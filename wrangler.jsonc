@@ -1,0 +1,43 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "xauusd-ai-trading-assistant",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-31",
+  "workers_dev": true,
+  "ai": {
+    "binding": "AI"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "xauusd-signals",
+      "database_id": "ff99b940-254e-4d44-ac1d-bccb9ed18f6e"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "SIGNAL_CACHE",
+      "id": "4ada6196de5a4000a28a047bf6b30ff3"
+    },
+    {
+      "binding": "WEBHOOK_BUFFER",
+      "id": "a7ceeae9a1d2471980e2bc71cb38e041"
+    },
+    {
+      "binding": "KNOWLEDGE_BASE",
+      "id": "f611edadb19c4260a111eb5796f2fba7"
+    }
+  ],
+  "vars": {
+    "AI_MODEL_ANALYST": "@cf/cloudflare/clef-flash",
+    "AI_MODEL_COUNSELOR": "@cf/google/gemma-4-26b-a4b-it",
+    "AI_MODEL_REASONER": "@cf/nvidia/nemotron-3-120b-a12b",
+    "REQUIRED_SOURCES": "prophet_r38,prophet_r37_ssot,gmi_v12_70"
+  },
+  "routes": [
+    {
+      "pattern": "ai.cryptophys.work",
+      "custom_domain": true
+    }
+  ]
+}
