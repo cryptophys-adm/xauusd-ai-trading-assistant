@@ -1,0 +1,39 @@
+{
+  "version": 3,
+  "status": "initial_project_policy",
+  "updated_at": "2026-10-31",
+  "purpose": "Evidence-based XAUUSD analysis from Prophet and GMI webhook payloads. This file is a starter policy document, not a substitute for the actual indicator payloads.",
+  "source_contract": {
+    "required_sources": [
+      "prophet_r38",
+      "prophet_r37_ssot",
+      "gmi_v12_70"
+    ],
+    "same_candle_required": true,
+    "closed_candle_preferred": true,
+    "never_invent_missing_metrics": true
+  },
+  "decision_policy": {
+    "prophet_is_base_bias": true,
+    "gmi_role": "validate_block_or_wait_on_Prophet_setups",
+    "gmi_must_not_silently_overwrite_prophet_bias": true,
+    "reversal_requires_explicit_auditable_evidence": true,
+    "allowed_decisions": ["BUY", "SELL", "WAIT", "NO_TRADE"],
+    "recommendation_only": true,
+    "automatic_trade_execution": false
+  },
+  "analysis_requirements": [
+    "Separate reported indicator values from model interpretation.",
+    "Identify source, symbol, timeframe, and candle timestamp.",
+    "State missing or conflicting evidence explicitly.",
+    "Give bullish, bearish, and neutral scenarios when evidence is mixed.",
+    "Include confirmation, invalidation, and risk considerations when supported by the payload.",
+    "Do not fabricate prices, indicator states, candle values, or confidence.",
+    "If source payloads disagree or required fields are absent, prefer WAIT or NO_TRADE."
+  ],
+  "limitations": [
+    "No Pine Script source files or real TradingView payload examples were present in the inspected Cloudflare resources.",
+    "Do not infer the exact meaning of proprietary indicator fields from field names alone.",
+    "The assistant does not execute trades or connect to a broker."
+  ]
+}
