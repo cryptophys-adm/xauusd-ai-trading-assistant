@@ -29,7 +29,7 @@
     }
   ],
   "vars": {
-    "AI_MODEL_ANALYST": "@cf/cloudflare/clef-flash",
+    "AI_MODEL_ANALYST": "@cf/zhipu/glm-4.7-flash",
     "AI_MODEL_COUNSELOR": "@cf/google/gemma-4-26b-a4b-it",
     "AI_MODEL_REASONER": "@cf/nvidia/nemotron-3-120b-a12b",
     "REQUIRED_SOURCES": "prophet_r38,prophet_r37_ssot,gmi_v12_70"
