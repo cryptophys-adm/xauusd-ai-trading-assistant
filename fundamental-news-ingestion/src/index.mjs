@@ -432,67 +432,122 @@ function retryAfterMilliseconds(response, attempt) {
   return base + Math.floor(Math.random() * 100);
 }
 
-async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
-  const endpoint = asString(metadata.mcp_endpoint || env.TV_MCP_ENDPOINT || `${getBaseUrl(env)}/mcp`);
-  const limit = parsePositiveInt(env.TV_MCP_MAX_ARTICLES, 20);
-  const toolName = asString(env.TV_MCP_NEWS_TOOL_NAME || "mcp-tv-get-news");
-
-  const requestBody = {
-    jsonrpc: "2.0",
-    id: randomBase64Url(12),
-    method: "tools/call",
-    params: {
-      name: toolName,
-      arguments: {
-        symbols,
-        symbol: symbols[0] || null,
-        tickers: symbols,
-        limit
-      }
+function parseMcpHttpBody(text, contentType) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return null;
+  try { return JSON.parse(trimmed); } catch {}
+  // Streamable HTTP may return Server-Sent Events with JSON-RPC messages.
+  if (String(contentType || "").includes("text/event-stream") || trimmed.startsWith("event:") || trimmed.startsWith("data:")) {
+    const messages = [];
+    for (const block of trimmed.split(/\r?\n\r?\n/)) {
+      const data = block.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
+      if (!data || data === "[DONE]") continue;
+      try { messages.push(JSON.parse(data)); } catch {}
     }
-  };
+    return messages.length === 1 ? messages[0] : messages.length ? messages : null;
+  }
+  return null;
+}
 
+async function postMcp(env, endpoint, accessToken, body, sessionId = "") {
+  const headers = {
+    accept: "application/json, text/event-stream",
+    "content-type": "application/json",
+    authorization: `Bearer ${accessToken}`,
+    "mcp-protocol-version": "2025-03-26",
+    "user-agent": asString(env.NEWS_INGEST_USER_AGENT || "XAUUSD-Fundamental-News-Ingestion/2.0")
+  };
+  if (sessionId) headers["mcp-session-id"] = sessionId;
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: {
-      accept: "application/json",
-      "content-type": "application/json",
-      authorization: `Bearer ${accessToken}`,
-      "user-agent": asString(env.NEWS_INGEST_USER_AGENT || "XAUUSD-Fundamental-News-Ingestion/2.0")
-    },
-    body: JSON.stringify(requestBody),
-    signal: AbortSignal.timeout(15000)
+    headers,
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20000)
   });
-
   const text = await response.text();
-  let payload = null;
-  try {
-    payload = JSON.parse(text);
-  } catch {
-    payload = null;
-  }
-
   if (!response.ok) {
-    const retryAfter = response.headers.get("retry-after");
-    const retryAfterMs = Number.isFinite(Number.parseInt(String(retryAfter || ""), 10))
-      ? Number.parseInt(String(retryAfter), 10) * 1000
-      : null;
     throw Object.assign(new Error(`TradingView MCP returned HTTP ${response.status}`), {
       code: "mcp_upstream_error",
       status: response.status,
-      retry_after_ms: retryAfterMs,
-      detail: asObject(payload) || text.slice(0, 500)
-    });
-  }
-
-  if (!payload) {
-    throw Object.assign(new Error("TradingView MCP returned non-JSON response"), {
-      code: "mcp_invalid_response",
+      retry_after_ms: Number.isFinite(Number.parseInt(response.headers.get("retry-after") || "", 10))
+        ? Number.parseInt(response.headers.get("retry-after"), 10) * 1000 : null,
       detail: text.slice(0, 500)
     });
   }
+  if (response.status === 202 || !text.trim()) {
+    return { payload: null, sessionId: response.headers.get("mcp-session-id") || sessionId };
+  }
+  const payload = parseMcpHttpBody(text, response.headers.get("content-type"));
+  if (!payload) {
+    throw Object.assign(new Error("TradingView MCP returned an unparseable response"), {
+      code: "mcp_invalid_response", detail: text.slice(0, 500)
+    });
+  }
+  if (payload.error) {
+    throw Object.assign(new Error(`MCP JSON-RPC error: ${payload.error.message || "unknown error"}`), {
+      code: "mcp_jsonrpc_error", detail: payload.error
+    });
+  }
+  return { payload, sessionId: response.headers.get("mcp-session-id") || sessionId };
+}
 
-  return payload;
+async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
+  const endpoint = asString(metadata.mcp_endpoint || env.TV_MCP_ENDPOINT || `${getBaseUrl(env)}/mcp`);
+  const limit = Math.min(parsePositiveInt(env.TV_MCP_MAX_ARTICLES, 25), 200);
+  const lang = asString(env.TV_MCP_NEWS_LANG || "en");
+  let requestId = 1;
+
+  // Establish a Streamable HTTP MCP session before invoking tools.
+  const initialized = await postMcp(env, endpoint, accessToken, {
+    jsonrpc: "2.0",
+    id: requestId++,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: WORKER_NAME, version: "1.0.0" }
+    }
+  });
+  let sessionId = initialized.sessionId;
+  if (initialized.payload?.error) throw new Error(initialized.payload.error.message || "MCP initialize failed");
+
+  await postMcp(env, endpoint, accessToken, {
+    jsonrpc: "2.0",
+    method: "notifications/initialized"
+  }, sessionId);
+
+  const articles = [];
+  const calls = [];
+  for (const symbol of symbols) {
+    const result = await postMcp(env, endpoint, accessToken, {
+      jsonrpc: "2.0",
+      id: requestId++,
+      method: "tools/call",
+      params: {
+        name: "get_news",
+        arguments: { symbol, lang, limit, offset: 0 }
+      }
+    }, sessionId);
+    sessionId = result.sessionId || sessionId;
+    const payload = result.payload;
+    if (!payload) continue;
+    if (payload.error) {
+      throw Object.assign(new Error(`TradingView MCP get_news failed for ${symbol}: ${payload.error.message || "unknown error"}`), {
+        code: "mcp_jsonrpc_error", detail: payload.error
+      });
+    }
+    calls.push({ symbol, result: payload.result ?? payload });
+    const parsed = parseArticlesFromMcpPayload(payload);
+    for (const article of parsed) {
+      if (!article.symbols.length) article.symbols = [symbol];
+      articles.push(article);
+    }
+  }
+  return {
+    jsonrpc: "2.0",
+    id: "news-aggregate",
+    result: { articles: dedupeArticles(articles), calls }
+  };
 }
 
 async function invokeMcpGetNewsWithRetry(env, metadata, accessToken, symbols) {
