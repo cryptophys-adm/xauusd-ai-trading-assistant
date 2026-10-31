@@ -32,6 +32,22 @@ Set these as Worker secrets; do not commit them:
 - TELEGRAM_CHAT_ID
 - WEBHOOK_SECRET
 
+For the `fundamental-news-ingestion` Worker, configure these separately:
+
+- INGEST_SECRET
+- TV_MCP_CLIENT_ID
+- TV_MCP_REDIRECT_URI
+- TV_MCP_CLIENT_SECRET (only if TradingView client auth method requires it)
+
+The ingestion Worker also requires a KV binding named `OAUTH_STORE` for OAuth state and token storage.
+Set optional vars as needed:
+
+- TV_MCP_BASE_URL (default: `https://mcp.tradingview.com`)
+- TV_MCP_METADATA_URL
+- TV_MCP_ENDPOINT
+- TV_MCP_SCOPE
+- TV_MCP_SYMBOLS (default: `OANDA:XAUUSD,TVC:USOIL,TVC:DXY`)
+
 ## Deploy
 
 Install dependencies and authenticate Wrangler to the intended Cloudflare account:
