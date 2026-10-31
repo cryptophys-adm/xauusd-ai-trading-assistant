@@ -326,8 +326,18 @@ async function getValidAccessToken(env, metadata) {
 
 function normalizeArticle(item) {
   const source = asString(item.source || item.provider || item.author || item.site || item.domain);
-  const published = item.published || item.published_at || item.datetime || item.time || item.timestamp || null;
-  const symbols = asArray(item.symbols || item.tickers) || [];
+  const rawPublished = item.published ?? item.published_at ?? item.datetime ?? item.time ?? item.timestamp ?? null;
+  let published = rawPublished;
+  if (typeof rawPublished === "number" || (typeof rawPublished === "string" && /^\d{10,13}$/.test(rawPublished.trim()))) {
+    const numeric = Number(rawPublished);
+    const milliseconds = String(Math.trunc(numeric)).length <= 10 ? numeric * 1000 : numeric;
+    const date = new Date(milliseconds);
+    published = Number.isFinite(date.getTime()) ? date.toISOString() : rawPublished;
+  } else if (typeof rawPublished === "string" && rawPublished.trim()) {
+    const date = new Date(rawPublished);
+    if (Number.isFinite(date.getTime())) published = date.toISOString();
+  }
+  const symbols = asArray(item.symbols || item.tickers || item.relatedSymbols) || [];
 
   return {
     id: asString(item.id || item.uuid),
@@ -337,7 +347,7 @@ function normalizeArticle(item) {
     source,
     language: asString(item.language || item.lang),
     published_at: published,
-    symbols: symbols.filter((value) => typeof value === "string")
+    symbols: [...new Set(symbols.filter((value) => typeof value === "string"))]
   };
 }
 
@@ -432,19 +442,28 @@ function retryAfterMilliseconds(response, attempt) {
   return base + Math.floor(Math.random() * 100);
 }
 
-function parseMcpHttpBody(text, contentType) {
+function parseMcpHttpBody(text, contentType, requestId = null) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return null;
   try { return JSON.parse(trimmed); } catch {}
-  // Streamable HTTP may return Server-Sent Events with JSON-RPC messages.
+  // Streamable HTTP may emit multiple SSE events. Prefer the JSON-RPC response
+  // matching this request ID; ignore unrelated notifications/progress messages.
   if (String(contentType || "").includes("text/event-stream") || trimmed.startsWith("event:") || trimmed.startsWith("data:")) {
     const messages = [];
     for (const block of trimmed.split(/\r?\n\r?\n/)) {
       const data = block.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
       if (!data || data === "[DONE]") continue;
-      try { messages.push(JSON.parse(data)); } catch {}
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed && typeof parsed === "object") messages.push(parsed);
+      } catch {}
     }
-    return messages.length === 1 ? messages[0] : messages.length ? messages : null;
+    if (!messages.length) return null;
+    if (requestId !== null) {
+      const matching = messages.find((message) => message.id === requestId && (message.result !== undefined || message.error !== undefined));
+      if (matching) return matching;
+    }
+    return [...messages].reverse().find((message) => message && (message.result !== undefined || message.error !== undefined)) || messages[messages.length - 1];
   }
   return null;
 }
@@ -477,7 +496,7 @@ async function postMcp(env, endpoint, accessToken, body, sessionId = "") {
   if (response.status === 202 || !text.trim()) {
     return { payload: null, sessionId: response.headers.get("mcp-session-id") || sessionId };
   }
-  const payload = parseMcpHttpBody(text, response.headers.get("content-type"));
+  const payload = parseMcpHttpBody(text, response.headers.get("content-type"), body?.id ?? null);
   if (!payload) {
     throw Object.assign(new Error("TradingView MCP returned an unparseable response"), {
       code: "mcp_invalid_response", detail: text.slice(0, 500)
