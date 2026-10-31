@@ -62,9 +62,17 @@ function extractText(result: unknown): string {
   if (typeof result === "string") return result;
   if (result && typeof result === "object") {
     const r = result as JsonObject;
+
+    // Workers AI models expose text through different response shapes.
+    for (const key of ["response", "output_text", "text"]) {
+      if (typeof r[key] === "string") return r[key] as string;
+    }
+
     const choices = r.choices;
     if (Array.isArray(choices) && choices[0] && typeof choices[0] === "object") {
-      const message = (choices[0] as JsonObject).message;
+      const first = choices[0] as JsonObject;
+      if (typeof first.text === "string") return first.text;
+      const message = first.message;
       if (message && typeof message === "object") {
         const content = (message as JsonObject).content;
         if (typeof content === "string") return content;
