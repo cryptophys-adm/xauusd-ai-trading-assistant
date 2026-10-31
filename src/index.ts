@@ -144,7 +144,7 @@ async function runAnalysis(
       "Set directional_bias to NEUTRAL and missing_evidence to true if evidence is missing, stale, contradictory, or insufficient.",
       "EVIDENCE:",
       JSON.stringify(evidence)
-    ].join("\\n"),
+    ].join("\n"),
     max_tokens: 700,
     temperature: 0.1
   } as never);
