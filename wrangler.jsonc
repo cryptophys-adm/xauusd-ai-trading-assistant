@@ -40,5 +40,37 @@
       "pattern": "ai.cryptophys.work",
       "custom_domain": true
     }
-  ]
+  ],
+  "previews": {
+    "vars": {
+      "AI_MODEL_ANALYST": "@cf/zai-org/glm-4.7-flash",
+      "AI_MODEL_COUNSELOR": "@cf/google/gemma-4-26b-a4b-it",
+      "AI_MODEL_REASONER": "@cf/nvidia/nemotron-3-120b-a12b",
+      "REQUIRED_SOURCES": "prophet_r38,prophet_r37_ssot,gmi_v12_70",
+      "INGEST_URL": "https://xauusd-fundamental-news-ingestion-preview.workers.dev"
+    },
+    "kv_namespaces": [
+      {
+        "binding": "SIGNAL_CACHE",
+        "id": "0cbd6ecc0fbc4dc99342960456ca71e5"
+      },
+      {
+        "binding": "WEBHOOK_BUFFER",
+        "id": "2000943b5db042f582b03043c75d5b1c"
+      },
+      {
+        "binding": "KNOWLEDGE_BASE",
+        "id": "773182e4a26c444e8f56c3e58a1987ef"
+      }
+    ],
+    "d1_databases": [
+      {
+        "binding": "DB",
+        "database_id": "90f53f14-ff7b-46c1-b146-a1efd4e13018"
+      }
+    ],
+    "ai": {
+      "binding": "AI"
+    }
+  }
 }
