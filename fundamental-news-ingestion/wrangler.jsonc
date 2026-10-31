@@ -5,9 +5,13 @@
   "compatibility_date": "2026-10-31",
   "workers_dev": true,
   "vars": {
+    "TRADINGVIEW_MCP_URL": "https://mcp.tradingview.com/mcp",
     "TV_SYMBOLS": "OANDA:XAUUSD,TVC:USOIL,TVC:DXY"
-  }
-  // Required (not in source): secrets INGEST_SECRET; var TRADINGVIEW_MCP_URL (official TradingView MCP endpoint);
-  // optional secrets TV_OAUTH_CLIENT_ID / TV_OAUTH_CLIENT_SECRET; and a KV namespace bound as TV_OAUTH_KV
-  // (add "kv_namespaces": [{ "binding": "TV_OAUTH_KV", "id": "<namespace id>" }] after creating it).
+  },
+  "kv_namespaces": [
+    {
+      "binding": "TV_OAUTH_KV",
+      "id": "a1c0f1055bd1434192d681a45866614d"
+    }
+  ]
 }
