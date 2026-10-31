@@ -7,6 +7,8 @@ export interface Env {
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_CHAT_ID?: string;
   WEBHOOK_SECRET?: string;
+  INGEST_URL?: string;
+  INGEST_SECRET?: string;
   AI_MODEL_ANALYST: string;
   AI_MODEL_COUNSELOR: string;
   AI_MODEL_REASONER: string;
@@ -120,6 +122,24 @@ async function sendTelegram(env: Env, text: string): Promise<void> {
   }
 }
 
+async function fetchNews(env: Env): Promise<{ available: boolean; articles: unknown[]; article_count: number; reason?: string; fetched_at: string }> {
+  const fetchedAt = new Date().toISOString();
+  if (!env.INGEST_URL || !env.INGEST_SECRET) return { available: false, articles: [], article_count: 0, reason: "INGEST_URL or INGEST_SECRET is not configured on this Worker.", fetched_at: fetchedAt };
+  const pullUrl = env.INGEST_URL.replace(/\\/+$/, "") + "/pull";
+  try {
+    const response = await fetch(pullUrl, { method: "POST", headers: { "Authorization": "Bearer " + env.INGEST_SECRET, "Accept": "application/json" } });
+    if (!response.ok) return { available: false, articles: [], article_count: 0, reason: "Ingestion endpoint returned HTTP " + response.status + " " + response.statusText, fetched_at: fetchedAt };
+    const body = await response.json() as Record<string, unknown>;
+    let articles: unknown[] | null = null;
+    for (const key of ["articles", "data", "results", "items"]) { if (Array.isArray(body[key])) { articles = body[key] as unknown[]; break; } }
+    if (!articles && Array.isArray(body)) articles = body as unknown[];
+    if (!articles || articles.length === 0) return { available: false, articles: [], article_count: 0, reason: "Ingestion endpoint returned no articles.", fetched_at: fetchedAt };
+    return { available: true, articles, article_count: articles.length, fetched_at: fetchedAt };
+  } catch (error) {
+    return { available: false, articles: [], article_count: 0, reason: "Failed to reach ingestion endpoint: " + (error instanceof Error ? error.message : "Unknown error"), fetched_at: fetchedAt };
+  }
+}
+
 async function runAnalysis(
   env: Env,
   candleKey: string,
@@ -127,8 +147,9 @@ async function runAnalysis(
   timeframe: string,
   payloads: Record<string, WebhookPayload>
 ): Promise<void> {
-  const [knowledgeText] = await Promise.all([
+  const [knowledgeText, newsEvidence] = await Promise.all([
     env.KNOWLEDGE_BASE.get("knowledge-base:v3"),
+    fetchNews(env)
   ]);
   const knowledge = knowledgeText || JSON.stringify({
     status: "kv_key_missing",
@@ -140,7 +161,8 @@ async function runAnalysis(
     ticker,
     timeframe,
     source_payloads: payloads,
-    policy: knowledge
+    policy: knowledge,
+    news_evidence: newsEvidence
   };
 
   const analystResult = await env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
@@ -148,6 +170,9 @@ async function runAnalysis(
       "You are the Analyst stage in an XAUUSD decision-support pipeline.",
       "Classify the supplied indicator evidence without inventing missing values or prices.",
       "Prophet is the base directional bias. GMI can validate, block, or defer a setup but must not silently overwrite Prophet's bias.",
+      "Evidence includes technical source_payloads and fundamental news_evidence.",
+      "If news_evidence.available is false, state that fundamental news data is unavailable. Do NOT invent news.",
+      "If news_evidence.available is true, consider the supplied articles alongside technical evidence.",
       "Return JSON only with keys: directional_bias (BULLISH, BEARISH, or NEUTRAL), setup_quality (integer 0-3), missing_evidence (boolean), reasoning.",
       "Set directional_bias to NEUTRAL and missing_evidence to true if evidence is missing, stale, contradictory, or insufficient.",
       "EVIDENCE:",
@@ -163,6 +188,8 @@ async function runAnalysis(
       "You are the Counselor stage in an XAUUSD decision-support pipeline.",
       "Use only the JSON evidence and analyst output below. Do not invent prices or indicator definitions.",
       "Prophet is the base bias. GMI may validate, block, or defer a Prophet setup; it must not silently overwrite Prophet's bias.",
+      "If news_evidence.available is false, acknowledge fundamental news is unavailable. Do NOT fabricate news.",
+      "If news_evidence.available is true, weigh the supplied articles in scenarios.",
       "Return concise JSON with keys: evidence_summary, bullish_scenario, bearish_scenario, neutral_scenario, confirmations, invalidation, risks, missing_data.",
       "If the source payloads conflict or fields are unclear, say so explicitly.",
       "EVIDENCE:",
@@ -180,6 +207,8 @@ async function runAnalysis(
       "You are the final Deep Reasoner stage for XAUUSD decision support.",
       "Use only the supplied evidence, analyst output, and counselor output. Do not invent market prices or claim the models verified facts they did not receive.",
       "Prophet remains the base bias. GMI may validate, block, or wait on a setup. Do not silently reverse Prophet's bias.",
+      "If news_evidence.available is false, state fundamental news analysis was not performed. Do NOT claim news supported or contradicted the setup.",
+      "If news_evidence.available is true, incorporate the supplied articles into final reasoning.",
       "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation.",
       "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
       "EVIDENCE:",
@@ -207,6 +236,7 @@ async function runAnalysis(
     counselor_output: counselorText,
     reasoner_model: env.AI_MODEL_REASONER,
     reasoner_output: reasonerText,
+    news_evidence: newsEvidence,
     decision
   };
 
