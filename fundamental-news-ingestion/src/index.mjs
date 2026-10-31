@@ -352,6 +352,7 @@ function pushCandidateArrays(target, value) {
   for (const key of ["articles", "headlines", "data", "results", "items", "news"]) {
     const candidate = objectValue[key];
     if (Array.isArray(candidate)) target.push(candidate);
+    else if (candidate && typeof candidate === "object") pushCandidateArrays(target, candidate);
   }
 
   if (Array.isArray(objectValue.content)) {
