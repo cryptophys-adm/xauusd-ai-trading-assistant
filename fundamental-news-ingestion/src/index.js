@@ -42,9 +42,14 @@ export async function pkceChallenge(verifier) {
   return b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
 }
 
-export function redirectUri(request) {
-  // Single canonical value used for registration, authorization and token exchange (must match exactly).
-  return new URL("/oauth/callback", new URL(request.url).origin).toString();
+export function redirectUri(request, env) {
+  const configured = env.TV_MCP_REDIRECT_URI;
+  if (!configured) throw new Error("TV_MCP_REDIRECT_URI is not configured");
+  const uri = new URL(configured);
+  if (uri.protocol !== "https:" || uri.pathname !== "/oauth/callback" || uri.search || uri.hash) {
+    throw new Error("TV_MCP_REDIRECT_URI must be a canonical HTTPS /oauth/callback URL");
+  }
+  return uri.toString();
 }
 
 function symbolsOf(env) {
@@ -94,7 +99,7 @@ async function getClient(env, meta, request) {
   if (env.TV_OAUTH_CLIENT_ID) {
     return { client_id: env.TV_OAUTH_CLIENT_ID, client_secret: env.TV_OAUTH_CLIENT_SECRET || undefined };
   }
-  const uri = redirectUri(request);
+  const uri = redirectUri(request, env);
   const stored = await kvGetJson(env, "tv:client");
   // A client registered with a different redirect URI would cause token/authorize failures.
   if (stored && stored.redirect_uri === uri) return stored;
@@ -176,7 +181,7 @@ async function oauthStart(request, env) {
   u.search = new URLSearchParams({
     response_type: "code",
     client_id: client.client_id,
-    redirect_uri: redirectUri(request),
+    redirect_uri: redirectUri(request, env),
     state,
     code_challenge: await pkceChallenge(verifier),
     code_challenge_method: "S256",
@@ -200,7 +205,7 @@ async function oauthCallback(request, env) {
     const data = await tokenRequest(env, meta, client, {
       grant_type: "authorization_code",
       code,
-      redirect_uri: redirectUri(request),
+      redirect_uri: redirectUri(request, env),
       code_verifier: saved.verifier
     });
     await storeTokens(env, data, null);
@@ -298,12 +303,12 @@ async function pull(request, env) {
   const base = { worker: WORKER, provider: PROVIDER, fetched_at: new Date().toISOString(), articles: [], count: 0 };
   const unavailable = (reason, status = 503, extra = {}) => json({ ...base, available: false, reason, ...extra }, status);
 
-  const cached = await kvGetJson(env, "tv:cache");
-  if (cached) return json({ ...cached, cache: "hit" });
-
   let token;
   try { token = await getAccessToken(env, request); } catch (e) { return unavailable("OAuth token refresh failed: " + e.message, 503); }
   if (!token) return unavailable("TradingView MCP is not authorized; complete OAuth via /oauth/start.");
+
+  const cached = await kvGetJson(env, "tv:cache");
+  if (cached) return json({ ...cached, cache: "hit" });
 
   let out;
   try {
@@ -318,7 +323,7 @@ async function pull(request, env) {
     if (e.rateLimited) return unavailable("TradingView MCP rate limit reached", 503);
     return unavailable("TradingView MCP request failed: " + e.message, 502);
   }
-  if (out.articles.length === 0 && out.errors.length) return unavailable("get_news failed for all symbols", 502, { errors: out.errors });
+  if (out.errors.length) return unavailable("get_news failed for one or more symbols; refusing an incomplete snapshot", 502, { errors: out.errors });
   const result = { ...base, available: true, symbols: symbolsOf(env), count: out.articles.length, articles: out.articles, errors: out.errors };
   await kvPut(env, "tv:cache", result, CACHE_TTL_S);
   return json({ ...result, cache: "miss" });
