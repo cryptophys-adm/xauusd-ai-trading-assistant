@@ -15,7 +15,7 @@ const J = (o, s = 200, h = {}) => new Response(JSON.stringify(o), { status: s, h
 
 beforeEach(() => {
   kv = new KV();
-  env = { INGEST_SECRET: "s3", TRADINGVIEW_MCP_URL: MCP, TV_OAUTH_KV: kv, TV_SYMBOLS: "A,B", TV_NO_BACKOFF: "1" };
+  env = { INGEST_SECRET: "s3", TRADINGVIEW_MCP_URL: MCP, TV_OAUTH_KV: kv, TV_SYMBOLS: "A,B", TV_NO_BACKOFF: "1", TV_MCP_REDIRECT_URI: "https://news.cryptophys.work/oauth/callback" };
   calls = [];
   tokenResponses = [];
   newsHandler = (sym) => J({ jsonrpc: "2.0", id: 1, result: { structuredContent: { articles: [{ title: "T " + sym, url: "u1" }, { title: "dup", url: "u1" }] } } });
@@ -64,7 +64,7 @@ test("pull without OAuth token is safe 503", async () => {
 test("oauth flow: state, PKCE, exact redirect_uri, state single use", async () => {
   const start = await (await worker.fetch(req("/oauth/start", "GET", "s3"), env)).json();
   const u = new URL(start.authorization_url);
-  assert.equal(u.searchParams.get("redirect_uri"), "https://w.test/oauth/callback");
+  assert.equal(u.searchParams.get("redirect_uri"), "https://news.cryptophys.work/oauth/callback");
   assert.equal(u.searchParams.get("code_challenge_method"), "S256");
   const state = u.searchParams.get("state");
   const verifier = JSON.parse(kv.m.get("tv:state:" + state)).verifier;
@@ -78,7 +78,7 @@ test("oauth flow: state, PKCE, exact redirect_uri, state single use", async () =
   const tok = calls.find((c) => c.url === AS + "/token");
   const form = new URLSearchParams(tok.init.body);
   assert.equal(form.get("code_verifier"), verifier);
-  assert.equal(form.get("redirect_uri"), "https://w.test/oauth/callback");
+  assert.equal(form.get("redirect_uri"), "https://news.cryptophys.work/oauth/callback");
   assert.equal(JSON.parse(kv.m.get("tv:tokens")).refresh_token, "RT");
   // replay of same state rejected
   assert.equal((await worker.fetch(req("/oauth/callback?code=c&state=" + state), env)).status, 400);
@@ -116,6 +116,22 @@ test("successful get_news returns deduplicated articles and caches", async () =>
   const b2 = await (await worker.fetch(req("/pull", "POST", "s3"), env)).json();
   assert.equal(b2.cache, "hit");
   assert.equal(calls.length, n);
+});
+
+test("partial symbol failure fails closed and does not return incomplete articles", async () => {
+  await setTokens({ access_token: "AT", expires_at: Date.now() + 3600000 });
+  let count = 0;
+  newsHandler = (sym) => {
+    count++;
+    if (sym === "B") return J({ jsonrpc: "2.0", id: 1, result: { isError: true, content: [{ type: "text", text: "unavailable" }] } });
+    return J({ jsonrpc: "2.0", id: 1, result: { structuredContent: { articles: [{ title: "partial", url: "partial-url" }] } } });
+  };
+  const r = await worker.fetch(req("/pull", "POST", "s3"), env);
+  const b = await r.json();
+  assert.equal(r.status, 502);
+  assert.equal(b.available, false);
+  assert.deepEqual(b.articles, []);
+  assert.equal(count, 2);
 });
 
 test("empty get_news result returns empty articles", async () => {
