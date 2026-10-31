@@ -138,7 +138,7 @@ test("OAuth callback validates state and PKCE verifier", async () => {
   assert.equal(responseBadPkce.status, 400);
 });
 
-test("POST /pull refreshes expired token and returns articles from get_news", async () => {
+test("POST /pull refreshes expired token and returns headlines from mcp-tv-get-news", async () => {
   const env = createEnv();
   const now = Math.floor(Date.now() / 1000);
   await env.OAUTH_STORE.put(
@@ -166,11 +166,16 @@ test("POST /pull refreshes expired token and returns articles from get_news", as
 
     if (String(url).includes("/mcp")) {
       assert.equal(init.headers.authorization, "Bearer fresh-token");
+      const rpc = JSON.parse(init.body);
+      assert.equal(rpc.method, "tools/call");
+      assert.equal(rpc.params.name, "mcp-tv-get-news");
       return jsonResponse({
         result: {
-          articles: [
-            { id: "1", title: "Gold rises", url: "https://news/1", symbols: ["OANDA:XAUUSD"] }
-          ]
+          data: {
+            headlines: [
+              { id: "1", title: "Gold rises", url: "https://news/1", symbols: ["OANDA:XAUUSD"] }
+            ]
+          }
         }
       });
     }
@@ -200,7 +205,7 @@ test("POST /pull refreshes expired token and returns articles from get_news", as
 
 test("POST /pull returns 502 with empty articles when MCP tool fails", async () => {
   const env = createEnv();
-  await env.OAUTH_STORE.put("tv_mcp:oauth_token", JSON.stringify({ access_token: "ok-token", expires_at: null }));
+  await env.OAUTH_STORE.put("tv_mcp:oauth_token", JSON.stringify({ access_token: "ok-token", expires_at: Math.floor(Date.now() / 1000) + 3600 }));
 
   globalThis.fetch = async (url) => {
     if (String(url).includes(".well-known/oauth-authorization-server")) {
@@ -231,7 +236,7 @@ test("POST /pull returns 502 with empty articles when MCP tool fails", async () 
   assert.deepEqual(body.articles, []);
 });
 
-test("POST /pull returns 200 with empty articles when get_news is empty", async () => {
+test("POST /pull returns 200 with empty articles when mcp-tv-get-news is empty", async () => {
   const env = createEnv();
   await env.OAUTH_STORE.put("tv_mcp:oauth_token", JSON.stringify({ access_token: "ok-token", expires_at: null }));
 
