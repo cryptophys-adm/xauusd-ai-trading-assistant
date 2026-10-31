@@ -315,7 +315,7 @@ async function getValidAccessToken(env, metadata) {
   const expiresAt = Number.parseInt(String(stored.expires_at || ""), 10);
   const now = nowSeconds();
 
-  if (accessToken && (!Number.isFinite(expiresAt) || expiresAt - now > 60)) {
+  if (accessToken && Number.isFinite(expiresAt) && expiresAt - now > 60) {
     return accessToken;
   }
 
@@ -349,7 +349,7 @@ function pushCandidateArrays(target, value) {
   const objectValue = asObject(value);
   if (!objectValue) return;
 
-  for (const key of ["articles", "data", "results", "items", "news"]) {
+  for (const key of ["articles", "headlines", "data", "results", "items", "news"]) {
     const candidate = objectValue[key];
     if (Array.isArray(candidate)) target.push(candidate);
   }
@@ -434,7 +434,7 @@ function retryAfterMilliseconds(response, attempt) {
 async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
   const endpoint = asString(metadata.mcp_endpoint || env.TV_MCP_ENDPOINT || `${getBaseUrl(env)}/mcp`);
   const limit = parsePositiveInt(env.TV_MCP_MAX_ARTICLES, 20);
-  const toolName = asString(env.TV_MCP_NEWS_TOOL_NAME || "get_news");
+  const toolName = asString(env.TV_MCP_NEWS_TOOL_NAME || "mcp-tv-get-news");
 
   const requestBody = {
     jsonrpc: "2.0",
