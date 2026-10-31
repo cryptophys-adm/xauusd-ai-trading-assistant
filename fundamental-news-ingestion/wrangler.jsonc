@@ -6,6 +6,7 @@
   "workers_dev": true,
   "vars": {
     "TRADINGVIEW_MCP_URL": "https://mcp.tradingview.com/mcp",
+    "TV_MCP_REDIRECT_URI": "https://news.cryptophys.work/oauth/callback",
     "TV_SYMBOLS": "OANDA:XAUUSD,TVC:USOIL,TVC:DXY"
   },
   "kv_namespaces": [
