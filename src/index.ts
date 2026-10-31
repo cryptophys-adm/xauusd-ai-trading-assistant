@@ -136,37 +136,17 @@ async function runAnalysis(
   };
 
   const analystResult = await env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
-    model: "clef-flash",
-    state: evidence,
-    questions: {
-      directional_bias: {
-        type: "choice",
-        instructions: "Based only on the supplied indicator evidence, classify the current XAUUSD directional state. Do not invent missing values.",
-        criteria: {
-          BULLISH: "Evidence supports bullish direction.",
-          BEARISH: "Evidence supports bearish direction.",
-          NEUTRAL: "Evidence is mixed, insufficient, stale, or conflicting."
-        }
-      },
-      setup_quality: {
-        type: "score",
-        instructions: "Score the evidence quality for a potential setup, not the probability of profit.",
-        criteria: [
-          "Insufficient or contradictory evidence",
-          "Weak evidence; confirmation required",
-          "Moderate evidence; material risks remain",
-          "Strong aligned evidence; invalidation still required"
-        ]
-      },
-      missing_evidence: {
-        type: "noul",
-        instructions: "Is important evidence missing or conflicting enough that the system should wait?",
-        criteria: {
-          true: "Important required fields are missing or source evidence conflicts.",
-          false: "The supplied payloads contain sufficient, reasonably aligned evidence for further review."
-        }
-      }
-    }
+    prompt: [
+      "You are the Analyst stage in an XAUUSD decision-support pipeline.",
+      "Classify the supplied indicator evidence without inventing missing values or prices.",
+      "Prophet is the base directional bias. GMI can validate, block, or defer a setup but must not silently overwrite Prophet's bias.",
+      "Return JSON only with keys: directional_bias (BULLISH, BEARISH, or NEUTRAL), setup_quality (integer 0-3), missing_evidence (boolean), reasoning.",
+      "Set directional_bias to NEUTRAL and missing_evidence to true if evidence is missing, stale, contradictory, or insufficient.",
+      "EVIDENCE:",
+      JSON.stringify(evidence)
+    ].join("\\n"),
+    max_tokens: 700,
+    temperature: 0.1
   } as never);
 
   const analystText = extractText(analystResult);
