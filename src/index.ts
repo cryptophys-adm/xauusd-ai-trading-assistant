@@ -125,7 +125,7 @@ async function sendTelegram(env: Env, text: string): Promise<void> {
 async function fetchNews(env: Env): Promise<{ available: boolean; articles: unknown[]; article_count: number; reason?: string; fetched_at: string }> {
   const fetchedAt = new Date().toISOString();
   if (!env.INGEST_URL || !env.INGEST_SECRET) return { available: false, articles: [], article_count: 0, reason: "INGEST_URL or INGEST_SECRET is not configured on this Worker.", fetched_at: fetchedAt };
-  const pullUrl = env.INGEST_URL.replace(/\\/+$/, "") + "/pull";
+  const pullUrl = env.INGEST_URL.replace(/\/+$/, "") + "/pull";
   try {
     const response = await fetch(pullUrl, { method: "POST", headers: { "Authorization": "Bearer " + env.INGEST_SECRET, "Accept": "application/json" } });
     if (!response.ok) return { available: false, articles: [], article_count: 0, reason: "Ingestion endpoint returned HTTP " + response.status + " " + response.statusText, fetched_at: fetchedAt };
