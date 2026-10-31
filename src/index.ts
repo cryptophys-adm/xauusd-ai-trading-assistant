@@ -394,7 +394,12 @@ export default {
         secrets_configured: {
           webhook_secret: Boolean(env.WEBHOOK_SECRET),
           telegram_bot_token: Boolean(env.TELEGRAM_BOT_TOKEN),
-          telegram_chat_id: Boolean(env.TELEGRAM_CHAT_ID)
+          telegram_chat_id: Boolean(env.TELEGRAM_CHAT_ID),
+          ingest_secret: Boolean(env.INGEST_SECRET)
+        },
+        ingest_configured: {
+          ingest_url: asText(env.INGEST_URL),
+          ingest_secret: Boolean(env.INGEST_SECRET)
         }
       });
     }
