@@ -19,28 +19,35 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-fundamental-news-ingestion
+  group: fundamental-news-ingestion-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  validate-and-deploy:
-    if: github.event_name != 'pull_request'
+  test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-
       - name: Run tests
         run: npm test --prefix fundamental-news-ingestion
-
       - name: Validate Worker bundle
         run: npx --yes wrangler@4.45.0 deploy --dry-run --config fundamental-news-ingestion/wrangler.jsonc
 
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Deploy Worker to Cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
