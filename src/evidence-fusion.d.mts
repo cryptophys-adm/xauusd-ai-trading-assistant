@@ -21,3 +21,6 @@ export const LOCAL_CALC_MAX_AGE_MS: number;
 export function deriveCandleKey(symbol: string, timeframe: string, candleTime: string): string;
 export function validateLocalCalculation(payload: unknown, expected?: Record<string, string>, now?: number): { valid: boolean; errors: string[] };
 export function buildEvidenceFusion(input: Record<string, any>, now?: number): Record<string, any>;
+
+export function containsCredentialFields(value: unknown, depth?: number): boolean;
+export function stripCredentialFields(value: unknown, depth?: number): unknown;
