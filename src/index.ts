@@ -514,6 +514,8 @@ async function runAnalysis(
       analysis_key: newsAnalysis?.analysis_key,
       status: newsAnalysis?.status,
       article_count: newsAnalysis?.article_count,
+      fetched_at: newsAnalysis?.fetched_at,
+      analyzed_at: newsAnalysis?.analyzed_at,
       recommendation: newsAnalysis?.recommendation,
       fresh: newsFreshness
     }
