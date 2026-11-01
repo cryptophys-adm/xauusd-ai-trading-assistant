@@ -544,8 +544,13 @@ async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
       clientInfo: { name: WORKER_NAME, version: "1.0.0" }
     }
   });
+  const protocolVersion = initialized.payload?.result?.protocolVersion;
+  if (protocolVersion !== "2025-03-26") {
+    throw Object.assign(new Error(`TradingView MCP returned an unsupported protocol version: ${asString(protocolVersion) || "missing"}`), {
+      code: "mcp_invalid_response"
+    });
+  }
   let sessionId = initialized.sessionId;
-  if (initialized.payload?.error) throw new Error(initialized.payload.error.message || "MCP initialize failed");
 
   await postMcp(env, endpoint, accessToken, {
     jsonrpc: "2.0",
