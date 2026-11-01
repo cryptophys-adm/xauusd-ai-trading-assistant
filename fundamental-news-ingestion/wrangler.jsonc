@@ -19,6 +19,6 @@
   },
   // Operational verification: require one fresh scheduled ingestion result after deployment.
   "triggers": {
-    "crons": ["* * * * *"]
+    "crons": ["*/1 * * * *"]
   }
 }
