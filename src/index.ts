@@ -155,12 +155,18 @@ function parseDecision(text: string): JsonObject {
       const numericFieldsValid = [parsed.entry_price, parsed.stop_loss, parsed.take_profit, parsed.risk_reward, parsed.position_size_pct]
         .every(value => value == null || (typeof value === "number" && Number.isFinite(value)));
       const pricesValid = entry !== null && entry > 0 && stop !== null && stop > 0 && target !== null && target > 0;
+      const directionalPricesValid = decision === "BUY"
+        ? entry !== null && stop !== null && target !== null && stop < entry && entry < target
+        : decision === "SELL"
+          ? entry !== null && stop !== null && target !== null && target < entry && entry < stop
+          : true;
       if (["BUY", "SELL", "WAIT", "NO_TRADE"].includes(decision) && confidenceValid && numericFieldsValid) {
-        if ((decision === "BUY" || decision === "SELL") && !pricesValid) {
+        if ((decision === "BUY" || decision === "SELL") &&
+          (!pricesValid || !directionalPricesValid || confidence === null || riskReward === null || riskReward <= 0 || positionSize === null || positionSize <= 0 || positionSize > 100)) {
           return {
             decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null,
             risk_reward: null, position_size_pct: null,
-            reasoning: "Model proposed an actionable decision without valid numeric entry, stop-loss, and take-profit prices; downgraded to WAIT.",
+            reasoning: "Actionable model output lacks valid directional prices, confidence, positive risk/reward, or a positive position size within 0–100%; downgraded to WAIT.",
             raw_response: text
           };
         }
