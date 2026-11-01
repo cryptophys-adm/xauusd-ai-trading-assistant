@@ -40,6 +40,11 @@ export function validateLocalCalculation(payload, expected = {}, now = Date.now(
   if (typeof payload.calculation_version !== "string" || !payload.calculation_version.trim()) errors.push("calculation_version_required");
   if (!isRecord(payload.values)) errors.push("values_must_be_object");
   if (!isRecord(payload.provenance)) errors.push("provenance_must_be_object");
+  else {
+    if (typeof payload.provenance.source !== "string" || !payload.provenance.source.trim()) errors.push("provenance_source_required");
+    if (typeof payload.provenance.source_hash !== "string" || !payload.provenance.source_hash.trim()) errors.push("provenance_source_hash_required");
+  }
+  if (isRecord(payload.values) && Object.keys(payload.values).length === 0) errors.push("values_must_not_be_empty");
   if (isRecord(payload.values)) {
     for (const [key, value] of Object.entries(payload.values)) {
       if (!key || (typeof value === "number" && !Number.isFinite(value))) {
@@ -69,10 +74,11 @@ function validateNewsAnalysis(newsAnalysis, expectedSymbol, now) {
   else if (now - analyzedAt > NEWS_MAX_AGE_MS) errors.push("news_analysis_stale");
   if (fetchedAt === null) errors.push("news_fetched_at_missing_or_invalid");
   else if (fetchedAt > now + FUTURE_CLOCK_SKEW_MS) errors.push("news_fetch_timestamp_in_future");
+  else if (now - fetchedAt > NEWS_MAX_AGE_MS) errors.push("news_evidence_stale");
   const evidence = isRecord(newsAnalysis.evidence) ? newsAnalysis.evidence : null;
   if (!evidence || !Array.isArray(evidence.articles) || evidence.articles.length === 0) errors.push("news_articles_missing");
   const symbols = Array.isArray(newsAnalysis.symbols) ? newsAnalysis.symbols : (Array.isArray(evidence?.symbols) ? evidence.symbols : []);
-  if (symbols.length && !symbols.some((symbol) => symbolKey(symbol) === symbolKey(expectedSymbol))) errors.push("news_symbol_not_covered");
+  if (!symbols.some((symbol) => symbolKey(symbol) === symbolKey(expectedSymbol))) errors.push("news_symbol_not_covered");
   return { valid: errors.length === 0, errors };
 }
 
@@ -80,6 +86,7 @@ export function buildEvidenceFusion(input, now = Date.now()) {
   const { candleKey, symbol, timeframe, candleTime, webhookPayloads = {}, localCalculations = [], newsAnalysis = null } = input || {};
   const missing = [];
   const errors = [];
+  if (timestampMs(candleTime) === null) errors.push("candle_time_invalid");
   const webhookSources = ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"];
   for (const source of webhookSources) {
     const payload = webhookPayloads[source];
