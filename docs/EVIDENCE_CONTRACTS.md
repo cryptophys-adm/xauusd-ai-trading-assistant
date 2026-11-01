@@ -37,7 +37,7 @@ Required JSON shape:
 }
 ```
 
-Allowed `engine` values are `mizan`, `prophet`, and `gmi`. This endpoint validates and stores results; it does **not** implement the calculation engines. Each result must be independently reproducible, versioned, and supported by source fixtures/parity tests before it can be considered production evidence. A calculation result older than 30 minutes or more than five minutes in the future is rejected.
+Allowed `engine` values are `mizan`, `prophet`, and `gmi`. This endpoint validates and stores results; it does **not** implement the calculation engines. Each result must be independently reproducible, versioned, and supported by source fixtures/parity tests before it can be considered production evidence. A calculation result older than 30 minutes, computed more than five minutes in the future, or computed more than five minutes before its candle timestamp is rejected. The timeframe-aware candle-age windows below are **provisional implementation defaults, not approved production policy**; they must be reviewed against the source candle timestamp semantics before production release.
 
 ## Completed fundamental news analysis
 
@@ -45,7 +45,7 @@ The AI Worker reads the most recent completed analysis from its own `news_analys
 
 ## Fusion behavior
 
-The versioned fused bundle uses `cryptophys.evidence-fusion.v1`. It records webhook source names, validated local calculation results, the completed news analysis, missing evidence, and validation errors. Any missing required local engine or fresh completed news analysis results in `status=degraded`. The AI chain still produces a diagnostic advisory record, but the final decision is forced to `WAIT`; confidence, entry, stop, target, risk/reward, and position size are null. This is not a substitute for acceptance tests.
+The versioned fused bundle uses `cryptophys.evidence-fusion.v1`. It records webhook source names, validated local calculation results, the completed news analysis, missing evidence, and validation errors. The provisional maximum candle ages are M1 5m, M5 15m, M15 45m, M30 90m, H1 3h, H2 6h, H4 12h, D1 72h, and W1 14d. Unknown timeframe labels fail closed until an explicit policy is defined. These values are candidate safeguards and require owner approval before production. Any missing required local engine or fresh completed news analysis results in `status=degraded`. The AI chain still produces a diagnostic advisory record, but the final decision is forced to `WAIT`; confidence, entry, stop, target, risk/reward, and position size are null. This is not a substitute for acceptance tests.
 
 ## Security and operational constraints
 
