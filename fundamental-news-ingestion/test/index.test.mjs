@@ -270,6 +270,55 @@ test("POST /pull returns 200 with empty articles when mcp-tv-get-news is empty",
   assert.deepEqual(body.articles, []);
 });
 
+test("scheduled ingestion uses configured bearer secret internally and records a successful article fetch", async () => {
+  const env = createEnv();
+  await env.OAUTH_STORE.put(
+    "tv_mcp:oauth_token",
+    JSON.stringify({ access_token: "valid-token", refresh_token: "refresh-token", expires_at: Math.floor(Date.now() / 1000) + 3600 })
+  );
+
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).includes(".well-known/oauth-authorization-server")) {
+      return jsonResponse({
+        authorization_endpoint: "https://mcp.example.com/oauth/authorize",
+        token_endpoint: "https://mcp.example.com/oauth/token",
+        token_endpoint_auth_methods_supported: ["none"]
+      });
+    }
+    if (String(url).includes("/mcp")) {
+      assert.equal(init.headers.authorization, "Bearer valid-token");
+      return jsonResponse({
+        result: {
+          data: {
+            headlines: [
+              { id: "scheduled-1", title: "Gold outlook update", url: "https://news.example.com/1", symbols: ["OANDA:XAUUSD"] }
+            ]
+          }
+        }
+      });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  await worker.scheduled(
+    { scheduledTime: Date.now(), cron: "*/30 * * * *" },
+    env,
+    createCtx()
+  );
+
+  const stored = JSON.parse(await env.OAUTH_STORE.get("tv_mcp:last_scheduled_pull"));
+  assert.equal(stored.status, "ok");
+  assert.equal(stored.article_count, 1);
+  assert.equal(stored.http_status, 200);
+  assert.deepEqual(stored.symbols, ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"]);
+  assert.equal(JSON.stringify(stored).includes("valid-token"), false);
+
+  const health = await worker.fetch(new Request("https://news.example.com/health"), env, createCtx());
+  const healthBody = await health.json();
+  assert.equal(healthBody.last_scheduled_ingest.status, "ok");
+  assert.equal(healthBody.last_scheduled_ingest.article_count, 1);
+});
+
 test("Parser output preserves AI-worker expected articles array contract", () => {
   const parsed = internals.parseArticlesFromMcpPayload({
     result: {
