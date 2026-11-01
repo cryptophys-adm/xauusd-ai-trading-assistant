@@ -489,6 +489,7 @@ async function runAnalysis(
     timeframe: item.timeframe,
     candle_time: item.candle_time,
     candle_key: item.candle_key,
+    computed_at: item.computed_at,
     calculation_version: item.calculation_version,
     values: item.values,
     provenance: item.provenance
