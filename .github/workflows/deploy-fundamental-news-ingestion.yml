@@ -43,3 +43,28 @@ jobs:
             exit 1
           fi
           npx --yes wrangler@4.45.0 deploy --config fundamental-news-ingestion/wrangler.jsonc
+
+      - name: Smoke test production health
+        run: |
+          response="$(curl --fail --silent --show-error --max-time 20 https://news.cryptophys.work/health)"
+          printf '%s' "$response" | node -e '
+            const h = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const valid = h.status === "ok"
+              && h.worker === "xauusd-fundamental-news-ingestion"
+              && h.ingest_auth_configured === true
+              && h.oauth_configured === true
+              && h.oauth_authorized === true
+              && h.oauth_store_configured === true;
+            const summary = {
+              worker: h.worker,
+              status: h.status,
+              provider: h.provider,
+              ingest_auth_configured: h.ingest_auth_configured,
+              oauth_configured: h.oauth_configured,
+              oauth_authorized: h.oauth_authorized,
+              oauth_store_configured: h.oauth_store_configured,
+              last_scheduled_ingest: h.last_scheduled_ingest || null
+            };
+            console.log(JSON.stringify(summary));
+            if (!valid) process.exit(1);
+          '
