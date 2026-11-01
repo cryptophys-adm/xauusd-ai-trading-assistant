@@ -510,22 +510,22 @@ function canonicalArticleUrl(value) {
     url.hash = "";
     url.search = "";
     url.hostname = url.hostname.toLowerCase();
-    url.pathname = url.pathname.replace(/\\/+$/, "") || "/";
-    return url.toString().replace(/\\/$/, "");
+    url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+    return url.toString().replace(/\/$/, "");
   } catch {
-    return raw.split(/[?#]/, 1)[0].replace(/\\/+$/, "").toLowerCase();
+    return raw.split(/[?#]/, 1)[0].replace(/\/+$/, "").toLowerCase();
   }
 }
 
 function articleDedupeKey(article) {
   const url = canonicalArticleUrl(article.url);
-  if (url) return `url:${url}`;
+  if (url) return \`url:\${url}\`;
   const id = asString(article.id).trim().toLowerCase();
-  if (id) return `id:${id}`;
-  const title = asString(article.title).normalize("NFKC").toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, " ").trim();
+  if (id) return \`id:\${id}\`;
+  const title = asString(article.title).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
   if (!title) return "";
-  const source = asString(article.source).normalize("NFKC").toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, " ").trim();
-  return `title:${title}|source:${source}`;
+  const source = asString(article.source).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return \`title:\${title}|source:\${source}\`;
 }
 
 function dedupeArticles(articles) {
@@ -552,7 +552,7 @@ function parsePublishedAtMs(value) {
   }
   if (typeof value !== "string" || !value.trim()) return null;
   const numeric = Number(value);
-  if (Number.isFinite(numeric) && /^\\d+(?:\\.\\d+)?$/.test(value.trim())) {
+  if (Number.isFinite(numeric) && /^\d+(?:\.\d+)?$/.test(value.trim())) {
     return numeric < 1e12 ? numeric * 1000 : numeric;
   }
   const parsed = Date.parse(value);
