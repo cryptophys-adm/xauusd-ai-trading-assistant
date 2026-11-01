@@ -416,12 +416,12 @@ async function upsertTradeDecision(
   }
 }
 
-async function claimAnalysisRun(env: Env, candleKey: string): Promise<boolean> {
+async function claimAnalysisRun(env: Env, candleKey: string, inputFingerprint: string): Promise<boolean> {
   const result = await env.DB.prepare(
-    "INSERT INTO analysis_runs (candle_key, status, attempt_count, started_at, updated_at) VALUES (?, 'analyzing', 1, datetime('now'), datetime('now')) " +
-    "ON CONFLICT(candle_key) DO UPDATE SET status = 'analyzing', attempt_count = analysis_runs.attempt_count + 1, started_at = datetime('now'), updated_at = datetime('now'), completed_at = NULL, error_code = NULL " +
-    "WHERE analysis_runs.status IN ('degraded', 'failed') OR (analysis_runs.status = 'analyzing' AND analysis_runs.updated_at < datetime('now', '-10 minutes'))"
-  ).bind(candleKey).run();
+    "INSERT INTO analysis_runs (candle_key, status, attempt_count, started_at, updated_at, result_json) VALUES (?, 'analyzing', 1, datetime('now'), datetime('now'), json_object('input_fingerprint', ?)) " +
+    "ON CONFLICT(candle_key) DO UPDATE SET status = 'analyzing', attempt_count = analysis_runs.attempt_count + 1, started_at = datetime('now'), updated_at = datetime('now'), completed_at = NULL, error_code = NULL, result_json = json_object('input_fingerprint', ?) " +
+    "WHERE (analysis_runs.status IN ('degraded', 'failed') AND COALESCE(json_extract(analysis_runs.result_json, '$.input_fingerprint'), '') != ?) OR (analysis_runs.status = 'analyzing' AND analysis_runs.updated_at < datetime('now', '-10 minutes'))"
+  ).bind(candleKey, inputFingerprint, inputFingerprint, inputFingerprint).run();
   return Number(result.meta.changes) > 0;
 }
 
@@ -446,8 +446,6 @@ async function runAnalysis(
   timeframe: string,
   payloads: Record<string, WebhookPayload>
 ): Promise<{ status: string; missing_evidence: string[] }> {
-  const claimed = await claimAnalysisRun(env, candleKey);
-  if (!claimed) return { status: "already_processed", missing_evidence: [] };
   const [knowledgeText, newsAnalysis, localCalculationRaw] = await Promise.all([
     env.KNOWLEDGE_BASE.get("knowledge-base:v3"),
     fetchLatestNewsAnalysis(env),
@@ -463,6 +461,40 @@ async function runAnalysis(
     if (!raw) continue;
     try { localCalculations.push(JSON.parse(raw)); } catch { /* malformed KV evidence is excluded and reported as missing */ }
   }
+  const fingerprintLocalCalculations = localCalculations.map((item: any) => ({
+    engine: item.engine,
+    schema_version: item.schema_version,
+    symbol: item.symbol,
+    timeframe: item.timeframe,
+    candle_time: item.candle_time,
+    candle_key: item.candle_key,
+    calculation_version: item.calculation_version,
+    values: item.values,
+    provenance: item.provenance
+  })).sort((a: any, b: any) => String(a.engine).localeCompare(String(b.engine)));
+  const newsAnalyzedAt = Date.parse(asText(newsAnalysis?.analyzed_at));
+  const newsFetchedAt = Date.parse(asText(newsAnalysis?.fetched_at));
+  const newsNow = Date.now();
+  const newsFreshness = Number.isFinite(newsAnalyzedAt) && Number.isFinite(newsFetchedAt) &&
+    newsNow - newsAnalyzedAt <= 6 * 60 * 60 * 1000 &&
+    newsNow - newsFetchedAt <= 6 * 60 * 60 * 1000 &&
+    newsAnalyzedAt <= newsNow + 5 * 60 * 1000 &&
+    newsFetchedAt <= newsNow + 5 * 60 * 1000;
+  const fingerprintInput = JSON.stringify({
+    candleKey, ticker, timeframe, payloads, localCalculations: fingerprintLocalCalculations,
+    news: {
+      analysis_key: newsAnalysis?.analysis_key,
+      status: newsAnalysis?.status,
+      article_count: newsAnalysis?.article_count,
+      recommendation: newsAnalysis?.recommendation,
+      fresh: newsFreshness
+    }
+  });
+  const fingerprintDigest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(fingerprintInput));
+  const inputFingerprint = Array.from(new Uint8Array(fingerprintDigest)).map(value => value.toString(16).padStart(2, "0")).join("");
+  const claimed = await claimAnalysisRun(env, candleKey, inputFingerprint);
+  if (!claimed) return { status: "already_processed", missing_evidence: [] };
+
   const fusion = buildEvidenceFusion({
     candleKey,
     symbol: ticker,
@@ -691,6 +723,7 @@ async function runAnalysis(
     validation_errors: fusion.validation_errors
   }), { expirationTtl: 60 * 60 * 24 * 14 });
   await setAnalysisRunStatus(env, candleKey, analysisStatus, {
+    input_fingerprint: inputFingerprint,
     missing_evidence: fusion.missing_evidence,
     validation_errors: fusion.validation_errors,
     decision: synthesis.decision,
