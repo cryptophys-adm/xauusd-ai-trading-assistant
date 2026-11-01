@@ -6,6 +6,11 @@ export const LOCAL_ENGINES = Object.freeze(["mizan", "prophet", "gmi"]);
 export const NEWS_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 export const LOCAL_CALC_MAX_AGE_MS = 30 * 60 * 1000;
 const FUTURE_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const CANDLE_INTERVAL_MS = Object.freeze({
+  M1: 60_000, M5: 5 * 60_000, M15: 15 * 60_000, M30: 30 * 60_000,
+  H1: 60 * 60_000, H4: 4 * 60 * 60_000, D1: 24 * 60 * 60_000,
+  W1: 7 * 24 * 60 * 60_000
+});
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -55,9 +60,11 @@ export function validateLocalCalculation(payload, expected = {}, now = Date.now(
       }
     }
   }
+  const candleAt = timestampMs(payload.candle_time);
   const computedAt = timestampMs(payload.computed_at);
   if (computedAt !== null && computedAt > now + FUTURE_CLOCK_SKEW_MS) errors.push("computed_at_in_future");
   if (computedAt !== null && now - computedAt > LOCAL_CALC_MAX_AGE_MS) errors.push("calculation_stale");
+  if (computedAt !== null && candleAt !== null && computedAt < candleAt - FUTURE_CLOCK_SKEW_MS) errors.push("calculation_predates_candle");
   if (expected.symbol && symbolKey(payload.symbol) !== symbolKey(expected.symbol)) errors.push("symbol_mismatch");
   if (expected.timeframe && timeframeKey(payload.timeframe) !== timeframeKey(expected.timeframe)) errors.push("timeframe_mismatch");
   if (expected.candle_key && payload.candle_key !== expected.candle_key) errors.push("candle_key_mismatch");
@@ -91,7 +98,13 @@ export function buildEvidenceFusion(input, now = Date.now()) {
   const errors = [];
   const candleTimeMs = timestampMs(candleTime);
   if (candleTimeMs === null) errors.push("candle_time_invalid");
-  else if (candleTimeMs > now + FUTURE_CLOCK_SKEW_MS) errors.push("candle_time_in_future");
+  else {
+    if (candleTimeMs > now + FUTURE_CLOCK_SKEW_MS) errors.push("candle_time_in_future");
+    const tf = timeframeKey(timeframe);
+    const intervalMs = CANDLE_INTERVAL_MS[tf];
+    if (!intervalMs) errors.push("timeframe_freshness_policy_unsupported");
+    else if (candleTimeMs <= now && now - candleTimeMs > intervalMs * 2) errors.push("candle_stale");
+  }
   const webhookSources = ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"];
   for (const source of webhookSources) {
     const payload = webhookPayloads[source];
