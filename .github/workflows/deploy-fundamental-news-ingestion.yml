@@ -88,7 +88,7 @@ jobs:
                 http_status: r.http_status
               }));
             ' 2>/dev/null)"; then
-              printf '%s\\n' "$summary"
+              printf '%s\n' "$summary"
               exit 0
             fi
             sleep 5
