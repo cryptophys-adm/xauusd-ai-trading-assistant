@@ -447,8 +447,10 @@ async function claimAnalysisRun(env: Env, candleKey: string, inputFingerprint: s
   const result = await env.DB.prepare(
     "INSERT INTO analysis_runs (candle_key, status, attempt_count, started_at, updated_at, result_json) VALUES (?, 'analyzing', 1, datetime('now'), datetime('now'), json_object('input_fingerprint', ?)) " +
     "ON CONFLICT(candle_key) DO UPDATE SET status = 'analyzing', attempt_count = analysis_runs.attempt_count + 1, started_at = datetime('now'), updated_at = datetime('now'), completed_at = NULL, error_code = NULL, result_json = json_object('input_fingerprint', ?) " +
-    "WHERE (analysis_runs.status = 'degraded' AND COALESCE(json_extract(analysis_runs.result_json, '$.input_fingerprint'), '') != ?) OR analysis_runs.status = 'failed' OR (analysis_runs.status = 'analyzing' AND analysis_runs.updated_at < datetime('now', '-10 minutes'))"
-  ).bind(candleKey, inputFingerprint, inputFingerprint, inputFingerprint).run();
+    "WHERE analysis_runs.status = 'failed' OR (analysis_runs.status = 'analyzing' AND analysis_runs.updated_at < datetime('now', '-10 minutes')) OR " +
+    "(analysis_runs.status = 'degraded' AND COALESCE(json_extract(analysis_runs.result_json, '$.input_fingerprint'), '') != ?) OR " +
+    "(analysis_runs.status = 'complete' AND COALESCE(json_extract(analysis_runs.result_json, '$.input_fingerprint'), '') != ?)"
+  ).bind(candleKey, inputFingerprint, inputFingerprint, inputFingerprint, inputFingerprint).run();
   return Number(result.meta.changes) > 0;
 }
 
@@ -704,6 +706,21 @@ async function runAnalysis(
     model: [env.AI_MODEL_ANALYST, env.AI_MODEL_COUNSELOR, env.AI_MODEL_REASONER].join(",")
   });
 
+  await setAnalysisRunStatus(env, candleKey, "complete", {
+    input_fingerprint: inputFingerprint,
+    decision: synthesis.decision,
+    evidence_fusion: {
+      schema_version: fusion.schema_version,
+      candle_key: fusion.candle_key,
+      symbol: fusion.symbol,
+      timeframe: fusion.timeframe,
+      candle_time: fusion.candle_time,
+      webhook_sources: fusion.webhook_sources,
+      local_calculation_versions: Object.fromEntries(Object.entries(fusion.local_calculations).map(([name, item]: [string, any]) => [name, item.calculation_version])),
+      news_analysis_key: asText(fusion.fundamental_news_analysis?.analysis_key),
+      news_analyzed_at: asText(fusion.fundamental_news_analysis?.analyzed_at)
+    }
+  }, null);
   const confidence = typeof decision.confidence === "number" ? decision.confidence : null;
   const entry = typeof decision.entry_price === "number" ? decision.entry_price : null;
   const stop = typeof decision.stop_loss === "number" ? decision.stop_loss : null;
