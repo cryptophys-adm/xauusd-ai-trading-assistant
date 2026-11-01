@@ -476,7 +476,9 @@ function extractMcpErrorText(payload) {
     .filter(Boolean)
     .join(" ");
   return [
+    asString(rootError?.code),
     asString(rootError?.message),
+    asString(resultError?.code),
     asString(resultError?.message),
     contentText
   ].filter(Boolean).join(" ");
