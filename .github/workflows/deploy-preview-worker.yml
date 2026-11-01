@@ -18,7 +18,7 @@ permissions:
 
 concurrency:
   group: evidence-fusion-preview
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   preview-e2e:
