@@ -102,9 +102,9 @@ function parseDecision(text: string): JsonObject {
       const target = nullableNumber(parsed.take_profit);
       const riskReward = nullableNumber(parsed.risk_reward);
       const positionSize = nullableNumber(parsed.position_size_pct);
-      const confidenceValid = parsed.confidence === null || (confidence !== null && confidence >= 0 && confidence <= 1);
+      const confidenceValid = parsed.confidence == null || (confidence !== null && confidence >= 0 && confidence <= 1);
       const numericFieldsValid = [parsed.entry_price, parsed.stop_loss, parsed.take_profit, parsed.risk_reward, parsed.position_size_pct]
-        .every(value => value === null || (typeof value === "number" && Number.isFinite(value)));
+        .every(value => value == null || (typeof value === "number" && Number.isFinite(value)));
       const pricesValid = entry !== null && entry > 0 && stop !== null && stop > 0 && target !== null && target > 0;
       if (["BUY", "SELL", "WAIT", "NO_TRADE"].includes(decision) && confidenceValid && numericFieldsValid) {
         if ((decision === "BUY" || decision === "SELL") && !pricesValid) {
