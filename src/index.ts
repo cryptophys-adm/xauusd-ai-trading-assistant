@@ -101,8 +101,8 @@ function parseLocalCalcProvenanceAllowlist(raw: string | undefined): LocalCalcPr
     const policy: LocalCalcProvenancePolicy = {};
     for (const engine of LOCAL_ENGINES) {
       const entry = parsed[engine] as Record<string, unknown> | undefined;
-      const sourceHashes = Array.isArray(entry?.source_hashes) ? entry!.source_hashes.filter((value): value is string => typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)) : [];
-      const implementationHashes = Array.isArray(entry?.implementation_hashes) ? entry!.implementation_hashes.filter((value): value is string => typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)) : [];
+      const sourceHashes = Array.isArray(entry?.source_hashes) ? entry!.source_hashes.filter((value): value is string => typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)).map(value => value.toLowerCase()) : [];
+      const implementationHashes = Array.isArray(entry?.implementation_hashes) ? entry!.implementation_hashes.filter((value): value is string => typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)).map(value => value.toLowerCase()) : [];
       if (!sourceHashes.length || !implementationHashes.length) return null;
       policy[engine] = { source_hashes: sourceHashes, implementation_hashes: implementationHashes };
     }
