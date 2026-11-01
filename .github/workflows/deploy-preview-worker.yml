@@ -130,7 +130,28 @@ jobs:
             assert.ok(response.status === 202 || response.status === 200, "local calculation rejected: " + JSON.stringify(lastLocalResult));
           }
 
-          assert.equal(lastLocalResult.analysis_status, "degraded");
+          // KV is eventually consistent. Retry the final idempotent evidence write while the preview bindings converge.
+  const retryDeadline = Date.now() + 60_000;
+  while (lastLocalResult.analysis_status === "waiting_for_evidence" && Date.now() < retryDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 2_000));
+    const retryResponse = await fetch(base + "/evidence/local-calculation", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schema_version: "cryptophys.local-calculation.v1",
+        engine: "gmi", symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
+        computed_at: new Date().toISOString(),
+        calculation_version: "gmi-preview-fixture-v1",
+        values: { bias: "NEUTRAL", fixture_only: true },
+        provenance: { source: "isolated-preview-fixture", source_hash: "preview-test-hash" }
+      })
+    });
+    lastLocalResult = await retryResponse.json();
+    assert.ok(retryResponse.status === 202 || retryResponse.status === 200,
+      "local calculation retry rejected: " + JSON.stringify(lastLocalResult));
+  }
+
+  assert.equal(lastLocalResult.analysis_status, "degraded");
           assert.ok(lastLocalResult.missing_evidence?.includes("fundamental_news_analysis"),
             "fresh completed news must remain a mandatory missing-evidence blocker in this fixture test");
           assert.ok(!lastLocalResult.missing_evidence?.some(item => item.startsWith("local_calculation:")),
