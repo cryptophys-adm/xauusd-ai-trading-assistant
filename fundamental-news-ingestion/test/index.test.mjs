@@ -349,8 +349,7 @@ test("HTTP 429 quota response opens cooldown and is not retried", async () => {
       mcpCalls += 1;
       return jsonResponse({
         error: {
-          code: "TOOL_QUOTA_EXCEEDED",
-          message: "Tool call quota exceeded; access to MCP is suspended until 23:59 UTC"
+          code: "TOOL_QUOTA_EXCEEDED"
         }
       }, { status: 429 });
     }
