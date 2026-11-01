@@ -39,3 +39,20 @@ CREATE TABLE IF NOT EXISTS trade_decisions (
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_dec_candle ON trade_decisions(candle_key);
+
+
+-- Standalone fundamental news analysis, independent of indicator webhooks.
+CREATE TABLE IF NOT EXISTS news_analyses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  analysis_key TEXT NOT NULL UNIQUE,
+  fetched_at TEXT NOT NULL,
+  analyzed_at TEXT NOT NULL,
+  article_count INTEGER NOT NULL,
+  evidence_json TEXT NOT NULL,
+  analyst_output TEXT NOT NULL,
+  counselor_output TEXT NOT NULL,
+  reasoner_output TEXT NOT NULL,
+  recommendation_json TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_news_analyses_analyzed_at ON news_analyses(analyzed_at);
