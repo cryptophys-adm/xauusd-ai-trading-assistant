@@ -246,6 +246,17 @@ test("POST /pull serves valid cached headlines during provider quota cooldown", 
   assert.equal(body.count, 1);
   assert.equal(body.articles[0].title, "Cached gold headline");
   assert.equal(upstreamCalls, 0);
+
+  const duplicateResponse = await worker.fetch(new Request("https://news.example.com/pull", {
+    method: "POST",
+    headers: { authorization: "Bearer ingest-secret" }
+  }), env, createCtx());
+  assert.equal(duplicateResponse.status, 200);
+  const duplicateBody = await duplicateResponse.json();
+  assert.equal(duplicateBody.cache, "hit");
+  assert.equal(duplicateBody.count, 0);
+  assert.deepEqual(duplicateBody.articles, []);
+  assert.equal(upstreamCalls, 0, "repeat cache hits must not trigger extra provider calls");
 });
 
 test("POST /pull enforces cooldown on cache miss before OAuth or MCP calls", async () => {
