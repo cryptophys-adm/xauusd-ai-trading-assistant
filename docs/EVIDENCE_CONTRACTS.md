@@ -11,7 +11,7 @@ All evidence for one analysis must refer to the same canonical candle identity:
 - `candle_key`: the exact correlation key used by the webhook pipeline.
 - All timestamps are ISO-8601 UTC. A producer must not silently substitute receipt time for candle time.
 
-The existing webhook contract accepts `prophet_r38`, `prophet_r37_ssot`, and `gmi_v12_70`. The configured three-source webhook gate remains in place.
+The existing inbound webhook contract accepts `prophet_r38`, `prophet_r37_ssot`, and `gmi_v12_70`. The Worker stamps the normalized stored envelope with `cryptophys.webhook-evidence.v1`; this preserves compatibility with existing TradingView alerts while giving fusion a versioned internal contract. The configured three-source webhook gate remains in place.
 
 ## Local calculation contract
 
@@ -41,7 +41,7 @@ Allowed `engine` values are `mizan`, `prophet`, and `gmi`. This endpoint validat
 
 ## Completed fundamental news analysis
 
-The AI Worker reads the most recent completed analysis from its own `news_analyses` D1 table. A valid record must contain `status=ok`, `analysis_type=fundamental_news`, valid `fetched_at` and `analyzed_at` timestamps, and non-empty underlying article evidence. Analysis older than six hours is stale. The current news ingestion provider's quota cooldown is a source failure, not evidence of no market impact.
+The AI Worker reads the most recent completed analysis from its own `news_analyses` D1 table and stamps it as `cryptophys.completed-news-analysis.v1`. A valid record must contain `status=ok`, `analysis_type=fundamental_news`, valid `fetched_at` and `analyzed_at` timestamps, symbol coverage, and non-empty underlying article evidence. Analysis older than six hours is stale. The current news ingestion provider's quota cooldown is a source failure, not evidence of no market impact.
 
 ## Fusion behavior
 
