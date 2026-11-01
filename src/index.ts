@@ -590,7 +590,12 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 
   const existing = await env.WEBHOOK_BUFFER.get("analysis:" + safeKeyPart(candleKey));
   if (existing) {
-    return json({ status: "accepted", candle_key: candleKey, analysis_status: "already_processed" }, 200);
+    try {
+      const prior = JSON.parse(existing) as JsonObject;
+      if (prior.status === "complete") {
+        return json({ status: "accepted", candle_key: candleKey, analysis_status: "already_processed" }, 200);
+      }
+    } catch { /* malformed marker does not block a retry */ }
   }
 
   try {
@@ -641,8 +646,13 @@ export default {
       }
       const declaredLength = Number.parseInt(request.headers.get("content-length") || "0", 10);
       if (Number.isFinite(declaredLength) && declaredLength > 65536) return json({ error: "Payload exceeds 64 KiB limit" }, 413);
+      let bodyText: string;
+      try {
+        bodyText = await request.text();
+        if (new TextEncoder().encode(bodyText).byteLength > 65536) return json({ error: "Payload exceeds 64 KiB limit" }, 413);
+      } catch { return json({ error: "Request body could not be read" }, 400); }
       let payload: unknown;
-      try { payload = await request.json(); } catch { return json({ error: "Request body must be valid JSON" }, 400); }
+      try { payload = JSON.parse(bodyText); } catch { return json({ error: "Request body must be valid JSON" }, 400); }
       const preliminary = validateLocalCalculation(payload);
       if (!preliminary.valid && preliminary.errors.some(error => error !== "calculation_stale" && error !== "computed_at_in_future")) {
         return json({ error: "Invalid local calculation contract", validation_errors: preliminary.errors }, 400);
@@ -662,7 +672,28 @@ export default {
       if (!validation.valid) return json({ error: "Invalid or stale local calculation contract", validation_errors: validation.errors }, 400);
       const stored = { ...record, received_at: new Date().toISOString() };
       await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":" + engine, JSON.stringify(stored), { expirationTtl: 60 * 60 * 24 * 14 });
-      return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key }, 202);
+
+      // Trigger fusion only after all three local engines and all configured webhook sources exist.
+      const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
+      const [localRecords, webhookRecords] = await Promise.all([
+        Promise.all(LOCAL_ENGINES.map(name => env.WEBHOOK_BUFFER.get("localcalc:" + key + ":" + name))),
+        Promise.all(required.map(name => env.WEBHOOK_BUFFER.get("candle:" + key + ":" + name)))
+      ]);
+      if (localRecords.every(Boolean) && webhookRecords.every(Boolean)) {
+        const payloads: Record<string, WebhookPayload> = {};
+        for (let index = 0; index < required.length; index++) {
+          try { payloads[required[index]] = JSON.parse(webhookRecords[index] as string) as WebhookPayload; } catch { /* fusion will report missing/malformed source */ }
+        }
+        if (required.every(name => payloads[name])) {
+          try {
+            const outcome = await runAnalysis(env, key, asText(record.symbol), asText(record.timeframe), payloads);
+            return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, analysis_status: outcome.status, missing_evidence: outcome.missing_evidence }, 202);
+          } catch (error) {
+            return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, analysis_status: "failed", error: error instanceof Error ? error.message : "Unknown analysis error" }, 502);
+          }
+        }
+      }
+      return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, analysis_status: "waiting_for_evidence" }, 202);
     }
     if (url.pathname === "/news/analyze" && request.method === "POST") {
       if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
