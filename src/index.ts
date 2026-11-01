@@ -15,6 +15,7 @@ export interface Env {
   AI_MODEL_COUNSELOR: string;
   AI_MODEL_REASONER: string;
   REQUIRED_SOURCES: string;
+  LOCAL_CALC_PROVENANCE_ALLOWLIST?: string;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -89,6 +90,26 @@ function asText(value: unknown): string {
 
 function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
+}
+
+type LocalCalcProvenancePolicy = Record<string, { source_hashes: string[]; implementation_hashes: string[] }>;
+
+function parseLocalCalcProvenanceAllowlist(raw: string | undefined): LocalCalcProvenancePolicy | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const policy: LocalCalcProvenancePolicy = {};
+    for (const engine of LOCAL_ENGINES) {
+      const entry = parsed[engine] as Record<string, unknown> | undefined;
+      const sourceHashes = Array.isArray(entry?.source_hashes) ? entry!.source_hashes.filter((value): value is string => typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)) : [];
+      const implementationHashes = Array.isArray(entry?.implementation_hashes) ? entry!.implementation_hashes.filter((value): value is string => typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)) : [];
+      if (!sourceHashes.length || !implementationHashes.length) return null;
+      policy[engine] = { source_hashes: sourceHashes, implementation_hashes: implementationHashes };
+    }
+    return policy;
+  } catch {
+    return null;
+  }
 }
 
 function extractText(result: unknown): string {
@@ -844,18 +865,28 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/ready") {
+      const provenancePolicy = parseLocalCalcProvenanceAllowlist(env.LOCAL_CALC_PROVENANCE_ALLOWLIST);
+      if (!provenancePolicy) {
+        return json({
+          status: "not_ready",
+          local_calculation_provenance_configured: false,
+          reason: "An explicit per-engine source and implementation SHA-256 allowlist is required."
+        }, 503);
+      }
       try {
         await env.DB.prepare("SELECT status FROM analysis_runs LIMIT 1").first<{ status: string }>();
         return json({
           status: "ready",
           schema_version: "cryptophys.evidence-fusion.v1",
           local_calculation_contract: "cryptophys.local-calculation.v1",
-          d1_analysis_runs: true
+          d1_analysis_runs: true,
+          local_calculation_provenance_configured: true
         });
       } catch {
         return json({
           status: "not_ready",
           d1_analysis_runs: false,
+          local_calculation_provenance_configured: true,
           reason: "Required analysis_runs D1 migration is not available."
         }, 503);
       }
@@ -920,6 +951,14 @@ export default {
         candle_time: asText(record.candle_time)
       });
       if (!validation.valid) return json({ error: "Invalid or stale local calculation contract", validation_errors: validation.errors }, 400);
+      const provenancePolicy = parseLocalCalcProvenanceAllowlist(env.LOCAL_CALC_PROVENANCE_ALLOWLIST);
+      if (!provenancePolicy) return json({ error: "Local calculation provenance allowlist is not configured" }, 503);
+      const provenance = record.provenance as Record<string, unknown>;
+      const allowedProvenance = provenancePolicy[engine];
+      if (!allowedProvenance.source_hashes.includes(asText(provenance.source_hash).toLowerCase()) ||
+          !allowedProvenance.implementation_hashes.includes(asText(provenance.implementation_hash).toLowerCase())) {
+        return json({ error: "Local calculation source or implementation hash is not approved for this engine" }, 403);
+      }
       const stored = {
         schema_version: record.schema_version,
         engine,
