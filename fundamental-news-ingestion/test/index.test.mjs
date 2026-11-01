@@ -569,3 +569,25 @@ test("cached articles outside the one-hour window are not returned as valid cach
   assert.equal(body.reason, "TradingView MCP quota cooldown active");
   assert.equal(body.articles.length, 0);
 });
+
+
+test("persistent dedupe suppresses the same article across separate pulls", async () => {
+  const env = createEnv();
+  const article = {
+    title: "Gold rises after dollar weakens",
+    source: "Market News",
+    url: "https://news.example.com/story?id=42&utm_source=first",
+    published_at: new Date().toISOString(),
+    symbols: ["OANDA:XAUUSD"]
+  };
+  const first = await internals.filterPreviouslySeenArticles(env, [article]);
+  assert.equal(first.length, 1);
+
+  const duplicateFromAnotherSymbol = {
+    ...article,
+    url: "https://NEWS.example.com/story?utm_source=second#headline",
+    symbols: ["TVC:DXY"]
+  };
+  const second = await internals.filterPreviouslySeenArticles(env, [duplicateFromAnotherSymbol]);
+  assert.equal(second.length, 0);
+});
