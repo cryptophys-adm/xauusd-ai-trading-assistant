@@ -103,6 +103,16 @@ test("rejects stale M5 candle even when local calculations are newly computed", 
   assert.ok(result.validation_errors.includes("candle_stale"));
 });
 
+test("rejects future local calculation candle timestamps", () => {
+  const payload = local("mizan");
+  payload.candle_time = "2026-11-02T15:00:00.000Z";
+  payload.candle_key = symbol + ":" + timeframe + ":" + payload.candle_time;
+  payload.computed_at = "2026-11-01T14:59:00.000Z";
+  const result = validateLocalCalculation(payload, { symbol, timeframe, candle_key: payload.candle_key, candle_time: payload.candle_time }, now);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.includes("candle_time_in_future"));
+});
+
 test("rejects calculation timestamps that predate their candle", () => {
   const payload = local("mizan");
   payload.computed_at = "2026-11-01T14:40:00.000Z";
