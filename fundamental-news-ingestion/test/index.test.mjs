@@ -215,16 +215,29 @@ test("GET /health treats expired cooldown as inactive without deleting a concurr
     until: new Date(Date.now() - 60 * 1000).toISOString(),
     reason: "provider_quota_exceeded"
   };
+  const renewedRecord = {
+    until: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    reason: "provider_quota_exceeded"
+  };
   await env.OAUTH_STORE.put(key, JSON.stringify(expiredRecord));
+  const get = env.OAUTH_STORE.get.bind(env.OAUTH_STORE);
+  let replaced = false;
+  env.OAUTH_STORE.get = async (requestedKey) => {
+    const value = await get(requestedKey);
+    if (requestedKey === key && !replaced) {
+      replaced = true;
+      await env.OAUTH_STORE.put(key, JSON.stringify(renewedRecord));
+    }
+    return value;
+  };
 
   const response = await worker.fetch(new Request("https://news.example.com/health"), env, createCtx());
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.provider_cooldown_until, null);
 
-  // Expired records are ignored rather than deleted; this avoids a read/delete
-  // race where a newer cooldown could replace the key between those operations.
-  assert.deepEqual(JSON.parse(await env.OAUTH_STORE.get(key)), expiredRecord);
+  assert.equal(replaced, true);
+  assert.deepEqual(JSON.parse(await get(key)), renewedRecord);
 });
 
 test("POST /pull serves valid cached headlines during provider quota cooldown", async () => {
@@ -331,9 +344,11 @@ test("POST /pull rechecks shared cooldown before retrying a transient MCP failur
     headers: { authorization: "Bearer ingest-secret" }
   }), env, createCtx());
 
-  assert.equal(response.status, 503);
+  assert.equal(response.status, 502);
   const body = await response.json();
-  assert.equal(body.reason, "TradingView MCP quota cooldown active");
+  assert.equal(body.reason, "TradingView MCP get_news failed");
+  assert.equal(body.detail, "TradingView MCP quota cooldown active");
+  assert.equal(body.upstream_diagnostic.code, "mcp_quota_cooldown_active");
   assert.equal(mcpCalls, 1, "must not retry MCP after a concurrent request opens cooldown");
 });
 
