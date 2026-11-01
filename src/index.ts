@@ -1,4 +1,4 @@
-import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation } from "./evidence-fusion.mjs";
+import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION } from "./evidence-fusion.mjs";
 
 export interface Env {
   DB: D1Database;
@@ -20,6 +20,7 @@ export interface Env {
 type JsonObject = Record<string, unknown>;
 
 type WebhookPayload = {
+  schema_version?: string;
   secret?: string;
   source?: string;
   ticker?: string;
@@ -295,6 +296,7 @@ async function fetchLatestNewsAnalysis(env: Env): Promise<JsonObject | null> {
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) recommendation = parsed as JsonObject;
     } catch { /* malformed recommendation is not trusted */ }
     return {
+      schema_version: NEWS_ANALYSIS_CONTRACT_VERSION,
       status: "ok",
       analysis_type: "fundamental_news",
       analysis_key: asText(row.analysis_key),
@@ -673,7 +675,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (asText(body.candle_key) && asText(body.candle_key) !== safeKeyPart(asText(body.candle_key))) {
     return json({ error: "candle_key contains unsupported characters" }, 400);
   }
-  const storedPayload: WebhookPayload = { ...body, source, ticker, timeframe, candle_time: candleTime, candle_key: candleKey };
+  const storedPayload: WebhookPayload = { ...body, schema_version: WEBHOOK_EVIDENCE_CONTRACT_VERSION, source, ticker, timeframe, candle_time: candleTime, candle_key: candleKey };
   delete storedPayload.secret;
 
   await env.DB.prepare(
