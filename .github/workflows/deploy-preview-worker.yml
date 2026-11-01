@@ -156,17 +156,18 @@ jobs:
           const retryDeadline = Date.now() + 60_000;
           while (lastLocalResult.analysis_status === "waiting_for_evidence" && Date.now() < retryDeadline) {
             await new Promise(resolve => setTimeout(resolve, 2_000));
+            lastLocalPayload = {
+              schema_version: "cryptophys.local-calculation.v1",
+              engine: "gmi", symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
+              computed_at: new Date().toISOString(),
+              calculation_version: "gmi-preview-fixture-v1",
+              values: { bias: "NEUTRAL", fixture_only: true },
+              provenance: { source: "isolated-preview-fixture", source_hash: "e".repeat(64), implementation_hash: "f".repeat(64) }
+            };
             const retryResponse = await fetch(base + "/evidence/local-calculation", {
               method: "POST",
               headers,
-              body: JSON.stringify({
-                schema_version: "cryptophys.local-calculation.v1",
-                engine: "gmi", symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
-                computed_at: new Date().toISOString(),
-                calculation_version: "gmi-preview-fixture-v1",
-                values: { bias: "NEUTRAL", fixture_only: true },
-                provenance: { source: "isolated-preview-fixture", source_hash: "e".repeat(64), implementation_hash: "f".repeat(64) }
-              })
+              body: JSON.stringify(lastLocalPayload)
             });
             lastLocalResult = await retryResponse.json();
             assert.ok(retryResponse.status === 202 || retryResponse.status === 200,
