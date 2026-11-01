@@ -21,6 +21,7 @@ No production release may be declared complete while a mandatory requirement is 
 - [ ] Symbol, timeframe, UTC candle timestamps, correlation key, source/version, provenance and freshness are validated.
 - [ ] Same-candle evidence is matched correctly; late, duplicated, conflicting, stale and malformed records are handled deterministically.
 - [ ] Required evidence policy and degraded/wait behavior are explicit.
+- [ ] Timeframe candle-age windows and news/local-calculation freshness thresholds are explicitly approved against actual source timestamp semantics; provisional implementation values do not count as approval.
 - [ ] Local calculation results have reproducible parameters and version identifiers.
 - [ ] Pine parity is demonstrated for every feature claimed as supported; unsupported features are not misrepresented as parity.
 - [ ] No invented, placeholder, or stale values can silently become production evidence.
