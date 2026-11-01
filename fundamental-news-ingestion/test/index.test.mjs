@@ -238,7 +238,7 @@ test("POST /pull returns 502 with empty articles when MCP tool fails", async () 
 
 test("POST /pull returns 200 with empty articles when mcp-tv-get-news is empty", async () => {
   const env = createEnv();
-  await env.OAUTH_STORE.put("tv_mcp:oauth_token", JSON.stringify({ access_token: "ok-token", expires_at: null }));
+  await env.OAUTH_STORE.put("tv_mcp:oauth_token", JSON.stringify({ access_token: "ok-token", expires_at: Math.floor(Date.now() / 1000) + 3600 }));
 
   globalThis.fetch = async (url) => {
     if (String(url).includes(".well-known/oauth-authorization-server")) {
