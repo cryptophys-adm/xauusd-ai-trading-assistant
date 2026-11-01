@@ -8,6 +8,8 @@ const WORKER_NAME = "xauusd-fundamental-news-ingestion";
 const TOKEN_KEY = "tv_mcp:oauth_token";
 const LAST_SCHEDULED_PULL_KEY = "tv_mcp:last_scheduled_pull";
 const QUOTA_COOLDOWN_KEY = "tv_mcp:quota_cooldown_until";
+const SEEN_ARTICLES_KEY = "tv_mcp:seen_articles_v1";
+const SEEN_ARTICLES_TTL_MS = 24 * 60 * 60 * 1000;
 const STATE_PREFIX = "tv_mcp:oauth_state:";
 const DEFAULT_SYMBOLS = ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"];
 const METADATA_CACHE_TTL_MS = 60 * 60 * 1000;
@@ -568,6 +570,52 @@ function filterRecentArticles(articles, now = Date.now(), windowMs = 60 * 60 * 1
   });
 }
 
+async function filterPreviouslySeenArticles(env, articles, now = Date.now()) {
+  const uniqueArticles = dedupeArticles(articles);
+  if (!env.OAUTH_STORE || uniqueArticles.length === 0) return uniqueArticles;
+
+  let storedRecords = [];
+  try {
+    const raw = await env.OAUTH_STORE.get(SEEN_ARTICLES_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(parsed?.records)) storedRecords = parsed.records;
+  } catch {
+    storedRecords = [];
+  }
+
+  const cutoff = now - SEEN_ARTICLES_TTL_MS;
+  const records = storedRecords.filter((record) =>
+    typeof record?.fingerprint === "string" &&
+    Number.isFinite(Date.parse(record.seen_at)) &&
+    Date.parse(record.seen_at) >= cutoff
+  );
+  const seen = new Set(records.map((record) => record.fingerprint));
+  const fresh = [];
+
+  for (const article of uniqueArticles) {
+    const key = articleDedupeKey(article);
+    if (!key) continue;
+    const fingerprint = await sha256Base64Url(key);
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+    records.push({ fingerprint, seen_at: new Date(now).toISOString() });
+    fresh.push(article);
+  }
+
+  try {
+    await env.OAUTH_STORE.put(
+      SEEN_ARTICLES_KEY,
+      JSON.stringify({ records }),
+      { expirationTtl: Math.ceil(SEEN_ARTICLES_TTL_MS / 1000) }
+    );
+  } catch {
+    // Keep ingestion available if dedupe state cannot be persisted; per-payload
+    // deduplication and the one-hour publication-time filter still apply.
+    console.error("news_dedupe_state_write_failed");
+  }
+  return fresh;
+}
+
 function unavailableResponse(status, reason, detail = {}) {
   return json(
     {
@@ -958,7 +1006,8 @@ async function handlePull(request, env, ctx, options = {}) {
     const cached = await cache.match(cacheKey);
     if (cached) {
       const payload = await cached.json();
-      const cachedArticles = filterRecentArticles(asArray(payload.articles) || []);
+      const recentCachedArticles = filterRecentArticles(asArray(payload.articles) || []);
+      const cachedArticles = await filterPreviouslySeenArticles(env, recentCachedArticles);
       if (cachedArticles.length > 0) {
         return json({ ...payload, articles: cachedArticles, count: cachedArticles.length, cache: "hit" });
       }
@@ -997,7 +1046,8 @@ async function handlePull(request, env, ctx, options = {}) {
 
   try {
     const { payload, attempt } = await invokeMcpGetNewsWithRetry(env, metadata, accessToken, symbols);
-    const articles = filterRecentArticles(parseArticlesFromMcpPayload(payload));
+    const recentArticles = filterRecentArticles(parseArticlesFromMcpPayload(payload));
+    const articles = await filterPreviouslySeenArticles(env, recentArticles);
     const result = {
       worker: WORKER_NAME,
       provider: PROVIDER,
@@ -1041,6 +1091,7 @@ export const internals = {
   parseArticlesFromMcpPayload,
   dedupeArticles,
   filterRecentArticles,
+  filterPreviouslySeenArticles,
   normalizeArticle,
   normalizeTokenPayload,
   resolveTokenAuthMethod,
