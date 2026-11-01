@@ -313,6 +313,29 @@ async function fetchLatestNewsAnalysis(env: Env): Promise<JsonObject | null> {
   }
 }
 
+async function claimAnalysisRun(env: Env, candleKey: string): Promise<boolean> {
+  const result = await env.DB.prepare(
+    "INSERT INTO analysis_runs (candle_key, status, attempt_count, started_at, updated_at) VALUES (?, 'analyzing', 1, datetime('now'), datetime('now')) " +
+    "ON CONFLICT(candle_key) DO UPDATE SET status = 'analyzing', attempt_count = analysis_runs.attempt_count + 1, started_at = datetime('now'), updated_at = datetime('now'), completed_at = NULL, error_code = NULL " +
+    "WHERE analysis_runs.status IN ('degraded', 'failed') OR (analysis_runs.status = 'analyzing' AND analysis_runs.updated_at < datetime('now', '-10 minutes'))"
+  ).bind(candleKey).run();
+  return Number(result.meta.changes) > 0;
+}
+
+async function setAnalysisRunStatus(env: Env, candleKey: string, status: string, details: JsonObject, errorCode: string | null = null): Promise<void> {
+  try {
+    await env.DB.prepare(
+      "UPDATE analysis_runs SET status = ?, updated_at = datetime('now'), completed_at = CASE WHEN ? = 'complete' THEN datetime('now') ELSE NULL END, error_code = ?, result_json = ? WHERE candle_key = ?"
+    ).bind(status, status, errorCode, JSON.stringify(details), candleKey).run();
+  } catch (error) {
+    console.error("analysis_run_status_update_failed", JSON.stringify({
+      candle_key: candleKey,
+      status,
+      message: error instanceof Error ? error.message : "Unknown status update error"
+    }));
+  }
+}
+
 async function runAnalysis(
   env: Env,
   candleKey: string,
@@ -320,6 +343,8 @@ async function runAnalysis(
   timeframe: string,
   payloads: Record<string, WebhookPayload>
 ): Promise<{ status: string; missing_evidence: string[] }> {
+  const claimed = await claimAnalysisRun(env, candleKey);
+  if (!claimed) return { status: "already_processed", missing_evidence: [] };
   const [knowledgeText, newsAnalysis, localCalculationRaw] = await Promise.all([
     env.KNOWLEDGE_BASE.get("knowledge-base:v3"),
     fetchLatestNewsAnalysis(env),
@@ -366,6 +391,44 @@ async function runAnalysis(
     policy: knowledge,
     news_evidence: newsEvidence
   };
+
+  if (!fusion.complete) {
+    const timestamp = new Date().toISOString();
+    const reasoning = "Evidence fusion is degraded. Missing evidence: " + (fusion.missing_evidence.join(", ") || "none") + ". Validation errors: " + (fusion.validation_errors.join(", ") || "none") + ". AI analysis was not invoked; no actionable trade setup is issued.";
+    const decision: JsonObject = {
+      decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null,
+      risk_reward: null, position_size_pct: null, reasoning, confirmation: null, invalidation: null
+    };
+    const synthesis = {
+      candle_key: candleKey, ticker, timeframe, timestamp, evidence_fusion: fusion,
+      analysis_chain_status: "not_invoked_due_to_degraded_evidence",
+      analyst_model: env.AI_MODEL_ANALYST, analyst_output: null,
+      counselor_model: env.AI_MODEL_COUNSELOR, counselor_output: null,
+      reasoner_model: env.AI_MODEL_REASONER, reasoner_output: null,
+      news_evidence: newsEvidence, decision
+    };
+    await env.DB.prepare(
+      "INSERT INTO ai_syntheses (candle_key, ticker, timeframe, timestamp, prophet_metrics, gmi_metrics, ai_analysis, ai_model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).bind(
+      candleKey, ticker, timeframe, timestamp,
+      JSON.stringify({ prophet_r38: payloads.prophet_r38?.metrics ?? payloads.prophet_r38, prophet_r37_ssot: payloads.prophet_r37_ssot?.metrics ?? payloads.prophet_r37_ssot }),
+      JSON.stringify(payloads.gmi_v12_70?.metrics ?? payloads.gmi_v12_70),
+      JSON.stringify(synthesis), "not_invoked_due_to_degraded_evidence"
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO trade_decisions (candle_key, decision, confidence, entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).bind(candleKey, "WAIT", null, null, null, null, null, null, reasoning).run();
+    await env.SIGNAL_CACHE.put("latest:" + safeKeyPart(ticker) + ":" + safeKeyPart(timeframe), JSON.stringify(synthesis), { expirationTtl: 60 * 60 * 24 * 7 });
+    try {
+      await sendTelegram(env, ["XAUUSD AI DECISION SUPPORT", "Symbol: " + ticker, "Timeframe: " + timeframe, "Candle: " + candleKey, "Decision: WAIT", "Reason: " + reasoning.slice(0, 900), "Note: advisory only; no trade was executed."].join("\n"));
+    } catch (error) {
+      console.error("telegram_delivery_failed", JSON.stringify({ candle_key: candleKey, message: error instanceof Error ? error.message : "Unknown notification error" }));
+    }
+    const details: JsonObject = { status: "degraded", missing_evidence: fusion.missing_evidence, validation_errors: fusion.validation_errors, timestamp };
+    await env.WEBHOOK_BUFFER.put("analysis:" + safeKeyPart(candleKey), JSON.stringify({ ...details, created_at: timestamp, sources: Object.keys(payloads), decision: synthesis }), { expirationTtl: 60 * 60 * 24 * 14 });
+    await setAnalysisRunStatus(env, candleKey, "degraded", details, "required_evidence_unavailable");
+    return { status: "degraded", missing_evidence: fusion.missing_evidence };
+  }
 
   const analystResult = await env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
     prompt: [
@@ -515,6 +578,7 @@ async function runAnalysis(
     missing_evidence: fusion.missing_evidence,
     validation_errors: fusion.validation_errors
   }), { expirationTtl: 60 * 60 * 24 * 14 });
+  await setAnalysisRunStatus(env, candleKey, analysisStatus, { missing_evidence: fusion.missing_evidence, validation_errors: fusion.validation_errors }, fusion.complete ? null : "required_evidence_unavailable");
   return { status: analysisStatus, missing_evidence: fusion.missing_evidence };
 }
 
