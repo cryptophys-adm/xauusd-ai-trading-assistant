@@ -4,6 +4,8 @@ Status: implementation contract; source parity and production acceptance remain 
 
 ## Correlation identity
 
+Both inbound webhook and local-calculation request bodies are capped at 64 KiB and are read as bounded streams before JSON parsing. The limit is an explicit API contract; increase it only after measuring real payload sizes and memory impact.
+
 All evidence for one analysis must refer to the same canonical candle identity:
 - `symbol`: canonical market symbol; provider prefixes may differ, but the instrument suffix must match.
 - `timeframe`: normalized uppercase timeframe identifier.
