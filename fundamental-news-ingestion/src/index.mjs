@@ -377,6 +377,36 @@ function pushCandidateArrays(target, value) {
   }
 }
 
+function summarizeMcpPayload(payload) {
+  const root = asObject(payload) || {};
+  const result = asObject(root.result) || {};
+  const content = asArray(result.content) || [];
+  return {
+    top_level_keys: Object.keys(root).slice(0, 12),
+    result_keys: Object.keys(result).slice(0, 12),
+    has_rpc_error: Boolean(root.error),
+    result_is_error: result.isError === true,
+    content_types: content.slice(0, 5).map((item) => {
+      const entry = asObject(item) || {};
+      const text = asString(entry.text);
+      let text_is_json = false;
+      if (text) {
+        try {
+          JSON.parse(text);
+          text_is_json = true;
+        } catch {
+          text_is_json = false;
+        }
+      }
+      return {
+        type: asString(entry.type) || null,
+        text_length: text.length,
+        text_is_json
+      };
+    })
+  };
+}
+
 function parseArticlesFromMcpPayload(payload) {
   const candidates = [];
   pushCandidateArrays(candidates, payload);
@@ -490,6 +520,14 @@ async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
     throw Object.assign(new Error("TradingView MCP returned non-JSON response"), {
       code: "mcp_invalid_response",
       detail: text.slice(0, 500)
+    });
+  }
+
+  const resultObject = asObject(payload.result);
+  if (payload.error || resultObject?.isError === true) {
+    throw Object.assign(new Error("TradingView MCP get_news tool reported an error"), {
+      code: "mcp_tool_error",
+      status: 502
     });
   }
 
@@ -662,7 +700,9 @@ async function readLastScheduledPull(env) {
       article_count: Number.isFinite(Number(value.article_count)) ? Number(value.article_count) : 0,
       symbols: Array.isArray(value.symbols) ? value.symbols.filter((item) => typeof item === "string").slice(0, 10) : [],
       cache: asString(value.cache) || null,
-      http_status: Number.isFinite(Number(value.http_status)) ? Number(value.http_status) : null
+      http_status: Number.isFinite(Number(value.http_status)) ? Number(value.http_status) : null,
+      pull_attempts: Number.isFinite(Number(value.pull_attempts)) ? Number(value.pull_attempts) : 1,
+      payload_diagnostics: value.payload_diagnostics && typeof value.payload_diagnostics === "object" ? value.payload_diagnostics : null
     };
   } catch {
     return null;
@@ -691,7 +731,7 @@ async function buildHealth(env) {
   };
 }
 
-async function handlePull(request, env, ctx) {
+async function handlePull(request, env, ctx, options = {}) {
   if (!asString(env.INGEST_SECRET)) {
     return unavailableResponse(503, "INGEST_SECRET is not configured");
   }
@@ -711,10 +751,12 @@ async function handlePull(request, env, ctx) {
     method: "GET"
   });
   const cache = caches.default;
-  const cached = await cache.match(cacheKey);
-  if (cached) {
-    const payload = await cached.json();
-    return json({ ...payload, cache: "hit" });
+  if (!options.forceRefresh) {
+    const cached = await cache.match(cacheKey);
+    if (cached) {
+      const payload = await cached.json();
+      return json({ ...payload, cache: "hit" });
+    }
   }
 
   let metadata;
@@ -746,7 +788,8 @@ async function handlePull(request, env, ctx) {
       count: articles.length,
       available: true,
       fetch_attempts: attempt,
-      articles
+      articles,
+      ...(articles.length === 0 ? { payload_diagnostics: summarizeMcpPayload(payload) } : {})
     };
 
     const cacheTtl = parsePositiveInt(env.TV_MCP_CACHE_TTL_SECONDS, 120);
@@ -818,12 +861,23 @@ export default {
   async scheduled(_controller, env, ctx) {
     const checkedAt = new Date().toISOString();
     try {
-      const request = new Request("https://news.cryptophys.work/pull", {
-        method: "POST",
-        headers: { authorization: `Bearer ${asString(env.INGEST_SECRET)}` }
-      });
-      const response = await handlePull(request, env, ctx);
-      const payload = await response.json().catch(() => ({}));
+      let response;
+      let payload = {};
+      let pullAttempt = 0;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        const request = new Request("https://news.cryptophys.work/pull", {
+          method: "POST",
+          headers: { authorization: `Bearer ${asString(env.INGEST_SECRET)}` }
+        });
+        response = await handlePull(request, env, ctx, { forceRefresh: attempt > 1 });
+        payload = await response.json().catch(() => ({}));
+        pullAttempt = attempt;
+        const articles = Array.isArray(payload.articles) ? payload.articles : [];
+        const count = Number.isFinite(Number(payload.count)) ? Number(payload.count) : articles.length;
+        if (response.ok && payload.available === true && count > 0) break;
+        if (!(attempt === 1 && response.ok && payload.available === true && count === 0)) break;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
       const articles = Array.isArray(payload.articles) ? payload.articles : [];
       const articleCount = Number.isFinite(Number(payload.count)) ? Number(payload.count) : articles.length;
       const available = payload.available === true;
@@ -839,7 +893,9 @@ export default {
         article_count: articleCount,
         symbols: Array.isArray(payload.symbols) ? payload.symbols.filter((item) => typeof item === "string").slice(0, 10) : parseCsv(env.TV_MCP_SYMBOLS, DEFAULT_SYMBOLS),
         cache: asString(payload.cache) || null,
-        http_status: response.status
+        http_status: response.status,
+        pull_attempts: pullAttempt,
+        payload_diagnostics: payload.payload_diagnostics && typeof payload.payload_diagnostics === "object" ? payload.payload_diagnostics : null
       };
       if (env.OAUTH_STORE) {
         await env.OAUTH_STORE.put(LAST_SCHEDULED_PULL_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
