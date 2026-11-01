@@ -377,15 +377,25 @@ function pushCandidateArrays(target, value) {
   }
 }
 
+function redactDiagnosticText(value) {
+  return asString(value)
+    .slice(0, 240)
+    .replace(/Bearer\\s+[A-Za-z0-9._~+\\/-]+=*/gi, "Bearer [redacted]")
+    .replace(/(access_token|refresh_token|client_secret|authorization)\\s*[:=]\\s*["']?[^,\\s"']+/gi, "$1=[redacted]");
+}
+
 function safeUpstreamDiagnostic(error) {
   const detail = asObject(error?.detail);
   const rpcError = asObject(detail?.error);
-  const resultError = asObject(asObject(detail?.result)?.error);
+  const result = asObject(detail?.result);
+  const resultError = asObject(result?.error);
   const selected = rpcError || resultError;
+  const content = Array.isArray(result?.content) ? result.content : [];
+  const contentText = content.map((item) => asString(asObject(item)?.text)).find(Boolean) || "";
   return {
     code: asString(error?.code) || null,
     upstream_error_code: selected && (typeof selected.code === "string" || typeof selected.code === "number") ? selected.code : null,
-    upstream_error_message: asString(selected?.message || detail?.message).slice(0, 240) || null,
+    upstream_error_message: redactDiagnosticText(selected?.message || detail?.message || contentText) || null,
     response_shape: detail ? Object.keys(detail).slice(0, 12) : typeof error?.detail === "string" ? "non_json_body" : null
   };
 }
@@ -540,7 +550,8 @@ async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
   if (payload.error || resultObject?.isError === true) {
     throw Object.assign(new Error("TradingView MCP get_news tool reported an error"), {
       code: "mcp_tool_error",
-      status: 502
+      status: 502,
+      detail: payload
     });
   }
 
