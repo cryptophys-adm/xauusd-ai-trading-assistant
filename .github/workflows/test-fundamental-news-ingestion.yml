@@ -1,0 +1,29 @@
+name: Test Fundamental News Ingestion
+
+on:
+  pull_request:
+    paths:
+      - "fundamental-news-ingestion/**"
+      - ".github/workflows/test-fundamental-news-ingestion.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run Worker unit tests
+        run: node --test fundamental-news-ingestion/test/index.test.mjs
+
+      - name: Validate Worker bundle
+        run: npx --yes wrangler@4.45.0 deploy --dry-run --config fundamental-news-ingestion/wrangler.jsonc
