@@ -18,6 +18,7 @@
     "TV_MCP_TOKEN_AUTH_METHOD": "none"
   },
   // Operational verification: require one fresh scheduled ingestion result after deployment.
+  // Verify the next scheduled pull after deploying safe upstream diagnostics.
   "triggers": {
     "crons": ["*/1 * * * *"]
   }
