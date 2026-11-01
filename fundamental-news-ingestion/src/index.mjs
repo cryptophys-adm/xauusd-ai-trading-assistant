@@ -572,6 +572,12 @@ async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
         code: "mcp_jsonrpc_error", detail: payload.error
       });
     }
+    if (payload.result?.isError) {
+      const errText = asString(payload.result.content?.[0]?.text || "Unknown tool error");
+      throw Object.assign(new Error(`TradingView MCP get_news tool error for ${symbol}: ${errText}`), {
+        code: "mcp_upstream_error", detail: errText
+      });
+    }
     calls.push({ symbol, result: payload.result ?? payload });
     const parsed = parseArticlesFromMcpPayload(payload);
     for (const article of parsed) {
@@ -881,5 +887,16 @@ export default {
       },
       404
     );
+  },
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil((async () => {
+      try {
+        const metadata = await fetchOAuthMetadata(env);
+        await getValidAccessToken(env, metadata);
+        console.log("[scheduled] Token refresh OK");
+      } catch (error) {
+        console.error("[scheduled] Token refresh failed:", error instanceof Error ? error.message : "Unknown error");
+      }
+    })());
   }
 };
