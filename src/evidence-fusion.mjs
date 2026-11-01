@@ -39,6 +39,29 @@ function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function isCredentialField(key) {
+  const normalized = String(key).replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+  return /(^|_)(secret|password|credential|authorization|api_key|private_key|access_token|refresh_token|token|bearer)(_|$)/i.test(normalized);
+}
+
+export function containsCredentialFields(value, depth = 0) {
+  if (depth > 20) return true;
+  if (Array.isArray(value)) return value.some(item => containsCredentialFields(item, depth + 1));
+  if (!isRecord(value)) return false;
+  return Object.entries(value).some(([key, child]) => isCredentialField(key) || containsCredentialFields(child, depth + 1));
+}
+
+export function stripCredentialFields(value, depth = 0) {
+  if (depth > 20) return null;
+  if (Array.isArray(value)) return value.map(item => stripCredentialFields(item, depth + 1));
+  if (!isRecord(value)) return value;
+  const clean = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (!isCredentialField(key)) clean[key] = stripCredentialFields(child, depth + 1);
+  }
+  return clean;
+}
+
 function timestampMs(value) {
   if (typeof value !== "string" || !value.trim()) return null;
   const parsed = Date.parse(value);
