@@ -15,7 +15,7 @@ Deliver a reliable, auditable XAUUSD decision-support product that converges Tra
 - AI Worker cron configured every 30 minutes.
 - AI Worker has bindings `AI`, `DB`, `SIGNAL_CACHE`, `WEBHOOK_BUFFER`, `KNOWLEDGE_BASE`; model vars for Analyst/Counselor/Reasoner; source and news URL vars.
 - D1 `xauusd-signals` and preview D1/preview KV resources are present.
-- These facts verify resource/deployment registration only. Direct HTTP health requests from the inspection environment were blocked, so runtime health and full end-to-end success remain unverified.
+- Live preflight (2026-11-01): AI Worker `/health` returned HTTP 200 with D1/KV/Workers AI bindings present. News Worker `/health` returned HTTP 200 but reports `provider_cooldown_reason=provider_quota_exceeded`; its latest scheduled ingest returned HTTP 503 and zero articles. This is a blocking upstream quota condition, not a healthy ingestion cycle. End-to-end fusion remains unverified.
 
 ## Phased rollout
 
@@ -26,7 +26,7 @@ Deliver a reliable, auditable XAUUSD decision-support product that converges Tra
 - Review all open PRs that could change ingestion, quota/cooldown behavior, model configuration, or deployment workflows before merging overlapping changes.
 
 ### Phase 1 — Specify the source/evidence contracts
-- Define JSON schemas and versioning for webhook, news evidence, completed news analysis, and local calculation results.
+- Define JSON schemas and versioning for webhook, news evidence, completed news analysis, and local calculation results. Implemented on feature branch: `docs/EVIDENCE_CONTRACTS.md` and `cryptophys.evidence-fusion.v1` / `cryptophys.local-calculation.v1`.
 - Define UTC timestamp/candle semantics, symbol/timeframe normalization, correlation key, freshness thresholds, required-source policy, provenance, idempotency, and degraded outcomes.
 - Confirm exact Pine source files/versions and data/tool capabilities. Do not assume MCP supports unverified market-data features.
 - Create fixture datasets from known closed candles; prohibit synthetic fixture values from being used as production data.
@@ -39,7 +39,7 @@ Deliver a reliable, auditable XAUUSD decision-support product that converges Tra
 - Verify Worker CPU, memory, bundle size, and request budget before choosing Rust/WASM production kernels.
 
 ### Phase 3 — Implement Evidence Fusion
-- Add local calculation output as a first-class, authenticated/versioned evidence source or internal module output.
+- Add local calculation output as a first-class, authenticated/versioned evidence source or internal module output. The feature branch implements authenticated `POST /evidence/local-calculation`, a 64 KiB body cap, version/freshness/provenance validation, KV storage, and a trigger when all configured webhook and local engine records are present. It is a contract receiver, not the actual Mizan/Prophet/GMI calculation engines.
 - Add the completed fundamental news-analysis result to the same fusion contract; preserve article evidence and analysis timestamps.
 - Keep the current webhook source gate compatible until a reviewed migration specifies the new required-source policy.
 - Validate source schemas, same-candle identity, freshness, provenance, duplicate handling, conflicts, and retry limits.
@@ -54,7 +54,7 @@ Deliver a reliable, auditable XAUUSD decision-support product that converges Tra
 
 ### Phase 5 — Preview and acceptance
 - Use preview-only D1/KV resources and preview Worker routes/domains.
-- Run unit, contract, integration, concurrency/idempotency, stale/missing-data, security, and failure-injection tests.
+- Run unit, contract, integration, concurrency/idempotency, stale/missing-data, security, and failure-injection tests. A PR workflow runs Node contract tests, TypeScript typecheck, and Wrangler dry-run. End-to-end and concurrency acceptance still require successful preview runtime tests.
 - Verify actual news ingestion and actual webhook/calculation evidence end-to-end using authorized real data. Record source timestamps and request/response correlation IDs without secrets.
 - Confirm model availability and quota/cost behavior; avoid deployment that depends on unverified or paid capabilities.
 - Test Telegram as an optional notification sink, not as the system of record.
