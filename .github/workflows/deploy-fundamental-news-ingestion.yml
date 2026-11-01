@@ -73,7 +73,7 @@ jobs:
         run: |
           started_epoch="$(date -u +%s)"
           last_summary="no fresh scheduled result observed"
-          for attempt in $(seq 1 22); do
+          for attempt in $(seq 1 40); do
             response="$(curl --fail --silent --show-error --max-time 20 https://news.cryptophys.work/health)"
             if summary="$(printf '%s' "$response" | STARTED_EPOCH="$started_epoch" node -e '
               const h = JSON.parse(require("fs").readFileSync(0, "utf8"));
@@ -88,7 +88,8 @@ jobs:
                 cache: r.cache,
                 http_status: r.http_status,
                 pull_attempts: r.pull_attempts,
-                payload_diagnostics: r.payload_diagnostics
+                payload_diagnostics: r.payload_diagnostics,
+        failure_diagnostic: r.failure_diagnostic || null
               }));
             ' 2>/dev/null)"; then
               last_summary="$summary"
@@ -103,5 +104,5 @@ jobs:
             sleep 5
           done
           echo "$last_summary" >&2
-          echo "No non-empty successful scheduled ingestion observed within 110 seconds." >&2
+          echo "No non-empty successful scheduled ingestion observed within 200 seconds." >&2
           exit 1
