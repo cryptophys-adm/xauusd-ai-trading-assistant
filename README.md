@@ -11,7 +11,8 @@ These documents are the baseline for future implementation and deployment:
 - [Architecture Baseline](docs/ARCHITECTURE_BASELINE.md) — canonical Evidence Fusion & Orchestration point and immutable architectural constraints.
 - [Deployment Blueprint](docs/DEPLOYMENT_BLUEPRINT.md) — phased implementation, preview, production rollout and rollback.
 - [Production Definition of Done](docs/PRODUCTION_DEFINITION_OF_DONE.md) — mandatory release acceptance gates.
-- [Evidence Contracts](docs/EVIDENCE_CONTRACTS.md) — versioned local-calculation contract, freshness rules, and degraded behavior.
+- [Evidence Contracts](docs/EVIDENCE_CONTRACTS.md) — versioned local-calculation contract, freshness rules, provenance allowlists, and degraded behavior.
+- [Local Calculation Source Baseline](docs/LOCAL_CALCULATION_SOURCE_BASELINE.md) — exact Pine hashes, Mizan dependency-version mismatch, and outstanding parity blockers.
 
 The canonical convergence point is **Evidence Fusion & Orchestration**, positioned after source ingestion/local calculations and before Analyst/Counselor. It must combine and validate:
 1. TradingView webhook evidence.
@@ -41,7 +42,7 @@ Existing resources and IDs must be reused. Do not recreate them. Keep preview re
 6. Analyst → Counselor → Reasoner receive the versioned fused evidence bundle. Missing/stale local calculations or completed news analysis force a `WAIT` decision with null risk/price fields.
 7. Outputs and fusion diagnostics are stored in D1/KV; optional Telegram delivery failure does not invalidate persisted results.
 
-The evidence-fusion implementation on the feature branch adds the local calculation contract and consumes the most recent completed fundamental-news analysis. The endpoint validates/authenticates and stores outputs; it does not calculate Mizan, Prophet, or GMI itself. Exact Pine sources, local engine implementation, parity fixtures, and live end-to-end acceptance remain mandatory blockers. Preserve the existing three-source webhook gate until a reviewed schema/policy migration defines any change to required sources.
+The evidence-fusion implementation on the feature branch adds the local calculation contract and consumes the most recent completed fundamental-news analysis. The endpoint validates/authenticates and stores outputs only when per-engine source and implementation SHA-256 hashes are explicitly allowlisted; production currently has no approved allowlist. The source audit found Mizan v1/v4 dependency mismatch and missing exact GMI/Prophet R37 baselines. Local engine implementation, approved source matrix, parity fixtures, and live end-to-end acceptance remain mandatory blockers. Preserve the existing three-source webhook gate until a reviewed schema/policy migration defines any change to required sources.
 
 ## AI model configuration
 
