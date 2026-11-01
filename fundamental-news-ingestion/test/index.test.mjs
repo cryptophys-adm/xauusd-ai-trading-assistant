@@ -329,6 +329,50 @@ test("scheduled ingestion uses configured bearer secret internally and records a
   assert.equal(healthBody.last_scheduled_ingest.article_count, 1);
 });
 
+test("HTTP 429 quota response opens cooldown and is not retried", async () => {
+  const env = createEnv({ TV_MCP_MAX_RETRIES: "3" });
+  await env.OAUTH_STORE.put(
+    "tv_mcp:oauth_token",
+    JSON.stringify({ access_token: "valid-token", refresh_token: "refresh-token", expires_at: Math.floor(Date.now() / 1000) + 3600 })
+  );
+
+  let mcpCalls = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes(".well-known/oauth-authorization-server")) {
+      return jsonResponse({
+        authorization_endpoint: "https://mcp.example.com/oauth/authorize",
+        token_endpoint: "https://mcp.example.com/oauth/token",
+        token_endpoint_auth_methods_supported: ["none"]
+      });
+    }
+    if (String(url).includes("/mcp")) {
+      mcpCalls += 1;
+      return jsonResponse({
+        error: {
+          code: "TOOL_QUOTA_EXCEEDED",
+          message: "Tool call quota exceeded; access to MCP is suspended until 23:59 UTC"
+        }
+      }, { status: 429 });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const response = await worker.fetch(
+    new Request("https://news.example.com/pull", {
+      method: "POST",
+      headers: { authorization: "Bearer ingest-secret" }
+    }),
+    env,
+    createCtx()
+  );
+
+  assert.equal(response.status, 502);
+  assert.equal(mcpCalls, 1, "HTTP 429 quota responses must not trigger retries");
+  const cooldown = JSON.parse(await env.OAUTH_STORE.get("tv_mcp:quota_cooldown_until"));
+  assert.equal(cooldown.reason, "provider_quota_exceeded");
+  assert.ok(Date.parse(cooldown.until) > Date.now());
+});
+
 test("scheduled ingestion opens a quota cooldown and avoids retrying a suspended MCP tool", async () => {
   const env = createEnv();
   await env.OAUTH_STORE.put(
