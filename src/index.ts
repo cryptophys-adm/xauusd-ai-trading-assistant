@@ -50,6 +50,34 @@ function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), { status, headers: JSON_HEADERS });
 }
 
+async function readBodyLimited(request: Request, maxBytes: number): Promise<{ text: string; tooLarge: boolean }> {
+  if (!request.body) return { text: "", tooLarge: false };
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("request body exceeds configured limit").catch(() => undefined);
+        return { text: "", tooLarge: true };
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { text: new TextDecoder().decode(body), tooLarge: false };
+}
+
 function normalizeSource(value: unknown): string | null {
   if (typeof value !== "string") return null;
   return SOURCE_ALIASES[value.trim().toLowerCase()] || null;
@@ -200,15 +228,20 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
   const analysisKey = Array.from(new Uint8Array(digest)).map(v => v.toString(16).padStart(2, "0")).join("");
 
   const cached = await env.DB.prepare(
-    "SELECT analysis_key, analyzed_at, article_count, recommendation_json FROM news_analyses WHERE analysis_key = ? LIMIT 1"
+    "SELECT analysis_key, analyzed_at, fetched_at, article_count, recommendation_json FROM news_analyses WHERE analysis_key = ? LIMIT 1"
   ).bind(analysisKey).first<JsonObject>();
   if (cached) {
+    const refreshedAt = new Date().toISOString();
+    await env.DB.prepare(
+      "UPDATE news_analyses SET fetched_at = ?, analyzed_at = ? WHERE analysis_key = ?"
+    ).bind(newsEvidence.fetched_at, refreshedAt, analysisKey).run();
     const latest = {
       status: "ok",
       analysis_type: "fundamental_news",
       deduplicated: true,
       analysis_key: analysisKey,
-      analyzed_at: cached.analyzed_at,
+      fetched_at: newsEvidence.fetched_at,
+      analyzed_at: refreshedAt,
       article_count: cached.article_count,
       recommendation: JSON.parse(asText(cached.recommendation_json) || "{}")
     };
@@ -807,8 +840,9 @@ export default {
       if (Number.isFinite(declaredLength) && declaredLength > 65536) return json({ error: "Payload exceeds 64 KiB limit" }, 413);
       let bodyText: string;
       try {
-        bodyText = await request.text();
-        if (new TextEncoder().encode(bodyText).byteLength > 65536) return json({ error: "Payload exceeds 64 KiB limit" }, 413);
+        const limitedBody = await readBodyLimited(request, 65536);
+        if (limitedBody.tooLarge) return json({ error: "Payload exceeds 64 KiB limit" }, 413);
+        bodyText = limitedBody.text;
       } catch { return json({ error: "Request body could not be read" }, 400); }
       let payload: unknown;
       try { payload = JSON.parse(bodyText); } catch { return json({ error: "Request body must be valid JSON" }, 400); }
@@ -830,6 +864,7 @@ export default {
       });
       if (!validation.valid) return json({ error: "Invalid or stale local calculation contract", validation_errors: validation.errors }, 400);
       const stored = { ...record, received_at: new Date().toISOString() };
+      delete (stored as Record<string, unknown>).secret;
       await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":" + engine, JSON.stringify(stored), { expirationTtl: 60 * 60 * 24 * 14 });
 
       // Trigger fusion only after all three local engines and all configured webhook sources exist.
