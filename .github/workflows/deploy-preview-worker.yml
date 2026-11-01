@@ -85,6 +85,11 @@ jobs:
             assert.equal(health.bindings?.[name], true, "missing preview binding: " + name);
           }
           assert.equal(health.secrets_configured?.webhook_secret, true, "preview secret must be visible to the Worker");
+          const readyResponse = await fetch(base + "/ready", { signal: AbortSignal.timeout(15000) });
+          const ready = await readyResponse.json();
+          assert.equal(readyResponse.status, 200);
+          assert.equal(ready.status, "ready");
+          assert.equal(ready.d1_analysis_runs, true);
 
           const unauthorized = await fetch(base + "/evidence/local-calculation", {
             method: "POST",
