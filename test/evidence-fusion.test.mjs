@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildEvidenceFusion, validateLocalCalculation, LOCAL_CALCULATION_CONTRACT_VERSION } from "../src/evidence-fusion.mjs";
+import { buildEvidenceFusion, validateLocalCalculation, LOCAL_CALCULATION_CONTRACT_VERSION, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION } from "../src/evidence-fusion.mjs";
 
 const now = Date.parse("2026-11-01T15:00:00.000Z");
 const candleTime = "2026-11-01T14:55:00.000Z";
@@ -17,11 +17,11 @@ function local(engine) {
   };
 }
 function webhook(source) {
-  return { source, ticker: symbol, timeframe, candle_time: candleTime, metrics: { bias: "NEUTRAL" } };
+  return { schema_version: WEBHOOK_EVIDENCE_CONTRACT_VERSION, source, ticker: symbol, timeframe, candle_time: candleTime, metrics: { bias: "NEUTRAL" } };
 }
 function news() {
   return {
-    status: "ok", analysis_type: "fundamental_news", analyzed_at: "2026-11-01T14:58:00.000Z",
+    schema_version: NEWS_ANALYSIS_CONTRACT_VERSION, status: "ok", analysis_type: "fundamental_news", analyzed_at: "2026-11-01T14:58:00.000Z",
     fetched_at: "2026-11-01T14:57:00.000Z", symbols: [symbol],
     evidence: { articles: [{ id: "fixture-1", title: "Fixture article" }] },
     recommendation: { recommendation: "WAIT_FOR_TECHNICAL_CONFIRMATION" }
