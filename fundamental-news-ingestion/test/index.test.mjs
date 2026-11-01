@@ -175,7 +175,7 @@ test("POST /pull refreshes expired token and returns headlines from mcp-tv-get-n
         result: {
           data: {
             headlines: [
-              { id: "1", title: "Gold rises", url: "https://news/1", symbols: ["OANDA:XAUUSD"] }
+              { id: "1", title: "Gold rises", url: "https://news/1", published_at: new Date().toISOString(), symbols: ["OANDA:XAUUSD"] }
             ]
           }
         }
@@ -217,7 +217,7 @@ test("POST /pull serves valid cached headlines during provider quota cooldown", 
     symbols: ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"],
     count: 1,
     available: true,
-    articles: [{ id: "cached-1", title: "Cached gold headline", url: "https://news.example.com/cached-1", symbols: ["OANDA:XAUUSD"] }]
+    articles: [{ id: "cached-1", title: "Cached gold headline", url: "https://news.example.com/cached-1", published_at: new Date().toISOString(), symbols: ["OANDA:XAUUSD"] }]
   };
   await env.OAUTH_STORE.put("tv_mcp:quota_cooldown_until", JSON.stringify({
     until: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
@@ -364,7 +364,7 @@ test("scheduled ingestion uses configured bearer secret internally and records a
         result: {
           data: {
             headlines: [
-              { id: "scheduled-1", title: "Gold outlook update", url: "https://news.example.com/1", symbols: ["OANDA:XAUUSD"] }
+              { id: "scheduled-1", title: "Gold outlook update", url: "https://news.example.com/1", published_at: new Date().toISOString(), symbols: ["OANDA:XAUUSD"] }
             ]
           }
         }
@@ -513,4 +513,59 @@ test("Parser output preserves AI-worker expected articles array contract", () =>
   assert.equal(Array.isArray(parsed), true);
   assert.equal(parsed.length, 1);
   assert.equal(parsed[0].url, "https://news/a");
+});
+
+
+test("last-hour filter excludes stale, future, invalid and undated news", () => {
+  const now = Date.parse("2026-11-02T00:00:00.000Z");
+  const articles = [
+    { title: "At cutoff", url: "https://news.example.com/cutoff", published_at: "2026-11-01T23:00:00.000Z" },
+    { title: "Fresh", url: "https://news.example.com/fresh", published_at: "2026-11-01T23:59:00.000Z" },
+    { title: "Too old", url: "https://news.example.com/old", published_at: "2026-11-01T22:59:59.999Z" },
+    { title: "Future", url: "https://news.example.com/future", published_at: "2026-11-02T00:00:01.000Z" },
+    { title: "Undated", url: "https://news.example.com/undated" },
+    { title: "Invalid date", url: "https://news.example.com/invalid", published_at: "not-a-date" }
+  ];
+  const filtered = internals.filterRecentArticles(articles, now);
+  assert.deepEqual(filtered.map((item) => item.title), ["At cutoff", "Fresh"]);
+});
+
+test("dedupe collapses tracking URLs and title/source duplicates while merging symbols", () => {
+  const articles = [
+    { title: "Gold rises on dollar weakness", source: "Market News", url: "https://NEWS.example.com/story?id=1&utm_source=a", symbols: ["OANDA:XAUUSD"] },
+    { title: "Gold rises on dollar weakness", source: "Market News", url: "https://news.example.com/story?utm_source=b#top", symbols: ["TVC:DXY"] },
+    { title: "Gold rises on dollar weakness", source: "Market News", url: "https://another.example.com/different", symbols: ["TVC:USOIL"] }
+  ];
+  const deduped = internals.dedupeArticles(articles);
+  assert.equal(deduped.length, 2);
+  assert.deepEqual(deduped[0].symbols.sort(), ["OANDA:XAUUSD", "TVC:DXY"]);
+});
+
+test("cached articles outside the one-hour window are not returned as valid cache", async () => {
+  const env = createEnv();
+  const stalePayload = {
+    worker: "xauusd-fundamental-news-ingestion",
+    provider: "TradingView MCP",
+    fetched_at: new Date().toISOString(),
+    symbols: ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"],
+    count: 1,
+    available: true,
+    articles: [{ id: "stale", title: "Stale headline", url: "https://news.example.com/stale", published_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), symbols: ["OANDA:XAUUSD"] }]
+  };
+  const cacheKey = new Request(new URL("/_internal/tv-mcp-cache?symbols=OANDA%3AXAUUSD%2CTVC%3AUSOIL%2CTVC%3ADXY", "https://news.example.com"), { method: "GET" });
+  await caches.default.put(cacheKey, new Response(JSON.stringify(stalePayload), {
+    headers: { "content-type": "application/json", "cache-control": "public, max-age=120" }
+  }));
+  await env.OAUTH_STORE.put("tv_mcp:quota_cooldown_until", JSON.stringify({
+    until: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    reason: "provider_quota_exceeded"
+  }));
+  const response = await worker.fetch(new Request("https://news.example.com/pull", {
+    method: "POST",
+    headers: { authorization: "Bearer ingest-secret" }
+  }), env, createCtx());
+  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(body.reason, "TradingView MCP quota cooldown active");
+  assert.equal(body.articles.length, 0);
 });
