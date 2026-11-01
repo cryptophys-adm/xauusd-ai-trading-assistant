@@ -502,11 +502,37 @@ function parseArticlesFromMcpPayload(payload) {
   return dedupeArticles(merged);
 }
 
+function canonicalArticleUrl(value) {
+  const raw = asString(value).trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    url.hash = "";
+    url.search = "";
+    url.hostname = url.hostname.toLowerCase();
+    url.pathname = url.pathname.replace(/\\/+$/, "") || "/";
+    return url.toString().replace(/\\/$/, "");
+  } catch {
+    return raw.split(/[?#]/, 1)[0].replace(/\\/+$/, "").toLowerCase();
+  }
+}
+
+function articleDedupeKey(article) {
+  const url = canonicalArticleUrl(article.url);
+  if (url) return `url:${url}`;
+  const id = asString(article.id).trim().toLowerCase();
+  if (id) return `id:${id}`;
+  const title = asString(article.title).normalize("NFKC").toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, " ").trim();
+  if (!title) return "";
+  const source = asString(article.source).normalize("NFKC").toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, " ").trim();
+  return `title:${title}|source:${source}`;
+}
+
 function dedupeArticles(articles) {
   const seen = new Map();
   const deduped = [];
   for (const article of articles) {
-    const key = asString(article.url) || asString(article.id) || (asString(article.title) + "|" + String(article.published_at || ""));
+    const key = articleDedupeKey(article);
     if (!key) continue;
     const existingIndex = seen.get(key);
     if (existingIndex !== undefined) {
@@ -518,6 +544,28 @@ function dedupeArticles(articles) {
     deduped.push({ ...article, symbols: [...new Set(asArray(article.symbols) || [])] });
   }
   return deduped;
+}
+
+function parsePublishedAtMs(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value < 1e12 ? value * 1000 : value;
+  }
+  if (typeof value !== "string" || !value.trim()) return null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && /^\\d+(?:\\.\\d+)?$/.test(value.trim())) {
+    return numeric < 1e12 ? numeric * 1000 : numeric;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function filterRecentArticles(articles, now = Date.now(), windowMs = 60 * 60 * 1000) {
+  const cutoff = now - windowMs;
+  return dedupeArticles(articles).filter((article) => {
+    const publishedAt = parsePublishedAtMs(article.published_at);
+    // Missing/invalid timestamps cannot be proven to belong to the last hour.
+    return publishedAt !== null && publishedAt >= cutoff && publishedAt <= now;
+  });
 }
 
 function unavailableResponse(status, reason, detail = {}) {
@@ -910,7 +958,12 @@ async function handlePull(request, env, ctx, options = {}) {
     const cached = await cache.match(cacheKey);
     if (cached) {
       const payload = await cached.json();
-      return json({ ...payload, cache: "hit" });
+      const cachedArticles = filterRecentArticles(asArray(payload.articles) || []);
+      if (cachedArticles.length > 0) {
+        return json({ ...payload, articles: cachedArticles, count: cachedArticles.length, cache: "hit" });
+      }
+      // A cache containing only stale/undated headlines is not valid for the
+      // one-hour news window. Continue to upstream unless the quota cooldown blocks it.
     }
   }
 
@@ -944,7 +997,7 @@ async function handlePull(request, env, ctx, options = {}) {
 
   try {
     const { payload, attempt } = await invokeMcpGetNewsWithRetry(env, metadata, accessToken, symbols);
-    const articles = parseArticlesFromMcpPayload(payload);
+    const articles = filterRecentArticles(parseArticlesFromMcpPayload(payload));
     const result = {
       worker: WORKER_NAME,
       provider: PROVIDER,
@@ -987,6 +1040,7 @@ async function handlePull(request, env, ctx, options = {}) {
 export const internals = {
   parseArticlesFromMcpPayload,
   dedupeArticles,
+  filterRecentArticles,
   normalizeArticle,
   normalizeTokenPayload,
   resolveTokenAuthMethod,
@@ -1027,23 +1081,15 @@ export default {
   async scheduled(_controller, env, ctx) {
     const checkedAt = new Date().toISOString();
     try {
-      let response;
-      let payload = {};
-      let pullAttempt = 0;
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
-        const request = new Request("https://news.cryptophys.work/pull", {
-          method: "POST",
-          headers: { authorization: `Bearer ${asString(env.INGEST_SECRET)}` }
-        });
-        response = await handlePull(request, env, ctx, { forceRefresh: attempt > 1 });
-        payload = await response.json().catch(() => ({}));
-        pullAttempt = attempt;
-        const articles = Array.isArray(payload.articles) ? payload.articles : [];
-        const count = Number.isFinite(Number(payload.count)) ? Number(payload.count) : articles.length;
-        if (response.ok && payload.available === true && count > 0) break;
-        if (!(attempt === 1 && response.ok && payload.available === true && count === 0)) break;
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-      }
+      const request = new Request("https://news.cryptophys.work/pull", {
+        method: "POST",
+        headers: { authorization: `Bearer ${asString(env.INGEST_SECRET)}` }
+      });
+      // One scheduled invocation performs one pull only. Empty results are valid
+      // and must not trigger a second quota-consuming provider request.
+      const response = await handlePull(request, env, ctx);
+      const payload = await response.json().catch(() => ({}));
+      const pullAttempt = 1;
       const articles = Array.isArray(payload.articles) ? payload.articles : [];
       const articleCount = Number.isFinite(Number(payload.count)) ? Number(payload.count) : articles.length;
       const available = payload.available === true;
