@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildEvidenceFusion, validateLocalCalculation, LOCAL_CALCULATION_CONTRACT_VERSION, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION } from "../src/evidence-fusion.mjs";
+import { buildEvidenceFusion, validateLocalCalculation, containsCredentialFields, stripCredentialFields, LOCAL_CALCULATION_CONTRACT_VERSION, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION } from "../src/evidence-fusion.mjs";
 
 const now = Date.parse("2026-11-01T15:00:00.000Z");
 const candleTime = "2026-11-01T14:55:00.000Z";
@@ -117,4 +117,14 @@ test("fails closed for timeframes without a declared freshness policy", () => {
   const result = buildEvidenceFusion(input, now);
   assert.equal(result.complete, false);
   assert.ok(result.validation_errors.includes("timeframe_freshness_policy_unsupported"));
+});
+
+test("detects credential-like fields recursively", () => {
+  assert.equal(containsCredentialFields({ values: { bias: "NEUTRAL", authToken: "do-not-store" } }), true);
+  assert.equal(containsCredentialFields({ values: { bias: "NEUTRAL", token_count: 3 } }), true);
+});
+
+test("strips credentials recursively from webhook evidence", () => {
+  const input = { source: "gmi_v12_70", secret: "top-level", metrics: { bias: "NEUTRAL", api_key: "nested" } };
+  assert.deepEqual(stripCredentialFields(input), { source: "gmi_v12_70", metrics: { bias: "NEUTRAL" } });
 });
