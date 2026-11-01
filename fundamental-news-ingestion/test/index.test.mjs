@@ -167,7 +167,7 @@ test("SSE response selects matching request ID and ignores notifications", async
         'data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}',
         `data: ${JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { protocolVersion: "2025-03-26" } })}`,
         ""
-      ].join("\\n\\n"), { headers: { "content-type": "text/event-stream", "mcp-session-id": "session-sse" } });
+      ].join("\n\n"), { headers: { "content-type": "text/event-stream", "mcp-session-id": "session-sse" } });
     }
     if (rpc.method === "notifications/initialized") return new Response(null, { status: 202 });
     const article = { id: "sse-1", title: "Gold headline", url: "https://news.example.com/sse-1" };
@@ -175,7 +175,7 @@ test("SSE response selects matching request ID and ignores notifications", async
       'data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}',
       `data: ${JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { content: [{ type: "text", text: JSON.stringify({ articles: [article] }) }] } })}`,
       ""
-    ].join("\\n\\n"), { headers: { "content-type": "text/event-stream" } });
+    ].join("\n\n"), { headers: { "content-type": "text/event-stream" } });
   }});
   const response = await worker.fetch(new Request("https://news.example.com/pull", {
     method: "POST", headers: { authorization: "Bearer ingest-secret" }
@@ -196,7 +196,7 @@ test("SSE without matching JSON-RPC response fails instead of returning empty su
     if (rpc.method === "initialize") return rpcResponse(rpc, { protocolVersion: "2025-03-26" });
     if (rpc.method === "notifications/initialized") return new Response(null, { status: 202 });
     toolCalls += 1;
-    return new Response('data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}\\n\\n',
+    return new Response('data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}\n\n',
       { headers: { "content-type": "text/event-stream" } });
   }});
   const response = await worker.fetch(new Request("https://news.example.com/pull", {
@@ -238,4 +238,6 @@ test("Parser output preserves AI-worker expected articles array contract", () =>
   assert.equal(Array.isArray(parsed), true);
   assert.equal(parsed.length, 1);
   assert.equal(parsed[0].url, "https://news/a");
+});
+
 });
