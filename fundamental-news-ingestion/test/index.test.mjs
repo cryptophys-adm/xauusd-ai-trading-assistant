@@ -169,6 +169,8 @@ test("POST /pull refreshes expired token and returns headlines from mcp-tv-get-n
       const rpc = JSON.parse(init.body);
       assert.equal(rpc.method, "tools/call");
       assert.equal(rpc.params.name, "mcp-tv-get-news");
+      assert.deepEqual(Object.keys(rpc.params.arguments).sort(), ["limit", "symbol"]);
+      assert.equal(typeof rpc.params.arguments.symbol, "string");
       return jsonResponse({
         result: {
           data: {
@@ -197,6 +199,9 @@ test("POST /pull refreshes expired token and returns headlines from mcp-tv-get-n
   assert.equal(body.available, true);
   assert.equal(body.count, 1);
   assert.equal(body.articles[0].title, "Gold rises");
+  assert.deepEqual(body.articles[0].symbols.sort(), ["OANDA:XAUUSD", "TVC:DXY", "TVC:USOIL"]);
+  const mcpCalls = calls.filter((call) => call.url.includes("/mcp"));
+  assert.deepEqual(mcpCalls.map((call) => JSON.parse(call.init.body).params.arguments.symbol), ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"]);
 
   const storedToken = JSON.parse(await env.OAUTH_STORE.get("tv_mcp:oauth_token"));
   assert.equal(storedToken.access_token, "fresh-token");
@@ -313,8 +318,8 @@ test("scheduled ingestion uses configured bearer secret internally and records a
   assert.equal(stored.status, "ok");
   assert.equal(stored.article_count, 1);
   assert.equal(stored.http_status, 200);
-  assert.equal(stored.pull_attempts, 2);
-  assert.equal(mcpCalls, 2);
+  assert.equal(stored.pull_attempts, 1);
+  assert.equal(mcpCalls, 3);
   assert.deepEqual(stored.symbols, ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"]);
   assert.equal(JSON.stringify(stored).includes("valid-token"), false);
 
