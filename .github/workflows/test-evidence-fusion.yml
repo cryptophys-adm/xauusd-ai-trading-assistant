@@ -1,0 +1,39 @@
+name: Test Evidence Fusion
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "test/**"
+      - "package.json"
+      - "tsconfig.json"
+      - "wrangler.jsonc"
+      - ".github/workflows/test-evidence-fusion.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run evidence contract tests
+        run: npm test
+
+      - name: Type-check Worker
+        run: npm run typecheck
+
+      - name: Validate Worker bundle
+        run: npx wrangler deploy --dry-run --config wrangler.jsonc
