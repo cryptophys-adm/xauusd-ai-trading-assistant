@@ -295,6 +295,63 @@ test("scheduled ingestion records a successful article fetch after retrying an e
   assert.equal(healthBody.last_scheduled_ingest.article_count, 1);
 });
 
+test("scheduled ingestion opens a quota cooldown and avoids retrying a suspended MCP tool", async () => {
+  const env = createEnv();
+  await env.OAUTH_STORE.put(
+    "tv_mcp:oauth_token",
+    JSON.stringify({
+      access_token: "valid-token",
+      refresh_token: "refresh-token",
+      expires_at: Math.floor(Date.now() / 1000) + 3600
+    })
+  );
+
+  let mcpCalls = 0;
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).includes(".well-known/oauth-authorization-server")) {
+      return jsonResponse({
+        authorization_endpoint: "https://mcp.example.com/oauth/authorize",
+        token_endpoint: "https://mcp.example.com/oauth/token",
+        token_endpoint_auth_methods_supported: ["none"]
+      });
+    }
+    if (String(url).includes("/mcp")) {
+      const rpc = JSON.parse(init.body);
+      if (rpc.method === "initialize") return rpcResponse(rpc, { protocolVersion: "2025-03-26" });
+      if (rpc.method === "notifications/initialized") return new Response(null, { status: 202 });
+      mcpCalls += 1;
+      return rpcResponse(rpc, {
+        isError: true,
+        content: [{
+          type: "text",
+          text: "tool_pre_invoke blocked by plugin ToolQuotaPlugin: TOOL_QUOTA_EXCEEDED - Tool call quota exceeded (Your TradingView account MCP usage has raised suspicion and access to MCP is suspended until 00:00 UTC."
+        }]
+      });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  await worker.scheduled({ scheduledTime: Date.now(), cron: "*/1 * * * *" }, env, createCtx());
+
+  assert.equal(mcpCalls, 1, "quota errors must not trigger retries");
+  const cooldown = JSON.parse(await env.OAUTH_STORE.get("tv_mcp:quota_cooldown_until"));
+  assert.equal(cooldown.reason, "provider_quota_exceeded");
+  assert.ok(Date.parse(cooldown.until) > Date.now());
+
+  await worker.scheduled({ scheduledTime: Date.now(), cron: "*/1 * * * *" }, env, createCtx());
+  assert.equal(mcpCalls, 1, "active cooldown must prevent further provider calls");
+
+  const health = await worker.fetch(
+    new Request("https://news.example.com/health"),
+    env,
+    createCtx()
+  );
+  const healthBody = await health.json();
+  assert.equal(healthBody.provider_cooldown_until, cooldown.until);
+  assert.equal(healthBody.provider_cooldown_reason, "provider_quota_exceeded");
+  assert.equal(healthBody.last_scheduled_ingest.failure_reason, "TradingView MCP quota cooldown active");
+});
+
 test("Parser output preserves AI-worker expected articles array contract", () => {
   const parsed = internals.parseArticlesFromMcpPayload({ result: { content: [{
     type: "text",

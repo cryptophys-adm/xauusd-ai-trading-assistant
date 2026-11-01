@@ -7,6 +7,7 @@ const PROVIDER = "TradingView MCP";
 const WORKER_NAME = "xauusd-fundamental-news-ingestion";
 const TOKEN_KEY = "tv_mcp:oauth_token";
 const LAST_SCHEDULED_PULL_KEY = "tv_mcp:last_scheduled_pull";
+const QUOTA_COOLDOWN_KEY = "tv_mcp:quota_cooldown_until";
 const STATE_PREFIX = "tv_mcp:oauth_state:";
 const DEFAULT_SYMBOLS = ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"];
 const METADATA_CACHE_TTL_MS = 60 * 60 * 1000;
@@ -112,6 +113,39 @@ async function writeKVJson(env, key, value, expirationTtl) {
 async function deleteKVKey(env, key) {
   if (!env.OAUTH_STORE) return;
   await env.OAUTH_STORE.delete(key);
+}
+
+async function readQuotaCooldown(env) {
+  if (!env.OAUTH_STORE) return null;
+  try {
+    const raw = await env.OAUTH_STORE.get(QUOTA_COOLDOWN_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw);
+    const until = asString(value?.until);
+    const untilMs = Date.parse(until);
+    if (!Number.isFinite(untilMs)) return null;
+    if (untilMs <= Date.now()) {
+      await deleteKVKey(env, QUOTA_COOLDOWN_KEY);
+      return null;
+    }
+    return { until, reason: asString(value?.reason) || "provider_quota_exceeded" };
+  } catch {
+    return null;
+  }
+}
+
+async function writeQuotaCooldown(env, until) {
+  if (!env.OAUTH_STORE) return;
+  const cooldownUntil = asString(until) || new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  await env.OAUTH_STORE.put(
+    QUOTA_COOLDOWN_KEY,
+    JSON.stringify({
+      until: cooldownUntil,
+      reason: "provider_quota_exceeded",
+      recorded_at: new Date().toISOString()
+    }),
+    { expirationTtl: 60 * 60 * 24 }
+  );
 }
 
 async function fetchOAuthMetadata(env) {
@@ -440,6 +474,23 @@ function summarizeMcpPayload(payload) {
   };
 }
 
+function extractMcpErrorText(payload) {
+  const root = asObject(payload) || {};
+  const result = asObject(root.result) || {};
+  const rootError = asObject(root.error);
+  const resultError = asObject(result.error);
+  const content = asArray(result.content) || [];
+  const contentText = content
+    .map((item) => asString(asObject(item)?.text))
+    .filter(Boolean)
+    .join(" ");
+  return [
+    asString(rootError?.message),
+    asString(resultError?.message),
+    contentText
+  ].filter(Boolean).join(" ");
+}
+
 function parseArticlesFromMcpPayload(payload) {
   const candidates = [];
   pushCandidateArrays(candidates, payload);
@@ -587,6 +638,28 @@ async function postMcp(env, endpoint, accessToken, body, sessionId = "") {
   return { payload, sessionId: response.headers.get("mcp-session-id") || sessionId };
 }
 
+function parseQuotaCooldownUntil(message, now = Date.now()) {
+  const match = asString(message).match(/suspended until\s+(\d{1,2}):(\d{2})\s*UTC/i);
+  if (!match) return new Date(now + 60 * 60 * 1000).toISOString();
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return new Date(now + 60 * 60 * 1000).toISOString();
+
+  const current = new Date(now);
+  let until = Date.UTC(
+    current.getUTCFullYear(),
+    current.getUTCMonth(),
+    current.getUTCDate(),
+    hours,
+    minutes,
+    0,
+    0
+  );
+  if (until <= now) until += 24 * 60 * 60 * 1000;
+  return new Date(until).toISOString();
+}
+
 async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
   const endpoint = asString(metadata.mcp_endpoint || env.TV_MCP_ENDPOINT || `${getBaseUrl(env)}/mcp`);
   const limit = Math.min(parsePositiveInt(env.TV_MCP_MAX_ARTICLES, 25), 200);
@@ -632,17 +705,22 @@ async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
     sessionId = result.sessionId || sessionId;
     const payload = result.payload;
     if (!payload) continue;
-    if (payload.error) {
-      throw Object.assign(new Error(`TradingView MCP get_news failed for ${symbol}: ${payload.error.message || "unknown error"}`), {
-        code: "mcp_jsonrpc_error", detail: payload.error
+    const resultObject = asObject(payload.result);
+    if (payload.error || resultObject?.isError === true) {
+      const upstreamMessage = extractMcpErrorText(payload);
+      const quotaExceeded = /TOOL_QUOTA_EXCEEDED|tool call quota exceeded|access to MCP is suspended/i.test(upstreamMessage);
+      throw Object.assign(new Error(
+        quotaExceeded
+          ? "TradingView MCP tool quota exceeded"
+          : `TradingView MCP get_news tool reported an error for symbol ${symbol}`
+      ), {
+        code: quotaExceeded ? "mcp_quota_exceeded" : "mcp_tool_error",
+        status: quotaExceeded ? 429 : 502,
+        quota_cooldown_until: quotaExceeded ? parseQuotaCooldownUntil(upstreamMessage) : null,
+        detail: payload
       });
     }
-    if (payload.result?.isError) {
-      const errText = asString(payload.result.content?.[0]?.text || "Unknown tool error");
-      throw Object.assign(new Error(`TradingView MCP get_news tool error for ${symbol}: ${errText}`), {
-        code: "mcp_upstream_error", detail: errText
-      });
-    }
+
     calls.push({ symbol, result: payload.result ?? payload });
     const parsed = parseArticlesFromMcpPayload(payload);
     for (const article of parsed) {
@@ -667,6 +745,14 @@ async function invokeMcpGetNewsWithRetry(env, metadata, accessToken, symbols) {
       return { payload, attempt };
     } catch (error) {
       lastError = error;
+      if (error?.code === "mcp_quota_exceeded") {
+        try {
+          await writeQuotaCooldown(env, error.quota_cooldown_until);
+        } catch {
+          console.error("provider_quota_cooldown_store_failed");
+        }
+        break;
+      }
       const status = Number.parseInt(String(error?.status || ""), 10);
       const retryable = !Number.isFinite(status) || status === 429 || (status >= 500 && status <= 599);
       if (!retryable || attempt === maxAttempts) break;
@@ -841,6 +927,7 @@ async function buildHealth(env) {
   const tokenExpiresAt = Number.parseInt(String(token?.expires_at || ""), 10);
   const hasUsableAccessToken = Boolean(asString(token?.access_token)) && (!Number.isFinite(tokenExpiresAt) || tokenExpiresAt > nowSeconds());
   const hasRefreshToken = Boolean(asString(token?.refresh_token));
+  const providerCooldown = await readQuotaCooldown(env);
 
   return {
     worker: WORKER_NAME,
@@ -853,6 +940,8 @@ async function buildHealth(env) {
     oauth_redirect_uri_configured: Boolean(asString(env.TV_MCP_REDIRECT_URI).trim()),
     oauth_client_id_configured: Boolean(asString(env.TV_MCP_CLIENT_ID).trim()),
     oauth_store_configured: Boolean(env.OAUTH_STORE),
+    provider_cooldown_until: providerCooldown?.until || null,
+    provider_cooldown_reason: providerCooldown?.reason || null,
     last_scheduled_ingest: await readLastScheduledPull(env)
   };
 }
@@ -869,6 +958,14 @@ async function handlePull(request, env, ctx, options = {}) {
   if (!hasOAuthConfig(env)) {
     return unavailableResponse(503, "TradingView MCP OAuth is not configured", {
       oauth_configured: false
+    });
+  }
+
+  const cooldown = await readQuotaCooldown(env);
+  if (cooldown) {
+    return unavailableResponse(503, "TradingView MCP quota cooldown active", {
+      failure_code: "provider_quota_exceeded",
+      retry_at: cooldown.until
     });
   }
 
