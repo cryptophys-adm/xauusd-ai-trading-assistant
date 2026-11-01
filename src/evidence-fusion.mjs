@@ -97,7 +97,8 @@ export function validateLocalCalculation(payload, expected = {}, now = Date.now(
   if (!isRecord(payload.provenance)) errors.push("provenance_must_be_object");
   else {
     if (typeof payload.provenance.source !== "string" || !payload.provenance.source.trim()) errors.push("provenance_source_required");
-    if (typeof payload.provenance.source_hash !== "string" || !payload.provenance.source_hash.trim()) errors.push("provenance_source_hash_required");
+    if (typeof payload.provenance.source_hash !== "string" || !/^[a-f0-9]{64}$/i.test(payload.provenance.source_hash)) errors.push("provenance_source_hash_must_be_sha256");
+    if (typeof payload.provenance.implementation_hash !== "string" || !/^[a-f0-9]{64}$/i.test(payload.provenance.implementation_hash)) errors.push("provenance_implementation_hash_must_be_sha256");
   }
   if (isRecord(payload.values) && Object.keys(payload.values).length === 0) errors.push("values_must_not_be_empty");
   if (isRecord(payload.values)) {
