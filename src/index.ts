@@ -527,11 +527,6 @@ async function runAnalysis(
   const inputFingerprint = Array.from(new Uint8Array(fingerprintDigest)).map(value => value.toString(16).padStart(2, "0")).join("");
   const claimed = await claimAnalysisRun(env, candleKey, inputFingerprint);
   if (!claimed) return { status: "already_processed", missing_evidence: [] };
-  const fingerprintDigest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(fingerprintInput));
-  const inputFingerprint = Array.from(new Uint8Array(fingerprintDigest)).map(value => value.toString(16).padStart(2, "0")).join("");
-  const claimed = await claimAnalysisRun(env, candleKey, inputFingerprint);
-  if (!claimed) return { status: "already_processed", missing_evidence: [] };
-
   const fusion = buildEvidenceFusion({
     candleKey,
     symbol: ticker,
