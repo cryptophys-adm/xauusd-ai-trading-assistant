@@ -200,7 +200,7 @@ test("POST /pull refreshes expired token and returns headlines from mcp-tv-get-n
   assert.equal(body.count, 1);
   assert.equal(body.articles[0].title, "Gold rises");
   assert.deepEqual(body.articles[0].symbols.sort(), ["OANDA:XAUUSD", "TVC:DXY", "TVC:USOIL"]);
-  const mcpCalls = calls.filter((call) => call.url.includes("/mcp"));
+  const mcpCalls = calls.filter((call) => new URL(call.url).pathname === "/mcp");
   assert.deepEqual(mcpCalls.map((call) => JSON.parse(call.init.body).params.arguments.symbol), ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"]);
 
   const storedToken = JSON.parse(await env.OAUTH_STORE.get("tv_mcp:oauth_token"));
