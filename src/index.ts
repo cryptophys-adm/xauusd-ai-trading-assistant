@@ -1,4 +1,4 @@
-import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION } from "./evidence-fusion.mjs";
+import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS } from "./evidence-fusion.mjs";
 
 export interface Env {
   DB: D1Database;
@@ -420,7 +420,7 @@ async function claimAnalysisRun(env: Env, candleKey: string, inputFingerprint: s
   const result = await env.DB.prepare(
     "INSERT INTO analysis_runs (candle_key, status, attempt_count, started_at, updated_at, result_json) VALUES (?, 'analyzing', 1, datetime('now'), datetime('now'), json_object('input_fingerprint', ?)) " +
     "ON CONFLICT(candle_key) DO UPDATE SET status = 'analyzing', attempt_count = analysis_runs.attempt_count + 1, started_at = datetime('now'), updated_at = datetime('now'), completed_at = NULL, error_code = NULL, result_json = json_object('input_fingerprint', ?) " +
-    "WHERE (analysis_runs.status IN ('degraded', 'failed') AND COALESCE(json_extract(analysis_runs.result_json, '$.input_fingerprint'), '') != ?) OR (analysis_runs.status = 'analyzing' AND analysis_runs.updated_at < datetime('now', '-10 minutes'))"
+    "WHERE (analysis_runs.status = 'degraded' AND COALESCE(json_extract(analysis_runs.result_json, '$.input_fingerprint'), '') != ?) OR analysis_runs.status = 'failed' OR (analysis_runs.status = 'analyzing' AND analysis_runs.updated_at < datetime('now', '-10 minutes'))"
   ).bind(candleKey, inputFingerprint, inputFingerprint, inputFingerprint).run();
   return Number(result.meta.changes) > 0;
 }
@@ -476,8 +476,8 @@ async function runAnalysis(
   const newsFetchedAt = Date.parse(asText(newsAnalysis?.fetched_at));
   const newsNow = Date.now();
   const newsFreshness = Number.isFinite(newsAnalyzedAt) && Number.isFinite(newsFetchedAt) &&
-    newsNow - newsAnalyzedAt <= 6 * 60 * 60 * 1000 &&
-    newsNow - newsFetchedAt <= 6 * 60 * 60 * 1000 &&
+    newsNow - newsAnalyzedAt <= NEWS_MAX_AGE_MS &&
+    newsNow - newsFetchedAt <= NEWS_MAX_AGE_MS &&
     newsAnalyzedAt <= newsNow + 5 * 60 * 1000 &&
     newsFetchedAt <= newsNow + 5 * 60 * 1000;
   const fingerprintInput = JSON.stringify({
@@ -549,6 +549,7 @@ async function runAnalysis(
       console.error("telegram_delivery_failed", JSON.stringify({ candle_key: candleKey, message: error instanceof Error ? error.message : "Unknown notification error" }));
     }
     const details: JsonObject = {
+      input_fingerprint: inputFingerprint,
       status: "degraded",
       missing_evidence: fusion.missing_evidence,
       validation_errors: fusion.validation_errors,
