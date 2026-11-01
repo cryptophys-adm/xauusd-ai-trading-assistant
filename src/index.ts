@@ -140,6 +140,142 @@ async function fetchNews(env: Env): Promise<{ available: boolean; articles: unkn
   }
 }
 
+
+async function runNewsAnalysis(env: Env): Promise<JsonObject> {
+  const newsEvidence = await fetchNews(env);
+  if (!newsEvidence.available || newsEvidence.articles.length === 0) {
+    throw new Error("News ingestion unavailable: " + (newsEvidence.reason || "no articles returned"));
+  }
+
+  const articles = newsEvidence.articles;
+  const digestInput = JSON.stringify(articles.map((item: unknown) => {
+    if (item && typeof item === "object") {
+      const article = item as JsonObject;
+      return { id: article.id, url: article.url, title: article.title, published_at: article.published_at };
+    }
+    return item;
+  }).sort((a: any, b: any) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(digestInput));
+  const analysisKey = Array.from(new Uint8Array(digest)).map(v => v.toString(16).padStart(2, "0")).join("");
+
+  const cached = await env.DB.prepare(
+    "SELECT analysis_key, analyzed_at, article_count, recommendation_json FROM news_analyses WHERE analysis_key = ? LIMIT 1"
+  ).bind(analysisKey).first<JsonObject>();
+  if (cached) {
+    const latest = {
+      status: "ok",
+      analysis_type: "fundamental_news",
+      deduplicated: true,
+      analysis_key: analysisKey,
+      analyzed_at: cached.analyzed_at,
+      article_count: cached.article_count,
+      recommendation: JSON.parse(asText(cached.recommendation_json) || "{}")
+    };
+    await env.SIGNAL_CACHE.put("latest:news:fundamental", JSON.stringify(latest), { expirationTtl: 60 * 60 * 24 * 7 });
+    return latest;
+  }
+
+  const [knowledgeText] = await Promise.all([env.KNOWLEDGE_BASE.get("knowledge-base:v3")]);
+  const evidence = {
+    analysis_type: "fundamental_news",
+    fetched_at: newsEvidence.fetched_at,
+    article_count: newsEvidence.article_count,
+    symbols: ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"],
+    articles,
+    policy: knowledgeText || "No knowledge-base:v3 entry is available; use conservative evidence-based reasoning."
+  };
+
+  const analystResult = await env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
+    prompt: [
+      "You are the Fundamental News Analyst for XAUUSD decision support.",
+      "Analyze only the supplied news articles. Do not infer current price action, technical indicators, or unpublished facts.",
+      "Assess direct and indirect potential impact on gold (XAUUSD), US dollar (DXY), and oil (USOIL). Distinguish reported facts from interpretation and note publication-time limitations.",
+      "Return JSON only with keys: gold_bias (BULLISH, BEARISH, NEUTRAL), dollar_bias (BULLISH, BEARISH, NEUTRAL), oil_bias (BULLISH, BEARISH, NEUTRAL), sentiment (RISK_ON, RISK_OFF, MIXED, UNKNOWN), key_catalysts, key_risks, evidence_quality (LOW, MEDIUM, HIGH), stale_or_uncertain (boolean), reasoning.",
+      "Do not produce entry, stop-loss, take-profit, position size, or a technical BUY/SELL order.",
+      "NEWS EVIDENCE:", JSON.stringify(evidence)
+    ].join("\n"),
+    max_tokens: 1000,
+    temperature: 0.1
+  } as never);
+  const analystText = extractText(analystResult);
+
+  const counselorResult = await env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
+    prompt: [
+      "You are the Fundamental News Counselor.",
+      "Use only the news evidence and analyst output. Provide balanced conditional scenarios, not trade execution instructions.",
+      "Return JSON only with keys: bullish_scenario, bearish_scenario, neutral_scenario, what_would_confirm, what_would_invalidate, watchlist_events, conflicts_or_missing_evidence.",
+      "Do not invent prices, technical confirmation, or unsupported causal claims.",
+      "NEWS EVIDENCE:", JSON.stringify(evidence),
+      "ANALYST:", analystText
+    ].join("\n"),
+    max_tokens: 1100,
+    temperature: 0.1
+  } as never);
+  const counselorText = extractText(counselorResult);
+
+  const reasonerResult = await env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
+    prompt: [
+      "You are the final Fundamental News Reasoner for XAUUSD decision support.",
+      "Synthesize only the supplied article evidence, analyst output, and counselor output. This is a fundamental outlook, not a technical trade signal.",
+      "Return JSON only with keys: recommendation (BULLISH_BIAS, BEARISH_BIAS, NEUTRAL, WAIT_FOR_TECHNICAL_CONFIRMATION), confidence (0 to 1 or null), horizon, rationale, supporting_evidence, opposing_evidence, risks, confirmation_needed, invalidation_conditions.",
+      "Do not output numeric entry, stop-loss, take-profit, risk/reward, or position size. Do not claim an executable BUY/SELL without technical evidence.",
+      "If evidence is mixed, stale, or insufficient, choose WAIT_FOR_TECHNICAL_CONFIRMATION or NEUTRAL and lower confidence.",
+      "NEWS EVIDENCE:", JSON.stringify(evidence),
+      "ANALYST:", analystText,
+      "COUNSELOR:", counselorText
+    ].join("\n"),
+    max_tokens: 1200,
+    temperature: 0.1
+  } as never);
+  const reasonerText = extractText(reasonerResult);
+
+  let recommendation: JsonObject;
+  const match = reasonerText.match(/\{[\s\S]*\}/);
+  try {
+    recommendation = match ? JSON.parse(match[0]) as JsonObject : {
+      recommendation: "WAIT_FOR_TECHNICAL_CONFIRMATION",
+      confidence: null,
+      rationale: "Reasoner response was not valid JSON; no trade signal generated.",
+      raw_response: reasonerText
+    };
+  } catch {
+    recommendation = {
+      recommendation: "WAIT_FOR_TECHNICAL_CONFIRMATION",
+      confidence: null,
+      rationale: "Reasoner response was not valid JSON; no trade signal generated.",
+      raw_response: reasonerText
+    };
+  }
+
+  const analyzedAt = new Date().toISOString();
+  const result: JsonObject = {
+    status: "ok",
+    analysis_type: "fundamental_news",
+    deduplicated: false,
+    analysis_key: analysisKey,
+    fetched_at: newsEvidence.fetched_at,
+    analyzed_at: analyzedAt,
+    article_count: newsEvidence.article_count,
+    symbols: evidence.symbols,
+    analyst_model: env.AI_MODEL_ANALYST,
+    analyst_output: analystText,
+    counselor_model: env.AI_MODEL_COUNSELOR,
+    counselor_output: counselorText,
+    reasoner_model: env.AI_MODEL_REASONER,
+    reasoner_output: reasonerText,
+    recommendation
+  };
+
+  await env.DB.prepare(
+    "INSERT INTO news_analyses (analysis_key, fetched_at, analyzed_at, article_count, evidence_json, analyst_output, counselor_output, reasoner_output, recommendation_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).bind(
+    analysisKey, newsEvidence.fetched_at, analyzedAt, newsEvidence.article_count,
+    JSON.stringify(evidence), analystText, counselorText, reasonerText, JSON.stringify(recommendation)
+  ).run();
+  await env.SIGNAL_CACHE.put("latest:news:fundamental", JSON.stringify(result), { expirationTtl: 60 * 60 * 24 * 7 });
+  return result;
+}
+
 async function runAnalysis(
   env: Env,
   candleKey: string,
@@ -406,6 +542,37 @@ export default {
     if (request.method === "POST" && url.pathname === "/webhook") {
       return handleWebhook(request, env);
     }
-    return json({ error: "Not found", endpoints: ["GET /health", "POST /webhook"] }, 404);
+    if (url.pathname === "/news/analyze" && request.method === "POST") {
+      if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
+        return json({ error: "Unauthorized" }, 401);
+      }
+      try {
+        return json(await runNewsAnalysis(env));
+      } catch (error) {
+        return json({ status: "error", error: error instanceof Error ? error.message : "Unknown news analysis error" }, 502);
+      }
+    }
+    if (url.pathname === "/news/latest" && request.method === "GET") {
+      if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
+        return json({ error: "Unauthorized" }, 401);
+      }
+      const latest = await env.SIGNAL_CACHE.get("latest:news:fundamental");
+      if (latest) return new Response(latest, { headers: JSON_HEADERS });
+      const row = await env.DB.prepare("SELECT analysis_key, fetched_at, analyzed_at, article_count, recommendation_json FROM news_analyses ORDER BY analyzed_at DESC LIMIT 1").first<JsonObject>();
+      if (!row) return json({ status: "not_found", message: "No fundamental news analysis has completed yet." }, 404);
+      return json({ status: "ok", analysis_type: "fundamental_news", ...row, recommendation: JSON.parse(asText(row.recommendation_json) || "{}") });
+    }
+    return json({ error: "Not found", endpoints: ["GET /health", "POST /webhook", "POST /news/analyze", "GET /news/latest"] }, 404);
+  },
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(runNewsAnalysis(env).then(result => {
+      console.log("Scheduled fundamental news analysis completed", JSON.stringify({
+        analysis_key: result.analysis_key,
+        article_count: result.article_count,
+        analyzed_at: result.analyzed_at
+      }));
+    }).catch(error => {
+      console.error("Scheduled fundamental news analysis failed", error instanceof Error ? error.message : String(error));
+    }));
   }
 };
