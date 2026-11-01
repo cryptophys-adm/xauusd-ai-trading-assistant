@@ -1,3 +1,5 @@
+import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation } from "./evidence-fusion.mjs";
+
 export interface Env {
   DB: D1Database;
   SIGNAL_CACHE: KVNamespace;
@@ -276,27 +278,91 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
   return result;
 }
 
+async function fetchLatestNewsAnalysis(env: Env): Promise<JsonObject | null> {
+  try {
+    const row = await env.DB.prepare(
+      "SELECT analysis_key, fetched_at, analyzed_at, article_count, evidence_json, analyst_output, counselor_output, reasoner_output, recommendation_json FROM news_analyses ORDER BY analyzed_at DESC LIMIT 1"
+    ).first<JsonObject>();
+    if (!row) return null;
+    let evidence: JsonObject | null = null;
+    try {
+      const parsed = JSON.parse(asText(row.evidence_json));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) evidence = parsed as JsonObject;
+    } catch { /* malformed historical row is treated as missing evidence */ }
+    let recommendation: JsonObject = {};
+    try {
+      const parsed = JSON.parse(asText(row.recommendation_json));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) recommendation = parsed as JsonObject;
+    } catch { /* malformed recommendation is not trusted */ }
+    return {
+      status: "ok",
+      analysis_type: "fundamental_news",
+      analysis_key: asText(row.analysis_key),
+      fetched_at: asText(row.fetched_at),
+      analyzed_at: asText(row.analyzed_at),
+      article_count: Number(row.article_count) || 0,
+      symbols: Array.isArray(evidence?.symbols) ? evidence.symbols : [],
+      evidence,
+      analyst_output: asText(row.analyst_output),
+      counselor_output: asText(row.counselor_output),
+      reasoner_output: asText(row.reasoner_output),
+      recommendation
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function runAnalysis(
   env: Env,
   candleKey: string,
   ticker: string,
   timeframe: string,
   payloads: Record<string, WebhookPayload>
-): Promise<void> {
-  const [knowledgeText, newsEvidence] = await Promise.all([
+): Promise<{ status: string; missing_evidence: string[] }> {
+  const [knowledgeText, newsAnalysis, localCalculationRaw] = await Promise.all([
     env.KNOWLEDGE_BASE.get("knowledge-base:v3"),
-    fetchNews(env)
+    fetchLatestNewsAnalysis(env),
+    Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get("localcalc:" + safeKeyPart(candleKey) + ":" + engine)))
   ]);
   const knowledge = knowledgeText || JSON.stringify({
     status: "kv_key_missing",
     message: "No knowledge-base:v3 value was found in the bound KV namespace. Use the checked-in knowledge-base-v3.json after reviewing it."
   });
+  const candleTime = asText(payloads.prophet_r38?.candle_time || payloads.prophet_r37_ssot?.candle_time || payloads.gmi_v12_70?.candle_time || payloads.prophet_r38?.timestamp || payloads.prophet_r37_ssot?.timestamp || payloads.gmi_v12_70?.timestamp);
+  const localCalculations: unknown[] = [];
+  for (const raw of localCalculationRaw) {
+    if (!raw) continue;
+    try { localCalculations.push(JSON.parse(raw)); } catch { /* malformed KV evidence is excluded and reported as missing */ }
+  }
+  const fusion = buildEvidenceFusion({
+    candleKey,
+    symbol: ticker,
+    timeframe,
+    candleTime,
+    webhookPayloads: payloads,
+    localCalculations,
+    newsAnalysis
+  });
+  const newsEvidence = {
+    available: Boolean(fusion.fundamental_news_analysis),
+    article_count: Number(fusion.fundamental_news_analysis?.article_count) || 0,
+    fetched_at: asText(fusion.fundamental_news_analysis?.fetched_at),
+    analyzed_at: asText(fusion.fundamental_news_analysis?.analyzed_at),
+    analysis_key: asText(fusion.fundamental_news_analysis?.analysis_key),
+    reason: fusion.fundamental_news_analysis ? undefined : "No fresh, valid completed fundamental news analysis is available."
+  };
 
   const evidence = {
+    schema_version: fusion.schema_version,
     candle_key: candleKey,
     ticker,
     timeframe,
+    candle_time: candleTime,
     source_payloads: payloads,
+    local_calculation_evidence: fusion.local_calculations,
+    fundamental_news_analysis: fusion.fundamental_news_analysis,
+    evidence_fusion: fusion,
     policy: knowledge,
     news_evidence: newsEvidence
   };
@@ -306,9 +372,10 @@ async function runAnalysis(
       "You are the Analyst stage in an XAUUSD decision-support pipeline.",
       "Classify the supplied indicator evidence without inventing missing values or prices.",
       "Prophet is the base directional bias. GMI can validate, block, or defer a setup but must not silently overwrite Prophet's bias.",
-      "Evidence includes technical source_payloads and fundamental news_evidence.",
-      "If news_evidence.available is false, state that fundamental news data is unavailable. Do NOT invent news.",
-      "If news_evidence.available is true, consider the supplied articles alongside technical evidence.",
+      "Evidence includes the versioned evidence_fusion result, technical source_payloads, all local calculation evidence, and completed fundamental_news_analysis.",
+      "If evidence_fusion.complete is false, set directional_bias to NEUTRAL and missing_evidence to true; list every missing_evidence and validation_errors item.",
+      "If news_evidence.available is false, state that completed fundamental news analysis is unavailable. Do NOT invent news.",
+      "If news_evidence.available is true, consider the completed analysis and its underlying article evidence alongside technical evidence.",
       "Return JSON only with keys: directional_bias (BULLISH, BEARISH, or NEUTRAL), setup_quality (integer 0-3), missing_evidence (boolean), reasoning.",
       "Set directional_bias to NEUTRAL and missing_evidence to true if evidence is missing, stale, contradictory, or insufficient.",
       "EVIDENCE:",
@@ -324,8 +391,10 @@ async function runAnalysis(
       "You are the Counselor stage in an XAUUSD decision-support pipeline.",
       "Use only the JSON evidence and analyst output below. Do not invent prices or indicator definitions.",
       "Prophet is the base bias. GMI may validate, block, or defer a Prophet setup; it must not silently overwrite Prophet's bias.",
-      "If news_evidence.available is false, acknowledge fundamental news is unavailable. Do NOT fabricate news.",
-      "If news_evidence.available is true, weigh the supplied articles in scenarios.",
+      "Use the complete versioned evidence_fusion bundle as the canonical evidence set, including local_calculation_evidence and fundamental_news_analysis.",
+      "If evidence_fusion.complete is false, explicitly mark the result degraded and enumerate missing evidence and validation errors.",
+      "If news_evidence.available is false, acknowledge completed fundamental news analysis is unavailable. Do NOT fabricate news.",
+      "If news_evidence.available is true, weigh the completed news analysis and its underlying article evidence in scenarios.",
       "Return concise JSON with keys: evidence_summary, bullish_scenario, bearish_scenario, neutral_scenario, confirmations, invalidation, risks, missing_data.",
       "If the source payloads conflict or fields are unclear, say so explicitly.",
       "EVIDENCE:",
@@ -343,8 +412,9 @@ async function runAnalysis(
       "You are the final Deep Reasoner stage for XAUUSD decision support.",
       "Use only the supplied evidence, analyst output, and counselor output. Do not invent market prices or claim the models verified facts they did not receive.",
       "Prophet remains the base bias. GMI may validate, block, or wait on a setup. Do not silently reverse Prophet's bias.",
-      "If news_evidence.available is false, state fundamental news analysis was not performed. Do NOT claim news supported or contradicted the setup.",
-      "If news_evidence.available is true, incorporate the supplied articles into final reasoning.",
+      "If evidence_fusion.complete is false, decision MUST be WAIT or NO_TRADE, confidence and all price/risk fields MUST be null, and reasoning must enumerate missing_evidence and validation_errors.",
+      "If news_evidence.available is false, state completed fundamental news analysis was unavailable. Do NOT claim news supported or contradicted the setup.",
+      "If news_evidence.available is true, incorporate the completed news analysis and its underlying article evidence into final reasoning.",
       "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation.",
       "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
       "EVIDENCE:",
@@ -358,7 +428,18 @@ async function runAnalysis(
     temperature: 0.1
   } as never);
   const reasonerText = extractText(reasonerResult);
-  const decision = parseDecision(reasonerText);
+  const parsedDecision = parseDecision(reasonerText);
+  const decision = fusion.complete ? parsedDecision : {
+    ...parsedDecision,
+    decision: "WAIT",
+    confidence: null,
+    entry_price: null,
+    stop_loss: null,
+    take_profit: null,
+    risk_reward: null,
+    position_size_pct: null,
+    reasoning: "Evidence fusion is degraded. Missing evidence: " + (fusion.missing_evidence.join(", ") || "none") + ". Validation errors: " + (fusion.validation_errors.join(", ") || "none") + ". No actionable trade setup is issued."
+  };
 
   const timestamp = new Date().toISOString();
   const synthesis = {
@@ -366,6 +447,7 @@ async function runAnalysis(
     ticker,
     timeframe,
     timestamp,
+    evidence_fusion: fusion,
     analyst_model: env.AI_MODEL_ANALYST,
     analyst_output: analystText,
     counselor_model: env.AI_MODEL_COUNSELOR,
@@ -418,14 +500,22 @@ async function runAnalysis(
     "Reason: " + reasoning.slice(0, 900),
     "Note: advisory only; no trade was executed."
   ].join("\n");
-  await sendTelegram(env, message);
+  try {
+    await sendTelegram(env, message);
+  } catch (error) {
+    console.error("telegram_delivery_failed", JSON.stringify({ candle_key: candleKey, message: error instanceof Error ? error.message : "Unknown notification error" }));
+  }
 
+  const analysisStatus = fusion.complete ? "complete" : "degraded";
   await env.WEBHOOK_BUFFER.put("analysis:" + safeKeyPart(candleKey), JSON.stringify({
-    status: "complete",
+    status: analysisStatus,
     created_at: timestamp,
     sources: Object.keys(payloads),
-    decision: synthesis
+    decision: synthesis,
+    missing_evidence: fusion.missing_evidence,
+    validation_errors: fusion.validation_errors
   }), { expirationTtl: 60 * 60 * 24 * 14 });
+  return { status: analysisStatus, missing_evidence: fusion.missing_evidence };
 }
 
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
@@ -462,7 +552,10 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   }
 
   const candleKey = safeKeyPart(asText(body.candle_key) || [ticker, timeframe, candleTime].join(":"));
-  const storedPayload: WebhookPayload = { ...body, source, ticker, timeframe, candle_time: candleTime };
+  if (asText(body.candle_key) && asText(body.candle_key) !== safeKeyPart(asText(body.candle_key))) {
+    return json({ error: "candle_key contains unsupported characters" }, 400);
+  }
+  const storedPayload: WebhookPayload = { ...body, source, ticker, timeframe, candle_time: candleTime, candle_key: candleKey };
   delete storedPayload.secret;
 
   await env.DB.prepare(
@@ -501,8 +594,8 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   }
 
   try {
-    await runAnalysis(env, candleKey, ticker, timeframe, payloads);
-    return json({ status: "accepted", candle_key: candleKey, analysis_status: "complete" }, 200);
+    const outcome = await runAnalysis(env, candleKey, ticker, timeframe, payloads);
+    return json({ status: "accepted", candle_key: candleKey, analysis_status: outcome.status, missing_evidence: outcome.missing_evidence }, 200);
   } catch (error) {
     return json({
       status: "accepted",
@@ -542,6 +635,35 @@ export default {
     if (request.method === "POST" && url.pathname === "/webhook") {
       return handleWebhook(request, env);
     }
+    if (request.method === "POST" && url.pathname === "/evidence/local-calculation") {
+      if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
+        return json({ error: "Unauthorized" }, 401);
+      }
+      const declaredLength = Number.parseInt(request.headers.get("content-length") || "0", 10);
+      if (Number.isFinite(declaredLength) && declaredLength > 65536) return json({ error: "Payload exceeds 64 KiB limit" }, 413);
+      let payload: unknown;
+      try { payload = await request.json(); } catch { return json({ error: "Request body must be valid JSON" }, 400); }
+      const preliminary = validateLocalCalculation(payload);
+      if (!preliminary.valid && preliminary.errors.some(error => error !== "calculation_stale" && error !== "computed_at_in_future")) {
+        return json({ error: "Invalid local calculation contract", validation_errors: preliminary.errors }, 400);
+      }
+      const record = payload as Record<string, unknown>;
+      const key = safeKeyPart(asText(record.candle_key));
+      const engine = asText(record.engine);
+      if (!key || !LOCAL_ENGINES.includes(engine as typeof LOCAL_ENGINES[number])) {
+        return json({ error: "Invalid candle_key or engine" }, 400);
+      }
+      const validation = validateLocalCalculation(record, {
+        symbol: asText(record.symbol),
+        timeframe: asText(record.timeframe),
+        candle_key: key,
+        candle_time: asText(record.candle_time)
+      });
+      if (!validation.valid) return json({ error: "Invalid or stale local calculation contract", validation_errors: validation.errors }, 400);
+      const stored = { ...record, received_at: new Date().toISOString() };
+      await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":" + engine, JSON.stringify(stored), { expirationTtl: 60 * 60 * 24 * 14 });
+      return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key }, 202);
+    }
     if (url.pathname === "/news/analyze" && request.method === "POST") {
       if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
         return json({ error: "Unauthorized" }, 401);
@@ -562,7 +684,7 @@ export default {
       if (!row) return json({ status: "not_found", message: "No fundamental news analysis has completed yet." }, 404);
       return json({ status: "ok", analysis_type: "fundamental_news", ...row, recommendation: JSON.parse(asText(row.recommendation_json) || "{}") });
     }
-    return json({ error: "Not found", endpoints: ["GET /health", "POST /webhook", "POST /news/analyze", "GET /news/latest"] }, 404);
+    return json({ error: "Not found", endpoints: ["GET /health", "POST /webhook", "POST /evidence/local-calculation", "POST /news/analyze", "GET /news/latest"] }, 404);
   },
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(runNewsAnalysis(env).then(result => {
