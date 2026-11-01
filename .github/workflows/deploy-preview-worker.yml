@@ -113,7 +113,7 @@ jobs:
               schema_version: "cryptophys.local-calculation.v1",
               engine: "mizan", symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
               computed_at: new Date().toISOString(), calculation_version: "credential-probe",
-              values: { bias: "NEUTRAL" }, provenance: { source: "preview-fixture", source_hash: "test-hash" },
+              values: { bias: "NEUTRAL" }, provenance: { source: "preview-fixture", source_hash: "a".repeat(64), implementation_hash: "b".repeat(64) },
               secret: "must-not-be-stored"
             })
           });
@@ -141,7 +141,7 @@ jobs:
                 computed_at: new Date().toISOString(),
                 calculation_version: engine + "-preview-fixture-v1",
                 values: { bias: "NEUTRAL", fixture_only: true },
-                provenance: { source: "isolated-preview-fixture", source_hash: "preview-test-hash" }
+                provenance: { source: "isolated-preview-fixture", source_hash: ({mizan:"a",prophet:"c",gmi:"e"})[engine].repeat(64), implementation_hash: ({mizan:"b",prophet:"d",gmi:"f"})[engine].repeat(64) }
             };
             const response = await fetch(base + "/evidence/local-calculation", {
               method: "POST",
@@ -165,7 +165,7 @@ jobs:
                 computed_at: new Date().toISOString(),
                 calculation_version: "gmi-preview-fixture-v1",
                 values: { bias: "NEUTRAL", fixture_only: true },
-                provenance: { source: "isolated-preview-fixture", source_hash: "preview-test-hash" }
+                provenance: { source: "isolated-preview-fixture", source_hash: "e".repeat(64), implementation_hash: "f".repeat(64) }
               })
             });
             lastLocalResult = await retryResponse.json();
