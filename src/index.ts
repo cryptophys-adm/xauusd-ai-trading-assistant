@@ -1,4 +1,4 @@
-import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS } from "./evidence-fusion.mjs";
+import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
 
 export interface Env {
   DB: D1Database;
@@ -780,7 +780,8 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (asText(body.candle_key) && asText(body.candle_key) !== safeKeyPart(asText(body.candle_key))) {
     return json({ error: "candle_key contains unsupported characters" }, 400);
   }
-  const storedPayload: WebhookPayload = { ...body, schema_version: WEBHOOK_EVIDENCE_CONTRACT_VERSION, source, ticker, timeframe, candle_time: candleTime, candle_key: candleKey };
+  const cleanBody = stripCredentialFields(body) as WebhookPayload;
+  const storedPayload: WebhookPayload = { ...cleanBody, schema_version: WEBHOOK_EVIDENCE_CONTRACT_VERSION, source, ticker, timeframe, candle_time: candleTime, candle_key: candleKey };
   delete storedPayload.secret;
 
   await env.DB.prepare(
@@ -902,6 +903,9 @@ export default {
         return json({ error: "Invalid local calculation contract", validation_errors: preliminary.errors }, 400);
       }
       const record = payload as Record<string, unknown>;
+      if (containsCredentialFields(record)) {
+        return json({ error: "Credential-like fields are not permitted in evidence payloads" }, 400);
+      }
       const key = safeKeyPart(asText(record.candle_key));
       const engine = asText(record.engine);
       if (!key || !LOCAL_ENGINES.includes(engine as typeof LOCAL_ENGINES[number])) {
@@ -914,8 +918,19 @@ export default {
         candle_time: asText(record.candle_time)
       });
       if (!validation.valid) return json({ error: "Invalid or stale local calculation contract", validation_errors: validation.errors }, 400);
-      const stored = { ...record, received_at: new Date().toISOString() };
-      delete (stored as Record<string, unknown>).secret;
+      const stored = {
+        schema_version: record.schema_version,
+        engine,
+        symbol: record.symbol,
+        timeframe: record.timeframe,
+        candle_time: record.candle_time,
+        candle_key: key,
+        computed_at: record.computed_at,
+        calculation_version: record.calculation_version,
+        values: record.values,
+        provenance: record.provenance,
+        received_at: new Date().toISOString()
+      };
       await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":" + engine, JSON.stringify(stored), { expirationTtl: 60 * 60 * 24 * 14 });
 
       // Trigger fusion only after all three local engines and all configured webhook sources exist.
