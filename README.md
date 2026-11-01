@@ -2,7 +2,7 @@
 
 Cloudflare-based, advisory-only XAUUSD decision support. The current Worker receives TradingView webhook payloads from Prophet R38, Prophet R37 SSOT, and GMI v12.70, stores candle evidence in D1/KV, runs Analyst → Counselor → Reasoner, and can send a Telegram summary.
 
-**Important status:** Cloudflare inventory confirms that the AI Worker and fundamental-news ingestion Worker are deployed. This is not proof of end-to-end product readiness. Local calculation outputs and the completed standalone news-analysis output are not yet proven to be integrated into the technical evidence pipeline. Do not mark the product production-complete until every gate in [Production Definition of Done](docs/PRODUCTION_DEFINITION_OF_DONE.md) passes with recorded evidence.
+**Important status:** The production AI and news-ingestion Workers are deployed, but the new fusion implementation is under review on a feature branch and has not been deployed. The live health endpoint returned HTTP 200 for both Workers; however, the news Worker reports TradingView MCP quota cooldown and the latest scheduled ingestion failed with HTTP 503. Local Mizan/Prophet/GMI calculation engines and Pine parity are not implemented/verified by this repository. Do not mark the product production-complete until every gate in [Production Definition of Done](docs/PRODUCTION_DEFINITION_OF_DONE.md) passes with recorded evidence.
 
 ## Architecture and deployment SSOT
 
@@ -11,6 +11,7 @@ These documents are the baseline for future implementation and deployment:
 - [Architecture Baseline](docs/ARCHITECTURE_BASELINE.md) — canonical Evidence Fusion & Orchestration point and immutable architectural constraints.
 - [Deployment Blueprint](docs/DEPLOYMENT_BLUEPRINT.md) — phased implementation, preview, production rollout and rollback.
 - [Production Definition of Done](docs/PRODUCTION_DEFINITION_OF_DONE.md) — mandatory release acceptance gates.
+- [Evidence Contracts](docs/EVIDENCE_CONTRACTS.md) — versioned local-calculation contract, freshness rules, and degraded behavior.
 
 The canonical convergence point is **Evidence Fusion & Orchestration**, positioned after source ingestion/local calculations and before Analyst/Counselor. It must combine and validate:
 1. TradingView webhook evidence.
@@ -36,10 +37,11 @@ Existing resources and IDs must be reused. Do not recreate them. Keep preview re
 2. The request must include the shared secret in `secret` or the `X-Webhook-Secret` header.
 3. The payload is recorded in D1 and cached in KV.
 4. Current analysis starts after Prophet R38, Prophet R37 SSOT and GMI v12.70 have supplied payloads for the same candle key.
-5. `runAnalysis()` fetches news evidence and calls Analyst, Counselor and Reasoner.
-6. Outputs are stored in D1/KV and a Telegram message is sent when configured.
+5. Evidence Fusion validates the three webhook payloads, the latest completed fundamental news analysis in D1, and local Mizan/Prophet/GMI results received through `POST /evidence/local-calculation`.
+6. Analyst → Counselor → Reasoner receive the versioned fused evidence bundle. Missing/stale local calculations or completed news analysis force a `WAIT` decision with null risk/price fields.
+7. Outputs and fusion diagnostics are stored in D1/KV; optional Telegram delivery failure does not invalidate persisted results.
 
-This is the current implementation, not the complete target architecture. The fusion work must explicitly bring local calculation results and the completed fundamental-news analysis into a validated evidence bundle. Preserve the current webhook gate until a reviewed schema/policy migration defines how new evidence becomes mandatory.
+The evidence-fusion implementation on the feature branch adds the local calculation contract and consumes the most recent completed fundamental-news analysis. The endpoint validates/authenticates and stores outputs; it does not calculate Mizan, Prophet, or GMI itself. Exact Pine sources, local engine implementation, parity fixtures, and live end-to-end acceptance remain mandatory blockers. Preserve the existing three-source webhook gate until a reviewed schema/policy migration defines any change to required sources.
 
 ## AI model configuration
 
