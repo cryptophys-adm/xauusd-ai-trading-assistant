@@ -107,6 +107,7 @@ export function validateLocalCalculation(payload, expected = {}, now = Date.now(
   }
   const candleAt = timestampMs(payload.candle_time);
   const computedAt = timestampMs(payload.computed_at);
+  if (candleAt !== null && candleAt > now + FUTURE_CLOCK_SKEW_MS) errors.push("candle_time_in_future");
   if (computedAt !== null && computedAt > now + FUTURE_CLOCK_SKEW_MS) errors.push("computed_at_in_future");
   if (computedAt !== null && now - computedAt > LOCAL_CALC_MAX_AGE_MS) errors.push("calculation_stale");
   if (computedAt !== null && candleAt !== null && computedAt < candleAt - FUTURE_CLOCK_SKEW_MS) errors.push("calculation_predates_candle");
