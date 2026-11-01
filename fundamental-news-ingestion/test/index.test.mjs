@@ -534,7 +534,7 @@ test("dedupe collapses tracking URLs and title/source duplicates while merging s
   const articles = [
     { title: "Gold rises on dollar weakness", source: "Market News", url: "https://NEWS.example.com/story?id=1&utm_source=a", symbols: ["OANDA:XAUUSD"] },
     { title: "Gold rises on dollar weakness", source: "Market News", url: "https://news.example.com/story?utm_source=b#top", symbols: ["TVC:DXY"] },
-    { title: "Gold rises on dollar weakness", source: "Market News", url: "https://another.example.com/different", symbols: ["TVC:USOIL"] }
+    { title: "Oil falls on inventory rise", source: "Market News", url: "https://another.example.com/different", symbols: ["TVC:USOIL"] }
   ];
   const deduped = internals.dedupeArticles(articles);
   assert.equal(deduped.length, 2);
