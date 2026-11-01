@@ -125,7 +125,8 @@ async function readQuotaCooldown(env) {
     const untilMs = Date.parse(until);
     if (!Number.isFinite(untilMs)) return null;
     if (untilMs <= Date.now()) {
-      await deleteKVKey(env, QUOTA_COOLDOWN_KEY);
+      // Treat expired records as inactive. Do not delete here: a concurrent
+      // invocation may have replaced the key with a newer cooldown.
       return null;
     }
     return { until, reason: asString(value?.reason) || "provider_quota_exceeded" };
@@ -607,9 +608,16 @@ async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
       const retryAfterMs = Number.isFinite(Number.parseInt(String(retryAfter || ""), 10))
         ? Number.parseInt(String(retryAfter), 10) * 1000
         : null;
-      throw Object.assign(new Error(`TradingView MCP returned HTTP ${response.status} for symbol ${symbol}`), {
-        code: "mcp_upstream_error",
-        status: response.status,
+      const upstreamMessage = payload ? extractMcpErrorText(payload) : text;
+      const quotaExceeded = /TOOL_QUOTA_EXCEEDED|tool call quota exceeded|access to MCP is suspended/i.test(upstreamMessage);
+      throw Object.assign(new Error(
+        quotaExceeded
+          ? "TradingView MCP tool quota exceeded"
+          : `TradingView MCP returned HTTP ${response.status} for symbol ${symbol}`
+      ), {
+        code: quotaExceeded ? "mcp_quota_exceeded" : "mcp_upstream_error",
+        status: quotaExceeded ? 429 : response.status,
+        quota_cooldown_until: quotaExceeded ? parseQuotaCooldownUntil(upstreamMessage) : null,
         retry_after_ms: retryAfterMs,
         detail: asObject(payload) || text.slice(0, 500)
       });
@@ -660,6 +668,16 @@ async function invokeMcpGetNewsWithRetry(env, metadata, accessToken, symbols) {
   let lastError = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (attempt > 1) {
+      const cooldown = await readQuotaCooldown(env);
+      if (cooldown) {
+        throw Object.assign(new Error("TradingView MCP quota cooldown active"), {
+          code: "mcp_quota_cooldown_active",
+          status: 503,
+          quota_cooldown_until: cooldown.until
+        });
+      }
+    }
     try {
       const payload = await invokeMcpGetNews(env, metadata, accessToken, symbols);
       return { payload, attempt };
@@ -881,14 +899,6 @@ async function handlePull(request, env, ctx, options = {}) {
     });
   }
 
-  const cooldown = await readQuotaCooldown(env);
-  if (cooldown) {
-    return unavailableResponse(503, "TradingView MCP quota cooldown active", {
-      failure_code: "provider_quota_exceeded",
-      retry_at: cooldown.until
-    });
-  }
-
   const symbols = parseCsv(env.TV_MCP_SYMBOLS, DEFAULT_SYMBOLS);
   const cacheKey = new Request(new URL(`/_internal/tv-mcp-cache?symbols=${encodeURIComponent(symbols.join(","))}`, request.url), {
     method: "GET"
@@ -900,6 +910,16 @@ async function handlePull(request, env, ctx, options = {}) {
       const payload = await cached.json();
       return json({ ...payload, cache: "hit" });
     }
+  }
+
+  // Cached headlines are safe to serve during provider cooldown. Enforce the
+  // circuit breaker only before OAuth discovery or an upstream MCP request.
+  const cooldown = await readQuotaCooldown(env);
+  if (cooldown) {
+    return unavailableResponse(503, "TradingView MCP quota cooldown active", {
+      failure_code: "provider_quota_exceeded",
+      retry_at: cooldown.until
+    });
   }
 
   let metadata;
