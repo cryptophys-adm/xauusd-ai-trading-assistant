@@ -83,3 +83,38 @@ test("rejects stale completed news analysis", () => {
   assert.equal(result.complete, false);
   assert.ok(result.validation_errors.includes("news:news_analysis_stale"));
 });
+
+test("rejects future candle timestamps", () => {
+  const input = completeInput();
+  input.candleTime = "2026-11-02T15:00:00.000Z";
+  const result = buildEvidenceFusion(input, now);
+  assert.equal(result.complete, false);
+  assert.ok(result.validation_errors.includes("candle_time_in_future"));
+});
+
+test("rejects stale M5 candle even when local calculations are newly computed", () => {
+  const input = completeInput();
+  input.candleTime = "2026-11-01T14:00:00.000Z";
+  input.candleKey = symbol + ":" + timeframe + ":" + input.candleTime;
+  input.webhookPayloads = Object.fromEntries(Object.entries(input.webhookPayloads).map(([key, value]) => [key, { ...value, candle_time: input.candleTime }]));
+  input.localCalculations = input.localCalculations.map(value => ({ ...value, candle_time: input.candleTime, candle_key: input.candleKey }));
+  const result = buildEvidenceFusion(input, now);
+  assert.equal(result.complete, false);
+  assert.ok(result.validation_errors.includes("candle_stale"));
+});
+
+test("rejects calculation timestamps that predate their candle", () => {
+  const payload = local("mizan");
+  payload.computed_at = "2026-11-01T14:40:00.000Z";
+  const result = validateLocalCalculation(payload, { symbol, timeframe, candle_key: candleKey, candle_time: candleTime }, now);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.includes("calculation_predates_candle"));
+});
+
+test("fails closed for timeframes without a declared freshness policy", () => {
+  const input = completeInput();
+  input.timeframe = "UNKNOWN";
+  const result = buildEvidenceFusion(input, now);
+  assert.equal(result.complete, false);
+  assert.ok(result.validation_errors.includes("timeframe_freshness_policy_unsupported"));
+});
