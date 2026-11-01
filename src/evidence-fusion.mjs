@@ -29,11 +29,7 @@ const TIMEFRAME_ALIASES = Object.freeze({
   "D": "D1", "1D": "D1", "D1": "D1",
   "W": "W1", "1W": "W1", "W1": "W1"
 });
-const CANDLE_INTERVAL_MS = Object.freeze({
-  M1: 60_000, M5: 5 * 60_000, M15: 15 * 60_000, M30: 30 * 60_000,
-  H1: 60 * 60_000, H2: 2 * 60 * 60_000, H4: 4 * 60 * 60_000, D1: 24 * 60 * 60_000,
-  W1: 7 * 24 * 60 * 60_000
-});
+
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -150,9 +146,9 @@ export function buildEvidenceFusion(input, now = Date.now()) {
   else {
     if (candleTimeMs > now + FUTURE_CLOCK_SKEW_MS) errors.push("candle_time_in_future");
     const tf = timeframeKey(timeframe);
-    const intervalMs = CANDLE_INTERVAL_MS[tf];
-    if (!intervalMs) errors.push("timeframe_freshness_policy_unsupported");
-    else if (candleTimeMs <= now && now - candleTimeMs > intervalMs * 2) errors.push("candle_stale");
+    const maxAgeMs = CANDLE_MAX_AGE_MS_BY_TIMEFRAME[tf];
+    if (!maxAgeMs) errors.push("timeframe_freshness_policy_unsupported");
+    else if (candleTimeMs <= now && now - candleTimeMs > maxAgeMs) errors.push("candle_stale");
   }
   const webhookSources = ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"];
   for (const source of webhookSources) {
