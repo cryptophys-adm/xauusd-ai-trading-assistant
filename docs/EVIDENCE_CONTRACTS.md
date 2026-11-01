@@ -34,8 +34,8 @@ Required JSON shape:
   "values": {},
   "provenance": {
     "source": "verified-local-calculation",
-    "source_hash": "64-character SHA-256 of the approved Pine source",
-    "implementation_hash": "64-character SHA-256 of the parity-tested local implementation"
+    "source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "implementation_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   }
 }
 ```
