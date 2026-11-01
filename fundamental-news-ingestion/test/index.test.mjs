@@ -240,4 +240,3 @@ test("Parser output preserves AI-worker expected articles array contract", () =>
   assert.equal(parsed[0].url, "https://news/a");
 });
 
-});
