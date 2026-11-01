@@ -680,6 +680,15 @@ export default {
         Promise.all(required.map(name => env.WEBHOOK_BUFFER.get("candle:" + key + ":" + name)))
       ]);
       if (localRecords.every(Boolean) && webhookRecords.every(Boolean)) {
+        const priorAnalysis = await env.WEBHOOK_BUFFER.get("analysis:" + key);
+        if (priorAnalysis) {
+          try {
+            const prior = JSON.parse(priorAnalysis) as JsonObject;
+            if (prior.status === "complete") {
+              return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, analysis_status: "already_processed" }, 202);
+            }
+          } catch { /* malformed marker does not block a retry */ }
+        }
         const payloads: Record<string, WebhookPayload> = {};
         for (let index = 0; index < required.length; index++) {
           try { payloads[required[index]] = JSON.parse(webhookRecords[index] as string) as WebhookPayload; } catch { /* fusion will report missing/malformed source */ }
