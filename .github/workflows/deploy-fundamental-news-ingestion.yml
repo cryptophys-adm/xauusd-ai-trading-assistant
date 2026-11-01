@@ -96,7 +96,7 @@ jobs:
                 const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
                 process.exit(r.status === "ok" && Number(r.article_count) > 0 ? 0 : 1);
               ' 2>/dev/null; then
-                printf '%s\\n' "$summary"
+                printf '%s\n' "$summary"
                 exit 0
               fi
             fi
