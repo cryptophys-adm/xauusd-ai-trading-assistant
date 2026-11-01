@@ -128,3 +128,11 @@ test("strips credentials recursively from webhook evidence", () => {
   const input = { source: "gmi_v12_70", secret: "top-level", metrics: { bias: "NEUTRAL", api_key: "nested" } };
   assert.deepEqual(stripCredentialFields(input), { source: "gmi_v12_70", metrics: { bias: "NEUTRAL" } });
 });
+
+test("rejects non-SHA256 provenance hashes", () => {
+  const payload = local("mizan");
+  payload.provenance.source_hash = "not-a-hash";
+  const result = validateLocalCalculation(payload, { symbol, timeframe, candle_key: candleKey, candle_time: candleTime }, now);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.includes("provenance_source_hash_must_be_sha256"));
+});
