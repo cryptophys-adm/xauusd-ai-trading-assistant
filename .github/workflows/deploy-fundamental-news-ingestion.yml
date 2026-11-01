@@ -89,7 +89,7 @@ jobs:
                 http_status: r.http_status,
                 pull_attempts: r.pull_attempts,
                 payload_diagnostics: r.payload_diagnostics,
-        failure_diagnostic: r.failure_diagnostic || null
+                failure_diagnostic: r.failure_diagnostic || null
               }));
             ' 2>/dev/null)"; then
               last_summary="$summary"
