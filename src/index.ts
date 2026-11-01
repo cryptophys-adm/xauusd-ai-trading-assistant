@@ -94,8 +94,41 @@ function parseDecision(text: string): JsonObject {
     try {
       const parsed = JSON.parse(match[0]) as JsonObject;
       const decision = asText(parsed.decision).toUpperCase();
-      if (["BUY", "SELL", "WAIT", "NO_TRADE"].includes(decision)) {
-        return { ...parsed, decision };
+      const nullableNumber = (value: unknown): number | null =>
+        typeof value === "number" && Number.isFinite(value) ? value : null;
+      const confidence = nullableNumber(parsed.confidence);
+      const entry = nullableNumber(parsed.entry_price);
+      const stop = nullableNumber(parsed.stop_loss);
+      const target = nullableNumber(parsed.take_profit);
+      const riskReward = nullableNumber(parsed.risk_reward);
+      const positionSize = nullableNumber(parsed.position_size_pct);
+      const confidenceValid = parsed.confidence === null || (confidence !== null && confidence >= 0 && confidence <= 1);
+      const numericFieldsValid = [parsed.entry_price, parsed.stop_loss, parsed.take_profit, parsed.risk_reward, parsed.position_size_pct]
+        .every(value => value === null || (typeof value === "number" && Number.isFinite(value)));
+      const pricesValid = entry !== null && entry > 0 && stop !== null && stop > 0 && target !== null && target > 0;
+      if (["BUY", "SELL", "WAIT", "NO_TRADE"].includes(decision) && confidenceValid && numericFieldsValid) {
+        if ((decision === "BUY" || decision === "SELL") && !pricesValid) {
+          return {
+            decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null,
+            risk_reward: null, position_size_pct: null,
+            reasoning: "Model proposed an actionable decision without valid numeric entry, stop-loss, and take-profit prices; downgraded to WAIT.",
+            raw_response: text
+          };
+        }
+        if (positionSize !== null && (positionSize < 0 || positionSize > 100)) {
+          return { decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null, risk_reward: null, position_size_pct: null, reasoning: "Model position_size_pct was outside the permitted 0–100 range; downgraded to WAIT.", raw_response: text };
+        }
+        return {
+          ...parsed,
+          decision,
+          confidence,
+          entry_price: entry,
+          stop_loss: stop,
+          take_profit: target,
+          risk_reward: riskReward,
+          position_size_pct: positionSize,
+          reasoning: asText(parsed.reasoning) || "No reasoning supplied."
+        };
       }
     } catch {
       // Fall through to conservative WAIT decision.
@@ -104,6 +137,11 @@ function parseDecision(text: string): JsonObject {
   return {
     decision: "WAIT",
     confidence: null,
+    entry_price: null,
+    stop_loss: null,
+    take_profit: null,
+    risk_reward: null,
+    position_size_pct: null,
     reasoning: "Model response did not contain a valid decision JSON object.",
     raw_response: text
   };
