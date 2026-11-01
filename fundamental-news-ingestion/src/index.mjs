@@ -1011,6 +1011,11 @@ async function handlePull(request, env, ctx, options = {}) {
       if (cachedArticles.length > 0) {
         return json({ ...payload, articles: cachedArticles, count: cachedArticles.length, cache: "hit" });
       }
+      if (recentCachedArticles.length > 0) {
+        // The cache is fresh but all items have already been emitted. Return an
+        // empty cache hit instead of making another provider request.
+        return json({ ...payload, articles: [], count: 0, available: true, cache: "hit", duplicate_count: recentCachedArticles.length });
+      }
       // A cache containing only stale/undated headlines is not valid for the
       // one-hour news window. Continue to upstream unless the quota cooldown blocks it.
     }
