@@ -498,6 +498,13 @@ async function postMcp(env, endpoint, accessToken, body, sessionId = "") {
     });
   }
   if (response.status === 202 || !text.trim()) {
+    if (body?.id !== undefined) {
+      throw Object.assign(new Error("TradingView MCP returned no JSON-RPC response for a request"), {
+        code: "mcp_invalid_response",
+        status: response.status,
+        detail: { expected_id: body.id, response_status: response.status }
+      });
+    }
     return { payload: null, sessionId: response.headers.get("mcp-session-id") || sessionId };
   }
   const payload = parseMcpHttpBody(text, response.headers.get("content-type"), body?.id ?? null);
