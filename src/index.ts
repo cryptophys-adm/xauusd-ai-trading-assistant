@@ -840,6 +840,23 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/ready") {
+      try {
+        await env.DB.prepare("SELECT status FROM analysis_runs LIMIT 1").first<{ status: string }>();
+        return json({
+          status: "ready",
+          schema_version: "cryptophys.evidence-fusion.v1",
+          local_calculation_contract: "cryptophys.local-calculation.v1",
+          d1_analysis_runs: true
+        });
+      } catch {
+        return json({
+          status: "not_ready",
+          d1_analysis_runs: false,
+          reason: "Required analysis_runs D1 migration is not available."
+        }, 503);
+      }
+    }
     if (request.method === "GET" && url.pathname === "/health") {
       return json({
         status: "ok",
@@ -953,7 +970,7 @@ export default {
       if (!row) return json({ status: "not_found", message: "No fundamental news analysis has completed yet." }, 404);
       return json({ status: "ok", analysis_type: "fundamental_news", ...row, recommendation: JSON.parse(asText(row.recommendation_json) || "{}") });
     }
-    return json({ error: "Not found", endpoints: ["GET /health", "POST /webhook", "POST /evidence/local-calculation", "POST /news/analyze", "GET /news/latest"] }, 404);
+    return json({ error: "Not found", endpoints: ["GET /health", "GET /ready", "POST /webhook", "POST /evidence/local-calculation", "POST /news/analyze", "GET /news/latest"] }, 404);
   },
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(runNewsAnalysis(env).then(result => {
