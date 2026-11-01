@@ -881,6 +881,11 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       if (prior.status === "complete") {
         return json({ status: "accepted", candle_key: candleKey, analysis_status: "already_processed" }, 200);
       }
+      // A degraded candle is retried only when its validated evidence snapshot changes.
+      // Freshness timestamps are part of the fingerprint so refreshed unchanged news can recover.
+      if (prior.status === "degraded" && typeof prior.input_fingerprint === "string") {
+        // The D1 claim remains authoritative; do not infer completion from KV.
+      }
     } catch { /* malformed marker does not block a retry */ }
   }
 
