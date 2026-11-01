@@ -377,6 +377,19 @@ function pushCandidateArrays(target, value) {
   }
 }
 
+function safeUpstreamDiagnostic(error) {
+  const detail = asObject(error?.detail);
+  const rpcError = asObject(detail?.error);
+  const resultError = asObject(asObject(detail?.result)?.error);
+  const selected = rpcError || resultError;
+  return {
+    code: asString(error?.code) || null,
+    upstream_error_code: selected && (typeof selected.code === "string" || typeof selected.code === "number") ? selected.code : null,
+    upstream_error_message: asString(selected?.message || detail?.message).slice(0, 240) || null,
+    response_shape: detail ? Object.keys(detail).slice(0, 12) : typeof error?.detail === "string" ? "non_json_body" : null
+  };
+}
+
 function summarizeMcpPayload(payload) {
   const root = asObject(payload) || {};
   const result = asObject(root.result) || {};
@@ -704,6 +717,7 @@ async function readLastScheduledPull(env) {
       pull_attempts: Number.isFinite(Number(value.pull_attempts)) ? Number(value.pull_attempts) : 1,
       payload_diagnostics: value.payload_diagnostics && typeof value.payload_diagnostics === "object" ? value.payload_diagnostics : null,
       failure_reason: asString(value.failure_reason) || null,
+      failure_diagnostic: value.failure_diagnostic && typeof value.failure_diagnostic === "object" ? value.failure_diagnostic : null,
       upstream_status: Number.isFinite(Number(value.upstream_status)) ? Number(value.upstream_status) : null
     };
   } catch {
@@ -815,7 +829,8 @@ async function handlePull(request, env, ctx, options = {}) {
     const safeStatus = Number.isFinite(status) ? 502 : 502;
     return unavailableResponse(safeStatus, "TradingView MCP get_news failed", {
       upstream_status: Number.isFinite(status) ? status : null,
-      detail: error instanceof Error ? error.message : "Unknown error"
+      detail: error instanceof Error ? error.message : "Unknown error",
+      upstream_diagnostic: safeUpstreamDiagnostic(error)
     });
   }
 }
@@ -899,6 +914,7 @@ export default {
         pull_attempts: pullAttempt,
         payload_diagnostics: payload.payload_diagnostics && typeof payload.payload_diagnostics === "object" ? payload.payload_diagnostics : null,
         failure_reason: asString(payload.reason) || null,
+        failure_diagnostic: payload.upstream_diagnostic && typeof payload.upstream_diagnostic === "object" ? payload.upstream_diagnostic : null,
         upstream_status: Number.isFinite(Number(payload.upstream_status)) ? Number(payload.upstream_status) : null
       };
       if (env.OAUTH_STORE) {
