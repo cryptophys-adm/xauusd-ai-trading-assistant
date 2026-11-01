@@ -62,7 +62,7 @@ Deliver a reliable, auditable XAUUSD decision-support product that converges Tra
 
 ### Phase 6 — Controlled production rollout
 - Production deployment requires explicit approval after preview acceptance.
-- Deploy immutable/reviewed commit SHA through the approved GitHub Actions/Wrangler workflow. The workflow must run unit tests, TypeScript typecheck and Wrangler dry-run before applying the additive D1 migration, then deploy and smoke-test. If deployment fails, roll back Worker code to the prior known-good version; the additive `analysis_runs` table can remain because the previous code does not depend on it.
+- Deploy immutable/reviewed commit SHA through the approved GitHub Actions/Wrangler workflow. The workflow runs unit tests, TypeScript typecheck and Wrangler dry-run before deploying and smoke-testing. The additive D1 migration must be applied and verified through an authorized Cloudflare D1 session before merging/releasing this code; the current GitHub Actions API token is not authorized for the D1 query/import endpoints. Do not merge this release until `analysis_runs` exists in production D1. If deployment fails, roll back Worker code to the prior known-good version; the additive table can remain because the previous code does not depend on it.
 - Verify active deployment version, bindings, D1/KV targets, custom domain, cron, and Worker health.
 - Run a bounded canary with known evidence and compare output against expected fixtures.
 - Check logs/metrics for errors, model failures, ingestion gaps, duplicate decisions, latency and quota consumption.
