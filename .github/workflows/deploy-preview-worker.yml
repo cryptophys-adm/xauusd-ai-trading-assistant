@@ -39,7 +39,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          DEPLOY_OUTPUT="$(npx wrangler deploy --config wrangler.preview.jsonc 2>&1)"
+          PREVIEW_WORKER_NAME="xauusd-ai-preview-${GITHUB_RUN_ID}"
+          echo "PREVIEW_WORKER_NAME=$PREVIEW_WORKER_NAME" >> "$GITHUB_ENV"
+          DEPLOY_OUTPUT="$(npx wrangler deploy --name "$PREVIEW_WORKER_NAME" --config wrangler.preview.jsonc 2>&1)"
           printf '%s\n' "$DEPLOY_OUTPUT"
           PREVIEW_URL="$(printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[^[:space:]]+workers\.dev' | head -n 1 || true)"
           if [ -z "$PREVIEW_URL" ]; then
@@ -57,7 +59,7 @@ jobs:
           PREVIEW_SECRET="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
           echo "::add-mask::$PREVIEW_SECRET"
           echo "PREVIEW_WEBHOOK_SECRET=$PREVIEW_SECRET" >> "$GITHUB_ENV"
-          printf '%s' "$PREVIEW_SECRET" | npx wrangler secret put WEBHOOK_SECRET --config wrangler.preview.jsonc
+          printf '%s' "$PREVIEW_SECRET" | npx wrangler secret put WEBHOOK_SECRET --name "$PREVIEW_WORKER_NAME" --config wrangler.preview.jsonc
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
@@ -171,3 +173,10 @@ jobs:
             complete_AI_chain: "NOT_TESTED: no real fresh news/Pine-parity evidence in this fixture"
           }, null, 2));
           NODE
+
+      - name: Delete isolated preview Worker
+        if: always() && env.PREVIEW_WORKER_NAME != ''
+        shell: bash
+        run: npx wrangler delete --name "$PREVIEW_WORKER_NAME" --config wrangler.preview.jsonc --force
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
