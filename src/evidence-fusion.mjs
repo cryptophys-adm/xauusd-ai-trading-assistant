@@ -1,5 +1,7 @@
 export const EVIDENCE_CONTRACT_VERSION = "cryptophys.evidence-fusion.v1";
 export const LOCAL_CALCULATION_CONTRACT_VERSION = "cryptophys.local-calculation.v1";
+export const WEBHOOK_EVIDENCE_CONTRACT_VERSION = "cryptophys.webhook-evidence.v1";
+export const NEWS_ANALYSIS_CONTRACT_VERSION = "cryptophys.completed-news-analysis.v1";
 export const LOCAL_ENGINES = Object.freeze(["mizan", "prophet", "gmi"]);
 export const NEWS_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 export const LOCAL_CALC_MAX_AGE_MS = 30 * 60 * 1000;
@@ -66,6 +68,7 @@ export function validateLocalCalculation(payload, expected = {}, now = Date.now(
 function validateNewsAnalysis(newsAnalysis, expectedSymbol, now) {
   const errors = [];
   if (!isRecord(newsAnalysis)) return { valid: false, errors: ["completed_news_analysis_missing"] };
+  if (newsAnalysis.schema_version !== NEWS_ANALYSIS_CONTRACT_VERSION) errors.push("completed_news_analysis_schema_invalid");
   if (newsAnalysis.status !== "ok" || newsAnalysis.analysis_type !== "fundamental_news") errors.push("completed_news_analysis_invalid_status");
   const analyzedAt = timestampMs(newsAnalysis.analyzed_at);
   const fetchedAt = timestampMs(newsAnalysis.fetched_at);
@@ -86,7 +89,9 @@ export function buildEvidenceFusion(input, now = Date.now()) {
   const { candleKey, symbol, timeframe, candleTime, webhookPayloads = {}, localCalculations = [], newsAnalysis = null } = input || {};
   const missing = [];
   const errors = [];
-  if (timestampMs(candleTime) === null) errors.push("candle_time_invalid");
+  const candleTimeMs = timestampMs(candleTime);
+  if (candleTimeMs === null) errors.push("candle_time_invalid");
+  else if (candleTimeMs > now + FUTURE_CLOCK_SKEW_MS) errors.push("candle_time_in_future");
   const webhookSources = ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"];
   for (const source of webhookSources) {
     const payload = webhookPayloads[source];
@@ -94,6 +99,7 @@ export function buildEvidenceFusion(input, now = Date.now()) {
       missing.push("webhook:" + source);
       continue;
     }
+    if (payload.schema_version !== WEBHOOK_EVIDENCE_CONTRACT_VERSION) errors.push("webhook_schema_invalid:" + source);
     if (symbolKey(payload.ticker || payload.symbol) !== symbolKey(symbol)) errors.push("webhook_symbol_mismatch:" + source);
     if (timeframeKey(payload.timeframe) !== timeframeKey(timeframe)) errors.push("webhook_timeframe_mismatch:" + source);
     if (timestampMs(payload.candle_time || payload.timestamp) !== timestampMs(candleTime)) errors.push("webhook_candle_time_mismatch:" + source);
