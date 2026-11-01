@@ -13,7 +13,7 @@ function local(engine) {
     schema_version: LOCAL_CALCULATION_CONTRACT_VERSION,
     engine, symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
     computed_at: "2026-11-01T14:59:00.000Z", calculation_version: engine + "-test-v1",
-    values: { bias: "NEUTRAL", score: 0 }, provenance: { source: "test-fixture" }
+    values: { bias: "NEUTRAL", score: 0 }, provenance: { source: "test-fixture", source_hash: "fixture-sha256" }
   };
 }
 function webhook(source) {
