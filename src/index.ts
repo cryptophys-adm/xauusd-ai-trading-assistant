@@ -447,10 +447,8 @@ async function claimAnalysisRun(env: Env, candleKey: string, inputFingerprint: s
   const result = await env.DB.prepare(
     "INSERT INTO analysis_runs (candle_key, status, attempt_count, started_at, updated_at, result_json) VALUES (?, 'analyzing', 1, datetime('now'), datetime('now'), json_object('input_fingerprint', ?)) " +
     "ON CONFLICT(candle_key) DO UPDATE SET status = 'analyzing', attempt_count = analysis_runs.attempt_count + 1, started_at = datetime('now'), updated_at = datetime('now'), completed_at = NULL, error_code = NULL, result_json = json_object('input_fingerprint', ?) " +
-    "WHERE analysis_runs.status = 'failed' OR (analysis_runs.status = 'analyzing' AND analysis_runs.updated_at < datetime('now', '-10 minutes')) OR " +
-    "(analysis_runs.status = 'degraded' AND COALESCE(json_extract(analysis_runs.result_json, '$.input_fingerprint'), '') != ?) OR " +
-    "(analysis_runs.status = 'complete' AND COALESCE(json_extract(analysis_runs.result_json, '$.input_fingerprint'), '') != ?)"
-  ).bind(candleKey, inputFingerprint, inputFingerprint, inputFingerprint, inputFingerprint).run();
+    "WHERE (analysis_runs.status = 'degraded' AND COALESCE(json_extract(analysis_runs.result_json, '$.input_fingerprint'), '') != ?) OR analysis_runs.status = 'failed' OR (analysis_runs.status = 'analyzing' AND analysis_runs.updated_at < datetime('now', '-10 minutes'))"
+  ).bind(candleKey, inputFingerprint, inputFingerprint, inputFingerprint).run();
   return Number(result.meta.changes) > 0;
 }
 
