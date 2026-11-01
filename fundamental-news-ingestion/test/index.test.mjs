@@ -277,6 +277,7 @@ test("scheduled ingestion uses configured bearer secret internally and records a
     JSON.stringify({ access_token: "valid-token", refresh_token: "refresh-token", expires_at: Math.floor(Date.now() / 1000) + 3600 })
   );
 
+  let mcpCalls = 0;
   globalThis.fetch = async (url, init = {}) => {
     if (String(url).includes(".well-known/oauth-authorization-server")) {
       return jsonResponse({
@@ -287,6 +288,8 @@ test("scheduled ingestion uses configured bearer secret internally and records a
     }
     if (String(url).includes("/mcp")) {
       assert.equal(init.headers.authorization, "Bearer valid-token");
+      mcpCalls += 1;
+      if (mcpCalls === 1) return jsonResponse({ result: { articles: [] } });
       return jsonResponse({
         result: {
           data: {
@@ -310,6 +313,8 @@ test("scheduled ingestion uses configured bearer secret internally and records a
   assert.equal(stored.status, "ok");
   assert.equal(stored.article_count, 1);
   assert.equal(stored.http_status, 200);
+  assert.equal(stored.pull_attempts, 2);
+  assert.equal(mcpCalls, 2);
   assert.deepEqual(stored.symbols, ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"]);
   assert.equal(JSON.stringify(stored).includes("valid-token"), false);
 
