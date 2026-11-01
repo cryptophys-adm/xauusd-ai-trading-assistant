@@ -776,7 +776,8 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     return json({ error: "WEBHOOK_SECRET is not configured" }, 503);
   }
 
-  const limitedBody = await readBodyLimited(request, 65536);
+  const limitedBody = await readBodyLimited(request, 65536).catch(() => null);
+  if (!limitedBody) return json({ error: "Unable to read request body" }, 400);
   if (limitedBody.tooLarge) return json({ error: "Payload exceeds 64 KiB limit" }, 413);
   let body: WebhookPayload;
   try {
