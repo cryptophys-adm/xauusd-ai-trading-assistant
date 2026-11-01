@@ -460,8 +460,12 @@ function parseMcpHttpBody(text, contentType, requestId = null) {
     }
     if (!messages.length) return null;
     if (requestId !== null) {
-      const matching = messages.find((message) => message.id === requestId && (message.result !== undefined || message.error !== undefined));
-      if (matching) return matching;
+      // A request may receive progress/notification events before its response.
+      // Never accept an unrelated event as the response for this request.
+      return messages.find((message) =>
+        message.id === requestId &&
+        (message.result !== undefined || message.error !== undefined)
+      ) || null;
     }
     return [...messages].reverse().find((message) => message && (message.result !== undefined || message.error !== undefined)) || messages[messages.length - 1];
   }
@@ -500,6 +504,12 @@ async function postMcp(env, endpoint, accessToken, body, sessionId = "") {
   if (!payload) {
     throw Object.assign(new Error("TradingView MCP returned an unparseable response"), {
       code: "mcp_invalid_response", detail: text.slice(0, 500)
+    });
+  }
+  if (body?.id !== undefined && payload.id !== body.id) {
+    throw Object.assign(new Error("TradingView MCP response ID does not match request ID"), {
+      code: "mcp_invalid_response",
+      detail: { expected_id: body.id, received_id: payload.id ?? null }
     });
   }
   if (payload.error) {
