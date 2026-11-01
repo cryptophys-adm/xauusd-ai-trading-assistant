@@ -48,11 +48,16 @@ jobs:
           if (!response.ok || body.status !== "ok") {
             throw new Error(`Health endpoint failed: HTTP ${response.status} ${JSON.stringify(body)}`);
           }
+          const readyResponse = await fetch("https://ai.cryptophys.work/ready", { signal: AbortSignal.timeout(15000) });
+          const ready = await readyResponse.json();
+          if (!readyResponse.ok || ready.status !== "ready" || ready.d1_analysis_runs !== true) {
+            throw new Error(`Readiness endpoint failed: HTTP ${readyResponse.status} ${JSON.stringify(ready)}`);
+          }
           for (const [name, configured] of Object.entries(body.bindings ?? {})) {
             if (configured !== true) throw new Error(`Missing runtime binding: ${name}`);
           }
           if (body.secrets_configured?.webhook_secret !== true) {
             throw new Error("WEBHOOK_SECRET is not configured in the deployed Worker");
           }
-          console.log(JSON.stringify({ url, status: response.status, body }, null, 2));
+          console.log(JSON.stringify({ url, status: response.status, body, readiness: ready }, null, 2));
           NODE
