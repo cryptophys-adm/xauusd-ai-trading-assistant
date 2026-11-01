@@ -702,7 +702,9 @@ async function readLastScheduledPull(env) {
       cache: asString(value.cache) || null,
       http_status: Number.isFinite(Number(value.http_status)) ? Number(value.http_status) : null,
       pull_attempts: Number.isFinite(Number(value.pull_attempts)) ? Number(value.pull_attempts) : 1,
-      payload_diagnostics: value.payload_diagnostics && typeof value.payload_diagnostics === "object" ? value.payload_diagnostics : null
+      payload_diagnostics: value.payload_diagnostics && typeof value.payload_diagnostics === "object" ? value.payload_diagnostics : null,
+      failure_reason: asString(value.failure_reason) || null,
+      upstream_status: Number.isFinite(Number(value.upstream_status)) ? Number(value.upstream_status) : null
     };
   } catch {
     return null;
@@ -895,7 +897,9 @@ export default {
         cache: asString(payload.cache) || null,
         http_status: response.status,
         pull_attempts: pullAttempt,
-        payload_diagnostics: payload.payload_diagnostics && typeof payload.payload_diagnostics === "object" ? payload.payload_diagnostics : null
+        payload_diagnostics: payload.payload_diagnostics && typeof payload.payload_diagnostics === "object" ? payload.payload_diagnostics : null,
+        failure_reason: asString(payload.reason) || null,
+        upstream_status: Number.isFinite(Number(payload.upstream_status)) ? Number(payload.upstream_status) : null
       };
       if (env.OAUTH_STORE) {
         await env.OAUTH_STORE.put(LAST_SCHEDULED_PULL_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
