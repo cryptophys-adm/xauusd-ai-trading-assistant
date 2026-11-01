@@ -1,0 +1,154 @@
+name: Deploy and test isolated Evidence Fusion preview
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "test/**"
+      - "migrations/**"
+      - "schema.sql"
+      - "wrangler.jsonc"
+      - "wrangler.preview.jsonc"
+      - "package.json"
+      - ".github/workflows/deploy-preview-worker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evidence-fusion-preview
+  cancel-in-progress: true
+
+jobs:
+  preview-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Initialize isolated preview D1 schema
+        run: npx wrangler d1 execute xauusd-signals --remote --config wrangler.preview.jsonc --file schema.sql
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Apply preview D1 migrations
+        run: npx wrangler d1 migrations apply xauusd-signals --remote --config wrangler.preview.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Deploy isolated preview Worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEPLOY_OUTPUT="$(npx wrangler deploy --config wrangler.preview.jsonc 2>&1)"
+          printf '%s\n' "$DEPLOY_OUTPUT"
+          PREVIEW_URL="$(printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[^[:space:]]+workers\.dev' | head -n 1 || true)"
+          if [ -z "$PREVIEW_URL" ]; then
+            echo "Could not resolve the preview workers.dev URL from Wrangler output." >&2
+            exit 1
+          fi
+          echo "PREVIEW_BASE_URL=$PREVIEW_URL" >> "$GITHUB_ENV"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Configure ephemeral preview-only webhook secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREVIEW_SECRET="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
+          echo "::add-mask::$PREVIEW_SECRET"
+          echo "PREVIEW_WEBHOOK_SECRET=$PREVIEW_SECRET" >> "$GITHUB_ENV"
+          printf '%s' "$PREVIEW_SECRET" | npx wrangler secret put WEBHOOK_SECRET --config wrangler.preview.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Run isolated end-to-end degraded-evidence acceptance
+        run: node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+
+          const base = process.env.PREVIEW_BASE_URL;
+          const secret = process.env.PREVIEW_WEBHOOK_SECRET;
+          assert.ok(base && base.startsWith("https://"), "preview URL is required");
+          assert.ok(secret, "ephemeral preview secret is required");
+
+          const healthResponse = await fetch(base + "/health", { signal: AbortSignal.timeout(15000) });
+          const health = await healthResponse.json();
+          assert.equal(healthResponse.status, 200);
+          assert.equal(health.status, "ok");
+          for (const name of ["d1", "signal_cache", "webhook_buffer", "knowledge_base", "workers_ai"]) {
+            assert.equal(health.bindings?.[name], true, "missing preview binding: " + name);
+          }
+          assert.equal(health.secrets_configured?.webhook_secret, true);
+
+          const unauthorized = await fetch(base + "/evidence/local-calculation", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}"
+          });
+          assert.equal(unauthorized.status, 401, "local calculation endpoint must reject unauthenticated requests");
+
+          const symbol = "OANDA:XAUUSD";
+          const timeframe = "M5";
+          const candleTime = new Date(Date.now() - 60_000).toISOString();
+          const candleKey = [symbol, timeframe, candleTime].join(":");
+          const headers = { "content-type": "application/json", "x-webhook-secret": secret };
+
+          for (const source of ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"]) {
+            const response = await fetch(base + "/webhook", {
+              method: "POST",
+              headers,
+              body: JSON.stringify({
+                source, ticker: symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
+                metrics: { bias: "NEUTRAL", fixture_only: true }
+              })
+            });
+            const result = await response.json();
+            assert.ok(response.status === 202 || response.status === 200, "webhook rejected: " + JSON.stringify(result));
+          }
+
+          let lastLocalResult;
+          for (const engine of ["mizan", "prophet", "gmi"]) {
+            const response = await fetch(base + "/evidence/local-calculation", {
+              method: "POST",
+              headers,
+              body: JSON.stringify({
+                schema_version: "cryptophys.local-calculation.v1",
+                engine, symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
+                computed_at: new Date().toISOString(),
+                calculation_version: engine + "-preview-fixture-v1",
+                values: { bias: "NEUTRAL", fixture_only: true },
+                provenance: { source: "isolated-preview-fixture", source_hash: "preview-test-hash" }
+              })
+            });
+            lastLocalResult = await response.json();
+            assert.ok(response.status === 202 || response.status === 200, "local calculation rejected: " + JSON.stringify(lastLocalResult));
+          }
+
+          assert.equal(lastLocalResult.analysis_status, "degraded");
+          assert.ok(lastLocalResult.missing_evidence?.includes("fundamental_news_analysis"),
+            "fresh completed news must remain a mandatory missing-evidence blocker in this fixture test");
+          assert.ok(!lastLocalResult.missing_evidence?.some(item => item.startsWith("local_calculation:")),
+            "all three local calculation contract records should have been fused");
+          console.log(JSON.stringify({
+            preview: base,
+            health: "PASS",
+            authentication: "PASS",
+            webhook_ingestion: "PASS",
+            local_calculation_contract: "PASS",
+            degraded_fail-closed_behavior: "PASS",
+            complete_AI_chain: "NOT_TESTED: no real fresh news/Pine-parity evidence in this fixture"
+          }, null, 2));
+        NODE
+        env:
+          PREVIEW_BASE_URL: ${{ env.PREVIEW_BASE_URL }}
+          PREVIEW_WEBHOOK_SECRET: ${{ env.PREVIEW_WEBHOOK_SECRET }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
