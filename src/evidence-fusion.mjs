@@ -5,7 +5,30 @@ export const NEWS_ANALYSIS_CONTRACT_VERSION = "cryptophys.completed-news-analysi
 export const LOCAL_ENGINES = Object.freeze(["mizan", "prophet", "gmi"]);
 export const NEWS_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 export const LOCAL_CALC_MAX_AGE_MS = 30 * 60 * 1000;
+// Provisional acceptance policy: must be reviewed against the deployed candle-time semantics before production.
+export const CANDLE_MAX_AGE_MS_BY_TIMEFRAME = Object.freeze({
+  M1: 5 * 60 * 1000,
+  M5: 15 * 60 * 1000,
+  M15: 45 * 60 * 1000,
+  M30: 90 * 60 * 1000,
+  H1: 3 * 60 * 60 * 1000,
+  H2: 6 * 60 * 60 * 1000,
+  H4: 12 * 60 * 60 * 1000,
+  D1: 72 * 60 * 60 * 1000,
+  W1: 14 * 24 * 60 * 60 * 1000
+});
 const FUTURE_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const TIMEFRAME_ALIASES = Object.freeze({
+  "1": "M1", "1M": "M1", "M1": "M1",
+  "5": "M5", "5M": "M5", "M5": "M5",
+  "15": "M15", "15M": "M15", "M15": "M15",
+  "30": "M30", "30M": "M30", "M30": "M30",
+  "60": "H1", "60M": "H1", "1H": "H1", "H1": "H1",
+  "120": "H2", "120M": "H2", "2H": "H2", "H2": "H2",
+  "240": "H4", "240M": "H4", "4H": "H4", "H4": "H4",
+  "D": "D1", "1D": "D1", "D1": "D1",
+  "W": "W1", "1W": "W1", "W1": "W1"
+});
 const CANDLE_INTERVAL_MS = Object.freeze({
   M1: 60_000, M5: 5 * 60_000, M15: 15 * 60_000, M30: 30 * 60_000,
   H1: 60 * 60_000, H4: 4 * 60 * 60_000, D1: 24 * 60 * 60_000,
@@ -27,7 +50,9 @@ function symbolKey(value) {
 }
 
 function timeframeKey(value) {
-  return typeof value === "string" ? value.trim().toUpperCase() : "";
+  if (typeof value !== "string") return "";
+  const raw = value.trim().toUpperCase();
+  return TIMEFRAME_ALIASES[raw] || "";
 }
 
 export function deriveCandleKey(symbol, timeframe, candleTime) {
@@ -114,8 +139,11 @@ export function buildEvidenceFusion(input, now = Date.now()) {
     }
     if (payload.schema_version !== WEBHOOK_EVIDENCE_CONTRACT_VERSION) errors.push("webhook_schema_invalid:" + source);
     if (symbolKey(payload.ticker || payload.symbol) !== symbolKey(symbol)) errors.push("webhook_symbol_mismatch:" + source);
+    if (!timeframeKey(timeframe) || !CANDLE_MAX_AGE_MS_BY_TIMEFRAME[timeframeKey(timeframe)]) errors.push("timeframe_freshness_policy_unsupported");
     if (timeframeKey(payload.timeframe) !== timeframeKey(timeframe)) errors.push("webhook_timeframe_mismatch:" + source);
-    if (timestampMs(payload.candle_time || payload.timestamp) !== timestampMs(candleTime)) errors.push("webhook_candle_time_mismatch:" + source);
+    const sourceCandleAt = timestampMs(payload.candle_time || payload.timestamp);
+    if (sourceCandleAt !== timestampMs(candleTime)) errors.push("webhook_candle_time_mismatch:" + source);
+    if (sourceCandleAt !== null && timeframeKey(timeframe) && CANDLE_MAX_AGE_MS_BY_TIMEFRAME[timeframeKey(timeframe)] && now - sourceCandleAt > CANDLE_MAX_AGE_MS_BY_TIMEFRAME[timeframeKey(timeframe)]) errors.push("candle_stale");
   }
 
   const calculationByEngine = {};
