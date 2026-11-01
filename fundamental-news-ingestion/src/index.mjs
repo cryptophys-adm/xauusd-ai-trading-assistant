@@ -6,6 +6,7 @@ const JSON_HEADERS = {
 const PROVIDER = "TradingView MCP";
 const WORKER_NAME = "xauusd-fundamental-news-ingestion";
 const TOKEN_KEY = "tv_mcp:oauth_token";
+const LAST_SCHEDULED_PULL_KEY = "tv_mcp:last_scheduled_pull";
 const STATE_PREFIX = "tv_mcp:oauth_state:";
 const DEFAULT_SYMBOLS = ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"];
 const METADATA_CACHE_TTL_MS = 60 * 60 * 1000;
@@ -647,6 +648,27 @@ async function handleOAuthCallback(request, env) {
   }
 }
 
+async function readLastScheduledPull(env) {
+  if (!env.OAUTH_STORE) return null;
+  try {
+    const raw = await env.OAUTH_STORE.get(LAST_SCHEDULED_PULL_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw);
+    if (!value || typeof value !== "object") return null;
+    return {
+      status: asString(value.status) || "unknown",
+      checked_at: asString(value.checked_at) || null,
+      fetched_at: asString(value.fetched_at) || null,
+      article_count: Number.isFinite(Number(value.article_count)) ? Number(value.article_count) : 0,
+      symbols: Array.isArray(value.symbols) ? value.symbols.filter((item) => typeof item === "string").slice(0, 10) : [],
+      cache: asString(value.cache) || null,
+      http_status: Number.isFinite(Number(value.http_status)) ? Number(value.http_status) : null
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function buildHealth(env) {
   const symbols = parseCsv(env.TV_MCP_SYMBOLS, DEFAULT_SYMBOLS);
   const token = await getStoredToken(env);
@@ -664,7 +686,8 @@ async function buildHealth(env) {
     oauth_authorized: hasUsableAccessToken || hasRefreshToken,
     oauth_redirect_uri_configured: Boolean(asString(env.TV_MCP_REDIRECT_URI).trim()),
     oauth_client_id_configured: Boolean(asString(env.TV_MCP_CLIENT_ID).trim()),
-    oauth_store_configured: Boolean(env.OAUTH_STORE)
+    oauth_store_configured: Boolean(env.OAUTH_STORE),
+    last_scheduled_ingest: await readLastScheduledPull(env)
   };
 }
 
@@ -790,5 +813,62 @@ export default {
       },
       404
     );
+  },
+
+  async scheduled(_controller, env, ctx) {
+    const checkedAt = new Date().toISOString();
+    try {
+      const request = new Request("https://news.cryptophys.work/pull", {
+        method: "POST",
+        headers: { authorization: `Bearer ${asString(env.INGEST_SECRET)}` }
+      });
+      const response = await handlePull(request, env, ctx);
+      const payload = await response.json().catch(() => ({}));
+      const articles = Array.isArray(payload.articles) ? payload.articles : [];
+      const articleCount = Number.isFinite(Number(payload.count)) ? Number(payload.count) : articles.length;
+      const available = payload.available === true;
+      const status = response.ok && available && articleCount > 0
+        ? "ok"
+        : response.ok && available
+          ? "empty"
+          : "error";
+      const summary = {
+        status,
+        checked_at: checkedAt,
+        fetched_at: asString(payload.fetched_at) || null,
+        article_count: articleCount,
+        symbols: Array.isArray(payload.symbols) ? payload.symbols.filter((item) => typeof item === "string").slice(0, 10) : parseCsv(env.TV_MCP_SYMBOLS, DEFAULT_SYMBOLS),
+        cache: asString(payload.cache) || null,
+        http_status: response.status
+      };
+      if (env.OAUTH_STORE) {
+        await env.OAUTH_STORE.put(LAST_SCHEDULED_PULL_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
+      }
+      const message = JSON.stringify(summary);
+      if (status === "ok") console.log("scheduled_news_ingest_success", message);
+      else if (status === "empty") console.warn("scheduled_news_ingest_empty", message);
+      else console.error("scheduled_news_ingest_failed", message);
+    } catch (error) {
+      const summary = {
+        status: "error",
+        checked_at: checkedAt,
+        fetched_at: null,
+        article_count: 0,
+        symbols: parseCsv(env.TV_MCP_SYMBOLS, DEFAULT_SYMBOLS),
+        cache: null,
+        http_status: 500
+      };
+      if (env.OAUTH_STORE) {
+        try {
+          await env.OAUTH_STORE.put(LAST_SCHEDULED_PULL_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
+        } catch {
+          // Keep the scheduled invocation from failing on a secondary status-write error.
+        }
+      }
+      console.error("scheduled_news_ingest_failed", JSON.stringify({
+        ...summary,
+        error: error instanceof Error ? error.message.slice(0, 200) : "Unknown error"
+      }));
+    }
   }
 };
