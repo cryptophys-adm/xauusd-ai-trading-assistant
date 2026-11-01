@@ -4,6 +4,19 @@
   "main": "src/index.mjs",
   "compatibility_date": "2026-10-31",
   "workers_dev": true,
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_STORE",
+      "id": "a1c0f1055bd1434192d681a45866614d"
+    }
+  ],
+  "vars": {
+    "TV_MCP_CLIENT_ID": "a2g7N_GyGRM3U9X7pHeBcGBP1eK0ZdlN",
+    "TV_MCP_METADATA_URL": "https://www.tradingview.com/.well-known/oauth-authorization-server",
+    "TV_MCP_REDIRECT_URI": "https://news.cryptophys.work/oauth/callback",
+    "TV_MCP_SCOPE": "mcp:read mcp:tools",
+    "TV_MCP_TOKEN_AUTH_METHOD": "none"
+  },
   "triggers": {
     "crons": ["*/30 * * * *"]
   }
