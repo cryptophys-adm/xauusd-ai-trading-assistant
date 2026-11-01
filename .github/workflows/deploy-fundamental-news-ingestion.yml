@@ -68,3 +68,40 @@ jobs:
             console.log(JSON.stringify(summary));
             if (!valid) process.exit(1);
           '
+      - name: One-time scheduled ingestion verification
+        if: contains(github.event.head_commit.message, 'verify scheduled ingest once')
+        run: |
+          started_epoch="$(date -u +%s)"
+          last_summary="no fresh scheduled result observed"
+          for attempt in $(seq 1 22); do
+            response="$(curl --fail --silent --show-error --max-time 20 https://news.cryptophys.work/health)"
+            if summary="$(printf '%s' "$response" | STARTED_EPOCH="$started_epoch" node -e '
+              const h = JSON.parse(require("fs").readFileSync(0, "utf8"));
+              const r = h.last_scheduled_ingest;
+              if (!r || !r.checked_at || Date.parse(r.checked_at) / 1000 < Number(process.env.STARTED_EPOCH)) process.exit(1);
+              console.log(JSON.stringify({
+                status: r.status,
+                checked_at: r.checked_at,
+                fetched_at: r.fetched_at,
+                article_count: r.article_count,
+                symbols: r.symbols,
+                cache: r.cache,
+                http_status: r.http_status,
+                pull_attempts: r.pull_attempts,
+                payload_diagnostics: r.payload_diagnostics
+              }));
+            ' 2>/dev/null)"; then
+              last_summary="$summary"
+              if printf '%s' "$summary" | node -e '
+                const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
+                process.exit(r.status === "ok" && Number(r.article_count) > 0 ? 0 : 1);
+              ' 2>/dev/null; then
+                printf '%s\\n' "$summary"
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          echo "$last_summary" >&2
+          echo "No non-empty successful scheduled ingestion observed within 110 seconds." >&2
+          exit 1
