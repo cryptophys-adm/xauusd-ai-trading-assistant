@@ -521,13 +521,13 @@ function canonicalArticleUrl(value) {
 
 function articleDedupeKey(article) {
   const url = canonicalArticleUrl(article.url);
-  if (url) return \`url:\${url}\`;
+  if (url) return "url:" + url;
   const id = asString(article.id).trim().toLowerCase();
-  if (id) return \`id:\${id}\`;
+  if (id) return "id:" + id;
   const title = asString(article.title).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
   if (!title) return "";
   const source = asString(article.source).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-  return \`title:\${title}|source:\${source}\`;
+  return "title:" + title + "|source:" + source;
 }
 
 function dedupeArticles(articles) {
