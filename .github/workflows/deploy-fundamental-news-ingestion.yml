@@ -68,30 +68,3 @@ jobs:
             console.log(JSON.stringify(summary));
             if (!valid) process.exit(1);
           '
-
-      - name: One-time scheduled ingestion verification
-        if: contains(github.event.head_commit.message, 'verify scheduled ingest once')
-        run: |
-          for attempt in $(seq 1 20); do
-            response="$(curl --fail --silent --show-error --max-time 20 https://news.cryptophys.work/health)"
-            if summary="$(printf '%s' "$response" | node -e '
-              const h = JSON.parse(require("fs").readFileSync(0, "utf8"));
-              const r = h.last_scheduled_ingest;
-              if (!r || r.status !== "ok" || Number(r.article_count) < 1) process.exit(1);
-              console.log(JSON.stringify({
-                status: r.status,
-                checked_at: r.checked_at,
-                fetched_at: r.fetched_at,
-                article_count: r.article_count,
-                symbols: r.symbols,
-                cache: r.cache,
-                http_status: r.http_status
-              }));
-            ' 2>/dev/null)"; then
-              printf '%s\n' "$summary"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Scheduled ingestion did not produce a successful non-empty article result within 100 seconds." >&2
-          exit 1
