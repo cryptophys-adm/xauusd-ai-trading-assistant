@@ -227,6 +227,74 @@ test("POST /pull returns 502 with empty articles when MCP tool fails", async () 
   assert.deepEqual(body.articles, []);
 });
 
+test("POST /pull returns 200 with empty articles when get_news is empty", async () => {
+  const env = createEnv();
+  await env.OAUTH_STORE.put("tv_mcp:oauth_token", JSON.stringify({ access_token: "ok-token", expires_at: Math.floor(Date.now() / 1000) + 3600 }));
+
+  installOAuthFetch({ onMcp: async (rpc) => {
+    if (rpc.method === "initialize") return rpcResponse(rpc, { protocolVersion: "2025-03-26" });
+    if (rpc.method === "notifications/initialized") return new Response(null, { status: 202 });
+    return rpcResponse(rpc, { content: [{ type: "text", text: JSON.stringify({ articles: [] }) }] });
+  }});
+
+  const response = await worker.fetch(
+    new Request("https://news.example.com/pull", {
+      method: "POST",
+      headers: { authorization: "Bearer " + env.INGEST_SECRET }
+    }),
+    env,
+    createCtx()
+  );
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.available, true);
+  assert.equal(body.count, 0);
+  assert.deepEqual(body.articles, []);
+});
+
+test("scheduled ingestion records a successful article fetch after retrying an empty pull", async () => {
+  const env = createEnv();
+  await env.OAUTH_STORE.put(
+    "tv_mcp:oauth_token",
+    JSON.stringify({ access_token: "valid-token", refresh_token: "refresh-token", expires_at: Math.floor(Date.now() / 1000) + 3600 })
+  );
+
+  let toolCalls = 0;
+  installOAuthFetch({ onMcp: async (rpc) => {
+    if (rpc.method === "initialize") return rpcResponse(rpc, { protocolVersion: "2025-03-26" }, { "mcp-session-id": "session-1" });
+    if (rpc.method === "notifications/initialized") return new Response(null, { status: 202 });
+    toolCalls += 1;
+    const articles = toolCalls <= 3 ? [] : [{
+      id: "scheduled-1",
+      title: "Gold outlook update",
+      url: "https://news.example.com/1",
+      symbols: ["OANDA:XAUUSD"]
+    }];
+    return rpcResponse(rpc, { content: [{ type: "text", text: JSON.stringify({ articles }) }] });
+  }});
+
+  await worker.scheduled(
+    { scheduledTime: Date.now(), cron: "*/30 * * * *" },
+    env,
+    createCtx()
+  );
+
+  const stored = JSON.parse(await env.OAUTH_STORE.get("tv_mcp:last_scheduled_pull"));
+  assert.equal(stored.status, "ok");
+  assert.equal(stored.article_count, 1);
+  assert.equal(stored.http_status, 200);
+  assert.equal(stored.pull_attempts, 2);
+  assert.equal(toolCalls, 6);
+  assert.deepEqual(stored.symbols, ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"]);
+  assert.equal(JSON.stringify(stored).includes("valid-token"), false);
+
+  const health = await worker.fetch(new Request("https://news.example.com/health"), env, createCtx());
+  const healthBody = await health.json();
+  assert.equal(healthBody.last_scheduled_ingest.status, "ok");
+  assert.equal(healthBody.last_scheduled_ingest.article_count, 1);
+});
+
 test("Parser output preserves AI-worker expected articles array contract", () => {
   const parsed = internals.parseArticlesFromMcpPayload({ result: { content: [{
     type: "text",
@@ -239,4 +307,3 @@ test("Parser output preserves AI-worker expected articles array contract", () =>
   assert.equal(parsed.length, 1);
   assert.equal(parsed[0].url, "https://news/a");
 });
-

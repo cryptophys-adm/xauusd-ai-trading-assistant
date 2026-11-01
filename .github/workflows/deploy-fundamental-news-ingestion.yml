@@ -28,6 +28,9 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Run Worker unit tests
+        run: node --test fundamental-news-ingestion/test/index.test.mjs
+
       - name: Validate Worker bundle
         run: npx --yes wrangler@4.45.0 deploy --dry-run --config fundamental-news-ingestion/wrangler.jsonc
 
@@ -40,3 +43,66 @@ jobs:
             exit 1
           fi
           npx --yes wrangler@4.45.0 deploy --config fundamental-news-ingestion/wrangler.jsonc
+
+      - name: Smoke test production health
+        run: |
+          response="$(curl --fail --silent --show-error --max-time 20 https://news.cryptophys.work/health)"
+          printf '%s' "$response" | node -e '
+            const h = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const valid = h.status === "ok"
+              && h.worker === "xauusd-fundamental-news-ingestion"
+              && h.ingest_auth_configured === true
+              && h.oauth_configured === true
+              && h.oauth_authorized === true
+              && h.oauth_store_configured === true;
+            const summary = {
+              worker: h.worker,
+              status: h.status,
+              provider: h.provider,
+              ingest_auth_configured: h.ingest_auth_configured,
+              oauth_configured: h.oauth_configured,
+              oauth_authorized: h.oauth_authorized,
+              oauth_store_configured: h.oauth_store_configured,
+              last_scheduled_ingest: h.last_scheduled_ingest || null
+            };
+            console.log(JSON.stringify(summary));
+            if (!valid) process.exit(1);
+          '
+      - name: One-time scheduled ingestion verification
+        if: contains(github.event.head_commit.message, 'verify scheduled ingest once')
+        run: |
+          started_epoch="$(date -u +%s)"
+          last_summary="no fresh scheduled result observed"
+          for attempt in $(seq 1 40); do
+            response="$(curl --fail --silent --show-error --max-time 20 https://news.cryptophys.work/health)"
+            if summary="$(printf '%s' "$response" | STARTED_EPOCH="$started_epoch" node -e '
+              const h = JSON.parse(require("fs").readFileSync(0, "utf8"));
+              const r = h.last_scheduled_ingest;
+              if (!r || !r.checked_at || Date.parse(r.checked_at) / 1000 < Number(process.env.STARTED_EPOCH)) process.exit(1);
+              console.log(JSON.stringify({
+                status: r.status,
+                checked_at: r.checked_at,
+                fetched_at: r.fetched_at,
+                article_count: r.article_count,
+                symbols: r.symbols,
+                cache: r.cache,
+                http_status: r.http_status,
+                pull_attempts: r.pull_attempts,
+                payload_diagnostics: r.payload_diagnostics,
+                failure_diagnostic: r.failure_diagnostic || null
+              }));
+            ' 2>/dev/null)"; then
+              last_summary="$summary"
+              if printf '%s' "$summary" | node -e '
+                const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
+                process.exit(r.status === "ok" && Number(r.article_count) > 0 ? 0 : 1);
+              ' 2>/dev/null; then
+                printf '%s\n' "$summary"
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          echo "$last_summary" >&2
+          echo "No non-empty successful scheduled ingestion observed within 200 seconds." >&2
+          exit 1

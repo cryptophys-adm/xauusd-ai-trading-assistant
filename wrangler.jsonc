@@ -4,6 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-31",
   "workers_dev": true,
+  "triggers": {
+    "crons": ["*/30 * * * *"]
+  },
   "ai": {
     "binding": "AI"
   },

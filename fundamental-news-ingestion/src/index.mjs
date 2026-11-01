@@ -6,6 +6,7 @@ const JSON_HEADERS = {
 const PROVIDER = "TradingView MCP";
 const WORKER_NAME = "xauusd-fundamental-news-ingestion";
 const TOKEN_KEY = "tv_mcp:oauth_token";
+const LAST_SCHEDULED_PULL_KEY = "tv_mcp:last_scheduled_pull";
 const STATE_PREFIX = "tv_mcp:oauth_state:";
 const DEFAULT_SYMBOLS = ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"];
 const METADATA_CACHE_TTL_MS = 60 * 60 * 1000;
@@ -386,6 +387,59 @@ function pushCandidateArrays(target, value) {
   }
 }
 
+function redactDiagnosticText(value) {
+  return asString(value)
+    .slice(0, 240)
+    .replace(/Bearer\\s+[A-Za-z0-9._~+\\/-]+=*/gi, "Bearer [redacted]")
+    .replace(/(access_token|refresh_token|client_secret|authorization)\\s*[:=]\\s*["']?[^,\\s"']+/gi, "$1=[redacted]");
+}
+
+function safeUpstreamDiagnostic(error) {
+  const detail = asObject(error?.detail);
+  const rpcError = asObject(detail?.error);
+  const result = asObject(detail?.result);
+  const resultError = asObject(result?.error);
+  const selected = rpcError || resultError;
+  const content = Array.isArray(result?.content) ? result.content : [];
+  const contentText = content.map((item) => asString(asObject(item)?.text)).find(Boolean) || "";
+  return {
+    code: asString(error?.code) || null,
+    upstream_error_code: selected && (typeof selected.code === "string" || typeof selected.code === "number") ? selected.code : null,
+    upstream_error_message: redactDiagnosticText(selected?.message || detail?.message || contentText) || null,
+    response_shape: detail ? Object.keys(detail).slice(0, 12) : typeof error?.detail === "string" ? "non_json_body" : null
+  };
+}
+
+function summarizeMcpPayload(payload) {
+  const root = asObject(payload) || {};
+  const result = asObject(root.result) || {};
+  const content = asArray(result.content) || [];
+  return {
+    top_level_keys: Object.keys(root).slice(0, 12),
+    result_keys: Object.keys(result).slice(0, 12),
+    has_rpc_error: Boolean(root.error),
+    result_is_error: result.isError === true,
+    content_types: content.slice(0, 5).map((item) => {
+      const entry = asObject(item) || {};
+      const text = asString(entry.text);
+      let text_is_json = false;
+      if (text) {
+        try {
+          JSON.parse(text);
+          text_is_json = true;
+        } catch {
+          text_is_json = false;
+        }
+      }
+      return {
+        type: asString(entry.type) || null,
+        text_length: text.length,
+        text_is_json
+      };
+    })
+  };
+}
+
 function parseArticlesFromMcpPayload(payload) {
   const candidates = [];
   pushCandidateArrays(candidates, payload);
@@ -405,13 +459,19 @@ function parseArticlesFromMcpPayload(payload) {
 }
 
 function dedupeArticles(articles) {
-  const seen = new Set();
+  const seen = new Map();
   const deduped = [];
   for (const article of articles) {
-    const key = asString(article.url) || asString(article.id) || `${asString(article.title)}|${String(article.published_at || "")}`;
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(article);
+    const key = asString(article.url) || asString(article.id) || (asString(article.title) + "|" + String(article.published_at || ""));
+    if (!key) continue;
+    const existingIndex = seen.get(key);
+    if (existingIndex !== undefined) {
+      const existing = deduped[existingIndex];
+      existing.symbols = [...new Set([...(asArray(existing.symbols) || []), ...(asArray(article.symbols) || [])])];
+      continue;
+    }
+    seen.set(key, deduped.length);
+    deduped.push({ ...article, symbols: [...new Set(asArray(article.symbols) || [])] });
   }
   return deduped;
 }
@@ -749,6 +809,32 @@ async function handleOAuthCallback(request, env) {
   }
 }
 
+async function readLastScheduledPull(env) {
+  if (!env.OAUTH_STORE) return null;
+  try {
+    const raw = await env.OAUTH_STORE.get(LAST_SCHEDULED_PULL_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw);
+    if (!value || typeof value !== "object") return null;
+    return {
+      status: asString(value.status) || "unknown",
+      checked_at: asString(value.checked_at) || null,
+      fetched_at: asString(value.fetched_at) || null,
+      article_count: Number.isFinite(Number(value.article_count)) ? Number(value.article_count) : 0,
+      symbols: Array.isArray(value.symbols) ? value.symbols.filter((item) => typeof item === "string").slice(0, 10) : [],
+      cache: asString(value.cache) || null,
+      http_status: Number.isFinite(Number(value.http_status)) ? Number(value.http_status) : null,
+      pull_attempts: Number.isFinite(Number(value.pull_attempts)) ? Number(value.pull_attempts) : 1,
+      payload_diagnostics: value.payload_diagnostics && typeof value.payload_diagnostics === "object" ? value.payload_diagnostics : null,
+      failure_reason: asString(value.failure_reason) || null,
+      failure_diagnostic: value.failure_diagnostic && typeof value.failure_diagnostic === "object" ? value.failure_diagnostic : null,
+      upstream_status: Number.isFinite(Number(value.upstream_status)) ? Number(value.upstream_status) : null
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function buildHealth(env) {
   const symbols = parseCsv(env.TV_MCP_SYMBOLS, DEFAULT_SYMBOLS);
   const token = await getStoredToken(env);
@@ -766,11 +852,12 @@ async function buildHealth(env) {
     oauth_authorized: hasUsableAccessToken || hasRefreshToken,
     oauth_redirect_uri_configured: Boolean(asString(env.TV_MCP_REDIRECT_URI).trim()),
     oauth_client_id_configured: Boolean(asString(env.TV_MCP_CLIENT_ID).trim()),
-    oauth_store_configured: Boolean(env.OAUTH_STORE)
+    oauth_store_configured: Boolean(env.OAUTH_STORE),
+    last_scheduled_ingest: await readLastScheduledPull(env)
   };
 }
 
-async function handlePull(request, env, ctx) {
+async function handlePull(request, env, ctx, options = {}) {
   if (!asString(env.INGEST_SECRET)) {
     return unavailableResponse(503, "INGEST_SECRET is not configured");
   }
@@ -790,10 +877,12 @@ async function handlePull(request, env, ctx) {
     method: "GET"
   });
   const cache = caches.default;
-  const cached = await cache.match(cacheKey);
-  if (cached) {
-    const payload = await cached.json();
-    return json({ ...payload, cache: "hit" });
+  if (!options.forceRefresh) {
+    const cached = await cache.match(cacheKey);
+    if (cached) {
+      const payload = await cached.json();
+      return json({ ...payload, cache: "hit" });
+    }
   }
 
   let metadata;
@@ -825,7 +914,8 @@ async function handlePull(request, env, ctx) {
       count: articles.length,
       available: true,
       fetch_attempts: attempt,
-      articles
+      articles,
+      ...(articles.length === 0 ? { payload_diagnostics: summarizeMcpPayload(payload) } : {})
     };
 
     const cacheTtl = parsePositiveInt(env.TV_MCP_CACHE_TTL_SECONDS, 120);
@@ -849,7 +939,8 @@ async function handlePull(request, env, ctx) {
     const safeStatus = Number.isFinite(status) ? 502 : 502;
     return unavailableResponse(safeStatus, "TradingView MCP get_news failed", {
       upstream_status: Number.isFinite(status) ? status : null,
-      detail: error instanceof Error ? error.message : "Unknown error"
+      detail: error instanceof Error ? error.message : "Unknown error",
+      upstream_diagnostic: safeUpstreamDiagnostic(error)
     });
   }
 }
@@ -893,15 +984,77 @@ export default {
       404
     );
   },
-  async scheduled(event, env, ctx) {
-    ctx.waitUntil((async () => {
-      try {
-        const metadata = await fetchOAuthMetadata(env);
-        await getValidAccessToken(env, metadata);
-        console.log("[scheduled] Token refresh OK");
-      } catch (error) {
-        console.error("[scheduled] Token refresh failed:", error instanceof Error ? error.message : "Unknown error");
+
+  async scheduled(_controller, env, ctx) {
+    const checkedAt = new Date().toISOString();
+    try {
+      let response;
+      let payload = {};
+      let pullAttempt = 0;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        const request = new Request("https://news.cryptophys.work/pull", {
+          method: "POST",
+          headers: { authorization: `Bearer ${asString(env.INGEST_SECRET)}` }
+        });
+        response = await handlePull(request, env, ctx, { forceRefresh: attempt > 1 });
+        payload = await response.json().catch(() => ({}));
+        pullAttempt = attempt;
+        const articles = Array.isArray(payload.articles) ? payload.articles : [];
+        const count = Number.isFinite(Number(payload.count)) ? Number(payload.count) : articles.length;
+        if (response.ok && payload.available === true && count > 0) break;
+        if (!(attempt === 1 && response.ok && payload.available === true && count === 0)) break;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
       }
-    })());
+      const articles = Array.isArray(payload.articles) ? payload.articles : [];
+      const articleCount = Number.isFinite(Number(payload.count)) ? Number(payload.count) : articles.length;
+      const available = payload.available === true;
+      const status = response.ok && available && articleCount > 0
+        ? "ok"
+        : response.ok && available
+          ? "empty"
+          : "error";
+      const summary = {
+        status,
+        checked_at: checkedAt,
+        fetched_at: asString(payload.fetched_at) || null,
+        article_count: articleCount,
+        symbols: Array.isArray(payload.symbols) ? payload.symbols.filter((item) => typeof item === "string").slice(0, 10) : parseCsv(env.TV_MCP_SYMBOLS, DEFAULT_SYMBOLS),
+        cache: asString(payload.cache) || null,
+        http_status: response.status,
+        pull_attempts: pullAttempt,
+        payload_diagnostics: payload.payload_diagnostics && typeof payload.payload_diagnostics === "object" ? payload.payload_diagnostics : null,
+        failure_reason: asString(payload.reason) || null,
+        failure_diagnostic: payload.upstream_diagnostic && typeof payload.upstream_diagnostic === "object" ? payload.upstream_diagnostic : null,
+        upstream_status: Number.isFinite(Number(payload.upstream_status)) ? Number(payload.upstream_status) : null
+      };
+      if (env.OAUTH_STORE) {
+        await env.OAUTH_STORE.put(LAST_SCHEDULED_PULL_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
+      }
+      const message = JSON.stringify(summary);
+      if (status === "ok") console.log("scheduled_news_ingest_success", message);
+      else if (status === "empty") console.warn("scheduled_news_ingest_empty", message);
+      else console.error("scheduled_news_ingest_failed", message);
+    } catch (error) {
+      const summary = {
+        status: "error",
+        checked_at: checkedAt,
+        fetched_at: null,
+        article_count: 0,
+        symbols: parseCsv(env.TV_MCP_SYMBOLS, DEFAULT_SYMBOLS),
+        cache: null,
+        http_status: 500
+      };
+      if (env.OAUTH_STORE) {
+        try {
+          await env.OAUTH_STORE.put(LAST_SCHEDULED_PULL_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
+        } catch {
+          // Keep the scheduled invocation from failing on a secondary status-write error.
+        }
+      }
+      console.error("scheduled_news_ingest_failed", JSON.stringify({
+        ...summary,
+        error: error instanceof Error ? error.message.slice(0, 200) : "Unknown error"
+      }));
+    }
   }
 };
