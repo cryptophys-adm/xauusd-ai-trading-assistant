@@ -35,6 +35,18 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Apply preview D1 migration when a D1-scoped token is configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${CLOUDFLARE_D1_API_TOKEN:-}" ]; then
+            CLOUDFLARE_API_TOKEN="$CLOUDFLARE_D1_API_TOKEN" npx wrangler d1 migrations apply xauusd-signals --remote --config wrangler.preview.jsonc
+          else
+            echo "Using the pre-provisioned isolated preview D1. The /ready acceptance check will fail if analysis_runs is missing."
+          fi
+        env:
+          CLOUDFLARE_D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_API_TOKEN }}
+
       - name: Deploy isolated preview Worker
         shell: bash
         run: |
