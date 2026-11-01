@@ -71,14 +71,20 @@ jobs:
           assert.ok(base && base.startsWith("https://"), "preview URL is required");
           assert.ok(secret, "ephemeral preview secret is required");
 
-          const healthResponse = await fetch(base + "/health", { signal: AbortSignal.timeout(15000) });
-          const health = await healthResponse.json();
+          let healthResponse;
+          let health;
+          for (let attempt = 0; attempt < 10; attempt++) {
+            healthResponse = await fetch(base + "/health", { signal: AbortSignal.timeout(15000) });
+            health = await healthResponse.json();
+            if (healthResponse.ok && health.secrets_configured?.webhook_secret === true) break;
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
           assert.equal(healthResponse.status, 200);
           assert.equal(health.status, "ok");
           for (const name of ["d1", "signal_cache", "webhook_buffer", "knowledge_base", "workers_ai"]) {
             assert.equal(health.bindings?.[name], true, "missing preview binding: " + name);
           }
-          assert.equal(health.secrets_configured?.webhook_secret, true);
+          assert.equal(health.secrets_configured?.webhook_secret, true, "preview secret must be visible to the Worker");
 
           const unauthorized = await fetch(base + "/evidence/local-calculation", {
             method: "POST",
