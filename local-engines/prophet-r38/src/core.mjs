@@ -123,6 +123,118 @@ function atrSeries(bars, len = 14) {
   }
   return out;
 }
+function pivotHighAt(src, end, left, right) {
+  const pivot = end - right;
+  if (pivot < left || end >= src.length) return null;
+  const v = src[pivot];
+  if (!finite(v)) return null;
+  for (let j = pivot - left; j <= pivot + right; j++) {
+    if (j === pivot || !finite(src[j])) continue;
+    if (src[j] >= v) return null;
+  }
+  return { value: v, pivotIndex: pivot };
+}
+function pivotLowAt(src, end, left, right) {
+  const pivot = end - right;
+  if (pivot < left || end >= src.length) return null;
+  const v = src[pivot];
+  if (!finite(v)) return null;
+  for (let j = pivot - left; j <= pivot + right; j++) {
+    if (j === pivot || !finite(src[j])) continue;
+    if (src[j] <= v) return null;
+  }
+  return { value: v, pivotIndex: pivot };
+}
+function structureStateMachine(bars, oscillator, volumeRatio, hasVolume, atr, options = {}) {
+  const legacy = options.legacy_mode === true;
+  const stateMaxAge = options.state_max_age ?? 50;
+  const pivotLeft = options.pivot_left ?? 5, pivotRight = options.pivot_right ?? 2;
+  const bodyFloorAtr = options.body_floor_atr ?? 0.10, wickBodyRatio = options.wick_body_ratio ?? 1.5;
+  let lastPhValue = null, lastPricePh = null, lastPhIndex = null;
+  let lastPlValue = null, lastPricePl = null, lastPlIndex = null;
+  let dState = 0, bState = 0, stateBar = null, bullEventBar = null, bearEventBar = null, subtype = 0;
+  const output = [];
+  for (let i = 0; i < bars.length; i++) {
+    const bar = bars[i], osc = oscillator[i], prevOsc = i > 0 ? oscillator[i - 1] : null;
+    const crossUp = finite(osc) && finite(prevOsc) && osc > 0 && prevOsc <= 0;
+    const crossDown = finite(osc) && finite(prevOsc) && osc < 0 && prevOsc >= 0;
+    let bearDiv = false, bullDiv = false, bearDivOriginBar = null, bearDivOriginValue = null, bullDivOriginBar = null, bullDivOriginValue = null;
+    const ph = pivotHighAt(oscillator, i, pivotLeft, pivotRight);
+    const pl = pivotLowAt(oscillator, i, pivotLeft, pivotRight);
+    if ((crossUp || crossDown) && (Math.abs(dState) < 3 || !legacy)) {
+      dState = 0; bState = 1;
+      if (!legacy) { subtype = 0; stateBar = null; bullEventBar = null; bearEventBar = null; }
+    }
+    if (ph) {
+      const pivotHigh = bars[ph.pivotIndex].high;
+      if (lastPricePh !== null && pivotHigh > lastPricePh && lastPhValue !== null && ph.value < lastPhValue && ph.value > 0) {
+        dState = -1; bState = 2; bearEventBar = i; bearDiv = true;
+        bearDivOriginBar = lastPhIndex; bearDivOriginValue = lastPhValue;
+        if (!legacy) bullEventBar = null;
+      }
+      lastPhValue = ph.value; lastPricePh = pivotHigh; lastPhIndex = ph.pivotIndex;
+    }
+    if (pl) {
+      const pivotLow = bars[pl.pivotIndex].low;
+      if (lastPricePl !== null && pivotLow < lastPricePl && lastPlValue !== null && pl.value > lastPlValue && pl.value < 0) {
+        dState = 1; bState = 2; bullEventBar = i; bullDiv = true;
+        bullDivOriginBar = lastPlIndex; bullDivOriginValue = lastPlValue;
+        if (!legacy) bearEventBar = null;
+      }
+      lastPlValue = pl.value; lastPricePl = pivotLow; lastPlIndex = pl.pivotIndex;
+    }
+    const body = Math.abs(bar.close - bar.open);
+    const lowerWick = Math.min(bar.open, bar.close) - bar.low;
+    const upperWick = bar.high - Math.max(bar.open, bar.close);
+    const effectiveBody = legacy ? body : Math.max(body, (finite(atr[i]) ? atr[i] : 0) * bodyFloorAtr);
+    const bottomRejection = lowerWick > effectiveBody * wickBodyRatio;
+    const topRejection = upperWick > effectiveBody * wickBodyRatio;
+    const realVolume = legacy ? volumeRatio[i] > 1 : (hasVolume && volumeRatio[i] > 1);
+    if (dState === -1) {
+      if (lastPricePh !== null && bar.close > lastPricePh) {
+        if (topRejection || (legacy ? !realVolume : (hasVolume && !realVolume))) {
+          dState = 3; bState = -4; subtype = 1; bearEventBar = i;
+          if (!legacy) bullEventBar = null;
+        } else {
+          dState = -3; bState = 3; subtype = 2; bullEventBar = i;
+          if (!legacy) bearEventBar = null;
+        }
+        stateBar = i;
+      } else if (i > 0 && bar.close < bars[i - 1].low && bar.close < bar.open) {
+        bState = -3; bearEventBar = i;
+        if (!legacy) bullEventBar = null;
+      }
+    }
+    if (dState === 1) {
+      if (lastPricePl !== null && bar.close < lastPricePl) {
+        if (bottomRejection || (legacy ? !realVolume : (hasVolume && !realVolume))) {
+          dState = -3; bState = 3; subtype = 3; bullEventBar = i;
+          if (!legacy) bearEventBar = null;
+        } else {
+          dState = 3; bState = -4; subtype = 4; bearEventBar = i;
+          if (!legacy) bullEventBar = null;
+        }
+        stateBar = i;
+      } else if (i > 0 && bar.close > bars[i - 1].high && bar.close > bar.open) {
+        bState = 3; bullEventBar = i;
+        if (!legacy) bearEventBar = null;
+      }
+    }
+    if (!legacy && (dState === 3 || dState === -3) && stateBar !== null && i - stateBar > stateMaxAge) {
+      dState = 0; bState = 1; subtype = 0; stateBar = null; bullEventBar = null; bearEventBar = null;
+    }
+    output.push({
+      d_enc: dState, b_enc: bState, structure_state_bar: stateBar,
+      bull_structure_event_bar: bullEventBar, bear_structure_event_bar: bearEventBar,
+      subtype_code: subtype, oscillator_pivot_high: ph?.value ?? null, oscillator_pivot_low: pl?.value ?? null,
+      bear_divergence_event: bearDiv, bull_divergence_event: bullDiv,
+      bear_divergence_origin_bar: bearDivOriginBar, bear_divergence_origin_value: bearDivOriginValue,
+      bull_divergence_origin_bar: bullDivOriginBar, bull_divergence_origin_value: bullDivOriginValue,
+      last_price_pivot_high: lastPricePh, last_price_pivot_low: lastPricePl
+    });
+  }
+  return output;
+}
 function crossover(a, b, i) {
   return i > 0 && finite(a[i]) && finite(b[i]) && finite(a[i - 1]) && finite(b[i - 1]) && a[i] > b[i] && a[i - 1] <= b[i - 1];
 }
@@ -184,6 +296,7 @@ export function calculateProphetR38Core(bars, options = {}) {
     if (er[i] !== null && baseSlow[i] !== null && chopSlow[i] !== null) slow[i] = baseSlow[i] * er[i] + chopSlow[i] * (1 - er[i]);
     core[i] = tensorCore[i];
   }
+  const structure = structureStateMachine(bars, fast, volRatio, hasVolume, atr, options);
   for (let i = 0; i < bars.length; i++) {
     const f = fast[i], s = slow[i];
     const buyCandidate = bars[i].confirmed === true && crossover(fast, slow, i) && f < -0.15;
