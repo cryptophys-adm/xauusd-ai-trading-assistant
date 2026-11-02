@@ -63,8 +63,9 @@ test("GMI stays blocked without intrabars and external symbol history", () => {
 
 test("Mizan stays unapproved even when history is sufficient", () => {
   const result = buildLocalEngineInput(bundle(), "mizan");
-  assert.equal(result.data_status, "history_ready_for_shadow");
+  assert.equal(result.data_status, "blocked_history_contract_undefined");
   assert.equal(result.calculation_status, "blocked_source_identity");
+  assert.ok(result.history_gaps.some((gap) => gap.code === "engine_history_requirements_unverified"));
   assert.equal(result.calculation_allowed_for_trusted_evidence, false);
 });
 
