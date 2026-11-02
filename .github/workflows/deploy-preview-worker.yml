@@ -94,12 +94,21 @@ jobs:
 
           let healthResponse;
           let health;
+          let healthParseError = "no response";
           for (let attempt = 0; attempt < 10; attempt++) {
             healthResponse = await fetch(base + "/health", { signal: AbortSignal.timeout(15000) });
-            health = await healthResponse.json();
-            if (healthResponse.ok && health.secrets_configured?.webhook_secret === true) break;
+            try {
+              health = await healthResponse.clone().json();
+              healthParseError = "";
+            } catch {
+              health = null;
+              const body = (await healthResponse.clone().text()).slice(0, 160);
+              healthParseError = `/health returned non-JSON HTTP ${healthResponse.status}: ${body}`;
+            }
+            if (healthResponse.ok && health?.status === "ok" && health.secrets_configured?.webhook_secret === true) break;
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
+          assert.ok(health, `health endpoint did not return JSON after retries: ${healthParseError}`);
           assert.equal(healthResponse.status, 200);
           assert.equal(health.status, "ok");
           for (const name of ["d1", "signal_cache", "webhook_buffer", "knowledge_base", "workers_ai"]) {
