@@ -208,6 +208,38 @@ test("POST /pull refreshes expired token and returns headlines from mcp-tv-get-n
   assert.equal(calls.some((call) => call.url.includes("/oauth/token")), true);
 });
 
+test("GET /health treats expired cooldown as inactive without deleting a concurrently renewed record", async () => {
+  const env = createEnv();
+  const key = "tv_mcp:quota_cooldown_until";
+  const expiredRecord = {
+    until: new Date(Date.now() - 60 * 1000).toISOString(),
+    reason: "provider_quota_exceeded"
+  };
+  const renewedRecord = {
+    until: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    reason: "provider_quota_exceeded"
+  };
+  await env.OAUTH_STORE.put(key, JSON.stringify(expiredRecord));
+  const get = env.OAUTH_STORE.get.bind(env.OAUTH_STORE);
+  let replaced = false;
+  env.OAUTH_STORE.get = async (requestedKey) => {
+    const value = await get(requestedKey);
+    if (requestedKey === key && !replaced) {
+      replaced = true;
+      await env.OAUTH_STORE.put(key, JSON.stringify(renewedRecord));
+    }
+    return value;
+  };
+
+  const response = await worker.fetch(new Request("https://news.example.com/health"), env, createCtx());
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.provider_cooldown_until, null);
+
+  assert.equal(replaced, true);
+  assert.deepEqual(JSON.parse(await get(key)), renewedRecord);
+});
+
 test("POST /pull serves valid cached headlines during provider quota cooldown", async () => {
   const env = createEnv();
   const cachedPayload = {
@@ -282,6 +314,53 @@ test("POST /pull enforces cooldown on cache miss before OAuth or MCP calls", asy
   assert.equal(body.reason, "TradingView MCP quota cooldown active");
   assert.equal(body.failure_code, "provider_quota_exceeded");
   assert.equal(upstreamCalls, 0);
+});
+
+test("POST /pull rechecks shared cooldown before retrying a transient MCP failure", async () => {
+  const env = createEnv({ TV_MCP_MAX_RETRIES: "3" });
+  await env.OAUTH_STORE.put(
+    "tv_mcp:oauth_token",
+    JSON.stringify({ access_token: "ok-token", expires_at: Math.floor(Date.now() / 1000) + 3600 })
+  );
+
+  let mcpCalls = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes(".well-known/oauth-authorization-server")) {
+      return jsonResponse({
+        authorization_endpoint: "https://mcp.example.com/oauth/authorize",
+        token_endpoint: "https://mcp.example.com/oauth/token",
+        token_endpoint_auth_methods_supported: ["none"]
+      });
+    }
+
+    if (String(url).includes("/mcp")) {
+      mcpCalls += 1;
+      if (mcpCalls === 1) {
+        // Simulate another concurrent request opening the shared cooldown
+        // while this request is waiting to retry its transient 503.
+        await env.OAUTH_STORE.put("tv_mcp:quota_cooldown_until", JSON.stringify({
+          until: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          reason: "provider_quota_exceeded"
+        }));
+        return jsonResponse({ error: { message: "temporary upstream failure" } }, { status: 503 });
+      }
+      return jsonResponse({ result: { data: { headlines: [] } } });
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const response = await worker.fetch(new Request("https://news.example.com/pull", {
+    method: "POST",
+    headers: { authorization: "Bearer ingest-secret" }
+  }), env, createCtx());
+
+  assert.equal(response.status, 502);
+  const body = await response.json();
+  assert.equal(body.reason, "TradingView MCP get_news failed");
+  assert.equal(body.detail, "TradingView MCP quota cooldown active");
+  assert.equal(body.upstream_diagnostic.code, "mcp_quota_cooldown_active");
+  assert.equal(mcpCalls, 1, "must not retry MCP after a concurrent request opens cooldown");
 });
 
 test("POST /pull returns 502 with empty articles when MCP tool fails", async () => {
