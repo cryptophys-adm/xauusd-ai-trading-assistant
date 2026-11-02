@@ -11,8 +11,7 @@
     }
   ],
   "vars": {
-    "TWELVE_DATA_SYMBOL": "XAU/USD",
-    "M5_BOOTSTRAP_CANDLES": "300"
+    "TWELVE_DATA_SYMBOL": "XAU/USD"
   },
   "triggers": {
     "crons": ["*/5 * * * *"]
