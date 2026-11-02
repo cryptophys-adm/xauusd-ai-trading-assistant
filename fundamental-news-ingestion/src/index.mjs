@@ -1007,7 +1007,9 @@ async function handlePull(request, env, ctx, options = {}) {
     if (cached) {
       const payload = await cached.json();
       const recentCachedArticles = filterRecentArticles(asArray(payload.articles) || []);
-      const cachedArticles = await filterPreviouslySeenArticles(env, recentCachedArticles);
+      const cachedArticles = options.skipSeenTracking === true
+        ? recentCachedArticles
+        : await filterPreviouslySeenArticles(env, recentCachedArticles);
       if (cachedArticles.length > 0) {
         return json({ ...payload, articles: cachedArticles, count: cachedArticles.length, cache: "hit" });
       }
@@ -1052,7 +1054,11 @@ async function handlePull(request, env, ctx, options = {}) {
   try {
     const { payload, attempt } = await invokeMcpGetNewsWithRetry(env, metadata, accessToken, symbols);
     const recentArticles = filterRecentArticles(parseArticlesFromMcpPayload(payload));
-    const articles = await filterPreviouslySeenArticles(env, recentArticles);
+    // Scheduled pulls warm the shared cache; only a consumer pull may mark
+    // articles as emitted, otherwise the AI Worker could miss fresh news.
+    const articles = options.skipSeenTracking === true
+      ? recentArticles
+      : await filterPreviouslySeenArticles(env, recentArticles);
     const result = {
       worker: WORKER_NAME,
       provider: PROVIDER,
@@ -1143,7 +1149,7 @@ export default {
       });
       // One scheduled invocation performs one pull only. Empty results are valid
       // and must not trigger a second quota-consuming provider request.
-      const response = await handlePull(request, env, ctx);
+      const response = await handlePull(request, env, ctx, { skipSeenTracking: true });
       const payload = await response.json().catch(() => ({}));
       const pullAttempt = 1;
       const articles = Array.isArray(payload.articles) ? payload.articles : [];
