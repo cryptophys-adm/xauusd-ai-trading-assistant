@@ -395,10 +395,10 @@ function structureStateMachine(bars, oscillator, volumeRatio, hasVolume, atr, op
     const effectiveBody = legacy ? body : Math.max(body, (finite(atr[i]) ? atr[i] : 0) * bodyFloorAtr);
     const bottomRejection = lowerWick > effectiveBody * wickBodyRatio;
     const topRejection = upperWick > effectiveBody * wickBodyRatio;
-    const realVolume = legacy ? volumeRatio[i] > 1 : (hasVolume && volumeRatio[i] > 1);
+    const realVolume = legacy ? volumeRatio[i] > 1 : (hasVolume[i] && volumeRatio[i] > 1);
     if (dState === -1) {
       if (lastPricePh !== null && bar.close > lastPricePh) {
-        if (topRejection || (legacy ? !realVolume : (hasVolume && !realVolume))) {
+        if (topRejection || (legacy ? !realVolume : (hasVolume[i] && !realVolume))) {
           dState = 3; bState = -4; subtype = 1; bearEventBar = i;
           if (!legacy) bullEventBar = null;
         } else {
@@ -413,7 +413,7 @@ function structureStateMachine(bars, oscillator, volumeRatio, hasVolume, atr, op
     }
     if (dState === 1) {
       if (lastPricePl !== null && bar.close < lastPricePl) {
-        if (bottomRejection || (legacy ? !realVolume : (hasVolume && !realVolume))) {
+        if (bottomRejection || (legacy ? !realVolume : (hasVolume[i] && !realVolume))) {
           dState = -3; bState = 3; subtype = 3; bullEventBar = i;
           if (!legacy) bearEventBar = null;
         } else {
@@ -489,11 +489,11 @@ function confirmationGate(bars, fast, slow, zScore, volumeRatio, hasVolume, stru
     const bearPrice = !!prev && bar.close < bar.open && bar.close < prev.low;
     const bullEarlyPrice = !!prev && bar.close > bar.open && bar.close > prev.close;
     const bearEarlyPrice = !!prev && bar.close < bar.open && bar.close < prev.close;
-    const isVolumeValid = legacy ? volumeRatio[i] >= 0.85 : (hasVolume && volumeRatio[i] >= 0.85);
+    const isVolumeValid = legacy ? volumeRatio[i] >= 0.85 : (hasVolume[i] && volumeRatio[i] >= 0.85);
     const buyQualityPoints = (intensity[i] === 3 ? 1 : 0) + (zScore[i] > 0 ? 1 : 0) + (isVolumeValid ? 1 : 0);
     const sellQualityPoints = (intensity[i] === -3 ? 1 : 0) + (zScore[i] < 0 ? 1 : 0) + (isVolumeValid ? 1 : 0);
-    const buyVolumePass = legacy ? buyQualityPoints >= 2 : (!hasVolume || volumeRatio[i] >= 0.85);
-    const sellVolumePass = legacy ? sellQualityPoints >= 2 : (!hasVolume || volumeRatio[i] >= 0.85);
+    const buyVolumePass = legacy ? buyQualityPoints >= 2 : (!hasVolume[i] || volumeRatio[i] >= 0.85);
+    const sellVolumePass = legacy ? sellQualityPoints >= 2 : (!hasVolume[i] || volumeRatio[i] >= 0.85);
     if (buyWindow) buyMinZ = buyMinZ === null || !finite(buyMinZ) ? zScore[i] : Math.min(buyMinZ, zScore[i]);
     if (sellWindow) sellMaxZ = sellMaxZ === null || !finite(sellMaxZ) ? zScore[i] : Math.max(sellMaxZ, zScore[i]);
     const buyDepthPass = finite(buyMinZ) && buyMinZ <= -0.618;
@@ -504,8 +504,8 @@ function confirmationGate(bars, fast, slow, zScore, volumeRatio, hasVolume, stru
     const sellConfirmedRaw = sellBase && sellVolumePass;
     const buyEarly = confirmedBar && buyWindow && bullEarlyPrice && bullishStructure && buyVolumePass && !buyConfirmedRaw;
     const sellEarly = confirmedBar && sellWindow && bearEarlyPrice && bearishStructure && sellVolumePass && !sellConfirmedRaw;
-    const buyHighQualityRaw = legacy ? (buyBase && buyQualityPoints === 3) : (buyConfirmedRaw && hasVolume && volumeRatio[i] >= 1.0 && buyDepthPass);
-    const sellHighQualityRaw = legacy ? (sellBase && sellQualityPoints === 3) : (sellConfirmedRaw && hasVolume && volumeRatio[i] >= 1.0 && sellDepthPass);
+    const buyHighQualityRaw = legacy ? (buyBase && buyQualityPoints === 3) : (buyConfirmedRaw && hasVolume[i] && volumeRatio[i] >= 1.0 && buyDepthPass);
+    const sellHighQualityRaw = legacy ? (sellBase && sellQualityPoints === 3) : (sellConfirmedRaw && hasVolume[i] && volumeRatio[i] >= 1.0 && sellDepthPass);
     if (buyConfirmedRaw && buyPassBar === null) buyPassBar = i;
     if (sellConfirmedRaw && sellPassBar === null) sellPassBar = i;
     if (buyConfirmedRaw && buyHighQualityRaw && buyHqBar === null) buyHqBar = i;
@@ -555,7 +555,10 @@ export function calculateProphetR38Core(bars, options = {}) {
   }
   const close = values(bars, "close"), high = values(bars, "high"), low = values(bars, "low");
   const volume = bars.map((b) => finite(b.volume) ? b.volume : null);
-  const hasVolume = volume.some((v) => finite(v) && v > 0);
+  // Pine: has_volume = nz(ta.cum(nz(volume)), 0.0) > 0.0 — cumulative up to the
+  // current bar only. A whole-series flag would leak future volume into early bars.
+  let cumVolume = 0;
+  const hasVolume = volume.map((v) => (cumVolume += finite(v) ? v : 0) > 0);
   const result = [];
   const atr = atrSeries(bars, 14);
   const raw = [], fast = [], slow = [], core = [], zScore = [], hurst = [], er = [], volAnom = [], volRatio = [];
@@ -603,7 +606,7 @@ export function calculateProphetR38Core(bars, options = {}) {
     const sellCandidate = bars[i].confirmed === true && crossunder(fast, slow, i) && f > 0.15;
     const cycle = [cycleAt(close, high, low, i, fastLen), cycleAt(close, high, low, i, midLen), cycleAt(close, high, low, i, slowLen)];
     const intensity = cycle.every((x) => x !== null && x > 0) ? 3 : cycle.every((x) => x !== null && x < 0) ? -3 : 0;
-    const d = { ...bars[i], index: i, structure: structure[i], confirmation: confirmation[i], htf_alignment: htfAlignment[i], order_blocks: orderBlocks[i], oscillator: { fast: f, slow: s, core: core[i], raw_composite: raw[i] }, sensors: { kww_zscore_50: zScore[i], hurst_rs_100: hurst[i], efficiency_ratio_14: er[i], volume_anomaly_20: volAnom[i], volume_ratio_20: volRatio[i], atr14: atr[i], cycle_intensity: intensity }, events: { raw_buy_cross_candidate: buyCandidate, raw_sell_cross_candidate: sellCandidate }, calculation_scope: "R38_SOURCE_DERIVED_OSCILLATOR_STRUCTURE_CONFIRMATION_HTF_OB_PARTIAL", parity_status: "not_proven", trusted_evidence_allowed: false };
+    const d = { ...bars[i], index: i, structure: structure[i], confirmation: confirmation[i], htf_alignment: htfAlignment[i], order_blocks: orderBlocks[i], oscillator: { fast: f, slow: s, core: core[i], raw_composite: raw[i] }, sensors: { kww_zscore_50: zScore[i], hurst_rs_100: hurst[i], efficiency_ratio_14: er[i], volume_anomaly_20: volAnom[i], volume_ratio_20: volRatio[i], has_volume: hasVolume[i], atr14: atr[i], cycle_intensity: intensity }, events: { raw_buy_cross_candidate: buyCandidate, raw_sell_cross_candidate: sellCandidate }, calculation_scope: "R38_SOURCE_DERIVED_OSCILLATOR_STRUCTURE_CONFIRMATION_HTF_OB_PARTIAL", parity_status: "not_proven", trusted_evidence_allowed: false };
     result.push(d);
   }
   return {
@@ -618,7 +621,7 @@ export function calculateProphetR38Core(bars, options = {}) {
     },
     implementation_scope: "oscillator sensors, divergence/structure state machine, adaptive confirmation gate, closed-bar HTF alignment diagnostic, and source-derived OB zone lifecycle/ranking/RR trade-readiness calculation; excludes complete position-management states, target latching/TP-hit lifecycle, and chart-rendering/alerts",
     history_requirements: { M5: 101, higher_timeframes: { M15: 51, H1: 51, H4: 51, D1: 51, W1: 51 }, chart_oscillator_slow_warmup: Math.max(slowLen, Math.round(smoothLen * 2.2) * 2) + Math.round(Math.sqrt(Math.round(smoothLen * 2.2) * 2)), kww_zscore_50: 50, efficiency_ratio_14: 15, volume_ratio_20: 21 },
-    has_volume: hasVolume,
+    has_volume: hasVolume.length ? hasVolume[hasVolume.length - 1] : false,
     outputs: result
   };
 }

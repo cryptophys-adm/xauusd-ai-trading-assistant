@@ -100,3 +100,17 @@ test("Prophet R38 HTF alignment uses closed-bar context and reports missing warm
   assert.equal(missing.data_status, "blocked_missing_or_warmup_htf_history");
   assert.deepEqual(missing.missing_timeframes, ["M15", "H1", "H4", "D1", "W1"]);
 });
+
+test("has_volume is cumulative to the current bar (Pine ta.cum), never looking ahead", () => {
+  const bars = makeBars(120).map((b, i) => ({ ...b, volume: i < 60 ? null : b.volume }));
+  const result = calculateProphetR38Core(bars);
+  assert.equal(result.outputs[0].sensors.has_volume, false);
+  assert.equal(result.outputs[59].sensors.has_volume, false);
+  assert.equal(result.outputs[60].sensors.has_volume, true);
+  assert.equal(result.outputs.at(-1).sensors.has_volume, true);
+  assert.equal(result.has_volume, true);
+  // Early-bar outputs must be identical to a run that never sees the later volume.
+  const prefix = calculateProphetR38Core(bars.slice(0, 60));
+  assert.deepEqual(result.outputs[59].structure, prefix.outputs[59].structure);
+  assert.deepEqual(result.outputs[59].confirmation, prefix.outputs[59].confirmation);
+});

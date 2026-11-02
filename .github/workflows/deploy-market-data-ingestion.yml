@@ -1,0 +1,158 @@
+name: Deploy Market Data Ingestion Worker (shadow)
+
+# Manual-only. Deploys `xauusd-tradingview-pull-adapter` with the partial
+# Prophet R38 shadow route. Outputs remain parity_status=not_proven and are
+# never trusted evidence; this workflow does NOT touch the AI Worker, its
+# provenance allowlist, or any D1 database.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy-shadow" to confirm a production deploy of xauusd-tradingview-pull-adapter'
+        required: true
+        type: string
+      run_pull:
+        description: "Run one authenticated /pull after deploy (consumes Twelve Data quota)"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-market-data-ingestion
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Add required reviewers to this GitHub environment to gate deploys on approval.
+    environment: market-data-production
+    steps:
+      - name: Require explicit confirmation
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "deploy-shadow" ]; then
+            echo "::error::Confirmation text did not match 'deploy-shadow'. Nothing deployed."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Run market data ingestion and Prophet R38 tests
+        run: node --test market-data-ingestion/test/*.test.mjs local-engines/prophet-r38/test/*.test.mjs
+
+      - name: Require deploy credentials and Worker secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          MARKET_DATA_INGEST_SECRET: ${{ secrets.MARKET_DATA_INGEST_SECRET }}
+        run: |
+          missing=0
+          for name in CLOUDFLARE_API_TOKEN TWELVE_DATA_API_KEY MARKET_DATA_INGEST_SECRET; do
+            if [ -z "${!name:-}" ]; then echo "::error::$name is not configured as a repository/environment secret."; missing=1; fi
+          done
+          if [ "${#MARKET_DATA_INGEST_SECRET}" -lt 32 ]; then
+            echo "::error::MARKET_DATA_INGEST_SECRET must be at least 32 characters."; missing=1
+          fi
+          exit $missing
+
+      - name: Validate Worker bundle
+        run: npx --yes wrangler@4.45.0 deploy --dry-run --config market-data-ingestion/wrangler.jsonc
+
+      - name: Deploy Worker
+        id: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4.45.0 deploy --config market-data-ingestion/wrangler.jsonc | tee deploy.log
+          url=$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -n1 || true)
+          if [ -z "$url" ]; then echo "::error::Could not determine workers.dev URL from deploy output."; exit 1; fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          version=$(grep -Eo 'Current Version ID: [0-9a-f-]+' deploy.log | awk '{print $4}' || true)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Set Worker secrets (values never echoed)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          MARKET_DATA_INGEST_SECRET: ${{ secrets.MARKET_DATA_INGEST_SECRET }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$TWELVE_DATA_API_KEY" | npx --yes wrangler@4.45.0 secret put TWELVE_DATA_API_KEY --config market-data-ingestion/wrangler.jsonc >/dev/null
+          printf '%s' "$MARKET_DATA_INGEST_SECRET" | npx --yes wrangler@4.45.0 secret put MARKET_DATA_INGEST_SECRET --config market-data-ingestion/wrangler.jsonc >/dev/null
+          echo "Worker secrets updated."
+
+      - name: Smoke test deployed Worker
+        env:
+          WORKER_URL: ${{ steps.deploy.outputs.url }}
+          WORKER_VERSION: ${{ steps.deploy.outputs.version }}
+          INGEST_SECRET: ${{ secrets.MARKET_DATA_INGEST_SECRET }}
+          RUN_PULL: ${{ inputs.run_pull }}
+        run: |
+          node --input-type=module <<'NODE'
+          const base = process.env.WORKER_URL;
+          const auth = { Authorization: `Bearer ${process.env.INGEST_SECRET}` };
+          const get = async (path, init = {}) => {
+            const r = await fetch(base + path, { ...init, signal: AbortSignal.timeout(60000) });
+            let body; try { body = await r.json(); } catch { body = null; }
+            return { status: r.status, body };
+          };
+          const fail = (msg, extra) => { console.error(msg, extra ? JSON.stringify(extra).slice(0, 2000) : ""); process.exit(1); };
+          // Secrets propagate shortly after `secret put`; retry health briefly.
+          let health;
+          for (let i = 0; i < 6; i++) {
+            health = await get("/health");
+            if (health.body?.source_configured && health.body?.pull_auth_configured) break;
+            await new Promise(r => setTimeout(r, 5000));
+          }
+          if (health.status !== 200 || health.body?.status !== "ok") fail("health failed", health);
+          for (const k of ["source_configured", "pull_auth_configured", "cache_configured"]) {
+            if (health.body[k] !== true) fail(`health: ${k} is not true`, health.body);
+          }
+          const unauth = await get("/engine-shadow?engine=prophet");
+          if (unauth.status !== 401) fail("unauthenticated /engine-shadow must return 401", unauth);
+          const summary = { url: base, version: process.env.WORKER_VERSION, health: health.body };
+          if (process.env.RUN_PULL === "true") {
+            const pull = await get("/pull", { method: "POST", headers: auth });
+            summary.pull = { status: pull.status, error: pull.body?.error ?? null, message: pull.body?.message ?? null };
+            if (pull.status === 429) fail("Twelve Data quota exceeded during pull", summary.pull);
+            if (pull.status >= 400) fail("authenticated /pull failed", summary.pull);
+          }
+          const shadow = await get("/engine-shadow?engine=prophet", { headers: auth });
+          summary.shadow = { status: shadow.status, engine_shadow_status: shadow.body?.engine_shadow_status, data_status: shadow.body?.data_status ?? null, history_gaps: shadow.body?.history_gaps ?? null, output_count: shadow.body?.output_count ?? 0 };
+          if (shadow.status === 200) {
+            if (shadow.body.parity_status !== "not_proven" || shadow.body.calculation_allowed_for_trusted_evidence !== false) fail("shadow output must stay non-trusted", summary.shadow);
+            if (!(shadow.body.outputs ?? []).every(o => o.parity_status === "not_proven" && o.trusted_evidence_allowed === false)) fail("every shadow output must stay non-trusted", summary.shadow);
+          } else if (shadow.status === 503 && ["blocked_insufficient_history", undefined].includes(shadow.body?.engine_shadow_status)) {
+            console.log("::warning::Shadow engine deployed but history/cache not ready yet; cron (*/5) will continue filling it.");
+          } else {
+            fail("unexpected /engine-shadow response", summary.shadow);
+          }
+          const mizan = await get("/engine-shadow?engine=mizan", { headers: auth });
+          if (![501, 503].includes(mizan.status)) fail("mizan shadow must be blocked (501/503)", { status: mizan.status });
+          console.log(JSON.stringify(summary, null, 2));
+          NODE
+
+      - name: Record rollback instructions
+        if: always()
+        run: |
+          {
+            echo "### xauusd-tradingview-pull-adapter"
+            echo "- Deployed URL: ${{ steps.deploy.outputs.url }}"
+            echo "- Version ID: ${{ steps.deploy.outputs.version }}"
+            echo "- Rollback: \`npx wrangler rollback --config market-data-ingestion/wrangler.jsonc\` (or delete the Worker; it owns no D1 and only a dedicated KV key prefix)."
+            echo "- Status: SHADOW ONLY — parity_status=not_proven, never trusted evidence."
+          } >> "$GITHUB_STEP_SUMMARY"
