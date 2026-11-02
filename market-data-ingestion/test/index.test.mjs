@@ -243,6 +243,9 @@ test("GET /engine-shadow runs the partial Prophet kernel from the cached bundle 
   assert.equal(body.parity_status, "not_proven");
   assert.equal(body.calculation_allowed_for_trusted_evidence, false);
   assert.equal(body.outputs.length, 20);
+  assert.equal(body.input_history_counts.M5, 500);
+  assert.equal(body.input_history_counts.M5_engine_window_limit, 500);
+  assert.equal(body.input_history_counts.M5_available_in_cache, 5000);
   assert.ok(Object.hasOwn(body.outputs.at(-1), "htf_alignment"));
   assert.ok(Object.hasOwn(body.outputs.at(-1), "order_blocks"));
   assert.equal(body.outputs.at(-1).order_blocks.trusted_evidence_allowed, false);
