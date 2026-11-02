@@ -17,7 +17,8 @@ function countFor(bundle, timeframe) {
 
 function sourceHistoryGaps(bundle, engine) {
   const gaps = [];
-  for (const [timeframe, required] of Object.entries(HISTORY_REQUIREMENTS[engine])) {
+  if (!HISTORY_REQUIREMENTS[engine]) gaps.push({ code: "engine_history_requirements_unverified" });
+  for (const [timeframe, required] of Object.entries(HISTORY_REQUIREMENTS[engine] || {})) {
     const actual = countFor(bundle, timeframe);
     if (actual < required) gaps.push({
       code: "insufficient_history",
@@ -107,11 +108,12 @@ export function buildLocalEngineInput(bundle, engine) {
     engine,
     symbol: inputs.symbol,
     requested_at: new Date().toISOString(),
-    data_status: historyReady ? "history_ready_for_shadow" : "blocked_insufficient_history",
+    data_status: !HISTORY_REQUIREMENTS[engine] ? "blocked_history_contract_undefined" :
+      historyReady ? "history_ready_for_shadow" : "blocked_insufficient_history",
     calculation_status: sourceGate,
     calculation_allowed_for_trusted_evidence: false,
     parity_status: "not_proven",
-    history_requirements: HISTORY_REQUIREMENTS[engine],
+    history_requirements: HISTORY_REQUIREMENTS[engine] || null,
     history_gaps: historyGaps,
     missing_dependencies: missingDependencies,
     inputs
