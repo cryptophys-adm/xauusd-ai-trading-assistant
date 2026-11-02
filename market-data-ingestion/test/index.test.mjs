@@ -200,3 +200,55 @@ test("native D1/W1 history fails closed when provider timezone is not verified a
   assert.equal(response.status, 503);
   assert.equal(body.error, "provider_timezone_unverified");
 });
+
+test("GET /engine-shadow runs the partial Prophet kernel from the cached bundle and never trusts it", async () => {
+  const cache = new MemoryKV();
+  const nowMs = Date.now();
+  const floor = Math.floor(nowMs / 300_000) * 300_000;
+  const m5 = Array.from({ length: 5000 }, (_, i) => {
+    const openMs = floor - (5000 - i) * 300_000;
+    const open = 2300 + Math.sin(i / 13) * 2 + i * 0.001;
+    const close = open + Math.sin(i / 3) * 0.5;
+    return {
+      open_time: new Date(openMs).toISOString(),
+      close_time: new Date(openMs + 300_000).toISOString(),
+      open, high: Math.max(open, close) + 0.25, low: Math.min(open, close) - 0.2,
+      close, volume: 100 + (i % 17)
+    };
+  });
+  const makeContext = (count, intervalMs, endMs) => Array.from({ length: count }, (_, i) => {
+    const openMs = endMs - (count - i) * intervalMs;
+    const open = 2300 + i * 0.05;
+    const close = open + Math.sin(i / 4) * 0.2;
+    return {
+      open_time: new Date(openMs).toISOString(),
+      close_time: new Date(openMs + intervalMs).toISOString(),
+      open, high: Math.max(open, close) + 0.3, low: Math.min(open, close) - 0.2,
+      close, volume: 100
+    };
+  });
+  const context = {
+    D1: { interval_minutes: 1440, candles: makeContext(60, 86_400_000, floor), candle_count: 60, source: { provider: "test", interval: "1day" } },
+    W1: { interval_minutes: 10080, candles: makeContext(60, 604_800_000, floor), candle_count: 60, source: { provider: "test", interval: "1week" } }
+  };
+  const bundle = internals.buildBundle(m5, new Date(nowMs).toISOString(), { symbol: "XAU/USD" }, context);
+  await cache.put("market-data:v1:OANDA:XAUUSD", JSON.stringify(bundle));
+  const response = await worker.fetch(new Request("https://market.example.com/engine-shadow?engine=prophet", {
+    headers: { authorization: "Bearer test-secret" }
+  }), env({ MARKET_DATA_CACHE: cache }));
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.engine_shadow_status, "partial_calculation_available");
+  assert.equal(body.calculation_status, "partial_unverified_kernel");
+  assert.equal(body.parity_status, "not_proven");
+  assert.equal(body.calculation_allowed_for_trusted_evidence, false);
+  assert.equal(body.outputs.length, 20);
+  assert.ok(Object.hasOwn(body.outputs.at(-1), "htf_alignment"));
+});
+
+test("GET /engine-shadow refuses to pretend Mizan/GMI local calculators exist", async () => {
+  const response = await worker.fetch(new Request("https://market.example.com/engine-shadow?engine=gmi", {
+    headers: { authorization: "Bearer test-secret" }
+  }), env());
+  assert.equal(response.status, 503);
+});
