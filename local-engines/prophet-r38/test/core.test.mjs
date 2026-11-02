@@ -27,7 +27,7 @@ test("Prophet R38 partial core emits source-derived sensors and preserves input 
   assert.equal(result.outputs.length, bars.length);
   assert.equal(result.outputs[0].index, 0);
   assert.equal(result.outputs.at(-1).index, bars.length - 1);
-  assert.equal(result.outputs.at(-1).calculation_scope, "R38_SOURCE_DERIVED_OSCILLATOR_STRUCTURE_CONFIRMATION_PARTIAL");
+  assert.equal(result.outputs.at(-1).calculation_scope, "R38_SOURCE_DERIVED_OSCILLATOR_STRUCTURE_CONFIRMATION_HTF_PARTIAL");
   assert.equal(result.outputs.at(-1).trusted_evidence_allowed, false);
   assert.ok(Object.hasOwn(result.outputs.at(-1).structure, "d_enc"));
   assert.ok(Object.hasOwn(result.outputs.at(-1).structure, "subtype_code"));
@@ -62,4 +62,38 @@ test("Prophet R38 partial core rejects invalid OHLC and out-of-order candles", (
   const outOfOrder = makeBars(10);
   outOfOrder[8] = { ...outOfOrder[8], open_time: outOfOrder[1].open_time };
   assert.throws(() => calculateProphetR38Core(outOfOrder), /chronological/);
+});
+
+test("Prophet R38 HTF alignment uses closed-bar context and reports missing warm-up", () => {
+  const bars = makeBars(500);
+  const makeHtf = (count, minutes, start) => {
+    const out = [];
+    let close = 2300;
+    for (let i = 0; i < count; i++) {
+      const open = close;
+      close += Math.sin(i / 3) * 0.4 + 0.02;
+      out.push({
+        open_time: new Date(Date.parse(start) + i * minutes * 60000).toISOString(),
+        close_time: new Date(Date.parse(start) + (i + 1) * minutes * 60000).toISOString(),
+        open, high: Math.max(open, close) + 0.3, low: Math.min(open, close) - 0.2, close, volume: 100
+      });
+    }
+    return out;
+  };
+  const higher_timeframes = {
+    M15: makeHtf(60, 15, "2025-12-31T00:00:00Z"),
+    H1: makeHtf(60, 60, "2025-12-29T00:00:00Z"),
+    H4: makeHtf(60, 240, "2025-12-22T00:00:00Z"),
+    D1: makeHtf(60, 1440, "2025-11-02T00:00:00Z"),
+    W1: makeHtf(60, 10080, "2024-11-03T00:00:00Z")
+  };
+  const result = calculateProphetR38Core(bars, { higher_timeframes });
+  const last = result.outputs.at(-1).htf_alignment;
+  assert.equal(last.mode, "previous_closed_htf_bar");
+  assert.equal(last.data_status, "history_ready_for_shadow");
+  assert.deepEqual(last.missing_timeframes, []);
+  assert.equal(last.trusted_evidence_allowed, false);
+  const missing = calculateProphetR38Core(bars, { higher_timeframes: {} }).outputs.at(-1).htf_alignment;
+  assert.equal(missing.data_status, "blocked_missing_or_warmup_htf_history");
+  assert.deepEqual(missing.missing_timeframes, ["M15", "H1", "H4", "D1", "W1"]);
 });
