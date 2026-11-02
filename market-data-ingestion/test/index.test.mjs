@@ -105,7 +105,7 @@ test("POST /pull calls Twelve Data with the bounded M5 bootstrap contract", asyn
     requestedUrls.push(requestedUrl);
     const values = providerValues(requestedUrl.searchParams.get("interval"), Date.now(), Number(requestedUrl.searchParams.get("outputsize")));
     return new Response(JSON.stringify({
-      status: "ok", meta: { symbol: "XAU/USD" }, values
+      status: "ok", meta: { symbol: "XAU/USD", exchange_timezone: "UTC" }, values
     }), { status: 200, headers: { "content-type": "application/json" } });
   };
   const testEnv = env();
