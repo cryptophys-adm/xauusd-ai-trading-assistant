@@ -91,9 +91,10 @@ test("POST /pull calls Twelve Data with the bounded M5 bootstrap contract", asyn
       status: "ok", meta: { symbol: "XAU/USD" }, values
     }), { status: 200, headers: { "content-type": "application/json" } });
   };
+  const testEnv = env();
   const response = await worker.fetch(new Request("https://market.example.com/pull", {
     method: "POST", headers: { authorization: "Bearer test-secret" }
-  }), env());
+  }), testEnv);
   const body = await response.json();
   assert.equal(response.status, 200, JSON.stringify(body));
   assert.equal(requestedUrl.searchParams.get("symbol"), "XAU/USD");
@@ -107,7 +108,7 @@ test("POST /pull calls Twelve Data with the bounded M5 bootstrap contract", asyn
   assert.equal(body.timeframes.M15.interval_minutes, 15);
   assert.equal(body.timeframes.H1.interval_minutes, 60);
   assert.equal(body.timeframes.H4.interval_minutes, 240);
-  assert.equal((await worker.fetch(new Request("https://market.example.com/latest"), env())).status, 200);
+  assert.equal((await worker.fetch(new Request("https://market.example.com/latest"), testEnv)).status, 200);
 });
 
 test("health exposes configuration status but no secrets", async () => {
