@@ -235,6 +235,93 @@ function structureStateMachine(bars, oscillator, volumeRatio, hasVolume, atr, op
   }
   return output;
 }
+function confirmationGate(bars, fast, slow, zScore, volumeRatio, hasVolume, structure, intensity, options = {}) {
+  const legacy = options.legacy_mode === true;
+  const autoWindow = options.auto_window !== false;
+  const timeframeMinutes = options.timeframe_minutes ?? 5;
+  const confirmationWindow = options.confirmation_window ?? (autoWindow ? (timeframeMinutes <= 1 ? 5 : timeframeMinutes <= 5 ? 4 : 3) : 3);
+  const freshBars = options.struct_fresh_bars ?? 6;
+  let lastBuyIndex = null, lastSellIndex = null, buyMinZ = null, sellMaxZ = null;
+  let buyPassBar = null, sellPassBar = null, buyHqBar = null, sellHqBar = null;
+  return bars.map((bar, i) => {
+    const confirmedBar = bar.confirmed === true;
+    const buyCandidate = confirmedBar && crossover(fast, slow, i) && fast[i] < -0.15;
+    const sellCandidate = confirmedBar && crossunder(fast, slow, i) && fast[i] > 0.15;
+    if (buyCandidate) {
+      lastBuyIndex = i; buyPassBar = null; buyHqBar = null;
+      if (!legacy) { lastSellIndex = lastSellIndex; sellPassBar = null; sellHqBar = null; }
+      buyMinZ = zScore[i];
+      if (!legacy) sellMaxZ = null;
+    }
+    if (sellCandidate) {
+      lastSellIndex = i; sellPassBar = null; sellHqBar = null;
+      if (!legacy) { buyPassBar = null; buyHqBar = null; buyMinZ = null; }
+      sellMaxZ = zScore[i];
+    }
+    const barsSinceBuy = lastBuyIndex === null ? null : i - lastBuyIndex;
+    const barsSinceSell = lastSellIndex === null ? null : i - lastSellIndex;
+    const hasBuy = barsSinceBuy !== null, hasSell = barsSinceSell !== null;
+    const sellSupersedesBuy = hasSell && (!hasBuy || barsSinceSell < barsSinceBuy);
+    const buySupersedesSell = hasBuy && (!hasSell || barsSinceBuy < barsSinceSell);
+    const buyWindow = hasBuy && barsSinceBuy >= 0 && barsSinceBuy <= confirmationWindow && (legacy || !sellSupersedesBuy);
+    const sellWindow = hasSell && barsSinceSell >= 0 && barsSinceSell <= confirmationWindow && (legacy || !buySupersedesSell);
+    const st = structure[i];
+    const bullFresh = st.bull_structure_event_bar !== null && i - st.bull_structure_event_bar <= freshBars;
+    const bearFresh = st.bear_structure_event_bar !== null && i - st.bear_structure_event_bar <= freshBars;
+    const freshBullDiv = st.d_enc === 1 && bullFresh;
+    const freshBearDiv = st.d_enc === -1 && bearFresh;
+    const freshBullSweep = st.d_enc === -3 && st.subtype_code === 3 && bullFresh;
+    const freshBearSweep = st.d_enc === 3 && st.subtype_code === 1 && bearFresh;
+    const bullishStructure = legacy
+      ? ((st.b_enc === 3 || st.d_enc === 1 || (st.d_enc === -3 && st.subtype_code === 3)) && st.d_enc !== 3)
+      : (bullFresh && (st.d_enc === 1 || (st.b_enc === 3 && st.d_enc !== 0) || (st.d_enc === -3 && (st.subtype_code === 3 || st.subtype_code === 2))));
+    const bearishStructure = legacy
+      ? ((st.b_enc === -3 || st.d_enc === -1 || (st.d_enc === 3 && st.subtype_code === 4)) && st.d_enc !== -3)
+      : (bearFresh && (st.d_enc === -1 || (st.b_enc === -3 && st.d_enc !== 0) || (st.d_enc === 3 && (st.subtype_code === 1 || st.subtype_code === 4))));
+    const prev = i > 0 ? bars[i - 1] : null;
+    const bullPrice = !!prev && bar.close > bar.open && bar.close > prev.high;
+    const bearPrice = !!prev && bar.close < bar.open && bar.close < prev.low;
+    const bullEarlyPrice = !!prev && bar.close > bar.open && bar.close > prev.close;
+    const bearEarlyPrice = !!prev && bar.close < bar.open && bar.close < prev.close;
+    const isVolumeValid = legacy ? volumeRatio[i] >= 0.85 : (hasVolume && volumeRatio[i] >= 0.85);
+    const buyQualityPoints = (intensity[i] === 3 ? 1 : 0) + (zScore[i] > 0 ? 1 : 0) + (isVolumeValid ? 1 : 0);
+    const sellQualityPoints = (intensity[i] === -3 ? 1 : 0) + (zScore[i] < 0 ? 1 : 0) + (isVolumeValid ? 1 : 0);
+    const buyVolumePass = legacy ? buyQualityPoints >= 2 : (!hasVolume || volumeRatio[i] >= 0.85);
+    const sellVolumePass = legacy ? sellQualityPoints >= 2 : (!hasVolume || volumeRatio[i] >= 0.85);
+    if (buyWindow) buyMinZ = buyMinZ === null || !finite(buyMinZ) ? zScore[i] : Math.min(buyMinZ, zScore[i]);
+    if (sellWindow) sellMaxZ = sellMaxZ === null || !finite(sellMaxZ) ? zScore[i] : Math.max(sellMaxZ, zScore[i]);
+    const buyDepthPass = finite(buyMinZ) && buyMinZ <= -0.618;
+    const sellDepthPass = finite(sellMaxZ) && sellMaxZ >= 0.618;
+    const buyBase = confirmedBar && buyWindow && bullPrice && bullishStructure;
+    const sellBase = confirmedBar && sellWindow && bearPrice && bearishStructure;
+    const buyConfirmedRaw = buyBase && buyVolumePass;
+    const sellConfirmedRaw = sellBase && sellVolumePass;
+    const buyEarly = confirmedBar && buyWindow && bullEarlyPrice && bullishStructure && buyVolumePass && !buyConfirmedRaw;
+    const sellEarly = confirmedBar && sellWindow && bearEarlyPrice && bearishStructure && sellVolumePass && !sellConfirmedRaw;
+    const buyHighQualityRaw = legacy ? (buyBase && buyQualityPoints === 3) : (buyConfirmedRaw && hasVolume && volumeRatio[i] >= 1.0 && buyDepthPass);
+    const sellHighQualityRaw = legacy ? (sellBase && sellQualityPoints === 3) : (sellConfirmedRaw && hasVolume && volumeRatio[i] >= 1.0 && sellDepthPass);
+    if (buyConfirmedRaw && buyPassBar === null) buyPassBar = i;
+    if (sellConfirmedRaw && sellPassBar === null) sellPassBar = i;
+    if (buyConfirmedRaw && buyHighQualityRaw && buyHqBar === null) buyHqBar = i;
+    if (sellConfirmedRaw && sellHighQualityRaw && sellHqBar === null) sellHqBar = i;
+    return {
+      confirmation_window: confirmationWindow,
+      buy_candidate: buyCandidate, sell_candidate: sellCandidate,
+      buy_window_active: buyWindow, sell_window_active: sellWindow,
+      bullish_price_confirm: bullPrice, bearish_price_confirm: bearPrice,
+      bullish_structure_confirm: bullishStructure, bearish_structure_confirm: bearishStructure,
+      buy_volume_pass: buyVolumePass, sell_volume_pass: sellVolumePass,
+      buy_depth_pass: buyDepthPass, sell_depth_pass: sellDepthPass,
+      buy_early_confirmation: buyEarly, sell_early_confirmation: sellEarly,
+      buy_confirmed: buyPassBar === i, sell_confirmed: sellPassBar === i,
+      buy_high_quality: buyHqBar === i, sell_high_quality: sellHqBar === i,
+      buy_passed_current_setup: buyPassBar !== null && lastBuyIndex !== null && buyPassBar >= lastBuyIndex,
+      sell_passed_current_setup: sellPassBar !== null && lastSellIndex !== null && sellPassBar >= lastSellIndex,
+      buy_min_z_in_window: buyMinZ, sell_max_z_in_window: sellMaxZ,
+      gate_status: buyWindow ? (buyPassBar !== null && lastBuyIndex !== null && buyPassBar >= lastBuyIndex ? "BUY_CONFIRMED" : !bullPrice ? "BUY_WAIT_PRICE" : !bullishStructure ? "BUY_WAIT_STRUCTURE" : !buyVolumePass ? "BUY_WAIT_VOLUME" : "BUY_WAIT") : sellWindow ? (sellPassBar !== null && lastSellIndex !== null && sellPassBar >= lastSellIndex ? "SELL_CONFIRMED" : !bearPrice ? "SELL_WAIT_PRICE" : !bearishStructure ? "SELL_WAIT_STRUCTURE" : !sellVolumePass ? "SELL_WAIT_VOLUME" : "SELL_WAIT") : "NO_ACTIVE_SETUP"
+    };
+  });
+}
 function crossover(a, b, i) {
   return i > 0 && finite(a[i]) && finite(b[i]) && finite(a[i - 1]) && finite(b[i - 1]) && a[i] > b[i] && a[i - 1] <= b[i - 1];
 }
@@ -297,13 +384,18 @@ export function calculateProphetR38Core(bars, options = {}) {
     core[i] = tensorCore[i];
   }
   const structure = structureStateMachine(bars, fast, volRatio, hasVolume, atr, options);
+  const cycles = bars.map((_, i) => {
+    const cf = cycleAt(close, high, low, i, fastLen), cm = cycleAt(close, high, low, i, midLen), cs = cycleAt(close, high, low, i, slowLen);
+    return cf !== null && cm !== null && cs !== null && cf > 0 && cm > 0 && cs > 0 ? 3 : cf !== null && cm !== null && cs !== null && cf < 0 && cm < 0 && cs < 0 ? -3 : 0;
+  });
+  const confirmation = confirmationGate(bars, fast, slow, zScore, volRatio, hasVolume, structure, cycles, options);
   for (let i = 0; i < bars.length; i++) {
     const f = fast[i], s = slow[i];
     const buyCandidate = bars[i].confirmed === true && crossover(fast, slow, i) && f < -0.15;
     const sellCandidate = bars[i].confirmed === true && crossunder(fast, slow, i) && f > 0.15;
     const cycle = [cycleAt(close, high, low, i, fastLen), cycleAt(close, high, low, i, midLen), cycleAt(close, high, low, i, slowLen)];
     const intensity = cycle.every((x) => x !== null && x > 0) ? 3 : cycle.every((x) => x !== null && x < 0) ? -3 : 0;
-    const d = { ...bars[i], index: i, structure: structure[i], oscillator: { fast: f, slow: s, core: core[i], raw_composite: raw[i] }, sensors: { kww_zscore_50: zScore[i], hurst_rs_100: hurst[i], efficiency_ratio_14: er[i], volume_anomaly_20: volAnom[i], volume_ratio_20: volRatio[i], atr14: atr[i], cycle_intensity: intensity }, events: { raw_buy_cross_candidate: buyCandidate, raw_sell_cross_candidate: sellCandidate }, calculation_scope: "R38_SOURCE_DERIVED_OSCILLATOR_AND_STRUCTURE_PARTIAL", parity_status: "not_proven", trusted_evidence_allowed: false };
+    const d = { ...bars[i], index: i, structure: structure[i], confirmation: confirmation[i], oscillator: { fast: f, slow: s, core: core[i], raw_composite: raw[i] }, sensors: { kww_zscore_50: zScore[i], hurst_rs_100: hurst[i], efficiency_ratio_14: er[i], volume_anomaly_20: volAnom[i], volume_ratio_20: volRatio[i], atr14: atr[i], cycle_intensity: intensity }, events: { raw_buy_cross_candidate: buyCandidate, raw_sell_cross_candidate: sellCandidate }, calculation_scope: "R38_SOURCE_DERIVED_OSCILLATOR_STRUCTURE_CONFIRMATION_PARTIAL", parity_status: "not_proven", trusted_evidence_allowed: false };
     result.push(d);
   }
   return {
@@ -316,7 +408,7 @@ export function calculateProphetR38Core(bars, options = {}) {
       declared_version: "The Prophet v7.02 R38",
       imported_library: "cryptophys/CryptophysMizanLib/4"
     },
-    implementation_scope: "oscillator sensors, divergence/structure state machine, and raw closed-bar crossover candidates; excludes HTF alignment, adaptive confirmation gate, OB ranking/lifecycle, entry/TP/SL management, and chart-rendering behavior",
+    implementation_scope: "oscillator sensors, divergence/structure state machine, and adaptive confirmation gate; excludes HTF alignment, OB ranking/lifecycle, entry/TP/SL management, and chart-rendering behavior",
     history_requirements: { M5: 101, chart_oscillator_slow_warmup: Math.max(slowLen, Math.round(smoothLen * 2.2) * 2) + Math.round(Math.sqrt(Math.round(smoothLen * 2.2) * 2)), kww_zscore_50: 50, efficiency_ratio_14: 15, volume_ratio_20: 21 },
     has_volume: hasVolume,
     outputs: result
