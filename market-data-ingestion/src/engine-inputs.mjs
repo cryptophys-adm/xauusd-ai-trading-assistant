@@ -1,7 +1,7 @@
 export const LOCAL_ENGINE_INPUT_CONTRACT = "cryptophys.local-engine-input.v1";
 
 const HISTORY_REQUIREMENTS = Object.freeze({
-  mizan: Object.freeze({ M5: 300 }),
+  mizan: null,
   prophet: Object.freeze({ M5: 101, M15: 51, H1: 51, H4: 51, D1: 51, W1: 51 }),
   gmi: Object.freeze({ M5: 300, M15: 51, H1: 51, H4: 51, D1: 51, W1: 51 })
 });
