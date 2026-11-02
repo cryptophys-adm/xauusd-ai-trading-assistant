@@ -241,6 +241,15 @@ async function fetchTwelveData(env, interval = "5min", outputsize = MAX_OUTPUTSI
       provider_message: asString(payload?.message).slice(0, 240)
     });
   }
+  if (interval === "1day" || interval === "1week") {
+    const exchangeTimezone = asString(payload.meta?.exchange_timezone).trim();
+    if (!["UTC", "Etc/UTC", "GMT"].includes(exchangeTimezone)) {
+      throw Object.assign(new Error("Native D1/W1 timestamps are not proven to be UTC"), {
+        code: "provider_timezone_unverified",
+        provider_timezone: exchangeTimezone || null
+      });
+    }
+  }
   return payload;
 }
 
@@ -371,7 +380,7 @@ function publicError(error) {
   const code = asString(error?.code) || "market_data_pull_failed";
   const status = code === "provider_not_configured" ? 503
     : code === "provider_quota_exceeded" ? 429
-      : code === "insufficient_closed_history" ? 503 : 502;
+      : code === "insufficient_closed_history" || code === "provider_timezone_unverified" ? 503 : 502;
   return {
     status,
     body: {
