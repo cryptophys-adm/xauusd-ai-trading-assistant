@@ -142,6 +142,7 @@ export function calculateProphetR38Core(bars, options = {}) {
       throw new TypeError(`invalid OHLC at index ${i}`);
     }
     if (b.volume !== null && b.volume !== undefined && (!finite(b.volume) || b.volume < 0)) throw new TypeError(`invalid volume at index ${i}`);
+    if (i > 0 && finite(Date.parse(bars[i - 1].open_time)) && finite(Date.parse(b.open_time)) && Date.parse(bars[i - 1].open_time) >= Date.parse(b.open_time)) throw new TypeError("bars must be strictly chronological");
   }
   const fastLen = options.fast_len ?? 13, midLen = options.mid_len ?? 34, slowLen = options.slow_len ?? 55, smoothLen = options.smooth_len ?? 6;
   for (const [name, n] of Object.entries({ fast_len: fastLen, mid_len: midLen, slow_len: slowLen, smooth_len: smoothLen })) {
