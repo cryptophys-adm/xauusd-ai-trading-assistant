@@ -35,6 +35,27 @@ jobs:
         run: npm run typecheck
       - name: Validate Worker bundle
         run: npx wrangler deploy --dry-run --config wrangler.jsonc
+
+      - name: Require approved production provenance allowlist before deployment
+        env:
+          LOCAL_CALC_PROVENANCE_ALLOWLIST: ${{ secrets.LOCAL_CALC_PROVENANCE_ALLOWLIST }}
+        run: |
+          node --input-type=module <<'NODE'
+          const raw = process.env.LOCAL_CALC_PROVENANCE_ALLOWLIST;
+          if (!raw) throw new Error("Production deployment blocked: LOCAL_CALC_PROVENANCE_ALLOWLIST is not configured. Do not approve placeholder or unverified Pine/implementation hashes.");
+          let policy;
+          try { policy = JSON.parse(raw); } catch { throw new Error("Production provenance allowlist must be valid JSON."); }
+          for (const engine of ["mizan", "prophet", "gmi"]) {
+            const entry = policy[engine];
+            if (!entry || !Array.isArray(entry.source_hashes) || !Array.isArray(entry.implementation_hashes) ||
+                entry.source_hashes.length === 0 || entry.implementation_hashes.length === 0 ||
+                !entry.source_hashes.every(value => typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)) ||
+                !entry.implementation_hashes.every(value => typeof value === "string" && /^[a-f0-9]{64}$/i.test(value))) {
+              throw new Error("Production deployment blocked: approved SHA-256 source and implementation hashes are required for " + engine + ".");
+            }
+          }
+          console.log("Production provenance allowlist shape validated for all three engines.");
+          NODE
       - name: Apply production D1 migrations when a D1-scoped token is configured
         shell: bash
         run: |
