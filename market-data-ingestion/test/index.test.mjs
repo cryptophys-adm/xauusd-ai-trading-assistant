@@ -177,3 +177,23 @@ test("invalid provider OHLC is rejected", () => {
   const openMs = Date.parse("2026-11-02T00:00:00.000Z");
   assert.throws(() => internals.parseProviderCandle(providerCandle(openMs, { high: "1", low: "9" })));
 });
+
+test("native D1/W1 history fails closed when provider timezone is not verified as UTC", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async (url) => {
+    const requestUrl = new URL(String(url));
+    const interval = requestUrl.searchParams.get("interval");
+    const values = providerValues(interval, Date.now(), Number(requestUrl.searchParams.get("outputsize")));
+    const exchange_timezone = interval === "1day" ? "America/New_York" : "UTC";
+    return new Response(JSON.stringify({
+      status: "ok", meta: { symbol: "XAU/USD", exchange_timezone }, values
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const response = await worker.fetch(new Request("https://market.example.com/pull", {
+    method: "POST", headers: { authorization: "Bearer test-secret" }
+  }), env());
+  const body = await response.json();
+  assert.equal(response.status, 503);
+  assert.equal(body.error, "provider_timezone_unverified");
+});
