@@ -303,7 +303,7 @@ export function calculateProphetR38Core(bars, options = {}) {
     const sellCandidate = bars[i].confirmed === true && crossunder(fast, slow, i) && f > 0.15;
     const cycle = [cycleAt(close, high, low, i, fastLen), cycleAt(close, high, low, i, midLen), cycleAt(close, high, low, i, slowLen)];
     const intensity = cycle.every((x) => x !== null && x > 0) ? 3 : cycle.every((x) => x !== null && x < 0) ? -3 : 0;
-    const d = { ...bars[i], index: i, oscillator: { fast: f, slow: s, core: core[i], raw_composite: raw[i] }, sensors: { kww_zscore_50: zScore[i], hurst_rs_100: hurst[i], efficiency_ratio_14: er[i], volume_anomaly_20: volAnom[i], volume_ratio_20: volRatio[i], atr14: atr[i], cycle_intensity: intensity }, events: { raw_buy_cross_candidate: buyCandidate, raw_sell_cross_candidate: sellCandidate }, calculation_scope: "R38_SOURCE_DERIVED_OSCILLATOR_PARTIAL", parity_status: "not_proven", trusted_evidence_allowed: false };
+    const d = { ...bars[i], index: i, structure: structure[i], oscillator: { fast: f, slow: s, core: core[i], raw_composite: raw[i] }, sensors: { kww_zscore_50: zScore[i], hurst_rs_100: hurst[i], efficiency_ratio_14: er[i], volume_anomaly_20: volAnom[i], volume_ratio_20: volRatio[i], atr14: atr[i], cycle_intensity: intensity }, events: { raw_buy_cross_candidate: buyCandidate, raw_sell_cross_candidate: sellCandidate }, calculation_scope: "R38_SOURCE_DERIVED_OSCILLATOR_AND_STRUCTURE_PARTIAL", parity_status: "not_proven", trusted_evidence_allowed: false };
     result.push(d);
   }
   return {
@@ -316,7 +316,7 @@ export function calculateProphetR38Core(bars, options = {}) {
       declared_version: "The Prophet v7.02 R38",
       imported_library: "cryptophys/CryptophysMizanLib/4"
     },
-    implementation_scope: "oscillator sensors and raw closed-bar crossover candidates only; excludes full structure state machine, HTF alignment, confirmation windows, OB ranking, entry/TP/SL management, and all chart-rendering behavior",
+    implementation_scope: "oscillator sensors, divergence/structure state machine, and raw closed-bar crossover candidates; excludes HTF alignment, adaptive confirmation gate, OB ranking/lifecycle, entry/TP/SL management, and chart-rendering behavior",
     history_requirements: { M5: 101, chart_oscillator_slow_warmup: Math.max(slowLen, Math.round(smoothLen * 2.2) * 2) + Math.round(Math.sqrt(Math.round(smoothLen * 2.2) * 2)), kww_zscore_50: 50, efficiency_ratio_14: 15, volume_ratio_20: 21 },
     has_volume: hasVolume,
     outputs: result
