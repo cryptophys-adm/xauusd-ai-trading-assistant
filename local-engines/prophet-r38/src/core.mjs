@@ -83,8 +83,11 @@ function hurstAt(src, end, len) {
   return clamp(h, 0, 1);
 }
 function volumeAnomalyAt(volume, end, len) {
-  const avg = smaAt(volume, end, len);
-  return avg === null || avg === 0 ? null : volume[end] / avg;
+  // MizanLib source: previous bar's volume / previous bar's SMA.
+  if (end < 1) return 1.0;
+  const previousSma = smaAt(volume, end - 1, len);
+  const previousVolume = volume[end - 1];
+  return previousSma === null || !finite(previousVolume) ? 1.0 : previousVolume / Math.max(previousSma, EPS);
 }
 function prophetVolumeRatioAt(volume, end, len) {
   // Pine: current volume divided by previous bar's SMA(volume, len).
