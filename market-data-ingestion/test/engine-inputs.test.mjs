@@ -31,7 +31,7 @@ function bundle() {
   };
 }
 
-test("Prophet receives sufficient default MTF warm-up but remains parity-blocked", () => {
+test("Prophet receives caller-derived MTF warm-up but remains parity-blocked", () => {
   const result = buildLocalEngineInput(bundle(), "prophet");
   assert.equal(result.data_status, "history_ready_for_shadow");
   assert.equal(result.calculation_status, "blocked_source_parity");
@@ -39,6 +39,9 @@ test("Prophet receives sufficient default MTF warm-up but remains parity-blocked
   assert.equal(result.inputs.timeframes.M5.candles.length, 5000);
   assert.equal(result.inputs.context_timeframes.D1.candles.length, 60);
   assert.equal(result.inputs.context_timeframes.W1.candles.length, 60);
+  assert.equal(result.history_requirements.M5, 101);
+  assert.equal(result.history_requirements.W1, 51);
+  assert.match(result.source_caller_contract.source, /R38/);
 });
 
 test("short daily and weekly histories are blocked rather than padded", () => {
@@ -53,24 +56,42 @@ test("short daily and weekly histories are blocked rather than padded", () => {
   assert.ok(result.history_gaps.some((gap) => gap.timeframe === "W1" && gap.required_bars === 51));
 });
 
-test("GMI stays blocked without intrabars and external symbol history", () => {
+test("GMI returns structured unavailable-input records and remains blocked", () => {
   const result = buildLocalEngineInput(bundle(), "gmi");
   assert.equal(result.data_status, "history_ready_for_shadow");
   assert.equal(result.calculation_status, "blocked_missing_gmi_inputs");
   assert.equal(result.calculation_allowed_for_trusted_evidence, false);
-  assert.ok(result.missing_dependencies.length >= 5);
+  assert.ok(result.unavailable_inputs.some((item) => item.code === "missing_intrabar_ohlcv"));
+  assert.ok(result.unavailable_inputs.some((item) => item.symbol === "TVC:DXY"));
+  assert.ok(result.unavailable_inputs.some((item) => item.symbol === "CRYPTOCAP:USDT"));
+  assert.ok(result.unavailable_inputs.some((item) => item.symbol === "TVC:USOIL"));
+  assert.ok(result.unavailable_inputs.some((item) => item.code === "missing_tradingview_footprint_semantics"));
 });
 
-test("Mizan stays unapproved even when history is sufficient", () => {
+test("Mizan history floor comes from known callers but identity/parity remain blocked", () => {
   const result = buildLocalEngineInput(bundle(), "mizan");
-  assert.equal(result.data_status, "blocked_history_contract_undefined");
+  assert.equal(result.data_status, "history_ready_for_shadow");
   assert.equal(result.calculation_status, "blocked_source_identity");
-  assert.ok(result.history_gaps.some((gap) => gap.code === "engine_history_requirements_unverified"));
   assert.equal(result.calculation_allowed_for_trusted_evidence, false);
+  assert.equal(result.history_requirements.M5, 300);
+  assert.equal(result.history_requirements.W1, 51);
+  assert.match(result.history_requirement_scope, /not a universal requirement/);
+  assert.equal(result.parity_status, "not_proven");
 });
 
-test("readiness lists the three engines and does not claim parity", () => {
+test("Mizan and Prophet history gaps are explicit when the source-derived floor is not met", () => {
+  const data = bundle();
+  data.timeframes.M5.candles = data.timeframes.M5.candles.slice(0, 100);
+  data.timeframes.M5.candle_count = 100;
+  const mizan = buildLocalEngineInput(data, "mizan");
+  const prophet = buildLocalEngineInput(data, "prophet");
+  assert.ok(mizan.history_gaps.some((gap) => gap.timeframe === "M5" && gap.required_bars === 300));
+  assert.ok(prophet.history_gaps.some((gap) => gap.timeframe === "M5" && gap.required_bars === 101));
+});
+
+test("readiness lists all engines and never claims parity or trusted eligibility", () => {
   const readiness = buildLocalEngineReadiness(bundle());
   assert.deepEqual(Object.keys(readiness), ["mizan", "prophet", "gmi"]);
   assert.ok(Object.values(readiness).every((item) => item.parity_status === "not_proven"));
+  assert.ok(Object.values(readiness).every((item) => item.calculation_allowed_for_trusted_evidence === false));
 });
