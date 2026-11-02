@@ -597,8 +597,6 @@ async function runAnalysis(
         news_analyzed_at: asText(fusion.fundamental_news_analysis?.analyzed_at)
       }
     };
-    await env.WEBHOOK_BUFFER.put("analysis:" + safeKeyPart(candleKey), JSON.stringify({ ...details, created_at: timestamp, sources: Object.keys(payloads), decision: synthesis }), { expirationTtl: 60 * 60 * 24 * 14 });
-    await setAnalysisRunStatus(env, candleKey, "degraded", details, "required_evidence_unavailable");
     await env.WEBHOOK_BUFFER.put("analysis:" + safeKeyPart(candleKey), JSON.stringify({
       status: "degraded",
       input_fingerprint: inputFingerprint,
@@ -608,6 +606,7 @@ async function runAnalysis(
       missing_evidence: fusion.missing_evidence,
       validation_errors: fusion.validation_errors
     }), { expirationTtl: 60 * 60 * 24 * 14 });
+    await setAnalysisRunStatus(env, candleKey, "degraded", details, "required_evidence_unavailable");
     return { status: "degraded", missing_evidence: fusion.missing_evidence };
   }
 
