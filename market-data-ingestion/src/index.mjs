@@ -11,12 +11,12 @@ const CACHE_KEY = "market-data:v1:OANDA:XAUUSD";
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 const MAX_OUTPUTSIZE = 5000;
 const INCREMENTAL_OUTPUTSIZE = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
 const BOOTSTRAP_STATE_KEY = "market-data:v1:bootstrap-state";
 const BOOTSTRAP_RETRY_MS = DAY_MS;
 const DAILY_CONTEXT_OUTPUTSIZE = 60;
 const WEEKLY_CONTEXT_OUTPUTSIZE = 60;
-const DAY_MS = 24 * 60 * 60 * 1000;
-const WEEK_MS = 7 * DAY_MS;
 const INTERVALS = [
   { name: "M5", minutes: 5, expectedBars: 1 },
   { name: "M15", minutes: 15, expectedBars: 3 },
