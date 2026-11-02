@@ -16,8 +16,8 @@ test("efficiency ratio is zero for a flat series and bounded for monotonic price
 });
 
 test("volume cycle is zero at midpoint and null before warm-up",()=>{
-  const c=Array.from({length:14},(_,i)=>i);
-  const h=c.map(v=>v+1), l=c.map(v=>v-1), a=c.map(()=>1);
+  const c=Array.from({length:14},()=>0);
+  const h=c.map(()=>1), l=c.map(()=>-1), a=c.map(()=>1);
   const out=prophetVolumeCycle(c,h,l,a,13);
   assert.equal(out[11],null);
   assert.equal(out[12],0);
