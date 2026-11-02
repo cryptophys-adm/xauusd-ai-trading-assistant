@@ -115,8 +115,23 @@ jobs:
             assert.equal(health.bindings?.[name], true, "missing preview binding: " + name);
           }
           assert.equal(health.secrets_configured?.webhook_secret, true, "preview secret must be visible to the Worker");
-          const readyResponse = await fetch(base + "/ready", { signal: AbortSignal.timeout(15000) });
-          const ready = await readyResponse.json();
+          let readyResponse;
+          let ready;
+          let readyParseError = "no response";
+          for (let attempt = 0; attempt < 10; attempt++) {
+            readyResponse = await fetch(base + "/ready", { signal: AbortSignal.timeout(15000) });
+            try {
+              ready = await readyResponse.clone().json();
+              readyParseError = "";
+            } catch {
+              ready = null;
+              const body = (await readyResponse.clone().text()).slice(0, 160);
+              readyParseError = `/ready returned non-JSON HTTP ${readyResponse.status}: ${body}`;
+            }
+            if (readyResponse.ok && ready?.status === "ready" && ready.d1_analysis_runs === true) break;
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+          assert.ok(ready, `ready endpoint did not return JSON after retries: ${readyParseError}`);
           assert.equal(readyResponse.status, 200);
           assert.equal(ready.status, "ready");
           assert.equal(ready.d1_analysis_runs, true);
