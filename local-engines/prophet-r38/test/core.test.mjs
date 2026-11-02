@@ -27,10 +27,13 @@ test("Prophet R38 partial core emits source-derived sensors and preserves input 
   assert.equal(result.outputs.length, bars.length);
   assert.equal(result.outputs[0].index, 0);
   assert.equal(result.outputs.at(-1).index, bars.length - 1);
-  assert.equal(result.outputs.at(-1).calculation_scope, "R38_SOURCE_DERIVED_OSCILLATOR_AND_STRUCTURE_PARTIAL");
+  assert.equal(result.outputs.at(-1).calculation_scope, "R38_SOURCE_DERIVED_OSCILLATOR_STRUCTURE_CONFIRMATION_PARTIAL");
   assert.equal(result.outputs.at(-1).trusted_evidence_allowed, false);
   assert.ok(Object.hasOwn(result.outputs.at(-1).structure, "d_enc"));
   assert.ok(Object.hasOwn(result.outputs.at(-1).structure, "subtype_code"));
+  assert.ok(Object.hasOwn(result.outputs.at(-1).confirmation, "buy_window_active"));
+  assert.ok(Object.hasOwn(result.outputs.at(-1).confirmation, "buy_confirmed"));
+  assert.equal(result.outputs.at(-1).confirmation.confirmation_window, 4);
   assert.ok([0, 1, 2, 3, 4].includes(result.outputs.at(-1).structure.subtype_code));
   assert.equal(result.outputs.at(-1).parity_status, "not_proven");
 });
