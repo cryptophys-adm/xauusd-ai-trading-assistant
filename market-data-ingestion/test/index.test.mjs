@@ -27,20 +27,20 @@ function providerCandle(openMs, overrides = {}) {
     ...overrides
   };
 }
-function providerValues(interval, nowMs) {
+function providerValues(interval, nowMs, count = 60) {
   if (interval === "5min") {
     const start = Math.floor(nowMs / 300_000) * 300_000 - 300_000;
-    return Array.from({ length: 5000 }, (_, i) => providerCandle(start - i * 300_000));
+    return Array.from({ length: count }, (_, i) => providerCandle(start - i * 300_000));
   }
   if (interval === "1day") {
     const start = Math.floor(nowMs / DAY_MS) * DAY_MS - DAY_MS;
-    return Array.from({ length: 60 }, (_, i) => providerCandle(start - i * DAY_MS));
+    return Array.from({ length: count }, (_, i) => providerCandle(start - i * DAY_MS));
   }
   const day = new Date(nowMs).getUTCDay();
   const daysSinceMonday = (day + 6) % 7;
   const thisWeek = Math.floor((nowMs - daysSinceMonday * DAY_MS) / WEEK_MS) * WEEK_MS;
   const lastWeek = thisWeek - WEEK_MS;
-  return Array.from({ length: 60 }, (_, i) => providerCandle(lastWeek - i * WEEK_MS));
+  return Array.from({ length: count }, (_, i) => providerCandle(lastWeek - i * WEEK_MS));
 }
 
 test("closed M5 candles exclude the still-forming candle and sort chronologically", () => {
@@ -103,7 +103,7 @@ test("POST /pull calls Twelve Data with the bounded M5 bootstrap contract", asyn
   globalThis.fetch = async (url) => {
     const requestedUrl = new URL(String(url));
     requestedUrls.push(requestedUrl);
-    const values = providerValues(requestedUrl.searchParams.get("interval"), Date.now());
+    const values = providerValues(requestedUrl.searchParams.get("interval"), Date.now(), Number(requestedUrl.searchParams.get("outputsize")));
     return new Response(JSON.stringify({
       status: "ok", meta: { symbol: "XAU/USD" }, values
     }), { status: 200, headers: { "content-type": "application/json" } });
@@ -145,6 +145,18 @@ test("POST /pull calls Twelve Data with the bounded M5 bootstrap contract", asyn
   assert.equal(engineInput.calculation_status, "blocked_source_parity");
   assert.equal(engineInput.calculation_allowed_for_trusted_evidence, false);
   assert.equal(engineInput.inputs.timeframes.M5.candle_count, 5000);
+
+  requestedUrls.length = 0;
+  const incrementalResponse = await worker.fetch(new Request("https://market.example.com/pull", {
+    method: "POST", headers: { authorization: "Bearer test-secret" }
+  }), testEnv);
+  assert.equal(incrementalResponse.status, 200);
+  const incrementalM5 = requestedUrls.find((item) => item.searchParams.get("interval") === "5min");
+  assert.equal(incrementalM5.searchParams.get("outputsize"), "3");
+  assert.equal(requestedUrls.some((item) => item.searchParams.get("interval") === "1day"), false);
+  assert.equal(requestedUrls.some((item) => item.searchParams.get("interval") === "1week"), false);
+  const incrementalBundle = await incrementalResponse.json();
+  assert.equal(incrementalBundle.timeframes.M5.candle_count, 5000);
 });
 
 test("GET /latest requires the configured bearer secret", async () => {
