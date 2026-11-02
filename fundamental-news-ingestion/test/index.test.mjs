@@ -397,6 +397,21 @@ test("scheduled ingestion uses configured bearer secret internally and records a
   assert.equal(stored.pull_attempts, 1);
   assert.equal(mcpCalls, 3);
   assert.deepEqual(stored.symbols, ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"]);
+
+  // The cron warms the shared cache but must not consume the article fingerprint.
+  assert.equal(await env.OAUTH_STORE.get("tv_mcp:seen_articles_v1"), null);
+  const consumerResponse = await worker.fetch(new Request("https://news.cryptophys.work/pull", {
+    method: "POST",
+    headers: { authorization: "Bearer ingest-secret" }
+  }), env, createCtx());
+  assert.equal(consumerResponse.status, 200);
+  const consumerBody = await consumerResponse.json();
+  assert.equal(consumerBody.cache, "hit");
+  assert.equal(consumerBody.count, 1);
+  assert.equal(consumerBody.articles[0].title, "Gold outlook update");
+  assert.equal(mcpCalls, 3, "consumer should use the scheduled cache without another upstream call");
+  const seenAfterConsumer = JSON.parse(await env.OAUTH_STORE.get("tv_mcp:seen_articles_v1"));
+  assert.equal(seenAfterConsumer.records.length, 1);
   assert.equal(JSON.stringify(stored).includes("valid-token"), false);
 
   const health = await worker.fetch(new Request("https://news.example.com/health"), env, createCtx());
