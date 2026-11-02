@@ -2,22 +2,28 @@
 
 Cloudflare-based, advisory-only XAUUSD decision support. The current Worker receives TradingView webhook payloads from Prophet R38, Prophet R37 SSOT, and GMI v12.70, stores candle evidence in D1/KV, runs Analyst → Counselor → Reasoner, and can send a Telegram summary.
 
-**Important status:** Cloudflare inventory confirms that the AI Worker and fundamental-news ingestion Worker are deployed. This is not proof of end-to-end product readiness. Local calculation outputs and the completed standalone news-analysis output are not yet proven to be integrated into the technical evidence pipeline. Do not mark the product production-complete until every gate in [Production Definition of Done](docs/PRODUCTION_DEFINITION_OF_DONE.md) passes with recorded evidence.
+**Important status (updated 2026-11-02):** The production AI and news-ingestion Workers remain deployed; the evidence-fusion changes are under review and have not been deployed to production. The last recorded live preflight (2026-11-01) showed HTTP 200 health responses but a TradingView MCP quota cooldown and a failed scheduled ingest; that provider state was not revalidated during this update. The feature branch now enforces one-hour article/analysis freshness, per-payload and persistent deduplication, one hourly ingestion at minute 5, and AI analysis at minute 6 to reuse the cache. CI tests and isolated preview checks pass, but the complete AI chain with fresh live news and Pine-parity outputs is not tested. Production D1 `xauusd-signals` still lacks `analysis_runs`. Local Mizan/Prophet/GMI calculation engines and Pine parity are not implemented/verified by this repository. Do not mark the product production-complete until every gate in [Production Definition of Done](docs/PRODUCTION_DEFINITION_OF_DONE.md) passes with recorded evidence.
+
+## Physical Worker deployment plan
+
+The target is **9 physical Cloudflare Workers total: 8 core Workers plus the separately retained `xauusd-fundamental-news-ingestion` Worker**. Core Workers are `xauusd-tradingview-pull-adapter`, `xauusd-pull-orchestrator`, `xauusd-market-data-normalizer`, `xauusd-mizan-engine`, `xauusd-prophet-engine`, `xauusd-gmi-engine`, `xauusd-confluence-controller`, and the existing `xauusd-ai-trading-assistant` (#8). The existing AI Worker retains its `AI`, `DB`, and three KV bindings and the Analyst → Counselor → Reasoner chain. Seven core Workers are planned, not deployed; capability, quota, parity and preview gates must pass before production. No containers and no deprecated per-timeframe Worker fleet. See [Architecture Baseline](docs/ARCHITECTURE_BASELINE.md) and [Deployment Blueprint](docs/DEPLOYMENT_BLUEPRINT.md).
 
 ## Architecture and deployment SSOT
 
 These documents are the baseline for future implementation and deployment:
 
-- [Architecture Baseline](docs/ARCHITECTURE_BASELINE.md) — canonical Evidence Fusion & Orchestration point and immutable architectural constraints.
+- [Architecture Baseline](docs/ARCHITECTURE_BASELINE.md) — canonical Confluence Controller and immutable architectural constraints.
 - [Deployment Blueprint](docs/DEPLOYMENT_BLUEPRINT.md) — phased implementation, preview, production rollout and rollback.
 - [Production Definition of Done](docs/PRODUCTION_DEFINITION_OF_DONE.md) — mandatory release acceptance gates.
+- [Evidence Contracts](docs/EVIDENCE_CONTRACTS.md) — versioned local-calculation contract, freshness rules, provenance allowlists, and degraded behavior.
+- [Local Calculation Source Baseline](docs/LOCAL_CALCULATION_SOURCE_BASELINE.md) — exact Pine hashes, Mizan dependency-version mismatch, and outstanding parity blockers.
 
-The canonical convergence point is **Evidence Fusion & Orchestration**, positioned after source ingestion/local calculations and before Analyst/Counselor. It must combine and validate:
+The canonical convergence point is **Confluence & Data-Request Controller**, positioned after source ingestion/local calculations and before the AI Engine. It must combine and validate:
 1. TradingView webhook evidence.
 2. Fundamental news evidence and timestamped news-analysis output.
 3. Local deterministic Mizan, Prophet and GMI calculation outputs.
 
-The target describes eight logical responsibilities, not a requirement to deploy eight separate physical Workers. No container and no deprecated per-timeframe CTA Worker fleet are part of this baseline. The existing news-ingestion Worker remains an upstream producer. The AI chain remains Analyst → Counselor → Reasoner, and output remains advisory only; no broker integration or automatic execution.
+The target explicitly uses **8 core physical Workers plus 1 separate news-ingestion Worker = 9 physical Workers total**. The Confluence & Data-Request Controller is a separate core Worker upstream of the existing AI Engine Worker. No container and no deprecated per-timeframe CTA Worker fleet are part of this baseline. The AI chain remains Analyst → Counselor → Reasoner, and output remains advisory only; no broker integration or automatic execution.
 
 ## Existing Cloudflare resources
 
@@ -36,10 +42,13 @@ Existing resources and IDs must be reused. Do not recreate them. Keep preview re
 2. The request must include the shared secret in `secret` or the `X-Webhook-Secret` header.
 3. The payload is recorded in D1 and cached in KV.
 4. Current analysis starts after Prophet R38, Prophet R37 SSOT and GMI v12.70 have supplied payloads for the same candle key.
-5. `runAnalysis()` fetches news evidence and calls Analyst, Counselor and Reasoner.
-6. Outputs are stored in D1/KV and a Telegram message is sent when configured.
+5. Evidence Fusion validates the three webhook payloads, the latest completed fundamental news analysis in D1, and local Mizan/Prophet/GMI results received through `POST /evidence/local-calculation`.
+6. Analyst → Counselor → Reasoner receive the versioned fused evidence bundle. Missing/stale local calculations or completed news analysis force a `WAIT` decision with null risk/price fields.
+7. Outputs and fusion diagnostics are stored in D1/KV; optional Telegram delivery failure does not invalidate persisted results.
 
-This is the current implementation, not the complete target architecture. The fusion work must explicitly bring local calculation results and the completed fundamental-news analysis into a validated evidence bundle. Preserve the current webhook gate until a reviewed schema/policy migration defines how new evidence becomes mandatory.
+**Implementation/target gap:** the current PR implementation still hosts the initial fusion receiver and `/evidence/local-calculation` endpoint inside `xauusd-ai-trading-assistant`. The approved target in this SSOT moves canonical fusion to the separate planned `xauusd-confluence-controller`; that extraction and authenticated handoff to the AI Worker have not yet been implemented or deployed.
+
+The evidence-fusion implementation on the feature branch adds the local calculation contract and consumes the most recent completed fundamental-news analysis. The endpoint validates/authenticates and stores outputs only when per-engine source and implementation SHA-256 hashes are explicitly allowlisted; production currently has no approved allowlist. The source audit found Mizan v1/v4 dependency mismatch and missing exact GMI/Prophet R37 baselines. Local engine implementation, approved source matrix, parity fixtures, and live end-to-end acceptance remain mandatory blockers. Preserve the existing three-source webhook gate until a reviewed schema/policy migration defines any change to required sources.
 
 ## AI model configuration
 
