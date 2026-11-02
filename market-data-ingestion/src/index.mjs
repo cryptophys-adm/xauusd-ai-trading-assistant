@@ -221,10 +221,12 @@ async function fetchTwelveData(env, interval = "5min", outputsize = MAX_OUTPUTSI
   endpoint.searchParams.set("outputsize", String(parsePositiveInt(outputsize, MAX_OUTPUTSIZE)));
   endpoint.searchParams.set("order", "desc");
   endpoint.searchParams.set("timezone", "UTC");
-  endpoint.searchParams.set("apikey", apiKey);
-
   const response = await fetch(endpoint, {
-    headers: { accept: "application/json", "user-agent": "Cryptophys-Market-Data-Ingestion/1.0" },
+    headers: {
+      accept: "application/json",
+      authorization: `apikey ${apiKey}`,
+      "user-agent": "Cryptophys-Market-Data-Ingestion/1.0"
+    },
     signal: AbortSignal.timeout(15000)
   });
   const bodyText = await response.text();
