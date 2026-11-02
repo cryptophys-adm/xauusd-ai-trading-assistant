@@ -196,7 +196,9 @@ export function calculateProphetR38Core(bars, options = {}) {
     schema_version: "cryptophys.prophet-r38-core.v1",
     source: {
       path: "pinescript/ssot/The-Prophet-v7.02-R38.txt",
-      source_sha256: "04deedcfbe09ec31379367c0388417ed499e508d",
+      source_git_blob_sha: "04deedcfbe09ec31379367c0388417ed499e508d",
+      source_sha256: null,
+      source_hash_status: "sha256_not_independently_verified",
       declared_version: "The Prophet v7.02 R38",
       imported_library: "cryptophys/CryptophysMizanLib/4"
     },
