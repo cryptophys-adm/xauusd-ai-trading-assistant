@@ -108,7 +108,14 @@ test("POST /pull calls Twelve Data with the bounded M5 bootstrap contract", asyn
   assert.equal(body.timeframes.M15.interval_minutes, 15);
   assert.equal(body.timeframes.H1.interval_minutes, 60);
   assert.equal(body.timeframes.H4.interval_minutes, 240);
-  assert.equal((await worker.fetch(new Request("https://market.example.com/latest"), testEnv)).status, 200);
+  assert.equal((await worker.fetch(new Request("https://market.example.com/latest", {
+    headers: { authorization: "Bearer test-secret" }
+  }), testEnv)).status, 200);
+});
+
+test("GET /latest requires the configured bearer secret", async () => {
+  const response = await worker.fetch(new Request("https://market.example.com/latest"), env());
+  assert.equal(response.status, 401);
 });
 
 test("health exposes configuration status but no secrets", async () => {
