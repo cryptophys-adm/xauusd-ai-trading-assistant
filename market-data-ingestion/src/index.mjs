@@ -288,6 +288,9 @@ const worker = {
     }
     if (request.method === "POST" && url.pathname === "/pull") return handlePull(request, env);
     if (request.method === "GET" && url.pathname === "/latest") {
+      if (!constantTimeEqual(getBearer(request), asString(env.MARKET_DATA_INGEST_SECRET))) {
+        return json({ error: "unauthorized" }, 401);
+      }
       const latest = await readLatest(env);
       return json(latest, latest.available ? 200 : 503);
     }
