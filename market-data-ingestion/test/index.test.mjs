@@ -94,13 +94,13 @@ test("POST /pull calls Twelve Data with the bounded M5 bootstrap contract", asyn
   const response = await worker.fetch(new Request("https://market.example.com/pull", {
     method: "POST", headers: { authorization: "Bearer test-secret" }
   }), env());
-  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
   assert.equal(requestedUrl.searchParams.get("symbol"), "XAU/USD");
   assert.equal(requestedUrl.searchParams.get("interval"), "5min");
   assert.equal(requestedUrl.searchParams.get("outputsize"), "300");
   assert.equal(requestedUrl.searchParams.get("timezone"), "UTC");
   assert.equal(requestedUrl.searchParams.has("apikey"), true);
-  const body = await response.json();
   assert.equal(body.schema_version, "cryptophys.market-data.v1");
   assert.equal(body.source.canonical_symbol, "OANDA:XAUUSD");
   assert.equal(body.timeframes.M5.candle_count, 300);
