@@ -345,7 +345,7 @@ function orderBlockEngine(bars, atr, er, volume, hasVolume, intensity, zScore, s
       buy_trade_ready: buyTradeReady, sell_trade_ready: sellTradeReady,
       buy_limit_level: buyTradeReady ? bestBuy.level : null, sell_limit_level: sellTradeReady ? bestSell.level : null,
       buy_target_level: buyTradeReady ? bestBullTarget.price : null, sell_target_level: sellTradeReady ? bestBearTarget.price : null,
-      active_order_blocks: zones.map(z => ({ ...z })),
+      active_order_block_zones: i === bars.length - 1 ? zones.map(z => ({ ...z })) : undefined,
       calculation_scope: "R38_SOURCE_DERIVED_ORDER_BLOCK_RANKING_PARTIAL",
       parity_status: "not_proven", trusted_evidence_allowed: false
     };
