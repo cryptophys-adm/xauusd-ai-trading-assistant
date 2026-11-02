@@ -11,6 +11,8 @@ const CACHE_KEY = "market-data:v1:OANDA:XAUUSD";
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 const MAX_OUTPUTSIZE = 5000;
 const INCREMENTAL_OUTPUTSIZE = 3;
+const BOOTSTRAP_STATE_KEY = "market-data:v1:bootstrap-state";
+const BOOTSTRAP_RETRY_MS = DAY_MS;
 const DAILY_CONTEXT_OUTPUTSIZE = 60;
 const WEEKLY_CONTEXT_OUTPUTSIZE = 60;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -264,7 +266,18 @@ async function pull(env) {
   const fetchedAt = new Date(nowMs).toISOString();
   const cached = await readCachedBundle(env);
   const cachedM5 = Array.isArray(cached?.timeframes?.M5?.candles) ? cached.timeframes.M5.candles : [];
-  const bootstrap = cachedM5.length < MAX_OUTPUTSIZE;
+  let bootstrapState = null;
+  if (env.MARKET_DATA_CACHE) {
+    try { bootstrapState = JSON.parse(await env.MARKET_DATA_CACHE.get(BOOTSTRAP_STATE_KEY) || "null"); } catch {}
+  }
+  const lastBootstrapAt = Date.parse(bootstrapState?.attempted_at || "");
+  const bootstrapRetryAllowed = !Number.isFinite(lastBootstrapAt) || nowMs - lastBootstrapAt >= BOOTSTRAP_RETRY_MS;
+  const bootstrap = cachedM5.length < MAX_OUTPUTSIZE && bootstrapRetryAllowed;
+  if (bootstrap && env.MARKET_DATA_CACHE) {
+    await env.MARKET_DATA_CACHE.put(BOOTSTRAP_STATE_KEY, JSON.stringify({
+      attempted_at: fetchedAt, status: "started"
+    }), { expirationTtl: 60 * 60 * 24 * 8 });
+  }
   const m5Payload = await fetchTwelveData(env, "5min", bootstrap ? MAX_OUTPUTSIZE : INCREMENTAL_OUTPUTSIZE);
   const incomingM5 = normalizeProviderPayload(m5Payload, nowMs, {
     durationMs: FIVE_MINUTES_MS,
@@ -272,12 +285,18 @@ async function pull(env) {
     minClosed: bootstrap ? 48 : 1
   });
   const m5 = mergeClosedCandles(cachedM5, incomingM5);
+  if (bootstrap && env.MARKET_DATA_CACHE) {
+    await env.MARKET_DATA_CACHE.put(BOOTSTRAP_STATE_KEY, JSON.stringify({
+      attempted_at: fetchedAt, status: m5.length >= MAX_OUTPUTSIZE ? "complete" : "insufficient_history",
+      returned_closed_m5: m5.length
+    }), { expirationTtl: 60 * 60 * 24 * 8 });
+  }
 
   // The 20-day daily CPR average and Prophet's default D1/W1 alignment require
   // native higher-timeframe warm-up history; M5-derived D1/W1 cannot supply it.
   const oldContext = cached?.context_timeframes || {};
   const needsDaily = !Array.isArray(oldContext.D1?.candles) ||
-    oldContext.D1.candles.length < DAILY_CONTEXT_OUTPUTSIZE ||
+    oldContext.D1.candles.length < 21 ||
     nowMs - Date.parse(oldContext.D1.candles.at(-1)?.close_time || 0) >= DAY_MS;
   const needsWeekly = !Array.isArray(oldContext.W1?.candles) ||
     oldContext.W1.candles.length < 51 ||
