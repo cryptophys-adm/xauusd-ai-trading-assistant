@@ -458,7 +458,7 @@ export function calculateProphetR38Core(bars, options = {}) {
       imported_library: "cryptophys/CryptophysMizanLib/4"
     },
     implementation_scope: "oscillator sensors, divergence/structure state machine, adaptive confirmation gate, and closed-bar HTF alignment diagnostic; excludes OB ranking/lifecycle, entry/TP/SL management, and chart-rendering behavior",
-    history_requirements: { M5: 101, chart_oscillator_slow_warmup: Math.max(slowLen, Math.round(smoothLen * 2.2) * 2) + Math.round(Math.sqrt(Math.round(smoothLen * 2.2) * 2)), kww_zscore_50: 50, efficiency_ratio_14: 15, volume_ratio_20: 21 },
+    history_requirements: { M5: 101, higher_timeframes: { M15: 51, H1: 51, H4: 51, D1: 51, W1: 51 }, chart_oscillator_slow_warmup: Math.max(slowLen, Math.round(smoothLen * 2.2) * 2) + Math.round(Math.sqrt(Math.round(smoothLen * 2.2) * 2)), kww_zscore_50: 50, efficiency_ratio_14: 15, volume_ratio_20: 21 },
     has_volume: hasVolume,
     outputs: result
   };
