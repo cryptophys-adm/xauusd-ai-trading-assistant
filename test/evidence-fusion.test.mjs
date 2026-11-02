@@ -168,3 +168,15 @@ test("rejects non-SHA256 provenance hashes", () => {
   assert.equal(result.valid, false);
   assert.ok(result.errors.includes("provenance_source_hash_must_be_sha256"));
 });
+
+test("rejects local calculations for a candle in the future (ported from PR #13)", () => {
+  const futureCandle = "2026-11-01T15:30:00.000Z";
+  const payload = { ...local("mizan"), candle_time: futureCandle, candle_key: "OANDA:XAUUSD:M5:" + futureCandle };
+  const result = validateLocalCalculation(payload, {}, now);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.includes("candle_time_in_future"));
+  // Within the 5-minute clock-skew allowance is still accepted.
+  const nearCandle = "2026-11-01T15:04:00.000Z";
+  const near = validateLocalCalculation({ ...local("mizan"), candle_time: nearCandle, candle_key: "x", computed_at: "2026-11-01T15:04:30.000Z" }, {}, now);
+  assert.ok(!near.errors.includes("candle_time_in_future"));
+});
