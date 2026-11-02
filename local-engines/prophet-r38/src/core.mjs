@@ -64,11 +64,13 @@ function efficiencyAt(src, end, len) {
   return path === 0 ? 0 : net / path;
 }
 function hurstAt(src, end, len) {
+  // Pine loop order is current bar toward older bars: src[i] / nz(src[i+1], src[i]).
   if (end < len) return 0.5;
   const ret = [];
-  for (let i = end - len + 1; i <= end; i++) {
-    const prior = src[i - 1] === null || src[i - 1] === undefined ? src[i] : src[i - 1];
-    ret.push(Math.log(src[i] / (prior || src[i])));
+  for (let offset = 0; offset < len; offset++) {
+    const current = src[end - offset];
+    const older = src[end - offset - 1];
+    ret.push(Math.log(current / (finite(older) && older !== 0 ? older : current)));
   }
   const mean = ret.reduce((a, b) => a + b, 0) / len;
   let cum = 0, max = 0, min = 0, varSum = 0;
@@ -100,15 +102,16 @@ function cycleAt(close, high, low, end, len) {
   const l = Math.min(...low.slice(end - len + 1, end + 1));
   return h === l ? 0 : (close[end] - l) / (h - l) - 0.5;
 }
-function atrAt(bars, end, len = 14) {
-  if (end + 1 < len) return null;
-  const tr = [];
-  for (let i = 0; i <= end; i++) {
+function atrSeries(bars, len = 14) {
+  const tr = [], out = [];
+  for (let i = 0; i < bars.length; i++) {
     const prevClose = i > 0 ? bars[i - 1].close : bars[i].close;
     tr.push(Math.max(bars[i].high - bars[i].low, Math.abs(bars[i].high - prevClose), Math.abs(bars[i].low - prevClose)));
+    if (i + 1 < len) out.push(null);
+    else if (i + 1 === len) out.push(tr.slice(0, len).reduce((a, b) => a + b, 0) / len);
+    else out.push((out[i - 1] * (len - 1) + tr[i]) / len); // Pine ta.atr uses Wilder RMA.
   }
-  const slice = tr.slice(end - len + 1, end + 1);
-  return slice.reduce((a, b) => a + b, 0) / len;
+  return out;
 }
 function crossover(a, b, i) {
   return i > 0 && finite(a[i]) && finite(b[i]) && finite(a[i - 1]) && finite(b[i - 1]) && a[i] > b[i] && a[i - 1] <= b[i - 1];
@@ -138,7 +141,8 @@ export function calculateProphetR38Core(bars, options = {}) {
   const volume = bars.map((b) => finite(b.volume) ? b.volume : null);
   const hasVolume = volume.some((v) => finite(v) && v > 0);
   const result = [];
-  const raw = [], fast = [], slow = [], core = [], zScore = [], hurst = [], er = [], volAnom = [], volRatio = [], atr = [];
+  const atr = atrSeries(bars, 14);
+  const raw = [], fast = [], slow = [], core = [], zScore = [], hurst = [], er = [], volAnom = [], volRatio = [];
   for (let i = 0; i < bars.length; i++) {
     const erNow = efficiencyAt(close, i, 14);
     const legacyAnom = volumeAnomalyAt(volume, i, 20);
@@ -154,7 +158,6 @@ export function calculateProphetR38Core(bars, options = {}) {
     er.push(erNow);
     volAnom.push(legacyAnom);
     volRatio.push(ratio);
-    atr.push(atrAt(bars, i, 14));
     const kww = kwwAt(close, i, 50);
     zScore.push(kww.z);
     hurst.push(hurstAt(close, i, 100));
