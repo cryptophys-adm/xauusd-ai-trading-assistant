@@ -91,3 +91,9 @@ The checked-in GMI imports `cryptophys/CryptophysMizanLib/4`, while `CryptophysM
 
 The webhook payload also embeds the secret directly into JSON string construction without an escaping step. The receiver must not assume arbitrary secret values are JSON-safe; keep the secret format restricted to a safe character set or change the Pine producer with explicit approval and test its emitted payload before relying on it.
 
+### Recovered Mizan dependency artifact
+
+The original Library artifact `CryptophysMizanLib_v4.pine` has now been materialized and hashed from its raw bytes. SHA-256 is `6c44d6bf2dbf7df525e2060cd166daf4b896c7d257ceb66fd787f4017880ceb3`, 73,727 bytes / 1,190 lines. This exactly matches the previously recorded audit hash for the Mizan v4 artifact, so the raw artifact itself is now independently recovered. Its internal header still says “Mizan Unified Library v1.6”; the published import path used by GMI is `cryptophys/CryptophysMizanLib/4`. Keep both facts in provenance: filename/import revision and source's internal title are different identifiers. Do not claim the repo's normalized `CryptophysMizanLib-uploaded.txt` is byte-identical to this raw artifact unless its own raw-byte SHA-256 is checked.
+
+A separate Library artifact `GMI_Omega_Build_v2.7_MIZANLIB_V4_CW10003_FIXED.pine` hashes to `eb540c37a5e5879b9bcab01097ac1d63ef3b5419f0f223d3023a8e4c0cfada78` (171,572 bytes / 2,818 lines). It is not the owner-designated installed source; retain it only as a historical comparison artifact, not as a substitute for the repository's GMI source.
+
