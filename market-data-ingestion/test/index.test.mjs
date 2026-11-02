@@ -244,6 +244,8 @@ test("GET /engine-shadow runs the partial Prophet kernel from the cached bundle 
   assert.equal(body.calculation_allowed_for_trusted_evidence, false);
   assert.equal(body.outputs.length, 20);
   assert.ok(Object.hasOwn(body.outputs.at(-1), "htf_alignment"));
+  assert.ok(Object.hasOwn(body.outputs.at(-1), "order_blocks"));
+  assert.equal(body.outputs.at(-1).order_blocks.trusted_evidence_allowed, false);
 });
 
 test("GET /engine-shadow refuses to pretend Mizan/GMI local calculators exist", async () => {
