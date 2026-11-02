@@ -342,8 +342,24 @@ async function readLatest(env) {
   try {
     const bundle = JSON.parse(raw);
     const fetchedAt = Date.parse(bundle.fetched_at);
-    if (!Number.isFinite(fetchedAt) || Date.now() - fetchedAt > 15 * 60 * 1000) {
+    const now = Date.now();
+    if (!Number.isFinite(fetchedAt) || now - fetchedAt > 15 * 60 * 1000) {
       return { available: false, reason: "cached_market_data_stale", fetched_at: bundle.fetched_at || null };
+    }
+    const latestCandleAt = Date.parse(bundle.latest_closed_m5_close_time || "");
+    if (!Number.isFinite(latestCandleAt)) {
+      return { available: false, reason: "latest_closed_candle_time_missing" };
+    }
+    if (latestCandleAt > now + 5 * 60 * 1000) {
+      return { available: false, reason: "latest_closed_candle_time_in_future" };
+    }
+    if (now - latestCandleAt > 15 * 60 * 1000) {
+      return {
+        available: false,
+        reason: "latest_closed_market_candle_stale",
+        latest_closed_m5_close_time: bundle.latest_closed_m5_close_time,
+        candle_age_ms: now - latestCandleAt
+      };
     }
     return { available: true, ...bundle };
   } catch {
