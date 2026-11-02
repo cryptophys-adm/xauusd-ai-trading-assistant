@@ -145,6 +145,54 @@ function pivotLowAt(src, end, left, right) {
   }
   return { value: v, pivotIndex: pivot };
 }
+const HTF_WEIGHTS = Object.freeze({ M15: 0.10, H1: 0.15, H4: 0.25, D1: 0.30, W1: 0.20 });
+const HTF_MINUTES = Object.freeze({ M15: 15, H1: 60, H4: 240, D1: 1440, W1: 10080 });
+function htfCloseTime(bar, timeframe) {
+  if (bar.close_time && finite(Date.parse(bar.close_time))) return Date.parse(bar.close_time);
+  return Date.parse(bar.open_time) + HTF_MINUTES[timeframe] * 60_000;
+}
+function buildHtfAlignment(chartBars, chartZ, higherTimeframes = {}, options = {}) {
+  const names = Object.keys(HTF_WEIGHTS);
+  const closedOnly = options.gmi_closed_only !== false;
+  const series = {};
+  for (const tf of names) {
+    const htfBars = Array.isArray(higherTimeframes[tf]) ? higherTimeframes[tf] : [];
+    const closes = htfBars.map(b => b.close);
+    series[tf] = { bars: htfBars, z: closes.map((_, i) => i < 50 ? null : kwwAt(closes, i, 50).z) };
+  }
+  return chartBars.map((chartBar, i) => {
+    const chartTime = Date.parse(chartBar.open_time);
+    const zByTf = {}, missingTimeframes = [];
+    for (const tf of names) {
+      const { bars, z } = series[tf];
+      let selected = -1;
+      const containing = bars.findIndex(b => {
+        const start = Date.parse(b.open_time), end = htfCloseTime(b, tf);
+        return finite(start) && finite(end) && start <= chartTime && chartTime < end;
+      });
+      if (containing >= 0) selected = closedOnly ? containing - 1 : containing;
+      else {
+        for (let j = 0; j < bars.length; j++) if (htfCloseTime(bars[j], tf) <= chartTime) selected = j;
+      }
+      const value = selected >= 0 ? z[selected] : null;
+      zByTf[tf] = finite(value) ? value : null;
+      if (!finite(value)) missingTimeframes.push(tf);
+    }
+    const globalZ = names.reduce((sum, tf) => sum + (finite(zByTf[tf]) ? zByTf[tf] : 0) * HTF_WEIGHTS[tf], 0);
+    const z = chartZ[i];
+    const alignmentCode = !finite(z) ? 0 : z > 0 && globalZ > 0 ? 1 : z < 0 && globalZ < 0 ? -1 : z === 0 || globalZ === 0 ? 0 : 2;
+    return {
+      mode: closedOnly ? "previous_closed_htf_bar" : "forming_htf_bar_repaint_risk",
+      z_by_timeframe: zByTf,
+      weighted_global_z: globalZ,
+      alignment_code: alignmentCode,
+      alignment_text: alignmentCode === 1 ? "ALIGNED BULLISH" : alignmentCode === -1 ? "ALIGNED BEARISH" : alignmentCode === 2 ? "DIRECTION CONFLICT" : "NEUTRAL / N/A",
+      missing_timeframes: missingTimeframes,
+      data_status: missingTimeframes.length ? "blocked_missing_or_warmup_htf_history" : "history_ready_for_shadow",
+      trusted_evidence_allowed: false
+    };
+  });
+}
 function structureStateMachine(bars, oscillator, volumeRatio, hasVolume, atr, options = {}) {
   const legacy = options.legacy_mode === true;
   const stateMaxAge = options.state_max_age ?? 50;
@@ -389,13 +437,14 @@ export function calculateProphetR38Core(bars, options = {}) {
     return cf !== null && cm !== null && cs !== null && cf > 0 && cm > 0 && cs > 0 ? 3 : cf !== null && cm !== null && cs !== null && cf < 0 && cm < 0 && cs < 0 ? -3 : 0;
   });
   const confirmation = confirmationGate(bars, fast, slow, zScore, volRatio, hasVolume, structure, cycles, options);
+  const htfAlignment = buildHtfAlignment(bars, zScore, options.higher_timeframes, options);
   for (let i = 0; i < bars.length; i++) {
     const f = fast[i], s = slow[i];
     const buyCandidate = bars[i].confirmed === true && crossover(fast, slow, i) && f < -0.15;
     const sellCandidate = bars[i].confirmed === true && crossunder(fast, slow, i) && f > 0.15;
     const cycle = [cycleAt(close, high, low, i, fastLen), cycleAt(close, high, low, i, midLen), cycleAt(close, high, low, i, slowLen)];
     const intensity = cycle.every((x) => x !== null && x > 0) ? 3 : cycle.every((x) => x !== null && x < 0) ? -3 : 0;
-    const d = { ...bars[i], index: i, structure: structure[i], confirmation: confirmation[i], oscillator: { fast: f, slow: s, core: core[i], raw_composite: raw[i] }, sensors: { kww_zscore_50: zScore[i], hurst_rs_100: hurst[i], efficiency_ratio_14: er[i], volume_anomaly_20: volAnom[i], volume_ratio_20: volRatio[i], atr14: atr[i], cycle_intensity: intensity }, events: { raw_buy_cross_candidate: buyCandidate, raw_sell_cross_candidate: sellCandidate }, calculation_scope: "R38_SOURCE_DERIVED_OSCILLATOR_STRUCTURE_CONFIRMATION_PARTIAL", parity_status: "not_proven", trusted_evidence_allowed: false };
+    const d = { ...bars[i], index: i, structure: structure[i], confirmation: confirmation[i], htf_alignment: htfAlignment[i], oscillator: { fast: f, slow: s, core: core[i], raw_composite: raw[i] }, sensors: { kww_zscore_50: zScore[i], hurst_rs_100: hurst[i], efficiency_ratio_14: er[i], volume_anomaly_20: volAnom[i], volume_ratio_20: volRatio[i], atr14: atr[i], cycle_intensity: intensity }, events: { raw_buy_cross_candidate: buyCandidate, raw_sell_cross_candidate: sellCandidate }, calculation_scope: "R38_SOURCE_DERIVED_OSCILLATOR_STRUCTURE_CONFIRMATION_HTF_PARTIAL", parity_status: "not_proven", trusted_evidence_allowed: false };
     result.push(d);
   }
   return {
@@ -408,7 +457,7 @@ export function calculateProphetR38Core(bars, options = {}) {
       declared_version: "The Prophet v7.02 R38",
       imported_library: "cryptophys/CryptophysMizanLib/4"
     },
-    implementation_scope: "oscillator sensors, divergence/structure state machine, and adaptive confirmation gate; excludes HTF alignment, OB ranking/lifecycle, entry/TP/SL management, and chart-rendering behavior",
+    implementation_scope: "oscillator sensors, divergence/structure state machine, adaptive confirmation gate, and closed-bar HTF alignment diagnostic; excludes OB ranking/lifecycle, entry/TP/SL management, and chart-rendering behavior",
     history_requirements: { M5: 101, chart_oscillator_slow_warmup: Math.max(slowLen, Math.round(smoothLen * 2.2) * 2) + Math.round(Math.sqrt(Math.round(smoothLen * 2.2) * 2)), kww_zscore_50: 50, efficiency_ratio_14: 15, volume_ratio_20: 21 },
     has_volume: hasVolume,
     outputs: result
