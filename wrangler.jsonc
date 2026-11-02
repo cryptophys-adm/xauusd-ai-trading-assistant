@@ -5,7 +5,7 @@
   "compatibility_date": "2026-10-31",
   "workers_dev": true,
   "triggers": {
-    "crons": ["*/30 * * * *"]
+    "crons": ["6 * * * *"]
   },
   "ai": {
     "binding": "AI"
@@ -14,7 +14,8 @@
     {
       "binding": "DB",
       "database_name": "xauusd-signals",
-      "database_id": "ff99b940-254e-4d44-ac1d-bccb9ed18f6e"
+      "database_id": "ff99b940-254e-4d44-ac1d-bccb9ed18f6e",
+      "migrations_dir": "migrations"
     }
   ],
   "kv_namespaces": [

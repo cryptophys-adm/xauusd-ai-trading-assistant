@@ -10,7 +10,13 @@
 No production release may be declared complete while a mandatory requirement is missing, failing, unverified, or waived without an explicit documented approval.
 
 ## Gate A — Architecture and scope
-- [ ] Evidence Fusion & Orchestration is the canonical convergence point for webhook evidence, news evidence/news-analysis output, and local calculation outputs.
+- [ ] The physical Worker topology is explicit: target 9 total (8 core Workers + 1 separate news-ingestion Worker), with 2 existing Workers retained and 7 core Workers planned.
+- [ ] Core Worker names are explicit: `xauusd-tradingview-pull-adapter`, `xauusd-pull-orchestrator`, `xauusd-market-data-normalizer`, `xauusd-mizan-engine`, `xauusd-prophet-engine`, `xauusd-gmi-engine`, `xauusd-confluence-controller`, and `xauusd-ai-trading-assistant`.
+- [ ] `xauusd-fundamental-news-ingestion` remains a separate ninth Worker; `xauusd-ai-trading-assistant` remains core Worker #8 with all existing AI/D1/KV bindings and model/source contracts preserved.
+- [ ] Every required Worker is listed by exact name, purpose, environment, active version, bindings/secrets, quota budget, health status, and rollback target.
+- [ ] No unapproved extra Worker or deprecated per-timeframe Worker fleet is deployed.
+
+- [ ] `xauusd-confluence-controller` is the canonical convergence point for webhook evidence, news evidence/news-analysis output, and local calculation outputs; it passes validated evidence to the existing AI Engine.
 - [ ] Analyst → Counselor → Reasoner sequence is wired as specified; Counselor sees fused evidence, not merely an isolated summary.
 - [ ] The eight logical responsibilities and no-container baseline are respected; no deprecated per-timeframe Worker fleet is reintroduced.
 - [ ] Advisory-only behavior is enforced; there is no broker integration or automatic order execution.
@@ -21,6 +27,7 @@ No production release may be declared complete while a mandatory requirement is 
 - [ ] Symbol, timeframe, UTC candle timestamps, correlation key, source/version, provenance and freshness are validated.
 - [ ] Same-candle evidence is matched correctly; late, duplicated, conflicting, stale and malformed records are handled deterministically.
 - [ ] Required evidence policy and degraded/wait behavior are explicit.
+- [ ] Timeframe candle-age windows and news/local-calculation freshness thresholds are explicitly approved against actual source timestamp semantics; provisional implementation values do not count as approval.
 - [ ] Local calculation results have reproducible parameters and version identifiers.
 - [ ] Pine parity is demonstrated for every feature claimed as supported; unsupported features are not misrepresented as parity.
 - [ ] No invented, placeholder, or stale values can silently become production evidence.
@@ -86,4 +93,4 @@ No production release may be declared complete while a mandatory requirement is 
 
 ## Current baseline status
 
-As of 2026-11-01, the existing AI and news Workers and their Cloudflare resources are registered/deployed, but the full fusion of local calculation outputs and completed news-analysis output has not been proven. End-to-end runtime health could not be verified from the inspection environment. Therefore, **the product must not be marked PRODUCTION COMPLETE** until the missing integration and all acceptance gates above are verified.
+As of 2026-11-02, the AI Worker and news-ingestion Worker remain deployed, and the isolated preview contract/E2E workflow has passed on the feature branch. The test suite now verifies that both the completed news analysis and each underlying article are within the preceding hour, and that duplicate articles are rejected. This does **not** establish real provider recovery or full AI-chain acceptance with fresh live news and Pine-parity outputs. Read-only Cloudflare API verification confirms the production AI Worker still uses `*/30 * * * *`, the production news ingestion Worker uses `5 * * * *`, production D1 `xauusd-signals` does not yet contain `analysis_runs`, and preview D1 does contain it. No production migration or deployment was performed. Local calculation engines and production provenance allowlists remain unapproved. Therefore, **the product must not be marked PRODUCTION COMPLETE** until the missing integration and all acceptance gates above are verified.

@@ -7,18 +7,20 @@
 
 ## 1. Architectural decision
 
-The canonical convergence point is **Evidence Fusion & Orchestration**, a logical layer inside the existing `xauusd-ai-trading-assistant` Worker unless measurement later proves a separate Worker is necessary. It sits after source ingestion and deterministic local calculations, and before the Analyst/Counselor/Reasoner stages.
+The canonical convergence point is **Confluence & Data-Request Controller**, deployed as core Worker #7, `xauusd-confluence-controller`. It validates and fuses evidence after source ingestion/normalization and deterministic local calculations, then passes a versioned evidence bundle to core Worker #8, the existing `xauusd-ai-trading-assistant`, for Analyst → Counselor → Reasoner. The AI Worker keeps its existing bindings and model contract; it does not replace the Confluence Controller.
 
 It must combine and validate:
 1. TradingView webhook evidence (currently Prophet R38, Prophet R37 SSOT, and GMI v12.70).
 2. Fundamental news evidence from `xauusd-fundamental-news-ingestion`, including the timestamped output of news analysis when available.
 3. Deterministic local calculation outputs (Mizan, Prophet, GMI) for the same symbol/timeframe/candle context.
 
+**Implementation gap:** the current feature branch still implements the initial evidence-fusion receiver within `xauusd-ai-trading-assistant`. The target topology places canonical fusion in the separate `xauusd-confluence-controller` Worker and sends its validated bundle to the AI Worker. This physical boundary and authenticated handoff remain to be implemented; do not treat the target topology as deployed.
+
 The existing code's `runAnalysis()` is the nearest implementation seam. Its current webhook gate requires the three configured webhook sources for one `candle_key`; it fetches news evidence and then calls Analyst → Counselor → Reasoner. That is a foundation, **not proof that local calculation outputs or the completed standalone news-analysis output are already integrated**.
 
 ## 2. Target logical topology
 
-The target has eight logical responsibilities. This is not a mandate to deploy eight separate physical Workers; consolidate where supported by CPU, quotas, isolation, and operational evidence. No container is part of the baseline.
+The target has **eight core physical Workers plus one separate news-ingestion Worker: nine physical Workers total**. The eight numbered core responsibilities below map one-to-one to eight core Worker deployments; `xauusd-fundamental-news-ingestion` is retained separately as an upstream producer. No container is part of the baseline.
 
 1. **TradingView Pull Adapter** — TypeScript Worker/client; use only verified MCP/data-tool capabilities and documented response contracts.
 2. **Pull Orchestrator** — TypeScript; schedule or request pulls, enforce bounded retries and budget/cooldown rules.
@@ -29,7 +31,27 @@ The target has eight logical responsibilities. This is not a mandate to deploy e
 7. **Evidence Fusion & Data-Request Controller** — canonical convergence point; validate provenance, freshness, completeness, same-candle identity, conflicts, and data-request policy.
 8. **AI Engine** — the existing `xauusd-ai-trading-assistant` Worker and its Analyst → Counselor → Reasoner chain, with existing resource bindings preserved.
 
-The existing `xauusd-fundamental-news-ingestion` Worker remains an upstream producer/service and is not a reason to recreate the deprecated timeframe-worker fleet.
+The existing `xauusd-fundamental-news-ingestion` Worker remains a separate ninth physical Worker and upstream producer/service; it is not counted among the eight core Workers. Do not recreate the deprecated timeframe-worker fleet.
+
+## 3. Explicit physical Worker count and deployment topology
+
+**Target: 9 physical Cloudflare Workers total = 8 core Workers + 1 separate news-ingestion Worker.** Existing deployments retained: `xauusd-fundamental-news-ingestion` and `xauusd-ai-trading-assistant`. The other seven core Workers are planned and must not be described as deployed until their own release gates pass.
+
+| Core # | Physical Worker | Status | Responsibilities |
+|---|---|---|---|
+| 1 | `xauusd-tradingview-pull-adapter` | Planned | TradingView/data-source adapter; only documented and verified data capabilities may be used. |
+| 2 | `xauusd-pull-orchestrator` | Planned | Closed-candle scheduling, pull coordination, bounded retries, cooldowns and quota budgets. |
+| 3 | `xauusd-market-data-normalizer` | Planned | Canonical symbols/timeframes/timestamps, candle boundaries, numeric validation and provenance. |
+| 4 | `xauusd-mizan-engine` | Planned | Deterministic MizanLib calculations; source/version and parity evidence required. |
+| 5 | `xauusd-prophet-engine` | Planned | Deterministic Prophet calculations; exact source/version and parity evidence required. |
+| 6 | `xauusd-gmi-engine` | Planned | Deterministic GMI calculations; exact source/version and parity evidence required. |
+| 7 | `xauusd-confluence-controller` | Planned | Canonical evidence fusion, freshness/completeness/provenance/conflict checks, and bounded additional-data requests. |
+| 8 | `xauusd-ai-trading-assistant` | Existing production | AI Engine: preserves `AI`, `DB`, `SIGNAL_CACHE`, `WEBHOOK_BUFFER`, `KNOWLEDGE_BASE`, model variables, `REQUIRED_SOURCES`, and Analyst → Counselor → Reasoner. |
+| Separate | `xauusd-fundamental-news-ingestion` | Existing production | News ingestion and completed news-analysis evidence; remains outside the eight core Workers. |
+
+Thus the target is **8 core Workers + 1 news Worker = 9 physical Workers**. The AI Engine and news-ingestion Worker must remain deployed; their names and existing production bindings/resources are not to be replaced. Evidence fusion is a separate core Worker (#7), while the existing AI Worker consumes its validated evidence bundle. No containers and no deprecated per-timeframe Worker fleet.
+
+The market-data adapter must not be enabled until source/API/MCP capabilities, authentication, fields, quotas and failure behavior are verified. The three calculation Workers must not claim Pine parity until exact source baselines and feature-level fixtures pass. Every planned Worker requires preview acceptance, resource/secret/quota inventory, health/readiness checks, rollback target and recorded acceptance evidence before production deployment. Do not silently reduce the physical count or combine the eight core deployments without a reviewed architecture decision.
 
 ## 3. Required processing order
 
