@@ -1,4 +1,5 @@
 import { buildLocalEngineInput, buildLocalEngineReadiness } from "./engine-inputs.mjs";
+import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -439,6 +440,86 @@ const worker = {
       const latest = await readLatest(env);
       if (!latest.available) return json(latest, 503);
       return json(buildLocalEngineInput(latest, engine), 200);
+    }
+    if (request.method === "GET" && url.pathname === "/engine-shadow") {
+      if (!constantTimeEqual(getBearer(request), asString(env.MARKET_DATA_INGEST_SECRET))) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      const engine = (url.searchParams.get("engine") || "").toLowerCase();
+      if (!["mizan", "prophet", "gmi"].includes(engine)) {
+        return json({ error: "engine_required", allowed_engines: ["mizan", "prophet", "gmi"] }, 400);
+      }
+      const latest = await readLatest(env);
+      if (!latest.available) return json(latest, 503);
+      const contract = buildLocalEngineInput(latest, engine);
+      if (engine !== "prophet") {
+        return json({
+          worker: WORKER_NAME,
+          engine,
+          engine_shadow_status: "blocked_no_local_calculator",
+          calculation_status: contract.calculation_status,
+          data_status: contract.data_status,
+          history_gaps: contract.history_gaps,
+          unavailable_inputs: contract.unavailable_inputs,
+          missing_dependencies: contract.missing_dependencies,
+          calculation_allowed_for_trusted_evidence: false,
+          parity_status: "not_proven"
+        }, 501);
+      }
+      if (contract.data_status !== "history_ready_for_shadow") {
+        return json({
+          worker: WORKER_NAME,
+          engine,
+          engine_shadow_status: "blocked_insufficient_history",
+          data_status: contract.data_status,
+          history_gaps: contract.history_gaps,
+          calculation_allowed_for_trusted_evidence: false,
+          parity_status: "not_proven"
+        }, 503);
+      }
+      const htf = {
+        M15: latest.timeframes?.M15?.candles || [],
+        H1: latest.timeframes?.H1?.candles || [],
+        H4: latest.timeframes?.H4?.candles || [],
+        D1: latest.context_timeframes?.D1?.candles || [],
+        W1: latest.context_timeframes?.W1?.candles || []
+      };
+      const bars = (latest.timeframes?.M5?.candles || []).map((bar) => ({ ...bar, confirmed: true }));
+      const calculated = calculateProphetR38Core(bars, {
+        timeframe_minutes: 5,
+        gmi_closed_only: true,
+        higher_timeframes: htf
+      });
+      return json({
+        worker: WORKER_NAME,
+        engine,
+        engine_shadow_status: "partial_calculation_available",
+        calculation_status: "partial_unverified_kernel",
+        implementation_scope: calculated.implementation_scope,
+        source: calculated.source,
+        symbol: latest.source?.canonical_symbol || "OANDA:XAUUSD",
+        provider: latest.source?.provider || null,
+        fetched_at: latest.fetched_at,
+        latest_closed_m5_close_time: latest.latest_closed_m5_close_time,
+        history_requirements: calculated.history_requirements,
+        input_history_counts: {
+          M5: bars.length,
+          M15: htf.M15.length,
+          H1: htf.H1.length,
+          H4: htf.H4.length,
+          D1: htf.D1.length,
+          W1: htf.W1.length
+        },
+        output_count: Math.min(20, calculated.outputs.length),
+        outputs: calculated.outputs.slice(-20),
+        parity_status: "not_proven",
+        calculation_allowed_for_trusted_evidence: false,
+        warnings: [
+          "This is a partial local R38 kernel, not the full R38 engine.",
+          "TradingView fixture parity has not been demonstrated.",
+          "Never use these outputs as trusted evidence or live trade instructions."
+        ]
+      }, 200);
     }
     if (request.method === "GET" && url.pathname === "/latest") {
       if (!constantTimeEqual(getBearer(request), asString(env.MARKET_DATA_INGEST_SECRET))) {
