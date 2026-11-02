@@ -193,6 +193,164 @@ function buildHtfAlignment(chartBars, chartZ, higherTimeframes = {}, options = {
     };
   });
 }
+function orderBlockEngine(bars, atr, er, volume, hasVolume, intensity, zScore, structure, confirmation, htfAlignment, options = {}) {
+  const pivotLen = options.ob_length ?? 5;
+  const maxActive = options.ob_max_active ?? 30;
+  const maxAge = options.ob_max_age ?? 120;
+  const maxDistanceAtr = options.key_level_max_distance_atr ?? 3.0;
+  const minScore = options.key_level_min_score ?? 55.0;
+  const touchLookback = options.key_level_touch_lookback ?? 40;
+  const retestBandAtr = options.ob_retest_band_atr ?? 0.15;
+  const maxZoneAtr = options.ob_zone_max_atr ?? 3.0;
+  const mitigationBufferAtr = options.ob_mitigation_buffer_atr ?? 0.25;
+  const highVolMultiplier = options.ob_high_volume_multiplier ?? 1.5;
+  const dynamicVolume = options.ob_dynamic_volume !== false;
+  const allowInside = options.ob_allow_inside !== false;
+  const closeOnly = options.ob_mitigation === "Close";
+  const stopBufferAtr = options.tm_stop_buffer_atr ?? 0.5;
+  const rrMin = options.tm_rr_min ?? 2.0;
+  const rrBasis = options.tm_rr_basis ?? "EDGE";
+  const mintick = options.mintick ?? 0.01;
+  const zones = [];
+  let priorDirectionState = 0;
+  return bars.map((bar, i) => {
+    const atrNow = atr[i], currentVolume = volume[i];
+    if (i >= pivotLen) {
+      const recentHighs = bars.slice(i - pivotLen + 1, i + 1).map(b => b.high);
+      const recentLows = bars.slice(i - pivotLen + 1, i + 1).map(b => b.low);
+      if (bars[i - pivotLen].high > Math.max(...recentHighs)) priorDirectionState = 0;
+      else if (bars[i - pivotLen].low < Math.min(...recentLows)) priorDirectionState = 1;
+    }
+    const volumePivot = pivotHighAt(volume, i, pivotLen, pivotLen);
+    const newBull = bar.confirmed === true && volumePivot !== null && priorDirectionState === 1;
+    const newBear = bar.confirmed === true && volumePivot !== null && priorDirectionState === 0;
+    if ((newBull || newBear) && finite(atrNow)) {
+      const pivotIndex = volumePivot.pivotIndex;
+      const sourceBar = bars[pivotIndex], sourceAtr = finite(atr[pivotIndex]) ? atr[pivotIndex] : atrNow;
+      const sourceMid = (sourceBar.high + sourceBar.low) / 2;
+      const spanCap = Math.max(sourceAtr * maxZoneAtr, mintick);
+      const dir = newBull ? 1 : -1;
+      const top = dir === -1 ? sourceBar.high : Math.min(sourceMid, sourceBar.low + spanCap);
+      const bottom = dir === -1 ? Math.max(sourceMid, sourceBar.high - spanCap) : sourceBar.low;
+      const span = Math.max(top - bottom, mintick);
+      const volumeSma = smaAt(volume, pivotIndex, 20);
+      const sourceNoise = finite(er[pivotIndex]) ? 1 - er[pivotIndex] : 0;
+      const adjustedMultiplier = dynamicVolume ? Math.max(1, highVolMultiplier * (1 - sourceNoise * 0.3)) : highVolMultiplier;
+      const highVolume = volumeSma !== null && finite(volume[pivotIndex]) && volume[pivotIndex] > volumeSma * adjustedMultiplier;
+      zones.unshift({
+        dir, top, bottom, mid: (top + bottom) / 2, initialSpan: span,
+        atrLocked: Math.max(sourceAtr, mintick), born: i, sourceIndex: pivotIndex, highVolume
+      });
+    }
+
+    if (bar.confirmed === true) {
+      for (let j = zones.length - 1; j >= 0; j--) {
+        const z = zones[j];
+        const allowUpdate = i > z.born;
+        if (allowUpdate) {
+          const buffer = Math.max(z.atrLocked * mitigationBufferAtr, 0);
+          if (z.dir === -1 && bar.high > z.bottom && bar.low <= z.top) z.bottom = Math.min(z.top, Math.max(z.bottom, bar.high));
+          else if (z.dir === 1 && bar.low < z.top && bar.high >= z.bottom) z.top = Math.max(z.bottom, Math.min(z.top, bar.low));
+          z.mid = (z.top + z.bottom) / 2;
+          const consumed = z.top - z.bottom <= mintick;
+          const brokenWick = z.dir === -1 ? bar.high >= z.top : bar.low <= z.bottom;
+          const brokenClose = z.dir === -1 ? bar.close > z.top + buffer : bar.close < z.bottom - buffer;
+          const invalid = allowUpdate && (consumed || (closeOnly ? brokenClose : (brokenWick || brokenClose)));
+          if (invalid || i - z.born > maxAge) zones.splice(j, 1);
+        } else if (i - z.born > maxAge) zones.splice(j, 1);
+      }
+      for (const dir of [1, -1]) {
+        let count = zones.filter(z => z.dir === dir).length;
+        for (let j = zones.length - 1; j >= 0 && count > maxActive; j--) {
+          if (zones[j].dir === dir) { zones.splice(j, 1); count--; }
+        }
+      }
+    }
+
+    const structureNow = structure[i];
+    const bullFresh = structureNow.bull_structure_event_bar !== null && i - structureNow.bull_structure_event_bar <= (options.struct_fresh_bars ?? 6);
+    const bearFresh = structureNow.bear_structure_event_bar !== null && i - structureNow.bear_structure_event_bar <= (options.struct_fresh_bars ?? 6);
+    const alignment = htfAlignment[i].alignment_code;
+    const macroBull = zScore[i] > 0, macroBear = zScore[i] < 0;
+    const macroCycleConflict = (intensity[i] === 3 && macroBear) || (intensity[i] === -3 && macroBull);
+    const pgCycleConflict = (intensity[i] === 3 && (alignment === -1 || alignment === 2)) || (intensity[i] === -3 && (alignment === 1 || alignment === 2));
+    const contextConflict = macroCycleConflict || pgCycleConflict;
+    const biasDir = intensity[i] === 3 ? 1 : intensity[i] === -3 ? -1 : 0;
+    const touchBand = finite(atrNow) ? atrNow * retestBandAtr : 0;
+    let bestBuy = null, bestSell = null, bestBullTarget = null, bestBearTarget = null;
+    let activeBull = 0, activeBear = 0;
+    for (const z of zones) {
+      const age = i - z.born;
+      let touches = 0, lastTouchBack = -10000;
+      for (let back = 1; back <= touchLookback; back++) {
+        const k = i - back;
+        if (k >= 0 && bars[k].low <= z.top + touchBand && bars[k].high >= z.bottom - touchBand) {
+          if (back - lastTouchBack >= 3) { touches++; lastTouchBack = back; }
+        }
+      }
+      const widthAtr = finite(atrNow) && atrNow > 0 ? (z.top - z.bottom) / Math.max(atrNow, mintick) : Infinity;
+      const buyDistance = bar.close - z.top, sellDistance = z.bottom - bar.close;
+      const score = (distance, structureFresh, cycleAligned, macroAligned, pgAligned) => {
+        const safeAtr = Math.max(finite(atrNow) ? atrNow : mintick, mintick);
+        const distanceScore = 25 * Math.max(0, 1 - Math.max(distance, 0) / (safeAtr * maxDistanceAtr));
+        const ageScore = 20 * Math.max(0, 1 - age / Math.max(maxAge, 1));
+        const retestScore = 15 * Math.min(touches, 3) / 3;
+        const widthScore = 15 * Math.max(0, 1 - widthAtr / 3);
+        return distanceScore + ageScore + retestScore + widthScore + (structureFresh ? 10 : 4) + (cycleAligned ? 5 : 0) + (macroAligned ? 5 : 0) + (pgAligned ? 5 : 0);
+      };
+      const entryEligible = z.dir === 1
+        ? biasDir === 1 && bar.close > (allowInside ? z.mid : z.top) && bar.close - z.top <= (finite(atrNow) ? atrNow : 0) * maxDistanceAtr
+        : biasDir === -1 && bar.close < (allowInside ? z.mid : z.bottom) && z.bottom - bar.close <= (finite(atrNow) ? atrNow : 0) * maxDistanceAtr;
+      if (z.dir === 1) activeBull++; else activeBear++;
+      if (entryEligible && z.dir === 1) {
+        const s = score(buyDistance, bullFresh, intensity[i] === 3, macroBull, alignment === 1);
+        if (!bestBuy || s > bestBuy.score) bestBuy = { level: z.mid, score: s, top: z.top, bottom: z.bottom, born: z.born };
+      }
+      if (entryEligible && z.dir === -1) {
+        const s = score(sellDistance, bearFresh, intensity[i] === -3, macroBear, alignment === -1);
+        if (!bestSell || s > bestSell.score) bestSell = { level: z.mid, score: s, top: z.top, bottom: z.bottom, born: z.born };
+      }
+      const targetScore = (distanceAtr) => 20 * Math.max(0, 1 - age / Math.max(maxAge, 1)) + 15 * Math.min(touches, 3) / 3 + 15 * Math.max(0, 1 - widthAtr / 3) + 25 * Math.max(0, 1 - Math.max(distanceAtr, 0) / 6);
+      if (z.dir === -1 && intensity[i] === 3 && z.bottom > bar.close) {
+        const s = targetScore((z.bottom - bar.close) / Math.max(finite(atrNow) ? atrNow : mintick, mintick));
+        if (!bestBullTarget || s > bestBullTarget.score) bestBullTarget = { price: z.bottom, score: s };
+      }
+      if (z.dir === 1 && intensity[i] === -3 && z.top < bar.close) {
+        const s = targetScore((bar.close - z.top) / Math.max(finite(atrNow) ? atrNow : mintick, mintick));
+        if (!bestBearTarget || s > bestBearTarget.score) bestBearTarget = { price: z.top, score: s };
+      }
+    }
+    const buyObPass = intensity[i] === 3 && bestBuy !== null && bestBuy.score >= minScore;
+    const sellObPass = intensity[i] === -3 && bestSell !== null && bestSell.score >= minScore;
+    const stopBuy = bestBuy ? bestBuy.bottom - (finite(atrNow) ? atrNow : 0) * stopBufferAtr : null;
+    const stopSell = bestSell ? bestSell.top + (finite(atrNow) ? atrNow : 0) * stopBufferAtr : null;
+    const buyRef = bestBuy ? (rrBasis === "EDGE" ? bestBuy.top : bestBuy.level) : null;
+    const sellRef = bestSell ? (rrBasis === "EDGE" ? bestSell.bottom : bestSell.level) : null;
+    const buyRisk = buyRef !== null && stopBuy !== null ? buyRef - stopBuy : null;
+    const sellRisk = sellRef !== null && stopSell !== null ? stopSell - sellRef : null;
+    const buyReward = bestBullTarget && buyRef !== null ? bestBullTarget.price - buyRef : null;
+    const sellReward = bestBearTarget && sellRef !== null ? sellRef - bestBearTarget.price : null;
+    const buyRR = buyRisk > 0 && buyReward > 0 ? buyReward / buyRisk : null;
+    const sellRR = sellRisk > 0 && sellReward > 0 ? sellReward / sellRisk : null;
+    const buyTradeReady = intensity[i] === 3 && !contextConflict && buyObPass && bestBullTarget !== null && buyRR !== null && buyRR >= rrMin;
+    const sellTradeReady = intensity[i] === -3 && !contextConflict && sellObPass && bestBearTarget !== null && sellRR !== null && sellRR >= rrMin;
+    return {
+      active_bull_ob_count: activeBull, active_bear_ob_count: activeBear,
+      best_buy_ob: bestBuy, best_sell_ob: bestSell,
+      best_bullish_ob_target: bestBullTarget, best_bearish_ob_target: bestBearTarget,
+      ob_buy_candidate_available: buyObPass, ob_sell_candidate_available: sellObPass,
+      ob_filter_status: intensity[i] === 3 ? (buyObPass ? "BULL OB PASS" : activeBull === 0 ? "BLOCK_NO_ACTIVE_BULL_OB" : "BLOCK_NO_QUALIFIED_BULL_OB") : intensity[i] === -3 ? (sellObPass ? "BEAR OB PASS" : activeBear === 0 ? "BLOCK_NO_ACTIVE_BEAR_OB" : "BLOCK_NO_QUALIFIED_BEAR_OB") : "BLOCK_TREND_UNRESOLVED",
+      forecast_context_conflict: contextConflict,
+      buy_stop_level: stopBuy, sell_stop_level: stopSell, buy_rr: buyRR, sell_rr: sellRR,
+      buy_trade_ready: buyTradeReady, sell_trade_ready: sellTradeReady,
+      buy_limit_level: buyTradeReady ? bestBuy.level : null, sell_limit_level: sellTradeReady ? bestSell.level : null,
+      buy_target_level: buyTradeReady ? bestBullTarget.price : null, sell_target_level: sellTradeReady ? bestBearTarget.price : null,
+      active_order_blocks: zones.map(z => ({ ...z })),
+      calculation_scope: "R38_SOURCE_DERIVED_ORDER_BLOCK_RANKING_PARTIAL",
+      parity_status: "not_proven", trusted_evidence_allowed: false
+    };
+  });
+}
 function structureStateMachine(bars, oscillator, volumeRatio, hasVolume, atr, options = {}) {
   const legacy = options.legacy_mode === true;
   const stateMaxAge = options.state_max_age ?? 50;
@@ -438,13 +596,14 @@ export function calculateProphetR38Core(bars, options = {}) {
   });
   const confirmation = confirmationGate(bars, fast, slow, zScore, volRatio, hasVolume, structure, cycles, options);
   const htfAlignment = buildHtfAlignment(bars, zScore, options.higher_timeframes, options);
+  const orderBlocks = orderBlockEngine(bars, atr, er, volume, hasVolume, cycles, zScore, structure, confirmation, htfAlignment, options);
   for (let i = 0; i < bars.length; i++) {
     const f = fast[i], s = slow[i];
     const buyCandidate = bars[i].confirmed === true && crossover(fast, slow, i) && f < -0.15;
     const sellCandidate = bars[i].confirmed === true && crossunder(fast, slow, i) && f > 0.15;
     const cycle = [cycleAt(close, high, low, i, fastLen), cycleAt(close, high, low, i, midLen), cycleAt(close, high, low, i, slowLen)];
     const intensity = cycle.every((x) => x !== null && x > 0) ? 3 : cycle.every((x) => x !== null && x < 0) ? -3 : 0;
-    const d = { ...bars[i], index: i, structure: structure[i], confirmation: confirmation[i], htf_alignment: htfAlignment[i], oscillator: { fast: f, slow: s, core: core[i], raw_composite: raw[i] }, sensors: { kww_zscore_50: zScore[i], hurst_rs_100: hurst[i], efficiency_ratio_14: er[i], volume_anomaly_20: volAnom[i], volume_ratio_20: volRatio[i], atr14: atr[i], cycle_intensity: intensity }, events: { raw_buy_cross_candidate: buyCandidate, raw_sell_cross_candidate: sellCandidate }, calculation_scope: "R38_SOURCE_DERIVED_OSCILLATOR_STRUCTURE_CONFIRMATION_HTF_PARTIAL", parity_status: "not_proven", trusted_evidence_allowed: false };
+    const d = { ...bars[i], index: i, structure: structure[i], confirmation: confirmation[i], htf_alignment: htfAlignment[i], order_blocks: orderBlocks[i], oscillator: { fast: f, slow: s, core: core[i], raw_composite: raw[i] }, sensors: { kww_zscore_50: zScore[i], hurst_rs_100: hurst[i], efficiency_ratio_14: er[i], volume_anomaly_20: volAnom[i], volume_ratio_20: volRatio[i], atr14: atr[i], cycle_intensity: intensity }, events: { raw_buy_cross_candidate: buyCandidate, raw_sell_cross_candidate: sellCandidate }, calculation_scope: "R38_SOURCE_DERIVED_OSCILLATOR_STRUCTURE_CONFIRMATION_HTF_OB_PARTIAL", parity_status: "not_proven", trusted_evidence_allowed: false };
     result.push(d);
   }
   return {
@@ -457,7 +616,7 @@ export function calculateProphetR38Core(bars, options = {}) {
       declared_version: "The Prophet v7.02 R38",
       imported_library: "cryptophys/CryptophysMizanLib/4"
     },
-    implementation_scope: "oscillator sensors, divergence/structure state machine, adaptive confirmation gate, and closed-bar HTF alignment diagnostic; excludes OB ranking/lifecycle, entry/TP/SL management, and chart-rendering behavior",
+    implementation_scope: "oscillator sensors, divergence/structure state machine, adaptive confirmation gate, closed-bar HTF alignment diagnostic, and source-derived OB zone lifecycle/ranking/RR trade-readiness calculation; excludes complete position-management states, target latching/TP-hit lifecycle, and chart-rendering/alerts",
     history_requirements: { M5: 101, higher_timeframes: { M15: 51, H1: 51, H4: 51, D1: 51, W1: 51 }, chart_oscillator_slow_warmup: Math.max(slowLen, Math.round(smoothLen * 2.2) * 2) + Math.round(Math.sqrt(Math.round(smoothLen * 2.2) * 2)), kww_zscore_50: 50, efficiency_ratio_14: 15, volume_ratio_20: 21 },
     has_volume: hasVolume,
     outputs: result
