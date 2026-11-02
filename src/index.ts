@@ -754,24 +754,6 @@ async function runAnalysis(
   }
 
   const analysisStatus = fusion.complete ? "complete" : "degraded";
-  if (analysisStatus === "complete") {
-    await setAnalysisRunStatus(env, candleKey, "complete", {
-      input_fingerprint: inputFingerprint,
-      decision: synthesis.decision,
-      evidence_fusion: {
-        schema_version: fusion.schema_version,
-        candle_key: fusion.candle_key,
-        symbol: fusion.symbol,
-        timeframe: fusion.timeframe,
-        candle_time: fusion.candle_time,
-        webhook_sources: fusion.webhook_sources,
-        local_calculation_versions: Object.fromEntries(Object.entries(fusion.local_calculations).map(([name, item]: [string, any]) => [name, item.calculation_version])),
-        news_analysis_key: asText(fusion.fundamental_news_analysis?.analysis_key),
-        news_analyzed_at: asText(fusion.fundamental_news_analysis?.analyzed_at)
-      }
-    }, null);
-  }
-
   await env.WEBHOOK_BUFFER.put("analysis:" + safeKeyPart(candleKey), JSON.stringify({
     status: analysisStatus,
     created_at: timestamp,
