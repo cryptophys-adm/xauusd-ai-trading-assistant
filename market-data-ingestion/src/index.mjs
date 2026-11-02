@@ -1,3 +1,5 @@
+import { buildLocalEngineInput, buildLocalEngineReadiness } from "./engine-inputs.mjs";
+
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store"
@@ -187,8 +189,17 @@ function buildBundle(m5, fetchedAt, providerMeta = {}, contextTimeframes = {}) {
         (contextTimeframes.D1?.candle_count || 0) >= 51 && (contextTimeframes.W1?.candle_count || 0) >= 51,
       gmi_profile_history_ready: (timeframes.M5?.candle_count || 0) >= 300,
       gmi_daily_cpr_history_ready: (contextTimeframes.D1?.candle_count || 0) >= 21,
-      gmi_weekly_cpr_history_ready: (contextTimeframes.W1?.candle_count || 0) >= 2
+      gmi_weekly_cpr_history_ready: (contextTimeframes.W1?.candle_count || 0) >= 51
     },
+    engine_readiness: buildLocalEngineReadiness({
+      schema_version: "cryptophys.market-data.v1",
+      source: { ...timeframes.M5, canonical_symbol: "OANDA:XAUUSD", provider: PROVIDER, provider_symbol: asString(providerMeta.symbol) || "XAU/USD" },
+      fetched_at: fetchedAt,
+      latest_closed_m5_close_time: m5.at(-1)?.close_time || null,
+      volume_available: m5.length > 0 && m5.every((bar) => Number.isFinite(bar.volume)),
+      timeframes,
+      context_timeframes: contextTimeframes
+    }),
     limitations: [
       "Only OHLCV is ingested. Footprint/order-flow arrays, TradingView indicator values, and external-symbol inputs are not inferred.",
       "M15/H1/H4 are aggregated from complete UTC-aligned M5 groups; native D1/W1 context is separately fetched to meet source warm-up requirements. These can differ from TradingView exchange/session boundaries.",
@@ -269,7 +280,7 @@ async function pull(env) {
     oldContext.D1.candles.length < DAILY_CONTEXT_OUTPUTSIZE ||
     nowMs - Date.parse(oldContext.D1.candles.at(-1)?.close_time || 0) >= DAY_MS;
   const needsWeekly = !Array.isArray(oldContext.W1?.candles) ||
-    oldContext.W1.candles.length < WEEKLY_CONTEXT_OUTPUTSIZE ||
+    oldContext.W1.candles.length < 51 ||
     nowMs - Date.parse(oldContext.W1.candles.at(-1)?.close_time || 0) >= WEEK_MS;
 
   let dailyContext = oldContext.D1?.candles || [];
@@ -371,6 +382,18 @@ const worker = {
       });
     }
     if (request.method === "POST" && url.pathname === "/pull") return handlePull(request, env);
+    if (request.method === "GET" && url.pathname === "/engine-inputs") {
+      if (!constantTimeEqual(getBearer(request), asString(env.MARKET_DATA_INGEST_SECRET))) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      const engine = (url.searchParams.get("engine") || "").toLowerCase();
+      if (!["mizan", "prophet", "gmi"].includes(engine)) {
+        return json({ error: "engine_required", allowed_engines: ["mizan", "prophet", "gmi"] }, 400);
+      }
+      const latest = await readLatest(env);
+      if (!latest.available) return json(latest, 503);
+      return json(buildLocalEngineInput(latest, engine), 200);
+    }
     if (request.method === "GET" && url.pathname === "/latest") {
       if (!constantTimeEqual(getBearer(request), asString(env.MARKET_DATA_INGEST_SECRET))) {
         return json({ error: "unauthorized" }, 401);
