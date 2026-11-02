@@ -250,5 +250,9 @@ test("GET /engine-shadow refuses to pretend Mizan/GMI local calculators exist", 
   const response = await worker.fetch(new Request("https://market.example.com/engine-shadow?engine=gmi", {
     headers: { authorization: "Bearer test-secret" }
   }), env());
-  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(response.status, 501);
+  assert.equal(body.engine_shadow_status, "blocked_no_local_calculator");
+  assert.equal(body.calculation_status, "blocked_missing_gmi_inputs");
+  assert.equal(body.calculation_allowed_for_trusted_evidence, false);
 });
