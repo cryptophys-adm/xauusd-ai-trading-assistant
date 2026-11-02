@@ -450,22 +450,34 @@ const worker = {
         return json({ error: "engine_required", allowed_engines: ["mizan", "prophet", "gmi"] }, 400);
       }
       const latest = await readLatest(env);
-      if (!latest.available) return json(latest, 503);
-      const contract = buildLocalEngineInput(latest, engine);
       if (engine !== "prophet") {
+        if (latest.available) {
+          const contract = buildLocalEngineInput(latest, engine);
+          return json({
+            worker: WORKER_NAME,
+            engine,
+            engine_shadow_status: "blocked_no_local_calculator",
+            calculation_status: contract.calculation_status,
+            data_status: contract.data_status,
+            history_gaps: contract.history_gaps,
+            unavailable_inputs: contract.unavailable_inputs,
+            missing_dependencies: contract.missing_dependencies,
+            calculation_allowed_for_trusted_evidence: false,
+            parity_status: "not_proven"
+          }, 501);
+        }
         return json({
           worker: WORKER_NAME,
           engine,
           engine_shadow_status: "blocked_no_local_calculator",
-          calculation_status: contract.calculation_status,
-          data_status: contract.data_status,
-          history_gaps: contract.history_gaps,
-          unavailable_inputs: contract.unavailable_inputs,
-          missing_dependencies: contract.missing_dependencies,
+          calculation_status: engine === "mizan" ? "blocked_source_identity" : "blocked_missing_gmi_inputs",
+          data_status: latest.reason || "market_data_unavailable",
           calculation_allowed_for_trusted_evidence: false,
           parity_status: "not_proven"
         }, 501);
       }
+      if (!latest.available) return json(latest, 503);
+      const contract = buildLocalEngineInput(latest, engine);
       if (contract.data_status !== "history_ready_for_shadow") {
         return json({
           worker: WORKER_NAME,
