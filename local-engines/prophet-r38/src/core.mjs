@@ -34,6 +34,16 @@ function hmaAt(src, end, len) {
   }
   return wmaAt(diff, end, root);
 }
+function wmaSeries(src, len) {
+  return src.map((_, end) => wmaAt(src, end, len));
+}
+function hmaSeries(src, len) {
+  const half = Math.max(1, Math.floor(len / 2));
+  const root = Math.max(1, Math.round(Math.sqrt(len)));
+  const a = wmaSeries(src, half), b = wmaSeries(src, len);
+  const diff = src.map((_, i) => a[i] === null || b[i] === null ? null : 2 * a[i] - b[i]);
+  return wmaSeries(diff, root);
+}
 function kwwAt(src, end, len) {
   if (!finite(src[end])) return { mean: null, sigma: null, z: null };
   const tau = 14.0, beta = 1 / Math.sqrt(3);
@@ -161,16 +171,17 @@ export function calculateProphetR38Core(bars, options = {}) {
     const kww = kwwAt(close, i, 50);
     zScore.push(kww.z);
     hurst.push(hurstAt(close, i, 100));
-    if (rawComp === null || erNow === null) {
-      fast.push(null); slow.push(null); core.push(null);
-    } else {
-      const baseF = hmaAt(raw, i, smoothLen), chopF = hmaAt(raw, i, smoothLen * 2);
-      const baseS = hmaAt(raw, i, Math.round(smoothLen * 2.2)), chopS = hmaAt(raw, i, Math.round(smoothLen * 2.2) * 2);
-      const tensorCore = hmaAt(raw, i, Math.round(smoothLen * 1.5));
-      fast.push(baseF === null || chopF === null ? null : (baseF * erNow) + (chopF * (1 - erNow)));
-      slow.push(baseS === null || chopS === null ? null : (baseS * erNow) + (chopS * (1 - erNow)));
-      core.push(tensorCore);
-    }
+    fast.push(null); slow.push(null); core.push(null);
+  }
+  const baseFast = hmaSeries(raw, smoothLen);
+  const chopFast = hmaSeries(raw, smoothLen * 2);
+  const baseSlow = hmaSeries(raw, Math.round(smoothLen * 2.2));
+  const chopSlow = hmaSeries(raw, Math.round(smoothLen * 2.2) * 2);
+  const tensorCore = hmaSeries(raw, Math.round(smoothLen * 1.5));
+  for (let i = 0; i < bars.length; i++) {
+    if (er[i] !== null && baseFast[i] !== null && chopFast[i] !== null) fast[i] = baseFast[i] * er[i] + chopFast[i] * (1 - er[i]);
+    if (er[i] !== null && baseSlow[i] !== null && chopSlow[i] !== null) slow[i] = baseSlow[i] * er[i] + chopSlow[i] * (1 - er[i]);
+    core[i] = tensorCore[i];
   }
   for (let i = 0; i < bars.length; i++) {
     const f = fast[i], s = slow[i];
