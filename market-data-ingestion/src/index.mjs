@@ -496,7 +496,7 @@ const worker = {
         D1: latest.context_timeframes?.D1?.candles || [],
         W1: latest.context_timeframes?.W1?.candles || []
       };
-      const bars = (latest.timeframes?.M5?.candles || []).map((bar) => ({ ...bar, confirmed: true }));
+      const bars = (latest.timeframes?.M5?.candles || []).slice(-500).map((bar) => ({ ...bar, confirmed: true }));
       const calculated = calculateProphetR38Core(bars, {
         timeframe_minutes: 5,
         gmi_closed_only: true,
@@ -516,6 +516,8 @@ const worker = {
         history_requirements: calculated.history_requirements,
         input_history_counts: {
           M5: bars.length,
+          M5_available_in_cache: latest.timeframes?.M5?.candle_count || 0,
+          M5_engine_window_limit: 500,
           M15: htf.M15.length,
           H1: htf.H1.length,
           H4: htf.H4.length,
