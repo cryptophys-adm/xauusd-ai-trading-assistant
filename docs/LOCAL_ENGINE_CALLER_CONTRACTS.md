@@ -51,7 +51,7 @@ The Worker must return structured unavailable-input records for these dependenci
 ## 4. Local engine implementation status
 
 - **Mizan:** source-derived shared-library caller history floor is defined. No general Mizan signal engine or approved installed-source identity is claimed.
-- **Prophet:** the checked-in R38 source is 1,150 lines. The prior R37 shared-core kernel is not the full R38 calculation engine; R38 is not marked implemented.
+- **Prophet:** a new `local-engines/prophet-r38/src/core.mjs` implements a source-derived partial kernel for KWW z-score, Hurst R/S, Kaufman efficiency ratio, volume anomaly/ratio, ATR RMA, fast/mid/slow cycles, HMA tensor oscillator, and raw closed-bar oscillator cross candidates. It is explicitly `R38_SOURCE_DERIVED_OSCILLATOR_PARTIAL`, not a complete R38 engine. The structure/divergence state machine, HTF alignment, adaptive confirmation gate, Order Block ranking/invalidation, and entry/TP/SL management are not yet implemented. Synthetic tests are not TradingView parity fixtures. The R37 shared-core kernel remains non-equivalent to full R38.
 - **GMI:** full engine remains blocked on external series, intrabars, footprint/order-flow semantics, and source fixtures. OHLC-only partial features may be implemented separately only when clearly scoped and independently fixture-tested.
 - All three engines remain parity_status=not_proven and calculation_allowed_for_trusted_evidence=false.
 
@@ -66,3 +66,18 @@ Fixture files must be captured from the exact installed indicator/library revisi
 - expected warm-up behavior, na/missing-input behavior, and timeframe-boundary behavior.
 
 Parity acceptance must compare every claimed output across multiple closed bars and boundary/missing-input cases. It must report absolute/relative tolerances where floating-point equality is not exact. A successful compile, a synthetic unit fixture, or matching one signal is not parity evidence. Until genuine fixtures exist and pass, all local outputs remain excluded from trusted evidence.
+
+## 6. New Prophet R38 partial kernel (not parity-certified)
+
+The new `local-engines/prophet-r38/src/core.mjs` implements only source-derived mathematical sensors and oscillator layers from the checked-in R38 Pine and owner-designated library formulas:
+- KWW weighted mean/sigma/z-score;
+- Hurst R/S with Pine's current-to-older return iteration;
+- Kaufman efficiency ratio;
+- legacy volume anomaly and current volume ratio;
+- Wilder RMA ATR(14);
+- fast/mid/slow range cycles, volume-weighted raw composite, and HMA-based adaptive tensor;
+- raw oscillator crossover candidate events only when the input bar is explicitly marked closed (`confirmed: true`).
+
+It does **not** yet implement the full R38 output contract: stateful divergence/structure machine, HTF closed-bar alignment, adaptive confirmation windows and supersession, volume/depth gates, mandatory Order Block first-filter lifecycle/ranking, candidate/entry/target/stop selection, trade management states, or rendering/alerts. The code reports `parity_status=not_proven` and `trusted_evidence_allowed=false` on every output. Its source provenance uses the Git blob ID until an independently computed raw-file SHA-256 is available; the blob ID must not be mislabeled as SHA-256.
+
+Tests in `local-engines/prophet-r38/test/core.test.mjs` cover schema, warm-up, missing-volume behavior, invalid OHLC and chronological ordering. They are software/unit tests only, not source parity tests.
