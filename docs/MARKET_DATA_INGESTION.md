@@ -22,7 +22,7 @@ Schema: `cryptophys.market-data.v1`.
 - Provider symbol: `XAU/USD`. These symbols are mapped for strategy correlation, **not asserted to have identical candles or prices**.
 - M5: up to 5,000 closed OHLCV candles; the currently forming M5 candle is excluded. This provides about 17 days of M5 history, around 104 H4 candles, 416 H1 candles, and 1,666 M15 candles when data is complete.
 - M15/H1/H4/D1: aggregated from complete, contiguous M5 groups aligned to UTC boundaries. The aggregated D1 series has only about 17 days with a 5,000-bar M5 bootstrap, so it is not sufficient for the source's 20-day daily CPR width average or Prophet's default 50-bar D1/W1 warm-up.
-- Additional native D1 and W1 context series request up to 60 closed bars each. These are separate provider-native context inputs, not substituted into the M5-derived aggregation; the input envelope records their separate provenance.
+- Additional native D1 and W1 context series request up to 60 closed bars each. These are separate provider-native context inputs, not substituted into the M5-derived aggregation; the input envelope records their separate provenance. Because Twelve Data documents that `timezone` is ignored for 1day/1week intervals, these series are accepted only when the response explicitly identifies `exchange_timezone` as UTC/GMT.
 - Each candle includes UTC `open_time`, `close_time`, OHLC, and volume where supplied.
 - No synthetic volume: if provider volume is absent, it remains `null` and `volume_available=false`.
 - The cache uses a dedicated `market-data:v1:OANDA:XAUUSD` key prefix in the existing `SIGNAL_CACHE` KV namespace; the existing AI Worker binding is not modified.
@@ -30,7 +30,7 @@ Schema: `cryptophys.market-data.v1`.
 ## Required secrets and release gates
 
 Configure Worker secrets out-of-band:
-- `TWELVE_DATA_API_KEY`: Twelve Data API key.
+- `TWELVE_DATA_API_KEY`: Twelve Data API key, sent in the provider's `Authorization: apikey …` header rather than a query string.
 - `MARKET_DATA_INGEST_SECRET`: high-entropy secret for authenticated manual pulls and downstream access.
 
 No API key or ingest secret is committed to the repository. The branch config binds the existing KV namespace ID used by the AI Worker's `SIGNAL_CACHE` as `MARKET_DATA_CACHE`; verify this binding against the active Cloudflare account before deployment. It does not create or replace any Cloudflare resource.
