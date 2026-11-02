@@ -7,7 +7,12 @@ const WORKER_NAME = "xauusd-tradingview-pull-adapter";
 const PROVIDER = "Twelve Data";
 const CACHE_KEY = "market-data:v1:OANDA:XAUUSD";
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
-const MAX_OUTPUTSIZE = 300;
+const MAX_OUTPUTSIZE = 5000;
+const INCREMENTAL_OUTPUTSIZE = 3;
+const DAILY_CONTEXT_OUTPUTSIZE = 60;
+const WEEKLY_CONTEXT_OUTPUTSIZE = 60;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
 const INTERVALS = [
   { name: "M5", minutes: 5, expectedBars: 1 },
   { name: "M15", minutes: 15, expectedBars: 3 },
@@ -54,7 +59,7 @@ function parseNumber(value, field) {
   return parsed;
 }
 
-function parseProviderCandle(value) {
+function parseProviderCandle(value, durationMs = FIVE_MINUTES_MS) {
   const openTime = Date.parse(`${value.datetime.replace(" ", "T")}Z`);
   if (!Number.isFinite(openTime)) throw new Error("Provider returned an invalid candle timestamp");
   const open = parseNumber(value.open, "open");
@@ -71,12 +76,15 @@ function parseProviderCandle(value) {
   return {
     open_time: new Date(openTime).toISOString(),
     open_time_ms: openTime,
-    close_time: new Date(openTime + FIVE_MINUTES_MS).toISOString(),
+    close_time: new Date(openTime + durationMs).toISOString(),
     open, high, low, close, volume
   };
 }
 
-function normalizeProviderPayload(payload, nowMs) {
+function normalizeProviderPayload(payload, nowMs, options = {}) {
+  const durationMs = options.durationMs ?? FIVE_MINUTES_MS;
+  const maxCandles = options.maxCandles ?? MAX_OUTPUTSIZE;
+  const minClosed = options.minClosed ?? 48;
   if (!payload || payload.status !== "ok" || !Array.isArray(payload.values)) {
     const providerMessage = asString(payload?.message) || asString(payload?.code) || "invalid_provider_payload";
     throw Object.assign(new Error("Market data provider returned an unavailable response"), {
@@ -85,7 +93,7 @@ function normalizeProviderPayload(payload, nowMs) {
     });
   }
 
-  const all = payload.values.map(parseProviderCandle).sort((a, b) => a.open_time_ms - b.open_time_ms);
+  const all = payload.values.map((value) => parseProviderCandle(value, durationMs)).sort((a, b) => a.open_time_ms - b.open_time_ms);
   const deduplicated = [];
   for (const candle of all) {
     if (deduplicated.length && deduplicated[deduplicated.length - 1].open_time_ms === candle.open_time_ms) {
@@ -97,14 +105,15 @@ function normalizeProviderPayload(payload, nowMs) {
 
   // Never pass the still-forming M5 bar into deterministic calculations.
   const closed = deduplicated.filter((candle) => candle.open_time_ms + FIVE_MINUTES_MS <= nowMs);
-  if (closed.length < 48) {
-    throw Object.assign(new Error("Insufficient closed M5 history for a safe bootstrap"), {
+  if (closed.length < minClosed) {
+    throw Object.assign(new Error("Insufficient closed history for the requested interval"), {
       code: "insufficient_closed_history",
-      closed_count: closed.length
+      closed_count: closed.length,
+      required_count: minClosed
     });
   }
 
-  return closed.slice(-MAX_OUTPUTSIZE).map(({ open_time_ms, ...candle }) => candle);
+  return closed.slice(-maxCandles).map(({ open_time_ms, ...candle }) => candle);
 }
 
 function aggregateCandles(m5, interval) {
@@ -144,7 +153,7 @@ function aggregateCandles(m5, interval) {
   return result;
 }
 
-function buildBundle(m5, fetchedAt, providerMeta = {}) {
+function buildBundle(m5, fetchedAt, providerMeta = {}, contextTimeframes = {}) {
   const timeframes = {};
   for (const interval of INTERVALS) {
     const candles = aggregateCandles(m5, interval);
@@ -170,22 +179,33 @@ function buildBundle(m5, fetchedAt, providerMeta = {}) {
     latest_closed_m5_close_time: m5.at(-1)?.close_time || null,
     volume_available: m5.length > 0 && m5.every((bar) => Number.isFinite(bar.volume)),
     timeframes,
+    context_timeframes: contextTimeframes,
+    history_sufficiency: {
+      m5_bootstrap_target: MAX_OUTPUTSIZE,
+      m5_bootstrap_complete: m5.length >= MAX_OUTPUTSIZE,
+      prophet_default_mtf_ready: ["M15", "H1", "H4"].every((tf) => timeframes[tf].candle_count >= 51) &&
+        (contextTimeframes.D1?.candle_count || 0) >= 51 && (contextTimeframes.W1?.candle_count || 0) >= 51,
+      gmi_profile_history_ready: (timeframes.M5?.candle_count || 0) >= 300,
+      gmi_daily_cpr_history_ready: (contextTimeframes.D1?.candle_count || 0) >= 21,
+      gmi_weekly_cpr_history_ready: (contextTimeframes.W1?.candle_count || 0) >= 2
+    },
     limitations: [
       "Only OHLCV is ingested. Footprint/order-flow arrays, TradingView indicator values, and external-symbol inputs are not inferred.",
-      "Higher timeframes are aggregated from complete UTC-aligned M5 groups; they may differ from TradingView exchange/session boundaries.",
-      "MizanLib, Prophet, and GMI parity is not established by this data-ingestion worker."
+      "M15/H1/H4 are aggregated from complete UTC-aligned M5 groups; native D1/W1 context is separately fetched to meet source warm-up requirements. These can differ from TradingView exchange/session boundaries.",
+      "MizanLib, Prophet, and GMI parity is not established by this data-ingestion worker.",
+      "MizanLib source/import identity is not fully verified; Prophet output remains blocked pending full R38 parity; GMI requires M1 intrabars, footprint/order-flow and external-symbol data not present in this bundle."
     ]
   };
 }
 
-async function fetchTwelveData(env) {
+async function fetchTwelveData(env, interval = "5min", outputsize = MAX_OUTPUTSIZE) {
   const apiKey = asString(env.TWELVE_DATA_API_KEY).trim();
   if (!apiKey) throw Object.assign(new Error("TWELVE_DATA_API_KEY is not configured"), { code: "provider_not_configured" });
 
   const endpoint = new URL(asString(env.TWELVE_DATA_BASE_URL) || "https://api.twelvedata.com/time_series");
   endpoint.searchParams.set("symbol", asString(env.TWELVE_DATA_SYMBOL) || "XAU/USD");
-  endpoint.searchParams.set("interval", "5min");
-  endpoint.searchParams.set("outputsize", String(parsePositiveInt(env.M5_BOOTSTRAP_CANDLES, MAX_OUTPUTSIZE)));
+  endpoint.searchParams.set("interval", interval);
+  endpoint.searchParams.set("outputsize", String(parsePositiveInt(outputsize, MAX_OUTPUTSIZE)));
   endpoint.searchParams.set("order", "desc");
   endpoint.searchParams.set("timezone", "UTC");
   endpoint.searchParams.set("apikey", apiKey);
@@ -211,13 +231,74 @@ async function fetchTwelveData(env) {
   return payload;
 }
 
+function mergeClosedCandles(existing, incoming, maxCandles = MAX_OUTPUTSIZE) {
+  const byOpenTime = new Map();
+  for (const candle of [...(existing || []), ...(incoming || [])]) {
+    byOpenTime.set(candle.open_time, candle);
+  }
+  return [...byOpenTime.values()]
+    .sort((a, b) => Date.parse(a.open_time) - Date.parse(b.open_time))
+    .slice(-maxCandles);
+}
+
+async function readCachedBundle(env) {
+  if (!env.MARKET_DATA_CACHE) return null;
+  const raw = await env.MARKET_DATA_CACHE.get(CACHE_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
 async function pull(env) {
-  const payload = await fetchTwelveData(env);
-  const fetchedAt = new Date().toISOString();
-  const m5 = normalizeProviderPayload(payload, Date.now());
-  const bundle = buildBundle(m5, fetchedAt, payload.meta || {});
+  const nowMs = Date.now();
+  const fetchedAt = new Date(nowMs).toISOString();
+  const cached = await readCachedBundle(env);
+  const cachedM5 = Array.isArray(cached?.timeframes?.M5?.candles) ? cached.timeframes.M5.candles : [];
+  const bootstrap = cachedM5.length < MAX_OUTPUTSIZE;
+  const m5Payload = await fetchTwelveData(env, "5min", bootstrap ? MAX_OUTPUTSIZE : INCREMENTAL_OUTPUTSIZE);
+  const incomingM5 = normalizeProviderPayload(m5Payload, nowMs, {
+    durationMs: FIVE_MINUTES_MS,
+    maxCandles: bootstrap ? MAX_OUTPUTSIZE : INCREMENTAL_OUTPUTSIZE,
+    minClosed: bootstrap ? 48 : 1
+  });
+  const m5 = mergeClosedCandles(cachedM5, incomingM5);
+
+  // The 20-day daily CPR average and Prophet's default D1/W1 alignment require
+  // native higher-timeframe warm-up history; M5-derived D1/W1 cannot supply it.
+  const oldContext = cached?.context_timeframes || {};
+  const needsDaily = !Array.isArray(oldContext.D1?.candles) ||
+    oldContext.D1.candles.length < DAILY_CONTEXT_OUTPUTSIZE ||
+    nowMs - Date.parse(oldContext.D1.candles.at(-1)?.close_time || 0) >= DAY_MS;
+  const needsWeekly = !Array.isArray(oldContext.W1?.candles) ||
+    oldContext.W1.candles.length < WEEKLY_CONTEXT_OUTPUTSIZE ||
+    nowMs - Date.parse(oldContext.W1.candles.at(-1)?.close_time || 0) >= WEEK_MS;
+
+  let dailyContext = oldContext.D1?.candles || [];
+  let weeklyContext = oldContext.W1?.candles || [];
+  let dailyMeta = oldContext.D1?.source || null;
+  let weeklyMeta = oldContext.W1?.source || null;
+
+  if (needsDaily) {
+    const dailyPayload = await fetchTwelveData(env, "1day", DAILY_CONTEXT_OUTPUTSIZE);
+    dailyContext = normalizeProviderPayload(dailyPayload, nowMs, {
+      durationMs: DAY_MS, maxCandles: DAILY_CONTEXT_OUTPUTSIZE, minClosed: 21
+    });
+    dailyMeta = { provider: PROVIDER, interval: "1day", alignment_basis: "provider_native_UTC" };
+  }
+  if (needsWeekly) {
+    const weeklyPayload = await fetchTwelveData(env, "1week", WEEKLY_CONTEXT_OUTPUTSIZE);
+    weeklyContext = normalizeProviderPayload(weeklyPayload, nowMs, {
+      durationMs: WEEK_MS, maxCandles: WEEKLY_CONTEXT_OUTPUTSIZE, minClosed: 51
+    });
+    weeklyMeta = { provider: PROVIDER, interval: "1week", alignment_basis: "provider_native_UTC" };
+  }
+
+  const contextTimeframes = {
+    D1: { interval_minutes: 1440, candle_count: dailyContext.length, candles: dailyContext, source: dailyMeta },
+    W1: { interval_minutes: 10080, candle_count: weeklyContext.length, candles: weeklyContext, source: weeklyMeta }
+  };
+  const bundle = buildBundle(m5, fetchedAt, m5Payload.meta || {}, contextTimeframes);
   if (env.MARKET_DATA_CACHE) {
-    await env.MARKET_DATA_CACHE.put(CACHE_KEY, JSON.stringify(bundle), { expirationTtl: 60 * 60 * 2 });
+    await env.MARKET_DATA_CACHE.put(CACHE_KEY, JSON.stringify(bundle), { expirationTtl: 60 * 60 * 24 * 8 });
   }
   return bundle;
 }
@@ -283,7 +364,10 @@ const worker = {
         pull_auth_configured: Boolean(asString(env.MARKET_DATA_INGEST_SECRET)),
         cache_configured: Boolean(env.MARKET_DATA_CACHE),
         cron: "*/5 * * * *",
-        supported_timeframes: INTERVALS.map((item) => item.name)
+        m5_bootstrap_target: MAX_OUTPUTSIZE,
+        m5_incremental_outputsize: INCREMENTAL_OUTPUTSIZE,
+        native_context_intervals: ["1day", "1week"],
+        supported_timeframes: [...INTERVALS.map((item) => item.name), "W1-context"]
       });
     }
     if (request.method === "POST" && url.pathname === "/pull") return handlePull(request, env);
@@ -316,6 +400,7 @@ const worker = {
 
 export const internals = {
   normalizeProviderPayload,
+  mergeClosedCandles,
   aggregateCandles,
   buildBundle,
   constantTimeEqual,
