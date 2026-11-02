@@ -10,6 +10,7 @@ Status: implementation added on feature branch; **not deployed and not approved 
 - `POST /pull`: authenticated on-demand pull using `Authorization: Bearer <MARKET_DATA_INGEST_SECRET>`.
 - `GET /latest`: latest cached normalized bundle, authenticated with the same bearer secret; returns 503 if no successful recent pull exists.
 - `GET /engine-inputs?engine=mizan|prophet|gmi`: authenticated, versioned per-engine candle input envelope with history gaps, source caller contract, and structured unavailable-input records. This is the handoff contract for local engine consumers; it does not itself run or certify those calculations.
+- `GET /engine-shadow?engine=prophet`: authenticated shadow-only execution of the partial local Prophet R38 kernel against the cached M5/M15/H1/H4/D1/W1 bundle. Returns the last 20 outputs and explicit partial/unverified status; it is not a full R38 engine and never emits trusted evidence. `engine=mizan|gmi` returns HTTP 501 with an explicit blocked-calculator status rather than inventing results.
 - Scheduled pull: every five minutes (`*/5 * * * *`). A KV bootstrap-state key prevents repeatedly requesting the full 5,000-row bootstrap; failed/short bootstrap retries are limited to once per 24 hours.
 
 This worker uses Twelve Data as the configured market-data provider. It does **not** call TradingView directly: TradingView states it does not currently offer a public API for retrieving market data or indicator values. The existing ChatGPT TradingView MCP connection is not an endpoint that a Cloudflare Worker can automatically call. See the official [TradingView API statement](https://www.tradingview.com/support/solutions/43000474413-i-need-access-to-your-api-in-order-to-get-data-or-indicator-values/) and [Twelve Data time-series documentation](https://twelvedata.com/docs).
@@ -58,7 +59,7 @@ No API key or ingest secret is committed to the repository. The branch config bi
 
 ## Calculation compatibility and limitations
 
-The bundle is a market-data input substrate, not the MizanLib, Prophet R38, or GMI calculation result. The full Prophet R38 engine is not implemented by the R37 shared-core kernel. GMI is blocked from full reproduction by missing external series, intrabars, and footprint/order-flow semantics. MizanLib is a shared dependency rather than a standalone signal engine, and the exact installed/published library identity is unresolved.
+The bundle is a market-data input substrate. The new `/engine-shadow?engine=prophet` route runs only the partial R38 oscillator/structure/confirmation/HTF kernel; it is not the full Prophet R38 calculation result. Mizan and GMI have no local calculators exposed by this Worker. The full Prophet R38 engine is not implemented by the R37 shared-core kernel. GMI is blocked from full reproduction by missing external series, intrabars, and footprint/order-flow semantics. MizanLib is a shared dependency rather than a standalone signal engine, and the exact installed/published library identity is unresolved.
 
 All three engines remain `parity_status=not_proven` and `calculation_allowed_for_trusted_evidence=false`. A history-ready result only means the configured input floor is present; it is not a calculation pass. No engine provenance allowlist is enabled by this worker.
 
