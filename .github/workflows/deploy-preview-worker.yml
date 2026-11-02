@@ -94,20 +94,44 @@ jobs:
 
           let healthResponse;
           let health;
+          let healthParseError = "no response";
           for (let attempt = 0; attempt < 10; attempt++) {
             healthResponse = await fetch(base + "/health", { signal: AbortSignal.timeout(15000) });
-            health = await healthResponse.json();
-            if (healthResponse.ok && health.secrets_configured?.webhook_secret === true) break;
+            try {
+              health = await healthResponse.clone().json();
+              healthParseError = "";
+            } catch {
+              health = null;
+              const body = (await healthResponse.clone().text()).slice(0, 160);
+              healthParseError = `/health returned non-JSON HTTP ${healthResponse.status}: ${body}`;
+            }
+            if (healthResponse.ok && health?.status === "ok" && health.secrets_configured?.webhook_secret === true) break;
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
+          assert.ok(health, `health endpoint did not return JSON after retries: ${healthParseError}`);
           assert.equal(healthResponse.status, 200);
           assert.equal(health.status, "ok");
           for (const name of ["d1", "signal_cache", "webhook_buffer", "knowledge_base", "workers_ai"]) {
             assert.equal(health.bindings?.[name], true, "missing preview binding: " + name);
           }
           assert.equal(health.secrets_configured?.webhook_secret, true, "preview secret must be visible to the Worker");
-          const readyResponse = await fetch(base + "/ready", { signal: AbortSignal.timeout(15000) });
-          const ready = await readyResponse.json();
+          let readyResponse;
+          let ready;
+          let readyParseError = "no response";
+          for (let attempt = 0; attempt < 10; attempt++) {
+            readyResponse = await fetch(base + "/ready", { signal: AbortSignal.timeout(15000) });
+            try {
+              ready = await readyResponse.clone().json();
+              readyParseError = "";
+            } catch {
+              ready = null;
+              const body = (await readyResponse.clone().text()).slice(0, 160);
+              readyParseError = `/ready returned non-JSON HTTP ${readyResponse.status}: ${body}`;
+            }
+            if (readyResponse.ok && ready?.status === "ready" && ready.d1_analysis_runs === true) break;
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+          assert.ok(ready, `ready endpoint did not return JSON after retries: ${readyParseError}`);
           assert.equal(readyResponse.status, 200);
           assert.equal(ready.status, "ready");
           assert.equal(ready.d1_analysis_runs, true);

@@ -1,0 +1,1282 @@
+//@version=6
+indicator("The Prophet v7.00 (The Omniscient SSOT) · R37 GMI-FIRST KEY LEVEL BRIDGE", "Prophet R37", overlay=false, max_labels_count=500, max_lines_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE PROPHET v7.00 (THE OMNISCIENT EDITION)
+// - [COLOR RESTORED]    : Dikembalikan ke tema Cyan (Bullish) & Red (Bearish) 
+//                         sesuai dengan versi klasik v6.18.
+// - [CORE RETAINED]     : Logika Market Regime & Liquidity Sweep dipertahankan 100%.
+// - [NEW AUTO-CLEAN]    : Garis divergensi historis akan otomatis dihapus (maks 5).
+// - [NEW ZEN MODE]      : Opsi untuk menyembunyikan pivot dots dan signal arrows.
+// - [NEW TV ALERTS]     : Native alertcondition untuk eksekusi Trade Management.
+// - [R10 OSCILLATOR-ONLY GATE]    : Pisahkan oscillator candidate dari konfirmasi harga/struktur; alert entry hanya setelah bar close.
+// - [R14 PHASE 1]       : Freshness/expiry state, risk priority, edge alerts, V2 gate, robust volume, exports.
+// - [R28 EARLY CONFIRM] : Advisory early state; full confirmation/HQ gates remain unchanged.
+//                         Oscillator formulas and raw cross thresholds retained.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import cryptophys/CryptophysMizanLib/1 as lib
+
+// =============================================================================
+// 🎛️ INPUT & SETTINGS
+// =============================================================================
+grp_set = "Harmonic Core Settings"
+fast_len   = input.int(13, "Fast Cycle", group=grp_set)
+mid_len    = input.int(34, "Mid Cycle", group=grp_set)
+slow_len   = input.int(55, "Slow Cycle", group=grp_set)
+smooth_len = input.int(6, "Base Fluidity", minval=1, maxval=15, group=grp_set)
+
+grp_ui = "UI & Visual Overrides"
+show_tables  = input.bool(true, "Show Tables (Master Toggle)", group=grp_ui)
+show_hud     = input.bool(true, "Show Prophet HUD", group=grp_ui)
+hud_pos      = input.string(position.bottom_right, "HUD Position", options=[position.top_right, position.bottom_right, position.bottom_left], group=grp_ui)
+show_div     = input.bool(true, "Show Divergence Lines", group=grp_ui)
+use_zen_mode = input.bool(false, "🧘‍♂️ Zen Mode (Hide minor shapes/dots)", group=grp_ui)
+show_momentum_projection = input.bool(true, "Show Momentum Projection", group=grp_ui, tooltip="Illustrative oscillator scenarios only; not a price forecast or entry signal.")
+projection_horizon = input.int(4, "Projection Horizon (bars)", minval=3, maxval=5, group=grp_ui)
+projection_lookback = input.int(5, "Projection Slope Lookback", minval=3, maxval=20, group=grp_ui)
+
+grp_position = "Trade Management · Manual Position"
+position_mode = input.string("NO POSITION", "Position being managed", options=["NO POSITION", "BUY POSITION", "SELL POSITION"], group=grp_position, tooltip="Manual tracking only. Set this to match a position you actually opened; this indicator does not know broker positions automatically.")
+position_entry = input.float(0.0, "Position entry price", minval=0.0, step=0.01, group=grp_position, tooltip="Enter the actual average entry price. Keep 0 when no valid entry price is provided.")
+grp_alert = "Alert & Integration Safety"
+auto_window = input.bool(true, "Adaptive confirmation window", group=grp_alert, tooltip="Uses a longer window on lower timeframes. Disable to use the manual window.")
+manual_window = input.int(3, "Manual confirmation window (closed bars)", minval=1, maxval=10, group=grp_alert)
+alert_confirmed_only = input.bool(true, "Trigger management alerts only on confirmed bars", group=grp_alert, tooltip="Management alerts obey this toggle. BUY/SELL CONFIRMED and HIGH QUALITY signals are always evaluated on closed bars.")
+
+grp_r14 = "Prophet R19 Controls"
+gate_mode = input.string("V2", "Confirmation gate mode", options=["LEGACY", "V2"], group=grp_r14, tooltip="HIPOTESIS: V2 uses fresh symmetric structure, volume validation, and setup depth. LEGACY aims to preserve R13 behavior for A/B comparison.")
+state_max_age = input.int(50, "Structure state maximum age (bars)", minval=1, maxval=500, group=grp_r14, tooltip="HIPOTESIS: expire persistent ±3 structure state after this many bars. Disabled in LEGACY mode.")
+struct_fresh_bars = input.int(6, "Structure event freshness (bars)", minval=1, maxval=100, group=grp_r14, tooltip="HIPOTESIS: a structure event must occur within this many bars to qualify V2 confirmation.")
+body_floor_atr = input.float(0.10, "Rejection body floor (ATR)", minval=0.0, maxval=1.0, step=0.01, group=grp_r14, tooltip="HIPOTESIS: prevents near-zero candle bodies from classifying small wicks as rejection. Disabled in LEGACY mode.")
+show_funnel = input.bool(false, "Show confirmation funnel", group=grp_r14, tooltip="Diagnostic counters only; does not alter signal logic.")
+
+// Multi-source Key Level Reasoning Engine. Scores are deterministic ranking heuristics, not probabilities.
+grp_key_reason = "Key Level Reasoning Engine · R37"
+key_level_max_age = input.int(120, "Maximum swing age (bars)", minval=20, maxval=500, group=grp_key_reason)
+key_level_touch_lookback = input.int(40, "Retest scan (bars)", minval=10, maxval=100, group=grp_key_reason)
+key_level_max_distance_atr = input.float(3.0, "Maximum entry distance (ATR)", minval=0.5, maxval=6.0, step=0.25, group=grp_key_reason)
+key_level_min_score = input.float(55.0, "Minimum key-level score (not probability)", minval=0.0, maxval=100.0, step=5.0, group=grp_key_reason)
+key_level_touch_band_atr = input.float(0.15, "Retest band (ATR)", minval=0.05, maxval=0.5, step=0.05, group=grp_key_reason)
+key_level_use_range_extremes = input.bool(true, "Include prior range extremes", group=grp_key_reason, tooltip="Adds prior 20/50/100-bar highs and lows as candidate levels. Current candle is excluded; these are reference levels, not guaranteed support/resistance.")
+key_level_range_lookback_1 = input.int(20, "Range level A (bars)", minval=10, maxval=200, group=grp_key_reason)
+key_level_range_lookback_2 = input.int(50, "Range level B (bars)", minval=20, maxval=300, group=grp_key_reason)
+key_level_range_lookback_3 = input.int(100, "Range level C (bars)", minval=30, maxval=500, group=grp_key_reason)
+
+// GMI-first integration. Select the matching GMI plots from TradingView's source selector.
+// Disabled by default to prevent accidental use of chart close as a GMI level.
+grp_gmi_levels = "GMI Key Level Bridge · R37"
+use_gmi_levels = input.bool(false, "Use GMI exported levels", group=grp_gmi_levels, tooltip="Enable only after adding the production GMI indicator and mapping each source below to its named GMI plot.")
+gmi_qm_buy = input.source(close, "GMI · Quasimodo Buy Level", group=grp_gmi_levels)
+gmi_qm_sell = input.source(close, "GMI · Quasimodo Sell Level", group=grp_gmi_levels)
+gmi_rbs = input.source(close, "GMI · RBS", group=grp_gmi_levels)
+gmi_sbr = input.source(close, "GMI · SBR", group=grp_gmi_levels)
+gmi_box_top = input.source(close, "GMI · Position Box TOP", group=grp_gmi_levels)
+gmi_box_bottom = input.source(close, "GMI · Position Box BOT", group=grp_gmi_levels)
+gmi_dynamic_tp = input.source(close, "GMI · Dynamic Target Profit", group=grp_gmi_levels)
+bool legacy_mode = gate_mode == "LEGACY"
+confirmation_window = auto_window ? (legacy_mode ? (timeframe.isminutes and timeframe.multiplier <= 1 ? 5 : timeframe.isminutes and timeframe.multiplier <= 5 ? 4 : 3) : timeframe.isseconds ? (timeframe.multiplier <= 15 ? 5 : 4) : timeframe.isminutes and timeframe.multiplier <= 1 ? 5 : timeframe.isminutes and timeframe.multiplier <= 5 ? 4 : 3) : manual_window
+
+bool show_div_act = show_div and not use_zen_mode
+
+// --- 1. DUAL PALETTE SYSTEM ---
+color c_green    = color.new(#22c55e, 0)
+color c_red      = color.new(#ef4444, 0)
+color c_cyan     = color.new(#00e5ff, 0)
+color c_orange   = color.new(#f97316, 0)
+color c_blue     = color.new(#3b82f6, 0)
+color c_purple   = color.new(#a855f7, 0)
+color c_dark     = color.new(#161618, 10)
+color c_border   = color.new(#3f3f46, 60)
+color no_color   = color.new(color.white, 100)
+color obs_sub    = color.new(#9ca3af, 0)
+
+// Structure subtype enum: 0 none, 1 bull trap, 2 true breakout, 3 bear trap, 4 true breakdown.
+int SUB_NONE = 0
+int SUB_BULL_TRAP = 1
+int SUB_TRUE_BREAKOUT = 2
+int SUB_BEAR_TRAP = 3
+int SUB_TRUE_BREAKDOWN = 4
+const float RAW_CROSS_DEPTH = 0.15
+const float PRICE_DISCOVERY_THRESHOLD = 0.45
+const float MIN_VOLUME_RATIO = 0.85
+const float HIGH_QUALITY_VOLUME_RATIO = 1.0
+const float SETUP_DEPTH_Z = 0.618
+const float MACRO_FILTER_Z = 1.0
+const float WICK_BODY_RATIO = 1.5
+// --- 2. THE MEMORY SENSORS ---
+float kaufman_er = lib.efficiency_ratio(close, 14)
+// Keep the existing published library reference (/1). The legacy helper is
+// available in /1; cap it locally. Current-bar ratio is computed locally so
+// this source does not require unpublished/new library exports.
+float vol_anom_legacy = math.min(2.0, lib.vol_anomaly(volume, 20))
+bool has_volume = nz(ta.cum(nz(volume)), 0.0) > 0.0
+float vol_sma_current = nz(ta.sma(volume, 20), volume)
+float vol_cur_ratio = math.min(2.0, not na(vol_sma_current[1]) and vol_sma_current[1] > 0 ? nz(volume / vol_sma_current[1], 1.0) : 1.0)
+float vol_anom = legacy_mode ? vol_anom_legacy : (barstate.isconfirmed ? nz(vol_cur_ratio, 1.0) : vol_anom_legacy)
+float vol_signal_ratio = legacy_mode or not barstate.isconfirmed ? vol_anom_legacy : nz(vol_cur_ratio, 1.0)
+
+float hurst      = lib.hurst_rs(close, 100)
+float z_score    = lib.kww_zscore(close, 50)
+
+// --- GMI MACRO Z-SCORE ALIGNMENT DIAGNOSTIC (READ-ONLY) ---
+// Match these timeframes to GMI's MTF Predictor Settings for a valid comparison.
+grp_gmi_align = "GMI Macro Alignment Diagnostic"
+gmi_align_tf1 = input.timeframe("15",  "GMI TF1 (default 15m)", group=grp_gmi_align)
+gmi_align_tf2 = input.timeframe("60",  "GMI TF2 (default 1H)", group=grp_gmi_align)
+gmi_align_tf3 = input.timeframe("240", "GMI TF3 (default 4H)", group=grp_gmi_align)
+gmi_align_tf4 = input.timeframe("D",   "GMI TF4 (default 1D)", group=grp_gmi_align)
+gmi_align_tf5 = input.timeframe("W",   "GMI TF5 (default 1W)", group=grp_gmi_align)
+
+float gmi_align_z1 = request.security(syminfo.tickerid, gmi_align_tf1, lib.kww_zscore(close, 50), ignore_invalid_symbol=true)
+float gmi_align_z2 = request.security(syminfo.tickerid, gmi_align_tf2, lib.kww_zscore(close, 50), ignore_invalid_symbol=true)
+float gmi_align_z3 = request.security(syminfo.tickerid, gmi_align_tf3, lib.kww_zscore(close, 50), ignore_invalid_symbol=true)
+float gmi_align_z4 = request.security(syminfo.tickerid, gmi_align_tf4, lib.kww_zscore(close, 50), ignore_invalid_symbol=true)
+float gmi_align_z5 = request.security(syminfo.tickerid, gmi_align_tf5, lib.kww_zscore(close, 50), ignore_invalid_symbol=true)
+float gmi_equiv_global_z = (nz(gmi_align_z1) * 0.10) + (nz(gmi_align_z2) * 0.15) + (nz(gmi_align_z3) * 0.25) + (nz(gmi_align_z4) * 0.30) + (nz(gmi_align_z5) * 0.20)
+int gmi_z_alignment_code = na(z_score) or na(gmi_equiv_global_z) ? 0 : z_score > 0 and gmi_equiv_global_z > 0 ? 1 : z_score < 0 and gmi_equiv_global_z < 0 ? -1 : z_score == 0 or gmi_equiv_global_z == 0 ? 0 : 2
+string gmi_z_alignment_txt = gmi_z_alignment_code == 1 ? "ALIGNED BULLISH" : gmi_z_alignment_code == -1 ? "ALIGNED BEARISH" : gmi_z_alignment_code == 2 ? "DIRECTION CONFLICT" : "NEUTRAL / N/A"
+color gmi_z_alignment_col = gmi_z_alignment_code == 1 ? c_cyan : gmi_z_alignment_code == -1 ? c_red : gmi_z_alignment_code == 2 ? c_orange : obs_sub
+
+bool is_vol_valid    = legacy_mode ? vol_anom_legacy >= 0.85 : (has_volume and vol_signal_ratio >= MIN_VOLUME_RATIO)
+bool is_real_vol     = legacy_mode ? vol_anom_legacy > 1.0 : (has_volume and vol_signal_ratio > 1.0)    
+bool is_macro_bull   = z_score > 0         
+bool is_macro_bear   = z_score < 0         
+bool is_strong_trend = hurst > 0.60        
+
+float cshi_score = (math.min(2.0, vol_anom) / 2.0 * 0.40) + (nz(hurst, 0.5) * 0.35) + (kaufman_er * 0.25)
+color cshi_col = c_red
+string cshi_txt = "LOW ACTIVITY"
+if cshi_score >= 0.65
+    cshi_col := c_purple, cshi_txt := "HIGH ACTIVITY"
+else if cshi_score >= 0.50
+    cshi_col := c_green, cshi_txt := "ACTIVE REGIME"
+else if cshi_score >= 0.38
+    cshi_col := c_orange, cshi_txt := "LOW ACTIVITY / TRANSITIONAL"
+
+// --- 3. HARMONIC ENGINE ---
+float w_f_int = lib.f_cycle(close, high, low, fast_len)
+float w_m_int = lib.f_cycle(close, high, low, mid_len)
+float w_s_int = lib.f_cycle(close, high, low, slow_len)
+float inten = (w_f_int > 0 and w_m_int > 0 and w_s_int > 0) ? 3.0 : (w_f_int < 0 and w_m_int < 0 and w_s_int < 0) ? -3.0 : 0.0
+
+float raw_comp = (lib.f_vol_cycle(close, high, low, fast_len, vol_anom) * 0.5) + (lib.f_vol_cycle(close, high, low, mid_len, vol_anom) * 0.35) + (lib.f_vol_cycle(close, high, low, slow_len, vol_anom) * 0.15)
+
+// Dynamic Kaufman ER Blending via library SSOT; formula contract matches the original inline implementation.
+[pro_fast, pro_slow, pro_core] = lib.calculate_prophet_tensor(raw_comp, kaufman_er, smooth_len)
+
+// --- 4. DIVERGENCE, MICRO-STRUCTURE, & MEMORY ENGINE ---
+var float last_ph_v = na
+var float last_pr_ph = na
+var int last_ph_bar = na
+var float last_pl_v = na
+var float last_pr_pl = na
+var int last_pl_bar = na
+var float d_enc = 0.0
+var float b_enc = 0.0
+var int structure_state_bar = na
+var int bull_structure_event_bar = na
+var int bear_structure_event_bar = na
+
+// R14 enum subtype; the display text is decoded from this integer.
+var int prophet_structure_subtype_code = SUB_NONE
+
+
+// Array Cleanup untuk Divergence Visuals
+var line[] div_lines = array.new_line()
+var label[] div_labels = array.new_label()
+
+float pro_ph = ta.pivothigh(pro_fast, 5, 2)
+float pro_pl = ta.pivotlow(pro_fast, 5, 2)
+
+bool is_cross_up = ta.crossover(pro_fast, 0)
+bool is_cross_dn = ta.crossunder(pro_fast, 0)
+
+if (is_cross_up or is_cross_dn) and (math.abs(d_enc) < 3.0 or not legacy_mode)
+    d_enc := 0.0, b_enc := 1.0
+    if not legacy_mode
+        prophet_structure_subtype_code := SUB_NONE
+        // V2: a zero-cross reset invalidates prior structure-state and event freshness.
+        structure_state_bar := na
+        bull_structure_event_bar := na
+        bear_structure_event_bar := na
+
+if not na(pro_ph)
+    if high[2] > last_pr_ph and pro_ph < last_ph_v and pro_ph > 0
+        d_enc := -1.0, b_enc := 2.0
+        bear_structure_event_bar := bar_index
+        if not legacy_mode
+            bull_structure_event_bar := na
+        if show_div_act
+            array.push(div_lines, line.new(last_ph_bar, last_ph_v, bar_index - 2, pro_ph, color=color.new(c_red, 20), width=2))
+            array.push(div_labels, label.new(bar_index - 2, pro_ph, "Div", color=no_color, textcolor=c_red, style=label.style_text_outline, size=size.tiny))
+            if array.size(div_lines) > 5
+                line.delete(array.shift(div_lines))
+                label.delete(array.shift(div_labels))
+    last_ph_v := pro_ph, last_pr_ph := high[2], last_ph_bar := bar_index - 2
+
+if not na(pro_pl)
+    if low[2] < last_pr_pl and pro_pl > last_pl_v and pro_pl < 0
+        d_enc := 1.0, b_enc := 2.0
+        bull_structure_event_bar := bar_index
+        if not legacy_mode
+            bear_structure_event_bar := na
+        if show_div_act
+            array.push(div_lines, line.new(last_pl_bar, last_pl_v, bar_index - 2, pro_pl, color=color.new(c_cyan, 20), width=2))
+            array.push(div_labels, label.new(bar_index - 2, pro_pl, "Div", color=no_color, textcolor=c_cyan, style=label.style_text_outline, size=size.tiny))
+            if array.size(div_lines) > 5
+                line.delete(array.shift(div_lines))
+                label.delete(array.shift(div_labels))
+    last_pl_v := pro_pl, last_pr_pl := low[2], last_pl_bar := bar_index - 2
+
+// --- LIQUIDITY SWEEP DETECTOR ---
+float body = math.abs(close - open)
+float wick_bot = math.min(open, close) - low
+float wick_top = high - math.max(open, close)
+float body_eff = legacy_mode ? body : math.max(body, ta.atr(14) * body_floor_atr)
+bool is_bot_rejection = wick_bot > (body_eff * WICK_BODY_RATIO)
+bool is_top_rejection = wick_top > (body_eff * WICK_BODY_RATIO)
+
+if d_enc == -1.0
+    if close > last_pr_ph
+        if is_top_rejection or (legacy_mode ? not is_real_vol : (has_volume and not is_real_vol))
+            d_enc := 3.0, b_enc := -4.0 // Bull Trap (Fakeout Up)
+            prophet_structure_subtype_code := SUB_BULL_TRAP
+            bear_structure_event_bar := bar_index
+            if not legacy_mode
+                bull_structure_event_bar := na
+        else
+            d_enc := -3.0, b_enc := 3.0 // True Breakout
+            prophet_structure_subtype_code := SUB_TRUE_BREAKOUT
+            bull_structure_event_bar := bar_index
+            if not legacy_mode
+                bear_structure_event_bar := na
+        structure_state_bar := bar_index
+    else if close < low[1] and close < open
+        b_enc := -3.0
+        bear_structure_event_bar := bar_index
+        if not legacy_mode
+            bull_structure_event_bar := na
+        
+if d_enc == 1.0
+    if close < last_pr_pl
+        if is_bot_rejection or (legacy_mode ? not is_real_vol : (has_volume and not is_real_vol))
+            d_enc := -3.0, b_enc := 3.0 // Bear Trap (Liquidity Sweep Down)
+            prophet_structure_subtype_code := SUB_BEAR_TRAP
+            bull_structure_event_bar := bar_index
+            if not legacy_mode
+                bear_structure_event_bar := na
+        else
+            d_enc := 3.0, b_enc := -4.0 // True Breakdown
+            prophet_structure_subtype_code := SUB_TRUE_BREAKDOWN
+            bear_structure_event_bar := bar_index
+            if not legacy_mode
+                bull_structure_event_bar := na
+        structure_state_bar := bar_index
+    else if close > high[1] and close > open
+        b_enc := 3.0
+        bull_structure_event_bar := bar_index
+        if not legacy_mode
+            bear_structure_event_bar := na
+
+// R14 state expiry. LEGACY intentionally retains the persistent R13 state.
+if not legacy_mode and (d_enc == 3.0 or d_enc == -3.0) and not na(structure_state_bar) and bar_index - structure_state_bar > state_max_age
+    d_enc := 0.0
+    b_enc := 1.0
+    prophet_structure_subtype_code := SUB_NONE
+    structure_state_bar := na
+    // Expired V2 structure must not leave a still-fresh event timestamp behind.
+    bull_structure_event_bar := na
+    bear_structure_event_bar := na
+
+string prophet_structure_subtype = prophet_structure_subtype_code == SUB_BULL_TRAP ? "BULL TRAP / FAKEOUT UP" : prophet_structure_subtype_code == SUB_TRUE_BREAKOUT ? "TRUE BREAKOUT" : prophet_structure_subtype_code == SUB_BEAR_TRAP ? "BEAR TRAP / LIQUIDITY SWEEP DOWN" : prophet_structure_subtype_code == SUB_TRUE_BREAKDOWN ? "TRUE BREAKDOWN" : "SUBTYPE UNRESOLVED"
+
+// 🛡️ Trade Management Rules
+float t_enc = 0.0
+
+if legacy_mode
+    if pro_fast >= PRICE_DISCOVERY_THRESHOLD
+        t_enc := 6.0
+    else if pro_fast <= -PRICE_DISCOVERY_THRESHOLD
+        t_enc := -6.0
+    else if d_enc == 3.0
+        if is_strong_trend and math.abs(z_score) >= MACRO_FILTER_Z
+            t_enc := 5.0
+        else
+            t_enc := 4.0
+    else if d_enc == -3.0
+        t_enc := 1.0
+    else if inten == 3.0 and kaufman_er > 0.5 and vol_anom_legacy >= 0.85
+        t_enc := is_strong_trend ? 1.0 : 0.0
+    else if inten == -3.0 and kaufman_er > 0.5 and vol_anom_legacy >= 0.85
+        t_enc := is_strong_trend ? -1.0 : 0.0
+    else if (b_enc == 3.0 or b_enc == -3.0) and not is_strong_trend
+        t_enc := 3.0
+else
+    if d_enc == 3.0
+        if is_strong_trend and math.abs(z_score) >= MACRO_FILTER_Z
+            t_enc := 5.0
+        else
+            t_enc := 4.0
+    else if pro_fast >= PRICE_DISCOVERY_THRESHOLD
+        t_enc := 6.0
+    else if pro_fast <= -PRICE_DISCOVERY_THRESHOLD
+        t_enc := -6.0
+    else if d_enc == -3.0
+        t_enc := 1.0
+    else if inten == 3.0 and kaufman_er > 0.5 and vol_anom >= 0.85
+        t_enc := is_strong_trend ? 1.0 : 0.0
+    else if inten == -3.0 and kaufman_er > 0.5 and vol_anom >= 0.85
+        t_enc := is_strong_trend ? -1.0 : 0.0
+    else if (b_enc == 3.0 or b_enc == -3.0) and not is_strong_trend
+        t_enc := 3.0 
+
+// --- 5. TEXT DECODER MAP (COLOR VALIDATED) ---
+string intensity_txt = math.abs(inten) == 3.0 ? "CYCLE ALIGNMENT: STRONG" : "CYCLE ALIGNMENT: MIXED"
+color int_col = inten > 0 ? c_cyan : inten < 0 ? c_red : obs_sub
+string int_dir_txt = inten > 0 ? "BULLISH 🚀" : inten < 0 ? "BEARISH 🩸" : "NEUTRAL ⚖️"
+
+string div_txt = "ALIGNED ⚖️"
+color div_col = obs_sub
+if d_enc == 1.0
+    div_txt := "BULLISH DIVERGENCE DETECTED", div_col := c_cyan
+else if d_enc == -1.0
+    div_txt := "BEARISH DIVERGENCE DETECTED", div_col := c_orange
+else if d_enc == 3.0
+    if t_enc == 5.0
+        div_txt := "MICRO BREAK / MACRO FILTER ACTIVE", div_col := c_blue
+    else if t_enc == 6.0 
+        div_txt := "PRICE-DISCOVERY STATE: HIGH", div_col := c_cyan
+    else if t_enc == -6.0
+        div_txt := "PRICE-DISCOVERY STATE: LOW", div_col := c_red
+    else
+        div_txt := "STRUCTURE STATE: BREAKOUT/TRAP CLASSIFICATION", div_col := c_red
+else if d_enc == -3.0
+    div_txt := "SWEEP/BREAKOUT STATE (SUBTYPE REQUIRED)", div_col := c_cyan 
+    
+// --- R7 DISPLAY-ONLY ALIGNMENT: HUD STRUCTURE LABEL TO RECORDED SUBTYPE ---
+// Does not modify d_enc/b_enc/t_enc or any signal/alert condition.
+if d_enc == 3.0 or d_enc == -3.0
+    div_txt := prophet_structure_subtype
+string vol_conf_txt = not has_volume and not legacy_mode ? "VOLUME N/A" : is_real_vol ? "ABOVE-BASELINE VOLUME" : "NOT ABOVE BASELINE"
+color vol_conf_col = not has_volume and not legacy_mode ? obs_sub : is_real_vol ? c_cyan : c_red
+
+string tm_txt = "NOMINAL (HOLD) ⚖️"
+color tm_col = obs_sub
+if t_enc == 1.0
+    tm_txt := "BULLISH MANAGEMENT STATE", tm_col := c_cyan
+else if t_enc == -1.0
+    tm_txt := "BEARISH MANAGEMENT STATE", tm_col := c_red
+else if t_enc == 3.0
+    tm_txt := "POTENTIAL REVERSAL CONDITION", tm_col := c_orange
+else if t_enc == 4.0
+    tm_txt := "RISK-REDUCTION WARNING", tm_col := c_red
+else if t_enc == 5.0
+    tm_txt := "WAIT: MACRO FILTER", tm_col := c_blue
+else if t_enc == 6.0
+    tm_txt := "UPPER PRICE-DISCOVERY CONDITION", tm_col := c_cyan
+else if t_enc == -6.0
+    tm_txt := "LOWER PRICE-DISCOVERY CONDITION", tm_col := c_red
+
+int tm_dir = (t_enc == 1.0 or t_enc == 6.0) ? 1 : (t_enc == -1.0 or t_enc == 4.0 or t_enc == -6.0) ? -1 : 0
+string macro_align_txt = tm_dir == 0 ? "—" : ((tm_dir == 1 and is_macro_bull) or (tm_dir == -1 and is_macro_bear)) ? "ALIGNS WITH MACRO Z-SCORE" : "OPPOSES MACRO Z-SCORE"
+color macro_align_col = macro_align_txt == "ALIGNS WITH MACRO Z-SCORE" ? c_cyan : macro_align_txt == "OPPOSES MACRO Z-SCORE" ? c_red : obs_sub
+
+
+// --- 6. MULTI-LAYER CINEMATIC RENDER ---
+// ✨ RIBBON COLOR DIKEMBALIKAN KE CYAN/RED ✨
+color phase_color = pro_slow > 0 ? c_cyan : c_red
+color ribbon_color = pro_fast > pro_slow ? c_cyan : c_red
+
+hline_peak = hline(0.35, color=color.new(c_red, 30), linestyle=hline.style_dotted)
+hline_max  = hline(0.55, color=no_color)
+fill(hline_peak, hline_max, color=color.new(c_red, 90))
+
+hline_trough = hline(-0.35, color=color.new(c_cyan, 30), linestyle=hline.style_dotted)
+hline_min    = hline(-0.55, color=no_color)
+fill(hline_trough, hline_min, color=color.new(c_cyan, 90))
+
+p_zero = plot(0, color=color.new(color.white, 80), linewidth=1)
+p_base = plot(pro_slow, color=no_color, editable=false)
+fill(p_base, p_zero, color=color.new(phase_color, 85))
+
+p_s = plot(pro_slow, color=color.new(ribbon_color, 30), linewidth=1)
+p_c = plot(pro_core, color=no_color, editable=false)
+p_f = plot(pro_fast, color=ribbon_color, linewidth=2)
+
+fill(p_f, p_c, color=color.new(ribbon_color, 50))
+fill(p_c, p_s, color=color.new(ribbon_color, 75))
+
+// --- R14 ADAPTIVE, TIERED CONFIRMATION GATE
+// Raw crossover formulas and thresholds remain unchanged. V2 adds fresh symmetric structure,
+// current-bar volume qualification, and z-score setup depth for HIGH QUALITY.
+bool raw_buy_cross  = ta.crossover(pro_fast, pro_slow) and pro_fast < -RAW_CROSS_DEPTH
+bool raw_sell_cross = ta.crossunder(pro_fast, pro_slow) and pro_fast > RAW_CROSS_DEPTH
+bool buy_candidate  = raw_buy_cross and barstate.isconfirmed
+bool sell_candidate = raw_sell_cross and barstate.isconfirmed
+
+// Full confirmation remains unchanged. Early confirmation is advisory only.
+bool bullish_price_confirm = close > open and close > high[1]
+bool bearish_price_confirm = close < open and close < low[1]
+bool bullish_price_early = close > open and close > close[1]
+bool bearish_price_early = close < open and close < close[1]
+bool bullish_structure_legacy = (b_enc == 3.0 or d_enc == 1.0 or (d_enc == -3.0 and prophet_structure_subtype == "BEAR TRAP / LIQUIDITY SWEEP DOWN")) and d_enc != 3.0
+bool bearish_structure_legacy = (b_enc == -3.0 or d_enc == -1.0 or (d_enc == 3.0 and prophet_structure_subtype == "TRUE BREAKDOWN")) and d_enc != -3.0
+bool bull_structure_fresh = (not na(bull_structure_event_bar) and bar_index - bull_structure_event_bar <= struct_fresh_bars)
+bool bear_structure_fresh = (not na(bear_structure_event_bar) and bar_index - bear_structure_event_bar <= struct_fresh_bars)
+bool bullish_structure_v2 = bull_structure_fresh and (d_enc == 1.0 or (b_enc == 3.0 and d_enc != 0.0) or (d_enc == -3.0 and (prophet_structure_subtype_code == SUB_BEAR_TRAP or prophet_structure_subtype_code == SUB_TRUE_BREAKOUT)))
+bool bearish_structure_v2 = bear_structure_fresh and (d_enc == -1.0 or (b_enc == -3.0 and d_enc != 0.0) or (d_enc == 3.0 and (prophet_structure_subtype_code == SUB_BULL_TRAP or prophet_structure_subtype_code == SUB_TRUE_BREAKDOWN)))
+bool bullish_structure_confirm = legacy_mode ? bullish_structure_legacy : bullish_structure_v2
+bool bearish_structure_confirm = legacy_mode ? bearish_structure_legacy : bearish_structure_v2
+
+int bars_since_buy = ta.barssince(buy_candidate)
+int bars_since_sell = ta.barssince(sell_candidate)
+bool has_buy_event = not na(bars_since_buy)
+bool has_sell_event = not na(bars_since_sell)
+// R14 V2: a newer opposite crossover supersedes the older candidate window.
+// LEGACY intentionally preserves the prior overlapping-window behavior.
+bool sell_supersedes_buy = has_sell_event and (not has_buy_event or bars_since_sell < bars_since_buy)
+bool buy_supersedes_sell = has_buy_event and (not has_sell_event or bars_since_buy < bars_since_sell)
+bool buy_window_active = has_buy_event and bars_since_buy >= 0 and bars_since_buy <= confirmation_window and (legacy_mode or not sell_supersedes_buy)
+bool sell_window_active = has_sell_event and bars_since_sell >= 0 and bars_since_sell <= confirmation_window and (legacy_mode or not buy_supersedes_sell)
+
+int buy_quality_points = (inten == 3.0 ? 1 : 0) + (is_macro_bull ? 1 : 0) + (is_vol_valid ? 1 : 0)
+int sell_quality_points = (inten == -3.0 ? 1 : 0) + (is_macro_bear ? 1 : 0) + (is_vol_valid ? 1 : 0)
+bool buy_base_confirm = barstate.isconfirmed and buy_window_active and bullish_price_confirm and bullish_structure_confirm
+bool sell_base_confirm = barstate.isconfirmed and sell_window_active and bearish_price_confirm and bearish_structure_confirm
+bool buy_volume_pass = legacy_mode ? buy_quality_points >= 2 : (not has_volume or vol_signal_ratio >= MIN_VOLUME_RATIO)
+bool sell_volume_pass = legacy_mode ? sell_quality_points >= 2 : (not has_volume or vol_signal_ratio >= MIN_VOLUME_RATIO)
+var float buy_candidate_min_z = na
+var float sell_candidate_max_z = na
+if buy_candidate
+    buy_candidate_min_z := z_score
+    // V2: discard setup-depth memory belonging to the superseded SELL candidate.
+    if not legacy_mode
+        sell_candidate_max_z := na
+if sell_candidate
+    sell_candidate_max_z := z_score
+    // V2: discard setup-depth memory belonging to the superseded BUY candidate.
+    if not legacy_mode
+        buy_candidate_min_z := na
+if buy_window_active
+    buy_candidate_min_z := na(buy_candidate_min_z) ? z_score : math.min(buy_candidate_min_z, z_score)
+if sell_window_active
+    sell_candidate_max_z := na(sell_candidate_max_z) ? z_score : math.max(sell_candidate_max_z, z_score)
+bool buy_depth_pass = not na(buy_candidate_min_z) and buy_candidate_min_z <= -SETUP_DEPTH_Z
+bool sell_depth_pass = not na(sell_candidate_max_z) and sell_candidate_max_z >= SETUP_DEPTH_Z
+bool buy_confirmed_raw = buy_base_confirm and buy_volume_pass
+bool sell_confirmed_raw = sell_base_confirm and sell_volume_pass
+// Advisory early state: same active candidate window, directional close beyond prior close,
+// and existing structure/volume gates. Does not promote to confirmed or high-quality.
+bool buy_early_confirmation = barstate.isconfirmed and buy_window_active and bullish_price_early and bullish_structure_confirm and buy_volume_pass and not buy_confirmed_raw
+bool sell_early_confirmation = barstate.isconfirmed and sell_window_active and bearish_price_early and bearish_structure_confirm and sell_volume_pass and not sell_confirmed_raw
+bool buy_high_quality_raw = legacy_mode ? (buy_base_confirm and buy_quality_points == 3) : (buy_confirmed_raw and has_volume and vol_signal_ratio >= HIGH_QUALITY_VOLUME_RATIO and buy_depth_pass)
+bool sell_high_quality_raw = legacy_mode ? (sell_base_confirm and sell_quality_points == 3) : (sell_confirmed_raw and has_volume and vol_signal_ratio >= HIGH_QUALITY_VOLUME_RATIO and sell_depth_pass)
+
+// Latch first pass for each candidate; preserve the last pass after its window expires for HUD accuracy.
+var int buy_pass_bar = na
+var int sell_pass_bar = na
+var int buy_hq_bar = na
+var int sell_hq_bar = na
+if buy_candidate
+    buy_pass_bar := na
+    buy_hq_bar := na
+    // V2 output alignment: a fresh BUY candidate invalidates prior SELL pass latches.
+    if not legacy_mode
+        sell_pass_bar := na
+        sell_hq_bar := na
+if sell_candidate
+    sell_pass_bar := na
+    sell_hq_bar := na
+    // V2 output alignment: a fresh SELL candidate invalidates prior BUY pass latches.
+    if not legacy_mode
+        buy_pass_bar := na
+        buy_hq_bar := na
+if buy_confirmed_raw and na(buy_pass_bar)
+    buy_pass_bar := bar_index
+if sell_confirmed_raw and na(sell_pass_bar)
+    sell_pass_bar := bar_index
+if buy_confirmed_raw and buy_high_quality_raw and na(buy_hq_bar)
+    buy_hq_bar := bar_index
+if sell_confirmed_raw and sell_high_quality_raw and na(sell_hq_bar)
+    sell_hq_bar := bar_index
+bool buy_confirmed = not na(buy_pass_bar) and bar_index == buy_pass_bar
+bool sell_confirmed = not na(sell_pass_bar) and bar_index == sell_pass_bar
+bool buy_high_quality = not na(buy_hq_bar) and bar_index == buy_hq_bar
+bool sell_high_quality = not na(sell_hq_bar) and bar_index == sell_hq_bar
+
+// Persist the first close that qualifies as an early/full entry reference for the active setup.
+// These are advisory references, not orders; clear the opposite direction on a fresh candidate.
+var float latched_buy_entry_candidate = na
+var float latched_sell_entry_candidate = na
+if buy_candidate
+    latched_buy_entry_candidate := na
+    if not legacy_mode
+        latched_sell_entry_candidate := na
+if sell_candidate
+    latched_sell_entry_candidate := na
+    if not legacy_mode
+        latched_buy_entry_candidate := na
+if (buy_early_confirmation or buy_confirmed_raw) and na(latched_buy_entry_candidate)
+    latched_buy_entry_candidate := close
+if (sell_early_confirmation or sell_confirmed_raw) and na(latched_sell_entry_candidate)
+    latched_sell_entry_candidate := close
+
+bool latest_is_buy = has_buy_event and (not has_sell_event or bars_since_buy < bars_since_sell)
+bool latest_is_sell = has_sell_event and (not has_buy_event or bars_since_sell < bars_since_buy)
+bool last_buy_passed = not na(buy_pass_bar) and not na(bars_since_buy) and buy_pass_bar >= bar_index - bars_since_buy
+bool last_sell_passed = not na(sell_pass_bar) and not na(bars_since_sell) and sell_pass_bar >= bar_index - bars_since_sell
+string gate_reason = "NO BLOCKER"
+// R21 diagnostic correction: gate_reason describes blockers for BASE CONFIRMATION only.
+// Setup depth is a HIGH-QUALITY tier requirement in V2, not a blocker for buy/sell_confirmed_raw.
+if latest_is_buy and buy_window_active and not last_buy_passed
+    gate_reason := not bullish_price_confirm ? "PRICE" : not bullish_structure_confirm ? "STRUCTURE" : not buy_volume_pass ? "VOLUME" : legacy_mode and buy_quality_points < 2 ? (inten != 3.0 ? "CYCLE" : not is_macro_bull ? "MACRO" : "VOLUME") : "WAIT"
+else if latest_is_sell and sell_window_active and not last_sell_passed
+    gate_reason := not bearish_price_confirm ? "PRICE" : not bearish_structure_confirm ? "STRUCTURE" : not sell_volume_pass ? "VOLUME" : legacy_mode and sell_quality_points < 2 ? (inten != -3.0 ? "CYCLE" : not is_macro_bear ? "MACRO" : "VOLUME") : "WAIT"
+
+int buy_pass_age = not na(buy_pass_bar) ? bar_index - buy_pass_bar : na
+int sell_pass_age = not na(sell_pass_bar) ? bar_index - sell_pass_bar : na
+int buy_hq_age = not na(buy_hq_bar) ? bar_index - buy_hq_bar : na
+int sell_hq_age = not na(sell_hq_bar) ? bar_index - sell_hq_bar : na
+string gate_status_txt = "GATE: NO CROSS"
+if has_buy_event or has_sell_event
+    if latest_is_buy
+        if not buy_window_active
+            gate_status_txt := last_buy_passed ? "BUY PASSED · WINDOW EXPIRED" : "NO ACTIVE SETUP"
+        else if last_buy_passed
+            if not legacy_mode and not has_volume
+                gate_status_txt := "BUY CONFIRMED · HQ N/A"
+            else if not na(buy_hq_bar)
+                gate_status_txt := "BUY HIGH QUALITY (" + str.tostring(buy_hq_age) + " bars ago)"
+            else
+                gate_status_txt := "BUY CONFIRMED (" + str.tostring(buy_pass_age) + " bars ago)"
+        else
+            gate_status_txt := "BUY WAIT · " + gate_reason
+    else if latest_is_sell
+        if not sell_window_active
+            gate_status_txt := last_sell_passed ? "SELL PASSED · WINDOW EXPIRED" : "NO ACTIVE SETUP"
+        else if last_sell_passed
+            if not legacy_mode and not has_volume
+                gate_status_txt := "SELL CONFIRMED · HQ N/A"
+            else if not na(sell_hq_bar)
+                gate_status_txt := "SELL HIGH QUALITY (" + str.tostring(sell_hq_age) + " bars ago)"
+            else
+                gate_status_txt := "SELL CONFIRMED (" + str.tostring(sell_pass_age) + " bars ago)"
+        else
+            gate_status_txt := "SELL WAIT · " + gate_reason
+color gate_status_col = str.contains(gate_status_txt, "WAIT") ? c_orange : str.contains(gate_status_txt, "BUY") ? c_cyan : str.contains(gate_status_txt, "SELL") ? c_red : obs_sub
+string tm_display_txt = tm_txt + " · " + gate_status_txt
+
+// Optional funnel: cumulative diagnostic counts, separate from the main HUD.
+var int funnel_candidates = 0
+var int funnel_price = 0
+var int funnel_structure = 0
+var int funnel_volume = 0
+var int funnel_confirmed = 0
+var int funnel_hq = 0
+var bool buy_price_counted = false
+var bool sell_price_counted = false
+var bool buy_structure_counted = false
+var bool sell_structure_counted = false
+var bool buy_volume_counted = false
+var bool sell_volume_counted = false
+if buy_candidate or sell_candidate
+    funnel_candidates += 1
+if buy_candidate
+    buy_price_counted := false, buy_structure_counted := false, buy_volume_counted := false
+if sell_candidate
+    sell_price_counted := false, sell_structure_counted := false, sell_volume_counted := false
+if buy_window_active and bullish_price_confirm and not buy_price_counted
+    funnel_price += 1, buy_price_counted := true
+if sell_window_active and bearish_price_confirm and not sell_price_counted
+    funnel_price += 1, sell_price_counted := true
+if buy_window_active and bullish_price_confirm and bullish_structure_confirm and not buy_structure_counted
+    funnel_structure += 1, buy_structure_counted := true
+if sell_window_active and bearish_price_confirm and bearish_structure_confirm and not sell_structure_counted
+    funnel_structure += 1, sell_structure_counted := true
+if buy_window_active and bullish_price_confirm and bullish_structure_confirm and buy_volume_pass and not buy_volume_counted
+    funnel_volume += 1, buy_volume_counted := true
+if sell_window_active and bearish_price_confirm and bearish_structure_confirm and sell_volume_pass and not sell_volume_counted
+    funnel_volume += 1, sell_volume_counted := true
+if buy_confirmed or sell_confirmed
+    funnel_confirmed += 1
+if buy_high_quality or sell_high_quality
+    funnel_hq += 1
+var table funnel_table = table.new(position.top_left, 2, 7, bgcolor=c_dark, border_width=1, border_color=c_border)
+if barstate.islast and show_funnel
+    table.cell(funnel_table, 0, 0, "R14 FUNNEL", text_color=c_purple)
+    table.cell(funnel_table, 1, 0, "COUNT", text_color=obs_sub)
+    table.cell(funnel_table, 0, 1, "Candidates", text_color=color.white), table.cell(funnel_table, 1, 1, str.tostring(funnel_candidates), text_color=obs_sub)
+    table.cell(funnel_table, 0, 2, "Price", text_color=color.white), table.cell(funnel_table, 1, 2, str.tostring(funnel_price), text_color=obs_sub)
+    table.cell(funnel_table, 0, 3, "Structure", text_color=color.white), table.cell(funnel_table, 1, 3, str.tostring(funnel_structure), text_color=obs_sub)
+    table.cell(funnel_table, 0, 4, "Volume", text_color=color.white), table.cell(funnel_table, 1, 4, str.tostring(funnel_volume), text_color=obs_sub)
+    table.cell(funnel_table, 0, 5, "Confirmed", text_color=color.white), table.cell(funnel_table, 1, 5, str.tostring(funnel_confirmed), text_color=obs_sub)
+    table.cell(funnel_table, 0, 6, "High Quality", text_color=color.white), table.cell(funnel_table, 1, 6, str.tostring(funnel_hq), text_color=obs_sub)
+else if barstate.islast
+    table.clear(funnel_table, 0, 0, 1, 6)
+
+bool cross_up_trough = ta.crossover(pro_fast, -0.35)
+bool cross_dn_peak   = ta.crossunder(pro_fast, 0.35)
+plotshape(cross_up_trough and barstate.isconfirmed and not use_zen_mode ? pro_fast : na, "Threshold Cross Up -0.35", shape.circle, location.absolute, color=c_cyan, size=size.tiny)
+plotshape(cross_dn_peak and barstate.isconfirmed and not use_zen_mode ? pro_fast : na, "Threshold Cross Down +0.35", shape.circle, location.absolute, color=c_red, size=size.tiny)
+
+// R14 HUD UX: indicate the existing confirmation window on the oscillator.
+// These are window-state markers only; they are not entry/confirmation signals.
+plotshape(buy_window_active and not use_zen_mode ? pro_fast : na, title="BUY Window Active", style=shape.circle, location=location.absolute, color=c_cyan, size=size.tiny)
+plotshape(sell_window_active and not use_zen_mode ? pro_fast : na, title="SELL Window Active", style=shape.circle, location=location.absolute, color=c_red, size=size.tiny)
+
+ // Short-horizon oscillator scenarios: slope continuation vs. slope reversal.
+ // These are illustrative momentum paths, not probabilities, price targets, or entry signals.
+var line momentum_projection_main = na
+var line momentum_projection_alt = na
+var line momentum_projection_boundary = na
+var label momentum_projection_main_label = na
+var label momentum_projection_alt_label = na
+float projection_lr_now = ta.linreg(pro_fast, projection_lookback, 0)
+float projection_lr_prev = ta.linreg(pro_fast, projection_lookback, 1)
+float projection_slope = projection_lr_now - projection_lr_prev
+float projection_noise = ta.stdev(pro_fast, projection_lookback) / projection_horizon
+float projection_stdev = ta.stdev(pro_fast, projection_lookback)
+float projection_range = math.max(projection_stdev, 0.01)
+float projection_step = math.max(math.abs(projection_slope), nz(projection_noise, 0.0) * 0.15)
+bool projection_slope_neutral = math.abs(projection_slope) < 0.000001
+float projection_main_end = projection_slope_neutral ? pro_fast + projection_step * projection_horizon : pro_fast + projection_slope * projection_horizon
+float projection_alt_end = projection_slope_neutral ? pro_fast - projection_step * projection_horizon : pro_fast - math.sign(projection_slope) * projection_step * projection_horizon
+
+if barstate.islast
+    if not na(momentum_projection_main)
+        line.delete(momentum_projection_main)
+    if not na(momentum_projection_alt)
+        line.delete(momentum_projection_alt)
+    if not na(momentum_projection_boundary)
+        line.delete(momentum_projection_boundary)
+    if not na(momentum_projection_main_label)
+        label.delete(momentum_projection_main_label)
+    if not na(momentum_projection_alt_label)
+        label.delete(momentum_projection_alt_label)
+    momentum_projection_main := na
+    momentum_projection_alt := na
+    momentum_projection_boundary := na
+    momentum_projection_main_label := na
+    momentum_projection_alt_label := na
+    if show_momentum_projection and not use_zen_mode and not na(pro_fast) and not na(projection_slope)
+        // Boundary separates observed oscillator values from future illustrative paths.
+        momentum_projection_boundary := line.new(
+          x1=bar_index, y1=0.0, x2=bar_index, y2=0.0,
+          xloc=xloc.bar_index, extend=extend.none,
+          color=color.new(color.gray, 25), style=line.style_dotted, width=1)
+        momentum_projection_main := line.new(
+          x1=bar_index, y1=pro_fast,
+          x2=bar_index + projection_horizon, y2=projection_main_end,
+          xloc=xloc.bar_index, extend=extend.none,
+          color=color.new(projection_slope >= 0 ? c_cyan : c_red, 5),
+          style=line.style_dashed, width=2)
+        momentum_projection_alt := line.new(
+          x1=bar_index, y1=pro_fast,
+          x2=bar_index + projection_horizon, y2=projection_alt_end,
+          xloc=xloc.bar_index, extend=extend.none,
+          color=color.new(projection_slope >= 0 ? c_red : c_cyan, 25),
+          style=line.style_dashed, width=2)
+        momentum_projection_main_label := label.new(
+          x=bar_index + projection_horizon, y=projection_main_end,
+          text=projection_slope >= 0 ? "MOM +" : "MOM −",
+          xloc=xloc.bar_index, yloc=yloc.price,
+          style=label.style_label_left,
+          color=color.new(projection_slope >= 0 ? c_cyan : c_red, 15),
+          textcolor=color.white, size=size.tiny)
+        momentum_projection_alt_label := label.new(
+          x=bar_index + projection_horizon, y=projection_alt_end,
+          text=projection_slope >= 0 ? "ALT −" : "ALT +",
+          xloc=xloc.bar_index, yloc=yloc.price,
+          style=label.style_label_left,
+          color=color.new(projection_slope >= 0 ? c_red : c_cyan, 25),
+          textcolor=color.white, size=size.tiny)
+        // Vertical boundary spans the current oscillator's recent range for visual separation.
+        line.set_y1(momentum_projection_boundary, pro_fast - projection_range * 1.5)
+        line.set_y2(momentum_projection_boundary, pro_fast + projection_range * 1.5)
+
+// --- 7. CSHI STATUS RIBBON ---
+p_cshi_top = plot(-0.62, "CSHI Ribbon Top", color=no_color, display=display.none)
+p_cshi_bot = plot(-0.68, "CSHI Ribbon Bot", color=no_color, display=display.none)
+fill(p_cshi_top, p_cshi_bot, color=color.new(cshi_col, 10), title="CSHI Status Ribbon")
+
+// --- 8. THE INSTITUTIONAL HUD RENDER ---
+// UX update: exactly 5 total rows (1 title + 4 data rows); display-only changes.
+string regime_detail = "ER " + str.tostring(kaufman_er, "#.00") + " · Vol " + str.tostring(vol_anom, "#.0") + "x"
+string hud_market_txt = cshi_txt + " · " + regime_detail
+string hud_harmonic_txt = intensity_txt + " · " + int_dir_txt
+string hud_structure_txt = div_txt + " · " + vol_conf_txt
+
+// Display-only momentum metric for Prophet HUD row 5.
+float prophet_momentum_delta = pro_fast - pro_fast[1]
+string hud_momentum_txt = na(prophet_momentum_delta) ? "MOMENTUM UNAVAILABLE" : pro_fast > pro_slow and prophet_momentum_delta > 0 ? "BULLISH · STRENGTHENING" : pro_fast > pro_slow and prophet_momentum_delta < 0 ? "BULLISH · WEAKENING" : pro_fast < pro_slow and prophet_momentum_delta < 0 ? "BEARISH · STRENGTHENING" : pro_fast < pro_slow and prophet_momentum_delta > 0 ? "BEARISH · WEAKENING" : "NEUTRAL · STABLE"
+color hud_momentum_col = str.contains(hud_momentum_txt, "BULLISH") ? c_cyan : str.contains(hud_momentum_txt, "BEARISH") ? c_red : obs_sub
+
+// R22 zone lifecycle: informational state inside existing Trade Management HUD only.
+// Does not replace oscillator plots or change confirmation/high-quality formulas.
+string zone_state_txt = "ZONE NONE"
+color zone_state_col = obs_sub
+if latest_is_buy and buy_window_active
+    zone_state_txt := last_buy_passed ? "BUY ZONE · CONFIRMED" : "BUY ZONE · OPEN"
+    zone_state_col := last_buy_passed ? c_cyan : c_orange
+else if latest_is_sell and sell_window_active
+    zone_state_txt := last_sell_passed ? "SELL ZONE · CONFIRMED" : "SELL ZONE · OPEN"
+    zone_state_col := last_sell_passed ? c_red : c_orange
+else if latest_is_buy and has_buy_event and bars_since_buy > confirmation_window
+    zone_state_txt := "BUY ZONE · EXPIRED"
+    zone_state_col := obs_sub
+else if latest_is_sell and has_sell_event and bars_since_sell > confirmation_window
+    zone_state_txt := "SELL ZONE · EXPIRED"
+    zone_state_col := obs_sub
+
+// R16 DISPLAY-ONLY FIX: expired candidate windows no longer dominate the HUD.
+// Entry formulas, candidate state, alerts and thresholds remain unchanged.
+// Compact, reconciled entry instruction. DISPLAY ONLY: no signal/gate/alert state is changed.
+string entry_instruction = "WAIT · NO SETUP"
+color entry_instruction_col = obs_sub
+bool buy_macro_ok = is_macro_bull and gmi_z_alignment_code == 1
+bool sell_macro_ok = is_macro_bear and gmi_z_alignment_code == -1
+
+// Risk reduction has display priority over entry readiness.
+if t_enc == 4.0
+    entry_instruction := "REDUCE RISK"
+    entry_instruction_col := c_red
+else if latest_is_buy and buy_window_active
+    if last_buy_passed
+        entry_instruction := buy_macro_ok ? "BUY · READY" : "BUY · CHECK MACRO"
+        entry_instruction_col := buy_macro_ok ? c_cyan : c_orange
+    else
+        entry_instruction := "WAIT BUY · " + gate_reason
+        entry_instruction_col := c_orange
+else if latest_is_sell and sell_window_active
+    if last_sell_passed
+        entry_instruction := sell_macro_ok ? "SELL · READY" : "SELL · CHECK MACRO"
+        entry_instruction_col := sell_macro_ok ? c_red : c_orange
+    else
+        entry_instruction := "WAIT SELL · " + gate_reason
+        entry_instruction_col := c_orange
+else if t_enc == 5.0
+    entry_instruction := "WAIT · MACRO FILTER"
+    entry_instruction_col := c_blue
+
+// Reason follows the active instruction first; only when no candidate is current does it use current TM/structure state.
+string entry_reason_short = "NO ACTIVE SETUP"
+if t_enc == 4.0
+    entry_reason_short := "RISK REDUCE"
+else if latest_is_buy
+    entry_reason_short := buy_window_active ? (last_buy_passed ? "GATE PASS" : gate_reason) : (last_buy_passed ? "GATE PASSED" : "NO CONFIRM")
+else if latest_is_sell
+    entry_reason_short := sell_window_active ? (last_sell_passed ? "GATE PASS" : gate_reason) : (last_sell_passed ? "GATE PASSED" : "NO CONFIRM")
+else
+    entry_reason_short := t_enc == 3.0 ? "REVERSAL" : t_enc == 5.0 ? "MACRO FILTER" : t_enc == 6.0 ? "UPPER DISC" : t_enc == -6.0 ? "LOWER DISC" : t_enc == 1.0 ? "BULL MGMT" : t_enc == -1.0 ? "BEAR MGMT" : (d_enc == 3.0 or d_enc == -3.0) ? "STRUCT SHIFT" : "NO MGMT ALERT"
+string gmi_align_short_txt = gmi_z_alignment_code == 1 ? "P/G BULL" : gmi_z_alignment_code == -1 ? "P/G BEAR" : gmi_z_alignment_code == 2 ? "P/G X" : "P/G NEUTRAL"
+string macro_context_txt = buy_macro_ok ? "MACRO/P-G BULL ALIGNED" : sell_macro_ok ? "MACRO/P-G BEAR ALIGNED" : is_macro_bull and gmi_z_alignment_code == -1 ? "MACRO BULL / P-G BEAR" : is_macro_bear and gmi_z_alignment_code == 1 ? "MACRO BEAR / P-G BULL" : is_macro_bull ? "MACRO BULL / P-G NOT ALIGNED" : is_macro_bear ? "MACRO BEAR / P-G NOT ALIGNED" : "MACRO NEUTRAL"
+string decision_context_txt = (inten == 3.0 ? "CYCLE BULL" : inten == -3.0 ? "CYCLE BEAR" : "CYCLE MIXED") + " · " + macro_context_txt + " · " + gmi_align_short_txt
+
+// R15 decision synthesis: DISPLAY ONLY. It combines existing regime, harmonic,
+// structure, candidate, gate and Prophet/GMI alignment states; no trade logic changes.
+string regime_short_txt = cshi_score >= 0.65 ? "HIGH ACTIVITY" : cshi_score >= 0.50 ? "ACTIVE" : cshi_score >= 0.38 ? "TRANSITIONAL" : "LOW ACTIVITY"
+string harmonic_short_txt = inten > 0 ? "CYCLE BULL" : inten < 0 ? "CYCLE BEAR" : "CYCLE MIXED"
+bool structure_bull_context = d_enc == 1.0 or (d_enc == -3.0 and (prophet_structure_subtype_code == SUB_BEAR_TRAP or prophet_structure_subtype_code == SUB_TRUE_BREAKOUT))
+bool structure_bear_context = d_enc == -1.0 or (d_enc == 3.0 and (prophet_structure_subtype_code == SUB_BULL_TRAP or prophet_structure_subtype_code == SUB_TRUE_BREAKDOWN))
+bool structure_trap_context = prophet_structure_subtype_code == SUB_BULL_TRAP or prophet_structure_subtype_code == SUB_BEAR_TRAP
+string structure_short_txt = structure_trap_context ? (prophet_structure_subtype_code == SUB_BULL_TRAP ? "BULL TRAP" : "BEAR TRAP") : prophet_structure_subtype_code == SUB_TRUE_BREAKOUT ? "TRUE BREAKOUT" : prophet_structure_subtype_code == SUB_TRUE_BREAKDOWN ? "TRUE BREAKDOWN" : structure_bull_context ? "BULL DIV" : structure_bear_context ? "BEAR DIV" : (d_enc == 3.0 or d_enc == -3.0) ? "BREAKOUT STATE" : "NO ACTIVE DIV"
+
+string decision_conclusion = "NO ACTIVE SETUP"
+color decision_conclusion_col = obs_sub
+if t_enc == 4.0
+    decision_conclusion := "REDUCE RISK · RISK VETO"
+    decision_conclusion_col := c_red
+// Display-only priority: when no candidate window is active, surface an existing
+// trap context instead of letting an expired opposite-side candidate mask it.
+else if structure_trap_context and ((latest_is_buy and not buy_window_active) or (latest_is_sell and not sell_window_active) or (not latest_is_buy and not latest_is_sell))
+    decision_conclusion := prophet_structure_subtype_code == SUB_BULL_TRAP ? "REVERSAL WATCH · BULL TRAP" : "REVERSAL WATCH · BEAR TRAP"
+    decision_conclusion_col := c_orange
+else if latest_is_buy and buy_window_active
+    if not last_buy_passed
+        decision_conclusion := "WAIT BUY · " + gate_reason
+        decision_conclusion_col := c_orange
+    else if not buy_macro_ok
+        decision_conclusion := "WAIT BUY · MACRO CONFLICT"
+        decision_conclusion_col := c_orange
+    else if inten == -3.0
+        decision_conclusion := "WAIT BUY · CYCLE CONFLICT"
+        decision_conclusion_col := c_orange
+    else if cshi_txt == "LOW ACTIVITY" and not is_vol_valid
+        decision_conclusion := "WAIT BUY · LOW ACTIVITY"
+        decision_conclusion_col := c_orange
+    else
+        decision_conclusion := "BUY BIAS · GATE + MACRO PASS"
+        decision_conclusion_col := c_cyan
+else if latest_is_sell and sell_window_active
+    if not last_sell_passed
+        decision_conclusion := "WAIT SELL · " + gate_reason
+        decision_conclusion_col := c_orange
+    else if not sell_macro_ok
+        decision_conclusion := "WAIT SELL · MACRO CONFLICT"
+        decision_conclusion_col := c_orange
+    else if inten == 3.0
+        decision_conclusion := "WAIT SELL · CYCLE CONFLICT"
+        decision_conclusion_col := c_orange
+    else if cshi_txt == "LOW ACTIVITY" and not is_vol_valid
+        decision_conclusion := "WAIT SELL · LOW ACTIVITY"
+        decision_conclusion_col := c_orange
+    else
+        decision_conclusion := "SELL BIAS · GATE + MACRO PASS"
+        decision_conclusion_col := c_red
+else if structure_trap_context
+    decision_conclusion := prophet_structure_subtype_code == SUB_BULL_TRAP ? "REVERSAL WATCH · BULL TRAP" : "REVERSAL WATCH · BEAR TRAP"
+    decision_conclusion_col := c_orange
+else if inten == 3.0 and is_macro_bull and gmi_z_alignment_code == 1
+    decision_conclusion := structure_bull_context ? "BULLISH BIAS · STRUCTURE SUPPORT" : "BULLISH BIAS · WAIT STRUCTURE"
+    decision_conclusion_col := structure_bull_context ? c_cyan : c_orange
+else if inten == -3.0 and is_macro_bear and gmi_z_alignment_code == -1
+    decision_conclusion := structure_bear_context ? "BEARISH BIAS · STRUCTURE SUPPORT" : "BEARISH BIAS · WAIT STRUCTURE"
+    decision_conclusion_col := structure_bear_context ? c_red : c_orange
+else if gmi_z_alignment_code == 2 or (inten == 3.0 and is_macro_bear) or (inten == -3.0 and is_macro_bull)
+    decision_conclusion := "WAIT · CYCLE/MACRO CONFLICT"
+    decision_conclusion_col := c_orange
+else if t_enc == 5.0
+    decision_conclusion := "WAIT · MACRO FILTER"
+    decision_conclusion_col := c_blue
+else if t_enc == 3.0
+    decision_conclusion := "REVERSAL WATCH · NO CONFIRM"
+    decision_conclusion_col := c_orange
+
+bool active_entry_window = (latest_is_buy and buy_window_active) or (latest_is_sell and sell_window_active)
+// Trade Management remains one complete, single-line status in its own HUD.
+string cycle_full_txt = inten == 3.0 ? "CYCLE BULLISH" : inten == -3.0 ? "CYCLE BEARISH" : "CYCLE MIXED"
+string macro_full_txt = is_macro_bull ? "MACRO BULLISH" : is_macro_bear ? "MACRO BEARISH" : "MACRO NEUTRAL"
+string pg_full_txt = gmi_z_alignment_code == 1 ? "PROPHET-GMI ALIGNED BULLISH" : gmi_z_alignment_code == -1 ? "PROPHET-GMI ALIGNED BEARISH" : gmi_z_alignment_code == 2 ? "PROPHET-GMI NOT ALIGNED" : "PROPHET-GMI NEUTRAL / UNAVAILABLE"
+string action_full_txt = t_enc == 4.0 ? "RISK CONDITION · REVIEW" : buy_confirmed ? "BUY CONFIRMED · FULL GATE PASSED" : sell_confirmed ? "SELL CONFIRMED · FULL GATE PASSED" : buy_early_confirmation ? "BUY EARLY CONFIRMATION · MONITOR" : sell_early_confirmation ? "SELL EARLY CONFIRMATION · MONITOR" : latest_is_buy and buy_window_active ? "BUY BIAS · WAITING FOR PRICE/STRUCTURE" : latest_is_sell and sell_window_active ? "SELL BIAS · WAITING FOR PRICE/STRUCTURE" : "WAIT FOR CONFIRMATION"
+color cycle_full_col = inten > 0 ? c_cyan : inten < 0 ? c_red : obs_sub
+color macro_full_col = is_macro_bull ? c_cyan : is_macro_bear ? c_red : obs_sub
+color pg_full_col = gmi_z_alignment_code == 1 ? c_cyan : gmi_z_alignment_code == -1 ? c_red : gmi_z_alignment_code == 2 ? c_orange : obs_sub
+color action_full_col = (buy_confirmed or buy_early_confirmation) ? c_cyan : (sell_confirmed or sell_early_confirmation) ? c_red : t_enc == 4.0 ? c_red : decision_conclusion_col
+string zone_full_txt = zone_state_txt == "ZONE NONE" ? "NO ACTIVE ZONE" : zone_state_txt
+
+// Position management is advisory and manually anchored to the trader's declared position.
+// TP uses the latest confirmed price swing in the favorable direction; no stop-loss is generated.
+float price_pivot_high = ta.pivothigh(high, 5, 2)
+float price_pivot_low = ta.pivotlow(low, 5, 2)
+float latest_swing_high = ta.valuewhen(not na(price_pivot_high), price_pivot_high, 0)
+float latest_swing_low = ta.valuewhen(not na(price_pivot_low), price_pivot_low, 0)
+bool position_active = position_mode != "NO POSITION"
+bool entry_valid = position_entry > 0
+bool buy_position = position_mode == "BUY POSITION"
+bool sell_position = position_mode == "SELL POSITION"
+float structure_tp = buy_position ? (not na(latest_swing_high) and latest_swing_high > position_entry ? latest_swing_high : na) : sell_position ? (not na(latest_swing_low) and latest_swing_low < position_entry ? latest_swing_low : na) : na
+bool tp_reached = position_active and entry_valid and not na(structure_tp) and (buy_position ? high >= structure_tp : low <= structure_tp)
+bool momentum_weakening = buy_position ? str.contains(hud_momentum_txt, "WEAKENING") and str.contains(hud_momentum_txt, "BULLISH") : sell_position ? str.contains(hud_momentum_txt, "WEAKENING") and str.contains(hud_momentum_txt, "BEARISH") : false
+bool opposite_confirmed = buy_position ? sell_confirmed : sell_position ? buy_confirmed : false
+bool opposite_structure_confirmed = buy_position ? (bear_structure_fresh and bearish_structure_confirm) : sell_position ? (bull_structure_fresh and bullish_structure_confirm) : false
+bool reversal_confirmed = position_active and (opposite_confirmed or opposite_structure_confirmed)
+string position_txt = not position_active ? "NO POSITION REGISTERED" : not entry_valid ? "SET ENTRY PRICE" : buy_position ? "BUY POSITION · ENTRY " + str.tostring(position_entry, format.mintick) : "SELL POSITION · ENTRY " + str.tostring(position_entry, format.mintick)
+color position_col = not position_active ? obs_sub : buy_position ? c_cyan : c_red
+// ============================================================================
+// GMI-FIRST KEY LEVEL REASONING ENGINE — deterministic, candle-close-safe.
+// Score = distance(25) + recency(20) + distinct retests(15) + rejection wick(15)
+//       + structure freshness(10) + cycle agreement(5) + macro agreement(5)
+//       + Prophet/GMI agreement(5) = 100 maximum. It is NOT a probability.
+// Pivot levels are only used after the existing 5-left / 2-right confirmation.
+// Prior rolling-range extremes add a second candidate family; current bar excluded.
+// Scores remain heuristic ranks, not probabilities or autonomous AI forecasts.
+// ============================================================================
+float key_level_atr = ta.atr(14)
+float key_touch_band = key_level_atr * key_level_touch_band_atr
+
+// Confirmed swing candidates and their confirmation bars. The pivot value is
+// exposed only after the right-side bars have elapsed.
+float swing_low_0 = ta.valuewhen(not na(price_pivot_low), price_pivot_low, 0)
+float swing_low_1 = ta.valuewhen(not na(price_pivot_low), price_pivot_low, 1)
+float swing_low_2 = ta.valuewhen(not na(price_pivot_low), price_pivot_low, 2)
+float swing_low_3 = ta.valuewhen(not na(price_pivot_low), price_pivot_low, 3)
+float swing_low_4 = ta.valuewhen(not na(price_pivot_low), price_pivot_low, 4)
+float swing_low_5 = ta.valuewhen(not na(price_pivot_low), price_pivot_low, 5)
+float swing_low_6 = ta.valuewhen(not na(price_pivot_low), price_pivot_low, 6)
+float swing_low_7 = ta.valuewhen(not na(price_pivot_low), price_pivot_low, 7)
+int swing_low_bar_0 = ta.valuewhen(not na(price_pivot_low), bar_index, 0)
+int swing_low_bar_1 = ta.valuewhen(not na(price_pivot_low), bar_index, 1)
+int swing_low_bar_2 = ta.valuewhen(not na(price_pivot_low), bar_index, 2)
+int swing_low_bar_3 = ta.valuewhen(not na(price_pivot_low), bar_index, 3)
+int swing_low_bar_4 = ta.valuewhen(not na(price_pivot_low), bar_index, 4)
+int swing_low_bar_5 = ta.valuewhen(not na(price_pivot_low), bar_index, 5)
+int swing_low_bar_6 = ta.valuewhen(not na(price_pivot_low), bar_index, 6)
+int swing_low_bar_7 = ta.valuewhen(not na(price_pivot_low), bar_index, 7)
+float swing_low_wick_0 = ta.valuewhen(not na(price_pivot_low), (math.min(open[2], close[2]) - low[2]) / math.max(high[2] - low[2], syminfo.mintick), 0)
+float swing_low_wick_1 = ta.valuewhen(not na(price_pivot_low), (math.min(open[2], close[2]) - low[2]) / math.max(high[2] - low[2], syminfo.mintick), 1)
+float swing_low_wick_2 = ta.valuewhen(not na(price_pivot_low), (math.min(open[2], close[2]) - low[2]) / math.max(high[2] - low[2], syminfo.mintick), 2)
+float swing_low_wick_3 = ta.valuewhen(not na(price_pivot_low), (math.min(open[2], close[2]) - low[2]) / math.max(high[2] - low[2], syminfo.mintick), 3)
+float swing_low_wick_4 = ta.valuewhen(not na(price_pivot_low), (math.min(open[2], close[2]) - low[2]) / math.max(high[2] - low[2], syminfo.mintick), 4)
+float swing_low_wick_5 = ta.valuewhen(not na(price_pivot_low), (math.min(open[2], close[2]) - low[2]) / math.max(high[2] - low[2], syminfo.mintick), 5)
+float swing_low_wick_6 = ta.valuewhen(not na(price_pivot_low), (math.min(open[2], close[2]) - low[2]) / math.max(high[2] - low[2], syminfo.mintick), 6)
+float swing_low_wick_7 = ta.valuewhen(not na(price_pivot_low), (math.min(open[2], close[2]) - low[2]) / math.max(high[2] - low[2], syminfo.mintick), 7)
+
+float swing_high_0 = ta.valuewhen(not na(price_pivot_high), price_pivot_high, 0)
+float swing_high_1 = ta.valuewhen(not na(price_pivot_high), price_pivot_high, 1)
+float swing_high_2 = ta.valuewhen(not na(price_pivot_high), price_pivot_high, 2)
+float swing_high_3 = ta.valuewhen(not na(price_pivot_high), price_pivot_high, 3)
+float swing_high_4 = ta.valuewhen(not na(price_pivot_high), price_pivot_high, 4)
+float swing_high_5 = ta.valuewhen(not na(price_pivot_high), price_pivot_high, 5)
+float swing_high_6 = ta.valuewhen(not na(price_pivot_high), price_pivot_high, 6)
+float swing_high_7 = ta.valuewhen(not na(price_pivot_high), price_pivot_high, 7)
+int swing_high_bar_0 = ta.valuewhen(not na(price_pivot_high), bar_index, 0)
+int swing_high_bar_1 = ta.valuewhen(not na(price_pivot_high), bar_index, 1)
+int swing_high_bar_2 = ta.valuewhen(not na(price_pivot_high), bar_index, 2)
+int swing_high_bar_3 = ta.valuewhen(not na(price_pivot_high), bar_index, 3)
+int swing_high_bar_4 = ta.valuewhen(not na(price_pivot_high), bar_index, 4)
+int swing_high_bar_5 = ta.valuewhen(not na(price_pivot_high), bar_index, 5)
+int swing_high_bar_6 = ta.valuewhen(not na(price_pivot_high), bar_index, 6)
+int swing_high_bar_7 = ta.valuewhen(not na(price_pivot_high), bar_index, 7)
+float swing_high_wick_0 = ta.valuewhen(not na(price_pivot_high), (high[2] - math.max(open[2], close[2])) / math.max(high[2] - low[2], syminfo.mintick), 0)
+float swing_high_wick_1 = ta.valuewhen(not na(price_pivot_high), (high[2] - math.max(open[2], close[2])) / math.max(high[2] - low[2], syminfo.mintick), 1)
+float swing_high_wick_2 = ta.valuewhen(not na(price_pivot_high), (high[2] - math.max(open[2], close[2])) / math.max(high[2] - low[2], syminfo.mintick), 2)
+float swing_high_wick_3 = ta.valuewhen(not na(price_pivot_high), (high[2] - math.max(open[2], close[2])) / math.max(high[2] - low[2], syminfo.mintick), 3)
+float swing_high_wick_4 = ta.valuewhen(not na(price_pivot_high), (high[2] - math.max(open[2], close[2])) / math.max(high[2] - low[2], syminfo.mintick), 4)
+float swing_high_wick_5 = ta.valuewhen(not na(price_pivot_high), (high[2] - math.max(open[2], close[2])) / math.max(high[2] - low[2], syminfo.mintick), 5)
+float swing_high_wick_6 = ta.valuewhen(not na(price_pivot_high), (high[2] - math.max(open[2], close[2])) / math.max(high[2] - low[2], syminfo.mintick), 6)
+float swing_high_wick_7 = ta.valuewhen(not na(price_pivot_high), (high[2] - math.max(open[2], close[2])) / math.max(high[2] - low[2], syminfo.mintick), 7)
+
+array<float> low_levels = array.from(swing_low_0, swing_low_1, swing_low_2, swing_low_3, swing_low_4, swing_low_5, swing_low_6, swing_low_7)
+array<int> low_confirm_bars = array.from(swing_low_bar_0, swing_low_bar_1, swing_low_bar_2, swing_low_bar_3, swing_low_bar_4, swing_low_bar_5, swing_low_bar_6, swing_low_bar_7)
+array<float> low_wicks = array.from(swing_low_wick_0, swing_low_wick_1, swing_low_wick_2, swing_low_wick_3, swing_low_wick_4, swing_low_wick_5, swing_low_wick_6, swing_low_wick_7)
+array<float> high_levels = array.from(swing_high_0, swing_high_1, swing_high_2, swing_high_3, swing_high_4, swing_high_5, swing_high_6, swing_high_7)
+array<int> high_confirm_bars = array.from(swing_high_bar_0, swing_high_bar_1, swing_high_bar_2, swing_high_bar_3, swing_high_bar_4, swing_high_bar_5, swing_high_bar_6, swing_high_bar_7)
+array<float> high_wicks = array.from(swing_high_wick_0, swing_high_wick_1, swing_high_wick_2, swing_high_wick_3, swing_high_wick_4, swing_high_wick_5, swing_high_wick_6, swing_high_wick_7)
+
+// Add prior rolling-range extremes as a second candidate family. The active
+// candle is excluded (high[1]/low[1]); offset-derived ages refer only to bars
+// already closed. A neutral wick value is used because range extremes are not
+// necessarily pivot-rejection candles.
+float range_high_a = ta.highest(high[1], key_level_range_lookback_1)
+float range_high_b = ta.highest(high[1], key_level_range_lookback_2)
+float range_high_c = ta.highest(high[1], key_level_range_lookback_3)
+float range_low_a = ta.lowest(low[1], key_level_range_lookback_1)
+float range_low_b = ta.lowest(low[1], key_level_range_lookback_2)
+float range_low_c = ta.lowest(low[1], key_level_range_lookback_3)
+int range_high_age_a = -ta.highestbars(high[1], key_level_range_lookback_1) + 1
+int range_high_age_b = -ta.highestbars(high[1], key_level_range_lookback_2) + 1
+int range_high_age_c = -ta.highestbars(high[1], key_level_range_lookback_3) + 1
+int range_low_age_a = -ta.lowestbars(low[1], key_level_range_lookback_1) + 1
+int range_low_age_b = -ta.lowestbars(low[1], key_level_range_lookback_2) + 1
+int range_low_age_c = -ta.lowestbars(low[1], key_level_range_lookback_3) + 1
+if key_level_use_range_extremes
+    array.push(high_levels, range_high_a)
+    array.push(high_confirm_bars, bar_index - range_high_age_a)
+    array.push(high_wicks, 0.0)
+    array.push(high_levels, range_high_b)
+    array.push(high_confirm_bars, bar_index - range_high_age_b)
+    array.push(high_wicks, 0.0)
+    array.push(high_levels, range_high_c)
+    array.push(high_confirm_bars, bar_index - range_high_age_c)
+    array.push(high_wicks, 0.0)
+    array.push(low_levels, range_low_a)
+    array.push(low_confirm_bars, bar_index - range_low_age_a)
+    array.push(low_wicks, 0.0)
+    array.push(low_levels, range_low_b)
+    array.push(low_confirm_bars, bar_index - range_low_age_b)
+    array.push(low_wicks, 0.0)
+    array.push(low_levels, range_low_c)
+    array.push(low_confirm_bars, bar_index - range_low_age_c)
+    array.push(low_wicks, 0.0)
+
+bool active_buy_zone = latest_is_buy and buy_window_active
+bool active_sell_zone = latest_is_sell and sell_window_active
+bool zone_bias_conflict = (active_buy_zone and inten == -3.0) or (active_sell_zone and inten == 3.0)
+bool macro_cycle_conflict = (inten == 3.0 and is_macro_bear) or (inten == -3.0 and is_macro_bull)
+bool pg_cycle_conflict = (inten == 3.0 and (gmi_z_alignment_code == -1 or gmi_z_alignment_code == 2)) or (inten == -3.0 and (gmi_z_alignment_code == 1 or gmi_z_alignment_code == 2))
+bool forecast_context_conflict = zone_bias_conflict or macro_cycle_conflict or pg_cycle_conflict
+int current_bias_dir = inten == 3.0 ? 1 : inten == -3.0 ? -1 : 0
+var float bias_tp_latched = na
+var float bias_tp_last_hit = na
+var bool bias_tp_latched_reached = false
+var int bias_tp_latched_dir = 0
+if current_bias_dir != bias_tp_latched_dir
+    bias_tp_latched := na
+    bias_tp_last_hit := na
+    bias_tp_latched_reached := false
+    bias_tp_latched_dir := current_bias_dir
+
+float best_buy_limit = nafloat best_buy_limit_score = na
+int best_buy_limit_touches = 0
+float best_buy_distance_component = na
+float best_buy_age_component = na
+float best_buy_retest_component = na
+float best_buy_wick_component = na
+float best_buy_structure_component = na
+float best_sell_limit = na
+float best_sell_limit_score = na
+int best_sell_limit_touches = 0
+float best_sell_distance_component = na
+float best_sell_age_component = na
+float best_sell_retest_component = na
+float best_sell_wick_component = na
+float best_sell_structure_component = na
+float best_buy_tp = na
+float best_buy_tp_score = na
+float best_sell_tp = na
+float best_sell_tp_score = na
+
+// BUY LIMIT candidates: confirmed support swings below close.
+if not na(key_level_atr) and key_level_atr > 0
+    for idx = 0 to array.size(low_levels) - 1
+        float lvl = array.get(low_levels, idx)
+        int born = array.get(low_confirm_bars, idx)
+        float wick = array.get(low_wicks, idx)
+        if not na(lvl) and not na(born)
+            int age = bar_index - born
+            float dist = close - lvl
+            if age >= 0 and age <= key_level_max_age and dist > 0 and dist <= key_level_atr * key_level_max_distance_atr
+                int touches = 0
+                int last_touch_back = -10000
+                for back = 1 to key_level_touch_lookback
+                    if not na(high[back]) and low[back] <= lvl + key_touch_band and high[back] >= lvl - key_touch_band
+                        if back - last_touch_back >= 3
+                            touches += 1
+                            last_touch_back := back
+                float distance_score = 25.0 * math.max(0.0, 1.0 - dist / (key_level_atr * key_level_max_distance_atr))
+                float recency_score = 20.0 * math.max(0.0, 1.0 - float(age) / key_level_max_age)
+                float retest_score = 15.0 * math.min(float(touches), 3.0) / 3.0
+                float rejection_score = 15.0 * math.max(0.0, math.min(1.0, wick / 0.60))
+                float structure_score = bull_structure_fresh ? 10.0 : 4.0
+                float cycle_score = inten == 3.0 ? 5.0 : 0.0
+                float macro_score = is_macro_bull ? 5.0 : 0.0
+                float pg_score = gmi_z_alignment_code == 1 ? 5.0 : 0.0
+                float total_score = distance_score + recency_score + retest_score + rejection_score + structure_score + cycle_score + macro_score + pg_score
+                if na(best_buy_limit_score) or total_score > best_buy_limit_score
+                    best_buy_limit := lvl
+                    best_buy_limit_score := total_score
+                    best_buy_limit_touches := touches
+                    best_buy_distance_component := distance_score
+                    best_buy_age_component := recency_score
+                    best_buy_retest_component := retest_score
+                    best_buy_wick_component := rejection_score
+                    best_buy_structure_component := structure_score
+
+    // SELL LIMIT candidates: confirmed resistance swings above close.
+    for idx = 0 to array.size(high_levels) - 1
+        float lvl = array.get(high_levels, idx)
+        int born = array.get(high_confirm_bars, idx)
+        float wick = array.get(high_wicks, idx)
+        if not na(lvl) and not na(born)
+            int age = bar_index - born
+            float dist = lvl - close
+            if age >= 0 and age <= key_level_max_age and dist > 0 and dist <= key_level_atr * key_level_max_distance_atr
+                int touches = 0
+                int last_touch_back = -10000
+                for back = 1 to key_level_touch_lookback
+                    if not na(high[back]) and low[back] <= lvl + key_touch_band and high[back] >= lvl - key_touch_band
+                        if back - last_touch_back >= 3
+                            touches += 1
+                            last_touch_back := back
+                float distance_score = 25.0 * math.max(0.0, 1.0 - dist / (key_level_atr * key_level_max_distance_atr))
+                float recency_score = 20.0 * math.max(0.0, 1.0 - float(age) / key_level_max_age)
+                float retest_score = 15.0 * math.min(float(touches), 3.0) / 3.0
+                float rejection_score = 15.0 * math.max(0.0, math.min(1.0, wick / 0.60))
+                float structure_score = bear_structure_fresh ? 10.0 : 4.0
+                float cycle_score = inten == -3.0 ? 5.0 : 0.0
+                float macro_score = is_macro_bear ? 5.0 : 0.0
+                float pg_score = gmi_z_alignment_code == -1 ? 5.0 : 0.0
+                float total_score = distance_score + recency_score + retest_score + rejection_score + structure_score + cycle_score + macro_score + pg_score
+                if na(best_sell_limit_score) or total_score > best_sell_limit_score
+                    best_sell_limit := lvl
+                    best_sell_limit_score := total_score
+                    best_sell_limit_touches := touches
+                    best_sell_distance_component := distance_score
+                    best_sell_age_component := recency_score
+                    best_sell_retest_component := retest_score
+                    best_sell_wick_component := rejection_score
+                    best_sell_structure_component := structure_score
+
+    // TP candidates are selected independently from entry levels: the nearest
+    // confirmed opposing swing in the favorable direction, at least 0.5 ATR away.
+    for idx = 0 to array.size(high_levels) - 1
+        float lvl = array.get(high_levels, idx)
+        int born = array.get(high_confirm_bars, idx)
+        float wick = array.get(high_wicks, idx)
+        if inten == 3.0 and not na(lvl) and not na(born) and (na(bias_tp_last_hit) or lvl > bias_tp_last_hit)
+            int age = bar_index - born
+            float dist = lvl - close
+            if age >= 0 and age <= key_level_max_age and dist >= key_level_atr * 0.50 and dist <= key_level_atr * 6.0
+                int touches = 0
+                int last_touch_back = -10000
+                for back = 1 to key_level_touch_lookback
+                    if not na(high[back]) and low[back] <= lvl + key_touch_band and high[back] >= lvl - key_touch_band
+                        if back - last_touch_back >= 3
+                            touches += 1
+                            last_touch_back := back
+                float score = 35.0 * math.max(0.0, 1.0 - float(age) / key_level_max_age) + 25.0 * math.max(0.0, 1.0 - dist / (key_level_atr * 6.0)) + 20.0 * math.min(float(touches), 3.0) / 3.0 + 20.0 * math.max(0.0, math.min(1.0, wick / 0.60))
+                if na(best_buy_tp_score) or score > best_buy_tp_score
+                    best_buy_tp := lvl
+                    best_buy_tp_score := score
+    for idx = 0 to array.size(low_levels) - 1
+        float lvl = array.get(low_levels, idx)
+        int born = array.get(low_confirm_bars, idx)
+        float wick = array.get(low_wicks, idx)
+        if inten == -3.0 and not na(lvl) and not na(born) and (na(bias_tp_last_hit) or lvl < bias_tp_last_hit)
+            int age = bar_index - born
+            float dist = close - lvl
+            if age >= 0 and age <= key_level_max_age and dist >= key_level_atr * 0.50 and dist <= key_level_atr * 6.0
+                int touches = 0
+                int last_touch_back = -10000
+                for back = 1 to key_level_touch_lookback
+                    if not na(high[back]) and low[back] <= lvl + key_touch_band and high[back] >= lvl - key_touch_band
+                        if back - last_touch_back >= 3
+                            touches += 1
+                            last_touch_back := back
+                float score = 35.0 * math.max(0.0, 1.0 - float(age) / key_level_max_age) + 25.0 * math.max(0.0, 1.0 - dist / (key_level_atr * 6.0)) + 20.0 * math.min(float(touches), 3.0) / 3.0 + 20.0 * math.max(0.0, math.min(1.0, wick / 0.60))
+                if na(best_sell_tp_score) or score > best_sell_tp_score
+                    best_sell_tp := lvl
+                    best_sell_tp_score := score
+
+// Suppress projected orders when directional context conflicts. Zone/price close
+// and confirmed/HQ signals remain intact; only advisory forecast output is gated.
+// GMI levels are candidate sources, not unconditional orders. Validate side, context,
+// distance, and candle-close state before allowing them into the advisory forecast.
+float gmi_buy_candidate = na
+float gmi_sell_candidate = na
+if use_gmi_levels
+    if not na(gmi_qm_buy) and gmi_qm_buy < close
+        gmi_buy_candidate := gmi_qm_buy
+    if not na(gmi_rbs) and gmi_rbs < close and (na(gmi_buy_candidate) or math.abs(close - gmi_rbs) < math.abs(close - gmi_buy_candidate))
+        gmi_buy_candidate := gmi_rbs
+    if not na(gmi_box_bottom) and gmi_box_bottom < close and (na(gmi_buy_candidate) or math.abs(close - gmi_box_bottom) < math.abs(close - gmi_buy_candidate))
+        gmi_buy_candidate := gmi_box_bottom
+    if not na(gmi_qm_sell) and gmi_qm_sell > close
+        gmi_sell_candidate := gmi_qm_sell
+    if not na(gmi_sbr) and gmi_sbr > close and (na(gmi_sell_candidate) or math.abs(close - gmi_sbr) < math.abs(close - gmi_sell_candidate))
+        gmi_sell_candidate := gmi_sbr
+    if not na(gmi_box_top) and gmi_box_top > close and (na(gmi_sell_candidate) or math.abs(close - gmi_box_top) < math.abs(close - gmi_sell_candidate))
+        gmi_sell_candidate := gmi_box_top
+
+bool gmi_buy_level_valid = use_gmi_levels and not na(gmi_buy_candidate) and not na(key_level_atr) and key_level_atr > 0 and close - gmi_buy_candidate <= key_level_atr * key_level_max_distance_atr
+bool gmi_sell_level_valid = use_gmi_levels and not na(gmi_sell_candidate) and not na(key_level_atr) and key_level_atr > 0 and gmi_sell_candidate - close <= key_level_atr * key_level_max_distance_atr
+float buy_limit_level = (inten == 3.0 and not forecast_context_conflict) ? (gmi_buy_level_valid ? gmi_buy_candidate : (not use_gmi_levels and not na(best_buy_limit_score) and best_buy_limit_score >= key_level_min_score ? best_buy_limit : na)) : na
+float sell_limit_level = (inten == -3.0 and not forecast_context_conflict) ? (gmi_sell_level_valid ? gmi_sell_candidate : (not use_gmi_levels and not na(best_sell_limit_score) and best_sell_limit_score >= key_level_min_score ? best_sell_limit : na)) : na
+float buy_limit_score = not na(buy_limit_level) ? (gmi_buy_level_valid ? 100.0 : best_buy_limit_score) : na
+float sell_limit_score = not na(sell_limit_level) ? (gmi_sell_level_valid ? 100.0 : best_sell_limit_score) : na
+
+// Keep the historical confirmation-price latch as a fallback reference. A scored
+// structural limit takes display priority because it is the actionable planning level.
+float buy_entry_candidate = latest_is_buy and buy_window_active and not na(latched_buy_entry_candidate) ? latched_buy_entry_candidate : na
+float sell_entry_candidate = latest_is_sell and sell_window_active and not na(latched_sell_entry_candidate) ? latched_sell_entry_candidate : na
+string entry_candidate_txt = forecast_context_conflict ? (zone_bias_conflict ? "CONFLICT · ZONE/BIAS" : macro_cycle_conflict ? "CONFLICT · CYCLE/MACRO" : "CONFLICT · PROPHET/GMI") : inten == 3.0 ? (not na(buy_limit_level) ? "BUY LMT " + str.tostring(buy_limit_level, format.mintick) + (gmi_buy_level_valid ? " · GMI" : " · RANK") : not na(buy_entry_candidate) ? "BUY REF " + str.tostring(buy_entry_candidate, format.mintick) : "BUY · NO KEY LEVEL") : inten == -3.0 ? (not na(sell_limit_level) ? "SELL LMT " + str.tostring(sell_limit_level, format.mintick) + (gmi_sell_level_valid ? " · GMI" : " · RANK") : not na(sell_entry_candidate) ? "SELL REF " + str.tostring(sell_entry_candidate, format.mintick) : "SELL · NO KEY LEVEL") : "ENTRY · MIXED BIAS"
+color entry_candidate_col = forecast_context_conflict ? c_orange : inten == 3.0 ? c_cyan : inten == -3.0 ? c_red : c_orange
+string entry_reasoning_tooltip = "Entry score is a heuristic ranking (not a probability). Weighting: distance 25, recency 20, distinct retests 15, rejection wick 15, fresh structure 10, cycle 5, macro 5, Prophet/GMI 5. BUY chosen components: dist=" + str.tostring(best_buy_distance_component, "#.0") + ", age=" + str.tostring(best_buy_age_component, "#.0") + ", retests=" + str.tostring(best_buy_retest_component, "#.0") + ", wick=" + str.tostring(best_buy_wick_component, "#.0") + ", structure=" + str.tostring(best_buy_structure_component, "#.0") + ". SELL chosen components: dist=" + str.tostring(best_sell_distance_component, "#.0") + ", age=" + str.tostring(best_sell_age_component, "#.0") + ", retests=" + str.tostring(best_sell_retest_component, "#.0") + ", wick=" + str.tostring(best_sell_wick_component, "#.0") + ", structure=" + str.tostring(best_sell_structure_component, "#.0") + ". Cycle, macro, and Prophet/GMI components each contribute 5 points. Threshold, maximum age, ATR distance and retest band are configurable inputs."
+
+// Target lifecycle: use the scored favorable swing. Once a level is reached,
+// remember it and exclude that level (and all targets already passed in that
+// direction) from the next target selection. A new target must be a farther key level.
+float gmi_tp_valid = use_gmi_levels and not na(gmi_dynamic_tp) and ((inten == 3.0 and gmi_dynamic_tp > close) or (inten == -3.0 and gmi_dynamic_tp < close)) ? gmi_dynamic_tp : na
+float bias_tp_raw = forecast_context_conflict ? na : not na(gmi_tp_valid) ? gmi_tp_valid : not use_gmi_levels ? (inten == 3.0 ? best_buy_tp : inten == -3.0 ? best_sell_tp : na) : na
+bool bias_tp_just_hit = not na(bias_tp_latched) and not bias_tp_latched_reached and ((bias_tp_latched_dir == 1 and high >= bias_tp_latched) or (bias_tp_latched_dir == -1 and low <= bias_tp_latched))
+if bias_tp_just_hit
+    bias_tp_last_hit := bias_tp_latched
+    bias_tp_latched := na
+    bias_tp_latched_reached := true
+if na(bias_tp_latched) and not na(bias_tp_raw) and not bias_tp_just_hit and not forecast_context_conflict
+    bias_tp_latched := bias_tp_raw
+    bias_tp_latched_reached := false
+float bias_tp = bias_tp_latched
+
+// Use key-level TP even with no declared broker position. Existing manual-position
+// TP behavior is retained when a position and entry price are explicitly supplied.
+string tp_txt = position_active and entry_valid ? (na(structure_tp) ? "TP · NO SWING" : tp_reached ? "TP HIT " + str.tostring(structure_tp, format.mintick) : "TP " + str.tostring(structure_tp, format.mintick)) : forecast_context_conflict ? "TP · WAIT CONTEXT" : bias_tp_just_hit or bias_tp_latched_reached ? "TP HIT " + str.tostring(bias_tp_last_hit, format.mintick) : not na(bias_tp) ? "TP " + str.tostring(bias_tp, format.mintick) : "TP · NO KEY LEVEL"
+color tp_col = (tp_reached or bias_tp_just_hit or bias_tp_latched_reached) ? c_cyan : (na(structure_tp) and na(bias_tp)) ? c_orange : position_col
+float exit_key_level = buy_position ? latest_swing_low : sell_position ? latest_swing_high : inten == 3.0 ? latest_swing_low : inten == -3.0 ? latest_swing_high : na
+string exit_reason_txt = position_active ? (reversal_confirmed ? "EXIT REVIEW · OPPOSITE CONFIRMED" : momentum_weakening ? "WARNING · MOMENTUM WEAKENING" : "HOLD · NO EXIT TRIGGER") : (sell_confirmed or (inten == -3.0 and str.contains(hud_momentum_txt, "BEARISH · STRENGTHENING"))) ? "SELL BIAS · EXIT REVIEW IF LONG" : (buy_confirmed or (inten == 3.0 and str.contains(hud_momentum_txt, "BULLISH · STRENGTHENING"))) ? "BUY BIAS · EXIT REVIEW IF SHORT" : str.contains(hud_momentum_txt, "WEAKENING") ? "WARNING · MOMENTUM WEAKENING" : "NO EXIT TRIGGER"
+string exit_txt = not na(exit_key_level) ? exit_reason_txt + " · KEY " + str.tostring(exit_key_level, format.mintick) : exit_reason_txt + " · KEY N/A"
+color exit_col = reversal_confirmed ? c_red : momentum_weakening ? c_orange : position_col
+
+string tooltip_entry_reason = active_entry_window or t_enc == 4.0 ? entry_reason_short : "NO ACTIVE SETUP"
+string decision_tooltip = "RULE-BASED REASONING ENGINE (DISPLAY-ONLY; NO ORDERS EXECUTED). Key-level projection uses mapped GMI levels when enabled, otherwise confirmed swing/range candidates, with a 3 ATR distance guard; limit levels are advisory, refreshed on candle close, and no stop-entry price is displayed. No external AI inference or broker state is used. Conclusion: " + decision_conclusion + ". Entry state: " + (t_enc == 4.0 ? entry_instruction : active_entry_window ? entry_instruction : "NO ACTIVE SETUP") + "; reason: " + tooltip_entry_reason + "; context: " + decision_context_txt + ". Compact regime=" + regime_short_txt + "; harmonic=" + harmonic_short_txt + "; structure context=" + structure_short_txt + ". Regime: " + cshi_txt + " (score=" + str.tostring(cshi_score, "#.00") + "). Harmonic: " + intensity_txt + " / " + int_dir_txt + ". Structure: " + div_txt + " / " + vol_conf_txt + "; subtype=" + prophet_structure_subtype + "; d_enc=" + str.tostring(d_enc) + "; state age=" + (not na(structure_state_bar) ? str.tostring(bar_index - structure_state_bar) : "N/A") + ". Gate: " + gate_status_txt + "; gate reason=" + gate_reason + ". Prophet Z=" + str.tostring(z_score, "#.000") + "; GMI weighted MTF Z=" + str.tostring(gmi_equiv_global_z, "#.000") + "; alignment=" + gmi_z_alignment_txt + ". Early confirmation is advisory only: directional candle close beyond previous close plus existing structure and volume gates. Full confirmation still requires the original prior-high/prior-low breakout. Early confirmation does not alter confirmed/HQ alerts, oscillator formulas, candidates, or LEGACY behavior."
+
+var table hud = table.new(hud_pos, 2, 5, bgcolor=c_dark, border_width=1, border_color=c_border, frame_color=c_border, frame_width=1)
+var table trade_management_hud = table.new(position.bottom_left, 9, 1, bgcolor=c_dark, border_width=0, border_color=color.new(c_border, 100), frame_color=c_border, frame_width=1)
+
+if barstate.islast and show_tables and show_hud
+    table.merge_cells(hud, 0, 0, 1, 0)
+    table.cell(hud, 0, 0, "THE PROPHET · R21", text_color=c_purple, text_size=size.small, text_halign=text.align_left)
+
+    table.cell(hud, 0, 1, "MARKET", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(hud, 1, 1, hud_market_txt, text_color=cshi_col, text_size=size.small, text_halign=text.align_right)
+
+    table.cell(hud, 0, 2, "HARMONIC", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(hud, 1, 2, hud_harmonic_txt, text_color=int_col, text_size=size.small, text_halign=text.align_right)
+
+    table.cell(hud, 0, 3, "STRUCTURE", text_color=color.white, text_size=size.small, text_halign=text.align_left,
+      tooltip="Structure diagnostic: " + (d_enc == 1.0 ? "BULLISH DIVERGENCE (d_enc=1)" : d_enc == -1.0 ? "BEARISH DIVERGENCE (d_enc=-1)" : d_enc == 3.0 ? prophet_structure_subtype + " (d_enc=3)" : d_enc == -3.0 ? prophet_structure_subtype + " (d_enc=-3)" : d_enc == 0.0 ? "ALIGNED / NO ACTIVE DIVERGENCE (d_enc=0)" : "UNRESOLVED STATE (d_enc=" + str.tostring(d_enc) + ")") + ". Persistent state: the ±3 structure code is retained until an existing reset/transition changes it; subtype identifies the recorded transition path, not a price forecast. Trade management and macro alignment are separate metrics. Diagnostic only; does not alter signal logic.")
+    table.cell(hud, 1, 3, hud_structure_txt, text_color=div_col, text_size=size.small, text_halign=text.align_right)
+
+    table.cell(hud, 0, 4, "MOMENTUM", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(hud, 1, 4, hud_momentum_txt, text_color=hud_momentum_col, text_size=size.small, text_halign=text.align_right, tooltip="Display-only momentum: compares pro_fast with pro_slow and the one-bar change in pro_fast. Not a standalone entry signal.")
+
+    table.cell(trade_management_hud, 0, 0, "TRADE MANAGEMENT", text_color=c_purple, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5), tooltip=decision_tooltip + " | Zone lifecycle and position management are advisory. Entry candidates are advisory price references; no broker integration, no stop-loss, and no order execution.")
+    table.cell(trade_management_hud, 1, 0, zone_full_txt, text_color=zone_state_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5))
+    table.cell(trade_management_hud, 2, 0, cycle_full_txt, text_color=cycle_full_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5))
+    table.cell(trade_management_hud, 3, 0, macro_full_txt, text_color=macro_full_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5))
+    table.cell(trade_management_hud, 4, 0, pg_full_txt, text_color=pg_full_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5))
+    table.cell(trade_management_hud, 5, 0, action_full_txt, text_color=action_full_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(decision_conclusion_col, 85))
+    table.cell(trade_management_hud, 6, 0, entry_candidate_txt, text_color=entry_candidate_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5), tooltip=entry_reasoning_tooltip)
+    table.cell(trade_management_hud, 7, 0, tp_txt, text_color=tp_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5), tooltip="When GMI bridge is enabled and mapped, entry candidates use valid GMI QM/RBS/SBR/Position Box levels; GMI Dynamic TP is preferred when directionally valid. Otherwise the internal R36 ranking is used only when GMI mode is disabled. TP is selected independently from the entry level. Target score ranks recency (35), distance (25), retests (20), and rejection wick (20). When price reaches the target, it is marked TP HIT and excluded from reuse; the next target must be farther in the favorable direction. These scores are ranking heuristics, not probabilities.")
+    table.cell(trade_management_hud, 8, 0, exit_txt, text_color=exit_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(exit_col, 88), tooltip="Momentum weakening is an early warning. With a registered position, exit review requires an opposite confirmed signal or fresh opposite structure. Without a registered position, this is a bias-based advisory only. No stop-loss is plotted or calculated; losses can grow without a defined risk limit.")
+else if barstate.islast
+    table.clear(hud, 0, 0, 1, 4)
+    table.clear(trade_management_hud, 0, 0, 8, 0)
+
+// =============================================================================
+// 🚨 9. NATIVE TV ALERTS ENGINE
+// =============================================================================
+bool alert_bar_ok = not alert_confirmed_only or barstate.isconfirmed
+
+alertcondition(alert_bar_ok and t_enc == 1.0 and (legacy_mode or (barstate.isconfirmed and t_enc[1] != 1.0)), title="🟢 PYRAMID BULL", message="The Prophet: Bullish management state detected. Review confirmation and risk controls before acting.")
+alertcondition(alert_bar_ok and t_enc == -1.0 and (legacy_mode or (barstate.isconfirmed and t_enc[1] != -1.0)), title="🔴 PYRAMID BEAR", message="The Prophet: Bearish management state detected. Review confirmation and risk controls before acting.")
+alertcondition(alert_bar_ok and t_enc == 4.0 and (legacy_mode or (barstate.isconfirmed and t_enc[1] != 4.0)), title="🛑 RUTHLESS CUT LOSS", message="The Prophet: Risk-reduction condition detected. Review current position and risk rules.")
+alertcondition(alert_bar_ok and (t_enc == 6.0 or t_enc == -6.0) and (legacy_mode or (barstate.isconfirmed and t_enc[1] != t_enc)), title="🌌 PRICE DISCOVERY", message="The Prophet: Price is searching for new boundaries (Supernova/Void).")
+alertcondition(alert_bar_ok and t_enc == 3.0 and (legacy_mode or (barstate.isconfirmed and t_enc[1] != 3.0)), title="⚡ POTENTIAL REVERSAL", message="The Prophet: Harmonic shift detected. Prepare for Reversal.")
+alertcondition(alert_bar_ok and t_enc == 5.0 and (legacy_mode or (barstate.isconfirmed and t_enc[1] != 5.0)), title="🛡️ MACRO SHIELD", message="The Prophet: Micro-structure break with macro filter active. Review context before deciding whether to hold.")
+alertcondition(alert_bar_ok and buy_confirmed, title="BUY CONFIRMED - Price/Structure", message="The Prophet R21: BUY confirmation passed within the adaptive crossover window on a closed bar. Review price, fresh structure, volume availability, and independent risk controls.")
+alertcondition(alert_bar_ok and sell_confirmed, title="SELL CONFIRMED - Price/Structure", message="The Prophet R21: SELL confirmation passed within the adaptive crossover window on a closed bar. Review price, fresh structure, volume availability, and independent risk controls.")
+alertcondition(alert_bar_ok and buy_high_quality, title="BUY HIGH QUALITY", message="The Prophet R21: BUY high-quality filter passed. This is a filter tier, not a win probability; apply independent risk controls.")
+alertcondition(alert_bar_ok and sell_high_quality, title="SELL HIGH QUALITY", message="The Prophet R21: SELL high-quality filter passed. This is a filter tier, not a win probability; apply independent risk controls.")
+
+// =============================================================================
+// 📡 DATA EXPORT PIPELINE (INTERNAL TV BRIDGE)
+// =============================================================================
+plot(t_enc, title="[OUT] Trade Management State", display=display.none)
+plot(d_enc, title="[OUT] Divergence State", display=display.none)
+plot(b_enc, title="[OUT] Breakout Memory State", display=display.none)
+plot(barstate.isconfirmed ? 1.0 : 0.0, title="[OUT] Bar Confirmed", display=display.none)
+plot(kaufman_er, title="[OUT] Kaufman Efficiency Ratio", display=display.none)
+plot(vol_anom, title="[OUT] Volume Anomaly Ratio", display=display.none)
+plot(hurst, title="[OUT] Hurst R/S", display=display.none)
+plot(z_score, title="[OUT] Macro Z-Score", display=display.none)
+plot(gmi_equiv_global_z, title="[OUT] GMI-Equivalent Weighted MTF Z-Score", display=display.none)
+plot(float(gmi_z_alignment_code), title="[OUT] Prophet-GMI Z Alignment Code (1 bull, -1 bear, 2 conflict, 0 neutral)", display=display.none)
+plot(inten, title="[OUT] Harmonic Intensity", display=display.none)
+
+plot(prophet_structure_subtype_code, title="[OUT] Structure Subtype Code", display=display.none)
+plot(buy_confirmed ? 1.0 : 0.0, title="[OUT] Buy Confirmed", display=display.none)
+plot(sell_confirmed ? 1.0 : 0.0, title="[OUT] Sell Confirmed", display=display.none)
+plot(buy_high_quality ? 1.0 : 0.0, title="[OUT] Buy High Quality", display=display.none)
+plot(sell_high_quality ? 1.0 : 0.0, title="[OUT] Sell High Quality", display=display.none)
+plot(not na(structure_state_bar) ? bar_index - structure_state_bar : na, title="[OUT] State Age", display=display.none)
+
+// R21 HISTORICAL STATE-MACHINE DIAGNOSTICS (DATA WINDOW EXPORT ONLY)
+// Display-only instrumentation. Does not change candidates, gates, entries, or alerts.
+plot(buy_candidate ? 1.0 : 0.0, title="[DIAG R21] Buy Candidate Event", display=display.data_window)
+plot(sell_candidate ? 1.0 : 0.0, title="[DIAG R21] Sell Candidate Event", display=display.data_window)
+plot(has_buy_event ? float(bars_since_buy) : na, title="[DIAG R21] Bars Since Buy Candidate", display=display.data_window)
+plot(has_sell_event ? float(bars_since_sell) : na, title="[DIAG R21] Bars Since Sell Candidate", display=display.data_window)
+plot(buy_window_active ? 1.0 : 0.0, title="[DIAG R21] Buy Window Active", display=display.data_window)
+plot(sell_window_active ? 1.0 : 0.0, title="[DIAG R21] Sell Window Active", display=display.data_window)
+plot(buy_limit_score, title="[KEY REASONING] Buy Key Level Score (heuristic, not probability)", display=display.data_window)
+plot(sell_limit_score, title="[KEY REASONING] Sell Key Level Score (heuristic, not probability)", display=display.data_window)
+plot(best_buy_tp_score, title="[KEY REASONING] Buy TP Level Score (heuristic, not probability)", display=display.data_window)
+plot(best_sell_tp_score, title="[KEY REASONING] Sell TP Level Score (heuristic, not probability)", display=display.data_window)
+plot(last_buy_passed ? 1.0 : 0.0, title="[DIAG R21] Buy Previously Passed", display=display.data_window)
+plot(last_sell_passed ? 1.0 : 0.0, title="[DIAG R21] Sell Previously Passed", display=display.data_window)
+plot(buy_confirmed ? 1.0 : 0.0, title="[DIAG R21] Buy Confirmed Current Bar", display=display.data_window)
+plot(sell_confirmed ? 1.0 : 0.0, title="[DIAG R21] Sell Confirmed Current Bar", display=display.data_window)
+plot(float(confirmation_window), title="[DIAG R21] Confirmation Window Bars", display=display.data_window)
+plot(latest_is_buy ? 1.0 : latest_is_sell ? -1.0 : 0.0, title="[DIAG R21] Latest Candidate Direction (1 buy, -1 sell, 0 none)", display=display.data_window)

@@ -1,0 +1,19 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "xauusd-tradingview-pull-adapter",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-10-31",
+  "workers_dev": true,
+  "kv_namespaces": [
+    {
+      "binding": "MARKET_DATA_CACHE",
+      "id": "4ada6196de5a4000a28a047bf6b30ff3"
+    }
+  ],
+  "vars": {
+    "TWELVE_DATA_SYMBOL": "XAU/USD"
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  }
+}
