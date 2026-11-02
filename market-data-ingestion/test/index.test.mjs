@@ -29,7 +29,7 @@ function providerCandle(openMs, overrides = {}) {
 }
 function providerValues(interval, nowMs) {
   if (interval === "5min") {
-    const start = Math.floor((nowMs - 2 * 60 * 60_000) / 300_000) * 300_000;
+    const start = Math.floor(nowMs / 300_000) * 300_000 - 300_000;
     return Array.from({ length: 5000 }, (_, i) => providerCandle(start - i * 300_000));
   }
   if (interval === "1day") {
