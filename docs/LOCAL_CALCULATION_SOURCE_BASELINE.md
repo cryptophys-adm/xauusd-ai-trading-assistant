@@ -72,3 +72,22 @@ This list is the direct-call inventory found in the GMI file, not a claim that a
 4. Add fixture tests using captured outputs from the installed TradingView indicator on closed candles. Include neutral/conflict cases, missing volume/profile inputs, MTF boundaries, and first-valid-bar warm-up. No TradingView output fixture means parity remains unverified.
 5. Compute SHA-256 from the exact canonical source bytes and from the finalized implementation files in a reproducible build step. Do not use a Git blob SHA as a SHA-256 allowlist entry. Do not populate `LOCAL_CALC_PROVENANCE_ALLOWLIST` or enable production rollout until the source hash, implementation hash, and parity fixtures are independently verified.
 
+### Decision path detail from the installed GMI source
+
+The numeric path is not a standalone indicator formula. It combines multiple stateful engines before emitting a verdict:
+
+- Prophet oscillator inputs: `prophet_volume_ratio(volume, 20)`, `vol_anomaly(volume, 20)`, three `f_vol_cycle` windows (13/34/55 with weights 0.50/0.35/0.15), `efficiency_ratio(close, 14)`, and `calculate_prophet_tensor(..., 6)`.
+- Shared structure state: `prophet_structure_core(pro_fast, high, low, open, close, pro_anom, has_volume, atr_val, false, 50, 5, 2, 0.10, 1.5)`.
+- Regime and tactical inputs include `return_distribution`, entropy/kinematic series, footprint/CVD state, volume-profile levels, fakeout memory, session flags, FVG/LVN data, order-block and whale-zone state, QM/RBS/SBR transitions, and Fabio decision outputs.
+- Initial `verdict_state` precedence begins with kinetic reversal long/short, then extension/HTF states, then HTF combined with MTF/LTF states. A later ordered override block can replace this using entropy-trap veto, fakeout/volume veto, GABFX conditions, Fabio Model 1/2, JMA alerts, and kinetic reversal; the confluence gate can then reset a conflicting result to neutral.
+- The integration gate is active only when `shared_prophet_alignment` and `barstate.isconfirmed` are true. It requires a valid profile (`vah >= poc >= val)); conflicts include Prophet internal direction/structure disagreement, GMI/Prophet disagreement, profile-location/Prophet disagreement, or the specified Prophet structure risk-hold subtype. The gate status codes are 0 inactive, -2 invalid profile, -1 conflict, 2 directional alignment, and 1 evaluable but not fully aligned.
+- CPR × GMI is explicitly non-vetoing diagnostic context. The webhook emits only on confirmed bars and only when the webhook input is enabled. Both payloads use the chart's current symbol and timeframe and include the same candle OHLCV/time fields.
+
+This dependency surface is too broad to safely port by reimplementing only `verdict_state` assignments. A faithful local GMI engine must either reproduce every upstream series/state transition that can affect these outputs or narrow the approved parity contract to a smaller explicitly named output (for example, the shared Prophet structure snapshot) and not label that reduced kernel as full GMI parity.
+
+### Blocking implementation dependency
+
+The checked-in GMI imports `cryptophys/CryptophysMizanLib/4`, while `CryptophysMizanLib-uploaded.txt` in this repository identifies internally as Mizan Unified Library v1.6. That uploaded file is not evidence of the exact published v4 implementation and cannot satisfy the transitive dependency for a parity implementation. The exact source of the published v4 dependency must be recovered/approved before its functions can be ported. This is a concrete dependency blocker, not a request to re-confirm which GMI indicator is installed.
+
+The webhook payload also embeds the secret directly into JSON string construction without an escaping step. The receiver must not assume arbitrary secret values are JSON-safe; keep the secret format restricted to a safe character set or change the Pine producer with explicit approval and test its emitted payload before relying on it.
+
