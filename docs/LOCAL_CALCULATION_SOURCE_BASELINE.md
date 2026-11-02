@@ -25,12 +25,12 @@ This corrected source is now the owner-designated MizanLib SSOT. The older v1.6.
 
 1. Prophet R38 imports Mizan library v4; Prophet v7.00 baseline and the available GMI R10.1.7 candidate import Mizan library v1. A single unversioned Mizan result is not sufficient evidence of parity for both dependency versions.
 2. The audit ledger records the GMI baseline SHA-256 as `c090e42649db03b34b8fd3fd17fcae2d611a418508dedb83d503eb268d28c736`. A Library artifact named `Global Multiverse Interceptor [v12.70 THE SINGULARITY].txt` is now located, alongside several R10/R11 candidates, but the available raw-byte materialization path is denied; therefore the ledger hash has not yet been independently matched to that exact artifact.
-3. A Prophet v7.00 R37 GMI-first key-level bridge candidate was found in the Library and copied into the repository candidate folder. This resolves the prior no-candidate search result, but does not prove it is the exact source installed in TradingView or the final producer for `prophet_r37_ssot`; its filename and indicator title explicitly mark it as a candidate.
+3. A standalone Prophet v7.00 R37 GMI-first key-level bridge candidate was found in the Library and copied into the repository candidate folder. Separately, the current repository GMI source contains a `CTA WEBHOOK — CORE SNAPSHOT` section that emits a distinct `prophet_r37_ssot` payload from the embedded/shared Prophet R37 structure core. This is the strongest source-level evidence for the webhook producer. The standalone file is still only a candidate; the exact GMI revision installed in TradingView and its byte identity against the audit-ledger baseline remain unverified.
 4. The repository's existing inbound sources are `prophet_r38`, `prophet_r37_ssot`, and `gmi_v12_70`. Those source identifiers do not by themselves prove which Pine source revision or Mizan library version generated a given value.
 
 ## Required before implementing/promoting local engines
 
-- Confirm the owner-approved final revision for `prophet_r37_ssot` against the located R37 candidate and confirm the GMI baseline file bytes against the audit-ledger hash.
+- Confirm the final installed GMI revision in TradingView and verify its source hash against the audit ledger; confirm that the embedded `prophet_r37_ssot` payload is the intended producer and capture its expected outputs for parity fixtures.
 - Approve the dependency matrix (including whether both Mizan v1 and v4 outputs are required per candle).
 - Define per-engine output schemas and map fields to the source's actual exported series/alert payloads.
 - Implement deterministic kernels against the approved hashes; record implementation SHA-256 separately from Pine source SHA-256.
