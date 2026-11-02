@@ -100,9 +100,11 @@ test("POST /pull calls Twelve Data with the bounded M5 bootstrap contract", asyn
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
   const requestedUrls = [];
-  globalThis.fetch = async (url) => {
+  const requestedHeaders = [];
+  globalThis.fetch = async (url, init = {}) => {
     const requestedUrl = new URL(String(url));
     requestedUrls.push(requestedUrl);
+    requestedHeaders.push(init.headers || {});
     const values = providerValues(requestedUrl.searchParams.get("interval"), Date.now(), Number(requestedUrl.searchParams.get("outputsize")));
     return new Response(JSON.stringify({
       status: "ok", meta: { symbol: "XAU/USD", exchange_timezone: "UTC" }, values
@@ -122,7 +124,8 @@ test("POST /pull calls Twelve Data with the bounded M5 bootstrap contract", asyn
   assert.equal(d1Request.searchParams.get("outputsize"), "60");
   assert.equal(w1Request.searchParams.get("outputsize"), "60");
   assert.equal(m5Request.searchParams.get("timezone"), "UTC");
-  assert.equal(m5Request.searchParams.has("apikey"), true);
+  assert.equal(m5Request.searchParams.has("apikey"), false);
+  assert.equal(requestedHeaders[0].authorization, "apikey test-api-key");
   assert.equal(body.schema_version, "cryptophys.market-data.v1");
   assert.equal(body.source.canonical_symbol, "OANDA:XAUUSD");
   assert.equal(body.timeframes.M5.candle_count, 5000);
