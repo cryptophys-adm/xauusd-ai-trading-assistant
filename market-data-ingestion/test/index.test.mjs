@@ -17,6 +17,8 @@ const env = (overrides = {}) => ({
 });
 
 const now = Date.now();
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
 function providerCandle(openMs, overrides = {}) {
   const iso = new Date(openMs).toISOString().slice(0, 19).replace("T", " ");
   return {
@@ -24,6 +26,21 @@ function providerCandle(openMs, overrides = {}) {
     open: "2300.00", high: "2302.00", low: "2299.00", close: "2301.00", volume: "12",
     ...overrides
   };
+}
+function providerValues(interval, nowMs) {
+  if (interval === "5min") {
+    const start = Math.floor((nowMs - 2 * 60 * 60_000) / 300_000) * 300_000;
+    return Array.from({ length: 5000 }, (_, i) => providerCandle(start - i * 300_000));
+  }
+  if (interval === "1day") {
+    const start = Math.floor(nowMs / DAY_MS) * DAY_MS - DAY_MS;
+    return Array.from({ length: 60 }, (_, i) => providerCandle(start - i * DAY_MS));
+  }
+  const day = new Date(nowMs).getUTCDay();
+  const daysSinceMonday = (day + 6) % 7;
+  const thisWeek = Math.floor((nowMs - daysSinceMonday * DAY_MS) / WEEK_MS) * WEEK_MS;
+  const lastWeek = thisWeek - WEEK_MS;
+  return Array.from({ length: 60 }, (_, i) => providerCandle(lastWeek - i * WEEK_MS));
 }
 
 test("closed M5 candles exclude the still-forming candle and sort chronologically", () => {
@@ -82,11 +99,11 @@ test("POST /pull requires the configured bearer secret", async () => {
 test("POST /pull calls Twelve Data with the bounded M5 bootstrap contract", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
-  const start = Math.floor((Date.now() - 2 * 60 * 60_000) / 300_000) * 300_000;
-  const values = Array.from({ length: 300 }, (_, i) => providerCandle(start - i * 300_000));
-  let requestedUrl;
+  const requestedUrls = [];
   globalThis.fetch = async (url) => {
-    requestedUrl = new URL(String(url));
+    const requestedUrl = new URL(String(url));
+    requestedUrls.push(requestedUrl);
+    const values = providerValues(requestedUrl.searchParams.get("interval"), Date.now());
     return new Response(JSON.stringify({
       status: "ok", meta: { symbol: "XAU/USD" }, values
     }), { status: 200, headers: { "content-type": "application/json" } });
@@ -97,20 +114,37 @@ test("POST /pull calls Twelve Data with the bounded M5 bootstrap contract", asyn
   }), testEnv);
   const body = await response.json();
   assert.equal(response.status, 200, JSON.stringify(body));
-  assert.equal(requestedUrl.searchParams.get("symbol"), "XAU/USD");
-  assert.equal(requestedUrl.searchParams.get("interval"), "5min");
-  assert.equal(requestedUrl.searchParams.get("outputsize"), "300");
-  assert.equal(requestedUrl.searchParams.get("timezone"), "UTC");
-  assert.equal(requestedUrl.searchParams.has("apikey"), true);
+  const m5Request = requestedUrls.find((item) => item.searchParams.get("interval") === "5min");
+  const d1Request = requestedUrls.find((item) => item.searchParams.get("interval") === "1day");
+  const w1Request = requestedUrls.find((item) => item.searchParams.get("interval") === "1week");
+  assert.equal(m5Request.searchParams.get("symbol"), "XAU/USD");
+  assert.equal(m5Request.searchParams.get("outputsize"), "5000");
+  assert.equal(d1Request.searchParams.get("outputsize"), "60");
+  assert.equal(w1Request.searchParams.get("outputsize"), "60");
+  assert.equal(m5Request.searchParams.get("timezone"), "UTC");
+  assert.equal(m5Request.searchParams.has("apikey"), true);
   assert.equal(body.schema_version, "cryptophys.market-data.v1");
   assert.equal(body.source.canonical_symbol, "OANDA:XAUUSD");
-  assert.equal(body.timeframes.M5.candle_count, 300);
+  assert.equal(body.timeframes.M5.candle_count, 5000);
+  assert.equal(body.context_timeframes.D1.candle_count, 60);
+  assert.equal(body.context_timeframes.W1.candle_count, 60);
+  assert.equal(body.history_sufficiency.prophet_default_mtf_ready, true);
   assert.equal(body.timeframes.M15.interval_minutes, 15);
   assert.equal(body.timeframes.H1.interval_minutes, 60);
   assert.equal(body.timeframes.H4.interval_minutes, 240);
   assert.equal((await worker.fetch(new Request("https://market.example.com/latest", {
     headers: { authorization: "Bearer test-secret" }
   }), testEnv)).status, 200);
+  const engineResponse = await worker.fetch(new Request("https://market.example.com/engine-inputs?engine=prophet", {
+    headers: { authorization: "Bearer test-secret" }
+  }), testEnv);
+  const engineInput = await engineResponse.json();
+  assert.equal(engineResponse.status, 200);
+  assert.equal(engineInput.engine, "prophet");
+  assert.equal(engineInput.data_status, "history_ready_for_shadow");
+  assert.equal(engineInput.calculation_status, "blocked_source_parity");
+  assert.equal(engineInput.calculation_allowed_for_trusted_evidence, false);
+  assert.equal(engineInput.inputs.timeframes.M5.candle_count, 5000);
 });
 
 test("GET /latest requires the configured bearer secret", async () => {
