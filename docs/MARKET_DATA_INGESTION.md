@@ -8,7 +8,7 @@ Status: implementation added on feature branch; **not deployed and not approved 
 - Provider adapter: Twelve Data `/time_series` endpoint, configured for `XAU/USD`, `5min`, `outputsize=300`, `timezone=UTC`.
 - `GET /health`: configuration status only; does not make an upstream request.
 - `POST /pull`: authenticated on-demand pull using `Authorization: Bearer <MARKET_DATA_INGEST_SECRET>`.
-- `GET /latest`: latest cached normalized bundle; returns 503 if no successful recent pull exists.
+- `GET /latest`: latest cached normalized bundle, authenticated with the same bearer secret; returns 503 if no successful recent pull exists.
 - Scheduled pull: every five minutes (`*/5 * * * *`).
 
 This worker uses Twelve Data as the configured market-data provider. It does **not** call TradingView directly: TradingView states it does not currently offer a public API for retrieving market data or indicator values. The existing ChatGPT TradingView MCP connection is not an endpoint that a Cloudflare Worker can automatically call. See the official [TradingView API statement](https://www.tradingview.com/support/solutions/43000474413-i-need-access-to-your-api-in-order-to-get-data-or-indicator-values/) and [Twelve Data time-series documentation](https://twelvedata.com/docs).
