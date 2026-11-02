@@ -35,6 +35,11 @@ function wmaAt(values, end, length) {
   return sum / weights;
 }
 
+// HMA period rounding: half = floor(len/2), sqrt period = round(sqrt(len)).
+// For the GMI call (smooth_len=6) pro_fast uses lengths 6 and 12, where
+// floor/round of sqrt agree; pro_slow uses 13, where they differ (3 vs 4).
+// pro_slow/pro_core are NOT inputs to prophet_structure_core and remain
+// unverified until TradingView fixtures pin ta.hma's internal rounding.
 function hmaSeries(values, length) {
   const half = Math.max(1, Math.floor(length / 2));
   const root = Math.max(1, Math.floor(Math.sqrt(length) + 0.5));
@@ -103,6 +108,9 @@ export function prophetVolumeCycle(closes, highs, lows, anomalies, period) {
 export function prophetEfficiencyRatio(closes, length = 14) {
   if (!Array.isArray(closes) || !Number.isSafeInteger(length) || length < 1) throw new TypeError("invalid close series or ER length");
   return closes.map((close, i) => {
+    // Pine math.sum(x, len) is na until len samples exist, so the ratio is na
+    // for the first len-1 bars (no partial-window sum).
+    if (i < length - 1) return null;
     const old = i >= length ? nvl(closes[i - length], close) : close;
     const direction = Math.abs(close - old);
     const start = Math.max(0, i - length + 1);
@@ -135,30 +143,70 @@ export function calculateProphetTensor(rawComp, efficiency, smoothLength = 6) {
 }
 
 /**
- * Calculate the source's confirmed-bar oscillator inputs and replay the shared
- * structure kernel. ATR remains an explicit caller input because the exact
- * source expression/settings for atr_val must be pinned separately.
+ * Pine ta.atr(length) == ta.rma(ta.tr(true), length).
+ * ta.tr(true): high-low when the prior close is na (first bar).
+ * ta.rma: seeded with ta.sma(src, length) on the first bar where it is
+ * available, then alpha=1/length recursion. na before warm-up.
  */
-export function replayProphetR37ClosedBars(candles, { atrValues, volumeLength = 20, erLength = 14, smoothLength = 6 } = {}) {
-  if (!Array.isArray(candles) || !Array.isArray(atrValues) || atrValues.length !== candles.length) {
-    throw new TypeError("candles and equal-length atrValues are required");
+export function pineAtr(candles, length = 14) {
+  if (!Array.isArray(candles) || !Number.isSafeInteger(length) || length < 1) throw new TypeError("invalid candles or ATR length");
+  const tr = candles.map((c, i) => {
+    const pc = i > 0 ? candles[i - 1].close : null;
+    if (!isNum(pc)) return c.high - c.low;
+    return Math.max(c.high - c.low, Math.abs(c.high - pc), Math.abs(c.low - pc));
+  });
+  const out = [];
+  let prev = null;
+  for (let i = 0; i < tr.length; i++) {
+    prev = isNum(prev) ? (tr[i] + (length - 1) * prev) / length : smaAt(tr, i, length);
+    out.push(isNum(prev) ? prev : null);
+  }
+  return out;
+}
+
+/** GMI line 154: atr_val = math.max(ta.atr(14), syminfo.mintick); na propagates. */
+export function gmiAtrValues(candles, mintick, length = 14) {
+  if (!isNum(mintick) || mintick <= 0) throw new TypeError("mintick must be a positive finite number");
+  return pineAtr(candles, length).map(a => isNum(a) ? Math.max(a, mintick) : null);
+}
+
+/**
+ * Calculate the source's confirmed-bar oscillator inputs and replay the shared
+ * structure kernel, following GMI v12.70 lines 873–883 on confirmed bars:
+ *   pro_anom = barstate.isconfirmed ? prophet_volume_ratio(volume, 20) : vol_anomaly(...)
+ * Every closed (historical/confirmed) bar takes the prophet_volume_ratio branch,
+ * and that SAME pro_anom feeds f_vol_cycle and prophet_structure_core.
+ * The realtime vol_anomaly branch is returned only for reference.
+ *
+ * ATR: pass `atrValues` explicitly, or `mintick` to compute GMI's
+ * max(ta.atr(14), mintick).
+ */
+export function replayProphetR37ClosedBars(candles, { atrValues, mintick, volumeLength = 20, erLength = 14, smoothLength = 6 } = {}) {
+  if (!Array.isArray(candles)) throw new TypeError("candles must be an array");
+  if (atrValues === undefined && mintick !== undefined) atrValues = gmiAtrValues(candles, mintick);
+  if (!Array.isArray(atrValues) || atrValues.length !== candles.length) {
+    throw new TypeError("equal-length atrValues or a positive mintick is required");
   }
   const volumes = candles.map(c => c.volume);
   const closes = candles.map(c => c.close), highs = candles.map(c => c.high), lows = candles.map(c => c.low);
   const volumeRatio = prophetVolumeRatio(volumes, volumeLength);
   const volumeAnomaly = prophetVolumeAnomaly(volumes, volumeLength).map(v => Math.min(2, nvl(v, 1)));
-  const raw13 = prophetVolumeCycle(closes, highs, lows, volumeAnomaly, 13);
-  const raw34 = prophetVolumeCycle(closes, highs, lows, volumeAnomaly, 34);
-  const raw55 = prophetVolumeCycle(closes, highs, lows, volumeAnomaly, 55);
+  // Confirmed-bar branch: pro_anom == prophet_volume_ratio.
+  const proAnom = volumeRatio;
+  const raw13 = prophetVolumeCycle(closes, highs, lows, proAnom, 13);
+  const raw34 = prophetVolumeCycle(closes, highs, lows, proAnom, 34);
+  const raw55 = prophetVolumeCycle(closes, highs, lows, proAnom, 55);
   const rawComp = closes.map((_, i) => [raw13[i], raw34[i], raw55[i]].every(isNum)
     ? raw13[i] * 0.5 + raw34[i] * 0.35 + raw55[i] * 0.15 : null);
   const er = prophetEfficiencyRatio(closes, erLength);
   const tensor = calculateProphetTensor(rawComp, er, smoothLength);
-  const hasVolume = volumes.map((_, i) => volumes.slice(0, i + 1).some(v => isNum(v) && v !== 0));
+  // GMI line 873: has_volume = nz(ta.cum(nz(volume)), 0.0) > 0.0
+  let cumVolume = 0;
+  const hasVolume = volumes.map(v => (cumVolume += nvl(v, 0)) > 0);
   const structureInput = candles.map((c, i) => ({
-    ...c, oscillator: tensor.pro_fast[i], volume_ratio: volumeRatio[i],
+    ...c, oscillator: tensor.pro_fast[i], volume_ratio: proAnom[i],
     has_volume: hasVolume[i], atr: atrValues[i]
   }));
-  return { volumeRatio, volumeAnomaly, rawComp, efficiencyRatio: er, ...tensor,
+  return { volumeRatio, proAnom, volumeAnomalyRealtime: volumeAnomaly, atrValues, hasVolume, rawComp, efficiencyRatio: er, ...tensor,
     structure: replayProphetR37Structure(structureInput) };
 }

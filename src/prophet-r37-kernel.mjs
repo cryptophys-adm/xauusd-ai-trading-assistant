@@ -98,8 +98,10 @@ export function replayProphetR37Structure(inputCandles, options = {}) {
   }
   const candles = inputCandles.map(normalizeCandle);
   for (let i = 1; i < candles.length; i++) {
-    if (candles[i].bar_index <= candles[i - 1].bar_index) {
-      throw new RangeError("bar_index must be strictly increasing");
+    // Pine bar_index has no gaps; history offsets ([1], [pivot_right]) count
+    // bars, so a gapped index would silently diverge from Pine semantics.
+    if (candles[i].bar_index !== candles[i - 1].bar_index + 1) {
+      throw new RangeError("bar_index must be strictly increasing and consecutive (Pine bar_index has no gaps)");
     }
   }
 
@@ -116,10 +118,12 @@ export function replayProphetR37Structure(inputCandles, options = {}) {
     const oscillatorPh = pivotAt(oscillator, i, cfg.pivotLeft, cfg.pivotRight, true);
     const oscillatorPl = pivotAt(oscillator, i, cfg.pivotLeft, cfg.pivotRight, false);
     const prevOsc = i > 0 ? oscillator[i - 1] : null;
-    const crossUp = pineLt(prevOsc, 0) && pineGt(c.oscillator, 0) ||
-      (pineEq(c.oscillator, 0) && pineLt(prevOsc, 0));
-    const crossDown = pineGt(prevOsc, 0) && pineLt(c.oscillator, 0) ||
-      (pineEq(c.oscillator, 0) && pineGt(prevOsc, 0));
+    // Pine: ta.crossover(x, 0)  == x > 0 and x[1] <= 0
+    //       ta.crossunder(x, 0) == x < 0 and x[1] >= 0
+    // A current value of exactly 0 is never a cross; a prior value of exactly
+    // 0 is. na on either side yields false.
+    const crossUp = pineGt(c.oscillator, 0) && (pineLt(prevOsc, 0) || pineEq(prevOsc, 0));
+    const crossDown = pineLt(c.oscillator, 0) && (pineGt(prevOsc, 0) || pineEq(prevOsc, 0));
     let bearDivEvent = false, bullDivEvent = false;
     let bearDivOriginBar = null, bearDivOriginValue = null;
     let bullDivOriginBar = null, bullDivOriginValue = null;
@@ -140,7 +144,7 @@ export function replayProphetR37Structure(inputCandles, options = {}) {
       }
       lastPhValue = oscillatorPh;
       lastPricePh = pivotPrice;
-      lastPhIndex = candles[i - cfg.pivotRight].bar_index;
+      lastPhIndex = bar - cfg.pivotRight; // Pine: bar_index - pivot_right
     }
 
     if (oscillatorPl !== null) {
@@ -152,7 +156,7 @@ export function replayProphetR37Structure(inputCandles, options = {}) {
       }
       lastPlValue = oscillatorPl;
       lastPricePl = pivotPrice;
-      lastPlIndex = candles[i - cfg.pivotRight].bar_index;
+      lastPlIndex = bar - cfg.pivotRight; // Pine: bar_index - pivot_right
     }
 
     const body = Math.abs(c.close - c.open);

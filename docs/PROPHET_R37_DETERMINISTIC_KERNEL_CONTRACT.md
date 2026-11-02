@@ -63,6 +63,25 @@ Important Pine semantics:
 - `has_volume=false` is not the same as volume ratio zero: in non-legacy mode, missing volume does not itself trigger the "not real volume" veto.
 - Pine execution and series history must use confirmed closed candles for the webhook parity contract.
 
+## Source-conformance corrections (review of first slice)
+
+Line-by-line review of `src/prophet-r37-*.mjs` against the Mizan export bodies and GMI v12.70 lines 154 and 873–883 found and corrected these transcription defects. Each is now covered by a unit test. These are conformance fixes to the source, not TradingView parity evidence.
+
+| # | Defect | Source rule | Effect before fix |
+|---|---|---|---|
+| 1 | Closed-bar replay fed `vol_anomaly` into `f_vol_cycle` | GMI 877: `pro_anom = barstate.isconfirmed ? prophet_volume_ratio(volume,20) : vol_anomaly(...)`; the same `pro_anom` feeds `f_vol_cycle` (878) and the structure core (883) | `raw_comp`, `pro_fast` and therefore every structure output used the realtime branch on closed bars |
+| 2 | Zero-cross treated `x == 0` as a cross and missed `x[1] == 0 → x ≠ 0` | `ta.crossover(x,0)` ≡ `x > 0 and x[1] <= 0`; `ta.crossunder` ≡ `x < 0 and x[1] >= 0` | Spurious and missed d/b resets |
+| 3 | Pivot origin index taken from the candle's own `bar_index` | `last_ph_index := bar_index - pivot_right` | Wrong divergence origin bar if indices are not contiguous |
+| 4 | Kernel accepted gapped `bar_index` | Pine `bar_index` is consecutive; `[n]` offsets count bars | Silent divergence; now rejected |
+| 5 | `efficiency_ratio` summed a partial window during warm-up | `math.sum(x, len)` is `na` until `len` samples | Non-na ER on bars `0..len-2` (not observable in `pro_fast`, which is na until `raw_comp` warms at bar 54, but wrong for the export itself) |
+| 6 | `has_volume` was O(n²) "any non-zero" | GMI 873: `nz(ta.cum(nz(volume)),0) > 0` | Equivalent for non-negative volume; now exact and O(n) |
+
+Added: `pineAtr` (`ta.rma(ta.tr(true), len)`, SMA-seeded) and `gmiAtrValues` (GMI 154: `math.max(ta.atr(14), syminfo.mintick)`, na-propagating). `replayProphetR37ClosedBars` accepts `{ mintick }` instead of a precomputed ATR vector.
+
+Open ambiguity (fixture-gated): `ta.hma` internal period rounding. The kernel uses `floor(len/2)` and `round(sqrt(len))`. For `smooth_len = 6`, `pro_fast` uses lengths 6 and 12, where floor and round of `sqrt` agree, so the structure input is unaffected. `pro_slow` uses length 13 (`sqrt` → 3 vs 4; half → 6 vs 6.5) and stays unverified until TradingView output is captured.
+
+Open ambiguity (fixture-gated): `ta.pivothigh`/`ta.pivotlow` tie handling (equal neighbour values). The kernel uses strict inequality on both sides.
+
 ## Kernel API
 
 Input: ordered candles with explicit monotonically increasing `bar_index`, oscillator (`pro_fast`), volume ratio (`pro_anom`), volume availability, ATR and OHLC. The kernel returns the 16-field tuple above for every bar plus a state snapshot suitable for deterministic continuation.
@@ -90,7 +109,7 @@ Each fixture must contain the complete input history and all 16 TradingView outp
 
 1. Confirm the checked-in Mizan function body matches the published library revision imported by GMI. Source text currently declares v1.6 despite the GMI import suffix /4.
 2. Capture TradingView output fixtures. None are available in this PR at time of this contract.
-3. Implement and independently validate `prophet_volume_ratio`, `vol_anomaly`, `f_vol_cycle`, `efficiency_ratio`, and `calculate_prophet_tensor` before claiming the oscillator input is reproduced. GMI currently computes `pro_anom` differently on confirmed versus realtime bars; closed-bar fixture scope uses the confirmed branch.
+3. `prophet_volume_ratio`, `vol_anomaly`, `f_vol_cycle`, `efficiency_ratio`, `calculate_prophet_tensor` and GMI `atr_val` are transcribed with source-conformance tests (see corrections above). They are NOT independently validated against TradingView: HMA rounding and pivot ties stay open. Closed-bar fixture scope uses the confirmed `pro_anom` branch (`prophet_volume_ratio`).
 4. Trace exact VP/footprint/session/OB/FVG/Fabio/kinematic dependencies before attempting a GMI verdict kernel.
 5. Do not populate `LOCAL_CALC_PROVENANCE_ALLOWLIST`, claim parity, or promote production based on this kernel alone.
 
