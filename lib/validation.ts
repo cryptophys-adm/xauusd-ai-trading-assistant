@@ -118,4 +118,55 @@ export function validateBundle(bundle: unknown): ValidationProblem[] {
     problems.push({ field: "timeframe", reason: "must be one of M1, M5, M15, H1, H4, D1" });
   }
   problems.push(...validateCandleRef(b.candle));
-  const valida
+  const validation = b.validation as Record<string, unknown> | null;
+  if (!validation || typeof validation !== "object") {
+    problems.push({ field: "validation", reason: "object required" });
+  } else {
+    if (typeof validation.ok !== "boolean") {
+      problems.push({ field: "validation.ok", reason: "boolean required" });
+    }
+    if (validation.completeness !== "complete" && validation.completeness !== "incomplete") {
+      problems.push({ field: "validation.completeness", reason: "'complete' or 'incomplete'" });
+    }
+    if (!Array.isArray(validation.errors)) {
+      problems.push({ field: "validation.errors", reason: "array required" });
+    }
+    if (!Array.isArray(validation.missing_evidence)) {
+      problems.push({ field: "validation.missing_evidence", reason: "array required" });
+    }
+    const freshness = validation.freshness as Record<string, unknown> | null;
+    if (freshness && typeof freshness === "object") {
+      for (const engine of REQUIRED_ENGINES) {
+        const fe = freshness[engine] as Record<string, unknown> | null;
+        if (!fe || typeof fe !== "object") {
+          problems.push({ field: `validation.freshness.${engine}`, reason: "object required" });
+          continue;
+        }
+        if (typeof fe.ok !== "boolean") {
+          problems.push({ field: `validation.freshness.${engine}.ok`, reason: "boolean required" });
+        }
+        if (fe.age_seconds !== null && (typeof fe.age_seconds !== "number" || !Number.isFinite(fe.age_seconds))) {
+          problems.push({ field: `validation.freshness.${engine}.age_seconds`, reason: "finite number or null" });
+        }
+      }
+    }
+  }
+  if (!Array.isArray(b.sources)) {
+    problems.push({ field: "sources", reason: "array required" });
+  } else {
+    for (const s of b.sources as unknown[]) {
+      const se = s as Record<string, unknown> | null;
+      if (!se || typeof se !== "object") {
+        problems.push({ field: "sources[]", reason: "object required" });
+        continue;
+      }
+      if (!isEngineId(se.engine)) {
+        problems.push({ field: "sources[].engine", reason: "must be mizan, prophet, or gmi" });
+      }
+      if (typeof se.provenance !== "string" || se.provenance.trim().length === 0) {
+        problems.push({ field: "sources[].provenance", reason: "required non-empty string" });
+      }
+      if (typeof se.provenance_verified !== "boolean") {
+        problems.push({ field: "sources[].provenance_verified", reason: "boolean required" });
+      }
+      if (typeof se.fresh
