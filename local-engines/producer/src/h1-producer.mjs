@@ -13,6 +13,7 @@
 //     bull_event  = prophet_bull_event_bar != 0 (na -> false)
 import { calculateProphetR38Core } from "../../prophet-r38/src/core.mjs";
 import { replayProphetR37ClosedBars } from "../../../src/prophet-r37-oscillator.mjs";
+import { computeGmi } from "../../gmi/src/gmi-core.mjs";
 import { ENGINE_PROVENANCE } from "./provenance.generated.mjs";
 
 export const LOCAL_CALCULATION_CONTRACT_VERSION = "cryptophys.local-calculation.v1";
@@ -56,8 +57,9 @@ const bars = (frame) => (Array.isArray(frame?.candles) ? frame.candles : []);
 
 /**
  * Returns { candle_key, candle_time, bar, records } for the last closed H1 bar.
- * records contains mizan and prophet local_computation payloads. GMI is not
- * produced: no local GMI calculator exists, and none is fabricated.
+ * records contains mizan, prophet and gmi local_computation payloads. GMI
+ * fields come from the local GMI v12.70 engine (local-engines/gmi); when it
+ * cannot run (insufficient history) the gmi record is omitted, never faked.
  */
 export function buildH1LocalCalculations(bundle, { now = Date.now(), mintick = 0.001 } = {}) {
   const h1 = bars(bundle?.timeframes?.H1).slice(-H1_WINDOW);
@@ -154,5 +156,30 @@ export function buildH1LocalCalculations(bundle, { now = Date.now(), mintick = 0
     }
   };
 
-  return { candle_key: candleKey, candle_time: candleTime, bar: candle, records: [mizan, prophet] };
+  const records = [mizan, prophet];
+  let gmiError = null;
+  try {
+    const gmi = computeGmi(bundle, { mintick });
+    if (gmi.open_time !== last.open_time) throw Object.assign(new Error("GMI evaluated a different bar"), { code: "gmi_bar_mismatch" });
+    records.push({
+      ...base,
+      engine: "gmi",
+      calculation_version: "gmi-v12.70-h1@" + ENGINE_PROVENANCE.gmi.implementation_hash.slice(0, 12),
+      values: {
+        candle,
+        bias: gmi.comparable.gmi_dir === 1 ? "BULLISH" : gmi.comparable.gmi_dir === -1 ? "BEARISH" : "NEUTRAL",
+        comparable: { gmi_v12_70: gmi.comparable },
+        diagnostics: gmi.diagnostics,
+        scope_note: "Only comparable.gmi_v12_70 fields are parity-checked; diagnostics are unverified internals."
+      },
+      provenance: {
+        source: "local-engines/gmi h1", source_hash: ENGINE_PROVENANCE.gmi.source_hash,
+        implementation_hash: ENGINE_PROVENANCE.gmi.implementation_hash, files: ENGINE_PROVENANCE.gmi.files,
+        dependencies: { mizan: mizanDependency }
+      }
+    });
+  } catch (error) {
+    gmiError = typeof error?.code === "string" ? error.code : "gmi_failed";
+  }
+  return { candle_key: candleKey, candle_time: candleTime, bar: candle, records, gmi_error: gmiError };
 }
