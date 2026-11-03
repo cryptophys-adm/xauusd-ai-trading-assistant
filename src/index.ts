@@ -286,7 +286,7 @@ async function fetchNews(env: Env): Promise<{ available: boolean; articles: unkn
       if (!env.INGEST_URL || !env.INGEST_SECRET) {
         return { available: false, articles: [], article_count: 0, reason: "News ingestion RPC or HTTP credentials are not configured.", fetched_at: fetchedAt };
       }
-      const pullUrl = env.INGEST_URL.replace(/\\/+$/, "") + "/pull";
+      const pullUrl = env.INGEST_URL.replace(/\/+$/, "") + "/pull";
       const response = await fetch(pullUrl, { method: "POST", headers: { "Authorization": "Bearer " + env.INGEST_SECRET, "Accept": "application/json" } });
       if (!response.ok) return { available: false, articles: [], article_count: 0, reason: "Ingestion endpoint returned HTTP " + response.status + " " + response.statusText, fetched_at: fetchedAt };
       body = await response.json() as Record<string, unknown>;
