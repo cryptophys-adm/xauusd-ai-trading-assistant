@@ -10,6 +10,14 @@
       "custom_domain": true
     }
   ],
+  // Read-only chart data from the market-data Worker (RPC, no shared secret).
+  "services": [
+    {
+      "binding": "MARKET_DATA",
+      "service": "xauusd-tradingview-pull-adapter",
+      "entrypoint": "MarketDataReader"
+    }
+  ],
   "observability": {
     "enabled": true
   }
