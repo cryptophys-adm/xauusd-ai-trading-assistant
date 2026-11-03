@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       run_pull:
-        description: "Run one authenticated /pull after deploy (consumes Twelve Data quota)"
+        description: "Run one authenticated /pull after deploy (consumes TradingView MCP tool-call quota, up to TV_MAX_CALLS_PER_RUN calls)"
         required: true
         type: boolean
         default: true
@@ -56,16 +56,17 @@ jobs:
       - name: Require deploy credentials and Worker secrets
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TV_GATEWAY_SECRET: ${{ secrets.TV_GATEWAY_SECRET }}
           MARKET_DATA_INGEST_SECRET: ${{ secrets.MARKET_DATA_INGEST_SECRET }}
         run: |
           missing=0
-          for name in CLOUDFLARE_API_TOKEN TWELVE_DATA_API_KEY MARKET_DATA_INGEST_SECRET; do
+          for name in CLOUDFLARE_API_TOKEN TV_GATEWAY_SECRET MARKET_DATA_INGEST_SECRET; do
             if [ -z "${!name:-}" ]; then echo "::error::$name is not configured as a repository/environment secret."; missing=1; fi
           done
-          if [ "${#MARKET_DATA_INGEST_SECRET}" -lt 32 ]; then
-            echo "::error::MARKET_DATA_INGEST_SECRET must be at least 32 characters."; missing=1
-          fi
+          for name in TV_GATEWAY_SECRET MARKET_DATA_INGEST_SECRET; do
+            value="${!name:-}"
+            if [ -n "$value" ] && [ "${#value}" -lt 32 ]; then echo "::error::$name must be at least 32 characters."; missing=1; fi
+          done
           exit $missing
 
       - name: Validate Worker bundle
@@ -87,11 +88,13 @@ jobs:
       - name: Set Worker secrets (values never echoed)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TV_GATEWAY_SECRET: ${{ secrets.TV_GATEWAY_SECRET }}
           MARKET_DATA_INGEST_SECRET: ${{ secrets.MARKET_DATA_INGEST_SECRET }}
         run: |
           set -euo pipefail
-          printf '%s' "$TWELVE_DATA_API_KEY" | npx --yes wrangler@4.45.0 secret put TWELVE_DATA_API_KEY --config market-data-ingestion/wrangler.jsonc >/dev/null
+          # Same gateway secret on both sides: the news Worker (TradingView MCP OAuth owner) and this adapter.
+          printf '%s' "$TV_GATEWAY_SECRET" | npx --yes wrangler@4.45.0 secret put TV_GATEWAY_SECRET --name xauusd-fundamental-news-ingestion >/dev/null
+          printf '%s' "$TV_GATEWAY_SECRET" | npx --yes wrangler@4.45.0 secret put TV_GATEWAY_SECRET --config market-data-ingestion/wrangler.jsonc >/dev/null
           printf '%s' "$MARKET_DATA_INGEST_SECRET" | npx --yes wrangler@4.45.0 secret put MARKET_DATA_INGEST_SECRET --config market-data-ingestion/wrangler.jsonc >/dev/null
           echo "Worker secrets updated."
 
@@ -115,11 +118,11 @@ jobs:
           let health;
           for (let i = 0; i < 6; i++) {
             health = await get("/health");
-            if (health.body?.source_configured && health.body?.pull_auth_configured) break;
+            if (health.body?.gateway_configured && health.body?.pull_auth_configured) break;
             await new Promise(r => setTimeout(r, 5000));
           }
           if (health.status !== 200 || health.body?.status !== "ok") fail("health failed", health);
-          for (const k of ["source_configured", "pull_auth_configured", "cache_configured"]) {
+          for (const k of ["gateway_configured", "gateway_binding", "pull_auth_configured", "cache_configured"]) {
             if (health.body[k] !== true) fail(`health: ${k} is not true`, health.body);
           }
           const unauth = await get("/engine-shadow?engine=prophet");
@@ -127,9 +130,9 @@ jobs:
           const summary = { url: base, version: process.env.WORKER_VERSION, health: health.body };
           if (process.env.RUN_PULL === "true") {
             const pull = await get("/pull", { method: "POST", headers: auth });
-            summary.pull = { status: pull.status, error: pull.body?.error ?? null, message: pull.body?.message ?? null };
-            if (pull.status === 429) fail("Twelve Data quota exceeded during pull", summary.pull);
-            if (pull.status >= 400) fail("authenticated /pull failed", summary.pull);
+            summary.pull = { http: pull.status, status: pull.body?.status ?? null, requested: pull.body?.requested ?? 0, updated: pull.body?.updated ?? [], failed: pull.body?.failed ?? [], quota_cooldown_until: pull.body?.quota_cooldown_until ?? null };
+            if (pull.status === 429) fail("TradingView MCP quota exceeded during pull", summary.pull);
+            if (pull.status >= 400 || !["ok", "partial", "up_to_date"].includes(pull.body?.status)) fail("authenticated /pull via TradingView gateway failed", summary.pull);
           }
           const shadow = await get("/engine-shadow?engine=prophet", { headers: auth });
           summary.shadow = { status: shadow.status, engine_shadow_status: shadow.body?.engine_shadow_status, data_status: shadow.body?.data_status ?? null, history_gaps: shadow.body?.history_gaps ?? null, output_count: shadow.body?.output_count ?? 0 };

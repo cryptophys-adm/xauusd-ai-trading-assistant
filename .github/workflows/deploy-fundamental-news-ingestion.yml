@@ -29,7 +29,7 @@ jobs:
           node-version: "22"
 
       - name: Run Worker unit tests
-        run: node --test fundamental-news-ingestion/test/index.test.mjs
+        run: node --test fundamental-news-ingestion/test/*.test.mjs
 
       - name: Validate Worker bundle
         run: npx --yes wrangler@4.45.0 deploy --dry-run --config fundamental-news-ingestion/wrangler.jsonc

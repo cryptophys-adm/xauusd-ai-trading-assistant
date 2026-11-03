@@ -13,7 +13,7 @@ function series(count, minutes) {
 function bundle() {
   return {
     schema_version: "cryptophys.market-data.v1",
-    source: { canonical_symbol: "OANDA:XAUUSD", provider: "Twelve Data", provider_symbol: "XAU/USD" },
+    source: { canonical_symbol: "OANDA:XAUUSD", provider: "TradingView MCP", provider_symbol: "OANDA:XAUUSD" },
     fetched_at: "2026-01-02T00:00:00.000Z",
     latest_closed_m5_close_time: "2026-01-02T00:00:00.000Z",
     volume_available: true,
@@ -25,8 +25,8 @@ function bundle() {
       D1: { interval_minutes: 1440, candle_count: 17, candles: series(17, 1440) }
     },
     context_timeframes: {
-      D1: { interval_minutes: 1440, candle_count: 60, candles: series(60, 1440), source: { provider: "Twelve Data", interval: "1day" } },
-      W1: { interval_minutes: 10080, candle_count: 60, candles: series(60, 10080), source: { provider: "Twelve Data", interval: "1week" } }
+      D1: { interval_minutes: 1440, candle_count: 60, candles: series(60, 1440), source: { provider: "TradingView MCP", interval: "1D" } },
+      W1: { interval_minutes: 10080, candle_count: 60, candles: series(60, 10080), source: { provider: "TradingView MCP", interval: "1W" } }
     }
   };
 }
@@ -65,7 +65,25 @@ test("GMI returns structured unavailable-input records and remains blocked", () 
   assert.ok(result.unavailable_inputs.some((item) => item.symbol === "TVC:DXY"));
   assert.ok(result.unavailable_inputs.some((item) => item.symbol === "CRYPTOCAP:USDT"));
   assert.ok(result.unavailable_inputs.some((item) => item.symbol === "TVC:USOIL"));
-  assert.ok(result.unavailable_inputs.some((item) => item.code === "missing_tradingview_footprint_semantics"));
+  assert.ok(!result.unavailable_inputs.some((item) => item.code === "missing_tradingview_footprint_semantics"));
+});
+
+test("GMI inputs from TradingView-native M1 and external series clear the unavailable list but not the calculator/parity block", () => {
+  const data = bundle();
+  data.timeframes.M1 = { interval_minutes: 1, candle_count: 3000, candles: series(3000, 1) };
+  data.external_series = {
+    "TVC:DXY": { H4: { candle_count: 500, candles: series(500, 240) } },
+    "CRYPTOCAP:USDT": { H4: { candle_count: 500, candles: series(500, 240) } },
+    "TVC:USOIL": { M5: { candle_count: 1000, candles: series(1000, 5) } }
+  };
+  const result = buildLocalEngineInput(data, "gmi");
+  assert.deepEqual(result.unavailable_inputs, []);
+  assert.equal(result.calculation_status, "blocked_no_local_gmi_calculator");
+  assert.equal(result.calculation_allowed_for_trusted_evidence, false);
+  assert.equal(result.inputs.external_series["TVC:DXY"].H4.candle_count, 500);
+  data.external_series["TVC:DXY"].H4 = { candle_count: 10, candles: series(10, 240) };
+  const short = buildLocalEngineInput(data, "gmi");
+  assert.deepEqual(short.unavailable_inputs.map((i) => [i.symbol, i.available_bars]), [["TVC:DXY", 10]]);
 });
 
 test("Mizan history floor comes from known callers but identity/parity remain blocked", () => {

@@ -10,8 +10,17 @@
       "id": "4ada6196de5a4000a28a047bf6b30ff3"
     }
   ],
+  // TradingView OHLCV comes only through the news-ingestion Worker, which owns
+  // the TradingView MCP OAuth grant and the account-wide quota cooldown.
+  "services": [
+    {
+      "binding": "TV_GATEWAY",
+      "service": "xauusd-fundamental-news-ingestion"
+    }
+  ],
   "vars": {
-    "TWELVE_DATA_SYMBOL": "XAU/USD"
+    "TV_MAX_CALLS_PER_RUN": "8",
+    "TV_DAILY_CALL_BUDGET": "1200"
   },
   "triggers": {
     "crons": ["*/5 * * * *"]

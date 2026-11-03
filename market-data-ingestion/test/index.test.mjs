@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { SERIES } from "../src/tradingview-source.mjs";
 
 const { default: worker, internals } = await import("../src/index.mjs");
 
@@ -9,255 +10,175 @@ class MemoryKV {
   async put(key, value) { this.map.set(key, value); }
 }
 
+const SECRET = "test-secret";
+const auth = { authorization: `Bearer ${SECRET}` };
+
+/** Fake gateway: serves TradingView-like columns ending with a still-forming bar. */
+function fakeGateway({ nowSec = Math.floor(Date.now() / 1000), status = 200, body = null } = {}) {
+  const calls = [];
+  return {
+    calls,
+    async fetch(url, init) {
+      const request = JSON.parse(init.body);
+      calls.push({ url, auth: init.headers.authorization, requests: request.requests });
+      if (body) return new Response(JSON.stringify(body), { status });
+      const results = request.requests.map((r) => {
+        const spec = SERIES.find((s) => s.symbol === r.symbol && s.interval === r.interval);
+        const lastOpen = Math.floor(nowSec / spec.seconds) * spec.seconds; // forming bar
+        const t = Array.from({ length: r.count }, (_, i) => lastOpen - (r.count - 1 - i) * spec.seconds);
+        const o = t.map((_, i) => 2300 + Math.sin(i / 9));
+        const c = o.map((x, i) => x + Math.sin(i / 3) * 0.4);
+        return {
+          ok: true, request: r, symbol: r.symbol, interval: r.interval, count: t.length, has_more: true,
+          bars: { t, o, c, h: o.map((x, i) => Math.max(x, c[i]) + 0.3), l: o.map((x, i) => Math.min(x, c[i]) - 0.3),
+            v: t.map((_, i) => (r.symbol === "TVC:DXY" ? null : 100 + (i % 13))) }
+        };
+      });
+      return new Response(JSON.stringify({ contract: "cryptophys.tv-ohlcv-gateway.v1", results }), { status: 200 });
+    }
+  };
+}
+
 const env = (overrides = {}) => ({
-  MARKET_DATA_INGEST_SECRET: "test-secret",
-  TWELVE_DATA_API_KEY: "test-api-key",
+  MARKET_DATA_INGEST_SECRET: SECRET,
+  TV_GATEWAY_SECRET: "gateway-secret",
   MARKET_DATA_CACHE: new MemoryKV(),
   ...overrides
 });
 
-const now = Date.now();
-const DAY_MS = 24 * 60 * 60 * 1000;
-const WEEK_MS = 7 * DAY_MS;
-function providerCandle(openMs, overrides = {}) {
-  const iso = new Date(openMs).toISOString().slice(0, 19).replace("T", " ");
-  return {
-    datetime: iso,
-    open: "2300.00", high: "2302.00", low: "2299.00", close: "2301.00", volume: "12",
-    ...overrides
-  };
-}
-function providerValues(interval, nowMs, count = 60) {
-  if (interval === "5min") {
-    const start = Math.floor(nowMs / 300_000) * 300_000 - 300_000;
-    return Array.from({ length: count }, (_, i) => providerCandle(start - i * 300_000));
-  }
-  if (interval === "1day") {
-    const start = Math.floor(nowMs / DAY_MS) * DAY_MS - DAY_MS;
-    return Array.from({ length: count }, (_, i) => providerCandle(start - i * DAY_MS));
-  }
-  const day = new Date(nowMs).getUTCDay();
-  const daysSinceMonday = (day + 6) % 7;
-  const thisWeek = Math.floor((nowMs - daysSinceMonday * DAY_MS) / WEEK_MS) * WEEK_MS;
-  const lastWeek = thisWeek - WEEK_MS;
-  return Array.from({ length: count }, (_, i) => providerCandle(lastWeek - i * WEEK_MS));
-}
-
-test("closed M5 candles exclude the still-forming candle and sort chronologically", () => {
-  const closedTime = Math.floor((now - 10 * 60_000) / 300_000) * 300_000;
-  const values = Array.from({ length: 60 }, (_, i) => providerCandle(closedTime - i * 300_000));
-  values.push(providerCandle(Math.floor(now / 300_000) * 300_000));
-  const candles = internals.normalizeProviderPayload({ status: "ok", values }, now);
-  assert.equal(candles.length, 60);
-  assert.ok(Date.parse(candles[0].open_time) < Date.parse(candles.at(-1).open_time));
-  assert.ok(Date.parse(candles.at(-1).close_time) <= now);
+test("closed candles exclude the still-forming TradingView bar, keep null volume, and sort", () => {
+  const spec = SERIES.find((s) => s.interval === "5m" && s.symbol === "OANDA:XAUUSD");
+  const nowSec = 1_800_000_000;
+  const forming = Math.floor(nowSec / 300) * 300;
+  const bars = { t: [forming, forming - 300, forming - 600], o: [1, 1, 1], h: [2, 2, 2], l: [0, 0, 0], c: [1, 1, 1], v: [5, null, 7] };
+  const candles = internals.closedCandlesFromColumns(bars, spec, nowSec);
+  assert.deepEqual(candles.map((c) => c.time), [forming - 600, forming - 300]);
+  assert.deepEqual(candles.map((c) => c.volume), [7, null]);
+  assert.equal(candles[1].close_time, new Date(forming * 1000).toISOString());
+  assert.throws(() => internals.closedCandlesFromColumns({ t: [1], o: [5], h: [4], l: [3], c: [5], v: [1] }, spec, nowSec), /inconsistent/);
 });
 
-test("higher timeframes are built only from complete contiguous M5 groups", () => {
-  const start = Date.parse("2026-11-02T00:00:00.000Z");
-  const m5 = Array.from({ length: 36 }, (_, i) => ({
-    open_time: new Date(start + i * 300_000).toISOString(),
-    close_time: new Date(start + (i + 1) * 300_000).toISOString(),
-    open: 10 + i, high: 20 + i, low: 5 + i, close: 15 + i, volume: 1
-  }));
-  const m15 = internals.aggregateCandles(m5, { name: "M15", minutes: 15, expectedBars: 3 });
-  const h1 = internals.aggregateCandles(m5, { name: "H1", minutes: 60, expectedBars: 12 });
-  assert.equal(m15.length, 12);
-  assert.equal(h1.length, 3);
-  assert.equal(h1[0].open, 10);
-  assert.equal(h1[0].close, 26);
-  assert.equal(h1[0].high, 31);
-  assert.equal(h1[0].low, 5);
-  assert.equal(h1[0].volume, 12);
+test("D1 bars use TradingView session open time and close only after a full session", () => {
+  const spec = SERIES.find((s) => s.interval === "1D");
+  const sessionOpen = Date.parse("2026-11-02T22:00:00Z") / 1000; // OANDA 17:00 New York
+  const bars = { t: [sessionOpen - 86400, sessionOpen], o: [1, 1], h: [1, 1], l: [1, 1], c: [1, 1], v: [1, 1] };
+  const before = internals.closedCandlesFromColumns(bars, spec, sessionOpen + 86399);
+  const after = internals.closedCandlesFromColumns(bars, spec, sessionOpen + 86400);
+  assert.equal(before.length, 1);
+  assert.equal(after.length, 2);
 });
 
-test("aggregation rejects groups with missing M5 bars", () => {
-  const start = Date.parse("2026-11-02T00:00:00.000Z");
-  const m5 = Array.from({ length: 12 }, (_, i) => ({
-    open_time: new Date(start + i * 300_000).toISOString(),
-    close_time: new Date(start + (i + 1) * 300_000).toISOString(),
-    open: 1, high: 2, low: 0.5, close: 1.5, volume: null
-  })).filter((_, index) => index !== 5);
-  assert.equal(internals.aggregateCandles(m5, { name: "H1", minutes: 60, expectedBars: 12 }).length, 0);
+test("planRequest bootstraps empty series, skips until a new bar closes, then requests only the gap", () => {
+  const spec = SERIES.find((s) => s.interval === "5m" && s.symbol === "OANDA:XAUUSD");
+  assert.deepEqual(internals.planRequest(spec, null, 1_000_000), { symbol: spec.symbol, interval: "5m", count: 5000, bootstrap: true });
+  const last = { time: 1_000_000 - 600 };
+  assert.equal(internals.planRequest(spec, { candles: [last] }, 1_000_000 - 1), null);
+  assert.equal(internals.planRequest(spec, { candles: [last] }, 1_000_000).count, 4); // gap + forming bar + overlap
+  assert.equal(internals.planRequest(spec, { candles: [last] }, 1_000_000 + 3000).bootstrap, false);
+  assert.equal(internals.planRequest(spec, { candles: [{ time: 0 }] }, 10_000_000).bootstrap, true);
 });
 
-test("missing provider volume remains null and is never synthesized", () => {
-  const openMs = Math.floor((now - 60 * 60_000) / 300_000) * 300_000;
-  const values = Array.from({ length: 60 }, (_, i) => providerCandle(openMs - i * 300_000, { volume: undefined }));
-  const candles = internals.normalizeProviderPayload({ status: "ok", values }, now);
-  assert.equal(candles.every((candle) => candle.volume === null), true);
+test("mergeCandles deduplicates by open time with newer data winning and keeps retention", () => {
+  const merged = internals.mergeCandles([{ time: 1, close: 1 }, { time: 2, close: 2 }], [{ time: 2, close: 9 }, { time: 3, close: 3 }], 2);
+  assert.deepEqual(merged, [{ time: 2, close: 9 }, { time: 3, close: 3 }]);
 });
 
 test("POST /pull requires the configured bearer secret", async () => {
-  const response = await worker.fetch(new Request("https://market.example.com/pull", {
-    method: "POST",
-    headers: { authorization: "Bearer wrong" }
-  }), env());
+  const response = await worker.fetch(new Request("https://market.example.com/pull", { method: "POST", headers: { authorization: "Bearer wrong" } }), env());
   assert.equal(response.status, 401);
 });
 
-test("POST /pull calls Twelve Data with the bounded M5 bootstrap contract", async (t) => {
-  const originalFetch = globalThis.fetch;
-  t.after(() => { globalThis.fetch = originalFetch; });
-  const requestedUrls = [];
-  const requestedHeaders = [];
-  globalThis.fetch = async (url, init = {}) => {
-    const requestedUrl = new URL(String(url));
-    requestedUrls.push(requestedUrl);
-    requestedHeaders.push(init.headers || {});
-    const values = providerValues(requestedUrl.searchParams.get("interval"), Date.now(), Number(requestedUrl.searchParams.get("outputsize")));
-    return new Response(JSON.stringify({
-      status: "ok", meta: { symbol: "XAU/USD", exchange_timezone: "UTC" }, values
-    }), { status: 200, headers: { "content-type": "application/json" } });
-  };
-  const testEnv = env();
-  const response = await worker.fetch(new Request("https://market.example.com/pull", {
-    method: "POST", headers: { authorization: "Bearer test-secret" }
-  }), testEnv);
+test("POST /pull bootstraps via the TradingView gateway within the per-run budget, then only fetches newly closed bars", async () => {
+  const gateway = fakeGateway();
+  const e = env({ TV_GATEWAY: gateway });
+  const first = await (await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e)).json();
+  assert.equal(first.status, "ok");
+  assert.equal(first.requested, 8);
+  assert.equal(first.deferred, 2);
+  assert.equal(gateway.calls[0].auth, "Bearer gateway-secret");
+  assert.deepEqual(gateway.calls[0].requests[0], { symbol: "OANDA:XAUUSD", interval: "5m", count: 5000 });
+  assert.ok(gateway.calls[0].requests.every((r) => Object.keys(r).join() === "symbol,interval,count"));
+
+  const second = await (await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e)).json();
+  assert.equal(second.requested, 2);
+  assert.deepEqual(second.updated.map((u) => u.series).sort(), ["CRYPTOCAP:USDT|4h", "TVC:DXY|4h"]);
+
+  const third = await (await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e)).json();
+  assert.equal(third.status, "up_to_date");
+  assert.equal(gateway.calls.length, 2);
+
+  const latest = await (await worker.fetch(new Request("https://m/latest", { headers: auth }), e)).json();
+  assert.equal(latest.available, true);
+  assert.equal(latest.schema_version, "cryptophys.market-data.v2");
+  assert.equal(latest.timeframes.M5.candle_count, 4999); // forming bar dropped
+  assert.equal(latest.timeframes.M1.candle_count, 2999);
+  assert.equal(latest.external_series["TVC:DXY"].H4.volume_available, false);
+  assert.ok(latest.timeframes.D1.candles.every((c) => Date.parse(c.close_time) <= Date.now()));
+});
+
+test("gateway quota exhaustion is surfaced as 429 and leaves cached series untouched", async () => {
+  const gateway = fakeGateway({ status: 429, body: { error: "mcp_quota_exceeded", quota_cooldown_until: "2026-11-03T23:30:00.000Z", results: [] } });
+  const e = env({ TV_GATEWAY: gateway });
+  const response = await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
   const body = await response.json();
-  assert.equal(response.status, 200, JSON.stringify(body));
-  const m5Request = requestedUrls.find((item) => item.searchParams.get("interval") === "5min");
-  const d1Request = requestedUrls.find((item) => item.searchParams.get("interval") === "1day");
-  const w1Request = requestedUrls.find((item) => item.searchParams.get("interval") === "1week");
-  assert.equal(m5Request.searchParams.get("symbol"), "XAU/USD");
-  assert.equal(m5Request.searchParams.get("outputsize"), "5000");
-  assert.equal(d1Request.searchParams.get("outputsize"), "60");
-  assert.equal(w1Request.searchParams.get("outputsize"), "60");
-  assert.equal(m5Request.searchParams.get("timezone"), "UTC");
-  assert.equal(m5Request.searchParams.has("apikey"), false);
-  assert.equal(requestedHeaders[0].authorization, "apikey test-api-key");
-  assert.equal(body.schema_version, "cryptophys.market-data.v1");
-  assert.equal(body.source.canonical_symbol, "OANDA:XAUUSD");
-  assert.equal(body.timeframes.M5.candle_count, 5000);
-  assert.equal(body.context_timeframes.D1.candle_count, 60);
-  assert.equal(body.context_timeframes.W1.candle_count, 60);
-  assert.equal(body.history_sufficiency.prophet_default_mtf_ready, true);
-  assert.equal(body.timeframes.M15.interval_minutes, 15);
-  assert.equal(body.timeframes.H1.interval_minutes, 60);
-  assert.equal(body.timeframes.H4.interval_minutes, 240);
-  assert.equal((await worker.fetch(new Request("https://market.example.com/latest", {
-    headers: { authorization: "Bearer test-secret" }
-  }), testEnv)).status, 200);
-  const engineResponse = await worker.fetch(new Request("https://market.example.com/engine-inputs?engine=prophet", {
-    headers: { authorization: "Bearer test-secret" }
-  }), testEnv);
-  const engineInput = await engineResponse.json();
-  assert.equal(engineResponse.status, 200);
-  assert.equal(engineInput.engine, "prophet");
-  assert.equal(engineInput.data_status, "history_ready_for_shadow");
-  assert.equal(engineInput.calculation_status, "blocked_source_parity");
-  assert.equal(engineInput.calculation_allowed_for_trusted_evidence, false);
-  assert.equal(engineInput.inputs.timeframes.M5.candle_count, 5000);
-
-  requestedUrls.length = 0;
-  const incrementalResponse = await worker.fetch(new Request("https://market.example.com/pull", {
-    method: "POST", headers: { authorization: "Bearer test-secret" }
-  }), testEnv);
-  assert.equal(incrementalResponse.status, 200);
-  const incrementalM5 = requestedUrls.find((item) => item.searchParams.get("interval") === "5min");
-  assert.equal(incrementalM5.searchParams.get("outputsize"), "3");
-  assert.equal(requestedUrls.some((item) => item.searchParams.get("interval") === "1day"), false);
-  assert.equal(requestedUrls.some((item) => item.searchParams.get("interval") === "1week"), false);
-  const incrementalBundle = await incrementalResponse.json();
-  assert.equal(incrementalBundle.timeframes.M5.candle_count, 5000);
+  assert.equal(response.status, 429);
+  assert.equal(body.status, "mcp_quota_exceeded");
+  assert.equal(body.quota_cooldown_until, "2026-11-03T23:30:00.000Z");
+  assert.equal(body.updated.length, 0);
 });
 
-test("GET /latest requires the configured bearer secret", async () => {
-  const response = await worker.fetch(new Request("https://market.example.com/latest"), env());
-  assert.equal(response.status, 401);
+test("daily MCP call budget stops pulls without contacting the gateway", async () => {
+  const gateway = fakeGateway();
+  const e = env({ TV_GATEWAY: gateway, TV_DAILY_CALL_BUDGET: "0" });
+  const response = await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).status, "daily_budget_exhausted");
+  assert.equal(gateway.calls.length, 0);
+});
+
+test("pull fails closed when the gateway secret is missing", async () => {
+  const response = await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), env({ TV_GATEWAY_SECRET: "", TV_GATEWAY: fakeGateway() }));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.status, "gateway_not_configured");
+  assert.equal(body.updated.length, 0);
+});
+
+test("GET /latest requires the bearer secret and reports no data before the first pull", async () => {
+  assert.equal((await worker.fetch(new Request("https://m/latest"), env())).status, 401);
+  const response = await worker.fetch(new Request("https://m/latest", { headers: auth }), env());
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).reason, "no_successful_pull_yet");
 });
 
 test("health exposes configuration status but no secrets", async () => {
-  const response = await worker.fetch(new Request("https://market.example.com/health"), env());
-  const body = await response.json();
-  assert.equal(body.worker, "xauusd-tradingview-pull-adapter");
-  assert.equal(body.source_configured, true);
-  assert.equal(JSON.stringify(body).includes("test-api-key"), false);
-  assert.equal(JSON.stringify(body).includes("test-secret"), false);
+  const body = await (await worker.fetch(new Request("https://m/health"), env({ TV_GATEWAY: fakeGateway() }))).json();
+  assert.equal(body.gateway_configured, true);
+  assert.equal(body.pull_auth_configured, true);
+  assert.equal(body.series.length, SERIES.length);
+  const text = JSON.stringify(body);
+  assert.ok(!text.includes(SECRET) && !text.includes("gateway-secret"));
 });
 
-test("invalid provider OHLC is rejected", () => {
-  const openMs = Date.parse("2026-11-02T00:00:00.000Z");
-  assert.throws(() => internals.parseProviderCandle(providerCandle(openMs, { high: "1", low: "9" })));
-});
-
-test("native D1/W1 history fails closed when provider timezone is not verified as UTC", async (t) => {
-  const originalFetch = globalThis.fetch;
-  t.after(() => { globalThis.fetch = originalFetch; });
-  globalThis.fetch = async (url) => {
-    const requestUrl = new URL(String(url));
-    const interval = requestUrl.searchParams.get("interval");
-    const values = providerValues(interval, Date.now(), Number(requestUrl.searchParams.get("outputsize")));
-    const exchange_timezone = interval === "1day" ? "America/New_York" : "UTC";
-    return new Response(JSON.stringify({
-      status: "ok", meta: { symbol: "XAU/USD", exchange_timezone }, values
-    }), { status: 200, headers: { "content-type": "application/json" } });
-  };
-  const response = await worker.fetch(new Request("https://market.example.com/pull", {
-    method: "POST", headers: { authorization: "Bearer test-secret" }
-  }), env());
-  const body = await response.json();
-  assert.equal(response.status, 503);
-  assert.equal(body.error, "provider_timezone_unverified");
-});
-
-test("GET /engine-shadow runs the partial Prophet kernel from the cached bundle and never trusts it", async () => {
-  const cache = new MemoryKV();
-  const nowMs = Date.now();
-  const floor = Math.floor(nowMs / 300_000) * 300_000;
-  const m5 = Array.from({ length: 5000 }, (_, i) => {
-    const openMs = floor - (5000 - i) * 300_000;
-    const open = 2300 + Math.sin(i / 13) * 2 + i * 0.001;
-    const close = open + Math.sin(i / 3) * 0.5;
-    return {
-      open_time: new Date(openMs).toISOString(),
-      close_time: new Date(openMs + 300_000).toISOString(),
-      open, high: Math.max(open, close) + 0.25, low: Math.min(open, close) - 0.2,
-      close, volume: 100 + (i % 17)
-    };
-  });
-  const makeContext = (count, intervalMs, endMs) => Array.from({ length: count }, (_, i) => {
-    const openMs = endMs - (count - i) * intervalMs;
-    const open = 2300 + i * 0.05;
-    const close = open + Math.sin(i / 4) * 0.2;
-    return {
-      open_time: new Date(openMs).toISOString(),
-      close_time: new Date(openMs + intervalMs).toISOString(),
-      open, high: Math.max(open, close) + 0.3, low: Math.min(open, close) - 0.2,
-      close, volume: 100
-    };
-  });
-  const context = {
-    D1: { interval_minutes: 1440, candles: makeContext(60, 86_400_000, floor), candle_count: 60, source: { provider: "test", interval: "1day" } },
-    W1: { interval_minutes: 10080, candles: makeContext(60, 604_800_000, floor), candle_count: 60, source: { provider: "test", interval: "1week" } }
-  };
-  const bundle = internals.buildBundle(m5, new Date(nowMs).toISOString(), { symbol: "XAU/USD" }, context);
-  await cache.put("market-data:v1:OANDA:XAUUSD", JSON.stringify(bundle));
-  const response = await worker.fetch(new Request("https://market.example.com/engine-shadow?engine=prophet", {
-    headers: { authorization: "Bearer test-secret" }
-  }), env({ MARKET_DATA_CACHE: cache }));
+test("GET /engine-shadow runs the partial Prophet kernel on TradingView-native series and never trusts it", async () => {
+  const e = env({ TV_GATEWAY: fakeGateway() });
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  const response = await worker.fetch(new Request("https://m/engine-shadow?engine=prophet", { headers: auth }), e);
   const body = await response.json();
   assert.equal(response.status, 200);
   assert.equal(body.engine_shadow_status, "partial_calculation_available");
-  assert.equal(body.calculation_status, "partial_unverified_kernel");
   assert.equal(body.parity_status, "not_proven");
   assert.equal(body.calculation_allowed_for_trusted_evidence, false);
   assert.equal(body.outputs.length, 20);
   assert.equal(body.input_history_counts.M5, 500);
-  assert.equal(body.input_history_counts.M5_engine_window_limit, 500);
-  assert.equal(body.input_history_counts.M5_available_in_cache, 5000);
-  assert.ok(Object.hasOwn(body.outputs.at(-1), "htf_alignment"));
-  assert.ok(Object.hasOwn(body.outputs.at(-1), "order_blocks"));
-  assert.equal(body.outputs.at(-1).order_blocks.trusted_evidence_allowed, false);
+  assert.equal(body.input_history_counts.D1, 499);
+  assert.ok(body.outputs.every((o) => o.trusted_evidence_allowed === false));
 });
 
 test("GET /engine-shadow refuses to pretend Mizan/GMI local calculators exist", async () => {
-  const response = await worker.fetch(new Request("https://market.example.com/engine-shadow?engine=gmi", {
-    headers: { authorization: "Bearer test-secret" }
-  }), env());
+  const response = await worker.fetch(new Request("https://m/engine-shadow?engine=gmi", { headers: auth }), env());
   const body = await response.json();
   assert.equal(response.status, 501);
   assert.equal(body.engine_shadow_status, "blocked_no_local_calculator");
-  assert.equal(body.calculation_status, "blocked_missing_gmi_inputs");
   assert.equal(body.calculation_allowed_for_trusted_evidence, false);
 });
