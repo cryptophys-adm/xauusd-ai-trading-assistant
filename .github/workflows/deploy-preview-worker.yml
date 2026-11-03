@@ -236,24 +236,24 @@ jobs:
           // Queue processing is asynchronous. Wait for measured parity and the fail-closed
           // synthesis instead of expecting the request handler to run reconciliation inline.
           const retryDeadline = Date.now() + 90_000;
-          let ready = null;
+          let queueReady = null;
           let latestDecision = null;
           while (Date.now() < retryDeadline) {
             const [readyResponse, decisionResponse] = await Promise.all([
               fetch(base + "/ready", { signal: AbortSignal.timeout(10000) }),
               fetch(base + "/api/decision/" + encodeURIComponent(candleKey), { signal: AbortSignal.timeout(10000) })
             ]);
-            if (readyResponse.ok) ready = await readyResponse.json();
+            if (readyResponse.ok) queueReady = await readyResponse.json();
             if (decisionResponse.ok) {
               const candidate = await decisionResponse.json();
               if (candidate.status === "ok" && candidate.synthesis?.evidence_fusion) latestDecision = candidate.synthesis;
             }
-            if ((ready?.registry_status_counts?.approved ?? 0) >= 2 && latestDecision) break;
+            if ((queueReady?.registry_status_counts?.approved ?? 0) >= 2 && latestDecision) break;
             await new Promise(resolve => setTimeout(resolve, 2000));
           }
 
-          assert.ok((ready?.registry_status_counts?.approved ?? 0) >= 2,
-            "Prophet and GMI identities must be promoted only after Queue-driven parity: " + JSON.stringify(ready));
+          assert.ok((queueReady?.registry_status_counts?.approved ?? 0) >= 2,
+            "Prophet and GMI identities must be promoted only after Queue-driven parity: " + JSON.stringify(queueReady));
           assert.ok(latestDecision, "Queue consumer must persist an asynchronous analysis synthesis");
           assert.equal(latestDecision.evidence_fusion.complete, false,
             "fixture without fresh news must remain degraded");
