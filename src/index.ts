@@ -549,6 +549,13 @@ async function runAnalysis(
   timeframe: string,
   payloads: Record<string, WebhookPayload>
 ): Promise<{ status: string; missing_evidence: string[] }> {
+  return tracing.enterSpan("invoke_agent", async (agentSpan) => {
+    agentSpan.setAttributes({
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.name": "xauusd-decision-agent",
+      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+      "gen_ai.conversation.id": candleKey
+    });
   const [knowledgeText, newsAnalysis, localCalculationRaw] = await Promise.all([
     env.KNOWLEDGE_BASE.get("knowledge-base:v3"),
     fetchLatestNewsAnalysis(env),
@@ -597,16 +604,7 @@ async function runAnalysis(
   const fingerprintDigest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(fingerprintInput));
   const inputFingerprint = Array.from(new Uint8Array(fingerprintDigest)).map(value => value.toString(16).padStart(2, "0")).join("");
   const claimed = await claimAnalysisRun(env, candleKey, inputFingerprint);
-  if (!claimed) return {
-  return tracing.enterSpan("invoke_agent", async (agentSpan) => {
-    agentSpan.setAttributes({
-      "gen_ai.operation.name": "invoke_agent",
-      "gen_ai.agent.name": "xauusd-decision-agent",
-      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
-      "gen_ai.conversation.id": candleKey
-    }); status: "already_processed", missing_evidence: [] 
-  });
-};
+  if (!claimed) return { status: "already_processed", missing_evidence: [] };
 
   const fusion = buildEvidenceFusion({
     candleKey,
@@ -882,8 +880,8 @@ async function runAnalysis(
     }
   }, null);
   return { status: analysisStatus, missing_evidence: fusion.missing_evidence };
+  });
 }
-
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (!env.WEBHOOK_SECRET) {
     return json({ error: "WEBHOOK_SECRET is not configured" }, 503);
