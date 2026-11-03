@@ -31,6 +31,8 @@ Agreement or disagreement between `tradingview_webhook` and `local_computation` 
 
 ## Local calculation contract
 
+> **Provenance (2026-11-03):** the operator-approved hash allowlist has been removed. Trust is decided autonomously by the AI Worker's parity registry, which compares local outputs with the TradingView webhook outputs for the same candle. See [AUTONOMOUS_PROVENANCE.md](AUTONOMOUS_PROVENANCE.md) for the rule and for the extra `values.candle`, `values.comparable` and `provenance.dependencies` fields.
+
 Endpoint: `POST /evidence/local-calculation` on the AI Worker. Authentication: `x-webhook-secret` header, using the existing Worker webhook secret. Request body maximum: 64 KiB.
 
 Required JSON shape:

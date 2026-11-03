@@ -111,7 +111,7 @@ Each fixture must contain the complete input history and all 16 TradingView outp
 2. Capture TradingView output fixtures. None are available in this PR at time of this contract.
 3. `prophet_volume_ratio`, `vol_anomaly`, `f_vol_cycle`, `efficiency_ratio`, `calculate_prophet_tensor` and GMI `atr_val` are transcribed with source-conformance tests (see corrections above). They are NOT independently validated against TradingView: HMA rounding and pivot ties stay open. Closed-bar fixture scope uses the confirmed `pro_anom` branch (`prophet_volume_ratio`).
 4. Trace exact VP/footprint/session/OB/FVG/Fabio/kinematic dependencies before attempting a GMI verdict kernel.
-5. Do not populate `LOCAL_CALC_PROVENANCE_ALLOWLIST`, claim parity, or promote production based on this kernel alone.
+5. (Superseded 2026-11-03: the allowlist was removed; trust now comes from the autonomous parity registry, see `AUTONOMOUS_PROVENANCE.md`.) Do not populate `LOCAL_CALC_PROVENANCE_ALLOWLIST`, claim parity, or promote production based on this kernel alone.
 
 ## Secret transport finding
 

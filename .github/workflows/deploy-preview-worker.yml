@@ -96,7 +96,14 @@ jobs:
           let health;
           let healthParseError = "no response";
           for (let attempt = 0; attempt < 10; attempt++) {
-            healthResponse = await fetch(base + "/health", { signal: AbortSignal.timeout(15000) });
+            try {
+              healthResponse = await fetch(base + "/health", { signal: AbortSignal.timeout(15000) });
+            } catch (error) {
+              // A freshly deployed workers.dev route can time out while it propagates; retry instead of failing.
+              healthParseError = "fetch failed: " + (error?.name || "error");
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              continue;
+            }
             try {
               health = await healthResponse.clone().json();
               healthParseError = "";
@@ -119,7 +126,13 @@ jobs:
           let ready;
           let readyParseError = "no response";
           for (let attempt = 0; attempt < 10; attempt++) {
-            readyResponse = await fetch(base + "/ready", { signal: AbortSignal.timeout(15000) });
+            try {
+              readyResponse = await fetch(base + "/ready", { signal: AbortSignal.timeout(15000) });
+            } catch (error) {
+              readyParseError = "fetch failed: " + (error?.name || "error");
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              continue;
+            }
             try {
               ready = await readyResponse.clone().json();
               readyParseError = "";
@@ -162,12 +175,21 @@ jobs:
           });
           assert.equal(credentialProbe.status, 400, "credential-like evidence fields must be rejected");
 
+          // TradingView webhook lane: indicator outputs plus the candle's OHLCV.
+          // These are the parity comparator for the local_computation lane.
+          const bar = { o: 3950.1, h: 3955.2, l: 3948.0, c: 3953.4, volume: 2103 };
+          const webhookValues = {
+            prophet_r38: { direction: 1, buy_confirmed: true, sell_confirmed: false, buy_high_quality: false, sell_high_quality: false, t_enc: 2, d_enc: -1, structure_subtype: 0 },
+            prophet_r37_ssot: { direction: 1, d_enc: -1, b_enc: 2, structure_subtype: 0, bull_event: true, bear_event: false },
+            gmi_v12_70: { verdict: 3, gate: 2, gmi_dir: 1, prophet_dir: 1, conflict: false }
+          };
           for (const source of ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"]) {
             const response = await fetch(base + "/webhook", {
               method: "POST",
               headers,
               body: JSON.stringify({
                 source, ticker: symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
+                ...bar, ...webhookValues[source],
                 metrics: { bias: "NEUTRAL", fixture_only: true }
               })
             });
@@ -175,17 +197,32 @@ jobs:
             assert.ok(response.status === 202 || response.status === 200, "webhook rejected: " + JSON.stringify(result));
           }
 
+          // local_computation lane: outputs that reproduce the webhook values on the same raw bar.
+          // With PARITY_PROMOTE_AFTER=1 a single matching candle promotes Prophet and GMI autonomously;
+          // Mizan is trusted because both declare the same Mizan dependency.
+          const mizanDependency = { mizan: { source_hash: "a".repeat(64), implementation_hash: "b".repeat(64) } };
+          const comparableFor = {
+            mizan: {},
+            prophet: { prophet_r38: webhookValues.prophet_r38, prophet_r37_ssot: webhookValues.prophet_r37_ssot },
+            gmi: { gmi_v12_70: webhookValues.gmi_v12_70 }
+          };
+          const localPayload = (engine) => ({
+            schema_version: "cryptophys.local-calculation.v1",
+            engine, symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
+            computed_at: new Date().toISOString(),
+            calculation_version: engine + "-preview-fixture-v1",
+            values: { bias: "NEUTRAL", fixture_only: true, candle: bar, comparable: comparableFor[engine] },
+            provenance: {
+              source: "isolated-preview-fixture",
+              source_hash: ({mizan:"a",prophet:"c",gmi:"e"})[engine].repeat(64),
+              implementation_hash: ({mizan:"b",prophet:"d",gmi:"f"})[engine].repeat(64),
+              ...(engine === "mizan" ? {} : { dependencies: mizanDependency })
+            }
+          });
           let lastLocalResult;
           let lastLocalPayload;
           for (const engine of ["mizan", "prophet", "gmi"]) {
-            lastLocalPayload = {
-                schema_version: "cryptophys.local-calculation.v1",
-                engine, symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
-                computed_at: new Date().toISOString(),
-                calculation_version: engine + "-preview-fixture-v1",
-                values: { bias: "NEUTRAL", fixture_only: true },
-                provenance: { source: "isolated-preview-fixture", source_hash: ({mizan:"a",prophet:"c",gmi:"e"})[engine].repeat(64), implementation_hash: ({mizan:"b",prophet:"d",gmi:"f"})[engine].repeat(64) }
-            };
+            lastLocalPayload = localPayload(engine);
             const response = await fetch(base + "/evidence/local-calculation", {
               method: "POST",
               headers,
@@ -199,14 +236,7 @@ jobs:
           const retryDeadline = Date.now() + 60_000;
           while (lastLocalResult.analysis_status === "waiting_for_evidence" && Date.now() < retryDeadline) {
             await new Promise(resolve => setTimeout(resolve, 2_000));
-            lastLocalPayload = {
-              schema_version: "cryptophys.local-calculation.v1",
-              engine: "gmi", symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
-              computed_at: new Date().toISOString(),
-              calculation_version: "gmi-preview-fixture-v1",
-              values: { bias: "NEUTRAL", fixture_only: true },
-              provenance: { source: "isolated-preview-fixture", source_hash: "e".repeat(64), implementation_hash: "f".repeat(64) }
-            };
+            lastLocalPayload = localPayload("gmi");
             const retryResponse = await fetch(base + "/evidence/local-calculation", {
               method: "POST",
               headers,
@@ -217,6 +247,7 @@ jobs:
               "local calculation retry rejected: " + JSON.stringify(lastLocalResult));
           }
 
+          assert.equal(lastLocalResult.trust_status, "approved_by_parity", "GMI must be promoted by measured parity: " + JSON.stringify(lastLocalResult));
           assert.equal(lastLocalResult.analysis_status, "degraded");
           assert.ok(lastLocalResult.missing_evidence?.includes("fundamental_news_analysis"),
             "fresh completed news must remain a mandatory missing-evidence blocker in this fixture test");
@@ -236,6 +267,7 @@ jobs:
             authentication: "PASS",
             webhook_ingestion: "PASS",
             local_calculation_contract: "PASS",
+            autonomous_parity_promotion: "PASS",
             degraded_evidence_deduplication: "PASS",
             "degraded_fail-closed_behavior": "PASS",
             complete_AI_chain: "NOT_TESTED: no real fresh news/Pine-parity evidence in this fixture"
