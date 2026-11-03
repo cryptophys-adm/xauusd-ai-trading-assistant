@@ -229,54 +229,72 @@ jobs:
               body: JSON.stringify(lastLocalPayload)
             });
             lastLocalResult = await response.json();
-            assert.ok(response.status === 202 || response.status === 200, "local calculation rejected: " + JSON.stringify(lastLocalResult));
+            assert.equal(response.status, 202, "local calculation must be durably queued before ACK: " + JSON.stringify(lastLocalResult));
+            assert.equal(lastLocalResult.analysis_status, "queued");
           }
 
-          // KV is eventually consistent. Retry the final idempotent evidence write while the preview bindings converge.
-          const retryDeadline = Date.now() + 60_000;
-          while (lastLocalResult.analysis_status === "waiting_for_evidence" && Date.now() < retryDeadline) {
-            await new Promise(resolve => setTimeout(resolve, 2_000));
-            lastLocalPayload = localPayload("gmi");
-            const retryResponse = await fetch(base + "/evidence/local-calculation", {
-              method: "POST",
-              headers,
-              body: JSON.stringify(lastLocalPayload)
-            });
-            lastLocalResult = await retryResponse.json();
-            assert.ok(retryResponse.status === 202 || retryResponse.status === 200,
-              "local calculation retry rejected: " + JSON.stringify(lastLocalResult));
+          // Queue processing is asynchronous. Wait for measured parity and the fail-closed
+          // synthesis instead of expecting the request handler to run reconciliation inline.
+          const retryDeadline = Date.now() + 90_000;
+          let queueReady = null;
+          let latestDecision = null;
+          while (Date.now() < retryDeadline) {
+            const [readyResponse, decisionResponse] = await Promise.all([
+              fetch(base + "/ready", { signal: AbortSignal.timeout(10000) }),
+              fetch(base + "/api/decision/" + encodeURIComponent(candleKey), { signal: AbortSignal.timeout(10000) })
+            ]);
+            if (readyResponse.ok) queueReady = await readyResponse.json();
+            if (decisionResponse.ok) {
+              const candidate = await decisionResponse.json();
+              if (candidate.status === "ok" && candidate.synthesis?.evidence_fusion) latestDecision = candidate.synthesis;
+            }
+            if ((queueReady?.registry_status_counts?.approved ?? 0) >= 2 && latestDecision) break;
+            await new Promise(resolve => setTimeout(resolve, 2000));
           }
 
-          assert.equal(lastLocalResult.trust_status, "approved_by_parity", "GMI must be promoted by measured parity: " + JSON.stringify(lastLocalResult));
-          assert.equal(lastLocalResult.analysis_status, "degraded");
-          assert.ok(lastLocalResult.missing_evidence?.includes("fundamental_news_analysis"),
+          assert.ok((queueReady?.registry_status_counts?.approved ?? 0) >= 2,
+            "Prophet and GMI identities must be promoted only after Queue-driven parity: " + JSON.stringify(queueReady));
+          assert.ok(latestDecision, "Queue consumer must persist an asynchronous analysis synthesis");
+          assert.equal(latestDecision.evidence_fusion.complete, false,
+            "fixture without fresh news must remain degraded");
+          assert.ok(latestDecision.evidence_fusion.missing_evidence?.includes("fundamental_news_analysis"),
             "fresh completed news must remain a mandatory missing-evidence blocker in this fixture test");
-          assert.ok(!lastLocalResult.missing_evidence?.some(item => item.startsWith("local_calculation:")),
+          assert.ok(!latestDecision.evidence_fusion.missing_evidence?.some(item => item.startsWith("local_calculation:")),
             "all three local calculation contract records should have been fused");
+
+          const firstSynthesisTimestamp = latestDecision.timestamp;
           const duplicateResponse = await fetch(base + "/evidence/local-calculation", {
             method: "POST",
             headers,
             body: JSON.stringify(lastLocalPayload)
           });
           const duplicateResult = await duplicateResponse.json();
-          assert.equal(duplicateResult.analysis_status, "already_processed",
-            "identical degraded evidence must be deduplicated without rerunning the analysis chain");
+          assert.equal(duplicateResponse.status, 202, "duplicate evidence is accepted into the durable queue");
+          assert.equal(duplicateResult.event_id, lastLocalResult.event_id,
+            "duplicate evidence must retain the same deterministic event ID");
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          const finalDecisionResponse = await fetch(base + "/api/decision/" + encodeURIComponent(candleKey));
+          const finalDecision = await finalDecisionResponse.json();
+          assert.equal(finalDecision.synthesis?.timestamp, firstSynthesisTimestamp,
+            "duplicate queue delivery must not rerun the same degraded AI analysis");
           console.log(JSON.stringify({
             preview: base,
             health: "PASS",
             authentication: "PASS",
-            webhook_ingestion: "PASS",
-            local_calculation_contract: "PASS",
-            autonomous_parity_promotion: "PASS",
-            degraded_evidence_deduplication: "PASS",
-            "degraded_fail-closed_behavior": "PASS",
+            webhook_ingestion_ack_first: "PASS",
+            local_calculation_queue_ack: "PASS",
+            asynchronous_parity_promotion: "PASS",
+            missing_evidence_fail_closed: "PASS",
+            duplicate_queue_idempotency: "PASS",
             complete_AI_chain: "NOT_TESTED: no real fresh news/Pine-parity evidence in this fixture"
           }, null, 2));
           NODE
 
-      - name: Delete isolated preview Worker
+      - name: Detach preview Queue consumer and delete isolated Worker
         if: always() && env.PREVIEW_WORKER_NAME != ''
         shell: bash
-        run: npx wrangler delete --name "$PREVIEW_WORKER_NAME" --config wrangler.preview.jsonc --force || echo "Preview Worker was not created or could not be deleted; inspect Cloudflare account state."
+        run: |
+          npx wrangler queues consumer worker remove xauusd-webhook-events-preview "$PREVIEW_WORKER_NAME" --config wrangler.preview.jsonc || echo "No preview Queue consumer to detach."
+          npx wrangler delete --name "$PREVIEW_WORKER_NAME" --config wrangler.preview.jsonc --force || echo "Preview Worker was not created or could not be deleted; inspect Cloudflare account state."
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

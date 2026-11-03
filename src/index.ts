@@ -11,6 +11,13 @@ const TECHNICAL_KNOWLEDGE = JSON.parse(knowledgeForPrompt("technical")) as JsonO
 const NEWS_KNOWLEDGE = JSON.parse(knowledgeForPrompt("news")) as JsonObject;
 const KNOWLEDGE_SHA = asText((TECHNICAL_KNOWLEDGE.provenance as JsonObject | undefined)?.content_sha256);
 import { identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema, registerIdentity, recordComparison, isTrusted, listRegistry, policyFromEnv, PARITY_REGISTRY_VERSION } from "./parity-registry.mjs";
+import { buildWebhookQueueTask, buildLocalCalculationQueueTask, sendQueueTask, createQueueConsumer } from "./queue-runtime.mjs";
+import type { QueueTask } from "./queue-runtime.mjs";
+import type { EvidenceBundle, HandoffResponse } from "../lib/contracts.ts";
+import { buildCandleKey, nowIso } from "../lib/contracts.ts";
+import { verifyHandoffRequest, REPLAY_RECORD_TTL_SECONDS } from "../lib/auth.ts";
+import { validateBundle } from "../lib/validation.ts";
+import { DASHBOARD_HTML } from "./dashboard.ts";
 
 export interface Env {
   DB: D1Database;
@@ -21,6 +28,11 @@ export interface Env {
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_CHAT_ID?: string;
   WEBHOOK_SECRET?: string;
+  CONFLUENCE_HANDOFF_SECRET?: string;
+  NEWS_INGESTION?: {
+    pull(options?: { forceRefresh?: boolean; origin?: string }): Promise<Record<string, unknown>>;
+  };
+  XAUUSD_EVENTS: Queue<QueueTask>;
   INGEST_URL?: string;
   INGEST_SECRET?: string;
   AI_MODEL_ANALYST: string;
@@ -49,6 +61,11 @@ type WebhookPayload = {
 };
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
+const replaySeen = new Map<string, number>();
+function pruneReplaySeen(): void {
+  const cutoff = Date.now() - REPLAY_RECORD_TTL_SECONDS * 1000;
+  for (const [id, timestamp] of replaySeen) if (timestamp < cutoff) replaySeen.delete(id);
+}
 const SOURCE_ALIASES: Record<string, string> = {
   prophet_r38: "prophet_r38",
   "prophet-r38": "prophet_r38",
@@ -268,26 +285,30 @@ async function sendTelegram(env: Env, text: string): Promise<void> {
 
 async function fetchNews(env: Env): Promise<{ available: boolean; articles: unknown[]; article_count: number; reason?: string; fetched_at: string }> {
   const fetchedAt = new Date().toISOString();
-  if (!env.INGEST_URL || !env.INGEST_SECRET) return { available: false, articles: [], article_count: 0, reason: "INGEST_URL or INGEST_SECRET is not configured on this Worker.", fetched_at: fetchedAt };
-  const pullUrl = env.INGEST_URL.replace(/\/+$/, "") + "/pull";
+  let body: Record<string, unknown>;
   try {
-    const response = await fetch(pullUrl, { method: "POST", headers: { "Authorization": "Bearer " + env.INGEST_SECRET, "Accept": "application/json" } });
-    if (!response.ok) return { available: false, articles: [], article_count: 0, reason: "Ingestion endpoint returned HTTP " + response.status + " " + response.statusText, fetched_at: fetchedAt };
-    const body = await response.json() as Record<string, unknown>;
-    let rawArticles: unknown[] | null = null;
-    for (const key of ["articles", "data", "results", "items"]) {
-      if (Array.isArray(body[key])) { rawArticles = body[key] as unknown[]; break; }
+    if (env.NEWS_INGESTION) {
+      body = await env.NEWS_INGESTION.pull({ forceRefresh: false });
+    } else {
+      if (!env.INGEST_URL || !env.INGEST_SECRET) {
+        return { available: false, articles: [], article_count: 0, reason: "News ingestion RPC or HTTP credentials are not configured.", fetched_at: fetchedAt };
+      }
+      const pullUrl = env.INGEST_URL.replace(/\/+$/, "") + "/pull";
+      const response = await fetch(pullUrl, { method: "POST", headers: { "Authorization": "Bearer " + env.INGEST_SECRET, "Accept": "application/json" } });
+      if (!response.ok) return { available: false, articles: [], article_count: 0, reason: "Ingestion endpoint returned HTTP " + response.status + " " + response.statusText, fetched_at: fetchedAt };
+      body = await response.json() as Record<string, unknown>;
     }
-    if (!rawArticles && Array.isArray(body)) rawArticles = body as unknown[];
-    if (!rawArticles || rawArticles.length === 0) return { available: false, articles: [], article_count: 0, reason: "Ingestion endpoint returned no articles.", fetched_at: fetchedAt };
-    const articles = filterRecentUniqueArticles(rawArticles, Date.now());
-    if (articles.length === 0) {
-      return { available: false, articles: [], article_count: 0, reason: "No unique articles with a valid publication timestamp from the last hour were available.", fetched_at: fetchedAt };
-    }
-    return { available: true, articles, article_count: articles.length, fetched_at: fetchedAt };
   } catch (error) {
-    return { available: false, articles: [], article_count: 0, reason: "Failed to reach ingestion endpoint: " + (error instanceof Error ? error.message : "Unknown error"), fetched_at: fetchedAt };
+    return { available: false, articles: [], article_count: 0, reason: "Failed to reach ingestion service: " + (error instanceof Error ? error.message : "Unknown error"), fetched_at: fetchedAt };
   }
+  let rawArticles: unknown[] | null = null;
+  for (const key of ["articles", "data", "results", "items"]) {
+    if (Array.isArray(body[key])) { rawArticles = body[key] as unknown[]; break; }
+  }
+  if (!rawArticles || rawArticles.length === 0) return { available: false, articles: [], article_count: 0, reason: "Ingestion service returned no articles.", fetched_at: fetchedAt };
+  const articles = filterRecentUniqueArticles(rawArticles, Date.now());
+  if (articles.length === 0) return { available: false, articles: [], article_count: 0, reason: "No unique articles with a valid publication timestamp from the last hour were available.", fetched_at: fetchedAt };
+  return { available: true, articles, article_count: articles.length, fetched_at: fetchedAt };
 }
 
 
@@ -661,6 +682,32 @@ async function runAnalysis(
       reasoner_model: env.AI_MODEL_REASONER, reasoner_output: null,
       news_evidence: newsEvidence, decision
     };
+    // Persist the fail-closed WAIT synthesis to the same read models used by the dashboard.
+    // This is not an AI invocation and never promotes incomplete evidence into a trade.
+    await upsertSynthesis(env, {
+      candleKey,
+      ticker,
+      timeframe,
+      timestamp,
+      prophetMetrics: JSON.stringify({
+        prophet_r38: payloads.prophet_r38?.metrics ?? payloads.prophet_r38,
+        prophet_r37_ssot: payloads.prophet_r37_ssot?.metrics ?? payloads.prophet_r37_ssot
+      }),
+      gmiMetrics: JSON.stringify(payloads.gmi_v12_70?.metrics ?? payloads.gmi_v12_70),
+      analysis: JSON.stringify(synthesis),
+      model: [env.AI_MODEL_ANALYST, env.AI_MODEL_COUNSELOR, env.AI_MODEL_REASONER].join(",")
+    });
+    await upsertTradeDecision(env, {
+      candleKey,
+      decision: "WAIT",
+      confidence: null,
+      entry: null,
+      stop: null,
+      target: null,
+      riskReward: null,
+      size: null,
+      reasoning
+    });
     await env.SIGNAL_CACHE.put("latest:" + safeKeyPart(ticker) + ":" + safeKeyPart(timeframe), JSON.stringify(synthesis), { expirationTtl: 60 * 60 * 24 * 7 });
     try {
       await sendTelegram(env, ["XAUUSD AI DECISION SUPPORT", "Symbol: " + ticker, "Timeframe: " + timeframe, "Candle: " + candleKey, "Decision: WAIT", "Reason: " + reasoning.slice(0, 900), "Note: advisory only; no trade was executed."].join("\n"));
@@ -950,58 +997,23 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   await env.WEBHOOK_BUFFER.put("candle:" + candleKey + ":" + source, JSON.stringify(storedPayload), {
     expirationTtl: 60 * 60 * 24 * 14
   });
-  // TradingView webhook outputs are the parity comparator for local engines.
+  const task = buildWebhookQueueTask({
+    candleKey, source, ticker, timeframe, enqueuedAt: new Date().toISOString()
+  });
   try {
-    await reconcileLocalComputation(env, candleKey);
+    await sendQueueTask(env.XAUUSD_EVENTS, task);
   } catch (error) {
-    console.error("parity_reconcile_failed", error instanceof Error ? error.message : "unknown");
+    console.error("webhook_queue_send_failed", JSON.stringify({
+      event_id: task.event_id, source,
+      error_name: error instanceof Error ? error.name : "UnknownError"
+    }));
+    return json({ error: "Failed to durably enqueue webhook event", event_id: task.event_id }, 503);
   }
-
-  const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70")
-    .split(",").map(s => s.trim()).filter(Boolean);
-  const payloads: Record<string, WebhookPayload> = {};
-  for (const requiredSource of required) {
-    const raw = await env.WEBHOOK_BUFFER.get("candle:" + candleKey + ":" + requiredSource);
-    if (raw) {
-      try { payloads[requiredSource] = JSON.parse(raw) as WebhookPayload; } catch { /* malformed cache entry is ignored */ }
-    }
-  }
-
-  const missing = required.filter(s => !payloads[s]);
-  if (missing.length > 0) {
-    return json({
-      status: "accepted",
-      candle_key: candleKey,
-      source,
-      normalized_non_finite_tokens: normalizedTokens,
-      analysis_status: "waiting_for_sources",
-      received_sources: Object.keys(payloads),
-      missing_sources: missing
-    }, 202);
-  }
-
-  const existing = await env.WEBHOOK_BUFFER.get("analysis:" + safeKeyPart(candleKey));
-  if (existing) {
-    try {
-      const prior = JSON.parse(existing) as JsonObject;
-      if (prior.status === "complete") {
-        return json({ status: "accepted", candle_key: candleKey, analysis_status: "already_processed" }, 200);
-      }
-    } catch { /* malformed marker does not block a retry */ }
-  }
-
-  try {
-    const outcome = await runAnalysis(env, candleKey, ticker, timeframe, payloads);
-    return json({ status: "accepted", candle_key: candleKey, analysis_status: outcome.status, missing_evidence: outcome.missing_evidence }, 200);
-  } catch (error) {
-    await setAnalysisRunStatus(env, candleKey, "failed", { message: error instanceof Error ? error.message : "Unknown analysis error" }, "analysis_failed");
-    return json({
-      status: "accepted",
-      candle_key: candleKey,
-      analysis_status: "failed",
-      error: error instanceof Error ? error.message : "Unknown analysis error"
-    }, 502);
-  }
+  return json({
+    status: "accepted", candle_key: candleKey, source,
+    analysis_status: "queued", queued: true, event_id: task.event_id,
+    normalized_non_finite_tokens: normalizedTokens
+  }, 202);
 }
 
 /**
@@ -1045,44 +1057,503 @@ async function ingestLocalCalculation(env: Env, payload: unknown): Promise<{ sta
     provenance: record.provenance,
     received_at: new Date().toISOString()
   };
-  // Every output is observed; only parity-approved identities enter the trusted lane.
+  // Persist the observed output and identity before queueing reconciliation.
   await ensureSchema(env.DB);
   await registerIdentity(env.DB, identity);
   await env.WEBHOOK_BUFFER.put(OBSERVED_PREFIX + key + ":" + engine, JSON.stringify(stored), LOCAL_TTL);
-  const reconciliation = await reconcileLocalComputation(env, key);
-  const trustStatus = (reconciliation.trust as Record<string, boolean>)[engine] ? "approved_by_parity" : "candidate_pending_parity";
 
-  // Trigger fusion only after all three local engines and all configured webhook sources exist.
+  const task = buildLocalCalculationQueueTask({
+    candleKey: key,
+    engine,
+    ticker: asText(record.symbol),
+    timeframe: asText(record.timeframe),
+    candleTime: asText(record.candle_time),
+    enqueuedAt: new Date().toISOString()
+  });
+  try {
+    await sendQueueTask(env.XAUUSD_EVENTS, task);
+  } catch (error) {
+    console.error("local_calculation_queue_send_failed", JSON.stringify({
+      event_id: task.event_id, engine,
+      error_name: error instanceof Error ? error.name : "UnknownError"
+    }));
+    return { status: 503, body: { error: "Failed to durably enqueue local calculation" } };
+  }
+  return {
+    status: 202,
+    body: {
+      status: "accepted", schema_version: record.schema_version, engine,
+      candle_key: key, trust_status: "candidate_pending_parity",
+      analysis_status: "queued", queued: true, event_id: task.event_id
+    }
+  };
+}
+
+async function runAnalysisFromBundle(
+  env: Env,
+  bundle: EvidenceBundle
+): Promise<HandoffResponse> {
+  return tracing.enterSpan("invoke_agent", async (agentSpan) => {
+    agentSpan.setAttributes({
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.name": "xauusd-decision-agent",
+      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+      "gen_ai.conversation.id": bundle.request_id
+    });
+  const requestId = bundle.request_id;
+  const candle = bundle.candle;
+  const ticker = candle.symbol;
+  const timeframe = candle.timeframe;
+  const candleKey = candle.candle_key || buildCandleKey(ticker, timeframe, candle.candle_ts);
+
+  const errors: string[] = [...bundle.validation.errors];
+
+  // Fail-closed: when evidence is incomplete, stale, conflicting, or provenance
+  // is unverified, do not emit a trade signal and do not invoke the AI models.
+  // WAIT / NO_TRADE with null price/risk parameters.
+  const failClosed = !bundle.validation.ok ||
+    bundle.validation.completeness === "incomplete" ||
+    bundle.validation.missing_evidence.length > 0 ||
+    !bundle.provenance_verified ||
+    bundle.validation.errors.length > 0;
+
+  let decision: JsonObject;
+  let analystText = "";
+  let counselorText = "";
+  let reasonerText = "";
+
+  if (failClosed) {
+    const reason = (bundle.validation.errors.length > 0
+      ? bundle.validation.errors.join("; ")
+      : bundle.validation.missing_evidence.length > 0
+        ? "Missing required evidence: " + bundle.validation.missing_evidence.join(", ")
+        : "Evidence incomplete or provenance unverified.");
+    errors.push("fail_closed: " + reason);
+    decision = {
+      decision: "WAIT",
+      confidence: null,
+      entry_price: null,
+      stop_loss: null,
+      take_profit: null,
+      risk_reward: null,
+      position_size_pct: null,
+      reasoning: "FAIL_CLOSED: " + reason,
+      confirmation: null,
+      invalidation: null
+    };
+    analystText = "FAIL_CLOSED: evidence not sufficient for AI analysis.";
+    counselorText = analystText;
+    reasonerText = analystText;
+  } else {
+    const evidence = {
+      candle_key: candleKey,
+      ticker,
+      timeframe,
+      symbol: bundle.symbol,
+      candle: bundle.candle,
+      engines: bundle.engines,
+      sources: bundle.sources,
+      news: bundle.news,
+      validation: bundle.validation,
+      evidence_fingerprint: bundle.evidence_fingerprint,
+      provenance_verified: bundle.provenance_verified,
+      schema_version: bundle.schema_version
+    };
+
+    const [knowledgeText] = await Promise.all([
+      env.KNOWLEDGE_BASE.get("knowledge-base:v4").then(value => value || env.KNOWLEDGE_BASE.get("knowledge-base:v3"))
+    ]);
+    const knowledge = knowledgeText || JSON.stringify({
+      status: "kv_key_missing",
+      message: "No knowledge-base:v4 or knowledge-base:v3 value was found in the bound KV namespace."
+    });
+
+    const analystResult = await tracing.enterSpan("chat", async (span) => {
+      span.setAttributes({
+        "gen_ai.operation.name": "chat",
+        "gen_ai.agent.name": "xauusd-decision-agent",
+        "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+        "gen_ai.conversation.id": bundle.request_id,
+        "gen_ai.request.model": String(env.AI_MODEL_ANALYST)
+      });
+      return env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
+      prompt: [
+        "You are the Analyst stage in an XAUUSD decision-support pipeline.",
+        "Classify the supplied indicator evidence without inventing missing values or prices.",
+        "Prophet is the base directional bias. GMI can validate, block, or defer a setup but must not silently overwrite Prophet's bias.",
+        "Evidence includes technical engine results, source provenance, and fundamental news_evidence.",
+        "If news_evidence.available is false, state that fundamental news data is unavailable. Do NOT invent news.",
+        "If news_evidence.available is true, consider the supplied articles alongside technical evidence.",
+        "Return JSON only with keys: directional_bias (BULLISH, BEARISH, or NEUTRAL), setup_quality (integer 0-3), missing_evidence (boolean), reasoning.",
+        "Set directional_bias to NEUTRAL and missing_evidence to true if evidence is missing, stale, contradictory, or insufficient.",
+        "EVIDENCE:",
+        JSON.stringify(evidence),
+        "POLICY:",
+        knowledge
+      ].join("\n"),
+      max_tokens: 700,
+      temperature: 0.1
+    } as never);
+    });
+    analystText = extractText(analystResult);
+
+    const counselorResult = await tracing.enterSpan("chat", async (span) => {
+      span.setAttributes({
+        "gen_ai.operation.name": "chat",
+        "gen_ai.agent.name": "xauusd-decision-agent",
+        "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+        "gen_ai.conversation.id": bundle.request_id,
+        "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR)
+      });
+      return env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
+      prompt: [
+        "You are the Counselor stage in an XAUUSD decision-support pipeline.",
+        "Use only the JSON evidence and analyst output below. Do not invent prices or indicator definitions.",
+        "Prophet is the base bias. GMI may validate, block, or defer a Prophet setup; it must not silently overwrite Prophet's bias.",
+        "If news_evidence.available is false, acknowledge fundamental news is unavailable. Do NOT fabricate news.",
+        "If news_evidence.available is true, weigh the supplied articles in scenarios.",
+        "Return concise JSON with keys: evidence_summary, bullish_scenario, bearish_scenario, neutral_scenario, confirmations, invalidation, risks, missing_data.",
+        "If the source payloads conflict or fields are unclear, say so explicitly.",
+        "EVIDENCE:",
+        JSON.stringify(evidence),
+        "POLICY:",
+        knowledge,
+        "ANALYST:",
+        analystText
+      ].join("\n"),
+      max_tokens: 1400,
+      temperature: 0.1
+    } as never);
+    });
+    counselorText = extractText(counselorResult);
+
+    const reasonerResult = await tracing.enterSpan("chat", async (span) => {
+      span.setAttributes({
+        "gen_ai.operation.name": "chat",
+        "gen_ai.agent.name": "xauusd-decision-agent",
+        "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+        "gen_ai.conversation.id": bundle.request_id,
+        "gen_ai.request.model": String(env.AI_MODEL_REASONER)
+      });
+      return env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
+      prompt: [
+        "You are the final Deep Reasoner stage for XAUUSD decision support.",
+        "Use only the supplied evidence, analyst output, and counselor output. Do not invent market prices or claim the models verified facts they did not receive.",
+        "Prophet remains the base bias. GMI may validate, block, or wait on a setup. Do not silently reverse Prophet's bias.",
+        "If news_evidence.available is false, state fundamental news analysis was not performed. Do NOT claim news supported or contradicted the setup.",
+        "If news_evidence.available is true, incorporate the supplied articles into final reasoning.",
+        "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation.",
+        "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
+        "EVIDENCE:",
+        JSON.stringify(evidence),
+        "ANALYST:",
+        analystText,
+        "COUNSELOR:",
+        counselorText
+      ].join("\n"),
+      max_tokens: 1200,
+      temperature: 0.1
+    } as never);
+    });
+    reasonerText = extractText(reasonerResult);
+    decision = parseDecision(reasonerText);
+  }
+
+  const timestamp = nowIso();
+  const synthesis = {
+    candle_key: candleKey,
+    ticker,
+    timeframe,
+    timestamp,
+    request_id: requestId,
+    schema_version: bundle.schema_version,
+    symbol: bundle.symbol,
+    candle: bundle.candle,
+    analyst_model: env.AI_MODEL_ANALYST,
+    analyst_output: analystText,
+    counselor_model: env.AI_MODEL_COUNSELOR,
+    counselor_output: counselorText,
+    reasoner_model: env.AI_MODEL_REASONER,
+    reasoner_output: reasonerText,
+    news_evidence: bundle.news,
+    engines: bundle.engines,
+    sources: bundle.sources,
+    validation: bundle.validation,
+    evidence_fingerprint: bundle.evidence_fingerprint,
+    provenance_verified: bundle.provenance_verified,
+    decision
+  };
+
+  // Persist synthesis (fail-closed records are still stored for audit).
+  await upsertSynthesis(env, {
+    candleKey, ticker, timeframe, timestamp,
+    prophetMetrics: JSON.stringify({ sources: bundle.sources, engines: bundle.engines }),
+    gmiMetrics: JSON.stringify({ engines: bundle.engines }),
+    analysis: JSON.stringify(synthesis),
+    model: [env.AI_MODEL_ANALYST, env.AI_MODEL_COUNSELOR, env.AI_MODEL_REASONER].join(",")
+  });
+
+  const confidence = typeof decision.confidence === "number" ? decision.confidence : null;
+  const entry = typeof decision.entry_price === "number" ? decision.entry_price : null;
+  const stop = typeof decision.stop_loss === "number" ? decision.stop_loss : null;
+  const target = typeof decision.take_profit === "number" ? decision.take_profit : null;
+  const rr = typeof decision.risk_reward === "number" ? decision.risk_reward : null;
+  const size = typeof decision.position_size_pct === "number" ? decision.position_size_pct : null;
+  const reasoning = asText(decision.reasoning) || reasonerText;
+
+  await upsertTradeDecision(env, {
+    candleKey, decision: asText(decision.decision) || "WAIT",
+    confidence, entry, stop, target, riskReward: rr, size, reasoning
+  });
+
+  await env.SIGNAL_CACHE.put("latest:" + safeKeyPart(ticker) + ":" + safeKeyPart(timeframe), JSON.stringify(synthesis), {
+    expirationTtl: 60 * 60 * 24 * 7
+  });
+
+  const message = [
+    "XAUUSD AI DECISION SUPPORT",
+    "Symbol: " + ticker,
+    "Timeframe: " + timeframe,
+    "Candle: " + candleKey,
+    "Decision: " + (asText(decision.decision) || "WAIT"),
+    "Confidence: " + (confidence === null ? "not provided" : Math.round(confidence * 100) + "%"),
+    "Reason: " + reasoning.slice(0, 900),
+    "Note: advisory only; no trade was executed."
+  ].join("\n");
+  let notified = false;
+  try {
+    await sendTelegram(env, message);
+    notified = true;
+  } catch {
+    notified = false;
+  }
+
+  await env.WEBHOOK_BUFFER.put("analysis:" + safeKeyPart(candleKey), JSON.stringify({
+    status: "complete",
+    created_at: timestamp,
+    request_id: requestId,
+    sources: bundle.engines.map((e) => e.engine),
+    decision: synthesis
+  }), { expirationTtl: 60 * 60 * 24 * 14 });
+
+  return {
+    schema_version: bundle.schema_version,
+    request_id: requestId,
+    decision: asText(decision.decision) || "WAIT",
+    confidence,
+    entry_price: entry,
+    stop_loss: stop,
+    take_profit: target,
+    risk_reward: rr,
+    position_size_pct: size,
+    reasoning,
+    confirmation: decision.confirmation && typeof decision.confirmation === "string" ? decision.confirmation : null,
+    invalidation: decision.invalidation && typeof decision.invalidation === "string" ? decision.invalidation : null,
+    models: {
+      analyst: env.AI_MODEL_ANALYST,
+      counselor: env.AI_MODEL_COUNSELOR,
+      reasoner: env.AI_MODEL_REASONER
+    },
+    stored: true,
+    notified,
+    errors
+  } as HandoffResponse;
+  });
+}
+
+
+
+async function handleAnalyze(request: Request, env: Env): Promise<Response> {
+  if (!env.CONFLUENCE_HANDOFF_SECRET) {
+    return json({ error: "Handoff secret not configured on AI Worker" }, 503);
+  }
+  if (!env.XAUUSD_EVENTS) {
+    return json({ error: "XAUUSD_EVENTS queue is not configured" }, 503);
+  }
+
+  const limited = await readBodyLimited(request, 262144).catch(() => null);
+  if (!limited || limited.tooLarge) return json({ error: "Request body too large or unreadable" }, 413);
+  const body = limited.text;
+
+  const headers = {
+    get: (name: string) => request.headers.get(name)
+  };
+  // Replay protection: reject duplicate request_ids within the TTL window.
+  // The Worker is single-threaded per isolate, so a Map is sufficient; entries
+  // are pruned on each request instead of relying on a module-level timer.
+  pruneReplaySeen();
+  const requestId = headers.get("x-request-id") || "";
+  if (requestId && replaySeen.has(requestId)) {
+    return json({ error: "Authentication failed", reason: "Duplicate request_id (replay)", request_id: requestId }, 401);
+  }
+
+  const verification = await verifyHandoffRequest(env.CONFLUENCE_HANDOFF_SECRET, body, headers, Date.now());
+  if (!verification.ok) {
+    return json({
+      error: "Authentication failed",
+      reason: verification.reason,
+      request_id: verification.request_id
+    }, 401);
+  }
+  let bundle: unknown;
+  try {
+    bundle = JSON.parse(body);
+  } catch {
+    return json({ error: "Request body must be valid JSON" }, 400);
+  }
+
+  const problems = validateBundle(bundle);
+  if (problems.length > 0) {
+    return json({
+      error: "Invalid evidence bundle",
+      request_id: verification.request_id,
+      problems
+    }, 400);
+  }
+
+  const validatedBundle = bundle as EvidenceBundle;
+  const task: QueueTask = {
+    kind: "analysis",
+    event_id: `analysis:${validatedBundle.request_id}`,
+    request_id: validatedBundle.request_id,
+    candle_key: validatedBundle.candle.candle_key,
+    enqueued_at: nowIso(),
+    bundle: validatedBundle
+  };
+  try {
+    await env.XAUUSD_EVENTS.send(task, { contentType: "json" });
+  } catch (error) {
+    return json({
+      error: "Failed to enqueue analysis",
+      request_id: validatedBundle.request_id,
+      reason: error instanceof Error ? error.message : "Unknown queue error"
+    }, 503);
+  }
+
+  // Mark replay only after durable enqueue; a failed enqueue must remain
+  // retryable by the Controller with the same authenticated request_id.
+  if (requestId) replaySeen.set(requestId, Date.now());
+
+  return json({
+    schema_version: validatedBundle.schema_version,
+    request_id: validatedBundle.request_id,
+    status: "accepted",
+    analysis_status: "queued",
+    queued: true,
+    event_id: task.event_id,
+    candle_key: validatedBundle.candle.candle_key
+  }, 202);
+}
+
+
+
+async function processAnalysisTask(env: Env, task: Extract<QueueTask, { kind: "analysis" }>): Promise<void> {
+  const bundle = task.bundle;
+  const candleKey = task.candle_key;
+  const claimed = await claimAnalysisRun(env, candleKey, bundle.evidence_fingerprint);
+  if (!claimed) return;
+  try {
+    const result = await runAnalysisFromBundle(env, bundle);
+    const failedClosed = result.errors.some(error => error.startsWith("fail_closed:"));
+    await setAnalysisRunStatus(env, candleKey, failedClosed ? "degraded" : "complete", {
+      input_fingerprint: bundle.evidence_fingerprint,
+      request_id: task.request_id,
+      decision: result.decision,
+      errors: result.errors,
+      schema_version: bundle.schema_version
+    }, failedClosed ? "required_evidence_unavailable" : null);
+  } catch (error) {
+    await setAnalysisRunStatus(env, candleKey, "failed", {
+      input_fingerprint: bundle.evidence_fingerprint,
+      request_id: task.request_id,
+      message: error instanceof Error ? error.message : "Unknown analysis error"
+    }, "analysis_failed");
+    throw error;
+  }
+}
+
+async function processWebhookReconcileTask(env: Env, task: Extract<QueueTask, { kind: "webhook_reconcile" }>): Promise<void> {
+  await reconcileLocalComputation(env, task.candle_key);
+  const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
+  const records = await Promise.all(required.map(source => env.WEBHOOK_BUFFER.get("candle:" + task.candle_key + ":" + source)));
+  const payloads: Record<string, WebhookPayload> = {};
+  for (let index = 0; index < required.length; index++) {
+    const raw = records[index];
+    if (!raw) continue;
+    try { payloads[required[index]] = JSON.parse(raw) as WebhookPayload; } catch { /* malformed evidence is excluded */ }
+  }
+  const missing = required.filter(source => !payloads[source]);
+  await env.WEBHOOK_BUFFER.put("reconciled:" + safeKeyPart(task.candle_key) + ":" + task.source, JSON.stringify({
+    status: missing.length ? "waiting_for_sources" : "sources_complete",
+    candle_key: task.candle_key, source: task.source,
+    received_sources: Object.keys(payloads), missing_sources: missing,
+    reconciled_at: new Date().toISOString()
+  }), LOCAL_TTL);
+  if (missing.length) return;
+  const existing = await env.WEBHOOK_BUFFER.get("analysis:" + safeKeyPart(task.candle_key));
+  if (existing) {
+    try { if ((JSON.parse(existing) as JsonObject).status === "complete") return; } catch { /* retry */ }
+  }
+  try {
+    await runAnalysis(env, task.candle_key, task.ticker, task.timeframe, payloads);
+  } catch (error) {
+    await setAnalysisRunStatus(env, task.candle_key, "failed", {
+      message: error instanceof Error ? error.message : "Unknown analysis error", event_id: task.event_id
+    }, "analysis_failed");
+    throw error;
+  }
+}
+
+async function processLocalCalculationReconcileTask(env: Env, task: Extract<QueueTask, { kind: "local_calculation_reconcile" }>): Promise<void> {
+  await reconcileLocalComputation(env, task.candle_key);
   const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
   const [localRecords, webhookRecords] = await Promise.all([
-    Promise.all(LOCAL_ENGINES.map(name => env.WEBHOOK_BUFFER.get("localcalc:" + key + ":" + name))),
-    Promise.all(required.map(name => env.WEBHOOK_BUFFER.get("candle:" + key + ":" + name)))
+    Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get("localcalc:" + task.candle_key + ":" + engine))),
+    Promise.all(required.map(source => env.WEBHOOK_BUFFER.get("candle:" + task.candle_key + ":" + source)))
   ]);
-  if (localRecords.every(Boolean) && webhookRecords.every(Boolean)) {
-    const priorAnalysis = await env.WEBHOOK_BUFFER.get("analysis:" + key);
-    if (priorAnalysis) {
-      try {
-        const prior = JSON.parse(priorAnalysis) as JsonObject;
-        if (prior.status === "complete") {
-          return { status: 202, body: { status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: "already_processed" } };
-        }
-      } catch { /* malformed marker does not block a retry */ }
-    }
-    const payloads: Record<string, WebhookPayload> = {};
-    for (let index = 0; index < required.length; index++) {
-      try { payloads[required[index]] = JSON.parse(webhookRecords[index] as string) as WebhookPayload; } catch { /* fusion will report missing/malformed source */ }
-    }
-    if (required.every(name => payloads[name])) {
-      try {
-        const outcome = await runAnalysis(env, key, asText(record.symbol), asText(record.timeframe), payloads);
-        return { status: 202, body: { status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: outcome.status, missing_evidence: outcome.missing_evidence } };
-      } catch (error) {
-        await setAnalysisRunStatus(env, key, "failed", { message: error instanceof Error ? error.message : "Unknown analysis error" }, "analysis_failed");
-        return { status: 502, body: { status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: "failed", error: error instanceof Error ? error.message : "Unknown analysis error" } };
-      }
-    }
+  if (!localRecords.every(Boolean) || !webhookRecords.every(Boolean)) return;
+  const payloads: Record<string, WebhookPayload> = {};
+  for (let index = 0; index < required.length; index++) {
+    try { payloads[required[index]] = JSON.parse(webhookRecords[index] as string) as WebhookPayload; } catch { /* malformed evidence is excluded */ }
   }
-  return { status: 202, body: { status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: "waiting_for_evidence" } };
+  if (!required.every(source => payloads[source])) return;
+  const existing = await env.WEBHOOK_BUFFER.get("analysis:" + safeKeyPart(task.candle_key));
+  if (existing) {
+    try { if ((JSON.parse(existing) as JsonObject).status === "complete") return; } catch { /* retry */ }
+  }
+  try {
+    await runAnalysis(env, task.candle_key, task.ticker, task.timeframe, payloads);
+  } catch (error) {
+    await setAnalysisRunStatus(env, task.candle_key, "failed", {
+      message: error instanceof Error ? error.message : "Unknown analysis error", event_id: task.event_id
+    }, "analysis_failed");
+    throw error;
+  }
+}
+
+async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
+  await tracing.enterSpan("process_queue", async span => {
+    span.setAttributes({
+      "messaging.system": "cloudflare_queues",
+      "messaging.destination.name": "xauusd-webhook-events",
+      "messaging.operation.type": "process",
+      "messaging.message.id": task.event_id,
+      "cryptophys.queue.task_kind": task.kind,
+      "cryptophys.candle_key": task.candle_key
+    });
+    if (task.kind === "webhook_reconcile") return processWebhookReconcileTask(env, task);
+    if (task.kind === "local_calculation_reconcile") return processLocalCalculationReconcileTask(env, task);
+    if (task.kind === "analysis") return processAnalysisTask(env, task);
+    throw new Error("Unsupported queue task kind");
+  });
+}
+
+async function consumeQueue(batch: MessageBatch<QueueTask>, env: Env): Promise<void> {
+  const consumer = createQueueConsumer(task => processQueueTask(env, task), {
+    retryDelaySeconds: 30,
+    onFailure: details => console.error("queue_task_failed", JSON.stringify(details))
+  });
+  await consumer(batch);
 }
 
 /**
@@ -1184,6 +1655,9 @@ export default {
     if (request.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
       return new Response(null, { status: 204, headers: { ...DASHBOARD_CORS, "access-control-allow-methods": "GET,OPTIONS", "access-control-allow-headers": "content-type", "access-control-max-age": "86400" } });
     }
+    if (request.method === "GET" && url.pathname === "/dashboard") {
+      return new Response(DASHBOARD_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    }
     const dashboardResponse = await handleDashboardApi(request, env, url).catch(() => dashboardJson({ status: "error", error: "dashboard_api_failed" }, 500));
     if (dashboardResponse) return dashboardResponse;
     if (request.method === "GET" && url.pathname === "/ready") {
@@ -1196,10 +1670,11 @@ export default {
         await ensureSchema(env.DB);
         const counts = await env.DB.prepare("SELECT status, COUNT(*) AS n FROM engine_parity_registry GROUP BY status").all<{ status: string; n: number }>();
         return json({
-          status: "ready",
+          status: env.XAUUSD_EVENTS ? "ready" : "not_ready",
           schema_version: "cryptophys.evidence-fusion.v1",
           local_calculation_contract: "cryptophys.local-calculation.v1",
           d1_analysis_runs: true,
+          event_queue: Boolean(env.XAUUSD_EVENTS),
           provenance_mode: "autonomous_parity_registry",
           parity_registry: PARITY_REGISTRY_VERSION,
           parity_policy: policyFromEnv(env as unknown as Record<string, unknown>),
@@ -1226,10 +1701,13 @@ export default {
           signal_cache: Boolean(env.SIGNAL_CACHE),
           webhook_buffer: Boolean(env.WEBHOOK_BUFFER),
           knowledge_base: Boolean(env.KNOWLEDGE_BASE),
-          workers_ai: Boolean(env.AI)
+          workers_ai: Boolean(env.AI),
+          event_queue: Boolean(env.XAUUSD_EVENTS),
+          news_ingestion_rpc: Boolean(env.NEWS_INGESTION)
         },
         secrets_configured: {
           webhook_secret: Boolean(env.WEBHOOK_SECRET),
+          confluence_handoff_secret: Boolean(env.CONFLUENCE_HANDOFF_SECRET),
           telegram_bot_token: Boolean(env.TELEGRAM_BOT_TOKEN),
           telegram_chat_id: Boolean(env.TELEGRAM_CHAT_ID),
           ingest_secret: Boolean(env.INGEST_SECRET)
@@ -1242,6 +1720,9 @@ export default {
     }
     if (request.method === "POST" && url.pathname === "/webhook") {
       return handleWebhook(request, env);
+    }
+    if (request.method === "POST" && url.pathname === "/v1/analyze") {
+      return handleAnalyze(request, env);
     }
     if (request.method === "POST" && url.pathname === "/evidence/local-calculation") {
       if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
@@ -1280,7 +1761,10 @@ export default {
       if (!row) return json({ status: "not_found", message: "No fundamental news analysis has completed yet." }, 404);
       return json({ status: "ok", analysis_type: "fundamental_news", ...row, recommendation: JSON.parse(asText(row.recommendation_json) || "{}") });
     }
-    return json({ error: "Not found", endpoints: ["GET /health", "GET /ready", "POST /webhook", "POST /evidence/local-calculation", "POST /news/analyze", "GET /news/latest", "GET /api/status", "GET /api/news", "GET /api/news/:key", "GET /api/decisions", "GET /api/decision/:key"] }, 404);
+    return json({ error: "Not found", endpoints: ["GET /health", "GET /ready", "GET /dashboard", "POST /webhook", "POST /v1/analyze", "POST /evidence/local-calculation", "POST /news/analyze", "GET /news/latest", "GET /api/status", "GET /api/news", "GET /api/news/:key", "GET /api/decisions", "GET /api/decision/:key"] }, 404);
+  },
+  async queue(batch: MessageBatch<QueueTask>, env: Env): Promise<void> {
+    return consumeQueue(batch, env);
   },
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(runNewsAnalysis(env).then(result => {
