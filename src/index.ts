@@ -1,4 +1,4 @@
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { WorkerEntrypoint, tracing } from "cloudflare:workers";
 import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { parseTradingViewJson } from "./tradingview-json.mjs";
@@ -280,6 +280,14 @@ async function fetchNews(env: Env): Promise<{ available: boolean; articles: unkn
 
 
 async function runNewsAnalysis(env: Env): Promise<JsonObject> {
+  const traceConversationId = crypto.randomUUID();
+  return tracing.enterSpan("invoke_agent", async (agentSpan) => {
+    agentSpan.setAttributes({
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.name": "xauusd-decision-agent",
+      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+      "gen_ai.conversation.id": traceConversationId
+    });
   const newsEvidence = await fetchNews(env);
   if (!newsEvidence.available || newsEvidence.articles.length === 0) {
     throw new Error("News ingestion unavailable: " + (newsEvidence.reason || "no articles returned"));
@@ -328,7 +336,15 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     policy: knowledgeText || "No knowledge-base:v3 entry is available; use conservative evidence-based reasoning."
   };
 
-  const analystResult = await env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
+  const analystResult = await tracing.enterSpan("chat", async (span) => {
+    span.setAttributes({
+      "gen_ai.operation.name": "chat",
+      "gen_ai.agent.name": "xauusd-decision-agent",
+      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+      "gen_ai.conversation.id": traceConversationId,
+      "gen_ai.request.model": String(env.AI_MODEL_ANALYST as keyof AiModels)
+    });
+    return env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
     prompt: [
       "You are the Fundamental News Analyst for XAUUSD decision support.",
       "Analyze only the supplied news articles. Do not infer current price action, technical indicators, or unpublished facts.",
@@ -339,10 +355,18 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     ].join("\n"),
     max_tokens: 1000,
     temperature: 0.1
-  } as never);
+  } as never); });
   const analystText = extractText(analystResult);
 
-  const counselorResult = await env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
+  const counselorResult = await tracing.enterSpan("chat", async (span) => {
+    span.setAttributes({
+      "gen_ai.operation.name": "chat",
+      "gen_ai.agent.name": "xauusd-decision-agent",
+      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+      "gen_ai.conversation.id": traceConversationId,
+      "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR as keyof AiModels)
+    });
+    return env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
     prompt: [
       "You are the Fundamental News Counselor.",
       "Use only the news evidence and analyst output. Provide balanced conditional scenarios, not trade execution instructions.",
@@ -353,10 +377,18 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     ].join("\n"),
     max_tokens: 1100,
     temperature: 0.1
-  } as never);
+  } as never); });
   const counselorText = extractText(counselorResult);
 
-  const reasonerResult = await env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
+  const reasonerResult = await tracing.enterSpan("chat", async (span) => {
+    span.setAttributes({
+      "gen_ai.operation.name": "chat",
+      "gen_ai.agent.name": "xauusd-decision-agent",
+      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+      "gen_ai.conversation.id": traceConversationId,
+      "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
+    });
+    return env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
     prompt: [
       "You are the final Fundamental News Reasoner for XAUUSD decision support.",
       "Synthesize only the supplied article evidence, analyst output, and counselor output. This is a fundamental outlook, not a technical trade signal.",
@@ -369,7 +401,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     ].join("\n"),
     max_tokens: 1200,
     temperature: 0.1
-  } as never);
+  } as never); });
   const reasonerText = extractText(reasonerResult);
 
   let recommendation: JsonObject;
@@ -417,6 +449,8 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
   ).run();
   await env.SIGNAL_CACHE.put("latest:news:fundamental", JSON.stringify(result), { expirationTtl: 60 * 60 * 24 * 7 });
   return result;
+
+  });
 }
 
 async function fetchLatestNewsAnalysis(env: Env): Promise<JsonObject | null> {
@@ -515,6 +549,13 @@ async function runAnalysis(
   timeframe: string,
   payloads: Record<string, WebhookPayload>
 ): Promise<{ status: string; missing_evidence: string[] }> {
+  return tracing.enterSpan("invoke_agent", async (agentSpan) => {
+    agentSpan.setAttributes({
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.name": "xauusd-decision-agent",
+      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+      "gen_ai.conversation.id": candleKey
+    });
   const [knowledgeText, newsAnalysis, localCalculationRaw] = await Promise.all([
     env.KNOWLEDGE_BASE.get("knowledge-base:v3"),
     fetchLatestNewsAnalysis(env),
@@ -643,7 +684,15 @@ async function runAnalysis(
     return { status: "degraded", missing_evidence: fusion.missing_evidence };
   }
 
-  const analystResult = await env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
+  const analystResult = await tracing.enterSpan("chat", async (span) => {
+    span.setAttributes({
+      "gen_ai.operation.name": "chat",
+      "gen_ai.agent.name": "xauusd-decision-agent",
+      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+      "gen_ai.conversation.id": candleKey,
+      "gen_ai.request.model": String(env.AI_MODEL_ANALYST as keyof AiModels)
+    });
+    return env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
     prompt: [
       "You are the Analyst stage in an XAUUSD decision-support pipeline.",
       "Classify the supplied indicator evidence without inventing missing values or prices.",
@@ -660,10 +709,18 @@ async function runAnalysis(
     ].join("\n"),
     max_tokens: 700,
     temperature: 0.1
-  } as never);
+  } as never); });
 
   const analystText = extractText(analystResult);
-  const counselorResult = await env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
+  const counselorResult = await tracing.enterSpan("chat", async (span) => {
+    span.setAttributes({
+      "gen_ai.operation.name": "chat",
+      "gen_ai.agent.name": "xauusd-decision-agent",
+      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+      "gen_ai.conversation.id": candleKey,
+      "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR as keyof AiModels)
+    });
+    return env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
     prompt: [
       "You are the Counselor stage in an XAUUSD decision-support pipeline.",
       "Use only the JSON evidence and analyst output below. Do not invent prices or indicator definitions.",
@@ -682,10 +739,18 @@ async function runAnalysis(
     ].join("\n"),
     max_tokens: 1400,
     temperature: 0.1
-  } as never);
+  } as never); });
   const counselorText = extractText(counselorResult);
 
-  const reasonerResult = await env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
+  const reasonerResult = await tracing.enterSpan("chat", async (span) => {
+    span.setAttributes({
+      "gen_ai.operation.name": "chat",
+      "gen_ai.agent.name": "xauusd-decision-agent",
+      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+      "gen_ai.conversation.id": candleKey,
+      "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
+    });
+    return env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
     prompt: [
       "You are the final Deep Reasoner stage for XAUUSD decision support.",
       "Use only the supplied evidence, analyst output, and counselor output. Do not invent market prices or claim the models verified facts they did not receive.",
@@ -705,7 +770,7 @@ async function runAnalysis(
     ].join("\n"),
     max_tokens: 1200,
     temperature: 0.1
-  } as never);
+  } as never); });
   const reasonerText = extractText(reasonerResult);
   const parsedDecision = parseDecision(reasonerText);
   const decision = fusion.complete ? parsedDecision : {
@@ -815,8 +880,8 @@ async function runAnalysis(
     }
   }, null);
   return { status: analysisStatus, missing_evidence: fusion.missing_evidence };
+  });
 }
-
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (!env.WEBHOOK_SECRET) {
     return json({ error: "WEBHOOK_SECRET is not configured" }, 503);

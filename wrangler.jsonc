@@ -5,7 +5,9 @@
   "compatibility_date": "2026-10-31",
   "workers_dev": true,
   "triggers": {
-    "crons": ["6 * * * *"]
+    "crons": [
+      "6 * * * *"
+    ]
   },
   "ai": {
     "binding": "AI"
@@ -75,6 +77,11 @@
     ],
     "ai": {
       "binding": "AI"
+    }
+  },
+  "observability": {
+    "traces": {
+      "enabled": true
     }
   }
 }
