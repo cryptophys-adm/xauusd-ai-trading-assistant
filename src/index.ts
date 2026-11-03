@@ -681,6 +681,32 @@ async function runAnalysis(
       reasoner_model: env.AI_MODEL_REASONER, reasoner_output: null,
       news_evidence: newsEvidence, decision
     };
+    // Persist the fail-closed WAIT synthesis to the same read models used by the dashboard.
+    // This is not an AI invocation and never promotes incomplete evidence into a trade.
+    await upsertSynthesis(env, {
+      candleKey,
+      ticker,
+      timeframe,
+      timestamp,
+      prophetMetrics: JSON.stringify({
+        prophet_r38: payloads.prophet_r38?.metrics ?? payloads.prophet_r38,
+        prophet_r37_ssot: payloads.prophet_r37_ssot?.metrics ?? payloads.prophet_r37_ssot
+      }),
+      gmiMetrics: JSON.stringify(payloads.gmi_v12_70?.metrics ?? payloads.gmi_v12_70),
+      analysis: JSON.stringify(synthesis),
+      model: [env.AI_MODEL_ANALYST, env.AI_MODEL_COUNSELOR, env.AI_MODEL_REASONER].join(",")
+    });
+    await upsertTradeDecision(env, {
+      candleKey,
+      decision: "WAIT",
+      confidence: null,
+      entry: null,
+      stop: null,
+      target: null,
+      riskReward: null,
+      size: null,
+      reasoning
+    });
     await env.SIGNAL_CACHE.put("latest:" + safeKeyPart(ticker) + ":" + safeKeyPart(timeframe), JSON.stringify(synthesis), { expirationTtl: 60 * 60 * 24 * 7 });
     try {
       await sendTelegram(env, ["XAUUSD AI DECISION SUPPORT", "Symbol: " + ticker, "Timeframe: " + timeframe, "Candle: " + candleKey, "Decision: WAIT", "Reason: " + reasoning.slice(0, 900), "Note: advisory only; no trade was executed."].join("\n"));
