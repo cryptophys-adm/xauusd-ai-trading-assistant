@@ -15,6 +15,9 @@ export type QueueTask =
       event_id: string;
       candle_key: string;
       engine: string;
+      ticker: string;
+      timeframe: string;
+      candle_time: string;
       enqueued_at: string;
     }
   | {
@@ -41,7 +44,7 @@ export function buildWebhookQueueTask(input: {
   candleKey: string; source: string; ticker: string; timeframe: string; enqueuedAt?: string;
 }): Extract<QueueTask, { kind: "webhook_reconcile" }>;
 export function buildLocalCalculationQueueTask(input: {
-  candleKey: string; engine: string; enqueuedAt?: string;
+  candleKey: string; engine: string; ticker: string; timeframe: string; candleTime: string; enqueuedAt?: string;
 }): Extract<QueueTask, { kind: "local_calculation_reconcile" }>;
 export function sendQueueTask(queue: Queue<QueueTask>, task: QueueTask): Promise<void>;
 export function createQueueConsumer(
