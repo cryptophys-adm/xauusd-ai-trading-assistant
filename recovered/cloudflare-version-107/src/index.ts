@@ -131,4 +131,95 @@ function extractText(result: unknown): string {
   if (result && typeof result === "object") {
     const r = result as JsonObject;
     for (const key of ["response", "output_text", "text"]) {
-      if (typeof r[key] === "string") return r[key] as string --- TRUNCATED --- 36,813 chars
+      if (typeof r[key] === "string") return r[key] as string;
+    }
+    const choices = r.choices;
+    if (Array.isArray(choices) && choices[0] && typeof choices[0] === "object") {
+      const first = choices[0] as JsonObject;
+      if (typeof first.text === "string") return first.text;
+      const message = first.message;
+      if (message && typeof message === "object") {
+        const content = (message as JsonObject).content;
+        if (typeof content === "string") return content;
+      }
+    }
+    return JSON.stringify(result);
+  }
+  return String(result ?? "");
+}
+
+function parseDecision(text: string): JsonObject {
+  const match = text.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0]) as JsonObject;
+      const decision = asText(parsed.decision).toUpperCase();
+      if (["BUY", "SELL", "WAIT", "NO_TRADE"].includes(decision)) {
+        return { ...parsed, decision };
+      }
+    } catch {
+      // Fall through to conservative WAIT decision.
+    }
+  }
+  return {
+    decision: "WAIT",
+    confidence: null,
+    reasoning: "Model response did not contain a valid decision JSON object.",
+    raw_response: text
+  };
+}
+
+async function sendTelegram(env: Env, text: string): Promise<void> {
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
+  const response = await fetch("https://api.telegram.org/bot" + env.TELEGRAM_BOT_TOKEN + "/sendMessage", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      chat_id: env.TELEGRAM_CHAT_ID,
+      text,
+      disable_web_page_preview: true
+    })
+  });
+  if (!response.ok) {
+    throw new Error("Telegram delivery failed with HTTP " + response.status);
+  }
+}
+
+/** Read request body bounded by MAX_BODY_BYTES; aborts the stream when exceeded. */
+async function readBoundedBody(request: Request): Promise<string> {
+  const contentLength = request.headers.get("content-length");
+  if (contentLength !== null) {
+    const len = Number.parseInt(contentLength, 10);
+    if (!Number.isFinite(len) || len < 0 || len > MAX_BODY_BYTES) {
+      throw new Error("Request body too large");
+    }
+  }
+  const chunks: Uint8Array[] = [];
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+  let total = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        reader.releaseLock();
+        throw new Error("Request body too large");
+      }
+      chunks.push(value);
+    }
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+function normalizeSource(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return SOURCE_ALIASES[value.trim().toLowerCase()] || null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Legacy TradingView webhook (transitional, backward compatible).    */
+/*                                                                    */
+/* This endpoint INGESTS indicator source payloads only. It does N
