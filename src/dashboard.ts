@@ -60,4 +60,115 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   button:hover { background:var(--accent); border-color:var(--accent); color:#fff; }
   .refresh-btn { float:right; }
 </style>
-</
+</head>
+<body>
+<div class="topbar">
+  <h1>⚡ XAUUSD AI Trading Assistant</h1>
+  <span class="badge" id="clock">--:--:--</span>
+</div>
+<div class="container">
+  <div class="grid">
+
+    <!-- Status -->
+    <div class="card span-12">
+      <h2>Status Worker</h2>
+      <div class="status-row" id="status-row"><div class="loader">Memuat status...</div></div>
+    </div>
+
+    <!-- Chart placeholder -->
+    <div class="card span-8">
+      <h2>Chart Harga (XAUUSD)</h2>
+      <div class="chart-box">Sumber data OHLCV belum terverifikasi (pull adapter stub). Chart akan diaktifkan setelah sumber data dikonfigurasi.</div>
+    </div>
+
+    <!-- Latest decision -->
+    <div class="card span-4">
+      <h2>Keputusan Terakhir</h2>
+      <div id="latest-decision"><div class="loader">Memuat...</div></div>
+    </div>
+
+    <!-- Agent conversation -->
+    <div class="card span-12">
+      <h2>Visualisasi Percakapan Agent (Latest News Analysis)</h2>
+      <div class="tabs">
+        <div class="tab active" data-tab="chat">Chat Timeline</div>
+        <div class="tab" data-tab="raw">Raw Output</div>
+      </div>
+      <div id="agent-chat" class="chat-timeline"><div class="loader">Memuat...</div></div>
+      <div id="agent-raw" style="display:none"></div>
+    </div>
+
+    <!-- News history -->
+    <div class="card span-6">
+      <h2>Riwayat News Analysis</h2>
+      <div id="news-list"><div class="loader">Memuat...</div></div>
+    </div>
+
+    <!-- Decisions history -->
+    <div class="card span-6">
+      <h2>Riwayat Keputusan (Trade Decisions)</h2>
+      <div id="decisions-list"><div class="loader">Memuat...</div></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+function esc(s){ return String(s??'').replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+function updateClock(){ $('clock').textContent = new Date().toLocaleTimeString('id-ID'); }
+setInterval(updateClock,1000); updateClock();
+
+async function loadStatus(){
+  try {
+    const r = await fetch('/api/status'); const d = await r.json();
+    const ai = d.ai_worker||{}; const ing = d.ingestion_worker||{};
+    const pills = [
+      {label:'AI Worker', ok: ai.status==='ok'},
+      {label:'Ingestion', ok: ing.status==='ok'},
+      {label:'OAuth', ok: !!ing.oauth_authorized},
+      {label:'Ingest Secret', ok: !!ai.ingest_secret},
+      {label:'Webhook Secret', ok: !!ai.webhook_secret},
+      {label:'RPC Binding', ok: !!ai.news_ingestion_rpc},
+    ];
+    $('status-row').innerHTML = pills.map(p=>'<div class="status-pill"><span class="dot '+(p.ok?'ok':'err')+'"></span>'+p.label+'</div>').join('');
+  } catch(e){ $('status-row').innerHTML = '<div class="error">Gagal memuat status: '+esc(e.message)+'</div>'; }
+}
+
+async function loadNews(){
+  try {
+    const r = await fetch('/api/news?limit=15'); const d = await r.json();
+    if(!d.items||d.items.length===0){ $('news-list').innerHTML='<div class="loader">Belum ada news analysis.</div>'; return; }
+    $('news-list').innerHTML = d.items.map(n=>{
+      const rec = n.recommendation||'—';
+      const cls = (rec==='BULLISH_BIAS'?'BUY':rec==='BEARISH_BIAS'?'SELL':rec==='WAIT_FOR_TECHNICAL_CONFIRMATION'?'WAIT':rec);
+      return '<div class="news-item"><div class="news-title">'+esc(rec)+' <span class="badge-decision '+cls+'">'+esc(rec)+'</span></div>'
+        +'<div class="news-meta">'+esc(n.analyzed_at)+' · '+n.article_count+' artikel · conf: '+(n.confidence!=null?Math.round(n.confidence*100)+'%':'—')+'</div>'
+        +'<div class="news-meta" style="margin-top:4px"><a href="#" onclick="loadAnalysis(\\''+esc(n.analysis_key)+'\\');return false;" style="color:var(--accent)">Lihat detail agent →</a></div></div>';
+    }).join('');
+  } catch(e){ $('news-list').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+}
+
+async function loadDecisions(){
+  try {
+    const r = await fetch('/api/decisions?limit=15'); const d = await r.json();
+    if(!d.items||d.items.length===0){ $('decisions-list').innerHTML='<div class="loader">Belum ada trade decision.</div>'; return; }
+    let html = '<table><thead><tr><th>Waktu</th><th>Decision</th><th>Conf</th><th>Candle</th></tr></thead><tbody>';
+    d.items.forEach(x=>{
+      const cls = (x.decision==='BUY'?'BUY':x.decision==='SELL'?'SELL':'WAIT');
+      html += '<tr><td>'+esc(String(x.timestamp).slice(0,16).replace('T',' '))+'</td>'
+        +'<td><span class="badge-decision '+cls+'">'+esc(x.decision)+'</span></td>'
+        +'<td>'+(x.confidence!=null?Math.round(x.confidence*100)+'%':'—')+'</td>'
+        +'<td style="font-size:11px;color:var(--muted)">'+esc(x.candle_key)+'</td></tr>';
+    });
+    html += '</tbody></table>';
+    $('decisions-list').innerHTML = html;
+  } catch(e){ $('decisions-list').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+}
+
+async function loadAnalysis(key){
+  try {
+    const r = await fetch('/api/news/'+encodeURIComponent(key)); const d = await r.json();
+    if(d.status!=='ok'){ alert('Gagal memuat analisis'); return; }
+    const rec 
