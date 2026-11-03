@@ -45,9 +45,10 @@ export function renderGenerated(provenance = computeProvenance()) {
     "export const ENGINE_PROVENANCE = Object.freeze(" + JSON.stringify(provenance, null, 2) + ");\n";
 }
 
-if (process.argv.includes("--write")) {
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (isMain && process.argv.includes("--write")) {
   writeFileSync(path.join(ROOT, GENERATED_PATH), renderGenerated());
   console.log("wrote " + GENERATED_PATH);
-} else if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+} else if (isMain) {
   console.log(JSON.stringify(computeProvenance(), null, 2));
 }

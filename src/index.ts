@@ -3,6 +3,13 @@ import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_E
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { parseTradingViewJson } from "./tradingview-json.mjs";
 import { chatMessages, cleanModelText, extractJsonObject } from "./model-text.mjs";
+import { knowledgeForPrompt } from "./knowledge-prompt.mjs";
+
+// knowledge-base v4 is generated from the Pine SSOT sources and bundled with the Worker
+// (scripts/build-knowledge-base.mjs); it no longer depends on a hand-maintained KV value.
+const TECHNICAL_KNOWLEDGE = JSON.parse(knowledgeForPrompt("technical")) as JsonObject;
+const NEWS_KNOWLEDGE = JSON.parse(knowledgeForPrompt("news")) as JsonObject;
+const KNOWLEDGE_SHA = asText((TECHNICAL_KNOWLEDGE.provenance as JsonObject | undefined)?.content_sha256);
 import { identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema, registerIdentity, recordComparison, isTrusted, listRegistry, policyFromEnv, PARITY_REGISTRY_VERSION } from "./parity-registry.mjs";
 
 export interface Env {
@@ -331,14 +338,13 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     return latest;
   }
 
-  const [knowledgeText] = await Promise.all([env.KNOWLEDGE_BASE.get("knowledge-base:v3")]);
   const evidence = {
     analysis_type: "fundamental_news",
     fetched_at: newsEvidence.fetched_at,
     article_count: newsEvidence.article_count,
     symbols: ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"],
     articles,
-    policy: knowledgeText || "No knowledge-base:v3 entry is available; use conservative evidence-based reasoning."
+    policy: NEWS_KNOWLEDGE
   };
 
   const analystResult = await tracing.enterSpan("chat", async (span) => {
@@ -562,15 +568,10 @@ async function runAnalysis(
       "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
       "gen_ai.conversation.id": candleKey
     });
-  const [knowledgeText, newsAnalysis, localCalculationRaw] = await Promise.all([
-    env.KNOWLEDGE_BASE.get("knowledge-base:v3"),
+  const [newsAnalysis, localCalculationRaw] = await Promise.all([
     fetchLatestNewsAnalysis(env),
     Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get("localcalc:" + safeKeyPart(candleKey) + ":" + engine)))
   ]);
-  const knowledge = knowledgeText || JSON.stringify({
-    status: "kv_key_missing",
-    message: "No knowledge-base:v3 value was found in the bound KV namespace. Use the checked-in knowledge-base-v3.json after reviewing it."
-  });
   const candleTime = asText(payloads.prophet_r38?.candle_time || payloads.prophet_r37_ssot?.candle_time || payloads.gmi_v12_70?.candle_time || payloads.prophet_r38?.timestamp || payloads.prophet_r37_ssot?.timestamp || payloads.gmi_v12_70?.timestamp);
   const localCalculations: unknown[] = [];
   for (const raw of localCalculationRaw) {
@@ -598,7 +599,7 @@ async function runAnalysis(
     newsAnalyzedAt <= newsNow + 5 * 60 * 1000 &&
     newsFetchedAt <= newsNow + 5 * 60 * 1000;
   const fingerprintInput = JSON.stringify({
-    candleKey, ticker, timeframe, payloads, localCalculations: fingerprintLocalCalculations,
+    candleKey, ticker, timeframe, payloads, localCalculations: fingerprintLocalCalculations, knowledge_sha256: KNOWLEDGE_SHA,
     news: {
       analysis_key: newsAnalysis?.analysis_key,
       status: newsAnalysis?.status,
@@ -641,7 +642,7 @@ async function runAnalysis(
     local_calculation_evidence: fusion.local_calculations,
     fundamental_news_analysis: fusion.fundamental_news_analysis,
     evidence_fusion: fusion,
-    policy: knowledge,
+    policy: TECHNICAL_KNOWLEDGE,
     news_evidence: newsEvidence
   };
 
@@ -702,6 +703,7 @@ async function runAnalysis(
     messages: chatMessages([
       "You are the Analyst stage in an XAUUSD decision-support pipeline.",
       "Classify the supplied indicator evidence without inventing missing values or prices.",
+      "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply EVIDENCE.policy.decision_policy. Never infer a field meaning that is not in the dictionary.",
       "Prophet is the base directional bias. GMI can validate, block, or defer a setup but must not silently overwrite Prophet's bias.",
       "Evidence includes the versioned evidence_fusion result, technical source_payloads, all local calculation evidence, and completed fundamental_news_analysis.",
       "Evidence arrives in three separate input lanes (see input_lanes): tradingview_webhook = indicator outputs computed by TradingView (source_payloads); local_computation = outputs computed locally from raw TradingView OHLCV (local_calculation_evidence); fundamental_news = completed news analysis. Never merge, average, or relabel values across lanes. Attribute every technical claim to its lane, and state explicitly where the tradingview_webhook and local_computation lanes agree or disagree.",
@@ -730,6 +732,7 @@ async function runAnalysis(
     messages: chatMessages([
       "You are the Counselor stage in an XAUUSD decision-support pipeline.",
       "Use only the JSON evidence and analyst output below. Do not invent prices or indicator definitions.",
+      "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply EVIDENCE.policy.decision_policy. Never infer a field meaning that is not in the dictionary.",
       "Prophet is the base bias. GMI may validate, block, or defer a Prophet setup; it must not silently overwrite Prophet's bias.",
       "Use the complete versioned evidence_fusion bundle as the canonical evidence set, including local_calculation_evidence and fundamental_news_analysis.",
       "Evidence arrives in three separate input lanes (see input_lanes): tradingview_webhook = indicator outputs computed by TradingView (source_payloads); local_computation = outputs computed locally from raw TradingView OHLCV (local_calculation_evidence); fundamental_news = completed news analysis. Never merge, average, or relabel values across lanes. Attribute every technical claim to its lane, and state explicitly where the tradingview_webhook and local_computation lanes agree or disagree.",
@@ -760,6 +763,7 @@ async function runAnalysis(
     messages: chatMessages([
       "You are the final Deep Reasoner stage for XAUUSD decision support.",
       "Use only the supplied evidence, analyst output, and counselor output. Do not invent market prices or claim the models verified facts they did not receive.",
+      "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply EVIDENCE.policy.decision_policy. Never infer a field meaning that is not in the dictionary.",
       "Prophet remains the base bias. GMI may validate, block, or wait on a setup. Do not silently reverse Prophet's bias.",
       "Evidence arrives in three separate input lanes (see input_lanes): tradingview_webhook = indicator outputs computed by TradingView (source_payloads); local_computation = outputs computed locally from raw TradingView OHLCV (local_calculation_evidence); fundamental_news = completed news analysis. Never merge, average, or relabel values across lanes. Attribute every technical claim to its lane, and state explicitly where the tradingview_webhook and local_computation lanes agree or disagree.",
       "If evidence_fusion.complete is false, decision MUST be WAIT or NO_TRADE, confidence and all price/risk fields MUST be null, and reasoning must enumerate missing_evidence and validation_errors.",
@@ -1216,6 +1220,7 @@ export default {
       return json({
         status: "ok",
         service: "xauusd-ai-trading-assistant",
+        knowledge_base: { version: 4, source: "bundled, generated from pinescript/ssot", content_sha256: KNOWLEDGE_SHA },
         bindings: {
           d1: Boolean(env.DB),
           signal_cache: Boolean(env.SIGNAL_CACHE),
