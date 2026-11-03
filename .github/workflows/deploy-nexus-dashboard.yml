@@ -53,4 +53,18 @@ jobs:
           const status = await get("https://nexus.cryptophys.work/api/status");
           if (!status) { console.error("/api/status proxy failed"); process.exit(1); }
           console.log(JSON.stringify(await status.json(), null, 2).slice(0, 2000));
+          // Chart data via the MARKET_DATA RPC binding (market-data Worker may still be deploying: retry).
+          let chart = null;
+          for (let i = 0; i < 12 && !chart; i++) {
+            try {
+              const r = await fetch("https://nexus.cryptophys.work/api/ohlcv?timeframe=H1&limit=50", { signal: AbortSignal.timeout(20000) });
+              const body = await r.json().catch(() => null);
+              if (r.ok && Array.isArray(body?.candles) && body.candles.length > 0) chart = body;
+              else console.log("ohlcv not ready:", r.status, JSON.stringify(body).slice(0, 300));
+            } catch (e) { console.log("ohlcv fetch error:", e?.name); }
+            if (!chart) await new Promise(r => setTimeout(r, 10000));
+          }
+          if (!chart) { console.error("/api/ohlcv returned no candles"); process.exit(1); }
+          const last = chart.candles.at(-1);
+          console.log(JSON.stringify({ chart: { symbol: chart.symbol, timeframe: chart.timeframe, count: chart.count, latest_close_time: chart.latest_close_time, last_close: last.close } }));
           NODE
