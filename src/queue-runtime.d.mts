@@ -37,7 +37,7 @@ export interface QueueRuntimeMessage<T> {
   retry(options?: { delaySeconds?: number }): void;
 }
 export interface QueueRuntimeBatch<T> {
-  messages: QueueRuntimeMessage<T>[];
+  messages: readonly QueueRuntimeMessage<T>[];
 }
 
 export function buildWebhookQueueTask(input: {
