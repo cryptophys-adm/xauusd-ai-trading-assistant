@@ -696,3 +696,12 @@ test("persistent dedupe suppresses the same article across separate pulls", asyn
   const second = await internals.filterPreviouslySeenArticles(env, [duplicateFromAnotherSymbol]);
   assert.equal(second.length, 0);
 });
+
+test("runNewsPull (NewsIngestionService RPC) runs /pull with the Worker's own secret", async () => {
+  const { runNewsPull } = await import("../src/index.mjs");
+  const missing = await runNewsPull({}, { waitUntil() {} });
+  assert.equal(missing.rpc_http_status, 503);
+  const noOauth = await runNewsPull({ INGEST_SECRET: "s" }, { waitUntil() {} });
+  assert.equal(noOauth.rpc_http_status, 503);
+  assert.equal(noOauth.oauth_configured, false);
+});
