@@ -16,11 +16,17 @@
     {
       "binding": "TV_GATEWAY",
       "service": "xauusd-fundamental-news-ingestion"
+    },
+    // local_computation lane -> AI Worker POST /evidence/local-calculation
+    {
+      "binding": "AI_WORKER",
+      "service": "xauusd-ai-trading-assistant"
     }
   ],
   "vars": {
     "TV_MAX_CALLS_PER_RUN": "8",
-    "TV_DAILY_CALL_BUDGET": "1200"
+    "TV_DAILY_CALL_BUDGET": "1200",
+    "CHART_MINTICK": "0.001"
   },
   "triggers": {
     "crons": ["*/5 * * * *"]

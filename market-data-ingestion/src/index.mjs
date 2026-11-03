@@ -1,5 +1,6 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
+import { publishLocalComputation, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
 import { SERIES, PROVIDER, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest } from "./tradingview-source.mjs";
 
 const JSON_HEADERS = {
@@ -94,6 +95,7 @@ const worker = {
         gateway_configured: Boolean(asString(env.TV_GATEWAY_SECRET)) && Boolean(env.TV_GATEWAY || asString(env.TV_GATEWAY_URL)),
         gateway_binding: Boolean(env.TV_GATEWAY),
         pull_auth_configured: Boolean(asString(env.MARKET_DATA_INGEST_SECRET)),
+        local_publisher_configured: Boolean(asString(env.AI_WEBHOOK_SECRET)) && Boolean(env.AI_WORKER || asString(env.AI_WORKER_URL)),
         cache_configured: Boolean(env.MARKET_DATA_CACHE),
         cron: "*/5 * * * *",
         series: SERIES.map(({ symbol, interval, timeframe, retain, role }) => ({ symbol, interval, timeframe, retain, role })),
@@ -101,6 +103,18 @@ const worker = {
       });
     }
     if (request.method === "POST" && url.pathname === "/pull") return handlePull(request, env);
+    if (request.method === "POST" && url.pathname === "/publish-local") {
+      if (!constantTimeEqual(getBearer(request), asString(env.MARKET_DATA_INGEST_SECRET))) return json({ error: "unauthorized" }, 401);
+      const result = await publishLocalComputation(env, { force: url.searchParams.get("force") === "true" });
+      const failed = ["publisher_not_configured", "cache_not_configured", "partial_failure"].includes(result.status);
+      return json({ worker: WORKER_NAME, ...result }, failed ? 503 : 200);
+    }
+    if (request.method === "GET" && url.pathname === "/local-computation/latest") {
+      if (!constantTimeEqual(getBearer(request), asString(env.MARKET_DATA_INGEST_SECRET))) return json({ error: "unauthorized" }, 401);
+      let last = null;
+      try { last = JSON.parse((await env.MARKET_DATA_CACHE?.get(LAST_PUBLISH_KEY)) || "null"); } catch { last = null; }
+      return json({ worker: WORKER_NAME, last_publish: last }, last ? 200 : 404);
+    }
     if (request.method === "GET" && url.pathname === "/engine-inputs") {
       if (!constantTimeEqual(getBearer(request), asString(env.MARKET_DATA_INGEST_SECRET))) {
         return json({ error: "unauthorized" }, 401);
@@ -229,6 +243,16 @@ const worker = {
           code: asString(error?.code) || "market_data_pull_failed",
           checked_at: new Date().toISOString()
         }));
+      }
+      // Publish the local_computation lane for a newly closed H1 bar (runs on cached data
+      // even if this cycle's pull failed; the publisher enforces freshness and dedupe).
+      try {
+        const published = await publishLocalComputation(env);
+        if (!["no_fresh_h1_close", "already_published"].includes(published.status)) {
+          console.log(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish", status: published.status, candle_key: published.candle_key || null }));
+        }
+      } catch (error) {
+        console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_failed", code: asString(error?.code) || "publish_failed" }));
       }
     })());
   }

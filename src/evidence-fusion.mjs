@@ -60,8 +60,15 @@ export function stripCredentialFields(value, depth = 0) {
 }
 
 function timestampMs(value) {
+  // TradingView alerts send `time` via str.tostring(time): epoch milliseconds
+  // as a digit string (e.g. "1793656800000"). Accept epoch ms/seconds strings
+  // and numbers as well as ISO-8601.
+  if (typeof value === "number") return Number.isFinite(value) ? (Math.abs(value) < 1e11 ? value * 1000 : value) : null;
   if (typeof value !== "string" || !value.trim()) return null;
-  const parsed = Date.parse(value);
+  const text = value.trim();
+  if (/^\d{10}$/.test(text)) return Number(text) * 1000;
+  if (/^\d{12,13}$/.test(text)) return Number(text);
+  const parsed = Date.parse(text);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
