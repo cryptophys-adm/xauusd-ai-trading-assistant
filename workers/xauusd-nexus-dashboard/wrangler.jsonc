@@ -1,0 +1,16 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "xauusd-nexus-dashboard",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-31",
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "nexus.cryptophys.work",
+      "custom_domain": true
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

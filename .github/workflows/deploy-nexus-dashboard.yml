@@ -1,0 +1,56 @@
+name: Deploy Nexus Dashboard Worker
+
+# Deploys `xauusd-nexus-dashboard` (nexus.cryptophys.work) on main. The
+# dashboard is static HTML plus a read-only /api/* proxy to the AI Worker,
+# so it needs no secrets beyond CLOUDFLARE_API_TOKEN.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "workers/xauusd-nexus-dashboard/**"
+      - ".github/workflows/deploy-nexus-dashboard.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-nexus-dashboard
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Require Cloudflare deploy credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then echo "::error::CLOUDFLARE_API_TOKEN is not configured."; exit 1; fi
+
+      - name: Validate Worker bundle
+        run: npx --yes wrangler@4.45.0 deploy --dry-run --config workers/xauusd-nexus-dashboard/wrangler.jsonc
+
+      - name: Deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx --yes wrangler@4.45.0 deploy --config workers/xauusd-nexus-dashboard/wrangler.jsonc
+
+      - name: Smoke test
+        run: |
+          node --input-type=module <<'NODE'
+          const get = async (u) => { for (let i = 0; i < 10; i++) { try { const r = await fetch(u, { signal: AbortSignal.timeout(20000) }); if (r.ok) return r; } catch {} await new Promise(r => setTimeout(r, 3000)); } return null; };
+          const page = await get("https://nexus.cryptophys.work/");
+          if (!page || !(await page.text()).includes("<!DOCTYPE html>")) { console.error("dashboard page not served"); process.exit(1); }
+          const status = await get("https://nexus.cryptophys.work/api/status");
+          if (!status) { console.error("/api/status proxy failed"); process.exit(1); }
+          console.log(JSON.stringify(await status.json(), null, 2).slice(0, 2000));
+          NODE
