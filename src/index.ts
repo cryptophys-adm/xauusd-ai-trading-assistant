@@ -280,12 +280,13 @@ async function fetchNews(env: Env): Promise<{ available: boolean; articles: unkn
 
 
 async function runNewsAnalysis(env: Env): Promise<JsonObject> {
+  const traceConversationId = crypto.randomUUID();
   return tracing.enterSpan("invoke_agent", async (agentSpan) => {
     agentSpan.setAttributes({
       "gen_ai.operation.name": "invoke_agent",
       "gen_ai.agent.name": "xauusd-decision-agent",
       "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
-      "gen_ai.conversation.id": analysisKey
+      "gen_ai.conversation.id": traceConversationId
     });
   const newsEvidence = await fetchNews(env);
   if (!newsEvidence.available || newsEvidence.articles.length === 0) {
@@ -340,7 +341,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.operation.name": "chat",
       "gen_ai.agent.name": "xauusd-decision-agent",
       "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
-      "gen_ai.conversation.id": analysisKey,
+      "gen_ai.conversation.id": traceConversationId,
       "gen_ai.request.model": String(env.AI_MODEL_ANALYST as keyof AiModels)
     });
     return env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
@@ -354,7 +355,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     ].join("\n"),
     max_tokens: 1000,
     temperature: 0.1
-  } as never; });;
+  } as never); });
   const analystText = extractText(analystResult);
 
   const counselorResult = await tracing.enterSpan("chat", async (span) => {
@@ -362,7 +363,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.operation.name": "chat",
       "gen_ai.agent.name": "xauusd-decision-agent",
       "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
-      "gen_ai.conversation.id": analysisKey,
+      "gen_ai.conversation.id": traceConversationId,
       "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR as keyof AiModels)
     });
     return env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
@@ -376,7 +377,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     ].join("\n"),
     max_tokens: 1100,
     temperature: 0.1
-  } as never; });;
+  } as never); });
   const counselorText = extractText(counselorResult);
 
   const reasonerResult = await tracing.enterSpan("chat", async (span) => {
@@ -384,7 +385,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.operation.name": "chat",
       "gen_ai.agent.name": "xauusd-decision-agent",
       "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
-      "gen_ai.conversation.id": analysisKey,
+      "gen_ai.conversation.id": traceConversationId,
       "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
     });
     return env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
@@ -400,7 +401,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     ].join("\n"),
     max_tokens: 1200,
     temperature: 0.1
-  } as never; });;
+  } as never); });
   const reasonerText = extractText(reasonerResult);
 
   let recommendation: JsonObject;
@@ -710,7 +711,7 @@ async function runAnalysis(
     ].join("\n"),
     max_tokens: 700,
     temperature: 0.1
-  } as never; });;
+  } as never); });
 
   const analystText = extractText(analystResult);
   const counselorResult = await tracing.enterSpan("chat", async (span) => {
@@ -740,7 +741,7 @@ async function runAnalysis(
     ].join("\n"),
     max_tokens: 1400,
     temperature: 0.1
-  } as never; });;
+  } as never); });
   const counselorText = extractText(counselorResult);
 
   const reasonerResult = await tracing.enterSpan("chat", async (span) => {
@@ -771,7 +772,7 @@ async function runAnalysis(
     ].join("\n"),
     max_tokens: 1200,
     temperature: 0.1
-  } as never; });;
+  } as never); });
   const reasonerText = extractText(reasonerResult);
   const parsedDecision = parseDecision(reasonerText);
   const decision = fusion.complete ? parsedDecision : {
