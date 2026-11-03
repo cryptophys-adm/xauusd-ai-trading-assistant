@@ -81,7 +81,7 @@ Only observed records whose identity is currently trusted are copied into the `l
 
 ## Local producer (H1) — implemented
 
-- **Where it runs:** `xauusd-tradingview-pull-adapter`, on its 5-minute cron, after each refresh. It calls `local-engines/producer/src/h1-producer.mjs`. For every newly closed `OANDA:XAUUSD` 1H bar (within 25 minutes of the close, published once per candle), it posts to the AI Worker over Service Binding `AI_WORKER` using `AI_WEBHOOK_SECRET`.
+- **Where it runs:** `xauusd-tradingview-pull-adapter`, on its 5-minute cron, after each refresh. It calls `local-engines/producer/src/h1-producer.mjs`. For every newly closed `OANDA:XAUUSD` 1H bar (within 25 minutes of the close, published once per candle), it submits to the AI Worker through the RPC Service Binding `AI_WORKER` (entrypoint `LocalComputationIngress.submit()`). It needs no shared secret, because RPC entrypoints are not reachable over public HTTP.
 - **`candle_key`:** `OANDA:XAUUSD:60:<bar open time ms>`, identical to what the AI Worker derives from the TradingView webhook (`syminfo.tickerid:timeframe.period:time`).
 - **`mizan` record:**
   - Values: Mizan shared-core outputs (`prophet_structure_core`, `calculate_prophet_tensor`) on H1.

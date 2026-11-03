@@ -18,13 +18,6 @@ const QUOTA_PATTERN = /TOOL_QUOTA_EXCEEDED|tool call quota exceeded|access to MC
 const asString = (value) => (typeof value === "string" ? value : "");
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
-  });
-}
-
 export function constantTimeEqual(left, right) {
   if (typeof left !== "string" || typeof right !== "string" || !left || !right) return false;
   const a = new TextEncoder().encode(left);
@@ -142,38 +135,32 @@ async function callOhlcvTool(env, endpoint, accessToken, args, deps) {
 }
 
 /**
- * POST /internal/tv-ohlcv
- * Body: { requests: [{ symbol, interval, count, date_to? }] }
- * Auth: Authorization: Bearer <TV_GATEWAY_SECRET>
+ * Runs a batch of get_ohlcv requests with the shared OAuth grant and quota
+ * cooldown. Reachable only through the `TvGateway` RPC entrypoint (Service
+ * Binding with entrypoint "TvGateway"): RPC methods are not exposed over
+ * public HTTP, so no shared secret is needed.
+ * Returns { status, body } where status mirrors HTTP semantics.
  */
-export async function handleOhlcvGateway(request, env, deps) {
-  const secret = asString(env.TV_GATEWAY_SECRET);
-  if (!secret) return json({ error: "gateway_not_configured" }, 503);
-  const header = request.headers.get("authorization") || "";
-  if (!constantTimeEqual(header.startsWith("Bearer ") ? header.slice(7) : "", secret)) return json({ error: "unauthorized" }, 401);
-
-  const length = Number(request.headers.get("content-length") || "0");
-  if (length > 16 * 1024) return json({ error: "body_too_large" }, 413);
-  let body;
-  try { body = JSON.parse(await request.text()); } catch { return json({ error: "invalid_json" }, 400); }
-  const raw = Array.isArray(body?.requests) ? body.requests : null;
-  if (!raw || raw.length === 0 || raw.length > MAX_REQUESTS_PER_CALL) return json({ error: "requests_must_be_1_to_12" }, 400);
+export async function runOhlcvRequests(env, raw, deps) {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_REQUESTS_PER_CALL) {
+    return { status: 400, body: { contract: OHLCV_GATEWAY_CONTRACT, error: "requests_must_be_1_to_12" } };
+  }
   const requests = [];
   for (const [index, item] of raw.entries()) {
     const checked = validateOhlcvRequest(item, env);
-    if (checked.error) return json({ error: checked.error, index }, 400);
+    if (checked.error) return { status: 400, body: { contract: OHLCV_GATEWAY_CONTRACT, error: checked.error, index } };
     requests.push(checked.value);
   }
 
   const cooldown = await deps.readQuotaCooldown(env);
-  if (cooldown) return json({ contract: OHLCV_GATEWAY_CONTRACT, error: "mcp_quota_cooldown_active", quota_cooldown_until: cooldown.until }, 503);
+  if (cooldown) return { status: 503, body: { contract: OHLCV_GATEWAY_CONTRACT, error: "mcp_quota_cooldown_active", quota_cooldown_until: cooldown.until } };
 
   let metadata, accessToken;
   try {
     metadata = await deps.fetchOAuthMetadata(env);
     accessToken = await deps.getValidAccessToken(env, metadata);
   } catch (error) {
-    return json({ contract: OHLCV_GATEWAY_CONTRACT, error: asString(error?.code) || "oauth_unavailable" }, 503);
+    return { status: 503, body: { contract: OHLCV_GATEWAY_CONTRACT, error: asString(error?.code) || "oauth_unavailable" } };
   }
   const endpoint = asString(metadata.mcp_endpoint);
 
@@ -186,10 +173,10 @@ export async function handleOhlcvGateway(request, env, deps) {
         try { await deps.writeQuotaCooldown(env, error.quota_cooldown_until); } catch { /* best effort */ }
         // Stop immediately: every further call would also be rejected and count against the account.
         results.push({ ok: false, request: args, error: "mcp_quota_exceeded" });
-        return json({ contract: OHLCV_GATEWAY_CONTRACT, error: "mcp_quota_exceeded", quota_cooldown_until: error.quota_cooldown_until, results }, 429);
+        return { status: 429, body: { contract: OHLCV_GATEWAY_CONTRACT, error: "mcp_quota_exceeded", quota_cooldown_until: error.quota_cooldown_until, results } };
       }
       results.push({ ok: false, request: args, error: asString(error?.code) || "mcp_request_failed", upstream_status: Number.isInteger(error?.status) ? error.status : null });
     }
   }
-  return json({ contract: OHLCV_GATEWAY_CONTRACT, fetched_at: new Date().toISOString(), results }, 200);
+  return { status: 200, body: { contract: OHLCV_GATEWAY_CONTRACT, fetched_at: new Date().toISOString(), results } };
 }

@@ -1,3 +1,4 @@
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema, registerIdentity, recordComparison, isTrusted, listRegistry, policyFromEnv, PARITY_REGISTRY_VERSION } from "./parity-registry.mjs";
@@ -919,6 +920,98 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   }
 }
 
+/**
+ * local_computation ingest shared by the authenticated HTTP endpoint and the
+ * RPC entrypoint (LocalComputationIngress). Records are stored as observed;
+ * only parity-approved identities enter the trusted lane.
+ */
+async function ingestLocalCalculation(env: Env, payload: unknown): Promise<{ status: number; body: JsonObject }> {
+  const preliminary = validateLocalCalculation(payload);
+  if (!preliminary.valid && preliminary.errors.some(error => error !== "calculation_stale" && error !== "computed_at_in_future")) {
+    return { status: 400, body: { error: "Invalid local calculation contract", validation_errors: preliminary.errors } };
+  }
+  const record = payload as Record<string, unknown>;
+  if (containsCredentialFields(record)) {
+    return { status: 400, body: { error: "Credential-like fields are not permitted in evidence payloads" } };
+  }
+  const key = safeKeyPart(asText(record.candle_key));
+  const engine = asText(record.engine);
+  if (!key || !LOCAL_ENGINES.includes(engine as typeof LOCAL_ENGINES[number])) {
+    return { status: 400, body: { error: "Invalid candle_key or engine" } };
+  }
+  const validation = validateLocalCalculation(record, {
+    symbol: asText(record.symbol),
+    timeframe: asText(record.timeframe),
+    candle_key: key,
+    candle_time: asText(record.candle_time)
+  });
+  if (!validation.valid) return { status: 400, body: { error: "Invalid or stale local calculation contract", validation_errors: validation.errors } };
+  const identity = identityOf(record);
+  if (!identity) return { status: 400, body: { error: "Local calculation provenance must carry SHA-256 source_hash and implementation_hash" } };
+  const stored = {
+    schema_version: record.schema_version,
+    engine,
+    symbol: record.symbol,
+    timeframe: record.timeframe,
+    candle_time: record.candle_time,
+    candle_key: key,
+    computed_at: record.computed_at,
+    calculation_version: record.calculation_version,
+    values: record.values,
+    provenance: record.provenance,
+    received_at: new Date().toISOString()
+  };
+  // Every output is observed; only parity-approved identities enter the trusted lane.
+  await ensureSchema(env.DB);
+  await registerIdentity(env.DB, identity);
+  await env.WEBHOOK_BUFFER.put(OBSERVED_PREFIX + key + ":" + engine, JSON.stringify(stored), LOCAL_TTL);
+  const reconciliation = await reconcileLocalComputation(env, key);
+  const trustStatus = (reconciliation.trust as Record<string, boolean>)[engine] ? "approved_by_parity" : "candidate_pending_parity";
+
+  // Trigger fusion only after all three local engines and all configured webhook sources exist.
+  const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
+  const [localRecords, webhookRecords] = await Promise.all([
+    Promise.all(LOCAL_ENGINES.map(name => env.WEBHOOK_BUFFER.get("localcalc:" + key + ":" + name))),
+    Promise.all(required.map(name => env.WEBHOOK_BUFFER.get("candle:" + key + ":" + name)))
+  ]);
+  if (localRecords.every(Boolean) && webhookRecords.every(Boolean)) {
+    const priorAnalysis = await env.WEBHOOK_BUFFER.get("analysis:" + key);
+    if (priorAnalysis) {
+      try {
+        const prior = JSON.parse(priorAnalysis) as JsonObject;
+        if (prior.status === "complete") {
+          return { status: 202, body: { status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: "already_processed" } };
+        }
+      } catch { /* malformed marker does not block a retry */ }
+    }
+    const payloads: Record<string, WebhookPayload> = {};
+    for (let index = 0; index < required.length; index++) {
+      try { payloads[required[index]] = JSON.parse(webhookRecords[index] as string) as WebhookPayload; } catch { /* fusion will report missing/malformed source */ }
+    }
+    if (required.every(name => payloads[name])) {
+      try {
+        const outcome = await runAnalysis(env, key, asText(record.symbol), asText(record.timeframe), payloads);
+        return { status: 202, body: { status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: outcome.status, missing_evidence: outcome.missing_evidence } };
+      } catch (error) {
+        await setAnalysisRunStatus(env, key, "failed", { message: error instanceof Error ? error.message : "Unknown analysis error" }, "analysis_failed");
+        return { status: 502, body: { status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: "failed", error: error instanceof Error ? error.message : "Unknown analysis error" } };
+      }
+    }
+  }
+  return { status: 202, body: { status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: "waiting_for_evidence" } };
+}
+
+/**
+ * RPC-only ingress for the local_computation lane (Service Binding with
+ * entrypoint "LocalComputationIngress"). RPC methods are not reachable over
+ * public HTTP, so internal producers need no shared secret.
+ */
+export class LocalComputationIngress extends WorkerEntrypoint<Env> {
+  async submit(record: unknown): Promise<{ status: number; body: JsonObject }> {
+    return ingestLocalCalculation(this.env, record);
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -992,79 +1085,8 @@ export default {
       } catch { return json({ error: "Request body could not be read" }, 400); }
       let payload: unknown;
       try { payload = JSON.parse(bodyText); } catch { return json({ error: "Request body must be valid JSON" }, 400); }
-      const preliminary = validateLocalCalculation(payload);
-      if (!preliminary.valid && preliminary.errors.some(error => error !== "calculation_stale" && error !== "computed_at_in_future")) {
-        return json({ error: "Invalid local calculation contract", validation_errors: preliminary.errors }, 400);
-      }
-      const record = payload as Record<string, unknown>;
-      if (containsCredentialFields(record)) {
-        return json({ error: "Credential-like fields are not permitted in evidence payloads" }, 400);
-      }
-      const key = safeKeyPart(asText(record.candle_key));
-      const engine = asText(record.engine);
-      if (!key || !LOCAL_ENGINES.includes(engine as typeof LOCAL_ENGINES[number])) {
-        return json({ error: "Invalid candle_key or engine" }, 400);
-      }
-      const validation = validateLocalCalculation(record, {
-        symbol: asText(record.symbol),
-        timeframe: asText(record.timeframe),
-        candle_key: key,
-        candle_time: asText(record.candle_time)
-      });
-      if (!validation.valid) return json({ error: "Invalid or stale local calculation contract", validation_errors: validation.errors }, 400);
-      const identity = identityOf(record);
-      if (!identity) return json({ error: "Local calculation provenance must carry SHA-256 source_hash and implementation_hash" }, 400);
-      const stored = {
-        schema_version: record.schema_version,
-        engine,
-        symbol: record.symbol,
-        timeframe: record.timeframe,
-        candle_time: record.candle_time,
-        candle_key: key,
-        computed_at: record.computed_at,
-        calculation_version: record.calculation_version,
-        values: record.values,
-        provenance: record.provenance,
-        received_at: new Date().toISOString()
-      };
-      // Every output is observed; only parity-approved identities enter the trusted lane.
-      await ensureSchema(env.DB);
-      await registerIdentity(env.DB, identity);
-      await env.WEBHOOK_BUFFER.put(OBSERVED_PREFIX + key + ":" + engine, JSON.stringify(stored), LOCAL_TTL);
-      const reconciliation = await reconcileLocalComputation(env, key);
-      const trustStatus = (reconciliation.trust as Record<string, boolean>)[engine] ? "approved_by_parity" : "candidate_pending_parity";
-
-      // Trigger fusion only after all three local engines and all configured webhook sources exist.
-      const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
-      const [localRecords, webhookRecords] = await Promise.all([
-        Promise.all(LOCAL_ENGINES.map(name => env.WEBHOOK_BUFFER.get("localcalc:" + key + ":" + name))),
-        Promise.all(required.map(name => env.WEBHOOK_BUFFER.get("candle:" + key + ":" + name)))
-      ]);
-      if (localRecords.every(Boolean) && webhookRecords.every(Boolean)) {
-        const priorAnalysis = await env.WEBHOOK_BUFFER.get("analysis:" + key);
-        if (priorAnalysis) {
-          try {
-            const prior = JSON.parse(priorAnalysis) as JsonObject;
-            if (prior.status === "complete") {
-              return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: "already_processed" }, 202);
-            }
-          } catch { /* malformed marker does not block a retry */ }
-        }
-        const payloads: Record<string, WebhookPayload> = {};
-        for (let index = 0; index < required.length; index++) {
-          try { payloads[required[index]] = JSON.parse(webhookRecords[index] as string) as WebhookPayload; } catch { /* fusion will report missing/malformed source */ }
-        }
-        if (required.every(name => payloads[name])) {
-          try {
-            const outcome = await runAnalysis(env, key, asText(record.symbol), asText(record.timeframe), payloads);
-            return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: outcome.status, missing_evidence: outcome.missing_evidence }, 202);
-          } catch (error) {
-            await setAnalysisRunStatus(env, key, "failed", { message: error instanceof Error ? error.message : "Unknown analysis error" }, "analysis_failed");
-            return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: "failed", error: error instanceof Error ? error.message : "Unknown analysis error" }, 502);
-          }
-        }
-      }
-      return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: "waiting_for_evidence" }, 202);
+      const result = await ingestLocalCalculation(env, payload);
+      return json(result.body, result.status);
     }
     if (url.pathname === "/news/analyze" && request.method === "POST") {
       if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {

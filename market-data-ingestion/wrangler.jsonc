@@ -10,17 +10,19 @@
       "id": "4ada6196de5a4000a28a047bf6b30ff3"
     }
   ],
-  // TradingView OHLCV comes only through the news-ingestion Worker, which owns
+  // RPC Service Bindings (no shared secrets). TradingView OHLCV comes only through the news-ingestion Worker, which owns
   // the TradingView MCP OAuth grant and the account-wide quota cooldown.
   "services": [
     {
       "binding": "TV_GATEWAY",
-      "service": "xauusd-fundamental-news-ingestion"
+      "service": "xauusd-fundamental-news-ingestion",
+      "entrypoint": "TvGateway"
     },
-    // local_computation lane -> AI Worker POST /evidence/local-calculation
+    // local_computation lane -> AI Worker LocalComputationIngress.submit()
     {
       "binding": "AI_WORKER",
-      "service": "xauusd-ai-trading-assistant"
+      "service": "xauusd-ai-trading-assistant",
+      "entrypoint": "LocalComputationIngress"
     }
   ],
   "vars": {

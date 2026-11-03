@@ -103,28 +103,20 @@ async function reserveBudget(kv, env, wanted, now) {
 }
 
 async function callGateway(env, requests) {
-  const secret = asString(env.TV_GATEWAY_SECRET);
-  if (!secret) throw Object.assign(new Error("TV_GATEWAY_SECRET is not configured"), { code: "gateway_not_configured" });
-  const init = {
-    method: "POST",
-    headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
-    body: JSON.stringify({ requests: requests.map(({ symbol, interval, count }) => ({ symbol, interval, count })) }),
-    signal: AbortSignal.timeout(60000)
-  };
-  // Prefer the Service Binding; the URL is a fallback for tests/preview.
-  const response = env.TV_GATEWAY
-    ? await env.TV_GATEWAY.fetch("https://tv-gateway.internal/internal/tv-ohlcv", init)
-    : await fetch(new URL("/internal/tv-ohlcv", asString(env.TV_GATEWAY_URL) || "https://news.cryptophys.work").toString(), init);
-  let body = null;
-  try { body = await response.json(); } catch { body = null; }
-  if (response.status === 429 || response.status === 503) {
+  // RPC Service Binding (entrypoint "TvGateway" on the news Worker): not
+  // reachable over public HTTP, so no shared secret is involved.
+  if (typeof env.TV_GATEWAY?.ohlcv !== "function") {
+    throw Object.assign(new Error("TV_GATEWAY RPC binding is not configured"), { code: "gateway_not_configured" });
+  }
+  const { status, body } = await env.TV_GATEWAY.ohlcv(requests.map(({ symbol, interval, count }) => ({ symbol, interval, count })));
+  if (status === 429 || status === 503) {
     throw Object.assign(new Error("TradingView MCP gateway unavailable"), {
-      code: asString(body?.error) || "gateway_unavailable", http_status: response.status,
+      code: asString(body?.error) || "gateway_unavailable", http_status: status,
       quota_cooldown_until: asString(body?.quota_cooldown_until) || null, partial: body?.results || []
     });
   }
-  if (!response.ok || !Array.isArray(body?.results)) {
-    throw Object.assign(new Error("TradingView MCP gateway request failed"), { code: asString(body?.error) || "gateway_request_failed", http_status: response.status });
+  if (status !== 200 || !Array.isArray(body?.results)) {
+    throw Object.assign(new Error("TradingView MCP gateway request failed"), { code: asString(body?.error) || "gateway_request_failed", http_status: status });
   }
   return body.results;
 }

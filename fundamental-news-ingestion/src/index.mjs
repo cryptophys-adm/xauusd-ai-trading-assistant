@@ -1,4 +1,4 @@
-import { handleOhlcvGateway } from "./tv-gateway.mjs";
+import { runOhlcvRequests } from "./tv-gateway.mjs";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -978,7 +978,7 @@ async function buildHealth(env) {
     oauth_redirect_uri_configured: Boolean(asString(env.TV_MCP_REDIRECT_URI).trim()),
     oauth_client_id_configured: Boolean(asString(env.TV_MCP_CLIENT_ID).trim()),
     oauth_store_configured: Boolean(env.OAUTH_STORE),
-    ohlcv_gateway_configured: Boolean(asString(env.TV_GATEWAY_SECRET)),
+    ohlcv_gateway: "rpc:TvGateway",
     provider_cooldown_until: providerCooldown?.until || null,
     provider_cooldown_reason: providerCooldown?.reason || null,
     last_scheduled_ingest: await readLastScheduledPull(env)
@@ -1101,6 +1101,20 @@ async function handlePull(request, env, ctx, options = {}) {
   }
 }
 
+/** Shared-grant OHLCV runner used by the TvGateway RPC entrypoint (src/worker.mjs). */
+export function runTvOhlcv(env, requests) {
+  return runOhlcvRequests(env, requests, {
+    fetch: (...args) => fetch(...args),
+    requestId: () => randomBase64Url(12),
+    fetchOAuthMetadata,
+    getValidAccessToken,
+    readQuotaCooldown,
+    writeQuotaCooldown,
+    parseQuotaCooldownUntil,
+    extractMcpErrorText
+  });
+}
+
 export const internals = {
   parseArticlesFromMcpPayload,
   dedupeArticles,
@@ -1134,25 +1148,10 @@ export default {
       return handlePull(request, env, ctx);
     }
 
-    if (request.method === "POST" && url.pathname === "/internal/tv-ohlcv") {
-      // Single owner of the TradingView MCP OAuth grant and quota cooldown;
-      // serves OHLCV to the local-engine market-data Worker.
-      return handleOhlcvGateway(request, env, {
-        fetch: (...args) => fetch(...args),
-        requestId: () => randomBase64Url(12),
-        fetchOAuthMetadata,
-        getValidAccessToken,
-        readQuotaCooldown,
-        writeQuotaCooldown,
-        parseQuotaCooldownUntil,
-        extractMcpErrorText
-      });
-    }
-
     return json(
       {
         error: "Not found",
-        endpoints: ["GET /health", "GET /oauth/start", "GET /oauth/callback", "POST /pull", "POST /internal/tv-ohlcv"]
+        endpoints: ["GET /health", "GET /oauth/start", "GET /oauth/callback", "POST /pull"]
       },
       404
     );
