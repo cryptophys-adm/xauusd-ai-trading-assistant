@@ -782,4 +782,161 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return handleAnalyze(request, env);
     }
 
-    if (request.metho
+    if (request.method === "GET" && url.pathname === "/dashboard") {
+      return new Response(DASHBOARD_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/status") {
+      let ingestion: unknown = null;
+      try {
+        const r = await fetch(asText(env.INGEST_URL || "https://news.cryptophys.work") + "/health");
+        ingestion = await r.json();
+      } catch { ingestion = { error: "unreachable" }; }
+      return json({
+        ai_worker: {
+          status: "ok",
+          ingest_url: asText(env.INGEST_URL),
+          ingest_secret: Boolean(env.INGEST_SECRET),
+          webhook_secret: Boolean(env.WEBHOOK_SECRET),
+          news_ingestion_rpc: Boolean(env.NEWS_INGESTION)
+        },
+        ingestion_worker: ingestion,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/news") {
+      const limit = Math.min(50, Math.max(1, Number(url.searchParams.get("limit") || "20")));
+      const rows = await env.DB.prepare(
+        "SELECT analysis_key, fetched_at, analyzed_at, article_count, recommendation_json FROM news_analyses ORDER BY analyzed_at DESC LIMIT ?"
+      ).bind(limit).all();
+      const items = (rows.results || []).map((r: any) => {
+        let rec: any = {};
+        try { rec = JSON.parse(asText(r.recommendation_json) || "{}"); } catch {}
+        return {
+          analysis_key: r.analysis_key,
+          fetched_at: r.fetched_at,
+          analyzed_at: r.analyzed_at,
+          article_count: r.article_count,
+          recommendation: rec?.recommendation || null,
+          confidence: rec?.confidence ?? null
+        };
+      });
+      return json({ status: "ok", count: items.length, items });
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/api/news/")) {
+      const key = decodeURIComponent(url.pathname.slice("/api/news/".length));
+      const row = await env.DB.prepare(
+        "SELECT analysis_key, fetched_at, analyzed_at, article_count, evidence_json, analyst_output, counselor_output, reasoner_output, recommendation_json FROM news_analyses WHERE analysis_key = ? LIMIT 1"
+      ).bind(key).first();
+      if (!row) return json({ status: "not_found" }, 404);
+      let evidence: any = null, recommendation: any = {};
+      try { evidence = JSON.parse(asText(row.evidence_json) || "null"); } catch {}
+      try { recommendation = JSON.parse(asText(row.recommendation_json) || "{}"); } catch {}
+      return json({
+        status: "ok",
+        analysis_key: row.analysis_key,
+        fetched_at: row.fetched_at,
+        analyzed_at: row.analyzed_at,
+        article_count: row.article_count,
+        evidence,
+        analyst_output: asText(row.analyst_output),
+        counselor_output: asText(row.counselor_output),
+        reasoner_output: asText(row.reasoner_output),
+        recommendation
+      });
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/decisions") {
+      const limit = Math.min(50, Math.max(1, Number(url.searchParams.get("limit") || "20")));
+      const rows = await env.DB.prepare(
+        "SELECT candle_key, timestamp, decision, confidence, entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning FROM trade_decisions ORDER BY timestamp DESC LIMIT ?"
+      ).bind(limit).all();
+      const items = (rows.results || []).map((r: any) => ({
+        candle_key: r.candle_key,
+        timestamp: r.timestamp,
+        decision: r.decision,
+        confidence: r.confidence,
+        entry_price: r.entry_price,
+        stop_loss: r.stop_loss,
+        take_profit: r.take_profit,
+        risk_reward: r.risk_reward,
+        position_size_pct: r.position_size_pct,
+        reasoning: asText(r.reasoning).slice(0, 300)
+      }));
+      return json({ status: "ok", count: items.length, items });
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/api/decision/")) {
+      const key = decodeURIComponent(url.pathname.slice("/api/decision/".length));
+      const row = await env.DB.prepare(
+        "SELECT candle_key, timestamp, ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY timestamp DESC LIMIT 1"
+      ).bind(key).first();
+      if (!row) return json({ status: "not_found" }, 404);
+      let synthesis: any = null;
+      try { synthesis = JSON.parse(asText(row.ai_analysis) || "null"); } catch {}
+      return json({
+        status: "ok",
+        candle_key: row.candle_key,
+        timestamp: row.timestamp,
+        synthesis
+      });
+    }
+
+    return json({ error: "Not found", endpoints: ["GET /health", "POST /webhook", "POST /v1/analyze", "GET /dashboard", "GET /api/status", "GET /api/news", "GET /api/decisions"] }, 404);
+  }
+
+async function queueHandler(batch: MessageBatch<QueueTask>, env: Env): Promise<void> {
+
+    // Messages are processed sequentially. max_concurrency=1 in wrangler.jsonc
+    // prevents concurrent consumer invocations from racing on the same candle.
+    for (const message of batch.messages) {
+      try {
+        const task = message.body;
+        if (task.kind === "webhook_reconcile") {
+          await reconcileWebhookTask(env, task);
+        } else if (task.kind === "analysis") {
+          await processAnalysisTask(env, task);
+        } else {
+          throw new Error("Unsupported queue task kind");
+        }
+        message.ack();
+      } catch (error) {
+        console.error("queue_task_failed", JSON.stringify({
+          message_id: message.id,
+          attempts: message.attempts,
+          kind: message.body?.kind,
+          event_id: message.body?.event_id,
+          error: error instanceof Error ? error.message : "Unknown queue error"
+        }));
+        // Do not ack failures: Queue retries with the configured delay and
+        // moves the message to the DLQ after max_retries is exhausted.
+        message.retry({ delaySeconds: 30 });
+      }
+    }
+  }
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    if (request.method === "OPTIONS") {
+      const origin = corsOrigin(request);
+      if (!origin) return new Response(null, { status: 405 });
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": origin,
+          "Vary": "Origin",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "content-type, x-webhook-secret, x-request-id, x-request-timestamp, x-content-sha256, x-signature, x-auth-scheme",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+    const response = await handleRequest(request, env);
+    return applyCors(response, request);
+  },
+  async queue(batch: MessageBatch<QueueTask>, env: Env): Promise<void> {
+    return queueHandler(batch, env);
+  }
+};
