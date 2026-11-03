@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "xauusd-fundamental-news-ingestion",
-  "main": "src/index.mjs",
+  "main": "src/worker.mjs",
   "compatibility_date": "2026-10-31",
   "workers_dev": true,
   "kv_namespaces": [

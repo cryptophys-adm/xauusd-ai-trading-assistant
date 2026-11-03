@@ -18,11 +18,10 @@ function fakeGateway({ nowSec = Math.floor(Date.now() / 1000), status = 200, bod
   const calls = [];
   return {
     calls,
-    async fetch(url, init) {
-      const request = JSON.parse(init.body);
-      calls.push({ url, auth: init.headers.authorization, requests: request.requests });
-      if (body) return new Response(JSON.stringify(body), { status });
-      const results = request.requests.map((r) => {
+    async ohlcv(requests) {
+      calls.push({ requests });
+      if (body) return { status, body };
+      const results = requests.map((r) => {
         const spec = SERIES.find((s) => s.symbol === r.symbol && s.interval === r.interval);
         const lastOpen = Math.floor(nowSec / spec.seconds) * spec.seconds; // forming bar
         const t = Array.from({ length: r.count }, (_, i) => lastOpen - (r.count - 1 - i) * spec.seconds);
@@ -34,14 +33,13 @@ function fakeGateway({ nowSec = Math.floor(Date.now() / 1000), status = 200, bod
             v: t.map((_, i) => (r.symbol === "TVC:DXY" ? null : 100 + (i % 13))) }
         };
       });
-      return new Response(JSON.stringify({ contract: "cryptophys.tv-ohlcv-gateway.v1", results }), { status: 200 });
+      return { status: 200, body: { contract: "cryptophys.tv-ohlcv-gateway.v1", results } };
     }
   };
 }
 
 const env = (overrides = {}) => ({
   MARKET_DATA_INGEST_SECRET: SECRET,
-  TV_GATEWAY_SECRET: "gateway-secret",
   MARKET_DATA_CACHE: new MemoryKV(),
   ...overrides
 });
@@ -95,7 +93,6 @@ test("POST /pull bootstraps via the TradingView gateway within the per-run budge
   assert.equal(first.status, "ok");
   assert.equal(first.requested, 8);
   assert.equal(first.deferred, 2);
-  assert.equal(gateway.calls[0].auth, "Bearer gateway-secret");
   assert.deepEqual(gateway.calls[0].requests[0], { symbol: "OANDA:XAUUSD", interval: "5m", count: 5000 });
   assert.ok(gateway.calls[0].requests.every((r) => Object.keys(r).join() === "symbol,interval,count"));
 
@@ -136,8 +133,8 @@ test("daily MCP call budget stops pulls without contacting the gateway", async (
   assert.equal(gateway.calls.length, 0);
 });
 
-test("pull fails closed when the gateway secret is missing", async () => {
-  const response = await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), env({ TV_GATEWAY_SECRET: "", TV_GATEWAY: fakeGateway() }));
+test("pull fails closed when the TvGateway RPC binding is missing", async () => {
+  const response = await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), env());
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.status, "gateway_not_configured");
@@ -157,7 +154,8 @@ test("health exposes configuration status but no secrets", async () => {
   assert.equal(body.pull_auth_configured, true);
   assert.equal(body.series.length, SERIES.length);
   const text = JSON.stringify(body);
-  assert.ok(!text.includes(SECRET) && !text.includes("gateway-secret"));
+  assert.ok(!text.includes(SECRET));
+  assert.equal(body.local_publisher_configured, false);
 });
 
 test("GET /engine-shadow runs the partial Prophet kernel on TradingView-native series and never trusts it", async () => {
@@ -190,17 +188,16 @@ function fakeAiWorker(status = 202) {
   const posts = [];
   return {
     posts,
-    async fetch(url, init) {
-      const body = JSON.parse(init.body);
-      posts.push({ url, secret: init.headers["x-webhook-secret"], body });
-      return new Response(JSON.stringify({ status: "accepted", engine: body.engine, trust_status: "candidate_pending_parity", analysis_status: "waiting_for_evidence" }), { status });
+    async submit(body) {
+      posts.push({ body });
+      return { status, body: { status: "accepted", engine: body.engine, trust_status: "candidate_pending_parity", analysis_status: "waiting_for_evidence" } };
     }
   };
 }
 
 test("publisher posts mizan+prophet local_computation for the latest closed H1 bar once, keyed like the webhook", async () => {
   const ai = fakeAiWorker();
-  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai, AI_WEBHOOK_SECRET: "ai-secret" });
+  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai });
   await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
   await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
   const lastH1 = (await buildBundle(e)).timeframes.H1.candles.at(-1);
@@ -209,7 +206,6 @@ test("publisher posts mizan+prophet local_computation for the latest closed H1 b
   const first = await publishLocalComputation(e, { now });
   assert.equal(first.status, "published", JSON.stringify(first));
   assert.deepEqual(ai.posts.map((p) => p.body.engine), ["mizan", "prophet"]);
-  assert.ok(ai.posts.every((p) => p.secret === "ai-secret" && p.url.endsWith("/evidence/local-calculation")));
   assert.equal(first.candle_key, `OANDA:XAUUSD:60:${lastH1.time * 1000}`);
   assert.equal(ai.posts[1].body.values.candle.c, lastH1.close);
   assert.deepEqual(first.not_produced, ["gmi"]);
@@ -225,12 +221,12 @@ test("publisher posts mizan+prophet local_computation for the latest closed H1 b
   assert.equal(latest.last_publish.candle_key, first.candle_key);
 });
 
-test("publisher stays off without the AI Worker secret/binding and records failures without a dedupe marker", async () => {
+test("publisher stays off without the AI Worker RPC binding and records failures without a dedupe marker", async () => {
   const off = await publishLocalComputation(env({ TV_GATEWAY: fakeGateway() }));
   assert.equal(off.status, "publisher_not_configured");
 
   const ai = fakeAiWorker(400);
-  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai, AI_WEBHOOK_SECRET: "ai-secret" });
+  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai });
   await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
   await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
   const lastH1 = (await buildBundle(e)).timeframes.H1.candles.at(-1);

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { validateOhlcvRequest, parseToolResult, normalizeOhlcvColumns } from "../src/tv-gateway.mjs";
 
-const { default: worker, internals } = await import(new URL("../src/index.mjs", import.meta.url).href);
+const { default: worker, internals, runTvOhlcv } = await import(new URL("../src/index.mjs", import.meta.url).href);
 
 class MemoryKV {
   constructor() { this.map = new Map(); }
@@ -14,7 +14,6 @@ class MemoryKV {
 function createEnv(overrides = {}) {
   return {
     INGEST_SECRET: "ingest-secret",
-    TV_GATEWAY_SECRET: "gateway-secret-0123456789abcdef0123",
     OAUTH_STORE: new MemoryKV(),
     TV_MCP_CLIENT_ID: "client-id",
     TV_MCP_REDIRECT_URI: "https://news.example.com/oauth/callback",
@@ -25,9 +24,6 @@ function createEnv(overrides = {}) {
 }
 const ctx = { waitUntil() {} };
 const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-const gatewayRequest = (body, secret = "gateway-secret-0123456789abcdef0123") => new Request("https://news.example.com/internal/tv-ohlcv", {
-  method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify(body)
-});
 async function authorize(env) {
   await env.OAUTH_STORE.put("tv_mcp:oauth_token", JSON.stringify({
     access_token: "access", refresh_token: "refresh", token_type: "Bearer", expires_at: Math.floor(Date.now() / 1000) + 3600
@@ -75,11 +71,12 @@ test("parseToolResult and normalizeOhlcvColumns accept rows and columns, keep nu
   assert.equal(parseToolResult({ result: { structuredContent: { a: 1 } } }).a, 1);
 });
 
-test("gateway requires its own bearer secret and is disabled without one", async () => {
+test("the OHLCV gateway is RPC-only: no public HTTP route exists", async () => {
   const env = createEnv();
-  assert.equal((await worker.fetch(gatewayRequest({ requests: [] }, "wrong"), env, ctx)).status, 401);
-  assert.equal((await worker.fetch(gatewayRequest({ requests: [] }, "ingest-secret"), env, ctx)).status, 401);
-  assert.equal((await worker.fetch(gatewayRequest({ requests: [] }), createEnv({ TV_GATEWAY_SECRET: "" }), ctx)).status, 503);
+  const response = await worker.fetch(new Request("https://news.example.com/internal/tv-ohlcv", { method: "POST", body: "{}" }), env, ctx);
+  assert.equal(response.status, 404);
+  const health = await (await worker.fetch(new Request("https://news.example.com/health"), env, ctx)).json();
+  assert.equal(health.ohlcv_gateway, "rpc:TvGateway");
 });
 
 test("gateway calls mcp-tv-get-ohlcv with validated columns args using the shared OAuth token", async () => {
@@ -89,9 +86,8 @@ test("gateway calls mcp-tv-get-ohlcv with validated columns args using the share
     success: true, symbol: "OANDA:XAUUSD", interval: "5m", has_more: true, next_date_to: "2026-11-03T00:25:00Z",
     bars: { t: [1793666100, 1793666400], o: [1, 2], h: [2, 3], l: [0.5, 1.5], c: [1.5, 2.5], v: [10, 20] }
   }));
-  const response = await worker.fetch(gatewayRequest({ requests: [{ symbol: "OANDA:XAUUSD", interval: "5m", count: 2 }] }), env, ctx);
-  assert.equal(response.status, 200);
-  const body = await response.json();
+  const { status, body } = await runTvOhlcv(env, [{ symbol: "OANDA:XAUUSD", interval: "5m", count: 2 }]);
+  assert.equal(status, 200);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].method, "tools/call");
   assert.equal(calls[0].params.name, "mcp-tv-get-ohlcv");
@@ -105,16 +101,16 @@ test("quota exhaustion stops the batch, records the shared cooldown, and later c
   const env = createEnv();
   await authorize(env);
   const calls = installFetch(() => jsonResponse({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "TOOL_QUOTA_EXCEEDED: access to MCP is suspended until 23:30 UTC" } }));
-  const response = await worker.fetch(gatewayRequest({ requests: [
+  const first = await runTvOhlcv(env, [
     { symbol: "OANDA:XAUUSD", interval: "5m", count: 2 },
     { symbol: "TVC:DXY", interval: "4h", count: 2 }
-  ] }), env, ctx);
-  assert.equal(response.status, 429);
+  ]);
+  assert.equal(first.status, 429);
   assert.equal(calls.length, 1);
   assert.ok(await env.OAUTH_STORE.get("tv_mcp:quota_cooldown_until"));
-  const again = await worker.fetch(gatewayRequest({ requests: [{ symbol: "OANDA:XAUUSD", interval: "5m", count: 2 }] }), env, ctx);
+  const again = await runTvOhlcv(env, [{ symbol: "OANDA:XAUUSD", interval: "5m", count: 2 }]);
   assert.equal(again.status, 503);
-  assert.equal((await again.json()).error, "mcp_quota_cooldown_active");
+  assert.equal(again.body.error, "mcp_quota_cooldown_active");
   assert.equal(calls.length, 1);
 });
 
@@ -122,8 +118,9 @@ test("gateway rejects oversize batches and invalid requests before touching OAut
   const env = createEnv();
   globalThis.fetch = async () => { throw new Error("must not fetch"); };
   const many = Array.from({ length: 13 }, () => ({ symbol: "OANDA:XAUUSD", interval: "5m", count: 1 }));
-  assert.equal((await worker.fetch(gatewayRequest({ requests: many }), env, ctx)).status, 400);
-  const bad = await worker.fetch(gatewayRequest({ requests: [{ symbol: "BINANCE:BTCUSDT", interval: "5m", count: 1 }] }), env, ctx);
+  assert.equal((await runTvOhlcv(env, many)).status, 400);
+  assert.equal((await runTvOhlcv(env, [])).status, 400);
+  const bad = await runTvOhlcv(env, [{ symbol: "BINANCE:BTCUSDT", interval: "5m", count: 1 }]);
   assert.equal(bad.status, 400);
-  assert.equal((await bad.json()).error, "symbol_not_allowed");
+  assert.equal(bad.body.error, "symbol_not_allowed");
 });
