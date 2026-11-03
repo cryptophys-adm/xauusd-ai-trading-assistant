@@ -103,6 +103,19 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   tr:hover { background:var(--panel2); }
   .loader { color:var(--muted); font-size:13px; padding:20px; text-align:center; }
   .error { color:var(--red); padding:12px; font-size:13px; }
+  .chart-section { max-width:1600px; margin:20px auto 0; padding:0 20px; }
+  .chart-card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px; }
+  .chart-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+  .chart-title { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  .chart-title h2 { font-size:16px; margin:0; }
+  .chart-price { font-size:20px; font-weight:700; }
+  .chart-change.up { color:var(--green); } .chart-change.down { color:var(--red); }
+  .tf-group { display:flex; gap:6px; }
+  .tf { padding:5px 12px; border-radius:8px; background:var(--panel2); border:1px solid var(--border); color:var(--muted); cursor:pointer; font-size:12px; }
+  .tf.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  #price-chart { height:420px; width:100%; }
+  @media (max-width:700px){ #price-chart { height:300px; } }
+  .chart-foot { margin-top:8px; font-size:11px; color:var(--muted); display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
   .chart-box { height:260px; background:var(--panel2); border:1px dashed var(--border); border-radius:10px; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:13px; text-align:center; padding:20px; }
   .tabs { display:flex; gap:6px; margin-bottom:12px; }
   .tab { padding:6px 14px; border-radius:8px; background:var(--panel2); border:1px solid var(--border); color:var(--muted); cursor:pointer; font-size:12px; transition:all .15s; }
@@ -129,6 +142,26 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <h1>⚡ Nexus — Agent Social Feed</h1>
   <span class="badge" id="clock">--:--:--</span>
 </div>
+<section class="chart-section">
+  <div class="chart-card">
+    <div class="chart-head">
+      <div class="chart-title">
+        <h2>XAUUSD · OANDA</h2>
+        <span class="chart-price" id="chart-price">—</span>
+        <span class="chart-change" id="chart-change"></span>
+      </div>
+      <div class="tf-group" id="tf-group">
+        <div class="tf" data-tf="M5">5m</div>
+        <div class="tf" data-tf="M15">15m</div>
+        <div class="tf active" data-tf="H1">1H</div>
+        <div class="tf" data-tf="H4">4H</div>
+        <div class="tf" data-tf="D1">1D</div>
+      </div>
+    </div>
+    <div id="price-chart"><div class="loader">Loading chart...</div></div>
+    <div class="chart-foot"><span id="chart-source">TradingView native closed bars</span><span id="chart-updated"></span></div>
+  </div>
+</section>
 <div class="layout">
 
   <!-- Left sidebar: agents -->
@@ -137,17 +170,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <h3>Agents</h3>
       <div class="agent-card">
         <div class="agent-avatar av-analyst">A</div>
-        <div class="agent-info"><div class="name">Analyst</div><div class="role">News & Bias</div><div class="model">glm-4.7-flash</div></div>
+        <div class="agent-info"><div class="name">Analyst</div><div class="role">News & Bias</div><div class="model" id="model-analyst">—</div></div>
         <span class="status-dot"></span>
       </div>
       <div class="agent-card">
         <div class="agent-avatar av-counselor">C</div>
-        <div class="agent-info"><div class="name">Counselor</div><div class="role">Scenarios</div><div class="model">glm-4.7-flash</div></div>
+        <div class="agent-info"><div class="name">Counselor</div><div class="role">Scenarios</div><div class="model" id="model-counselor">—</div></div>
         <span class="status-dot"></span>
       </div>
       <div class="agent-card">
         <div class="agent-avatar av-reasoner">R</div>
-        <div class="agent-info"><div class="name">Reasoner</div><div class="role">Final Decision</div><div class="model">nemotron-120b</div></div>
+        <div class="agent-info"><div class="name">Reasoner</div><div class="role">Final Decision</div><div class="model" id="model-reasoner">—</div></div>
         <span class="status-dot"></span>
       </div>
     </div>
@@ -182,11 +215,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <div id="agent-raw" style="display:none"></div>
     </div>
 
-    <!-- Price Chart -->
-    <div class="card">
-      <h2>Price Chart (XAUUSD)</h2>
-      <div class="chart-box">OHLCV data source not yet verified (pull adapter pending). Chart will be enabled once a verified market data source is configured.</div>
-    </div>
 
   </div>
 
@@ -208,6 +236,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
 </div>
 
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <script>
 const API = "https://ai.cryptophys.work";
 const $ = (id) => document.getElementById(id);
@@ -220,6 +249,8 @@ async function loadStatus(){
   try {
     const r = await fetch(API+'/api/status'); const d = await r.json();
     const ai = d.ai_worker||{}; const ing = d.ingestion_worker||{};
+    const models = ai.models||{};
+    [['analyst','model-analyst'],['counselor','model-counselor'],['reasoner','model-reasoner']].forEach(([k,id])=>{ if(models[k]) $(id).textContent = String(models[k]).split('/').pop(); });
     const pills = [
       {label:'AI Worker', ok: ai.status==='ok'},
       {label:'Ingestion', ok: ing.status==='ok'},
@@ -316,15 +347,77 @@ async function autoLoad(){
     if(d.items && d.items.length>0) loadAnalysis(d.items[0].analysis_key);
   } catch(e){}
 }
+
+// ---- Price chart (closed TradingView bars via MarketDataReader RPC) ----
+let chart = null, candleSeries = null, volumeSeries = null, chartTf = 'H1';
+function initChart(){
+  const el = $('price-chart');
+  if (!window.LightweightCharts) { el.innerHTML = '<div class="error">Chart library failed to load.</div>'; return false; }
+  el.innerHTML = '';
+  chart = LightweightCharts.createChart(el, {
+    autoSize: true,
+    layout: { background: { color: 'transparent' }, textColor: '#8b949e' },
+    grid: { vertLines: { color: 'rgba(36,48,74,.5)' }, horzLines: { color: 'rgba(36,48,74,.5)' } },
+    rightPriceScale: { borderColor: '#24304a' },
+    timeScale: { borderColor: '#24304a', timeVisible: true, secondsVisible: false },
+    crosshair: { mode: 0 }
+  });
+  candleSeries = chart.addCandlestickSeries({ upColor:'#22c55e', downColor:'#ef4444', borderUpColor:'#22c55e', borderDownColor:'#ef4444', wickUpColor:'#22c55e', wickDownColor:'#ef4444', priceFormat:{ type:'price', precision:2, minMove:0.01 } });
+  volumeSeries = chart.addHistogramSeries({ priceFormat:{ type:'volume' }, priceScaleId:'vol' });
+  chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+  return true;
+}
+async function loadChart(fit){
+  if (!chart && !initChart()) return;
+  try {
+    const r = await fetch('/api/ohlcv?timeframe='+chartTf+'&limit=400'); const d = await r.json();
+    if (!r.ok) { $('chart-updated').textContent = 'Data unavailable: '+(d.error||r.status); return; }
+    candleSeries.setData(d.candles.map(c=>({ time:c.time, open:c.open, high:c.high, low:c.low, close:c.close })));
+    volumeSeries.setData(d.candles.filter(c=>c.volume!=null).map(c=>({ time:c.time, value:c.volume, color: c.close>=c.open?'rgba(34,197,94,.35)':'rgba(239,68,68,.35)' })));
+    if (fit) chart.timeScale().fitContent();
+    const last = d.candles[d.candles.length-1], prev = d.candles[d.candles.length-2];
+    $('chart-price').textContent = last.close.toFixed(2);
+    if (prev) { const ch = last.close-prev.close, pct = ch/prev.close*100; const el=$('chart-change'); el.textContent=(ch>=0?'+':'')+ch.toFixed(2)+' ('+(ch>=0?'+':'')+pct.toFixed(2)+'%)'; el.className='chart-change '+(ch>=0?'up':'down'); }
+    $('chart-source').textContent = d.symbol+' · '+d.timeframe+' · '+d.basis;
+    $('chart-updated').textContent = 'Last closed bar: '+new Date(d.latest_close_time).toLocaleString('en-US');
+  } catch(e){ $('chart-updated').textContent = 'Chart error: '+e.message; }
+}
+document.querySelectorAll('#tf-group .tf').forEach(t=>{
+  t.addEventListener('click',()=>{
+    document.querySelectorAll('#tf-group .tf').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active'); chartTf = t.dataset.tf; loadChart(true);
+  });
+});
+loadChart(true);
+setInterval(()=>loadChart(false), 60000);
 loadStatus(); loadNews(); loadDecisions(); autoLoad();
 setInterval(()=>{ loadStatus(); loadNews(); loadDecisions(); }, 30000);
 </script>
 </body>
 </html>`;
 
+interface MarketDataReader {
+  candles(options: { timeframe?: string; limit?: number }): Promise<{ status: number; body: unknown }>;
+}
+interface Env { MARKET_DATA?: MarketDataReader }
+
 export default {
-  async fetch(request: Request): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    // Chart data: read-only RPC to the market-data Worker (no secret, no MCP call).
+    if (request.method === "GET" && url.pathname === "/api/ohlcv") {
+      if (typeof env.MARKET_DATA?.candles !== "function") return json({ error: "market_data_binding_missing" }, 503);
+      try {
+        const { status, body } = await env.MARKET_DATA.candles({
+          timeframe: url.searchParams.get("timeframe") || "H1",
+          limit: Number(url.searchParams.get("limit") || "300")
+        });
+        return new Response(JSON.stringify(body), { status, headers: { ...JSON_HEADERS, "cache-control": "public, max-age=30" } });
+      } catch {
+        return json({ error: "market_data_unavailable" }, 502);
+      }
+    }
 
     if (url.pathname.startsWith("/api/")) {
       const target = AI_WORKER_BASE + url.pathname + url.search;
@@ -347,6 +440,6 @@ export default {
       return new Response(DASHBOARD_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" } });
     }
 
-    return json({ error: "Not found", endpoints: ["GET /", "GET /dashboard", "GET /api/*"] }, 404);
+    return json({ error: "Not found", endpoints: ["GET /", "GET /dashboard", "GET /api/ohlcv", "GET /api/*"] }, 404);
   }
 };
