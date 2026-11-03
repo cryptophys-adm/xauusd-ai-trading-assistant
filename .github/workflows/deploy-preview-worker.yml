@@ -184,16 +184,24 @@ jobs:
             gmi_v12_70: { verdict: 3, gate: 2, gmi_dir: 1, prophet_dir: 1, conflict: false }
           };
           for (const source of ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"]) {
-            const response = await fetch(base + "/webhook", {
-              method: "POST",
-              headers,
-              body: JSON.stringify({
-                source, ticker: symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
-                ...bar, ...webhookValues[source],
-                metrics: { bias: "NEUTRAL", fixture_only: true }
-              })
-            });
-            const result = await response.json();
+            // `wrangler secret put` creates a new Worker version that reaches isolates gradually:
+            // a request can still land on an isolate without WEBHOOK_SECRET for a few seconds
+            // after /health already saw it. Retry only that specific 503.
+            let response, result;
+            for (let attempt = 0; attempt < 15; attempt++) {
+              response = await fetch(base + "/webhook", {
+                method: "POST",
+                headers,
+                body: JSON.stringify({
+                  source, ticker: symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
+                  ...bar, ...webhookValues[source],
+                  metrics: { bias: "NEUTRAL", fixture_only: true }
+                })
+              });
+              result = await response.json();
+              if (!(response.status === 503 && /WEBHOOK_SECRET is not configured/.test(String(result?.error)))) break;
+              await new Promise(resolve => setTimeout(resolve, 2000));
+            }
             assert.ok(response.status === 202 || response.status === 200, "webhook rejected: " + JSON.stringify(result));
           }
 
