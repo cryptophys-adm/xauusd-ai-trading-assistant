@@ -36,7 +36,7 @@
   ],
   "vars": {
     "AI_MODEL_ANALYST": "@cf/zai-org/glm-4.7-flash",
-    "AI_MODEL_COUNSELOR": "@cf/google/gemma-4-26b-a4b-it",
+    "AI_MODEL_COUNSELOR": "@cf/zai-org/glm-5.3-flash",
     "AI_MODEL_REASONER": "@cf/nvidia/nemotron-3-120b-a12b",
     "REQUIRED_SOURCES": "prophet_r38,prophet_r37_ssot,gmi_v12_70",
     "INGEST_URL": "https://news.cryptophys.work"
@@ -80,8 +80,45 @@
     }
   },
   "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    },
     "traces": {
-      "enabled": true
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true
     }
+  },
+  "services": [
+    {
+      "binding": "NEWS_INGESTION",
+      "service": "xauusd-fundamental-news-ingestion",
+      "entrypoint": "NewsIngestionService",
+      "environment": "production"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "XAUUSD_EVENTS",
+        "queue": "xauusd-webhook-events"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "xauusd-webhook-events",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "xauusd-webhook-events-dlq",
+        "retry_delay": 30,
+        "max_concurrency": 1
+      }
+    ]
   }
 }
