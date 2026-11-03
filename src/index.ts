@@ -2,6 +2,7 @@ import { WorkerEntrypoint, tracing } from "cloudflare:workers";
 import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { parseTradingViewJson } from "./tradingview-json.mjs";
+import { chatMessages, cleanModelText, extractJsonObject } from "./model-text.mjs";
 import { identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema, registerIdentity, recordComparison, isTrusted, listRegistry, policyFromEnv, PARITY_REGISTRY_VERSION } from "./parity-registry.mjs";
 
 export interface Env {
@@ -149,6 +150,10 @@ async function reconcileLocalComputation(env: Env, candleKey: string): Promise<J
 }
 
 function extractText(result: unknown): string {
+  return cleanModelText(extractRawText(result));
+}
+
+function extractRawText(result: unknown): string {
   if (typeof result === "string") return result;
   if (result && typeof result === "object") {
     const r = result as JsonObject;
@@ -174,10 +179,10 @@ function extractText(result: unknown): string {
 }
 
 function parseDecision(text: string): JsonObject {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (match) {
+  const extracted = extractJsonObject(text);
+  if (extracted) {
     try {
-      const parsed = JSON.parse(match[0]) as JsonObject;
+      const parsed = extracted;
       const decision = asText(parsed.decision).toUpperCase();
       const nullableNumber = (value: unknown): number | null =>
         typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -345,14 +350,14 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.request.model": String(env.AI_MODEL_ANALYST as keyof AiModels)
     });
     return env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
-    prompt: [
+    messages: chatMessages([
       "You are the Fundamental News Analyst for XAUUSD decision support.",
       "Analyze only the supplied news articles. Do not infer current price action, technical indicators, or unpublished facts.",
       "Assess direct and indirect potential impact on gold (XAUUSD), US dollar (DXY), and oil (USOIL). Distinguish reported facts from interpretation and note publication-time limitations.",
-      "Return JSON only with keys: gold_bias (BULLISH, BEARISH, NEUTRAL), dollar_bias (BULLISH, BEARISH, NEUTRAL), oil_bias (BULLISH, BEARISH, NEUTRAL), sentiment (RISK_ON, RISK_OFF, MIXED, UNKNOWN), key_catalysts, key_risks, evidence_quality (LOW, MEDIUM, HIGH), stale_or_uncertain (boolean), reasoning.",
+      "Write your thesis as plain prose (4-6 sentences, no JSON, no markdown). Cover: gold bias (BULLISH, BEARISH or NEUTRAL), dollar bias, oil bias, risk sentiment, key catalysts, key risks, evidence quality (LOW, MEDIUM, HIGH) and whether the evidence is stale or uncertain. Cite article titles.",
       "Do not produce entry, stop-loss, take-profit, position size, or a technical BUY/SELL order.",
       "NEWS EVIDENCE:", JSON.stringify(evidence)
-    ].join("\n"),
+    ]),
     max_tokens: 1000,
     temperature: 0.1
   } as never); });
@@ -367,14 +372,14 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR as keyof AiModels)
     });
     return env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
-    prompt: [
+    messages: chatMessages([
       "You are the Fundamental News Counselor.",
       "Use only the news evidence and analyst output. Provide balanced conditional scenarios, not trade execution instructions.",
-      "Return JSON only with keys: bullish_scenario, bearish_scenario, neutral_scenario, what_would_confirm, what_would_invalidate, watchlist_events, conflicts_or_missing_evidence.",
+      "Challenge the analyst's thesis in plain prose (4-6 sentences, no JSON, no markdown). Cover: bullish, bearish and neutral scenarios, what would confirm or invalidate the thesis, watchlist events, and conflicts or missing evidence.",
       "Do not invent prices, technical confirmation, or unsupported causal claims.",
       "NEWS EVIDENCE:", JSON.stringify(evidence),
       "ANALYST:", analystText
-    ].join("\n"),
+    ]),
     max_tokens: 1100,
     temperature: 0.1
   } as never); });
@@ -389,25 +394,26 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
     });
     return env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
-    prompt: [
+    messages: chatMessages([
       "You are the final Fundamental News Reasoner for XAUUSD decision support.",
       "Synthesize only the supplied article evidence, analyst output, and counselor output. This is a fundamental outlook, not a technical trade signal.",
+      "Your entire response must be one JSON object: start with { and end with }. No markdown, no text outside the JSON.",
       "Return JSON only with keys: recommendation (BULLISH_BIAS, BEARISH_BIAS, NEUTRAL, WAIT_FOR_TECHNICAL_CONFIRMATION), confidence (0 to 1 or null), horizon, rationale, supporting_evidence, opposing_evidence, risks, confirmation_needed, invalidation_conditions.",
       "Do not output numeric entry, stop-loss, take-profit, risk/reward, or position size. Do not claim an executable BUY/SELL without technical evidence.",
       "If evidence is mixed, stale, or insufficient, choose WAIT_FOR_TECHNICAL_CONFIRMATION or NEUTRAL and lower confidence.",
       "NEWS EVIDENCE:", JSON.stringify(evidence),
       "ANALYST:", analystText,
       "COUNSELOR:", counselorText
-    ].join("\n"),
+    ]),
     max_tokens: 1200,
     temperature: 0.1
   } as never); });
   const reasonerText = extractText(reasonerResult);
 
   let recommendation: JsonObject;
-  const match = reasonerText.match(/\{[\s\S]*\}/);
+  const extractedRecommendation = extractJsonObject(reasonerText);
   try {
-    recommendation = match ? JSON.parse(match[0]) as JsonObject : {
+    recommendation = extractedRecommendation ? extractedRecommendation : {
       recommendation: "WAIT_FOR_TECHNICAL_CONFIRMATION",
       confidence: null,
       rationale: "Reasoner response was not valid JSON; no trade signal generated.",
@@ -693,7 +699,7 @@ async function runAnalysis(
       "gen_ai.request.model": String(env.AI_MODEL_ANALYST as keyof AiModels)
     });
     return env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
-    prompt: [
+    messages: chatMessages([
       "You are the Analyst stage in an XAUUSD decision-support pipeline.",
       "Classify the supplied indicator evidence without inventing missing values or prices.",
       "Prophet is the base directional bias. GMI can validate, block, or defer a setup but must not silently overwrite Prophet's bias.",
@@ -706,7 +712,7 @@ async function runAnalysis(
       "Set directional_bias to NEUTRAL and missing_evidence to true if evidence is missing, stale, contradictory, or insufficient.",
       "EVIDENCE:",
       JSON.stringify(evidence)
-    ].join("\n"),
+    ]),
     max_tokens: 700,
     temperature: 0.1
   } as never); });
@@ -721,7 +727,7 @@ async function runAnalysis(
       "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR as keyof AiModels)
     });
     return env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
-    prompt: [
+    messages: chatMessages([
       "You are the Counselor stage in an XAUUSD decision-support pipeline.",
       "Use only the JSON evidence and analyst output below. Do not invent prices or indicator definitions.",
       "Prophet is the base bias. GMI may validate, block, or defer a Prophet setup; it must not silently overwrite Prophet's bias.",
@@ -736,7 +742,7 @@ async function runAnalysis(
       JSON.stringify(evidence),
       "ANALYST:",
       analystText
-    ].join("\n"),
+    ]),
     max_tokens: 1400,
     temperature: 0.1
   } as never); });
@@ -751,7 +757,7 @@ async function runAnalysis(
       "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
     });
     return env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
-    prompt: [
+    messages: chatMessages([
       "You are the final Deep Reasoner stage for XAUUSD decision support.",
       "Use only the supplied evidence, analyst output, and counselor output. Do not invent market prices or claim the models verified facts they did not receive.",
       "Prophet remains the base bias. GMI may validate, block, or wait on a setup. Do not silently reverse Prophet's bias.",
@@ -767,7 +773,7 @@ async function runAnalysis(
       analystText,
       "COUNSELOR:",
       counselorText
-    ].join("\n"),
+    ]),
     max_tokens: 1200,
     temperature: 0.1
   } as never); });
@@ -1086,9 +1092,96 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
   }
 }
 
+const DASHBOARD_CORS = { "access-control-allow-origin": "*" };
+
+function dashboardJson(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), { status, headers: { ...JSON_HEADERS, ...DASHBOARD_CORS, "cache-control": "no-store" } });
+}
+
+function parseJsonText(value: unknown, fallback: unknown): unknown {
+  try { return JSON.parse(asText(value) || "null") ?? fallback; } catch { return fallback; }
+}
+
+const LOCAL_LANE_FRESH_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * Read-only API for the Nexus dashboard (nexus.cryptophys.work proxies /api/*).
+ * Exposes analysis summaries only: no secrets, no write operations.
+ */
+async function handleDashboardApi(request: Request, env: Env, url: URL): Promise<Response | null> {
+  if (request.method !== "GET" || !url.pathname.startsWith("/api/")) return null;
+  const limitParam = () => Math.min(50, Math.max(1, Number(url.searchParams.get("limit") || "20") || 20));
+  if (url.pathname === "/api/status") {
+    let ingestion: unknown = { error: "unreachable" };
+    try {
+      const r = await fetch(asText(env.INGEST_URL || "https://news.cryptophys.work").replace(/\/+$/, "") + "/health", { signal: AbortSignal.timeout(5000) });
+      ingestion = await r.json();
+    } catch { /* reported as unreachable */ }
+    let lastComparison: string | null = null;
+    try {
+      await ensureSchema(env.DB);
+      const row = await env.DB.prepare("SELECT MAX(compared_at) AS last FROM engine_parity_comparisons").first<{ last: string | null }>();
+      lastComparison = row?.last ?? null;
+    } catch { /* registry unavailable */ }
+    const lastMs = lastComparison ? Date.parse(lastComparison) : NaN;
+    return dashboardJson({
+      ai_worker: {
+        status: "ok",
+        ingest_url: asText(env.INGEST_URL),
+        ingest_secret: Boolean(env.INGEST_SECRET),
+        webhook_secret: Boolean(env.WEBHOOK_SECRET),
+        models: { analyst: env.AI_MODEL_ANALYST, counselor: env.AI_MODEL_COUNSELOR, reasoner: env.AI_MODEL_REASONER },
+        // local_computation arrives over the LocalComputationIngress RPC entrypoint;
+        // "fresh" means a local-vs-webhook parity comparison ran in the last 2 hours.
+        local_lane: { rpc_entrypoint: "LocalComputationIngress", last_parity_comparison_at: lastComparison, fresh: Number.isFinite(lastMs) && Date.now() - lastMs < LOCAL_LANE_FRESH_MS }
+      },
+      ingestion_worker: ingestion,
+      timestamp: new Date().toISOString()
+    });
+  }
+  if (url.pathname === "/api/news") {
+    const rows = await env.DB.prepare("SELECT analysis_key, fetched_at, analyzed_at, article_count, recommendation_json FROM news_analyses ORDER BY analyzed_at DESC LIMIT ?").bind(limitParam()).all<JsonObject>();
+    const items = (rows.results || []).map(r => {
+      const rec = parseJsonText(r.recommendation_json, {}) as JsonObject;
+      return { analysis_key: r.analysis_key, fetched_at: r.fetched_at, analyzed_at: r.analyzed_at, article_count: r.article_count, recommendation: rec?.recommendation ?? null, confidence: rec?.confidence ?? null };
+    });
+    return dashboardJson({ status: "ok", count: items.length, items });
+  }
+  if (url.pathname.startsWith("/api/news/")) {
+    const key = decodeURIComponent(url.pathname.slice("/api/news/".length));
+    const row = await env.DB.prepare("SELECT analysis_key, fetched_at, analyzed_at, article_count, evidence_json, analyst_output, counselor_output, reasoner_output, recommendation_json FROM news_analyses WHERE analysis_key = ? LIMIT 1").bind(key).first<JsonObject>();
+    if (!row) return dashboardJson({ status: "not_found" }, 404);
+    return dashboardJson({
+      status: "ok", analysis_key: row.analysis_key, fetched_at: row.fetched_at, analyzed_at: row.analyzed_at, article_count: row.article_count,
+      evidence: parseJsonText(row.evidence_json, null),
+      analyst_model: env.AI_MODEL_ANALYST, analyst_output: asText(row.analyst_output),
+      counselor_model: env.AI_MODEL_COUNSELOR, counselor_output: asText(row.counselor_output),
+      reasoner_model: env.AI_MODEL_REASONER, reasoner_output: asText(row.reasoner_output),
+      recommendation: parseJsonText(row.recommendation_json, {})
+    });
+  }
+  if (url.pathname === "/api/decisions") {
+    const rows = await env.DB.prepare("SELECT candle_key, created_at, decision, confidence, entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning FROM trade_decisions ORDER BY created_at DESC LIMIT ?").bind(limitParam()).all<JsonObject>();
+    const items = (rows.results || []).map(r => ({ candle_key: r.candle_key, timestamp: r.created_at, decision: r.decision, confidence: r.confidence, entry_price: r.entry_price, stop_loss: r.stop_loss, take_profit: r.take_profit, risk_reward: r.risk_reward, position_size_pct: r.position_size_pct, reasoning: asText(r.reasoning).slice(0, 300) }));
+    return dashboardJson({ status: "ok", count: items.length, items });
+  }
+  if (url.pathname.startsWith("/api/decision/")) {
+    const key = decodeURIComponent(url.pathname.slice("/api/decision/".length));
+    const row = await env.DB.prepare("SELECT candle_key, timestamp, ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY timestamp DESC LIMIT 1").bind(key).first<JsonObject>();
+    if (!row) return dashboardJson({ status: "not_found" }, 404);
+    return dashboardJson({ status: "ok", candle_key: row.candle_key, timestamp: row.timestamp, synthesis: parseJsonText(row.ai_analysis, null) });
+  }
+  return dashboardJson({ error: "Not found" }, 404);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
+      return new Response(null, { status: 204, headers: { ...DASHBOARD_CORS, "access-control-allow-methods": "GET,OPTIONS", "access-control-allow-headers": "content-type", "access-control-max-age": "86400" } });
+    }
+    const dashboardResponse = await handleDashboardApi(request, env, url).catch(() => dashboardJson({ status: "error", error: "dashboard_api_failed" }, 500));
+    if (dashboardResponse) return dashboardResponse;
     if (request.method === "GET" && url.pathname === "/ready") {
       try {
         await env.DB.prepare("SELECT status FROM analysis_runs LIMIT 1").first<{ status: string }>();
@@ -1182,7 +1275,7 @@ export default {
       if (!row) return json({ status: "not_found", message: "No fundamental news analysis has completed yet." }, 404);
       return json({ status: "ok", analysis_type: "fundamental_news", ...row, recommendation: JSON.parse(asText(row.recommendation_json) || "{}") });
     }
-    return json({ error: "Not found", endpoints: ["GET /health", "GET /ready", "POST /webhook", "POST /evidence/local-calculation", "POST /news/analyze", "GET /news/latest"] }, 404);
+    return json({ error: "Not found", endpoints: ["GET /health", "GET /ready", "POST /webhook", "POST /evidence/local-calculation", "POST /news/analyze", "GET /news/latest", "GET /api/status", "GET /api/news", "GET /api/news/:key", "GET /api/decisions", "GET /api/decision/:key"] }, 404);
   },
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(runNewsAnalysis(env).then(result => {
