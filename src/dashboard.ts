@@ -171,4 +171,55 @@ async function loadAnalysis(key){
   try {
     const r = await fetch('/api/news/'+encodeURIComponent(key)); const d = await r.json();
     if(d.status!=='ok'){ alert('Gagal memuat analisis'); return; }
-    const rec 
+    const rec = d.recommendation||{};
+    const cls = (rec.recommendation==='BULLISH_BIAS'?'BUY':rec.recommendation==='BEARISH_BIAS'?'SELL':rec.recommendation==='WAIT_FOR_TECHNICAL_CONFIRMATION'?'WAIT':rec.recommendation);
+    $('latest-decision').innerHTML =
+      '<div style="margin-bottom:8px"><span class="badge-decision '+cls+'" style="font-size:14px;padding:6px 12px">'+esc(rec.recommendation||'—')+'</span></div>'
+      +'<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Confidence: '+(rec.confidence!=null?Math.round(rec.confidence*100)+'%':'—')+' · Horizon: '+esc(rec.horizon||'—')+'</div>'
+      +'<div style="font-size:13px;margin-bottom:8px"><b>Rationale:</b> '+esc(rec.rationale||'—')+'</div>'
+      +'<div style="font-size:12px;color:var(--muted)"><b>Supporting:</b> '+esc(JSON.stringify(rec.supporting_evidence||[]))+'</div>'
+      +'<div style="font-size:12px;color:var(--muted)"><b>Opposing:</b> '+esc(JSON.stringify(rec.opposing_evidence||[]))+'</div>'
+      +'<div style="font-size:12px;color:var(--muted)"><b>Risks:</b> '+esc(JSON.stringify(rec.risks||[]))+'</div>'
+      +'<div style="font-size:12px;color:var(--muted)"><b>Confirmation needed:</b> '+esc(rec.confirmation_needed||'—')+'</div>'
+      +'<div style="font-size:12px;color:var(--muted)"><b>Invalidation:</b> '+esc(rec.invalidation_conditions||'—')+'</div>';
+    // chat timeline
+    const msgs = [
+      {av:'av-analyst', name:'Analyst', model:d.analyst_output? 'glm-4.7-flash':'', content:d.analyst_output||'(kosong)'},
+      {av:'av-counselor', name:'Counselor', model:'gemma-4-26b', content:d.counselor_output||'(kosong)'},
+      {av:'av-reasoner', name:'Reasoner', model:'nemotron-120b', content:d.reasoner_output||'(kosong)'},
+    ];
+    $('agent-chat').innerHTML = msgs.map(m=>
+      '<div class="chat-msg"><div class="chat-avatar '+m.av+'">'+m.name[0]+'</div>'
+      +'<div class="chat-bubble"><div class="meta">'+m.name+' · '+m.model+'</div><div class="content">'+esc(m.content)+'</div></div></div>'
+    ).join('');
+    // raw
+    $('agent-raw').innerHTML = '<div class="agent-block"><h3>Analyst Output</h3><pre>'+esc(d.analyst_output||'')+'</pre></div>'
+      +'<div class="agent-block"><h3>Counselor Output</h3><pre>'+esc(d.counselor_output||'')+'</pre></div>'
+      +'<div class="agent-block"><h3>Reasoner Output</h3><pre>'+esc(d.reasoner_output||'')+'</pre></div>'
+      +'<div class="agent-block"><h3>Evidence (articles)</h3><pre>'+esc(JSON.stringify(d.evidence?.articles||[],null,2))+'</pre></div>';
+  } catch(e){ alert('Error: '+e.message); }
+}
+
+// tabs
+document.querySelectorAll('.tab').forEach(t=>{
+  t.addEventListener('click',()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    const tab=t.dataset.tab;
+    $('agent-chat').style.display = tab==='chat'?'flex':'none';
+    $('agent-raw').style.display = tab==='raw'?'block':'none';
+  });
+});
+
+// auto-load latest
+async function autoLoad(){
+  try {
+    const r = await fetch('/api/news?limit=1'); const d = await r.json();
+    if(d.items && d.items.length>0) loadAnalysis(d.items[0].analysis_key);
+  } catch(e){}
+}
+loadStatus(); loadNews(); loadDecisions(); autoLoad();
+setInterval(()=>{ loadStatus(); loadNews(); loadDecisions(); }, 30000);
+</script>
+</body>
+</html>`;
