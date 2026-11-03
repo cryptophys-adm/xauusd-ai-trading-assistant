@@ -1,16 +1,18 @@
 # Cloudflare production version 107 source recovery
 
-Recovered from the Cloudflare Workers uploaded source map for production version 107 of `xauusd-ai-trading-assistant`.
+Recovered from the uploaded Cloudflare Workers source map for production version 107 of `xauusd-ai-trading-assistant`.
 
-Version ID: `c01cbafd-b4e2-41f4-b9f5-98c4ac145e7e`
-Production deployment ID: `04660a3b-caf8-4b72-b550-ed8ff929675c`
-Source map files: `lib/contracts.ts`, `lib/auth.ts`, `lib/validation.ts`, `src/dashboard.ts`, `src/index.ts`.
+- Version ID: `c01cbafd-b4e2-41f4-b9f5-98c4ac145e7e`
+- Production deployment ID: `04660a3b-caf8-4b72-b550-ed8ff929675c`
 
-SHA-256:
-- `lib/contracts.ts`: `eae890246409824e92a90154d8e2024563bd2da94e5aeb4b46f12b9cf09d19a5`
-- `lib/auth.ts`: `bcabb136d277477fc56c5dbbc7718a2f05ea01149bd689fb9765c95da0b3810e`
-- `lib/validation.ts`: `34afb53e5a17e5d7edbbe3185df5dfa356b510a8dece4bb718d69a77f0757ff9`
-- `src/dashboard.ts`: `076983d11a6b2cbe211bdeab113cd8e06eb3724804875bcef5a089d2dfc0fdfa`
-- `src/index.ts`: `df498d3d3996ad6bda52e3e3fd0b1bd339f9ecbd2a285f6ac484c05f1603b31c`
+Complete recovered source files and verified lengths:
 
-The recovered `src/index.ts` is retained as a forensic reference, not as the active application entrypoint. It must not replace the richer GitHub `main` implementation wholesale. The root `lib/*` and `src/dashboard.ts` files are the exact recovered source dependencies being merged additively.
+| Source map path | Recovered repository path | Characters | Git blob SHA |
+|---|---|---:|---|
+| `lib/contracts.ts` | `lib/contracts.ts` | 6,887 | `a0ccbe8e2aaf415cbb0041f0336c91973a81e7a8` |
+| `lib/auth.ts` | `lib/auth.ts` | 4,654 | `3f950dedcf376746471590a8555340b1c6cc6bac` |
+| `lib/validation.ts` | `lib/validation.ts` | 9,508 | `99d342a0ae1cc9271a88e627222a1a6c1eb99789` |
+| `src/dashboard.ts` | `src/dashboard.ts` | 13,290 | `dffd1e7b7adf37432a090bb4e90d8d2407ffb745` |
+| `src/index.ts` | `recovered/cloudflare-version-107/src/index.ts` | 36,813 | `202bdb6bcf7ef70b5749bf669e3ee919d76e8ca7` |
+
+The Git blob identifiers above refer to the full recovered file contents. The recovered production `src/index.ts` is retained as a forensic reference, not as the active application entrypoint. It must not replace the richer GitHub `main` implementation wholesale. The root `lib/*` and `src/dashboard.ts` files are its exact recovered dependencies and are integrated additively into the existing mainline runtime.
