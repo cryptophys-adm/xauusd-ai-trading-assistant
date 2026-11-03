@@ -35,5 +35,39 @@
     "AI_MODEL_REASONER": "@cf/nvidia/nemotron-3-120b-a12b",
     "REQUIRED_SOURCES": "prophet_r38,prophet_r37_ssot,gmi_v12_70",
     "PARITY_PROMOTE_AFTER": "1"
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "XAUUSD_EVENTS",
+        "queue": "xauusd-webhook-events-preview"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "xauusd-webhook-events-preview",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "xauusd-webhook-events-preview-dlq",
+        "retry_delay": 30,
+        "max_concurrency": 1
+      }
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true
+    }
   }
 }
