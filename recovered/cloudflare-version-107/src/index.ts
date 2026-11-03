@@ -408,4 +408,172 @@ async function runAnalysisFromBundle(
   const candle = bundle.candle;
   const ticker = candle.symbol;
   const timeframe = candle.timeframe;
-  const candleKey = candle.candle_key || bui
+  const candleKey = candle.candle_key || buildCandleKey(ticker, timeframe, candle.candle_ts);
+
+  const errors: string[] = [...bundle.validation.errors];
+
+  // Fail-closed: when evidence is incomplete, stale, conflicting, or provenance
+  // is unverified, do not emit a trade signal and do not invoke the AI models.
+  // WAIT / NO_TRADE with null price/risk parameters.
+  const failClosed = !bundle.validation.ok ||
+    bundle.validation.completeness === "incomplete" ||
+    bundle.validation.missing_evidence.length > 0 ||
+    !bundle.provenance_verified ||
+    bundle.validation.errors.length > 0;
+
+  let decision: JsonObject;
+  let analystText = "";
+  let counselorText = "";
+  let reasonerText = "";
+
+  if (failClosed) {
+    const reason = (bundle.validation.errors.length > 0
+      ? bundle.validation.errors.join("; ")
+      : bundle.validation.missing_evidence.length > 0
+        ? "Missing required evidence: " + bundle.validation.missing_evidence.join(", ")
+        : "Evidence incomplete or provenance unverified.");
+    errors.push("fail_closed: " + reason);
+    decision = {
+      decision: "WAIT",
+      confidence: null,
+      entry_price: null,
+      stop_loss: null,
+      take_profit: null,
+      risk_reward: null,
+      position_size_pct: null,
+      reasoning: "FAIL_CLOSED: " + reason,
+      confirmation: null,
+      invalidation: null
+    };
+    analystText = "FAIL_CLOSED: evidence not sufficient for AI analysis.";
+    counselorText = analystText;
+    reasonerText = analystText;
+  } else {
+    const evidence = {
+      candle_key: candleKey,
+      ticker,
+      timeframe,
+      symbol: bundle.symbol,
+      candle: bundle.candle,
+      engines: bundle.engines,
+      sources: bundle.sources,
+      news: bundle.news,
+      validation: bundle.validation,
+      evidence_fingerprint: bundle.evidence_fingerprint,
+      provenance_verified: bundle.provenance_verified,
+      schema_version: bundle.schema_version
+    };
+
+    const [knowledgeText] = await Promise.all([
+      env.KNOWLEDGE_BASE.get("knowledge-base:v4").then(value => value || env.KNOWLEDGE_BASE.get("knowledge-base:v3"))
+    ]);
+    const knowledge = knowledgeText || JSON.stringify({
+      status: "kv_key_missing",
+      message: "No knowledge-base:v4 or knowledge-base:v3 value was found in the bound KV namespace."
+    });
+
+    const analystResult = await env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
+      prompt: [
+        "You are the Analyst stage in an XAUUSD decision-support pipeline.",
+        "Classify the supplied indicator evidence without inventing missing values or prices.",
+        "Prophet is the base directional bias. GMI can validate, block, or defer a setup but must not silently overwrite Prophet's bias.",
+        "Evidence includes technical engine results, source provenance, and fundamental news_evidence.",
+        "If news_evidence.available is false, state that fundamental news data is unavailable. Do NOT invent news.",
+        "If news_evidence.available is true, consider the supplied articles alongside technical evidence.",
+        "Return JSON only with keys: directional_bias (BULLISH, BEARISH, or NEUTRAL), setup_quality (integer 0-3), missing_evidence (boolean), reasoning.",
+        "Set directional_bias to NEUTRAL and missing_evidence to true if evidence is missing, stale, contradictory, or insufficient.",
+        "EVIDENCE:",
+        JSON.stringify(evidence),
+        "POLICY:",
+        knowledge
+      ].join("\n"),
+      max_tokens: 700,
+      temperature: 0.1
+    } as never);
+    analystText = extractText(analystResult);
+
+    const counselorResult = await env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
+      prompt: [
+        "You are the Counselor stage in an XAUUSD decision-support pipeline.",
+        "Use only the JSON evidence and analyst output below. Do not invent prices or indicator definitions.",
+        "Prophet is the base bias. GMI may validate, block, or defer a Prophet setup; it must not silently overwrite Prophet's bias.",
+        "If news_evidence.available is false, acknowledge fundamental news is unavailable. Do NOT fabricate news.",
+        "If news_evidence.available is true, weigh the supplied articles in scenarios.",
+        "Return concise JSON with keys: evidence_summary, bullish_scenario, bearish_scenario, neutral_scenario, confirmations, invalidation, risks, missing_data.",
+        "If the source payloads conflict or fields are unclear, say so explicitly.",
+        "EVIDENCE:",
+        JSON.stringify(evidence),
+        "POLICY:",
+        knowledge,
+        "ANALYST:",
+        analystText
+      ].join("\n"),
+      max_tokens: 1400,
+      temperature: 0.1
+    } as never);
+    counselorText = extractText(counselorResult);
+
+    const reasonerResult = await env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
+      prompt: [
+        "You are the final Deep Reasoner stage for XAUUSD decision support.",
+        "Use only the supplied evidence, analyst output, and counselor output. Do not invent market prices or claim the models verified facts they did not receive.",
+        "Prophet remains the base bias. GMI may validate, block, or wait on a setup. Do not silently reverse Prophet's bias.",
+        "If news_evidence.available is false, state fundamental news analysis was not performed. Do NOT claim news supported or contradicted the setup.",
+        "If news_evidence.available is true, incorporate the supplied articles into final reasoning.",
+        "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation.",
+        "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
+        "EVIDENCE:",
+        JSON.stringify(evidence),
+        "ANALYST:",
+        analystText,
+        "COUNSELOR:",
+        counselorText
+      ].join("\n"),
+      max_tokens: 1200,
+      temperature: 0.1
+    } as never);
+    reasonerText = extractText(reasonerResult);
+    decision = parseDecision(reasonerText);
+  }
+
+  const timestamp = nowIso();
+  const synthesis = {
+    candle_key: candleKey,
+    ticker,
+    timeframe,
+    timestamp,
+    request_id: requestId,
+    schema_version: bundle.schema_version,
+    symbol: bundle.symbol,
+    candle: bundle.candle,
+    analyst_model: env.AI_MODEL_ANALYST,
+    analyst_output: analystText,
+    counselor_model: env.AI_MODEL_COUNSELOR,
+    counselor_output: counselorText,
+    reasoner_model: env.AI_MODEL_REASONER,
+    reasoner_output: reasonerText,
+    news_evidence: bundle.news,
+    engines: bundle.engines,
+    sources: bundle.sources,
+    validation: bundle.validation,
+    evidence_fingerprint: bundle.evidence_fingerprint,
+    provenance_verified: bundle.provenance_verified,
+    decision
+  };
+
+  // Persist synthesis (fail-closed records are still stored for audit).
+  await env.DB.prepare(
+    "INSERT INTO ai_syntheses (candle_key, ticker, timeframe, timestamp, prophet_metrics, gmi_metrics, ai_analysis, ai_model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+  ).bind(
+    candleKey,
+    ticker,
+    timeframe,
+    timestamp,
+    JSON.stringify({ sources: bundle.sources, engines: bundle.engines }),
+    JSON.stringify({ engines: bundle.engines }),
+    JSON.stringify(synthesis),
+    [env.AI_MODEL_ANALYST, env.AI_MODEL_COUNSELOR, env.AI_MODEL_REASONER].join(",")
+  ).run();
+
+  const confidence = typeof decision.confidence === "number" ? decision.confidence : null;
+  const ent
