@@ -195,7 +195,7 @@ function fakeAiWorker(status = 202) {
   };
 }
 
-test("publisher posts mizan+prophet local_computation for the latest closed H1 bar once, keyed like the webhook", async () => {
+test("publisher posts mizan+prophet+gmi local_computation for the latest closed H1 bar once, keyed like the webhook", async () => {
   const ai = fakeAiWorker();
   const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai });
   await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
@@ -205,14 +205,14 @@ test("publisher posts mizan+prophet local_computation for the latest closed H1 b
 
   const first = await publishLocalComputation(e, { now });
   assert.equal(first.status, "published", JSON.stringify(first));
-  assert.deepEqual(ai.posts.map((p) => p.body.engine), ["mizan", "prophet"]);
+  assert.deepEqual(ai.posts.map((p) => p.body.engine), ["mizan", "prophet", "gmi"]);
   assert.equal(first.candle_key, `OANDA:XAUUSD:60:${lastH1.time * 1000}`);
   assert.equal(ai.posts[1].body.values.candle.c, lastH1.close);
-  assert.deepEqual(first.not_produced, ["gmi"]);
+  assert.deepEqual(first.not_produced, []);
 
   const again = await publishLocalComputation(e, { now });
   assert.equal(again.status, "already_published");
-  assert.equal(ai.posts.length, 2);
+  assert.equal(ai.posts.length, 3);
 
   const stale = await publishLocalComputation(e, { now: now + 30 * 60_000 });
   assert.equal(stale.status, "no_fresh_h1_close");
@@ -235,5 +235,5 @@ test("publisher stays off without the AI Worker RPC binding and records failures
   assert.equal(failed.status, "partial_failure");
   const retry = await publishLocalComputation(e, { now });
   assert.equal(retry.status, "partial_failure"); // retried, not deduplicated
-  assert.equal(ai.posts.length, 4);
+  assert.equal(ai.posts.length, 6);
 });

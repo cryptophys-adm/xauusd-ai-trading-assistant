@@ -59,7 +59,8 @@ export async function publishLocalComputation(env, { now = Date.now(), force = f
     candle_time: built.candle_time,
     published_at: new Date(now).toISOString(),
     engines: results,
-    not_produced: ["gmi"]
+    not_produced: built.records.some((r) => r.engine === "gmi") ? [] : ["gmi"],
+    gmi_error: built.gmi_error || null
   };
   if (ok) await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
   await kv.put(LAST_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });

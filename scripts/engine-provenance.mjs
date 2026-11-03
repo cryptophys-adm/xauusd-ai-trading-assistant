@@ -14,6 +14,10 @@ export const ENGINE_FILES = {
     sources: ["pinescript/ssot/CryptophysMizanLib-uploaded.txt"],
     implementation: ["src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs"]
   },
+  gmi: {
+    sources: ["pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
+    implementation: ["local-engines/gmi/src/pine.mjs", "local-engines/gmi/src/mizan.mjs", "local-engines/gmi/src/gmi-core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs"]
+  },
   prophet: {
     sources: ["pinescript/ssot/The-Prophet-v7.02-R38.txt", "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
     implementation: ["local-engines/prophet-r38/src/core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs"]

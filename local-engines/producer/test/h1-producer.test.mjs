@@ -36,7 +36,8 @@ test("candle_key matches the AI Worker's webhook derivation (tickerid:timeframe.
   assert.equal(built.candle_key, webhookCandleKey(lastH1Open));
   assert.equal(built.candle_key, `OANDA:XAUUSD:60:${lastH1Open}`);
   assert.equal(built.candle_time, "2026-11-03T09:00:00.000Z");
-  assert.deepEqual(built.records.map((r) => r.engine), ["mizan", "prophet"]);
+  assert.deepEqual(built.records.map((r) => r.engine), ["mizan", "prophet", "gmi"]);
+  assert.equal(built.gmi_error, null);
 });
 
 test("records satisfy the local-calculation contract, carry no credential fields, and have registry identities", () => {
@@ -96,4 +97,25 @@ test("GMI r10_prophet_consensus_dir: internal conflict forces neutral", () => {
   assert.equal(prophetConsensusDir({ proFast: 0.2, dEnc: 0, subtype: 1 }), 0);
   assert.equal(prophetConsensusDir({ proFast: -0.2, dEnc: 0, subtype: 4 }), -1);
   assert.equal(prophetConsensusDir({ proFast: null, dEnc: 0, subtype: 2 }), 1);
+});
+
+test("gmi record supplies every gmi_v12_70 parity field and declares the same Mizan dependency", () => {
+  const built = buildH1LocalCalculations(bundle(), { now });
+  const gmi = built.records.find((r) => r.engine === "gmi");
+  const v = validateLocalCalculation(gmi, { symbol: gmi.symbol, timeframe: gmi.timeframe, candle_key: gmi.candle_key, candle_time: gmi.candle_time }, now);
+  assert.equal(v.valid, true, JSON.stringify(v.errors));
+  for (const field of PARITY_FIELDS.gmi.gmi_v12_70) assert.ok(field in gmi.values.comparable.gmi_v12_70, field);
+  const webhooks = { gmi_v12_70: { ...gmi.values.candle, ...gmi.values.comparable.gmi_v12_70 } };
+  assert.equal(compareWithWebhooks(gmi, webhooks).status, "match");
+  assert.equal(identityOf(gmi).mizanSourceHash, identityOf(built.records[0]).sourceHash);
+  // GMI and Prophet share the GMI-embedded prophet consensus direction.
+  assert.equal(gmi.values.comparable.gmi_v12_70.prophet_dir, built.records[1].values.comparable.prophet_r37_ssot.direction);
+});
+
+test("gmi is omitted (not faked) when chart history is below the 300-bar profile lookback", () => {
+  const short = bundle();
+  short.timeframes.H1.candles = short.timeframes.H1.candles.slice(-200);
+  const built = buildH1LocalCalculations(short, { now });
+  assert.deepEqual(built.records.map((r) => r.engine), ["mizan", "prophet"]);
+  assert.equal(built.gmi_error, "insufficient_chart_history");
 });
