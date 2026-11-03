@@ -169,4 +169,54 @@ export function validateBundle(bundle: unknown): ValidationProblem[] {
       if (typeof se.provenance_verified !== "boolean") {
         problems.push({ field: "sources[].provenance_verified", reason: "boolean required" });
       }
-      if (typeof se.fresh
+      if (typeof se.freshness_ok !== "boolean") {
+        problems.push({ field: "sources[].freshness_ok", reason: "boolean required" });
+      }
+      if (!Array.isArray(se.missing_evidence)) {
+        problems.push({ field: "sources[].missing_evidence", reason: "array required" });
+      }
+    }
+  }
+  if (!Array.isArray(b.engines)) {
+    problems.push({ field: "engines", reason: "array required" });
+  } else {
+    for (const e of b.engines as unknown[]) {
+      problems.push(...validateEngineResult(e));
+    }
+  }
+  problems.push(...validateNewsEvidence(b.news));
+  if (typeof b.evidence_fingerprint !== "string" || b.evidence_fingerprint.trim().length === 0) {
+    problems.push({ field: "evidence_fingerprint", reason: "required non-empty string" });
+  }
+  if (typeof b.provenance_verified !== "boolean") {
+    problems.push({ field: "provenance_verified", reason: "boolean required" });
+  }
+  const handoff = b.handoff as Record<string, unknown> | null;
+  if (!handoff || typeof handoff !== "object") {
+    problems.push({ field: "handoff", reason: "object required" });
+  } else {
+    if (typeof handoff.target_worker !== "string" || handoff.target_worker.trim().length === 0) {
+      problems.push({ field: "handoff.target_worker", reason: "required non-empty string" });
+    }
+    if (typeof handoff.target_endpoint !== "string" || handoff.target_endpoint.trim().length === 0) {
+      problems.push({ field: "handoff.target_endpoint", reason: "required non-empty string" });
+    }
+    if (typeof handoff.auth_scheme !== "string") {
+      problems.push({ field: "handoff.auth_scheme", reason: "string required" });
+    }
+  }
+  return problems;
+}
+
+/** EngineIds present in the bundle, de-duplicated and validated. */
+export function bundleEngineIds(bundle: EvidenceBundle): EngineId[] {
+  const seen = new Set<EngineId>();
+  const out: EngineId[] = [];
+  for (const e of bundle.engines) {
+    if (isEngineId(e.engine) && !seen.has(e.engine)) {
+      seen.add(e.engine);
+      out.push(e.engine);
+    }
+  }
+  return out;
+}
