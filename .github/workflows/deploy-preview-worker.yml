@@ -162,6 +162,24 @@ jobs:
           const candleKey = [symbol, timeframe, candleTime].join(":");
           const headers = { "content-type": "application/json", "x-webhook-secret": secret };
 
+          // `wrangler secret put` creates a new Worker version that reaches isolates gradually.
+          // Before asserting authenticated behaviour, wait until the secret is accepted on
+          // 5 consecutive authenticated requests (an isolate without it answers 401/503).
+          const probeBody = JSON.stringify({
+            schema_version: "cryptophys.local-calculation.v1",
+            engine: "mizan", symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
+            computed_at: new Date().toISOString(), calculation_version: "credential-probe",
+            values: { bias: "NEUTRAL" }, provenance: { source: "preview-fixture", source_hash: "a".repeat(64), implementation_hash: "b".repeat(64) },
+            secret: "must-not-be-stored"
+          });
+          let consecutiveAccepted = 0;
+          for (let attempt = 0; attempt < 45 && consecutiveAccepted < 5; attempt++) {
+            const probe = await fetch(base + "/evidence/local-calculation", { method: "POST", headers, body: probeBody });
+            consecutiveAccepted = probe.status === 401 || probe.status === 503 ? 0 : consecutiveAccepted + 1;
+            if (consecutiveAccepted < 5) await new Promise(resolve => setTimeout(resolve, consecutiveAccepted ? 300 : 2000));
+          }
+          assert.equal(consecutiveAccepted, 5, "preview secret did not propagate to the Worker within the wait window");
+
           const credentialProbe = await fetch(base + "/evidence/local-calculation", {
             method: "POST",
             headers,
@@ -184,16 +202,24 @@ jobs:
             gmi_v12_70: { verdict: 3, gate: 2, gmi_dir: 1, prophet_dir: 1, conflict: false }
           };
           for (const source of ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"]) {
-            const response = await fetch(base + "/webhook", {
-              method: "POST",
-              headers,
-              body: JSON.stringify({
-                source, ticker: symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
-                ...bar, ...webhookValues[source],
-                metrics: { bias: "NEUTRAL", fixture_only: true }
-              })
-            });
-            const result = await response.json();
+            // `wrangler secret put` creates a new Worker version that reaches isolates gradually:
+            // a request can still land on an isolate without WEBHOOK_SECRET for a few seconds
+            // after /health already saw it. Retry only that specific 503.
+            let response, result;
+            for (let attempt = 0; attempt < 15; attempt++) {
+              response = await fetch(base + "/webhook", {
+                method: "POST",
+                headers,
+                body: JSON.stringify({
+                  source, ticker: symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
+                  ...bar, ...webhookValues[source],
+                  metrics: { bias: "NEUTRAL", fixture_only: true }
+                })
+              });
+              result = await response.json();
+              if (!(response.status === 503 && /WEBHOOK_SECRET is not configured/.test(String(result?.error)))) break;
+              await new Promise(resolve => setTimeout(resolve, 2000));
+            }
             assert.ok(response.status === 202 || response.status === 200, "webhook rejected: " + JSON.stringify(result));
           }
 

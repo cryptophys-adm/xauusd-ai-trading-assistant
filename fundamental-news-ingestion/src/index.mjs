@@ -1109,6 +1109,21 @@ async function handlePull(request, env, ctx, options = {}) {
 }
 
 /** Shared-grant OHLCV runner used by the TvGateway RPC entrypoint (src/worker.mjs). */
+/**
+ * Internal pull for RPC callers (the AI Worker's NEWS_INGESTION binding).
+ * Runs the same handler as POST /pull with this Worker's own INGEST_SECRET, so
+ * the caller needs no shared secret. Returns the JSON body of /pull.
+ */
+export async function runNewsPull(env, ctx, { forceRefresh = false } = {}) {
+  const request = new Request("https://news.cryptophys.work/pull", {
+    method: "POST",
+    headers: { authorization: `Bearer ${asString(env.INGEST_SECRET)}` }
+  });
+  const response = await handlePull(request, env, ctx, { forceRefresh: forceRefresh === true });
+  const body = await response.json().catch(() => ({}));
+  return { ...body, rpc_http_status: response.status };
+}
+
 export function runTvOhlcv(env, requests) {
   return runOhlcvRequests(env, requests, {
     fetch: (...args) => fetch(...args),
