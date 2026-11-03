@@ -103,3 +103,9 @@ As of 2026-11-02, the evidence-fusion release was merged to `main` (release comm
   - **AI Worker — not confirmed:** after merge `8e163fb` the AI Worker script was not modified (still 10:38:05Z) while the Actions provenance gate blocked deployment. How the evidence-fusion code reached production at 10:38:05Z (during the gated Actions run for `6103324`) is unresolved; check the Worker's Deployments history in the Cloudflare dashboard.
 - Consequence today: production `/ready` returns 503 (no allowlist) and analysis waits for all three local engines, so no decision can complete. Production D1 `xauusd-signals` showed 0 rows in `webhook_sources`, `news_analyses`, `trade_decisions` and `analysis_runs`.
 - Required owner action: decide whether Workers Builds or GitHub Actions is the single production deploy path for each Worker (Cloudflare dashboard → Worker → Settings → Builds), and make the provenance gate apply to that path. Confirm in Deployments which mechanism produced the AI Worker version live since 10:38:05Z.
+
+### Provenance model change (2026-11-03, owner decision)
+
+- `local_computation` is the primary technical lane and remains required. The 1H TradingView webhook lane is its comparator.
+- The operator-approved `LOCAL_CALC_PROVENANCE_ALLOWLIST` and its deploy gate are removed. The AI Worker autonomously promotes or revokes local-engine identities through the deterministic parity registry ([AUTONOMOUS_PROVENANCE.md](AUTONOMOUS_PROVENANCE.md)).
+- Gate B's "Pine parity is demonstrated" is therefore met per identity and per field set by registry status `approved`, not by a manual sign-off.

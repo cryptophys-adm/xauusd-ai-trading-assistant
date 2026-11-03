@@ -1,5 +1,6 @@
 import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
+import { identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema, registerIdentity, recordComparison, isTrusted, listRegistry, policyFromEnv, PARITY_REGISTRY_VERSION } from "./parity-registry.mjs";
 
 export interface Env {
   DB: D1Database;
@@ -16,7 +17,9 @@ export interface Env {
   AI_MODEL_COUNSELOR: string;
   AI_MODEL_REASONER: string;
   REQUIRED_SOURCES: string;
-  LOCAL_CALC_PROVENANCE_ALLOWLIST?: string;
+  PARITY_PROMOTE_AFTER?: string;
+  PARITY_ABS_TOLERANCE?: string;
+  PARITY_REL_TOLERANCE?: string;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -93,24 +96,54 @@ function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
 }
 
-type LocalCalcProvenancePolicy = Record<string, { source_hashes: string[]; implementation_hashes: string[] }>;
+const OBSERVED_PREFIX = "localcalc-observed:";
+const TRUSTED_PREFIX = "localcalc:";
+const LOCAL_TTL = { expirationTtl: 60 * 60 * 24 * 14 };
 
-function parseLocalCalcProvenanceAllowlist(raw: string | undefined): LocalCalcProvenancePolicy | null {
+async function readJsonKV(kv: KVNamespace, key: string): Promise<JsonObject | null> {
+  const raw = await kv.get(key);
   if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const policy: LocalCalcProvenancePolicy = {};
-    for (const engine of LOCAL_ENGINES) {
-      const entry = parsed[engine] as Record<string, unknown> | undefined;
-      const sourceHashes = Array.isArray(entry?.source_hashes) ? entry!.source_hashes.filter((value): value is string => typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)).map(value => value.toLowerCase()) : [];
-      const implementationHashes = Array.isArray(entry?.implementation_hashes) ? entry!.implementation_hashes.filter((value): value is string => typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)).map(value => value.toLowerCase()) : [];
-      if (!sourceHashes.length || !implementationHashes.length) return null;
-      policy[engine] = { source_hashes: sourceHashes, implementation_hashes: implementationHashes };
+  try { return JSON.parse(raw) as JsonObject; } catch { return null; }
+}
+
+/**
+ * Autonomous provenance reconciliation for one candle. Compares every observed
+ * local engine output with TradingView's webhook outputs for the same candle,
+ * records the result in the parity registry (promotion/revocation is a fixed
+ * rule), then places into the trusted local_computation lane exactly those
+ * observed records whose identity is currently approved.
+ */
+async function reconcileLocalComputation(env: Env, candleKey: string): Promise<JsonObject> {
+  await ensureSchema(env.DB);
+  const policy = policyFromEnv(env as unknown as Record<string, unknown>);
+  const observed: Record<string, JsonObject | null> = {};
+  await Promise.all(LOCAL_ENGINES.map(async engine => {
+    observed[engine] = await readJsonKV(env.WEBHOOK_BUFFER, OBSERVED_PREFIX + candleKey + ":" + engine);
+  }));
+  const comparisons: JsonObject = {};
+  for (const engine of ["prophet", "gmi"]) {
+    const record = observed[engine];
+    const id = record ? identityOf(record) : null;
+    if (!record || !id) continue;
+    const webhooks: Record<string, unknown> = {};
+    for (const source of requiredSourcesFor(engine)) {
+      const payload = await readJsonKV(env.WEBHOOK_BUFFER, "candle:" + candleKey + ":" + source);
+      if (payload) webhooks[source] = payload;
     }
-    return policy;
-  } catch {
-    return null;
+    const comparison = compareWithWebhooks(record, webhooks, policy);
+    const outcome = await recordComparison(env.DB, id, candleKey, comparison, policy);
+    comparisons[engine] = { result: comparison.status, counted: outcome.counted, mismatches: (comparison.mismatches ?? []) as unknown as JsonObject[], missing: comparison.missing ?? [] };
   }
+  const trust: Record<string, boolean> = {};
+  for (const engine of LOCAL_ENGINES) {
+    const record = observed[engine];
+    const id = record ? identityOf(record) : null;
+    trust[engine] = id ? await isTrusted(env.DB, id) : false;
+    const trustedKey = TRUSTED_PREFIX + candleKey + ":" + engine;
+    if (record && trust[engine]) await env.WEBHOOK_BUFFER.put(trustedKey, JSON.stringify({ ...record, trust_status: "approved_by_parity" }), LOCAL_TTL);
+    else await env.WEBHOOK_BUFFER.delete(trustedKey);
+  }
+  return { comparisons, trust };
 }
 
 function extractText(result: unknown): string {
@@ -833,6 +866,12 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   await env.WEBHOOK_BUFFER.put("candle:" + candleKey + ":" + source, JSON.stringify(storedPayload), {
     expirationTtl: 60 * 60 * 24 * 14
   });
+  // TradingView webhook outputs are the parity comparator for local engines.
+  try {
+    await reconcileLocalComputation(env, candleKey);
+  } catch (error) {
+    console.error("parity_reconcile_failed", error instanceof Error ? error.message : "unknown");
+  }
 
   const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70")
     .split(",").map(s => s.trim()).filter(Boolean);
@@ -884,31 +923,34 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/ready") {
-      const provenancePolicy = parseLocalCalcProvenanceAllowlist(env.LOCAL_CALC_PROVENANCE_ALLOWLIST);
-      if (!provenancePolicy) {
-        return json({
-          status: "not_ready",
-          local_calculation_provenance_configured: false,
-          reason: "An explicit per-engine source and implementation SHA-256 allowlist is required."
-        }, 503);
-      }
       try {
         await env.DB.prepare("SELECT status FROM analysis_runs LIMIT 1").first<{ status: string }>();
+      } catch {
+        return json({ status: "not_ready", d1_analysis_runs: false, reason: "Required analysis_runs D1 migration is not available." }, 503);
+      }
+      try {
+        await ensureSchema(env.DB);
+        const counts = await env.DB.prepare("SELECT status, COUNT(*) AS n FROM engine_parity_registry GROUP BY status").all<{ status: string; n: number }>();
         return json({
           status: "ready",
           schema_version: "cryptophys.evidence-fusion.v1",
           local_calculation_contract: "cryptophys.local-calculation.v1",
           d1_analysis_runs: true,
-          local_calculation_provenance_configured: true
+          provenance_mode: "autonomous_parity_registry",
+          parity_registry: PARITY_REGISTRY_VERSION,
+          parity_policy: policyFromEnv(env as unknown as Record<string, unknown>),
+          registry_status_counts: Object.fromEntries((counts.results || []).map(row => [row.status, Number(row.n)]))
         });
       } catch {
-        return json({
-          status: "not_ready",
-          d1_analysis_runs: false,
-          local_calculation_provenance_configured: true,
-          reason: "Required analysis_runs D1 migration is not available."
-        }, 503);
+        return json({ status: "not_ready", d1_analysis_runs: true, reason: "Engine parity registry is not available." }, 503);
       }
+    }
+    if (request.method === "GET" && url.pathname === "/provenance/registry") {
+      if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
+        return json({ error: "Unauthorized" }, 401);
+      }
+      await ensureSchema(env.DB);
+      return json({ registry: PARITY_REGISTRY_VERSION, policy: policyFromEnv(env as unknown as Record<string, unknown>), entries: await listRegistry(env.DB) });
     }
     if (request.method === "GET" && url.pathname === "/health") {
       return json({
@@ -970,14 +1012,8 @@ export default {
         candle_time: asText(record.candle_time)
       });
       if (!validation.valid) return json({ error: "Invalid or stale local calculation contract", validation_errors: validation.errors }, 400);
-      const provenancePolicy = parseLocalCalcProvenanceAllowlist(env.LOCAL_CALC_PROVENANCE_ALLOWLIST);
-      if (!provenancePolicy) return json({ error: "Local calculation provenance allowlist is not configured" }, 503);
-      const provenance = record.provenance as Record<string, unknown>;
-      const allowedProvenance = provenancePolicy[engine];
-      if (!allowedProvenance.source_hashes.includes(asText(provenance.source_hash).toLowerCase()) ||
-          !allowedProvenance.implementation_hashes.includes(asText(provenance.implementation_hash).toLowerCase())) {
-        return json({ error: "Local calculation source or implementation hash is not approved for this engine" }, 403);
-      }
+      const identity = identityOf(record);
+      if (!identity) return json({ error: "Local calculation provenance must carry SHA-256 source_hash and implementation_hash" }, 400);
       const stored = {
         schema_version: record.schema_version,
         engine,
@@ -991,7 +1027,12 @@ export default {
         provenance: record.provenance,
         received_at: new Date().toISOString()
       };
-      await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":" + engine, JSON.stringify(stored), { expirationTtl: 60 * 60 * 24 * 14 });
+      // Every output is observed; only parity-approved identities enter the trusted lane.
+      await ensureSchema(env.DB);
+      await registerIdentity(env.DB, identity);
+      await env.WEBHOOK_BUFFER.put(OBSERVED_PREFIX + key + ":" + engine, JSON.stringify(stored), LOCAL_TTL);
+      const reconciliation = await reconcileLocalComputation(env, key);
+      const trustStatus = (reconciliation.trust as Record<string, boolean>)[engine] ? "approved_by_parity" : "candidate_pending_parity";
 
       // Trigger fusion only after all three local engines and all configured webhook sources exist.
       const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
@@ -1005,7 +1046,7 @@ export default {
           try {
             const prior = JSON.parse(priorAnalysis) as JsonObject;
             if (prior.status === "complete") {
-              return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, analysis_status: "already_processed" }, 202);
+              return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: "already_processed" }, 202);
             }
           } catch { /* malformed marker does not block a retry */ }
         }
@@ -1016,14 +1057,14 @@ export default {
         if (required.every(name => payloads[name])) {
           try {
             const outcome = await runAnalysis(env, key, asText(record.symbol), asText(record.timeframe), payloads);
-            return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, analysis_status: outcome.status, missing_evidence: outcome.missing_evidence }, 202);
+            return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: outcome.status, missing_evidence: outcome.missing_evidence }, 202);
           } catch (error) {
             await setAnalysisRunStatus(env, key, "failed", { message: error instanceof Error ? error.message : "Unknown analysis error" }, "analysis_failed");
-            return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, analysis_status: "failed", error: error instanceof Error ? error.message : "Unknown analysis error" }, 502);
+            return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: "failed", error: error instanceof Error ? error.message : "Unknown analysis error" }, 502);
           }
         }
       }
-      return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, analysis_status: "waiting_for_evidence" }, 202);
+      return json({ status: "accepted", schema_version: record.schema_version, engine, candle_key: key, trust_status: trustStatus, analysis_status: "waiting_for_evidence" }, 202);
     }
     if (url.pathname === "/news/analyze" && request.method === "POST") {
       if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
