@@ -576,4 +576,210 @@ async function runAnalysisFromBundle(
   ).run();
 
   const confidence = typeof decision.confidence === "number" ? decision.confidence : null;
-  const ent
+  const entry = typeof decision.entry_price === "number" ? decision.entry_price : null;
+  const stop = typeof decision.stop_loss === "number" ? decision.stop_loss : null;
+  const target = typeof decision.take_profit === "number" ? decision.take_profit : null;
+  const rr = typeof decision.risk_reward === "number" ? decision.risk_reward : null;
+  const size = typeof decision.position_size_pct === "number" ? decision.position_size_pct : null;
+  const reasoning = asText(decision.reasoning) || reasonerText;
+
+  await env.DB.prepare(
+    "INSERT INTO trade_decisions (candle_key, decision, confidence, entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).bind(candleKey, asText(decision.decision) || "WAIT", confidence, entry, stop, target, rr, size, reasoning).run();
+
+  await env.SIGNAL_CACHE.put("latest:" + safeKeyPart(ticker) + ":" + safeKeyPart(timeframe), JSON.stringify(synthesis), {
+    expirationTtl: 60 * 60 * 24 * 7
+  });
+
+  const message = [
+    "XAUUSD AI DECISION SUPPORT",
+    "Symbol: " + ticker,
+    "Timeframe: " + timeframe,
+    "Candle: " + candleKey,
+    "Decision: " + (asText(decision.decision) || "WAIT"),
+    "Confidence: " + (confidence === null ? "not provided" : Math.round(confidence * 100) + "%"),
+    "Reason: " + reasoning.slice(0, 900),
+    "Note: advisory only; no trade was executed."
+  ].join("\n");
+  let notified = false;
+  try {
+    await sendTelegram(env, message);
+    notified = true;
+  } catch {
+    notified = false;
+  }
+
+  await env.WEBHOOK_BUFFER.put("analysis:" + safeKeyPart(candleKey), JSON.stringify({
+    status: "complete",
+    created_at: timestamp,
+    request_id: requestId,
+    sources: bundle.engines.map((e) => e.engine),
+    decision: synthesis
+  }), { expirationTtl: 60 * 60 * 24 * 14 });
+
+  return {
+    schema_version: bundle.schema_version,
+    request_id: requestId,
+    decision: asText(decision.decision) || "WAIT",
+    confidence,
+    entry_price: entry,
+    stop_loss: stop,
+    take_profit: target,
+    risk_reward: rr,
+    position_size_pct: size,
+    reasoning,
+    confirmation: decision.confirmation && typeof decision.confirmation === "string" ? decision.confirmation : null,
+    invalidation: decision.invalidation && typeof decision.invalidation === "string" ? decision.invalidation : null,
+    models: {
+      analyst: env.AI_MODEL_ANALYST,
+      counselor: env.AI_MODEL_COUNSELOR,
+      reasoner: env.AI_MODEL_REASONER
+    },
+    stored: true,
+    notified,
+    errors
+  } as HandoffResponse;
+}
+
+async function handleAnalyze(request: Request, env: Env): Promise<Response> {
+  if (!env.CONFLUENCE_HANDOFF_SECRET) {
+    return json({ error: "Handoff secret not configured on AI Worker" }, 503);
+  }
+  if (!env.XAUUSD_EVENTS) {
+    return json({ error: "XAUUSD_EVENTS queue is not configured" }, 503);
+  }
+
+  let body: string;
+  try {
+    body = await readBoundedBody(request);
+  } catch {
+    return json({ error: "Request body too large" }, 413);
+  }
+
+  const headers = {
+    get: (name: string) => request.headers.get(name)
+  };
+  // Replay protection: reject duplicate request_ids within the TTL window.
+  // The Worker is single-threaded per isolate, so a Map is sufficient; entries
+  // are pruned on each request instead of relying on a module-level timer.
+  pruneReplaySeen();
+  const requestId = headers.get("x-request-id") || "";
+  if (requestId && replaySeen.has(requestId)) {
+    return json({ error: "Authentication failed", reason: "Duplicate request_id (replay)", request_id: requestId }, 401);
+  }
+
+  const verification = await verifyHandoffRequest(env.CONFLUENCE_HANDOFF_SECRET, body, headers, Date.now());
+  if (!verification.ok) {
+    return json({
+      error: "Authentication failed",
+      reason: verification.reason,
+      request_id: verification.request_id
+    }, 401);
+  }
+  let bundle: unknown;
+  try {
+    bundle = JSON.parse(body);
+  } catch {
+    return json({ error: "Request body must be valid JSON" }, 400);
+  }
+
+  const problems = validateBundle(bundle);
+  if (problems.length > 0) {
+    return json({
+      error: "Invalid evidence bundle",
+      request_id: verification.request_id,
+      problems
+    }, 400);
+  }
+
+  const validatedBundle = bundle as EvidenceBundle;
+  const task: QueueTask = {
+    kind: "analysis",
+    event_id: `analysis:${validatedBundle.request_id}`,
+    request_id: validatedBundle.request_id,
+    candle_key: validatedBundle.candle.candle_key,
+    enqueued_at: nowIso(),
+    bundle: validatedBundle
+  };
+  try {
+    await env.XAUUSD_EVENTS.send(task, { contentType: "json" });
+  } catch (error) {
+    return json({
+      error: "Failed to enqueue analysis",
+      request_id: validatedBundle.request_id,
+      reason: error instanceof Error ? error.message : "Unknown queue error"
+    }, 503);
+  }
+
+  // Mark replay only after durable enqueue; a failed enqueue must remain
+  // retryable by the Controller with the same authenticated request_id.
+  if (requestId) replaySeen.set(requestId, Date.now());
+
+  return json({
+    schema_version: validatedBundle.schema_version,
+    request_id: validatedBundle.request_id,
+    status: "accepted",
+    analysis_status: "queued",
+    queued: true,
+    event_id: task.event_id,
+    candle_key: validatedBundle.candle.candle_key
+  }, 202);
+}
+
+async function processAnalysisTask(env: Env, task: Extract<QueueTask, { kind: "analysis" }>): Promise<void> {
+  const bundle = task.bundle;
+  const candleKey = bundle.candle.candle_key;
+  const claimed = await claimAnalysisRun(env, candleKey, bundle.evidence_fingerprint);
+  if (!claimed) return;
+
+  try {
+    const result = await runAnalysisFromBundle(env, bundle);
+    const failedClosed = result.errors.some(error => error.startsWith("fail_closed:"));
+    await setAnalysisRunStatus(env, candleKey, failedClosed ? "degraded" : "complete", bundle.evidence_fingerprint);
+  } catch (error) {
+    await setAnalysisRunStatus(env, candleKey, "failed", bundle.evidence_fingerprint, "analysis_failed");
+    throw error;
+  }
+}
+
+async function handleRequest(request: Request, env: Env): Promise<Response> {
+
+    const url = new URL(request.url);
+
+    if (request.method === "GET" && url.pathname === "/health") {
+      return json({
+        status: "ok",
+        service: "xauusd-ai-trading-assistant",
+        schema_version: SCHEMA_VERSION,
+        bindings: {
+          d1: Boolean(env.DB),
+          signal_cache: Boolean(env.SIGNAL_CACHE),
+          webhook_buffer: Boolean(env.WEBHOOK_BUFFER),
+          knowledge_base: Boolean(env.KNOWLEDGE_BASE),
+          workers_ai: Boolean(env.AI),
+          event_queue: Boolean(env.XAUUSD_EVENTS)
+        },
+        secrets_configured: {
+          webhook_secret: Boolean(env.WEBHOOK_SECRET),
+          telegram_bot_token: Boolean(env.TELEGRAM_BOT_TOKEN),
+          telegram_chat_id: Boolean(env.TELEGRAM_CHAT_ID),
+          confluence_handoff_secret: Boolean(env.CONFLUENCE_HANDOFF_SECRET)
+        },
+        ingest_configured: {
+          ingest_url: asText(env.INGEST_URL),
+          ingest_secret: Boolean(env.INGEST_SECRET),
+          news_ingestion_rpc: Boolean(env.NEWS_INGESTION)
+        },
+        endpoints: ["GET /health", "POST /webhook (legacy ingest)", "POST /v1/analyze (authenticated handoff)"]
+      });
+    }
+
+    if (request.method === "POST" && url.pathname === "/webhook") {
+      return handleWebhook(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/analyze") {
+      return handleAnalyze(request, env);
+    }
+
+    if (request.metho
