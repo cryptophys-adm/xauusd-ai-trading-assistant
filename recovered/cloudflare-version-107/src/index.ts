@@ -222,4 +222,190 @@ function normalizeSource(value: unknown): string | null {
 /* ------------------------------------------------------------------ */
 /* Legacy TradingView webhook (transitional, backward compatible).    */
 /*                                                                    */
-/* This endpoint INGESTS indicator source payloads only. It does N
+/* This endpoint INGESTS indicator source payloads only. It does NOT  */
+/* perform evidence fusion or AI analysis. Fusion is owned by the     */
+/* Confluence Controller, which pushes validated bundles to           */
+/* POST /v1/analyze. The webhook path is kept operational so no       */
+/* TradingView alert flow is cut during the migration.                */
+/* ------------------------------------------------------------------ */
+
+type WebhookPayload = {
+  secret?: string;
+  source?: string;
+  ticker?: string;
+  symbol?: string;
+  timeframe?: string;
+  timestamp?: string;
+  candle_time?: string;
+  candle_key?: string;
+  metrics?: unknown;
+  [key: string]: unknown;
+};
+
+function requiredSources(env: Env): string[] {
+  return (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70")
+    .split(",").map(s => s.trim()).filter(Boolean);
+}
+
+async function handleWebhook(request: Request, env: Env): Promise<Response> {
+  if (!env.WEBHOOK_SECRET) {
+    return json({ error: "WEBHOOK_SECRET is not configured" }, 503);
+  }
+  if (!env.XAUUSD_EVENTS) {
+    return json({ error: "XAUUSD_EVENTS queue is not configured" }, 503);
+  }
+
+  let body: WebhookPayload;
+  try {
+    const raw = await readBoundedBody(request);
+    body = JSON.parse(raw) as WebhookPayload;
+  } catch {
+    return json({ error: "Request body must be valid JSON" }, 400);
+  }
+
+  const headerSecret = request.headers.get("x-webhook-secret") || "";
+  const bodySecret = asText(body.secret);
+  if (headerSecret !== env.WEBHOOK_SECRET && bodySecret !== env.WEBHOOK_SECRET) {
+    return json({ error: "Unauthorized" }, 401);
+  }
+
+  const source = normalizeSource(body.source);
+  if (!source) {
+    return json({
+      error: "Unsupported source",
+      accepted_sources: ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"]
+    }, 400);
+  }
+
+  const ticker = asText(body.ticker || body.symbol);
+  const timeframe = asText(body.timeframe);
+  const candleTime = asText(body.candle_time || body.timestamp);
+  if (!ticker || !timeframe || !candleTime) {
+    return json({ error: "ticker/symbol, timeframe, and candle_time/timestamp are required" }, 400);
+  }
+
+  const candleKey = safeKeyPart(asText(body.candle_key) || [ticker, timeframe, candleTime].join(":"));
+  const storedPayload: WebhookPayload = { ...body, source, ticker, timeframe, candle_time: candleTime };
+  delete storedPayload.secret;
+
+  // Persist first. The UNIQUE(candle_key, source) D1 constraint and deterministic
+  // KV key make duplicate webhook deliveries idempotent.
+  await env.DB.prepare(
+    "INSERT INTO webhook_sources (candle_key, source, payload) VALUES (?, ?, ?) ON CONFLICT(candle_key, source) DO UPDATE SET payload = excluded.payload, received_at = datetime('now')"
+  ).bind(candleKey, source, JSON.stringify(storedPayload)).run();
+
+  await env.WEBHOOK_BUFFER.put("candle:" + candleKey + ":" + source, JSON.stringify(storedPayload), {
+    expirationTtl: 60 * 60 * 24 * 14
+  });
+
+  const task: QueueTask = {
+    kind: "webhook_reconcile",
+    event_id: `webhook:${candleKey}:${source}`,
+    candle_key: candleKey,
+    source,
+    ticker,
+    timeframe,
+    enqueued_at: nowIso()
+  };
+  try {
+    await env.XAUUSD_EVENTS.send(task, { contentType: "json" });
+  } catch (error) {
+    // Return 503 so TradingView retries. Evidence is already durable and the
+    // deterministic event id plus candle_key+source persistence dedups retries.
+    return json({
+      error: "Failed to enqueue webhook event",
+      candle_key: candleKey,
+      source,
+      reason: error instanceof Error ? error.message : "Unknown queue error"
+    }, 503);
+  }
+
+  // ACK immediately after the durable enqueue. No source reconciliation or AI
+  // work runs on the TradingView request path.
+  return json({
+    status: "accepted",
+    analysis_status: "queued",
+    queued: true,
+    event_id: task.event_id,
+    candle_key: candleKey,
+    source
+  }, 202);
+}
+
+async function reconcileWebhookTask(env: Env, task: Extract<QueueTask, { kind: "webhook_reconcile" }>): Promise<void> {
+  const required = requiredSources(env);
+  const receivedSources: string[] = [];
+  for (const source of required) {
+    const raw = await env.WEBHOOK_BUFFER.get("candle:" + task.candle_key + ":" + source);
+    if (raw) receivedSources.push(source);
+  }
+  const missingSources = required.filter(source => !receivedSources.includes(source));
+  const reconciledAt = nowIso();
+
+  // Deterministic marker key makes repeated queue deliveries idempotent. Fusion
+  // and AI analysis are not reintroduced into this legacy reconciliation path.
+  await env.WEBHOOK_BUFFER.put(`reconciled:${task.candle_key}:${task.source}`, JSON.stringify({
+    status: missingSources.length === 0 ? "sources_complete" : "waiting_for_sources",
+    candle_key: task.candle_key,
+    source: task.source,
+    received_sources: receivedSources,
+    missing_sources: missingSources,
+    reconciled_at: reconciledAt
+  }), { expirationTtl: 60 * 60 * 24 * 14 });
+}
+
+/* ------------------------------------------------------------------ */
+/* Authenticated handoff: Confluence Controller -> AI Worker          */
+/* ------------------------------------------------------------------ */
+
+let replaySeen = new Map<string, number>(); // request_id -> timestamp ms
+
+function pruneReplaySeen(): void {
+  const cutoff = Date.now() - REPLAY_RECORD_TTL_SECONDS * 1000;
+  for (const [id, ts] of replaySeen) {
+    if (ts < cutoff) replaySeen.delete(id);
+  }
+}
+
+/**
+ * Atomically claim one analysis per candle and evidence fingerprint.
+ * Complete/degraded runs with the same fingerprint are skipped; failed runs,
+ * expired analyzing claims, and changed evidence are eligible for retry.
+ */
+async function claimAnalysisRun(env: Env, candleKey: string, fingerprint: string): Promise<boolean> {
+  const result = await env.DB.prepare(
+    "INSERT INTO analysis_runs (candle_key, status, attempt_count, started_at, updated_at, result_json) " +
+    "VALUES (?, 'analyzing', 1, datetime('now'), datetime('now'), json_object('input_fingerprint', ?)) " +
+    "ON CONFLICT(candle_key) DO UPDATE SET status = 'analyzing', attempt_count = analysis_runs.attempt_count + 1, " +
+    "started_at = datetime('now'), updated_at = datetime('now'), completed_at = NULL, error_code = NULL, " +
+    "result_json = json_object('input_fingerprint', ?) " +
+    "WHERE analysis_runs.status = 'failed' " +
+    "OR (analysis_runs.status IN ('complete', 'degraded') AND COALESCE(json_extract(analysis_runs.result_json, '$.input_fingerprint'), '') != ?) " +
+    "OR (analysis_runs.status = 'analyzing' AND analysis_runs.updated_at < datetime('now', '-10 minutes'))"
+  ).bind(candleKey, fingerprint, fingerprint, fingerprint).run();
+  return Number(result.meta?.changes || 0) > 0;
+}
+
+async function setAnalysisRunStatus(
+  env: Env,
+  candleKey: string,
+  status: "complete" | "degraded" | "failed",
+  fingerprint: string,
+  errorCode: string | null = null
+): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE analysis_runs SET status = ?, updated_at = datetime('now'), " +
+    "completed_at = CASE WHEN ? IN ('complete', 'degraded') THEN datetime('now') ELSE NULL END, " +
+    "error_code = ?, result_json = json_object('input_fingerprint', ?) WHERE candle_key = ?"
+  ).bind(status, status, errorCode, fingerprint, candleKey).run();
+}
+
+async function runAnalysisFromBundle(
+  env: Env,
+  bundle: EvidenceBundle
+): Promise<HandoffResponse> {
+  const requestId = bundle.request_id;
+  const candle = bundle.candle;
+  const ticker = candle.symbol;
+  const timeframe = candle.timeframe;
+  const candleKey = candle.candle_key || bui
