@@ -40,8 +40,9 @@ test("concurrent webhook events retain independent source identity", async () =>
 });
 
 test("duplicate event keys are stable for idempotent D1 and consumer processing", () => {
-  const task1 = buildLocalCalculationQueueTask({ candleKey: "candle-1", engine: "prophet", enqueuedAt: "t1" });
-  const task2 = buildLocalCalculationQueueTask({ candleKey: "candle-1", engine: "prophet", enqueuedAt: "t2" });
+  const context = { candleKey: "candle-1", engine: "prophet", ticker: "OANDA:XAUUSD", timeframe: "H1", candleTime: "2026-11-03T20:00:00.000Z" };
+  const task1 = buildLocalCalculationQueueTask({ ...context, enqueuedAt: "t1" });
+  const task2 = buildLocalCalculationQueueTask({ ...context, enqueuedAt: "t2" });
   assert.equal(task1.event_id, task2.event_id);
 });
 
