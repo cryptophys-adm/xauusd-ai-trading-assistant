@@ -182,3 +182,62 @@ test("GET /engine-shadow refuses to pretend Mizan/GMI local calculators exist", 
   assert.equal(body.engine_shadow_status, "blocked_no_local_calculator");
   assert.equal(body.calculation_allowed_for_trusted_evidence, false);
 });
+
+const { publishLocalComputation } = await import("../src/local-publisher.mjs");
+const { buildBundle } = await import("../src/tradingview-source.mjs");
+
+function fakeAiWorker(status = 202) {
+  const posts = [];
+  return {
+    posts,
+    async fetch(url, init) {
+      const body = JSON.parse(init.body);
+      posts.push({ url, secret: init.headers["x-webhook-secret"], body });
+      return new Response(JSON.stringify({ status: "accepted", engine: body.engine, trust_status: "candidate_pending_parity", analysis_status: "waiting_for_evidence" }), { status });
+    }
+  };
+}
+
+test("publisher posts mizan+prophet local_computation for the latest closed H1 bar once, keyed like the webhook", async () => {
+  const ai = fakeAiWorker();
+  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai, AI_WEBHOOK_SECRET: "ai-secret" });
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  const lastH1 = (await buildBundle(e)).timeframes.H1.candles.at(-1);
+  const now = Date.parse(lastH1.close_time) + 60_000;
+
+  const first = await publishLocalComputation(e, { now });
+  assert.equal(first.status, "published", JSON.stringify(first));
+  assert.deepEqual(ai.posts.map((p) => p.body.engine), ["mizan", "prophet"]);
+  assert.ok(ai.posts.every((p) => p.secret === "ai-secret" && p.url.endsWith("/evidence/local-calculation")));
+  assert.equal(first.candle_key, `OANDA:XAUUSD:60:${lastH1.time * 1000}`);
+  assert.equal(ai.posts[1].body.values.candle.c, lastH1.close);
+  assert.deepEqual(first.not_produced, ["gmi"]);
+
+  const again = await publishLocalComputation(e, { now });
+  assert.equal(again.status, "already_published");
+  assert.equal(ai.posts.length, 2);
+
+  const stale = await publishLocalComputation(e, { now: now + 30 * 60_000 });
+  assert.equal(stale.status, "no_fresh_h1_close");
+
+  const latest = await (await worker.fetch(new Request("https://m/local-computation/latest", { headers: auth }), e)).json();
+  assert.equal(latest.last_publish.candle_key, first.candle_key);
+});
+
+test("publisher stays off without the AI Worker secret/binding and records failures without a dedupe marker", async () => {
+  const off = await publishLocalComputation(env({ TV_GATEWAY: fakeGateway() }));
+  assert.equal(off.status, "publisher_not_configured");
+
+  const ai = fakeAiWorker(400);
+  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai, AI_WEBHOOK_SECRET: "ai-secret" });
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  const lastH1 = (await buildBundle(e)).timeframes.H1.candles.at(-1);
+  const now = Date.parse(lastH1.close_time) + 60_000;
+  const failed = await publishLocalComputation(e, { now });
+  assert.equal(failed.status, "partial_failure");
+  const retry = await publishLocalComputation(e, { now });
+  assert.equal(retry.status, "partial_failure"); // retried, not deduplicated
+  assert.equal(ai.posts.length, 4);
+});

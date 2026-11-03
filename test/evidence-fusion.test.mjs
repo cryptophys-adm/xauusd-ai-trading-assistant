@@ -203,3 +203,16 @@ test("fusion keeps webhook, local computation and news as three distinct labelle
   // A missing local lane never borrows webhook values, and vice versa.
   assert.ok(!("gmi" in degraded.local_calculations));
 });
+
+test("TradingView epoch-ms candle_time (str.tostring(time)) is accepted and matched against ISO local records", () => {
+  const input = completeInput();
+  const ms = String(Date.parse(candleTime));
+  for (const source of Object.keys(input.webhookPayloads)) input.webhookPayloads[source].candle_time = ms;
+  input.candleTime = ms;
+  const result = buildEvidenceFusion(input, now);
+  assert.ok(!result.validation_errors.some((e) => e.startsWith("webhook_candle_time_mismatch")), JSON.stringify(result.validation_errors));
+  assert.ok(!result.validation_errors.includes("candle_time_invalid"));
+  // Local records keep ISO candle_time; both resolve to the same instant.
+  assert.ok(!result.validation_errors.some((e) => e.endsWith("candle_time_mismatch")), JSON.stringify(result.validation_errors));
+  assert.equal(result.status, "ready");
+});

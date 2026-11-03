@@ -4,7 +4,10 @@ on:
   pull_request:
     paths:
       - "market-data-ingestion/**"
-      - "local-engines/prophet-r38/**"
+      - "local-engines/**"
+      - "src/prophet-r37-*.mjs"
+      - "src/evidence-fusion.mjs"
+      - "src/parity-registry.mjs"
       - "package.json"
       - ".github/workflows/validate-market-data-ingestion.yml"
   push:
@@ -12,7 +15,10 @@ on:
       - feat/xauusd-market-data-ingestion
     paths:
       - "market-data-ingestion/**"
-      - "local-engines/prophet-r38/**"
+      - "local-engines/**"
+      - "src/prophet-r37-*.mjs"
+      - "src/evidence-fusion.mjs"
+      - "src/parity-registry.mjs"
       - "package.json"
       - ".github/workflows/validate-market-data-ingestion.yml"
 
@@ -39,7 +45,7 @@ jobs:
         run: npm install --ignore-scripts
 
       - name: Run market data ingestion tests
-        run: node --test market-data-ingestion/test/*.test.mjs local-engines/prophet-r38/test/*.test.mjs
+        run: node --test market-data-ingestion/test/*.test.mjs local-engines/prophet-r38/test/*.test.mjs local-engines/producer/test/*.test.mjs
 
       - name: Validate Cloudflare Worker bundle
         run: npx --yes wrangler@4.45.0 deploy --dry-run --config market-data-ingestion/wrangler.jsonc

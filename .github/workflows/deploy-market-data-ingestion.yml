@@ -51,7 +51,7 @@ jobs:
         run: npm install --ignore-scripts
 
       - name: Run market data ingestion and Prophet R38 tests
-        run: node --test market-data-ingestion/test/*.test.mjs local-engines/prophet-r38/test/*.test.mjs
+        run: node --test market-data-ingestion/test/*.test.mjs local-engines/prophet-r38/test/*.test.mjs local-engines/producer/test/*.test.mjs
 
       - name: Require deploy credentials and Worker secrets
         env:
@@ -90,12 +90,20 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TV_GATEWAY_SECRET: ${{ secrets.TV_GATEWAY_SECRET }}
           MARKET_DATA_INGEST_SECRET: ${{ secrets.MARKET_DATA_INGEST_SECRET }}
+          AI_WEBHOOK_SECRET: ${{ secrets.AI_WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
           # Same gateway secret on both sides: the news Worker (TradingView MCP OAuth owner) and this adapter.
           printf '%s' "$TV_GATEWAY_SECRET" | npx --yes wrangler@4.45.0 secret put TV_GATEWAY_SECRET --name xauusd-fundamental-news-ingestion >/dev/null
           printf '%s' "$TV_GATEWAY_SECRET" | npx --yes wrangler@4.45.0 secret put TV_GATEWAY_SECRET --config market-data-ingestion/wrangler.jsonc >/dev/null
           printf '%s' "$MARKET_DATA_INGEST_SECRET" | npx --yes wrangler@4.45.0 secret put MARKET_DATA_INGEST_SECRET --config market-data-ingestion/wrangler.jsonc >/dev/null
+          # local_computation lane: must equal the AI Worker's WEBHOOK_SECRET. Optional; without it the
+          # adapter still ingests data but does not publish local engine outputs.
+          if [ -n "${AI_WEBHOOK_SECRET:-}" ]; then
+            printf '%s' "$AI_WEBHOOK_SECRET" | npx --yes wrangler@4.45.0 secret put AI_WEBHOOK_SECRET --config market-data-ingestion/wrangler.jsonc >/dev/null
+          else
+            echo "::warning::AI_WEBHOOK_SECRET not configured; local_computation publishing stays disabled."
+          fi
           echo "Worker secrets updated."
 
       - name: Smoke test deployed Worker
