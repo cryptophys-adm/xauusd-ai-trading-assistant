@@ -47,7 +47,7 @@ The existing `xauusd-fundamental-news-ingestion` Worker remains a separate ninth
 | 6 | `xauusd-gmi-engine` | Planned | Deterministic GMI calculations; exact source/version and parity evidence required. |
 | 7 | `xauusd-confluence-controller` | Planned | Canonical evidence fusion, freshness/completeness/provenance/conflict checks, and bounded additional-data requests. |
 | 8 | `xauusd-ai-trading-assistant` | Existing production | AI Engine: preserves `AI`, `DB`, `SIGNAL_CACHE`, `WEBHOOK_BUFFER`, `KNOWLEDGE_BASE`, model variables, `REQUIRED_SOURCES`, and Analyst → Counselor → Reasoner. |
-| Separate | `xauusd-fundamental-news-ingestion` | Existing production | News ingestion and completed news-analysis evidence; remains outside the eight core Workers. |
+| Separate | `xauusd-fundamental-news-ingestion` (role: **TradingView MCP gateway**) | Existing production | Single owner of the TradingView MCP OAuth grant and account-wide quota cooldown. Serves fundamental news (HTTP `/pull` + hourly cron) and OHLCV for local engines (RPC entrypoint `TvGateway`). The name is historical and kept for OAuth redirect, secret and binding continuity. It remains outside the eight core Workers. |
 
 Thus the target is **8 core Workers + 1 news Worker = 9 physical Workers**. The AI Engine and news-ingestion Worker must remain deployed; their names and existing production bindings/resources are not to be replaced. Evidence fusion is a separate core Worker (#7), while the existing AI Worker consumes its validated evidence bundle. No containers and no deprecated per-timeframe Worker fleet.
 
