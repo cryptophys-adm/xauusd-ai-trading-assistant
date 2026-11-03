@@ -96,7 +96,14 @@ jobs:
           let health;
           let healthParseError = "no response";
           for (let attempt = 0; attempt < 10; attempt++) {
-            healthResponse = await fetch(base + "/health", { signal: AbortSignal.timeout(15000) });
+            try {
+              healthResponse = await fetch(base + "/health", { signal: AbortSignal.timeout(15000) });
+            } catch (error) {
+              // A freshly deployed workers.dev route can time out while it propagates; retry instead of failing.
+              healthParseError = "fetch failed: " + (error?.name || "error");
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              continue;
+            }
             try {
               health = await healthResponse.clone().json();
               healthParseError = "";
@@ -119,7 +126,13 @@ jobs:
           let ready;
           let readyParseError = "no response";
           for (let attempt = 0; attempt < 10; attempt++) {
-            readyResponse = await fetch(base + "/ready", { signal: AbortSignal.timeout(15000) });
+            try {
+              readyResponse = await fetch(base + "/ready", { signal: AbortSignal.timeout(15000) });
+            } catch (error) {
+              readyParseError = "fetch failed: " + (error?.name || "error");
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              continue;
+            }
             try {
               ready = await readyResponse.clone().json();
               readyParseError = "";
