@@ -94,6 +94,17 @@ test("worker source keeps asynchronous queueing, provenance, and AI tracing hook
   assert.match(source, /tracing\.enterSpan\("invoke_agent"/);
   assert.match(source, /tracing\.enterSpan\("chat"/);
   assert.match(source, /tracing\.enterSpan\("process_queue"/);
+  const d1Write = source.indexOf(').bind(candleKey, source, JSON.stringify(storedPayload)).run();');
+  const kvWrite = source.indexOf('await env.WEBHOOK_BUFFER.put("candle:" + candleKey + ":" + source');
+  const queueSend = source.indexOf("await sendQueueTask(env.XAUUSD_EVENTS, task)", d1Write);
+  const accepted = source.indexOf('analysis_status: "queued"', queueSend);
+  assert.ok(d1Write >= 0 && kvWrite > d1Write && queueSend > kvWrite && accepted > queueSend,
+    "D1 and KV writes must precede durable queue send and HTTP 202 acceptance");
+  assert.match(source, /verifyHandoffRequest\(env\.CONFLUENCE_HANDOFF_SECRET/);
+  assert.match(source, /validateBundle\(bundle\)/);
+  assert.match(source, /fail_closed:/);
+  assert.doesNotMatch(source, /span\.setAttribute\(\s*["'][^"']*(?:prompt|secret|token)[^"']*["']/i,
+    "prompt and credential values must never be attached to spans");
   assert.match(wrangler, /xauusd-webhook-events/);
   assert.match(wrangler, /xauusd-webhook-events-dlq/);
   assert.match(wrangler, /"max_retries": 5/);
