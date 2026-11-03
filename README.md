@@ -29,8 +29,9 @@ The target explicitly uses **8 core physical Workers plus 1 separate news-ingest
 
 - AI Worker: `xauusd-ai-trading-assistant`
 - AI custom domain: `ai.cryptophys.work`
-- News ingestion Worker: `xauusd-fundamental-news-ingestion`
-- News custom domain: `news.cryptophys.work`
+- TradingView MCP gateway Worker: `xauusd-fundamental-news-ingestion`. The name is historical. It serves fundamental news over HTTP `/pull` and cron, and OHLCV for local engines through the RPC entrypoint `TvGateway`.
+- Gateway custom domain: `news.cryptophys.work`. It is kept because it is the registered TradingView OAuth redirect host.
+- Market-data / local-engine Worker: `xauusd-tradingview-pull-adapter` (see `docs/MARKET_DATA_INGESTION.md`)
 - D1: `xauusd-signals` (ID is in `wrangler.jsonc`)
 - KV bindings: `SIGNAL_CACHE`, `WEBHOOK_BUFFER`, `KNOWLEDGE_BASE`
 

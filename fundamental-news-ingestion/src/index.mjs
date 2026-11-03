@@ -970,6 +970,13 @@ async function buildHealth(env) {
   return {
     worker: WORKER_NAME,
     status: "ok",
+    // The Worker name is historical: it is the single TradingView MCP gateway
+    // (one OAuth grant, one account-wide quota cooldown) for news and OHLCV.
+    role: "tradingview-mcp-gateway",
+    services: {
+      news: { transport: "http+cron", endpoints: ["POST /pull"], cron: "5 * * * *" },
+      ohlcv: { transport: "rpc", entrypoint: "TvGateway", consumers: ["xauusd-tradingview-pull-adapter"] }
+    },
     provider: PROVIDER,
     symbols,
     ingest_auth_configured: Boolean(asString(env.INGEST_SECRET)),

@@ -1,5 +1,8 @@
 {
   "$schema": "../node_modules/wrangler/config-schema.json",
+  // Name kept for continuity (OAuth redirect https://news.cryptophys.work/oauth/callback,
+  // secrets, Workers Builds, Service Bindings). Role: the single TradingView MCP gateway —
+  // fundamental news (HTTP /pull + cron) and OHLCV for local engines (RPC entrypoint TvGateway).
   "name": "xauusd-fundamental-news-ingestion",
   "main": "src/worker.mjs",
   "compatibility_date": "2026-10-31",

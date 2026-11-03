@@ -40,7 +40,7 @@ The target is **9 physical Workers total: 8 core Workers plus the separately ret
 | 6 | `xauusd-gmi-engine` | Planned | Deterministic GMI calculations; exact source/version and parity evidence required. |
 | 7 | `xauusd-confluence-controller` | Planned | Canonical evidence fusion and data-request policy, including freshness, provenance, completeness and conflict checks. |
 | 8 | `xauusd-ai-trading-assistant` | Existing production | AI Engine; preserve all current AI/D1/KV bindings, model variables, `REQUIRED_SOURCES` and Analyst → Counselor → Reasoner. |
-| Separate | `xauusd-fundamental-news-ingestion` | Existing production | News collection and completed news-analysis evidence; explicitly outside the eight core Workers. |
+| Separate | `xauusd-fundamental-news-ingestion` (role: TradingView MCP gateway) | Existing production | TradingView MCP gateway: news collection and completed news-analysis evidence, plus OHLCV for local engines through RPC `TvGateway`. The name is historical. Explicitly outside the eight core Workers. |
 
 **Count: 8 core + 1 news = 9 physical Workers.** Keep both existing Workers and their resource contracts. The seven planned core Workers are not deployed. No containers and no deprecated per-timeframe Worker fleet. Each planned Worker must pass source-capability/contract checks, preview acceptance, quota/security/readiness checks and rollback planning before production deployment. News ingestion currently has a provider quota/cooldown blocker; this remains a release blocker until a fresh valid cycle is observed.
 

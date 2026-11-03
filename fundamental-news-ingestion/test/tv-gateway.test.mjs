@@ -124,3 +124,11 @@ test("gateway rejects oversize batches and invalid requests before touching OAut
   assert.equal(bad.status, 400);
   assert.equal(bad.body.error, "symbol_not_allowed");
 });
+
+test("health identifies the Worker by role: TradingView MCP gateway serving news and OHLCV", async () => {
+  const body = await (await worker.fetch(new Request("https://news.example.com/health"), createEnv(), ctx)).json();
+  assert.equal(body.worker, "xauusd-fundamental-news-ingestion");
+  assert.equal(body.role, "tradingview-mcp-gateway");
+  assert.deepEqual(Object.keys(body.services), ["news", "ohlcv"]);
+  assert.equal(body.services.ohlcv.entrypoint, "TvGateway");
+});
