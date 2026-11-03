@@ -1,0 +1,70 @@
+name: Decommission legacy Workers
+
+# One-off, owner-approved (2026-11-03) removal of six Workers that were deployed
+# by hand from deleted branches and are not part of this repository:
+#   - xauusd-mizan-engine / xauusd-prophet-engine / xauusd-gmi-engine:
+#       stubs that compute nothing but report production_ready=true
+#   - xauusd-market-data-normalizer / xauusd-pull-orchestrator: unused stubs
+#   - xauusd-confluence-controller: unauthenticated POST /v1/fuse that signed
+#       caller-asserted "verified" evidence with CONFLUENCE_HANDOFF_SECRET
+# Local computation for MizanLib, Prophet and GMI is owned by
+# xauusd-tradingview-pull-adapter (see docs/LOCAL_COMPUTATION_OWNERSHIP.md).
+# Idempotent: a Worker that no longer exists is reported and skipped.
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/decommission-legacy-workers.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: decommission-legacy-workers
+  cancel-in-progress: false
+
+jobs:
+  decommission:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Delete the six legacy Workers (explicit allowlist only)
+        run: |
+          set -uo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then echo "::error::CLOUDFLARE_API_TOKEN is not configured."; exit 1; fi
+          failed=0
+          for name in \
+            xauusd-mizan-engine \
+            xauusd-prophet-engine \
+            xauusd-gmi-engine \
+            xauusd-market-data-normalizer \
+            xauusd-pull-orchestrator \
+            xauusd-confluence-controller; do
+            echo "::group::$name"
+            out="$(npx --yes wrangler@4.45.0 delete --name "$name" --force 2>&1)"; rc=$?
+            echo "$out"
+            if [ $rc -eq 0 ]; then
+              echo "deleted: $name"
+            elif echo "$out" | grep -qiE "does not exist|not found|10007"; then
+              echo "already absent: $name"
+            else
+              echo "::error::failed to delete $name"; failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $failed
+
+      - name: Record result
+        if: always()
+        run: |
+          {
+            echo "### Legacy Worker decommission"
+            echo "Removed (or confirmed absent): xauusd-mizan-engine, xauusd-prophet-engine, xauusd-gmi-engine, xauusd-market-data-normalizer, xauusd-pull-orchestrator, xauusd-confluence-controller."
+            echo "Local computation owner: xauusd-tradingview-pull-adapter (market-data-ingestion/)."
+          } >> "$GITHUB_STEP_SUMMARY"
