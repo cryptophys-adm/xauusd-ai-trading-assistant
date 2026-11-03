@@ -129,4 +129,9 @@ export async function verifyHandoffRequest(
 
   const ok = await verifyHmac(secret, { body, request_id: requestId, timestamp }, signature);
   if (!ok) {
-    re --- TRUNCATED --- 4,654 chars
+    return { ok: false, request_id: requestId, timestamp, reason: "Invalid signature" };
+  }
+
+  if (seenIds) seenIds.add(requestId);
+  return { ok: true, request_id: requestId, timestamp, reason: null };
+}
