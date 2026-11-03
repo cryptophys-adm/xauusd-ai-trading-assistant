@@ -54,4 +54,10 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
   .news-item { padding:10px 0; border-bottom:1px solid var(--border); }
   .news-item:last-child { border-bottom:none; }
-  .news- --- TRUNCATED --- 13,290 chars
+  .news-title { font-size:13px; font-weight:500; }
+  .news-meta { font-size:11px; color:var(--muted); margin-top:2px; }
+  select, button { background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 10px; font-size:13px; cursor:pointer; }
+  button:hover { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .refresh-btn { float:right; }
+</style>
+</
