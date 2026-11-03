@@ -2,11 +2,13 @@
 
 Status: implementation on `main`; **not deployed and not approved as Pine-parity evidence**.
 
-## Direction (owner decision, 2026-11-03)
+## Direction (owner decisions, 2026-11-03)
 
 - **Twelve Data is deprecated and removed.** No third-party market-data provider is used.
-- **TradingView webhooks are not part of the target design.** Local engines compute Mizan/Prophet/GMI themselves from TradingView data.
-- Local engines must receive **exactly the inputs the Pine scripts see**. The worker therefore pulls OHLCV from TradingView the same way the news-ingestion Worker pulls news: via the TradingView MCP server with the account's OAuth grant.
+- **TradingView webhooks are kept.** The platform has two separate technical lanes, and their outputs are never mixed:
+  1. **`tradingview_webhook`:** indicator outputs computed by TradingView itself (installed Prophet R38, Prophet R37 SSOT and GMI v12.70), delivered by alert webhook.
+  2. **`local_computation`:** Mizan/Prophet/GMI computed by local engines from **raw** TradingView OHLCV. This Worker supplies that raw data, pulled the same way news ingestion pulls news: via TradingView MCP with the account's OAuth grant.
+- The AI pipeline receives three inputs before Analyst → Counselor → Reasoner: `tradingview_webhook`, `local_computation` and `fundamental_news`. They appear as `evidence_fusion.input_lanes` (see [EVIDENCE_CONTRACTS.md](EVIDENCE_CONTRACTS.md)).
 
 ## Data path
 
@@ -97,4 +99,4 @@ The news Worker must already be running the gateway code. Any merge to `main` th
 - Bars are served under the TradingView account's plan and exchange entitlements, either realtime or delayed. The MCP notice says "regular session only". For 24h OANDA FX/metals this matches the chart, but the session setting must match the indicator's chart for parity.
 - Intraday depth is limited by the TradingView feed to a few thousand bars per interval.
 - Having the right inputs is necessary but not sufficient for parity. Mizan/Prophet/GMI outputs remain `parity_status=not_proven` until closed-candle TradingView fixtures from the installed indicators are matched.
-- The AI Worker still lists the webhook sources `prophet_r38`, `prophet_r37_ssot` and `gmi_v12_70` in `REQUIRED_SOURCES`. Replacing that webhook dependency with local-engine outputs is the next integration step and is not done here.
+- The webhook lane (`REQUIRED_SOURCES`: `prophet_r38`, `prophet_r37_ssot`, `gmi_v12_70`) stays as it is. Local-engine outputs are a second, separate lane: they reach the AI Worker via `POST /evidence/local-calculation`, which is still gated by the provenance allowlist. A worker that runs the engines on the raw bundle and posts their results for each closed candle is not built yet.

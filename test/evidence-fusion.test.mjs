@@ -180,3 +180,26 @@ test("rejects local calculations for a candle in the future (ported from PR #13)
   const near = validateLocalCalculation({ ...local("mizan"), candle_time: nearCandle, candle_key: "x", computed_at: "2026-11-01T15:04:30.000Z" }, {}, now);
   assert.ok(!near.errors.includes("candle_time_in_future"));
 });
+
+test("fusion keeps webhook, local computation and news as three distinct labelled lanes", () => {
+  const result = buildEvidenceFusion(completeInput(), now);
+  assert.deepEqual(Object.keys(result.input_lanes), ["tradingview_webhook", "local_computation", "fundamental_news"]);
+  assert.match(result.input_lanes.tradingview_webhook.computed_by, /TradingView/);
+  assert.match(result.input_lanes.local_computation.computed_by, /raw TradingView OHLCV/);
+  assert.deepEqual(result.input_lanes.tradingview_webhook.present_sources, ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"]);
+  assert.deepEqual(result.input_lanes.local_computation.present_engines, ["mizan", "prophet", "gmi"]);
+  assert.equal(result.input_lanes.local_computation.calculation_versions.prophet, "prophet-test-v1");
+  assert.ok(Object.values(result.input_lanes).every((lane) => lane.complete === true));
+
+  const partial = completeInput();
+  delete partial.webhookPayloads.gmi_v12_70;
+  partial.localCalculations = [local("prophet")];
+  partial.newsAnalysis = null;
+  const degraded = buildEvidenceFusion(partial, now);
+  assert.deepEqual(degraded.input_lanes.tradingview_webhook.missing_sources, ["gmi_v12_70"]);
+  assert.equal(degraded.input_lanes.tradingview_webhook.complete, false);
+  assert.deepEqual(degraded.input_lanes.local_computation.missing_engines, ["mizan", "gmi"]);
+  assert.equal(degraded.input_lanes.fundamental_news.present, false);
+  // A missing local lane never borrows webhook values, and vice versa.
+  assert.ok(!("gmi" in degraded.local_calculations));
+});
