@@ -20,15 +20,18 @@ export function buildWebhookQueueTask(input) {
 }
 
 export function buildLocalCalculationQueueTask(input) {
-  const { candleKey, engine, enqueuedAt = new Date().toISOString() } = input ?? {};
-  if (![candleKey, engine].every(value => typeof value === "string" && value.trim())) {
-    throw new TypeError("local calculation queue task requires candleKey and engine");
+  const { candleKey, engine, ticker, timeframe, candleTime, enqueuedAt = new Date().toISOString() } = input ?? {};
+  if (![candleKey, engine, ticker, timeframe, candleTime].every(value => typeof value === "string" && value.trim())) {
+    throw new TypeError("local calculation queue task requires candleKey, engine, ticker, timeframe, and candleTime");
   }
   return {
     kind: "local_calculation_reconcile",
     event_id: `localcalc:${candleKey}:${engine}`,
     candle_key: candleKey,
     engine,
+    ticker,
+    timeframe,
+    candle_time: candleTime,
     enqueued_at: enqueuedAt
   };
 }
