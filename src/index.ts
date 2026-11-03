@@ -1160,13 +1160,8 @@ async function runAnalysisFromBundle(
       schema_version: bundle.schema_version
     };
 
-    const [knowledgeText] = await Promise.all([
-      env.KNOWLEDGE_BASE.get("knowledge-base:v4").then(value => value || env.KNOWLEDGE_BASE.get("knowledge-base:v3"))
-    ]);
-    const knowledge = knowledgeText || JSON.stringify({
-      status: "kv_key_missing",
-      message: "No knowledge-base:v4 or knowledge-base:v3 value was found in the bound KV namespace."
-    });
+    // Bundled knowledge base v4 (generated from the Pine SSOT); never a hand-maintained KV value.
+    const knowledge = JSON.stringify(TECHNICAL_KNOWLEDGE);
 
     const analystResult = await tracing.enterSpan("chat", async (span) => {
       span.setAttributes({
@@ -1177,9 +1172,10 @@ async function runAnalysisFromBundle(
         "gen_ai.request.model": String(env.AI_MODEL_ANALYST)
       });
       return env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
-      prompt: [
+      messages: chatMessages([
         "You are the Analyst stage in an XAUUSD decision-support pipeline.",
         "Classify the supplied indicator evidence without inventing missing values or prices.",
+        "Decode every numeric field with POLICY.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply POLICY.decision_policy. Never infer a field meaning that is not in the dictionary.",
         "Prophet is the base directional bias. GMI can validate, block, or defer a setup but must not silently overwrite Prophet's bias.",
         "Evidence includes technical engine results, source provenance, and fundamental news_evidence.",
         "If news_evidence.available is false, state that fundamental news data is unavailable. Do NOT invent news.",
@@ -1190,7 +1186,7 @@ async function runAnalysisFromBundle(
         JSON.stringify(evidence),
         "POLICY:",
         knowledge
-      ].join("\n"),
+      ]),
       max_tokens: 700,
       temperature: 0.1
     } as never);
@@ -1206,9 +1202,10 @@ async function runAnalysisFromBundle(
         "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR)
       });
       return env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
-      prompt: [
+      messages: chatMessages([
         "You are the Counselor stage in an XAUUSD decision-support pipeline.",
         "Use only the JSON evidence and analyst output below. Do not invent prices or indicator definitions.",
+        "Decode every numeric field with POLICY.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply POLICY.decision_policy. Never infer a field meaning that is not in the dictionary.",
         "Prophet is the base bias. GMI may validate, block, or defer a Prophet setup; it must not silently overwrite Prophet's bias.",
         "If news_evidence.available is false, acknowledge fundamental news is unavailable. Do NOT fabricate news.",
         "If news_evidence.available is true, weigh the supplied articles in scenarios.",
@@ -1220,7 +1217,7 @@ async function runAnalysisFromBundle(
         knowledge,
         "ANALYST:",
         analystText
-      ].join("\n"),
+      ]),
       max_tokens: 1400,
       temperature: 0.1
     } as never);
@@ -1236,9 +1233,10 @@ async function runAnalysisFromBundle(
         "gen_ai.request.model": String(env.AI_MODEL_REASONER)
       });
       return env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
-      prompt: [
+      messages: chatMessages([
         "You are the final Deep Reasoner stage for XAUUSD decision support.",
         "Use only the supplied evidence, analyst output, and counselor output. Do not invent market prices or claim the models verified facts they did not receive.",
+        "Decode every numeric field with POLICY.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply POLICY.decision_policy. Never infer a field meaning that is not in the dictionary.",
         "Prophet remains the base bias. GMI may validate, block, or wait on a setup. Do not silently reverse Prophet's bias.",
         "If news_evidence.available is false, state fundamental news analysis was not performed. Do NOT claim news supported or contradicted the setup.",
         "If news_evidence.available is true, incorporate the supplied articles into final reasoning.",
@@ -1246,11 +1244,13 @@ async function runAnalysisFromBundle(
         "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
         "EVIDENCE:",
         JSON.stringify(evidence),
+        "POLICY:",
+        knowledge,
         "ANALYST:",
         analystText,
         "COUNSELOR:",
         counselorText
-      ].join("\n"),
+      ]),
       max_tokens: 1200,
       temperature: 0.1
     } as never);
