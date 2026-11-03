@@ -16,7 +16,7 @@ This page records how the files in `pinescript/ssot/` were checked against what 
 | Webhook payload keys equal the keys actually delivered | ✅ | ✅ (both `prophet_r37_ssot` and `gmi_v12_70`) | n/a |
 | Import path | `cryptophys/CryptophysMizanLib/4` | `cryptophys/CryptophysMizanLib/4` | — |
 | Functional parity with TradingView output | ✅ every candle matched so far (24 fields, including MizanLib structure fields) | ⏳ first comparison from 15:00 UTC | indirect (via Prophet and GMI) |
-| Byte identity with the published library | n/a | n/a | ⚠️ not proven |
+| Content equals the owner's export of the published library | n/a | n/a | ✅ identical code (2026-11-03) |
 
 These checks are enforced by tests:
 - `test/pine-installed-inputs.test.mjs` checks titles, input defaults and payload keys.
@@ -28,9 +28,10 @@ Source SHA-256 of the current files:
 - `CryptophysMizanLib-uploaded.txt`: `755ab68cb0ed9bd536c4e83eb71b09f804424cc1027b811f486906a3625aba59`
 
 ## Open items
-1. **MizanLib byte identity.**
-   - The repo copy is 73,681 bytes and 1,189 lines. The recovered raw v4 artifact recorded in `LOCAL_CALCULATION_SOURCE_BASELINE.md` is 73,727 bytes and 1,190 lines (SHA-256 `6c44d6bf…`), and the owner attachment hash noted in `OPENCODE_CONTINUATION_INSTRUCTIONS.md` is `252139fc…`. Neither matches the repo copy byte for byte.
-   - Prophet's parity on the structure fields shows that the MizanLib functions those fields depend on behave like the published `CryptophysMizanLib/4`.
-   - To close this item, export the published library source from TradingView and replace the repo copy if it differs.
+1. **MizanLib: resolved on 2026-11-03.**
+   - The owner pasted the source of the published `CryptophysMizanLib/4` and it was compared line by line with the repo copy: all 1,190 lines, Sections 1–32, are identical.
+   - The only differences are trailing whitespace on 8 lines and the final newline, which the chat paste does not preserve. No code, constant or comment differs.
+   - The repo copy was therefore kept unchanged, so the MizanLib engine identity and the parity history stay intact.
+   - The earlier byte-size mismatch with the recorded raw artifact (73,727 bytes versus 73,681) is a whitespace and line-ending difference only.
 2. **Boolean inputs.** TradingView alert names do not show boolean inputs, for example `legacy_mode`, `shared_prophet_alignment` and `use_vol_veto`. The engines assume the Pine defaults; the parity registry will flag any deviation.
 3. **GMI header comments.** The GMI file header says "R11 CPR CONTEXT ENGINE CANDIDATE — BASED ON USER-UPLOADED R10.1.7" and "static transformation only… NOT yet verified". The installed indicator title and settings match this file, so these comments are stale. They are left untouched to preserve the source bytes.
