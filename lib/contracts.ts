@@ -119,4 +119,82 @@ export interface BundleValidation {
   missing_evidence: string[];
 }
 
-/** The versioned, auth --- TRUNCATED --- 6,887 chars
+/** The versioned, authenticated bundle sent Controller -> AI Worker. */
+export interface EvidenceBundle {
+  schema_version: string;
+  request_id: string;
+  created_at: string; // ISO-8601 UTC
+  symbol: string;
+  timeframe: Timeframe;
+  candle: CandleRef;
+  validation: BundleValidation;
+  sources: SourceEvidence[];
+  engines: EngineResult[];
+  news: NewsEvidence;
+  /** SHA-256 of the canonical evidence subset (for dedup / fingerprinting). */
+  evidence_fingerprint: string;
+  provenance_verified: boolean;
+  handoff: {
+    target_worker: string;
+    target_endpoint: string;
+    auth_scheme: string;
+  };
+}
+
+/** Response from the AI Worker /v1/analyze endpoint. */
+export interface HandoffResponse {
+  schema_version: string;
+  request_id: string;
+  decision: Decision;
+  confidence: number | null;
+  entry_price: number | null;
+  stop_loss: number | null;
+  take_profit: number | null;
+  risk_reward: number | null;
+  position_size_pct: number | null;
+  reasoning: string;
+  confirmation: string | null;
+  invalidation: string | null;
+  models: {
+    analyst: string;
+    counselor: string;
+    reasoner: string;
+  };
+  stored: boolean;
+  notified: boolean;
+  errors: string[];
+}
+
+/** Build the canonical candle key: SYMBOL:TIMEFRAME:ISO_TS. */
+export function buildCandleKey(symbol: string, timeframe: Timeframe, candleTs: string): string {
+  const safe = (s: string) => s.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
+  return [safe(symbol), safe(timeframe), safe(candleTs)].join(":");
+}
+
+/** ISO-8601 UTC now. */
+export function nowIso(): string {
+  return new Date().toISOString();
+}
+
+/** Parse an ISO-8601 timestamp safely. Returns null when invalid. */
+export function parseIso(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Is a candle in the future relative to now? */
+export function isCandleInFuture(candleTs: string): boolean {
+  const d = parseIso(candleTs);
+  if (!d) return true;
+  return d.getTime() > Date.now();
+}
+
+/** Compute SHA-256 hex digest. Available in Workers and Node. */
+export async function sha256Hex(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  const bytes = new Uint8Array(digest);
+  let hex = "";
+  for (const b of bytes) hex += b.toString(16).padStart(2, "0");
+  return hex;
+}
