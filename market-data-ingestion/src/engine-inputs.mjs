@@ -33,25 +33,34 @@ const SOURCE_CALLER_CONTRACTS = Object.freeze({
       D1: "daily CPR width uses a 20-day mean and needs 21 completed daily bars",
       W1: "weekly timeframe calculations and MTF alignment require closed weekly context"
     },
-    blockers: ["M1 lower-timeframe OHLCV arrays absent", "TVC:DXY H4 absent", "CRYPTOCAP:USDT H4 absent", "TVC:USOIL series absent", "TradingView-compatible footprint/order-flow arrays absent", "feature-level TradingView fixtures absent"]
+    input_series: {
+      lower_tf: "OANDA:XAUUSD 1m (request.security_lower_tf intrabars)",
+      external: ["TVC:DXY 4h", "CRYPTOCAP:USDT 4h", "TVC:USOIL chart timeframe (5m)"]
+    },
+    blockers: ["no local GMI calculator yet", "feature-level TradingView fixtures absent"]
   }
 });
 
-const GMI_UNAVAILABLE_INPUTS = Object.freeze([
-  { code: "missing_intrabar_ohlcv", source_call: "request.security_lower_tf", required_resolution: "dyn_ltf (M1 on the configured M5 workflow)", fields: ["time", "open", "high", "low", "close", "volume"], blocks: ["footprint_from_arrays", "ext_profile_calc", "ext_update_intra"] },
-  { code: "missing_external_series", symbol: "TVC:DXY", timeframe: "H4", blocks: ["macro_kinematics", "macro_penalty"] },
-  { code: "missing_external_series", symbol: "CRYPTOCAP:USDT", timeframe: "H4", blocks: ["macro_kinematics", "macro_penalty"] },
-  { code: "missing_external_series", symbol: "TVC:USOIL", timeframe: "chart timeframe", blocks: ["oil RSI macro context"] },
-  { code: "missing_tradingview_footprint_semantics", blocks: ["buy/sell volume inference and footprint/order-flow-dependent features"] }
+// GMI inputs beyond the chart series. Each is reported as unavailable only
+// when the TradingView-native series is actually missing from the bundle.
+const GMI_EXTRA_INPUTS = Object.freeze([
+  { code: "missing_intrabar_ohlcv", lookup: (b) => b?.timeframes?.M1, min: 300, source_call: "request.security_lower_tf", required_resolution: "dyn_ltf (M1 on the configured M5 workflow)", fields: ["time", "open", "high", "low", "close", "volume"], blocks: ["footprint_from_arrays", "ext_profile_calc", "ext_update_intra"] },
+  { code: "missing_external_series", symbol: "TVC:DXY", timeframe: "H4", lookup: (b) => b?.external_series?.["TVC:DXY"]?.H4, min: 51, blocks: ["macro_kinematics", "macro_penalty"] },
+  { code: "missing_external_series", symbol: "CRYPTOCAP:USDT", timeframe: "H4", lookup: (b) => b?.external_series?.["CRYPTOCAP:USDT"]?.H4, min: 51, blocks: ["macro_kinematics", "macro_penalty"] },
+  { code: "missing_external_series", symbol: "TVC:USOIL", timeframe: "M5", lookup: (b) => b?.external_series?.["TVC:USOIL"]?.M5, min: 51, blocks: ["oil RSI macro context"] }
 ]);
 
+function gmiUnavailableInputs(bundle) {
+  return GMI_EXTRA_INPUTS
+    .filter((item) => (item.lookup(bundle)?.candle_count ?? item.lookup(bundle)?.candles?.length ?? 0) < item.min)
+    .map(({ lookup, min, ...rest }) => ({ ...rest, required_bars: min, available_bars: lookup(bundle)?.candle_count ?? lookup(bundle)?.candles?.length ?? 0, blocks: [...rest.blocks], ...(rest.fields ? { fields: [...rest.fields] } : {}) }));
+}
+
 function countFor(bundle, timeframe) {
-  if (["D1", "W1"].includes(timeframe)) {
-    return bundle?.context_timeframes?.[timeframe]?.candle_count ??
-      bundle?.context_timeframes?.[timeframe]?.candles?.length ?? 0;
-  }
-  return bundle?.timeframes?.[timeframe]?.candle_count ??
-    bundle?.timeframes?.[timeframe]?.candles?.length ?? 0;
+  const native = bundle?.timeframes?.[timeframe];
+  const context = bundle?.context_timeframes?.[timeframe];
+  const count = (frame) => frame?.candle_count ?? frame?.candles?.length ?? 0;
+  return Math.max(count(native), ["D1", "W1"].includes(timeframe) ? count(context) : 0);
 }
 
 function sourceHistoryGaps(bundle, engine) {
@@ -87,6 +96,7 @@ function dataForEngine(bundle) {
     latest_closed_m5_close_time: bundle.latest_closed_m5_close_time,
     timeframes: bundle.timeframes,
     context_timeframes: bundle.context_timeframes || {},
+    external_series: bundle.external_series || {},
     volume_available: bundle.volume_available === true
   };
 }
@@ -120,14 +130,11 @@ export function buildLocalEngineInput(bundle, engine) {
       "verified equality between the installed published MizanLib /4 and the source used by this repository"
     );
   } else {
-    calculationStatus = "blocked_missing_gmi_inputs";
-    unavailableInputs = GMI_UNAVAILABLE_INPUTS.map((item) => ({ ...item, fields: item.fields ? [...item.fields] : undefined, blocks: [...(item.blocks || [])] }));
+    unavailableInputs = gmiUnavailableInputs(bundle);
+    calculationStatus = unavailableInputs.length ? "blocked_missing_gmi_inputs" : "blocked_no_local_gmi_calculator";
     missingDependencies.push(
-      "M1 intrabar OHLCV arrays for request.security_lower_tf",
-      "TVC:DXY H4 history",
-      "CRYPTOCAP:USDT H4 history",
-      "TVC:USOIL chart-timeframe history",
-      "TradingView-compatible footprint/order-flow inputs",
+      ...unavailableInputs.map((item) => item.symbol ? `${item.symbol} ${item.timeframe} history` : "M1 intrabar OHLCV arrays for request.security_lower_tf"),
+      "deterministic local GMI calculator (not implemented)",
       "feature-level GMI TradingView fixtures and verified MizanLib /4 identity"
     );
   }

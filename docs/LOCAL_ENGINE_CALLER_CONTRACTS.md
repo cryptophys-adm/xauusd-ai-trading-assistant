@@ -35,7 +35,20 @@ The numbers below are minimum warm-up requirements for the named call sites, not
 
 MizanLib does not have one standalone signal-history requirement. The market-data envelope therefore uses the union of the known Prophet R38/GMI caller floors: M5=300, M15/H1/H4/D1/W1=51. This is explicitly a **minimum caller warm-up floor**, not universal sufficiency for all exports, all input settings, profile state, or every indicator that imports the library. Any additional caller or longer lookback must extend this contract before readiness can pass.
 
-## 3. GMI inputs unavailable in the current candle bundle
+## 3. GMI inputs and their TradingView-native source (updated 2026-11-03)
+
+Twelve Data is deprecated. All inputs now come from TradingView through the TradingView MCP `mcp-tv-get-ohlcv` tool, via the news-ingestion Worker gateway (see [MARKET_DATA_INGESTION.md](MARKET_DATA_INGESTION.md)). The inputs that were previously missing are now pulled as native TradingView series:
+
+- `OANDA:XAUUSD` 1m for `request.security_lower_tf`;
+- `TVC:DXY` 4h;
+- `CRYPTOCAP:USDT` 4h;
+- `TVC:USOIL` 5m.
+
+`/engine-inputs?engine=gmi` reports one of these as unavailable only when its series is missing or under-warmed. `footprint_from_arrays` consumes those LTF OHLCV arrays, so it is no longer listed as an unavailable input. Its parity still needs fixtures.
+
+The table below is the historical (Twelve Data era) gap list, kept for audit:
+
+### Historical: GMI inputs unavailable in the old candle bundle
 
 | Input / source call | Current status | Feature consequence |
 |---|---|---|
