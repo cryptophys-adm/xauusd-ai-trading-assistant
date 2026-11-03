@@ -13,6 +13,11 @@ const QUOTA_COOLDOWN_KEY = "tv_mcp:quota_cooldown_until";
 const SEEN_ARTICLES_KEY = "tv_mcp:seen_articles_v1";
 const SEEN_ARTICLES_TTL_MS = 24 * 60 * 60 * 1000;
 const STATE_PREFIX = "tv_mcp:oauth_state:";
+// PKCE fallback cookie: KV is eventually consistent across locations, so the
+// state written by /oauth/start may not be readable yet where /oauth/callback
+// lands. The browser carries the same state + verifier back in an HttpOnly cookie.
+const OAUTH_COOKIE = "tv_mcp_oauth";
+const OAUTH_STATE_TTL_SECONDS = 15 * 60;
 const DEFAULT_SYMBOLS = ["OANDA:XAUUSD", "TVC:USOIL", "TVC:DXY"];
 const METADATA_CACHE_TTL_MS = 60 * 60 * 1000;
 
@@ -838,7 +843,7 @@ async function handleOAuthStart(request, env) {
       scope,
       resource
     },
-    10 * 60
+    OAUTH_STATE_TTL_SECONDS
   );
 
   const authUrl = new URL(metadata.authorization_endpoint);
@@ -855,8 +860,34 @@ async function handleOAuthStart(request, env) {
   if (url.searchParams.get("format") === "json") {
     return json({ authorization_url: authUrl.toString(), state });
   }
-  return Response.redirect(authUrl.toString(), 302);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: authUrl.toString(),
+      "set-cookie": `${OAUTH_COOKIE}=${state}.${codeVerifier}; Max-Age=${OAUTH_STATE_TTL_SECONDS}; Path=/oauth; HttpOnly; Secure; SameSite=Lax`,
+      "cache-control": "no-store"
+    }
+  });
 }
+
+function readOAuthCookie(request, state) {
+  const header = request.headers.get("cookie") || "";
+  for (const part of header.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name !== OAUTH_COOKIE) continue;
+    const value = rest.join("=");
+    const dot = value.indexOf(".");
+    if (dot <= 0) return null;
+    const cookieState = value.slice(0, dot);
+    const codeVerifier = value.slice(dot + 1);
+    // Only accept the cookie for the exact state TradingView echoed back.
+    if (cookieState !== state || !/^[A-Za-z0-9_-]{43,128}$/.test(codeVerifier)) return null;
+    return { code_verifier: codeVerifier };
+  }
+  return null;
+}
+
+const CLEAR_OAUTH_COOKIE = { "set-cookie": `${OAUTH_COOKIE}=; Max-Age=0; Path=/oauth; HttpOnly; Secure; SameSite=Lax` };
 
 async function handleOAuthCallback(request, env) {
   if (!hasOAuthConfig(env)) {
@@ -883,10 +914,16 @@ async function handleOAuthCallback(request, env) {
     return json({ error: "Missing OAuth code or state" }, 400);
   }
 
-  const stateRecord = await readKVJson(env, STATE_PREFIX + state);
+  const configuredRedirectUri = asString(env.TV_MCP_REDIRECT_URI).trim();
+  const kvRecord = await readKVJson(env, STATE_PREFIX + state);
   await deleteKVKey(env, STATE_PREFIX + state);
+  const cookieRecord = kvRecord ? null : readOAuthCookie(request, state);
+  const stateRecord = kvRecord || (cookieRecord ? { ...cookieRecord, redirect_uri: configuredRedirectUri } : null);
   if (!stateRecord) {
-    return json({ error: "Invalid or expired OAuth state" }, 400);
+    return json({
+      error: "Invalid or expired OAuth state",
+      hint: "Open /oauth/start again and finish the TradingView login within 15 minutes in the same browser, without reloading the callback page."
+    }, 400, CLEAR_OAUTH_COOKIE);
   }
 
   const codeVerifier = asString(stateRecord.code_verifier);
@@ -918,7 +955,7 @@ async function handleOAuthCallback(request, env) {
       token_type: tokenRecord.token_type,
       expires_at: tokenRecord.expires_at,
       scope: tokenRecord.scope
-    });
+    }, 200, CLEAR_OAUTH_COOKIE);
   } catch (error) {
     const status = Number.parseInt(String(error?.status || ""), 10);
     const safeStatus = Number.isFinite(status) && status >= 400 && status < 600 ? status : 502;
