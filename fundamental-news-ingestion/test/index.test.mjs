@@ -705,3 +705,49 @@ test("runNewsPull (NewsIngestionService RPC) runs /pull with the Worker's own se
   assert.equal(noOauth.rpc_http_status, 503);
   assert.equal(noOauth.oauth_configured, false);
 });
+
+test("OAuth callback falls back to the PKCE cookie when the KV state is not visible yet", async () => {
+  const env = createEnv();
+  const tokenBodies = [];
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).includes(".well-known/oauth-authorization-server")) {
+      return jsonResponse({
+        authorization_endpoint: "https://mcp.example.com/oauth/authorize",
+        token_endpoint: "https://mcp.example.com/oauth/token",
+        token_endpoint_auth_methods_supported: ["none"]
+      });
+    }
+    if (String(url).includes("/oauth/token")) {
+      tokenBodies.push(new URLSearchParams(init.body));
+      return jsonResponse({ access_token: "new-token", refresh_token: "r", expires_in: 3600 });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const start = await worker.fetch(new Request("https://news.example.com/oauth/start"), env, createCtx());
+  assert.equal(start.status, 302);
+  const state = new URL(start.headers.get("location")).searchParams.get("state");
+  const cookie = start.headers.get("set-cookie");
+  assert.match(cookie, /^tv_mcp_oauth=[^;]+; .*HttpOnly; Secure; SameSite=Lax/);
+  const cookiePair = cookie.split(";")[0];
+  const verifier = cookiePair.slice(cookiePair.indexOf(".") + 1);
+
+  // Simulate KV not yet visible at the callback location.
+  await env.OAUTH_STORE.delete("tv_mcp:oauth_state:" + state);
+
+  const wrongState = await worker.fetch(
+    new Request("https://news.example.com/oauth/callback?code=abc&state=other", { headers: { cookie: cookiePair } }),
+    env, createCtx()
+  );
+  assert.equal(wrongState.status, 400);
+
+  const callback = await worker.fetch(
+    new Request(`https://news.example.com/oauth/callback?code=abc&state=${state}`, { headers: { cookie: cookiePair } }),
+    env, createCtx()
+  );
+  assert.equal(callback.status, 200);
+  assert.equal((await callback.json()).oauth_authorized, true);
+  assert.equal(tokenBodies.at(-1).get("code_verifier"), verifier);
+  assert.match(callback.headers.get("set-cookie"), /tv_mcp_oauth=; Max-Age=0/);
+  assert.equal(JSON.parse(await env.OAUTH_STORE.get("tv_mcp:oauth_token")).access_token, "new-token");
+});
