@@ -15,6 +15,20 @@ All evidence for one analysis must refer to the same canonical candle identity:
 
 The existing inbound webhook contract accepts `prophet_r38`, `prophet_r37_ssot`, and `gmi_v12_70`. The Worker stamps the normalized stored envelope with `cryptophys.webhook-evidence.v1`; this preserves compatibility with existing TradingView alerts while giving fusion a versioned internal contract. The configured three-source webhook gate remains in place.
 
+## Input lanes (owner decision, 2026-11-03)
+
+The AI Worker receives **three distinct inputs** before the Analyst → Counselor → Reasoner pipeline. `buildEvidenceFusion` reports them as `input_lanes`, and every AI stage is instructed never to merge, average or relabel values across lanes.
+
+| Lane | Computed by | Carried in | Required set |
+|---|---|---|---|
+| `tradingview_webhook` | TradingView: the installed Pine indicators, sent by alert webhook | `source_payloads` | `prophet_r38`, `prophet_r37_ssot`, `gmi_v12_70` |
+| `local_computation` | local Mizan/Prophet/GMI engines from raw TradingView OHLCV (TradingView MCP via the news-Worker gateway) | `local_calculation_evidence` | `mizan`, `prophet`, `gmi` |
+| `fundamental_news` | news ingestion (TradingView MCP news) and completed fundamental news analysis | `fundamental_news_analysis` | one fresh, valid analysis |
+
+Each lane reports its own present/missing members and a `complete` flag. Missing members in one lane are never filled from another lane.
+
+Agreement or disagreement between `tradingview_webhook` and `local_computation` for the same closed candle is reported explicitly by the AI stages. Because the webhook lane carries TradingView's own outputs, matching webhook payloads and local outputs per candle is also the natural source of parity fixtures for the local engines.
+
 ## Local calculation contract
 
 Endpoint: `POST /evidence/local-calculation` on the AI Worker. Authentication: `x-webhook-secret` header, using the existing Worker webhook secret. Request body maximum: 64 KiB.

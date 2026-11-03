@@ -206,6 +206,37 @@ export function buildEvidenceFusion(input, now = Date.now()) {
   }
 
   const complete = missing.length === 0 && errors.length === 0;
+  // Three separate input lanes. Values are never merged or relabelled across
+  // lanes: TradingView-computed indicator outputs (webhook) stay distinct from
+  // locally computed outputs (raw TradingView OHLCV -> local engines).
+  const presentWebhooks = webhookSources.filter((source) => isRecord(webhookPayloads[source]));
+  const presentEngines = LOCAL_ENGINES.filter((engine) => calculationByEngine[engine]);
+  const inputLanes = {
+    tradingview_webhook: {
+      lane_id: "tradingview_webhook",
+      computed_by: "TradingView: installed Pine indicators, delivered by alert webhook",
+      required_sources: [...webhookSources],
+      present_sources: presentWebhooks,
+      missing_sources: webhookSources.filter((source) => !presentWebhooks.includes(source)),
+      complete: presentWebhooks.length === webhookSources.length && !errors.some((error) => error.startsWith("webhook_"))
+    },
+    local_computation: {
+      lane_id: "local_computation",
+      computed_by: "Local Mizan/Prophet/GMI engines from raw TradingView OHLCV (TradingView MCP)",
+      required_engines: [...LOCAL_ENGINES],
+      present_engines: presentEngines,
+      missing_engines: LOCAL_ENGINES.filter((engine) => !presentEngines.includes(engine)),
+      calculation_versions: Object.fromEntries(presentEngines.map((engine) => [engine, calculationByEngine[engine].calculation_version])),
+      complete: presentEngines.length === LOCAL_ENGINES.length && !errors.some((error) => error.startsWith("local_calculation"))
+    },
+    fundamental_news: {
+      lane_id: "fundamental_news",
+      computed_by: "News ingestion (TradingView MCP news) and completed fundamental news analysis",
+      present: newsValidation.valid,
+      analyzed_at: newsValidation.valid ? newsAnalysis.analyzed_at ?? null : null,
+      complete: newsValidation.valid
+    }
+  };
   return {
     schema_version: EVIDENCE_CONTRACT_VERSION,
     status: complete ? "ready" : "degraded",
@@ -215,7 +246,8 @@ export function buildEvidenceFusion(input, now = Date.now()) {
     timeframe,
     candle_time: candleTime,
     fused_at: new Date(now).toISOString(),
-    webhook_sources: webhookSources.filter((source) => isRecord(webhookPayloads[source])),
+    input_lanes: inputLanes,
+    webhook_sources: presentWebhooks,
     local_calculations: calculationByEngine,
     fundamental_news_analysis: newsValidation.valid ? newsAnalysis : null,
     missing_evidence: [...new Set(missing)],
