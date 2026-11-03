@@ -2,6 +2,11 @@
 
 Knowledge base v4 is what the Analyst, Counselor and Reasoner agents use to interpret evidence. It replaces the v3 starter policy. v3 said explicitly that no Pine source was available and that field meanings must not be inferred.
 
+## Naming
+- **Local computation engines:** MizanLib (engine id `mizan`), Prophet and GMI.
+- **Webhook sources:** `prophet_r38`, `prophet_r37_ssot` and `gmi_v12_70`.
+- See [PINE_SOURCE_VERIFICATION.md](PINE_SOURCE_VERIFICATION.md) for how the Pine files were checked against the installed indicators.
+
 ## What it contains
 - **`field_dictionary`:** the meaning of every compared field.
   - `prophet_r38`: `direction`, `buy_confirmed`, `sell_confirmed`, `buy_high_quality`, `sell_high_quality`, `t_enc`, `d_enc`, `structure_subtype`. `buy_confirmed` and `sell_confirmed` include the V2 gate rules and thresholds.

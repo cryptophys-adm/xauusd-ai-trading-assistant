@@ -4,8 +4,14 @@ export const KNOWLEDGE_BASE_V4 = Object.freeze({
   "status": "derived_from_pine_ssot",
   "purpose": "Field dictionary and decision rules for interpreting XAUUSD 1H evidence from the TradingView webhook lane and the local_computation lane. All encodings are derived from the Pine SSOT sources with line references; nothing here is inferred from field names.",
   "input_lanes": {
-    "tradingview_webhook": "Indicator outputs computed by TradingView on the closed 1H candle (sources prophet_r38, prophet_r37_ssot, gmi_v12_70). Ground truth for the indicator state.",
-    "local_computation": "The same fields recomputed locally from raw TradingView OHLCV by the ported engines (mizan, prophet, gmi). values.comparable.<source> mirrors the webhook fields. Only trust local values whose trust_status is approved_by_parity (24 consecutive candles matched the webhook field by field). values.diagnostics are unverified internals: use them only to explain, never as decisive evidence.",
+    "tradingview_webhook": "Indicator outputs computed by TradingView on the closed 1H candle. Three webhook sources: prophet_r38 (The Prophet v7.02 R38 indicator), prophet_r37_ssot (the shared Prophet structure core computed inside GMI from MizanLib) and gmi_v12_70 (Global Multiverse Interceptor v12.70). Ground truth for the indicator state.",
+    "local_computation": "Recomputed locally from raw TradingView OHLCV by three local engines: MizanLib (record engine id 'mizan'), Prophet (engine id 'prophet') and GMI (engine id 'gmi'). Only trust local values whose trust_status is approved_by_parity (24 consecutive candles matched the webhook field by field). values.diagnostics are unverified internals: use them only to explain, never as decisive evidence.",
+    "local_engines": {
+      "MizanLib": "engine id 'mizan'. Shared library core (prophet_structure_core, calculate_prophet_tensor) used by both Prophet and GMI. It has no webhook of its own; it is trusted only while an approved Prophet and an approved GMI both declare this MizanLib identity as their dependency.",
+      "Prophet": "engine id 'prophet'. values.comparable.prophet_r38 is compared with the prophet_r38 webhook and values.comparable.prophet_r37_ssot with the prophet_r37_ssot webhook.",
+      "GMI": "engine id 'gmi'. values.comparable.gmi_v12_70 is compared with the gmi_v12_70 webhook."
+    },
+    "naming_rule": "Local engines are named MizanLib, Prophet and GMI. prophet_r38, prophet_r37_ssot and gmi_v12_70 are WEBHOOK source names (and the keys of values.comparable), not local engine names.",
     "fundamental_news": "Completed news analysis (analyst, counselor, reasoner) of articles from the last hour. Context only; it never creates a technical trigger by itself.",
     "lane_rules": [
       "Never merge, average or relabel values across lanes; attribute every claim to its lane.",
@@ -558,6 +564,6 @@ export const KNOWLEDGE_BASE_V4 = Object.freeze({
       }
     },
     "reference_count": 53,
-    "content_sha256": "4b8f67bf17216f6d513b0b2a058031496ef57e2dad8436d002f0e2f353cf01a0"
+    "content_sha256": "651a3f0092424a95e0481a0b02783b7daa3cd1ac50fdd02d0b1d3f100d357ea1"
   }
 });
