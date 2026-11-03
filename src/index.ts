@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
+import { parseTradingViewJson } from "./tradingview-json.mjs";
 import { identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema, registerIdentity, recordComparison, isTrusted, listRegistry, policyFromEnv, PARITY_REGISTRY_VERSION } from "./parity-registry.mjs";
 
 export interface Env {
@@ -825,10 +826,17 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (!limitedBody) return json({ error: "Unable to read request body" }, 400);
   if (limitedBody.tooLarge) return json({ error: "Payload exceeds 64 KiB limit" }, 413);
   let body: WebhookPayload;
+  let normalizedTokens = 0;
   try {
-    body = JSON.parse(limitedBody.text) as WebhookPayload;
+    // TradingView alerts can contain bare NaN/Infinity (Pine str.tostring(na)); map them to null.
+    const parsed = parseTradingViewJson(limitedBody.text);
+    body = parsed.value as WebhookPayload;
+    normalizedTokens = parsed.normalized_tokens;
   } catch {
     return json({ error: "Request body must be valid JSON" }, 400);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return json({ error: "Request body must be a JSON object" }, 400);
   }
 
   const headerSecret = request.headers.get("x-webhook-secret") || "";
@@ -890,6 +898,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       status: "accepted",
       candle_key: candleKey,
       source,
+      normalized_non_finite_tokens: normalizedTokens,
       analysis_status: "waiting_for_sources",
       received_sources: Object.keys(payloads),
       missing_sources: missing
