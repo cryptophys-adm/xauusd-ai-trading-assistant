@@ -1,3 +1,5 @@
+> **HISTORICAL / SUPERSEDED (2026-11-04).** This document describes earlier plans or states. The canonical, current topology and deployment rules are in [docs/SSOT.md](SSOT.md) and [AGENTS.md](../AGENTS.md). Where this document disagrees with them, it is wrong. In particular, the "8 core + 1" Worker plan (pull-orchestrator, normalizer, mizan/prophet/gmi engines, confluence-controller) is cancelled and those Workers were removed. Do not deploy anything described here.
+
 # Prophet R37 deterministic parity kernel — contract v1
 
 Status: **source-derived specification and kernel scaffold; NOT TradingView parity**.

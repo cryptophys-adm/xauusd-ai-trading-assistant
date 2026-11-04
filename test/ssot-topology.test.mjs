@@ -1,0 +1,58 @@
+// Guards the canonical topology in docs/SSOT.md and AGENTS.md: no Wrangler
+// config may declare a Worker outside the four production Workers, the removed
+// legacy Workers may never come back, and the live docs agree with each other.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const PRODUCTION = ["xauusd-ai-trading-assistant", "xauusd-fundamental-news-ingestion", "xauusd-tradingview-pull-adapter", "xauusd-nexus-dashboard"];
+const PREVIEW_ONLY = ["xauusd-ai-trading-assistant-preview"];
+const REMOVED = ["xauusd-mizan-engine", "xauusd-prophet-engine", "xauusd-gmi-engine", "xauusd-market-data-normalizer", "xauusd-pull-orchestrator", "xauusd-confluence-controller"];
+const SKIP = new Set(["node_modules", ".git", "recovered"]);
+
+function walk(dir, out = []) {
+  for (const name of readdirSync(dir)) {
+    if (SKIP.has(name)) continue;
+    const p = path.join(dir, name);
+    if (statSync(p).isDirectory()) walk(p, out); else out.push(p);
+  }
+  return out;
+}
+const files = walk(ROOT);
+const read = (p) => readFileSync(p, "utf8");
+
+test("every Wrangler config declares only an SSOT Worker", () => {
+  const configs = files.filter((p) => /wrangler[^/]*\.jsonc?$/.test(p));
+  assert.ok(configs.length >= 4);
+  const declared = configs.map((p) => [path.relative(ROOT, p), read(p).match(/"name"\s*:\s*"([^"]+)"/)?.[1]]);
+  for (const [file, name] of declared) assert.ok([...PRODUCTION, ...PREVIEW_ONLY].includes(name), `${file} declares non-SSOT Worker "${name}"`);
+  for (const worker of PRODUCTION) assert.ok(declared.some(([, n]) => n === worker), `no Wrangler config for SSOT Worker ${worker}`);
+});
+
+test("removed legacy Workers are not referenced by any config, workflow or source", () => {
+  const allowed = new Set(["docs/SSOT.md", "AGENTS.md", "docs/LOCAL_COMPUTATION_OWNERSHIP.md", ".github/workflows/decommission-legacy-workers.yml", "test/ssot-topology.test.mjs"]);
+  for (const p of files) {
+    const rel = path.relative(ROOT, p);
+    if (allowed.has(rel) || !/\.(jsonc?|ya?ml|mjs|ts|js)$/.test(rel)) continue;
+    const text = read(p);
+    for (const name of REMOVED) assert.ok(!text.includes(name), `${rel} references removed Worker ${name}`);
+  }
+});
+
+test("live docs agree with the SSOT; docs naming removed Workers are marked historical", () => {
+  for (const doc of ["docs/SSOT.md", "AGENTS.md", "README.md"]) {
+    const text = read(path.join(ROOT, doc));
+    for (const worker of PRODUCTION) assert.ok(text.includes(worker), `${doc} must list ${worker}`);
+  }
+  assert.ok(!REMOVED.some((n) => read(path.join(ROOT, "README.md")).includes(n)), "README must not describe removed Workers");
+  const live = new Set(["docs/SSOT.md", "docs/LOCAL_COMPUTATION_OWNERSHIP.md"]);
+  for (const p of files.filter((f) => f.startsWith(path.join(ROOT, "docs")) && f.endsWith(".md"))) {
+    const rel = path.relative(ROOT, p);
+    if (live.has(rel)) continue;
+    const text = read(p);
+    if (REMOVED.some((n) => text.includes(n))) assert.match(text.slice(0, 600), /HISTORICAL \/ SUPERSEDED/, `${rel} names removed Workers but is not marked historical`);
+  }
+});
