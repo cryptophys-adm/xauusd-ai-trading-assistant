@@ -56,7 +56,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 
 ### Multi-agent bus (Phase 2, shadow only, `MULTI_AGENT_BUS_ENABLED`)
 - Code: `src/multi-agent-bus.mjs`. Production `wrangler.jsonc` sets the flag to `"false"`; only `wrangler.preview.jsonc` sets `"true"`.
-- After the H1 synthesis is persisted (degraded or complete), the AI Worker enqueues a `multi_agent_bus` task on the existing queue. The task reads that synthesis, runs agents `technical` and `news` for 2 rounds, then a `moderator` consensus. That is at most 5 model calls, with a 90 s wall budget and the `MULTI_AGENT_MAX_CALLS_PER_HOUR` cap; the cap fails closed.
+- After the H1 synthesis is persisted (degraded or complete), the AI Worker enqueues a `multi_agent_bus` task on the existing queue. The task reads that synthesis, runs agents `technical` and `news` for 2 rounds, then a `moderator` consensus. That is at most 5 model calls, with a 180 s wall budget and the `MULTI_AGENT_MAX_CALLS_PER_HOUR` cap; the cap fails closed.
 - Model: `MULTI_AGENT_MODEL` = `reflection-ai/beam-1.0-501b-a23b` (third-party via Workers AI, $0 per the catalog on 2026-11-04, strict `json_schema`). On a Beam error the call is retried once with `MULTI_AGENT_FALLBACK_MODEL` = `@cf/zai-org/glm-4.7-flash`, and `fallback_used` is recorded. The H1 chain models are unchanged.
 - The bus **never** writes into the chain's evidence, prompts or decision. Its output lives only in D1 `bus_messages` (migration `0003_bus_messages.sql`; the schema is also ensured at runtime for the preview D1), and it is read through `GET /api/bus?candle_key=` (messages, consensus, `agreement_with_chain`).
 

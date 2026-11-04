@@ -166,15 +166,16 @@ test("finish_reason length with null content is invalid_output", async () => {
   assert.equal(bus.consensus, null, "no consensus from an invalid moderator answer");
 });
 
-test("Beam error falls back once to the fallback model and records fallback_used", async () => {
-  const e = env({ AI: fakeAI(({ model, request }) => model === BUS_DEFAULT_MODEL ? new Error("3040: capacity") : happyHandler({ request: { ...request, response_format: { json_schema: { name: /moderator/i.test(request.messages[0].content) ? "bus_moderator" : "bus_agent" } } } })) });
+test("Beam error falls back to the fallback model, records why, and skips Beam for the rest of the run", async () => {
+  const e = env({ AI: fakeAI(({ model, request }) => model === BUS_DEFAULT_MODEL ? new Error("5007: model not available") : happyHandler({ request: { ...request, response_format: { json_schema: { name: /moderator/i.test(request.messages[0].content) ? "bus_moderator" : "bus_agent" } } } })) });
   await runMultiAgentBus(e, task());
-  assert.equal(e.AI.calls.length, 10, "each step: one Beam attempt + one fallback attempt");
+  assert.equal(e.AI.calls.filter(c => c.model === BUS_DEFAULT_MODEL).length, 1, "Beam is tried once per run");
   const fallbackCalls = e.AI.calls.filter(c => c.model === BUS_DEFAULT_FALLBACK_MODEL);
   assert.equal(fallbackCalls.length, 5);
   assert.ok(fallbackCalls.every(c => c.request.response_format === undefined && c.request.max_tokens > 0), "fallback uses the plain Workers AI chat form");
   const bus = await readBus(e.DB, CANDLE);
   assert.ok(bus.items.every(m => m.fallback_used === true && m.model === BUS_DEFAULT_FALLBACK_MODEL && m.status === "ok"));
+  assert.ok(bus.items.every(m => /5007: model not available/.test(m.primary_error)), "the Beam error is stored for diagnosis");
 });
 
 test("both models failing records agent_failed and still finishes", async () => {
@@ -210,14 +211,14 @@ test("budget counter failure fails closed", async () => {
   assert.equal(e.AI.calls.length, 0);
 });
 
-test("90 s wall budget (fake clock) stops further calls", async () => {
+test("wall budget (fake clock) stops further calls", async () => {
   let now = Date.parse("2026-11-04T10:00:00Z");
   const e = env({ AI: fakeAI(({ request }) => { now += 50_000; return happyHandler({ request }); }) });
   await runMultiAgentBus(e, task(), { clock: () => now });
-  assert.ok(e.AI.calls.length <= 2, `calls after the wall budget: ${e.AI.calls.length}`);
-  assert.ok(BUS_WALL_BUDGET_MS === 90_000);
+  assert.equal(BUS_WALL_BUDGET_MS, 180_000);
+  assert.equal(e.AI.calls.length, 4, "the 4th call starts at 150 s; the moderator at 200 s is over budget");
   const bus = await readBus(e.DB, CANDLE);
-  assert.ok(bus.items.some(m => m.status === "budget_exhausted"));
+  assert.equal(bus.items.find(m => m.agent === "moderator").status, "budget_exhausted");
 });
 
 test("redelivering the same queue message makes no new calls and no duplicate rows", async () => {

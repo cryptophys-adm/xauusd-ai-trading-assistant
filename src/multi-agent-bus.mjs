@@ -13,7 +13,10 @@ export const BUS_DEFAULT_FALLBACK_MODEL = "@cf/zai-org/glm-4.7-flash";
 export const BUS_AGENTS = Object.freeze(["technical", "news"]);
 export const BUS_ROUNDS = 2;
 export const BUS_MODERATOR_ROUND = 3;
-export const BUS_WALL_BUDGET_MS = 90_000;
+// Wall budget per synthesis. The fallback model answers in ~30 s per call, so
+// 5 calls need well over 90 s; queue consumers may run for up to 15 minutes.
+export const BUS_WALL_BUDGET_MS = 180_000;
+const PRIMARY_CALL_TIMEOUT_MS = 60_000;
 export const BUS_MAX_TOKENS = Object.freeze({ agent: 2048, moderator: 4096 });
 export const BUS_STANCES = Object.freeze(["BUY", "SELL", "WAIT"]);
 const INSIGHT_MAX = 600;
@@ -292,29 +295,42 @@ function requestFor(model, messages, schemaName, schema, maxTokens, effort, prim
  * One model call with a single fallback retry. Returns the parsed object plus
  * call metadata. Never throws.
  */
-export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock }) {
+export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState = {} }) {
   const primary = String(env?.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL);
   const fallback = String(env?.MULTI_AGENT_FALLBACK_MODEL || BUS_DEFAULT_FALLBACK_MODEL);
-  const attempts = [{ model: primary, primary: true }];
+  const attempts = [];
+  // Once the primary model has failed in this run, later steps go straight to
+  // the fallback instead of spending the wall budget on the same error again.
+  if (!runState.primaryError) attempts.push({ model: primary, primary: true });
   if (fallback && fallback !== primary) attempts.push({ model: fallback, primary: false });
+  if (!attempts.length) attempts.push({ model: primary, primary: true });
   let lastError = null;
   let usage = 0;
+  const meta = (i) => ({ fallback_used: !attempts[i].primary, primary_error: runState.primaryError || null });
   for (let i = 0; i < attempts.length; i++) {
     const { model, primary: isPrimary } = attempts[i];
     const remaining = deadline - clock();
-    if (remaining <= 0) return { status: "budget_exhausted", model, fallback_used: i > 0, usage_tokens: usage || null, calls: i };
+    if (remaining <= 0) return { status: "budget_exhausted", model, ...meta(i), usage_tokens: usage || null, calls: i };
     const t0 = clock();
     try {
-      const result = await withTimeout(env.AI.run(model, requestFor(model, messages, schemaName, schema, maxTokens, effort, isPrimary)), remaining);
+      const timeout = isPrimary ? Math.min(remaining, PRIMARY_CALL_TIMEOUT_MS) : remaining;
+      const result = await withTimeout(env.AI.run(model, requestFor(model, messages, schemaName, schema, maxTokens, effort, isPrimary)), timeout);
       usage += usageTokens(result) || 0;
       const parsed = parseModelObject(result);
-      return { status: "answered", model, fallback_used: i > 0, usage_tokens: usage || null, latency_ms: clock() - t0, obj: parsed.obj, text: parsed.text, truncated: parsed.truncated === true, calls: i + 1 };
+      return { status: "answered", model, ...meta(i), usage_tokens: usage || null, latency_ms: clock() - t0, obj: parsed.obj, text: parsed.text, truncated: parsed.truncated === true, calls: i + 1 };
     } catch (error) {
       lastError = error;
-      if (error?.name === "TimeoutError") return { status: "agent_failed", model, fallback_used: i > 0, usage_tokens: usage || null, latency_ms: clock() - t0, error: "timeout", calls: i + 1 };
+      const message = error?.name === "TimeoutError" ? "timeout" : clip(error?.message || String(error) || "model_error", 300);
+      if (isPrimary) {
+        runState.primaryError = `${model}: ${message}`;
+        console.warn("bus_primary_model_failed", JSON.stringify({ model, error: message }));
+        continue;
+      }
+      return { status: "agent_failed", model, ...meta(i), usage_tokens: usage || null, latency_ms: clock() - t0, error: message, calls: i + 1 };
     }
   }
-  return { status: "agent_failed", model: attempts[attempts.length - 1].model, fallback_used: attempts.length > 1, usage_tokens: usage || null, error: clip(lastError?.message || "model_error", 200), calls: attempts.length };
+  const last = attempts.length - 1;
+  return { status: "agent_failed", model: attempts[last].model, ...meta(last), usage_tokens: usage || null, error: clip(lastError?.message || "model_error", 300), calls: attempts.length };
 }
 
 async function callsInLastHour(db, now) {
@@ -358,15 +374,17 @@ export function rowToMessage(row) {
 }
 
 function messageFromCall(base, call, obj, validation, kind) {
+  const diag = call.primary_error ? { primary_error: call.primary_error } : {};
   if (call.status !== "answered") {
-    return { ...base, status: call.status, insight: JSON.stringify({ insight: call.status === "budget_exhausted" ? "budget exhausted" : "agent failed: " + (call.error || "error") }), confidence: null, refs: [], model: call.model, fallback_used: call.fallback_used, usage_tokens: call.usage_tokens, latency_ms: call.latency_ms ?? null };
+    return { ...base, status: call.status, insight: JSON.stringify({ insight: call.status === "budget_exhausted" ? "budget exhausted" : "agent failed: " + (call.error || "error"), ...diag }), confidence: null, refs: [], model: call.model, fallback_used: call.fallback_used, usage_tokens: call.usage_tokens, latency_ms: call.latency_ms ?? null };
   }
   if (!validation.valid) {
-    return { ...base, status: "invalid_output", insight: JSON.stringify({ insight: clip(call.text, RAW_MAX), errors: call.truncated ? ["finish_reason_length", ...validation.errors] : validation.errors }), confidence: null, refs: [], model: call.model, fallback_used: call.fallback_used, usage_tokens: call.usage_tokens, latency_ms: call.latency_ms };
+    return { ...base, status: "invalid_output", insight: JSON.stringify({ insight: clip(call.text, RAW_MAX), errors: call.truncated ? ["finish_reason_length", ...validation.errors] : validation.errors, ...diag }), confidence: null, refs: [], model: call.model, fallback_used: call.fallback_used, usage_tokens: call.usage_tokens, latency_ms: call.latency_ms };
   }
   const body = kind === "moderator"
     ? { stance: obj.stance, agreed: obj.agreed, summary: clip(obj.summary, SUMMARY_MAX), dissent: obj.dissent.map(d => clip(d, 300)).slice(0, 10) }
     : { stance: obj.stance, insight: clip(obj.insight, INSIGHT_MAX), responds_to: obj.responds_to ?? null };
+  Object.assign(body, diag);
   return { ...base, status: STATUS_OK, insight: JSON.stringify(body), confidence: obj.confidence, refs: kind === "moderator" ? [] : obj.refs.slice(0, 12).map(r => clip(r, 200)), model: call.model, fallback_used: call.fallback_used, usage_tokens: call.usage_tokens, latency_ms: call.latency_ms };
 }
 
@@ -390,6 +408,7 @@ export async function runMultiAgentBus(env, task, { clock = () => Date.now() } =
   if (existing.has(`${BUS_MODERATOR_ROUND}:moderator`)) return { status: "already_complete", calls: 0 };
 
   const started = clock();
+  const runState = { primaryError: null };
   const deadline = started + BUS_WALL_BUDGET_MS;
   const maxPerHour = Number(env.MULTI_AGENT_MAX_CALLS_PER_HOUR ?? 20);
   let calls = 0;
@@ -416,7 +435,7 @@ export async function runMultiAgentBus(env, task, { clock = () => Date.now() } =
       } else {
         const call = await callBusModel(env, {
           messages: agentMessages(agent, round, evidence[agent], roundOne), schemaName: "bus_agent", schema: AGENT_JSON_SCHEMA,
-          maxTokens: BUS_MAX_TOKENS.agent, effort: "low", deadline, clock
+          maxTokens: BUS_MAX_TOKENS.agent, effort: "low", deadline, clock, runState
         });
         calls += call.calls || 0;
         const validation = call.status === "answered" ? (call.truncated ? { valid: false, errors: [] } : validateAgentOutput(call.obj, { agent, round })) : null;
@@ -434,7 +453,7 @@ export async function runMultiAgentBus(env, task, { clock = () => Date.now() } =
   } else {
     const call = await callBusModel(env, {
       messages: moderatorMessages(evidence, transcript), schemaName: "bus_moderator", schema: MODERATOR_JSON_SCHEMA,
-      maxTokens: BUS_MAX_TOKENS.moderator, effort: "medium", deadline, clock
+      maxTokens: BUS_MAX_TOKENS.moderator, effort: "medium", deadline, clock, runState
     });
     calls += call.calls || 0;
     const validation = call.status === "answered" ? (call.truncated ? { valid: false, errors: [] } : validateModeratorOutput(call.obj)) : null;

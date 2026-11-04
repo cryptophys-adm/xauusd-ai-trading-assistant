@@ -307,7 +307,7 @@ jobs:
           // Multi-agent bus (MULTI_AGENT_BUS_ENABLED=true in wrangler.preview.jsonc only):
           // after the synthesis is persisted, a separate queue task runs 2 agents x 2 rounds
           // plus a moderator on real Workers AI. Prove the output, the model and the consensus.
-          const busDeadline = Date.now() + 180_000;
+          const busDeadline = Date.now() + 300_000;
           let bus = null;
           while (Date.now() < busDeadline) {
             const busResponse = await fetch(base + "/api/bus?candle_key=" + encodeURIComponent(candleKey), { signal: AbortSignal.timeout(10000) });
@@ -323,7 +323,7 @@ jobs:
               round: item.round, agent: item.agent, status: item.status, model: item.model,
               fallback_used: item.fallback_used, usage_tokens: item.usage_tokens, latency_ms: item.latency_ms,
               stance: item.stance ?? null, confidence: item.confidence, refs: item.refs,
-              text: String(item.insight ?? item.summary ?? "").slice(0, 300), errors: item.errors
+              text: String(item.insight ?? item.summary ?? "").slice(0, 300), errors: item.errors, primary_error: item.primary_error
             }))
           }, null, 2));
           assert.equal(bus?.enabled, true, "preview must run the bus");
