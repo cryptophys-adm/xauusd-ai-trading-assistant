@@ -23,4 +23,4 @@ export function reconcileLocalComputation(env: unknown, candleKey: string): Prom
 export function closedH1CandleKeys(now?: number, options?: { symbol?: string; timeframe?: string; lookback?: number }): string[];
 export function reconcileRecentCandles(env: unknown, options?: { now?: number; lookback?: number }): Promise<SweepResult>;
 
-export function backfillRecentAnalyses(env: unknown, options?: { now?: number; lookback?: number; loadPayloads?: any; runAnalysis?: any }): Promise<{ triggered: number; candle_keys: string[] }>;
+export function backfillRecentAnalyses(env: unknown, options?: { now?: number; lookback?: number; loadPayloads?: any; runAnalysis?: any; setStatus?: any }): Promise<{ triggered: number; candle_keys: string[] }>;

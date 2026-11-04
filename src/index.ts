@@ -1760,7 +1760,7 @@ export default {
       // all miss a candle when KV has not yet settled (cached misses); without a
       // later sweep those parity comparisons would be lost permanently.
       ctx.waitUntil(reconcileRecentCandles(env).then(async result => {
-        try { await backfillRecentAnalyses(env, { loadPayloads: loadWebhookPayloadsFromD1, runAnalysis }); } catch (e) { console.error("backfill_failed", e instanceof Error ? e.message : String(e)); }
+        try { await backfillRecentAnalyses(env, { loadPayloads: loadWebhookPayloadsFromD1, runAnalysis, setStatus: setAnalysisRunStatus }); } catch (e) { console.error("backfill_failed", e instanceof Error ? e.message : String(e)); }
         console.log("Scheduled parity sweep completed", JSON.stringify({
           swept_at: result.swept_at,
           candle_keys: result.candle_keys,

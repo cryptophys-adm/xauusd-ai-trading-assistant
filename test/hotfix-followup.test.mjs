@@ -47,10 +47,38 @@ test("backfill runs once then no-op", async () => {
 
 test("backfill skips candles older than 2h", async () => {
   const now = Date.parse("2026-11-04T03:00:00.000Z");
-  const oldKey = "OANDA:XAUUSD:60:" + (now - 3*60*60*1000);
-  const env = { DB: { prepare(){ return { bind(){ return { async first(){ return null; }, async all(){ return {results:[]} } }; } }; } }, WEBHOOK_BUFFER: kv({}) };
-  const calls=[];
-  await backfillRecentAnalyses(env, { now, lookback: 3, loadPayloads: async ()=>({a:1}), runAnalysis: async (_e,k)=>{ calls.push(k); } });
-  // no complete payloads -> no calls anyway; just ensure no throw
-  assert.ok(true);
+  const required = ["prophet_r38","prophet_r37_ssot","gmi_v12_70"];
+  const payloads = Object.fromEntries(required.map(s=>[s,{x:1}]));
+  const keys = closedH1CandleKeys(now, { lookback: 3 });
+  function makeDb() {
+    return { prepare(sql) {
+      if (sql.includes("analysis_runs")) return { bind() { return { async first() { return null; } }; } };
+      return { bind() { return { async all() { return { results: [] }; } }; } };
+    } };
+  }
+  const env = { DB: makeDb(), WEBHOOK_BUFFER: kv({}) };
+  const calls = [];
+  await backfillRecentAnalyses(env, { now, lookback: 3, loadPayloads: async (_e,k,req) => payloads, runAnalysis: async (_e,k) => { calls.push(k); }, setStatus: async () => {} });
+  assert.equal(calls.length, 2);
+  assert.ok(!calls.includes(keys[2]));
+});
+
+
+test("backfill records failed and continues", async () => {
+  const now = Date.parse("2026-11-04T03:00:00.000Z");
+  const required = ["prophet_r38","prophet_r37_ssot","gmi_v12_70"];
+  const payloads = Object.fromEntries(required.map(s=>[s,{x:1}]));
+  const keys = closedH1CandleKeys(now, { lookback: 2 });
+  function makeDb() {
+    return { prepare(sql) {
+      if (sql.includes("analysis_runs")) return { bind() { return { async first() { return null; } }; } };
+      return { bind() { return { async all() { return { results: [] }; } }; } };
+    } };
+  }
+  const env = { DB: makeDb(), WEBHOOK_BUFFER: kv({}), REQUIRED_SOURCES: required.join(",") };
+  const calls = [];
+  const statuses = [];
+  await backfillRecentAnalyses(env, { now, lookback: 2, loadPayloads: async (_e,k,req) => payloads, runAnalysis: async (_e,k) => { if (k === keys[0]) throw new Error("boom"); calls.push(k); }, setStatus: async (_e,k,st) => { statuses.push({k,st}); } });
+  assert.ok(statuses.some(s => s.st === "failed"));
+  assert.equal(calls.length, 1);
 });
