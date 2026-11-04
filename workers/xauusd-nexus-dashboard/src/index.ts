@@ -303,11 +303,21 @@ async function loadTechnicalDecision(key){
     const syn = d.synthesis||{};
     const dec = syn.decision||{};
     const cls = (dec.decision==='BUY'?'BUY':dec.decision==='SELL'?'SELL':'WAIT');
+    let m5ctx = '';
+    try {
+      const mr = await fetch('/api/ohlcv?timeframe=5m&limit=12'); const md = await mr.json();
+      if (md && Array.isArray(md.candles) && md.candles.length) {
+        const last = md.candles[md.candles.length-1];
+        m5ctx = '<div style="font-size:12px;color:var(--muted);margin-top:8px"><b>5m context (last '+md.candles.length+' bars):</b> '
+          +'close '+esc(String(last.close))+' · H '+esc(String(last.high))+' · L '+esc(String(last.low))+' · '+esc(String(last.close_time||''))+'</div>';
+      }
+    } catch(e) { m5ctx = ''; }
     $('latest-decision').innerHTML =
       '<div class="decision-card">'
       +'<div class="decision-badge '+cls+'">'+esc(dec.decision||'—')+'</div>'
       +'<div class="conf">Confidence: '+(dec.confidence!=null?Math.round(dec.confidence*100)+'%':'—')+' · '+esc(d.candle_key||'')+'</div>'
       +'<div class="rationale-box">'+esc(dec.reasoning||syn.reasoning||'—')+'</div>'
+      +m5ctx
       +'</div>';
     const msgs = [
       {av:'av-analyst', cls:'analyst', name:'Analyst', model:(function(m){return String(m||'').split('/').pop();})(syn.analyst_model), content:syn.analyst_output||'(empty)'},
