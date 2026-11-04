@@ -6,6 +6,8 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-04
 
+- feat(phase4): enable the multi-agent bus, news threads and the live 5m room in production (owner approval); shadow/advisory only.
+- `8f62aed` (PR #60) feat(phase3): agent threads per news analysis and a live 5m trading room.
 - feat(phase3): agent threads per news analysis and a live 5m room (`src/agent-threads.mjs`, migration 0004, `/api/threads`, `/api/live`, `POST /evidence/m5-context`, Nexus cards); the 5m context carries `recent_bars`; flags are on in preview, off in production.
 - `b930221` (PR #59) fix(news,ohlcv): generic HTTP 429 opens a shared rate-limit cooldown.
 - fix(news,ohlcv): a generic HTTP 429 from TradingView MCP (without the TOOL_QUOTA_EXCEEDED text) now opens a short shared cooldown (`provider_rate_limited`, Retry-After clamped to 30 s..15 min) and is not retried; a shorter cooldown never overwrites a longer quota suspension.
