@@ -229,6 +229,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <div id="decisions-list"><div class="loader">Loading...</div></div>
     </div>
     <div class="rightbar-card">
+      <h3>Local Lane (Parity)</h3>
+      <div id="local-lane"><div class="loader">Loading...</div></div>
+    </div>
+    <div class="rightbar-card">
       <h3>Quick Stats</h3>
       <div id="quick-stats"><div class="loader">Loading...</div></div>
     </div>
@@ -259,7 +263,9 @@ async function loadStatus(){
       {label:'Webhook Secret', ok: !!ai.webhook_secret},
       {label:'Local Lane', ok: !!(ai.local_lane && ai.local_lane.fresh)},
     ];
-    $('status-row').innerHTML = pills.map(p=>'<div class="status-pill"><span class="dot '+(p.ok?'ok':'err')+'"></span>'+p.label+'</div>').join('');
+    const reg = (ai.local_lane && Array.isArray(ai.local_lane.registry)) ? ai.local_lane.registry : [];
+    const parityHtml = reg.length ? '<div style="margin-top:8px;font-size:11px;color:var(--muted)">'+reg.map(x=>esc(x.engine)+': '+esc(x.status)+' '+x.consecutive_matches+'/24').join(' · ')+'</div>' : '';
+    $('status-row').innerHTML = pills.map(p=>'<div class="status-pill"><span class="dot '+(p.ok?'ok':'err')+'"></span>'+p.label+'</div>').join('') + parityHtml;
   } catch(e){ $('status-row').innerHTML = '<div class="error">Failed to load status: '+esc(e.message)+'</div>'; }
 }
 
@@ -284,7 +290,7 @@ async function loadDecisions(){
     let html = '<table><thead><tr><th>Time</th><th>Decision</th><th>Conf</th></tr></thead><tbody>';
     d.items.forEach(x=>{
       const cls = (x.decision==='BUY'?'BUY':x.decision==='SELL'?'SELL':'WAIT');
-      html += '<tr onclick="loadTechnicalDecision(\''+esc(x.candle_key)+'\')" style="cursor:pointer">'
+      html += '<tr onclick="loadTechnicalDecision(\\''+esc(x.candle_key)+'\\')" style="cursor:pointer">'
         +'<td>'+esc(String(x.timestamp).slice(0,16).replace('T',' '))+'</td>'
         +'<td><span class="badge-decision '+cls+'">'+esc(x.decision)+'</span></td>'
         +'<td>'+(x.confidence!=null?Math.round(x.confidence*100)+'%':'—')+'</td></tr>';
@@ -305,19 +311,23 @@ async function loadTechnicalDecision(key){
     const cls = (dec.decision==='BUY'?'BUY':dec.decision==='SELL'?'SELL':'WAIT');
     let m5ctx = '';
     try {
-      const cr = await fetch(API+'/api/m5-context'); const cd = await cr.json();
+      const cr = await fetch(API+'/api/m5-context');
+      if (cr.ok) { const cd = await cr.json();
       if (cd && cd.status === 'ok' && cd.context) {
         const c = cd.context;
         m5ctx = '<div style="font-size:12px;color:var(--muted);margin-top:8px"><span style="background:#f59e0b;color:#000;padding:2px 6px;border-radius:4px;font-weight:700">UNVERIFIED 5m</span> '
           +'<b>'+esc(c.engine||'5m')+'</b> · bias '+esc(c.bias||'—')+' · buy '+esc(String(c.buy_confirmed))+' · sell '+esc(String(c.sell_confirmed))
           +' · candle '+esc(String(c.candle_time||''))+'</div>';
       }
+      }
     } catch(e) { m5ctx = ''; }
     try {
-      const mr = await fetch('/api/ohlcv?timeframe=M5&limit=12'); const md = await mr.json();
+      const mr = await fetch('/api/ohlcv?timeframe=M5&limit=12');
+      if (mr.ok) { const md = await mr.json();
       if (md && Array.isArray(md.candles) && md.candles.length) {
         const last = md.candles[md.candles.length-1];
         m5ctx += '<div style="font-size:12px;color:var(--muted);margin-top:4px"><b>5m bars (last '+md.candles.length+')</b>: close '+esc(String(last.close))+' · H '+esc(String(last.high))+' · L '+esc(String(last.low))+'</div>';
+      }
       }
     } catch(e) {}
     $('latest-decision').innerHTML =
@@ -326,6 +336,7 @@ async function loadTechnicalDecision(key){
       +'<div class="conf">Confidence: '+(dec.confidence!=null?Math.round(dec.confidence*100)+'%':'—')+' · '+esc(d.candle_key||'')+'</div>'
       +'<div class="rationale-box">'+esc(dec.reasoning||syn.reasoning||'—')+'</div>'
       +m5ctx
+      +'<div id="bus-consensus" style="margin-top:10px"></div>'
       +'</div>';
     const msgs = [
       {av:'av-analyst', cls:'analyst', name:'Analyst', model:(function(m){return String(m||'').split('/').pop();})(syn.analyst_model), content:syn.analyst_output||'(empty)'},
@@ -341,7 +352,7 @@ async function loadTechnicalDecision(key){
       +'<div class="agent-raw"><h3>Analyst Output</h3><pre>'+esc(syn.analyst_output||'')+'</pre></div>'
       +'<div class="agent-raw"><h3>Counselor Output</h3><pre>'+esc(syn.counselor_output||'')+'</pre></div>'
       +'<div class="agent-raw"><h3>Reasoner Output</h3><pre>'+esc(syn.reasoner_output||'')+'</pre></div>';
-  } catch(e){ alert('Error: '+e.message); }
+  } catch(e){ $('latest-decision').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
 }
 
 async function loadAnalysis(key){
@@ -377,7 +388,7 @@ async function loadAnalysis(key){
       +'<div class="agent-raw"><h3>Counselor Output</h3><pre>'+esc(d.counselor_output||'')+'</pre></div>'
       +'<div class="agent-raw"><h3>Reasoner Output</h3><pre>'+esc(d.reasoner_output||'')+'</pre></div>'
       +'<div class="agent-raw"><h3>Evidence (articles)</h3><pre>'+esc(JSON.stringify(d.evidence?.articles||[],null,2))+'</pre></div>';
-  } catch(e){ alert('Error: '+e.message); }
+  } catch(e){ $('latest-decision').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
 }
 
 document.querySelectorAll('.tab').forEach(t=>{
@@ -390,12 +401,37 @@ document.querySelectorAll('.tab').forEach(t=>{
   });
 });
 
+
+async function loadLocalLane(){
+  try {
+    const r = await fetch('/api/local-lane'); const d = await r.json();
+    if (!r.ok) { $('local-lane').innerHTML = '<div class="error">'+esc(d.error||r.status)+'</div>'; return; }
+    const diag = d.body || d;
+    const lr = diag.last_refresh || {};
+    const lp = diag.last_publish || {};
+    const b = diag.budget || {};
+    const series = Array.isArray(diag.series) ? diag.series : [];
+    const latestBars = series.map(s => esc(s.timeframe)+': '+esc(String(s.latest_close_time||'—'))).join(' · ');
+    $('local-lane').innerHTML = '<div style="font-size:12px;line-height:1.6">'
+      +'<div><b>Last refresh:</b> '+esc(String(lr.status||'—'))+' @ '+esc(String(lr.checked_at||'—'))+'</div>'
+      +'<div><b>Last publish:</b> '+esc(String(lp.candle_key||'—'))+' · '+esc(String(lp.status||'—'))+' @ '+esc(String(lp.published_at||'—'))+'</div>'
+      +'<div><b>Budget:</b> '+esc(String(b.used||0))+'/'+esc(String(b.daily||'—'))+'</div>'
+      +'<div><b>Latest bars:</b> '+latestBars+'</div>'
+      +'</div>';
+  } catch(e){ $('local-lane').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+}
+
 async function autoLoad(){
+  try {
+    const r = await fetch(API+'/api/decisions?limit=1'); const d = await r.json();
+    if(d.items && d.items.length>0) loadTechnicalDecision(d.items[0].candle_key);
+  } catch(e){}
   try {
     const r = await fetch(API+'/api/news?limit=1'); const d = await r.json();
     if(d.items && d.items.length>0) loadAnalysis(d.items[0].analysis_key);
   } catch(e){}
 }
+
 
 // ---- Price chart (closed TradingView bars via MarketDataReader RPC) ----
 let chart = null, candleSeries = null, volumeSeries = null, chartTf = 'H1';
@@ -439,8 +475,8 @@ document.querySelectorAll('#tf-group .tf').forEach(t=>{
 });
 loadChart(true);
 setInterval(()=>loadChart(false), 60000);
-loadStatus(); loadNews(); loadDecisions(); autoLoad();
-setInterval(()=>{ loadStatus(); loadNews(); loadDecisions(); }, 30000);
+loadStatus(); loadNews(); loadDecisions(); autoLoad(); loadLocalLane();
+setInterval(()=>{ loadStatus(); loadNews(); loadDecisions(); loadLocalLane(); }, 30000);
 </script>
 </body>
 </html>`;

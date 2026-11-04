@@ -1,7 +1,8 @@
 # RFC — Multi-Agent Communication Bus (XAUUSD)
 
-Status: **Phase 2 implemented (flag off)**.
+Status: **Approved by owner 2026-11-04; Phase 2 implemented (flag off); Phase 3 RFC drafted**.
 Canonical references: `docs/SSOT.md`, `AGENTS.md`, `docs/CHANGELOG.md`.
+Phase 3 UI (news threads + live 5m room): `docs/RFC_NEXUS_AGENT_SOCIAL.md`.
 
 ## 1. Motivation
 Move from a sequential Analyst → Counselor → Reasoner chain to a **multi-agent debate** where specialized agents (technical, liquidity, macro/news, risk, parity) publish insights into a shared bus, converge to a consensus decision, and surface a live "crowded market" chatroom in the Nexus dashboard. OHLCV ingestion already includes 5m; news stays 1H.
