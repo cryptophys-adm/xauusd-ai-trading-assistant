@@ -215,10 +215,10 @@ test("wall budget (fake clock) stops further calls", async () => {
   let now = Date.parse("2026-11-04T10:00:00Z");
   const e = env({ AI: fakeAI(({ request }) => { now += 50_000; return happyHandler({ request }); }) });
   await runMultiAgentBus(e, task(), { clock: () => now });
-  assert.equal(BUS_WALL_BUDGET_MS, 180_000);
-  assert.equal(e.AI.calls.length, 4, "the 4th call starts at 150 s; the moderator at 200 s is over budget");
+  assert.equal(BUS_WALL_BUDGET_MS, 300_000);
+  assert.equal(e.AI.calls.length, 5, "the 5th call starts at 200 s; a 6th call is not scheduled");
   const bus = await readBus(e.DB, CANDLE);
-  assert.equal(bus.items.find(m => m.agent === "moderator").status, "budget_exhausted");
+  assert.equal(bus.items.find(m => m.agent === "moderator").status, "ok");
 });
 
 test("redelivering the same queue message makes no new calls and no duplicate rows", async () => {

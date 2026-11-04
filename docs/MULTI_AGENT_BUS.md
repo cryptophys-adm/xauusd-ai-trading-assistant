@@ -32,7 +32,7 @@ Move from a sequential Analyst → Counselor → Reasoner chain to a **multi-age
 - No change to current H1 decision path until approved.
 
 ## 6. Decisions taken for Phase 2 (2026-11-04)
-- First agents: `technical` and `news`, plus a `moderator`. 2 rounds, 180 s wall budget, at most 5 calls per H1 synthesis.
+- First agents: `technical` and `news`, plus a `moderator`. 2 rounds, 300 s wall budget, at most 5 calls per H1 synthesis.
 - The existing Analyst → Counselor → Reasoner chain stays authoritative. The bus runs as a separate queue task after the synthesis is persisted and never feeds back into it.
 - Cadence: H1 only. The 5m live room is Phase 3b (`docs/RFC_NEXUS_AGENT_SOCIAL.md`).
 - Model: Beam (`reflection-ai/beam-1.0-501b-a23b`, $0) with a single fallback to `@cf/zai-org/glm-4.7-flash`.

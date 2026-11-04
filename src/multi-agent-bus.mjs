@@ -13,9 +13,9 @@ export const BUS_DEFAULT_FALLBACK_MODEL = "@cf/zai-org/glm-4.7-flash";
 export const BUS_AGENTS = Object.freeze(["technical", "news"]);
 export const BUS_ROUNDS = 2;
 export const BUS_MODERATOR_ROUND = 3;
-// Wall budget per synthesis. The fallback model answers in ~30 s per call, so
-// 5 calls need well over 90 s; queue consumers may run for up to 15 minutes.
-export const BUS_WALL_BUDGET_MS = 180_000;
+// Wall budget per synthesis. Fallback calls can take about 40 s, so five
+// sequential calls need room beyond 180 s; queue consumers may run 15 minutes.
+export const BUS_WALL_BUDGET_MS = 300_000;
 const PRIMARY_CALL_TIMEOUT_MS = 60_000;
 export const BUS_MAX_TOKENS = Object.freeze({ agent: 2048, moderator: 4096 });
 export const BUS_STANCES = Object.freeze(["BUY", "SELL", "WAIT"]);
