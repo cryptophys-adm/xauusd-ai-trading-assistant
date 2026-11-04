@@ -104,3 +104,32 @@ export async function reconcileRecentCandles(env, { now = Date.now(), lookback =
   }
   return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, results };
 }
+
+export async function backfillRecentAnalyses(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, loadPayloads = null, runAnalysis = null } = {}) {
+  const candleKeys = closedH1CandleKeys(now, { lookback });
+  let triggered = 0;
+  for (const candleKey of candleKeys) {
+    const openMs = Number(String(candleKey).split(":").pop());
+    if (!Number.isFinite(openMs)) continue;
+    if (now - openMs > 2 * 60 * 60 * 1000) continue;
+    try {
+      const existing = await env.DB.prepare("SELECT status FROM analysis_runs WHERE candle_key = ?").bind(candleKey).first();
+      if (existing) continue;
+      const required = ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"];
+      const payloads = loadPayloads ? await loadPayloads(env, candleKey, required) : null;
+      if (!payloads || !required.every(source => payloads[source])) continue;
+      const lastColon = candleKey.lastIndexOf(":");
+      const rest = candleKey.slice(0, lastColon);
+      const secondLast = rest.lastIndexOf(":");
+      const timeframe = rest.slice(secondLast + 1);
+      const ticker = rest.slice(0, secondLast);
+      if (typeof runAnalysis === "function") {
+        await runAnalysis(env, candleKey, ticker, timeframe, payloads);
+        triggered += 1;
+      }
+    } catch (error) {
+      // swallow per-candle
+    }
+  }
+  return { triggered, candle_keys: candleKeys };
+}
