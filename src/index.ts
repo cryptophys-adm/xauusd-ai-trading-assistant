@@ -40,6 +40,8 @@ export interface Env {
   AI_MODEL_COUNSELOR: string;
   AI_MODEL_REASONER: string;
   REQUIRED_SOURCES: string;
+  MULTI_AGENT_BUS_ENABLED?: string;
+  MULTI_AGENT_MAX_CALLS_PER_HOUR?: string;
   PARITY_PROMOTE_AFTER?: string;
   PARITY_ABS_TOLERANCE?: string;
   PARITY_REL_TOLERANCE?: string;
@@ -517,6 +519,60 @@ async function setAnalysisRunStatus(env: Env, candleKey: string, status: string,
   }
 }
 
+async function ensureBusSchema(env: Env): Promise<void> {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS bus_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    candle_key TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    agent TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    insight TEXT NOT NULL,
+    confidence REAL,
+    refs_json TEXT,
+    model TEXT
+  )`).run();
+}
+
+async function runMultiAgentBus(env: Env, fusion: any, candleKey: string): Promise<any[]> {
+  const enabled = String(env.MULTI_AGENT_BUS_ENABLED || "false").toLowerCase() === "true";
+  if (!enabled) return [];
+  await ensureBusSchema(env);
+  const started = Date.now();
+  const messages: any[] = [];
+  const agents = ["technical", "news"];
+  for (let round = 1; round <= 2; round++) {
+    if (Date.now() - started > 90000) break;
+    for (const agent of agents) {
+      if (Date.now() - started > 90000) break;
+      let insight = "";
+      let confidence: number | null = null;
+      const refs: string[] = [];
+      try {
+        if (agent === "technical") {
+          insight = "Trusted lanes: " + (fusion?.input_lanes?.tradingview_webhook?.present_sources || []).join(",") + "; local: " + (fusion?.input_lanes?.local_computation?.present_engines || []).join(",");
+          confidence = 0.5;
+          refs.push("fusion");
+          if (fusion?.informational_5m_context) refs.push("informational_5m_context (UNVERIFIED)");
+        } else {
+          insight = "News lane present: " + String(fusion?.fundamental_news_analysis !== null);
+          confidence = 0.5;
+          refs.push("fundamental_news");
+        }
+      } catch {
+        insight = "agent_failed";
+        confidence = 0;
+      }
+      const msg = { candle_key: candleKey, round, agent, ts: new Date().toISOString(), insight, confidence, refs };
+      messages.push(msg);
+      try {
+        await env.DB.prepare("INSERT INTO bus_messages (candle_key, round, agent, ts, insight, confidence, refs_json, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+          .bind(candleKey, round, agent, msg.ts, insight, confidence, JSON.stringify(refs), "shadow").run();
+      } catch { /* ignore */ }
+    }
+  }
+  return messages;
+}
+
 async function runAnalysis(
   env: Env,
   candleKey: string,
@@ -605,6 +661,8 @@ async function runAnalysis(
     reason: fusion.fundamental_news_analysis ? undefined : "No fresh, valid completed fundamental news analysis is available."
   };
 
+  const busMessages = await runMultiAgentBus(env, fusion, candleKey);
+
   const evidence = {
     schema_version: fusion.schema_version,
     candle_key: candleKey,
@@ -616,6 +674,7 @@ async function runAnalysis(
     local_calculation_evidence: fusion.local_calculations,
     fundamental_news_analysis: fusion.fundamental_news_analysis,
     informational_5m_context: fusion.informational_5m_context,
+    bus_messages: busMessages,
     evidence_fusion: fusion,
     policy: TECHNICAL_KNOWLEDGE,
     news_evidence: newsEvidence
@@ -1623,6 +1682,28 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     const row = await env.DB.prepare("SELECT candle_key, timestamp, ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY timestamp DESC LIMIT 1").bind(key).first<JsonObject>();
     if (!row) return dashboardJson({ status: "not_found" }, 404);
     return dashboardJson({ status: "ok", candle_key: row.candle_key, timestamp: row.timestamp, synthesis: parseJsonText(row.ai_analysis, null) });
+  }
+  if (url.pathname === "/api/bus") {
+    const key = url.searchParams.get("candle_key");
+    try {
+      await ensureBusSchema(env);
+      const stmt = key
+        ? env.DB.prepare("SELECT id, candle_key, round, agent, ts, insight, confidence, refs_json FROM bus_messages WHERE candle_key = ? ORDER BY round, id").bind(key)
+        : env.DB.prepare("SELECT id, candle_key, round, agent, ts, insight, confidence, refs_json FROM bus_messages ORDER BY id DESC LIMIT 50");
+      const rows = await stmt.all();
+      return dashboardJson({ status: "ok", items: rows.results || [] });
+    } catch {
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/bus/latest") {
+    try {
+      await ensureBusSchema(env);
+      const rows = await env.DB.prepare("SELECT id, candle_key, round, agent, ts, insight, confidence, refs_json FROM bus_messages ORDER BY id DESC LIMIT 50").all();
+      return dashboardJson({ status: "ok", items: rows.results || [] });
+    } catch {
+      return dashboardJson({ status: "error" }, 500);
+    }
   }
   if (url.pathname === "/api/m5-context") {
     try {

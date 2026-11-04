@@ -1,6 +1,6 @@
 # RFC — Multi-Agent Communication Bus (XAUUSD)
 
-Status: **Approved by owner 2026-11-04; implementation phased (see below)**.
+Status: **Phase 2 implemented (flag off)**.
 Canonical references: `docs/SSOT.md`, `AGENTS.md`, `docs/CHANGELOG.md`.
 
 ## 1. Motivation

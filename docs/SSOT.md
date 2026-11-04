@@ -43,6 +43,13 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   position size or confidence, and is labelled "UNVERIFIED 5m" in the UI and prompts.
 - Trust remains H1-only via the autonomous parity registry; no parity exists for 5m.
 
+### Multi-agent bus (Phase 2, flag off by default)
+- Optional advisory bus stored in D1 `bus_messages`; enabled only when
+  `MULTI_AGENT_BUS_ENABLED=true`. Default false: no bus code runs and no
+  extra AI calls are made.
+- The bus never decides: the Analyst -> Counselor -> Reasoner chain still
+  produces decision, entry/SL/TP and confidence. Cadence remains H1 only.
+
 - Transport: the pull adapter calls `AI_WORKER.submitContext(record)` on the
   AI Worker's `LocalComputationIngress` RPC entrypoint (no shared secret).
 - Storage: KV key `context:m5:latest` (TTL 900 s) on the AI Worker.
