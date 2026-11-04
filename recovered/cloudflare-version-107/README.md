@@ -16,3 +16,5 @@ Complete recovered source files and verified lengths:
 | `src/index.ts` | `recovered/cloudflare-version-107/src/index.ts` | 36,813 | `202bdb6bcf7ef70b5749bf669e3ee919d76e8ca7` |
 
 The Git blob identifiers above refer to the full recovered file contents. The recovered production `src/index.ts` is retained as a forensic reference, not as the active application entrypoint. It must not replace the richer GitHub `main` implementation wholesale. The root `lib/*` and `src/dashboard.ts` files are its exact recovered dependencies and are integrated additively into the existing mainline runtime.
+
+`src/dashboard.ts` (the old Analyst/Counselor/Reasoner chat and raw-output page) was retired from the mainline runtime on 2026-11-04. `GET /dashboard` now redirects to the Nexus dashboard. The recovered content is still available from git by the blob SHA above.

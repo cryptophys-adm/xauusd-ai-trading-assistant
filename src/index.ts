@@ -18,9 +18,9 @@ import type { EvidenceBundle, HandoffResponse } from "../lib/contracts.ts";
 import { buildCandleKey, nowIso } from "../lib/contracts.ts";
 import { verifyHandoffRequest, REPLAY_RECORD_TTL_SECONDS } from "../lib/auth.ts";
 import { validateBundle } from "../lib/validation.ts";
-import { DASHBOARD_HTML } from "./dashboard.ts";
 
 export interface Env {
+  NEXUS_DASHBOARD_URL?: string;
   DB: D1Database;
   SIGNAL_CACHE: KVNamespace;
   WEBHOOK_BUFFER: KVNamespace;
@@ -130,7 +130,7 @@ function asText(value: unknown): string {
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
-import { liveRoomEnabled, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread } from "./agent-threads.mjs";
+import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread } from "./agent-threads.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
 
@@ -1573,7 +1573,9 @@ async function ingestM5Context(env: Env, payload: unknown): Promise<{ status: nu
   if (!kv || typeof kv.put !== "function") return { status: 503, body: { error: "kv_not_configured" } };
   const stored = { ...p, received_at: new Date().toISOString() };
   await kv.put("context:m5:latest", JSON.stringify(stored), { expirationTtl: 900 });
-  if (liveRoomEnabled(env)) {
+  // The live room meets at each 15m candle close; every 5m context still refreshes the KV
+  // execution context above.
+  if (liveRoomEnabled(env) && isFifteenMinuteClose(p.candle_time)) {
     try {
       await sendQueueTask(env.XAUUSD_EVENTS, buildLiveRoomTask({ barTime: String(p.candle_time), context: stored }) as unknown as QueueTask);
     } catch (error) {
@@ -1711,7 +1713,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/live") {
     try {
       const items = await readLive(env.DB, { since: Number(url.searchParams.get("since") || "0"), limit: Number(url.searchParams.get("limit") || "50") });
-      return dashboardJson({ status: "ok", enabled: liveRoomEnabled(env), label: "UNVERIFIED 5m", items });
+      return dashboardJson({ status: "ok", enabled: liveRoomEnabled(env), cadence: "15m", label: "UNVERIFIED 5m", items });
     } catch (error) {
       console.error("live_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error", error: "live_unavailable" }, 500);
@@ -1745,7 +1747,8 @@ export default {
       return new Response(null, { status: 204, headers: { ...DASHBOARD_CORS, "access-control-allow-methods": "GET,OPTIONS", "access-control-allow-headers": "content-type", "access-control-max-age": "86400" } });
     }
     if (request.method === "GET" && url.pathname === "/dashboard") {
-      return new Response(DASHBOARD_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+      // The old debate/raw-output page is retired: Nexus (threads + live room) is the only dashboard.
+      return Response.redirect(String(env.NEXUS_DASHBOARD_URL || "https://nexus.cryptophys.work/"), 302);
     }
     const dashboardResponse = await handleDashboardApi(request, env, url).catch(() => dashboardJson({ status: "error", error: "dashboard_api_failed" }, 500));
     if (dashboardResponse) return dashboardResponse;

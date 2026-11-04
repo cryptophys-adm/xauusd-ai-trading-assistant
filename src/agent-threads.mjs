@@ -23,7 +23,6 @@ export const LIVE_ROOM_WALL_BUDGET_MS = 150_000;
 const INSIGHT_MAX = 600;
 const SUMMARY_MAX = 1000;
 const RAW_MAX = 2048;
-const LIVE_SIGNATURE_KEY = "liveroom:last_signature";
 
 export const THREAD_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS agent_threads (
@@ -93,12 +92,47 @@ export function buildNewsThreadTask({ analysisKey, enqueuedAt = new Date().toISO
   return { kind: "news_thread", event_id: `news_thread:${analysisKey}`, analysis_key: analysisKey, candle_key: `news:${analysisKey}`, enqueued_at: enqueuedAt };
 }
 
+const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+
+/** True when a 5m bar close time is also a 15m candle close (:00, :15, :30, :45 UTC). */
+export function isFifteenMinuteClose(closeTime) {
+  const ms = Date.parse(String(closeTime ?? ""));
+  return Number.isFinite(ms) && ms % FIFTEEN_MINUTES_MS === 0;
+}
+
+/**
+ * Complete 15m candles built from closed 5m bars ({ t: close time, o, h, l, c, v }).
+ * A 15m candle is complete only when all three of its 5m bars are present.
+ */
+export function buildFifteenMinuteCandles(bars5m, { limit = 4 } = {}) {
+  const buckets = new Map();
+  for (const b of Array.isArray(bars5m) ? bars5m : []) {
+    const t = Date.parse(String(b?.t ?? ""));
+    if (!Number.isFinite(t)) continue;
+    const close = Math.ceil(t / FIFTEEN_MINUTES_MS) * FIFTEEN_MINUTES_MS;
+    if (!buckets.has(close)) buckets.set(close, new Map());
+    buckets.get(close).set(t, b);
+  }
+  const candles = [];
+  for (const [close, byTime] of [...buckets.entries()].sort((a, b) => a[0] - b[0])) {
+    const bars = [...byTime.entries()].sort((a, b) => a[0] - b[0]).map(([, b]) => b);
+    if (bars.length !== 3) continue;
+    const vols = bars.map(b => (b.v == null ? NaN : Number(b.v))).filter(Number.isFinite);
+    candles.push({
+      close_time: new Date(close).toISOString(),
+      o: Number(bars[0].o), h: Math.max(...bars.map(b => Number(b.h))), l: Math.min(...bars.map(b => Number(b.l))), c: Number(bars[2].c),
+      v: vols.length === 3 ? vols.reduce((x, y) => x + y, 0) : null
+    });
+  }
+  return candles.slice(-limit);
+}
+
 export function buildLiveRoomTask({ barTime, context = null, enqueuedAt = new Date().toISOString() } = {}) {
   if (!Number.isFinite(Date.parse(String(barTime ?? "")))) throw new TypeError("live room task requires a valid barTime");
   const iso = new Date(Date.parse(barTime)).toISOString();
   // The 5m context travels inside the task, so the consumer never depends on a
   // KV read that may not have propagated to its location yet.
-  return { kind: "live_room", event_id: `live_room:${iso}`, bar_time: iso, candle_key: `live5m:${iso}`, context, enqueued_at: enqueuedAt };
+  return { kind: "live_room", event_id: `live_room:${iso}`, bar_time: iso, candle_key: `live15m:${iso}`, context, enqueued_at: enqueuedAt };
 }
 
 let schemaReady = false;
@@ -342,13 +376,6 @@ export async function runNewsThread(env, task, { clock = () => Date.now() } = {}
 
 // ---------------------------------------------------------------- live room
 
-export function liveRoomSignature({ m5, h1, newsKey }) {
-  return JSON.stringify({
-    bias: m5?.bias ?? null, buy: m5?.buy_confirmed === true, sell: m5?.sell_confirmed === true, d_enc: m5?.d_enc ?? null,
-    h1_candle: h1?.candle_key ?? null, h1_decision: h1?.decision ?? null, news: newsKey ?? null
-  });
-}
-
 function validateRoomAgent(obj, agent) {
   const errors = [];
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { valid: false, errors: ["not_an_object"] };
@@ -376,8 +403,10 @@ export function validateRoomModerator(obj, h1Decision) {
 
 function roomAgentMessages(agent, evidence, technicalMsg) {
   const role = agent === "technical"
-    ? "You are the technical agent in a live XAUUSD 5m trading room. Read the latest closed 5m bars and the UNVERIFIED 5m Prophet context. The H1 TradingView reading (Prophet R38, Prophet R37, GMI v12.70) is the higher-timeframe backdrop: say whether the 5m move agrees with it. Call it \"the H1 TradingView reading\", never by a field name."
-    : "You are the risk agent in a live XAUUSD 5m trading room. Challenge the technical agent: where does the 5m read conflict with the authoritative H1 decision or the news consensus? Prefer HOLD/WAIT when it does.";
+    ? "You are the technical agent in a live XAUUSD trading room that meets at every 15m candle close. " +
+      "First judge the closed 15m candles: that is the setup. Then use the 5m execution data from the local lane (the UNVERIFIED 5m Prophet read and the last 5m bars) for execution timing: is there an entry trigger now, or should an open position be held or closed? " +
+      "The H1 TradingView reading (Prophet R38, Prophet R37, GMI v12.70) is the higher-timeframe backdrop: say whether the 15m setup agrees with it. Call things by plain names such as \"the 15m candle\" or \"the H1 TradingView reading\", never by a field name."
+    : "You are the risk agent in a live XAUUSD trading room that meets at every 15m candle close. Challenge the technical agent: where do the 15m setup or the 5m execution read conflict with the authoritative H1 decision or the news consensus? Prefer HOLD/WAIT when they do.";
   return chatMessages([
     role,
     RULES,
@@ -391,11 +420,11 @@ function roomAgentMessages(agent, evidence, technicalMsg) {
 
 function roomModeratorMessages(evidence, transcript) {
   return chatMessages([
-    "You are the moderator of a live XAUUSD 5m trading room.",
+    "You are the moderator of a live XAUUSD trading room that meets at every 15m candle close.",
     RULES,
     `Give one short consensus line. If your stance differs from the H1 decision (${evidence.h1.decision}), the summary must say "H1 decision: ${evidence.h1.decision}".`,
     `Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"summary":"<= 300 chars"}`,
-    "EVIDENCE: " + JSON.stringify({ h1: evidence.h1, news: evidence.news, m5: { bias: evidence.m5.bias, label: evidence.m5.label } }),
+    "EVIDENCE: " + JSON.stringify({ h1: evidence.h1, news: evidence.news, m15: evidence.m15.candles.at(-1) ?? null, m5: { bias: evidence.m5.bias, label: evidence.m5.label } }),
     "ROOM:",
     JSON.stringify(transcript.map(m => ({ agent: m.agent, status: m.status, stance: m.stance, confidence: m.confidence, insight: m.insight })))
   ]);
@@ -407,6 +436,8 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
   const kv = env.SIGNAL_CACHE;
   await ensureThreadSchema(db);
   const barTime = new Date(Date.parse(task.bar_time)).toISOString();
+  // The room meets only at a 15m candle close; the other 5m bars feed execution context only.
+  if (!isFifteenMinuteClose(barTime)) return { status: "not_15m_close", calls: 0 };
   const fromTask = task.context && typeof task.context === "object" ? task.context : null;
   const m5Raw = fromTask || parseJson(await kv?.get?.("context:m5:latest"), null);
   const m5At = Date.parse(m5Raw?.candle_time ?? "");
@@ -425,26 +456,29 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
   const newsThread = await db.prepare("SELECT t.id, t.ref_key, m.stance, m.confidence, m.body_json FROM agent_threads t LEFT JOIN agent_thread_messages m ON m.thread_id = t.id AND m.step = 'moderator' AND m.status = 'ok' WHERE t.kind = 'news' ORDER BY t.created_at DESC LIMIT 1").first();
   const news = newsThread ? { analysis_key: newsThread.ref_key, consensus: newsThread.stance ?? null, confidence: newsThread.confidence ?? null, summary: clip(parseJson(newsThread.body_json, {})?.summary, 300) } : null;
 
-  const signature = liveRoomSignature({ m5: m5Raw, h1, newsKey: news?.analysis_key });
-  const last = await kv?.get?.(LIVE_SIGNATURE_KEY);
-  if (last === signature) return { status: "skipped_no_change", calls: 0 };
-
   const day = barTime.slice(0, 10);
-  const threadId = `live5m:${day}`;
-  await upsertThread(db, { id: threadId, kind: "live5m", refKey: day, title: `Live room 5m · ${day}`, post: null, now: clock() });
+  const threadId = `live15m:${day}`;
+  await upsertThread(db, { id: threadId, kind: "live15m", refKey: day, title: `Live room 15m · ${day}`, post: null, now: clock() });
   const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, barTime).all()).results || []).map(r => [r.step, rowToThreadMessage(r)]));
   if (existing.has("moderator")) return { status: "already_complete", calls: 0 };
 
+  const recentBars = Array.isArray(m5Raw.recent_bars) ? m5Raw.recent_bars.slice(-12) : [];
   const evidence = {
+    m15: {
+      label: "closed 15m candles built from TradingView 5m bars",
+      close_time: barTime,
+      candles: buildFifteenMinuteCandles(recentBars)
+    },
     m5: {
       label: "UNVERIFIED 5m",
+      role: "execution timing from the local lane",
       trust_status: "informational_unverified",
       bar_time: barTime,
       bias: m5Raw.bias ?? null,
       buy_confirmed: m5Raw.buy_confirmed === true,
       sell_confirmed: m5Raw.sell_confirmed === true,
       d_enc: m5Raw.d_enc ?? null,
-      recent_bars: Array.isArray(m5Raw.recent_bars) ? m5Raw.recent_bars.slice(-12) : []
+      recent_bars: recentBars
     },
     h1,
     news
@@ -457,7 +491,7 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
   let calls = 0;
   const budgetOk = async () => {
     if (clock() >= deadline) return false;
-    try { return (await callsInLastHour(db, clock(), "live5m")) < (Number.isFinite(maxPerHour) ? maxPerHour : 0); } catch { return false; }
+    try { return (await callsInLastHour(db, clock(), "live%")) < (Number.isFinite(maxPerHour) ? maxPerHour : 0); } catch { return false; }
   };
   const step = async (base, opts) => { calls += 1; return runStep(roomEnv, db, { ...base, bar_time: barTime }, { ...opts, deadline, clock, runState, budgetOk }); };
   const toBody = (obj) => ({ body: { insight: clip(obj.insight, INSIGHT_MAX), responds_to: obj.responds_to ?? null }, refs: obj.refs.slice(0, 12).map(r => clip(r, 200)) });
@@ -475,7 +509,6 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
     maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateRoomModerator(o, h1.decision),
     toBody: (obj) => ({ body: { summary: clip(obj.summary, 400), h1_decision: h1.decision }, refs: [] })
   });
-  try { await kv?.put?.(LIVE_SIGNATURE_KEY, signature, { expirationTtl: 2 * 60 * 60 }); } catch { /* best effort */ }
   return { status: "complete", calls };
 }
 
@@ -514,8 +547,8 @@ export async function readLive(db, { since = 0, limit = 50 } = {}) {
   const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
   const s = Number(since) || 0;
   const rows = s > 0
-    ? ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id LIKE 'live5m:%' AND id > ? ORDER BY id ASC LIMIT ?").bind(s, n).all()).results || [])
-    : (((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id LIKE 'live5m:%' ORDER BY id DESC LIMIT ?").bind(n).all()).results) || []).reverse();
+    ? ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id LIKE 'live%:%' AND id > ? ORDER BY id ASC LIMIT ?").bind(s, n).all()).results || [])
+    : (((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id LIKE 'live%:%' ORDER BY id DESC LIMIT ?").bind(n).all()).results) || []).reverse();
   return rows.map(rowToThreadMessage);
 }
 
