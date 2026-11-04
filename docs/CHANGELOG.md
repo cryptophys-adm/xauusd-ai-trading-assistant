@@ -1,0 +1,28 @@
+# Changelog (canonical change log)
+
+This file is the single source of truth for repository changes. Topology and
+deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
+what changed and when, by merge commit and PR.
+
+## 2026-11-04
+
+- `2f3930a` (PR #41) fix(parity): scheduled reconcile sweep + local-lane diagnostics.
+- `f515beb` (PR #40) canonical SSOT + AGENTS.md rules; mark stale docs historical; topology guard test.
+- `553548e` (PR #39) fix(agents): token budgets for reasoning models; never store raw response objects.
+- `78ecef1` (PR #38) decommission six legacy Workers; document local computation ownership.
+- `136ef34` (PR #37) fix TradingView OAuth PKCE cookie fallback.
+
+## 2026-11-03
+
+- `81f3452` (PR #35) knowledge base v4; fix news RPC entrypoint; chart smoke test.
+- `5dff8c9` (PR #34) XAUUSD candlestick chart on Nexus dashboard.
+- `ba5f613` (PR #33) fix garbage agent output; bring dashboard API and Nexus Worker into git.
+- `0ee3993` (PR #31) identities changed (parity streaks reset).
+- `22a1752` (PR #27) H1 local_computation producer + publisher.
+- `7f7e6c3` (PR #26) autonomous parity registry replaces operator hash allowlist.
+- `ec38530` (PR #25) keep webhook lane; three distinct AI input lanes.
+- `817963a` (PR #24) TradingView MCP as the only market-data source for local engines.
+- `1faab4b` (PR #23) (merge).
+- `8e163fb` (PR #22) Prophet R37/R38 local engine, market-data ingestion, shadow deploy workflow.
+
+(Older entries: see `git log`.)

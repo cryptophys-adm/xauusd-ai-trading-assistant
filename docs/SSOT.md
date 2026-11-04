@@ -1,6 +1,6 @@
 # SSOT — XAUUSD AI Trading Assistant (canonical, current state)
 
-This is the single source of truth for the system's topology, ownership and deployment. If any other document disagrees with this one, this one wins and the other document is historical. Last reconciled: 2026-11-04.
+This is the single source of truth for the system's topology, ownership and deployment. If any other document disagrees with this one, this one wins and the other document is historical. Last reconciled: 2026-11-04. Change log: docs/CHANGELOG.md.
 
 ## 1. Production topology: exactly four Workers
 | Worker | Source | Deployed by (only on push to `main`) | Role |
