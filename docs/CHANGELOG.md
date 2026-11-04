@@ -6,6 +6,8 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-04
 
+- feat(nexus): Threads 1H replaces the old debate card; agents are shown by name only (no model names); agent output must be natural language (validated); the WAIT reasoning and 5m context read as plain sentences.
+- `2341164` (PR #61) feat(phase4): bus, news threads and live 5m room enabled in production.
 - feat(phase4): enable the multi-agent bus, news threads and the live 5m room in production (owner approval); shadow/advisory only.
 - `8f62aed` (PR #60) feat(phase3): agent threads per news analysis and a live 5m trading room.
 - feat(phase3): agent threads per news analysis and a live 5m room (`src/agent-threads.mjs`, migration 0004, `/api/threads`, `/api/live`, `POST /evidence/m5-context`, Nexus cards); the 5m context carries `recent_bars`; flags are on in preview, off in production.

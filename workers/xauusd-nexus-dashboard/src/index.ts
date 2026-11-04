@@ -187,18 +187,23 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <div class="sidebar-card">
       <h3>Agents</h3>
       <div class="agent-card">
-        <div class="agent-avatar av-analyst">A</div>
-        <div class="agent-info"><div class="name">Analyst</div><div class="role">News & Bias</div><div class="model" id="model-analyst">—</div></div>
+        <div class="agent-avatar av-analyst">T</div>
+        <div class="agent-info"><div class="name">Technical Analyst</div><div class="role">H1 and 5m charts</div></div>
         <span class="status-dot"></span>
       </div>
       <div class="agent-card">
-        <div class="agent-avatar av-counselor">C</div>
-        <div class="agent-info"><div class="name">Counselor</div><div class="role">Scenarios</div><div class="model" id="model-counselor">—</div></div>
+        <div class="agent-avatar av-counselor">N</div>
+        <div class="agent-info"><div class="name">News Analyst</div><div class="role">Fundamental news</div></div>
         <span class="status-dot"></span>
       </div>
       <div class="agent-card">
         <div class="agent-avatar av-reasoner">R</div>
-        <div class="agent-info"><div class="name">Reasoner</div><div class="role">Final Decision</div><div class="model" id="model-reasoner">—</div></div>
+        <div class="agent-info"><div class="name">Risk Manager</div><div class="role">Live 5m room</div></div>
+        <span class="status-dot"></span>
+      </div>
+      <div class="agent-card">
+        <div class="agent-avatar av-analyst">M</div>
+        <div class="agent-info"><div class="name">Moderator</div><div class="role">Consensus</div></div>
         <span class="status-dot"></span>
       </div>
     </div>
@@ -216,21 +221,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <div class="loader">Loading latest decision...</div>
     </div>
 
-    <!-- Agent Debate Feed -->
+    <!-- Threads 1H: the agents' debate on each H1 candle -->
     <div class="card">
       <div class="feed-header">
-        <div class="avatar">AI</div>
+        <div class="avatar">1H</div>
         <div>
-          <h2>Agent Debate</h2>
-          <div class="sub">Analyst → Counselor → Reasoner · Latest News Analysis</div>
+          <h2>Threads 1H</h2>
+          <div class="sub">One thread per H1 candle · Technical Analyst and News Analyst reply to each other · Moderator consensus · advisory only</div>
         </div>
       </div>
-      <div class="tabs">
-        <div class="tab active" data-tab="chat">Debate</div>
-        <div class="tab" data-tab="raw">Raw Output</div>
-      </div>
-      <div id="agent-chat" class="debate"><div class="loader">Loading...</div></div>
-      <div id="agent-raw" style="display:none"></div>
+      <div id="h1-list"><div class="loader">Loading threads...</div></div>
+      <div id="h1-view" style="display:none"></div>
     </div>
 
     <!-- Phase 3: agent threads per news analysis -->
@@ -238,10 +239,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <div class="feed-header">
         <div class="avatar">TH</div>
         <div>
-          <h2>Agent Threads</h2>
-          <div class="sub">One thread per news analysis · agents reply to each other · moderator consensus · advisory only</div>
+          <h2>News Threads</h2>
+          <div class="sub">One thread per news analysis · News Analyst and Technical Analyst reply to each other · Moderator consensus · advisory only</div>
         </div>
       </div>
+      <div id="news-threads"></div>
       <div id="thread-list"><div class="loader">Loading threads...</div></div>
       <div id="thread-view" style="display:none"></div>
     </div>
@@ -297,8 +299,6 @@ async function loadStatus(){
   try {
     const r = await fetch(API+'/api/status'); const d = await r.json();
     const ai = d.ai_worker||{}; const ing = d.ingestion_worker||{};
-    const models = ai.models||{};
-    [['analyst','model-analyst'],['counselor','model-counselor'],['reasoner','model-reasoner']].forEach(([k,id])=>{ if(models[k]) $(id).textContent = String(models[k]).split('/').pop(); });
     const pills = [
       {label:'AI Worker', ok: ai.status==='ok'},
       {label:'Ingestion', ok: ing.status==='ok'},
@@ -322,7 +322,7 @@ async function loadNews(){
       const cls = (rec==='BULLISH_BIAS'?'BUY':rec==='BEARISH_BIAS'?'SELL':rec==='WAIT_FOR_TECHNICAL_CONFIRMATION'?'WAIT':rec);
       return '<div class="news-item"><div class="news-title">'+esc(rec)+' <span class="badge-decision '+cls+'">'+esc(rec)+'</span></div>'
         +'<div class="news-meta">'+esc(n.analyzed_at)+' · '+n.article_count+' articles · conf: '+(n.confidence!=null?Math.round(n.confidence*100)+'%':'—')+'</div>'
-        +'<div class="news-meta" style="margin-top:4px"><a href="#" onclick="loadAnalysis(\\''+esc(n.analysis_key)+'\\');return false;" class="news-link">View debate →</a></div></div>';
+        +'<div class="news-meta" style="margin-top:4px"><a href="#news-threads" class="news-link" data-kind="news" data-thread="news:'+escAttr(n.analysis_key)+'">Open thread →</a></div></div>';
     }).join('');
   } catch(e){ $('news-list').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
 }
@@ -334,7 +334,7 @@ async function loadDecisions(){
     let html = '<table><thead><tr><th>Time</th><th>Decision</th><th>Conf</th></tr></thead><tbody>';
     d.items.forEach(x=>{
       const cls = (x.decision==='BUY'?'BUY':x.decision==='SELL'?'SELL':'WAIT');
-      html += '<tr onclick="loadTechnicalDecision(\\''+esc(x.candle_key)+'\\')" style="cursor:pointer">'
+      html += '<tr data-decision="'+escAttr(x.candle_key)+'" style="cursor:pointer">'
         +'<td>'+esc(String(x.timestamp).slice(0,16).replace('T',' '))+'</td>'
         +'<td><span class="badge-decision '+cls+'">'+esc(x.decision)+'</span></td>'
         +'<td>'+(x.confidence!=null?Math.round(x.confidence*100)+'%':'—')+'</td></tr>';
@@ -349,101 +349,42 @@ async function loadDecisions(){
 async function loadTechnicalDecision(key){
   try {
     const r = await fetch(API+'/api/decision/'+encodeURIComponent(key)); const d = await r.json();
-    if(d.status!=='ok'){ alert('Failed to load technical decision'); return; }
+    if(d.status!=='ok'){ $('latest-decision').innerHTML = '<div class="error">This decision could not be loaded.</div>'; return; }
     const syn = d.synthesis||{};
     const dec = syn.decision||{};
     const cls = (dec.decision==='BUY'?'BUY':dec.decision==='SELL'?'SELL':'WAIT');
     let m5ctx = '';
     try {
       const cr = await fetch(API+'/api/m5-context');
-      if (cr.ok) { const cd = await cr.json();
-      if (cd && cd.status === 'ok' && cd.context) {
-        const c = cd.context;
-        m5ctx = '<div style="font-size:12px;color:var(--muted);margin-top:8px"><span style="background:#f59e0b;color:#000;padding:2px 6px;border-radius:4px;font-weight:700">UNVERIFIED 5m</span> '
-          +'<b>'+esc(c.engine||'5m')+'</b> · bias '+esc(c.bias||'—')+' · buy '+esc(String(c.buy_confirmed))+' · sell '+esc(String(c.sell_confirmed))
-          +' · candle '+esc(String(c.candle_time||''))+'</div>';
-      }
+      if (cr.ok) {
+        const cd = await cr.json();
+        if (cd && cd.status === 'ok' && cd.context) {
+          const c = cd.context;
+          const bias = String(c.bias||'neutral').toLowerCase();
+          const signal = c.buy_confirmed ? 'a confirmed buy signal' : c.sell_confirmed ? 'a confirmed sell signal' : 'no confirmed buy or sell signal';
+          const bars = Array.isArray(c.recent_bars) ? c.recent_bars : [];
+          const last = bars.length ? bars[bars.length-1] : null;
+          m5ctx = '<div style="font-size:12px;color:var(--muted);margin-top:8px"><span class="badge-warn">UNVERIFIED 5m</span> '
+            +'The 5m picture is '+esc(bias)+' with '+signal
+            +(last ? ', last close '+esc(String(last.c)) : '')
+            +' (bar '+esc(String(c.candle_time||'').replace('T',' ').slice(0,16))+' UTC). It is context only and never changes the H1 decision.</div>';
+        }
       }
     } catch(e) { m5ctx = ''; }
-    try {
-      const mr = await fetch('/api/ohlcv?timeframe=M5&limit=12');
-      if (mr.ok) { const md = await mr.json();
-      if (md && Array.isArray(md.candles) && md.candles.length) {
-        const last = md.candles[md.candles.length-1];
-        m5ctx += '<div style="font-size:12px;color:var(--muted);margin-top:4px"><b>5m bars (last '+md.candles.length+')</b>: close '+esc(String(last.close))+' · H '+esc(String(last.high))+' · L '+esc(String(last.low))+'</div>';
-      }
-      }
-    } catch(e) {}
     $('latest-decision').innerHTML =
       '<div class="decision-card">'
       +'<div class="decision-badge '+cls+'">'+esc(dec.decision||'—')+'</div>'
-      +'<div class="conf">Confidence: '+(dec.confidence!=null?Math.round(dec.confidence*100)+'%':'—')+' · '+esc(d.candle_key||'')+'</div>'
+      +'<div class="conf">Confidence: '+(dec.confidence!=null?Math.round(dec.confidence*100)+'%':'—')+' · H1 candle '+esc(h1When(d.candle_key))+'</div>'
       +'<div class="rationale-box">'+esc(dec.reasoning||syn.reasoning||'—')+'</div>'
       +m5ctx
-      +'<div id="bus-consensus" style="margin-top:10px"></div>'
       +'</div>';
-    const msgs = [
-      {av:'av-analyst', cls:'analyst', name:'Analyst', model:(function(m){return String(m||'').split('/').pop();})(syn.analyst_model), content:syn.analyst_output||'(empty)'},
-      {av:'av-counselor', cls:'counselor', name:'Counselor', model:(function(m){return String(m||'').split('/').pop();})(syn.counselor_model), content:syn.counselor_output||'(empty)'},
-      {av:'av-reasoner', cls:'reasoner', name:'Reasoner', model:(function(m){return String(m||'').split('/').pop();})(syn.reasoner_model), content:syn.reasoner_output||'(empty)'},
-    ];
-    $('agent-chat').innerHTML = msgs.map(m=>
-      '<div class="debate-msg"><div class="debate-avatar '+m.av+'">'+m.name[0]+'</div>'
-      +'<div class="debate-bubble '+m.cls+'"><div class="meta"><span class="role">'+m.name+'</span><span class="model">'+m.model+'</span></div>'
-      +'<div class="content">'+esc(m.content)+'</div></div></div>'
-    ).join('');
-    $('agent-raw').innerHTML = '<div class="agent-raw"><h3>Technical Decision</h3><pre>'+esc(JSON.stringify(dec,null,2))+'</pre></div>'
-      +'<div class="agent-raw"><h3>Analyst Output</h3><pre>'+esc(syn.analyst_output||'')+'</pre></div>'
-      +'<div class="agent-raw"><h3>Counselor Output</h3><pre>'+esc(syn.counselor_output||'')+'</pre></div>'
-      +'<div class="agent-raw"><h3>Reasoner Output</h3><pre>'+esc(syn.reasoner_output||'')+'</pre></div>';
   } catch(e){ $('latest-decision').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
 }
 
-async function loadAnalysis(key){
-  try {
-    const r = await fetch(API+'/api/news/'+encodeURIComponent(key)); const d = await r.json();
-    if(d.status!=='ok'){ alert('Failed to load analysis'); return; }
-    const rec = d.recommendation||{};
-    const cls = (rec.recommendation==='BULLISH_BIAS'?'BUY':rec.recommendation==='BEARISH_BIAS'?'SELL':rec.recommendation==='WAIT_FOR_TECHNICAL_CONFIRMATION'?'WAIT':rec.recommendation);
-    $('latest-decision').innerHTML =
-      '<div class="decision-card">'
-      +'<div class="decision-badge '+cls+'">'+esc(rec.recommendation||'—')+'</div>'
-      +'<div class="conf">Confidence: '+(rec.confidence!=null?Math.round(rec.confidence*100)+'%':'—')+' · Horizon: '+esc(rec.horizon||'—')+'</div>'
-      +'<div class="rationale-box">'+esc(rec.rationale||'—')+'</div>'
-      +'<div class="ev-row">'
-      + (Array.isArray(rec.supporting_evidence)?rec.supporting_evidence.map(e=>'<span class="ev-tag support">✓ '+esc(e)+'</span>').join(''):'')
-      + (Array.isArray(rec.opposing_evidence)?rec.opposing_evidence.map(e=>'<span class="ev-tag oppose">✗ '+esc(e)+'</span>').join(''):'')
-      + (Array.isArray(rec.risks)?rec.risks.map(e=>'<span class="ev-tag risk">⚠ '+esc(e)+'</span>').join(''):'')
-      +'</div>'
-      +'<div style="font-size:12px;color:var(--muted);margin-top:10px"><b>Confirmation:</b> '+esc(rec.confirmation_needed||'—')+'</div>'
-      +'<div style="font-size:12px;color:var(--muted)"><b>Invalidation:</b> '+esc(rec.invalidation_conditions||'—')+'</div>'
-      +'</div>';
-    const msgs = [
-      {av:'av-analyst', cls:'analyst', name:'Analyst', model:(function(m){return String(m||'').split('/').pop();})(d.analyst_model), content:d.analyst_output||'(empty)'},
-      {av:'av-counselor', cls:'counselor', name:'Counselor', model:(function(m){return String(m||'').split('/').pop();})(d.counselor_model), content:d.counselor_output||'(empty)'},
-      {av:'av-reasoner', cls:'reasoner', name:'Reasoner', model:(function(m){return String(m||'').split('/').pop();})(d.reasoner_model), content:d.reasoner_output||'(empty)'},
-    ];
-    $('agent-chat').innerHTML = msgs.map(m=>
-      '<div class="debate-msg"><div class="debate-avatar '+m.av+'">'+m.name[0]+'</div>'
-      +'<div class="debate-bubble '+m.cls+'"><div class="meta"><span class="role">'+m.name+'</span><span class="model">'+m.model+'</span></div>'
-      +'<div class="content">'+esc(m.content)+'</div></div></div>'
-    ).join('');
-    $('agent-raw').innerHTML = '<div class="agent-raw"><h3>Analyst Output</h3><pre>'+esc(d.analyst_output||'')+'</pre></div>'
-      +'<div class="agent-raw"><h3>Counselor Output</h3><pre>'+esc(d.counselor_output||'')+'</pre></div>'
-      +'<div class="agent-raw"><h3>Reasoner Output</h3><pre>'+esc(d.reasoner_output||'')+'</pre></div>'
-      +'<div class="agent-raw"><h3>Evidence (articles)</h3><pre>'+esc(JSON.stringify(d.evidence?.articles||[],null,2))+'</pre></div>';
-  } catch(e){ $('latest-decision').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+function h1When(candleKey){
+  const ms = Number(String(candleKey||'').split(':').pop());
+  return isFinite(ms) && ms > 0 ? new Date(ms).toISOString().slice(0,16).replace('T',' ')+' UTC' : String(candleKey||'');
 }
-
-document.querySelectorAll('.tab').forEach(t=>{
-  t.addEventListener('click',()=>{
-    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-    t.classList.add('active');
-    const tab=t.dataset.tab;
-    $('agent-chat').style.display = tab==='chat'?'flex':'none';
-    $('agent-raw').style.display = tab==='raw'?'block':'none';
-  });
-});
 
 
 async function loadLocalLane(){
@@ -469,10 +410,6 @@ async function autoLoad(){
   try {
     const r = await fetch(API+'/api/decisions?limit=1'); const d = await r.json();
     if(d.items && d.items.length>0) loadTechnicalDecision(d.items[0].candle_key);
-  } catch(e){}
-  try {
-    const r = await fetch(API+'/api/news?limit=1'); const d = await r.json();
-    if(d.items && d.items.length>0) loadAnalysis(d.items[0].analysis_key);
   } catch(e){}
 }
 
@@ -528,58 +465,91 @@ function timeAgo(ts){
   return Math.round(ms/86400000) + 'd ago';
 }
 function chip(stance){ return stance ? '<span class="chip '+escAttr(stance)+'">'+esc(stance)+'</span>' : ''; }
-function modelShort(m){ return esc(String(m||'').split('/').pop()); }
-let threadSelected = null;
-async function loadThreads(){
-  if (threadSelected) return;
+const AGENT_NAMES = { technical: 'Technical Analyst', news: 'News Analyst', risk: 'Risk Manager', moderator: 'Moderator' };
+function agentName(a){ return AGENT_NAMES[a] || String(a||'Agent'); }
+const THREAD_BOXES = { h1: { list: 'h1-list', view: 'h1-view', empty: 'No H1 threads yet. A thread appears after the next H1 decision.' }, news: { list: 'thread-list', view: 'thread-view', empty: 'No news threads yet. A thread appears after the next news analysis.' } };
+const threadSelected = { h1: null, news: null };
+async function loadThreads(kind){
+  kind = kind || 'news';
+  const box = THREAD_BOXES[kind];
+  if (threadSelected[kind]) return;
   try {
-    const r = await fetch(API+'/api/threads?kind=news&limit=15'); const d = await r.json();
-    if (!r.ok) { $('thread-list').innerHTML = '<div class="error">'+esc(d.error||r.status)+'</div>'; return; }
+    const r = await fetch(API+'/api/threads?kind='+kind+'&limit=15'); const d = await r.json();
+    if (!r.ok) { $(box.list).innerHTML = '<div class="error">Threads are unavailable right now.</div>'; return; }
     const items = d.items || [];
-    if (!items.length) { $('thread-list').innerHTML = '<div class="loader">No threads yet. Threads appear after the next news analysis.</div>'; return; }
-    $('thread-list').innerHTML = items.map(t => '<div class="thread-item" data-thread="'+escAttr(t.id)+'">'
+    if (!items.length) { $(box.list).innerHTML = '<div class="loader">'+box.empty+'</div>'; return; }
+    $(box.list).innerHTML = items.map(t => '<div class="thread-item" data-kind="'+kind+'" data-thread="'+escAttr(t.id)+'">'
       +'<div class="t-title">'+esc(t.title)+'</div>'
       +'<div class="thread-meta">'+chip(t.consensus)+'<span>'+t.reply_count+' replies</span><span>'+esc(timeAgo(t.created_at))+'</span>'
       +(t.post && t.post.article_count ? '<span>'+t.post.article_count+' articles</span>' : '')+'</div></div>').join('');
-  } catch(e){ $('thread-list').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+  } catch(e){ $(box.list).innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
 }
 function renderThreadMsg(m, depth){
-  const body = m.insight || m.summary || '';
-  const status = m.status && m.status !== 'ok' ? '<span class="badge-warn">'+esc(m.status)+'</span>' : '';
-  const fb = m.fallback_used ? '<span>fallback</span>' : '';
-  let html = '<div class="tmsg'+(m.agent==='moderator'?' mod':'')+'" style="margin-left:'+(Math.min(depth,4)*18)+'px">'
-    +'<div class="m-head"><span class="m-agent">'+esc(m.agent)+'</span><span>'+modelShort(m.model)+'</span><span>'+esc(timeAgo(m.ts))+'</span>'
-    +chip(m.stance)+(m.confidence!=null ? '<span>conf '+Math.round(m.confidence*100)+'%</span>' : '')+status+fb+'</div>'
-    +'<div class="m-body">'+esc(body)+'</div>'
-    +(m.dissent && m.dissent.length ? '<div class="m-refs">Dissent: '+esc(m.dissent.join('; '))+'</div>' : '')
-    +(m.refs && m.refs.length ? '<div class="m-refs">refs: '+esc(m.refs.join(', '))+'</div>' : '')
-    +'</div>';
+  const name = agentName(m.agent);
+  let html = '<div class="tmsg'+(m.agent==='moderator'?' mod':'')+'" style="margin-left:'+(Math.min(depth,4)*18)+'px">';
+  if (m.status && m.status !== 'ok') {
+    html += '<div class="m-head"><span class="m-agent">'+esc(name)+'</span><span>'+esc(timeAgo(m.ts))+'</span></div>'
+      +'<div class="m-body" style="color:var(--muted)">'+esc(name)+' could not reply this round.</div></div>';
+  } else {
+    const body = m.insight || m.summary || '';
+    html += '<div class="m-head"><span class="m-agent">'+esc(name)+'</span><span>'+esc(timeAgo(m.ts))+'</span>'
+      +chip(m.stance)+(m.confidence!=null ? '<span>confidence '+Math.round(m.confidence*100)+'%</span>' : '')+'</div>'
+      +'<div class="m-body">'+esc(body)+'</div>'
+      +(m.dissent && m.dissent.length ? '<div class="m-refs">Disagreement: '+esc(m.dissent.join(' '))+'</div>' : '')
+      +'</div>';
+  }
   (m.replies||[]).forEach(c => { html += renderThreadMsg(c, depth+1); });
   return html;
 }
-async function openThread(id){
-  threadSelected = id;
-  $('thread-list').style.display = 'none';
-  $('thread-view').style.display = 'block';
-  $('thread-view').innerHTML = '<div class="loader">Loading thread...</div>';
+function renderPost(kind, t){
+  const p = t.post || {};
+  if (kind === 'h1') {
+    return '<div class="post-box" style="margin-top:10px"><div class="t-title" style="font-weight:700;font-size:15px">'+esc(t.title)+'</div>'
+      +'<div class="thread-meta" style="margin:6px 0">'+chip(p.decision)+(p.confidence!=null ? '<span>confidence '+Math.round(p.confidence*100)+'%</span>' : '')+'<span>'+esc(timeAgo(t.created_at))+'</span></div>'
+      +'<div>'+esc(p.reasoning||'')+'</div></div>';
+  }
+  const rec = p.recommendation || {};
+  return '<div class="post-box" style="margin-top:10px"><div class="t-title" style="font-weight:700;font-size:15px">'+esc(t.title)+'</div>'
+    +'<div class="thread-meta" style="margin:6px 0">'+esc(timeAgo(t.created_at))+(p.article_count ? ' · '+p.article_count+' articles' : '')+'</div>'
+    +((p.headlines||[]).length ? '<ul style="margin:6px 0 0 18px">'+p.headlines.map(h => '<li>'+esc(h)+'</li>').join('')+'</ul>' : '')
+    +(rec.summary ? '<div style="margin-top:6px;color:var(--muted)">'+esc(rec.summary)+'</div>' : '')
+    +'</div>';
+}
+async function openThread(kind, id){
+  const box = THREAD_BOXES[kind];
+  threadSelected[kind] = id;
+  $(box.list).style.display = 'none';
+  $(box.view).style.display = 'block';
+  $(box.view).innerHTML = '<div class="loader">Loading thread...</div>';
   try {
     const r = await fetch(API+'/api/threads/'+encodeURIComponent(id)); const d = await r.json();
-    if (!r.ok || !d.thread) { $('thread-view').innerHTML = '<div class="error">'+esc(d.error||d.status||r.status)+'</div>'; return; }
-    const t = d.thread; const p = t.post || {};
-    const rec = p.recommendation || {};
-    $('thread-view').innerHTML = '<button data-thread-back="1">&larr; All threads</button>'
-      +'<div class="post-box" style="margin-top:10px"><div class="t-title" style="font-weight:700;font-size:15px">'+esc(t.title)+'</div>'
-      +'<div class="thread-meta" style="margin:6px 0">'+esc(timeAgo(t.created_at))+(p.article_count ? ' · '+p.article_count+' articles' : '')+(rec.stance ? ' · news analysis: '+esc(rec.stance) : '')+'</div>'
-      +((p.headlines||[]).length ? '<ul style="margin:6px 0 0 18px">'+p.headlines.map(h => '<li>'+esc(h)+'</li>').join('')+'</ul>' : '')
-      +'</div>'
-      +(t.messages||[]).map(m => renderThreadMsg(m, 0)).join('');
-  } catch(e){ $('thread-view').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+    if (!r.ok || !d.thread) { $(box.view).innerHTML = '<button data-thread-back="'+kind+'">&larr; All threads</button><div class="loader">No agent discussion for this one yet.</div>'; return; }
+    const t = d.thread;
+    $(box.view).innerHTML = '<button data-thread-back="'+kind+'">&larr; All threads</button>'
+      + renderPost(kind, t)
+      + (t.messages||[]).map(m => renderThreadMsg(m, 0)).join('');
+  } catch(e){ $(box.view).innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
 }
 document.addEventListener('click', ev => {
   const back = ev.target.closest('[data-thread-back]');
-  if (back) { threadSelected = null; $('thread-view').style.display='none'; $('thread-list').style.display='block'; loadThreads(); return; }
+  if (back) {
+    const kind = back.getAttribute('data-thread-back');
+    threadSelected[kind] = null; $(THREAD_BOXES[kind].view).style.display='none'; $(THREAD_BOXES[kind].list).style.display='block'; loadThreads(kind); return;
+  }
   const item = ev.target.closest('[data-thread]');
-  if (item) openThread(item.getAttribute('data-thread'));
+  if (item) {
+    ev.preventDefault();
+    const kind = item.getAttribute('data-kind') || 'news';
+    openThread(kind, item.getAttribute('data-thread'));
+    const card = $(THREAD_BOXES[kind].view).closest('.card'); if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
+  const row = ev.target.closest('[data-decision]');
+  if (row) {
+    const key = row.getAttribute('data-decision');
+    loadTechnicalDecision(key);
+    openThread('h1', 'h1:'+key);
+  }
 });
 let liveSince = 0; let liveLastBar = null; let liveLoaded = false;
 async function loadLive(){
@@ -609,9 +579,9 @@ async function loadLiveH1(){
     if (x) $('live-h1').innerHTML = 'H1 decision: '+chip(x.decision)+' <span style="color:var(--muted)">'+esc(x.candle_key||'')+'</span>';
   } catch(e){}
 }
-loadThreads(); loadLive(); loadLiveH1();
+loadThreads('h1'); loadThreads('news'); loadLive(); loadLiveH1();
 setInterval(loadLive, 10000);
-setInterval(()=>{ loadThreads(); loadLiveH1(); }, 60000);
+setInterval(()=>{ loadThreads('h1'); loadThreads('news'); loadLiveH1(); }, 60000);
 
 loadChart(true);
 setInterval(()=>loadChart(false), 60000);

@@ -354,6 +354,18 @@ jobs:
           assert.equal(latestDecision.decision?.decision ?? finalDecision.synthesis?.decision?.decision, "WAIT",
             "the bus never changes the chain decision");
 
+          // Agent text must read as natural language (no field names, evidence paths or key=value).
+          const codeLike = (text) => /\b[a-z][a-z0-9]*_[a-z0-9_]+\b|\b[a-z][a-z0-9_]+\.[a-z][a-z0-9_]+\b|\b\w+\s*=\s*\w+/.test(String(text ?? ""));
+          assert.ok(bus.items.every(item => !codeLike(item.insight) && !codeLike(item.summary)), "bus messages must be natural language");
+
+          // Threads 1H: the same debate served as one thread per H1 candle.
+          const h1Response = await fetch(base + "/api/threads/" + encodeURIComponent("h1:" + candleKey));
+          const h1Thread = (await h1Response.json()).thread;
+          assert.equal(h1Response.status, 200, "Threads 1H must serve the candle's debate");
+          assert.deepEqual(h1Thread.messages.map(m => m.step), ["r1:technical", "r1:news", "moderator"]);
+          assert.ok(h1Thread.messages.slice(0, 2).every(m => m.replies.length === 1), "round-2 replies are nested under the other agent");
+          assert.match(h1Thread.post.reasoning, /^No trade for this candle/, "the H1 post explains the decision in plain language");
+
           // Phase 3a: news thread. The preview has no news ingestion, so a preview-only fixture
           // (PREVIEW_FIXTURES_ENABLED, never set in production) creates one news analysis.
           const fixtureResponse = await fetch(base + "/preview/news-analysis-fixture", { method: "POST", headers });
@@ -377,6 +389,7 @@ jobs:
           assert.equal(threadMessages.length, 5, "news thread: 2 agents x 2 rounds + moderator");
           assert.ok(threadMessages.every(m => m.status === "ok"), "every thread message must be schema-valid model output");
           assert.ok(threadMessages.some(m => m.fallback_used === false && m.model === "@cf/zai-org/glm-5.3-flash"), "the primary model must answer in the thread");
+          assert.ok(threadMessages.every(m => !codeLike(m.insight) && !codeLike(m.summary)), "thread messages must be natural language");
           const r2 = threadMessages.filter(m => m.step.startsWith("r2:"));
           assert.ok(r2.length === 2 && r2.every(m => m.parent_id), "round-2 replies are nested under the other agent's round-1 message");
 
@@ -403,6 +416,7 @@ jobs:
           assert.ok(live.every(m => m.status === "ok"), "every live-room message must be schema-valid model output");
           assert.ok(live.every(m => m.fallback_used === false && m.model === "@cf/zai-org/glm-5.3-flash"), "the live room uses the primary model only");
           assert.equal(live[1].parent_id, live[0].id, "risk replies to technical");
+          assert.ok(live.every(m => !codeLike(m.insight) && !codeLike(m.summary)), "live-room messages must be natural language");
 
           console.log(JSON.stringify({
             preview: base,
@@ -416,6 +430,8 @@ jobs:
             multi_agent_bus_real_models: "PASS",
             news_thread_real_models: "PASS",
             live_room_real_models: "PASS",
+            threads_1h: "PASS",
+            natural_language: "PASS",
             multi_agent_bus_model: bus.items.some(item => item.fallback_used === false) ? "glm-5.3-flash" : "fallback (see primary_error)",
             complete_AI_chain: "NOT_TESTED: no real fresh news/Pine-parity evidence in this fixture"
           }, null, 2));

@@ -73,7 +73,11 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - Primary model only, never the paid fallback. The `LIVE_ROOM_MAX_CALLS_PER_HOUR` cap fails closed.
   - Everything is labelled UNVERIFIED 5m.
   - The 5m context now carries the last 12 closed bars (`recent_bars`) for the room. The H1 chain strips them.
-- Read APIs: `GET /api/threads?kind=news`, `GET /api/threads/:id` (nested replies), `GET /api/live?since=`. The Nexus dashboard shows **Agent Threads** and **Live Room 5m** cards.
+- Read APIs: `GET /api/threads?kind=news|h1`, `GET /api/threads/:id` (nested replies; `h1:<candle_key>` serves the H1 bus debate as a thread) and `GET /api/live?since=`.
+- The Nexus dashboard shows three cards: **Threads 1H** (it replaces the old Analyst/Counselor/Reasoner debate card), **News Threads** and **Live Room 5m**.
+- The dashboard shows agents by name only: Technical Analyst, News Analyst, Risk Manager and Moderator. It never shows model names.
+- Agent text must be natural language: validators reject snake_case field names, dotted evidence paths and key=value pairs in insights, summaries and dissent (`src/natural-language.mjs`). Evidence paths stay in `refs`.
+- The fail-closed WAIT reasoning is plain language too (`describeDegradedEvidence`).
 - Neither feature writes into the H1 chain's evidence, prompts or decision. Stances are discussion only: no orders.
 - `POST /preview/news-analysis-fixture` exists only when `PREVIEW_FIXTURES_ENABLED` is `"true"` (set only in `wrangler.preview.jsonc`), so preview-e2e can prove a news thread.
 

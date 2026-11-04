@@ -10,6 +10,7 @@
 // evidence, prompts or decision. Everything 5m is UNVERIFIED.
 
 import { chatMessages } from "./model-text.mjs";
+import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, describeDegradedEvidence } from "./natural-language.mjs";
 import {
   callBusModel, buildBusEvidence, validateAgentOutput, validateModeratorOutput,
   AGENT_JSON_SCHEMA, MODERATOR_JSON_SCHEMA, BUS_DEFAULT_MODEL, BUS_MAX_TOKENS, busEnabled
@@ -123,7 +124,8 @@ const RULES = [
   "Advisory only: never produce entry, stop loss, take profit or position size, and never place or recommend executing an order. Stances are discussion positions, not orders.",
   "The H1 decision chain is authoritative. A local_computation engine counts as trusted only when its trust_status is approved_by_parity.",
   "Anything 5m is UNVERIFIED 5m: no parity comparator exists for it.",
-  "Cite every claim with refs: JSON paths into the evidence object you were given.",
+  "Back every claim with refs: JSON paths into the evidence object you were given.",
+  NATURAL_LANGUAGE_RULE,
   "Return only one JSON object that matches the required schema."
 ].join("\n");
 
@@ -325,6 +327,7 @@ function validateRoomAgent(obj, agent) {
   if (!inUnit(obj.confidence)) errors.push("confidence_out_of_range");
   if (typeof obj.insight !== "string" || !obj.insight.trim()) errors.push("insight_missing");
   if (!Array.isArray(obj.refs) || !obj.refs.length || obj.refs.some(r => typeof r !== "string" || !r.trim())) errors.push("refs_missing");
+  errors.push(...naturalLanguageErrors(obj.insight));
   return { valid: errors.length === 0, errors };
 }
 
@@ -337,6 +340,7 @@ export function validateRoomModerator(obj, h1Decision) {
   if (typeof obj.summary !== "string" || !obj.summary.trim()) errors.push("summary_missing");
   const h1 = String(h1Decision || "WAIT").toUpperCase();
   if (errors.length === 0 && obj.stance !== h1 && !new RegExp(`H1[^.]{0,40}${h1}`, "i").test(obj.summary)) errors.push("h1_reference_missing");
+  if (typeof obj.summary === "string") errors.push(...naturalLanguageErrors(obj.summary));
   return { valid: errors.length === 0, errors };
 }
 
@@ -478,4 +482,92 @@ export async function readLive(db, { since = 0, limit = 50 } = {}) {
     ? ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id LIKE 'live5m:%' AND id > ? ORDER BY id ASC LIMIT ?").bind(s, n).all()).results || [])
     : (((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id LIKE 'live5m:%' ORDER BY id DESC LIMIT ?").bind(n).all()).results) || []).reverse();
   return rows.map(rowToThreadMessage);
+}
+
+// ---------------------------------------------------------------- H1 threads
+// The H1 multi-agent bus (bus_messages) presented as one thread per H1 candle:
+// post = the H1 decision, replies = technical/news (round 2 nested under the
+// other agent's round-1 message), then the moderator.
+
+const H1_AGENTS = ["technical", "news"];
+
+function busRowToMessage(row) {
+  const body = parseJson(row.insight, null);
+  const structured = body && typeof body === "object" && !Array.isArray(body) ? body : { insight: String(row.insight ?? "") };
+  const round = Number(row.round);
+  return {
+    id: row.id,
+    run_id: row.run_id,
+    step: row.agent === "moderator" ? "moderator" : `r${round}:${row.agent}`,
+    agent: row.agent,
+    round,
+    ts: row.ts,
+    status: row.status,
+    confidence: row.confidence ?? null,
+    stance: structured.stance ?? null,
+    ...structured
+  };
+}
+
+function h1Title(candleKey, decision) {
+  const ms = Number(String(candleKey).split(":").pop());
+  const when = Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 16).replace("T", " ") + " UTC" : candleKey;
+  return `H1 candle ${when} · decision ${decision || "WAIT"}`;
+}
+
+function h1Post(candleKey, synthesisJson) {
+  const synthesis = parseJson(synthesisJson, {}) || {};
+  const decision = synthesis.decision || {};
+  const fusion = synthesis.evidence_fusion || {};
+  const ms = Number(String(candleKey).split(":").pop());
+  const reasoning = fusion.complete === false
+    ? describeDegradedEvidence(fusion.missing_evidence || [], fusion.validation_errors || [])
+    : String(decision.reasoning || "");
+  return {
+    candle_key: candleKey,
+    candle_open: Number.isFinite(ms) ? new Date(ms).toISOString() : null,
+    decision: decision.decision || "WAIT",
+    confidence: decision.confidence ?? null,
+    reasoning: clip(reasoning, 1200)
+  };
+}
+
+export async function listH1Threads(db, { limit = 20 } = {}) {
+  const n = Math.min(Math.max(Number(limit) || 20, 1), 50);
+  let rows = [];
+  try {
+    rows = (await db.prepare("SELECT candle_key, MAX(id) AS last_id, MIN(ts) AS first_ts FROM bus_messages GROUP BY candle_key ORDER BY last_id DESC LIMIT ?").bind(n).all()).results || [];
+  } catch { return []; }
+  const out = [];
+  for (const r of rows) {
+    const synth = await db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(r.candle_key).first();
+    const run = await db.prepare("SELECT run_id FROM bus_messages WHERE id = ?").bind(r.last_id).first();
+    const msgs = (await db.prepare("SELECT * FROM bus_messages WHERE candle_key = ? AND run_id = ? ORDER BY id").bind(r.candle_key, run?.run_id).all()).results || [];
+    const mod = msgs.map(busRowToMessage).find(m => m.agent === "moderator" && m.status === "ok");
+    const post = h1Post(r.candle_key, synth?.ai_analysis);
+    out.push({ id: `h1:${r.candle_key}`, kind: "h1", ref_key: r.candle_key, title: h1Title(r.candle_key, post.decision), created_at: r.first_ts, reply_count: msgs.length, consensus: mod?.stance ?? null, post });
+  }
+  return out;
+}
+
+export async function readH1Thread(db, candleKey) {
+  let rows = [];
+  try {
+    rows = (await db.prepare("SELECT * FROM bus_messages WHERE candle_key = ? ORDER BY id").bind(candleKey).all()).results || [];
+  } catch { return null; }
+  if (!rows.length) return null;
+  const latestRun = rows.at(-1).run_id;
+  const msgs = rows.filter(r => r.run_id === latestRun).map(busRowToMessage);
+  const byStep = new Map(msgs.map(m => [m.step, m]));
+  for (const m of msgs) {
+    if (m.round === 2 && H1_AGENTS.includes(m.agent)) {
+      const other = byStep.get(`r1:${m.agent === "technical" ? "news" : "technical"}`);
+      m.parent_id = other ? other.id : null;
+    } else {
+      m.parent_id = null;
+    }
+  }
+  const synth = await db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(candleKey).first();
+  const post = h1Post(candleKey, synth?.ai_analysis);
+  return { id: `h1:${candleKey}`, kind: "h1", ref_key: candleKey, title: h1Title(candleKey, post.decision), created_at: msgs[0]?.ts ?? null, post, messages: buildMessageTree(msgs) };
 }

@@ -130,7 +130,8 @@ function asText(value: unknown): string {
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
-import { liveRoomEnabled, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive } from "./agent-threads.mjs";
+import { liveRoomEnabled, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread } from "./agent-threads.mjs";
+import { describeDegradedEvidence } from "./natural-language.mjs";
 
 function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
@@ -658,7 +659,8 @@ async function runAnalysis(
 
   if (!fusion.complete) {
     const timestamp = new Date().toISOString();
-    const reasoning = "Evidence fusion is degraded. Missing evidence: " + (fusion.missing_evidence.join(", ") || "none") + ". Validation errors: " + (fusion.validation_errors.join(", ") || "none") + ". AI analysis was not invoked; no actionable trade setup is issued.";
+    // Plain language for the dashboard and Telegram; the machine-readable lists stay in evidence_fusion.
+    const reasoning = describeDegradedEvidence(fusion.missing_evidence, fusion.validation_errors);
     const decision: JsonObject = {
       decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null,
       risk_reward: null, position_size_pct: null, reasoning, confirmation: null, invalidation: null
@@ -832,7 +834,7 @@ async function runAnalysis(
     take_profit: null,
     risk_reward: null,
     position_size_pct: null,
-    reasoning: "Evidence fusion is degraded. Missing evidence: " + (fusion.missing_evidence.join(", ") || "none") + ". Validation errors: " + (fusion.validation_errors.join(", ") || "none") + ". No actionable trade setup is issued."
+    reasoning: describeDegradedEvidence(fusion.missing_evidence, fusion.validation_errors)
   };
 
   const timestamp = new Date().toISOString();
@@ -1685,7 +1687,9 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   }
   if (url.pathname === "/api/threads") {
     try {
-      const items = await listThreads(env.DB, { kind: url.searchParams.get("kind") || "news", limit: Number(url.searchParams.get("limit") || "20") });
+      const kind = url.searchParams.get("kind") || "news";
+      const limit = Number(url.searchParams.get("limit") || "20");
+      const items = kind === "h1" ? await listH1Threads(env.DB, { limit }) : await listThreads(env.DB, { kind, limit });
       return dashboardJson({ status: "ok", count: items.length, items });
     } catch (error) {
       console.error("threads_read_failed", error instanceof Error ? error.message : String(error));
@@ -1694,7 +1698,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   }
   if (url.pathname.startsWith("/api/threads/")) {
     try {
-      const thread = await readThread(env.DB, decodeURIComponent(url.pathname.slice("/api/threads/".length)));
+      const threadId = decodeURIComponent(url.pathname.slice("/api/threads/".length));
+      const thread = threadId.startsWith("h1:") ? await readH1Thread(env.DB, threadId.slice(3)) : await readThread(env.DB, threadId);
       if (!thread) return dashboardJson({ status: "not_found" }, 404);
       return dashboardJson({ status: "ok", thread });
     } catch (error) {
