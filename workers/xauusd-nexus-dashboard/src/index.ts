@@ -352,8 +352,7 @@ async function loadTechnicalDecision(key){
       +'<div class="agent-raw"><h3>Analyst Output</h3><pre>'+esc(syn.analyst_output||'')+'</pre></div>'
       +'<div class="agent-raw"><h3>Counselor Output</h3><pre>'+esc(syn.counselor_output||'')+'</pre></div>'
       +'<div class="agent-raw"><h3>Reasoner Output</h3><pre>'+esc(syn.reasoner_output||'')+'</pre></div>';
-    loadBusConsensus(key);
-  } catch(e){ alert('Error: '+e.message); }
+  } catch(e){ $('latest-decision').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
 }
 
 async function loadAnalysis(key){
@@ -389,7 +388,7 @@ async function loadAnalysis(key){
       +'<div class="agent-raw"><h3>Counselor Output</h3><pre>'+esc(d.counselor_output||'')+'</pre></div>'
       +'<div class="agent-raw"><h3>Reasoner Output</h3><pre>'+esc(d.reasoner_output||'')+'</pre></div>'
       +'<div class="agent-raw"><h3>Evidence (articles)</h3><pre>'+esc(JSON.stringify(d.evidence?.articles||[],null,2))+'</pre></div>';
-  } catch(e){ alert('Error: '+e.message); }
+  } catch(e){ $('latest-decision').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
 }
 
 document.querySelectorAll('.tab').forEach(t=>{
@@ -408,28 +407,18 @@ async function loadLocalLane(){
     const r = await fetch('/api/local-lane'); const d = await r.json();
     if (!r.ok) { $('local-lane').innerHTML = '<div class="error">'+esc(d.error||r.status)+'</div>'; return; }
     const diag = d.body || d;
-    const fmt = (v) => (v && typeof v === 'object') ? JSON.stringify(v) : String(v ?? '—');
+    const lr = diag.last_refresh || {};
+    const lp = diag.last_publish || {};
+    const b = diag.budget || {};
+    const series = Array.isArray(diag.series) ? diag.series : [];
+    const latestBars = series.map(s => esc(s.timeframe)+': '+esc(String(s.latest_close_time||'—'))).join(' · ');
     $('local-lane').innerHTML = '<div style="font-size:12px;line-height:1.6">'
-      +'<div><b>Last refresh:</b> '+esc(fmt(diag.last_refresh||diag.lastRefresh))+'</div>'
-      +'<div><b>Latest closed bar:</b> '+esc(fmt(diag.latest_closed_bar||diag.latestClosedBar))+'</div>'
-      +'<div><b>Last publish:</b> '+esc(fmt(diag.last_publish||diag.lastPublish))+'</div>'
-      +'<div><b>Quota budget:</b> '+esc(fmt(diag.quota_budget||diag.quotaBudget))+'</div>'
+      +'<div><b>Last refresh:</b> '+esc(String(lr.status||'—'))+' @ '+esc(String(lr.checked_at||'—'))+'</div>'
+      +'<div><b>Last publish:</b> '+esc(String(lp.candle_key||'—'))+' · '+esc(String(lp.status||'—'))+' @ '+esc(String(lp.published_at||'—'))+'</div>'
+      +'<div><b>Budget:</b> '+esc(String(b.used||0))+'/'+esc(String(b.daily||'—'))+'</div>'
+      +'<div><b>Latest bars:</b> '+latestBars+'</div>'
       +'</div>';
   } catch(e){ $('local-lane').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
-}
-
-async function loadBusConsensus(key){
-  try {
-    const r = await fetch(API+'/api/bus?candle_key='+encodeURIComponent(key)); const d = await r.json();
-    if (!d || !d.consensus) { $('bus-consensus').innerHTML = '<div style="font-size:12px;color:var(--muted)">Bus consensus: none yet</div>'; return; }
-    const c = d.consensus;
-    const agreed = c.agreed===true ? 'agreed' : c.agreed===false ? 'disagreed' : '—';
-    $('bus-consensus').innerHTML = '<div style="background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px">'
-      +'<div style="font-weight:600;margin-bottom:4px">Bus Consensus: '+esc(String(c.stance||'—'))+' · '+esc(String(c.confidence!=null?Math.round(c.confidence*100)+'%':'—'))+' · '+esc(agreed)+'</div>'
-      +'<div style="color:var(--muted)">'+esc(String(c.summary||''))+'</div>'
-      +(Array.isArray(c.dissent)&&c.dissent.length?'<div style="color:var(--red);margin-top:4px">Dissent: '+esc(c.dissent.join('; '))+'</div>':'')
-      +'</div>';
-  } catch(e){ $('bus-consensus').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
 }
 
 async function autoLoad(){
@@ -487,7 +476,7 @@ document.querySelectorAll('#tf-group .tf').forEach(t=>{
 loadChart(true);
 setInterval(()=>loadChart(false), 60000);
 loadStatus(); loadNews(); loadDecisions(); autoLoad(); loadLocalLane();
-setInterval(()=>{ loadStatus(); loadNews(); loadDecisions(); autoLoad(); loadLocalLane(); }, 30000);
+setInterval(()=>{ loadStatus(); loadNews(); loadDecisions(); loadLocalLane(); }, 30000);
 </script>
 </body>
 </html>`;
