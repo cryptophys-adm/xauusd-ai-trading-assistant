@@ -751,3 +751,85 @@ test("OAuth callback falls back to the PKCE cookie when the KV state is not visi
   assert.match(callback.headers.get("set-cookie"), /tv_mcp_oauth=; Max-Age=0/);
   assert.equal(JSON.parse(await env.OAUTH_STORE.get("tv_mcp:oauth_token")).access_token, "new-token");
 });
+
+function mcpFetch(onMcp) {
+  let mcpCalls = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes(".well-known/oauth-authorization-server")) {
+      return jsonResponse({
+        authorization_endpoint: "https://mcp.example.com/oauth/authorize",
+        token_endpoint: "https://mcp.example.com/oauth/token",
+        token_endpoint_auth_methods_supported: ["none"]
+      });
+    }
+    if (String(url).includes("/mcp")) {
+      mcpCalls += 1;
+      return onMcp(mcpCalls);
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+  return () => mcpCalls;
+}
+
+async function authorizeNews(env) {
+  await env.OAUTH_STORE.put(
+    "tv_mcp:oauth_token",
+    JSON.stringify({ access_token: "valid-token", refresh_token: "refresh-token", expires_at: Math.floor(Date.now() / 1000) + 3600 })
+  );
+}
+
+test("generic HTTP 429 (no quota message) opens a short shared cooldown and is not retried", async () => {
+  const env = createEnv({ TV_MCP_MAX_RETRIES: "3" });
+  await authorizeNews(env);
+  const calls = mcpFetch(() => new Response(JSON.stringify({ error: { code: "rate_limited", message: "Too Many Requests" } }), {
+    status: 429,
+    headers: { "content-type": "application/json", "retry-after": "120" }
+  }));
+  const before = Date.now();
+  const response = await worker.fetch(
+    new Request("https://news.example.com/pull", { method: "POST", headers: { authorization: "Bearer ingest-secret" } }),
+    env,
+    createCtx()
+  );
+  assert.equal(response.status, 502);
+  assert.equal(calls(), 1, "a generic HTTP 429 must not be retried");
+  const cooldown = JSON.parse(await env.OAUTH_STORE.get("tv_mcp:quota_cooldown_until"));
+  assert.equal(cooldown.reason, "provider_rate_limited");
+  const untilMs = Date.parse(cooldown.until);
+  assert.ok(untilMs >= before + 119_000 && untilMs <= Date.now() + 121_000, "Retry-After (120 s) sets the cooldown length");
+
+  // A second pull inside the cooldown makes no upstream call.
+  await worker.fetch(
+    new Request("https://news.example.com/pull", { method: "POST", headers: { authorization: "Bearer ingest-secret" } }),
+    env,
+    createCtx()
+  );
+  assert.equal(calls(), 1, "the shared cooldown stops the next invocation before MCP");
+});
+
+test("a rate-limit cooldown never shortens a longer quota suspension", async () => {
+  const env = createEnv();
+  const longUntil = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  await internals.writeQuotaCooldown(env, longUntil, "provider_quota_exceeded");
+  await internals.writeQuotaCooldown(env, internals.rateLimitCooldownUntil(60_000), "provider_rate_limited");
+  let stored = JSON.parse(await env.OAUTH_STORE.get("tv_mcp:quota_cooldown_until"));
+  assert.equal(stored.until, longUntil, "the shorter rate-limit pause is ignored");
+  assert.equal(stored.reason, "provider_quota_exceeded");
+
+  // A longer cooldown does replace a shorter one.
+  const env2 = createEnv();
+  await internals.writeQuotaCooldown(env2, internals.rateLimitCooldownUntil(60_000), "provider_rate_limited");
+  await internals.writeQuotaCooldown(env2, longUntil, "provider_quota_exceeded");
+  stored = JSON.parse(await env2.OAUTH_STORE.get("tv_mcp:quota_cooldown_until"));
+  assert.equal(stored.until, longUntil);
+  assert.equal(stored.reason, "provider_quota_exceeded");
+});
+
+test("rate-limit cooldown length honours Retry-After within 30 s .. 15 min", () => {
+  const now = Date.parse("2026-11-04T12:00:00Z");
+  const len = (ms) => Date.parse(internals.rateLimitCooldownUntil(ms, now)) - now;
+  assert.equal(len(null), 60_000, "default 60 s without Retry-After");
+  assert.equal(len(5_000), 30_000, "minimum 30 s");
+  assert.equal(len(120_000), 120_000);
+  assert.equal(len(3 * 60 * 60 * 1000), 15 * 60 * 1000, "maximum 15 min");
+});

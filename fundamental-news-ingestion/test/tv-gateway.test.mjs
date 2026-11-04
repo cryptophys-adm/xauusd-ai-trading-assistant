@@ -132,3 +132,31 @@ test("health identifies the Worker by role: TradingView MCP gateway serving news
   assert.deepEqual(Object.keys(body.services), ["news", "ohlcv"]);
   assert.equal(body.services.ohlcv.entrypoint, "TvGateway");
 });
+
+test("generic HTTP 429 from MCP stops the OHLCV batch and opens the shared rate-limit cooldown", async () => {
+  const env = createEnv();
+  await authorize(env);
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    if (target.includes(".well-known")) {
+      return jsonResponse({ authorization_endpoint: "https://mcp.example.com/authorize", token_endpoint: "https://mcp.example.com/token" });
+    }
+    calls.push(target);
+    return new Response(JSON.stringify({ error: "Too Many Requests" }), { status: 429, headers: { "content-type": "application/json", "retry-after": "90" } });
+  };
+  const first = await runTvOhlcv(env, [
+    { symbol: "OANDA:XAUUSD", interval: "5m", count: 2 },
+    { symbol: "TVC:DXY", interval: "4h", count: 2 }
+  ]);
+  assert.equal(first.status, 429);
+  assert.equal(first.body.error, "mcp_rate_limited");
+  assert.equal(calls.length, 1, "the batch stops at the first 429");
+  const cooldown = JSON.parse(await env.OAUTH_STORE.get("tv_mcp:quota_cooldown_until"));
+  assert.equal(cooldown.reason, "provider_rate_limited");
+  assert.ok(Date.parse(cooldown.until) > Date.now() + 80_000);
+  const again = await runTvOhlcv(env, [{ symbol: "OANDA:XAUUSD", interval: "5m", count: 2 }]);
+  assert.equal(again.status, 503);
+  assert.equal(again.body.error, "mcp_quota_cooldown_active");
+  assert.equal(calls.length, 1);
+});
