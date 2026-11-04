@@ -346,6 +346,16 @@ async function loadDecisions(){
   } catch(e){ $('decisions-list').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
 }
 
+function renderTvReading(tv){
+  if (!tv) return '';
+  const lines = Array.isArray(tv.lines) ? tv.lines : [];
+  return '<div class="tv-reading" style="margin-top:8px;font-size:12px;line-height:1.55">'
+    +'<div style="font-weight:700;margin-bottom:4px">TradingView signals (H1)</div>'
+    +'<div>'+esc(tv.summary||'')+'</div>'
+    +(lines.length ? '<ul style="margin:4px 0 0 18px;color:var(--muted)">'+lines.map(l => '<li>'+esc(l.text)+'</li>').join('')+'</ul>' : '')
+    +'</div>';
+}
+
 async function loadTechnicalDecision(key){
   try {
     const r = await fetch(API+'/api/decision/'+encodeURIComponent(key)); const d = await r.json();
@@ -376,6 +386,7 @@ async function loadTechnicalDecision(key){
       +'<div class="decision-badge '+cls+'">'+esc(dec.decision||'—')+'</div>'
       +'<div class="conf">Confidence: '+(dec.confidence!=null?Math.round(dec.confidence*100)+'%':'—')+' · H1 candle '+esc(h1When(d.candle_key))+'</div>'
       +'<div class="rationale-box">'+esc(dec.reasoning||syn.reasoning||'—')+'</div>'
+      +renderTvReading(d.tradingview_reading)
       +m5ctx
       +'</div>';
   } catch(e){ $('latest-decision').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
@@ -506,7 +517,8 @@ function renderPost(kind, t){
   if (kind === 'h1') {
     return '<div class="post-box" style="margin-top:10px"><div class="t-title" style="font-weight:700;font-size:15px">'+esc(t.title)+'</div>'
       +'<div class="thread-meta" style="margin:6px 0">'+chip(p.decision)+(p.confidence!=null ? '<span>confidence '+Math.round(p.confidence*100)+'%</span>' : '')+'<span>'+esc(timeAgo(t.created_at))+'</span></div>'
-      +'<div>'+esc(p.reasoning||'')+'</div></div>';
+      +'<div>'+esc(p.reasoning||'')+'</div>'
+      +renderTvReading(p.tradingview)+'</div>';
   }
   const rec = p.recommendation || {};
   return '<div class="post-box" style="margin-top:10px"><div class="t-title" style="font-weight:700;font-size:15px">'+esc(t.title)+'</div>'

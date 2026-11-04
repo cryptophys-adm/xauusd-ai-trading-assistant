@@ -259,11 +259,22 @@ jobs:
           let lastLocalPayload;
           for (const engine of ["mizan", "prophet", "gmi"]) {
             lastLocalPayload = localPayload(engine);
-            const response = await fetch(base + "/evidence/local-calculation", {
-              method: "POST",
-              headers,
-              body: JSON.stringify(lastLocalPayload)
-            });
+            // A fresh preview Worker can briefly answer with a Cloudflare HTML error page (5xx)
+            // while the new version propagates. Retry only that non-JSON edge answer; the POST is
+            // idempotent (deterministic event ID), and any JSON answer is asserted below as is.
+            let response;
+            for (let attempt = 0; attempt < 10; attempt++) {
+              response = await fetch(base + "/evidence/local-calculation", {
+                method: "POST",
+                headers,
+                body: JSON.stringify(lastLocalPayload)
+              });
+              if ((response.headers.get("content-type") || "").includes("application/json")) break;
+              console.log("::warning::local-calculation " + engine + " got a non-JSON edge answer (HTTP " + response.status + "), retrying: " + (await response.text()).slice(0, 120).replace(/\s+/g, " "));
+              await new Promise(resolve => setTimeout(resolve, 3000));
+            }
+            assert.ok((response.headers.get("content-type") || "").includes("application/json"),
+              "local calculation kept answering with a non-JSON edge page (HTTP " + response.status + ")");
             lastLocalResult = await response.json();
             assert.equal(response.status, 202, "local calculation must be durably queued before ACK: " + JSON.stringify(lastLocalResult));
             assert.equal(lastLocalResult.analysis_status, "queued");
@@ -365,6 +376,23 @@ jobs:
           assert.deepEqual(h1Thread.messages.map(m => m.step), ["r1:technical", "r1:news", "moderator"]);
           assert.ok(h1Thread.messages.slice(0, 2).every(m => m.replies.length === 1), "round-2 replies are nested under the other agent");
           assert.match(h1Thread.post.reasoning, /^No trade for this candle/, "the H1 post explains the decision in plain language");
+
+          // TradingView webhook reading: the three alerts decoded into plain language, shown on the
+          // decision card and the H1 post, and fed to the technical agent.
+          const tvReading = finalDecision.tradingview_reading;
+          console.log("TRADINGVIEW READING " + JSON.stringify(tvReading, null, 2));
+          assert.deepEqual((tvReading?.lines || []).map(l => l.source), ["Prophet R38", "Prophet R37", "GMI v12.70"],
+            "the decision API must decode all three webhook alerts");
+          assert.ok([tvReading.summary, ...tvReading.lines.map(l => l.text)].every(t => t && !codeLike(t)), "the webhook reading must be natural language");
+          // The fixture alerts carry a confirmed buy and a bullish, aligned GMI verdict: the stored
+          // indicator fields must survive (they also carry a `metrics` object).
+          assert.match(tvReading.lines[0].text, /confirmed BUY signal/, "Prophet R38 buy confirmation must be decoded");
+          assert.match(tvReading.lines[2].text, /a bullish verdict/, "GMI verdict must be decoded");
+          assert.equal(tvReading.bias, "bullish");
+          assert.deepEqual(h1Thread.post.tradingview?.lines?.map(l => l.source), ["Prophet R38", "Prophet R37", "GMI v12.70"],
+            "the H1 thread post must show the webhook reading");
+          const technicalR1 = bus.items.find(item => item.round === 1 && item.agent === "technical");
+          if (!/Prophet|GMI/.test(String(technicalR1?.insight ?? ""))) console.log("::warning::The technical agent did not name a TradingView indicator in round 1.");
 
           // Phase 3a: news thread. The preview has no news ingestion, so a preview-only fixture
           // (PREVIEW_FIXTURES_ENABLED, never set in production) creates one news analysis.

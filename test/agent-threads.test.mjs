@@ -158,6 +158,9 @@ test("live room: technical, risk (reply to technical), moderator; primary model 
   assert.equal(evidence.m5.label, "UNVERIFIED 5m");
   assert.equal(evidence.m5.recent_bars.length, 12);
   assert.equal(evidence.h1.decision, "WAIT");
+  assert.match(evidence.h1.tradingview, /TradingView indicators/, "the room sees the H1 TradingView reading");
+  const prompts = e.AI.calls.map(c => c.request.messages.map(m => m.content).join("\n")).join("\n");
+  assert.doesNotMatch(prompts, /tradingview_reading/, "no snake_case key the model could echo into its text");
 });
 
 test("live room never uses the paid fallback model", async () => {
@@ -258,5 +261,40 @@ test("H1 threads are built from the bus: post = decision, round 2 nested under t
   assert.equal(t.messages[0].replies[0].step, "r2:news", "news' round-2 reply sits under technical's round-1 message");
   assert.equal(t.messages[1].replies[0].step, "r2:technical");
   assert.match(t.post.reasoning, /^No trade for this candle/);
+  assert.deepEqual(t.post.tradingview.lines.map(l => l.source), ["Prophet R38", "Prophet R37", "GMI v12.70"]);
+  assert.match(list[0].post.tradingview.summary, /TradingView indicators/);
   assert.equal(await readH1Thread(d1, "OANDA:XAUUSD:60:1"), null);
+});
+
+test("an answer that only fails the natural-language rule gets one correction, counted in the budget", async () => {
+  const codeLike = { stance: "WAIT", confidence: 0.6, summary: "H1 decision: WAIT because h1.decision says so." };
+  const fixed = { stance: "WAIT", confidence: 0.6, summary: "H1 decision: WAIT. The hourly picture says stand aside." };
+  const e = env({ AI: fakeAI(({ sys, request }) => /moderator of a live/i.test(sys) ? (request.messages.length > 2 ? fixed : codeLike) : undefined) });
+  const result = await runLiveRoomBar(e, { bar_time: BAR });
+  assert.equal(result.status, "complete");
+  assert.equal(e.AI.calls.length, 4, "technical, risk, moderator, one correction");
+  const correction = e.AI.calls[3].request.messages;
+  assert.equal(correction.at(-2).role, "assistant");
+  assert.match(correction.at(-1).content, /reads like code/);
+  const mod = (await readLive(e.DB, {})).find(m => m.step === "moderator");
+  assert.equal(mod.status, "ok");
+  assert.equal(mod.summary, fixed.summary);
+  assert.equal(mod.corrections, 1);
+  const n = e.DB.raw.prepare("SELECT SUM(1 + COALESCE(fallback_used, 0) + COALESCE(json_extract(body_json, '$.corrections'), 0)) AS n FROM agent_thread_messages").get().n;
+  assert.equal(n, 4, "the hourly budget counts the correction call");
+});
+
+test("a correction that still reads like code stays invalid_output; schema errors get no correction", async () => {
+  const codeLike = { stance: "WAIT", confidence: 0.6, summary: "H1 decision: WAIT per h1.decision." };
+  const e = env({ AI: fakeAI(({ sys }) => /moderator of a live/i.test(sys) ? codeLike : undefined) });
+  await runLiveRoomBar(e, { bar_time: BAR });
+  const mod = (await readLive(e.DB, {})).find(m => m.step === "moderator");
+  assert.equal(mod.status, "invalid_output");
+  assert.equal(mod.corrections, 1);
+  assert.equal(e.AI.calls.length, 4, "exactly one correction attempt");
+
+  resetThreadSchemaCacheForTests();
+  const e2 = env({ AI: fakeAI(({ sys }) => /moderator of a live/i.test(sys) ? { stance: "LONG", confidence: 0.6, summary: "Plain words." } : undefined) });
+  await runLiveRoomBar(e2, { bar_time: BAR });
+  assert.equal(e2.AI.calls.length, 3, "a schema error is not retried");
 });

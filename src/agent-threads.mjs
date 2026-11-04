@@ -11,6 +11,7 @@
 
 import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, describeDegradedEvidence } from "./natural-language.mjs";
+import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import {
   callBusModel, buildBusEvidence, validateAgentOutput, validateModeratorOutput,
   AGENT_JSON_SCHEMA, MODERATOR_JSON_SCHEMA, BUS_DEFAULT_MODEL, BUS_MAX_TOKENS, busEnabled
@@ -132,7 +133,7 @@ const RULES = [
 async function callsInLastHour(db, now, kindPrefix) {
   const cutoff = new Date(now - 60 * 60 * 1000).toISOString();
   const row = await db.prepare(
-    "SELECT COALESCE(SUM(1 + COALESCE(fallback_used, 0)), 0) AS n FROM agent_thread_messages WHERE ts >= ? AND status <> 'budget_exhausted' AND status <> 'skipped' AND thread_id LIKE ?"
+    "SELECT COALESCE(SUM(1 + COALESCE(fallback_used, 0) + COALESCE(json_extract(body_json, '$.corrections'), 0)), 0) AS n FROM agent_thread_messages WHERE ts >= ? AND status <> 'budget_exhausted' AND status <> 'skipped' AND thread_id LIKE ?"
   ).bind(cutoff, `${kindPrefix}:%`).first();
   const n = Number(row?.n);
   if (!Number.isFinite(n)) throw new Error("thread_budget_unavailable");
@@ -193,13 +194,42 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
   if (call.status !== "answered") {
     return writeMessage(db, { ...base, ts, ...meta, status: call.status, body: { insight: call.status === "budget_exhausted" ? "budget exhausted" : "agent failed: " + (call.error || "error"), ...diag } });
   }
-  const validation = call.truncated ? { valid: false, errors: ["finish_reason_length"] } : validate(call.obj);
-  if (!validation.valid) {
-    return writeMessage(db, { ...base, ts, ...meta, status: "invalid_output", body: { insight: clip(call.text, RAW_MAX), errors: validation.errors, ...diag } });
+  let validation = call.truncated ? { valid: false, errors: ["finish_reason_length"] } : validate(call.obj);
+  // An answer that is valid except that its text reads like code (a field name or key path)
+  // gets one correction attempt. The extra call is recorded in `corrections` and counted by
+  // the hourly budget; it never runs without budget or past the wall deadline.
+  let corrections = 0;
+  let finalCall = call;
+  if (!validation.valid && !call.truncated && validation.errors.length && validation.errors.every(e => e.startsWith("not_natural_language:")) && clock() < deadline && (await budgetOk())) {
+    const retry = await callBusModel(env, {
+      messages: [...messages, { role: "assistant", content: String(call.text ?? "") }, { role: "user", content: CORRECTION_PROMPT }],
+      schemaName, schema, maxTokens, effort, deadline, clock, runState
+    });
+    corrections = 1 + (retry.fallback_used ? 1 : 0);
+    meta.usage_tokens = sumOrNull(meta.usage_tokens, retry.usage_tokens);
+    meta.latency_ms = sumOrNull(meta.latency_ms, retry.latency_ms);
+    if (retry.status === "answered" && !retry.truncated) {
+      const second = validate(retry.obj);
+      if (second.valid) { validation = second; finalCall = retry; meta.model = retry.model; meta.fallback_used = meta.fallback_used || retry.fallback_used; }
+    }
   }
-  const { body, refs } = toBody(call.obj);
-  return writeMessage(db, { ...base, ts, ...meta, status: "ok", stance: call.obj.stance, confidence: call.obj.confidence, body: { ...body, ...diag }, refs });
+  const extra = corrections ? { corrections } : {};
+  if (!validation.valid) {
+    return writeMessage(db, { ...base, ts, ...meta, status: "invalid_output", body: { insight: clip(call.text, RAW_MAX), errors: validation.errors, ...extra, ...diag } });
+  }
+  const { body, refs } = toBody(finalCall.obj);
+  return writeMessage(db, { ...base, ts, ...meta, status: "ok", stance: finalCall.obj.stance, confidence: finalCall.obj.confidence, body: { ...body, ...extra, ...diag }, refs });
 }
+
+function sumOrNull(a, b) {
+  const xs = [a, b].map(Number).filter(Number.isFinite);
+  return xs.length ? xs.reduce((x, y) => x + y, 0) : null;
+}
+
+const CORRECTION_PROMPT =
+  "Your answer was rejected: its text reads like code (a field name, a word with underscores, a key path with dots, or key=value). " +
+  "Return the same JSON object with the same stance and confidence, but rewrite every text field in plain sentences a trader would write. " +
+  "Describe evidence in words (for example \"the H1 decision\", \"the 5m bias\", \"verified by parity\") and never copy a key from the evidence.";
 
 // ---------------------------------------------------------------- news thread
 
@@ -346,7 +376,7 @@ export function validateRoomModerator(obj, h1Decision) {
 
 function roomAgentMessages(agent, evidence, technicalMsg) {
   const role = agent === "technical"
-    ? "You are the technical agent in a live XAUUSD 5m trading room. Read the latest closed 5m bars and the UNVERIFIED 5m Prophet context."
+    ? "You are the technical agent in a live XAUUSD 5m trading room. Read the latest closed 5m bars and the UNVERIFIED 5m Prophet context. The H1 TradingView reading (Prophet R38, Prophet R37, GMI v12.70) is the higher-timeframe backdrop: say whether the 5m move agrees with it. Call it \"the H1 TradingView reading\", never by a field name."
     : "You are the risk agent in a live XAUUSD 5m trading room. Challenge the technical agent: where does the 5m read conflict with the authoritative H1 decision or the news consensus? Prefer HOLD/WAIT when it does.";
   return chatMessages([
     role,
@@ -384,9 +414,14 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
   if (m5At < Date.parse(barTime)) throw Object.assign(new Error("m5 context not visible yet"), { name: "RetryableError" });
   if (new Date(m5At).toISOString() !== barTime) return { status: "stale_bar", calls: 0 };
 
-  const synth = await db.prepare("SELECT candle_key, ai_analysis FROM ai_syntheses ORDER BY id DESC LIMIT 1").first();
+  const synth = await db.prepare("SELECT candle_key, ai_analysis, prophet_metrics, gmi_metrics FROM ai_syntheses ORDER BY id DESC LIMIT 1").first();
   const decision = parseJson(synth?.ai_analysis, {})?.decision || {};
-  const h1 = { candle_key: synth?.candle_key ?? null, decision: String(decision.decision || "WAIT").toUpperCase(), confidence: decision.confidence ?? null };
+  const h1 = {
+    candle_key: synth?.candle_key ?? null,
+    decision: String(decision.decision || "WAIT").toUpperCase(),
+    confidence: decision.confidence ?? null,
+    tradingview: synth ? interpretWebhookRow(synth).summary : null
+  };
   const newsThread = await db.prepare("SELECT t.id, t.ref_key, m.stance, m.confidence, m.body_json FROM agent_threads t LEFT JOIN agent_thread_messages m ON m.thread_id = t.id AND m.step = 'moderator' AND m.status = 'ok' WHERE t.kind = 'news' ORDER BY t.created_at DESC LIMIT 1").first();
   const news = newsThread ? { analysis_key: newsThread.ref_key, consensus: newsThread.stance ?? null, confidence: newsThread.confidence ?? null, summary: clip(parseJson(newsThread.body_json, {})?.summary, 300) } : null;
 
@@ -515,8 +550,8 @@ function h1Title(candleKey, decision) {
   return `H1 candle ${when} · decision ${decision || "WAIT"}`;
 }
 
-function h1Post(candleKey, synthesisJson) {
-  const synthesis = parseJson(synthesisJson, {}) || {};
+function h1Post(candleKey, synth) {
+  const synthesis = parseJson(synth?.ai_analysis, {}) || {};
   const decision = synthesis.decision || {};
   const fusion = synthesis.evidence_fusion || {};
   const ms = Number(String(candleKey).split(":").pop());
@@ -528,7 +563,8 @@ function h1Post(candleKey, synthesisJson) {
     candle_open: Number.isFinite(ms) ? new Date(ms).toISOString() : null,
     decision: decision.decision || "WAIT",
     confidence: decision.confidence ?? null,
-    reasoning: clip(reasoning, 1200)
+    reasoning: clip(reasoning, 1200),
+    tradingview: interpretWebhookRow(synth)
   };
 }
 
@@ -540,11 +576,11 @@ export async function listH1Threads(db, { limit = 20 } = {}) {
   } catch { return []; }
   const out = [];
   for (const r of rows) {
-    const synth = await db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(r.candle_key).first();
+    const synth = await db.prepare("SELECT ai_analysis, prophet_metrics, gmi_metrics FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(r.candle_key).first();
     const run = await db.prepare("SELECT run_id FROM bus_messages WHERE id = ?").bind(r.last_id).first();
     const msgs = (await db.prepare("SELECT * FROM bus_messages WHERE candle_key = ? AND run_id = ? ORDER BY id").bind(r.candle_key, run?.run_id).all()).results || [];
     const mod = msgs.map(busRowToMessage).find(m => m.agent === "moderator" && m.status === "ok");
-    const post = h1Post(r.candle_key, synth?.ai_analysis);
+    const post = h1Post(r.candle_key, synth);
     out.push({ id: `h1:${r.candle_key}`, kind: "h1", ref_key: r.candle_key, title: h1Title(r.candle_key, post.decision), created_at: r.first_ts, reply_count: msgs.length, consensus: mod?.stance ?? null, post });
   }
   return out;
@@ -567,7 +603,7 @@ export async function readH1Thread(db, candleKey) {
       m.parent_id = null;
     }
   }
-  const synth = await db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(candleKey).first();
-  const post = h1Post(candleKey, synth?.ai_analysis);
+  const synth = await db.prepare("SELECT ai_analysis, prophet_metrics, gmi_metrics FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(candleKey).first();
+  const post = h1Post(candleKey, synth);
   return { id: `h1:${candleKey}`, kind: "h1", ref_key: candleKey, title: h1Title(candleKey, post.decision), created_at: msgs[0]?.ts ?? null, post, messages: buildMessageTree(msgs) };
 }

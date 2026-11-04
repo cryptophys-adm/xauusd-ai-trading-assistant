@@ -8,6 +8,7 @@
 
 import { chatMessages, cleanModelText, extractJsonObject, extractModelText } from "./model-text.mjs";
 import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE } from "./natural-language.mjs";
+import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 
 export const BUS_DEFAULT_MODEL = "@cf/zai-org/glm-5.3-flash";
 export const BUS_DEFAULT_FALLBACK_MODEL = "@cf/zai-org/glm-4.7-flash";
@@ -164,6 +165,7 @@ export function buildBusEvidence(row) {
   return {
     technical: {
       ...common,
+      tradingview: (({ summary, lines }) => ({ summary, lines }))(interpretWebhookRow(row)),
       tradingview_webhook: webhook,
       local_computation: { trusted_only_when: "approved_by_parity", engines: local },
       informational_5m_context: m5
@@ -183,6 +185,11 @@ export function buildBusEvidence(row) {
     chain_decision: common.h1_chain_decision.decision
   };
 }
+
+const TECHNICAL_WEBHOOK_RULE =
+  "The tradingview object is the decoded meaning of the three TradingView alerts for this candle; call it \"the TradingView reading\", never by a field name. " +
+  "Interpret each indicator by name (Prophet R38, Prophet R37 and GMI v12.70) in your own words: what it signals, whether anything is confirmed, and whether they agree. " +
+  "Do this even when the decision is WAIT, then explain how it fits the rest of the evidence.";
 
 const RULES = [
   "Advisory only: never produce entry, stop loss, take profit or position size; the H1 decision chain owns those.",
@@ -204,8 +211,8 @@ export function agentMessages(agent, round, evidence, roundOneMessages = []) {
     RULES,
     `Round ${round} of ${BUS_ROUNDS}.`,
     round === 1
-      ? "Give your independent stance on this H1 candle."
-      : "Read the other agent's round-1 message below. State whether you agree or dispute it and why, set responds_to to that agent's name, and give your updated stance.",
+      ? "Give your independent stance on this H1 candle." + (agent === "technical" ? " " + TECHNICAL_WEBHOOK_RULE : "")
+      : "Read the other agent's round-1 message below. State whether you agree or dispute it and why, set responds_to to that agent's name, and give your updated stance." + (agent === "technical" ? " Refer to the TradingView indicators by name where they matter." : ""),
     `Required JSON: {"agent":"${agent}","round":${round},"stance":"BUY|SELL|WAIT","confidence":0..1,"insight":"<= ${INSIGHT_MAX} chars","refs":["..."],"responds_to":${round === 1 ? "null" : "\"<agent>\""}}`,
     "EVIDENCE:",
     JSON.stringify(evidence),
@@ -225,6 +232,7 @@ export function moderatorMessages(evidence, messages) {
     `Required JSON: {"stance":"BUY|SELL|WAIT","confidence":0..1,"agreed":true|false,"summary":"<= ${SUMMARY_MAX} chars","dissent":["..."]}`,
     "H1 CHAIN DECISION (read-only, authoritative): " + JSON.stringify(evidence.technical.h1_chain_decision),
     "EVIDENCE STATUS: " + JSON.stringify(evidence.technical.evidence_status),
+    "TRADINGVIEW READING (decoded alerts; mention in one plain sentence what the indicators said): " + JSON.stringify(evidence.technical.tradingview),
     "TRANSCRIPT:",
     JSON.stringify(transcript)
   ]);
