@@ -175,7 +175,10 @@ jobs:
           let consecutiveAccepted = 0;
           for (let attempt = 0; attempt < 45 && consecutiveAccepted < 5; attempt++) {
             const probe = await fetch(base + "/evidence/local-calculation", { method: "POST", headers, body: probeBody });
-            consecutiveAccepted = probe.status === 401 || probe.status === 503 ? 0 : consecutiveAccepted + 1;
+            // Only the Worker's own answer counts: the probe carries a credential-like field, so a
+            // propagated isolate with the secret answers 400. 401/503 (no secret yet) and 404/5xx
+            // (workers.dev route not yet propagated) reset the streak.
+            consecutiveAccepted = probe.status === 400 ? consecutiveAccepted + 1 : 0;
             if (consecutiveAccepted < 5) await new Promise(resolve => setTimeout(resolve, consecutiveAccepted ? 300 : 2000));
           }
           assert.equal(consecutiveAccepted, 5, "preview secret did not propagate to the Worker within the wait window");
