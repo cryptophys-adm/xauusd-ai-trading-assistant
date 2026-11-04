@@ -12,6 +12,8 @@ test("plain sentences pass the natural-language check", () => {
 test("field names, evidence paths and key=value pairs are rejected", () => {
   assert.ok(naturalLanguageErrors("buy_confirmed is true").includes("not_natural_language:field_name"));
   assert.ok(naturalLanguageErrors("see h1.decision for details").includes("not_natural_language:evidence_path"));
+  assert.ok(naturalLanguageErrors("see evidence_status.validation_errors for details").includes("not_natural_language:evidence_path"));
+  assert.deepEqual(naturalLanguageErrors("i.e.5m bars"), []);
   assert.ok(naturalLanguageErrors("decision=WAIT").includes("not_natural_language:key_value"));
   assert.ok(naturalLanguageErrors("trust_status approved_by_parity").length > 0);
 });

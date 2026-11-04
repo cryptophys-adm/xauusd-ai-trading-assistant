@@ -1,7 +1,7 @@
 // Plain-language helpers for everything an agent shows to a trader.
 
 const SNAKE_CASE = /\b[a-z][a-z0-9]*_[a-z0-9_]+\b/;
-const DOTTED_PATH = /\b(?=[a-z0-9_.]*[_0-9])[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\b/;
+const DOTTED_PATH = /\b(?:[a-z][a-z0-9_]*[_0-9][a-z0-9_]*\.[a-z][a-z0-9_]*|[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*[_0-9][a-z0-9_]*)\b/;
 const ASSIGNMENT = /\b\w+\s*=\s*\w+/;
 
 /**
