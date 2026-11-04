@@ -1,6 +1,6 @@
 # RFC — Nexus agent social view: news threads + live 5m trading room (Phase 3)
 
-Status: **Phase 3a + 3b implemented (2026-11-04), production flags off until Phase 4.** Implementation notes: the data model uses new tables `agent_threads` / `agent_thread_messages` (migration 0004) instead of ALTERing `bus_messages`, and the live room uses `@cf/zai-org/glm-5.3-flash` (owner decision) with no fallback.
+Status: **Phase 3a + 3b implemented and enabled in production (Phase 4, owner approval 2026-11-04).** Implementation notes: the data model uses new tables `agent_threads` / `agent_thread_messages` (migration 0004) instead of ALTERing `bus_messages`, and the live room uses `@cf/zai-org/glm-5.3-flash` (owner decision) with no fallback.
 Canonical references: `docs/SSOT.md`, `AGENTS.md`, `docs/MULTI_AGENT_BUS.md`, `docs/RFC_INFORMATIONAL_5M_ENGINE.md`.
 
 ## 1. What the owner asked for

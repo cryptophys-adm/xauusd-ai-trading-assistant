@@ -41,12 +41,13 @@
     "AI_MODEL_REASONER": "@cf/nvidia/nemotron-3-120b-a12b",
     "REQUIRED_SOURCES": "prophet_r38,prophet_r37_ssot,gmi_v12_70",
     "INGEST_URL": "https://news.cryptophys.work",
-    // Multi-agent bus (docs/MULTI_AGENT_BUS.md): OFF in production until the owner approves Phase 4.
-    "MULTI_AGENT_BUS_ENABLED": "false",
+    // Multi-agent bus, news threads and live 5m room: ON in production (Phase 4, owner approval 2026-11-04).
+    // Shadow/advisory only: none of them writes into the H1 chain's evidence, prompts or decision.
+    "MULTI_AGENT_BUS_ENABLED": "true",
     "MULTI_AGENT_MAX_CALLS_PER_HOUR": "20",
     "MULTI_AGENT_MODEL": "@cf/zai-org/glm-5.3-flash",
     "MULTI_AGENT_FALLBACK_MODEL": "@cf/zai-org/glm-4.7-flash",
-    "LIVE_ROOM_ENABLED": "false",
+    "LIVE_ROOM_ENABLED": "true",
     "LIVE_ROOM_MAX_CALLS_PER_HOUR": "36"
   },
   "routes": [
