@@ -265,3 +265,36 @@ test("H1 threads are built from the bus: post = decision, round 2 nested under t
   assert.match(list[0].post.tradingview.summary, /TradingView indicators/);
   assert.equal(await readH1Thread(d1, "OANDA:XAUUSD:60:1"), null);
 });
+
+test("an answer that only fails the natural-language rule gets one correction, counted in the budget", async () => {
+  const codeLike = { stance: "WAIT", confidence: 0.6, summary: "H1 decision: WAIT because h1.decision says so." };
+  const fixed = { stance: "WAIT", confidence: 0.6, summary: "H1 decision: WAIT. The hourly picture says stand aside." };
+  const e = env({ AI: fakeAI(({ sys, request }) => /moderator of a live/i.test(sys) ? (request.messages.length > 2 ? fixed : codeLike) : undefined) });
+  const result = await runLiveRoomBar(e, { bar_time: BAR });
+  assert.equal(result.status, "complete");
+  assert.equal(e.AI.calls.length, 4, "technical, risk, moderator, one correction");
+  const correction = e.AI.calls[3].request.messages;
+  assert.equal(correction.at(-2).role, "assistant");
+  assert.match(correction.at(-1).content, /reads like code/);
+  const mod = (await readLive(e.DB, {})).find(m => m.step === "moderator");
+  assert.equal(mod.status, "ok");
+  assert.equal(mod.summary, fixed.summary);
+  assert.equal(mod.corrections, 1);
+  const n = e.DB.raw.prepare("SELECT SUM(1 + COALESCE(fallback_used, 0) + COALESCE(json_extract(body_json, '$.corrections'), 0)) AS n FROM agent_thread_messages").get().n;
+  assert.equal(n, 4, "the hourly budget counts the correction call");
+});
+
+test("a correction that still reads like code stays invalid_output; schema errors get no correction", async () => {
+  const codeLike = { stance: "WAIT", confidence: 0.6, summary: "H1 decision: WAIT per h1.decision." };
+  const e = env({ AI: fakeAI(({ sys }) => /moderator of a live/i.test(sys) ? codeLike : undefined) });
+  await runLiveRoomBar(e, { bar_time: BAR });
+  const mod = (await readLive(e.DB, {})).find(m => m.step === "moderator");
+  assert.equal(mod.status, "invalid_output");
+  assert.equal(mod.corrections, 1);
+  assert.equal(e.AI.calls.length, 4, "exactly one correction attempt");
+
+  resetThreadSchemaCacheForTests();
+  const e2 = env({ AI: fakeAI(({ sys }) => /moderator of a live/i.test(sys) ? { stance: "LONG", confidence: 0.6, summary: "Plain words." } : undefined) });
+  await runLiveRoomBar(e2, { bar_time: BAR });
+  assert.equal(e2.AI.calls.length, 3, "a schema error is not retried");
+});

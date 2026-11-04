@@ -20,8 +20,8 @@ export function naturalLanguageErrors(text) {
 
 export const NATURAL_LANGUAGE_RULE =
   "Write insight, summary and dissent in plain natural language for a trader, like a short forum post. " +
-  "Never write field names, snake_case words, dotted evidence paths or key=value pairs in that text: " +
-  "say \"the H1 decision is WAIT\", not \"h1.decision=WAIT\"; say \"verified by parity\", not \"approved_by_parity\". " +
+  "Never copy a key name or key path from the evidence into that text, and never write words joined by underscores or dots, or key=value pairs. " +
+  "Describe evidence in words instead, for example \"the H1 decision is WAIT\", \"the 5m bias is bullish\" or \"verified by parity\". " +
   "Evidence paths go only in the refs array.";
 
 const ENGINE_NAMES = { mizan: "MizanLib", prophet: "Prophet", gmi: "GMI" };

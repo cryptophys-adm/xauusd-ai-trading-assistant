@@ -7,6 +7,7 @@ what changed and when, by merge commit and PR.
 ## 2026-11-04
 
 - feat(agents,nexus): the three TradingView webhook alerts are decoded into plain language (`src/webhook-interpretation.mjs`, codes per the Pine sources). The reading feeds the technical agent, which must interpret Prophet R38, Prophet R37 and GMI v12.70 by name; it is shown as "TradingView signals (H1)" on the decision card and the Threads 1H post. The H1 decision is unchanged (still fail-closed).
+- fix(agents): news-thread and live-room answers that fail only the natural-language check get one budgeted correction call. The natural-language rule no longer shows a literal key path as its counter-example.
 - fix(synthesis): `ai_syntheses.prophet_metrics`/`gmi_metrics` store the alert's indicator fields; an alert that also carried a `metrics` object used to lose them (`storedIndicatorMetrics`).
 - `5049369` (PR #62) feat(nexus): Threads 1H, natural-language agent output, agent names only.
 - feat(nexus): Threads 1H replaces the old debate card; agents are shown by name only (no model names); agent output must be natural language (validated); the WAIT reasoning and 5m context read as plain sentences.

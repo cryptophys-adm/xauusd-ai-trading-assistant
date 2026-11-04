@@ -78,6 +78,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - The dashboard shows agents by name only: Technical Analyst, News Analyst, Risk Manager and Moderator. It never shows model names.
 - Agent text must be natural language: validators reject snake_case field names, dotted evidence paths and key=value pairs in insights, summaries and dissent (`src/natural-language.mjs`). Evidence paths stay in `refs`.
 - The fail-closed WAIT reasoning is plain language too (`describeDegradedEvidence`).
+- In news threads and the live room, an answer that fails only the natural-language check gets one correction call (`corrections` in the message body). That call is counted by the hourly budget and never runs past the budget or the wall deadline. A second failure stays `invalid_output`.
 - TradingView webhook reading (`src/webhook-interpretation.mjs`):
   - It decodes the three alerts of each H1 candle into plain sentences: Prophet R38, Prophet R37 and GMI v12.70.
     - It covers signal, trade-management state, divergence or structure break, confirmation candle, GMI verdict and confluence gate.

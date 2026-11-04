@@ -133,7 +133,7 @@ const RULES = [
 async function callsInLastHour(db, now, kindPrefix) {
   const cutoff = new Date(now - 60 * 60 * 1000).toISOString();
   const row = await db.prepare(
-    "SELECT COALESCE(SUM(1 + COALESCE(fallback_used, 0)), 0) AS n FROM agent_thread_messages WHERE ts >= ? AND status <> 'budget_exhausted' AND status <> 'skipped' AND thread_id LIKE ?"
+    "SELECT COALESCE(SUM(1 + COALESCE(fallback_used, 0) + COALESCE(json_extract(body_json, '$.corrections'), 0)), 0) AS n FROM agent_thread_messages WHERE ts >= ? AND status <> 'budget_exhausted' AND status <> 'skipped' AND thread_id LIKE ?"
   ).bind(cutoff, `${kindPrefix}:%`).first();
   const n = Number(row?.n);
   if (!Number.isFinite(n)) throw new Error("thread_budget_unavailable");
@@ -194,13 +194,42 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
   if (call.status !== "answered") {
     return writeMessage(db, { ...base, ts, ...meta, status: call.status, body: { insight: call.status === "budget_exhausted" ? "budget exhausted" : "agent failed: " + (call.error || "error"), ...diag } });
   }
-  const validation = call.truncated ? { valid: false, errors: ["finish_reason_length"] } : validate(call.obj);
-  if (!validation.valid) {
-    return writeMessage(db, { ...base, ts, ...meta, status: "invalid_output", body: { insight: clip(call.text, RAW_MAX), errors: validation.errors, ...diag } });
+  let validation = call.truncated ? { valid: false, errors: ["finish_reason_length"] } : validate(call.obj);
+  // An answer that is valid except that its text reads like code (a field name or key path)
+  // gets one correction attempt. The extra call is recorded in `corrections` and counted by
+  // the hourly budget; it never runs without budget or past the wall deadline.
+  let corrections = 0;
+  let finalCall = call;
+  if (!validation.valid && !call.truncated && validation.errors.length && validation.errors.every(e => e.startsWith("not_natural_language:")) && clock() < deadline && (await budgetOk())) {
+    const retry = await callBusModel(env, {
+      messages: [...messages, { role: "assistant", content: String(call.text ?? "") }, { role: "user", content: CORRECTION_PROMPT }],
+      schemaName, schema, maxTokens, effort, deadline, clock, runState
+    });
+    corrections = 1 + (retry.fallback_used ? 1 : 0);
+    meta.usage_tokens = sumOrNull(meta.usage_tokens, retry.usage_tokens);
+    meta.latency_ms = sumOrNull(meta.latency_ms, retry.latency_ms);
+    if (retry.status === "answered" && !retry.truncated) {
+      const second = validate(retry.obj);
+      if (second.valid) { validation = second; finalCall = retry; meta.model = retry.model; meta.fallback_used = meta.fallback_used || retry.fallback_used; }
+    }
   }
-  const { body, refs } = toBody(call.obj);
-  return writeMessage(db, { ...base, ts, ...meta, status: "ok", stance: call.obj.stance, confidence: call.obj.confidence, body: { ...body, ...diag }, refs });
+  const extra = corrections ? { corrections } : {};
+  if (!validation.valid) {
+    return writeMessage(db, { ...base, ts, ...meta, status: "invalid_output", body: { insight: clip(call.text, RAW_MAX), errors: validation.errors, ...extra, ...diag } });
+  }
+  const { body, refs } = toBody(finalCall.obj);
+  return writeMessage(db, { ...base, ts, ...meta, status: "ok", stance: finalCall.obj.stance, confidence: finalCall.obj.confidence, body: { ...body, ...extra, ...diag }, refs });
 }
+
+function sumOrNull(a, b) {
+  const xs = [a, b].map(Number).filter(Number.isFinite);
+  return xs.length ? xs.reduce((x, y) => x + y, 0) : null;
+}
+
+const CORRECTION_PROMPT =
+  "Your answer was rejected: its text reads like code (a field name, a word with underscores, a key path with dots, or key=value). " +
+  "Return the same JSON object with the same stance and confidence, but rewrite every text field in plain sentences a trader would write. " +
+  "Describe evidence in words (for example \"the H1 decision\", \"the 5m bias\", \"verified by parity\") and never copy a key from the evidence.";
 
 // ---------------------------------------------------------------- news thread
 
