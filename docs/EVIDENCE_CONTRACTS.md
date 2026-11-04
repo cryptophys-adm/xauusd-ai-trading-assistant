@@ -1,3 +1,5 @@
+> **Partially superseded (2026-11-04).** The input-lane contract here is still valid. Provenance "allowlist" rules were replaced by the autonomous parity registry ([AUTONOMOUS_PROVENANCE.md](AUTONOMOUS_PROVENANCE.md)). Topology and deployment are defined only in [docs/SSOT.md](SSOT.md).
+
 # Evidence Contracts — Version 1
 
 Status: implementation contract; source parity and production acceptance remain incomplete.
