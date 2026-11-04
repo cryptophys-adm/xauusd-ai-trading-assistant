@@ -32,7 +32,7 @@ const TIMEFRAME_ALIASES = Object.freeze({
 });
 
 
-function isRecord(value) {
+export function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -59,7 +59,7 @@ export function stripCredentialFields(value, depth = 0) {
   return clean;
 }
 
-function timestampMs(value) {
+export function timestampMs(value) {
   // TradingView alerts send `time` via str.tostring(time): epoch milliseconds
   // as a digit string (e.g. "1793656800000"). Accept epoch ms/seconds strings
   // and numbers as well as ISO-8601.

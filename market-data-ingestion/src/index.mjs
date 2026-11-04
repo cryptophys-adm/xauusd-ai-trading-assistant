@@ -1,6 +1,7 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
 import { publishLocalComputation, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
+import { buildM5ProphetContext } from "../../local-engines/producer/src/m5-producer.mjs";
 import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest } from "./tradingview-source.mjs";
 
 const JSON_HEADERS = {
@@ -253,6 +254,23 @@ const worker = {
         }
       } catch (error) {
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_failed", code: asString(error?.code) || "publish_failed" }));
+      }
+      // Informational (unverified) 5m context: build from closed M5 bars and forward
+      // to the AI Worker. Never enters the trusted local_computation lane.
+      try {
+        if (typeof env.AI_WORKER?.submitContext === "function") {
+          const latest = await buildBundle(env);
+          const bars = latest?.timeframes?.M5?.candles || [];
+          if (Array.isArray(bars) && bars.length >= 50) {
+            const context = buildM5ProphetContext(bars);
+            const result = await env.AI_WORKER.submitContext(context);
+            if (result?.status && result.status >= 400) {
+              console.error(JSON.stringify({ worker: WORKER_NAME, event: "m5_context_submit_failed", status: result.status }));
+            }
+          }
+        }
+      } catch (error) {
+        console.error(JSON.stringify({ worker: WORKER_NAME, event: "m5_context_build_failed", code: asString(error?.code) || "build_failed" }));
       }
     })());
   }
