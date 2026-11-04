@@ -6,6 +6,9 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-04
 
+- fix(nexus): restore dashboard scripts — escaped quote in `loadTechnicalDecision` onclick (from PR #43, `7535188`) was a JS syntax error that left every panel on "Loading…"; adds `test/nexus-dashboard-html.test.mjs`.
+- `0e6eb85` (PR #54) hotfix: regressions from #52 (backfill failure recorded, REQUIRED_SOURCES from env, real >2h test).
+
 - `096e5fb` (PR #51) hotfix: H1 analysis trigger + news lookback 75 min.
 - (PR #50) fix(phase1): m5 context validation/freshness helper, tests, docs.
 - `1f37a7c` (PR #48) feat(evidence): add informational (untrusted) 5m context field to fusion bundle.

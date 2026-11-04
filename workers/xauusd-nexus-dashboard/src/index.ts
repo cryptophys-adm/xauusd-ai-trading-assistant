@@ -284,7 +284,7 @@ async function loadDecisions(){
     let html = '<table><thead><tr><th>Time</th><th>Decision</th><th>Conf</th></tr></thead><tbody>';
     d.items.forEach(x=>{
       const cls = (x.decision==='BUY'?'BUY':x.decision==='SELL'?'SELL':'WAIT');
-      html += '<tr onclick="loadTechnicalDecision(\''+esc(x.candle_key)+'\')" style="cursor:pointer">'
+      html += '<tr onclick="loadTechnicalDecision(\\''+esc(x.candle_key)+'\\')" style="cursor:pointer">'
         +'<td>'+esc(String(x.timestamp).slice(0,16).replace('T',' '))+'</td>'
         +'<td><span class="badge-decision '+cls+'">'+esc(x.decision)+'</span></td>'
         +'<td>'+(x.confidence!=null?Math.round(x.confidence*100)+'%':'—')+'</td></tr>';
