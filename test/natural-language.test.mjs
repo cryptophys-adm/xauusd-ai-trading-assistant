@@ -6,6 +6,7 @@ import { validateRoomModerator } from "../src/agent-threads.mjs";
 
 test("plain sentences pass the natural-language check", () => {
   assert.deepEqual(naturalLanguageErrors("The H1 decision is WAIT. Gold drifted from 4046 to 4031, e.g. a mild pullback."), []);
+  assert.deepEqual(naturalLanguageErrors("The setup is neutral vs. the prior session."), []);
 });
 
 test("field names, evidence paths and key=value pairs are rejected", () => {
