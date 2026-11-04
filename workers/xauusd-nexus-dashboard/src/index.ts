@@ -284,7 +284,8 @@ async function loadDecisions(){
     let html = '<table><thead><tr><th>Time</th><th>Decision</th><th>Conf</th></tr></thead><tbody>';
     d.items.forEach(x=>{
       const cls = (x.decision==='BUY'?'BUY':x.decision==='SELL'?'SELL':'WAIT');
-      html += '<tr><td>'+esc(String(x.timestamp).slice(0,16).replace('T',' '))+'</td>'
+      html += '<tr onclick="loadTechnicalDecision(\''+esc(x.candle_key)+'\')" style="cursor:pointer">'
+        +'<td>'+esc(String(x.timestamp).slice(0,16).replace('T',' '))+'</td>'
         +'<td><span class="badge-decision '+cls+'">'+esc(x.decision)+'</span></td>'
         +'<td>'+(x.confidence!=null?Math.round(x.confidence*100)+'%':'—')+'</td></tr>';
     });
@@ -293,6 +294,36 @@ async function loadDecisions(){
     $('quick-stats').innerHTML = '<div class="stat"><span class="label">Total Decisions</span><span class="value">'+d.items.length+'</span></div>'
       +'<div class="stat"><span class="label">Latest</span><span class="value">'+esc(d.items[0].decision)+'</span></div>';
   } catch(e){ $('decisions-list').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+}
+
+async function loadTechnicalDecision(key){
+  try {
+    const r = await fetch(API+'/api/decision/'+encodeURIComponent(key)); const d = await r.json();
+    if(d.status!=='ok'){ alert('Failed to load technical decision'); return; }
+    const syn = d.synthesis||{};
+    const dec = syn.decision||{};
+    const cls = (dec.decision==='BUY'?'BUY':dec.decision==='SELL'?'SELL':'WAIT');
+    $('latest-decision').innerHTML =
+      '<div class="decision-card">'
+      +'<div class="decision-badge '+cls+'">'+esc(dec.decision||'—')+'</div>'
+      +'<div class="conf">Confidence: '+(dec.confidence!=null?Math.round(dec.confidence*100)+'%':'—')+' · '+esc(d.candle_key||'')+'</div>'
+      +'<div class="rationale-box">'+esc(dec.reasoning||syn.reasoning||'—')+'</div>'
+      +'</div>';
+    const msgs = [
+      {av:'av-analyst', cls:'analyst', name:'Analyst', model:(function(m){return String(m||'').split('/').pop();})(syn.analyst_model), content:syn.analyst_output||'(empty)'},
+      {av:'av-counselor', cls:'counselor', name:'Counselor', model:(function(m){return String(m||'').split('/').pop();})(syn.counselor_model), content:syn.counselor_output||'(empty)'},
+      {av:'av-reasoner', cls:'reasoner', name:'Reasoner', model:(function(m){return String(m||'').split('/').pop();})(syn.reasoner_model), content:syn.reasoner_output||'(empty)'},
+    ];
+    $('agent-chat').innerHTML = msgs.map(m=>
+      '<div class="debate-msg"><div class="debate-avatar '+m.av+'">'+m.name[0]+'</div>'
+      +'<div class="debate-bubble '+m.cls+'"><div class="meta"><span class="role">'+m.name+'</span><span class="model">'+m.model+'</span></div>'
+      +'<div class="content">'+esc(m.content)+'</div></div></div>'
+    ).join('');
+    $('agent-raw').innerHTML = '<div class="agent-raw"><h3>Technical Decision</h3><pre>'+esc(JSON.stringify(dec,null,2))+'</pre></div>'
+      +'<div class="agent-raw"><h3>Analyst Output</h3><pre>'+esc(syn.analyst_output||'')+'</pre></div>'
+      +'<div class="agent-raw"><h3>Counselor Output</h3><pre>'+esc(syn.counselor_output||'')+'</pre></div>'
+      +'<div class="agent-raw"><h3>Reasoner Output</h3><pre>'+esc(syn.reasoner_output||'')+'</pre></div>';
+  } catch(e){ alert('Error: '+e.message); }
 }
 
 async function loadAnalysis(key){
