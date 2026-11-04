@@ -33,6 +33,8 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
 
 Coverage per Pine parameter is in `docs/LOCAL_COMPUTATION_OWNERSHIP.md`.
 
+The parity sweep cron also backfills `runAnalysis` for any closed H1 candle within the last 2 hours that has complete webhook evidence in D1 but no `analysis_runs` row, keeping analysis idempotent via `claimAnalysisRun`.
+
 ### Informational (non-trusted) 5m context
 - A separate, **informational_unverified** evidence key `informational_5m_context` may be
   surfaced in the fusion bundle. It is built by `local-engines/producer/src/m5-producer.mjs`

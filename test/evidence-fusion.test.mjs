@@ -86,7 +86,7 @@ test("rejects stale completed news analysis", () => {
 
 test("enforces the one-hour completed-news analysis freshness boundary", () => {
   const input = completeInput();
-  input.newsAnalysis.analyzed_at = "2026-11-01T13:59:00.000Z";
+  input.newsAnalysis.analyzed_at = "2026-11-01T13:44:00.000Z";
   const result = buildEvidenceFusion(input, now);
   assert.equal(result.complete, false);
   assert.ok(result.validation_errors.includes("news:news_analysis_stale"));
@@ -94,7 +94,7 @@ test("enforces the one-hour completed-news analysis freshness boundary", () => {
 
 test("rejects stale underlying articles even when the analysis timestamps are fresh", () => {
   const input = completeInput();
-  input.newsAnalysis.evidence.articles[0].published_at = "2026-11-01T13:59:59.999Z";
+  input.newsAnalysis.evidence.articles[0].published_at = "2026-11-01T13:56:59.999Z";
   const result = buildEvidenceFusion(input, now);
   assert.equal(result.complete, false);
   assert.ok(result.validation_errors.includes("news:news_articles_outside_lookback_or_duplicate"));
@@ -224,4 +224,15 @@ test("informational 5m context never affects completeness or missing evidence", 
   assert.equal(withCtx.complete, without.complete);
   assert.deepEqual(withCtx.missing_evidence, without.missing_evidence);
   assert.equal(withCtx.informational_5m_context?.trust_status, "informational_unverified");
+});
+
+test("news analysis from :06 stays valid when retried at :00:40 next hour", () => {
+  const input = completeInput();
+  // fetch/analyze at 00:06, article published 50 min before fetch
+  input.newsAnalysis.fetched_at = "2026-11-01T00:06:00.000Z";
+  input.newsAnalysis.analyzed_at = "2026-11-01T00:06:00.000Z";
+  input.newsAnalysis.evidence.articles[0].published_at = "2026-10-31T23:16:00.000Z";
+  const validationTime = Date.parse("2026-11-01T01:00:40.000Z");
+  const result = buildEvidenceFusion(input, validationTime);
+  assert.equal(result.fundamental_news_analysis !== null, true);
 });
