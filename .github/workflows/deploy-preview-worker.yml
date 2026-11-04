@@ -259,11 +259,22 @@ jobs:
           let lastLocalPayload;
           for (const engine of ["mizan", "prophet", "gmi"]) {
             lastLocalPayload = localPayload(engine);
-            const response = await fetch(base + "/evidence/local-calculation", {
-              method: "POST",
-              headers,
-              body: JSON.stringify(lastLocalPayload)
-            });
+            // A fresh preview Worker can briefly answer with a Cloudflare HTML error page (5xx)
+            // while the new version propagates. Retry only that non-JSON edge answer; the POST is
+            // idempotent (deterministic event ID), and any JSON answer is asserted below as is.
+            let response;
+            for (let attempt = 0; attempt < 10; attempt++) {
+              response = await fetch(base + "/evidence/local-calculation", {
+                method: "POST",
+                headers,
+                body: JSON.stringify(lastLocalPayload)
+              });
+              if ((response.headers.get("content-type") || "").includes("application/json")) break;
+              console.log("::warning::local-calculation " + engine + " got a non-JSON edge answer (HTTP " + response.status + "), retrying: " + (await response.text()).slice(0, 120).replace(/\s+/g, " "));
+              await new Promise(resolve => setTimeout(resolve, 3000));
+            }
+            assert.ok((response.headers.get("content-type") || "").includes("application/json"),
+              "local calculation kept answering with a non-JSON edge page (HTTP " + response.status + ")");
             lastLocalResult = await response.json();
             assert.equal(response.status, 202, "local calculation must be durably queued before ACK: " + JSON.stringify(lastLocalResult));
             assert.equal(lastLocalResult.analysis_status, "queued");
