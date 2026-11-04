@@ -235,3 +235,28 @@ test("buildMessageTree nests replies under their parent", () => {
   assert.deepEqual(tree.map(m => m.id), [1, 4]);
   assert.equal(tree[0].replies[0].replies[0].id, 3);
 });
+
+import { listH1Threads, readH1Thread } from "../src/agent-threads.mjs";
+
+test("H1 threads are built from the bus: post = decision, round 2 nested under the other agent", async () => {
+  const d1 = fakeD1();
+  seed(d1);
+  d1.raw.exec(`CREATE TABLE bus_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, candle_key TEXT NOT NULL, round INTEGER NOT NULL, agent TEXT NOT NULL, ts TEXT NOT NULL, insight TEXT NOT NULL, confidence REAL, refs_json TEXT, model TEXT, status TEXT, latency_ms INTEGER, fallback_used INTEGER DEFAULT 0, usage_tokens INTEGER, UNIQUE(candle_key, run_id, round, agent))`);
+  const key = "OANDA:XAUUSD:60:1793800800000";
+  const ins = d1.raw.prepare("INSERT INTO bus_messages (run_id, candle_key, round, agent, ts, insight, confidence, model, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  for (const [round, agent, text] of [[1, "technical", "Engines lean bullish."], [1, "news", "No clear driver."], [2, "technical", "I agree with News."], [2, "news", "I dispute the bullish read."], [3, "moderator", null]]) {
+    const body = agent === "moderator" ? { stance: "WAIT", agreed: false, summary: "Wait for news.", dissent: ["Technical leaned bullish."] } : { stance: "WAIT", insight: text, responds_to: round === 2 ? (agent === "technical" ? "news" : "technical") : null };
+    ins.run("run1", key, round, agent, "2026-11-04T15:00:30Z", JSON.stringify(body), 0.5, "@cf/zai-org/glm-5.3-flash", "ok");
+  }
+  const list = await listH1Threads(d1, {});
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, `h1:${key}`);
+  assert.equal(list[0].consensus, "WAIT");
+  assert.match(list[0].title, /^H1 candle 2026-11-04 14:00 UTC · decision WAIT$/);
+  const t = await readH1Thread(d1, key);
+  assert.deepEqual(t.messages.map(m => m.step), ["r1:technical", "r1:news", "moderator"]);
+  assert.equal(t.messages[0].replies[0].step, "r2:news", "news' round-2 reply sits under technical's round-1 message");
+  assert.equal(t.messages[1].replies[0].step, "r2:technical");
+  assert.match(t.post.reasoning, /^No trade for this candle/);
+  assert.equal(await readH1Thread(d1, "OANDA:XAUUSD:60:1"), null);
+});

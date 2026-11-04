@@ -7,6 +7,7 @@
 // prompts, decision, entry/SL/TP, size or confidence.
 
 import { chatMessages, cleanModelText, extractJsonObject, extractModelText } from "./model-text.mjs";
+import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE } from "./natural-language.mjs";
 
 export const BUS_DEFAULT_MODEL = "@cf/zai-org/glm-5.3-flash";
 export const BUS_DEFAULT_FALLBACK_MODEL = "@cf/zai-org/glm-4.7-flash";
@@ -187,7 +188,8 @@ const RULES = [
   "Advisory only: never produce entry, stop loss, take profit or position size; the H1 decision chain owns those.",
   "A local_computation engine counts as trusted only when its trust_status is approved_by_parity.",
   "informational_5m_context is UNVERIFIED 5m: you may mention it, but it must never be the main reason for a stance.",
-  "Cite every claim with refs: JSON paths into the evidence object you were given (for example \"tradingview_webhook.gmi_v12_70.verdict\").",
+  "Back every claim with refs: JSON paths into the evidence object you were given (for example \"tradingview_webhook.gmi_v12_70.verdict\").",
+  NATURAL_LANGUAGE_RULE,
   "If the evidence is degraded or missing, say so and prefer WAIT.",
   "Return only one JSON object that matches the required schema."
 ].join("\n");
@@ -242,6 +244,7 @@ export function validateAgentOutput(obj, { agent, round }) {
   if (typeof obj.insight !== "string" || !obj.insight.trim()) errors.push("insight_missing");
   if (!Array.isArray(obj.refs) || obj.refs.length === 0 || obj.refs.some(r => typeof r !== "string" || !r.trim())) errors.push("refs_missing");
   if (round > 1 && (typeof obj.responds_to !== "string" || obj.responds_to === agent || !BUS_AGENTS.includes(obj.responds_to))) errors.push("responds_to_invalid");
+  errors.push(...naturalLanguageErrors(obj.insight));
   return { valid: errors.length === 0, errors };
 }
 
@@ -253,6 +256,7 @@ export function validateModeratorOutput(obj) {
   if (typeof obj.agreed !== "boolean") errors.push("agreed_missing");
   if (typeof obj.summary !== "string" || !obj.summary.trim()) errors.push("summary_missing");
   if (!Array.isArray(obj.dissent) || obj.dissent.some(d => typeof d !== "string")) errors.push("dissent_invalid");
+  else errors.push(...naturalLanguageErrors([obj.summary, ...obj.dissent].join(" ")));
   return { valid: errors.length === 0, errors };
 }
 
