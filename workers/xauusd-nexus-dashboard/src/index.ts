@@ -305,7 +305,7 @@ async function loadTechnicalDecision(key){
     const cls = (dec.decision==='BUY'?'BUY':dec.decision==='SELL'?'SELL':'WAIT');
     let m5ctx = '';
     try {
-      const mr = await fetch('/api/ohlcv?timeframe=5m&limit=12'); const md = await mr.json();
+      const mr = await fetch('/api/ohlcv?timeframe=M5&limit=12'); const md = await mr.json();
       if (md && Array.isArray(md.candles) && md.candles.length) {
         const last = md.candles[md.candles.length-1];
         m5ctx = '<div style="font-size:12px;color:var(--muted);margin-top:8px"><b>5m context (last '+md.candles.length+' bars):</b> '

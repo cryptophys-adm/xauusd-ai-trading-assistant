@@ -1,6 +1,6 @@
 # RFC — Informational (non-trusted) 5m engine in evidence bundle
 
-Status: **Proposal / not implemented**. Requires owner approval before code changes.
+Status: **Approved by owner 2026-11-04; implementation phased (see below)**.
 Canonical references: `docs/SSOT.md`, `AGENTS.md`, `docs/MULTI_AGENT_BUS.md`.
 
 ## 1. Motivation

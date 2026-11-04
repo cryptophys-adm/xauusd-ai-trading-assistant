@@ -33,6 +33,17 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
 
 Coverage per Pine parameter is in `docs/LOCAL_COMPUTATION_OWNERSHIP.md`.
 
+### Informational (non-trusted) 5m context
+- A separate, **informational_unverified** evidence key `informational_5m_context` may be
+  surfaced in the fusion bundle. It is built by `local-engines/producer/src/m5-producer.mjs`
+  (`buildM5ProphetContext`) from closed M5 bars.
+- It is **never** part of `fusion.complete`, never changes decision, entry/SL/TP, risk/reward,
+  position size or confidence, and is labelled "UNVERIFIED 5m" in the UI and prompts.
+- Trust remains H1-only via the autonomous parity registry; no parity exists for 5m.
+- Diagnostics: `GET /api/local-lane` (proxied by the Nexus dashboard to the pull adapter's
+  `MarketDataReader.diagnostics()`) exposes the pull adapter's last refresh, latest closed bar
+  per series, last publish and quota budget.
+
 ## 4. Sources and knowledge
 - **Pine sources:** `pinescript/ssot/`. Verified against the installed TradingView indicators; see `docs/PINE_SOURCE_VERIFICATION.md`. Never edit these files.
 - **Agent knowledge base:** v4, generated from Pine with line citations and bundled into the AI Worker. See `docs/KNOWLEDGE_BASE_V4.md`.
