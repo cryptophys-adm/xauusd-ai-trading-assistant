@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import {
   runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, buildMessageTree, validateRoomModerator,
-  buildNewsThreadTask, buildLiveRoomTask, liveRoomEnabled, resetThreadSchemaCacheForTests, ROOM_STANCES
+  buildNewsThreadTask, buildLiveRoomTask, liveRoomEnabled, resetThreadSchemaCacheForTests, ROOM_STANCES,
+  isFifteenMinuteClose, buildFifteenMinuteCandles
 } from "../src/agent-threads.mjs";
 import { BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL } from "../src/multi-agent-bus.mjs";
 
@@ -25,7 +26,7 @@ function fakeKV(init = {}) {
 }
 
 const NEWS_KEY = "news-abc";
-const BAR = "2026-11-04T15:05:00.000Z";
+const BAR = "2026-11-04T15:15:00.000Z"; // a 15m candle close
 
 function seed(d1, decision = "WAIT") {
   d1.raw.prepare("INSERT INTO ai_syntheses (candle_key, ai_analysis, prophet_metrics, gmi_metrics) VALUES (?, ?, ?, ?)").run(
@@ -42,7 +43,7 @@ function seed(d1, decision = "WAIT") {
 }
 
 function m5(extra = {}) {
-  return JSON.stringify({ schema_version: "cryptophys.local-context.v1", trust_status: "informational_unverified", symbol: "OANDA:XAUUSD", timeframe: "5", candle_time: BAR, bias: "BULLISH", buy_confirmed: true, sell_confirmed: false, d_enc: 1, recent_bars: Array.from({ length: 12 }, (_, i) => ({ t: BAR, o: 4000 + i, h: 4002 + i, l: 3999 + i, c: 4001 + i, v: 10 })), ...extra });
+  return JSON.stringify({ schema_version: "cryptophys.local-context.v1", trust_status: "informational_unverified", symbol: "OANDA:XAUUSD", timeframe: "5", candle_time: BAR, bias: "BULLISH", buy_confirmed: true, sell_confirmed: false, d_enc: 1, recent_bars: Array.from({ length: 12 }, (_, i) => ({ t: new Date(Date.parse(extra.candle_time || BAR) - (11 - i) * 300_000).toISOString(), o: 4000 + i, h: 4002 + i, l: 3999 + i, c: 4001 + i, v: 10 })), ...extra });
 }
 
 /** Chat Completions-shaped fake that answers each prompt from its "Required JSON" line. */
@@ -66,7 +67,7 @@ function fakeAI(override) {
         else {
           const agent = (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1];
           const round = /Round 2 of 2/.test(user) ? 2 : 1;
-          const isRoom = /live XAUUSD 5m/.test(sys);
+          const isRoom = /live XAUUSD trading room/.test(sys);
           content = isRoom
             ? { agent, stance: agent === "technical" ? "BUY" : "HOLD", confidence: 0.6, insight: `${agent} 5m read`, refs: ["m5.bias"], responds_to: agent === "risk" ? "technical" : null }
             : { agent, round, stance: "WAIT", confidence: 0.4, insight: `${agent} r${round}`, refs: ["post.headlines"], responds_to: round === 1 ? null : (agent === "news" ? "technical" : "news") };
@@ -158,6 +159,10 @@ test("live room: technical, risk (reply to technical), moderator; primary model 
   assert.equal(evidence.m5.label, "UNVERIFIED 5m");
   assert.equal(evidence.m5.recent_bars.length, 12);
   assert.equal(evidence.h1.decision, "WAIT");
+  assert.equal(evidence.m15.close_time, BAR);
+  assert.equal(evidence.m15.candles.length, 4, "12 closed 5m bars make 4 closed 15m candles");
+  assert.deepEqual(evidence.m15.candles.at(-1), { close_time: BAR, o: 4009, h: 4013, l: 4008, c: 4012, v: 30 });
+  assert.equal(evidence.m5.role, "execution timing from the local lane");
   assert.match(evidence.h1.tradingview, /TradingView indicators/, "the room sees the H1 TradingView reading");
   const prompts = e.AI.calls.map(c => c.request.messages.map(m => m.content).join("\n")).join("\n");
   assert.doesNotMatch(prompts, /tradingview_reading/, "no snake_case key the model could echo into its text");
@@ -171,17 +176,36 @@ test("live room never uses the paid fallback model", async () => {
   assert.ok(items.every(m => m.status === "agent_failed"));
 });
 
-test("live room skips a bar when nothing changed", async () => {
+test("live room meets only at 15m candle closes, every 15m close even when nothing changed", async () => {
   const e = env();
-  await runLiveRoomBar(e, { bar_time: BAR });
-  const next = "2026-11-04T15:10:00.000Z";
+  assert.equal((await runLiveRoomBar(e, { bar_time: BAR })).status, "complete");
+  for (const mid of ["2026-11-04T15:20:00.000Z", "2026-11-04T15:25:00.000Z"]) {
+    await e.SIGNAL_CACHE.put("context:m5:latest", m5({ candle_time: mid }));
+    assert.equal((await runLiveRoomBar(e, { bar_time: mid })).status, "not_15m_close");
+  }
+  assert.equal(e.AI.calls.length, 3, "5m bars inside a 15m candle make no calls");
+  const next = "2026-11-04T15:30:00.000Z";
   await e.SIGNAL_CACHE.put("context:m5:latest", m5({ candle_time: next }));
-  const r = await runLiveRoomBar(e, { bar_time: next });
-  assert.equal(r.status, "skipped_no_change");
-  assert.equal(e.AI.calls.length, 3, "no calls for an unchanged picture");
-  await e.SIGNAL_CACHE.put("context:m5:latest", m5({ candle_time: "2026-11-04T15:15:00.000Z", bias: "BEARISH", buy_confirmed: false, sell_confirmed: true }));
-  assert.equal((await runLiveRoomBar(e, { bar_time: "2026-11-04T15:15:00.000Z" })).status, "complete");
+  assert.equal((await runLiveRoomBar(e, { bar_time: next })).status, "complete", "the next 15m close runs even with an unchanged picture");
   assert.equal(e.AI.calls.length, 6);
+  const live = await readLive(e.DB, {});
+  assert.ok(live.every(m => m.thread_id.startsWith("live15m:")));
+});
+
+test("15m close detection and 15m candles from 5m bars", () => {
+  assert.equal(isFifteenMinuteClose("2026-11-04T15:15:00.000Z"), true);
+  assert.equal(isFifteenMinuteClose("2026-11-04T16:00:00.000Z"), true);
+  assert.equal(isFifteenMinuteClose("2026-11-04T15:20:00.000Z"), false);
+  assert.equal(isFifteenMinuteClose("not a time"), false);
+  const bar = (t, o, h, l, c, v) => ({ t, o, h, l, c, v });
+  const candles = buildFifteenMinuteCandles([
+    bar("2026-11-04T15:05:00.000Z", 1, 5, 0, 2, 1), // incomplete 15:15 candle (only two bars)
+    bar("2026-11-04T15:10:00.000Z", 2, 3, 1, 2, 1),
+    bar("2026-11-04T15:20:00.000Z", 10, 12, 9, 11, 2),
+    bar("2026-11-04T15:25:00.000Z", 11, 15, 10, 14, 3),
+    bar("2026-11-04T15:30:00.000Z", 14, 14, 8, 9, null)
+  ]);
+  assert.deepEqual(candles, [{ close_time: "2026-11-04T15:30:00.000Z", o: 10, h: 15, l: 8, c: 9, v: null }]);
 });
 
 test("live room uses the context carried by the task (no KV dependency)", async () => {

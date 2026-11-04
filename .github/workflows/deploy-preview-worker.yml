@@ -423,7 +423,8 @@ jobs:
 
           // Phase 3b: live 5m room. The context goes through the authenticated HTTP ingress
           // (the same handler the pull adapter reaches over RPC).
-          const barTime = new Date(Math.floor(Date.now() / 300_000) * 300_000).toISOString();
+          // The room meets at a 15m candle close: use the latest 15m boundary as the closed 5m bar.
+          const barTime = new Date(Math.floor(Date.now() / 900_000) * 900_000).toISOString();
           const recentBars = Array.from({ length: 12 }, (_, i) => ({ t: new Date(Date.parse(barTime) - (11 - i) * 300_000).toISOString(), o: 4000 + i, h: 4003 + i, l: 3998 + i, c: 4002 + i, v: 100 + i }));
           const contextResponse = await fetch(base + "/evidence/m5-context", {
             method: "POST",
@@ -441,6 +442,9 @@ jobs:
           }
           console.log("LIVE ROOM PROOF " + JSON.stringify(live.map(m => ({ step: m.step, parent_id: m.parent_id, status: m.status, model: m.model, fallback_used: m.fallback_used, stance: m.stance, confidence: m.confidence, text: String(m.insight ?? m.summary ?? "").slice(0, 240), errors: m.errors, primary_error: m.primary_error })), null, 2));
           assert.deepEqual(live.map(m => m.step), ["technical", "risk", "moderator"], "live room: technical, risk, moderator");
+          assert.ok(live.every(m => String(m.thread_id).startsWith("live15m:")), "the live room is the 15m room");
+          const legacyDashboard = await fetch(base + "/dashboard", { redirect: "manual" });
+          assert.equal(legacyDashboard.status, 302, "the old debate/raw dashboard redirects to Nexus");
           assert.ok(live.every(m => m.status === "ok"), "every live-room message must be schema-valid model output");
           assert.ok(live.every(m => m.fallback_used === false && m.model === "@cf/zai-org/glm-5.3-flash"), "the live room uses the primary model only");
           assert.equal(live[1].parent_id, live[0].id, "risk replies to technical");

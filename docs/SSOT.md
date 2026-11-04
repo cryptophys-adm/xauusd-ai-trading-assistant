@@ -60,21 +60,28 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - Model: `MULTI_AGENT_MODEL` = `@cf/zai-org/glm-5.3-flash` (owner decision 2026-11-04; the same model as the production Counselor, so already proven on this account; strict `json_schema`, `reasoning_effort` low/high). On an error (or a 60 s timeout) the call is retried once with `MULTI_AGENT_FALLBACK_MODEL` = `@cf/zai-org/glm-4.7-flash`, `fallback_used` is recorded, and the primary error is stored as `primary_error` on every message of that run. After the first primary failure in a run, the remaining steps go straight to the fallback. The H1 chain models are unchanged. Beam (`reflection-ai/beam-1.0-501b-a23b`) was evaluated and rejected: it needs AI Gateway Unified Billing credits.
 - The bus **never** writes into the chain's evidence, prompts or decision. Its output lives only in D1 `bus_messages` (migration `0003_bus_messages.sql`; the schema is also ensured at runtime for the preview D1), and it is read through `GET /api/bus?candle_key=` (messages, consensus, `agreement_with_chain`).
 
-### Agent threads and live 5m room (Phase 3, `docs/RFC_NEXUS_AGENT_SOCIAL.md`)
+### Agent threads and live 15m room (Phase 3, `docs/RFC_NEXUS_AGENT_SOCIAL.md`)
 - Code: `src/agent-threads.mjs`. Tables `agent_threads` and `agent_thread_messages` (migration `0004_agent_threads.sql`; new tables only, `0003` is never altered; the schema is also ensured at runtime for the preview D1).
 - **News threads** (behind `MULTI_AGENT_BUS_ENABLED`):
   - After each news analysis, a `news_thread` queue task makes the analysis a post.
   - `news` and `technical` reply, each then replies to the other's reply (`parent_id`), and a `moderator` posts the consensus.
   - At most 5 calls, using the bus model with the bus fallback.
-- **Live 5m room** (behind `LIVE_ROOM_ENABLED`):
-  - Each 5m context submission (RPC `submitContext`, or the authenticated `POST /evidence/m5-context`) enqueues a `live_room` task that carries the context itself.
-  - When the picture changed (bias/flags/H1 decision/news), `technical` and `risk` (a reply to technical) post, then a `moderator`, using stances BUY/SELL/HOLD/WAIT/CLOSE.
+- **Live 15m room** (behind `LIVE_ROOM_ENABLED`, owner decision 2026-11-04):
+  - Every 5m context submission (RPC `submitContext`, or the authenticated `POST /evidence/m5-context`) refreshes the 5m execution context in KV.
+  - Only a submission whose closed 5m bar also closes a 15m candle (:00, :15, :30, :45 UTC) enqueues a `live_room` task. The task carries the context itself.
+  - At every 15m close, `technical` and `risk` (a reply to technical) post, then a `moderator`, using stances BUY/SELL/HOLD/WAIT/CLOSE. There is no "nothing changed" skip.
+  - Evidence:
+    - `m15`: the closed 15m candles built from the last 12 closed 5m bars; a candle counts only when all three of its bars are present. This is the setup.
+    - `m5`: the local-lane 5m Prophet read and bars, labelled UNVERIFIED 5m. This is the execution timing.
+    - `h1`: the H1 decision and the H1 TradingView reading.
+    - `news`: the latest news-thread consensus.
   - The moderator must state the H1 decision whenever its stance differs from it.
-  - Primary model only, never the paid fallback. The `LIVE_ROOM_MAX_CALLS_PER_HOUR` cap fails closed.
-  - Everything is labelled UNVERIFIED 5m.
-  - The 5m context now carries the last 12 closed bars (`recent_bars`) for the room. The H1 chain strips them.
+  - Primary model only, never the paid fallback. The `LIVE_ROOM_MAX_CALLS_PER_HOUR` cap fails closed: 4 rooms an hour × 3 calls, well under 36.
+  - Thread ids are `live15m:<day>`. `GET /api/live` also returns the older `live5m:` history.
+  - The 5m context carries the last 12 closed bars (`recent_bars`). The H1 chain strips them.
 - Read APIs: `GET /api/threads?kind=news|h1`, `GET /api/threads/:id` (nested replies; `h1:<candle_key>` serves the H1 bus debate as a thread) and `GET /api/live?since=`.
-- The Nexus dashboard shows three cards: **Threads 1H** (it replaces the old Analyst/Counselor/Reasoner debate card), **News Threads** and **Live Room 5m**.
+- The Nexus dashboard shows three cards: **Threads 1H** (it replaces the old Analyst/Counselor/Reasoner debate card), **News Threads** and **Live Room 15m**.
+- The AI Worker's old `/dashboard` page (Analyst/Counselor/Reasoner chat timeline and raw output) is retired. `GET /dashboard` redirects (302) to the Nexus dashboard (`NEXUS_DASHBOARD_URL`, default `https://nexus.cryptophys.work/`).
 - The dashboard shows agents by name only: Technical Analyst, News Analyst, Risk Manager and Moderator. It never shows model names.
 - Agent text must be natural language: validators reject snake_case field names, dotted evidence paths and key=value pairs in insights, summaries and dissent (`src/natural-language.mjs`). Evidence paths stay in `refs`.
 - The fail-closed WAIT reasoning is plain language too (`describeDegradedEvidence`).
@@ -90,6 +97,13 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - It is also fed to the bus moderator, to news threads (technical side) and to the live room (as the H1 backdrop).
 - Neither feature writes into the H1 chain's evidence, prompts or decision. Stances are discussion only: no orders.
 - `POST /preview/news-analysis-fixture` exists only when `PREVIEW_FIXTURES_ENABLED` is `"true"` (set only in `wrangler.preview.jsonc`), so preview-e2e can prove a news thread.
+
+### Next phase: one agent per Pine HUD (planned, not built)
+- Owner request, 2026-11-04: every HUD in the installed Pine indicators becomes its own agent.
+  - Each agent is named after its HUD.
+  - Each agent analyses only the data its HUD produces.
+- The brief for the VPS agent is `docs/BRIEF_HUD_AGENTS.md`. It covers the HUD inventory, the rules, and an assessment → RFC → flagged implementation sequence.
+- Nothing in this section is live yet.
 
 ## 4. Sources and knowledge
 - **Pine sources:** `pinescript/ssot/`. Verified against the installed TradingView indicators; see `docs/PINE_SOURCE_VERIFICATION.md`. Never edit these files.

@@ -120,9 +120,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .tabs { display:flex; gap:6px; margin-bottom:12px; }
   .tab { padding:6px 14px; border-radius:8px; background:var(--panel2); border:1px solid var(--border); color:var(--muted); cursor:pointer; font-size:12px; transition:all .15s; }
   .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
-  .agent-raw { background:var(--panel2); border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:10px; }
-  .agent-raw h3 { margin:0 0 6px; font-size:12px; color:var(--cyan); text-transform:uppercase; }
-  .agent-raw pre { margin:0; white-space:pre-wrap; word-break:break-word; font-size:12px; color:var(--text); max-height:280px; overflow:auto; }
   button { background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px 14px; font-size:13px; cursor:pointer; transition:all .15s; }
   button:hover { background:var(--accent); border-color:var(--accent); color:#fff; }
   .feed-header { display:flex; align-items:center; gap:10px; margin-bottom:16px; padding-bottom:12px; border-bottom:1px solid var(--border); }
@@ -248,16 +245,16 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <div id="thread-view" style="display:none"></div>
     </div>
 
-    <!-- Phase 3: live 5m trading room -->
+    <!-- Live room: meets at every 15m candle close; 5m local-lane data is the execution read -->
     <div class="card">
       <div class="feed-header">
-        <div class="avatar">5m</div>
+        <div class="avatar">15m</div>
         <div>
-          <h2>Live Room 5m</h2>
-          <div class="sub">Technical · Risk · Moderator on each changed closed 5m bar</div>
+          <h2>Live Room 15m</h2>
+          <div class="sub">Technical · Risk · Moderator at every 15m candle close · 5m local-lane data for execution</div>
         </div>
       </div>
-      <div class="live-pin"><span class="badge-warn">UNVERIFIED 5m</span><span id="live-h1">H1 decision: —</span><span style="color:var(--muted)">Discussion only. No orders are placed.</span></div>
+      <div class="live-pin"><span class="badge-warn">5m execution: UNVERIFIED</span><span id="live-h1">H1 decision: —</span><span style="color:var(--muted)">Discussion only. No orders are placed.</span></div>
       <div id="live-feed" class="live-feed"><div class="loader">Loading live room...</div></div>
     </div>
 
@@ -571,12 +568,12 @@ async function loadLive(){
     if (!r.ok) { if (!liveLoaded) feed.innerHTML = '<div class="error">'+esc(d.error||r.status)+'</div>'; return; }
     const items = d.items || [];
     if (!liveLoaded) { feed.innerHTML = ''; liveLoaded = true; }
-    if (!items.length) { if (!feed.children.length) feed.innerHTML = '<div class="loader">'+(d.enabled ? 'Waiting for the next changed 5m bar...' : 'Live room is off in this environment.')+'</div>'; return; }
+    if (!items.length) { if (!feed.children.length) feed.innerHTML = '<div class="loader">'+(d.enabled ? 'Waiting for the next 15m candle close...' : 'Live room is off in this environment.')+'</div>'; return; }
     if (feed.querySelector('.loader')) feed.innerHTML = '';
     const nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
     let html = '';
     items.forEach(m => {
-      if (m.bar_time !== liveLastBar) { liveLastBar = m.bar_time; html += '<div class="live-bar">5m bar '+esc(String(m.bar_time||'').replace('T',' ').slice(0,16))+' UTC</div>'; }
+      if (m.bar_time !== liveLastBar) { liveLastBar = m.bar_time; html += '<div class="live-bar">15m candle close '+esc(String(m.bar_time||'').replace('T',' ').slice(0,16))+' UTC</div>'; }
       html += renderThreadMsg(Object.assign({}, m, { replies: [] }), m.parent_id ? 1 : 0);
       liveSince = Math.max(liveSince, m.id);
     });
