@@ -34,6 +34,8 @@
     "AI_MODEL_COUNSELOR": "@cf/google/gemma-4-26b-a4b-it",
     "AI_MODEL_REASONER": "@cf/nvidia/nemotron-3-120b-a12b",
     "REQUIRED_SOURCES": "prophet_r38,prophet_r37_ssot,gmi_v12_70",
+      "MULTI_AGENT_BUS_ENABLED": "true",
+      "MULTI_AGENT_MAX_CALLS_PER_HOUR": "20"
     "PARITY_PROMOTE_AFTER": "1"
   },
   "queues": {

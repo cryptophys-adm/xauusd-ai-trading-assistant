@@ -70,3 +70,17 @@ export function createQueueConsumer(processTask, options = {}) {
     }
   };
 }
+
+export function buildMultiAgentBusQueueTask(input) {
+  const { candleKey, inputFingerprint, enqueuedAt = new Date().toISOString() } = input ?? {};
+  if (typeof candleKey !== "string" || !candleKey.trim() || typeof inputFingerprint !== "string" || !inputFingerprint.trim()) {
+    throw new TypeError("multi-agent bus queue task requires candleKey and inputFingerprint");
+  }
+  return {
+    kind: "multi_agent_bus",
+    event_id: `bus:${candleKey}:${inputFingerprint}`,
+    candle_key: candleKey,
+    input_fingerprint: inputFingerprint,
+    enqueued_at: enqueuedAt
+  };
+}

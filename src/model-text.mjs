@@ -51,7 +51,7 @@ export function extractJsonObject(text) {
  * writing the answer, so small budgets end with finish_reason "length" and
  * message.content === null.
  */
-export const MAX_TOKENS = Object.freeze({ analyst: 4096, counselor: 4096, reasoner: 6144 });
+export const MAX_TOKENS = Object.freeze({ analyst: 4096, counselor: 4096, reasoner: 6144, bus_agent: 1536, bus_moderator: 2048 });
 
 /**
  * Text of a Workers AI response (legacy `response` shape or OpenAI-style

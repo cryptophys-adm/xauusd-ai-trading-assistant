@@ -12,7 +12,7 @@ const TECHNICAL_KNOWLEDGE = JSON.parse(knowledgeForPrompt("technical")) as JsonO
 const NEWS_KNOWLEDGE = JSON.parse(knowledgeForPrompt("news")) as JsonObject;
 const KNOWLEDGE_SHA = asText((TECHNICAL_KNOWLEDGE.provenance as JsonObject | undefined)?.content_sha256);
 import { identityOf, ensureSchema, registerIdentity, listRegistry, policyFromEnv, PARITY_REGISTRY_VERSION } from "./parity-registry.mjs";
-import { buildWebhookQueueTask, buildLocalCalculationQueueTask, sendQueueTask, createQueueConsumer } from "./queue-runtime.mjs";
+import { buildWebhookQueueTask, buildLocalCalculationQueueTask, buildMultiAgentBusQueueTask, sendQueueTask, createQueueConsumer } from "./queue-runtime.mjs";
 import type { QueueTask } from "./queue-runtime.mjs";
 import type { EvidenceBundle, HandoffResponse } from "../lib/contracts.ts";
 import { buildCandleKey, nowIso } from "../lib/contracts.ts";
@@ -522,6 +522,7 @@ async function setAnalysisRunStatus(env: Env, candleKey: string, status: string,
 async function ensureBusSchema(env: Env): Promise<void> {
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS bus_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
     candle_key TEXT NOT NULL,
     round INTEGER NOT NULL,
     agent TEXT NOT NULL,
@@ -529,7 +530,10 @@ async function ensureBusSchema(env: Env): Promise<void> {
     insight TEXT NOT NULL,
     confidence REAL,
     refs_json TEXT,
-    model TEXT
+    model TEXT,
+    status TEXT,
+    latency_ms INTEGER,
+    UNIQUE(candle_key, run_id, round, agent)
   )`).run();
 }
 
@@ -885,6 +889,15 @@ async function runAnalysis(
     analysis: JSON.stringify(synthesis),
     model: [env.AI_MODEL_ANALYST, env.AI_MODEL_COUNSELOR, env.AI_MODEL_REASONER].join(",")
   });
+
+  if (String(env.MULTI_AGENT_BUS_ENABLED || "false").toLowerCase() === "true") {
+    try {
+      const task = buildMultiAgentBusQueueTask({ candleKey, inputFingerprint: inputFingerprint });
+      await sendQueueTask(env.XAUUSD_EVENTS, task);
+    } catch (error) {
+      console.error("bus_enqueue_failed", error instanceof Error ? error.message : String(error));
+    }
+  }
 
   const confidence = typeof decision.confidence === "number" ? decision.confidence : null;
   const entry = typeof decision.entry_price === "number" ? decision.entry_price : null;
@@ -1309,6 +1322,15 @@ async function runAnalysisFromBundle(
     model: [env.AI_MODEL_ANALYST, env.AI_MODEL_COUNSELOR, env.AI_MODEL_REASONER].join(",")
   });
 
+  if (String(env.MULTI_AGENT_BUS_ENABLED || "false").toLowerCase() === "true") {
+    try {
+      const task = buildMultiAgentBusQueueTask({ candleKey, inputFingerprint: bundle.evidence_fingerprint });
+      await sendQueueTask(env.XAUUSD_EVENTS, task);
+    } catch (error) {
+      console.error("bus_enqueue_failed", error instanceof Error ? error.message : String(error));
+    }
+  }
+
   const confidence = typeof decision.confidence === "number" ? decision.confidence : null;
   const entry = typeof decision.entry_price === "number" ? decision.entry_price : null;
   const stop = typeof decision.stop_loss === "number" ? decision.stop_loss : null;
@@ -1535,6 +1557,127 @@ async function processLocalCalculationReconcileTask(env: Env, task: Extract<Queu
   }
 }
 
+async function countBusCallsLastHour(env: Env): Promise<number> {
+  try {
+    const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM bus_messages WHERE ts >= datetime('now', '-60 minutes')").first<{ n: number }>();
+    return Number(row?.n) || 0;
+  } catch { return 0; }
+}
+
+async function processMultiAgentBusTask(env: Env, task: Extract<QueueTask, { kind: "multi_agent_bus" }>): Promise<void> {
+  await ensureBusSchema(env);
+  const started = Date.now();
+  const maxCalls = Number(env.MULTI_AGENT_MAX_CALLS_PER_HOUR || "20");
+  // read evidence snapshot from ai_syntheses
+  let evidence: any = null;
+  let chainDecision: string | null = null;
+  try {
+    const row = await env.DB.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY timestamp DESC LIMIT 1").bind(task.candle_key).first<{ ai_analysis: string }>();
+    const syn = row ? JSON.parse(row.ai_analysis || "{}") : null;
+    evidence = syn?.evidence_fusion ? syn : syn;
+    chainDecision = syn?.decision?.decision ?? null;
+    // evidence snapshot = fusion bundle embedded in synthesis
+    evidence = syn?.evidence_fusion ?? syn;
+  } catch { evidence = null; }
+  if (!evidence) return;
+
+  const messages: any[] = [];
+  const runId = task.input_fingerprint;
+  const agents = [
+    { name: "technical", model: env.AI_MODEL_ANALYST, system: "You are a technical analyst. Advisory only. Do not produce entry/SL/TP or position size. A local lane counts as trusted only when approved_by_parity. The 5m context is UNVERIFIED and must not be the main reason. Every claim must cite refs. Return strict JSON: {agent,round,stance,confidence,insight,refs,responds_to?}." },
+    { name: "news", model: env.AI_MODEL_COUNSELOR, system: "You are a news analyst. Advisory only. Do not produce entry/SL/TP or position size. Return strict JSON: {agent,round,stance,confidence,insight,refs,responds_to?}." }
+  ];
+
+  async function callAgent(agent: any, round: number, round1Messages: any[]) {
+    if (Date.now() - started > 90000) return { status: "budget_exhausted" };
+    const used = await countBusCallsLastHour(env);
+    if (used >= maxCalls) return { status: "budget_exhausted" };
+    const input = JSON.stringify({ evidence, round, responds_to: round1Messages });
+    const prompt = agent.system + "\nRound " + round + ". Evidence: " + input.slice(0, 8000);
+    const t0 = Date.now();
+    try {
+      const result = await env.AI.run(agent.model, { messages: chatMessages([prompt]), max_tokens: MAX_TOKENS.bus_agent, temperature: 0.1 } as never);
+      const text = extractModelText(result);
+      const obj = extractJsonObject(text);
+      const latency = Date.now() - t0;
+      const valid = obj && typeof obj.insight === "string" && Array.isArray(obj.refs) && obj.refs.length > 0;
+      const insight = valid ? String(obj.insight).slice(0, 600) : text.slice(0, 2048);
+      const status = valid ? "ok" : "invalid_output";
+      const msg = {
+        run_id: runId,
+        candle_key: task.candle_key,
+        round,
+        agent: agent.name,
+        ts: new Date().toISOString(),
+        insight,
+        confidence: typeof obj?.confidence === "number" ? obj.confidence : null,
+        refs: Array.isArray(obj?.refs) ? obj.refs : [],
+        status,
+        model: agent.model,
+        latency_ms: latency
+      };
+      try {
+        await env.DB.prepare("INSERT OR IGNORE INTO bus_messages (run_id, candle_key, round, agent, ts, insight, confidence, refs_json, model, status, latency_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .bind(msg.run_id, msg.candle_key, msg.round, msg.agent, msg.ts, msg.insight, msg.confidence, JSON.stringify(msg.refs), msg.model, msg.status, msg.latency_ms).run();
+      } catch { /* ignore */ }
+      messages.push(msg);
+      return msg;
+    } catch (error) {
+      const msg = {
+        run_id: runId,
+        candle_key: task.candle_key,
+        round,
+        agent: agent.name,
+        ts: new Date().toISOString(),
+        insight: "agent_failed",
+        confidence: null,
+        refs: [],
+        status: "agent_failed",
+        model: agent.model,
+        latency_ms: Date.now() - t0
+      };
+      try {
+        await env.DB.prepare("INSERT OR IGNORE INTO bus_messages (run_id, candle_key, round, agent, ts, insight, confidence, refs_json, model, status, latency_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .bind(msg.run_id, msg.candle_key, msg.round, msg.agent, msg.ts, msg.insight, msg.confidence, JSON.stringify(msg.refs), msg.model, msg.status, msg.latency_ms).run();
+      } catch { /* ignore */ }
+      messages.push(msg);
+      return msg;
+    }
+  }
+
+  // Round 1
+  const round1 = [];
+  for (const agent of agents) {
+    if (Date.now() - started > 90000) break;
+    const m = await callAgent(agent, 1, []);
+    round1.push(m);
+  }
+  // Round 2
+  const round2 = [];
+  for (const agent of agents) {
+    if (Date.now() - started > 90000) break;
+    const m = await callAgent(agent, 2, round1);
+    round2.push(m);
+  }
+  // Moderator
+  if (Date.now() - started <= 90000) {
+    const used = await countBusCallsLastHour(env);
+    if (used < maxCalls) {
+      const t0 = Date.now();
+      try {
+        const result = await env.AI.run(env.AI_MODEL_REASONER, { messages: chatMessages(["You are a moderator. Return strict JSON {stance,confidence,agreed,summary,dissent}. Evidence: " + JSON.stringify({ messages: [...round1, ...round2] }).slice(0,8000)]), max_tokens: MAX_TOKENS.bus_moderator, temperature: 0.1 } as never);
+        const text = extractModelText(result);
+        const obj = extractJsonObject(text) || {};
+        const insight = JSON.stringify({ stance: obj.stance, confidence: obj.confidence, agreed: obj.agreed, summary: String(obj.summary || "").slice(0, 1000), dissent: Array.isArray(obj.dissent) ? obj.dissent : [] });
+        await env.DB.prepare("INSERT OR IGNORE INTO bus_messages (run_id, candle_key, round, agent, ts, insight, confidence, refs_json, model, status, latency_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .bind(runId, task.candle_key, 3, "moderator", new Date().toISOString(), insight, typeof obj.confidence === "number" ? obj.confidence : null, JSON.stringify([]), env.AI_MODEL_REASONER, "ok", Date.now() - t0).run();
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
 async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
   await tracing.enterSpan("process_queue", async span => {
     span.setAttributes({
@@ -1547,6 +1690,7 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
     });
     if (task.kind === "webhook_reconcile") return processWebhookReconcileTask(env, task);
     if (task.kind === "local_calculation_reconcile") return processLocalCalculationReconcileTask(env, task);
+    if (task.kind === "multi_agent_bus") return processMultiAgentBusTask(env, task);
     if (task.kind === "analysis") return processAnalysisTask(env, task);
     throw new Error("Unsupported queue task kind");
   });
@@ -1686,23 +1830,27 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/bus") {
     const key = url.searchParams.get("candle_key");
     try {
-      await ensureBusSchema(env);
       const stmt = key
-        ? env.DB.prepare("SELECT id, candle_key, round, agent, ts, insight, confidence, refs_json FROM bus_messages WHERE candle_key = ? ORDER BY round, id").bind(key)
-        : env.DB.prepare("SELECT id, candle_key, round, agent, ts, insight, confidence, refs_json FROM bus_messages ORDER BY id DESC LIMIT 50");
+        ? env.DB.prepare("SELECT id, run_id, candle_key, round, agent, ts, insight, confidence, refs_json, model, status, latency_ms FROM bus_messages WHERE candle_key = ? ORDER BY round, id").bind(key)
+        : env.DB.prepare("SELECT id, run_id, candle_key, round, agent, ts, insight, confidence, refs_json, model, status, latency_ms FROM bus_messages ORDER BY id DESC LIMIT 50");
       const rows = await stmt.all();
-      return dashboardJson({ status: "ok", items: rows.results || [] });
+      const items = rows.results || [];
+      // consensus from moderator (last moderator message)
+      const moderator = items.filter((m: any) => m.agent === "moderator").pop();
+      let consensus = null;
+      if (moderator) { try { consensus = JSON.parse(String(moderator.insight)); } catch { consensus = { summary: moderator.insight }; } }
+      let chainDecision = null;
+      if (key) {
+        try {
+          const row = await env.DB.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY timestamp DESC LIMIT 1").bind(key).first<{ ai_analysis: string }>();
+          const syn = row ? JSON.parse(row.ai_analysis || "{}") : null;
+          chainDecision = syn?.decision?.decision ?? null;
+        } catch { chainDecision = null; }
+      }
+      const agreement_with_chain = consensus && chainDecision ? (String(consensus.stance || "").toUpperCase() === String(chainDecision).toUpperCase()) : null;
+      return dashboardJson({ status: "ok", items, consensus, agreement_with_chain });
     } catch {
-      return dashboardJson({ status: "error" }, 500);
-    }
-  }
-  if (url.pathname === "/api/bus/latest") {
-    try {
-      await ensureBusSchema(env);
-      const rows = await env.DB.prepare("SELECT id, candle_key, round, agent, ts, insight, confidence, refs_json FROM bus_messages ORDER BY id DESC LIMIT 50").all();
-      return dashboardJson({ status: "ok", items: rows.results || [] });
-    } catch {
-      return dashboardJson({ status: "error" }, 500);
+      return dashboardJson({ status: "ok", items: [], consensus: null, agreement_with_chain: null });
     }
   }
   if (url.pathname === "/api/m5-context") {

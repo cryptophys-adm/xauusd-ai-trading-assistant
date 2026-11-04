@@ -21,6 +21,13 @@ export type QueueTask =
       enqueued_at: string;
     }
   | {
+      kind: "multi_agent_bus";
+      event_id: string;
+      candle_key: string;
+      input_fingerprint: string;
+      enqueued_at: string;
+    }
+  | {
       kind: "analysis";
       event_id: string;
       request_id: string;
@@ -46,6 +53,9 @@ export function buildWebhookQueueTask(input: {
 export function buildLocalCalculationQueueTask(input: {
   candleKey: string; engine: string; ticker: string; timeframe: string; candleTime: string; enqueuedAt?: string;
 }): Extract<QueueTask, { kind: "local_calculation_reconcile" }>;
+export function buildMultiAgentBusQueueTask(input: {
+  candleKey: string; inputFingerprint: string; enqueuedAt?: string;
+}): Extract<QueueTask, { kind: "multi_agent_bus" }>;
 export function sendQueueTask(queue: Queue<QueueTask>, task: QueueTask): Promise<void>;
 export function createQueueConsumer(
   processTask: (task: QueueTask) => Promise<void>,
