@@ -105,7 +105,8 @@ export async function reconcileRecentCandles(env, { now = Date.now(), lookback =
   return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, results };
 }
 
-export async function backfillRecentAnalyses(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, loadPayloads = null, runAnalysis = null } = {}) {
+export async function backfillRecentAnalyses(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, loadPayloads = null, runAnalysis = null, setStatus = null } = {}) {
+  const required = String(env?.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(v=>v.trim()).filter(Boolean);
   const candleKeys = closedH1CandleKeys(now, { lookback });
   let triggered = 0;
   for (const candleKey of candleKeys) {
@@ -115,7 +116,6 @@ export async function backfillRecentAnalyses(env, { now = Date.now(), lookback =
     try {
       const existing = await env.DB.prepare("SELECT status FROM analysis_runs WHERE candle_key = ?").bind(candleKey).first();
       if (existing) continue;
-      const required = ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"];
       const payloads = loadPayloads ? await loadPayloads(env, candleKey, required) : null;
       if (!payloads || !required.every(source => payloads[source])) continue;
       const lastColon = candleKey.lastIndexOf(":");
@@ -128,7 +128,10 @@ export async function backfillRecentAnalyses(env, { now = Date.now(), lookback =
         triggered += 1;
       }
     } catch (error) {
-      // swallow per-candle
+      if (typeof setStatus === "function") {
+        try { await setStatus(env, candleKey, "failed", { message: error instanceof Error ? error.message : String(error) }, "analysis_failed"); } catch { /* ignore */ }
+      }
+      console.error("backfill_candle_failed", candleKey, error instanceof Error ? error.message : String(error));
     }
   }
   return { triggered, candle_keys: candleKeys };
