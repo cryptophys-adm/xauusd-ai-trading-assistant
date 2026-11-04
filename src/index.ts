@@ -44,6 +44,9 @@ export interface Env {
   MULTI_AGENT_MAX_CALLS_PER_HOUR?: string;
   MULTI_AGENT_MODEL?: string;
   MULTI_AGENT_FALLBACK_MODEL?: string;
+  LIVE_ROOM_ENABLED?: string;
+  LIVE_ROOM_MAX_CALLS_PER_HOUR?: string;
+  PREVIEW_FIXTURES_ENABLED?: string;
   PARITY_PROMOTE_AFTER?: string;
   PARITY_ABS_TOLERANCE?: string;
   PARITY_REL_TOLERANCE?: string;
@@ -127,6 +130,7 @@ function asText(value: unknown): string {
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
+import { liveRoomEnabled, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive } from "./agent-threads.mjs";
 
 function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
@@ -423,6 +427,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     JSON.stringify(evidence), analystText, counselorText, reasonerText, JSON.stringify(recommendation)
   ).run();
   await env.SIGNAL_CACHE.put("latest:news:fundamental", JSON.stringify(result), { expirationTtl: 60 * 60 * 24 * 7 });
+  await enqueueNewsThread(env, analysisKey);
   return result;
 
   });
@@ -527,6 +532,16 @@ async function setAnalysisRunStatus(env: Env, candleKey: string, status: string,
  * synthesis is persisted and only when MULTI_AGENT_BUS_ENABLED is "true". It
  * never feeds back into the chain's evidence, prompts or decision.
  */
+/** Phase 3 news thread for a completed news analysis (shadow, behind MULTI_AGENT_BUS_ENABLED). */
+async function enqueueNewsThread(env: Env, analysisKey: string): Promise<void> {
+  if (!busEnabled(env)) return;
+  try {
+    await sendQueueTask(env.XAUUSD_EVENTS, buildNewsThreadTask({ analysisKey }) as unknown as QueueTask);
+  } catch (error) {
+    console.error("news_thread_enqueue_failed", JSON.stringify({ analysis_key: analysisKey, error: error instanceof Error ? error.message : String(error) }));
+  }
+}
+
 async function enqueueMultiAgentBus(env: Env, candleKey: string, inputFingerprint: string): Promise<void> {
   if (!busEnabled(env)) return;
   try {
@@ -601,7 +616,8 @@ async function runAnalysis(
     if (raw) {
       const parsed = JSON.parse(raw);
       const fresh = freshM5Context(parsed, Date.now());
-      if (fresh) informational5mContext = fresh;
+      // recent_bars feed only the live room; the H1 chain keeps the compact context.
+      if (fresh) { const { recent_bars: _bars, ...compact } = fresh as JsonObject; informational5mContext = compact; }
     }
   } catch { informational5mContext = null; }
 
@@ -1510,6 +1526,16 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
     if (task.kind === "webhook_reconcile") return processWebhookReconcileTask(env, task);
     if (task.kind === "local_calculation_reconcile") return processLocalCalculationReconcileTask(env, task);
     if (task.kind === "analysis") return processAnalysisTask(env, task);
+    if (task.kind === "news_thread") {
+      const result = await runNewsThread(env, task);
+      console.log("news_thread", JSON.stringify({ analysis_key: task.analysis_key, ...result }));
+      return;
+    }
+    if (task.kind === "live_room") {
+      const result = await runLiveRoomBar(env, task);
+      console.log("live_room", JSON.stringify({ bar_time: task.bar_time, ...result }));
+      return;
+    }
     if (task.kind === "multi_agent_bus") {
       const result = await runMultiAgentBus(env, task);
       console.log("multi_agent_bus", JSON.stringify({ candle_key: task.candle_key, ...result }));
@@ -1544,6 +1570,13 @@ async function ingestM5Context(env: Env, payload: unknown): Promise<{ status: nu
   if (!kv || typeof kv.put !== "function") return { status: 503, body: { error: "kv_not_configured" } };
   const stored = { ...p, received_at: new Date().toISOString() };
   await kv.put("context:m5:latest", JSON.stringify(stored), { expirationTtl: 900 });
+  if (liveRoomEnabled(env)) {
+    try {
+      await sendQueueTask(env.XAUUSD_EVENTS, buildLiveRoomTask({ barTime: String(p.candle_time), context: stored }) as unknown as QueueTask);
+    } catch (error) {
+      console.error("live_room_enqueue_failed", error instanceof Error ? error.message : String(error));
+    }
+  }
   return { status: 200, body: { status: "ok", key: "context:m5:latest" } };
 }
 
@@ -1649,6 +1682,34 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     const row = await env.DB.prepare("SELECT candle_key, timestamp, ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY timestamp DESC LIMIT 1").bind(key).first<JsonObject>();
     if (!row) return dashboardJson({ status: "not_found" }, 404);
     return dashboardJson({ status: "ok", candle_key: row.candle_key, timestamp: row.timestamp, synthesis: parseJsonText(row.ai_analysis, null) });
+  }
+  if (url.pathname === "/api/threads") {
+    try {
+      const items = await listThreads(env.DB, { kind: url.searchParams.get("kind") || "news", limit: Number(url.searchParams.get("limit") || "20") });
+      return dashboardJson({ status: "ok", count: items.length, items });
+    } catch (error) {
+      console.error("threads_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "threads_unavailable" }, 500);
+    }
+  }
+  if (url.pathname.startsWith("/api/threads/")) {
+    try {
+      const thread = await readThread(env.DB, decodeURIComponent(url.pathname.slice("/api/threads/".length)));
+      if (!thread) return dashboardJson({ status: "not_found" }, 404);
+      return dashboardJson({ status: "ok", thread });
+    } catch (error) {
+      console.error("thread_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "thread_unavailable" }, 500);
+    }
+  }
+  if (url.pathname === "/api/live") {
+    try {
+      const items = await readLive(env.DB, { since: Number(url.searchParams.get("since") || "0"), limit: Number(url.searchParams.get("limit") || "50") });
+      return dashboardJson({ status: "ok", enabled: liveRoomEnabled(env), label: "UNVERIFIED 5m", items });
+    } catch (error) {
+      console.error("live_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "live_unavailable" }, 500);
+    }
   }
   if (url.pathname === "/api/bus") {
     try {
@@ -1762,6 +1823,40 @@ export default {
       try { payload = JSON.parse(bodyText); } catch { return json({ error: "Request body must be valid JSON" }, 400); }
       const result = await ingestLocalCalculation(env, payload);
       return json(result.body, result.status);
+    }
+    if (request.method === "POST" && url.pathname === "/evidence/m5-context") {
+      if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
+        return json({ error: "Unauthorized" }, 401);
+      }
+      let bodyText: string;
+      try {
+        const limitedBody = await readBodyLimited(request, 65536);
+        if (limitedBody.tooLarge) return json({ error: "Payload exceeds 64 KiB limit" }, 413);
+        bodyText = limitedBody.text;
+      } catch { return json({ error: "Request body could not be read" }, 400); }
+      let payload: unknown;
+      try { payload = JSON.parse(bodyText); } catch { return json({ error: "Request body must be valid JSON" }, 400); }
+      const result = await ingestM5Context(env, payload);
+      return json(result.body, result.status);
+    }
+    if (request.method === "POST" && url.pathname === "/preview/news-analysis-fixture") {
+      // Exists only where PREVIEW_FIXTURES_ENABLED is "true" (wrangler.preview.jsonc). Production never sets it.
+      if (String(env.PREVIEW_FIXTURES_ENABLED || "false") !== "true") return json({ error: "Not found" }, 404);
+      if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
+        return json({ error: "Unauthorized" }, 401);
+      }
+      const now = new Date().toISOString();
+      const analysisKey = "preview-fixture-" + crypto.randomUUID();
+      const evidence = { articles: [
+        { title: "Fed signals patience on rate cuts as inflation cools", published_at: now, source: "preview-fixture" },
+        { title: "Dollar index slips; gold steadies near session highs", published_at: now, source: "preview-fixture" }
+      ] };
+      const recommendation = { stance: "WAIT_FOR_TECHNICAL_CONFIRMATION", confidence: 0.4, summary: "Preview fixture: mixed macro signals, no clear driver." };
+      await env.DB.prepare(
+        "INSERT INTO news_analyses (analysis_key, fetched_at, analyzed_at, article_count, evidence_json, analyst_output, counselor_output, reasoner_output, recommendation_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ).bind(analysisKey, now, now, 2, JSON.stringify(evidence), "preview fixture", "preview fixture", "Preview fixture reasoner: wait for technical confirmation.", JSON.stringify(recommendation)).run();
+      await enqueueNewsThread(env, analysisKey);
+      return json({ status: "ok", analysis_key: analysisKey, thread_id: "news:" + analysisKey }, 202);
     }
     if (url.pathname === "/news/analyze" && request.method === "POST") {
       if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {

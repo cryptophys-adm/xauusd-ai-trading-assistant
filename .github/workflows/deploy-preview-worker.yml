@@ -354,6 +354,56 @@ jobs:
           assert.equal(latestDecision.decision?.decision ?? finalDecision.synthesis?.decision?.decision, "WAIT",
             "the bus never changes the chain decision");
 
+          // Phase 3a: news thread. The preview has no news ingestion, so a preview-only fixture
+          // (PREVIEW_FIXTURES_ENABLED, never set in production) creates one news analysis.
+          const fixtureResponse = await fetch(base + "/preview/news-analysis-fixture", { method: "POST", headers });
+          const fixture = await fixtureResponse.json();
+          assert.equal(fixtureResponse.status, 202, "news fixture: " + JSON.stringify(fixture));
+          const threadDeadline = Date.now() + 300_000;
+          let thread = null;
+          const flat = (list) => list.flatMap(m => [m, ...flat(m.replies || [])]);
+          while (Date.now() < threadDeadline) {
+            const r = await fetch(base + "/api/threads/" + encodeURIComponent(fixture.thread_id), { signal: AbortSignal.timeout(10000) });
+            if (r.ok) thread = (await r.json()).thread;
+            if (thread && flat(thread.messages || []).some(m => m.step === "moderator")) break;
+            await new Promise(resolve => setTimeout(resolve, 5000));
+          }
+          const threadMessages = flat(thread?.messages || []);
+          console.log("THREAD PROOF " + JSON.stringify({
+            title: thread?.title,
+            roots: (thread?.messages || []).map(m => m.step),
+            messages: threadMessages.map(m => ({ step: m.step, parent_id: m.parent_id, status: m.status, model: m.model, fallback_used: m.fallback_used, stance: m.stance, confidence: m.confidence, text: String(m.insight ?? m.summary ?? "").slice(0, 240), primary_error: m.primary_error }))
+          }, null, 2));
+          assert.equal(threadMessages.length, 5, "news thread: 2 agents x 2 rounds + moderator");
+          assert.ok(threadMessages.every(m => m.status === "ok"), "every thread message must be schema-valid model output");
+          assert.ok(threadMessages.some(m => m.fallback_used === false && m.model === "@cf/zai-org/glm-5.3-flash"), "the primary model must answer in the thread");
+          const r2 = threadMessages.filter(m => m.step.startsWith("r2:"));
+          assert.ok(r2.length === 2 && r2.every(m => m.parent_id), "round-2 replies are nested under the other agent's round-1 message");
+
+          // Phase 3b: live 5m room. The context goes through the authenticated HTTP ingress
+          // (the same handler the pull adapter reaches over RPC).
+          const barTime = new Date(Math.floor(Date.now() / 300_000) * 300_000).toISOString();
+          const recentBars = Array.from({ length: 12 }, (_, i) => ({ t: new Date(Date.parse(barTime) - (11 - i) * 300_000).toISOString(), o: 4000 + i, h: 4003 + i, l: 3998 + i, c: 4002 + i, v: 100 + i }));
+          const contextResponse = await fetch(base + "/evidence/m5-context", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ schema_version: "cryptophys.local-context.v1", engine: "prophet_r38_5m", trust_status: "informational_unverified", symbol, timeframe: "5", candle_time: barTime, bias: "BULLISH", buy_confirmed: true, sell_confirmed: false, d_enc: 1, t_enc: null, recent_bars: recentBars })
+          });
+          assert.equal(contextResponse.status, 200, "m5 context ingress: " + JSON.stringify(await contextResponse.clone().json()));
+          const liveDeadline = Date.now() + 300_000;
+          let live = [];
+          while (Date.now() < liveDeadline) {
+            const r = await fetch(base + "/api/live?limit=50", { signal: AbortSignal.timeout(10000) });
+            if (r.ok) live = ((await r.json()).items || []).filter(m => m.bar_time === barTime);
+            if (live.some(m => m.step === "moderator")) break;
+            await new Promise(resolve => setTimeout(resolve, 5000));
+          }
+          console.log("LIVE ROOM PROOF " + JSON.stringify(live.map(m => ({ step: m.step, parent_id: m.parent_id, status: m.status, model: m.model, fallback_used: m.fallback_used, stance: m.stance, confidence: m.confidence, text: String(m.insight ?? m.summary ?? "").slice(0, 240), errors: m.errors, primary_error: m.primary_error })), null, 2));
+          assert.deepEqual(live.map(m => m.step), ["technical", "risk", "moderator"], "live room: technical, risk, moderator");
+          assert.ok(live.every(m => m.status === "ok"), "every live-room message must be schema-valid model output");
+          assert.ok(live.every(m => m.fallback_used === false && m.model === "@cf/zai-org/glm-5.3-flash"), "the live room uses the primary model only");
+          assert.equal(live[1].parent_id, live[0].id, "risk replies to technical");
+
           console.log(JSON.stringify({
             preview: base,
             health: "PASS",
@@ -364,6 +414,8 @@ jobs:
             missing_evidence_fail_closed: "PASS",
             duplicate_queue_idempotency: "PASS",
             multi_agent_bus_real_models: "PASS",
+            news_thread_real_models: "PASS",
+            live_room_real_models: "PASS",
             multi_agent_bus_model: bus.items.some(item => item.fallback_used === false) ? "glm-5.3-flash" : "fallback (see primary_error)",
             complete_AI_chain: "NOT_TESTED: no real fresh news/Pine-parity evidence in this fixture"
           }, null, 2));

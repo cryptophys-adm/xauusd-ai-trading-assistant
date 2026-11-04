@@ -135,6 +135,24 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .stat:last-child { border-bottom:none; }
   .stat .label { color:var(--muted); }
   .stat .value { font-weight:600; }
+  .thread-item { padding:10px 12px; border:1px solid var(--border); border-radius:10px; margin-bottom:8px; cursor:pointer; background:var(--panel2); }
+  .thread-item:hover { border-color:var(--accent); }
+  .thread-item .t-title { font-weight:600; font-size:14px; margin-bottom:4px; }
+  .thread-meta { font-size:11px; color:var(--muted); display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .chip { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11px; font-weight:700; border:1px solid var(--border); }
+  .chip.BUY { color:var(--green); border-color:var(--green); } .chip.SELL { color:var(--red); border-color:var(--red); }
+  .chip.WAIT, .chip.HOLD { color:#f59e0b; border-color:#f59e0b; } .chip.CLOSE { color:var(--cyan); border-color:var(--cyan); }
+  .post-box { background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:12px; margin-bottom:12px; font-size:13px; }
+  .tmsg { border-left:2px solid var(--border); padding:6px 0 6px 12px; margin:8px 0; }
+  .tmsg .m-head { font-size:12px; color:var(--muted); display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .tmsg .m-agent { color:var(--text); font-weight:700; }
+  .tmsg .m-body { font-size:13px; margin-top:4px; line-height:1.5; }
+  .tmsg .m-refs { font-size:10px; color:var(--muted); margin-top:4px; word-break:break-word; }
+  .tmsg.mod { border-left-color:var(--accent); }
+  .badge-warn { background:#f59e0b; color:#000; padding:2px 6px; border-radius:4px; font-weight:700; font-size:11px; }
+  .live-feed { max-height:420px; overflow-y:auto; padding-right:4px; }
+  .live-bar { text-align:center; font-size:11px; color:var(--muted); margin:10px 0 4px; }
+  .live-pin { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:12px; margin-bottom:10px; }
 </style>
 </head>
 <body>
@@ -213,6 +231,32 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       </div>
       <div id="agent-chat" class="debate"><div class="loader">Loading...</div></div>
       <div id="agent-raw" style="display:none"></div>
+    </div>
+
+    <!-- Phase 3: agent threads per news analysis -->
+    <div class="card">
+      <div class="feed-header">
+        <div class="avatar">TH</div>
+        <div>
+          <h2>Agent Threads</h2>
+          <div class="sub">One thread per news analysis · agents reply to each other · moderator consensus · advisory only</div>
+        </div>
+      </div>
+      <div id="thread-list"><div class="loader">Loading threads...</div></div>
+      <div id="thread-view" style="display:none"></div>
+    </div>
+
+    <!-- Phase 3: live 5m trading room -->
+    <div class="card">
+      <div class="feed-header">
+        <div class="avatar">5m</div>
+        <div>
+          <h2>Live Room 5m</h2>
+          <div class="sub">Technical · Risk · Moderator on each changed closed 5m bar</div>
+        </div>
+      </div>
+      <div class="live-pin"><span class="badge-warn">UNVERIFIED 5m</span><span id="live-h1">H1 decision: —</span><span style="color:var(--muted)">Discussion only. No orders are placed.</span></div>
+      <div id="live-feed" class="live-feed"><div class="loader">Loading live room...</div></div>
     </div>
 
 
@@ -473,6 +517,102 @@ document.querySelectorAll('#tf-group .tf').forEach(t=>{
     t.classList.add('active'); chartTf = t.dataset.tf; loadChart(true);
   });
 });
+// ---- Phase 3: agent threads and live room ----
+function escAttr(s){ return String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function timeAgo(ts){
+  const ms = Date.now() - Date.parse(ts||'');
+  if (!isFinite(ms)) return '';
+  if (ms < 60000) return Math.max(1, Math.round(ms/1000)) + 's ago';
+  if (ms < 3600000) return Math.round(ms/60000) + 'm ago';
+  if (ms < 86400000) return Math.round(ms/3600000) + 'h ago';
+  return Math.round(ms/86400000) + 'd ago';
+}
+function chip(stance){ return stance ? '<span class="chip '+escAttr(stance)+'">'+esc(stance)+'</span>' : ''; }
+function modelShort(m){ return esc(String(m||'').split('/').pop()); }
+let threadSelected = null;
+async function loadThreads(){
+  if (threadSelected) return;
+  try {
+    const r = await fetch(API+'/api/threads?kind=news&limit=15'); const d = await r.json();
+    if (!r.ok) { $('thread-list').innerHTML = '<div class="error">'+esc(d.error||r.status)+'</div>'; return; }
+    const items = d.items || [];
+    if (!items.length) { $('thread-list').innerHTML = '<div class="loader">No threads yet. Threads appear after the next news analysis.</div>'; return; }
+    $('thread-list').innerHTML = items.map(t => '<div class="thread-item" data-thread="'+escAttr(t.id)+'">'
+      +'<div class="t-title">'+esc(t.title)+'</div>'
+      +'<div class="thread-meta">'+chip(t.consensus)+'<span>'+t.reply_count+' replies</span><span>'+esc(timeAgo(t.created_at))+'</span>'
+      +(t.post && t.post.article_count ? '<span>'+t.post.article_count+' articles</span>' : '')+'</div></div>').join('');
+  } catch(e){ $('thread-list').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+}
+function renderThreadMsg(m, depth){
+  const body = m.insight || m.summary || '';
+  const status = m.status && m.status !== 'ok' ? '<span class="badge-warn">'+esc(m.status)+'</span>' : '';
+  const fb = m.fallback_used ? '<span>fallback</span>' : '';
+  let html = '<div class="tmsg'+(m.agent==='moderator'?' mod':'')+'" style="margin-left:'+(Math.min(depth,4)*18)+'px">'
+    +'<div class="m-head"><span class="m-agent">'+esc(m.agent)+'</span><span>'+modelShort(m.model)+'</span><span>'+esc(timeAgo(m.ts))+'</span>'
+    +chip(m.stance)+(m.confidence!=null ? '<span>conf '+Math.round(m.confidence*100)+'%</span>' : '')+status+fb+'</div>'
+    +'<div class="m-body">'+esc(body)+'</div>'
+    +(m.dissent && m.dissent.length ? '<div class="m-refs">Dissent: '+esc(m.dissent.join('; '))+'</div>' : '')
+    +(m.refs && m.refs.length ? '<div class="m-refs">refs: '+esc(m.refs.join(', '))+'</div>' : '')
+    +'</div>';
+  (m.replies||[]).forEach(c => { html += renderThreadMsg(c, depth+1); });
+  return html;
+}
+async function openThread(id){
+  threadSelected = id;
+  $('thread-list').style.display = 'none';
+  $('thread-view').style.display = 'block';
+  $('thread-view').innerHTML = '<div class="loader">Loading thread...</div>';
+  try {
+    const r = await fetch(API+'/api/threads/'+encodeURIComponent(id)); const d = await r.json();
+    if (!r.ok || !d.thread) { $('thread-view').innerHTML = '<div class="error">'+esc(d.error||d.status||r.status)+'</div>'; return; }
+    const t = d.thread; const p = t.post || {};
+    const rec = p.recommendation || {};
+    $('thread-view').innerHTML = '<button data-thread-back="1">&larr; All threads</button>'
+      +'<div class="post-box" style="margin-top:10px"><div class="t-title" style="font-weight:700;font-size:15px">'+esc(t.title)+'</div>'
+      +'<div class="thread-meta" style="margin:6px 0">'+esc(timeAgo(t.created_at))+(p.article_count ? ' · '+p.article_count+' articles' : '')+(rec.stance ? ' · news analysis: '+esc(rec.stance) : '')+'</div>'
+      +((p.headlines||[]).length ? '<ul style="margin:6px 0 0 18px">'+p.headlines.map(h => '<li>'+esc(h)+'</li>').join('')+'</ul>' : '')
+      +'</div>'
+      +(t.messages||[]).map(m => renderThreadMsg(m, 0)).join('');
+  } catch(e){ $('thread-view').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+}
+document.addEventListener('click', ev => {
+  const back = ev.target.closest('[data-thread-back]');
+  if (back) { threadSelected = null; $('thread-view').style.display='none'; $('thread-list').style.display='block'; loadThreads(); return; }
+  const item = ev.target.closest('[data-thread]');
+  if (item) openThread(item.getAttribute('data-thread'));
+});
+let liveSince = 0; let liveLastBar = null; let liveLoaded = false;
+async function loadLive(){
+  const feed = $('live-feed');
+  try {
+    const r = await fetch(API+'/api/live?since='+liveSince+'&limit=60'); const d = await r.json();
+    if (!r.ok) { if (!liveLoaded) feed.innerHTML = '<div class="error">'+esc(d.error||r.status)+'</div>'; return; }
+    const items = d.items || [];
+    if (!liveLoaded) { feed.innerHTML = ''; liveLoaded = true; }
+    if (!items.length) { if (!feed.children.length) feed.innerHTML = '<div class="loader">'+(d.enabled ? 'Waiting for the next changed 5m bar...' : 'Live room is off in this environment.')+'</div>'; return; }
+    if (feed.querySelector('.loader')) feed.innerHTML = '';
+    const nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
+    let html = '';
+    items.forEach(m => {
+      if (m.bar_time !== liveLastBar) { liveLastBar = m.bar_time; html += '<div class="live-bar">5m bar '+esc(String(m.bar_time||'').replace('T',' ').slice(0,16))+' UTC</div>'; }
+      html += renderThreadMsg(Object.assign({}, m, { replies: [] }), m.parent_id ? 1 : 0);
+      liveSince = Math.max(liveSince, m.id);
+    });
+    feed.insertAdjacentHTML('beforeend', html);
+    if (nearBottom) feed.scrollTop = feed.scrollHeight;
+  } catch(e){ if (!liveLoaded) feed.innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+}
+async function loadLiveH1(){
+  try {
+    const r = await fetch(API+'/api/decisions?limit=1'); const d = await r.json();
+    const x = (d.items||[])[0];
+    if (x) $('live-h1').innerHTML = 'H1 decision: '+chip(x.decision)+' <span style="color:var(--muted)">'+esc(x.candle_key||'')+'</span>';
+  } catch(e){}
+}
+loadThreads(); loadLive(); loadLiveH1();
+setInterval(loadLive, 10000);
+setInterval(()=>{ loadThreads(); loadLiveH1(); }, 60000);
+
 loadChart(true);
 setInterval(()=>loadChart(false), 60000);
 loadStatus(); loadNews(); loadDecisions(); autoLoad(); loadLocalLane();
