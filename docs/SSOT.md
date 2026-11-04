@@ -78,6 +78,15 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - The dashboard shows agents by name only: Technical Analyst, News Analyst, Risk Manager and Moderator. It never shows model names.
 - Agent text must be natural language: validators reject snake_case field names, dotted evidence paths and key=value pairs in insights, summaries and dissent (`src/natural-language.mjs`). Evidence paths stay in `refs`.
 - The fail-closed WAIT reasoning is plain language too (`describeDegradedEvidence`).
+- TradingView webhook reading (`src/webhook-interpretation.mjs`):
+  - It decodes the three alerts of each H1 candle into plain sentences: Prophet R38, Prophet R37 and GMI v12.70.
+    - It covers signal, trade-management state, divergence or structure break, confirmation candle, GMI verdict and confluence gate.
+    - It also gives an overall lean.
+  - The codes follow the Pine sources exactly.
+  - It is deterministic, never a model output, and never changes the H1 decision.
+  - It is served by `GET /api/decision/:key` (`tradingview_reading`) and in the Threads 1H post (`post.tradingview`). Nexus shows it as "TradingView signals (H1)".
+  - It is fed to the bus technical agent (`tradingview_reading`), which must interpret each indicator by name, even on WAIT.
+  - It is also fed to the bus moderator, to news threads (technical side) and to the live room (as the H1 backdrop).
 - Neither feature writes into the H1 chain's evidence, prompts or decision. Stances are discussion only: no orders.
 - `POST /preview/news-analysis-fixture` exists only when `PREVIEW_FIXTURES_ENABLED` is `"true"` (set only in `wrangler.preview.jsonc`), so preview-e2e can prove a news thread.
 

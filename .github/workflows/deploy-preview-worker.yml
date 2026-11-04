@@ -366,6 +366,18 @@ jobs:
           assert.ok(h1Thread.messages.slice(0, 2).every(m => m.replies.length === 1), "round-2 replies are nested under the other agent");
           assert.match(h1Thread.post.reasoning, /^No trade for this candle/, "the H1 post explains the decision in plain language");
 
+          // TradingView webhook reading: the three alerts decoded into plain language, shown on the
+          // decision card and the H1 post, and fed to the technical agent.
+          const tvReading = finalDecision.tradingview_reading;
+          console.log("TRADINGVIEW READING " + JSON.stringify(tvReading, null, 2));
+          assert.deepEqual((tvReading?.lines || []).map(l => l.source), ["Prophet R38", "Prophet R37", "GMI v12.70"],
+            "the decision API must decode all three webhook alerts");
+          assert.ok([tvReading.summary, ...tvReading.lines.map(l => l.text)].every(t => t && !codeLike(t)), "the webhook reading must be natural language");
+          assert.deepEqual(h1Thread.post.tradingview?.lines?.map(l => l.source), ["Prophet R38", "Prophet R37", "GMI v12.70"],
+            "the H1 thread post must show the webhook reading");
+          const technicalR1 = bus.items.find(item => item.round === 1 && item.agent === "technical");
+          if (!/Prophet|GMI/.test(String(technicalR1?.insight ?? ""))) console.log("::warning::The technical agent did not name a TradingView indicator in round 1.");
+
           // Phase 3a: news thread. The preview has no news ingestion, so a preview-only fixture
           // (PREVIEW_FIXTURES_ENABLED, never set in production) creates one news analysis.
           const fixtureResponse = await fetch(base + "/preview/news-analysis-fixture", { method: "POST", headers });

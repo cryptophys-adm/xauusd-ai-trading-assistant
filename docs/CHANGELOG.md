@@ -6,6 +6,8 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-04
 
+- feat(agents,nexus): the three TradingView webhook alerts are decoded into plain language (`src/webhook-interpretation.mjs`, codes per the Pine sources). The reading feeds the technical agent, which must interpret Prophet R38, Prophet R37 and GMI v12.70 by name; it is shown as "TradingView signals (H1)" on the decision card and the Threads 1H post. The H1 decision is unchanged (still fail-closed).
+- `5049369` (PR #62) feat(nexus): Threads 1H, natural-language agent output, agent names only.
 - feat(nexus): Threads 1H replaces the old debate card; agents are shown by name only (no model names); agent output must be natural language (validated); the WAIT reasoning and 5m context read as plain sentences.
 - `2341164` (PR #61) feat(phase4): bus, news threads and live 5m room enabled in production.
 - feat(phase4): enable the multi-agent bus, news threads and the live 5m room in production (owner approval); shadow/advisory only.

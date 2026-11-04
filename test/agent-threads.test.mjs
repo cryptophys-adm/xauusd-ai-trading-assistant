@@ -258,5 +258,7 @@ test("H1 threads are built from the bus: post = decision, round 2 nested under t
   assert.equal(t.messages[0].replies[0].step, "r2:news", "news' round-2 reply sits under technical's round-1 message");
   assert.equal(t.messages[1].replies[0].step, "r2:technical");
   assert.match(t.post.reasoning, /^No trade for this candle/);
+  assert.deepEqual(t.post.tradingview.lines.map(l => l.source), ["Prophet R38", "Prophet R37", "GMI v12.70"]);
+  assert.match(list[0].post.tradingview.summary, /TradingView indicators/);
   assert.equal(await readH1Thread(d1, "OANDA:XAUUSD:60:1"), null);
 });

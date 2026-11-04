@@ -11,6 +11,7 @@
 
 import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, describeDegradedEvidence } from "./natural-language.mjs";
+import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import {
   callBusModel, buildBusEvidence, validateAgentOutput, validateModeratorOutput,
   AGENT_JSON_SCHEMA, MODERATOR_JSON_SCHEMA, BUS_DEFAULT_MODEL, BUS_MAX_TOKENS, busEnabled
@@ -346,7 +347,7 @@ export function validateRoomModerator(obj, h1Decision) {
 
 function roomAgentMessages(agent, evidence, technicalMsg) {
   const role = agent === "technical"
-    ? "You are the technical agent in a live XAUUSD 5m trading room. Read the latest closed 5m bars and the UNVERIFIED 5m Prophet context."
+    ? "You are the technical agent in a live XAUUSD 5m trading room. Read the latest closed 5m bars and the UNVERIFIED 5m Prophet context. The H1 TradingView reading (Prophet R38, Prophet R37, GMI v12.70) is the higher-timeframe backdrop: say whether the 5m move agrees with it."
     : "You are the risk agent in a live XAUUSD 5m trading room. Challenge the technical agent: where does the 5m read conflict with the authoritative H1 decision or the news consensus? Prefer HOLD/WAIT when it does.";
   return chatMessages([
     role,
@@ -384,9 +385,14 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
   if (m5At < Date.parse(barTime)) throw Object.assign(new Error("m5 context not visible yet"), { name: "RetryableError" });
   if (new Date(m5At).toISOString() !== barTime) return { status: "stale_bar", calls: 0 };
 
-  const synth = await db.prepare("SELECT candle_key, ai_analysis FROM ai_syntheses ORDER BY id DESC LIMIT 1").first();
+  const synth = await db.prepare("SELECT candle_key, ai_analysis, prophet_metrics, gmi_metrics FROM ai_syntheses ORDER BY id DESC LIMIT 1").first();
   const decision = parseJson(synth?.ai_analysis, {})?.decision || {};
-  const h1 = { candle_key: synth?.candle_key ?? null, decision: String(decision.decision || "WAIT").toUpperCase(), confidence: decision.confidence ?? null };
+  const h1 = {
+    candle_key: synth?.candle_key ?? null,
+    decision: String(decision.decision || "WAIT").toUpperCase(),
+    confidence: decision.confidence ?? null,
+    tradingview_reading: synth ? interpretWebhookRow(synth).summary : null
+  };
   const newsThread = await db.prepare("SELECT t.id, t.ref_key, m.stance, m.confidence, m.body_json FROM agent_threads t LEFT JOIN agent_thread_messages m ON m.thread_id = t.id AND m.step = 'moderator' AND m.status = 'ok' WHERE t.kind = 'news' ORDER BY t.created_at DESC LIMIT 1").first();
   const news = newsThread ? { analysis_key: newsThread.ref_key, consensus: newsThread.stance ?? null, confidence: newsThread.confidence ?? null, summary: clip(parseJson(newsThread.body_json, {})?.summary, 300) } : null;
 
@@ -515,8 +521,8 @@ function h1Title(candleKey, decision) {
   return `H1 candle ${when} · decision ${decision || "WAIT"}`;
 }
 
-function h1Post(candleKey, synthesisJson) {
-  const synthesis = parseJson(synthesisJson, {}) || {};
+function h1Post(candleKey, synth) {
+  const synthesis = parseJson(synth?.ai_analysis, {}) || {};
   const decision = synthesis.decision || {};
   const fusion = synthesis.evidence_fusion || {};
   const ms = Number(String(candleKey).split(":").pop());
@@ -528,7 +534,8 @@ function h1Post(candleKey, synthesisJson) {
     candle_open: Number.isFinite(ms) ? new Date(ms).toISOString() : null,
     decision: decision.decision || "WAIT",
     confidence: decision.confidence ?? null,
-    reasoning: clip(reasoning, 1200)
+    reasoning: clip(reasoning, 1200),
+    tradingview: interpretWebhookRow(synth)
   };
 }
 
@@ -540,11 +547,11 @@ export async function listH1Threads(db, { limit = 20 } = {}) {
   } catch { return []; }
   const out = [];
   for (const r of rows) {
-    const synth = await db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(r.candle_key).first();
+    const synth = await db.prepare("SELECT ai_analysis, prophet_metrics, gmi_metrics FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(r.candle_key).first();
     const run = await db.prepare("SELECT run_id FROM bus_messages WHERE id = ?").bind(r.last_id).first();
     const msgs = (await db.prepare("SELECT * FROM bus_messages WHERE candle_key = ? AND run_id = ? ORDER BY id").bind(r.candle_key, run?.run_id).all()).results || [];
     const mod = msgs.map(busRowToMessage).find(m => m.agent === "moderator" && m.status === "ok");
-    const post = h1Post(r.candle_key, synth?.ai_analysis);
+    const post = h1Post(r.candle_key, synth);
     out.push({ id: `h1:${r.candle_key}`, kind: "h1", ref_key: r.candle_key, title: h1Title(r.candle_key, post.decision), created_at: r.first_ts, reply_count: msgs.length, consensus: mod?.stance ?? null, post });
   }
   return out;
@@ -567,7 +574,7 @@ export async function readH1Thread(db, candleKey) {
       m.parent_id = null;
     }
   }
-  const synth = await db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(candleKey).first();
-  const post = h1Post(candleKey, synth?.ai_analysis);
+  const synth = await db.prepare("SELECT ai_analysis, prophet_metrics, gmi_metrics FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(candleKey).first();
+  const post = h1Post(candleKey, synth);
   return { id: `h1:${candleKey}`, kind: "h1", ref_key: candleKey, title: h1Title(candleKey, post.decision), created_at: msgs[0]?.ts ?? null, post, messages: buildMessageTree(msgs) };
 }

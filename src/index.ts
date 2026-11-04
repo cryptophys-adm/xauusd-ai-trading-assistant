@@ -132,6 +132,7 @@ import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
 import { liveRoomEnabled, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread } from "./agent-threads.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
+import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 
 function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
@@ -1681,9 +1682,9 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   }
   if (url.pathname.startsWith("/api/decision/")) {
     const key = decodeURIComponent(url.pathname.slice("/api/decision/".length));
-    const row = await env.DB.prepare("SELECT candle_key, timestamp, ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY timestamp DESC LIMIT 1").bind(key).first<JsonObject>();
+    const row = await env.DB.prepare("SELECT candle_key, timestamp, ai_analysis, prophet_metrics, gmi_metrics FROM ai_syntheses WHERE candle_key = ? ORDER BY timestamp DESC LIMIT 1").bind(key).first<JsonObject>();
     if (!row) return dashboardJson({ status: "not_found" }, 404);
-    return dashboardJson({ status: "ok", candle_key: row.candle_key, timestamp: row.timestamp, synthesis: parseJsonText(row.ai_analysis, null) });
+    return dashboardJson({ status: "ok", candle_key: row.candle_key, timestamp: row.timestamp, synthesis: parseJsonText(row.ai_analysis, null), tradingview_reading: interpretWebhookRow(row) });
   }
   if (url.pathname === "/api/threads") {
     try {
