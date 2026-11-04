@@ -85,7 +85,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - The codes follow the Pine sources exactly.
   - It is deterministic, never a model output, and never changes the H1 decision.
   - It is served by `GET /api/decision/:key` (`tradingview_reading`) and in the Threads 1H post (`post.tradingview`). Nexus shows it as "TradingView signals (H1)".
-  - It is fed to the bus technical agent (`tradingview_reading`), which must interpret each indicator by name, even on WAIT.
+  - It is fed to the bus technical agent (evidence key `tradingview`, no underscore so the model does not echo a field name), which must interpret each indicator by name, even on WAIT.
   - It is also fed to the bus moderator, to news threads (technical side) and to the live room (as the H1 backdrop).
 - Neither feature writes into the H1 chain's evidence, prompts or decision. Stances are discussion only: no orders.
 - `POST /preview/news-analysis-fixture` exists only when `PREVIEW_FIXTURES_ENABLED` is `"true"` (set only in `wrangler.preview.jsonc`), so preview-e2e can prove a news thread.

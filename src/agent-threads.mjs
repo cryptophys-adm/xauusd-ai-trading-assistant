@@ -347,7 +347,7 @@ export function validateRoomModerator(obj, h1Decision) {
 
 function roomAgentMessages(agent, evidence, technicalMsg) {
   const role = agent === "technical"
-    ? "You are the technical agent in a live XAUUSD 5m trading room. Read the latest closed 5m bars and the UNVERIFIED 5m Prophet context. The H1 TradingView reading (Prophet R38, Prophet R37, GMI v12.70) is the higher-timeframe backdrop: say whether the 5m move agrees with it."
+    ? "You are the technical agent in a live XAUUSD 5m trading room. Read the latest closed 5m bars and the UNVERIFIED 5m Prophet context. The H1 TradingView reading (Prophet R38, Prophet R37, GMI v12.70) is the higher-timeframe backdrop: say whether the 5m move agrees with it. Call it \"the H1 TradingView reading\", never by a field name."
     : "You are the risk agent in a live XAUUSD 5m trading room. Challenge the technical agent: where does the 5m read conflict with the authoritative H1 decision or the news consensus? Prefer HOLD/WAIT when it does.";
   return chatMessages([
     role,
@@ -391,7 +391,7 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
     candle_key: synth?.candle_key ?? null,
     decision: String(decision.decision || "WAIT").toUpperCase(),
     confidence: decision.confidence ?? null,
-    tradingview_reading: synth ? interpretWebhookRow(synth).summary : null
+    tradingview: synth ? interpretWebhookRow(synth).summary : null
   };
   const newsThread = await db.prepare("SELECT t.id, t.ref_key, m.stance, m.confidence, m.body_json FROM agent_threads t LEFT JOIN agent_thread_messages m ON m.thread_id = t.id AND m.step = 'moderator' AND m.status = 'ok' WHERE t.kind = 'news' ORDER BY t.created_at DESC LIMIT 1").first();
   const news = newsThread ? { analysis_key: newsThread.ref_key, consensus: newsThread.stance ?? null, confidence: newsThread.confidence ?? null, summary: clip(parseJson(newsThread.body_json, {})?.summary, 300) } : null;

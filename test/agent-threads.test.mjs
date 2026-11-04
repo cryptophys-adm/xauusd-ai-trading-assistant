@@ -158,6 +158,9 @@ test("live room: technical, risk (reply to technical), moderator; primary model 
   assert.equal(evidence.m5.label, "UNVERIFIED 5m");
   assert.equal(evidence.m5.recent_bars.length, 12);
   assert.equal(evidence.h1.decision, "WAIT");
+  assert.match(evidence.h1.tradingview, /TradingView indicators/, "the room sees the H1 TradingView reading");
+  const prompts = e.AI.calls.map(c => c.request.messages.map(m => m.content).join("\n")).join("\n");
+  assert.doesNotMatch(prompts, /tradingview_reading/, "no snake_case key the model could echo into its text");
 });
 
 test("live room never uses the paid fallback model", async () => {

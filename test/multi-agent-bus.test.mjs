@@ -139,9 +139,9 @@ test("evidence is compact valid JSON, keeps lanes apart and strips unknown field
   assert.equal(ev.technical.local_computation.trusted_only_when, "approved_by_parity");
   assert.deepEqual(ev.news.fundamental_news.headlines, ["Fed holds rates", "Gold steady"]);
   assert.equal(ev.technical.h1_chain_decision.decision, "WAIT");
-  assert.deepEqual(ev.technical.tradingview_reading.lines.map(l => l.source), ["Prophet R38", "Prophet R37", "GMI v12.70"]);
-  assert.match(ev.technical.tradingview_reading.summary, /TradingView indicators/);
-  assert.equal(ev.news.tradingview_reading, undefined, "the news lane does not get the technical reading");
+  assert.deepEqual(ev.technical.tradingview.lines.map(l => l.source), ["Prophet R38", "Prophet R37", "GMI v12.70"]);
+  assert.match(ev.technical.tradingview.summary, /TradingView indicators/);
+  assert.equal(ev.news.tradingview, undefined, "the news lane does not get the technical reading");
 });
 
 test("the technical agent is told to interpret each TradingView indicator; the moderator sees the reading", async () => {
@@ -150,7 +150,7 @@ test("the technical agent is told to interpret each TradingView indicator; the m
   const techR1 = e.AI.calls[0].request.messages[1].content;
   const newsR1 = e.AI.calls[1].request.messages[1].content;
   assert.match(techR1, /Interpret each indicator by name \(Prophet R38, Prophet R37 and GMI v12\.70\)/);
-  assert.match(techR1, /"tradingview_reading"/);
+  assert.match(techR1, /"tradingview":\{"summary"/);
   assert.doesNotMatch(newsR1, /Interpret each indicator by name/);
   const moderator = e.AI.calls.at(-1).request.messages.map(m => m.content).join("\n");
   assert.match(moderator, /TRADINGVIEW READING/);

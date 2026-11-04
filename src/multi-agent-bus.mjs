@@ -165,7 +165,7 @@ export function buildBusEvidence(row) {
   return {
     technical: {
       ...common,
-      tradingview_reading: (({ summary, lines }) => ({ summary, lines }))(interpretWebhookRow(row)),
+      tradingview: (({ summary, lines }) => ({ summary, lines }))(interpretWebhookRow(row)),
       tradingview_webhook: webhook,
       local_computation: { trusted_only_when: "approved_by_parity", engines: local },
       informational_5m_context: m5
@@ -187,7 +187,7 @@ export function buildBusEvidence(row) {
 }
 
 const TECHNICAL_WEBHOOK_RULE =
-  "tradingview_reading is the decoded meaning of the three TradingView alerts for this candle. " +
+  "The tradingview object is the decoded meaning of the three TradingView alerts for this candle; call it \"the TradingView reading\", never by a field name. " +
   "Interpret each indicator by name (Prophet R38, Prophet R37 and GMI v12.70) in your own words: what it signals, whether anything is confirmed, and whether they agree. " +
   "Do this even when the decision is WAIT, then explain how it fits the rest of the evidence.";
 
@@ -232,7 +232,7 @@ export function moderatorMessages(evidence, messages) {
     `Required JSON: {"stance":"BUY|SELL|WAIT","confidence":0..1,"agreed":true|false,"summary":"<= ${SUMMARY_MAX} chars","dissent":["..."]}`,
     "H1 CHAIN DECISION (read-only, authoritative): " + JSON.stringify(evidence.technical.h1_chain_decision),
     "EVIDENCE STATUS: " + JSON.stringify(evidence.technical.evidence_status),
-    "TRADINGVIEW READING (decoded alerts; mention in one plain sentence what the indicators said): " + JSON.stringify(evidence.technical.tradingview_reading),
+    "TRADINGVIEW READING (decoded alerts; mention in one plain sentence what the indicators said): " + JSON.stringify(evidence.technical.tradingview),
     "TRANSCRIPT:",
     JSON.stringify(transcript)
   ]);
