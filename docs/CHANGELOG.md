@@ -6,6 +6,13 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-04
 
+- `1f37a7c` (PR #48) feat(evidence): add informational (untrusted) 5m context field to fusion bundle.
+- `663b411` (PR #47) docs: RFC informational (non-trusted) 5m engine in evidence bundle.
+- `8e664f4` (PR #46) feat(engines): informational 5m prophet context producer (B1).
+- `dd291fe` (PR #45) feat(nexus): surface 5m OHLCV context in technical decision view.
+- `ed49480` (PR #44) docs: RFC multi-agent communication bus (proposal).
+- `770ff3d` (PR #43) feat(nexus): surface technical decision debate in dashboard.
+- `4fe4b7e` (PR #42) docs: add canonical changelog; reference from SSOT.
 - `2f3930a` (PR #41) fix(parity): scheduled reconcile sweep + local-lane diagnostics.
 - `f515beb` (PR #40) canonical SSOT + AGENTS.md rules; mark stale docs historical; topology guard test.
 - `553548e` (PR #39) fix(agents): token budgets for reasoning models; never store raw response objects.
