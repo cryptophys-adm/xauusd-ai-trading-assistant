@@ -44,3 +44,38 @@ export function extractJsonObject(text) {
   }
   return null;
 }
+
+/**
+ * Token budgets per stage. glm-4.7-flash and nemotron are reasoning models: with
+ * chat messages they spend completion tokens on a hidden reasoning trace before
+ * writing the answer, so small budgets end with finish_reason "length" and
+ * message.content === null.
+ */
+export const MAX_TOKENS = Object.freeze({ analyst: 4096, counselor: 4096, reasoner: 6144 });
+
+/**
+ * Text of a Workers AI response (legacy `response` shape or OpenAI-style
+ * chat.completion). Never returns a serialized response object: when the model
+ * produced no answer text, returns a short explanatory marker instead.
+ */
+export function extractModelText(result) {
+  if (typeof result === "string") return result;
+  if (!result || typeof result !== "object") return String(result ?? "");
+  for (const key of ["response", "output_text", "text"]) {
+    if (typeof result[key] === "string") return result[key];
+  }
+  const first = Array.isArray(result.choices) ? result.choices[0] : null;
+  if (first && typeof first === "object") {
+    if (typeof first.text === "string") return first.text;
+    const content = first.message?.content;
+    if (typeof content === "string" && content.trim()) return content;
+    if (Array.isArray(content)) {
+      const joined = content.map((part) => (typeof part === "string" ? part : typeof part?.text === "string" ? part.text : "")).join("");
+      if (joined.trim()) return joined;
+    }
+    return first.finish_reason === "length"
+      ? "[no answer: the model used its whole token budget on reasoning]"
+      : "[no answer: the model returned no text]";
+  }
+  return "[no answer: unrecognised model response shape]";
+}

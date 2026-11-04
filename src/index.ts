@@ -2,7 +2,7 @@ import { WorkerEntrypoint, tracing } from "cloudflare:workers";
 import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { parseTradingViewJson } from "./tradingview-json.mjs";
-import { chatMessages, cleanModelText, extractJsonObject } from "./model-text.mjs";
+import { chatMessages, cleanModelText, extractJsonObject, extractModelText, MAX_TOKENS } from "./model-text.mjs";
 import { knowledgeForPrompt } from "./knowledge-prompt.mjs";
 
 // knowledge-base v4 is generated from the Pine SSOT sources and bundled with the Worker
@@ -178,28 +178,7 @@ function extractText(result: unknown): string {
 }
 
 function extractRawText(result: unknown): string {
-  if (typeof result === "string") return result;
-  if (result && typeof result === "object") {
-    const r = result as JsonObject;
-
-    // Workers AI models expose text through different response shapes.
-    for (const key of ["response", "output_text", "text"]) {
-      if (typeof r[key] === "string") return r[key] as string;
-    }
-
-    const choices = r.choices;
-    if (Array.isArray(choices) && choices[0] && typeof choices[0] === "object") {
-      const first = choices[0] as JsonObject;
-      if (typeof first.text === "string") return first.text;
-      const message = first.message;
-      if (message && typeof message === "object") {
-        const content = (message as JsonObject).content;
-        if (typeof content === "string") return content;
-      }
-    }
-    return JSON.stringify(result);
-  }
-  return String(result ?? "");
+  return extractModelText(result);
 }
 
 function parseDecision(text: string): JsonObject {
@@ -385,7 +364,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "Do not produce entry, stop-loss, take-profit, position size, or a technical BUY/SELL order.",
       "NEWS EVIDENCE:", JSON.stringify(evidence)
     ]),
-    max_tokens: 1000,
+    max_tokens: MAX_TOKENS.analyst,
     temperature: 0.1
   } as never); });
   const analystText = extractText(analystResult);
@@ -407,7 +386,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "NEWS EVIDENCE:", JSON.stringify(evidence),
       "ANALYST:", analystText
     ]),
-    max_tokens: 1100,
+    max_tokens: MAX_TOKENS.counselor,
     temperature: 0.1
   } as never); });
   const counselorText = extractText(counselorResult);
@@ -432,7 +411,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "ANALYST:", analystText,
       "COUNSELOR:", counselorText
     ]),
-    max_tokens: 1200,
+    max_tokens: MAX_TOKENS.reasoner,
     temperature: 0.1
   } as never); });
   const reasonerText = extractText(reasonerResult);
@@ -762,7 +741,7 @@ async function runAnalysis(
       "EVIDENCE:",
       JSON.stringify(evidence)
     ]),
-    max_tokens: 700,
+    max_tokens: MAX_TOKENS.analyst,
     temperature: 0.1
   } as never); });
 
@@ -793,7 +772,7 @@ async function runAnalysis(
       "ANALYST:",
       analystText
     ]),
-    max_tokens: 1400,
+    max_tokens: MAX_TOKENS.counselor,
     temperature: 0.1
   } as never); });
   const counselorText = extractText(counselorResult);
@@ -825,7 +804,7 @@ async function runAnalysis(
       "COUNSELOR:",
       counselorText
     ]),
-    max_tokens: 1200,
+    max_tokens: MAX_TOKENS.reasoner,
     temperature: 0.1
   } as never); });
   const reasonerText = extractText(reasonerResult);
@@ -1187,7 +1166,7 @@ async function runAnalysisFromBundle(
         "POLICY:",
         knowledge
       ]),
-      max_tokens: 700,
+      max_tokens: MAX_TOKENS.analyst,
       temperature: 0.1
     } as never);
     });
@@ -1218,7 +1197,7 @@ async function runAnalysisFromBundle(
         "ANALYST:",
         analystText
       ]),
-      max_tokens: 1400,
+      max_tokens: MAX_TOKENS.counselor,
       temperature: 0.1
     } as never);
     });
@@ -1251,7 +1230,7 @@ async function runAnalysisFromBundle(
         "COUNSELOR:",
         counselorText
       ]),
-      max_tokens: 1200,
+      max_tokens: MAX_TOKENS.reasoner,
       temperature: 0.1
     } as never);
     });
