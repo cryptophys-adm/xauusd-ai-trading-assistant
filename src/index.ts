@@ -40,6 +40,8 @@ export interface Env {
   AI_MODEL_COUNSELOR: string;
   AI_MODEL_REASONER: string;
   REQUIRED_SOURCES: string;
+  MULTI_AGENT_MODEL?: string;
+  MULTI_AGENT_FALLBACK_MODEL?: string;
   MULTI_AGENT_BUS_ENABLED?: string;
   MULTI_AGENT_MAX_CALLS_PER_HOUR?: string;
   PARITY_PROMOTE_AFTER?: string;
@@ -540,7 +542,6 @@ async function ensureBusSchema(env: Env): Promise<void> {
 async function runMultiAgentBus(env: Env, fusion: any, candleKey: string): Promise<any[]> {
   const enabled = String(env.MULTI_AGENT_BUS_ENABLED || "false").toLowerCase() === "true";
   if (!enabled) return [];
-  await ensureBusSchema(env);
   const started = Date.now();
   const messages: any[] = [];
   const agents = ["technical", "news"];
@@ -664,8 +665,6 @@ async function runAnalysis(
     analysis_key: asText(fusion.fundamental_news_analysis?.analysis_key),
     reason: fusion.fundamental_news_analysis ? undefined : "No fresh, valid completed fundamental news analysis is available."
   };
-
-  const busMessages = await runMultiAgentBus(env, fusion, candleKey);
 
   const evidence = {
     schema_version: fusion.schema_version,
@@ -875,7 +874,6 @@ async function runAnalysis(
     reasoner_model: env.AI_MODEL_REASONER,
     reasoner_output: reasonerText,
     news_evidence: newsEvidence,
-    bus_messages: busMessages,
     decision
   };
 
@@ -1565,7 +1563,6 @@ async function countBusCallsLastHour(env: Env): Promise<number> {
 }
 
 async function processMultiAgentBusTask(env: Env, task: Extract<QueueTask, { kind: "multi_agent_bus" }>): Promise<void> {
-  await ensureBusSchema(env);
   const started = Date.now();
   const maxCalls = Number(env.MULTI_AGENT_MAX_CALLS_PER_HOUR || "20");
   // read evidence snapshot from ai_syntheses

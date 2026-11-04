@@ -42,7 +42,9 @@
     "REQUIRED_SOURCES": "prophet_r38,prophet_r37_ssot,gmi_v12_70",
     "INGEST_URL": "https://news.cryptophys.work",
     "MULTI_AGENT_BUS_ENABLED": "false",
-    "MULTI_AGENT_MAX_CALLS_PER_HOUR": "20"
+    "MULTI_AGENT_MAX_CALLS_PER_HOUR": "20",
+    "MULTI_AGENT_MODEL": "reflection-ai/beam-1.0-501b-a23b",
+    "MULTI_AGENT_FALLBACK_MODEL": "@cf/zai-org/glm-4.7-flash"
   },
   "routes": [
     {
