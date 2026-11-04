@@ -8,7 +8,7 @@
 
 import { chatMessages, cleanModelText, extractJsonObject, extractModelText } from "./model-text.mjs";
 
-export const BUS_DEFAULT_MODEL = "reflection-ai/beam-1.0-501b-a23b";
+export const BUS_DEFAULT_MODEL = "@cf/zai-org/glm-5.3-flash";
 export const BUS_DEFAULT_FALLBACK_MODEL = "@cf/zai-org/glm-4.7-flash";
 export const BUS_AGENTS = Object.freeze(["technical", "news"]);
 export const BUS_ROUNDS = 2;
@@ -17,7 +17,9 @@ export const BUS_MODERATOR_ROUND = 3;
 // sequential calls need room beyond 180 s; queue consumers may run 15 minutes.
 export const BUS_WALL_BUDGET_MS = 300_000;
 const PRIMARY_CALL_TIMEOUT_MS = 60_000;
-export const BUS_MAX_TOKENS = Object.freeze({ agent: 2048, moderator: 4096 });
+// glm-5.3-flash always reasons (reasoning cannot be disabled), so leave room
+// for the hidden trace before the JSON answer.
+export const BUS_MAX_TOKENS = Object.freeze({ agent: 3072, moderator: 4096 });
 export const BUS_STANCES = Object.freeze(["BUY", "SELL", "WAIT"]);
 const INSIGHT_MAX = 600;
 const SUMMARY_MAX = 1000;
@@ -283,9 +285,10 @@ function withTimeout(promise, ms) {
 }
 
 function requestFor(model, messages, schemaName, schema, maxTokens, effort, primary) {
-  // Beam (third-party, Chat Completions) supports strict json_schema and
-  // reasoning_effort. The fallback Workers AI model gets the plain chat form;
-  // its output is validated the same way afterwards.
+  // The primary model (glm-5.3-flash) takes the Chat Completions form with a
+  // strict json_schema and reasoning_effort (low | high | max; "medium" would
+  // map to max). The fallback model gets the plain chat form; its output is
+  // validated the same way afterwards.
   return primary
     ? { messages, max_completion_tokens: maxTokens, temperature: 0.1, reasoning_effort: effort, response_format: { type: "json_schema", json_schema: { name: schemaName, strict: true, schema } } }
     : { messages, max_tokens: maxTokens, temperature: 0.1 };
@@ -453,7 +456,7 @@ export async function runMultiAgentBus(env, task, { clock = () => Date.now() } =
   } else {
     const call = await callBusModel(env, {
       messages: moderatorMessages(evidence, transcript), schemaName: "bus_moderator", schema: MODERATOR_JSON_SCHEMA,
-      maxTokens: BUS_MAX_TOKENS.moderator, effort: "medium", deadline, clock, runState
+      maxTokens: BUS_MAX_TOKENS.moderator, effort: "high", deadline, clock, runState
     });
     calls += call.calls || 0;
     const validation = call.status === "answered" ? (call.truncated ? { valid: false, errors: [] } : validateModeratorOutput(call.obj)) : null;

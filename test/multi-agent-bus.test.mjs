@@ -48,7 +48,7 @@ function agentReply(agent, round, stance = "WAIT", extra = {}) {
 }
 const moderatorReply = (extra = {}) => ({ stance: "WAIT", confidence: 0.5, agreed: true, summary: "Both agents prefer WAIT while evidence is degraded.", dissent: [], ...extra });
 
-/** Fake env.AI: answers in the Chat Completions shape Beam uses; records every call. */
+/** Fake env.AI: answers in the Chat Completions shape; records every call. */
 function fakeAI(handler) {
   const calls = [];
   return {
@@ -89,7 +89,7 @@ test("flag false: no model calls, no rows", async () => {
   assert.equal(busEnabled({}), false, "flag defaults to off");
 });
 
-test("flag true: 5 calls in order, all to the Beam model with strict json_schema", async () => {
+test("flag true: 5 calls in order, all to glm-5.3-flash with strict json_schema", async () => {
   const e = env();
   const result = await runMultiAgentBus(e, task());
   assert.equal(result.status, "complete");
@@ -101,8 +101,8 @@ test("flag true: 5 calls in order, all to the Beam model with strict json_schema
     assert.equal(c.request.response_format.type, "json_schema");
     assert.equal(c.request.response_format.json_schema.strict, true);
     assert.equal(c.request.response_format.json_schema.schema.additionalProperties, false);
-    assert.ok(c.request.max_completion_tokens >= 2048);
-    assert.ok(["low", "medium"].includes(c.request.reasoning_effort));
+    assert.ok(c.request.max_completion_tokens >= 3072);
+    assert.ok(["low", "high"].includes(c.request.reasoning_effort), "never medium (maps to max on glm-5.3-flash)");
   }
   assert.equal(e.AI.calls[4].request.max_completion_tokens, 4096, "moderator gets a reasoning-sized budget");
   const bus = await readBus(e.DB, CANDLE);
@@ -166,16 +166,16 @@ test("finish_reason length with null content is invalid_output", async () => {
   assert.equal(bus.consensus, null, "no consensus from an invalid moderator answer");
 });
 
-test("Beam error falls back to the fallback model, records why, and skips Beam for the rest of the run", async () => {
+test("a primary-model error falls back, records why, and skips the primary for the rest of the run", async () => {
   const e = env({ AI: fakeAI(({ model, request }) => model === BUS_DEFAULT_MODEL ? new Error("5007: model not available") : happyHandler({ request: { ...request, response_format: { json_schema: { name: /moderator/i.test(request.messages[0].content) ? "bus_moderator" : "bus_agent" } } } })) });
   await runMultiAgentBus(e, task());
-  assert.equal(e.AI.calls.filter(c => c.model === BUS_DEFAULT_MODEL).length, 1, "Beam is tried once per run");
+  assert.equal(e.AI.calls.filter(c => c.model === BUS_DEFAULT_MODEL).length, 1, "the primary is tried once per run");
   const fallbackCalls = e.AI.calls.filter(c => c.model === BUS_DEFAULT_FALLBACK_MODEL);
   assert.equal(fallbackCalls.length, 5);
   assert.ok(fallbackCalls.every(c => c.request.response_format === undefined && c.request.max_tokens > 0), "fallback uses the plain Workers AI chat form");
   const bus = await readBus(e.DB, CANDLE);
   assert.ok(bus.items.every(m => m.fallback_used === true && m.model === BUS_DEFAULT_FALLBACK_MODEL && m.status === "ok"));
-  assert.ok(bus.items.every(m => /5007: model not available/.test(m.primary_error)), "the Beam error is stored for diagnosis");
+  assert.ok(bus.items.every(m => /5007: model not available/.test(m.primary_error)), "the primary error is stored for diagnosis");
 });
 
 test("both models failing records agent_failed and still finishes", async () => {

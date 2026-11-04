@@ -340,14 +340,14 @@ jobs:
           assert.equal(bus?.items?.length, 5, "bus must store technical+news x 2 rounds + moderator");
           assert.ok(bus.items.every(item => item.status === "ok"),
             "every bus message must be schema-valid model output");
-          // Beam (third-party, AI Gateway Unified Billing) answers, or every fallback answer must say why
-          // Beam was not used. A fallback without a recorded primary_error would be a silent switch.
-          const beamAnswered = bus.items.some(item => item.fallback_used === false && item.model === "reflection-ai/beam-1.0-501b-a23b");
+          // The primary model (glm-5.3-flash) answers, or every fallback answer must say why it was
+          // not used. A fallback without a recorded primary_error would be a silent switch.
+          const primaryAnswered = bus.items.some(item => item.fallback_used === false && item.model === "@cf/zai-org/glm-5.3-flash");
           const fallbackExplained = bus.items.every(item => item.fallback_used !== true || (typeof item.primary_error === "string" && item.primary_error.length > 0));
           assert.ok(fallbackExplained, "every fallback answer must record the primary model error");
-          assert.ok(beamAnswered || bus.items.every(item => item.fallback_used === true),
-            "a run is either answered by Beam or fully on the recorded fallback");
-          if (!beamAnswered) console.log("::warning::Multi-agent bus ran on the fallback model. Beam error: " + bus.items[0].primary_error);
+          assert.ok(primaryAnswered || bus.items.every(item => item.fallback_used === true),
+            "a run is either answered by the primary model or fully on the recorded fallback");
+          if (!primaryAnswered) console.log("::warning::Multi-agent bus ran on the fallback model. Primary model error: " + bus.items[0].primary_error);
           assert.ok(bus.items.filter(item => item.agent !== "moderator").every(item => Array.isArray(item.refs) && item.refs.length > 0),
             "agent messages must cite refs");
           assert.ok(["BUY", "SELL", "WAIT"].includes(bus.consensus?.stance), "moderator consensus is required");
@@ -364,7 +364,7 @@ jobs:
             missing_evidence_fail_closed: "PASS",
             duplicate_queue_idempotency: "PASS",
             multi_agent_bus_real_models: "PASS",
-            multi_agent_bus_model: bus.items.some(item => item.fallback_used === false) ? "beam" : "fallback (see primary_error)",
+            multi_agent_bus_model: bus.items.some(item => item.fallback_used === false) ? "glm-5.3-flash" : "fallback (see primary_error)",
             complete_AI_chain: "NOT_TESTED: no real fresh news/Pine-parity evidence in this fixture"
           }, null, 2));
           NODE

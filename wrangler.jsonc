@@ -44,7 +44,7 @@
     // Multi-agent bus (docs/MULTI_AGENT_BUS.md): OFF in production until the owner approves Phase 4.
     "MULTI_AGENT_BUS_ENABLED": "false",
     "MULTI_AGENT_MAX_CALLS_PER_HOUR": "20",
-    "MULTI_AGENT_MODEL": "reflection-ai/beam-1.0-501b-a23b",
+    "MULTI_AGENT_MODEL": "@cf/zai-org/glm-5.3-flash",
     "MULTI_AGENT_FALLBACK_MODEL": "@cf/zai-org/glm-4.7-flash"
   },
   "routes": [

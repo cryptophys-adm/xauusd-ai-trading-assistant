@@ -35,7 +35,7 @@ Move from a sequential Analyst → Counselor → Reasoner chain to a **multi-age
 - First agents: `technical` and `news`, plus a `moderator`. 2 rounds, 300 s wall budget, at most 5 calls per H1 synthesis.
 - The existing Analyst → Counselor → Reasoner chain stays authoritative. The bus runs as a separate queue task after the synthesis is persisted and never feeds back into it.
 - Cadence: H1 only. The 5m live room is Phase 3b (`docs/RFC_NEXUS_AGENT_SOCIAL.md`).
-- Model: Beam (`reflection-ai/beam-1.0-501b-a23b`, $0) with a single fallback to `@cf/zai-org/glm-4.7-flash`.
+- Model (owner decision 2026-11-04): `@cf/zai-org/glm-5.3-flash` ($0.15/M input, $0.50/M output, about $1.4/month at H1 cadence) with a single fallback to `@cf/zai-org/glm-4.7-flash`. Beam (`reflection-ai/beam-1.0-501b-a23b`) was tried first but needs AI Gateway Unified Billing credits (`2021: Insufficient unified billing credits`).
 
 ## 7. Next steps (original plan)
 1. Add 5m local computation + parity registry (separate PR, tested).
