@@ -120,7 +120,7 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-import { reconcileLocalComputation, reconcileRecentCandles, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
+import { reconcileLocalComputation, reconcileRecentCandles, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 
 function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
@@ -499,9 +499,14 @@ async function claimAnalysisRun(env: Env, candleKey: string, inputFingerprint: s
 
 async function setAnalysisRunStatus(env: Env, candleKey: string, status: string, details: JsonObject, errorCode: string | null = null): Promise<void> {
   try {
-    await env.DB.prepare(
+    const result = await env.DB.prepare(
       "UPDATE analysis_runs SET status = ?, updated_at = datetime('now'), completed_at = CASE WHEN ? = 'complete' THEN datetime('now') ELSE NULL END, error_code = ?, result_json = ? WHERE candle_key = ?"
     ).bind(status, status, errorCode, JSON.stringify(details), candleKey).run();
+    if (!Number(result?.meta?.changes || 0)) {
+      await env.DB.prepare(
+        "INSERT INTO analysis_runs (candle_key, status, attempt_count, started_at, updated_at, completed_at, error_code, result_json) VALUES (?, ?, 1, datetime('now'), datetime('now'), CASE WHEN ? = 'complete' THEN datetime('now') ELSE NULL END, ?, ?)"
+      ).bind(candleKey, status, status, errorCode, JSON.stringify(details)).run();
+    }
   } catch (error) {
     console.error("analysis_run_status_update_failed", JSON.stringify({
       candle_key: candleKey,
@@ -1423,16 +1428,31 @@ async function processAnalysisTask(env: Env, task: Extract<QueueTask, { kind: "a
   }
 }
 
+async function loadWebhookPayloadsFromD1(env: Env, candleKey: string, required: string[]): Promise<Record<string, WebhookPayload>> {
+  const payloads: Record<string, WebhookPayload> = {};
+  try {
+    const rows = await env.DB.prepare("SELECT source, payload FROM webhook_sources WHERE candle_key = ?").bind(candleKey).all<{ source: string; payload: string }>();
+    for (const row of rows.results || []) {
+      if (!required.includes(row.source)) continue;
+      try { payloads[row.source] = JSON.parse(row.payload) as WebhookPayload; } catch { /* malformed */ }
+    }
+  } catch { /* fall back to KV below */ }
+  if (required.every(source => payloads[source])) return payloads;
+  // KV cache fallback (consistency only).
+  await Promise.all(required.map(async (source) => {
+    if (payloads[source]) return;
+    try {
+      const raw = await env.WEBHOOK_BUFFER.get("candle:" + candleKey + ":" + source);
+      if (raw) payloads[source] = JSON.parse(raw) as WebhookPayload;
+    } catch { /* ignore */ }
+  }));
+  return payloads;
+}
+
 async function processWebhookReconcileTask(env: Env, task: Extract<QueueTask, { kind: "webhook_reconcile" }>): Promise<void> {
   await reconcileLocalComputation(env, task.candle_key);
   const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
-  const records = await Promise.all(required.map(source => env.WEBHOOK_BUFFER.get("candle:" + task.candle_key + ":" + source)));
-  const payloads: Record<string, WebhookPayload> = {};
-  for (let index = 0; index < required.length; index++) {
-    const raw = records[index];
-    if (!raw) continue;
-    try { payloads[required[index]] = JSON.parse(raw) as WebhookPayload; } catch { /* malformed evidence is excluded */ }
-  }
+  const payloads = await loadWebhookPayloadsFromD1(env, task.candle_key, required);
   const missing = required.filter(source => !payloads[source]);
   await env.WEBHOOK_BUFFER.put("reconciled:" + safeKeyPart(task.candle_key) + ":" + task.source, JSON.stringify({
     status: missing.length ? "waiting_for_sources" : "sources_complete",
@@ -1458,15 +1478,9 @@ async function processWebhookReconcileTask(env: Env, task: Extract<QueueTask, { 
 async function processLocalCalculationReconcileTask(env: Env, task: Extract<QueueTask, { kind: "local_calculation_reconcile" }>): Promise<void> {
   await reconcileLocalComputation(env, task.candle_key);
   const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
-  const [localRecords, webhookRecords] = await Promise.all([
-    Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get("localcalc:" + task.candle_key + ":" + engine))),
-    Promise.all(required.map(source => env.WEBHOOK_BUFFER.get("candle:" + task.candle_key + ":" + source)))
-  ]);
-  if (!localRecords.every(Boolean) || !webhookRecords.every(Boolean)) return;
-  const payloads: Record<string, WebhookPayload> = {};
-  for (let index = 0; index < required.length; index++) {
-    try { payloads[required[index]] = JSON.parse(webhookRecords[index] as string) as WebhookPayload; } catch { /* malformed evidence is excluded */ }
-  }
+  const localRecords = await Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get("localcalc:" + task.candle_key + ":" + engine)));
+  if (!localRecords.every(Boolean)) return;
+  const payloads = await loadWebhookPayloadsFromD1(env, task.candle_key, required);
   if (!required.every(source => payloads[source])) return;
   const existing = await env.WEBHOOK_BUFFER.get("analysis:" + safeKeyPart(task.candle_key));
   if (existing) {
@@ -1479,6 +1493,27 @@ async function processLocalCalculationReconcileTask(env: Env, task: Extract<Queu
       message: error instanceof Error ? error.message : "Unknown analysis error", event_id: task.event_id
     }, "analysis_failed");
     throw error;
+  }
+}
+
+async function backfillRecentAnalyses(env: Env, now = Date.now()): Promise<void> {
+  const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
+  const keys = closedH1CandleKeys(now, { lookback: 3 });
+  for (const candleKey of keys) {
+    const openMs = Number(candleKey.split(":").pop());
+    if (!Number.isFinite(openMs)) continue;
+    if (now - openMs > 2 * 60 * 60 * 1000) continue;
+    try {
+      const existingRun = await env.DB.prepare("SELECT status FROM analysis_runs WHERE candle_key = ?").bind(candleKey).first<{ status: string }>();
+      if (existingRun) continue;
+      const payloads = await loadWebhookPayloadsFromD1(env, candleKey, required);
+      if (!required.every(source => payloads[source])) continue;
+      const ticker = "OANDA:XAUUSD";
+      const timeframe = "H1";
+      await runAnalysis(env, candleKey, ticker, timeframe, payloads);
+    } catch (error) {
+      await setAnalysisRunStatus(env, candleKey, "failed", { message: error instanceof Error ? error.message : "Unknown analysis error" }, "analysis_failed");
+    }
   }
 }
 
@@ -1765,7 +1800,8 @@ export default {
       // per-event reconcile tasks run within seconds of evidence arrival and can
       // all miss a candle when KV has not yet settled (cached misses); without a
       // later sweep those parity comparisons would be lost permanently.
-      ctx.waitUntil(reconcileRecentCandles(env).then(result => {
+      ctx.waitUntil(reconcileRecentCandles(env).then(async result => {
+        try { await backfillRecentAnalyses(env); } catch (e) { console.error("backfill_failed", e instanceof Error ? e.message : String(e)); }
         console.log("Scheduled parity sweep completed", JSON.stringify({
           swept_at: result.swept_at,
           candle_keys: result.candle_keys,

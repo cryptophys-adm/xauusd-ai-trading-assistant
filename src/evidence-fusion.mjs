@@ -1,10 +1,10 @@
-import { filterRecentUniqueArticles } from "./news-filter.mjs";
+import { filterRecentUniqueArticles, NEWS_LOOKBACK_MS } from "./news-filter.mjs";
 export const EVIDENCE_CONTRACT_VERSION = "cryptophys.evidence-fusion.v1";
 export const LOCAL_CALCULATION_CONTRACT_VERSION = "cryptophys.local-calculation.v1";
 export const WEBHOOK_EVIDENCE_CONTRACT_VERSION = "cryptophys.webhook-evidence.v1";
 export const NEWS_ANALYSIS_CONTRACT_VERSION = "cryptophys.completed-news-analysis.v1";
 export const LOCAL_ENGINES = Object.freeze(["mizan", "prophet", "gmi"]);
-export const NEWS_MAX_AGE_MS = 60 * 60 * 1000;
+export const NEWS_MAX_AGE_MS = 75 * 60 * 1000;
 export const LOCAL_CALC_MAX_AGE_MS = 30 * 60 * 1000;
 // Provisional acceptance policy: must be reviewed against the deployed candle-time semantics before production.
 export const CANDLE_MAX_AGE_MS_BY_TIMEFRAME = Object.freeze({
@@ -145,7 +145,8 @@ function validateNewsAnalysis(newsAnalysis, expectedSymbol, now) {
   } else {
     // Validate the underlying article publication times, not just the time at which
     // an old digest was analyzed or fetched. Historical rows fail closed.
-    const recentUniqueArticles = filterRecentUniqueArticles(evidence.articles, now, NEWS_MAX_AGE_MS);
+    const referenceTime = Number.isFinite(fetchedAt) ? fetchedAt : now;
+    const recentUniqueArticles = filterRecentUniqueArticles(evidence.articles, referenceTime, NEWS_LOOKBACK_MS);
     if (recentUniqueArticles.length !== evidence.articles.length) {
       errors.push("news_articles_outside_lookback_or_duplicate");
     }
