@@ -62,3 +62,23 @@ test("backfill skips candles older than 2h", async () => {
   assert.equal(calls.length, 2);
   assert.ok(!calls.includes(keys[2]));
 });
+
+
+test("backfill records failed and continues", async () => {
+  const now = Date.parse("2026-11-04T03:00:00.000Z");
+  const required = ["prophet_r38","prophet_r37_ssot","gmi_v12_70"];
+  const payloads = Object.fromEntries(required.map(s=>[s,{x:1}]));
+  const keys = closedH1CandleKeys(now, { lookback: 2 });
+  function makeDb() {
+    return { prepare(sql) {
+      if (sql.includes("analysis_runs")) return { bind() { return { async first() { return null; } }; } };
+      return { bind() { return { async all() { return { results: [] }; } }; } };
+    } };
+  }
+  const env = { DB: makeDb(), WEBHOOK_BUFFER: kv({}), REQUIRED_SOURCES: required.join(",") };
+  const calls = [];
+  const statuses = [];
+  await backfillRecentAnalyses(env, { now, lookback: 2, loadPayloads: async (_e,k,req) => payloads, runAnalysis: async (_e,k) => { if (k === keys[0]) throw new Error("boom"); calls.push(k); }, setStatus: async (_e,k,st) => { statuses.push({k,st}); } });
+  assert.ok(statuses.some(s => s.st === "failed"));
+  assert.equal(calls.length, 1);
+});
