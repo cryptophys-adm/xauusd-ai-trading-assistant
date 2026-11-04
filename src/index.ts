@@ -40,6 +40,10 @@ export interface Env {
   AI_MODEL_COUNSELOR: string;
   AI_MODEL_REASONER: string;
   REQUIRED_SOURCES: string;
+  MULTI_AGENT_BUS_ENABLED?: string;
+  MULTI_AGENT_MAX_CALLS_PER_HOUR?: string;
+  MULTI_AGENT_MODEL?: string;
+  MULTI_AGENT_FALLBACK_MODEL?: string;
   PARITY_PROMOTE_AFTER?: string;
   PARITY_ABS_TOLERANCE?: string;
   PARITY_REL_TOLERANCE?: string;
@@ -122,6 +126,7 @@ function asText(value: unknown): string {
 
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
+import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
 
 function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
@@ -517,6 +522,20 @@ async function setAnalysisRunStatus(env: Env, candleKey: string, status: string,
   }
 }
 
+/**
+ * Shadow multi-agent bus (docs/MULTI_AGENT_BUS.md): enqueued only after the H1
+ * synthesis is persisted and only when MULTI_AGENT_BUS_ENABLED is "true". It
+ * never feeds back into the chain's evidence, prompts or decision.
+ */
+async function enqueueMultiAgentBus(env: Env, candleKey: string, inputFingerprint: string): Promise<void> {
+  if (!busEnabled(env)) return;
+  try {
+    await sendQueueTask(env.XAUUSD_EVENTS, buildMultiAgentBusTask({ candleKey, inputFingerprint }) as unknown as QueueTask);
+  } catch (error) {
+    console.error("bus_enqueue_failed", JSON.stringify({ candle_key: candleKey, error: error instanceof Error ? error.message : String(error) }));
+  }
+}
+
 async function runAnalysis(
   env: Env,
   candleKey: string,
@@ -689,6 +708,7 @@ async function runAnalysis(
     };
     await env.WEBHOOK_BUFFER.put("analysis:" + safeKeyPart(candleKey), JSON.stringify({ ...details, created_at: timestamp, sources: Object.keys(payloads), decision: synthesis }), { expirationTtl: 60 * 60 * 24 * 14 });
     await setAnalysisRunStatus(env, candleKey, "degraded", details, "required_evidence_unavailable");
+    await enqueueMultiAgentBus(env, candleKey, inputFingerprint);
     return { status: "degraded", missing_evidence: fusion.missing_evidence };
   }
 
@@ -893,6 +913,7 @@ async function runAnalysis(
       news_analyzed_at: asText(fusion.fundamental_news_analysis?.analyzed_at)
     }
   }, null);
+  await enqueueMultiAgentBus(env, candleKey, inputFingerprint);
   return { status: analysisStatus, missing_evidence: fusion.missing_evidence };
   });
 }
@@ -1489,6 +1510,11 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
     if (task.kind === "webhook_reconcile") return processWebhookReconcileTask(env, task);
     if (task.kind === "local_calculation_reconcile") return processLocalCalculationReconcileTask(env, task);
     if (task.kind === "analysis") return processAnalysisTask(env, task);
+    if (task.kind === "multi_agent_bus") {
+      const result = await runMultiAgentBus(env, task);
+      console.log("multi_agent_bus", JSON.stringify({ candle_key: task.candle_key, ...result }));
+      return;
+    }
     throw new Error("Unsupported queue task kind");
   });
 }
@@ -1623,6 +1649,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     const row = await env.DB.prepare("SELECT candle_key, timestamp, ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY timestamp DESC LIMIT 1").bind(key).first<JsonObject>();
     if (!row) return dashboardJson({ status: "not_found" }, 404);
     return dashboardJson({ status: "ok", candle_key: row.candle_key, timestamp: row.timestamp, synthesis: parseJsonText(row.ai_analysis, null) });
+  }
+  if (url.pathname === "/api/bus") {
+    try {
+      const bus = await readBus(env.DB, url.searchParams.get("candle_key"));
+      return dashboardJson({ status: "ok", enabled: busEnabled(env), ...bus });
+    } catch (error) {
+      console.error("bus_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "bus_unavailable" }, 500);
+    }
   }
   if (url.pathname === "/api/m5-context") {
     try {
