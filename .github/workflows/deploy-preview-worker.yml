@@ -53,11 +53,18 @@ jobs:
           set -euo pipefail
           PREVIEW_WORKER_NAME="xauusd-ai-preview-${GITHUB_RUN_ID}"
           echo "PREVIEW_WORKER_NAME=$PREVIEW_WORKER_NAME" >> "$GITHUB_ENV"
-          set +e
-          DEPLOY_OUTPUT="$(npx wrangler deploy --name "$PREVIEW_WORKER_NAME" --config wrangler.preview.jsonc 2>&1)"
-          DEPLOY_STATUS=$?
-          set -e
-          printf '%s\n' "$DEPLOY_OUTPUT"
+          # A brand-new Worker can briefly read back as "does not exist" (code 10007) right after
+          # its first upload; retry only that eventual-consistency error.
+          for attempt in 1 2 3; do
+            set +e
+            DEPLOY_OUTPUT="$(npx wrangler deploy --name "$PREVIEW_WORKER_NAME" --config wrangler.preview.jsonc 2>&1)"
+            DEPLOY_STATUS=$?
+            set -e
+            printf '%s\n' "$DEPLOY_OUTPUT"
+            if [ "$DEPLOY_STATUS" -eq 0 ] || ! printf '%s' "$DEPLOY_OUTPUT" | grep -q 'code: 10007'; then break; fi
+            echo "Preview deploy hit Cloudflare code 10007 (attempt $attempt); retrying in 10s." >&2
+            sleep 10
+          done
           if [ "$DEPLOY_STATUS" -ne 0 ]; then
             echo "Preview Worker deployment failed with exit code $DEPLOY_STATUS." >&2
             exit "$DEPLOY_STATUS"
