@@ -340,14 +340,14 @@ jobs:
           assert.equal(bus?.items?.length, 5, "bus must store technical+news x 2 rounds + moderator");
           assert.ok(bus.items.every(item => item.status === "ok"),
             "every bus message must be schema-valid model output");
-          // The primary model (glm-5.3-flash) answers, or every fallback answer must say why it was
-          // not used. A fallback without a recorded primary_error would be a silent switch.
+          // Acceptance: the primary model (glm-5.3-flash, owner decision) must answer. A fallback-only
+          // run does not prove the configured model and fails. Any fallback answer must record why the
+          // primary was not used (never a silent switch).
           const primaryAnswered = bus.items.some(item => item.fallback_used === false && item.model === "@cf/zai-org/glm-5.3-flash");
           const fallbackExplained = bus.items.every(item => item.fallback_used !== true || (typeof item.primary_error === "string" && item.primary_error.length > 0));
+          if (!primaryAnswered) console.log("::error::Multi-agent bus never reached the primary model. Primary model error: " + bus.items[0]?.primary_error);
+          assert.ok(primaryAnswered, "the primary model (@cf/zai-org/glm-5.3-flash) must answer at least one bus step");
           assert.ok(fallbackExplained, "every fallback answer must record the primary model error");
-          assert.ok(primaryAnswered || bus.items.every(item => item.fallback_used === true),
-            "a run is either answered by the primary model or fully on the recorded fallback");
-          if (!primaryAnswered) console.log("::warning::Multi-agent bus ran on the fallback model. Primary model error: " + bus.items[0].primary_error);
           assert.ok(bus.items.filter(item => item.agent !== "moderator").every(item => Array.isArray(item.refs) && item.refs.length > 0),
             "agent messages must cite refs");
           assert.ok(["BUY", "SELL", "WAIT"].includes(bus.consensus?.stance), "moderator consensus is required");
