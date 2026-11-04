@@ -3,6 +3,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import worker from "./index.mjs";
 import { readChartCandles } from "./chart-reader.mjs";
+import { readDiagnostics } from "./diagnostics.mjs";
 
 /**
  * Read-only RPC entrypoint for the Nexus dashboard (Service Binding with
@@ -12,6 +13,11 @@ import { readChartCandles } from "./chart-reader.mjs";
 export class MarketDataReader extends WorkerEntrypoint {
   async candles(options) {
     return readChartCandles(this.env, options || {});
+  }
+
+  /** Read-only lane diagnostics (KV state); never triggers a TradingView MCP call. */
+  async diagnostics() {
+    return readDiagnostics(this.env);
   }
 }
 

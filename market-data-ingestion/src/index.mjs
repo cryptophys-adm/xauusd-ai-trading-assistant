@@ -1,7 +1,7 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
 import { publishLocalComputation, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
-import { SERIES, PROVIDER, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest } from "./tradingview-source.mjs";
+import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest } from "./tradingview-source.mjs";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -9,7 +9,7 @@ const JSON_HEADERS = {
 };
 
 const WORKER_NAME = "xauusd-tradingview-pull-adapter";
-const STATUS_KEY = "market-data:v2:last-refresh";
+const STATUS_KEY = LAST_REFRESH_KEY;
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), { status, headers: JSON_HEADERS });

@@ -398,6 +398,7 @@ setInterval(()=>{ loadStatus(); loadNews(); loadDecisions(); }, 30000);
 
 interface MarketDataReader {
   candles(options: { timeframe?: string; limit?: number }): Promise<{ status: number; body: unknown }>;
+  diagnostics(): Promise<{ status: number; body: unknown }>;
 }
 interface Env { MARKET_DATA?: MarketDataReader }
 
@@ -416,6 +417,18 @@ export default {
         return new Response(JSON.stringify(body), { status, headers: { ...JSON_HEADERS, "cache-control": "public, max-age=30" } });
       } catch {
         return json({ error: "market_data_unavailable" }, 502);
+      }
+    }
+
+    // Local-lane diagnostics: read-only KV state of the pull adapter (last
+    // refresh, latest closed bar per series, last publish, quota budget).
+    if (request.method === "GET" && url.pathname === "/api/local-lane") {
+      if (typeof env.MARKET_DATA?.diagnostics !== "function") return json({ error: "market_data_binding_missing" }, 503);
+      try {
+        const { status, body } = await env.MARKET_DATA.diagnostics();
+        return new Response(JSON.stringify(body), { status, headers: { ...JSON_HEADERS, "cache-control": "no-store" } });
+      } catch {
+        return json({ error: "market_data_diagnostics_failed" }, 502);
       }
     }
 
@@ -440,6 +453,6 @@ export default {
       return new Response(DASHBOARD_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" } });
     }
 
-    return json({ error: "Not found", endpoints: ["GET /", "GET /dashboard", "GET /api/ohlcv", "GET /api/*"] }, 404);
+    return json({ error: "Not found", endpoints: ["GET /", "GET /dashboard", "GET /api/ohlcv", "GET /api/local-lane", "GET /api/*"] }, 404);
   }
 };

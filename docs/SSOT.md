@@ -28,7 +28,7 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
 
 ## 3. Three AI input lanes
 1. **TradingView webhook** (`POST /webhook`, once per closed 1H bar). The sources are `prophet_r38`, `prophet_r37_ssot` and `gmi_v12_70`. This lane is the comparator.
-2. **Local computation** (primary). The engines are MizanLib (record id `mizan`), Prophet and GMI, computed by the pull adapter from closed TradingView bars. Trust is earned only through the autonomous parity registry: 24 consecutive candles that match the webhook. There is no manual allowlist and no operator approval.
+2. **Local computation** (primary). The engines are MizanLib (record id `mizan`), Prophet and GMI, computed by the pull adapter from closed TradingView bars. Trust is earned only through the autonomous parity registry: 24 consecutive candles that match the webhook. There is no manual allowlist and no operator approval. Because the per-event reconcile runs within seconds of evidence arrival and can miss a candle while KV is still settling, the AI Worker also reconciles the last closed H1 candles on a cron (`10-59/15 * * * *`); the reconcile is idempotent, so a candle is counted at most once.
 3. **Fundamental news**: TradingView MCP news. The AI Worker analyses it at cron `:06`.
 
 Coverage per Pine parameter is in `docs/LOCAL_COMPUTATION_OWNERSHIP.md`.

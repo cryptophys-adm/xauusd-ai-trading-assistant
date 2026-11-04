@@ -6,7 +6,8 @@
   "workers_dev": true,
   "triggers": {
     "crons": [
-      "6 * * * *"
+      "6 * * * *",
+      "10-59/15 * * * *"
     ]
   },
   "ai": {

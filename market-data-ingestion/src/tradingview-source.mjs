@@ -11,6 +11,8 @@ export const PROVIDER = "TradingView MCP (mcp-tv-get-ohlcv via xauusd-fundamenta
 export const CANONICAL_SYMBOL = "OANDA:XAUUSD";
 const SERIES_KEY_PREFIX = "market-data:v2:series:";
 const BUDGET_KEY_PREFIX = "market-data:v2:mcp-calls:";
+/** KV key of the last refresh summary, written by every pull cycle. */
+export const LAST_REFRESH_KEY = "market-data:v2:last-refresh";
 const MAX_GATEWAY_COUNT = 8000;
 
 // Order is priority: the chart timeframe is refreshed first when the per-run
