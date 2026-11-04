@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import {
   buildWebhookQueueTask,
   buildLocalCalculationQueueTask,
+  buildMultiAgentBusQueueTask,
   sendQueueTask,
   createQueueConsumer
 } from "../src/queue-runtime.mjs";
@@ -109,4 +110,19 @@ test("worker source keeps asynchronous queueing, provenance, and AI tracing hook
   assert.match(wrangler, /xauusd-webhook-events-dlq/);
   assert.match(wrangler, /"max_retries": 5/);
   assert.match(wrangler, /"traces":\s*\{\s*"enabled": true/);
+});
+
+
+test("multi-agent bus queue task has deterministic event identity", () => {
+  const input = { candleKey: "OANDA:XAUUSD:H1:2026-11-03T20:00:00.000Z", inputFingerprint: "abc123", enqueuedAt: "2026-11-03T21:00:00.000Z" };
+  const a = buildMultiAgentBusQueueTask(input);
+  const b = buildMultiAgentBusQueueTask(input);
+  assert.deepEqual(a, b);
+  assert.equal(a.kind, "multi_agent_bus");
+  assert.equal(a.event_id, "bus:OANDA:XAUUSD:H1:2026-11-03T20:00:00.000Z:abc123");
+});
+
+test("multi-agent bus queue task rejects missing inputs", () => {
+  assert.throws(() => buildMultiAgentBusQueueTask({ candleKey: "c1" }), TypeError);
+  assert.throws(() => buildMultiAgentBusQueueTask({ inputFingerprint: "fp" }), TypeError);
 });

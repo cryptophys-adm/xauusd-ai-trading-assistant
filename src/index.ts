@@ -406,9 +406,9 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     analyzed_at: analyzedAt,
     article_count: newsEvidence.article_count,
     symbols: evidence.symbols,
-    analyst_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b",
+    analyst_model: env.AI_MODEL_ANALYST,
     analyst_output: analystText,
-    counselor_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b",
+    counselor_model: env.AI_MODEL_COUNSELOR,
     counselor_output: counselorText,
     reasoner_model: env.AI_MODEL_REASONER,
     reasoner_output: reasonerText,
@@ -539,44 +539,6 @@ async function ensureBusSchema(env: Env): Promise<void> {
   )`).run();
 }
 
-async function runMultiAgentBus(env: Env, fusion: any, candleKey: string): Promise<any[]> {
-  const enabled = String(env.MULTI_AGENT_BUS_ENABLED || "false").toLowerCase() === "true";
-  if (!enabled) return [];
-  const started = Date.now();
-  const messages: any[] = [];
-  const agents = ["technical", "news"];
-  for (let round = 1; round <= 2; round++) {
-    if (Date.now() - started > 90000) break;
-    for (const agent of agents) {
-      if (Date.now() - started > 90000) break;
-      let insight = "";
-      let confidence: number | null = null;
-      const refs: string[] = [];
-      try {
-        if (agent === "technical") {
-          insight = "Trusted lanes: " + (fusion?.input_lanes?.tradingview_webhook?.present_sources || []).join(",") + "; local: " + (fusion?.input_lanes?.local_computation?.present_engines || []).join(",");
-          confidence = 0.5;
-          refs.push("fusion");
-          if (fusion?.informational_5m_context) refs.push("informational_5m_context (UNVERIFIED)");
-        } else {
-          insight = "News lane present: " + String(fusion?.fundamental_news_analysis !== null);
-          confidence = 0.5;
-          refs.push("fundamental_news");
-        }
-      } catch {
-        insight = "agent_failed";
-        confidence = 0;
-      }
-      const msg = { candle_key: candleKey, round, agent, ts: new Date().toISOString(), insight, confidence, refs };
-      messages.push(msg);
-      try {
-        await env.DB.prepare("INSERT INTO bus_messages (candle_key, round, agent, ts, insight, confidence, refs_json, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-          .bind(candleKey, round, agent, msg.ts, insight, confidence, JSON.stringify(refs), "shadow").run();
-      } catch { /* ignore */ }
-    }
-  }
-  return messages;
-}
 
 async function runAnalysis(
   env: Env,
@@ -692,8 +654,8 @@ async function runAnalysis(
     const synthesis = {
       candle_key: candleKey, ticker, timeframe, timestamp, evidence_fusion: fusion,
       analysis_chain_status: "not_invoked_due_to_degraded_evidence",
-      analyst_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b", analyst_output: null,
-      counselor_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b", counselor_output: null,
+      analyst_model: env.AI_MODEL_ANALYST, analyst_output: null,
+      counselor_model: env.AI_MODEL_COUNSELOR, counselor_output: null,
       reasoner_model: env.AI_MODEL_REASONER, reasoner_output: null,
       news_evidence: newsEvidence, decision
     };
@@ -867,9 +829,9 @@ async function runAnalysis(
     timeframe,
     timestamp,
     evidence_fusion: fusion,
-    analyst_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b",
+    analyst_model: env.AI_MODEL_ANALYST,
     analyst_output: analystText,
-    counselor_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b",
+    counselor_model: env.AI_MODEL_COUNSELOR,
     counselor_output: counselorText,
     reasoner_model: env.AI_MODEL_REASONER,
     reasoner_output: reasonerText,
@@ -1296,9 +1258,9 @@ async function runAnalysisFromBundle(
     schema_version: bundle.schema_version,
     symbol: bundle.symbol,
     candle: bundle.candle,
-    analyst_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b",
+    analyst_model: env.AI_MODEL_ANALYST,
     analyst_output: analystText,
-    counselor_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b",
+    counselor_model: env.AI_MODEL_COUNSELOR,
     counselor_output: counselorText,
     reasoner_model: env.AI_MODEL_REASONER,
     reasoner_output: reasonerText,
@@ -1563,6 +1525,9 @@ async function countBusCallsLastHour(env: Env): Promise<number> {
 }
 
 async function processMultiAgentBusTask(env: Env, task: Extract<QueueTask, { kind: "multi_agent_bus" }>): Promise<void> {
+  await ensureBusSchema(env);
+  const existing = await env.DB.prepare("SELECT COUNT(*) AS n FROM bus_messages WHERE run_id = ?").bind(task.input_fingerprint).first<{ n: number }>();
+  if (Number(existing?.n || 0) > 0) return;
   const started = Date.now();
   const maxCalls = Number(env.MULTI_AGENT_MAX_CALLS_PER_HOUR || "20");
   // read evidence snapshot from ai_syntheses
@@ -1571,9 +1536,8 @@ async function processMultiAgentBusTask(env: Env, task: Extract<QueueTask, { kin
   try {
     const row = await env.DB.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY timestamp DESC LIMIT 1").bind(task.candle_key).first<{ ai_analysis: string }>();
     const syn = row ? JSON.parse(row.ai_analysis || "{}") : null;
-    evidence = syn?.evidence_fusion ? syn : syn;
     chainDecision = syn?.decision?.decision ?? null;
-    // evidence snapshot = fusion bundle embedded in synthesis
+    // Prefer the versioned fusion bundle; fall back to the whole synthesis.
     evidence = syn?.evidence_fusion ?? syn;
   } catch { evidence = null; }
   if (!evidence) return;
@@ -1807,8 +1771,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     return dashboardJson({
       status: "ok", analysis_key: row.analysis_key, fetched_at: row.fetched_at, analyzed_at: row.analyzed_at, article_count: row.article_count,
       evidence: parseJsonText(row.evidence_json, null),
-      analyst_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b", analyst_output: asText(row.analyst_output),
-      counselor_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b", counselor_output: asText(row.counselor_output),
+      analyst_model: env.AI_MODEL_ANALYST, analyst_output: asText(row.analyst_output),
+      counselor_model: env.AI_MODEL_COUNSELOR, counselor_output: asText(row.counselor_output),
       reasoner_model: env.AI_MODEL_REASONER, reasoner_output: asText(row.reasoner_output),
       recommendation: parseJsonText(row.recommendation_json, {})
     });
