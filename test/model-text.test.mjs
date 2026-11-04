@@ -31,3 +31,13 @@ test("extractJsonObject tolerates fences, prose and trailing text", () => {
   assert.equal(extractJsonObject("no json"), null);
   assert.equal(extractJsonObject("[1,2]"), null);
 });
+
+test("extractModelText reads chat.completion content and never returns the raw object", async () => {
+  const { extractModelText } = await import("../src/model-text.mjs");
+  assert.equal(extractModelText({ response: "legacy" }), "legacy");
+  assert.equal(extractModelText({ choices: [{ message: { content: "answer" }, finish_reason: "stop" }] }), "answer");
+  const cut = extractModelText({ object: "chat.completion", choices: [{ message: { content: null, reasoning: "thinking..." }, finish_reason: "length" }], usage: {} });
+  assert.match(cut, /^\[no answer: the model used its whole token budget on reasoning\]$/);
+  assert.ok(!cut.includes("chat.completion"));
+  assert.match(extractModelText({ foo: 1 }), /^\[no answer/);
+});
