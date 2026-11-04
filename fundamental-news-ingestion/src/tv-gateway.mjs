@@ -115,10 +115,17 @@ async function callOhlcvTool(env, endpoint, accessToken, args, deps) {
   const toolError = payload?.error || payload?.result?.isError === true;
   if (!response.ok || toolError) {
     const quota = QUOTA_PATTERN.test(upstreamMessage || "");
-    throw Object.assign(new Error(quota ? "TradingView MCP tool quota exceeded" : "TradingView MCP get_ohlcv failed"), {
-      code: quota ? "mcp_quota_exceeded" : (response.ok ? "mcp_tool_error" : "mcp_upstream_error"),
+    const rateLimited = !quota && response.status === 429;
+    const retryAfterSeconds = Number.parseInt(String(response.headers?.get?.("retry-after") || ""), 10);
+    const retryAfterMs = Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1000 : null;
+    throw Object.assign(new Error(
+      quota ? "TradingView MCP tool quota exceeded" : rateLimited ? "TradingView MCP rate limited (HTTP 429)" : "TradingView MCP get_ohlcv failed"
+    ), {
+      code: quota ? "mcp_quota_exceeded" : rateLimited ? "mcp_rate_limited" : (response.ok ? "mcp_tool_error" : "mcp_upstream_error"),
       status: quota ? 429 : (response.ok ? 502 : response.status),
-      quota_cooldown_until: quota ? deps.parseQuotaCooldownUntil(upstreamMessage) : null
+      quota_cooldown_until: quota
+        ? deps.parseQuotaCooldownUntil(upstreamMessage)
+        : rateLimited ? deps.rateLimitCooldownUntil(retryAfterMs) : null
     });
   }
   const tool = parseToolResult(payload);
@@ -169,11 +176,12 @@ export async function runOhlcvRequests(env, raw, deps) {
     try {
       results.push({ ok: true, request: args, ...(await callOhlcvTool(env, endpoint, accessToken, args, deps)) });
     } catch (error) {
-      if (error?.code === "mcp_quota_exceeded") {
-        try { await deps.writeQuotaCooldown(env, error.quota_cooldown_until); } catch { /* best effort */ }
+      if (error?.code === "mcp_quota_exceeded" || error?.code === "mcp_rate_limited") {
+        const reason = error.code === "mcp_rate_limited" ? "provider_rate_limited" : "provider_quota_exceeded";
+        try { await deps.writeQuotaCooldown(env, error.quota_cooldown_until, reason); } catch { /* best effort */ }
         // Stop immediately: every further call would also be rejected and count against the account.
-        results.push({ ok: false, request: args, error: "mcp_quota_exceeded" });
-        return { status: 429, body: { contract: OHLCV_GATEWAY_CONTRACT, error: "mcp_quota_exceeded", quota_cooldown_until: error.quota_cooldown_until, results } };
+        results.push({ ok: false, request: args, error: error.code });
+        return { status: 429, body: { contract: OHLCV_GATEWAY_CONTRACT, error: error.code, quota_cooldown_until: error.quota_cooldown_until, results } };
       }
       results.push({ ok: false, request: args, error: asString(error?.code) || "mcp_request_failed", upstream_status: Number.isInteger(error?.status) ? error.status : null });
     }

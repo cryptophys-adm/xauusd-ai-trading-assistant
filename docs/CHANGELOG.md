@@ -6,6 +6,8 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-04
 
+- fix(news,ohlcv): a generic HTTP 429 from TradingView MCP (without the TOOL_QUOTA_EXCEEDED text) now opens a short shared cooldown (`provider_rate_limited`, Retry-After clamped to 30 s..15 min) and is not retried; a shorter cooldown never overwrites a longer quota suspension.
+- `015d0b4` (PR #58) feat(phase2): real multi-agent bus on `@cf/zai-org/glm-5.3-flash`, shadow only, flag off in production.
 - bus: primary model is `@cf/zai-org/glm-5.3-flash` (owner decision; Beam needs AI Gateway Unified Billing credits); moderator `reasoning_effort` is `high` (`medium` maps to `max` on GLM-5.3), agent token budget is 3072.
 - fix(preview-e2e): allow 300 s for the five sequential multi-agent model calls; the fallback model exceeded the previous 180 s budget before moderator consensus.
 - feat(phase2): real multi-agent bus (shadow, flag off in production): `src/multi-agent-bus.mjs`, queue task `multi_agent_bus`, `GET /api/bus`, Beam + glm-4.7-flash fallback, strict JSON schema + validation, hourly/300 s budgets that fail closed, idempotent per run; 20 tests with node:sqlite D1 + fake `env.AI`; preview-e2e proves 5 real model messages + consensus. Supersedes PR #53.

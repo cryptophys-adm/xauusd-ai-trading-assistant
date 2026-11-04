@@ -144,18 +144,36 @@ async function readQuotaCooldown(env) {
   }
 }
 
-async function writeQuotaCooldown(env, until) {
+async function writeQuotaCooldown(env, until, reason = "provider_quota_exceeded") {
   if (!env.OAUTH_STORE) return;
   const cooldownUntil = asString(until) || new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  // Never shorten an active cooldown: a short rate-limit pause must not
+  // overwrite a longer quota suspension recorded by another invocation.
+  const current = await readQuotaCooldown(env);
+  if (current && Date.parse(current.until) >= Date.parse(cooldownUntil)) return;
   await env.OAUTH_STORE.put(
     QUOTA_COOLDOWN_KEY,
     JSON.stringify({
       until: cooldownUntil,
-      reason: "provider_quota_exceeded",
+      reason,
       recorded_at: new Date().toISOString()
     }),
     { expirationTtl: 60 * 60 * 24 }
   );
+}
+
+const RATE_LIMIT_COOLDOWN_MIN_MS = 30 * 1000;
+const RATE_LIMIT_COOLDOWN_DEFAULT_MS = 60 * 1000;
+const RATE_LIMIT_COOLDOWN_MAX_MS = 15 * 60 * 1000;
+
+/**
+ * Shared cooldown end for a generic HTTP 429 (rate limit without the
+ * TOOL_QUOTA_EXCEEDED message): honour Retry-After, clamped to 30 s..15 min.
+ */
+function rateLimitCooldownUntil(retryAfterMs, now = Date.now()) {
+  const requested = Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? retryAfterMs : RATE_LIMIT_COOLDOWN_DEFAULT_MS;
+  const bounded = Math.min(Math.max(requested, RATE_LIMIT_COOLDOWN_MIN_MS), RATE_LIMIT_COOLDOWN_MAX_MS);
+  return new Date(now + bounded).toISOString();
 }
 
 async function fetchOAuthMetadata(env) {
@@ -715,14 +733,19 @@ async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
         : null;
       const upstreamMessage = payload ? extractMcpErrorText(payload) : text;
       const quotaExceeded = /TOOL_QUOTA_EXCEEDED|tool call quota exceeded|access to MCP is suspended/i.test(upstreamMessage);
+      const rateLimited = !quotaExceeded && response.status === 429;
       throw Object.assign(new Error(
         quotaExceeded
           ? "TradingView MCP tool quota exceeded"
-          : `TradingView MCP returned HTTP ${response.status} for symbol ${symbol}`
+          : rateLimited
+            ? `TradingView MCP rate limited (HTTP 429) for symbol ${symbol}`
+            : `TradingView MCP returned HTTP ${response.status} for symbol ${symbol}`
       ), {
-        code: quotaExceeded ? "mcp_quota_exceeded" : "mcp_upstream_error",
+        code: quotaExceeded ? "mcp_quota_exceeded" : rateLimited ? "mcp_rate_limited" : "mcp_upstream_error",
         status: quotaExceeded ? 429 : response.status,
-        quota_cooldown_until: quotaExceeded ? parseQuotaCooldownUntil(upstreamMessage) : null,
+        quota_cooldown_until: quotaExceeded
+          ? parseQuotaCooldownUntil(upstreamMessage)
+          : rateLimited ? rateLimitCooldownUntil(retryAfterMs) : null,
         retry_after_ms: retryAfterMs,
         detail: asObject(payload) || text.slice(0, 500)
       });
@@ -788,16 +811,22 @@ async function invokeMcpGetNewsWithRetry(env, metadata, accessToken, symbols) {
       return { payload, attempt };
     } catch (error) {
       lastError = error;
-      if (error?.code === "mcp_quota_exceeded") {
+      if (error?.code === "mcp_quota_exceeded" || error?.code === "mcp_rate_limited") {
+        // Quota suspension or generic HTTP 429: open the shared cooldown and do
+        // not retry, so no invocation keeps spending provider quota.
         try {
-          await writeQuotaCooldown(env, error.quota_cooldown_until);
+          await writeQuotaCooldown(
+            env,
+            error.quota_cooldown_until,
+            error.code === "mcp_rate_limited" ? "provider_rate_limited" : "provider_quota_exceeded"
+          );
         } catch {
           console.error("provider_quota_cooldown_store_failed");
         }
         break;
       }
       const status = Number.parseInt(String(error?.status || ""), 10);
-      const retryable = !Number.isFinite(status) || status === 429 || (status >= 500 && status <= 599);
+      const retryable = !Number.isFinite(status) || (status >= 500 && status <= 599);
       if (!retryable || attempt === maxAttempts) break;
 
       const retryDelay = Number.isFinite(Number(error?.retry_after_ms))
@@ -1170,6 +1199,7 @@ export function runTvOhlcv(env, requests) {
     readQuotaCooldown,
     writeQuotaCooldown,
     parseQuotaCooldownUntil,
+    rateLimitCooldownUntil,
     extractMcpErrorText
   });
 }
@@ -1182,6 +1212,9 @@ export const internals = {
   normalizeArticle,
   normalizeTokenPayload,
   resolveTokenAuthMethod,
+  rateLimitCooldownUntil,
+  writeQuotaCooldown,
+  readQuotaCooldown,
   resetForTests() {
     metadataCache = { value: null, expiresAt: 0 };
   }
