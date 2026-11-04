@@ -373,6 +373,11 @@ jobs:
           assert.deepEqual((tvReading?.lines || []).map(l => l.source), ["Prophet R38", "Prophet R37", "GMI v12.70"],
             "the decision API must decode all three webhook alerts");
           assert.ok([tvReading.summary, ...tvReading.lines.map(l => l.text)].every(t => t && !codeLike(t)), "the webhook reading must be natural language");
+          // The fixture alerts carry a confirmed buy and a bullish, aligned GMI verdict: the stored
+          // indicator fields must survive (they also carry a `metrics` object).
+          assert.match(tvReading.lines[0].text, /confirmed BUY signal/, "Prophet R38 buy confirmation must be decoded");
+          assert.match(tvReading.lines[2].text, /a bullish verdict/, "GMI verdict must be decoded");
+          assert.equal(tvReading.bias, "bullish");
           assert.deepEqual(h1Thread.post.tradingview?.lines?.map(l => l.source), ["Prophet R38", "Prophet R37", "GMI v12.70"],
             "the H1 thread post must show the webhook reading");
           const technicalR1 = bus.items.find(item => item.round === 1 && item.agent === "technical");

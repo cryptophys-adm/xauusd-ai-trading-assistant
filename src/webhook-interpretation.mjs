@@ -165,6 +165,17 @@ function parse(text) {
   try { return JSON.parse(text) || {}; } catch { return {}; }
 }
 
+/**
+ * What to store per webhook in ai_syntheses: the indicator fields of the payload, plus
+ * any `metrics` sub-object. Storing only `metrics` (the old behaviour) dropped the
+ * indicator fields whenever an alert carried one. Top-level indicator fields win.
+ */
+export function storedIndicatorMetrics(payload) {
+  if (!payload || typeof payload !== "object") return payload ?? null;
+  const { metrics, ...fields } = payload;
+  return metrics && typeof metrics === "object" && !Array.isArray(metrics) ? { ...metrics, ...fields } : fields;
+}
+
 /** Reading straight from an ai_syntheses row (prophet_metrics and gmi_metrics JSON columns). */
 export function interpretWebhookRow(row) {
   const prophet = parse(row?.prophet_metrics);

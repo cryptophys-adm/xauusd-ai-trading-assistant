@@ -132,7 +132,7 @@ import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
 import { liveRoomEnabled, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread } from "./agent-threads.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
-import { interpretWebhookRow } from "./webhook-interpretation.mjs";
+import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
 
 function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
@@ -682,10 +682,10 @@ async function runAnalysis(
       timeframe,
       timestamp,
       prophetMetrics: JSON.stringify({
-        prophet_r38: payloads.prophet_r38?.metrics ?? payloads.prophet_r38,
-        prophet_r37_ssot: payloads.prophet_r37_ssot?.metrics ?? payloads.prophet_r37_ssot
+        prophet_r38: storedIndicatorMetrics(payloads.prophet_r38),
+        prophet_r37_ssot: storedIndicatorMetrics(payloads.prophet_r37_ssot)
       }),
-      gmiMetrics: JSON.stringify(payloads.gmi_v12_70?.metrics ?? payloads.gmi_v12_70),
+      gmiMetrics: JSON.stringify(storedIndicatorMetrics(payloads.gmi_v12_70)),
       analysis: JSON.stringify(synthesis),
       model: [env.AI_MODEL_ANALYST, env.AI_MODEL_COUNSELOR, env.AI_MODEL_REASONER].join(",")
     });
@@ -858,10 +858,10 @@ async function runAnalysis(
   await upsertSynthesis(env, {
     candleKey, ticker, timeframe, timestamp,
     prophetMetrics: JSON.stringify({
-      prophet_r38: payloads.prophet_r38?.metrics ?? payloads.prophet_r38,
-      prophet_r37_ssot: payloads.prophet_r37_ssot?.metrics ?? payloads.prophet_r37_ssot
+      prophet_r38: storedIndicatorMetrics(payloads.prophet_r38),
+      prophet_r37_ssot: storedIndicatorMetrics(payloads.prophet_r37_ssot)
     }),
-    gmiMetrics: JSON.stringify(payloads.gmi_v12_70?.metrics ?? payloads.gmi_v12_70),
+    gmiMetrics: JSON.stringify(storedIndicatorMetrics(payloads.gmi_v12_70)),
     analysis: JSON.stringify(synthesis),
     model: [env.AI_MODEL_ANALYST, env.AI_MODEL_COUNSELOR, env.AI_MODEL_REASONER].join(",")
   });

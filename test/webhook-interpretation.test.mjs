@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { interpretWebhooks, interpretWebhookRow } from "../src/webhook-interpretation.mjs";
+import { interpretWebhooks, interpretWebhookRow, storedIndicatorMetrics } from "../src/webhook-interpretation.mjs";
 import { naturalLanguageErrors } from "../src/natural-language.mjs";
 
 // Production candle 2026-11-04 22:00 UTC (OANDA:XAUUSD:60:1793826000000), webhook values as stored.
@@ -75,4 +75,15 @@ test("every decoded sentence passes the natural-language rule", () => {
       assert.doesNotMatch(text, /undefined|null|NaN/, text);
     }
   }
+});
+
+test("stored metrics keep the indicator fields when an alert also carries a metrics object", () => {
+  const stored = storedIndicatorMetrics({ verdict: 3, gate: 2, gmi_dir: 1, conflict: false, metrics: { bias: "NEUTRAL", gate: 0 } });
+  assert.equal(stored.verdict, 3);
+  assert.equal(stored.gate, 2, "top-level indicator fields win over metrics");
+  assert.equal(stored.bias, "NEUTRAL");
+  assert.equal(stored.metrics, undefined);
+  assert.deepEqual(storedIndicatorMetrics({ verdict: 0 }), { verdict: 0 });
+  assert.equal(storedIndicatorMetrics(undefined), null);
+  assert.match(interpretWebhooks({ gmi: stored }).lines[0].text, /a bullish verdict/);
 });
