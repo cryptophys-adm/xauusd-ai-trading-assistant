@@ -120,7 +120,8 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-import { reconcileLocalComputation, reconcileRecentCandles, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
+import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
+import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 
 function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
@@ -1428,27 +1429,6 @@ async function processAnalysisTask(env: Env, task: Extract<QueueTask, { kind: "a
   }
 }
 
-async function loadWebhookPayloadsFromD1(env: Env, candleKey: string, required: string[]): Promise<Record<string, WebhookPayload>> {
-  const payloads: Record<string, WebhookPayload> = {};
-  try {
-    const rows = await env.DB.prepare("SELECT source, payload FROM webhook_sources WHERE candle_key = ?").bind(candleKey).all<{ source: string; payload: string }>();
-    for (const row of rows.results || []) {
-      if (!required.includes(row.source)) continue;
-      try { payloads[row.source] = JSON.parse(row.payload) as WebhookPayload; } catch { /* malformed */ }
-    }
-  } catch { /* fall back to KV below */ }
-  if (required.every(source => payloads[source])) return payloads;
-  // KV cache fallback (consistency only).
-  await Promise.all(required.map(async (source) => {
-    if (payloads[source]) return;
-    try {
-      const raw = await env.WEBHOOK_BUFFER.get("candle:" + candleKey + ":" + source);
-      if (raw) payloads[source] = JSON.parse(raw) as WebhookPayload;
-    } catch { /* ignore */ }
-  }));
-  return payloads;
-}
-
 async function processWebhookReconcileTask(env: Env, task: Extract<QueueTask, { kind: "webhook_reconcile" }>): Promise<void> {
   await reconcileLocalComputation(env, task.candle_key);
   const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
@@ -1493,27 +1473,6 @@ async function processLocalCalculationReconcileTask(env: Env, task: Extract<Queu
       message: error instanceof Error ? error.message : "Unknown analysis error", event_id: task.event_id
     }, "analysis_failed");
     throw error;
-  }
-}
-
-async function backfillRecentAnalyses(env: Env, now = Date.now()): Promise<void> {
-  const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
-  const keys = closedH1CandleKeys(now, { lookback: 3 });
-  for (const candleKey of keys) {
-    const openMs = Number(candleKey.split(":").pop());
-    if (!Number.isFinite(openMs)) continue;
-    if (now - openMs > 2 * 60 * 60 * 1000) continue;
-    try {
-      const existingRun = await env.DB.prepare("SELECT status FROM analysis_runs WHERE candle_key = ?").bind(candleKey).first<{ status: string }>();
-      if (existingRun) continue;
-      const payloads = await loadWebhookPayloadsFromD1(env, candleKey, required);
-      if (!required.every(source => payloads[source])) continue;
-      const ticker = "OANDA:XAUUSD";
-      const timeframe = "H1";
-      await runAnalysis(env, candleKey, ticker, timeframe, payloads);
-    } catch (error) {
-      await setAnalysisRunStatus(env, candleKey, "failed", { message: error instanceof Error ? error.message : "Unknown analysis error" }, "analysis_failed");
-    }
   }
 }
 
@@ -1801,7 +1760,7 @@ export default {
       // all miss a candle when KV has not yet settled (cached misses); without a
       // later sweep those parity comparisons would be lost permanently.
       ctx.waitUntil(reconcileRecentCandles(env).then(async result => {
-        try { await backfillRecentAnalyses(env); } catch (e) { console.error("backfill_failed", e instanceof Error ? e.message : String(e)); }
+        try { await backfillRecentAnalyses(env, { loadPayloads: loadWebhookPayloadsFromD1, runAnalysis }); } catch (e) { console.error("backfill_failed", e instanceof Error ? e.message : String(e)); }
         console.log("Scheduled parity sweep completed", JSON.stringify({
           swept_at: result.swept_at,
           candle_keys: result.candle_keys,

@@ -84,7 +84,7 @@ test("rejects stale completed news analysis", () => {
   assert.ok(result.validation_errors.includes("news:news_analysis_stale"));
 });
 
-test("enforces the one-hour completed-news analysis freshness boundary", () => {
+test("enforces the 75-minute completed-news analysis freshness boundary", () => {
   const input = completeInput();
   input.newsAnalysis.analyzed_at = "2026-11-01T13:44:00.000Z";
   const result = buildEvidenceFusion(input, now);
