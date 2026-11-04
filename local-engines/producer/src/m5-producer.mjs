@@ -33,6 +33,8 @@ export function buildM5ProphetContext(bars5m, { mintick = 0.001 } = {}) {
     sell_confirmed: sell,
     d_enc: o.structure?.d_enc ?? null,
     t_enc: null,
+    // Last 12 closed 5m bars for the live room (Phase 3b). Informational only.
+    recent_bars: slice.slice(-12).map((b) => ({ t: b.close_time, o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume ?? null })),
     note: "Unverified 5m context. No webhook comparator exists; do not use as trusted evidence."
   };
 }

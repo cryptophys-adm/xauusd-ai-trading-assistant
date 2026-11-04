@@ -60,6 +60,23 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - Model: `MULTI_AGENT_MODEL` = `@cf/zai-org/glm-5.3-flash` (owner decision 2026-11-04; the same model as the production Counselor, so already proven on this account; strict `json_schema`, `reasoning_effort` low/high). On an error (or a 60 s timeout) the call is retried once with `MULTI_AGENT_FALLBACK_MODEL` = `@cf/zai-org/glm-4.7-flash`, `fallback_used` is recorded, and the primary error is stored as `primary_error` on every message of that run. After the first primary failure in a run, the remaining steps go straight to the fallback. The H1 chain models are unchanged. Beam (`reflection-ai/beam-1.0-501b-a23b`) was evaluated and rejected: it needs AI Gateway Unified Billing credits.
 - The bus **never** writes into the chain's evidence, prompts or decision. Its output lives only in D1 `bus_messages` (migration `0003_bus_messages.sql`; the schema is also ensured at runtime for the preview D1), and it is read through `GET /api/bus?candle_key=` (messages, consensus, `agreement_with_chain`).
 
+### Agent threads and live 5m room (Phase 3, `docs/RFC_NEXUS_AGENT_SOCIAL.md`)
+- Code: `src/agent-threads.mjs`. Tables `agent_threads` and `agent_thread_messages` (migration `0004_agent_threads.sql`; new tables only, `0003` is never altered; the schema is also ensured at runtime for the preview D1).
+- **News threads** (behind `MULTI_AGENT_BUS_ENABLED`):
+  - After each news analysis, a `news_thread` queue task makes the analysis a post.
+  - `news` and `technical` reply, each then replies to the other's reply (`parent_id`), and a `moderator` posts the consensus.
+  - At most 5 calls, using the bus model with the bus fallback.
+- **Live 5m room** (behind `LIVE_ROOM_ENABLED`):
+  - Each 5m context submission (RPC `submitContext`, or the authenticated `POST /evidence/m5-context`) enqueues a `live_room` task that carries the context itself.
+  - When the picture changed (bias/flags/H1 decision/news), `technical` and `risk` (a reply to technical) post, then a `moderator`, using stances BUY/SELL/HOLD/WAIT/CLOSE.
+  - The moderator must state the H1 decision whenever its stance differs from it.
+  - Primary model only, never the paid fallback. The `LIVE_ROOM_MAX_CALLS_PER_HOUR` cap fails closed.
+  - Everything is labelled UNVERIFIED 5m.
+  - The 5m context now carries the last 12 closed bars (`recent_bars`) for the room. The H1 chain strips them.
+- Read APIs: `GET /api/threads?kind=news`, `GET /api/threads/:id` (nested replies), `GET /api/live?since=`. The Nexus dashboard shows **Agent Threads** and **Live Room 5m** cards.
+- Neither feature writes into the H1 chain's evidence, prompts or decision. Stances are discussion only: no orders.
+- `POST /preview/news-analysis-fixture` exists only when `PREVIEW_FIXTURES_ENABLED` is `"true"` (set only in `wrangler.preview.jsonc`), so preview-e2e can prove a news thread.
+
 ## 4. Sources and knowledge
 - **Pine sources:** `pinescript/ssot/`. Verified against the installed TradingView indicators; see `docs/PINE_SOURCE_VERIFICATION.md`. Never edit these files.
 - **Agent knowledge base:** v4, generated from Pine with line citations and bundled into the AI Worker. See `docs/KNOWLEDGE_BASE_V4.md`.

@@ -29,6 +29,21 @@ export type QueueTask =
       bundle: EvidenceBundle;
     }
   | {
+      kind: "news_thread";
+      event_id: string;
+      analysis_key: string;
+      candle_key: string;
+      enqueued_at: string;
+    }
+  | {
+      kind: "live_room";
+      event_id: string;
+      bar_time: string;
+      candle_key: string;
+      context: Record<string, unknown> | null;
+      enqueued_at: string;
+    }
+  | {
       kind: "multi_agent_bus";
       event_id: string;
       candle_key: string;

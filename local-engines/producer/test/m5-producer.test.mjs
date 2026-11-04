@@ -22,3 +22,12 @@ test("returns informational 5m context", () => {
   assert.equal(r.timeframe, "5");
   assert.ok(["BULLISH","BEARISH","NEUTRAL"].includes(r.bias));
 });
+
+test("m5 context carries the last 12 closed bars for the live room", () => {
+  const r = buildM5ProphetContext(bars(60));
+  assert.equal(r.recent_bars.length, 12);
+  const last = r.recent_bars.at(-1);
+  assert.equal(last.t, r.candle_time);
+  for (const k of ["o", "h", "l", "c"]) assert.equal(typeof last[k], "number");
+  assert.equal(r.trust_status, "informational_unverified");
+});
