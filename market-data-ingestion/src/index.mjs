@@ -245,10 +245,13 @@ const worker = {
           checked_at: new Date().toISOString()
         }));
       }
+      // Build the bundle once for both publish and informational 5m context.
+      let latestBundle = null;
+      try { latestBundle = await buildBundle(env); } catch { latestBundle = null; }
       // Publish the local_computation lane for a newly closed H1 bar (runs on cached data
       // even if this cycle's pull failed; the publisher enforces freshness and dedupe).
       try {
-        const published = await publishLocalComputation(env);
+        const published = await publishLocalComputation(env, { bundle: latestBundle });
         if (!["no_fresh_h1_close", "already_published"].includes(published.status)) {
           console.log(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish", status: published.status, candle_key: published.candle_key || null }));
         }
@@ -258,9 +261,8 @@ const worker = {
       // Informational (unverified) 5m context: build from closed M5 bars and forward
       // to the AI Worker. Never enters the trusted local_computation lane.
       try {
-        if (typeof env.AI_WORKER?.submitContext === "function") {
-          const latest = await buildBundle(env);
-          const bars = latest?.timeframes?.M5?.candles || [];
+        if (typeof env.AI_WORKER?.submitContext === "function" && latestBundle) {
+          const bars = latestBundle?.timeframes?.M5?.candles || [];
           if (Array.isArray(bars) && bars.length >= 50) {
             const context = buildM5ProphetContext(bars);
             const result = await env.AI_WORKER.submitContext(context);

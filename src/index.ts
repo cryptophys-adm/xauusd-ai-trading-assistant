@@ -1,5 +1,6 @@
 import { WorkerEntrypoint, tracing } from "cloudflare:workers";
 import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
+import { validateM5Context, freshM5Context } from "./m5-context.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { parseTradingViewJson } from "./tradingview-json.mjs";
 import { chatMessages, cleanModelText, extractJsonObject, extractModelText, MAX_TOKENS } from "./model-text.mjs";
@@ -574,10 +575,8 @@ async function runAnalysis(
     const raw = await env.SIGNAL_CACHE?.get("context:m5:latest");
     if (raw) {
       const parsed = JSON.parse(raw);
-      const receivedAt = Date.parse(String(parsed?.received_at ?? parsed?.candle_time ?? ""));
-      if (receivedAt !== null && Date.now() - receivedAt <= 10 * 60 * 1000) {
-        informational5mContext = parsed;
-      }
+      const fresh = freshM5Context(parsed, Date.now());
+      if (fresh) informational5mContext = fresh;
     }
   } catch { informational5mContext = null; }
 
@@ -1516,13 +1515,11 @@ async function consumeQueue(batch: MessageBatch<QueueTask>, env: Env): Promise<v
 async function ingestM5Context(env: Env, payload: unknown): Promise<{ status: number; body: JsonObject }> {
   const p = (payload && typeof payload === "object" && !Array.isArray(payload)) ? (payload as Record<string, unknown>) : null;
   if (!p) return { status: 400, body: { error: "Invalid 5m context payload" } };
-  if (p.schema_version !== "cryptophys.local-context.v1") return { status: 400, body: { error: "Invalid 5m context schema_version" } };
-  if (p.trust_status !== "informational_unverified") return { status: 400, body: { error: "Invalid 5m context trust_status" } };
-  if (typeof p.symbol !== "string" || !p.symbol.trim()) return { status: 400, body: { error: "symbol_required" } };
-  if (p.timeframe !== "5") return { status: 400, body: { error: "timeframe_must_be_5" } };
-  const candleAt = Date.parse(String(p.candle_time ?? ""));
-  if (!Number.isFinite(candleAt)) return { status: 400, body: { error: "candle_time_invalid" } };
-  if (candleAt > Date.now() + 5 * 60 * 1000) return { status: 400, body: { error: "candle_time_in_future" } };
+  const validation = validateM5Context(p, Date.now());
+  if (!validation.valid) {
+    const first = validation.errors[0] || "invalid";
+    return { status: 400, body: { error: first, validation_errors: validation.errors } };
+  }
   const kv = env.SIGNAL_CACHE;
   if (!kv || typeof kv.put !== "function") return { status: 503, body: { error: "kv_not_configured" } };
   const stored = { ...p, received_at: new Date().toISOString() };
@@ -1633,7 +1630,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     if (!row) return dashboardJson({ status: "not_found" }, 404);
     return dashboardJson({ status: "ok", candle_key: row.candle_key, timestamp: row.timestamp, synthesis: parseJsonText(row.ai_analysis, null) });
   }
-  if (url.pathname === "/api/m5-context" || url.pathname === "/api/informational-5m-context") {
+  if (url.pathname === "/api/m5-context") {
     try {
       const raw = await env.SIGNAL_CACHE?.get("context:m5:latest");
       if (!raw) return dashboardJson({ status: "not_found" }, 404);
