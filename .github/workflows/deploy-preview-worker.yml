@@ -303,6 +303,41 @@ jobs:
           const finalDecision = await finalDecisionResponse.json();
           assert.equal(finalDecision.synthesis?.timestamp, firstSynthesisTimestamp,
             "duplicate queue delivery must not rerun the same degraded AI analysis");
+
+          // Multi-agent bus (MULTI_AGENT_BUS_ENABLED=true in wrangler.preview.jsonc only):
+          // after the synthesis is persisted, a separate queue task runs 2 agents x 2 rounds
+          // plus a moderator on real Workers AI. Prove the output, the model and the consensus.
+          const busDeadline = Date.now() + 180_000;
+          let bus = null;
+          while (Date.now() < busDeadline) {
+            const busResponse = await fetch(base + "/api/bus?candle_key=" + encodeURIComponent(candleKey), { signal: AbortSignal.timeout(10000) });
+            if (busResponse.ok) bus = await busResponse.json();
+            if (bus?.items?.some(item => item.agent === "moderator")) break;
+            await new Promise(resolve => setTimeout(resolve, 5000));
+          }
+          console.log("BUS PROOF " + JSON.stringify({
+            enabled: bus?.enabled,
+            consensus: bus?.consensus,
+            agreement_with_chain: bus?.agreement_with_chain,
+            messages: (bus?.items || []).map(item => ({
+              round: item.round, agent: item.agent, status: item.status, model: item.model,
+              fallback_used: item.fallback_used, usage_tokens: item.usage_tokens, latency_ms: item.latency_ms,
+              stance: item.stance ?? null, confidence: item.confidence, refs: item.refs,
+              text: String(item.insight ?? item.summary ?? "").slice(0, 300), errors: item.errors
+            }))
+          }, null, 2));
+          assert.equal(bus?.enabled, true, "preview must run the bus");
+          assert.equal(bus?.items?.length, 5, "bus must store technical+news x 2 rounds + moderator");
+          assert.ok(bus.items.every(item => item.status === "ok"),
+            "every bus message must be schema-valid model output");
+          assert.ok(bus.items.some(item => item.fallback_used === false && item.model === "reflection-ai/beam-1.0-501b-a23b"),
+            "Beam must answer at least one bus step (all-fallback means Beam is unreachable from Workers AI)");
+          assert.ok(bus.items.filter(item => item.agent !== "moderator").every(item => Array.isArray(item.refs) && item.refs.length > 0),
+            "agent messages must cite refs");
+          assert.ok(["BUY", "SELL", "WAIT"].includes(bus.consensus?.stance), "moderator consensus is required");
+          assert.equal(latestDecision.decision?.decision ?? finalDecision.synthesis?.decision?.decision, "WAIT",
+            "the bus never changes the chain decision");
+
           console.log(JSON.stringify({
             preview: base,
             health: "PASS",
@@ -312,6 +347,7 @@ jobs:
             asynchronous_parity_promotion: "PASS",
             missing_evidence_fail_closed: "PASS",
             duplicate_queue_idempotency: "PASS",
+            multi_agent_bus_real_models: "PASS",
             complete_AI_chain: "NOT_TESTED: no real fresh news/Pine-parity evidence in this fixture"
           }, null, 2));
           NODE

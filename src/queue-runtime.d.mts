@@ -27,6 +27,13 @@ export type QueueTask =
       candle_key: string;
       enqueued_at: string;
       bundle: EvidenceBundle;
+    }
+  | {
+      kind: "multi_agent_bus";
+      event_id: string;
+      candle_key: string;
+      input_fingerprint: string;
+      enqueued_at: string;
     };
 
 export interface QueueRuntimeMessage<T> {
