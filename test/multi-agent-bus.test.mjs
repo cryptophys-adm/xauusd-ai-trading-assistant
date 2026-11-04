@@ -213,10 +213,19 @@ test("budget counter failure fails closed", async () => {
 
 test("wall budget (fake clock) stops further calls", async () => {
   let now = Date.parse("2026-11-04T10:00:00Z");
-  const e = env({ AI: fakeAI(({ request }) => { now += 50_000; return happyHandler({ request }); }) });
+  const e = env({ AI: fakeAI(({ request }) => { now += 80_000; return happyHandler({ request }); }) });
   await runMultiAgentBus(e, task(), { clock: () => now });
   assert.equal(BUS_WALL_BUDGET_MS, 300_000);
-  assert.equal(e.AI.calls.length, 5, "the 5th call starts at 200 s; a 6th call is not scheduled");
+  assert.equal(e.AI.calls.length, 4, "the 4th call starts at 240 s; the moderator at 320 s is over budget");
+  const bus = await readBus(e.DB, CANDLE);
+  assert.equal(bus.items.find(m => m.agent === "moderator").status, "budget_exhausted");
+});
+
+test("five fallback-speed calls (~50 s each) fit inside the wall budget", async () => {
+  let now = Date.parse("2026-11-04T10:00:00Z");
+  const e = env({ AI: fakeAI(({ request }) => { now += 50_000; return happyHandler({ request }); }) });
+  await runMultiAgentBus(e, task(), { clock: () => now });
+  assert.equal(e.AI.calls.length, 5);
   const bus = await readBus(e.DB, CANDLE);
   assert.equal(bus.items.find(m => m.agent === "moderator").status, "ok");
 });
