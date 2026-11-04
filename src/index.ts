@@ -10,7 +10,7 @@ import { knowledgeForPrompt } from "./knowledge-prompt.mjs";
 const TECHNICAL_KNOWLEDGE = JSON.parse(knowledgeForPrompt("technical")) as JsonObject;
 const NEWS_KNOWLEDGE = JSON.parse(knowledgeForPrompt("news")) as JsonObject;
 const KNOWLEDGE_SHA = asText((TECHNICAL_KNOWLEDGE.provenance as JsonObject | undefined)?.content_sha256);
-import { identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema, registerIdentity, recordComparison, isTrusted, listRegistry, policyFromEnv, PARITY_REGISTRY_VERSION } from "./parity-registry.mjs";
+import { identityOf, ensureSchema, registerIdentity, listRegistry, policyFromEnv, PARITY_REGISTRY_VERSION } from "./parity-registry.mjs";
 import { buildWebhookQueueTask, buildLocalCalculationQueueTask, sendQueueTask, createQueueConsumer } from "./queue-runtime.mjs";
 import type { QueueTask } from "./queue-runtime.mjs";
 import type { EvidenceBundle, HandoffResponse } from "../lib/contracts.ts";
@@ -119,59 +119,15 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+import { reconcileLocalComputation, reconcileRecentCandles, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
+
 function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
 }
 
-const OBSERVED_PREFIX = "localcalc-observed:";
-const TRUSTED_PREFIX = "localcalc:";
-const LOCAL_TTL = { expirationTtl: 60 * 60 * 24 * 14 };
-
-async function readJsonKV(kv: KVNamespace, key: string): Promise<JsonObject | null> {
-  const raw = await kv.get(key);
-  if (!raw) return null;
-  try { return JSON.parse(raw) as JsonObject; } catch { return null; }
-}
-
-/**
- * Autonomous provenance reconciliation for one candle. Compares every observed
- * local engine output with TradingView's webhook outputs for the same candle,
- * records the result in the parity registry (promotion/revocation is a fixed
- * rule), then places into the trusted local_computation lane exactly those
- * observed records whose identity is currently approved.
- */
-async function reconcileLocalComputation(env: Env, candleKey: string): Promise<JsonObject> {
-  await ensureSchema(env.DB);
-  const policy = policyFromEnv(env as unknown as Record<string, unknown>);
-  const observed: Record<string, JsonObject | null> = {};
-  await Promise.all(LOCAL_ENGINES.map(async engine => {
-    observed[engine] = await readJsonKV(env.WEBHOOK_BUFFER, OBSERVED_PREFIX + candleKey + ":" + engine);
-  }));
-  const comparisons: JsonObject = {};
-  for (const engine of ["prophet", "gmi"]) {
-    const record = observed[engine];
-    const id = record ? identityOf(record) : null;
-    if (!record || !id) continue;
-    const webhooks: Record<string, unknown> = {};
-    for (const source of requiredSourcesFor(engine)) {
-      const payload = await readJsonKV(env.WEBHOOK_BUFFER, "candle:" + candleKey + ":" + source);
-      if (payload) webhooks[source] = payload;
-    }
-    const comparison = compareWithWebhooks(record, webhooks, policy);
-    const outcome = await recordComparison(env.DB, id, candleKey, comparison, policy);
-    comparisons[engine] = { result: comparison.status, counted: outcome.counted, mismatches: (comparison.mismatches ?? []) as unknown as JsonObject[], missing: comparison.missing ?? [] };
-  }
-  const trust: Record<string, boolean> = {};
-  for (const engine of LOCAL_ENGINES) {
-    const record = observed[engine];
-    const id = record ? identityOf(record) : null;
-    trust[engine] = id ? await isTrusted(env.DB, id) : false;
-    const trustedKey = TRUSTED_PREFIX + candleKey + ":" + engine;
-    if (record && trust[engine]) await env.WEBHOOK_BUFFER.put(trustedKey, JSON.stringify({ ...record, trust_status: "approved_by_parity" }), LOCAL_TTL);
-    else await env.WEBHOOK_BUFFER.delete(trustedKey);
-  }
-  return { comparisons, trust };
-}
+// reconcileLocalComputation now lives in ./parity-sweep.mjs (shared by the queue
+// tasks and the scheduled parity sweep); OBSERVED_PREFIX and LOCAL_TTL come from
+// there too so the lane's KV layout has a single owner.
 
 function extractText(result: unknown): string {
   return cleanModelText(extractRawText(result));
@@ -1572,10 +1528,16 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       ingestion = await r.json();
     } catch { /* reported as unreachable */ }
     let lastComparison: string | null = null;
+    let recentComparisons: unknown[] = [];
+    let registry: unknown[] = [];
     try {
       await ensureSchema(env.DB);
       const row = await env.DB.prepare("SELECT MAX(compared_at) AS last FROM engine_parity_comparisons").first<{ last: string | null }>();
       lastComparison = row?.last ?? null;
+      const recent = await env.DB.prepare("SELECT engine, candle_key, result, compared_at FROM engine_parity_comparisons ORDER BY compared_at DESC LIMIT 5").all<JsonObject>();
+      recentComparisons = recent.results || [];
+      const entries = await env.DB.prepare("SELECT engine, status, consecutive_matches, last_candle_key, last_result, updated_at FROM engine_parity_registry ORDER BY updated_at DESC LIMIT 10").all<JsonObject>();
+      registry = entries.results || [];
     } catch { /* registry unavailable */ }
     const lastMs = lastComparison ? Date.parse(lastComparison) : NaN;
     return dashboardJson({
@@ -1587,7 +1549,16 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
         models: { analyst: env.AI_MODEL_ANALYST, counselor: env.AI_MODEL_COUNSELOR, reasoner: env.AI_MODEL_REASONER },
         // local_computation arrives over the LocalComputationIngress RPC entrypoint;
         // "fresh" means a local-vs-webhook parity comparison ran in the last 2 hours.
-        local_lane: { rpc_entrypoint: "LocalComputationIngress", last_parity_comparison_at: lastComparison, fresh: Number.isFinite(lastMs) && Date.now() - lastMs < LOCAL_LANE_FRESH_MS }
+        // A scheduled sweep (cron 10-59/15) re-reconciles the last closed H1 candles
+        // so a candle is not lost when the per-event tasks run before KV settles.
+        local_lane: {
+          rpc_entrypoint: "LocalComputationIngress",
+          last_parity_comparison_at: lastComparison,
+          fresh: Number.isFinite(lastMs) && Date.now() - lastMs < LOCAL_LANE_FRESH_MS,
+          parity_sweep_cron: PARITY_SWEEP_CRON,
+          recent_comparisons: recentComparisons,
+          registry
+        }
       },
       ingestion_worker: ingestion,
       timestamp: new Date().toISOString()
@@ -1745,7 +1716,27 @@ export default {
   async queue(batch: MessageBatch<QueueTask>, env: Env): Promise<void> {
     return consumeQueue(batch, env);
   },
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    if (event.cron === PARITY_SWEEP_CRON) {
+      // Idempotent re-reconciliation of the most recently closed H1 candles. The
+      // per-event reconcile tasks run within seconds of evidence arrival and can
+      // all miss a candle when KV has not yet settled (cached misses); without a
+      // later sweep those parity comparisons would be lost permanently.
+      ctx.waitUntil(reconcileRecentCandles(env).then(result => {
+        console.log("Scheduled parity sweep completed", JSON.stringify({
+          swept_at: result.swept_at,
+          candle_keys: result.candle_keys,
+          results: Object.fromEntries(Object.entries(result.results).map(([key, value]) => [key,
+            "comparisons" in value
+              ? Object.fromEntries(Object.entries(value.comparisons).map(([engine, outcome]) => [engine, `${outcome.result}${outcome.counted ? "" : " (not counted)"}`]))
+              : { error: value.error }
+          ]))
+        }));
+      }).catch(error => {
+        console.error("Scheduled parity sweep failed", error instanceof Error ? error.message : String(error));
+      }));
+      return;
+    }
     ctx.waitUntil(runNewsAnalysis(env).then(result => {
       console.log("Scheduled fundamental news analysis completed", JSON.stringify({
         analysis_key: result.analysis_key,
