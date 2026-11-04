@@ -674,7 +674,6 @@ async function runAnalysis(
     local_calculation_evidence: fusion.local_calculations,
     fundamental_news_analysis: fusion.fundamental_news_analysis,
     informational_5m_context: fusion.informational_5m_context,
-    bus_messages: busMessages,
     evidence_fusion: fusion,
     policy: TECHNICAL_KNOWLEDGE,
     news_evidence: newsEvidence
@@ -872,6 +871,7 @@ async function runAnalysis(
     reasoner_model: env.AI_MODEL_REASONER,
     reasoner_output: reasonerText,
     news_evidence: newsEvidence,
+    bus_messages: busMessages,
     decision
   };
 
