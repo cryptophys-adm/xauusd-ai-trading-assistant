@@ -406,9 +406,9 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     analyzed_at: analyzedAt,
     article_count: newsEvidence.article_count,
     symbols: evidence.symbols,
-    analyst_model: env.AI_MODEL_ANALYST,
+    analyst_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b",
     analyst_output: analystText,
-    counselor_model: env.AI_MODEL_COUNSELOR,
+    counselor_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b",
     counselor_output: counselorText,
     reasoner_model: env.AI_MODEL_REASONER,
     reasoner_output: reasonerText,
@@ -692,8 +692,8 @@ async function runAnalysis(
     const synthesis = {
       candle_key: candleKey, ticker, timeframe, timestamp, evidence_fusion: fusion,
       analysis_chain_status: "not_invoked_due_to_degraded_evidence",
-      analyst_model: env.AI_MODEL_ANALYST, analyst_output: null,
-      counselor_model: env.AI_MODEL_COUNSELOR, counselor_output: null,
+      analyst_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b", analyst_output: null,
+      counselor_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b", counselor_output: null,
       reasoner_model: env.AI_MODEL_REASONER, reasoner_output: null,
       news_evidence: newsEvidence, decision
     };
@@ -867,9 +867,9 @@ async function runAnalysis(
     timeframe,
     timestamp,
     evidence_fusion: fusion,
-    analyst_model: env.AI_MODEL_ANALYST,
+    analyst_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b",
     analyst_output: analystText,
-    counselor_model: env.AI_MODEL_COUNSELOR,
+    counselor_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b",
     counselor_output: counselorText,
     reasoner_model: env.AI_MODEL_REASONER,
     reasoner_output: reasonerText,
@@ -1296,9 +1296,9 @@ async function runAnalysisFromBundle(
     schema_version: bundle.schema_version,
     symbol: bundle.symbol,
     candle: bundle.candle,
-    analyst_model: env.AI_MODEL_ANALYST,
+    analyst_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b",
     analyst_output: analystText,
-    counselor_model: env.AI_MODEL_COUNSELOR,
+    counselor_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b",
     counselor_output: counselorText,
     reasoner_model: env.AI_MODEL_REASONER,
     reasoner_output: reasonerText,
@@ -1581,8 +1581,8 @@ async function processMultiAgentBusTask(env: Env, task: Extract<QueueTask, { kin
   const messages: any[] = [];
   const runId = task.input_fingerprint;
   const agents = [
-    { name: "technical", model: env.AI_MODEL_ANALYST, system: "You are a technical analyst. Advisory only. Do not produce entry/SL/TP or position size. A local lane counts as trusted only when approved_by_parity. The 5m context is UNVERIFIED and must not be the main reason. Every claim must cite refs. Return strict JSON: {agent,round,stance,confidence,insight,refs,responds_to?}." },
-    { name: "news", model: env.AI_MODEL_COUNSELOR, system: "You are a news analyst. Advisory only. Do not produce entry/SL/TP or position size. Return strict JSON: {agent,round,stance,confidence,insight,refs,responds_to?}." }
+    { name: "technical", model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b", system: "You are a technical analyst. Advisory only. Do not produce entry/SL/TP or position size. A local lane counts as trusted only when approved_by_parity. The 5m context is UNVERIFIED and must not be the main reason. Every claim must cite refs. Return strict JSON: {agent,round,stance,confidence,insight,refs,responds_to?}." },
+    { name: "news", model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b", system: "You are a news analyst. Advisory only. Do not produce entry/SL/TP or position size. Return strict JSON: {agent,round,stance,confidence,insight,refs,responds_to?}." }
   ];
 
   async function callAgent(agent: any, round: number, round1Messages: any[]) {
@@ -1593,7 +1593,7 @@ async function processMultiAgentBusTask(env: Env, task: Extract<QueueTask, { kin
     const prompt = agent.system + "\nRound " + round + ". Evidence: " + input.slice(0, 8000);
     const t0 = Date.now();
     try {
-      const result = await env.AI.run(agent.model, { messages: chatMessages([prompt]), max_tokens: MAX_TOKENS.bus_agent, temperature: 0.1 } as never);
+      const result = await env.AI.run(agent.model, { messages: chatMessages([prompt]), max_completion_tokens: MAX_TOKENS.bus_agent, temperature: 0.1, reasoning_effort: "low", response_format: { type: "json_schema", json_schema: { name: "agent", strict: true, schema: { type: "object", properties: { agent: { type: "string" }, round: { type: "number" }, stance: { type: "string" }, confidence: { type: "number" }, insight: { type: "string" }, refs: { type: "array", items: { type: "string" } } }, required: ["agent","round","stance","confidence","insight","refs"] } } } } as never);
       const text = extractModelText(result);
       const obj = extractJsonObject(text);
       const latency = Date.now() - t0;
@@ -1662,12 +1662,12 @@ async function processMultiAgentBusTask(env: Env, task: Extract<QueueTask, { kin
     if (used < maxCalls) {
       const t0 = Date.now();
       try {
-        const result = await env.AI.run(env.AI_MODEL_REASONER, { messages: chatMessages(["You are a moderator. Return strict JSON {stance,confidence,agreed,summary,dissent}. Evidence: " + JSON.stringify({ messages: [...round1, ...round2] }).slice(0,8000)]), max_tokens: MAX_TOKENS.bus_moderator, temperature: 0.1 } as never);
+        const result = await env.AI.run(env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b", { messages: chatMessages(["You are a moderator. Return strict JSON {stance,confidence,agreed,summary,dissent}. Evidence: " + JSON.stringify({ messages: [...round1, ...round2] }).slice(0,8000)]), max_completion_tokens: MAX_TOKENS.bus_moderator, temperature: 0.1, reasoning_effort: "low", response_format: { type: "json_schema", json_schema: { name: "moderator", strict: true, schema: { type: "object", properties: { stance: { type: "string" }, confidence: { type: "number" }, agreed: { type: "boolean" }, summary: { type: "string" }, dissent: { type: "array", items: { type: "string" } } }, required: ["stance","confidence","agreed","summary","dissent"] } } } } as never);
         const text = extractModelText(result);
         const obj = extractJsonObject(text) || {};
         const insight = JSON.stringify({ stance: obj.stance, confidence: obj.confidence, agreed: obj.agreed, summary: String(obj.summary || "").slice(0, 1000), dissent: Array.isArray(obj.dissent) ? obj.dissent : [] });
         await env.DB.prepare("INSERT OR IGNORE INTO bus_messages (run_id, candle_key, round, agent, ts, insight, confidence, refs_json, model, status, latency_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-          .bind(runId, task.candle_key, 3, "moderator", new Date().toISOString(), insight, typeof obj.confidence === "number" ? obj.confidence : null, JSON.stringify([]), env.AI_MODEL_REASONER, "ok", Date.now() - t0).run();
+          .bind(runId, task.candle_key, 3, "moderator", new Date().toISOString(), insight, typeof obj.confidence === "number" ? obj.confidence : null, JSON.stringify([]), env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b", "ok", Date.now() - t0).run();
       } catch {
         // ignore
       }
@@ -1807,8 +1807,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     return dashboardJson({
       status: "ok", analysis_key: row.analysis_key, fetched_at: row.fetched_at, analyzed_at: row.analyzed_at, article_count: row.article_count,
       evidence: parseJsonText(row.evidence_json, null),
-      analyst_model: env.AI_MODEL_ANALYST, analyst_output: asText(row.analyst_output),
-      counselor_model: env.AI_MODEL_COUNSELOR, counselor_output: asText(row.counselor_output),
+      analyst_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b", analyst_output: asText(row.analyst_output),
+      counselor_model: env.MULTI_AGENT_MODEL || "reflection-ai/beam-1.0-501b-a23b", counselor_output: asText(row.counselor_output),
       reasoner_model: env.AI_MODEL_REASONER, reasoner_output: asText(row.reasoner_output),
       recommendation: parseJsonText(row.recommendation_json, {})
     });
