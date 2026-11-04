@@ -40,6 +40,14 @@ Coverage per Pine parameter is in `docs/LOCAL_COMPUTATION_OWNERSHIP.md`.
 - It is **never** part of `fusion.complete`, never changes decision, entry/SL/TP, risk/reward,
   position size or confidence, and is labelled "UNVERIFIED 5m" in the UI and prompts.
 - Trust remains H1-only via the autonomous parity registry; no parity exists for 5m.
+
+- Transport: the pull adapter calls `AI_WORKER.submitContext(record)` on the
+  AI Worker's `LocalComputationIngress` RPC entrypoint (no shared secret).
+- Storage: KV key `context:m5:latest` (TTL 900 s) on the AI Worker.
+- Read API: `GET /api/m5-context` returns the latest stored 5m context.
+- Freshness rule for use in `runAnalysis`: accepted only when both
+  `now - Date.parse(candle_time) <= 15 min` and
+  `now - Date.parse(received_at) <= 10 min`.
 - Diagnostics: `GET /api/local-lane` (proxied by the Nexus dashboard to the pull adapter's
   `MarketDataReader.diagnostics()`) exposes the pull adapter's last refresh, latest closed bar
   per series, last publish and quota budget.

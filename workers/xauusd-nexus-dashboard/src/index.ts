@@ -305,13 +305,21 @@ async function loadTechnicalDecision(key){
     const cls = (dec.decision==='BUY'?'BUY':dec.decision==='SELL'?'SELL':'WAIT');
     let m5ctx = '';
     try {
+      const cr = await fetch(API+'/api/m5-context'); const cd = await cr.json();
+      if (cd && cd.status === 'ok' && cd.context) {
+        const c = cd.context;
+        m5ctx = '<div style="font-size:12px;color:var(--muted);margin-top:8px"><span style="background:#f59e0b;color:#000;padding:2px 6px;border-radius:4px;font-weight:700">UNVERIFIED 5m</span> '
+          +'<b>'+esc(c.engine||'5m')+'</b> · bias '+esc(c.bias||'—')+' · buy '+esc(String(c.buy_confirmed))+' · sell '+esc(String(c.sell_confirmed))
+          +' · candle '+esc(String(c.candle_time||''))+'</div>';
+      }
+    } catch(e) { m5ctx = ''; }
+    try {
       const mr = await fetch('/api/ohlcv?timeframe=M5&limit=12'); const md = await mr.json();
       if (md && Array.isArray(md.candles) && md.candles.length) {
         const last = md.candles[md.candles.length-1];
-        m5ctx = '<div style="font-size:12px;color:var(--muted);margin-top:8px"><b>5m context (last '+md.candles.length+' bars):</b> '
-          +'close '+esc(String(last.close))+' · H '+esc(String(last.high))+' · L '+esc(String(last.low))+' · '+esc(String(last.close_time||''))+'</div>';
+        m5ctx += '<div style="font-size:12px;color:var(--muted);margin-top:4px"><b>5m bars (last '+md.candles.length+')</b>: close '+esc(String(last.close))+' · H '+esc(String(last.high))+' · L '+esc(String(last.low))+'</div>';
       }
-    } catch(e) { m5ctx = ''; }
+    } catch(e) {}
     $('latest-decision').innerHTML =
       '<div class="decision-card">'
       +'<div class="decision-badge '+cls+'">'+esc(dec.decision||'—')+'</div>'

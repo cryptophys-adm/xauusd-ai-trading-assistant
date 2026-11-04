@@ -25,19 +25,19 @@ async function postRecord(env, record) {
   };
 }
 
-export async function publishLocalComputation(env, { now = Date.now(), force = false } = {}) {
+export async function publishLocalComputation(env, { now = Date.now(), force = false, bundle = null } = {}) {
   const kv = env.MARKET_DATA_CACHE;
   if (!kv) return { status: "cache_not_configured" };
   if (typeof env.AI_WORKER?.submit !== "function") return { status: "publisher_not_configured" };
-  const bundle = await buildBundle(env, now);
-  const lastH1 = bundle.timeframes?.H1?.candles?.at(-1);
+  const resolvedBundle = bundle || await buildBundle(env, now);
+  const lastH1 = resolvedBundle.timeframes?.H1?.candles?.at(-1);
   if (!lastH1) return { status: "no_h1_data" };
   const closedAgo = now - Date.parse(lastH1.close_time);
   if (!force && closedAgo > MAX_PUBLISH_DELAY_MS) return { status: "no_fresh_h1_close", last_h1_close_time: lastH1.close_time };
 
   let built;
   try {
-    built = buildH1LocalCalculations(bundle, { now, mintick: Number(env.CHART_MINTICK) || 0.001 });
+    built = buildH1LocalCalculations(resolvedBundle, { now, mintick: Number(env.CHART_MINTICK) || 0.001 });
   } catch (error) {
     return { status: asString(error?.code) || "local_computation_failed", message: asString(error?.message).slice(0, 200) };
   }

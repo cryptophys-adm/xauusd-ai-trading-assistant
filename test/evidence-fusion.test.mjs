@@ -216,3 +216,12 @@ test("TradingView epoch-ms candle_time (str.tostring(time)) is accepted and matc
   assert.ok(!result.validation_errors.some((e) => e.endsWith("candle_time_mismatch")), JSON.stringify(result.validation_errors));
   assert.equal(result.status, "ready");
 });
+
+test("informational 5m context never affects completeness or missing evidence", () => {
+  const base = completeInput();
+  const without = buildEvidenceFusion(base, now);
+  const withCtx = buildEvidenceFusion({ ...base, informational5mContext: { trust_status: "informational_unverified", bias: "BULLISH" } }, now);
+  assert.equal(withCtx.complete, without.complete);
+  assert.deepEqual(withCtx.missing_evidence, without.missing_evidence);
+  assert.equal(withCtx.informational_5m_context?.trust_status, "informational_unverified");
+});
