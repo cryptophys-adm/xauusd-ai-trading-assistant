@@ -576,7 +576,8 @@ async function runAnalysis(
     candleTime,
     webhookPayloads: payloads,
     localCalculations,
-    newsAnalysis
+    newsAnalysis,
+    informational5mContext: null
   });
   const newsEvidence = {
     available: Boolean(fusion.fundamental_news_analysis),
@@ -597,6 +598,7 @@ async function runAnalysis(
     source_payloads: payloads,
     local_calculation_evidence: fusion.local_calculations,
     fundamental_news_analysis: fusion.fundamental_news_analysis,
+    informational_5m_context: fusion.informational_5m_context,
     evidence_fusion: fusion,
     policy: TECHNICAL_KNOWLEDGE,
     news_evidence: newsEvidence
@@ -692,6 +694,7 @@ async function runAnalysis(
       "If evidence_fusion.complete is false, set directional_bias to NEUTRAL and missing_evidence to true; list every missing_evidence and validation_errors item.",
       "If news_evidence.available is false, state that completed fundamental news analysis is unavailable. Do NOT invent news.",
       "If news_evidence.available is true, consider the completed analysis and its underlying article evidence alongside technical evidence.",
+      "If informational_5m_context is present, treat it as unverified 5m context only; it must not change the decision or prices.",
       "Return JSON only with keys: directional_bias (BULLISH, BEARISH, or NEUTRAL), setup_quality (integer 0-3), missing_evidence (boolean), reasoning.",
       "Set directional_bias to NEUTRAL and missing_evidence to true if evidence is missing, stale, contradictory, or insufficient.",
       "EVIDENCE:",
@@ -721,6 +724,7 @@ async function runAnalysis(
       "If evidence_fusion.complete is false, explicitly mark the result degraded and enumerate missing evidence and validation errors.",
       "If news_evidence.available is false, acknowledge completed fundamental news analysis is unavailable. Do NOT fabricate news.",
       "If news_evidence.available is true, weigh the completed news analysis and its underlying article evidence in scenarios.",
+      "If informational_5m_context is present, treat it as unverified 5m context only; it must not change the decision or prices.",
       "Return concise JSON with keys: evidence_summary, bullish_scenario, bearish_scenario, neutral_scenario, confirmations, invalidation, risks, missing_data.",
       "If the source payloads conflict or fields are unclear, say so explicitly.",
       "EVIDENCE:",
@@ -751,6 +755,7 @@ async function runAnalysis(
       "If evidence_fusion.complete is false, decision MUST be WAIT or NO_TRADE, confidence and all price/risk fields MUST be null, and reasoning must enumerate missing_evidence and validation_errors.",
       "If news_evidence.available is false, state completed fundamental news analysis was unavailable. Do NOT claim news supported or contradicted the setup.",
       "If news_evidence.available is true, incorporate the completed news analysis and its underlying article evidence into final reasoning.",
+      "If informational_5m_context is present, treat it as unverified 5m context only; it must not change the decision or prices.",
       "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation.",
       "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
       "EVIDENCE:",

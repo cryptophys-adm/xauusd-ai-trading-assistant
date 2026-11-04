@@ -156,7 +156,7 @@ function validateNewsAnalysis(newsAnalysis, expectedSymbol, now) {
 }
 
 export function buildEvidenceFusion(input, now = Date.now()) {
-  const { candleKey, symbol, timeframe, candleTime, webhookPayloads = {}, localCalculations = [], newsAnalysis = null } = input || {};
+  const { candleKey, symbol, timeframe, candleTime, webhookPayloads = {}, localCalculations = [], newsAnalysis = null, informational5mContext = null } = input || {};
   const missing = [];
   const errors = [];
   const candleTimeMs = timestampMs(candleTime);
@@ -257,6 +257,7 @@ export function buildEvidenceFusion(input, now = Date.now()) {
     webhook_sources: presentWebhooks,
     local_calculations: calculationByEngine,
     fundamental_news_analysis: newsValidation.valid ? newsAnalysis : null,
+    informational_5m_context: informational5mContext && typeof informational5mContext === "object" ? informational5mContext : null,
     missing_evidence: [...new Set(missing)],
     validation_errors: [...new Set(errors)]
   };
