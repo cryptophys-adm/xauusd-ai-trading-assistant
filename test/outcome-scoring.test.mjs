@@ -50,6 +50,17 @@ test("WAIT: hit when nothing moves, missed_opportunity with the direction of the
   assert.equal(s.max_up, 10, "the full horizon is measured for reporting");
 });
 
+test("v2: a WAIT through a whipsaw is a hit; only a clean move a BUY or SELL would have caught is missed", () => {
+  const i = 14;
+  // The first bar that reaches the threshold touches both sides: neither BUY nor SELL is a hit.
+  const whipsaw = barsFrom([...base, [100, 106, 94, 100], [100, 108, 99, 107], [107, 109, 106, 108], [108, 110, 107, 109]]);
+  assert.equal(scoreStance({ stance: "WAIT", bars: whipsaw, closeMs: closeOf(whipsaw, i) }).result, "hit");
+  // A clean rise: a BUY would have hit, so the WAIT missed it.
+  const clean = barsFrom([...base, [100, 103, 99, 102], [102, 106, 101, 105], [105, 106, 104, 105], [105, 106, 104, 105]]);
+  const s = scoreStance({ stance: "WAIT", bars: clean, closeMs: closeOf(clean, i) });
+  assert.deepEqual([s.result, s.direction], ["missed_opportunity", 1]);
+});
+
 test("confidence gives a Brier score; HOLD and CLOSE are not scored; missing bars are no_data", () => {
   const up = barsFrom([...base, [100, 106, 99, 105], [105, 106, 104, 105], [105, 106, 104, 105], [105, 106, 104, 105]]);
   assert.equal(scoreStance({ stance: "BUY", confidence: 0.8, bars: up, closeMs: closeOf(up, 14) }).brier.toFixed(2), "0.04");
@@ -134,6 +145,13 @@ test("scoreRecentStatements scores chain, bus, HUD, indicator and room stances o
   });
   const again = await scoreRecentStatements(env, { now: Math.max(now, m15Now) });
   assert.equal(again.scores, 0, "idempotent per candle");
+  // A row from an older scoring version is rescored and replaced, once.
+  db.prepare("UPDATE outcome_scores SET scoring_version = 'cryptophys.outcome-scoring.v1', result = 'stale' WHERE subject = 'chain:h1'").run();
+  db.prepare("UPDATE outcome_runs SET scoring_version = 'cryptophys.outcome-scoring.v1' WHERE timeframe = '60'").run();
+  const rescored = await scoreRecentStatements(env, { now: Math.max(now, m15Now) });
+  assert.ok(rescored.scores > 0);
+  assert.equal(db.prepare("SELECT result FROM outcome_scores WHERE subject = 'chain:h1'").get().result, "missed_opportunity");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM outcome_scores WHERE scoring_version <> 'cryptophys.outcome-scoring.v2'").get().n, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM outcome_scores").get().n, 7);
 
   const cards = await scorecards(env.DB, { days: 30, now: Math.max(now, m15Now) });

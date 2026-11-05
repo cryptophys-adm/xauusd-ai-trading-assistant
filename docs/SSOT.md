@@ -179,7 +179,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - Backlog (owner, 2026-11-05): B4 (merge the GMI core copy, needs a new H1 GMI approval in a calibration window) and the Grid Bot Protocol HUD. See `docs/BRIEF_HUD_AGENTS.md`.
 
 ### Outcome scoring and stuck states (RFC_INDICATOR_AGENT_PLATFORM P1)
-- Code: `src/outcome-scoring.mjs`. Tables `outcome_scores`, `outcome_runs` and `stuck_states` (migration `0005_outcome_scores.sql`; also ensured at runtime). Owner approval 2026-11-05 for the definition.
+- Code: `src/outcome-scoring.mjs`. Tables `outcome_scores`, `outcome_runs` and `stuck_states` (migrations `0005_outcome_scores.sql` and `0006_outcome_runs_version.sql`; also ensured at runtime). Rows carry `scoring_version`: candles scored by an older version are scored again within the lookback, and scorecards read only the current version. Owner approval 2026-11-05 for the definition.
 - It is deterministic and reads prices only: the pull adapter's closed TradingView bars, from the same KV namespace (`SIGNAL_CACHE` = `MARKET_DATA_CACHE`). It never changes a decision, prompt or evidence.
 - **What is scored, per closed candle, once its horizon has closed:**
   - **H1:** the chain decision (`chain:h1`), the bus round-2 agents and the moderator (`bus:*`), the HUD agents (`hud:*`), and the parity-approved indicator directions (`indicator:prophet_r38`, `indicator:prophet_r37`, `indicator:gmi_v12_70`).
@@ -187,7 +187,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - **How:**
   - The entry is the statement candle's close, and the threshold is `0.5 × ATR(14)`, a simple average of the true range. The horizon is the next 4 closed candles.
   - BUY or SELL is a hit when the favourable excursion reaches the threshold first, a miss when the adverse excursion does (both in the same bar counts as a miss), and neutral otherwise.
-  - WAIT (and NO_TRADE) is a hit when neither excursion reaches the threshold. Otherwise it is a `missed_opportunity`, with the direction of the first move.
+  - WAIT (and NO_TRADE) is a `missed_opportunity` only when a BUY or a SELL on the same candle would have been a hit: a clean move to the threshold without first touching the other side. The record keeps that move's direction. Otherwise, including a whipsaw, WAIT is a hit. This is scoring v2, owner approval 2026-11-05. v1 counted any touch, and nearly every WAIT read as missed.
   - HOLD and CLOSE are not scored.
   - A Brier score is computed when the statement has a confidence.
 - **Stuck states:** once an hour, over the approved H1 records of the last 24 candles. A Prophet or GMI state field (subtype, `b_enc`, `d_enc`, `t_enc`, gate, verdict, conflict) is stuck when it is unchanged for ≥ 8 candles while the high-low range of those candles exceeds `3 × ATR(14)`. Episodes open, extend and clear in `stuck_states`.
