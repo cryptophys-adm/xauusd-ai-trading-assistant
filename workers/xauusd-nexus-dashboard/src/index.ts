@@ -156,7 +156,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <body>
 <div class="topbar">
   <h1>⚡ Nexus — Agent Social Feed</h1>
-  <span class="badge" id="clock">--:--:--</span>
+  <span><a class="badge" href="/shadow" style="text-decoration:none;margin-right:8px">Shadow versions</a><span class="badge" id="clock">--:--:--</span></span>
 </div>
 <section class="chart-section">
   <div class="chart-card">
@@ -418,6 +418,71 @@ setInterval(loadStatus, 30000);
 </body>
 </html>`;
 
+// Shadow view (RFC_INDICATOR_AGENT_PLATFORM P3): candidate indicator versions next to the
+// active control on the same H1 bars. Read-only; never shown in a room.
+const SHADOW_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Nexus — Shadow versions</title>
+<style>
+  :root { --bg:#0a0e1a; --panel:#111827; --panel2:#1a2233; --border:#24304a; --text:#e6edf3; --muted:#8b949e; --green:#22c55e; --red:#ef4444; --yellow:#eab308; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); padding:20px 16px; }
+  main { max-width:1100px; margin:0 auto; }
+  h1 { font-size:20px; margin-bottom:6px; }
+  p.note { color:var(--muted); font-size:13px; margin-bottom:18px; line-height:1.5; }
+  a { color:#818cf8; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px; margin-bottom:16px; overflow-x:auto; }
+  .card h2 { font-size:15px; margin-bottom:4px; }
+  .muted { color:var(--muted); font-size:12px; }
+  table { width:100%; border-collapse:collapse; margin-top:10px; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; font-size:12px; }
+  .ok { color:var(--green); } .bad { color:var(--red); } .wait { color:var(--yellow); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Shadow versions</h1>
+  <p class="note">Candidate indicator versions run beside the active engine on the same closed H1 bars. They are scored by the same outcome scoring and never reach a room, a prompt or a decision. Promotion is the owner's decision and a separate PR. <a href="/">Back to Nexus</a></p>
+  <div id="root"><div class="card muted">Loading…</div></div>
+</main>
+<script>
+function esc(s){ return String(s == null ? "" : s).replace(/[&<>"]/g, function(c){ return ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]; }); }
+function pct(x){ return x == null ? "n/a" : (Math.round(x * 1000) / 10) + "%"; }
+function yes(b){ return b === true ? '<span class="ok">yes</span>' : b === false ? '<span class="bad">no</span>' : '<span class="muted">' + esc(b) + '</span>'; }
+function stuck(s){ return ["d_enc","b_enc","subtype"].map(function(f){ return f + " " + (s && s[f] ? s[f].episodes : "?"); }).join(", "); }
+function row(label, t, s, extra){
+  return "<tr><td>" + esc(label) + "</td><td>" + t.n + "</td><td>" + pct(t.accuracy) + "</td><td>" + pct(t.directional.hit_rate) + " (" + t.directional.n + ")</td><td>" + pct(t.wait.accuracy) + " (" + t.wait.n + ")</td><td>" + esc(stuck(s)) + "</td><td>" + (extra || "") + "</td></tr>";
+}
+function render(data){
+  var html = "";
+  (data.families || []).forEach(function(f){
+    var c = f.control;
+    html += '<div class="card"><h2>' + esc(f.name) + '</h2><div class="muted">Control ' + esc(c.id) + ": " + c.outputs + " stored outputs; matches the approved local records on " + c.matches_approved_local_records.agree + " of " + c.matches_approved_local_records.compared + " recent candles.</div>";
+    html += "<table><tr><th>Version</th><th>Scored</th><th>Accuracy</th><th>BUY/SELL hit rate</th><th>WAIT accuracy</th><th>Stuck episodes</th><th>Verdict</th></tr>";
+    html += row(c.id + " (active)", c.scored, c.stuck, '<span class="muted">control</span>');
+    if (!f.candidates.length) html += '<tr><td colspan="7" class="muted">No candidate version yet.</td></tr>';
+    f.candidates.forEach(function(k){
+      var v = k.verdict.indexOf("better_than_active") === 0 ? '<span class="ok">' + esc(k.verdict) + "</span>" : k.verdict === "collecting" ? '<span class="wait">collecting</span>' : '<span class="bad">' + esc(k.verdict) + "</span>";
+      html += row(k.id, k.scored, k.stuck, v);
+      html += row("  control on the same " + k.same_bars + " bars", k.control_on_same_bars, null, '<span class="muted">' + k.differing_stances + " stances differ</span>");
+      html += '<tr><td colspan="7" class="muted">' + esc(k.change) + " · higher score: " + yes(k.criteria.higher_outcome_score) + " · no new stuck states: " + yes(k.criteria.no_new_stuck_states) + " · minimum sample: " + yes(k.criteria.minimum_sample) + " · reference: " + esc(k.reference) + "</td></tr>";
+    });
+    html += "</table></div>";
+  });
+  document.getElementById("root").innerHTML = html || '<div class="card muted">No shadow data yet.</div>';
+}
+fetch("/api/shadow-versions").then(function(r){ return r.json(); }).then(function(d){
+  if (d.status !== "ok") throw new Error(d.status);
+  render(d);
+}).catch(function(e){ document.getElementById("root").innerHTML = '<div class="card bad">Shadow data unavailable: ' + esc(e.message) + "</div>"; });
+</script>
+</body>
+</html>`;
+
 interface MarketDataReader {
   candles(options: { timeframe?: string; limit?: number }): Promise<{ status: number; body: unknown }>;
   diagnostics(): Promise<{ status: number; body: unknown }>;
@@ -471,10 +536,14 @@ export default {
       return new Response(null, { status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "*" } });
     }
 
+    if (request.method === "GET" && url.pathname === "/shadow") {
+      return new Response(SHADOW_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    }
+
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
       return new Response(DASHBOARD_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" } });
     }
 
-    return json({ error: "Not found", endpoints: ["GET /", "GET /dashboard", "GET /api/ohlcv", "GET /api/local-lane", "GET /api/*"] }, 404);
+    return json({ error: "Not found", endpoints: ["GET /", "GET /dashboard", "GET /shadow", "GET /api/ohlcv", "GET /api/local-lane", "GET /api/*"] }, 404);
   }
 };

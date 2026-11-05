@@ -6,6 +6,13 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- feat(shadow): RFC_INDICATOR_AGENT_PLATFORM P3, shadow indicator versions.
+  - **Framework.** `src/shadow-versions.mjs` replays a control (the active Prophet R37 and R38 code with defaults) and candidate versions over the same cached H1 bars, once an hour. Outputs are stored after a 300-bar warm-up, and the first computation is final (`shadow_outputs`, migration `0008`).
+  - **Scoring.** Outputs are scored as `shadow:<version>`.
+  - **Comparison.** Candidates are compared with the control on the same bars using the RFC criteria: higher accuracy, no new stuck episodes, and at least 200 bars.
+  - **Read model.** `GET /api/shadow-versions` and the Nexus `/shadow` page.
+  - **Isolation.** Nothing reaches a room, a prompt or a decision, and the engine files are unchanged. P3 ships no candidate; P5 adds the first.
+
 - feat(platform): RFC_INDICATOR_AGENT_PLATFORM P4, owner instruction 2026-11-05.
   - **Binding.** The AI Worker binds `AGENTS` to the Cryptophys Platform `cryptophys-ai-kernel` `AgentRpc` entrypoint. The binding pins `host_worker` and carries no secret. It is production only; preview has no binding, so the code is a no-op there.
   - **Reports.** One advisory report per meaningful event, sent from the parity sweep cron:

@@ -21,3 +21,15 @@ test("nexus dashboard inline scripts parse", () => {
     assert.doesNotThrow(() => new Function(code), `inline script #${index} has a syntax error`);
   });
 });
+
+test("nexus shadow view inline scripts parse", () => {
+  const source = readFileSync(new URL("../workers/xauusd-nexus-dashboard/src/index.ts", import.meta.url), "utf8");
+  const match = source.match(/const SHADOW_HTML = (`[\s\S]*?<\/html>`);/);
+  assert.ok(match, "SHADOW_HTML template literal not found");
+  const html = (0, eval)(match[1]);
+  const scripts = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+  assert.equal(scripts.length, 1);
+  assert.doesNotThrow(() => new Function(scripts[0]), "shadow view script has a syntax error");
+  assert.match(html, /\/api\/shadow-versions/);
+  assert.match(source, /url\.pathname === "\/shadow"/);
+});
