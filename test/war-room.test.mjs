@@ -102,7 +102,7 @@ test("every agent opens on the bus, the minority and the Risk Manager rebut, the
   assert.deepEqual(Object.keys(data), ["hud", "timeframe", "reading"]);
   // The debate sees the whole bus.
   const rebuttal = ai.calls.find(c => /debate/.test(c.request.messages[0].content));
-  assert.equal(JSON.parse(rebuttal.request.messages[1].content.split("COMMUNICATION BUS (id, name, stance, confidence, claim):\n")[1]).length, 6);
+  assert.equal(JSON.parse(rebuttal.request.messages[1].content.split("COMMUNICATION BUS (id, name, stance, confidence, evidence, claim):\n")[1]).length, 6);
 
   assert.equal((await runWarRoomBar(e, task())).status, "already_complete", "idempotent per bar");
 });
@@ -153,6 +153,33 @@ test("no confirmation, no entry: the Risk Manager enforces it and a BUY conclusi
   e2.DB.raw.prepare("UPDATE ai_syntheses SET prophet_metrics = ?").run(JSON.stringify({ prophet_r38: { direction: 1, buy_confirmed: true } }));
   await runWarRoomBar(e2, task());
   assert.equal((await readWarRoom(e2.DB)).conclusion.status, "ok");
+});
+
+test("calibration status is shown once: no disclaimer asked, uncalibrated HUD confidence capped, evidence on the bus", async () => {
+  const ai = fakeAI({ stances: { kinetic_engine: "SELL" } });
+  const run = ai.run;
+  // The model writes the agent id with a space, as production did for interstellar_eyes.
+  ai.run = async (model, request) => {
+    const r = await run(model, request);
+    const body = JSON.parse(r.choices[0].message.content);
+    if (body.agent === "fabio_amt") body.agent = "fabio amt";
+    r.choices[0].message.content = JSON.stringify(body);
+    return r;
+  };
+  const e = env(ai);
+  await runWarRoomBar(e, task());
+  const room = await readWarRoom(e.DB);
+  const kinetic = room.openings.find(o => o.id === "kinetic_engine");
+  assert.equal(kinetic.confidence, 0.4, "no verified statement: confidence capped at 0.4 (the model said 0.7)");
+  assert.equal(room.openings.find(o => o.id === "fabio_amt").status, "ok", "an id written with a space still names the agent");
+  assert.deepEqual(room.roster.find(r => r.id === "kinetic_engine").calibration, { verified_lines: 0, total_lines: room.roster.find(r => r.id === "kinetic_engine").calibration.total_lines });
+  const hudPrompt = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  assert.match(hudPrompt, /never mention calibration, verification or comparators/);
+  const debate = ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  const bus = JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, confidence, evidence, claim):\n")[1]);
+  assert.equal(bus.find(b => b.id === "kinetic_engine").evidence, "no statement verified by parity yet");
+  assert.equal(bus.find(b => b.id === "h1").evidence, "parity-approved H1 chain");
+  assert.match(debate, /call agents by their names/);
 });
 
 test("a failed opening stays out of the bus; the room still concludes", async () => {

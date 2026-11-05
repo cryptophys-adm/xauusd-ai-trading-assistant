@@ -351,18 +351,26 @@ function renderConclusion(room){
     +'<div class="conf" style="margin-top:6px;color:var(--muted)">Advisory only. Price levels come only from the validated H1 chain. No orders are placed.</div>'
     +'</div>';
 }
+// Calibration status, shown once per agent (owner decision A): the agents never repeat it.
+let rosterCal = {};
+function calBadge(c){
+  if (!c) return '';
+  if (c.total_lines != null) return c.verified_lines ? '<span class="badge-ok">'+c.verified_lines+' of '+c.total_lines+' verified</span>' : '<span class="badge-warn">15m not calibrated</span>';
+  return c.label ? '<span class="badge-ok">'+esc(c.label)+'</span>' : '';
+}
 function renderMsg(m, text, extra){
   if (m.status !== 'ok') return '<div class="tmsg"><div class="m-head"><span class="m-agent">'+esc(m.name)+'</span></div><div class="m-body" style="color:var(--muted)">'+esc(m.name)+' could not speak this round.</div></div>';
-  return '<div class="tmsg"><div class="m-head"><span class="m-agent">'+esc(m.name)+'</span><span>'+esc(timeAgo(m.ts))+'</span>'+chip(m.stance)+'<span>confidence '+pct(m.confidence)+'</span>'+(extra||'')+'</div><div class="m-body">'+esc(text||'')+'</div></div>';
+  return '<div class="tmsg"><div class="m-head"><span class="m-agent">'+esc(m.name)+'</span>'+calBadge(rosterCal[m.id])+'<span>'+esc(timeAgo(m.ts))+'</span>'+chip(m.stance)+'<span>confidence '+pct(m.confidence)+'</span>'+(extra||'')+'</div><div class="m-body">'+esc(text||'')+'</div></div>';
 }
 function renderRoster(room){
   const list = (room && room.roster) || [];
   if (!list.length) { $('agent-roster').innerHTML = '<div class="loader">No War Room session yet.</div>'; return; }
   const said = {}; (room.openings||[]).forEach(o => { said[o.id] = o; });
+  rosterCal = {}; list.forEach(a => { rosterCal[a.id] = a.calibration; });
   $('agent-roster').innerHTML = list.map(a => {
     const o = said[a.id];
     return '<div class="agent-card"><div class="agent-avatar av-analyst">'+esc(String(a.name||'?').slice(0,1))+'</div>'
-      +'<div class="agent-info"><div class="name">'+esc(a.name)+'</div><div class="role">'+esc(a.role)+'</div></div>'
+      +'<div class="agent-info"><div class="name">'+esc(a.name)+'</div><div class="role">'+esc(a.role)+'</div><div>'+calBadge(a.calibration)+'</div></div>'
       +(o && o.status==='ok' ? chip(o.stance) : '<span class="status-dot"></span>')+'</div>';
   }).join('');
 }
