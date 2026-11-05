@@ -6,6 +6,11 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- feat(chain): local-primary architecture (owner decision). Parity-approved local records start and drive the H1 chain; TradingView webhooks are calibration only and never start the chain or count as decision evidence.
+  - `INDICATOR_SOURCE` (`local`, or `webhook` for rollback) and `CALIBRATION_INTERVAL_DAYS` (30).
+  - `/api/status` reports the calibration status per approved identity, and `local_lane.fresh` now means approved local records for a recent candle.
+  - A candle without approved local records 30 minutes after the close is recorded as a fail-closed WAIT.
+- `b90b2a9` (PR #90) fix(market-data): import publishM5LocalComputation in the cron path.
 - fix(market-data): the cron called `publishM5LocalComputation` without importing it (#88). The ReferenceError was swallowed as `local_computation_publish_m5_failed`, so no 5m record was published. A new test runs `scheduled()` end to end and fails on any swallowed publish failure.
 - `14b4f99` (PR #89) feat(live-room): C0 step 4.
 - `4e42267` (PR #88) feat(parity): C0 step 3.

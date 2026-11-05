@@ -124,8 +124,12 @@ export async function reconcileRecentCandles(env, { now = Date.now(), lookback =
   return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, results };
 }
 
+/** Minutes after an H1 close after which a candle without approved local records is recorded as a fail-closed WAIT. */
+export const LOCAL_MISSING_AFTER_MS = 30 * 60 * 1000;
+
 export async function backfillRecentAnalyses(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, loadPayloads = null, runAnalysis = null, setStatus = null } = {}) {
   const required = String(env?.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(v=>v.trim()).filter(Boolean);
+  const localPrimary = String(env?.INDICATOR_SOURCE || "local").toLowerCase() !== "webhook";
   const candleKeys = closedH1CandleKeys(now, { lookback });
   let triggered = 0;
   for (const candleKey of candleKeys) {
@@ -135,8 +139,15 @@ export async function backfillRecentAnalyses(env, { now = Date.now(), lookback =
     try {
       const existing = await env.DB.prepare("SELECT status FROM analysis_runs WHERE candle_key = ?").bind(candleKey).first();
       if (existing) continue;
-      const payloads = loadPayloads ? await loadPayloads(env, candleKey, required) : null;
-      if (!payloads || !required.every(source => payloads[source])) continue;
+      const payloads = (loadPayloads ? await loadPayloads(env, candleKey, required) : null) || {};
+      if (localPrimary) {
+        // Local-primary: approved local records drive the chain; webhooks are calibration only.
+        // A candle whose approved local records never arrived is still recorded, as a
+        // fail-closed WAIT, once the local publish window has passed.
+        const trusted = await Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get(TRUSTED_PREFIX + candleKey + ":" + engine)));
+        const closedMs = openMs + H1_SECONDS * 1000;
+        if (!trusted.every(Boolean) && now - closedMs < LOCAL_MISSING_AFTER_MS) continue;
+      } else if (!required.every(source => payloads[source])) continue;
       const lastColon = candleKey.lastIndexOf(":");
       const rest = candleKey.slice(0, lastColon);
       const secondLast = rest.lastIndexOf(":");

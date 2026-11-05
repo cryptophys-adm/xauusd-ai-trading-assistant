@@ -26,14 +26,29 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
   - `AI_WORKER` → AI Worker `LocalComputationIngress.submit()`.
 - The dashboard calls `MARKET_DATA` → pull adapter `MarketDataReader.candles()`.
 
-## 3. Three AI input lanes
-1. **TradingView webhook** (`POST /webhook`, once per closed 1H bar). The sources are `prophet_r38`, `prophet_r37_ssot` and `gmi_v12_70`. This lane is the comparator.
-2. **Local computation** (primary). The engines are MizanLib (record id `mizan`), Prophet and GMI, computed by the pull adapter from closed TradingView bars. Trust is earned only through the autonomous parity registry: 24 consecutive candles that match the webhook. There is no manual allowlist and no operator approval. Because the per-event reconcile runs within seconds of evidence arrival and can miss a candle while KV is still settling, the AI Worker also reconciles the last closed H1 candles on a cron (`10-59/15 * * * *`); the reconcile is idempotent, so a candle is counted at most once.
+## 3. Three AI input lanes (local-primary)
+Owner decision, 2026-11-05: the architecture does not depend on webhooks. Approved local records drive the chain, and TradingView webhooks only calibrate the local engines. `INDICATOR_SOURCE` controls this: `"local"` is the default; `"webhook"` restores the legacy webhook-driven chain as a rollback.
+
+1. **Local computation** (decision lane). MizanLib (record id `mizan`), Prophet and GMI are computed by the pull adapter from closed TradingView bars.
+   - Trust is earned only through the autonomous parity registry: 24 consecutive candles that match TradingView. There is no manual allowlist and no operator approval.
+   - The chain starts as soon as the parity-approved (`localcalc:`) records of a closed H1 candle exist. It does not wait for any webhook.
+   - The indicator values the agents read (`source_payloads`, `origin: "local_computation"`) are the approved records' comparable fields. These are the same field names and codes the TradingView alerts carry.
+   - A candle whose approved local records do not arrive within 30 minutes of the close is recorded as a fail-closed WAIT. A revoked or never-approved identity therefore never trades.
+2. **TradingView webhook** (calibration only). The sources are `prophet_r38`, `prophet_r37_ssot` and `gmi_v12_70`, on H1 and 5m.
+   - Webhooks are stored and compared field by field with the local records. They never start the chain and are never decision evidence (`input_lanes.tradingview_webhook.role: "calibration_only"`).
+   - Approval persists while no webhook arrives. A mismatch during a calibration run revokes the identity, and the chain then fails closed until it re-earns 24/24.
+   - **Calibration runbook (for example monthly).**
+     1. Install the existing alerts on the H1 chart, and on the 5m chart for the 5m lane.
+     2. Leave them on for at least a few candles.
+     3. Check `GET /api/status` → `ai_worker.local_lane.calibration`. It shows the last calibration per identity and `calibration_due` after `CALIBRATION_INTERVAL_DAYS`, which defaults to 30.
+     4. Remove the alerts again.
+   - Any change to a hashed engine file creates a new identity. That identity needs a calibration run of 24/24 before it is trusted.
+   - The per-event reconcile and the cron (`10-59/15 * * * *`) are idempotent, so a candle is counted at most once.
 3. **Fundamental news**: TradingView MCP news. The AI Worker analyses it at cron `:06`.
 
 Coverage per Pine parameter is in `docs/LOCAL_COMPUTATION_OWNERSHIP.md`.
 
-The parity sweep cron also backfills `runAnalysis` for any closed H1 candle within the last 2 hours that has complete webhook evidence in D1 but no `analysis_runs` row, keeping analysis idempotent via `claimAnalysisRun`.
+The parity sweep cron also backfills `runAnalysis` for any closed H1 candle within the last 2 hours that has no `analysis_runs` row. It does so when the candle's approved local records exist, or as a fail-closed WAIT 30 minutes after the close. Analysis stays idempotent via `claimAnalysisRun`.
 
 ### Informational (non-trusted) 5m context
 - A separate, **informational_unverified** evidence key `informational_5m_context` may be

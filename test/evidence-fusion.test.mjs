@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildEvidenceFusion, validateLocalCalculation, containsCredentialFields, stripCredentialFields, LOCAL_CALCULATION_CONTRACT_VERSION, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION } from "../src/evidence-fusion.mjs";
+import { buildEvidenceFusion, indicatorPayloadsFromLocal, INDICATOR_SOURCES, validateLocalCalculation, containsCredentialFields, stripCredentialFields, LOCAL_CALCULATION_CONTRACT_VERSION, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION } from "../src/evidence-fusion.mjs";
 
 const now = Date.parse("2026-11-01T15:00:00.000Z");
 const candleTime = "2026-11-01T14:55:00.000Z";
@@ -248,4 +248,45 @@ test("news analysis from :06 stays valid when retried at :00:40 next hour", () =
   const validationTime = Date.parse("2026-11-01T01:00:40.000Z");
   const result = buildEvidenceFusion(input, validationTime);
   assert.equal(result.fundamental_news_analysis !== null, true);
+});
+
+test("calibration webhook lane: local records and news are enough, webhooks are never required", () => {
+  const input = { ...completeInput(), webhookPayloads: {}, webhookLane: "calibration" };
+  const result = buildEvidenceFusion(input, now);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.missing_evidence, []);
+  assert.equal(result.input_lanes.tradingview_webhook.role, "calibration_only");
+  assert.deepEqual(result.input_lanes.tradingview_webhook.required_sources, []);
+  // A malformed calibration webhook is not decision evidence and cannot degrade the decision.
+  const noisy = buildEvidenceFusion({ ...input, webhookPayloads: { prophet_r38: { ...webhook("prophet_r38"), timeframe: "60" } } }, now);
+  assert.equal(noisy.complete, true);
+  // Missing local evidence still fails closed.
+  const noLocal = buildEvidenceFusion({ ...input, localCalculations: [local("mizan"), local("gmi")] }, now);
+  assert.equal(noLocal.complete, false);
+  assert.ok(noLocal.missing_evidence.includes("local_calculation:prophet"));
+  // The default (legacy) lane still requires all three webhooks.
+  assert.ok(buildEvidenceFusion({ ...completeInput(), webhookPayloads: {} }, now).missing_evidence.includes("webhook:prophet_r38"));
+});
+
+test("indicator payloads are derived from approved local records with the alert field names and a local origin", () => {
+  const comparable = {
+    prophet: { prophet_r38: { direction: 1, buy_confirmed: true, t_enc: 0 }, prophet_r37_ssot: { direction: 1, d_enc: 1 } },
+    gmi: { gmi_v12_70: { verdict: 3, gate: 2, gmi_dir: 1, prophet_dir: 1, conflict: false } }
+  };
+  const records = ["mizan", "prophet", "gmi"].map(engine => {
+    const r = local(engine);
+    r.trust_status = "approved_by_parity";
+    r.values = { candle: { o: 1, h: 2, l: 0.5, c: 1.5, volume: 10 }, comparable: comparable[engine] || {} };
+    return r;
+  });
+  const out = indicatorPayloadsFromLocal(records, { symbol, timeframe, candleKey });
+  assert.deepEqual(Object.keys(out).sort(), Object.keys(INDICATOR_SOURCES).sort());
+  assert.equal(out.prophet_r38.origin, "local_computation");
+  assert.equal(out.prophet_r38.trust_status, "approved_by_parity");
+  assert.equal(out.prophet_r38.buy_confirmed, true);
+  assert.equal(out.prophet_r38.c, 1.5);
+  assert.equal(out.prophet_r37_ssot.d_enc, 1);
+  assert.equal(out.gmi_v12_70.gate, 2);
+  assert.equal(out.gmi_v12_70.candle_time, candleTime);
+  assert.deepEqual(indicatorPayloadsFromLocal([records[0]], {}), {}, "no prophet/gmi record: nothing is invented");
 });

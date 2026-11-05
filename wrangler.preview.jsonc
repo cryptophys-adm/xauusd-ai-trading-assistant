@@ -36,6 +36,10 @@
     "REQUIRED_SOURCES": "prophet_r38,prophet_r37_ssot,gmi_v12_70",
     // preview-e2e runs its fixture chain on M5; 15m webhooks are stored only (asserted in preview-e2e).
     "ANALYSIS_TIMEFRAMES": "60,5",
+    // Local-primary (owner decision 2026-11-05): approved local records drive the chain;
+    // TradingView webhooks only calibrate the local engines, for example monthly.
+    "INDICATOR_SOURCE": "local",
+    "CALIBRATION_INTERVAL_DAYS": "30",
     "PARITY_PROMOTE_AFTER": "1",
     // The isolated preview runs the multi-agent bus so preview-e2e can prove real model output.
     "MULTI_AGENT_BUS_ENABLED": "true",
