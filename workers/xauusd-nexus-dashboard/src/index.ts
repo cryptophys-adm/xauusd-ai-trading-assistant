@@ -1,3 +1,5 @@
+// Phase C7 scaffold: HUD agent display names (verified/UNVERIFIED badge per HUD).
+const HUD_AGENT_NAMES = ["R37 Funnel","Prophet","Trade Management","The Interstellar Eyes","Kinetic Engine (TVA)","Fabio AMT Sensors","Chronos Matrix","Aegis Footprint Matrix","Tactical Muscles","Macro & Aether Sensors","GABFX Price Action","Playbook Execution","Decision Matrix","Grid Bot Protocol"];
 /**
  * xauusd-nexus-dashboard
  * Standalone dashboard Worker — Moltbook-inspired agent social feed.

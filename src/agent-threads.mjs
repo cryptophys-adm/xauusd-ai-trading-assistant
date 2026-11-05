@@ -640,3 +640,41 @@ export async function readH1Thread(db, candleKey) {
   const post = h1Post(candleKey, synth);
   return { id: `h1:${candleKey}`, kind: "h1", ref_key: candleKey, title: h1Title(candleKey, post.decision), created_at: msgs[0]?.ts ?? null, post, messages: buildMessageTree(msgs) };
 }
+
+
+export function hudAgentIds() {
+  return ["r37_funnel","prophet","trade_management","interstellar_eyes","kinetic_engine","fabio_amt","chronos_matrix","aegis_footprint","tactical_muscles","macro_aether","gabfx_price_action","playbook_execution","decision_matrix","grid_bot_protocol"];
+}
+
+export function hudAgentsEnabled(env) {
+  return String(env?.HUD_AGENTS_ENABLED ?? "false").trim().toLowerCase() === "true";
+}
+
+
+export async function runHudAgentsThreads(env, { threadId, candleKey, readings = {}, clock = () => Date.now() } = {}) {
+  if (!hudAgentsEnabled(env)) return { skipped: true, reason: "flag_disabled" };
+  const ids = hudAgentIds();
+  const started = clock();
+  const results = [];
+  for (const id of ids) {
+    // TODO: call model with src/hud-reading.mjs output; validate with src/natural-language.mjs; store message.
+    results.push({ agent: id, status: "not_implemented", reading: readings[id] || null });
+  }
+  return { skipped: false, thread_id: threadId, candle_key: candleKey, agents: results, elapsed_ms: clock() - started };
+}
+
+
+export const HUD_LIVE_ROOM_AGENTS = Object.freeze(["trade_management", "kinetic_engine", "fabio_amt", "aegis_footprint"]);
+
+export function hudLiveRoomEnabled(env) {
+  return hudAgentsEnabled(env) && liveRoomEnabled(env);
+}
+
+
+export async function callHudAgent(env, { agentId, reading, deadline, clock = () => Date.now() } = {}) {
+  if (!hudAgentsEnabled(env)) return { status: "skipped", reason: "flag_disabled" };
+  const { callBusModel } = await import("./multi-agent-bus.mjs");
+  const messages = [{ role: "user", content: `You are the ${agentId} HUD agent. Reading: ${JSON.stringify(reading || {})}. Reply JSON only.` }];
+  const result = await callBusModel(env, { messages, schemaName: "hud_agent", schema: { type: "object", properties: { insight: { type: "string" } }, required: ["insight"] }, maxTokens: 256, effort: "low", deadline: deadline || (clock() + 30000), clock });
+  return { agent: agentId, status: result.status || "unknown", obj: result.obj || null };
+}

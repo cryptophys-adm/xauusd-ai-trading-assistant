@@ -84,7 +84,13 @@ const SOURCE_ALIASES: Record<string, string> = {
   "prophet r37 ssot": "prophet_r37_ssot",
   gmi_v12_70: "gmi_v12_70",
   "gmi-v12.70": "gmi_v12_70",
-  "gmi v12.70": "gmi_v12_70"
+  "gmi v12.70": "gmi_v12_70",
+  prophet_r38_hud: "prophet_r38_hud",
+  "prophet-r38-hud": "prophet_r38_hud",
+  "prophet r38 hud": "prophet_r38_hud",
+  gmi_v12_70_hud: "gmi_v12_70_hud",
+  "gmi-v12.70-hud": "gmi_v12_70_hud",
+  "gmi v12.70 hud": "gmi_v12_70_hud"
 };
 
 function json(data: unknown, status = 200): Response {
@@ -194,14 +200,17 @@ function parseDecision(text: string): JsonObject {
           (!pricesValid || !directionalPricesValid || confidence === null || riskReward === null || riskReward <= 0 || positionSize === null || positionSize <= 0 || positionSize > 100)) {
           return {
             decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null,
-            risk_reward: null, position_size_pct: null,
+            risk_reward: null, position_size_pct: null, trade_plan: null,
             reasoning: "Actionable model output lacks valid directional prices, confidence, positive risk/reward, or a positive position size within 0–100%; downgraded to WAIT.",
             raw_response: text
           };
         }
         if (positionSize !== null && (positionSize < 0 || positionSize > 100)) {
-          return { decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null, risk_reward: null, position_size_pct: null, reasoning: "Model position_size_pct was outside the permitted 0–100 range; downgraded to WAIT.", raw_response: text };
+          return { decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null, risk_reward: null, position_size_pct: null, trade_plan: null, reasoning: "Model position_size_pct was outside the permitted 0–100 range; downgraded to WAIT.", raw_response: text };
         }
+        const tradePlan = (decision === "BUY" || decision === "SELL") && parsed.trade_plan && typeof parsed.trade_plan === "object"
+          ? parsed.trade_plan
+          : null;
         return {
           ...parsed,
           decision,
@@ -211,6 +220,7 @@ function parseDecision(text: string): JsonObject {
           take_profit: target,
           risk_reward: riskReward,
           position_size_pct: positionSize,
+          trade_plan: tradePlan,
           reasoning: asText(parsed.reasoning) || "No reasoning supplied."
         };
       }
@@ -226,6 +236,7 @@ function parseDecision(text: string): JsonObject {
     take_profit: null,
     risk_reward: null,
     position_size_pct: null,
+    trade_plan: null,
     reasoning: "Model response did not contain a valid decision JSON object.",
     raw_response: text
   };
@@ -985,7 +996,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (!source) {
     return json({
       error: "Unsupported source",
-      accepted_sources: ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"]
+      accepted_sources: ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70", "prophet_r38_hud", "gmi_v12_70_hud"]
     }, 400);
   }
 

@@ -1,0 +1,1157 @@
+//@version=6
+indicator("The Prophet v7.02 (MizanLib Shared Core) · R38", "Prophet R38", overlay=false, max_labels_count=500, max_lines_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE PROPHET v7.01 · R37 — PERBAIKAN BERDASARKAN AUDIT
+// [FIX-1 VETO]     : t_enc 5 (AWAIT MACRO) tidak lagi diekspor sebagai VETO (CMD 4).
+//                    Hanya t_enc 4 (RUTHLESS CUT LOSS) yang veto. Input opsional
+//                    untuk perilaku lama (default OFF).
+// [FIX-2 REPAINT]  : Z-score GMI multi-timeframe memakai bar HTF yang SUDAH CLOSE
+//                    (expr[1] + lookahead_on) secara default; tidak repaint.
+// [FIX-3 OB RETEST]: Opsi mengizinkan entry saat harga berada di dalam zona OB
+//                    (limit di midpoint, harus tetap di bawah/atas harga pasar).
+// [FIX-4 DEAD CODE]: Loop scoring swing-level (tidak dipakai entry/TP) dihapus,
+//                    blok HUD `if false` dihapus, plot budget lebih longgar.
+// [FIX-5 R:R]      : Basis R:R konservatif (EDGE = tepi OB yang pertama tersentuh).
+// [FIX-6 ATR]      : ta.atr(14) dihitung sekali per bar, tidak lagi di dalam ternary.
+// [FIX-7 NAMING]   : Penamaan revisi disatukan ke R37.
+// Formula osilator, raw cross, gate konfirmasi dan HQ tidak diubah.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import cryptophys/CryptophysMizanLib/4 as lib
+
+// =============================================================================
+// INPUT & SETTINGS
+// =============================================================================
+grp_set = "Harmonic Core Settings"
+fast_len   = input.int(13, "Fast Cycle", group=grp_set)
+mid_len    = input.int(34, "Mid Cycle", group=grp_set)
+slow_len   = input.int(55, "Slow Cycle", group=grp_set)
+smooth_len = input.int(6, "Base Fluidity", minval=1, maxval=15, group=grp_set)
+
+grp_ui = "UI & Visual Overrides"
+show_tables  = input.bool(true, "Show Tables (Master Toggle)", group=grp_ui)
+show_hud     = input.bool(true, "Show Prophet HUD", group=grp_ui)
+hud_pos      = input.string(position.top_right, "HUD Position", options=[position.top_right, position.bottom_right, position.bottom_left], group=grp_ui)
+show_div     = input.bool(true, "Show Divergence Lines", group=grp_ui)
+use_zen_mode = input.bool(false, "Zen Mode (Hide minor shapes/dots)", group=grp_ui)
+show_momentum_projection = input.bool(true, "Show Momentum Projection", group=grp_ui, tooltip="Illustrative oscillator scenarios only; not a price forecast or entry signal.")
+projection_horizon = input.int(4, "Projection Horizon (bars)", minval=3, maxval=5, group=grp_ui)
+projection_lookback = input.int(5, "Projection Slope Lookback", minval=3, maxval=20, group=grp_ui)
+
+grp_position = "Trade Management · Manual Position"
+position_mode = input.string("NO POSITION", "Position being managed", options=["NO POSITION", "BUY POSITION", "SELL POSITION"], group=grp_position, tooltip="Manual tracking only. Set this to match a position you actually opened; this indicator does not know broker positions automatically.")
+position_entry = input.float(0.0, "Position entry price", minval=0.0, step=0.01, group=grp_position, tooltip="Enter the actual average entry price. Keep 0 when no valid entry price is provided.")
+
+grp_alert = "Alert & Integration Safety"
+auto_window = input.bool(true, "Adaptive confirmation window", group=grp_alert, tooltip="Uses a longer window on lower timeframes. Disable to use the manual window.")
+manual_window = input.int(3, "Manual confirmation window (closed bars)", minval=1, maxval=10, group=grp_alert)
+alert_confirmed_only = input.bool(true, "Trigger management alerts only on confirmed bars", group=grp_alert, tooltip="Management alerts obey this toggle. BUY/SELL CONFIRMED and HIGH QUALITY signals are always evaluated on closed bars.")
+
+grp_r14 = "Prophet R38 Controls"
+gate_mode = input.string("V2", "Confirmation gate mode", options=["LEGACY", "V2"], group=grp_r14, tooltip="V2 uses fresh symmetric structure, volume validation, and setup depth. LEGACY preserves R13 behavior for A/B comparison.")
+state_max_age = input.int(50, "Structure state maximum age (bars)", minval=1, maxval=500, group=grp_r14, tooltip="Expire persistent ±3 structure state after this many bars. Disabled in LEGACY mode.")
+struct_fresh_bars = input.int(6, "Structure event freshness (bars)", minval=1, maxval=100, group=grp_r14, tooltip="A structure event must occur within this many bars to qualify V2 confirmation.")
+body_floor_atr = input.float(0.10, "Rejection body floor (ATR)", minval=0.0, maxval=1.0, step=0.01, group=grp_r14, tooltip="Prevents near-zero candle bodies from classifying small wicks as rejection. Disabled in LEGACY mode.")
+show_funnel = input.bool(false, "Show confirmation funnel", group=grp_r14, tooltip="Diagnostic counters only; does not alter signal logic.")
+
+// Key-level scoring. Scores are deterministic ranking heuristics, not probabilities.
+grp_key_reason = "Key Level Reasoning Engine"
+key_level_touch_lookback = input.int(40, "Retest scan (bars)", minval=10, maxval=100, group=grp_key_reason)
+key_level_max_distance_atr = input.float(3.0, "Maximum entry distance (ATR)", minval=0.5, maxval=6.0, step=0.25, group=grp_key_reason)
+key_level_min_score = input.float(55.0, "Minimum key-level score (not probability)", minval=0.0, maxval=100.0, step=5.0, group=grp_key_reason)
+
+// LuxAlgo-derived Order Block gate: OBs are the mandatory first filter for entry
+// candidates and directional targets. No swing-level fallback exists.
+grp_ob = "Order Block First Filter · LuxAlgo Reference"
+ob_length = input.int(5, "Volume Pivot Length", minval=1, group=grp_ob)
+ob_max_active = input.int(30, "Maximum active OB zones per direction", minval=1, maxval=100, group=grp_ob)
+ob_max_age = input.int(120, "Maximum OB age (bars)", minval=5, maxval=1000, group=grp_ob)
+ob_mitigation = input.string("Wick", "Full OB Invalidation Method", options=["Wick", "Close"], group=grp_ob, tooltip="Partial mitigation always carves wick penetration; this setting controls the full-zone invalidation trigger.")
+ob_retest_band_atr = input.float(0.15, "OB Retest Band (ATR)", minval=0.0, maxval=1.0, step=0.05, group=grp_ob)
+ob_allow_inside = input.bool(true, "Allow entry while price is inside the OB", group=grp_ob, tooltip="R37: the limit stays at the OB midpoint but is eligible once close is beyond the midpoint (limit still rests on the correct side of market). OFF = R36 behavior (close must be outside the OB edge).")
+ob_show_status = input.bool(true, "Show OB filter status in reasoning tooltip", group=grp_ob)
+ob_zone_max_atr = input.float(3.0, "Maximum OB Zone Span (ATR)", minval=0.5, maxval=8.0, step=0.5, group=grp_ob)
+ob_mitigation_buffer_atr = input.float(0.25, "OB Mitigation Buffer (ATR)", minval=0.0, maxval=1.5, step=0.05, group=grp_ob)
+ob_high_volume_multiplier = input.float(1.5, "High-Volume Classification Multiplier", minval=1.0, maxval=5.0, step=0.1, group=grp_ob)
+ob_dynamic_volume = input.bool(true, "Auto-Adjust High-Volume Classification", group=grp_ob)
+
+grp_tm_risk = "Trade Management · Risk Gate"
+tm_stop_buffer_atr = input.float(0.5, "Stop buffer beyond OB edge (ATR)", minval=0.0, maxval=2.0, step=0.1, group=grp_tm_risk, tooltip="Invalidation is placed OUTSIDE the OB edge by this ATR fraction. A stop on the zone edge is a sweep target.")
+tm_rr_min = input.float(2.0, "Minimum R:R to allow an order line", minval=0.5, maxval=10.0, step=0.5, group=grp_tm_risk, tooltip="Below this ratio the row prints NO TRADE instead of a price. Deterministic arithmetic, not a probability.")
+tm_rr_basis = input.string("EDGE", "R:R entry basis", options=["EDGE", "MID"], group=grp_tm_risk, tooltip="EDGE (conservative, default): risk and reward are measured from the first OB edge price touches, so a fill at the edge cannot invalidate the ratio. MID: measured from the midpoint limit (R36 behavior).")
+
+grp_gmi_align = "GMI Macro Alignment Diagnostic"
+gmi_align_tf1 = input.timeframe("15",  "GMI TF1 (default 15m)", group=grp_gmi_align)
+gmi_align_tf2 = input.timeframe("60",  "GMI TF2 (default 1H)", group=grp_gmi_align)
+gmi_align_tf3 = input.timeframe("240", "GMI TF3 (default 4H)", group=grp_gmi_align)
+gmi_align_tf4 = input.timeframe("D",   "GMI TF4 (default 1D)", group=grp_gmi_align)
+gmi_align_tf5 = input.timeframe("W",   "GMI TF5 (default 1W)", group=grp_gmi_align)
+gmi_closed_only = input.bool(true, "Use closed higher-timeframe bars only (no repaint)", group=grp_gmi_align, tooltip="R37: reads the last CLOSED bar of each higher timeframe (expr[1] with lookahead_on), so alignment cannot flip intrabar. OFF = R36 behavior; the forming HTF bar can repaint on realtime ticks.")
+
+bool legacy_mode = gate_mode == "LEGACY"
+confirmation_window = auto_window ? (legacy_mode ? (timeframe.isminutes and timeframe.multiplier <= 1 ? 5 : timeframe.isminutes and timeframe.multiplier <= 5 ? 4 : 3) : timeframe.isseconds ? (timeframe.multiplier <= 15 ? 5 : 4) : timeframe.isminutes and timeframe.multiplier <= 1 ? 5 : timeframe.isminutes and timeframe.multiplier <= 5 ? 4 : 3) : manual_window
+
+bool show_div_act = show_div and not use_zen_mode
+
+// --- PALETTE ---
+color c_green    = color.new(#22c55e, 0)
+color c_red      = color.new(#ef4444, 0)
+color c_cyan     = color.new(#00e5ff, 0)
+color c_orange   = color.new(#f97316, 0)
+color c_blue     = color.new(#3b82f6, 0)
+color c_purple   = color.new(#a855f7, 0)
+color c_dark     = color.new(#161618, 10)
+color c_border   = color.new(#3f3f46, 60)
+color no_color   = color.new(color.white, 100)
+color obs_sub    = color.new(#9ca3af, 0)
+
+// Structure subtype enum: 0 none, 1 bull trap, 2 true breakout, 3 bear trap, 4 true breakdown.
+int SUB_NONE = 0
+int SUB_BULL_TRAP = 1
+int SUB_TRUE_BREAKOUT = 2
+int SUB_BEAR_TRAP = 3
+int SUB_TRUE_BREAKDOWN = 4
+const float RAW_CROSS_DEPTH = 0.15
+const float PRICE_DISCOVERY_THRESHOLD = 0.45
+const float MIN_VOLUME_RATIO = 0.85
+const float HIGH_QUALITY_VOLUME_RATIO = 1.0
+const float SETUP_DEPTH_Z = 0.618
+const float MACRO_FILTER_Z = 1.0
+const float WICK_BODY_RATIO = 1.5
+
+// R37 FIX-6: single ATR series for the whole script.
+float atr14 = ta.atr(14)
+
+// --- MEMORY SENSORS ---
+float kaufman_er = lib.efficiency_ratio(close, 14)
+float vol_anom_legacy = math.min(2.0, lib.vol_anomaly(volume, 20))
+bool has_volume = nz(ta.cum(nz(volume)), 0.0) > 0.0
+float vol_cur_ratio = lib.prophet_volume_ratio(volume, 20)
+float vol_anom = legacy_mode ? vol_anom_legacy : (barstate.isconfirmed ? nz(vol_cur_ratio, 1.0) : vol_anom_legacy)
+float vol_signal_ratio = legacy_mode or not barstate.isconfirmed ? vol_anom_legacy : nz(vol_cur_ratio, 1.0)
+
+float hurst      = lib.hurst_rs(close, 100)
+float z_score    = lib.kww_zscore(close, 50)
+
+// R37 FIX-2: higher-timeframe z-score, closed bars only by default.
+f_htf_z(string tf) =>
+    float z = na
+    if gmi_closed_only
+        z := request.security(syminfo.tickerid, tf, lib.kww_zscore(close, 50)[1], lookahead=barmerge.lookahead_on, ignore_invalid_symbol=true)
+    else
+        z := request.security(syminfo.tickerid, tf, lib.kww_zscore(close, 50), ignore_invalid_symbol=true)
+    z
+
+float gmi_align_z1 = f_htf_z(gmi_align_tf1)
+float gmi_align_z2 = f_htf_z(gmi_align_tf2)
+float gmi_align_z3 = f_htf_z(gmi_align_tf3)
+float gmi_align_z4 = f_htf_z(gmi_align_tf4)
+float gmi_align_z5 = f_htf_z(gmi_align_tf5)
+float gmi_equiv_global_z = (nz(gmi_align_z1) * 0.10) + (nz(gmi_align_z2) * 0.15) + (nz(gmi_align_z3) * 0.25) + (nz(gmi_align_z4) * 0.30) + (nz(gmi_align_z5) * 0.20)
+int gmi_z_alignment_code = na(z_score) or na(gmi_equiv_global_z) ? 0 : z_score > 0 and gmi_equiv_global_z > 0 ? 1 : z_score < 0 and gmi_equiv_global_z < 0 ? -1 : z_score == 0 or gmi_equiv_global_z == 0 ? 0 : 2
+string gmi_z_alignment_txt = gmi_z_alignment_code == 1 ? "ALIGNED BULLISH" : gmi_z_alignment_code == -1 ? "ALIGNED BEARISH" : gmi_z_alignment_code == 2 ? "DIRECTION CONFLICT" : "NEUTRAL / N/A"
+color gmi_z_alignment_col = gmi_z_alignment_code == 1 ? c_cyan : gmi_z_alignment_code == -1 ? c_red : gmi_z_alignment_code == 2 ? c_orange : obs_sub
+
+bool is_vol_valid    = legacy_mode ? vol_anom_legacy >= 0.85 : (has_volume and vol_signal_ratio >= MIN_VOLUME_RATIO)
+bool is_real_vol     = legacy_mode ? vol_anom_legacy > 1.0 : (has_volume and vol_signal_ratio > 1.0)
+bool is_macro_bull   = z_score > 0
+bool is_macro_bear   = z_score < 0
+bool is_strong_trend = hurst > 0.60
+
+float cshi_score = (math.min(2.0, vol_anom) / 2.0 * 0.40) + (nz(hurst, 0.5) * 0.35) + (kaufman_er * 0.25)
+color cshi_col = c_red
+string cshi_txt = "LOW ACTIVITY"
+if cshi_score >= 0.65
+    cshi_col := c_purple, cshi_txt := "HIGH ACTIVITY"
+else if cshi_score >= 0.50
+    cshi_col := c_green, cshi_txt := "ACTIVE REGIME"
+else if cshi_score >= 0.38
+    cshi_col := c_orange, cshi_txt := "LOW ACTIVITY / TRANSITIONAL"
+
+// --- HARMONIC ENGINE ---
+float w_f_int = lib.f_cycle(close, high, low, fast_len)
+float w_m_int = lib.f_cycle(close, high, low, mid_len)
+float w_s_int = lib.f_cycle(close, high, low, slow_len)
+float inten = (w_f_int > 0 and w_m_int > 0 and w_s_int > 0) ? 3.0 : (w_f_int < 0 and w_m_int < 0 and w_s_int < 0) ? -3.0 : 0.0
+
+float raw_comp = (lib.f_vol_cycle(close, high, low, fast_len, vol_anom) * 0.5) + (lib.f_vol_cycle(close, high, low, mid_len, vol_anom) * 0.35) + (lib.f_vol_cycle(close, high, low, slow_len, vol_anom) * 0.15)
+[pro_fast, pro_slow, pro_core] = lib.calculate_prophet_tensor(raw_comp, kaufman_er, smooth_len)
+
+// --- MIZANLIB SHARED PROPHET STRUCTURE CORE ---
+var line[] div_lines = array.new_line()
+var label[] div_labels = array.new_label()
+[d_enc, b_enc, structure_state_bar, bull_structure_event_bar, bear_structure_event_bar, prophet_structure_subtype_code, pro_ph, pro_pl, bear_div_event, bull_div_event, bear_div_origin_bar, bear_div_origin_value, bull_div_origin_bar, bull_div_origin_value, last_pr_ph, last_pr_pl] = lib.prophet_structure_core(pro_fast, high, low, open, close, vol_signal_ratio, has_volume, atr14, legacy_mode, state_max_age, 5, 2, body_floor_atr, WICK_BODY_RATIO)
+if bear_div_event and show_div_act
+    array.push(div_lines, line.new(bear_div_origin_bar, bear_div_origin_value, bar_index - 2, pro_ph, color=color.new(c_red, 20), width=2))
+    array.push(div_labels, label.new(bar_index - 2, pro_ph, "Div", color=no_color, textcolor=c_red, style=label.style_text_outline, size=size.tiny))
+if bull_div_event and show_div_act
+    array.push(div_lines, line.new(bull_div_origin_bar, bull_div_origin_value, bar_index - 2, pro_pl, color=color.new(c_cyan, 20), width=2))
+    array.push(div_labels, label.new(bar_index - 2, pro_pl, "Div", color=no_color, textcolor=c_cyan, style=label.style_text_outline, size=size.tiny))
+while array.size(div_lines) > 5
+    line.delete(array.shift(div_lines))
+    label.delete(array.shift(div_labels))
+
+string prophet_structure_subtype = prophet_structure_subtype_code == SUB_BULL_TRAP ? "BULL TRAP / FAKEOUT UP" : prophet_structure_subtype_code == SUB_TRUE_BREAKOUT ? "TRUE BREAKOUT" : prophet_structure_subtype_code == SUB_BEAR_TRAP ? "BEAR TRAP / LIQUIDITY SWEEP DOWN" : prophet_structure_subtype_code == SUB_TRUE_BREAKDOWN ? "TRUE BREAKDOWN" : "SUBTYPE UNRESOLVED"
+
+// --- Trade Management Rules ---
+float t_enc = 0.0
+if legacy_mode
+    if pro_fast >= PRICE_DISCOVERY_THRESHOLD
+        t_enc := 6.0
+    else if pro_fast <= -PRICE_DISCOVERY_THRESHOLD
+        t_enc := -6.0
+    else if d_enc == 3.0
+        if is_strong_trend and math.abs(z_score) >= MACRO_FILTER_Z
+            t_enc := 5.0
+        else
+            t_enc := 4.0
+    else if d_enc == -3.0
+        t_enc := 1.0
+    else if inten == 3.0 and kaufman_er > 0.5 and vol_anom_legacy >= 0.85
+        t_enc := is_strong_trend ? 1.0 : 0.0
+    else if inten == -3.0 and kaufman_er > 0.5 and vol_anom_legacy >= 0.85
+        t_enc := is_strong_trend ? -1.0 : 0.0
+    else if (b_enc == 3.0 or b_enc == -3.0) and not is_strong_trend
+        t_enc := 3.0
+else
+    if d_enc == 3.0
+        if is_strong_trend and math.abs(z_score) >= MACRO_FILTER_Z
+            t_enc := 5.0
+        else
+            t_enc := 4.0
+    else if pro_fast >= PRICE_DISCOVERY_THRESHOLD
+        t_enc := 6.0
+    else if pro_fast <= -PRICE_DISCOVERY_THRESHOLD
+        t_enc := -6.0
+    else if d_enc == -3.0
+        t_enc := 1.0
+    else if inten == 3.0 and kaufman_er > 0.5 and vol_anom >= 0.85
+        t_enc := is_strong_trend ? 1.0 : 0.0
+    else if inten == -3.0 and kaufman_er > 0.5 and vol_anom >= 0.85
+        t_enc := is_strong_trend ? -1.0 : 0.0
+    else if (b_enc == 3.0 or b_enc == -3.0) and not is_strong_trend
+        t_enc := 3.0
+
+// --- TEXT DECODER MAP ---
+string intensity_txt = math.abs(inten) == 3.0 ? "CYCLE ALIGNMENT: STRONG" : "CYCLE ALIGNMENT: MIXED"
+color int_col = inten > 0 ? c_cyan : inten < 0 ? c_red : obs_sub
+string int_dir_txt = inten > 0 ? "BULLISH 🚀" : inten < 0 ? "BEARISH 🩸" : "NEUTRAL ⚖️"
+
+string div_txt = "ALIGNED ⚖️"
+color div_col = obs_sub
+if d_enc == 1.0
+    div_txt := "BULLISH DIVERGENCE DETECTED", div_col := c_cyan
+else if d_enc == -1.0
+    div_txt := "BEARISH DIVERGENCE DETECTED", div_col := c_orange
+else if d_enc == 3.0
+    if t_enc == 5.0
+        div_txt := "MICRO BREAK / MACRO FILTER ACTIVE", div_col := c_blue
+    else if t_enc == 6.0
+        div_txt := "PRICE-DISCOVERY STATE: HIGH", div_col := c_cyan
+    else if t_enc == -6.0
+        div_txt := "PRICE-DISCOVERY STATE: LOW", div_col := c_red
+    else
+        div_txt := "STRUCTURE STATE: BREAKOUT/TRAP CLASSIFICATION", div_col := c_red
+else if d_enc == -3.0
+    div_txt := "SWEEP/BREAKOUT STATE (SUBTYPE REQUIRED)", div_col := c_cyan
+
+// Display-only: HUD structure label follows the recorded subtype.
+if d_enc == 3.0 or d_enc == -3.0
+    div_txt := prophet_structure_subtype
+string vol_conf_txt = not has_volume and not legacy_mode ? "VOLUME N/A" : is_real_vol ? "ABOVE-BASELINE VOLUME" : "NOT ABOVE BASELINE"
+color vol_conf_col = not has_volume and not legacy_mode ? obs_sub : is_real_vol ? c_cyan : c_red
+
+string legacy_tm_state_txt = t_enc == 1.0 ? "PYRAMID BULL" : t_enc == -1.0 ? "PYRAMID BEAR" : t_enc == 2.0 ? "TP (OVERBOUGHT)" : t_enc == -2.0 ? "TP (OVERSOLD)" : t_enc == 3.0 ? "REVERSAL" : t_enc == 4.0 ? "RUTHLESS CUT LOSS" : t_enc == 5.0 ? "AWAIT MACRO (HOLD)" : t_enc == 6.0 ? "DISCOVERING HIGH" : t_enc == -6.0 ? "DISCOVERING LOW" : "NOMINAL (HOLD)"
+
+string tm_txt = "NOMINAL (HOLD) ⚖️"
+color tm_col = obs_sub
+if t_enc == 1.0
+    tm_txt := "PYRAMID BULL", tm_col := c_cyan
+else if t_enc == -1.0
+    tm_txt := "PYRAMID BEAR", tm_col := c_red
+else if t_enc == 2.0
+    tm_txt := "TP (OVERBOUGHT)", tm_col := c_cyan
+else if t_enc == -2.0
+    tm_txt := "TP (OVERSOLD)", tm_col := c_red
+else if t_enc == 3.0
+    tm_txt := "REVERSAL", tm_col := c_orange
+else if t_enc == 4.0
+    tm_txt := "RUTHLESS CUT LOSS", tm_col := c_red
+else if t_enc == 5.0
+    tm_txt := "AWAIT MACRO (HOLD)", tm_col := c_blue
+else if t_enc == 6.0
+    tm_txt := "DISCOVERING HIGH", tm_col := c_cyan
+else if t_enc == -6.0
+    tm_txt := "DISCOVERING LOW", tm_col := c_red
+
+int tm_dir = (t_enc == 1.0 or t_enc == -2.0 or t_enc == 6.0) ? 1 : (t_enc == -1.0 or t_enc == 2.0 or t_enc == 4.0 or t_enc == -6.0) ? -1 : 0
+string macro_align_txt = tm_dir == 0 ? "—" : ((tm_dir == 1 and is_macro_bull) or (tm_dir == -1 and is_macro_bear)) ? "ALIGNS WITH MACRO Z-SCORE" : "OPPOSES MACRO Z-SCORE"
+color macro_align_col = macro_align_txt == "ALIGNS WITH MACRO Z-SCORE" ? c_cyan : macro_align_txt == "OPPOSES MACRO Z-SCORE" ? c_red : obs_sub
+
+// --- RENDER ---
+color phase_color = pro_slow > 0 ? c_cyan : c_red
+color ribbon_color = pro_fast > pro_slow ? c_cyan : c_red
+
+hline_peak = hline(0.35, color=color.new(c_red, 30), linestyle=hline.style_dotted)
+hline_max  = hline(0.55, color=no_color)
+fill(hline_peak, hline_max, color=color.new(c_red, 90))
+
+hline_trough = hline(-0.35, color=color.new(c_cyan, 30), linestyle=hline.style_dotted)
+hline_min    = hline(-0.55, color=no_color)
+fill(hline_trough, hline_min, color=color.new(c_cyan, 90))
+
+p_zero = plot(0, color=color.new(color.white, 80), linewidth=1)
+p_base = plot(pro_slow, color=no_color, editable=false)
+fill(p_base, p_zero, color=color.new(phase_color, 85))
+
+p_s = plot(pro_slow, color=color.new(ribbon_color, 30), linewidth=1)
+p_c = plot(pro_core, color=no_color, editable=false)
+p_f = plot(pro_fast, color=ribbon_color, linewidth=2)
+
+fill(p_f, p_c, color=color.new(ribbon_color, 50))
+fill(p_c, p_s, color=color.new(ribbon_color, 75))
+
+// --- ADAPTIVE, TIERED CONFIRMATION GATE ---
+bool raw_buy_cross  = ta.crossover(pro_fast, pro_slow) and pro_fast < -RAW_CROSS_DEPTH
+bool raw_sell_cross = ta.crossunder(pro_fast, pro_slow) and pro_fast > RAW_CROSS_DEPTH
+bool buy_candidate  = raw_buy_cross and barstate.isconfirmed
+bool sell_candidate = raw_sell_cross and barstate.isconfirmed
+
+bool bullish_price_confirm = close > open and close > high[1]
+bool bearish_price_confirm = close < open and close < low[1]
+bool bullish_price_early = close > open and close > close[1]
+bool bearish_price_early = close < open and close < close[1]
+bool bullish_structure_legacy = (b_enc == 3.0 or d_enc == 1.0 or (d_enc == -3.0 and prophet_structure_subtype == "BEAR TRAP / LIQUIDITY SWEEP DOWN")) and d_enc != 3.0
+bool bearish_structure_legacy = (b_enc == -3.0 or d_enc == -1.0 or (d_enc == 3.0 and prophet_structure_subtype == "TRUE BREAKDOWN")) and d_enc != -3.0
+bool bull_structure_fresh = (not na(bull_structure_event_bar) and bar_index - bull_structure_event_bar <= struct_fresh_bars)
+bool bear_structure_fresh = (not na(bear_structure_event_bar) and bar_index - bear_structure_event_bar <= struct_fresh_bars)
+bool fresh_bullish_divergence = d_enc == 1.0 and bull_structure_fresh
+bool fresh_bearish_divergence = d_enc == -1.0 and bear_structure_fresh
+bool fresh_bullish_sweep_reversal = d_enc == -3.0 and prophet_structure_subtype_code == SUB_BEAR_TRAP and bull_structure_fresh
+bool fresh_bearish_sweep_reversal = d_enc == 3.0 and prophet_structure_subtype_code == SUB_BULL_TRAP and bear_structure_fresh
+bool bullish_countertrend_watch = inten == -3.0 and (fresh_bullish_divergence or fresh_bullish_sweep_reversal)
+bool bearish_countertrend_watch = inten == 3.0 and (fresh_bearish_divergence or fresh_bearish_sweep_reversal)
+bool bullish_structure_v2 = bull_structure_fresh and (d_enc == 1.0 or (b_enc == 3.0 and d_enc != 0.0) or (d_enc == -3.0 and (prophet_structure_subtype_code == SUB_BEAR_TRAP or prophet_structure_subtype_code == SUB_TRUE_BREAKOUT)))
+bool bearish_structure_v2 = bear_structure_fresh and (d_enc == -1.0 or (b_enc == -3.0 and d_enc != 0.0) or (d_enc == 3.0 and (prophet_structure_subtype_code == SUB_BULL_TRAP or prophet_structure_subtype_code == SUB_TRUE_BREAKDOWN)))
+bool bullish_structure_confirm = legacy_mode ? bullish_structure_legacy : bullish_structure_v2
+bool bearish_structure_confirm = legacy_mode ? bearish_structure_legacy : bearish_structure_v2
+
+int bars_since_buy = ta.barssince(buy_candidate)
+int bars_since_sell = ta.barssince(sell_candidate)
+bool has_buy_event = not na(bars_since_buy)
+bool has_sell_event = not na(bars_since_sell)
+bool sell_supersedes_buy = has_sell_event and (not has_buy_event or bars_since_sell < bars_since_buy)
+bool buy_supersedes_sell = has_buy_event and (not has_sell_event or bars_since_buy < bars_since_sell)
+bool buy_window_active = has_buy_event and bars_since_buy >= 0 and bars_since_buy <= confirmation_window and (legacy_mode or not sell_supersedes_buy)
+bool sell_window_active = has_sell_event and bars_since_sell >= 0 and bars_since_sell <= confirmation_window and (legacy_mode or not buy_supersedes_sell)
+
+int buy_quality_points = (inten == 3.0 ? 1 : 0) + (is_macro_bull ? 1 : 0) + (is_vol_valid ? 1 : 0)
+int sell_quality_points = (inten == -3.0 ? 1 : 0) + (is_macro_bear ? 1 : 0) + (is_vol_valid ? 1 : 0)
+bool buy_base_confirm = barstate.isconfirmed and buy_window_active and bullish_price_confirm and bullish_structure_confirm
+bool sell_base_confirm = barstate.isconfirmed and sell_window_active and bearish_price_confirm and bearish_structure_confirm
+bool buy_volume_pass = legacy_mode ? buy_quality_points >= 2 : (not has_volume or vol_signal_ratio >= MIN_VOLUME_RATIO)
+bool sell_volume_pass = legacy_mode ? sell_quality_points >= 2 : (not has_volume or vol_signal_ratio >= MIN_VOLUME_RATIO)
+var float buy_candidate_min_z = na
+var float sell_candidate_max_z = na
+if buy_candidate
+    buy_candidate_min_z := z_score
+    if not legacy_mode
+        sell_candidate_max_z := na
+if sell_candidate
+    sell_candidate_max_z := z_score
+    if not legacy_mode
+        buy_candidate_min_z := na
+if buy_window_active
+    buy_candidate_min_z := na(buy_candidate_min_z) ? z_score : math.min(buy_candidate_min_z, z_score)
+if sell_window_active
+    sell_candidate_max_z := na(sell_candidate_max_z) ? z_score : math.max(sell_candidate_max_z, z_score)
+bool buy_depth_pass = not na(buy_candidate_min_z) and buy_candidate_min_z <= -SETUP_DEPTH_Z
+bool sell_depth_pass = not na(sell_candidate_max_z) and sell_candidate_max_z >= SETUP_DEPTH_Z
+bool buy_confirmed_raw = buy_base_confirm and buy_volume_pass
+bool sell_confirmed_raw = sell_base_confirm and sell_volume_pass
+bool buy_early_confirmation = barstate.isconfirmed and buy_window_active and bullish_price_early and bullish_structure_confirm and buy_volume_pass and not buy_confirmed_raw
+bool sell_early_confirmation = barstate.isconfirmed and sell_window_active and bearish_price_early and bearish_structure_confirm and sell_volume_pass and not sell_confirmed_raw
+bool buy_high_quality_raw = legacy_mode ? (buy_base_confirm and buy_quality_points == 3) : (buy_confirmed_raw and has_volume and vol_signal_ratio >= HIGH_QUALITY_VOLUME_RATIO and buy_depth_pass)
+bool sell_high_quality_raw = legacy_mode ? (sell_base_confirm and sell_quality_points == 3) : (sell_confirmed_raw and has_volume and vol_signal_ratio >= HIGH_QUALITY_VOLUME_RATIO and sell_depth_pass)
+
+var int buy_pass_bar = na
+var int sell_pass_bar = na
+var int buy_hq_bar = na
+var int sell_hq_bar = na
+if buy_candidate
+    buy_pass_bar := na
+    buy_hq_bar := na
+    if not legacy_mode
+        sell_pass_bar := na
+        sell_hq_bar := na
+if sell_candidate
+    sell_pass_bar := na
+    sell_hq_bar := na
+    if not legacy_mode
+        buy_pass_bar := na
+        buy_hq_bar := na
+if buy_confirmed_raw and na(buy_pass_bar)
+    buy_pass_bar := bar_index
+if sell_confirmed_raw and na(sell_pass_bar)
+    sell_pass_bar := bar_index
+if buy_confirmed_raw and buy_high_quality_raw and na(buy_hq_bar)
+    buy_hq_bar := bar_index
+if sell_confirmed_raw and sell_high_quality_raw and na(sell_hq_bar)
+    sell_hq_bar := bar_index
+bool buy_confirmed = not na(buy_pass_bar) and bar_index == buy_pass_bar
+bool sell_confirmed = not na(sell_pass_bar) and bar_index == sell_pass_bar
+bool buy_high_quality = not na(buy_hq_bar) and bar_index == buy_hq_bar
+bool sell_high_quality = not na(sell_hq_bar) and bar_index == sell_hq_bar
+
+var float latched_buy_entry_candidate = na
+var float latched_sell_entry_candidate = na
+if buy_candidate
+    latched_buy_entry_candidate := na
+    if not legacy_mode
+        latched_sell_entry_candidate := na
+if sell_candidate
+    latched_sell_entry_candidate := na
+    if not legacy_mode
+        latched_buy_entry_candidate := na
+if (buy_early_confirmation or buy_confirmed_raw) and na(latched_buy_entry_candidate)
+    latched_buy_entry_candidate := close
+if (sell_early_confirmation or sell_confirmed_raw) and na(latched_sell_entry_candidate)
+    latched_sell_entry_candidate := close
+
+bool latest_is_buy = has_buy_event and (not has_sell_event or bars_since_buy < bars_since_sell)
+bool latest_is_sell = has_sell_event and (not has_buy_event or bars_since_sell < bars_since_buy)
+bool decision_buy_setup_active = latest_is_buy and buy_window_active and inten == 3.0
+bool decision_sell_setup_active = latest_is_sell and sell_window_active and inten == -3.0
+bool buy_setup_superseded_by_trend = latest_is_buy and buy_window_active and inten == -3.0
+bool sell_setup_superseded_by_trend = latest_is_sell and sell_window_active and inten == 3.0
+bool last_buy_passed = not na(buy_pass_bar) and not na(bars_since_buy) and buy_pass_bar >= bar_index - bars_since_buy
+bool last_sell_passed = not na(sell_pass_bar) and not na(bars_since_sell) and sell_pass_bar >= bar_index - bars_since_sell
+string gate_reason = "NO BLOCKER"
+// gate_reason describes blockers for BASE CONFIRMATION only. Setup depth is an HQ-tier requirement.
+if latest_is_buy and buy_window_active and not last_buy_passed
+    gate_reason := not bullish_price_confirm ? "PRICE" : not bullish_structure_confirm ? "STRUCTURE" : not buy_volume_pass ? "VOLUME" : legacy_mode and buy_quality_points < 2 ? (inten != 3.0 ? "CYCLE" : not is_macro_bull ? "MACRO" : "VOLUME") : "WAIT"
+else if latest_is_sell and sell_window_active and not last_sell_passed
+    gate_reason := not bearish_price_confirm ? "PRICE" : not bearish_structure_confirm ? "STRUCTURE" : not sell_volume_pass ? "VOLUME" : legacy_mode and sell_quality_points < 2 ? (inten != -3.0 ? "CYCLE" : not is_macro_bear ? "MACRO" : "VOLUME") : "WAIT"
+
+int buy_pass_age = not na(buy_pass_bar) ? bar_index - buy_pass_bar : na
+int sell_pass_age = not na(sell_pass_bar) ? bar_index - sell_pass_bar : na
+int buy_hq_age = not na(buy_hq_bar) ? bar_index - buy_hq_bar : na
+int sell_hq_age = not na(sell_hq_bar) ? bar_index - sell_hq_bar : na
+string gate_status_txt = "GATE: NO CROSS"
+if has_buy_event or has_sell_event
+    if latest_is_buy
+        if not buy_window_active
+            gate_status_txt := last_buy_passed ? "BUY PASSED · WINDOW EXPIRED" : "NO ACTIVE SETUP"
+        else if last_buy_passed
+            if not legacy_mode and not has_volume
+                gate_status_txt := "BUY CONFIRMED · HQ N/A"
+            else if not na(buy_hq_bar)
+                gate_status_txt := "BUY HIGH QUALITY (" + str.tostring(buy_hq_age) + " bars ago)"
+            else
+                gate_status_txt := "BUY CONFIRMED (" + str.tostring(buy_pass_age) + " bars ago)"
+        else
+            gate_status_txt := "BUY WAIT · " + gate_reason
+    else if latest_is_sell
+        if not sell_window_active
+            gate_status_txt := last_sell_passed ? "SELL PASSED · WINDOW EXPIRED" : "NO ACTIVE SETUP"
+        else if last_sell_passed
+            if not legacy_mode and not has_volume
+                gate_status_txt := "SELL CONFIRMED · HQ N/A"
+            else if not na(sell_hq_bar)
+                gate_status_txt := "SELL HIGH QUALITY (" + str.tostring(sell_hq_age) + " bars ago)"
+            else
+                gate_status_txt := "SELL CONFIRMED (" + str.tostring(sell_pass_age) + " bars ago)"
+        else
+            gate_status_txt := "SELL WAIT · " + gate_reason
+color gate_status_col = str.contains(gate_status_txt, "WAIT") ? c_orange : str.contains(gate_status_txt, "BUY") ? c_cyan : str.contains(gate_status_txt, "SELL") ? c_red : obs_sub
+string tm_display_txt = tm_txt + " · " + gate_status_txt
+
+// Optional funnel: cumulative diagnostic counts.
+var int funnel_candidates = 0
+var int funnel_price = 0
+var int funnel_structure = 0
+var int funnel_volume = 0
+var int funnel_confirmed = 0
+var int funnel_hq = 0
+var bool buy_price_counted = false
+var bool sell_price_counted = false
+var bool buy_structure_counted = false
+var bool sell_structure_counted = false
+var bool buy_volume_counted = false
+var bool sell_volume_counted = false
+if buy_candidate or sell_candidate
+    funnel_candidates += 1
+if buy_candidate
+    buy_price_counted := false, buy_structure_counted := false, buy_volume_counted := false
+if sell_candidate
+    sell_price_counted := false, sell_structure_counted := false, sell_volume_counted := false
+if buy_window_active and bullish_price_confirm and not buy_price_counted
+    funnel_price += 1, buy_price_counted := true
+if sell_window_active and bearish_price_confirm and not sell_price_counted
+    funnel_price += 1, sell_price_counted := true
+if buy_window_active and bullish_price_confirm and bullish_structure_confirm and not buy_structure_counted
+    funnel_structure += 1, buy_structure_counted := true
+if sell_window_active and bearish_price_confirm and bearish_structure_confirm and not sell_structure_counted
+    funnel_structure += 1, sell_structure_counted := true
+if buy_window_active and bullish_price_confirm and bullish_structure_confirm and buy_volume_pass and not buy_volume_counted
+    funnel_volume += 1, buy_volume_counted := true
+if sell_window_active and bearish_price_confirm and bearish_structure_confirm and sell_volume_pass and not sell_volume_counted
+    funnel_volume += 1, sell_volume_counted := true
+if buy_confirmed or sell_confirmed
+    funnel_confirmed += 1
+if buy_high_quality or sell_high_quality
+    funnel_hq += 1
+var table funnel_table = table.new(position.top_left, 2, 7, bgcolor=c_dark, border_width=1, border_color=c_border)
+if barstate.islast and show_funnel
+    table.cell(funnel_table, 0, 0, "R37 FUNNEL", text_color=c_purple)
+    table.cell(funnel_table, 1, 0, "COUNT", text_color=obs_sub)
+    table.cell(funnel_table, 0, 1, "Candidates", text_color=color.white), table.cell(funnel_table, 1, 1, str.tostring(funnel_candidates), text_color=obs_sub)
+    table.cell(funnel_table, 0, 2, "Price", text_color=color.white), table.cell(funnel_table, 1, 2, str.tostring(funnel_price), text_color=obs_sub)
+    table.cell(funnel_table, 0, 3, "Structure", text_color=color.white), table.cell(funnel_table, 1, 3, str.tostring(funnel_structure), text_color=obs_sub)
+    table.cell(funnel_table, 0, 4, "Volume", text_color=color.white), table.cell(funnel_table, 1, 4, str.tostring(funnel_volume), text_color=obs_sub)
+    table.cell(funnel_table, 0, 5, "Confirmed", text_color=color.white), table.cell(funnel_table, 1, 5, str.tostring(funnel_confirmed), text_color=obs_sub)
+    table.cell(funnel_table, 0, 6, "High Quality", text_color=color.white), table.cell(funnel_table, 1, 6, str.tostring(funnel_hq), text_color=obs_sub)
+else if barstate.islast
+    table.clear(funnel_table, 0, 0, 1, 6)
+
+bool cross_up_trough = ta.crossover(pro_fast, -0.35)
+bool cross_dn_peak   = ta.crossunder(pro_fast, 0.35)
+plotshape(cross_up_trough and barstate.isconfirmed and not use_zen_mode ? pro_fast : na, "Threshold Cross Up -0.35", shape.circle, location.absolute, color=c_cyan, size=size.tiny)
+plotshape(cross_dn_peak and barstate.isconfirmed and not use_zen_mode ? pro_fast : na, "Threshold Cross Down +0.35", shape.circle, location.absolute, color=c_red, size=size.tiny)
+plotshape(buy_window_active and not use_zen_mode ? pro_fast : na, title="BUY Window Active", style=shape.circle, location=location.absolute, color=c_cyan, size=size.tiny)
+plotshape(sell_window_active and not use_zen_mode ? pro_fast : na, title="SELL Window Active", style=shape.circle, location=location.absolute, color=c_red, size=size.tiny)
+
+// Short-horizon oscillator scenarios (illustrative, not probabilities or entry signals).
+var line momentum_projection_main = na
+var line momentum_projection_alt = na
+var line momentum_projection_boundary = na
+var label momentum_projection_main_label = na
+var label momentum_projection_alt_label = na
+float projection_lr_now = ta.linreg(pro_fast, projection_lookback, 0)
+float projection_lr_prev = ta.linreg(pro_fast, projection_lookback, 1)
+float projection_slope = projection_lr_now - projection_lr_prev
+float projection_noise = ta.stdev(pro_fast, projection_lookback) / projection_horizon
+float projection_stdev = ta.stdev(pro_fast, projection_lookback)
+float projection_range = math.max(projection_stdev, 0.01)
+float projection_step = math.max(math.abs(projection_slope), nz(projection_noise, 0.0) * 0.15)
+bool projection_slope_neutral = math.abs(projection_slope) < 0.000001
+float projection_main_end = projection_slope_neutral ? pro_fast + projection_step * projection_horizon : pro_fast + projection_slope * projection_horizon
+float projection_alt_end = projection_slope_neutral ? pro_fast - projection_step * projection_horizon : pro_fast - math.sign(projection_slope) * projection_step * projection_horizon
+
+if barstate.islast
+    if not na(momentum_projection_main)
+        line.delete(momentum_projection_main)
+    if not na(momentum_projection_alt)
+        line.delete(momentum_projection_alt)
+    if not na(momentum_projection_boundary)
+        line.delete(momentum_projection_boundary)
+    if not na(momentum_projection_main_label)
+        label.delete(momentum_projection_main_label)
+    if not na(momentum_projection_alt_label)
+        label.delete(momentum_projection_alt_label)
+    momentum_projection_main := na
+    momentum_projection_alt := na
+    momentum_projection_boundary := na
+    momentum_projection_main_label := na
+    momentum_projection_alt_label := na
+    if show_momentum_projection and not use_zen_mode and not na(pro_fast) and not na(projection_slope)
+        momentum_projection_boundary := line.new(
+          x1=bar_index, y1=0.0, x2=bar_index, y2=0.0,
+          xloc=xloc.bar_index, extend=extend.none,
+          color=color.new(color.gray, 25), style=line.style_dotted, width=1)
+        momentum_projection_main := line.new(
+          x1=bar_index, y1=pro_fast,
+          x2=bar_index + projection_horizon, y2=projection_main_end,
+          xloc=xloc.bar_index, extend=extend.none,
+          color=color.new(projection_slope >= 0 ? c_cyan : c_red, 5),
+          style=line.style_dashed, width=2)
+        momentum_projection_alt := line.new(
+          x1=bar_index, y1=pro_fast,
+          x2=bar_index + projection_horizon, y2=projection_alt_end,
+          xloc=xloc.bar_index, extend=extend.none,
+          color=color.new(projection_slope >= 0 ? c_red : c_cyan, 25),
+          style=line.style_dashed, width=2)
+        momentum_projection_main_label := label.new(
+          x=bar_index + projection_horizon, y=projection_main_end,
+          text=projection_slope >= 0 ? "MOM +" : "MOM −",
+          xloc=xloc.bar_index, yloc=yloc.price,
+          style=label.style_label_left,
+          color=color.new(projection_slope >= 0 ? c_cyan : c_red, 15),
+          textcolor=color.white, size=size.tiny)
+        momentum_projection_alt_label := label.new(
+          x=bar_index + projection_horizon, y=projection_alt_end,
+          text=projection_slope >= 0 ? "ALT −" : "ALT +",
+          xloc=xloc.bar_index, yloc=yloc.price,
+          style=label.style_label_left,
+          color=color.new(projection_slope >= 0 ? c_red : c_cyan, 25),
+          textcolor=color.white, size=size.tiny)
+        line.set_y1(momentum_projection_boundary, pro_fast - projection_range * 1.5)
+        line.set_y2(momentum_projection_boundary, pro_fast + projection_range * 1.5)
+
+// --- CSHI STATUS RIBBON ---
+p_cshi_top = plot(-0.62, "CSHI Ribbon Top", color=no_color, display=display.none)
+p_cshi_bot = plot(-0.68, "CSHI Ribbon Bot", color=no_color, display=display.none)
+fill(p_cshi_top, p_cshi_bot, color=color.new(cshi_col, 10), title="CSHI Status Ribbon")
+
+// --- HUD TEXT ---
+string regime_detail = "ER " + str.tostring(kaufman_er, "#.00") + " · Vol " + str.tostring(vol_anom, "#.0") + "x"
+string hud_market_txt = cshi_txt + " · " + regime_detail
+string hud_harmonic_txt = intensity_txt + " · " + int_dir_txt
+string hud_structure_txt = div_txt + " · " + vol_conf_txt
+
+float prophet_momentum_delta = pro_fast - pro_fast[1]
+string hud_momentum_strength_txt = na(prophet_momentum_delta) ? "MOMENTUM UNAVAILABLE" : pro_fast > pro_slow and prophet_momentum_delta > 0 ? "BULLISH · STRENGTHENING" : pro_fast > pro_slow and prophet_momentum_delta < 0 ? "BULLISH · WEAKENING" : pro_fast < pro_slow and prophet_momentum_delta < 0 ? "BEARISH · STRENGTHENING" : pro_fast < pro_slow and prophet_momentum_delta > 0 ? "BEARISH · WEAKENING" : "NEUTRAL · STABLE"
+string legacy_tm_context_txt = legacy_tm_state_txt
+if bullish_countertrend_watch and t_enc == 1.0
+    legacy_tm_context_txt := "PYRAMID BULL · COUNTER-TREND WATCH"
+else if inten == -3.0 and t_enc == 1.0 and not bull_structure_fresh
+    legacy_tm_context_txt := "PYRAMID BULL · STALE STRUCTURE / CYCLE CONFLICT"
+else if bearish_countertrend_watch and t_enc == -1.0
+    legacy_tm_context_txt := "PYRAMID BEAR · COUNTER-TREND WATCH"
+else if inten == 3.0 and t_enc == -1.0 and not bear_structure_fresh
+    legacy_tm_context_txt := "PYRAMID BEAR · STALE STRUCTURE / CYCLE CONFLICT"
+string momentum_trend_context_txt = inten == -3.0 and str.contains(hud_momentum_strength_txt, "BULLISH") ? " · COUNTER-TREND RECOVERY" : inten == 3.0 and str.contains(hud_momentum_strength_txt, "BEARISH") ? " · COUNTER-TREND PULLBACK" : inten == 0.0 ? " · TREND UNRESOLVED" : ""
+string hud_momentum_txt = hud_momentum_strength_txt + " — " + legacy_tm_context_txt + momentum_trend_context_txt
+color hud_momentum_col = (bullish_countertrend_watch or bearish_countertrend_watch or (inten == -3.0 and str.contains(hud_momentum_strength_txt, "BULLISH")) or (inten == 3.0 and str.contains(hud_momentum_strength_txt, "BEARISH"))) ? c_orange : (t_enc == 4.0 or (inten == -3.0 and t_enc == 1.0) or (inten == 3.0 and t_enc == -1.0)) ? c_orange : t_enc == 3.0 ? c_orange : t_enc == 5.0 ? c_blue : (t_enc == 6.0 or t_enc == 1.0 or t_enc == -2.0) ? c_cyan : (t_enc == -6.0 or t_enc == -1.0 or t_enc == 2.0) ? c_red : str.contains(hud_momentum_strength_txt, "BULLISH") ? c_cyan : str.contains(hud_momentum_strength_txt, "BEARISH") ? c_red : obs_sub
+
+// Zone lifecycle (informational).
+string zone_state_txt = "ZONE NONE"
+color zone_state_col = obs_sub
+if bullish_countertrend_watch
+    zone_state_txt := buy_confirmed ? "COUNTER-TREND BUY SIGNAL PASS · OB/TREND WAIT" : buy_setup_superseded_by_trend ? "BUY WINDOW SUPERSEDED · BULL REVERSAL WATCH" : "COUNTER-TREND BULL WATCH · BUY GATES/OB REQUIRED"
+    zone_state_col := c_orange
+else if bearish_countertrend_watch
+    zone_state_txt := sell_confirmed ? "COUNTER-TREND SELL SIGNAL PASS · OB/TREND WAIT" : sell_setup_superseded_by_trend ? "SELL WINDOW SUPERSEDED · BEAR REVERSAL WATCH" : "COUNTER-TREND BEAR WATCH · SELL GATES/OB REQUIRED"
+    zone_state_col := c_orange
+else if buy_setup_superseded_by_trend
+    zone_state_txt := "BUY ZONE · SUPERSEDED BY BEAR TREND"
+    zone_state_col := c_red
+else if sell_setup_superseded_by_trend
+    zone_state_txt := "SELL ZONE · SUPERSEDED BY BULL TREND"
+    zone_state_col := c_cyan
+else if latest_is_buy and buy_window_active and inten == 0.0
+    zone_state_txt := "BUY ZONE · WAIT TREND"
+    zone_state_col := c_orange
+else if latest_is_sell and sell_window_active and inten == 0.0
+    zone_state_txt := "SELL ZONE · WAIT TREND"
+    zone_state_col := c_orange
+else if decision_buy_setup_active
+    zone_state_txt := last_buy_passed ? "BUY ZONE · CONFIRMED" : "BUY ZONE · OPEN"
+    zone_state_col := last_buy_passed ? c_cyan : c_orange
+else if decision_sell_setup_active
+    zone_state_txt := last_sell_passed ? "SELL ZONE · CONFIRMED" : "SELL ZONE · OPEN"
+    zone_state_col := last_sell_passed ? c_red : c_orange
+else if latest_is_buy and has_buy_event and bars_since_buy > confirmation_window
+    zone_state_txt := inten == 3.0 ? "BUY ZONE · EXPIRED" : na(inten) or inten == 0.0 ? "NO ACTIVE ZONE · STALE BUY CROSS (CYCLE MIXED)" : "NO ACTIVE ZONE · STALE BUY CROSS (CYCLE BEARISH)"
+    zone_state_col := obs_sub
+else if latest_is_sell and has_sell_event and bars_since_sell > confirmation_window
+    zone_state_txt := inten == -3.0 ? "SELL ZONE · EXPIRED" : na(inten) or inten == 0.0 ? "NO ACTIVE ZONE · STALE SELL CROSS (CYCLE MIXED)" : "NO ACTIVE ZONE · STALE SELL CROSS (CYCLE BULLISH)"
+    zone_state_col := obs_sub
+
+// Compact entry instruction (DISPLAY ONLY).
+string entry_instruction = "WAIT · NO SETUP"
+color entry_instruction_col = obs_sub
+bool buy_macro_ok = is_macro_bull and gmi_z_alignment_code == 1
+bool sell_macro_ok = is_macro_bear and gmi_z_alignment_code == -1
+
+if t_enc == 4.0
+    entry_instruction := "REDUCE RISK"
+    entry_instruction_col := c_red
+else if bullish_countertrend_watch
+    entry_instruction := buy_confirmed ? "BUY GATES PASS · WAIT TREND + BULL OB" : "REVERSAL WATCH · WAIT BUY GATES + BULL OB"
+    entry_instruction_col := c_orange
+else if bearish_countertrend_watch
+    entry_instruction := sell_confirmed ? "SELL GATES PASS · WAIT TREND + BEAR OB" : "REVERSAL WATCH · WAIT SELL GATES + BEAR OB"
+    entry_instruction_col := c_orange
+else if buy_setup_superseded_by_trend
+    entry_instruction := "SELL BIAS · BUY SETUP SUPERSEDED"
+    entry_instruction_col := c_red
+else if sell_setup_superseded_by_trend
+    entry_instruction := "BUY BIAS · SELL SETUP SUPERSEDED"
+    entry_instruction_col := c_cyan
+else if decision_buy_setup_active
+    if last_buy_passed
+        entry_instruction := buy_macro_ok ? "BUY · READY" : "BUY · CHECK MACRO"
+        entry_instruction_col := buy_macro_ok ? c_cyan : c_orange
+    else
+        entry_instruction := "WAIT BUY · " + gate_reason
+        entry_instruction_col := c_orange
+else if decision_sell_setup_active
+    if last_sell_passed
+        entry_instruction := sell_macro_ok ? "SELL · READY" : "SELL · CHECK MACRO"
+        entry_instruction_col := sell_macro_ok ? c_red : c_orange
+    else
+        entry_instruction := "WAIT SELL · " + gate_reason
+        entry_instruction_col := c_orange
+else if t_enc == 5.0
+    entry_instruction := "WAIT · MACRO FILTER"
+    entry_instruction_col := c_blue
+
+string entry_reason_short = "NO ACTIVE SETUP"
+if t_enc == 4.0
+    entry_reason_short := "RISK REDUCE"
+else if bullish_countertrend_watch
+    entry_reason_short := buy_confirmed ? "BUY GATES PASS; WAIT TREND/OB" : "FRESH BULLISH DIV/SWEEP; WAIT BUY GATES"
+else if bearish_countertrend_watch
+    entry_reason_short := sell_confirmed ? "SELL GATES PASS; WAIT TREND/OB" : "FRESH BEARISH DIV/SWEEP; WAIT SELL GATES"
+else if buy_setup_superseded_by_trend
+    entry_reason_short := "BUY SETUP SUPERSEDED BY BEAR TREND"
+else if sell_setup_superseded_by_trend
+    entry_reason_short := "SELL SETUP SUPERSEDED BY BULL TREND"
+else if decision_buy_setup_active
+    entry_reason_short := last_buy_passed ? "GATE PASS" : gate_reason
+else if decision_sell_setup_active
+    entry_reason_short := last_sell_passed ? "GATE PASS" : gate_reason
+else if latest_is_buy
+    entry_reason_short := last_buy_passed ? "GATE PASSED" : "NO CONFIRM"
+else if latest_is_sell
+    entry_reason_short := last_sell_passed ? "GATE PASSED" : "NO CONFIRM"
+else
+    entry_reason_short := t_enc == 3.0 ? "REVERSAL" : t_enc == 5.0 ? "MACRO FILTER" : t_enc == 6.0 ? "UPPER DISC" : t_enc == -6.0 ? "LOWER DISC" : t_enc == 1.0 ? "BULL MGMT" : t_enc == -1.0 ? "BEAR MGMT" : (d_enc == 3.0 or d_enc == -3.0) ? "STRUCT SHIFT" : "NO MGMT ALERT"
+string gmi_align_short_txt = gmi_z_alignment_code == 1 ? "P/G BULL" : gmi_z_alignment_code == -1 ? "P/G BEAR" : gmi_z_alignment_code == 2 ? "P/G X" : "P/G NEUTRAL"
+string macro_context_txt = buy_macro_ok ? "MACRO/P-G BULL ALIGNED" : sell_macro_ok ? "MACRO/P-G BEAR ALIGNED" : is_macro_bull and gmi_z_alignment_code == -1 ? "MACRO BULL / P-G BEAR" : is_macro_bear and gmi_z_alignment_code == 1 ? "MACRO BEAR / P-G BULL" : is_macro_bull ? "MACRO BULL / P-G NOT ALIGNED" : is_macro_bear ? "MACRO BEAR / P-G NOT ALIGNED" : "MACRO NEUTRAL"
+string decision_context_txt = (inten == 3.0 ? "CYCLE BULL" : inten == -3.0 ? "CYCLE BEAR" : "CYCLE MIXED") + " · " + macro_context_txt + " · " + gmi_align_short_txt
+
+// Decision synthesis (DISPLAY ONLY).
+string regime_short_txt = cshi_score >= 0.65 ? "HIGH ACTIVITY" : cshi_score >= 0.50 ? "ACTIVE" : cshi_score >= 0.38 ? "TRANSITIONAL" : "LOW ACTIVITY"
+string harmonic_short_txt = inten > 0 ? "CYCLE BULL" : inten < 0 ? "CYCLE BEAR" : "CYCLE MIXED"
+bool structure_bull_context = d_enc == 1.0 or (d_enc == -3.0 and (prophet_structure_subtype_code == SUB_BEAR_TRAP or prophet_structure_subtype_code == SUB_TRUE_BREAKOUT))
+bool structure_bear_context = d_enc == -1.0 or (d_enc == 3.0 and (prophet_structure_subtype_code == SUB_BULL_TRAP or prophet_structure_subtype_code == SUB_TRUE_BREAKDOWN))
+bool structure_trap_context = prophet_structure_subtype_code == SUB_BULL_TRAP or prophet_structure_subtype_code == SUB_BEAR_TRAP
+string structure_short_txt = structure_trap_context ? (prophet_structure_subtype_code == SUB_BULL_TRAP ? "BULL TRAP" : "BEAR TRAP") : prophet_structure_subtype_code == SUB_TRUE_BREAKOUT ? "TRUE BREAKOUT" : prophet_structure_subtype_code == SUB_TRUE_BREAKDOWN ? "TRUE BREAKDOWN" : structure_bull_context ? "BULL DIV" : structure_bear_context ? "BEAR DIV" : (d_enc == 3.0 or d_enc == -3.0) ? "BREAKOUT STATE" : "NO ACTIVE DIV"
+
+string decision_conclusion = "NO ACTIVE SETUP"
+color decision_conclusion_col = obs_sub
+if t_enc == 4.0
+    decision_conclusion := "REDUCE RISK · RISK VETO"
+    decision_conclusion_col := c_red
+else if bullish_countertrend_watch
+    decision_conclusion := buy_confirmed ? "COUNTER-TREND BUY SIGNAL PASS · WAIT TREND/OB" : "COUNTER-TREND REVERSAL WATCH · WAIT BUY GATES"
+    decision_conclusion_col := c_orange
+else if bearish_countertrend_watch
+    decision_conclusion := sell_confirmed ? "COUNTER-TREND SELL SIGNAL PASS · WAIT TREND/OB" : "COUNTER-TREND REVERSAL WATCH · WAIT SELL GATES"
+    decision_conclusion_col := c_orange
+else if structure_trap_context and ((latest_is_buy and not buy_window_active) or (latest_is_sell and not sell_window_active) or (not latest_is_buy and not latest_is_sell))
+    decision_conclusion := prophet_structure_subtype_code == SUB_BULL_TRAP ? "REVERSAL WATCH · BULL TRAP" : "REVERSAL WATCH · BEAR TRAP"
+    decision_conclusion_col := c_orange
+else if decision_buy_setup_active
+    if not last_buy_passed
+        decision_conclusion := "WAIT BUY · " + gate_reason
+        decision_conclusion_col := c_orange
+    else if not buy_macro_ok
+        decision_conclusion := "WAIT BUY · MACRO CONFLICT"
+        decision_conclusion_col := c_orange
+    else if cshi_txt == "LOW ACTIVITY" and not is_vol_valid
+        decision_conclusion := "WAIT BUY · LOW ACTIVITY"
+        decision_conclusion_col := c_orange
+    else
+        decision_conclusion := "BUY BIAS · GATE + MACRO PASS"
+        decision_conclusion_col := c_cyan
+else if decision_sell_setup_active
+    if not last_sell_passed
+        decision_conclusion := "WAIT SELL · " + gate_reason
+        decision_conclusion_col := c_orange
+    else if not sell_macro_ok
+        decision_conclusion := "WAIT SELL · MACRO CONFLICT"
+        decision_conclusion_col := c_orange
+    else if cshi_txt == "LOW ACTIVITY" and not is_vol_valid
+        decision_conclusion := "WAIT SELL · LOW ACTIVITY"
+        decision_conclusion_col := c_orange
+    else
+        decision_conclusion := "SELL BIAS · GATE + MACRO PASS"
+        decision_conclusion_col := c_red
+else if structure_trap_context
+    decision_conclusion := prophet_structure_subtype_code == SUB_BULL_TRAP ? "REVERSAL WATCH · BULL TRAP" : "REVERSAL WATCH · BEAR TRAP"
+    decision_conclusion_col := c_orange
+else if inten == 3.0 and is_macro_bull and gmi_z_alignment_code == 1
+    decision_conclusion := structure_bull_context ? "BULLISH BIAS · STRUCTURE SUPPORT" : "BULLISH BIAS · WAIT STRUCTURE"
+    decision_conclusion_col := structure_bull_context ? c_cyan : c_orange
+else if inten == -3.0 and is_macro_bear and gmi_z_alignment_code == -1
+    decision_conclusion := structure_bear_context ? "BEARISH BIAS · STRUCTURE SUPPORT" : "BEARISH BIAS · WAIT STRUCTURE"
+    decision_conclusion_col := structure_bear_context ? c_red : c_orange
+else if gmi_z_alignment_code == 2 or (inten == 3.0 and is_macro_bear) or (inten == -3.0 and is_macro_bull)
+    decision_conclusion := "WAIT · CYCLE/MACRO CONFLICT"
+    decision_conclusion_col := c_orange
+else if t_enc == 5.0
+    decision_conclusion := "WAIT · MACRO FILTER"
+    decision_conclusion_col := c_blue
+else if t_enc == 3.0
+    decision_conclusion := "REVERSAL WATCH · NO CONFIRM"
+    decision_conclusion_col := c_orange
+
+bool active_entry_window = decision_buy_setup_active or decision_sell_setup_active
+string cycle_full_txt = inten == 3.0 ? "CYCLE BULLISH" : inten == -3.0 ? "CYCLE BEARISH" : "CYCLE MIXED"
+string macro_full_txt = is_macro_bull ? "MACRO BULLISH" : is_macro_bear ? "MACRO BEARISH" : "MACRO NEUTRAL"
+string pg_full_txt = gmi_z_alignment_code == 1 ? "PROPHET-GMI ALIGNED BULLISH" : gmi_z_alignment_code == -1 ? "PROPHET-GMI ALIGNED BEARISH" : gmi_z_alignment_code == 2 ? "PROPHET-GMI NOT ALIGNED" : "PROPHET-GMI NEUTRAL / UNAVAILABLE"
+string action_full_txt = t_enc == 4.0 ? "RISK CONDITION · REVIEW" : buy_confirmed ? "BUY CONFIRMED · FULL GATE PASSED" : sell_confirmed ? "SELL CONFIRMED · FULL GATE PASSED" : buy_early_confirmation ? "BUY EARLY CONFIRMATION · MONITOR" : sell_early_confirmation ? "SELL EARLY CONFIRMATION · MONITOR" : decision_buy_setup_active ? "BUY BIAS · WAITING FOR PRICE/STRUCTURE" : decision_sell_setup_active ? "SELL BIAS · WAITING FOR PRICE/STRUCTURE" : "WAIT FOR CONFIRMATION"
+color cycle_full_col = inten > 0 ? c_cyan : inten < 0 ? c_red : obs_sub
+color macro_full_col = is_macro_bull ? c_cyan : is_macro_bear ? c_red : obs_sub
+color pg_full_col = gmi_z_alignment_code == 1 ? c_cyan : gmi_z_alignment_code == -1 ? c_red : gmi_z_alignment_code == 2 ? c_orange : obs_sub
+// Final action text: risk text wins, otherwise the synthesized decision conclusion.
+action_full_txt := (t_enc == 4.0 ? action_full_txt : decision_conclusion)
+color action_full_col = t_enc == 4.0 ? c_red : (bullish_countertrend_watch or bearish_countertrend_watch) ? c_orange : buy_setup_superseded_by_trend ? c_red : sell_setup_superseded_by_trend ? c_cyan : (buy_confirmed or buy_early_confirmation) ? c_cyan : (sell_confirmed or sell_early_confirmation) ? c_red : decision_conclusion_col
+string zone_full_txt = zone_state_txt == "ZONE NONE" ? "NO ACTIVE ZONE" : zone_state_txt
+
+// Position management (advisory, manually anchored).
+float price_pivot_high = ta.pivothigh(high, 5, 2)
+float price_pivot_low = ta.pivotlow(low, 5, 2)
+float latest_swing_high = ta.valuewhen(not na(price_pivot_high), price_pivot_high, 0)
+float latest_swing_low = ta.valuewhen(not na(price_pivot_low), price_pivot_low, 0)
+bool position_active = position_mode != "NO POSITION"
+bool entry_valid = position_entry > 0
+bool buy_position = position_mode == "BUY POSITION"
+bool sell_position = position_mode == "SELL POSITION"
+float structure_tp = buy_position ? (not na(latest_swing_high) and latest_swing_high > position_entry ? latest_swing_high : na) : sell_position ? (not na(latest_swing_low) and latest_swing_low < position_entry ? latest_swing_low : na) : na
+bool tp_reached = position_active and entry_valid and not na(structure_tp) and (buy_position ? high >= structure_tp : low <= structure_tp)
+bool momentum_weakening = buy_position ? str.contains(hud_momentum_txt, "WEAKENING") and str.contains(hud_momentum_txt, "BULLISH") : sell_position ? str.contains(hud_momentum_txt, "WEAKENING") and str.contains(hud_momentum_txt, "BEARISH") : false
+bool opposite_confirmed = buy_position ? sell_confirmed : sell_position ? buy_confirmed : false
+bool opposite_structure_confirmed = buy_position ? (bear_structure_fresh and bearish_structure_confirm) : sell_position ? (bull_structure_fresh and bullish_structure_confirm) : false
+bool reversal_confirmed = position_active and (opposite_confirmed or opposite_structure_confirmed)
+string position_txt = not position_active ? "NO POSITION REGISTERED" : not entry_valid ? "SET ENTRY PRICE" : buy_position ? "BUY POSITION · ENTRY " + str.tostring(position_entry, format.mintick) : "SELL POSITION · ENTRY " + str.tostring(position_entry, format.mintick)
+color position_col = not position_active ? obs_sub : buy_position ? c_cyan : c_red
+
+// ============================================================================
+// KEY LEVEL ENGINE (R37) — Order Block only. Swing-level scoring was removed
+// (audit: it ran every bar but fed neither entries nor targets).
+// Score = distance(25) + age(20) + retests(15) + zone width(15) + structure(10)
+//       + cycle(5) + macro(5) + Prophet/GMI(5) = 100 max. NOT a probability.
+// ============================================================================
+float key_level_atr = atr14
+
+bool macro_cycle_conflict = (inten == 3.0 and is_macro_bear) or (inten == -3.0 and is_macro_bull)
+bool pg_cycle_conflict = (inten == 3.0 and (gmi_z_alignment_code == -1 or gmi_z_alignment_code == 2)) or (inten == -3.0 and (gmi_z_alignment_code == 1 or gmi_z_alignment_code == 2))
+bool forecast_context_conflict = macro_cycle_conflict or pg_cycle_conflict
+int current_bias_dir = inten == 3.0 ? 1 : inten == -3.0 ? -1 : 0
+var float bias_tp_latched = na
+var float bias_tp_last_hit = na
+var bool bias_tp_latched_reached = false
+var int bias_tp_latched_dir = 0
+if current_bias_dir != bias_tp_latched_dir
+    bias_tp_latched := na
+    bias_tp_last_hit := na
+    bias_tp_latched_reached := false
+    bias_tp_latched_dir := current_bias_dir
+
+// --- MIZANLIB SHARED VALIDATED OB ENGINE (DYNAMIC CHART TIMEFRAME) ---
+var int ob_structure_state = 0
+ob_structure_state := lib.ob_direction_state(high, low, ob_length, nz(ob_structure_state[1], 0))
+float ob_volume_pivot = lib.ob_volume_pivot(volume, ob_length)
+float ob_volume_sma = ta.sma(volume, 20)
+bool ob_source_high_volume = lib.ob_high_volume(volume, ob_volume_sma, 1.0 - lib.efficiency_ratio(close, 14), ob_length, ob_high_volume_multiplier, ob_dynamic_volume)
+
+var array<float> ob_zone_top = array.new_float()
+var array<float> ob_zone_bottom = array.new_float()
+var array<float> ob_zone_mid = array.new_float()
+var array<float> ob_zone_init_span = array.new_float()
+var array<float> ob_zone_atr_locked = array.new_float()
+var array<int> ob_zone_dir = array.new_int()       // +1 bullish, -1 bearish
+var array<int> ob_zone_born = array.new_int()      // confirmation bar, not source bar
+var array<int> ob_zone_source_time = array.new_int()
+var array<bool> ob_zone_high_volume = array.new_bool()
+
+bool ob_new_bull = barstate.isconfirmed and not na(ob_volume_pivot) and ob_structure_state == 1
+bool ob_new_bear = barstate.isconfirmed and not na(ob_volume_pivot) and ob_structure_state == 0
+// Evaluate both directional zone-bound helpers on every bar for Pine consistency.
+[bull_top, bull_bottom, bull_mid, bull_span] = lib.ob_zone_bounds(high, low, atr14, ob_length, ob_zone_max_atr, 1)
+[bear_top, bear_bottom, bear_mid, bear_span] = lib.ob_zone_bounds(high, low, atr14, ob_length, ob_zone_max_atr, -1)
+
+if ob_new_bull
+    array.unshift(ob_zone_top, bull_top)
+    array.unshift(ob_zone_bottom, bull_bottom)
+    array.unshift(ob_zone_mid, bull_mid)
+    array.unshift(ob_zone_init_span, bull_span)
+    array.unshift(ob_zone_atr_locked, math.max(nz(atr14[ob_length], atr14), syminfo.mintick))
+    array.unshift(ob_zone_dir, 1)
+    array.unshift(ob_zone_born, bar_index)
+    array.unshift(ob_zone_source_time, time[ob_length])
+    array.unshift(ob_zone_high_volume, ob_source_high_volume)
+if ob_new_bear
+    array.unshift(ob_zone_top, bear_top)
+    array.unshift(ob_zone_bottom, bear_bottom)
+    array.unshift(ob_zone_mid, bear_mid)
+    array.unshift(ob_zone_init_span, bear_span)
+    array.unshift(ob_zone_atr_locked, math.max(nz(atr14[ob_length], atr14), syminfo.mintick))
+    array.unshift(ob_zone_dir, -1)
+    array.unshift(ob_zone_born, bar_index)
+    array.unshift(ob_zone_source_time, time[ob_length])
+    array.unshift(ob_zone_high_volume, ob_source_high_volume)
+
+// Progressive partial mitigation is shared with GMI; zones are removed only when consumed/broken/expired.
+if barstate.isconfirmed and array.size(ob_zone_dir) > 0
+    for j = array.size(ob_zone_dir) - 1 to 0
+        int dir = array.get(ob_zone_dir, j)
+        float top = array.get(ob_zone_top, j)
+        float bottom = array.get(ob_zone_bottom, j)
+        float initial_span = array.get(ob_zone_init_span, j)
+        float atr_locked = array.get(ob_zone_atr_locked, j)
+        int born = array.get(ob_zone_born, j)
+        [next_top, next_bottom, remaining_pct, touched, invalid] = lib.ob_progressive_update(dir, top, bottom, initial_span, atr_locked, high, low, close, ob_mitigation_buffer_atr, bar_index > born, ob_mitigation == "Close")
+        array.set(ob_zone_top, j, next_top)
+        array.set(ob_zone_bottom, j, next_bottom)
+        array.set(ob_zone_mid, j, math.avg(next_top, next_bottom))
+        bool expired = bar_index - born > ob_max_age
+        if invalid or expired
+            array.remove(ob_zone_top, j)
+            array.remove(ob_zone_bottom, j)
+            array.remove(ob_zone_mid, j)
+            array.remove(ob_zone_init_span, j)
+            array.remove(ob_zone_atr_locked, j)
+            array.remove(ob_zone_dir, j)
+            array.remove(ob_zone_born, j)
+            array.remove(ob_zone_source_time, j)
+            array.remove(ob_zone_high_volume, j)
+
+// Bound storage per direction; remove oldest excess zones while keeping all arrays aligned.
+if barstate.isconfirmed
+    int bull_count = 0
+    int bear_count = 0
+    if array.size(ob_zone_dir) > 0
+        for j = 0 to array.size(ob_zone_dir) - 1
+            if array.get(ob_zone_dir, j) == 1
+                bull_count += 1
+            else
+                bear_count += 1
+    if bull_count > ob_max_active or bear_count > ob_max_active
+        for j = array.size(ob_zone_dir) - 1 to 0
+            int dir = array.get(ob_zone_dir, j)
+            bool drop = dir == 1 ? bull_count > ob_max_active : bear_count > ob_max_active
+            if drop
+                array.remove(ob_zone_top, j)
+                array.remove(ob_zone_bottom, j)
+                array.remove(ob_zone_mid, j)
+                array.remove(ob_zone_init_span, j)
+                array.remove(ob_zone_atr_locked, j)
+                array.remove(ob_zone_dir, j)
+                array.remove(ob_zone_born, j)
+                array.remove(ob_zone_source_time, j)
+                array.remove(ob_zone_high_volume, j)
+                if dir == 1
+                    bull_count -= 1
+                else
+                    bear_count -= 1
+
+float best_buy_ob_level = na
+float best_buy_ob_score = na
+float best_buy_ob_top = na
+float best_buy_ob_bottom = na
+float best_sell_ob_level = na
+float best_sell_ob_score = na
+float best_sell_ob_top = na
+float best_sell_ob_bottom = na
+float best_bull_ob_tp = na
+float best_bull_ob_tp_score = na
+float best_bear_ob_tp = na
+float best_bear_ob_tp_score = na
+int active_bull_ob_count = 0
+int active_bear_ob_count = 0
+float ob_touch_band = nz(key_level_atr, atr14) * ob_retest_band_atr
+
+if not na(key_level_atr) and key_level_atr > 0 and array.size(ob_zone_dir) > 0
+    for j = 0 to array.size(ob_zone_dir) - 1
+        int dir = array.get(ob_zone_dir, j)
+        float top = array.get(ob_zone_top, j)
+        float bottom = array.get(ob_zone_bottom, j)
+        float mid = array.get(ob_zone_mid, j)
+        int born = array.get(ob_zone_born, j)
+        int age = bar_index - born
+        // Inline the shared library retest-count algorithm so its history scan is
+        // evaluated consistently for each active zone without a conditional library call.
+        int touches = 0
+        int last_touch_back = -10000
+        for back = 1 to key_level_touch_lookback
+            if not na(high[back]) and not na(low[back]) and low[back] <= top + ob_touch_band and high[back] >= bottom - ob_touch_band
+                if back - last_touch_back >= 3
+                    touches += 1
+                    last_touch_back := back
+        float dist_buy = close - top
+        float dist_sell = bottom - close
+        float zone_width_atr = (top - bottom) / math.max(key_level_atr, syminfo.mintick)
+        float buy_score = lib.ob_rank_score(dist_buy, key_level_atr, key_level_max_distance_atr, age, ob_max_age, touches, zone_width_atr, bull_structure_fresh, inten == 3.0, is_macro_bull, gmi_z_alignment_code == 1)
+        float sell_score = lib.ob_rank_score(dist_sell, key_level_atr, key_level_max_distance_atr, age, ob_max_age, touches, zone_width_atr, bear_structure_fresh, inten == -3.0, is_macro_bear, gmi_z_alignment_code == -1)
+
+        // R37 FIX-3: the limit rests at the OB midpoint. With ob_allow_inside the zone is
+        // eligible once close is beyond the midpoint (limit still on the correct side of
+        // market); otherwise close must be outside the OB edge (R36 behavior).
+        bool bull_entry_eligible = dir == 1 and lib.ob_entry_eligible(dir, inten == 3.0 ? 1 : inten == -3.0 ? -1 : 0, close, top, bottom, mid, key_level_atr, key_level_max_distance_atr, ob_allow_inside)
+        bool bear_entry_eligible = dir == -1 and lib.ob_entry_eligible(dir, inten == 3.0 ? 1 : inten == -3.0 ? -1 : 0, close, top, bottom, mid, key_level_atr, key_level_max_distance_atr, ob_allow_inside)
+        if dir == 1
+            active_bull_ob_count += 1
+        else
+            active_bear_ob_count += 1
+        if bull_entry_eligible and (na(best_buy_ob_score) or buy_score > best_buy_ob_score)
+            best_buy_ob_level := mid
+            best_buy_ob_score := buy_score
+            best_buy_ob_top := top
+            best_buy_ob_bottom := bottom
+        if bear_entry_eligible and (na(best_sell_ob_score) or sell_score > best_sell_ob_score)
+            best_sell_ob_level := mid
+            best_sell_ob_score := sell_score
+            best_sell_ob_top := top
+            best_sell_ob_bottom := bottom
+
+        // Targets: opposing, still-valid OBs beyond current price.
+        if dir == -1 and inten == 3.0 and bottom > close and (na(bias_tp_last_hit) or bottom > bias_tp_last_hit)
+            float tp_score = lib.ob_target_score(age, ob_max_age, touches, zone_width_atr, (bottom - close) / math.max(key_level_atr, syminfo.mintick))
+            if na(best_bull_ob_tp_score) or tp_score > best_bull_ob_tp_score
+                best_bull_ob_tp := bottom
+                best_bull_ob_tp_score := tp_score
+        if dir == 1 and inten == -3.0 and top < close and (na(bias_tp_last_hit) or top < bias_tp_last_hit)
+            float tp_score = lib.ob_target_score(age, ob_max_age, touches, zone_width_atr, (close - top) / math.max(key_level_atr, syminfo.mintick))            if na(best_bear_ob_tp_score) or tp_score > best_bear_ob_tp_score
+                best_bear_ob_tp := top
+                best_bear_ob_tp_score := tp_score
+
+bool ob_buy_candidate_available = inten == 3.0 and not na(best_buy_ob_level) and not na(best_buy_ob_score) and best_buy_ob_score >= key_level_min_score
+bool ob_sell_candidate_available = inten == -3.0 and not na(best_sell_ob_level) and not na(best_sell_ob_score) and best_sell_ob_score >= key_level_min_score
+string ob_filter_status = inten == 3.0 ? (ob_buy_candidate_available ? "BULL OB PASS" : active_bull_ob_count == 0 ? "BLOCK · NO ACTIVE BULL OB" : "BLOCK · NO QUALIFIED BULL OB") : inten == -3.0 ? (ob_sell_candidate_available ? "BEAR OB PASS" : active_bear_ob_count == 0 ? "BLOCK · NO ACTIVE BEAR OB" : "BLOCK · NO QUALIFIED BEAR OB") : "BLOCK · TREND UNRESOLVED"
+
+// Risk gate: order line only when target exists AND R:R clears the threshold AND
+// invalidation sits outside the OB edge by the ATR buffer.
+// R37 FIX-5: R:R basis is EDGE by default (first edge price touches) for a conservative ratio.
+float tm_stop_buf = key_level_atr * tm_stop_buffer_atr
+float buy_stop_level  = na(best_buy_ob_bottom) ? na : best_buy_ob_bottom - tm_stop_buf
+float sell_stop_level = na(best_sell_ob_top) ? na : best_sell_ob_top + tm_stop_buf
+float buy_rr_ref  = tm_rr_basis == "EDGE" ? best_buy_ob_top : best_buy_ob_level
+float sell_rr_ref = tm_rr_basis == "EDGE" ? best_sell_ob_bottom : best_sell_ob_level
+float buy_risk_pts  = (na(buy_rr_ref) or na(buy_stop_level)) ? na : buy_rr_ref - buy_stop_level
+float sell_risk_pts = (na(sell_rr_ref) or na(sell_stop_level)) ? na : sell_stop_level - sell_rr_ref
+float buy_reward_pts  = (na(best_bull_ob_tp) or na(buy_rr_ref)) ? na : best_bull_ob_tp - buy_rr_ref
+float sell_reward_pts = (na(sell_rr_ref) or na(best_bear_ob_tp)) ? na : sell_rr_ref - best_bear_ob_tp
+float buy_rr  = (na(buy_risk_pts) or na(buy_reward_pts) or buy_risk_pts <= 0 or buy_reward_pts <= 0) ? na : buy_reward_pts / buy_risk_pts
+float sell_rr = (na(sell_risk_pts) or na(sell_reward_pts) or sell_risk_pts <= 0 or sell_reward_pts <= 0) ? na : sell_reward_pts / sell_risk_pts
+bool buy_target_ok  = not na(best_bull_ob_tp)
+bool sell_target_ok = not na(best_bear_ob_tp)
+bool buy_rr_ok  = not na(buy_rr) and buy_rr >= tm_rr_min
+bool sell_rr_ok = not na(sell_rr) and sell_rr >= tm_rr_min
+bool buy_trade_ready  = inten == 3.0 and not forecast_context_conflict and ob_buy_candidate_available and buy_target_ok and buy_rr_ok
+bool sell_trade_ready = inten == -3.0 and not forecast_context_conflict and ob_sell_candidate_available and sell_target_ok and sell_rr_ok
+float buy_limit_level = buy_trade_ready ? best_buy_ob_level : na
+float sell_limit_level = sell_trade_ready ? best_sell_ob_level : na
+float buy_limit_score = not na(buy_limit_level) ? best_buy_ob_score : na
+float sell_limit_score = not na(sell_limit_level) ? best_sell_ob_score : na
+
+float buy_entry_candidate = decision_buy_setup_active and not na(latched_buy_entry_candidate) ? latched_buy_entry_candidate : na
+float sell_entry_candidate = decision_sell_setup_active and not na(latched_sell_entry_candidate) ? latched_sell_entry_candidate : na
+string entry_candidate_txt = forecast_context_conflict ? (macro_cycle_conflict ? "NO TRADE · CONTEXT CONFLICT (CYCLE/MACRO)" : "NO TRADE · CONTEXT CONFLICT (PROPHET/GMI)") : inten == 3.0 ? (buy_trade_ready ? "BUY LIMIT " + str.tostring(best_buy_ob_level, format.mintick) + " · INV " + str.tostring(buy_stop_level, format.mintick) + " · R:R " + str.tostring(buy_rr, "#.#") + " · TTL " + str.tostring(confirmation_window) + "b · CONF " + str.tostring(math.round(best_buy_ob_score)) : not ob_buy_candidate_available ? "NO TRADE · " + ob_filter_status : not buy_target_ok ? "NO TRADE · NO OPPOSING OB TARGET" : "NO TRADE · R:R " + str.tostring(buy_rr, "#.#") + " < " + str.tostring(tm_rr_min, "#.#")) : inten == -3.0 ? (sell_trade_ready ? "SELL LIMIT " + str.tostring(best_sell_ob_level, format.mintick) + " · INV " + str.tostring(sell_stop_level, format.mintick) + " · R:R " + str.tostring(sell_rr, "#.#") + " · TTL " + str.tostring(confirmation_window) + "b · CONF " + str.tostring(math.round(best_sell_ob_score)) : not ob_sell_candidate_available ? "NO TRADE · " + ob_filter_status : not sell_target_ok ? "NO TRADE · NO OPPOSING OB TARGET" : "NO TRADE · R:R " + str.tostring(sell_rr, "#.#") + " < " + str.tostring(tm_rr_min, "#.#")) : "NO TRADE · TREND UNRESOLVED"
+color entry_candidate_col = forecast_context_conflict ? c_orange : buy_trade_ready ? c_cyan : sell_trade_ready ? c_red : inten == 3.0 or inten == -3.0 ? c_orange : obs_sub
+string entry_reasoning_tooltip = "OB score is a heuristic ranking (not a probability). Weighting: distance 25, age 20, distinct retests 15, zone width 15, fresh structure 10, cycle 5, macro 5, Prophet/GMI 5. Best BUY OB score=" + str.tostring(best_buy_ob_score, "#.0") + "; best SELL OB score=" + str.tostring(best_sell_ob_score, "#.0") + ". R:R basis=" + tm_rr_basis + "; inside-OB entry=" + str.tostring(ob_allow_inside) + ". Threshold, maximum age, ATR distance and retest band are configurable inputs."
+
+// Target lifecycle: a latched target stays valid only while its originating opposing OB is active.
+bool latched_tp_ob_active = false
+if not na(bias_tp_latched) and array.size(ob_zone_dir) > 0
+    for j = 0 to array.size(ob_zone_dir) - 1
+        int dir = array.get(ob_zone_dir, j)
+        float top = array.get(ob_zone_top, j)
+        float bottom = array.get(ob_zone_bottom, j)
+        bool matching_target_zone = (bias_tp_latched_dir == 1 and dir == -1 and bias_tp_latched >= bottom and bias_tp_latched <= top) or (bias_tp_latched_dir == -1 and dir == 1 and bias_tp_latched >= bottom and bias_tp_latched <= top)
+        if matching_target_zone
+            latched_tp_ob_active := true
+if not na(bias_tp_latched) and not latched_tp_ob_active
+    bias_tp_latched := na
+    bias_tp_latched_reached := false
+float bias_tp_raw = forecast_context_conflict ? na : inten == 3.0 ? best_bull_ob_tp : inten == -3.0 ? best_bear_ob_tp : na
+bool bias_tp_just_hit = barstate.isconfirmed and not na(bias_tp_latched) and not bias_tp_latched_reached and ((bias_tp_latched_dir == 1 and high >= bias_tp_latched) or (bias_tp_latched_dir == -1 and low <= bias_tp_latched))
+if bias_tp_just_hit
+    bias_tp_last_hit := bias_tp_latched
+    bias_tp_latched := na
+    bias_tp_latched_reached := true
+if na(bias_tp_latched) and not na(bias_tp_raw) and not bias_tp_just_hit and not forecast_context_conflict
+    bias_tp_latched := bias_tp_raw
+    bias_tp_latched_reached := false
+float bias_tp = bias_tp_latched
+
+string tp_txt = buy_trade_ready ? (((tp_reached and not na(structure_tp) and structure_tp == best_bull_ob_tp) or (bias_tp_just_hit and not na(bias_tp_last_hit) and bias_tp_last_hit == best_bull_ob_tp)) ? "TARGET KEY HIT " + str.tostring(best_bull_ob_tp, format.mintick) : "TARGET KEY " + str.tostring(best_bull_ob_tp, format.mintick)) : sell_trade_ready ? (((tp_reached and not na(structure_tp) and structure_tp == best_bear_ob_tp) or (bias_tp_just_hit and not na(bias_tp_last_hit) and bias_tp_last_hit == best_bear_ob_tp)) ? "TARGET KEY HIT " + str.tostring(best_bear_ob_tp, format.mintick) : "TARGET KEY " + str.tostring(best_bear_ob_tp, format.mintick)) : position_active and entry_valid ? (na(structure_tp) ? "TARGET KEY · NO SWING" : tp_reached ? "TARGET KEY HIT " + str.tostring(structure_tp, format.mintick) : "TARGET KEY " + str.tostring(structure_tp, format.mintick)) : forecast_context_conflict ? "TARGET KEY · WAIT CONTEXT" : bias_tp_just_hit ? "TARGET KEY HIT " + str.tostring(bias_tp_last_hit, format.mintick) : not na(bias_tp) ? "TARGET KEY " + str.tostring(bias_tp, format.mintick) : "TARGET KEY · NO QUALIFIED OPPOSING OB"
+color tp_col = (tp_reached or bias_tp_just_hit) ? c_cyan : (na(structure_tp) and na(bias_tp)) ? c_orange : position_col
+float exit_key_level = buy_position ? (not na(best_buy_ob_bottom) ? best_buy_ob_bottom : na) : sell_position ? (not na(best_sell_ob_top) ? best_sell_ob_top : na) : inten == 3.0 ? (not na(best_buy_ob_bottom) ? best_buy_ob_bottom : na) : inten == -3.0 ? (not na(best_sell_ob_top) ? best_sell_ob_top : na) : na
+string exit_reason_txt = position_active ? (tp_reached ? "TP TARGET REACHED · REVIEW EXIT" : t_enc == 4.0 ? "EXIT REVIEW · RISK-REDUCTION STATE" : reversal_confirmed ? "EXIT REVIEW · OPPOSITE CONFIRMED" : t_enc == 3.0 ? "EXIT REVIEW · POTENTIAL REVERSAL" : ((buy_position and tm_dir == -1) or (sell_position and tm_dir == 1)) ? "EXIT REVIEW · MANAGEMENT STATE OPPOSES POSITION" : momentum_weakening ? "WARNING · POSITION MOMENTUM WEAKENING" : t_enc == 5.0 ? "POSITION REVIEW · MACRO WAIT IS NOT AN EXIT SIGNAL" : ((buy_position and tm_dir == 1) or (sell_position and tm_dir == -1)) and str.contains(hud_momentum_strength_txt, "STRENGTHENING") ? "HOLD REVIEW · STATE + MOMENTUM ALIGNED" : "POSITION REVIEW · NO EXIT TRIGGER") : (sell_confirmed or (inten == -3.0 and str.contains(hud_momentum_strength_txt, "BEARISH · STRENGTHENING"))) ? "BEARISH BIAS · EXIT REVIEW IF LONG" : (buy_confirmed or (inten == 3.0 and str.contains(hud_momentum_strength_txt, "BULLISH · STRENGTHENING"))) ? "BULLISH BIAS · EXIT REVIEW IF SHORT" : bullish_countertrend_watch ? "BEARISH BIAS · FRESH BULLISH REVERSAL WATCH · ENTRY OB-GATED" : bearish_countertrend_watch ? "BULLISH BIAS · FRESH BEARISH REVERSAL WATCH · ENTRY OB-GATED" : inten == -3.0 and str.contains(hud_momentum_strength_txt, "BULLISH") ? "BEARISH BIAS · BULLISH MOMENTUM RECOVERY · NO FRESH REVERSAL CONFIRMED" : inten == 3.0 and str.contains(hud_momentum_strength_txt, "BEARISH") ? "BULLISH BIAS · BEARISH MOMENTUM PULLBACK · NO FRESH REVERSAL CONFIRMED" : t_enc == 5.0 ? "WAIT · MACRO FILTER (NO POSITION)" : str.contains(hud_momentum_strength_txt, "WEAKENING") ? "WARNING · MOMENTUM WEAKENING" : "NO EXIT TRIGGER"
+string exit_key_status_txt = not na(exit_key_level) ? "OB KEY " + str.tostring(exit_key_level, format.mintick) : (position_active or inten != 0.0) ? "KEY · NO QUALIFIED DIRECTIONAL OB" : "KEY · TREND UNRESOLVED"
+string exit_txt = (position_active ? "POSITION MANAGEMENT · " : "MARKET CONTEXT · ") + exit_reason_txt + " · " + exit_key_status_txt
+color exit_col = tp_reached ? c_cyan : (position_active and (t_enc == 4.0 or reversal_confirmed or ((buy_position and tm_dir == -1) or (sell_position and tm_dir == 1)))) ? c_red : (position_active and (t_enc == 3.0 or momentum_weakening)) ? c_orange : (position_active and t_enc == 5.0) ? c_blue : position_col
+
+string tooltip_entry_reason = active_entry_window or t_enc == 4.0 or bullish_countertrend_watch or bearish_countertrend_watch ? entry_reason_short : "NO ACTIVE SETUP"
+string decision_tooltip = "RULE-BASED DECISION ENGINE (DISPLAY-ONLY; NO ORDERS EXECUTED). OB filter status: " + ob_filter_status + ". Fresh divergence/trap structures create a counter-trend reversal watch but do not bypass price/structure/volume confirmation or the trend-matched OB filter. Entry levels come only from confirmed, unmitigated OB zones matching Prophet trend; swing levels are not a fallback. Conclusion: " + decision_conclusion + ". Entry state: " + (t_enc == 4.0 or active_entry_window or bullish_countertrend_watch or bearish_countertrend_watch ? entry_instruction : "NO ACTIVE SETUP") + "; reason: " + tooltip_entry_reason + "; context: " + decision_context_txt + ". Regime=" + regime_short_txt + "; harmonic=" + harmonic_short_txt + "; structure=" + structure_short_txt + " (" + prophet_structure_subtype + "; d_enc=" + str.tostring(d_enc) + "; state age=" + (not na(structure_state_bar) ? str.tostring(bar_index - structure_state_bar) : "N/A") + "). Gate: " + gate_status_txt + "; reason=" + gate_reason + ". Prophet Z=" + str.tostring(z_score, "#.000") + "; GMI weighted MTF Z=" + str.tostring(gmi_equiv_global_z, "#.000") + " (" + (gmi_closed_only ? "closed HTF bars" : "live HTF bars") + "); alignment=" + gmi_z_alignment_txt + ". Early confirmation is advisory only and does not alter confirmed/HQ alerts, oscillator formulas, candidates, or LEGACY behavior."
+
+var table hud = table.new(position.top_right, 2, 4, bgcolor=c_dark, border_width=1, border_color=c_border, frame_color=c_border, frame_width=1)
+var table trade_management_hud = table.new(position.bottom_left, 9, 1, bgcolor=c_dark, border_width=0, border_color=color.new(c_border, 100), frame_color=c_border, frame_width=1)
+
+// R37 FIX-4: retired `if false` HUD block removed. One render block: 4 metric rows + trade row.
+if barstate.islast and show_tables and show_hud
+    table.cell(hud, 0, 0, "MARKET", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(hud, 1, 0, hud_market_txt, text_color=cshi_col, text_size=size.small, text_halign=text.align_right)
+    table.cell(hud, 0, 1, "HARMONIC", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(hud, 1, 1, hud_harmonic_txt, text_color=int_col, text_size=size.small, text_halign=text.align_right)
+    table.cell(hud, 0, 2, "STRUCTURE", text_color=color.white, text_size=size.small, text_halign=text.align_left, tooltip="Structure diagnostic: d_enc=" + str.tostring(d_enc) + " / subtype=" + prophet_structure_subtype + ". Diagnostic only; does not alter signal logic.")
+    table.cell(hud, 1, 2, hud_structure_txt, text_color=div_col, text_size=size.small, text_halign=text.align_right)
+    table.cell(hud, 0, 3, "MOMENTUM", text_color=color.white, text_size=size.small, text_halign=text.align_left, tooltip="Momentum strength compares pro_fast with pro_slow and the one-bar change in pro_fast. The suffix preserves the legacy Trade Management state from t_enc. Advisory only; no order is executed.")
+    table.cell(hud, 1, 3, hud_momentum_txt, text_color=hud_momentum_col, text_size=size.small, text_halign=text.align_right)
+    table.cell(trade_management_hud, 0, 0, "TRADE MANAGEMENT", text_color=c_purple, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5), tooltip=decision_tooltip)
+    table.cell(trade_management_hud, 1, 0, zone_full_txt, text_color=zone_state_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5))
+    table.cell(trade_management_hud, 2, 0, cycle_full_txt, text_color=cycle_full_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5))
+    table.cell(trade_management_hud, 3, 0, macro_full_txt, text_color=macro_full_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5))
+    table.cell(trade_management_hud, 4, 0, pg_full_txt, text_color=pg_full_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5))
+    table.cell(trade_management_hud, 5, 0, action_full_txt, text_color=action_full_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(decision_conclusion_col, 85))
+    table.cell(trade_management_hud, 6, 0, entry_candidate_txt, text_color=entry_candidate_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5), tooltip=entry_reasoning_tooltip)
+    table.cell(trade_management_hud, 7, 0, tp_txt, text_color=tp_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_dark, 5), tooltip="TP is selected independently from entry using an opposing, active, unmitigated OB. Scores are ranking heuristics, not probabilities.")
+    table.cell(trade_management_hud, 8, 0, exit_txt, text_color=exit_col, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(exit_col, 88), tooltip="Advisory only. No stop-loss is plotted or calculated for a manual position; losses can grow without a defined risk limit.")
+else if barstate.islast
+    table.clear(trade_management_hud, 0, 0, 8, 0)
+
+// =============================================================================
+// NATIVE TV ALERTS
+// =============================================================================
+bool alert_bar_ok = not alert_confirmed_only or barstate.isconfirmed
+
+alertcondition(alert_bar_ok and t_enc == 1.0 and (legacy_mode or (barstate.isconfirmed and t_enc[1] != 1.0)), title="🟢 PYRAMID BULL", message="The Prophet: Bullish management state detected. Review confirmation and risk controls before acting.")
+alertcondition(alert_bar_ok and t_enc == -1.0 and (legacy_mode or (barstate.isconfirmed and t_enc[1] != -1.0)), title="🔴 PYRAMID BEAR", message="The Prophet: Bearish management state detected. Review confirmation and risk controls before acting.")
+alertcondition(alert_bar_ok and t_enc == 4.0 and (legacy_mode or (barstate.isconfirmed and t_enc[1] != 4.0)), title="🛑 RUTHLESS CUT LOSS", message="The Prophet: Risk-reduction condition detected. Review current position and risk rules.")
+alertcondition(alert_bar_ok and (t_enc == 6.0 or t_enc == -6.0) and (legacy_mode or (barstate.isconfirmed and t_enc[1] != t_enc)), title="🌌 PRICE DISCOVERY", message="The Prophet: Price is searching for new boundaries (Supernova/Void).")
+alertcondition(alert_bar_ok and t_enc == 3.0 and (legacy_mode or (barstate.isconfirmed and t_enc[1] != 3.0)), title="⚡ POTENTIAL REVERSAL", message="The Prophet: Harmonic shift detected. Prepare for Reversal.")
+alertcondition(alert_bar_ok and t_enc == 5.0 and (legacy_mode or (barstate.isconfirmed and t_enc[1] != 5.0)), title="🛡️ MACRO SHIELD", message="The Prophet: Micro-structure break with macro filter active. Review context before deciding whether to hold.")
+alertcondition(alert_bar_ok and buy_confirmed, title="BUY CONFIRMED - Price/Structure", message="The Prophet R38: BUY confirmation passed within the adaptive crossover window on a closed bar. Review price, fresh structure, volume availability, and independent risk controls.")
+alertcondition(alert_bar_ok and sell_confirmed, title="SELL CONFIRMED - Price/Structure", message="The Prophet R38: SELL confirmation passed within the adaptive crossover window on a closed bar. Review price, fresh structure, volume availability, and independent risk controls.")
+alertcondition(alert_bar_ok and buy_high_quality, title="BUY HIGH QUALITY", message="The Prophet R38: BUY high-quality filter passed. This is a filter tier, not a win probability; apply independent risk controls.")
+alertcondition(alert_bar_ok and sell_high_quality, title="SELL HIGH QUALITY", message="The Prophet R38: SELL high-quality filter passed. This is a filter tier, not a win probability; apply independent risk controls.")
+
+// =============================================================================
+// LOCAL DIAGNOSTICS (NO INTER-INDICATOR EXPORT)
+// =============================================================================
+
+// Diagnostics (Data Window only).
+plot(buy_candidate ? 1.0 : 0.0, title="[DIAG] Buy Candidate Event", display=display.data_window)
+plot(sell_candidate ? 1.0 : 0.0, title="[DIAG] Sell Candidate Event", display=display.data_window)
+plot(buy_window_active ? 1.0 : 0.0, title="[DIAG] Buy Window Active", display=display.data_window)
+plot(sell_window_active ? 1.0 : 0.0, title="[DIAG] Sell Window Active", display=display.data_window)
+plot(buy_limit_score, title="[KEY] Buy OB Limit Score (heuristic, not probability)", display=display.data_window)
+plot(sell_limit_score, title="[KEY] Sell OB Limit Score (heuristic, not probability)", display=display.data_window)
+plot(best_buy_ob_score, title="[OB] Best Bullish OB Score", display=display.data_window)
+plot(best_sell_ob_score, title="[OB] Best Bearish OB Score", display=display.data_window)
+plot(ob_buy_candidate_available ? 1.0 : 0.0, title="[OB] Bullish OB Candidate Available", display=display.data_window)
+plot(ob_sell_candidate_available ? 1.0 : 0.0, title="[OB] Bearish OB Candidate Available", display=display.data_window)
+plot(float(active_bull_ob_count), title="[OB] Active Bullish OB Count", display=display.data_window)
+plot(float(active_bear_ob_count), title="[OB] Active Bearish OB Count", display=display.data_window)
+plot(best_bull_ob_tp_score, title="[OB] Bull TP OB Score (heuristic, not probability)", display=display.data_window)
+plot(best_bear_ob_tp_score, title="[OB] Bear TP OB Score (heuristic, not probability)", display=display.data_window)
+plot(buy_rr, title="[OB] Buy R:R", display=display.data_window)
+plot(sell_rr, title="[OB] Sell R:R", display=display.data_window)
+plot(last_buy_passed ? 1.0 : 0.0, title="[DIAG] Buy Previously Passed", display=display.data_window)
+plot(last_sell_passed ? 1.0 : 0.0, title="[DIAG] Sell Previously Passed", display=display.data_window)
+
+
+// =============================================================================
+// CTA WEBHOOK — PROPHET R38 SNAPSHOT v1.0
+// Configure TradingView alert: "Any alert() function call" and webhook URL:
+// https://ai.cryptophys.work/webhook
+// Secret is an input so credentials are not hard-coded into the script.
+cta_webhook_enabled = input.bool(false, "Enable CTA Webhook")
+cta_webhook_secret = input.string("", "CTA Webhook Secret", confirm=true)
+if cta_webhook_enabled and barstate.isconfirmed
+    string cta_prophet_payload = "{\"v\":1,\"source\":\"prophet_r38\",\"src\":\"prophet_r38\",\"ticker\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.tickerid + "\",\"timeframe\":\"" + timeframe.period + "\",\"tf\":\"" + timeframe.period + "\",\"candle_time\":\"" + str.tostring(time) + "\",\"timestamp\":\"" + str.tostring(time) + "\",\"t\":" + str.tostring(time) + ",\"o\":" + str.tostring(open) + ",\"h\":" + str.tostring(high) + ",\"l\":" + str.tostring(low) + ",\"c\":" + str.tostring(close) + ",\"volume\":" + str.tostring(nz(volume, 0)) + ",\"direction\":" + str.tostring(buy_confirmed ? 1 : sell_confirmed ? -1 : 0) + ",\"buy_confirmed\":" + (buy_confirmed ? "true" : "false") + ",\"sell_confirmed\":" + (sell_confirmed ? "true" : "false") + ",\"buy_high_quality\":" + (buy_high_quality ? "true" : "false") + ",\"sell_high_quality\":" + (sell_high_quality ? "true" : "false") + ",\"t_enc\":" + str.tostring(t_enc) + ",\"d_enc\":" + str.tostring(d_enc) + ",\"structure_subtype\":" + str.tostring(prophet_structure_subtype_code) + ",\"secret\":\"" + cta_webhook_secret + "\"}"
+    alert(cta_prophet_payload, alert.freq_once_per_bar_close)
+
+// =============================================================================
+// CANDIDATE HUD ALERT — source: prophet_r38_hud (H1 + 15m)
+// Carries RFC §1.2 HUD fields as numbers, booleans and codes (never *_txt).
+// =============================================================================
+if cta_webhook_enabled and barstate.isconfirmed
+    string cta_prophet_hud_payload = "{\"v\":1,\"source\":\"prophet_r38_hud\",\"src\":\"prophet_r38_hud\",\"ticker\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.tickerid + "\",\"timeframe\":\"" + timeframe.period + "\",\"tf\":\"" + timeframe.period + "\",\"candle_time\":\"" + str.tostring(time) + "\",\"timestamp\":\"" + str.tostring(time) + "\",\"t\":" + str.tostring(time) + ",\"cshi_score\":" + str.tostring(cshi_score) + ",\"cycle_intensity\":" + str.tostring(inten) + ",\"d_enc\":" + str.tostring(d_enc) + ",\"structure_subtype\":" + str.tostring(prophet_structure_subtype_code) + ",\"t_enc\":" + str.tostring(t_enc) + ",\"secret\":\"" + cta_webhook_secret + "\"}"
+    alert(cta_prophet_hud_payload, alert.freq_once_per_bar_close)

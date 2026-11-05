@@ -24,6 +24,13 @@ export const PARITY_FIELDS = Object.freeze({
   }),
   gmi: Object.freeze({
     gmi_v12_70: Object.freeze(["verdict", "gate", "gmi_dir", "prophet_dir", "conflict"])
+  }),
+  // Separate HUD identities (RFC §3). Approved prophet/gmi identities above are untouched.
+  prophet_hud: Object.freeze({
+    prophet_r38_hud: Object.freeze(["cshi_score", "cycle_intensity", "d_enc", "structure_subtype", "t_enc"])
+  }),
+  gmi_hud: Object.freeze({
+    gmi_v12_70_hud: Object.freeze(["verdict", "gate", "gmi_dir", "prophet_dir", "conflict"])
   })
 });
 
@@ -56,7 +63,7 @@ export function identityOf(record) {
   const engine = record?.engine;
   const sourceHash = normalizeHash(record?.provenance?.source_hash);
   const implementationHash = normalizeHash(record?.provenance?.implementation_hash);
-  if (!["mizan", "prophet", "gmi"].includes(engine) || !sourceHash || !implementationHash) return null;
+  if (!["mizan", "prophet", "gmi", "prophet_hud", "gmi_hud"].includes(engine) || !sourceHash || !implementationHash) return null;
   const dep = record?.provenance?.dependencies?.mizan;
   return {
     engine, sourceHash, implementationHash,

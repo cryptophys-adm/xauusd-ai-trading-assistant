@@ -1,0 +1,2828 @@
+//@version=6
+// R11 CPR CONTEXT ENGINE CANDIDATE — BASED ON USER-UPLOADED R10.1.7
+// - Independent GABFX levels and LVN/HVN visibility toggles.
+// - TDM profile blocks and POC/VAH/VAL lines have separate toggles and stale-object cleanup.
+// - Whale zone visibility is separated from zone detection/state calculation.
+// - Zen Mode hides shaded/fill blocks while preserving enabled analytical lines and underlying calculations.
+// - External VP cleans disabled profile/POC/VA objects immediately.
+// R10.1 CANDIDATE CHANGELOG
+// Baseline: Global Multiverse Interceptor [v12.70 THE SINGULARITY].txt
+// 1) Core VP bins: per-bar volume allocation changed from one HLC3 bin to Low/HLC3/High weights 25/50/25.
+//    Total volume is preserved; POC/VAH/VAL may change by design. This is an approximation, not tick-level VP.
+// 2) Added opt-in, bar-confirmed Prophet/GMI/VP conflict gate. Raw VP distribution is NOT modified by Prophet.
+// 3) Prophet d_enc is classified with shared MizanLib subtype provenance; no external export is required.
+// 4) Shared Prophet structure and VP confluence can veto directional verdicts without an external bridge.
+// 5) GABFX label follows BUY/SELL text and reuses one label instead of creating a new label each last-bar update.
+// 6) Gate diagnostics distinguish inactive, neutral/no-conflict, directional alignment, conflict, and invalid VP.
+// 7) POC side remains diagnostic; only outside-VA location is used as VP directional context.
+// 8) Existing visual controls, alert titles, and VP weighting are preserved; the shared Prophet core is consumed directly from MizanLib; no external Prophet source bridge is required.
+// R11 CHANGELOG
+// 9) Added Daily CPR from the previous completed daily candle; Weekly CPR calculation is preserved.
+// 10) Added Daily CPR width classification relative to its 20-day mean width (0.80x/1.20x heuristics).
+// 11) Added daily CPR wick-rejection / location context and a non-veto GMI directional confluence diagnostic.
+// 12) CPR context is diagnostic only: it does NOT change verdict_state, alerts, or VP calculations.
+// 13) Moved Weekly/Daily CPR, width, and CPR × GMI rows into CHRONOS MATRIX; expanded its table and shifted Aegis Footprint down.
+// 14) Consolidated CPR HUD to three rows; added classic daily R1-R3/S1-S3 levels and merged width with CPR × GMI.
+// VALIDATION: static transformation only. TradingView compilation, replay, and regression NOT yet verified.
+
+// Audit R2: wording/display-only changes applied to user-supplied compile-passing baseline. Verify in TradingView before deployment.
+indicator("Global Multiverse Interceptor [v12.70 THE SINGULARITY] · R10.1.5 SEPARATE CHRONOS HUD", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GLOBAL MULTIVERSE INTERCEPTOR v12.70: THE SINGULARITY (AUDIT WORDING R2)
+// [ELEVATION PATCH]:
+// - [ANTI-FAKEOUT BUFFER]   : Buffer ATR untuk mitigasi zona OB pada timeframe chart aktif.
+// - [DYNAMIC WICK LIMITER]  : Membatasi zona wick terlalu lebar (Max ATR limit) untuk RR optimal.
+// - [DYNAMIC VOLUME]        : Klasifikasi high-volume adaptif berdasarkan Entropi/Noise pada candle pivot.
+// - [INTERACTIVE HUD]       : Tooltips informatif pada HUD panel TDM & Aether.
+// - [DATA WINDOW EXPORT]    : Output tak kasat mata (TP, SL, QM) ke Data Window.
+// - [AGGRESSIVE GC]         : Proteksi anti-null pointer & memory leak untuk render masif.
+// - [SAFE RENDER LIMIT]     : Pencegahan TV hard-limit crash >5000 bar.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import cryptophys/CryptophysMizanLib/4 as lib
+
+max_bars_back(time, 5000)
+max_bars_back(high, 5000)
+max_bars_back(low, 5000)
+max_bars_back(close, 5000)
+max_bars_back(volume, 5000)
+
+// =============================================================================
+// ⚙️ 1. ASSET CONFIGURATION & TOGGLES
+// =============================================================================
+grp_macro = "🌍 Quant-Fundamental Engine"
+use_funda = input.bool(true, "Auto-Fusi Fundamental (EPS & FCF untuk Saham)", group=grp_macro)
+
+grp_aegis_proj = "🩸 Aegis Dynamic Order Block Engine"
+show_aegis_ob  = input.bool(true, "Show Validated OB Zones (Chart Timeframe)", group=grp_aegis_proj)
+ob_pivot_len   = input.int(5, "Volume Pivot Length", minval=1, group=grp_aegis_proj)
+vol_mult_ob    = input.float(1.5, "High-Volume Classification Multiplier", step=0.1, group=grp_aegis_proj)
+use_dyn_vol    = input.bool(true, "Auto-Adjust Volume Classification (Noise)", group=grp_aegis_proj)
+sma_len_ob     = input.int(20, "Volume SMA Length", minval=1, group=grp_aegis_proj)
+max_nodes_ob   = input.int(60, "Max Memory Validated OB Zones", minval=1, maxval=100, group=grp_aegis_proj)
+ob_max_age     = input.int(120, "Maximum OB Age (bars)", minval=5, maxval=1000, group=grp_aegis_proj)
+max_ob_per_direction = input.int(30, "Maximum OB Zones Per Direction", minval=1, maxval=100, group=grp_aegis_proj)
+ob_mitigation_method = input.string("Wick", "Full Invalidation Method", options=["Wick", "Close"], group=grp_aegis_proj, tooltip="Partial mitigation always carves wick penetration; this setting controls the full-zone invalidation trigger.")
+mitig_buffer   = input.float(0.25, "Anti-Fakeout Buffer (ATR)", step=0.05, group=grp_aegis_proj)
+max_wick_atr   = input.float(3.0, "Max OB Zone Span (ATR)", step=0.5, group=grp_aegis_proj)
+
+grp_gabfx = "🎯 GABFX Mastermind Settings"
+use_zen_mode = input.bool(false, "🧘‍♂️ Zen Mode (Clean Chart for PA)", group=grp_gabfx)
+use_snap_tp  = input.bool(true, "🧲 Auto-Snap TP to Roadblocks", group=grp_gabfx)
+use_vol_veto = input.bool(true, "🛑 Veto Execution if Volume is Dead", group=grp_gabfx)
+
+grp_config = "Cockpit Toggles"
+show_tables   = input.bool(true, "Show All Tables / HUDs", group=grp_config)
+show_main_hud = input.bool(true, "👁️ Show Interstellar & Kineto-AMT HUD (Bottom Left)", group=grp_config)
+show_aegis    = input.bool(true, "👁️ Show Aegis HUD (Chronos + Footprint)", group=grp_config)
+show_tdm_hud  = input.bool(true, "👁️ Show Matrix & Omega Sensors (Bottom Right)", group=grp_config)
+show_tdm_blocks  = input.bool(true, "Show TDM Profile Blocks (Gray/White Histogram)", group=grp_config)
+show_tdm_levels  = input.bool(true, "Show TDM POC/VAH/VAL Lines", group=grp_config)
+show_tdm_profile = show_tdm_blocks or show_tdm_levels
+
+grp_link = "🔗 MizanLib Shared Prophet Core"
+shared_prophet_alignment = input.bool(true, "Enable Shared Prophet Confluence", group=grp_link)
+
+grp_tdm = "Thermodynamic Matrix Settings"
+vp_lookback = input.int(300, "Matrix Lookback Bars", minval=50, maxval=1000, group=grp_tdm)
+vp_rows     = input.int(40, "Matrix Resolution (Rows)", minval=10, maxval=100, group=grp_tdm)
+vp_thresh   = input.int(70, "Matrix Render Threshold (%)", minval=1, maxval=99, group=grp_tdm)
+e_len       = input.int(50, "Entropy Length", group=grp_tdm)
+
+grp_mtf = "MTF Predictor Settings"
+tf1 = input.timeframe("15",  "Timeframe 1", group=grp_mtf)
+tf2 = input.timeframe("60",  "Timeframe 2", group=grp_mtf)
+tf3 = input.timeframe("240", "Timeframe 3", group=grp_mtf)
+tf4 = input.timeframe("D",   "Timeframe 4", group=grp_mtf)
+tf5 = input.timeframe("W",   "Timeframe 5", group=grp_mtf)
+
+grp_vis = "Visual Arsenals"
+show_kww        = input.bool(true, "Show Z-KWW Quantum Bands", group=grp_vis)
+show_lev        = input.bool(true, "Show Active Whale Zones (Visual Only)", group=grp_vis)
+show_gabfx_levels = input.bool(true, "Show GABFX QM BUY/SELL + RBS/SBR Levels", group=grp_vis)
+show_lvn_hvn_levels = input.bool(true, "Show LVN/HVN Levels and Labels", group=grp_vis)
+show_fib        = input.bool(true, "Show SMC Fibonacci", group=grp_vis)
+show_cama       = input.bool(true, "Show MTF Camarilla Lines (Chart)", group=grp_vis)
+show_fvg        = input.bool(true, "Show Aether FVG Zones", group=grp_vis)
+show_reg_line   = input.bool(true, "Show TVA Regression Channel", group=grp_vis)
+use_tva_channel = input.bool(true, "Enable TVA Adaptive Regression", group=grp_vis)
+reg_period      = input.int(150, "TVA Base Period", group=grp_vis)
+reg_dev         = input.float(2.0, "TVA Deviation", group=grp_vis)
+
+grp_omega = "🌟 [OMEGA] Chart Add-ons"
+show_ema        = input.bool(true, "Show Dynamic EMA", group=grp_omega)
+ema_len         = input.int(114, "EMA Length", minval=1, group=grp_omega)
+show_vwap       = input.bool(true, "Show VWAP", group=grp_omega)
+show_signals    = input.bool(true, "Show Signals (SQZ / ACC / DIST)", group=grp_omega)
+show_pa_lines   = input.bool(true, "Show PA Support/Resistance", group=grp_omega)
+show_bz_box     = input.bool(true, "Show Dynamic Position Box", group=grp_omega)
+show_cone       = input.bool(true, "Show Probability Cone", group=grp_omega)
+show_mtl        = input.bool(true, "Show Macro Baselines", group=grp_omega)
+tl_show         = input.bool(true, "Show Tactical Trendlines", group=grp_omega)
+show_mitigation = input.bool(true, "Keep/Display Whale Mitigation Blocks (does not disable detection)", group=grp_omega)
+
+bool show_kww_act      = show_kww
+bool show_fib_act      = show_fib
+bool show_cama_act     = show_cama
+bool show_fvg_act      = show_fvg
+bool show_reg_line_act = show_reg_line
+bool show_mtl_act      = show_mtl
+bool show_cone_act     = show_cone
+bool show_ema_act      = show_ema
+bool show_vwap_act     = show_vwap
+bool show_aegis_ob_act = show_aegis_ob
+bool show_gabfx_levels_act = show_gabfx_levels
+bool show_lvn_hvn_levels_act = show_lvn_hvn_levels
+bool show_whale_zones_act = show_lev and not use_zen_mode
+
+// =============================================================================
+// 🎨 2. THEME PALETTE & GLOBAL VARS
+// =============================================================================
+color obs_dark   = color.new(#161618, 10)
+color obs_border = color.new(#3f3f46, 60)
+color obs_sub    = color.new(#9ca3af, 0)
+color c_green    = color.new(#22c55e, 0)
+color c_red      = color.new(#ef4444, 0)
+color c_orange   = color.new(#f97316, 0)
+color c_blue     = color.new(#3b82f6, 0)
+color c_cyan     = color.new(#00e5ff, 0)
+color c_yellow   = color.new(#ffeb3b, 0) 
+color c_purple   = color.new(#a855f7, 0) 
+color c_magenta  = color.new(#e040fb, 0)
+
+float atr_val = math.max(ta.atr(14), syminfo.mintick)
+string std_ticker = ticker.standard(syminfo.tickerid)
+
+float vol_sma = math.max(ta.sma(volume, 20), 0.0001)
+float mml_liq = vol_sma > 0 ? (volume / vol_sma) : 0.0
+float dynamic_ema_val = ta.ema(close, ema_len)
+
+var line upperChannelLine  = line.new(na, na, na, na, extend=extend.right, color=color.new(c_red, 0), style=line.style_solid, width=2)
+var line medianChannelLine = line.new(na, na, na, na, extend=extend.right, color=color.new(c_orange, 0), style=line.style_solid, width=1)
+var line lowerChannelLine  = line.new(na, na, na, na, extend=extend.right, color=color.new(c_green, 0), style=line.style_solid, width=2)
+
+var line l_dh = line.new(na, na, na, na, extend=extend.both, color=color.new(color.white, 60), style=line.style_dashed, width=1)
+var line l_dl = line.new(na, na, na, na, extend=extend.both, color=color.new(color.white, 60), style=line.style_dashed, width=1)
+var line l_do = line.new(na, na, na, na, extend=extend.both, color=color.new(color.white, 30), style=line.style_solid, width=1)
+var line l_wh = line.new(na, na, na, na, extend=extend.both, color=color.new(c_cyan, 60), style=line.style_dashed, width=1)
+var line l_wl = line.new(na, na, na, na, extend=extend.both, color=color.new(c_cyan, 60), style=line.style_dashed, width=1)
+var line l_wo = line.new(na, na, na, na, extend=extend.both, color=color.new(c_cyan, 30), style=line.style_solid, width=1)
+
+var label lb_dh = label.new(na, na, "D-High", color=color.new(color.white, 100), textcolor=color.white, style=label.style_none, size=size.small)
+var label lb_dl = label.new(na, na, "D-Low", color=color.new(color.white, 100), textcolor=color.white, style=label.style_none, size=size.small)
+var label lb_do = label.new(na, na, "D-Open", color=color.new(color.white, 100), textcolor=color.white, style=label.style_none, size=size.small)
+var label lb_wh = label.new(na, na, "W-High", color=color.new(color.white, 100), textcolor=c_cyan, style=label.style_none, size=size.small)
+var label lb_wl = label.new(na, na, "W-Low", color=color.new(color.white, 100), textcolor=c_cyan, style=label.style_none, size=size.small)
+var label lb_wo = label.new(na, na, "W-Open", color=color.new(color.white, 100), textcolor=c_cyan, style=label.style_none, size=size.small)
+
+var line line_tac_res = line.new(na, na, na, na, extend=extend.right, color=color.new(c_red, 30), width=2, style=line.style_dotted)
+var line line_tac_sup = line.new(na, na, na, na, extend=extend.right, color=color.new(c_green, 30), width=2, style=line.style_dotted)
+var line visual_line_up = line.new(na, na, na, na, color=color.new(c_red, 30), style=line.style_dashed, width=2)
+var line visual_line_dn = line.new(na, na, na, na, color=color.new(c_green, 30), style=line.style_dashed, width=2)
+var label visual_lbl_up = label.new(na, na, text="PA Res", color=color.new(color.white, 100), textcolor=color.new(c_red, 30), style=label.style_label_left, size=size.small)
+var label visual_lbl_dn = label.new(na, na, text="PA Sup", color=color.new(color.white, 100), textcolor=color.new(c_green, 30), style=label.style_label_left, size=size.small)
+
+var line l_lvn_bull_line_1 = line.new(na, na, na, na, color=color.new(c_cyan, 30), style=line.style_dotted, width=2)
+var line l_lvn_bear_line_1 = line.new(na, na, na, na, color=color.new(c_magenta, 30), style=line.style_dotted, width=2)
+var line l_lvn_bull_line_2 = line.new(na, na, na, na, color=color.new(c_cyan, 60), style=line.style_dotted, width=1)
+var line l_lvn_bear_line_2 = line.new(na, na, na, na, color=color.new(c_magenta, 60), style=line.style_dotted, width=1)
+
+var label lbl_lvn_bull_1 = label.new(na, na, text="", color=color.new(color.white, 100), textcolor=c_cyan, style=label.style_label_left, size=size.small)
+var label lbl_lvn_bear_1 = label.new(na, na, text="", color=color.new(color.white, 100), textcolor=c_magenta, style=label.style_label_left, size=size.small)
+var label lbl_lvn_bull_2 = label.new(na, na, text="", color=color.new(color.white, 100), textcolor=color.new(c_cyan, 30), style=label.style_label_left, size=size.small)
+var label lbl_lvn_bear_2 = label.new(na, na, text="", color=color.new(color.white, 100), textcolor=color.new(c_magenta, 30), style=label.style_label_left, size=size.small)
+
+var line l_hvn_bull_line = line.new(na, na, na, na, color=color.new(c_orange, 30), style=line.style_dashed, width=2)
+var line l_hvn_bear_line = line.new(na, na, na, na, color=color.new(c_orange, 30), style=line.style_dashed, width=2)
+var label lbl_hvn_bull = label.new(na, na, text="", color=color.new(color.white, 100), textcolor=c_orange, style=label.style_label_left, size=size.small)
+var label lbl_hvn_bear = label.new(na, na, text="", color=color.new(color.white, 100), textcolor=c_orange, style=label.style_label_left, size=size.small)
+
+var box bz_reward_box = box.new(0, 0, 0, 0, bgcolor=color.new(c_green, 85), border_color=color.new(c_green, 40), border_style=line.style_solid)
+var box bz_risk_box   = box.new(0, 0, 0, 0, bgcolor=color.new(c_red, 85), border_color=color.new(c_red, 40), border_style=line.style_solid)
+var label bz_rr_lbl   = label.new(0, 0, text="", style=label.style_label_left, textcolor=color.white, size=size.small, color=color.new(color.black, 100))
+
+var line upper_cone = line.new(na, na, na, na, color=color.new(c_green, 50), style=line.style_dashed)
+var line lower_cone = line.new(na, na, na, na, color=color.new(c_red, 50), style=line.style_dashed)
+var line end_cone   = line.new(na, na, na, na, color=color.new(color.gray, 80), style=line.style_dotted)
+
+var line qm_sell_line = line.new(na, na, na, na, color=color.new(c_magenta, 30), style=line.style_dashed, width=2)
+var label qm_sell_lbl = label.new(na, na, "QM SELL ZONE", color=color.new(color.white, 100), textcolor=c_magenta, style=label.style_label_left, size=size.small)
+
+var line qm_buy_line = line.new(na, na, na, na, color=color.new(c_cyan, 30), style=line.style_dashed, width=2)
+var label qm_buy_lbl = label.new(na, na, "QM BUY ZONE", color=color.new(color.white, 100), textcolor=c_cyan, style=label.style_label_left, size=size.small)
+
+var line rbs_line = line.new(na, na, na, na, color=color.new(c_green, 30), style=line.style_dotted, width=2)
+var label rbs_lbl = label.new(na, na, "RBS ZONE", color=color.new(color.white, 100), textcolor=c_green, style=label.style_label_left, size=size.small)
+
+var line sbr_line = line.new(na, na, na, na, color=color.new(c_red, 30), style=line.style_dotted, width=2)
+var label sbr_lbl = label.new(na, na, "SBR ZONE", color=color.new(color.white, 100), textcolor=c_red, style=label.style_label_left, size=size.small)
+
+var table hud_main    = show_tables and show_main_hud ? table.new(position.bottom_left,  11, 11, bgcolor=obs_dark, border_width=1, border_color=obs_border, frame_color=obs_border, frame_width=1) : na
+
+var table hud_aegis   = table.new(position.middle_left, 3, 17, bgcolor=obs_dark, border_width=1, border_color=obs_border, frame_color=obs_border, frame_width=1)
+var table hud_tdm     = show_tables and show_tdm_hud ? table.new(position.bottom_right, 4,  55, bgcolor=obs_dark, border_width=1, border_color=obs_border, frame_color=obs_border, frame_width=1) : na
+
+var box[] m_tdm_boxes = array.new_box()
+
+
+// =============================================================================
+// 🌎 3. SESSIONS, MACRO & FUNDAMENTAL ENGINE
+// =============================================================================
+bool is_ny  = not na(time(timeframe.period, "0800-1700", "America/New_York"))
+bool is_lon = not na(time(timeframe.period, "0300-1200", "America/New_York"))
+int is_ses_tok = not na(time(timeframe.period, '1900-0400', "America/New_York")) ? 1 : 0
+
+var float max_ses_tok = na
+var float min_ses_tok = na
+if is_ses_tok > 0
+    if is_ses_tok > nz(is_ses_tok[1], 0)
+        max_ses_tok := high
+        min_ses_tok := low
+    else
+        max_ses_tok := math.max(high, nz(max_ses_tok, high))
+        min_ses_tok := math.min(low, nz(min_ses_tok, low))
+
+// ✨ THE QUANT-FUNDAMENTAL FUSION ENGINE ✨
+float eps_val = request.financial(syminfo.tickerid, "EARNINGS_PER_SHARE", "TTM", ignore_invalid_symbol=true)
+float fcf_val = request.financial(syminfo.tickerid, "FREE_CASH_FLOW", "TTM", ignore_invalid_symbol=true)
+bool has_funda = not na(eps_val) or not na(fcf_val)
+
+bool is_funda_bear = false
+bool is_funda_bull = false
+if has_funda
+    if nz(eps_val, 0) < 0 or nz(fcf_val, 0) < 0
+        is_funda_bear := true
+    else if nz(eps_val, 0) > 0 and nz(fcf_val, 0) > 0
+        is_funda_bull := true
+
+[dxy_theta, dxy_omega] = request.security(ticker.standard("TVC:DXY"), "240", lib.macro_kinematics(close), ignore_invalid_symbol=true)
+[usdt_theta, usdt_omega] = request.security(ticker.standard("CRYPTOCAP:USDT"), "240", lib.macro_kinematics(close), ignore_invalid_symbol=true)
+float avg_m_theta = (nz(dxy_theta) + nz(usdt_theta)) / 2.0
+float avg_m_omega = (nz(dxy_omega) + nz(usdt_omega)) / 2.0
+
+// ✨ EST MACRO SHIFT ✨
+float est_macro_bars = na
+string macro_rev_txt = ""
+color macro_rev_col = na
+
+if math.sign(avg_m_theta) != math.sign(avg_m_omega) and avg_m_omega != 0
+    est_macro_bars := math.abs(avg_m_theta / avg_m_omega)
+    macro_rev_txt := str.tostring(math.ceil(est_macro_bars)) + " BARS (4H)"
+    macro_rev_col := c_orange
+else if avg_m_omega == 0
+    macro_rev_txt := "STAGNANT ⇋"
+    macro_rev_col := obs_sub
+else if avg_m_theta > 0 and avg_m_omega > 0
+    macro_rev_txt := "ACCELERATING 🩸"
+    macro_rev_col := c_red
+else if avg_m_theta < 0 and avg_m_omega < 0
+    macro_rev_txt := "ACCELERATING 🚀"
+    macro_rev_col := c_green
+else
+    macro_rev_txt := "NEUTRAL"
+    macro_rev_col := obs_sub
+
+float lmas = lib.get_jurik(35, 2, 2, close)
+float lmal = lib.get_jurik(75, 2, 2, close)
+float ppoT = lmal != 0 ? (lmas - lmal) / lmal * 100 : 0
+float pctRank = ta.percentrank(ppoT, 200)
+
+float raw_jma_vel = ta.ema(ta.change(pctRank), 3)
+float raw_price_vel = math.max(math.abs(ta.ema(ta.change(close), 5)), atr_val * 0.1) 
+
+float s_theta_temp = ta.ema(math.atan((ta.linreg(close, 150, 0) - ta.linreg(close, 150, 1)) / atr_val * 10.0) * (180.0 / math.pi), 3)
+float trend_gravity = math.max(0.5, math.min(1.5, 1.0 + (nz(s_theta_temp, 0) / 100.0)))
+float inv_gravity   = math.max(0.5, 2.0 - trend_gravity) 
+
+float jma_est_bars = na
+string jma_proj_txt = ""
+
+if pctRank >= 90
+    jma_proj_txt := "MAX OB 🚨"
+else if pctRank <= 10
+    jma_proj_txt := "MAX OS 🚨"
+else if raw_jma_vel > 0.1 
+    float adj_jma_vel = raw_jma_vel * trend_gravity
+    jma_est_bars := (90.0 - pctRank) / math.max(adj_jma_vel, 0.01)
+    float est_price_ob = close + ((raw_price_vel * trend_gravity) * jma_est_bars) 
+    jma_proj_txt := str.tostring(math.ceil(jma_est_bars)) + "b OB @" + str.tostring(est_price_ob, format.mintick) + " 🚀"
+else if raw_jma_vel < -0.1 
+    float adj_jma_vel = math.abs(raw_jma_vel) * inv_gravity
+    jma_est_bars := (pctRank - 10.0) / math.max(adj_jma_vel, 0.01)
+    float est_price_os = close - ((raw_price_vel * inv_gravity) * jma_est_bars) 
+    jma_proj_txt := str.tostring(math.ceil(jma_est_bars)) + "b OS @" + str.tostring(est_price_os, format.mintick) + " 🩸"
+else
+    jma_proj_txt := "STAGNANT ⇋"
+
+bool jma_alert_long  = pctRank <= 10 or (raw_jma_vel < -0.1 and jma_est_bars <= 3)
+bool jma_alert_short = pctRank >= 90 or (raw_jma_vel >  0.1 and jma_est_bars <= 3)
+
+[w_h_prev_cpr, w_l_prev_cpr, w_c_prev_cpr] = request.security(std_ticker, "W", [high[1], low[1], close[1]], lookahead=barmerge.lookahead_on)
+float w_p = (w_h_prev_cpr + w_l_prev_cpr + w_c_prev_cpr) / 3.0
+float w_bc = (w_h_prev_cpr + w_l_prev_cpr) / 2.0
+float w_tc = w_p - w_bc + w_p
+float tc_val = math.max(w_bc, w_tc)
+float bc_val = math.min(w_bc, w_tc)
+
+string cpr_status = "INSIDE CPR"
+color cpr_col = c_orange
+if close > tc_val
+    cpr_status := "ABOVE TC (BULL)"
+    cpr_col := c_green
+else if close < bc_val
+    cpr_status := "BELOW BC (BEAR)"
+    cpr_col := c_red
+
+// R11 CPR CONTEXT ENGINE — Daily values come only from completed daily candles.
+// Width classification is a configurable-by-design heuristic, not a universal market rule.
+[d_h_prev_cpr, d_l_prev_cpr, d_c_prev_cpr, d_cpr_avg_width] = request.security(std_ticker, "D", lib.daily_cpr_stats(high, low, close), lookahead=barmerge.lookahead_on)
+float d_p = (d_h_prev_cpr + d_l_prev_cpr + d_c_prev_cpr) / 3.0
+// Classic floor-pivot support/resistance from the previous completed daily candle.
+float d_r1 = 2.0 * d_p - d_l_prev_cpr
+float d_s1 = 2.0 * d_p - d_h_prev_cpr
+float d_range_prev = d_h_prev_cpr - d_l_prev_cpr
+float d_r2 = d_p + d_range_prev
+float d_s2 = d_p - d_range_prev
+float d_r3 = d_h_prev_cpr + 2.0 * (d_p - d_l_prev_cpr)
+float d_s3 = d_l_prev_cpr - 2.0 * (d_h_prev_cpr - d_p)
+float d_bc_raw = (d_h_prev_cpr + d_l_prev_cpr) / 2.0
+float d_tc_raw = 2.0 * d_p - d_bc_raw
+float d_tc = math.max(d_bc_raw, d_tc_raw)
+float d_bc = math.min(d_bc_raw, d_tc_raw)
+float d_cpr_width = d_tc - d_bc
+float d_cpr_width_ratio = d_cpr_avg_width > 0 ? d_cpr_width / d_cpr_avg_width : na
+string d_cpr_width_status = na(d_cpr_width_ratio) ? "WIDTH N/A" : d_cpr_width_ratio < 0.80 ? "NARROW" : d_cpr_width_ratio > 1.20 ? "WIDE" : "NORMAL"
+
+string d_cpr_status = "INSIDE DAILY CPR"
+color d_cpr_col = c_orange
+if high > d_tc and close <= d_tc
+    d_cpr_status := "WICK REJECT UP"
+    d_cpr_col := c_red
+else if low < d_bc and close >= d_bc
+    d_cpr_status := "WICK REJECT DOWN"
+    d_cpr_col := c_green
+else if close > d_tc
+    d_cpr_status := "ABOVE DAILY TC"
+    d_cpr_col := c_green
+else if close < d_bc
+    d_cpr_status := "BELOW DAILY BC"
+    d_cpr_col := c_red
+
+// Directional CPR context requires price outside BOTH daily and weekly CPR ranges.
+// This is an informational confluence input only; it never changes GMI decisions.
+int cpr_context_dir = close > d_tc and close > tc_val ? 1 : close < d_bc and close < bc_val ? -1 : 0
+
+float hilow = (high - low) * 100
+float openclose = (close - open) * 100
+float vol_vpt = hilow != 0 ? (volume / hilow) : 0
+float spreadvol = openclose * vol_vpt
+float vpt = spreadvol + ta.cum(spreadvol)
+float vpt_smooth = ta.sma(vpt, 14)
+string vpt_status = vpt > vpt_smooth ? "BULLISH FLOW" : "BEARISH FLOW"
+color vpt_col = vpt > vpt_smooth ? c_green : c_red
+
+float dxy_close = nz(request.security(ticker.standard("TVC:DXY"), "240", close, ignore_invalid_symbol=true), close)
+float usdt_dom  = nz(request.security(ticker.standard("CRYPTOCAP:USDT"), "240", close, ignore_invalid_symbol=true), close)
+float roc_dxy   = ta.roc(dxy_close, 14)
+float roc_usdt  = ta.roc(usdt_dom, 14)
+float macro_pen = lib.macro_penalty(roc_dxy > 0, roc_usdt > 0)
+
+// ✨ FUNDAMENTAL OVERRIDE FOR MACRO STATE ✨
+string macro_state = macro_pen == 1.0 ? "RISK ON (SAFE)" : "RISK OFF (DANGER)"
+string macro_src_txt = "DXY/USDT"
+color macro_state_col = macro_pen == 1.0 ? c_green : c_red
+
+if use_funda and has_funda
+    if is_funda_bear
+        macro_state := "DISTRESS (BEAR)"
+        macro_state_col := c_red
+    else if is_funda_bull
+        macro_state := "GROWTH (BULL)"
+        macro_state_col := c_green
+    else
+        macro_state := "NEUTRAL"
+        macro_state_col := obs_sub
+    macro_src_txt := "EPS/FCF"
+
+f_rsi_14() => ta.rsi(close, 14)
+// GOLD monitoring mode: WTI oil H1 RSI is used as a monitoring proxy only.
+// This does not feed or modify the BUY/SELL decision logic.
+float rsi_oil = request.security("TVC:USOIL", timeframe.period, f_rsi_14(), ignore_invalid_symbol=true)
+float grav_vec = na(rsi_oil) ? na : (rsi_oil - 50.0) / 50.0
+string grav_state = na(grav_vec) ? "UNAVAILABLE" : grav_vec > 0.15 ? "BIAS PRICE DOWN (BEAR)" : grav_vec < -0.15 ? "BIAS PRICE UP (BULL)" : "NEUTRAL"
+color grav_state_col = na(grav_vec) ? obs_sub : grav_vec > 0.15 ? c_red : grav_vec < -0.15 ? c_green : obs_sub
+
+[d_o, d_h_prev, d_l_prev] = request.security(std_ticker, "D", [open, high[1], low[1]], lookahead=barmerge.lookahead_on)
+[w_o, w_h_prev, w_l_prev] = request.security(std_ticker, "W", [open, high[1], low[1]], lookahead=barmerge.lookahead_on)
+
+[c_h6_5m, c_h5_5m, c_h4_5m, c_h3_5m, c_l3_5m, c_l4_5m, c_l5_5m, c_l6_5m] = request.security(syminfo.tickerid, "5", lib.camarilla_extended(high, low, close), lookahead=barmerge.lookahead_off)
+[c_h6_15, c_h5_15, c_h4_15, c_h3_15, c_l3_15, c_l4_15, c_l5_15, c_l6_15] = request.security(syminfo.tickerid, tf1, lib.camarilla_extended(high, low, close), lookahead=barmerge.lookahead_off)
+[c_h6_1H, c_h5_1H, c_h4_1H, c_h3_1H, c_l3_1H, c_l4_1H, c_l5_1H, c_l6_1H] = request.security(syminfo.tickerid, tf2, lib.camarilla_extended(high, low, close), lookahead=barmerge.lookahead_off)
+[c_h6_4H, c_h5_4H, c_h4_4H, c_h3_4H, c_l3_4H, c_l4_4H, c_l5_4H, c_l6_4H] = request.security(syminfo.tickerid, tf3, lib.camarilla_extended(high, low, close), lookahead=barmerge.lookahead_off)
+[c_h6_1D, c_h5_1D, c_h4_1D, c_h3_1D, c_l3_1D, c_l4_1D, c_l5_1D, c_l6_1D] = request.security(syminfo.tickerid, tf4, lib.camarilla_extended(high, low, close), lookahead=barmerge.lookahead_off)
+[c_h6_1W, c_h5_1W, c_h4_1W, c_h3_1W, c_l3_1W, c_l4_1W, c_l5_1W, c_l6_1W] = request.security(syminfo.tickerid, tf5, lib.camarilla_extended(high, low, close), lookahead=barmerge.lookahead_off)
+
+f_mtf_data() =>
+    [lib.kww_zscore(close, 50), lib.entropy_calc(close, 50), lib.hurst_rs(close, 50)]
+
+[z1, e1, h1] = request.security(syminfo.tickerid, tf1, f_mtf_data(), ignore_invalid_symbol=true)
+[z2, e2, h2] = request.security(syminfo.tickerid, tf2, f_mtf_data(), ignore_invalid_symbol=true)
+[z3, e3, h3] = request.security(syminfo.tickerid, tf3, f_mtf_data(), ignore_invalid_symbol=true)
+[z4, e4, h4] = request.security(syminfo.tickerid, tf4, f_mtf_data(), ignore_invalid_symbol=true)
+[z5, e5, h5] = request.security(syminfo.tickerid, tf5, f_mtf_data(), ignore_invalid_symbol=true)
+
+float global_z = (nz(z1)*0.10) + (nz(z2)*0.15) + (nz(z3)*0.25) + (nz(z4)*0.30) + (nz(z5)*0.20)
+float global_h = (nz(h1)*0.10) + (nz(h2)*0.15) + (nz(h3)*0.25) + (nz(h4)*0.30) + (nz(h5)*0.20)
+
+// =============================================================================
+// 🌌 4. VISUAL PLANE ENRICHMENT & OMEGA ENGINE (LOCAL)
+// =============================================================================
+float e = lib.entropy_calc(close, e_len)
+float eff_rat_loc = lib.efficiency_ratio(close, 14)
+float noise_lvl = nz(e) * (1.0 - eff_rat_loc)
+bool is_chaos = e >= 0.8 or noise_lvl >= 0.85
+
+[ma_kww, sigma_kww] = lib.kww_calc(close, 50)
+float kww_upper = ma_kww + (1.618 * sigma_kww)
+float kww_lower = ma_kww - (1.618 * sigma_kww)
+float kww_width = kww_upper - kww_lower
+float kww_width_pct = kww_lower > 0 ? (kww_width / kww_lower) * 100.0 : 0.0
+
+float swc_warp = lib.spacetime_warp(sigma_kww, ma_kww)
+int dyn_reg_period = use_tva_channel ? int(math.max(10, math.min(math.round(reg_period / math.max(nz(swc_warp, 1.0), 0.1)), 500))) : reg_period
+
+plot(show_kww_act ? ma_kww : na, "KWW MA", color=color.new(c_yellow, 0), linewidth=2)
+p_up = plot(show_kww_act ? ma_kww + sigma_kww : na, "KWW +1.0", color=color.new(c_yellow, 50), linewidth=1)
+p_dn = plot(show_kww_act ? ma_kww - sigma_kww : na, "KWW -1.0", color=color.new(c_yellow, 50), linewidth=1)
+fill(p_up, p_dn, color=color.new(c_yellow, use_zen_mode ? 100 : 85), title="Z-KWW +-1 Zone")
+plot(show_kww_act ? kww_upper : na, "KWW +1.618", color=color.new(c_green, 15), linewidth=2)
+plot(show_kww_act ? kww_lower : na, "KWW -1.618", color=color.new(c_green, 15), linewidth=2)
+
+plot(show_ema_act ? dynamic_ema_val : na, "Dynamic EMA", color=color.new(#ff9800, 0), linewidth=2)
+plot(show_vwap_act ? ta.vwap(hlc3) : na, "VWAP", color=color.new(c_cyan, 0), linewidth=2)
+
+float tva_line_0 = ta.linreg(close, dyn_reg_period, 0)
+float tva_line_1 = ta.linreg(close, dyn_reg_period, 1)
+float tva_true_slope = tva_line_0 - tva_line_1 
+float tva_norm_slope = (tva_true_slope / math.max(atr_val, 0.0001)) * 10.0 
+float k_theta = math.atan(tva_norm_slope) * (180.0 / math.pi)
+
+float s_theta = ta.ema(k_theta, 3)
+float s_omega = ta.ema(ta.change(k_theta), 3)
+float s_alpha = ta.ema(ta.change(s_omega), 3)
+float s_jerk  = ta.ema(ta.change(s_alpha), 3)
+float omega_1 = nz(s_omega[1], 0.0)
+float omega_2 = nz(s_omega[2], 0.0)
+
+string kin_phase = "CRUISING ⚖️ (NEUTRAL)"
+color kin_phase_col = obs_sub
+if s_theta > 20 and s_omega < -1.0
+    kin_phase := "STALLING ⚠️ (BIAS SHORT)"
+    kin_phase_col := c_orange
+else if s_theta < -20 and s_omega > 1.0
+    kin_phase := "BRAKING ⚠️ (BIAS LONG)"
+    kin_phase_col := c_blue
+else if s_theta > 0 and s_omega > 0
+    kin_phase := "BULL IGNITION 🚀 (BIAS LONG)"
+    kin_phase_col := c_green
+else if s_theta < 0 and s_omega < 0
+    kin_phase := "BEAR IGNITION 🩸 (BIAS SHORT)"
+    kin_phase_col := c_red
+
+string jerk_status = math.abs(s_jerk) > 0.05 ? "SHOCK DETECTED ⚡" : "NOMINAL"
+color jerk_col = math.abs(s_jerk) > 0.05 ? c_yellow : obs_sub
+
+// ✨ EST TVA REVERSAL ✨
+float est_rev_bars = na
+string rev_txt = ""
+color rev_col = na
+
+if math.sign(s_theta) != math.sign(s_omega) and s_omega != 0
+    est_rev_bars := math.abs(s_theta / s_omega)
+    rev_txt := str.tostring(math.ceil(est_rev_bars)) + " BARS"
+    rev_col := c_orange
+else if s_omega == 0
+    rev_txt := "STAGNANT ⇋"
+    rev_col := obs_sub
+else if s_theta > 0 and s_omega > 0
+    rev_txt := "ACCELERATING 🚀"
+    rev_col := c_green
+else if s_theta < 0 and s_omega < 0
+    rev_txt := "ACCELERATING 🩸"
+    rev_col := c_red
+else
+    rev_txt := "NEUTRAL"
+    rev_col := obs_sub
+
+// --- AETHER FVG & SMR RESERVOIR ---
+[is_fvg_bull, is_fvg_bear] = lib.fvg_detect(high, low, open, close)
+var float[] b_tgt = array.new_float(), var float[] b_mass = array.new_float()
+var label[] b_lbls = array.new_label(), var line[] b_lines = array.new_line()
+var float[] s_tgt = array.new_float(), var float[] s_mass = array.new_float()
+var label[] s_lbls = array.new_label(), var line[] s_lines = array.new_line()
+
+float fvg_vol_anom = nz(volume[1] / vol_sma, 1.0)
+
+if is_fvg_bull and fvg_vol_anom >= 0.8
+    array.push(b_tgt, high[2])
+    array.push(b_mass, lib.fvg_mass_bull(fvg_vol_anom, high[2], low, atr_val, 1.0))
+    if show_fvg_act
+        array.push(b_lbls, label.new(x=bar_index, y=low - atr_val*0.6, text="◉ " + str.tostring(high[2], format.mintick), color=color.new(obs_dark, 0), textcolor=c_green, style=label.style_label_up, size=size.normal))
+        array.push(b_lines, line.new(x1=bar_index, y1=high[2], x2=bar_index+1, y2=high[2], extend=extend.right, color=color.new(c_green, 65), style=line.style_dashed, width=1))
+    else
+        array.push(b_lbls, label(na)), array.push(b_lines, line(na))
+    if array.size(b_tgt) > 20
+        array.shift(b_tgt), array.shift(b_mass)
+        label lbl_rm = array.shift(b_lbls), line ln_rm = array.shift(b_lines)
+        if not na(lbl_rm)
+            label.delete(lbl_rm)
+        if not na(ln_rm)
+            line.delete(ln_rm)
+
+if is_fvg_bear and fvg_vol_anom >= 0.8
+    array.push(s_tgt, low[2])
+    array.push(s_mass, lib.fvg_mass_bear(fvg_vol_anom, low[2], high, atr_val, 1.0))
+    if show_fvg_act
+        array.push(s_lbls, label.new(x=bar_index, y=high + atr_val*0.6, text="◉ " + str.tostring(low[2], format.mintick), color=color.new(obs_dark, 0), textcolor=c_red, style=label.style_label_down, size=size.normal))
+        array.push(s_lines, line.new(x1=bar_index, y1=low[2], x2=bar_index+1, y2=low[2], extend=extend.right, color=color.new(c_red, 65), style=line.style_dashed, width=1))
+    else
+        array.push(s_lbls, label(na)), array.push(s_lines, line(na))
+    if array.size(s_tgt) > 20
+        array.shift(s_tgt), array.shift(s_mass)
+        label lbl_rm = array.shift(s_lbls), line ln_rm = array.shift(s_lines)
+        if not na(lbl_rm)
+            label.delete(lbl_rm)
+        if not na(ln_rm)
+            line.delete(ln_rm)
+
+var float raw_reservoir = 0.0
+float c_in = 0.0, float c_out = 0.0
+
+if array.size(b_tgt) > 0
+    for i = array.size(b_tgt) - 1 to 0
+        if low <= array.get(b_tgt, i) 
+            c_in += array.get(b_mass, i)
+            array.remove(b_tgt, i), array.remove(b_mass, i)
+            label lbl_rm = array.remove(b_lbls, i), line ln_rm = array.remove(b_lines, i)
+            if not na(lbl_rm)
+                label.delete(lbl_rm)
+            if not na(ln_rm)
+                line.delete(ln_rm)
+        else
+            float new_m = array.get(b_mass, i) * 0.995
+            if new_m < 0.05
+                array.remove(b_tgt, i), array.remove(b_mass, i)
+                label lbl_rm = array.remove(b_lbls, i), line ln_rm = array.remove(b_lines, i)
+                if not na(lbl_rm)
+                    label.delete(lbl_rm)
+                if not na(ln_rm)
+                    line.delete(ln_rm)
+            else
+                array.set(b_mass, i, new_m)
+
+if array.size(s_tgt) > 0
+    for i = array.size(s_tgt) - 1 to 0
+        if high >= array.get(s_tgt, i) 
+            c_out += array.get(s_mass, i)
+            array.remove(s_tgt, i), array.remove(s_mass, i)
+            label lbl_rm = array.remove(s_lbls, i), line ln_rm = array.remove(s_lines, i)
+            if not na(lbl_rm)
+                label.delete(lbl_rm)
+            if not na(ln_rm)
+                line.delete(ln_rm)
+        else
+            float new_m = array.get(s_mass, i) * 0.995 
+            if new_m < 0.05
+                array.remove(s_tgt, i), array.remove(s_mass, i)
+                label lbl_rm = array.remove(s_lbls, i), line ln_rm = array.remove(s_lines, i)
+                if not na(lbl_rm)
+                    label.delete(lbl_rm)
+                if not na(ln_rm)
+                    line.delete(ln_rm)
+            else
+                array.set(s_mass, i, new_m)
+
+raw_reservoir := nz(raw_reservoir[1], 0.0) * 0.995 + nz(c_in, 0.0) - nz(c_out, 0.0)
+float res_max = nz(ta.highest(raw_reservoir, 500), raw_reservoir)
+float res_min = nz(ta.lowest(raw_reservoir, 500), raw_reservoir)
+float smri = (res_max - res_min) == 0 ? 50.0 : ((raw_reservoir - res_min) / math.max(res_max - res_min, 0.0001)) * 100.0
+smri := nz(ta.ema(smri, 3), smri)
+
+[q_up, q_dn, q_net, q_up_pct, q_dn_pct, g_scale] = lib.q_gravity(s_tgt, s_mass, b_tgt, b_mass, atr_val)
+float total_fvg_mass = array.sum(b_mass) + array.sum(s_mass)
+float bull_mass_pct = total_fvg_mass > 0 ? (array.sum(b_mass) / total_fvg_mass) * 100.0 : 50.0
+float bear_mass_pct = total_fvg_mass > 0 ? (array.sum(s_mass) / total_fvg_mass) * 100.0 : 50.0
+
+// =============================================================================
+// ✨ 5. GLOBAL TDM MATRIX (KDE GAUSSIAN SMOOTHING) ✨
+// =============================================================================
+[global_min_p, global_max_p, step, vol_bins, smooth_vol, ent_bins, cnt_bins, vah_price, val_price, poc_price, lvn_bull_1, lvn_bull_2, lvn_bear_1, lvn_bear_2, hvn_price_bull, hvn_price_bear, cg_up, cg_dn, cg_net_pull] = lib.tdm_profile(high, low, volume, hlc3, e, close, atr_val, vp_lookback, vp_rows)
+float max_v = array.size(vol_bins) > 0 ? array.max(vol_bins) : 0.0
+string cg_bias_str = cg_net_pull > 5.0 ? "BULLISH PULL 🚀" : cg_net_pull < -5.0 ? "BEARISH PULL 🩸" : "BALANCED ⚖️"
+color cg_bias_col = cg_net_pull > 5.0 ? c_green : cg_net_pull < -5.0 ? c_red : obs_sub
+
+// =============================================================================
+// 🩸 6. AEGIS: FOOTPRINT & ORDER FLOW ENGINE
+// =============================================================================
+// Shared MizanLib footprint aggregation. Values are candle-direction estimates, not bid/ask delta.
+// Preserve the original dynamic LTF source selection; MizanLib owns aggregation, GMI owns data requests.
+string dyn_ltf = timeframe.isweekly or timeframe.ismonthly ? "60" : timeframe.isdaily ? "15" : timeframe.period == "240" ? "5" : "1"
+float[] ltf_v = request.security_lower_tf(std_ticker, dyn_ltf, volume)
+float[] ltf_c = request.security_lower_tf(std_ticker, dyn_ltf, close)
+float[] ltf_o = request.security_lower_tf(std_ticker, dyn_ltf, open)
+
+[buy_vol, sell_vol] = lib.footprint_from_arrays(ltf_v, ltf_c, ltf_o)
+
+float cur_bar_delta = nz(buy_vol - sell_vol, 0.0)
+float cur_tot_vol = nz(buy_vol + sell_vol, 0.0)
+float cur_delta_pct = cur_tot_vol > 0 ? (cur_bar_delta / cur_tot_vol) * 100.0 : 0.0
+
+float delta_1_pct = nz(cur_delta_pct[1], 0.0)
+float delta_2_pct = nz(cur_delta_pct[2], 0.0)
+
+var float true_cvd = 0.0
+var float true_cum_vol = 0.0
+true_cvd += cur_bar_delta
+true_cum_vol += cur_tot_vol
+float true_cvd_pct = true_cum_vol > 0 ? (true_cvd / true_cum_vol) * 100.0 : 0.0
+
+float osc_cvd = math.sum(cur_bar_delta, 14)
+float sum_tot_vol_14 = math.sum(cur_tot_vol, 14) 
+float osc_cvd_pct = sum_tot_vol_14 > 0 ? (osc_cvd / sum_tot_vol_14) * 100.0 : 0.0
+
+float vol_surge = vol_sma > 0 ? (volume / vol_sma) : 0.0
+float body = math.abs(close - open)
+float wick_bot_ltf = math.min(open, close) - low
+float wick_top_ltf = high - math.max(open, close)
+float ltf_wick = (high - low) - body
+bool is_limit_wall = vol_surge > 1.5 and (math.abs(close - open) < atr_val * 0.5) 
+
+bool bull_absorption = cur_bar_delta < 0 and math.abs(cur_bar_delta) > (cur_tot_vol * 0.2) and close >= open 
+bool bear_absorption = cur_bar_delta > 0 and cur_bar_delta > (cur_tot_vol * 0.2) and close <= open 
+
+bool prev_bull = (bar_index > 0) ? bull_absorption[1] : false
+bool prev_bear = (bar_index > 0) ? bear_absorption[1] : false
+
+bool fabio_bull_squeeze = prev_bull and close > high[1] and cur_bar_delta > 0
+bool fabio_bear_squeeze = prev_bear and close < low[1]  and cur_bar_delta < 0
+
+bool cvd_bull_div = close < ta.lowest(close, 10)[1] and osc_cvd > nz(osc_cvd[1]) 
+bool cvd_bear_div = close > ta.highest(close, 10)[1] and osc_cvd < nz(osc_cvd[1]) 
+
+string fp_status = "NEUTRAL"
+color fp_col = obs_sub
+
+if na(buy_vol) 
+    fp_status := "NO LTF DATA"
+    fp_col := obs_sub
+else if fabio_bull_squeeze
+    fp_status := "BULL SQUEEZE 🚀"
+    fp_col := c_green
+else if fabio_bear_squeeze
+    fp_status := "BEAR SQUEEZE 🩸"
+    fp_col := c_red
+else if bull_absorption and is_limit_wall
+    fp_status := "BUY WALL LIMIT 🛡️"
+    fp_col := c_green 
+else if bear_absorption and is_limit_wall
+    fp_status := "SELL WALL LIMIT 🧱"
+    fp_col := c_red
+else if bull_absorption
+    fp_status := "BULL ABSORPTION"
+    fp_col := c_cyan 
+else if bear_absorption
+    fp_status := "BEAR ABSORPTION"
+    fp_col := c_orange
+else if cvd_bull_div
+    fp_status := "BULLISH CVD DIV"
+    fp_col := c_cyan
+else if cvd_bear_div
+    fp_status := "BEARISH CVD DIV"
+    fp_col := c_orange
+else if osc_cvd > 0
+    fp_status := "BUY CONTROL"
+    fp_col := c_green
+else if osc_cvd < 0
+    fp_status := "SELL CONTROL"
+    fp_col := c_red
+
+// =============================================================================
+// ✨ CSHI v2.0 (MUDDY WATERS PROTOCOL) & VOL VETO EVAL ✨
+// =============================================================================
+[spread_toxicity, smooth_spread, price_vel, smooth_vel, bot_viability_score, cshi_grid, is_muddy_waters, is_grid_viable] = lib.cshi_engine(open, high, low, close, atr_val, eff_rat_loc, e)
+
+string grid_status = "WAITING"
+color grid_col = obs_sub
+
+if is_muddy_waters
+    grid_status := "MUDDY WATERS (ON) 🎣"
+    grid_col := c_cyan
+else if cshi_grid > 85.0
+    grid_status := "TOXIC CHOP (OFF) 💀" 
+    grid_col := c_red
+else if cshi_grid >= 50.0 and cshi_grid <= 85.0
+    grid_status := "OPTIMAL (ON) 🤖"
+    grid_col := c_green
+else
+    grid_status := "TRENDING / DEAD (OFF) 🛑" 
+    grid_col := c_orange
+
+
+bool is_vol_dead = nz(ta.sma(volume, 3)[1], volume) < vol_sma * 0.35
+bool is_vol_thin = nz(ta.sma(volume, 3)[1], volume) < vol_sma * 0.70 
+bool veto_active = use_vol_veto and is_vol_dead
+
+// =============================================================================
+// 🐋 7. OMEGA: SPACETIME WHALE MAP
+// =============================================================================
+var bool in_mitig_bull = false
+var bool in_mitig_bear = false
+in_mitig_bull := false
+in_mitig_bear := false
+
+float lev_rel_vol = vol_sma > 0 ? (volume / vol_sma) : 0.0
+
+bool is_whale_vol = volume > (vol_sma * 1.5)
+bool is_whale_spr = (math.abs(close - open) > (atr_val * 0.25)) or ((high - low) > (atr_val * 0.6))
+bool is_whale = is_whale_vol and is_whale_spr
+
+type WhaleZone
+    box id
+    float top
+    float bot
+    bool is_support
+    float remaining_hp
+    bool is_active
+    int creation_bar
+    bool is_mitigated 
+
+var zones = array.new<WhaleZone>(5)
+var int zone_ptr = 0
+
+if is_whale 
+    bool is_support = close >= open
+    float top_bound = close + (atr_val * 0.15)
+    float bot_bound = close - (atr_val * 0.15)
+    color base_col = is_support ? c_cyan : c_red
+    
+    WhaleZone old_z = array.get(zones, zone_ptr)
+    if not na(old_z) and not na(old_z.id)
+        box.delete(old_z.id)
+        
+    box new_box = box.new(left=bar_index, top=top_bound, right=bar_index + 30, bottom=bot_bound, border_width=1, border_color=show_whale_zones_act ? color.new(base_col, 50) : color.new(base_col, 100), bgcolor=show_whale_zones_act ? color.new(base_col, 15) : color.new(base_col, 100))
+    array.set(zones, zone_ptr, WhaleZone.new(new_box, top_bound, bot_bound, is_support, lev_rel_vol, true, bar_index, false))
+    zone_ptr := (zone_ptr + 1) % 5
+
+// Process zone state transitions first; count active zones only after invalidation.
+for i = 0 to 4
+    WhaleZone z_w = array.get(zones, i)
+    if not na(z_w)
+        bool zone_visible = show_whale_zones_act or (z_w.is_mitigated and show_mitigation and not use_zen_mode)
+        if not na(z_w.id)
+            color zone_base_col = z_w.is_support ? c_cyan : c_red
+            box.set_bgcolor(z_w.id, zone_visible ? (z_w.is_mitigated ? color.new(z_w.is_support ? c_red : c_cyan, 90) : color.new(zone_base_col, 15)) : color.new(zone_base_col, 100))
+            box.set_border_color(z_w.id, zone_visible ? (z_w.is_mitigated ? color.new(z_w.is_support ? c_red : c_cyan, 80) : color.new(zone_base_col, 50)) : color.new(zone_base_col, 100))
+        if z_w.is_active
+            if high >= z_w.bot and low <= z_w.top and bar_index > z_w.creation_bar
+                z_w.remaining_hp := math.max(0.0, z_w.remaining_hp - (vol_sma > 0 ? (volume / vol_sma) : 1.0))
+            
+            if z_w.remaining_hp <= 0 or (z_w.is_support and close < z_w.bot) or (not z_w.is_support and close > z_w.top)
+                z_w.is_active := false
+                
+                if show_mitigation
+                    z_w.is_mitigated := true 
+                    color flip_col = z_w.is_support ? c_red : c_cyan
+                    box.set_bgcolor(z_w.id, color.new(flip_col, 90))
+                    box.set_border_color(z_w.id, color.new(flip_col, 80))
+                    box.set_text(z_w.id, "[MITIGATION BLOCK]\nBroken " + (z_w.is_support ? "Support" : "Resistance"))
+                    box.set_text_color(z_w.id, color.new(flip_col, 50))
+                    box.set_right(z_w.id, bar_index + 15)
+                else
+                    if not na(z_w.id)
+                        box.delete(z_w.id)
+                    z_w.id := na
+            else
+                box.set_right(z_w.id, bar_index + 15)
+                string z_spacial = ""
+                if z_w.top >= val_price and z_w.bot <= vah_price
+                    if z_w.top >= poc_price * 0.999 and z_w.bot <= poc_price * 1.001
+                        z_spacial := "[🛡️ HVN SHIELD]"
+                    else
+                        z_spacial := "[⚖️ TDM FAIR VALUE]"
+                else
+                    z_spacial := "[🎯 LVN SQUEEZE TRAP]"
+                
+                int z_temporal = bar_index - z_w.creation_bar
+                string final_txt = "\n" + z_spacial + "\nHP: " + str.tostring(z_w.remaining_hp, "#.#") + "x | T: " + str.tostring(z_temporal) + "b"
+                box.set_text(z_w.id, final_txt)
+                box.set_text_color(z_w.id, zone_visible ? color.new(color.white, 30) : color.new(color.white, 100))
+                box.set_text_size(z_w.id, size.small)
+
+        else if z_w.is_mitigated
+            bool is_mitigation_res = z_w.is_support 
+            bool is_invalidated = false
+            if is_mitigation_res and close > z_w.top 
+                is_invalidated := true
+            else if not is_mitigation_res and close < z_w.bot 
+                is_invalidated := true
+                
+            if is_invalidated
+                z_w.is_mitigated := false
+                if not na(z_w.id)
+                    box.delete(z_w.id) 
+                z_w.id := na
+            else
+                box.set_right(z_w.id, bar_index + 15)
+                if is_mitigation_res and high >= z_w.bot and low <= z_w.top
+                    in_mitig_bear := true
+                if not is_mitigation_res and low <= z_w.top and high >= z_w.bot
+                    in_mitig_bull := true
+
+// Count zones after all zone invalidation/mitigation transitions for this bar.
+int active_lev_count = 0
+for i = 0 to 4
+    WhaleZone z_count = array.get(zones, i)
+    if not na(z_count) and z_count.is_active
+        active_lev_count += 1
+
+// --- 💎 WHALE ABSORPTION IMBALANCE (WAI) ENGINE ---
+// LTF candle-direction volume is an estimate, not true bid/ask aggressor delta.
+// Keep missing LTF data distinct from a genuine neutral reading.
+bool wai_data_available = array.size(ltf_v) > 0 and array.size(ltf_v) == array.size(ltf_c) and array.size(ltf_v) == array.size(ltf_o) and not na(buy_vol) and not na(sell_vol)
+// Require the complete Whale condition (relative volume + price spread) for WAI events.
+// Strict candle direction excludes doji candles from absorption classification.
+bool bull_wai = wai_data_available and is_whale and cur_bar_delta < 0 and close > open
+bool bear_wai = wai_data_available and is_whale and cur_bar_delta > 0 and close < open
+// Normalize event weight by the chart-timeframe average volume.
+// This changes WAI's scale only; it does not change the event qualification rules.
+float wai_rel_volume = vol_sma > 0 ? cur_tot_vol / vol_sma : na
+float wai_raw = not wai_data_available or na(wai_rel_volume) ? 0.0 : bull_wai ? wai_rel_volume : bear_wai ? -wai_rel_volume : 0.0
+float wai_osc = math.sum(wai_raw, 50)
+
+string wai_str = not wai_data_available ? "DATA UNAVAILABLE" : wai_osc > 0 ? "ACCUMULATE 🟢" : wai_osc < 0 ? "DISTRIBUTE 🔴" : "NEUTRAL ⚖️"
+color wai_col = not wai_data_available ? c_orange : wai_osc > 0 ? c_green : wai_osc < 0 ? c_red : obs_sub
+
+plotshape(show_signals and bull_wai, style=shape.diamond, location=location.belowbar, color=color.new(c_cyan, 0), size=size.tiny, text="💎 ACC", textcolor=color.white)
+plotshape(show_signals and bear_wai, style=shape.diamond, location=location.abovebar, color=color.new(c_magenta, 0), size=size.tiny, text="💎 DIST", textcolor=color.white)
+
+// =============================================================================
+// 🧠 8. BAYESIAN VERDICT LOGIC & JMA KINETICS
+// =============================================================================
+// Shared Prophet oscillator tensor: same 13/34/55 cycle blend and Kaufman-adaptive tensor as Prophet.
+bool has_volume = nz(ta.cum(nz(volume)), 0.0) > 0.0
+// Evaluate shared volume functions on every bar; select the appropriate regime afterward.
+float pro_volume_ratio_confirmed = lib.prophet_volume_ratio(volume, 20)
+float pro_volume_anomaly_realtime = math.min(2.0, nz(lib.vol_anomaly(volume, 20), 1.0))
+float pro_anom = barstate.isconfirmed ? pro_volume_ratio_confirmed : pro_volume_anomaly_realtime
+float raw_comp = (lib.f_vol_cycle(close, high, low, 13, pro_anom) * 0.5) + (lib.f_vol_cycle(close, high, low, 34, pro_anom) * 0.35) + (lib.f_vol_cycle(close, high, low, 55, pro_anom) * 0.15)
+float kaufman_er = lib.efficiency_ratio(close, 14)
+[pro_fast, pro_slow_shared, pro_core_shared] = lib.calculate_prophet_tensor(raw_comp, kaufman_er, 6)
+
+// Shared Prophet R37 state machine from MizanLib; no inter-indicator hidden-plot bridge.
+[d_enc, b_enc, prophet_structure_state_bar, prophet_bull_event_bar, prophet_bear_event_bar, prophet_structure_subtype_code, pro_ph, pro_pl, prophet_bear_div_event, prophet_bull_div_event, prophet_bear_div_origin_bar, prophet_bear_div_origin_value, prophet_bull_div_origin_bar, prophet_bull_div_origin_value, prophet_last_price_ph, prophet_last_price_pl] = lib.prophet_structure_core(pro_fast, high, low, open, close, pro_anom, has_volume, atr_val, false, 50, 5, 2, 0.10, 1.5)
+bool is_real_vol_prophet = has_volume and pro_anom > 1.0
+
+[ret_val, base_mu, adj_mu, adj_sigma] = lib.return_distribution(close, ma_kww, sigma_kww, e)
+
+float htf_state = (e >= 0.80) ? 0 : ((close - ma_kww) / math.max(sigma_kww, 0.0001) > 0 and global_h > 0.5 and adj_mu > 0) ? 1 : -1
+if use_funda and has_funda
+    htf_state := is_funda_bull ? 1 : is_funda_bear ? -1 : 0
+
+float mtf_state = (prophet_structure_subtype_code == 2 or prophet_structure_subtype_code == 3) ? 1 : (prophet_structure_subtype_code == 1 or prophet_structure_subtype_code == 4) ? -1 : 0
+float ltf_state = fp_status == "BUY WALL LIMIT 🛡️" or fp_status == "BULLISH CVD DIV" ? 2 : fp_status == "SELL WALL LIMIT 🧱" or fp_status == "BEARISH CVD DIV" ? -2 : (osc_cvd > 0 and s_omega > 0) ? 1 : (osc_cvd < 0 and s_omega < 0) ? -1 : 0
+float ext_state = ((s_omega < -0.5) and s_alpha < 0) ? 1 : (pro_fast > 0.45) ? 2 : 0
+
+bool kin_rev_long = not na(est_rev_bars) and est_rev_bars <= 5 and close < val_price and s_omega > 0
+bool kin_rev_short = not na(est_rev_bars) and est_rev_bars <= 5 and close > vah_price and s_omega < 0
+
+// ─────────────────────────────────────────────────────────────────────────
+// ✨ AEGIS DYNAMIC-TIMEFRAME VALIDATED ORDER BLOCK ENGINE ✨
+// ─────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────
+// 🩸 DYNAMIC-TIMEFRAME AEGIS ORDER BLOCK ENGINE
+// Adapted from LuxAlgo Order Block Detector, © LuxAlgo.
+// License: CC BY-NC-SA 4.0 — https://creativecommons.org/licenses/by-nc-sa/4.0/
+// Adaptations: chart-timeframe operation, ATR span cap, progressive mitigation, GMI sensors.
+// Qualification: confirmed volume pivot + directional price-extreme state.
+// ─────────────────────────────────────────────────────────────────────────
+type AegisNode
+    box top_box
+    box bot_box
+    int start_idx
+    int activation_idx
+    float top_upper
+    float top_lower
+    float top_init_span
+    float bot_upper
+    float bot_lower
+    float bot_init_span
+    float atr_ob_locked
+    bool high_volume_node
+    bool top_active
+    bool bot_active
+    int top_polarity
+    int bot_polarity
+
+// All qualification data is calculated on the active chart timeframe.
+// No fixed-timeframe request.security() call is used by this engine.
+float ob_volume_pivot = lib.ob_volume_pivot(volume, ob_pivot_len)
+float ob_volume_sma = ta.sma(volume, sma_len_ob)
+float ob_atr_series = ta.atr(14)
+var int ob_direction_state = 0
+ob_direction_state := lib.ob_direction_state(high, low, ob_pivot_len, nz(ob_direction_state[1], 0))
+
+bool ob_has_volume_pivot = not na(ob_volume_pivot)
+bool ob_source_high_volume = lib.ob_high_volume(volume, ob_volume_sma, 1.0 - lib.efficiency_ratio(close, 14), ob_pivot_len, vol_mult_ob, use_dyn_vol)
+
+string ob_tf_tag = timeframe.period
+if timeframe.isseconds
+    ob_tf_tag := str.tostring(timeframe.multiplier) + "S"
+else if timeframe.isintraday
+    ob_tf_tag := timeframe.multiplier >= 60 and timeframe.multiplier % 60 == 0 ? str.tostring(timeframe.multiplier / 60) + "H" : str.tostring(timeframe.multiplier) + "m"
+else if timeframe.isdaily
+    ob_tf_tag := str.tostring(timeframe.multiplier) + "D"
+else if timeframe.isweekly
+    ob_tf_tag := str.tostring(timeframe.multiplier) + "W"
+else if timeframe.ismonthly
+    ob_tf_tag := str.tostring(timeframe.multiplier) + "MO"
+
+var aegis_nodes = array.new<AegisNode>()
+
+// Per-bar OB sensors reset before evaluating active nodes.
+bool in_ob_bull = false
+bool in_ob_bear = false
+float nearest_ob_bull_sl = na
+float nearest_ob_bear_sl = na
+
+// Evaluate both directional zone-bound calculations on every bar for consistent series history.
+// A pivot is only used after its right-side confirmation bars have closed.
+// One directional OB is created per qualified volume pivot, not two zones
+// from the same candle.
+[supply_upper, supply_lower, supply_mid, supply_span] = lib.ob_zone_bounds(high, low, ob_atr_series, ob_pivot_len, max_wick_atr, -1)
+[demand_upper, demand_lower, demand_mid, demand_span] = lib.ob_zone_bounds(high, low, ob_atr_series, ob_pivot_len, max_wick_atr, 1)
+
+if barstate.isconfirmed and ob_has_volume_pivot
+    float src_high = high[ob_pivot_len]
+    float src_low = low[ob_pivot_len]
+    float ref_atr = math.max(nz(ob_atr_series[ob_pivot_len], atr_val), syminfo.mintick)
+    bool make_bear_ob = ob_direction_state == 0
+    bool make_bull_ob = ob_direction_state == 1
+
+    box b_top = na
+    box b_bot = na
+    float node_top_upper = na
+    float node_top_lower = na
+    float node_top_span = na
+    float node_bot_upper = na
+    float node_bot_lower = na
+    float node_bot_span = na
+
+    if make_bear_ob
+        b_top := box.new(na, na, na, na, bgcolor=na, border_color=na, text_size=size.tiny, xloc=xloc.bar_index)
+        node_top_upper := supply_upper
+        node_top_lower := supply_lower
+        node_top_span := supply_span
+    else if make_bull_ob
+        b_bot := box.new(na, na, na, na, bgcolor=na, border_color=na, text_size=size.tiny, xloc=xloc.bar_index)
+        node_bot_upper := demand_upper
+        node_bot_lower := demand_lower
+        node_bot_span := demand_span
+
+    array.push(aegis_nodes, AegisNode.new(b_top, b_bot, bar_index - ob_pivot_len, bar_index, node_top_upper, node_top_lower, node_top_span, node_bot_upper, node_bot_lower, node_bot_span, ref_atr, ob_source_high_volume, make_bear_ob, make_bull_ob, -1, 1))
+
+    // Enforce the same per-direction memory ceiling used by Prophet.
+    int active_bull_nodes = 0
+    int active_bear_nodes = 0
+    if array.size(aegis_nodes) > 0
+        for j = 0 to array.size(aegis_nodes) - 1
+            AegisNode candidate = array.get(aegis_nodes, j)
+            if candidate.bot_active                active_bull_nodes += 1
+            if candidate.top_active
+                active_bear_nodes += 1
+    int prune_idx = 0
+    while prune_idx < array.size(aegis_nodes) and (active_bull_nodes > max_ob_per_direction or active_bear_nodes > max_ob_per_direction)
+        AegisNode candidate = array.get(aegis_nodes, prune_idx)
+        bool prune_bull = candidate.bot_active and active_bull_nodes > max_ob_per_direction
+        bool prune_bear = candidate.top_active and active_bear_nodes > max_ob_per_direction
+        if prune_bull or prune_bear
+            if not na(candidate.top_box)
+                box.delete(candidate.top_box)
+            if not na(candidate.bot_box)
+                box.delete(candidate.bot_box)
+            if candidate.bot_active
+                active_bull_nodes -= 1
+            if candidate.top_active
+                active_bear_nodes -= 1
+            array.remove(aegis_nodes, prune_idx)
+        else
+            prune_idx += 1
+
+    while array.size(aegis_nodes) > max_nodes_ob
+        AegisNode removed = array.shift(aegis_nodes)
+        if not na(removed.top_box)
+            box.delete(removed.top_box)
+        if not na(removed.bot_box)
+            box.delete(removed.bot_box)
+
+if barstate.isconfirmed and array.size(aegis_nodes) > 0
+    for i = array.size(aegis_nodes) - 1 to 0
+        AegisNode n = array.get(aegis_nodes, i)
+        float mitig_buf = n.atr_ob_locked * mitig_buffer
+        int safe_start_idx = math.max(bar_index - 4900, n.start_idx)
+        bool ob_expired = bar_index - n.activation_idx > ob_max_age
+        if ob_expired
+            n.top_active := false
+            n.bot_active := false
+            if not na(n.top_box)
+                box.delete(n.top_box)
+                n.top_box := na
+            if not na(n.bot_box)
+                box.delete(n.bot_box)
+                n.bot_box := na
+
+        // --- 1. VALIDATED BEARISH SUPPLY OB: PROGRESSIVE MITIGATION ---
+        if n.top_active
+            [top_next_upper, top_next_lower, top_remaining_pct, touch_top_ob, top_invalid] = lib.ob_progressive_update(n.top_polarity, n.top_upper, n.top_lower, n.top_init_span, n.atr_ob_locked, high, low, close, mitig_buffer, bar_index > n.activation_idx, ob_mitigation_method == "Close")
+            n.top_upper := top_next_upper
+            n.top_lower := top_next_lower
+            if n.top_polarity == -1 and touch_top_ob and not top_invalid
+                in_ob_bear := true
+                nearest_ob_bear_sl := n.top_upper + mitig_buf
+
+            if top_invalid
+                n.top_active := false
+                if not na(n.top_box)
+                    box.delete(n.top_box)
+                    n.top_box := na
+            else
+                float top_rem_pct = top_remaining_pct
+                box.set_lefttop(n.top_box, safe_start_idx, n.top_upper)
+                box.set_rightbottom(n.top_box, bar_index + 15, n.top_lower)
+                box.set_bgcolor(n.top_box, (not show_aegis_ob_act or use_zen_mode) ? color.new(c_red, 100) : color.new(c_red, 85))
+                box.set_border_color(n.top_box, show_aegis_ob_act ? color.new(c_red, 50) : color.new(c_red, 100))
+                string top_vol_tag = n.high_volume_node ? "HIGH VOL" : "VOL PIVOT"
+                box.set_text(n.top_box, ob_tf_tag + " VALIDATED SUPPLY OB (" + top_vol_tag + ") [" + str.tostring(top_rem_pct, "#") + "%]")
+                box.set_text_color(n.top_box, show_aegis_ob_act ? color.new(color.white, 60) : color.new(color.white, 100))
+
+        // --- 2. VALIDATED BULLISH DEMAND OB: PROGRESSIVE MITIGATION ---
+        if n.bot_active
+            [bot_next_upper, bot_next_lower, bot_remaining_pct, touch_bot_ob, bot_invalid] = lib.ob_progressive_update(n.bot_polarity, n.bot_upper, n.bot_lower, n.bot_init_span, n.atr_ob_locked, high, low, close, mitig_buffer, bar_index > n.activation_idx, ob_mitigation_method == "Close")
+            n.bot_upper := bot_next_upper
+            n.bot_lower := bot_next_lower
+            if n.bot_polarity == 1 and touch_bot_ob and not bot_invalid
+                in_ob_bull := true
+                nearest_ob_bull_sl := n.bot_lower - mitig_buf
+
+            if bot_invalid
+                n.bot_active := false
+                if not na(n.bot_box)
+                    box.delete(n.bot_box)
+                    n.bot_box := na
+            else
+                float bot_rem_pct = bot_remaining_pct
+                box.set_lefttop(n.bot_box, safe_start_idx, n.bot_upper)
+                box.set_rightbottom(n.bot_box, bar_index + 15, n.bot_lower)
+                box.set_bgcolor(n.bot_box, (not show_aegis_ob_act or use_zen_mode) ? color.new(c_cyan, 100) : color.new(c_cyan, 85))
+                box.set_border_color(n.bot_box, show_aegis_ob_act ? color.new(c_cyan, 50) : color.new(c_cyan, 100))
+                string bot_vol_tag = n.high_volume_node ? "HIGH VOL" : "VOL PIVOT"
+                box.set_text(n.bot_box, ob_tf_tag + " VALIDATED DEMAND OB (" + bot_vol_tag + ") [" + str.tostring(bot_rem_pct, "#") + "%]")
+                box.set_text_color(n.bot_box, show_aegis_ob_act ? color.new(color.white, 60) : color.new(color.white, 100))
+
+        if not n.top_active and not n.bot_active
+            array.remove(aegis_nodes, i)
+
+// =============================================================================
+// 🛡️ 9. OMEGA CHART PLANE ADD-ONS (PA SUPPORT)
+// =============================================================================
+float _pa_ph = ta.pivothigh(high, 10, 10)
+float _pa_pl = ta.pivotlow(low, 10, 10)
+var float sig_line_up = na
+var float sig_line_dn = na
+
+if not na(_pa_ph)
+    sig_line_up := _pa_ph
+if not na(_pa_pl)
+    sig_line_dn := _pa_pl
+
+var float tl_ph1_y = na
+var int tl_ph1_x = na
+var float tl_ph2_y = na
+var int tl_ph2_x = na
+var float tl_pl1_y = na
+var int tl_pl1_x = na
+var float tl_pl2_y = na
+var int tl_pl2_x = na
+
+float tl_ph = ta.pivothigh(high, 14, 14)
+float tl_pl = ta.pivotlow(low, 14, 14)
+
+if not na(tl_ph)
+    tl_ph2_y := tl_ph1_y
+    tl_ph2_x := tl_ph1_x
+    tl_ph1_y := tl_ph
+    tl_ph1_x := bar_index[14]
+
+if not na(tl_pl)
+    tl_pl2_y := tl_pl1_y
+    tl_pl2_x := tl_pl1_x
+    tl_pl1_y := tl_pl
+    tl_pl1_x := bar_index[14]
+
+float struct_res = not na(sig_line_up) ? sig_line_up : (not na(c_h3_1D) ? c_h3_1D : close + atr_val)
+float struct_sup = not na(sig_line_dn) ? sig_line_dn : (not na(c_l3_1D) ? c_l3_1D : close - atr_val)
+float struct_eq  = (struct_res + struct_sup) / 2.0 
+int g_poc_dir = close < struct_eq - atr_val * 0.5 ? 1 : close > struct_eq + atr_val * 0.5 ? -1 : 0 
+
+// =============================================================================
+// 🧠 10. GABFX PA ENGINE: QM & RBS/SBR DETECTOR (WITH MITIGATION)
+// =============================================================================
+var float qm_sell_lvl = na
+var float qm_buy_lvl  = na
+var float rbs_lvl     = na
+var float sbr_lvl     = na
+
+[next_qm_sell_lvl, next_qm_buy_lvl, next_rbs_lvl, next_sbr_lvl, in_qm_buy, in_qm_sell, in_rbs, in_sbr] = lib.gabfx_update(close, tl_ph1_y, tl_ph2_y, tl_pl1_y, tl_pl2_y, qm_sell_lvl, qm_buy_lvl, rbs_lvl, sbr_lvl, atr_val)
+qm_sell_lvl := next_qm_sell_lvl
+qm_buy_lvl := next_qm_buy_lvl
+rbs_lvl := next_rbs_lvl
+sbr_lvl := next_sbr_lvl
+
+bool pa_gabfx_buy  = (in_qm_buy or in_rbs or in_mitig_bull or in_ob_bull) and (fabio_bull_squeeze or bull_absorption)
+bool pa_gabfx_sell = (in_qm_sell or in_sbr or in_mitig_bear or in_ob_bear) and (fabio_bear_squeeze or bear_absorption)
+
+// =============================================================================
+// 🧠 11. ACTION VERDICT INTEGRATION
+// =============================================================================
+float verdict_state = 0
+if kin_rev_long
+    verdict_state := 3 
+else if kin_rev_short
+    verdict_state := -3 
+else if ext_state == 1 and htf_state == 1
+    verdict_state := -1  
+else if ext_state == 2 and htf_state == 1
+    verdict_state := 4   
+else if htf_state == 1 and (mtf_state == 1 or ltf_state >= 1)
+    verdict_state := 3 
+else if htf_state == -1 and (mtf_state == -1 or ltf_state <= -1)
+    verdict_state := -3
+    // state2 disabled 
+else if false
+    verdict_state := -3 
+
+float d_e = ta.change(e)
+float s_de_dt = ta.ema(d_e, 3)
+float sma_atr = ta.sma(atr_val, 50)
+bool is_entropy_trap = (atr_val < sma_atr) and (s_de_dt > 0.02)
+
+string verdict = "WAIT / OBSERVE 👁️"
+color v_col = obs_sub
+string ai_decision = "NO CLEAR SIGNAL"
+color ai_col = obs_sub
+
+bool is_imbalance_bull = close > vah_price
+bool is_imbalance_bear = close < val_price
+bool is_balance        = close <= vah_price and close >= val_price
+
+bool is_fakeout_bot = low < val_price and close > val_price
+bool is_fakeout_top = high > vah_price and close < vah_price
+// Evaluate the rolling three-bar fakeout memory on every chart bar.
+bool fabio_recent_fakeout_bot = ta.barssince(is_fakeout_bot) <= 3
+bool fabio_recent_fakeout_top = ta.barssince(is_fakeout_top) <= 3
+
+bool m1_flow_bull = (fp_status == "BULL SQUEEZE 🚀" or fp_status == "BUY WALL LIMIT 🛡️" or bull_absorption)
+bool m1_flow_bear = (fp_status == "BEAR SQUEEZE 🩸" or fp_status == "SELL WALL LIMIT 🧱" or bear_absorption)
+bool m2_flow_bull = (fp_status == "BULL SQUEEZE 🚀" or bull_absorption)
+bool m2_flow_bear = (fp_status == "BEAR SQUEEZE 🩸" or bear_absorption)
+
+[fabio_m1_buy, fabio_m1_sell, fabio_m2_buy, fabio_m2_sell] = lib.fabio_decision(close, atr_val, is_ny, (is_lon or is_balance), is_imbalance_bull, is_imbalance_bear, lvn_bull_1, lvn_bear_1, m1_flow_bull, m1_flow_bear, is_fakeout_bot, is_fakeout_top, m2_flow_bull, m2_flow_bear)
+
+if is_entropy_trap
+    string bias_dir = (bull_mass_pct > bear_mass_pct + 10 or osc_cvd > 0) ? " 🚀 (BIAS LONG)" : (bear_mass_pct > bull_mass_pct + 10 or osc_cvd < 0) ? " 🩸 (BIAS SHORT)" : " ⚖️ (NEUTRAL)"
+    verdict_state := 0
+    verdict := "⚠️ AVALANCHE" + bias_dir
+    v_col := (bull_mass_pct > bear_mass_pct + 10) ? c_green : (bear_mass_pct > bull_mass_pct + 10) ? c_red : c_purple
+    ai_decision := "PREP AVALANCHE"
+    ai_col := v_col
+
+else if (in_qm_buy or in_rbs or in_qm_sell or in_sbr or in_mitig_bull or in_mitig_bear or in_ob_bull or in_ob_bear) and veto_active
+    verdict_state := 0
+    verdict := "VETO: FAKEOUT LIKELY 🛑"
+    v_col := c_orange
+    ai_decision := "ABORT SETUP (NO VOL)"
+    ai_col := c_orange
+else if pa_gabfx_buy
+    verdict_state := 3
+    verdict := (in_ob_bull and not in_qm_buy and not in_rbs) ? "AEGIS: VALIDATED OB BUY 🚀" : (in_mitig_bull and not in_qm_buy and not in_rbs) ? "WHALE: MITIGATION BUY 🚀" : "GABFX: QM/RBS ENTRY 🚀"
+    v_col := c_green
+    ai_decision := "GABFX BULLISH CONDITION"
+    ai_col := c_green
+else if pa_gabfx_sell
+    verdict_state := -3
+    verdict := (in_ob_bear and not in_qm_sell and not in_sbr) ? "AEGIS: VALIDATED OB SELL 🩸" : (in_mitig_bear and not in_qm_sell and not in_sbr) ? "WHALE: MITIGATION SELL 🩸" : "GABFX: QM/SBR ENTRY 🩸"
+    v_col := c_red
+    ai_decision := "GABFX BEARISH CONDITION"
+    ai_col := c_red
+
+else if fabio_m1_buy
+    verdict_state := 3
+    verdict := "MODEL 1: NY TREND BUY 🚀"
+    v_col := c_green
+    ai_decision := "MODEL 1 BUY CONDITION"
+    ai_col := c_green
+else if fabio_m1_sell
+    verdict_state := -3
+    verdict := "MODEL 1: NY TREND SELL 🩸"
+    v_col := c_red
+    ai_decision := "MODEL 1 SELL CONDITION"
+    ai_col := c_red
+else if fabio_m2_buy
+    verdict_state := 3
+    verdict := "MODEL 2: LON FAKEOUT BUY 📈"
+    v_col := c_cyan
+    ai_decision := "MODEL 2 BUY CONDITION"
+    ai_col := c_cyan
+else if fabio_m2_sell
+    verdict_state := -3
+    verdict := "MODEL 2: LON FAKEOUT SELL 📉"
+    v_col := c_orange
+    ai_decision := "MODEL 2 SELL CONDITION"
+    ai_col := c_orange
+else if jma_alert_long and is_balance
+    verdict_state := 3
+    verdict := "JMA OVERSOLD ZONE 🚀"
+    v_col := c_green
+    ai_decision := "PREP LONG / ACCUM"
+    ai_col := c_green
+else if jma_alert_short and is_balance
+    verdict_state := -3
+    verdict := "JMA OVERBOUGHT ZONE 🩸"
+    v_col := c_red
+    ai_decision := "PREP SHORT / DIST"
+    ai_col := c_red
+else if kin_rev_long
+    verdict_state := 3
+    verdict := "KINETIC SHIFT BUY 🚀"
+    v_col := c_green
+    ai_decision := "NAVIGATOR LONG"
+    ai_col := c_green
+else if kin_rev_short
+    verdict_state := -3
+    verdict := "KINETIC SHIFT SELL 🩸"
+    v_col := c_red
+    ai_decision := "NAVIGATOR SHORT"
+    ai_col := c_red
+else if verdict_state == 4
+    verdict := "EXTENSION STATE: REVIEW RISK 🌌"
+    v_col := c_purple
+    ai_decision := "REVIEW POSITION RISK"
+    ai_col := c_purple
+else if verdict_state == 3
+    verdict := "BULLISH VERDICT STATE 🚀"
+    v_col := c_green
+    ai_decision := "BULLISH VERDICT (NON-FABIO)"
+    ai_col := c_green
+else if verdict_state == 2
+    verdict := "PREP LONG 📈"
+    v_col := c_cyan
+    ai_decision := "ACCUMULATING"
+    ai_col := c_cyan
+else if verdict_state == -1
+    verdict := "EXHAUSTION / RISK ALERT 🛑"
+    v_col := c_orange
+    ai_decision := "KTS EVASION"
+    ai_col := c_orange
+else if verdict_state == -3
+    verdict := "BEARISH VERDICT STATE 🩸"
+    v_col := c_red
+    ai_decision := "BEARISH VERDICT (NON-FABIO)"
+    ai_col := c_red
+else if is_chaos
+    verdict := "VETO: CHAOS ⚠️"
+    v_col := c_orange
+    ai_decision := "SAFE MODE"
+    ai_col := c_orange
+
+// =============================================================================
+// MIZANLIB SHARED PROPHET × GMI VOLUME-PROFILE CONFLUENCE GATE
+// Prophet oscillator and structure are recalculated from the same MizanLib core;
+// no hidden-plot transfer or external indicator coupling is used.
+int r10_vp_location_dir = close > vah_price ? 1 : close < val_price ? -1 : 0
+bool r10_profile_valid = not na(poc_price) and not na(vah_price) and not na(val_price) and vah_price >= poc_price and poc_price >= val_price
+int r10_prophet_div_dir = (prophet_structure_subtype_code == 2 or prophet_structure_subtype_code == 3 or d_enc == 1.0) ? 1 : (prophet_structure_subtype_code == 1 or prophet_structure_subtype_code == 4 or d_enc == -1.0) ? -1 : 0
+int r10_prophet_dir = pro_fast > 0.0 ? 1 : pro_fast < 0.0 ? -1 : 0
+bool r10_prophet_internal_conflict = r10_prophet_dir != 0 and r10_prophet_div_dir != 0 and r10_prophet_dir != r10_prophet_div_dir
+int r10_prophet_consensus_dir = r10_prophet_internal_conflict ? 0 : r10_prophet_dir != 0 ? r10_prophet_dir : r10_prophet_div_dir
+bool r10_gmi_is_directional = verdict_state == 3 or verdict_state == -3
+int r10_gmi_dir = verdict_state == 3 ? 1 : verdict_state == -3 ? -1 : 0
+bool r10_gmi_prophet_conflict = r10_gmi_is_directional and r10_prophet_consensus_dir != 0 and r10_gmi_dir != r10_prophet_consensus_dir
+bool r10_profile_prophet_conflict = r10_vp_location_dir != 0 and r10_prophet_consensus_dir != 0 and r10_vp_location_dir != r10_prophet_consensus_dir
+bool r10_prophet_risk_hold = prophet_structure_subtype_code == 1
+bool r10_integration_active = shared_prophet_alignment and barstate.isconfirmed
+bool r10_gate_evaluable = r10_integration_active and r10_profile_valid
+bool r10_integration_conflict = r10_gate_evaluable and (r10_prophet_internal_conflict or r10_gmi_prophet_conflict or r10_profile_prophet_conflict or r10_prophet_risk_hold)
+bool r10_directionally_aligned = r10_gate_evaluable and not r10_integration_conflict and r10_gmi_is_directional and r10_prophet_consensus_dir != 0 and r10_gmi_dir == r10_prophet_consensus_dir and r10_vp_location_dir == r10_prophet_consensus_dir
+int r10_gate_status = not r10_integration_active ? 0 : not r10_profile_valid ? -2 : r10_integration_conflict ? -1 : r10_directionally_aligned ? 2 : 1
+
+if r10_integration_conflict
+    verdict_state := 0
+    verdict := r10_prophet_risk_hold ? "PROPHET STRUCTURE RISK HOLD · WAIT" : "MIZANLIB PROPHET / GMI / VP CONFLICT · WAIT"
+    v_col := c_orange
+    ai_decision := r10_prophet_risk_hold ? "PROPHET STRUCTURE RISK" : "CONFLUENCE CONFLICT"
+    ai_col := c_orange
+
+// CPR × GMI confluence is deliberately diagnostic and non-vetoing.
+int cpr_gmi_dir = verdict_state == 3 ? 1 : verdict_state == -3 ? -1 : 0
+string cpr_gmi_context = cpr_gmi_dir == 0 ? "GMI NEUTRAL" : cpr_context_dir == 0 ? "CPR NEUTRAL" : cpr_gmi_dir == cpr_context_dir ? "ALIGNED" : "CONFLICT"
+color cpr_gmi_context_col = cpr_gmi_context == "ALIGNED" ? c_green : cpr_gmi_context == "CONFLICT" ? c_red : obs_sub
+
+
+plotshape(show_signals and fabio_bull_squeeze, style=shape.triangleup, location=location.belowbar, color=color.new(c_cyan, 0), size=size.tiny, text="🚀 SQZ", textcolor=color.white)
+plotshape(show_signals and fabio_bear_squeeze, style=shape.triangledown, location=location.abovebar, color=color.new(c_orange, 0), size=size.tiny, text="🩸 SQZ", textcolor=color.white)
+
+string gabfx_seq = ""
+if in_qm_buy or in_rbs or in_mitig_bull or in_ob_bull
+    if veto_active
+        gabfx_seq := "[VETO] NO VOLUME 💀"
+    else if pa_gabfx_buy
+        gabfx_seq := "[3] GABFX BUY CONDITION 🚀"
+    else
+        gabfx_seq := "[1] IN ZONE (WAIT VOL)"
+else if in_qm_sell or in_sbr or in_mitig_bear or in_ob_bear
+    if veto_active
+        gabfx_seq := "[VETO] NO VOLUME 💀"
+    else if pa_gabfx_sell
+        gabfx_seq := "[3] GABFX SELL CONDITION 🩸"
+    else
+        gabfx_seq := "[1] IN ZONE (WAIT VOL)"
+
+// One persistent GABFX label. Display direction follows the actual GABFX text, not g_poc_dir.
+var label gabfx_label = na
+if barstate.islast
+    if gabfx_seq == ""
+        if not na(gabfx_label)
+            label.delete(gabfx_label)
+            gabfx_label := na
+    else
+        bool gabfx_label_buy = str.contains(gabfx_seq, "BUY CONDITION")
+        bool gabfx_label_sell = str.contains(gabfx_seq, "SELL CONDITION")
+        float gabfx_label_y = gabfx_label_buy ? low - atr_val : gabfx_label_sell ? high + atr_val : close
+        color gabfx_label_text_color = gabfx_label_buy ? c_green : gabfx_label_sell ? c_red : c_orange
+        gabfx_label_style = gabfx_label_buy ? label.style_label_up : gabfx_label_sell ? label.style_label_down : label.style_label_left
+        if na(gabfx_label)
+            gabfx_label := label.new(bar_index, gabfx_label_y, text=gabfx_seq, color=color.new(obs_dark, 20), textcolor=gabfx_label_text_color, style=gabfx_label_style, size=size.small)
+        else
+            label.set_xy(gabfx_label, bar_index, gabfx_label_y)
+            label.set_text(gabfx_label, gabfx_seq)
+            label.set_color(gabfx_label, color.new(obs_dark, 20))
+            label.set_textcolor(gabfx_label, gabfx_label_text_color)
+            label.set_style(gabfx_label, gabfx_label_style)
+
+// =============================================================================
+// 🛡️ 12. PROGRESSIVE SL BOX & CSHI GRID
+// =============================================================================
+float lq_top = na
+float lq_bot = na
+float lq_tp = na
+float lq_rr = na
+//
+//
+//
+//
+float lq_sizing = 100.0
+
+float sizing_modifier = 1.0
+if g_poc_dir == 1 
+    if macro_state == "RISK OFF (DANGER)" or macro_state == "DISTRESS (BEAR)"
+        sizing_modifier := 0.3
+        if not na(est_macro_bars) and est_macro_bars <= 5
+            sizing_modifier := 0.8
+else 
+    if macro_state == "RISK ON (SAFE)" or macro_state == "GROWTH (BULL)"
+        sizing_modifier := 0.3
+        if not na(est_macro_bars) and est_macro_bars <= 5
+            sizing_modifier := 0.8
+
+lq_sizing := lq_sizing * sizing_modifier * (is_vol_thin ? 0.5 : 1.0)
+string sl_manager_txt = "AT RISK ⚠️"
+color sl_manager_col = c_orange
+
+float gabfx_res_roadblock = not na(qm_sell_lvl) ? qm_sell_lvl : (not na(sbr_lvl) ? sbr_lvl : struct_res)
+float gabfx_sup_roadblock = not na(qm_buy_lvl)  ? qm_buy_lvl  : (not na(rbs_lvl) ? rbs_lvl : struct_sup)
+
+if g_poc_dir == 1 
+    float entry_p = close
+    float c_lo = math.max(nz(nearest_ob_bull_sl, -9e9), math.max(nz(hvn_price_bull, -9e9), math.max(nz(val_price, -9e9), math.max(nz(c_l3_1D, -9e9), nz(c_l4_1D, -9e9)))))
+    c_lo := c_lo < close - atr_val * 0.25 and c_lo > -9e9 ? c_lo : close - atr_val * 1.5
+    float sl_p    = c_lo - atr_val * (not na(hvn_price_bull) and c_lo >= hvn_price_bull - syminfo.mintick ? 1.0 : 0.5) - (syminfo.mintick * 2) 
+    float initial_risk = entry_p - sl_p
+    
+    lq_top := math.max(entry_p, sl_p)
+    lq_bot := math.min(entry_p, sl_p)
+    
+    if use_snap_tp and not na(gabfx_res_roadblock) and gabfx_res_roadblock > close
+        lq_tp := gabfx_res_roadblock
+    else
+        lq_tp := fabio_m2_buy ? poc_price : (fabio_m1_buy ? poc_price + (poc_price - val_price) : struct_res)
+    float rr_floor = 1.5 * (lq_top - lq_bot)
+    lq_tp := lq_tp >= close + rr_floor ? lq_tp : c_h4_1D >= close + rr_floor ? c_h4_1D : c_h5_1D >= close + rr_floor ? c_h5_1D : float(na)
+    //
+    
+    if initial_risk > 0
+        float float_profit = high - entry_p
+        float cur_rr = float_profit / initial_risk
+        
+        if cur_rr >= 3.0
+            lq_bot := entry_p + (initial_risk * 2.0)
+            sl_manager_txt := "LOCKED +2R 🌌"
+            sl_manager_col := c_purple
+        else if cur_rr >= 2.0
+            lq_bot := entry_p + initial_risk
+            sl_manager_txt := "LOCKED +1R 🔒"
+            sl_manager_col := c_blue
+        else if cur_rr >= 1.0
+            lq_bot := entry_p
+            sl_manager_txt := "SECURED (BE) 🛡️"
+            sl_manager_col := c_green
+
+    float risk = lq_top - lq_bot
+    float reward = lq_tp - lq_top
+    lq_rr := risk > 0 and not na(reward) and reward > 0 ? reward / risk : 0.0
+else 
+    float entry_p = close
+    float c_hi = math.min(nz(nearest_ob_bear_sl, 9e9), math.min(nz(hvn_price_bear, 9e9), math.min(nz(vah_price, 9e9), math.min(nz(c_h3_1D, 9e9), nz(c_h4_1D, 9e9)))))
+    c_hi := c_hi > close + atr_val * 0.25 and c_hi < 9e9 ? c_hi : close + atr_val * 1.5
+    float sl_p    = c_hi + atr_val * (not na(hvn_price_bear) and c_hi <= hvn_price_bear + syminfo.mintick ? 1.0 : 0.5) + (syminfo.mintick * 2) 
+    float initial_risk = sl_p - entry_p
+    
+    lq_top := math.max(entry_p, sl_p)
+    lq_bot := math.min(entry_p, sl_p)
+
+    if use_snap_tp and not na(gabfx_sup_roadblock) and gabfx_sup_roadblock < close
+        lq_tp := gabfx_sup_roadblock
+    else
+        lq_tp := fabio_m2_sell ? poc_price : (fabio_m1_sell ? poc_price - (vah_price - poc_price) : struct_sup)
+    float rr_floor = 1.5 * (lq_top - lq_bot)
+    lq_tp := lq_tp <= close - rr_floor ? lq_tp : c_l4_1D <= close - rr_floor ? c_l4_1D : c_l5_1D <= close - rr_floor ? c_l5_1D : float(na)
+    //
+    
+    if initial_risk > 0
+        float float_profit = entry_p - low
+        float cur_rr = float_profit / initial_risk
+        
+        if cur_rr >= 3.0
+            lq_top := entry_p - (initial_risk * 2.0)
+            sl_manager_txt := "LOCKED +2R 🌌"
+            sl_manager_col := c_purple
+        else if cur_rr >= 2.0
+            lq_top := entry_p - initial_risk
+            sl_manager_txt := "LOCKED +1R 🔒"
+            sl_manager_col := c_blue
+        else if cur_rr >= 1.0
+            lq_top := entry_p
+            sl_manager_txt := "SECURED (BE) 🛡️"
+            sl_manager_col := c_green
+            
+    float risk = lq_top - lq_bot
+    float reward = lq_bot - lq_tp
+    lq_rr := risk > 0 and not na(reward) and reward > 0 ? reward / risk : 0.0
+
+if g_poc_dir == 0
+    lq_tp := na
+    lq_rr := 0.0
+// deadband guard
+float c_grid_top = na
+float c_grid_bot = na
+float c_grid_tp  = na
+float c_grid_sl  = na
+
+if g_poc_dir == 1 
+    c_grid_top := c_l3_1D
+    c_grid_bot := c_l5_1D
+    c_grid_tp  := c_h4_1D
+    c_grid_sl  := c_l5_1D - atr_val
+else 
+    c_grid_top := c_h5_1D
+    c_grid_bot := c_h3_1D
+    c_grid_tp  := c_l4_1D
+    c_grid_sl  := c_h5_1D + atr_val
+
+float trigger_px = na
+if g_poc_dir == 1
+    trigger_px := close > c_grid_top ? c_grid_top : math.max(c_grid_bot, close)
+else
+    trigger_px := close < c_grid_bot ? c_grid_bot : math.min(c_grid_top, close)
+
+float range_pct = c_grid_bot > 0 ? ((c_grid_top - c_grid_bot) / c_grid_bot) * 100.0 : 0.0
+int grid_count = int(math.max(2, math.round(range_pct / 1.3)))
+
+string str_g_range = is_grid_viable ? str.tostring(c_grid_bot, format.mintick) + " - " + str.tostring(c_grid_top, format.mintick) : "--"
+
+string trigger_action = ""
+if g_poc_dir == 1
+    trigger_action := close > c_grid_top ? "PULLBACK TO " : "ACTIVE @ "
+else
+    trigger_action := close < c_grid_bot ? "PULLBACK TO " : "ACTIVE @ "
+    
+string str_g_trig  = is_grid_viable ? trigger_action + str.tostring(trigger_px, format.mintick) : "--"
+string str_g_count = is_grid_viable ? str.tostring(grid_count) + (g_poc_dir == 1 ? " Long Grids" : " Short Grids") : "--"
+string str_g_tpsl  = is_grid_viable ? str.tostring(c_grid_tp, format.mintick) + " / " + str.tostring(c_grid_sl, format.mintick) : "--"
+color col_g_val    = is_grid_viable ? (g_poc_dir == 1 ? c_cyan : c_purple) : obs_sub
+color col_g_tpsl   = is_grid_viable ? (g_poc_dir == 1 ? c_green : c_red) : obs_sub
+
+int burst_score = 0
+if (fabio_bull_squeeze or fabio_bear_squeeze)
+    burst_score += 1
+if (is_imbalance_bull or is_imbalance_bear)
+    burst_score += 1
+if (str.contains(kin_phase, "IGNITION"))
+    burst_score += 1
+if (swc_warp > 1.2)
+    burst_score += 1
+if (mml_liq > 0.60)
+    burst_score += 1
+
+string burst_txt = "CHOPPY (NO BURST)"
+color burst_col = obs_sub
+if burst_score == 5
+    burst_txt := "SUPERNOVA 🌌🚀"
+    burst_col := c_yellow
+else if burst_score == 4
+    burst_txt := "EXPLOSIVE 🚀"
+    burst_col := c_purple
+else if burst_score == 3
+    burst_txt := "HIGH VELOCITY 🔥"
+    burst_col := c_red
+else if burst_score == 2
+    burst_txt := "BUILDING ⚡"
+    burst_col := c_orange
+else if burst_score == 1
+    burst_txt := "LOW MOMENTUM"
+    burst_col := c_cyan
+
+//==================================================
+// 📐 13. SMC FIBONACCI GRID (SYNCED WITH SPACETIME)
+//==================================================
+int hb_10 = ta.highestbars(high, 10)
+int lb_10 = ta.lowestbars(low, 10)
+
+f_get_struct_max() =>
+    int maxBar = -math.abs(hb_10)
+    int idx = 0
+    for i = 0 to 9 by 1
+        if high[i+1] > high[i+2] and high[i] <= high[i+1] and ((i+1) * -1) >= maxBar
+            idx := (i+1) * -1
+    idx == 0 ? maxBar : idx
+
+f_get_struct_min() =>
+    int minBar = -math.abs(lb_10)
+    int idx = 0
+    for i = 0 to 9 by 1
+        if low[i+1] < low[i+2] and low[i] >= low[i+1] and ((i+1) * -1) >= minBar
+            idx := (i+1) * -1
+    idx == 0 ? minBar : idx
+
+var float struct_h = 0.0
+var float struct_l = 0.0
+var int struct_h_idx = bar_index
+var int struct_l_idx = bar_index
+var int struct_dir = 0 
+
+int structMaxBar = bar_index + f_get_struct_max()
+int structMinBar = bar_index + f_get_struct_min()
+float lowStructBreak = close
+float highStructBreak = close
+
+bool is_struct_l_broken = (lowStructBreak < struct_l and lowStructBreak[1] >= struct_l and lowStructBreak[2] >= struct_l and lowStructBreak[3] >= struct_l and bar_index[1] > struct_l_idx and bar_index[2] > struct_l_idx and bar_index[3] > struct_l_idx) or (struct_dir == 2 and lowStructBreak < struct_l)
+bool is_struct_h_broken = (highStructBreak > struct_h and highStructBreak[1] <= struct_h and highStructBreak[2] <= struct_h and highStructBreak[3] <= struct_h and bar_index[1] > struct_h_idx and bar_index[2] > struct_h_idx and bar_index[3] > struct_h_idx) or (struct_dir == 1 and highStructBreak > struct_h)
+
+if bar_index == 0
+    struct_h := high
+    struct_l := low
+else if is_struct_l_broken
+    struct_dir := 1
+    struct_h_idx := structMaxBar
+    struct_l_idx := bar_index
+    struct_h := high[math.max(0, math.min(4999, bar_index - struct_h_idx))]
+    struct_l := low
+else if is_struct_h_broken
+    struct_dir := 2
+    struct_h_idx := bar_index
+    struct_l_idx := structMinBar
+    struct_h := high
+    struct_l := low[math.max(0, math.min(4999, bar_index - struct_l_idx))] 
+else
+    if high > struct_h and (struct_dir == 0 or struct_dir == 2)
+        if not(true and bar_index[1] > struct_h_idx and bar_index[2] > struct_h_idx and bar_index[3] > struct_h_idx)
+            struct_h := high
+            struct_h_idx := bar_index
+    else if low < struct_l and (struct_dir == 0 or struct_dir == 1)
+        if not(true and bar_index[1] > struct_l_idx and bar_index[2] > struct_l_idx and bar_index[3] > struct_l_idx)
+            struct_l := low
+            struct_l_idx := bar_index
+
+var line[] fib_lines = array.new_line(15)
+var label[] fib_labels = array.new_label(15)
+var line[] chart_lines = array.new_line()
+var label[] chart_labels = array.new_label()
+
+f_render_fib(idx, fibValue, fibColor, is_camarilla, swc) =>
+    float range_s = math.abs(struct_h - struct_l)
+    float warped_fibValue = 0.5 + (fibValue - 0.5) * nz(swc, 1.0)
+    float fPrice = struct_dir == 2 ? struct_l + (range_s * warped_fibValue) : struct_h - (range_s * warped_fibValue)
+    int fStart = math.max(bar_index - 490, struct_dir == 2 ? struct_l_idx : struct_h_idx)
+    line ln = array.get(fib_lines, idx)
+    label lbl = array.get(fib_labels, idx)
+    color final_c = fibColor == color.new(#9c27b0,0) ? color.new(#00b0ff,0) : fibColor
+
+    if not na(fPrice)
+        if na(ln)
+            array.set(fib_lines, idx, line.new(x1=fStart, y1=fPrice, x2=bar_index + 12, y2=fPrice, color=color.new(final_c, 30), width=is_camarilla ? 2 : 1, style=is_camarilla ? line.style_dashed : line.style_solid))
+        else
+            line.set_xy1(ln, fStart, fPrice)
+            line.set_xy2(ln, bar_index + 12, fPrice)
+            line.set_color(ln, color.new(final_c, 30))
+        if na(lbl)
+            array.set(fib_labels, idx, label.new(x=bar_index + 6, y=fPrice, text=(is_camarilla ? "C-L3/H3 " : "") + str.tostring(fibValue) + " (" + str.tostring(fPrice, format.mintick) + ")\n", color=color.new(color.white, 100), textcolor=final_c, style=label.style_none, size=size.small))
+        else
+            label.set_xy(lbl, bar_index + 6, fPrice)
+            label.set_text(lbl, (is_camarilla ? "C-L3/H3 " : "") + str.tostring(fibValue) + " (" + str.tostring(fPrice, format.mintick) + ")\n")
+            label.set_textcolor(lbl, final_c)
+
+f_draw_cama_set(prefix, h5, h4, h3, l3, l4, l5, start_x, end_x) =>
+    color c_r = c_red
+    color c_o = c_orange
+    color c_g = c_green
+    if not na(h5)
+        array.push(chart_lines, line.new(bar_index + start_x, h5, bar_index + end_x, h5, color=color.new(c_r, 40), style=line.style_solid))
+        array.push(chart_labels, label.new(bar_index + start_x, h5, text=prefix + " H5 " + str.tostring(h5, format.mintick) + "\n", color=color.new(color.white, 100), textcolor=c_r, style=label.style_none, size=size.small))
+    if not na(h4)
+        array.push(chart_lines, line.new(bar_index + start_x, h4, bar_index + end_x, h4, color=color.new(c_r, 40), style=line.style_solid))
+        array.push(chart_labels, label.new(bar_index + start_x, h4, text=prefix + " H4 " + str.tostring(h4, format.mintick) + "\n", color=color.new(color.white, 100), textcolor=c_r, style=label.style_none, size=size.small))
+    if not na(h3)
+        array.push(chart_lines, line.new(bar_index + start_x, h3, bar_index + end_x, h3, color=color.new(c_o, 40), style=line.style_solid))
+        array.push(chart_labels, label.new(bar_index + start_x, h3, text=prefix + " H3 " + str.tostring(h3, format.mintick) + "\n", color=color.new(color.white, 100), textcolor=c_o, style=label.style_none, size=size.small))
+    if not na(l3)
+        array.push(chart_lines, line.new(bar_index + start_x, l3, bar_index + end_x, l3, color=color.new(c_g, 40), style=line.style_solid))
+        array.push(chart_labels, label.new(bar_index + start_x, l3, text=prefix + " L3 " + str.tostring(l3, format.mintick) + "\n", color=color.new(color.white, 100), textcolor=c_g, style=label.style_none, size=size.small))
+    if not na(l4)
+        array.push(chart_lines, line.new(bar_index + start_x, l4, bar_index + end_x, l4, color=color.new(c_g, 40), style=line.style_solid))
+        array.push(chart_labels, label.new(bar_index + start_x, l4, text=prefix + " L4 " + str.tostring(l4, format.mintick) + "\n", color=color.new(color.white, 100), textcolor=c_g, style=label.style_none, size=size.small))
+    if not na(l5)
+        array.push(chart_lines, line.new(bar_index + start_x, l5, bar_index + end_x, l5, color=color.new(c_g, 40), style=line.style_solid))
+        array.push(chart_labels, label.new(bar_index + start_x, l5, text=prefix + " L5 " + str.tostring(l5, format.mintick) + "\n", color=color.new(color.white, 100), textcolor=c_g, style=label.style_none, size=size.small))
+
+// --- SCOPE VARS UNTUK TACTICAL INSIGHT ---
+string str_ht = htf_state == 1 ? "MACRO TAILWIND 🟢 (BULLISH)" : htf_state == 0 ? "ENTROPIC VOID ⚠️ (NEUTRAL)" : "MACRO HEADWIND 🔴 (BEARISH)"
+color col_ht  = htf_state == 1 ? c_green : htf_state == 0 ? c_orange : c_red
+
+string str_mt = mtf_state == 1 ? "BEAR TRAP / LOW SWEEP 🟢" : mtf_state == -1 ? "BULL TRAP / HIGH SWEEP 🔴" : "PENDING STRUCTURE ⏳ (WAITING)"
+color col_mt  = mtf_state == 1 ? c_cyan : mtf_state == -1 ? c_red : obs_sub
+
+string str_lt = ltf_state == 2 ? "BULLISH ABSORB 🛡️ (DEFENDING)" : ltf_state == 1 ? "MOMENTUM IGNITION 🚀 (ATTACKING)" : ltf_state == -2 ? "BEARISH ABSORB 🧱 (DEFENDING)" : ltf_state == -1 ? "LIQUIDATION FLUSH 🩸 (ATTACKING)" : "VOLUME EQUILIBRIUM ⚖️ (CRUISING)"
+color col_lt  = ltf_state == 2 ? c_green : ltf_state == 1 ? c_cyan : ltf_state == -2 ? c_red : ltf_state == -1 ? c_orange : obs_sub
+
+string str_ex = ext_state == 1 ? "MOMENTUM EXHAUSTION 🛑 (REVIEW RISK)" : ext_state == 2 ? "OVER-EXTENSION 💰 (EXTENSION ALERT)" : "NO EXTENSION CONDITION DETECTED"
+color col_ex  = ext_state == 1 ? c_orange : ext_state == 2 ? c_purple : obs_sub
+
+string active_sessions = ""
+if is_ses_tok > 0
+    active_sessions += "TOK "
+if not na(time(timeframe.period, "0300-1200", "America/New_York")) // Samakan dengan is_lon
+    active_sessions += "LON "
+if not na(time(timeframe.period, "0800-1700", "America/New_York")) // Samakan dengan is_ny
+    active_sessions += "NY "
+if active_sessions == ""
+    active_sessions := "OUT OF SESSION"
+
+string asia_range_str = na(max_ses_tok) ? "WAITING" : str.tostring(max_ses_tok, format.mintick) + " - " + str.tostring(min_ses_tok, format.mintick)
+
+//==================================================
+// 🖥️ 14. MASTER RENDER (BARSTATE.ISLAST)
+//==================================================
+f_get_cell_data(float lvl_price, float c_h6, float c_h5, float c_h4, float c_h3, float c_l3, float c_l4, float c_l5, float c_l6, int zone_idx) =>
+    int active_zone = 0
+    if close > c_h6
+        active_zone := 1
+    else if close <= c_h6 and close > c_h5
+        active_zone := 2
+    else if close <= c_h5 and close > c_h4
+        active_zone := 3
+    else if close <= c_h4 and close > c_h3
+        active_zone := 4
+    else if close <= c_h3 and close >= c_l3
+        active_zone := 5
+    else if close < c_l3 and close >= c_l4
+        active_zone := 6
+    else if close < c_l4 and close >= c_l5
+        active_zone := 7
+    else if close < c_l5 and close >= c_l6
+        active_zone := 8
+    else if close < c_l6
+        active_zone := 9
+        
+    bool is_active = (zone_idx == active_zone)
+    string txt = ""
+    color bg_col = na
+    color txt_col = obs_sub
+
+    if is_active
+        if zone_idx == 1
+            txt := "🚀 SUPERNOVA"
+            bg_col := color.new(c_purple, 40)
+            txt_col := color.white
+        else if zone_idx == 2
+            txt := "🔥 BULL SQUEEZE"
+            bg_col := color.new(c_green, 60)
+            txt_col := color.white
+        else if zone_idx == 3
+            txt := "LONG (BRK)"
+            bg_col := color.new(c_green, 80)
+            txt_col := c_green
+        else if zone_idx == 4
+            txt := "⚔️ TEST RESIST"
+            bg_col := color.new(c_orange, 80)
+            txt_col := c_orange
+        else if zone_idx == 5
+            txt := "⚖️ CHOP ZONE"
+            bg_col := color.new(color.gray, 80)
+            txt_col := color.white
+        else if zone_idx == 6
+            txt := "🛡️ TEST SUPPORT"
+            bg_col := color.new(c_cyan, 80)
+            txt_col := c_cyan
+        else if zone_idx == 7
+            txt := "SHORT (BRK)"
+            bg_col := color.new(c_red, 80)
+            txt_col := c_red
+        else if zone_idx == 8
+            txt := "🩸 BEAR SQUEEZE"
+            bg_col := color.new(c_red, 60)
+            txt_col := color.white
+        else if zone_idx == 9
+            txt := "💀 VOID (SHORT)"
+            bg_col := color.new(c_red, 40)
+            txt_col := color.white
+    else
+        float dist = ((lvl_price - close) / close) * 100.0
+        string dist_str = (dist > 0 ? "+" : "") + str.tostring(dist, "#.00") + "%"
+        txt := str.tostring(lvl_price, format.mintick) + " | " + dist_str
+        txt_col := dist > 0 ? c_cyan : c_orange
+        
+    [txt, bg_col, txt_col]
+
+f_fill_miraj_col(int col_idx, string tf_name, float c_h6, float c_h5, float c_h4, float c_h3, float c_l3, float c_l4, float c_l5, float c_l6) =>
+    table.cell(hud_main, col_idx, 0, tf_name, text_color=obs_sub, text_size=size.small, text_halign=text.align_center)
+    
+    [t1, b1, c1] = f_get_cell_data(c_h6, c_h6, c_h5, c_h4, c_h3, c_l3, c_l4, c_l5, c_l6, 1)
+    table.cell(hud_main, col_idx, 1, t1, text_color=c1, bgcolor=b1, text_size=size.small, text_halign=text.align_right)
+    
+    [t2, b2, c2] = f_get_cell_data(c_h5, c_h6, c_h5, c_h4, c_h3, c_l3, c_l4, c_l5, c_l6, 2)
+    table.cell(hud_main, col_idx, 2, t2, text_color=c2, bgcolor=b2, text_size=size.small, text_halign=text.align_right)
+    
+    [t3, b3, c3] = f_get_cell_data(c_h4, c_h6, c_h5, c_h4, c_h3, c_l3, c_l4, c_l5, c_l6, 3)
+    table.cell(hud_main, col_idx, 3, t3, text_color=c3, bgcolor=b3, text_size=size.small, text_halign=text.align_right)
+    
+    [t4, b4, c4] = f_get_cell_data(c_h3, c_h6, c_h5, c_h4, c_h3, c_l3, c_l4, c_l5, c_l6, 4)
+    table.cell(hud_main, col_idx, 4, t4, text_color=c4, bgcolor=b4, text_size=size.small, text_halign=text.align_right)
+    
+    float mid_p = (c_h3 + c_l3) / 2.0
+    [t5, b5, c5] = f_get_cell_data(mid_p, c_h6, c_h5, c_h4, c_h3, c_l3, c_l4, c_l5, c_l6, 5)
+    table.cell(hud_main, col_idx, 5, t5, text_color=c5, bgcolor=b5, text_size=size.small, text_halign=text.align_right)
+
+    [t6, b6, c6] = f_get_cell_data(c_l3, c_h6, c_h5, c_h4, c_h3, c_l3, c_l4, c_l5, c_l6, 6)
+    table.cell(hud_main, col_idx, 6, t6, text_color=c6, bgcolor=b6, text_size=size.small, text_halign=text.align_right)
+    
+    [t7, b7, c7] = f_get_cell_data(c_l4, c_h6, c_h5, c_h4, c_h3, c_l3, c_l4, c_l5, c_l6, 7)
+    table.cell(hud_main, col_idx, 7, t7, text_color=c7, bgcolor=b7, text_size=size.small, text_halign=text.align_right)
+    
+    [t8, b8, c8] = f_get_cell_data(c_l5, c_h6, c_h5, c_h4, c_h3, c_l3, c_l4, c_l5, c_l6, 8)
+    table.cell(hud_main, col_idx, 8, t8, text_color=c8, bgcolor=b8, text_size=size.small, text_halign=text.align_right)
+    
+    [t9, b9, c9] = f_get_cell_data(c_l6, c_h6, c_h5, c_h4, c_h3, c_l3, c_l4, c_l5, c_l6, 9)
+    table.cell(hud_main, col_idx, 9, t9, text_color=c9, bgcolor=b9, text_size=size.small, text_halign=text.align_right)
+
+
+f_render_visual_a() =>
+    var line m_poc_line = na
+    var line m_vah_line = na
+    var line m_val_line = na
+    if barstate.islast
+        // ─────────────────────────────────────────────────────────────────────────
+        // ✨ GABFX PA ENGINE ZONE RENDERER ✨
+        // ─────────────────────────────────────────────────────────────────────────
+        if show_gabfx_levels_act and not na(qm_sell_lvl)
+            line.set_xy1(qm_sell_line, bar_index - 50, qm_sell_lvl)
+            line.set_xy2(qm_sell_line, bar_index + 15, qm_sell_lvl)
+            label.set_xy(qm_sell_lbl, bar_index + 15, qm_sell_lvl)
+        else
+            line.set_xy1(qm_sell_line, na, na)
+            label.set_xy(qm_sell_lbl, na, na)
+
+        if show_gabfx_levels_act and not na(qm_buy_lvl)
+            line.set_xy1(qm_buy_line, bar_index - 50, qm_buy_lvl)
+            line.set_xy2(qm_buy_line, bar_index + 15, qm_buy_lvl)
+            label.set_xy(qm_buy_lbl, bar_index + 15, qm_buy_lvl)
+        else
+            line.set_xy1(qm_buy_line, na, na)
+            label.set_xy(qm_buy_lbl, na, na)
+
+        if show_gabfx_levels_act and not na(rbs_lvl)
+            line.set_xy1(rbs_line, bar_index - 30, rbs_lvl)
+            line.set_xy2(rbs_line, bar_index + 15, rbs_lvl)
+            label.set_xy(rbs_lbl, bar_index + 15, rbs_lvl)
+        else
+            line.set_xy1(rbs_line, na, na)
+            label.set_xy(rbs_lbl, na, na)
+
+        if show_gabfx_levels_act and not na(sbr_lvl)
+            line.set_xy1(sbr_line, bar_index - 30, sbr_lvl)
+            line.set_xy2(sbr_line, bar_index + 15, sbr_lvl)
+            label.set_xy(sbr_lbl, bar_index + 15, sbr_lvl)
+        else
+            line.set_xy1(sbr_line, na, na)
+            label.set_xy(sbr_lbl, na, na)
+
+        // ─────────────────────────────────────────────────────────────────────────
+        // ✨ 🧪 TDM MATRIX (DYNAMIC FILTER THRESHOLD & AGGRESSIVE GC) ✨
+        // ─────────────────────────────────────────────────────────────────────────
+        // TDM Profile: independent block and level toggles; always clear stale objects first.
+        if array.size(m_tdm_boxes) > 0
+            for i = 0 to array.size(m_tdm_boxes) - 1
+                box b_del = array.get(m_tdm_boxes, i)
+                if not na(b_del)
+                    box.delete(b_del)
+            array.clear(m_tdm_boxes)
+        if not na(m_poc_line)
+            line.delete(m_poc_line)
+            m_poc_line := na
+        if not na(m_vah_line)
+            line.delete(m_vah_line)
+            m_vah_line := na
+        if not na(m_val_line)
+            line.delete(m_val_line)
+            m_val_line := na
+
+        int tdm_start = math.max(0, bar_index - vp_lookback)
+        int tdm_end   = bar_index + 15
+        float vol_threshold = max_v * (vp_thresh / 100.0)
+
+        if show_tdm_blocks and not use_zen_mode
+            for i = 0 to vp_rows - 1
+                float b_vol = array.get(smooth_vol, i)
+                int b_cnt = array.get(cnt_bins, i)
+                float b_top = global_min_p + ((i + 1) * step)
+                float b_bot = global_min_p + (i * step)
+                if b_vol > vol_threshold
+                    float vol_ratio = max_v > 0 ? b_vol / max_v : 0.0
+                    float b_ent = b_cnt > 0 ? array.get(ent_bins, i) / b_cnt : 0.5
+                    color base_col = color.from_gradient(b_ent, 0.40, 0.65, color.rgb(168, 85, 247), color.rgb(100, 116, 139))
+                    int transp = math.round(85.0 - (vol_ratio * 55.0))
+                    box new_b = box.new(left=tdm_start, top=b_top, right=tdm_end, bottom=b_bot, border_color=na, bgcolor=color.new(base_col, transp))
+                    array.push(m_tdm_boxes, new_b)
+
+        if show_tdm_levels
+            m_poc_line := line.new(tdm_start, poc_price, tdm_end, poc_price, extend=extend.right, color=color.new(c_yellow, 30), width=2, style=line.style_dashed)
+            m_vah_line := line.new(tdm_start, vah_price, tdm_end, vah_price, extend=extend.right, color=color.new(c_red, 0), width=2, style=line.style_dashed)
+            m_val_line := line.new(tdm_start, val_price, tdm_end, val_price, extend=extend.right, color=color.new(c_green, 0), width=2, style=line.style_dashed)
+
+    0
+
+f_render_visual_b() =>
+    if barstate.islast
+        if array.size(chart_lines) > 0
+            for i = 0 to array.size(chart_lines) - 1
+                line l_del = array.get(chart_lines, i)
+                label lbl_del = array.get(chart_labels, i)
+                if not na(l_del)
+                    line.delete(l_del)
+                if not na(lbl_del)
+                    label.delete(lbl_del)
+            array.clear(chart_lines)
+            array.clear(chart_labels)
+
+        if show_fib_act
+            f_render_fib(0,  2.618, color.new(#9c27b0,0), false, swc_warp)
+            f_render_fib(1,  1.618, color.new(#2962ff,0), false, swc_warp)
+            f_render_fib(2,  1.272, color.new(#81c784,0), false, swc_warp)
+            f_render_fib(3,  1.000, color.new(#787b86,0), false, swc_warp)
+            f_render_fib(4,  0.886, color.new(#1e88e5,0), false, swc_warp)
+            f_render_fib(5,  0.786, color.new(#64b5f6,0), false, swc_warp)
+            f_render_fib(6,  0.618, color.new(#089981,0), false, swc_warp)
+            f_render_fib(7,  0.500, color.new(#4caf50,0), false, swc_warp)
+            f_render_fib(8,  0.382, color.new(#81c784,0), false, swc_warp)
+            f_render_fib(9,  0.275, color.new(#e65100,0), true, swc_warp) 
+            f_render_fib(10, 0.236, color.new(#f23645,0), false, swc_warp)
+            f_render_fib(11, 0.000, color.new(#787b86,0), false, swc_warp)
+            f_render_fib(12, -0.236, color.new(#f44336,0), false, swc_warp)
+            f_render_fib(13, -0.618, color.new(#009688,0), false, swc_warp)
+            f_render_fib(14, -0.886, color.new(#d32f2f,0), false, swc_warp)
+
+        if show_cama_act
+            f_draw_cama_set("1D",  c_h5_1D, c_h4_1D, c_h3_1D, c_l3_1D, c_l4_1D, c_l5_1D, 15, 35) 
+            f_draw_cama_set("1W",  c_h5_1W, c_h4_1W, c_h3_1W, c_l3_1W, c_l4_1W, c_l5_1W, 37, 57) 
+
+        if show_mtl_act
+            line.set_xy1(l_dh, bar_index, d_h_prev)
+            line.set_xy2(l_dh, bar_index + 1, d_h_prev)
+            label.set_xy(lb_dh, bar_index + 110, d_h_prev)
+            line.set_xy1(l_dl, bar_index, d_l_prev)
+            line.set_xy2(l_dl, bar_index + 1, d_l_prev)
+            label.set_xy(lb_dl, bar_index + 110, d_l_prev)
+            line.set_xy1(l_do, bar_index, d_o)
+            line.set_xy2(l_do, bar_index + 1, d_o)
+            label.set_xy(lb_do, bar_index + 110, d_o)
+            line.set_xy1(l_wh, bar_index, w_h_prev)
+            line.set_xy2(l_wh, bar_index + 1, w_h_prev)
+            label.set_xy(lb_wh, bar_index + 110, w_h_prev)
+            line.set_xy1(l_wl, bar_index, w_l_prev)
+            line.set_xy2(l_wl, bar_index + 1, w_l_prev)
+            label.set_xy(lb_wl, bar_index + 110, w_l_prev)
+            line.set_xy1(l_wo, bar_index, w_o)
+            line.set_xy2(l_wo, bar_index + 1, w_o)
+            label.set_xy(lb_wo, bar_index + 110, w_o)
+
+    0
+
+f_render_visual_c() =>
+    if barstate.islast
+        if show_reg_line_act
+            float periodMinusOne_v = dyn_reg_period - 1
+            float linearRegression_v = tva_line_0
+            float tva_slope_forward = tva_true_slope
+            float startingPointY_v = linearRegression_v - (tva_slope_forward * periodMinusOne_v)
+            float deviation_v = 0.0
+            for i = 0 to int(periodMinusOne_v)
+                float target_y = linearRegression_v - (tva_slope_forward * i)
+                deviation_v += math.pow(nz(close[i]) - target_y, 2.0)
+            deviation_v := reg_dev * math.sqrt(deviation_v / math.max(periodMinusOne_v, 1))
+            float current_tva_upper = linearRegression_v + deviation_v
+            float current_tva_lower = linearRegression_v - deviation_v
+            
+            if not na(startingPointY_v) and not na(linearRegression_v) and not na(deviation_v)
+                line.set_xy1(upperChannelLine, int(bar_index - periodMinusOne_v), startingPointY_v + deviation_v)
+                line.set_xy2(upperChannelLine, bar_index, current_tva_upper)
+                line.set_xy1(medianChannelLine, int(bar_index - periodMinusOne_v), startingPointY_v)
+                line.set_xy2(medianChannelLine, bar_index, linearRegression_v)
+                line.set_xy1(lowerChannelLine, int(bar_index - periodMinusOne_v), startingPointY_v - deviation_v)
+                line.set_xy2(lowerChannelLine, bar_index, current_tva_lower)
+
+        if show_pa_lines and not use_zen_mode
+            if not na(sig_line_up)
+                line.set_xy1(visual_line_up, bar_index - 30, sig_line_up)
+                line.set_xy2(visual_line_up, bar_index + 10, sig_line_up)
+                label.set_xy(visual_lbl_up, bar_index + 10, sig_line_up)
+            if not na(sig_line_dn)
+                line.set_xy1(visual_line_dn, bar_index - 30, sig_line_dn)
+                line.set_xy2(visual_line_dn, bar_index + 10, sig_line_dn)
+                label.set_xy(visual_lbl_dn, bar_index + 10, sig_line_dn)
+                
+        if show_lvn_hvn_levels_act and not na(lvn_bull_1)
+            line.set_xy1(l_lvn_bull_line_1, bar_index - 30, lvn_bull_1)
+            line.set_xy2(l_lvn_bull_line_1, bar_index + 15, lvn_bull_1)
+            label.set_xy(lbl_lvn_bull_1, bar_index + 15, lvn_bull_1)
+            label.set_text(lbl_lvn_bull_1, "LVN Bull 1 (Pullback) • " + str.tostring(lvn_bull_1, format.mintick))
+        else
+            line.set_xy1(l_lvn_bull_line_1, na, na)
+            label.set_xy(lbl_lvn_bull_1, na, na)
+
+        if show_lvn_hvn_levels_act and not na(lvn_bear_1)
+            line.set_xy1(l_lvn_bear_line_1, bar_index - 30, lvn_bear_1)
+            line.set_xy2(l_lvn_bear_line_1, bar_index + 15, lvn_bear_1)
+            label.set_xy(lbl_lvn_bear_1, bar_index + 15, lvn_bear_1)
+            label.set_text(lbl_lvn_bear_1, "LVN Bear 1 (Pullback) • " + str.tostring(lvn_bear_1, format.mintick))
+        else
+            line.set_xy1(l_lvn_bear_line_1, na, na)
+            label.set_xy(lbl_lvn_bear_1, na, na)
+
+        if show_lvn_hvn_levels_act and not na(lvn_bull_2)            line.set_xy1(l_lvn_bull_line_2, bar_index - 30, lvn_bull_2)
+            line.set_xy2(l_lvn_bull_line_2, bar_index + 15, lvn_bull_2)
+            label.set_xy(lbl_lvn_bull_2, bar_index + 15, lvn_bull_2)
+            label.set_text(lbl_lvn_bull_2, "LVN Bull 2 (Void/Sqz) • " + str.tostring(lvn_bull_2, format.mintick))
+        else
+            line.set_xy1(l_lvn_bull_line_2, na, na)
+            label.set_xy(lbl_lvn_bull_2, na, na)
+
+        if show_lvn_hvn_levels_act and not na(lvn_bear_2)
+            line.set_xy1(l_lvn_bear_line_2, bar_index - 30, lvn_bear_2)
+            line.set_xy2(l_lvn_bear_line_2, bar_index + 15, lvn_bear_2)
+            label.set_xy(lbl_lvn_bear_2, bar_index + 15, lvn_bear_2)
+            label.set_text(lbl_lvn_bear_2, "LVN Bear 2 (Void/Sqz) • " + str.tostring(lvn_bear_2, format.mintick))
+        else
+            line.set_xy1(l_lvn_bear_line_2, na, na)
+            label.set_xy(lbl_lvn_bear_2, na, na)
+
+        if show_lvn_hvn_levels_act and not na(hvn_price_bull)
+            line.set_xy1(l_hvn_bull_line, bar_index - 30, hvn_price_bull)
+            line.set_xy2(l_hvn_bull_line, bar_index + 15, hvn_price_bull)
+            label.set_xy(lbl_hvn_bull, bar_index + 15, hvn_price_bull)
+            label.set_text(lbl_hvn_bull, "HVN Bull (Stop Loss) • " + str.tostring(hvn_price_bull, format.mintick))
+        else
+            line.set_xy1(l_hvn_bull_line, na, na)
+            line.set_xy2(l_hvn_bull_line, na, na)
+            label.set_xy(lbl_hvn_bull, na, na)
+        if show_lvn_hvn_levels_act and not na(hvn_price_bear)
+            line.set_xy1(l_hvn_bear_line, bar_index - 30, hvn_price_bear)
+            line.set_xy2(l_hvn_bear_line, bar_index + 15, hvn_price_bear)
+            label.set_xy(lbl_hvn_bear, bar_index + 15, hvn_price_bear)
+            label.set_text(lbl_hvn_bear, "HVN Bear (Stop Loss) • " + str.tostring(hvn_price_bear, format.mintick))
+        else
+            line.set_xy1(l_hvn_bear_line, na, na)
+            line.set_xy2(l_hvn_bear_line, na, na)
+            label.set_xy(lbl_hvn_bear, na, na)
+
+        if tl_show and not use_zen_mode
+            if not na(tl_ph1_y) and not na(tl_ph2_y)
+                line.set_xy1(line_tac_res, tl_ph2_x, tl_ph2_y)
+                line.set_xy2(line_tac_res, tl_ph1_x, tl_ph1_y)
+            if not na(tl_pl1_y) and not na(tl_pl2_y)
+                line.set_xy1(line_tac_sup, tl_pl2_x, tl_pl2_y)
+                line.set_xy2(line_tac_sup, tl_pl1_x, tl_pl1_y)
+
+        if show_bz_box and lq_rr >= 1.5 and (lq_top - lq_bot) >= atr_val and not veto_active and not is_chaos and (verdict_state == 3 and g_poc_dir == 1 or verdict_state == -3 and g_poc_dir == -1)
+            int box_left  = bar_index + 1
+            int box_right = bar_index + 6
+            string sizing_txt = str.tostring(lq_sizing, "#.#") + "% CAP"
+            if g_poc_dir == 1 
+                if lq_tp > lq_top and lq_top > lq_bot
+                    box.set_lefttop(bz_reward_box, box_left, lq_tp)
+                    box.set_rightbottom(bz_reward_box, box_right, lq_top)
+                    box.set_bgcolor(bz_reward_box, color.new(c_green, 85))
+                    box.set_border_color(bz_reward_box, color.new(c_green, 40))
+                    box.set_lefttop(bz_risk_box, box_left, lq_top)
+                    box.set_rightbottom(bz_risk_box, box_right, lq_bot)
+                    box.set_bgcolor(bz_risk_box, color.new(c_red, 85))
+                    box.set_border_color(bz_risk_box, color.new(c_red, 40))
+                    label.set_xy(bz_rr_lbl, box_right, lq_top)
+                    label.set_text(bz_rr_lbl, "🎯 TP: " + str.tostring(lq_tp, format.mintick) + "\n🛒 BUY: " + str.tostring(lq_top, format.mintick) + "\n🛑 SL: " + str.tostring(lq_bot, format.mintick) + "\n⚖️ RR: " + str.tostring(lq_rr, "#.##") + (lq_rr >= 1.5 ? " TAKE" : " REJECT<1.5") + "\n💰 SIZING: " + sizing_txt)
+                    label.set_textcolor(bz_rr_lbl, color.white)
+            else
+                if lq_tp < lq_bot and lq_top > lq_bot
+                    box.set_lefttop(bz_reward_box, box_left, lq_bot)
+                    box.set_rightbottom(bz_reward_box, box_right, lq_tp)
+                    box.set_bgcolor(bz_reward_box, color.new(c_green, 85))
+                    box.set_border_color(bz_reward_box, color.new(c_green, 40))
+                    box.set_lefttop(bz_risk_box, box_left, lq_top)
+                    box.set_rightbottom(bz_risk_box, box_right, lq_bot)
+                    box.set_bgcolor(bz_risk_box, color.new(c_red, 85))
+                    box.set_border_color(bz_risk_box, color.new(c_red, 40))
+                    label.set_xy(bz_rr_lbl, box_right, lq_bot)
+                    label.set_text(bz_rr_lbl, "🛑 SL: " + str.tostring(lq_top, format.mintick) + "\n🛒 SELL: " + str.tostring(lq_bot, format.mintick) + "\n🎯 TP: " + str.tostring(lq_tp, format.mintick) + "\n⚖️ RR: " + str.tostring(lq_rr, "#.##") + (lq_rr >= 1.5 ? " TAKE" : " REJECT<1.5") + "\n💰 SIZING: " + sizing_txt)
+                    label.set_textcolor(bz_rr_lbl, color.white)
+        else
+            box.set_lefttop(bz_reward_box, na, na)
+            box.set_rightbottom(bz_reward_box, na, na)
+            box.set_lefttop(bz_risk_box, na, na)
+            box.set_rightbottom(bz_risk_box, na, na)
+            label.set_xy(bz_rr_lbl, na, na)
+
+        if show_cone_act
+            [p90_calc, p10_calc] = lib.calculate_cone(adj_mu, adj_sigma, 50, 1.618, close)
+            if not na(p90_calc) and not na(p10_calc)
+                line.set_xy1(upper_cone, bar_index, close)
+                line.set_xy2(upper_cone, bar_index + 50, p90_calc)
+                line.set_xy1(lower_cone, bar_index, close)
+                line.set_xy2(lower_cone, bar_index + 50, p10_calc)
+                line.set_xy1(end_cone, bar_index + 50, p90_calc)
+                line.set_xy2(end_cone, bar_index + 50, p10_calc)
+
+        // ─────────────────────────────────────────────────────────────────────────
+    0
+
+f_render_main_hud() =>
+    if barstate.islast
+        // 🌌 MAIN HUD (BOTTOM LEFT) - INTERSTELLAR, KINETIC, FABIO
+        // ─────────────────────────────────────────────────────────────────────────
+        if show_tables and show_main_hud
+            table.cell(hud_main, 0, 0, "🌌 THE INTERSTELLAR EYES", text_color=c_purple, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(obs_border, 50))
+            table.cell(hud_main, 0, 1, "+MAX > H6", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_purple, 80))
+            table.cell(hud_main, 0, 2, "H6 - H5", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_green, 80))
+            table.cell(hud_main, 0, 3, "H5 - H4", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_green, 80))
+            table.cell(hud_main, 0, 4, "H4 - H3", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_orange, 80))
+            table.cell(hud_main, 0, 5, "H3 - L3", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(color.gray, 80))
+            table.cell(hud_main, 0, 6, "L3 - L4", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_cyan, 80))
+            table.cell(hud_main, 0, 7, "L4 - L5", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_red, 80))
+            table.cell(hud_main, 0, 8, "L5 - L6", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_red, 80))
+            table.cell(hud_main, 0, 9, "-MAX < L6", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_red, 80))
+            
+            f_fill_miraj_col(1, "5m", c_h6_5m, c_h5_5m, c_h4_5m, c_h3_5m, c_l3_5m, c_l4_5m, c_l5_5m, c_l6_5m)
+            f_fill_miraj_col(2, "15m", c_h6_15, c_h5_15, c_h4_15, c_h3_15, c_l3_15, c_l4_15, c_l5_15, c_l6_15)
+            f_fill_miraj_col(3, "1H", c_h6_1H, c_h5_1H, c_h4_1H, c_h3_1H, c_l3_1H, c_l4_1H, c_l5_1H, c_l6_1H)
+            f_fill_miraj_col(4, "4H", c_h6_4H, c_h5_4H, c_h4_4H, c_h3_4H, c_l3_4H, c_l4_4H, c_l5_4H, c_l6_4H)
+            f_fill_miraj_col(5, "1D", c_h6_1D, c_h5_1D, c_h4_1D, c_h3_1D, c_l3_1D, c_l4_1D, c_l5_1D, c_l6_1D)
+            f_fill_miraj_col(6, "1W", c_h6_1W, c_h5_1W, c_h4_1W, c_h3_1W, c_l3_1W, c_l4_1W, c_l5_1W, c_l6_1W)
+
+            table.cell(hud_main, 7, 0, "🛸 KINETIC ENGINE (TVA)", text_color=c_cyan, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(obs_border, 50))
+            table.merge_cells(hud_main, 7, 0, 8, 0)
+            table.cell(hud_main, 7, 1, "CHANNEL ANGLE (θ)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Mengukur kemiringan regresi adaptif. Positif = Tren Naik, Negatif = Tren Turun")
+            table.cell(hud_main, 8, 1, (s_theta > 0 ? "+" : "") + str.tostring(s_theta, "#.0") + "°", text_color=s_theta > 0 ? c_green : c_red, text_size=size.small, text_halign=text.align_right)
+            table.cell(hud_main, 7, 2, "VELOCITY (0)|(1)|(2)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Kecepatan perubahan sudut per bar (Momen sekarang | 1 bar lalu | 2 bar lalu).")
+            table.cell(hud_main, 8, 2, (s_omega > 0 ? "+" : "") + str.tostring(s_omega, "#.00") + " | " + (omega_1 > 0 ? "+" : "") + str.tostring(omega_1, "#.00") + " | " + (omega_2 > 0 ? "+" : "") + str.tostring(omega_2, "#.00"), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+            table.cell(hud_main, 7, 3, "MOMENTUM FORCE (α)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+            table.cell(hud_main, 8, 3, (s_alpha > 0 ? "+" : "") + str.tostring(s_alpha, "#.000"), text_color=s_alpha > 0 ? c_green : c_red, text_size=size.small, text_halign=text.align_right)
+            table.cell(hud_main, 7, 4, "ANOMALY JERK (Δα)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Perubahan mendadak pada akselerasi kinetik. Ini metrik anomali indikator, bukan bukti manipulasi pasar.")
+            table.cell(hud_main, 8, 4, jerk_status, text_color=jerk_col, text_size=size.small, text_halign=text.align_right)
+            table.cell(hud_main, 7, 5, "EST. TIME TO REVERSAL", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+            table.cell(hud_main, 8, 5, rev_txt, text_color=rev_col, text_size=size.small, text_halign=text.align_right)
+            
+            string swc_str = swc_warp > 1.2 ? "EXPANSION 🌌" : swc_warp < 0.8 ? "COMPRESS 🗜️" : "STABLE ➖"
+            color swc_col = swc_warp > 1.2 ? c_red : swc_warp < 0.8 ? c_green : obs_sub
+            table.cell(hud_main, 7, 6, "SPACETIME WARP", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Ekspansi = Squeeze Meledak (Burst). Kompresi = Konsolidasi/Akumulasi.")
+            table.cell(hud_main, 8, 6, swc_str + " [" + str.tostring(swc_warp, "#.00") + "x]", text_color=swc_col, text_size=size.small, text_halign=text.align_right)
+
+            string ent_str = is_chaos ? "CHAOS ⚠️" : e < 0.4 ? "SOLID 🧊" : "LIQUID 💧"
+            color ent_col = is_chaos ? c_red : e < 0.4 ? c_green : c_purple
+            table.cell(hud_main, 7, 7, "MARKET ENTROPY", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Tingkat kekacauan pasar (Noise). Ambang yang sama dengan gerbang keputusan: entropy >= 0.80 atau noise >= 0.85 = CHAOS. < 0.45 struktur solid.")
+            table.cell(hud_main, 8, 7, ent_str + " [" + str.tostring(e, "#.00") + "]", text_color=ent_col, text_size=size.small, text_halign=text.align_right)
+            table.cell(hud_main, 7, 8, "KINETIC PHASE", text_color=color.white, text_size=size.small, text_halign=text.align_center)
+            table.merge_cells(hud_main, 7, 8, 8, 8)
+            table.cell(hud_main, 7, 9, kin_phase, text_color=color.white, text_size=size.small, text_halign=text.align_center, bgcolor=color.new(kin_phase_col, 50))
+            table.merge_cells(hud_main, 7, 9, 8, 9)
+
+            table.cell(hud_main, 9, 0, "🐺 FABIO AMT SENSORS", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(#d97706, 50))
+            table.merge_cells(hud_main, 9, 0, 10, 0)
+            table.cell(hud_main, 9, 1, "POC (GRAVITY)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Point of Control (POC) dari distribusi volume yang dihitung skrip; bukan jaminan harga akan kembali ke level ini.")
+            table.cell(hud_main, 10, 1, str.tostring(poc_price, format.mintick), text_color=c_yellow, text_size=size.small, text_halign=text.align_right)
+            table.cell(hud_main, 9, 2, "VALUE AREA (65-80%)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Rentang Value Area dihitung oleh model dengan rasio target dinamis 65-80% berdasarkan entropy; bukan jaminan proporsi transaksi aktual.")
+            table.cell(hud_main, 10, 2, str.tostring(val_price, format.mintick) + " - " + str.tostring(vah_price, format.mintick), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+            
+            table.cell(hud_main, 9, 3, "LVN 1 (PULLBACK) B|S", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Low Volume Node (Lapisan 1), sebagai referensi area retest. Kualitas entry perlu validasi setup dan risiko terpisah.")
+            table.cell(hud_main, 10, 3, (na(lvn_bull_1) ? "--" : str.tostring(lvn_bull_1, format.mintick)) + " | " + (na(lvn_bear_1) ? "--" : str.tostring(lvn_bear_1, format.mintick)), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+            
+            table.cell(hud_main, 9, 4, "LVN 2 (VOID/SQZ) B|S", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Low Volume Node (Lapisan 2), sebagai referensi void/squeeze. Level ini sendiri tidak menjamin eksekusi cepat atau edge.")
+            table.cell(hud_main, 10, 4, (na(lvn_bull_2) ? "--" : str.tostring(lvn_bull_2, format.mintick)) + " | " + (na(lvn_bear_2) ? "--" : str.tostring(lvn_bear_2, format.mintick)), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+
+            table.cell(hud_main, 9, 5, "HVN (STOP LOSS) B|S", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="High Volume Node ekstrem sebagai referensi struktur volume; tidak otomatis menjadi level stop-loss yang sesuai untuk setiap posisi.")
+            table.cell(hud_main, 10, 5, (na(hvn_price_bull) ? "--" : str.tostring(hvn_price_bull, format.mintick)) + " | " + (na(hvn_price_bear) ? "--" : str.tostring(hvn_price_bear, format.mintick)), text_color=c_orange, text_size=size.small, text_halign=text.align_right)
+            
+            table.cell(hud_main, 9, 6, "SQUEEZE STATE", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+            table.cell(hud_main, 10, 6, fp_status, text_color=fp_col, text_size=size.small, text_halign=text.align_right)
+
+            string mml_str = mml_liq > 0.6 ? "HIGH 🌊" : "LOW 🏜️"
+            color mml_col = mml_liq > 0.6 ? c_green : c_orange
+            table.cell(hud_main, 9, 7, "LIQUIDITY (MML)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Kepadatan Likuiditas berdasarkan rasio Volume vs SMA20.")
+            table.cell(hud_main, 10, 7, mml_str + " [" + str.tostring(mml_liq, "#.00") + "]", text_color=mml_col, text_size=size.small, text_halign=text.align_right)
+
+            string smr_str = bull_mass_pct > 61.8 ? "DEMAND 🟢" : bear_mass_pct > 61.8 ? "SUPPLY 🔴" : "BALANCED ⚖️"
+            color smr_col = bull_mass_pct > 61.8 ? c_green : bear_mass_pct > 61.8 ? c_red : obs_sub
+            table.cell(hud_main, 9, 8, "ACTIVE SMR (D:S)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Rasio Massa Demand (Bull FVG) melawan Supply (Bear FVG).")
+            table.cell(hud_main, 10, 8, smr_str, text_color=smr_col, text_size=size.small, text_halign=text.align_right)
+
+            string fab_mod = fabio_m1_buy ? "M1 BUY 🚀" : fabio_m1_sell ? "M1 SELL 🩸" : fabio_m2_buy ? "M2 BUY 📈" : fabio_m2_sell ? "M2 SELL 📉" : "WAITING ⏳"
+            color fab_col = (fabio_m1_buy or fabio_m2_buy) ? c_green : (fabio_m1_sell or fabio_m2_sell) ? c_red : obs_sub
+            table.cell(hud_main, 9, 9, "FABIO AMT MODEL STATUS", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+            string fabio_gate_diag = "M1 NY=" + str.tostring(is_ny) +
+                 " | M1 imbalance B/S=" + str.tostring(is_imbalance_bull) + "/" + str.tostring(is_imbalance_bear) +
+                 " | LVN B1/S1=" + (na(lvn_bull_1) ? "NA" : str.tostring(lvn_bull_1, format.mintick)) + "/" + (na(lvn_bear_1) ? "NA" : str.tostring(lvn_bear_1, format.mintick)) +
+                 " | M1 tolerance=2.5 ATR (" + str.tostring(atr_val * 2.5, format.mintick) + ")" +
+                 " | M1 flow B/S=" + str.tostring(m1_flow_bull) + "/" + str.tostring(m1_flow_bear) +
+                 " | M2 session LON/balance=" + str.tostring(is_lon or is_balance) +
+                 " | fakeout now B/S=" + str.tostring(is_fakeout_bot) + "/" + str.tostring(is_fakeout_top) +
+                 " | fakeout memory 3 bars B/S=" + str.tostring(fabio_recent_fakeout_bot) + "/" + str.tostring(fabio_recent_fakeout_top) +
+                 " | M2 flow B/S=" + str.tostring(m2_flow_bull) + "/" + str.tostring(m2_flow_bear) +
+                 " | MODEL M1 B/S=" + str.tostring(fabio_m1_buy) + "/" + str.tostring(fabio_m1_sell) +
+                 " | MODEL M2 B/S=" + str.tostring(fabio_m2_buy) + "/" + str.tostring(fabio_m2_sell) +
+                 " | LVN available B/S=" + str.tostring(not na(lvn_bull_1)) + "/" + str.tostring(not na(lvn_bear_1)) +
+                 " | M1 BUY reason=" + (not is_ny ? "NY SESSION OFF" : not is_imbalance_bull ? "NO BULL IMBALANCE" : na(lvn_bull_1) ? "LVN BULL MISSING" : math.abs(close - lvn_bull_1) > (atr_val * 2.5) ? "LVN DISTANCE FAIL" : not m1_flow_bull ? "FLOW NOT CONFIRMED" : "PASS") +
+                 " | M1 SELL reason=" + (not is_ny ? "NY SESSION OFF" : not is_imbalance_bear ? "NO BEAR IMBALANCE" : na(lvn_bear_1) ? "LVN BEAR MISSING" : math.abs(close - lvn_bear_1) > (atr_val * 2.5) ? "LVN DISTANCE FAIL" : not m1_flow_bear ? "FLOW NOT CONFIRMED" : "PASS") +
+                 " | M2 BUY reason=" + ((not (is_lon or is_balance)) ? "SESSION/BALANCE FAIL" : not fabio_recent_fakeout_bot ? "NO RECENT BOTTOM FAKEOUT" : not m2_flow_bull ? "FLOW NOT CONFIRMED" : "PASS") +
+                 " | M2 SELL reason=" + ((not (is_lon or is_balance)) ? "SESSION/BALANCE FAIL" : not fabio_recent_fakeout_top ? "NO RECENT TOP FAKEOUT" : not m2_flow_bear ? "FLOW NOT CONFIRMED" : "PASS") +
+                 " | sessions: NY 08:00-17:00 ET, LON 03:00-12:00 ET"
+            table.cell(hud_main, 10, 9, fab_mod, text_color=fab_col, text_size=size.small, text_halign=text.align_right, tooltip=fabio_gate_diag)
+            
+            table.cell(hud_main, 9, 10, "PROGRESSIVE SL", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Manajemen proteksi Modal Dinamis.")
+            table.cell(hud_main, 10, 10, sl_manager_txt, text_color=sl_manager_col, text_size=size.small, text_halign=text.align_right)
+
+    0
+
+f_render_aegis_hud() =>
+    if barstate.islast
+        table.clear(hud_aegis, 0, 0, 2, 16)
+        table.set_bgcolor(hud_aegis, obs_dark)
+        table.set_border_color(hud_aegis, obs_border)
+        table.set_frame_color(hud_aegis, obs_border)
+        int row_offset = show_tables and show_aegis ? 7 : 0
+        if show_tables and show_aegis
+            if show_aegis
+                table.cell(hud_aegis, 0, 0, "CHRONOS MATRIX", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=obs_border)
+                table.cell(hud_aegis, 1, 0, "SESSION", text_color=color.white, text_size=size.small, text_halign=text.align_right, bgcolor=obs_border)
+                table.merge_cells(hud_aegis, 1, 0, 2, 0)
+                table.cell(hud_aegis, 0, 1, "ACTIVE SESSIONS", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, bgcolor=obs_dark)
+                table.cell(hud_aegis, 1, 1, active_sessions, text_color=active_sessions == "OUT OF SESSION" ? obs_sub : c_cyan, text_size=size.small, text_halign=text.align_right, bgcolor=obs_dark)
+                table.merge_cells(hud_aegis, 1, 1, 2, 1)
+                table.cell(hud_aegis, 0, 2, "ASIAN RANGE (TOKYO)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, bgcolor=obs_dark)
+                table.cell(hud_aegis, 1, 2, asia_range_str, text_color=color.white, text_size=size.small, text_halign=text.align_right, bgcolor=obs_dark)
+                table.merge_cells(hud_aegis, 1, 2, 2, 2)
+                table.cell(hud_aegis, 0, 3, "WEEKLY CPR", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, bgcolor=obs_dark)
+                table.cell(hud_aegis, 1, 3, cpr_status, text_color=cpr_col, text_size=size.small, text_halign=text.align_right, bgcolor=obs_dark, tooltip="WEEKLY CPR" + "\nStatus: " + cpr_status + "\nP=" + str.tostring(w_p, format.mintick) + " | TC=" + str.tostring(tc_val, format.mintick) + " | BC=" + str.tostring(bc_val, format.mintick))
+                table.merge_cells(hud_aegis, 1, 3, 2, 3)
+                table.cell(hud_aegis, 0, 4, "DAILY CPR + S/R", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, bgcolor=obs_dark)
+                // Keep CPR status visible in Chronos; detailed conditions and all S/R values are in the tooltip.
+                string daily_cpr_sr_text = d_cpr_status
+                string d_cpr_condition = d_cpr_status == "WICK REJECT UP" ? "high > d_tc and close <= d_tc" : d_cpr_status == "WICK REJECT DOWN" ? "low < d_bc and close >= d_bc" : d_cpr_status == "ABOVE DAILY TC" ? "No prior condition; close > d_tc" : d_cpr_status == "BELOW DAILY BC" ? "No prior condition; close < d_bc" : "None of the prior conditions matched"
+                string d_cpr_color_name = d_cpr_status == "WICK REJECT UP" or d_cpr_status == "BELOW DAILY BC" ? "RED" : d_cpr_status == "WICK REJECT DOWN" or d_cpr_status == "ABOVE DAILY TC" ? "GREEN" : "ORANGE"
+                string daily_cpr_sr_tooltip = "DAILY CPR STATUS / CLASSIC PIVOT S/R" + "\nStatus: " + d_cpr_status + "\nCondition: " + d_cpr_condition + "\nColor: " + d_cpr_color_name + "\nP=" + str.tostring(d_p, format.mintick) + " | TC=" + str.tostring(d_tc, format.mintick) + " | BC=" + str.tostring(d_bc, format.mintick) + "\nResistance: R1=" + str.tostring(d_r1, format.mintick) + " | R2=" + str.tostring(d_r2, format.mintick) + " | R3=" + str.tostring(d_r3, format.mintick) + "\nSupport: S1=" + str.tostring(d_s1, format.mintick) + " | S2=" + str.tostring(d_s2, format.mintick) + " | S3=" + str.tostring(d_s3, format.mintick) + "\nLevels use previous completed daily OHLC."
+                table.cell(hud_aegis, 1, 4, daily_cpr_sr_text, text_color=d_cpr_col, text_size=size.small, text_halign=text.align_right, bgcolor=obs_dark, tooltip=daily_cpr_sr_tooltip)
+                table.merge_cells(hud_aegis, 1, 4, 2, 4)
+                table.cell(hud_aegis, 0, 5, "CPR WIDTH × GMI", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, bgcolor=obs_dark)
+                string cpr_width_gmi_text = d_cpr_width_status + " | " + cpr_gmi_context
+                string cpr_width_gmi_tooltip = "DAILY CPR WIDTH × GMI" + "\nWidth=" + str.tostring(d_cpr_width, format.mintick) + " | Ratio to 20-day average=" + (na(d_cpr_width_ratio) ? "n/a" : str.tostring(d_cpr_width_ratio, "#.00") + "x") + "\nClassification: " + d_cpr_width_status + "\nCPR × GMI: " + cpr_gmi_context + "\nNarrow/Wide thresholds are heuristic (0.80x/1.20x)."
+                table.cell(hud_aegis, 1, 5, cpr_width_gmi_text, text_color=cpr_gmi_context_col, text_size=size.small, text_halign=text.align_right, bgcolor=obs_dark, tooltip=cpr_width_gmi_tooltip)
+                table.merge_cells(hud_aegis, 1, 5, 2, 5)
+        if show_tables and show_aegis
+            table.cell(hud_aegis, 0, 0 + row_offset, "🩸 AEGIS FOOTPRINT MATRIX", text_color=c_red, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(obs_border, 50))
+            table.merge_cells(hud_aegis, 0, 0 + row_offset, 2, 0 + row_offset)
+
+            string aegis_vol_tooltip = "BUY / SELL VOLUME (CURRENT BAR)" + "\nBuy volume=" + str.tostring(buy_vol, format.volume) + "\nSell volume=" + str.tostring(sell_vol, format.volume) + "\nTotal volume=" + str.tostring(cur_tot_vol, format.volume) + "\nValues use the script's current buy/sell volume estimation method."
+            table.cell(hud_aegis, 0, 1 + row_offset, "BUY / SELL VOL", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip=aegis_vol_tooltip)
+            table.cell(hud_aegis, 1, 1 + row_offset, str.tostring(buy_vol, format.volume) + " / " + str.tostring(sell_vol, format.volume), text_color=color.white, text_size=size.small, text_halign=text.align_right, tooltip=aegis_vol_tooltip)
+            table.cell(hud_aegis, 2, 1 + row_offset, "TOT: " + str.tostring(cur_tot_vol, format.volume), text_color=obs_sub, text_size=size.small, text_halign=text.align_right, tooltip=aegis_vol_tooltip)
+
+            string aegis_delta_history = "DELTA HISTORY (CURRENT | PREVIOUS 1 | PREVIOUS 2)" + "\nDelta %: " + (cur_delta_pct > 0 ? "+" : "") + str.tostring(cur_delta_pct, "#.0") + "% | " + (delta_1_pct > 0 ? "+" : "") + str.tostring(delta_1_pct, "#.0") + "% | " + (delta_2_pct > 0 ? "+" : "") + str.tostring(delta_2_pct, "#.0") + "%"
+            string aegis_delta_tooltip = "BAR NET DELTA" + "\nNet delta=" + (na(cur_bar_delta) ? "n/a" : str.tostring(cur_bar_delta, format.volume)) + "\nDelta percent=" + (na(cur_delta_pct) ? "n/a" : str.tostring(cur_delta_pct, "#.00") + "%") + "\n" + aegis_delta_history + "\nPositive delta indicates estimated buy-side dominance; negative delta indicates estimated sell-side dominance."
+            table.cell(hud_aegis, 0, 2 + row_offset, "BAR DELTA", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip=aegis_delta_tooltip)
+            table.cell(hud_aegis, 1, 2 + row_offset, na(cur_bar_delta) ? "--" : (cur_bar_delta > 0 ? "+" : "") + str.tostring(cur_bar_delta, format.volume), text_color=na(cur_bar_delta) ? obs_sub : (cur_bar_delta > 0 ? c_cyan : c_red), text_size=size.small, text_halign=text.align_right, tooltip=aegis_delta_tooltip)
+            table.cell(hud_aegis, 2, 2 + row_offset, na(cur_delta_pct) ? "--" : str.tostring(cur_delta_pct, "#.00") + "%", text_color=na(cur_bar_delta) ? obs_sub : (cur_bar_delta > 0 ? c_cyan : c_red), text_size=size.small, text_halign=text.align_right, tooltip=aegis_delta_tooltip)
+
+            string aegis_cvd_tooltip = "CUMULATIVE VOLUME DELTA (CVD)" + "\nOscillator CVD (14 bars)=" + (osc_cvd > 0 ? "+" : "") + str.tostring(osc_cvd, format.volume) + " (" + (osc_cvd_pct > 0 ? "+" : "") + str.tostring(osc_cvd_pct, "#.00") + "%)" + "\nScript-calculated CVD (lifetime)=" + (true_cvd > 0 ? "+" : "") + str.tostring(true_cvd, format.volume) + " (" + (true_cvd_pct > 0 ? "+" : "") + str.tostring(true_cvd_pct, "#.00") + "%)" + "\nOscillator CVD is the 14-bar measure; lifetime CVD is the script's cumulative estimate."
+            table.cell(hud_aegis, 0, 3 + row_offset, "CVD (14B / LIFE)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip=aegis_cvd_tooltip)
+            table.cell(hud_aegis, 1, 3 + row_offset, (osc_cvd > 0 ? "+" : "") + str.tostring(osc_cvd, format.volume), text_color=osc_cvd > 0 ? c_green : c_red, text_size=size.small, text_halign=text.align_right, tooltip=aegis_cvd_tooltip)
+            table.cell(hud_aegis, 2, 3 + row_offset, (true_cvd > 0 ? "+" : "") + str.tostring(true_cvd, format.volume), text_color=true_cvd > 0 ? c_green : c_red, text_size=size.small, text_halign=text.align_right, tooltip=aegis_cvd_tooltip)
+
+            string aegis_surge_tooltip = "VOLUME SURGE HEURISTIC" + "\nStatus=" + (is_whale ? "SURGE ACTIVE" : "NO SURGE") + "\nVolume surge ratio=" + str.tostring(vol_surge, "#.00") + "x" + "\nThe ratio is evaluated by the existing script heuristic; this status is not a standalone trade signal."
+            table.cell(hud_aegis, 0, 4 + row_offset, "VOLUME SURGE", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip=aegis_surge_tooltip)
+            table.cell(hud_aegis, 1, 4 + row_offset, is_whale ? "SURGE ACTIVE" : "NO SURGE", text_color=is_whale ? c_cyan : obs_sub, text_size=size.small, text_halign=text.align_right, tooltip=aegis_surge_tooltip)
+            table.cell(hud_aegis, 2, 4 + row_offset, str.tostring(vol_surge, "#.00") + "x", text_color=obs_sub, text_size=size.small, text_halign=text.align_right, tooltip=aegis_surge_tooltip)
+
+            string aegis_pa_state = d_enc == -3.0 ? "BULLISH STRUCTURE" : d_enc == 3.0 ? "BEARISH STRUCTURE" : "FORMING"
+            string aegis_pa_tooltip = "PA STRUCTURE" + "\nState=" + aegis_pa_state + "\nd_enc=" + str.tostring(d_enc) + "\nContext only; not an entry signal."
+            table.cell(hud_aegis, 0, 5 + row_offset, "PA STRUCTURE", text_color=color.white, text_size=size.small, text_halign=text.align_left, tooltip=aegis_pa_tooltip)
+            table.cell(hud_aegis, 1, 5 + row_offset, aegis_pa_state, text_color=d_enc == -3.0 ? c_green : d_enc == 3.0 ? c_red : obs_sub, text_size=size.small, text_halign=text.align_right, tooltip=aegis_pa_tooltip)
+            table.merge_cells(hud_aegis, 1, 5 + row_offset, 2, 5 + row_offset)
+
+            string aegis_whale_tooltip = "WHALE ACTIVITY" + "\nWAI status=" + wai_str + "\nActive zones=" + str.tostring(active_lev_count) + "\nZone display=" + (show_lev ? "ON" : "OFF") + "\nWAI and zone count are separate diagnostics; zone visibility does not disable zone detection."
+            table.cell(hud_aegis, 0, 6 + row_offset, "WHALE ACTIVITY", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip=aegis_whale_tooltip)
+            table.cell(hud_aegis, 1, 6 + row_offset, wai_str, text_color=wai_col, text_size=size.small, text_halign=text.align_right, tooltip=aegis_whale_tooltip)
+            table.cell(hud_aegis, 2, 6 + row_offset, str.tostring(active_lev_count) + " ZONES", text_color=active_lev_count > 0 ? c_cyan : obs_sub, text_size=size.small, text_halign=text.align_right, tooltip=aegis_whale_tooltip)
+        if not show_tables or not show_aegis
+            table.set_bgcolor(hud_aegis, color.new(obs_dark, 100))
+            table.set_border_color(hud_aegis, color.new(obs_border, 100))
+            table.set_frame_color(hud_aegis, color.new(obs_border, 100))
+    0
+
+f_render_tdm_hud_top() =>
+    int r = 0
+    if barstate.islast and show_tables and show_tdm_hud
+        table.cell(hud_tdm, 0, r, "🧪 MATRIX & OMEGA SENSORS", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_purple, 50))
+        table.merge_cells(hud_tdm, 0, r, 3, r)
+        r += 1
+        
+        table.cell(hud_tdm, 0, r, "🛠️ TACTICAL MUSCLES", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(obs_border, 50))
+        table.merge_cells(hud_tdm, 0, r, 3, r)
+        r += 1
+
+        string jma_status = str.tostring(pctRank, "#.0") + "%"
+        color jma_col = obs_sub
+        if pctRank >= 90
+            jma_status += " (OVERBOUGHT)", jma_col := c_red
+        else if pctRank <= 10
+            jma_status += " (OVERSOLD)", jma_col := c_green
+        else
+            jma_status += " (" + jma_proj_txt + ")"
+
+        table.cell(hud_tdm, 0, r, "JMA PPO RANKING", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, jma_status, text_color=jma_col, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "VPT VOLUME TREND", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, vpt_status, text_color=vpt_col, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+        
+        string tva_status = use_tva_channel ? ("ADAPTIVE (" + str.tostring(dyn_reg_period) + "b)") : ("STATIC (" + str.tostring(reg_period) + "b)")
+        color tva_col = use_tva_channel ? (dyn_reg_period < reg_period ? c_red : dyn_reg_period > reg_period ? c_green : c_orange) : obs_sub
+        table.cell(hud_tdm, 0, r, "TVA REGRESSION", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, tva_status, text_color=tva_col, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+
+        // --- BARIS SMC BUY / SELL ZONE ---
+        string bz_lbl_txt = g_poc_dir == 1 ? "SMC BUY ZONE" : "SMC SELL ZONE"
+        color bz_lbl_col = g_poc_dir == 1 ? c_cyan : c_purple
+        table.cell(hud_tdm, 0, r, bz_lbl_txt, text_color=bz_lbl_col, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, (na(lq_bot) ? "--" : str.tostring(lq_bot, format.mintick)) + " - " + (na(lq_top) ? "--" : str.tostring(lq_top, format.mintick)), text_color=g_poc_dir == 1 ? c_green : c_red, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+
+        // ✨ OMEGA SENSORS ✨
+        table.cell(hud_tdm, 0, r, "🌍 MACRO & AETHER SENSORS", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(obs_border, 50))
+        table.merge_cells(hud_tdm, 0, r, 3, r)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "MTF HURST (TREND)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Mengukur memori tren jangka panjang.")
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, str.tostring(global_h, "#.000"), text_color=global_h > 0.65 ? c_green : global_h < 0.5 ? c_red : c_orange, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+        
+        table.cell(hud_tdm, 0, r, "MTF Z-SCORE (KWW)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Deviasi nilai tengah pita kuantum. Z > 1.618 (Extrem Top).")
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        color z_col = global_z >= 1.618 ? c_red : global_z <= -1.618 ? c_green : c_cyan
+        table.cell(hud_tdm, 2, r, str.tostring(global_z, "#.00"), text_color=z_col, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+        
+        table.cell(hud_tdm, 0, r, "CONSOL. GRAVITY", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Tarikan gravitasi ke arah TDM POC. Menentukan bobot Pullback.")
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, cg_bias_str + " [" + (cg_net_pull > 0 ? "+" : "") + str.tostring(cg_net_pull, "#.0") + "%]", text_color=cg_bias_col, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "Z3 KINETIC SPREAD", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, str.tostring(kww_width, format.mintick), text_color=c_cyan, text_size=size.small, text_halign=text.align_right)
+        table.cell(hud_tdm, 3, r, str.tostring(kww_width_pct, "#.00") + "%", text_color=obs_sub, text_size=size.small, text_halign=text.align_right)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "MACRO CYCLE", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Siklus fundamental makro menggunakan pergerakan DXY/USDT korelasi.")
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, macro_state, text_color=macro_state_col, text_size=size.small, text_halign=text.align_right)
+        table.cell(hud_tdm, 3, r, macro_src_txt, text_color=obs_sub, text_size=size.small, text_halign=text.align_right)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "EST. MACRO SHIFT", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Estimasi waktu reversal berdasarkan akselerasi sudut kinetik.")
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, macro_rev_txt, text_color=macro_rev_col, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "ASSET GRAVITY", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, grav_state, text_color=grav_state_col, text_size=size.small, text_halign=text.align_right)
+        table.cell(hud_tdm, 3, r, na(rsi_oil) ? "WTI OIL N/A" : "WTI OIL", text_color=obs_sub, text_size=size.small, text_halign=text.align_right)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "Q-GRAVITY PULL", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, g_scale > 0.1 ? "PULL UP" : g_scale < -0.1 ? "PULL DOWN" : "BALANCED", text_color=g_scale > 0.1 ? c_green : g_scale < -0.1 ? c_red : obs_sub, text_size=size.small, text_halign=text.align_right)
+        table.cell(hud_tdm, 3, r, str.tostring(g_scale * 100, "#.00") + "%", text_color=obs_sub, text_size=size.small, text_halign=text.align_right)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "MACRO SMR (SMRI)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, smri >= 85.0 ? "MARK-UP" : smri <= 15.0 ? "MARK-DOWN" : "EQUILIBRIUM", text_color=smri >= 85.0 ? c_green : smri <= 15.0 ? c_red : obs_sub, text_size=size.small, text_halign=text.align_right)
+        table.cell(hud_tdm, 3, r, str.tostring(smri, "#.0") + "%", text_color=obs_sub, text_size=size.small, text_halign=text.align_right)
+        r += 1
+
+        // ✨ NEW: GABFX PRICE ACTION SECTION ✨
+        table.cell(hud_tdm, 0, r, "🎯 GABFX PRICE ACTION", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_blue, 70))
+        table.merge_cells(hud_tdm, 0, r, 3, r)
+        r += 1
+
+        string qm_str = not na(qm_sell_lvl) and close <= qm_sell_lvl + atr_val * 2 ? "BEARISH QM (SELL)" : not na(qm_buy_lvl) and close >= qm_buy_lvl - atr_val * 2 ? "BULLISH QM (BUY)" : "WAITING"
+        color qm_col = str.contains(qm_str, "BUY") ? c_green : str.contains(qm_str, "SELL") ? c_red : obs_sub
+
+        table.cell(hud_tdm, 0, r, "QUASIMODO (QM) ZONE", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="Setup Quasimodo/Over-Under mendeteksi pembalikan arah dengan konfirmasi H-L-HH-LL.")
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, qm_str, text_color=qm_col, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+
+        string rbs_sbr_str = in_rbs ? "RBS ACTIVE 🟢" : in_sbr ? "SBR ACTIVE 🔴" : "WAITING"
+        color rbs_sbr_col = in_rbs ? c_green : in_sbr ? c_red : obs_sub
+
+        table.cell(hud_tdm, 0, r, "RBS / SBR RETEST", text_color=obs_sub, text_size=size.small, text_halign=text.align_left, tooltip="RBS (Resist Become Support) atau SBR (Support Become Resist).")
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, rbs_sbr_str, text_color=rbs_sbr_col, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+    r
+
+f_render_tdm_hud_bottom(int startRow) =>
+    int r = startRow
+    if barstate.islast and show_tables and show_tdm_hud
+        table.cell(hud_tdm, 0, r, "📖 PLAYBOOK EXECUTION", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_blue, 70))
+        table.merge_cells(hud_tdm, 0, r, 3, r)
+        r += 1
+        
+        table.cell(hud_tdm, 0, r, "PHASE 1: HTF (MACRO)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, str_ht, text_color=col_ht, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "PHASE 2: MTF (PROPHET)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, str_mt, text_color=col_mt, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "PHASE 3: LTF (AEGIS/KIN)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, str_lt, text_color=col_lt, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "PHASE 4: EXIT (KTS/TP)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, str_ex, text_color=col_ex, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "🛑 DECISION MATRIX", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_purple, 50))
+        table.merge_cells(hud_tdm, 0, r, 3, r)
+        r += 1
+        
+        table.cell(hud_tdm, 0, r, "SCALP BURST INDEX", text_color=color.white, text_size=size.small, text_halign=text.align_left, tooltip="Akumulasi kondisi ideal untuk ledakan tren. 5/5 = Supernova 🌌🚀.")
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, burst_txt, text_color=color.white, text_size=size.small, text_halign=text.align_right, bgcolor=color.new(burst_col, 50))
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "ACTION VERDICT", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, verdict, text_color=color.white, text_size=size.small, text_halign=text.align_right, bgcolor=color.new(v_col, 50))
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+        
+        table.cell(hud_tdm, 0, r, "EXECUTE", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, ai_decision, text_color=color.white, text_size=size.small, text_halign=text.align_right, bgcolor=color.new(ai_col, 50))
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+        
+        table.cell(hud_tdm, 0, r, "SYSTEM GUARD", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, is_chaos ? "SAFE MODE ⚠️" : "SECURE 🚀", text_color=is_chaos ? c_red : c_green, text_size=size.small, text_halign=text.align_right)
+        table.cell(hud_tdm, 3, r, "STATUS", text_color=obs_sub, text_size=size.small, text_halign=text.align_right)
+        r += 1
+
+        table.cell(hud_tdm, 0, r, "🤖 GRID BOT PROTOCOL", text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(c_blue, 70))
+        table.merge_cells(hud_tdm, 0, r, 3, r)
+        r += 1
+        
+        table.cell(hud_tdm, 0, r, "CSHI VIABILITY", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, str.tostring(cshi_grid, "#.0") + "%", text_color=grid_col, text_size=size.small, text_halign=text.align_right)
+        table.cell(hud_tdm, 3, r, "SCORE", text_color=obs_sub, text_size=size.small, text_halign=text.align_right)
+        r += 1
+        
+        table.cell(hud_tdm, 0, r, "DEPLOY STATUS", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, grid_status, text_color=grid_col, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+        
+        table.cell(hud_tdm, 0, r, "GRID RANGE (BOT-TOP)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, str_g_range, text_color=col_g_val, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+        
+        table.cell(hud_tdm, 0, r, "TRIGGER PRICE", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, str_g_trig, text_color=col_g_val, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+        
+        table.cell(hud_tdm, 0, r, "GRID QUANTITY (1.3%)", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, str_g_count, text_color=col_g_val, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+        r += 1
+        
+        table.cell(hud_tdm, 0, r, "TAKE PROFIT / STOP LOSS", text_color=obs_sub, text_size=size.small, text_halign=text.align_left)
+        table.merge_cells(hud_tdm, 0, r, 1, r)
+        table.cell(hud_tdm, 2, r, str_g_tpsl, text_color=col_g_tpsl, text_size=size.small, text_halign=text.align_right)
+        table.merge_cells(hud_tdm, 2, r, 3, r)
+    0
+
+// Render functions are called independently to keep each function below Pine external-element limits.
+f_render_visual_a()
+f_render_visual_b()
+f_render_visual_c()
+f_render_main_hud()
+f_render_aegis_hud()
+int tdm_next_row = f_render_tdm_hud_top()
+f_render_tdm_hud_bottom(tdm_next_row)
+
+
+// =============================================================================
+// ✨ 14.5. TRUE OPENINGS (IMAGE PROTOCOL - FUNCTION WRAPPED) ✨
+// =============================================================================
+grp_true = "🎯 True Opening Lines"
+show_true_yr  = input.bool(true, "Show True Year Open (1st Mon Apr)", group=grp_true)
+show_true_mo  = input.bool(true, "Show True Month Open (2nd Mon)", group=grp_true)
+show_true_wk  = input.bool(true, "Show True Week Open (Mon 6PM)", group=grp_true)
+show_true_dy  = input.bool(true, "Show True Day Open (12AM)", group=grp_true)
+show_true_asi = input.bool(true, "Show True Asia Open (7:30PM)", group=grp_true)
+show_true_lon = input.bool(true, "Show True London Open (1:30AM)", group=grp_true)
+show_true_nya = input.bool(true, "Show True NYAM Open (7:30AM)", group=grp_true)
+show_true_nyp = input.bool(true, "Show True NYPM Open (1:30PM)", group=grp_true)
+
+// Membungkus logika untuk bypass error "Main body of the script is too long"
+f_render_true_openings() =>
+    string tz_ny = "America/New_York"
+    int cur_month = month(time, tz_ny)
+    int cur_dow   = dayofweek(time, tz_ny)
+    int cur_dom   = dayofmonth(time, tz_ny)
+
+    var float t_yr_op = na
+    var float t_mo_op = na
+    var float t_wk_op = na
+    var float t_dy_op = na
+    var float t_as_op = na
+    var float t_lo_op = na
+    var float t_nya_op = na
+    var float t_nyp_op = na
+
+    bool is_first_mon_apr = cur_month == 4 and cur_dow == dayofweek.monday and cur_dom <= 7
+    if is_first_mon_apr and not is_first_mon_apr[1]
+        t_yr_op := open
+
+    bool is_sec_mon = cur_dow == dayofweek.monday and cur_dom >= 8 and cur_dom <= 14
+    if is_sec_mon and not is_sec_mon[1]
+        t_mo_op := open
+
+    bool in_wk = not na(time(timeframe.period, "1800-1815", tz_ny)) and cur_dow == dayofweek.monday
+    if in_wk and not in_wk[1]
+        t_wk_op := open
+
+    bool in_dy = not na(time(timeframe.period, "0000-0015", tz_ny))
+    if in_dy and not in_dy[1]
+        t_dy_op := open
+
+    bool in_asi = not na(time(timeframe.period, "1930-1945", tz_ny))
+    if in_asi and not in_asi[1]
+        t_as_op := open
+
+    bool in_lon = not na(time(timeframe.period, "0130-0145", tz_ny))
+    if in_lon and not in_lon[1]
+        t_lo_op := open
+
+    bool in_nya = not na(time(timeframe.period, "0730-0745", tz_ny))
+    if in_nya and not in_nya[1]
+        t_nya_op := open
+
+    bool in_nyp = not na(time(timeframe.period, "1330-1345", tz_ny))
+    if in_nyp and not in_nyp[1]
+        t_nyp_op := open
+
+    var line l_tyo = line.new(na, na, na, na, extend=extend.both, color=color.new(color.red, 0), style=line.style_solid, width=2)
+    var label lb_tyo = label.new(na, na, "True Year Open", color=color.new(color.white, 100), textcolor=color.red, style=label.style_none, size=size.small)
+
+    var line l_tmo = line.new(na, na, na, na, extend=extend.both, color=color.new(color.red, 30), style=line.style_dashed, width=1)
+    var label lb_tmo = label.new(na, na, "True Month Open", color=color.new(color.white, 100), textcolor=color.red, style=label.style_none, size=size.small)
+
+    var line l_two = line.new(na, na, na, na, extend=extend.both, color=color.new(color.orange, 30), style=line.style_dashed, width=1)
+    var label lb_two = label.new(na, na, "True Week Open", color=color.new(color.white, 100), textcolor=color.orange, style=label.style_none, size=size.small)
+
+    var line l_tdo = line.new(na, na, na, na, extend=extend.both, color=color.new(color.white, 30), style=line.style_dashed, width=1)
+    var label lb_tdo = label.new(na, na, "True Day Open", color=color.new(color.white, 100), textcolor=color.white, style=label.style_none, size=size.small)
+
+    var line l_tas = line.new(na, na, na, na, extend=extend.both, color=color.new(color.yellow, 30), style=line.style_dotted, width=1)
+    var label lb_tas = label.new(na, na, "True Asia Open", color=color.new(color.white, 100), textcolor=color.yellow, style=label.style_none, size=size.small)
+
+    var line l_tlo = line.new(na, na, na, na, extend=extend.both, color=color.new(color.green, 30), style=line.style_dotted, width=1)
+    var label lb_tlo = label.new(na, na, "True London Open", color=color.new(color.white, 100), textcolor=color.green, style=label.style_none, size=size.small)
+
+    var line l_tnya = line.new(na, na, na, na, extend=extend.both, color=color.new(color.blue, 30), style=line.style_dotted, width=1)
+    var label lb_tnya = label.new(na, na, "True NYAM Open", color=color.new(color.white, 100), textcolor=color.blue, style=label.style_none, size=size.small)
+
+    var line l_tnyp = line.new(na, na, na, na, extend=extend.both, color=color.new(color.fuchsia, 30), style=line.style_dotted, width=1)
+    var label lb_tnyp = label.new(na, na, "True NYPM Open", color=color.new(color.white, 100), textcolor=color.fuchsia, style=label.style_none, size=size.small)
+
+    if barstate.islast
+        bool show_true_lines = not use_zen_mode 
+        
+        if show_true_yr and show_true_lines and not na(t_yr_op)
+            line.set_xy1(l_tyo, bar_index, t_yr_op)
+            line.set_xy2(l_tyo, bar_index + 1, t_yr_op)
+            label.set_xy(lb_tyo, bar_index + 15, t_yr_op)
+
+        if show_true_mo and show_true_lines and not na(t_mo_op)
+            line.set_xy1(l_tmo, bar_index, t_mo_op)
+            line.set_xy2(l_tmo, bar_index + 1, t_mo_op)
+            label.set_xy(lb_tmo, bar_index + 15, t_mo_op)
+
+        if show_true_wk and show_true_lines and not na(t_wk_op)
+            line.set_xy1(l_two, bar_index, t_wk_op)
+            line.set_xy2(l_two, bar_index + 1, t_wk_op)
+            label.set_xy(lb_two, bar_index + 15, t_wk_op)
+
+        if show_true_dy and show_true_lines and not na(t_dy_op)
+            line.set_xy1(l_tdo, bar_index, t_dy_op)
+            line.set_xy2(l_tdo, bar_index + 1, t_dy_op)
+            label.set_xy(lb_tdo, bar_index + 15, t_dy_op)
+
+        if show_true_asi and show_true_lines and not na(t_as_op)
+            line.set_xy1(l_tas, bar_index, t_as_op)
+            line.set_xy2(l_tas, bar_index + 1, t_as_op)
+            label.set_xy(lb_tas, bar_index + 15, t_as_op)
+
+        if show_true_lon and show_true_lines and not na(t_lo_op)
+            line.set_xy1(l_tlo, bar_index, t_lo_op)
+            line.set_xy2(l_tlo, bar_index + 1, t_lo_op)
+            label.set_xy(lb_tlo, bar_index + 15, t_lo_op)
+
+        if show_true_nya and show_true_lines and not na(t_nya_op)
+            line.set_xy1(l_tnya, bar_index, t_nya_op)
+            line.set_xy2(l_tnya, bar_index + 1, t_nya_op)
+            label.set_xy(lb_tnya, bar_index + 15, t_nya_op)
+
+        if show_true_nyp and show_true_lines and not na(t_nyp_op)
+            line.set_xy1(l_tnyp, bar_index, t_nyp_op)
+            line.set_xy2(l_tnyp, bar_index + 1, t_nyp_op)
+            label.set_xy(lb_tnyp, bar_index + 15, t_nyp_op)
+
+// Eksekusi fungsinya
+f_render_true_openings()
+
+// =============================================================================
+// 📊 14.5 EXTERNAL SESSION VOLUME PROFILE (LEVIATHAN RENDERER)
+// =============================================================================
+grp_ext_vp = "📊 External Volume Profile (Visuals)"
+ext_sessionType = input.string('Daily', 'Session Type', options=['Tokyo','London','New York','Daily','Weekly', 'Monthly', 'Quarterly', 'Yearly'], group=grp_ext_vp)
+ext_showProf = input.bool(true, 'Show Volume Profile', group=grp_ext_vp)
+ext_showPoc = input.bool(true, 'Show POC', group=grp_ext_vp)
+ext_showVA = input.bool(true, 'Show VAH and VAL', group=grp_ext_vp)
+ext_resolution = input.int(30, 'Resolution', minval=5, group=grp_ext_vp)
+ext_VAwid = input.int(70, 'Value Area Volume %', minval=1, maxval=100, group=grp_ext_vp)
+// Explicit timezone/session boundaries. Regional timezones preserve DST behavior.
+ext_calendar_tz_mode = input.string('Exchange', 'Calendar Timezone', options=['Exchange', 'Etc/UTC'], group=grp_ext_vp)
+ext_tokyo_start_h = input.int(9, 'Tokyo Start Hour', minval=0, maxval=23, group=grp_ext_vp, inline='tokyo')
+ext_tokyo_start_m = input.int(0, '', minval=0, maxval=59, group=grp_ext_vp, inline='tokyo')
+ext_tokyo_end_h = input.int(15, 'Tokyo End Hour', minval=0, maxval=23, group=grp_ext_vp, inline='tokyo2')
+ext_tokyo_end_m = input.int(0, '', minval=0, maxval=59, group=grp_ext_vp, inline='tokyo2')
+ext_london_start_h = input.int(8, 'London Start Hour', minval=0, maxval=23, group=grp_ext_vp, inline='london')
+ext_london_start_m = input.int(0, '', minval=0, maxval=59, group=grp_ext_vp, inline='london')
+ext_london_end_h = input.int(16, 'London End Hour', minval=0, maxval=23, group=grp_ext_vp, inline='london2')
+ext_london_end_m = input.int(30, '', minval=0, maxval=59, group=grp_ext_vp, inline='london2')
+ext_ny_start_h = input.int(9, 'New York Start Hour', minval=0, maxval=23, group=grp_ext_vp, inline='ny')
+ext_ny_start_m = input.int(30, '', minval=0, maxval=59, group=grp_ext_vp, inline='ny')
+ext_ny_end_h = input.int(16, 'New York End Hour', minval=0, maxval=23, group=grp_ext_vp, inline='ny2')
+ext_ny_end_m = input.int(0, '', minval=0, maxval=59, group=grp_ext_vp, inline='ny2')
+
+ext_bullCol = input.color(color.rgb(76, 175, 79, 50), 'Up Volume', group=grp_ext_vp)
+ext_bearCol = input.color(color.rgb(255, 82, 82, 50), 'Down Volume', group=grp_ext_vp)
+ext_pocCol = input.color(color.red, 'POC Color', group=grp_ext_vp)
+ext_vahCol = input.color(color.aqua, 'VAH/VAL Color', group=grp_ext_vp)
+
+var int ext_zoneStart = 0
+int ext_lookback = bar_index - ext_zoneStart
+var bool ext_activeZone = false
+
+var ext_vpGreen = array.new_float(ext_resolution, 0)
+var ext_vpRed = array.new_float(ext_resolution, 0)
+var ext_zoneBounds = array.new_float(ext_resolution, 0)
+
+var int[] ext_ltfTime = array.new_int(0)
+var float[] ext_ltfOpen = array.new_float(0)
+var float[] ext_ltfClose = array.new_float(0)
+var float[] ext_ltfHigh = array.new_float(0)
+var float[] ext_ltfLow = array.new_float(0)
+var float[] ext_ltfVolume = array.new_float(0)
+
+// Reuse the indicator's declared LTF policy instead of requesting chart-TF data implicitly.
+[e_dT, e_dO, e_dC, e_dH, e_dL, e_dV] = request.security_lower_tf(syminfo.tickerid, dyn_ltf, [time, open, close, high, low, volume])
+
+// Profile range derives from the ingested intrabars for the active session.
+// Empty/flat ranges remain na and are rejected by the downstream guards.
+float ext_profHigh = array.size(ext_ltfHigh) > 0 ? array.max(ext_ltfHigh) : na
+float ext_profLow = array.size(ext_ltfLow) > 0 ? array.min(ext_ltfLow) : na
+bool ext_validProfileRange = not na(ext_profHigh) and not na(ext_profLow) and ext_profHigh > ext_profLow and ext_resolution >= 2
+
+ext_drawCurZone(bool update) =>
+    var line ext_pocLine = na
+    var line ext_vahLine = na
+    var line ext_valLine = na
+    var box[] ext_redBoxes = array.new_box(ext_resolution, na)
+    var box[] ext_greenBoxes = array.new_box(ext_resolution, na)
+
+    // Clear disabled visual layers immediately; calculations/profile state remain intact.
+    if barstate.islast
+        if not ext_showProf or use_zen_mode
+            for i = 0 to array.size(ext_redBoxes) - 1
+                box rb = array.get(ext_redBoxes, i)
+                box gb = array.get(ext_greenBoxes, i)
+                if not na(rb)
+                    box.delete(rb)
+                    array.set(ext_redBoxes, i, na)
+                if not na(gb)
+                    box.delete(gb)
+                    array.set(ext_greenBoxes, i, na)
+        if not ext_showPoc and not na(ext_pocLine)
+            line.delete(ext_pocLine)
+            ext_pocLine := na
+        if not ext_showVA
+            if not na(ext_vahLine)
+                line.delete(ext_vahLine)
+                ext_vahLine := na
+            if not na(ext_valLine)
+                line.delete(ext_valLine)
+                ext_valLine := na
+
+    if update and ext_validProfileRange and array.sum(ext_vpGreen) + array.sum(ext_vpRed) > 0
+        if not na(ext_pocLine)
+            line.delete(ext_pocLine)
+        if not na(ext_vahLine)
+            line.delete(ext_vahLine)
+        if not na(ext_valLine)
+            line.delete(ext_valLine)
+
+        for i = 0 to array.size(ext_redBoxes) - 1
+            if not na(array.get(ext_redBoxes, i))
+                box.delete(array.get(ext_redBoxes, i))
+                box.delete(array.get(ext_greenBoxes, i))
+        
+        float gap = (ext_profHigh - ext_profLow) / ext_resolution
+        // Compute historical bar indices arithmetically to avoid dynamic series offsets
+        // exceeding Pine's inferred historical buffer (e.g. bar_index[37] with buffer 36).
+        float leftMax = bar_index - ext_lookback
+        float rightMax = bar_index - int(ext_lookback / 1.4)
+        float rightMaxVol = array.max(ext_vpGreen)+array.max(ext_vpRed)
+        float buffer = gap / 10
+        
+        if ext_showProf and not use_zen_mode
+            for i = 0 to array.size(ext_vpRed) - 1
+                int greenEnd = int(leftMax + (rightMax - leftMax) * (array.get(ext_vpGreen, i) / math.max(rightMaxVol, 0.0001)))
+                int redEnd = int(greenEnd + (rightMax - leftMax) * (array.get(ext_vpRed, i) / math.max(rightMaxVol, 0.0001)))
+                
+                array.set(ext_greenBoxes, i, box.new(int(leftMax), array.get(ext_zoneBounds, i) - buffer, greenEnd, array.get(ext_zoneBounds, i) - gap + buffer, bgcolor=ext_bullCol, border_width=0))
+                array.set(ext_redBoxes, i, box.new(greenEnd, array.get(ext_zoneBounds, i) - buffer, redEnd, array.get(ext_zoneBounds, i) - gap + buffer, bgcolor=ext_bearCol, border_width=0))
+        
+        float cur_poc = lib.ext_profile_poc(ext_validProfileRange, ext_vpRed, ext_vpGreen, ext_zoneBounds)
+        [cur_val, cur_vah] = lib.ext_profile_value_levels(cur_poc, ext_validProfileRange, ext_profHigh, ext_profLow, ext_resolution, ext_VAwid, ext_vpRed, ext_vpGreen, ext_zoneBounds)
+        
+        if ext_showPoc and not na(cur_poc)
+            ext_pocLine := line.new(int(leftMax), cur_poc, bar_index, cur_poc, color=ext_pocCol, width=2)
+        if ext_showVA and not na(cur_vah) and not na(cur_val)
+            ext_vahLine := line.new(int(leftMax), cur_vah, bar_index, cur_vah, color=ext_vahCol, width=1, style=line.style_dashed)
+            ext_valLine := line.new(int(leftMax), cur_val, bar_index, cur_val, color=ext_vahCol, width=1, style=line.style_dashed)
+    else if update
+        // Remove stale levels/profile when a new session has no valid range or volume.
+        if not na(ext_pocLine)
+            line.delete(ext_pocLine)
+            ext_pocLine := na
+        if not na(ext_vahLine)
+            line.delete(ext_vahLine)
+            ext_vahLine := na
+        if not na(ext_valLine)
+            line.delete(ext_valLine)
+            ext_valLine := na
+        for i = 0 to array.size(ext_redBoxes) - 1
+            if not na(array.get(ext_redBoxes, i))
+                box.delete(array.get(ext_redBoxes, i))
+                array.set(ext_redBoxes, i, na)
+            if not na(array.get(ext_greenBoxes, i))
+                box.delete(array.get(ext_greenBoxes, i))
+                array.set(ext_greenBoxes, i, na)
+
+    // Explicit, consistent return type for both drawing and cleanup branches.
+    0
+
+// Session identity is computed from each intrabar timestamp, not just chart bars.
+// Regional sessions use IANA timezones so London/New York DST is handled by Pine.
+ext_calendarTimezone = ext_calendar_tz_mode == 'Exchange' ? syminfo.timezone : 'Etc/UTC'
+var int ext_activeSessionKey = na
+[ext_sessionReset, ext_nextSessionKey] = lib.ext_update_intra(e_dT, e_dO, e_dH, e_dL, e_dC, e_dV, ext_ltfTime, ext_ltfOpen, ext_ltfHigh, ext_ltfLow, ext_ltfClose, ext_ltfVolume, ext_activeSessionKey, ext_calendarTimezone, ext_sessionType, ext_tokyo_start_h, ext_tokyo_start_m, ext_tokyo_end_h, ext_tokyo_end_m, ext_london_start_h, ext_london_start_m, ext_london_end_h, ext_london_end_m, ext_ny_start_h, ext_ny_start_m, ext_ny_end_h, ext_ny_end_m)
+ext_activeSessionKey := ext_nextSessionKey
+if ext_sessionReset
+    ext_zoneStart := bar_index
+ext_lookback := bar_index - ext_zoneStart
+// Re-evaluate after ingest because arrays may have been reset/populated above.
+ext_profHigh := array.size(ext_ltfHigh) > 0 ? array.max(ext_ltfHigh) : na
+ext_profLow := array.size(ext_ltfLow) > 0 ? array.min(ext_ltfLow) : na
+ext_validProfileRange := not na(ext_profHigh) and not na(ext_profLow) and ext_profHigh > ext_profLow and ext_resolution >= 2
+lib.ext_profile_calc(ext_validProfileRange, barstate.islast, ext_profHigh, ext_profLow, ext_resolution, ext_ltfOpen, ext_ltfHigh, ext_ltfLow, ext_ltfClose, ext_ltfVolume, ext_zoneBounds, ext_vpGreen, ext_vpRed)
+ext_drawCurZone(barstate.islast)
+
+// =============================================================================
+// [END] EXTERNAL SESSION VOLUME PROFILE 
+// =============================================================================
+
+// =============================================================================
+// CTA WEBHOOK — CORE SNAPSHOT v1.3
+// Emits one canonical GMI message and one distinct message from the actual shared Prophet R37 structure core.
+// Default OFF. Both payloads are emitted only after the candle closes.
+cta_webhook_enabled = input.bool(false, "Enable CTA Webhook")
+cta_webhook_secret = input.string("", "CTA Webhook Secret", confirm=true)
+if cta_webhook_enabled and barstate.isconfirmed
+    string cta_core_payload = "{\"v\":1,\"source\":\"prophet_r37_ssot\",\"src\":\"prophet_r37_ssot\",\"ticker\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.tickerid + "\",\"timeframe\":\"" + timeframe.period + "\",\"tf\":\"" + timeframe.period + "\",\"candle_time\":\"" + str.tostring(time) + "\",\"timestamp\":\"" + str.tostring(time) + "\",\"t\":" + str.tostring(time) + ",\"o\":" + str.tostring(open) + ",\"h\":" + str.tostring(high) + ",\"l\":" + str.tostring(low) + ",\"c\":" + str.tostring(close) + ",\"volume\":" + str.tostring(nz(volume, 0)) + ",\"direction\":" + str.tostring(r10_prophet_consensus_dir) + ",\"d_enc\":" + str.tostring(d_enc) + ",\"b_enc\":" + str.tostring(b_enc) + ",\"structure_state\":" + str.tostring(prophet_structure_state_bar) + ",\"structure_subtype\":" + str.tostring(prophet_structure_subtype_code) + ",\"bull_event\":" + (prophet_bull_event_bar != 0 ? "true" : "false") + ",\"bear_event\":" + (prophet_bear_event_bar != 0 ? "true" : "false") + ",\"secret\":\"" + cta_webhook_secret + "\"}"
+    string cta_gmi_payload = "{\"v\":1,\"source\":\"gmi_v12_70\",\"src\":\"gmi_v12_70\",\"ticker\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.tickerid + "\",\"timeframe\":\"" + timeframe.period + "\",\"tf\":\"" + timeframe.period + "\",\"candle_time\":\"" + str.tostring(time) + "\",\"timestamp\":\"" + str.tostring(time) + "\",\"t\":" + str.tostring(time) + ",\"o\":" + str.tostring(open) + ",\"h\":" + str.tostring(high) + ",\"l\":" + str.tostring(low) + ",\"c\":" + str.tostring(close) + ",\"volume\":" + str.tostring(nz(volume, 0)) + ",\"verdict\":" + str.tostring(verdict_state) + ",\"gate\":" + str.tostring(r10_gate_status) + ",\"gmi_dir\":" + str.tostring(r10_gmi_dir) + ",\"prophet_dir\":" + str.tostring(r10_prophet_consensus_dir) + ",\"conflict\":" + (r10_integration_conflict ? "true" : "false") + ",\"shared_core_status\":" + str.tostring(prophet_structure_state_bar) + ",\"secret\":\"" + cta_webhook_secret + "\"}"
+    alert(cta_core_payload, alert.freq_all)
+    alert(cta_gmi_payload, alert.freq_all)
+
+// =============================================================================
+// CANDIDATE HUD ALERT — source: gmi_v12_70_hud (H1 + 15m)
+// Carries RFC §1.2 HUD fields as numbers, booleans and codes (never *_txt).
+// =============================================================================
+if cta_webhook_enabled and barstate.isconfirmed
+    string cta_gmi_hud_payload = "{\"v\":1,\"source\":\"gmi_v12_70_hud\",\"src\":\"gmi_v12_70_hud\",\"ticker\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.tickerid + "\",\"timeframe\":\"" + timeframe.period + "\",\"tf\":\"" + timeframe.period + "\",\"candle_time\":\"" + str.tostring(time) + "\",\"timestamp\":\"" + str.tostring(time) + "\",\"t\":" + str.tostring(time) + ",\"verdict\":" + str.tostring(verdict_state) + ",\"gate\":" + str.tostring(r10_gate_status) + ",\"gmi_dir\":" + str.tostring(r10_gmi_dir) + ",\"prophet_dir\":" + str.tostring(r10_prophet_consensus_dir) + ",\"conflict\":" + (r10_integration_conflict ? "true" : "false") + ",\"secret\":\"" + cta_webhook_secret + "\"}"
+    alert(cta_gmi_hud_payload, alert.freq_all)

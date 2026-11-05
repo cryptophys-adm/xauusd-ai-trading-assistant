@@ -50,6 +50,7 @@
     "MULTI_AGENT_MODEL": "@cf/zai-org/glm-5.3-flash",
     "MULTI_AGENT_FALLBACK_MODEL": "@cf/zai-org/glm-4.7-flash",
     "LIVE_ROOM_ENABLED": "true",
+    "HUD_AGENTS_ENABLED": "false",
     "LIVE_ROOM_MAX_CALLS_PER_HOUR": "36"
   },
   "routes": [
