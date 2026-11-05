@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import {
-  CONTROLS, CANDIDATES, ENGINE_FAMILIES, SHADOW_WARMUP_BARS, computeVersion, runShadowVersions, readShadowVersions, stuckEpisodes,
+  CONTROLS, CANDIDATES, ENGINE_FAMILIES, SHADOW_WARMUP_BARS, computeVersion, runShadowVersions, readShadowVersions, stuckEpisodes, signTestP,
   resetShadowSchemaCacheForTests, resetShadowReadCacheForTests
 } from "../src/shadow-versions.mjs";
 import { resetOutcomeSchemaCacheForTests, SCORING_VERSION } from "../src/outcome-scoring.mjs";
@@ -38,10 +38,13 @@ const series = (bars) => ({ async get(k) { return k === "market-data:v2:series:O
 const LATCH = { id: "prophet_r37@latch-test", family: "prophet_r37", role: "candidate", timeframe: "60", params: { stateMaxAge: 8 }, reference: "none", change: "test latch" };
 function reset() { resetShadowSchemaCacheForTests(); resetOutcomeSchemaCacheForTests(); resetShadowReadCacheForTests(); }
 
-test("controls are the active engines with their default parameters; P3 ships no candidate", () => {
+test("controls are the active engines with their default parameters; P5 candidates expire the latch sooner", () => {
   assert.deepEqual(CONTROLS.map(c => c.id), ["prophet_r37@active", "prophet_r38@active"]);
   assert.ok(CONTROLS.every(c => c.params === null && c.role === "control"));
-  assert.deepEqual(CANDIDATES, []);
+  assert.deepEqual(CANDIDATES.map(c => [c.id, c.params]), [
+    ["prophet_r37@latch8", { stateMaxAge: 8 }], ["prophet_r37@latch12", { stateMaxAge: 12 }], ["prophet_r38@latch8", { state_max_age: 8 }]
+  ]);
+  assert.ok(CANDIDATES.every(c => c.role === "candidate" && c.reference === "none" && c.timeframe === "60"));
   assert.deepEqual(Object.keys(ENGINE_FAMILIES), ["prophet_r37", "prophet_r38"]);
 });
 
@@ -53,11 +56,13 @@ test("the R37 control reproduces the active replay exactly", () => {
   assert.ok(out.some(o => Math.abs(o.fields.d_enc) === 3), "the fixture must contain latched structure states");
 });
 
-test("a latch-expiry candidate never holds a ±3 structure state longer than its maximum age", () => {
-  const out = computeVersion(LATCH, BARS);
-  let run = 0, longest = 0;
-  for (const o of out) { run = Math.abs(o.fields.d_enc) === 3 ? run + 1 : 0; longest = Math.max(longest, run); }
-  assert.ok(longest <= 9, `held ${longest} bars`);
+test("every latch-expiry candidate holds a ±3 structure state at most its maximum age (R37 and R38)", () => {
+  for (const c of [LATCH, ...CANDIDATES]) {
+    const max = c.params.stateMaxAge ?? c.params.state_max_age;
+    let run = 0, longest = 0;
+    for (const o of computeVersion(c, BARS)) { run = Math.abs(o.fields.d_enc) === 3 ? run + 1 : 0; longest = Math.max(longest, run); }
+    assert.ok(longest <= max + 1, `${c.id} held ${longest} bars`);
+  }
 });
 
 test("runShadowVersions stores outputs after the warm-up only, once, and scores closed horizons as source shadow", async () => {
@@ -106,7 +111,7 @@ test("the shadow view compares each candidate with the control on the same bars,
   assert.equal(c.criteria.minimum_sample, false, "116 bars is below the 200-statement minimum");
   assert.equal(c.verdict, "collecting");
   assert.ok(c.differing_stances >= 0 && c.differing_stances <= c.same_bars);
-  assert.equal(view.families.find(f => f.family === "prophet_r38").candidates.length, 0);
+  assert.equal(view.families.find(f => f.family === "prophet_r38").candidates.length, 0, "only the candidates passed in are compared");
 });
 
 test("stuckEpisodes counts one episode per qualifying run", () => {
@@ -117,4 +122,12 @@ test("stuckEpisodes counts one episode per qualifying run", () => {
   assert.equal(s.d_enc.episodes, 1);
   assert.equal(s.d_enc.stuck_candles, 3, "candles 8, 9 and 10 of the run qualify (range > 15 from the 4th candle, run ≥ 8 from the 8th)");
   assert.equal(s.b_enc.episodes, 1);
+});
+
+test("a higher accuracy counts only when the paired sign test says it is not chance", () => {
+  assert.equal(signTestP(0, 0), null);
+  assert.equal(signTestP(5, 5), 0.623);
+  assert.equal(signTestP(10, 0), 0.001);
+  assert.ok(signTestP(15, 5) < 0.05);
+  assert.ok(signTestP(4, 2) > 0.05, "4 against 2 is chance");
 });

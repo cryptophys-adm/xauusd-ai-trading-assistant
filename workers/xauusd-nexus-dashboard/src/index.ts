@@ -469,7 +469,7 @@ function render(data){
       var v = k.verdict.indexOf("better_than_active") === 0 ? '<span class="ok">' + esc(k.verdict) + "</span>" : k.verdict === "collecting" ? '<span class="wait">collecting</span>' : '<span class="bad">' + esc(k.verdict) + "</span>";
       html += row(k.id, k.scored, k.stuck, v);
       html += row("  control on the same " + k.same_bars + " bars", k.control_on_same_bars, null, '<span class="muted">' + k.differing_stances + " stances differ</span>");
-      html += '<tr><td colspan="7" class="muted">' + esc(k.change) + " · higher score: " + yes(k.criteria.higher_outcome_score) + " · no new stuck states: " + yes(k.criteria.no_new_stuck_states) + " · minimum sample: " + yes(k.criteria.minimum_sample) + " · reference: " + esc(k.reference) + "</td></tr>";
+      html += '<tr><td colspan="7" class="muted">' + esc(k.change) + " · where they disagree: candidate right " + k.paired.candidate_better + ", active right " + k.paired.control_better + " (p " + (k.paired.p_value == null ? "n/a" : k.paired.p_value) + ")" + " · significantly higher score: " + yes(k.criteria.higher_outcome_score) + " · no new stuck states: " + yes(k.criteria.no_new_stuck_states) + " · minimum sample: " + yes(k.criteria.minimum_sample) + " · reference: " + esc(k.reference) + "</td></tr>";
     });
     html += "</table></div>";
   });

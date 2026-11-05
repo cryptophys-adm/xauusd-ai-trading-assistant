@@ -94,10 +94,25 @@ export const CONTROLS = Object.freeze(Object.keys(ENGINE_FAMILIES).map((family) 
 })));
 
 /**
- * Candidate versions. P3 ships the framework and the controls only; candidates are added
- * by later phases (P5: the structure-latch expiry), each with its own id and parameters.
+ * Candidate versions. Each has its own id and parameters; the engine code is the active one.
+ *
+ * P5 (RFC §9): the structure-latch expiry. Prophet's structure state machine latches a
+ * ±3 state (bull trap, bear trap, sweep, failed breakdown) until an oscillator zero cross
+ * or for at most `stateMaxAge` = 50 bars. On 2026-11-05 a bull trap (subtype 1,
+ * b_enc -4) held from 00:00 to 16:00 UTC while price rallied, and GMI held "Prophet risk
+ * hold" with it. These candidates expire the latch sooner. They are local-only (option
+ * b, RFC §4.3); whether a promotion also needs a Pine candidate is owner decision 1.
  */
-export const CANDIDATES = Object.freeze([]);
+const latch = (family, bars, param) => Object.freeze({
+  id: `${family}@latch${bars}`, family, role: "candidate", timeframe: "60", reference: "none",
+  params: Object.freeze({ [param]: bars }),
+  change: `the ±3 structure latch expires after ${bars} closed H1 bars instead of 50`
+});
+export const CANDIDATES = Object.freeze([
+  latch("prophet_r37", 8, "stateMaxAge"),
+  latch("prophet_r37", 12, "stateMaxAge"),
+  latch("prophet_r38", 8, "state_max_age")
+]);
 
 export function shadowVersions(candidates = CANDIDATES) {
   return [...CONTROLS, ...candidates];
@@ -201,6 +216,22 @@ export function stuckEpisodes(rows, barsByKey, atrByKey, { n = SCORING.stuckCand
   return out;
 }
 
+const RIGHT = (s) => s.result === "hit";
+const DECIDED = (s) => s.result === "hit" || s.result === "miss" || s.result === "missed_opportunity";
+
+/** One-sided exact sign test: P(X >= wins) for X ~ Binomial(wins + losses, 0.5). */
+export function signTestP(wins, losses) {
+  const n = wins + losses;
+  if (n === 0) return null;
+  let logC = 0, tail = 0;
+  // Sum C(n, k) / 2^n for k = wins..n with a running log binomial coefficient.
+  const terms = [];
+  for (let k = 0; k <= n; k++) { if (k > 0) logC += Math.log(n - k + 1) - Math.log(k); terms.push(logC - n * Math.LN2); }
+  for (let k = wins; k <= n; k++) tail += Math.exp(terms[k]);
+  return Math.min(1, Math.round(tail * 10000) / 10000);
+}
+export const SHADOW_SIGNIFICANCE = 0.05;
+
 function tally(scores) {
   const t = { n: 0, directional: { n: 0, hit: 0, miss: 0, neutral: 0 }, wait: { n: 0, hit: 0, missed_opportunity: 0 } };
   for (const s of scores) {
@@ -287,11 +318,25 @@ async function buildShadowView(env, { days, now, candidates }) {
       const mine = tally(shared), theirs = tally(controlShared);
       const stuck = stuckEpisodes(d.outputs, barsByKey, atrByKey);
       const controlStuck = entry.control.stuck;
-      const differ = shared.filter((s) => controlScores.get(s.candle_key).stance !== s.stance).length;
+      const differing = shared.filter((s) => controlScores.get(s.candle_key).stance !== s.stance);
+      const differ = differing.length;
+      // Paired comparison on the bars where the two versions disagree: the candidate wins a
+      // bar when it is right and the control is wrong. A higher accuracy counts only when the
+      // sign test says it is unlikely to be chance.
+      let wins = 0, losses = 0;
+      for (const s of differing) {
+        const c = controlScores.get(s.candle_key);
+        if (!DECIDED(s) || !DECIDED(c)) continue;
+        if (RIGHT(s) && !RIGHT(c)) wins += 1;
+        else if (!RIGHT(s) && RIGHT(c)) losses += 1;
+      }
+      const pValue = signTestP(wins, losses);
       const criteria = {
-        higher_outcome_score: mine.accuracy !== null && theirs.accuracy !== null ? mine.accuracy > theirs.accuracy : null,
+        higher_outcome_score: mine.accuracy !== null && theirs.accuracy !== null ? mine.accuracy > theirs.accuracy && pValue !== null && pValue < SHADOW_SIGNIFICANCE : null,
         no_worse_calibration: "not_applicable: indicator directions carry no confidence (Brier needs one)",
-        no_new_stuck_states: STUCK_FIELDS.every((f) => stuck[f].episodes <= controlStuck[f].episodes),
+        // Stuck time, not episode count: expiring a long latch can split one episode in two
+        // while shortening the time spent stuck.
+        no_new_stuck_states: STUCK_FIELDS.every((f) => stuck[f].stuck_candles <= controlStuck[f].stuck_candles),
         reference_parity: cand.reference === "none" ? "not_applicable: local-only version (option b); owner decision 1 decides whether promotion needs a Pine candidate" : "pending",
         minimum_sample: shared.length >= SHADOW_MIN_SAMPLE
       };
@@ -299,6 +344,7 @@ async function buildShadowView(env, { days, now, candidates }) {
       entry.candidates.push({
         id: cand.id, change: cand.change, params: cand.params, reference: cand.reference ?? "none", lifecycle: "candidate (shadow)",
         same_bars: shared.length, differing_stances: differ,
+        paired: { candidate_better: wins, control_better: losses, p_value: pValue, significance: SHADOW_SIGNIFICANCE },
         scored: mine, control_on_same_bars: theirs,
         stuck,
         criteria,

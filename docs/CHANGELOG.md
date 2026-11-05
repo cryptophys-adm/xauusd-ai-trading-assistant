@@ -6,6 +6,23 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- feat(shadow): RFC_INDICATOR_AGENT_PLATFORM P5, the first improvement candidates: structure-latch expiry.
+  - **Candidates.** `prophet_r37@latch8`, `prophet_r37@latch12` and `prophet_r38@latch8`. The ±3 structure latch expires after 8 or 12 closed H1 bars instead of 50.
+  - **Local-only.** They are option (b); owner decision 1 decides whether a promotion also needs a Pine candidate. They run in shadow only.
+  - **Stricter criteria.**
+    - A higher accuracy must pass a paired one-sided sign test (p < 0.05) on the bars where the versions disagree.
+    - Stuck time is compared in candles, not episodes, because expiring a latch can split one episode in two.
+  - **Real-data replay** (696 scored H1 bars, 2026-09-19 to 2026-11-05):
+
+    | Version | Accuracy | Control | Bars that differ | Paired result |
+    |---|---|---|---|---|
+    | `prophet_r37@latch8` | 0.431 | 0.433 | 21 | 3 vs 4 |
+    | `prophet_r37@latch12` | 0.434 | 0.433 | 6 | 3 vs 2 (p 0.5) |
+    | `prophet_r38@latch8` | — | — | 0 | — |
+
+    - `prophet_r38@latch8` changes no direction: R38 confirmed only 4 times in 696 bars.
+    - Expiry alone is not yet an improvement. Its main effect would be on GMI's "Prophet risk hold", which needs a GMI variant: a future candidate.
+
 - feat(shadow): RFC_INDICATOR_AGENT_PLATFORM P3, shadow indicator versions.
   - **Framework.** `src/shadow-versions.mjs` replays a control (the active Prophet R37 and R38 code with defaults) and candidate versions over the same cached H1 bars, once an hour. Outputs are stored after a 300-bar warm-up, and the first computation is final (`shadow_outputs`, migration `0008`).
   - **Scoring.** Outputs are scored as `shadow:<version>`.

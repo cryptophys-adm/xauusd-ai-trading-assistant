@@ -229,9 +229,10 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - **Isolation.** Nothing here reaches a room, a prompt, the evidence or a decision.
 - **Comparison is like for like.** A candidate is compared with its control only on bars scored for both.
   - **Accuracy:** right calls over decided calls. A directional hit and a WAIT hit are right; a miss and a missed opportunity are wrong; a directional neutral is undecided.
-  - **Criteria:** a higher score, no new stuck episodes (§ above: ≥ 8 candles with range > 3 × ATR), and a minimum sample of 200 bars. Brier does not apply, because indicator directions carry no confidence. Reference parity applies only to a Pine candidate (RFC decision 1).
+  - **Criteria:** a higher score that is significant, meaning a one-sided exact sign test with p < 0.05 on the bars where the two versions disagree and exactly one is right; no more stuck time (candles inside stuck episodes, § above: ≥ 8 candles with range > 3 × ATR); and a minimum sample of 200 bars. Brier does not apply, because indicator directions carry no confidence. Reference parity applies only to a Pine candidate (RFC decision 1).
   - **Control check:** the control is also checked against the approved local records of the last 24 candles (`matches_approved_local_records`).
 - **Read model.** `GET /api/shadow-versions?days=30` (cached for 5 minutes) and the Nexus page `/shadow`.
+- **Candidates (P5, 2026-11-05):** `prophet_r37@latch8`, `prophet_r37@latch12` and `prophet_r38@latch8`. The ±3 structure latch expires after 8 or 12 closed H1 bars instead of 50. They are local-only (option b); owner decision 1 decides whether a promotion also needs a Pine candidate.
 - **Promotion** is never automatic. The verdict `better_than_active: ready for owner review` is a proposal; the owner approves a separate promotion PR.
 
 ## 4. Sources and knowledge

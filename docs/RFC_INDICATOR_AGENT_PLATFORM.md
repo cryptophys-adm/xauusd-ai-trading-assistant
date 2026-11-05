@@ -215,7 +215,7 @@ With dozens of agents, a room cannot post every agent on every bar.
 2. **P2 (this repo): the manifest and registry.** Manifests wrap the existing engines and HUDs without changing the hashed files. The rosters and readings are generated from the manifests, and `GET /api/indicator-agents` is added.
 3. **P3 (this repo): shadow versions.** Candidates are computed and scored on every closed bar, and Nexus gets a shadow view.
 4. **P4 (cloud platform, taskplane): the Indicator Auditor.** `indicators.observe`, the `indicator_audit` report and `indicators.propose`, with a Service Binding to the read API.
-5. **P5: the first improvement.** A bull-trap latch expiry is added as a candidate version of Prophet R37/R38, as a local-only version or as a Pine candidate (owner decision 1). It runs in shadow, the scores are compared, and the owner approves or rejects the promotion.
+5. **P5: the first improvement.** *(Shipped 2026-11-05 as shadow candidates `prophet_r37@latch8`, `prophet_r37@latch12` and `prophet_r38@latch8`. The first real-data replay shows no significant gain; see the CHANGELOG.)* A bull-trap latch expiry is added as a candidate version of Prophet R37/R38, as a local-only version or as a Pine candidate (owner decision 1). It runs in shadow, the scores are compared, and the owner approves or rejects the promotion.
 6. **P6: Supertrend** as the first new indicator agent through the manifest path, then Order Block.
 7. **P7: crowd line, reputation weighting and Nexus scorecards.**
 
