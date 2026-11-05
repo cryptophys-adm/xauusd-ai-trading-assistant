@@ -24,3 +24,6 @@ export function buildEvidenceFusion(input: Record<string, any>, now?: number): R
 
 export function containsCredentialFields(value: unknown, depth?: number): boolean;
 export function stripCredentialFields(value: unknown, depth?: number): unknown;
+export function timeframeKey(value: unknown): string;
+export function analysisAllowedForTimeframe(timeframe: unknown, configured?: string): boolean;
+export function isHudSource(source: unknown): boolean;

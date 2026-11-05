@@ -147,6 +147,12 @@ Write `docs/RFC_HUD_AGENTS.md`, covering:
 
 Phase C order (one small PR each, reviewed by Claude, CI green):
 
+0. **C0: verified 5m lane** (owner decision 2026-11-05, done before C1). The 5m execution data strongly influences the agents, so it must be parity-verified like H1.
+   - **Step 1 (done by Claude).** `POST /webhook` starts the AI chain only for `ANALYSIS_TIMEFRAMES`: `"60"` in production, and `"60,5"` in preview for the M5 fixture. Webhooks on any other timeframe are stored for parity only (`analysis_status: "stored_only"`).
+   - **Step 2: timeframe-aware parity identities.** Add the timeframe to the registry identity, so that `prophet_m5` and `gmi_m5` (and later `*_hud_m15`) never share a streak with the approved H1 identities. Existing H1 rows keep their approval.
+   - **Step 3: full 5m local producer.** The 5m producer computes the complete `PARITY_FIELDS` for `prophet_r38`, `prophet_r37_ssot` and `gmi_v12_70` on every closed 5m bar. It publishes them as local calculations with timeframe 5, compared against stored 5m webhooks.
+   - **Step 4: the 5m context becomes verified.** While the `*_m5` identities are approved, `informational_5m_context` and the live room label the 5m data verified. Otherwise it stays labelled UNVERIFIED, and the label switches automatically.
+   - **Step 5: the owner installs the existing alerts on the 5m chart.** No Pine change is needed, because the payloads already carry the timeframe. 24 consecutive matching 5m candles take about 2 hours.
 1. **C1: candidate and ingestion only.**
    - Add Pine candidates in `pinescript/candidates/` for Prophet R38 and GMI v12.70. They keep today's payloads byte-for-byte and add separate `prophet_r38_hud` and `gmi_v12_70_hud` alerts carrying the §1.2 HUD fields (numbers, booleans, codes) on H1 and 15m.
    - `POST /webhook` accepts and stores these `*_hud` sources for timeframes 60 and 15.

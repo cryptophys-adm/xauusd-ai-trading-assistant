@@ -1,5 +1,5 @@
 import { WorkerEntrypoint, tracing } from "cloudflare:workers";
-import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
+import { buildEvidenceFusion, analysisAllowedForTimeframe, isHudSource, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
 import { validateM5Context, freshM5Context } from "./m5-context.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { parseTradingViewJson } from "./tradingview-json.mjs";
@@ -40,6 +40,7 @@ export interface Env {
   AI_MODEL_COUNSELOR: string;
   AI_MODEL_REASONER: string;
   REQUIRED_SOURCES: string;
+  ANALYSIS_TIMEFRAMES?: string;
   MULTI_AGENT_BUS_ENABLED?: string;
   MULTI_AGENT_MAX_CALLS_PER_HOUR?: string;
   MULTI_AGENT_MODEL?: string;
@@ -140,6 +141,7 @@ import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRo
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
 import { DECISION_TEXT_RULE, plainDecisionText } from "./plain-decision.mjs";
+import { TRADE_PLAN_RULE, validateTradePlan } from "./trade-plan.mjs";
 
 function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
@@ -207,9 +209,9 @@ function parseDecision(text: string): JsonObject {
         if (positionSize !== null && (positionSize < 0 || positionSize > 100)) {
           return { decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null, risk_reward: null, position_size_pct: null, trade_plan: null, reasoning: "Model position_size_pct was outside the permitted 0–100 range; downgraded to WAIT.", raw_response: text };
         }
-        const tradePlan = (decision === "BUY" || decision === "SELL") && parsed.trade_plan && typeof parsed.trade_plan === "object"
-          ? parsed.trade_plan
-          : null;
+        // trade_plan (RFC_HUD_AGENTS §7) is validated against the decision prices; an invalid plan is dropped, never the decision.
+        const planCheck = validateTradePlan(parsed.trade_plan, { decision, entry_price: entry, stop_loss: stop, take_profit: target });
+        const tradePlan = planCheck.plan;
         return {
           ...parsed,
           decision,
@@ -220,6 +222,7 @@ function parseDecision(text: string): JsonObject {
           risk_reward: riskReward,
           position_size_pct: positionSize,
           trade_plan: tradePlan,
+          ...(planCheck.errors.length ? { trade_plan_errors: planCheck.errors } : {}),
           reasoning: asText(parsed.reasoning) || "No reasoning supplied."
         };
       }
@@ -838,7 +841,7 @@ async function runAnalysis(
       "If news_evidence.available is false, state completed fundamental news analysis was unavailable. Do NOT claim news supported or contradicted the setup.",
       "If news_evidence.available is true, incorporate the completed news analysis and its underlying article evidence into final reasoning.",
       "If informational_5m_context is present, treat it as unverified 5m context only; it must not change the decision or prices.",
-      "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation.", DECISION_TEXT_RULE,
+      "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation, trade_plan.", DECISION_TEXT_RULE, TRADE_PLAN_RULE,
       "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
       "EVIDENCE:",
       JSON.stringify(evidence),
@@ -1021,6 +1024,19 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   await env.WEBHOOK_BUFFER.put("candle:" + candleKey + ":" + source, JSON.stringify(storedPayload), {
     expirationTtl: 60 * 60 * 24 * 14
   });
+  // Only analysis timeframes (H1 in production) start the AI chain. Other timeframes,
+  // such as 5m or 15m parity comparators, are stored for parity and nothing else.
+  // HUD comparator sources (*_hud) are parity evidence only: they never start the AI chain.
+  const storedOnlyReason = isHudSource(source)
+    ? "hud_comparator_source"
+    : !analysisAllowedForTimeframe(timeframe, env.ANALYSIS_TIMEFRAMES || "60") ? "timeframe_not_analysed" : null;
+  if (storedOnlyReason) {
+    return json({
+      status: "accepted", candle_key: candleKey, source,
+      analysis_status: "stored_only", queued: false, reason: storedOnlyReason,
+      normalized_non_finite_tokens: normalizedTokens
+    }, 202);
+  }
   const task = buildWebhookQueueTask({
     candleKey, source, ticker, timeframe, enqueuedAt: new Date().toISOString()
   });
@@ -1264,7 +1280,7 @@ async function runAnalysisFromBundle(
         "Prophet remains the base bias. GMI may validate, block, or wait on a setup. Do not silently reverse Prophet's bias.",
         "If news_evidence.available is false, state fundamental news analysis was not performed. Do NOT claim news supported or contradicted the setup.",
         "If news_evidence.available is true, incorporate the supplied articles into final reasoning.",
-        "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation.", DECISION_TEXT_RULE,
+        "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation, trade_plan.", DECISION_TEXT_RULE, TRADE_PLAN_RULE,
         "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
         "EVIDENCE:",
         JSON.stringify(evidence),

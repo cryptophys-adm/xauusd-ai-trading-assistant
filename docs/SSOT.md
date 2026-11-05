@@ -47,6 +47,8 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   AI Worker's `LocalComputationIngress` RPC entrypoint (no shared secret).
 - Storage: KV key `context:m5:latest` (TTL 900 s) on the AI Worker.
 - Read API: `GET /api/m5-context` returns the latest stored 5m context.
+- **Analysis timeframes.** `POST /webhook` starts the AI chain only for `ANALYSIS_TIMEFRAMES`: `"60"` (H1) in production, and `"60,5"` in preview for the M5 fixture. Webhooks on other timeframes, such as 5m or 15m parity comparators, are stored only and answer `analysis_status: "stored_only"`.
+- **Verified 5m lane (C0, planned).** Per-timeframe parity identities and a full 5m producer, so that the 5m context becomes verified after 24/24 5m matches. See `docs/BRIEF_HUD_AGENTS.md`. Until then the 5m context stays UNVERIFIED.
 - Freshness rule for use in `runAnalysis`: accepted only when both
   `now - Date.parse(candle_time) <= 15 min` and
   `now - Date.parse(received_at) <= 10 min`.
@@ -85,6 +87,14 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - The dashboard shows agents by name only: Technical Analyst, News Analyst, Risk Manager and Moderator. It never shows model names.
 - Agent text must be natural language: validators reject snake_case field names, dotted evidence paths and key=value pairs in insights, summaries and dissent (`src/natural-language.mjs`). Evidence paths stay in `refs`.
 - The fail-closed WAIT reasoning is plain language too (`describeDegradedEvidence`).
+- **H1 `trade_plan`** (`src/trade-plan.mjs`, RFC_HUD_AGENTS §7):
+  - The Reasoner prompt (`TRADE_PLAN_RULE`) asks for `trade_plan` on BUY or SELL. It covers action, entry, invalidation, take profit, exit reason, progressive stop and zone.
+  - `parseDecision` validates the plan with `validateTradePlan`:
+    - the prices must be positive, correctly ordered for the side, and equal to the decision's validated `entry_price`, `stop_loss` and `take_profit`;
+    - the progressive stop must lie between invalidation and take profit;
+    - the zone needs `low <= high` and a side of DEMAND or SUPPLY;
+    - unknown keys, such as grid levels, are dropped.
+  - An invalid plan becomes null, with `trade_plan_errors` recorded. The decision itself is never changed. WAIT and NO_TRADE never carry a plan.
 - **H1 decision text is plain language too** (`src/plain-decision.mjs`):
   - The Reasoner prompt carries `DECISION_TEXT_RULE`.
   - When the reasoning, confirmation or invalidation text still reads like code (field names, key paths, `key = value`, `==`), one call to the bus model rewrites only those fields.

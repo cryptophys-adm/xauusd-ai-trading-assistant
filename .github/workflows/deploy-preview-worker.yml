@@ -233,6 +233,26 @@ jobs:
             assert.ok(response.status === 202 || response.status === 200, "webhook rejected: " + JSON.stringify(result));
           }
 
+          // A webhook on a non-analysis timeframe (15m) is stored for parity only and never starts the AI chain.
+          const m15Response = await fetch(base + "/webhook", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ source: "prophet_r38", ticker: symbol, timeframe: "15", candle_time: candleTime, ...bar, ...webhookValues.prophet_r38 })
+          });
+          const m15Result = await m15Response.json();
+          assert.equal(m15Response.status, 202, "15m webhook: " + JSON.stringify(m15Result));
+          assert.equal(m15Result.analysis_status, "stored_only", "a 15m webhook must not start the AI chain");
+          assert.equal(m15Result.queued, false);
+          // A HUD comparator source on H1 is stored for parity only and never starts the AI chain.
+          const hudResponse = await fetch(base + "/webhook", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ source: "prophet_r38_hud", ticker: symbol, timeframe: "60", candle_time: candleTime, ...bar, cshi_score: 0.5 })
+          });
+          const hudResult = await hudResponse.json();
+          assert.equal(hudResponse.status, 202, "hud webhook: " + JSON.stringify(hudResult));
+          assert.equal(hudResult.analysis_status, "stored_only", "a *_hud webhook must not start the AI chain");
+
           // local_computation lane: outputs that reproduce the webhook values on the same raw bar.
           // With PARITY_PROMOTE_AFTER=1 a single matching candle promotes Prophet and GMI autonomously;
           // Mizan is trusted because both declare the same Mizan dependency.
