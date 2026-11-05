@@ -141,7 +141,8 @@ import { storeHudSnapshot, loadHudSnapshot, hudReadings } from "./hud-store.mjs"
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
-import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread } from "./agent-threads.mjs";
+import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents } from "./agent-threads.mjs";
+import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
 import { DECISION_TEXT_RULE, plainDecisionText } from "./plain-decision.mjs";
@@ -577,7 +578,18 @@ async function enqueueNewsThread(env: Env, analysisKey: string): Promise<void> {
   }
 }
 
+/** Phase C5: HUD agents post in Threads 1H after each H1 synthesis (behind HUD_AGENTS_ENABLED). */
+async function enqueueHudAgents(env: Env, candleKey: string): Promise<void> {
+  if (!hudAgentsEnabled(env) || candleKey.split(":")[2] !== "60") return;
+  try {
+    await sendQueueTask(env.XAUUSD_EVENTS, buildHudAgentsTask({ candleKey }) as unknown as QueueTask);
+  } catch (error) {
+    console.error("hud_agents_enqueue_failed", JSON.stringify({ candle_key: candleKey, error: error instanceof Error ? error.message : String(error) }));
+  }
+}
+
 async function enqueueMultiAgentBus(env: Env, candleKey: string, inputFingerprint: string): Promise<void> {
+  await enqueueHudAgents(env, candleKey);
   if (!busEnabled(env)) return;
   try {
     await sendQueueTask(env.XAUUSD_EVENTS, buildMultiAgentBusTask({ candleKey, inputFingerprint }) as unknown as QueueTask);
@@ -1635,6 +1647,16 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
     if (task.kind === "live_room") {
       const result = await runLiveRoomBar(env, task);
       console.log("live_room", JSON.stringify({ bar_time: task.bar_time, ...result }));
+      return;
+    }
+    if (task.kind === "hud_agents") {
+      const result = await runHudAgents(env, task, {
+        loadReadings: async (e, key) => {
+          const snapshot = await loadHudSnapshot(e, { timeframe: "60", candleKey: key });
+          return snapshot ? hudReadings(e, snapshot) : null;
+        }
+      });
+      console.log("hud_agents", JSON.stringify({ candle_key: task.candle_key, ...result }));
       return;
     }
     if (task.kind === "multi_agent_bus") {

@@ -13,6 +13,8 @@ import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import { verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
+import { HUD_IDS, HUD_NAMES } from "./hud-reading.mjs";
+import { hudAgentsEnabled } from "./hud-agents.mjs";
 import {
   callBusModel, buildBusEvidence, validateAgentOutput, validateModeratorOutput,
   AGENT_JSON_SCHEMA, MODERATOR_JSON_SCHEMA, BUS_DEFAULT_MODEL, BUS_MAX_TOKENS, busEnabled
@@ -638,9 +640,11 @@ export async function readH1Thread(db, candleKey) {
   let rows = [];
   try {
     rows = (await db.prepare("SELECT * FROM bus_messages WHERE candle_key = ? ORDER BY id").bind(candleKey).all()).results || [];
-  } catch { return null; }
-  if (!rows.length) return null;
-  const latestRun = rows.at(-1).run_id;
+  } catch { rows = []; }
+  // HUD agents post in the same Threads 1H view, even when the bus did not run.
+  const hudAgents = await readHudThread(db, candleKey);
+  if (!rows.length && !hudAgents.length) return null;
+  const latestRun = rows.at(-1)?.run_id;
   const msgs = rows.filter(r => r.run_id === latestRun).map(busRowToMessage);
   const byStep = new Map(msgs.map(m => [m.step, m]));
   for (const m of msgs) {
@@ -653,43 +657,146 @@ export async function readH1Thread(db, candleKey) {
   }
   const synth = await db.prepare("SELECT ai_analysis, prophet_metrics, gmi_metrics FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(candleKey).first();
   const post = h1Post(candleKey, synth);
-  return { id: `h1:${candleKey}`, kind: "h1", ref_key: candleKey, title: h1Title(candleKey, post.decision), created_at: msgs[0]?.ts ?? null, post, messages: buildMessageTree(msgs) };
+  return { id: `h1:${candleKey}`, kind: "h1", ref_key: candleKey, title: h1Title(candleKey, post.decision), created_at: msgs[0]?.ts ?? hudAgents[0]?.ts ?? null, post, messages: buildMessageTree(msgs), hud_agents: hudAgents };
 }
 
 
-export function hudAgentIds() {
-  return ["r37_funnel","prophet","trade_management","interstellar_eyes","kinetic_engine","fabio_amt","chronos_matrix","aegis_footprint","tactical_muscles","macro_aether","gabfx_price_action","playbook_execution","decision_matrix","grid_bot_protocol"];
+// ---------------------------------------------------------------- HUD agents (Phase C5)
+//
+// One agent per Pine HUD section, named after the HUD (owner decision). After each H1
+// synthesis, every HUD with a computed reading posts once in Threads 1H, then a moderator
+// summarises. Each agent sees only its own HUD reading (with "verified by parity" or "not
+// yet calibrated" per statement) and the authoritative H1 decision. Advisory only: no
+// entry, stop, target or size; never changes the H1 decision. Behind HUD_AGENTS_ENABLED.
+
+export const HUD_WALL_BUDGET_MS = 240_000;
+export const HUD_STANCES = Object.freeze(["BUY", "SELL", "WAIT"]);
+
+const HUD_AGENT_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    agent: { type: "string" },
+    stance: { type: "string", enum: [...HUD_STANCES] },
+    confidence: { type: "number" },
+    insight: { type: "string" }
+  },
+  required: ["agent", "stance", "confidence", "insight"]
+});
+
+export function buildHudAgentsTask({ candleKey, enqueuedAt = new Date().toISOString() } = {}) {
+  if (typeof candleKey !== "string" || !candleKey.trim()) throw new TypeError("HUD agents task requires candleKey");
+  return { kind: "hud_agents", event_id: `hud_agents:${candleKey}`, candle_key: candleKey, enqueued_at: enqueuedAt };
 }
 
-export function hudAgentsEnabled(env) {
-  return String(env?.HUD_AGENTS_ENABLED ?? "false").trim().toLowerCase() === "true";
+export function validateHudAgent(obj, agentId) {
+  const errors = [];
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { valid: false, errors: ["not_an_object"] };
+  if (obj.agent !== agentId) errors.push("agent_mismatch");
+  if (!HUD_STANCES.includes(obj.stance)) errors.push("stance_invalid");
+  if (!inUnit(obj.confidence)) errors.push("confidence_out_of_range");
+  if (typeof obj.insight !== "string" || !obj.insight.trim()) errors.push("insight_missing");
+  errors.push(...naturalLanguageErrors(obj.insight));
+  return { valid: errors.length === 0, errors };
 }
 
+/** Reading lines as the agent sees them: each statement says whether parity verified it. */
+export function hudEvidenceLines(reading) {
+  return (reading?.lines || []).map((l) => `${l.verified ? "Verified by parity" : "Not yet calibrated"}: ${l.text}`);
+}
 
-export async function runHudAgentsThreads(env, { threadId, candleKey, readings = {}, clock = () => Date.now() } = {}) {
-  if (!hudAgentsEnabled(env)) return { skipped: true, reason: "flag_disabled" };
-  const ids = hudAgentIds();
-  const started = clock();
-  const results = [];
-  for (const id of ids) {
-    // TODO: call model with src/hud-reading.mjs output; validate with src/natural-language.mjs; store message.
-    results.push({ agent: id, status: "not_implemented", reading: readings[id] || null });
+function hudAgentMessages(agentId, name, reading, h1) {
+  return chatMessages([
+    `You are ${name}, one agent per Pine HUD in an XAUUSD trading forum. You speak only about the ${name} HUD, for the H1 candle that just closed.`,
+    RULES,
+    "Read only your HUD reading below. Each statement is marked either verified by parity (it equals the parity-approved local computation) or not yet calibrated (an engine internal no TradingView comparator has checked). Lean on the verified statements, and say plainly when your view rests on statements that are not yet calibrated.",
+    `The authoritative H1 decision is ${h1.decision}. Say whether your HUD agrees with it. Never give entry, stop loss, take profit or position size.`,
+    `Required JSON: {"agent":"${agentId}","stance":"BUY|SELL|WAIT","confidence":0..1,"insight":"<= 400 chars"}`,
+    "EVIDENCE:",
+    JSON.stringify({ hud: name, timeframe: "1 hour", reading: hudEvidenceLines(reading), h1: { decision: h1.decision, confidence: h1.confidence } })
+  ]);
+}
+
+function hudModeratorMessages(h1, transcript) {
+  return chatMessages([
+    "You are the moderator of the HUD agents in an XAUUSD trading forum: one agent per Pine HUD has posted about the H1 candle that just closed.",
+    RULES,
+    `Give one short consensus line across the HUDs, naming which HUDs agree and which disagree. If your stance differs from the H1 decision (${h1.decision}), the summary must say "H1 decision: ${h1.decision}".`,
+    `Required JSON: {"stance":"BUY|SELL|WAIT","confidence":0..1,"summary":"<= 300 chars"}`,
+    "HUD AGENTS:",
+    JSON.stringify(transcript.map((m) => ({ hud: m.name, status: m.status, stance: m.stance, confidence: m.confidence, insight: m.insight })))
+  ]);
+}
+
+/**
+ * Runs the HUD agents for one closed H1 candle. Idempotent per (candle, HUD): stored valid
+ * messages are reused on redelivery and never re-spend the budget.
+ */
+export async function runHudAgents(env, task, { clock = () => Date.now(), loadReadings } = {}) {
+  if (!hudAgentsEnabled(env)) return { status: "disabled", calls: 0 };
+  const db = env.DB;
+  const candleKey = task?.candle_key;
+  await ensureThreadSchema(db);
+  const hud = typeof loadReadings === "function" ? await loadReadings(env, candleKey) : null;
+  if (!hud || !hud.readings) throw Object.assign(new Error("HUD snapshot not visible yet"), { name: "RetryableError" });
+  const synth = await db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(candleKey).first();
+  if (!synth) throw Object.assign(new Error("H1 synthesis not visible yet"), { name: "RetryableError" });
+  const decision = parseJson(synth.ai_analysis, {})?.decision || {};
+  const h1 = { decision: String(decision.decision || "WAIT").toUpperCase(), confidence: decision.confidence ?? null };
+
+  const threadId = `hud1h:${candleKey}`;
+  await upsertThread(db, { id: threadId, kind: "hud1h", refKey: candleKey, title: `HUD agents · ${candleKey}`, post: { candle_key: candleKey, h1_decision: h1.decision, not_computed: hud.not_computed }, now: clock() });
+  const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, candleKey).all()).results || []).map((r) => [r.step, rowToThreadMessage(r)]));
+  if (existing.get("moderator")?.status === "ok") return { status: "already_complete", calls: 0 };
+
+  const hudEnv = { ...env, MULTI_AGENT_FALLBACK_MODEL: env.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL };
+  const deadline = clock() + HUD_WALL_BUDGET_MS;
+  const maxPerHour = Number(env.HUD_AGENTS_MAX_CALLS_PER_HOUR ?? 30);
+  const runState = { primaryError: null };
+  let calls = 0;
+  const budgetOk = async () => {
+    if (clock() >= deadline) return false;
+    try { return (await callsInLastHour(db, clock(), "hud%")) < (Number.isFinite(maxPerHour) ? maxPerHour : 0); } catch { return false; }
+  };
+  const transcript = [];
+  for (const id of HUD_IDS) {
+    const reading = hud.readings[id];
+    if (!reading?.available) continue;
+    const step = `hud:${id}`;
+    let msg = existing.get(step);
+    if (msg?.status !== "ok") {
+      calls += 1;
+      msg = await runStep(hudEnv, db, { thread_id: threadId, run_id: candleKey, step, agent: id, parent_id: null }, {
+        messages: hudAgentMessages(id, HUD_NAMES[id], reading, h1), schemaName: "hud_agent", schema: HUD_AGENT_SCHEMA,
+        maxTokens: BUS_MAX_TOKENS.agent, effort: "low", deadline, clock, runState, budgetOk,
+        validate: (o) => validateHudAgent(o, id),
+        toBody: (o) => ({ body: { insight: clip(o.insight, INSIGHT_MAX), hud: HUD_NAMES[id], verified_lines: reading.lines.filter((l) => l.verified).length, total_lines: reading.lines.length }, refs: [] })
+      });
+    }
+    transcript.push({ ...msg, name: HUD_NAMES[id] });
   }
-  return { skipped: false, thread_id: threadId, candle_key: candleKey, agents: results, elapsed_ms: clock() - started };
+  const answered = transcript.filter((m) => m.status === "ok");
+  if (answered.length) {
+    calls += 1;
+    await runStep(hudEnv, db, { thread_id: threadId, run_id: candleKey, step: "moderator", agent: "moderator", parent_id: null }, {
+      messages: hudModeratorMessages(h1, answered), schemaName: "hud_moderator", schema: ROOM_MODERATOR_SCHEMA,
+      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", deadline, clock, runState, budgetOk,
+      validate: (o) => { const v = validateRoomModerator(o, h1.decision); if (o && !HUD_STANCES.includes(o.stance)) v.errors.push("stance_invalid"); return { valid: v.errors.length === 0, errors: v.errors }; },
+      toBody: (o) => ({ body: { summary: clip(o.summary, 400), h1_decision: h1.decision }, refs: [] })
+    });
+  }
+  return { status: "complete", calls, agents: transcript.length, answered: answered.length };
 }
 
-
-export const HUD_LIVE_ROOM_AGENTS = Object.freeze(["trade_management", "kinetic_engine", "fabio_amt", "aegis_footprint"]);
-
-export function hudLiveRoomEnabled(env) {
-  return hudAgentsEnabled(env) && liveRoomEnabled(env);
-}
-
-
-export async function callHudAgent(env, { agentId, reading, deadline, clock = () => Date.now() } = {}) {
-  if (!hudAgentsEnabled(env)) return { status: "skipped", reason: "flag_disabled" };
-  const { callBusModel } = await import("./multi-agent-bus.mjs");
-  const messages = [{ role: "user", content: `You are the ${agentId} HUD agent. Reading: ${JSON.stringify(reading || {})}. Reply JSON only.` }];
-  const result = await callBusModel(env, { messages, schemaName: "hud_agent", schema: { type: "object", properties: { insight: { type: "string" } }, required: ["insight"] }, maxTokens: 256, effort: "low", deadline: deadline || (clock() + 30000), clock });
-  return { agent: agentId, status: result.status || "unknown", obj: result.obj || null };
+/** HUD agent messages of one H1 candle for Threads 1H (display names only, never model names). */
+export async function readHudThread(db, candleKey) {
+  let rows = [];
+  try {
+    rows = (await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? ORDER BY id").bind(`hud1h:${candleKey}`).all()).results || [];
+  } catch { return []; }
+  return rows.map(rowToThreadMessage).filter(Boolean).map((m) => ({
+    id: m.id, step: m.step, agent: m.agent, name: m.agent === "moderator" ? "Moderator" : HUD_NAMES[m.agent] ?? m.agent,
+    status: m.status, stance: m.stance, confidence: m.confidence, insight: m.insight ?? null, summary: m.summary ?? null, ts: m.ts,
+    verified_lines: m.verified_lines ?? null, total_lines: m.total_lines ?? null
+  }));
 }

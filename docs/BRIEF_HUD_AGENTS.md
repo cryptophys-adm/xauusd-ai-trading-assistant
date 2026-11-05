@@ -167,9 +167,15 @@ Phase C order (one small PR each, reviewed by Claude, CI green):
    - The approved `prophet`/`gmi` identities and their hashed files are untouched.
 3. **C3: `src/hud-reading.mjs` (done by Claude).** Deterministic plain-language readings for the 13 HUDs, one line per row, each line carrying `verified`. Every enum token is decoded, and the tests validate every reading with the natural-language validator.
 4. **C4: `trade_plan`** in the Reasoner output (RFC §7), validated in `parseDecision`, null on WAIT.
-5. **C5: the 14 HUD agents in Threads 1H** behind `HUD_AGENTS_ENABLED`: off in production, on in preview, with a preview-e2e proof.
+5. **C5: HUD agents in Threads 1H (done by Claude)**, behind `HUD_AGENTS_ENABLED`: off in production, on in preview.
+   - After every H1 synthesis, a `hud_agents` queue task runs one agent per computed HUD (13 today), named after the HUD, then a moderator.
+   - Each agent sees only its own reading, with every statement marked "verified by parity" or "not yet calibrated", plus the authoritative H1 decision. Stances are BUY, SELL or WAIT. Agents never give levels or size.
+   - The agents run on the primary model only, and messages are idempotent per candle and HUD.
+   - The budget is capped by `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`.
+   - Missing snapshots and syntheses are retried, never invented.
+   - Production enablement still needs the preview-e2e proof on an H1 candle (a follow-up PR) and the owner's approval.
 6. **C6: the four HUD agents in the live 15m room** (raise `LIVE_ROOM_MAX_CALLS_PER_HOUR` to 48).
-7. **C7: Nexus**, showing HUD agents by HUD name and a verified or UNVERIFIED badge per HUD.
+7. **C7: Nexus (done by Claude).** The H1 thread lists the HUD agents by HUD name, with a badge "N of M verified by parity" per agent, and the moderator last. Model names are never shown.
 
 ## 5. Phase C: implementation (small PRs, each green)
 

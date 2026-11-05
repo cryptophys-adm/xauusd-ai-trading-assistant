@@ -5,6 +5,7 @@ import {
   runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, buildMessageTree, validateRoomModerator,
   buildNewsThreadTask, buildLiveRoomTask, liveRoomEnabled, resetThreadSchemaCacheForTests, ROOM_STANCES,
   isFifteenMinuteClose, buildFifteenMinuteCandles
+  , runHudAgents, readH1Thread as readH1ThreadForHud, hudEvidenceLines, validateHudAgent, buildHudAgentsTask
 } from "../src/agent-threads.mjs";
 import { BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL } from "../src/multi-agent-bus.mjs";
 
@@ -378,4 +379,92 @@ test("an approved H1 identity never verifies a 5m record", async () => {
   assert.equal((await verifiedM5Reading(e, BAR)).verified, true);
   assert.equal(await m5ParityApproved(e.DB), true);
   assert.equal((await verifiedM5Reading(e, "2026-11-04T15:10:00.000Z")).reason, "no_local_5m_record");
+});
+
+// ---------------------------------------------------------------- HUD agents (Phase C5)
+const HUD_KEY = "OANDA:XAUUSD:60:1793804400000";
+function hudReadingsFixture() {
+  const line = (text, verified) => ({ text, verified });
+  return {
+    candle_key: HUD_KEY, timeframe: "60", not_computed: ["grid_bot_protocol"], verified_against_approved_record: true,
+    readings: {
+      prophet: { agent_id: "prophet", name: "Prophet", available: true, lines: [line("Prophet's structure shows a bullish divergence.", true), line("On the cycle read, all three Prophet cycles point up.", false)] },
+      decision_matrix: { agent_id: "decision_matrix", name: "Decision Matrix", available: true, lines: [line("The action verdict is wait and observe.", true)] },
+      tactical_muscles: { agent_id: "tactical_muscles", name: "Tactical Muscles", available: false, lines: [] }
+    }
+  };
+}
+function hudAI() {
+  return fakeAI(({ sys, user }) => {
+    if (/moderator of the HUD agents/.test(sys)) return { stance: "WAIT", confidence: 0.5, summary: "Prophet and the Decision Matrix both support waiting." };
+    if (/one agent per Pine HUD/.test(sys)) {
+      const agent = (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1];
+      return { agent, stance: "WAIT", confidence: 0.5, insight: "My reading supports waiting, in line with the H1 decision." };
+    }
+    return undefined;
+  });
+}
+function hudEnv(overrides = {}) {
+  const e = env({ AI: hudAI(), HUD_AGENTS_ENABLED: "true", ...overrides });
+  e.DB.raw.prepare("INSERT INTO ai_syntheses (candle_key, ai_analysis) VALUES (?, ?)").run(HUD_KEY, JSON.stringify({ decision: { decision: "WAIT", confidence: 0.4 } }));
+  return e;
+}
+const loadReadings = async () => hudReadingsFixture();
+
+test("HUD agents: flag off means no calls", async () => {
+  const e = env({ AI: hudAI() });
+  assert.equal((await runHudAgents(e, { candle_key: HUD_KEY }, { loadReadings })).status, "disabled");
+  assert.equal(e.AI.calls.length, 0);
+});
+
+test("HUD agents: one post per computed HUD, then a moderator; each sees only its own reading with verification", async () => {
+  const e = hudEnv();
+  const result = await runHudAgents(e, { candle_key: HUD_KEY }, { loadReadings });
+  assert.equal(result.status, "complete");
+  assert.equal(result.answered, 2, "tactical_muscles has no reading and is skipped");
+  assert.equal(e.AI.calls.length, 3);
+  assert.ok(e.AI.calls.every(c => c.model === BUS_DEFAULT_MODEL), "primary model only");
+  const prophetPrompt = e.AI.calls[0].request.messages.map(m => m.content).join("\n");
+  assert.match(prophetPrompt, /You are Prophet/);
+  assert.match(prophetPrompt, /Verified by parity: Prophet's structure/);
+  assert.match(prophetPrompt, /Not yet calibrated: On the cycle read/);
+  assert.doesNotMatch(prophetPrompt, /action verdict/i, "an agent never sees another HUD's reading");
+  const thread = await readH1ThreadForHud(e.DB, HUD_KEY);
+  const hud = thread?.hud_agents ?? [];
+  assert.deepEqual(hud.map(m => m.name), ["Prophet", "Decision Matrix", "Moderator"]);
+  assert.ok(hud.every(m => m.status === "ok"));
+  assert.equal(hud[0].verified_lines, 1);
+  assert.equal(hud[0].total_lines, 2);
+});
+
+test("HUD agents: redelivery reuses stored messages and spends nothing", async () => {
+  const e = hudEnv();
+  await runHudAgents(e, { candle_key: HUD_KEY }, { loadReadings });
+  const before = e.AI.calls.length;
+  const again = await runHudAgents(e, { candle_key: HUD_KEY }, { loadReadings });
+  assert.equal(again.status, "already_complete");
+  assert.equal(e.AI.calls.length, before);
+});
+
+test("HUD agents: the hourly cap fails closed", async () => {
+  const e = hudEnv({ HUD_AGENTS_MAX_CALLS_PER_HOUR: "1" });
+  await runHudAgents(e, { candle_key: HUD_KEY }, { loadReadings });
+  const statuses = (await readH1ThreadForHud(e.DB, HUD_KEY))?.hud_agents?.map(m => m.status) ?? [];
+  assert.equal(e.AI.calls.length, 1);
+  assert.ok(statuses.includes("budget_exhausted"));
+});
+
+test("HUD agents: a missing snapshot or synthesis is retried, never invented", async () => {
+  const e = hudEnv();
+  await assert.rejects(() => runHudAgents(e, { candle_key: HUD_KEY }, { loadReadings: async () => null }), /HUD snapshot not visible yet/);
+  const noSynth = env({ AI: hudAI(), HUD_AGENTS_ENABLED: "true" });
+  await assert.rejects(() => runHudAgents(noSynth, { candle_key: HUD_KEY }, { loadReadings }), /H1 synthesis not visible yet/);
+});
+
+test("HUD agent validation and evidence lines", () => {
+  assert.deepEqual(hudEvidenceLines({ lines: [{ text: "A.", verified: true }, { text: "B.", verified: false }] }), ["Verified by parity: A.", "Not yet calibrated: B."]);
+  assert.equal(validateHudAgent({ agent: "prophet", stance: "WAIT", confidence: 0.5, insight: "Plain words." }, "prophet").valid, true);
+  assert.ok(validateHudAgent({ agent: "prophet", stance: "HOLD", confidence: 0.5, insight: "Plain words." }, "prophet").errors.includes("stance_invalid"));
+  assert.ok(validateHudAgent({ agent: "prophet", stance: "WAIT", confidence: 0.5, insight: "see d_enc" }, "prophet").errors.some(e => e.startsWith("not_natural_language")));
+  assert.equal(buildHudAgentsTask({ candleKey: HUD_KEY }).event_id, `hud_agents:${HUD_KEY}`);
 });
