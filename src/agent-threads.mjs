@@ -7,11 +7,12 @@
 //    and a risk agent post, then a moderator posts a one-line consensus.
 //
 // Both are shadow/advisory only. They never write into the H1 chain's
-// evidence, prompts or decision. Everything 5m is UNVERIFIED.
+// evidence, prompts or decision. 5m is UNVERIFIED unless parity-approved on 5m (C0).
 
 import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow } from "./webhook-interpretation.mjs";
+import { verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
 import {
   callBusModel, buildBusEvidence, validateAgentOutput, validateModeratorOutput,
   AGENT_JSON_SCHEMA, MODERATOR_JSON_SCHEMA, BUS_DEFAULT_MODEL, BUS_MAX_TOKENS, busEnabled
@@ -158,7 +159,7 @@ function inUnit(value) {
 const RULES = [
   "Advisory only: never produce entry, stop loss, take profit or position size, and never place or recommend executing an order. Stances are discussion positions, not orders.",
   "The H1 decision chain is authoritative. A local_computation engine counts as trusted only when its trust_status is approved_by_parity.",
-  "Anything 5m is UNVERIFIED 5m: no parity comparator exists for it.",
+  "5m data is UNVERIFIED 5m (informational only) unless it is labelled VERIFIED 5m, which means its Prophet and GMI implementations are parity-approved on the 5m chart.",
   "Back every claim with refs: JSON paths into the evidence object you were given.",
   NATURAL_LANGUAGE_RULE,
   "Return only one JSON object that matches the required schema."
@@ -404,7 +405,7 @@ export function validateRoomModerator(obj, h1Decision) {
 function roomAgentMessages(agent, evidence, technicalMsg) {
   const role = agent === "technical"
     ? "You are the technical agent in a live XAUUSD trading room that meets at every 15m candle close. " +
-      "First judge the closed 15m candles: that is the setup. Then use the 5m execution data from the local lane (the UNVERIFIED 5m Prophet read and the last 5m bars) for execution timing: is there an entry trigger now, or should an open position be held or closed? " +
+      "First judge the closed 15m candles: that is the setup. Then use the 5m execution data from the local lane (the 5m read, labelled VERIFIED 5m or UNVERIFIED 5m, and the last 5m bars) for execution timing: is there an entry trigger now, or should an open position be held or closed? " +
       "The H1 TradingView reading (Prophet R38, Prophet R37, GMI v12.70) is the higher-timeframe backdrop: say whether the 15m setup agrees with it. Call things by plain names such as \"the 15m candle\" or \"the H1 TradingView reading\", never by a field name."
     : "You are the risk agent in a live XAUUSD trading room that meets at every 15m candle close. Challenge the technical agent: where do the 15m setup or the 5m execution read conflict with the authoritative H1 decision or the news consensus? Prefer HOLD/WAIT when they do.";
   return chatMessages([
@@ -463,23 +464,37 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
   if (existing.has("moderator")) return { status: "already_complete", calls: 0 };
 
   const recentBars = Array.isArray(m5Raw.recent_bars) ? m5Raw.recent_bars.slice(-12) : [];
+  // C0 step 4: verified only while the 5m implementations are parity-approved.
+  let m5Verified = { verified: false };
+  try { m5Verified = await verifiedM5Reading(env, barTime); } catch { m5Verified = { verified: false }; }
+  const m5 = m5Verified.verified
+    ? {
+        label: M5_VERIFIED_LABEL,
+        role: "execution timing from the local lane",
+        trust_status: "approved_by_parity",
+        bar_time: barTime,
+        bias: m5Verified.bias,
+        reading: { summary: m5Verified.summary, lines: m5Verified.lines },
+        recent_bars: recentBars
+      }
+    : {
+        label: M5_UNVERIFIED_LABEL,
+        role: "execution timing from the local lane",
+        trust_status: "informational_unverified",
+        bar_time: barTime,
+        bias: m5Raw.bias ?? null,
+        buy_confirmed: m5Raw.buy_confirmed === true,
+        sell_confirmed: m5Raw.sell_confirmed === true,
+        d_enc: m5Raw.d_enc ?? null,
+        recent_bars: recentBars
+      };
   const evidence = {
     m15: {
       label: "closed 15m candles built from TradingView 5m bars",
       close_time: barTime,
       candles: buildFifteenMinuteCandles(recentBars)
     },
-    m5: {
-      label: "UNVERIFIED 5m",
-      role: "execution timing from the local lane",
-      trust_status: "informational_unverified",
-      bar_time: barTime,
-      bias: m5Raw.bias ?? null,
-      buy_confirmed: m5Raw.buy_confirmed === true,
-      sell_confirmed: m5Raw.sell_confirmed === true,
-      d_enc: m5Raw.d_enc ?? null,
-      recent_bars: recentBars
-    },
+    m5,
     h1,
     news
   };
