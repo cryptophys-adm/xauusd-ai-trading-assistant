@@ -657,6 +657,7 @@ export async function runHudAgentsThreads(env, { threadId, candleKey, readings =
   const started = clock();
   const results = [];
   for (const id of ids) {
+    // TODO: call model with src/hud-reading.mjs output; validate with src/natural-language.mjs; store message.
     results.push({ agent: id, status: "not_implemented", reading: readings[id] || null });
   }
   return { skipped: false, thread_id: threadId, candle_key: candleKey, agents: results, elapsed_ms: clock() - started };
