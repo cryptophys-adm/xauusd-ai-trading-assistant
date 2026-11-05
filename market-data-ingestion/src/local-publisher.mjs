@@ -5,6 +5,7 @@
 import { buildBundle } from "./tradingview-source.mjs";
 import { buildH1LocalCalculations } from "../../local-engines/producer/src/h1-producer.mjs";
 import { buildM5LocalCalculations } from "../../local-engines/producer/src/m5-local-producer.mjs";
+import { buildHudSnapshot } from "../../local-engines/producer/src/hud-snapshot.mjs";
 
 const PUBLISHED_PREFIX = "market-data:v2:local-published:";
 export const LAST_PUBLISH_KEY = "market-data:v2:local-last-publish";
@@ -118,5 +119,47 @@ export async function publishM5LocalComputation(env, { now = Date.now(), force =
   };
   if (ok) await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 });
   await kv.put(LAST_M5_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
+  return summary;
+}
+
+const HUD_CHARTS = Object.freeze({ H1: { maxDelayMs: 25 * 60 * 1000 }, M15: { maxDelayMs: 9 * 60 * 1000 } });
+export const LAST_HUD_PUBLISH_KEY = "market-data:v2:hud-last-publish";
+
+/**
+ * Phase C2: publishes the HUD snapshot of the latest closed H1 and M15 bar to the AI
+ * Worker (LocalComputationIngress.submitHud). HUD agents only; never decision evidence.
+ * Enabled only when HUD_SNAPSHOT_PUBLISH is "true". One snapshot per chart bar.
+ */
+export async function publishHudSnapshots(env, { now = Date.now(), bundle = null } = {}) {
+  if (String(env.HUD_SNAPSHOT_PUBLISH || "").toLowerCase() !== "true") return { status: "hud_publish_disabled" };
+  const kv = env.MARKET_DATA_CACHE;
+  if (!kv) return { status: "cache_not_configured" };
+  if (typeof env.AI_WORKER?.submitHud !== "function") return { status: "publisher_not_configured" };
+  const resolvedBundle = bundle || await buildBundle(env, now);
+  const results = {};
+  for (const [chart, { maxDelayMs }] of Object.entries(HUD_CHARTS)) {
+    const last = resolvedBundle.timeframes?.[chart]?.candles?.at(-1);
+    if (!last) { results[chart] = { status: "no_data" }; continue; }
+    if (now - Date.parse(last.close_time) > maxDelayMs) { results[chart] = { status: "no_fresh_close" }; continue; }
+    let snapshot;
+    try {
+      snapshot = buildHudSnapshot(resolvedBundle, { chart, now, mintick: Number(env.CHART_MINTICK) || 0.001 });
+    } catch (error) {
+      results[chart] = { status: asString(error?.code) || "hud_snapshot_failed" };
+      continue;
+    }
+    const markerKey = "market-data:v2:hud-published:" + snapshot.candle_key;
+    if (await kv.get(markerKey)) { results[chart] = { status: "already_published", candle_key: snapshot.candle_key }; continue; }
+    try {
+      const { status, body } = await env.AI_WORKER.submitHud(snapshot);
+      const ok = status < 300;
+      if (ok) await kv.put(markerKey, "1", { expirationTtl: 60 * 60 * 24 });
+      results[chart] = { status: ok ? "published" : "rejected", candle_key: snapshot.candle_key, http_status: status, error: ok ? null : asString(body?.error) || "ai_worker_rejected" };
+    } catch (error) {
+      results[chart] = { status: "post_failed", candle_key: snapshot.candle_key, error: asString(error?.name) || "post_failed" };
+    }
+  }
+  const summary = { status: "done", published_at: new Date(now).toISOString(), charts: results };
+  await kv.put(LAST_HUD_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
   return summary;
 }

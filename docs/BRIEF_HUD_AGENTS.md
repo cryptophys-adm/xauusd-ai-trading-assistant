@@ -158,11 +158,14 @@ Phase C order (one small PR each, reviewed by Claude, CI green):
    - `POST /webhook` accepts and stores these `*_hud` sources for timeframes 60 and 15.
    - They are **not** in `REQUIRED_SOURCES`, not in the evidence fusion and not in the H1 decision lane.
    - Ship install instructions for the owner.
-2. **C2: local HUD producers and HUD parity.**
-   - Add H1 and 15m producers (closed M15 bars aggregated from closed M5) that compute the same HUD fields.
-   - Add separate parity identities (`prophet_hud_h1`, `prophet_hud_m15`, `gmi_hud_h1`, `gmi_hud_m15`) compared against the stored `*_hud` webhooks.
-   - The approved `prophet` and `gmi` identities stay untouched.
-3. **C3: `src/hud-reading.mjs`**, the deterministic code-to-sentence readings, with tests covering every code path.
+2. **C2: local HUD snapshots (done by Claude, replaces pi's scaffolds).**
+   - `local-engines/producer/src/hud-snapshot.mjs` builds one snapshot per closed H1 and 15m bar from the same local engines: Prophet R38 core, the R37 core, and GMI via `gmi-core-tf.mjs`. Camarilla and CPR use the Mizan formulas.
+   - It covers 13 of the 14 HUDs. Grid Bot Protocol is declared `not_computed`, not invented.
+   - The pull adapter publishes the snapshots through the RPC `submitHud` (`HUD_SNAPSHOT_PUBLISH`). The AI Worker stores them under `hud:<tf>:<candle_key>` and `hud:<tf>:latest`, and serves them at `GET /api/hud/latest?tf=60|15` and `GET /api/hud/<candle_key>`.
+   - **Verification per field, local-primary.** A HUD field that is a TradingView alert field (d_enc, subtype, t_enc, confirmations, verdict, gate, directions, conflict) is marked verified only when it equals the parity-approved local record of the same candle. Every other field is an engine internal that is shown as not yet calibrated.
+   - Calibrating the internals needs a Pine candidate comparator in a later calibration run. pi's candidates only add `cshi_score` and `cycle_intensity`.
+   - The approved `prophet`/`gmi` identities and their hashed files are untouched.
+3. **C3: `src/hud-reading.mjs` (done by Claude).** Deterministic plain-language readings for the 13 HUDs, one line per row, each line carrying `verified`. Every enum token is decoded, and the tests validate every reading with the natural-language validator.
 4. **C4: `trade_plan`** in the Reasoner output (RFC §7), validated in `parseDecision`, null on WAIT.
 5. **C5: the 14 HUD agents in Threads 1H** behind `HUD_AGENTS_ENABLED`: off in production, on in preview, with a preview-e2e proof.
 6. **C6: the four HUD agents in the live 15m room** (raise `LIVE_ROOM_MAX_CALLS_PER_HOUR` to 48).

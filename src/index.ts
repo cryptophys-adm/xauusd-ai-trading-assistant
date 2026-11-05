@@ -137,6 +137,7 @@ function asText(value: unknown): string {
 }
 
 import { m5ParityApproved, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
+import { storeHudSnapshot, loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -1689,6 +1690,10 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
   async submitContext(record: unknown): Promise<{ status: number; body: JsonObject }> {
     return ingestM5Context(this.env, record);
   }
+  /** Phase C2: HUD snapshot of a closed H1 or 15m bar (HUD agents only, never decision evidence). */
+  async submitHud(snapshot: unknown): Promise<{ status: number; body: JsonObject }> {
+    return storeHudSnapshot(this.env, snapshot) as Promise<{ status: number; body: JsonObject }>;
+  }
 }
 
 const DASHBOARD_CORS = { "access-control-allow-origin": "*" };
@@ -1839,6 +1844,19 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     } catch (error) {
       console.error("bus_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error", error: "bus_unavailable" }, 500);
+    }
+  }
+  if (url.pathname === "/api/hud/latest" || url.pathname.startsWith("/api/hud/")) {
+    try {
+      const timeframe = url.searchParams.get("tf") === "15" ? "15" : "60";
+      const tail = decodeURIComponent(url.pathname.slice("/api/hud/".length));
+      const candleKey = tail === "latest" ? null : tail;
+      const snapshot = await loadHudSnapshot(env, { timeframe: candleKey ? candleKey.split(":")[2] || timeframe : timeframe, candleKey });
+      if (!snapshot) return dashboardJson({ status: "not_found" }, 404);
+      return dashboardJson({ status: "ok", hud: await hudReadings(env, snapshot) });
+    } catch (error) {
+      console.error("hud_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
     }
   }
   if (url.pathname === "/api/m5-context") {

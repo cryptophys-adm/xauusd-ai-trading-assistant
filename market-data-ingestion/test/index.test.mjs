@@ -181,7 +181,7 @@ test("GET /engine-shadow refuses to pretend Mizan/GMI local calculators exist", 
   assert.equal(body.calculation_allowed_for_trusted_evidence, false);
 });
 
-const { publishLocalComputation, publishM5LocalComputation, LAST_M5_PUBLISH_KEY } = await import("../src/local-publisher.mjs");
+const { publishLocalComputation, publishM5LocalComputation, publishHudSnapshots, LAST_M5_PUBLISH_KEY } = await import("../src/local-publisher.mjs");
 const { buildBundle } = await import("../src/tradingview-source.mjs");
 
 function fakeAiWorker(status = 202) {
@@ -289,4 +289,34 @@ test("scheduled cron publishes the 5m parity records end to end (no swallowed fa
   assert.deepEqual(m5.map((p) => p.engine), ["mizan", "prophet", "gmi"]);
   assert.ok(m5.every((p) => p.candle_key.startsWith("OANDA:XAUUSD:5:")));
   assert.equal(contexts.length, 1);
+});
+
+test("HUD publisher is off unless HUD_SNAPSHOT_PUBLISH is true, then sends one H1 and one M15 snapshot per closed bar", async () => {
+  const sent = [];
+  const ai = { async submitHud(body) { sent.push(body); return { status: 202, body: { status: "accepted" } }; } };
+  assert.equal((await publishHudSnapshots(env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai }))).status, "hud_publish_disabled");
+
+  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai, HUD_SNAPSHOT_PUBLISH: "true" });
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  const b = await buildBundle(e);
+  const lastH1 = b.timeframes.H1.candles.at(-1), lastM15 = b.timeframes.M15.candles.at(-1);
+  const nowH1 = Date.parse(lastH1.close_time) + 60_000;
+  const nowM15 = Date.parse(lastM15.close_time) + 60_000;
+
+  const h1 = await publishHudSnapshots(e, { now: nowH1, bundle: b });
+  assert.equal(h1.charts.H1.status, "published", JSON.stringify(h1));
+  const m15 = await publishHudSnapshots(e, { now: nowM15, bundle: b });
+  assert.equal(m15.charts.M15.status, "published", JSON.stringify(m15));
+  assert.deepEqual(sent.map(s => s.timeframe).sort(), ["15", "60"]);
+  assert.equal(sent.find(s => s.timeframe === "60").candle_key, `OANDA:XAUUSD:60:${lastH1.time * 1000}`);
+  assert.ok(sent.every(s => s.schema_version === "cryptophys.hud-snapshot.v1" && s.huds.prophet && !JSON.stringify(s).includes("secret")));
+
+  const again = await publishHudSnapshots(e, { now: nowM15, bundle: b });
+  assert.equal(again.charts.M15.status, "already_published");
+  assert.equal(sent.length, 2);
+  const now = nowM15;
+  const stale = await publishHudSnapshots(e, { now: now + 60 * 60_000, bundle: b });
+  assert.equal(stale.charts.H1.status, "no_fresh_close");
+  assert.equal(stale.charts.M15.status, "no_fresh_close");
 });

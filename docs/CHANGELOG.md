@@ -6,6 +6,12 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- feat(hud): Phase C2/C3. HUD snapshots per closed H1 and 15m bar from the local engines, covering 13 of the 14 HUDs (Grid Bot not computed).
+  - Transport is the RPC `submitHud`, and the snapshots are served at `/api/hud/*`.
+  - Each field is verified against the approved local record.
+  - Plain-language readings per HUD, with a verified flag per line.
+  - pi's empty HUD producer scaffolds are removed.
+- `78682a3` (PR #91) feat(chain): local-primary H1 chain, webhooks are calibration only.
 - feat(chain): local-primary architecture (owner decision). Parity-approved local records start and drive the H1 chain; TradingView webhooks are calibration only and never start the chain or count as decision evidence.
   - `INDICATOR_SOURCE` (`local`, or `webhook` for rollback) and `CALIBRATION_INTERVAL_DAYS` (30).
   - `/api/status` reports the calibration status per approved identity, and `local_lane.fresh` now means approved local records for a recent candle.
