@@ -24,7 +24,7 @@ export async function readDiagnostics(env, { now = Date.now() } = {}) {
   ]);
   const today = new Date(now).toISOString().slice(0, 10);
   const budgetUsed = Number.parseInt((await kv.get(SERIES_INTERNALS.BUDGET_KEY_PREFIX + today)) || "0", 10) || 0;
-  const budgetDaily = Number.parseInt(typeof env.TV_DAILY_CALL_BUDGET === "string" ? env.TV_DAILY_CALL_BUDGET : "", 10) || 800;
+  const budgetDaily = Number.parseInt(typeof env.TV_DAILY_CALL_BUDGET === "string" ? env.TV_DAILY_CALL_BUDGET : "", 10) || 1200;
   return {
     status: 200,
     body: {

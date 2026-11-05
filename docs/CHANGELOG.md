@@ -6,11 +6,6 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
-- fix(market-data): TradingView MCP daily budget 1200 → 800 (owner decision 2026-11-05).
-  - **Why.** TradingView suspended the account's MCP access until 00:00 UTC for suspicious volume, which also stopped the pull adapter. It warned that continued volume could mean a one-week suspension.
-  - **Demand cut.** Steady-state demand was about 1000 calls a day. `TVC:USOIL`, which no local engine reads, now refreshes every 4 hours (`refresh_seconds`) instead of every 5 minutes. That brings demand to about 720 a day, under the new cap.
-  - **Unchanged.** The XAUUSD series keep their cadence.
-
 - feat(shadow): GMI "Prophet risk hold" candidates `gmi_v12_70@latch8` and `gmi_v12_70@latch12`.
   - **How they work.** `src/gmi-regate.mjs` recomputes the two points of GMI v12.70 that the Prophet structure feeds: `mtf_state`, and the R10 gate with its risk hold. It starts from the approved local GMI record's diagnostics, so the hashed engine is not forked.
   - **Exactness.** With the active structure it reproduces GMI's comparable fields exactly (42 cases across two branches).

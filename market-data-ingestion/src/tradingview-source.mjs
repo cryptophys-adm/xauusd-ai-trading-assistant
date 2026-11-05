@@ -25,10 +25,7 @@ export const SERIES = Object.freeze([
   { key: "OANDA:XAUUSD|4h", symbol: CANONICAL_SYMBOL, interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "htf" },
   { key: "OANDA:XAUUSD|1D", symbol: CANONICAL_SYMBOL, interval: "1D", timeframe: "D1", seconds: 86400, retain: 500, role: "htf" },
   { key: "OANDA:XAUUSD|1W", symbol: CANONICAL_SYMBOL, interval: "1W", timeframe: "W1", seconds: 604800, retain: 260, role: "htf" },
-  // USOIL feeds no local engine (only the engine-input diagnostics), so it is refreshed every
-  // 4 hours instead of every 5 minutes: about 280 fewer MCP calls a day (budget 800, owner
-  // decision 2026-11-05, after a TradingView MCP suspension).
-  { key: "TVC:USOIL|5m", symbol: "TVC:USOIL", interval: "5m", timeframe: "M5", seconds: 300, retain: 1000, role: "external", refresh_seconds: 14400 },
+  { key: "TVC:USOIL|5m", symbol: "TVC:USOIL", interval: "5m", timeframe: "M5", seconds: 300, retain: 1000, role: "external" },
   { key: "TVC:DXY|4h", symbol: "TVC:DXY", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "external" },
   { key: "CRYPTOCAP:USDT|4h", symbol: "CRYPTOCAP:USDT", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "external" }
 ]);
@@ -76,9 +73,7 @@ export function mergeCandles(existing, incoming, retain) {
 export function planRequest(spec, cached, nowSec) {
   const last = cached?.candles?.at(-1);
   if (!last) return { symbol: spec.symbol, interval: spec.interval, count: Math.min(spec.retain, MAX_GATEWAY_COUNT), bootstrap: true };
-  // A new bar can have closed one interval after the cached bar's close. A series with a
-  // longer `refresh_seconds` waits until that much newer data can exist.
-  const nextCloseSec = last.time + spec.seconds + Math.max(spec.seconds, spec.refresh_seconds || 0);
+  const nextCloseSec = last.time + 2 * spec.seconds;
   if (nextCloseSec > nowSec) return null;
   const missing = Math.ceil((nowSec - last.time) / spec.seconds) + 2;
   if (missing >= spec.retain) return { symbol: spec.symbol, interval: spec.interval, count: Math.min(spec.retain, MAX_GATEWAY_COUNT), bootstrap: true };
@@ -101,7 +96,7 @@ async function writeSeries(kv, spec, record) {
 }
 
 async function reserveBudget(kv, env, wanted, now) {
-  const daily = Number.parseInt(asString(env.TV_DAILY_CALL_BUDGET) || "800", 10);
+  const daily = Number.parseInt(asString(env.TV_DAILY_CALL_BUDGET) || "1200", 10);
   const key = BUDGET_KEY_PREFIX + new Date(now).toISOString().slice(0, 10);
   const used = Number.parseInt((await kv.get(key)) || "0", 10) || 0;
   const allowed = Math.max(0, Math.min(wanted, daily - used));

@@ -63,16 +63,8 @@ RPC method `TvGateway.ohlcv(requests)` on `xauusd-fundamental-news-ingestion`, e
 
 - A cron runs every 5 minutes. A series is requested only when a new bar of its interval can have closed since the cached one. The first request bootstraps to the retention depth; later requests ask only for the gap plus overlap, merged by bar open time.
 - **Per-run cap:** `TV_MAX_CALLS_PER_RUN`, default 8, maximum 12. The chart series (M5) is requested first; deferred series follow on the next run.
-- **Daily cap:** `TV_DAILY_CALL_BUDGET` is **800** MCP calls per UTC day, counted in KV. It was 1200 until the owner's decision of 2026-11-05: that evening TradingView suspended the account's MCP access until 00:00 UTC for suspicious volume. It warned that continued volume could mean a one-week suspension, which would stop the local lane for a week.
-- **Refresh cadence:** a series may set `refresh_seconds` to wait for that much newer data. `TVC:USOIL` uses 4 hours, because no local engine reads it; only the engine-input diagnostics list it.
-- **Steady-state usage:** about 720 calls per day, below the cap:
-  - M5 and M1 every 5 minutes, 288 each;
-  - M15, 96;
-  - H1, 24;
-  - the 4-hour series (XAUUSD, DXY, USDT, USOIL), 6 each;
-  - D1, 1.
-  - `market-data-ingestion/test/index.test.mjs` fails if this demand passes 92% of the cap.
-- The account is shared with news ingestion's hourly calls. If TradingView suspends it, the shared cooldown stops both Workers.
+- **Daily cap:** `TV_DAILY_CALL_BUDGET`, default 1200 MCP calls per UTC day, counted in KV.
+- **Steady-state usage:** about 3 calls per 5 minutes (M5, M1, USOIL) plus higher timeframes as their bars close, roughly 900–1000 calls per day. This is shared with news ingestion's hourly calls. If TradingView suspends the account, the shared cooldown stops both Workers.
 
 ## Worker endpoints (`xauusd-tradingview-pull-adapter`)
 
@@ -136,16 +128,8 @@ RPC method `TvGateway.ohlcv(requests)` on `xauusd-fundamental-news-ingestion`, e
 
 - A cron runs every 5 minutes. A series is requested only when a new bar of its interval can have closed since the cached one. The first request bootstraps to the retention depth; later requests ask only for the gap plus overlap, merged by bar open time.
 - **Per-run cap:** `TV_MAX_CALLS_PER_RUN`, default 8, maximum 12. The chart series (M5) is requested first; deferred series follow on the next run.
-- **Daily cap:** `TV_DAILY_CALL_BUDGET` is **800** MCP calls per UTC day, counted in KV. It was 1200 until the owner's decision of 2026-11-05: that evening TradingView suspended the account's MCP access until 00:00 UTC for suspicious volume. It warned that continued volume could mean a one-week suspension, which would stop the local lane for a week.
-- **Refresh cadence:** a series may set `refresh_seconds` to wait for that much newer data. `TVC:USOIL` uses 4 hours, because no local engine reads it; only the engine-input diagnostics list it.
-- **Steady-state usage:** about 720 calls per day, below the cap:
-  - M5 and M1 every 5 minutes, 288 each;
-  - M15, 96;
-  - H1, 24;
-  - the 4-hour series (XAUUSD, DXY, USDT, USOIL), 6 each;
-  - D1, 1.
-  - `market-data-ingestion/test/index.test.mjs` fails if this demand passes 92% of the cap.
-- The account is shared with news ingestion's hourly calls. If TradingView suspends it, the shared cooldown stops both Workers.
+- **Daily cap:** `TV_DAILY_CALL_BUDGET`, default 1200 MCP calls per UTC day, counted in KV.
+- **Steady-state usage:** about 3 calls per 5 minutes (M5, M1, USOIL) plus higher timeframes as their bars close, roughly 900–1000 calls per day. This is shared with news ingestion's hourly calls. If TradingView suspends the account, the shared cooldown stops both Workers.
 
 ## Worker endpoints (`xauusd-tradingview-pull-adapter`)
 
