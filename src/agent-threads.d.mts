@@ -23,3 +23,11 @@ export function readThread(db: unknown, id: string): Promise<Record<string, any>
 export function readLive(db: unknown, options?: { since?: number; limit?: number }): Promise<Array<Record<string, any>>>;
 export function listH1Threads(db: unknown, options?: { limit?: number }): Promise<Array<Record<string, any>>>;
 export function readH1Thread(db: unknown, candleKey: string): Promise<Record<string, any> | null>;
+export const HUD_WALL_BUDGET_MS: number;
+export const HUD_STANCES: readonly string[];
+export interface HudAgentsTask { kind: "hud_agents"; event_id: string; candle_key: string; enqueued_at: string }
+export function buildHudAgentsTask(input: { candleKey: string; enqueuedAt?: string }): HudAgentsTask;
+export function validateHudAgent(obj: unknown, agentId: string): { valid: boolean; errors: string[] };
+export function hudEvidenceLines(reading: unknown): string[];
+export function runHudAgents(env: unknown, task: { candle_key: string }, options?: { clock?: () => number; loadReadings?: (env: any, candleKey: string) => Promise<any> }): Promise<{ status: string; calls: number; agents?: number; answered?: number }>;
+export function readHudThread(db: unknown, candleKey: string): Promise<Array<Record<string, any>>>;

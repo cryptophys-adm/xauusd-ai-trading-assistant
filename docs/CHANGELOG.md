@@ -6,6 +6,11 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- feat(hud): Phase C5/C7. HUD agents in Threads 1H, behind `HUD_AGENTS_ENABLED` (off in production, on in preview).
+  - One agent per computed HUD posts after each H1 synthesis, then a moderator. Agents run on the primary model only, within 30 calls per hour, and each sees only its own verified or not-yet-calibrated reading.
+  - Nexus shows them by HUD name with a parity badge.
+  - pi's scaffolds are replaced.
+- `8caa888` (PR #92) feat(hud): Phase C2/C3 HUD snapshots and readings.
 - feat(hud): Phase C2/C3. HUD snapshots per closed H1 and 15m bar from the local engines, covering 13 of the 14 HUDs (Grid Bot not computed).
   - Transport is the RPC `submitHud`, and the snapshots are served at `/api/hud/*`.
   - Each field is verified against the approved local record.

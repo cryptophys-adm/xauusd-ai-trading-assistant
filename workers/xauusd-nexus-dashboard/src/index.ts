@@ -1,5 +1,3 @@
-// Phase C7 scaffold: HUD agent display names (verified/UNVERIFIED badge per HUD).
-const HUD_AGENT_NAMES = ["R37 Funnel","Prophet","Trade Management","The Interstellar Eyes","Kinetic Engine (TVA)","Fabio AMT Sensors","Chronos Matrix","Aegis Footprint Matrix","Tactical Muscles","Macro & Aether Sensors","GABFX Price Action","Playbook Execution","Decision Matrix","Grid Bot Protocol"];
 /**
  * xauusd-nexus-dashboard
  * Standalone dashboard Worker — Moltbook-inspired agent social feed.
@@ -527,6 +525,27 @@ function renderPost(kind, t){
     +(rec.summary ? '<div style="margin-top:6px;color:var(--muted)">'+esc(rec.summary)+'</div>' : '')
     +'</div>';
 }
+// Phase C7: HUD agents (one per Pine HUD, shown by HUD name) under the H1 thread, with
+// how many of each agent's statements are verified by parity.
+function renderHudAgents(list){
+  if (!Array.isArray(list) || !list.length) return '';
+  let html = '<div class="t-title" style="font-weight:700;margin:14px 0 6px">HUD agents</div>';
+  list.forEach(m => {
+    const isMod = m.agent === 'moderator';
+    html += '<div class="tmsg'+(isMod?' mod':'')+'">';
+    if (m.status !== 'ok') {
+      html += '<div class="m-head"><span class="m-agent">'+esc(m.name)+'</span><span>'+esc(timeAgo(m.ts))+'</span></div>'
+        +'<div class="m-body" style="color:var(--muted)">'+esc(m.name)+' could not reply this round.</div></div>';
+      return;
+    }
+    const total = Number(m.total_lines)||0, ok = Number(m.verified_lines)||0;
+    const badge = isMod || !total ? '' : '<span class="'+(ok ? 'badge-ok' : 'badge-warn')+'">'+ok+' of '+total+' verified by parity</span>';
+    html += '<div class="m-head"><span class="m-agent">'+esc(m.name)+'</span><span>'+esc(timeAgo(m.ts))+'</span>'+chip(m.stance)
+      +(m.confidence!=null ? '<span>confidence '+Math.round(m.confidence*100)+'%</span>' : '')+badge+'</div>'
+      +'<div class="m-body">'+esc(m.insight || m.summary || '')+'</div></div>';
+  });
+  return html;
+}
 async function openThread(kind, id){
   const box = THREAD_BOXES[kind];
   threadSelected[kind] = id;
@@ -539,7 +558,8 @@ async function openThread(kind, id){
     const t = d.thread;
     $(box.view).innerHTML = '<button data-thread-back="'+kind+'">&larr; All threads</button>'
       + renderPost(kind, t)
-      + (t.messages||[]).map(m => renderThreadMsg(m, 0)).join('');
+      + (t.messages||[]).map(m => renderThreadMsg(m, 0)).join('')
+      + (kind === 'h1' ? renderHudAgents(t.hud_agents) : '');
   } catch(e){ $(box.view).innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
 }
 document.addEventListener('click', ev => {
