@@ -14,8 +14,14 @@
 // the same candle would have been a hit (a clean move to the threshold without first touching
 // the other side). v1 counted any touch of the threshold, which a 4-candle horizon at
 // 0.5 x ATR almost always gives, so nearly every WAIT read as missed (chain 1/35, room 0/56).
-export const SCORING_VERSION = "cryptophys.outcome-scoring.v2";
-export const SCORING = Object.freeze({ horizon: 4, atrPeriod: 14, thresholdAtr: 0.5, stuckCandles: 8, stuckRangeAtr: 3 });
+//
+// v3 (owner approval 2026-11-05): v2 still read WAIT as missed on H1 (chain 1/35). Over 4 H1
+// candles some side almost always reaches 0.5 x ATR first, so a 1:1 trade "wins" nearly
+// always. A WAIT now misses an opportunity only when a 2:1 trade would have won: price
+// reaches 1 x ATR (waitTargetAtr) on one side before touching 0.5 x ATR (thresholdAtr) on
+// the other. BUY and SELL scoring is unchanged (1:1 at 0.5 x ATR).
+export const SCORING_VERSION = "cryptophys.outcome-scoring.v3";
+export const SCORING = Object.freeze({ horizon: 4, atrPeriod: 14, thresholdAtr: 0.5, waitTargetAtr: 1, stuckCandles: 8, stuckRangeAtr: 3 });
 
 const SYMBOL = "OANDA:XAUUSD";
 const SERIES_KEY_PREFIX = "market-data:v2:series:";
@@ -121,7 +127,7 @@ export function sessionOf(closeMs) {
  * Returns { result: "pending" } until the horizon has closed, "no_data" when the bar or
  * its ATR history is missing, "not_scored" for stances outside the definition.
  */
-export function scoreStance({ stance, confidence = null, bars, closeMs, horizon = SCORING.horizon, period = SCORING.atrPeriod, k = SCORING.thresholdAtr }) {
+export function scoreStance({ stance, confidence = null, bars, closeMs, horizon = SCORING.horizon, period = SCORING.atrPeriod, k = SCORING.thresholdAtr, waitTarget = SCORING.waitTargetAtr }) {
   const s = normalizeStance(stance);
   if (!s) return { result: "not_scored" };
   const i = bars.findIndex((b) => Date.parse(b.close_time) === closeMs);
@@ -143,10 +149,22 @@ export function scoreStance({ stance, confidence = null, bars, closeMs, horizon 
   const directional = (side) => (!first ? "neutral" : first.up && first.down ? "miss" : (side === "BUY" ? first.up : first.down) ? "hit" : "miss");
   let result, direction = null;
   if (s === "WAIT") {
-    // A WAIT missed an opportunity only when a BUY or a SELL would have been a hit.
-    const buy = directional("BUY"), sell = directional("SELL");
-    result = buy === "hit" || sell === "hit" ? "missed_opportunity" : "hit";
-    if (result === "missed_opportunity") direction = buy === "hit" ? 1 : -1;
+    // A WAIT missed an opportunity only when a 2:1 trade would have won: the target
+    // (waitTarget x ATR) on one side before the stop (k x ATR) on the other, bar by bar;
+    // a bar touching both counts as the stop (conservative).
+    const target = waitTarget * atr;
+    const wins = (side) => {
+      for (let j = i + 1; j <= i + horizon; j++) {
+        const fav = side === "BUY" ? bars[j].high - entry : entry - bars[j].low;
+        const adv = side === "BUY" ? entry - bars[j].low : bars[j].high - entry;
+        if (adv >= threshold) return false;
+        if (fav >= target) return true;
+      }
+      return false;
+    };
+    const buy = wins("BUY"), sell = wins("SELL");
+    result = buy || sell ? "missed_opportunity" : "hit";
+    if (result === "missed_opportunity") direction = buy ? 1 : -1;
   } else {
     result = directional(s);
   }

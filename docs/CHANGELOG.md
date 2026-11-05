@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- fix(scoring): scoring v3 (owner approval 2026-11-05). WAIT is missed only when a 2:1 trade would have won: `1 × ATR` on one side before `0.5 × ATR` on the other. In production, v2 still marked H1 WAIT right on only 1 of 35 candles, because over 4 H1 candles some side almost always reaches `0.5 × ATR` first. BUY and SELL scoring is unchanged. Rows are rescored within the lookback.
 - feat(15m,war-room): owner decisions A and B.
   - **A: calibration status once.**
     - Each agent's evidence status is stored once in the War Room brief and shown once on Nexus. Agents never repeat calibration disclaimers; 12 of 17 openings at 16:00 had led with "not yet calibrated".

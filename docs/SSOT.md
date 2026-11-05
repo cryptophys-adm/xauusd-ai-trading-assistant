@@ -197,7 +197,9 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - **How:**
   - The entry is the statement candle's close, and the threshold is `0.5 × ATR(14)`, a simple average of the true range. The horizon is the next 4 closed candles.
   - BUY or SELL is a hit when the favourable excursion reaches the threshold first, a miss when the adverse excursion does (both in the same bar counts as a miss), and neutral otherwise.
-  - WAIT (and NO_TRADE) is a `missed_opportunity` only when a BUY or a SELL on the same candle would have been a hit: a clean move to the threshold without first touching the other side. The record keeps that move's direction. Otherwise, including a whipsaw, WAIT is a hit. This is scoring v2, owner approval 2026-11-05. v1 counted any touch, and nearly every WAIT read as missed.
+  - WAIT (and NO_TRADE) is a `missed_opportunity` only when a 2:1 trade would have won: price reaches `1 × ATR` (`waitTargetAtr`) on one side before touching `0.5 × ATR` on the other, bar by bar. A bar touching both counts as the stop. The record keeps the winning direction. Otherwise WAIT is a hit, including in a whipsaw or a 1:1 move. This is scoring v3, owner approval 2026-11-05.
+    - v1 counted any touch, and nearly every WAIT read as missed.
+    - v2 counted any 1:1 win, and still marked H1 WAIT right on only 1 of 35 candles, because over 4 H1 candles some side almost always reaches `0.5 × ATR` first.
   - HOLD and CLOSE are not scored.
   - A Brier score is computed when the statement has a confidence.
 - **Stuck states:** once an hour, over the approved H1 records of the last 24 candles. A Prophet or GMI state field (subtype, `b_enc`, `d_enc`, `t_enc`, gate, verdict, conflict) is stuck when it is unchanged for ≥ 8 candles while the high-low range of those candles exceeds `3 × ATR(14)`. Episodes open, extend and clear in `stuck_states`.

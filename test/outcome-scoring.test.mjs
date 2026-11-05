@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import {
-  SCORING, atrAt, scoreStance, normalizeStance, sessionOf, detectStuckStates, indicatorStances,
+  SCORING, SCORING_VERSION, atrAt, scoreStance, normalizeStance, sessionOf, detectStuckStates, indicatorStances,
   scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, resetOutcomeSchemaCacheForTests
 } from "../src/outcome-scoring.mjs";
 
@@ -19,7 +19,8 @@ const base = Array.from({ length: 15 }, () => [100, 105, 95, 100]);
 const closeOf = (bars, i) => Date.parse(bars[i].close_time);
 
 test("the scoring definition is the one the owner approved", () => {
-  assert.deepEqual({ ...SCORING }, { horizon: 4, atrPeriod: 14, thresholdAtr: 0.5, stuckCandles: 8, stuckRangeAtr: 3 });
+  assert.deepEqual({ ...SCORING }, { horizon: 4, atrPeriod: 14, thresholdAtr: 0.5, waitTargetAtr: 1, stuckCandles: 8, stuckRangeAtr: 3 });
+  assert.equal(SCORING_VERSION, "cryptophys.outcome-scoring.v3");
 });
 
 test("ATR is the simple average true range of the last 14 bars", () => {
@@ -44,21 +45,29 @@ test("WAIT: hit when nothing moves, missed_opportunity with the direction of the
   const i = 14;
   const flat = barsFrom([...base, [100, 102, 98, 100], [100, 102, 98, 100], [100, 102, 98, 100], [100, 102, 98, 100]]);
   assert.equal(scoreStance({ stance: "WAIT", bars: flat, closeMs: closeOf(flat, i) }).result, "hit");
-  const down = barsFrom([...base, [100, 101, 97, 98], [98, 99, 93, 94], [94, 110, 93, 108], [108, 109, 107, 108]]);
+  // A clean fall to 1 x ATR (10) before any 0.5 x ATR (5) rise: a 2:1 SELL would have won.
+  const down = barsFrom([...base, [100, 101, 96, 97], [97, 98, 89, 90], [90, 91, 89, 90], [90, 91, 89, 90]]);
   const s = scoreStance({ stance: "WAIT", bars: down, closeMs: closeOf(down, i) });
   assert.deepEqual([s.result, s.direction], ["missed_opportunity", -1]);
-  assert.equal(s.max_up, 10, "the full horizon is measured for reporting");
+  assert.equal(s.max_down, 11, "the full horizon is measured for reporting");
 });
 
-test("v2: a WAIT through a whipsaw is a hit; only a clean move a BUY or SELL would have caught is missed", () => {
+test("v3: a WAIT misses only a 2:1 move; a whipsaw or a 1:1 move is a hit", () => {
   const i = 14;
   // The first bar that reaches the threshold touches both sides: neither BUY nor SELL is a hit.
   const whipsaw = barsFrom([...base, [100, 106, 94, 100], [100, 108, 99, 107], [107, 109, 106, 108], [108, 110, 107, 109]]);
   assert.equal(scoreStance({ stance: "WAIT", bars: whipsaw, closeMs: closeOf(whipsaw, i) }).result, "hit");
-  // A clean rise: a BUY would have hit, so the WAIT missed it.
-  const clean = barsFrom([...base, [100, 103, 99, 102], [102, 106, 101, 105], [105, 106, 104, 105], [105, 106, 104, 105]]);
+  // A 1:1 rise (+6, a BUY hit) that never reaches 1 x ATR: not worth taking, WAIT was right.
+  const oneToOne = barsFrom([...base, [100, 103, 99, 102], [102, 106, 101, 105], [105, 106, 104, 105], [105, 106, 104, 105]]);
+  assert.equal(scoreStance({ stance: "BUY", bars: oneToOne, closeMs: closeOf(oneToOne, i) }).result, "hit", "BUY scoring is unchanged (1:1)");
+  assert.equal(scoreStance({ stance: "WAIT", bars: oneToOne, closeMs: closeOf(oneToOne, i) }).result, "hit");
+  // A 2:1 rise: +11 before any -5, so the WAIT missed it.
+  const clean = barsFrom([...base, [100, 103, 99, 102], [102, 106, 101, 105], [105, 111, 104, 110], [110, 111, 109, 110]]);
   const s = scoreStance({ stance: "WAIT", bars: clean, closeMs: closeOf(clean, i) });
   assert.deepEqual([s.result, s.direction], ["missed_opportunity", 1]);
+  // The stop first: -5 before +10, then the rise: no 2:1 BUY, and no 2:1 SELL either.
+  const stopFirst = barsFrom([...base, [100, 101, 94, 96], [96, 112, 95, 111], [111, 112, 110, 111], [111, 112, 110, 111]]);
+  assert.equal(scoreStance({ stance: "WAIT", bars: stopFirst, closeMs: closeOf(stopFirst, i) }).result, "hit");
 });
 
 test("confidence gives a Brier score; HOLD and CLOSE are not scored; missing bars are no_data", () => {
@@ -151,7 +160,7 @@ test("scoreRecentStatements scores chain, bus, HUD, indicator and room stances o
   const rescored = await scoreRecentStatements(env, { now: Math.max(now, m15Now) });
   assert.ok(rescored.scores > 0);
   assert.equal(db.prepare("SELECT result FROM outcome_scores WHERE subject = 'chain:h1'").get().result, "missed_opportunity");
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM outcome_scores WHERE scoring_version <> 'cryptophys.outcome-scoring.v2'").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM outcome_scores WHERE scoring_version <> '" + SCORING_VERSION + "'").get().n, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM outcome_scores").get().n, 7);
 
   const cards = await scorecards(env.DB, { days: 30, now: Math.max(now, m15Now) });
