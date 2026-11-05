@@ -6,6 +6,10 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- fix(scoring): scoring v2 (owner approval 2026-11-05).
+  - WAIT is a missed opportunity only when a BUY or a SELL on the same candle would have been a hit. A whipsaw counts as a hit for WAIT.
+  - Under v1, a 0.5 × ATR touch within 4 candles marked nearly every WAIT as missed: the chain was right on 1 of 35 candles and the room on 0 of 56.
+  - Older rows are rescored within the lookback, and scorecards read only v2. Migration `0006_outcome_runs_version.sql`.
 - feat(war-room): Live War Room 15m (owner decision).
   - **Room.** At every 15m close, all agents open on a communication bus with one role each: H1 Desk, News, Technical, Risk and 13 HUD agents. The minority and the Risk Manager then debate for at most 3 minutes, and the moderator concludes for the Nexus main panel. The H1 decision stays the constraint.
   - **Rollout.** Behind `WAR_ROOM_ENABLED` (on), with `WAR_ROOM_MAX_CALLS_PER_HOUR = 112`. It replaces the legacy live room and the per-H1 HUD agents.

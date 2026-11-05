@@ -10,7 +10,11 @@
 // is the AI Worker's SIGNAL_CACHE namespace (same id in both wrangler files), keys
 // market-data:v2:series:<symbol>|<interval>.
 
-export const SCORING_VERSION = "cryptophys.outcome-scoring.v1";
+// v2 (owner approval 2026-11-05): WAIT is a missed opportunity only when a BUY or a SELL on
+// the same candle would have been a hit (a clean move to the threshold without first touching
+// the other side). v1 counted any touch of the threshold, which a 4-candle horizon at
+// 0.5 x ATR almost always gives, so nearly every WAIT read as missed (chain 1/35, room 0/56).
+export const SCORING_VERSION = "cryptophys.outcome-scoring.v2";
 export const SCORING = Object.freeze({ horizon: 4, atrPeriod: 14, thresholdAtr: 0.5, stuckCandles: 8, stuckRangeAtr: 3 });
 
 const SYMBOL = "OANDA:XAUUSD";
@@ -72,6 +76,8 @@ let schemaReady = false;
 export async function ensureOutcomeSchema(db) {
   if (schemaReady) return;
   for (const sql of OUTCOME_SCHEMA_SQL) await db.prepare(sql).run();
+  // Migration 0006 adds the column on D1; this keeps runtime-created schemas in step.
+  try { await db.prepare("ALTER TABLE outcome_runs ADD COLUMN scoring_version TEXT").run(); } catch { /* already there */ }
   schemaReady = true;
 }
 export function resetOutcomeSchemaCacheForTests() { schemaReady = false; }
@@ -125,19 +131,25 @@ export function scoreStance({ stance, confidence = null, bars, closeMs, horizon 
   if (bars.length - 1 - i < horizon) return { result: "pending" };
   const entry = bars[i].close;
   const threshold = k * atr;
-  let maxUp = 0, maxDown = 0, result = null, direction = null;
+  let maxUp = 0, maxDown = 0;
+  // The first bar whose excursion reaches the threshold decides a directional stance.
+  let first = null;
   for (let j = i + 1; j <= i + horizon; j++) {
     const up = bars[j].high - entry, down = entry - bars[j].low;
     maxUp = Math.max(maxUp, up);
     maxDown = Math.max(maxDown, down);
-    if (result) continue;
-    const upHit = up >= threshold, downHit = down >= threshold;
-    if (!upHit && !downHit) continue;
-    if (s === "WAIT") { result = "missed_opportunity"; direction = upHit && downHit ? 0 : upHit ? 1 : -1; continue; }
-    const fav = s === "BUY" ? upHit : downHit, adv = s === "BUY" ? downHit : upHit;
-    result = adv ? "miss" : fav ? "hit" : null;
+    if (!first && (up >= threshold || down >= threshold)) first = { up: up >= threshold, down: down >= threshold };
   }
-  if (!result) result = s === "WAIT" ? "hit" : "neutral";
+  const directional = (side) => (!first ? "neutral" : first.up && first.down ? "miss" : (side === "BUY" ? first.up : first.down) ? "hit" : "miss");
+  let result, direction = null;
+  if (s === "WAIT") {
+    // A WAIT missed an opportunity only when a BUY or a SELL would have been a hit.
+    const buy = directional("BUY"), sell = directional("SELL");
+    result = buy === "hit" || sell === "hit" ? "missed_opportunity" : "hit";
+    if (result === "missed_opportunity") direction = buy === "hit" ? 1 : -1;
+  } else {
+    result = directional(s);
+  }
   const p = finite(confidence) && confidence >= 0 && confidence <= 1 ? confidence : null;
   const y = result === "hit" ? 1 : 0;
   return {
@@ -229,8 +241,11 @@ async function loadBars(env, timeframe) {
 }
 
 async function insertScore(db, row) {
+  // A row scored by an older scoring version is replaced; a current row is final.
   await db.prepare(
-    "INSERT OR IGNORE INTO outcome_scores (subject, source, timeframe, candle_key, statement_close, stance, confidence, result, direction, entry, atr, threshold, max_up, max_down, brier, session, scoring_version, scored_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO outcome_scores (subject, source, timeframe, candle_key, statement_close, stance, confidence, result, direction, entry, atr, threshold, max_up, max_down, brier, session, scoring_version, scored_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+    "ON CONFLICT(subject, timeframe, candle_key) DO UPDATE SET stance = excluded.stance, confidence = excluded.confidence, result = excluded.result, direction = excluded.direction, entry = excluded.entry, atr = excluded.atr, threshold = excluded.threshold, max_up = excluded.max_up, max_down = excluded.max_down, brier = excluded.brier, session = excluded.session, scoring_version = excluded.scoring_version, scored_at = excluded.scored_at " +
+    "WHERE outcome_scores.scoring_version <> excluded.scoring_version"
   ).bind(row.subject, row.source, row.timeframe, row.candle_key, row.statement_close, row.stance, row.confidence, row.result, row.direction, row.entry, row.atr, row.threshold, row.max_up, row.max_down, row.brier, row.session, SCORING_VERSION, row.scored_at).run();
 }
 
@@ -250,7 +265,7 @@ export async function scoreRecentStatements(env, { now = Date.now() } = {}) {
     const ready = bars.slice(SCORING.atrPeriod, bars.length - SCORING.horizon).slice(-spec.lookback);
     if (!ready.length) continue;
     const keyOf = (bar) => `${SYMBOL}:${timeframe}:${Date.parse(bar.open_time)}`;
-    const done = new Set(((await env.DB.prepare("SELECT candle_key FROM outcome_runs WHERE timeframe = ? AND scored_at >= ?").bind(timeframe, new Date(now - 3 * 86_400_000).toISOString()).all()).results || []).map((r) => r.candle_key));
+    const done = new Set(((await env.DB.prepare("SELECT candle_key FROM outcome_runs WHERE timeframe = ? AND scored_at >= ? AND scoring_version = ?").bind(timeframe, new Date(now - 3 * 86_400_000).toISOString(), SCORING_VERSION).all()).results || []).map((r) => r.candle_key));
     const rooms = timeframe === "15" ? await roomStatements(env, ready[0].close_time) : null;
     for (const bar of ready) {
       const candleKey = keyOf(bar);
@@ -264,7 +279,7 @@ export async function scoreRecentStatements(env, { now = Date.now() } = {}) {
         await insertScore(env.DB, { ...score, subject: st.subject, source: st.source, timeframe, candle_key: candleKey, statement_close: bar.close_time, confidence: finite(st.confidence) ? st.confidence : null, scored_at: scoredAt });
         written += 1;
       }
-      await env.DB.prepare("INSERT OR IGNORE INTO outcome_runs (timeframe, candle_key, statements, scored_at) VALUES (?, ?, ?, ?)").bind(timeframe, candleKey, written, scoredAt).run();
+      await env.DB.prepare("INSERT INTO outcome_runs (timeframe, candle_key, statements, scored_at, scoring_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT(timeframe, candle_key) DO UPDATE SET statements = excluded.statements, scored_at = excluded.scored_at, scoring_version = excluded.scoring_version").bind(timeframe, candleKey, written, scoredAt, SCORING_VERSION).run();
       summary.candles += 1;
       summary.scores += written;
     }
@@ -324,7 +339,7 @@ export async function detectRecentStuckStates(env, { now = Date.now(), lookback 
 export async function scorecards(db, { days = 30, now = Date.now() } = {}) {
   await ensureOutcomeSchema(db);
   const since = new Date(now - days * 86_400_000).toISOString();
-  const rows = (await db.prepare("SELECT subject, source, timeframe, stance, result, brier, session FROM outcome_scores WHERE statement_close >= ?").bind(since).all()).results || [];
+  const rows = (await db.prepare("SELECT subject, source, timeframe, stance, result, brier, session FROM outcome_scores WHERE statement_close >= ? AND scoring_version = ?").bind(since, SCORING_VERSION).all()).results || [];
   const cards = new Map();
   for (const r of rows) {
     const id = r.subject + "|" + r.timeframe;
