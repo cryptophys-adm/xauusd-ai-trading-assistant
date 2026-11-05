@@ -669,3 +669,12 @@ export const HUD_LIVE_ROOM_AGENTS = Object.freeze(["trade_management", "kinetic_
 export function hudLiveRoomEnabled(env) {
   return hudAgentsEnabled(env) && liveRoomEnabled(env);
 }
+
+
+export async function callHudAgent(env, { agentId, reading, deadline, clock = () => Date.now() } = {}) {
+  if (!hudAgentsEnabled(env)) return { status: "skipped", reason: "flag_disabled" };
+  const { callBusModel } = await import("./multi-agent-bus.mjs");
+  const messages = [{ role: "user", content: `You are the ${agentId} HUD agent. Reading: ${JSON.stringify(reading || {})}. Reply JSON only.` }];
+  const result = await callBusModel(env, { messages, schemaName: "hud_agent", schema: { type: "object", properties: { insight: { type: "string" } }, required: ["insight"] }, maxTokens: 256, effort: "low", deadline: deadline || (clock() + 30000), clock });
+  return { agent: agentId, status: result.status || "unknown", obj: result.obj || null };
+}
