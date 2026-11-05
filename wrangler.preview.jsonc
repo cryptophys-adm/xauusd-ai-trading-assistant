@@ -43,14 +43,18 @@
     "PARITY_PROMOTE_AFTER": "1",
     // The isolated preview runs the multi-agent bus so preview-e2e can prove real model output.
     "MULTI_AGENT_BUS_ENABLED": "true",
-    "MULTI_AGENT_MAX_CALLS_PER_HOUR": "40",
+    // The preview D1 is shared by every preview-e2e run (all PRs), and the hourly caps count
+    // rows in it, so they measure all runs of the hour together. One run uses about 10 bus and
+    // news calls, 10 live-room calls and 3 HUD calls: the caps allow ~15 runs an hour and still
+    // fail closed on a runaway. Production keeps its own, lower caps in wrangler.jsonc.
+    "MULTI_AGENT_MAX_CALLS_PER_HOUR": "150",
     "MULTI_AGENT_MODEL": "@cf/zai-org/glm-5.3-flash",
     "MULTI_AGENT_FALLBACK_MODEL": "@cf/zai-org/glm-4.7-flash",
     "LIVE_ROOM_ENABLED": "true",
     "HUD_AGENTS_ENABLED": "true",
     // Phase C5: own hourly cap for the HUD agents (13 agents + moderator per H1 run).
-    "HUD_AGENTS_MAX_CALLS_PER_HOUR": "30",
-    "LIVE_ROOM_MAX_CALLS_PER_HOUR": "36",
+    "HUD_AGENTS_MAX_CALLS_PER_HOUR": "60",
+    "LIVE_ROOM_MAX_CALLS_PER_HOUR": "150",
     "PREVIEW_FIXTURES_ENABLED": "true"
   },
   "queues": {

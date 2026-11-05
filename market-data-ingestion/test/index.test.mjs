@@ -307,7 +307,10 @@ test("HUD publisher is off unless HUD_SNAPSHOT_PUBLISH is true, then sends one H
   const h1 = await publishHudSnapshots(e, { now: nowH1, bundle: b });
   assert.equal(h1.charts.H1.status, "published", JSON.stringify(h1));
   const m15 = await publishHudSnapshots(e, { now: nowM15, bundle: b });
-  assert.equal(m15.charts.M15.status, "published", JSON.stringify(m15));
+  // When the latest 15m close lies within its window of the H1 close, the first call
+  // already published it; either way it is published exactly once.
+  const m15Statuses = [h1.charts.M15.status, m15.charts.M15.status];
+  assert.ok(m15Statuses.includes("published") && m15Statuses.filter(st => st === "published").length === 1, JSON.stringify(m15Statuses));
   assert.deepEqual(sent.map(s => s.timeframe).sort(), ["15", "60"]);
   assert.equal(sent.find(s => s.timeframe === "60").candle_key, `OANDA:XAUUSD:60:${lastH1.time * 1000}`);
   assert.ok(sent.every(s => s.schema_version === "cryptophys.hud-snapshot.v1" && s.huds.prophet && !JSON.stringify(s).includes("secret")));

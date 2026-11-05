@@ -468,3 +468,65 @@ test("HUD agent validation and evidence lines", () => {
   assert.ok(validateHudAgent({ agent: "prophet", stance: "WAIT", confidence: 0.5, insight: "see d_enc" }, "prophet").errors.some(e => e.startsWith("not_natural_language")));
   assert.equal(buildHudAgentsTask({ candleKey: HUD_KEY }).event_id, `hud_agents:${HUD_KEY}`);
 });
+
+test("live room: with HUD agents on, the 15m HUD agents speak from their 15m reading before the moderator", async () => {
+  const openMs = Date.parse(BAR) - 15 * 60_000;
+  const key15 = "OANDA:XAUUSD:15:" + openMs;
+  const snapshot = {
+    schema_version: "cryptophys.hud-snapshot.v1", timeframe: "15", candle_key: key15, computed_at: BAR, not_computed: ["grid_bot_protocol"],
+    huds: {
+      trade_management: { fields: { prophet_dir: 1, gmi_dir: 1, conflict: false, gate: 2, cycle_intensity: 3 }, parity: {} },
+      kinetic_engine: { fields: { theta: 12.5, omega: 0.4, alpha: 0.1, entropy: 0.5, is_chaos: false }, parity: {} },
+      prophet: { fields: { d_enc: 1 }, parity: {} }
+    }
+  };
+  const ai = fakeAI(({ sys, user }) => {
+    if (/one agent per Pine HUD, in a live XAUUSD trading room/.test(sys)) {
+      const agent = (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1];
+      return { agent, stance: "HOLD", confidence: 0.5, insight: "My 15m reading is not yet calibrated and leans toward holding." };
+    }
+    return undefined;
+  });
+  const e = env({ AI: ai, HUD_AGENTS_ENABLED: "true", LIVE_ROOM_MAX_CALLS_PER_HOUR: "48" });
+  e.SIGNAL_CACHE.map.set(`hud:15:${key15}`, JSON.stringify(snapshot));
+  const result = await runLiveRoomBar(e, { bar_time: BAR });
+  assert.equal(result.status, "complete");
+  const items = await readLive(e.DB, {});
+  assert.deepEqual(items.map(m => m.step), ["technical", "risk", "hud:trade_management", "hud:kinetic_engine", "moderator"], "only live-room HUDs with a reading speak; prophet is not a live-room HUD");
+  const tm = items.find(m => m.step === "hud:trade_management");
+  assert.equal(tm.hud, "Trade Management");
+  assert.equal(tm.status, "ok");
+  assert.equal(tm.verified_lines, 0, "the 15m HUD has no calibrated comparator");
+  const modPrompt = ai.calls.at(-1).request.messages.map(m => m.content).join("\n");
+  assert.match(modPrompt, /Trade Management/);
+  assert.match(modPrompt, /Kinetic Engine/);
+});
+
+test("live room: HUD agents off means no HUD posts", async () => {
+  const e = env();
+  await runLiveRoomBar(e, { bar_time: BAR });
+  const items = await readLive(e.DB, {});
+  assert.ok(!items.some(m => String(m.step).startsWith("hud:")));
+});
+
+test("live room: a 15m HUD snapshot carried in the task is used without any KV read", async () => {
+  const key15 = "OANDA:XAUUSD:15:" + (Date.parse(BAR) - 15 * 60_000);
+  const snapshot = { schema_version: "cryptophys.hud-snapshot.v1", timeframe: "15", candle_key: key15, computed_at: BAR, huds: { fabio_amt: { fields: { close: 4005, poc: 4001, vah: 4010, val: 3995, footprint_status: "BUY CONTROL" }, parity: {} } } };
+  const ai = fakeAI(({ sys, user }) => {
+    if (/one agent per Pine HUD, in a live XAUUSD trading room/.test(sys)) {
+      const agent = (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1];
+      return { agent, stance: "WAIT", confidence: 0.4, insight: "Price sits inside the value area, which is not yet calibrated on this chart." };
+    }
+    return undefined;
+  });
+  const e = env({ AI: ai, HUD_AGENTS_ENABLED: "true" });
+  await runLiveRoomBar(e, { bar_time: BAR, hud: snapshot });
+  const steps = (await readLive(e.DB, {})).map(m => m.step);
+  assert.deepEqual(steps, ["technical", "risk", "hud:fabio_amt", "moderator"]);
+  // A snapshot for another bar is ignored.
+  const other = { ...snapshot, candle_key: "OANDA:XAUUSD:15:1" };
+  resetThreadSchemaCacheForTests();
+  const e2 = env({ AI: ai, HUD_AGENTS_ENABLED: "true" });
+  await runLiveRoomBar(e2, { bar_time: BAR, hud: other });
+  assert.ok(!(await readLive(e2.DB, {})).some(m => String(m.step).startsWith("hud:")));
+});

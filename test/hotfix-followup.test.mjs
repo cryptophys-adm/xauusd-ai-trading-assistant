@@ -110,3 +110,21 @@ test("local-primary backfill waits for the local publish window, then records a 
   await backfillRecentAnalyses(env, { now: closedAt + LOCAL_MISSING_AFTER_MS + 60 * 1000, lookback: 1, loadPayloads: async () => ({}), runAnalysis: run });
   assert.equal(calls.length, 1, "after the window the candle is analysed and fails closed on missing local evidence");
 });
+
+test("backfill retries a failed analysis (for example a model timeout) up to the attempt cap", async () => {
+  const now = Date.parse("2026-11-04T03:10:00.000Z");
+  const [key] = closedH1CandleKeys(now, { lookback: 1 });
+  const trusted = Object.fromEntries(["mizan", "prophet", "gmi"].map(e => ["localcalc:" + key + ":" + e, "{}"]));
+  const runs = [];
+  const dbWith = (row) => ({ prepare(sql) {
+    if (sql.includes("analysis_runs")) return { bind() { return { async first() { return row; } }; } };
+    return { bind() { return { async all() { return { results: [] }; } }; } };
+  } });
+  const run = async (_e, k) => { runs.push(k); };
+  await backfillRecentAnalyses({ DB: dbWith({ status: "failed", attempt_count: 1 }), WEBHOOK_BUFFER: kv(trusted) }, { now, lookback: 1, loadPayloads: async () => ({}), runAnalysis: run });
+  assert.equal(runs.length, 1, "a failed run is retried");
+  await backfillRecentAnalyses({ DB: dbWith({ status: "failed", attempt_count: 4 }), WEBHOOK_BUFFER: kv(trusted) }, { now, lookback: 1, loadPayloads: async () => ({}), runAnalysis: run });
+  assert.equal(runs.length, 1, "no retry past the attempt cap");
+  await backfillRecentAnalyses({ DB: dbWith({ status: "degraded", attempt_count: 1 }), WEBHOOK_BUFFER: kv(trusted) }, { now, lookback: 1, loadPayloads: async () => ({}), runAnalysis: run });
+  assert.equal(runs.length, 1, "a recorded fail-closed run is final");
+});

@@ -199,3 +199,21 @@ test("sweep reconciles 5m candles under timeframe-scoped ids and never touches t
   const empty = result.m5_candle_keys.find((key) => key !== m5Key);
   assert.deepEqual(result.results[empty], { comparisons: {}, trust: {} });
 });
+
+test("reconcile never deletes a trusted copy just because its observed record is not visible yet", async () => {
+  const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
+  const candleKey = "OANDA:XAUUSD:60:1793750400000";
+  await env.WEBHOOK_BUFFER.put("localcalc:" + candleKey + ":gmi", JSON.stringify({ engine: "gmi", trust_status: "approved_by_parity" }));
+  // Only the prophet observed record is visible to this reconcile (gmi has not propagated).
+  const hooks = webhookPayloads();
+  const prophet = observedRecord("prophet", hooks);
+  await ensureSchema(env.DB);
+  await registerIdentity(env.DB, identityOf(prophet));
+  await env.WEBHOOK_BUFFER.put("localcalc-observed:" + candleKey + ":prophet", JSON.stringify(prophet));
+  await reconcileLocalComputation(env, candleKey);
+  assert.ok(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":gmi"), "the trusted gmi copy written by another reconcile survives");
+  // A visible record whose identity is not approved does lose its trusted copy.
+  await env.WEBHOOK_BUFFER.put("localcalc:" + candleKey + ":prophet", JSON.stringify({ engine: "prophet" }));
+  await reconcileLocalComputation(env, candleKey);
+  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":prophet"), null);
+});

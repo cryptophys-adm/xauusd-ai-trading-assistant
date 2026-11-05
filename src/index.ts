@@ -141,7 +141,7 @@ import { storeHudSnapshot, loadHudSnapshot, hudReadings } from "./hud-store.mjs"
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
-import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents } from "./agent-threads.mjs";
+import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents, m15KeyForClose } from "./agent-threads.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
@@ -615,6 +615,9 @@ function calibrationStatus(rows: JsonObject[], now: number, intervalDays: number
   }
   return out;
 }
+
+/** How long a local_calculation_reconcile task retries while the other approved records become visible. */
+const LOCAL_TRIGGER_RETRY_MS = 4 * 60 * 1000;
 
 /** "local" (default): parity-approved local records drive the chain; "webhook": legacy webhook-driven chain. */
 function indicatorSourceMode(env: Env): "local" | "webhook" {
@@ -1608,7 +1611,16 @@ async function processLocalCalculationReconcileTask(env: Env, task: Extract<Queu
   if (!analysisAllowedForTimeframe(task.timeframe, env.ANALYSIS_TIMEFRAMES || "60")) return;
   const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
   const localRecords = await Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get("localcalc:" + task.candle_key + ":" + engine)));
-  if (!localRecords.every(Boolean)) return;
+  if (!localRecords.every(Boolean)) {
+    // Local-primary: these records are the trigger. Right after publication the other
+    // engines' records may not be visible here yet (KV across locations), so retry for a
+    // few minutes instead of waiting for the 15-minute sweep; the sweep stays the backstop.
+    const enqueuedMs = Date.parse(asText(task.enqueued_at));
+    if (indicatorSourceMode(env) === "local" && Number.isFinite(enqueuedMs) && Date.now() - enqueuedMs < LOCAL_TRIGGER_RETRY_MS) {
+      throw Object.assign(new Error("approved local records not all visible yet"), { name: "RetryableError" });
+    }
+    return;
+  }
   const payloads = await loadWebhookPayloadsFromD1(env, task.candle_key, required);
   // Local-primary: the parity-approved local records are enough; webhooks are calibration only.
   if (indicatorSourceMode(env) !== "local" && !required.every(source => payloads[source])) return;
@@ -1696,8 +1708,14 @@ async function ingestM5Context(env: Env, payload: unknown): Promise<{ status: nu
   // The live room meets at each 15m candle close; every 5m context still refreshes the KV
   // execution context above.
   if (liveRoomEnabled(env) && isFifteenMinuteClose(p.candle_time)) {
+    // Phase C6: the 15m HUD snapshot is read here, where it was just written, and carried
+    // in the task (the consumer may run where the KV write has not propagated yet).
+    let hud: unknown = null;
+    if (hudAgentsEnabled(env)) {
+      try { hud = await loadHudSnapshot(env, { timeframe: "15", candleKey: m15KeyForClose(String(p.candle_time)) }); } catch { hud = null; }
+    }
     try {
-      await sendQueueTask(env.XAUUSD_EVENTS, buildLiveRoomTask({ barTime: String(p.candle_time), context: stored }) as unknown as QueueTask);
+      await sendQueueTask(env.XAUUSD_EVENTS, buildLiveRoomTask({ barTime: String(p.candle_time), context: stored, hud: hud as Record<string, unknown> | null }) as unknown as QueueTask);
     } catch (error) {
       console.error("live_room_enqueue_failed", error instanceof Error ? error.message : String(error));
     }
@@ -1999,6 +2017,20 @@ export default {
       let payload: unknown;
       try { payload = JSON.parse(bodyText); } catch { return json({ error: "Request body must be valid JSON" }, 400); }
       const result = await ingestM5Context(env, payload);
+      return json(result.body, result.status);
+    }
+    if (request.method === "POST" && url.pathname === "/preview/hud-snapshot") {
+      // Preview-only HTTP twin of the RPC LocalComputationIngress.submitHud, for the
+      // preview-e2e proof of the HUD agents. Production never sets PREVIEW_FIXTURES_ENABLED.
+      if (String(env.PREVIEW_FIXTURES_ENABLED || "false") !== "true") return json({ error: "Not found" }, 404);
+      if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
+        return json({ error: "Unauthorized" }, 401);
+      }
+      const limitedBody = await readBodyLimited(request, 65536);
+      if (limitedBody.tooLarge) return json({ error: "Payload exceeds 64 KiB limit" }, 413);
+      let payload: unknown;
+      try { payload = JSON.parse(limitedBody.text); } catch { return json({ error: "Request body must be valid JSON" }, 400); }
+      const result = await storeHudSnapshot(env, payload);
       return json(result.body, result.status);
     }
     if (request.method === "POST" && url.pathname === "/preview/news-analysis-fixture") {

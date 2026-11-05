@@ -41,6 +41,7 @@ export type QueueTask =
       bar_time: string;
       candle_key: string;
       context: Record<string, unknown> | null;
+      hud?: Record<string, unknown> | null;
       enqueued_at: string;
     }
   | {

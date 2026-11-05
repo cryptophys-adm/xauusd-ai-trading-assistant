@@ -156,11 +156,21 @@ jobs:
           assert.equal(ready.status, "ready");
           assert.equal(ready.d1_analysis_runs, true);
 
-          const unauthorized = await fetch(base + "/evidence/local-calculation", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: "{}"
-          });
+          // A fresh preview Worker can still answer from an edge that has not received it yet
+          // (a Cloudflare 404 or HTML page). Retry only those edge answers; the Worker's own
+          // answer to an unauthenticated request is JSON and must be 401.
+          let unauthorized;
+          for (let attempt = 0; attempt < 10; attempt++) {
+            unauthorized = await fetch(base + "/evidence/local-calculation", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: "{}"
+            });
+            const isWorkerJson = (unauthorized.headers.get("content-type") || "").includes("application/json") && unauthorized.status !== 404;
+            if (isWorkerJson) break;
+            console.log("::warning::unauthenticated probe got an edge answer (HTTP " + unauthorized.status + "), retrying");
+            await new Promise(resolve => setTimeout(resolve, 3000));
+          }
           assert.equal(unauthorized.status, 401, "local calculation endpoint must reject unauthenticated requests");
 
           const symbol = "OANDA:XAUUSD";
@@ -226,6 +236,12 @@ jobs:
                   metrics: { bias: "NEUTRAL", fixture_only: true }
                 })
               });
+              // A fresh preview Worker can still answer from an edge with an HTML page; retry it.
+              if (!(response.headers.get("content-type") || "").includes("application/json")) {
+                console.log("::warning::webhook " + source + " got a non-JSON edge answer (HTTP " + response.status + "), retrying");
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                continue;
+              }
               result = await response.json();
               if (!(response.status === 503 && /WEBHOOK_SECRET is not configured/.test(String(result?.error)))) break;
               await new Promise(resolve => setTimeout(resolve, 2000));
@@ -302,13 +318,19 @@ jobs:
 
           // Queue processing is asynchronous. Wait for measured parity and the fail-closed
           // synthesis instead of expecting the request handler to run reconciliation inline.
+          // A poll that times out or hits a transient edge error is retried by its loop; it must
+          // never abort the whole proof (one slow answer from a fresh preview Worker did).
+          const pollFetch = (url) => fetch(url, { signal: AbortSignal.timeout(10000) }).catch(error => {
+            console.log("::warning::poll " + url.slice(base.length) + " failed: " + (error?.name || "error") + ", retrying");
+            return { ok: false };
+          });
           const retryDeadline = Date.now() + 90_000;
           let queueReady = null;
           let latestDecision = null;
           while (Date.now() < retryDeadline) {
             const [readyResponse, decisionResponse] = await Promise.all([
-              fetch(base + "/ready", { signal: AbortSignal.timeout(10000) }),
-              fetch(base + "/api/decision/" + encodeURIComponent(candleKey), { signal: AbortSignal.timeout(10000) })
+              pollFetch(base + "/ready"),
+              pollFetch(base + "/api/decision/" + encodeURIComponent(candleKey))
             ]);
             if (readyResponse.ok) queueReady = await readyResponse.json();
             if (decisionResponse.ok) {
@@ -351,7 +373,7 @@ jobs:
           const busDeadline = Date.now() + 360_000;
           let bus = null;
           while (Date.now() < busDeadline) {
-            const busResponse = await fetch(base + "/api/bus?candle_key=" + encodeURIComponent(candleKey), { signal: AbortSignal.timeout(10000) });
+            const busResponse = await pollFetch(base + "/api/bus?candle_key=" + encodeURIComponent(candleKey));
             if (busResponse.ok) bus = await busResponse.json();
             if (bus?.items?.some(item => item.agent === "moderator")) break;
             await new Promise(resolve => setTimeout(resolve, 5000));
@@ -423,7 +445,7 @@ jobs:
           let thread = null;
           const flat = (list) => list.flatMap(m => [m, ...flat(m.replies || [])]);
           while (Date.now() < threadDeadline) {
-            const r = await fetch(base + "/api/threads/" + encodeURIComponent(fixture.thread_id), { signal: AbortSignal.timeout(10000) });
+            const r = await pollFetch(base + "/api/threads/" + encodeURIComponent(fixture.thread_id));
             if (r.ok) thread = (await r.json()).thread;
             if (thread && flat(thread.messages || []).some(m => m.step === "moderator")) break;
             await new Promise(resolve => setTimeout(resolve, 5000));
@@ -455,7 +477,7 @@ jobs:
           const liveDeadline = Date.now() + 300_000;
           let live = [];
           while (Date.now() < liveDeadline) {
-            const r = await fetch(base + "/api/live?limit=50", { signal: AbortSignal.timeout(10000) });
+            const r = await pollFetch(base + "/api/live?limit=50");
             if (r.ok) live = ((await r.json()).items || []).filter(m => m.bar_time === barTime);
             if (live.some(m => m.step === "moderator")) break;
             await new Promise(resolve => setTimeout(resolve, 5000));
@@ -470,6 +492,77 @@ jobs:
           assert.equal(live[1].parent_id, live[0].id, "risk replies to technical");
           assert.ok(live.every(m => !codeLike(m.insight) && !codeLike(m.summary)), "live-room messages must be natural language");
 
+          // Phase C5: HUD agents in Threads 1H on a real H1 candle (local-primary chain).
+          // A HUD snapshot (the preview twin of the RPC submitHud) is stored first, then the
+          // calibration webhooks and the local records of the previous closed hour; parity
+          // approves the fixture identities (PARITY_PROMOTE_AFTER=1), the chain runs from the
+          // approved local records, and the HUD agents post after the synthesis.
+          const hourOpen = Math.floor(Date.now() / 3_600_000) * 3_600_000 - 3_600_000;
+          const key60 = symbol + ":60:" + hourOpen;
+          const nowIso = new Date().toISOString();
+          const hudFixture = (timeframe, candleKey, huds) => ({ schema_version: "cryptophys.hud-snapshot.v1", symbol, timeframe, candle_key: candleKey, candle_time: new Date(Number(candleKey.split(":").pop())).toISOString(), computed_at: nowIso, not_computed: ["grid_bot_protocol"], huds });
+          const h1Huds = {
+            prophet: { fields: { d_enc: -1, structure_subtype: 0, t_enc: 2, cycle_intensity: 3, kww_zscore: 0.8, hurst: 0.62, efficiency_ratio: 0.55, volume_ratio: 1.1, oscillator_fast: 0.2, oscillator_slow: 0.1 }, parity: { d_enc: "prophet_r38.d_enc", structure_subtype: "prophet_r38.structure_subtype", t_enc: "prophet_r38.t_enc" } },
+            decision_matrix: { fields: { verdict: 3, gate: 2, conflict: false, branch: "jma_long", is_chaos: false }, parity: { verdict: "gmi_v12_70.verdict", gate: "gmi_v12_70.gate", conflict: "gmi_v12_70.conflict" } }
+          };
+          const hudPost = await fetch(base + "/preview/hud-snapshot", { method: "POST", headers, body: JSON.stringify(hudFixture("60", key60, h1Huds)) });
+          assert.equal(hudPost.status, 202, "H1 HUD snapshot: " + JSON.stringify(await hudPost.clone().json()));
+          const h1Bar = { o: 4001.1, h: 4006.2, l: 3999.0, c: 4004.4, volume: 1800 };
+          for (const source of ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"]) {
+            const r = await fetch(base + "/webhook", { method: "POST", headers, body: JSON.stringify({ source, ticker: symbol, timeframe: "60", candle_time: String(hourOpen), ...h1Bar, ...webhookValues[source] }) });
+            assert.equal(r.status, 202, "H1 calibration webhook " + source);
+          }
+          for (const engine of ["mizan", "prophet", "gmi"]) {
+            const record = { ...localPayload(engine), timeframe: "60", candle_time: new Date(hourOpen).toISOString(), candle_key: key60, computed_at: new Date().toISOString(), values: { bias: "NEUTRAL", fixture_only: true, candle: h1Bar, comparable: comparableFor[engine] } };
+            const r = await fetch(base + "/evidence/local-calculation", { method: "POST", headers, body: JSON.stringify(record) });
+            assert.equal(r.status, 202, "H1 local calculation " + engine + ": " + JSON.stringify(await r.clone().json()));
+          }
+          const hudDeadline = Date.now() + 360_000;
+          let hudThread = null;
+          while (Date.now() < hudDeadline) {
+            const r = await pollFetch(base + "/api/threads/" + encodeURIComponent("h1:" + key60));
+            if (r.ok) hudThread = (await r.json()).thread;
+            if ((hudThread?.hud_agents || []).some(m => m.agent === "moderator")) break;
+            await new Promise(resolve => setTimeout(resolve, 5000));
+          }
+          const hudAgents = hudThread?.hud_agents || [];
+          console.log("HUD AGENTS PROOF " + JSON.stringify(hudAgents.map(m => ({ name: m.name, status: m.status, stance: m.stance, verified: m.verified_lines + "/" + m.total_lines, text: String(m.insight ?? m.summary ?? "").slice(0, 240) })), null, 2));
+          assert.deepEqual(hudAgents.map(m => m.name), ["Prophet", "Decision Matrix", "Moderator"], "one agent per computed HUD, named after the HUD, then the moderator");
+          assert.ok(hudAgents.every(m => m.status === "ok"), "every HUD agent message must be schema-valid model output");
+          assert.ok(hudAgents.every(m => !codeLike(m.insight) && !codeLike(m.summary)), "HUD agent messages must be natural language");
+          assert.equal(hudAgents[0].verified_lines, 2, "Prophet's structure and momentum lines equal the approved local record");
+          const hudReadingResponse = await fetch(base + "/api/hud/" + encodeURIComponent(key60));
+          assert.equal(hudReadingResponse.status, 200, "the HUD reading API serves the snapshot");
+          assert.equal((await hudReadingResponse.json()).hud?.verified_against_approved_record, true, "readings are verified against the approved local record");
+
+          // Phase C6: the 15m HUD agents in the live room, on the previous 15m close.
+          // The preview D1 is shared by every e2e run and a room is keyed by its bar, so a bar an
+          // earlier run already used would answer "already complete" with that run's messages.
+          // Use a random earlier 15m close (up to a day back) to get a bar no run has used yet.
+          const barTime2 = new Date(Date.parse(barTime) - 900_000 * (2 + Math.floor(Math.random() * 90))).toISOString();
+          const key15 = symbol + ":15:" + (Date.parse(barTime2) - 900_000);
+          const m15Huds = {
+            trade_management: { fields: { prophet_dir: 1, gmi_dir: 1, conflict: false, gate: 2, cycle_intensity: 3, kww_zscore: 0.5, ob_filter_status: "BULL OB PASS", buy_trade_ready: false, sell_trade_ready: false, active_bull_ob: 1, active_bear_ob: 0 }, parity: {} },
+            kinetic_engine: { fields: { theta: 14.2, omega: 0.6, alpha: 0.1, entropy: 0.52, is_chaos: false }, parity: {} }
+          };
+          const m15Post = await fetch(base + "/preview/hud-snapshot", { method: "POST", headers, body: JSON.stringify(hudFixture("15", key15, m15Huds)) });
+          assert.equal(m15Post.status, 202, "15m HUD snapshot: " + JSON.stringify(await m15Post.clone().json()));
+          const recentBars2 = recentBars.map(b => ({ ...b, t: new Date(Date.parse(b.t) - (Date.parse(barTime) - Date.parse(barTime2))).toISOString() }));
+          const context2 = await fetch(base + "/evidence/m5-context", { method: "POST", headers, body: JSON.stringify({ schema_version: "cryptophys.local-context.v1", engine: "prophet_r38_5m", trust_status: "informational_unverified", symbol, timeframe: "5", candle_time: barTime2, bias: "BULLISH", buy_confirmed: true, sell_confirmed: false, d_enc: 1, t_enc: null, recent_bars: recentBars2 }) });
+          assert.equal(context2.status, 200, "second m5 context");
+          const live2Deadline = Date.now() + 300_000;
+          let live2 = [];
+          while (Date.now() < live2Deadline) {
+            const r = await pollFetch(base + "/api/live?limit=50");
+            if (r.ok) live2 = ((await r.json()).items || []).filter(m => m.bar_time === barTime2);
+            if (live2.some(m => m.step === "moderator")) break;
+            await new Promise(resolve => setTimeout(resolve, 5000));
+          }
+          console.log("LIVE ROOM HUD PROOF " + JSON.stringify(live2.map(m => ({ step: m.step, hud: m.hud, status: m.status, stance: m.stance, text: String(m.insight ?? m.summary ?? "").slice(0, 240) })), null, 2));
+          assert.deepEqual(live2.map(m => m.step), ["technical", "risk", "hud:trade_management", "hud:kinetic_engine", "moderator"], "the 15m HUD agents speak before the moderator");
+          assert.ok(live2.every(m => m.status === "ok"), "every live-room message must be schema-valid model output");
+          assert.ok(live2.every(m => !codeLike(m.insight) && !codeLike(m.summary)), "live-room HUD messages must be natural language");
+
           console.log(JSON.stringify({
             preview: base,
             health: "PASS",
@@ -483,6 +576,8 @@ jobs:
             news_thread_real_models: "PASS",
             live_room_real_models: "PASS",
             threads_1h: "PASS",
+            hud_agents_threads_1h: "PASS",
+            hud_agents_live_room: "PASS",
             natural_language: "PASS",
             multi_agent_bus_model: bus.items.some(item => item.fallback_used === false) ? "glm-5.3-flash" : "fallback (see primary_error)",
             complete_AI_chain: "NOT_TESTED: no real fresh news/Pine-parity evidence in this fixture"

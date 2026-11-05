@@ -174,7 +174,10 @@ Phase C order (one small PR each, reviewed by Claude, CI green):
    - The budget is capped by `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`.
    - Missing snapshots and syntheses are retried, never invented.
    - Production enablement still needs the preview-e2e proof on an H1 candle (a follow-up PR) and the owner's approval.
-6. **C6: the four HUD agents in the live 15m room** (raise `LIVE_ROOM_MAX_CALLS_PER_HOUR` to 48).
+6. **C6: the four HUD agents in the live 15m room (done by Claude).** Trade Management, Kinetic Engine (TVA), Fabio AMT Sensors and Aegis Footprint Matrix post after technical and risk, and before the moderator.
+   - They speak from the 15m HUD snapshot of the bar that just closed, behind `HUD_AGENTS_ENABLED`. All their statements read as not yet calibrated, because no 15m comparator exists.
+   - Stances are BUY, SELL, HOLD, WAIT or CLOSE, on the primary model only, and they count against `LIVE_ROOM_MAX_CALLS_PER_HOUR`, now 48.
+   - Nexus shows them by HUD name.
 7. **C7: Nexus (done by Claude).** The H1 thread lists the HUD agents by HUD name, with a badge "N of M verified by parity" per agent, and the moderator last. Model names are never shown.
 
 ## 5. Phase C: implementation (small PRs, each green)

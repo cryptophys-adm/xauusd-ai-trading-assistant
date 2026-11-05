@@ -15,6 +15,7 @@ import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import { verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
 import { HUD_IDS, HUD_NAMES } from "./hud-reading.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
+import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import {
   callBusModel, buildBusEvidence, validateAgentOutput, validateModeratorOutput,
   AGENT_JSON_SCHEMA, MODERATOR_JSON_SCHEMA, BUS_DEFAULT_MODEL, BUS_MAX_TOKENS, busEnabled
@@ -130,12 +131,17 @@ export function buildFifteenMinuteCandles(bars5m, { limit = 4 } = {}) {
   return candles.slice(-limit);
 }
 
-export function buildLiveRoomTask({ barTime, context = null, enqueuedAt = new Date().toISOString() } = {}) {
+export function buildLiveRoomTask({ barTime, context = null, hud = null, enqueuedAt = new Date().toISOString() } = {}) {
   if (!Number.isFinite(Date.parse(String(barTime ?? "")))) throw new TypeError("live room task requires a valid barTime");
   const iso = new Date(Date.parse(barTime)).toISOString();
-  // The 5m context travels inside the task, so the consumer never depends on a
-  // KV read that may not have propagated to its location yet.
-  return { kind: "live_room", event_id: `live_room:${iso}`, bar_time: iso, candle_key: `live15m:${iso}`, context, enqueued_at: enqueuedAt };
+  // The 5m context and the 15m HUD snapshot travel inside the task, so the consumer
+  // never depends on a KV read that may not have propagated to its location yet.
+  return { kind: "live_room", event_id: `live_room:${iso}`, bar_time: iso, candle_key: `live15m:${iso}`, context, ...(hud ? { hud } : {}), enqueued_at: enqueuedAt };
+}
+
+/** Candle key of the 15m bar that closes at closeIso. */
+export function m15KeyForClose(closeIso) {
+  return `OANDA:XAUUSD:15:${Date.parse(closeIso) - FIFTEEN_MINUTES_MS}`;
 }
 
 let schemaReady = false;
@@ -521,8 +527,30 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
     messages: roomAgentMessages("risk", evidence, technical?.status === "ok" ? technical : null), schemaName: "room_agent", schema: ROOM_AGENT_SCHEMA,
     maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateRoomAgent(o, "risk"), toBody
   });
+  // Phase C6: the four HUD agents of the live room speak from their 15m HUD reading.
+  const hudPosts = [];
+  if (hudAgentsEnabled(env)) {
+    let hud = null;
+    try {
+      const key15 = m15KeyForClose(barTime);
+      const carried = task.hud && typeof task.hud === "object" && task.hud.candle_key === key15 ? task.hud : null;
+      const snapshot = carried || await loadHudSnapshot(env, { timeframe: "15", candleKey: key15 });
+      hud = snapshot ? await hudReadings(env, snapshot) : null;
+    } catch { hud = null; }
+    for (const id of HUD_LIVE_ROOM_AGENTS) {
+      const reading = hud?.readings?.[id];
+      if (!reading?.available) continue;
+      const stepName = `hud:${id}`;
+      const msg = existing.get(stepName) || await step({ thread_id: threadId, run_id: barTime, step: stepName, agent: id, parent_id: null }, {
+        messages: liveHudMessages(id, HUD_NAMES[id], reading, evidence.h1), schemaName: "live_hud_agent", schema: LIVE_HUD_AGENT_SCHEMA,
+        maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateHudAgent(o, id, ROOM_STANCES),
+        toBody: (o) => ({ body: { insight: clip(o.insight, INSIGHT_MAX), hud: HUD_NAMES[id], verified_lines: reading.lines.filter((l) => l.verified).length, total_lines: reading.lines.length }, refs: [] })
+      });
+      hudPosts.push({ ...msg, agent: HUD_NAMES[id] });
+    }
+  }
   await step({ thread_id: threadId, run_id: barTime, step: "moderator", agent: "moderator", parent_id: null }, {
-    messages: roomModeratorMessages(evidence, [technical, risk].filter(Boolean)), schemaName: "room_moderator", schema: ROOM_MODERATOR_SCHEMA,
+    messages: roomModeratorMessages(evidence, [technical, risk, ...hudPosts].filter(Boolean)), schemaName: "room_moderator", schema: ROOM_MODERATOR_SCHEMA,
     maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateRoomModerator(o, h1.decision),
     toBody: (obj) => ({ body: { summary: clip(obj.summary, 400), h1_decision: h1.decision }, refs: [] })
   });
@@ -684,16 +712,33 @@ const HUD_AGENT_SCHEMA = Object.freeze({
   required: ["agent", "stance", "confidence", "insight"]
 });
 
+/** Live 15m room HUD agents (RFC §6.2, owner decision: Aegis included). */
+export const HUD_LIVE_ROOM_AGENTS = Object.freeze(["trade_management", "kinetic_engine", "fabio_amt", "aegis_footprint"]);
+
+const LIVE_HUD_AGENT_SCHEMA = Object.freeze({ ...HUD_AGENT_SCHEMA, properties: { ...HUD_AGENT_SCHEMA.properties, stance: { type: "string", enum: [...ROOM_STANCES] } } });
+
+function liveHudMessages(agentId, name, reading, h1) {
+  return chatMessages([
+    `You are ${name}, one agent per Pine HUD, in a live XAUUSD trading room that meets at every 15m candle close. You speak only about the ${name} HUD on the 15m candle that just closed.`,
+    RULES,
+    "Read only your HUD reading below. Each statement is marked verified by parity or not yet calibrated; on the 15m chart no comparator has calibrated the HUD yet, so say plainly that your view is not yet calibrated.",
+    `The authoritative H1 decision is ${h1.decision}. Room stances: BUY, SELL, HOLD (keep an existing position), WAIT (stay flat), CLOSE (exit an existing position). Never give entry, stop loss, take profit or position size.`,
+    `Required JSON: {"agent":"${agentId}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"insight":"<= 400 chars"}`,
+    "EVIDENCE:",
+    JSON.stringify({ hud: name, timeframe: "15 minutes", reading: hudEvidenceLines(reading), h1: { decision: h1.decision, confidence: h1.confidence } })
+  ]);
+}
+
 export function buildHudAgentsTask({ candleKey, enqueuedAt = new Date().toISOString() } = {}) {
   if (typeof candleKey !== "string" || !candleKey.trim()) throw new TypeError("HUD agents task requires candleKey");
   return { kind: "hud_agents", event_id: `hud_agents:${candleKey}`, candle_key: candleKey, enqueued_at: enqueuedAt };
 }
 
-export function validateHudAgent(obj, agentId) {
+export function validateHudAgent(obj, agentId, stances = HUD_STANCES) {
   const errors = [];
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { valid: false, errors: ["not_an_object"] };
   if (obj.agent !== agentId) errors.push("agent_mismatch");
-  if (!HUD_STANCES.includes(obj.stance)) errors.push("stance_invalid");
+  if (!stances.includes(obj.stance)) errors.push("stance_invalid");
   if (!inUnit(obj.confidence)) errors.push("confidence_out_of_range");
   if (typeof obj.insight !== "string" || !obj.insight.trim()) errors.push("insight_missing");
   errors.push(...naturalLanguageErrors(obj.insight));
