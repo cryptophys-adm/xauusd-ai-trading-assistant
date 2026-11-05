@@ -528,7 +528,10 @@ jobs:
             assert.ok(room.openings.every(m => m.status === "ok"), "every opening must be schema-valid model output");
             assert.ok(room.openings.every(m => m.fallback_used === false && m.model === "@cf/zai-org/glm-5.3-flash"), "the War Room uses the primary model only");
             assert.ok(room.debate.some(m => m.id === "risk" && m.status === "ok"), "the Risk Manager rebuts in the debate");
-            assert.ok(room.debate.every(m => m.status === "ok" && m.rebuts.length), "every rebuttal names the agents it rebuts");
+            // A split room's rebuttals name their targets; in a unanimous room the Risk Manager
+            // stress-tests the consensus and may name nobody (src/war-room.mjs validateRebuttal).
+            const unanimous = room.openings.every(m => m.stance === room.openings[0].stance);
+            assert.ok(room.debate.every(m => m.status === "ok" && (unanimous || m.rebuts.length)), "every rebuttal in a split room names the agents it rebuts");
             assert.equal(room.conclusion?.status, "ok", "the moderator concludes for the main panel");
             assert.equal(room.phase, "closed");
             assert.ok(room.conclusion.reasons.length >= 1 && room.conclusion.reasons.length <= 3);
