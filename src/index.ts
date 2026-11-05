@@ -154,6 +154,7 @@ import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { warRoomEnabled, runWarRoomBar, readWarRoom, readTldr } from "./war-room.mjs";
 import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, SCORING, SCORING_VERSION } from "./outcome-scoring.mjs";
 import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
+import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
 import { DECISION_TEXT_RULE, plainDecisionText } from "./plain-decision.mjs";
@@ -1953,6 +1954,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/shadow-versions") {
+    try {
+      const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") || "30") || 30));
+      return dashboardJson({ status: "ok", ...(await readShadowVersions(env, { days })) });
+    } catch (error) {
+      console.error("shadow_versions_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/platform/status") {
     try {
       return dashboardJson({ status: "ok", ...(await platformStatus(env)) });
@@ -2163,6 +2173,12 @@ export default {
           if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) await detectRecentStuckStates(env);
           console.log("outcome_scoring", JSON.stringify(scored));
         } catch (e) { console.error("outcome_scoring_failed", e instanceof Error ? e.message : String(e)); }
+        // RFC_INDICATOR_AGENT_PLATFORM P3: shadow versions, once an hour (first sweep after the
+        // H1 close). Computed and scored only; never shown in a room or used by a decision.
+        if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) {
+          try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env))); }
+          catch (e) { console.error("shadow_versions_failed", e instanceof Error ? e.message : String(e)); }
+        }
         // RFC_INDICATOR_AGENT_PLATFORM P4: advisory reports to the Cryptophys Platform kernel.
         // Non-fatal by design; a no-op without the AGENTS binding (preview, tests).
         try {

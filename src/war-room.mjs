@@ -134,6 +134,9 @@ export function validateConclusion(o, h1Decision, busAgents, confirmations = nul
   const errors = [...base.errors];
   if (o && typeof o === "object" && confirmations && !entryAllowed(o.stance, confirmations)) errors.push("entry_without_confirmation");
   if (o && typeof o === "object") {
+    // A blank trailing entry (seen in preview 2026-11-05: three reasons and "") carries no
+    // content: drop blanks before judging the list instead of failing the whole conclusion.
+    if (Array.isArray(o.reasons)) o.reasons = o.reasons.filter(r => !(typeof r === "string" && !r.trim()));
     if (!Array.isArray(o.reasons) || o.reasons.length < 1 || o.reasons.length > 3 || o.reasons.some(r => typeof r !== "string" || !r.trim())) errors.push("reasons_invalid");
     else for (const r of o.reasons) errors.push(...naturalLanguageErrors(r));
     if (!Array.isArray(o.dissent) || o.dissent.some(d => !busAgents.includes(d))) errors.push("dissent_invalid");

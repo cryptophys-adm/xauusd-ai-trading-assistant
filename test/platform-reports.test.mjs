@@ -21,7 +21,7 @@ function d1() {
 }
 
 /** A fake AgentRpc binding that records calls and answers like the kernel. */
-function kernel(answer = () => ({ outcome: "succeeded", result: { report_id: "rpt_1" } })) {
+function kernel(answer = () => ({ outcome: "succeeded", capability: "reports.publish", tier: 1, decision_id: "dec_1", result: { report: { report_id: "rpt_1" } } })) {
   const calls = [];
   return {
     calls,

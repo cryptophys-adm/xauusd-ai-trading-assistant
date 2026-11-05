@@ -219,6 +219,22 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - **When:** in the parity sweep cron (`10-59/15`), after the backfill. Stuck-state detection runs in the first sweep of each hour.
 - **Read APIs:** `GET /api/scorecards?days=30` (per subject: directional hit rate, WAIT accuracy, missed opportunities, Brier and sessions, plus the open stuck states) and `GET /api/stuck-states`.
 
+### Shadow indicator versions (RFC_INDICATOR_AGENT_PLATFORM P3)
+- Code: `src/shadow-versions.mjs`. Table `shadow_outputs` (migration `0008_shadow_outputs.sql`; also ensured at runtime).
+- **What runs.** Once an hour, in the first parity sweep after the H1 close, every version is replayed over the pull adapter's cached H1 bars (`SIGNAL_CACHE`).
+  - **Control** for each engine family (`prophet_r37@active`, `prophet_r38@active`): the active, parity-approved code with its default parameters.
+  - **Candidates**: the same pure engine functions with different parameters. The engine files and their provenance hashes do not change.
+- **Storage.** An output is stored only with at least 300 bars of history behind it. The first computation is final.
+- **Scoring.** Every output is scored by the outcome scoring as `shadow:<version>` (`source = "shadow"`) once its horizon has closed.
+- **Isolation.** Nothing here reaches a room, a prompt, the evidence or a decision.
+- **Comparison is like for like.** A candidate is compared with its control only on bars scored for both.
+  - **Accuracy:** right calls over decided calls. A directional hit and a WAIT hit are right; a miss and a missed opportunity are wrong; a directional neutral is undecided.
+  - **Criteria:** a higher score that is significant, meaning a one-sided exact sign test with p < 0.05 on the bars where the two versions disagree and exactly one is right; no more stuck time (candles inside stuck episodes, § above: ≥ 8 candles with range > 3 × ATR); and a minimum sample of 200 bars. Brier does not apply, because indicator directions carry no confidence. Reference parity applies only to a Pine candidate (RFC decision 1).
+  - **Control check:** the control is also checked against the approved local records of the last 24 candles (`matches_approved_local_records`).
+- **Read model.** `GET /api/shadow-versions?days=30` (cached for 5 minutes) and the Nexus page `/shadow`.
+- **Candidates (P5, 2026-11-05):** `prophet_r37@latch8`, `prophet_r37@latch12` and `prophet_r38@latch8`. The ±3 structure latch expires after 8 or 12 closed H1 bars instead of 50. They are local-only (option b); owner decision 1 decides whether a promotion also needs a Pine candidate.
+- **Promotion** is never automatic. The verdict `better_than_active: ready for owner review` is a proposal; the owner approves a separate promotion PR.
+
 ## 4. Sources and knowledge
 - **Pine sources:** `pinescript/ssot/`. Verified against the installed TradingView indicators; see `docs/PINE_SOURCE_VERIFICATION.md`. Never edit these files.
 - **Agent knowledge base:** v4, generated from Pine with line citations and bundled into the AI Worker. See `docs/KNOWLEDGE_BASE_V4.md`.

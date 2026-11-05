@@ -199,6 +199,14 @@ test("a conclusion that differs from the H1 decision must name it", async () => 
   assert.equal(validateConclusion({ ...bad, summary: "H1 decision: WAIT, but the room sells the flush." }, "WAIT", ["h1"]).valid, true);
 });
 
+test("blank reasons are dropped before the conclusion is judged; an all-blank list still fails", () => {
+  const c = { stance: "WAIT", confidence: 0.75, summary: "H1 decision: WAIT. The room agrees.", reasons: ["The H1 decision is WAIT.", "News is mixed.", "The 5m flag is unverified.", ""], dissent: [] };
+  const r = validateConclusion(c, "WAIT", ["h1"]);
+  assert.equal(r.valid, true, JSON.stringify(r.errors));
+  assert.deepEqual(c.reasons, ["The H1 decision is WAIT.", "News is mixed.", "The 5m flag is unverified."]);
+  assert.deepEqual(validateConclusion({ ...c, reasons: ["", "  "] }, "WAIT", ["h1"]).errors.includes("reasons_invalid"), true);
+});
+
 test("the hourly budget caps the whole room", async () => {
   const e = env(fakeAI(), { WAR_ROOM_MAX_CALLS_PER_HOUR: "3" });
   await runWarRoomBar(e, task());

@@ -6,6 +6,33 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- ci(preview-e2e): a War Room proof draws its random 15m bar only when the shared preview D1 has no room for it yet. Run 42080341191 drew a bar an earlier run had used and read that run's room.
+- ci(preview-e2e): transport errors between the runner and the preview edge (`ECONNRESET`, timeouts, socket errors) are retried up to 5 times. Every e2e request is idempotent. Run 42079728424 died on one reset right after a passing War Room proof.
+- fix(war-room): blank conclusion reasons are dropped before validation. A preview run on 2026-11-05 returned three reasons and an empty string, which failed the whole conclusion as `reasons_invalid`. A list with no non-blank reason still fails.
+- feat(shadow): RFC_INDICATOR_AGENT_PLATFORM P5, the first improvement candidates: structure-latch expiry.
+  - **Candidates.** `prophet_r37@latch8`, `prophet_r37@latch12` and `prophet_r38@latch8`. The ±3 structure latch expires after 8 or 12 closed H1 bars instead of 50.
+  - **Local-only.** They are option (b); owner decision 1 decides whether a promotion also needs a Pine candidate. They run in shadow only.
+  - **Stricter criteria.**
+    - A higher accuracy must pass a paired one-sided sign test (p < 0.05) on the bars where the versions disagree.
+    - Stuck time is compared in candles, not episodes, because expiring a latch can split one episode in two.
+  - **Real-data replay** (696 scored H1 bars, 2026-09-19 to 2026-11-05):
+
+    | Version | Accuracy | Control | Bars that differ | Paired result |
+    |---|---|---|---|---|
+    | `prophet_r37@latch8` | 0.431 | 0.433 | 21 | 3 vs 4 |
+    | `prophet_r37@latch12` | 0.434 | 0.433 | 6 | 3 vs 2 (p 0.5) |
+    | `prophet_r38@latch8` | — | — | 0 | — |
+
+    - `prophet_r38@latch8` changes no direction: R38 confirmed only 4 times in 696 bars.
+    - Expiry alone is not yet an improvement. Its main effect would be on GMI's "Prophet risk hold", which needs a GMI variant: a future candidate.
+
+- feat(shadow): RFC_INDICATOR_AGENT_PLATFORM P3, shadow indicator versions.
+  - **Framework.** `src/shadow-versions.mjs` replays a control (the active Prophet R37 and R38 code with defaults) and candidate versions over the same cached H1 bars, once an hour. Outputs are stored after a 300-bar warm-up, and the first computation is final (`shadow_outputs`, migration `0008`).
+  - **Scoring.** Outputs are scored as `shadow:<version>`.
+  - **Comparison.** Candidates are compared with the control on the same bars using the RFC criteria: higher accuracy, no new stuck episodes, and at least 200 bars.
+  - **Read model.** `GET /api/shadow-versions` and the Nexus `/shadow` page.
+  - **Isolation.** Nothing reaches a room, a prompt or a decision, and the engine files are unchanged. P3 ships no candidate; P5 adds the first.
+
 - feat(platform): RFC_INDICATOR_AGENT_PLATFORM P4, owner instruction 2026-11-05.
   - **Binding.** The AI Worker binds `AGENTS` to the Cryptophys Platform `cryptophys-ai-kernel` `AgentRpc` entrypoint. The binding pins `host_worker` and carries no secret. It is production only; preview has no binding, so the code is a no-op there.
   - **Reports.** One advisory report per meaningful event, sent from the parity sweep cron:
