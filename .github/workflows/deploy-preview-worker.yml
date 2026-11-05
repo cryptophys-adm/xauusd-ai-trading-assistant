@@ -302,13 +302,19 @@ jobs:
 
           // Queue processing is asynchronous. Wait for measured parity and the fail-closed
           // synthesis instead of expecting the request handler to run reconciliation inline.
+          // A poll that times out or hits a transient edge error is retried by its loop; it must
+          // never abort the whole proof (one slow answer from a fresh preview Worker did).
+          const pollFetch = (url) => fetch(url, { signal: AbortSignal.timeout(10000) }).catch(error => {
+            console.log("::warning::poll " + url.slice(base.length) + " failed: " + (error?.name || "error") + ", retrying");
+            return { ok: false };
+          });
           const retryDeadline = Date.now() + 90_000;
           let queueReady = null;
           let latestDecision = null;
           while (Date.now() < retryDeadline) {
             const [readyResponse, decisionResponse] = await Promise.all([
-              fetch(base + "/ready", { signal: AbortSignal.timeout(10000) }),
-              fetch(base + "/api/decision/" + encodeURIComponent(candleKey), { signal: AbortSignal.timeout(10000) })
+              pollFetch(base + "/ready"),
+              pollFetch(base + "/api/decision/" + encodeURIComponent(candleKey))
             ]);
             if (readyResponse.ok) queueReady = await readyResponse.json();
             if (decisionResponse.ok) {
@@ -351,7 +357,7 @@ jobs:
           const busDeadline = Date.now() + 360_000;
           let bus = null;
           while (Date.now() < busDeadline) {
-            const busResponse = await fetch(base + "/api/bus?candle_key=" + encodeURIComponent(candleKey), { signal: AbortSignal.timeout(10000) });
+            const busResponse = await pollFetch(base + "/api/bus?candle_key=" + encodeURIComponent(candleKey));
             if (busResponse.ok) bus = await busResponse.json();
             if (bus?.items?.some(item => item.agent === "moderator")) break;
             await new Promise(resolve => setTimeout(resolve, 5000));
@@ -423,7 +429,7 @@ jobs:
           let thread = null;
           const flat = (list) => list.flatMap(m => [m, ...flat(m.replies || [])]);
           while (Date.now() < threadDeadline) {
-            const r = await fetch(base + "/api/threads/" + encodeURIComponent(fixture.thread_id), { signal: AbortSignal.timeout(10000) });
+            const r = await pollFetch(base + "/api/threads/" + encodeURIComponent(fixture.thread_id));
             if (r.ok) thread = (await r.json()).thread;
             if (thread && flat(thread.messages || []).some(m => m.step === "moderator")) break;
             await new Promise(resolve => setTimeout(resolve, 5000));
@@ -455,7 +461,7 @@ jobs:
           const liveDeadline = Date.now() + 300_000;
           let live = [];
           while (Date.now() < liveDeadline) {
-            const r = await fetch(base + "/api/live?limit=50", { signal: AbortSignal.timeout(10000) });
+            const r = await pollFetch(base + "/api/live?limit=50");
             if (r.ok) live = ((await r.json()).items || []).filter(m => m.bar_time === barTime);
             if (live.some(m => m.step === "moderator")) break;
             await new Promise(resolve => setTimeout(resolve, 5000));
@@ -498,7 +504,7 @@ jobs:
           const hudDeadline = Date.now() + 360_000;
           let hudThread = null;
           while (Date.now() < hudDeadline) {
-            const r = await fetch(base + "/api/threads/" + encodeURIComponent("h1:" + key60), { signal: AbortSignal.timeout(10000) });
+            const r = await pollFetch(base + "/api/threads/" + encodeURIComponent("h1:" + key60));
             if (r.ok) hudThread = (await r.json()).thread;
             if ((hudThread?.hud_agents || []).some(m => m.agent === "moderator")) break;
             await new Promise(resolve => setTimeout(resolve, 5000));
@@ -528,7 +534,7 @@ jobs:
           const live2Deadline = Date.now() + 300_000;
           let live2 = [];
           while (Date.now() < live2Deadline) {
-            const r = await fetch(base + "/api/live?limit=50", { signal: AbortSignal.timeout(10000) });
+            const r = await pollFetch(base + "/api/live?limit=50");
             if (r.ok) live2 = ((await r.json()).items || []).filter(m => m.bar_time === barTime2);
             if (live2.some(m => m.step === "moderator")) break;
             await new Promise(resolve => setTimeout(resolve, 5000));

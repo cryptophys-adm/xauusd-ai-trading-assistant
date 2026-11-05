@@ -616,6 +616,9 @@ function calibrationStatus(rows: JsonObject[], now: number, intervalDays: number
   return out;
 }
 
+/** How long a local_calculation_reconcile task retries while the other approved records become visible. */
+const LOCAL_TRIGGER_RETRY_MS = 4 * 60 * 1000;
+
 /** "local" (default): parity-approved local records drive the chain; "webhook": legacy webhook-driven chain. */
 function indicatorSourceMode(env: Env): "local" | "webhook" {
   return asText(env.INDICATOR_SOURCE).toLowerCase() === "webhook" ? "webhook" : "local";
@@ -1608,7 +1611,16 @@ async function processLocalCalculationReconcileTask(env: Env, task: Extract<Queu
   if (!analysisAllowedForTimeframe(task.timeframe, env.ANALYSIS_TIMEFRAMES || "60")) return;
   const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
   const localRecords = await Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get("localcalc:" + task.candle_key + ":" + engine)));
-  if (!localRecords.every(Boolean)) return;
+  if (!localRecords.every(Boolean)) {
+    // Local-primary: these records are the trigger. Right after publication the other
+    // engines' records may not be visible here yet (KV across locations), so retry for a
+    // few minutes instead of waiting for the 15-minute sweep; the sweep stays the backstop.
+    const enqueuedMs = Date.parse(asText(task.enqueued_at));
+    if (indicatorSourceMode(env) === "local" && Number.isFinite(enqueuedMs) && Date.now() - enqueuedMs < LOCAL_TRIGGER_RETRY_MS) {
+      throw Object.assign(new Error("approved local records not all visible yet"), { name: "RetryableError" });
+    }
+    return;
+  }
   const payloads = await loadWebhookPayloadsFromD1(env, task.candle_key, required);
   // Local-primary: the parity-approved local records are enough; webhooks are calibration only.
   if (indicatorSourceMode(env) !== "local" && !required.every(source => payloads[source])) return;

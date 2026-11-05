@@ -73,8 +73,11 @@ export async function reconcileLocalComputation(env, candleKey) {
     const id = record ? identityOf(record) : null;
     trust[engine] = id ? await isTrusted(env.DB, id) : false;
     const trustedKey = TRUSTED_PREFIX + candleKey + ":" + engine;
+    // A record that is not visible yet (KV is eventually consistent across locations) is
+    // left alone: deleting its trusted copy here would undo a reconcile that saw it. Only a
+    // visible record whose identity is not (or no longer) approved loses its trusted copy.
     if (record && trust[engine]) await env.WEBHOOK_BUFFER.put(trustedKey, JSON.stringify({ ...record, trust_status: "approved_by_parity" }), LOCAL_TTL);
-    else await env.WEBHOOK_BUFFER.delete(trustedKey);
+    else if (record) await env.WEBHOOK_BUFFER.delete(trustedKey);
   }
   return { comparisons, trust };
 }
