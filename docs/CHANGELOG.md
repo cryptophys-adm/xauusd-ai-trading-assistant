@@ -6,6 +6,17 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- feat(15m,war-room): owner decisions A and B.
+  - **A: calibration status once.**
+    - Each agent's evidence status is stored once in the War Room brief and shown once on Nexus. Agents never repeat calibration disclaimers; 12 of 17 openings at 16:00 had led with "not yet calibrated".
+    - Uncalibrated HUD agents are capped at confidence 0.4.
+    - The bus and the moderator weigh verified evidence above uncalibrated readings.
+    - Agent ids written with spaces are accepted. The 16:00 opening of `interstellar_eyes` had failed as `agent_mismatch`.
+    - Agents are named, not referred to by id, in debate text. The 16:00 Risk Manager rebuttal had failed the natural-language check over `kinetic_engine`.
+  - **B: verified 15m lane.**
+    - `m15-local-producer.mjs` and `publishM15LocalComputation` publish 15m records (`M15_PARITY_PUBLISH`).
+    - New identities `prophet_m15` and `gmi_m15` have their own provenance; the H1 and 5m hashes are unchanged.
+    - The parity sweep covers the last two closed 15m candles.
 - fix(scoring): scoring v2 (owner approval 2026-11-05).
   - WAIT is a missed opportunity only when a BUY or a SELL on the same candle would have been a hit. A whipsaw counts as a hit for WAIT.
   - Under v1, a 0.5 × ATR touch within 4 candles marked nearly every WAIT as missed: the chain was right on 1 of 35 candles and the room on 0 of 56.

@@ -181,7 +181,7 @@ test("GET /engine-shadow refuses to pretend Mizan/GMI local calculators exist", 
   assert.equal(body.calculation_allowed_for_trusted_evidence, false);
 });
 
-const { publishLocalComputation, publishM5LocalComputation, publishHudSnapshots, LAST_M5_PUBLISH_KEY } = await import("../src/local-publisher.mjs");
+const { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHudSnapshots, LAST_M5_PUBLISH_KEY, LAST_M15_PUBLISH_KEY } = await import("../src/local-publisher.mjs");
 const { buildBundle } = await import("../src/tradingview-source.mjs");
 
 function fakeAiWorker(status = 202) {
@@ -263,6 +263,24 @@ test("5m publisher is off unless M5_PARITY_PUBLISH is true, then posts timeframe
 
   const stale = await publishM5LocalComputation(e, { now: now + 15 * 60_000 });
   assert.equal(stale.status, "no_fresh_m5_close");
+});
+
+test("15m publisher is off unless M15_PARITY_PUBLISH is true, then posts timeframe-15 records once per closed 15m bar", async () => {
+  const ai = fakeAiWorker();
+  assert.equal((await publishM15LocalComputation(env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai }))).status, "m15_publish_disabled");
+  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai, M15_PARITY_PUBLISH: "true" });
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  const lastM15 = (await buildBundle(e)).timeframes.M15.candles.at(-1);
+  const now = Date.parse(lastM15.close_time) + 60_000;
+  const first = await publishM15LocalComputation(e, { now });
+  assert.equal(first.status, "published", JSON.stringify(first));
+  assert.equal(first.candle_key, `OANDA:XAUUSD:15:${lastM15.time * 1000}`);
+  assert.deepEqual(ai.posts.map((p) => p.body.engine), ["mizan", "prophet", "gmi"]);
+  assert.ok(ai.posts.every((p) => p.body.timeframe === "15" && p.body.candle_key === first.candle_key));
+  assert.equal(JSON.parse(await e.MARKET_DATA_CACHE.get(LAST_M15_PUBLISH_KEY)).candle_key, first.candle_key);
+  assert.equal((await publishM15LocalComputation(e, { now })).status, "already_published");
+  assert.equal((await publishM15LocalComputation(e, { now: now + 20 * 60_000 })).status, "no_fresh_m15_close");
 });
 
 test("scheduled cron publishes the 5m parity records end to end (no swallowed failures)", async () => {

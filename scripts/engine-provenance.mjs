@@ -31,6 +31,16 @@ export const ENGINE_FILES = {
   prophet_m5: {
     sources: ["pinescript/ssot/The-Prophet-v7.02-R38.txt", "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
     implementation: ["local-engines/prophet-r38/src/core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/m5-local-producer.mjs"]
+  },
+  // 15m chart (owner decision 2026-11-05): separate identities again, so neither the H1 nor
+  // the 5m approvals change when the 15m code changes (prophet_m15, gmi_m15).
+  gmi_m15: {
+    sources: ["pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
+    implementation: ["local-engines/gmi/src/pine.mjs", "local-engines/gmi/src/mizan.mjs", "local-engines/gmi/src/gmi-core.mjs", "local-engines/gmi/src/gmi-core-tf.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/m15-local-producer.mjs"]
+  },
+  prophet_m15: {
+    sources: ["pinescript/ssot/The-Prophet-v7.02-R38.txt", "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
+    implementation: ["local-engines/prophet-r38/src/core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/m15-local-producer.mjs"]
   }
 };
 export const GENERATED_PATH = "local-engines/producer/src/provenance.generated.mjs";

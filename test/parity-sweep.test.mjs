@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import {
   PARITY_SWEEP_CRON, PARITY_SWEEP_LOOKBACK_CANDLES,
-  closedH1CandleKeys, closedM5CandleKeys, reconcileLocalComputation, reconcileRecentCandles
+  closedH1CandleKeys, closedM5CandleKeys, closedM15CandleKeys, reconcileLocalComputation, reconcileRecentCandles
 } from "../src/parity-sweep.mjs";
 import { resetSchemaCacheForTests, ensureSchema, registerIdentity, identityOf } from "../src/parity-registry.mjs";
 
@@ -175,6 +175,16 @@ test("closedM5CandleKeys lists the most recently closed 5m candle opens, newest 
     "OANDA:XAUUSD:5:" + Date.parse("2026-11-04T01:00:00.000Z"),
     "OANDA:XAUUSD:5:" + Date.parse("2026-11-04T00:55:00.000Z")
   ]);
+});
+
+test("closedM15CandleKeys lists the most recently closed 15m candle opens; the sweep includes them", async () => {
+  const now = Date.parse("2026-11-04T01:10:30.000Z");
+  assert.deepEqual(closedM15CandleKeys(now), [
+    "OANDA:XAUUSD:15:" + Date.parse("2026-11-04T00:45:00.000Z"),
+    "OANDA:XAUUSD:15:" + Date.parse("2026-11-04T00:30:00.000Z")
+  ]);
+  const result = await reconcileRecentCandles({ DB: d1(), WEBHOOK_BUFFER: kv() }, { now });
+  assert.deepEqual(result.m15_candle_keys, closedM15CandleKeys(now));
 });
 
 test("sweep reconciles 5m candles under timeframe-scoped ids and never touches the H1 registry rows", async () => {
