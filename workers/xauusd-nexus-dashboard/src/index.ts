@@ -149,6 +149,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .tmsg .m-refs { font-size:10px; color:var(--muted); margin-top:4px; word-break:break-word; }
   .tmsg.mod { border-left-color:var(--accent); }
   .badge-warn { background:#f59e0b; color:#000; padding:2px 6px; border-radius:4px; font-weight:700; font-size:11px; }
+  .badge-ok { background:#10b981; color:#000; padding:2px 6px; border-radius:4px; font-weight:700; font-size:11px; }
   .live-feed { max-height:420px; overflow-y:auto; padding-right:4px; }
   .live-bar { text-align:center; font-size:11px; color:var(--muted); margin:10px 0 4px; }
   .live-pin { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:12px; margin-bottom:10px; }
@@ -256,7 +257,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           <div class="sub">Technical · Risk · Moderator at every 15m candle close · 5m local-lane data for execution</div>
         </div>
       </div>
-      <div class="live-pin"><span class="badge-warn">5m execution: UNVERIFIED</span><span id="live-h1">H1 decision: —</span><span style="color:var(--muted)">Discussion only. No orders are placed.</span></div>
+      <div class="live-pin"><span id="live-m5-badge" class="badge-warn">5m execution: UNVERIFIED</span><span id="live-h1">H1 decision: —</span><span style="color:var(--muted)">Discussion only. No orders are placed.</span></div>
       <div id="live-feed" class="live-feed"><div class="loader">Loading live room...</div></div>
     </div>
 
@@ -569,6 +570,8 @@ async function loadLive(){
     const r = await fetch(API+'/api/live?since='+liveSince+'&limit=60'); const d = await r.json();
     if (!r.ok) { if (!liveLoaded) feed.innerHTML = '<div class="error">'+esc(d.error||r.status)+'</div>'; return; }
     const items = d.items || [];
+    const m5Badge = $('live-m5-badge');
+    if (m5Badge) { m5Badge.className = d.m5_verified ? 'badge-ok' : 'badge-warn'; m5Badge.textContent = d.m5_verified ? '5m execution: VERIFIED (parity approved)' : '5m execution: UNVERIFIED'; }
     if (!liveLoaded) { feed.innerHTML = ''; liveLoaded = true; }
     if (!items.length) { if (!feed.children.length) feed.innerHTML = '<div class="loader">'+(d.enabled ? 'Waiting for the next 15m candle close...' : 'Live room is off in this environment.')+'</div>'; return; }
     if (feed.querySelector('.loader')) feed.innerHTML = '';

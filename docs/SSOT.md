@@ -51,7 +51,10 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - Storage: KV key `context:m5:latest` (TTL 900 s) on the AI Worker.
 - Read API: `GET /api/m5-context` returns the latest stored 5m context.
 - **Analysis timeframes.** `POST /webhook` starts the AI chain only for `ANALYSIS_TIMEFRAMES`: `"60"` (H1) in production, and `"60,5"` in preview for the M5 fixture. Webhooks on other timeframes, such as 5m or 15m parity comparators, are stored only and answer `analysis_status: "stored_only"`.
-- **Verified 5m lane (C0).** Per-timeframe parity identities and the full 5m producer are in place. Comparison starts once the owner installs the existing alerts on the 5m chart. The 5m context becomes verified after 24/24 5m matches, which is step 4: the label switch. See `docs/BRIEF_HUD_AGENTS.md`. Until then the 5m context stays UNVERIFIED.
+- **Verified 5m lane (C0).** Per-timeframe parity identities and the full 5m producer are in place. Comparison starts once the owner installs the existing alerts on the 5m chart. The label switch is step 4. While `prophet_m5` and `gmi_m5` are both approved, and the observed 5m records for the bar come from those approved implementations, the live room's 5m read is labelled **VERIFIED 5m** (`trust_status: approved_by_parity`). It is then read in plain language with the same reading as the H1 webhooks (`src/m5-verification.mjs`).
+  - Otherwise the read stays UNVERIFIED 5m, and the label switches by itself.
+  - `GET /api/live` returns `m5_verified`, and the Nexus live badge follows it.
+  - The decision card's 5m context stays UNVERIFIED: it is the separate informational `buildM5ProphetContext` read. See `docs/BRIEF_HUD_AGENTS.md`. Until then the 5m context stays UNVERIFIED.
 - Freshness rule for use in `runAnalysis`: accepted only when both
   `now - Date.parse(candle_time) <= 15 min` and
   `now - Date.parse(received_at) <= 10 min`.
@@ -77,7 +80,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - At every 15m close, `technical` and `risk` (a reply to technical) post, then a `moderator`, using stances BUY/SELL/HOLD/WAIT/CLOSE. There is no "nothing changed" skip.
   - Evidence:
     - `m15`: the closed 15m candles built from the last 12 closed 5m bars; a candle counts only when all three of its bars are present. This is the setup.
-    - `m5`: the local-lane 5m Prophet read and bars, labelled UNVERIFIED 5m. This is the execution timing.
+    - `m5`: the local-lane 5m read and bars, labelled VERIFIED 5m when parity-approved on 5m (C0), otherwise UNVERIFIED 5m. This is the execution timing.
     - `h1`: the H1 decision and the H1 TradingView reading.
     - `news`: the latest news-thread consensus.
   - The moderator must state the H1 decision whenever its stance differs from it.

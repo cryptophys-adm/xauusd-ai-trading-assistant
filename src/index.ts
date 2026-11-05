@@ -134,6 +134,7 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+import { m5ParityApproved, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -1760,7 +1761,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/live") {
     try {
       const items = await readLive(env.DB, { since: Number(url.searchParams.get("since") || "0"), limit: Number(url.searchParams.get("limit") || "50") });
-      return dashboardJson({ status: "ok", enabled: liveRoomEnabled(env), cadence: "15m", label: "UNVERIFIED 5m", items });
+      const m5Verified = await m5ParityApproved(env.DB);
+      return dashboardJson({ status: "ok", enabled: liveRoomEnabled(env), cadence: "15m", label: m5Verified ? M5_VERIFIED_LABEL : M5_UNVERIFIED_LABEL, m5_verified: m5Verified, items });
     } catch (error) {
       console.error("live_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error", error: "live_unavailable" }, 500);

@@ -322,3 +322,60 @@ test("a correction that still reads like code stays invalid_output; schema error
   await runLiveRoomBar(e2, { bar_time: BAR });
   assert.equal(e2.AI.calls.length, 3, "a schema error is not retried");
 });
+
+// C0 step 4: the 5m read is VERIFIED only while prophet_m5 and gmi_m5 are parity-approved.
+async function seedVerifiedM5(e, { approve = true } = {}) {
+  const { ensureSchema, registerIdentity, identityOf, resetSchemaCacheForTests } = await import("../src/parity-registry.mjs");
+  resetSchemaCacheForTests();
+  const H = (c) => c.repeat(64);
+  const key = `OANDA:XAUUSD:5:${Date.parse(BAR) - 300_000}`;
+  const base = { schema_version: "cryptophys.local-calculation.v1", symbol: "OANDA:XAUUSD", timeframe: "5", candle_key: key };
+  const records = {
+    prophet: { ...base, engine: "prophet", provenance: { source_hash: H("a"), implementation_hash: H("5") }, values: { comparable: {
+      prophet_r38: { direction: -1, buy_confirmed: false, sell_confirmed: true, buy_high_quality: false, sell_high_quality: false, t_enc: 0, d_enc: -1, structure_subtype: 1 },
+      prophet_r37_ssot: { direction: -1, d_enc: -1, b_enc: 0, structure_subtype: 1, bull_event: false, bear_event: true } } } },
+    gmi: { ...base, engine: "gmi", provenance: { source_hash: H("b"), implementation_hash: H("6") }, values: { comparable: {
+      gmi_v12_70: { verdict: -3, gate: 2, gmi_dir: -1, prophet_dir: -1, conflict: false } } } }
+  };
+  e.WEBHOOK_BUFFER = fakeKV(Object.fromEntries(Object.entries(records).map(([engine, r]) => [`localcalc-observed:${key}:${engine}`, JSON.stringify(r)])));
+  await ensureSchema(e.DB);
+  for (const r of Object.values(records)) await registerIdentity(e.DB, identityOf(r));
+  if (approve) e.DB.raw.prepare("UPDATE engine_parity_registry SET status = 'approved' WHERE engine IN ('prophet_m5', 'gmi_m5')").run();
+  return key;
+}
+
+test("live room labels the 5m read VERIFIED 5m only while the 5m implementations are parity-approved", async () => {
+  const e = env();
+  await seedVerifiedM5(e);
+  await runLiveRoomBar(e, { bar_time: BAR });
+  const evidence = JSON.parse(e.AI.calls[0].request.messages[1].content.split("EVIDENCE:\n")[1].split("\n")[0]);
+  assert.equal(evidence.m5.label, "VERIFIED 5m");
+  assert.equal(evidence.m5.trust_status, "approved_by_parity");
+  assert.equal(evidence.m5.bias, "bearish", "the verified read replaces the unverified BULLISH context");
+  assert.match(evidence.m5.reading.summary, /verified 5m indicators/);
+  assert.equal(evidence.m5.reading.lines.length, 3);
+  assert.equal(evidence.m5.recent_bars.length, 12);
+});
+
+test("live room keeps UNVERIFIED 5m while the 5m identities are only candidates", async () => {
+  const e = env();
+  await seedVerifiedM5(e, { approve: false });
+  await runLiveRoomBar(e, { bar_time: BAR });
+  const evidence = JSON.parse(e.AI.calls[0].request.messages[1].content.split("EVIDENCE:\n")[1].split("\n")[0]);
+  assert.equal(evidence.m5.label, "UNVERIFIED 5m");
+  assert.equal(evidence.m5.bias, "BULLISH");
+});
+
+test("an approved H1 identity never verifies a 5m record", async () => {
+  const { verifiedM5Reading, m5ParityApproved } = await import("../src/m5-verification.mjs");
+  const e = env();
+  await seedVerifiedM5(e, { approve: false });
+  // Same hashes approved under the bare H1 ids must not count for 5m.
+  e.DB.raw.prepare("INSERT INTO engine_parity_registry (engine, source_hash, implementation_hash, status, first_seen_at, updated_at) SELECT REPLACE(engine, '_m5', ''), source_hash, implementation_hash, 'approved', first_seen_at, updated_at FROM engine_parity_registry WHERE engine IN ('prophet_m5', 'gmi_m5')").run();
+  assert.equal((await verifiedM5Reading(e, BAR)).reason, "m5_parity_not_approved");
+  assert.equal(await m5ParityApproved(e.DB), false);
+  e.DB.raw.prepare("UPDATE engine_parity_registry SET status = 'approved' WHERE engine IN ('prophet_m5', 'gmi_m5')").run();
+  assert.equal((await verifiedM5Reading(e, BAR)).verified, true);
+  assert.equal(await m5ParityApproved(e.DB), true);
+  assert.equal((await verifiedM5Reading(e, "2026-11-04T15:10:00.000Z")).reason, "no_local_5m_record");
+});
