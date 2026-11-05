@@ -102,7 +102,10 @@ jobs:
           let healthResponse;
           let health;
           let healthParseError = "no response";
-          for (let attempt = 0; attempt < 10; attempt++) {
+          // `wrangler secret put` creates a new Worker version that reaches isolates gradually:
+          // wait up to 90 s for /health to see the secret (10 x 1 s was not enough on ede9e9f).
+          const healthDeadline = Date.now() + 90_000;
+          while (Date.now() < healthDeadline) {
             try {
               healthResponse = await fetch(base + "/health", { signal: AbortSignal.timeout(15000) });
             } catch (error) {
