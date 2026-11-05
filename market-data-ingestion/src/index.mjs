@@ -1,6 +1,6 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
-import { publishLocalComputation, publishM5LocalComputation, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
+import { publishLocalComputation, publishM5LocalComputation, publishHudSnapshots, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
 import { buildM5ProphetContext } from "../../local-engines/producer/src/m5-producer.mjs";
 import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest } from "./tradingview-source.mjs";
 
@@ -266,6 +266,14 @@ const worker = {
         }
       } catch (error) {
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_m5_failed", code: asString(error?.code) || "publish_failed" }));
+      }
+      // Phase C2: HUD snapshots for the HUD agents (flag-gated; never decision evidence).
+      try {
+        const hud = await publishHudSnapshots(env, { bundle: latestBundle });
+        const failed = Object.entries(hud.charts || {}).filter(([, r]) => !["published", "already_published", "no_fresh_close"].includes(r.status));
+        if (failed.length) console.error(JSON.stringify({ worker: WORKER_NAME, event: "hud_snapshot_publish_failed", charts: Object.fromEntries(failed.map(([c, r]) => [c, r.status])) }));
+      } catch (error) {
+        console.error(JSON.stringify({ worker: WORKER_NAME, event: "hud_snapshot_publish_failed", code: asString(error?.code) || "publish_failed" }));
       }
       // Informational (unverified) 5m context: build from closed M5 bars and forward
       // to the AI Worker. Never enters the trusted local_computation lane.

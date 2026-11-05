@@ -5,14 +5,14 @@
 // and the shared MizanLib structure core). This is a deterministic description of
 // what the indicators said; it is not a trade signal and never changes the H1 decision.
 
-const STRUCTURE_SUBTYPES = {
+export const STRUCTURE_SUBTYPES = {
   1: { text: "a bull trap (a fake breakout up)", lean: -1 },
   2: { text: "a true breakout up", lean: 1 },
   3: { text: "a bear trap (a liquidity sweep down that reversed)", lean: 1 },
   4: { text: "a true breakdown", lean: -1 }
 };
 
-const TRADE_MANAGEMENT = {
+export const TRADE_MANAGEMENT = {
   0: "nominal, with nothing to manage",
   1: "bullish trend continuation (adding to longs is allowed)",
   "-1": "bearish trend continuation (adding to shorts is allowed)",
@@ -25,7 +25,7 @@ const TRADE_MANAGEMENT = {
   "-6": "price discovery to the downside"
 };
 
-const GMI_VERDICTS = {
+export const GMI_VERDICTS = {
   3: "a bullish verdict",
   "-3": "a bearish verdict",
   4: "an extension state where open risk should be reviewed",
@@ -34,7 +34,7 @@ const GMI_VERDICTS = {
   0: "wait and observe"
 };
 
-const GMI_GATES = {
+export const GMI_GATES = {
   2: "Prophet, GMI and the volume profile all agree on direction",
   1: "the confluence gate passed, but without full agreement on direction",
   "-1": "the confluence gate found a conflict between Prophet, GMI and the volume profile",
@@ -56,7 +56,7 @@ function dirWord(dir) {
 }
 
 /** Prophet structure (divergence / break) from d_enc and the subtype code. */
-function describeStructure(dEnc, subtype) {
+export function describeStructure(dEnc, subtype) {
   if (dEnc === 1) return { text: "a bullish divergence", lean: 1 };
   if (dEnc === -1) return { text: "a bearish divergence", lean: -1 };
   if (dEnc === 3 || dEnc === -3) {
