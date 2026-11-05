@@ -41,7 +41,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   (`buildM5ProphetContext`) from closed M5 bars.
 - It is **never** part of `fusion.complete`, never changes decision, entry/SL/TP, risk/reward,
   position size or confidence, and is labelled "UNVERIFIED 5m" in the UI and prompts.
-- Trust remains H1-only via the autonomous parity registry; no parity exists for 5m.
+- Trust is H1-only until the 5m producer publishes full 5m records (C0 step 3). The registry is already timeframe-scoped: 5m records earn their own approval under `prophet_m5`, `gmi_m5` and `mizan_m5`, separate from the approved H1 ids, and the parity sweep revisits the last six closed 5m candles.
 
 - Transport: the pull adapter calls `AI_WORKER.submitContext(record)` on the
   AI Worker's `LocalComputationIngress` RPC entrypoint (no shared secret).

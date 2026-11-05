@@ -58,17 +58,38 @@ export function normalizeHash(value) {
   return HASH.test(hash) ? hash : null;
 }
 
+export const BASE_ENGINES = Object.freeze(["mizan", "prophet", "gmi", "prophet_hud", "gmi_hud"]);
+
+// Registry engine ids are scoped by chart timeframe. H1 keeps the bare id, so the
+// approved H1 prophet/gmi rows (and their streaks) are untouched; every other
+// timeframe earns its own approval under a suffixed id (prophet_m5, gmi_m5, ...).
+// The same source and implementation hash approved on H1 says nothing about 5m.
+const TIMEFRAME_SCOPE = Object.freeze({
+  "60": "", "60M": "", "1H": "", "H1": "",
+  "5": "_m5", "5M": "_m5", "M5": "_m5",
+  "15": "_m15", "15M": "_m15", "M15": "_m15"
+});
+
+/** Registry engine id for an engine on a chart timeframe, or null when the timeframe is not supported. */
+export function scopedEngine(engine, timeframe) {
+  if (!BASE_ENGINES.includes(engine)) return null;
+  const raw = timeframe == null || String(timeframe).trim() === "" ? "60" : String(timeframe).trim().toUpperCase();
+  const suffix = TIMEFRAME_SCOPE[raw];
+  return suffix === undefined ? null : engine + suffix;
+}
+
 /** Extracts the registry identity of a local calculation record, or null. */
 export function identityOf(record) {
-  const engine = record?.engine;
+  const base = record?.engine;
+  const engine = scopedEngine(base, record?.timeframe);
   const sourceHash = normalizeHash(record?.provenance?.source_hash);
   const implementationHash = normalizeHash(record?.provenance?.implementation_hash);
-  if (!["mizan", "prophet", "gmi", "prophet_hud", "gmi_hud"].includes(engine) || !sourceHash || !implementationHash) return null;
+  if (!engine || !sourceHash || !implementationHash) return null;
   const dep = record?.provenance?.dependencies?.mizan;
   return {
     engine, sourceHash, implementationHash,
-    mizanSourceHash: engine === "mizan" ? null : normalizeHash(dep?.source_hash),
-    mizanImplementationHash: engine === "mizan" ? null : normalizeHash(dep?.implementation_hash)
+    mizanSourceHash: base === "mizan" ? null : normalizeHash(dep?.source_hash),
+    mizanImplementationHash: base === "mizan" ? null : normalizeHash(dep?.implementation_hash)
   };
 }
 
@@ -232,14 +253,17 @@ export async function recordComparison(db, id, candleKey, comparison, policy = D
 
 /** True when the identity is currently trusted for the local_computation lane. */
 export async function isTrusted(db, id) {
-  if (id.engine === "mizan") {
+  if (id.engine === "mizan" || id.engine.startsWith("mizan_")) {
+    // Mizan is trusted per timeframe: only approved Prophet AND GMI identities on
+    // the same timeframe scope (for example prophet_m5 and gmi_m5) vouch for it.
+    const suffix = id.engine.slice("mizan".length);
     const row = await db.prepare(
       `SELECT
-         SUM(CASE WHEN engine = 'prophet' THEN 1 ELSE 0 END) AS prophet,
-         SUM(CASE WHEN engine = 'gmi' THEN 1 ELSE 0 END) AS gmi
+         SUM(CASE WHEN engine = ? THEN 1 ELSE 0 END) AS prophet,
+         SUM(CASE WHEN engine = ? THEN 1 ELSE 0 END) AS gmi
        FROM engine_parity_registry
        WHERE status = 'approved' AND mizan_source_hash = ? AND mizan_implementation_hash = ?`
-    ).bind(id.sourceHash, id.implementationHash).first();
+    ).bind("prophet" + suffix, "gmi" + suffix, id.sourceHash, id.implementationHash).first();
     return Number(row?.prophet) > 0 && Number(row?.gmi) > 0;
   }
   const row = await db.prepare(

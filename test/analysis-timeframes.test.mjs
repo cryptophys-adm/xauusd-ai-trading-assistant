@@ -25,3 +25,17 @@ test("HUD comparator sources never start the AI chain", () => {
   assert.equal(isHudSource("gmi_v12_70_hud"), true);
   for (const s of ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70", "", undefined]) assert.equal(isHudSource(s), false, String(s));
 });
+
+test("reconcile tasks run parity on every timeframe but start the AI chain only on analysis timeframes", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  for (const handler of ["processWebhookReconcileTask", "processLocalCalculationReconcileTask"]) {
+    const start = source.indexOf(`async function ${handler}(`);
+    assert.ok(start > 0, handler);
+    const body = source.slice(start, source.indexOf("\n}\n", start));
+    const reconcile = body.indexOf("reconcileLocalComputation(env, task.candle_key)");
+    const gate = body.indexOf('analysisAllowedForTimeframe(task.timeframe, env.ANALYSIS_TIMEFRAMES || "60")');
+    const analysis = body.indexOf("runAnalysis(");
+    assert.ok(reconcile >= 0 && gate > reconcile && analysis > gate, handler);
+  }
+});

@@ -25,7 +25,10 @@ export const LOCAL_TTL = { expirationTtl: 60 * 60 * 24 * 14 };
 /** Cron expression that triggers the sweep in the scheduled handler. */
 export const PARITY_SWEEP_CRON = "10-59/15 * * * *";
 export const PARITY_SWEEP_LOOKBACK_CANDLES = 3;
+/** 5m candles revisited per sweep: the sweep runs every 15 minutes, so 6 covers each 5m candle twice. */
+export const PARITY_SWEEP_LOOKBACK_M5_CANDLES = 6;
 const H1_SECONDS = 3600;
+const M5_SECONDS = 300;
 
 async function readJsonKV(kv, key) {
   const raw = await kv.get(key);
@@ -47,6 +50,9 @@ export async function reconcileLocalComputation(env, candleKey) {
   await Promise.all(LOCAL_ENGINES.map(async engine => {
     observed[engine] = await readJsonKV(env.WEBHOOK_BUFFER, OBSERVED_PREFIX + candleKey + ":" + engine);
   }));
+  // Nothing observed for this candle (for example a 5m candle with no local 5m
+  // producer yet): nothing to compare and no trusted record can exist.
+  if (!LOCAL_ENGINES.some(engine => observed[engine])) return { comparisons: {}, trust: {} };
   const comparisons = {};
   for (const engine of ["prophet", "gmi"]) {
     const record = observed[engine];
@@ -80,11 +86,19 @@ export async function reconcileLocalComputation(env, candleKey) {
  * skipped by reconcileLocalComputation, so guessing keys is safe.
  */
 export function closedH1CandleKeys(now = Date.now(), { symbol = "OANDA:XAUUSD", timeframe = "60", lookback = PARITY_SWEEP_LOOKBACK_CANDLES } = {}) {
-  const currentOpenMs = Math.floor(now / (H1_SECONDS * 1000)) * H1_SECONDS * 1000;
+  return closedCandleKeys(now, H1_SECONDS, { symbol, timeframe, lookback });
+}
+
+/** Candle keys of the `lookback` most recently closed 5m candles, newest first. */
+export function closedM5CandleKeys(now = Date.now(), { symbol = "OANDA:XAUUSD", lookback = PARITY_SWEEP_LOOKBACK_M5_CANDLES } = {}) {
+  return closedCandleKeys(now, M5_SECONDS, { symbol, timeframe: "5", lookback });
+}
+
+function closedCandleKeys(now, seconds, { symbol, timeframe, lookback }) {
+  const periodMs = seconds * 1000;
+  const currentOpenMs = Math.floor(now / periodMs) * periodMs;
   const keys = [];
-  for (let i = 1; i <= lookback; i += 1) {
-    keys.push(`${symbol}:${timeframe}:${currentOpenMs - i * H1_SECONDS * 1000}`);
-  }
+  for (let i = 1; i <= lookback; i += 1) keys.push(`${symbol}:${timeframe}:${currentOpenMs - i * periodMs}`);
   return keys;
 }
 
@@ -92,17 +106,22 @@ export function closedH1CandleKeys(now = Date.now(), { symbol = "OANDA:XAUUSD", 
  * Reconciles the most recently closed H1 candles. Returns a per-candle summary;
  * individual candle failures are captured instead of aborting the sweep.
  */
-export async function reconcileRecentCandles(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES } = {}) {
+export async function reconcileRecentCandles(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, m5Lookback = PARITY_SWEEP_LOOKBACK_M5_CANDLES } = {}) {
   const candleKeys = closedH1CandleKeys(now, { lookback });
+  // 5m parity (C0): 5m comparator webhooks are stored only and never queue a
+  // reconcile task, so the sweep is what pairs them with the local 5m records
+  // when those arrive first. Registry ids are timeframe-scoped (prophet_m5,
+  // gmi_m5), so this can never touch the approved H1 identities.
+  const m5CandleKeys = closedM5CandleKeys(now, { lookback: m5Lookback });
   const results = {};
-  for (const candleKey of candleKeys) {
+  for (const candleKey of [...candleKeys, ...m5CandleKeys]) {
     try {
       results[candleKey] = await reconcileLocalComputation(env, candleKey);
     } catch (error) {
       results[candleKey] = { error: error instanceof Error ? error.name : "UnknownError" };
     }
   }
-  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, results };
+  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, results };
 }
 
 export async function backfillRecentAnalyses(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, loadPayloads = null, runAnalysis = null, setStatus = null } = {}) {

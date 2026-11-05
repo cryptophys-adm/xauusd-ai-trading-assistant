@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import {
   PARITY_SWEEP_CRON, PARITY_SWEEP_LOOKBACK_CANDLES,
-  closedH1CandleKeys, reconcileLocalComputation, reconcileRecentCandles
+  closedH1CandleKeys, closedM5CandleKeys, reconcileLocalComputation, reconcileRecentCandles
 } from "../src/parity-sweep.mjs";
 import { resetSchemaCacheForTests, ensureSchema, registerIdentity, identityOf } from "../src/parity-registry.mjs";
 
@@ -51,26 +51,26 @@ function webhookPayloads() {
   };
 }
 
-function observedRecord(engine, webhooks) {
+function observedRecord(engine, webhooks, timeframe = "60") {
   const comparable = engine === "prophet"
     ? { prophet_r38: pick(webhooks.prophet_r38, R38_FIELDS), prophet_r37_ssot: pick(webhooks.prophet_r37_ssot, R37_FIELDS) }
     : { gmi_v12_70: pick(webhooks.gmi_v12_70, GMI_FIELDS) };
   return {
-    engine,
+    engine, timeframe,
     provenance: { source_hash: H({ prophet: "a", gmi: "b" }[engine]), implementation_hash: H("1") },
     values: { candle, comparable }
   };
 }
 
 /** Seeds KV the way the webhook handler and LocalComputationIngress do. */
-async function seedCandle(env, candleKey) {
+async function seedCandle(env, candleKey, timeframe = "60") {
   await ensureSchema(env.DB);
   const hooks = webhookPayloads();
   for (const [source, payload] of Object.entries(hooks)) {
     await env.WEBHOOK_BUFFER.put("candle:" + candleKey + ":" + source, JSON.stringify(payload));
   }
   for (const engine of ["prophet", "gmi"]) {
-    const record = observedRecord(engine, hooks);
+    const record = observedRecord(engine, hooks, timeframe);
     // ingestLocalCalculation registers the identity before any reconcile runs.
     await registerIdentity(env.DB, identityOf(record));
     await env.WEBHOOK_BUFFER.put("localcalc-observed:" + candleKey + ":" + engine, JSON.stringify(record));
@@ -166,4 +166,36 @@ test("reconcileLocalComputation promotes trusted records into the trusted lane o
   assert.equal(after.trust.prophet, true);
   const trusted = JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":prophet"));
   assert.equal(trusted.trust_status, "approved_by_parity");
+});
+
+test("closedM5CandleKeys lists the most recently closed 5m candle opens, newest first", () => {
+  const now = Date.parse("2026-11-04T01:10:30.000Z");
+  assert.deepEqual(closedM5CandleKeys(now, { lookback: 3 }), [
+    "OANDA:XAUUSD:5:" + Date.parse("2026-11-04T01:05:00.000Z"),
+    "OANDA:XAUUSD:5:" + Date.parse("2026-11-04T01:00:00.000Z"),
+    "OANDA:XAUUSD:5:" + Date.parse("2026-11-04T00:55:00.000Z")
+  ]);
+});
+
+test("sweep reconciles 5m candles under timeframe-scoped ids and never touches the H1 registry rows", async () => {
+  const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
+  const now = Date.parse("2026-11-04T01:10:00.000Z");
+  const h1Key = "OANDA:XAUUSD:60:1793750400000";
+  const m5Key = "OANDA:XAUUSD:5:" + Date.parse("2026-11-04T01:00:00.000Z");
+  await seedCandle(env, h1Key, "60");
+  await seedCandle(env, m5Key, "5");
+
+  const result = await reconcileRecentCandles(env, { now });
+  assert.ok(result.m5_candle_keys.includes(m5Key));
+  assert.equal(result.results[m5Key].comparisons.prophet.result, "match");
+  const registry = env.DB.db.prepare("SELECT engine, consecutive_matches, last_candle_key FROM engine_parity_registry ORDER BY engine").all().map((row) => ({ ...row }));
+  assert.deepEqual(registry, [
+    { engine: "gmi", consecutive_matches: 1, last_candle_key: h1Key },
+    { engine: "gmi_m5", consecutive_matches: 1, last_candle_key: m5Key },
+    { engine: "prophet", consecutive_matches: 1, last_candle_key: h1Key },
+    { engine: "prophet_m5", consecutive_matches: 1, last_candle_key: m5Key }
+  ]);
+  // A 5m candle with no local record is skipped without KV writes.
+  const empty = result.m5_candle_keys.find((key) => key !== m5Key);
+  assert.deepEqual(result.results[empty], { comparisons: {}, trust: {} });
 });
