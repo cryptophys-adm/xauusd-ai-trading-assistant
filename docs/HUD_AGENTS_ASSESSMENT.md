@@ -19,14 +19,17 @@ Sources inspected (line numbers as in `main` on 2026-11-05):
 
 Parity status legend used throughout:
 
-- **TradingView output; local engine: parity candidate** — the field is carried today in the trusted `tradingview_webhook` lane (TradingView's own output) and is also listed in `PARITY_FIELDS` (`src/parity-registry.mjs`) for local-engine comparison on every closed H1 bar. No local engine is parity-approved yet (`engine_parity_registry` at `2026-11-05T00:00Z`: `prophet` candidate `23/24`, `gmi` candidate `23/24`, `mizan` candidate `0/24`).
+- **TradingView output; local engine: parity-approved** — the field is carried in the trusted `tradingview_webhook` lane (TradingView's own output) and is listed in `PARITY_FIELDS` (`src/parity-registry.mjs`), so it is compared field by field with the local engine on every closed H1 bar.
+  - The `prophet` and `gmi` engines have been **parity-approved since 2026-11-05 01:00 UTC**: 24/24 consecutive matches, and 31/31 by 08:00 UTC.
+  - MizanLib has no webhook of its own and is trusted through the approved engines' declared Mizan dependency.
+  - Approval covers only the `PARITY_FIELDS`, never the engines' `diagnostics`.
 - **Computed (unverified)** — ported from Pine and run locally, appears in `diagnostics` or engine internals, not compared in `PARITY_FIELDS`.
 - **Not ported** — not computed locally today.
 
 Data-source decision legend (brief §3.2):
 
 - **(a)** existing webhook field (authoritative `tradingview_webhook` lane);
-- **(b)** existing local engine output — trusted only when the engine is parity-approved (`approved_by_parity`), and otherwise labelled UNVERIFIED;
+- **(b)** existing local engine output. Only the engine's `PARITY_FIELDS` are trusted, and only while it is parity-approved (`approved_by_parity`). Every other output (`diagnostics`, internals) stays labelled UNVERIFIED even for an approved engine.
 - **(c)** new local computation + parity comparator;
 - **(d)** richer alert payload from a Pine candidate in `pinescript/candidates/`, carrying numeric levels, booleans and codes (never rendered strings), which the owner must install.
 
@@ -47,8 +50,8 @@ Table is 2 columns × 7 rows (1 header row + 6 counter rows), rendered only when
 | 3 | `Price` (row 2) | `funnel_price` incremented on `buy/sell_window_active and bullish/bearish_price_confirm` (lines 489–492, 510) | None | None | Not ported | (c) |
 | 4 | `Structure` (row 3) | `funnel_structure` on price+structure confirm (lines 493–496, 511) | None | None | Not ported | (c) |
 | 5 | `Volume` (row 4) | `funnel_volume` on price+structure+volume pass (lines 497–500, 512) | None | None | Not ported | (c) |
-| 6 | `Confirmed` (row 5) | `funnel_confirmed` on `buy_confirmed or sell_confirmed` (lines 501–502, 513) | Per-bar `buy_confirmed` / `sell_confirmed` (`prophet_r38`); cumulative count is not in webhook | Per-bar `confirmation.buy_confirmed` / `sell_confirmed` in `local-engines/prophet-r38/src/core.mjs` (line 522) | TradingView output; local engine: parity candidate (per-bar flags) | (a) per-bar confirmation via webhook |
-| 7 | `High Quality` (row 6) | `funnel_hq` on `buy_high_quality or sell_high_quality` (lines 503–504, 514) | Per-bar `buy_high_quality` / `sell_high_quality` (`prophet_r38`); cumulative count is not in webhook | Per-bar `confirmation.buy_high_quality` / `sell_high_quality` (line 523) | TradingView output; local engine: parity candidate (per-bar flags) | (a) per-bar HQ confirmation via webhook |
+| 6 | `Confirmed` (row 5) | `funnel_confirmed` on `buy_confirmed or sell_confirmed` (lines 501–502, 513) | Per-bar `buy_confirmed` / `sell_confirmed` (`prophet_r38`); cumulative count is not in webhook | Per-bar `confirmation.buy_confirmed` / `sell_confirmed` in `local-engines/prophet-r38/src/core.mjs` (line 522) | TradingView output; local engine: parity-approved (per-bar flags) | (a) per-bar confirmation via webhook |
+| 7 | `High Quality` (row 6) | `funnel_hq` on `buy_high_quality or sell_high_quality` (lines 503–504, 514) | Per-bar `buy_high_quality` / `sell_high_quality` (`prophet_r38`); cumulative count is not in webhook | Per-bar `confirmation.buy_high_quality` / `sell_high_quality` (line 523) | TradingView output; local engine: parity-approved (per-bar flags) | (a) per-bar HQ confirmation via webhook |
 
 Note: the funnel counters themselves are cumulative `var int` state that depends on the chart start bar and reset semantics (`buy_candidate` resets per-setup flags). Cumulative tallies cannot be reproduced deterministically from a fixed OHLCV window; see §2.2.
 
@@ -60,8 +63,8 @@ Note: the funnel counters themselves are cumulative `var int` state that depends
 |---|---|---|---|---|---|---|
 | 1 | `MARKET` (row 0) | `hud_market_txt = cshi_txt + " · " + regime_detail` where `cshi_txt` from `cshi_score` (lines 162–171, 599) and `regime_detail` = ER + Vol (line 598) | None | `sensors` (KWW z-score, Hurst, efficiency ratio, volume ratio) in `core.mjs` (lines 564, 609); `cshi_score` composite not exposed | Computed (unverified, partial) | (b) unverified local reading |
 | 2 | `HARMONIC` (row 1) | `hud_harmonic_txt = intensity_txt + " · " + int_dir_txt` from `inten` (lines 176, 237–239, 600) | None | `sensors.cycle_intensity` in `core.mjs` (line 608) | Computed (unverified) | (b) |
-| 3 | `STRUCTURE` (row 2) | `hud_structure_txt = div_txt + " · " + vol_conf_txt` from `d_enc`, `t_enc`, `prophet_structure_subtype` (lines 241–262, 601) | `d_enc`, `structure_subtype` (`prophet_r38`) | `structure.d_enc`, `structure.subtype_code` in `core.mjs` (lines 595, 609) | TradingView output; local engine: parity candidate (`d_enc`, `structure_subtype`); volume-confirmation suffix is unverified | (a) for `d_enc`/`structure_subtype`, (b) for volume suffix |
-| 4 | `MOMENTUM` (row 3) | `hud_momentum_txt = hud_momentum_strength_txt + " — " + legacy_tm_context_txt + momentum_trend_context_txt` (lines 603–615) | `t_enc` (`prophet_r38`); momentum delta `pro_fast - pro_fast[1]` is not in webhook | `oscillator.fast`/`slow` in `core.mjs` (line 609); `pro_fast - pro_fast[1]` not exposed | TradingView output; local engine: parity candidate (`t_enc`); momentum delta is Computed (unverified) | (a) for `t_enc`, (b) for oscillator momentum reading |
+| 3 | `STRUCTURE` (row 2) | `hud_structure_txt = div_txt + " · " + vol_conf_txt` from `d_enc`, `t_enc`, `prophet_structure_subtype` (lines 241–262, 601) | `d_enc`, `structure_subtype` (`prophet_r38`) | `structure.d_enc`, `structure.subtype_code` in `core.mjs` (lines 595, 609) | TradingView output; local engine: parity-approved (`d_enc`, `structure_subtype`); volume-confirmation suffix is unverified | (a) for `d_enc`/`structure_subtype`, (b) for volume suffix |
+| 4 | `MOMENTUM` (row 3) | `hud_momentum_txt = hud_momentum_strength_txt + " — " + legacy_tm_context_txt + momentum_trend_context_txt` (lines 603–615) | `t_enc` (`prophet_r38`); momentum delta `pro_fast - pro_fast[1]` is not in webhook | `oscillator.fast`/`slow` in `core.mjs` (line 609); `pro_fast - pro_fast[1]` not exposed | TradingView output; local engine: parity-approved (`t_enc`); momentum delta is Computed (unverified) | (a) for `t_enc`, (b) for oscillator momentum reading |
 
 ### 1.3 Trade Management — `trade_management_hud` (Prophet R38, line 1075)
 
@@ -73,7 +76,7 @@ Note: the funnel counters themselves are cumulative `var int` state that depends
 | 2 | Zone (col 1) | `zone_full_txt` / `zone_state_txt` (lines 619–652, 794, 1088) | `t_enc`, `d_enc` (`prophet_r38`) indirectly; OB zone proximity not in webhook | `structure.d_enc`, `confirmation.*` in `core.mjs` | Computed (unverified) | (b) |
 | 3 | Cycle (col 2) | `cycle_full_txt` from `inten` (lines 784, 788, 1089) | None | `sensors.cycle_intensity` in `core.mjs` (line 608) | Computed (unverified) | (b) |
 | 4 | Macro (col 3) | `macro_full_txt` from `is_macro_bull/bear` = `z_score >/< 0` (lines 158–159, 785, 789, 1090) | None | `sensors.kww_zscore` in `core.mjs` (line 609) | Computed (unverified) | (b) |
-| 5 | Prophet–GMI (col 4) | `pg_full_txt` from `gmi_z_alignment_code` (lines 152–154, 786, 790, 1091) | `prophet_dir`, `gmi_dir`, `conflict`, `gate` (`gmi_v12_70`) | `htf_alignment` in `core.mjs` (line 601) | TradingView output; local engine: parity candidate (via `gmi_v12_70` alignment fields); local `htf_alignment` is Computed (unverified) | (a) via GMI webhook alignment + (b) local unverified |
+| 5 | Prophet–GMI (col 4) | `pg_full_txt` from `gmi_z_alignment_code` (lines 152–154, 786, 790, 1091) | `prophet_dir`, `gmi_dir`, `conflict`, `gate` (`gmi_v12_70`) | `htf_alignment` in `core.mjs` (line 601) | TradingView output; local engine: parity-approved (via `gmi_v12_70` alignment fields); local `htf_alignment` is Computed (unverified) | (a) via GMI webhook alignment + (b) local unverified |
 | 6 | Action (col 5) | `action_full_txt` = `decision_conclusion` (lines 724–793, 1092) | None | None (OB lifecycle, ranking, trade readiness not ported) | Not ported | (c) or (d) |
 | 7 | Entry candidate (col 6) | `entry_candidate_txt` (lines 1033–1035, 1093) — BUY/SELL LIMIT level, invalidation level, R:R, TTL, confidence | None | OB zones partially in `core.mjs` (`order_blocks`, line 602), but entry-level latching/TP-hit lifecycle not ported | Not ported | (c) or (d) |
 | 8 | TP (col 7) | `tp_txt` (lines 1063–1064, 1094) — target key level | None | OB target scoring not ported | Not ported | (c) or (d) |
@@ -139,7 +142,7 @@ The Interstellar Eyes is a pure price-level reference grid with 9 bands across 6
 | 2 | `ASIAN RANGE (TOKYO)` (row 2) | `max_ses_tok`, `min_ses_tok` (lines 236–244, 1699, 2220) | None | None | Not ported | (c) (from Tokyo-window bars) |
 | 3 | `WEEKLY CPR` (row 3) | `cpr_status` from `w_p`, `tc_val`, `bc_val` (lines 321–336, 2223) | None | Not ported in `gmi-core.mjs` | Not ported | (c) |
 | 4 | `DAILY CPR + S/R` (row 4) | `d_cpr_status`, `d_r1..d_r3`, `d_s1..d_s3`, `d_p`, `d_tc`, `d_bc` (lines 337–371, 2226) | None | Not ported in `gmi-core.mjs` | Not ported | (c) |
-| 5 | `CPR WIDTH × GMI` (row 5) | `cpr_width_gmi_text = d_cpr_width_status + " \| " + cpr_gmi_context` (lines 353–355, 1336–1338, 2229–2231) | `verdict` (`gmi_v12_70`) for the GMI side; daily CPR width is not in webhook | `comparable.verdict` in `gmi-core.mjs` (line 395); CPR width not ported | TradingView output; local engine: parity candidate (`verdict`); CPR width Not ported | (a) for `verdict` + (c) for CPR width |
+| 5 | `CPR WIDTH × GMI` (row 5) | `cpr_width_gmi_text = d_cpr_width_status + " \| " + cpr_gmi_context` (lines 353–355, 1336–1338, 2229–2231) | `verdict` (`gmi_v12_70`) for the GMI side; daily CPR width is not in webhook | `comparable.verdict` in `gmi-core.mjs` (line 395); CPR width not ported | TradingView output; local engine: parity-approved (`verdict`); CPR width Not ported | (a) for `verdict` + (c) for CPR width |
 
 ### 1.8 Aegis Footprint Matrix — `hud_aegis` lower block (GMI v12.70, line 223)
 
@@ -151,7 +154,7 @@ The Interstellar Eyes is a pure price-level reference grid with 9 bands across 6
 | 2 | `BAR DELTA` (row 2+offset) | `cur_bar_delta`, `cur_delta_pct` (lines 637, 639, 2242–2246) | None | computed internally in `gmi-core.mjs`, not in `diagnostics` | Computed (not exposed) | (c) expose in `diagnostics` |
 | 3 | `CVD (14B / LIFE)` (row 3+offset) | `osc_cvd`, `true_cvd` (lines 644–650, 2248–2251) | None | `osc_cvd` computed internally in `gmi-core.mjs`, not in `diagnostics`; lifetime `true_cvd` is chart-start dependent | Computed (not exposed, `osc_cvd`) / Not ported (`true_cvd`) | (c) expose 14-bar `osc_cvd` |
 | 4 | `VOLUME SURGE` (row 4+offset) | `is_whale`, `vol_surge` (lines 654, 746–748, 2253–2256) | None | computed internally in `gmi-core.mjs`, not in `diagnostics` | Computed (not exposed) | (c) expose in `diagnostics` |
-| 5 | `PA STRUCTURE` (row 5+offset) | `aegis_pa_state` from `d_enc` (lines 2258–2262) | `d_enc` (`prophet_r37_ssot`) | `d_enc` in `src/prophet-r37-kernel.mjs` / `h1-producer.mjs` | TradingView output; local engine: parity candidate (`d_enc`) | (a) existing webhook field |
+| 5 | `PA STRUCTURE` (row 5+offset) | `aegis_pa_state` from `d_enc` (lines 2258–2262) | `d_enc` (`prophet_r37_ssot`) | `d_enc` in `src/prophet-r37-kernel.mjs` / `h1-producer.mjs` | TradingView output; local engine: parity-approved (`d_enc`) | (a) existing webhook field |
 | 6 | `WHALE ACTIVITY` (row 6+offset) | `wai_str`, `active_lev_count` (lines 852–864, 2264–2267) | None | `in_mitig_*`, `in_ob_*` in `diagnostics.zones` (`gmi-core.mjs` line 400); `active_lev_count` not exposed | Computed (partial) | (b) `diagnostics.zones` + (c) expose `active_lev_count` |
 
 ### 1.9 Matrix & Omega Sensors — `hud_tdm` (GMI v12.70, line 224)
@@ -202,8 +205,8 @@ Owner decision (2026-11-05): **one agent per titled section** (6 agents total fo
 | # | HUD row label | Pine variable(s) | Webhook | Local coverage | Parity status | Decision |
 |---|---|---|---|---|---|---|
 | 1 | `SCALP BURST INDEX` | `burst_txt`, `burst_score` (lines 1534–1562, 2442–2445) | None | `burst_score` not in `diagnostics` | Not ported | (c) |
-| 2 | `ACTION VERDICT` | `verdict` (lines 1179–1305, 2448–2451) | `verdict` (`gmi_v12_70`) | `comparable.verdict` in `gmi-core.mjs` (line 395) | TradingView output; local engine: parity candidate (`verdict`) | (a) existing webhook field |
-| 3 | `EXECUTE` | `ai_decision` (lines 1181, 1206–1304, 2454–2457) | `verdict`, `gate`, `conflict` (`gmi_v12_70`) | `comparable.verdict` + `diagnostics.branch` in `gmi-core.mjs` (lines 395, 397) | TradingView output; local engine: parity candidate (`verdict`/`gate`) + Computed (unverified, `branch`) | (a) + (b) derived reading |
+| 2 | `ACTION VERDICT` | `verdict` (lines 1179–1305, 2448–2451) | `verdict` (`gmi_v12_70`) | `comparable.verdict` in `gmi-core.mjs` (line 395) | TradingView output; local engine: parity-approved (`verdict`) | (a) existing webhook field |
+| 3 | `EXECUTE` | `ai_decision` (lines 1181, 1206–1304, 2454–2457) | `verdict`, `gate`, `conflict` (`gmi_v12_70`) | `comparable.verdict` + `diagnostics.branch` in `gmi-core.mjs` (lines 395, 397) | TradingView output; local engine: parity-approved (`verdict`/`gate`) + Computed (unverified, `branch`) | (a) + (b) derived reading |
 | 4 | `SYSTEM GUARD` | `is_chaos` (lines 444, 2460–2463) | None | `diagnostics.is_chaos` in `gmi-core.mjs` (line 398) | Computed (unverified) | (b) |
 
 #### Agent 14 — Grid Bot Protocol (`hud_tdm` Section 6)
@@ -255,7 +258,7 @@ Why (a) and (b) are preferred: (a) uses TradingView's own authoritative webhook 
   - `prophet_r37_ssot`: `direction`, `d_enc`, `b_enc`, `structure_subtype`, `bull_event`, `bear_event`.
   - `gmi_v12_70`: `verdict`, `gate`, `gmi_dir`, `prophet_dir`, `conflict`.
 - **Local computation lane (`local_computation`):**
-  - The same fields above are parity-checked on every closed H1 candle in `src/parity-registry.mjs`, but **no local engine is parity-approved yet** (`prophet`: candidate `23/24`, `gmi`: candidate `23/24`, `mizan`: candidate `0/24` as of `2026-11-05T00:00Z`).
+  - The same fields above are parity-checked on every closed H1 candle in `src/parity-registry.mjs`, and the `prophet` and `gmi` engines have been **parity-approved since 2026-11-05 01:00 UTC**. MizanLib is trusted through their declared dependency.
   - All other local engine outputs (`diagnostics.*`, `sensors.*`, `oscillator.*`) are not in `PARITY_FIELDS` and remain **UNVERIFIED** even after an engine reaches `24/24`.
 
 ---
@@ -347,7 +350,7 @@ Each HUD agent's evidence is strictly limited to **its own HUD's deterministic r
 1. **Advisory-only compliance (SSOT §5, brief §0.5).** Several HUD sections display price levels or terms that resemble trade instructions: *Trade Management* (entry candidate, TP, exit), *Fabio AMT Sensors* (HVN "STOP LOSS", progressive SL, model status), *Tactical Muscles* (SMC buy/sell zone), *Decision Matrix* (action verdict, execute) and *Grid Bot Protocol* (deploy status, grid range, trigger price, grid quantity, take profit / stop loss).
    - **Guardrail:** Every HUD agent prompt and deterministic reading must frame levels strictly as HUD observations attributed to the indicator (e.g., *"the Grid Bot Protocol section displays a trigger level near …"*), never as an order, position size or trade instruction. HUD agents never output entry/SL/TP/size fields in their JSON schema.
 2. **Honest labelling of parity-candidate and unverified data.**
-   - Because no local engine has reached 24/24 parity yet (`prophet` 23/24, `gmi` 23/24, `mizan` 0/24 at `2026-11-05T00:00Z`), only fields read from the `tradingview_webhook` lane (decision (a)) are authoritative TradingView outputs today.
+   - The `prophet` and `gmi` engines are parity-approved (since 2026-11-05 01:00 UTC), but approval covers only the `PARITY_FIELDS`. All other local values used by HUD agents (`diagnostics`, internals) remain UNVERIFIED and must be labelled so.
    - All local-engine HUD fields (decisions (b) and (c)) must carry an explicit `unverified` marker in the HUD data contract and deterministic reading until backed by a parity-approved comparator.
 3. **Natural-language validator compliance (`src/natural-language.mjs`).**
    - Following `src/webhook-interpretation.mjs`, each of the 14 HUDs gets a deterministic decoder function turning numeric values, booleans and codes into plain English sentences before the model sees them, preventing the model from echoing `snake_case` identifiers, dotted paths or `key=value` tokens.
@@ -367,11 +370,11 @@ Each HUD agent's evidence is strictly limited to **its own HUD's deterministic r
 
 ## Appendix A — Quick reference: parity-tracked fields per source
 
-| Source | Fields in `tradingview_webhook` & `PARITY_FIELDS` (`src/parity-registry.mjs`) | Status at `2026-11-05T00:00Z` |
+| Source | Fields in `tradingview_webhook` & `PARITY_FIELDS` (`src/parity-registry.mjs`) | Status at `2026-11-05T08:00Z` |
 |---|---|---|
-| `prophet_r38` | `direction`, `buy_confirmed`, `sell_confirmed`, `buy_high_quality`, `sell_high_quality`, `t_enc`, `d_enc`, `structure_subtype` | TradingView webhook: authoritative (`tradingview_webhook` lane). Local `prophet` engine: **parity candidate (23/24)**. |
-| `prophet_r37_ssot` | `direction`, `d_enc`, `b_enc`, `structure_subtype`, `bull_event`, `bear_event` | TradingView webhook: authoritative (`tradingview_webhook` lane). Local `mizan` engine: **parity candidate (0/24)**. |
-| `gmi_v12_70` | `verdict`, `gate`, `gmi_dir`, `prophet_dir`, `conflict` | TradingView webhook: authoritative (`tradingview_webhook` lane). Local `gmi` engine: **parity candidate (23/24)**. |
+| `prophet_r38` | `direction`, `buy_confirmed`, `sell_confirmed`, `buy_high_quality`, `sell_high_quality`, `t_enc`, `d_enc`, `structure_subtype` | TradingView webhook: authoritative (`tradingview_webhook` lane). Local `prophet` engine: **parity-approved (31/31)**. |
+| `prophet_r37_ssot` | `direction`, `d_enc`, `b_enc`, `structure_subtype`, `bull_event`, `bear_event` | TradingView webhook: authoritative (`tradingview_webhook` lane). Compared by the local `prophet` engine (`PARITY_FIELDS.prophet`): **parity-approved (31/31)**. MizanLib is trusted through the approved engines' declared dependency. |
+| `gmi_v12_70` | `verdict`, `gate`, `gmi_dir`, `prophet_dir`, `conflict` | TradingView webhook: authoritative (`tradingview_webhook` lane). Local `gmi` engine: **parity-approved (31/31)**. |
 
 All other HUD-derived values are not in `PARITY_FIELDS` and must be labelled **UNVERIFIED**.
 
