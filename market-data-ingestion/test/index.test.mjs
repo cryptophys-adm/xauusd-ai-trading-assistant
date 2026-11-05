@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SERIES } from "../src/tradingview-source.mjs";
@@ -74,6 +75,28 @@ test("planRequest bootstraps empty series, skips until a new bar closes, then re
   assert.equal(internals.planRequest(spec, { candles: [last] }, 1_000_000).count, 4); // gap + forming bar + overlap
   assert.equal(internals.planRequest(spec, { candles: [last] }, 1_000_000 + 3000).bootstrap, false);
   assert.equal(internals.planRequest(spec, { candles: [{ time: 0 }] }, 10_000_000).bootstrap, true);
+});
+
+test("a series with refresh_seconds waits for that much newer data (USOIL every 4 hours)", () => {
+  const usoil = SERIES.find((s) => s.symbol === "TVC:USOIL");
+  assert.equal(usoil.refresh_seconds, 14400);
+  const last = { time: 1_000_000 };
+  assert.equal(internals.planRequest(usoil, { candles: [last] }, 1_000_000 + 300 + 14400 - 1), null, "not before 4 hours of newer bars");
+  const plan = internals.planRequest(usoil, { candles: [last] }, 1_000_000 + 300 + 14400);
+  assert.equal(plan.bootstrap, false);
+  assert.ok(plan.count >= 48 && plan.count < usoil.retain, "asks only for the 4-hour gap");
+  // Every XAUUSD series keeps its own interval as the refresh cadence.
+  for (const spec of SERIES.filter((s) => s.symbol === "OANDA:XAUUSD")) assert.equal(spec.refresh_seconds, undefined);
+});
+
+test("steady-state daily MCP demand fits the 800 budget with margin", () => {
+  // The cron runs every 5 minutes, so a series is requested at most once per run.
+  const cronSeconds = 300;
+  const perDay = SERIES.reduce((sum, s) => sum + 86400 / Math.max(cronSeconds, s.seconds, s.refresh_seconds || 0), 0);
+  const budget = Number(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").match(/"TV_DAILY_CALL_BUDGET":\s*"(\d+)"/)[1]);
+  assert.equal(budget, 800);
+  assert.ok(perDay <= 0.92 * budget, `demand ${Math.round(perDay)} a day leaves too little margin under ${budget}`);
+  assert.ok(perDay > 600, "the XAUUSD 5m, 1m and 15m series still refresh at their own cadence");
 });
 
 test("mergeCandles deduplicates by open time with newer data winning and keeps retention", () => {

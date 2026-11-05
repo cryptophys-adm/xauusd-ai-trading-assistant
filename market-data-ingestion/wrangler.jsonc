@@ -27,7 +27,9 @@
   ],
   "vars": {
     "TV_MAX_CALLS_PER_RUN": "8",
-    "TV_DAILY_CALL_BUDGET": "1200",
+    // Owner decision 2026-11-05 after a TradingView MCP suspension: 800 a day (was 1200).
+    // Steady-state demand is about 720 a day with USOIL refreshed every 4 hours.
+    "TV_DAILY_CALL_BUDGET": "800",
     "CHART_MINTICK": "0.001",
     // C0 verified 5m lane: publish 5m local records for parity (timeframe-scoped ids).
     "M5_PARITY_PUBLISH": "true",
