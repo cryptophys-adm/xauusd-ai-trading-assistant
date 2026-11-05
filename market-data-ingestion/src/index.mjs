@@ -1,7 +1,6 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
 import { publishLocalComputation, publishM5LocalComputation, publishHudSnapshots, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
-import { buildM5ProphetContext } from "../../local-engines/producer/src/m5-producer.mjs";
 import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest } from "./tradingview-source.mjs";
 
 const JSON_HEADERS = {
@@ -259,8 +258,10 @@ const worker = {
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_failed", code: asString(error?.code) || "publish_failed" }));
       }
       // C0 verified 5m lane: publish the 5m local records for parity (flag-gated).
+      let m5Context = null;
       try {
         const publishedM5 = await publishM5LocalComputation(env, { bundle: latestBundle });
+        m5Context = publishedM5.context || null;
         if (!["m5_publish_disabled", "no_fresh_m5_close", "already_published"].includes(publishedM5.status)) {
           console.log(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_m5", status: publishedM5.status, candle_key: publishedM5.candle_key || null, gmi_error: publishedM5.gmi_error || null }));
         }
@@ -275,21 +276,19 @@ const worker = {
       } catch (error) {
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "hud_snapshot_publish_failed", code: asString(error?.code) || "publish_failed" }));
       }
-      // Informational (unverified) 5m context: build from closed M5 bars and forward
-      // to the AI Worker. Never enters the trusted local_computation lane.
+      // B2: the 5m execution context of the bar just published, reshaped from its 5m parity
+      // record (same values the AI Worker verifies), forwarded once per closed 5m bar. It
+      // never enters the trusted local_computation lane; the AI Worker labels it VERIFIED 5m
+      // only while prophet_m5 and gmi_m5 are approved.
       try {
-        if (typeof env.AI_WORKER?.submitContext === "function" && latestBundle) {
-          const bars = latestBundle?.timeframes?.M5?.candles || [];
-          if (Array.isArray(bars) && bars.length >= 50) {
-            const context = buildM5ProphetContext(bars);
-            const result = await env.AI_WORKER.submitContext(context);
-            if (result?.status && result.status >= 400) {
-              console.error(JSON.stringify({ worker: WORKER_NAME, event: "m5_context_submit_failed", status: result.status }));
-            }
+        if (m5Context && typeof env.AI_WORKER?.submitContext === "function") {
+          const result = await env.AI_WORKER.submitContext(m5Context);
+          if (result?.status && result.status >= 400) {
+            console.error(JSON.stringify({ worker: WORKER_NAME, event: "m5_context_submit_failed", status: result.status }));
           }
         }
       } catch (error) {
-        console.error(JSON.stringify({ worker: WORKER_NAME, event: "m5_context_build_failed", code: asString(error?.code) || "build_failed" }));
+        console.error(JSON.stringify({ worker: WORKER_NAME, event: "m5_context_submit_failed", code: asString(error?.code) || "submit_failed" }));
       }
     })());
   }

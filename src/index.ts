@@ -136,7 +136,7 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-import { m5ParityApproved, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
+import { m5ParityApproved, verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
 import { storeHudSnapshot, loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
@@ -709,7 +709,20 @@ async function runAnalysis(
       const parsed = JSON.parse(raw);
       const fresh = freshM5Context(parsed, Date.now());
       // recent_bars feed only the live room; the H1 chain keeps the compact context.
-      if (fresh) { const { recent_bars: _bars, ...compact } = fresh as JsonObject; informational5mContext = compact; }
+      if (fresh) {
+        const { recent_bars: _bars, ...compact } = fresh as JsonObject;
+        // B2: the context's bar is labelled VERIFIED 5m only while prophet_m5 and gmi_m5 are
+        // approved and that bar's observed 5m records come from them (as in the live room).
+        // Either way it stays context: it never changes the H1 decision or prices.
+        let verification: JsonObject = { verified: false, label: M5_UNVERIFIED_LABEL };
+        try {
+          const reading = await verifiedM5Reading(env, String(compact.candle_time)) as JsonObject;
+          verification = reading.verified
+            ? { verified: true, label: M5_VERIFIED_LABEL, trust_status: "approved_by_parity", summary: reading.summary as string }
+            : { verified: false, label: M5_UNVERIFIED_LABEL, reason: (reading.reason as string) || "unverified" };
+        } catch { /* stays unverified */ }
+        informational5mContext = { ...compact, verification };
+      }
     }
   } catch { informational5mContext = null; }
 
@@ -842,7 +855,7 @@ async function runAnalysis(
       "If evidence_fusion.complete is false, set directional_bias to NEUTRAL and missing_evidence to true; list every missing_evidence and validation_errors item.",
       "If news_evidence.available is false, state that completed fundamental news analysis is unavailable. Do NOT invent news.",
       "If news_evidence.available is true, consider the completed analysis and its underlying article evidence alongside technical evidence.",
-      "If informational_5m_context is present, treat it as unverified 5m context only; it must not change the decision or prices.",
+      "If informational_5m_context is present, it is 5m execution context only, labelled VERIFIED 5m (parity-approved) or UNVERIFIED 5m by its verification field; either way it must not change the decision or prices.",
       "Return JSON only with keys: directional_bias (BULLISH, BEARISH, or NEUTRAL), setup_quality (integer 0-3), missing_evidence (boolean), reasoning.",
       "Set directional_bias to NEUTRAL and missing_evidence to true if evidence is missing, stale, contradictory, or insufficient.",
       "EVIDENCE:",
@@ -872,7 +885,7 @@ async function runAnalysis(
       "If evidence_fusion.complete is false, explicitly mark the result degraded and enumerate missing evidence and validation errors.",
       "If news_evidence.available is false, acknowledge completed fundamental news analysis is unavailable. Do NOT fabricate news.",
       "If news_evidence.available is true, weigh the completed news analysis and its underlying article evidence in scenarios.",
-      "If informational_5m_context is present, treat it as unverified 5m context only; it must not change the decision or prices.",
+      "If informational_5m_context is present, it is 5m execution context only, labelled VERIFIED 5m (parity-approved) or UNVERIFIED 5m by its verification field; either way it must not change the decision or prices.",
       "Return concise JSON with keys: evidence_summary, bullish_scenario, bearish_scenario, neutral_scenario, confirmations, invalidation, risks, missing_data.",
       "If the source payloads conflict or fields are unclear, say so explicitly.",
       "EVIDENCE:",
@@ -903,7 +916,7 @@ async function runAnalysis(
       "If evidence_fusion.complete is false, decision MUST be WAIT or NO_TRADE, confidence and all price/risk fields MUST be null, and reasoning must enumerate missing_evidence and validation_errors.",
       "If news_evidence.available is false, state completed fundamental news analysis was unavailable. Do NOT claim news supported or contradicted the setup.",
       "If news_evidence.available is true, incorporate the completed news analysis and its underlying article evidence into final reasoning.",
-      "If informational_5m_context is present, treat it as unverified 5m context only; it must not change the decision or prices.",
+      "If informational_5m_context is present, it is 5m execution context only, labelled VERIFIED 5m (parity-approved) or UNVERIFIED 5m by its verification field; either way it must not change the decision or prices.",
       "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation, trade_plan.", DECISION_TEXT_RULE, TRADE_PLAN_RULE,
       "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
       "EVIDENCE:",

@@ -50,12 +50,16 @@ Coverage per Pine parameter is in `docs/LOCAL_COMPUTATION_OWNERSHIP.md`.
 
 The parity sweep cron also backfills `runAnalysis` for any closed H1 candle within the last 2 hours that has no `analysis_runs` row. It does so when the candle's approved local records exist, or as a fail-closed WAIT 30 minutes after the close. Analysis stays idempotent via `claimAnalysisRun`.
 
-### Informational (non-trusted) 5m context
-- A separate, **informational_unverified** evidence key `informational_5m_context` may be
-  surfaced in the fusion bundle. It is built by `local-engines/producer/src/m5-producer.mjs`
-  (`buildM5ProphetContext`) from closed M5 bars.
-- It is **never** part of `fusion.complete`, never changes decision, entry/SL/TP, risk/reward,
-  position size or confidence, and is labelled "UNVERIFIED 5m" in the UI and prompts.
+### 5m execution context
+- The evidence key `informational_5m_context` may be surfaced in the fusion bundle. Since B2 it is the
+  5m parity record of the bar, reshaped (`local-engines/producer/src/m5-context.mjs`): the pull adapter
+  sends it once per closed 5m bar, right after publishing that bar's 5m records. `buildM5ProphetContext`
+  (a second, separate 5m computation) is retired.
+- The context always declares `informational_unverified`. The AI Worker labels it **VERIFIED 5m**
+  (`verification.verified`, `approved_by_parity`) only while `prophet_m5` and `gmi_m5` are approved and that
+  bar's observed 5m records come from them (`verifiedM5Reading`); otherwise **UNVERIFIED 5m**.
+- Either way it is execution timing only: it is **never** part of `fusion.complete`, and never changes the
+  decision, entry/SL/TP, risk/reward, position size or confidence.
 - **5m parity records (C0 step 3).** The pull adapter also publishes full mizan, prophet and gmi records for every closed 5m bar (`local-engines/producer/src/m5-local-producer.mjs`, behind `M5_PARITY_PUBLISH`). They have timeframe `"5"` and candle key `OANDA:XAUUSD:5:<open ms>`.
   - The records earn their own approval under the timeframe-scoped ids `prophet_m5`, `gmi_m5` and `mizan_m5`, separate from the approved H1 ids. The parity sweep revisits the last six closed 5m candles.
   - GMI on the 5m chart runs `local-engines/gmi/src/gmi-core-tf.mjs`, a timeframe-parameterised copy of `gmi-core.mjs`. `gmi-core.mjs` stays byte-identical, because it is part of the approved H1 hash. A test proves the copy equals `computeGmi` on H1.
@@ -70,7 +74,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - Otherwise the read stays UNVERIFIED 5m, and the label switches by itself.
   - `GET /api/live` returns `m5_verified`, and the Nexus live badge follows it.
   - **5m alerts after approval (owner decision "pilihan 1", 2026-11-05).** Once `prophet_m5` and `gmi_m5` are both approved, the owner may delete the two 5m TradingView alerts. The approval persists while the 5m source and implementation hashes are unchanged; a 5m engine change needs the 5m alerts again for a calibration run, like the monthly H1 calibration.
-  - The decision card's 5m context stays UNVERIFIED: it is the separate informational `buildM5ProphetContext` read. See `docs/BRIEF_HUD_AGENTS.md`. Until then the 5m context stays UNVERIFIED.
+  - The H1 chain and the bus read the same verification (B2), so every consumer of the 5m data follows one label.
 - Freshness rule for use in `runAnalysis`: accepted only when both
   `now - Date.parse(candle_time) <= 15 min` and
   `now - Date.parse(received_at) <= 10 min`.

@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- feat(m5): B2. The 5m execution context is the bar's 5m parity record, reshaped (`m5-context.mjs`), sent once per closed 5m bar; `buildM5ProphetContext` is retired. The H1 chain and the bus label it VERIFIED 5m while `prophet_m5` and `gmi_m5` are approved, otherwise UNVERIFIED 5m. It still never changes the H1 decision or prices.
 - fix(agents): a retried thread step (HUD agents, live room, news threads) replaces its stored failure instead of being ignored. Stored ok messages stay final, and the row keeps its id. Before, `INSERT OR IGNORE` kept the first `invalid_output` forever while each retry still spent a model call (preview-e2e on PR #95).
 - fix(agents): prompts for answers without a `refs` field (moderators, HUD agents) no longer ask the model to back claims with refs; they ask it to name sources in plain words. The HUD moderator had written the evidence paths into its summary and failed the natural-language check (preview-e2e on PR #95).
 - fix(fusion): a local record's freshness is judged from its candle's close (computed within 30 minutes of it), not from when the analysis runs. Retries and backfills after a Workers AI timeout no longer degrade the candle with `calculation_stale` (the 11:00 and 12:00 UTC candles of 2026-11-05). Ingest still rejects records that are old now.

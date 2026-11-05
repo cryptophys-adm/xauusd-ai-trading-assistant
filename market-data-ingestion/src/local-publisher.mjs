@@ -5,6 +5,7 @@
 import { buildBundle } from "./tradingview-source.mjs";
 import { buildH1LocalCalculations } from "../../local-engines/producer/src/h1-producer.mjs";
 import { buildM5LocalCalculations } from "../../local-engines/producer/src/m5-local-producer.mjs";
+import { m5ContextFromRecords } from "../../local-engines/producer/src/m5-context.mjs";
 import { buildHudSnapshot } from "../../local-engines/producer/src/hud-snapshot.mjs";
 
 const PUBLISHED_PREFIX = "market-data:v2:local-published:";
@@ -119,7 +120,9 @@ export async function publishM5LocalComputation(env, { now = Date.now(), force =
   };
   if (ok) await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 });
   await kv.put(LAST_M5_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
-  return summary;
+  // B2: the 5m execution context of the same bar, reshaped from its parity record (never
+  // stored here; the cron forwards it to the AI Worker's submitContext).
+  return { ...summary, context: m5ContextFromRecords(built, resolvedBundle.timeframes?.M5?.candles) };
 }
 
 const HUD_CHARTS = Object.freeze({ H1: { maxDelayMs: 25 * 60 * 1000 }, M15: { maxDelayMs: 9 * 60 * 1000 } });
