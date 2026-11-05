@@ -6,6 +6,8 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- fix(market-data): the cron called `publishM5LocalComputation` without importing it (#88). The ReferenceError was swallowed as `local_computation_publish_m5_failed`, so no 5m record was published. A new test runs `scheduled()` end to end and fails on any swallowed publish failure.
+- `14b4f99` (PR #89) feat(live-room): C0 step 4.
 - `4e42267` (PR #88) feat(parity): C0 step 3.
 - feat(live-room): C0 step 4. The live room labels the 5m read **VERIFIED 5m** while `prophet_m5` and `gmi_m5` are parity-approved and the bar's observed 5m records come from those implementations; otherwise it stays UNVERIFIED 5m. `/api/live` returns `m5_verified`, and the Nexus badge follows it.
 - feat(parity): C0 step 3. The pull adapter publishes full mizan, prophet and gmi records for every closed 5m bar (`m5-local-producer.mjs`, `M5_PARITY_PUBLISH`). GMI 5m uses `gmi-core-tf.mjs`, a timeframe-parameterised copy proven equal to `computeGmi` on H1. There are new provenance entries `prophet_m5` and `gmi_m5`. The H1 hashes are unchanged.

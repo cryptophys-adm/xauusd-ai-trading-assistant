@@ -1,6 +1,6 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
-import { publishLocalComputation, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
+import { publishLocalComputation, publishM5LocalComputation, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
 import { buildM5ProphetContext } from "../../local-engines/producer/src/m5-producer.mjs";
 import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest } from "./tradingview-source.mjs";
 
