@@ -20,6 +20,7 @@ import { calculateProphetR38Core } from "../../prophet-r38/src/core.mjs";
 import { replayProphetR37ClosedBars } from "../../../src/prophet-r37-oscillator.mjs";
 import { computeGmiOnChart } from "../../gmi/src/gmi-core-tf.mjs";
 import { CHART_TICKERID, prophetR38TEnc, prophetConsensusDir } from "./h1-producer.mjs";
+import { computeMacroAether } from "./macro-aether.mjs";
 
 export const HUD_SNAPSHOT_VERSION = "cryptophys.hud-snapshot.v1";
 const CHART = Object.freeze({ H1: { minutes: 60, period: "60", minBars: 320 }, M15: { minutes: 15, period: "15", minBars: 320 } });
@@ -71,6 +72,18 @@ function lastClosedAt(series, ms) {
   let found = null;
   for (const b of series) if (Date.parse(b.close_time) <= ms) found = b;
   return found;
+}
+
+/** Macro & Aether rows; a failure leaves them absent, never invented. */
+function macroAether(chartBars, bundle, chart, mintick) {
+  try {
+    const m = computeMacroAether({ chartBars, external: bundle?.external_series || {}, chartKey: chart, mintick });
+    if (!m) return {};
+    const { open_fvg_targets: targets, ...fields } = m;
+    return { ...fields, open_fvg_targets_bull: targets?.bull ?? null, open_fvg_targets_bear: targets?.bear ?? null };
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -172,7 +185,10 @@ export function buildHudSnapshot(bundle, { chart = "H1", now = Date.now(), minti
     macro_aether: hud({
       weighted_global_z: round(htf.weighted_global_z), alignment_code: num(htf.alignment_code),
       z_by_timeframe: Object.fromEntries(Object.entries(htf.z_by_timeframe || {}).map(([k, v]) => [k, round(v)])),
-      ...(gmi ? { global_hurst: round(gd.global_h) } : {})
+      ...(gmi ? { global_hurst: round(gd.global_h) } : {}),
+      // The other rows of the Pine HUD: consolidation gravity, Z3 spread, macro cycle and
+      // shift (DXY/USDT 4h), asset gravity (WTI), Q-gravity and SMRI (macro-aether.mjs).
+      ...macroAether(chartBars, bundle, chart, mintick)
     })
   };
 

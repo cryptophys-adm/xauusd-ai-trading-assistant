@@ -199,6 +199,16 @@ export function readHud(agentId, hud = {}) {
       const z = f.z_by_timeframe && typeof f.z_by_timeframe === "object" ? Object.entries(f.z_by_timeframe).filter(([, v]) => isNum(v)) : [];
       if (z.length) add(`Per timeframe the z-scores are ${z.map(([k, v]) => `${{ M15: "15-minute", H1: "1-hour", H4: "4-hour", D1: "daily", W1: "weekly" }[k] ?? k} ${fixed(v)}`).join(", ")}.`);
       if (isNum(f.global_hurst)) add(`The weighted global Hurst exponent is ${fixed(f.global_hurst)}, ${f.global_hurst > 0.5 ? "a persistent, trending macro regime" : "an anti-persistent macro regime"}.`);
+      if (f.macro_cycle) add(`The macro cycle from the dollar index and USDT dominance is ${f.macro_cycle === "risk_on" ? "risk on, both falling, which is safe for gold" : "risk off: the dollar or USDT dominance is rising, a headwind for gold"}.`);
+      if (f.macro_shift) {
+        const shift = { reversal_due: isNum(f.macro_shift_bars_4h) ? `a macro reversal is projected in about ${f.macro_shift_bars_4h} four-hour bars` : "a macro reversal is projected", stagnant: "the macro kinematics are stagnant", accelerating_dollar_up: "the dollar and USDT side is accelerating up, against gold", accelerating_dollar_down: "the dollar and USDT side is accelerating down, in favour of gold", neutral: "the macro kinematics are neutral" }[f.macro_shift];
+        if (shift) add(`On the macro shift, ${shift}.`);
+      }
+      if (f.asset_gravity && isNum(f.oil_rsi)) add(`WTI oil has an RSI of ${fixed(f.oil_rsi, 1)} on this timeframe, so the asset gravity reads ${{ bias_price_down: "a bias for gold to fall", bias_price_up: "a bias for gold to rise", neutral: "neutral" }[f.asset_gravity]}.`);
+      if (f.consolidation_gravity && isNum(f.consolidation_gravity_pct)) add(`The volume profile pulls ${{ bullish_pull: "upward", bearish_pull: "downward", balanced: "evenly" }[f.consolidation_gravity]} (${f.consolidation_gravity_pct > 0 ? "+" : ""}${fixed(f.consolidation_gravity_pct, 1)}%).`);
+      if (isNum(f.kinetic_spread)) add(`The kinetic band is ${fixed(f.kinetic_spread, 2)} wide${isNum(f.kinetic_spread_pct) ? `, ${fixed(f.kinetic_spread_pct, 2)}% of price` : ""}.`);
+      if (f.q_gravity) add(`Unfilled fair value gaps pull ${{ pull_up: "price up", pull_down: "price down", balanced: "both ways evenly" }[f.q_gravity]}${isNum(f.q_gravity_pct) ? ` (${fixed(f.q_gravity_pct, 1)}%)` : ""}.`);
+      if (f.smr_phase && isNum(f.smri)) add(`The smart-money reservoir index is ${fixed(f.smri, 1)}%, ${{ mark_up: "a mark-up phase", mark_down: "a mark-down phase", equilibrium: "equilibrium" }[f.smr_phase]}.`);
       break;
     }
     case "gabfx_price_action": {
