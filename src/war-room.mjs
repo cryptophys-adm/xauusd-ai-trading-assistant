@@ -76,13 +76,27 @@ export function validateOpening(o, agent) {
   return { valid: errors.length === 0, errors };
 }
 
-export function validateRebuttal(o, agent, busAgents) {
+/** Rebuttal targets as bus ids: an agent's display name is accepted for its id. */
+export function normalizeRebuts(rebuts, busAgents) {
+  if (!Array.isArray(rebuts)) return null;
+  const byName = new Map(busAgents.map(id => [agentName(id).toLowerCase(), id]));
+  return rebuts.map(r => (busAgents.includes(r) ? r : byName.get(String(r ?? "").trim().toLowerCase()) ?? r));
+}
+
+/**
+ * A rebuttal names the bus agents it rebuts. In a unanimous room the Risk Manager stress-tests
+ * the consensus instead and may name nobody (preview-e2e: a unanimous WAIT room left it no one
+ * to rebut, and it answered rebuts: []).
+ */
+export function validateRebuttal(o, agent, busAgents, { unanimous = false } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
   const errors = [];
   if (o.agent !== agent) errors.push("agent_mismatch");
   if (!ROOM_STANCES.includes(o.stance)) errors.push("stance_invalid");
   if (!inUnit(o.confidence)) errors.push("confidence_out_of_range");
-  if (!Array.isArray(o.rebuts) || !o.rebuts.length || o.rebuts.some(r => r === agent || !busAgents.includes(r))) errors.push("rebuts_invalid");
+  const rebuts = normalizeRebuts(o.rebuts, busAgents);
+  if (!rebuts || (!rebuts.length && !unanimous) || rebuts.some(r => r === agent || !busAgents.includes(r))) errors.push("rebuts_invalid");
+  else o.rebuts = rebuts;
   if (typeof o.argument !== "string" || !o.argument.trim()) errors.push("argument_missing");
   else errors.push(...naturalLanguageErrors(o.argument));
   return { valid: errors.length === 0, errors };
@@ -140,12 +154,14 @@ function openingMessages(agent, data, h1) {
   ]);
 }
 
-function rebuttalMessages(agent, own, bus, h1) {
+function rebuttalMessages(agent, own, bus, h1, unanimous) {
   return chatMessages([
     `You are ${agentName(agent)} in the XAUUSD Live War Room debate${DESK_AGENTS[agent] ? " (" + DESK_AGENTS[agent].role + ")" : ""}. The debate is open for at most 3 minutes.`,
     RULES_NO_REFS,
     ROOM_RULES,
-    "Rebut the strongest claims you disagree with and name those agents in rebuts by their id. Add only new reasoning from your own role; never restate your opening or another agent's claim. You may change your stance if the bus convinced you.",
+    unanimous
+      ? "The bus is unanimous. Stress-test the consensus: challenge the claim most likely to be wrong, name that agent in rebuts by its id, and say what would invalidate the consensus. Add only new reasoning from your own role; never restate a claim."
+      : "Rebut the strongest claims you disagree with and name those agents in rebuts by their id. Add only new reasoning from your own role; never restate your opening or another agent's claim. You may change your stance if the bus convinced you.",
     `The H1 decision is ${h1.decision}.`,
     `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"rebuts":["<agent id>"],"argument":"<= ${ARGUMENT_MAX - 40} chars"}`,
     "YOUR OPENING: " + JSON.stringify({ stance: own.stance, confidence: own.confidence, claim: own.claim }),
@@ -250,6 +266,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   // Phase 2: the debate, open for at most 3 minutes.
   const majority = majorityStance(answered, h1.decision);
   const rebutters = selectRebutters(answered, majority);
+  const unanimous = answered.every(m => m.stance === majority);
   const debateStep = phase(WAR_ROOM_DEBATE_MS);
   const openingId = new Map(answered.map(m => [m.agent, m.id]));
   const debate = (await Promise.all(rebutters.map(agent => {
@@ -257,8 +274,8 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     if (prior?.status === "ok") return prior;
     const own = answered.find(m => m.agent === agent);
     return debateStep(base("debate:" + agent, agent, openingId.get(agent) ?? null), {
-      messages: rebuttalMessages(agent, own, bus, h1), schemaName: "war_room_rebuttal", schema: REBUTTAL_SCHEMA,
-      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateRebuttal(o, agent, busAgents),
+      messages: rebuttalMessages(agent, own, bus, h1, unanimous), schemaName: "war_room_rebuttal", schema: REBUTTAL_SCHEMA,
+      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateRebuttal(o, agent, busAgents, { unanimous }),
       toBody: (o) => ({ body: { argument: clip(o.argument, ARGUMENT_MAX), rebuts: [...new Set(o.rebuts)].slice(0, 4), name: agentName(agent) }, refs: [] })
     });
   }))).filter(m => m?.status === "ok");

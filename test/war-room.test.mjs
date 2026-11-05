@@ -107,6 +107,16 @@ test("every agent opens on the bus, the minority and the Risk Manager rebut, the
   assert.equal((await runWarRoomBar(e, task())).status, "already_complete", "idempotent per bar");
 });
 
+test("a unanimous room: the Risk Manager stress-tests the consensus", async () => {
+  const ai = fakeAI();
+  const e = env(ai);
+  await runWarRoomBar(e, task());
+  const room = await readWarRoom(e.DB);
+  assert.deepEqual(room.debate.map(d => [d.id, d.status]), [["risk", "ok"]]);
+  const prompt = ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  assert.match(prompt, /The bus is unanimous\. Stress-test the consensus/);
+});
+
 test("a failed opening stays out of the bus; the room still concludes", async () => {
   const e = env(fakeAI({ fail: new Set(["news"]) }));
   await runWarRoomBar(e, task());
@@ -142,6 +152,12 @@ test("selection and validators", () => {
   assert.equal(validateRebuttal({ agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: ["risk"], argument: "No." }, "risk", ["risk", "h1"]).valid, false, "an agent never rebuts itself");
   assert.equal(validateRebuttal({ agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: ["ghost"], argument: "No." }, "risk", ["risk", "h1"]).valid, false, "rebuts must name a bus agent");
   assert.ok(Object.keys(DESK_AGENTS).every(k => DESK_AGENTS[k].role));
+  const named = { agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: ["H1 Desk"], argument: "The higher timeframe could flip." };
+  assert.equal(validateRebuttal(named, "risk", ["risk", "h1"]).valid, true, "a display name maps to its id");
+  assert.deepEqual(named.rebuts, ["h1"]);
+  const empty = { agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: [], argument: "Nothing to rebut, but a volatility spike would invalidate waiting." };
+  assert.equal(validateRebuttal(empty, "risk", ["risk", "h1"]).valid, false, "a split room needs named targets");
+  assert.equal(validateRebuttal(empty, "risk", ["risk", "h1"], { unanimous: true }).valid, true, "a unanimous room lets the Risk Manager stress-test without a target");
 });
 
 test("TLDR for the right panel: H1 decision with the bus consensus, and the latest news thread", async () => {
