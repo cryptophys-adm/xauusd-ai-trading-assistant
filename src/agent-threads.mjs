@@ -649,3 +649,15 @@ export function hudAgentIds() {
 export function hudAgentsEnabled(env) {
   return String(env?.HUD_AGENTS_ENABLED ?? "false").trim().toLowerCase() === "true";
 }
+
+
+export async function runHudAgentsThreads(env, { threadId, candleKey, readings = {}, clock = () => Date.now() } = {}) {
+  if (!hudAgentsEnabled(env)) return { skipped: true, reason: "flag_disabled" };
+  const ids = hudAgentIds();
+  const started = clock();
+  const results = [];
+  for (const id of ids) {
+    results.push({ agent: id, status: "not_implemented", reading: readings[id] || null });
+  }
+  return { skipped: false, thread_id: threadId, candle_key: candleKey, agents: results, elapsed_ms: clock() - started };
+}
