@@ -14,6 +14,9 @@ Read `docs/SSOT.md` first. It is the only canonical description of this system. 
 5. **Start from the latest `main`.** Do not revive, merge or deploy branches cut from an old base.
 6. **Do not edit `pinescript/ssot/*`.** Local engine trust comes only from the autonomous parity registry. Never mark an engine verified or `production_ready` by hand.
 7. **Inter-Worker calls use RPC Service Bindings.** Do not add shared secrets between Workers.
+   - The only binding outside this repository is the AI Worker's `AGENTS` binding to the Cryptophys Platform `cryptophys-ai-kernel` (`AgentRpc`, `props.host_worker = "xauusd-ai-trading-assistant"`). See docs/SSOT.md §2.
+   - Never copy it to another Worker or to the preview config, and never change `host_worker`.
+   - Kernel denials are final: no retry loops, and no switching agent ids.
 8. **Advisory only.** No broker integration and no automatic execution.
 
 ## Before opening a PR

@@ -56,3 +56,16 @@ test("live docs agree with the SSOT; docs naming removed Workers are marked hist
     if (REMOVED.some((n) => text.includes(n))) assert.match(text.slice(0, 600), /HISTORICAL \/ SUPERSEDED/, `${rel} names removed Workers but is not marked historical`);
   }
 });
+
+test("only the production AI Worker binds the Cryptophys Platform kernel, with its own pinned host_worker", () => {
+  const configs = files.filter((p) => /wrangler[^/]*\.jsonc?$/.test(p));
+  for (const p of configs) {
+    const rel = path.relative(ROOT, p);
+    const text = read(p);
+    if (!text.includes("cryptophys-ai-kernel")) continue;
+    assert.equal(rel, "wrangler.jsonc", `${rel} must not bind the platform kernel (only the production AI Worker hosts the agents)`);
+    assert.match(text, /"binding":\s*"AGENTS",\s*"service":\s*"cryptophys-ai-kernel",\s*"entrypoint":\s*"AgentRpc",\s*"props":\s*\{\s*"host_worker":\s*"xauusd-ai-trading-assistant"\s*\}/);
+  }
+  assert.ok(read(path.join(ROOT, "wrangler.jsonc")).includes("cryptophys-ai-kernel"));
+  for (const doc of ["docs/SSOT.md", "AGENTS.md"]) assert.ok(read(path.join(ROOT, doc)).includes("cryptophys-ai-kernel"), `${doc} must document the platform kernel binding`);
+});

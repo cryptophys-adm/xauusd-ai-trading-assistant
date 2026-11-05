@@ -33,6 +33,12 @@ export interface Env {
   NEWS_INGESTION?: {
     pull(options?: { forceRefresh?: boolean; origin?: string }): Promise<Record<string, unknown>>;
   };
+  // Cryptophys Platform AI Kernel (RFC_INDICATOR_AGENT_PLATFORM P4). Production only; the
+  // caller identity is pinned in the binding props, there is no secret.
+  AGENTS?: {
+    whoami(agentId: string): Promise<Record<string, unknown>>;
+    syscall(agentId: string, capability: string, input?: Record<string, unknown>): Promise<Record<string, unknown>>;
+  };
   XAUUSD_EVENTS: Queue<QueueTask>;
   INGEST_URL?: string;
   INGEST_SECRET?: string;
@@ -147,6 +153,7 @@ import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRo
 import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { warRoomEnabled, runWarRoomBar, readWarRoom, readTldr } from "./war-room.mjs";
 import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, SCORING, SCORING_VERSION } from "./outcome-scoring.mjs";
+import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
 import { DECISION_TEXT_RULE, plainDecisionText } from "./plain-decision.mjs";
@@ -1946,6 +1953,14 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/platform/status") {
+    try {
+      return dashboardJson({ status: "ok", ...(await platformStatus(env)) });
+    } catch (error) {
+      console.error("platform_status_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/stuck-states") {
     try {
       return dashboardJson({ status: "ok", scoring: SCORING, items: await listStuckStates(env.DB, { limit: limitParam() }) });
@@ -2148,6 +2163,12 @@ export default {
           if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) await detectRecentStuckStates(env);
           console.log("outcome_scoring", JSON.stringify(scored));
         } catch (e) { console.error("outcome_scoring_failed", e instanceof Error ? e.message : String(e)); }
+        // RFC_INDICATOR_AGENT_PLATFORM P4: advisory reports to the Cryptophys Platform kernel.
+        // Non-fatal by design; a no-op without the AGENTS binding (preview, tests).
+        try {
+          const published = await publishPlatformReports(env);
+          if (published.status !== "disabled") console.log("platform_reports", JSON.stringify(published));
+        } catch (e) { console.error("platform_reports_failed", e instanceof Error ? e.message : String(e)); }
         console.log("Scheduled parity sweep completed", JSON.stringify({
           swept_at: result.swept_at,
           candle_keys: result.candle_keys,
