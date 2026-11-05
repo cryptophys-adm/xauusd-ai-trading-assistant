@@ -194,8 +194,10 @@ Provide the **parity comparator** for HUD fields that are not in `PARITY_FIELDS`
 
 ## 10. Open questions for the owner
 
-1. Confirm the 15m subset (§6.2) includes `aegis_footprint` or only the three named agents.
-2. Confirm whether the H1 candidate alert (§2.2) ships in the same Phase C PR as the producer, or a separate PR.
+Answered by the owner on 2026-11-05 (see "Phase C plan and owner decisions" in `docs/BRIEF_HUD_AGENTS.md`):
+
+1. `aegis_footprint` **is included** in the live 15m room (4 HUD agents).
+2. The Pine candidate ships **first, in its own PR (C1)**, together with the webhook ingestion of the `*_hud` sources, so the 24-candle parity clock can start as early as possible.
 
 ---
 

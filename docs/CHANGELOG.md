@@ -6,6 +6,10 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- docs(hud-agents): Phase C plan recorded.
+  - Owner decisions: Aegis joins the live 15m room, HUD data is verified through a Pine candidate comparator, and the candidate plus `*_hud` webhook ingestion ship first.
+- `a8f6cc3` (PR #69) docs: Phase B HUD agents RFC.
+- `73a0a98` (PR #68) docs(hud-agents): owner answers to the Phase A open questions.
 - docs(hud-agents): owner answers to the Phase A open questions:
   - 15m HUD agents with parity-verified data (Pine candidate comparator for H1 and 15m);
   - non-reproducible HUD rows become H1 decision-reasoning output;
