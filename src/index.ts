@@ -199,14 +199,17 @@ function parseDecision(text: string): JsonObject {
           (!pricesValid || !directionalPricesValid || confidence === null || riskReward === null || riskReward <= 0 || positionSize === null || positionSize <= 0 || positionSize > 100)) {
           return {
             decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null,
-            risk_reward: null, position_size_pct: null,
+            risk_reward: null, position_size_pct: null, trade_plan: null,
             reasoning: "Actionable model output lacks valid directional prices, confidence, positive risk/reward, or a positive position size within 0–100%; downgraded to WAIT.",
             raw_response: text
           };
         }
         if (positionSize !== null && (positionSize < 0 || positionSize > 100)) {
-          return { decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null, risk_reward: null, position_size_pct: null, reasoning: "Model position_size_pct was outside the permitted 0–100 range; downgraded to WAIT.", raw_response: text };
+          return { decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null, risk_reward: null, position_size_pct: null, trade_plan: null, reasoning: "Model position_size_pct was outside the permitted 0–100 range; downgraded to WAIT.", raw_response: text };
         }
+        const tradePlan = (decision === "BUY" || decision === "SELL") && parsed.trade_plan && typeof parsed.trade_plan === "object"
+          ? parsed.trade_plan
+          : null;
         return {
           ...parsed,
           decision,
@@ -216,6 +219,7 @@ function parseDecision(text: string): JsonObject {
           take_profit: target,
           risk_reward: riskReward,
           position_size_pct: positionSize,
+          trade_plan: tradePlan,
           reasoning: asText(parsed.reasoning) || "No reasoning supplied."
         };
       }
@@ -231,6 +235,7 @@ function parseDecision(text: string): JsonObject {
     take_profit: null,
     risk_reward: null,
     position_size_pct: null,
+    trade_plan: null,
     reasoning: "Model response did not contain a valid decision JSON object.",
     raw_response: text
   };
