@@ -43,6 +43,9 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
 Owner decision, 2026-11-05: the architecture does not depend on webhooks. Approved local records drive the chain, and TradingView webhooks only calibrate the local engines. `INDICATOR_SOURCE` controls this: `"local"` is the default; `"webhook"` restores the legacy webhook-driven chain as a rollback.
 
 1. **Local computation** (decision lane). MizanLib (record id `mizan`), Prophet and GMI are computed by the pull adapter from closed TradingView bars.
+   - Since 2026-11-05 (owner decision, TradingView MCP budget 800 calls a day), the pull adapter pulls XAUUSD M1, H1, H4, D1 and W1, USOIL 5m, and DXY and USDT 4h.
+   - It aggregates XAUUSD M5 and M15 from M1, and USOIL M15 and H1 from USOIL 5m. A daily check compares them with native bars.
+   - See docs/MARKET_DATA_INGESTION.md.
    - Trust is earned only through the autonomous parity registry: 24 consecutive candles that match TradingView. There is no manual allowlist and no operator approval.
    - The chain starts as soon as the parity-approved (`localcalc:`) records of a closed H1 candle exist. It does not wait for any webhook.
    - The indicator values the agents read (`source_payloads`, `origin: "local_computation"`) are the approved records' comparable fields. These are the same field names and codes the TradingView alerts carry.
