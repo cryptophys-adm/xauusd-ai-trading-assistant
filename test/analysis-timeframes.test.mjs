@@ -39,3 +39,14 @@ test("reconcile tasks run parity on every timeframe but start the AI chain only 
     assert.ok(reconcile >= 0 && gate > reconcile && analysis > gate, handler);
   }
 });
+
+test("local-primary: webhooks never start the chain; approved local records do, without waiting for webhooks", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  const body = (name) => { const start = source.indexOf(`async function ${name}(`); return source.slice(start, source.indexOf("\n}\n", start)); };
+  const webhookTask = body("processWebhookReconcileTask");
+  assert.ok(webhookTask.indexOf('indicatorSourceMode(env) === "local") return;') < webhookTask.indexOf("runAnalysis("));
+  const localTask = body("processLocalCalculationReconcileTask");
+  assert.match(localTask, /indicatorSourceMode\(env\) !== "local" && !required\.every/);
+  assert.match(source, /webhookLane: localPrimary \? "calibration" : "required"/);
+});

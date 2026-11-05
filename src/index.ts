@@ -1,5 +1,5 @@
 import { WorkerEntrypoint, tracing } from "cloudflare:workers";
-import { buildEvidenceFusion, analysisAllowedForTimeframe, isHudSource, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
+import { buildEvidenceFusion, indicatorPayloadsFromLocal, analysisAllowedForTimeframe, isHudSource, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
 import { validateM5Context, freshM5Context } from "./m5-context.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { parseTradingViewJson } from "./tradingview-json.mjs";
@@ -40,6 +40,8 @@ export interface Env {
   AI_MODEL_COUNSELOR: string;
   AI_MODEL_REASONER: string;
   REQUIRED_SOURCES: string;
+  INDICATOR_SOURCE?: string;
+  CALIBRATION_INTERVAL_DAYS?: string;
   ANALYSIS_TIMEFRAMES?: string;
   MULTI_AGENT_BUS_ENABLED?: string;
   MULTI_AGENT_MAX_CALLS_PER_HOUR?: string;
@@ -583,12 +585,47 @@ async function enqueueMultiAgentBus(env: Env, candleKey: string, inputFingerprin
   }
 }
 
+/**
+ * Calibration status per approved identity: when TradingView last confirmed it (a parity
+ * comparison) and whether a calibration run is due (owner decision: webhooks are used for
+ * periodic calibration, for example monthly, not for decisions).
+ */
+function calibrationStatus(rows: JsonObject[], now: number, intervalDays: number): JsonObject {
+  const out: JsonObject = { interval_days: intervalDays, engines: {} as JsonObject, due: false };
+  for (const row of rows) {
+    const last = asText(row.last_compared_at);
+    const lastMs = Date.parse(last);
+    const days = Number.isFinite(lastMs) ? Math.floor((now - lastMs) / 86_400_000) : null;
+    const due = days === null || days >= intervalDays;
+    (out.engines as JsonObject)[asText(row.engine)] = { status: asText(row.status), consecutive_matches: Number(row.consecutive_matches) || 0, last_calibrated_at: last || null, days_since_calibration: days, calibration_due: due };
+    if (due) out.due = true;
+  }
+  return out;
+}
+
+/** "local" (default): parity-approved local records drive the chain; "webhook": legacy webhook-driven chain. */
+function indicatorSourceMode(env: Env): "local" | "webhook" {
+  return asText(env.INDICATOR_SOURCE).toLowerCase() === "webhook" ? "webhook" : "local";
+}
+
+/** ISO bar open time from a "<symbol>:<timeframe>:<open ms>" candle key, or "". */
+function candleTimeFromKey(candleKey: string): string {
+  const ms = Number(String(candleKey).split(":").pop());
+  return Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : "";
+}
+
+function laneRule(localPrimary: boolean): string {
+  return localPrimary
+    ? "Evidence lanes (see input_lanes): source_payloads hold the Prophet R38, Prophet R37 and GMI v12.70 indicator outputs computed locally from raw TradingView OHLCV by engines approved by parity with TradingView (the same fields the TradingView alerts carry); local_calculation_evidence holds those local records; tradingview_webhook is calibration only and is not decision evidence; fundamental_news = completed news analysis. Never merge, average, or relabel values across lanes, and attribute every technical claim to its lane."
+    : "Evidence arrives in three separate input lanes (see input_lanes): tradingview_webhook = indicator outputs computed by TradingView (source_payloads); local_computation = outputs computed locally from raw TradingView OHLCV (local_calculation_evidence); fundamental_news = completed news analysis. Never merge, average, or relabel values across lanes. Attribute every technical claim to its lane, and state explicitly where the tradingview_webhook and local_computation lanes agree or disagree.";
+}
+
 async function runAnalysis(
   env: Env,
   candleKey: string,
   ticker: string,
   timeframe: string,
-  payloads: Record<string, WebhookPayload>
+  webhookPayloads: Record<string, WebhookPayload>
 ): Promise<{ status: string; missing_evidence: string[] }> {
   return tracing.enterSpan("invoke_agent", async (agentSpan) => {
     agentSpan.setAttributes({
@@ -601,12 +638,19 @@ async function runAnalysis(
     fetchLatestNewsAnalysis(env),
     Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get("localcalc:" + safeKeyPart(candleKey) + ":" + engine)))
   ]);
-  const candleTime = asText(payloads.prophet_r38?.candle_time || payloads.prophet_r37_ssot?.candle_time || payloads.gmi_v12_70?.candle_time || payloads.prophet_r38?.timestamp || payloads.prophet_r37_ssot?.timestamp || payloads.gmi_v12_70?.timestamp);
   const localCalculations: unknown[] = [];
   for (const raw of localCalculationRaw) {
     if (!raw) continue;
     try { localCalculations.push(JSON.parse(raw)); } catch { /* malformed KV evidence is excluded and reported as missing */ }
   }
+  // Local-primary architecture (owner decision 2026-11-05): the indicator values the chain
+  // reads are the parity-approved local records. TradingView webhooks only calibrate the
+  // local engines; INDICATOR_SOURCE="webhook" restores the legacy webhook-driven chain.
+  const localPrimary = indicatorSourceMode(env) === "local";
+  const payloads: Record<string, WebhookPayload> = localPrimary
+    ? indicatorPayloadsFromLocal(localCalculations, { symbol: ticker, timeframe, candleKey }) as Record<string, WebhookPayload>
+    : webhookPayloads;
+  const candleTime = asText(payloads.prophet_r38?.candle_time || payloads.prophet_r37_ssot?.candle_time || payloads.gmi_v12_70?.candle_time || payloads.prophet_r38?.timestamp || payloads.prophet_r37_ssot?.timestamp || payloads.gmi_v12_70?.timestamp) || candleTimeFromKey(candleKey);
   const fingerprintLocalCalculations = localCalculations.map((item: any) => ({
     engine: item.engine,
     schema_version: item.schema_version,
@@ -658,10 +702,11 @@ async function runAnalysis(
     symbol: ticker,
     timeframe,
     candleTime,
-    webhookPayloads: payloads,
+    webhookPayloads,
     localCalculations,
     newsAnalysis,
-    informational5mContext
+    informational5mContext,
+    webhookLane: localPrimary ? "calibration" : "required"
   });
   const newsEvidence = {
     available: Boolean(fusion.fundamental_news_analysis),
@@ -680,6 +725,7 @@ async function runAnalysis(
     candle_time: candleTime,
     input_lanes: fusion.input_lanes,
     source_payloads: payloads,
+    indicator_source: localPrimary ? "local_computation_approved_by_parity" : "tradingview_webhook",
     local_calculation_evidence: fusion.local_calculations,
     fundamental_news_analysis: fusion.fundamental_news_analysis,
     informational_5m_context: fusion.informational_5m_context,
@@ -776,7 +822,7 @@ async function runAnalysis(
       "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply EVIDENCE.policy.decision_policy. Never infer a field meaning that is not in the dictionary.",
       "Prophet is the base directional bias. GMI can validate, block, or defer a setup but must not silently overwrite Prophet's bias.",
       "Evidence includes the versioned evidence_fusion result, technical source_payloads, all local calculation evidence, and completed fundamental_news_analysis.",
-      "Evidence arrives in three separate input lanes (see input_lanes): tradingview_webhook = indicator outputs computed by TradingView (source_payloads); local_computation = outputs computed locally from raw TradingView OHLCV (local_calculation_evidence); fundamental_news = completed news analysis. Never merge, average, or relabel values across lanes. Attribute every technical claim to its lane, and state explicitly where the tradingview_webhook and local_computation lanes agree or disagree.",
+      laneRule(localPrimary),
       "If evidence_fusion.complete is false, set directional_bias to NEUTRAL and missing_evidence to true; list every missing_evidence and validation_errors item.",
       "If news_evidence.available is false, state that completed fundamental news analysis is unavailable. Do NOT invent news.",
       "If news_evidence.available is true, consider the completed analysis and its underlying article evidence alongside technical evidence.",
@@ -806,7 +852,7 @@ async function runAnalysis(
       "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply EVIDENCE.policy.decision_policy. Never infer a field meaning that is not in the dictionary.",
       "Prophet is the base bias. GMI may validate, block, or defer a Prophet setup; it must not silently overwrite Prophet's bias.",
       "Use the complete versioned evidence_fusion bundle as the canonical evidence set, including local_calculation_evidence and fundamental_news_analysis.",
-      "Evidence arrives in three separate input lanes (see input_lanes): tradingview_webhook = indicator outputs computed by TradingView (source_payloads); local_computation = outputs computed locally from raw TradingView OHLCV (local_calculation_evidence); fundamental_news = completed news analysis. Never merge, average, or relabel values across lanes. Attribute every technical claim to its lane, and state explicitly where the tradingview_webhook and local_computation lanes agree or disagree.",
+      laneRule(localPrimary),
       "If evidence_fusion.complete is false, explicitly mark the result degraded and enumerate missing evidence and validation errors.",
       "If news_evidence.available is false, acknowledge completed fundamental news analysis is unavailable. Do NOT fabricate news.",
       "If news_evidence.available is true, weigh the completed news analysis and its underlying article evidence in scenarios.",
@@ -837,7 +883,7 @@ async function runAnalysis(
       "Use only the supplied evidence, analyst output, and counselor output. Do not invent market prices or claim the models verified facts they did not receive.",
       "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply EVIDENCE.policy.decision_policy. Never infer a field meaning that is not in the dictionary.",
       "Prophet remains the base bias. GMI may validate, block, or wait on a setup. Do not silently reverse Prophet's bias.",
-      "Evidence arrives in three separate input lanes (see input_lanes): tradingview_webhook = indicator outputs computed by TradingView (source_payloads); local_computation = outputs computed locally from raw TradingView OHLCV (local_calculation_evidence); fundamental_news = completed news analysis. Never merge, average, or relabel values across lanes. Attribute every technical claim to its lane, and state explicitly where the tradingview_webhook and local_computation lanes agree or disagree.",
+      laneRule(localPrimary),
       "If evidence_fusion.complete is false, decision MUST be WAIT or NO_TRADE, confidence and all price/risk fields MUST be null, and reasoning must enumerate missing_evidence and validation_errors.",
       "If news_evidence.available is false, state completed fundamental news analysis was unavailable. Do NOT claim news supported or contradicted the setup.",
       "If news_evidence.available is true, incorporate the completed news analysis and its underlying article evidence into final reasoning.",
@@ -1517,6 +1563,8 @@ async function processWebhookReconcileTask(env: Env, task: Extract<QueueTask, { 
   await reconcileLocalComputation(env, task.candle_key);
   // Parity runs on every timeframe; only analysis timeframes (H1 in production) start the AI chain.
   if (!analysisAllowedForTimeframe(task.timeframe, env.ANALYSIS_TIMEFRAMES || "60")) return;
+  // Local-primary: a webhook only calibrates the local engines and never starts the chain.
+  if (indicatorSourceMode(env) === "local") return;
   const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
   const payloads = await loadWebhookPayloadsFromD1(env, task.candle_key, required);
   const missing = required.filter(source => !payloads[source]);
@@ -1549,7 +1597,8 @@ async function processLocalCalculationReconcileTask(env: Env, task: Extract<Queu
   const localRecords = await Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get("localcalc:" + task.candle_key + ":" + engine)));
   if (!localRecords.every(Boolean)) return;
   const payloads = await loadWebhookPayloadsFromD1(env, task.candle_key, required);
-  if (!required.every(source => payloads[source])) return;
+  // Local-primary: the parity-approved local records are enough; webhooks are calibration only.
+  if (indicatorSourceMode(env) !== "local" && !required.every(source => payloads[source])) return;
   const existing = await env.WEBHOOK_BUFFER.get("analysis:" + safeKeyPart(task.candle_key));
   if (existing) {
     try { if ((JSON.parse(existing) as JsonObject).status === "complete") return; } catch { /* retry */ }
@@ -1670,6 +1719,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     let lastComparison: string | null = null;
     let recentComparisons: unknown[] = [];
     let registry: unknown[] = [];
+    let calibration: JsonObject = {};
     try {
       await ensureSchema(env.DB);
       const row = await env.DB.prepare("SELECT MAX(compared_at) AS last FROM engine_parity_comparisons").first<{ last: string | null }>();
@@ -1678,7 +1728,17 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       recentComparisons = recent.results || [];
       const entries = await env.DB.prepare("SELECT engine, status, consecutive_matches, last_candle_key, last_result, updated_at FROM engine_parity_registry ORDER BY updated_at DESC LIMIT 10").all<JsonObject>();
       registry = entries.results || [];
+      const perEngine = await env.DB.prepare(
+        "SELECT r.engine, r.status, r.consecutive_matches, (SELECT MAX(c.compared_at) FROM engine_parity_comparisons c WHERE c.engine = r.engine AND c.source_hash = r.source_hash AND c.implementation_hash = r.implementation_hash) AS last_compared_at FROM engine_parity_registry r WHERE r.status = 'approved' AND r.engine IN ('prophet', 'gmi', 'prophet_m5', 'gmi_m5')"
+      ).all<JsonObject>();
+      calibration = calibrationStatus(perEngine.results || [], Date.now(), Number(env.CALIBRATION_INTERVAL_DAYS) || 30);
     } catch { /* registry unavailable */ }
+    // Local-primary: the lane is fresh while approved local records exist for a recent closed H1 candle.
+    let localRecordFresh = false;
+    try {
+      const recent = closedH1CandleKeys(Date.now(), { lookback: 2 });
+      localRecordFresh = (await Promise.all(recent.map(key => env.WEBHOOK_BUFFER.get("localcalc:" + key + ":prophet")))).some(Boolean);
+    } catch { localRecordFresh = false; }
     const lastMs = lastComparison ? Date.parse(lastComparison) : NaN;
     return dashboardJson({
       ai_worker: {
@@ -1693,8 +1753,12 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
         // so a candle is not lost when the per-event tasks run before KV settles.
         local_lane: {
           rpc_entrypoint: "LocalComputationIngress",
+          indicator_source: indicatorSourceMode(env),
           last_parity_comparison_at: lastComparison,
-          fresh: Number.isFinite(lastMs) && Date.now() - lastMs < LOCAL_LANE_FRESH_MS,
+          // Local-primary: fresh = approved local records for a recent H1 candle. Legacy webhook
+          // mode keeps the old meaning (a parity comparison in the last 2 hours).
+          fresh: indicatorSourceMode(env) === "local" ? localRecordFresh : Number.isFinite(lastMs) && Date.now() - lastMs < LOCAL_LANE_FRESH_MS,
+          calibration,
           parity_sweep_cron: PARITY_SWEEP_CRON,
           recent_comparisons: recentComparisons,
           registry

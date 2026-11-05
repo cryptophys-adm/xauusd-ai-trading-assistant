@@ -27,3 +27,4 @@ export function closedM5CandleKeys(now?: number, options?: { symbol?: string; lo
 export function reconcileRecentCandles(env: unknown, options?: { now?: number; lookback?: number; m5Lookback?: number }): Promise<SweepResult>;
 
 export function backfillRecentAnalyses(env: unknown, options?: { now?: number; lookback?: number; loadPayloads?: any; runAnalysis?: any; setStatus?: any }): Promise<{ triggered: number; candle_keys: string[] }>;
+export const LOCAL_MISSING_AFTER_MS: number;

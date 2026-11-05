@@ -174,8 +174,44 @@ function validateNewsAnalysis(newsAnalysis, expectedSymbol, now) {
   return { valid: errors.length === 0, errors };
 }
 
+/** The three indicator sources and the local engine whose parity-approved output reproduces each. */
+export const INDICATOR_SOURCES = Object.freeze({ prophet_r38: "prophet", prophet_r37_ssot: "prophet", gmi_v12_70: "gmi" });
+
+/**
+ * Indicator payloads for the AI chain, derived from parity-approved local records
+ * (local-primary architecture, owner decision 2026-11-05). The comparable fields are
+ * exactly the TradingView alert fields, so every consumer reads them unchanged;
+ * `origin` marks that they were computed locally, never by a webhook.
+ */
+export function indicatorPayloadsFromLocal(localCalculations, { symbol, timeframe, candleKey } = {}) {
+  const byEngine = {};
+  for (const item of Array.isArray(localCalculations) ? localCalculations : []) {
+    if (isRecord(item) && LOCAL_ENGINES.includes(item.engine) && !byEngine[item.engine]) byEngine[item.engine] = item;
+  }
+  const out = {};
+  for (const [source, engine] of Object.entries(INDICATOR_SOURCES)) {
+    const record = byEngine[engine];
+    const fields = record?.values?.comparable?.[source];
+    if (!isRecord(fields)) continue;
+    const candle = isRecord(record.values.candle) ? record.values.candle : {};
+    out[source] = {
+      schema_version: WEBHOOK_EVIDENCE_CONTRACT_VERSION,
+      origin: "local_computation",
+      trust_status: record.trust_status ?? null,
+      source, ticker: symbol ?? record.symbol, symbol: symbol ?? record.symbol,
+      timeframe: timeframe ?? record.timeframe, candle_time: record.candle_time, candle_key: candleKey ?? record.candle_key,
+      o: candle.o, h: candle.h, l: candle.l, c: candle.c, volume: candle.volume,
+      ...fields
+    };
+  }
+  return out;
+}
+
 export function buildEvidenceFusion(input, now = Date.now()) {
-  const { candleKey, symbol, timeframe, candleTime, webhookPayloads = {}, localCalculations = [], newsAnalysis = null, informational5mContext = null } = input || {};
+  const { candleKey, symbol, timeframe, candleTime, webhookPayloads = {}, localCalculations = [], newsAnalysis = null, informational5mContext = null, webhookLane = "required" } = input || {};
+  // webhookLane "calibration": TradingView webhooks only calibrate the local engines
+  // (parity registry). They are neither required nor validated as decision evidence.
+  const calibrationOnly = webhookLane === "calibration";
   const missing = [];
   const errors = [];
   const candleTimeMs = timestampMs(candleTime);
@@ -188,7 +224,7 @@ export function buildEvidenceFusion(input, now = Date.now()) {
     else if (candleTimeMs <= now && now - candleTimeMs > maxAgeMs) errors.push("candle_stale");
   }
   const webhookSources = ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"];
-  for (const source of webhookSources) {
+  for (const source of calibrationOnly ? [] : webhookSources) {
     const payload = webhookPayloads[source];
     if (!isRecord(payload)) {
       missing.push("webhook:" + source);
@@ -241,7 +277,8 @@ export function buildEvidenceFusion(input, now = Date.now()) {
     tradingview_webhook: {
       lane_id: "tradingview_webhook",
       computed_by: "TradingView: installed Pine indicators, delivered by alert webhook",
-      required_sources: [...webhookSources],
+      role: calibrationOnly ? "calibration_only" : "decision_evidence",
+      required_sources: calibrationOnly ? [] : [...webhookSources],
       present_sources: presentWebhooks,
       missing_sources: webhookSources.filter((source) => !presentWebhooks.includes(source)),
       complete: presentWebhooks.length === webhookSources.length && !errors.some((error) => error.startsWith("webhook_"))

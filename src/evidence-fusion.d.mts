@@ -27,3 +27,5 @@ export function stripCredentialFields(value: unknown, depth?: number): unknown;
 export function timeframeKey(value: unknown): string;
 export function analysisAllowedForTimeframe(timeframe: unknown, configured?: string): boolean;
 export function isHudSource(source: unknown): boolean;
+export const INDICATOR_SOURCES: Readonly<Record<string, LocalCalculationEngine>>;
+export function indicatorPayloadsFromLocal(localCalculations: unknown, context?: { symbol?: string; timeframe?: string; candleKey?: string }): Record<string, Record<string, unknown>>;
