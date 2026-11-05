@@ -198,9 +198,15 @@ async function upsertThread(db, { id, kind, refKey, title, post, now }) {
   await db.prepare("UPDATE agent_threads SET updated_at = ? WHERE id = ?").bind(ts, id).run();
 }
 
+// A step is stored once per (thread, run, step). A stored ok message is final (idempotent
+// redelivery). A stored failure (invalid_output, agent_failed, budget_exhausted, ...) is
+// replaced by the retry's result, keeping its id so replies stay attached; before, the
+// retry spent its calls and the failure stayed forever (preview-e2e, PR #95).
 async function writeMessage(db, msg) {
   await db.prepare(
-    "INSERT OR IGNORE INTO agent_thread_messages (thread_id, run_id, step, parent_id, agent, bar_time, ts, stance, confidence, body_json, refs_json, model, status, latency_ms, fallback_used, usage_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO agent_thread_messages (thread_id, run_id, step, parent_id, agent, bar_time, ts, stance, confidence, body_json, refs_json, model, status, latency_ms, fallback_used, usage_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+    "ON CONFLICT(thread_id, run_id, step) DO UPDATE SET parent_id = excluded.parent_id, agent = excluded.agent, bar_time = excluded.bar_time, ts = excluded.ts, stance = excluded.stance, confidence = excluded.confidence, body_json = excluded.body_json, refs_json = excluded.refs_json, model = excluded.model, status = excluded.status, latency_ms = excluded.latency_ms, fallback_used = excluded.fallback_used, usage_tokens = excluded.usage_tokens " +
+    "WHERE agent_thread_messages.status <> 'ok'"
   ).bind(
     msg.thread_id, msg.run_id, msg.step, msg.parent_id ?? null, msg.agent, msg.bar_time ?? null, msg.ts,
     msg.stance ?? null, msg.confidence ?? null, JSON.stringify(msg.body ?? {}), JSON.stringify(msg.refs ?? []),

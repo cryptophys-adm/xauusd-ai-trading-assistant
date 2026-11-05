@@ -429,6 +429,30 @@ test("schemas without refs never ask for refs; schemas with refs still do", asyn
   assert.match(moderator, /no refs field/);
 });
 
+test("a retried step replaces its stored failure, keeps its id, and never overwrites an ok message", async () => {
+  // preview-e2e (#95): the HUD moderator failed once; every later retry spent a call and
+  // the INSERT OR IGNORE kept the old invalid_output row forever.
+  let broken = true;
+  const e = env({ HUD_AGENTS_ENABLED: "true", AI: fakeAI(({ sys, user }) => {
+    if (/moderator of the HUD agents/.test(sys)) return broken ? { stance: "WAIT", confidence: 0.5, summary: "Refs: h1.decision and agents[0].stance." } : { stance: "WAIT", confidence: 0.5, summary: "Prophet and the Decision Matrix both support waiting." };
+    if (/one agent per Pine HUD/.test(sys)) return { agent: (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1], stance: "WAIT", confidence: 0.5, insight: "My reading supports waiting, in line with the H1 decision." };
+    return undefined;
+  }) });
+  e.DB.raw.prepare("INSERT INTO ai_syntheses (candle_key, ai_analysis) VALUES (?, ?)").run(HUD_KEY, JSON.stringify({ decision: { decision: "WAIT", confidence: 0.4 } }));
+  const row = () => e.DB.raw.prepare("SELECT id, status, ts FROM agent_thread_messages WHERE thread_id = ? AND step = 'moderator'").get("hud1h:" + HUD_KEY);
+  await runHudAgents(e, { candle_key: HUD_KEY }, { loadReadings });
+  const failed = row();
+  assert.equal(failed.status, "invalid_output");
+  const prophetBefore = e.DB.raw.prepare("SELECT ts FROM agent_thread_messages WHERE step = 'hud:prophet'").get().ts;
+  broken = false;
+  await runHudAgents(e, { candle_key: HUD_KEY }, { loadReadings });
+  const fixed = row();
+  assert.equal(fixed.status, "ok", "the retry's valid answer is stored");
+  assert.equal(fixed.id, failed.id, "the row keeps its id");
+  assert.equal(e.DB.raw.prepare("SELECT ts FROM agent_thread_messages WHERE step = 'hud:prophet'").get().ts, prophetBefore, "an ok message is never rewritten");
+  assert.equal(e.DB.raw.prepare("SELECT COUNT(*) AS n FROM agent_thread_messages WHERE step = 'moderator'").get().n, 1);
+});
+
 test("HUD agents: flag off means no calls", async () => {
   const e = env({ AI: hudAI() });
   assert.equal((await runHudAgents(e, { candle_key: HUD_KEY }, { loadReadings })).status, "disabled");
