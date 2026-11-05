@@ -48,6 +48,19 @@ test("accepts a complete same-candle evidence bundle", () => {
   assert.equal(Object.keys(result.local_calculations).length, 3);
 });
 
+test("ignores *_hud webhook sources for fusion and H1 decision lane", () => {
+  const input = completeInput();
+  input.webhookPayloads.prophet_r38_hud = webhook("prophet_r38_hud");
+  input.webhookPayloads.gmi_v12_70_hud = webhook("gmi_v12_70_hud");
+  const result = buildEvidenceFusion(input, now);
+  assert.equal(result.status, "ready");
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.missing_evidence, []);
+  // HUD sources are not part of the required fusion sources.
+  assert.ok(!result.webhook_sources.includes("prophet_r38_hud"));
+  assert.ok(!result.webhook_sources.includes("gmi_v12_70_hud"));
+});
+
 test("marks missing local calculations and news as degraded", () => {
   const input = completeInput();
   input.localCalculations = [local("mizan")];
