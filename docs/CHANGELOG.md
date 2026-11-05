@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- fix(chain): `trade_plan` is requested from the Reasoner and validated against the decision prices (`src/trade-plan.mjs`). PR #74 only passed the raw object through, and the Reasoner was never asked for it.
 - fix(webhook): only `ANALYSIS_TIMEFRAMES` start the AI chain (`"60"` in production). Before this, a 5m or 15m alert would have run the full chain, the bus and Telegram on every bar. Other timeframes are stored only, for parity.
 - docs: C0 "verified 5m lane" added before C1 (owner decision).
 - `3584e19` (PR #70) docs(hud-agents): Phase C plan.

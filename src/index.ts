@@ -141,6 +141,7 @@ import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRo
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
 import { DECISION_TEXT_RULE, plainDecisionText } from "./plain-decision.mjs";
+import { TRADE_PLAN_RULE, validateTradePlan } from "./trade-plan.mjs";
 
 function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
@@ -208,9 +209,9 @@ function parseDecision(text: string): JsonObject {
         if (positionSize !== null && (positionSize < 0 || positionSize > 100)) {
           return { decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null, risk_reward: null, position_size_pct: null, trade_plan: null, reasoning: "Model position_size_pct was outside the permitted 0–100 range; downgraded to WAIT.", raw_response: text };
         }
-        const tradePlan = (decision === "BUY" || decision === "SELL") && parsed.trade_plan && typeof parsed.trade_plan === "object"
-          ? parsed.trade_plan
-          : null;
+        // trade_plan (RFC_HUD_AGENTS §7) is validated against the decision prices; an invalid plan is dropped, never the decision.
+        const planCheck = validateTradePlan(parsed.trade_plan, { decision, entry_price: entry, stop_loss: stop, take_profit: target });
+        const tradePlan = planCheck.plan;
         return {
           ...parsed,
           decision,
@@ -221,6 +222,7 @@ function parseDecision(text: string): JsonObject {
           risk_reward: riskReward,
           position_size_pct: positionSize,
           trade_plan: tradePlan,
+          ...(planCheck.errors.length ? { trade_plan_errors: planCheck.errors } : {}),
           reasoning: asText(parsed.reasoning) || "No reasoning supplied."
         };
       }
@@ -839,7 +841,7 @@ async function runAnalysis(
       "If news_evidence.available is false, state completed fundamental news analysis was unavailable. Do NOT claim news supported or contradicted the setup.",
       "If news_evidence.available is true, incorporate the completed news analysis and its underlying article evidence into final reasoning.",
       "If informational_5m_context is present, treat it as unverified 5m context only; it must not change the decision or prices.",
-      "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation.", DECISION_TEXT_RULE,
+      "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation, trade_plan.", DECISION_TEXT_RULE, TRADE_PLAN_RULE,
       "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
       "EVIDENCE:",
       JSON.stringify(evidence),
@@ -1278,7 +1280,7 @@ async function runAnalysisFromBundle(
         "Prophet remains the base bias. GMI may validate, block, or wait on a setup. Do not silently reverse Prophet's bias.",
         "If news_evidence.available is false, state fundamental news analysis was not performed. Do NOT claim news supported or contradicted the setup.",
         "If news_evidence.available is true, incorporate the supplied articles into final reasoning.",
-        "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation.", DECISION_TEXT_RULE,
+        "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation, trade_plan.", DECISION_TEXT_RULE, TRADE_PLAN_RULE,
         "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
         "EVIDENCE:",
         JSON.stringify(evidence),
