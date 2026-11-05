@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import {
   compareWithWebhooks, identityOf, ensureSchema, registerIdentity, recordComparison, isTrusted, listRegistry,
-  resetSchemaCacheForTests, policyFromEnv, DEFAULT_POLICY
+  resetSchemaCacheForTests, policyFromEnv, DEFAULT_POLICY, scopedEngine
 } from "../src/parity-registry.mjs";
 
 /** Minimal D1 adapter over node:sqlite so the registry SQL runs for real. */
@@ -140,6 +140,57 @@ test("Mizan is trusted only while approved Prophet AND GMI both declare the same
   assert.equal(await isTrusted(db, mizan), true);
   await recordComparison(db, gmi, "k2", { status: "mismatch", compared: 1, mismatches: [{}], missing: [] }, policy);
   assert.equal(await isTrusted(db, mizan), false);
+});
+
+test("registry ids are timeframe-scoped: H1 keeps the bare id, 5m and 15m earn their own", () => {
+  assert.equal(scopedEngine("prophet", "60"), "prophet");
+  assert.equal(scopedEngine("prophet", "H1"), "prophet");
+  assert.equal(scopedEngine("gmi", undefined), "gmi");
+  assert.equal(scopedEngine("prophet", "5"), "prophet_m5");
+  assert.equal(scopedEngine("mizan", "M5"), "mizan_m5");
+  assert.equal(scopedEngine("prophet_hud", "15"), "prophet_hud_m15");
+  assert.equal(scopedEngine("prophet", "240"), null);
+  assert.equal(scopedEngine("aegis", "60"), null);
+
+  const h1 = identityOf({ ...local("prophet", {}, { dependencies: mizanDep }), timeframe: "60" });
+  const m5 = identityOf({ ...local("prophet", {}, { dependencies: mizanDep }), timeframe: "5" });
+  assert.equal(h1.engine, "prophet");
+  assert.equal(m5.engine, "prophet_m5");
+  assert.equal(m5.sourceHash, h1.sourceHash);
+  assert.equal(m5.mizanSourceHash, h1.mizanSourceHash);
+  assert.equal(identityOf({ ...local("mizan", {}), timeframe: "5" }).mizanSourceHash, null);
+  assert.equal(identityOf({ ...local("prophet", {}), timeframe: "240" }), null);
+});
+
+test("an approved H1 identity does not make the same hashes trusted on 5m, and 5m results never touch H1", async () => {
+  const db = d1();
+  await ensureSchema(db);
+  const policy = { ...DEFAULT_POLICY, promoteAfter: 1 };
+  const match = { status: "match", compared: 1, mismatches: [], missing: [] };
+  const mismatch = { status: "mismatch", compared: 1, mismatches: [{}], missing: [] };
+  const id = (engine, timeframe) => identityOf({ ...local(engine, {}, { dependencies: mizanDep }), timeframe });
+  const [prophetH1, gmiH1, prophetM5, gmiM5] = [id("prophet", "60"), id("gmi", "60"), id("prophet", "5"), id("gmi", "5")];
+  const mizanH1 = identityOf({ ...local("mizan", {}), timeframe: "60" });
+  const mizanM5 = identityOf({ ...local("mizan", {}), timeframe: "5" });
+  for (const m of [mizanH1, mizanM5]) { m.sourceHash = H("d"); m.implementationHash = H("2"); }
+  for (const x of [prophetH1, gmiH1, prophetM5, gmiM5, mizanH1, mizanM5]) await registerIdentity(db, x);
+
+  await recordComparison(db, prophetH1, "OANDA:XAUUSD:60:1", match, policy);
+  await recordComparison(db, gmiH1, "OANDA:XAUUSD:60:1", match, policy);
+  assert.equal(await isTrusted(db, prophetH1), true);
+  assert.equal(await isTrusted(db, mizanH1), true);
+  assert.equal(await isTrusted(db, prophetM5), false);
+  assert.equal(await isTrusted(db, mizanM5), false);
+
+  // A 5m mismatch resets only the 5m streak; the approved H1 identity stays approved.
+  await recordComparison(db, prophetM5, "OANDA:XAUUSD:5:1", mismatch, policy);
+  assert.equal(await isTrusted(db, prophetH1), true);
+
+  await recordComparison(db, prophetM5, "OANDA:XAUUSD:5:2", match, policy);
+  assert.equal(await isTrusted(db, mizanM5), false);
+  await recordComparison(db, gmiM5, "OANDA:XAUUSD:5:2", match, policy);
+  assert.equal(await isTrusted(db, prophetM5), true);
+  assert.equal(await isTrusted(db, mizanM5), true);
 });
 
 test("policy is configurable from env with safe fallbacks", () => {

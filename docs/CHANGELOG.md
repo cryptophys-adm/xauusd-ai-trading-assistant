@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- fix(parity): C0 step 2. Registry engine ids are timeframe-scoped (`prophet_m5`, `gmi_m5`, `mizan_m5`, `*_m15`), and H1 keeps the bare ids and its approval. The sweep also reconciles the last six closed 5m candles. Reconcile tasks start the AI chain only on `ANALYSIS_TIMEFRAMES`, so a 5m local record can never run the H1 chain.
 - fix(chain): `trade_plan` is requested from the Reasoner and validated against the decision prices (`src/trade-plan.mjs`). PR #74 only passed the raw object through, and the Reasoner was never asked for it.
 - fix(webhook): only `ANALYSIS_TIMEFRAMES` start the AI chain (`"60"` in production). Before this, a 5m or 15m alert would have run the full chain, the bus and Telegram on every bar. Other timeframes are stored only, for parity.
 - docs: C0 "verified 5m lane" added before C1 (owner decision).

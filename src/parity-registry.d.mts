@@ -1,5 +1,5 @@
 export interface EngineIdentity {
-  engine: "mizan" | "prophet" | "gmi";
+  engine: string;
   sourceHash: string;
   implementationHash: string;
   mizanSourceHash: string | null;
@@ -21,6 +21,8 @@ export const DEFAULT_POLICY: Readonly<ParityPolicy>;
 export const SCHEMA_SQL: string[];
 export function policyFromEnv(env?: Record<string, unknown>): ParityPolicy;
 export function normalizeHash(value: unknown): string | null;
+export const BASE_ENGINES: readonly string[];
+export function scopedEngine(engine: unknown, timeframe: unknown): string | null;
 export function identityOf(record: unknown): EngineIdentity | null;
 export function requiredSourcesFor(engine: string): string[];
 export function compareWithWebhooks(record: unknown, webhookPayloads: Record<string, unknown>, policy?: ParityPolicy): ParityComparison;

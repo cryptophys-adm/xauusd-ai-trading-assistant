@@ -1514,6 +1514,8 @@ async function processAnalysisTask(env: Env, task: Extract<QueueTask, { kind: "a
 
 async function processWebhookReconcileTask(env: Env, task: Extract<QueueTask, { kind: "webhook_reconcile" }>): Promise<void> {
   await reconcileLocalComputation(env, task.candle_key);
+  // Parity runs on every timeframe; only analysis timeframes (H1 in production) start the AI chain.
+  if (!analysisAllowedForTimeframe(task.timeframe, env.ANALYSIS_TIMEFRAMES || "60")) return;
   const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
   const payloads = await loadWebhookPayloadsFromD1(env, task.candle_key, required);
   const missing = required.filter(source => !payloads[source]);
@@ -1540,6 +1542,8 @@ async function processWebhookReconcileTask(env: Env, task: Extract<QueueTask, { 
 
 async function processLocalCalculationReconcileTask(env: Env, task: Extract<QueueTask, { kind: "local_calculation_reconcile" }>): Promise<void> {
   await reconcileLocalComputation(env, task.candle_key);
+  // Parity runs on every timeframe; only analysis timeframes (H1 in production) start the AI chain.
+  if (!analysisAllowedForTimeframe(task.timeframe, env.ANALYSIS_TIMEFRAMES || "60")) return;
   const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
   const localRecords = await Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get("localcalc:" + task.candle_key + ":" + engine)));
   if (!localRecords.every(Boolean)) return;
