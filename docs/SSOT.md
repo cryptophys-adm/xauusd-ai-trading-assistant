@@ -164,6 +164,22 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - Live: C0, C2, C3, C5, C6 and C7 are built. `HUD_AGENTS_ENABLED` is `"true"` in `wrangler.jsonc` (owner approval 2026-11-05, after the #94 preview-e2e proof). After each H1 synthesis, one agent per computed HUD (13) and a moderator post in Threads 1H, within `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`. At each 15m close, Trade Management, Kinetic Engine, Fabio AMT and Aegis Footprint speak in the live room, within `LIVE_ROOM_MAX_CALLS_PER_HOUR = 48`. Turning the flag to `"false"` stops new HUD posts at once.
 - Backlog (owner, 2026-11-05): B4 (merge the GMI core copy, needs a new H1 GMI approval in a calibration window) and the Grid Bot Protocol HUD. See `docs/BRIEF_HUD_AGENTS.md`.
 
+### Outcome scoring and stuck states (RFC_INDICATOR_AGENT_PLATFORM P1)
+- Code: `src/outcome-scoring.mjs`. Tables `outcome_scores`, `outcome_runs` and `stuck_states` (migration `0005_outcome_scores.sql`; also ensured at runtime). Owner approval 2026-11-05 for the definition.
+- It is deterministic and reads prices only: the pull adapter's closed TradingView bars, from the same KV namespace (`SIGNAL_CACHE` = `MARKET_DATA_CACHE`). It never changes a decision, prompt or evidence.
+- **What is scored, per closed candle, once its horizon has closed:**
+  - **H1:** the chain decision (`chain:h1`), the bus round-2 agents and the moderator (`bus:*`), the HUD agents (`hud:*`), and the parity-approved indicator directions (`indicator:prophet_r38`, `indicator:prophet_r37`, `indicator:gmi_v12_70`).
+  - **15m:** the live-room posts (`room:*`).
+- **How:**
+  - The entry is the statement candle's close, and the threshold is `0.5 × ATR(14)`, a simple average of the true range. The horizon is the next 4 closed candles.
+  - BUY or SELL is a hit when the favourable excursion reaches the threshold first, a miss when the adverse excursion does (both in the same bar counts as a miss), and neutral otherwise.
+  - WAIT (and NO_TRADE) is a hit when neither excursion reaches the threshold. Otherwise it is a `missed_opportunity`, with the direction of the first move.
+  - HOLD and CLOSE are not scored.
+  - A Brier score is computed when the statement has a confidence.
+- **Stuck states:** once an hour, over the approved H1 records of the last 24 candles. A Prophet or GMI state field (subtype, `b_enc`, `d_enc`, `t_enc`, gate, verdict, conflict) is stuck when it is unchanged for ≥ 8 candles while the high-low range of those candles exceeds `3 × ATR(14)`. Episodes open, extend and clear in `stuck_states`.
+- **When:** in the parity sweep cron (`10-59/15`), after the backfill. Stuck-state detection runs in the first sweep of each hour.
+- **Read APIs:** `GET /api/scorecards?days=30` (per subject: directional hit rate, WAIT accuracy, missed opportunities, Brier and sessions, plus the open stuck states) and `GET /api/stuck-states`.
+
 ## 4. Sources and knowledge
 - **Pine sources:** `pinescript/ssot/`. Verified against the installed TradingView indicators; see `docs/PINE_SOURCE_VERIFICATION.md`. Never edit these files.
 - **Agent knowledge base:** v4, generated from Pine with line citations and bundled into the AI Worker. See `docs/KNOWLEDGE_BASE_V4.md`.

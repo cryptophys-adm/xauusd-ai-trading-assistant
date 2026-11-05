@@ -102,7 +102,10 @@ jobs:
           let healthResponse;
           let health;
           let healthParseError = "no response";
-          for (let attempt = 0; attempt < 10; attempt++) {
+          // `wrangler secret put` creates a new Worker version that reaches isolates gradually:
+          // wait up to 90 s for /health to see the secret (10 x 1 s was not enough on ede9e9f).
+          const healthDeadline = Date.now() + 90_000;
+          while (Date.now() < healthDeadline) {
             try {
               healthResponse = await fetch(base + "/health", { signal: AbortSignal.timeout(15000) });
             } catch (error) {
@@ -335,10 +338,19 @@ jobs:
           // synthesis instead of expecting the request handler to run reconciliation inline.
           // A poll that times out or hits a transient edge error is retried by its loop; it must
           // never abort the whole proof (one slow answer from a fresh preview Worker did).
-          const pollFetch = (url) => fetch(url, { signal: AbortSignal.timeout(10000) }).catch(error => {
-            console.log("::warning::poll " + url.slice(base.length) + " failed: " + (error?.name || "error") + ", retrying");
-            return { ok: false };
-          });
+          // The timeout also covers reading the body (the run on 2152e3c aborted inside
+          // response.json() after fetch had resolved), so the body is read and parsed here: the
+          // caller gets { ok, status, json() } with the JSON already parsed, or ok: false.
+          const pollFetch = async (url) => {
+            try {
+              const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+              const body = JSON.parse(await response.text());
+              return { ok: response.ok, status: response.status, json: async () => body };
+            } catch (error) {
+              console.log("::warning::poll " + url.slice(base.length) + " failed: " + (error?.name || "error") + ", retrying");
+              return { ok: false };
+            }
+          };
           const retryDeadline = Date.now() + 90_000;
           let queueReady = null;
           let latestDecision = null;
