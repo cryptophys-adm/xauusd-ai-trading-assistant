@@ -168,6 +168,8 @@ test("parity sweep cron: approves the candle's local records and the backfill ru
   const { candleKey, output } = await sweepLastClosedCandle(env);
   assert.deepEqual(output.lines.error.filter(l => /Scheduled parity sweep failed|backfill_failed|backfill_candle_failed|ReferenceError|TypeError/.test(l)), [], "the cron must not fail");
   assert.ok(output.lines.log.some(l => l.startsWith("Scheduled parity sweep completed")), "the sweep reports its result");
+  assert.ok(output.lines.log.some(l => l.startsWith("outcome_scoring {\"status\":\"ok\"")), "the sweep runs outcome scoring (P1)");
+  assert.ok(!output.lines.error.some(l => l.startsWith("outcome_scoring_failed")), output.lines.error.join("\n"));
   const registry = Object.fromEntries(env.DB.db.prepare("SELECT engine, status FROM engine_parity_registry").all().map(r => [r.engine, r.status]));
   assert.equal(registry.prophet, "approved");
   assert.equal(registry.gmi, "approved");

@@ -143,6 +143,7 @@ import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
 import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents, m15KeyForClose } from "./agent-threads.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
+import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, SCORING, SCORING_VERSION } from "./outcome-scoring.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
 import { DECISION_TEXT_RULE, plainDecisionText } from "./plain-decision.mjs";
@@ -1912,6 +1913,23 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/scorecards") {
+    try {
+      const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") || "30") || 30));
+      return dashboardJson({ status: "ok", version: SCORING_VERSION, scoring: SCORING, window_days: days, subjects: await scorecards(env.DB, { days }), stuck_states: (await listStuckStates(env.DB, { limit: 20 })).filter(s => s.status === "open") });
+    } catch (error) {
+      console.error("scorecards_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/stuck-states") {
+    try {
+      return dashboardJson({ status: "ok", scoring: SCORING, items: await listStuckStates(env.DB, { limit: limitParam() }) });
+    } catch (error) {
+      console.error("stuck_states_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/m5-context") {
     try {
       const raw = await env.SIGNAL_CACHE?.get("context:m5:latest");
@@ -2098,6 +2116,14 @@ export default {
       // later sweep those parity comparisons would be lost permanently.
       ctx.waitUntil(reconcileRecentCandles(env).then(async result => {
         try { await backfillRecentAnalyses(env, { loadPayloads: loadWebhookPayloadsFromD1, runAnalysis, setStatus: setAnalysisRunStatus }); } catch (e) { console.error("backfill_failed", e instanceof Error ? e.message : String(e)); }
+        // RFC_INDICATOR_AGENT_PLATFORM P1: score statements whose horizon has closed, and
+        // detect stuck states once an hour (the first sweep after the hour). Never touches
+        // a decision; failures are logged and retried by the next sweep.
+        try {
+          const scored = await scoreRecentStatements(env);
+          if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) await detectRecentStuckStates(env);
+          console.log("outcome_scoring", JSON.stringify(scored));
+        } catch (e) { console.error("outcome_scoring_failed", e instanceof Error ? e.message : String(e)); }
         console.log("Scheduled parity sweep completed", JSON.stringify({
           swept_at: result.swept_at,
           candle_keys: result.candle_keys,

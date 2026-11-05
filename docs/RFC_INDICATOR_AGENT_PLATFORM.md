@@ -1,6 +1,6 @@
 # RFC: Indicator agent platform
 
-- **Status:** Draft. Owner review needed before any implementation.
+- **Status:** Draft. Owner decisions 2 and 3 (§10) approved on 2026-11-05: the scoring definition and the stuck-state thresholds. P1 is implemented (`src/outcome-scoring.mjs`, see `docs/SSOT.md`). Decisions 1 and 4–6 are still open.
 - **Date:** 2026-11-05
 - **Author:** Claude (orchestrator)
 - **Owner direction (2026-11-05):**
