@@ -92,13 +92,15 @@ test("POST /pull bootstraps via the TradingView gateway within the per-run budge
   const first = await (await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e)).json();
   assert.equal(first.status, "ok");
   assert.equal(first.requested, 8);
-  assert.equal(first.deferred, 2);
-  assert.deepEqual(gateway.calls[0].requests[0], { symbol: "OANDA:XAUUSD", interval: "5m", count: 5000 });
+  assert.equal(first.deferred, 4);
+  // M1 (the chart source) first; an empty derived cache is bootstrapped natively once.
+  assert.deepEqual(gateway.calls[0].requests[0], { symbol: "OANDA:XAUUSD", interval: "1m", count: 3000 });
+  assert.deepEqual(gateway.calls[0].requests[1], { symbol: "OANDA:XAUUSD", interval: "5m", count: 5000 });
   assert.ok(gateway.calls[0].requests.every((r) => Object.keys(r).join() === "symbol,interval,count"));
 
   const second = await (await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e)).json();
-  assert.equal(second.requested, 2);
-  assert.deepEqual(second.updated.map((u) => u.series).sort(), ["CRYPTOCAP:USDT|4h", "TVC:DXY|4h"]);
+  assert.equal(second.requested, 4);
+  assert.deepEqual(second.updated.map((u) => u.series).sort(), ["CRYPTOCAP:USDT|4h", "TVC:DXY|4h", "TVC:USOIL|15m", "TVC:USOIL|1h"]);
 
   const third = await (await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e)).json();
   assert.equal(third.status, "up_to_date");

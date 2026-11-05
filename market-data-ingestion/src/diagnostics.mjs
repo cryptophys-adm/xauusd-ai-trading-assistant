@@ -17,14 +17,15 @@ async function readJson(kv, key) {
 export async function readDiagnostics(env, { now = Date.now() } = {}) {
   const kv = env.MARKET_DATA_CACHE;
   if (!kv) return { status: 503, body: { error: "cache_not_configured" } };
-  const [lastRefresh, lastPublish, records] = await Promise.all([
+  const [lastRefresh, lastPublish, derivedCheck, records] = await Promise.all([
     readJson(kv, LAST_REFRESH_KEY),
     readJson(kv, LAST_PUBLISH_KEY),
+    readJson(kv, SERIES_INTERNALS.DERIVED_CHECK_KEY),
     Promise.all(SERIES.map((spec) => readSeries(kv, spec)))
   ]);
   const today = new Date(now).toISOString().slice(0, 10);
   const budgetUsed = Number.parseInt((await kv.get(SERIES_INTERNALS.BUDGET_KEY_PREFIX + today)) || "0", 10) || 0;
-  const budgetDaily = Number.parseInt(typeof env.TV_DAILY_CALL_BUDGET === "string" ? env.TV_DAILY_CALL_BUDGET : "", 10) || 1200;
+  const budgetDaily = Number.parseInt(typeof env.TV_DAILY_CALL_BUDGET === "string" ? env.TV_DAILY_CALL_BUDGET : "", 10) || 800;
   return {
     status: 200,
     body: {
@@ -35,6 +36,7 @@ export async function readDiagnostics(env, { now = Date.now() } = {}) {
       budget: { date: today, used: budgetUsed, daily: budgetDaily },
       last_refresh: lastRefresh,
       last_publish: lastPublish,
+      derived_check: derivedCheck,
       series: SERIES.map((spec, index) => {
         const record = records[index];
         const last = Array.isArray(record?.candles) ? record.candles.at(-1) : null;
@@ -44,6 +46,7 @@ export async function readDiagnostics(env, { now = Date.now() } = {}) {
           interval: spec.interval,
           timeframe: spec.timeframe,
           role: spec.role,
+          derived_from: spec.derived_from || null,
           candle_count: typeof record?.candle_count === "number" ? record.candle_count : (Array.isArray(record?.candles) ? record.candles.length : 0),
           fetched_at: typeof record?.fetched_at === "string" ? record.fetched_at : null,
           latest_open_time: last?.open_time || null,

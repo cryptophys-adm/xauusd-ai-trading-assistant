@@ -2,10 +2,12 @@
 //
 // Bars come from the TradingView MCP `mcp-tv-get-ohlcv` tool through the
 // news-ingestion Worker's gateway (the single owner of the TradingView OAuth
-// grant and quota cooldown). Every series is a native TradingView series — the
-// same bars Pine sees on the chart and through request.security /
-// request.security_lower_tf — never re-aggregated or resampled here.
+// grant and quota cooldown). M1, H1, H4, D1, W1 and the 4h macro series are native
+// TradingView series. Since 2026-11-05 (owner decision, budget 800 calls a day) M5 and
+// M15 are aggregated locally from M1, and USOIL M15 and H1 from USOIL M5
+// (derived-series.mjs). verifyDerivedSeries compares them with native bars once a day.
 
+import { aggregateCandles, sourceCovers, compareWithNative } from "./derived-series.mjs";
 export const MARKET_DATA_SCHEMA = "cryptophys.market-data.v2";
 export const PROVIDER = "TradingView MCP (mcp-tv-get-ohlcv via xauusd-fundamental-news-ingestion gateway)";
 export const CANONICAL_SYMBOL = "OANDA:XAUUSD";
@@ -15,17 +17,23 @@ const BUDGET_KEY_PREFIX = "market-data:v2:mcp-calls:";
 export const LAST_REFRESH_KEY = "market-data:v2:last-refresh";
 const MAX_GATEWAY_COUNT = 8000;
 
-// Order is priority: the chart timeframe is refreshed first when the per-run
-// call budget is tight.
+// Order is priority: the chart source (M1) is refreshed first when the per-run call
+// budget is tight. `derived_from` series are built locally from their source (see
+// derived-series.mjs) and are pulled natively only to bootstrap or to fill a gap the source
+// no longer covers (owner decision 2026-11-05, TradingView MCP budget 800 a day).
 export const SERIES = Object.freeze([
-  { key: "OANDA:XAUUSD|5m", symbol: CANONICAL_SYMBOL, interval: "5m", timeframe: "M5", seconds: 300, retain: 5000, role: "chart" },
-  { key: "OANDA:XAUUSD|1m", symbol: CANONICAL_SYMBOL, interval: "1m", timeframe: "M1", seconds: 60, retain: 3000, role: "lower_tf_intrabars" },
-  { key: "OANDA:XAUUSD|15m", symbol: CANONICAL_SYMBOL, interval: "15m", timeframe: "M15", seconds: 900, retain: 2000, role: "htf" },
+  { key: "OANDA:XAUUSD|1m", symbol: CANONICAL_SYMBOL, interval: "1m", timeframe: "M1", seconds: 60, retain: 3000, role: "chart_source" },
+  { key: "OANDA:XAUUSD|5m", symbol: CANONICAL_SYMBOL, interval: "5m", timeframe: "M5", seconds: 300, retain: 5000, role: "chart", derived_from: "OANDA:XAUUSD|1m" },
+  { key: "OANDA:XAUUSD|15m", symbol: CANONICAL_SYMBOL, interval: "15m", timeframe: "M15", seconds: 900, retain: 2000, role: "htf", derived_from: "OANDA:XAUUSD|1m" },
   { key: "OANDA:XAUUSD|1h", symbol: CANONICAL_SYMBOL, interval: "1h", timeframe: "H1", seconds: 3600, retain: 1000, role: "htf" },
   { key: "OANDA:XAUUSD|4h", symbol: CANONICAL_SYMBOL, interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "htf" },
   { key: "OANDA:XAUUSD|1D", symbol: CANONICAL_SYMBOL, interval: "1D", timeframe: "D1", seconds: 86400, retain: 500, role: "htf" },
   { key: "OANDA:XAUUSD|1W", symbol: CANONICAL_SYMBOL, interval: "1W", timeframe: "W1", seconds: 604800, retain: 260, role: "htf" },
-  { key: "TVC:USOIL|5m", symbol: "TVC:USOIL", interval: "5m", timeframe: "M5", seconds: 300, retain: 1000, role: "external" },
+  // USOIL feeds Macro & Aether's ASSET GRAVITY (WTI RSI at the chart timeframe).
+  { key: "TVC:USOIL|5m", symbol: "TVC:USOIL", interval: "5m", timeframe: "M5", seconds: 300, retain: 3000, role: "external" },
+  { key: "TVC:USOIL|15m", symbol: "TVC:USOIL", interval: "15m", timeframe: "M15", seconds: 900, retain: 1000, role: "external", derived_from: "TVC:USOIL|5m" },
+  { key: "TVC:USOIL|1h", symbol: "TVC:USOIL", interval: "1h", timeframe: "H1", seconds: 3600, retain: 500, role: "external", derived_from: "TVC:USOIL|5m" },
+  // GMI reads DXY and USDT only at 240 (macro_kinematics, dxy_close), whatever the chart.
   { key: "TVC:DXY|4h", symbol: "TVC:DXY", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "external" },
   { key: "CRYPTOCAP:USDT|4h", symbol: "CRYPTOCAP:USDT", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "external" }
 ]);
@@ -96,7 +104,7 @@ async function writeSeries(kv, spec, record) {
 }
 
 async function reserveBudget(kv, env, wanted, now) {
-  const daily = Number.parseInt(asString(env.TV_DAILY_CALL_BUDGET) || "1200", 10);
+  const daily = Number.parseInt(asString(env.TV_DAILY_CALL_BUDGET) || "800", 10);
   const key = BUDGET_KEY_PREFIX + new Date(now).toISOString().slice(0, 10);
   const used = Number.parseInt((await kv.get(key)) || "0", 10) || 0;
   const allowed = Math.max(0, Math.min(wanted, daily - used));
@@ -134,14 +142,28 @@ export async function refreshSeries(env, { now = Date.now(), force = false } = {
   const perRun = Math.min(12, Number.parseInt(asString(env.TV_MAX_CALLS_PER_RUN) || "8", 10) || 8);
 
   const cached = await Promise.all(SERIES.map((spec) => readSeries(kv, spec)));
+  const sourceIndex = (spec) => SERIES.findIndex((s) => s.key === spec.derived_from);
   const planned = [];
   SERIES.forEach((spec, index) => {
-    const plan = force && cached[index]?.candles?.length
-      ? { symbol: spec.symbol, interval: spec.interval, count: 5, bootstrap: false }
-      : planRequest(spec, cached[index], nowSec);
+    let plan;
+    if (spec.derived_from) {
+      // Derived locally unless its cache is empty or the cached source no longer reaches
+      // back to its first missing bar: then one native pull bootstraps or fills the gap.
+      const own = cached[index]?.candles || [];
+      const source = cached[sourceIndex(spec)]?.candles || [];
+      if (own.length && sourceCovers(own.at(-1), source, spec.seconds)) plan = null;
+      else plan = planRequest(spec, cached[index], nowSec);
+    } else {
+      plan = force && cached[index]?.candles?.length
+        ? { symbol: spec.symbol, interval: spec.interval, count: 5, bootstrap: false }
+        : planRequest(spec, cached[index], nowSec);
+    }
     if (plan) planned.push({ spec, index, plan });
   });
-  if (planned.length === 0) return { status: "up_to_date", requested: 0, updated: [] };
+  if (planned.length === 0) {
+    const derived = await deriveSeries(kv, cached, now, new Set());
+    return { status: "up_to_date", requested: 0, updated: [], derived };
+  }
 
   const budget = await reserveBudget(kv, env, Math.min(perRun, planned.length), now);
   const batch = planned.slice(0, budget.allowed);
@@ -177,11 +199,41 @@ export async function refreshSeries(env, { now = Date.now(), force = false } = {
       failed.push({ series: item.spec.key, error: asString(error?.code) || "invalid_ohlcv_payload" });
     }
   }
+  // Derived series are built after the native writes, from the refreshed sources. A
+  // series pulled natively in this run is not derived again in the same run.
+  const fresh = await Promise.all(SERIES.map((spec) => readSeries(kv, spec)));
+  const derived = await deriveSeries(kv, fresh, now, new Set(updated.map((u) => u.series)));
   return {
     status: gatewayError ? asString(gatewayError.code) || "gateway_error" : failed.length ? "partial" : "ok",
     quota_cooldown_until: gatewayError?.quota_cooldown_until || null,
-    requested: batch.length, deferred: planned.length - batch.length, updated, failed, budget
+    requested: batch.length, deferred: planned.length - batch.length, updated, failed, derived, budget
   };
+}
+
+/** Extends every derived series from its cached source. Never calls the gateway. */
+async function deriveSeries(kv, records, now, skip) {
+  const nowSec = Math.floor(now / 1000);
+  const out = [];
+  for (const [index, spec] of SERIES.entries()) {
+    if (!spec.derived_from || skip.has(spec.key)) continue;
+    const own = records[index]?.candles || [];
+    const sourceSpec = SERIES.find((s) => s.key === spec.derived_from);
+    const sourceRecord = records[SERIES.indexOf(sourceSpec)];
+    const source = sourceRecord?.candles || [];
+    if (!own.length || !sourceCovers(own.at(-1), source, spec.seconds)) continue;
+    const fetchedAtSec = Math.floor(Date.parse(sourceRecord?.fetched_at || "") / 1000);
+    const incoming = aggregateCandles(source, { seconds: spec.seconds, sourceSeconds: sourceSpec.seconds, nowSec, fetchedAtSec, after: own.at(-1).time });
+    if (!incoming.length) continue;
+    const candles = mergeCandles(own, incoming, spec.retain);
+    await writeSeries(kv, spec, {
+      series: spec.key, symbol: spec.symbol, interval: spec.interval, timeframe: spec.timeframe,
+      fetched_at: new Date(now).toISOString(), derived_from: spec.derived_from, candle_count: candles.length,
+      volume_available: candles.length > 0 && candles.every((c) => c.volume !== null),
+      candles
+    });
+    out.push({ series: spec.key, derived: incoming.length, stored: candles.length });
+  }
+  return out;
 }
 
 function frame(record, spec) {
@@ -214,7 +266,7 @@ export async function buildBundle(env, now = Date.now()) {
       canonical_symbol: CANONICAL_SYMBOL,
       provider_symbol: CANONICAL_SYMBOL,
       tool: "mcp-tv-get-ohlcv",
-      candle_basis: "TradingView native bars per interval (exchange session boundaries); closed bars only; no resampling",
+      candle_basis: "TradingView native bars for M1, H1, H4, D1, W1 and the 4h macro series; M5 and M15 aggregated locally from M1, USOIL M15 and H1 from USOIL M5 (epoch-aligned buckets, complete buckets only); closed bars only",
       notice: "Bars are served under the TradingView account's plan/exchange entitlements (realtime or delayed)."
     },
     fetched_at: fetchedTimes.length ? new Date(Math.max(...fetchedTimes)).toISOString() : null,
@@ -228,4 +280,41 @@ export async function buildBundle(env, now = Date.now()) {
   };
 }
 
-export const SERIES_INTERNALS = { SERIES_KEY_PREFIX, BUDGET_KEY_PREFIX };
+/** KV key of the last daily derived-vs-native comparison. */
+export const DERIVED_CHECK_KEY = "market-data:v2:derived-check";
+const VERIFY_COUNT = { 300: 48, 900: 32, 3600: 24 };
+
+/**
+ * Once per UTC day (from 01:00), pulls a few native bars of every derived series and
+ * compares them with the derived bars on the same open times. Never writes a series.
+ */
+export async function verifyDerivedSeries(env, { now = Date.now() } = {}) {
+  const kv = env.MARKET_DATA_CACHE;
+  if (!kv) return { status: "cache_not_configured" };
+  const today = new Date(now).toISOString().slice(0, 10);
+  const previous = await readJson(kv, DERIVED_CHECK_KEY);
+  if (previous?.date === today || new Date(now).getUTCHours() < 1) return { status: "not_due" };
+  const specs = SERIES.filter((s) => s.derived_from);
+  const budget = await reserveBudget(kv, env, specs.length, now);
+  if (budget.allowed < specs.length) return { status: "daily_budget_exhausted", budget };
+  const nowSec = Math.floor(now / 1000);
+  let results;
+  try {
+    results = await callGateway(env, specs.map((spec) => ({ symbol: spec.symbol, interval: spec.interval, count: VERIFY_COUNT[spec.seconds] || 24 })));
+  } catch (error) {
+    return { status: asString(error?.code) || "gateway_error" };
+  }
+  const series = [];
+  for (const [i, spec] of specs.entries()) {
+    const result = results[i];
+    if (!result?.ok) { series.push({ series: spec.key, error: asString(result?.error) || "not_attempted" }); continue; }
+    const native = closedCandlesFromColumns(result.bars, spec, nowSec);
+    const derived = (await readSeries(kv, spec))?.candles || [];
+    series.push({ series: spec.key, ...compareWithNative(derived, native) });
+  }
+  const summary = { date: today, checked_at: new Date(now).toISOString(), status: series.every((x) => !x.error && x.mismatched === 0) ? "match" : "mismatch_or_error", series };
+  await kv.put(DERIVED_CHECK_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 14 });
+  return summary;
+}
+
+export const SERIES_INTERNALS = { SERIES_KEY_PREFIX, BUDGET_KEY_PREFIX, DERIVED_CHECK_KEY };

@@ -1,7 +1,7 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
 import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHudSnapshots, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
-import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest } from "./tradingview-source.mjs";
+import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, verifyDerivedSeries } from "./tradingview-source.mjs";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -98,7 +98,7 @@ const worker = {
         local_publisher_configured: typeof env.AI_WORKER?.submit === "function",
         cache_configured: Boolean(env.MARKET_DATA_CACHE),
         cron: "*/5 * * * *",
-        series: SERIES.map(({ symbol, interval, timeframe, retain, role }) => ({ symbol, interval, timeframe, retain, role })),
+        series: SERIES.map(({ symbol, interval, timeframe, retain, role, derived_from }) => ({ symbol, interval, timeframe, retain, role, derived_from: derived_from || null })),
         last_refresh: lastRefresh ? { status: lastRefresh.status, checked_at: lastRefresh.checked_at, requested: lastRefresh.requested, failed: lastRefresh.failed, quota_cooldown_until: lastRefresh.quota_cooldown_until } : null
       });
     }
@@ -234,7 +234,13 @@ const worker = {
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil((async () => {
       try {
-        await pull(env);
+        const pulled = await pull(env);
+        // Daily derived-vs-native check (a few calls, once per UTC day); skipped while the
+        // gateway reports a quota cooldown.
+        if (!["mcp_quota_cooldown_active", "gateway_unavailable", "daily_budget_exhausted"].includes(pulled?.status)) {
+          const check = await verifyDerivedSeries(env);
+          if (check.status !== "not_due") console.log(JSON.stringify({ worker: WORKER_NAME, event: "derived_series_check", status: check.status, series: check.series?.map((x) => ({ series: x.series, compared: x.compared, mismatched: x.mismatched, error: x.error })) }));
+        }
       } catch (error) {
         // Keep logs sanitized: never log URLs, secrets, request headers or raw provider payloads.
         console.error(JSON.stringify({

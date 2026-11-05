@@ -6,6 +6,16 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- feat(market-data): M5 and M15 derived locally from M1, and USOIL M15/H1 from USOIL M5; TradingView MCP budget 1200 → 800 (owner decision 2026-11-05).
+  - **Why.** TradingView suspended the account's MCP access until 00:00 UTC for suspicious volume, which also stopped the pull adapter.
+  - **Native pulls.**
+    - Now: XAUUSD M1, H1, H4, D1 and W1; USOIL 5m; DXY and USDT 4h.
+    - No longer pulled: XAUUSD M5 and M15, which were duplicates of M1.
+    - USOIL 15m and 1h are new and derived.
+  - **Demand.** About 620 calls a day, down from about 1000.
+  - **Daily check.** A daily check compares the derived bars with a few native bars.
+  - **Unchanged.** The cached history and every series key, so the engines, the AI Worker's scoring and Nexus read the same series.
+
 - feat(shadow): GMI "Prophet risk hold" candidates `gmi_v12_70@latch8` and `gmi_v12_70@latch12`.
   - **How they work.** `src/gmi-regate.mjs` recomputes the two points of GMI v12.70 that the Prophet structure feeds: `mtf_state`, and the R10 gate with its risk hold. It starts from the approved local GMI record's diagnostics, so the hashed engine is not forked.
   - **Exactness.** With the active structure it reproduces GMI's comparable fields exactly (42 cases across two branches).
