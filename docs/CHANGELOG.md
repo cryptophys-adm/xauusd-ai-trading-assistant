@@ -4,6 +4,14 @@ This file is the single source of truth for repository changes. Topology and
 deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
+## 2026-11-05
+
+- docs(hud-agents): owner decisions recorded in `docs/BRIEF_HUD_AGENTS.md`:
+  - the Prophet R38 top-right HUD agent is named "Prophet";
+  - Matrix & Omega Sensors gets one agent per titled section (Tactical Muscles, Macro & Aether Sensors, GABFX Price Action, Playbook Execution, Decision Matrix, Grid Bot Protocol);
+  - that makes 14 HUD agents.
+- `d4e8e60` (PR #64) feat(live-room,nexus): 15m live room; old debate/raw dashboard retired; HUD-agent brief.
+
 ## 2026-11-04
 
 - feat(live-room,nexus): the live room meets at every 15m candle close. The closed 15m candles are the setup; the 5m local-lane data is the execution read. The AI Worker's old `/dashboard` (debate chat timeline and raw output) is retired and redirects to Nexus, so only the threads and the live room are shown.

@@ -52,7 +52,7 @@ Read these files in order:
 | HUD (agent name) | Table | Rows |
 |---|---|---|
 | **R37 Funnel** | `funnel_table` (line 505) | Candidates, Price, Structure, Volume, Confirmed, High Quality (funnel counts) |
-| **Prophet HUD** (the top-right table has no title; confirm the name with the owner) | `hud` (line 1074) | Market, Harmonic, Structure, Momentum |
+| **Prophet** (the top-right table has no title; owner decision 2026-11-05) | `hud` (line 1074) | Market, Harmonic, Structure, Momentum |
 | **Trade Management** | `trade_management_hud` (line 1075) | Zone, cycle, macro, Prophet–GMI alignment, action, entry candidate, TP, exit |
 
 **Global Multiverse Interceptor v12.70** (`pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt`):
@@ -64,9 +64,24 @@ Read these files in order:
 | **Fabio AMT Sensors** | `hud_main`, column 9 | POC, value area, LVN 1 and 2, HVN, squeeze state, liquidity (MML), active SMR, model status, progressive SL |
 | **Chronos Matrix** | `hud_aegis`, top (line 223) | Active sessions, Asian range, weekly CPR, daily CPR and S/R, CPR width × GMI |
 | **Aegis Footprint Matrix** | `hud_aegis`, lower block | Buy/sell volume, bar delta, CVD, volume surge, PA structure, whale activity |
-| **Matrix & Omega Sensors** | `hud_tdm` (line 224) | Titled sections: Tactical Muscles, Macro & Aether Sensors, GABFX Price Action, Playbook Execution, Decision Matrix, Grid Bot Protocol |
 
-**Open question for the owner, to raise in your assessment.** "Matrix & Omega Sensors" is one table with six titled sections. The default is one agent per table (9 agents). The alternative is one agent per titled section (14 agents), which costs more model calls.
+**Matrix & Omega Sensors** (`hud_tdm`, line 224) is one table with six titled sections. Owner decision, 2026-11-05: **one agent per titled section**. Each section agent sees only its own section's rows.
+
+| HUD section (agent name) | Rows |
+|---|---|
+| **Tactical Muscles** | JMA PPO ranking, VPT volume trend, TVA regression |
+| **Macro & Aether Sensors** | MTF Hurst (trend), MTF Z-score (KWW), consolidation gravity, Z3 kinetic spread, macro cycle, estimated macro shift, asset gravity, Q-gravity pull, macro SMR (SMRI) |
+| **GABFX Price Action** | Quasimodo (QM) zone, RBS / SBR retest |
+| **Playbook Execution** | Phase 1 HTF (macro), Phase 2 MTF (Prophet), Phase 3 LTF (Aegis/Kinetic), Phase 4 exit (KTS/TP) |
+| **Decision Matrix** | Scalp burst index, action verdict, execute, system guard |
+| **Grid Bot Protocol** | CSHI viability, deploy status, grid range, trigger price, grid quantity, take profit / stop loss |
+
+The Grid Bot Protocol and Decision Matrix agents describe what their section shows, attributed to the HUD. They never turn it into an order, a size or an instruction (rule 5).
+
+**Total: 14 agents.**
+- Prophet R38: R37 Funnel, Prophet, Trade Management.
+- GMI v12.70 (5): The Interstellar Eyes, Kinetic Engine (TVA), Fabio AMT Sensors, Chronos Matrix, Aegis Footprint Matrix.
+- Matrix & Omega Sensors (6): the six sections above.
 
 ## 3. Phase A: assessment (documents only, no runtime change)
 
@@ -84,11 +99,11 @@ Deliver `docs/HUD_AGENTS_ASSESSMENT.md` in a PR. It must contain:
    - (d) a richer alert payload from a Pine candidate in `pinescript/candidates/`, which the owner must install.
 
    Prefer (a) and (b). Say plainly which HUD rows cannot be reproduced locally.
-3. **Cost.** Estimate the model calls per H1 candle and per hour for 9 agents (and for 14), and propose a budget variable, for example `HUD_AGENTS_MAX_CALLS_PER_HOUR`. The current budgets are:
+3. **Cost.** Estimate the model calls per H1 candle and per hour for the 14 agents plus a moderator, and propose a budget variable, for example `HUD_AGENTS_MAX_CALLS_PER_HOUR`. The current budgets are:
    - the bus: 20 an hour, about 5 calls per H1 candle;
    - the live room: 36 an hour, 12 used at 4 rooms × 3 calls.
 4. **Schedule.** Say which HUD agents speak per H1 candle (in Threads 1H). Also say whether any of them, for example Trade Management, Kinetic Engine or Aegis Footprint, should also speak in the live 15m room.
-5. **Risks and open questions for the owner**, including the item in section 2.
+5. **Risks and open questions for the owner.**
 
 ## 4. Phase B: design (an RFC, still no runtime change)
 
