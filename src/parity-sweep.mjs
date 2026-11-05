@@ -129,6 +129,8 @@ export async function reconcileRecentCandles(env, { now = Date.now(), lookback =
 
 /** Minutes after an H1 close after which a candle without approved local records is recorded as a fail-closed WAIT. */
 export const LOCAL_MISSING_AFTER_MS = 30 * 60 * 1000;
+/** Attempts after which a failed analysis is no longer retried by the backfill. */
+export const BACKFILL_MAX_ATTEMPTS = 4;
 
 export async function backfillRecentAnalyses(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, loadPayloads = null, runAnalysis = null, setStatus = null } = {}) {
   const required = String(env?.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(v=>v.trim()).filter(Boolean);
@@ -140,8 +142,10 @@ export async function backfillRecentAnalyses(env, { now = Date.now(), lookback =
     if (!Number.isFinite(openMs)) continue;
     if (now - openMs > 2 * 60 * 60 * 1000) continue;
     try {
-      const existing = await env.DB.prepare("SELECT status FROM analysis_runs WHERE candle_key = ?").bind(candleKey).first();
-      if (existing) continue;
+      const existing = await env.DB.prepare("SELECT status, attempt_count FROM analysis_runs WHERE candle_key = ?").bind(candleKey).first();
+      // A run that failed (for example a Workers AI timeout) is retried here, like the queue
+      // retries it, up to BACKFILL_MAX_ATTEMPTS; every other recorded status is final.
+      if (existing && !(existing.status === "failed" && Number(existing.attempt_count || 0) < BACKFILL_MAX_ATTEMPTS)) continue;
       const payloads = (loadPayloads ? await loadPayloads(env, candleKey, required) : null) || {};
       if (localPrimary) {
         // Local-primary: approved local records drive the chain; webhooks are calibration only.
