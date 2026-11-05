@@ -6,6 +6,11 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- fix(chain): the H1 decision text (reasoning, confirmation, invalidation) is written in plain language.
+  - The Reasoner prompt carries a natural-language rule, and there is a one-call rewrite of code-like text by the bus model.
+  - The decision, prices and conditions are never changed, and a rewrite that adds a number is rejected.
+  - Prompted by the first complete H1 analyses after Prophet and GMI were parity-approved (2026-11-05 01:00 UTC).
+- `8436980` (PR #65) docs(hud-agents): owner decisions recorded.
 - docs(hud-agents): owner decisions recorded in `docs/BRIEF_HUD_AGENTS.md`:
   - the Prophet R38 top-right HUD agent is named "Prophet";
   - Matrix & Omega Sensors gets one agent per titled section (Tactical Muscles, Macro & Aether Sensors, GABFX Price Action, Playbook Execution, Decision Matrix, Grid Bot Protocol);
