@@ -184,7 +184,7 @@ const RULES_NO_REFS = RULES.replace(
 async function callsInLastHour(db, now, kindPrefix) {
   const cutoff = new Date(now - 60 * 60 * 1000).toISOString();
   const row = await db.prepare(
-    "SELECT COALESCE(SUM(1 + COALESCE(fallback_used, 0) + COALESCE(json_extract(body_json, '$.corrections'), 0)), 0) AS n FROM agent_thread_messages WHERE ts >= ? AND status <> 'budget_exhausted' AND status <> 'skipped' AND thread_id LIKE ?"
+    "SELECT COALESCE(SUM(1 + COALESCE(fallback_used, 0) + COALESCE(json_extract(body_json, '$.corrections'), 0)), 0) AS n FROM agent_thread_messages WHERE ts >= ? AND status NOT IN ('budget_exhausted', 'skipped', 'info') AND thread_id LIKE ?"
   ).bind(cutoff, `${kindPrefix}:%`).first();
   const n = Number(row?.n);
   if (!Number.isFinite(n)) throw new Error("thread_budget_unavailable");
@@ -453,20 +453,21 @@ function roomModeratorMessages(evidence, transcript) {
   ]);
 }
 
-export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {}) {
-  if (!liveRoomEnabled(env)) return { status: "disabled", calls: 0 };
+/**
+ * The live room's evidence for the 15m close barTime: the closed 15m candles, the 5m execution
+ * read (VERIFIED 5m only while parity-approved), the latest H1 decision and the news consensus.
+ * Returns { evidence } or { status } when the bar is stale; throws RetryableError while the 5m
+ * context of this bar is not visible yet. Shared by the live room and the War Room.
+ */
+export async function liveEvidence(env, task, barTime) {
   const db = env.DB;
   const kv = env.SIGNAL_CACHE;
-  await ensureThreadSchema(db);
-  const barTime = new Date(Date.parse(task.bar_time)).toISOString();
-  // The room meets only at a 15m candle close; the other 5m bars feed execution context only.
-  if (!isFifteenMinuteClose(barTime)) return { status: "not_15m_close", calls: 0 };
   const fromTask = task.context && typeof task.context === "object" ? task.context : null;
   const m5Raw = fromTask || parseJson(await kv?.get?.("context:m5:latest"), null);
   const m5At = Date.parse(m5Raw?.candle_time ?? "");
   if (!Number.isFinite(m5At)) throw Object.assign(new Error("m5 context not visible yet"), { name: "RetryableError" });
   if (m5At < Date.parse(barTime)) throw Object.assign(new Error("m5 context not visible yet"), { name: "RetryableError" });
-  if (new Date(m5At).toISOString() !== barTime) return { status: "stale_bar", calls: 0 };
+  if (new Date(m5At).toISOString() !== barTime) return { status: "stale_bar" };
 
   const synth = await db.prepare("SELECT candle_key, ai_analysis, prophet_metrics, gmi_metrics FROM ai_syntheses ORDER BY id DESC LIMIT 1").first();
   const decision = parseJson(synth?.ai_analysis, {})?.decision || {};
@@ -478,12 +479,6 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
   };
   const newsThread = await db.prepare("SELECT t.id, t.ref_key, m.stance, m.confidence, m.body_json FROM agent_threads t LEFT JOIN agent_thread_messages m ON m.thread_id = t.id AND m.step = 'moderator' AND m.status = 'ok' WHERE t.kind = 'news' ORDER BY t.created_at DESC LIMIT 1").first();
   const news = newsThread ? { analysis_key: newsThread.ref_key, consensus: newsThread.stance ?? null, confidence: newsThread.confidence ?? null, summary: clip(parseJson(newsThread.body_json, {})?.summary, 300) } : null;
-
-  const day = barTime.slice(0, 10);
-  const threadId = `live15m:${day}`;
-  await upsertThread(db, { id: threadId, kind: "live15m", refKey: day, title: `Live room 15m · ${day}`, post: null, now: clock() });
-  const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, barTime).all()).results || []).map(r => [r.step, rowToThreadMessage(r)]));
-  if (existing.has("moderator")) return { status: "already_complete", calls: 0 };
 
   const recentBars = Array.isArray(m5Raw.recent_bars) ? m5Raw.recent_bars.slice(-12) : [];
   // C0 step 4: verified only while the 5m implementations are parity-approved.
@@ -520,6 +515,34 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
     h1,
     news
   };
+  // Entry confirmations (owner rule: no confirmation, no entry). The H1 one comes from the
+  // parity-approved Prophet R38 record behind the latest H1 decision; the 5m one from the bar's
+  // 5m context, and it counts only while the 5m lane is VERIFIED.
+  const r38 = parseJson(synth?.prophet_metrics, {})?.prophet_r38 || {};
+  const confirmations = {
+    h1_prophet_r38: { buy_confirmed: r38.buy_confirmed === true, sell_confirmed: r38.sell_confirmed === true },
+    m5_prophet_r38: { buy_confirmed: m5Raw.buy_confirmed === true, sell_confirmed: m5Raw.sell_confirmed === true, verified: m5Verified.verified === true }
+  };
+  return { evidence, synthesis: synth, confirmations };
+}
+
+export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {}) {
+  if (!liveRoomEnabled(env)) return { status: "disabled", calls: 0 };
+  const db = env.DB;
+  await ensureThreadSchema(db);
+  const barTime = new Date(Date.parse(task.bar_time)).toISOString();
+  // The room meets only at a 15m candle close; the other 5m bars feed execution context only.
+  if (!isFifteenMinuteClose(barTime)) return { status: "not_15m_close", calls: 0 };
+  const live = await liveEvidence(env, task, barTime);
+  if (live.status) return { status: live.status, calls: 0 };
+  const { evidence } = live;
+  const h1 = evidence.h1;
+  const day = barTime.slice(0, 10);
+  const threadId = `live15m:${day}`;
+  await upsertThread(db, { id: threadId, kind: "live15m", refKey: day, title: `Live room 15m · ${day}`, post: null, now: clock() });
+  const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, barTime).all()).results || []).map(r => [r.step, rowToThreadMessage(r)]));
+  if (existing.has("moderator")) return { status: "already_complete", calls: 0 };
+
   // The live room never pays for a fallback model: primary only.
   const roomEnv = { ...env, MULTI_AGENT_FALLBACK_MODEL: env.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL };
   const deadline = clock() + LIVE_ROOM_WALL_BUDGET_MS;
@@ -859,3 +882,6 @@ export async function readHudThread(db, candleKey) {
     verified_lines: m.verified_lines ?? null, total_lines: m.total_lines ?? null
   }));
 }
+
+/** Shared with the War Room (src/war-room.mjs): one storage, budget and step runner. */
+export const threadInternals = Object.freeze({ runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson, INSIGHT_MAX });

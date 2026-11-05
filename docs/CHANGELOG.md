@@ -6,6 +6,12 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- feat(war-room): Live War Room 15m (owner decision).
+  - **Room.** At every 15m close, all agents open on a communication bus with one role each: H1 Desk, News, Technical, Risk and 13 HUD agents. The minority and the Risk Manager then debate for at most 3 minutes, and the moderator concludes for the Nexus main panel. The H1 decision stays the constraint.
+  - **Rollout.** Behind `WAR_ROOM_ENABLED` (on), with `WAR_ROOM_MAX_CALLS_PER_HOUR = 112`. It replaces the legacy live room and the per-H1 HUD agents.
+  - **APIs.** `GET /api/war-room/latest` and `GET /api/tldr`.
+  - **No confirmation, no entry** (owner rule): the Risk Manager enforces it from the H1 and VERIFIED 5m Prophet R38 confirmations, and a BUY or SELL conclusion without the matching confirmation is rejected.
+  - **Nexus.** The main panel is the conclusion, the War Room shows the latest discussion only, and the right panel holds only the Threads 1H and News Thread TLDR. The left panel lists the War Room agents.
 - feat(scoring): RFC_INDICATOR_AGENT_PLATFORM P1 (owner approval of the scoring definition and the stuck-state thresholds).
   - Deterministic outcome scoring of the H1 chain, bus, HUD-agent, indicator and live-room stances: horizon 4 candles, threshold `0.5 × ATR(14)`.
   - A stuck-state detector: a field unchanged for 8 H1 candles while the range exceeds `3 × ATR`.

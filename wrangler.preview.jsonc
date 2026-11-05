@@ -55,6 +55,11 @@
     // Phase C5: own hourly cap for the HUD agents (13 agents + moderator per H1 run).
     "HUD_AGENTS_MAX_CALLS_PER_HOUR": "60",
     "LIVE_ROOM_MAX_CALLS_PER_HOUR": "150",
+    // Live War Room 15m (owner decision 2026-11-05): every agent opens on the bus, debates for at
+    // most 3 minutes, and the moderator concludes for the main panel. It replaces the legacy live
+    // room and the per-H1 HUD agents. About 27 calls per 15m close.
+    "WAR_ROOM_ENABLED": "true",
+    "WAR_ROOM_MAX_CALLS_PER_HOUR": "400",
     "PREVIEW_FIXTURES_ENABLED": "true"
   },
   "queues": {

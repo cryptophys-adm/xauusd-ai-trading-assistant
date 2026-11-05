@@ -108,7 +108,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - Thread ids are `live15m:<day>`. `GET /api/live` also returns the older `live5m:` history.
   - The 5m context carries the last 12 closed bars (`recent_bars`). The H1 chain strips them.
 - Read APIs: `GET /api/threads?kind=news|h1`, `GET /api/threads/:id` (nested replies; `h1:<candle_key>` serves the H1 bus debate as a thread) and `GET /api/live?since=`.
-- The Nexus dashboard shows three cards: **Threads 1H** (it replaces the old Analyst/Counselor/Reasoner debate card), **News Threads** and **Live Room 15m**.
+- **Nexus layout (owner decision 2026-11-05, Live War Room).** The main panel is the War Room conclusion, with the H1 decision shown as its constraint. Below it, the Live War Room 15m shows the latest discussion only, with no history. The right panel holds only the Threads 1H TLDR and the News Thread TLDR (`GET /api/tldr`). The left panel lists the War Room agents and the worker status.
 - The AI Worker's old `/dashboard` page (Analyst/Counselor/Reasoner chat timeline and raw output) is retired. `GET /dashboard` redirects (302) to the Nexus dashboard (`NEXUS_DASHBOARD_URL`, default `https://nexus.cryptophys.work/`).
 - The dashboard shows agents by name only: Technical Analyst, News Analyst, Risk Manager and Moderator. It never shows model names.
 - Agent text must be natural language: validators reject snake_case field names, dotted evidence paths and key=value pairs in insights, summaries and dissent (`src/natural-language.mjs`). Evidence paths stay in `refs`.
@@ -161,6 +161,20 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - HUD data must be verified through a Pine candidate comparator;
   - the candidate ships first (C1).
 - The Phase C order (C1–C7) is in `docs/BRIEF_HUD_AGENTS.md`.
+- **Live War Room 15m** (`src/war-room.mjs`, behind `WAR_ROOM_ENABLED`, on in production; owner decision 2026-11-05). At every 15m close, every agent discusses in one room, in three phases:
+  1. **Communication bus.** Each agent posts one opening claim from its own data only: the H1 Desk (the H1 chain and the H1 TradingView reading), the News Analyst, the Technical Analyst (15m candles and the 5m execution read), the Risk Manager, and one agent per computed 15m HUD (13).
+  2. **Debate.** Agents whose stance differs from the bus majority (at most 7, by confidence) and the Risk Manager rebut named agents. The debate is open for at most 3 minutes, then closed.
+  3. **Conclusion.** The moderator concludes for the Nexus main panel: stance, summary, up to 3 reasons and the agents that still disagree.
+  - The H1 decision is the constraint: a conclusion that differs must say "H1 decision: X". Price levels come only from the validated H1 chain.
+  - **No confirmation, no entry** (owner rule 2026-11-05).
+    - BUY needs a confirmed buy signal: the H1 Prophet R38 confirmation from the approved record behind the latest H1 decision, or a VERIFIED 5m Prophet R38 confirmation candle. SELL needs a confirmed sell signal.
+    - Without the matching confirmation the stance is WAIT, or HOLD / CLOSE for an open position.
+    - The Risk Manager sees the confirmations, applies the rule in its opening, and rebuts every entry proposed without one.
+    - A BUY or SELL conclusion without the matching confirmation is rejected (`entry_without_confirmation`).
+    - Nexus shows the confirmation state under the conclusion.
+  - Primary model only, within `WAR_ROOM_MAX_CALLS_PER_HOUR = 112` (about 27 calls per close). Messages are stored in `agent_thread_messages` (thread `warroom:<day>`, steps `brief`, `open:*`, `debate:*` and `conclusion`).
+  - Read API: `GET /api/war-room/latest[?bar=<iso>]`.
+  - When on, it replaces the legacy live room and the per-H1 HUD agents (their budget moves here). Turning it `"false"` restores both.
 - Live: C0, C2, C3, C5, C6 and C7 are built. `HUD_AGENTS_ENABLED` is `"true"` in `wrangler.jsonc` (owner approval 2026-11-05, after the #94 preview-e2e proof). After each H1 synthesis, one agent per computed HUD (13) and a moderator post in Threads 1H, within `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`. At each 15m close, Trade Management, Kinetic Engine, Fabio AMT and Aegis Footprint speak in the live room, within `LIVE_ROOM_MAX_CALLS_PER_HOUR = 48`. Turning the flag to `"false"` stops new HUD posts at once.
 - Backlog (owner, 2026-11-05): B4 (merge the GMI core copy, needs a new H1 GMI approval in a calibration window) and the Grid Bot Protocol HUD. See `docs/BRIEF_HUD_AGENTS.md`.
 

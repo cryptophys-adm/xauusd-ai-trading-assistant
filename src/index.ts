@@ -49,6 +49,8 @@ export interface Env {
   MULTI_AGENT_FALLBACK_MODEL?: string;
   LIVE_ROOM_ENABLED?: string;
   LIVE_ROOM_MAX_CALLS_PER_HOUR?: string;
+  WAR_ROOM_ENABLED?: string;
+  WAR_ROOM_MAX_CALLS_PER_HOUR?: string;
   PREVIEW_FIXTURES_ENABLED?: string;
   PARITY_PROMOTE_AFTER?: string;
   PARITY_ABS_TOLERANCE?: string;
@@ -143,6 +145,7 @@ import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
 import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents, m15KeyForClose } from "./agent-threads.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
+import { warRoomEnabled, runWarRoomBar, readWarRoom, readTldr } from "./war-room.mjs";
 import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, SCORING, SCORING_VERSION } from "./outcome-scoring.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
@@ -581,7 +584,8 @@ async function enqueueNewsThread(env: Env, analysisKey: string): Promise<void> {
 
 /** Phase C5: HUD agents post in Threads 1H after each H1 synthesis (behind HUD_AGENTS_ENABLED). */
 async function enqueueHudAgents(env: Env, candleKey: string): Promise<void> {
-  if (!hudAgentsEnabled(env) || candleKey.split(":")[2] !== "60") return;
+  // The War Room replaces the per-H1 HUD agents (owner decision 2026-11-05): their budget moves there.
+  if (!hudAgentsEnabled(env) || warRoomEnabled(env) || candleKey.split(":")[2] !== "60") return;
   try {
     await sendQueueTask(env.XAUUSD_EVENTS, buildHudAgentsTask({ candleKey }) as unknown as QueueTask);
   } catch (error) {
@@ -1671,8 +1675,9 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
       return;
     }
     if (task.kind === "live_room") {
-      const result = await runLiveRoomBar(env, task);
-      console.log("live_room", JSON.stringify({ bar_time: task.bar_time, ...result }));
+      // The Live War Room 15m replaces the legacy live room when WAR_ROOM_ENABLED is on.
+      const result = warRoomEnabled(env) ? await runWarRoomBar(env, task) : await runLiveRoomBar(env, task);
+      console.log(warRoomEnabled(env) ? "war_room" : "live_room", JSON.stringify({ bar_time: task.bar_time, ...result }));
       return;
     }
     if (task.kind === "hud_agents") {
@@ -1721,11 +1726,11 @@ async function ingestM5Context(env: Env, payload: unknown): Promise<{ status: nu
   await kv.put("context:m5:latest", JSON.stringify(stored), { expirationTtl: 900 });
   // The live room meets at each 15m candle close; every 5m context still refreshes the KV
   // execution context above.
-  if (liveRoomEnabled(env) && isFifteenMinuteClose(p.candle_time)) {
+  if ((liveRoomEnabled(env) || warRoomEnabled(env)) && isFifteenMinuteClose(p.candle_time)) {
     // Phase C6: the 15m HUD snapshot is read here, where it was just written, and carried
     // in the task (the consumer may run where the KV write has not propagated yet).
     let hud: unknown = null;
-    if (hudAgentsEnabled(env)) {
+    if (hudAgentsEnabled(env) || warRoomEnabled(env)) {
       try { hud = await loadHudSnapshot(env, { timeframe: "15", candleKey: m15KeyForClose(String(p.candle_time)) }); } catch { hud = null; }
     }
     try {
@@ -1879,6 +1884,25 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     } catch (error) {
       console.error("thread_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error", error: "thread_unavailable" }, 500);
+    }
+  }
+  if (url.pathname === "/api/war-room/latest") {
+    try {
+      const bar = url.searchParams.get("bar");
+      const room = await readWarRoom(env.DB, { barTime: bar && Number.isFinite(Date.parse(bar)) ? bar : null });
+      if (!room) return dashboardJson({ status: "not_found", enabled: warRoomEnabled(env) }, 404);
+      return dashboardJson({ status: "ok", enabled: warRoomEnabled(env), room });
+    } catch (error) {
+      console.error("war_room_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/tldr") {
+    try {
+      return dashboardJson({ status: "ok", ...(await readTldr(env.DB)) });
+    } catch (error) {
+      console.error("tldr_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
     }
   }
   if (url.pathname === "/api/live") {

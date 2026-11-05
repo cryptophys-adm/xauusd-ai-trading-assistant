@@ -234,3 +234,15 @@ With dozens of agents, a room cannot post every agent on every bar.
 - **Divergence from what traders see.** Local-only versions differ from the TradingView chart. Mitigation: label them clearly ("local version, not on your chart"), and prefer Pine candidates for active versions.
 - **Cost growth.** Mitigation: only the top agents speak, the crowd line is deterministic, the hourly caps fail closed, and the control plane manages budgets.
 - **Score gaming by the language model.** Scores are computed from prices only, never from model text. Model agents are scored on their stance, not on their wording.
+
+## 12. Addendum: Live War Room 15m (owner decision 2026-11-05)
+
+The owner decided that all agents discuss in one Live War Room at every 15m close. The design is:
+- **Communication bus.** Each agent posts one opening from its own data. There is one role per agent, and no information is repeated.
+- **Debate.** The debate is open for at most 3 minutes. The minority agents (at most 7) and the Risk Manager rebut named agents.
+- **Conclusion.** The conclusion goes to the Nexus main panel.
+- **H1 decision.** The H1 decision stays the constraint, and price levels come only from the H1 chain.
+- **Per-H1 HUD agents.** They are retired while the War Room runs.
+- **Nexus.** The War Room shows the latest discussion only. The right panel is replaced by the Threads 1H and News Thread TLDR.
+
+This is the first step of §7, the crowded-market view. Once P1 scorecards have enough history, the bus majority and the moderator can weight agents by track record (P7). The implementation is in `src/war-room.mjs`, and `docs/SSOT.md` describes it.

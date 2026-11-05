@@ -183,27 +183,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <!-- Left sidebar: agents -->
   <div class="sidebar">
     <div class="sidebar-card">
-      <h3>Agents</h3>
-      <div class="agent-card">
-        <div class="agent-avatar av-analyst">T</div>
-        <div class="agent-info"><div class="name">Technical Analyst</div><div class="role">H1 and 5m charts</div></div>
-        <span class="status-dot"></span>
-      </div>
-      <div class="agent-card">
-        <div class="agent-avatar av-counselor">N</div>
-        <div class="agent-info"><div class="name">News Analyst</div><div class="role">Fundamental news</div></div>
-        <span class="status-dot"></span>
-      </div>
-      <div class="agent-card">
-        <div class="agent-avatar av-reasoner">R</div>
-        <div class="agent-info"><div class="name">Risk Manager</div><div class="role">Live 5m room</div></div>
-        <span class="status-dot"></span>
-      </div>
-      <div class="agent-card">
-        <div class="agent-avatar av-analyst">M</div>
-        <div class="agent-info"><div class="name">Moderator</div><div class="role">Consensus</div></div>
-        <span class="status-dot"></span>
-      </div>
+      <h3>War Room agents</h3>
+      <div id="agent-roster"><div class="loader">Loading agents...</div></div>
     </div>
     <div class="sidebar-card">
       <h3>Worker Status</h3>
@@ -214,71 +195,36 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <!-- Main feed -->
   <div class="feed">
 
-    <!-- Latest Decision -->
-    <div class="decision-card" id="latest-decision">
-      <div class="loader">Loading latest decision...</div>
+    <!-- Main panel: the conclusion of the latest Live War Room debate -->
+    <div id="war-conclusion">
+      <div class="loader">Loading the War Room conclusion...</div>
     </div>
 
-    <!-- Threads 1H: the agents' debate on each H1 candle -->
+    <!-- Live War Room 15m: the latest discussion only (bus openings, then the debate) -->
     <div class="card">
       <div class="feed-header">
-        <div class="avatar">1H</div>
+        <div class="avatar">WR</div>
         <div>
-          <h2>Threads 1H</h2>
-          <div class="sub">One thread per H1 candle · Technical Analyst and News Analyst reply to each other · Moderator consensus · advisory only</div>
+          <h2>Live War Room 15m</h2>
+          <div class="sub">Every agent opens on the communication bus, then debates for at most 3 minutes; the conclusion goes to the main panel · advisory only, no orders</div>
         </div>
       </div>
-      <div id="h1-list"><div class="loader">Loading threads...</div></div>
-      <div id="h1-view" style="display:none"></div>
+      <div class="live-pin" id="war-status">Waiting for the next 15m candle close...</div>
+      <div id="war-bus"></div>
+      <div id="war-debate"></div>
     </div>
-
-    <!-- Phase 3: agent threads per news analysis -->
-    <div class="card">
-      <div class="feed-header">
-        <div class="avatar">TH</div>
-        <div>
-          <h2>News Threads</h2>
-          <div class="sub">One thread per news analysis · News Analyst and Technical Analyst reply to each other · Moderator consensus · advisory only</div>
-        </div>
-      </div>
-      <div id="news-threads"></div>
-      <div id="thread-list"><div class="loader">Loading threads...</div></div>
-      <div id="thread-view" style="display:none"></div>
-    </div>
-
-    <!-- Live room: meets at every 15m candle close; 5m local-lane data is the execution read -->
-    <div class="card">
-      <div class="feed-header">
-        <div class="avatar">15m</div>
-        <div>
-          <h2>Live Room 15m</h2>
-          <div class="sub">Technical · Risk · Moderator at every 15m candle close · 5m local-lane data for execution</div>
-        </div>
-      </div>
-      <div class="live-pin"><span id="live-m5-badge" class="badge-warn">5m execution: UNVERIFIED</span><span id="live-h1">H1 decision: —</span><span style="color:var(--muted)">Discussion only. No orders are placed.</span></div>
-      <div id="live-feed" class="live-feed"><div class="loader">Loading live room...</div></div>
-    </div>
-
 
   </div>
 
   <!-- Right sidebar -->
   <div class="rightbar">
     <div class="rightbar-card">
-      <h3>News History</h3>
-      <div id="news-list"><div class="loader">Loading...</div></div>
+      <h3>Threads 1H · TLDR</h3>
+      <div id="tldr-h1"><div class="loader">Loading...</div></div>
     </div>
     <div class="rightbar-card">
-      <h3>Trade Decisions</h3>
-      <div id="decisions-list"><div class="loader">Loading...</div></div>
-    </div>
-    <div class="rightbar-card">
-      <h3>Local Lane (Parity)</h3>
-      <div id="local-lane"><div class="loader">Loading...</div></div>
-    </div>
-    <div class="rightbar-card">
-      <h3>Quick Stats</h3>
-      <div id="quick-stats"><div class="loader">Loading...</div></div>
+      <h3>News Thread · TLDR</h3>
+      <div id="tldr-news"><div class="loader">Loading...</div></div>
     </div>
   </div>
 
@@ -311,117 +257,11 @@ async function loadStatus(){
   } catch(e){ $('status-row').innerHTML = '<div class="error">Failed to load status: '+esc(e.message)+'</div>'; }
 }
 
-async function loadNews(){
-  try {
-    const r = await fetch(API+'/api/news?limit=15'); const d = await r.json();
-    if(!d.items||d.items.length===0){ $('news-list').innerHTML='<div class="loader">No news analysis yet.</div>'; return; }
-    $('news-list').innerHTML = d.items.map(n=>{
-      const rec = n.recommendation||'—';
-      const cls = (rec==='BULLISH_BIAS'?'BUY':rec==='BEARISH_BIAS'?'SELL':rec==='WAIT_FOR_TECHNICAL_CONFIRMATION'?'WAIT':rec);
-      return '<div class="news-item"><div class="news-title">'+esc(rec)+' <span class="badge-decision '+cls+'">'+esc(rec)+'</span></div>'
-        +'<div class="news-meta">'+esc(n.analyzed_at)+' · '+n.article_count+' articles · conf: '+(n.confidence!=null?Math.round(n.confidence*100)+'%':'—')+'</div>'
-        +'<div class="news-meta" style="margin-top:4px"><a href="#news-threads" class="news-link" data-kind="news" data-thread="news:'+escAttr(n.analysis_key)+'">Open thread →</a></div></div>';
-    }).join('');
-  } catch(e){ $('news-list').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
-}
-
-async function loadDecisions(){
-  try {
-    const r = await fetch(API+'/api/decisions?limit=15'); const d = await r.json();
-    if(!d.items||d.items.length===0){ $('decisions-list').innerHTML='<div class="loader">No trade decisions yet.</div>'; return; }
-    let html = '<table><thead><tr><th>Time</th><th>Decision</th><th>Conf</th></tr></thead><tbody>';
-    d.items.forEach(x=>{
-      const cls = (x.decision==='BUY'?'BUY':x.decision==='SELL'?'SELL':'WAIT');
-      html += '<tr data-decision="'+escAttr(x.candle_key)+'" style="cursor:pointer">'
-        +'<td>'+esc(String(x.timestamp).slice(0,16).replace('T',' '))+'</td>'
-        +'<td><span class="badge-decision '+cls+'">'+esc(x.decision)+'</span></td>'
-        +'<td>'+(x.confidence!=null?Math.round(x.confidence*100)+'%':'—')+'</td></tr>';
-    });
-    html += '</tbody></table>';
-    $('decisions-list').innerHTML = html;
-    $('quick-stats').innerHTML = '<div class="stat"><span class="label">Total Decisions</span><span class="value">'+d.items.length+'</span></div>'
-      +'<div class="stat"><span class="label">Latest</span><span class="value">'+esc(d.items[0].decision)+'</span></div>';
-  } catch(e){ $('decisions-list').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
-}
-
-function renderTvReading(tv){
-  if (!tv) return '';
-  const lines = Array.isArray(tv.lines) ? tv.lines : [];
-  return '<div class="tv-reading" style="margin-top:8px;font-size:12px;line-height:1.55">'
-    +'<div style="font-weight:700;margin-bottom:4px">TradingView signals (H1)</div>'
-    +'<div>'+esc(tv.summary||'')+'</div>'
-    +(lines.length ? '<ul style="margin:4px 0 0 18px;color:var(--muted)">'+lines.map(l => '<li>'+esc(l.text)+'</li>').join('')+'</ul>' : '')
-    +'</div>';
-}
-
-async function loadTechnicalDecision(key){
-  try {
-    const r = await fetch(API+'/api/decision/'+encodeURIComponent(key)); const d = await r.json();
-    if(d.status!=='ok'){ $('latest-decision').innerHTML = '<div class="error">This decision could not be loaded.</div>'; return; }
-    const syn = d.synthesis||{};
-    const dec = syn.decision||{};
-    const cls = (dec.decision==='BUY'?'BUY':dec.decision==='SELL'?'SELL':'WAIT');
-    let m5ctx = '';
-    try {
-      const cr = await fetch(API+'/api/m5-context');
-      if (cr.ok) {
-        const cd = await cr.json();
-        if (cd && cd.status === 'ok' && cd.context) {
-          const c = cd.context;
-          const bias = String(c.bias||'neutral').toLowerCase();
-          const signal = c.buy_confirmed ? 'a confirmed buy signal' : c.sell_confirmed ? 'a confirmed sell signal' : 'no confirmed buy or sell signal';
-          const bars = Array.isArray(c.recent_bars) ? c.recent_bars : [];
-          const last = bars.length ? bars[bars.length-1] : null;
-          m5ctx = '<div style="font-size:12px;color:var(--muted);margin-top:8px"><span class="badge-warn">UNVERIFIED 5m</span> '
-            +'The 5m picture is '+esc(bias)+' with '+signal
-            +(last ? ', last close '+esc(String(last.c)) : '')
-            +' (bar '+esc(String(c.candle_time||'').replace('T',' ').slice(0,16))+' UTC). It is context only and never changes the H1 decision.</div>';
-        }
-      }
-    } catch(e) { m5ctx = ''; }
-    $('latest-decision').innerHTML =
-      '<div class="decision-card">'
-      +'<div class="decision-badge '+cls+'">'+esc(dec.decision||'—')+'</div>'
-      +'<div class="conf">Confidence: '+(dec.confidence!=null?Math.round(dec.confidence*100)+'%':'—')+' · H1 candle '+esc(h1When(d.candle_key))+'</div>'
-      +'<div class="rationale-box">'+esc(dec.reasoning||syn.reasoning||'—')+'</div>'
-      +renderTvReading(d.tradingview_reading)
-      +m5ctx
-      +'</div>';
-  } catch(e){ $('latest-decision').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
-}
-
 function h1When(candleKey){
   const ms = Number(String(candleKey||'').split(':').pop());
   return isFinite(ms) && ms > 0 ? new Date(ms).toISOString().slice(0,16).replace('T',' ')+' UTC' : String(candleKey||'');
 }
-
-
-async function loadLocalLane(){
-  try {
-    const r = await fetch('/api/local-lane'); const d = await r.json();
-    if (!r.ok) { $('local-lane').innerHTML = '<div class="error">'+esc(d.error||r.status)+'</div>'; return; }
-    const diag = d.body || d;
-    const lr = diag.last_refresh || {};
-    const lp = diag.last_publish || {};
-    const b = diag.budget || {};
-    const series = Array.isArray(diag.series) ? diag.series : [];
-    const latestBars = series.map(s => esc(s.timeframe)+': '+esc(String(s.latest_close_time||'—'))).join(' · ');
-    $('local-lane').innerHTML = '<div style="font-size:12px;line-height:1.6">'
-      +'<div><b>Last refresh:</b> '+esc(String(lr.status||'—'))+' @ '+esc(String(lr.checked_at||'—'))+'</div>'
-      +'<div><b>Last publish:</b> '+esc(String(lp.candle_key||'—'))+' · '+esc(String(lp.status||'—'))+' @ '+esc(String(lp.published_at||'—'))+'</div>'
-      +'<div><b>Budget:</b> '+esc(String(b.used||0))+'/'+esc(String(b.daily||'—'))+'</div>'
-      +'<div><b>Latest bars:</b> '+latestBars+'</div>'
-      +'</div>';
-  } catch(e){ $('local-lane').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
-}
-
-async function autoLoad(){
-  try {
-    const r = await fetch(API+'/api/decisions?limit=1'); const d = await r.json();
-    if(d.items && d.items.length>0) loadTechnicalDecision(d.items[0].candle_key);
-  } catch(e){}
-}
-
+function pct(x){ return x!=null && isFinite(x) ? Math.round(x*100)+'%' : '—'; }
 
 // ---- Price chart (closed TradingView bars via MarketDataReader RPC) ----
 let chart = null, candleSeries = null, volumeSeries = null, chartTf = 'H1';
@@ -463,7 +303,7 @@ document.querySelectorAll('#tf-group .tf').forEach(t=>{
     t.classList.add('active'); chartTf = t.dataset.tf; loadChart(true);
   });
 });
-// ---- Phase 3: agent threads and live room ----
+// ---- Live War Room 15m, its conclusion (main panel) and the TLDR (right panel) ----
 function escAttr(s){ return String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function timeAgo(ts){
   const ms = Date.now() - Date.parse(ts||'');
@@ -474,153 +314,98 @@ function timeAgo(ts){
   return Math.round(ms/86400000) + 'd ago';
 }
 function chip(stance){ return stance ? '<span class="chip '+escAttr(stance)+'">'+esc(stance)+'</span>' : ''; }
-const AGENT_NAMES = { technical: 'Technical Analyst', news: 'News Analyst', risk: 'Risk Manager', moderator: 'Moderator' };
-function agentName(a){ return AGENT_NAMES[a] || String(a||'Agent'); }
-const THREAD_BOXES = { h1: { list: 'h1-list', view: 'h1-view', empty: 'No H1 threads yet. A thread appears after the next H1 decision.' }, news: { list: 'thread-list', view: 'thread-view', empty: 'No news threads yet. A thread appears after the next news analysis.' } };
-const threadSelected = { h1: null, news: null };
-async function loadThreads(kind){
-  kind = kind || 'news';
-  const box = THREAD_BOXES[kind];
-  if (threadSelected[kind]) return;
-  try {
-    const r = await fetch(API+'/api/threads?kind='+kind+'&limit=15'); const d = await r.json();
-    if (!r.ok) { $(box.list).innerHTML = '<div class="error">Threads are unavailable right now.</div>'; return; }
-    const items = d.items || [];
-    if (!items.length) { $(box.list).innerHTML = '<div class="loader">'+box.empty+'</div>'; return; }
-    $(box.list).innerHTML = items.map(t => '<div class="thread-item" data-kind="'+kind+'" data-thread="'+escAttr(t.id)+'">'
-      +'<div class="t-title">'+esc(t.title)+'</div>'
-      +'<div class="thread-meta">'+chip(t.consensus)+'<span>'+t.reply_count+' replies</span><span>'+esc(timeAgo(t.created_at))+'</span>'
-      +(t.post && t.post.article_count ? '<span>'+t.post.article_count+' articles</span>' : '')+'</div></div>').join('');
-  } catch(e){ $(box.list).innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
-}
-function renderThreadMsg(m, depth){
-  const name = m.hud || agentName(m.agent);
-  let html = '<div class="tmsg'+(m.agent==='moderator'?' mod':'')+'" style="margin-left:'+(Math.min(depth,4)*18)+'px">';
-  if (m.status && m.status !== 'ok') {
-    html += '<div class="m-head"><span class="m-agent">'+esc(name)+'</span><span>'+esc(timeAgo(m.ts))+'</span></div>'
-      +'<div class="m-body" style="color:var(--muted)">'+esc(name)+' could not reply this round.</div></div>';
-  } else {
-    const body = m.insight || m.summary || '';
-    html += '<div class="m-head"><span class="m-agent">'+esc(name)+'</span><span>'+esc(timeAgo(m.ts))+'</span>'
-      +chip(m.stance)+(m.confidence!=null ? '<span>confidence '+Math.round(m.confidence*100)+'%</span>' : '')+'</div>'
-      +'<div class="m-body">'+esc(body)+'</div>'
-      +(m.dissent && m.dissent.length ? '<div class="m-refs">Disagreement: '+esc(m.dissent.join(' '))+'</div>' : '')
-      +'</div>';
-  }
-  (m.replies||[]).forEach(c => { html += renderThreadMsg(c, depth+1); });
-  return html;
-}
-function renderPost(kind, t){
-  const p = t.post || {};
-  if (kind === 'h1') {
-    return '<div class="post-box" style="margin-top:10px"><div class="t-title" style="font-weight:700;font-size:15px">'+esc(t.title)+'</div>'
-      +'<div class="thread-meta" style="margin:6px 0">'+chip(p.decision)+(p.confidence!=null ? '<span>confidence '+Math.round(p.confidence*100)+'%</span>' : '')+'<span>'+esc(timeAgo(t.created_at))+'</span></div>'
-      +'<div>'+esc(p.reasoning||'')+'</div>'
-      +renderTvReading(p.tradingview)+'</div>';
-  }
-  const rec = p.recommendation || {};
-  return '<div class="post-box" style="margin-top:10px"><div class="t-title" style="font-weight:700;font-size:15px">'+esc(t.title)+'</div>'
-    +'<div class="thread-meta" style="margin:6px 0">'+esc(timeAgo(t.created_at))+(p.article_count ? ' · '+p.article_count+' articles' : '')+'</div>'
-    +((p.headlines||[]).length ? '<ul style="margin:6px 0 0 18px">'+p.headlines.map(h => '<li>'+esc(h)+'</li>').join('')+'</ul>' : '')
-    +(rec.summary ? '<div style="margin-top:6px;color:var(--muted)">'+esc(rec.summary)+'</div>' : '')
-    +'</div>';
-}
-// Phase C7: HUD agents (one per Pine HUD, shown by HUD name) under the H1 thread, with
-// how many of each agent's statements are verified by parity.
-function renderHudAgents(list){
-  if (!Array.isArray(list) || !list.length) return '';
-  let html = '<div class="t-title" style="font-weight:700;margin:14px 0 6px">HUD agents</div>';
-  list.forEach(m => {
-    const isMod = m.agent === 'moderator';
-    html += '<div class="tmsg'+(isMod?' mod':'')+'">';
-    if (m.status !== 'ok') {
-      html += '<div class="m-head"><span class="m-agent">'+esc(m.name)+'</span><span>'+esc(timeAgo(m.ts))+'</span></div>'
-        +'<div class="m-body" style="color:var(--muted)">'+esc(m.name)+' could not reply this round.</div></div>';
-      return;
-    }
-    const total = Number(m.total_lines)||0, ok = Number(m.verified_lines)||0;
-    const badge = isMod || !total ? '' : '<span class="'+(ok ? 'badge-ok' : 'badge-warn')+'">'+ok+' of '+total+' verified by parity</span>';
-    html += '<div class="m-head"><span class="m-agent">'+esc(m.name)+'</span><span>'+esc(timeAgo(m.ts))+'</span>'+chip(m.stance)
-      +(m.confidence!=null ? '<span>confidence '+Math.round(m.confidence*100)+'%</span>' : '')+badge+'</div>'
-      +'<div class="m-body">'+esc(m.insight || m.summary || '')+'</div></div>';
-  });
-  return html;
-}
-async function openThread(kind, id){
-  const box = THREAD_BOXES[kind];
-  threadSelected[kind] = id;
-  $(box.list).style.display = 'none';
-  $(box.view).style.display = 'block';
-  $(box.view).innerHTML = '<div class="loader">Loading thread...</div>';
-  try {
-    const r = await fetch(API+'/api/threads/'+encodeURIComponent(id)); const d = await r.json();
-    if (!r.ok || !d.thread) { $(box.view).innerHTML = '<button data-thread-back="'+kind+'">&larr; All threads</button><div class="loader">No agent discussion for this one yet.</div>'; return; }
-    const t = d.thread;
-    $(box.view).innerHTML = '<button data-thread-back="'+kind+'">&larr; All threads</button>'
-      + renderPost(kind, t)
-      + (t.messages||[]).map(m => renderThreadMsg(m, 0)).join('')
-      + (kind === 'h1' ? renderHudAgents(t.hud_agents) : '');
-  } catch(e){ $(box.view).innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
-}
-document.addEventListener('click', ev => {
-  const back = ev.target.closest('[data-thread-back]');
-  if (back) {
-    const kind = back.getAttribute('data-thread-back');
-    threadSelected[kind] = null; $(THREAD_BOXES[kind].view).style.display='none'; $(THREAD_BOXES[kind].list).style.display='block'; loadThreads(kind); return;
-  }
-  const item = ev.target.closest('[data-thread]');
-  if (item) {
-    ev.preventDefault();
-    const kind = item.getAttribute('data-kind') || 'news';
-    openThread(kind, item.getAttribute('data-thread'));
-    const card = $(THREAD_BOXES[kind].view).closest('.card'); if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    return;
-  }
-  const row = ev.target.closest('[data-decision]');
-  if (row) {
-    const key = row.getAttribute('data-decision');
-    loadTechnicalDecision(key);
-    openThread('h1', 'h1:'+key);
-  }
-});
-let liveSince = 0; let liveLastBar = null; let liveLoaded = false;
-async function loadLive(){
-  const feed = $('live-feed');
-  try {
-    const r = await fetch(API+'/api/live?since='+liveSince+'&limit=60'); const d = await r.json();
-    if (!r.ok) { if (!liveLoaded) feed.innerHTML = '<div class="error">'+esc(d.error||r.status)+'</div>'; return; }
-    const items = d.items || [];
-    const m5Badge = $('live-m5-badge');
-    if (m5Badge) { m5Badge.className = d.m5_verified ? 'badge-ok' : 'badge-warn'; m5Badge.textContent = d.m5_verified ? '5m execution: VERIFIED (parity approved)' : '5m execution: UNVERIFIED'; }
-    if (!liveLoaded) { feed.innerHTML = ''; liveLoaded = true; }
-    if (!items.length) { if (!feed.children.length) feed.innerHTML = '<div class="loader">'+(d.enabled ? 'Waiting for the next 15m candle close...' : 'Live room is off in this environment.')+'</div>'; return; }
-    if (feed.querySelector('.loader')) feed.innerHTML = '';
-    const nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
-    let html = '';
-    items.forEach(m => {
-      if (m.bar_time !== liveLastBar) { liveLastBar = m.bar_time; html += '<div class="live-bar">15m candle close '+esc(String(m.bar_time||'').replace('T',' ').slice(0,16))+' UTC</div>'; }
-      html += renderThreadMsg(Object.assign({}, m, { replies: [] }), m.parent_id ? 1 : 0);
-      liveSince = Math.max(liveSince, m.id);
-    });
-    feed.insertAdjacentHTML('beforeend', html);
-    if (nearBottom) feed.scrollTop = feed.scrollHeight;
-  } catch(e){ if (!liveLoaded) feed.innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
-}
-async function loadLiveH1(){
+function barLabel(iso){ return String(iso||'').replace('T',' ').slice(0,16)+' UTC'; }
+let latestH1 = null;
+async function loadH1Levels(){
   try {
     const r = await fetch(API+'/api/decisions?limit=1'); const d = await r.json();
-    const x = (d.items||[])[0];
-    if (x) $('live-h1').innerHTML = 'H1 decision: '+chip(x.decision)+' <span style="color:var(--muted)">'+esc(x.candle_key||'')+'</span>';
-  } catch(e){}
+    latestH1 = (d.items||[])[0] || null;
+  } catch(e){ latestH1 = null; }
 }
-loadThreads('h1'); loadThreads('news'); loadLive(); loadLiveH1();
-setInterval(loadLive, 10000);
-setInterval(()=>{ loadThreads('h1'); loadThreads('news'); loadLiveH1(); }, 60000);
+function renderConclusion(room){
+  const c = room && room.conclusion;
+  const h1 = (room && room.h1) || {};
+  const lv = latestH1 && latestH1.candle_key === h1.candle_key ? latestH1 : null;
+  const levels = lv && (lv.decision==='BUY'||lv.decision==='SELL') && lv.entry_price
+    ? ' · entry '+esc(lv.entry_price)+' · stop '+esc(lv.stop_loss)+' · target '+esc(lv.take_profit) : '';
+  const constraint = '<div class="conf" style="margin-top:10px">H1 decision (constraint): '+chip(h1.decision)+' confidence '+pct(h1.confidence)+' · H1 candle '+esc(h1When(h1.candle_key))+levels+'</div>';
+  const cf = room && room.confirmations;
+  const side = (x) => x && x.buy_confirmed ? 'buy confirmed' : x && x.sell_confirmed ? 'sell confirmed' : 'no confirmation';
+  const confirm = cf ? '<div class="conf" style="margin-top:6px">Entry confirmation · H1 Prophet R38: '+side(cf.h1_prophet_r38)+' · 5m: '+side(cf.m5_prophet_r38)+(cf.m5_prophet_r38 && !cf.m5_prophet_r38.verified ? ' (unverified, does not count)' : '')+' · rule: no confirmation, no entry</div>' : '';
+  const m5 = room && room.m5_label ? '<span class="'+(room.m5_label==='VERIFIED 5m'?'badge-ok':'badge-warn')+'">'+esc(room.m5_label)+'</span>' : '';
+  if (!c || c.status !== 'ok') {
+    const waiting = room ? (room.phase==='closed' ? 'The moderator could not conclude this round.' : 'The War Room is in session ('+esc(room.phase)+'); the conclusion follows the debate.') : 'No War Room session yet.';
+    $('war-conclusion').innerHTML = '<div class="decision-card"><div class="conf">War Room · 15m candle close '+esc(room ? barLabel(room.bar_time) : '—')+' '+m5+'</div><div class="rationale-box">'+waiting+'</div>'+(room ? constraint : '')+'</div>';
+    return;
+  }
+  const cls = (c.stance==='BUY'?'BUY':c.stance==='SELL'?'SELL':'WAIT');
+  $('war-conclusion').innerHTML = '<div class="decision-card">'
+    +'<div class="conf">War Room conclusion · 15m candle close '+esc(barLabel(room.bar_time))+' '+m5+'</div>'
+    +'<div class="decision-badge '+cls+'">'+esc(c.stance)+'</div>'
+    +'<div class="conf">Confidence: '+pct(c.confidence)+(c.majority ? ' · bus majority '+esc(c.majority) : '')+'</div>'
+    +'<div class="rationale-box">'+esc(c.summary||'')+'</div>'
+    +((c.reasons||[]).length ? '<ul style="text-align:left;margin:8px 0 0 18px;font-size:13px;line-height:1.55">'+c.reasons.map(r=>'<li>'+esc(r)+'</li>').join('')+'</ul>' : '')
+    +((c.dissent||[]).length ? '<div class="conf" style="margin-top:6px">Still disagree: '+c.dissent.map(d=>esc(d.name)).join(', ')+'</div>' : '')
+    +constraint
+    +confirm
+    +'<div class="conf" style="margin-top:6px;color:var(--muted)">Advisory only. Price levels come only from the validated H1 chain. No orders are placed.</div>'
+    +'</div>';
+}
+function renderMsg(m, text, extra){
+  if (m.status !== 'ok') return '<div class="tmsg"><div class="m-head"><span class="m-agent">'+esc(m.name)+'</span></div><div class="m-body" style="color:var(--muted)">'+esc(m.name)+' could not speak this round.</div></div>';
+  return '<div class="tmsg"><div class="m-head"><span class="m-agent">'+esc(m.name)+'</span><span>'+esc(timeAgo(m.ts))+'</span>'+chip(m.stance)+'<span>confidence '+pct(m.confidence)+'</span>'+(extra||'')+'</div><div class="m-body">'+esc(text||'')+'</div></div>';
+}
+function renderRoster(room){
+  const list = (room && room.roster) || [];
+  if (!list.length) { $('agent-roster').innerHTML = '<div class="loader">No War Room session yet.</div>'; return; }
+  const said = {}; (room.openings||[]).forEach(o => { said[o.id] = o; });
+  $('agent-roster').innerHTML = list.map(a => {
+    const o = said[a.id];
+    return '<div class="agent-card"><div class="agent-avatar av-analyst">'+esc(String(a.name||'?').slice(0,1))+'</div>'
+      +'<div class="agent-info"><div class="name">'+esc(a.name)+'</div><div class="role">'+esc(a.role)+'</div></div>'
+      +(o && o.status==='ok' ? chip(o.stance) : '<span class="status-dot"></span>')+'</div>';
+  }).join('');
+}
+async function loadWarRoom(){
+  try {
+    const r = await fetch(API+'/api/war-room/latest'); const d = await r.json();
+    const room = r.ok ? d.room : null;
+    renderConclusion(room);
+    renderRoster(room);
+    if (!room) { $('war-status').textContent = d && d.enabled===false ? 'The War Room is off in this environment.' : 'Waiting for the next 15m candle close...'; $('war-bus').innerHTML=''; $('war-debate').innerHTML=''; return; }
+    const phase = room.phase==='closed' ? 'Debate closed · conclusion in the main panel' : room.phase==='debate' ? 'Debate open (at most '+Math.round((room.debate_window_seconds||180)/60)+' minutes)' : 'Openings on the communication bus';
+    $('war-status').innerHTML = '<b>15m candle close '+esc(barLabel(room.bar_time))+'</b><span>'+esc(phase)+'</span><span style="color:var(--muted)">Discussion only. No orders are placed.</span>';
+    $('war-bus').innerHTML = '<div class="t-title" style="font-weight:700;margin:10px 0 6px">Communication bus</div>'
+      +(room.openings||[]).map(m => renderMsg(m, m.claim)).join('');
+    $('war-debate').innerHTML = (room.debate||[]).length
+      ? '<div class="t-title" style="font-weight:700;margin:14px 0 6px">Debate</div>'+room.debate.map(m => renderMsg(m, m.argument, (m.rebuts_names||[]).length ? '<span>rebuts '+esc(m.rebuts_names.join(', '))+'</span>' : '')).join('')
+      : '';
+  } catch(e){ $('war-status').innerHTML = '<span class="error">'+esc(e.message)+'</span>'; }
+}
+async function loadTldr(){
+  try {
+    const r = await fetch(API+'/api/tldr'); const d = await r.json();
+    const h = d.h1, n = d.news;
+    $('tldr-h1').innerHTML = h
+      ? '<div class="news-item"><div class="news-title">'+chip(h.decision)+' confidence '+pct(h.confidence)+'</div><div class="news-meta">H1 candle '+esc(h1When(h.candle_key))+'</div>'
+        +'<div style="font-size:12px;margin-top:6px;line-height:1.5">'+esc(h.tldr||'')+'</div>'
+        +(h.consensus ? '<div style="font-size:12px;margin-top:6px;color:var(--muted)">Debate: '+chip(h.consensus.stance)+' '+esc(h.consensus.summary||'')+'</div>' : '')+'</div>'
+      : '<div class="loader">No H1 decision yet.</div>';
+    $('tldr-news').innerHTML = n
+      ? '<div class="news-item"><div class="news-title">'+chip(n.consensus)+' '+esc(n.title||'')+'</div><div class="news-meta">'+esc(timeAgo(n.created_at))+'</div>'
+        +'<div style="font-size:12px;margin-top:6px;line-height:1.5">'+esc(n.tldr||'')+'</div>'
+        +((n.headlines||[]).length ? '<ul style="margin:6px 0 0 18px;font-size:12px;color:var(--muted)">'+n.headlines.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>' : '')+'</div>'
+      : '<div class="loader">No news thread yet.</div>';
+  } catch(e){ $('tldr-h1').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+}
+loadH1Levels().then(loadWarRoom); loadTldr();
+setInterval(loadWarRoom, 10000);
+setInterval(()=>{ loadH1Levels(); loadTldr(); }, 60000);
 
 loadChart(true);
 setInterval(()=>loadChart(false), 60000);
-loadStatus(); loadNews(); loadDecisions(); autoLoad(); loadLocalLane();
-setInterval(()=>{ loadStatus(); loadNews(); loadDecisions(); loadLocalLane(); }, 30000);
+loadStatus();
+setInterval(loadStatus, 30000);
 </script>
 </body>
 </html>`;
