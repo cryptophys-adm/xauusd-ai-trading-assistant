@@ -133,6 +133,7 @@ import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from ".
 import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread } from "./agent-threads.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
+import { DECISION_TEXT_RULE, plainDecisionText } from "./plain-decision.mjs";
 
 function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
@@ -148,6 +149,20 @@ function extractText(result: unknown): string {
 
 function extractRawText(result: unknown): string {
   return extractModelText(result);
+}
+
+/**
+ * Owner rule: the decision text a trader reads is natural language. Only the reasoning,
+ * confirmation and invalidation sentences may be rewritten; the decision, prices and
+ * conditions never change, and the raw reasoner output is kept in the synthesis.
+ */
+async function plainDecision(env: Env, decision: JsonObject): Promise<JsonObject> {
+  try {
+    return (await plainDecisionText(env, decision)).decision as JsonObject;
+  } catch (error) {
+    console.warn("plain_decision_failed", error instanceof Error ? error.message : String(error));
+    return decision;
+  }
 }
 
 function parseDecision(text: string): JsonObject {
@@ -812,7 +827,7 @@ async function runAnalysis(
       "If news_evidence.available is false, state completed fundamental news analysis was unavailable. Do NOT claim news supported or contradicted the setup.",
       "If news_evidence.available is true, incorporate the completed news analysis and its underlying article evidence into final reasoning.",
       "If informational_5m_context is present, treat it as unverified 5m context only; it must not change the decision or prices.",
-      "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation.",
+      "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation.", DECISION_TEXT_RULE,
       "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
       "EVIDENCE:",
       JSON.stringify(evidence),
@@ -826,7 +841,7 @@ async function runAnalysis(
   } as never); });
   const reasonerText = extractText(reasonerResult);
   const parsedDecision = parseDecision(reasonerText);
-  const decision = fusion.complete ? parsedDecision : {
+  let decision: JsonObject = fusion.complete ? parsedDecision : {
     ...parsedDecision,
     decision: "WAIT",
     confidence: null,
@@ -837,6 +852,7 @@ async function runAnalysis(
     position_size_pct: null,
     reasoning: describeDegradedEvidence(fusion.missing_evidence, fusion.validation_errors)
   };
+  if (fusion.complete) decision = await plainDecision(env, decision);
 
   const timestamp = new Date().toISOString();
   const synthesis = {
@@ -1237,7 +1253,7 @@ async function runAnalysisFromBundle(
         "Prophet remains the base bias. GMI may validate, block, or wait on a setup. Do not silently reverse Prophet's bias.",
         "If news_evidence.available is false, state fundamental news analysis was not performed. Do NOT claim news supported or contradicted the setup.",
         "If news_evidence.available is true, incorporate the supplied articles into final reasoning.",
-        "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation.",
+        "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation.", DECISION_TEXT_RULE,
         "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
         "EVIDENCE:",
         JSON.stringify(evidence),
@@ -1253,7 +1269,7 @@ async function runAnalysisFromBundle(
     } as never);
     });
     reasonerText = extractText(reasonerResult);
-    decision = parseDecision(reasonerText);
+    decision = await plainDecision(env, parseDecision(reasonerText));
   }
 
   const timestamp = nowIso();
