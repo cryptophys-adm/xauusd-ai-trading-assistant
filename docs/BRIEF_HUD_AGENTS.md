@@ -105,6 +105,22 @@ Deliver `docs/HUD_AGENTS_ASSESSMENT.md` in a PR. It must contain:
 4. **Schedule.** Say which HUD agents speak per H1 candle (in Threads 1H). Also say whether any of them, for example Trade Management, Kinetic Engine or Aegis Footprint, should also speak in the live 15m room.
 5. **Risks and open questions for the owner.**
 
+## Owner decisions on the Phase A open questions (2026-11-05)
+
+These answer §5.2 of `docs/HUD_AGENTS_ASSESSMENT.md`, and Phase B must follow them.
+
+1. **Live 15m room: Option B, with verified data.** Build a 15m local HUD producer, so that Trade Management, Kinetic Engine (TVA) and Fabio AMT Sensors (and optionally Aegis Footprint Matrix) also speak in the live 15m room. Their HUD data must become **verified**, not stay informational.
+   - **What "verified" means here.** It uses the same autonomous parity registry as H1: 24 consecutive field-by-field matches against TradingView. That needs a TradingView comparator for every HUD field and for each timeframe.
+   - **The comparator.** Today's alerts carry only the `PARITY_FIELDS`, and `pinescript/ssot/*` must not be edited. The comparator is therefore a Pine candidate in `pinescript/candidates/` whose alert payload adds the HUD fields as numbers, booleans and codes. The owner installs it on TradingView for H1 and for 15m.
+   - **The registry.** It needs per-timeframe identities (H1 and 15m) and HUD field sets.
+   - **Until approval.** Until a HUD field set reaches 24/24, its values stay labelled UNVERIFIED, and they never become trusted by hand.
+2. **Rows that cannot be recomputed locally become output of the decision reasoning.** These rows are Trade Management action/entry/TP/exit, Progressive SL, the SMC buy/sell zone and the Grid Bot levels.
+   - They are neither reproduced by HUD agents nor carried by a Pine candidate.
+   - The authoritative H1 decision chain (Reasoner), which already owns entry, stop loss, take profit and risk/reward, produces them from the verified evidence.
+   - HUD agents report only their reproducible rows. For these rows they may refer to the decision's levels, attributed to the decision.
+3. **R37 Funnel:** the agent reads the funnel stages for the current candle (candidate, price, structure, volume, confirmed, high quality: pass or fail on that bar), not the cumulative counters.
+4. **Budget:** `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`, separate from the bus and live-room budgets.
+
 ## 4. Phase B: design (an RFC, still no runtime change)
 
 Write `docs/RFC_HUD_AGENTS.md`, covering:

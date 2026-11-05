@@ -113,6 +113,12 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - the untitled Prophet R38 top-right HUD is named "Prophet";
   - Matrix & Omega Sensors gets one agent per titled section.
   - That makes 14 agents in total.
+- Phase A assessment: `docs/HUD_AGENTS_ASSESSMENT.md` (PR #66). The owner's answers (2026-11-05) are in `docs/BRIEF_HUD_AGENTS.md`:
+  - HUD agents also speak in the live 15m room, on 15m HUD data that must be parity-verified like H1.
+  - Verification uses a Pine candidate alert that carries the HUD fields, installed by the owner for H1 and 15m.
+  - Rows that cannot be recomputed locally become output of the H1 decision reasoning.
+  - The R37 Funnel is read per current candle.
+  - `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`.
 - Nothing in this section is live yet.
 
 ## 4. Sources and knowledge
