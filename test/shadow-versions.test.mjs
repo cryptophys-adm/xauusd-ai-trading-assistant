@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import {
-  CONTROLS, CANDIDATES, ENGINE_FAMILIES, SHADOW_WARMUP_BARS, computeVersion, runShadowVersions, readShadowVersions, stuckEpisodes, signTestP,
+  CONTROLS, CANDIDATES, ENGINE_FAMILIES, SHADOW_WARMUP_BARS, GMI_LOOKBACK_BARS, computeVersion, runShadowVersions, readShadowVersions, stuckEpisodes, signTestP,
   resetShadowSchemaCacheForTests, resetShadowReadCacheForTests
 } from "../src/shadow-versions.mjs";
 import { resetOutcomeSchemaCacheForTests, SCORING_VERSION } from "../src/outcome-scoring.mjs";
 import { replayProphetR37ClosedBars } from "../src/prophet-r37-oscillator.mjs";
+import { regateGmi } from "../src/gmi-regate.mjs";
 
 function d1() {
   const db = new DatabaseSync(":memory:");
@@ -39,13 +40,14 @@ const LATCH = { id: "prophet_r37@latch-test", family: "prophet_r37", role: "cand
 function reset() { resetShadowSchemaCacheForTests(); resetOutcomeSchemaCacheForTests(); resetShadowReadCacheForTests(); }
 
 test("controls are the active engines with their default parameters; P5 candidates expire the latch sooner", () => {
-  assert.deepEqual(CONTROLS.map(c => c.id), ["prophet_r37@active", "prophet_r38@active"]);
+  assert.deepEqual(CONTROLS.map(c => c.id), ["prophet_r37@active", "prophet_r38@active", "gmi_v12_70@active"]);
   assert.ok(CONTROLS.every(c => c.params === null && c.role === "control"));
   assert.deepEqual(CANDIDATES.map(c => [c.id, c.params]), [
-    ["prophet_r37@latch8", { stateMaxAge: 8 }], ["prophet_r37@latch12", { stateMaxAge: 12 }], ["prophet_r38@latch8", { state_max_age: 8 }]
+    ["prophet_r37@latch8", { stateMaxAge: 8 }], ["prophet_r37@latch12", { stateMaxAge: 12 }], ["prophet_r38@latch8", { state_max_age: 8 }],
+    ["gmi_v12_70@latch8", { stateMaxAge: 8 }], ["gmi_v12_70@latch12", { stateMaxAge: 12 }]
   ]);
   assert.ok(CANDIDATES.every(c => c.role === "candidate" && c.reference === "none" && c.timeframe === "60"));
-  assert.deepEqual(Object.keys(ENGINE_FAMILIES), ["prophet_r37", "prophet_r38"]);
+  assert.deepEqual(Object.keys(ENGINE_FAMILIES), ["prophet_r37", "prophet_r38", "gmi_v12_70"]);
 });
 
 test("the R37 control reproduces the active replay exactly", () => {
@@ -57,7 +59,7 @@ test("the R37 control reproduces the active replay exactly", () => {
 });
 
 test("every latch-expiry candidate holds a ±3 structure state at most its maximum age (R37 and R38)", () => {
-  for (const c of [LATCH, ...CANDIDATES]) {
+  for (const c of [LATCH, ...CANDIDATES.filter(c => !ENGINE_FAMILIES[c.family].needs_local_records)]) {
     const max = c.params.stateMaxAge ?? c.params.state_max_age;
     let run = 0, longest = 0;
     for (const o of computeVersion(c, BARS)) { run = Math.abs(o.fields.d_enc) === 3 ? run + 1 : 0; longest = Math.max(longest, run); }
@@ -130,4 +132,34 @@ test("a higher accuracy counts only when the paired sign test says it is not cha
   assert.equal(signTestP(10, 0), 0.001);
   assert.ok(signTestP(15, 5) < 0.05);
   assert.ok(signTestP(4, 2) > 0.05, "4 against 2 is chance");
+});
+
+test("GMI versions are re-gated from the approved local GMI records; bars without one have no output", async () => {
+  reset();
+  const ref = replayProphetR37ClosedBars(BARS.map((b, i) => ({ bar_index: i, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume })), { mintick: 0.001 });
+  const kvMap = new Map();
+  const withRecord = BARS.slice(-10);
+  withRecord.forEach((bar) => {
+    const i = BARS.indexOf(bar);
+    const diagnostics = { branch: "initial", htf_state: 1, ltf_state: 0, ext_state: 0, vah: bar.close + 5, val: bar.close - 5, poc: bar.close };
+    const st = ref.structure[i];
+    const comparable = regateGmi({ diagnostics, close: bar.close, proFast: ref.pro_fast[i], subtype: st.subtype, dEnc: st.d_enc });
+    kvMap.set("localcalc:OANDA:XAUUSD:60:" + Date.parse(bar.open_time) + ":gmi", JSON.stringify({ values: { candle: { c: bar.close }, diagnostics, comparable: { gmi_v12_70: comparable } } }));
+  });
+  const env = { DB: d1(), SIGNAL_CACHE: series(BARS), WEBHOOK_BUFFER: { async get(k) { return kvMap.get(k) ?? null; } } };
+  const gmiLatch = CANDIDATES.find(c => c.id === "gmi_v12_70@latch8");
+  const r = await runShadowVersions(env, { now: NOW, candidates: [gmiLatch] });
+  assert.equal(r.versions["gmi_v12_70@active"].stored, 10, "only the bars with a local GMI record");
+  assert.equal(r.versions[gmiLatch.id].stored, 10);
+  assert.ok(GMI_LOOKBACK_BARS >= 24);
+  const row = env.DB.raw.prepare("SELECT fields_json FROM shadow_outputs WHERE version_id = 'gmi_v12_70@active' ORDER BY close_time DESC LIMIT 1").get();
+  assert.deepEqual(Object.keys(JSON.parse(row.fields_json)), ["d_enc", "b_enc", "subtype", "verdict", "gate"]);
+  // A second run reads no record again for bars every GMI version already has.
+  let reads = 0;
+  env.WEBHOOK_BUFFER = { async get(k) { reads += 1; return kvMap.get(k) ?? null; } };
+  await runShadowVersions(env, { now: NOW, candidates: [gmiLatch] });
+  assert.equal(reads, Math.min(GMI_LOOKBACK_BARS, BARS.length - SHADOW_WARMUP_BARS) - 10, "only the bars still missing an output are read");
+  const view = await readShadowVersions(env, { now: NOW, days: 90, candidates: [gmiLatch], cache: false });
+  const gmi = view.families.find(f => f.family === "gmi_v12_70");
+  assert.deepEqual(gmi.control.matches_approved_local_records, { compared: 10, agree: 10 }, "the control reproduces the approved GMI records");
 });

@@ -1,0 +1,1 @@
+export function regateGmi(input: { diagnostics: Record<string, unknown>; close: number; proFast: number | null; subtype: number; dEnc: number; sharedAlignment?: boolean }): { verdict: number; gate: number; gmi_dir: number; prophet_dir: number; conflict: boolean } | null;

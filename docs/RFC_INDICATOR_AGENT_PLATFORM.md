@@ -221,12 +221,12 @@ With dozens of agents, a room cannot post every agent on every bar.
 
 ## 10. Decisions for the owner
 
-1. **Improved versions.** Should an improvement (for example the latch expiry) be allowed as a local-only version judged by outcome, (b) in §4.3? Or must every promotion come with a Pine candidate you install on TradingView, (a)?
+1. **Improved versions.** Should an improvement (for example the latch expiry) be allowed as a local-only version judged by outcome, (b) in §4.3? Or must every promotion come with a Pine candidate you install on TradingView, (a)? **Decided 2026-11-05: (b).** A local-only version is enough, so an improvement is proven by outcome first.
 2. **Scoring definition.** Horizon 4 candles, threshold `0.5 × ATR(14)`, WAIT counted as a hit when there is no move: accept these, or change them?
 3. **Stuck-state thresholds.** `N = 8` candles and range `> 3 × ATR` on H1: accept or change?
 4. **First new indicator.** Supertrend first, then Order Block?
 5. **Where the auditor lives.** In the cloud platform's AI Kernel, as proposed, with this repository serving read-only data? Or as an agent inside this repository? **Decided 2026-11-05: in the platform.** The 21 XAUUSD agents are registered there (platform migration 0016). This repository publishes advisory reports over the `AGENTS` RPC binding (P4, docs/SSOT.md §2).
-6. **Room limits.** How many agents may post text per room and per bar before the crowd line takes over (proposed: 6)?
+6. **Room limits.** How many agents may post text per room and per bar before the crowd line takes over (proposed: 6)? **Decided 2026-11-05: no limit.** Every active agent speaks in its room. The hourly call budget still applies.
 
 ## 11. Risks
 

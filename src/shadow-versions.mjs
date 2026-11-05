@@ -22,6 +22,7 @@ import { replayProphetR37Structure } from "./prophet-r37-kernel.mjs";
 import { calculateProphetR38Core } from "../local-engines/prophet-r38/src/core.mjs";
 import { prophetConsensusDir } from "../local-engines/producer/src/h1-producer.mjs";
 import { SCORING, SCORING_VERSION, scoreStance, atrAt, ensureOutcomeSchema } from "./outcome-scoring.mjs";
+import { regateGmi } from "./gmi-regate.mjs";
 
 const SYMBOL = "OANDA:XAUUSD";
 const SERIES_KEY = "market-data:v2:series:" + SYMBOL + "|1h";
@@ -82,10 +83,39 @@ function replayR38(bars, options = {}) {
   });
 }
 
+/**
+ * GMI v12.70 re-gated with a Prophet structure (src/gmi-regate.mjs). GMI needs M1, M15 and
+ * higher-timeframe bars, so it is not replayed: each bar starts from the approved local GMI
+ * record of that candle (`localcalc:<key>:gmi`, kept 14 days) and only the two points the
+ * structure feeds are recomputed. Bars without a local record have no output.
+ */
+function replayGmi(bars, structureOptions, ctx = {}) {
+  const candles = bars.map((b, i) => ({ bar_index: i, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume }));
+  const r = replayProphetR37ClosedBars(candles, { mintick: MINTICK });
+  const structure = structureOptions
+    ? replayProphetR37Structure(candles.map((c, i) => ({ ...c, oscillator: r.pro_fast[i], volume_ratio: r.proAnom[i], has_volume: r.hasVolume[i], atr: r.atrValues[i] })), structureOptions)
+    : r.structure;
+  return bars.map((b, i) => {
+    const record = ctx.gmiRecords?.get(keyOf(b));
+    const close = record?.values?.candle?.c;
+    if (!record?.values?.diagnostics || !finite(close)) return null;
+    const s = structure[i];
+    const g = regateGmi({ diagnostics: record.values.diagnostics, close, proFast: r.pro_fast[i], subtype: s.subtype, dEnc: s.d_enc });
+    if (!g) return null;
+    return { stance: stanceOf(sign(g.verdict)), fields: { d_enc: s.d_enc, b_enc: s.b_enc, subtype: s.subtype, verdict: g.verdict, gate: g.gate } };
+  });
+}
+
+const sameProphet = (row, f) => stanceOf(sign(f.direction)) === row.stance && f.structure_subtype === row.fields.subtype && f.d_enc === row.fields.d_enc;
+const sameGmi = (row, f) => f.verdict === row.fields.verdict && f.gate === row.fields.gate;
+
 export const ENGINE_FAMILIES = Object.freeze({
-  prophet_r37: { name: "Prophet R37 (GMI shared core)", active_subject: "indicator:prophet_r37", local_field: "prophet_r37_ssot", replay: replayR37 },
-  prophet_r38: { name: "Prophet R38", active_subject: "indicator:prophet_r38", local_field: "prophet_r38", replay: replayR38 }
+  prophet_r37: { name: "Prophet R37 (GMI shared core)", active_subject: "indicator:prophet_r37", local_engine: "prophet", local_field: "prophet_r37_ssot", matches: sameProphet, replay: replayR37 },
+  prophet_r38: { name: "Prophet R38", active_subject: "indicator:prophet_r38", local_engine: "prophet", local_field: "prophet_r38", matches: sameProphet, replay: replayR38 },
+  gmi_v12_70: { name: "GMI v12.70 (Prophet risk hold)", active_subject: "indicator:gmi_v12_70", local_engine: "gmi", local_field: "gmi_v12_70", matches: sameGmi, replay: replayGmi, needs_local_records: true }
 });
+/** GMI outputs need the approved local record of the candle: only the recent bars are tried. */
+export const GMI_LOOKBACK_BARS = 72;
 
 /** Controls: the active engine code replayed with its defaults (one per family). */
 export const CONTROLS = Object.freeze(Object.keys(ENGINE_FAMILIES).map((family) => Object.freeze({
@@ -111,7 +141,10 @@ const latch = (family, bars, param) => Object.freeze({
 export const CANDIDATES = Object.freeze([
   latch("prophet_r37", 8, "stateMaxAge"),
   latch("prophet_r37", 12, "stateMaxAge"),
-  latch("prophet_r38", 8, "state_max_age")
+  latch("prophet_r38", 8, "state_max_age"),
+  // The latch's effect on the chain: GMI's "Prophet risk hold" (subtype 1) and mtf_state.
+  latch("gmi_v12_70", 8, "stateMaxAge"),
+  latch("gmi_v12_70", 12, "stateMaxAge")
 ]);
 
 export function shadowVersions(candidates = CANDIDATES) {
@@ -120,11 +153,30 @@ export function shadowVersions(candidates = CANDIDATES) {
 
 const keyOf = (bar) => `${SYMBOL}:60:${Date.parse(bar.open_time)}`;
 
-/** Pure: per-bar outputs of one version over `bars` (oldest first). */
-export function computeVersion(version, bars) {
+/** Pure: per-bar outputs of one version over `bars` (oldest first); null where it has none. */
+export function computeVersion(version, bars, ctx = {}) {
   const family = ENGINE_FAMILIES[version.family];
   if (!family) throw new Error("unknown engine family " + version.family);
-  return family.replay(bars, version.params || undefined);
+  return family.replay(bars, version.params || undefined, ctx);
+}
+
+/** Loads the approved local GMI records of the recent bars some GMI version still lacks. */
+async function loadGmiRecords(env, bars, versions) {
+  const gmiIds = versions.filter((v) => ENGINE_FAMILIES[v.family]?.needs_local_records).map((v) => v.id);
+  const records = new Map();
+  if (!gmiIds.length || !env.WEBHOOK_BUFFER?.get) return records;
+  const recent = bars.slice(Math.max(SHADOW_WARMUP_BARS, bars.length - GMI_LOOKBACK_BARS));
+  const have = new Map();
+  for (const row of (await env.DB.prepare(`SELECT candle_key, COUNT(*) AS n FROM shadow_outputs WHERE version_id IN (${gmiIds.map(() => "?").join(", ")}) AND close_time >= ? GROUP BY candle_key`).bind(...gmiIds, recent[0]?.close_time ?? "").all()).results || []) have.set(row.candle_key, row.n);
+  for (const bar of recent) {
+    const key = keyOf(bar);
+    if ((have.get(key) || 0) >= gmiIds.length) continue;
+    try {
+      const record = JSON.parse((await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":gmi")) || "null");
+      if (record) records.set(key, record);
+    } catch { /* unreadable record: no output for that bar */ }
+  }
+  return records;
 }
 
 // ------------------------------------------------------------------ storage and scoring
@@ -165,10 +217,12 @@ export async function runShadowVersions(env, { now = Date.now(), candidates = CA
   const computedAt = new Date(now).toISOString();
   const versions = shadowVersions(candidates);
   const summary = { status: "ok", bars: bars.length, versions: {} };
+  const ctx = { gmiRecords: await loadGmiRecords(env, bars, versions) };
   for (const version of versions) {
-    const outputs = computeVersion(version, bars);
+    const outputs = computeVersion(version, bars, ctx);
     const inserts = [];
     for (let i = SHADOW_WARMUP_BARS; i < bars.length; i++) {
+      if (!outputs[i]) continue;
       inserts.push(env.DB.prepare("INSERT INTO shadow_outputs (version_id, timeframe, candle_key, close_time, stance, fields_json, computed_at) VALUES (?, '60', ?, ?, ?, ?, ?) ON CONFLICT(version_id, candle_key) DO NOTHING")
         .bind(version.id, keyOf(bars[i]), bars[i].close_time, outputs[i].stance, JSON.stringify(outputs[i].fields), computedAt));
     }
@@ -292,12 +346,11 @@ async function buildShadowView(env, { days, now, candidates }) {
     let agree = 0, compared = 0;
     for (const row of c.outputs.slice(-24)) {
       let local = null;
-      try { local = JSON.parse((await env.WEBHOOK_BUFFER?.get?.("localcalc:" + row.candle_key + ":prophet")) || "null"); } catch { local = null; }
+      try { local = JSON.parse((await env.WEBHOOK_BUFFER?.get?.("localcalc:" + row.candle_key + ":" + spec.local_engine)) || "null"); } catch { local = null; }
       const f = local?.values?.comparable?.[spec.local_field];
       if (!f) continue;
       compared += 1;
-      const localStance = stanceOf(sign(f.direction));
-      if (localStance === row.stance && f.structure_subtype === row.fields.subtype && f.d_enc === row.fields.d_enc) agree += 1;
+      if (spec.matches(row, f)) agree += 1;
     }
     const controlScores = new Map(c.scores.map((s) => [s.candle_key, s]));
     const entry = {
