@@ -1,6 +1,6 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
-import { publishLocalComputation, publishM5LocalComputation, publishHudSnapshots, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
+import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHudSnapshots, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
 import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest } from "./tradingview-source.mjs";
 
 const JSON_HEADERS = {
@@ -267,6 +267,15 @@ const worker = {
         }
       } catch (error) {
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_m5_failed", code: asString(error?.code) || "publish_failed" }));
+      }
+      // Verified 15m lane: publish the 15m local records for parity (flag-gated).
+      try {
+        const publishedM15 = await publishM15LocalComputation(env, { bundle: latestBundle });
+        if (!["m15_publish_disabled", "no_fresh_m15_close", "already_published"].includes(publishedM15.status)) {
+          console.log(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_m15", status: publishedM15.status, candle_key: publishedM15.candle_key || null, gmi_error: publishedM15.gmi_error || null }));
+        }
+      } catch (error) {
+        console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_m15_failed", code: asString(error?.code) || "publish_failed" }));
       }
       // Phase C2: HUD snapshots for the HUD agents (flag-gated; never decision evidence).
       try {

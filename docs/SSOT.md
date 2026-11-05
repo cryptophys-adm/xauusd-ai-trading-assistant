@@ -64,6 +64,11 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - The records earn their own approval under the timeframe-scoped ids `prophet_m5`, `gmi_m5` and `mizan_m5`, separate from the approved H1 ids. The parity sweep revisits the last six closed 5m candles.
   - GMI on the 5m chart runs `local-engines/gmi/src/gmi-core-tf.mjs`, a timeframe-parameterised copy of `gmi-core.mjs`. `gmi-core.mjs` stays byte-identical, because it is part of the approved H1 hash. A test proves the copy equals `computeGmi` on H1.
   - The provenance has its own `prophet_m5` and `gmi_m5` entries, so 5m code changes never change the H1 hashes.
+- **Verified 15m lane** (owner decision 2026-11-05, same design as 5m).
+  - The pull adapter publishes mizan, prophet and gmi records for every closed 15m bar. The producer is `local-engines/producer/src/m15-local-producer.mjs`, behind `M15_PARITY_PUBLISH`, with timeframe `"15"` and candle key `OANDA:XAUUSD:15:<open ms>`, the same key as the 15m HUD snapshot.
+  - The records earn their own approval as `prophet_m15` and `gmi_m15`, with their own provenance entries. The H1 and 5m hashes are unchanged. The parity sweep revisits the last two closed 15m candles.
+  - Calibration needs the existing Prophet R38 and GMI alerts installed on the 15m chart until both identities are approved (24 matches). After that, the alerts may be removed, as with 5m ("pilihan 1").
+  - Once approved, the 15m HUD fields that are alert fields read as verified by parity in the War Room. Engine internals stay uncalibrated until a Pine candidate comparator exists (C1).
 
 - Transport: the pull adapter calls `AI_WORKER.submitContext(record)` on the
   AI Worker's `LocalComputationIngress` RPC entrypoint (no shared secret).
@@ -166,6 +171,11 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   2. **Debate.** Agents whose stance differs from the bus majority (at most 7, by confidence) and the Risk Manager rebut named agents. The debate is open for at most 3 minutes, then closed.
   3. **Conclusion.** The moderator concludes for the Nexus main panel: stance, summary, up to 3 reasons and the agents that still disagree.
   - The H1 decision is the constraint: a conclusion that differs must say "H1 decision: X". Price levels come only from the validated H1 chain.
+  - **Calibration status once** (owner decision 2026-11-05, option A).
+    - The brief stores each agent's evidence status: verified lines out of total for a HUD agent, otherwise the source label. Nexus shows it once, as a badge next to the agent.
+    - Agents never mention calibration in their text.
+    - A HUD agent with no verified statement speaks at confidence ≤ 0.4.
+    - The bus shows each agent's evidence, and the moderator weighs verified evidence above uncalibrated readings.
   - **No confirmation, no entry** (owner rule 2026-11-05).
     - BUY needs a confirmed buy signal: the H1 Prophet R38 confirmation from the approved record behind the latest H1 decision, or a VERIFIED 5m Prophet R38 confirmation candle. SELL needs a confirmed sell signal.
     - Without the matching confirmation the stance is WAIT, or HOLD / CLOSE for an open position.

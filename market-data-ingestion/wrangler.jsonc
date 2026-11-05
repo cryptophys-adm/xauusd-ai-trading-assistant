@@ -31,6 +31,8 @@
     "CHART_MINTICK": "0.001",
     // C0 verified 5m lane: publish 5m local records for parity (timeframe-scoped ids).
     "M5_PARITY_PUBLISH": "true",
+    // Verified 15m lane (owner decision 2026-11-05): 15m local records for parity.
+    "M15_PARITY_PUBLISH": "true",
     // Phase C2: HUD snapshots (H1 and 15m) for the HUD agents; never decision evidence.
     "HUD_SNAPSHOT_PUBLISH": "true"
   },

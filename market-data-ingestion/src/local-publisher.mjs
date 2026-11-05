@@ -5,6 +5,7 @@
 import { buildBundle } from "./tradingview-source.mjs";
 import { buildH1LocalCalculations } from "../../local-engines/producer/src/h1-producer.mjs";
 import { buildM5LocalCalculations } from "../../local-engines/producer/src/m5-local-producer.mjs";
+import { buildM15LocalCalculations } from "../../local-engines/producer/src/m15-local-producer.mjs";
 import { m5ContextFromRecords } from "../../local-engines/producer/src/m5-context.mjs";
 import { buildHudSnapshot } from "../../local-engines/producer/src/hud-snapshot.mjs";
 
@@ -123,6 +124,55 @@ export async function publishM5LocalComputation(env, { now = Date.now(), force =
   // B2: the 5m execution context of the same bar, reshaped from its parity record (never
   // stored here; the cron forwards it to the AI Worker's submitContext).
   return { ...summary, context: m5ContextFromRecords(built, resolvedBundle.timeframes?.M5?.candles) };
+}
+
+export const LAST_M15_PUBLISH_KEY = "market-data:v2:local-last-publish-m15";
+// The cron runs every 5 minutes: a 15m close is published by the first run after it.
+const MAX_M15_PUBLISH_DELAY_MS = 9 * 60 * 1000;
+
+/**
+ * Verified 15m lane (owner decision 2026-11-05): publishes the 15m local records for parity,
+ * like the 5m lane, once per closed 15m bar. Enabled only when M15_PARITY_PUBLISH is "true".
+ */
+export async function publishM15LocalComputation(env, { now = Date.now(), force = false, bundle = null } = {}) {
+  if (String(env.M15_PARITY_PUBLISH || "").toLowerCase() !== "true") return { status: "m15_publish_disabled" };
+  const kv = env.MARKET_DATA_CACHE;
+  if (!kv) return { status: "cache_not_configured" };
+  if (typeof env.AI_WORKER?.submit !== "function") return { status: "publisher_not_configured" };
+  const resolvedBundle = bundle || await buildBundle(env, now);
+  const lastM15 = resolvedBundle.timeframes?.M15?.candles?.at(-1);
+  if (!lastM15) return { status: "no_m15_data" };
+  if (!force && now - Date.parse(lastM15.close_time) > MAX_M15_PUBLISH_DELAY_MS) return { status: "no_fresh_m15_close", last_m15_close_time: lastM15.close_time };
+  let built;
+  try {
+    built = buildM15LocalCalculations(resolvedBundle, { now, mintick: Number(env.CHART_MINTICK) || 0.001 });
+  } catch (error) {
+    return { status: asString(error?.code) || "local_computation_failed", message: asString(error?.message).slice(0, 200) };
+  }
+  const markerKey = PUBLISHED_PREFIX + built.candle_key;
+  if (!force && (await kv.get(markerKey))) return { status: "already_published", candle_key: built.candle_key };
+  const results = [];
+  for (const record of built.records) {
+    try {
+      results.push(await postRecord(env, record));
+    } catch (error) {
+      results.push({ engine: record.engine, http_status: null, error: asString(error?.name) || "post_failed" });
+    }
+  }
+  const ok = results.every((r) => r.http_status && r.http_status < 300);
+  const summary = {
+    status: ok ? "published" : "partial_failure",
+    timeframe: "15",
+    candle_key: built.candle_key,
+    candle_time: built.candle_time,
+    published_at: new Date(now).toISOString(),
+    engines: results,
+    not_produced: built.records.some((r) => r.engine === "gmi") ? [] : ["gmi"],
+    gmi_error: built.gmi_error || null
+  };
+  if (ok) await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 });
+  await kv.put(LAST_M15_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
+  return summary;
 }
 
 const HUD_CHARTS = Object.freeze({ H1: { maxDelayMs: 25 * 60 * 1000 }, M15: { maxDelayMs: 9 * 60 * 1000 } });

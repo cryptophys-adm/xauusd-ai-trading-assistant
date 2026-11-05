@@ -177,5 +177,89 @@ export const ENGINE_PROVENANCE = Object.freeze({
         }
       ]
     }
+  },
+  "gmi_m15": {
+    "source_hash": "c5285333399a5a1ac677edb24e13aa0483b3af084de9ea403cf378be446646f7",
+    "implementation_hash": "605eb374a0cea19eb6f1db9fe051e0f2b0042911e06c2acbd9072bbd1b752220",
+    "files": {
+      "sources": [
+        {
+          "path": "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt",
+          "sha256": "f9115eb0224a6f68f212a368a662be57dd2810d1a6adc0abbe1b2ce570ee2c94"
+        }
+      ],
+      "implementation": [
+        {
+          "path": "local-engines/gmi/src/pine.mjs",
+          "sha256": "c2387b392a07df4cc0a7cca1c736275db8c824c396974414dad190dfab384111"
+        },
+        {
+          "path": "local-engines/gmi/src/mizan.mjs",
+          "sha256": "7c07c5574d28d7cd4c2d4e496e42d6df55232a51ad5ca1bf2c8c87e0faa61393"
+        },
+        {
+          "path": "local-engines/gmi/src/gmi-core.mjs",
+          "sha256": "1eeb775c372edead53fd2525abc7d1109a4f178c1924cbf114bd7e78cafc3ac9"
+        },
+        {
+          "path": "local-engines/gmi/src/gmi-core-tf.mjs",
+          "sha256": "3fe771e96ca381a7956a94a8b7448f5e0bbfc928df90c5ee234485f27b6d8dce"
+        },
+        {
+          "path": "src/prophet-r37-kernel.mjs",
+          "sha256": "d2d55ae4986d37b6e9274bbbf2ef30eca9c658fefa2de1fcf0d8d6525b7c2c4c"
+        },
+        {
+          "path": "src/prophet-r37-oscillator.mjs",
+          "sha256": "ac3b7099138b99a21d942d5acaf3412c832952fea928d15abbe406344b530f6e"
+        },
+        {
+          "path": "local-engines/producer/src/h1-producer.mjs",
+          "sha256": "4064d1d4d3cc97ee5125b4423c530e5fee1d124673657bbd2ef60cfde7bde9f1"
+        },
+        {
+          "path": "local-engines/producer/src/m15-local-producer.mjs",
+          "sha256": "a0ce1ed49043082099d4596f69f2422871b4e8fe24c4c699550ec3a84e4680e1"
+        }
+      ]
+    }
+  },
+  "prophet_m15": {
+    "source_hash": "696544c53144af1c1888f3f38b8c8084bcbb78dea3c4c0d571e0fffb224f1ce6",
+    "implementation_hash": "1f1c54c0d7d4c961fa4031ebd28fb92dbff4c0a01c53f41933ee98d98164fcb8",
+    "files": {
+      "sources": [
+        {
+          "path": "pinescript/ssot/The-Prophet-v7.02-R38.txt",
+          "sha256": "71a9e933f7a123545125ed075a7bf1940c7cc1930396b6112a8e480f2d5aedc9"
+        },
+        {
+          "path": "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt",
+          "sha256": "f9115eb0224a6f68f212a368a662be57dd2810d1a6adc0abbe1b2ce570ee2c94"
+        }
+      ],
+      "implementation": [
+        {
+          "path": "local-engines/prophet-r38/src/core.mjs",
+          "sha256": "35f60ade42a29e9481cdf6608446ae8bf44cd3942108594b783d3a4b2cfd4c66"
+        },
+        {
+          "path": "src/prophet-r37-kernel.mjs",
+          "sha256": "d2d55ae4986d37b6e9274bbbf2ef30eca9c658fefa2de1fcf0d8d6525b7c2c4c"
+        },
+        {
+          "path": "src/prophet-r37-oscillator.mjs",
+          "sha256": "ac3b7099138b99a21d942d5acaf3412c832952fea928d15abbe406344b530f6e"
+        },
+        {
+          "path": "local-engines/producer/src/h1-producer.mjs",
+          "sha256": "4064d1d4d3cc97ee5125b4423c530e5fee1d124673657bbd2ef60cfde7bde9f1"
+        },
+        {
+          "path": "local-engines/producer/src/m15-local-producer.mjs",
+          "sha256": "a0ce1ed49043082099d4596f69f2422871b4e8fe24c4c699550ec3a84e4680e1"
+        }
+      ]
+    }
   }
 });

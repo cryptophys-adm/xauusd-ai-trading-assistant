@@ -27,8 +27,11 @@ export const PARITY_SWEEP_CRON = "10-59/15 * * * *";
 export const PARITY_SWEEP_LOOKBACK_CANDLES = 3;
 /** 5m candles revisited per sweep: the sweep runs every 15 minutes, so 6 covers each 5m candle twice. */
 export const PARITY_SWEEP_LOOKBACK_M5_CANDLES = 6;
+// The sweep runs every 15 minutes: the last 2 closed 15m candles cover each one at least once.
+export const PARITY_SWEEP_LOOKBACK_M15_CANDLES = 2;
 const H1_SECONDS = 3600;
 const M5_SECONDS = 300;
+const M15_SECONDS = 900;
 
 async function readJsonKV(kv, key) {
   const raw = await kv.get(key);
@@ -97,6 +100,11 @@ export function closedM5CandleKeys(now = Date.now(), { symbol = "OANDA:XAUUSD", 
   return closedCandleKeys(now, M5_SECONDS, { symbol, timeframe: "5", lookback });
 }
 
+/** Verified 15m lane: the most recently closed 15m candle keys, newest first. */
+export function closedM15CandleKeys(now = Date.now(), { symbol = "OANDA:XAUUSD", lookback = PARITY_SWEEP_LOOKBACK_M15_CANDLES } = {}) {
+  return closedCandleKeys(now, M15_SECONDS, { symbol, timeframe: "15", lookback });
+}
+
 function closedCandleKeys(now, seconds, { symbol, timeframe, lookback }) {
   const periodMs = seconds * 1000;
   const currentOpenMs = Math.floor(now / periodMs) * periodMs;
@@ -109,22 +117,24 @@ function closedCandleKeys(now, seconds, { symbol, timeframe, lookback }) {
  * Reconciles the most recently closed H1 candles. Returns a per-candle summary;
  * individual candle failures are captured instead of aborting the sweep.
  */
-export async function reconcileRecentCandles(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, m5Lookback = PARITY_SWEEP_LOOKBACK_M5_CANDLES } = {}) {
+export async function reconcileRecentCandles(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, m5Lookback = PARITY_SWEEP_LOOKBACK_M5_CANDLES, m15Lookback = PARITY_SWEEP_LOOKBACK_M15_CANDLES } = {}) {
   const candleKeys = closedH1CandleKeys(now, { lookback });
   // 5m parity (C0): 5m comparator webhooks are stored only and never queue a
   // reconcile task, so the sweep is what pairs them with the local 5m records
   // when those arrive first. Registry ids are timeframe-scoped (prophet_m5,
   // gmi_m5), so this can never touch the approved H1 identities.
   const m5CandleKeys = closedM5CandleKeys(now, { lookback: m5Lookback });
+  // Verified 15m lane: the same for the 15m comparators (prophet_m15, gmi_m15).
+  const m15CandleKeys = closedM15CandleKeys(now, { lookback: m15Lookback });
   const results = {};
-  for (const candleKey of [...candleKeys, ...m5CandleKeys]) {
+  for (const candleKey of [...candleKeys, ...m5CandleKeys, ...m15CandleKeys]) {
     try {
       results[candleKey] = await reconcileLocalComputation(env, candleKey);
     } catch (error) {
       results[candleKey] = { error: error instanceof Error ? error.name : "UnknownError" };
     }
   }
-  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, results };
+  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, m15_candle_keys: m15CandleKeys, results };
 }
 
 /** Minutes after an H1 close after which a candle without approved local records is recorded as a fail-closed WAIT. */
