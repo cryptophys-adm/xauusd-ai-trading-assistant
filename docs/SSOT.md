@@ -103,6 +103,10 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - Each agent is named after its HUD.
   - Each agent analyses only the data its HUD produces.
 - The brief for the VPS agent is `docs/BRIEF_HUD_AGENTS.md`. It covers the HUD inventory, the rules, and an assessment → RFC → flagged implementation sequence.
+- Owner decisions, 2026-11-05:
+  - the untitled Prophet R38 top-right HUD is named "Prophet";
+  - Matrix & Omega Sensors gets one agent per titled section.
+  - That makes 14 agents in total.
 - Nothing in this section is live yet.
 
 ## 4. Sources and knowledge
