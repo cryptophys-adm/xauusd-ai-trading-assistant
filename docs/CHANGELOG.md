@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- ci(preview-e2e): transport errors between the runner and the preview edge (`ECONNRESET`, timeouts, socket errors) are retried up to 5 times. Every e2e request is idempotent. Run 42079728424 died on one reset right after a passing War Room proof.
 - fix(war-room): blank conclusion reasons are dropped before validation. A preview run on 2026-11-05 returned three reasons and an empty string, which failed the whole conclusion as `reasons_invalid`. A list with no non-blank reason still fails.
 - feat(shadow): RFC_INDICATOR_AGENT_PLATFORM P5, the first improvement candidates: structure-latch expiry.
   - **Candidates.** `prophet_r37@latch8`, `prophet_r37@latch12` and `prophet_r38@latch8`. The ±3 structure latch expires after 8 or 12 closed H1 bars instead of 50.

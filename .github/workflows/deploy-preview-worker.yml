@@ -186,7 +186,24 @@ jobs:
           // response.json() before any changed code ran). Every POST below goes through this
           // retry: only a non-JSON edge answer is retried; any JSON answer is returned and
           // asserted as is. The fixture POSTs are idempotent (deterministic event IDs and keys).
-          const rawFetch = globalThis.fetch;
+          const nativeFetch = globalThis.fetch;
+          // A transport reset between the runner and the edge (run 42079728424 died on
+          // `read ECONNRESET` right after a passing War Room proof) is not a Worker answer:
+          // retry it a few times. Every request here is idempotent (GETs, and POSTs with
+          // deterministic IDs and string bodies), so a retry cannot change the outcome.
+          const rawFetch = async (url, init) => {
+            for (let attempt = 1; ; attempt++) {
+              try {
+                return await nativeFetch(url, init);
+              } catch (error) {
+                const code = error?.cause?.code || "";
+                const transport = error?.name === "TypeError" && /ECONNRESET|ETIMEDOUT|EPIPE|ECONNREFUSED|UND_ERR_SOCKET|UND_ERR_CONNECT_TIMEOUT/.test(code);
+                if (!transport || attempt >= 5) throw error;
+                console.log("::warning::" + (init?.method || "GET") + " " + String(url).slice(base.length) + " transport error " + code + ", retrying");
+                await new Promise(resolve => setTimeout(resolve, 3000));
+              }
+            }
+          };
           globalThis.fetch = async (url, init) => {
             if (init?.method !== "POST") return rawFetch(url, init);
             for (let attempt = 1; ; attempt++) {
