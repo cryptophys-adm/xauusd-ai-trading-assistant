@@ -104,7 +104,16 @@ export function deriveCandleKey(symbol, timeframe, candleTime) {
   return [symbol, timeframe, candleTime].map((part) => String(part ?? "").trim()).join(":");
 }
 
-export function validateLocalCalculation(payload, expected = {}, now = Date.now()) {
+const TIMEFRAME_MINUTES = Object.freeze({ M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H2: 120, H4: 240, D1: 1440 });
+
+/**
+ * staleFrom "now" (ingest): the record must be at most LOCAL_CALC_MAX_AGE_MS old now.
+ * staleFrom "candle_close" (fusion): the record must have been computed within
+ * LOCAL_CALC_MAX_AGE_MS of its candle's close, however late the analysis runs. A record
+ * of candle X stays valid evidence for candle X when the analysis is retried or
+ * backfilled after a Workers AI timeout; candle_key equality still binds it to X.
+ */
+export function validateLocalCalculation(payload, expected = {}, now = Date.now(), { staleFrom = "now" } = {}) {
   const errors = [];
   if (!isRecord(payload)) return { valid: false, errors: ["payload_must_be_object"] };
   if (payload.schema_version !== LOCAL_CALCULATION_CONTRACT_VERSION) errors.push("unsupported_schema_version");
@@ -135,7 +144,10 @@ export function validateLocalCalculation(payload, expected = {}, now = Date.now(
   const computedAt = timestampMs(payload.computed_at);
   if (candleAt !== null && candleAt > now + FUTURE_CLOCK_SKEW_MS) errors.push("candle_time_in_future");
   if (computedAt !== null && computedAt > now + FUTURE_CLOCK_SKEW_MS) errors.push("computed_at_in_future");
-  if (computedAt !== null && now - computedAt > LOCAL_CALC_MAX_AGE_MS) errors.push("calculation_stale");
+  const tfMinutes = TIMEFRAME_MINUTES[timeframeKey(payload.timeframe)];
+  const staleReference = staleFrom === "candle_close" && candleAt !== null && tfMinutes ? candleAt + tfMinutes * 60_000 : now;
+  if (computedAt !== null && staleReference - computedAt > LOCAL_CALC_MAX_AGE_MS) errors.push("calculation_stale");
+  if (staleFrom === "candle_close" && computedAt !== null && staleReference !== now && computedAt - staleReference > LOCAL_CALC_MAX_AGE_MS) errors.push("calculation_stale");
   if (computedAt !== null && candleAt !== null && computedAt < candleAt - FUTURE_CLOCK_SKEW_MS) errors.push("calculation_predates_candle");
   if (expected.symbol && symbolKey(payload.symbol) !== symbolKey(expected.symbol)) errors.push("symbol_mismatch");
   if (expected.timeframe && timeframeKey(payload.timeframe) !== timeframeKey(expected.timeframe)) errors.push("timeframe_mismatch");
@@ -250,7 +262,7 @@ export function buildEvidenceFusion(input, now = Date.now()) {
       errors.push("duplicate_local_calculation:" + engine);
       continue;
     }
-    const validation = validateLocalCalculation(item, { symbol, timeframe, candle_key: candleKey, candle_time: candleTime }, now);
+    const validation = validateLocalCalculation(item, { symbol, timeframe, candle_key: candleKey, candle_time: candleTime }, now, { staleFrom: "candle_close" });
     if (!validation.valid) {
       errors.push(...validation.errors.map((error) => "local_calculation:" + engine + ":" + error));
       continue;
