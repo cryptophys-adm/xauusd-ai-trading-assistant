@@ -137,6 +137,31 @@ Write `docs/RFC_HUD_AGENTS.md`, covering:
   - Optionally, a subset speaks in the live 15m room.
 - **Flags, budgets, fail-closed behaviour, idempotency per (candle, run) and the preview-e2e proof.**
 
+## Phase C plan and owner decisions (2026-11-05)
+
+- **Aegis Footprint Matrix joins the live 15m room**, so four HUD agents speak there: Trade Management, Kinetic Engine (TVA), Fabio AMT Sensors and Aegis Footprint Matrix.
+- **HUD data must be verified**, using the Pine candidate alert as the TradingView comparator.
+  - The local lane computes the HUD values. Its inputs are raw TradingView OHLCV, but the indicator logic is our own port.
+  - The comparator proves that the port matches TradingView's own output: 24/24 consecutive matches per timeframe.
+- **The Pine candidate ships first**, in its own PR, because the 24-candle clock starts only once the owner installs the alerts.
+
+Phase C order (one small PR each, reviewed by Claude, CI green):
+
+1. **C1: candidate and ingestion only.**
+   - Add Pine candidates in `pinescript/candidates/` for Prophet R38 and GMI v12.70. They keep today's payloads byte-for-byte and add separate `prophet_r38_hud` and `gmi_v12_70_hud` alerts carrying the §1.2 HUD fields (numbers, booleans, codes) on H1 and 15m.
+   - `POST /webhook` accepts and stores these `*_hud` sources for timeframes 60 and 15.
+   - They are **not** in `REQUIRED_SOURCES`, not in the evidence fusion and not in the H1 decision lane.
+   - Ship install instructions for the owner.
+2. **C2: local HUD producers and HUD parity.**
+   - Add H1 and 15m producers (closed M15 bars aggregated from closed M5) that compute the same HUD fields.
+   - Add separate parity identities (`prophet_hud_h1`, `prophet_hud_m15`, `gmi_hud_h1`, `gmi_hud_m15`) compared against the stored `*_hud` webhooks.
+   - The approved `prophet` and `gmi` identities stay untouched.
+3. **C3: `src/hud-reading.mjs`**, the deterministic code-to-sentence readings, with tests covering every code path.
+4. **C4: `trade_plan`** in the Reasoner output (RFC §7), validated in `parseDecision`, null on WAIT.
+5. **C5: the 14 HUD agents in Threads 1H** behind `HUD_AGENTS_ENABLED`: off in production, on in preview, with a preview-e2e proof.
+6. **C6: the four HUD agents in the live 15m room** (raise `LIVE_ROOM_MAX_CALLS_PER_HOUR` to 48).
+7. **C7: Nexus**, showing HUD agents by HUD name and a verified or UNVERIFIED badge per HUD.
+
 ## 5. Phase C: implementation (small PRs, each green)
 
 1. The HUD data contract and the computation of the HUD fields that are reproducible today. This lives in the local engines or producers, with parity where a TradingView comparator exists, and the data is informational otherwise.

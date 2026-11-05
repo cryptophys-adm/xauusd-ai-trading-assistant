@@ -119,6 +119,12 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - Rows that cannot be recomputed locally become output of the H1 decision reasoning.
   - The R37 Funnel is read per current candle.
   - `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`.
+- RFC: `docs/RFC_HUD_AGENTS.md` (PR #69).
+- Owner decisions, 2026-11-05:
+  - Aegis joins the live 15m room;
+  - HUD data must be verified through a Pine candidate comparator;
+  - the candidate ships first (C1).
+- The Phase C order (C1–C7) is in `docs/BRIEF_HUD_AGENTS.md`.
 - Nothing in this section is live yet.
 
 ## 4. Sources and knowledge
