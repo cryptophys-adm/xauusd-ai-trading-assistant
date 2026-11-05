@@ -7,6 +7,7 @@ what changed and when, by merge commit and PR.
 ## 2026-11-05
 
 - feat(live-room): Phase C6. Four HUD agents (Trade Management, Kinetic Engine, Fabio AMT, Aegis Footprint) speak in the live 15m room from the 15m HUD snapshot, behind `HUD_AGENTS_ENABLED`. `LIVE_ROOM_MAX_CALLS_PER_HOUR` goes from 36 to 48.
+  - Preview only: the hourly model-call caps count rows in the preview D1 that every preview-e2e run shares, so several runs in one hour exhausted them (all bus messages `budget_exhausted`). Preview caps are now 150 (bus and live room) and 60 (HUD agents); production caps are unchanged.
 - feat(hud): Phase C5/C7. HUD agents in Threads 1H, behind `HUD_AGENTS_ENABLED` (off in production, on in preview).
   - One agent per computed HUD posts after each H1 synthesis, then a moderator. Agents run on the primary model only, within 30 calls per hour, and each sees only its own verified or not-yet-calibrated reading.
   - Nexus shows them by HUD name with a parity badge.
