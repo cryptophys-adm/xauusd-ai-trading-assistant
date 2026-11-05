@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- fix(bus): the fallback model (a reasoning model whose hidden trace shares `max_tokens`) gets twice the token budget, and an answer cut off by the limit is recorded as `finish_reason_length` instead of malformed output. Found by preview-e2e on PR #95: the primary timed out and the fallback's round-2 answer stopped mid-JSON at 3072 tokens.
 - feat(hud): HUD agents on in production (`HUD_AGENTS_ENABLED`, owner approval 2026-11-05). Docs record owner decision "pilihan 1" (the 5m alerts may be deleted once `prophet_m5` and `gmi_m5` are approved) and the backlog (B4, Grid Bot Protocol).
 - test(worker): `test/worker-scheduled.test.mjs` bundles `src/index.ts` with esbuild and runs the real `scheduled()` handlers. The parity sweep cron approves a candle's local records and the backfill runs its analysis; the news cron fails into a logged error.
 - feat(live-room): Phase C6. Four HUD agents (Trade Management, Kinetic Engine, Fabio AMT, Aegis Footprint) speak in the live 15m room from the 15m HUD snapshot, behind `HUD_AGENTS_ENABLED`. `LIVE_ROOM_MAX_CALLS_PER_HOUR` goes from 36 to 48.

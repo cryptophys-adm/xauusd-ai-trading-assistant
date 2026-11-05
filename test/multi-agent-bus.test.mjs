@@ -181,6 +181,15 @@ test("finish_reason length with null content is invalid_output", async () => {
   assert.equal(bus.consensus, null, "no consensus from an invalid moderator answer");
 });
 
+test("an answer cut off by the token limit is recorded as finish_reason_length", async () => {
+  const d1 = fakeD1(); seedSynthesis(d1);
+  const cut = "```json\n{\n  \"agent\": \"technical\",\n  \"round\": 2,\n  \"stance\": \"WAIT\",\n  \"insight\": \"I agree with";
+  const ai = { calls: [], run: async (model, request) => { ai.calls.push({ model, request }); return { choices: [{ message: { content: cut }, finish_reason: "length" }] }; } };
+  await runMultiAgentBus({ DB: d1, AI: ai, MULTI_AGENT_BUS_ENABLED: "true", MULTI_AGENT_MAX_CALLS_PER_HOUR: "50" }, task());
+  const bus = await readBus(d1, CANDLE);
+  assert.ok(bus.items.every(m => m.status === "invalid_output" && m.errors.includes("finish_reason_length")), JSON.stringify(bus.items.map(m => m.errors)));
+});
+
 test("a primary-model error falls back, records why, and skips the primary for the rest of the run", async () => {
   const e = env({ AI: fakeAI(({ model, request }) => model === BUS_DEFAULT_MODEL ? new Error("5007: model not available") : happyHandler({ request: { ...request, response_format: { json_schema: { name: /moderator/i.test(request.messages[0].content) ? "bus_moderator" : "bus_agent" } } } })) });
   await runMultiAgentBus(e, task());
@@ -188,6 +197,7 @@ test("a primary-model error falls back, records why, and skips the primary for t
   const fallbackCalls = e.AI.calls.filter(c => c.model === BUS_DEFAULT_FALLBACK_MODEL);
   assert.equal(fallbackCalls.length, 5);
   assert.ok(fallbackCalls.every(c => c.request.response_format === undefined && c.request.max_tokens > 0), "fallback uses the plain Workers AI chat form");
+  assert.ok(fallbackCalls.every(c => c.request.max_tokens >= 2 * 3072), "the fallback reasoning model gets twice the token budget");
   const bus = await readBus(e.DB, CANDLE);
   assert.ok(bus.items.every(m => m.fallback_used === true && m.model === BUS_DEFAULT_FALLBACK_MODEL && m.status === "ok"));
   assert.ok(bus.items.every(m => /5007: model not available/.test(m.primary_error)), "the primary error is stored for diagnosis");
