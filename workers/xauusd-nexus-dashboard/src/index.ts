@@ -494,7 +494,7 @@ async function loadThreads(kind){
   } catch(e){ $(box.list).innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
 }
 function renderThreadMsg(m, depth){
-  const name = agentName(m.agent);
+  const name = m.hud || agentName(m.agent);
   let html = '<div class="tmsg'+(m.agent==='moderator'?' mod':'')+'" style="margin-left:'+(Math.min(depth,4)*18)+'px">';
   if (m.status && m.status !== 'ok') {
     html += '<div class="m-head"><span class="m-agent">'+esc(name)+'</span><span>'+esc(timeAgo(m.ts))+'</span></div>'

@@ -50,7 +50,7 @@
     "HUD_AGENTS_ENABLED": "true",
     // Phase C5: own hourly cap for the HUD agents (13 agents + moderator per H1 run).
     "HUD_AGENTS_MAX_CALLS_PER_HOUR": "30",
-    "LIVE_ROOM_MAX_CALLS_PER_HOUR": "36",
+    "LIVE_ROOM_MAX_CALLS_PER_HOUR": "48",
     "PREVIEW_FIXTURES_ENABLED": "true"
   },
   "queues": {

@@ -27,7 +27,8 @@ export const HUD_WALL_BUDGET_MS: number;
 export const HUD_STANCES: readonly string[];
 export interface HudAgentsTask { kind: "hud_agents"; event_id: string; candle_key: string; enqueued_at: string }
 export function buildHudAgentsTask(input: { candleKey: string; enqueuedAt?: string }): HudAgentsTask;
-export function validateHudAgent(obj: unknown, agentId: string): { valid: boolean; errors: string[] };
+export function validateHudAgent(obj: unknown, agentId: string, stances?: readonly string[]): { valid: boolean; errors: string[] };
 export function hudEvidenceLines(reading: unknown): string[];
 export function runHudAgents(env: unknown, task: { candle_key: string }, options?: { clock?: () => number; loadReadings?: (env: any, candleKey: string) => Promise<any> }): Promise<{ status: string; calls: number; agents?: number; answered?: number }>;
 export function readHudThread(db: unknown, candleKey: string): Promise<Array<Record<string, any>>>;
+export const HUD_LIVE_ROOM_AGENTS: readonly string[];
