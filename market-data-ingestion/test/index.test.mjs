@@ -181,7 +181,7 @@ test("GET /engine-shadow refuses to pretend Mizan/GMI local calculators exist", 
   assert.equal(body.calculation_allowed_for_trusted_evidence, false);
 });
 
-const { publishLocalComputation } = await import("../src/local-publisher.mjs");
+const { publishLocalComputation, publishM5LocalComputation, LAST_M5_PUBLISH_KEY } = await import("../src/local-publisher.mjs");
 const { buildBundle } = await import("../src/tradingview-source.mjs");
 
 function fakeAiWorker(status = 202) {
@@ -236,4 +236,31 @@ test("publisher stays off without the AI Worker RPC binding and records failures
   const retry = await publishLocalComputation(e, { now });
   assert.equal(retry.status, "partial_failure"); // retried, not deduplicated
   assert.equal(ai.posts.length, 6);
+});
+
+test("5m publisher is off unless M5_PARITY_PUBLISH is true, then posts timeframe-5 records once per closed 5m bar", async () => {
+  const ai = fakeAiWorker();
+  const off = await publishM5LocalComputation(env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai }));
+  assert.equal(off.status, "m5_publish_disabled");
+  assert.equal(ai.posts.length, 0);
+
+  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai, M5_PARITY_PUBLISH: "true" });
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  const lastM5 = (await buildBundle(e)).timeframes.M5.candles.at(-1);
+  const now = Date.parse(lastM5.close_time) + 30_000;
+
+  const first = await publishM5LocalComputation(e, { now });
+  assert.equal(first.status, "published", JSON.stringify(first));
+  assert.equal(first.candle_key, `OANDA:XAUUSD:5:${lastM5.time * 1000}`);
+  assert.deepEqual(ai.posts.map((p) => p.body.engine), ["mizan", "prophet", "gmi"]);
+  assert.ok(ai.posts.every((p) => p.body.timeframe === "5" && p.body.candle_key === first.candle_key));
+  assert.equal(JSON.parse(await e.MARKET_DATA_CACHE.get(LAST_M5_PUBLISH_KEY)).candle_key, first.candle_key);
+
+  const again = await publishM5LocalComputation(e, { now });
+  assert.equal(again.status, "already_published");
+  assert.equal(ai.posts.length, 3);
+
+  const stale = await publishM5LocalComputation(e, { now: now + 15 * 60_000 });
+  assert.equal(stale.status, "no_fresh_m5_close");
 });

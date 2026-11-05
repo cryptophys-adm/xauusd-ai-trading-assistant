@@ -21,6 +21,16 @@ export const ENGINE_FILES = {
   prophet: {
     sources: ["pinescript/ssot/The-Prophet-v7.02-R38.txt", "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
     implementation: ["local-engines/prophet-r38/src/core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs"]
+  },
+  // 5m chart (C0). Separate identities, so the approved H1 hashes above never change
+  // when the 5m code changes. The registry also scopes ids by timeframe (prophet_m5, gmi_m5).
+  gmi_m5: {
+    sources: ["pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
+    implementation: ["local-engines/gmi/src/pine.mjs", "local-engines/gmi/src/mizan.mjs", "local-engines/gmi/src/gmi-core.mjs", "local-engines/gmi/src/gmi-core-tf.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/m5-local-producer.mjs"]
+  },
+  prophet_m5: {
+    sources: ["pinescript/ssot/The-Prophet-v7.02-R38.txt", "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
+    implementation: ["local-engines/prophet-r38/src/core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/m5-local-producer.mjs"]
   }
 };
 export const GENERATED_PATH = "local-engines/producer/src/provenance.generated.mjs";
