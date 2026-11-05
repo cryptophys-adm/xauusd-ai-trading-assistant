@@ -166,6 +166,12 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   2. **Debate.** Agents whose stance differs from the bus majority (at most 7, by confidence) and the Risk Manager rebut named agents. The debate is open for at most 3 minutes, then closed.
   3. **Conclusion.** The moderator concludes for the Nexus main panel: stance, summary, up to 3 reasons and the agents that still disagree.
   - The H1 decision is the constraint: a conclusion that differs must say "H1 decision: X". Price levels come only from the validated H1 chain.
+  - **No confirmation, no entry** (owner rule 2026-11-05).
+    - BUY needs a confirmed buy signal: the H1 Prophet R38 confirmation from the approved record behind the latest H1 decision, or a VERIFIED 5m Prophet R38 confirmation candle. SELL needs a confirmed sell signal.
+    - Without the matching confirmation the stance is WAIT, or HOLD / CLOSE for an open position.
+    - The Risk Manager sees the confirmations, applies the rule in its opening, and rebuts every entry proposed without one.
+    - A BUY or SELL conclusion without the matching confirmation is rejected (`entry_without_confirmation`).
+    - Nexus shows the confirmation state under the conclusion.
   - Primary model only, within `WAR_ROOM_MAX_CALLS_PER_HOUR = 112` (about 27 calls per close). Messages are stored in `agent_thread_messages` (thread `warroom:<day>`, steps `brief`, `open:*`, `debate:*` and `conclusion`).
   - Read API: `GET /api/war-room/latest[?bar=<iso>]`.
   - When on, it replaces the legacy live room and the per-H1 HUD agents (their budget moves here). Turning it `"false"` restores both.

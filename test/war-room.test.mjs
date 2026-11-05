@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { resetThreadSchemaCacheForTests, buildLiveRoomTask } from "../src/agent-threads.mjs";
 import {
   runWarRoomBar, readWarRoom, readTldr, warRoomEnabled, majorityStance, selectRebutters,
-  validateOpening, validateRebuttal, validateConclusion, WAR_ROOM_DEBATE_MS, DESK_AGENTS
+  validateOpening, validateRebuttal, validateConclusion, WAR_ROOM_DEBATE_MS, DESK_AGENTS, entryAllowed
 } from "../src/war-room.mjs";
 
 const BAR = "2026-11-05T14:45:00.000Z";
@@ -125,6 +125,34 @@ test("openings read back in roster order, whatever order the parallel steps fini
   const e = env(slow);
   await runWarRoomBar(e, task());
   assert.deepEqual((await readWarRoom(e.DB)).openings.map(o => o.id), ["h1", "news", "technical", "risk", "kinetic_engine", "fabio_amt"]);
+});
+
+test("no confirmation, no entry: the Risk Manager enforces it and a BUY conclusion needs a confirmed buy", async () => {
+  const none = { h1_prophet_r38: { buy_confirmed: false, sell_confirmed: false }, m5_prophet_r38: { buy_confirmed: true, sell_confirmed: false, verified: false } };
+  assert.equal(entryAllowed("WAIT", none), true);
+  assert.equal(entryAllowed("BUY", none), false, "an UNVERIFIED 5m confirmation does not count");
+  assert.equal(entryAllowed("BUY", { ...none, m5_prophet_r38: { ...none.m5_prophet_r38, verified: true } }), true, "a VERIFIED 5m confirmation candle does");
+  assert.equal(entryAllowed("SELL", { ...none, h1_prophet_r38: { buy_confirmed: false, sell_confirmed: true } }), true);
+
+  const buy = { stance: "BUY", confidence: 0.6, summary: "H1 decision: WAIT, but the room buys the dip.", reasons: ["Momentum turned up."], dissent: [] };
+  const ai = fakeAI({ conclusion: buy });
+  const e = env(ai);
+  await runWarRoomBar(e, task());
+  const room = await readWarRoom(e.DB);
+  assert.equal(room.conclusion.status, "invalid_output", "no confirmed buy in this bar: the BUY conclusion is rejected");
+  assert.deepEqual(room.confirmations.h1_prophet_r38, { buy_confirmed: false, sell_confirmed: false });
+  const riskOpening = ai.calls.find(c => /"agent":"risk"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  assert.match(riskOpening, /Rule: no confirmation, no entry/);
+  assert.ok(JSON.parse(riskOpening.split("YOUR DATA:\n")[1]).confirmations, "the Risk Manager sees the confirmations");
+  const moderator = ai.calls.find(c => /moderator of the XAUUSD Live War Room/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  assert.match(moderator, /no confirmation, no entry[\s\S]*CONFIRMATIONS/);
+
+  // With a confirmed H1 buy the same conclusion is accepted.
+  resetThreadSchemaCacheForTests();
+  const e2 = env(fakeAI({ conclusion: buy }));
+  e2.DB.raw.prepare("UPDATE ai_syntheses SET prophet_metrics = ?").run(JSON.stringify({ prophet_r38: { direction: 1, buy_confirmed: true } }));
+  await runWarRoomBar(e2, task());
+  assert.equal((await readWarRoom(e2.DB)).conclusion.status, "ok");
 });
 
 test("a failed opening stays out of the bus; the room still concludes", async () => {

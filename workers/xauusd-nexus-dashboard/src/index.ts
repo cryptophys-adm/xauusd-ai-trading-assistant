@@ -329,6 +329,9 @@ function renderConclusion(room){
   const levels = lv && (lv.decision==='BUY'||lv.decision==='SELL') && lv.entry_price
     ? ' · entry '+esc(lv.entry_price)+' · stop '+esc(lv.stop_loss)+' · target '+esc(lv.take_profit) : '';
   const constraint = '<div class="conf" style="margin-top:10px">H1 decision (constraint): '+chip(h1.decision)+' confidence '+pct(h1.confidence)+' · H1 candle '+esc(h1When(h1.candle_key))+levels+'</div>';
+  const cf = room && room.confirmations;
+  const side = (x) => x && x.buy_confirmed ? 'buy confirmed' : x && x.sell_confirmed ? 'sell confirmed' : 'no confirmation';
+  const confirm = cf ? '<div class="conf" style="margin-top:6px">Entry confirmation · H1 Prophet R38: '+side(cf.h1_prophet_r38)+' · 5m: '+side(cf.m5_prophet_r38)+(cf.m5_prophet_r38 && !cf.m5_prophet_r38.verified ? ' (unverified, does not count)' : '')+' · rule: no confirmation, no entry</div>' : '';
   const m5 = room && room.m5_label ? '<span class="'+(room.m5_label==='VERIFIED 5m'?'badge-ok':'badge-warn')+'">'+esc(room.m5_label)+'</span>' : '';
   if (!c || c.status !== 'ok') {
     const waiting = room ? (room.phase==='closed' ? 'The moderator could not conclude this round.' : 'The War Room is in session ('+esc(room.phase)+'); the conclusion follows the debate.') : 'No War Room session yet.';
@@ -344,6 +347,7 @@ function renderConclusion(room){
     +((c.reasons||[]).length ? '<ul style="text-align:left;margin:8px 0 0 18px;font-size:13px;line-height:1.55">'+c.reasons.map(r=>'<li>'+esc(r)+'</li>').join('')+'</ul>' : '')
     +((c.dissent||[]).length ? '<div class="conf" style="margin-top:6px">Still disagree: '+c.dissent.map(d=>esc(d.name)).join(', ')+'</div>' : '')
     +constraint
+    +confirm
     +'<div class="conf" style="margin-top:6px;color:var(--muted)">Advisory only. Price levels come only from the validated H1 chain. No orders are placed.</div>'
     +'</div>';
 }

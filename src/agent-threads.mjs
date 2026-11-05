@@ -515,7 +515,15 @@ export async function liveEvidence(env, task, barTime) {
     h1,
     news
   };
-  return { evidence, synthesis: synth };
+  // Entry confirmations (owner rule: no confirmation, no entry). The H1 one comes from the
+  // parity-approved Prophet R38 record behind the latest H1 decision; the 5m one from the bar's
+  // 5m context, and it counts only while the 5m lane is VERIFIED.
+  const r38 = parseJson(synth?.prophet_metrics, {})?.prophet_r38 || {};
+  const confirmations = {
+    h1_prophet_r38: { buy_confirmed: r38.buy_confirmed === true, sell_confirmed: r38.sell_confirmed === true },
+    m5_prophet_r38: { buy_confirmed: m5Raw.buy_confirmed === true, sell_confirmed: m5Raw.sell_confirmed === true, verified: m5Verified.verified === true }
+  };
+  return { evidence, synthesis: synth, confirmations };
 }
 
 export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {}) {
