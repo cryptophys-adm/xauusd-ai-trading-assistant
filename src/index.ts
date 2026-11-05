@@ -83,7 +83,13 @@ const SOURCE_ALIASES: Record<string, string> = {
   "prophet r37 ssot": "prophet_r37_ssot",
   gmi_v12_70: "gmi_v12_70",
   "gmi-v12.70": "gmi_v12_70",
-  "gmi v12.70": "gmi_v12_70"
+  "gmi v12.70": "gmi_v12_70",
+  prophet_r38_hud: "prophet_r38_hud",
+  "prophet-r38-hud": "prophet_r38_hud",
+  "prophet r38 hud": "prophet_r38_hud",
+  gmi_v12_70_hud: "gmi_v12_70_hud",
+  "gmi-v12.70-hud": "gmi_v12_70_hud",
+  "gmi v12.70 hud": "gmi_v12_70_hud"
 };
 
 function json(data: unknown, status = 200): Response {
@@ -984,7 +990,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (!source) {
     return json({
       error: "Unsupported source",
-      accepted_sources: ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"]
+      accepted_sources: ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70", "prophet_r38_hud", "gmi_v12_70_hud"]
     }, 400);
   }
 
