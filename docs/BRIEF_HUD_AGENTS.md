@@ -152,7 +152,8 @@ Phase C order (one small PR each, reviewed by Claude, CI green):
    - **Step 2 (done by Claude): timeframe-aware parity identities.** Registry engine ids are scoped by the record's timeframe (`scopedEngine` in `src/parity-registry.mjs`): H1 keeps the bare id (`prophet`, `gmi`, `mizan`), 5m uses `prophet_m5`, `gmi_m5`, `mizan_m5`, and 15m uses `*_m15`. They never share a streak with the approved H1 identities, and existing H1 rows keep their approval. Mizan is trusted per timeframe. The parity sweep also revisits the last six closed 5m candles, and reconcile tasks start the AI chain only on `ANALYSIS_TIMEFRAMES`.
    - **Step 3 (done by Claude): full 5m local producer.** `m5-local-producer.mjs` computes the complete `PARITY_FIELDS` for `prophet_r38`, `prophet_r37_ssot` and `gmi_v12_70` on every closed 5m bar. The pull adapter publishes them with timeframe 5 (`M5_PARITY_PUBLISH`), and they are compared against stored 5m webhooks. GMI uses `gmi-core-tf.mjs`, and the approved H1 files and hashes are unchanged.
    - **Step 4 (done by Claude for the live room): the 5m context becomes verified.** While the `*_m5` identities are approved, `informational_5m_context` and the live room label the 5m data verified. Otherwise it stays labelled UNVERIFIED, and the label switches automatically.
-   - **Step 5: the owner installs the existing alerts on the 5m chart.** No Pine change is needed, because the payloads already carry the timeframe. 24 consecutive matching 5m candles take about 2 hours.
+   - **Step 5: the owner installs the existing alerts on the 5m chart (done 2026-11-05).** No Pine change is needed, because the payloads already carry the timeframe. 24 consecutive matching 5m candles take about 2 hours.
+   - **After approval (owner decision "pilihan 1", 2026-11-05):** once both `prophet_m5` and `gmi_m5` are approved, the owner may delete the two 5m alerts. The approval persists while the 5m source and implementation hashes are unchanged. A 5m engine change needs the 5m alerts again for a calibration run, like the monthly H1 calibration.
 1. **C1: candidate and ingestion only.**
    - Add Pine candidates in `pinescript/candidates/` for Prophet R38 and GMI v12.70. They keep today's payloads byte-for-byte and add separate `prophet_r38_hud` and `gmi_v12_70_hud` alerts carrying the §1.2 HUD fields (numbers, booleans, codes) on H1 and 15m.
    - `POST /webhook` accepts and stores these `*_hud` sources for timeframes 60 and 15.
@@ -167,13 +168,13 @@ Phase C order (one small PR each, reviewed by Claude, CI green):
    - The approved `prophet`/`gmi` identities and their hashed files are untouched.
 3. **C3: `src/hud-reading.mjs` (done by Claude).** Deterministic plain-language readings for the 13 HUDs, one line per row, each line carrying `verified`. Every enum token is decoded, and the tests validate every reading with the natural-language validator.
 4. **C4: `trade_plan`** in the Reasoner output (RFC §7), validated in `parseDecision`, null on WAIT.
-5. **C5: HUD agents in Threads 1H (done by Claude)**, behind `HUD_AGENTS_ENABLED`: off in production, on in preview.
+5. **C5: HUD agents in Threads 1H (done by Claude)**, behind `HUD_AGENTS_ENABLED`: on in preview, and on in production since the owner's approval of 2026-11-05.
    - After every H1 synthesis, a `hud_agents` queue task runs one agent per computed HUD (13 today), named after the HUD, then a moderator.
    - Each agent sees only its own reading, with every statement marked "verified by parity" or "not yet calibrated", plus the authoritative H1 decision. Stances are BUY, SELL or WAIT. Agents never give levels or size.
    - The agents run on the primary model only, and messages are idempotent per candle and HUD.
    - The budget is capped by `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`.
    - Missing snapshots and syntheses are retried, never invented.
-   - Production enablement still needs the preview-e2e proof on an H1 candle (a follow-up PR) and the owner's approval.
+   - The preview-e2e proves them on an H1 candle (#94), and the owner approved production on 2026-11-05.
 6. **C6: the four HUD agents in the live 15m room (done by Claude).** Trade Management, Kinetic Engine (TVA), Fabio AMT Sensors and Aegis Footprint Matrix post after technical and risk, and before the moderator.
    - They speak from the 15m HUD snapshot of the bar that just closed, behind `HUD_AGENTS_ENABLED`. All their statements read as not yet calibrated, because no 15m comparator exists.
    - Stances are BUY, SELL, HOLD, WAIT or CLOSE, on the primary model only, and they count against `LIVE_ROOM_MAX_CALLS_PER_HOUR`, now 48.
@@ -189,7 +190,12 @@ Phase C order (one small PR each, reviewed by Claude, CI green):
 
 ## 6. Phase D: production
 
-Production is enabled only after the owner approves, by a PR that sets the flag in `wrangler.jsonc`.
+Production is enabled only after the owner approves, by a PR that sets the flag in `wrangler.jsonc`. Done: the owner approved on 2026-11-05, and `HUD_AGENTS_ENABLED` is `"true"` in `wrangler.jsonc`.
+
+### Backlog (owner, 2026-11-05)
+
+- **B4: remove the GMI core duplication.** `gmi-core-tf.mjs` repeats the approved H1 GMI core. Merging them changes the GMI implementation hash, so the H1 `gmi` identity needs a new 24-candle approval. Schedule it in a calibration window, with the H1 GMI alert active.
+- **Grid Bot Protocol HUD.** The only HUD that is not computed (`not_computed`). It can be ported from the Pine source, but its statements stay "not yet calibrated" until a Pine candidate comparator exists.
 
 ## 7. How to report
 

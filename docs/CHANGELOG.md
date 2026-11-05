@@ -6,6 +6,8 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- feat(hud): HUD agents on in production (`HUD_AGENTS_ENABLED`, owner approval 2026-11-05). Docs record owner decision "pilihan 1" (the 5m alerts may be deleted once `prophet_m5` and `gmi_m5` are approved) and the backlog (B4, Grid Bot Protocol).
+- test(worker): `test/worker-scheduled.test.mjs` bundles `src/index.ts` with esbuild and runs the real `scheduled()` handlers. The parity sweep cron approves a candle's local records and the backfill runs its analysis; the news cron fails into a logged error.
 - feat(live-room): Phase C6. Four HUD agents (Trade Management, Kinetic Engine, Fabio AMT, Aegis Footprint) speak in the live 15m room from the 15m HUD snapshot, behind `HUD_AGENTS_ENABLED`. `LIVE_ROOM_MAX_CALLS_PER_HOUR` goes from 36 to 48.
   - Preview only: the hourly model-call caps count rows in the preview D1 that every preview-e2e run shares, so several runs in one hour exhausted them (all bus messages `budget_exhausted`). Preview caps are now 150 (bus and live room) and 60 (HUD agents); production caps are unchanged.
 - feat(hud): Phase C5/C7. HUD agents in Threads 1H, behind `HUD_AGENTS_ENABLED` (off in production, on in preview).

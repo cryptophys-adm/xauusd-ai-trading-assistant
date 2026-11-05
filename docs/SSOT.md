@@ -69,6 +69,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - **Verified 5m lane (C0).** Per-timeframe parity identities and the full 5m producer are in place. Comparison starts once the owner installs the existing alerts on the 5m chart. The label switch is step 4. While `prophet_m5` and `gmi_m5` are both approved, and the observed 5m records for the bar come from those approved implementations, the live room's 5m read is labelled **VERIFIED 5m** (`trust_status: approved_by_parity`). It is then read in plain language with the same reading as the H1 webhooks (`src/m5-verification.mjs`).
   - Otherwise the read stays UNVERIFIED 5m, and the label switches by itself.
   - `GET /api/live` returns `m5_verified`, and the Nexus live badge follows it.
+  - **5m alerts after approval (owner decision "pilihan 1", 2026-11-05).** Once `prophet_m5` and `gmi_m5` are both approved, the owner may delete the two 5m TradingView alerts. The approval persists while the 5m source and implementation hashes are unchanged; a 5m engine change needs the 5m alerts again for a calibration run, like the monthly H1 calibration.
   - The decision card's 5m context stays UNVERIFIED: it is the separate informational `buildM5ProphetContext` read. See `docs/BRIEF_HUD_AGENTS.md`. Until then the 5m context stays UNVERIFIED.
 - Freshness rule for use in `runAnalysis`: accepted only when both
   `now - Date.parse(candle_time) <= 15 min` and
@@ -135,7 +136,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - Neither feature writes into the H1 chain's evidence, prompts or decision. Stances are discussion only: no orders.
 - `POST /preview/news-analysis-fixture` exists only when `PREVIEW_FIXTURES_ENABLED` is `"true"` (set only in `wrangler.preview.jsonc`), so preview-e2e can prove a news thread.
 
-### Next phase: one agent per Pine HUD (planned, not built)
+### HUD agents (Phase C, `HUD_AGENTS_ENABLED`, on in production since 2026-11-05)
 - Owner request, 2026-11-04: every HUD in the installed Pine indicators becomes its own agent.
   - Each agent is named after its HUD.
   - Each agent analyses only the data its HUD produces.
@@ -156,7 +157,8 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - HUD data must be verified through a Pine candidate comparator;
   - the candidate ships first (C1).
 - The Phase C order (C1–C7) is in `docs/BRIEF_HUD_AGENTS.md`.
-- Nothing in this section is live yet.
+- Live: C0, C2, C3, C5, C6 and C7 are built. `HUD_AGENTS_ENABLED` is `"true"` in `wrangler.jsonc` (owner approval 2026-11-05, after the #94 preview-e2e proof). After each H1 synthesis, one agent per computed HUD (13) and a moderator post in Threads 1H, within `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`. At each 15m close, Trade Management, Kinetic Engine, Fabio AMT and Aegis Footprint speak in the live room, within `LIVE_ROOM_MAX_CALLS_PER_HOUR = 48`. Turning the flag to `"false"` stops new HUD posts at once.
+- Backlog (owner, 2026-11-05): B4 (merge the GMI core copy, needs a new H1 GMI approval in a calibration window) and the Grid Bot Protocol HUD. See `docs/BRIEF_HUD_AGENTS.md`.
 
 ## 4. Sources and knowledge
 - **Pine sources:** `pinescript/ssot/`. Verified against the installed TradingView indicators; see `docs/PINE_SOURCE_VERIFICATION.md`. Never edit these files.
