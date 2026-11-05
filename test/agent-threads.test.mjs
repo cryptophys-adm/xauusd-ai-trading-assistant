@@ -411,6 +411,24 @@ function hudEnv(overrides = {}) {
 }
 const loadReadings = async () => hudReadingsFixture();
 
+test("schemas without refs never ask for refs; schemas with refs still do", async () => {
+  // preview-e2e (#95): told to back claims with refs but given no refs field, the HUD
+  // moderator wrote the paths into its summary and failed the natural-language check.
+  const e = hudEnv();
+  await runHudAgents(e, { candle_key: HUD_KEY }, { loadReadings });
+  for (const call of e.AI.calls) {
+    const prompt = call.request.messages.map(m => m.content).join("\n");
+    assert.doesNotMatch(prompt, /Back every claim with refs/);
+    assert.match(prompt, /no refs field: never write refs, evidence paths/);
+  }
+  resetThreadSchemaCacheForTests();
+  const room = env();
+  await runLiveRoomBar(room, buildLiveRoomTask({ barTime: BAR }));
+  const [technical, , moderator] = room.AI.calls.map(c => c.request.messages.map(m => m.content).join("\n"));
+  assert.match(technical, /Back every claim with refs/, "the room agents keep their refs field and rule");
+  assert.match(moderator, /no refs field/);
+});
+
 test("HUD agents: flag off means no calls", async () => {
   const e = env({ AI: hudAI() });
   assert.equal((await runHudAgents(e, { candle_key: HUD_KEY }, { loadReadings })).status, "disabled");

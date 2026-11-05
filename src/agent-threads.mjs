@@ -173,6 +173,14 @@ const RULES = [
   "Return only one JSON object that matches the required schema."
 ].join("\n");
 
+// Schemas without a refs field (moderators, HUD agents). Asked to "back every claim with
+// refs" there, the model wrote the paths into its text ("refs: [h1.decision, agents[0]...]")
+// and failed the natural-language check (preview-e2e, PR #95).
+const RULES_NO_REFS = RULES.replace(
+  "Back every claim with refs: JSON paths into the evidence object you were given.",
+  "This answer has no refs field: never write refs, evidence paths, field names or JSON keys in your text. Name every source in plain words (for example \"the H1 decision\" or \"the Prophet HUD\")."
+);
+
 async function callsInLastHour(db, now, kindPrefix) {
   const cutoff = new Date(now - 60 * 60 * 1000).toISOString();
   const row = await db.prepare(
@@ -318,7 +326,7 @@ function newsAgentMessages(agent, round, post, technical, others) {
 function newsModeratorMessages(post, technical, transcript) {
   return chatMessages([
     "You are the moderator of an XAUUSD forum thread about one news analysis.",
-    RULES,
+    RULES_NO_REFS,
     "Summarise the thread into one consensus. agreed is true only when both round-2 replies share a stance. List disagreements in dissent.",
     `Required JSON: {"stance":"BUY|SELL|WAIT","confidence":0..1,"agreed":true|false,"summary":"<= ${SUMMARY_MAX} chars","dissent":["..."]}`,
     "H1 CHAIN DECISION (read-only, authoritative): " + JSON.stringify(technical.h1_chain_decision),
@@ -430,7 +438,7 @@ function roomAgentMessages(agent, evidence, technicalMsg) {
 function roomModeratorMessages(evidence, transcript) {
   return chatMessages([
     "You are the moderator of a live XAUUSD trading room that meets at every 15m candle close.",
-    RULES,
+    RULES_NO_REFS,
     `Give one short consensus line. If your stance differs from the H1 decision (${evidence.h1.decision}), the summary must say "H1 decision: ${evidence.h1.decision}".`,
     `Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"summary":"<= 300 chars"}`,
     "EVIDENCE: " + JSON.stringify({ h1: evidence.h1, news: evidence.news, m15: evidence.m15.candles.at(-1) ?? null, m5: { bias: evidence.m5.bias, label: evidence.m5.label } }),
@@ -720,7 +728,7 @@ const LIVE_HUD_AGENT_SCHEMA = Object.freeze({ ...HUD_AGENT_SCHEMA, properties: {
 function liveHudMessages(agentId, name, reading, h1) {
   return chatMessages([
     `You are ${name}, one agent per Pine HUD, in a live XAUUSD trading room that meets at every 15m candle close. You speak only about the ${name} HUD on the 15m candle that just closed.`,
-    RULES,
+    RULES_NO_REFS,
     "Read only your HUD reading below. Each statement is marked verified by parity or not yet calibrated; on the 15m chart no comparator has calibrated the HUD yet, so say plainly that your view is not yet calibrated.",
     `The authoritative H1 decision is ${h1.decision}. Room stances: BUY, SELL, HOLD (keep an existing position), WAIT (stay flat), CLOSE (exit an existing position). Never give entry, stop loss, take profit or position size.`,
     `Required JSON: {"agent":"${agentId}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"insight":"<= 400 chars"}`,
@@ -753,7 +761,7 @@ export function hudEvidenceLines(reading) {
 function hudAgentMessages(agentId, name, reading, h1) {
   return chatMessages([
     `You are ${name}, one agent per Pine HUD in an XAUUSD trading forum. You speak only about the ${name} HUD, for the H1 candle that just closed.`,
-    RULES,
+    RULES_NO_REFS,
     "Read only your HUD reading below. Each statement is marked either verified by parity (it equals the parity-approved local computation) or not yet calibrated (an engine internal no TradingView comparator has checked). Lean on the verified statements, and say plainly when your view rests on statements that are not yet calibrated.",
     `The authoritative H1 decision is ${h1.decision}. Say whether your HUD agrees with it. Never give entry, stop loss, take profit or position size.`,
     `Required JSON: {"agent":"${agentId}","stance":"BUY|SELL|WAIT","confidence":0..1,"insight":"<= 400 chars"}`,
@@ -765,7 +773,7 @@ function hudAgentMessages(agentId, name, reading, h1) {
 function hudModeratorMessages(h1, transcript) {
   return chatMessages([
     "You are the moderator of the HUD agents in an XAUUSD trading forum: one agent per Pine HUD has posted about the H1 candle that just closed.",
-    RULES,
+    RULES_NO_REFS,
     `Give one short consensus line across the HUDs, naming which HUDs agree and which disagree. If your stance differs from the H1 decision (${h1.decision}), the summary must say "H1 decision: ${h1.decision}".`,
     `Required JSON: {"stance":"BUY|SELL|WAIT","confidence":0..1,"summary":"<= 300 chars"}`,
     "HUD AGENTS:",
