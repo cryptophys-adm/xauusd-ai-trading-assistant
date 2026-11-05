@@ -6,6 +6,9 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- fix(webhook): only `ANALYSIS_TIMEFRAMES` start the AI chain (`"60"` in production). Before this, a 5m or 15m alert would have run the full chain, the bus and Telegram on every bar. Other timeframes are stored only, for parity.
+- docs: C0 "verified 5m lane" added before C1 (owner decision).
+- `3584e19` (PR #70) docs(hud-agents): Phase C plan.
 - docs(hud-agents): Phase C plan recorded.
   - Owner decisions: Aegis joins the live 15m room, HUD data is verified through a Pine candidate comparator, and the candidate plus `*_hud` webhook ingestion ship first.
 - `a8f6cc3` (PR #69) docs: Phase B HUD agents RFC.

@@ -76,10 +76,23 @@ function symbolKey(value) {
   return typeof value === "string" ? value.trim().toUpperCase().split(":").pop() : "";
 }
 
-function timeframeKey(value) {
+export function timeframeKey(value) {
   if (typeof value !== "string") return "";
   const raw = value.trim().toUpperCase();
   return TIMEFRAME_ALIASES[raw] || "";
+}
+
+/**
+ * Whether a webhook on this timeframe may start the AI analysis chain.
+ * ANALYSIS_TIMEFRAMES is a comma list (default "60" = H1 only). Webhooks on any
+ * other timeframe (for example 5m or 15m parity comparators) are stored only:
+ * they never run the Analyst -> Counselor -> Reasoner chain, the bus or Telegram.
+ */
+export function analysisAllowedForTimeframe(timeframe, configured = "60") {
+  const key = timeframeKey(String(timeframe ?? ""));
+  if (!key) return false;
+  const allowed = String(configured || "60").split(",").map(v => timeframeKey(v.trim())).filter(Boolean);
+  return allowed.includes(key);
 }
 
 export function deriveCandleKey(symbol, timeframe, candleTime) {

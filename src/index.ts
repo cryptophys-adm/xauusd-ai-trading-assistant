@@ -1,5 +1,5 @@
 import { WorkerEntrypoint, tracing } from "cloudflare:workers";
-import { buildEvidenceFusion, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
+import { buildEvidenceFusion, analysisAllowedForTimeframe, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
 import { validateM5Context, freshM5Context } from "./m5-context.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { parseTradingViewJson } from "./tradingview-json.mjs";
@@ -40,6 +40,7 @@ export interface Env {
   AI_MODEL_COUNSELOR: string;
   AI_MODEL_REASONER: string;
   REQUIRED_SOURCES: string;
+  ANALYSIS_TIMEFRAMES?: string;
   MULTI_AGENT_BUS_ENABLED?: string;
   MULTI_AGENT_MAX_CALLS_PER_HOUR?: string;
   MULTI_AGENT_MODEL?: string;
@@ -1010,6 +1011,15 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   await env.WEBHOOK_BUFFER.put("candle:" + candleKey + ":" + source, JSON.stringify(storedPayload), {
     expirationTtl: 60 * 60 * 24 * 14
   });
+  // Only analysis timeframes (H1 in production) start the AI chain. Other timeframes,
+  // such as 5m or 15m parity comparators, are stored for parity and nothing else.
+  if (!analysisAllowedForTimeframe(timeframe, env.ANALYSIS_TIMEFRAMES || "60")) {
+    return json({
+      status: "accepted", candle_key: candleKey, source,
+      analysis_status: "stored_only", queued: false, reason: "timeframe_not_analysed",
+      normalized_non_finite_tokens: normalizedTokens
+    }, 202);
+  }
   const task = buildWebhookQueueTask({
     candleKey, source, ticker, timeframe, enqueuedAt: new Date().toISOString()
   });

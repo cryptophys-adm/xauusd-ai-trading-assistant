@@ -47,6 +47,8 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   AI Worker's `LocalComputationIngress` RPC entrypoint (no shared secret).
 - Storage: KV key `context:m5:latest` (TTL 900 s) on the AI Worker.
 - Read API: `GET /api/m5-context` returns the latest stored 5m context.
+- **Analysis timeframes.** `POST /webhook` starts the AI chain only for `ANALYSIS_TIMEFRAMES`: `"60"` (H1) in production, and `"60,5"` in preview for the M5 fixture. Webhooks on other timeframes, such as 5m or 15m parity comparators, are stored only and answer `analysis_status: "stored_only"`.
+- **Verified 5m lane (C0, planned).** Per-timeframe parity identities and a full 5m producer, so that the 5m context becomes verified after 24/24 5m matches. See `docs/BRIEF_HUD_AGENTS.md`. Until then the 5m context stays UNVERIFIED.
 - Freshness rule for use in `runAnalysis`: accepted only when both
   `now - Date.parse(candle_time) <= 15 min` and
   `now - Date.parse(received_at) <= 10 min`.
