@@ -513,8 +513,19 @@ jobs:
           // adapter reaches over RPC). The preview D1 is shared by every e2e run and a room is
           // keyed by its bar, so each proof uses a random earlier 15m close no run has used yet.
           const latest15 = Math.floor(Date.now() / 900_000) * 900_000;
-          const randomBar = (avoid = []) => { for (;;) { const t = new Date(latest15 - 900_000 * (2 + Math.floor(Math.random() * 90))).toISOString(); if (!avoid.includes(t)) return t; } };
-          const barTime = randomBar();
+          // Random alone is not enough: run 42080341191 drew a bar an earlier run had used and
+          // read that run's room (other agents, older code). A bar is taken only when the shared
+          // D1 has no room for it yet (404 from /api/war-room/latest?bar=).
+          const randomBar = async (avoid = []) => {
+            for (let attempt = 1; ; attempt++) {
+              const t = new Date(latest15 - 900_000 * (2 + Math.floor(Math.random() * 90))).toISOString();
+              if (avoid.includes(t)) continue;
+              const probe = await pollFetch(base + "/api/war-room/latest?bar=" + encodeURIComponent(t));
+              if (probe.status === 404 || attempt >= 30) return t;
+              console.log("::warning::bar " + t + " already has a War Room in the shared preview D1, drawing another");
+            }
+          };
+          const barTime = await randomBar();
           const barsFor = (closeIso) => Array.from({ length: 12 }, (_, i) => ({ t: new Date(Date.parse(closeIso) - (11 - i) * 300_000).toISOString(), o: 4000 + i, h: 4003 + i, l: 3998 + i, c: 4002 + i, v: 100 + i }));
           const recentBars = barsFor(barTime);
           const contextResponse = await fetch(base + "/evidence/m5-context", {
@@ -599,7 +610,7 @@ jobs:
           assert.equal(hudReading.readings.prophet.lines.filter(l => l.verified).length, 2, "Prophet's structure and momentum lines equal the approved local record");
 
           // The 15m HUD agents join the War Room: one opening per HUD in the 15m snapshot.
-          const barTime2 = randomBar([barTime]);
+          const barTime2 = await randomBar([barTime]);
           const key15 = symbol + ":15:" + (Date.parse(barTime2) - 900_000);
           const m15Huds = {
             trade_management: { fields: { prophet_dir: 1, gmi_dir: 1, conflict: false, gate: 2, cycle_intensity: 3, kww_zscore: 0.5, ob_filter_status: "BULL OB PASS", buy_trade_ready: false, sell_trade_ready: false, active_bull_ob: 1, active_bear_ob: 0 }, parity: {} },
