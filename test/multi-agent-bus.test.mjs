@@ -288,6 +288,20 @@ test("the bus never writes to ai_syntheses (chain evidence/decision untouched)",
   assert.equal(after, before);
 });
 
+test("B2: a parity-verified 5m context reaches the bus as VERIFIED 5m, never as decision evidence", () => {
+  const d1 = fakeD1(); seedSynthesis(d1);
+  const row = d1.raw.prepare("SELECT * FROM ai_syntheses").get();
+  const ai = JSON.parse(row.ai_analysis);
+  ai.evidence_fusion.informational_5m_context.verification = { verified: true, label: "VERIFIED 5m", trust_status: "approved_by_parity", summary: "The verified 5m indicators lean bullish." };
+  const ev = buildBusEvidence({ ...row, ai_analysis: JSON.stringify(ai) });
+  assert.equal(ev.technical.informational_5m_context.label, "VERIFIED 5m");
+  assert.equal(ev.technical.informational_5m_context.trust_status, "approved_by_parity");
+  assert.match(ev.technical.informational_5m_context.reading, /verified 5m indicators/);
+  assert.equal(ev.technical.h1_chain_decision.decision, "WAIT", "the chain decision is unchanged");
+  ai.evidence_fusion.informational_5m_context.verification = { verified: false, label: "UNVERIFIED 5m", reason: "m5_parity_not_approved" };
+  assert.equal(buildBusEvidence({ ...row, ai_analysis: JSON.stringify(ai) }).technical.informational_5m_context.label, "UNVERIFIED 5m");
+});
+
 test("agent prompts carry the advisory and trust rules", async () => {
   const e = env();
   await runMultiAgentBus(e, task());

@@ -160,7 +160,9 @@ export function buildBusEvidence(row) {
     h1_chain_decision: { decision: decision.decision ?? "WAIT", confidence: decision.confidence ?? null }
   };
   const m5 = fusion.informational_5m_context
-    ? { ...pick(fusion.informational_5m_context, ["engine", "bias", "buy_confirmed", "sell_confirmed", "d_enc", "candle_time"]), trust_status: "informational_unverified", label: "UNVERIFIED 5m" }
+    ? (fusion.informational_5m_context.verification?.verified === true
+      ? { ...pick(fusion.informational_5m_context, ["engine", "bias", "buy_confirmed", "sell_confirmed", "d_enc", "candle_time"]), trust_status: "approved_by_parity", label: "VERIFIED 5m", reading: clip(fusion.informational_5m_context.verification.summary ?? "", 400) }
+      : { ...pick(fusion.informational_5m_context, ["engine", "bias", "buy_confirmed", "sell_confirmed", "d_enc", "candle_time"]), trust_status: "informational_unverified", label: "UNVERIFIED 5m" })
     : null;
   return {
     technical: {
@@ -194,7 +196,7 @@ const TECHNICAL_WEBHOOK_RULE =
 const RULES = [
   "Advisory only: never produce entry, stop loss, take profit or position size; the H1 decision chain owns those.",
   "A local_computation engine counts as trusted only when its trust_status is approved_by_parity.",
-  "informational_5m_context is UNVERIFIED 5m: you may mention it, but it must never be the main reason for a stance.",
+  "informational_5m_context is 5m execution timing only. When labelled VERIFIED 5m it is parity-approved and you may weigh it as timing; when labelled UNVERIFIED 5m you may mention it, but it must never be the main reason for a stance. Either way the H1 decision chain owns the direction.",
   "Back every claim with refs: JSON paths into the evidence object you were given (for example \"tradingview_webhook.gmi_v12_70.verdict\").",
   NATURAL_LANGUAGE_RULE,
   "If the evidence is degraded or missing, say so and prefer WAIT.",

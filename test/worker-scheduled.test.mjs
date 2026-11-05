@@ -137,8 +137,8 @@ async function post(worker, env, path, body) {
 
 const worker = await loadWorker();
 
-test("parity sweep cron: approves the candle's local records and the backfill runs its analysis", async () => {
-  const { env } = await workerEnv();
+/** Seeds the last closed H1 candle through the real handlers, then runs the parity sweep cron. */
+async function sweepLastClosedCandle(env) {
   const openMs = Math.floor(Date.now() / 3_600_000) * 3_600_000 - 3_600_000;
   const candleKey = SYMBOL + ":60:" + openMs;
 
@@ -160,7 +160,12 @@ test("parity sweep cron: approves the candle's local records and the backfill ru
     await worker.scheduled({ cron: "10-59/15 * * * *", scheduledTime: Date.now() }, env, ctx);
     await settle();
   } finally { output.restore(); }
+  return { candleKey, output };
+}
 
+test("parity sweep cron: approves the candle's local records and the backfill runs its analysis", async () => {
+  const { env } = await workerEnv();
+  const { candleKey, output } = await sweepLastClosedCandle(env);
   assert.deepEqual(output.lines.error.filter(l => /Scheduled parity sweep failed|backfill_failed|backfill_candle_failed|ReferenceError|TypeError/.test(l)), [], "the cron must not fail");
   assert.ok(output.lines.log.some(l => l.startsWith("Scheduled parity sweep completed")), "the sweep reports its result");
   const registry = Object.fromEntries(env.DB.db.prepare("SELECT engine, status FROM engine_parity_registry").all().map(r => [r.engine, r.status]));
@@ -181,4 +186,35 @@ test("news cron: a missing news ingestion fails into a logged error, never an ex
   } finally { output.restore(); }
   assert.ok(output.lines.error.some(l => l.startsWith("Scheduled fundamental news analysis failed")), output.lines.error.join("\n"));
   assert.ok(!output.lines.error.some(l => /ReferenceError|is not a function|is not defined/.test(l)), output.lines.error.join("\n"));
+});
+
+test("B2: the H1 chain labels the 5m context VERIFIED 5m only while the 5m identities are approved", async () => {
+  const closeMs = Math.floor(Date.now() / 300_000) * 300_000;
+  const key5 = SYMBOL + ":5:" + (closeMs - 300_000);
+  const m5Record = (engine) => ({
+    engine, timeframe: "5", candle_key: key5,
+    provenance: { source_hash: (engine === "prophet" ? "1" : "2").repeat(64), implementation_hash: (engine === "prophet" ? "3" : "4").repeat(64) },
+    values: { comparable: engine === "prophet" ? { prophet_r38: values.prophet_r38, prophet_r37_ssot: values.prophet_r37_ssot } : { gmi_v12_70: values.gmi_v12_70 } }
+  });
+  const context = { schema_version: "cryptophys.local-context.v1", engine: "prophet_r38_5m", trust_status: "informational_unverified", source: "m5_parity_record", symbol: SYMBOL, timeframe: "5", candle_key: key5, candle_time: new Date(closeMs).toISOString(), bias: "BULLISH", buy_confirmed: true, sell_confirmed: false, d_enc: -1, t_enc: 2, received_at: new Date().toISOString() };
+  const fusionOf = (env, candleKey) => JSON.parse(env.DB.db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ?").get(candleKey).ai_analysis).evidence_fusion;
+
+  for (const approved of [true, false]) {
+    const { env } = await workerEnv();
+    await env.SIGNAL_CACHE.put("context:m5:latest", JSON.stringify(context));
+    for (const engine of ["prophet", "gmi"]) {
+      const record = m5Record(engine);
+      await env.WEBHOOK_BUFFER.put("localcalc-observed:" + key5 + ":" + engine, JSON.stringify(record));
+      const now = new Date().toISOString();
+      env.DB.db.prepare("INSERT INTO engine_parity_registry (engine, source_hash, implementation_hash, status, consecutive_matches, first_seen_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(engine + "_m5", record.provenance.source_hash, record.provenance.implementation_hash, approved ? "approved" : "candidate", approved ? 24 : 19, now, now);
+    }
+    const { candleKey } = await sweepLastClosedCandle(env);
+    const m5 = fusionOf(env, candleKey).informational_5m_context;
+    assert.equal(m5.candle_key, key5);
+    assert.equal(m5.verification.verified, approved);
+    assert.equal(m5.verification.label, approved ? "VERIFIED 5m" : "UNVERIFIED 5m");
+    if (!approved) assert.equal(m5.verification.reason, "m5_parity_not_approved");
+    assert.equal(m5.recent_bars, undefined, "the H1 chain keeps the compact context");
+  }
 });

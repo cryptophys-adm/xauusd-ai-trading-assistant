@@ -288,7 +288,18 @@ test("scheduled cron publishes the 5m parity records end to end (no swallowed fa
   const m5 = posts.filter((p) => p.timeframe === "5");
   assert.deepEqual(m5.map((p) => p.engine), ["mizan", "prophet", "gmi"]);
   assert.ok(m5.every((p) => p.candle_key.startsWith("OANDA:XAUUSD:5:")));
+  // B2: the 5m context is the same bar's prophet parity record, reshaped (no second computation).
   assert.equal(contexts.length, 1);
+  const [context] = contexts;
+  const prophet = m5.find((p) => p.engine === "prophet");
+  const r38 = prophet.values.comparable.prophet_r38;
+  assert.equal(context.candle_key, prophet.candle_key);
+  assert.equal(context.source, "m5_parity_record");
+  assert.equal(context.trust_status, "informational_unverified");
+  assert.equal(Date.parse(context.candle_time) - Date.parse(prophet.candle_time), 5 * 60_000, "the context carries the bar's close");
+  assert.deepEqual([context.buy_confirmed, context.sell_confirmed, context.d_enc, context.t_enc, context.bias], [r38.buy_confirmed, r38.sell_confirmed, r38.d_enc, r38.t_enc, prophet.values.bias]);
+  assert.equal(context.recent_bars.length, 12);
+  assert.equal(context.recent_bars.at(-1).t, context.candle_time);
 });
 
 test("HUD publisher is off unless HUD_SNAPSHOT_PUBLISH is true, then sends one H1 and one M15 snapshot per closed bar", async () => {
