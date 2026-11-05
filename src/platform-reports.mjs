@@ -87,7 +87,8 @@ export async function publishToPlatform(env, agentId, report, { timeoutMs = PLAT
     // The kernel answers `succeeded`, `denied` (policy, rate limit, kill switch, suspension)
     // or `failed` (the kernel rejected the report itself, e.g. an invalid body).
     if (result?.outcome === "succeeded" || result?.outcome === "success") {
-      const reportId = result?.result?.report_id ?? null;
+      // Kernel shape: { outcome: "succeeded", result: { report: { report_id, … } } }.
+      const reportId = result?.result?.report?.report_id ?? result?.result?.report_id ?? null;
       return { outcome: "success", report_id: typeof reportId === "string" ? reportId : null };
     }
     const reason = typeof result?.reason === "string" ? result.reason.slice(0, 200) : typeof result?.error === "string" ? result.error : "unknown";
