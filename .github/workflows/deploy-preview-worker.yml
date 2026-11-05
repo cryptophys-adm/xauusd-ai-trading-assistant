@@ -236,6 +236,12 @@ jobs:
                   metrics: { bias: "NEUTRAL", fixture_only: true }
                 })
               });
+              // A fresh preview Worker can still answer from an edge with an HTML page; retry it.
+              if (!(response.headers.get("content-type") || "").includes("application/json")) {
+                console.log("::warning::webhook " + source + " got a non-JSON edge answer (HTTP " + response.status + "), retrying");
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                continue;
+              }
               result = await response.json();
               if (!(response.status === 503 && /WEBHOOK_SECRET is not configured/.test(String(result?.error)))) break;
               await new Promise(resolve => setTimeout(resolve, 2000));
