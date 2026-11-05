@@ -40,7 +40,7 @@ jobs:
         run: npm install --ignore-scripts
 
       - name: Run market data, Prophet R38 and producer tests
-        run: node --test market-data-ingestion/test/*.test.mjs local-engines/prophet-r38/test/*.test.mjs local-engines/producer/test/*.test.mjs test/engine-provenance.test.mjs
+        run: node --test market-data-ingestion/test/*.test.mjs local-engines/prophet-r38/test/*.test.mjs local-engines/producer/test/*.test.mjs local-engines/gmi/test/*.test.mjs test/engine-provenance.test.mjs
 
       - name: Require Cloudflare deploy credentials
         env:

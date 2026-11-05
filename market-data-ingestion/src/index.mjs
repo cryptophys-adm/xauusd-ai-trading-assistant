@@ -258,6 +258,15 @@ const worker = {
       } catch (error) {
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_failed", code: asString(error?.code) || "publish_failed" }));
       }
+      // C0 verified 5m lane: publish the 5m local records for parity (flag-gated).
+      try {
+        const publishedM5 = await publishM5LocalComputation(env, { bundle: latestBundle });
+        if (!["m5_publish_disabled", "no_fresh_m5_close", "already_published"].includes(publishedM5.status)) {
+          console.log(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_m5", status: publishedM5.status, candle_key: publishedM5.candle_key || null, gmi_error: publishedM5.gmi_error || null }));
+        }
+      } catch (error) {
+        console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_m5_failed", code: asString(error?.code) || "publish_failed" }));
+      }
       // Informational (unverified) 5m context: build from closed M5 bars and forward
       // to the AI Worker. Never enters the trusted local_computation lane.
       try {

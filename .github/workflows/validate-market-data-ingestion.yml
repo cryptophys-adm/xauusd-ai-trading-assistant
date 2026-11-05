@@ -45,7 +45,7 @@ jobs:
         run: npm install --ignore-scripts
 
       - name: Run market data ingestion tests
-        run: node --test market-data-ingestion/test/*.test.mjs local-engines/prophet-r38/test/*.test.mjs local-engines/producer/test/*.test.mjs
+        run: node --test market-data-ingestion/test/*.test.mjs local-engines/prophet-r38/test/*.test.mjs local-engines/producer/test/*.test.mjs local-engines/gmi/test/*.test.mjs
 
       - name: Validate Cloudflare Worker bundle
         run: npx --yes wrangler@4.45.0 deploy --dry-run --config market-data-ingestion/wrangler.jsonc

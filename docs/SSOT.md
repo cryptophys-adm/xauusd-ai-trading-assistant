@@ -41,14 +41,17 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   (`buildM5ProphetContext`) from closed M5 bars.
 - It is **never** part of `fusion.complete`, never changes decision, entry/SL/TP, risk/reward,
   position size or confidence, and is labelled "UNVERIFIED 5m" in the UI and prompts.
-- Trust is H1-only until the 5m producer publishes full 5m records (C0 step 3). The registry is already timeframe-scoped: 5m records earn their own approval under `prophet_m5`, `gmi_m5` and `mizan_m5`, separate from the approved H1 ids, and the parity sweep revisits the last six closed 5m candles.
+- **5m parity records (C0 step 3).** The pull adapter also publishes full mizan, prophet and gmi records for every closed 5m bar (`local-engines/producer/src/m5-local-producer.mjs`, behind `M5_PARITY_PUBLISH`). They have timeframe `"5"` and candle key `OANDA:XAUUSD:5:<open ms>`.
+  - The records earn their own approval under the timeframe-scoped ids `prophet_m5`, `gmi_m5` and `mizan_m5`, separate from the approved H1 ids. The parity sweep revisits the last six closed 5m candles.
+  - GMI on the 5m chart runs `local-engines/gmi/src/gmi-core-tf.mjs`, a timeframe-parameterised copy of `gmi-core.mjs`. `gmi-core.mjs` stays byte-identical, because it is part of the approved H1 hash. A test proves the copy equals `computeGmi` on H1.
+  - The provenance has its own `prophet_m5` and `gmi_m5` entries, so 5m code changes never change the H1 hashes.
 
 - Transport: the pull adapter calls `AI_WORKER.submitContext(record)` on the
   AI Worker's `LocalComputationIngress` RPC entrypoint (no shared secret).
 - Storage: KV key `context:m5:latest` (TTL 900 s) on the AI Worker.
 - Read API: `GET /api/m5-context` returns the latest stored 5m context.
 - **Analysis timeframes.** `POST /webhook` starts the AI chain only for `ANALYSIS_TIMEFRAMES`: `"60"` (H1) in production, and `"60,5"` in preview for the M5 fixture. Webhooks on other timeframes, such as 5m or 15m parity comparators, are stored only and answer `analysis_status: "stored_only"`.
-- **Verified 5m lane (C0, planned).** Per-timeframe parity identities and a full 5m producer, so that the 5m context becomes verified after 24/24 5m matches. See `docs/BRIEF_HUD_AGENTS.md`. Until then the 5m context stays UNVERIFIED.
+- **Verified 5m lane (C0).** Per-timeframe parity identities and the full 5m producer are in place. Comparison starts once the owner installs the existing alerts on the 5m chart. The 5m context becomes verified after 24/24 5m matches, which is step 4: the label switch. See `docs/BRIEF_HUD_AGENTS.md`. Until then the 5m context stays UNVERIFIED.
 - Freshness rule for use in `runAnalysis`: accepted only when both
   `now - Date.parse(candle_time) <= 15 min` and
   `now - Date.parse(received_at) <= 10 min`.
