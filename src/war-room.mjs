@@ -1,0 +1,328 @@
+// Live War Room 15m (owner decision 2026-11-05, docs/RFC_INDICATOR_AGENT_PLATFORM.md §12).
+//
+// Every agent discusses in one room at each 15m candle close, in three phases:
+//   1. Communication bus: each agent posts one opening claim from its own data only (one
+//      role per agent, no repeated information).
+//   2. Debate: every agent sees the whole bus; agents whose stance differs from the majority
+//      (at most 7, by confidence) and the Risk Manager rebut named agents. The debate is open
+//      for at most 3 minutes, then closed.
+//   3. Conclusion: the moderator concludes for the Nexus main panel. The H1 decision chain
+//      stays the constraint: a conclusion that differs must say "H1 decision: X", and price
+//      levels come only from the validated H1 chain.
+// Advisory only: stances are discussion positions, never orders. Primary model only.
+// Behind WAR_ROOM_ENABLED; when on, it replaces the legacy live room and the per-H1 HUD
+// agents (owner decision: their budget moves here).
+import { chatMessages } from "./model-text.mjs";
+import { naturalLanguageErrors } from "./natural-language.mjs";
+import { HUD_IDS, HUD_NAMES } from "./hud-reading.mjs";
+import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
+import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
+import {
+  ROOM_STANCES, ensureThreadSchema, isFifteenMinuteClose, liveEvidence, m15KeyForClose,
+  hudEvidenceLines, rowToThreadMessage, validateRoomModerator, threadInternals
+} from "./agent-threads.mjs";
+
+const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson } = threadInternals;
+
+export const WAR_ROOM_OPENING_MS = 90_000;
+export const WAR_ROOM_DEBATE_MS = 180_000; // owner: the debate is open for at most 3 minutes
+export const WAR_ROOM_CONCLUSION_MS = 60_000;
+export const WAR_ROOM_MAX_REBUTTALS = 8;
+const CLAIM_MAX = 320;
+const ARGUMENT_MAX = 420;
+
+export function warRoomEnabled(env) {
+  return String(env?.WAR_ROOM_ENABLED ?? "false").trim().toLowerCase() === "true";
+}
+
+/** Desk agents (one role each); the HUD agents follow, one per computed 15m HUD. */
+export const DESK_AGENTS = Object.freeze({
+  h1: { name: "H1 Desk", role: "the H1 decision chain and the H1 TradingView reading: the higher-timeframe constraint" },
+  news: { name: "News Analyst", role: "the latest fundamental news consensus" },
+  technical: { name: "Technical Analyst", role: "price action only: the closed 15m candles and the 5m execution read" },
+  risk: { name: "Risk Manager", role: "risk only: volatility, conflicts between timeframes, and what would invalidate a move" }
+});
+
+export function agentName(id) {
+  if (DESK_AGENTS[id]) return DESK_AGENTS[id].name;
+  if (HUD_NAMES[id]) return HUD_NAMES[id];
+  return id === "moderator" ? "Moderator" : String(id);
+}
+
+const OPENING_SCHEMA = Object.freeze({
+  type: "object", additionalProperties: false,
+  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, confidence: { type: "number" }, claim: { type: "string" } },
+  required: ["agent", "stance", "confidence", "claim"]
+});
+const REBUTTAL_SCHEMA = Object.freeze({
+  type: "object", additionalProperties: false,
+  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, confidence: { type: "number" }, rebuts: { type: "array", items: { type: "string" } }, argument: { type: "string" } },
+  required: ["agent", "stance", "confidence", "rebuts", "argument"]
+});
+const CONCLUSION_SCHEMA = Object.freeze({
+  type: "object", additionalProperties: false,
+  properties: { stance: { type: "string", enum: [...ROOM_STANCES] }, confidence: { type: "number" }, summary: { type: "string" }, reasons: { type: "array", items: { type: "string" } }, dissent: { type: "array", items: { type: "string" } } },
+  required: ["stance", "confidence", "summary", "reasons", "dissent"]
+});
+
+export function validateOpening(o, agent) {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
+  const errors = [];
+  if (o.agent !== agent) errors.push("agent_mismatch");
+  if (!ROOM_STANCES.includes(o.stance)) errors.push("stance_invalid");
+  if (!inUnit(o.confidence)) errors.push("confidence_out_of_range");
+  if (typeof o.claim !== "string" || !o.claim.trim()) errors.push("claim_missing");
+  else errors.push(...naturalLanguageErrors(o.claim));
+  return { valid: errors.length === 0, errors };
+}
+
+export function validateRebuttal(o, agent, busAgents) {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
+  const errors = [];
+  if (o.agent !== agent) errors.push("agent_mismatch");
+  if (!ROOM_STANCES.includes(o.stance)) errors.push("stance_invalid");
+  if (!inUnit(o.confidence)) errors.push("confidence_out_of_range");
+  if (!Array.isArray(o.rebuts) || !o.rebuts.length || o.rebuts.some(r => r === agent || !busAgents.includes(r))) errors.push("rebuts_invalid");
+  if (typeof o.argument !== "string" || !o.argument.trim()) errors.push("argument_missing");
+  else errors.push(...naturalLanguageErrors(o.argument));
+  return { valid: errors.length === 0, errors };
+}
+
+export function validateConclusion(o, h1Decision, busAgents) {
+  const base = validateRoomModerator(o, h1Decision);
+  const errors = [...base.errors];
+  if (o && typeof o === "object") {
+    if (!Array.isArray(o.reasons) || o.reasons.length < 1 || o.reasons.length > 3 || o.reasons.some(r => typeof r !== "string" || !r.trim())) errors.push("reasons_invalid");
+    else for (const r of o.reasons) errors.push(...naturalLanguageErrors(r));
+    if (!Array.isArray(o.dissent) || o.dissent.some(d => !busAgents.includes(d))) errors.push("dissent_invalid");
+  }
+  return { valid: errors.length === 0, errors: [...new Set(errors)] };
+}
+
+/** The majority stance of the answered openings (ties: WAIT first, then the H1 desk's stance). */
+export function majorityStance(openings, h1Stance = "WAIT") {
+  const counts = new Map();
+  for (const o of openings) counts.set(o.stance, (counts.get(o.stance) || 0) + 1);
+  let best = null;
+  for (const [stance, n] of counts) {
+    const prefer = (s) => (s === "WAIT" ? 2 : s === h1Stance ? 1 : 0);
+    if (!best || n > best.n || (n === best.n && prefer(stance) > prefer(best.stance))) best = { stance, n };
+  }
+  return best?.stance ?? null;
+}
+
+/** Who rebuts: minority agents by confidence (at most max - 1), plus the Risk Manager. */
+export function selectRebutters(openings, majority, max = WAR_ROOM_MAX_REBUTTALS) {
+  const minority = openings.filter(o => o.stance !== majority && o.agent !== "risk").sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0)).slice(0, max - 1).map(o => o.agent);
+  const risk = openings.find(o => o.agent === "risk");
+  return risk ? [...minority, "risk"] : minority;
+}
+
+const ROOM_RULES = [
+  "Room stances: BUY, SELL, HOLD (keep an existing position), WAIT (stay flat), CLOSE (exit an existing position). They are discussion positions only.",
+  "Never give entry, stop loss, take profit or position size: price levels come only from the validated H1 decision chain."
+].join("\n");
+
+function openingMessages(agent, data, h1) {
+  const desk = DESK_AGENTS[agent];
+  const who = desk
+    ? `You are the ${desk.name} in the XAUUSD Live War Room, which meets at every 15m candle close. Your only role: ${desk.role}.`
+    : `You are ${HUD_NAMES[agent]}, one agent per Pine HUD, in the XAUUSD Live War Room, which meets at every 15m candle close. You speak only about the ${HUD_NAMES[agent]} HUD on the 15m candle that just closed. Statements marked not yet calibrated have no comparator yet: say so when your view rests on them.`;
+  return chatMessages([
+    who,
+    RULES_NO_REFS,
+    ROOM_RULES,
+    "This is your opening on the communication bus: one claim from your own data only. Do not repeat what other roles cover (the other agents are the H1 Desk, the News Analyst, the Technical Analyst, the Risk Manager and one agent per HUD).",
+    `The H1 decision is ${h1.decision}.`,
+    `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"claim":"<= ${CLAIM_MAX - 40} chars"}`,
+    "YOUR DATA:",
+    JSON.stringify(data)
+  ]);
+}
+
+function rebuttalMessages(agent, own, bus, h1) {
+  return chatMessages([
+    `You are ${agentName(agent)} in the XAUUSD Live War Room debate${DESK_AGENTS[agent] ? " (" + DESK_AGENTS[agent].role + ")" : ""}. The debate is open for at most 3 minutes.`,
+    RULES_NO_REFS,
+    ROOM_RULES,
+    "Rebut the strongest claims you disagree with and name those agents in rebuts by their id. Add only new reasoning from your own role; never restate your opening or another agent's claim. You may change your stance if the bus convinced you.",
+    `The H1 decision is ${h1.decision}.`,
+    `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"rebuts":["<agent id>"],"argument":"<= ${ARGUMENT_MAX - 40} chars"}`,
+    "YOUR OPENING: " + JSON.stringify({ stance: own.stance, confidence: own.confidence, claim: own.claim }),
+    "COMMUNICATION BUS (id, name, stance, confidence, claim):",
+    JSON.stringify(bus)
+  ]);
+}
+
+function conclusionMessages(h1, bus, debate) {
+  return chatMessages([
+    "You are the moderator of the XAUUSD Live War Room. The debate is closed. Write the conclusion for the main panel.",
+    RULES_NO_REFS,
+    ROOM_RULES,
+    `The H1 decision (${h1.decision}) is the constraint: if your stance differs from it, the summary must say "H1 decision: ${h1.decision}" and why the room still differs.`,
+    "Weigh claims by their argument, not by the number of agents. No repetition: the summary states the conclusion once, each reason adds something new, and dissent lists the ids of agents that still disagree.",
+    `Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"summary":"<= 360 chars","reasons":["<= 160 chars", "at most 3"],"dissent":["<agent id>"]}`,
+    "COMMUNICATION BUS:",
+    JSON.stringify(bus),
+    "DEBATE:",
+    JSON.stringify(debate)
+  ]);
+}
+
+/** Each agent's own data: one role each, nothing shared that another role covers. */
+function agentData(agent, evidence, hud, h1Detail) {
+  switch (agent) {
+    case "h1": return { h1_decision: h1Detail.decision, confidence: h1Detail.confidence, reasoning: h1Detail.reasoning, tradingview_h1: evidence.h1.tradingview };
+    case "news": return evidence.news ? { consensus: evidence.news.consensus, confidence: evidence.news.confidence, summary: evidence.news.summary } : { available: false, note: "no news consensus yet" };
+    case "technical": return { candles_15m: evidence.m15.candles, execution_5m: { label: evidence.m5.label, bias: evidence.m5.bias, reading: evidence.m5.reading?.summary ?? null, last_bars: evidence.m5.recent_bars.slice(-6) } };
+    case "risk": {
+      const c = evidence.m15.candles;
+      const ranges = c.map(x => Math.round((x.h - x.l) * 100) / 100);
+      return { candles_15m: c, ranges_15m: ranges, h1_decision: evidence.h1.decision, h1_confidence: evidence.h1.confidence, news_consensus: evidence.news?.consensus ?? null, execution_5m_label: evidence.m5.label };
+    }
+    default: return { hud: HUD_NAMES[agent], timeframe: "15 minutes", reading: hudEvidenceLines(hud?.readings?.[agent]) };
+  }
+}
+
+/**
+ * Runs the War Room for one 15m close. Idempotent per bar: stored ok steps are reused, failed
+ * steps are retried, and a stored ok conclusion ends the run.
+ */
+export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}) {
+  if (!warRoomEnabled(env)) return { status: "disabled", calls: 0 };
+  const db = env.DB;
+  await ensureThreadSchema(db);
+  const barTime = new Date(Date.parse(task.bar_time)).toISOString();
+  if (!isFifteenMinuteClose(barTime)) return { status: "not_15m_close", calls: 0 };
+  const live = await liveEvidence(env, task, barTime);
+  if (live.status) return { status: live.status, calls: 0 };
+  const { evidence, synthesis } = live;
+  const decision = parseJson(synthesis?.ai_analysis, {})?.decision || {};
+  const h1 = { decision: evidence.h1.decision, confidence: evidence.h1.confidence, candle_key: evidence.h1.candle_key, reasoning: clip(decision.reasoning, 400) };
+
+  let hud = null;
+  try {
+    const key15 = m15KeyForClose(barTime);
+    const carried = task.hud && typeof task.hud === "object" && task.hud.candle_key === key15 ? task.hud : null;
+    const snapshot = carried || await loadHudSnapshot(env, { timeframe: "15", candleKey: key15 });
+    hud = snapshot ? await hudReadings(env, snapshot) : null;
+  } catch { hud = null; }
+  const roster = ["h1", "news", "technical", "risk", ...HUD_IDS.filter(id => hud?.readings?.[id]?.available)];
+
+  const day = barTime.slice(0, 10);
+  const threadId = `warroom:${day}`;
+  await upsertThread(db, { id: threadId, kind: "warroom", refKey: day, title: `Live War Room 15m · ${day}`, post: null, now: clock() });
+  const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, barTime).all()).results || []).map(r => [r.step, rowToThreadMessage(r)]));
+  if (existing.get("conclusion")?.status === "ok") return { status: "already_complete", calls: 0 };
+  const base = (step, agent, parent_id = null) => ({ thread_id: threadId, run_id: barTime, step, agent, parent_id, bar_time: barTime });
+  if (!existing.has("brief")) {
+    await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { roster, h1: { ...h1, reasoning: undefined }, m5_label: evidence.m5.label, m15_close: evidence.m15.candles.at(-1) ?? null, news: evidence.news } });
+  }
+
+  // One budget for the bar, shared by every parallel step (and its correction call).
+  const roomEnv = { ...env, MULTI_AGENT_FALLBACK_MODEL: env.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL };
+  const maxPerHour = Number(env.WAR_ROOM_MAX_CALLS_PER_HOUR ?? 112);
+  let remaining = 0;
+  try { remaining = (Number.isFinite(maxPerHour) ? maxPerHour : 0) - (await callsInLastHour(db, clock(), "warroom")); } catch { remaining = 0; }
+  let calls = 0;
+  const phase = (ms) => {
+    const deadline = clock() + ms;
+    const runState = { primaryError: null };
+    const budgetOk = async () => clock() < deadline && remaining-- > 0;
+    return (stepBase, opts) => { calls += 1; return runStep(roomEnv, db, stepBase, { ...opts, deadline, clock, runState, budgetOk }); };
+  };
+
+  // Phase 1: the communication bus.
+  const open = phase(WAR_ROOM_OPENING_MS);
+  const openings = await Promise.all(roster.map(agent => {
+    const prior = existing.get("open:" + agent);
+    if (prior?.status === "ok") return prior;
+    return open(base("open:" + agent, agent), {
+      messages: openingMessages(agent, agentData(agent, evidence, hud, h1), h1), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
+      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateOpening(o, agent),
+      toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), name: agentName(agent) }, refs: [] })
+    });
+  }));
+  const answered = openings.filter(m => m?.status === "ok");
+  const bus = answered.map(m => ({ id: m.agent, name: agentName(m.agent), stance: m.stance, confidence: m.confidence, claim: m.claim }));
+  const busAgents = bus.map(b => b.id);
+
+  // Phase 2: the debate, open for at most 3 minutes.
+  const majority = majorityStance(answered, h1.decision);
+  const rebutters = selectRebutters(answered, majority);
+  const debateStep = phase(WAR_ROOM_DEBATE_MS);
+  const openingId = new Map(answered.map(m => [m.agent, m.id]));
+  const debate = (await Promise.all(rebutters.map(agent => {
+    const prior = existing.get("debate:" + agent);
+    if (prior?.status === "ok") return prior;
+    const own = answered.find(m => m.agent === agent);
+    return debateStep(base("debate:" + agent, agent, openingId.get(agent) ?? null), {
+      messages: rebuttalMessages(agent, own, bus, h1), schemaName: "war_room_rebuttal", schema: REBUTTAL_SCHEMA,
+      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateRebuttal(o, agent, busAgents),
+      toBody: (o) => ({ body: { argument: clip(o.argument, ARGUMENT_MAX), rebuts: [...new Set(o.rebuts)].slice(0, 4), name: agentName(agent) }, refs: [] })
+    });
+  }))).filter(m => m?.status === "ok");
+
+  // Phase 3: the conclusion for the main panel.
+  if (!answered.length) return { status: "no_openings", calls };
+  const conclude = phase(WAR_ROOM_CONCLUSION_MS);
+  await conclude(base("conclusion", "moderator"), {
+    messages: conclusionMessages(h1, bus, debate.map(m => ({ id: m.agent, name: agentName(m.agent), stance: m.stance, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument }))),
+    schemaName: "war_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low",
+    validate: (o) => validateConclusion(o, h1.decision, busAgents),
+    toBody: (o) => ({ body: { summary: clip(o.summary, 400), reasons: o.reasons.slice(0, 3).map(r => clip(r, 200)), dissent: [...new Set(o.dissent)], majority, h1_decision: h1.decision }, refs: [] })
+  });
+  return { status: "complete", calls, openings: answered.length, rebuttals: debate.length };
+}
+
+/** The latest War Room run (or the one at barTime): brief, bus, debate and conclusion. */
+export async function readWarRoom(db, { barTime = null } = {}) {
+  await ensureThreadSchema(db);
+  const run = barTime
+    ? new Date(Date.parse(barTime)).toISOString()
+    : (await db.prepare("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id LIKE 'warroom:%'").first())?.r;
+  if (!run) return null;
+  const rows = ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(`warroom:${run.slice(0, 10)}`, run).all()).results || []).map(rowToThreadMessage);
+  if (!rows.length) return null;
+  const brief = rows.find(m => m.step === "brief") || null;
+  const pick = (m) => ({ id: m.agent, name: agentName(m.agent), status: m.status, model: m.model, fallback_used: m.fallback_used, errors: m.errors, stance: m.stance, confidence: m.confidence, ts: m.ts, claim: m.claim, argument: m.argument, rebuts: m.rebuts, rebuts_names: (m.rebuts || []).map(agentName) });
+  const openings = rows.filter(m => m.step.startsWith("open:")).map(pick);
+  const debate = rows.filter(m => m.step.startsWith("debate:")).map(pick);
+  const c = rows.find(m => m.step === "conclusion");
+  const conclusion = c ? { status: c.status, stance: c.stance, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [], dissent: (c.dissent || []).map(id => ({ id, name: agentName(id) })), majority: c.majority ?? null, h1_decision: c.h1_decision ?? null, ts: c.ts } : null;
+  const started = brief?.ts ?? rows[0].ts;
+  return {
+    bar_time: run,
+    phase: c?.status === "ok" ? "closed" : debate.length ? "debate" : "opening",
+    started_at: started,
+    debate_window_seconds: WAR_ROOM_DEBATE_MS / 1000,
+    roster: (brief?.roster || openings.map(o => o.id)).map(id => ({ id, name: agentName(id), role: DESK_AGENTS[id]?.role ?? `the ${agentName(id)} HUD on the 15m chart` })),
+    h1: brief?.h1 ?? null,
+    m5_label: brief?.m5_label ?? null,
+    m15_close: brief?.m15_close ?? null,
+    openings,
+    debate,
+    conclusion
+  };
+}
+
+/** TLDR cards for the right panel: Threads 1H and News Thread. */
+export async function readTldr(db) {
+  await ensureThreadSchema(db);
+  const synth = await db.prepare("SELECT candle_key, ai_analysis FROM ai_syntheses WHERE timeframe = '60' OR candle_key LIKE '%:60:%' ORDER BY id DESC LIMIT 1").first();
+  let h1 = null;
+  if (synth) {
+    const d = parseJson(synth.ai_analysis, {})?.decision || {};
+    let consensus = null;
+    try {
+      const mod = await db.prepare("SELECT insight, confidence FROM bus_messages WHERE candle_key = ? AND agent = 'moderator' AND status = 'ok' ORDER BY ts DESC LIMIT 1").bind(synth.candle_key).first();
+      const body = parseJson(mod?.insight, null);
+      if (body) consensus = { stance: body.stance ?? null, confidence: mod.confidence ?? null, summary: clip(body.summary, 300) };
+    } catch { consensus = null; }
+    h1 = { candle_key: synth.candle_key, decision: String(d.decision || "WAIT").toUpperCase(), confidence: d.confidence ?? null, tldr: clip(d.reasoning, 280), consensus };
+  }
+  const t = await db.prepare("SELECT t.id, t.ref_key, t.title, t.created_at, t.post_json, m.stance, m.confidence, m.body_json FROM agent_threads t LEFT JOIN agent_thread_messages m ON m.thread_id = t.id AND m.step = 'moderator' AND m.status = 'ok' WHERE t.kind = 'news' ORDER BY t.created_at DESC LIMIT 1").first();
+  const post = parseJson(t?.post_json, {}) || {};
+  const news = t ? { thread_id: t.id, title: t.title, created_at: t.created_at, consensus: t.stance ?? null, confidence: t.confidence ?? null, tldr: clip(parseJson(t.body_json, {})?.summary, 300), headlines: (post.headlines || []).slice(0, 3) } : null;
+  return { h1, news };
+}
