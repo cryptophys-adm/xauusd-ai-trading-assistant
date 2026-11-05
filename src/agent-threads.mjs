@@ -661,3 +661,10 @@ export async function runHudAgentsThreads(env, { threadId, candleKey, readings =
   }
   return { skipped: false, thread_id: threadId, candle_key: candleKey, agents: results, elapsed_ms: clock() - started };
 }
+
+
+export const HUD_LIVE_ROOM_AGENTS = Object.freeze(["trade_management", "kinetic_engine", "fabio_amt", "aegis_footprint"]);
+
+export function hudLiveRoomEnabled(env) {
+  return hudAgentsEnabled(env) && liveRoomEnabled(env);
+}
