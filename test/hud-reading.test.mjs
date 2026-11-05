@@ -84,3 +84,35 @@ test("unknown or empty HUDs are unavailable, never invented", () => {
   assert.equal(readHud("grid_bot_protocol", { fields: {} }).available, false);
   assert.equal(readHud("not_a_hud", { fields: { foo: 1 } }).available, false);
 });
+
+test("Macro & Aether carries every Pine row when the macro series exist, and reads as natural language", () => {
+  const macroBundle = { ...bundle, external_series: {
+    "TVC:DXY": { H4: { candles: series(500, 240, Date.parse("2026-11-03T04:00:00Z")) } },
+    "CRYPTOCAP:USDT": { H4: { candles: series(500, 240, Date.parse("2026-11-03T04:00:00Z")) } },
+    "TVC:USOIL": { H1: { candles: series(500, 60, last) } }
+  } };
+  const f = buildHudSnapshot(macroBundle, { now }).huds.macro_aether.fields;
+  for (const key of ["consolidation_gravity", "kinetic_spread", "macro_cycle", "macro_shift", "asset_gravity", "oil_rsi", "q_gravity", "smri", "smr_phase"]) assert.ok(f[key] !== null && f[key] !== undefined, key);
+  const lines = readHud("macro_aether", { fields: f }).lines.map(l => l.text);
+  assert.ok(lines.length >= 8, lines.join(" | "));
+  for (const t of lines) assert.deepEqual(naturalLanguageErrors(t), [], t);
+  // Every enum decodes; none is echoed.
+  for (const fields of [
+    ...["risk_on", "risk_off"].map(macro_cycle => ({ macro_cycle })),
+    ...["reversal_due", "stagnant", "accelerating_dollar_up", "accelerating_dollar_down", "neutral"].map(macro_shift => ({ macro_shift, macro_shift_bars_4h: 3 })),
+    ...["bias_price_down", "bias_price_up", "neutral"].map(asset_gravity => ({ asset_gravity, oil_rsi: 55 })),
+    ...["bullish_pull", "bearish_pull", "balanced"].map(consolidation_gravity => ({ consolidation_gravity, consolidation_gravity_pct: 4 })),
+    ...["pull_up", "pull_down", "balanced"].map(q_gravity => ({ q_gravity, q_gravity_pct: 2 })),
+    ...["mark_up", "mark_down", "equilibrium"].map(smr_phase => ({ smr_phase, smri: 50 }))
+  ]) {
+    const text = readHud("macro_aether", { fields }).lines.map(l => l.text);
+    const token = Object.values(fields)[0];
+    assert.equal(text.length, 1, JSON.stringify(fields));
+    assert.ok(!token.includes("_") || !text[0].includes(token), `${token} must not be echoed: ${text[0]}`);
+    assert.deepEqual(naturalLanguageErrors(text[0]), [], text[0]);
+  }
+  // Without the macro series the macro rows are absent, never invented.
+  const plain = snapshot.huds.macro_aether.fields;
+  assert.equal(plain.macro_cycle, null);
+  assert.equal(plain.asset_gravity, null);
+});

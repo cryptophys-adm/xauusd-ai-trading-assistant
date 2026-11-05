@@ -6,6 +6,11 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- feat(hud): Macro & Aether Sensors complete (step 2 of the owner's timeframe-thread plan).
+  - **New rows.** `macro-aether.mjs` ports CONSOL. GRAVITY, Z3 KINETIC SPREAD, MACRO CYCLE, EST. MACRO SHIFT, ASSET GRAVITY (WTI), Q-GRAVITY PULL and MACRO SMR from GMI v12.70 and MizanLib.
+  - **Where they appear.** The H1 and M15 HUD snapshots carry them, and the Macro & Aether agent reads them in plain language.
+  - **Unchanged.** No hashed engine file changed.
+
 - feat(market-data): M5 and M15 derived locally from M1, and USOIL M15/H1 from USOIL M5; TradingView MCP budget 1200 → 800 (owner decision 2026-11-05).
   - **Why.** TradingView suspended the account's MCP access until 00:00 UTC for suspicious volume, which also stopped the pull adapter.
   - **Native pulls.**

@@ -203,6 +203,11 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - When on, it replaces the legacy live room and the per-H1 HUD agents (their budget moves here). Turning it `"false"` restores both.
 - Live: C0, C2, C3, C5, C6 and C7 are built. `HUD_AGENTS_ENABLED` is `"true"` in `wrangler.jsonc` (owner approval 2026-11-05, after the #94 preview-e2e proof). After each H1 synthesis, one agent per computed HUD (13) and a moderator post in Threads 1H, within `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`. At each 15m close, Trade Management, Kinetic Engine, Fabio AMT and Aegis Footprint speak in the live room, within `LIVE_ROOM_MAX_CALLS_PER_HOUR = 48`. Turning the flag to `"false"` stops new HUD posts at once.
 - Backlog (owner, 2026-11-05): B4 (merge the GMI core copy, needs a new H1 GMI approval in a calibration window) and the Grid Bot Protocol HUD. See `docs/BRIEF_HUD_AGENTS.md`.
+- **Macro & Aether Sensors complete** (owner decision 2026-11-05: every TradingView metric becomes agent data). `local-engines/producer/src/macro-aether.mjs` computes every row of the Pine HUD for the H1 and M15 snapshots:
+  - **Rows:** CONSOL. GRAVITY (TDM profile gravity), Z3 KINETIC SPREAD, MACRO CYCLE (DXY and USDT ROC), EST. MACRO SHIFT (macro kinematics on DXY and USDT 4h), ASSET GRAVITY (WTI RSI14 at the chart timeframe, from the USOIL M15 and H1 series), Q-GRAVITY PULL and MACRO SMR (the FVG reservoir).
+  - **MTF HURST and MTF Z-SCORE** were already in the snapshot.
+  - **Lookahead off:** the other series are read as last closed at the chart bar's close. TradingView's realtime bar can show a developing 4h DXY or USDT bar, so the macro rows may lag by one 4h bar.
+  - **Unverified:** no row is a webhook field, so every row reads as unverified. A missing series leaves its rows absent.
 
 ### Outcome scoring and stuck states (RFC_INDICATOR_AGENT_PLATFORM P1)
 - Code: `src/outcome-scoring.mjs`. Tables `outcome_scores`, `outcome_runs` and `stuck_states` (migrations `0005_outcome_scores.sql` and `0006_outcome_runs_version.sql`; also ensured at runtime). Rows carry `scoring_version`: candles scored by an older version are scored again within the lookback, and scorecards read only the current version. Owner approval 2026-11-05 for the definition.
