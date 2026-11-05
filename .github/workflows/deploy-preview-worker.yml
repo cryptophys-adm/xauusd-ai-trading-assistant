@@ -156,11 +156,21 @@ jobs:
           assert.equal(ready.status, "ready");
           assert.equal(ready.d1_analysis_runs, true);
 
-          const unauthorized = await fetch(base + "/evidence/local-calculation", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: "{}"
-          });
+          // A fresh preview Worker can still answer from an edge that has not received it yet
+          // (a Cloudflare 404 or HTML page). Retry only those edge answers; the Worker's own
+          // answer to an unauthenticated request is JSON and must be 401.
+          let unauthorized;
+          for (let attempt = 0; attempt < 10; attempt++) {
+            unauthorized = await fetch(base + "/evidence/local-calculation", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: "{}"
+            });
+            const isWorkerJson = (unauthorized.headers.get("content-type") || "").includes("application/json") && unauthorized.status !== 404;
+            if (isWorkerJson) break;
+            console.log("::warning::unauthenticated probe got an edge answer (HTTP " + unauthorized.status + "), retrying");
+            await new Promise(resolve => setTimeout(resolve, 3000));
+          }
           assert.equal(unauthorized.status, 401, "local calculation endpoint must reject unauthenticated requests");
 
           const symbol = "OANDA:XAUUSD";
