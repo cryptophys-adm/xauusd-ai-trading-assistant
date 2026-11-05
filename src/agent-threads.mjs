@@ -640,3 +640,12 @@ export async function readH1Thread(db, candleKey) {
   const post = h1Post(candleKey, synth);
   return { id: `h1:${candleKey}`, kind: "h1", ref_key: candleKey, title: h1Title(candleKey, post.decision), created_at: msgs[0]?.ts ?? null, post, messages: buildMessageTree(msgs) };
 }
+
+
+export function hudAgentIds() {
+  return ["r37_funnel","prophet","trade_management","interstellar_eyes","kinetic_engine","fabio_amt","chronos_matrix","aegis_footprint","tactical_muscles","macro_aether","gabfx_price_action","playbook_execution","decision_matrix","grid_bot_protocol"];
+}
+
+export function hudAgentsEnabled(env) {
+  return String(env?.HUD_AGENTS_ENABLED ?? "false").trim().toLowerCase() === "true";
+}
