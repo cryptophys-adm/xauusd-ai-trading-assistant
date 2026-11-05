@@ -6,6 +6,12 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- feat(shadow): GMI "Prophet risk hold" candidates `gmi_v12_70@latch8` and `gmi_v12_70@latch12`.
+  - **How they work.** `src/gmi-regate.mjs` recomputes the two points of GMI v12.70 that the Prophet structure feeds: `mtf_state`, and the R10 gate with its risk hold. It starts from the approved local GMI record's diagnostics, so the hashed engine is not forked.
+  - **Exactness.** With the active structure it reproduces GMI's comparable fields exactly (42 cases across two branches).
+  - **Shadow family.** `gmi_v12_70` is a new shadow family. Its control is checked against the approved records.
+- docs(rfc): owner decisions 2026-11-05. Decision 1: a local-only improved version is enough to prove it first. Decision 6: no limit on agents per room.
+
 - ci(preview-e2e): a War Room proof draws its random 15m bar only when the shared preview D1 has no room for it yet. Run 42080341191 drew a bar an earlier run had used and read that run's room.
 - ci(preview-e2e): transport errors between the runner and the preview edge (`ECONNRESET`, timeouts, socket errors) are retried up to 5 times. Every e2e request is idempotent. Run 42079728424 died on one reset right after a passing War Room proof.
 - fix(war-room): blank conclusion reasons are dropped before validation. A preview run on 2026-11-05 returned three reasons and an empty string, which failed the whole conclusion as `reasons_invalid`. A list with no non-blank reason still fails.
