@@ -2001,6 +2001,20 @@ export default {
       const result = await ingestM5Context(env, payload);
       return json(result.body, result.status);
     }
+    if (request.method === "POST" && url.pathname === "/preview/hud-snapshot") {
+      // Preview-only HTTP twin of the RPC LocalComputationIngress.submitHud, for the
+      // preview-e2e proof of the HUD agents. Production never sets PREVIEW_FIXTURES_ENABLED.
+      if (String(env.PREVIEW_FIXTURES_ENABLED || "false") !== "true") return json({ error: "Not found" }, 404);
+      if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
+        return json({ error: "Unauthorized" }, 401);
+      }
+      const limitedBody = await readBodyLimited(request, 65536);
+      if (limitedBody.tooLarge) return json({ error: "Payload exceeds 64 KiB limit" }, 413);
+      let payload: unknown;
+      try { payload = JSON.parse(limitedBody.text); } catch { return json({ error: "Request body must be valid JSON" }, 400); }
+      const result = await storeHudSnapshot(env, payload);
+      return json(result.body, result.status);
+    }
     if (request.method === "POST" && url.pathname === "/preview/news-analysis-fixture") {
       // Exists only where PREVIEW_FIXTURES_ENABLED is "true" (wrangler.preview.jsonc). Production never sets it.
       if (String(env.PREVIEW_FIXTURES_ENABLED || "false") !== "true") return json({ error: "Not found" }, 404);
