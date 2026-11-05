@@ -264,3 +264,29 @@ test("5m publisher is off unless M5_PARITY_PUBLISH is true, then posts timeframe
   const stale = await publishM5LocalComputation(e, { now: now + 15 * 60_000 });
   assert.equal(stale.status, "no_fresh_m5_close");
 });
+
+test("scheduled cron publishes the 5m parity records end to end (no swallowed failures)", async () => {
+  const posts = [];
+  const contexts = [];
+  const ai = {
+    async submit(body) { posts.push(body); return { status: 202, body: { status: "accepted" } }; },
+    async submitContext(body) { contexts.push(body); return { status: 202, body: { status: "accepted" } }; }
+  };
+  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai, M5_PARITY_PUBLISH: "true" });
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  const errors = [];
+  const originalError = console.error;
+  console.error = (...args) => { errors.push(args.join(" ")); };
+  try {
+    const pending = [];
+    await worker.scheduled({ cron: "*/5 * * * *" }, e, { waitUntil: (p) => pending.push(p) });
+    await Promise.all(pending);
+  } finally {
+    console.error = originalError;
+  }
+  assert.deepEqual(errors.filter((line) => /_failed/.test(line)), [], "the cron must not swallow a publish failure");
+  const m5 = posts.filter((p) => p.timeframe === "5");
+  assert.deepEqual(m5.map((p) => p.engine), ["mizan", "prophet", "gmi"]);
+  assert.ok(m5.every((p) => p.candle_key.startsWith("OANDA:XAUUSD:5:")));
+  assert.equal(contexts.length, 1);
+});
