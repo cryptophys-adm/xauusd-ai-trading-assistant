@@ -303,8 +303,11 @@ export async function readWarRoom(db, { barTime = null } = {}) {
   if (!rows.length) return null;
   const brief = rows.find(m => m.step === "brief") || null;
   const pick = (m) => ({ id: m.agent, name: agentName(m.agent), status: m.status, model: m.model, fallback_used: m.fallback_used, errors: m.errors, stance: m.stance, confidence: m.confidence, ts: m.ts, claim: m.claim, argument: m.argument, rebuts: m.rebuts, rebuts_names: (m.rebuts || []).map(agentName) });
-  const openings = rows.filter(m => m.step.startsWith("open:")).map(pick);
-  const debate = rows.filter(m => m.step.startsWith("debate:")).map(pick);
+  // Steps run in parallel, so rows land in completion order: show them in roster order.
+  const order = new Map((brief?.roster || []).map((id, i) => [id, i]));
+  const byRoster = (a, b) => (order.get(a.id) ?? 99) - (order.get(b.id) ?? 99);
+  const openings = rows.filter(m => m.step.startsWith("open:")).map(pick).sort(byRoster);
+  const debate = rows.filter(m => m.step.startsWith("debate:")).map(pick).sort(byRoster);
   const c = rows.find(m => m.step === "conclusion");
   const conclusion = c ? { status: c.status, stance: c.stance, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [], dissent: (c.dissent || []).map(id => ({ id, name: agentName(id) })), majority: c.majority ?? null, h1_decision: c.h1_decision ?? null, ts: c.ts } : null;
   const started = brief?.ts ?? rows[0].ts;

@@ -117,6 +117,16 @@ test("a unanimous room: the Risk Manager stress-tests the consensus", async () =
   assert.match(prompt, /The bus is unanimous\. Stress-test the consensus/);
 });
 
+test("openings read back in roster order, whatever order the parallel steps finished in", async () => {
+  // The news desk answers last; the bus still lists h1, news, technical, risk, then the HUDs.
+  const slow = fakeAI();
+  const run = slow.run;
+  slow.run = async (model, request) => { if (/"agent":"h1"/.test(request.messages[1].content) && !/debate/.test(request.messages[0].content)) await new Promise(r => setTimeout(r, 20)); return run(model, request); };
+  const e = env(slow);
+  await runWarRoomBar(e, task());
+  assert.deepEqual((await readWarRoom(e.DB)).openings.map(o => o.id), ["h1", "news", "technical", "risk", "kinetic_engine", "fabio_amt"]);
+});
+
 test("a failed opening stays out of the bus; the room still concludes", async () => {
   const e = env(fakeAI({ fail: new Set(["news"]) }));
   await runWarRoomBar(e, task());
