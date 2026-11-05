@@ -6,6 +6,17 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- feat(platform): RFC_INDICATOR_AGENT_PLATFORM P4, owner instruction 2026-11-05.
+  - **Binding.** The AI Worker binds `AGENTS` to the Cryptophys Platform `cryptophys-ai-kernel` `AgentRpc` entrypoint. The binding pins `host_worker` and carries no secret. It is production only; preview has no binding, so the code is a no-op there.
+  - **Reports.** One advisory report per meaningful event, sent from the parity sweep cron:
+    - `xauusd-reasoner`: each new H1 decision; a BUY↔SELL flip is a `warning`.
+    - `xauusd-moderator`: the War Room conclusion when its stance changes, otherwise at most once an hour.
+    - `hud-*`: a HUD stance moving into or out of BUY or SELL.
+  - **Failure handling.** A denial or a kernel rejection is recorded and never retried. Only a transport failure is retried, by the next sweep. Nothing is ever fatal to the chain.
+  - **Storage and API.** Migration `0007_platform_publications.sql` adds the cursors. `GET /api/platform/status` shows them.
+  - **Topology.** The topology test pins the binding to the production AI Worker.
+  - **Platform-side auditor.** The Indicator Auditor of RFC §6 lives in the platform (owner decision 5); no platform change is needed.
+
 - fix(scoring): scoring v3 (owner approval 2026-11-05). WAIT is missed only when a 2:1 trade would have won: `1 × ATR` on one side before `0.5 × ATR` on the other. In production, v2 still marked H1 WAIT right on only 1 of 35 candles, because over 4 H1 candles some side almost always reaches `0.5 × ATR` first. BUY and SELL scoring is unchanged. Rows are rescored within the lookback.
 - feat(15m,war-room): owner decisions A and B.
   - **A: calibration status once.**

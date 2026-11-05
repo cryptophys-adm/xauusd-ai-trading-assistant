@@ -25,6 +25,19 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
   - `TV_GATEWAY` → news Worker `TvGateway.ohlcv()`;
   - `AI_WORKER` → AI Worker `LocalComputationIngress.submit()`.
 - The dashboard calls `MARKET_DATA` → pull adapter `MarketDataReader.candles()`.
+- The AI Worker calls `AGENTS` → Cryptophys Platform `cryptophys-ai-kernel` `AgentRpc` (owner approval 2026-11-05, RFC_INDICATOR_AGENT_PLATFORM P4). This is the only binding to a Worker outside this repository, and it adds no Worker to the topology above.
+  - **Identity:** the binding pins `props.host_worker = "xauusd-ai-trading-assistant"`, and there is no secret or token. The kernel lets this Worker act only as the 21 XAUUSD agents registered with that `host_worker` (platform migration 0016), each with `tier_max = 1`. No other Worker, and not the preview config, may carry this binding. `host_worker` never takes another value. `test/ssot-topology.test.mjs` guards both rules.
+  - **What is sent** (`src/platform-reports.mjs`, in the parity sweep cron): one advisory report per meaningful event, never per tick.
+    - `xauusd-reasoner` (`xauusd_digest`): every new H1 chain decision. A BUY↔SELL flip is `warning`.
+    - `xauusd-moderator` (`xauusd_digest`): the War Room 15m conclusion when its stance changes, otherwise at most once an hour.
+    - `hud-*` (`hud_digest`): a HUD agent's War Room stance when it moves into or out of BUY or SELL.
+  - **Rules:**
+    - Observations only: decision and confidence, never size, lots, levels or order wording.
+    - `critical` is never sent, because the platform opens a GitHub issue for it.
+    - A denial (rate limit, kill switch, suspension) or a kernel rejection is recorded and not retried. Only a transport failure is retried, once, by the next sweep.
+    - Every failure is non-fatal: the chain runs whether the kernel is up or not.
+  - **Cursors and status:** cursors live in D1 `platform_publications` (migration `0007`). `GET /api/platform/status` shows `whoami("xauusd-moderator")`, cached for 5 minutes, and the publications.
+  - The platform reads this Worker only through `GET /api/decisions`, and it never writes here.
 
 ## 3. Three AI input lanes (local-primary)
 Owner decision, 2026-11-05: the architecture does not depend on webhooks. Approved local records drive the chain, and TradingView webhooks only calibrate the local engines. `INDICATOR_SOURCE` controls this: `"local"` is the default; `"webhook"` restores the legacy webhook-driven chain as a rollback.

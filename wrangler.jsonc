@@ -124,6 +124,15 @@
       "service": "xauusd-fundamental-news-ingestion",
       "entrypoint": "NewsIngestionService",
       "environment": "production"
+    },
+    // Cryptophys Platform AI Kernel (RFC_INDICATOR_AGENT_PLATFORM P4): advisory reports from the
+    // 21 agents this Worker hosts. No secret: the kernel trusts the pinned host_worker. Never
+    // change host_worker, and never add this binding to another Worker or to the preview config.
+    {
+      "binding": "AGENTS",
+      "service": "cryptophys-ai-kernel",
+      "entrypoint": "AgentRpc",
+      "props": { "host_worker": "xauusd-ai-trading-assistant" }
     }
   ],
   "queues": {
