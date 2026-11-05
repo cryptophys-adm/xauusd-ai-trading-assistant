@@ -88,6 +88,11 @@ export function timeframeKey(value) {
  * other timeframe (for example 5m or 15m parity comparators) are stored only:
  * they never run the Analyst -> Counselor -> Reasoner chain, the bus or Telegram.
  */
+/** HUD comparator webhook sources (for example prophet_r38_hud) are stored for parity only. */
+export function isHudSource(source) {
+  return typeof source === "string" && source.endsWith("_hud");
+}
+
 export function analysisAllowedForTimeframe(timeframe, configured = "60") {
   const key = timeframeKey(String(timeframe ?? ""));
   if (!key) return false;

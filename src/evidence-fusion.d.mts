@@ -26,3 +26,4 @@ export function containsCredentialFields(value: unknown, depth?: number): boolea
 export function stripCredentialFields(value: unknown, depth?: number): unknown;
 export function timeframeKey(value: unknown): string;
 export function analysisAllowedForTimeframe(timeframe: unknown, configured?: string): boolean;
+export function isHudSource(source: unknown): boolean;

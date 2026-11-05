@@ -1,5 +1,5 @@
 import { WorkerEntrypoint, tracing } from "cloudflare:workers";
-import { buildEvidenceFusion, analysisAllowedForTimeframe, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
+import { buildEvidenceFusion, analysisAllowedForTimeframe, isHudSource, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
 import { validateM5Context, freshM5Context } from "./m5-context.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { parseTradingViewJson } from "./tradingview-json.mjs";
@@ -1024,10 +1024,14 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   });
   // Only analysis timeframes (H1 in production) start the AI chain. Other timeframes,
   // such as 5m or 15m parity comparators, are stored for parity and nothing else.
-  if (!analysisAllowedForTimeframe(timeframe, env.ANALYSIS_TIMEFRAMES || "60")) {
+  // HUD comparator sources (*_hud) are parity evidence only: they never start the AI chain.
+  const storedOnlyReason = isHudSource(source)
+    ? "hud_comparator_source"
+    : !analysisAllowedForTimeframe(timeframe, env.ANALYSIS_TIMEFRAMES || "60") ? "timeframe_not_analysed" : null;
+  if (storedOnlyReason) {
     return json({
       status: "accepted", candle_key: candleKey, source,
-      analysis_status: "stored_only", queued: false, reason: "timeframe_not_analysed",
+      analysis_status: "stored_only", queued: false, reason: storedOnlyReason,
       normalized_non_finite_tokens: normalizedTokens
     }, 202);
   }
