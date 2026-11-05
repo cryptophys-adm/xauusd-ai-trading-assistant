@@ -6,6 +6,13 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- docs(hud-agents): owner answers to the Phase A open questions:
+  - 15m HUD agents with parity-verified data (Pine candidate comparator for H1 and 15m);
+  - non-reproducible HUD rows become H1 decision-reasoning output;
+  - the funnel is read per current candle;
+  - `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`.
+- `75c4bbb` (PR #66) docs: Phase A HUD agents assessment.
+- `6e49eb2` (PR #67) fix(chain): plain-language H1 decision text.
 - fix(chain): the H1 decision text (reasoning, confirmation, invalidation) is written in plain language.
   - The Reasoner prompt carries a natural-language rule, and there is a one-call rewrite of code-like text by the bus model.
   - The decision, prices and conditions are never changed, and a rewrite that adds a number is rejected.
