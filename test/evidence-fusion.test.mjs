@@ -89,6 +89,29 @@ test("rejects stale local calculation output", () => {
   assert.ok(result.errors.includes("calculation_stale"));
 });
 
+test("fusion judges a local record by its candle's close, not by when the analysis runs", () => {
+  // H1 candle 13:00, closed 14:00; its records were computed at 14:01. A retry or backfill
+  // 40 minutes after the close (Workers AI timeout) still fuses them: they are that
+  // candle's evidence, bound to it by candle_key.
+  const h1Time = "2026-11-01T13:00:00.000Z";
+  const h1Key = "OANDA:XAUUSD:60:" + Date.parse(h1Time);
+  const closeMs = Date.parse(h1Time) + 60 * 60_000;
+  const h1Input = (computedAt) => {
+    const input = completeInput();
+    Object.assign(input, { candleKey: h1Key, timeframe: "60", candleTime: h1Time });
+    for (const w of Object.values(input.webhookPayloads)) Object.assign(w, { timeframe: "60", candle_time: h1Time });
+    for (const item of input.localCalculations) Object.assign(item, { timeframe: "60", candle_time: h1Time, candle_key: h1Key, computed_at: new Date(computedAt).toISOString() });
+    return input;
+  };
+  const late = closeMs + 40 * 60_000;
+  const fused = buildEvidenceFusion(h1Input(closeMs + 60_000), late);
+  assert.ok(!fused.validation_errors.some(e => e.endsWith(":calculation_stale")), JSON.stringify(fused.validation_errors));
+  // Ingest still rejects a record that is old now.
+  assert.ok(validateLocalCalculation(h1Input(closeMs + 60_000).localCalculations[0], {}, late).errors.includes("calculation_stale"));
+  // A record recomputed long after its candle closed is stale for the fusion too.
+  assert.ok(buildEvidenceFusion(h1Input(closeMs + 45 * 60_000), closeMs + 46 * 60_000).validation_errors.includes("local_calculation:mizan:calculation_stale"));
+});
+
 test("rejects stale completed news analysis", () => {
   const input = completeInput();
   input.newsAnalysis.analyzed_at = "2026-11-01T01:00:00.000Z";

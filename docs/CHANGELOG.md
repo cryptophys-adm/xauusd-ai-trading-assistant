@@ -6,6 +6,12 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-05
 
+- fix(agents): a retried thread step (HUD agents, live room, news threads) replaces its stored failure instead of being ignored. Stored ok messages stay final, and the row keeps its id. Before, `INSERT OR IGNORE` kept the first `invalid_output` forever while each retry still spent a model call (preview-e2e on PR #95).
+- fix(agents): prompts for answers without a `refs` field (moderators, HUD agents) no longer ask the model to back claims with refs; they ask it to name sources in plain words. The HUD moderator had written the evidence paths into its summary and failed the natural-language check (preview-e2e on PR #95).
+- fix(fusion): a local record's freshness is judged from its candle's close (computed within 30 minutes of it), not from when the analysis runs. Retries and backfills after a Workers AI timeout no longer degrade the candle with `calculation_stale` (the 11:00 and 12:00 UTC candles of 2026-11-05). Ingest still rejects records that are old now.
+- fix(bus): the fallback model (a reasoning model whose hidden trace shares `max_tokens`) gets twice the token budget, and an answer cut off by the limit is recorded as `finish_reason_length` instead of malformed output. Found by preview-e2e on PR #95: the primary timed out and the fallback's round-2 answer stopped mid-JSON at 3072 tokens.
+- feat(hud): HUD agents on in production (`HUD_AGENTS_ENABLED`, owner approval 2026-11-05). Docs record owner decision "pilihan 1" (the 5m alerts may be deleted once `prophet_m5` and `gmi_m5` are approved) and the backlog (B4, Grid Bot Protocol).
+- test(worker): `test/worker-scheduled.test.mjs` bundles `src/index.ts` with esbuild and runs the real `scheduled()` handlers. The parity sweep cron approves a candle's local records and the backfill runs its analysis; the news cron fails into a logged error.
 - feat(live-room): Phase C6. Four HUD agents (Trade Management, Kinetic Engine, Fabio AMT, Aegis Footprint) speak in the live 15m room from the 15m HUD snapshot, behind `HUD_AGENTS_ENABLED`. `LIVE_ROOM_MAX_CALLS_PER_HOUR` goes from 36 to 48.
   - Preview only: the hourly model-call caps count rows in the preview D1 that every preview-e2e run shares, so several runs in one hour exhausted them (all bus messages `budget_exhausted`). Preview caps are now 150 (bus and live room) and 60 (HUD agents); production caps are unchanged.
 - feat(hud): Phase C5/C7. HUD agents in Threads 1H, behind `HUD_AGENTS_ENABLED` (off in production, on in preview).

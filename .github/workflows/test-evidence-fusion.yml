@@ -5,6 +5,8 @@ on:
     paths:
       - "src/**"
       - "test/**"
+      - "schema.sql"
+      - "migrations/**"
       - "package.json"
       - "tsconfig.json"
       - "wrangler.jsonc"

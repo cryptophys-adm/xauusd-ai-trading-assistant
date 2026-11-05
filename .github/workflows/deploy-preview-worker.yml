@@ -178,6 +178,21 @@ jobs:
           const candleTime = new Date(Date.now() - 60_000).toISOString();
           const candleKey = [symbol, timeframe, candleTime].join(":");
           const headers = { "content-type": "application/json", "x-webhook-secret": secret };
+          // A fresh preview Worker can answer a POST from an edge that has not received it yet,
+          // with an HTML page instead of the Worker's JSON (runs on 9d9306c and 324dd86 died on
+          // response.json() before any changed code ran). Every POST below goes through this
+          // retry: only a non-JSON edge answer is retried; any JSON answer is returned and
+          // asserted as is. The fixture POSTs are idempotent (deterministic event IDs and keys).
+          const rawFetch = globalThis.fetch;
+          globalThis.fetch = async (url, init) => {
+            if (init?.method !== "POST") return rawFetch(url, init);
+            for (let attempt = 1; ; attempt++) {
+              const response = await rawFetch(url, init);
+              if ((response.headers.get("content-type") || "").includes("application/json") || attempt >= 10) return response;
+              console.log("::warning::POST " + String(url).slice(base.length) + " got a non-JSON edge answer (HTTP " + response.status + "), retrying");
+              await new Promise(resolve => setTimeout(resolve, 3000));
+            }
+          };
 
           // `wrangler secret put` creates a new Worker version that reaches isolates gradually.
           // Before asserting authenticated behaviour, wait until the secret is accepted on

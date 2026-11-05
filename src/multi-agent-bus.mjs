@@ -278,7 +278,9 @@ export function parseModelObject(result) {
     return { obj: null, text: extractModelText(result), truncated: true };
   }
   const text = cleanModelText(extractModelText(result));
-  return { obj: extractJsonObject(text), text };
+  const obj = extractJsonObject(text);
+  // An answer cut off by the token limit is recorded as such, not as malformed output.
+  return obj || first?.finish_reason !== "length" ? { obj, text } : { obj: null, text, truncated: true };
 }
 
 function usageTokens(result) {
@@ -296,6 +298,11 @@ function withTimeout(promise, ms) {
   ]).finally(() => clearTimeout(timer));
 }
 
+// The fallback (glm-4.7-flash) is a reasoning model without reasoning_effort: its hidden
+// trace shares max_tokens with the answer, and at the primary's budget it was cut off
+// mid-JSON (preview-e2e, PR #95). It gets twice the budget.
+export const FALLBACK_TOKEN_FACTOR = 2;
+
 function requestFor(model, messages, schemaName, schema, maxTokens, effort, primary) {
   // The primary model (glm-5.3-flash) takes the Chat Completions form with a
   // strict json_schema and reasoning_effort (low | high | max; "medium" would
@@ -303,7 +310,7 @@ function requestFor(model, messages, schemaName, schema, maxTokens, effort, prim
   // validated the same way afterwards.
   return primary
     ? { messages, max_completion_tokens: maxTokens, temperature: 0.1, reasoning_effort: effort, response_format: { type: "json_schema", json_schema: { name: schemaName, strict: true, schema } } }
-    : { messages, max_tokens: maxTokens, temperature: 0.1 };
+    : { messages, max_tokens: maxTokens * FALLBACK_TOKEN_FACTOR, temperature: 0.1 };
 }
 
 /**
