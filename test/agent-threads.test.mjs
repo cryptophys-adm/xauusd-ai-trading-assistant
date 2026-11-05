@@ -508,3 +508,25 @@ test("live room: HUD agents off means no HUD posts", async () => {
   const items = await readLive(e.DB, {});
   assert.ok(!items.some(m => String(m.step).startsWith("hud:")));
 });
+
+test("live room: a 15m HUD snapshot carried in the task is used without any KV read", async () => {
+  const key15 = "OANDA:XAUUSD:15:" + (Date.parse(BAR) - 15 * 60_000);
+  const snapshot = { schema_version: "cryptophys.hud-snapshot.v1", timeframe: "15", candle_key: key15, computed_at: BAR, huds: { fabio_amt: { fields: { close: 4005, poc: 4001, vah: 4010, val: 3995, footprint_status: "BUY CONTROL" }, parity: {} } } };
+  const ai = fakeAI(({ sys, user }) => {
+    if (/one agent per Pine HUD, in a live XAUUSD trading room/.test(sys)) {
+      const agent = (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1];
+      return { agent, stance: "WAIT", confidence: 0.4, insight: "Price sits inside the value area, which is not yet calibrated on this chart." };
+    }
+    return undefined;
+  });
+  const e = env({ AI: ai, HUD_AGENTS_ENABLED: "true" });
+  await runLiveRoomBar(e, { bar_time: BAR, hud: snapshot });
+  const steps = (await readLive(e.DB, {})).map(m => m.step);
+  assert.deepEqual(steps, ["technical", "risk", "hud:fabio_amt", "moderator"]);
+  // A snapshot for another bar is ignored.
+  const other = { ...snapshot, candle_key: "OANDA:XAUUSD:15:1" };
+  resetThreadSchemaCacheForTests();
+  const e2 = env({ AI: ai, HUD_AGENTS_ENABLED: "true" });
+  await runLiveRoomBar(e2, { bar_time: BAR, hud: other });
+  assert.ok(!(await readLive(e2.DB, {})).some(m => String(m.step).startsWith("hud:")));
+});

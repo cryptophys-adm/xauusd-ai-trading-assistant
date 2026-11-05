@@ -131,12 +131,17 @@ export function buildFifteenMinuteCandles(bars5m, { limit = 4 } = {}) {
   return candles.slice(-limit);
 }
 
-export function buildLiveRoomTask({ barTime, context = null, enqueuedAt = new Date().toISOString() } = {}) {
+export function buildLiveRoomTask({ barTime, context = null, hud = null, enqueuedAt = new Date().toISOString() } = {}) {
   if (!Number.isFinite(Date.parse(String(barTime ?? "")))) throw new TypeError("live room task requires a valid barTime");
   const iso = new Date(Date.parse(barTime)).toISOString();
-  // The 5m context travels inside the task, so the consumer never depends on a
-  // KV read that may not have propagated to its location yet.
-  return { kind: "live_room", event_id: `live_room:${iso}`, bar_time: iso, candle_key: `live15m:${iso}`, context, enqueued_at: enqueuedAt };
+  // The 5m context and the 15m HUD snapshot travel inside the task, so the consumer
+  // never depends on a KV read that may not have propagated to its location yet.
+  return { kind: "live_room", event_id: `live_room:${iso}`, bar_time: iso, candle_key: `live15m:${iso}`, context, ...(hud ? { hud } : {}), enqueued_at: enqueuedAt };
+}
+
+/** Candle key of the 15m bar that closes at closeIso. */
+export function m15KeyForClose(closeIso) {
+  return `OANDA:XAUUSD:15:${Date.parse(closeIso) - FIFTEEN_MINUTES_MS}`;
 }
 
 let schemaReady = false;
@@ -527,7 +532,9 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
   if (hudAgentsEnabled(env)) {
     let hud = null;
     try {
-      const snapshot = await loadHudSnapshot(env, { timeframe: "15", candleKey: `OANDA:XAUUSD:15:${Date.parse(barTime) - FIFTEEN_MINUTES_MS}` });
+      const key15 = m15KeyForClose(barTime);
+      const carried = task.hud && typeof task.hud === "object" && task.hud.candle_key === key15 ? task.hud : null;
+      const snapshot = carried || await loadHudSnapshot(env, { timeframe: "15", candleKey: key15 });
       hud = snapshot ? await hudReadings(env, snapshot) : null;
     } catch { hud = null; }
     for (const id of HUD_LIVE_ROOM_AGENTS) {

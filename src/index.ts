@@ -141,7 +141,7 @@ import { storeHudSnapshot, loadHudSnapshot, hudReadings } from "./hud-store.mjs"
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
-import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents } from "./agent-threads.mjs";
+import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents, m15KeyForClose } from "./agent-threads.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
@@ -1696,8 +1696,14 @@ async function ingestM5Context(env: Env, payload: unknown): Promise<{ status: nu
   // The live room meets at each 15m candle close; every 5m context still refreshes the KV
   // execution context above.
   if (liveRoomEnabled(env) && isFifteenMinuteClose(p.candle_time)) {
+    // Phase C6: the 15m HUD snapshot is read here, where it was just written, and carried
+    // in the task (the consumer may run where the KV write has not propagated yet).
+    let hud: unknown = null;
+    if (hudAgentsEnabled(env)) {
+      try { hud = await loadHudSnapshot(env, { timeframe: "15", candleKey: m15KeyForClose(String(p.candle_time)) }); } catch { hud = null; }
+    }
     try {
-      await sendQueueTask(env.XAUUSD_EVENTS, buildLiveRoomTask({ barTime: String(p.candle_time), context: stored }) as unknown as QueueTask);
+      await sendQueueTask(env.XAUUSD_EVENTS, buildLiveRoomTask({ barTime: String(p.candle_time), context: stored, hud: hud as Record<string, unknown> | null }) as unknown as QueueTask);
     } catch (error) {
       console.error("live_room_enqueue_failed", error instanceof Error ? error.message : String(error));
     }
