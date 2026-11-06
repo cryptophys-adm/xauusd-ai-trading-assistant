@@ -56,6 +56,19 @@ Owner decision, 2026-11-05: the architecture does not depend on webhooks. Approv
    - The indicator values the agents read (`source_payloads`, `origin: "local_computation"`) are the approved records' comparable fields. These are the same field names and codes the TradingView alerts carry.
    - A candle whose approved local records do not arrive within 30 minutes of the close is recorded as a fail-closed WAIT. A revoked or never-approved identity therefore never trades.
 2. **TradingView webhook** (calibration only). The sources are `prophet_r38`, `prophet_r37_ssot` and `gmi_v12_70`, on H1 and 5m.
+   - **Prophet is read as one indicator** (owner decision 2026-11-06).
+     - Prophet R38 (the standalone indicator) and Prophet R37 (the core inside GMI, which sends `prophet_r37_ssot`) share one MizanLib structure core: their `d_enc` and subtype are identical in production.
+     - Every reading therefore decodes them as a single "Prophet": R38's signal and trade management, R37's consensus direction and confirmation candle, and the shared structure once. This covers the TradingView reading of the H1 chain, the H1 bus, the timeframe desks and the Prophet HUD agent.
+     - The Prophet HUD agent reads, in order:
+       1. its signal (R38 confirmations);
+       2. its direction, from the R37 consensus (GMI's `prophet_dir`, equal to the R37 alert's direction);
+       3. its structure;
+       4. its trade management;
+       5. its setup (setup gate and cycles);
+       6. its regime.
+     - The signal, direction, structure and management lines are each verified by parity.
+     - The direction is Prophet's bias.
+     - The two alerts stay separate in TradingView for calibration, because the R37 alert proves that GMI's structure equals Prophet's.
    - Webhooks are stored and compared field by field with the local records. They never start the chain and are never decision evidence (`input_lanes.tradingview_webhook.role: "calibration_only"`).
    - Approval persists while no webhook arrives. A mismatch during a calibration run revokes the identity, and the chain then fails closed until it re-earns 24/24.
    - **Input mismatch** (owner decision 2026-11-06). When only the input bar differs (open, high, low, close or volume) and every indicator field agrees, the comparison is `input_mismatch`.

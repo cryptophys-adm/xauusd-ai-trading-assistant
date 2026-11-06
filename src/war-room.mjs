@@ -43,7 +43,7 @@ export function warRoomEnabled(env) {
  * is the Higher-Timeframe Desk's role.
  */
 export const DESK_AGENTS = Object.freeze({
-  m15: { name: "15m Desk", role: "the local Prophet R38, Prophet R37 and GMI computation of the 15m candle that just closed: this timeframe's own signal" },
+  m15: { name: "15m Desk", role: "the local Prophet (signal, direction, structure, trade management) and GMI computation of the 15m candle that just closed: this timeframe's own signal" },
   htf: { name: "Higher-Timeframe Desk", role: "the H1 decision chain, its TradingView reading and the latest 1H War Room conclusion: the higher-timeframe constraint" },
   news: { name: "News Analyst", role: "the fundamental news of the last 24 hours: the daily bias for gold and the headlines behind it" },
   technical: { name: "Technical Analyst", role: "price action only: the closed 15m candles and the 5m execution read" },

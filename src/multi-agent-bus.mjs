@@ -190,7 +190,7 @@ export function buildBusEvidence(row) {
 
 const TECHNICAL_WEBHOOK_RULE =
   "The tradingview object is the decoded meaning of the three TradingView alerts for this candle; call it \"the TradingView reading\", never by a field name. " +
-  "Interpret each indicator by name (Prophet R38, Prophet R37 and GMI v12.70) in your own words: what it signals, whether anything is confirmed, and whether they agree. " +
+  "Interpret each indicator by name (Prophet and GMI v12.70) in your own words: what it signals, whether anything is confirmed, and whether they agree. Prophet is one indicator: its signal, direction, structure and trade management come in one reading. " +
   "Do this even when the decision is WAIT, then explain how it fits the rest of the evidence.";
 
 const RULES = [

@@ -78,17 +78,32 @@ test("computed from verified bars: only pure bar formulas, and only when the can
   assert.equal(calibrationNote({ verified_lines: 2, total_lines: 5 }, "x"), "2 verified by parity (of 5 statements)");
 });
 
-test("Prophet reads its state: the cycle bias and the setup gate, like the Prophet HUD on TradingView (Prophet audit 2026-11-06)", () => {
+test("Prophet reads its setup: the setup gate and the cycles, like the Prophet HUD on TradingView (Prophet audit 2026-11-06)", () => {
   const base = { d_enc: 0, structure_subtype: 0, t_enc: 0 };
   const bull = readHud("prophet", { fields: { ...base, cycle_intensity: 3, gate_status: "BUY_WAIT_STRUCTURE" } });
-  assert.ok(bull.lines.some(l => l.text === "Prophet's state: a bullish bias from all three cycles, and a buy setup is waiting for structure confirmation."), bull.lines.map(l => l.text).join(" | "));
+  assert.ok(bull.lines.some(l => l.text === "Prophet's setup: a buy setup is waiting for structure confirmation, and all three Prophet cycles point up."), bull.lines.map(l => l.text).join(" | "));
   const mixed = readHud("prophet", { fields: { ...base, cycle_intensity: 1, gate_status: "NO_ACTIVE_SETUP" } });
-  assert.ok(mixed.lines.some(l => l.text === "Prophet's state: no bias, because the three cycles do not agree, and no buy or sell setup is active."));
+  assert.ok(mixed.lines.some(l => l.text === "Prophet's setup: no buy or sell setup is active, and the three Prophet cycles do not agree."));
   const risk = readHud("prophet", { fields: { ...base, t_enc: 4, cycle_intensity: -3, gate_status: "SELL_CONFIRMED" } });
-  assert.ok(risk.lines.some(l => /^Prophet's state: a bearish bias from all three cycles, and the sell setup is confirmed; a risk veto calls for reducing risk\.$/.test(l.text)));
+  assert.ok(risk.lines.some(l => /^Prophet's setup: the sell setup is confirmed, and all three Prophet cycles point down; a risk veto calls for reducing risk\.$/.test(l.text)));
   // Without the setup gate the cycle line stays as it was.
   assert.ok(readHud("prophet", { fields: { ...base, cycle_intensity: 3 } }).lines.some(l => l.text === "On the cycle read, all three Prophet cycles point up."));
   for (const r of [bull, mixed, risk]) for (const l of r.lines) assert.deepEqual(naturalLanguageErrors(l.text), [], l.text);
+});
+
+test("Prophet reads as one indicator: R38 signal, R37 direction, shared structure, management, state (owner decision 2026-11-06)", () => {
+  const fields = { buy_confirmed: false, sell_confirmed: false, prophet_dir: 1, d_enc: -1, structure_subtype: 0, t_enc: 3, cycle_intensity: 3, gate_status: "BUY_WAIT_PRICE" };
+  const r = readHud("prophet", { fields, verified: ["buy_confirmed", "sell_confirmed", "prophet_dir", "d_enc", "structure_subtype", "t_enc"] });
+  const texts = r.lines.map(l => l.text);
+  assert.equal(texts[0], "Prophet's signal: no buy or sell confirmation on this closed candle.");
+  assert.equal(texts[1], "Prophet's direction is bullish, with momentum and structure in agreement.");
+  assert.match(texts[2], /^Prophet's structure shows a bearish divergence/);
+  assert.equal(r.lines.slice(0, 4).every(l => l.verified), true, "signal, direction, structure and management are alert fields");
+  assert.ok(texts.some(t => /^Prophet's setup: a buy setup is waiting for price confirmation, and all three Prophet cycles point up/.test(t)));
+  const sell = readHud("prophet", { fields: { ...fields, sell_confirmed: true, sell_high_quality: true, prophet_dir: 0 } });
+  assert.equal(sell.lines[0].text, "Prophet's signal: a confirmed SELL on this closed candle that also passed the high-quality filter.");
+  assert.equal(sell.lines[1].text, "Prophet has no clear direction: its momentum and structure do not agree, or both are flat.");
+  for (const t of [...texts, ...sell.lines.map(l => l.text)]) assert.deepEqual(naturalLanguageErrors(t), [], t);
 });
 
 test("all enum tokens decode to sentences", () => {

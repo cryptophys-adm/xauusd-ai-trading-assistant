@@ -6,6 +6,13 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(prophet): Prophet R38 and R37 read as one indicator (owner decision 2026-11-06, "so it is not ambiguous").
+  - **Why one indicator:** both share one MizanLib structure core; their `d_enc` and subtype were identical on all 55 production H1 candles.
+  - **What R37 adds:** its consensus direction was bullish or bearish on 29 of them, while R38's signal was set once. That consensus direction is the bias Prophet seemed to lack.
+  - **The interpreter** (H1 chain, H1 bus, timeframe desks) now writes one "Prophet: …" line: R38's signal and trade management, R37's direction and confirmation candle, and the structure once.
+  - **The Prophet HUD agent** reads its signal and direction first, then structure, management, setup and regime. The signal and direction come from the same snapshot, through the R37 Funnel and Trade Management panels, and are verified by parity.
+  - **Prompts and desk roles** name "Prophet" instead of "Prophet R38, Prophet R37".
+  - **Not changed:** the two TradingView alerts stay separate for calibration.
 - feat(rooms): every agent states a bias beside its action; Prophet reads its state; a BUY or SELL conclusion needs support (owner decision 2026-11-06, Prophet audit).
   - **Audit:**
     - The AI Worker reads Prophet R38 correctly. The alert fields equal the local reading (verified by parity).
@@ -16,7 +23,7 @@ what changed and when, by merge commit and PR.
     - Room leans therefore read near neutral.
     - The one confirmed sell (5 Nov 06:00) was blocked by the GMI gate conflict, by design.
   - **Bias:** every opening now gives `bias` (BULLISH, BEARISH or NEUTRAL) beside its action. Room leans and the Global Conclusion read it, and Nexus shows "WAIT · bias bullish".
-  - **Prophet state:** the Prophet reading gains its state from the setup gate the snapshot computes for the R37 Funnel, for example "a bullish bias from all three cycles, and a buy setup is waiting for structure confirmation", plus a risk veto (`t_enc 4`) or reversal watch (`t_enc 3`).
+  - **Prophet setup:** the Prophet reading gains its setup from the setup gate the snapshot computes for the R37 Funnel, for example "a buy setup is waiting for structure confirmation, and all three Prophet cycles point up", plus a risk veto (`t_enc 4`) or reversal watch (`t_enc 3`).
   - **Support rule:** a BUY or SELL conclusion needs at least one agent holding that stance. A conclusion that breaks it, or the confirmation rule, gets one correction call. The preview run had a BUY over a unanimous WAIT room.
 - feat(war-room): each room has its own timeframe desk; the War Room conclusion looks as before in every tab (owner feedback 2026-11-06).
   - **15m room:**
