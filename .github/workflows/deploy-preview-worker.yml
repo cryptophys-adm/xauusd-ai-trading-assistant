@@ -601,6 +601,13 @@ jobs:
           assert.ok(["BUY", "SELL", "WAIT"].includes(strategy.decision));
           assert.deepEqual(strategy.layers.map((l) => l.key), ["D1", "H4", "H1", "M15", "M5"]);
           assert.ok(!/lot|position size of/i.test(JSON.stringify(strategy)), "no position size");
+          // Key Level Agent (owner decision 2026-11-06): zones of every chart's key levels.
+          const keyLevelsResponse = await fetch(base + "/api/key-levels");
+          assert.equal(keyLevelsResponse.status, 200, "the Key Level Agent is served");
+          const keyLevels = (await keyLevelsResponse.json()).key_levels;
+          assert.ok(Array.isArray(keyLevels.zones) && Array.isArray(keyLevels.candidates), "zones and candidates");
+          assert.ok(keyLevels.candidates.every((z) => z.sources >= 2), "a candidate has two or more sources");
+          console.log("KEY LEVELS PROOF " + JSON.stringify({ price: keyLevels.price, raw: keyLevels.raw_count, zones: keyLevels.zones.length, candidates: keyLevels.candidates.length, summary: keyLevels.summary }));
           const legacyDashboard = await fetch(base + "/dashboard", { redirect: "manual" });
           assert.equal(legacyDashboard.status, 302, "the old debate/raw dashboard redirects to Nexus");
 

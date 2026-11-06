@@ -19,6 +19,7 @@ import { readTimeframeThread } from "./timeframe-threads.mjs";
 import { readWarRoom } from "./war-room.mjs";
 import { readNewsDaily } from "./news-daily.mjs";
 import { loadHudSnapshot } from "./hud-store.mjs";
+import { buildKeyLevels } from "./key-level-agent.mjs";
 
 export const STRATEGY_VERSION = "cryptophys.strategy-engine.v1";
 export const TREND_WEIGHTS = Object.freeze({ D1: 0.5, H4: 0.5 });
@@ -34,7 +35,6 @@ const LAYER = {
   M15: { label: "15m", role: "Location" },
   M5: { label: "5m", role: "Trigger" }
 };
-const CAMARILLA_TF = { "15": "15m", "60": "1H", "240": "4H", D: "daily", W: "weekly" };
 
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
 const r2 = (v) => (isNum(v) ? Math.round(v * 100) / 100 : null);
@@ -79,78 +79,43 @@ function roomLayer(key, room, now) {
 }
 
 /**
- * The key levels around price from the 1H and 15m HUD snapshots: Camarilla (15m, 1H, 4H, daily,
- * weekly), daily and weekly CPR, the 1H value area, and the low and high of the recent 15m bars.
- * Levels closer than `merge` are merged into one with both labels.
- */
-export function keyLevels({ h1Snapshot = null, m15Snapshot = null, m15Bars = [], merge = 0 } = {}) {
-  const out = [];
-  // Major levels (Camarilla H4/H5/L4/L5, the pivots, the value area) are targets and obstacles;
-  // minor ones (Camarilla H3/L3, the 15m swing) only anchor entries and stops.
-  const add = (price, label, kind, major = true) => { if (isNum(price) && price > 0) out.push({ price, labels: [label], kind, major }); };
-  for (const snap of [h1Snapshot, m15Snapshot]) {
-    const cam = snap?.huds?.interstellar_eyes?.fields?.camarilla || {};
-    for (const [tf, lv] of Object.entries(cam)) {
-      if (!lv || !CAMARILLA_TF[tf]) continue;
-      for (const k of ["h3", "h4", "h5", "l3", "l4", "l5"]) add(lv[k], `${CAMARILLA_TF[tf]} Camarilla ${k.toUpperCase()}`, "camarilla", !k.endsWith("3"));
-    }
-  }
-  const chronos = h1Snapshot?.huds?.chronos_matrix?.fields || m15Snapshot?.huds?.chronos_matrix?.fields || {};
-  for (const [name, cpr] of [["daily", chronos.daily_cpr], ["weekly", chronos.weekly_cpr]]) {
-    if (!cpr) continue;
-    add(cpr.pivot, `${name} pivot`, "cpr");
-    add(cpr.tc, `${name} CPR top`, "cpr");
-    add(cpr.bc, `${name} CPR bottom`, "cpr");
-  }
-  const fabio = h1Snapshot?.huds?.fabio_amt?.fields || {};
-  add(fabio.poc, "1H point of control", "value");
-  add(fabio.vah, "1H value area high", "value");
-  add(fabio.val, "1H value area low", "value");
-  const recent = (m15Bars || []).slice(-8).filter((b) => isNum(b?.high) && isNum(b?.low));
-  if (recent.length >= 3) {
-    add(Math.min(...recent.map((b) => b.low)), "15m swing low", "swing", false);
-    add(Math.max(...recent.map((b) => b.high)), "15m swing high", "swing", false);
-  }
-  out.sort((a, b) => a.price - b.price);
-  const merged = [];
-  for (const l of out) {
-    const last = merged.at(-1);
-    if (last && merge > 0 && l.price - last.price < merge) { last.labels.push(...l.labels); last.price = (last.price + l.price) / 2; last.major = last.major || l.major; }
-    else merged.push({ ...l, labels: [...l.labels] });
-  }
-  return merged.map((l) => ({ price: r2(l.price), label: [...new Set(l.labels)].join(" / "), kind: l.kind, major: l.major }));
-}
-
-/**
- * Entry, stop and targets for a direction (+1 long, -1 short) from the price, the key levels and
- * the 1H ATR. `atLevel` says whether price already sits at a level with the trade; otherwise the
- * planned entry is the nearest level with the trade (a pullback).
+ * Entry, stop and targets for a direction (+1 long, -1 short) from the price, the key level zones
+ * ({ low, high, price, label, major }; a plain level is a zone of zero width) and the 1H ATR.
+ * - At a zone with the trade (price inside it or within 0.35 ATR of it, or inside a demand or
+ *   supply zone of the 15m HUDs): the entry is the price. Otherwise the planned entry is the
+ *   near edge of the nearest zone with the trade (a pullback).
+ * - The stop sits beyond the far edge of the first zone against the trade at least 0.5 ATR from
+ *   the entry, padded by 0.2 ATR; without one, or beyond 2.5 ATR, it is 1.5 ATR.
+ * - The targets are the near edges of the next two MAJOR zones (Key Level Agent candidates), each
+ *   at least 0.5 ATR beyond the previous one, or 2R and 3R projections.
  */
 export function tradeLevels({ dir, price, levels, atrH1, inZone = false }) {
   if (!dir || !isNum(price) || !isNum(atrH1) || atrH1 <= 0) return null;
   const near = 0.35 * atrH1, gap = 0.5 * atrH1, pad = 0.2 * atrH1;
-  const against = levels.filter((l) => (dir > 0 ? l.price < price : l.price > price)).sort((a, b) => dir * (b.price - a.price));
-  const nearest = against[0] ?? null;
-  const atLevel = inZone || (nearest && Math.abs(price - nearest.price) <= near);
-  const entry = atLevel ? price : nearest ? nearest.price : price;
-  const entryNote = atLevel ? (inZone ? "price is inside a demand or supply zone with the trade" : `price holds at ${nearest.label}`) : nearest ? `a pullback to ${nearest.label}` : "price";
-  // The stop: beyond the next level against the trade at least `gap` away, padded; 0.5 to 2.5 ATR.
-  const stopLevel = levels.filter((l) => (dir > 0 ? l.price <= entry - gap : l.price >= entry + gap)).sort((a, b) => dir * (b.price - a.price))[0] ?? null;
-  let stop = stopLevel ? stopLevel.price - dir * pad : null;
-  let stopNote = stopLevel ? `beyond ${stopLevel.label}` : null;
+  const lo = (z) => (isNum(z.low) ? z.low : z.price), hi = (z) => (isNum(z.high) ? z.high : z.price);
+  const nearEdge = (z) => (dir > 0 ? hi(z) : lo(z)), farEdge = (z) => (dir > 0 ? lo(z) : hi(z));
+  // Zones with the trade's back to them: support for a long, resistance for a short.
+  const behind = levels.filter((z) => (dir > 0 ? lo(z) <= price : hi(z) >= price)).sort((a, b) => dir * (nearEdge(b) - nearEdge(a)));
+  const nearest = behind[0] ?? null;
+  const atZone = nearest && price >= lo(nearest) - near && price <= hi(nearest) + near;
+  const atLevel = inZone || Boolean(atZone);
+  const entry = atLevel ? price : nearest ? nearEdge(nearest) : price;
+  const entryNote = atZone ? `price holds at ${nearest.label}` : inZone ? "price is inside a demand or supply zone with the trade" : nearest ? `a pullback to ${nearest.label}` : "price";
+  const stopZone = levels.filter((z) => dir * (entry - farEdge(z)) >= gap).sort((a, b) => dir * (farEdge(b) - farEdge(a)))[0] ?? null;
+  let stop = stopZone ? farEdge(stopZone) - dir * pad : null;
+  let stopNote = stopZone ? `beyond ${stopZone.label}` : null;
   const risk0 = isNum(stop) ? Math.abs(entry - stop) : null;
   if (!isNum(risk0) || risk0 > 2.5 * atrH1) { stop = entry - dir * 1.5 * atrH1; stopNote = "1.5 times the 1H average range"; }
   const risk = Math.abs(entry - stop);
-  // Targets: the next MAJOR levels with the trade (the obstacles price must clear), each at least
-  // `gap` beyond the previous one.
-  const ahead = levels.filter((l) => l.major !== false && (dir > 0 ? l.price >= entry + gap : l.price <= entry - gap)).sort((a, b) => dir * (a.price - b.price));
+  const targetEdge = (z) => (dir > 0 ? lo(z) : hi(z));
+  const ahead = levels.filter((z) => z.major !== false && dir * (targetEdge(z) - entry) >= gap).sort((a, b) => dir * (targetEdge(a) - targetEdge(b)));
   const t1 = ahead[0] ?? null;
-  const t2 = t1 ? ahead.find((l) => dir * (l.price - t1.price) >= gap) ?? null : null;
-  const tp1 = t1 ? t1.price : entry + dir * 2 * risk;
-  const tp2 = t2 ? t2.price : entry + dir * Math.max(3 * risk, Math.abs(tp1 - entry) + risk);
+  const t2 = t1 ? ahead.find((z) => dir * (targetEdge(z) - targetEdge(t1)) >= gap) ?? null : null;
+  const tp1 = t1 ? targetEdge(t1) : entry + dir * 2 * risk;
+  const tp2 = t2 ? targetEdge(t2) : entry + dir * Math.max(3 * risk, Math.abs(tp1 - entry) + risk);
   const rr = (tp) => r2(Math.abs(tp - entry) / risk);
   return {
-    at_level: Boolean(atLevel), entry: r2(entry), entry_note: entryNote,
+    at_level: atLevel, entry: r2(entry), entry_note: entryNote,
     stop: r2(stop), stop_note: stopNote, risk: r2(risk),
     tp1: r2(tp1), tp1_note: t1 ? t1.label : "a 2R projection",
     tp2: r2(tp2), tp2_note: t2 ? t2.label : "a projection beyond the first target",
@@ -192,7 +157,7 @@ function triggerOf(dir, { confirmations, m15Snapshot }) {
  * Pure: the strategy from the four War Rooms (every agent's bias), News Daily, the 1H and 15m HUD
  * snapshots, the latest confirmations and the closed 1H and 15m bars.
  */
-export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h1Chain = null, now = Date.now() } = {}) {
+export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, now = Date.now() } = {}) {
   const layers = Object.fromEntries(["D1", "H4", "H1", "M15"].map((k) => [k, roomLayer(k, rooms[k], now)]));
   const usable = (k) => layers[k].available && !layers[k].stale;
 
@@ -216,7 +181,13 @@ export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15S
 
   const atrH1 = atr(h1Bars);
   const price = [m15Bars.at(-1)?.close, m15Snapshot?.huds?.interstellar_eyes?.fields?.close, h1Snapshot?.huds?.interstellar_eyes?.fields?.close].find(isNum) ?? null;
-  const levels = keyLevels({ h1Snapshot, m15Snapshot, m15Bars, merge: isNum(atrH1) ? 0.1 * atrH1 : 0 });
+  // Key Level Agent (owner decision 2026-11-06): the zones where the key levels of every chart stack.
+  const keyLevelReading = buildKeyLevels({
+    snapshots: { "15": m15Snapshot, "60": h1Snapshot, "240": h4Snapshot, "1D": d1Snapshot },
+    bars: { M15: m15Bars, H1: h1Bars, H4: h4Bars, D1: d1Bars, W1: w1Bars }, price, atrH1
+  });
+  const zoneText = (z) => `${z.candidate ? "the" : "a"} ${z.low === z.high ? z.low.toFixed(2) : `${z.low.toFixed(2)}–${z.high.toFixed(2)}`} ${z.candidate ? "key zone" : "level"} (${z.label})`;
+  const levels = keyLevelReading.zones.map((z) => ({ low: z.low, high: z.high, price: z.price, major: z.candidate, label: zoneText(z) }));
   const zones = { ...(m15Snapshot?.huds?.aegis_footprint?.fields || {}), ...(m15Snapshot?.huds?.gabfx_price_action?.fields || {}) };
   const inZone = dir > 0 ? zones.in_bull_order_block === true || zones.in_bull_mitigation === true || zones.in_qm_buy === true || zones.in_rbs === true
     : dir < 0 ? zones.in_bear_order_block === true || zones.in_bear_mitigation === true || zones.in_qm_sell === true || zones.in_sbr === true : false;
@@ -252,7 +223,7 @@ export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15S
     why_direction: why, alignment: r2(alignment), trend: r2(trend),
     price: r2(price), atr_h1: r2(atrH1),
     plan, min_rrr: MIN_RRR,
-    key_levels: levels.filter((l) => !isNum(price) || !isNum(atrH1) || Math.abs(l.price - price) <= 4 * atrH1),
+    key_levels: keyLevelReading,
     layers: layerList, trigger, vetoes, cautions,
     h1_chain: h1Chain ? { decision: h1Chain.decision ?? null, confidence: h1Chain.confidence ?? null, candle_key: h1Chain.candle_key ?? null } : null,
     advisory: "Advisory only: no orders are placed and no position size is given."
@@ -270,15 +241,18 @@ async function seriesCandles(env, interval) {
 export async function loadStrategyInputs(env, { now = Date.now() } = {}) {
   const safe = async (fn) => { try { return await fn(); } catch { return null; } };
   const db = env.DB;
-  const [d1, h4, h1, m15, news, h1Snapshot, m15Snapshot, h1Bars, m15Bars] = await Promise.all([
+  const [d1, h4, h1, m15, news, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot, h1Bars, m15Bars, h4Bars, d1Bars, w1Bars] = await Promise.all([
     safe(() => readTimeframeThread(db, "D1")), safe(() => readTimeframeThread(db, "H4")), safe(() => readTimeframeThread(db, "H1")),
     safe(() => readWarRoom(db)), safe(() => readNewsDaily(db)),
     safe(() => loadHudSnapshot(env, { timeframe: "60" })), safe(() => loadHudSnapshot(env, { timeframe: "15" })),
-    seriesCandles(env, "1h"), seriesCandles(env, "15m")
+    safe(() => loadHudSnapshot(env, { timeframe: "240" })), safe(() => loadHudSnapshot(env, { timeframe: "1D" })),
+    seriesCandles(env, "1h"), seriesCandles(env, "15m"), seriesCandles(env, "4h"), seriesCandles(env, "1D"), seriesCandles(env, "1W")
   ]);
   return {
-    rooms: { D1: d1, H4: h4, H1: h1, M15: m15 }, news, h1Snapshot, m15Snapshot,
-    confirmations: m15?.confirmations ?? null, h1Bars: h1Bars.slice(-30), m15Bars: m15Bars.slice(-30),
+    rooms: { D1: d1, H4: h4, H1: h1, M15: m15 }, news, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot,
+    confirmations: m15?.confirmations ?? null,
+    // Enough closed bars for the ATR and the Key Level Agent's swings; the last week for its high and low.
+    h1Bars: h1Bars.slice(-60), m15Bars: m15Bars.slice(-60), h4Bars: h4Bars.slice(-60), d1Bars: d1Bars.slice(-60), w1Bars: w1Bars.slice(-2),
     h1Chain: m15?.h1 ?? h1?.h1 ?? null, now
   };
 }

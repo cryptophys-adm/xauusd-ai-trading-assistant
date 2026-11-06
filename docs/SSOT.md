@@ -211,7 +211,23 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - **1H setup:** the side is the trend's when the 1H room does not lean against it. With a neutral trend, a 1H lean of 0.3 or more counts when the 15m room agrees.
     - **15m location:** the 15m room must not lean against the side. Price must sit at a key level with the trade (within 0.35 × the 1H ATR(14)) or inside a demand or supply zone (order block, mitigation, QM or flip zone of the 15m HUDs). Otherwise the planned entry is a pullback to the nearest level.
     - **5m trigger:** a VERIFIED 5m Prophet confirmation in the trade's direction, or the 15m Prophet confirmation. An unverified 5m confirmation never counts.
-  - **Key levels** (from the 1H and 15m HUD snapshots, computed from closed bars): Camarilla 15m, 1H, 4H, daily and weekly; the daily and weekly pivot ranges; the 1H value area and point of control; and the recent 15m swing high and low. Levels closer than 0.1 ATR merge. H3/L3 and the swings are minor: they anchor entries and stops but are never targets.
+  - **Key levels: the Key Level Agent** (owner decision 2026-11-06: "not only Camarilla"; `src/key-level-agent.mjs`, `GET /api/key-levels`, deterministic):
+    - **Sources:** every key level of every chart, weighted by kind and by timeframe (15m 1, 1H 1.5, 4H 2, daily 2.5, weekly 3):
+      - Camarilla H3/L3 0.6, H4/L4 1.0, H5/L5 0.8, of the 15m, 1H, 4H, daily and weekly sets (from the 15m, 1H, 4H and D1 HUD snapshots; a set shared by several snapshots counts once);
+      - the daily and weekly pivot 1.0, and the CPR top and bottom 0.7;
+      - the point of control 0.9 and the value area high and low 0.8, of each chart;
+      - the last four swing highs and lows (2-bar fractals of the last 60 closed bars) of the 15m, 1H, 4H and D1 charts, 0.9;
+      - the previous day high and low 1.0 and close 0.6, and the previous week high and low 1.0;
+      - round numbers within four 1H ATRs of price: every 50 dollars 0.8, every 25 dollars 0.4.
+    - **Zones:** the levels, sorted by price, are grouped while a group's span stays within 0.3 × the 1H ATR (at least 1 dollar).
+      - A zone's score is the sum of its weights, and its sources are its distinct (kind, timeframe) pairs.
+      - **Candidate key level:** a zone with two or more sources. Strength: strong (score ≥ 6), medium (≥ 3) or weak.
+      - Role: support, resistance, or "at price".
+    - **The strategy plans on the zones:**
+      - entry: at a zone with the trade (inside it, or within 0.35 ATR of it), or a pullback to its near edge;
+      - stop: beyond the far edge of the first zone against the trade at least 0.5 ATR from the entry;
+      - targets: the near edges of the next two candidate zones.
+      - Non-candidate zones anchor entries and stops but are never targets.
   - **Plan and reward-to-risk:**
     - entry: price at the level, or the planned pullback level;
     - stop: beyond the next level against the trade at least 0.5 ATR away, padded by 0.2 ATR. Without one, or beyond 2.5 ATR, the stop is 1.5 ATR;
@@ -237,6 +253,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - vetoes and cautions;
     - the H1 chain decision and the R38 confirmations as a reference.
     - **Lean vs bias:** a bias is the BULLISH, BEARISH or NEUTRAL label each agent gives. A room's lean is the confidence-weighted mean of its agents' biases, from −1 to +1; inside ±0.15 the strategy reads it as neutral.
+  - *Key Level Agent* (second): the zones on one price axis around price, with candidates coloured by role and shaded by strength; the six nearest candidate zones with their range, strength and leading levels (hover lists every level); and the agent's summary.
   - *Global Conclusion* (data only, no card of its own; `GET /api/conclusion/global`, `src/global-conclusion.mjs`, deterministic, no model call). One multi-timeframe summary of the D1, 4H, 1H and 15m War Rooms and News Daily:
     - the global bias from the weighted room leans (below);
     - a heat strip of the five leans, with stale rooms faded;

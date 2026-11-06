@@ -6,6 +6,17 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(strategy): the Key Level Agent. Key levels come from every chart, not only Camarilla, and the levels that stack in one zone become candidate key levels (owner decision 2026-11-06).
+  - **Sources:** `src/key-level-agent.mjs` (`GET /api/key-levels`) gathers, each weighted by kind and timeframe:
+    - Camarilla of the 15m, 1H, 4H, daily and weekly charts;
+    - the daily and weekly pivot ranges;
+    - the value area of each chart;
+    - the swings of the 15m, 1H, 4H and D1 bars;
+    - the previous day and week;
+    - round numbers.
+  - **Zones:** levels within 0.3 × the 1H ATR group into zones. A zone with two or more independent sources is a candidate, rated strong, medium or weak.
+  - **Strategy:** it plans on the zones. The entry is at or pulls back to a zone edge, the stop sits beyond the far edge of the first zone against the trade, and the targets are the near edges of the next candidate zones. The strategy now also reads the 4H and D1 HUD snapshots and the 4H, D1 and W1 bars.
+  - **Nexus:** a Key Level Agent card shows the zone ladder, the nearest candidate zones and a summary.
 - feat(nexus): the Global Conclusion and the strategy engine are one "Global decision" card (owner request 2026-11-06: they were redundant).
   - `GET /api/conclusion/global` now carries the full strategy, so Nexus fetches one endpoint.
   - The card shows:
