@@ -402,15 +402,21 @@ async function dueBars(env, now) {
   return due;
 }
 
-/** Runs the due 1H, 4H and D1 rooms in parallel; each is idempotent per bar. */
+/**
+ * Runs the due rooms one after another, the higher timeframe first (D1, 4H, 1H): each room's
+ * Higher-Timeframe Desk then reads the conclusion just written above it, and the model sees one
+ * room's burst at a time (production 2026-11-06: three rooms in parallel hit the Workers AI
+ * per-minute limit). Each room is idempotent per bar; a room cut short is finished by the next sweep.
+ */
 export async function runPendingTimeframeThreads(env, { now = Date.now(), clock = () => Date.now() } = {}) {
   if (!tfThreadsEnabled(env)) return { status: "disabled" };
-  const due = await dueBars(env, now);
+  const order = ["D1", "H4", "H1"];
+  const due = (await dueBars(env, now)).sort((a, b) => order.indexOf(a.chart) - order.indexOf(b.chart));
   const out = {};
-  await Promise.all(due.map(async ({ chart, key }) => {
+  for (const { chart, key } of due) {
     try { out[chart] = await runTimeframeThread(env, { chart, candleKey: key }, { clock }); }
     catch (error) { out[chart] = { status: "error", error: error instanceof Error ? error.name : "UnknownError", message: error instanceof Error ? error.message.slice(0, 200) : null }; }
-  }));
+  }
   return { status: "ok", charts: out };
 }
 

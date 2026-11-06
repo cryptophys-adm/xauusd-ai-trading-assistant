@@ -220,3 +220,20 @@ test("B2: the H1 chain labels the 5m context VERIFIED 5m only while the 5m ident
     assert.equal(m5.recent_bars, undefined, "the H1 chain keeps the compact context");
   }
 });
+
+test("exact API routes win over their prefix routes: /api/threads/timeframe and /api/news/daily", async () => {
+  // Production 2026-11-06: /api/threads/:id and /api/news/:key answered these two as ids (404).
+  const { env } = await workerEnv();
+  env.TF_THREADS_ENABLED = "true";
+  env.NEWS_DAILY_ENABLED = "true";
+  const get = async (path) => {
+    const r = await worker.fetch(new Request("https://worker.test" + path), env, execution().ctx);
+    return { status: r.status, body: await r.json() };
+  };
+  const tf = await get("/api/threads/timeframe?chart=4H");
+  assert.equal(tf.status, 404);
+  assert.deepEqual(tf.body, { status: "not_found", enabled: true, chart: "H4" }, "the timeframe route answered, not /api/threads/:id");
+  assert.equal((await get("/api/threads/timeframe?chart=W1")).status, 400);
+  const news = await get("/api/news/daily");
+  assert.deepEqual(news.body, { status: "not_found", enabled: true }, "the News Daily route answered, not /api/news/:key");
+});

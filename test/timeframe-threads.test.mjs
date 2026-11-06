@@ -171,3 +171,20 @@ test("the pending runner is off behind the flag, waits for the HUD snapshot, the
   assert.equal(out.charts.H4.status, "complete");
   assert.equal(out.charts.D1, undefined, "no daily series cached: no D1 key");
 });
+
+test("due rooms run one after another, the higher timeframe first: the 4H room reads the D1 conclusion just written", async () => {
+  const ai = fakeAI();
+  const e = env(ai);
+  const d1Open = Date.parse("2026-11-04T22:00:00.000Z"); // closes with the 4H bar, at 22:00
+  const d1Key = "OANDA:XAUUSD:1D:" + d1Open;
+  await e.SIGNAL_CACHE.put("market-data:v2:series:OANDA:XAUUSD|1D", series(d1Open, 24 * 3600_000));
+  await e.SIGNAL_CACHE.put("hud:1D:" + d1Key, hudSnapshot(d1Key, "1D"));
+  const out = await runPendingTimeframeThreads(e, { now: NOW, clock: fixedClock });
+  assert.deepEqual(Object.keys(out.charts), ["D1", "H4"]);
+  assert.equal(out.charts.D1.status, "complete");
+  const h4 = await readTimeframeThread(e.DB, "H4");
+  assert.ok(h4.roster.some((a) => a.id === "htf"), "the 4H room has the Higher-Timeframe Desk");
+  const firstH4Call = ai.calls.findIndex((c) => /4-hour War Room/.test(c.request.messages[0].content));
+  const lastD1Call = ai.calls.map((c) => /daily War Room/.test(c.request.messages[0].content)).lastIndexOf(true);
+  assert.ok(lastD1Call < firstH4Call, "no 4H call before the D1 room is done");
+});
