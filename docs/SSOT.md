@@ -248,7 +248,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - The Phase C order (C1–C7) is in `docs/BRIEF_HUD_AGENTS.md`.
 - **Live War Room 15m** (`src/war-room.mjs`, behind `WAR_ROOM_ENABLED`, on in production; owner decision 2026-11-05). At every 15m close, every agent discusses in one room, in three phases:
   1. **Communication bus.** Each agent posts one opening claim from its own data only: the H1 Desk (the H1 chain and the H1 TradingView reading), the News Analyst, the Technical Analyst (15m candles and the 5m execution read), the Risk Manager, and one agent per computed 15m HUD (13).
-  2. **Debate.** Agents whose stance differs from the bus majority (at most 7, by confidence) and the Risk Manager rebut named agents. The debate is open for at most 3 minutes, then closed.
+  2. **Debate.** Agents whose stance differs from the bus majority (at most 7, by confidence) and the Risk Manager rebut named agents. A dissenter the bus persuaded may concede instead: its stance changes, it may name nobody, and it is kept as `conceded: true` (2026-11-06). The debate is open for at most 3 minutes, then closed.
   3. **Conclusion.** The moderator concludes for the Nexus main panel: stance, summary, up to 3 reasons and the agents that still disagree.
   - The H1 decision is the constraint: a conclusion that differs must say "H1 decision: X". Price levels come only from the validated H1 chain.
   - **Calibration status once** (owner decision 2026-11-05, option A).

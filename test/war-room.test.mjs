@@ -225,6 +225,33 @@ test("computed from verified bars: Camarilla and session statements lift the 0.4
   }
 });
 
+test("a persuaded dissenter concedes in the debate and stays on the record", async () => {
+  // Production 2026-11-06: the News Analyst dropped SELL for WAIT and wrote rebuts ["news"]; the
+  // concession was rejected as rebuts_invalid every half hour.
+  const ai = fakeAI({ stances: { kinetic_engine: "SELL" } });
+  const run = ai.run;
+  ai.run = async (model, request) => {
+    const r = await run(model, request);
+    const body = JSON.parse(r.choices[0].message.content);
+    if (/debate/.test(request.messages[0].content) && body.agent === "kinetic_engine") {
+      Object.assign(body, { stance: "WAIT", rebuts: ["kinetic_engine"], argument: "The H1 decision is WAIT and my channel read is not calibrated, so I drop my SELL and stay flat." });
+      r.choices[0].message.content = JSON.stringify(body);
+    }
+    return r;
+  };
+  const e = env(ai);
+  await runWarRoomBar(e, task());
+  const room = await readWarRoom(e.DB);
+  const k = room.debate.find(d => d.id === "kinetic_engine");
+  assert.equal(k.status, "ok");
+  assert.equal(k.conceded, true);
+  assert.equal(k.stance, "WAIT");
+  assert.deepEqual(k.rebuts, []);
+  assert.equal(room.debate.find(d => d.id === "risk").conceded, false);
+  const prompt = ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  assert.match(prompt, /never your own id/);
+});
+
 test("a failed opening stays out of the bus; the room still concludes", async () => {
   const e = env(fakeAI({ fail: new Set(["news"]) }));
   await runWarRoomBar(e, task());
@@ -265,7 +292,7 @@ test("selection and validators", () => {
   assert.deepEqual(selectRebutters(openings, "WAIT"), ["a", "b", "risk"]);
   assert.equal(selectRebutters(Array.from({ length: 12 }, (_, i) => o("x" + i, "BUY", i / 12)), "WAIT").length, 7, "at most 7 minority agents (plus risk when present)");
   assert.equal(validateOpening({ agent: "h1", stance: "WAIT", confidence: 0.5, claim: "refs: h1.decision" }, "h1").valid, false, "natural language only");
-  assert.equal(validateRebuttal({ agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: ["risk"], argument: "No." }, "risk", ["risk", "h1"]).valid, false, "an agent never rebuts itself");
+  assert.equal(validateRebuttal({ agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: ["risk"], argument: "No." }, "risk", ["risk", "h1"]).valid, false, "an agent that keeps its stance never rebuts only itself");
   assert.equal(validateRebuttal({ agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: ["ghost"], argument: "No." }, "risk", ["risk", "h1"]).valid, false, "rebuts must name a bus agent");
   assert.ok(Object.keys(DESK_AGENTS).every(k => DESK_AGENTS[k].role));
   const named = { agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: ["H1 Desk"], argument: "The higher timeframe could flip." };
@@ -274,6 +301,23 @@ test("selection and validators", () => {
   const empty = { agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: [], argument: "Nothing to rebut, but a volatility spike would invalidate waiting." };
   assert.equal(validateRebuttal(empty, "risk", ["risk", "h1"]).valid, false, "a split room needs named targets");
   assert.equal(validateRebuttal(empty, "risk", ["risk", "h1"], { unanimous: true }).valid, true, "a unanimous room lets the Risk Manager stress-test without a target");
+
+  // A dissenter persuaded by the bus concedes: production wrote rebuts ["news"] (itself) or [] when
+  // the News Analyst dropped SELL for WAIT, and the concession was lost as rebuts_invalid.
+  const bus = ["h1", "news", "risk"];
+  const selfRebut = { agent: "news", stance: "WAIT", confidence: 0.55, rebuts: ["news"], argument: "My bearish read stands, but the H1 decision is WAIT, so I drop my SELL and stay flat." };
+  assert.equal(validateRebuttal(selfRebut, "news", bus, { ownStance: "SELL" }).valid, true, "changing stance is a concession");
+  assert.deepEqual(selfRebut.rebuts, []);
+  assert.equal(selfRebut.conceded, true);
+  const noTarget = { agent: "news", stance: "WAIT", confidence: 0.55, rebuts: [], argument: "I drop my SELL and stay flat until the H1 chain confirms." };
+  assert.equal(validateRebuttal(noTarget, "news", bus, { ownStance: "SELL" }).valid, true);
+  const kept = { agent: "news", stance: "SELL", confidence: 0.6, rebuts: ["news"], argument: "I keep my SELL: the dollar bid is real." };
+  assert.equal(validateRebuttal(kept, "news", bus, { ownStance: "SELL" }).valid, false, "keeping the stance still needs a named target");
+  const mixed = { agent: "news", stance: "WAIT", confidence: 0.55, rebuts: ["news", "Risk Manager"], argument: "The Risk Manager is right about volatility, so I move to WAIT." };
+  assert.equal(validateRebuttal(mixed, "news", bus, { ownStance: "SELL" }).valid, true, "its own id beside real targets is dropped");
+  assert.deepEqual(mixed.rebuts, ["risk"]);
+  assert.equal(mixed.conceded, true);
+  assert.equal(validateRebuttal({ ...noTarget, rebuts: ["ghost"] }, "news", bus, { ownStance: "SELL" }).valid, false, "an unknown agent is still invalid");
 });
 
 test("TLDR for the right panel: H1 decision with the bus consensus, and the latest news thread", async () => {

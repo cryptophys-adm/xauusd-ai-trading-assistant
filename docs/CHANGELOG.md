@@ -16,6 +16,11 @@ what changed and when, by merge commit and PR.
     - macro drivers over 24 hours;
     - a session clock.
   - One provider fetches the 1H, 4H and D1 Threads, News Daily and the 5m context every 60 seconds for both panels.
+- fix(war-room): a dissenter the bus persuaded now concedes in the debate instead of being dropped.
+  - In production, every concession was rejected as `rebuts_invalid`. The dissenter changed its stance (for example, News Analyst SELL to WAIT), then wrote its own id or nothing in `rebuts`. This happened about every half hour in the 15m room, and also in the 4H room.
+  - A rebuttal whose stance differs from the agent's opening may now name nobody. Its own id is dropped, and it is stored as `conceded: true`.
+  - Nexus marks it "CONCEDES".
+  - preview-e2e accepts it. On PR #116 the live preview model hit the same case.
 - feat(hud): a third calibration tier, "computed from verified bars" (owner decision 2026-11-06, option 1).
   - HUD statements that are pure formulas of closed bars count as calibrated evidence when the candle's bar is proven equal to TradingView's. These are the Camarilla levels and bands, the daily and weekly pivot ranges, and the trading sessions.
   - The bar is proven when the candle has an approved local record and a matching parity comparison (which includes the input bar), and no input mismatch.
