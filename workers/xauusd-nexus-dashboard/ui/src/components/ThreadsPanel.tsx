@@ -13,9 +13,10 @@ const side = (x: any) => (x?.buy_confirmed ? "buy confirmed" : x?.sell_confirmed
 
 /**
  * The conclusion of the active tab, first under the tab bar, in the design of the original War
- * Room conclusion card (owner request 2026-11-06): the stance in large glowing type with its
- * confidence and bus majority, the summary in its own box, reasons and dissent, then two boxes
- * with what binds it (the higher-timeframe constraint and the entry confirmation).
+ * Room conclusion card (owner request 2026-11-06): the decision in large glowing type with its
+ * confidence, the room's bias beside it (owner decision 2026-11-06: decision and bias are
+ * different things), the summary in its own box, reasons and dissent, then two boxes with what
+ * binds it (the higher-timeframe constraint and the entry confirmation).
  */
 function ConclusionHero({ c, title, waiting, badges, constraint, confirmation }: { c: any; title: string; waiting: string; badges?: ReactNode; constraint?: ReactNode; confirmation?: ReactNode }) {
   const ok = c && c.status === "ok";
@@ -27,10 +28,20 @@ function ConclusionHero({ c, title, waiting, badges, constraint, confirmation }:
       </div>
       {!ok ? <p className="text-[12.5px] text-slate-400">{waiting}</p> : (
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-          <div className="flex shrink-0 flex-col items-start gap-1 lg:w-44">
-            <div className={`mono text-[52px] font-extrabold leading-none ${stanceColor(c.stance)}`} style={{ textShadow: "0 0 28px currentColor" }}>{c.stance}</div>
-            <div className="mono text-[12px] text-slate-400">confidence {pct(c.confidence)}</div>
-            {c.majority && <div className="text-[11px] text-slate-500">bus majority {c.majority}</div>}
+          <div className="flex shrink-0 flex-row items-start gap-6 lg:w-44 lg:flex-col lg:gap-3">
+            <div className="flex flex-col items-start gap-1">
+              <span className="eyebrow text-[9px]" title="What to do now, under the confirmation rule">Decision</span>
+              <div className={`mono text-[52px] font-extrabold leading-none ${stanceColor(c.stance)}`} style={{ textShadow: "0 0 28px currentColor" }}>{c.stance}</div>
+              <div className="mono text-[12px] text-slate-400">confidence {pct(c.confidence)}</div>
+            </div>
+            {(c.bias ?? c.majority_bias) && (
+              <div className="flex flex-col items-start gap-1">
+                <span className="eyebrow text-[9px]" title="Where the weight of the room's evidence leans">Bias</span>
+                <div className={`mono text-[26px] font-bold leading-none ${stanceColor(c.bias ?? c.majority_bias)}`}>{c.bias ?? c.majority_bias}</div>
+                {c.majority && <div className="text-[11px] text-slate-500">bus majority {c.majority}{c.majority_bias ? ` · leaning ${String(c.majority_bias).toLowerCase()}` : ""}</div>}
+              </div>
+            )}
+            {!(c.bias ?? c.majority_bias) && c.majority && <div className="text-[11px] text-slate-500">bus majority {c.majority}</div>}
           </div>
           <div className="min-w-0 flex-1">
             <p className="glass-inner px-4 py-3 text-[13px] leading-relaxed text-slate-200">{c.summary}</p>

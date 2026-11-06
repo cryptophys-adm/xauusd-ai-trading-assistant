@@ -123,6 +123,8 @@ test("a 4H War Room: every agent opens, the debate runs, the moderator concludes
   assert.equal(thread.tab, "4H");
   assert.equal(thread.phase, "closed");
   assert.equal(thread.conclusion.stance, "WAIT");
+  assert.ok(["BULLISH", "BEARISH", "NEUTRAL"].includes(thread.conclusion.bias), "the conclusion carries the bias beside the decision");
+  assert.equal(thread.conclusion.majority_bias, thread.conclusion.bias);
   assert.deepEqual(thread.openings.map((p) => p.id), ["h4", "technical", "risk", "kinetic_engine", "fabio_amt"]);
   assert.equal(thread.openings[0].name, "4H Desk");
   assert.equal(thread.openings[3].calibration, "not yet calibrated");

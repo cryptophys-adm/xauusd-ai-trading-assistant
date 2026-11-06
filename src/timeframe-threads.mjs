@@ -33,6 +33,7 @@ import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { ensureThreadSchema, rowToThreadMessage, ROOM_STANCES, hudEvidenceLines, threadInternals } from "./agent-threads.mjs";
 import {
   validateOpening, validateRebuttal, majorityStance, selectRebutters, UNCALIBRATED_CONFIDENCE_CAP, BIAS_RULE, SUPPORT_RULE, stanceSupported,
+  majorityBias, biasOfStance, biasSplitText, DECISION_BIAS_RULE, conclusionBiasErrors,
   WAR_ROOM_OPENING_MS, WAR_ROOM_DEBATE_MS, WAR_ROOM_CONCLUSION_MS
 } from "./war-room.mjs";
 import { closedHtfCandleKeys, OBSERVED_PREFIX } from "./parity-sweep.mjs";
@@ -102,13 +103,13 @@ const OPENING_SCHEMA = Object.freeze({
 });
 const REBUTTAL_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
-  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, confidence: { type: "number" }, rebuts: { type: "array", items: { type: "string" } }, argument: { type: "string" } },
-  required: ["agent", "stance", "confidence", "rebuts", "argument"]
+  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, rebuts: { type: "array", items: { type: "string" } }, argument: { type: "string" } },
+  required: ["agent", "stance", "bias", "confidence", "rebuts", "argument"]
 });
 const CONCLUSION_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
-  properties: { stance: { type: "string", enum: [...ROOM_STANCES] }, confidence: { type: "number" }, summary: { type: "string" }, reasons: { type: "array", items: { type: "string" } }, dissent: { type: "array", items: { type: "string" } } },
-  required: ["stance", "confidence", "summary", "reasons", "dissent"]
+  properties: { stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, summary: { type: "string" }, reasons: { type: "array", items: { type: "string" } }, dissent: { type: "array", items: { type: "string" } } },
+  required: ["stance", "bias", "confidence", "summary", "reasons", "dissent"]
 });
 
 const ROOM_RULES = [
@@ -132,7 +133,7 @@ function normalizeTfNames(o, busAgents) {
  * BUY or SELL needs the chart's confirmation; on 1H a stance that differs from the H1 decision
  * must name it.
  */
-export function validateTfConclusion(o, { busAgents = [], confirmations = null, h1Decision = null, supportStances = null } = {}) {
+export function validateTfConclusion(o, { busAgents = [], confirmations = null, h1Decision = null, supportStances = null, supportBiases = null, roomBias = "NEUTRAL" } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
   const errors = [];
   if (!ROOM_STANCES.includes(o.stance)) errors.push("stance_invalid");
@@ -145,6 +146,7 @@ export function validateTfConclusion(o, { busAgents = [], confirmations = null, 
   }
   if (confirmations && !tfEntryAllowed(o.stance, confirmations)) errors.push("entry_without_confirmation");
   if (!stanceSupported(o.stance, supportStances)) errors.push("stance_without_support");
+  errors.push(...conclusionBiasErrors(o, { supportBiases, roomBias }));
   if (Array.isArray(o.reasons)) o.reasons = o.reasons.filter((r) => !(typeof r === "string" && !r.trim()));
   if (!Array.isArray(o.reasons) || o.reasons.length < 1 || o.reasons.some((r) => typeof r !== "string")) errors.push("reasons_invalid");
   else for (const r of o.reasons.slice(0, 3)) errors.push(...naturalLanguageErrors(r));
@@ -179,7 +181,7 @@ async function latestConclusion(db, chart) {
   try { row = await db.prepare("SELECT run_id, stance, confidence, body_json FROM agent_thread_messages WHERE thread_id = ? AND step = 'conclusion' AND status = 'ok' ORDER BY run_id DESC LIMIT 1").bind(`tf:${chart}`).first(); } catch { row = null; }
   if (!row) return null;
   const body = parseJson(row.body_json, {}) || {};
-  return { timeframe: TF_THREAD_CHARTS[chart].label, bar_open: barOpenOf(row.run_id), stance: row.stance, confidence: row.confidence, summary: body.summary ?? null };
+  return { timeframe: TF_THREAD_CHARTS[chart].label, bar_open: barOpenOf(row.run_id), stance: row.stance, bias: body.bias ?? null, confidence: row.confidence, summary: body.summary ?? null };
 }
 
 /**
@@ -268,19 +270,21 @@ function openingMessages(agent, data, spec, roster) {
   ]);
 }
 
-function rebuttalMessages(agent, own, bus, spec, unanimous, confirmations) {
+function rebuttalMessages(agent, own, bus, spec, unanimous, confirmations, roomBias = null) {
   const riskRule = agent === "risk" ? [ruleText(spec) + " Rebut every agent on the bus that proposes BUY or SELL without the matching confirmation. CONFIRMATIONS: " + JSON.stringify(confirmations)] : [];
   return chatMessages([
     `You are ${tfAgentName(agent)} in the XAUUSD ${spec.label} War Room debate${TF_DESKS[agent] ? " (" + TF_DESKS[agent].role + ")" : ""}. The debate is open for at most 3 minutes.`,
     RULES_NO_REFS,
     ROOM_RULES,
-    unanimous
-      ? "The bus is unanimous. Stress-test the consensus: challenge the claim most likely to be wrong, put that agent's id in rebuts, and say what would invalidate the consensus. Add only new reasoning from your own role; never restate a claim."
-      : "Rebut the strongest claims you disagree with and put those agents' ids in rebuts. Add only new reasoning from your own role; never restate your opening or another agent's claim. You may change your stance if the bus convinced you: then put the ids of the agents who convinced you in rebuts (or leave it empty), never your own id.",
+    unanimous && roomBias && agent !== "risk"
+      ? biasSplitText(roomBias)
+      : unanimous
+        ? "The bus is unanimous. Stress-test the consensus: challenge the claim most likely to be wrong, put that agent's id in rebuts, and say what would invalidate the consensus. Add only new reasoning from your own role; never restate a claim."
+        : "Rebut the strongest claims you disagree with and put those agents' ids in rebuts. Add only new reasoning from your own role; never restate your opening or another agent's claim. You may change your stance or your bias if the bus convinced you: then put the ids of the agents who convinced you in rebuts (or leave it empty), never your own id.",
     ...riskRule,
     "In the argument, call agents by their names, never by an id. Each bus entry says how much of that agent's data is verified by parity or computed from verified bars: weigh that evidence above uncalibrated readings, and never discuss calibration itself.",
-    `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"rebuts":["<agent id>"],"argument":"<= ${ARGUMENT_MAX - 40} chars"}`,
-    "YOUR OPENING: " + JSON.stringify({ stance: own.stance, confidence: own.confidence, claim: own.claim }),
+    `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"rebuts":["<agent id>"],"argument":"<= ${ARGUMENT_MAX - 40} chars"}`,
+    "YOUR OPENING: " + JSON.stringify({ stance: own.stance, bias: own.bias ?? null, confidence: own.confidence, claim: own.claim }),
     "COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):",
     JSON.stringify(bus)
   ]);
@@ -294,8 +298,9 @@ function conclusionMessages(spec, bus, debate, confirmations, h1) {
     ...(h1 ? [`The H1 decision chain decided ${h1.decision}: if your stance differs from it, the summary must say "H1 decision: ${h1.decision}" and why the room still differs.`] : []),
     ruleText(spec) + " The conclusion obeys it: BUY or SELL only with the matching confirmation below. CONFIRMATIONS: " + JSON.stringify(confirmations),
     SUPPORT_RULE,
-    "Weigh claims by their argument and by their evidence, not by the number of agents: a claim built on data verified by parity, or computed from verified bars, outweighs one built on uncalibrated readings (each bus entry states which). No repetition: the summary states the conclusion once, each reason adds something new, and dissent lists the ids of agents whose stance still differs from yours. In the summary and reasons, call agents by their names, never by an id, and never discuss calibration itself.",
-    'Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"summary":"<= 360 chars","reasons":["<= 160 chars", "at most 3"],"dissent":["<agent id>"]}',
+    DECISION_BIAS_RULE + " A BULLISH or BEARISH bias needs at least one agent holding it.",
+    "Weigh claims by their argument and by their evidence, not by the number of agents: a claim built on data verified by parity, or computed from verified bars, outweighs one built on uncalibrated readings (each bus entry states which). No repetition: the summary states the conclusion once, each reason adds something new, and dissent lists the ids of agents whose stance or bias still differs from yours. In the summary and reasons, call agents by their names, never by an id, and never discuss calibration itself.",
+    'Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"summary":"<= 360 chars","reasons":["<= 160 chars", "at most 3"],"dissent":["<agent id>"]}',
     "COMMUNICATION BUS:",
     JSON.stringify(bus),
     "DEBATE:",
@@ -392,8 +397,10 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
 
   // Phase 2: the debate, open for at most 3 minutes.
   const majority = majorityStance(answered, ev.h1?.decision ?? ev.higher?.stance ?? "WAIT");
-  const rebutters = selectRebutters(answered, majority, TF_ROOM_MAX_REBUTTALS);
+  const roomBias = majorityBias(answered);
+  const rebutters = selectRebutters(answered, majority, TF_ROOM_MAX_REBUTTALS, { bias: roomBias });
   const unanimous = answered.every((m) => m.stance === majority);
+  const biasSplit = unanimous && rebutters.some((a) => a !== "risk") ? roomBias : null;
   const debateStep = phase(WAR_ROOM_DEBATE_MS);
   const openingId = new Map(answered.map((m) => [m.agent, m.id]));
   const debate = (await Promise.all(rebutters.map((agent) => {
@@ -401,20 +408,20 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
     if (prior?.status === "ok") return prior;
     const own = answered.find((m) => m.agent === agent);
     return debateStep(base("debate:" + agent, agent, openingId.get(agent) ?? null), {
-      messages: rebuttalMessages(agent, own, bus, spec, unanimous, ev.confirmations), schemaName: "tf_room_rebuttal", schema: REBUTTAL_SCHEMA,
+      messages: rebuttalMessages(agent, own, bus, spec, unanimous, ev.confirmations, biasSplit), schemaName: "tf_room_rebuttal", schema: REBUTTAL_SCHEMA,
       maxTokens: BUS_MAX_TOKENS.agent, effort: "low",
-      validate: (o) => validateRebuttal(normalizeTfNames(o, busAgents), agent, busAgents, { unanimous, ownStance: own?.stance ?? null }),
-      toBody: (o) => ({ body: { argument: clip(o.argument, ARGUMENT_MAX), rebuts: [...new Set(o.rebuts)].slice(0, 4), ...(o.conceded ? { conceded: true } : {}), name: tfAgentName(agent) }, refs: [] })
+      validate: (o) => validateRebuttal(normalizeTfNames(o, busAgents), agent, busAgents, { unanimous, ownStance: own?.stance ?? null, ownBias: own?.bias ?? null }),
+      toBody: (o) => ({ body: { argument: clip(o.argument, ARGUMENT_MAX), bias: o.bias, rebuts: [...new Set(o.rebuts)].slice(0, 4), ...(o.conceded ? { conceded: true } : {}), name: tfAgentName(agent) }, refs: [] })
     });
   }))).filter((m) => m?.status === "ok");
 
   // Phase 3: the TLDR of this timeframe.
   const conclude = phase(WAR_ROOM_CONCLUSION_MS);
   await conclude(base("conclusion", "moderator"), {
-    messages: conclusionMessages(spec, bus, debate.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument })), ev.confirmations, ev.h1),
+    messages: conclusionMessages(spec, bus, debate.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument })), ev.confirmations, ev.h1),
     schemaName: "tf_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low",
-    validate: (o) => validateTfConclusion(o, { busAgents, confirmations: ev.confirmations, h1Decision: ev.h1?.decision ?? null, supportStances: new Set([...answered.map((m) => m.stance), ...debate.map((m) => m.stance)]) }),
-    toBody: (o) => ({ body: { summary: clip(o.summary, 400), reasons: o.reasons.slice(0, 3).map((r) => clip(r, 200)), dissent: [...new Set(o.dissent)], majority }, refs: [] })
+    validate: (o) => validateTfConclusion(o, { busAgents, confirmations: ev.confirmations, h1Decision: ev.h1?.decision ?? null, supportStances: new Set([...answered.map((m) => m.stance), ...debate.map((m) => m.stance)]), supportBiases: new Set([...answered, ...debate].map((m) => m.bias || biasOfStance(m.stance))), roomBias }),
+    toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map((r) => clip(r, 200)), dissent: [...new Set(o.dissent)], majority, majority_bias: roomBias }, refs: [] })
   });
   return { status: "complete", calls, openings: answered.length, rebuttals: debate.length, ...(reconvened ? { reconvened: true } : {}) };
 }
@@ -494,7 +501,7 @@ export async function readTimeframeThread(db, chart) {
     phase: c?.status === "ok" ? "closed" : debate.length ? "debate" : "opening",
     confirmations: brief?.confirmations ?? null, hud_snapshot: brief?.hud_snapshot ?? null,
     roster: (brief?.roster || []).map((id) => ({ id, name: tfAgentName(id), calibration: note(id) })),
-    conclusion: c ? { status: c.status, stance: c.stance, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [], dissent: (c.dissent || []).map((id) => ({ id, name: tfAgentName(id) })), majority: c.majority ?? null } : null,
+    conclusion: c ? { status: c.status, stance: c.stance, bias: c.bias ?? null, majority_bias: c.majority_bias ?? null, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [], dissent: (c.dissent || []).map((id) => ({ id, name: tfAgentName(id) })), majority: c.majority ?? null } : null,
     openings,
     debate
   };
