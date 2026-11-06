@@ -35,6 +35,8 @@
     "M5_PARITY_PUBLISH": "true",
     // Verified 15m lane (owner decision 2026-11-05): 15m local records for parity.
     "M15_PARITY_PUBLISH": "true",
+    // H4/D1 lane (owner decision 2026-11-05): local records for parity on the H4 and D1 charts.
+    "HTF_PARITY_PUBLISH": "true",
     // Phase C2: HUD snapshots (H1 and 15m) for the HUD agents; never decision evidence.
     "HUD_SNAPSHOT_PUBLISH": "true"
   },

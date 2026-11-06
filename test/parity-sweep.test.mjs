@@ -227,3 +227,21 @@ test("reconcile never deletes a trusted copy just because its observed record is
   await reconcileLocalComputation(env, candleKey);
   assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":prophet"), null);
 });
+
+test("H4/D1 sweep keys come from the cached native bars (22:00-anchored), newest first", async () => {
+  const { closedHtfCandleKeys } = await import("../src/parity-sweep.mjs");
+  const bar = (openIso, hours) => ({ open_time: openIso, close_time: new Date(Date.parse(openIso) + hours * 3600_000).toISOString() });
+  const store = {
+    "market-data:v2:series:OANDA:XAUUSD|4h": JSON.stringify({ candles: [bar("2026-11-05T14:00:00Z", 4), bar("2026-11-05T18:00:00Z", 4), bar("2026-11-05T22:00:00Z", 4)] }),
+    "market-data:v2:series:OANDA:XAUUSD|1D": JSON.stringify({ candles: [bar("2026-11-03T22:00:00Z", 24), bar("2026-11-04T22:00:00Z", 24)] })
+  };
+  const env = { SIGNAL_CACHE: { async get(k) { return store[k] ?? null; } } };
+  const now = Date.parse("2026-11-06T01:00:00Z"); // the 22:00 H4 bar is still forming
+  assert.deepEqual(await closedHtfCandleKeys(env, now), [
+    `OANDA:XAUUSD:240:${Date.parse("2026-11-05T18:00:00Z")}`,
+    `OANDA:XAUUSD:240:${Date.parse("2026-11-05T14:00:00Z")}`,
+    `OANDA:XAUUSD:1D:${Date.parse("2026-11-04T22:00:00Z")}`,
+    `OANDA:XAUUSD:1D:${Date.parse("2026-11-03T22:00:00Z")}`
+  ]);
+  assert.deepEqual(await closedHtfCandleKeys({}, now), [], "no cache: no keys, never guessed");
+});

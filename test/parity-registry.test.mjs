@@ -142,14 +142,17 @@ test("Mizan is trusted only while approved Prophet AND GMI both declare the same
   assert.equal(await isTrusted(db, mizan), false);
 });
 
-test("registry ids are timeframe-scoped: H1 keeps the bare id, 5m and 15m earn their own", () => {
+test("registry ids are timeframe-scoped: H1 keeps the bare id, 5m, 15m, H4 and D1 earn their own", () => {
   assert.equal(scopedEngine("prophet", "60"), "prophet");
   assert.equal(scopedEngine("prophet", "H1"), "prophet");
   assert.equal(scopedEngine("gmi", undefined), "gmi");
   assert.equal(scopedEngine("prophet", "5"), "prophet_m5");
   assert.equal(scopedEngine("mizan", "M5"), "mizan_m5");
   assert.equal(scopedEngine("prophet_hud", "15"), "prophet_hud_m15");
-  assert.equal(scopedEngine("prophet", "240"), null);
+  assert.equal(scopedEngine("prophet", "240"), "prophet_h4");
+  assert.equal(scopedEngine("gmi", "1D"), "gmi_d1");
+  assert.equal(scopedEngine("mizan", "D"), "mizan_d1");
+  assert.equal(scopedEngine("prophet", "1W"), null, "weekly is not a parity lane");
   assert.equal(scopedEngine("aegis", "60"), null);
 
   const h1 = identityOf({ ...local("prophet", {}, { dependencies: mizanDep }), timeframe: "60" });
@@ -159,7 +162,8 @@ test("registry ids are timeframe-scoped: H1 keeps the bare id, 5m and 15m earn t
   assert.equal(m5.sourceHash, h1.sourceHash);
   assert.equal(m5.mizanSourceHash, h1.mizanSourceHash);
   assert.equal(identityOf({ ...local("mizan", {}), timeframe: "5" }).mizanSourceHash, null);
-  assert.equal(identityOf({ ...local("prophet", {}), timeframe: "240" }), null);
+  assert.equal(identityOf({ ...local("prophet", {}), timeframe: "240" }).engine, "prophet_h4");
+  assert.equal(identityOf({ ...local("prophet", {}), timeframe: "1W" }), null);
 });
 
 test("an approved H1 identity does not make the same hashes trusted on 5m, and 5m results never touch H1", async () => {

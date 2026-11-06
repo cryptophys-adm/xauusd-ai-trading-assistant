@@ -577,6 +577,22 @@ export const KNOWLEDGE_BASE_V4 = Object.freeze({
       "prophet_m15": {
         "source_hash": "696544c53144af1c1888f3f38b8c8084bcbb78dea3c4c0d571e0fffb224f1ce6",
         "implementation_hash": "1f1c54c0d7d4c961fa4031ebd28fb92dbff4c0a01c53f41933ee98d98164fcb8"
+      },
+      "gmi_h4": {
+        "source_hash": "c5285333399a5a1ac677edb24e13aa0483b3af084de9ea403cf378be446646f7",
+        "implementation_hash": "ffe55c39d9c20e61fb9814d04d3d56f435c0324e20a905432f4d9c9cac788d39"
+      },
+      "prophet_h4": {
+        "source_hash": "696544c53144af1c1888f3f38b8c8084bcbb78dea3c4c0d571e0fffb224f1ce6",
+        "implementation_hash": "8ddfee0378b7abe3dc933e53ee5c967398cde31f660e5177714166dba4d969e6"
+      },
+      "gmi_d1": {
+        "source_hash": "c5285333399a5a1ac677edb24e13aa0483b3af084de9ea403cf378be446646f7",
+        "implementation_hash": "ffe55c39d9c20e61fb9814d04d3d56f435c0324e20a905432f4d9c9cac788d39"
+      },
+      "prophet_d1": {
+        "source_hash": "696544c53144af1c1888f3f38b8c8084bcbb78dea3c4c0d571e0fffb224f1ce6",
+        "implementation_hash": "8ddfee0378b7abe3dc933e53ee5c967398cde31f660e5177714166dba4d969e6"
       }
     },
     "reference_count": 53,

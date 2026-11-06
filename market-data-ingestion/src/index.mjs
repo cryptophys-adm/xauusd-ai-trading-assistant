@@ -1,6 +1,6 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
-import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHudSnapshots, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
+import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHtfLocalComputation, publishHudSnapshots, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
 import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, verifyDerivedSeries } from "./tradingview-source.mjs";
 
 const JSON_HEADERS = {
@@ -282,6 +282,16 @@ const worker = {
         }
       } catch (error) {
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_m15_failed", code: asString(error?.code) || "publish_failed" }));
+      }
+      // H4/D1 lane (owner decision 2026-11-05): local records for parity on those charts.
+      try {
+        const htf = await publishHtfLocalComputation(env, { bundle: latestBundle });
+        const notable = Object.entries(htf.charts || {}).filter(([, r]) => !["no_fresh_close", "already_published"].includes(r.status));
+        if (htf.status !== "htf_publish_disabled" && notable.length) {
+          console.log(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_htf", charts: Object.fromEntries(notable.map(([c, r]) => [c, { status: r.status, candle_key: r.candle_key || null, gmi_error: r.gmi_error || null }])) }));
+        }
+      } catch (error) {
+        console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_htf_failed", code: asString(error?.code) || "publish_failed" }));
       }
       // Phase C2: HUD snapshots for the HUD agents (flag-gated; never decision evidence).
       try {

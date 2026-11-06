@@ -6,6 +6,7 @@ import { buildBundle } from "./tradingview-source.mjs";
 import { buildH1LocalCalculations } from "../../local-engines/producer/src/h1-producer.mjs";
 import { buildM5LocalCalculations } from "../../local-engines/producer/src/m5-local-producer.mjs";
 import { buildM15LocalCalculations } from "../../local-engines/producer/src/m15-local-producer.mjs";
+import { buildHtfLocalCalculations, HTF_CHARTS } from "../../local-engines/producer/src/htf-local-producer.mjs";
 import { m5ContextFromRecords } from "../../local-engines/producer/src/m5-context.mjs";
 import { buildHudSnapshot } from "../../local-engines/producer/src/hud-snapshot.mjs";
 
@@ -172,6 +173,53 @@ export async function publishM15LocalComputation(env, { now = Date.now(), force 
   };
   if (ok) await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 });
   await kv.put(LAST_M15_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
+  return summary;
+}
+
+/** H4/D1 lane (owner decision 2026-11-05): last publish summary per chart. */
+export const LAST_HTF_PUBLISH_KEY = "market-data:v2:local-last-publish-htf";
+const MAX_HTF_PUBLISH_DELAY_MS = Object.freeze({ H4: 30 * 60 * 1000, D1: 60 * 60 * 1000 });
+
+/**
+ * Publishes the local records of the latest closed H4 and D1 bars (timeframes "240" and
+ * "1D") for parity against the TradingView alerts on those charts. Flag-gated by
+ * HTF_PARITY_PUBLISH; each candle is published once.
+ */
+export async function publishHtfLocalComputation(env, { now = Date.now(), force = false, bundle = null } = {}) {
+  if (String(env.HTF_PARITY_PUBLISH || "").toLowerCase() !== "true") return { status: "htf_publish_disabled" };
+  const kv = env.MARKET_DATA_CACHE;
+  if (!kv) return { status: "cache_not_configured" };
+  if (typeof env.AI_WORKER?.submit !== "function") return { status: "publisher_not_configured" };
+  const resolvedBundle = bundle || await buildBundle(env, now);
+  const charts = {};
+  for (const chart of Object.keys(HTF_CHARTS)) {
+    const last = resolvedBundle.timeframes?.[chart]?.candles?.at(-1);
+    if (!last) { charts[chart] = { status: "no_data" }; continue; }
+    if (!force && now - Date.parse(last.close_time) > MAX_HTF_PUBLISH_DELAY_MS[chart]) { charts[chart] = { status: "no_fresh_close", last_close_time: last.close_time }; continue; }
+    let built;
+    try {
+      built = buildHtfLocalCalculations(resolvedBundle, { chart, now, mintick: Number(env.CHART_MINTICK) || 0.001 });
+    } catch (error) {
+      charts[chart] = { status: asString(error?.code) || "local_computation_failed", message: asString(error?.message).slice(0, 200) };
+      continue;
+    }
+    const markerKey = PUBLISHED_PREFIX + built.candle_key;
+    if (!force && (await kv.get(markerKey))) { charts[chart] = { status: "already_published", candle_key: built.candle_key }; continue; }
+    const results = [];
+    for (const record of built.records) {
+      try { results.push(await postRecord(env, record)); }
+      catch (error) { results.push({ engine: record.engine, http_status: null, error: asString(error?.name) || "post_failed" }); }
+    }
+    const ok = results.every((r) => r.http_status && r.http_status < 300);
+    charts[chart] = {
+      status: ok ? "published" : "partial_failure", timeframe: HTF_CHARTS[chart].period,
+      candle_key: built.candle_key, candle_time: built.candle_time, published_at: new Date(now).toISOString(),
+      engines: results, not_produced: built.records.some((r) => r.engine === "gmi") ? [] : ["gmi"], gmi_error: built.gmi_error || null
+    };
+    if (ok) await kv.put(markerKey, JSON.stringify(charts[chart]), { expirationTtl: 60 * 60 * 24 * 3 });
+  }
+  const summary = { status: "ok", checked_at: new Date(now).toISOString(), charts };
+  if (Object.values(charts).some((c) => ["published", "partial_failure"].includes(c.status))) await kv.put(LAST_HTF_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
   return summary;
 }
 

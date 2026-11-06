@@ -105,6 +105,22 @@ export function closedM15CandleKeys(now = Date.now(), { symbol = "OANDA:XAUUSD",
   return closedCandleKeys(now, M15_SECONDS, { symbol, timeframe: "15", lookback });
 }
 
+/**
+ * H4/D1 lane: candle keys of the most recently closed H4 ("240") and D1 ("1D") bars, newest
+ * first. OANDA H4 and D1 bars open at 17:00 New York, not on epoch multiples, so the keys
+ * come from the pull adapter's cached native bars (same KV namespace), never from the clock.
+ */
+export async function closedHtfCandleKeys(env, now = Date.now(), { symbol = "OANDA:XAUUSD", lookback = 2 } = {}) {
+  const keys = [];
+  for (const [series, period] of [["4h", "240"], ["1D", "1D"]]) {
+    let record = null;
+    try { record = JSON.parse((await env.SIGNAL_CACHE?.get?.(`market-data:v2:series:${symbol}|${series}`)) || "null"); } catch { record = null; }
+    const closed = (Array.isArray(record?.candles) ? record.candles : []).filter((c) => Date.parse(c.close_time) <= now && Number.isFinite(Date.parse(c.open_time)));
+    for (const c of closed.slice(-lookback).reverse()) keys.push(`${symbol}:${period}:${Date.parse(c.open_time)}`);
+  }
+  return keys;
+}
+
 function closedCandleKeys(now, seconds, { symbol, timeframe, lookback }) {
   const periodMs = seconds * 1000;
   const currentOpenMs = Math.floor(now / periodMs) * periodMs;
@@ -126,15 +142,18 @@ export async function reconcileRecentCandles(env, { now = Date.now(), lookback =
   const m5CandleKeys = closedM5CandleKeys(now, { lookback: m5Lookback });
   // Verified 15m lane: the same for the 15m comparators (prophet_m15, gmi_m15).
   const m15CandleKeys = closedM15CandleKeys(now, { lookback: m15Lookback });
+  // H4/D1 lane (prophet_h4, gmi_h4, prophet_d1, gmi_d1): keys from the cached native bars.
+  let htfCandleKeys = [];
+  try { htfCandleKeys = await closedHtfCandleKeys(env, now); } catch { htfCandleKeys = []; }
   const results = {};
-  for (const candleKey of [...candleKeys, ...m5CandleKeys, ...m15CandleKeys]) {
+  for (const candleKey of [...candleKeys, ...m5CandleKeys, ...m15CandleKeys, ...htfCandleKeys]) {
     try {
       results[candleKey] = await reconcileLocalComputation(env, candleKey);
     } catch (error) {
       results[candleKey] = { error: error instanceof Error ? error.name : "UnknownError" };
     }
   }
-  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, m15_candle_keys: m15CandleKeys, results };
+  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, m15_candle_keys: m15CandleKeys, htf_candle_keys: htfCandleKeys, results };
 }
 
 /** Minutes after an H1 close after which a candle without approved local records is recorded as a fail-closed WAIT. */
