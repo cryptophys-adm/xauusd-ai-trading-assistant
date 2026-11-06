@@ -384,6 +384,9 @@ test("a rate-limited call waits and retries the same model once; it never marks 
   const { callBusModel, isRateLimited } = await import("../src/multi-agent-bus.mjs");
   assert.equal(isRateLimited(new Error("3021: rate limiting: inference request per min rate reached")), true);
   assert.equal(isRateLimited(new Error("5007: model unavailable")), false);
+  // Production 2026-11-06 12:01: every opening of the 15m War Room failed with 3040; the 12:15
+  // room ran normally. Capacity errors are transient like the per-minute limit.
+  assert.equal(isRateLimited(new Error("3040: Capacity temporarily exceeded, please try again.")), true);
   let calls = 0;
   const ai = { run: async () => { calls += 1; if (calls === 1) throw new Error("3021: rate limiting: inference request per min rate reached"); return { choices: [{ message: { content: "{\"stance\":\"WAIT\"}" }, finish_reason: "stop" }] }; } };
   const runState = {};

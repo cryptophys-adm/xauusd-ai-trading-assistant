@@ -328,7 +328,9 @@ function requestFor(model, messages, schemaName, schema, maxTokens, effort, prim
  */
 export const RATE_LIMIT_RETRY_MS = 12_000;
 export function isRateLimited(error) {
-  return /\b3021\b|rate limit/i.test(String(error?.message || error || ""));
+  // 3040 "Capacity temporarily exceeded" (production 2026-11-06 12:01, a whole War Room lost) is
+  // as transient as the per-minute limit, so it gets the same single wait-and-retry.
+  return /\b3021\b|rate limit|\b3040\b|capacity temporarily exceeded/i.test(String(error?.message || error || ""));
 }
 
 export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState = {} }) {
