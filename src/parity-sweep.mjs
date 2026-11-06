@@ -68,13 +68,17 @@ export async function reconcileLocalComputation(env, candleKey) {
     }
     const comparison = compareWithWebhooks(record, webhooks, policy);
     const outcome = await recordComparison(env.DB, id, candleKey, comparison, policy);
-    comparisons[engine] = { result: comparison.status, counted: outcome.counted, mismatches: comparison.mismatches ?? [], missing: comparison.missing ?? [] };
+    comparisons[engine] = { result: outcome.result ?? comparison.status, counted: outcome.counted, mismatches: comparison.mismatches ?? [], missing: comparison.missing ?? [], ...(outcome.escalated ? { escalated: outcome.escalated } : {}) };
   }
+  // A candle whose local input bar differs from TradingView's final bar never enters the trusted
+  // lane, whatever the identity's status: the H1 chain then reads the TradingView evidence for it,
+  // until the pull adapter republishes the candle on the final bar and it matches.
+  const inputDiffers = Object.values(comparisons).some((c) => c.result === "input_mismatch");
   const trust = {};
   for (const engine of LOCAL_ENGINES) {
     const record = observed[engine];
     const id = record ? identityOf(record) : null;
-    trust[engine] = id ? await isTrusted(env.DB, id) : false;
+    trust[engine] = id && !inputDiffers ? await isTrusted(env.DB, id) : false;
     const trustedKey = TRUSTED_PREFIX + candleKey + ":" + engine;
     // A record that is not visible yet (KV is eventually consistent across locations) is
     // left alone: deleting its trusted copy here would undo a reconcile that saw it. Only a

@@ -6,6 +6,15 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(parity, health): architecture gaps 1 and 2 (owner decision 2026-11-06).
+  - **Gap 1: one bad bar no longer revokes the H1 chain.**
+    - When only the input bar differs from TradingView and every indicator field agrees, the result is `input_mismatch`. It neither counts nor revokes, and the candle stays out of the trusted lane.
+    - The pull adapter republishes an H1 candle whose bar TradingView revised later. The new comparison replaces the open one and counts.
+    - Three input mismatches in a row still revoke.
+  - **Gap 2: the system watches itself** (`src/health-alerts.mjs`).
+    - It checks for: a revoked parity identity, an input mismatch, a missing local H1 record, a room without a conclusion, Workers AI rate-limit losses, a stale News Daily, and a stale War Room.
+    - It reports a `warning` when an alert opens and an `info` when it resolves, from `xauusd-risk-manager` to the platform kernel (at most 3 an hour, never `critical`).
+    - Nexus shows the open alerts as its Priority Queue.
 - feat(nexus): Nexus rebuilt in the Cerebrum Console obsidian design (owner decision 2026-11-06), so it can merge into the Console control panel. The `nexus` subdomain will later replace `home`.
   - **Stack:** a React SPA in `workers/xauusd-nexus-dashboard/ui` with the same stack and palette as `workers/console/ui`: React, Vite, Tailwind obsidian, lucide, framer-motion and the three.js neural mesh. It is served as Workers Static Assets.
   - **Layout:**
