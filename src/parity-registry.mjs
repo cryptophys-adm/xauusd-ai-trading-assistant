@@ -287,6 +287,38 @@ export async function recordComparison(db, id, candleKey, comparison, policy = D
   return { counted: true, result: comparison.status, ...(escalated ? { escalated: "repeated_input_mismatch" } : {}) };
 }
 
+/**
+ * One-time reconciliation (owner approval 2026-11-06): comparisons stored as `mismatch` before the
+ * input-mismatch rule, whose mismatches are all input-bar fields, are reclassified as
+ * `input_mismatch`; an identity revoked only by such comparisons (no indicator mismatch since its
+ * approval) is restored to approved. A revocation by an indicator mismatch, or by repeated input
+ * mismatches (detail.reason "repeated_input_mismatch"), is never touched.
+ * Returns { reclassified, restored: [engine] }.
+ */
+export async function reclassifyInputOnlyMismatches(db, now = new Date().toISOString()) {
+  const inputOnly = `result = 'mismatch'
+    AND COALESCE(json_extract(detail, '$.reason'), '') <> 'repeated_input_mismatch'
+    AND json_array_length(json_extract(detail, '$.mismatches')) > 0
+    AND NOT EXISTS (SELECT 1 FROM json_each(json_extract(detail, '$.mismatches')) WHERE json_extract(value, '$.field') NOT LIKE 'input:%')`;
+  const counts = (await db.prepare(`SELECT engine, source_hash, implementation_hash, COUNT(*) AS n FROM engine_parity_comparisons WHERE ${inputOnly} GROUP BY engine, source_hash, implementation_hash`).all())?.results || [];
+  const updated = await db.prepare(`UPDATE engine_parity_comparisons SET result = 'input_mismatch' WHERE ${inputOnly}`).run();
+  for (const c of counts) {
+    await db.prepare("UPDATE engine_parity_registry SET total_mismatches = MAX(total_mismatches - ?, 0), updated_at = ? WHERE engine = ? AND source_hash = ? AND implementation_hash = ?")
+      .bind(Number(c.n) || 0, now, c.engine, c.source_hash, c.implementation_hash).run();
+  }
+  const revoked = (await db.prepare(
+    `SELECT r.engine, r.source_hash, r.implementation_hash FROM engine_parity_registry r
+     WHERE r.status = 'revoked' AND r.approved_at IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM engine_parity_comparisons c WHERE c.engine = r.engine AND c.source_hash = r.source_hash
+                       AND c.implementation_hash = r.implementation_hash AND c.result = 'mismatch' AND c.compared_at >= r.approved_at)`
+  ).all())?.results || [];
+  for (const r of revoked) {
+    await db.prepare("UPDATE engine_parity_registry SET status = 'approved', revoked_at = NULL, updated_at = ? WHERE engine = ? AND source_hash = ? AND implementation_hash = ? AND status = 'revoked'")
+      .bind(now, r.engine, r.source_hash, r.implementation_hash).run();
+  }
+  return { reclassified: Number(updated?.meta?.changes) || 0, restored: revoked.map((r) => r.engine) };
+}
+
 /** True when the identity is currently trusted for the local_computation lane. */
 export async function isTrusted(db, id) {
   if (id.engine === "mizan" || id.engine.startsWith("mizan_")) {

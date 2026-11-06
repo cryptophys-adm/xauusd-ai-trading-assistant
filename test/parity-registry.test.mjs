@@ -257,3 +257,33 @@ test(`${INPUT_MISMATCH_REVOKE_AFTER} input mismatches in a row mean the data pip
   assert.equal(row.status, "revoked");
   assert.equal(row.last_detail.reason, "repeated_input_mismatch");
 });
+
+test("one-time reconciliation: input-only revocations are restored; indicator and repeated-input revocations stay", async () => {
+  const { reclassifyInputOnlyMismatches } = await import("../src/parity-registry.mjs");
+  const db = d1();
+  await ensureSchema(db);
+  const policy = { ...DEFAULT_POLICY, promoteAfter: 1 };
+  const match = { status: "match", compared: 1, mismatches: [], missing: [] };
+  const old = (fields) => ({ status: "mismatch", compared: 10, mismatches: fields.map((field) => ({ field })), missing: [] });
+  const ids = {
+    inputOnly: identityOf(local("prophet", {})),
+    indicator: identityOf(local("gmi", {}, { dependencies: mizanDep })),
+    m5: identityOf({ ...local("prophet", {}), timeframe: "5" })
+  };
+  for (const id of Object.values(ids)) { await registerIdentity(db, id); await recordComparison(db, id, "k0", match, policy, "2026-11-06T00:00:00Z"); }
+  // Under the old rule these bar-only differences were stored as mismatches and revoked.
+  await recordComparison(db, ids.inputOnly, "k1", old(["input:c", "input:volume"]), policy, "2026-11-06T03:00:00Z");
+  await recordComparison(db, ids.indicator, "k1", old(["input:c", "d_enc"]), policy, "2026-11-06T03:00:00Z");
+  await recordComparison(db, ids.m5, "k1", { ...old(["input:volume"]), status: "mismatch" }, policy, "2026-11-06T03:00:00Z");
+  await db.prepare("UPDATE engine_parity_comparisons SET detail = json_set(detail, '$.reason', 'repeated_input_mismatch') WHERE engine = 'prophet_m5'").run();
+  for (const id of Object.values(ids)) assert.equal(await isTrusted(db, id), false);
+
+  const r = await reclassifyInputOnlyMismatches(db, "2026-11-06T09:00:00Z");
+  assert.deepEqual(r, { reclassified: 1, restored: ["prophet"] });
+  assert.equal(await isTrusted(db, ids.inputOnly), true);
+  assert.equal(await isTrusted(db, ids.indicator), false, "an indicator mismatch stays revoked");
+  assert.equal(await isTrusted(db, ids.m5), false, "an escalated repeated-input revocation stays revoked");
+  const row = (await listRegistry(db)).find((x) => x.engine === "prophet");
+  assert.equal(row.total_mismatches, 0);
+  assert.deepEqual(await reclassifyInputOnlyMismatches(db), { reclassified: 0, restored: [] }, "idempotent");
+});

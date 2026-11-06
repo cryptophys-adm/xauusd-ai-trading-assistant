@@ -15,7 +15,7 @@
 import { LOCAL_ENGINES } from "./evidence-fusion.mjs";
 import {
   identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema,
-  recordComparison, isTrusted, policyFromEnv
+  recordComparison, isTrusted, policyFromEnv, reclassifyInputOnlyMismatches
 } from "./parity-registry.mjs";
 
 export const OBSERVED_PREFIX = "localcalc-observed:";
@@ -137,7 +137,28 @@ function closedCandleKeys(now, seconds, { symbol, timeframe, lookback }) {
  * Reconciles the most recently closed H1 candles. Returns a per-candle summary;
  * individual candle failures are captured instead of aborting the sweep.
  */
+/** KV marker of the one-time input-mismatch reconciliation (owner approval 2026-11-06). */
+export const RECLASSIFY_MARKER = "parity:reclassify-input-only:v1";
+
+/** Runs reclassifyInputOnlyMismatches once per database (KV marker); never throws. */
+export async function reclassifyOnce(env, now = Date.now()) {
+  try {
+    if (await env.SIGNAL_CACHE?.get?.(RECLASSIFY_MARKER)) return { status: "done_before" };
+    await ensureSchema(env.DB);
+    const result = await reclassifyInputOnlyMismatches(env.DB, new Date(now).toISOString());
+    await env.SIGNAL_CACHE?.put?.(RECLASSIFY_MARKER, JSON.stringify({ ...result, at: new Date(now).toISOString() }));
+    console.log("parity_reclassify_input_only", JSON.stringify(result));
+    return { status: "ok", ...result };
+  } catch (error) {
+    console.error("parity_reclassify_failed", error instanceof Error ? error.message : String(error));
+    return { status: "error" };
+  }
+}
+
 export async function reconcileRecentCandles(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, m5Lookback = PARITY_SWEEP_LOOKBACK_M5_CANDLES, m15Lookback = PARITY_SWEEP_LOOKBACK_M15_CANDLES } = {}) {
+  // Before this sweep compares anything: restore identities revoked only by input-bar differences
+  // under the old rule, so this same sweep places their records into the trusted lane again.
+  await reclassifyOnce(env, now);
   const candleKeys = closedH1CandleKeys(now, { lookback });
   // 5m parity (C0): 5m comparator webhooks are stored only and never queue a
   // reconcile task, so the sweep is what pairs them with the local 5m records

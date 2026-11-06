@@ -11,6 +11,10 @@ what changed and when, by merge commit and PR.
     - When only the input bar differs from TradingView and every indicator field agrees, the result is `input_mismatch`. It neither counts nor revokes, and the candle stays out of the trusted lane.
     - The pull adapter republishes an H1 candle whose bar TradingView revised later. The new comparison replaces the open one and counts.
     - Three input mismatches in a row still revoke.
+    - **One-time reconciliation (owner approval 2026-11-06):** the first parity sweep after deploy runs `reclassifyOnce` (KV marker `parity:reclassify-input-only:v1`).
+      - It reclassifies the comparisons stored as `mismatch` under the old rule whose mismatches are all input-bar fields. In production these are three: GMI H1 01:00 volume, and Prophet and GMI H1 03:00 close and volume.
+      - It restores the H1 `prophet` and `gmi` identities they revoked.
+      - Indicator mismatches and escalated repeated-input revocations are never touched.
   - **Gap 2: the system watches itself** (`src/health-alerts.mjs`).
     - It checks for: a revoked parity identity, an input mismatch, a missing local H1 record, a room without a conclusion, Workers AI rate-limit losses, a stale News Daily, and a stale War Room.
     - It reports a `warning` when an alert opens and an `info` when it resolves, from `xauusd-risk-manager` to the platform kernel (at most 3 an hour, never `critical`).

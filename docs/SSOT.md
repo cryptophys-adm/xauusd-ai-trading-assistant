@@ -63,6 +63,7 @@ Owner decision, 2026-11-05: the architecture does not depend on webhooks. Approv
      - That candle's records stay out of the trusted lane, so the H1 chain reads the TradingView evidence for it.
      - The pull adapter rebuilds an H1 candle whose bar TradingView revised after publication. It cuts the bundle at that close and publishes once more (`republishRevisedH1`). The new comparison replaces the open one and counts.
      - `INPUT_MISMATCH_REVOKE_AFTER` (3) input mismatches in a row on different candles mean the data pipeline is wrong, so they revoke like a mismatch.
+     - One-time reconciliation (owner approval 2026-11-06): `reclassifyOnce` reclassifies the earlier input-only mismatches and restores the identities they revoked (the H1 `prophet` and `gmi` revocations of 2026-11-06). It runs once per database, guarded by a KV marker.
    - **Calibration runbook (for example monthly).**
      1. Install the existing alerts on the H1 chart, and on the 5m chart for the 5m lane.
      2. Leave them on for at least a few candles.
