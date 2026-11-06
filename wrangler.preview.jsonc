@@ -60,6 +60,9 @@
     // room and the per-H1 HUD agents. About 27 calls per 15m close.
     "WAR_ROOM_ENABLED": "true",
     "WAR_ROOM_MAX_CALLS_PER_HOUR": "400",
+    // Threads per timeframe (owner decision 2026-11-05): H4 and D1 threads, one per closed bar.
+    "TF_THREADS_ENABLED": "true",
+    "TF_THREADS_MAX_CALLS_PER_HOUR": "60",
     "PREVIEW_FIXTURES_ENABLED": "true"
   },
   "queues": {

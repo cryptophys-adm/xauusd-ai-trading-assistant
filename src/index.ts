@@ -57,6 +57,8 @@ export interface Env {
   LIVE_ROOM_MAX_CALLS_PER_HOUR?: string;
   WAR_ROOM_ENABLED?: string;
   WAR_ROOM_MAX_CALLS_PER_HOUR?: string;
+  TF_THREADS_ENABLED?: string;
+  TF_THREADS_MAX_CALLS_PER_HOUR?: string;
   PREVIEW_FIXTURES_ENABLED?: string;
   PARITY_PROMOTE_AFTER?: string;
   PARITY_ABS_TOLERANCE?: string;
@@ -155,6 +157,7 @@ import { warRoomEnabled, runWarRoomBar, readWarRoom, readTldr } from "./war-room
 import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, SCORING, SCORING_VERSION } from "./outcome-scoring.mjs";
 import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
+import { runPendingTimeframeThreads, readTimeframeThread, tfThreadsEnabled } from "./timeframe-threads.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
 import { DECISION_TEXT_RULE, plainDecisionText } from "./plain-decision.mjs";
@@ -1954,6 +1957,19 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/threads/timeframe") {
+    // The H4 and D1 tabs of the Nexus right panel (H1 and 15m read /api/tldr and /api/war-room/latest).
+    const chart = (url.searchParams.get("chart") || "").toUpperCase();
+    if (chart !== "H4" && chart !== "D1") return dashboardJson({ status: "error", error: "chart must be H4 or D1" }, 400);
+    try {
+      const thread = await readTimeframeThread(env.DB, chart);
+      if (!thread) return dashboardJson({ status: "not_found", enabled: tfThreadsEnabled(env), chart }, 404);
+      return dashboardJson({ status: "ok", enabled: tfThreadsEnabled(env), thread });
+    } catch (error) {
+      console.error("tf_thread_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/shadow-versions") {
     try {
       const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") || "30") || 30));
@@ -2179,6 +2195,12 @@ export default {
           try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env))); }
           catch (e) { console.error("shadow_versions_failed", e instanceof Error ? e.message : String(e)); }
         }
+        // Threads per timeframe (owner decision 2026-11-05): the H4 and D1 threads, once per
+        // closed bar, after its local records are in. Behind TF_THREADS_ENABLED.
+        try {
+          const tf = await runPendingTimeframeThreads(env);
+          if (tf.status !== "disabled") console.log("tf_threads", JSON.stringify(tf));
+        } catch (e) { console.error("tf_threads_failed", e instanceof Error ? e.message : String(e)); }
         // RFC_INDICATOR_AGENT_PLATFORM P4: advisory reports to the Cryptophys Platform kernel.
         // Non-fatal by design; a no-op without the AGENTS binding (preview, tests).
         try {

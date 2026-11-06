@@ -127,6 +127,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .feed-header h2 { margin:0; font-size:18px; }
   .feed-header .sub { font-size:12px; color:var(--muted); }
   .rightbar-card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px; margin-bottom:12px; position:sticky; top:70px; }
+  .tf-tabs { display:flex; gap:4px; margin-bottom:10px; flex-wrap:wrap; }
+  .tf-tabs button { background:var(--panel2); color:var(--muted); border:1px solid var(--border); border-radius:8px; padding:4px 10px; font-size:12px; cursor:pointer; }
+  .tf-tabs button.active { color:var(--text); border-color:var(--accent); }
+  .tf-post { font-size:12px; line-height:1.5; padding:6px 0; border-top:1px solid var(--border); }
+  .tf-post .who { color:var(--muted); font-size:11px; }
   .rightbar-card h3 { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.6px; margin-bottom:10px; }
   .stat { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border); font-size:13px; }
   .stat:last-child { border-bottom:none; }
@@ -219,12 +224,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <!-- Right sidebar -->
   <div class="rightbar">
     <div class="rightbar-card">
-      <h3>Threads 1H · TLDR</h3>
-      <div id="tldr-h1"><div class="loader">Loading...</div></div>
-    </div>
-    <div class="rightbar-card">
-      <h3>News Thread · TLDR</h3>
-      <div id="tldr-news"><div class="loader">Loading...</div></div>
+      <h3>Threads · TLDR</h3>
+      <div class="tf-tabs" id="tf-tabs">
+        <button data-tab="D1">D1</button><button data-tab="H4">H4</button><button data-tab="H1">H1</button><button data-tab="M15">15m</button><button data-tab="NEWS">News</button>
+      </div>
+      <div id="tf-body"><div class="loader">Loading...</div></div>
     </div>
   </div>
 
@@ -390,22 +394,63 @@ async function loadWarRoom(){
       : '';
   } catch(e){ $('war-status').innerHTML = '<span class="error">'+esc(e.message)+'</span>'; }
 }
-async function loadTldr(){
-  try {
-    const r = await fetch(API+'/api/tldr'); const d = await r.json();
-    const h = d.h1, n = d.news;
-    $('tldr-h1').innerHTML = h
-      ? '<div class="news-item"><div class="news-title">'+chip(h.decision)+' confidence '+pct(h.confidence)+'</div><div class="news-meta">H1 candle '+esc(h1When(h.candle_key))+'</div>'
-        +'<div style="font-size:12px;margin-top:6px;line-height:1.5">'+esc(h.tldr||'')+'</div>'
-        +(h.consensus ? '<div style="font-size:12px;margin-top:6px;color:var(--muted)">Debate: '+chip(h.consensus.stance)+' '+esc(h.consensus.summary||'')+'</div>' : '')+'</div>'
-      : '<div class="loader">No H1 decision yet.</div>';
-    $('tldr-news').innerHTML = n
-      ? '<div class="news-item"><div class="news-title">'+chip(n.consensus)+' '+esc(n.title||'')+'</div><div class="news-meta">'+esc(timeAgo(n.created_at))+'</div>'
-        +'<div style="font-size:12px;margin-top:6px;line-height:1.5">'+esc(n.tldr||'')+'</div>'
-        +((n.headlines||[]).length ? '<ul style="margin:6px 0 0 18px;font-size:12px;color:var(--muted)">'+n.headlines.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>' : '')+'</div>'
-      : '<div class="loader">No news thread yet.</div>';
-  } catch(e){ $('tldr-h1').innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+// Right panel: one Thread per timeframe as a tab (owner decision 2026-11-05: D1, H4, H1, 15m),
+// plus the News Thread. H1 and News come from /api/tldr, 15m from the War Room, H4 and D1
+// from /api/threads/timeframe.
+let tfTab = 'H1';
+try { const saved = localStorage.getItem('nexus.tfTab'); if (saved) tfTab = saved; } catch(e){}
+function tfPosts(posts){
+  return (posts||[]).filter(p=>p.status==='ok').map(p=>'<div class="tf-post"><div class="who">'+esc(p.name||p.id)+(p.calibration ? ' · '+esc(p.calibration) : '')+'</div>'+chip(p.stance)+' '+esc(p.claim||'')+'</div>').join('');
 }
+function tfConclusion(c, when){
+  if (!c || c.status !== 'ok') return '<div class="loader">The moderator has not concluded yet.</div>';
+  return '<div class="news-item"><div class="news-title">'+chip(c.stance)+' confidence '+pct(c.confidence)+'</div><div class="news-meta">'+esc(when||'')+'</div>'
+    +'<div style="font-size:12px;margin-top:6px;line-height:1.5">'+esc(c.summary||'')+'</div>'
+    +((c.reasons||[]).length ? '<ul style="margin:6px 0 0 18px;font-size:12px;color:var(--muted)">'+c.reasons.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>' : '')+'</div>';
+}
+async function loadTldr(){
+  document.querySelectorAll('#tf-tabs button').forEach(b=>b.classList.toggle('active', b.dataset.tab===tfTab));
+  const body = $('tf-body');
+  try {
+    if (tfTab === 'H1' || tfTab === 'NEWS') {
+      const d = await (await fetch(API+'/api/tldr')).json();
+      if (tfTab === 'H1') {
+        const h = d.h1;
+        body.innerHTML = h
+          ? '<div class="news-item"><div class="news-title">'+chip(h.decision)+' confidence '+pct(h.confidence)+'</div><div class="news-meta">H1 candle '+esc(h1When(h.candle_key))+'</div>'
+            +'<div style="font-size:12px;margin-top:6px;line-height:1.5">'+esc(h.tldr||'')+'</div>'
+            +(h.consensus ? '<div style="font-size:12px;margin-top:6px;color:var(--muted)">Debate: '+chip(h.consensus.stance)+' '+esc(h.consensus.summary||'')+'</div>' : '')+'</div>'
+          : '<div class="loader">No H1 decision yet.</div>';
+      } else {
+        const n = d.news;
+        body.innerHTML = n
+          ? '<div class="news-item"><div class="news-title">'+chip(n.consensus)+' '+esc(n.title||'')+'</div><div class="news-meta">'+esc(timeAgo(n.created_at))+'</div>'
+            +'<div style="font-size:12px;margin-top:6px;line-height:1.5">'+esc(n.tldr||'')+'</div>'
+            +((n.headlines||[]).length ? '<ul style="margin:6px 0 0 18px;font-size:12px;color:var(--muted)">'+n.headlines.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>' : '')+'</div>'
+          : '<div class="loader">No news thread yet.</div>';
+      }
+    } else if (tfTab === 'M15') {
+      const r = await fetch(API+'/api/war-room/latest');
+      const d = r.ok ? await r.json() : null;
+      const room = d && d.room;
+      body.innerHTML = room
+        ? tfConclusion(room.conclusion, '15m bar closing '+timeAgo(room.bar_time)) + tfPosts(room.openings)
+        : '<div class="loader">No War Room yet.</div>';
+    } else {
+      const r = await fetch(API+'/api/threads/timeframe?chart='+tfTab);
+      const d = r.ok ? await r.json() : null;
+      const t = d && d.thread;
+      body.innerHTML = t
+        ? tfConclusion(t.conclusion, tfTab+' bar closing '+timeAgo(t.bar_close)) + tfPosts(t.posts)
+        : '<div class="loader">No '+esc(tfTab)+' thread yet: it starts at the next closed '+(tfTab==='H4'?'4-hour':'daily')+' candle.</div>';
+    }
+  } catch(e){ body.innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+}
+document.querySelectorAll('#tf-tabs button').forEach(b=>b.addEventListener('click', ()=>{
+  tfTab = b.dataset.tab;
+  try { localStorage.setItem('nexus.tfTab', tfTab); } catch(e){}
+  loadTldr();
+}));
 loadH1Levels().then(loadWarRoom); loadTldr();
 setInterval(loadWarRoom, 10000);
 setInterval(()=>{ loadH1Levels(); loadTldr(); }, 60000);

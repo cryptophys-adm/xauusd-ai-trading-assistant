@@ -6,6 +6,10 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(threads): Thread tabs in Nexus, D1, H4, H1 and 15m (step 4 of the owner's timeframe-thread plan; no 5m thread for now).
+  - **H4 and D1 threads.** `src/timeframe-threads.mjs` runs one thread per closed H4 or D1 bar: Structure Desk, GMI Desk, Technical Analyst, Macro Desk and Risk Manager open once each, then the moderator writes the TLDR. Uncalibrated desks speak at confidence 0.4 or lower.
+  - **Runs and budget.** The parity sweep cron runs it behind `TF_THREADS_ENABLED`, within `TF_THREADS_MAX_CALLS_PER_HOUR` (production 24, preview 60). Read API: `GET /api/threads/timeframe?chart=H4|D1`.
+  - **Nexus.** The right panel is one "Threads · TLDR" card with tabs D1, H4, H1, 15m and News. H1 and News come from `/api/tldr`, 15m from the Live War Room, H4 and D1 from the new API.
 - feat(htf): H4 and D1 local lane (step 3 of the owner's timeframe-thread plan).
   - **Producer and publishing.** `htf-local-producer.mjs` builds mizan, prophet and gmi records for every closed H4 (`"240"`) and D1 (`"1D"`) bar. The pull adapter publishes them behind `HTF_PARITY_PUBLISH`.
   - **GMI engine.** GMI runs on the new `gmi-core-htf.mjs`, which adds H4/D1 and Pine's `dyn_ltf` intrabars (M5 on H4, M15 on D1). A test proves it equals `gmi-core-tf.mjs` on M15 and H1.
