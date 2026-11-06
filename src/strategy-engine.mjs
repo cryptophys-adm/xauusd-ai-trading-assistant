@@ -164,8 +164,10 @@ function riskChecks(dir, { h1Snapshot, m15Snapshot, news }) {
   const dm = h1Snapshot?.huds?.decision_matrix?.fields || {};
   const tm = h1Snapshot?.huds?.trade_management?.fields || {};
   const prophet = h1Snapshot?.huds?.prophet?.fields || {};
-  if (dm.conflict === true || tm.conflict === true) vetoes.push("GMI and Prophet conflict on the 1-hour chart");
-  if (dm.gate === -1 || tm.gate === -1) vetoes.push("the GMI confluence gate is closed on the 1-hour chart");
+  // Owner decision 2026-11-06: a GMI and Prophet conflict and a closed GMI gate are cautions (each
+  // -0.1 confidence), not vetoes; production 14:15 had a clear bearish consensus blocked by them.
+  if (dm.conflict === true || tm.conflict === true) cautions.push("GMI and Prophet conflict on the 1-hour chart");
+  if (dm.gate === -1 || tm.gate === -1) cautions.push("the GMI confluence gate is closed on the 1-hour chart");
   if (prophet.t_enc === 4) vetoes.push("Prophet signals a ruthless cut loss on the 1-hour chart");
   if (dir > 0 && dm.verdict === -3) vetoes.push("the GMI verdict is a strong sell on the 1-hour chart");
   if (dir < 0 && dm.verdict === 3) vetoes.push("the GMI verdict is a strong buy on the 1-hour chart");

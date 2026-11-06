@@ -6,6 +6,9 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- fix(strategy): a GMI and Prophet conflict and a closed GMI gate on the 1H chart are cautions (each −0.1 confidence), no longer vetoes (owner decision 2026-11-06, "longgarkan saja").
+  - **Why:** at 14:15 they blocked a short setup that every room's agents backed (D1 −0.34, 1H −0.46, 15m −0.62).
+  - **Still vetoes:** a Prophet cut loss (t_enc 4), and a strong GMI verdict against the trade.
 - feat(strategy): the strategy engine. The decision is the consensus of every agent from D1 to 5m, with key levels and reward-to-risk (owner decision 2026-11-06: "full confluence and all agents"; "D1 trend down to the 5m entry, with key level prices and RRR").
   - **Why:** the H1 chain's three models need a Prophet trigger on the H1 candle itself, so the decision was almost always WAIT.
   - **What:** `src/strategy-engine.mjs` (`GET /api/strategy`) is deterministic. It reads:

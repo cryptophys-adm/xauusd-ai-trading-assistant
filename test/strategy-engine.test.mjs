@@ -86,13 +86,21 @@ test("the trend decides the side: a 1H room against the trend, or a 15m room aga
   assert.equal(neutralTrend.direction, "LONG", "a neutral trend lets a strong 1H and 15m agreement through");
 });
 
-test("vetoes block the setup: a GMI conflict, a closed gate, a Prophet cut loss", () => {
-  for (const extra of [{ decision_matrix: { fields: { conflict: true, gate: 1, verdict: 1 } } }, { decision_matrix: { fields: { conflict: false, gate: -1, verdict: 1 } } }, { prophet: { fields: { t_enc: 4 } } }]) {
+test("vetoes block the setup: a Prophet cut loss, a strong GMI verdict against the trade", () => {
+  for (const extra of [{ prophet: { fields: { t_enc: 4 } } }, { decision_matrix: { fields: { conflict: false, gate: 1, verdict: -3 } } }]) {
     const s = buildStrategy(input({ h1Snapshot: snapshot("60", 4040, extra) }));
     assert.equal(s.state, "BLOCKED", JSON.stringify(extra));
     assert.equal(s.decision, "WAIT");
     assert.ok(s.vetoes.length);
   }
+  // Owner decision 2026-11-06 ("longgarkan"): a GMI and Prophet conflict and a closed GMI gate are
+  // cautions, not vetoes: each lowers the confidence by 0.1 and the trade may still trigger.
+  const base = buildStrategy(input());
+  const loosened = buildStrategy(input({ h1Snapshot: snapshot("60", 4040, { decision_matrix: { fields: { conflict: true, gate: -1, verdict: 1 } }, trade_management: { fields: { conflict: true, gate: -1 } } }) }));
+  assert.equal(loosened.vetoes.length, 0);
+  assert.deepEqual(loosened.cautions, ["GMI and Prophet conflict on the 1-hour chart", "the GMI confluence gate is closed on the 1-hour chart"]);
+  assert.equal(loosened.confidence, Math.round((base.confidence - 0.2) * 100) / 100);
+  assert.equal(loosened.state, base.confidence - 0.2 >= 0.4 ? "TRIGGERED" : "LOW_CONFIDENCE");
   const caution = buildStrategy(input({ news: { tldr: { status: "ok", stance: "BEARISH", confidence: 0.8 } } }));
   assert.ok(caution.cautions.some((c) => /news/.test(c)));
   assert.ok(caution.confidence < buildStrategy(input()).confidence);
