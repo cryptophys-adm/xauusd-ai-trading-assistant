@@ -104,7 +104,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - **No webhook dependency:** the rooms run on local computation only: closed bars, the HUD snapshot and the local Prophet R38 record of the bar.
     - **Calibration:** a HUD statement is verified only where it equals a parity-approved record. On 4H and D1 there are none until the alerts are installed there, so those HUD agents speak at confidence 0.4 or lower.
     - **No confirmation, no entry:** a BUY or SELL conclusion needs that chart's Prophet R38 confirmation, read from the local record of the bar. The 1H conclusion names the H1 decision when it differs.
-    - **Schedule:** the rooms run from the parity sweep cron in their own `waitUntil`, in parallel, behind `TF_THREADS_ENABLED`, within `TF_THREADS_MAX_CALLS_PER_HOUR` (production 120, preview 150; about 26 calls per room).
+    - **Schedule:** the rooms run from the parity sweep cron in their own `waitUntil`, one after another, the higher timeframe first (D1, 4H, 1H), so each Higher-Timeframe Desk reads the conclusion just written and the model sees one room's burst at a time. They run behind `TF_THREADS_ENABLED`, within `TF_THREADS_MAX_CALLS_PER_HOUR` (production 120, preview 150; about 26 calls per room).
       - A bar waits up to 20 minutes for its HUD snapshot, then runs with the desks only.
       - Each room runs once per bar.
     - **Storage and API:** messages are stored in `agent_thread_messages` (thread `tf:H1` / `tf:H4` / `tf:D1`, run = bar open; steps `brief`, `open:*`, `debate:*` and `conclusion`). Read API: `GET /api/threads/timeframe?chart=H1|H4|D1` (also `1H`, `4H`).

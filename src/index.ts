@@ -1854,7 +1854,9 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     });
     return dashboardJson({ status: "ok", count: items.length, items });
   }
-  if (url.pathname.startsWith("/api/news/")) {
+  // Exact routes under a prefix route are excluded here, or the prefix route would answer them
+  // as an id (production 2026-11-06: /api/news/daily and /api/threads/timeframe read as ids).
+  if (url.pathname.startsWith("/api/news/") && url.pathname !== "/api/news/daily") {
     const key = decodeURIComponent(url.pathname.slice("/api/news/".length));
     const row = await env.DB.prepare("SELECT analysis_key, fetched_at, analyzed_at, article_count, evidence_json, analyst_output, counselor_output, reasoner_output, recommendation_json FROM news_analyses WHERE analysis_key = ? LIMIT 1").bind(key).first<JsonObject>();
     if (!row) return dashboardJson({ status: "not_found" }, 404);
@@ -1889,7 +1891,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error", error: "threads_unavailable" }, 500);
     }
   }
-  if (url.pathname.startsWith("/api/threads/")) {
+  if (url.pathname.startsWith("/api/threads/") && url.pathname !== "/api/threads/timeframe") {
     try {
       const threadId = decodeURIComponent(url.pathname.slice("/api/threads/".length));
       const thread = threadId.startsWith("h1:") ? await readH1Thread(env.DB, threadId.slice(3)) : await readThread(env.DB, threadId);
@@ -2194,9 +2196,9 @@ export default {
       // per-event reconcile tasks run within seconds of evidence arrival and can
       // all miss a candle when KV has not yet settled (cached misses); without a
       // later sweep those parity comparisons would be lost permanently.
-      // Timeframe War Rooms (owner decision 2026-11-06): the 1H, 4H and D1 rooms of the bars that
-      // just closed, in parallel with the sweep (a room takes up to about 5.5 minutes). Behind
-      // TF_THREADS_ENABLED; idempotent per bar.
+      // Timeframe War Rooms (owner decision 2026-11-06): the D1, 4H and 1H rooms of the bars that
+      // just closed, one after another, beside the sweep (a room takes up to about 5.5 minutes).
+      // Behind TF_THREADS_ENABLED; idempotent per bar.
       ctx.waitUntil(runPendingTimeframeThreads(env).then(tf => {
         if (tf.status !== "disabled") console.log("tf_threads", JSON.stringify(tf));
       }).catch(e => console.error("tf_threads_failed", e instanceof Error ? e.message : String(e))));
