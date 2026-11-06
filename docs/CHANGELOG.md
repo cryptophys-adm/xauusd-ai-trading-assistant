@@ -6,6 +6,18 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(rooms): every agent states a bias beside its action; Prophet reads its state; a BUY or SELL conclusion needs support (owner decision 2026-11-06, Prophet audit).
+  - **Audit:**
+    - The AI Worker reads Prophet R38 correctly. The alert fields equal the local reading (verified by parity).
+    - TradingView itself sent `direction 0 / t_enc 0 / d_enc 0` on H1 today. The cut-loss (`t_enc 4`), price-discovery (`t_enc 6`) and structure-break (`d_enc 3`) states of 4 and 5 November were read and reasoned about.
+    - Prophet looked "always WAIT" for two reasons:
+      - the room stance is an action, and without a confirmation the action is WAIT;
+      - the Prophet agent never received its setup state.
+    - Room leans therefore read near neutral.
+    - The one confirmed sell (5 Nov 06:00) was blocked by the GMI gate conflict, by design.
+  - **Bias:** every opening now gives `bias` (BULLISH, BEARISH or NEUTRAL) beside its action. Room leans and the Global Conclusion read it, and Nexus shows "WAIT · bias bullish".
+  - **Prophet state:** the Prophet reading gains its state from the setup gate the snapshot computes for the R37 Funnel, for example "a bullish bias from all three cycles, and a buy setup is waiting for structure confirmation", plus a risk veto (`t_enc 4`) or reversal watch (`t_enc 3`).
+  - **Support rule:** a BUY or SELL conclusion needs at least one agent holding that stance. A conclusion that breaks it, or the confirmation rule, gets one correction call. The preview run had a BUY over a unanimous WAIT room.
 - feat(war-room): each room has its own timeframe desk; the War Room conclusion looks as before in every tab (owner feedback 2026-11-06).
   - **15m room:**
     - The 15m Desk replaces the H1 Desk. It reads the parity-approved 15m Prophet R38, R37 and GMI records of the candle, in plain sentences.

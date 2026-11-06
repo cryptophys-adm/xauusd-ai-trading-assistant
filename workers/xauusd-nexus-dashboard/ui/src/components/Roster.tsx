@@ -1,13 +1,13 @@
 import { Bot } from "lucide-react";
 import { Skeleton } from "./ui";
 import { Stance } from "./Stance";
-import { calibrationText } from "./Post";
+import { calibrationText, BiasTag } from "./Post";
 import { useWarRoom } from "../lib/warroom";
 import { useMarket } from "../lib/market";
 import { useTab, tabLabel } from "../lib/tab";
 import { pct } from "../lib/format";
 
-function Agent({ name, stance, cal, ok = true }: { name: string; stance?: string | null; cal?: string | null; ok?: boolean }) {
+function Agent({ name, stance, bias, cal, ok = true }: { name: string; stance?: string | null; bias?: string | null; cal?: string | null; ok?: boolean }) {
   const verified = /verified|approved|VERIFIED/.test(cal ?? "") && !/not yet/.test(cal ?? "");
   return (
     <div className="glass-inner flex items-start gap-2.5 px-2.5 py-2">
@@ -15,7 +15,7 @@ function Agent({ name, stance, cal, ok = true }: { name: string; stance?: string
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[12px] font-semibold text-slate-200">{name}</span>
-          {ok && stance ? <Stance value={stance} /> : <span className="h-1.5 w-1.5 rounded-full bg-slate-600" />}
+          {ok && stance ? <span className="flex items-center gap-1.5">{bias && <BiasTag bias={bias} />}<Stance value={stance} /></span> : <span className="h-1.5 w-1.5 rounded-full bg-slate-600" />}
         </div>
         {cal && <div className={`mt-0.5 truncate text-[10px] ${verified ? "text-emerald-300/80" : "text-slate-500"}`}>{cal}</div>}
       </div>
@@ -46,7 +46,7 @@ export default function Roster() {
           : <p className="text-[12px] text-slate-500">The News Analyst has not concluded yet.</p>
       ) : !list.length ? <p className="text-[12px] text-slate-500">No {tabLabel(tab)} War Room session yet.</p> : (
         <div className="max-h-[60vh] space-y-1.5 overflow-y-auto pr-1">
-          {list.map((a: any) => <Agent key={a.id} name={a.name} stance={said[a.id]?.stance} ok={said[a.id]?.status === "ok"} cal={calibrationText(a.calibration)} />)}
+          {list.map((a: any) => <Agent key={a.id} name={a.name} stance={said[a.id]?.stance} bias={said[a.id]?.bias} ok={said[a.id]?.status === "ok"} cal={calibrationText(a.calibration)} />)}
         </div>
       )}
     </div>

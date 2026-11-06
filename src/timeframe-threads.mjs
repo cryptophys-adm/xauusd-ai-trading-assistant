@@ -32,7 +32,7 @@ import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { ensureThreadSchema, rowToThreadMessage, ROOM_STANCES, hudEvidenceLines, threadInternals } from "./agent-threads.mjs";
 import {
-  validateOpening, validateRebuttal, majorityStance, selectRebutters, UNCALIBRATED_CONFIDENCE_CAP,
+  validateOpening, validateRebuttal, majorityStance, selectRebutters, UNCALIBRATED_CONFIDENCE_CAP, BIAS_RULE, SUPPORT_RULE, stanceSupported,
   WAR_ROOM_OPENING_MS, WAR_ROOM_DEBATE_MS, WAR_ROOM_CONCLUSION_MS
 } from "./war-room.mjs";
 import { closedHtfCandleKeys, OBSERVED_PREFIX } from "./parity-sweep.mjs";
@@ -94,8 +94,8 @@ const ruleText = (spec) =>
 
 const OPENING_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
-  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, confidence: { type: "number" }, claim: { type: "string" } },
-  required: ["agent", "stance", "confidence", "claim"]
+  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, claim: { type: "string" } },
+  required: ["agent", "stance", "bias", "confidence", "claim"]
 });
 const REBUTTAL_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
@@ -129,7 +129,7 @@ function normalizeTfNames(o, busAgents) {
  * BUY or SELL needs the chart's confirmation; on 1H a stance that differs from the H1 decision
  * must name it.
  */
-export function validateTfConclusion(o, { busAgents = [], confirmations = null, h1Decision = null } = {}) {
+export function validateTfConclusion(o, { busAgents = [], confirmations = null, h1Decision = null, supportStances = null } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
   const errors = [];
   if (!ROOM_STANCES.includes(o.stance)) errors.push("stance_invalid");
@@ -141,6 +141,7 @@ export function validateTfConclusion(o, { busAgents = [], confirmations = null, 
     if (h1 && ROOM_STANCES.includes(o.stance) && o.stance !== h1 && !new RegExp(`H1[^.]{0,40}${h1}`, "i").test(o.summary)) errors.push("h1_reference_missing");
   }
   if (confirmations && !tfEntryAllowed(o.stance, confirmations)) errors.push("entry_without_confirmation");
+  if (!stanceSupported(o.stance, supportStances)) errors.push("stance_without_support");
   if (Array.isArray(o.reasons)) o.reasons = o.reasons.filter((r) => !(typeof r === "string" && !r.trim()));
   if (!Array.isArray(o.reasons) || o.reasons.length < 1 || o.reasons.some((r) => typeof r !== "string")) errors.push("reasons_invalid");
   else for (const r of o.reasons.slice(0, 3)) errors.push(...naturalLanguageErrors(r));
@@ -257,7 +258,8 @@ function openingMessages(agent, data, spec, roster) {
     ROOM_RULES,
     ...riskRule,
     `This is your opening on the communication bus: one claim from your own data only. Do not repeat what other roles cover (the other agents are ${deskList(roster)} and one agent per HUD).`,
-    `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"claim":"<= ${CLAIM_MAX - 40} chars"}`,
+    BIAS_RULE,
+    `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"claim":"<= ${CLAIM_MAX - 40} chars"}`,
     "YOUR DATA:",
     JSON.stringify(data ?? { available: false })
   ]);
@@ -276,7 +278,7 @@ function rebuttalMessages(agent, own, bus, spec, unanimous, confirmations) {
     "In the argument, call agents by their names, never by an id. Each bus entry says how much of that agent's data is verified by parity or computed from verified bars: weigh that evidence above uncalibrated readings, and never discuss calibration itself.",
     `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"rebuts":["<agent id>"],"argument":"<= ${ARGUMENT_MAX - 40} chars"}`,
     "YOUR OPENING: " + JSON.stringify({ stance: own.stance, confidence: own.confidence, claim: own.claim }),
-    "COMMUNICATION BUS (id, name, stance, confidence, evidence, claim):",
+    "COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):",
     JSON.stringify(bus)
   ]);
 }
@@ -288,6 +290,7 @@ function conclusionMessages(spec, bus, debate, confirmations, h1) {
     ROOM_RULES,
     ...(h1 ? [`The H1 decision chain decided ${h1.decision}: if your stance differs from it, the summary must say "H1 decision: ${h1.decision}" and why the room still differs.`] : []),
     ruleText(spec) + " The conclusion obeys it: BUY or SELL only with the matching confirmation below. CONFIRMATIONS: " + JSON.stringify(confirmations),
+    SUPPORT_RULE,
     "Weigh claims by their argument and by their evidence, not by the number of agents: a claim built on data verified by parity, or computed from verified bars, outweighs one built on uncalibrated readings (each bus entry states which). No repetition: the summary states the conclusion once, each reason adds something new, and dissent lists the ids of agents whose stance still differs from yours. In the summary and reasons, call agents by their names, never by an id, and never discuss calibration itself.",
     'Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"summary":"<= 360 chars","reasons":["<= 160 chars", "at most 3"],"dissent":["<agent id>"]}',
     "COMMUNICATION BUS:",
@@ -363,14 +366,14 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
       maxTokens: BUS_MAX_TOKENS.agent, effort: "low",
       // A 4H or D1 Desk whose records parity has not approved speaks at 0.4 or lower.
       validate: (o) => validateOpening(normalizeTfNames(o, [agent]), agent, { verifiedLines: (agent === "h4" || agent === "d1") ? (ev.desk?.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]) }),
-      toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), name: tfAgentName(agent) }, refs: [] })
+      toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), bias: o.bias, name: tfAgentName(agent) }, refs: [] })
     });
   }));
   const answered = openings.filter((m) => m?.status === "ok");
   if (!answered.length) return { status: "no_openings", calls };
   const young = clock() - Date.parse(ev.bar_close) < TF_QUORUM_WAIT_MS;
   if (young && answered.length * 2 < roster.length) return { status: "waiting_for_quorum", calls, openings: answered.length, roster: roster.length };
-  const bus = answered.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, confidence: m.confidence, evidence: evidenceNote(m.agent), claim: m.claim }));
+  const bus = answered.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, evidence: evidenceNote(m.agent), claim: m.claim }));
   const busAgents = bus.map((b) => b.id);
 
   // Phase 2: the debate, open for at most 3 minutes.
@@ -396,7 +399,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   await conclude(base("conclusion", "moderator"), {
     messages: conclusionMessages(spec, bus, debate.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument })), ev.confirmations, ev.h1),
     schemaName: "tf_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low",
-    validate: (o) => validateTfConclusion(o, { busAgents, confirmations: ev.confirmations, h1Decision: ev.h1?.decision ?? null }),
+    validate: (o) => validateTfConclusion(o, { busAgents, confirmations: ev.confirmations, h1Decision: ev.h1?.decision ?? null, supportStances: new Set([...answered.map((m) => m.stance), ...debate.map((m) => m.stance)]) }),
     toBody: (o) => ({ body: { summary: clip(o.summary, 400), reasons: o.reasons.slice(0, 3).map((r) => clip(r, 200)), dissent: [...new Set(o.dissent)], majority }, refs: [] })
   });
   return { status: "complete", calls, openings: answered.length, rebuttals: debate.length };
@@ -468,7 +471,7 @@ export async function readTimeframeThread(db, chart) {
     if (c.total_lines == null) return c.label ?? null;
     return calibrationNote(c);
   };
-  const pick = (m) => ({ id: m.agent, name: tfAgentName(m.agent), status: m.status, stance: m.stance, confidence: m.confidence, ts: m.ts, claim: m.claim ?? null, argument: m.argument ?? null, rebuts: m.rebuts ?? [], rebuts_names: (m.rebuts || []).map(tfAgentName), conceded: m.conceded === true, calibration: note(m.agent) });
+  const pick = (m) => ({ id: m.agent, name: tfAgentName(m.agent), status: m.status, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, ts: m.ts, claim: m.claim ?? null, argument: m.argument ?? null, rebuts: m.rebuts ?? [], rebuts_names: (m.rebuts || []).map(tfAgentName), conceded: m.conceded === true, calibration: note(m.agent) });
   const openings = rows.filter((m) => m.step.startsWith("open:")).map(pick).sort(byRoster);
   const debate = rows.filter((m) => m.step.startsWith("debate:")).map(pick).sort(byRoster);
   const c = rows.find((m) => m.step === "conclusion");

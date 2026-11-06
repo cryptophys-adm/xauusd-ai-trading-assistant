@@ -3,7 +3,7 @@ import { ago, pct } from "../lib/format";
 
 export type RoomMessage = {
   id: string; name?: string; status: string; stance?: string | null; confidence?: number | null; ts?: string;
-  claim?: string | null; argument?: string | null; rebuts_names?: string[]; conceded?: boolean; calibration?: unknown;
+  claim?: string | null; argument?: string | null; rebuts_names?: string[]; conceded?: boolean; bias?: string | null; calibration?: unknown;
 };
 
 export function calibrationText(c: unknown): string | null {
@@ -16,6 +16,12 @@ export function calibrationText(c: unknown): string | null {
     return parts.length ? `${parts.join(" · ")} of ${x.total_lines}` : "not yet calibrated";
   }
   return x.label ?? null;
+}
+
+/** The direction an agent's data leans, beside its action (owner decision 2026-11-06). */
+export function BiasTag({ bias }: { bias: string }) {
+  const c = bias === "BULLISH" ? "text-emerald-300" : bias === "BEARISH" ? "text-rose-300" : "text-slate-400";
+  return <span className={`text-[10px] ${c}`} title="The direction this agent's data leans">bias {bias.toLowerCase()}</span>;
 }
 
 /** One message of a room: an opening on the bus or a rebuttal in the debate. */
@@ -32,6 +38,7 @@ export function Post({ m, text, calibration }: { m: RoomMessage; text?: string |
       <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
         <span className="font-semibold text-slate-200">{m.name ?? m.id}</span>
         <Stance value={m.stance} />
+        {m.bias && <BiasTag bias={m.bias} />}
         <span className="mono">{pct(m.confidence)}</span>
         {calibration && <span className="text-slate-500">· {calibration}</span>}
         {m.conceded && <span className="chip border-cyan-400/30 bg-cyan-400/10 px-1.5 py-0 text-[9px] tracking-[0.14em] text-cyan-200">CONCEDES</span>}

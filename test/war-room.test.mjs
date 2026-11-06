@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { resetThreadSchemaCacheForTests, buildLiveRoomTask } from "../src/agent-threads.mjs";
 import {
   runWarRoomBar, readWarRoom, readTldr, warRoomEnabled, majorityStance, selectRebutters,
-  validateOpening, validateRebuttal, validateConclusion, WAR_ROOM_DEBATE_MS, DESK_AGENTS, entryAllowed
+  validateOpening, validateRebuttal, validateConclusion, WAR_ROOM_DEBATE_MS, DESK_AGENTS, entryAllowed, ROOM_BIASES
 } from "../src/war-room.mjs";
 
 const BAR = "2026-11-05T14:45:00.000Z";
@@ -102,7 +102,7 @@ test("every agent opens on the bus, the minority and the Risk Manager rebut, the
   assert.deepEqual(Object.keys(data), ["hud", "timeframe", "reading"]);
   // The debate sees the whole bus.
   const rebuttal = ai.calls.find(c => /debate/.test(c.request.messages[0].content));
-  assert.equal(JSON.parse(rebuttal.request.messages[1].content.split("COMMUNICATION BUS (id, name, stance, confidence, evidence, claim):\n")[1]).length, 6);
+  assert.equal(JSON.parse(rebuttal.request.messages[1].content.split("COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):\n")[1]).length, 6);
 
   assert.equal((await runWarRoomBar(e, task())).status, "already_complete", "idempotent per bar");
 });
@@ -147,9 +147,10 @@ test("no confirmation, no entry: the Risk Manager enforces it and a BUY conclusi
   const moderator = ai.calls.find(c => /moderator of the XAUUSD Live War Room/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   assert.match(moderator, /no confirmation, no entry[\s\S]*CONFIRMATIONS/);
 
-  // With a confirmed H1 buy the same conclusion is accepted.
+  // With a confirmed H1 buy, and an agent on the bus holding BUY (owner decision 2026-11-06),
+  // the same conclusion is accepted.
   resetThreadSchemaCacheForTests();
-  const e2 = env(fakeAI({ conclusion: buy }));
+  const e2 = env(fakeAI({ conclusion: buy, stances: { technical: "BUY" } }));
   e2.DB.raw.prepare("UPDATE ai_syntheses SET prophet_metrics = ?").run(JSON.stringify({ prophet_r38: { direction: 1, buy_confirmed: true } }));
   await runWarRoomBar(e2, task());
   assert.equal((await readWarRoom(e2.DB)).conclusion.status, "ok");
@@ -176,7 +177,7 @@ test("calibration status is shown once: no disclaimer asked, uncalibrated HUD co
   const hudPrompt = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   assert.match(hudPrompt, /never mention calibration, verification or comparators/);
   const debate = ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
-  const bus = JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, confidence, evidence, claim):\n")[1]);
+  const bus = JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):\n")[1]);
   assert.equal(bus.find(b => b.id === "kinetic_engine").evidence, "no statement calibrated yet");
   assert.equal(bus.find(b => b.id === "htf").evidence, "parity-approved H1 chain");
   assert.match(debate, /call agents by their names/);
@@ -215,7 +216,7 @@ test("computed from verified bars: Camarilla and session statements lift the 0.4
   const prompt = ok.ai.calls.find(c => /"agent":"interstellar_eyes"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request.messages[1].content;
   assert.match(prompt, /Computed from verified bars: On the daily Camarilla levels/);
   const debate = ok.ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
-  const bus = JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, confidence, evidence, claim):\n")[1]);
+  const bus = JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):\n")[1]);
   assert.equal(bus.find(b => b.id === "interstellar_eyes").evidence, "1 computed from verified bars (of 1 statement)");
 
   for (const [label, args] of [["no comparison yet", { approved: true }], ["the bar differed from TradingView", { approved: true, comparison: "input_mismatch" }], ["no approved record", { approved: false, comparison: "match" }]]) {
@@ -288,6 +289,64 @@ test("the 15m Desk reads only the 15m chart; the H1 chain moves to the Higher-Ti
   const observed = await run("localcalc-observed:");
   assert.equal(observed.room.roster.find(r => r.id === "m15").calibration.label, "15m local records, not parity approved");
   assert.equal(observed.room.openings.find(o => o.id === "m15").confidence, 0.4, "an unapproved chain speaks at 0.4 or lower");
+});
+
+test("every opening carries a bias besides its action (owner decision 2026-11-06, Prophet audit)", async () => {
+  assert.deepEqual(ROOM_BIASES, ["BULLISH", "BEARISH", "NEUTRAL"]);
+  const ai = fakeAI();
+  const run0 = ai.run;
+  ai.run = async (model, request) => {
+    const r = await run0(model, request);
+    const body = JSON.parse(r.choices[0].message.content);
+    if (body.claim) { body.bias = body.agent === "kinetic_engine" ? "BULLISH" : body.agent === "technical" ? "bearish" : undefined; r.choices[0].message.content = JSON.stringify(body); }
+    return r;
+  };
+  const e = env(ai);
+  await runWarRoomBar(e, task());
+  const room = await readWarRoom(e.DB);
+  const by = Object.fromEntries(room.openings.map(o => [o.id, o]));
+  assert.equal(by.kinetic_engine.stance, "WAIT");
+  assert.equal(by.kinetic_engine.bias, "BULLISH", "WAIT for the action, but the data leans bullish");
+  assert.equal(by.technical.bias, "BEARISH", "case is normalised");
+  assert.equal(by.risk.bias, "NEUTRAL", "a missing bias falls back to the stance's direction");
+  const prompt = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request;
+  assert.match(prompt.messages[1].content, /"bias":"BULLISH\|BEARISH\|NEUTRAL"/);
+  assert.ok(prompt.response_format.json_schema.schema.properties.bias, "the strict schema asks for it");
+  assert.equal(validateOpening({ agent: "risk", stance: "WAIT", bias: "UP", confidence: 0.5, claim: "Flat." }, "risk").errors.includes("bias_invalid"), true);
+  const debate = ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  assert.match(JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):\n")[1]).find(b => b.id === "kinetic_engine").bias, /BULLISH/);
+});
+
+test("a BUY or SELL conclusion needs an agent on the bus or in the debate holding it (owner decision 2026-11-06)", () => {
+  const c = { stance: "BUY", confidence: 0.6, summary: "H1 decision: WAIT, but the room buys the confirmed signal.", reasons: ["The H1 Prophet confirmed a buy."], dissent: [] };
+  const confirmations = { h1_prophet_r38: { buy_confirmed: true, sell_confirmed: false } };
+  const unanimous = validateConclusion({ ...c }, "WAIT", ["htf", "risk"], confirmations, { supportStances: new Set(["WAIT"]) });
+  assert.ok(unanimous.errors.includes("stance_without_support"), "preview-e2e: BUY while every agent said WAIT");
+  assert.equal(validateConclusion({ ...c }, "WAIT", ["htf", "risk"], confirmations, { supportStances: new Set(["WAIT", "BUY"]) }).valid, true);
+  assert.equal(validateConclusion({ ...c, stance: "WAIT", summary: "The room waits." }, "WAIT", ["htf"], confirmations, { supportStances: new Set(["SELL"]) }).valid, true, "WAIT needs no support");
+});
+
+test("a moderator that overrules the whole room is asked once to correct its stance", async () => {
+  const buy = { stance: "BUY", confidence: 0.6, summary: "H1 decision: WAIT, but the room buys the confirmed signal.", reasons: ["The H1 Prophet confirmed a buy."], dissent: [] };
+  let moderatorCalls = 0;
+  const ai = fakeAI();
+  const run0 = ai.run;
+  ai.run = async (model, request) => {
+    if (/moderator of the XAUUSD Live War Room/.test(request.messages[0].content)) {
+      moderatorCalls += 1;
+      const content = moderatorCalls === 1 ? buy : { stance: "WAIT", confidence: 0.6, summary: "The room waits: the confirmation alone does not carry it.", reasons: ["Every agent holds WAIT."], dissent: [] };
+      if (moderatorCalls === 2) assert.match(request.messages.at(-1).content, /at least one agent on the bus or in the debate holding that stance/);
+      return { choices: [{ message: { content: JSON.stringify(content) }, finish_reason: "stop" }], usage: { total_tokens: 50 } };
+    }
+    return run0(model, request);
+  };
+  const e = env(ai);
+  e.DB.raw.prepare("UPDATE ai_syntheses SET prophet_metrics = ?").run(JSON.stringify({ prophet_r38: { direction: 1, buy_confirmed: true } }));
+  await runWarRoomBar(e, task());
+  const c = (await readWarRoom(e.DB)).conclusion;
+  assert.equal(moderatorCalls, 2);
+  assert.equal(c.status, "ok");
+  assert.equal(c.stance, "WAIT");
 });
 
 test("a failed opening stays out of the bus; the room still concludes", async () => {

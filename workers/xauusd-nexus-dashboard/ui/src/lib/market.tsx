@@ -44,15 +44,15 @@ export function direction(stance?: string | null): number {
 }
 
 /**
- * The room's directional lean in [-1, 1]: the confidence-weighted mean direction of the agents
- * that opened successfully. A WAIT agent pulls the lean toward 0 with its confidence, so a room
+ * The room's directional lean in [-1, 1]: the confidence-weighted mean of the biases of the agents
+ * that opened successfully (their action when no bias was stored). A WAIT agent pulls the lean toward 0 with its confidence, so a room
  * that mostly waits reads as neutral even when one desk leans hard.
  */
 export function roomLean(openings: any[] | undefined): number | null {
   const ok = (openings ?? []).filter((o) => o?.status === "ok" && typeof o.confidence === "number");
   const weight = ok.reduce((s, o) => s + o.confidence, 0);
   if (!ok.length || weight <= 0) return null;
-  return ok.reduce((s, o) => s + direction(o.stance) * o.confidence, 0) / weight;
+  return ok.reduce((s, o) => s + direction(o.bias || o.stance) * o.confidence, 0) / weight;
 }
 
 /** Stance counts of the agents that opened successfully. */

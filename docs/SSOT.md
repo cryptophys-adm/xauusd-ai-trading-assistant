@@ -284,6 +284,13 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
      - **One agent per computed 15m HUD** (13).
   2. **Debate.** Agents whose stance differs from the bus majority (at most 7, by confidence) and the Risk Manager rebut named agents. A dissenter the bus persuaded may concede instead: its stance changes, it may name nobody, and it is kept as `conceded: true` (2026-11-06). The debate is open for at most 3 minutes, then closed.
   3. **Conclusion.** The moderator concludes for the Nexus main panel: stance, summary, up to 3 reasons and the agents that still disagree.
+  - **Bias beside the action** (owner decision 2026-11-06, Prophet audit).
+    - Every opening states its action (BUY, SELL, HOLD, WAIT or CLOSE) and its `bias` (BULLISH, BEARISH or NEUTRAL): the direction its own data leans, even when the action is WAIT for lack of a confirmation.
+    - Room leans (Trend by timeframe, Global Conclusion) read the bias. Openings stored before the bias existed use the action.
+    - Nexus shows the action with "bias …" next to it.
+  - **A BUY or SELL conclusion needs support** (owner decision 2026-11-06).
+    - At least one agent on the bus or in the debate must hold that stance; a confirmation alone never overrules the whole room.
+    - A conclusion that breaks this rule, or "no confirmation, no entry", gets one correction call telling the moderator which rule it broke, then is rejected. The same applies in the 1H, 4H and D1 rooms.
   - The H1 decision is the constraint: a conclusion that differs must say "H1 decision: X". Price levels come only from the validated H1 chain.
   - **Calibration status once** (owner decision 2026-11-05, option A).
     - The brief stores each agent's evidence status: for a HUD agent, its verified lines, its lines computed from verified bars and its total lines; otherwise the source label. Nexus shows it once, as a badge next to the agent.
