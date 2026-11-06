@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { resetThreadSchemaCacheForTests } from "../src/agent-threads.mjs";
 import {
   runTimeframeThread, runPendingTimeframeThreads, readTimeframeThread, validateTfConclusion, tfEvidence,
-  tfThreadsEnabled, tfEntryAllowed, closedH1Key, TF_THREAD_CHARTS, TF_DESKS, TF_HUD_WAIT_MS
+  tfThreadsEnabled, tfEntryAllowed, closedH1Key, TF_THREAD_CHARTS, TF_DESKS, TF_HUD_WAIT_MS, TF_ROOM_GAP_MS, TF_QUORUM_WAIT_MS
 } from "../src/timeframe-threads.mjs";
 
 const H4_MS = 4 * 3600_000;
@@ -48,7 +48,7 @@ function hudSnapshot(candleKey, timeframe) {
 }
 
 /** Each agent answers from its Required JSON line; the moderator writes the TLDR. */
-function fakeAI({ conclusion = null, confidence = 0.35, stances = {} } = {}) {
+function fakeAI({ conclusion = null, confidence = 0.35, stances = {}, fail = new Set() } = {}) {
   const calls = [];
   return {
     calls,
@@ -58,6 +58,7 @@ function fakeAI({ conclusion = null, confidence = 0.35, stances = {} } = {}) {
       const agent = (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1];
       let content;
       if (/moderator of the XAUUSD/.test(sys)) content = conclusion || { stance: "WAIT", confidence: 0.5, summary: "The four-hour room leans up but has no confirmation yet, so it prefers to wait.", reasons: ["Structure points up without a confirmed signal.", "Volatility is normal for this chart."], dissent: [] };
+      else if (fail.has(agent)) throw new Error("3021: rate limiting: inference request per min rate reached");
       else if (/debate/.test(sys)) content = { agent, stance: stances[agent] || "WAIT", confidence: 0.5, rebuts: [agent === "technical" ? "risk" : "technical"], argument: "The last candles closed near their highs, which argues against fading the move." };
       else content = { agent, stance: stances[agent] || "WAIT", confidence, claim: "My own data on this chart supports waiting for the next candle." };
       return { choices: [{ message: { content: JSON.stringify(content) }, finish_reason: "stop" }], usage: { total_tokens: 40 } };
@@ -179,12 +180,33 @@ test("due rooms run one after another, the higher timeframe first: the 4H room r
   const d1Key = "OANDA:XAUUSD:1D:" + d1Open;
   await e.SIGNAL_CACHE.put("market-data:v2:series:OANDA:XAUUSD|1D", series(d1Open, 24 * 3600_000));
   await e.SIGNAL_CACHE.put("hud:1D:" + d1Key, hudSnapshot(d1Key, "1D"));
-  const out = await runPendingTimeframeThreads(e, { now: NOW, clock: fixedClock });
+  const slept = [];
+  const out = await runPendingTimeframeThreads(e, { now: NOW, clock: fixedClock, sleep: async (ms) => { slept.push(ms); } });
   assert.deepEqual(Object.keys(out.charts), ["D1", "H4"]);
+  assert.deepEqual(slept, [TF_ROOM_GAP_MS], "one gap between the two rooms, for the per-minute model limit");
   assert.equal(out.charts.D1.status, "complete");
   const h4 = await readTimeframeThread(e.DB, "H4");
   assert.ok(h4.roster.some((a) => a.id === "htf"), "the 4H room has the Higher-Timeframe Desk");
   const firstH4Call = ai.calls.findIndex((c) => /4-hour War Room/.test(c.request.messages[0].content));
   const lastD1Call = ai.calls.map((c) => /daily War Room/.test(c.request.messages[0].content)).lastIndexOf(true);
   assert.ok(lastD1Call < firstH4Call, "no 4H call before the D1 room is done");
+});
+
+test("a room with fewer than half of its agents heard waits for the next sweep, which retries only the failed openings", async () => {
+  const e = env(fakeAI({ fail: new Set(["technical", "risk", "kinetic_engine"]) }));
+  const first = await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
+  assert.equal(first.status, "waiting_for_quorum");
+  assert.equal((await readTimeframeThread(e.DB, "H4")).conclusion, null, "no TLDR from one agent out of four");
+  const ai = fakeAI();
+  e.AI = ai;
+  const second = await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
+  assert.equal(second.status, "complete");
+  const openingCalls = ai.calls.filter((c) => /Required JSON: \{"agent":"\w+","stance":"BUY\|SELL\|HOLD\|WAIT\|CLOSE","confidence":0\.\.1,"claim"/.test(c.request.messages[1].content));
+  assert.equal(openingCalls.length, 3, "only the three failed openings are asked again");
+});
+
+test("past the quorum wait a room concludes with whoever spoke", async () => {
+  const e = env(fakeAI({ fail: new Set(["technical", "risk", "kinetic_engine"]) }));
+  const late = () => LAST_OPEN + H4_MS + TF_QUORUM_WAIT_MS + 1;
+  assert.equal((await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: late })).status, "complete");
 });
