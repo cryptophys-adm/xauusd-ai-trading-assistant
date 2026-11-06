@@ -9,7 +9,7 @@ export const DECISION_TEXT_FIELDS = Object.freeze(["reasoning", "confirmation", 
 
 export const DECISION_TEXT_RULE =
   "Write reasoning, confirmation and invalidation as plain sentences a trader reads. " +
-  "Name each indicator (Prophet R38, Prophet R37, GMI v12.70, MizanLib) and say in words what it shows, " +
+  "Name each indicator (Prophet, GMI v12.70, MizanLib) and say in words what it shows; Prophet is one indicator, its signal and trade management (R38) and its direction and confirmation candle (R37) read together, " +
   "for example \"GMI v12.70 reports a conflict, so its confluence gate blocks the setup\". " +
   "Never write field names, words joined by underscores, key paths with dots, comparisons such as == or !=, or key = value pairs.";
 

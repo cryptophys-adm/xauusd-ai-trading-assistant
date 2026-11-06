@@ -50,8 +50,8 @@ export const TF_THREAD_CHARTS = Object.freeze({
 export const TF_DESKS = Object.freeze({
   // Each room's own timeframe desk (owner decision 2026-11-06: a desk analyses only its chart).
   h1: { name: "1H Desk", role: "the H1 decision chain (its decision, confidence and reasoning) and the local 1-hour computation of the bar" },
-  h4: { name: "4H Desk", role: "the local Prophet R38, Prophet R37 and GMI computation of the 4-hour candle that just closed: this timeframe's own signal" },
-  d1: { name: "D1 Desk", role: "the local Prophet R38, Prophet R37 and GMI computation of the daily candle that just closed: this timeframe's own signal" },
+  h4: { name: "4H Desk", role: "the local Prophet (signal, direction, structure, trade management) and GMI computation of the 4-hour candle that just closed: this timeframe's own signal" },
+  d1: { name: "D1 Desk", role: "the local Prophet (signal, direction, structure, trade management) and GMI computation of the daily candle that just closed: this timeframe's own signal" },
   htf: { name: "Higher-Timeframe Desk", role: "the conclusion of the next higher timeframe's Thread: the backdrop this timeframe trades in" },
   news: { name: "News Analyst", role: "the fundamental news of the last 24 hours: the daily bias for gold and the headlines behind it" },
   technical: { name: "Technical Analyst", role: "price action only: the last closed candles of this chart" },

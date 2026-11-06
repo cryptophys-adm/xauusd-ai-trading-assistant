@@ -133,15 +133,29 @@ export function readHud(agentId, hud = {}) {
       break;
     }
     case "prophet": {
+      // Owner decision 2026-11-06: Prophet reads as one indicator. The R38 signal and the R37
+      // consensus direction come from the same snapshot (hud-store passes them in) and are alert
+      // fields, so each is verified by parity on its own.
+      if (typeof f.buy_confirmed === "boolean" || typeof f.sell_confirmed === "boolean") {
+        const buy = f.buy_confirmed === true, sell = f.sell_confirmed === true;
+        add(buy ? `Prophet's signal: a confirmed BUY on this closed candle${f.buy_high_quality ? " that also passed the high-quality filter" : ""}.`
+          : sell ? `Prophet's signal: a confirmed SELL on this closed candle${f.sell_high_quality ? " that also passed the high-quality filter" : ""}.`
+            : "Prophet's signal: no buy or sell confirmation on this closed candle.",
+        buy ? ["buy_confirmed"] : sell ? ["sell_confirmed"] : ["buy_confirmed", "sell_confirmed"]);
+      }
+      if (isNum(f.prophet_dir)) {
+        add(f.prophet_dir ? `Prophet's direction is ${dir(f.prophet_dir)}, with momentum and structure in agreement.` : "Prophet has no clear direction: its momentum and structure do not agree, or both are flat.", ["prophet_dir"]);
+      }
       const structure = describeStructure(f.d_enc, f.structure_subtype);
       add(`Prophet's structure shows ${structure.text}.`, ["d_enc", "structure_subtype"]);
       if (TRADE_MANAGEMENT[f.t_enc]) add(`Its momentum and trade-management state is ${TRADE_MANAGEMENT[f.t_enc]}.`, ["t_enc"]);
       // Prophet audit (2026-11-06): the Prophet HUD on TradingView shows a state, not only WAIT.
       // With the setup gate of the same snapshot, Prophet reads its bias and setup in one line.
+      // The direction above (R37 consensus) is Prophet's bias; this line is its setup and cycles,
+      // worded so the two never read as conflicting biases.
       if (R38_GATE[f.gate_status]) {
-        const bias = f.cycle_intensity === 3 ? "a bullish bias from all three cycles" : f.cycle_intensity === -3 ? "a bearish bias from all three cycles" : "no bias, because the three cycles do not agree";
         const risk = f.t_enc === 4 ? "; a risk veto calls for reducing risk" : f.t_enc === 3 ? "; a reversal is being watched" : "";
-        add(`Prophet's state: ${bias}, and ${R38_GATE[f.gate_status]}${risk}.`);
+        add(`Prophet's setup: ${R38_GATE[f.gate_status]}, and ${cycle(f.cycle_intensity)}${risk}.`);
       } else add(`On the cycle read, ${cycle(f.cycle_intensity)}.`);
       const parts = [];
       if (isNum(f.kww_zscore)) parts.push(`the price z-score is ${fixed(f.kww_zscore)}`);

@@ -66,48 +66,48 @@ export function describeStructure(dEnc, subtype) {
   return { text: "no divergence, with momentum in line with price", lean: 0 };
 }
 
-function interpretR38(p) {
-  if (!present(p)) return null;
-  const buy = p.buy_confirmed === true || num(p.direction) === 1;
-  const sell = p.sell_confirmed === true || num(p.direction) === -1;
-  const signal = buy
-    ? `a confirmed BUY signal on this closed candle${p.buy_high_quality === true ? " that also passed the high-quality filter" : ""}`
-    : sell
-      ? `a confirmed SELL signal on this closed candle${p.sell_high_quality === true ? " that also passed the high-quality filter" : ""}`
-      : "no buy or sell confirmation on this closed candle";
-  const tm = TRADE_MANAGEMENT[num(p.t_enc)] ?? "not reported";
-  const structure = describeStructure(num(p.d_enc), num(p.structure_subtype));
+/**
+ * Prophet as one indicator (owner decision 2026-11-06). Prophet R38 and the Prophet R37 core
+ * inside GMI share one MizanLib structure core (their d_enc and subtype are identical in
+ * production), so they read as one Prophet: the R38 signal and trade management, the R37
+ * consensus direction and confirmation candle, and the shared structure once. The two alerts stay
+ * separate in TradingView for calibration.
+ */
+function interpretProphet(r38, r37) {
+  const has38 = present(r38), has37 = present(r37);
+  if (!has38 && !has37) return null;
+  const buy = has38 && (r38.buy_confirmed === true || num(r38.direction) === 1);
+  const sell = has38 && (r38.sell_confirmed === true || num(r38.direction) === -1);
+  const signal = !has38
+    ? "the signal alert has not arrived"
+    : buy
+      ? `a confirmed BUY signal on this closed candle${r38.buy_high_quality === true ? " that also passed the high-quality filter" : ""}`
+      : sell
+        ? `a confirmed SELL signal on this closed candle${r38.sell_high_quality === true ? " that also passed the high-quality filter" : ""}`
+        : "no buy or sell confirmation on this closed candle";
+  const dir = has37 ? num(r37.direction) ?? 0 : null;
+  const direction = dir == null
+    ? ""
+    : dir
+      ? ` Its direction is ${dirWord(dir)}, with momentum and structure in agreement.`
+      : " It has no clear direction: its momentum and structure do not agree, or both are flat.";
+  const shared = has38 ? r38 : r37;
+  const structure = describeStructure(num(shared.d_enc), num(shared.structure_subtype));
+  const bEnc = has37 ? num(r37.b_enc) : null;
+  const confirmation = bEnc === 3 ? "a bullish confirmation candle"
+    : bEnc === -3 ? "a bearish confirmation candle (a close below the previous low)"
+      : bEnc === -4 ? "a bearish structure confirmation"
+        : bEnc === 2 ? "a divergence still waiting for its confirmation candle"
+          : has37 ? "no confirmation candle" : null;
+  const event = has37 && r37.bull_event === true ? " A fresh bullish structure event printed on this candle." : has37 && r37.bear_event === true ? " A fresh bearish structure event printed on this candle." : "";
+  const tm = has38 ? TRADE_MANAGEMENT[num(r38.t_enc)] ?? "not reported" : null;
   const confirmed = buy ? 1 : sell ? -1 : 0;
-  return {
-    source: "Prophet R38",
-    confirmed,
-    lean: confirmed || structure.lean,
-    text: `Prophet R38 shows ${signal}. Its trade-management state is ${tm}, and the structure shows ${structure.text}.`
-  };
-}
-
-function interpretR37(p) {
-  if (!present(p)) return null;
-  const dir = num(p.direction) ?? 0;
-  const structure = describeStructure(num(p.d_enc), num(p.structure_subtype));
-  const bEnc = num(p.b_enc);
-  const confirmation = bEnc === 3
-    ? "a bullish confirmation candle"
-    : bEnc === -3
-      ? "a bearish confirmation candle (a close below the previous low)"
-      : bEnc === -4
-        ? "a bearish structure confirmation"
-        : bEnc === 2
-          ? "a divergence still waiting for its confirmation candle"
-          : "no confirmation candle";
-  const event = p.bull_event === true ? " A fresh bullish structure event printed on this candle." : p.bear_event === true ? " A fresh bearish structure event printed on this candle." : "";
-  const direction = dir ? `a ${dirWord(dir)} direction` : "no clear direction (its momentum and structure do not agree, or both are flat)";
   const confirmationLean = bEnc === 3 ? 1 : bEnc === -3 || bEnc === -4 ? -1 : 0;
   return {
-    source: "Prophet R37",
-    confirmed: 0,
-    lean: dir || structure.lean || confirmationLean,
-    text: `Prophet R37, the shared core inside GMI, reads ${direction}. It shows ${structure.text} with ${confirmation}.${event}`
+    source: "Prophet",
+    confirmed,
+    lean: confirmed || dir || structure.lean || confirmationLean,
+    text: `Prophet: ${signal}.${direction} The structure shows ${structure.text}${confirmation ? `, and ${confirmation}` : ""}.${event}${tm ? ` Its trade-management state is ${tm}.` : ""}`
   };
 }
 
@@ -147,9 +147,9 @@ function overall(readings) {
  * Returns { available, bias, summary, lines: [{ source, text }], missing }.
  */
 export function interpretWebhooks({ prophetR38, prophetR37, gmi } = {}) {
-  const readings = [interpretR38(prophetR38), interpretR37(prophetR37), interpretGmi(gmi)];
-  const names = ["Prophet R38", "Prophet R37", "GMI v12.70"];
-  const missing = names.filter((_, i) => !readings[i]);
+  const readings = [interpretProphet(prophetR38, prophetR37), interpretGmi(gmi)];
+  // The alerts stay three in TradingView; a missing one is named by its alert.
+  const missing = [[prophetR38, "Prophet R38"], [prophetR37, "Prophet R37"], [gmi, "GMI v12.70"]].filter(([p]) => !present(p)).map(([, n]) => n);
   const got = readings.filter(Boolean);
   if (!got.length) {
     return { available: false, bias: "unavailable", summary: "No TradingView alert has arrived for this candle yet.", lines: [], missing };

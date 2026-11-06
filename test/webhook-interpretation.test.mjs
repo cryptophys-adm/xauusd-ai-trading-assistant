@@ -10,18 +10,23 @@ const PROD = {
   gmi: { verdict: 0, gate: -1, gmi_dir: -1, prophet_dir: 0, conflict: true }
 };
 
-test("decodes the three alerts of a real candle into plain language", () => {
+test("decodes the three alerts of a real candle into plain language; Prophet reads as one indicator", () => {
   const r = interpretWebhooks(PROD);
   assert.equal(r.available, true);
   assert.equal(r.bias, "bearish");
-  assert.deepEqual(r.lines.map(l => l.source), ["Prophet R38", "Prophet R37", "GMI v12.70"]);
-  assert.match(r.lines[0].text, /no buy or sell confirmation/);
-  assert.match(r.lines[0].text, /possible reversal/);
-  assert.match(r.lines[0].text, /bearish divergence/);
-  assert.match(r.lines[1].text, /bearish confirmation candle/);
-  assert.match(r.lines[1].text, /fresh bearish structure event/);
-  assert.match(r.lines[2].text, /leans bearish, but the confluence gate found a conflict/);
-  assert.match(r.lines[2].text, /wait and observe/);
+  // Owner decision 2026-11-06: R38 (signal and trade management) and R37 (direction and
+  // confirmation candle) share one structure core, so Prophet is read once, not twice.
+  assert.deepEqual(r.lines.map(l => l.source), ["Prophet", "GMI v12.70"]);
+  const p = r.lines[0].text;
+  assert.match(p, /^Prophet: no buy or sell confirmation on this closed candle\./);
+  assert.match(p, /no clear direction/);
+  assert.match(p, /bearish divergence/);
+  assert.equal((p.match(/divergence/g) || []).length, 1, "the shared structure is said once");
+  assert.match(p, /bearish confirmation candle/);
+  assert.match(p, /fresh bearish structure event/);
+  assert.match(p, /possible reversal/);
+  assert.match(r.lines[1].text, /leans bearish, but the confluence gate found a conflict/);
+  assert.match(r.lines[1].text, /wait and observe/);
   assert.match(r.summary, /lean bearish, but no buy or sell signal is confirmed and GMI reports a conflict/);
 });
 
@@ -33,8 +38,19 @@ test("a confirmed, agreeing buy reads as a buy", () => {
   });
   assert.equal(r.bias, "bullish");
   assert.match(r.lines[0].text, /confirmed BUY signal .* high-quality filter/);
-  assert.match(r.lines[2].text, /all agree on direction/);
+  assert.match(r.lines[0].text, /Its direction is bullish, with momentum and structure in agreement/);
+  assert.match(r.lines[1].text, /all agree on direction/);
   assert.match(r.summary, /point up, with a confirmed buy signal/);
+});
+
+test("Prophet's direction comes from the R37 consensus even when R38 has no signal", () => {
+  const r = interpretWebhooks({ prophetR38: { direction: 0, t_enc: 0, d_enc: 0 }, prophetR37: { direction: 1, d_enc: 0, b_enc: 1 } });
+  assert.equal(r.lines.length, 1);
+  assert.match(r.lines[0].text, /^Prophet: no buy or sell confirmation on this closed candle\. Its direction is bullish/);
+  assert.equal(r.bias, "bullish", "the consensus direction is the lean");
+  const onlyR37 = interpretWebhooks({ prophetR37: { direction: -1, d_enc: -1, b_enc: -3 } });
+  assert.match(onlyR37.lines[0].text, /^Prophet: the signal alert has not arrived\. Its direction is bearish/);
+  for (const t of [r.lines[0].text, onlyR37.lines[0].text]) assert.deepEqual(naturalLanguageErrors(t), []);
 });
 
 test("structure breaks use the Pine subtype names", () => {
@@ -58,7 +74,7 @@ test("missing alerts are named; nothing at all says so", () => {
 
 test("reads straight from the stored ai_syntheses columns", () => {
   const r = interpretWebhookRow({ prophet_metrics: JSON.stringify({ prophet_r38: PROD.prophetR38, prophet_r37_ssot: PROD.prophetR37 }), gmi_metrics: JSON.stringify(PROD.gmi) });
-  assert.equal(r.lines.length, 3);
+  assert.equal(r.lines.length, 2, "Prophet once, GMI once");
   assert.equal(r.bias, "bearish");
 });
 

@@ -87,7 +87,23 @@ test("bars are verified only by a matching parity comparison of the same candle,
 test("the Prophet reading gets the setup gate of the same snapshot (computed for the R37 Funnel)", async () => {
   const huds = { prophet: { fields: { d_enc: 0, structure_subtype: 0, t_enc: 0, cycle_intensity: -3 } }, r37_funnel: { fields: { gate_status: "SELL_WAIT_PRICE" } } };
   const h = await hudReadings({ SIGNAL_CACHE: kv(), WEBHOOK_BUFFER: kv() }, snapshot({ huds }));
-  assert.ok(h.readings.prophet.lines.some(l => l.text === "Prophet's state: a bearish bias from all three cycles, and a sell setup is waiting for price confirmation."));
+  assert.ok(h.readings.prophet.lines.some(l => l.text === "Prophet's setup: a sell setup is waiting for price confirmation, and all three Prophet cycles point down."));
+});
+
+test("the Prophet reading takes the R38 signal and the R37 direction from the same snapshot, verified against the approved record", async () => {
+  const huds = {
+    prophet: { fields: { d_enc: 0, structure_subtype: 0, t_enc: 0, cycle_intensity: 1 }, parity: { d_enc: "prophet_r38.d_enc" } },
+    r37_funnel: { fields: { buy_confirmed: true, sell_confirmed: false, buy_high_quality: false, gate_status: "BUY_CONFIRMED" }, parity: { buy_confirmed: "prophet_r38.buy_confirmed", sell_confirmed: "prophet_r38.sell_confirmed" } },
+    trade_management: { fields: { prophet_dir: 1 }, parity: { prophet_dir: "gmi_v12_70.prophet_dir" } }
+  };
+  const env = { SIGNAL_CACHE: kv(), WEBHOOK_BUFFER: kv() };
+  await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":prophet", JSON.stringify({ values: { comparable: { prophet_r38: { buy_confirmed: true, sell_confirmed: false, d_enc: 0 } } } }));
+  await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":gmi", JSON.stringify({ values: { comparable: { gmi_v12_70: { prophet_dir: 1 } } } }));
+  const lines = (await hudReadings(env, snapshot({ huds }))).readings.prophet.lines;
+  assert.deepEqual(lines.slice(0, 2).map(l => [l.text, l.verified]), [
+    ["Prophet's signal: a confirmed BUY on this closed candle.", true],
+    ["Prophet's direction is bullish, with momentum and structure in agreement.", true]
+  ]);
 });
 
 test("invalid snapshots are refused without writing", async () => {

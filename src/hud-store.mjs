@@ -81,6 +81,27 @@ export async function barsVerified(env, candleKey) {
   }
 }
 
+/**
+ * Prophet as one indicator (owner decision 2026-11-06): its own HUD plus, from the same snapshot,
+ * the R38 signal and setup gate (computed for the R37 Funnel panel) and the R37 consensus
+ * direction (carried by Trade Management as prophet_dir, equal to the R37 alert's direction in
+ * production), each with its parity path so it is verified on its own.
+ */
+function prophetView(hud, huds) {
+  const fields = { ...(hud.fields || {}) }, parity = { ...(hud.parity || {}) };
+  const take = (source, keys) => {
+    for (const k of keys) {
+      if (source?.fields && k in source.fields && !(k in fields)) {
+        fields[k] = source.fields[k];
+        if (source.parity?.[k]) parity[k] = source.parity[k];
+      }
+    }
+  };
+  take(huds?.r37_funnel, ["buy_confirmed", "sell_confirmed", "buy_high_quality", "sell_high_quality", "gate_status"]);
+  take(huds?.trade_management, ["prophet_dir"]);
+  return { ...hud, fields, parity };
+}
+
 /** Readings for every HUD of a snapshot, with verification against the approved record. */
 export async function hudReadings(env, snapshot) {
   if (!isRecord(snapshot?.huds)) return null;
@@ -91,10 +112,8 @@ export async function hudReadings(env, snapshot) {
   for (const id of HUD_IDS) {
     const hud = snapshot.huds[id];
     if (!hud) continue;
-    // Prophet reads the setup gate the snapshot computed for the R37 Funnel (same engine, same bar).
-    const fields = id === "prophet" && snapshot.huds.r37_funnel?.fields?.gate_status && !hud.fields?.gate_status
-      ? { ...hud.fields, gate_status: snapshot.huds.r37_funnel.fields.gate_status } : hud.fields;
-    readings[id] = readHud(id, { ...hud, fields, verified: verifiedFields(hud, approved), bars_verified: bars });
+    const view = id === "prophet" ? prophetView(hud, snapshot.huds) : hud;
+    readings[id] = readHud(id, { ...view, verified: verifiedFields(view, approved), bars_verified: bars });
   }
   return {
     candle_key: snapshot.candle_key,

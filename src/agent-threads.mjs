@@ -458,7 +458,7 @@ function roomAgentMessages(agent, evidence, technicalMsg) {
   const role = agent === "technical"
     ? "You are the technical agent in a live XAUUSD trading room that meets at every 15m candle close. " +
       "First judge the closed 15m candles: that is the setup. Then use the 5m execution data from the local lane (the 5m read, labelled VERIFIED 5m or UNVERIFIED 5m, and the last 5m bars) for execution timing: is there an entry trigger now, or should an open position be held or closed? " +
-      "The H1 TradingView reading (Prophet R38, Prophet R37, GMI v12.70) is the higher-timeframe backdrop: say whether the 15m setup agrees with it. Call things by plain names such as \"the 15m candle\" or \"the H1 TradingView reading\", never by a field name."
+      "The H1 TradingView reading (Prophet and GMI v12.70) is the higher-timeframe backdrop: say whether the 15m setup agrees with it. Call things by plain names such as \"the 15m candle\" or \"the H1 TradingView reading\", never by a field name."
     : "You are the risk agent in a live XAUUSD trading room that meets at every 15m candle close. Challenge the technical agent: where do the 15m setup or the 5m execution read conflict with the authoritative H1 decision or the news consensus? Prefer HOLD/WAIT when they do.";
   return chatMessages([
     role,
