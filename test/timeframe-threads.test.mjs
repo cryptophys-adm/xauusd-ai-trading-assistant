@@ -144,6 +144,31 @@ test("HUD agents with no verified statement speak at confidence <= 0.4; desks ke
   assert.equal(by.h4.calibration, "4H local records, not parity approved");
 });
 
+test("openings carry a bias; a BUY or SELL conclusion needs an agent holding it", async () => {
+  const conf = { chart_prophet_r38: { buy_confirmed: true, sell_confirmed: false } };
+  const c = { stance: "BUY", confidence: 0.6, summary: "The room buys the confirmed signal.", reasons: ["Prophet R38 confirmed a buy."], dissent: [] };
+  assert.ok(validateTfConclusion({ ...c }, { busAgents: ["technical"], confirmations: conf, supportStances: new Set(["WAIT"]) }).errors.includes("stance_without_support"));
+  assert.equal(validateTfConclusion({ ...c }, { busAgents: ["technical"], confirmations: conf, supportStances: new Set(["BUY", "WAIT"]) }).valid, true);
+
+  const ai = fakeAI();
+  const run0 = ai.run;
+  ai.run = async (model, request) => {
+    const r = await run0(model, request);
+    const body = JSON.parse(r.choices[0].message.content);
+    if (body.claim && body.agent === "kinetic_engine") { body.bias = "BEARISH"; r.choices[0].message.content = JSON.stringify(body); }
+    return r;
+  };
+  const e = env(ai);
+  await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
+  const t = await readTimeframeThread(e.DB, "H4");
+  assert.equal(t.openings.find((o) => o.id === "kinetic_engine").bias, "BEARISH");
+  assert.equal(t.openings.find((o) => o.id === "technical").bias, "NEUTRAL");
+  const prompt = ai.calls.find((x) => /"agent":"technical"/.test(x.request.messages[1].content) && !/debate/.test(x.request.messages[0].content)).request.messages[1].content;
+  assert.match(prompt, /"bias":"BULLISH\|BEARISH\|NEUTRAL"/);
+  const mod = ai.calls.find((x) => /moderator of the XAUUSD/.test(x.request.messages[0].content)).request.messages.map((m) => m.content).join("\n");
+  assert.match(mod, /needs at least one agent on the bus or in the debate holding that stance/);
+});
+
 test("the 4H Desk reads only its own bar, in words; without local records the room has no 4H Desk", async () => {
   const ai = fakeAI();
   const e = env(ai, { buy: true });
@@ -220,7 +245,7 @@ test("a room with fewer than half of its agents heard waits for the next sweep, 
   e.AI = ai;
   const second = await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
   assert.equal(second.status, "complete");
-  const openingCalls = ai.calls.filter((c) => /Required JSON: \{"agent":"\w+","stance":"BUY\|SELL\|HOLD\|WAIT\|CLOSE","confidence":0\.\.1,"claim"/.test(c.request.messages[1].content));
+  const openingCalls = ai.calls.filter((c) => /Required JSON: \{"agent":"\w+","stance":"BUY\|SELL\|HOLD\|WAIT\|CLOSE","bias":"BULLISH\|BEARISH\|NEUTRAL","confidence":0\.\.1,"claim"/.test(c.request.messages[1].content));
   assert.equal(openingCalls.length, 3, "only the three failed openings are asked again");
 });
 

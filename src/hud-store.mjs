@@ -91,7 +91,10 @@ export async function hudReadings(env, snapshot) {
   for (const id of HUD_IDS) {
     const hud = snapshot.huds[id];
     if (!hud) continue;
-    readings[id] = readHud(id, { ...hud, verified: verifiedFields(hud, approved), bars_verified: bars });
+    // Prophet reads the setup gate the snapshot computed for the R37 Funnel (same engine, same bar).
+    const fields = id === "prophet" && snapshot.huds.r37_funnel?.fields?.gate_status && !hud.fields?.gate_status
+      ? { ...hud.fields, gate_status: snapshot.huds.r37_funnel.fields.gate_status } : hud.fields;
+    readings[id] = readHud(id, { ...hud, fields, verified: verifiedFields(hud, approved), bars_verified: bars });
   }
   return {
     candle_key: snapshot.candle_key,

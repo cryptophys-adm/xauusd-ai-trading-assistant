@@ -47,6 +47,11 @@ const room = (stance, openings, extra = {}) => ({ bar_close: "2026-11-06T10:00:0
 test("room lean is the confidence-weighted mean direction of the agents that spoke", () => {
   assert.equal(roomLean([op("a", "BUY", 0.8), op("b", "WAIT", 0.8), op("c", "SELL", 0.4, "agent_failed")]), 0.5);
   assert.equal(roomLean([]), null);
+  // Prophet audit (2026-11-06): the lean reads each agent's bias, so a room of WAIT actions whose
+  // data leans bullish reads bullish; rooms stored before the bias existed fall back to the action.
+  const waitButBullish = [{ ...op("a", "WAIT", 0.6), bias: "BULLISH" }, { ...op("b", "WAIT", 0.4), bias: "NEUTRAL" }];
+  assert.equal(roomLean(waitButBullish), 0.6);
+  assert.equal(roomLean([{ ...op("a", "WAIT", 0.5), bias: "BEARISH" }, op("b", "BUY", 0.5)]), 0);
 });
 
 test("global conclusion: bias from the weighted rooms and news, action bound by the H1 decision", () => {

@@ -78,6 +78,19 @@ test("computed from verified bars: only pure bar formulas, and only when the can
   assert.equal(calibrationNote({ verified_lines: 2, total_lines: 5 }, "x"), "2 verified by parity (of 5 statements)");
 });
 
+test("Prophet reads its state: the cycle bias and the setup gate, like the Prophet HUD on TradingView (Prophet audit 2026-11-06)", () => {
+  const base = { d_enc: 0, structure_subtype: 0, t_enc: 0 };
+  const bull = readHud("prophet", { fields: { ...base, cycle_intensity: 3, gate_status: "BUY_WAIT_STRUCTURE" } });
+  assert.ok(bull.lines.some(l => l.text === "Prophet's state: a bullish bias from all three cycles, and a buy setup is waiting for structure confirmation."), bull.lines.map(l => l.text).join(" | "));
+  const mixed = readHud("prophet", { fields: { ...base, cycle_intensity: 1, gate_status: "NO_ACTIVE_SETUP" } });
+  assert.ok(mixed.lines.some(l => l.text === "Prophet's state: no bias, because the three cycles do not agree, and no buy or sell setup is active."));
+  const risk = readHud("prophet", { fields: { ...base, t_enc: 4, cycle_intensity: -3, gate_status: "SELL_CONFIRMED" } });
+  assert.ok(risk.lines.some(l => /^Prophet's state: a bearish bias from all three cycles, and the sell setup is confirmed; a risk veto calls for reducing risk\.$/.test(l.text)));
+  // Without the setup gate the cycle line stays as it was.
+  assert.ok(readHud("prophet", { fields: { ...base, cycle_intensity: 3 } }).lines.some(l => l.text === "On the cycle read, all three Prophet cycles point up."));
+  for (const r of [bull, mixed, risk]) for (const l of r.lines) assert.deepEqual(naturalLanguageErrors(l.text), [], l.text);
+});
+
 test("all enum tokens decode to sentences", () => {
   const tokens = {
     r37_funnel: ["NO_ACTIVE_SETUP", "BUY_CONFIRMED", "BUY_WAIT_PRICE", "BUY_WAIT_STRUCTURE", "BUY_WAIT_VOLUME", "BUY_WAIT", "SELL_CONFIRMED", "SELL_WAIT_PRICE", "SELL_WAIT_STRUCTURE", "SELL_WAIT_VOLUME", "SELL_WAIT"].map(gate_status => ({ gate_status })),

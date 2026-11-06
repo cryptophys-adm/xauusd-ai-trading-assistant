@@ -262,14 +262,16 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
     return writeMessage(db, { ...base, ts, ...meta, status: call.status, body: { insight: call.status === "budget_exhausted" ? "budget exhausted" : "agent failed: " + (call.error || "error"), ...diag } });
   }
   let validation = call.truncated ? { valid: false, errors: ["finish_reason_length"] } : validate(call.obj);
-  // An answer that is valid except that its text reads like code (a field name or key path)
-  // gets one correction attempt. The extra call is recorded in `corrections` and counted by
-  // the hourly budget; it never runs without budget or past the wall deadline.
+  // An answer that is valid except that its text reads like code (a field name or key path), or a
+  // conclusion that breaks a room rule (no support, no confirmation), gets one correction attempt.
+  // The extra call is recorded in `corrections` and counted by the hourly budget; it never runs
+  // without budget or past the wall deadline.
   let corrections = 0;
   let finalCall = call;
-  if (!validation.valid && !call.truncated && validation.errors.length && validation.errors.every(e => e.startsWith("not_natural_language:")) && clock() < deadline && (await budgetOk())) {
+  const correction = !validation.valid && !call.truncated ? correctionFor(validation.errors) : null;
+  if (correction && clock() < deadline && (await budgetOk())) {
     const retry = await callBusModel(env, {
-      messages: [...messages, { role: "assistant", content: String(call.text ?? "") }, { role: "user", content: CORRECTION_PROMPT }],
+      messages: [...messages, { role: "assistant", content: String(call.text ?? "") }, { role: "user", content: correction }],
       schemaName, schema, maxTokens, effort, deadline, clock, runState
     });
     corrections = 1 + (retry.fallback_used ? 1 : 0);
@@ -294,6 +296,27 @@ function sumOrNull(a, b) {
 }
 
 const CORRECTION_PROMPT = NATURAL_LANGUAGE_CORRECTION;
+
+/** Rule errors a single correction call may fix, each with what to tell the model. */
+const RULE_CORRECTIONS = Object.freeze({
+  stance_without_support: "A BUY or SELL conclusion needs at least one agent on the bus or in the debate holding that stance; a confirmation alone never overrules the whole room.",
+  entry_without_confirmation: "BUY or SELL needs the matching confirmation in the CONFIRMATIONS above; without it the stance is WAIT, or HOLD / CLOSE for a position already open."
+});
+
+/**
+ * The correction request for a rejected answer, or null when its errors are not correctable:
+ * text that reads like code, or a conclusion that breaks a room rule (owner decision 2026-11-06).
+ */
+function correctionFor(errors) {
+  if (!Array.isArray(errors) || !errors.length) return null;
+  const rules = errors.filter((e) => RULE_CORRECTIONS[e]);
+  const wording = errors.filter((e) => String(e).startsWith("not_natural_language:"));
+  if (rules.length + wording.length !== errors.length) return null;
+  if (!rules.length) return CORRECTION_PROMPT;
+  return "Your answer was rejected: " + rules.map((e) => RULE_CORRECTIONS[e]).join(" ") +
+    " Return the JSON again with a stance that obeys these rules (WAIT when the room does not support an entry), and rewrite the summary and reasons to match." +
+    (wording.length ? " " + CORRECTION_PROMPT : "");
+}
 
 // ---------------------------------------------------------------- news thread
 

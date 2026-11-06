@@ -136,7 +136,13 @@ export function readHud(agentId, hud = {}) {
       const structure = describeStructure(f.d_enc, f.structure_subtype);
       add(`Prophet's structure shows ${structure.text}.`, ["d_enc", "structure_subtype"]);
       if (TRADE_MANAGEMENT[f.t_enc]) add(`Its momentum and trade-management state is ${TRADE_MANAGEMENT[f.t_enc]}.`, ["t_enc"]);
-      add(`On the cycle read, ${cycle(f.cycle_intensity)}.`);
+      // Prophet audit (2026-11-06): the Prophet HUD on TradingView shows a state, not only WAIT.
+      // With the setup gate of the same snapshot, Prophet reads its bias and setup in one line.
+      if (R38_GATE[f.gate_status]) {
+        const bias = f.cycle_intensity === 3 ? "a bullish bias from all three cycles" : f.cycle_intensity === -3 ? "a bearish bias from all three cycles" : "no bias, because the three cycles do not agree";
+        const risk = f.t_enc === 4 ? "; a risk veto calls for reducing risk" : f.t_enc === 3 ? "; a reversal is being watched" : "";
+        add(`Prophet's state: ${bias}, and ${R38_GATE[f.gate_status]}${risk}.`);
+      } else add(`On the cycle read, ${cycle(f.cycle_intensity)}.`);
       const parts = [];
       if (isNum(f.kww_zscore)) parts.push(`the price z-score is ${fixed(f.kww_zscore)}`);
       if (isNum(f.hurst)) parts.push(`the Hurst exponent is ${fixed(f.hurst)} (${f.hurst > 0.6 ? "a strong trend" : f.hurst < 0.45 ? "mean reverting" : "a weak trend"})`);

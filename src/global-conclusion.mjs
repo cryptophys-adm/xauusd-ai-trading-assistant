@@ -2,7 +2,7 @@
 // and 15m War Rooms and News Daily, for the right panel of Nexus.
 //
 // Deterministic: no model call. Each room contributes its lean (the confidence-weighted mean
-// direction of its agents), weighted D1 30, 4H 25, 1H 20, 15m 15 and News 10; a missing room
+// direction of its agents' biases), weighted D1 30, 4H 25, 1H 20, 15m 15 and News 10; a missing room
 // drops out and the rest renormalise. The action stays bound by the authoritative H1 decision:
 // a BUY or SELL stands only when the global bias does not lean against it, otherwise WAIT.
 // Advisory only: no levels, sizes or orders are produced here.
@@ -31,11 +31,15 @@ const word = (v) => {
   return a < NEUTRAL_BAND ? "neutral" : a < 0.3 ? `slightly ${s}` : a < 0.6 ? s : `strongly ${s}`;
 };
 
-/** Confidence-weighted mean direction of the agents that spoke, in [-1, 1], or null. */
+/**
+ * Confidence-weighted mean direction of the agents that spoke, in [-1, 1], or null. Each agent's
+ * direction is its bias (owner decision 2026-11-06: the action is mostly WAIT without a
+ * confirmation, the bias carries the lean); openings stored before the bias existed use the action.
+ */
 export function roomLean(openings) {
   const ok = (openings || []).filter((o) => o?.status === "ok" && isNum(o.confidence));
   const w = ok.reduce((s, o) => s + o.confidence, 0);
-  return ok.length && w > 0 ? r2(ok.reduce((s, o) => s + direction(o.stance) * o.confidence, 0) / w) : null;
+  return ok.length && w > 0 ? r2(ok.reduce((s, o) => s + direction(o.bias || o.stance) * o.confidence, 0) / w) : null;
 }
 
 function newsLean(news) {

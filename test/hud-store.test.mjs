@@ -84,6 +84,12 @@ test("bars are verified only by a matching parity comparison of the same candle,
   assert.deepEqual(h.readings.chronos_matrix.lines.map(l => [l.verified, l.derived]), [[false, true], [true, false]]);
 });
 
+test("the Prophet reading gets the setup gate of the same snapshot (computed for the R37 Funnel)", async () => {
+  const huds = { prophet: { fields: { d_enc: 0, structure_subtype: 0, t_enc: 0, cycle_intensity: -3 } }, r37_funnel: { fields: { gate_status: "SELL_WAIT_PRICE" } } };
+  const h = await hudReadings({ SIGNAL_CACHE: kv(), WEBHOOK_BUFFER: kv() }, snapshot({ huds }));
+  assert.ok(h.readings.prophet.lines.some(l => l.text === "Prophet's state: a bearish bias from all three cycles, and a sell setup is waiting for price confirmation."));
+});
+
 test("invalid snapshots are refused without writing", async () => {
   const env = { SIGNAL_CACHE: kv(), WEBHOOK_BUFFER: kv() };
   const r = await storeHudSnapshot(env, snapshot({ timeframe: "5" }), now);
