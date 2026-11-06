@@ -254,3 +254,26 @@ test("past the quorum wait a room concludes with whoever spoke", async () => {
   const late = () => LAST_OPEN + H4_MS + TF_QUORUM_WAIT_MS + 1;
   assert.equal((await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: late })).status, "complete");
 });
+
+test("a room that concluded without its HUD snapshot re-convenes once when the snapshot arrives late", async () => {
+  const ai = fakeAI();
+  const e = env(ai, { hud: false });
+  assert.equal((await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock })).status, "complete");
+  const before = await readTimeframeThread(e.DB, "H4");
+  assert.equal(before.hud_snapshot, false);
+  assert.deepEqual(before.roster.map((a) => a.id), ["h4", "technical", "risk"]);
+  assert.deepEqual(await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock }), { status: "already_complete", calls: 0 }, "no snapshot yet: nothing to add");
+
+  // Owner decision 2026-11-06 (D1 catch-up): the pull adapter publishes the missed snapshot late.
+  await e.SIGNAL_CACHE.put("hud:240:" + H4_KEY, hudSnapshot(H4_KEY, "240"));
+  const again = await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
+  assert.equal(again.status, "complete");
+  assert.equal(again.reconvened, true);
+  const after = await readTimeframeThread(e.DB, "H4");
+  assert.equal(after.hud_snapshot, true);
+  assert.deepEqual(after.roster.map((a) => a.id), ["h4", "technical", "risk", "kinetic_engine", "fabio_amt"]);
+  assert.equal(after.bar_open, before.bar_open, "the same bar, one room");
+  assert.equal(after.bar_close, before.bar_close);
+  assert.equal(after.phase, "closed");
+  assert.deepEqual(await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock }), { status: "already_complete", calls: 0 }, "once only");
+});

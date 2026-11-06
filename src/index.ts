@@ -1695,6 +1695,8 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
       // The Live War Room 15m replaces the legacy live room when WAR_ROOM_ENABLED is on.
       const result = warRoomEnabled(env) ? await runWarRoomBar(env, task) : await runLiveRoomBar(env, task);
       console.log(warRoomEnabled(env) ? "war_room" : "live_room", JSON.stringify({ bar_time: task.bar_time, ...result }));
+      // Quorum (production 2026-11-06): redeliver after a model minute; the ok openings are kept.
+      if (result?.status === "waiting_for_quorum") throw Object.assign(new Error("war room waiting for quorum"), { name: "WarRoomQuorumPending", retryDelaySeconds: 60 });
       return;
     }
     if (task.kind === "hud_agents") {

@@ -68,6 +68,12 @@ test("consumer retries failed tasks and leaves them unacknowledged for DLQ polic
   assert.equal(failures[0].errorName, "Error");
 });
 
+test("a task error may set its own retry delay", async () => {
+  const message = mockMessage("message-quorum", { kind: "live_room", event_id: "q" });
+  await createQueueConsumer(async () => { throw Object.assign(new Error("quorum"), { name: "WarRoomQuorumPending", retryDelaySeconds: 60 }); }, { retryDelaySeconds: 30 })({ messages: [message] });
+  assert.deepEqual(message.state.retries, [{ delaySeconds: 60 }]);
+});
+
 test("missing evidence is a completed wait state and is ACKed, not retried", async () => {
   const message = mockMessage("message-wait", { kind: "webhook_reconcile", event_id: "wait" });
   await createQueueConsumer(async () => {

@@ -62,6 +62,9 @@ const CLAIM_MAX = 320;
 const ARGUMENT_MAX = 420;
 /** A bar's room waits for its HUD snapshot this long after the close, then runs without it. */
 export const TF_HUD_WAIT_MS = 20 * 60 * 1000;
+/** The run id suffix of a room that re-convened once its late HUD snapshot arrived. */
+export const RECONVENE_SUFFIX = "#hud";
+const barOpenOf = (runId) => String(runId).split("#")[0];
 /**
  * Gap between two rooms of one sweep: the Workers AI per-minute limit is shared, and one room
  * spends about 22 calls within a minute (production 2026-11-06: a 1H room started right after the
@@ -176,7 +179,7 @@ async function latestConclusion(db, chart) {
   try { row = await db.prepare("SELECT run_id, stance, confidence, body_json FROM agent_thread_messages WHERE thread_id = ? AND step = 'conclusion' AND status = 'ok' ORDER BY run_id DESC LIMIT 1").bind(`tf:${chart}`).first(); } catch { row = null; }
   if (!row) return null;
   const body = parseJson(row.body_json, {}) || {};
-  return { timeframe: TF_THREAD_CHARTS[chart].label, bar_open: row.run_id, stance: row.stance, confidence: row.confidence, summary: body.summary ?? null };
+  return { timeframe: TF_THREAD_CHARTS[chart].label, bar_open: barOpenOf(row.run_id), stance: row.stance, confidence: row.confidence, summary: body.summary ?? null };
 }
 
 /**
@@ -308,11 +311,22 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   await ensureThreadSchema(db);
   const ev = await tfEvidence(env, chart, candleKey);
   if (!ev) return { status: "no_bar" };
-  const runId = ev.bar_open;
   const threadId = `tf:${chart}`;
   await upsertThread(db, { id: threadId, kind: "tf", refKey: chart, title: `Thread ${spec.tab} · XAUUSD ${spec.label} War Room`, post: null, now: clock() });
-  const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, runId).all()).results || []).map((r) => [r.step, rowToThreadMessage(r)]));
-  if (existing.get("conclusion")?.status === "ok") return { status: "already_complete", calls: 0 };
+  const load = async (id) => new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, id).all()).results || []).map((r) => [r.step, rowToThreadMessage(r)]));
+  let runId = ev.bar_open;
+  let existing = await load(runId);
+  let reconvened = false;
+  if (existing.get("conclusion")?.status === "ok") {
+    // D1 catch-up (owner decision 2026-11-06): a room that concluded without its HUD snapshot
+    // meets once more, under the same bar, when the snapshot arrives late. The second session
+    // sorts after the first (run_id + RECONVENE_SUFFIX), so the tab and the rooms below read it.
+    if (existing.get("brief")?.hud_snapshot !== false || !ev.hud) return { status: "already_complete", calls: 0 };
+    runId = ev.bar_open + RECONVENE_SUFFIX;
+    existing = await load(runId);
+    if (existing.get("conclusion")?.status === "ok") return { status: "already_complete", calls: 0 };
+    reconvened = true;
+  }
 
   // The room's own timeframe desk first: the 1H Desk with the H1 chain, the 4H or D1 Desk with
   // the local records of the bar.
@@ -402,7 +416,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
     validate: (o) => validateTfConclusion(o, { busAgents, confirmations: ev.confirmations, h1Decision: ev.h1?.decision ?? null, supportStances: new Set([...answered.map((m) => m.stance), ...debate.map((m) => m.stance)]) }),
     toBody: (o) => ({ body: { summary: clip(o.summary, 400), reasons: o.reasons.slice(0, 3).map((r) => clip(r, 200)), dissent: [...new Set(o.dissent)], majority }, refs: [] })
   });
-  return { status: "complete", calls, openings: answered.length, rebuttals: debate.length };
+  return { status: "complete", calls, openings: answered.length, rebuttals: debate.length, ...(reconvened ? { reconvened: true } : {}) };
 }
 
 /** The latest closed H1 bar key (H1 bars are epoch-aligned). */
@@ -476,7 +490,7 @@ export async function readTimeframeThread(db, chart) {
   const debate = rows.filter((m) => m.step.startsWith("debate:")).map(pick).sort(byRoster);
   const c = rows.find((m) => m.step === "conclusion");
   return {
-    tf: chart, tab: spec.tab, bar_open: run, bar_close: brief?.bar_time ?? rows[0]?.bar_time ?? null, candle_key: brief?.candle_key ?? null,
+    tf: chart, tab: spec.tab, bar_open: barOpenOf(run), reconvened: String(run).includes("#"), bar_close: brief?.bar_time ?? rows[0]?.bar_time ?? null, candle_key: brief?.candle_key ?? null,
     phase: c?.status === "ok" ? "closed" : debate.length ? "debate" : "opening",
     confirmations: brief?.confirmations ?? null, hud_snapshot: brief?.hud_snapshot ?? null,
     roster: (brief?.roster || []).map((id) => ({ id, name: tfAgentName(id), calibration: note(id) })),

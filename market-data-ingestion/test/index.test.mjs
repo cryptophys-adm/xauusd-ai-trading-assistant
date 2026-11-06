@@ -421,6 +421,38 @@ test("HUD publisher is off unless HUD_SNAPSHOT_PUBLISH is true, then sends one H
   assert.equal(stale.charts.M15.status, "no_fresh_close");
 });
 
+test("HUD publisher catches up a missed H4 or D1 snapshot once while that bar is the latest close", async () => {
+  const sent = [];
+  const ai = { async submitHud(body) { sent.push(body); return { status: 202, body: { status: "accepted" } }; } };
+  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai, HUD_SNAPSHOT_PUBLISH: "true" });
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  const b = await buildBundle(e);
+  const last = b.timeframes.D1.candles.at(-1);
+  const closeMs = Date.parse(last.close_time);
+  // Owner decision 2026-11-06: the D1 close passed before the HUD D1 feature, so its room met
+  // without the HUD agents. Hours later the bar is still the latest close and is sent once.
+  const r = await publishHudSnapshots(e, { now: closeMs + 3 * 3600_000, bundle: b });
+  assert.equal(r.charts.D1.status, "published", JSON.stringify(r.charts.D1));
+  assert.equal(r.charts.D1.catch_up, true);
+  assert.ok(!r.charts.H1.catch_up && !r.charts.M15.catch_up, "H1 and M15 rooms move on with every bar: no catch-up");
+  const d1 = sent.filter((s) => s.timeframe === "1D");
+  assert.equal(d1.length, 1);
+  assert.equal(d1[0].candle_key, `OANDA:XAUUSD:1D:${Date.parse(last.open_time)}`);
+  const health = await (await worker.fetch(new Request("https://m/health"), e)).json();
+  assert.deepEqual(health.last_hud_publish.charts.D1, { status: "published", candle_key: d1[0].candle_key, catch_up: true });
+  assert.ok(!JSON.stringify(health).includes(SECRET));
+
+  const again = await publishHudSnapshots(e, { now: closeMs + 4 * 3600_000, bundle: b });
+  assert.equal(again.charts.D1.status, "already_published");
+  assert.equal(sent.filter((s) => s.timeframe === "1D").length, 1, "once only");
+  const h1Last = b.timeframes.H1.candles.at(-1);
+  const h1Late = await publishHudSnapshots(e, { now: Date.parse(h1Last.close_time) + 2 * 3600_000, bundle: b });
+  assert.equal(h1Late.charts.H1.status, "no_fresh_close");
+  const past = await publishHudSnapshots(e, { now: closeMs + 73 * 3600_000, bundle: b });
+  assert.equal(past.charts.D1.status, "no_fresh_close", "past the catch-up window");
+});
+
 test("HUD publisher also sends the H4 and D1 snapshots of a fresh close, once each", async () => {
   const sent = [];
   const ai = { async submitHud(body) { sent.push(body); return { status: 202, body: { status: "accepted" } }; } };

@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { resetThreadSchemaCacheForTests, buildLiveRoomTask } from "../src/agent-threads.mjs";
 import {
   runWarRoomBar, readWarRoom, readTldr, warRoomEnabled, majorityStance, selectRebutters,
-  validateOpening, validateRebuttal, validateConclusion, WAR_ROOM_DEBATE_MS, DESK_AGENTS, entryAllowed, ROOM_BIASES
+  validateOpening, validateRebuttal, validateConclusion, WAR_ROOM_DEBATE_MS, WAR_ROOM_QUORUM_WAIT_MS, DESK_AGENTS, entryAllowed, ROOM_BIASES
 } from "../src/war-room.mjs";
 
 const BAR = "2026-11-05T14:45:00.000Z";
@@ -355,6 +355,32 @@ test("a failed opening stays out of the bus; the room still concludes", async ()
   const room = await readWarRoom(e.DB);
   assert.equal(room.openings.find(o => o.id === "news").status, "agent_failed");
   assert.equal(room.conclusion.status, "ok");
+});
+
+test("a young room with fewer than half of its agents heard waits for quorum; the retry asks only the failed openings", async () => {
+  // Production 13:15 (2026-11-06): Workers AI 3021 and 3040 failed 14 of 18 openings and the room
+  // concluded on four agents. Within the quorum wait the queue redelivers the task instead.
+  const young = () => Date.parse(BAR) + 90_000;
+  const e = env(fakeAI({ fail: new Set(["news", "technical", "risk", "kinetic_engine"]) }));
+  const first = await runWarRoomBar(e, task(), { clock: young });
+  assert.equal(first.status, "waiting_for_quorum");
+  assert.equal(first.openings, 2);
+  assert.equal(first.roster, 6);
+  assert.equal((await readWarRoom(e.DB)).conclusion, null, "no conclusion from two agents out of six");
+  const ai = fakeAI();
+  e.AI = ai;
+  const second = await runWarRoomBar(e, task(), { clock: young });
+  assert.equal(second.status, "complete");
+  const openingCalls = ai.calls.filter((c) => !/debate|moderator/.test(c.request.messages[0].content));
+  assert.equal(openingCalls.length, 4, "only the four failed openings are asked again");
+  assert.equal(WAR_ROOM_QUORUM_WAIT_MS, 5 * 60_000);
+});
+
+test("past the quorum wait the room concludes with whoever spoke", async () => {
+  const e = env(fakeAI({ fail: new Set(["news", "technical", "risk", "kinetic_engine"]) }));
+  const r = await runWarRoomBar(e, task(), { clock: () => Date.parse(BAR) + WAR_ROOM_QUORUM_WAIT_MS + 1 });
+  assert.equal(r.status, "complete");
+  assert.equal(r.openings, 2);
 });
 
 test("a conclusion that differs from the H1 decision must name it", async () => {

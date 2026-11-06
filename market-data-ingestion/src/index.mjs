@@ -1,6 +1,6 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
-import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHtfLocalComputation, publishHudSnapshots, republishRevisedH1, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
+import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHtfLocalComputation, publishHudSnapshots, republishRevisedH1, LAST_PUBLISH_KEY, LAST_HUD_PUBLISH_KEY } from "./local-publisher.mjs";
 import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, verifyDerivedSeries, settleSeconds, SETTLE_SECONDS } from "./tradingview-source.mjs";
 
 const JSON_HEADERS = {
@@ -88,6 +88,8 @@ const worker = {
     if (request.method === "GET" && url.pathname === "/health") {
       let lastRefresh = null;
       try { lastRefresh = JSON.parse((await env.MARKET_DATA_CACHE?.get(STATUS_KEY)) || "null"); } catch { lastRefresh = null; }
+      let lastHud = null;
+      try { lastHud = JSON.parse((await env.MARKET_DATA_CACHE?.get(LAST_HUD_PUBLISH_KEY)) || "null"); } catch { lastHud = null; }
       return json({
         status: "ok",
         worker: WORKER_NAME,
@@ -99,6 +101,8 @@ const worker = {
         cache_configured: Boolean(env.MARKET_DATA_CACHE),
         cron: "*/5 * * * *",
         series: SERIES.map(({ symbol, interval, timeframe, retain, role, derived_from }) => ({ symbol, interval, timeframe, retain, role, derived_from: derived_from || null })),
+        // The HUD publisher per chart: status and candle only (D1 catch-up, 2026-11-06).
+        last_hud_publish: lastHud ? { published_at: lastHud.published_at ?? null, charts: Object.fromEntries(Object.entries(lastHud.charts || {}).map(([c, r]) => [c, { status: r?.status ?? null, candle_key: r?.candle_key ?? null, ...(r?.catch_up ? { catch_up: true } : {}) }])) } : null,
         last_refresh: lastRefresh ? { status: lastRefresh.status, checked_at: lastRefresh.checked_at, requested: lastRefresh.requested, failed: lastRefresh.failed, quota_cooldown_until: lastRefresh.quota_cooldown_until } : null
       });
     }
