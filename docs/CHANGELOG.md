@@ -6,6 +6,16 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(nexus): the War Rooms move under the chart, and the right panel becomes a chart-only trading assistant (owner decision 2026-11-06).
+  - **Center:** one card under the chart with the tabs `News | 15m | 1H | 4H | D1`, opening on News at every load. The separate 15m conclusion and 15m room cards are removed, because they repeated the 15m tab.
+  - **Right:**
+    - a market sentiment gauge (weighted room leans plus news) with a headline-bias donut;
+    - trend by timeframe: D1 macro, 4H intraday, 1H swing, 15m structure, 5m confirmation;
+    - the H1 decision ring with its levels and confirmations;
+    - agent consensus bars;
+    - macro drivers over 24 hours;
+    - a session clock.
+  - One provider fetches the 1H, 4H and D1 Threads, News Daily and the 5m context every 60 seconds for both panels.
 - feat(hud): a third calibration tier, "computed from verified bars" (owner decision 2026-11-06, option 1).
   - HUD statements that are pure formulas of closed bars count as calibrated evidence when the candle's bar is proven equal to TradingView's. These are the Camarilla levels and bands, the daily and weekly pivot ranges, and the trading sessions.
   - The bar is proven when the candle has an approved local record and a matching parity comparison (which includes the input bar), and no input mismatch.

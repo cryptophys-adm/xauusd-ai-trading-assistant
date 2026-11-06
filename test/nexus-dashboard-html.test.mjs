@@ -49,10 +49,22 @@ test("Nexus is read-only: no write method reaches the AI Worker, and missing bin
 test("the UI keeps the Console's obsidian palette and calls only same-origin read routes", () => {
   const ui = (p) => readFileSync(join(root, "workers/xauusd-nexus-dashboard/ui", p), "utf8");
   assert.match(ui("tailwind.config.js"), /obsidian: \{ DEFAULT: "#05070c"/);
+  // Owner decision 2026-11-06: the War Rooms of every timeframe sit under the chart in one card,
+  // tabs News | 15m | 1H | 4H | D1, and every page load opens on News.
   const panel = ui("src/components/ThreadsPanel.tsx");
-  for (const label of ["\"D1\"", "\"4H\"", "\"1H\"", "\"15m\"", "\"News\""]) assert.ok(panel.includes(label), label);
-  assert.match(panel, /\/api\/threads\/timeframe\?chart=/);
-  assert.match(panel, /\/api\/news\/daily/);
+  assert.match(panel, /\[\["NEWS", "News"\], \["M15", "15m"\], \["H1", "1H"\], \["H4", "4H"\], \["D1", "D1"\]\]/);
+  assert.match(panel, /useState<Tab>\("NEWS"\)/);
+  assert.doesNotMatch(panel, /localStorage/, "the tab is not remembered: each load opens on News");
+  const market = ui("src/lib/market.tsx");
+  assert.match(market, /\/api\/threads\/timeframe\?chart=/);
+  assert.match(market, /\/api\/news\/daily/);
+  assert.match(market, /\/api\/m5-context/);
+  const page = ui("src/pages/WarRoom.tsx");
+  assert.ok(page.indexOf("<PriceChart />") < page.indexOf("<ThreadsPanel"), "the rooms sit under the chart");
+  assert.doesNotMatch(page, /LiveWarRoom|WarRoomConclusion/, "no separate 15m cards: they repeated the 15m tab");
+  // The right panel is the trading assistant, as charts.
+  const assistant = ui("src/components/AssistantPanel.tsx");
+  for (const card of ["Market sentiment", "Trend by timeframe", "Macro trend", "Intraday trend", "Swing trend", "Structure", "Confirmation", "Agent consensus", "Macro drivers", "Session clock"]) assert.ok(assistant.includes(card), card);
   const api = ui("src/lib/api.ts");
   assert.doesNotMatch(api, /method:\s*"(POST|PUT|DELETE)"/);
   const wrangler = readFileSync(join(root, "workers/xauusd-nexus-dashboard/wrangler.jsonc"), "utf8");
