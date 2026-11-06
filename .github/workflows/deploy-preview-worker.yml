@@ -483,15 +483,18 @@ jobs:
           // decision card and the H1 post, and fed to the technical agent.
           const tvReading = finalDecision.tradingview_reading;
           console.log("TRADINGVIEW READING " + JSON.stringify(tvReading, null, 2));
-          assert.deepEqual((tvReading?.lines || []).map(l => l.source), ["Prophet R38", "Prophet R37", "GMI v12.70"],
-            "the decision API must decode all three webhook alerts");
+          // Owner decision 2026-11-06: Prophet R38 and R37 read as one Prophet (one shared core).
+          assert.deepEqual((tvReading?.lines || []).map(l => l.source), ["Prophet", "GMI v12.70"],
+            "the decision API must decode all three webhook alerts (Prophet R38 and R37 as one Prophet)");
+          assert.deepEqual(tvReading.missing, [], "all three alerts arrived");
           assert.ok([tvReading.summary, ...tvReading.lines.map(l => l.text)].every(t => t && !codeLike(t)), "the webhook reading must be natural language");
           // The fixture alerts carry a confirmed buy and a bullish, aligned GMI verdict: the stored
           // indicator fields must survive (they also carry a `metrics` object).
           assert.match(tvReading.lines[0].text, /confirmed BUY signal/, "Prophet R38 buy confirmation must be decoded");
-          assert.match(tvReading.lines[2].text, /a bullish verdict/, "GMI verdict must be decoded");
+          assert.match(tvReading.lines[0].text, /Its direction is|no clear direction/, "Prophet R37 direction must be decoded in the same line");
+          assert.match(tvReading.lines[1].text, /a bullish verdict/, "GMI verdict must be decoded");
           assert.equal(tvReading.bias, "bullish");
-          assert.deepEqual(h1Thread.post.tradingview?.lines?.map(l => l.source), ["Prophet R38", "Prophet R37", "GMI v12.70"],
+          assert.deepEqual(h1Thread.post.tradingview?.lines?.map(l => l.source), ["Prophet", "GMI v12.70"],
             "the H1 thread post must show the webhook reading");
           const technicalR1 = bus.items.find(item => item.round === 1 && item.agent === "technical");
           if (!/Prophet|GMI/.test(String(technicalR1?.insight ?? ""))) console.log("::warning::The technical agent did not name a TradingView indicator in round 1.");
