@@ -96,6 +96,10 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Calibration:** the owner installs the Prophet R38 and GMI alerts on the 4-hour and daily charts, set to "Any alert() function call" with the same webhook.
     - 24 matches take about 4 trading days on H4 and about 5 weeks on D1.
     - Until then, H4 and D1 readings are unverified.
+  - **Threads (step 4):** `src/timeframe-threads.mjs` runs the H4 and D1 threads, one per closed bar, from the parity sweep cron behind `TF_THREADS_ENABLED`, within `TF_THREADS_MAX_CALLS_PER_HOUR` (production 24, preview 60).
+    - Five desks with one role each: Structure Desk (Prophet R38 and R37 on that chart), GMI Desk, Technical Analyst (closed bars), Macro Desk (Macro & Aether on that chart) and Risk Manager. The moderator writes the TLDR.
+    - A thread runs only when the local prophet or gmi record of that bar exists. The brief stores each desk's calibration status once. An uncalibrated desk speaks at confidence 0.4 or lower.
+    - Messages are stored in `agent_thread_messages` (thread `tf:H4` / `tf:D1`, run = bar open, steps `brief`, `open:*` and `conclusion`). Read API: `GET /api/threads/timeframe?chart=H4|D1`.
 
 - Transport: the pull adapter calls `AI_WORKER.submitContext(record)` on the
   AI Worker's `LocalComputationIngress` RPC entrypoint (no shared secret).
@@ -140,7 +144,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - Thread ids are `live15m:<day>`. `GET /api/live` also returns the older `live5m:` history.
   - The 5m context carries the last 12 closed bars (`recent_bars`). The H1 chain strips them.
 - Read APIs: `GET /api/threads?kind=news|h1`, `GET /api/threads/:id` (nested replies; `h1:<candle_key>` serves the H1 bus debate as a thread) and `GET /api/live?since=`.
-- **Nexus layout (owner decision 2026-11-05, Live War Room).** The main panel is the War Room conclusion, with the H1 decision shown as its constraint. Below it, the Live War Room 15m shows the latest discussion only, with no history. The right panel holds only the Threads 1H TLDR and the News Thread TLDR (`GET /api/tldr`). The left panel lists the War Room agents and the worker status.
+- **Nexus layout (owner decision 2026-11-05, Live War Room).** The main panel is the War Room conclusion, with the H1 decision shown as its constraint. Below it, the Live War Room 15m shows the latest discussion only, with no history. The right panel is one "Threads · TLDR" card with tabs D1, H4, H1, 15m and News (owner decision 2026-11-05; no 5m tab for now): H1 and News from `GET /api/tldr`, 15m from `GET /api/war-room/latest`, H4 and D1 from `GET /api/threads/timeframe`. The left panel lists the War Room agents and the worker status.
 - The AI Worker's old `/dashboard` page (Analyst/Counselor/Reasoner chat timeline and raw output) is retired. `GET /dashboard` redirects (302) to the Nexus dashboard (`NEXUS_DASHBOARD_URL`, default `https://nexus.cryptophys.work/`).
 - The dashboard shows agents by name only: Technical Analyst, News Analyst, Risk Manager and Moderator. It never shows model names.
 - Agent text must be natural language: validators reject snake_case field names, dotted evidence paths and key=value pairs in insights, summaries and dissent (`src/natural-language.mjs`). Evidence paths stay in `refs`.
