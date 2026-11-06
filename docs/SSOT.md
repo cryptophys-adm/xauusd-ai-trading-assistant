@@ -204,14 +204,36 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **The active tab drives the page.**
     - The left panel lists the desks and HUD agents of that tab's room, with their stance and calibration. On the News tab it shows the News Analyst.
     - The level ladder and regime radar on the right show that tab's chart. News uses the 1-hour chart.
-- **Trading assistant panel (right, owner decision 2026-11-06; charts only).** It is display-only: every number comes from the rooms, News Daily and the 5m context. Nothing is computed outside the parity lane.
-  - *Global Conclusion* (first; `GET /api/conclusion/global`, `src/global-conclusion.mjs`, deterministic, no model call). One multi-timeframe summary of the D1, 4H, 1H and 15m War Rooms and News Daily:
+- **Strategy engine** (owner decision 2026-11-06: "the decision is the consensus of all agents, not three"; `src/strategy-engine.mjs`, `GET /api/strategy`; deterministic, no model call, computed on read).
+  - **Why:** the H1 chain's three models (Analyst, Counselor, Reasoner) apply the policy rules, which need a Prophet R38 trigger on the H1 candle itself, so the decision was almost always WAIT. Meanwhile the rooms' agents leaned clearly one way.
+  - **Top-down layers** (every room's lean is the confidence-weighted bias of all its agents):
+    - **D1 macro trend and 4H intraday trend:** their mean is the trend. A room older than two of its bars is stale and drops out.
+    - **1H setup:** the side is the trend's when the 1H room does not lean against it. With a neutral trend, a 1H lean of 0.3 or more counts when the 15m room agrees.
+    - **15m location:** the 15m room must not lean against the side. Price must sit at a key level with the trade (within 0.35 × the 1H ATR(14)) or inside a demand or supply zone (order block, mitigation, QM or flip zone of the 15m HUDs). Otherwise the planned entry is a pullback to the nearest level.
+    - **5m trigger:** a VERIFIED 5m Prophet confirmation in the trade's direction, or the 15m Prophet confirmation. An unverified 5m confirmation never counts.
+  - **Key levels** (from the 1H and 15m HUD snapshots, computed from closed bars): Camarilla 15m, 1H, 4H, daily and weekly; the daily and weekly pivot ranges; the 1H value area and point of control; and the recent 15m swing high and low. Levels closer than 0.1 ATR merge. H3/L3 and the swings are minor: they anchor entries and stops but are never targets.
+  - **Plan and reward-to-risk:**
+    - entry: price at the level, or the planned pullback level;
+    - stop: beyond the next level against the trade at least 0.5 ATR away, padded by 0.2 ATR. Without one, or beyond 2.5 ATR, the stop is 1.5 ATR;
+    - TP1 and TP2: the next two major levels with the trade, each at least 0.5 ATR beyond the previous one, or 2R and 3R projections;
+    - RRR to each target.
+  - **Vetoes and cautions:**
+    - Vetoes (state `BLOCKED`): a GMI and Prophet conflict, a closed GMI gate (−1), a Prophet cut loss (t_enc 4), or a strong GMI verdict against the side (∓3), on the 1H chart.
+    - Cautions (−0.1 confidence each): both the 1H and the 15m regime chaotic; News Daily leaning against the side at 0.6 or more.
+  - **States:** `NO_SETUP`, `BLOCKED`, `NO_LEVELS`, `SETUP_FORMING` (wait for the pullback), `SETUP_READY` (at the level, waiting for the trigger), `LOW_REWARD`, `LOW_CONFIDENCE` and `TRIGGERED`.
+    - The decision is BUY or SELL only when `TRIGGERED`: the trigger fired, no veto, at least 1.5R (`MIN_RRR`) to TP2, and a confidence of at least 0.4. Every other state is WAIT, and it still shows the side, the levels and the RRR.
+    - Confidence: 0.6 × the weighted alignment (D1 30, 4H 30, 1H 25, 15m 15), +0.15 at a level, +0.2 when triggered, minus cautions, and −0.1 when any room is stale.
+  - **Authority:** the Global Conclusion's action is the strategy decision. The H1 chain keeps running and is shown beside it as a reference. Kernel reports are unchanged, and never carry levels.
+  - **Advisory only:** no orders, no broker and no position size. The rooms still never give levels; the engine's levels come from closed bars only.
+- **Trading assistant panel (right, owner decision 2026-11-06; charts only).** It is display-only: every number comes from the rooms, News Daily, the 5m context and the strategy engine. Nothing is computed outside the parity lane.
+  - *Strategy engine* (first): decision, direction, confidence and the headline; a checklist of the five layers (D1, 4H, 1H, 15m, 5m) with their lean and pass or fail; the plan ladder (TP2, TP1, entry, stop with prices, the level behind each, and the RRR against the 1.5R minimum); vetoes and cautions; and the H1 chain decision as a reference.
+  - *Global Conclusion* (`GET /api/conclusion/global`, `src/global-conclusion.mjs`, deterministic, no model call). One multi-timeframe summary of the D1, 4H, 1H and 15m War Rooms and News Daily:
     - the global bias from the weighted room leans (below);
     - a heat strip of the five leans, with stale rooms faded;
     - how many timeframes agree;
     - a summary;
     - the action.
-    - The action is the authoritative H1 decision. A BUY or SELL becomes WAIT when the global bias leans against it. The validated H1 levels show only when it is BUY or SELL.
+    - The action is the strategy engine's decision. Without a strategy it falls back to the H1 decision, which becomes WAIT when the global bias leans against it. The H1 chain decision shows as a reference.
   - *Market sentiment:* a semicircle gauge from −100 (bearish) to +100 (bullish): the Global Conclusion's score.
     - It shows the weighted mean of each room's lean: D1 30, 4H 25, 1H 20, 15m 15, News 10. A missing input drops out and the rest renormalise.
     - A room's lean is the confidence-weighted mean direction of its agents (BUY +1, SELL −1, WAIT, HOLD and CLOSE 0). News lean is (bullish − bearish) over all tagged headlines.

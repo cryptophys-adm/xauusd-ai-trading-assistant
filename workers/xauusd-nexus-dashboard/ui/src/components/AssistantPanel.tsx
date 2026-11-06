@@ -9,13 +9,14 @@ import { useTab, tabLabel, TAB_HUD_TF } from "../lib/tab";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 import { candleWhen, pct, utc } from "../lib/format";
+import StrategyPanel from "./StrategyPanel";
 
 const side = (x: any) => (x?.buy_confirmed ? "buy confirmed" : x?.sell_confirmed ? "sell confirmed" : "none");
 
 /**
  * Global Conclusion (owner decision 2026-11-06): the multi-timeframe summary of the D1, 4H, 1H
- * and 15m War Rooms and the news, from GET /api/conclusion/global. The action stays bound by the
- * authoritative H1 decision; the validated H1 levels show only when it is BUY or SELL.
+ * and 15m War Rooms and the news, from GET /api/conclusion/global. The action is the strategy
+ * engine's decision (the consensus of all agents); the H1 chain decision is shown for reference.
  */
 function GlobalConclusion() {
   const { global: g, loading } = useMarket();
@@ -30,7 +31,7 @@ function GlobalConclusion() {
           <div className="flex items-center gap-3">
             <div className="flex flex-col">
               <div className={`mono text-[40px] font-extrabold leading-none ${stanceColor(g.action)}`} style={{ textShadow: "0 0 24px currentColor" }}>{g.action}</div>
-              <div className="mt-1 text-[11px] text-slate-500">{g.bias === "NEUTRAL" ? "timeframes split" : `${g.alignment.with_bias} of ${g.alignment.of} timeframes agree`}</div>
+              <div className="mt-1 text-[11px] text-slate-500">{g.bias === "NEUTRAL" ? "timeframes split" : `${g.alignment.with_bias} of ${g.alignment.of} timeframes agree`}{g.strategy ? ` · strategy ${String(g.strategy.state).toLowerCase().replace(/_/g, " ")}` : ""}</div>
             </div>
             <div className="ml-auto grid grid-cols-5 gap-1" role="img" aria-label="Lean per timeframe">
               {g.timeframes.map((t: any) => (
@@ -44,12 +45,12 @@ function GlobalConclusion() {
           <p className="glass-inner mt-3 px-3 py-2.5 text-[12px] leading-relaxed text-slate-300">{g.summary}</p>
           {h1 && (
             <div className="mt-2 space-y-1 text-[11px] text-slate-400">
-              <div className="flex flex-wrap items-center gap-2"><span className="eyebrow text-[9px]">H1 decision</span><Stance value={h1.decision} /><span className="mono">{pct(h1.confidence)}</span><span>· {candleWhen(h1.candle_key)}</span></div>
+              <div className="flex flex-wrap items-center gap-2"><span className="eyebrow text-[9px]">H1 chain (reference)</span><Stance value={h1.decision} /><span className="mono">{pct(h1.confidence)}</span><span>· {candleWhen(h1.candle_key)}</span></div>
               {lv && <div className="mono text-slate-300">entry {lv.entry_price} · stop {lv.stop_loss} · target {lv.take_profit}</div>}
               {cf && <div><Activity className="mr-1 inline h-3 w-3" />R38 H1 {side(cf.h1_prophet_r38)} · 5m {side(cf.m5_prophet_r38)}{cf.m5_prophet_r38 && !cf.m5_prophet_r38.verified ? " (unverified)" : ""}</div>}
             </div>
           )}
-          <p className="mt-2 text-[9px] uppercase tracking-widest text-slate-600">Advisory only · levels only from the validated H1 chain · no orders</p>
+          <p className="mt-2 text-[9px] uppercase tracking-widest text-slate-600">Advisory only · action from the strategy engine · no orders</p>
         </>
       )}
     </Panel>
@@ -295,6 +296,7 @@ export default function AssistantPanel({ className }: { className?: string }) {
   return (
     <div className={className}>
       <div className="space-y-4">
+        <StrategyPanel />
         <GlobalConclusion />
         <SentimentCard />
         <TrendLadder ladder={ladder} />

@@ -593,6 +593,14 @@ jobs:
           // Owner decision 2026-11-06: the 15m room has no H1 Desk; the Higher-Timeframe Desk carries
           // the H1 chain. No 15m local records are posted for this bar, so there is no 15m Desk.
           assertWarRoom(room1, ["htf", "news", "technical", "risk"]);
+          // Strategy engine (owner decision 2026-11-06): served from the live rooms; deterministic.
+          const strategyResponse = await fetch(base + "/api/strategy");
+          assert.equal(strategyResponse.status, 200, "the strategy engine is served");
+          const strategy = (await strategyResponse.json()).strategy;
+          console.log("STRATEGY PROOF " + JSON.stringify({ decision: strategy.decision, state: strategy.state, direction: strategy.direction, headline: strategy.headline, layers: strategy.layers.map((l) => [l.key, l.lean, l.pass]) }));
+          assert.ok(["BUY", "SELL", "WAIT"].includes(strategy.decision));
+          assert.deepEqual(strategy.layers.map((l) => l.key), ["D1", "H4", "H1", "M15", "M5"]);
+          assert.ok(!/lot|position size of/i.test(JSON.stringify(strategy)), "no position size");
           const legacyDashboard = await fetch(base + "/dashboard", { redirect: "manual" });
           assert.equal(legacyDashboard.status, 302, "the old debate/raw dashboard redirects to Nexus");
 

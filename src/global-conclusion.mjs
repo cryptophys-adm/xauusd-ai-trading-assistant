@@ -3,12 +3,13 @@
 //
 // Deterministic: no model call. Each room contributes its lean (the confidence-weighted mean
 // direction of its agents' biases), weighted D1 30, 4H 25, 1H 20, 15m 15 and News 10; a missing room
-// drops out and the rest renormalise. The action stays bound by the authoritative H1 decision:
-// a BUY or SELL stands only when the global bias does not lean against it, otherwise WAIT.
+// drops out and the rest renormalise. The action is the strategy engine's decision (owner decision
+// 2026-11-06: the consensus of all agents decides, src/strategy-engine.mjs). Without a strategy it
+// falls back to the H1 decision, which stands only when the global bias does not lean against it.
 // Advisory only: no levels, sizes or orders are produced here.
-import { readTimeframeThread } from "./timeframe-threads.mjs";
-import { readWarRoom } from "./war-room.mjs";
-import { readNewsDaily } from "./news-daily.mjs";
+import { roomLean, loadStrategyInputs, buildStrategy } from "./strategy-engine.mjs";
+
+export { roomLean };
 
 export const GLOBAL_CONCLUSION_VERSION = "cryptophys.global-conclusion.v1";
 export const GLOBAL_WEIGHTS = Object.freeze({ D1: 0.3, H4: 0.25, H1: 0.2, M15: 0.15, NEWS: 0.1 });
@@ -31,17 +32,6 @@ const word = (v) => {
   return a < NEUTRAL_BAND ? "neutral" : a < 0.3 ? `slightly ${s}` : a < 0.6 ? s : `strongly ${s}`;
 };
 
-/**
- * Confidence-weighted mean direction of the agents that spoke, in [-1, 1], or null. Each agent's
- * direction is its bias (owner decision 2026-11-06: the action is mostly WAIT without a
- * confirmation, the bias carries the lean); openings stored before the bias existed use the action.
- */
-export function roomLean(openings) {
-  const ok = (openings || []).filter((o) => o?.status === "ok" && isNum(o.confidence));
-  const w = ok.reduce((s, o) => s + o.confidence, 0);
-  return ok.length && w > 0 ? r2(ok.reduce((s, o) => s + direction(o.bias || o.stance) * o.confidence, 0) / w) : null;
-}
-
 function newsLean(news) {
   const c = news?.counts ?? {};
   const b = Number(c.bullish) || 0, s = Number(c.bearish) || 0, n = Number(c.neutral) || 0;
@@ -49,7 +39,7 @@ function newsLean(news) {
 }
 
 /** Pure: the Global Conclusion from the latest rooms, News Daily and the H1 decision. */
-export function buildGlobalConclusion({ d1 = null, h4 = null, h1 = null, m15 = null, news = null, h1Decision = null, now = Date.now() } = {}) {
+export function buildGlobalConclusion({ d1 = null, h4 = null, h1 = null, m15 = null, news = null, h1Decision = null, strategy = null, now = Date.now() } = {}) {
   const rooms = { D1: d1, H4: h4, H1: h1, M15: m15 };
   const timeframes = Object.entries(rooms).map(([key, room]) => {
     const at = room?.bar_close ?? room?.bar_time ?? null;
@@ -84,6 +74,12 @@ export function buildGlobalConclusion({ d1 = null, h4 = null, h1 = null, m15 = n
     action = "WAIT";
     actionReason = `The timeframes lean ${word(score)}, against the H1 ${decision}, so the global action is WAIT.`;
   }
+  // Owner decision 2026-11-06: the decision is the consensus of all agents, so the strategy
+  // engine's decision is the global action when it is available; the H1 chain stays for reference.
+  if (strategy?.decision) {
+    action = strategy.decision;
+    actionReason = `Strategy engine: ${strategy.headline}`;
+  }
 
   const parts = timeframes.filter((tf) => tf.available).map((tf) => `${tf.label} ${word(tf.lean)}`);
   const summary = !parts.length
@@ -95,18 +91,16 @@ export function buildGlobalConclusion({ d1 = null, h4 = null, h1 = null, m15 = n
     bias, score, action, action_reason: actionReason,
     alignment: { with_bias: withBias, of: leaning.length },
     h1_decision: decision ? { decision, confidence: h1Decision?.confidence ?? null, candle_key: h1Decision?.candle_key ?? null } : null,
-    timeframes, summary, weights: GLOBAL_WEIGHTS
+    timeframes, summary, weights: GLOBAL_WEIGHTS,
+    strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline } : null
   };
 }
 
-/** Reads the latest rooms and News Daily from D1 and builds the Global Conclusion. */
+/** Reads the latest rooms, News Daily and the strategy inputs, and builds the Global Conclusion. */
 export async function readGlobalConclusion(env, { now = Date.now() } = {}) {
-  const db = env.DB;
-  const safe = async (fn) => { try { return await fn(); } catch { return null; } };
-  const [d1, h4, h1, m15, news] = await Promise.all([
-    safe(() => readTimeframeThread(db, "D1")), safe(() => readTimeframeThread(db, "H4")), safe(() => readTimeframeThread(db, "H1")),
-    safe(() => readWarRoom(db)), safe(() => readNewsDaily(db))
-  ]);
-  const h1Decision = m15?.h1 ?? h1?.h1 ?? null;
-  return buildGlobalConclusion({ d1, h4, h1, m15, news, h1Decision, now });
+  const inputs = await loadStrategyInputs(env, { now });
+  const { D1: d1, H4: h4, H1: h1, M15: m15 } = inputs.rooms;
+  let strategy = null;
+  try { strategy = buildStrategy(inputs); } catch { strategy = null; }
+  return buildGlobalConclusion({ d1, h4, h1, m15, news: inputs.news, h1Decision: inputs.h1Chain, strategy, now });
 }

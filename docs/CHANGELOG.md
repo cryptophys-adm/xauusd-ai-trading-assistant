@@ -6,6 +6,19 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(strategy): the strategy engine. The decision is the consensus of every agent from D1 to 5m, with key levels and reward-to-risk (owner decision 2026-11-06: "full confluence and all agents"; "D1 trend down to the 5m entry, with key level prices and RRR").
+  - **Why:** the H1 chain's three models need a Prophet trigger on the H1 candle itself, so the decision was almost always WAIT.
+  - **What:** `src/strategy-engine.mjs` (`GET /api/strategy`) is deterministic. It reads:
+    - the four War Rooms (every agent's bias, confidence weighted);
+    - News Daily;
+    - the 1H and 15m HUD snapshots;
+    - the latest confirmations;
+    - the closed 1H and 15m bars.
+  - **Layers:** D1 and 4H give the trend, 1H the setup with the trend, 15m the location at a key level, and the 5m verified trigger.
+  - **Plan:** an entry, a stop beyond the next level against the trade, and TP1/TP2 at the next major levels, with the RRR to each.
+  - **Rules:** BUY/SELL needs the trigger, no veto, at least 1.5R and a confidence of at least 0.4. Otherwise it is WAIT with the state, the side and the levels.
+  - **Global Conclusion:** its action is now the strategy decision. The H1 chain stays as a reference.
+  - **Nexus:** a Strategy engine card leads the right panel: decision, the five-layer checklist, the plan ladder with RRR, vetoes and cautions.
 - feat(rooms): decision and bias are separate; the debate follows the bias (owner decision 2026-11-06).
   - **Why many agents never spoke:** debate speakers were chosen by action alone. In production at 13:30, all 18 agents said WAIT, 11 leaned bearish and 3 bullish, and only the Risk Manager debated. The "could not speak this round" posts at 13:15 were the Workers AI limits, fixed by the quorum.
   - **Debate:** agents whose bias leans against the room's bias now debate, its strongest holder defends it, and the Risk Manager stays. Rebuttals carry a bias, and a changed bias is a concession.
