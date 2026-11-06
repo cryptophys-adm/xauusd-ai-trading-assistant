@@ -10,6 +10,7 @@ import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 import { utc } from "../lib/format";
 import GlobalDecision from "./GlobalDecision";
+import KeyLevelAgent from "./KeyLevelAgent";
 
 
 function SentimentCard() {
@@ -252,6 +253,7 @@ export default function AssistantPanel({ className }: { className?: string }) {
     <div className={className}>
       <div className="space-y-4">
         <GlobalDecision />
+        <KeyLevelAgent />
         <SentimentCard />
         <TrendLadder ladder={ladder} />
         <LevelsCard levels={levels} loading={loading} tab={tab} />

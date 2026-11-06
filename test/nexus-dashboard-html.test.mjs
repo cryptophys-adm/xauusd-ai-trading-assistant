@@ -77,6 +77,10 @@ test("the UI keeps the Console's obsidian palette and calls only same-origin rea
   for (const word of ["Global decision", "Decision", "Bias", "Direction", "Lean:", "TP1", "TP2", "Stop", "Entry", "R</span>", "H1 chain (reference)"]) assert.ok(decision.includes(word), word);
   assert.ok(assistant.indexOf("<GlobalDecision") >= 0 && assistant.indexOf("<GlobalDecision") < assistant.indexOf("<SentimentCard"), "the global decision leads the right panel");
   assert.doesNotMatch(assistant, /GlobalConclusion|StrategyPanel/, "the two former cards are merged");
+  // Key Level Agent (owner decision 2026-11-06): the candidate zones of every chart's key levels.
+  const keyLevels = ui("src/components/KeyLevelAgent.tsx");
+  for (const word of ["Key Level Agent", "candidate zones", "key_levels", "sources"]) assert.ok(keyLevels.includes(word), word);
+  assert.ok(assistant.indexOf("<KeyLevelAgent") > assistant.indexOf("<GlobalDecision"), "the zones follow the decision");
   for (const card of ["Market sentiment", "Trend by timeframe", "Macro trend", "Intraday trend", "Swing trend", "Structure", "Confirmation", "Levels", "Regime", "Agent consensus", "Macro drivers", "Session clock"]) assert.ok(assistant.includes(card), card);
   assert.ok(assistant.indexOf("<GlobalConclusion />") < assistant.indexOf("<SentimentCard />"), "the Global Conclusion comes first");
   const api = ui("src/lib/api.ts");

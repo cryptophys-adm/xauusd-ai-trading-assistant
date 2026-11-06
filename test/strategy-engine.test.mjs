@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildStrategy, keyLevels, tradeLevels, atr, roomLean, MIN_RRR } from "../src/strategy-engine.mjs";
+import { buildStrategy, tradeLevels, atr, roomLean, MIN_RRR } from "../src/strategy-engine.mjs";
 import { buildGlobalConclusion } from "../src/global-conclusion.mjs";
 
 const NOW = Date.parse("2026-11-06T14:20:00Z");
@@ -46,12 +46,15 @@ test("all agents aligned bullish from D1 to 15m, price at a support, a verified 
   assert.ok(s.plan.stop < s.plan.entry && s.plan.tp1 > s.plan.entry && s.plan.tp2 > s.plan.tp1);
   assert.ok(s.plan.rrr.tp2 >= MIN_RRR);
   assert.match(s.plan.stop_note, /beyond /);
-  assert.equal(s.plan.tp1, 4052, "targets are major levels: the 1H point of control first");
-  assert.equal(s.plan.tp2, 4060, "then the 1H Camarilla H4");
+  // Key Level Agent zones: the targets are the near edges of the next candidate zones.
+  assert.equal(s.plan.tp1, 4048, "the zone where the 1H and 15m Camarilla H3 and round 4050 stack");
+  assert.match(s.plan.tp1_note, /key zone .*round 4050/);
+  assert.equal(s.plan.tp2, 4060, "then the 1H and 15m Camarilla H4 zone");
+  assert.equal(s.plan.stop, 4028, "beyond the far edge of the 4030-4031 zone (value area low and 15m swing low), padded by 0.2 ATR");
   assert.deepEqual(s.layers.map((l) => l.key), ["D1", "H4", "H1", "M15", "M5"]);
   assert.ok(s.layers.every((l) => l.pass === true));
   assert.equal(s.h1_chain.decision, "WAIT", "the H1 chain is reported beside the engine's decision");
-  assert.ok(s.key_levels.length > 4);
+  assert.ok(s.key_levels.candidates.length >= 3, "the Key Level Agent's reading travels with the strategy");
   assert.match(s.advisory, /no orders/);
 });
 
@@ -62,12 +65,12 @@ test("the same setup without a trigger is READY, away from a level it is FORMING
   assert.match(ready.headline, /waiting for a verified 5m/);
   const unverified = buildStrategy(input({ confirmations: { m5_prophet_r38: { buy_confirmed: true, verified: false } } }));
   assert.equal(unverified.state, "SETUP_READY", "an unverified 5m confirmation never triggers");
-  // Price 4057: the nearest level below is the 1H point of control at 4052, more than 0.35 ATR away.
+  // Price 4057: the nearest zone below ends at 4052 (1H point of control), more than 0.35 ATR away.
   const away = buildStrategy(input({ m15Bars: m15Bars.map((b) => ({ ...b, close: 4057, high: 4060, low: 4046 })), h1Snapshot: snapshot("60", 4057), m15Snapshot: snapshot("15", 4057) }));
   assert.equal(away.state, "SETUP_FORMING", away.headline);
   assert.ok(away.plan.entry < 4057, "the planned entry is a pullback to the level below");
   assert.match(away.headline, /wait for a pullback/);
-  assert.equal(away.plan.entry, 4052, "the pullback is to the 1H point of control");
+  assert.equal(away.plan.entry, 4052, "the pullback is to the top of the 1H point of control zone");
 });
 
 test("the trend decides the side: a 1H room against the trend, or a 15m room against both, gives no setup", () => {
@@ -115,15 +118,20 @@ test("stale or missing rooms give no setup; the reward must reach the minimum", 
   assert.ok(plan.rrr.tp1 > 0 && plan.rrr.tp2 >= plan.rrr.tp1);
 });
 
-test("levels and ATR helpers", () => {
+test("ATR and lean helpers; a plan on zones uses their edges", () => {
   assert.equal(atr(h1Bars), 10);
   assert.equal(atr([]), null);
-  const levels = keyLevels({ h1Snapshot: snapshot("60", 4040), m15Snapshot: null, m15Bars, merge: 1 });
-  assert.ok(levels.some((l) => /1H Camarilla L3/.test(l.label)));
-  assert.ok(levels.some((l) => /daily pivot/.test(l.label)));
-  assert.ok(levels.some((l) => /15m swing low/.test(l.label)));
-  assert.ok(levels.every((l, i) => i === 0 || l.price >= levels[i - 1].price), "sorted by price");
   assert.equal(roomLean([op("a", "BULLISH", 1), op("b", "BEARISH", 1)]), 0);
+  const zones = [{ low: 96, high: 97, price: 96.5, label: "support zone", major: true }, { low: 99, high: 99.8, price: 99.4, label: "entry zone", major: true }, { low: 103, high: 104, price: 103.5, label: "first target", major: true }, { low: 106, high: 107, price: 106.5, label: "second target", major: true }];
+  const plan = tradeLevels({ dir: 1, price: 100, levels: zones, atrH1: 2 });
+  assert.equal(plan.entry, 100, "within 0.35 ATR of the entry zone's top");
+  assert.equal(plan.stop, 98.6, "beyond the far edge of the entry zone, padded");
+  assert.equal(plan.tp1, 103, "the near edge of the first target zone");
+  assert.equal(plan.tp2, 106);
+  const short = tradeLevels({ dir: -1, price: 102.8, levels: zones, atrH1: 2 });
+  assert.equal(short.entry, 102.8, "a short at the near edge of a resistance zone");
+  assert.equal(short.stop, 104.4);
+  assert.equal(short.tp1, 99.8);
 });
 
 test("the global action is the strategy decision; without a strategy it stays the H1 decision", () => {

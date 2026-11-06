@@ -1981,6 +1981,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/key-levels") {
+    // Key Level Agent (owner decision 2026-11-06): the zones where the key levels of every chart stack.
+    try {
+      return dashboardJson({ status: "ok", key_levels: (await readStrategy(env)).key_levels });
+    } catch (error) {
+      console.error("key_levels_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/strategy") {
     // Strategy engine (owner decision 2026-11-06): the decision from the consensus of all agents
     // across D1 to 5m, with its key levels and reward-to-risk. Advisory only.
