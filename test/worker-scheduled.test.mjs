@@ -237,3 +237,26 @@ test("exact API routes win over their prefix routes: /api/threads/timeframe and 
   const news = await get("/api/news/daily");
   assert.deepEqual(news.body, { status: "not_found", enabled: true }, "the News Daily route answered, not /api/news/:key");
 });
+
+test("/api/hud/levels and /api/conclusion/global answer as routes of their own (never as a HUD candle key)", async () => {
+  const { env } = await workerEnv();
+  const get = async (path) => {
+    const r = await worker.fetch(new Request("https://worker.test" + path), env, execution().ctx);
+    return { status: r.status, body: await r.json() };
+  };
+  const none = await get("/api/hud/levels?tf=240");
+  assert.equal(none.status, 404);
+  assert.deepEqual(none.body, { status: "not_found", timeframe: "240" }, "the levels route answered, not /api/hud/:candle_key");
+  assert.equal((await get("/api/hud/levels?tf=5")).status, 400);
+  const snap = { schema_version: "cryptophys.hud-snapshot.v1", timeframe: "15", candle_key: "OANDA:XAUUSD:15:1793955600000", computed_at: new Date().toISOString(),
+    huds: { interstellar_eyes: { fields: { close: 4050, camarilla: { "15": { h6: 4120, h5: 4100, h4: 4080, h3: 4065, l3: 4035, l4: 4020, l5: 4000, l6: 3980 } }, band: { "15": "l3_h3" } } } } };
+  await env.SIGNAL_CACHE.put("hud:15:latest", JSON.stringify(snap));
+  const lv = await get("/api/hud/levels?tf=15");
+  assert.equal(lv.status, 200);
+  assert.equal(lv.body.levels.close, 4050);
+  assert.equal(lv.body.levels.camarilla[0].band, "l3_h3");
+  const g = await get("/api/conclusion/global");
+  assert.equal(g.status, 200);
+  assert.equal(g.body.status, "ok");
+  assert.equal(g.body.global.action, "WAIT");
+});

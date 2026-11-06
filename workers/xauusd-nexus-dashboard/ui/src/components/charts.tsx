@@ -96,3 +96,84 @@ export function StackedBar({ mix, height = 10 }: { mix: Record<string, number>; 
     </div>
   );
 }
+
+type Levels = { h6: number; h5: number; h4: number; h3: number; l3: number; l4: number; l5: number; l6: number };
+type Cpr = { pivot: number; tc: number; bc: number; position?: string | null } | null;
+
+/**
+ * Vertical price ladder: one Camarilla set (H6 down to L6) with the H3–L3 range, the H4–H5
+ * breakout and L4–L5 breakdown zones shaded, the daily and weekly pivot ranges as bands, and the
+ * close as a marker (clamped to an edge with an arrow when it is outside the ladder).
+ */
+export function LevelLadder({ levels, close, daily, weekly, height = 300 }: { levels: Levels; close: number | null; daily?: Cpr; weekly?: Cpr; height?: number }) {
+  const W = 300, padT = 10, padB = 10, x0 = 70, x1 = 236;
+  // Keep the ladder on the Camarilla set: the close and a pivot range near it extend it by at most
+  // a quarter of its span; a pivot range further away shows as an edge marker with its price.
+  const span = levels.h6 - levels.l6 || 1;
+  const near = (p: number) => p <= levels.h6 + span * 0.25 && p >= levels.l6 - span * 0.25;
+  const vals = [levels.h6, levels.l6, ...(close != null ? [close] : []), ...[daily, weekly].flatMap((c) => (c && near(c.pivot) ? [c.tc, c.bc] : []))];
+  const hi = Math.min(Math.max(...vals), levels.h6 + span * 0.25), lo = Math.max(Math.min(...vals), levels.l6 - span * 0.25);
+  const y = (p: number) => padT + ((hi - p) / (hi - lo || 1)) * (height - padT - padB);
+  const yc = (p: number) => Math.max(padT, Math.min(height - padB, y(p)));
+  const zone = (a: number, b: number, color: string, op: number) => <rect x={x0} width={x1 - x0} y={yc(Math.max(a, b))} height={Math.max(1, yc(Math.min(a, b)) - yc(Math.max(a, b)))} fill={color} opacity={op} />;
+  const rows: [keyof Levels, string, string][] = [["h6", "H6", C.bull], ["h5", "H5", C.bull], ["h4", "H4", C.bull], ["h3", "H3", C.wait], ["l3", "L3", C.wait], ["l4", "L4", C.bear], ["l5", "L5", C.bear], ["l6", "L6", C.bear]];
+  const out = close == null ? null : close > hi ? "up" : close < lo ? "down" : null;
+  const band = (c: Cpr, label: string, color: string) => c && (c.pivot > hi || c.pivot < lo ? (
+    <text key={label} x={x1} y={c.pivot > hi ? padT + 2 : height - 2} textAnchor="end" fontSize="8.5" fill={color} className="mono">{c.pivot > hi ? "▲" : "▼"} {label} {c.pivot.toFixed(2)}</text>
+  ) : (
+    <g key={label}>
+      <rect x={x1 - 34} width={30} y={yc(c.tc)} height={Math.max(2, yc(c.bc) - yc(c.tc))} fill={color} opacity={0.55} rx={2} />
+      <line x1={x1 - 38} x2={x1} y1={yc(c.pivot)} y2={yc(c.pivot)} stroke={color} strokeWidth={1.2} strokeDasharray="2 2" />
+      <text x={x1 + 4} y={yc(c.pivot) + 3} fontSize="8" fill={color}>{label}</text>
+    </g>
+  ));
+  return (
+    <svg viewBox={`0 0 ${W} ${height}`} className="w-full" role="img" aria-label={`Camarilla ladder, close ${close ?? "unknown"}`}>
+      {zone(levels.h3, levels.l3, C.wait, 0.08)}
+      {zone(levels.h4, levels.h5, C.bull, 0.1)}
+      {zone(levels.l4, levels.l5, C.bear, 0.1)}
+      {rows.map(([k, name, color]) => (
+        <g key={k}>
+          <line x1={x0} x2={x1} y1={y(levels[k])} y2={y(levels[k])} stroke={color} strokeOpacity={k === "h3" || k === "l3" || k === "h4" || k === "l4" ? 0.9 : 0.45} strokeWidth={k === "h4" || k === "l4" ? 1.6 : 1} />
+          <text x={x0 - 6} y={y(levels[k]) + 3} textAnchor="end" fontSize="9" fill={color} className="mono">{name} {levels[k].toFixed(2)}</text>
+        </g>
+      ))}
+      {band(daily ?? null, "D pivot", C.cyan)}
+      {band(weekly ?? null, "W pivot", C.violet)}
+      {close != null && (
+        <g>
+          <line x1={x0 - 2} x2={x1 + 2} y1={yc(close)} y2={yc(close)} stroke="#e2e8f0" strokeWidth={2} />
+          <polygon points={`${x1 + 2},${yc(close)} ${x1 + 9},${yc(close) - 4} ${x1 + 9},${yc(close) + 4}`} fill="#e2e8f0" />
+          <rect x={x0 + 4} y={yc(close) - 15} width={78} height={13} rx={3} fill="#0b1220" stroke="#e2e8f0" strokeOpacity={0.4} />
+          <text x={x0 + 43} y={yc(close) - 5.5} textAnchor="middle" fontSize="9" fontWeight="700" fill="#e2e8f0" className="mono">{out === "up" ? "▲ " : out === "down" ? "▼ " : ""}{close.toFixed(2)}</text>
+        </g>
+      )}
+    </svg>
+  );
+}
+
+/** Radar of axes in [0, 1] (a hexagon for six). A missing value is drawn at the centre, dashed. */
+export function RegimeRadar({ axes, size = 220, color = C.cyan }: { axes: { key: string; label: string; value: number | null }[]; size?: number; color?: string }) {
+  const n = axes.length, cx = 110, cy = 104, R = 72;
+  const at = (i: number, r: number) => { const a = (-90 + (360 / n) * i) * (Math.PI / 180); return [cx + R * r * Math.cos(a), cy + R * r * Math.sin(a)] as const; };
+  const ring = (r: number) => axes.map((_, i) => at(i, r).join(",")).join(" ");
+  const shape = axes.map((a, i) => at(i, a.value ?? 0).join(",")).join(" ");
+  return (
+    <svg viewBox="-34 0 288 214" width="100%" style={{ maxWidth: size + 60 }} role="img" aria-label={axes.map((a) => `${a.label} ${a.value ?? "n/a"}`).join(", ")}>
+      {[0.25, 0.5, 0.75, 1].map((r) => <polygon key={r} points={ring(r)} fill="none" stroke={C.track} strokeWidth={r === 1 ? 1.4 : 1} />)}
+      {axes.map((_, i) => { const [x, y] = at(i, 1); return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke={C.track} />; })}
+      <motion.polygon initial={{ opacity: 0, scale: 0.6 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5 }} style={{ transformOrigin: `${cx}px ${cy}px` }}
+        points={shape} fill={color} fillOpacity={0.2} stroke={color} strokeWidth={1.8} />
+      {axes.map((a, i) => { const [x, y] = at(i, a.value ?? 0); return <circle key={a.key} cx={x} cy={y} r={2.6} fill={a.value == null ? "transparent" : color} stroke={color} strokeDasharray={a.value == null ? "1.5 1.5" : undefined} />; })}
+      {axes.map((a, i) => {
+        const [x, y] = at(i, 1.2);
+        const anchor = Math.abs(x - cx) < 6 ? "middle" : x > cx ? "start" : "end";
+        return (
+          <text key={a.key} x={x} y={y + 3} textAnchor={anchor} fontSize="8.5" fill="#94a3b8">
+            {a.label}<tspan className="mono" fill={a.value == null ? C.muted : "#e2e8f0"}>{a.value == null ? " –" : ` ${Math.round(a.value * 100)}`}</tspan>
+          </text>
+        );
+      })}
+    </svg>
+  );
+}
