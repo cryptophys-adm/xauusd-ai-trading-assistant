@@ -29,6 +29,13 @@ const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, cli
 export const WAR_ROOM_OPENING_MS = 90_000;
 export const WAR_ROOM_DEBATE_MS = 180_000; // owner: the debate is open for at most 3 minutes
 export const WAR_ROOM_CONCLUSION_MS = 60_000;
+/**
+ * Quorum (production 2026-11-06 13:15: Workers AI 3021 and 3040 failed 14 of 18 openings and the
+ * room concluded on four agents): within this wait after the close, a room with fewer than half
+ * of its agents heard does not conclude; the queue redelivers the task and only the failed
+ * openings are asked again. Past it, the room concludes with whoever spoke.
+ */
+export const WAR_ROOM_QUORUM_WAIT_MS = 5 * 60_000;
 export const WAR_ROOM_MAX_REBUTTALS = 8;
 const CLAIM_MAX = 320;
 const ARGUMENT_MAX = 420;
@@ -374,6 +381,9 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     });
   }));
   const answered = openings.filter(m => m?.status === "ok");
+  if (answered.length && answered.length * 2 < roster.length && clock() - Date.parse(barTime) < WAR_ROOM_QUORUM_WAIT_MS) {
+    return { status: "waiting_for_quorum", calls, openings: answered.length, roster: roster.length };
+  }
   const bus = answered.map(m => ({ id: m.agent, name: agentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, evidence: evidenceNote(m.agent), claim: m.claim }));
   const busAgents = bus.map(b => b.id);
 

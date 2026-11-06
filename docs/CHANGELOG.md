@@ -6,6 +6,10 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- fix(war-room): the Live War Room 15m waits for a quorum before it concludes.
+  - **Why:** in production at 13:15, Workers AI 3021 (the per-minute limit) and 3040 (capacity) failed 14 of 18 openings, even after the single retry, and the room concluded on four agents.
+  - **Now:** within 5 minutes of the close, a room with fewer than half of its agents heard returns `waiting_for_quorum`. The queue redelivers it after 60 seconds, and only the failed openings are asked again. Past the wait, it concludes with whoever spoke, as the timeframe rooms do.
+  - **Queue:** a task error may carry its own `retryDelaySeconds`.
 - feat(rooms): D1 catch-up: a missed H4 or D1 HUD snapshot is sent late, once, and its room re-convenes with every agent (owner decision 2026-11-06, "Catch up now").
   - **Why:** the D1 room of the 5 November bar met with only the Technical Analyst and the Risk Manager. That bar closed (22:00 UTC) before the D1 HUD snapshot, the D1 Desk and News Daily existed, and the pull adapter sends a D1 snapshot only within 60 minutes of the close, so no D1 snapshot was ever stored.
   - **Pull adapter:** an H4 or D1 bar whose snapshot was never sent is sent once while it is still the latest close (H4 4 hours, D1 72 hours), built on the bundle cut at its close. `GET /health` shows `last_hud_publish` per chart.

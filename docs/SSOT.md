@@ -324,6 +324,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - The Risk Manager sees the confirmations, applies the rule in its opening, and rebuts every entry proposed without one.
     - A BUY or SELL conclusion without the matching confirmation is rejected (`entry_without_confirmation`).
     - Nexus shows the confirmation state under the conclusion.
+  - **Quorum (2026-11-06):** within 5 minutes of the close (`WAR_ROOM_QUORUM_WAIT_MS`), a room with fewer than half of its agents heard does not conclude. The queue task is redelivered after 60 seconds (`WarRoomQuorumPending`), and only the failed openings are asked again. Past the wait, the room concludes with whoever spoke. Production 13:15 that day: Workers AI 3021 and 3040 failed 14 of 18 openings, and the room concluded on four agents.
   - Primary model only, within `WAR_ROOM_MAX_CALLS_PER_HOUR = 112` (about 27 calls per close). Messages are stored in `agent_thread_messages` (thread `warroom:<day>`, steps `brief`, `open:*`, `debate:*` and `conclusion`).
   - Read API: `GET /api/war-room/latest[?bar=<iso>]`.
   - When on, it replaces the legacy live room and the per-H1 HUD agents (their budget moves here). Turning it `"false"` restores both.

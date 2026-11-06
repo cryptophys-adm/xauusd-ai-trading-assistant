@@ -65,7 +65,9 @@ export function createQueueConsumer(processTask, options = {}) {
         } catch {
           // Logging failure must not prevent retry.
         }
-        message.retry({ delaySeconds: retryDelaySeconds });
+        // A task may ask for its own delay (the War Room waiting for quorum waits a model minute).
+        const own = error && typeof error === "object" ? error.retryDelaySeconds : undefined;
+        message.retry({ delaySeconds: Number.isInteger(own) && own >= 0 ? own : retryDelaySeconds });
       }
     }
   };
