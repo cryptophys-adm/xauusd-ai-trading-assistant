@@ -6,6 +6,21 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(war-room): each room has its own timeframe desk; the War Room conclusion looks as before in every tab (owner feedback 2026-11-06).
+  - **15m room:**
+    - The 15m Desk replaces the H1 Desk. It reads the parity-approved 15m Prophet R38, R37 and GMI records of the candle, in plain sentences.
+    - The H1 chain and the latest 1H room conclusion move to a Higher-Timeframe Desk. The H1 decision still binds the moderator.
+  - **1H, 4H and D1 rooms:**
+    - The H1 Desk is now the 1H Desk, which also reads the local 1-hour records.
+    - The 4H and D1 rooms gain a 4H Desk and a D1 Desk on their bar's local records.
+    - Unapproved records are labelled and capped at confidence 0.4 (`src/timeframe-desk.mjs`).
+  - **Nexus:** each tab's conclusion uses the original War Room conclusion design:
+    - the glowing 52 px stance, with badges for the candle close, the phase and the 5m label;
+    - the summary in its own box;
+    - the H1 constraint and the entry confirmation in two boxes;
+    - the advisory note.
+  - **Stored summaries and reasons** now end at a full sentence (or a word with "…") instead of mid-word.
+  - **The D1 room of 5 November had only two agents:** its bar closed before the D1 HUD snapshot and News Daily existed. The next daily close (22:00 UTC) runs with the full roster.
 - feat(nexus): Global Conclusion, Camarilla/CPR level ladder and regime radar; each tab starts with its conclusion, and the agents panel follows the active tab (owner decision 2026-11-06).
   - **AI Worker:**
     - `GET /api/conclusion/global` (`src/global-conclusion.mjs`): a deterministic multi-timeframe summary of the D1, 4H, 1H and 15m rooms plus News Daily. It gives a weighted bias, agreement, a summary and an action bound by the H1 decision.

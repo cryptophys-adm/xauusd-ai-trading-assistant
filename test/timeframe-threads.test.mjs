@@ -79,7 +79,8 @@ test.beforeEach(() => resetThreadSchemaCacheForTests());
 test("1H, 4H and D1 run here as War Rooms; desks have one role each", () => {
   assert.deepEqual(Object.keys(TF_THREAD_CHARTS), ["H1", "H4", "D1"]);
   assert.deepEqual(Object.values(TF_THREAD_CHARTS).map((c) => c.tab), ["1H", "4H", "D1"]);
-  assert.deepEqual(Object.keys(TF_DESKS), ["h1", "htf", "news", "technical", "risk"]);
+  assert.deepEqual(Object.keys(TF_DESKS), ["h1", "h4", "d1", "htf", "news", "technical", "risk"]);
+  assert.deepEqual(["h1", "h4", "d1"].map((id) => TF_DESKS[id].name), ["1H Desk", "4H Desk", "D1 Desk"], "each room has its own timeframe desk");
   assert.equal(tfThreadsEnabled({ TF_THREADS_ENABLED: "true" }), true);
   assert.equal(tfThreadsEnabled({}), false);
   assert.equal(closedH1Key(Date.parse("2026-11-06T01:10:00Z")), "OANDA:XAUUSD:60:" + Date.parse("2026-11-06T00:00:00Z"));
@@ -114,7 +115,7 @@ test("a 4H War Room: every agent opens, the debate runs, the moderator concludes
   const e = env(ai);
   const r = await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
   assert.equal(r.status, "complete");
-  assert.equal(r.openings, 4, "technical, risk and the two HUD agents");
+  assert.equal(r.openings, 5, "the 4H Desk, technical, risk and the two HUD agents");
   assert.equal(r.rebuttals, 2, "the minority HUD agent and the Risk Manager");
   for (const call of ai.calls) assert.doesNotMatch(call.request.messages.map((m) => m.content).join("\n"), /lot size|take_profit/i);
 
@@ -122,8 +123,9 @@ test("a 4H War Room: every agent opens, the debate runs, the moderator concludes
   assert.equal(thread.tab, "4H");
   assert.equal(thread.phase, "closed");
   assert.equal(thread.conclusion.stance, "WAIT");
-  assert.deepEqual(thread.openings.map((p) => p.id), ["technical", "risk", "kinetic_engine", "fabio_amt"]);
-  assert.equal(thread.openings[2].calibration, "not yet calibrated");
+  assert.deepEqual(thread.openings.map((p) => p.id), ["h4", "technical", "risk", "kinetic_engine", "fabio_amt"]);
+  assert.equal(thread.openings[0].name, "4H Desk");
+  assert.equal(thread.openings[3].calibration, "not yet calibrated");
   assert.deepEqual(thread.debate.map((d) => d.id), ["risk", "kinetic_engine"]);
   assert.ok(thread.debate[0].rebuts_names.length >= 1);
 
@@ -138,6 +140,23 @@ test("HUD agents with no verified statement speak at confidence <= 0.4; desks ke
   const by = Object.fromEntries((await readTimeframeThread(e.DB, "H4")).openings.map((p) => [p.id, p]));
   assert.equal(by.kinetic_engine.confidence, 0.4);
   assert.equal(by.technical.confidence, 0.9);
+  assert.equal(by.h4.confidence, 0.4, "a 4H Desk on records parity has not approved speaks at 0.4 or lower");
+  assert.equal(by.h4.calibration, "4H local records, not parity approved");
+});
+
+test("the 4H Desk reads only its own bar, in words; without local records the room has no 4H Desk", async () => {
+  const ai = fakeAI();
+  const e = env(ai, { buy: true });
+  await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
+  const call = ai.calls.find((c) => /"agent":"h4"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content));
+  const data = JSON.parse(call.request.messages[1].content.split("EVIDENCE:\n").at(-1).split("YOUR DATA:\n").at(-1));
+  assert.equal(data.timeframe, "4-hour");
+  assert.equal(data.approved_by_parity, false);
+  assert.ok(data.reading.some((s) => /confirmed BUY/.test(s)));
+  resetThreadSchemaCacheForTests();
+  const none = env(fakeAI(), { records: false });
+  await runTimeframeThread(none, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
+  assert.ok(!(await readTimeframeThread(none.DB, "H4")).roster.some((a) => a.id === "h4"));
 });
 
 test("the 4H room's Higher-Timeframe Desk reads the D1 Thread's conclusion", async () => {

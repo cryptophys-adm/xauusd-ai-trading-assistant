@@ -156,9 +156,19 @@ function parseJson(text, fallback = null) {
   if (typeof text !== "string" || !text) return fallback;
   try { return JSON.parse(text); } catch { return fallback; }
 }
+/**
+ * Text shortened to at most `max` characters for storage and display. It ends at the last full
+ * sentence that fits when that keeps at least half of the room, else at the last word with an
+ * ellipsis: production stored summaries cut mid-word ("until the hourly chain confirms a d").
+ */
 function clip(value, max) {
   const s = String(value ?? "");
-  return s.length > max ? s.slice(0, max) : s;
+  if (s.length <= max) return s;
+  const head = s.slice(0, max);
+  const sentence = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "), /[.!?]$/.test(head) ? head.length - 1 : -1);
+  if (sentence >= max / 2) return head.slice(0, sentence + 1);
+  const word = head.slice(0, max - 1).lastIndexOf(" ");
+  return (word > 0 ? head.slice(0, word) : head.slice(0, max - 1)).replace(/[\s,;:]+$/, "") + "…";
 }
 function inUnit(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;

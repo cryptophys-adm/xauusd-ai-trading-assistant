@@ -18,6 +18,7 @@ import { HUD_IDS, HUD_NAMES, calibrationCounts, calibrationNote, calibratedLines
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
+import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import {
   ROOM_STANCES, ensureThreadSchema, isFifteenMinuteClose, liveEvidence, m15KeyForClose,
   hudEvidenceLines, rowToThreadMessage, validateRoomModerator, threadInternals
@@ -36,9 +37,14 @@ export function warRoomEnabled(env) {
   return String(env?.WAR_ROOM_ENABLED ?? "false").trim().toLowerCase() === "true";
 }
 
-/** Desk agents (one role each); the HUD agents follow, one per computed 15m HUD. */
+/**
+ * Desk agents (one role each); the HUD agents follow, one per computed 15m HUD. Owner decision
+ * 2026-11-06: the 15m Desk analyses only the 15m chart; the H1 chain, which still binds the room,
+ * is the Higher-Timeframe Desk's role.
+ */
 export const DESK_AGENTS = Object.freeze({
-  h1: { name: "H1 Desk", role: "the H1 decision chain and the H1 TradingView reading: the higher-timeframe constraint" },
+  m15: { name: "15m Desk", role: "the local Prophet R38, Prophet R37 and GMI computation of the 15m candle that just closed: this timeframe's own signal" },
+  htf: { name: "Higher-Timeframe Desk", role: "the H1 decision chain, its TradingView reading and the latest 1H War Room conclusion: the higher-timeframe constraint" },
   news: { name: "News Analyst", role: "the fundamental news of the last 24 hours: the daily bias for gold and the headlines behind it" },
   technical: { name: "Technical Analyst", role: "price action only: the closed 15m candles and the 5m execution read" },
   risk: { name: "Risk Manager", role: "risk only: volatility, conflicts between timeframes, what would invalidate a move, and the rule no confirmation, no entry" }
@@ -59,8 +65,12 @@ export function entryAllowed(stance, confirmations) {
 export const NO_CONFIRMATION_RULE =
   "Rule: no confirmation, no entry. BUY needs a confirmed buy signal (the H1 Prophet R38 confirmation, or a VERIFIED 5m Prophet R38 confirmation candle); SELL needs a confirmed sell signal. Without the matching confirmation the stance is WAIT, or HOLD / CLOSE for a position already open.";
 
+/** Names of desks that earlier rooms used, so their stored messages still read by name. */
+const LEGACY_DESK_NAMES = Object.freeze({ h1: "H1 Desk" });
+
 export function agentName(id) {
   if (DESK_AGENTS[id]) return DESK_AGENTS[id].name;
+  if (LEGACY_DESK_NAMES[id]) return LEGACY_DESK_NAMES[id];
   if (HUD_NAMES[id]) return HUD_NAMES[id];
   return id === "moderator" ? "Moderator" : String(id);
 }
@@ -186,7 +196,7 @@ function openingMessages(agent, data, h1) {
     RULES_NO_REFS,
     ROOM_RULES,
     ...riskRule,
-    "This is your opening on the communication bus: one claim from your own data only. Do not repeat what other roles cover (the other agents are the H1 Desk, the News Analyst, the Technical Analyst, the Risk Manager and one agent per HUD).",
+    "This is your opening on the communication bus: one claim from your own data only. Do not repeat what other roles cover (the other agents are the 15m Desk, the Higher-Timeframe Desk, the News Analyst, the Technical Analyst, the Risk Manager and one agent per HUD).",
     `The H1 decision is ${h1.decision}.`,
     `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"claim":"<= ${CLAIM_MAX - 40} chars"}`,
     "YOUR DATA:",
@@ -231,10 +241,20 @@ function conclusionMessages(h1, bus, debate, confirmations) {
   ]);
 }
 
+/** The latest ok conclusion of a timeframe room (for the Higher-Timeframe Desk), or null. */
+async function latestRoomConclusion(db, threadId) {
+  try {
+    const row = await db.prepare("SELECT run_id, stance, confidence, body_json FROM agent_thread_messages WHERE thread_id = ? AND step = 'conclusion' AND status = 'ok' ORDER BY run_id DESC LIMIT 1").bind(threadId).first();
+    if (!row) return null;
+    return { bar_open: row.run_id, stance: row.stance, confidence: row.confidence, summary: parseJson(row.body_json, {})?.summary ?? null };
+  } catch { return null; }
+}
+
 /** Each agent's own data: one role each, nothing shared that another role covers. */
-function agentData(agent, evidence, hud, h1Detail, confirmations) {
+function agentData(agent, evidence, hud, h1Detail, confirmations, desk15, oneHour) {
   switch (agent) {
-    case "h1": return { h1_decision: h1Detail.decision, confidence: h1Detail.confidence, reasoning: h1Detail.reasoning, tradingview_h1: evidence.h1.tradingview };
+    case "m15": return { timeframe: "15 minutes", reading: desk15.reading, approved_by_parity: desk15.approved_by_parity };
+    case "htf": return { h1_decision: h1Detail.decision, confidence: h1Detail.confidence, reasoning: h1Detail.reasoning, tradingview_h1: evidence.h1.tradingview, one_hour_room: oneHour };
     case "news": return evidence.news ? { window: evidence.news.window ?? "the latest hourly batch", consensus: evidence.news.consensus, confidence: evidence.news.confidence, summary: evidence.news.summary, reasons: evidence.news.reasons, counts: evidence.news.counts, headlines: evidence.news.headlines } : { available: false, note: "no news consensus yet" };
     case "technical": return { candles_15m: evidence.m15.candles, execution_5m: { label: evidence.m5.label, bias: evidence.m5.bias, reading: evidence.m5.reading?.summary ?? null, last_bars: evidence.m5.recent_bars.slice(-6) } };
     case "risk": {
@@ -272,12 +292,17 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     const snapshot = carried || await loadHudSnapshot(env, { timeframe: "15", candleKey: key15 });
     hud = snapshot ? await hudReadings(env, snapshot) : null;
   } catch { hud = null; }
-  const roster = ["h1", "news", "technical", "risk", ...HUD_IDS.filter(id => hud?.readings?.[id]?.available)];
+  // The 15m Desk: the 15m local records of the candle that just closed (owner decision 2026-11-06).
+  let desk15 = { available: false, reading: [], approved_by_parity: false };
+  try { desk15 = await chartDeskReading(env, m15KeyForClose(barTime)); } catch { /* no desk this bar */ }
+  const oneHour = await latestRoomConclusion(db, "tf:H1");
+  const roster = [...(desk15.available ? ["m15"] : []), "htf", "news", "technical", "risk", ...HUD_IDS.filter(id => hud?.readings?.[id]?.available)];
   // Evidence status, shown once per agent (owner decision A): no agent repeats it in its text.
   const calibration = Object.fromEntries(roster.map(id => {
     const lines = hud?.readings?.[id]?.lines;
     if (Array.isArray(lines)) return [id, calibrationCounts(lines)];
-    if (id === "h1") return [id, { label: "parity-approved H1 chain" }];
+    if (id === "m15") return [id, { label: chartDeskLabel("15m", desk15) }];
+    if (id === "htf") return [id, { label: "parity-approved H1 chain" }];
     if (id === "technical" || id === "risk") return [id, { label: evidence.m5.label }];
     return [id, { label: "news analysis" }];
   }));
@@ -316,8 +341,9 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     const prior = existing.get("open:" + agent);
     if (prior?.status === "ok") return prior;
     return open(base("open:" + agent, agent), {
-      messages: openingMessages(agent, agentData(agent, evidence, hud, h1, confirmations), h1), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
-      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateOpening(o, agent, { verifiedLines: calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]) }),
+      messages: openingMessages(agent, agentData(agent, evidence, hud, h1, confirmations, desk15, oneHour), h1), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
+      // An unapproved 15m chain speaks like any uncalibrated agent: at 0.4 or lower.
+      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateOpening(o, agent, { verifiedLines: agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]) }),
       toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), name: agentName(agent) }, refs: [] })
     });
   }));

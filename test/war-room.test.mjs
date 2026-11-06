@@ -84,7 +84,7 @@ test("every agent opens on the bus, the minority and the Risk Manager rebut, the
   assert.equal(result.status, "complete");
   const room = await readWarRoom(e.DB);
   assert.equal(room.phase, "closed");
-  assert.deepEqual(room.roster.map(r => r.id), ["h1", "news", "technical", "risk", "kinetic_engine", "fabio_amt"], "desks, then one agent per computed 15m HUD");
+  assert.deepEqual(room.roster.map(r => r.id), ["htf", "news", "technical", "risk", "kinetic_engine", "fabio_amt"], "desks, then one agent per computed 15m HUD (no 15m records here, so no 15m Desk)");
   assert.equal(room.openings.length, 6);
   assert.ok(room.openings.every(o => o.status === "ok" && o.claim));
   assert.deepEqual(room.debate.map(d => d.id).sort(), ["kinetic_engine", "risk", "technical"], "the two SELL agents (minority) and the Risk Manager");
@@ -118,13 +118,13 @@ test("a unanimous room: the Risk Manager stress-tests the consensus", async () =
 });
 
 test("openings read back in roster order, whatever order the parallel steps finished in", async () => {
-  // The news desk answers last; the bus still lists h1, news, technical, risk, then the HUDs.
+  // The Higher-Timeframe Desk answers last; the bus still lists htf, news, technical, risk, then the HUDs.
   const slow = fakeAI();
   const run = slow.run;
-  slow.run = async (model, request) => { if (/"agent":"h1"/.test(request.messages[1].content) && !/debate/.test(request.messages[0].content)) await new Promise(r => setTimeout(r, 20)); return run(model, request); };
+  slow.run = async (model, request) => { if (/"agent":"htf"/.test(request.messages[1].content) && !/debate/.test(request.messages[0].content)) await new Promise(r => setTimeout(r, 20)); return run(model, request); };
   const e = env(slow);
   await runWarRoomBar(e, task());
-  assert.deepEqual((await readWarRoom(e.DB)).openings.map(o => o.id), ["h1", "news", "technical", "risk", "kinetic_engine", "fabio_amt"]);
+  assert.deepEqual((await readWarRoom(e.DB)).openings.map(o => o.id), ["htf", "news", "technical", "risk", "kinetic_engine", "fabio_amt"]);
 });
 
 test("no confirmation, no entry: the Risk Manager enforces it and a BUY conclusion needs a confirmed buy", async () => {
@@ -178,7 +178,7 @@ test("calibration status is shown once: no disclaimer asked, uncalibrated HUD co
   const debate = ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   const bus = JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, confidence, evidence, claim):\n")[1]);
   assert.equal(bus.find(b => b.id === "kinetic_engine").evidence, "no statement calibrated yet");
-  assert.equal(bus.find(b => b.id === "h1").evidence, "parity-approved H1 chain");
+  assert.equal(bus.find(b => b.id === "htf").evidence, "parity-approved H1 chain");
   assert.match(debate, /call agents by their names/);
 });
 
@@ -250,6 +250,44 @@ test("a persuaded dissenter concedes in the debate and stays on the record", asy
   assert.equal(room.debate.find(d => d.id === "risk").conceded, false);
   const prompt = ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   assert.match(prompt, /never your own id/);
+});
+
+test("the 15m Desk reads only the 15m chart; the H1 chain moves to the Higher-Timeframe Desk (owner decision 2026-11-06)", async () => {
+  const p = { values: { comparable: { prophet_r38: { direction: -1, buy_confirmed: false, sell_confirmed: true, t_enc: 0, d_enc: -1 }, prophet_r37_ssot: { d_enc: -1, b_enc: -1 } } } };
+  const g = { values: { comparable: { gmi_v12_70: { verdict: -2, gate: 1, gmi_dir: -1, prophet_dir: -1, conflict: false } } } };
+  const run = async (prefix) => {
+    resetThreadSchemaCacheForTests();
+    const ai = fakeAI();
+    const run0 = ai.run;
+    ai.run = async (model, request) => {
+      const r = await run0(model, request);
+      const body = JSON.parse(r.choices[0].message.content);
+      if (body.agent === "m15" && body.claim) { body.stance = "SELL"; body.confidence = 0.8; r.choices[0].message.content = JSON.stringify(body); }
+      return r;
+    };
+    const e = env(ai);
+    await e.WEBHOOK_BUFFER.put(`${prefix}${K15}:prophet`, JSON.stringify(p));
+    await e.WEBHOOK_BUFFER.put(`${prefix}${K15}:gmi`, JSON.stringify(g));
+    await runWarRoomBar(e, task());
+    return { room: await readWarRoom(e.DB), ai };
+  };
+
+  const approved = await run("localcalc:");
+  assert.deepEqual(approved.room.roster.slice(0, 2).map(r => [r.id, r.name]), [["m15", "15m Desk"], ["htf", "Higher-Timeframe Desk"]]);
+  assert.ok(!approved.room.roster.some(r => r.id === "h1"), "no H1 Desk in the 15m room");
+  assert.equal(approved.room.roster.find(r => r.id === "m15").calibration.label, "parity-approved 15m chain");
+  assert.equal(approved.room.openings.find(o => o.id === "m15").confidence, 0.8);
+  const m15Prompt = approved.ai.calls.find(c => /"agent":"m15"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request.messages[1].content;
+  const data = JSON.parse(m15Prompt.split("YOUR DATA:\n")[1]);
+  assert.equal(data.timeframe, "15 minutes");
+  assert.ok(data.reading.some(s => /confirmed SELL/.test(s)), "the 15m Prophet R38 confirmation, in words");
+  assert.ok(!("h1_decision" in data), "the 15m Desk does not read the H1 chain");
+  const htfPrompt = approved.ai.calls.find(c => /"agent":"htf"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request.messages[1].content;
+  assert.equal(JSON.parse(htfPrompt.split("YOUR DATA:\n")[1]).h1_decision, "WAIT", "the Higher-Timeframe Desk carries the H1 chain");
+
+  const observed = await run("localcalc-observed:");
+  assert.equal(observed.room.roster.find(r => r.id === "m15").calibration.label, "15m local records, not parity approved");
+  assert.equal(observed.room.openings.find(o => o.id === "m15").confidence, 0.4, "an unapproved chain speaks at 0.4 or lower");
 });
 
 test("a failed opening stays out of the bus; the room still concludes", async () => {

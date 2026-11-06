@@ -572,3 +572,14 @@ test("live room: a 15m HUD snapshot carried in the task is used without any KV r
   await runLiveRoomBar(e2, { bar_time: BAR, hud: other });
   assert.ok(!(await readLive(e2.DB, {})).some(m => String(m.step).startsWith("hud:")));
 });
+
+test("clip ends at the last full sentence that fits, else at a word with an ellipsis; short text is untouched", async () => {
+  const { threadInternals } = await import("../src/agent-threads.mjs");
+  const { clip } = threadInternals;
+  const text = "H1 decision: WAIT, and the room agrees. No confirmed buy or sell signal exists. We stay flat until the hourly chain confirms a direction.";
+  assert.equal(clip(text, 400), text);
+  assert.equal(clip(text, 120), "H1 decision: WAIT, and the room agrees. No confirmed buy or sell signal exists.", "production cut this mid-word as 'confirms a d'");
+  assert.equal(clip("one long sentence without any full stop inside the limit at all", 30), "one long sentence without…");
+  assert.ok(clip("x".repeat(50), 20).length <= 20);
+  assert.equal(clip(null, 10), "");
+});

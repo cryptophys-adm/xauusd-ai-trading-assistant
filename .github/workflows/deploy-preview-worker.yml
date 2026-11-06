@@ -585,7 +585,9 @@ jobs:
           };
           const room1 = await waitWarRoom(barTime);
           warRoomProof("WAR ROOM PROOF", room1);
-          assertWarRoom(room1, ["h1", "news", "technical", "risk"]);
+          // Owner decision 2026-11-06: the 15m room has no H1 Desk; the Higher-Timeframe Desk carries
+          // the H1 chain. No 15m local records are posted for this bar, so there is no 15m Desk.
+          assertWarRoom(room1, ["htf", "news", "technical", "risk"]);
           const legacyDashboard = await fetch(base + "/dashboard", { redirect: "manual" });
           assert.equal(legacyDashboard.status, 302, "the old debate/raw dashboard redirects to Nexus");
 
@@ -639,7 +641,7 @@ jobs:
           assert.equal(context2.status, 200, "second m5 context");
           const room2 = await waitWarRoom(barTime2);
           warRoomProof("WAR ROOM HUD PROOF", room2);
-          assertWarRoom(room2, ["h1", "news", "technical", "risk", "trade_management", "kinetic_engine"]);
+          assertWarRoom(room2, ["htf", "news", "technical", "risk", "trade_management", "kinetic_engine"]);
           const tldr = await (await fetch(base + "/api/tldr")).json();
           assert.equal(tldr.status, "ok", "the right-panel TLDR endpoint answers");
           assert.ok(tldr.h1?.decision && tldr.news?.thread_id, "TLDR covers Threads 1H and the news thread");
