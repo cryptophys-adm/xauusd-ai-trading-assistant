@@ -41,6 +41,24 @@ export const ENGINE_FILES = {
   prophet_m15: {
     sources: ["pinescript/ssot/The-Prophet-v7.02-R38.txt", "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
     implementation: ["local-engines/prophet-r38/src/core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/m15-local-producer.mjs"]
+  },
+  // H4 and D1 charts (owner decision 2026-11-05, Threads D1/H4/H1/15m): own identities, so
+  // no H1, 5m or 15m approval changes when the H4/D1 code changes.
+  gmi_h4: {
+    sources: ["pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
+    implementation: ["local-engines/gmi/src/pine.mjs", "local-engines/gmi/src/mizan.mjs", "local-engines/gmi/src/gmi-core.mjs", "local-engines/gmi/src/gmi-core-htf.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/htf-local-producer.mjs"]
+  },
+  prophet_h4: {
+    sources: ["pinescript/ssot/The-Prophet-v7.02-R38.txt", "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
+    implementation: ["local-engines/prophet-r38/src/core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/htf-local-producer.mjs"]
+  },
+  gmi_d1: {
+    sources: ["pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
+    implementation: ["local-engines/gmi/src/pine.mjs", "local-engines/gmi/src/mizan.mjs", "local-engines/gmi/src/gmi-core.mjs", "local-engines/gmi/src/gmi-core-htf.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/htf-local-producer.mjs"]
+  },
+  prophet_d1: {
+    sources: ["pinescript/ssot/The-Prophet-v7.02-R38.txt", "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
+    implementation: ["local-engines/prophet-r38/src/core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/htf-local-producer.mjs"]
   }
 };
 export const GENERATED_PATH = "local-engines/producer/src/provenance.generated.mjs";

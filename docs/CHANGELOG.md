@@ -4,6 +4,14 @@ This file is the single source of truth for repository changes. Topology and
 deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
+## 2026-11-06
+
+- feat(htf): H4 and D1 local lane (step 3 of the owner's timeframe-thread plan).
+  - **Producer and publishing.** `htf-local-producer.mjs` builds mizan, prophet and gmi records for every closed H4 (`"240"`) and D1 (`"1D"`) bar. The pull adapter publishes them behind `HTF_PARITY_PUBLISH`.
+  - **GMI engine.** GMI runs on the new `gmi-core-htf.mjs`, which adds H4/D1 and Pine's `dyn_ltf` intrabars (M5 on H4, M15 on D1). A test proves it equals `gmi-core-tf.mjs` on M15 and H1.
+  - **Identities.** New provenance identities `prophet_h4`, `gmi_h4`, `prophet_d1` and `gmi_d1`. Every existing hash is unchanged.
+  - **AI Worker.** The registry scopes `_h4` and `_d1`. The parity sweep reads the last two closed H4 and D1 keys from the cached native bars, because OANDA H4 and D1 bars open at 17:00 New York.
+
 ## 2026-11-05
 
 - feat(hud): Macro & Aether Sensors complete (step 2 of the owner's timeframe-thread plan).

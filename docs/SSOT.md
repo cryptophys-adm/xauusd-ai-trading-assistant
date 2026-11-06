@@ -85,6 +85,17 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - The records earn their own approval as `prophet_m15` and `gmi_m15`, with their own provenance entries. The H1 and 5m hashes are unchanged. The parity sweep revisits the last two closed 15m candles.
   - Calibration needs the existing Prophet R38 and GMI alerts installed on the 15m chart until both identities are approved (24 matches). After that, the alerts may be removed, as with 5m ("pilihan 1").
   - Once approved, the 15m HUD fields that are alert fields read as verified by parity in the War Room. Engine internals stay uncalibrated until a Pine candidate comparator exists (C1).
+- **H4 and D1 lane** (owner decision 2026-11-05: Threads per timeframe D1, H4, H1 and 15m).
+  - **Records:** the pull adapter publishes mizan, prophet and gmi records for every closed H4 and D1 bar. The producer is `local-engines/producer/src/htf-local-producer.mjs`, behind `HTF_PARITY_PUBLISH`.
+  - **Timeframes and keys:** the timeframes are `"240"` and `"1D"`, as Pine v6 `timeframe.period` reports them. The candle keys are `OANDA:XAUUSD:240:<open ms>` and `OANDA:XAUUSD:1D:<open ms>`.
+  - **GMI engine:** GMI runs on `local-engines/gmi/src/gmi-core-htf.mjs`, a copy of `gmi-core-tf.mjs` that adds the H4 and D1 charts and Pine's `dyn_ltf` intrabars (M5 on H4, M15 on D1).
+    - `gmi-core-tf.mjs` stays byte-identical, so the `gmi_m5` and `gmi_m15` hashes do not move.
+    - A test proves the copy equals `gmi-core-tf.mjs` on M15 and H1.
+  - **Identities:** the records earn their own approvals as `prophet_h4`, `gmi_h4`, `prophet_d1` and `gmi_d1`, each with its own provenance entry. No other hash changed.
+  - **Sweep:** OANDA H4 and D1 bars open at 17:00 New York, not on epoch multiples. The parity sweep therefore takes the last two closed H4 and D1 keys from the cached native bars (`closedHtfCandleKeys`), never from the clock.
+  - **Calibration:** the owner installs the Prophet R38 and GMI alerts on the 4-hour and daily charts, set to "Any alert() function call" with the same webhook.
+    - 24 matches take about 4 trading days on H4 and about 5 weeks on D1.
+    - Until then, H4 and D1 readings are unverified.
 
 - Transport: the pull adapter calls `AI_WORKER.submitContext(record)` on the
   AI Worker's `LocalComputationIngress` RPC entrypoint (no shared secret).

@@ -261,5 +261,173 @@ export const ENGINE_PROVENANCE = Object.freeze({
         }
       ]
     }
+  },
+  "gmi_h4": {
+    "source_hash": "c5285333399a5a1ac677edb24e13aa0483b3af084de9ea403cf378be446646f7",
+    "implementation_hash": "ffe55c39d9c20e61fb9814d04d3d56f435c0324e20a905432f4d9c9cac788d39",
+    "files": {
+      "sources": [
+        {
+          "path": "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt",
+          "sha256": "f9115eb0224a6f68f212a368a662be57dd2810d1a6adc0abbe1b2ce570ee2c94"
+        }
+      ],
+      "implementation": [
+        {
+          "path": "local-engines/gmi/src/pine.mjs",
+          "sha256": "c2387b392a07df4cc0a7cca1c736275db8c824c396974414dad190dfab384111"
+        },
+        {
+          "path": "local-engines/gmi/src/mizan.mjs",
+          "sha256": "7c07c5574d28d7cd4c2d4e496e42d6df55232a51ad5ca1bf2c8c87e0faa61393"
+        },
+        {
+          "path": "local-engines/gmi/src/gmi-core.mjs",
+          "sha256": "1eeb775c372edead53fd2525abc7d1109a4f178c1924cbf114bd7e78cafc3ac9"
+        },
+        {
+          "path": "local-engines/gmi/src/gmi-core-htf.mjs",
+          "sha256": "ebbace5a383c97d1635b0581e6118b34d452f5c8ecdb410d7e2b4e652bea2e96"
+        },
+        {
+          "path": "src/prophet-r37-kernel.mjs",
+          "sha256": "d2d55ae4986d37b6e9274bbbf2ef30eca9c658fefa2de1fcf0d8d6525b7c2c4c"
+        },
+        {
+          "path": "src/prophet-r37-oscillator.mjs",
+          "sha256": "ac3b7099138b99a21d942d5acaf3412c832952fea928d15abbe406344b530f6e"
+        },
+        {
+          "path": "local-engines/producer/src/h1-producer.mjs",
+          "sha256": "4064d1d4d3cc97ee5125b4423c530e5fee1d124673657bbd2ef60cfde7bde9f1"
+        },
+        {
+          "path": "local-engines/producer/src/htf-local-producer.mjs",
+          "sha256": "c7a500c3f808f4df163cde70c524249cc5d5bbee114d82b5d4db1a5fceed6845"
+        }
+      ]
+    }
+  },
+  "prophet_h4": {
+    "source_hash": "696544c53144af1c1888f3f38b8c8084bcbb78dea3c4c0d571e0fffb224f1ce6",
+    "implementation_hash": "8ddfee0378b7abe3dc933e53ee5c967398cde31f660e5177714166dba4d969e6",
+    "files": {
+      "sources": [
+        {
+          "path": "pinescript/ssot/The-Prophet-v7.02-R38.txt",
+          "sha256": "71a9e933f7a123545125ed075a7bf1940c7cc1930396b6112a8e480f2d5aedc9"
+        },
+        {
+          "path": "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt",
+          "sha256": "f9115eb0224a6f68f212a368a662be57dd2810d1a6adc0abbe1b2ce570ee2c94"
+        }
+      ],
+      "implementation": [
+        {
+          "path": "local-engines/prophet-r38/src/core.mjs",
+          "sha256": "35f60ade42a29e9481cdf6608446ae8bf44cd3942108594b783d3a4b2cfd4c66"
+        },
+        {
+          "path": "src/prophet-r37-kernel.mjs",
+          "sha256": "d2d55ae4986d37b6e9274bbbf2ef30eca9c658fefa2de1fcf0d8d6525b7c2c4c"
+        },
+        {
+          "path": "src/prophet-r37-oscillator.mjs",
+          "sha256": "ac3b7099138b99a21d942d5acaf3412c832952fea928d15abbe406344b530f6e"
+        },
+        {
+          "path": "local-engines/producer/src/h1-producer.mjs",
+          "sha256": "4064d1d4d3cc97ee5125b4423c530e5fee1d124673657bbd2ef60cfde7bde9f1"
+        },
+        {
+          "path": "local-engines/producer/src/htf-local-producer.mjs",
+          "sha256": "c7a500c3f808f4df163cde70c524249cc5d5bbee114d82b5d4db1a5fceed6845"
+        }
+      ]
+    }
+  },
+  "gmi_d1": {
+    "source_hash": "c5285333399a5a1ac677edb24e13aa0483b3af084de9ea403cf378be446646f7",
+    "implementation_hash": "ffe55c39d9c20e61fb9814d04d3d56f435c0324e20a905432f4d9c9cac788d39",
+    "files": {
+      "sources": [
+        {
+          "path": "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt",
+          "sha256": "f9115eb0224a6f68f212a368a662be57dd2810d1a6adc0abbe1b2ce570ee2c94"
+        }
+      ],
+      "implementation": [
+        {
+          "path": "local-engines/gmi/src/pine.mjs",
+          "sha256": "c2387b392a07df4cc0a7cca1c736275db8c824c396974414dad190dfab384111"
+        },
+        {
+          "path": "local-engines/gmi/src/mizan.mjs",
+          "sha256": "7c07c5574d28d7cd4c2d4e496e42d6df55232a51ad5ca1bf2c8c87e0faa61393"
+        },
+        {
+          "path": "local-engines/gmi/src/gmi-core.mjs",
+          "sha256": "1eeb775c372edead53fd2525abc7d1109a4f178c1924cbf114bd7e78cafc3ac9"
+        },
+        {
+          "path": "local-engines/gmi/src/gmi-core-htf.mjs",
+          "sha256": "ebbace5a383c97d1635b0581e6118b34d452f5c8ecdb410d7e2b4e652bea2e96"
+        },
+        {
+          "path": "src/prophet-r37-kernel.mjs",
+          "sha256": "d2d55ae4986d37b6e9274bbbf2ef30eca9c658fefa2de1fcf0d8d6525b7c2c4c"
+        },
+        {
+          "path": "src/prophet-r37-oscillator.mjs",
+          "sha256": "ac3b7099138b99a21d942d5acaf3412c832952fea928d15abbe406344b530f6e"
+        },
+        {
+          "path": "local-engines/producer/src/h1-producer.mjs",
+          "sha256": "4064d1d4d3cc97ee5125b4423c530e5fee1d124673657bbd2ef60cfde7bde9f1"
+        },
+        {
+          "path": "local-engines/producer/src/htf-local-producer.mjs",
+          "sha256": "c7a500c3f808f4df163cde70c524249cc5d5bbee114d82b5d4db1a5fceed6845"
+        }
+      ]
+    }
+  },
+  "prophet_d1": {
+    "source_hash": "696544c53144af1c1888f3f38b8c8084bcbb78dea3c4c0d571e0fffb224f1ce6",
+    "implementation_hash": "8ddfee0378b7abe3dc933e53ee5c967398cde31f660e5177714166dba4d969e6",
+    "files": {
+      "sources": [
+        {
+          "path": "pinescript/ssot/The-Prophet-v7.02-R38.txt",
+          "sha256": "71a9e933f7a123545125ed075a7bf1940c7cc1930396b6112a8e480f2d5aedc9"
+        },
+        {
+          "path": "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt",
+          "sha256": "f9115eb0224a6f68f212a368a662be57dd2810d1a6adc0abbe1b2ce570ee2c94"
+        }
+      ],
+      "implementation": [
+        {
+          "path": "local-engines/prophet-r38/src/core.mjs",
+          "sha256": "35f60ade42a29e9481cdf6608446ae8bf44cd3942108594b783d3a4b2cfd4c66"
+        },
+        {
+          "path": "src/prophet-r37-kernel.mjs",
+          "sha256": "d2d55ae4986d37b6e9274bbbf2ef30eca9c658fefa2de1fcf0d8d6525b7c2c4c"
+        },
+        {
+          "path": "src/prophet-r37-oscillator.mjs",
+          "sha256": "ac3b7099138b99a21d942d5acaf3412c832952fea928d15abbe406344b530f6e"
+        },
+        {
+          "path": "local-engines/producer/src/h1-producer.mjs",
+          "sha256": "4064d1d4d3cc97ee5125b4423c530e5fee1d124673657bbd2ef60cfde7bde9f1"
+        },
+        {
+          "path": "local-engines/producer/src/htf-local-producer.mjs",
+          "sha256": "c7a500c3f808f4df163cde70c524249cc5d5bbee114d82b5d4db1a5fceed6845"
+        }
+      ]
+    }
   }
 });

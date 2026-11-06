@@ -67,7 +67,10 @@ export const BASE_ENGINES = Object.freeze(["mizan", "prophet", "gmi", "prophet_h
 const TIMEFRAME_SCOPE = Object.freeze({
   "60": "", "60M": "", "1H": "", "H1": "",
   "5": "_m5", "5M": "_m5", "M5": "_m5",
-  "15": "_m15", "15M": "_m15", "M15": "_m15"
+  "15": "_m15", "15M": "_m15", "M15": "_m15",
+  // H4 and D1 charts (owner decision 2026-11-05). Pine v6 timeframe.period is "240" and "1D".
+  "240": "_h4", "4H": "_h4", "H4": "_h4",
+  "1D": "_d1", "D": "_d1", "D1": "_d1"
 });
 
 /** Registry engine id for an engine on a chart timeframe, or null when the timeframe is not supported. */
