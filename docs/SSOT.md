@@ -113,7 +113,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
       - Desks: H1 Desk (1H only), Higher-Timeframe Desk (the conclusion of the 4H Thread on 1H, of the D1 Thread on 4H), News Analyst (News Daily), Technical Analyst and Risk Manager.
       - HUD agents come from that bar's HUD snapshot. The pull adapter now also publishes H4 and D1 HUD snapshots (`hud-snapshot.mjs`, timeframes `"240"` and `"1D"`, GMI from `gmi-core-htf.mjs`).
     - **No webhook dependency:** the rooms run on local computation only: closed bars, the HUD snapshot and the local Prophet R38 record of the bar.
-    - **Calibration:** a HUD statement is verified only where it equals a parity-approved record. On 4H and D1 there are none until the alerts are installed there, so those HUD agents speak at confidence 0.4 or lower.
+    - **Calibration:** a HUD statement is verified only where it equals a parity-approved record, and computed from verified bars only where the bar's parity comparison matched (see "Calibration status once"). On 4H and D1 there are none until the alerts are installed there, so those HUD agents speak at confidence 0.4 or lower.
     - **No confirmation, no entry:** a BUY or SELL conclusion needs that chart's Prophet R38 confirmation, read from the local record of the bar. The 1H conclusion names the H1 decision when it differs.
     - **Schedule:** the rooms run from the parity sweep cron in their own `waitUntil`, one after another, the higher timeframe first (D1, 4H, 1H), so each Higher-Timeframe Desk reads the conclusion just written and the model sees one room's burst at a time. They run behind `TF_THREADS_ENABLED`, within `TF_THREADS_MAX_CALLS_PER_HOUR` (production 120, preview 150; about 26 calls per room).
       - A bar waits up to 20 minutes for its HUD snapshot, then runs with the desks only.
@@ -240,10 +240,14 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   3. **Conclusion.** The moderator concludes for the Nexus main panel: stance, summary, up to 3 reasons and the agents that still disagree.
   - The H1 decision is the constraint: a conclusion that differs must say "H1 decision: X". Price levels come only from the validated H1 chain.
   - **Calibration status once** (owner decision 2026-11-05, option A).
-    - The brief stores each agent's evidence status: verified lines out of total for a HUD agent, otherwise the source label. Nexus shows it once, as a badge next to the agent.
+    - The brief stores each agent's evidence status: for a HUD agent, its verified lines, its lines computed from verified bars and its total lines; otherwise the source label. Nexus shows it once, as a badge next to the agent.
+    - **Three tiers per HUD statement** (`src/hud-reading.mjs`, owner decision 2026-11-06, option 1):
+      - *Verified by parity:* every field it uses is a TradingView alert field equal to the parity-approved record of the candle.
+      - *Computed from verified bars:* a pure formula of closed bars, with no engine internal behind it: the Camarilla levels and bands (The Interstellar Eyes), the daily and weekly central pivot ranges and the trading sessions (Chronos Matrix). It applies only when the candle is in the trusted lane (an approved record exists) and its parity comparison matched, which includes the input bar (open, high, low, close, volume), with no `input_mismatch` (`barsVerified` in `src/hud-store.mjs`). The higher-timeframe bars behind Camarilla and the pivots come from the same TradingView feed and are not compared separately.
+      - *Not yet calibrated:* an engine internal no TradingView comparator has checked.
     - Agents never mention calibration in their text.
-    - A HUD agent with no verified statement speaks at confidence ≤ 0.4.
-    - The bus shows each agent's evidence, and the moderator weighs verified evidence above uncalibrated readings.
+    - A HUD agent with no statement in the first two tiers speaks at confidence ≤ 0.4.
+    - The bus shows each agent's evidence, and the moderator weighs verified and bar-computed evidence above uncalibrated readings.
   - **No confirmation, no entry** (owner rule 2026-11-05).
     - BUY needs a confirmed buy signal: the H1 Prophet R38 confirmation from the approved record behind the latest H1 decision, or a VERIFIED 5m Prophet R38 confirmation candle. SELL needs a confirmed sell signal.
     - Without the matching confirmation the stance is WAIT, or HOLD / CLOSE for an open position.

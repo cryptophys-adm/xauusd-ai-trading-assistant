@@ -172,14 +172,57 @@ test("calibration status is shown once: no disclaimer asked, uncalibrated HUD co
   const kinetic = room.openings.find(o => o.id === "kinetic_engine");
   assert.equal(kinetic.confidence, 0.4, "no verified statement: confidence capped at 0.4 (the model said 0.7)");
   assert.equal(room.openings.find(o => o.id === "fabio_amt").status, "ok", "an id written with a space still names the agent");
-  assert.deepEqual(room.roster.find(r => r.id === "kinetic_engine").calibration, { verified_lines: 0, total_lines: room.roster.find(r => r.id === "kinetic_engine").calibration.total_lines });
+  assert.deepEqual(room.roster.find(r => r.id === "kinetic_engine").calibration, { verified_lines: 0, derived_lines: 0, total_lines: room.roster.find(r => r.id === "kinetic_engine").calibration.total_lines });
   const hudPrompt = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   assert.match(hudPrompt, /never mention calibration, verification or comparators/);
   const debate = ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   const bus = JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, confidence, evidence, claim):\n")[1]);
-  assert.equal(bus.find(b => b.id === "kinetic_engine").evidence, "no statement verified by parity yet");
+  assert.equal(bus.find(b => b.id === "kinetic_engine").evidence, "no statement calibrated yet");
   assert.equal(bus.find(b => b.id === "h1").evidence, "parity-approved H1 chain");
   assert.match(debate, /call agents by their names/);
+});
+
+test("computed from verified bars: Camarilla and session statements lift the 0.4 cap only when the candle's bar matched TradingView", async () => {
+  const snapshot = {
+    ...hudSnapshot(),
+    huds: {
+      interstellar_eyes: { fields: { close: 4050, camarilla: { D: { h4: 4100, h3: 4070, l3: 4010, l4: 3990 } }, band: { D: "l3_h3" } }, parity: {} },
+      kinetic_engine: { fields: { theta: 43, omega: -0.4, alpha: -0.1, entropy: 0.86, is_chaos: true }, parity: {} }
+    }
+  };
+  const run = async ({ approved, comparison }) => {
+    resetThreadSchemaCacheForTests();
+    const ai = fakeAI();
+    const run0 = ai.run;
+    ai.run = async (model, request) => {
+      const r = await run0(model, request);
+      const body = JSON.parse(r.choices[0].message.content);
+      if (body.agent === "interstellar_eyes" && body.claim) { body.confidence = 0.7; r.choices[0].message.content = JSON.stringify(body); }
+      return r;
+    };
+    const e = env(ai, { SIGNAL_CACHE: kv({ ["hud:15:" + K15]: JSON.stringify(snapshot) }) });
+    e.DB.raw.exec("CREATE TABLE engine_parity_comparisons (engine TEXT, candle_key TEXT, result TEXT)");
+    if (comparison) e.DB.raw.prepare("INSERT INTO engine_parity_comparisons VALUES ('prophet_m15', ?, ?)").run(K15, comparison);
+    if (approved) await e.WEBHOOK_BUFFER.put("localcalc:" + K15 + ":prophet", JSON.stringify({ values: { comparable: { prophet_r38: { direction: 0 } } } }));
+    await runWarRoomBar(e, task());
+    return { room: await readWarRoom(e.DB), ai };
+  };
+
+  const ok = await run({ approved: true, comparison: "match" });
+  assert.deepEqual(ok.room.roster.find(r => r.id === "interstellar_eyes").calibration, { verified_lines: 0, derived_lines: 1, total_lines: 1 });
+  assert.equal(ok.room.openings.find(o => o.id === "interstellar_eyes").confidence, 0.7, "a statement computed from verified bars lifts the cap");
+  assert.equal(ok.room.openings.find(o => o.id === "kinetic_engine").confidence, 0.4, "engine internals stay capped");
+  const prompt = ok.ai.calls.find(c => /"agent":"interstellar_eyes"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request.messages[1].content;
+  assert.match(prompt, /Computed from verified bars: On the daily Camarilla levels/);
+  const debate = ok.ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  const bus = JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, confidence, evidence, claim):\n")[1]);
+  assert.equal(bus.find(b => b.id === "interstellar_eyes").evidence, "1 computed from verified bars (of 1 statement)");
+
+  for (const [label, args] of [["no comparison yet", { approved: true }], ["the bar differed from TradingView", { approved: true, comparison: "input_mismatch" }], ["no approved record", { approved: false, comparison: "match" }]]) {
+    const r = await run(args);
+    assert.deepEqual(r.room.roster.find(x => x.id === "interstellar_eyes").calibration, { verified_lines: 0, derived_lines: 0, total_lines: 1 }, label);
+    assert.equal(r.room.openings.find(o => o.id === "interstellar_eyes").confidence, 0.4, label);
+  }
 });
 
 test("a failed opening stays out of the bus; the room still concludes", async () => {

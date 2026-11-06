@@ -25,7 +25,7 @@
 // (TF_THREADS_MAX_CALLS_PER_HOUR).
 import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors } from "./natural-language.mjs";
-import { HUD_IDS, HUD_NAMES } from "./hud-reading.mjs";
+import { HUD_IDS, HUD_NAMES, calibrationCounts, calibrationNote, calibratedLines } from "./hud-reading.mjs";
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
@@ -242,7 +242,7 @@ function openingMessages(agent, data, spec, roster) {
   const riskRule = agent === "risk" ? [ruleText(spec) + " Judge every possible entry against the confirmations in your data, and say plainly whether any entry is confirmed."] : [];
   const who = desk
     ? `You are the ${desk.name} in the XAUUSD ${spec.label} War Room, which meets at every closed ${spec.label} candle. Your only role: ${desk.role}.`
-    : `You are ${HUD_NAMES[agent]}, one agent per Pine HUD, in the XAUUSD ${spec.label} War Room. You speak only about the ${HUD_NAMES[agent]} HUD on the ${spec.label} candle that just closed. Lean on the statements marked verified by parity. The readers already see your calibration status once, next to your name: never mention calibration, verification or comparators in your claim. When none of your statements is verified, keep your confidence at or below ${UNCALIBRATED_CONFIDENCE_CAP}.`;
+    : `You are ${HUD_NAMES[agent]}, one agent per Pine HUD, in the XAUUSD ${spec.label} War Room. You speak only about the ${HUD_NAMES[agent]} HUD on the ${spec.label} candle that just closed. Lean on the statements marked verified by parity or computed from verified bars. The readers already see your calibration status once, next to your name: never mention calibration, verification or comparators in your claim. When every statement is not yet calibrated, keep your confidence at or below ${UNCALIBRATED_CONFIDENCE_CAP}.`;
   return chatMessages([
     who,
     RULES_NO_REFS,
@@ -265,7 +265,7 @@ function rebuttalMessages(agent, own, bus, spec, unanimous, confirmations) {
       ? "The bus is unanimous. Stress-test the consensus: challenge the claim most likely to be wrong, put that agent's id in rebuts, and say what would invalidate the consensus. Add only new reasoning from your own role; never restate a claim."
       : "Rebut the strongest claims you disagree with and put those agents' ids in rebuts. Add only new reasoning from your own role; never restate your opening or another agent's claim. You may change your stance if the bus convinced you.",
     ...riskRule,
-    "In the argument, call agents by their names, never by an id. Each bus entry says how much of that agent's data is verified by parity: weigh verified evidence above uncalibrated readings, and never discuss calibration itself.",
+    "In the argument, call agents by their names, never by an id. Each bus entry says how much of that agent's data is verified by parity or computed from verified bars: weigh that evidence above uncalibrated readings, and never discuss calibration itself.",
     `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"rebuts":["<agent id>"],"argument":"<= ${ARGUMENT_MAX - 40} chars"}`,
     "YOUR OPENING: " + JSON.stringify({ stance: own.stance, confidence: own.confidence, claim: own.claim }),
     "COMMUNICATION BUS (id, name, stance, confidence, evidence, claim):",
@@ -280,7 +280,7 @@ function conclusionMessages(spec, bus, debate, confirmations, h1) {
     ROOM_RULES,
     ...(h1 ? [`The H1 decision chain decided ${h1.decision}: if your stance differs from it, the summary must say "H1 decision: ${h1.decision}" and why the room still differs.`] : []),
     ruleText(spec) + " The conclusion obeys it: BUY or SELL only with the matching confirmation below. CONFIRMATIONS: " + JSON.stringify(confirmations),
-    "Weigh claims by their argument and by their evidence, not by the number of agents: a claim built on data verified by parity outweighs one built on uncalibrated readings (each bus entry states which). No repetition: the summary states the conclusion once, each reason adds something new, and dissent lists the ids of agents whose stance still differs from yours. In the summary and reasons, call agents by their names, never by an id, and never discuss calibration itself.",
+    "Weigh claims by their argument and by their evidence, not by the number of agents: a claim built on data verified by parity, or computed from verified bars, outweighs one built on uncalibrated readings (each bus entry states which). No repetition: the summary states the conclusion once, each reason adds something new, and dissent lists the ids of agents whose stance still differs from yours. In the summary and reasons, call agents by their names, never by an id, and never discuss calibration itself.",
     'Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"summary":"<= 360 chars","reasons":["<= 160 chars", "at most 3"],"dissent":["<agent id>"]}',
     "COMMUNICATION BUS:",
     JSON.stringify(bus),
@@ -309,7 +309,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   ];
   const calibration = Object.fromEntries(roster.map((id) => {
     const lines = ev.hud?.readings?.[id]?.lines;
-    if (Array.isArray(lines)) return [id, { verified_lines: lines.filter((l) => l.verified).length, total_lines: lines.length }];
+    if (Array.isArray(lines)) return [id, calibrationCounts(lines)];
     if (id === "h1") return [id, { label: "H1 decision chain" }];
     if (id === "htf") return [id, { label: `the ${ev.higher.timeframe} Thread` }];
     if (id === "news") return [id, { label: "news of the last 24 hours" }];
@@ -318,7 +318,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   const evidenceNote = (id) => {
     const c = calibration[id] || {};
     if (c.total_lines == null) return c.label || null;
-    return c.verified_lines ? `${c.verified_lines} of ${c.total_lines} statements verified by parity` : "no statement verified by parity yet";
+    return calibrationNote(c, "no statement calibrated yet");
   };
   const base = (step, agent, parent_id = null) => ({ thread_id: threadId, run_id: runId, step, agent, parent_id, bar_time: ev.bar_close });
   if (!existing.has("brief")) {
@@ -349,7 +349,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
     return open(base("open:" + agent, agent), {
       messages: openingMessages(agent, agentData(agent, ev, spec), spec, roster), schemaName: "tf_room_opening", schema: OPENING_SCHEMA,
       maxTokens: BUS_MAX_TOKENS.agent, effort: "low",
-      validate: (o) => validateOpening(normalizeTfNames(o, [agent]), agent, { verifiedLines: calibration[agent]?.total_lines == null ? null : calibration[agent].verified_lines }),
+      validate: (o) => validateOpening(normalizeTfNames(o, [agent]), agent, { verifiedLines: calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]) }),
       toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), name: tfAgentName(agent) }, refs: [] })
     });
   }));
@@ -453,7 +453,7 @@ export async function readTimeframeThread(db, chart) {
     const c = brief?.calibration?.[id];
     if (!c) return null;
     if (c.total_lines == null) return c.label ?? null;
-    return c.verified_lines ? `${c.verified_lines} of ${c.total_lines} statements verified by parity` : "not yet calibrated";
+    return calibrationNote(c);
   };
   const pick = (m) => ({ id: m.agent, name: tfAgentName(m.agent), status: m.status, stance: m.stance, confidence: m.confidence, ts: m.ts, claim: m.claim ?? null, argument: m.argument ?? null, rebuts: m.rebuts ?? [], rebuts_names: (m.rebuts || []).map(tfAgentName), calibration: note(m.agent) });
   const openings = rows.filter((m) => m.step.startsWith("open:")).map(pick).sort(byRoster);

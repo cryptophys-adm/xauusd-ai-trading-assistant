@@ -13,7 +13,7 @@ import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import { verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
-import { HUD_IDS, HUD_NAMES } from "./hud-reading.mjs";
+import { HUD_IDS, HUD_NAMES, calibrationCounts } from "./hud-reading.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import {
@@ -581,7 +581,7 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
       const msg = existing.get(stepName) || await step({ thread_id: threadId, run_id: barTime, step: stepName, agent: id, parent_id: null }, {
         messages: liveHudMessages(id, HUD_NAMES[id], reading, evidence.h1), schemaName: "live_hud_agent", schema: LIVE_HUD_AGENT_SCHEMA,
         maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateHudAgent(o, id, ROOM_STANCES),
-        toBody: (o) => ({ body: { insight: clip(o.insight, INSIGHT_MAX), hud: HUD_NAMES[id], verified_lines: reading.lines.filter((l) => l.verified).length, total_lines: reading.lines.length }, refs: [] })
+        toBody: (o) => ({ body: { insight: clip(o.insight, INSIGHT_MAX), hud: HUD_NAMES[id], ...calibrationCounts(reading.lines) }, refs: [] })
       });
       hudPosts.push({ ...msg, agent: HUD_NAMES[id] });
     }
@@ -758,7 +758,7 @@ function liveHudMessages(agentId, name, reading, h1) {
   return chatMessages([
     `You are ${name}, one agent per Pine HUD, in a live XAUUSD trading room that meets at every 15m candle close. You speak only about the ${name} HUD on the 15m candle that just closed.`,
     RULES_NO_REFS,
-    "Read only your HUD reading below. Each statement is marked verified by parity or not yet calibrated; on the 15m chart no comparator has calibrated the HUD yet, so say plainly that your view is not yet calibrated.",
+    HUD_TIERS_RULE,
     `The authoritative H1 decision is ${h1.decision}. Room stances: BUY, SELL, HOLD (keep an existing position), WAIT (stay flat), CLOSE (exit an existing position). Never give entry, stop loss, take profit or position size.`,
     `Required JSON: {"agent":"${agentId}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"insight":"<= 400 chars"}`,
     "EVIDENCE:",
@@ -782,16 +782,19 @@ export function validateHudAgent(obj, agentId, stances = HUD_STANCES) {
   return { valid: errors.length === 0, errors };
 }
 
-/** Reading lines as the agent sees them: each statement says whether parity verified it. */
+/** Reading lines as the agent sees them: each statement carries its calibration tier. */
 export function hudEvidenceLines(reading) {
-  return (reading?.lines || []).map((l) => `${l.verified ? "Verified by parity" : "Not yet calibrated"}: ${l.text}`);
+  return (reading?.lines || []).map((l) => `${l.verified ? "Verified by parity" : l.derived ? "Computed from verified bars" : "Not yet calibrated"}: ${l.text}`);
 }
+
+/** How a HUD agent weighs the three calibration tiers of its reading. */
+export const HUD_TIERS_RULE = "Read only your HUD reading below. Each statement is marked verified by parity (it equals the parity-approved local computation), computed from verified bars (a pure formula of closed bars, such as Camarilla levels, pivot ranges or sessions, on a bar that matched TradingView), or not yet calibrated (an engine internal no TradingView comparator has checked). Lean on the verified and bar-computed statements, and say plainly when your view rests on statements that are not yet calibrated.";
 
 function hudAgentMessages(agentId, name, reading, h1) {
   return chatMessages([
     `You are ${name}, one agent per Pine HUD in an XAUUSD trading forum. You speak only about the ${name} HUD, for the H1 candle that just closed.`,
     RULES_NO_REFS,
-    "Read only your HUD reading below. Each statement is marked either verified by parity (it equals the parity-approved local computation) or not yet calibrated (an engine internal no TradingView comparator has checked). Lean on the verified statements, and say plainly when your view rests on statements that are not yet calibrated.",
+    HUD_TIERS_RULE,
     `The authoritative H1 decision is ${h1.decision}. Say whether your HUD agrees with it. Never give entry, stop loss, take profit or position size.`,
     `Required JSON: {"agent":"${agentId}","stance":"BUY|SELL|WAIT","confidence":0..1,"insight":"<= 400 chars"}`,
     "EVIDENCE:",
@@ -852,7 +855,7 @@ export async function runHudAgents(env, task, { clock = () => Date.now(), loadRe
         messages: hudAgentMessages(id, HUD_NAMES[id], reading, h1), schemaName: "hud_agent", schema: HUD_AGENT_SCHEMA,
         maxTokens: BUS_MAX_TOKENS.agent, effort: "low", deadline, clock, runState, budgetOk,
         validate: (o) => validateHudAgent(o, id),
-        toBody: (o) => ({ body: { insight: clip(o.insight, INSIGHT_MAX), hud: HUD_NAMES[id], verified_lines: reading.lines.filter((l) => l.verified).length, total_lines: reading.lines.length }, refs: [] })
+        toBody: (o) => ({ body: { insight: clip(o.insight, INSIGHT_MAX), hud: HUD_NAMES[id], ...calibrationCounts(reading.lines) }, refs: [] })
       });
     }
     transcript.push({ ...msg, name: HUD_NAMES[id] });
@@ -879,7 +882,7 @@ export async function readHudThread(db, candleKey) {
   return rows.map(rowToThreadMessage).filter(Boolean).map((m) => ({
     id: m.id, step: m.step, agent: m.agent, name: m.agent === "moderator" ? "Moderator" : HUD_NAMES[m.agent] ?? m.agent,
     status: m.status, stance: m.stance, confidence: m.confidence, insight: m.insight ?? null, summary: m.summary ?? null, ts: m.ts,
-    verified_lines: m.verified_lines ?? null, total_lines: m.total_lines ?? null
+    verified_lines: m.verified_lines ?? null, derived_lines: m.derived_lines ?? null, total_lines: m.total_lines ?? null
   }));
 }
 
