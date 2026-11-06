@@ -3,7 +3,7 @@ import { ago, pct } from "../lib/format";
 
 export type RoomMessage = {
   id: string; name?: string; status: string; stance?: string | null; confidence?: number | null; ts?: string;
-  claim?: string | null; argument?: string | null; rebuts_names?: string[]; calibration?: unknown;
+  claim?: string | null; argument?: string | null; rebuts_names?: string[]; conceded?: boolean; calibration?: unknown;
 };
 
 export function calibrationText(c: unknown): string | null {
@@ -34,6 +34,7 @@ export function Post({ m, text, calibration }: { m: RoomMessage; text?: string |
         <Stance value={m.stance} />
         <span className="mono">{pct(m.confidence)}</span>
         {calibration && <span className="text-slate-500">· {calibration}</span>}
+        {m.conceded && <span className="chip border-cyan-400/30 bg-cyan-400/10 px-1.5 py-0 text-[9px] tracking-[0.14em] text-cyan-200">CONCEDES</span>}
         {!!m.rebuts_names?.length && <span className="text-violet-300/80">→ {m.rebuts_names.join(", ")}</span>}
         {m.ts && <span className="ml-auto text-[10px] text-slate-600">{ago(m.ts)}</span>}
       </div>

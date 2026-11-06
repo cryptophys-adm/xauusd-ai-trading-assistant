@@ -10,7 +10,7 @@
 // evidence, prompts or decision. 5m is UNVERIFIED unless parity-approved on 5m (C0).
 
 import { chatMessages } from "./model-text.mjs";
-import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, describeDegradedEvidence } from "./natural-language.mjs";
+import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, NATURAL_LANGUAGE_CORRECTION, describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import { verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
 import { HUD_IDS, HUD_NAMES, calibrationCounts } from "./hud-reading.mjs";
@@ -283,10 +283,7 @@ function sumOrNull(a, b) {
   return xs.length ? xs.reduce((x, y) => x + y, 0) : null;
 }
 
-const CORRECTION_PROMPT =
-  "Your answer was rejected: its text reads like code (a field name, a word with underscores, a key path with dots, or key=value). " +
-  "Return the same JSON object with the same stance and confidence, but rewrite every text field in plain sentences a trader would write. " +
-  "Describe evidence in words (for example \"the H1 decision\", \"the 5m bias\", \"verified by parity\") and never copy a key from the evidence.";
+const CORRECTION_PROMPT = NATURAL_LANGUAGE_CORRECTION;
 
 // ---------------------------------------------------------------- news thread
 

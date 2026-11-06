@@ -263,7 +263,7 @@ function rebuttalMessages(agent, own, bus, spec, unanimous, confirmations) {
     ROOM_RULES,
     unanimous
       ? "The bus is unanimous. Stress-test the consensus: challenge the claim most likely to be wrong, put that agent's id in rebuts, and say what would invalidate the consensus. Add only new reasoning from your own role; never restate a claim."
-      : "Rebut the strongest claims you disagree with and put those agents' ids in rebuts. Add only new reasoning from your own role; never restate your opening or another agent's claim. You may change your stance if the bus convinced you.",
+      : "Rebut the strongest claims you disagree with and put those agents' ids in rebuts. Add only new reasoning from your own role; never restate your opening or another agent's claim. You may change your stance if the bus convinced you: then put the ids of the agents who convinced you in rebuts (or leave it empty), never your own id.",
     ...riskRule,
     "In the argument, call agents by their names, never by an id. Each bus entry says how much of that agent's data is verified by parity or computed from verified bars: weigh that evidence above uncalibrated readings, and never discuss calibration itself.",
     `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"rebuts":["<agent id>"],"argument":"<= ${ARGUMENT_MAX - 40} chars"}`,
@@ -373,8 +373,8 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
     return debateStep(base("debate:" + agent, agent, openingId.get(agent) ?? null), {
       messages: rebuttalMessages(agent, own, bus, spec, unanimous, ev.confirmations), schemaName: "tf_room_rebuttal", schema: REBUTTAL_SCHEMA,
       maxTokens: BUS_MAX_TOKENS.agent, effort: "low",
-      validate: (o) => validateRebuttal(normalizeTfNames(o, busAgents), agent, busAgents, { unanimous }),
-      toBody: (o) => ({ body: { argument: clip(o.argument, ARGUMENT_MAX), rebuts: [...new Set(o.rebuts)].slice(0, 4), name: tfAgentName(agent) }, refs: [] })
+      validate: (o) => validateRebuttal(normalizeTfNames(o, busAgents), agent, busAgents, { unanimous, ownStance: own?.stance ?? null }),
+      toBody: (o) => ({ body: { argument: clip(o.argument, ARGUMENT_MAX), rebuts: [...new Set(o.rebuts)].slice(0, 4), ...(o.conceded ? { conceded: true } : {}), name: tfAgentName(agent) }, refs: [] })
     });
   }))).filter((m) => m?.status === "ok");
 
@@ -455,7 +455,7 @@ export async function readTimeframeThread(db, chart) {
     if (c.total_lines == null) return c.label ?? null;
     return calibrationNote(c);
   };
-  const pick = (m) => ({ id: m.agent, name: tfAgentName(m.agent), status: m.status, stance: m.stance, confidence: m.confidence, ts: m.ts, claim: m.claim ?? null, argument: m.argument ?? null, rebuts: m.rebuts ?? [], rebuts_names: (m.rebuts || []).map(tfAgentName), calibration: note(m.agent) });
+  const pick = (m) => ({ id: m.agent, name: tfAgentName(m.agent), status: m.status, stance: m.stance, confidence: m.confidence, ts: m.ts, claim: m.claim ?? null, argument: m.argument ?? null, rebuts: m.rebuts ?? [], rebuts_names: (m.rebuts || []).map(tfAgentName), conceded: m.conceded === true, calibration: note(m.agent) });
   const openings = rows.filter((m) => m.step.startsWith("open:")).map(pick).sort(byRoster);
   const debate = rows.filter((m) => m.step.startsWith("debate:")).map(pick).sort(byRoster);
   const c = rows.find((m) => m.step === "conclusion");

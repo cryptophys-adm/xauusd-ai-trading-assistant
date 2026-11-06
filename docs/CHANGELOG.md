@@ -6,6 +6,25 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(nexus): the War Rooms move under the chart, and the right panel becomes a chart-only trading assistant (owner decision 2026-11-06).
+  - **Center:** one card under the chart with the tabs `News | 15m | 1H | 4H | D1`, opening on News at every load. The separate 15m conclusion and 15m room cards are removed, because they repeated the 15m tab.
+  - **Right:**
+    - a market sentiment gauge (weighted room leans plus news) with a headline-bias donut;
+    - trend by timeframe: D1 macro, 4H intraday, 1H swing, 15m structure, 5m confirmation;
+    - the H1 decision ring with its levels and confirmations;
+    - agent consensus bars;
+    - macro drivers over 24 hours;
+    - a session clock.
+  - One provider fetches the 1H, 4H and D1 Threads, News Daily and the 5m context every 60 seconds for both panels.
+- fix(war-room): a dissenter the bus persuaded now concedes in the debate instead of being dropped.
+  - In production, every concession was rejected as `rebuts_invalid`. The dissenter changed its stance (for example, News Analyst SELL to WAIT), then wrote its own id or nothing in `rebuts`. This happened about every half hour in the 15m room, and also in the 4H room.
+  - A rebuttal whose stance differs from the agent's opening may now name nobody. Its own id is dropped, and it is stored as `conceded: true`.
+  - Nexus marks it "CONCEDES".
+  - preview-e2e accepts it. On PR #116 the live preview model hit the same case.
+- fix(bus): the H1 multi-agent bus gets the same single correction attempt as the Thread rooms.
+  - An answer from an agent or the moderator that is valid except that its text reads like code (a field name or a key path) is asked once to rewrite in plain words.
+  - The extra call is recorded in `corrections` and counted by the hourly budget. It never runs past the wall deadline.
+  - On PR #116 the preview moderator named a field from the evidence, and the conclusion was lost.
 - feat(hud): a third calibration tier, "computed from verified bars" (owner decision 2026-11-06, option 1).
   - HUD statements that are pure formulas of closed bars count as calibrated evidence when the candle's bar is proven equal to TradingView's. These are the Camarilla levels and bands, the daily and weekly pivot ranges, and the trading sessions.
   - The bar is proven when the candle has an approved local record and a matching parity comparison (which includes the input bar), and no input mismatch.

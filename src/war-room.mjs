@@ -111,20 +111,26 @@ export function normalizeRebuts(rebuts, busAgents) {
 }
 
 /**
- * A rebuttal names the bus agents it rebuts. In a unanimous room the Risk Manager stress-tests
- * the consensus instead and may name nobody (preview-e2e: a unanimous WAIT room left it no one
- * to rebut, and it answered rebuts: []).
+ * A rebuttal names the bus agents it rebuts. Two cases may name nobody:
+ * - In a unanimous room the Risk Manager stress-tests the consensus (preview-e2e: a unanimous
+ *   WAIT room left it no one to rebut, and it answered rebuts: []).
+ * - A dissenter the bus persuaded concedes: its stance differs from its own opening (`ownStance`).
+ *   Production wrote rebuts [itself] or [] for every such concession and lost it as
+ *   rebuts_invalid; it is now kept, with its own id dropped and `conceded: true`.
  */
-export function validateRebuttal(o, agent, busAgents, { unanimous = false } = {}) {
+export function validateRebuttal(o, agent, busAgents, { unanimous = false, ownStance = null } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
   const errors = [];
   if (!sameAgent(o.agent, agent)) errors.push("agent_mismatch");
   else o.agent = agent;
   if (!ROOM_STANCES.includes(o.stance)) errors.push("stance_invalid");
   if (!inUnit(o.confidence)) errors.push("confidence_out_of_range");
-  const rebuts = normalizeRebuts(o.rebuts, busAgents);
-  if (!rebuts || (!rebuts.length && !unanimous) || rebuts.some(r => r === agent || !busAgents.includes(r))) errors.push("rebuts_invalid");
-  else o.rebuts = rebuts;
+  const conceded = ownStance != null && ROOM_STANCES.includes(o.stance) && o.stance !== ownStance;
+  const named = normalizeRebuts(o.rebuts, busAgents);
+  // Its own id is meaningful only as a concession; beside real targets or in a concession it is dropped.
+  const rebuts = named && (conceded || named.some(r => r !== agent)) ? named.filter(r => r !== agent) : named;
+  if (!rebuts || (!rebuts.length && !unanimous && !conceded) || rebuts.some(r => r === agent || !busAgents.includes(r))) errors.push("rebuts_invalid");
+  else { o.rebuts = rebuts; if (conceded) o.conceded = true; }
   if (typeof o.argument !== "string" || !o.argument.trim()) errors.push("argument_missing");
   else errors.push(...naturalLanguageErrors(o.argument));
   return { valid: errors.length === 0, errors };
@@ -198,7 +204,7 @@ function rebuttalMessages(agent, own, bus, h1, unanimous, confirmations) {
     ROOM_RULES,
     unanimous
       ? "The bus is unanimous. Stress-test the consensus: challenge the claim most likely to be wrong, put that agent's id in rebuts, and say what would invalidate the consensus. Add only new reasoning from your own role; never restate a claim."
-      : "Rebut the strongest claims you disagree with and put those agents' ids in rebuts. Add only new reasoning from your own role; never restate your opening or another agent's claim. You may change your stance if the bus convinced you.",
+      : "Rebut the strongest claims you disagree with and put those agents' ids in rebuts. Add only new reasoning from your own role; never restate your opening or another agent's claim. You may change your stance if the bus convinced you: then put the ids of the agents who convinced you in rebuts (or leave it empty), never your own id.",
     ...riskRule,
     "In the argument, call agents by their names (for example the Kinetic Engine), never by an id. Each bus entry says how much of that agent's data is verified by parity or computed from verified bars: weigh that evidence above uncalibrated readings, and never discuss calibration itself.",
     `The H1 decision is ${h1.decision}.`,
@@ -331,8 +337,8 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     const own = answered.find(m => m.agent === agent);
     return debateStep(base("debate:" + agent, agent, openingId.get(agent) ?? null), {
       messages: rebuttalMessages(agent, own, bus, h1, unanimous, confirmations), schemaName: "war_room_rebuttal", schema: REBUTTAL_SCHEMA,
-      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateRebuttal(o, agent, busAgents, { unanimous }),
-      toBody: (o) => ({ body: { argument: clip(o.argument, ARGUMENT_MAX), rebuts: [...new Set(o.rebuts)].slice(0, 4), name: agentName(agent) }, refs: [] })
+      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateRebuttal(o, agent, busAgents, { unanimous, ownStance: own?.stance ?? null }),
+      toBody: (o) => ({ body: { argument: clip(o.argument, ARGUMENT_MAX), rebuts: [...new Set(o.rebuts)].slice(0, 4), ...(o.conceded ? { conceded: true } : {}), name: agentName(agent) }, refs: [] })
     });
   }))).filter(m => m?.status === "ok");
 
@@ -358,7 +364,7 @@ export async function readWarRoom(db, { barTime = null } = {}) {
   const rows = ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(`warroom:${run.slice(0, 10)}`, run).all()).results || []).map(rowToThreadMessage);
   if (!rows.length) return null;
   const brief = rows.find(m => m.step === "brief") || null;
-  const pick = (m) => ({ id: m.agent, name: agentName(m.agent), status: m.status, model: m.model, fallback_used: m.fallback_used, errors: m.errors, stance: m.stance, confidence: m.confidence, ts: m.ts, claim: m.claim, argument: m.argument, rebuts: m.rebuts, rebuts_names: (m.rebuts || []).map(agentName) });
+  const pick = (m) => ({ id: m.agent, name: agentName(m.agent), status: m.status, model: m.model, fallback_used: m.fallback_used, errors: m.errors, stance: m.stance, confidence: m.confidence, ts: m.ts, claim: m.claim, argument: m.argument, rebuts: m.rebuts, rebuts_names: (m.rebuts || []).map(agentName), conceded: m.conceded === true });
   // Steps run in parallel, so rows land in completion order: show them in roster order.
   const order = new Map((brief?.roster || []).map((id, i) => [id, i]));
   const byRoster = (a, b) => (order.get(a.id) ?? 99) - (order.get(b.id) ?? 99);

@@ -4,12 +4,12 @@ import { Layers } from "lucide-react";
 import { Post, Tldr, calibrationText } from "./Post";
 import { Stance } from "./Stance";
 import { Skeleton } from "./ui";
-import { get } from "../lib/api";
-import { usePoll } from "../lib/usePoll";
 import { useWarRoom } from "../lib/warroom";
+import { useMarket } from "../lib/market";
 import { ago, utc } from "../lib/format";
 
-const TABS = [["D1", "D1"], ["H4", "4H"], ["H1", "1H"], ["M15", "15m"], ["NEWS", "News"]] as const;
+// Owner decision 2026-11-06: News first, then the rooms from the fastest timeframe up.
+const TABS = [["NEWS", "News"], ["M15", "15m"], ["H1", "1H"], ["H4", "4H"], ["D1", "D1"]] as const;
 type Tab = (typeof TABS)[number][0];
 
 function RoomView({ room, label }: { room: any; label: string }) {
@@ -62,30 +62,27 @@ function NewsView({ d }: { d: any }) {
 
 function TabBody({ tab }: { tab: Tab }) {
   const { room } = useWarRoom();
-  const path = tab === "NEWS" ? "/api/news/daily" : tab === "M15" ? null : `/api/threads/timeframe?chart=${tab}`;
-  const { data, loading, error } = usePoll(() => (path ? get(path) : Promise.resolve(null)), 60_000, [tab]);
+  const { threads, news, loading, error } = useMarket();
   if (tab === "M15") return room ? <RoomView room={room} label="Live War Room 15m" /> : <p className="text-[12px] text-slate-500">No War Room yet.</p>;
-  if (loading && !data) return <Skeleton rows={6} />;
-  if (error && !data) return <p className="text-[12px] text-rose-300">Unavailable: {error}</p>;
-  if (tab === "NEWS") return (data as any)?.daily ? <NewsView d={(data as any).daily} /> : <p className="text-[12px] text-slate-500">No daily news analysis yet: it runs with the hourly news cron.</p>;
-  const t = (data as any)?.thread;
+  if (loading) return <Skeleton rows={6} />;
+  if (tab === "NEWS") return news ? <NewsView d={news} /> : error ? <p className="text-[12px] text-rose-300">Unavailable: {error}</p> : <p className="text-[12px] text-slate-500">No daily news analysis yet: it runs with the hourly news cron.</p>;
+  const t = threads[tab];
   const label = TABS.find(([k]) => k === tab)?.[1] ?? tab;
   return t ? <RoomView room={t} label={`${label} War Room`} /> : <p className="text-[12px] text-slate-500">No {label} Thread yet: the room meets at the next closed {tab === "H1" ? "1-hour" : tab === "H4" ? "4-hour" : "daily"} candle.</p>;
 }
 
-/** Right panel: one card whose top is the tab bar D1 | 4H | 1H | 15m | News, one Thread per tab. */
+/**
+ * Center, under the chart: the living War Rooms of every timeframe in one card whose top is the
+ * tab bar News | 15m | 1H | 4H | D1. Every page load opens on News (owner decision 2026-11-06).
+ */
 export default function ThreadsPanel({ className }: { className?: string }) {
-  const [tab, setTab] = useState<Tab>(() => {
-    try { const s = localStorage.getItem("nexus.tfTab"); if (s && TABS.some(([k]) => k === s)) return s as Tab; } catch { /* per-viewer convenience only */ }
-    return "H1";
-  });
-  const pick = (t: Tab) => { setTab(t); try { localStorage.setItem("nexus.tfTab", t); } catch { /* ignore */ } };
+  const [tab, setTab] = useState<Tab>("NEWS");
   return (
-    <section className={clsx("glass flex min-h-0 flex-col overflow-hidden", className)} aria-label="Threads">
-      <div className="flex items-center border-b border-white/10 bg-white/[0.02]" role="tablist" aria-label="Thread timeframe">
+    <section className={clsx("glass flex min-h-0 flex-col overflow-hidden", className)} aria-label="War Rooms">
+      <div className="flex items-center border-b border-white/10 bg-white/[0.02]" role="tablist" aria-label="War Room timeframe">
         <span className="hidden px-3 text-cyan-300 sm:inline-flex" aria-hidden="true"><Layers className="h-3.5 w-3.5" /></span>
         {TABS.map(([key, label]) => (
-          <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => pick(key)}
+          <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)}
             className={clsx("flex-1 border-b-2 px-2 py-3 text-[11px] font-semibold uppercase tracking-[0.18em] transition",
               tab === key ? "border-cyan-400 bg-cyan-400/[0.06] text-white" : "border-transparent text-slate-500 hover:bg-white/[0.03] hover:text-slate-200")}>{label}</button>
         ))}

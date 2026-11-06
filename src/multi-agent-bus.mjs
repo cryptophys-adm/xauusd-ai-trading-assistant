@@ -7,7 +7,7 @@
 // prompts, decision, entry/SL/TP, size or confidence.
 
 import { chatMessages, cleanModelText, extractJsonObject, extractModelText } from "./model-text.mjs";
-import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE } from "./natural-language.mjs";
+import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, NATURAL_LANGUAGE_CORRECTION, onlyNaturalLanguageErrors } from "./natural-language.mjs";
 import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 
 export const BUS_DEFAULT_MODEL = "@cf/zai-org/glm-5.3-flash";
@@ -381,7 +381,7 @@ export async function callBusModel(env, { messages, schemaName, schema, maxToken
 async function callsInLastHour(db, now) {
   // ts is stored as an ISO string; compare against an ISO cutoff (not datetime('now')).
   const cutoff = new Date(now - 60 * 60 * 1000).toISOString();
-  const row = await db.prepare("SELECT COALESCE(SUM(1 + COALESCE(fallback_used, 0)), 0) AS n FROM bus_messages WHERE ts >= ? AND status <> 'budget_exhausted'").bind(cutoff).first();
+  const row = await db.prepare("SELECT COALESCE(SUM(1 + COALESCE(fallback_used, 0) + CASE WHEN json_valid(insight) THEN COALESCE(json_extract(insight, '$.corrections'), 0) ELSE 0 END), 0) AS n FROM bus_messages WHERE ts >= ? AND status <> 'budget_exhausted'").bind(cutoff).first();
   const n = Number(row?.n);
   if (!Number.isFinite(n)) throw new Error("bus_budget_unavailable");
   return n;
@@ -418,8 +418,31 @@ export function rowToMessage(row) {
   };
 }
 
-function messageFromCall(base, call, obj, validation, kind) {
-  const diag = call.primary_error ? { primary_error: call.primary_error } : {};
+/**
+ * Validates an answer; one that is valid except that its text reads like code gets one
+ * correction call (the same rule as the Thread rooms in agent-threads.mjs). Never runs past the
+ * wall deadline or without budget. Returns the call to record, its validation and the extra calls.
+ */
+async function validateWithCorrection(env, opts, call, validate, { budgetOk, clock, deadline }) {
+  if (call.status !== "answered") return { call, validation: null, extraCalls: 0, corrections: 0 };
+  const validation = call.truncated ? { valid: false, errors: [] } : validate(call.obj);
+  if (validation.valid || call.truncated || !onlyNaturalLanguageErrors(validation.errors) || clock() >= deadline || !(await budgetOk())) {
+    return { call, validation, extraCalls: 0, corrections: 0 };
+  }
+  const retry = await callBusModel(env, { ...opts, messages: [...opts.messages, { role: "assistant", content: String(call.text ?? "") }, { role: "user", content: NATURAL_LANGUAGE_CORRECTION }] });
+  const extraCalls = retry.calls || 0;
+  const sum = (a, b) => { const xs = [a, b].map(Number).filter(Number.isFinite); return xs.length ? xs.reduce((x, y) => x + y, 0) : null; };
+  if (retry.status === "answered" && !retry.truncated) {
+    const second = validate(retry.obj);
+    if (second.valid) {
+      return { call: { ...retry, usage_tokens: sum(call.usage_tokens, retry.usage_tokens), latency_ms: sum(call.latency_ms, retry.latency_ms), fallback_used: Boolean(call.fallback_used || retry.fallback_used) }, validation: second, extraCalls, corrections: Math.max(1, extraCalls) };
+    }
+  }
+  return { call: { ...call, usage_tokens: sum(call.usage_tokens, retry.usage_tokens), latency_ms: sum(call.latency_ms, retry.latency_ms) }, validation, extraCalls, corrections: Math.max(1, extraCalls) };
+}
+
+function messageFromCall(base, call, obj, validation, kind, extra = {}) {
+  const diag = { ...(call.primary_error ? { primary_error: call.primary_error } : {}), ...extra };
   if (call.status !== "answered") {
     return { ...base, status: call.status, insight: JSON.stringify({ insight: call.status === "budget_exhausted" ? "budget exhausted" : "agent failed: " + (call.error || "error"), ...diag }), confidence: null, refs: [], model: call.model, fallback_used: call.fallback_used, usage_tokens: call.usage_tokens, latency_ms: call.latency_ms ?? null };
   }
@@ -478,13 +501,15 @@ export async function runMultiAgentBus(env, task, { clock = () => Date.now() } =
       if (!(await budgetOk())) {
         msg = messageFromCall(base, { status: "budget_exhausted", model: null, fallback_used: false, usage_tokens: null }, null, null, "agent");
       } else {
-        const call = await callBusModel(env, {
+        const opts = {
           messages: agentMessages(agent, round, evidence[agent], roundOne), schemaName: "bus_agent", schema: AGENT_JSON_SCHEMA,
           maxTokens: BUS_MAX_TOKENS.agent, effort: "low", deadline, clock, runState
-        });
-        calls += call.calls || 0;
-        const validation = call.status === "answered" ? (call.truncated ? { valid: false, errors: [] } : validateAgentOutput(call.obj, { agent, round })) : null;
-        msg = messageFromCall(base, call, call.obj, validation || { valid: false, errors: [] }, "agent");
+        };
+        const first = await callBusModel(env, opts);
+        calls += first.calls || 0;
+        const { call, validation, extraCalls, corrections } = await validateWithCorrection(env, opts, first, (o) => validateAgentOutput(o, { agent, round }), { budgetOk, clock, deadline });
+        calls += extraCalls;
+        msg = messageFromCall(base, call, call.obj, validation || { valid: false, errors: [] }, "agent", corrections ? { corrections } : {});
       }
       await writeMessage(db, msg);
       transcript.push(rowToMessage(msg));
@@ -496,13 +521,15 @@ export async function runMultiAgentBus(env, task, { clock = () => Date.now() } =
   if (!(await budgetOk())) {
     modMsg = messageFromCall(modBase, { status: "budget_exhausted", model: null, fallback_used: false, usage_tokens: null }, null, null, "moderator");
   } else {
-    const call = await callBusModel(env, {
+    const opts = {
       messages: moderatorMessages(evidence, transcript), schemaName: "bus_moderator", schema: MODERATOR_JSON_SCHEMA,
       maxTokens: BUS_MAX_TOKENS.moderator, effort: "high", deadline, clock, runState
-    });
-    calls += call.calls || 0;
-    const validation = call.status === "answered" ? (call.truncated ? { valid: false, errors: [] } : validateModeratorOutput(call.obj)) : null;
-    modMsg = messageFromCall(modBase, call, call.obj, validation || { valid: false, errors: [] }, "moderator");
+    };
+    const first = await callBusModel(env, opts);
+    calls += first.calls || 0;
+    const { call, validation, extraCalls, corrections } = await validateWithCorrection(env, opts, first, validateModeratorOutput, { budgetOk, clock, deadline });
+    calls += extraCalls;
+    modMsg = messageFromCall(modBase, call, call.obj, validation || { valid: false, errors: [] }, "moderator", corrections ? { corrections } : {});
   }
   await writeMessage(db, modMsg);
   transcript.push(rowToMessage(modMsg));

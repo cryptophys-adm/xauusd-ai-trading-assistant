@@ -170,15 +170,27 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - Thread ids are `live15m:<day>`. `GET /api/live` also returns the older `live5m:` history.
   - The 5m context carries the last 12 closed bars (`recent_bars`). The H1 chain strips them.
 - Read APIs: `GET /api/threads?kind=news|h1`, `GET /api/threads/:id` (nested replies; `h1:<candle_key>` serves the H1 bus debate as a thread) and `GET /api/live?since=`.
-- **Nexus layout (owner decision 2026-11-05, Live War Room).** The main panel is the War Room conclusion, with the H1 decision shown as its constraint. Below it, the Live War Room 15m shows the latest discussion only, with no history. The right panel is one card whose top is the tab bar D1 | 4H | 1H | 15m | News (owner decision 2026-11-06; no 5m tab for now). Each timeframe tab shows its whole War Room Thread (TLDR, communication bus, debate): 15m from `GET /api/war-room/latest`; 1H, 4H and D1 from `GET /api/threads/timeframe`. The News tab shows the News Daily TLDR and each headline with its bias (`GET /api/news/daily`). The left panel lists the War Room agents and the worker status.
+- **Nexus layout (owner decisions 2026-11-05 and 2026-11-06).** The living War Rooms of every timeframe sit in the center, under the chart, in one card whose top is the tab bar `News | 15m | 1H | 4H | D1`. Every page load opens on News (no 5m tab for now). Each timeframe tab shows its whole War Room (TLDR, communication bus, debate): 15m from `GET /api/war-room/latest`; 1H, 4H and D1 from `GET /api/threads/timeframe`. The News tab shows the News Daily TLDR and each headline with its bias (`GET /api/news/daily`). The separate 15m conclusion and 15m room cards are gone, because they repeated the 15m tab. The H1 decision, its levels and the entry confirmations moved to the right panel.
+- **Trading assistant panel (right, owner decision 2026-11-06; charts only).** It is display-only: every number comes from the rooms, News Daily and the 5m context. Nothing is computed outside the parity lane.
+  - *Market sentiment:* a semicircle gauge from −100 (bearish) to +100 (bullish).
+    - It shows the weighted mean of each room's lean: D1 30, 4H 25, 1H 20, 15m 15, News 10. A missing input drops out and the rest renormalise.
+    - A room's lean is the confidence-weighted mean direction of its agents (BUY +1, SELL −1, WAIT, HOLD and CLOSE 0). News lean is (bullish − bearish) over all tagged headlines.
+    - Under the gauge, a donut shows the headline biases of the last 24 hours.
+  - *Trend by timeframe:* one diverging bar per timeframe: D1 macro trend, 4H intraday trend, 1H swing trend, 15m structure, 5m confirmation.
+    - Each bar carries the room's lean, the moderator's action and one line of interpretation.
+    - The 5m row uses the 5m context bias, at full weight when a confirmation printed.
+  - *H1 decision:* a confidence ring with the decision, the levels of the validated H1 chain (when BUY or SELL) and the R38 confirmations.
+  - *Agent consensus:* one stacked bar per room of its agents' stances.
+  - *Macro drivers 24h:* diverging bars for gold, DXY, WTI oil and USDT dominance, with whether the gold–dollar inverse link holds.
+  - *Session clock:* a 24-hour ring of the Tokyo, London and New York sessions in New York time, as the Chronos Matrix defines them, with a needle at now.
 - **Nexus UI (owner decision 2026-11-06).** Nexus uses the obsidian design of the Cerebrum Console (`cryptophys-cloud-platform` `workers/console/ui`), because it will merge into the Console control panel. The `nexus` subdomain will later replace `home`.
   - **Stack:** the same as the Console: React 18, Vite, Tailwind with the obsidian palette, lucide-react, framer-motion, and three.js for the neural-mesh background. The chart uses lightweight-charts.
   - **Build and serving:** the source is in `workers/xauusd-nexus-dashboard/ui`. It is built into `ui/dist` and served as Workers Static Assets (`run_worker_first`). The deploy workflow builds it; `validate-nexus-dashboard.yml` builds it on pull requests.
   - **Layout:**
     - Same header, nav row, glass panels and status footer as the Console.
-    - Left: War Room agents and Worker status.
-    - Center: chart, War Room conclusion, Live War Room 15m.
-    - Right: the Threads card with its tab bar `D1 | 4H | 1H | 15m | News`.
+    - Left: Priority Queue, War Room agents and Worker status.
+    - Center: the chart, then the War Rooms card with its tab bar `News | 15m | 1H | 4H | D1`.
+    - Right: the trading assistant panel (charts).
     - On narrower screens, the side panels move under the center instead of hiding.
     - Shadow versions are at `#/shadow`; `/shadow` redirects there.
   - **Read-only:** the Worker forwards only GET/HEAD `/api/*` calls to the AI Worker.
@@ -236,7 +248,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - The Phase C order (C1–C7) is in `docs/BRIEF_HUD_AGENTS.md`.
 - **Live War Room 15m** (`src/war-room.mjs`, behind `WAR_ROOM_ENABLED`, on in production; owner decision 2026-11-05). At every 15m close, every agent discusses in one room, in three phases:
   1. **Communication bus.** Each agent posts one opening claim from its own data only: the H1 Desk (the H1 chain and the H1 TradingView reading), the News Analyst, the Technical Analyst (15m candles and the 5m execution read), the Risk Manager, and one agent per computed 15m HUD (13).
-  2. **Debate.** Agents whose stance differs from the bus majority (at most 7, by confidence) and the Risk Manager rebut named agents. The debate is open for at most 3 minutes, then closed.
+  2. **Debate.** Agents whose stance differs from the bus majority (at most 7, by confidence) and the Risk Manager rebut named agents. A dissenter the bus persuaded may concede instead: its stance changes, it may name nobody, and it is kept as `conceded: true` (2026-11-06). The debate is open for at most 3 minutes, then closed.
   3. **Conclusion.** The moderator concludes for the Nexus main panel: stance, summary, up to 3 reasons and the agents that still disagree.
   - The H1 decision is the constraint: a conclusion that differs must say "H1 decision: X". Price levels come only from the validated H1 chain.
   - **Calibration status once** (owner decision 2026-11-05, option A).

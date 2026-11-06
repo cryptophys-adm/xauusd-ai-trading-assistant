@@ -564,7 +564,7 @@ jobs:
           const warRoomProof = (label, room) => console.log(label + " " + JSON.stringify({
             phase: room?.phase,
             openings: (room?.openings || []).map(m => ({ id: m.id, status: m.status, model: m.model, stance: m.stance, text: String(m.claim ?? "").slice(0, 200), errors: m.errors })),
-            debate: (room?.debate || []).map(m => ({ id: m.id, status: m.status, stance: m.stance, rebuts: m.rebuts, text: String(m.argument ?? "").slice(0, 200), errors: m.errors })),
+            debate: (room?.debate || []).map(m => ({ id: m.id, status: m.status, stance: m.stance, rebuts: m.rebuts, conceded: m.conceded, text: String(m.argument ?? "").slice(0, 200), errors: m.errors })),
             conclusion: room?.conclusion
           }, null, 2));
           const assertWarRoom = (room, ids) => {
@@ -575,7 +575,8 @@ jobs:
             // A split room's rebuttals name their targets; in a unanimous room the Risk Manager
             // stress-tests the consensus and may name nobody (src/war-room.mjs validateRebuttal).
             const unanimous = room.openings.every(m => m.stance === room.openings[0].stance);
-            assert.ok(room.debate.every(m => m.status === "ok" && (unanimous || m.rebuts.length)), "every rebuttal in a split room names the agents it rebuts");
+            // A dissenter the bus persuaded may concede without a target (conceded: true).
+            assert.ok(room.debate.every(m => m.status === "ok" && (unanimous || m.rebuts.length || m.conceded === true)), "every rebuttal in a split room names the agents it rebuts or concedes");
             assert.equal(room.conclusion?.status, "ok", "the moderator concludes for the main panel");
             assert.equal(room.phase, "closed");
             assert.ok(room.conclusion.reasons.length >= 1 && room.conclusion.reasons.length <= 3);

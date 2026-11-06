@@ -171,6 +171,45 @@ test("invalid JSON or out-of-schema output is stored as invalid_output, bus cont
   assert.equal(bus.consensus.stance, "WAIT");
 });
 
+test("text that reads like code gets one correction attempt, for agents and the moderator", async () => {
+  // preview-e2e (PR #116): the moderator named a field from the evidence and the conclusion was lost.
+  let moderatorAsked = 0;
+  const e = env({ AI: fakeAI(({ n, request }) => {
+    if (n === 1) return agentReply("technical", 1, "WAIT", { insight: "The buy_confirmed flag is false." });
+    if (/moderator/i.test(request.messages[0].content) && ++moderatorAsked === 1) return moderatorReply({ summary: "Stand aside: the symbol_coverage check failed." });
+    return happyHandler({ request });
+  }) });
+  await runMultiAgentBus(e, task());
+  const bus = await readBus(e.DB, CANDLE);
+  assert.equal(e.AI.calls.length, 7, "five steps plus one correction each for the two rejected answers");
+  assert.ok(bus.items.every(m => m.status === "ok"), bus.items.map(m => m.status).join(","));
+  const fix = e.AI.calls[1].request.messages;
+  assert.match(fix.at(-1).content, /rejected: its text reads like code/);
+  assert.equal(fix.at(-2).role, "assistant");
+  assert.equal(bus.items.find(m => m.agent === "moderator").corrections, 1);
+
+  // The hourly budget counts the correction calls: 5 rows + 2 corrections = 7 of 7.
+  resetBusSchemaCacheForTests();
+  const tight = env({ MULTI_AGENT_MAX_CALLS_PER_HOUR: "7", AI: fakeAI(({ n, request }) => (n === 1 ? agentReply("technical", 1, "WAIT", { insight: "The buy_confirmed flag is false." }) : happyHandler({ request }))) });
+  await runMultiAgentBus(tight, task());
+  assert.equal(tight.AI.calls.length, 6, "one correction plus five steps");
+  await runMultiAgentBus(tight, buildMultiAgentBusTask({ candleKey: CANDLE, inputFingerprint: RUN + "-next" }));
+  assert.equal(tight.AI.calls.length, 7, "only one more call fits: the correction counted toward the budget");
+
+  // A second answer that still reads like code stays invalid; no third call.
+  resetBusSchemaCacheForTests();
+  const stubborn = env({ AI: fakeAI(({ request }) => (/moderator/i.test(request.messages[0].content) ? moderatorReply({ summary: "The h1.decision is WAIT." }) : happyHandler({ request }))) });
+  await runMultiAgentBus(stubborn, task());
+  assert.equal(stubborn.AI.calls.length, 6);
+  assert.equal((await readBus(stubborn.DB, CANDLE)).items.find(m => m.agent === "moderator").status, "invalid_output");
+
+  // Other errors (a wrong stance) get no correction attempt.
+  resetBusSchemaCacheForTests();
+  const wrong = env({ AI: fakeAI(({ n, request }) => (n === 1 ? agentReply("technical", 1, "LONG") : happyHandler({ request }))) });
+  await runMultiAgentBus(wrong, task());
+  assert.equal(wrong.AI.calls.length, 5);
+});
+
 test("finish_reason length with null content is invalid_output", async () => {
   const d1 = fakeD1(); seedSynthesis(d1);
   const ai = { calls: [], run: async (model, request) => { ai.calls.push({ model, request }); return { choices: [{ message: { content: null }, finish_reason: "length" }] }; } };
