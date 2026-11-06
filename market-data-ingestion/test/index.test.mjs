@@ -10,6 +10,12 @@ class MemoryKV {
   async put(key, value) { this.map.set(key, value); }
 }
 
+// The pulls compare bar times with Date.now(): a 1m, 5m or 15m bar that closed while a test ran
+// made the second pull fetch new bars (CI on PR #116: "6 !== 4" at a quarter-hour boundary).
+// Every test reads a frozen clock in the middle of every bar, far from any boundary.
+const FROZEN_NOW = Date.parse("2026-11-04T10:07:30.000Z");
+test.beforeEach((t) => t.mock.timers.enable({ apis: ["Date"], now: FROZEN_NOW }));
+
 const SECRET = "test-secret";
 const auth = { authorization: `Bearer ${SECRET}` };
 
