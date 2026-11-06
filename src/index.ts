@@ -152,6 +152,7 @@ import { m5ParityApproved, verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_L
 import { storeHudSnapshot, loadHudSnapshot, hudReadings, approvedComparable, barsVerified } from "./hud-store.mjs";
 import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
 import { readGlobalConclusion } from "./global-conclusion.mjs";
+import { readStrategy } from "./strategy-engine.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -1977,6 +1978,16 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "ok", levels: hudLevels(snapshot, { barsVerified: verified }) });
     } catch (error) {
       console.error("hud_levels_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/strategy") {
+    // Strategy engine (owner decision 2026-11-06): the decision from the consensus of all agents
+    // across D1 to 5m, with its key levels and reward-to-risk. Advisory only.
+    try {
+      return dashboardJson({ status: "ok", strategy: await readStrategy(env) });
+    } catch (error) {
+      console.error("strategy_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
     }
   }

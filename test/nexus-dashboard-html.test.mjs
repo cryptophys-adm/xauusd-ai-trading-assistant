@@ -64,13 +64,17 @@ test("the UI keeps the Console's obsidian palette and calls only same-origin rea
   assert.match(panel, />Bias</);
   assert.match(ui("src/components/Roster.tsx"), /useTab\(\)/, "the agents panel follows the active tab");
   const market = ui("src/lib/market.tsx");
-  for (const route of ["/api/threads/timeframe?chart=", "/api/news/daily", "/api/m5-context", "/api/conclusion/global"]) assert.ok(market.includes(route), route);
+  for (const route of ["/api/threads/timeframe?chart=", "/api/news/daily", "/api/m5-context", "/api/conclusion/global", "/api/strategy"]) assert.ok(market.includes(route), route);
   const page = ui("src/pages/WarRoom.tsx");
   assert.ok(page.indexOf("<PriceChart />") < page.indexOf("<ThreadsPanel"), "the rooms sit under the chart");
   assert.doesNotMatch(page, /LiveWarRoom|WarRoomConclusion/, "no separate 15m cards: they repeated the 15m tab");
   // The right panel is the trading assistant, as charts, with the Global Conclusion first.
   const assistant = ui("src/components/AssistantPanel.tsx");
   assert.match(assistant, /\/api\/hud\/levels\?tf=/);
+  // Owner decision 2026-11-06: the strategy engine's decision, key levels and RRR lead the panel.
+  const strategyPanel = ui("src/components/StrategyPanel.tsx");
+  for (const word of ["Strategy engine", "Decision", "TP1", "TP2", "Stop", "Entry", "R</span>"]) assert.ok(strategyPanel.includes(word), word);
+  assert.ok(assistant.indexOf("<StrategyPanel") < assistant.indexOf("<GlobalConclusion"), "the strategy leads the right panel");
   for (const card of ["Global conclusion", "Market sentiment", "Trend by timeframe", "Macro trend", "Intraday trend", "Swing trend", "Structure", "Confirmation", "Levels", "Regime", "Agent consensus", "Macro drivers", "Session clock"]) assert.ok(assistant.includes(card), card);
   assert.ok(assistant.indexOf("<GlobalConclusion />") < assistant.indexOf("<SentimentCard />"), "the Global Conclusion comes first");
   const api = ui("src/lib/api.ts");
