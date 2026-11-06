@@ -47,14 +47,17 @@ test("all agents aligned bullish from D1 to 15m, price at a support, a verified 
   assert.ok(s.plan.rrr.tp2 >= MIN_RRR);
   assert.match(s.plan.stop_note, /beyond /);
   // Key Level Agent zones: the targets are the near edges of the next candidate zones.
-  assert.equal(s.plan.tp1, 4048, "the zone where the 1H and 15m Camarilla H3 and round 4050 stack");
-  assert.match(s.plan.tp1_note, /key zone .*round 4050/);
-  assert.equal(s.plan.tp2, 4060, "then the 1H and 15m Camarilla H4 zone");
+  // The 4048-4050 zone (1H and 15m Camarilla H3, round 4050) has 3 sources but scores 2.3, below
+  // medium, so it is not a candidate: without a candidate zone ahead the targets are 2R and 3R.
+  assert.equal(s.plan.tp1, 4064);
+  assert.equal(s.plan.tp1_note, "a 2R projection");
+  assert.equal(s.plan.tp2, 4076);
+  assert.deepEqual(s.plan.rrr, { tp1: 2, tp2: 3 });
   assert.equal(s.plan.stop, 4028, "beyond the far edge of the 4030-4031 zone (value area low and 15m swing low), padded by 0.2 ATR");
   assert.deepEqual(s.layers.map((l) => l.key), ["D1", "H4", "H1", "M15", "M5"]);
   assert.ok(s.layers.every((l) => l.pass === true));
   assert.equal(s.h1_chain.decision, "WAIT", "the H1 chain is reported beside the engine's decision");
-  assert.ok(s.key_levels.candidates.length >= 3, "the Key Level Agent's reading travels with the strategy");
+  assert.ok(s.key_levels.zones.length >= 5 && Array.isArray(s.key_levels.candidates), "the Key Level Agent's reading travels with the strategy");
   assert.match(s.advisory, /no orders/);
 });
 

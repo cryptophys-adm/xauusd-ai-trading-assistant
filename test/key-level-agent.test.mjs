@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildKeyLevels, rawLevels, clusterLevels, swings, TF_WEIGHT } from "../src/key-level-agent.mjs";
+import { buildKeyLevels, rawLevels, clusterLevels, swings, TF_WEIGHT, CANDIDATE_MIN_SOURCES, CANDIDATE_MIN_SCORE } from "../src/key-level-agent.mjs";
 
 const camarilla = (base) => ({ h3: base + 8, h4: base + 20, h5: base + 35, l3: base - 2, l4: base - 14, l5: base - 30 });
 const snap = (timeframe, cam, extra = {}) => ({
@@ -40,7 +40,21 @@ test("every chart's levels are gathered once, weighted by kind and timeframe", (
   assert.equal(TF_WEIGHT.W, 3);
 });
 
-test("stacked levels form a zone; two or more sources make it a candidate, the score its strength", () => {
+test("a candidate needs three sources and at least medium strength (owner decision 2026-11-06)", () => {
+  const lv = (price, kind, tf, label, weight) => ({ price, kind, tf, label, weight });
+  assert.deepEqual([CANDIDATE_MIN_SOURCES, CANDIDATE_MIN_SCORE], [3, 3]);
+  const [twoStrong, threeWeak, threeMedium] = clusterLevels([
+    lv(100, "previous", "W", "previous week high", 3), lv(100.5, "camarilla", "D", "daily Camarilla H4", 2.5),
+    lv(110, "camarilla", "60", "1H Camarilla H3", 0.9), lv(110.5, "camarilla", "15", "15m Camarilla H3", 0.6), lv(111, "round", "15", "round 110", 0.8),
+    lv(120, "camarilla", "60", "1H Camarilla H4", 1.5), lv(120.5, "pivot", "D", "daily pivot", 2.5), lv(121, "round", "15", "round 120", 0.8)
+  ], 2, 105);
+  assert.equal(twoStrong.strength, "medium");
+  assert.equal(twoStrong.candidate, false, "two sources are not enough, however heavy");
+  assert.equal(threeWeak.candidate, false, "three sources, score 2.3: weak");
+  assert.equal(threeMedium.candidate, true, "three sources, score 4.8");
+});
+
+test("stacked levels form a zone; enough independent sources make it a candidate, the score its strength", () => {
   const lv = (price, kind, tf, label, weight) => ({ price, kind, tf, label, weight });
   const zones = clusterLevels([
     lv(4030, "value", "60", "1H value area low", 1.2), lv(4031, "swing", "15", "15m swing low", 0.9), lv(4031.5, "camarilla", "D", "daily Camarilla L4", 2.5), lv(4032, "previous", "D", "previous day low", 2.5),

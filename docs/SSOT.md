@@ -221,7 +221,8 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
       - round numbers within four 1H ATRs of price: every 50 dollars 0.8, every 25 dollars 0.4.
     - **Zones:** the levels, sorted by price, are grouped while a group's span stays within 0.3 × the 1H ATR (at least 1 dollar).
       - A zone's score is the sum of its weights, and its sources are its distinct (kind, timeframe) pairs.
-      - **Candidate key level:** a zone with two or more sources. Strength: strong (score ≥ 6), medium (≥ 3) or weak.
+      - Strength: strong (score ≥ 6), medium (≥ 3) or weak.
+      - **Candidate key level:** a zone with three or more sources and at least medium strength. The owner tightened this on 2026-11-06: at two sources, production marked 14 of 18 zones; at three sources and medium, it marked 9 of 18.
       - Role: support, resistance, or "at price".
     - **The strategy plans on the zones:**
       - entry: at a zone with the trade (inside it, or within 0.35 ATR of it), or a pullback to its near edge;
@@ -253,6 +254,10 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - vetoes and cautions;
     - the H1 chain decision and the R38 confirmations as a reference.
     - **Lean vs bias:** a bias is the BULLISH, BEARISH or NEUTRAL label each agent gives. A room's lean is the confidence-weighted mean of its agents' biases, from −1 to +1; inside ±0.15 the strategy reads it as neutral.
+  - **Chart zones** (owner request 2026-11-06): the price chart draws the candidate zones as bands behind the candles, using a lightweight-charts series primitive (`ui/src/lib/zones-primitive.ts`).
+    - Bands are coloured by role (support green, resistance red, at price cyan) and shaded by strength. Labels show only where there is room.
+    - The strategy plan's entry, stop, TP1 and TP2 are drawn as price lines, with the RRR on the axis label.
+    - The "Zones" button toggles both, and is remembered per viewer.
   - *Key Level Agent* (second): the zones on one price axis around price, with candidates coloured by role and shaded by strength; the six nearest candidate zones with their range, strength and leading levels (hover lists every level); and the agent's summary.
   - *Global Conclusion* (data only, no card of its own; `GET /api/conclusion/global`, `src/global-conclusion.mjs`, deterministic, no model call). One multi-timeframe summary of the D1, 4H, 1H and 15m War Rooms and News Daily:
     - the global bias from the weighted room leans (below);
