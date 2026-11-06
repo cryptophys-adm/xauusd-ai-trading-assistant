@@ -10,26 +10,29 @@ type Ctx = {
   threads: Partial<Record<TfChart, any>>;
   news: any | null;
   m5: any | null;
+  /** The Global Conclusion of the AI Worker (GET /api/conclusion/global). */
+  global: any | null;
   loading: boolean;
   error: string | null;
 };
-const MarketContext = createContext<Ctx>({ threads: {}, news: null, m5: null, loading: true, error: null });
+const MarketContext = createContext<Ctx>({ threads: {}, news: null, m5: null, global: null, loading: true, error: null });
 
 /**
- * The 1H, 4H and D1 Threads, News Daily and the 5m context, refreshed every 60 s and shared by
+ * The 1H, 4H and D1 Threads, News Daily, the 5m context and the Global Conclusion, refreshed every 60 s and shared by
  * the center tabs and the right-hand assistant panel, so each is fetched once per refresh.
  */
 export function MarketProvider({ children }: { children: ReactNode }) {
   const poll = usePoll(async () => {
-    const [d1, h4, h1, news, m5] = await Promise.all([
+    const [d1, h4, h1, news, m5, glob] = await Promise.all([
       ...TF_CHARTS.map((c) => get(`/api/threads/timeframe?chart=${c}`).catch(() => null)),
       get("/api/news/daily").catch(() => null),
       get("/api/m5-context").catch(() => null),
+      get("/api/conclusion/global").catch(() => null),
     ]);
-    return { threads: { D1: d1?.thread ?? null, H4: h4?.thread ?? null, H1: h1?.thread ?? null }, news: news?.daily ?? null, m5: m5?.context ?? null };
+    return { threads: { D1: d1?.thread ?? null, H4: h4?.thread ?? null, H1: h1?.thread ?? null }, news: news?.daily ?? null, m5: m5?.context ?? null, global: glob?.global ?? null };
   }, 60_000);
   const v = poll.data as any;
-  const value: Ctx = { threads: v?.threads ?? {}, news: v?.news ?? null, m5: v?.m5 ?? null, loading: poll.loading && !v, error: poll.error };
+  const value: Ctx = { threads: v?.threads ?? {}, news: v?.news ?? null, m5: v?.m5 ?? null, global: v?.global ?? null, loading: poll.loading && !v, error: poll.error };
   return <MarketContext.Provider value={value}>{children}</MarketContext.Provider>;
 }
 
@@ -71,19 +74,6 @@ export function m5Lean(m5: any): number | null {
   if (m5.buy_confirmed) return 1;
   if (m5.sell_confirmed) return -1;
   return direction(m5.bias) * 0.5;
-}
-
-/** Weights of the composite sentiment: higher timeframes carry more of it. */
-export const SENTIMENT_WEIGHTS = { D1: 0.3, H4: 0.25, H1: 0.2, M15: 0.15, NEWS: 0.1 } as const;
-
-/** Weighted mean of the available leans (missing ones drop out and the rest renormalise). */
-export function compositeSentiment(leans: Partial<Record<keyof typeof SENTIMENT_WEIGHTS, number | null>>): number | null {
-  let s = 0, w = 0;
-  for (const [k, wk] of Object.entries(SENTIMENT_WEIGHTS)) {
-    const v = leans[k as keyof typeof SENTIMENT_WEIGHTS];
-    if (typeof v === "number" && Number.isFinite(v)) { s += v * wk; w += wk; }
-  }
-  return w ? s / w : null;
 }
 
 /** Plain label of a lean. */

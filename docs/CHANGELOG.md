@@ -6,6 +6,15 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(nexus): Global Conclusion, Camarilla/CPR level ladder and regime radar; each tab starts with its conclusion, and the agents panel follows the active tab (owner decision 2026-11-06).
+  - **AI Worker:**
+    - `GET /api/conclusion/global` (`src/global-conclusion.mjs`): a deterministic multi-timeframe summary of the D1, 4H, 1H and 15m rooms plus News Daily. It gives a weighted bias, agreement, a summary and an action bound by the H1 decision.
+    - `GET /api/hud/levels?tf=15|60|240|1D` (`src/hud-levels.mjs`): Camarilla sets, daily and weekly pivot ranges, and six regime axes from the latest HUD snapshot. Each comes with its calibration.
+    - Both routes answer before the `/api/hud/:candle_key` prefix. `/api/hud/latest?tf=` now also accepts 240 and 1D.
+  - **Nexus:**
+    - The right panel opens with the Global Conclusion and its sentiment gauge. The level ladder and regime radar follow the active tab.
+    - The tab card shows the active timeframe's conclusion first.
+    - The left panel lists the active room's agents.
 - feat(nexus): the War Rooms move under the chart, and the right panel becomes a chart-only trading assistant (owner decision 2026-11-06).
   - **Center:** one card under the chart with the tabs `News | 15m | 1H | 4H | D1`, opening on News at every load. The separate 15m conclusion and 15m room cards are removed, because they repeated the 15m tab.
   - **Right:**

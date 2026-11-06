@@ -149,7 +149,9 @@ function asText(value: unknown): string {
 }
 
 import { m5ParityApproved, verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
-import { storeHudSnapshot, loadHudSnapshot, hudReadings } from "./hud-store.mjs";
+import { storeHudSnapshot, loadHudSnapshot, hudReadings, approvedComparable, barsVerified } from "./hud-store.mjs";
+import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
+import { readGlobalConclusion } from "./global-conclusion.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -1961,9 +1963,33 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error", error: "bus_unavailable" }, 500);
     }
   }
+  // Exact routes before the /api/hud/:candle_key prefix (the #110 lesson): levels and regime of
+  // the latest HUD snapshot of one timeframe, for the Nexus level ladder and regime radar.
+  if (url.pathname === "/api/hud/levels") {
+    const timeframe = url.searchParams.get("tf") || "60";
+    if (!LEVEL_TIMEFRAMES.includes(timeframe)) return dashboardJson({ status: "error", error: "tf must be 15, 60, 240 or 1D" }, 400);
+    try {
+      const snapshot = await loadHudSnapshot(env, { timeframe });
+      if (!snapshot) return dashboardJson({ status: "not_found", timeframe }, 404);
+      const verified = (await approvedComparable(env, snapshot.candle_key)) ? await barsVerified(env, snapshot.candle_key) : false;
+      return dashboardJson({ status: "ok", levels: hudLevels(snapshot, { barsVerified: verified }) });
+    } catch (error) {
+      console.error("hud_levels_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/conclusion/global") {
+    try {
+      return dashboardJson({ status: "ok", global: await readGlobalConclusion(env) });
+    } catch (error) {
+      console.error("global_conclusion_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/hud/latest" || url.pathname.startsWith("/api/hud/")) {
     try {
-      const timeframe = url.searchParams.get("tf") === "15" ? "15" : "60";
+      const askedTf = url.searchParams.get("tf") || "60";
+      const timeframe = LEVEL_TIMEFRAMES.includes(askedTf) ? askedTf : "60";
       const tail = decodeURIComponent(url.pathname.slice("/api/hud/".length));
       const candleKey = tail === "latest" ? null : tail;
       const snapshot = await loadHudSnapshot(env, { timeframe: candleKey ? candleKey.split(":")[2] || timeframe : timeframe, candleKey });

@@ -170,16 +170,38 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - Thread ids are `live15m:<day>`. `GET /api/live` also returns the older `live5m:` history.
   - The 5m context carries the last 12 closed bars (`recent_bars`). The H1 chain strips them.
 - Read APIs: `GET /api/threads?kind=news|h1`, `GET /api/threads/:id` (nested replies; `h1:<candle_key>` serves the H1 bus debate as a thread) and `GET /api/live?since=`.
-- **Nexus layout (owner decisions 2026-11-05 and 2026-11-06).** The living War Rooms of every timeframe sit in the center, under the chart, in one card whose top is the tab bar `News | 15m | 1H | 4H | D1`. Every page load opens on News (no 5m tab for now). Each timeframe tab shows its whole War Room (TLDR, communication bus, debate): 15m from `GET /api/war-room/latest`; 1H, 4H and D1 from `GET /api/threads/timeframe`. The News tab shows the News Daily TLDR and each headline with its bias (`GET /api/news/daily`). The separate 15m conclusion and 15m room cards are gone, because they repeated the 15m tab. The H1 decision, its levels and the entry confirmations moved to the right panel.
+- **Nexus layout (owner decisions 2026-11-05 and 2026-11-06).**
+  - **Center, under the chart:** the living War Rooms of every timeframe in one card. Its top is the tab bar `News | 15m | 1H | 4H | D1`, and every page load opens on News (no 5m tab for now).
+  - **Each tab** starts with its conclusion directly under the tab bar: the stance in large type, confidence, summary, reasons, dissent, and what binds it.
+    - On 15m: the H1 constraint and the entry confirmations.
+    - On 1H, 4H and D1: that chart's Prophet R38 confirmation.
+    - Under the conclusion come the communication bus and the debate.
+  - **Sources:** 15m reads `GET /api/war-room/latest`; 1H, 4H and D1 read `GET /api/threads/timeframe`. The News tab shows the News Daily TLDR and each headline with its bias (`GET /api/news/daily`).
+  - **No separate 15m cards:** they repeated the 15m tab.
+  - **The active tab drives the page.**
+    - The left panel lists the desks and HUD agents of that tab's room, with their stance and calibration. On the News tab it shows the News Analyst.
+    - The level ladder and regime radar on the right show that tab's chart. News uses the 1-hour chart.
 - **Trading assistant panel (right, owner decision 2026-11-06; charts only).** It is display-only: every number comes from the rooms, News Daily and the 5m context. Nothing is computed outside the parity lane.
-  - *Market sentiment:* a semicircle gauge from −100 (bearish) to +100 (bullish).
+  - *Global Conclusion* (first; `GET /api/conclusion/global`, `src/global-conclusion.mjs`, deterministic, no model call). One multi-timeframe summary of the D1, 4H, 1H and 15m War Rooms and News Daily:
+    - the global bias from the weighted room leans (below);
+    - a heat strip of the five leans, with stale rooms faded;
+    - how many timeframes agree;
+    - a summary;
+    - the action.
+    - The action is the authoritative H1 decision. A BUY or SELL becomes WAIT when the global bias leans against it. The validated H1 levels show only when it is BUY or SELL.
+  - *Market sentiment:* a semicircle gauge from −100 (bearish) to +100 (bullish): the Global Conclusion's score.
     - It shows the weighted mean of each room's lean: D1 30, 4H 25, 1H 20, 15m 15, News 10. A missing input drops out and the rest renormalise.
     - A room's lean is the confidence-weighted mean direction of its agents (BUY +1, SELL −1, WAIT, HOLD and CLOSE 0). News lean is (bullish − bearish) over all tagged headlines.
     - Under the gauge, a donut shows the headline biases of the last 24 hours.
   - *Trend by timeframe:* one diverging bar per timeframe: D1 macro trend, 4H intraday trend, 1H swing trend, 15m structure, 5m confirmation.
     - Each bar carries the room's lean, the moderator's action and one line of interpretation.
     - The 5m row uses the 5m context bias, at full weight when a confirmation printed.
-  - *H1 decision:* a confidence ring with the decision, the levels of the validated H1 chain (when BUY or SELL) and the R38 confirmations.
+  - *Levels* (`GET /api/hud/levels?tf=15|60|240|1D`, `src/hud-levels.mjs`): a vertical Camarilla ladder from H6 to L6 for the active tab's chart.
+    - Shaded zones: the H3–L3 range, the H4–H5 breakout zone and the L4–L5 breakdown zone.
+    - Chips switch between the 15-minute, 1-hour, 4-hour, daily and weekly sets.
+    - The daily and weekly pivot ranges show as bands, or as edge markers with their price when far away. The close is a marker.
+    - It reads "from verified bars" when the candle's bar is verified (see the three calibration tiers).
+  - *Regime:* a radar of six engine sensors of that chart, each scaled 0–100: trend (Hurst), efficiency, stretch (|z| of 3), volume (of 2× average), cycle agreement and order (1 − entropy). A chaos flag is shown. It is not yet calibrated.
   - *Agent consensus:* one stacked bar per room of its agents' stances.
   - *Macro drivers 24h:* diverging bars for gold, DXY, WTI oil and USDT dominance, with whether the gold–dollar inverse link holds.
   - *Session clock:* a 24-hour ring of the Tokyo, London and New York sessions in New York time, as the Chronos Matrix defines them, with a needle at now.

@@ -5,20 +5,23 @@ import ThreadsPanel from "../components/ThreadsPanel";
 import PriorityQueue from "../components/PriorityQueue";
 import AssistantPanel from "../components/AssistantPanel";
 import { MarketProvider } from "../lib/market";
+import { TabProvider } from "../lib/tab";
 
 /**
  * Owner decision 2026-11-06:
- * - Left: the Priority Queue (health alerts), the War Room agents and the Worker status.
+ * - Left: the Priority Queue (health alerts), the agents of the room in the active tab and the
+ *   Worker status.
  * - Center: the chart, and under it the living War Rooms of every timeframe in one tabbed card
- *   (News | 15m | 1H | 4H | D1, opening on News). The separate 15m conclusion and 15m room cards are
- *   gone: they repeated the 15m tab.
- * - Right: the trading assistant as charts (sentiment, trend by timeframe, H1 decision,
- *   agent consensus, macro drivers, session clock), sticky and scrolling inside itself.
+ *   (News | 15m | 1H | 4H | D1, opening on News); each tab starts with its conclusion.
+ * - Right: the trading assistant as charts: the Global Conclusion (all timeframes and news), then
+ *   sentiment, trend by timeframe, the level ladder and regime radar of the active tab's chart,
+ *   agent consensus, macro drivers and the session clock; sticky and scrolling inside itself.
  * On narrower screens the side panels move under the center instead of hiding.
  */
 export default function WarRoom() {
   return (
     <MarketProvider>
+      <TabProvider>
       <div className="mx-auto flex max-w-[1680px] gap-5 px-3 py-3 sm:px-6 sm:py-5">
         <aside className="hidden w-[260px] shrink-0 flex-col gap-4 xl:flex">
           <PriorityQueue />
@@ -36,6 +39,7 @@ export default function WarRoom() {
           <AssistantPanel className="sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto pr-1" />
         </aside>
       </div>
+      </TabProvider>
     </MarketProvider>
   );
 }

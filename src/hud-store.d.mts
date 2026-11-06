@@ -5,3 +5,4 @@ export function storeHudSnapshot(env: unknown, p: unknown, now?: number): Promis
 export function loadHudSnapshot(env: unknown, options?: { timeframe?: string; candleKey?: string | null }): Promise<Record<string, any> | null>;
 export function approvedComparable(env: unknown, candleKey: string): Promise<Record<string, any> | null>;
 export function hudReadings(env: unknown, snapshot: unknown): Promise<Record<string, any> | null>;
+export function barsVerified(env: unknown, candleKey: string): Promise<boolean>;
