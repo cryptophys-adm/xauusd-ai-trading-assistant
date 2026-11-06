@@ -218,8 +218,11 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - TP1 and TP2: the next two major levels with the trade, each at least 0.5 ATR beyond the previous one, or 2R and 3R projections;
     - RRR to each target.
   - **Vetoes and cautions:**
-    - Vetoes (state `BLOCKED`): a GMI and Prophet conflict, a closed GMI gate (−1), a Prophet cut loss (t_enc 4), or a strong GMI verdict against the side (∓3), on the 1H chart.
-    - Cautions (−0.1 confidence each): both the 1H and the 15m regime chaotic; News Daily leaning against the side at 0.6 or more.
+    - Vetoes (state `BLOCKED`): a Prophet cut loss (t_enc 4), or a strong GMI verdict against the side (∓3), on the 1H chart.
+    - Cautions (−0.1 confidence each):
+      - a GMI and Prophet conflict, or a closed GMI gate (−1), on the 1H chart. These were vetoes until the owner loosened them on 2026-11-06: at 14:15 that day they blocked a clear bearish consensus;
+      - both the 1H and the 15m regime chaotic;
+      - News Daily leaning against the side at 0.6 or more.
   - **States:** `NO_SETUP`, `BLOCKED`, `NO_LEVELS`, `SETUP_FORMING` (wait for the pullback), `SETUP_READY` (at the level, waiting for the trigger), `LOW_REWARD`, `LOW_CONFIDENCE` and `TRIGGERED`.
     - The decision is BUY or SELL only when `TRIGGERED`: the trigger fired, no veto, at least 1.5R (`MIN_RRR`) to TP2, and a confidence of at least 0.4. Every other state is WAIT, and it still shows the side, the levels and the RRR.
     - Confidence: 0.6 × the weighted alignment (D1 30, 4H 30, 1H 25, 15m 15), +0.15 at a level, +0.2 when triggered, minus cautions, and −0.1 when any room is stale.
