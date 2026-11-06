@@ -9,10 +9,11 @@
 //        open for at most 3 minutes;
 //     3. Conclusion: the moderator writes the TLDR of that timeframe.
 //
-// The agents: the desks (H1 Desk on 1H, the Higher-Timeframe Desk, News Analyst, Technical
-// Analyst, Risk Manager) and one agent per HUD computed on that chart (the HUD snapshot of the
-// bar). The rooms run from local computation only, never from a webhook: the bars, the HUD
-// snapshot and the local Prophet R38 record of the bar.
+// The agents: the desks (the room's own timeframe desk: the 1H Desk with the H1 chain, the 4H
+// Desk, the D1 Desk; the Higher-Timeframe Desk, News Analyst, Technical Analyst, Risk Manager)
+// and one agent per HUD computed on that chart (the HUD snapshot of the bar). The rooms run from
+// local computation only, never from a webhook: the bars, the HUD snapshot and the local Prophet
+// R38, R37 and GMI records of the bar.
 //
 // Rules, as in the Live War Room: one role per agent and no repetition; HUD statements are
 // marked verified only where they equal a parity-approved record, and an agent with no
@@ -36,6 +37,7 @@ import {
 } from "./war-room.mjs";
 import { closedHtfCandleKeys, OBSERVED_PREFIX } from "./parity-sweep.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
+import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 
 const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson } = threadInternals;
 
@@ -46,7 +48,10 @@ export const TF_THREAD_CHARTS = Object.freeze({
   D1: { period: "1D", series: "1D", label: "daily", tab: "D1", higher: null, minutes: 1440 }
 });
 export const TF_DESKS = Object.freeze({
-  h1: { name: "H1 Desk", role: "the H1 decision chain: its decision, confidence and reasoning" },
+  // Each room's own timeframe desk (owner decision 2026-11-06: a desk analyses only its chart).
+  h1: { name: "1H Desk", role: "the H1 decision chain (its decision, confidence and reasoning) and the local 1-hour computation of the bar" },
+  h4: { name: "4H Desk", role: "the local Prophet R38, Prophet R37 and GMI computation of the 4-hour candle that just closed: this timeframe's own signal" },
+  d1: { name: "D1 Desk", role: "the local Prophet R38, Prophet R37 and GMI computation of the daily candle that just closed: this timeframe's own signal" },
   htf: { name: "Higher-Timeframe Desk", role: "the conclusion of the next higher timeframe's Thread: the backdrop this timeframe trades in" },
   news: { name: "News Analyst", role: "the fundamental news of the last 24 hours: the daily bias for gold and the headlines behind it" },
   technical: { name: "Technical Analyst", role: "price action only: the last closed candles of this chart" },
@@ -213,16 +218,19 @@ export async function tfEvidence(env, chart, candleKey) {
   }
   const higher = spec.higher ? await latestConclusion(db, spec.higher) : null;
   const news = await newsDeskEvidence(db);
+  let desk = { available: false, reading: [], approved_by_parity: false };
+  try { desk = await chartDeskReading(env, candleKey); } catch { /* no desk reading this bar */ }
   return {
     chart, candle_key: candleKey, bar_open: last.open_time, bar_close: last.close_time,
     technical: { candles, average_range_14: round(ranges.reduce((a, b) => a + b, 0) / Math.max(ranges.length, 1)) },
-    hud, confirmations, h1, higher, news
+    hud, confirmations, h1, higher, news, desk
   };
 }
 
 function agentData(agent, ev, spec) {
   switch (agent) {
-    case "h1": return { h1_decision: ev.h1.decision, confidence: ev.h1.confidence, reasoning: ev.h1.reasoning, tradingview_h1: ev.h1.tradingview };
+    case "h1": return { h1_decision: ev.h1.decision, confidence: ev.h1.confidence, reasoning: ev.h1.reasoning, tradingview_h1: ev.h1.tradingview, ...(ev.desk?.available ? { local_reading: ev.desk.reading } : {}) };
+    case "h4": case "d1": return { timeframe: spec.label, reading: ev.desk.reading, approved_by_parity: ev.desk.approved_by_parity };
     case "htf": return ev.higher;
     case "news": return ev.news;
     case "technical": return { timeframe: spec.label, closed_candles: ev.technical.candles };
@@ -303,14 +311,18 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, runId).all()).results || []).map((r) => [r.step, rowToThreadMessage(r)]));
   if (existing.get("conclusion")?.status === "ok") return { status: "already_complete", calls: 0 };
 
+  // The room's own timeframe desk first: the 1H Desk with the H1 chain, the 4H or D1 Desk with
+  // the local records of the bar.
+  const ownDesk = chart === "H1" ? (ev.h1 ? "h1" : null) : ev.desk?.available ? { H4: "h4", D1: "d1" }[chart] : null;
   const roster = [
-    ...(ev.h1 ? ["h1"] : []), ...(ev.higher ? ["htf"] : []), ...(ev.news ? ["news"] : []), "technical", "risk",
+    ...(ownDesk ? [ownDesk] : []), ...(ev.higher ? ["htf"] : []), ...(ev.news ? ["news"] : []), "technical", "risk",
     ...HUD_IDS.filter((id) => ev.hud?.readings?.[id]?.available)
   ];
   const calibration = Object.fromEntries(roster.map((id) => {
     const lines = ev.hud?.readings?.[id]?.lines;
     if (Array.isArray(lines)) return [id, calibrationCounts(lines)];
     if (id === "h1") return [id, { label: "H1 decision chain" }];
+    if (id === "h4" || id === "d1") return [id, { label: chartDeskLabel(spec.tab, ev.desk) }];
     if (id === "htf") return [id, { label: `the ${ev.higher.timeframe} Thread` }];
     if (id === "news") return [id, { label: "news of the last 24 hours" }];
     return [id, { label: `closed ${spec.label} bars` }];
@@ -349,7 +361,8 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
     return open(base("open:" + agent, agent), {
       messages: openingMessages(agent, agentData(agent, ev, spec), spec, roster), schemaName: "tf_room_opening", schema: OPENING_SCHEMA,
       maxTokens: BUS_MAX_TOKENS.agent, effort: "low",
-      validate: (o) => validateOpening(normalizeTfNames(o, [agent]), agent, { verifiedLines: calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]) }),
+      // A 4H or D1 Desk whose records parity has not approved speaks at 0.4 or lower.
+      validate: (o) => validateOpening(normalizeTfNames(o, [agent]), agent, { verifiedLines: (agent === "h4" || agent === "d1") ? (ev.desk?.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]) }),
       toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), name: tfAgentName(agent) }, refs: [] })
     });
   }));

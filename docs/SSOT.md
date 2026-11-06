@@ -110,7 +110,13 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Timeframe War Rooms (owner decision 2026-11-06; supersedes the five-desk H4/D1 threads of step 4):** every Thread, D1, 4H, 1H and 15m, is the consensus of all agents, as in the Live War Room. 15m is the Live War Room; `src/timeframe-threads.mjs` runs the 1H, 4H and D1 rooms.
     - **Phases:** each closed bar of that chart runs the same three phases: every agent opens on the bus, the minority (by confidence) and the Risk Manager debate for at most 3 minutes, and the moderator writes the TLDR.
     - **Agents:** the desks plus one agent per HUD computed on that chart.
-      - Desks: H1 Desk (1H only), Higher-Timeframe Desk (the conclusion of the 4H Thread on 1H, of the D1 Thread on 4H), News Analyst (News Daily), Technical Analyst and Risk Manager.
+      - Desks:
+        - The room's own timeframe desk analyses only its chart (owner decision 2026-11-06; `src/timeframe-desk.mjs`):
+          - The 1H Desk reads the H1 decision chain plus the local 1-hour reading.
+          - The 4H Desk and the D1 Desk read the local Prophet R38, R37 and GMI records of the bar, decoded into plain sentences.
+          - A desk whose records parity has not approved is labelled so and speaks at confidence 0.4 or lower.
+          - A room without local records for its bar has no own desk.
+        - The other desks: the Higher-Timeframe Desk (the conclusion of the 4H Thread on 1H, of the D1 Thread on 4H), the News Analyst (News Daily), the Technical Analyst and the Risk Manager.
       - HUD agents come from that bar's HUD snapshot. The pull adapter now also publishes H4 and D1 HUD snapshots (`hud-snapshot.mjs`, timeframes `"240"` and `"1D"`, GMI from `gmi-core-htf.mjs`).
     - **No webhook dependency:** the rooms run on local computation only: closed bars, the HUD snapshot and the local Prophet R38 record of the bar.
     - **Calibration:** a HUD statement is verified only where it equals a parity-approved record, and computed from verified bars only where the bar's parity comparison matched (see "Calibration status once"). On 4H and D1 there are none until the alerts are installed there, so those HUD agents speak at confidence 0.4 or lower.
@@ -269,7 +275,13 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - the candidate ships first (C1).
 - The Phase C order (C1–C7) is in `docs/BRIEF_HUD_AGENTS.md`.
 - **Live War Room 15m** (`src/war-room.mjs`, behind `WAR_ROOM_ENABLED`, on in production; owner decision 2026-11-05). At every 15m close, every agent discusses in one room, in three phases:
-  1. **Communication bus.** Each agent posts one opening claim from its own data only: the H1 Desk (the H1 chain and the H1 TradingView reading), the News Analyst, the Technical Analyst (15m candles and the 5m execution read), the Risk Manager, and one agent per computed 15m HUD (13).
+  1. **Communication bus.** Each agent posts one opening claim from its own data only. The agents (owner decision 2026-11-06: the 15m room has no H1 Desk):
+     - **15m Desk:** the parity-approved 15m Prophet R38, R37 and GMI records of the candle, in plain sentences. It speaks at 0.4 or lower when they are not approved.
+     - **Higher-Timeframe Desk:** the H1 chain, its TradingView reading and the latest 1H War Room conclusion. The H1 decision still binds the moderator.
+     - **News Analyst.**
+     - **Technical Analyst:** the 15m candles and the 5m execution read.
+     - **Risk Manager.**
+     - **One agent per computed 15m HUD** (13).
   2. **Debate.** Agents whose stance differs from the bus majority (at most 7, by confidence) and the Risk Manager rebut named agents. A dissenter the bus persuaded may concede instead: its stance changes, it may name nobody, and it is kept as `conceded: true` (2026-11-06). The debate is open for at most 3 minutes, then closed.
   3. **Conclusion.** The moderator concludes for the Nexus main panel: stance, summary, up to 3 reasons and the agents that still disagree.
   - The H1 decision is the constraint: a conclusion that differs must say "H1 decision: X". Price levels come only from the validated H1 chain.
