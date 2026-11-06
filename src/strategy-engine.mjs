@@ -28,7 +28,7 @@ export const MIN_CONFIDENCE = 0.4;
 const LEAN = 0.15; // a lean inside +-LEAN is neutral
 const PERIOD_MS = { D1: 86_400_000, H4: 14_400_000, H1: 3_600_000, M15: 900_000 };
 const LAYER = {
-  D1: { label: "D1", role: "Macro trend" },
+  D1: { label: "D1", role: "Macro" },
   H4: { label: "4H", role: "Intraday" },
   H1: { label: "1H", role: "Setup" },
   M15: { label: "15m", role: "Location" },

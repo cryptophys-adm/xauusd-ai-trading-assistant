@@ -12,7 +12,7 @@ type Ctx = {
   m5: any | null;
   /** The Global Conclusion of the AI Worker (GET /api/conclusion/global). */
   global: any | null;
-  /** The strategy engine's decision, key levels and RRR (GET /api/strategy). */
+  /** The strategy engine's decision, key levels and RRR (carried by the Global Conclusion). */
   strategy: any | null;
   loading: boolean;
   error: string | null;
@@ -25,14 +25,13 @@ const MarketContext = createContext<Ctx>({ threads: {}, news: null, m5: null, gl
  */
 export function MarketProvider({ children }: { children: ReactNode }) {
   const poll = usePoll(async () => {
-    const [d1, h4, h1, news, m5, glob, strategy] = await Promise.all([
+    const [d1, h4, h1, news, m5, glob] = await Promise.all([
       ...TF_CHARTS.map((c) => get(`/api/threads/timeframe?chart=${c}`).catch(() => null)),
       get("/api/news/daily").catch(() => null),
       get("/api/m5-context").catch(() => null),
       get("/api/conclusion/global").catch(() => null),
-      get("/api/strategy").catch(() => null),
     ]);
-    return { threads: { D1: d1?.thread ?? null, H4: h4?.thread ?? null, H1: h1?.thread ?? null }, news: news?.daily ?? null, m5: m5?.context ?? null, global: glob?.global ?? null, strategy: strategy?.strategy ?? null };
+    return { threads: { D1: d1?.thread ?? null, H4: h4?.thread ?? null, H1: h1?.thread ?? null }, news: news?.daily ?? null, m5: m5?.context ?? null, global: glob?.global ?? null, strategy: glob?.global?.strategy ?? null };
   }, 60_000);
   const v = poll.data as any;
   const value: Ctx = { threads: v?.threads ?? {}, news: v?.news ?? null, m5: v?.m5 ?? null, global: v?.global ?? null, strategy: v?.strategy ?? null, loading: poll.loading && !v, error: poll.error };

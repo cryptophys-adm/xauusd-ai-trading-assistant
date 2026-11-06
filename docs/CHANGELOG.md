@@ -6,6 +6,15 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(nexus): the Global Conclusion and the strategy engine are one "Global decision" card (owner request 2026-11-06: they were redundant).
+  - `GET /api/conclusion/global` now carries the full strategy, so Nexus fetches one endpoint.
+  - The card shows:
+    - the decision, direction, global bias with its score, and confidence;
+    - one row per timeframe plus News, with its lean (−100 to +100) and whether it passes;
+    - the plan with its RRR;
+    - vetoes and cautions;
+    - the H1 chain as a reference.
+  - The StrategyPanel and GlobalConclusion cards are removed.
 - fix(strategy): a GMI and Prophet conflict and a closed GMI gate on the 1H chart are cautions (each −0.1 confidence), no longer vetoes (owner decision 2026-11-06, "longgarkan saja").
   - **Why:** at 14:15 they blocked a short setup that every room's agents backed (D1 −0.34, 1H −0.46, 15m −0.62).
   - **Still vetoes:** a Prophet cut loss (t_enc 4), and a strong GMI verdict against the trade.

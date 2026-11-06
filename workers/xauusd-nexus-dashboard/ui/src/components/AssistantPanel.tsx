@@ -1,61 +1,16 @@
 import { useEffect, useState } from "react";
-import { Activity, Clock3, Compass, Gauge, Globe2, Globe, Layers3, Radar, Users } from "lucide-react";
+import { Clock3, Compass, Gauge, Globe2, Layers3, Radar, Users } from "lucide-react";
 import { Badge, Panel, Skeleton } from "./ui";
-import { Stance, stanceColor } from "./Stance";
+import { Stance } from "./Stance";
 import { C, DivergingBar, Donut, LevelLadder, RegimeRadar, SentimentGauge, StackedBar, leanColor } from "./charts";
 import { useMarket, roomLean, stanceMix, m5Lean, leanLabel, interpretation } from "../lib/market";
 import { useWarRoom } from "../lib/warroom";
 import { useTab, tabLabel, TAB_HUD_TF } from "../lib/tab";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
-import { candleWhen, pct, utc } from "../lib/format";
-import StrategyPanel from "./StrategyPanel";
+import { utc } from "../lib/format";
+import GlobalDecision from "./GlobalDecision";
 
-const side = (x: any) => (x?.buy_confirmed ? "buy confirmed" : x?.sell_confirmed ? "sell confirmed" : "none");
-
-/**
- * Global Conclusion (owner decision 2026-11-06): the multi-timeframe summary of the D1, 4H, 1H
- * and 15m War Rooms and the news, from GET /api/conclusion/global. The action is the strategy
- * engine's decision (the consensus of all agents); the H1 chain decision is shown for reference.
- */
-function GlobalConclusion() {
-  const { global: g, loading } = useMarket();
-  const { room, h1: latest } = useWarRoom();
-  const cf = room?.confirmations;
-  const h1 = g?.h1_decision;
-  const lv = latest && h1 && latest.candle_key === h1.candle_key && (latest.decision === "BUY" || latest.decision === "SELL") && latest.entry_price ? latest : null;
-  return (
-    <Panel title="Global conclusion" icon={<Globe className="h-3.5 w-3.5 text-cyan-300" />} right={g && <Badge tone={g.bias === "BULLISH" ? "green" : g.bias === "BEARISH" ? "red" : "slate"}>bias {String(g.bias).toLowerCase()}</Badge>}>
-      {loading && !g ? <Skeleton rows={3} /> : !g ? <p className="text-[12px] text-slate-500">The Global Conclusion is not available yet.</p> : (
-        <>
-          <div className="flex items-center gap-3">
-            <div className="flex flex-col">
-              <div className={`mono text-[40px] font-extrabold leading-none ${stanceColor(g.action)}`} style={{ textShadow: "0 0 24px currentColor" }}>{g.action}</div>
-              <div className="mt-1 text-[11px] text-slate-500">{g.bias === "NEUTRAL" ? "timeframes split" : `${g.alignment.with_bias} of ${g.alignment.of} timeframes agree`}{g.strategy ? ` · strategy ${String(g.strategy.state).toLowerCase().replace(/_/g, " ")}` : ""}</div>
-            </div>
-            <div className="ml-auto grid grid-cols-5 gap-1" role="img" aria-label="Lean per timeframe">
-              {g.timeframes.map((t: any) => (
-                <div key={t.key} className="flex flex-col items-center gap-1" title={`${t.label}: ${leanLabel(t.lean)}${t.action ? `, ${t.action}` : ""}`}>
-                  <div className="h-8 w-7 rounded-md border border-white/10" style={{ background: t.available ? `${leanColor(t.lean)}${t.stale ? "33" : "88"}` : "transparent" }} />
-                  <span className="mono text-[9px] text-slate-400">{t.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-          <p className="glass-inner mt-3 px-3 py-2.5 text-[12px] leading-relaxed text-slate-300">{g.summary}</p>
-          {h1 && (
-            <div className="mt-2 space-y-1 text-[11px] text-slate-400">
-              <div className="flex flex-wrap items-center gap-2"><span className="eyebrow text-[9px]">H1 chain (reference)</span><Stance value={h1.decision} /><span className="mono">{pct(h1.confidence)}</span><span>· {candleWhen(h1.candle_key)}</span></div>
-              {lv && <div className="mono text-slate-300">entry {lv.entry_price} · stop {lv.stop_loss} · target {lv.take_profit}</div>}
-              {cf && <div><Activity className="mr-1 inline h-3 w-3" />R38 H1 {side(cf.h1_prophet_r38)} · 5m {side(cf.m5_prophet_r38)}{cf.m5_prophet_r38 && !cf.m5_prophet_r38.verified ? " (unverified)" : ""}</div>}
-            </div>
-          )}
-          <p className="mt-2 text-[9px] uppercase tracking-widest text-slate-600">Advisory only · action from the strategy engine · no orders</p>
-        </>
-      )}
-    </Panel>
-  );
-}
 
 function SentimentCard() {
   const { global: g, news, loading } = useMarket();
@@ -296,8 +251,7 @@ export default function AssistantPanel({ className }: { className?: string }) {
   return (
     <div className={className}>
       <div className="space-y-4">
-        <StrategyPanel />
-        <GlobalConclusion />
+        <GlobalDecision />
         <SentimentCard />
         <TrendLadder ladder={ladder} />
         <LevelsCard levels={levels} loading={loading} tab={tab} />
