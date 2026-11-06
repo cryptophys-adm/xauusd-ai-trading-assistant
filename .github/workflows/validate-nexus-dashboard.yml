@@ -1,0 +1,34 @@
+name: Validate Nexus Dashboard
+
+# Pull requests that touch the Nexus Worker or its UI: typecheck and build the React SPA, then
+# validate the Worker bundle with its static assets (no deploy, no secrets).
+on:
+  pull_request:
+    paths:
+      - "workers/xauusd-nexus-dashboard/**"
+      - ".github/workflows/validate-nexus-dashboard.yml"
+      - ".github/workflows/deploy-nexus-dashboard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Typecheck and build the Nexus UI
+        working-directory: workers/xauusd-nexus-dashboard/ui
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Validate Worker bundle with assets
+        run: npx --yes wrangler@4.45.0 deploy --dry-run --config workers/xauusd-nexus-dashboard/wrangler.jsonc

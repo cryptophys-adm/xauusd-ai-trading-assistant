@@ -1,8 +1,8 @@
 name: Deploy Nexus Dashboard Worker
 
-# Deploys `xauusd-nexus-dashboard` (nexus.cryptophys.work) on main. The
-# dashboard is static HTML plus a read-only /api/* proxy to the AI Worker,
-# so it needs no secrets beyond CLOUDFLARE_API_TOKEN.
+# Deploys `xauusd-nexus-dashboard` (nexus.cryptophys.work) on main. The dashboard is a React SPA
+# in the Cerebrum Console obsidian design (ui/, built into ui/dist and served as Workers Static
+# Assets) plus read-only /api/* routes, so it needs no secrets beyond CLOUDFLARE_API_TOKEN.
 on:
   push:
     branches: [main]
@@ -36,6 +36,12 @@ jobs:
         run: |
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then echo "::error::CLOUDFLARE_API_TOKEN is not configured."; exit 1; fi
 
+      - name: Build the Nexus UI
+        working-directory: workers/xauusd-nexus-dashboard/ui
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
       - name: Validate Worker bundle
         run: npx --yes wrangler@4.45.0 deploy --dry-run --config workers/xauusd-nexus-dashboard/wrangler.jsonc
 
@@ -49,7 +55,10 @@ jobs:
           node --input-type=module <<'NODE'
           const get = async (u) => { for (let i = 0; i < 10; i++) { try { const r = await fetch(u, { signal: AbortSignal.timeout(20000) }); if (r.ok) return r; } catch {} await new Promise(r => setTimeout(r, 3000)); } return null; };
           const page = await get("https://nexus.cryptophys.work/");
-          if (!page || !(await page.text()).includes("<!DOCTYPE html>")) { console.error("dashboard page not served"); process.exit(1); }
+          const html = page ? await page.text() : "";
+          if (!/<!doctype html>/i.test(html) || !html.includes('id="root"')) { console.error("dashboard page not served"); process.exit(1); }
+          const script = html.match(/src="(\/assets\/[^"]+\.js)"/);
+          if (!script || !(await get("https://nexus.cryptophys.work" + script[1]))) { console.error("dashboard bundle not served"); process.exit(1); }
           const status = await get("https://nexus.cryptophys.work/api/status");
           if (!status) { console.error("/api/status proxy failed"); process.exit(1); }
           console.log(JSON.stringify(await status.json(), null, 2).slice(0, 2000));

@@ -1,0 +1,17 @@
+import { useEffect, useState } from "react";
+import AppShell from "./components/AppShell";
+import WarRoom from "./pages/WarRoom";
+import Shadow from "./pages/Shadow";
+
+const parse = (hash: string) => hash.replace(/^#\/?/, "").split("/").filter(Boolean)[0] ?? "";
+
+export default function App() {
+  const [route, setRoute] = useState(() => parse(window.location.hash));
+  useEffect(() => {
+    const on = () => { setRoute(parse(window.location.hash)); window.scrollTo({ top: 0 }); };
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  const current = route === "shadow" ? "shadow" : "";
+  return <AppShell current={current}>{current === "shadow" ? <Shadow /> : <WarRoom />}</AppShell>;
+}

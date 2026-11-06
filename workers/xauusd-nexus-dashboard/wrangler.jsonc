@@ -18,6 +18,14 @@
       "entrypoint": "MarketDataReader"
     }
   ],
+  // Nexus UI (React SPA in the Cerebrum Console obsidian design), built from ui/ into ui/dist by the
+  // deploy and validation workflows. run_worker_first: /api routes and redirects are handled by the
+  // Worker, which then serves the assets with their cache headers.
+  "assets": {
+    "directory": "./ui/dist",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
   "observability": {
     "enabled": true
   }
