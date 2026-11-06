@@ -229,8 +229,15 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Authority:** the Global Conclusion's action is the strategy decision. The H1 chain keeps running and is shown beside it as a reference. Kernel reports are unchanged, and never carry levels.
   - **Advisory only:** no orders, no broker and no position size. The rooms still never give levels; the engine's levels come from closed bars only.
 - **Trading assistant panel (right, owner decision 2026-11-06; charts only).** It is display-only: every number comes from the rooms, News Daily, the 5m context and the strategy engine. Nothing is computed outside the parity lane.
-  - *Strategy engine* (first): decision, direction, confidence and the headline; a checklist of the five layers (D1, 4H, 1H, 15m, 5m) with their lean and pass or fail; the plan ladder (TP2, TP1, entry, stop with prices, the level behind each, and the RRR against the 1.5R minimum); vetoes and cautions; and the H1 chain decision as a reference.
-  - *Global Conclusion* (`GET /api/conclusion/global`, `src/global-conclusion.mjs`, deterministic, no model call). One multi-timeframe summary of the D1, 4H, 1H and 15m War Rooms and News Daily:
+  - *Global decision* (first; owner decision 2026-11-06: the Global Conclusion and the strategy engine were redundant, so they are one card). It reads `GET /api/conclusion/global`, which carries the full strategy, and shows:
+    - the decision, direction, global bias with its score, confidence, price and the 1H ATR;
+    - the strategy headline;
+    - one row per timeframe (D1, 4H, 1H, 15m, 5m) plus News: its lean as a diverging bar with a −100 to +100 value, whether it passes the strategy, and its note on hover;
+    - the plan ladder (TP2, TP1, entry, stop with prices, the level behind each, and the RRR against the 1.5R minimum);
+    - vetoes and cautions;
+    - the H1 chain decision and the R38 confirmations as a reference.
+    - **Lean vs bias:** a bias is the BULLISH, BEARISH or NEUTRAL label each agent gives. A room's lean is the confidence-weighted mean of its agents' biases, from −1 to +1; inside ±0.15 the strategy reads it as neutral.
+  - *Global Conclusion* (data only, no card of its own; `GET /api/conclusion/global`, `src/global-conclusion.mjs`, deterministic, no model call). One multi-timeframe summary of the D1, 4H, 1H and 15m War Rooms and News Daily:
     - the global bias from the weighted room leans (below);
     - a heat strip of the five leans, with stale rooms faded;
     - how many timeframes agree;

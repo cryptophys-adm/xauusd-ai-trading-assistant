@@ -92,7 +92,9 @@ export function buildGlobalConclusion({ d1 = null, h4 = null, h1 = null, m15 = n
     alignment: { with_bias: withBias, of: leaning.length },
     h1_decision: decision ? { decision, confidence: h1Decision?.confidence ?? null, candle_key: h1Decision?.candle_key ?? null } : null,
     timeframes, summary, weights: GLOBAL_WEIGHTS,
-    strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline } : null
+    // Owner decision 2026-11-06: the Global Conclusion and the strategy engine are one "Global
+    // decision" in Nexus, so the full strategy (layers, plan, RRR, vetoes) travels here.
+    strategy: strategy ?? null
   };
 }
 
