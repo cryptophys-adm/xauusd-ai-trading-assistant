@@ -46,6 +46,20 @@ const finite = (x) => typeof x === "number" && Number.isFinite(x);
  * t + interval <= now (TradingView marks the last bar as still forming).
  * Bars with inconsistent OHLC are rejected rather than repaired.
  */
+/**
+ * Native bars of 1 hour and longer count as closed only SETTLE_SECONDS after their close.
+ * TradingView returns the just-closed bar before its last ticks are final: production
+ * 2026-11-06, the H1 bar closing 04:00 UTC was pulled at about 04:00:20 with close 4045.145
+ * and volume 48491; the final bar (and the TradingView alert) read 4044.815 and 48987. The
+ * local H1 record built on the provisional bar failed parity on its input and revoked the
+ * approved H1 identities. Shorter native bars (M1, USOIL 5m) keep no delay, so the 15m War
+ * Room is not held back; derived bars inherit their source's timing.
+ */
+export const SETTLE_SECONDS = 90;
+export function settleSeconds(spec) {
+  return spec && !spec.derived_from && spec.seconds >= 3600 ? SETTLE_SECONDS : 0;
+}
+
 export function closedCandlesFromColumns(bars, spec, nowSec) {
   const out = [];
   const n = Array.isArray(bars?.t) ? bars.t.length : 0;
@@ -55,7 +69,7 @@ export function closedCandlesFromColumns(bars, spec, nowSec) {
     if (high < Math.max(open, close, low) || low > Math.min(open, close, high)) {
       throw Object.assign(new Error("inconsistent OHLC bounds"), { code: "invalid_ohlcv_payload" });
     }
-    if (t + spec.seconds > nowSec) continue; // still forming — never fed to the engines
+    if (t + spec.seconds + settleSeconds(spec) > nowSec) continue; // still forming or not yet final — never fed to the engines
     const volume = finite(bars.v?.[i]) ? bars.v[i] : null;
     out.push({
       time: t,
@@ -81,7 +95,7 @@ export function mergeCandles(existing, incoming, retain) {
 export function planRequest(spec, cached, nowSec) {
   const last = cached?.candles?.at(-1);
   if (!last) return { symbol: spec.symbol, interval: spec.interval, count: Math.min(spec.retain, MAX_GATEWAY_COUNT), bootstrap: true };
-  const nextCloseSec = last.time + 2 * spec.seconds;
+  const nextCloseSec = last.time + 2 * spec.seconds + settleSeconds(spec);
   if (nextCloseSec > nowSec) return null;
   const missing = Math.ceil((nowSec - last.time) / spec.seconds) + 2;
   if (missing >= spec.retain) return { symbol: spec.symbol, interval: spec.interval, count: Math.min(spec.retain, MAX_GATEWAY_COUNT), bootstrap: true };
