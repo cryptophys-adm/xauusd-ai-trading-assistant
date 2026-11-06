@@ -324,7 +324,8 @@ test("scheduled cron publishes the 5m parity records end to end (no swallowed fa
 
 test("HUD publisher is off unless HUD_SNAPSHOT_PUBLISH is true, then sends one H1 and one M15 snapshot per closed bar", async () => {
   const sent = [];
-  const ai = { async submitHud(body) { sent.push(body); return { status: 202, body: { status: "accepted" } }; } };
+  // H4 and D1 snapshots (timeframe War Rooms) have their own test below; this one follows H1 and M15.
+  const ai = { async submitHud(body) { if (body.timeframe === "60" || body.timeframe === "15") sent.push(body); return { status: 202, body: { status: "accepted" } }; } };
   assert.equal((await publishHudSnapshots(env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai }))).status, "hud_publish_disabled");
 
   const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai, HUD_SNAPSHOT_PUBLISH: "true" });
@@ -353,4 +354,27 @@ test("HUD publisher is off unless HUD_SNAPSHOT_PUBLISH is true, then sends one H
   const stale = await publishHudSnapshots(e, { now: now + 60 * 60_000, bundle: b });
   assert.equal(stale.charts.H1.status, "no_fresh_close");
   assert.equal(stale.charts.M15.status, "no_fresh_close");
+});
+
+test("HUD publisher also sends the H4 and D1 snapshots of a fresh close, once each", async () => {
+  const sent = [];
+  const ai = { async submitHud(body) { sent.push(body); return { status: 202, body: { status: "accepted" } }; } };
+  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai, HUD_SNAPSHOT_PUBLISH: "true" });
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  const b = await buildBundle(e);
+  for (const [chart, period] of [["H4", "240"], ["D1", "1D"]]) {
+    const last = b.timeframes[chart]?.candles?.at(-1);
+    if (!last) continue;
+    const now = Date.parse(last.close_time) + 60_000;
+    const r = await publishHudSnapshots(e, { now, bundle: b });
+    // A short fixture history is reported, never invented; a close already sent by an earlier
+    // call (the D1 close is also an H4 close) is not sent twice.
+    const status = r.charts[chart].status;
+    assert.ok(["published", "already_published", "insufficient_hud_history"].includes(status), JSON.stringify(r.charts[chart]));
+    if (status !== "insufficient_hud_history") {
+      assert.equal(sent.filter((s) => s.timeframe === period).length, 1);
+      assert.equal((await publishHudSnapshots(e, { now, bundle: b })).charts[chart].status, "already_published");
+    }
+  }
 });

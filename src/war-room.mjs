@@ -17,6 +17,7 @@ import { naturalLanguageErrors } from "./natural-language.mjs";
 import { HUD_IDS, HUD_NAMES } from "./hud-reading.mjs";
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
+import { newsDeskEvidence } from "./news-daily.mjs";
 import {
   ROOM_STANCES, ensureThreadSchema, isFifteenMinuteClose, liveEvidence, m15KeyForClose,
   hudEvidenceLines, rowToThreadMessage, validateRoomModerator, threadInternals
@@ -38,7 +39,7 @@ export function warRoomEnabled(env) {
 /** Desk agents (one role each); the HUD agents follow, one per computed 15m HUD. */
 export const DESK_AGENTS = Object.freeze({
   h1: { name: "H1 Desk", role: "the H1 decision chain and the H1 TradingView reading: the higher-timeframe constraint" },
-  news: { name: "News Analyst", role: "the latest fundamental news consensus" },
+  news: { name: "News Analyst", role: "the fundamental news of the last 24 hours: the daily bias for gold and the headlines behind it" },
   technical: { name: "Technical Analyst", role: "price action only: the closed 15m candles and the 5m execution read" },
   risk: { name: "Risk Manager", role: "risk only: volatility, conflicts between timeframes, what would invalidate a move, and the rule no confirmation, no entry" }
 });
@@ -228,7 +229,7 @@ function conclusionMessages(h1, bus, debate, confirmations) {
 function agentData(agent, evidence, hud, h1Detail, confirmations) {
   switch (agent) {
     case "h1": return { h1_decision: h1Detail.decision, confidence: h1Detail.confidence, reasoning: h1Detail.reasoning, tradingview_h1: evidence.h1.tradingview };
-    case "news": return evidence.news ? { consensus: evidence.news.consensus, confidence: evidence.news.confidence, summary: evidence.news.summary } : { available: false, note: "no news consensus yet" };
+    case "news": return evidence.news ? { window: evidence.news.window ?? "the latest hourly batch", consensus: evidence.news.consensus, confidence: evidence.news.confidence, summary: evidence.news.summary, reasons: evidence.news.reasons, counts: evidence.news.counts, headlines: evidence.news.headlines } : { available: false, note: "no news consensus yet" };
     case "technical": return { candles_15m: evidence.m15.candles, execution_5m: { label: evidence.m5.label, bias: evidence.m5.bias, reading: evidence.m5.reading?.summary ?? null, last_bars: evidence.m5.recent_bars.slice(-6) } };
     case "risk": {
       const c = evidence.m15.candles;
@@ -252,6 +253,9 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   const live = await liveEvidence(env, task, barTime);
   if (live.status) return { status: live.status, calls: 0 };
   const { evidence, synthesis, confirmations } = live;
+  // News Daily (owner decision 2026-11-06): the News Analyst reads the last 24 hours when present.
+  const daily = await newsDeskEvidence(db);
+  if (daily) evidence.news = daily;
   const decision = parseJson(synthesis?.ai_analysis, {})?.decision || {};
   const h1 = { decision: evidence.h1.decision, confidence: evidence.h1.confidence, candle_key: evidence.h1.candle_key, reasoning: clip(decision.reasoning, 400) };
 

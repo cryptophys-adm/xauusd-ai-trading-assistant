@@ -96,10 +96,23 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Calibration:** the owner installs the Prophet R38 and GMI alerts on the 4-hour and daily charts, set to "Any alert() function call" with the same webhook.
     - 24 matches take about 4 trading days on H4 and about 5 weeks on D1.
     - Until then, H4 and D1 readings are unverified.
-  - **Threads (step 4):** `src/timeframe-threads.mjs` runs the H4 and D1 threads, one per closed bar, from the parity sweep cron behind `TF_THREADS_ENABLED`, within `TF_THREADS_MAX_CALLS_PER_HOUR` (production 24, preview 60).
-    - Five desks with one role each: Structure Desk (Prophet R38 and R37 on that chart), GMI Desk, Technical Analyst (closed bars), Macro Desk (Macro & Aether on that chart) and Risk Manager. The moderator writes the TLDR.
-    - A thread runs only when the local prophet or gmi record of that bar exists. The brief stores each desk's calibration status once. An uncalibrated desk speaks at confidence 0.4 or lower.
-    - Messages are stored in `agent_thread_messages` (thread `tf:H4` / `tf:D1`, run = bar open, steps `brief`, `open:*` and `conclusion`). Read API: `GET /api/threads/timeframe?chart=H4|D1`.
+  - **Timeframe War Rooms (owner decision 2026-11-06; supersedes the five-desk H4/D1 threads of step 4):** every Thread, D1, 4H, 1H and 15m, is the consensus of all agents, as in the Live War Room. 15m is the Live War Room; `src/timeframe-threads.mjs` runs the 1H, 4H and D1 rooms.
+    - **Phases:** each closed bar of that chart runs the same three phases: every agent opens on the bus, the minority (by confidence) and the Risk Manager debate for at most 3 minutes, and the moderator writes the TLDR.
+    - **Agents:** the desks plus one agent per HUD computed on that chart.
+      - Desks: H1 Desk (1H only), Higher-Timeframe Desk (the conclusion of the 4H Thread on 1H, of the D1 Thread on 4H), News Analyst (News Daily), Technical Analyst and Risk Manager.
+      - HUD agents come from that bar's HUD snapshot. The pull adapter now also publishes H4 and D1 HUD snapshots (`hud-snapshot.mjs`, timeframes `"240"` and `"1D"`, GMI from `gmi-core-htf.mjs`).
+    - **No webhook dependency:** the rooms run on local computation only: closed bars, the HUD snapshot and the local Prophet R38 record of the bar.
+    - **Calibration:** a HUD statement is verified only where it equals a parity-approved record. On 4H and D1 there are none until the alerts are installed there, so those HUD agents speak at confidence 0.4 or lower.
+    - **No confirmation, no entry:** a BUY or SELL conclusion needs that chart's Prophet R38 confirmation, read from the local record of the bar. The 1H conclusion names the H1 decision when it differs.
+    - **Schedule:** the rooms run from the parity sweep cron in their own `waitUntil`, in parallel, behind `TF_THREADS_ENABLED`, within `TF_THREADS_MAX_CALLS_PER_HOUR` (production 120, preview 150; about 26 calls per room).
+      - A bar waits up to 20 minutes for its HUD snapshot, then runs with the desks only.
+      - Each room runs once per bar.
+    - **Storage and API:** messages are stored in `agent_thread_messages` (thread `tf:H1` / `tf:H4` / `tf:D1`, run = bar open; steps `brief`, `open:*`, `debate:*` and `conclusion`). Read API: `GET /api/threads/timeframe?chart=H1|H4|D1` (also `1H`, `4H`).
+- **News Daily** (owner decision 2026-11-06): `src/news-daily.mjs`, run by the hourly news cron after the hourly analysis, behind `NEWS_DAILY_ENABLED`, within `NEWS_DAILY_MAX_CALLS_PER_HOUR` (production 6, preview 12).
+  - **Input:** the unique articles of the last 24 hours, taken from the stored hourly analyses (no extra TradingView pull), plus the 24-hour moves of gold, the dollar index, WTI oil and the USDT dominance from the cached closed bars.
+  - **Per headline:** each headline gets a gold bias (BULLISH, BEARISH or NEUTRAL) and one plain sentence why. A tag is cached for 3 days, so each run tags only new headlines.
+  - **TLDR:** the News Analyst writes the TLDR: one bias for the day, a summary and one to three reasons. A run is skipped while the 24-hour headline set is unchanged.
+  - **Consumers:** every News Analyst desk reads it, in the Live War Room and the timeframe rooms. Read API: `GET /api/news/daily`.
 
 - Transport: the pull adapter calls `AI_WORKER.submitContext(record)` on the
   AI Worker's `LocalComputationIngress` RPC entrypoint (no shared secret).
@@ -144,7 +157,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - Thread ids are `live15m:<day>`. `GET /api/live` also returns the older `live5m:` history.
   - The 5m context carries the last 12 closed bars (`recent_bars`). The H1 chain strips them.
 - Read APIs: `GET /api/threads?kind=news|h1`, `GET /api/threads/:id` (nested replies; `h1:<candle_key>` serves the H1 bus debate as a thread) and `GET /api/live?since=`.
-- **Nexus layout (owner decision 2026-11-05, Live War Room).** The main panel is the War Room conclusion, with the H1 decision shown as its constraint. Below it, the Live War Room 15m shows the latest discussion only, with no history. The right panel is one "Threads · TLDR" card with tabs D1, H4, H1, 15m and News (owner decision 2026-11-05; no 5m tab for now): H1 and News from `GET /api/tldr`, 15m from `GET /api/war-room/latest`, H4 and D1 from `GET /api/threads/timeframe`. The left panel lists the War Room agents and the worker status.
+- **Nexus layout (owner decision 2026-11-05, Live War Room).** The main panel is the War Room conclusion, with the H1 decision shown as its constraint. Below it, the Live War Room 15m shows the latest discussion only, with no history. The right panel is one card whose top is the tab bar D1 | 4H | 1H | 15m | News (owner decision 2026-11-06; no 5m tab for now). Each timeframe tab shows its whole War Room Thread (TLDR, communication bus, debate): 15m from `GET /api/war-room/latest`; 1H, 4H and D1 from `GET /api/threads/timeframe`. The News tab shows the News Daily TLDR and each headline with its bias (`GET /api/news/daily`). The left panel lists the War Room agents and the worker status.
 - The AI Worker's old `/dashboard` page (Analyst/Counselor/Reasoner chat timeline and raw output) is retired. `GET /dashboard` redirects (302) to the Nexus dashboard (`NEXUS_DASHBOARD_URL`, default `https://nexus.cryptophys.work/`).
 - The dashboard shows agents by name only: Technical Analyst, News Analyst, Risk Manager and Moderator. It never shows model names.
 - Agent text must be natural language: validators reject snake_case field names, dotted evidence paths and key=value pairs in insights, summaries and dissent (`src/natural-language.mjs`). Evidence paths stay in `refs`.

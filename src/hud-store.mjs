@@ -10,8 +10,8 @@ import { containsCredentialFields } from "./evidence-fusion.mjs";
 import { readHud, verifiedFields, HUD_IDS } from "./hud-reading.mjs";
 
 export const HUD_SNAPSHOT_VERSION = "cryptophys.hud-snapshot.v1";
-export const HUD_TIMEFRAMES = Object.freeze(["60", "15"]);
-const KEY = /^OANDA:XAUUSD:(60|15):\d{12,13}$/;
+export const HUD_TIMEFRAMES = Object.freeze(["60", "15", "240", "1D"]);
+const KEY = /^OANDA:XAUUSD:(60|15|240|1D):\d{12,13}$/;
 const MAX_AGE_MS = 30 * 60 * 1000;
 const MAX_BYTES = 64 * 1024;
 const TTL = { expirationTtl: 60 * 60 * 24 * 14 };

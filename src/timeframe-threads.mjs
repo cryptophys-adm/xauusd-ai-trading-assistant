@@ -1,84 +1,137 @@
-// Threads per timeframe (owner decision 2026-11-05, step 4): Nexus shows the Thread of each
-// timeframe as a tab in the right panel: D1, H4, H1 and 15m.
+// Timeframe War Rooms (owner decisions 2026-11-05 and 2026-11-06): Nexus shows one Thread per
+// timeframe as a tab in the right panel, D1, 4H, 1H and 15m, and every Thread is the consensus
+// of all agents, as in the Live War Room:
 //
-//   H1  is the existing Threads 1H (the H1 decision chain and its debate);
-//   15m is the Live War Room 15m (src/war-room.mjs);
-//   H4 and D1 are new and run here, once per closed H4 or D1 bar.
+//   15m is the Live War Room itself (src/war-room.mjs);
+//   1H, 4H and D1 run here, once per closed bar of that chart, in the same three phases:
+//     1. Communication bus: every agent opens with one claim from its own data only;
+//     2. Debate: minority agents (by confidence) and the Risk Manager rebut named agents,
+//        open for at most 3 minutes;
+//     3. Conclusion: the moderator writes the TLDR of that timeframe.
 //
-// An H4/D1 thread has five agents, each with one role and its own data (no redundancy):
-//   structure  Prophet R38 and the R37 shared core on that chart (local records);
-//   gmi        GMI v12.70 on that chart (local records);
-//   technical  the price action of the last closed bars of that chart;
-//   macro      Macro & Aether on that chart (DXY/USDT macro cycle and shift, kinetic spread,
-//              consolidation gravity, Q-gravity, SMRI);
-//   risk       volatility of that chart and what would invalidate a move.
-// The moderator then writes the TLDR for the Nexus tab. Advisory only: stances are discussion
-// positions, never orders, and no price level comes from here.
+// The agents: the desks (H1 Desk on 1H, the Higher-Timeframe Desk, News Analyst, Technical
+// Analyst, Risk Manager) and one agent per HUD computed on that chart (the HUD snapshot of the
+// bar). The rooms run from local computation only, never from a webhook: the bars, the HUD
+// snapshot and the local Prophet R38 record of the bar.
 //
-// Calibration: H4 and D1 earn parity approval only once the owner installs the TradingView
-// alerts on those charts. The brief stores each indicator desk's status once; agents never
-// repeat it, and an uncalibrated desk speaks at confidence <= 0.4.
+// Rules, as in the Live War Room: one role per agent and no repetition; HUD statements are
+// marked verified only where they equal a parity-approved record, and an agent with no
+// verified statement speaks at confidence <= 0.4; no confirmation, no entry (BUY or SELL needs
+// that chart's Prophet R38 confirmation); the 1H conclusion names the H1 decision when it
+// differs. Advisory only: stances are discussion positions, never orders, and no price level
+// comes from here.
 //
-// Runs from the parity sweep cron (at most every 15 minutes), behind TF_THREADS_ENABLED, with
-// its own hourly call budget (TF_THREADS_MAX_CALLS_PER_HOUR).
+// Runs from the parity sweep cron, behind TF_THREADS_ENABLED, within its own hourly budget
+// (TF_THREADS_MAX_CALLS_PER_HOUR).
 import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors } from "./natural-language.mjs";
+import { HUD_IDS, HUD_NAMES } from "./hud-reading.mjs";
+import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
+import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
-import { ensureThreadSchema, rowToThreadMessage, ROOM_STANCES, threadInternals } from "./agent-threads.mjs";
-import { validateOpening, UNCALIBRATED_CONFIDENCE_CAP } from "./war-room.mjs";
+import { ensureThreadSchema, rowToThreadMessage, ROOM_STANCES, hudEvidenceLines, threadInternals } from "./agent-threads.mjs";
+import {
+  validateOpening, validateRebuttal, majorityStance, selectRebutters, UNCALIBRATED_CONFIDENCE_CAP,
+  WAR_ROOM_OPENING_MS, WAR_ROOM_DEBATE_MS, WAR_ROOM_CONCLUSION_MS
+} from "./war-room.mjs";
 import { closedHtfCandleKeys, OBSERVED_PREFIX } from "./parity-sweep.mjs";
-import { computeMacroAether } from "../local-engines/producer/src/macro-aether.mjs";
+import { newsDeskEvidence } from "./news-daily.mjs";
 
 const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson } = threadInternals;
 
-export const TF_THREAD_CHARTS = Object.freeze({
-  H4: { period: "240", series: "4h", label: "4-hour", engines: { prophet: "prophet_h4", gmi: "gmi_h4" } },
-  D1: { period: "1D", series: "1D", label: "daily", engines: { prophet: "prophet_d1", gmi: "gmi_d1" } }
-});
-export const TF_AGENTS = Object.freeze({
-  structure: { name: "Structure Desk", role: "Prophet R38 and the R37 shared structure core on this chart" },
-  gmi: { name: "GMI Desk", role: "the GMI v12.70 verdict, gate and branch on this chart" },
-  technical: { name: "Technical Analyst", role: "price action only: the last closed candles of this chart" },
-  macro: { name: "Macro Desk", role: "the Macro & Aether sensors on this chart: dollar and USDT macro cycle and shift, kinetic spread, volume-profile gravity, fair-value-gap pull and the smart-money reservoir" },
-  risk: { name: "Risk Manager", role: "risk only: volatility of this chart and what would invalidate a move" }
-});
-export const TF_OPENING_MS = 120_000;
-export const TF_CONCLUSION_MS = 60_000;
-const CLAIM_MAX = 320;
 const SYMBOL = "OANDA:XAUUSD";
+export const TF_THREAD_CHARTS = Object.freeze({
+  H1: { period: "60", series: "1h", label: "1-hour", tab: "1H", higher: "H4", minutes: 60 },
+  H4: { period: "240", series: "4h", label: "4-hour", tab: "4H", higher: "D1", minutes: 240 },
+  D1: { period: "1D", series: "1D", label: "daily", tab: "D1", higher: null, minutes: 1440 }
+});
+export const TF_DESKS = Object.freeze({
+  h1: { name: "H1 Desk", role: "the H1 decision chain: its decision, confidence and reasoning" },
+  htf: { name: "Higher-Timeframe Desk", role: "the conclusion of the next higher timeframe's Thread: the backdrop this timeframe trades in" },
+  news: { name: "News Analyst", role: "the fundamental news of the last 24 hours: the daily bias for gold and the headlines behind it" },
+  technical: { name: "Technical Analyst", role: "price action only: the last closed candles of this chart" },
+  risk: { name: "Risk Manager", role: "risk only: volatility of this chart, conflicts with the higher timeframe and the news, what would invalidate a move, and the rule no confirmation, no entry" }
+});
+export const TF_ROOM_MAX_REBUTTALS = 8;
+const CLAIM_MAX = 320;
+const ARGUMENT_MAX = 420;
+/** A bar's room waits for its HUD snapshot this long after the close, then runs without it. */
+export const TF_HUD_WAIT_MS = 20 * 60 * 1000;
 
 export function tfThreadsEnabled(env) {
   return String(env?.TF_THREADS_ENABLED || "").toLowerCase() === "true";
 }
+
+export function tfAgentName(id) {
+  if (TF_DESKS[id]) return TF_DESKS[id].name;
+  if (HUD_NAMES[id]) return HUD_NAMES[id];
+  return id === "moderator" ? "Moderator" : String(id);
+}
+
+/** No confirmation, no entry: BUY or SELL needs that chart's Prophet R38 confirmation. */
+export function tfEntryAllowed(stance, confirmations) {
+  if (stance !== "BUY" && stance !== "SELL") return true;
+  return confirmations?.chart_prophet_r38?.[stance === "BUY" ? "buy_confirmed" : "sell_confirmed"] === true;
+}
+const ruleText = (spec) =>
+  `Rule: no confirmation, no entry. BUY needs a confirmed buy signal of the ${spec.label} Prophet R38; SELL needs a confirmed sell signal. Without the matching confirmation the stance is WAIT, or HOLD / CLOSE for a position already open.`;
 
 const OPENING_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
   properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, confidence: { type: "number" }, claim: { type: "string" } },
   required: ["agent", "stance", "confidence", "claim"]
 });
+const REBUTTAL_SCHEMA = Object.freeze({
+  type: "object", additionalProperties: false,
+  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, confidence: { type: "number" }, rebuts: { type: "array", items: { type: "string" } }, argument: { type: "string" } },
+  required: ["agent", "stance", "confidence", "rebuts", "argument"]
+});
 const CONCLUSION_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
-  properties: { stance: { type: "string", enum: [...ROOM_STANCES] }, confidence: { type: "number" }, summary: { type: "string" }, reasons: { type: "array", items: { type: "string" } } },
-  required: ["stance", "confidence", "summary", "reasons"]
+  properties: { stance: { type: "string", enum: [...ROOM_STANCES] }, confidence: { type: "number" }, summary: { type: "string" }, reasons: { type: "array", items: { type: "string" } }, dissent: { type: "array", items: { type: "string" } } },
+  required: ["stance", "confidence", "summary", "reasons", "dissent"]
 });
 
-const RULES = [
-  "Stances: BUY, SELL, HOLD (keep an existing position), WAIT (stay flat), CLOSE (exit an existing position). They describe the bias of this timeframe for discussion only.",
-  "Never give entry, stop loss, take profit or position size. Never mention calibration, verification or comparators: readers see each desk's status once, next to its name."
+const ROOM_RULES = [
+  "Room stances: BUY, SELL, HOLD (keep an existing position), WAIT (stay flat), CLOSE (exit an existing position). They are discussion positions about this timeframe only.",
+  "Never give entry, stop loss, take profit or position size: price levels come only from the validated H1 decision chain."
 ].join("\n");
 
-/** The moderator's TLDR: a stance, a short summary and one to three reasons, in plain language. */
-export function validateTfConclusion(o) {
+/** Agent ids and rebuttal targets given as display names are mapped to their ids. */
+function normalizeTfNames(o, busAgents) {
+  if (!o || typeof o !== "object") return o;
+  const byName = new Map(busAgents.map((id) => [tfAgentName(id).toLowerCase(), id]));
+  const toId = (r) => (busAgents.includes(r) ? r : byName.get(String(r ?? "").trim().toLowerCase()) ?? r);
+  if (Array.isArray(o.rebuts)) o.rebuts = o.rebuts.map(toId);
+  if (Array.isArray(o.dissent)) o.dissent = o.dissent.map(toId);
+  if (typeof o.agent === "string") o.agent = toId(o.agent);
+  return o;
+}
+
+/**
+ * The moderator's TLDR of one timeframe: stance, summary, one to three reasons and the dissent.
+ * BUY or SELL needs the chart's confirmation; on 1H a stance that differs from the H1 decision
+ * must name it.
+ */
+export function validateTfConclusion(o, { busAgents = [], confirmations = null, h1Decision = null } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
   const errors = [];
   if (!ROOM_STANCES.includes(o.stance)) errors.push("stance_invalid");
   if (!inUnit(o.confidence)) errors.push("confidence_out_of_range");
   if (typeof o.summary !== "string" || !o.summary.trim()) errors.push("summary_missing");
-  else errors.push(...naturalLanguageErrors(o.summary));
-  if (Array.isArray(o.reasons)) o.reasons = o.reasons.filter(r => !(typeof r === "string" && !r.trim()));
-  if (!Array.isArray(o.reasons) || o.reasons.length < 1 || o.reasons.some(r => typeof r !== "string")) errors.push("reasons_invalid");
+  else {
+    errors.push(...naturalLanguageErrors(o.summary));
+    const h1 = h1Decision ? String(h1Decision).toUpperCase() : null;
+    if (h1 && ROOM_STANCES.includes(o.stance) && o.stance !== h1 && !new RegExp(`H1[^.]{0,40}${h1}`, "i").test(o.summary)) errors.push("h1_reference_missing");
+  }
+  if (confirmations && !tfEntryAllowed(o.stance, confirmations)) errors.push("entry_without_confirmation");
+  if (Array.isArray(o.reasons)) o.reasons = o.reasons.filter((r) => !(typeof r === "string" && !r.trim()));
+  if (!Array.isArray(o.reasons) || o.reasons.length < 1 || o.reasons.some((r) => typeof r !== "string")) errors.push("reasons_invalid");
   else for (const r of o.reasons.slice(0, 3)) errors.push(...naturalLanguageErrors(r));
-  return { valid: errors.length === 0, errors };
+  if (o.dissent == null) o.dissent = [];
+  normalizeTfNames(o, busAgents);
+  if (!Array.isArray(o.dissent) || o.dissent.some((d) => !busAgents.includes(d))) errors.push("dissent_invalid");
+  return { valid: errors.length === 0, errors: [...new Set(errors)] };
 }
 
 const round = (x, d = 2) => (typeof x === "number" && Number.isFinite(x) ? Math.round(x * 10 ** d) / 10 ** d : null);
@@ -90,107 +143,183 @@ async function seriesBars(env, key) {
   } catch { return []; }
 }
 
-async function localRecord(env, candleKey, engine) {
+async function localProphet(env, candleKey) {
   for (const prefix of ["localcalc:", OBSERVED_PREFIX]) {
     try {
-      const raw = await env.WEBHOOK_BUFFER?.get?.(prefix + candleKey + ":" + engine);
-      if (raw) return { record: JSON.parse(raw), trusted: prefix === "localcalc:" };
+      const raw = await env.WEBHOOK_BUFFER?.get?.(prefix + candleKey + ":prophet");
+      if (raw) return { record: JSON.parse(raw), approved: prefix === "localcalc:" };
     } catch { /* unreadable: try the next */ }
   }
   return null;
 }
 
-async function parityStatus(db, engine) {
-  try {
-    const row = await db.prepare("SELECT status, consecutive_matches FROM engine_parity_registry WHERE engine = ? ORDER BY CASE status WHEN 'approved' THEN 0 WHEN 'candidate' THEN 1 ELSE 2 END, updated_at DESC LIMIT 1").bind(engine).first();
-    if (row?.status === "approved") return { label: "verified by parity against TradingView", approved: true };
-    return { label: `not yet calibrated against TradingView (${Number(row?.consecutive_matches) || 0} of 24 matches)`, approved: false };
-  } catch { return { label: "not yet calibrated against TradingView", approved: false }; }
+/** The latest conclusion of a timeframe's Thread, for the desk one timeframe below. */
+async function latestConclusion(db, chart) {
+  let row = null;
+  try { row = await db.prepare("SELECT run_id, stance, confidence, body_json FROM agent_thread_messages WHERE thread_id = ? AND step = 'conclusion' AND status = 'ok' ORDER BY run_id DESC LIMIT 1").bind(`tf:${chart}`).first(); } catch { row = null; }
+  if (!row) return null;
+  const body = parseJson(row.body_json, {}) || {};
+  return { timeframe: TF_THREAD_CHARTS[chart].label, bar_open: row.run_id, stance: row.stance, confidence: row.confidence, summary: body.summary ?? null };
 }
 
-/** Evidence for one closed H4 or D1 bar; null fields stay null, never invented. */
+/**
+ * Evidence for one closed 1H, 4H or D1 bar; null when the bar is not in the cached series yet.
+ * Fields that are not available stay null, never invented.
+ */
 export async function tfEvidence(env, chart, candleKey) {
   const spec = TF_THREAD_CHARTS[chart];
+  const db = env.DB;
   const openMs = Number(candleKey.split(":").at(-1));
   const bars = (await seriesBars(env, `${SYMBOL}|${spec.series}`)).filter((b) => Date.parse(b.open_time) <= openMs);
   const last = bars.at(-1);
   if (!last || Date.parse(last.open_time) !== openMs) return null;
-  const recent = bars.slice(-8).map((b) => ({ open: b.open_time, o: round(b.open), h: round(b.high), l: round(b.low), c: round(b.close) }));
+  const candles = bars.slice(-12).map((b) => ({ open: b.open_time, o: round(b.open), h: round(b.high), l: round(b.low), c: round(b.close) }));
   const ranges = bars.slice(-14).map((b) => b.high - b.low);
-  const prophet = await localRecord(env, candleKey, "prophet");
-  const gmi = await localRecord(env, candleKey, "gmi");
-  let macro = null;
+
+  let snapshot = null, hud = null;
   try {
-    const external = {};
-    for (const sym of ["TVC:DXY", "CRYPTOCAP:USDT"]) external[sym] = { H4: { candles: await seriesBars(env, `${sym}|4h`) } };
-    const m = computeMacroAether({ chartBars: bars.slice(-1000), external, chartKey: chart });
-    if (m) { const { open_fvg_targets: _t, ...rest } = m; macro = rest; }
-  } catch { macro = null; }
+    snapshot = await loadHudSnapshot(env, { timeframe: spec.period, candleKey });
+    hud = snapshot ? await hudReadings(env, snapshot) : null;
+  } catch { hud = null; }
+
+  const prophet = await localProphet(env, candleKey);
   const r38 = prophet?.record?.values?.comparable?.prophet_r38 || null;
-  const r37 = prophet?.record?.values?.comparable?.prophet_r37_ssot || null;
-  const g = gmi?.record?.values?.comparable?.gmi_v12_70 || null;
-  const gd = gmi?.record?.values?.diagnostics || {};
+  const funnel = snapshot?.huds?.r37_funnel?.fields || null;
+  const confirmations = {
+    chart_prophet_r38: {
+      buy_confirmed: (r38?.buy_confirmed ?? funnel?.buy_confirmed) === true,
+      sell_confirmed: (r38?.sell_confirmed ?? funnel?.sell_confirmed) === true,
+      approved_by_parity: prophet?.approved === true,
+      source: r38 ? "the local Prophet R38 record of this bar" : funnel ? "the R37 funnel HUD of this bar" : "not available"
+    }
+  };
+
+  let h1 = null;
+  if (chart === "H1") {
+    const synth = await db.prepare("SELECT candle_key, ai_analysis, prophet_metrics, gmi_metrics FROM ai_syntheses WHERE timeframe = '60' OR candle_key LIKE '%:60:%' ORDER BY id DESC LIMIT 1").first();
+    const d = parseJson(synth?.ai_analysis, {})?.decision || {};
+    h1 = synth ? { candle_key: synth.candle_key, decision: String(d.decision || "WAIT").toUpperCase(), confidence: d.confidence ?? null, reasoning: clip(d.reasoning, 400), tradingview: interpretWebhookRow(synth).summary } : null;
+  }
+  const higher = spec.higher ? await latestConclusion(db, spec.higher) : null;
+  const news = await newsDeskEvidence(db);
   return {
     chart, candle_key: candleKey, bar_open: last.open_time, bar_close: last.close_time,
-    technical: { recent, average_range_14: round(ranges.reduce((a, b) => a + b, 0) / Math.max(ranges.length, 1)) },
-    structure: r38 || r37 ? { r38, r37 } : null,
-    gmi: g ? { ...g, branch: gd.branch ?? null, htf_state: gd.htf_state ?? null, ltf_state: gd.ltf_state ?? null, footprint: gd.fp_status ?? null } : null,
-    macro
+    technical: { candles, average_range_14: round(ranges.reduce((a, b) => a + b, 0) / Math.max(ranges.length, 1)) },
+    hud, confirmations, h1, higher, news
   };
 }
 
-function openingMessages(agent, chart, data) {
-  const spec = TF_THREAD_CHARTS[chart], desk = TF_AGENTS[agent];
+function agentData(agent, ev, spec) {
+  switch (agent) {
+    case "h1": return { h1_decision: ev.h1.decision, confidence: ev.h1.confidence, reasoning: ev.h1.reasoning, tradingview_h1: ev.h1.tradingview };
+    case "htf": return ev.higher;
+    case "news": return ev.news;
+    case "technical": return { timeframe: spec.label, closed_candles: ev.technical.candles };
+    case "risk": return {
+      timeframe: spec.label, ranges: ev.technical.candles.map((c) => round(c.h - c.l)), average_range_14: ev.technical.average_range_14,
+      higher_timeframe: ev.higher ? { stance: ev.higher.stance, timeframe: ev.higher.timeframe } : null, h1_decision: ev.h1?.decision ?? null,
+      news_bias: ev.news?.consensus ?? null, confirmations: ev.confirmations
+    };
+    default: return { hud: HUD_NAMES[agent], timeframe: spec.label, reading: hudEvidenceLines(ev.hud?.readings?.[agent]) };
+  }
+}
+
+const deskList = (roster) => roster.filter((id) => TF_DESKS[id]).map((id) => `the ${TF_DESKS[id].name}`).join(", ");
+
+function openingMessages(agent, data, spec, roster) {
+  const desk = TF_DESKS[agent];
+  const riskRule = agent === "risk" ? [ruleText(spec) + " Judge every possible entry against the confirmations in your data, and say plainly whether any entry is confirmed."] : [];
+  const who = desk
+    ? `You are the ${desk.name} in the XAUUSD ${spec.label} War Room, which meets at every closed ${spec.label} candle. Your only role: ${desk.role}.`
+    : `You are ${HUD_NAMES[agent]}, one agent per Pine HUD, in the XAUUSD ${spec.label} War Room. You speak only about the ${HUD_NAMES[agent]} HUD on the ${spec.label} candle that just closed. Lean on the statements marked verified by parity. The readers already see your calibration status once, next to your name: never mention calibration, verification or comparators in your claim. When none of your statements is verified, keep your confidence at or below ${UNCALIBRATED_CONFIDENCE_CAP}.`;
   return chatMessages([
-    `You are the ${desk.name} in the XAUUSD ${spec.label} Thread, which meets at every closed ${spec.label} candle. Your only role: ${desk.role}.`,
+    who,
     RULES_NO_REFS,
-    RULES,
-    "Give one claim from your own data only. Do not repeat what the other desks cover (Structure Desk, GMI Desk, Technical Analyst, Macro Desk, Risk Manager).",
-    `When your data is not yet calibrated, keep your confidence at or below ${UNCALIBRATED_CONFIDENCE_CAP}.`,
+    ROOM_RULES,
+    ...riskRule,
+    `This is your opening on the communication bus: one claim from your own data only. Do not repeat what other roles cover (the other agents are ${deskList(roster)} and one agent per HUD).`,
     `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"claim":"<= ${CLAIM_MAX - 40} chars"}`,
     "YOUR DATA:",
-    JSON.stringify(data)
+    JSON.stringify(data ?? { available: false })
   ]);
 }
 
-function conclusionMessages(chart, bus) {
-  const spec = TF_THREAD_CHARTS[chart];
+function rebuttalMessages(agent, own, bus, spec, unanimous, confirmations) {
+  const riskRule = agent === "risk" ? [ruleText(spec) + " Rebut every agent on the bus that proposes BUY or SELL without the matching confirmation. CONFIRMATIONS: " + JSON.stringify(confirmations)] : [];
   return chatMessages([
-    `You are the moderator of the XAUUSD ${spec.label} Thread. Write the TLDR for the ${spec.label} tab: the bias of this timeframe in one short summary and one to three reasons.`,
+    `You are ${tfAgentName(agent)} in the XAUUSD ${spec.label} War Room debate${TF_DESKS[agent] ? " (" + TF_DESKS[agent].role + ")" : ""}. The debate is open for at most 3 minutes.`,
     RULES_NO_REFS,
-    RULES,
-    "Weigh claims by their argument and evidence, not by the number of desks; a desk verified by parity outweighs an uncalibrated one (each entry states its status). Call desks by their names. No repetition.",
-    'Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"summary":"<= 320 chars","reasons":["<= 160 chars", "at most 3"]}',
-    "THE DESKS:",
+    ROOM_RULES,
+    unanimous
+      ? "The bus is unanimous. Stress-test the consensus: challenge the claim most likely to be wrong, put that agent's id in rebuts, and say what would invalidate the consensus. Add only new reasoning from your own role; never restate a claim."
+      : "Rebut the strongest claims you disagree with and put those agents' ids in rebuts. Add only new reasoning from your own role; never restate your opening or another agent's claim. You may change your stance if the bus convinced you.",
+    ...riskRule,
+    "In the argument, call agents by their names, never by an id. Each bus entry says how much of that agent's data is verified by parity: weigh verified evidence above uncalibrated readings, and never discuss calibration itself.",
+    `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"rebuts":["<agent id>"],"argument":"<= ${ARGUMENT_MAX - 40} chars"}`,
+    "YOUR OPENING: " + JSON.stringify({ stance: own.stance, confidence: own.confidence, claim: own.claim }),
+    "COMMUNICATION BUS (id, name, stance, confidence, evidence, claim):",
     JSON.stringify(bus)
   ]);
 }
 
-/** Runs the thread of one closed H4 or D1 bar; idempotent per bar. */
+function conclusionMessages(spec, bus, debate, confirmations, h1) {
+  return chatMessages([
+    `You are the moderator of the XAUUSD ${spec.label} War Room. The debate is closed. Write the TLDR of the ${spec.label} Thread: the consensus of the room on this timeframe.`,
+    RULES_NO_REFS,
+    ROOM_RULES,
+    ...(h1 ? [`The H1 decision chain decided ${h1.decision}: if your stance differs from it, the summary must say "H1 decision: ${h1.decision}" and why the room still differs.`] : []),
+    ruleText(spec) + " The conclusion obeys it: BUY or SELL only with the matching confirmation below. CONFIRMATIONS: " + JSON.stringify(confirmations),
+    "Weigh claims by their argument and by their evidence, not by the number of agents: a claim built on data verified by parity outweighs one built on uncalibrated readings (each bus entry states which). No repetition: the summary states the conclusion once, each reason adds something new, and dissent lists the ids of agents whose stance still differs from yours. In the summary and reasons, call agents by their names, never by an id, and never discuss calibration itself.",
+    'Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"summary":"<= 360 chars","reasons":["<= 160 chars", "at most 3"],"dissent":["<agent id>"]}',
+    "COMMUNICATION BUS:",
+    JSON.stringify(bus),
+    "DEBATE:",
+    JSON.stringify(debate)
+  ]);
+}
+
+/** Runs the War Room of one closed 1H, 4H or D1 bar; idempotent per bar. */
 export async function runTimeframeThread(env, { chart, candleKey }, { clock = () => Date.now() } = {}) {
   const spec = TF_THREAD_CHARTS[chart];
   if (!spec) return { status: "unsupported_chart" };
   const db = env.DB;
   await ensureThreadSchema(db);
-  const evidence = await tfEvidence(env, chart, candleKey);
-  if (!evidence) return { status: "no_bar" };
-  if (!evidence.structure && !evidence.gmi) return { status: "no_local_records" };
-  const runId = evidence.bar_open;
+  const ev = await tfEvidence(env, chart, candleKey);
+  if (!ev) return { status: "no_bar" };
+  const runId = ev.bar_open;
   const threadId = `tf:${chart}`;
-  await upsertThread(db, { id: threadId, kind: "tf", refKey: chart, title: `Thread ${chart} · XAUUSD ${spec.label}`, post: null, now: clock() });
-  const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, runId).all()).results || []).map(r => [r.step, rowToThreadMessage(r)]));
+  await upsertThread(db, { id: threadId, kind: "tf", refKey: chart, title: `Thread ${spec.tab} · XAUUSD ${spec.label} War Room`, post: null, now: clock() });
+  const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, runId).all()).results || []).map((r) => [r.step, rowToThreadMessage(r)]));
   if (existing.get("conclusion")?.status === "ok") return { status: "already_complete", calls: 0 };
 
-  const [pStatus, gStatus] = await Promise.all([parityStatus(db, spec.engines.prophet), parityStatus(db, spec.engines.gmi)]);
-  const roster = Object.keys(TF_AGENTS).filter(id => (id === "structure" ? evidence.structure : id === "gmi" ? evidence.gmi : id === "macro" ? evidence.macro : true));
-  const status = { structure: pStatus, gmi: gStatus, technical: { label: "closed TradingView bars" }, macro: { label: "not yet calibrated against TradingView" }, risk: { label: "closed TradingView bars" } };
-  const base = (step, agent) => ({ thread_id: threadId, run_id: runId, step, agent, parent_id: null, bar_time: evidence.bar_close });
+  const roster = [
+    ...(ev.h1 ? ["h1"] : []), ...(ev.higher ? ["htf"] : []), ...(ev.news ? ["news"] : []), "technical", "risk",
+    ...HUD_IDS.filter((id) => ev.hud?.readings?.[id]?.available)
+  ];
+  const calibration = Object.fromEntries(roster.map((id) => {
+    const lines = ev.hud?.readings?.[id]?.lines;
+    if (Array.isArray(lines)) return [id, { verified_lines: lines.filter((l) => l.verified).length, total_lines: lines.length }];
+    if (id === "h1") return [id, { label: "H1 decision chain" }];
+    if (id === "htf") return [id, { label: `the ${ev.higher.timeframe} Thread` }];
+    if (id === "news") return [id, { label: "news of the last 24 hours" }];
+    return [id, { label: `closed ${spec.label} bars` }];
+  }));
+  const evidenceNote = (id) => {
+    const c = calibration[id] || {};
+    if (c.total_lines == null) return c.label || null;
+    return c.verified_lines ? `${c.verified_lines} of ${c.total_lines} statements verified by parity` : "no statement verified by parity yet";
+  };
+  const base = (step, agent, parent_id = null) => ({ thread_id: threadId, run_id: runId, step, agent, parent_id, bar_time: ev.bar_close });
   if (!existing.has("brief")) {
-    await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { chart, candle_key: candleKey, roster, calibration: Object.fromEntries(roster.map(id => [id, { label: status[id].label }])), bar: evidence.technical.recent.at(-1) } });
+    await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: {
+      chart, candle_key: candleKey, roster, calibration, confirmations: ev.confirmations, bar: ev.technical.candles.at(-1) ?? null,
+      hud_snapshot: Boolean(ev.hud), h1: ev.h1 ? { decision: ev.h1.decision, confidence: ev.h1.confidence } : null,
+      higher: ev.higher ? { timeframe: ev.higher.timeframe, stance: ev.higher.stance } : null, news: ev.news ? { consensus: ev.news.consensus } : null
+    } });
   }
 
-  const tfEnv = { ...env, MULTI_AGENT_FALLBACK_MODEL: env.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL };
-  const maxPerHour = Number(env.TF_THREADS_MAX_CALLS_PER_HOUR ?? 24);
+  const roomEnv = { ...env, MULTI_AGENT_FALLBACK_MODEL: env.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL };
+  const maxPerHour = Number(env.TF_THREADS_MAX_CALLS_PER_HOUR ?? 120);
   let remaining = 0;
   try { remaining = (Number.isFinite(maxPerHour) ? maxPerHour : 0) - (await callsInLastHour(db, clock(), "tf")); } catch { remaining = 0; }
   let calls = 0;
@@ -198,68 +327,122 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
     const deadline = clock() + ms;
     const runState = { primaryError: null };
     const budgetOk = async () => clock() < deadline && remaining-- > 0;
-    return (stepBase, opts) => { calls += 1; return runStep(tfEnv, db, stepBase, { ...opts, deadline, clock, runState, budgetOk }); };
+    return (stepBase, opts) => { calls += 1; return runStep(roomEnv, db, stepBase, { ...opts, deadline, clock, runState, budgetOk }); };
   };
-  const dataFor = (id) => ({
-    structure: { status: status.structure.label, ...evidence.structure },
-    gmi: { status: status.gmi.label, ...evidence.gmi },
-    technical: evidence.technical,
-    macro: { status: status.macro.label, ...evidence.macro },
-    risk: { average_range_14: evidence.technical.average_range_14, recent: evidence.technical.recent.slice(-4), structure: evidence.structure?.r38 ?? null }
-  })[id];
-  const uncalibrated = (id) => (id === "structure" && !pStatus.approved) || (id === "gmi" && !gStatus.approved) || id === "macro";
 
-  const open = phase(TF_OPENING_MS);
-  const openings = await Promise.all(roster.map(agent => {
+  // Phase 1: the communication bus.
+  const open = phase(WAR_ROOM_OPENING_MS);
+  const openings = await Promise.all(roster.map((agent) => {
     const prior = existing.get("open:" + agent);
     if (prior?.status === "ok") return prior;
     return open(base("open:" + agent, agent), {
-      messages: openingMessages(agent, chart, dataFor(agent)), schemaName: "tf_thread_opening", schema: OPENING_SCHEMA,
-      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateOpening(o, agent, { verifiedLines: uncalibrated(agent) ? 0 : null }),
-      toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), name: TF_AGENTS[agent].name }, refs: [] })
+      messages: openingMessages(agent, agentData(agent, ev, spec), spec, roster), schemaName: "tf_room_opening", schema: OPENING_SCHEMA,
+      maxTokens: BUS_MAX_TOKENS.agent, effort: "low",
+      validate: (o) => validateOpening(normalizeTfNames(o, [agent]), agent, { verifiedLines: calibration[agent]?.total_lines == null ? null : calibration[agent].verified_lines }),
+      toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), name: tfAgentName(agent) }, refs: [] })
     });
   }));
-  const answered = openings.filter(m => m?.status === "ok");
+  const answered = openings.filter((m) => m?.status === "ok");
   if (!answered.length) return { status: "no_openings", calls };
-  const bus = answered.map(m => ({ id: m.agent, name: TF_AGENTS[m.agent]?.name ?? m.agent, status: status[m.agent]?.label ?? null, stance: m.stance, confidence: m.confidence, claim: m.claim }));
-  const conclude = phase(TF_CONCLUSION_MS);
+  const bus = answered.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, confidence: m.confidence, evidence: evidenceNote(m.agent), claim: m.claim }));
+  const busAgents = bus.map((b) => b.id);
+
+  // Phase 2: the debate, open for at most 3 minutes.
+  const majority = majorityStance(answered, ev.h1?.decision ?? ev.higher?.stance ?? "WAIT");
+  const rebutters = selectRebutters(answered, majority, TF_ROOM_MAX_REBUTTALS);
+  const unanimous = answered.every((m) => m.stance === majority);
+  const debateStep = phase(WAR_ROOM_DEBATE_MS);
+  const openingId = new Map(answered.map((m) => [m.agent, m.id]));
+  const debate = (await Promise.all(rebutters.map((agent) => {
+    const prior = existing.get("debate:" + agent);
+    if (prior?.status === "ok") return prior;
+    const own = answered.find((m) => m.agent === agent);
+    return debateStep(base("debate:" + agent, agent, openingId.get(agent) ?? null), {
+      messages: rebuttalMessages(agent, own, bus, spec, unanimous, ev.confirmations), schemaName: "tf_room_rebuttal", schema: REBUTTAL_SCHEMA,
+      maxTokens: BUS_MAX_TOKENS.agent, effort: "low",
+      validate: (o) => validateRebuttal(normalizeTfNames(o, busAgents), agent, busAgents, { unanimous }),
+      toBody: (o) => ({ body: { argument: clip(o.argument, ARGUMENT_MAX), rebuts: [...new Set(o.rebuts)].slice(0, 4), name: tfAgentName(agent) }, refs: [] })
+    });
+  }))).filter((m) => m?.status === "ok");
+
+  // Phase 3: the TLDR of this timeframe.
+  const conclude = phase(WAR_ROOM_CONCLUSION_MS);
   await conclude(base("conclusion", "moderator"), {
-    messages: conclusionMessages(chart, bus), schemaName: "tf_thread_conclusion", schema: CONCLUSION_SCHEMA,
-    maxTokens: BUS_MAX_TOKENS.moderator, effort: "low", validate: validateTfConclusion,
-    toBody: (o) => ({ body: { summary: clip(o.summary, 400), reasons: o.reasons.slice(0, 3).map(r => clip(r, 200)) }, refs: [] })
+    messages: conclusionMessages(spec, bus, debate.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument })), ev.confirmations, ev.h1),
+    schemaName: "tf_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low",
+    validate: (o) => validateTfConclusion(o, { busAgents, confirmations: ev.confirmations, h1Decision: ev.h1?.decision ?? null }),
+    toBody: (o) => ({ body: { summary: clip(o.summary, 400), reasons: o.reasons.slice(0, 3).map((r) => clip(r, 200)), dissent: [...new Set(o.dissent)], majority }, refs: [] })
   });
-  return { status: "complete", calls, openings: answered.length };
+  return { status: "complete", calls, openings: answered.length, rebuttals: debate.length };
 }
 
-/** Runs the thread of the latest closed H4 and D1 bar when its local records are in. */
+/** The latest closed H1 bar key (H1 bars are epoch-aligned). */
+export function closedH1Key(now) {
+  const h = 3600_000;
+  return `${SYMBOL}:60:${Math.floor(now / h) * h - h}`;
+}
+
+/**
+ * The bars whose room is due: the latest closed 1H, 4H and D1 bar. A bar waits for its HUD
+ * snapshot for TF_HUD_WAIT_MS after its close, then runs with the desks only.
+ */
+async function dueBars(env, now) {
+  const keys = [closedH1Key(now), ...(await closedHtfCandleKeys(env, now, { lookback: 1 }))];
+  const due = [];
+  for (const key of keys) {
+    const period = key.split(":")[2];
+    const chart = Object.keys(TF_THREAD_CHARTS).find((c) => TF_THREAD_CHARTS[c].period === period);
+    if (!chart) continue;
+    const closeMs = Number(key.split(":").at(-1)) + TF_THREAD_CHARTS[chart].minutes * 60_000;
+    let snapshot = null;
+    try { snapshot = await env.SIGNAL_CACHE?.get?.(`hud:${period}:${key}`); } catch { snapshot = null; }
+    if (!snapshot && now - closeMs < TF_HUD_WAIT_MS) continue;
+    due.push({ chart, key });
+  }
+  return due;
+}
+
+/** Runs the due 1H, 4H and D1 rooms in parallel; each is idempotent per bar. */
 export async function runPendingTimeframeThreads(env, { now = Date.now(), clock = () => Date.now() } = {}) {
   if (!tfThreadsEnabled(env)) return { status: "disabled" };
-  const keys = await closedHtfCandleKeys(env, now, { lookback: 1 });
+  const due = await dueBars(env, now);
   const out = {};
-  for (const key of keys) {
-    const chart = key.split(":")[2] === "240" ? "H4" : "D1";
+  await Promise.all(due.map(async ({ chart, key }) => {
     try { out[chart] = await runTimeframeThread(env, { chart, candleKey: key }, { clock }); }
-    catch (error) { out[chart] = { status: "error", error: error instanceof Error ? error.name : "UnknownError" }; }
-  }
+    catch (error) { out[chart] = { status: "error", error: error instanceof Error ? error.name : "UnknownError", message: error instanceof Error ? error.message.slice(0, 200) : null }; }
+  }));
   return { status: "ok", charts: out };
 }
 
-/** The latest H4 or D1 thread for its Nexus tab. */
+/** The latest 1H, 4H or D1 room for its Nexus tab: roster, bus, debate and TLDR. */
 export async function readTimeframeThread(db, chart) {
-  if (!TF_THREAD_CHARTS[chart]) return null;
+  const spec = TF_THREAD_CHARTS[chart];
+  if (!spec) return null;
   await ensureThreadSchema(db);
   const threadId = `tf:${chart}`;
   const run = (await db.prepare("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id = ?").bind(threadId).first())?.r;
   if (!run) return null;
   const rows = ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(threadId, run).all()).results || []).map(rowToThreadMessage);
-  const brief = rows.find(m => m.step === "brief");
+  const brief = rows.find((m) => m.step === "brief");
   const order = new Map((brief?.roster || []).map((id, i) => [id, i]));
-  const posts = rows.filter(m => m.step.startsWith("open:")).sort((a, b) => (order.get(a.agent) ?? 99) - (order.get(b.agent) ?? 99))
-    .map(m => ({ id: m.agent, name: TF_AGENTS[m.agent]?.name ?? m.agent, status: m.status, stance: m.stance, confidence: m.confidence, claim: m.claim ?? null, calibration: brief?.calibration?.[m.agent]?.label ?? null }));
-  const c = rows.find(m => m.step === "conclusion");
+  const byRoster = (a, b) => (order.get(a.id) ?? 99) - (order.get(b.id) ?? 99);
+  const note = (id) => {
+    const c = brief?.calibration?.[id];
+    if (!c) return null;
+    if (c.total_lines == null) return c.label ?? null;
+    return c.verified_lines ? `${c.verified_lines} of ${c.total_lines} statements verified by parity` : "not yet calibrated";
+  };
+  const pick = (m) => ({ id: m.agent, name: tfAgentName(m.agent), status: m.status, stance: m.stance, confidence: m.confidence, ts: m.ts, claim: m.claim ?? null, argument: m.argument ?? null, rebuts: m.rebuts ?? [], rebuts_names: (m.rebuts || []).map(tfAgentName), calibration: note(m.agent) });
+  const openings = rows.filter((m) => m.step.startsWith("open:")).map(pick).sort(byRoster);
+  const debate = rows.filter((m) => m.step.startsWith("debate:")).map(pick).sort(byRoster);
+  const c = rows.find((m) => m.step === "conclusion");
   return {
-    tf: chart, bar_open: run, bar_close: brief?.bar_time ?? rows[0]?.bar_time ?? null, candle_key: brief?.candle_key ?? null,
-    conclusion: c ? { status: c.status, stance: c.stance, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [] } : null,
-    posts
+    tf: chart, tab: spec.tab, bar_open: run, bar_close: brief?.bar_time ?? rows[0]?.bar_time ?? null, candle_key: brief?.candle_key ?? null,
+    phase: c?.status === "ok" ? "closed" : debate.length ? "debate" : "opening",
+    confirmations: brief?.confirmations ?? null, hud_snapshot: brief?.hud_snapshot ?? null,
+    roster: (brief?.roster || []).map((id) => ({ id, name: tfAgentName(id), calibration: note(id) })),
+    conclusion: c ? { status: c.status, stance: c.stance, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [], dissent: (c.dissent || []).map((id) => ({ id, name: tfAgentName(id) })), majority: c.majority ?? null } : null,
+    openings,
+    debate
   };
 }
