@@ -11,6 +11,7 @@ what changed and when, by merge commit and PR.
   - The bar is proven when the candle has an approved local record and a matching parity comparison (which includes the input bar), and no input mismatch.
   - Such statements lift the 0.4 confidence cap in the 15m War Room and in the 1H, 4H and D1 rooms. Engine internals stay not yet calibrated.
   - Agents, the debate and the moderator see the tier. Nexus shows it in the badge, for example "1 verified · 3 from verified bars of 4".
+  - CI: the preview deploy now also retries a Cloudflare API outage (5xx, "no healthy upstream") with a 30, 60 and 90 s backoff. Before, one outage failed preview-e2e before any test ran.
 - feat(parity, health): architecture gaps 1 and 2 (owner decision 2026-11-06).
   - **Gap 1: one bad bar no longer revokes the H1 chain.**
     - When only the input bar differs from TradingView and every indicator field agrees, the result is `input_mismatch`. It neither counts nor revokes, and the candle stays out of the trusted lane.
