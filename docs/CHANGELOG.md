@@ -15,6 +15,9 @@ what changed and when, by merge commit and PR.
     - It checks for: a revoked parity identity, an input mismatch, a missing local H1 record, a room without a conclusion, Workers AI rate-limit losses, a stale News Daily, and a stale War Room.
     - It reports a `warning` when an alert opens and an `info` when it resolves, from `xauusd-risk-manager` to the platform kernel (at most 3 an hour, never `critical`).
     - Nexus shows the open alerts as its Priority Queue.
+  - **Rate-limited model calls retry once.** A call that hits the Workers AI per-minute limit (3021) waits 12 seconds and retries the same model once, within its deadline. It no longer marks the primary model as failed for the rest of the run.
+    - The limit is shared by every room and by the preview-e2e runs of the same account.
+    - A preview run beside the 15m War Room lost two HUD openings to it.
 - feat(nexus): Nexus rebuilt in the Cerebrum Console obsidian design (owner decision 2026-11-06), so it can merge into the Console control panel. The `nexus` subdomain will later replace `home`.
   - **Stack:** a React SPA in `workers/xauusd-nexus-dashboard/ui` with the same stack and palette as `workers/console/ui`: React, Vite, Tailwind obsidian, lucide, framer-motion and the three.js neural mesh. It is served as Workers Static Assets.
   - **Layout:**
