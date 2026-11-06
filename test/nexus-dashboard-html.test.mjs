@@ -81,6 +81,11 @@ test("the UI keeps the Console's obsidian palette and calls only same-origin rea
   const keyLevels = ui("src/components/KeyLevelAgent.tsx");
   for (const word of ["Key Level Agent", "candidate zones", "key_levels", "sources"]) assert.ok(keyLevels.includes(word), word);
   assert.ok(assistant.indexOf("<KeyLevelAgent") > assistant.indexOf("<GlobalDecision"), "the zones follow the decision");
+  // Owner request 2026-11-06: the zones are drawn on the chart, with the plan's price lines.
+  const chartSrc = ui("src/components/PriceChart.tsx");
+  assert.match(chartSrc, /attachPrimitive\(zonesRef\.current\)/);
+  for (const word of ["key_levels?.candidates", "createPriceLine", "\"Stop\"", "TP1", "TP2", ">Zones<"]) assert.ok(chartSrc.includes(word), word);
+  assert.match(ui("src/lib/zones-primitive.ts"), /drawBackground/, "the bands sit behind the candles");
   for (const card of ["Market sentiment", "Trend by timeframe", "Macro trend", "Intraday trend", "Swing trend", "Structure", "Confirmation", "Levels", "Regime", "Agent consensus", "Macro drivers", "Session clock"]) assert.ok(assistant.includes(card), card);
   assert.ok(assistant.indexOf("<GlobalConclusion />") < assistant.indexOf("<SentimentCard />"), "the Global Conclusion comes first");
   const api = ui("src/lib/api.ts");

@@ -606,7 +606,7 @@ jobs:
           assert.equal(keyLevelsResponse.status, 200, "the Key Level Agent is served");
           const keyLevels = (await keyLevelsResponse.json()).key_levels;
           assert.ok(Array.isArray(keyLevels.zones) && Array.isArray(keyLevels.candidates), "zones and candidates");
-          assert.ok(keyLevels.candidates.every((z) => z.sources >= 2), "a candidate has two or more sources");
+          assert.ok(keyLevels.candidates.every((z) => z.sources >= 3 && z.score >= 3), "a candidate has three or more sources and at least medium strength");
           console.log("KEY LEVELS PROOF " + JSON.stringify({ price: keyLevels.price, raw: keyLevels.raw_count, zones: keyLevels.zones.length, candidates: keyLevels.candidates.length, summary: keyLevels.summary }));
           const legacyDashboard = await fetch(base + "/dashboard", { redirect: "manual" });
           assert.equal(legacyDashboard.status, 302, "the old debate/raw dashboard redirects to Nexus");

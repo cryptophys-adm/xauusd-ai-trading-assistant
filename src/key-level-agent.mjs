@@ -13,13 +13,16 @@
 //   round numbers    every 50 dollars 0.8, every 25 dollars 0.4, near price
 // A zone is a run of levels, sorted by price, whose span stays within the tolerance (0.3 x the 1H
 // ATR, at least 1 dollar). Its score is the sum of its weights; its sources are the distinct
-// (kind, timeframe) pairs. Candidate: 2+ sources. Strength: strong (score >= 6), medium (>= 3), weak.
+// (kind, timeframe) pairs. Strength: strong (score >= 6), medium (>= 3), weak. Candidate (owner decision
+// 2026-11-06, tightened after production showed 14 of 18 zones at 2+ sources): 3+ sources and at
+// least medium strength.
 
 export const KEY_LEVEL_VERSION = "cryptophys.key-level-agent.v1";
 export const TF_WEIGHT = Object.freeze({ "15": 1, "60": 1.5, "240": 2, D: 2.5, "1D": 2.5, W: 3 });
 const TF_NAME = { "15": "15m", "60": "1H", "240": "4H", D: "daily", "1D": "daily", W: "weekly" };
 const CAMARILLA_WEIGHT = { h3: 0.6, l3: 0.6, h4: 1, l4: 1, h5: 0.8, l5: 0.8 };
 const SWING_LOOKBACK = 60, SWINGS_PER_SIDE = 4, ROUND_RANGE_ATR = 4;
+export const CANDIDATE_MIN_SOURCES = 3, CANDIDATE_MIN_SCORE = 3;
 
 const isNum = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
 const r2 = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
@@ -110,7 +113,7 @@ export function clusterLevels(levels, tolerance, price = null) {
     const role = !isNum(price) ? null : price >= low - tolerance / 3 && price <= high + tolerance / 3 ? "at price" : center < price ? "support" : "resistance";
     return {
       low: r2(low), high: r2(high), price: r2(center), score: r2(score), sources: sources.length,
-      candidate: sources.length >= 2, strength, role,
+      candidate: sources.length >= CANDIDATE_MIN_SOURCES && score >= CANDIDATE_MIN_SCORE, strength, role,
       label: sorted.slice(0, 3).map((x) => x.label).join(" / ") + (m.length > 3 ? ` +${m.length - 3}` : ""),
       members: sorted.map((x) => ({ price: x.price, label: x.label, kind: x.kind, weight: x.weight }))
     };

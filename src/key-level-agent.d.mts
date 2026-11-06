@@ -4,3 +4,5 @@ export function swings(bars: unknown[], options?: { lookback?: number; perSide?:
 export function rawLevels(input?: Record<string, any>): Array<Record<string, any>>;
 export function clusterLevels(levels: Array<Record<string, any>>, tolerance: number, price?: number | null): Array<Record<string, any>>;
 export function buildKeyLevels(input?: Record<string, any>): Record<string, any>;
+export const CANDIDATE_MIN_SOURCES: number;
+export const CANDIDATE_MIN_SCORE: number;
