@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- fix(bus): a Workers AI capacity error (3040, "Capacity temporarily exceeded") gets the same single wait-and-retry as the per-minute limit (3021). Production 12:01: every opening of the 15m War Room and the News Daily TLDR failed on it, and the 12:15 room ran normally.
 - feat(prophet): Prophet R38 and R37 read as one indicator (owner decision 2026-11-06, "so it is not ambiguous").
   - **Why one indicator:** both share one MizanLib structure core; their `d_enc` and subtype were identical on all 55 production H1 candles.
   - **What R37 adds:** its consensus direction was bullish or bearish on 29 of them, while R38's signal was set once. That consensus direction is the bias Prophet seemed to lack.
