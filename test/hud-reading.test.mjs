@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readHud, verifiedFields, HUD_IDS, HUD_NAMES } from "../src/hud-reading.mjs";
+import { readHud, verifiedFields, HUD_IDS, HUD_NAMES, calibrationCounts, calibrationNote, calibratedLines } from "../src/hud-reading.mjs";
 import { naturalLanguageErrors } from "../src/natural-language.mjs";
 import { buildHudSnapshot } from "../local-engines/producer/src/hud-snapshot.mjs";
 import { buildH1LocalCalculations } from "../local-engines/producer/src/h1-producer.mjs";
@@ -55,6 +55,27 @@ test("verified marks only fields equal to the approved record, and only lines bu
   // Without an approved record nothing is verified.
   assert.deepEqual(verifiedFields(prophet, null), []);
   assert.ok(readHud("prophet", prophet).lines.every(l => l.verified === false));
+});
+
+test("computed from verified bars: only pure bar formulas, and only when the candle's bar is verified", () => {
+  const chronos = { fields: { session_london: true, session_new_york: true, daily_cpr: { position: "above_tc", pivot: 4000, bc: 3990, tc: 4010 }, weekly_cpr: { position: "inside", pivot: 3980, bc: 3970, tc: 3990 }, verdict: 3 }, parity: { verdict: "gmi_v12_70.verdict" } };
+  const eyes = { fields: { close: 4050, camarilla: { D: { h4: 4100, h3: 4070, l3: 4010, l4: 3990 }, W: { h4: 4200, h3: 4150, l3: 3950, l4: 3900 } }, band: { D: "l3_h3", W: "l3_h3" } } };
+  const fabio = { fields: { close: 4050, vah: 4071, val: 3894, poc: 3948, footprint_status: "NEUTRAL" } };
+
+  const withBars = readHud("chronos_matrix", { ...chronos, verified: ["verdict"], bars_verified: true });
+  assert.deepEqual(withBars.lines.map(l => [l.verified, l.derived]), [[false, true], [false, true], [false, true], [true, false]], "sessions and both pivot lines are bar formulas; the verdict stays parity verified");
+  assert.deepEqual(calibrationCounts(withBars.lines), { verified_lines: 1, derived_lines: 3, total_lines: 4 });
+  assert.equal(calibrationNote(calibrationCounts(withBars.lines)), "1 verified by parity, 3 computed from verified bars (of 4 statements)");
+
+  assert.ok(readHud("interstellar_eyes", { ...eyes, bars_verified: true }).lines.every(l => l.derived && !l.verified));
+  assert.ok(readHud("fabio_amt", { ...fabio, bars_verified: true }).lines.every(l => !l.derived), "the value area is a GMI volume-profile internal, not a bar formula");
+
+  // Without a verified bar nothing is derived, and the counts fall back to the old two tiers.
+  const noBars = readHud("chronos_matrix", { ...chronos, verified: ["verdict"] });
+  assert.ok(noBars.lines.every(l => l.derived === false));
+  assert.equal(calibratedLines(calibrationCounts(readHud("interstellar_eyes", eyes).lines)), 0);
+  assert.equal(calibrationNote({ verified_lines: 0, derived_lines: 0, total_lines: 3 }), "not yet calibrated");
+  assert.equal(calibrationNote({ verified_lines: 2, total_lines: 5 }, "x"), "2 verified by parity (of 5 statements)");
 });
 
 test("all enum tokens decode to sentences", () => {

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateHudSnapshot, storeHudSnapshot, loadHudSnapshot, hudReadings, HUD_SNAPSHOT_VERSION } from "../src/hud-store.mjs";
+import { DatabaseSync } from "node:sqlite";
+import { validateHudSnapshot, storeHudSnapshot, loadHudSnapshot, hudReadings, barsVerified, HUD_SNAPSHOT_VERSION } from "../src/hud-store.mjs";
 
 function kv(init = {}) {
   const m = new Map(Object.entries(init));
@@ -54,6 +55,33 @@ test("store keeps the snapshot per candle and as latest; readings verify only fi
   assert.equal(h.readings.decision_matrix.lines[0].verified, true);
   assert.equal(h.readings.decision_matrix.lines.at(-1).verified, false, "system guard is an internal");
   assert.deepEqual(h.not_computed, ["grid_bot_protocol"]);
+});
+
+function comparisonsDb(rows) {
+  const db = new DatabaseSync(":memory:");
+  db.exec("CREATE TABLE engine_parity_comparisons (engine TEXT, candle_key TEXT, result TEXT)");
+  for (const [engine, candle, result] of rows) db.prepare("INSERT INTO engine_parity_comparisons VALUES (?, ?, ?)").run(engine, candle, result);
+  const wrap = (sql, params = []) => ({ bind: (...a) => wrap(sql, a), all: async () => ({ results: db.prepare(sql).all(...params) }) });
+  return { prepare: (sql) => wrap(sql) };
+}
+
+test("bars are verified only by a matching parity comparison of the same candle, and never with an input mismatch", async () => {
+  assert.equal(await barsVerified({ DB: comparisonsDb([["prophet", key, "match"], ["gmi", key, "match"]]) }, key), true);
+  assert.equal(await barsVerified({ DB: comparisonsDb([["prophet", key, "match"], ["gmi", key, "input_mismatch"]]) }, key), false);
+  assert.equal(await barsVerified({ DB: comparisonsDb([["prophet", key, "incomplete"]]) }, key), false);
+  assert.equal(await barsVerified({ DB: comparisonsDb([["prophet", "OANDA:XAUUSD:60:1", "match"]]) }, key), false, "another candle says nothing");
+  assert.equal(await barsVerified({ DB: { prepare: () => { throw new Error("no such table"); } } }, key), false);
+  assert.equal(await barsVerified({}, key), false);
+
+  // Through hudReadings: the bar tier needs both the approved record and the matching comparison.
+  const huds = { chronos_matrix: { fields: { session_london: true, verdict: 3 }, parity: { verdict: "gmi_v12_70.verdict" } } };
+  const env = { SIGNAL_CACHE: kv(), WEBHOOK_BUFFER: kv(), DB: comparisonsDb([["gmi", key, "match"]]) };
+  let h = await hudReadings(env, snapshot({ huds }));
+  assert.equal(h.bars_verified, false, "no approved record: the candle is not in the trusted lane");
+  await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":gmi", JSON.stringify({ values: { comparable: { gmi_v12_70: { verdict: 3 } } } }));
+  h = await hudReadings(env, snapshot({ huds }));
+  assert.equal(h.bars_verified, true);
+  assert.deepEqual(h.readings.chronos_matrix.lines.map(l => [l.verified, l.derived]), [[false, true], [true, false]]);
 });
 
 test("invalid snapshots are refused without writing", async () => {

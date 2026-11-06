@@ -3,10 +3,17 @@
 // codes are decoded exactly as the Pine sources and local engines define them, every
 // sentence is plain English, and nothing here is a trade signal.
 //
-// Each line carries `verified`: true only when every field it describes is a parity
-// verified field of the snapshot (the AI Worker sets `verified` per field after
-// comparing it with the approved local record of the same candle). Agents receive the
-// lines, never the raw codes, so they interpret meaning instead of echoing identifiers.
+// Each line carries one of three calibration tiers:
+// - `verified`: every field it describes is a parity verified field of the snapshot (the
+//   AI Worker sets `verified` per field after comparing it with the approved local record
+//   of the same candle);
+// - `derived` ("computed from verified bars"): the line is a pure formula of closed bars
+//   (Camarilla levels and bands, central pivot ranges, trading sessions), and the AI Worker
+//   confirmed this candle's own bar equals TradingView's in the parity input check
+//   (`bars_verified`). Owner decision 2026-11-06: such lines count as calibrated evidence;
+// - neither: an engine internal no TradingView comparator has checked ("not yet calibrated").
+// Agents receive the lines, never the raw codes, so they interpret meaning instead of
+// echoing identifiers.
 import { TRADE_MANAGEMENT, GMI_VERDICTS, GMI_GATES, describeStructure } from "./webhook-interpretation.mjs";
 
 export const HUD_READING_VERSION = "cryptophys.hud-reading.v2";
@@ -94,14 +101,19 @@ function cycle(v) {
 }
 
 /**
- * readHud(agentId, { fields, verified }) -> { agent_id, name, available, lines: [{ text, verified }] }.
- * `verified` is the list of field names the AI Worker confirmed against the approved record.
+ * readHud(agentId, { fields, verified, bars_verified }) ->
+ *   { agent_id, name, available, lines: [{ text, verified, derived }] }.
+ * `verified` is the list of field names the AI Worker confirmed against the approved record;
+ * `bars_verified` is true when the AI Worker confirmed this candle's bar against TradingView.
  */
 export function readHud(agentId, hud = {}) {
   const f = hud?.fields && typeof hud.fields === "object" ? hud.fields : {};
   const ok = new Set(Array.isArray(hud?.verified) ? hud.verified : []);
+  const barsOk = hud?.bars_verified === true;
   const lines = [];
-  const add = (text, uses = []) => { if (text) lines.push({ text, verified: uses.length > 0 && uses.every((u) => ok.has(u)) }); };
+  const add = (text, uses = []) => { if (text) lines.push({ text, verified: uses.length > 0 && uses.every((u) => ok.has(u)), derived: false }); };
+  // A statement that is a pure formula of closed bars (no engine internal behind it).
+  const addFromBars = (text) => { if (text) lines.push({ text, verified: false, derived: barsOk }); };
 
   switch (agentId) {
     case "r37_funnel": {
@@ -150,7 +162,7 @@ export function readHud(agentId, hud = {}) {
       for (const [tf, band] of Object.entries(bands)) {
         const levels = f.camarilla?.[tf];
         if (!BAND[band] || !levels) continue;
-        add(`On the ${TF_NAMES[tf] ?? tf} Camarilla levels, price ${price(f.close)} is ${BAND[band]} (H4 ${price(levels.h4)}, H3 ${price(levels.h3)}, L3 ${price(levels.l3)}, L4 ${price(levels.l4)}).`);
+        addFromBars(`On the ${TF_NAMES[tf] ?? tf} Camarilla levels, price ${price(f.close)} is ${BAND[band]} (H4 ${price(levels.h4)}, H3 ${price(levels.h3)}, L3 ${price(levels.l3)}, L4 ${price(levels.l4)}).`);
       }
       break;
     }
@@ -170,10 +182,10 @@ export function readHud(agentId, hud = {}) {
     }
     case "chronos_matrix": {
       const sessions = [f.session_tokyo && "Tokyo", f.session_london && "London", f.session_new_york && "New York"].filter(Boolean);
-      add(sessions.length ? `Active sessions on this candle: ${sessions.join(" and ")}.` : "No major session is active on this candle.");
+      addFromBars(sessions.length ? `Active sessions on this candle: ${sessions.join(" and ")}.` : "No major session is active on this candle.");
       for (const [key, name] of [["daily_cpr", "daily"], ["weekly_cpr", "weekly"]]) {
         const c = f[key];
-        if (c && CPR_POSITION[c.position]) add(`Price is ${CPR_POSITION[c.position]} of the ${name} pivot (pivot ${price(c.pivot)}, range ${price(c.bc)} to ${price(c.tc)}).`);
+        if (c && CPR_POSITION[c.position]) addFromBars(`Price is ${CPR_POSITION[c.position]} of the ${name} pivot (pivot ${price(c.pivot)}, range ${price(c.bc)} to ${price(c.tc)}).`);
       }
       if (GMI_VERDICTS[f.verdict] !== undefined) add(`The GMI verdict for this candle is ${GMI_VERDICTS[f.verdict]}.`, ["verdict"]);
       break;
@@ -236,6 +248,29 @@ export function readHud(agentId, hud = {}) {
       break;
   }
   return { agent_id: agentId, name: HUD_NAMES[agentId] ?? agentId, version: HUD_READING_VERSION, available: lines.length > 0, lines };
+}
+
+/** Calibration counts of one reading: { verified_lines, derived_lines, total_lines }. */
+export function calibrationCounts(lines) {
+  const list = Array.isArray(lines) ? lines : [];
+  return {
+    verified_lines: list.filter((l) => l?.verified).length,
+    derived_lines: list.filter((l) => !l?.verified && l?.derived).length,
+    total_lines: list.length
+  };
+}
+
+/** Calibrated statements: verified by parity or computed from verified bars. */
+export const calibratedLines = (c) => (Number(c?.verified_lines) || 0) + (Number(c?.derived_lines) || 0);
+
+/** One plain sentence for a calibration count, or `none` when nothing is calibrated. */
+export function calibrationNote(c, none = "not yet calibrated") {
+  const v = Number(c?.verified_lines) || 0, d = Number(c?.derived_lines) || 0, t = c?.total_lines;
+  if (!v && !d) return none;
+  const parts = [];
+  if (v) parts.push(`${v} verified by parity`);
+  if (d) parts.push(`${d} computed from verified bars`);
+  return `${parts.join(", ")} (of ${t} statement${t === 1 ? "" : "s"})`;
 }
 
 /** Verified field names of one HUD: parity fields equal to the approved local record. */

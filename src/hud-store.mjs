@@ -5,7 +5,10 @@
 // for the HUD agents only: it never enters the H1 decision lane or the evidence fusion.
 // Verification is decided here, at read time, against the parity-approved local record
 // of the same candle (localcalc:<candle_key>:prophet|gmi): a HUD field is verified only
-// when it equals that record. Everything else reads as not yet calibrated.
+// when it equals that record. A statement that is a pure formula of closed bars reads as
+// "computed from verified bars" when the candle also has a parity comparison whose input
+// bar (open, high, low, close, volume) equalled TradingView's (barsVerified). Everything
+// else reads as not yet calibrated.
 import { containsCredentialFields } from "./evidence-fusion.mjs";
 import { readHud, verifiedFields, HUD_IDS } from "./hud-reading.mjs";
 
@@ -63,21 +66,39 @@ export async function approvedComparable(env, candleKey) {
   return Object.keys(out).length ? out : null;
 }
 
+/**
+ * True when this candle's own bar is proven equal to TradingView's: a parity comparison of the
+ * candle matched (the input bar is part of every comparison) and none of its comparisons found
+ * only the input bar different. Without the parity tables (or any comparison yet) it is false.
+ */
+export async function barsVerified(env, candleKey) {
+  if (!env?.DB?.prepare || typeof candleKey !== "string") return false;
+  try {
+    const rows = (await env.DB.prepare("SELECT result FROM engine_parity_comparisons WHERE candle_key = ?").bind(candleKey).all())?.results || [];
+    return rows.some((r) => r.result === "match") && !rows.some((r) => r.result === "input_mismatch");
+  } catch {
+    return false;
+  }
+}
+
 /** Readings for every HUD of a snapshot, with verification against the approved record. */
 export async function hudReadings(env, snapshot) {
   if (!isRecord(snapshot?.huds)) return null;
   const approved = await approvedComparable(env, snapshot.candle_key);
+  // Only a candle in the trusted lane (an approved record exists) can vouch for its bars.
+  const bars = approved ? await barsVerified(env, snapshot.candle_key) : false;
   const readings = {};
   for (const id of HUD_IDS) {
     const hud = snapshot.huds[id];
     if (!hud) continue;
-    readings[id] = readHud(id, { ...hud, verified: verifiedFields(hud, approved) });
+    readings[id] = readHud(id, { ...hud, verified: verifiedFields(hud, approved), bars_verified: bars });
   }
   return {
     candle_key: snapshot.candle_key,
     timeframe: snapshot.timeframe,
     computed_at: snapshot.computed_at,
     verified_against_approved_record: Boolean(approved),
+    bars_verified: bars,
     not_computed: Array.isArray(snapshot.not_computed) ? snapshot.not_computed : [],
     readings
   };
