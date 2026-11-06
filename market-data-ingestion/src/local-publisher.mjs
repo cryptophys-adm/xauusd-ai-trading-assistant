@@ -3,7 +3,7 @@
 // observed and lets its autonomous parity registry decide trust by comparing
 // them with the TradingView webhook outputs for the same candle_key.
 import { buildBundle } from "./tradingview-source.mjs";
-import { buildH1LocalCalculations } from "../../local-engines/producer/src/h1-producer.mjs";
+import { buildH1LocalCalculations, CHART_TICKERID } from "../../local-engines/producer/src/h1-producer.mjs";
 import { buildM5LocalCalculations } from "../../local-engines/producer/src/m5-local-producer.mjs";
 import { buildM15LocalCalculations } from "../../local-engines/producer/src/m15-local-producer.mjs";
 import { buildHtfLocalCalculations, HTF_CHARTS } from "../../local-engines/producer/src/htf-local-producer.mjs";
@@ -279,7 +279,18 @@ export async function publishHtfLocalComputation(env, { now = Date.now(), force 
 }
 
 // H4 and D1 feed the timeframe War Rooms (owner decision 2026-11-06).
-const HUD_CHARTS = Object.freeze({ H1: { maxDelayMs: 25 * 60 * 1000 }, M15: { maxDelayMs: 9 * 60 * 1000 }, H4: { maxDelayMs: 30 * 60 * 1000 }, D1: { maxDelayMs: 60 * 60 * 1000 } });
+// catchUpMs (D1 catch-up, owner decision 2026-11-06): an H4 or D1 bar whose snapshot was never
+// published inside maxDelayMs is still published once while it is the chart's latest closed bar,
+// cut at its own close so the snapshot is the one it would have been at the close. The room of
+// that bar then re-convenes once with the HUD agents (src/timeframe-threads.mjs). D1 covers the
+// weekend (Friday's close stays the latest until Monday's). H1 and M15 rooms move on every bar.
+const HUD_CHARTS = Object.freeze({
+  H1: { maxDelayMs: 25 * 60 * 1000 }, M15: { maxDelayMs: 9 * 60 * 1000 },
+  H4: { maxDelayMs: 30 * 60 * 1000, catchUpMs: 4 * 60 * 60 * 1000 }, D1: { maxDelayMs: 60 * 60 * 1000, catchUpMs: 72 * 60 * 60 * 1000 }
+});
+const HUD_PERIOD = Object.freeze({ H1: "60", M15: "15", H4: "240", D1: "1D" });
+// Longer than the longest catch-up window, so a caught-up bar is never sent twice.
+const HUD_MARKER_TTL_S = 60 * 60 * 24 * 4;
 export const LAST_HUD_PUBLISH_KEY = "market-data:v2:hud-last-publish";
 
 /**
@@ -294,13 +305,18 @@ export async function publishHudSnapshots(env, { now = Date.now(), bundle = null
   if (typeof env.AI_WORKER?.submitHud !== "function") return { status: "publisher_not_configured" };
   const resolvedBundle = bundle || await buildBundle(env, now);
   const results = {};
-  for (const [chart, { maxDelayMs }] of Object.entries(HUD_CHARTS)) {
+  for (const [chart, { maxDelayMs, catchUpMs = 0 }] of Object.entries(HUD_CHARTS)) {
     const last = resolvedBundle.timeframes?.[chart]?.candles?.at(-1);
     if (!last) { results[chart] = { status: "no_data" }; continue; }
-    if (now - Date.parse(last.close_time) > maxDelayMs) { results[chart] = { status: "no_fresh_close" }; continue; }
+    const closeMs = Date.parse(last.close_time);
+    const late = now - closeMs > maxDelayMs;
+    if (late && !(now - closeMs <= catchUpMs)) { results[chart] = { status: "no_fresh_close" }; continue; }
+    // A late bar is only sent when it was never sent: check the marker before building.
+    const lateKey = late ? [CHART_TICKERID, HUD_PERIOD[chart], String(Date.parse(last.open_time))].join(":") : null;
+    if (lateKey && await kv.get("market-data:v2:hud-published:" + lateKey)) { results[chart] = { status: "already_published", candle_key: lateKey }; continue; }
     let snapshot;
     try {
-      snapshot = buildHudSnapshot(resolvedBundle, { chart, now, mintick: Number(env.CHART_MINTICK) || 0.001 });
+      snapshot = buildHudSnapshot(late ? bundleUntil(resolvedBundle, closeMs) : resolvedBundle, { chart, now, mintick: Number(env.CHART_MINTICK) || 0.001 });
     } catch (error) {
       results[chart] = { status: asString(error?.code) || "hud_snapshot_failed" };
       continue;
@@ -310,8 +326,8 @@ export async function publishHudSnapshots(env, { now = Date.now(), bundle = null
     try {
       const { status, body } = await env.AI_WORKER.submitHud(snapshot);
       const ok = status < 300;
-      if (ok) await kv.put(markerKey, "1", { expirationTtl: 60 * 60 * 24 });
-      results[chart] = { status: ok ? "published" : "rejected", candle_key: snapshot.candle_key, http_status: status, error: ok ? null : asString(body?.error) || "ai_worker_rejected" };
+      if (ok) await kv.put(markerKey, "1", { expirationTtl: HUD_MARKER_TTL_S });
+      results[chart] = { status: ok ? "published" : "rejected", ...(late ? { catch_up: true } : {}), candle_key: snapshot.candle_key, http_status: status, error: ok ? null : asString(body?.error) || "ai_worker_rejected" };
     } catch (error) {
       results[chart] = { status: "post_failed", candle_key: snapshot.candle_key, error: asString(error?.name) || "post_failed" };
     }

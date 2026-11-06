@@ -131,14 +131,18 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
           - A room without local records for its bar has no own desk.
         - The other desks: the Higher-Timeframe Desk (the conclusion of the 4H Thread on 1H, of the D1 Thread on 4H), the News Analyst (News Daily), the Technical Analyst and the Risk Manager.
       - HUD agents come from that bar's HUD snapshot. The pull adapter now also publishes H4 and D1 HUD snapshots (`hud-snapshot.mjs`, timeframes `"240"` and `"1D"`, GMI from `gmi-core-htf.mjs`).
+        - Fresh windows after the close: H1 25 minutes, M15 9, H4 30, D1 60.
+        - **Catch-up (owner decision 2026-11-06):** an H4 or D1 bar whose snapshot was never sent in that window is sent once while it is still the chart's latest close (H4 up to 4 hours, D1 up to 72 hours, which covers the weekend). It is built on the bundle cut at the bar's close, so it is the snapshot that bar would have had. The marker `market-data:v2:hud-published:<candle_key>` (4 days) keeps every bar to one send. H1 and M15 have no catch-up: their rooms move on with every bar.
+        - The pull adapter's `GET /health` shows `last_hud_publish`: each chart's status and candle key, and `catch_up` when a bar was sent late.
     - **No webhook dependency:** the rooms run on local computation only: closed bars, the HUD snapshot and the local Prophet R38 record of the bar.
     - **Calibration:** a HUD statement is verified only where it equals a parity-approved record, and computed from verified bars only where the bar's parity comparison matched (see "Calibration status once"). On 4H and D1 there are none until the alerts are installed there, so those HUD agents speak at confidence 0.4 or lower.
     - **No confirmation, no entry:** a BUY or SELL conclusion needs that chart's Prophet R38 confirmation, read from the local record of the bar. The 1H conclusion names the H1 decision when it differs.
     - **Schedule:** the rooms run from the parity sweep cron in their own `waitUntil`, one after another, the higher timeframe first (D1, 4H, 1H), so each Higher-Timeframe Desk reads the conclusion just written and the model sees one room's burst at a time. They run behind `TF_THREADS_ENABLED`, within `TF_THREADS_MAX_CALLS_PER_HOUR` (production 120, preview 150; about 26 calls per room).
       - A bar waits up to 20 minutes for its HUD snapshot, then runs with the desks only.
+      - **Re-convene:** a room that concluded without its HUD snapshot meets once more, for the same bar, when the snapshot arrives late (the catch-up above). The second session is stored as run `<bar open>#hud`, which sorts after the first, so the tab, the Global Conclusion and the room below read it. The API reports the bar open without the suffix and `reconvened: true`.
       - Rooms of one sweep are 65 seconds apart: one room spends about 22 calls within a minute, and the Workers AI per-minute limit is shared.
       - A room concludes only when at least half of its agents spoke. Otherwise the next sweep retries the failed openings. Two hours after the close, it concludes with whoever spoke.
-      - Each room runs once per bar.
+      - Each room runs once per bar, plus at most that one re-convene.
     - **Storage and API:** messages are stored in `agent_thread_messages` (thread `tf:H1` / `tf:H4` / `tf:D1`, run = bar open; steps `brief`, `open:*`, `debate:*` and `conclusion`). Read API: `GET /api/threads/timeframe?chart=H1|H4|D1` (also `1H`, `4H`).
 - **News Daily** (owner decision 2026-11-06): `src/news-daily.mjs`, run by the hourly news cron after the hourly analysis, behind `NEWS_DAILY_ENABLED`, within `NEWS_DAILY_MAX_CALLS_PER_HOUR` (production 6, preview 12).
   - **Input:** the unique articles of the last 24 hours, taken from the stored hourly analyses (no extra TradingView pull), plus the 24-hour moves of gold, the dollar index, WTI oil and the USDT dominance from the cached closed bars.
