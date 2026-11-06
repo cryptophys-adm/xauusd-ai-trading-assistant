@@ -6,6 +6,10 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- fix(market-data): native bars of 1 hour and longer count as closed only 90 seconds after their close.
+  - **Cause:** the pull adapter took the H1 bar that closed at 04:00 UTC seconds after its close. That provisional bar had close 4045.145 and volume 48491. The final bar, and the TradingView alert, had 4044.815 and 48987.
+  - **Effect:** the local H1 record built on the provisional bar failed parity on its input and revoked the approved H1 `prophet` and `gmi` identities. They re-earn 24 matches.
+  - **Scope:** M1 and USOIL 5m keep no delay, so the 15m War Room is not held back.
 - fix(threads): rooms of one sweep are 65 seconds apart, and a room concludes only with at least half of its agents heard.
   - In production, the 1H room started right after the 4H room and lost 14 of 18 openings to the Workers AI per-minute limit.
   - Failed openings are retried by the next sweep.

@@ -60,10 +60,29 @@ test("D1 bars use TradingView session open time and close only after a full sess
   const spec = SERIES.find((s) => s.interval === "1D");
   const sessionOpen = Date.parse("2026-11-02T22:00:00Z") / 1000; // OANDA 17:00 New York
   const bars = { t: [sessionOpen - 86400, sessionOpen], o: [1, 1], h: [1, 1], l: [1, 1], c: [1, 1], v: [1, 1] };
-  const before = internals.closedCandlesFromColumns(bars, spec, sessionOpen + 86399);
-  const after = internals.closedCandlesFromColumns(bars, spec, sessionOpen + 86400);
+  const before = internals.closedCandlesFromColumns(bars, spec, sessionOpen + 86400 + internals.SETTLE_SECONDS - 1);
+  const after = internals.closedCandlesFromColumns(bars, spec, sessionOpen + 86400 + internals.SETTLE_SECONDS);
   assert.equal(before.length, 1);
   assert.equal(after.length, 2);
+});
+
+test("native H1 and longer bars settle 90 s after their close before they count as closed; M1 does not wait", () => {
+  // Production 2026-11-06: an H1 bar pulled seconds after its close carried a provisional close
+  // and volume, and the local record built on it failed parity against the final bar.
+  const h1 = SERIES.find((s) => s.interval === "1h" && s.symbol === "OANDA:XAUUSD");
+  const m1 = SERIES.find((s) => s.interval === "1m" && s.symbol === "OANDA:XAUUSD");
+  assert.equal(internals.settleSeconds(h1), 90);
+  assert.equal(internals.settleSeconds(m1), 0);
+  assert.equal(internals.settleSeconds(SERIES.find((s) => s.symbol === "TVC:USOIL" && s.interval === "1h")), 0, "a derived series inherits its source's timing");
+  const open = 1_800_000_000 - 3600;
+  const bars = { t: [open], o: [1], h: [2], l: [0], c: [1], v: [5] };
+  assert.equal(internals.closedCandlesFromColumns(bars, h1, open + 3600 + 30).length, 0, "30 s after the close: not final yet");
+  assert.equal(internals.closedCandlesFromColumns(bars, h1, open + 3600 + 90).length, 1);
+  const last = { time: open - 3600 };
+  assert.equal(internals.planRequest(h1, { candles: [last] }, open + 3600 + 30), null, "no pull before the bar settles");
+  assert.ok(internals.planRequest(h1, { candles: [last] }, open + 3600 + 90));
+  const m1Open = 1_800_000_000 - 60;
+  assert.equal(internals.closedCandlesFromColumns({ t: [m1Open], o: [1], h: [2], l: [0], c: [1], v: [5] }, m1, m1Open + 60).length, 1);
 });
 
 test("planRequest bootstraps empty series, skips until a new bar closes, then requests only the gap", () => {
