@@ -106,6 +106,8 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - **No confirmation, no entry:** a BUY or SELL conclusion needs that chart's Prophet R38 confirmation, read from the local record of the bar. The 1H conclusion names the H1 decision when it differs.
     - **Schedule:** the rooms run from the parity sweep cron in their own `waitUntil`, one after another, the higher timeframe first (D1, 4H, 1H), so each Higher-Timeframe Desk reads the conclusion just written and the model sees one room's burst at a time. They run behind `TF_THREADS_ENABLED`, within `TF_THREADS_MAX_CALLS_PER_HOUR` (production 120, preview 150; about 26 calls per room).
       - A bar waits up to 20 minutes for its HUD snapshot, then runs with the desks only.
+      - Rooms of one sweep are 65 seconds apart: one room spends about 22 calls within a minute, and the Workers AI per-minute limit is shared.
+      - A room concludes only when at least half of its agents spoke. Otherwise the next sweep retries the failed openings. Two hours after the close, it concludes with whoever spoke.
       - Each room runs once per bar.
     - **Storage and API:** messages are stored in `agent_thread_messages` (thread `tf:H1` / `tf:H4` / `tf:D1`, run = bar open; steps `brief`, `open:*`, `debate:*` and `conclusion`). Read API: `GET /api/threads/timeframe?chart=H1|H4|D1` (also `1H`, `4H`).
 - **News Daily** (owner decision 2026-11-06): `src/news-daily.mjs`, run by the hourly news cron after the hourly analysis, behind `NEWS_DAILY_ENABLED`, within `NEWS_DAILY_MAX_CALLS_PER_HOUR` (production 6, preview 12).

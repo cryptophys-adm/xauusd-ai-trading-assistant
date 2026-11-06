@@ -6,6 +6,10 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- fix(threads): rooms of one sweep are 65 seconds apart, and a room concludes only with at least half of its agents heard.
+  - In production, the 1H room started right after the 4H room and lost 14 of 18 openings to the Workers AI per-minute limit.
+  - Failed openings are retried by the next sweep.
+  - Two hours after the close, a room concludes with whoever spoke.
 - fix(api): `/api/threads/timeframe` and `/api/news/daily` were answered by the `/api/threads/:id` and `/api/news/:key` prefix routes (404 in production). The prefix routes now exclude them, and a worker test covers it.
   - The timeframe rooms run one after another, D1, 4H, then 1H, instead of in parallel. In the first production run, three parallel rooms hit the Workers AI per-minute limit, and each room should read the higher timeframe's fresh conclusion.
 - feat(threads): every Thread is a War Room of all agents; News Daily; tab bar on top of the right panel (owner decision 2026-11-06).

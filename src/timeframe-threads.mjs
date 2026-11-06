@@ -57,6 +57,17 @@ const CLAIM_MAX = 320;
 const ARGUMENT_MAX = 420;
 /** A bar's room waits for its HUD snapshot this long after the close, then runs without it. */
 export const TF_HUD_WAIT_MS = 20 * 60 * 1000;
+/**
+ * Gap between two rooms of one sweep: the Workers AI per-minute limit is shared, and one room
+ * spends about 22 calls within a minute (production 2026-11-06: a 1H room started right after the
+ * 4H room lost 14 of its openings to "inference request per min rate reached").
+ */
+export const TF_ROOM_GAP_MS = 65_000;
+/**
+ * A room concludes only when at least half of its agents spoke; otherwise its failed openings are
+ * retried by the next sweep. After TF_QUORUM_WAIT_MS past the close it concludes with whoever spoke.
+ */
+export const TF_QUORUM_WAIT_MS = 2 * 60 * 60 * 1000;
 
 export function tfThreadsEnabled(env) {
   return String(env?.TF_THREADS_ENABLED || "").toLowerCase() === "true";
@@ -344,6 +355,8 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   }));
   const answered = openings.filter((m) => m?.status === "ok");
   if (!answered.length) return { status: "no_openings", calls };
+  const young = clock() - Date.parse(ev.bar_close) < TF_QUORUM_WAIT_MS;
+  if (young && answered.length * 2 < roster.length) return { status: "waiting_for_quorum", calls, openings: answered.length, roster: roster.length };
   const bus = answered.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, confidence: m.confidence, evidence: evidenceNote(m.agent), claim: m.claim }));
   const busAgents = bus.map((b) => b.id);
 
@@ -408,14 +421,18 @@ async function dueBars(env, now) {
  * room's burst at a time (production 2026-11-06: three rooms in parallel hit the Workers AI
  * per-minute limit). Each room is idempotent per bar; a room cut short is finished by the next sweep.
  */
-export async function runPendingTimeframeThreads(env, { now = Date.now(), clock = () => Date.now() } = {}) {
+export async function runPendingTimeframeThreads(env, { now = Date.now(), clock = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   if (!tfThreadsEnabled(env)) return { status: "disabled" };
   const order = ["D1", "H4", "H1"];
   const due = (await dueBars(env, now)).sort((a, b) => order.indexOf(a.chart) - order.indexOf(b.chart));
   const out = {};
+  let spent = false;
   for (const { chart, key } of due) {
+    // Only a room that called the model spends the per-minute limit; a finished bar costs nothing.
+    if (spent) await sleep(TF_ROOM_GAP_MS);
     try { out[chart] = await runTimeframeThread(env, { chart, candleKey: key }, { clock }); }
     catch (error) { out[chart] = { status: "error", error: error instanceof Error ? error.name : "UnknownError", message: error instanceof Error ? error.message.slice(0, 200) : null }; }
+    spent = Number(out[chart]?.calls) > 0;
   }
   return { status: "ok", charts: out };
 }
