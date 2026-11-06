@@ -21,6 +21,10 @@ what changed and when, by merge commit and PR.
   - A rebuttal whose stance differs from the agent's opening may now name nobody. Its own id is dropped, and it is stored as `conceded: true`.
   - Nexus marks it "CONCEDES".
   - preview-e2e accepts it. On PR #116 the live preview model hit the same case.
+- fix(bus): the H1 multi-agent bus gets the same single correction attempt as the Thread rooms.
+  - An answer from an agent or the moderator that is valid except that its text reads like code (a field name or a key path) is asked once to rewrite in plain words.
+  - The extra call is recorded in `corrections` and counted by the hourly budget. It never runs past the wall deadline.
+  - On PR #116 the preview moderator named a field from the evidence, and the conclusion was lost.
 - feat(hud): a third calibration tier, "computed from verified bars" (owner decision 2026-11-06, option 1).
   - HUD statements that are pure formulas of closed bars count as calibrated evidence when the candle's bar is proven equal to TradingView's. These are the Camarilla levels and bands, the daily and weekly pivot ranges, and the trading sessions.
   - The bar is proven when the candle has an approved local record and a matching parity comparison (which includes the input bar), and no input mismatch.

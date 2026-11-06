@@ -18,6 +18,15 @@ export function naturalLanguageErrors(text) {
   return errors;
 }
 
+/** The one correction request sent when an answer is rejected only for reading like code. */
+export const NATURAL_LANGUAGE_CORRECTION =
+  "Your answer was rejected: its text reads like code (a field name, a word with underscores, a key path with dots, or key=value). " +
+  "Return the same JSON object with the same stance and confidence, but rewrite every text field in plain sentences a trader would write. " +
+  "Describe evidence in words (for example \"the H1 decision\", \"the 5m bias\", \"verified by parity\") and never copy a key from the evidence.";
+
+/** True when every validation error is a natural-language error (so one correction may fix it). */
+export const onlyNaturalLanguageErrors = (errors) => Array.isArray(errors) && errors.length > 0 && errors.every((e) => String(e).startsWith("not_natural_language:"));
+
 export const NATURAL_LANGUAGE_RULE =
   "Write insight, summary and dissent in plain natural language for a trader, like a short forum post. " +
   "Never copy a key name or key path from the evidence into that text, and never write words joined by underscores or dots, or key=value pairs. " +
