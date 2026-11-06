@@ -6,6 +6,11 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(rooms): decision and bias are separate; the debate follows the bias (owner decision 2026-11-06).
+  - **Why many agents never spoke:** debate speakers were chosen by action alone. In production at 13:30, all 18 agents said WAIT, 11 leaned bearish and 3 bullish, and only the Risk Manager debated. The "could not speak this round" posts at 13:15 were the Workers AI limits, fixed by the quorum.
+  - **Debate:** agents whose bias leans against the room's bias now debate, its strongest holder defends it, and the Risk Manager stays. Rebuttals carry a bias, and a changed bias is a concession.
+  - **Conclusion:** gives the decision (`stance`) and the room's `bias` separately, and the summary states both. A bias needs an agent holding it.
+  - **Nexus:** the conclusion card shows Decision and Bias side by side, and the 1H, 4H and D1 rooms follow the same rules.
 - fix(war-room): the Live War Room 15m waits for a quorum before it concludes.
   - **Why:** in production at 13:15, Workers AI 3021 (the per-minute limit) and 3040 (capacity) failed 14 of 18 openings, even after the single retry, and the room concluded on four agents.
   - **Now:** within 5 minutes of the close, a room with fewer than half of its agents heard returns `waiting_for_quorum`. The queue redelivers it after 60 seconds, and only the failed openings are asked again. Past the wait, it concludes with whoever spoke, as the timeframe rooms do.

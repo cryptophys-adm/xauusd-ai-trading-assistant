@@ -4,7 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import { resetThreadSchemaCacheForTests, buildLiveRoomTask } from "../src/agent-threads.mjs";
 import {
   runWarRoomBar, readWarRoom, readTldr, warRoomEnabled, majorityStance, selectRebutters,
-  validateOpening, validateRebuttal, validateConclusion, WAR_ROOM_DEBATE_MS, WAR_ROOM_QUORUM_WAIT_MS, DESK_AGENTS, entryAllowed, ROOM_BIASES
+  validateOpening, validateRebuttal, validateConclusion, WAR_ROOM_DEBATE_MS, WAR_ROOM_QUORUM_WAIT_MS, DESK_AGENTS, entryAllowed, ROOM_BIASES,
+  majorityBias, biasSupported
 } from "../src/war-room.mjs";
 
 const BAR = "2026-11-05T14:45:00.000Z";
@@ -40,7 +41,7 @@ function hudSnapshot() {
 }
 
 /** Each agent answers from its Required JSON line; `stances` overrides an agent's opening stance. */
-function fakeAI({ stances = {}, conclusion = null, fail = new Set() } = {}) {
+function fakeAI({ stances = {}, biases = {}, conclusion = null, fail = new Set() } = {}) {
   const calls = [];
   return {
     calls,
@@ -51,8 +52,8 @@ function fakeAI({ stances = {}, conclusion = null, fail = new Set() } = {}) {
       let content;
       if (/moderator of the XAUUSD Live War Room/.test(sys)) content = conclusion || { stance: "WAIT", confidence: 0.6, summary: "Stay flat: the flush has no confirmation and the higher timeframe still says wait.", reasons: ["The 5m read gives no trigger.", "Volatility is high after the flush."], dissent: ["kinetic_engine"] };
       else if (fail.has(agent)) throw new Error("model down");
-      else if (/debate/.test(sys)) content = { agent, stance: stances[agent] || "WAIT", confidence: 0.55, rebuts: [agent === "technical" ? "risk" : "technical"], argument: "The flush was on rising volume, which argues against reading it as a stop hunt." };
-      else content = { agent, stance: stances[agent] || "WAIT", confidence: agent === "kinetic_engine" ? 0.7 : 0.5, claim: "My own data supports waiting for the next candle." };
+      else if (/debate/.test(sys)) content = { agent, stance: stances[agent] || "WAIT", ...(biases[agent] ? { bias: biases[agent] } : {}), confidence: 0.55, rebuts: [agent === "technical" ? "risk" : "technical"], argument: "The flush was on rising volume, which argues against reading it as a stop hunt." };
+      else content = { agent, stance: stances[agent] || "WAIT", ...(biases[agent] ? { bias: biases[agent] } : {}), confidence: agent === "kinetic_engine" ? 0.7 : 0.5, claim: "My own data supports waiting for the next candle." };
       return { choices: [{ message: { content: JSON.stringify(content) }, finish_reason: "stop" }], usage: { total_tokens: 50 } };
     }
   };
@@ -381,6 +382,53 @@ test("past the quorum wait the room concludes with whoever spoke", async () => {
   const r = await runWarRoomBar(e, task(), { clock: () => Date.parse(BAR) + WAR_ROOM_QUORUM_WAIT_MS + 1 });
   assert.equal(r.status, "complete");
   assert.equal(r.openings, 2);
+});
+
+test("decision and bias: a room that agrees on WAIT but splits on the bias debates the bias", async () => {
+  // Production 13:30 (2026-11-06): all 18 agents said WAIT, 11 leaned bearish and 3 bullish, and
+  // only the Risk Manager debated. Owner: distinguish the decision from the bias.
+  const biases = { htf: "BULLISH", news: "BEARISH", technical: "BEARISH", risk: "BEARISH", kinetic_engine: "BULLISH", fabio_amt: "BEARISH" };
+  const conclusion = { stance: "WAIT", bias: "BEARISH", confidence: 0.6, summary: "Decision WAIT, bias bearish: most desks lean down but nothing is confirmed.", reasons: ["No confirmed sell candle yet."], dissent: ["kinetic_engine", "htf"] };
+  const ai = fakeAI({ biases, conclusion });
+  const e = env(ai);
+  const r = await runWarRoomBar(e, task());
+  assert.equal(r.status, "complete");
+  const room = await readWarRoom(e.DB);
+  assert.deepEqual(room.debate.map((d) => d.id).sort(), ["htf", "kinetic_engine", "news", "risk"].sort(), "the two bullish dissenters, the strongest bearish defender and the Risk Manager");
+  const debatePrompt = ai.calls.find((c) => /debate/.test(c.request.messages[0].content) && /"agent":"kinetic_engine"/.test(c.request.messages[1].content)).request.messages.map((m) => m.content).join("\n");
+  assert.match(debatePrompt, /agrees on the action but not on the bias: the room leans bearish/);
+  assert.match(debatePrompt, /"bias":"BULLISH\|BEARISH\|NEUTRAL"/);
+  assert.equal(room.conclusion.stance, "WAIT");
+  assert.equal(room.conclusion.bias, "BEARISH");
+  assert.equal(room.conclusion.majority_bias, "BEARISH");
+  const moderatorPrompt = ai.calls.find((c) => /moderator of the XAUUSD Live War Room/.test(c.request.messages[0].content)).request.messages.map((m) => m.content).join("\n");
+  assert.match(moderatorPrompt, /"stance" is the DECISION/);
+});
+
+test("a conclusion bias needs an agent holding it; a missing bias is the room's own", () => {
+  const c = { stance: "WAIT", confidence: 0.6, summary: "Decision WAIT, bias bullish: nothing is confirmed.", reasons: ["Nothing is confirmed."], dissent: [] };
+  const bad = validateConclusion({ ...c, bias: "BULLISH" }, "WAIT", ["risk"], null, { supportBiases: new Set(["BEARISH", "NEUTRAL"]) });
+  assert.ok(bad.errors.includes("bias_without_support"));
+  const filled = { ...c };
+  assert.equal(validateConclusion(filled, "WAIT", ["risk"], null, { supportBiases: new Set(["BEARISH"]), roomBias: "BEARISH" }).valid, true);
+  assert.equal(filled.bias, "BEARISH");
+  assert.equal(biasSupported("NEUTRAL", new Set(["BEARISH"])), true);
+  const o = (agent, bias, confidence) => ({ agent, stance: "WAIT", bias, confidence });
+  assert.equal(majorityBias([o("a", "BEARISH", 0.8), o("b", "BULLISH", 0.3), o("c", "NEUTRAL", 0.5)]), "BEARISH");
+  assert.equal(majorityBias([o("a", "BEARISH", 0.5), o("b", "BULLISH", 0.5)]), "NEUTRAL");
+  assert.equal(majorityBias([{ agent: "x", stance: "BUY", confidence: 0.5 }]), "BULLISH", "openings before the bias read their action");
+});
+
+test("selection by bias: dissenters against the room's bias, its strongest holder defends it, then the Risk Manager", () => {
+  const o = (agent, stance, bias, confidence) => ({ agent, stance, bias, confidence });
+  const openings = [o("a", "WAIT", "BEARISH", 0.9), o("b", "WAIT", "BEARISH", 0.5), o("c", "WAIT", "BULLISH", 0.4), o("d", "WAIT", "BULLISH", 0.6), o("n", "WAIT", "NEUTRAL", 0.9), o("risk", "WAIT", "BEARISH", 0.5)];
+  assert.deepEqual(selectRebutters(openings, "WAIT", 8, { bias: "BEARISH" }), ["d", "c", "a", "risk"]);
+  assert.deepEqual(selectRebutters(openings, "WAIT", 8, { bias: "NEUTRAL" }), ["a", "d", "b", "c", "risk"], "against a neutral room every leaning agent dissents; no defender");
+  assert.deepEqual(selectRebutters(openings.map((x) => ({ ...x, bias: "BEARISH" })), "WAIT", 8, { bias: "BEARISH" }), ["risk"], "one bias, one action: the Risk Manager stress-tests");
+  assert.equal(selectRebutters(Array.from({ length: 12 }, (_, i) => o("x" + i, "WAIT", "BULLISH", i / 12)).concat(o("y", "WAIT", "BEARISH", 1), o("risk", "WAIT", "BEARISH", 1)), "WAIT", 8, { bias: "BEARISH" }).length, 8, "at most eight speakers");
+  const r = { agent: "c", stance: "WAIT", bias: "BEARISH", confidence: 0.5, rebuts: [], argument: "The bearish desks convinced me." };
+  assert.equal(validateRebuttal(r, "c", ["a", "c"], { ownStance: "WAIT", ownBias: "BULLISH" }).valid, true);
+  assert.equal(r.conceded, true, "a changed bias is a concession");
 });
 
 test("a conclusion that differs from the H1 decision must name it", async () => {

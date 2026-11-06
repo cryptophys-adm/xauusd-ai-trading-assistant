@@ -51,7 +51,7 @@ export function Post({ m, text, calibration }: { m: RoomMessage; text?: string |
 }
 
 export type Conclusion = {
-  status: string; stance?: string | null; confidence?: number | null; summary?: string | null;
+  status: string; stance?: string | null; bias?: string | null; confidence?: number | null; summary?: string | null;
   reasons?: string[]; dissent?: { id: string; name: string }[];
 };
 
@@ -62,6 +62,7 @@ export function Tldr({ c, waiting }: { c?: Conclusion | null; waiting: string })
     <div className="glass-inner border-cyan-400/20 px-3 py-3">
       <div className="mb-2 flex items-center gap-2">
         <Stance value={c.stance} />
+        {c.bias && <BiasTag bias={c.bias} />}
         <span className="mono text-[11px] text-slate-400">confidence {pct(c.confidence)}</span>
         <span className="eyebrow ml-auto text-[9px] tracking-[0.24em] text-cyan-300/70">TLDR</span>
       </div>

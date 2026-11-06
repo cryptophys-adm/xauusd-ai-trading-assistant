@@ -113,7 +113,7 @@ function TrendLadder({ ladder }: { ladder: ReturnType<typeof useLadder> }) {
               {r.note && <p className="mt-1.5 line-clamp-2 text-[11px] leading-snug text-slate-400" title={r.note}>{r.note}</p>}
             </div>
           ))}
-          <p className="text-[10px] text-slate-600">Bar: the agents' confidence-weighted lean in each room (left bearish, right bullish). Chip: the moderator's action.</p>
+          <p className="text-[10px] text-slate-600">Bar: the agents' confidence-weighted lean in each room (left bearish, right bullish). Chip: the room's decision (the bar is its bias).</p>
         </div>
       )}
     </Panel>

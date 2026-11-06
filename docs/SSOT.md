@@ -299,8 +299,18 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
      - **Technical Analyst:** the 15m candles and the 5m execution read.
      - **Risk Manager.**
      - **One agent per computed 15m HUD** (13).
-  2. **Debate.** Agents whose stance differs from the bus majority (at most 7, by confidence) and the Risk Manager rebut named agents. A dissenter the bus persuaded may concede instead: its stance changes, it may name nobody, and it is kept as `conceded: true` (2026-11-06). The debate is open for at most 3 minutes, then closed.
-  3. **Conclusion.** The moderator concludes for the Nexus main panel: stance, summary, up to 3 reasons and the agents that still disagree.
+  2. **Debate.** At most 8 speakers rebut named agents. The debate is open for at most 3 minutes, then closed.
+     - **Who speaks** (owner decision 2026-11-06: decision and bias are different things):
+       - agents whose action differs from the bus majority;
+       - agents whose bias leans against the room's bias (the confidence-weighted bias of the bus, NEUTRAL inside ±0.1; against a NEUTRAL room every leaning agent counts), by confidence;
+       - when anyone dissents against a BULLISH or BEARISH room, its strongest holder, to defend it;
+       - the Risk Manager.
+     - **Why:** production 13:30, 2026-11-06: all 18 agents said WAIT, 11 leaned bearish and 3 bullish, and only the Risk Manager debated, because speakers were chosen by action alone.
+     - When the action is unanimous but the bias is split, the debaters argue the bias.
+     - Every rebuttal gives its bias too. A dissenter the bus persuaded may concede instead: its stance or bias changes, it may name nobody, and it is kept as `conceded: true` (2026-11-06).
+  3. **Conclusion.** The moderator concludes for the Nexus main panel: the **decision** (`stance`: what to do now, under the confirmation rule), the room's **bias** (`bias`: where the weight of the evidence leans, BULLISH, BEARISH or NEUTRAL, even when the decision is WAIT), a summary that states both first ("Decision WAIT, bias bearish: …"), up to 3 reasons, and the agents that still disagree.
+     - A BULLISH or BEARISH bias needs at least one agent holding it (`bias_without_support`, one correction call). A missing bias is the room's computed bias, stored as `majority_bias`.
+     - Nexus shows the decision and the bias side by side. The 1H, 4H and D1 rooms follow the same rules.
   - **Bias beside the action** (owner decision 2026-11-06, Prophet audit).
     - Every opening states its action (BUY, SELL, HOLD, WAIT or CLOSE) and its `bias` (BULLISH, BEARISH or NEUTRAL): the direction its own data leans, even when the action is WAIT for lack of a confirmation.
     - Room leans (Trend by timeframe, Global Conclusion) read the bias. Openings stored before the bias existed use the action.

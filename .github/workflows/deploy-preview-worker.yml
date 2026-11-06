@@ -583,6 +583,8 @@ jobs:
             assert.equal(room.conclusion?.status, "ok", "the moderator concludes for the main panel");
             assert.equal(room.phase, "closed");
             assert.ok(room.conclusion.reasons.length >= 1 && room.conclusion.reasons.length <= 3);
+            // Owner decision 2026-11-06: the conclusion gives the decision and the room's bias.
+            assert.ok(["BULLISH", "BEARISH", "NEUTRAL"].includes(room.conclusion.bias), "the conclusion carries the bias beside the decision");
             const texts = [...room.openings.map(m => m.claim), ...room.debate.map(m => m.argument), room.conclusion.summary, ...room.conclusion.reasons];
             assert.ok(texts.every(t => t && !codeLike(t)), "War Room messages must be natural language");
           };

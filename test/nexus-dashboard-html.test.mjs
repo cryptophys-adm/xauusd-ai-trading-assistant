@@ -59,6 +59,9 @@ test("the UI keeps the Console's obsidian palette and calls only same-origin rea
   const panel = ui("src/components/ThreadsPanel.tsx");
   assert.match(panel, /useTab\(\)/);
   assert.ok(panel.indexOf("<ConclusionHero") < panel.indexOf("<Discussion"), "each room tab starts with its conclusion");
+  // Owner decision 2026-11-06: the conclusion shows the decision and the room's bias separately.
+  assert.match(panel, />Decision</);
+  assert.match(panel, />Bias</);
   assert.match(ui("src/components/Roster.tsx"), /useTab\(\)/, "the agents panel follows the active tab");
   const market = ui("src/lib/market.tsx");
   for (const route of ["/api/threads/timeframe?chart=", "/api/news/daily", "/api/m5-context", "/api/conclusion/global"]) assert.ok(market.includes(route), route);
