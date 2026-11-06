@@ -1,0 +1,31 @@
+{
+  "name": "@cryptophys/nexus-ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Nexus UI: the XAUUSD War Room and Threads in the Cerebrum Console obsidian design (same stack and palette as workers/console/ui in cryptophys-cloud-platform), served as Workers Static Assets.",
+  "scripts": {
+    "build": "tsc --noEmit -p . && vite build",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "clsx": "2.1.1",
+    "framer-motion": "11.2.10",
+    "lightweight-charts": "4.2.0",
+    "lucide-react": "0.378.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "three": "0.174.0"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@types/three": "0.174.0",
+    "@vitejs/plugin-react": "4.7.0",
+    "autoprefixer": "10.4.20",
+    "postcss": "8.5.32",
+    "tailwindcss": "3.4.17",
+    "typescript": "5.9.3",
+    "vite": "6.4.5"
+  }
+}

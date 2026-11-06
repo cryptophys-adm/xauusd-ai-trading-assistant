@@ -160,6 +160,17 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - The 5m context carries the last 12 closed bars (`recent_bars`). The H1 chain strips them.
 - Read APIs: `GET /api/threads?kind=news|h1`, `GET /api/threads/:id` (nested replies; `h1:<candle_key>` serves the H1 bus debate as a thread) and `GET /api/live?since=`.
 - **Nexus layout (owner decision 2026-11-05, Live War Room).** The main panel is the War Room conclusion, with the H1 decision shown as its constraint. Below it, the Live War Room 15m shows the latest discussion only, with no history. The right panel is one card whose top is the tab bar D1 | 4H | 1H | 15m | News (owner decision 2026-11-06; no 5m tab for now). Each timeframe tab shows its whole War Room Thread (TLDR, communication bus, debate): 15m from `GET /api/war-room/latest`; 1H, 4H and D1 from `GET /api/threads/timeframe`. The News tab shows the News Daily TLDR and each headline with its bias (`GET /api/news/daily`). The left panel lists the War Room agents and the worker status.
+- **Nexus UI (owner decision 2026-11-06).** Nexus uses the obsidian design of the Cerebrum Console (`cryptophys-cloud-platform` `workers/console/ui`), because it will merge into the Console control panel. The `nexus` subdomain will later replace `home`.
+  - **Stack:** the same as the Console: React 18, Vite, Tailwind with the obsidian palette, lucide-react, framer-motion, and three.js for the neural-mesh background. The chart uses lightweight-charts.
+  - **Build and serving:** the source is in `workers/xauusd-nexus-dashboard/ui`. It is built into `ui/dist` and served as Workers Static Assets (`run_worker_first`). The deploy workflow builds it; `validate-nexus-dashboard.yml` builds it on pull requests.
+  - **Layout:**
+    - Same header, nav row, glass panels and status footer as the Console.
+    - Left: War Room agents and Worker status.
+    - Center: chart, War Room conclusion, Live War Room 15m.
+    - Right: the Threads card with its tab bar `D1 | 4H | 1H | 15m | News`.
+    - On narrower screens, the side panels move under the center instead of hiding.
+    - Shadow versions are at `#/shadow`; `/shadow` redirects there.
+  - **Read-only:** the Worker forwards only GET/HEAD `/api/*` calls to the AI Worker.
 - The AI Worker's old `/dashboard` page (Analyst/Counselor/Reasoner chat timeline and raw output) is retired. `GET /dashboard` redirects (302) to the Nexus dashboard (`NEXUS_DASHBOARD_URL`, default `https://nexus.cryptophys.work/`).
 - The dashboard shows agents by name only: Technical Analyst, News Analyst, Risk Manager and Moderator. It never shows model names.
 - Agent text must be natural language: validators reject snake_case field names, dotted evidence paths and key=value pairs in insights, summaries and dissent (`src/natural-language.mjs`). Evidence paths stay in `refs`.
