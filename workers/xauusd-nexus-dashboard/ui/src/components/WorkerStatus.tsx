@@ -8,20 +8,25 @@ export default function WorkerStatus() {
   const { data, loading, error } = usePoll(() => get("/api/status"), 30_000);
   const ai = (data as any)?.ai_worker ?? {};
   const ing = (data as any)?.ingestion_worker ?? {};
-  const pills = [
-    { label: "AI Worker", ok: ai.status === "ok" },
-    { label: "News ingestion", ok: ing.status === "ok" },
-    { label: "TradingView OAuth", ok: !!ing.oauth_authorized },
-    { label: "Local lane", ok: !!ai.local_lane?.fresh },
-  ];
   const registry: any[] = Array.isArray(ai.local_lane?.registry) ? ai.local_lane.registry : [];
+  // The local lane is fresh when an approved local H1 record exists for a recent candle. While the
+  // H1 identities re-earn parity it is not fresh by design: show the progress instead of a bare red.
+  const h1 = registry.filter((x) => x.engine === "prophet" || x.engine === "gmi");
+  const reEarning = !ai.local_lane?.fresh && h1.length > 0 && h1.every((x) => x.status !== "approved");
+  const progress = h1.length ? Math.min(...h1.map((x) => Number(x.consecutive_matches) || 0)) : 0;
+  const pills: { label: string; tone: "green" | "amber" | "red" }[] = [
+    { label: "AI Worker", tone: ai.status === "ok" ? "green" : "red" },
+    { label: "News ingestion", tone: ing.status === "ok" ? "green" : "red" },
+    { label: "TradingView OAuth", tone: ing.oauth_authorized ? "green" : "red" },
+    { label: reEarning ? `Local lane · re-earning ${progress}/24` : "Local lane", tone: ai.local_lane?.fresh ? "green" : reEarning ? "amber" : "red" },
+  ];
   return (
     <div className="glass p-4">
       <div className="eyebrow mb-3 flex items-center gap-2"><Server className="h-3 w-3 text-cyan-300" />Worker status</div>
       {loading && !data ? <Skeleton rows={3} /> : error && !data ? <p className="text-[12px] text-rose-300">Status unavailable.</p> : (
         <>
           <div className="grid grid-cols-2 gap-1.5">
-            {pills.map((p) => <div key={p.label} className="glass-inner flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-slate-300"><Dot tone={p.ok ? "green" : "red"} pulse={!p.ok} />{p.label}</div>)}
+            {pills.map((p) => <div key={p.label} className="glass-inner flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-slate-300"><Dot tone={p.tone} pulse={p.tone !== "green"} />{p.label}</div>)}
           </div>
           {!!registry.length && (
             <div className="mt-3">

@@ -31,6 +31,11 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
     - `xauusd-reasoner` (`xauusd_digest`): every new H1 chain decision. A BUY↔SELL flip is `warning`.
     - `xauusd-moderator` (`xauusd_digest`): the War Room 15m conclusion when its stance changes, otherwise at most once an hour.
     - `hud-*` (`hud_digest`): a HUD agent's War Room stance when it moves into or out of BUY or SELL.
+    - `xauusd-risk-manager` (`xauusd_digest`, `src/health-alerts.mjs`, owner decision 2026-11-06): system health alerts.
+      - **Detected problems:** a revoked parity identity, an input bar that differs from TradingView, a missing local H1 record, a timeframe room without a conclusion 45 minutes after the close, 10+ calls lost to the Workers AI rate limit in an hour, a stale News Daily, and a stale War Room 15m.
+      - **Reports:** a `warning` when an alert opens, and an `info` when a lasting alert resolves. At most 3 reports an hour.
+      - **Where they live:** D1 `health_alerts` (migration 0009). Nexus shows them as its Priority Queue (`GET /api/health/alerts`).
+      - An alert never changes a decision, a room or a parity status.
   - **Rules:**
     - Observations only: decision and confidence, never size, lots, levels or order wording.
     - `critical` is never sent, because the platform opens a GitHub issue for it.
@@ -53,6 +58,12 @@ Owner decision, 2026-11-05: the architecture does not depend on webhooks. Approv
 2. **TradingView webhook** (calibration only). The sources are `prophet_r38`, `prophet_r37_ssot` and `gmi_v12_70`, on H1 and 5m.
    - Webhooks are stored and compared field by field with the local records. They never start the chain and are never decision evidence (`input_lanes.tradingview_webhook.role: "calibration_only"`).
    - Approval persists while no webhook arrives. A mismatch during a calibration run revokes the identity, and the chain then fails closed until it re-earns 24/24.
+   - **Input mismatch** (owner decision 2026-11-06). When only the input bar differs (open, high, low, close or volume) and every indicator field agrees, the comparison is `input_mismatch`.
+     - It neither counts nor revokes.
+     - That candle's records stay out of the trusted lane, so the H1 chain reads the TradingView evidence for it.
+     - The pull adapter rebuilds an H1 candle whose bar TradingView revised after publication. It cuts the bundle at that close and publishes once more (`republishRevisedH1`). The new comparison replaces the open one and counts.
+     - `INPUT_MISMATCH_REVOKE_AFTER` (3) input mismatches in a row on different candles mean the data pipeline is wrong, so they revoke like a mismatch.
+     - One-time reconciliation (owner approval 2026-11-06): `reclassifyOnce` reclassifies the earlier input-only mismatches and restores the identities they revoked (the H1 `prophet` and `gmi` revocations of 2026-11-06). It runs once per database, guarded by a KV marker.
    - **Calibration runbook (for example monthly).**
      1. Install the existing alerts on the H1 chart, and on the 5m chart for the 5m lane.
      2. Leave them on for at least a few candles.

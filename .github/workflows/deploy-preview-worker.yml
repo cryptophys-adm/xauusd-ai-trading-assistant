@@ -51,6 +51,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Runs are serialized (concurrency group), but a run that failed midway leaves its queue
+          # messages behind (War Room, analysis and retries), and the next run's consumer drains them
+          # first: on PR #114 the next run's analysis waited past its 90 s window behind them. The
+          # Worker of every earlier run is deleted, so its messages can only delay this run.
+          npx wrangler queues purge xauusd-webhook-events-preview --force --config wrangler.preview.jsonc || echo "Preview queue purge unavailable; continuing."
           PREVIEW_WORKER_NAME="xauusd-ai-preview-${GITHUB_RUN_ID}"
           echo "PREVIEW_WORKER_NAME=$PREVIEW_WORKER_NAME" >> "$GITHUB_ENV"
           # A brand-new Worker can briefly read back as "does not exist" (code 10007) right after
@@ -368,7 +373,9 @@ jobs:
               return { ok: false };
             }
           };
-          const retryDeadline = Date.now() + 90_000;
+          // The queue consumer runs one batch at a time and this run's own War Room and bus tasks
+          // share it: 180 s leaves room for a busy consumer without hiding a stuck one.
+          const retryDeadline = Date.now() + 180_000;
           let queueReady = null;
           let latestDecision = null;
           while (Date.now() < retryDeadline) {

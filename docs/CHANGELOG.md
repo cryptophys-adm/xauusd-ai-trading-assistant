@@ -6,6 +6,22 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(parity, health): architecture gaps 1 and 2 (owner decision 2026-11-06).
+  - **Gap 1: one bad bar no longer revokes the H1 chain.**
+    - When only the input bar differs from TradingView and every indicator field agrees, the result is `input_mismatch`. It neither counts nor revokes, and the candle stays out of the trusted lane.
+    - The pull adapter republishes an H1 candle whose bar TradingView revised later. The new comparison replaces the open one and counts.
+    - Three input mismatches in a row still revoke.
+    - **One-time reconciliation (owner approval 2026-11-06):** the first parity sweep after deploy runs `reclassifyOnce` (KV marker `parity:reclassify-input-only:v1`).
+      - It reclassifies the comparisons stored as `mismatch` under the old rule whose mismatches are all input-bar fields. In production these are three: GMI H1 01:00 volume, and Prophet and GMI H1 03:00 close and volume.
+      - It restores the H1 `prophet` and `gmi` identities they revoked.
+      - Indicator mismatches and escalated repeated-input revocations are never touched.
+  - **Gap 2: the system watches itself** (`src/health-alerts.mjs`).
+    - It checks for: a revoked parity identity, an input mismatch, a missing local H1 record, a room without a conclusion, Workers AI rate-limit losses, a stale News Daily, and a stale War Room.
+    - It reports a `warning` when an alert opens and an `info` when it resolves, from `xauusd-risk-manager` to the platform kernel (at most 3 an hour, never `critical`).
+    - Nexus shows the open alerts as its Priority Queue.
+  - **Rate-limited model calls retry once.** A call that hits the Workers AI per-minute limit (3021) waits 12 seconds and retries the same model once, within its deadline. It no longer marks the primary model as failed for the rest of the run.
+    - The limit is shared by every room and by the preview-e2e runs of the same account.
+    - A preview run beside the 15m War Room lost two HUD openings to it.
 - feat(nexus): Nexus rebuilt in the Cerebrum Console obsidian design (owner decision 2026-11-06), so it can merge into the Console control panel. The `nexus` subdomain will later replace `home`.
   - **Stack:** a React SPA in `workers/xauusd-nexus-dashboard/ui` with the same stack and palette as `workers/console/ui`: React, Vite, Tailwind obsidian, lucide, framer-motion and the three.js neural mesh. It is served as Workers Static Assets.
   - **Layout:**

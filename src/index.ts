@@ -161,6 +161,7 @@ import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
 import { runPendingTimeframeThreads, readTimeframeThread, tfThreadsEnabled } from "./timeframe-threads.mjs";
 import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
+import { runHealthAlerts, readHealthAlerts } from "./health-alerts.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
 import { DECISION_TEXT_RULE, plainDecisionText } from "./plain-decision.mjs";
@@ -1913,6 +1914,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/health/alerts") {
+    // The Nexus Priority Queue: open health alerts and those resolved in the last 24 hours.
+    try {
+      return dashboardJson({ status: "ok", ...(await readHealthAlerts(env.DB)) });
+    } catch (error) {
+      console.error("health_alerts_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/news/daily") {
     // The News tab: the last 24 hours of news, each headline with its gold bias, and the TLDR.
     try {
@@ -2218,6 +2228,13 @@ export default {
           try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env))); }
           catch (e) { console.error("shadow_versions_failed", e instanceof Error ? e.message : String(e)); }
         }
+        // Health alerts (gap 2, owner decision 2026-11-06): detect operational problems, keep
+        // them as open alerts for the Nexus Priority Queue and report state changes to the
+        // platform kernel (warning / info, never critical). Non-fatal by design.
+        try {
+          const health = await runHealthAlerts(env);
+          if (health.opened || health.resolved || (Array.isArray(health.published) && health.published.length)) console.log("health_alerts", JSON.stringify(health));
+        } catch (e) { console.error("health_alerts_failed", e instanceof Error ? e.message : String(e)); }
         // RFC_INDICATOR_AGENT_PLATFORM P4: advisory reports to the Cryptophys Platform kernel.
         // Non-fatal by design; a no-op without the AGENTS binding (preview, tests).
         try {

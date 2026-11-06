@@ -68,11 +68,66 @@ export async function publishLocalComputation(env, { now = Date.now(), force = f
     published_at: new Date(now).toISOString(),
     engines: results,
     not_produced: built.records.some((r) => r.engine === "gmi") ? [] : ["gmi"],
-    gmi_error: built.gmi_error || null
+    gmi_error: built.gmi_error || null,
+    // The bar the records were built on, so a later revision of it can be detected.
+    bar: barSnapshot(lastH1)
   };
   if (ok) await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
   await kv.put(LAST_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
   return summary;
+}
+
+const barSnapshot = (b) => (b ? { open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume ?? null } : null);
+const sameBar = (a, b) => !!a && !!b && ["open", "high", "low", "close", "volume"].every((k) => a[k] === b[k]);
+
+/** The bundle as it was at `closeMs`: every series cut to the bars closed by then. */
+export function bundleUntil(bundle, closeMs) {
+  const cut = (f) => (f ? { ...f, candles: (f.candles || []).filter((c) => Date.parse(c.close_time) <= closeMs) } : f);
+  const timeframes = Object.fromEntries(Object.entries(bundle?.timeframes || {}).map(([k, f]) => [k, cut(f)]));
+  const external = Object.fromEntries(Object.entries(bundle?.external_series || {}).map(([sym, frames]) => [sym, Object.fromEntries(Object.entries(frames || {}).map(([k, f]) => [k, cut(f)]))]));
+  return { ...bundle, timeframes, context_timeframes: { D1: timeframes.D1, W1: timeframes.W1 }, external_series: external };
+}
+
+/** H1 bars checked for a revision after their records were published (newest first). */
+export const H1_REVISION_LOOKBACK = 3;
+
+/**
+ * Self-healing input (gap 1, owner decision 2026-11-06): when TradingView revises an H1 bar after
+ * its local records were published (the overlap re-pull of the next close merges the final bar),
+ * the records are rebuilt on the bar as it was then, cut at its close, and published once more.
+ * The AI Worker compares them again: a former input mismatch is replaced and counts.
+ */
+export async function republishRevisedH1(env, { now = Date.now(), bundle = null } = {}) {
+  const kv = env.MARKET_DATA_CACHE;
+  if (!kv || typeof env.AI_WORKER?.submit !== "function") return { status: "not_configured" };
+  const resolvedBundle = bundle || await buildBundle(env, now);
+  const h1 = resolvedBundle.timeframes?.H1?.candles || [];
+  const out = [];
+  for (const bar of h1.slice(-H1_REVISION_LOOKBACK).reverse()) {
+    const candleKey = "OANDA:XAUUSD:60:" + Date.parse(bar.open_time);
+    let marker = null;
+    try { marker = JSON.parse((await kv.get(PUBLISHED_PREFIX + candleKey)) || "null"); } catch { marker = null; }
+    if (!marker?.bar || marker.republished_at || sameBar(marker.bar, barSnapshot(bar))) continue;
+    let built;
+    try {
+      built = buildH1LocalCalculations(bundleUntil(resolvedBundle, Date.parse(bar.close_time)), { now, mintick: Number(env.CHART_MINTICK) || 0.001 });
+    } catch (error) {
+      out.push({ candle_key: candleKey, status: asString(error?.code) || "local_computation_failed" });
+      continue;
+    }
+    if (built.candle_key !== candleKey) { out.push({ candle_key: candleKey, status: "candle_key_mismatch" }); continue; }
+    const results = [];
+    for (const record of built.records) {
+      try { results.push(await postRecord(env, record)); }
+      catch (error) { results.push({ engine: record.engine, http_status: null, error: asString(error?.name) || "post_failed" }); }
+    }
+    const ok = results.every((r) => r.http_status && r.http_status < 300);
+    if (ok) {
+      await kv.put(PUBLISHED_PREFIX + candleKey, JSON.stringify({ ...marker, bar: barSnapshot(bar), previous_bar: marker.bar, republished_at: new Date(now).toISOString() }), { expirationTtl: 60 * 60 * 24 * 7 });
+    }
+    out.push({ candle_key: candleKey, status: ok ? "republished" : "partial_failure", previous_bar: marker.bar, bar: barSnapshot(bar), engines: results });
+  }
+  return { status: out.length ? "revised" : "unchanged", candles: out };
 }
 
 /**

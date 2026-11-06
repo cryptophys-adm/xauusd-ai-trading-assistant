@@ -245,3 +245,34 @@ test("H4/D1 sweep keys come from the cached native bars (22:00-anchored), newest
   ]);
   assert.deepEqual(await closedHtfCandleKeys({}, now), [], "no cache: no keys, never guessed");
 });
+
+test("a candle whose local input bar differs never enters the trusted lane; the republished final bar does", async () => {
+  const env = { DB: d1(), WEBHOOK_BUFFER: kv(), PARITY_PROMOTE_AFTER: "1" };
+  const base = 1793750400000;
+  const approvedKey = `OANDA:XAUUSD:60:${base - 3600000}`;
+  await seedCandle(env, approvedKey);
+  await reconcileLocalComputation(env, approvedKey);
+
+  // The local record of the next candle was built on a provisional bar (close and volume differ).
+  const key = `OANDA:XAUUSD:60:${base}`;
+  await seedCandle(env, key);
+  for (const engine of ["prophet", "gmi"]) {
+    const rec = JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc-observed:" + key + ":" + engine));
+    rec.values.candle = { ...rec.values.candle, c: rec.values.candle.c + 0.33, volume: rec.values.candle.volume - 496 };
+    await env.WEBHOOK_BUFFER.put("localcalc-observed:" + key + ":" + engine, JSON.stringify(rec));
+  }
+  const first = await reconcileLocalComputation(env, key);
+  assert.equal(first.comparisons.prophet.result, "input_mismatch");
+  assert.deepEqual([first.trust.prophet, first.trust.gmi, first.trust.mizan], [false, false, false]);
+  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":prophet"), null);
+  const status = env.DB.db.prepare("SELECT status FROM engine_parity_registry WHERE engine = 'prophet'").get().status;
+  assert.equal(status, "approved", "the identity is not revoked for a bar-only difference");
+
+  // Republished on the final bar: it matches, counts, and enters the trusted lane.
+  await seedCandle(env, key);
+  const second = await reconcileLocalComputation(env, key);
+  assert.equal(second.comparisons.prophet.result, "match");
+  assert.equal(second.comparisons.prophet.counted, true);
+  assert.equal(second.trust.prophet, true);
+  assert.ok(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":prophet"));
+});

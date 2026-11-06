@@ -340,3 +340,28 @@ test("task builder is deterministic", () => {
   assert.equal(t.event_id, `bus:${CANDLE}:${RUN}`);
   assert.throws(() => buildMultiAgentBusTask({ candleKey: "", inputFingerprint: RUN }));
 });
+
+test("a rate-limited call waits and retries the same model once; it never marks the primary as failed", async () => {
+  const { callBusModel, isRateLimited } = await import("../src/multi-agent-bus.mjs");
+  assert.equal(isRateLimited(new Error("3021: rate limiting: inference request per min rate reached")), true);
+  assert.equal(isRateLimited(new Error("5007: model unavailable")), false);
+  let calls = 0;
+  const ai = { run: async () => { calls += 1; if (calls === 1) throw new Error("3021: rate limiting: inference request per min rate reached"); return { choices: [{ message: { content: "{\"stance\":\"WAIT\"}" }, finish_reason: "stop" }] }; } };
+  const runState = {};
+  const now = Date.now();
+  const r = await callBusModel({ AI: ai, MULTI_AGENT_MODEL: "m", MULTI_AGENT_FALLBACK_MODEL: "m", MODEL_RATE_LIMIT_RETRY_MS: "0" }, { messages: [{ role: "system", content: "s" }, { role: "user", content: "u" }], schemaName: "x", schema: { type: "object" }, maxTokens: 10, deadline: now + 60_000, clock: () => now, runState });
+  assert.equal(r.status, "answered");
+  assert.equal(calls, 2);
+  assert.equal(runState.primaryError, undefined, "a transient rate limit does not demote the primary model");
+
+  // A second rate limit, or no time left for the wait, fails the agent as before.
+  let n = 0;
+  const always = { run: async () => { n += 1; throw new Error("3021: rate limiting"); } };
+  const failed = await callBusModel({ AI: always, MULTI_AGENT_MODEL: "m", MULTI_AGENT_FALLBACK_MODEL: "m", MODEL_RATE_LIMIT_RETRY_MS: "0" }, { messages: [{ role: "system", content: "s" }, { role: "user", content: "u" }], schemaName: "x", schema: { type: "object" }, maxTokens: 10, deadline: now + 60_000, clock: () => now, runState: {} });
+  assert.equal(failed.status, "agent_failed");
+  assert.equal(n, 2);
+  let m = 0;
+  const late = await callBusModel({ AI: { run: async () => { m += 1; throw new Error("3021: rate limiting"); } }, MULTI_AGENT_MODEL: "m", MULTI_AGENT_FALLBACK_MODEL: "m" }, { messages: [{ role: "system", content: "s" }, { role: "user", content: "u" }], schemaName: "x", schema: { type: "object" }, maxTokens: 10, deadline: now + 10_000, clock: () => now, runState: {} });
+  assert.equal(late.status, "agent_failed");
+  assert.equal(m, 1, "no wait when the deadline cannot hold it");
+});

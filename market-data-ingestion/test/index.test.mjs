@@ -202,7 +202,7 @@ test("GET /engine-shadow refuses to pretend Mizan/GMI local calculators exist", 
   assert.equal(body.calculation_allowed_for_trusted_evidence, false);
 });
 
-const { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHudSnapshots, LAST_M5_PUBLISH_KEY, LAST_M15_PUBLISH_KEY } = await import("../src/local-publisher.mjs");
+const { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHudSnapshots, republishRevisedH1, bundleUntil, LAST_M5_PUBLISH_KEY, LAST_M15_PUBLISH_KEY } = await import("../src/local-publisher.mjs");
 const { buildBundle } = await import("../src/tradingview-source.mjs");
 
 function fakeAiWorker(status = 202) {
@@ -240,6 +240,46 @@ test("publisher posts mizan+prophet+gmi local_computation for the latest closed 
 
   const latest = await (await worker.fetch(new Request("https://m/local-computation/latest", { headers: auth }), e)).json();
   assert.equal(latest.last_publish.candle_key, first.candle_key);
+});
+
+test("a published H1 bar that TradingView revises later is rebuilt on the final bar and published once more", async () => {
+  // Production 2026-11-06: the H1 bar pulled seconds after its close was provisional (close and
+  // volume); the overlap re-pull merged the final bar later, after the records were published.
+  const ai = fakeAiWorker();
+  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai });
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  const bundle = await buildBundle(e);
+  const lastH1 = bundle.timeframes.H1.candles.at(-1);
+  const now = Date.parse(lastH1.close_time) + 60_000;
+  assert.equal((await publishLocalComputation(e, { now, bundle })).status, "published");
+  assert.deepEqual(await republishRevisedH1(e, { now, bundle }), { status: "unchanged", candles: [] }, "an unrevised bar is never republished");
+
+  const revised = structuredClone(bundle);
+  const bar = revised.timeframes.H1.candles.at(-1);
+  bar.close = Math.round((bar.close - 0.33) * 1000) / 1000;
+  bar.low = Math.min(bar.low, bar.close);
+  bar.volume = (bar.volume ?? 0) + 496;
+  const r = await republishRevisedH1(e, { now: now + 60 * 60_000, bundle: revised });
+  assert.equal(r.status, "revised");
+  assert.equal(r.candles[0].status, "republished");
+  assert.equal(r.candles[0].candle_key, `OANDA:XAUUSD:60:${lastH1.time * 1000}`);
+  const reposted = ai.posts.slice(3).map((p) => p.body);
+  assert.deepEqual(reposted.map((b) => b.engine), ["mizan", "prophet", "gmi"]);
+  assert.equal(reposted[1].values.candle.c, bar.close, "rebuilt on the final bar");
+  assert.equal(reposted[1].values.candle.volume, bar.volume);
+
+  assert.equal((await republishRevisedH1(e, { now: now + 61 * 60_000, bundle: revised })).status, "unchanged", "republished once only");
+  assert.equal(ai.posts.length, 6);
+});
+
+test("bundleUntil cuts every series at a close, so a past bar is rebuilt as it was then", () => {
+  const f = (closes) => ({ candles: closes.map((c) => ({ close_time: new Date(c).toISOString() })) });
+  const cut = bundleUntil({ timeframes: { H1: f([1000, 2000, 3000]), D1: f([5000]) }, external_series: { "TVC:DXY": { H4: f([1500, 2500]) } } }, 2000);
+  assert.equal(cut.timeframes.H1.candles.length, 2);
+  assert.equal(cut.timeframes.D1.candles.length, 0);
+  assert.equal(cut.external_series["TVC:DXY"].H4.candles.length, 1);
+  assert.equal(cut.context_timeframes.D1, cut.timeframes.D1);
 });
 
 test("publisher stays off without the AI Worker RPC binding and records failures without a dedupe marker", async () => {

@@ -319,6 +319,18 @@ function requestFor(model, messages, schemaName, schema, maxTokens, effort, prim
  * One model call with a single fallback retry. Returns the parsed object plus
  * call metadata. Never throws.
  */
+/**
+ * Workers AI per-minute rate limit (error 3021). The limit is shared by every room and by the
+ * preview-e2e runs of the same account (production 2026-11-06: a room started right after another
+ * lost 14 of 18 openings; a preview run beside the 15m War Room lost two HUD openings). It is
+ * transient, so a rate-limited call waits and tries the same model once more, within its deadline,
+ * instead of failing the agent or marking the primary model as failed for the rest of the run.
+ */
+export const RATE_LIMIT_RETRY_MS = 12_000;
+export function isRateLimited(error) {
+  return /\b3021\b|rate limit/i.test(String(error?.message || error || ""));
+}
+
 export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState = {} }) {
   const primary = String(env?.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL);
   const fallback = String(env?.MULTI_AGENT_FALLBACK_MODEL || BUS_DEFAULT_FALLBACK_MODEL);
@@ -331,6 +343,8 @@ export async function callBusModel(env, { messages, schemaName, schema, maxToken
   let lastError = null;
   let usage = 0;
   const meta = (i) => ({ fallback_used: !attempts[i].primary, primary_error: runState.primaryError || null });
+  const waitMs = Number.isFinite(Number(env?.MODEL_RATE_LIMIT_RETRY_MS)) ? Number(env.MODEL_RATE_LIMIT_RETRY_MS) : RATE_LIMIT_RETRY_MS;
+  let rateRetried = false;
   for (let i = 0; i < attempts.length; i++) {
     const { model, primary: isPrimary } = attempts[i];
     const remaining = deadline - clock();
@@ -345,6 +359,13 @@ export async function callBusModel(env, { messages, schemaName, schema, maxToken
     } catch (error) {
       lastError = error;
       const message = error?.name === "TimeoutError" ? "timeout" : clip(error?.message || String(error) || "model_error", 300);
+      if (!rateRetried && isRateLimited(error) && deadline - clock() > waitMs + 5_000) {
+        rateRetried = true;
+        console.warn("bus_model_rate_limited", JSON.stringify({ model, retry_in_ms: waitMs }));
+        if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+        i -= 1; // the same model once more
+        continue;
+      }
       if (isPrimary) {
         runState.primaryError = `${model}: ${message}`;
         console.warn("bus_primary_model_failed", JSON.stringify({ model, error: message }));

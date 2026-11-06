@@ -1,6 +1,6 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
-import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHtfLocalComputation, publishHudSnapshots, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
+import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHtfLocalComputation, publishHudSnapshots, republishRevisedH1, LAST_PUBLISH_KEY } from "./local-publisher.mjs";
 import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, verifyDerivedSeries, settleSeconds, SETTLE_SECONDS } from "./tradingview-source.mjs";
 
 const JSON_HEADERS = {
@@ -262,6 +262,14 @@ const worker = {
         }
       } catch (error) {
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_failed", code: asString(error?.code) || "publish_failed" }));
+      }
+      // A published H1 bar that TradingView revised later is rebuilt and published once more,
+      // so its parity comparison runs on the final bar (gap 1, owner decision 2026-11-06).
+      try {
+        const revised = await republishRevisedH1(env, { bundle: latestBundle });
+        if (revised.status === "revised") console.log(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_republish_h1", candles: revised.candles.map((c) => ({ candle_key: c.candle_key, status: c.status, previous_bar: c.previous_bar, bar: c.bar })) }));
+      } catch (error) {
+        console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_republish_h1_failed", code: asString(error?.code) || "republish_failed" }));
       }
       // C0 verified 5m lane: publish the 5m local records for parity (flag-gated).
       let m5Context = null;

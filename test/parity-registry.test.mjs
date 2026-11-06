@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import {
   compareWithWebhooks, identityOf, ensureSchema, registerIdentity, recordComparison, isTrusted, listRegistry,
-  resetSchemaCacheForTests, policyFromEnv, DEFAULT_POLICY, scopedEngine
+  resetSchemaCacheForTests, policyFromEnv, DEFAULT_POLICY, scopedEngine, INPUT_MISMATCH_REVOKE_AFTER
 } from "../src/parity-registry.mjs";
 
 /** Minimal D1 adapter over node:sqlite so the registry SQL runs for real. */
@@ -61,14 +61,14 @@ test("comparison matches field-by-field including raw candle inputs, with numeri
   assert.equal(compareWithWebhooks(nearly, webhooks()).status, "match");
 });
 
-test("a differing indicator value or a differing input bar is a mismatch", () => {
+test("a differing indicator value is a mismatch; a differing input bar alone is an input mismatch", () => {
   const value = prophetComparable();
   value.prophet_r38.d_enc = 1;
   const r1 = compareWithWebhooks(local("prophet", value), webhooks());
   assert.equal(r1.status, "mismatch");
   assert.deepEqual(r1.mismatches.map((m) => m.field), ["d_enc"]);
   const r2 = compareWithWebhooks(local("gmi", gmiComparable(), { candle: { ...candle, h: candle.h + 0.5 } }), webhooks());
-  assert.equal(r2.status, "mismatch");
+  assert.equal(r2.status, "input_mismatch");
   assert.equal(r2.mismatches[0].field, "input:h");
 });
 
@@ -201,4 +201,89 @@ test("policy is configurable from env with safe fallbacks", () => {
   assert.deepEqual(policyFromEnv({}), DEFAULT_POLICY);
   assert.equal(policyFromEnv({ PARITY_PROMOTE_AFTER: "48" }).promoteAfter, 48);
   assert.equal(policyFromEnv({ PARITY_PROMOTE_AFTER: "0" }).promoteAfter, 24);
+});
+
+test("a bar-only difference is an input mismatch; a differing indicator field stays a mismatch", () => {
+  const bar = compareWithWebhooks(local("prophet", prophetComparable(), { candle: { ...candle, c: candle.c + 0.33, volume: candle.volume + 496 } }), webhooks());
+  assert.equal(bar.status, "input_mismatch");
+  assert.deepEqual(bar.mismatches.map((m) => m.field).sort(), ["input:c", "input:c", "input:volume", "input:volume"]);
+  const value = prophetComparable();
+  value.prophet_r38.d_enc = 1;
+  assert.equal(compareWithWebhooks(local("prophet", value, { candle: { ...candle, c: candle.c + 0.33 } }), webhooks()).status, "mismatch");
+});
+
+test("an input mismatch neither counts nor revokes; the republished candle replaces it and counts", async () => {
+  const db = d1();
+  await ensureSchema(db);
+  const policy = { ...DEFAULT_POLICY, promoteAfter: 2 };
+  const id = identityOf(local("prophet", {}));
+  await registerIdentity(db, id);
+  const match = { status: "match", compared: 24, mismatches: [], missing: [] };
+  const input = { status: "input_mismatch", compared: 24, mismatches: [{ field: "input:c" }], missing: [] };
+  await recordComparison(db, id, "k1", match, policy, "2026-11-06T01:00:00Z");
+  await recordComparison(db, id, "k2", match, policy, "2026-11-06T02:00:00Z");
+  assert.equal(await isTrusted(db, id), true);
+
+  const r = await recordComparison(db, id, "k3", input, policy, "2026-11-06T03:00:00Z");
+  assert.deepEqual(r, { counted: false, result: "input_mismatch" });
+  assert.equal(await isTrusted(db, id), true, "the approved identity stays approved");
+  let [row] = await listRegistry(db);
+  assert.equal(row.consecutive_matches, 2);
+  assert.equal(row.last_result, "input_mismatch");
+
+  // The pull adapter republishes k3 on the final bar: the new comparison replaces the open one.
+  assert.equal((await recordComparison(db, id, "k3", match, policy, "2026-11-06T03:05:00Z")).counted, true);
+  [row] = await listRegistry(db);
+  assert.equal(row.consecutive_matches, 3);
+  assert.equal((await recordComparison(db, id, "k3", match, policy)).counted, false, "a counted candle is final");
+});
+
+test(`${INPUT_MISMATCH_REVOKE_AFTER} input mismatches in a row mean the data pipeline is wrong: they revoke`, async () => {
+  const db = d1();
+  await ensureSchema(db);
+  const policy = { ...DEFAULT_POLICY, promoteAfter: 1 };
+  const id = identityOf(local("gmi", {}, { dependencies: mizanDep }));
+  await registerIdentity(db, id);
+  await recordComparison(db, id, "k0", { status: "match", compared: 1, mismatches: [], missing: [] }, policy, "2026-11-06T00:00:00Z");
+  const input = { status: "input_mismatch", compared: 10, mismatches: [{ field: "input:volume" }], missing: [] };
+  await recordComparison(db, id, "k1", input, policy, "2026-11-06T01:00:00Z");
+  await recordComparison(db, id, "k2", input, policy, "2026-11-06T02:00:00Z");
+  assert.equal(await isTrusted(db, id), true);
+  const third = await recordComparison(db, id, "k3", input, policy, "2026-11-06T03:00:00Z");
+  assert.equal(third.result, "mismatch");
+  assert.equal(third.escalated, "repeated_input_mismatch");
+  assert.equal(await isTrusted(db, id), false);
+  const [row] = await listRegistry(db);
+  assert.equal(row.status, "revoked");
+  assert.equal(row.last_detail.reason, "repeated_input_mismatch");
+});
+
+test("one-time reconciliation: input-only revocations are restored; indicator and repeated-input revocations stay", async () => {
+  const { reclassifyInputOnlyMismatches } = await import("../src/parity-registry.mjs");
+  const db = d1();
+  await ensureSchema(db);
+  const policy = { ...DEFAULT_POLICY, promoteAfter: 1 };
+  const match = { status: "match", compared: 1, mismatches: [], missing: [] };
+  const old = (fields) => ({ status: "mismatch", compared: 10, mismatches: fields.map((field) => ({ field })), missing: [] });
+  const ids = {
+    inputOnly: identityOf(local("prophet", {})),
+    indicator: identityOf(local("gmi", {}, { dependencies: mizanDep })),
+    m5: identityOf({ ...local("prophet", {}), timeframe: "5" })
+  };
+  for (const id of Object.values(ids)) { await registerIdentity(db, id); await recordComparison(db, id, "k0", match, policy, "2026-11-06T00:00:00Z"); }
+  // Under the old rule these bar-only differences were stored as mismatches and revoked.
+  await recordComparison(db, ids.inputOnly, "k1", old(["input:c", "input:volume"]), policy, "2026-11-06T03:00:00Z");
+  await recordComparison(db, ids.indicator, "k1", old(["input:c", "d_enc"]), policy, "2026-11-06T03:00:00Z");
+  await recordComparison(db, ids.m5, "k1", { ...old(["input:volume"]), status: "mismatch" }, policy, "2026-11-06T03:00:00Z");
+  await db.prepare("UPDATE engine_parity_comparisons SET detail = json_set(detail, '$.reason', 'repeated_input_mismatch') WHERE engine = 'prophet_m5'").run();
+  for (const id of Object.values(ids)) assert.equal(await isTrusted(db, id), false);
+
+  const r = await reclassifyInputOnlyMismatches(db, "2026-11-06T09:00:00Z");
+  assert.deepEqual(r, { reclassified: 1, restored: ["prophet"] });
+  assert.equal(await isTrusted(db, ids.inputOnly), true);
+  assert.equal(await isTrusted(db, ids.indicator), false, "an indicator mismatch stays revoked");
+  assert.equal(await isTrusted(db, ids.m5), false, "an escalated repeated-input revocation stays revoked");
+  const row = (await listRegistry(db)).find((x) => x.engine === "prophet");
+  assert.equal(row.total_mismatches, 0);
+  assert.deepEqual(await reclassifyInputOnlyMismatches(db), { reclassified: 0, restored: [] }, "idempotent");
 });

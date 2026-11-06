@@ -148,6 +148,11 @@ export function compareWithWebhooks(record, webhookPayloads, policy = DEFAULT_PO
     }
   }
   const uniqueMissing = [...new Set(missing)];
+  // Only the input bar differs (open, high, low, close or volume) while every indicator field
+  // agrees: the engine computed correctly on a bar that TradingView later finalised differently
+  // (production 2026-11-06). That says nothing against the implementation, so it is recorded
+  // apart and does not revoke; repeated input mismatches still do (see recordComparison).
+  if (mismatches.length && mismatches.every((m) => String(m.field).startsWith("input:"))) return { status: "input_mismatch", compared, mismatches, missing: uniqueMissing };
   if (mismatches.length) return { status: "mismatch", compared, mismatches, missing: uniqueMissing };
   if (uniqueMissing.length) return { status: "incomplete", compared, mismatches: [], missing: uniqueMissing };
   return { status: "match", compared, mismatches: [], missing: [] };
@@ -209,20 +214,48 @@ export async function registerIdentity(db, id, now = new Date().toISOString()) {
   ).bind(id.engine, id.sourceHash, id.implementationHash, id.mizanSourceHash, id.mizanImplementationHash, now, now).run();
 }
 
+/** Consecutive input mismatches (on different candles) after which the identity is revoked. */
+export const INPUT_MISMATCH_REVOKE_AFTER = 3;
+
 /**
  * Records one comparison and applies the promotion/revocation rule. Returns
  * { counted: false } when this identity already has a result for the candle.
+ *
+ * An input mismatch (only the bar differs) is recorded but neither counts nor revokes, and it
+ * stays open: when the pull adapter republishes the candle on the final bar, the new
+ * comparison replaces it and counts. INPUT_MISMATCH_REVOKE_AFTER input mismatches in a row
+ * (on different candles) mean the data pipeline itself is wrong, so they revoke like a mismatch.
  */
 export async function recordComparison(db, id, candleKey, comparison, policy = DEFAULT_POLICY, now = new Date().toISOString()) {
-  if (!["match", "mismatch", "incomplete"].includes(comparison.status)) return { counted: false, reason: comparison.status };
-  const detail = JSON.stringify({ compared: comparison.compared, mismatches: comparison.mismatches.slice(0, 20), missing: comparison.missing.slice(0, 40) });
+  if (!["match", "mismatch", "incomplete", "input_mismatch"].includes(comparison.status)) return { counted: false, reason: comparison.status };
+  let status = comparison.status;
+  let escalated = false;
+  if (status === "input_mismatch") {
+    const previous = (await db.prepare(
+      "SELECT result FROM engine_parity_comparisons WHERE engine = ? AND source_hash = ? AND implementation_hash = ? AND candle_key <> ? ORDER BY compared_at DESC LIMIT ?"
+    ).bind(id.engine, id.sourceHash, id.implementationHash, candleKey, INPUT_MISMATCH_REVOKE_AFTER - 1).all())?.results || [];
+    if (previous.length === INPUT_MISMATCH_REVOKE_AFTER - 1 && previous.every((r) => r.result === "input_mismatch")) { status = "mismatch"; escalated = true; }
+  }
+  const detail = JSON.stringify({ compared: comparison.compared, mismatches: comparison.mismatches.slice(0, 20), missing: comparison.missing.slice(0, 40), ...(escalated ? { reason: "repeated_input_mismatch" } : {}) });
   const inserted = await db.prepare(
     `INSERT INTO engine_parity_comparisons (engine, source_hash, implementation_hash, candle_key, result, detail, compared_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`
-  ).bind(id.engine, id.sourceHash, id.implementationHash, candleKey, comparison.status, detail, now).run();
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(engine, source_hash, implementation_hash, candle_key) DO UPDATE SET
+       result = excluded.result, detail = excluded.detail, compared_at = excluded.compared_at
+     WHERE engine_parity_comparisons.result = 'input_mismatch'`
+  ).bind(id.engine, id.sourceHash, id.implementationHash, candleKey, status, detail, now).run();
   if (!inserted?.meta?.changes) return { counted: false, reason: "already_compared" };
 
   const key = [id.engine, id.sourceHash, id.implementationHash];
+  if (status === "input_mismatch") {
+    await db.prepare(
+      `UPDATE engine_parity_registry SET last_candle_key = ?, last_result = 'input_mismatch', last_detail = ?, updated_at = ?
+       WHERE engine = ? AND source_hash = ? AND implementation_hash = ?`
+    ).bind(candleKey, detail, now, ...key).run();
+    return { counted: false, result: "input_mismatch" };
+  }
+  comparison = { ...comparison, status };
+
   if (comparison.status === "match") {
     await db.prepare(
       `UPDATE engine_parity_registry SET
@@ -251,7 +284,39 @@ export async function recordComparison(db, id, candleKey, comparison, policy = D
        WHERE engine = ? AND source_hash = ? AND implementation_hash = ?`
     ).bind(candleKey, detail, now, ...key).run();
   }
-  return { counted: true, result: comparison.status };
+  return { counted: true, result: comparison.status, ...(escalated ? { escalated: "repeated_input_mismatch" } : {}) };
+}
+
+/**
+ * One-time reconciliation (owner approval 2026-11-06): comparisons stored as `mismatch` before the
+ * input-mismatch rule, whose mismatches are all input-bar fields, are reclassified as
+ * `input_mismatch`; an identity revoked only by such comparisons (no indicator mismatch since its
+ * approval) is restored to approved. A revocation by an indicator mismatch, or by repeated input
+ * mismatches (detail.reason "repeated_input_mismatch"), is never touched.
+ * Returns { reclassified, restored: [engine] }.
+ */
+export async function reclassifyInputOnlyMismatches(db, now = new Date().toISOString()) {
+  const inputOnly = `result = 'mismatch'
+    AND COALESCE(json_extract(detail, '$.reason'), '') <> 'repeated_input_mismatch'
+    AND json_array_length(json_extract(detail, '$.mismatches')) > 0
+    AND NOT EXISTS (SELECT 1 FROM json_each(json_extract(detail, '$.mismatches')) WHERE json_extract(value, '$.field') NOT LIKE 'input:%')`;
+  const counts = (await db.prepare(`SELECT engine, source_hash, implementation_hash, COUNT(*) AS n FROM engine_parity_comparisons WHERE ${inputOnly} GROUP BY engine, source_hash, implementation_hash`).all())?.results || [];
+  const updated = await db.prepare(`UPDATE engine_parity_comparisons SET result = 'input_mismatch' WHERE ${inputOnly}`).run();
+  for (const c of counts) {
+    await db.prepare("UPDATE engine_parity_registry SET total_mismatches = MAX(total_mismatches - ?, 0), updated_at = ? WHERE engine = ? AND source_hash = ? AND implementation_hash = ?")
+      .bind(Number(c.n) || 0, now, c.engine, c.source_hash, c.implementation_hash).run();
+  }
+  const revoked = (await db.prepare(
+    `SELECT r.engine, r.source_hash, r.implementation_hash FROM engine_parity_registry r
+     WHERE r.status = 'revoked' AND r.approved_at IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM engine_parity_comparisons c WHERE c.engine = r.engine AND c.source_hash = r.source_hash
+                       AND c.implementation_hash = r.implementation_hash AND c.result = 'mismatch' AND c.compared_at >= r.approved_at)`
+  ).all())?.results || [];
+  for (const r of revoked) {
+    await db.prepare("UPDATE engine_parity_registry SET status = 'approved', revoked_at = NULL, updated_at = ? WHERE engine = ? AND source_hash = ? AND implementation_hash = ? AND status = 'revoked'")
+      .bind(now, r.engine, r.source_hash, r.implementation_hash).run();
+  }
+  return { reclassified: Number(updated?.meta?.changes) || 0, restored: revoked.map((r) => r.engine) };
 }
 
 /** True when the identity is currently trusted for the local_computation lane. */

@@ -70,7 +70,7 @@ function env(ai, { records = true, hud = true, overrides = {}, buy = false } = {
   const buffer = records ? { ["localcalc-observed:" + H4_KEY + ":prophet"]: prophetRecord({ buy }) } : {};
   const cache = { "market-data:v2:series:OANDA:XAUUSD|4h": series(LAST_OPEN, H4_MS) };
   if (hud) cache["hud:240:" + H4_KEY] = hudSnapshot(H4_KEY, "240");
-  return { DB: fakeD1(), AI: ai, WEBHOOK_BUFFER: kv(buffer), SIGNAL_CACHE: kv(cache), TF_THREADS_ENABLED: "true", TF_THREADS_MAX_CALLS_PER_HOUR: "120", ...overrides };
+  return { DB: fakeD1(), AI: ai, WEBHOOK_BUFFER: kv(buffer), SIGNAL_CACHE: kv(cache), TF_THREADS_ENABLED: "true", TF_THREADS_MAX_CALLS_PER_HOUR: "120", MODEL_RATE_LIMIT_RETRY_MS: "0", ...overrides };
 }
 const fixedClock = () => NOW;
 

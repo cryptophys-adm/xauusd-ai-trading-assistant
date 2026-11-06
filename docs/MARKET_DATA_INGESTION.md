@@ -56,6 +56,7 @@ RPC method `TvGateway.ohlcv(requests)` on `xauusd-fundamental-news-ingestion`, e
 - `t` is the bar open time in Unix seconds.
 - Daily and weekly bars open at the OANDA session boundary (17:00 New York), not at UTC midnight.
 - The last bar returned is still forming. A bar is used only when `t + interval <= now`. Native bars of 1 hour and longer (H1, H4, D1, W1, DXY and USDT 4h) wait 90 more seconds (`SETTLE_SECONDS`). Right after the close, TradingView still returns provisional values (production 2026-11-06: an H1 close and volume differed from the final bar). M1 and USOIL 5m do not wait, and derived bars follow their source.
+- A published H1 bar that TradingView revises later (seen through the overlap re-pull of the next close) is rebuilt on the bundle cut at its close and published once more (`republishRevisedH1`, the last 3 H1 bars, once each). The AI Worker then replaces the open `input_mismatch` comparison.
 - `OANDA:XAUUSD` volume is OANDA tick volume, the same value as Pine's `volume` on that chart.
 - `TVC:DXY` returns `v = null`, which is kept as `null`.
 
