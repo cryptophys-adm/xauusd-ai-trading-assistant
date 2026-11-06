@@ -59,6 +59,8 @@ export interface Env {
   WAR_ROOM_MAX_CALLS_PER_HOUR?: string;
   TF_THREADS_ENABLED?: string;
   TF_THREADS_MAX_CALLS_PER_HOUR?: string;
+  NEWS_DAILY_ENABLED?: string;
+  NEWS_DAILY_MAX_CALLS_PER_HOUR?: string;
   PREVIEW_FIXTURES_ENABLED?: string;
   PARITY_PROMOTE_AFTER?: string;
   PARITY_ABS_TOLERANCE?: string;
@@ -158,6 +160,7 @@ import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckSt
 import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
 import { runPendingTimeframeThreads, readTimeframeThread, tfThreadsEnabled } from "./timeframe-threads.mjs";
+import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
 import { DECISION_TEXT_RULE, plainDecisionText } from "./plain-decision.mjs";
@@ -1908,6 +1911,17 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/news/daily") {
+    // The News tab: the last 24 hours of news, each headline with its gold bias, and the TLDR.
+    try {
+      const daily = await readNewsDaily(env.DB);
+      if (!daily) return dashboardJson({ status: "not_found", enabled: newsDailyEnabled(env) }, 404);
+      return dashboardJson({ status: "ok", enabled: newsDailyEnabled(env), daily });
+    } catch (error) {
+      console.error("news_daily_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/tldr") {
     try {
       return dashboardJson({ status: "ok", ...(await readTldr(env.DB)) });
@@ -1958,9 +1972,10 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     }
   }
   if (url.pathname === "/api/threads/timeframe") {
-    // The H4 and D1 tabs of the Nexus right panel (H1 and 15m read /api/tldr and /api/war-room/latest).
-    const chart = (url.searchParams.get("chart") || "").toUpperCase();
-    if (chart !== "H4" && chart !== "D1") return dashboardJson({ status: "error", error: "chart must be H4 or D1" }, 400);
+    // The 1H, 4H and D1 tabs of the Nexus right panel (15m reads /api/war-room/latest).
+    const asked = (url.searchParams.get("chart") || "").toUpperCase();
+    const chart = ({ "1H": "H1", "4H": "H4", D: "D1", "1D": "D1" } as Record<string, string>)[asked] ?? asked;
+    if (!["H1", "H4", "D1"].includes(chart)) return dashboardJson({ status: "error", error: "chart must be H1, H4 or D1" }, 400);
     try {
       const thread = await readTimeframeThread(env.DB, chart);
       if (!thread) return dashboardJson({ status: "not_found", enabled: tfThreadsEnabled(env), chart }, 404);
@@ -2179,6 +2194,12 @@ export default {
       // per-event reconcile tasks run within seconds of evidence arrival and can
       // all miss a candle when KV has not yet settled (cached misses); without a
       // later sweep those parity comparisons would be lost permanently.
+      // Timeframe War Rooms (owner decision 2026-11-06): the 1H, 4H and D1 rooms of the bars that
+      // just closed, in parallel with the sweep (a room takes up to about 5.5 minutes). Behind
+      // TF_THREADS_ENABLED; idempotent per bar.
+      ctx.waitUntil(runPendingTimeframeThreads(env).then(tf => {
+        if (tf.status !== "disabled") console.log("tf_threads", JSON.stringify(tf));
+      }).catch(e => console.error("tf_threads_failed", e instanceof Error ? e.message : String(e))));
       ctx.waitUntil(reconcileRecentCandles(env).then(async result => {
         try { await backfillRecentAnalyses(env, { loadPayloads: loadWebhookPayloadsFromD1, runAnalysis, setStatus: setAnalysisRunStatus }); } catch (e) { console.error("backfill_failed", e instanceof Error ? e.message : String(e)); }
         // RFC_INDICATOR_AGENT_PLATFORM P1: score statements whose horizon has closed, and
@@ -2195,12 +2216,6 @@ export default {
           try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env))); }
           catch (e) { console.error("shadow_versions_failed", e instanceof Error ? e.message : String(e)); }
         }
-        // Threads per timeframe (owner decision 2026-11-05): the H4 and D1 threads, once per
-        // closed bar, after its local records are in. Behind TF_THREADS_ENABLED.
-        try {
-          const tf = await runPendingTimeframeThreads(env);
-          if (tf.status !== "disabled") console.log("tf_threads", JSON.stringify(tf));
-        } catch (e) { console.error("tf_threads_failed", e instanceof Error ? e.message : String(e)); }
         // RFC_INDICATOR_AGENT_PLATFORM P4: advisory reports to the Cryptophys Platform kernel.
         // Non-fatal by design; a no-op without the AGENTS binding (preview, tests).
         try {
@@ -2229,6 +2244,13 @@ export default {
       }));
     }).catch(error => {
       console.error("Scheduled fundamental news analysis failed", error instanceof Error ? error.message : String(error));
+    }).then(async () => {
+      // News Daily (owner decision 2026-11-06): the rolling 24-hour analysis, after the hourly
+      // batch is stored (it also runs when the hour brought no new article).
+      try {
+        const daily = await runNewsDaily(env);
+        if (daily.status !== "disabled") console.log("news_daily", JSON.stringify(daily));
+      } catch (e) { console.error("news_daily_failed", e instanceof Error ? e.message : String(e)); }
     }));
   }
 };

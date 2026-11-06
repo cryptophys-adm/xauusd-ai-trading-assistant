@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { resetThreadSchemaCacheForTests } from "../src/agent-threads.mjs";
 import {
   runTimeframeThread, runPendingTimeframeThreads, readTimeframeThread, validateTfConclusion, tfEvidence,
-  tfThreadsEnabled, TF_THREAD_CHARTS, TF_AGENTS
+  tfThreadsEnabled, tfEntryAllowed, closedH1Key, TF_THREAD_CHARTS, TF_DESKS, TF_HUD_WAIT_MS
 } from "../src/timeframe-threads.mjs";
 
 const H4_MS = 4 * 3600_000;
@@ -15,6 +15,7 @@ const NOW = LAST_OPEN + H4_MS + 5 * 60_000;
 
 function fakeD1() {
   const db = new DatabaseSync(":memory:");
+  db.exec(`CREATE TABLE ai_syntheses (id INTEGER PRIMARY KEY AUTOINCREMENT, candle_key TEXT NOT NULL, ticker TEXT, timeframe TEXT, timestamp TEXT, prophet_metrics TEXT, gmi_metrics TEXT, ai_analysis TEXT, ai_model TEXT)`);
   const wrap = (sql, params = []) => ({
     bind: (...args) => wrap(sql, args.map((v) => (v === undefined ? null : v))),
     run: async () => { const r = db.prepare(sql).run(...params); return { meta: { changes: Number(r.changes) } }; },
@@ -25,25 +26,29 @@ function fakeD1() {
 }
 const kv = (init = {}) => { const m = new Map(Object.entries(init)); return { get: async (k) => (m.has(k) ? m.get(k) : null), put: async (k, v) => { m.set(k, String(v)); } }; };
 
-function h4Series(count = 60) {
+function series(lastOpen, stepMs, count = 60) {
   const candles = Array.from({ length: count }, (_, i) => {
-    const open = LAST_OPEN - (count - 1 - i) * H4_MS;
+    const open = lastOpen - (count - 1 - i) * stepMs;
     const base = 4000 + Math.sin(i / 3) * 20 + i;
-    return { open_time: new Date(open).toISOString(), close_time: new Date(open + H4_MS).toISOString(), open: base, high: base + 12, low: base - 9, close: base + 3, volume: 1000 + i };
+    return { open_time: new Date(open).toISOString(), close_time: new Date(open + stepMs).toISOString(), open: base, high: base + 12, low: base - 9, close: base + 3, volume: 1000 + i };
   });
   return JSON.stringify({ candles });
 }
-const prophetRecord = () => JSON.stringify({ engine: "prophet", timeframe: "240", values: { comparable: {
-  prophet_r38: { direction: 1, buy_confirmed: false, sell_confirmed: false, t_enc: 2, d_enc: 1, structure_subtype: 0 },
-  prophet_r37_ssot: { direction: 1, d_enc: 1, b_enc: 2, structure_subtype: 0, bull_event: false, bear_event: false }
+const prophetRecord = ({ buy = false } = {}) => JSON.stringify({ engine: "prophet", timeframe: "240", values: { comparable: {
+  prophet_r38: { direction: 1, buy_confirmed: buy, sell_confirmed: false, t_enc: 2, d_enc: 1, structure_subtype: 0 }
 } } });
-const gmiRecord = () => JSON.stringify({ engine: "gmi", timeframe: "240", values: {
-  comparable: { gmi_v12_70: { verdict: 2, gate: 1, gmi_dir: 1, prophet_dir: 1, conflict: false } },
-  diagnostics: { branch: "trend", htf_state: 1, ltf_state: 1, fp_status: "neutral" }
-} });
+function hudSnapshot(candleKey, timeframe) {
+  return JSON.stringify({
+    schema_version: "cryptophys.hud-snapshot.v1", symbol: "OANDA:XAUUSD", timeframe, candle_key: candleKey, computed_at: new Date(NOW).toISOString(), not_computed: ["grid_bot_protocol"],
+    huds: {
+      kinetic_engine: { fields: { theta: 43, omega: -0.4, alpha: -0.1, entropy: 0.86, is_chaos: true }, parity: {} },
+      fabio_amt: { fields: { vah: 4071, val: 3894, poc: 3948 }, parity: {} }
+    }
+  });
+}
 
-/** Each desk answers from its Required JSON line; the moderator writes the TLDR. */
-function fakeAI({ conclusion = null, fail = new Set(), confidence = 0.35 } = {}) {
+/** Each agent answers from its Required JSON line; the moderator writes the TLDR. */
+function fakeAI({ conclusion = null, confidence = 0.35, stances = {} } = {}) {
   const calls = [];
   return {
     calls,
@@ -52,94 +57,96 @@ function fakeAI({ conclusion = null, fail = new Set(), confidence = 0.35 } = {})
       const sys = request.messages[0].content, user = request.messages[1].content;
       const agent = (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1];
       let content;
-      if (/moderator of the XAUUSD/.test(sys)) content = conclusion || { stance: "WAIT", confidence: 0.5, summary: "The four-hour bias leans up but has no confirmation yet, so the desks prefer to wait.", reasons: ["Structure points up without a confirmed signal.", "Volatility is normal for this chart."] };
-      else if (fail.has(agent)) throw new Error("model down");
-      else content = { agent, stance: "WAIT", confidence, claim: "My own data on this chart supports waiting for the next candle." };
+      if (/moderator of the XAUUSD/.test(sys)) content = conclusion || { stance: "WAIT", confidence: 0.5, summary: "The four-hour room leans up but has no confirmation yet, so it prefers to wait.", reasons: ["Structure points up without a confirmed signal.", "Volatility is normal for this chart."], dissent: [] };
+      else if (/debate/.test(sys)) content = { agent, stance: stances[agent] || "WAIT", confidence: 0.5, rebuts: [agent === "technical" ? "risk" : "technical"], argument: "The last candles closed near their highs, which argues against fading the move." };
+      else content = { agent, stance: stances[agent] || "WAIT", confidence, claim: "My own data on this chart supports waiting for the next candle." };
       return { choices: [{ message: { content: JSON.stringify(content) }, finish_reason: "stop" }], usage: { total_tokens: 40 } };
     }
   };
 }
 
-function env(ai, { records = true, overrides = {} } = {}) {
-  const buffer = records ? { ["localcalc:" + H4_KEY + ":prophet"]: prophetRecord(), ["localcalc:" + H4_KEY + ":gmi"]: gmiRecord() } : {};
-  return {
-    DB: fakeD1(), AI: ai, WEBHOOK_BUFFER: kv(buffer),
-    SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|4h": h4Series() }),
-    TF_THREADS_ENABLED: "true", TF_THREADS_MAX_CALLS_PER_HOUR: "24", ...overrides
-  };
+function env(ai, { records = true, hud = true, overrides = {}, buy = false } = {}) {
+  const buffer = records ? { ["localcalc-observed:" + H4_KEY + ":prophet"]: prophetRecord({ buy }) } : {};
+  const cache = { "market-data:v2:series:OANDA:XAUUSD|4h": series(LAST_OPEN, H4_MS) };
+  if (hud) cache["hud:240:" + H4_KEY] = hudSnapshot(H4_KEY, "240");
+  return { DB: fakeD1(), AI: ai, WEBHOOK_BUFFER: kv(buffer), SIGNAL_CACHE: kv(cache), TF_THREADS_ENABLED: "true", TF_THREADS_MAX_CALLS_PER_HOUR: "120", ...overrides };
 }
 const fixedClock = () => NOW;
 
 test.beforeEach(() => resetThreadSchemaCacheForTests());
 
-test("only H4 and D1 run here; five desks with one role each", () => {
-  assert.deepEqual(Object.keys(TF_THREAD_CHARTS), ["H4", "D1"]);
-  assert.deepEqual(Object.keys(TF_AGENTS), ["structure", "gmi", "technical", "macro", "risk"]);
+test("1H, 4H and D1 run here as War Rooms; desks have one role each", () => {
+  assert.deepEqual(Object.keys(TF_THREAD_CHARTS), ["H1", "H4", "D1"]);
+  assert.deepEqual(Object.values(TF_THREAD_CHARTS).map((c) => c.tab), ["1H", "4H", "D1"]);
+  assert.deepEqual(Object.keys(TF_DESKS), ["h1", "htf", "news", "technical", "risk"]);
   assert.equal(tfThreadsEnabled({ TF_THREADS_ENABLED: "true" }), true);
   assert.equal(tfThreadsEnabled({}), false);
+  assert.equal(closedH1Key(Date.parse("2026-11-06T01:10:00Z")), "OANDA:XAUUSD:60:" + Date.parse("2026-11-06T00:00:00Z"));
 });
 
-test("the TLDR needs a stance, a plain summary and one to three reasons; blank reasons are dropped", () => {
-  assert.equal(validateTfConclusion({ stance: "WAIT", confidence: 0.5, summary: "The bias leans up but waits for confirmation.", reasons: ["Structure points up.", " "] }).valid, true);
-  assert.deepEqual(validateTfConclusion({ stance: "LONG", confidence: 0.5, summary: "x", reasons: ["y"] }).errors.includes("stance_invalid"), true);
-  assert.equal(validateTfConclusion({ stance: "WAIT", confidence: 1.4, summary: "Wait.", reasons: ["Why."] }).valid, false);
-  assert.equal(validateTfConclusion({ stance: "WAIT", confidence: 0.4, summary: "Wait.", reasons: [] }).valid, false);
-  assert.equal(validateTfConclusion(null).valid, false);
+test("the TLDR: plain summary, one to three reasons, dissent by id, no entry without confirmation, 1H names the H1 decision", () => {
+  const ok = { stance: "WAIT", confidence: 0.5, summary: "The room waits for confirmation.", reasons: ["Structure points up.", " "], dissent: ["Technical Analyst"] };
+  assert.equal(validateTfConclusion(ok, { busAgents: ["technical", "risk"] }).valid, true);
+  assert.deepEqual(ok.dissent, ["technical"], "a name in dissent maps to its id");
+  const buy = { stance: "BUY", confidence: 0.6, summary: "The room leans to buy.", reasons: ["Momentum is up."], dissent: [] };
+  const none = { chart_prophet_r38: { buy_confirmed: false, sell_confirmed: false } };
+  assert.ok(validateTfConclusion({ ...buy }, { confirmations: none }).errors.includes("entry_without_confirmation"));
+  assert.equal(validateTfConclusion({ ...buy }, { confirmations: { chart_prophet_r38: { buy_confirmed: true } } }).valid, true);
+  assert.ok(validateTfConclusion({ ...ok, dissent: [] }, { h1Decision: "BUY" }).errors.includes("h1_reference_missing"));
+  assert.equal(validateTfConclusion({ ...ok, dissent: [], summary: "H1 decision: BUY, but the room waits for confirmation." }, { h1Decision: "BUY" }).valid, true);
+  assert.equal(tfEntryAllowed("HOLD", none), true);
 });
 
-test("evidence is the closed bar of that chart; a bar not in the series gives no evidence", async () => {
-  const e = await tfEvidence(env(fakeAI()), "H4", H4_KEY);
+test("evidence is the closed bar, its HUD snapshot and its local Prophet R38 confirmation; a bar not in the series gives none", async () => {
+  const e = await tfEvidence(env(fakeAI(), { buy: true }), "H4", H4_KEY);
   assert.equal(e.bar_open, new Date(LAST_OPEN).toISOString());
-  assert.equal(e.technical.recent.length, 8);
-  assert.ok(e.technical.average_range_14 > 0);
-  assert.equal(e.structure.r38.direction, 1);
-  assert.equal(e.gmi.branch, "trend");
+  assert.equal(e.technical.candles.length, 12);
+  assert.ok(e.hud.readings.kinetic_engine.available);
+  assert.equal(e.confirmations.chart_prophet_r38.buy_confirmed, true);
+  assert.equal(e.confirmations.chart_prophet_r38.approved_by_parity, false);
+  assert.equal(e.h1, null, "the H1 desk sits only in the 1H room");
   assert.equal(await tfEvidence(env(fakeAI()), "H4", "OANDA:XAUUSD:240:" + (LAST_OPEN + H4_MS)), null);
 });
 
-test("an H4 thread: the brief, five openings and the moderator's TLDR; the rerun spends nothing", async () => {
-  const ai = fakeAI();
+test("a 4H War Room: every agent opens, the debate runs, the moderator concludes; the rerun spends nothing", async () => {
+  const ai = fakeAI({ stances: { kinetic_engine: "SELL" } });
   const e = env(ai);
   const r = await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
   assert.equal(r.status, "complete");
-  assert.equal(r.openings + 1, ai.calls.length);
-  for (const call of ai.calls) {
-    const text = call.request.messages.map((m) => m.content).join("\n");
-    assert.doesNotMatch(text, /stop loss":|take_profit|lot size/i);
-  }
+  assert.equal(r.openings, 4, "technical, risk and the two HUD agents");
+  assert.equal(r.rebuttals, 2, "the minority HUD agent and the Risk Manager");
+  for (const call of ai.calls) assert.doesNotMatch(call.request.messages.map((m) => m.content).join("\n"), /lot size|take_profit/i);
 
   const thread = await readTimeframeThread(e.DB, "H4");
-  assert.equal(thread.tf, "H4");
-  assert.equal(thread.candle_key, H4_KEY);
-  assert.equal(thread.conclusion.status, "ok");
+  assert.equal(thread.tab, "4H");
+  assert.equal(thread.phase, "closed");
   assert.equal(thread.conclusion.stance, "WAIT");
-  assert.ok(thread.conclusion.reasons.length >= 1);
-  assert.deepEqual(thread.posts.slice(0, 3).map((p) => p.id), ["structure", "gmi", "technical"]);
-  assert.match(thread.posts[0].calibration, /not yet calibrated/);
-  assert.equal(thread.posts.every((p) => p.status === "ok"), true);
+  assert.deepEqual(thread.openings.map((p) => p.id), ["technical", "risk", "kinetic_engine", "fabio_amt"]);
+  assert.equal(thread.openings[2].calibration, "not yet calibrated");
+  assert.deepEqual(thread.debate.map((d) => d.id), ["risk", "kinetic_engine"]);
+  assert.ok(thread.debate[0].rebuts_names.length >= 1);
 
-  const again = await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
-  assert.deepEqual(again, { status: "already_complete", calls: 0 });
+  assert.deepEqual(await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock }), { status: "already_complete", calls: 0 });
   assert.equal(await readTimeframeThread(e.DB, "D1"), null);
   assert.equal(await readTimeframeThread(e.DB, "W1"), null);
 });
 
-test("an uncalibrated desk speaks at confidence <= 0.4; bar-based desks keep theirs", async () => {
+test("HUD agents with no verified statement speak at confidence <= 0.4; desks keep theirs", async () => {
   const e = env(fakeAI({ confidence: 0.9 }));
   await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
-  const thread = await readTimeframeThread(e.DB, "H4");
-  const by = Object.fromEntries(thread.posts.map((p) => [p.id, p]));
-  assert.equal(by.structure.status, "ok");
-  assert.equal(by.structure.confidence, 0.4);
-  assert.equal(by.gmi.confidence, 0.4);
+  const by = Object.fromEntries((await readTimeframeThread(e.DB, "H4")).openings.map((p) => [p.id, p]));
+  assert.equal(by.kinetic_engine.confidence, 0.4);
   assert.equal(by.technical.confidence, 0.9);
 });
 
-test("no local records means no thread and no model calls", async () => {
-  const ai = fakeAI();
-  assert.deepEqual(await runTimeframeThread(env(ai, { records: false }), { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock }), { status: "no_local_records" });
-  assert.equal(ai.calls.length, 0);
-  assert.deepEqual(await runTimeframeThread(env(ai), { chart: "M5", candleKey: H4_KEY }), { status: "unsupported_chart" });
+test("the 4H room's Higher-Timeframe Desk reads the D1 Thread's conclusion", async () => {
+  const e = env(fakeAI());
+  const d1Open = Date.parse("2026-11-04T22:00:00.000Z");
+  e.SIGNAL_CACHE.put("market-data:v2:series:OANDA:XAUUSD|1D", series(d1Open, 24 * 3600_000));
+  await runTimeframeThread(e, { chart: "D1", candleKey: "OANDA:XAUUSD:1D:" + d1Open }, { clock: fixedClock });
+  const ev = await tfEvidence(e, "H4", H4_KEY);
+  assert.equal(ev.higher.timeframe, "daily");
+  assert.equal(ev.higher.stance, "WAIT");
 });
 
 test("the hourly budget caps the calls: the rest are stored as budget_exhausted", async () => {
@@ -148,15 +155,19 @@ test("the hourly budget caps the calls: the rest are stored as budget_exhausted"
   await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
   assert.equal(ai.calls.length, 2);
   const thread = await readTimeframeThread(e.DB, "H4");
-  assert.equal(thread.posts.filter((p) => p.status === "budget_exhausted").length, thread.posts.length - 2);
+  assert.equal(thread.openings.filter((p) => p.status === "budget_exhausted").length, thread.openings.length - 2);
 });
 
-test("the pending runner is off behind the flag and picks the latest closed H4 bar", async () => {
+test("the pending runner is off behind the flag, waits for the HUD snapshot, then runs the latest closed 4H bar", async () => {
   const ai = fakeAI();
   assert.deepEqual(await runPendingTimeframeThreads(env(ai, { overrides: { TF_THREADS_ENABLED: "false" } }), { now: NOW }), { status: "disabled" });
+  const waiting = await runPendingTimeframeThreads(env(ai, { hud: false }), { now: NOW, clock: fixedClock });
+  assert.deepEqual(waiting.charts, {}, "no HUD snapshot yet and the close is recent: wait");
   assert.equal(ai.calls.length, 0);
-  const out = await runPendingTimeframeThreads(env(ai), { now: NOW, clock: fixedClock });
-  assert.equal(out.status, "ok");
+  const late = await runPendingTimeframeThreads(env(ai, { hud: false }), { now: LAST_OPEN + H4_MS + TF_HUD_WAIT_MS + 1, clock: fixedClock });
+  assert.equal(late.charts.H4.status, "complete", "after the wait it runs with the desks only");
+  resetThreadSchemaCacheForTests(); // a fresh database follows
+  const out = await runPendingTimeframeThreads(env(fakeAI()), { now: NOW, clock: fixedClock });
   assert.equal(out.charts.H4.status, "complete");
   assert.equal(out.charts.D1, undefined, "no daily series cached: no D1 key");
 });

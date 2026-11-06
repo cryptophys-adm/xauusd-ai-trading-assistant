@@ -6,6 +6,16 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- feat(threads): every Thread is a War Room of all agents; News Daily; tab bar on top of the right panel (owner decision 2026-11-06).
+  - **Timeframe War Rooms.** The 1H, 4H and D1 Threads now run the Live War Room phases: every agent opens, a debate of up to 3 minutes, then the moderator's TLDR.
+    - Agents: the desks plus one agent per HUD of that chart.
+    - They run from local computation only, never from a webhook.
+    - The pull adapter now also publishes the H4 and D1 HUD snapshots.
+    - Budget `TF_THREADS_MAX_CALLS_PER_HOUR`: production 120.
+  - **News Daily.** The last 24 hours of headlines, each with a gold bias (Bullish, Bearish or Neutral) and why, plus market context, and the News Analyst's TLDR.
+    - The War Room and the timeframe rooms read it.
+    - Read API: `GET /api/news/daily`.
+  - **Nexus.** The right panel's tab bar sits on top of the card: D1 | 4H | 1H | 15m | News. Each tab shows the whole Thread instead of a short TLDR.
 - feat(threads): Thread tabs in Nexus, D1, H4, H1 and 15m (step 4 of the owner's timeframe-thread plan; no 5m thread for now).
   - **H4 and D1 threads.** `src/timeframe-threads.mjs` runs one thread per closed H4 or D1 bar: Structure Desk, GMI Desk, Technical Analyst, Macro Desk and Risk Manager open once each, then the moderator writes the TLDR. Uncalibrated desks speak at confidence 0.4 or lower.
   - **Runs and budget.** The parity sweep cron runs it behind `TF_THREADS_ENABLED`, within `TF_THREADS_MAX_CALLS_PER_HOUR` (production 24, preview 60). Read API: `GET /api/threads/timeframe?chart=H4|D1`.

@@ -127,11 +127,25 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .feed-header h2 { margin:0; font-size:18px; }
   .feed-header .sub { font-size:12px; color:var(--muted); }
   .rightbar-card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px; margin-bottom:12px; position:sticky; top:70px; }
-  .tf-tabs { display:flex; gap:4px; margin-bottom:10px; flex-wrap:wrap; }
-  .tf-tabs button { background:var(--panel2); color:var(--muted); border:1px solid var(--border); border-radius:8px; padding:4px 10px; font-size:12px; cursor:pointer; }
-  .tf-tabs button.active { color:var(--text); border-color:var(--accent); }
-  .tf-post { font-size:12px; line-height:1.5; padding:6px 0; border-top:1px solid var(--border); }
-  .tf-post .who { color:var(--muted); font-size:11px; }
+  /* Right panel: one card, its tab bar on top (D1 | 4H | 1H | 15m | News), one Thread per tab */
+  .tf-card { padding:0; overflow:hidden; }
+  .tf-tabs { display:flex; border-bottom:1px solid var(--border); background:var(--panel2); }
+  .tf-tabs button { flex:1; background:transparent; color:var(--muted); border:none; border-right:1px solid var(--border); border-radius:0; padding:10px 0; font-size:12px; font-weight:700; cursor:pointer; }
+  .tf-tabs button:last-child { border-right:none; }
+  .tf-tabs button:hover { background:var(--panel); color:var(--text); }
+  .tf-tabs button.active { background:var(--panel); color:var(--text); box-shadow:inset 0 -2px 0 var(--accent); }
+  .tf-body { padding:12px 14px; max-height:calc(100vh - 150px); overflow-y:auto; }
+  .tf-head { font-size:11px; color:var(--muted); margin-bottom:8px; }
+  .tf-tldr { background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:10px; margin-bottom:10px; }
+  .tf-tldr .sum { font-size:12px; line-height:1.55; margin-top:6px; }
+  .tf-tldr ul { margin:6px 0 0 16px; font-size:12px; color:var(--muted); line-height:1.5; }
+  .tf-sec { font-size:11px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin:12px 0 4px; }
+  .tf-post { font-size:12px; line-height:1.5; padding:7px 0; border-top:1px solid var(--border); }
+  .tf-post .who { color:var(--muted); font-size:11px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:2px; }
+  .tf-post .who b { color:var(--text); font-weight:600; }
+  .tf-post a { color:var(--text); text-decoration:none; } .tf-post a:hover { text-decoration:underline; }
+  .tf-post .why { color:var(--muted); font-size:11px; margin-top:2px; }
+  .chip.BULLISH { color:var(--green); border-color:var(--green); } .chip.BEARISH { color:var(--red); border-color:var(--red); } .chip.NEUTRAL { color:var(--muted); border-color:var(--muted); }
   .rightbar-card h3 { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.6px; margin-bottom:10px; }
   .stat { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border); font-size:13px; }
   .stat:last-child { border-bottom:none; }
@@ -223,12 +237,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
   <!-- Right sidebar -->
   <div class="rightbar">
-    <div class="rightbar-card">
-      <h3>Threads · TLDR</h3>
-      <div class="tf-tabs" id="tf-tabs">
-        <button data-tab="D1">D1</button><button data-tab="H4">H4</button><button data-tab="H1">H1</button><button data-tab="M15">15m</button><button data-tab="NEWS">News</button>
+    <div class="rightbar-card tf-card">
+      <div class="tf-tabs" id="tf-tabs" role="tablist" aria-label="Threads">
+        <button data-tab="D1" role="tab">D1</button><button data-tab="H4" role="tab">4H</button><button data-tab="H1" role="tab">1H</button><button data-tab="M15" role="tab">15m</button><button data-tab="NEWS" role="tab">News</button>
       </div>
-      <div id="tf-body"><div class="loader">Loading...</div></div>
+      <div id="tf-body" class="tf-body"><div class="loader">Loading...</div></div>
     </div>
   </div>
 
@@ -394,57 +407,81 @@ async function loadWarRoom(){
       : '';
   } catch(e){ $('war-status').innerHTML = '<span class="error">'+esc(e.message)+'</span>'; }
 }
-// Right panel: one Thread per timeframe as a tab (owner decision 2026-11-05: D1, H4, H1, 15m),
-// plus the News Thread. H1 and News come from /api/tldr, 15m from the War Room, H4 and D1
-// from /api/threads/timeframe.
+// Right panel (owner decision 2026-11-06): one card whose top is the tab bar D1 | 4H | 1H | 15m |
+// News. Every timeframe tab is a War Room Thread of all agents: its TLDR, the communication bus
+// and the debate. 15m is the Live War Room; 1H, 4H and D1 come from /api/threads/timeframe; News
+// is the last 24 hours, each headline with its gold bias, and the TLDR (/api/news/daily).
 let tfTab = 'H1';
 try { const saved = localStorage.getItem('nexus.tfTab'); if (saved) tfTab = saved; } catch(e){}
-function tfPosts(posts){
-  return (posts||[]).filter(p=>p.status==='ok').map(p=>'<div class="tf-post"><div class="who">'+esc(p.name||p.id)+(p.calibration ? ' · '+esc(p.calibration) : '')+'</div>'+chip(p.stance)+' '+esc(p.claim||'')+'</div>').join('');
+const TF_LABEL = { D1:'D1', H4:'4H', H1:'1H', M15:'15m', NEWS:'News' };
+function calNote(c){
+  if (!c) return '';
+  if (typeof c === 'string') return c;
+  if (c.total_lines != null) return c.verified_lines ? c.verified_lines+' of '+c.total_lines+' verified' : 'not yet calibrated';
+  return c.label || '';
 }
-function tfConclusion(c, when){
-  if (!c || c.status !== 'ok') return '<div class="loader">The moderator has not concluded yet.</div>';
-  return '<div class="news-item"><div class="news-title">'+chip(c.stance)+' confidence '+pct(c.confidence)+'</div><div class="news-meta">'+esc(when||'')+'</div>'
-    +'<div style="font-size:12px;margin-top:6px;line-height:1.5">'+esc(c.summary||'')+'</div>'
-    +((c.reasons||[]).length ? '<ul style="margin:6px 0 0 18px;font-size:12px;color:var(--muted)">'+c.reasons.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>' : '')+'</div>';
+function tfPost(m, text, cal, extra){
+  if (m.status !== 'ok') return '<div class="tf-post"><div class="who"><b>'+esc(m.name||m.id)+'</b></div><div style="color:var(--muted)">Could not speak this round.</div></div>';
+  return '<div class="tf-post"><div class="who"><b>'+esc(m.name||m.id)+'</b>'+chip(m.stance)+'<span>'+pct(m.confidence)+'</span>'+(cal ? '<span>· '+esc(cal)+'</span>' : '')+(extra||'')+'</div>'+esc(text||'')+'</div>';
+}
+function tfTldr(c, waiting){
+  if (!c || c.status !== 'ok') return '<div class="tf-tldr" style="color:var(--muted);font-size:12px">'+esc(waiting)+'</div>';
+  return '<div class="tf-tldr"><div>'+chip(c.stance)+' <span style="font-size:12px;color:var(--muted)">confidence '+pct(c.confidence)+'</span> <span style="font-size:11px;color:var(--muted)">TLDR</span></div>'
+    +'<div class="sum">'+esc(c.summary||'')+'</div>'
+    +((c.reasons||[]).length ? '<ul>'+c.reasons.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>' : '')
+    +((c.dissent||[]).length ? '<div style="font-size:11px;color:var(--muted);margin-top:6px">Still disagree: '+c.dissent.map(d=>esc(d.name||d.id||d)).join(', ')+'</div>' : '')+'</div>';
+}
+function tfRoom(room, label, calOf){
+  const phase = room.phase==='closed' ? 'debate closed' : room.phase==='debate' ? 'debate open' : 'openings on the bus';
+  const opens = room.openings||[], debate = room.debate||[];
+  return '<div class="tf-head">'+esc(label)+' · candle closing '+esc(barLabel(room.bar_close||room.bar_time))+' · '+esc(phase)+' · '+opens.length+' agents</div>'
+    + tfTldr(room.conclusion, room.phase==='closed' ? 'The moderator could not conclude this round.' : 'The room is in session; the TLDR follows the debate.')
+    + (opens.length ? '<div class="tf-sec">Communication bus</div>'+opens.map(m=>tfPost(m, m.claim, calOf(m))).join('') : '')
+    + (debate.length ? '<div class="tf-sec">Debate</div>'+debate.map(m=>tfPost(m, m.argument, '', (m.rebuts_names||[]).length ? '<span>· rebuts '+esc(m.rebuts_names.join(', '))+'</span>' : '')).join('') : '')
+    + '<div style="font-size:11px;color:var(--muted);margin-top:10px">Advisory only. No orders are placed.</div>';
+}
+function move(x, name){
+  if (!x || x.change_24h_percent == null) return '';
+  const v = x.change_24h_percent;
+  return '<span style="color:'+(v>0?'var(--green)':v<0?'var(--red)':'var(--muted)')+'">'+esc(name)+' '+(v>0?'+':'')+esc(v)+'%</span>';
+}
+function tfNews(d){
+  const c = d.counts || {};
+  const ctx = d.context || {};
+  const moves = [move(ctx.gold,'Gold'), move(ctx.dollar,'DXY'), move(ctx.oil,'Oil'), move(ctx.usdt,'USDT.D')].filter(Boolean).join(' · ');
+  return '<div class="tf-head">News of the last 24 hours · updated '+esc(timeAgo(d.run_at))+' · '+(d.items||[]).length+' headlines</div>'
+    + tfTldr(d.tldr, 'The News Analyst has not written the TLDR yet.')
+    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">'+chip('BULLISH')+' '+(c.bullish||0)+' '+chip('BEARISH')+' '+(c.bearish||0)+' '+chip('NEUTRAL')+' '+(c.neutral||0)+(moves ? '<div style="margin-top:4px">24h: '+moves+'</div>' : '')+'</div>'
+    + '<div class="tf-sec">Headlines</div>'
+    + (d.items||[]).map(i=>'<div class="tf-post"><div class="who">'+(i.bias ? chip(i.bias) : '<span>not tagged</span>')+'<span>'+esc(timeAgo(i.published_at))+'</span></div>'
+        +(i.url ? '<a href="'+escAttr(i.url)+'" target="_blank" rel="noopener">'+esc(i.title)+'</a>' : esc(i.title))
+        +(i.why ? '<div class="why">'+esc(i.why)+'</div>' : '')+'</div>').join('');
 }
 async function loadTldr(){
-  document.querySelectorAll('#tf-tabs button').forEach(b=>b.classList.toggle('active', b.dataset.tab===tfTab));
+  document.querySelectorAll('#tf-tabs button').forEach(b=>{ const on = b.dataset.tab===tfTab; b.classList.toggle('active', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
   const body = $('tf-body');
+  const tab = tfTab;
   try {
-    if (tfTab === 'H1' || tfTab === 'NEWS') {
-      const d = await (await fetch(API+'/api/tldr')).json();
-      if (tfTab === 'H1') {
-        const h = d.h1;
-        body.innerHTML = h
-          ? '<div class="news-item"><div class="news-title">'+chip(h.decision)+' confidence '+pct(h.confidence)+'</div><div class="news-meta">H1 candle '+esc(h1When(h.candle_key))+'</div>'
-            +'<div style="font-size:12px;margin-top:6px;line-height:1.5">'+esc(h.tldr||'')+'</div>'
-            +(h.consensus ? '<div style="font-size:12px;margin-top:6px;color:var(--muted)">Debate: '+chip(h.consensus.stance)+' '+esc(h.consensus.summary||'')+'</div>' : '')+'</div>'
-          : '<div class="loader">No H1 decision yet.</div>';
-      } else {
-        const n = d.news;
-        body.innerHTML = n
-          ? '<div class="news-item"><div class="news-title">'+chip(n.consensus)+' '+esc(n.title||'')+'</div><div class="news-meta">'+esc(timeAgo(n.created_at))+'</div>'
-            +'<div style="font-size:12px;margin-top:6px;line-height:1.5">'+esc(n.tldr||'')+'</div>'
-            +((n.headlines||[]).length ? '<ul style="margin:6px 0 0 18px;font-size:12px;color:var(--muted)">'+n.headlines.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>' : '')+'</div>'
-          : '<div class="loader">No news thread yet.</div>';
-      }
-    } else if (tfTab === 'M15') {
+    let html;
+    if (tab === 'NEWS') {
+      const r = await fetch(API+'/api/news/daily');
+      const d = r.ok ? await r.json() : null;
+      html = d && d.daily ? tfNews(d.daily) : '<div class="loader">No daily news analysis yet: it runs with the hourly news cron.</div>';
+    } else if (tab === 'M15') {
       const r = await fetch(API+'/api/war-room/latest');
       const d = r.ok ? await r.json() : null;
       const room = d && d.room;
-      body.innerHTML = room
-        ? tfConclusion(room.conclusion, '15m bar closing '+timeAgo(room.bar_time)) + tfPosts(room.openings)
-        : '<div class="loader">No War Room yet.</div>';
+      const cal = {}; ((room && room.roster) || []).forEach(a => { cal[a.id] = a.calibration; });
+      html = room ? tfRoom(room, 'Live War Room 15m', m => calNote(cal[m.id])) : '<div class="loader">No War Room yet.</div>';
     } else {
-      const r = await fetch(API+'/api/threads/timeframe?chart='+tfTab);
+      const r = await fetch(API+'/api/threads/timeframe?chart='+tab);
       const d = r.ok ? await r.json() : null;
       const t = d && d.thread;
-      body.innerHTML = t
-        ? tfConclusion(t.conclusion, tfTab+' bar closing '+timeAgo(t.bar_close)) + tfPosts(t.posts)
-        : '<div class="loader">No '+esc(tfTab)+' thread yet: it starts at the next closed '+(tfTab==='H4'?'4-hour':'daily')+' candle.</div>';
+      const label = TF_LABEL[tab]+' War Room';
+      html = t ? tfRoom(t, label, m => m.calibration) : '<div class="loader">No '+esc(TF_LABEL[tab])+' Thread yet: the room meets at the next closed '+(tab==='H1'?'1-hour':tab==='H4'?'4-hour':'daily')+' candle.</div>';
     }
-  } catch(e){ body.innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
+    if (tab === tfTab) body.innerHTML = html;
+  } catch(e){ if (tab === tfTab) body.innerHTML = '<div class="error">'+esc(e.message)+'</div>'; }
 }
 document.querySelectorAll('#tf-tabs button').forEach(b=>b.addEventListener('click', ()=>{
   tfTab = b.dataset.tab;

@@ -223,7 +223,8 @@ export async function publishHtfLocalComputation(env, { now = Date.now(), force 
   return summary;
 }
 
-const HUD_CHARTS = Object.freeze({ H1: { maxDelayMs: 25 * 60 * 1000 }, M15: { maxDelayMs: 9 * 60 * 1000 } });
+// H4 and D1 feed the timeframe War Rooms (owner decision 2026-11-06).
+const HUD_CHARTS = Object.freeze({ H1: { maxDelayMs: 25 * 60 * 1000 }, M15: { maxDelayMs: 9 * 60 * 1000 }, H4: { maxDelayMs: 30 * 60 * 1000 }, D1: { maxDelayMs: 60 * 60 * 1000 } });
 export const LAST_HUD_PUBLISH_KEY = "market-data:v2:hud-last-publish";
 
 /**

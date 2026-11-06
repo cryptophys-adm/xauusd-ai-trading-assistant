@@ -64,9 +64,13 @@
     // room and the per-H1 HUD agents. About 27 calls per 15m close.
     "WAR_ROOM_ENABLED": "true",
     "WAR_ROOM_MAX_CALLS_PER_HOUR": "112",
-    // Threads per timeframe (owner decision 2026-11-05): H4 and D1 threads, one per closed bar.
+    // Timeframe War Rooms (owner decision 2026-11-06): the 1H, 4H and D1 Threads are War Rooms of
+    // all agents, one per closed bar (about 26 calls each; at most three rooms in one hour).
     "TF_THREADS_ENABLED": "true",
-    "TF_THREADS_MAX_CALLS_PER_HOUR": "24"
+    "TF_THREADS_MAX_CALLS_PER_HOUR": "120",
+    // News Daily (owner decision 2026-11-06): the last 24 hours, each headline tagged once.
+    "NEWS_DAILY_ENABLED": "true",
+    "NEWS_DAILY_MAX_CALLS_PER_HOUR": "6"
   },
   "routes": [
     {

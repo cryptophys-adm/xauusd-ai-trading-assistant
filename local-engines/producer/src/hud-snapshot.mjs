@@ -1,4 +1,5 @@
-// Phase C2: HUD snapshot for one closed chart bar (H1 or M15).
+// Phase C2: HUD snapshot for one closed chart bar (M15, H1, H4 or D1; H4 and D1 for the
+// timeframe War Rooms, owner decision 2026-11-06).
 //
 // One snapshot carries the data of each Pine HUD section (RFC_HUD_AGENTS §1.2) as
 // numbers, booleans and small enum tokens, never rendered *_txt strings. It is built
@@ -19,11 +20,18 @@
 import { calculateProphetR38Core } from "../../prophet-r38/src/core.mjs";
 import { replayProphetR37ClosedBars } from "../../../src/prophet-r37-oscillator.mjs";
 import { computeGmiOnChart } from "../../gmi/src/gmi-core-tf.mjs";
+import { computeGmiOnHtfChart } from "../../gmi/src/gmi-core-htf.mjs";
 import { CHART_TICKERID, prophetR38TEnc, prophetConsensusDir } from "./h1-producer.mjs";
 import { computeMacroAether } from "./macro-aether.mjs";
 
 export const HUD_SNAPSHOT_VERSION = "cryptophys.hud-snapshot.v1";
-const CHART = Object.freeze({ H1: { minutes: 60, period: "60", minBars: 320 }, M15: { minutes: 15, period: "15", minBars: 320 } });
+const CHART = Object.freeze({
+  H1: { minutes: 60, period: "60", minBars: 320 },
+  M15: { minutes: 15, period: "15", minBars: 320 },
+  // H4 and D1 (Pine v6 timeframe.period "240" and "1D"); GMI on them runs on gmi-core-htf.mjs.
+  H4: { minutes: 240, period: "240", minBars: 320, htf: true, own: "240" },
+  D1: { minutes: 1440, period: "1D", minBars: 320, htf: true, own: "D" }
+});
 const WINDOW = 1000;
 const NY = "America/New_York";
 
@@ -87,7 +95,7 @@ function macroAether(chartBars, bundle, chart, mintick) {
 }
 
 /**
- * buildHudSnapshot(bundle, { chart: "H1" | "M15", now, mintick })
+ * buildHudSnapshot(bundle, { chart: "H1" | "M15" | "H4" | "D1", now, mintick })
  */
 export function buildHudSnapshot(bundle, { chart = "H1", now = Date.now(), mintick = 0.001 } = {}) {
   const spec = CHART[chart];
@@ -115,7 +123,7 @@ export function buildHudSnapshot(bundle, { chart = "H1", now = Date.now(), minti
 
   let gmi = null, gmiError = null;
   try {
-    gmi = computeGmiOnChart(bundle, { chart, mintick });
+    gmi = spec.htf ? computeGmiOnHtfChart(bundle, { chart, mintick }) : computeGmiOnChart(bundle, { chart, mintick });
     if (gmi.open_time !== last.open_time) { gmi = null; gmiError = "gmi_bar_mismatch"; }
   } catch (error) { gmiError = typeof error?.code === "string" ? error.code : "gmi_failed"; }
   const g = gmi?.comparable || {}, gd = gmi?.diagnostics || {}, zones = gd.zones || {};
@@ -126,7 +134,8 @@ export function buildHudSnapshot(bundle, { chart = "H1", now = Date.now(), minti
   const previousChartBar = chartBars.at(-2) ?? null;
   const higher = { "240": tf.H4, D: tf.D1, W: tf.W1 };
   const camarillaByTf = { [spec.period]: camarilla(previousChartBar) };
-  for (const [key, frame] of Object.entries(higher)) camarillaByTf[key] = camarilla(lastClosedAt(bars(frame), closeMs));
+  // On the H4 or D1 chart its own timeframe is the chart entry above (the previous bar).
+  for (const [key, frame] of Object.entries(higher)) if (key !== spec.own) camarillaByTf[key] = camarilla(lastClosedAt(bars(frame), closeMs));
   const dailyPrev = lastClosedAt(bars(tf.D1), openMs);
   const weeklyPrev = lastClosedAt(bars(tf.W1), openMs);
   const ny = nyMinutes(openMs);
