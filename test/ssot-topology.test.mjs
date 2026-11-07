@@ -82,3 +82,12 @@ test("only the production AI Worker binds Aether, to KnowledgeIngress, with no p
   assert.ok(read(path.join(ROOT, "wrangler.jsonc")).includes("cryptophys-aether"));
   for (const doc of ["docs/SSOT.md", "AGENTS.md"]) assert.ok(read(path.join(ROOT, doc)).includes("cryptophys-aether"), `${doc} must document the Aether binding`);
 });
+
+test("Nexus reaches the AI Worker only through its AI_WORKER Service Binding, never the public URL", () => {
+  const text = read(path.join(ROOT, "workers/xauusd-nexus-dashboard/wrangler.jsonc"));
+  assert.match(text, /\{\s*"binding":\s*"AI_WORKER",\s*"service":\s*"xauusd-ai-trading-assistant"\s*\}/);
+  const src = read(path.join(ROOT, "workers/xauusd-nexus-dashboard/src/index.ts"));
+  assert.match(src, /env\.AI_WORKER\.fetch\(/);
+  assert.doesNotMatch(src, /await fetch\(AI_WORKER_BASE/, "no public fetch of the AI Worker");
+  for (const doc of ["docs/SSOT.md", "AGENTS.md"]) assert.ok(read(path.join(ROOT, doc)).includes("AI_WORKER"), `${doc} must document the Nexus -> AI Worker binding`);
+});

@@ -5,10 +5,13 @@
  * ui/dist and served as Workers Static Assets), plus read-only data routes:
  *   GET /api/ohlcv       closed TradingView bars via the MarketDataReader RPC (no secret, no MCP call)
  *   GET /api/local-lane  read-only diagnostics of the pull adapter
- *   GET /api/*           everything else is proxied to the AI Worker's read-only dashboard API
+ *   GET /api/*           everything else is proxied to the AI Worker's read-only dashboard API, over the
+ *                        AI_WORKER Service Binding (never the public internet, so the AI Worker's /api
+ *                        can sit behind Cloudflare Access without breaking Nexus)
  * Nexus never changes state: advisory only, no orders.
  */
 
+/** Host of the proxied requests; the AI_WORKER binding delivers them without leaving Cloudflare. */
 const AI_WORKER_BASE = "https://ai.cryptophys.work";
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 
@@ -20,7 +23,11 @@ interface MarketDataReader {
   candles(options: { timeframe?: string; limit?: number }): Promise<{ status: number; body: unknown }>;
   diagnostics(): Promise<{ status: number; body: unknown }>;
 }
-interface Env { MARKET_DATA?: MarketDataReader; ASSETS?: { fetch(request: Request): Promise<Response> } }
+interface Env {
+  MARKET_DATA?: MarketDataReader;
+  AI_WORKER?: { fetch(request: Request): Promise<Response> };
+  ASSETS?: { fetch(request: Request): Promise<Response> };
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -52,8 +59,9 @@ export default {
     if (url.pathname.startsWith("/api/")) {
       // Read-only: only GET and HEAD reach the AI Worker from Nexus.
       if (request.method !== "GET" && request.method !== "HEAD") return json({ error: "method_not_allowed" }, 405);
+      if (typeof env.AI_WORKER?.fetch !== "function") return json({ error: "ai_worker_binding_missing" }, 503);
       try {
-        const r = await fetch(AI_WORKER_BASE + url.pathname + url.search, { method: request.method, headers: { accept: "application/json" } });
+        const r = await env.AI_WORKER.fetch(new Request(AI_WORKER_BASE + url.pathname + url.search, { method: request.method, headers: { accept: "application/json" } }));
         const headers = new Headers(r.headers);
         headers.set("access-control-allow-origin", "*");
         return new Response(r.body, { status: r.status, headers });

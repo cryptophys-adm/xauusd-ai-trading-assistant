@@ -6,6 +6,11 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(nexus): Nexus reaches the AI Worker through a Service Binding (topology change, owner go 2026-11-07, step 1 of locking the read API).
+  - **Binding:** `AI_WORKER` → `xauusd-ai-trading-assistant` (default `fetch`) replaces the public fetch of `https://ai.cryptophys.work`.
+  - **Why:** the AI Worker's `/api` can now go behind Cloudflare Access while Nexus keeps working. The webhook stays public and secret-protected.
+  - **Read-only:** only GET and HEAD are forwarded. A missing binding fails closed with 503.
+  - SSOT §2, AGENTS.md rule 7 and the topology test change together.
 - feat(aether): phase A7, the AI Worker pulls Aether's learned pack; approved parameter candidates run as shadow versions.
   - **Pull:** `src/aether-pack.mjs`, hourly over the existing `AETHER` binding (`KnowledgeIngress.learnedPack()`). D1 `aether_learned_pack` (migration 0013) keeps the last good pack. A failure keeps it in use.
   - **Shadow:** an approved `param_candidate` in the reviewed `TUNING_GRID` (`stateMaxAge` 8, 12, 16, 24 for `prophet_r37` and `gmi_v12_70`) becomes a shadow version. At most 3 candidates run per family, and stopped points are never restarted. Nexus `/shadow` marks it "From Aether".
