@@ -3,6 +3,7 @@ import AppShell from "./components/AppShell";
 import WarRoom from "./pages/WarRoom";
 import Shadow from "./pages/Shadow";
 import Scorecards from "./pages/Scorecards";
+import Performance from "./pages/Performance";
 
 const parse = (hash: string) => hash.replace(/^#\/?/, "").split("/").filter(Boolean)[0] ?? "";
 
@@ -13,6 +14,8 @@ export default function App() {
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);
-  const current = route === "shadow" || route === "scorecards" ? route : "";
-  return <AppShell current={current}>{current === "shadow" ? <Shadow /> : current === "scorecards" ? <Scorecards /> : <WarRoom />}</AppShell>;
+  const PAGES: Record<string, () => JSX.Element> = { shadow: Shadow, scorecards: Scorecards, performance: Performance };
+  const current = route in PAGES ? route : "";
+  const Page = PAGES[current] ?? WarRoom;
+  return <AppShell current={current}><Page /></AppShell>;
 }

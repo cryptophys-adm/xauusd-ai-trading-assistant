@@ -323,11 +323,24 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - *Agent consensus:* one stacked bar per room of its agents' stances.
   - *Macro drivers 24h:* diverging bars for gold, DXY, WTI oil and USDT dominance, with whether the gold–dollar inverse link holds.
   - *Session clock:* a 24-hour ring of the Tokyo, London and New York sessions in New York time, as the Chronos Matrix defines them, with a needle at now.
+- **Signal Ledger (owner request 2026-11-07, `src/signal-ledger.mjs`, D1 `signal_ledger`, migration 0010).** Every directional signal, followed to its outcome in R. Advisory only: R multiples of the advice, never money, lots or positions. It never feeds a room, a prompt or a decision.
+  - **Sources:**
+    - `h1_decision`: the Reasoner's BUY/SELL from `trade_decisions` (entry, stop, one take profit).
+    - `strategy`: the strategy engine's TRIGGERED setup (entry, stop, TP1, TP2), recorded by the sweep. It is recorded at most once per hour, and only when no signal of the same side is pending or open.
+  - **Rules:** the simulation runs on closed 15m bars, falling back to 1H bars before the 15m series starts.
+    - The entry is a limit order. It fills when price reaches it within 8 hours.
+    - Before the fill, a stop touch cancels the signal as `invalidated`, a TP1 touch cancels it as `target_before_entry`, and no touch at all cancels it as `unfilled`.
+    - Once filled, two policies run side by side: exit at TP1, and exit at TP2. Each ends at its target, at the stop (−1R), or after 72 hours at the close.
+    - A bar that reaches both the stop and the target counts as the stop and is flagged as ambiguous.
+    - MFE and MAE are kept in R.
+  - **Run:** in the parity sweep, every 15 minutes.
+  - **Read:** `GET /api/ledger?days=30` returns per source and in total: win rate, expectancy, total R, profit factor, maximum drawdown, fill rate, the equity curve and the signals. Nexus shows it on the Performance page.
 - **Nexus UI (owner decision 2026-11-06).** Nexus uses the obsidian design of the Cerebrum Console (`cryptophys-cloud-platform` `workers/console/ui`), because it will merge into the Console control panel. The `nexus` subdomain will later replace `home`.
   - **Stack:** the same as the Console: React 18, Vite, Tailwind with the obsidian palette, lucide-react, framer-motion, and three.js for the neural-mesh background. The chart uses lightweight-charts.
   - **Build and serving:** the source is in `workers/xauusd-nexus-dashboard/ui`. It is built into `ui/dist` and served as Workers Static Assets (`run_worker_first`). The deploy workflow builds it; `validate-nexus-dashboard.yml` builds it on pull requests.
   - **Layout:**
-    - Same header, nav row, glass panels and status footer as the Console.
+    - Same header, glass panels and status footer as the Console.
+    - **Left sidebar (owner request 2026-11-07):** navigation grouped by analytic layer. Live: War Room. Analytics: Performance (`#/performance`), Scorecards, Shadow versions. Market: Economic calendar, Correlations. Intelligence: Decision audit, Alerts. The Market and Intelligence layers are listed as "soon" until they are built. On phones the sidebar opens from the menu button.
     - Left: Priority Queue, War Room agents and Worker status.
     - Center: the chart, then the War Rooms card with its tab bar `News | 15m | 1H | 4H | D1`.
     - Right: the trading assistant panel (charts).

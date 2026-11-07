@@ -66,6 +66,14 @@ reports to the owner.
    - Merging them changes the GMI implementation hash, so the H1 `gmi` identity needs a new 24-candle approval.
    - Schedule it in a calibration window, with the H1 GMI alert active.
    - It cannot be done without the owner: it edits a hashed engine file (`gmi-core-tf.mjs`), which the project rules allow only in a calibration window the owner opens.
+11. **Nexus analytic layers (owner request 2026-11-07, "Nexus vs KIRA").** The Signal Ledger and the Performance page are built. Next, in order:
+    1. **Economic calendar and the event-risk gate.**
+       - **Proposed source:** the ForexFactory weekly JSON export (`nfs.faireconomy.media/ff_calendar_thisweek.json`). Checked 2026-11-07: public, no key. Each event has a title, currency, time (New York offset), impact (Low, Medium, High, Holiday), forecast and previous; there is no actual value.
+       - **Fetching:** it is rate limited, so a scheduled fetch caches it, at most once per hour.
+       - **Owner decisions:** whether to use this source, which currencies count (USD only, or more), and the gate (how many hours before a High-impact event, and whether it is a caution or a forced WAIT).
+    2. **Alerts to the owner.** Setup active, entry reached, TP or stop reached. **Owner decision:** the channel (Telegram, email or web push).
+    3. **Correlations panel:** DXY, US10Y and silver, with their change and the rolling correlation with gold. US10Y needs a new series.
+    4. **Decision audit and growing knowledge (Vectorize).** Draft RFC in progress, together with `cryptophys-cloud-platform`.
 10. **Comparator alerts for the new agents (owner).**
     - **Grid Bot Protocol:** the comparator is built (2026-11-07). The GMI HUD candidate alert carries its fields and the `gmi_hud` identity compares them. What remains is the owner step: install the GMI HUD candidate on the H1 chart (`docs/HUD_CANDIDATE_INSTALL.md`). The same install starts parity for the other GMI HUD fields.
     - **Supertrend and Order Blocks (optional):** they have no TradingView comparator yet, so their statements stay unverified (Supertrend counts as computed from verified bars).

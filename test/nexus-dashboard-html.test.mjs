@@ -93,3 +93,16 @@ test("the UI keeps the Console's obsidian palette and calls only same-origin rea
   const wrangler = readFileSync(join(root, "workers/xauusd-nexus-dashboard/wrangler.jsonc"), "utf8");
   assert.match(wrangler, /"directory": "\.\/ui\/dist"/);
 });
+
+test("a grouped left sidebar routes the analytic layers; the Performance page reads the Signal Ledger in R", () => {
+  const ui = (p) => readFileSync(join(root, "workers/xauusd-nexus-dashboard/ui", p), "utf8");
+  const shell = ui("src/components/AppShell.tsx");
+  for (const group of ['title: "Live"', 'title: "Analytics"', 'title: "Market"', 'title: "Intelligence"']) assert.ok(shell.includes(group), group);
+  assert.match(shell, /<aside[^>]*aria-label="Nexus"/);
+  assert.match(shell, /key: "performance"/);
+  assert.match(ui("src/App.tsx"), /performance: Performance/);
+  const perf = ui("src/pages/Performance.tsx");
+  assert.ok(perf.includes("/api/ledger?days=30"));
+  assert.match(perf, /never money/);
+  assert.doesNotMatch(perf, /lot size|balance|equity \$|position size/i, "advisory only: R multiples, never money or size");
+});
