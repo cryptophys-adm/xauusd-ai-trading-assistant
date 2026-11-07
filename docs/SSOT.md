@@ -1,6 +1,6 @@
 # SSOT — XAUUSD AI Trading Assistant (canonical, current state)
 
-This is the single source of truth for the system's topology, ownership and deployment. If any other document disagrees with this one, this one wins and the other document is historical. Last reconciled: 2026-11-04. Change log: docs/CHANGELOG.md.
+This is the single source of truth for the system's topology, ownership and deployment. If any other document disagrees with this one, this one wins and the other document is historical. Last reconciled: 2026-11-07. Change log: docs/CHANGELOG.md.
 
 ## 1. Production topology: exactly four Workers
 | Worker | Source | Deployed by (only on push to `main`) | Role |
@@ -43,6 +43,17 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
     - Every failure is non-fatal: the chain runs whether the kernel is up or not.
   - **Cursors and status:** cursors live in D1 `platform_publications` (migration `0007`). `GET /api/platform/status` shows `whoami("xauusd-moderator")`, cached for 5 minutes, and the publications.
   - The platform reads this Worker only through `GET /api/decisions`, and it never writes here.
+- The AI Worker calls `AETHER` → `cryptophys-aether` `KnowledgeIngress` (Aether, the Knowledge Guardian; RFC_AETHER_KNOWLEDGE_GUARDIAN phase A5, owner go 2026-11-07). It is the second binding to a Worker outside this repository, and it adds no Worker to the topology above.
+  - **Identity:** no props, no secret or token. Aether accepts calls only through a Service Binding in this account. No other Worker, and not the preview config, may carry this binding. `test/ssot-topology.test.mjs` guards it.
+  - **What is sent** (`src/aether-push.mjs`, once an hour in the first parity sweep after the H1 close): the decision cards of `src/decision-cards.mjs`.
+    - Up to 12 cards of the 15m and 1H rooms, and up to 8 of the 4H and D1 rooms. These are the latest cards of each chart, which covers the 4-candle outcome horizon.
+    - A card is sent again only when its content changes, for example when its outcomes are scored. D1 `aether_card_pushes` (migration `0012`) keeps the hash last sent.
+    - A card that fails the local leak check (any level, price, plan or size) is never sent. Aether checks every card again and may refuse one; a refusal is recorded and that content is not sent again.
+  - **Rules:**
+    - Advisory only. A push never changes a room, a decision or a card, and the sweep never waits on Aether.
+    - A transport failure is non-fatal and leaves the ledger untouched, so the next hour retries it.
+    - Aether never writes here.
+  - **Status:** `GET /api/aether/status` shows the push ledger per chart, the last 24 hours and the latest refusals, without card content.
 
 ## 3. Three AI input lanes (local-primary)
 Owner decision, 2026-11-05: the architecture does not depend on webhooks. Approved local records drive the chain, and TradingView webhooks only calibrate the local engines. `INDICATOR_SOURCE` controls this: `"local"` is the default; `"webhook"` restores the legacy webhook-driven chain as a rollback.

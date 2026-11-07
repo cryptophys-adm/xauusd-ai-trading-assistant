@@ -6,6 +6,11 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(aether): phase A5, the AI Worker pushes its decision cards to Aether (topology change, owner go 2026-11-07).
+  - **Binding:** `AETHER` → `cryptophys-aether` `KnowledgeIngress`, production AI Worker only, no props and no secret. SSOT §2, AGENTS.md rule 7 and the topology test change together.
+  - **Push:** `src/aether-push.mjs`, once an hour in the first sweep after the H1 close. It sends the latest cards of each chart whose content changed, checked locally for leaks first. D1 `aether_card_pushes` (migration 0012) keeps the hash last sent and Aether's refusals.
+  - **Status:** `GET /api/aether/status`.
+  - **Non-fatal:** a push never changes a room, a decision or a card, and never waits on Aether.
 - fix(rooms): agents stop talking about calibration (Aether's first compliance finding: more than half of the latest room messages broke the owner rule).
   - **Cause:** the natural-language rule and its correction prompt gave "verified by parity" as their example phrase. The example is replaced.
   - **Soft correction:** a valid room answer that still mentions parity, calibration, comparators, "unverified", "verified by" or "parity-verified" gets one soft correction within the budget. It is never rejected for this; the first answer is kept when the correction fails or changes the stance.

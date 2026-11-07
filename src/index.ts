@@ -39,6 +39,12 @@ export interface Env {
     whoami(agentId: string): Promise<Record<string, unknown>>;
     syscall(agentId: string, capability: string, input?: Record<string, unknown>): Promise<Record<string, unknown>>;
   };
+  // Aether, the Knowledge Guardian (RFC_AETHER_KNOWLEDGE_GUARDIAN A5): cryptophys-aether
+  // KnowledgeIngress. Production only; no secret. Receives decision cards (no levels).
+  AETHER?: {
+    ingestCards(cards: unknown[]): Promise<{ accepted: number; rejected: Array<{ card_id: string | null; errors: string[] }>; truncated: number }>;
+    canonInfo(): Promise<Record<string, unknown>>;
+  };
   XAUUSD_EVENTS: Queue<QueueTask>;
   INGEST_URL?: string;
   INGEST_SECRET?: string;
@@ -159,6 +165,7 @@ import { readGlobalConclusion } from "./global-conclusion.mjs";
 import { readStrategy } from "./strategy-engine.mjs";
 import { runSignalLedger, readLedger } from "./signal-ledger.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
+import { pushDecisionCards, aetherPushStatus } from "./aether-push.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
@@ -2063,6 +2070,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/aether/status") {
+    // Aether A5: the push ledger of decision cards sent to cryptophys-aether (no card content).
+    try {
+      return dashboardJson({ status: "ok", aether: await aetherPushStatus(env) });
+    } catch (error) {
+      console.error("aether_status_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/decision-cards") {
     // Decision cards for Aether (RFC_AETHER_KNOWLEDGE_GUARDIAN §6.1): no levels, prices or sizes.
     try {
@@ -2417,6 +2433,14 @@ export default {
           const compliance = await runComplianceChecks(env);
           if (compliance.status === "ok" && Number(compliance.violations)) console.log("compliance_checks", JSON.stringify(compliance));
         } catch (e) { console.error("compliance_checks_failed", e instanceof Error ? e.message : String(e)); }
+        // Aether A5: push the decision cards whose content changed to cryptophys-aether, once an
+        // hour (first sweep after the H1 close). Never waits on Aether; a no-op without the binding.
+        if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) {
+          try {
+            const pushed = await pushDecisionCards(env);
+            if (pushed.status !== "disabled" && (pushed.status !== "ok" || Number(pushed.pushed))) console.log("aether_push", JSON.stringify(pushed));
+          } catch (e) { console.error("aether_push_failed", e instanceof Error ? e.message : String(e)); }
+        }
         // Health alerts (gap 2, owner decision 2026-11-06): detect operational problems, keep
         // them as open alerts for the Nexus Priority Queue and report state changes to the
         // platform kernel (warning / info, never critical). Non-fatal by design.
