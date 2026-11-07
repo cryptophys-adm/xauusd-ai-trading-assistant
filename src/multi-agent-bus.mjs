@@ -333,18 +333,34 @@ export function isRateLimited(error) {
   return /\b3021\b|rate limit|\b3040\b|capacity temporarily exceeded/i.test(String(error?.message || error || ""));
 }
 
+/**
+ * Fallback reliability (owner decision 2026-11-06, after three preview-e2e failures that day):
+ * - A primary TIMEOUT is transient: the step falls back, but the next step tries the primary
+ *   again. Only the PRIMARY_TIMEOUTS_TO_PIN-th timeout in a run pins the fallback (each costs up to
+ *   60 s of the wall budget). Any other primary error pins it at once, as before.
+ * - A fallback answer cut off by its token limit (finish_reason length: the reasoning model spent
+ *   the budget on hidden reasoning) is asked once more with twice the budget and a brevity note,
+ *   when FALLBACK_RETRY_MIN_MS are left before the deadline.
+ */
+export const PRIMARY_TIMEOUTS_TO_PIN = 2;
+export const FALLBACK_RETRY_MIN_MS = 30_000;
+export const FALLBACK_BRIEF_NOTE = "Your previous answer ran out of tokens before the JSON. Reply with the JSON object only. Keep any reasoning very short.";
+
 export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState = {} }) {
   const primary = String(env?.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL);
   const fallback = String(env?.MULTI_AGENT_FALLBACK_MODEL || BUS_DEFAULT_FALLBACK_MODEL);
+  const primaryTimeoutMs = Number(env?.BUS_PRIMARY_TIMEOUT_MS) > 0 ? Number(env.BUS_PRIMARY_TIMEOUT_MS) : PRIMARY_CALL_TIMEOUT_MS;
   const attempts = [];
-  // Once the primary model has failed in this run, later steps go straight to
+  // Once the primary model is pinned as failed in this run, later steps go straight to
   // the fallback instead of spending the wall budget on the same error again.
   if (!runState.primaryError) attempts.push({ model: primary, primary: true });
   if (fallback && fallback !== primary) attempts.push({ model: fallback, primary: false });
   if (!attempts.length) attempts.push({ model: primary, primary: true });
   let lastError = null;
   let usage = 0;
-  const meta = (i) => ({ fallback_used: !attempts[i].primary, primary_error: runState.primaryError || null });
+  let callPrimaryError = null;
+  let extraCalls = 0;
+  const meta = (i) => ({ fallback_used: !attempts[i].primary, primary_error: callPrimaryError || runState.primaryError || null });
   const waitMs = Number.isFinite(Number(env?.MODEL_RATE_LIMIT_RETRY_MS)) ? Number(env.MODEL_RATE_LIMIT_RETRY_MS) : RATE_LIMIT_RETRY_MS;
   let rateRetried = false;
   for (let i = 0; i < attempts.length; i++) {
@@ -353,11 +369,26 @@ export async function callBusModel(env, { messages, schemaName, schema, maxToken
     if (remaining <= 0) return { status: "budget_exhausted", model, ...meta(i), usage_tokens: usage || null, calls: i };
     const t0 = clock();
     try {
-      const timeout = isPrimary ? Math.min(remaining, PRIMARY_CALL_TIMEOUT_MS) : remaining;
+      const timeout = isPrimary ? Math.min(remaining, primaryTimeoutMs) : remaining;
       const result = await withTimeout(env.AI.run(model, requestFor(model, messages, schemaName, schema, maxTokens, effort, isPrimary)), timeout);
       usage += usageTokens(result) || 0;
-      const parsed = parseModelObject(result);
-      return { status: "answered", model, ...meta(i), usage_tokens: usage || null, latency_ms: clock() - t0, obj: parsed.obj, text: parsed.text, truncated: parsed.truncated === true, calls: i + 1 };
+      let parsed = parseModelObject(result);
+      if (!isPrimary && parsed.truncated === true && deadline - clock() > FALLBACK_RETRY_MIN_MS) {
+        // The fallback spent its budget on hidden reasoning: once more, briefly, with twice the budget.
+        console.warn("bus_fallback_truncated_retry", JSON.stringify({ model }));
+        const brief = [...messages.slice(0, -1), { ...messages.at(-1), content: `${messages.at(-1)?.content ?? ""}\n\n${FALLBACK_BRIEF_NOTE}` }];
+        const request = { ...requestFor(model, brief, schemaName, schema, maxTokens, effort, false) };
+        request.max_tokens = request.max_tokens * 2;
+        extraCalls += 1;
+        try {
+          const retry = await withTimeout(env.AI.run(model, request), Math.max(1, deadline - clock()));
+          usage += usageTokens(retry) || 0;
+          parsed = parseModelObject(retry);
+        } catch (retryError) {
+          console.warn("bus_fallback_retry_failed", JSON.stringify({ model, error: clip(retryError?.message || String(retryError), 200) }));
+        }
+      }
+      return { status: "answered", model, ...meta(i), usage_tokens: usage || null, latency_ms: clock() - t0, obj: parsed.obj, text: parsed.text, truncated: parsed.truncated === true, calls: i + 1 + extraCalls };
     } catch (error) {
       lastError = error;
       const message = error?.name === "TimeoutError" ? "timeout" : clip(error?.message || String(error) || "model_error", 300);
@@ -369,8 +400,12 @@ export async function callBusModel(env, { messages, schemaName, schema, maxToken
         continue;
       }
       if (isPrimary) {
-        runState.primaryError = `${model}: ${message}`;
-        console.warn("bus_primary_model_failed", JSON.stringify({ model, error: message }));
+        callPrimaryError = `${model}: ${message}`;
+        const timedOut = error?.name === "TimeoutError";
+        if (timedOut) runState.primaryTimeouts = (runState.primaryTimeouts || 0) + 1;
+        // A timeout pins the fallback only once it repeats in this run; other errors pin at once.
+        if (!timedOut || runState.primaryTimeouts >= PRIMARY_TIMEOUTS_TO_PIN) runState.primaryError = callPrimaryError;
+        console.warn("bus_primary_model_failed", JSON.stringify({ model, error: message, pinned: Boolean(runState.primaryError) }));
         continue;
       }
       return { status: "agent_failed", model, ...meta(i), usage_tokens: usage || null, latency_ms: clock() - t0, error: message, calls: i + 1 };

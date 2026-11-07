@@ -407,3 +407,61 @@ test("a rate-limited call waits and retries the same model once; it never marks 
   assert.equal(late.status, "agent_failed");
   assert.equal(m, 1, "no wait when the deadline cannot hold it");
 });
+
+test("one primary timeout falls back for that step only; a second timeout in the run pins the fallback", async () => {
+  // preview-e2e 2026-11-06 (#127): one glm-5.3-flash timeout sent all five news-thread steps to the
+  // fallback. A timeout is transient: the next step tries the primary again.
+  const { callBusModel } = await import("../src/multi-agent-bus.mjs");
+  const timeout = () => new Promise(() => {}); // never answers: the per-call timeout fires
+  let primaryCalls = 0;
+  const ai = { run: async (model) => {
+    if (model === "primary") { primaryCalls += 1; if (primaryCalls <= 2 && primaryCalls !== 2) return timeout(); if (primaryCalls === 3) return timeout(); }
+    return { choices: [{ message: { content: "{\"stance\":\"WAIT\"}" }, finish_reason: "stop" }] };
+  } };
+  let now = 0;
+  const clock = () => now;
+  const env = { AI: ai, MULTI_AGENT_MODEL: "primary", MULTI_AGENT_FALLBACK_MODEL: "fallback", BUS_PRIMARY_TIMEOUT_MS: "5" };
+  const args = { messages: [{ role: "system", content: "s" }, { role: "user", content: "u" }], schemaName: "x", schema: { type: "object" }, maxTokens: 10, deadline: 1e12, clock };
+  const runState = {};
+  const first = await callBusModel(env, { ...args, runState });
+  assert.equal(first.model, "fallback", "step 1: primary timed out, the fallback answers");
+  assert.match(first.primary_error, /timeout/);
+  assert.equal(runState.primaryError, undefined, "one timeout does not pin the run");
+  const second = await callBusModel(env, { ...args, runState });
+  assert.equal(second.model, "primary", "step 2 tries the primary again and it answers");
+  assert.equal(second.fallback_used, false);
+  const third = await callBusModel(env, { ...args, runState });
+  assert.equal(third.model, "fallback", "step 3: a second timeout");
+  assert.match(runState.primaryError, /timeout/, "two timeouts pin the fallback for the rest of the run");
+  const fourth = await callBusModel(env, { ...args, runState });
+  assert.equal(fourth.model, "fallback");
+  assert.equal(primaryCalls, 3, "the pinned run no longer spends time on the primary");
+});
+
+test("a fallback answer cut off by its token limit is asked once more, briefly, with a larger budget", async () => {
+  // preview-e2e 2026-11-06 (#128): the H1 bus moderator fell back to glm-4.7-flash, which spent its
+  // whole budget on hidden reasoning (finish_reason length, 9340 tokens) and gave no answer.
+  const { callBusModel, FALLBACK_TOKEN_FACTOR } = await import("../src/multi-agent-bus.mjs");
+  const requests = [];
+  const ai = { run: async (model, request) => {
+    requests.push({ model, request });
+    if (model === "primary") throw new Error("5007: model not available");
+    if (requests.filter((r) => r.model === "fallback").length === 1) return { choices: [{ message: { content: null }, finish_reason: "length" }] };
+    return { choices: [{ message: { content: "{\"stance\":\"WAIT\"}" }, finish_reason: "stop" }] };
+  } };
+  const now = 0;
+  const r = await callBusModel({ AI: ai, MULTI_AGENT_MODEL: "primary", MULTI_AGENT_FALLBACK_MODEL: "fallback" }, { messages: [{ role: "system", content: "s" }, { role: "user", content: "u" }], schemaName: "x", schema: { type: "object" }, maxTokens: 100, deadline: 600_000, clock: () => now, runState: {} });
+  assert.equal(r.status, "answered");
+  assert.deepEqual(r.obj, { stance: "WAIT" });
+  assert.equal(r.truncated, false);
+  const fallbacks = requests.filter((x) => x.model === "fallback");
+  assert.equal(fallbacks.length, 2);
+  assert.equal(fallbacks[0].request.max_tokens, 100 * FALLBACK_TOKEN_FACTOR);
+  assert.equal(fallbacks[1].request.max_tokens, 100 * FALLBACK_TOKEN_FACTOR * 2, "twice the fallback budget");
+  assert.match(fallbacks[1].request.messages.at(-1).content, /JSON object only/);
+  assert.equal(r.calls, 3);
+
+  // No time left for the retry: the cut-off answer is returned as before.
+  const short = await callBusModel({ AI: { run: async (model) => (model === "primary" ? Promise.reject(new Error("5007")) : { choices: [{ message: { content: null }, finish_reason: "length" }] }) }, MULTI_AGENT_MODEL: "primary", MULTI_AGENT_FALLBACK_MODEL: "fallback" }, { messages: [{ role: "user", content: "u" }], schemaName: "x", schema: { type: "object" }, maxTokens: 100, deadline: 10_000, clock: () => now, runState: {} });
+  assert.equal(short.truncated, true);
+});
