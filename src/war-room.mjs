@@ -20,6 +20,8 @@ import { HUD_IDS, HUD_NAMES, calibrationCounts, calibrationNote, calibratedLines
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
+import { buildCrowdLine, finalEntries, crowdRule, roomReputation } from "./reputation.mjs";
+import { agentReputation } from "./outcome-scoring.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import {
   ROOM_STANCES, ensureThreadSchema, isFifteenMinuteClose, liveEvidence, m15KeyForClose,
@@ -342,9 +344,10 @@ function rebuttalMessages(agent, own, bus, h1, unanimous, confirmations, roomBia
   ]);
 }
 
-function conclusionMessages(h1, bus, debate, confirmations) {
+function conclusionMessages(h1, bus, debate, confirmations, crowd = null) {
   return chatMessages([
     "You are the moderator of the XAUUSD Live War Room. The Consensus Discussion is closed. Write the conclusion for the main panel.",
+    ...(crowd ? [crowdRule(crowd)] : []),
     RULES_NO_REFS,
     ROOM_RULES,
     `The H1 decision (${h1.decision}) is the constraint: if your stance differs from it, the summary must say "H1 decision: ${h1.decision}" and why the room still differs.`,
@@ -493,14 +496,15 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     });
   }))).filter(m => m?.status === "ok");
 
-  // Phase 3: the conclusion for the main panel.
+  // Phase 3: the conclusion for the main panel, with the crowd line (P7, RFC §7).
   if (!answered.length) return { status: "no_openings", calls };
+  const crowd = buildCrowdLine(finalEntries(answered, debate), await agentReputation(db, "15"));
   const conclude = phase(WAR_ROOM_CONCLUSION_MS);
   await conclude(base("conclusion", "moderator"), {
-    messages: conclusionMessages(h1, bus, debate.map(m => ({ id: m.agent, name: agentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument })), confirmations),
+    messages: conclusionMessages(h1, bus, debate.map(m => ({ id: m.agent, name: agentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument })), confirmations, crowd),
     schemaName: "war_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low",
     validate: (o) => validateConclusion(o, h1.decision, busAgents, confirmations, { supportStances: new Set([...answered.map(m => m.stance), ...debate.map(m => m.stance)]), supportBiases: new Set([...answered.map(biasOf), ...debate.map(biasOf)]), roomBias }),
-    toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map(r => clip(r, 200)), dissent: [...new Set(o.dissent)], majority, majority_bias: roomBias, h1_decision: h1.decision }, refs: [] })
+    toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map(r => clip(r, 200)), dissent: [...new Set(o.dissent)], majority, majority_bias: roomBias, h1_decision: h1.decision, crowd }, refs: [] })
   });
   return { status: "complete", calls, openings: answered.length, rebuttals: debate.length };
 }
@@ -524,8 +528,13 @@ export async function readWarRoom(db, { barTime = null } = {}) {
   const c = rows.find(m => m.step === "conclusion");
   const conclusion = c ? { status: c.status, stance: c.stance, bias: c.bias ?? null, majority_bias: c.majority_bias ?? null, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [], dissent: (c.dissent || []).map(id => ({ id, name: agentName(id) })), majority: c.majority ?? null, h1_decision: c.h1_decision ?? null, ts: c.ts, model: c.model ?? null, fallback_used: c.fallback_used === true, ...(c.status !== "ok" ? { errors: c.errors ?? [], primary_error: c.primary_error ?? null, raw: String(c.insight ?? "").slice(0, 300) } : {}) } : null;
   const started = brief?.ts ?? rows[0].ts;
+  // P7 (RFC §7): each agent's 30-day track record on the 15m chart, and the room's crowd line.
+  const rep = await agentReputation(db, "15");
+  const ids = [...new Set([...(brief?.roster || openings.map(o => o.id)), "moderator"])];
   return {
     bar_time: run,
+    reputation: roomReputation(ids, rep),
+    crowd: c?.crowd ?? (openings.some(o => o.status === "ok") ? buildCrowdLine(finalEntries(openings, debate), rep) : null),
     phase: c?.status === "ok" ? "closed" : debate.length ? "debate" : "opening",
     started_at: started,
     debate_window_seconds: WAR_ROOM_DEBATE_MS / 1000,

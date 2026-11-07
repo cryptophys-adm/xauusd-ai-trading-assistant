@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { motion } from "framer-motion";
-import { Activity, ExternalLink, FlaskConical, Home, Menu, ShieldCheck, Sparkles, Swords, X } from "lucide-react";
+import { Activity, ExternalLink, FlaskConical, Home, Menu, ShieldCheck, Sparkles, Swords, Trophy, X } from "lucide-react";
 import { Dot } from "./ui";
 import { useWarRoom } from "../lib/warroom";
 
@@ -8,6 +8,7 @@ import { useWarRoom } from "../lib/warroom";
 // the Console in phase 2 (ADR-0008), so its header, nav, glass panels and footer match.
 export const NAV = [
   { label: "War Room", href: "#/", key: "", icon: Swords },
+  { label: "Scorecards", href: "#/scorecards", key: "scorecards", icon: Trophy },
   { label: "Shadow versions", href: "#/shadow", key: "shadow", icon: FlaskConical },
 ];
 

@@ -20,6 +20,8 @@
 // always. A WAIT now misses an opportunity only when a 2:1 trade would have won: price
 // reaches 1 x ATR (waitTargetAtr) on one side before touching 0.5 x ATR (thresholdAtr) on
 // the other. BUY and SELL scoring is unchanged (1:1 at 0.5 x ATR).
+import { reputationFromScorecards, REPUTATION_DAYS } from "./reputation.mjs";
+
 export const SCORING_VERSION = "cryptophys.outcome-scoring.v3";
 export const SCORING = Object.freeze({ horizon: 4, atrPeriod: 14, thresholdAtr: 0.5, waitTargetAtr: 1, stuckCandles: 8, stuckRangeAtr: 3 });
 
@@ -252,6 +254,39 @@ export async function roomStatements(env, sinceIso) {
   return byBar;
 }
 
+/**
+ * P7 (RFC §7): the agents of the rooms that meet today, by bar. Each agent's final stance (its
+ * Consensus Discussion answer, else its opening) and the moderator's conclusion are scored as
+ * "agent:<id>" on the room's timeframe, so reputation follows the agent from bar to bar.
+ *   15: the Live War Room 15m (threads warroom:<day>), keyed by the 15m bar close;
+ *   60: the 1H War Room (thread tf:H1), keyed by the H1 candle key (a re-convened session wins).
+ */
+export async function agentStatements(env, timeframe, sinceIso) {
+  const byKey = new Map();
+  const add = (key, row) => {
+    if (!key || !row.stance) return;
+    const list = byKey.get(key) || new Map();
+    const agent = row.step === "conclusion" ? "moderator" : String(row.agent);
+    const prior = list.get(agent);
+    // The Consensus Discussion answer is the final stance; a later session (#hud) wins.
+    if (!prior || row.step.startsWith("debate:") || row.step === "conclusion" || String(row.run_id) > String(prior.run_id)) list.set(agent, { subject: "agent:" + agent, source: "room", stance: row.stance, confidence: row.confidence ?? null, run_id: row.run_id, step: row.step });
+    byKey.set(key, list);
+  };
+  try {
+    if (timeframe === "15") {
+      const rows = (await env.DB.prepare("SELECT run_id, bar_time, step, agent, stance, confidence FROM agent_thread_messages WHERE thread_id LIKE 'warroom:%' AND status = 'ok' AND bar_time >= ? AND (step LIKE 'open:%' OR step LIKE 'debate:%' OR step = 'conclusion') ORDER BY run_id, CASE WHEN step LIKE 'open:%' THEN 0 ELSE 1 END").bind(sinceIso).all()).results || [];
+      for (const r of rows) add(r.bar_time, r);
+    } else if (timeframe === "60") {
+      const rows = (await env.DB.prepare("SELECT m.run_id, m.step, m.agent, m.stance, m.confidence, json_extract(b.body_json, '$.candle_key') AS candle_key FROM agent_thread_messages m JOIN agent_thread_messages b ON b.thread_id = m.thread_id AND b.run_id = m.run_id AND b.step = 'brief' WHERE m.thread_id = 'tf:H1' AND m.status = 'ok' AND m.ts >= ? AND (m.step LIKE 'open:%' OR m.step LIKE 'debate:%' OR m.step = 'conclusion') ORDER BY m.run_id, CASE WHEN m.step LIKE 'open:%' THEN 0 ELSE 1 END").bind(sinceIso).all()).results || [];
+      for (const r of rows) add(r.candle_key, r);
+    }
+  } catch { /* thread tables absent */ }
+  return new Map([...byKey].map(([k, m]) => [k, [...m.values()].map(({ run_id: _r, step: _s, ...st }) => st)]));
+}
+
+/** The outcome_runs timeframe that marks a bar whose room agents were scored. */
+export const AGENT_RUN_SUFFIX = ":agents";
+
 async function loadBars(env, timeframe) {
   const record = parse(await env.SIGNAL_CACHE?.get?.(SERIES_KEY_PREFIX + SCORED_TIMEFRAMES[timeframe].series));
   const candles = Array.isArray(record?.candles) ? record.candles : [];
@@ -301,8 +336,33 @@ export async function scoreRecentStatements(env, { now = Date.now() } = {}) {
       summary.candles += 1;
       summary.scores += written;
     }
+    // P7: the room agents of the same bars, once per bar (their own run marker).
+    const agentRun = timeframe + AGENT_RUN_SUFFIX;
+    const agentsDone = new Set(((await env.DB.prepare("SELECT candle_key FROM outcome_runs WHERE timeframe = ? AND scored_at >= ? AND scoring_version = ?").bind(agentRun, new Date(now - 3 * 86_400_000).toISOString(), SCORING_VERSION).all()).results || []).map((r) => r.candle_key));
+    const byKey = await agentStatements(env, timeframe, timeframe === "60" ? new Date(Date.parse(ready[0].open_time) - 3_600_000).toISOString() : ready[0].close_time);
+    for (const bar of ready) {
+      const candleKey = keyOf(bar);
+      if (agentsDone.has(candleKey)) continue;
+      const statements = byKey.get(timeframe === "60" ? candleKey : bar.close_time) || [];
+      if (!statements.length) continue;
+      const closeMs = Date.parse(bar.close_time);
+      let written = 0;
+      for (const st of statements) {
+        const score = scoreStance({ stance: st.stance, confidence: st.confidence, bars, closeMs });
+        if (["pending", "no_data", "not_scored"].includes(score.result)) continue;
+        await insertScore(env.DB, { ...score, subject: st.subject, source: st.source, timeframe, candle_key: candleKey, statement_close: bar.close_time, confidence: finite(st.confidence) ? st.confidence : null, scored_at: scoredAt });
+        written += 1;
+      }
+      await env.DB.prepare("INSERT INTO outcome_runs (timeframe, candle_key, statements, scored_at, scoring_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT(timeframe, candle_key) DO UPDATE SET statements = excluded.statements, scored_at = excluded.scored_at, scoring_version = excluded.scoring_version").bind(agentRun, candleKey, written, scoredAt, SCORING_VERSION).run();
+      summary.agent_scores = (summary.agent_scores || 0) + written;
+    }
   }
   return summary;
+}
+
+/** Reputation of the agents of one timeframe's room (src/reputation.mjs), from the 30-day scorecards. */
+export async function agentReputation(db, timeframe, { days = REPUTATION_DAYS, now = Date.now() } = {}) {
+  try { return reputationFromScorecards(await scorecards(db, { days, now }), timeframe); } catch { return {}; }
 }
 
 const STUCK_FIELDS = Object.freeze({

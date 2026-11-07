@@ -162,11 +162,12 @@ import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
 import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents, m15KeyForClose } from "./agent-threads.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
-import { warRoomEnabled, runWarRoomBar, readWarRoom, readTldr } from "./war-room.mjs";
+import { warRoomEnabled, runWarRoomBar, readWarRoom, readTldr, agentName } from "./war-room.mjs";
+import { reputationOf, familyOf, REPUTATION_VERSION, REPUTATION_PRIOR, WEIGHT_RANGE } from "./reputation.mjs";
 import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, SCORING, SCORING_VERSION } from "./outcome-scoring.mjs";
 import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
-import { runPendingTimeframeThreads, runTimeframeThread, readTimeframeThread, tfThreadsEnabled } from "./timeframe-threads.mjs";
+import { runPendingTimeframeThreads, runTimeframeThread, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import {
   H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, H1_ROOM_RETRY_S, H1_ROOM_LOCK_PREFIX, H1_ROOM_LOCK_TTL_S, buildH1RoomTask, h1RoomGate, AWAITING_CONSENSUS, H1_REASONER_GIVE_UP_MS, H1_PENDING_LOOKBACK_MS,
   h1BarTimes, finalizeDue, consensusInput, reasonerLines, consensusGuard, emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
@@ -2062,7 +2063,17 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/scorecards") {
     try {
       const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") || "30") || 30));
-      return dashboardJson({ status: "ok", version: SCORING_VERSION, scoring: SCORING, window_days: days, subjects: await scorecards(env.DB, { days }), stuck_states: (await listStuckStates(env.DB, { limit: 20 })).filter(s => s.status === "open") });
+      const subjects = await scorecards(env.DB, { days }) as JsonObject[];
+      // P7 (RFC §7): the room agents' track records, by chart, best weight first.
+      const agents = (tf: string, nameOf: (id: string) => string) => subjects
+        .filter(c => c.timeframe === tf && String(c.subject).startsWith("agent:"))
+        .map((c): JsonObject => { const id = String(c.subject).slice(6); return { id, name: nameOf(id), family: familyOf(id), ...reputationOf(c) }; })
+        .sort((x, y) => Number(y.weight) - Number(x.weight) || Number(y.decisive) - Number(x.decisive));
+      return dashboardJson({
+        status: "ok", version: SCORING_VERSION, scoring: SCORING, window_days: days, subjects,
+        reputation: { version: REPUTATION_VERSION, prior: REPUTATION_PRIOR, weight_range: WEIGHT_RANGE, rooms: { "15m": agents("15", agentName), "1H": agents("60", tfAgentName) } },
+        stuck_states: (await listStuckStates(env.DB, { limit: 20 })).filter(s => s.status === "open")
+      });
     } catch (error) {
       console.error("scorecards_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);

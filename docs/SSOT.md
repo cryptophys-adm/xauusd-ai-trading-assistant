@@ -459,6 +459,37 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - **When:** in the parity sweep cron (`10-59/15`), after the backfill. Stuck-state detection runs in the first sweep of each hour.
 - **Read APIs:** `GET /api/scorecards?days=30` (per subject: directional hit rate, WAIT accuracy, missed opportunities, Brier and sessions, plus the open stuck states) and `GET /api/stuck-states`.
 
+### Crowd line, reputation and scorecards (RFC_INDICATOR_AGENT_PLATFORM P7, owner go 2026-11-07)
+- **Owner decisions of 2026-11-07:** the RFC's proposed values are accepted. That covers the scoring definition (horizon 4 candles, 0.5 × ATR, the v3 WAIT rule), the stuck-state thresholds (8 candles, more than 3 × ATR), and Supertrend first then Order Block (P6).
+- **Room agents scored:**
+  - Outcome scoring now covers the agents of the rooms that meet today: the Live War Room 15m (timeframe `15`) and the 1H War Room (timeframe `60`).
+  - The subject is `agent:<id>`. The stance scored is the agent's final one: its Consensus Discussion answer, else its opening. The moderator's conclusion is scored as `agent:moderator`. A re-convened session (`#hud`) wins.
+  - Each bar is scored once, with its own run marker (`outcome_runs` timeframe `<tf>:agents`), so bars already scored for the chain still get their agents.
+  - Scoring starts with the bars after this deploy. The retired per-H1 HUD agents and the legacy 15m room keep their old subjects.
+- **Reputation** (`src/reputation.mjs`):
+  - It is computed per agent and chart over 30 days.
+  - Decisive calls are BUY/SELL hits and misses, plus WAIT hits and missed moves.
+  - The accuracy is shrunk toward 50 % with 10 pseudo-observations, so a new agent weighs 1 and earns its weight with its sample.
+  - Weight = 2 × the shrunk accuracy, kept between 0.25 and 2.
+  - In the 1H room, open H1 stuck states put a caution flag on the agents that read the stuck field (the 1H Desk, Prophet, R37 Funnel, Decision Matrix).
+- **Crowd line** (deterministic, one per room and bar):
+  - the stances and biases of every agent that spoke;
+  - the same biases weighted by reputation;
+  - a disagreement index (the normalised entropy of the weighted biases: 0 unanimous, 1 an even three-way split);
+  - the agent families whose weighted lean goes against the crowd.
+  - The families are a table in `src/reputation.mjs` until P2 manifests carry them.
+- **Who uses it:**
+  - The moderator of every room (15m, 1H, 4H, D1) receives it. If its bias differs from the weighted crowd, it says so in the summary; this is never a validation error.
+  - The H1 Reasoner receives it in `CONSENSUS.crowd`. A weighted crowd against the room, or a disagreement above 0.7, lowers the Reasoner's confidence; it never reverses the room's bias on its own.
+- **API:**
+  - Every room read (`GET /api/war-room/latest`, `GET /api/threads/timeframe`) carries `crowd` and `reputation`, keyed by agent.
+  - `GET /api/scorecards` adds `reputation.rooms` (`15m`, `1H`): name, family, decisive calls, accuracy, hit rate, WAIT accuracy, Brier and crowd weight.
+- **Nexus:**
+  - Each post shows its agent's record: accuracy, sample, crowd weight, and a CAUTION chip with the stuck state.
+  - Each room shows a crowd line card under its conclusion: head-count and weighted bias bars, the disagreement, the families against the crowd, and whether it differs from the conclusion.
+  - A new **Scorecards** page (`#/scorecards`) lists the room agents of each chart, the H1 decision, the indicators and the open stuck states.
+- No limit on who speaks (owner decision 6, 2026-11-05): every active agent still speaks. The crowd line informs; it does not silence anyone.
+
 ### Shadow indicator versions (RFC_INDICATOR_AGENT_PLATFORM P3)
 - Code: `src/shadow-versions.mjs`. Table `shadow_outputs` (migration `0008_shadow_outputs.sql`; also ensured at runtime).
 - **What runs.** Once an hour, in the first parity sweep after the H1 close, every version is replayed over the pull adapter's cached H1 bars (`SIGNAL_CACHE`).

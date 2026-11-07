@@ -195,6 +195,8 @@ Production is enabled only after the owner approves, by a PR that sets the flag 
 
 ### Backlog (owner, 2026-11-05)
 
+*Merged into `docs/BACKLOG.md` on 2026-11-07, the only backlog. Kept here for the record.*
+
 - **B4: remove the GMI core duplication.** `gmi-core-tf.mjs` repeats the approved H1 GMI core. Merging them changes the GMI implementation hash, so the H1 `gmi` identity needs a new 24-candle approval. Schedule it in a calibration window, with the H1 GMI alert active.
 - **Grid Bot Protocol HUD.** The only HUD that is not computed (`not_computed`). It can be ported from the Pine source, but its statements stay "not yet calibrated" until a Pine candidate comparator exists.
 

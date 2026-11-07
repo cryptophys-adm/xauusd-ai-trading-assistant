@@ -511,3 +511,15 @@ test("a moderator that names agents by their ids is read with their names; a fou
   assert.match(o.reasons[0], /^Kinetic Engine/);
   assert.equal(agentIdsToNames({ summary: "per h1.decision_field" }, ["risk"]).summary, "per h1.decision_field", "other code-like text is untouched (and still rejected)");
 });
+
+test("P7: the Live War Room moderator gets the crowd line; the room carries it and the agents' records", async () => {
+  const ai = fakeAI({ stances: { kinetic_engine: "SELL" } });
+  const e = env(ai);
+  await runWarRoomBar(e, task());
+  const moderator = ai.calls.find(c => /moderator of the XAUUSD Live War Room/.test(c.request.messages[0].content));
+  assert.match(moderator.request.messages.map(m => m.content).join("\n"), /CROWD LINE \(deterministic:/);
+  const room = await readWarRoom(e.DB);
+  assert.equal(room.crowd.agents, 6);
+  assert.equal(room.crowd.stances.SELL, 1);
+  assert.ok(room.reputation.moderator && room.reputation.risk);
+});

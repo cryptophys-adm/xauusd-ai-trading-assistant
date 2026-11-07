@@ -366,3 +366,17 @@ test("the sweep leaves an H1 bar alone while the h1_room task holds its room", a
   const out = await runPendingTimeframeThreads(e, { now, clock: () => now, sleep: async () => {} });
   assert.equal(out.charts.H1, undefined);
 });
+
+test("P7: the moderator gets the crowd line; the room carries it and every agent's track record", async () => {
+  const ai = fakeAI({ stances: { kinetic_engine: "SELL" } });
+  const e = env(ai);
+  await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
+  const moderator = ai.calls.find((c) => /moderator of the XAUUSD 4-hour War Room/.test(c.request.messages[0].content));
+  assert.match(moderator.request.messages.map((m) => m.content).join("\n"), /CROWD LINE \(deterministic: .*0 of 5 agents have a record\): the weighted crowd leans/);
+  const thread = await readTimeframeThread(e.DB, "H4");
+  assert.equal(thread.crowd.agents, 5);
+  assert.equal(thread.crowd.stances.SELL, 1);
+  assert.deepEqual(Object.keys(thread.reputation).sort(), ["fabio_amt", "h4", "kinetic_engine", "moderator", "risk", "technical"].sort());
+  assert.equal(thread.reputation.kinetic_engine.weight, 1, "no record yet");
+  assert.equal(thread.reputation.kinetic_engine.family, "trend");
+});

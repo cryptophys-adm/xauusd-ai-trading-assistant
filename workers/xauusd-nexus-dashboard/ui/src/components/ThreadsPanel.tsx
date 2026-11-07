@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import clsx from "clsx";
 import { Layers, Swords } from "lucide-react";
 import { Post, calibrationText } from "./Post";
+import CrowdLine from "./CrowdLine";
 import { Stance, stanceColor } from "./Stance";
 import { Badge, Skeleton } from "./ui";
 import { useWarRoom } from "../lib/warroom";
@@ -72,9 +73,9 @@ function Discussion({ room }: { room: any }) {
   return (
     <div className="space-y-3">
       {!!opens.length && <div className="eyebrow pt-1 text-[10px]">Communication bus · {opens.length} agents</div>}
-      <div className="space-y-1.5">{opens.map((m: any) => <Post key={m.id} m={m} text={m.claim} calibration={calibrationText(m.calibration ?? cal[m.id])} />)}</div>
+      <div className="space-y-1.5">{opens.map((m: any) => <Post key={m.id} m={m} text={m.claim} calibration={calibrationText(m.calibration ?? cal[m.id])} reputation={room.reputation?.[m.id]} />)}</div>
       {!!debate.length && <div className="eyebrow pt-1 text-[10px]">Consensus Discussion</div>}
-      <div className="space-y-1.5">{debate.map((m: any) => <Post key={m.id} m={m} text={m.argument} />)}</div>
+      <div className="space-y-1.5">{debate.map((m: any) => <Post key={m.id} m={m} text={m.argument} reputation={room.reputation?.[m.id]} />)}</div>
     </div>
   );
 }
@@ -128,6 +129,7 @@ function RoomTab({ room, tab }: { room: any; tab: Tab }) {
     <div className="space-y-3">
       <ConclusionHero c={room.conclusion} title={`${label} War Room`} badges={badges} constraint={constraint} confirmation={confirmation}
         waiting={room.phase === "closed" ? "The moderator could not conclude this round." : `The ${label} War Room is in session (${phaseText(room)}); the conclusion follows the Consensus Discussion.`} />
+      {room.crowd && <CrowdLine crowd={room.crowd} conclusionBias={room.conclusion?.status === "ok" ? room.conclusion.bias : null} />}
       <Discussion room={room} />
       {tab === "H1" && <ReasonerDecision r={room.reasoner_decision} />}
     </div>
