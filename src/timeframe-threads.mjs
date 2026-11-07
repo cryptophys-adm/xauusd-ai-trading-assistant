@@ -42,6 +42,7 @@ import {
 import { closedHtfCandleKeys, OBSERVED_PREFIX } from "./parity-sweep.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
+import { H1_ROOM_LOCK_PREFIX } from "./h1-consensus.mjs";
 
 const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson } = threadInternals;
 
@@ -438,6 +439,12 @@ async function dueBars(env, now) {
     const chart = Object.keys(TF_THREAD_CHARTS).find((c) => TF_THREAD_CHARTS[c].period === period);
     if (!chart) continue;
     const closeMs = Number(key.split(":").at(-1)) + TF_THREAD_CHARTS[chart].minutes * 60_000;
+    // The h1_room queue task runs this bar's 1H room right after the close (src/h1-consensus.mjs).
+    if (chart === "H1") {
+      let held = null;
+      try { held = await env.SIGNAL_CACHE?.get?.(H1_ROOM_LOCK_PREFIX + key); } catch { held = null; }
+      if (held) continue;
+    }
     let snapshot = null;
     try { snapshot = await env.SIGNAL_CACHE?.get?.(`hud:${period}:${key}`); } catch { snapshot = null; }
     if (!snapshot && now - closeMs < TF_HUD_WAIT_MS) continue;

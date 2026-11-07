@@ -101,6 +101,13 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - A room that concludes WAIT with a bullish or bearish bias may become BUY or SELL in that direction only with the matching confirmed 1-hour Prophet R38 signal and exact prices.
   - It never decides against the room's bias. A deterministic guard (`consensusGuard`) turns a BUY or SELL against the room's bias, or against a concluded BUY or SELL, into WAIT with the prices cleared.
   - It departs from the room only for a veto: Prophet R38 `t_enc` 4, a GMI verdict of -3 against a BUY or +3 against a SELL, or missing exact prices. A GMI conflict or a gate of -1 lowers confidence (owner decision 2026-11-06).
+- **The 1H room right after the close (owner request 2026-11-07):**
+  - When `runAnalysis` parks the evidence, it enqueues an `h1_room` queue task, so the 1H War Room no longer waits for the next sweep (:10, :25, :40, :55) and its 20-minute HUD wait.
+  - The task waits for the bar's HUD snapshot until 5 minutes after the close (`H1_ROOM_HUD_WAIT_MS`, redelivered every minute), then runs the room. The Reasoner decides as soon as the room concludes.
+  - A snapshot that arrives later re-convenes the room (`#hud`); the decision already written stays.
+  - A bar not yet in the cached series, or a room still waiting for its quorum, is redelivered.
+  - While the task holds the room (`h1room:lock:<candle_key>`, 7 minutes), the sweep skips that bar. The sweep remains the fallback.
+  - The synthesis records `consensus.decided_after_close_s`. Target: about 10 minutes after the close; before, 15 to 45 minutes.
 - **Fail-closed:** a room where no agent spoke by the fallback time gives WAIT without a model call. A Reasoner that keeps failing is retried by every sweep, and after 2 hours gives WAIT.
 - **Idempotent:** only the caller that moves the stage from `awaiting_consensus` to `finalizing` decides (a stale `finalizing` is reclaimed after 10 minutes). New evidence of the bar may reclaim a stale `analyzing` run; it then parks the fresher evidence.
 - **Stored:** the synthesis carries `analysis_chain: "consensus_reasoner"`, `consensus` (status concluded, partial or empty; who spoke; the room's bias; the conclusion; whether the guard overrode the Reasoner) and the raw Reasoner output. Persistence is unchanged: `ai_syntheses`, `trade_decisions`, `latest:`, Telegram and `analysis:`.
@@ -427,7 +434,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - Read API: `GET /api/war-room/latest[?bar=<iso>]`.
   - When on, it replaces the legacy live room and the per-H1 HUD agents (their budget moves here). Turning it `"false"` restores both.
 - Live: C0, C2, C3, C5, C6 and C7 are built. `HUD_AGENTS_ENABLED` is `"true"` in `wrangler.jsonc` (owner approval 2026-11-05, after the #94 preview-e2e proof). After each H1 synthesis, one agent per computed HUD (13) and a moderator post in Threads 1H, within `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`. At each 15m close, Trade Management, Kinetic Engine, Fabio AMT and Aegis Footprint speak in the live room, within `LIVE_ROOM_MAX_CALLS_PER_HOUR = 48`. Turning the flag to `"false"` stops new HUD posts at once.
-- Backlog (owner, 2026-11-05): B4 (merge the GMI core copy, needs a new H1 GMI approval in a calibration window) and the Grid Bot Protocol HUD. See `docs/BRIEF_HUD_AGENTS.md`.
+- Backlog (owner, 2026-11-05): B4 (merge the GMI core copy, needs a new H1 GMI approval in a calibration window) and the Grid Bot Protocol HUD. See `docs/BRIEF_HUD_AGENTS.md`. All open work that waits on the market, a date or the owner is listed in `docs/BACKLOG.md`.
 - **Macro & Aether Sensors complete** (owner decision 2026-11-05: every TradingView metric becomes agent data). `local-engines/producer/src/macro-aether.mjs` computes every row of the Pine HUD for the H1 and M15 snapshots:
   - **Rows:** CONSOL. GRAVITY (TDM profile gravity), Z3 KINETIC SPREAD, MACRO CYCLE (DXY and USDT ROC), EST. MACRO SHIFT (macro kinematics on DXY and USDT 4h), ASSET GRAVITY (WTI RSI14 at the chart timeframe, from the USOIL M15 and H1 series), Q-GRAVITY PULL and MACRO SMR (the FVG reservoir).
   - **MTF HURST and MTF Z-SCORE** were already in the snapshot.

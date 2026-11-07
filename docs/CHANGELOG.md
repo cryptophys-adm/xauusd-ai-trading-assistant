@@ -6,6 +6,15 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(h1): the 1H room runs right after the close, so the H1 decision comes sooner (owner request 2026-11-07).
+  - **Why:** the decision came 15-45 minutes after the close. The room waited for the next sweep (:10, :25, :40, :55) and up to 20 minutes for its HUD snapshot.
+  - **Now:**
+    - Parking the evidence enqueues an `h1_room` task.
+    - The task waits for the HUD snapshot until 5 minutes after the close, runs the 1H room, and the Reasoner decides at once.
+    - A late snapshot re-convenes the room; the decision already written stays.
+  - **Fallback:** the sweep remains it, and skips a bar while the task holds its room (`h1room:lock:`).
+  - **Measured:** `consensus.decided_after_close_s` (target about 10 minutes).
+  - **Backlog:** `docs/BACKLOG.md` lists the open work that waits on the market, a date or the owner, starting with the Monday 2026-11-09 production checks.
 - feat(models): the model migration (owner decision 2026-11-07: "as recommended").
   - **Why:** Workers AI retires `@cf/zai-org/glm-5.3-flash` and `@cf/nvidia/nemotron-3-120b-a12b` on 2026-11-20 (changelog 2026-11-05: HTTP 410, error 5028; first announced for 2026-11-15). glm-5.3-flash was also paid and limited to 20 requests a minute per account, the main source of the rooms' 3021 errors.
   - **Roles:**

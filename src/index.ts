@@ -166,9 +166,9 @@ import { warRoomEnabled, runWarRoomBar, readWarRoom, readTldr } from "./war-room
 import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, SCORING, SCORING_VERSION } from "./outcome-scoring.mjs";
 import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
-import { runPendingTimeframeThreads, readTimeframeThread, tfThreadsEnabled } from "./timeframe-threads.mjs";
+import { runPendingTimeframeThreads, runTimeframeThread, readTimeframeThread, tfThreadsEnabled } from "./timeframe-threads.mjs";
 import {
-  H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, AWAITING_CONSENSUS, H1_REASONER_GIVE_UP_MS, H1_PENDING_LOOKBACK_MS,
+  H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, H1_ROOM_RETRY_S, H1_ROOM_LOCK_PREFIX, H1_ROOM_LOCK_TTL_S, buildH1RoomTask, h1RoomGate, AWAITING_CONSENSUS, H1_REASONER_GIVE_UP_MS, H1_PENDING_LOOKBACK_MS,
   h1BarTimes, finalizeDue, consensusInput, reasonerLines, consensusGuard, emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
 } from "./h1-consensus.mjs";
 import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
@@ -879,8 +879,48 @@ async function runAnalysis(
   await setAnalysisRunStatus(env, candleKey, "analyzing", { input_fingerprint: inputFingerprint, parked_at: parkedAt, chain: H1_CHAIN, stage: AWAITING_CONSENSUS }, AWAITING_CONSENSUS);
   // A chart without a War Room (only H1 has one) never gets a consensus: decide now (fail-closed).
   if (candleKey.split(":")[2] !== "60" || !h1BarTimes(candleKey)) await finalizeH1Decision(env, candleKey, { force: true });
+  // The 1H room right away (owner request 2026-11-07), not at the next sweep.
+  else await enqueueH1Room(env, candleKey);
   return { status: AWAITING_CONSENSUS, missing_evidence: fusion.missing_evidence };
   });
+}
+
+/** Enqueues the 1H room of a parked bar (src/h1-consensus.mjs). The sweep stays the fallback. */
+async function enqueueH1Room(env: Env, candleKey: string): Promise<void> {
+  if (!tfThreadsEnabled(env)) return;
+  try {
+    await sendQueueTask(env.XAUUSD_EVENTS, buildH1RoomTask({ candleKey }) as unknown as QueueTask);
+  } catch (error) {
+    console.error("h1_room_enqueue_failed", JSON.stringify({ candle_key: candleKey, error: error instanceof Error ? error.message : String(error) }));
+  }
+}
+
+/**
+ * The h1_room task: waits (redelivered every minute) for the bar's HUD snapshot until
+ * H1_ROOM_HUD_WAIT_MS after the close, runs the 1H War Room, and the Reasoner decides as soon as
+ * the room concludes. A room still waiting for its bar or its quorum is redelivered; the sweep
+ * finishes anything the task could not.
+ */
+async function processH1RoomTask(env: Env, task: { candle_key: string }): Promise<void> {
+  const key = task.candle_key;
+  const retry = (why: string) => Object.assign(new Error("h1 room " + why), { name: "H1RoomPending", retryDelaySeconds: H1_ROOM_RETRY_S });
+  if (!tfThreadsEnabled(env)) return;
+  let hud: string | null = null;
+  try { hud = await env.SIGNAL_CACHE.get("hud:60:" + key); } catch { hud = null; }
+  if (h1RoomGate({ candleKey: key, now: Date.now(), hudReady: Boolean(hud) }) === "wait_for_hud") throw retry("waiting for its HUD snapshot");
+  try { await env.SIGNAL_CACHE.put(H1_ROOM_LOCK_PREFIX + key, new Date().toISOString(), { expirationTtl: H1_ROOM_LOCK_TTL_S }); } catch { /* best effort */ }
+  let result: Record<string, unknown>;
+  try {
+    result = await runTimeframeThread(env, { chart: "H1", candleKey: key });
+  } finally {
+    try { await env.SIGNAL_CACHE.delete(H1_ROOM_LOCK_PREFIX + key); } catch { /* expires on its own */ }
+  }
+  console.log("h1_room", JSON.stringify({ candle_key: key, ...result }));
+  if (result.status === "no_bar" || result.status === "waiting_for_quorum") throw retry(String(result.status));
+  if (result.status === "complete" || result.status === "already_complete") {
+    const finalized = await finalizeH1Decision(env, key);
+    console.log("h1_consensus_decision", JSON.stringify({ candle_key: key, via: "h1_room", ...finalized }));
+  }
 }
 
 /** Evidence-fusion fields kept in analysis_runs.result_json. */
@@ -969,7 +1009,7 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
     candle_key: candleKey, ticker, timeframe, timestamp,
     evidence_fusion: fusion,
     analysis_chain: H1_CHAIN,
-    consensus: consensusSummary(consensus, { overridden }),
+    consensus: consensusSummary(consensus, { overridden, decidedAfterCloseS: h1BarTimes(candleKey) ? Math.round((Date.now() - (h1BarTimes(candleKey) as { close: number }).close) / 1000) : null }),
     reasoner_model: env.AI_MODEL_REASONER,
     reasoner_output: reasonerText,
     news_evidence: parked.news_evidence ?? evidence.news_evidence ?? null,
@@ -1703,6 +1743,7 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
       console.log("hud_agents", JSON.stringify({ candle_key: task.candle_key, ...result }));
       return;
     }
+    if (task.kind === "h1_room") return processH1RoomTask(env, task);
     if (task.kind === "multi_agent_bus") {
       const result = await runMultiAgentBus(env, task);
       console.log("multi_agent_bus", JSON.stringify({ candle_key: task.candle_key, ...result }));

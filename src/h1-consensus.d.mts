@@ -13,4 +13,10 @@ export function reasonerLines(input: { evidence: unknown; consensus: any; laneRu
 export function consensusGuard(decision: Record<string, any>, consensus: any): { decision: Record<string, any>; overridden: boolean };
 export function emptyConsensusDecision(): Record<string, any>;
 export function reasonerUnavailableDecision(): Record<string, any>;
-export function consensusSummary(consensus: any, options?: { overridden?: boolean }): Record<string, any>;
+export function consensusSummary(consensus: any, options?: { overridden?: boolean; decidedAfterCloseS?: number | null }): Record<string, any>;
+export const H1_ROOM_HUD_WAIT_MS: number;
+export const H1_ROOM_RETRY_S: number;
+export const H1_ROOM_LOCK_PREFIX: string;
+export const H1_ROOM_LOCK_TTL_S: number;
+export function buildH1RoomTask(input: { candleKey: string; enqueuedAt?: string }): { kind: "h1_room"; event_id: string; candle_key: string; enqueued_at: string };
+export function h1RoomGate(input: { candleKey: string; now: number; hudReady: boolean }): "run" | "wait_for_hud";
