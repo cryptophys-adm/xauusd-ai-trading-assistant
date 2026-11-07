@@ -3,7 +3,10 @@
   "name": "xauusd-nexus-dashboard",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-31",
-  "workers_dev": true,
+  // No public workers.dev or preview URL (owner, 2026-11-07): Nexus is reached only at
+  // nexus.cryptophys.work, behind Cloudflare Access.
+  "workers_dev": false,
+  "preview_urls": false,
   "routes": [
     {
       "pattern": "nexus.cryptophys.work",

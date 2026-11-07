@@ -52,9 +52,9 @@ jobs:
 
       - name: Smoke test
         # nexus.cryptophys.work is behind Cloudflare Access (owner, 2026-11-07): without credentials it
-        # answers with the Access login redirect. With the CI service token (repository secrets
-        # CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET) every check runs against the custom domain;
-        # without it, the content checks fall back to the Worker's workers.dev address.
+        # answers with the Access login redirect, which the first check requires. Every content check
+        # runs against the custom domain with the CI service token (repository secrets
+        # CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET); Nexus has no workers.dev address.
         env:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
@@ -63,10 +63,12 @@ jobs:
           const DOMAIN = "https://nexus.cryptophys.work";
           const TOKEN = process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET
             ? { "CF-Access-Client-Id": process.env.CF_ACCESS_CLIENT_ID, "CF-Access-Client-Secret": process.env.CF_ACCESS_CLIENT_SECRET } : null;
-          const ORIGIN = TOKEN ? DOMAIN : "https://xauusd-nexus-dashboard.afif-kw.workers.dev";
+          // workers.dev is disabled (owner, 2026-11-07): the content checks need the CI service token.
+          if (!TOKEN) { console.error("CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET are required: Nexus has no public workers.dev address"); process.exit(1); }
+          const ORIGIN = DOMAIN;
           const nativeFetch = globalThis.fetch;
           const fetch = (u, init = {}) => nativeFetch(u, TOKEN && String(u).startsWith(ORIGIN) ? { ...init, headers: { ...(init.headers || {}), ...TOKEN } } : init);
-          console.log(TOKEN ? "using the CI service token against the custom domain" : "no service token: content checks on workers.dev");
+          console.log("using the CI service token against the custom domain");
           const get = async (u) => { for (let i = 0; i < 10; i++) { try { const r = await fetch(u, { signal: AbortSignal.timeout(20000) }); if (r.ok) return r; } catch {} await new Promise(r => setTimeout(r, 3000)); } return null; };
           let front = null;
           for (let i = 0; i < 10 && !front; i++) { try { front = await nativeFetch(DOMAIN + "/", { redirect: "manual", signal: AbortSignal.timeout(20000) }); } catch { await new Promise(r => setTimeout(r, 3000)); } }

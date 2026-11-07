@@ -19,6 +19,11 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
 
 `test/ssot-topology.test.mjs` fails if a Wrangler config in this repository declares any other Worker name.
 
+**Public surface (owner, 2026-11-07).** The AI Worker and Nexus have no `workers.dev` address and no preview URL (`workers_dev: false`, `preview_urls: false`):
+- **AI Worker:** reached only at `ai.cryptophys.work`. `POST /webhook` is public and protected by `WEBHOOK_SECRET`; `/api/*` sits behind Cloudflare Access. Other Workers reach it through Service Bindings.
+- **Nexus:** reached only at `nexus.cryptophys.work`, behind Cloudflare Access.
+- **Checks:** the deploy smoke tests check the Access lock with the CI service token (`CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`). The topology test guards both settings.
+
 ## 2. Inter-Worker calls (RPC Service Bindings, no shared secrets)
 - The AI Worker calls `NEWS_INGESTION` → news Worker `NewsIngestionService.pull()`.
 - The pull adapter calls:
