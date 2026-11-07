@@ -320,13 +320,14 @@ test("a correction that still reads like code stays invalid_output; schema error
   await runLiveRoomBar(e, { bar_time: BAR });
   const mod = (await readLive(e.DB, {})).find(m => m.step === "moderator");
   assert.equal(mod.status, "invalid_output");
-  assert.equal(mod.corrections, 1);
-  assert.equal(e.AI.calls.length, 4, "exactly one correction attempt");
+  assert.equal(mod.corrections, 2, "one correction, then one answer from the moderator's fallback model");
+  assert.equal(e.AI.calls.length, 5, "exactly one correction attempt and one fallback attempt");
+  assert.deepEqual(e.AI.calls.slice(2).map(c => c.model), [MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_FALLBACK_MODEL]);
 
   resetThreadSchemaCacheForTests();
   const e2 = env({ AI: fakeAI(({ sys }) => /moderator of a live/i.test(sys) ? { stance: "LONG", confidence: 0.6, summary: "Plain words." } : undefined) });
   await runLiveRoomBar(e2, { bar_time: BAR });
-  assert.equal(e2.AI.calls.length, 3, "a schema error is not retried");
+  assert.equal(e2.AI.calls.length, 4, "a schema error gets no correction, only the moderator's fallback model once");
 });
 
 // C0 step 4: the 5m read is VERIFIED only while prophet_m5 and gmi_m5 are parity-approved.

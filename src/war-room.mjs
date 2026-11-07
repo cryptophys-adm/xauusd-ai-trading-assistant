@@ -179,6 +179,7 @@ export function normalizeRebuts(rebuts, busAgents) {
  */
 export function validateRebuttal(o, agent, busAgents, { unanimous = false, ownStance = null, ownBias = null } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
+  agentIdsToNames(o, busAgents);
   const errors = [];
   if (!sameAgent(o.agent, agent)) errors.push("agent_mismatch");
   else o.agent = agent;
@@ -217,7 +218,28 @@ export function conclusionBiasErrors(o, { supportBiases = null, roomBias = "NEUT
   return biasSupported(o.bias, supportBiases) ? [] : ["bias_without_support"];
 }
 
+/**
+ * Agent ids in a moderator's text are written as the agents' names (preview-e2e 2026-11-07: the
+ * gpt-oss-120b moderator wrote "trade_management", which the natural-language rule rejects as a
+ * field name). Only ids of agents on the bus are replaced; any other code-like text still fails.
+ */
+export function agentIdsToNames(o, ids, nameOf = agentName) {
+  if (!o || typeof o !== "object") return o;
+  const swap = (t) => {
+    if (typeof t !== "string") return t;
+    let out = t;
+    for (const id of ids || []) if (/_/.test(id)) out = out.replace(new RegExp(`\\b${id}\\b`, "g"), nameOf(id));
+    return out;
+  };
+  for (const k of ["summary", "argument", "claim"]) if (typeof o[k] === "string") o[k] = swap(o[k]);
+  if (Array.isArray(o.reasons)) o.reasons = o.reasons.map(swap);
+  return o;
+}
+
 export function validateConclusion(o, h1Decision, busAgents, confirmations = null, { supportStances = null, supportBiases = null, roomBias = "NEUTRAL" } = {}) {
+  agentIdsToNames(o, busAgents);
+  // At most three reasons are kept (a fourth is dropped, not a reason to lose the conclusion).
+  if (o && typeof o === "object" && Array.isArray(o.reasons) && o.reasons.length > 3) o.reasons = o.reasons.filter(r => !(typeof r === "string" && !r.trim())).slice(0, 3);
   const base = validateRoomModerator(o, h1Decision);
   const errors = [...base.errors, ...conclusionBiasErrors(o, { supportBiases, roomBias })];
   if (o && typeof o === "object" && confirmations && !entryAllowed(o.stance, confirmations)) errors.push("entry_without_confirmation");
@@ -500,7 +522,7 @@ export async function readWarRoom(db, { barTime = null } = {}) {
   const openings = rows.filter(m => m.step.startsWith("open:")).map(pick).sort(byRoster);
   const debate = rows.filter(m => m.step.startsWith("debate:")).map(pick).sort(byRoster);
   const c = rows.find(m => m.step === "conclusion");
-  const conclusion = c ? { status: c.status, stance: c.stance, bias: c.bias ?? null, majority_bias: c.majority_bias ?? null, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [], dissent: (c.dissent || []).map(id => ({ id, name: agentName(id) })), majority: c.majority ?? null, h1_decision: c.h1_decision ?? null, ts: c.ts } : null;
+  const conclusion = c ? { status: c.status, stance: c.stance, bias: c.bias ?? null, majority_bias: c.majority_bias ?? null, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [], dissent: (c.dissent || []).map(id => ({ id, name: agentName(id) })), majority: c.majority ?? null, h1_decision: c.h1_decision ?? null, ts: c.ts, model: c.model ?? null, fallback_used: c.fallback_used === true, ...(c.status !== "ok" ? { errors: c.errors ?? [], primary_error: c.primary_error ?? null, raw: String(c.insight ?? "").slice(0, 300) } : {}) } : null;
   const started = brief?.ts ?? rows[0].ts;
   return {
     bar_time: run,

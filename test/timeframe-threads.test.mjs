@@ -321,3 +321,36 @@ test("an onRoom failure is recorded on the room and never stops the sweep", asyn
   assert.equal(out.charts.H1.status, "complete");
   assert.equal(out.charts.H1.on_room_error, "reasoner down");
 });
+
+test("a moderator answer that stays invalid is asked once from the moderator's fallback model (preview-e2e 2026-11-07)", async () => {
+  const base = fakeAI();
+  const ai = {
+    calls: base.calls,
+    run: async (model, request) => {
+      if (/moderator of the XAUUSD/.test(request.messages[0].content) && model === "@cf/openai/gpt-oss-120b") {
+        base.calls.push({ model, request });
+        return { choices: [{ message: { content: JSON.stringify({ stance: "WAIT", confidence: 0.5, summary: "", reasons: [], dissent: [] }) }, finish_reason: "stop" }] };
+      }
+      return base.run(model, request);
+    }
+  };
+  const e = env(ai);
+  const r = await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
+  assert.equal(r.status, "complete");
+  const thread = await readTimeframeThread(e.DB, "H4");
+  assert.equal(thread.conclusion.status, "ok");
+  assert.equal(thread.conclusion.model, "@cf/google/gemma-4-26b-a4b-it");
+  assert.equal(thread.conclusion.fallback_used, true);
+  const moderatorCalls = ai.calls.filter((c) => /moderator of the XAUUSD/.test(c.request.messages[0].content)).map((c) => c.model);
+  assert.deepEqual(moderatorCalls, ["@cf/openai/gpt-oss-120b", "@cf/google/gemma-4-26b-a4b-it"], "the primary once (no rule correction for a missing summary), then the fallback once");
+});
+
+test("a conclusion that failed shows its errors and model for diagnosis", async () => {
+  const ai = fakeAI({ conclusion: { stance: "WAIT", confidence: 0.5, summary: "", reasons: [], dissent: [] } });
+  const e = env(ai);
+  await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
+  const c = (await readTimeframeThread(e.DB, "H4")).conclusion;
+  assert.equal(c.status, "invalid_output");
+  assert.ok(c.errors.includes("summary_missing"), JSON.stringify(c));
+  assert.ok(c.model);
+});

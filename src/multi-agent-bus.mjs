@@ -365,7 +365,7 @@ export const PRIMARY_TIMEOUTS_TO_PIN = 2;
 export const FALLBACK_RETRY_MIN_MS = 30_000;
 export const FALLBACK_BRIEF_NOTE = "Your previous answer ran out of tokens before the JSON. Reply with the JSON object only. Keep any reasoning very short.";
 
-export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState = {}, role = "agent" }) {
+export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState = {}, role = "agent", skipPrimary = null }) {
   const { primary, fallback } = roleModels(env, role);
   const primaryTimeoutMs = Number(env?.BUS_PRIMARY_TIMEOUT_MS) > 0 ? Number(env.BUS_PRIMARY_TIMEOUT_MS) : PRIMARY_CALL_TIMEOUT_MS;
   const attempts = [];
@@ -373,12 +373,13 @@ export async function callBusModel(env, { messages, schemaName, schema, maxToken
   // the fallback instead of spending the wall budget on the same error again.
   // A pin belongs to the model that failed: a room's agents and its moderator use different models.
   const pinned = Boolean(runState.primaryError) && (runState.primaryErrorModel ?? primary) === primary;
-  if (!pinned) attempts.push({ model: primary, primary: true });
+  // skipPrimary: the primary answered but its answer was rejected; only the fallback is asked.
+  if (!pinned && !skipPrimary) attempts.push({ model: primary, primary: true });
   if (fallback && fallback !== primary) attempts.push({ model: fallback, primary: false });
   if (!attempts.length) attempts.push({ model: primary, primary: true });
   let lastError = null;
   let usage = 0;
-  let callPrimaryError = null;
+  let callPrimaryError = skipPrimary ? `${primary}: ${skipPrimary}` : null;
   let extraCalls = 0;
   const meta = (i) => ({ fallback_used: !attempts[i].primary, primary_error: callPrimaryError || (pinned ? runState.primaryError : null) || null });
   const waitMs = Number.isFinite(Number(env?.MODEL_RATE_LIMIT_RETRY_MS)) ? Number(env.MODEL_RATE_LIMIT_RETRY_MS) : RATE_LIMIT_RETRY_MS;

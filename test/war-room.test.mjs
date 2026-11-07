@@ -500,3 +500,14 @@ test("TLDR for the right panel: H1 decision with the bus consensus, and the late
   assert.match(t.h1.tldr, /GMI blocks/);
   assert.equal(t.news, null);
 });
+
+test("a moderator that names agents by their ids is read with their names; a fourth reason is dropped (preview-e2e 2026-11-07, gpt-oss-120b)", async () => {
+  const { validateConclusion, agentIdsToNames } = await import("../src/war-room.mjs");
+  const o = { stance: "WAIT", bias: "NEUTRAL", confidence: 0.6, summary: "The room waits: trade_management sees no ready setup.", reasons: ["kinetic_engine reads an orderly regime.", "No entry is confirmed.", "Volatility is normal.", "A fourth reason."], dissent: [] };
+  const r = validateConclusion(o, "WAIT", ["trade_management", "kinetic_engine", "risk"]);
+  assert.equal(r.valid, true, JSON.stringify(r.errors));
+  assert.match(o.summary, /Trade Management sees no ready setup/);
+  assert.equal(o.reasons.length, 3);
+  assert.match(o.reasons[0], /^Kinetic Engine/);
+  assert.equal(agentIdsToNames({ summary: "per h1.decision_field" }, ["risk"]).summary, "per h1.decision_field", "other code-like text is untouched (and still rejected)");
+});

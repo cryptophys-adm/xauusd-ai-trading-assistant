@@ -17,7 +17,7 @@ import { HUD_IDS, HUD_NAMES, calibrationCounts } from "./hud-reading.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import {
-  callBusModel, buildBusEvidence, validateAgentOutput, validateModeratorOutput,
+  callBusModel, roleModels, buildBusEvidence, validateAgentOutput, validateModeratorOutput,
   AGENT_JSON_SCHEMA, MODERATOR_JSON_SCHEMA, BUS_DEFAULT_MODEL, BUS_MAX_TOKENS, busEnabled
 } from "./multi-agent-bus.mjs";
 
@@ -285,6 +285,20 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
     if (retry.status === "answered" && !retry.truncated) {
       const second = validate(retry.obj);
       if (second.valid) { validation = second; finalCall = retry; meta.model = retry.model; meta.fallback_used = meta.fallback_used || retry.fallback_used; }
+    }
+  }
+  // A conclusion is what the room is for (production of 2026-11-07, preview-e2e: a gpt-oss-120b
+  // moderator answer stayed invalid after its correction). A moderator answer that is still
+  // rejected is asked once more from the role's fallback model, within the deadline and budget.
+  const roleFallback = roleModels(env, role).fallback;
+  if (!validation.valid && role === "moderator" && !finalCall.fallback_used && roleFallback && roleFallback !== call.model && clock() < deadline && (await budgetOk())) {
+    const alt = await callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, role, skipPrimary: `invalid_output (${(validation.errors || []).slice(0, 4).join(", ") || "unparseable"})` });
+    if (alt.calls) corrections += 1;
+    meta.usage_tokens = sumOrNull(meta.usage_tokens, alt.usage_tokens);
+    if (alt.status === "answered" && !alt.truncated) {
+      const third = validate(alt.obj);
+      console.warn("moderator_fallback_after_invalid", JSON.stringify({ step: base?.step, primary: call.model, fallback: alt.model, errors: validation.errors, valid: third.valid }));
+      if (third.valid) { validation = third; finalCall = alt; meta.model = alt.model; meta.fallback_used = true; diag.primary_error = alt.primary_error; }
     }
   }
   const extra = corrections ? { corrections } : {};

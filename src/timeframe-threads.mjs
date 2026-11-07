@@ -36,7 +36,7 @@ import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { ensureThreadSchema, rowToThreadMessage, ROOM_STANCES, hudEvidenceLines, threadInternals } from "./agent-threads.mjs";
 import {
   validateOpening, validateRebuttal, majorityStance, selectRebutters, UNCALIBRATED_CONFIDENCE_CAP, BIAS_RULE, SUPPORT_RULE, stanceSupported,
-  majorityBias, biasOfStance, biasSplitText, DECISION_BIAS_RULE, conclusionBiasErrors,
+  majorityBias, biasOfStance, biasSplitText, DECISION_BIAS_RULE, conclusionBiasErrors, agentIdsToNames,
   WAR_ROOM_OPENING_MS, WAR_ROOM_DEBATE_MS, WAR_ROOM_CONCLUSION_MS
 } from "./war-room.mjs";
 import { closedHtfCandleKeys, OBSERVED_PREFIX } from "./parity-sweep.mjs";
@@ -138,6 +138,7 @@ function normalizeTfNames(o, busAgents) {
  */
 export function validateTfConclusion(o, { busAgents = [], confirmations = null, h1Decision = null, supportStances = null, supportBiases = null, roomBias = "NEUTRAL" } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
+  agentIdsToNames(o, busAgents, tfAgentName);
   const errors = [];
   if (!ROOM_STANCES.includes(o.stance)) errors.push("stance_invalid");
   if (!inUnit(o.confidence)) errors.push("confidence_out_of_range");
@@ -505,7 +506,7 @@ export async function readTimeframeThread(db, chart, { candleKey = null } = {}) 
     phase: c?.status === "ok" ? "closed" : debate.length ? "debate" : "opening",
     confirmations: brief?.confirmations ?? null, hud_snapshot: brief?.hud_snapshot ?? null,
     roster: (brief?.roster || []).map((id) => ({ id, name: tfAgentName(id), calibration: note(id) })),
-    conclusion: c ? { status: c.status, stance: c.stance, bias: c.bias ?? null, majority_bias: c.majority_bias ?? null, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [], dissent: (c.dissent || []).map((id) => ({ id, name: tfAgentName(id) })), majority: c.majority ?? null } : null,
+    conclusion: c ? { status: c.status, stance: c.stance, bias: c.bias ?? null, majority_bias: c.majority_bias ?? null, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [], dissent: (c.dissent || []).map((id) => ({ id, name: tfAgentName(id) })), majority: c.majority ?? null, model: c.model ?? null, fallback_used: c.fallback_used === true, ...(c.status !== "ok" ? { errors: c.errors ?? [], primary_error: c.primary_error ?? null, raw: String(c.insight ?? "").slice(0, 300) } : {}) } : null,
     openings,
     debate
   };
