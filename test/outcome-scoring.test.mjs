@@ -192,3 +192,38 @@ test("detectRecentStuckStates opens an episode on approved records and clears it
   await detectRecentStuckStates(env, { lookback: 9 });
   assert.ok((await listStuckStates(env.DB)).every(s => s.status === "cleared"));
 });
+
+test("P7: the agents of the Live War Room 15m and the 1H War Room are scored by their final stance, once per bar", async () => {
+  resetOutcomeSchemaCacheForTests();
+  const h1 = barsFrom([...base, [100, 104, 99, 103], [103, 108, 102, 107], [107, 109, 106, 108], [108, 110, 107, 109]]);
+  const now = Date.parse(h1.at(-1).close_time) + 60_000;
+  const key = "OANDA:XAUUSD:60:" + Date.parse(h1[14].open_time);
+  const m15 = barsFrom([...base, [100, 101, 99, 100], [100, 101, 99, 100], [100, 101, 99, 100], [100, 101, 99, 100]], { start: Date.parse(h1[0].open_time) + 30 * H, ms: 900_000 });
+  const m15Now = Date.parse(m15.at(-1).close_time) + 60_000;
+  const env = { DB: d1(), SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|1h": JSON.stringify({ candles: h1 }), "market-data:v2:series:OANDA:XAUUSD|15m": JSON.stringify({ candles: m15 }) }), WEBHOOK_BUFFER: kv({}) };
+  const db = env.DB.raw;
+  const msg = db.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, bar_time, ts, stance, confidence, body_json, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ok')");
+  const close15 = m15[14].close_time;
+  msg.run("warroom:" + close15.slice(0, 10), close15, "open:technical", "technical", close15, close15, "BUY", 0.6, "{}");
+  msg.run("warroom:" + close15.slice(0, 10), close15, "debate:technical", "technical", close15, close15, "WAIT", 0.6, "{}");
+  msg.run("warroom:" + close15.slice(0, 10), close15, "conclusion", "moderator", close15, close15, "WAIT", 0.7, "{}");
+  const run = h1[14].open_time, ts = h1[15].close_time;
+  msg.run("tf:H1", run, "brief", "system", null, ts, null, null, JSON.stringify({ candle_key: key }));
+  msg.run("tf:H1", run, "open:risk", "risk", null, ts, "WAIT", 0.5, "{}");
+  msg.run("tf:H1", run, "open:kinetic_engine", "kinetic_engine", null, ts, "SELL", 0.5, "{}");
+  // A re-convened session (#hud) of the same bar wins over the first.
+  msg.run("tf:H1", run + "#hud", "brief", "system", null, ts, null, null, JSON.stringify({ candle_key: key }));
+  msg.run("tf:H1", run + "#hud", "open:kinetic_engine", "kinetic_engine", null, ts, "BUY", 0.5, "{}");
+
+  const out = await scoreRecentStatements(env, { now: Math.max(now, m15Now) });
+  assert.equal(out.agent_scores, 4, JSON.stringify(out));
+  const rows = Object.fromEntries(db.prepare("SELECT subject, timeframe, stance, result FROM outcome_scores WHERE subject LIKE 'agent:%'").all().map(r => [r.subject + "@" + r.timeframe, r.stance + " " + r.result]));
+  assert.deepEqual(rows, {
+    "agent:technical@15": "WAIT hit",          // the Consensus Discussion answer, not the opening BUY
+    "agent:moderator@15": "WAIT hit",
+    "agent:risk@60": "WAIT missed_opportunity",
+    "agent:kinetic_engine@60": "BUY hit"       // the re-convened session's stance
+  });
+  const again = await scoreRecentStatements(env, { now: Math.max(now, m15Now) });
+  assert.equal(again.agent_scores ?? 0, 0, "once per bar");
+});

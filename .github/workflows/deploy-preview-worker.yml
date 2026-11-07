@@ -556,6 +556,10 @@ jobs:
             // A dissenter the bus persuaded may concede without a target (conceded: true).
             assert.ok(room.debate.every(m => m.status === "ok" && (unanimous || m.rebuts.length || m.conceded === true)), "every rebuttal in a split room names the agents it rebuts or concedes");
             assert.equal(room.conclusion?.status, "ok", "the moderator concludes for the main panel");
+            // P7 (RFC_INDICATOR_AGENT_PLATFORM §7): the crowd line and every agent's track record.
+            assert.equal(room.crowd?.agents, room.openings.filter(m => m.status === "ok").length, "the crowd line counts every agent that spoke");
+            assert.ok(["BULLISH", "BEARISH", "NEUTRAL"].includes(room.crowd.weighted_bias) && room.crowd.disagreement >= 0 && room.crowd.disagreement <= 1, "the crowd line has a weighted bias and a disagreement index");
+            assert.ok(ids.every(id => Number.isFinite(room.reputation?.[id]?.weight)), "every agent carries a track record");
             assert.equal(room.phase, "closed");
             assert.ok(room.conclusion.reasons.length >= 1 && room.conclusion.reasons.length <= 3);
             // Owner decision 2026-11-06: the conclusion gives the decision and the room's bias.
@@ -583,6 +587,10 @@ jobs:
           assert.ok(Array.isArray(keyLevels.zones) && Array.isArray(keyLevels.candidates), "zones and candidates");
           assert.ok(keyLevels.candidates.every((z) => z.sources >= 3 && z.score >= 3), "a candidate has three or more sources and at least medium strength");
           console.log("KEY LEVELS PROOF " + JSON.stringify({ price: keyLevels.price, raw: keyLevels.raw_count, zones: keyLevels.zones.length, candidates: keyLevels.candidates.length, summary: keyLevels.summary }));
+          const scorecardsResponse = await fetch(base + "/api/scorecards?days=30");
+          const scorecardsBody = await scorecardsResponse.json();
+          assert.equal(scorecardsResponse.status, 200, "scorecards are served");
+          assert.ok(Array.isArray(scorecardsBody.reputation?.rooms?.["15m"]) && Array.isArray(scorecardsBody.reputation?.rooms?.["1H"]), "the room agents' track records are served (P7)");
           const legacyDashboard = await fetch(base + "/dashboard", { redirect: "manual" });
           assert.equal(legacyDashboard.status, 302, "the old debate/raw dashboard redirects to Nexus");
 
@@ -656,6 +664,7 @@ jobs:
             war_room_real_models: "PASS",
             h1_hud_snapshot_verified: "PASS",
             war_room_hud_agents: "PASS",
+            crowd_line_and_scorecards: "PASS",
             right_panel_tldr: "PASS",
             natural_language: "PASS",
             complete_AI_chain: "NOT_TESTED: no real fresh news/Pine-parity evidence in this fixture"

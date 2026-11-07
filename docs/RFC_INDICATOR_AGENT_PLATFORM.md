@@ -217,14 +217,14 @@ With dozens of agents, a room cannot post every agent on every bar.
 4. **P4 (cloud platform, taskplane): the Indicator Auditor.** `indicators.observe`, the `indicator_audit` report and `indicators.propose`, with a Service Binding to the read API.
 5. **P5: the first improvement.** *(Shipped 2026-11-05 as shadow candidates `prophet_r37@latch8`, `prophet_r37@latch12` and `prophet_r38@latch8`. The first real-data replay shows no significant gain; see the CHANGELOG.)* A bull-trap latch expiry is added as a candidate version of Prophet R37/R38, as a local-only version or as a Pine candidate (owner decision 1). It runs in shadow, the scores are compared, and the owner approves or rejects the promotion.
 6. **P6: Supertrend** as the first new indicator agent through the manifest path, then Order Block.
-7. **P7: crowd line, reputation weighting and Nexus scorecards.**
+7. **P7: crowd line, reputation weighting and Nexus scorecards.** *(Shipped 2026-11-07; see docs/SSOT.md "Crowd line, reputation and scorecards". The open phases P2 and P6 are tracked in docs/BACKLOG.md.)*
 
 ## 10. Decisions for the owner
 
 1. **Improved versions.** Should an improvement (for example the latch expiry) be allowed as a local-only version judged by outcome, (b) in §4.3? Or must every promotion come with a Pine candidate you install on TradingView, (a)? **Decided 2026-11-05: (b).** A local-only version is enough, so an improvement is proven by outcome first.
-2. **Scoring definition.** Horizon 4 candles, threshold `0.5 × ATR(14)`, WAIT counted as a hit when there is no move: accept these, or change them?
-3. **Stuck-state thresholds.** `N = 8` candles and range `> 3 × ATR` on H1: accept or change?
-4. **First new indicator.** Supertrend first, then Order Block?
+2. **Scoring definition.** Horizon 4 candles, threshold `0.5 × ATR(14)`, WAIT counted as a hit when there is no move: accept these, or change them? **Decided 2026-11-07: accepted** as proposed (with the v3 WAIT rule: a WAIT misses only a 2:1 move of 1 × ATR).
+3. **Stuck-state thresholds.** `N = 8` candles and range `> 3 × ATR` on H1: accept or change? **Decided 2026-11-07: accepted.**
+4. **First new indicator.** Supertrend first, then Order Block? **Decided 2026-11-07: yes.** Supertrend first, then Order Block (P6, after P2).
 5. **Where the auditor lives.** In the cloud platform's AI Kernel, as proposed, with this repository serving read-only data? Or as an agent inside this repository? **Decided 2026-11-05: in the platform.** The 21 XAUUSD agents are registered there (platform migration 0016). This repository publishes advisory reports over the `AGENTS` RPC binding (P4, docs/SSOT.md §2).
 6. **Room limits.** How many agents may post text per room and per bar before the crowd line takes over (proposed: 6)? **Decided 2026-11-05: no limit.** Every active agent speaks in its room. The hourly call budget still applies.
 

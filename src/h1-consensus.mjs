@@ -99,7 +99,9 @@ export function consensusInput(room) {
     room_bias: roomBias,
     communication_bus: bus,
     consensus_discussion: discussion,
-    conclusion
+    conclusion,
+    // P7 (RFC §7): the deterministic crowd line, weighted by each agent's 30-day track record.
+    crowd: room?.crowd ? { weighted_bias: room.crowd.weighted_bias, weighted_lean: room.crowd.weighted_lean, disagreement: room.crowd.disagreement, scored_agents: room.crowd.scored_agents, agents: room.crowd.agents, disagreeing_families: room.crowd.disagreeing_families } : null
   };
 }
 
@@ -111,6 +113,7 @@ export function reasonerLines({ evidence, consensus, laneRule, decisionTextRule,
     "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply EVIDENCE.policy.decision_policy. Never infer a field meaning that is not in the dictionary.",
     "The decision follows the consensus of the room: the conclusion's decision and bias, weighed by the arguments and by how much of each agent's evidence is verified. A room stance of HOLD or CLOSE is about an open position: your decision is then WAIT. If the room concluded WAIT with a BULLISH or BEARISH bias, you may decide BUY or SELL in that direction only when EVIDENCE holds the matching confirmed 1-hour Prophet R38 signal and exact prices for the plan; otherwise WAIT, and say which way the room leans.",
     "Never decide against the room's bias. Depart from the room's decision only for a veto in EVIDENCE: Prophet R38 trade management t_enc 4 (ruthless cut loss), a GMI verdict of -3 against a BUY or +3 against a SELL, or missing exact price evidence; then decide WAIT and name the veto. A GMI conflict or a GMI gate of -1 lowers your confidence; it never vetoes on its own.",
+    "CONSENSUS.crowd is the deterministic crowd line: every agent's final bias weighted by its 30-day track record. A weighted crowd that leans against the room's conclusion, or a high disagreement (above 0.7), lowers your confidence; it never reverses the room's bias on its own.",
     consensus?.status === "partial"
       ? `The room did not conclude within 45 minutes of the close: ${consensus.agents_spoke} of ${consensus.roster_size} agents spoke. Decide from the bus and the discussion that exist, and keep your confidence lower for it.`
       : "The room concluded: name its decision and bias once in the reasoning, and if your decision differs, say why.",

@@ -6,6 +6,12 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(agents): P7 of RFC_INDICATOR_AGENT_PLATFORM, the crowd line, reputation weighting and Nexus scorecards (owner go 2026-11-07). The RFC's proposed values for decisions 2 to 4 are accepted.
+  - **Scoring:** outcome scoring now covers the agents of the Live War Room 15m and the 1H War Room (`agent:<id>`, final stance after the Consensus Discussion). Before, only the retired legacy rooms were scored, so the current rooms had no track record.
+  - **Reputation:** 30-day accuracy shrunk toward 50 % with 10 pseudo-observations. Weight = 2 × that, within 0.25 to 2. Open H1 stuck states add a caution flag in the 1H room.
+  - **Crowd line:** for every room, a deterministic line with the head count, the reputation-weighted biases, a disagreement index and the families against the crowd. The moderator and the H1 Reasoner receive it.
+  - **Nexus:** each post shows its agent's record, each room shows a crowd line card, and a new Scorecards page lists the agents.
+  - **Backlog:** last week's lists are merged into `docs/BACKLOG.md`: B4, the Grid Bot Protocol HUD, P2, P6 and the P5 candidates' decision.
 - feat(h1): the 1H room runs right after the close, so the H1 decision comes sooner (owner request 2026-11-07).
   - **Why:** the decision came 15-45 minutes after the close. The room waited for the next sweep (:10, :25, :40, :55) and up to 20 minutes for its HUD snapshot.
   - **Now:**

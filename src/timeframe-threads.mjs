@@ -43,6 +43,8 @@ import { closedHtfCandleKeys, OBSERVED_PREFIX } from "./parity-sweep.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import { H1_ROOM_LOCK_PREFIX } from "./h1-consensus.mjs";
+import { buildCrowdLine, finalEntries, crowdRule, roomReputation, stuckCautions, ROOM_TIMEFRAME } from "./reputation.mjs";
+import { agentReputation, listStuckStates } from "./outcome-scoring.mjs";
 
 const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson } = threadInternals;
 
@@ -288,11 +290,12 @@ function rebuttalMessages(agent, own, bus, spec, unanimous, confirmations, roomB
   ]);
 }
 
-function conclusionMessages(spec, bus, debate, confirmations) {
+function conclusionMessages(spec, bus, debate, confirmations, crowd = null) {
   return chatMessages([
     `You are the moderator of the XAUUSD ${spec.label} War Room. The Consensus Discussion is closed. Write the TLDR of the ${spec.label} Thread: the consensus of the room on this timeframe.${spec.tab === "1H" ? " The Reasoner writes the H1 decision after you, from this room's consensus." : ""}`,
     RULES_NO_REFS,
     ROOM_RULES,
+    ...(crowd ? [crowdRule(crowd)] : []),
     ruleText(spec) + " The conclusion obeys it: BUY or SELL only with the matching confirmation below. CONFIRMATIONS: " + JSON.stringify(confirmations),
     SUPPORT_RULE,
     DECISION_BIAS_RULE + " A BULLISH or BEARISH bias needs at least one agent holding it.",
@@ -410,13 +413,14 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
     });
   }))).filter((m) => m?.status === "ok");
 
-  // Phase 3: the TLDR of this timeframe.
+  // Phase 3: the TLDR of this timeframe, with the crowd line (P7, RFC §7).
+  const crowd = buildCrowdLine(finalEntries(answered, debate), await agentReputation(db, ROOM_TIMEFRAME[chart]));
   const conclude = phase(WAR_ROOM_CONCLUSION_MS);
   await conclude(base("conclusion", "moderator"), {
-    messages: conclusionMessages(spec, bus, debate.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument })), ev.confirmations),
+    messages: conclusionMessages(spec, bus, debate.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument })), ev.confirmations, crowd),
     schemaName: "tf_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low",
     validate: (o) => validateTfConclusion(o, { busAgents, confirmations: ev.confirmations, supportStances: new Set([...answered.map((m) => m.stance), ...debate.map((m) => m.stance)]), supportBiases: new Set([...answered, ...debate].map((m) => m.bias || biasOfStance(m.stance))), roomBias }),
-    toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map((r) => clip(r, 200)), dissent: [...new Set(o.dissent)], majority, majority_bias: roomBias }, refs: [] })
+    toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map((r) => clip(r, 200)), dissent: [...new Set(o.dissent)], majority, majority_bias: roomBias, crowd }, refs: [] })
   });
   return { status: "complete", calls, openings: answered.length, rebuttals: debate.length, ...(reconvened ? { reconvened: true } : {}) };
 }
@@ -508,7 +512,15 @@ export async function readTimeframeThread(db, chart, { candleKey = null } = {}) 
   const openings = rows.filter((m) => m.step.startsWith("open:")).map(pick).sort(byRoster);
   const debate = rows.filter((m) => m.step.startsWith("debate:")).map(pick).sort(byRoster);
   const c = rows.find((m) => m.step === "conclusion");
+  // P7 (RFC §7): each agent's 30-day track record on this chart (with caution flags from the open
+  // H1 stuck states in the 1H room), and the room's crowd line.
+  const rep = await agentReputation(db, ROOM_TIMEFRAME[chart]);
+  let cautions = {};
+  if (chart === "H1") { try { cautions = stuckCautions(await listStuckStates(db, { limit: 20 })); } catch { cautions = {}; } }
+  const ids = [...new Set([...(brief?.roster || []), "moderator"])];
   return {
+    reputation: roomReputation(ids, rep, cautions),
+    crowd: c?.crowd ?? (openings.some((o) => o.status === "ok") ? buildCrowdLine(finalEntries(openings, debate), rep) : null),
     tf: chart, tab: spec.tab, bar_open: barOpenOf(run), reconvened: String(run).includes("#"), bar_close: brief?.bar_time ?? rows[0]?.bar_time ?? null, candle_key: brief?.candle_key ?? null,
     phase: c?.status === "ok" ? "closed" : debate.length ? "debate" : "opening",
     confirmations: brief?.confirmations ?? null, hud_snapshot: brief?.hud_snapshot ?? null,

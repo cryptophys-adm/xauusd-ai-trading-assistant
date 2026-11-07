@@ -24,8 +24,29 @@ export function BiasTag({ bias }: { bias: string }) {
   return <span className={`text-[10px] ${c}`} title="The direction this agent's data leans">bias {bias.toLowerCase()}</span>;
 }
 
+export type Reputation = { n?: number; decisive?: number; accuracy?: number | null; weight?: number; hit_rate?: number | null; wait_accuracy?: number | null; brier?: number | null; family?: string; caution?: string[] };
+
+/**
+ * An agent's 30-day track record beside its post (P7, RFC_INDICATOR_AGENT_PLATFORM §7): the
+ * accuracy of its decisive calls, the sample, its weight in the crowd line, and caution flags.
+ */
+export function TrackRecord({ r }: { r?: Reputation | null }) {
+  if (!r) return null;
+  const decisive = r.decisive ?? 0;
+  const tone = !decisive ? "text-slate-600" : (r.accuracy ?? 0) >= 0.55 ? "text-emerald-300/80" : (r.accuracy ?? 0) < 0.45 ? "text-rose-300/80" : "text-slate-400";
+  const title = decisive
+    ? `Last 30 days: ${decisive} decisive calls (BUY/SELL hit or miss, WAIT right or a missed move), accuracy ${pct(r.accuracy)}; BUY/SELL hit rate ${pct(r.hit_rate)}, WAIT accuracy ${pct(r.wait_accuracy)}, Brier ${r.brier ?? "n/a"}. Weight in the crowd line ×${r.weight}.`
+    : "No scored calls yet: weight ×1 in the crowd line.";
+  return (
+    <span className="inline-flex items-center gap-1.5" title={title}>
+      <span className={`mono text-[10px] ${tone}`}>{decisive ? `record ${pct(r.accuracy)} · n ${decisive} · ×${r.weight}` : "no record yet"}</span>
+      {!!r.caution?.length && <span className="chip border-amber-400/30 bg-amber-400/10 px-1.5 py-0 text-[9px] tracking-[0.14em] text-amber-200" title={r.caution.join("\n")}>CAUTION</span>}
+    </span>
+  );
+}
+
 /** One message of a room: an opening on the bus or an answer in the Consensus Discussion. */
-export function Post({ m, text, calibration }: { m: RoomMessage; text?: string | null; calibration?: string | null }) {
+export function Post({ m, text, calibration, reputation }: { m: RoomMessage; text?: string | null; calibration?: string | null; reputation?: Reputation | null }) {
   if (m.status !== "ok") {
     return (
       <div className="glass-inner px-3 py-2 text-[12px] text-slate-500">
@@ -41,6 +62,7 @@ export function Post({ m, text, calibration }: { m: RoomMessage; text?: string |
         {m.bias && <BiasTag bias={m.bias} />}
         <span className="mono">{pct(m.confidence)}</span>
         {calibration && <span className="text-slate-500">· {calibration}</span>}
+        <TrackRecord r={reputation} />
         {m.conceded && <span className="chip border-cyan-400/30 bg-cyan-400/10 px-1.5 py-0 text-[9px] tracking-[0.14em] text-cyan-200">CONCEDES</span>}
         {!!m.rebuts_names?.length && <span className="text-violet-300/80">→ {m.rebuts_names.join(", ")}</span>}
         {m.ts && <span className="ml-auto text-[10px] text-slate-600">{ago(m.ts)}</span>}

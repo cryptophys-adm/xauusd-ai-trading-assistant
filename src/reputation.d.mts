@@ -1,0 +1,16 @@
+export const REPUTATION_VERSION: string;
+export const REPUTATION_DAYS: number;
+export const REPUTATION_PRIOR: number;
+export const WEIGHT_RANGE: readonly number[];
+export const NEUTRAL_BAND: number;
+export const AGENT_FAMILIES: Readonly<Record<string, string>>;
+export const ROOM_TIMEFRAME: Readonly<Record<string, string>>;
+export function familyOf(id: string): string;
+export function biasOf(entry: unknown): "BULLISH" | "BEARISH" | "NEUTRAL";
+export function reputationOf(card: any): Record<string, any>;
+export function reputationFromScorecards(cards: any[], timeframe: string): Record<string, any>;
+export function buildCrowdLine(entries: any[], reputation?: Record<string, any>): Record<string, any>;
+export function finalEntries(openings: any[], debate: any[]): Array<Record<string, any>>;
+export function crowdRule(crowd: any): string;
+export function stuckCautions(stuck: any[]): Record<string, string[]>;
+export function roomReputation(ids: string[], reputation?: Record<string, any>, cautions?: Record<string, string[]>): Record<string, any>;
