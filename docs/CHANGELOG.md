@@ -6,6 +6,11 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(agents): P2 of RFC_INDICATOR_AGENT_PLATFORM, indicator manifests and the registry.
+  - **Manifests:** `src/indicator-manifests.mjs` gives one manifest per engine, library, HUD agent, desk and the moderator. No hashed file changes.
+  - **Generated rosters:** the HUD roster and the agent families of the crowd line are now generated from the manifests.
+  - **Registry:** `GET /api/indicator-agents` (`src/indicator-registry.mjs`) joins each manifest with its parity identities per chart, its 30-day scorecards, its open stuck states and its shadow versions.
+  - **Next:** P6 (Supertrend, then Order Block) can use the manifest path.
 - feat(agents): P7 of RFC_INDICATOR_AGENT_PLATFORM, the crowd line, reputation weighting and Nexus scorecards (owner go 2026-11-07). The RFC's proposed values for decisions 2 to 4 are accepted.
   - **Scoring:** outcome scoring now covers the agents of the Live War Room 15m and the 1H War Room (`agent:<id>`, final stance after the Consensus Discussion). Before, only the retired legacy rooms were scored, so the current rooms had no track record.
   - **Reputation:** 30-day accuracy shrunk toward 50 % with 10 pseudo-observations. Weight = 2 × that, within 0.25 to 2. Open H1 stuck states add a caution flag in the 1H room.

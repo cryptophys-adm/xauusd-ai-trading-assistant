@@ -13,21 +13,16 @@
 // normalised entropy of the weighted biases: 0 unanimous, 1 an even three-way split), and the agent
 // families whose weighted lean goes against the crowd.
 
+import { MANIFEST_FAMILIES } from "./indicator-manifests.mjs";
+
 export const REPUTATION_VERSION = "cryptophys.reputation.v1";
 export const REPUTATION_DAYS = 30;
 export const REPUTATION_PRIOR = 10;
 export const WEIGHT_RANGE = Object.freeze([0.25, 2]);
 export const NEUTRAL_BAND = 0.1;
 
-/** Agent families (RFC §7), until P2 manifests carry them. */
-export const AGENT_FAMILIES = Object.freeze({
-  h1: "timeframe desk", h4: "timeframe desk", d1: "timeframe desk", m15: "timeframe desk",
-  htf: "higher timeframe", news: "fundamentals", technical: "price action", risk: "risk",
-  prophet: "structure", r37_funnel: "structure", interstellar_eyes: "levels", chronos_matrix: "levels",
-  kinetic_engine: "trend", decision_matrix: "trend", tactical_muscles: "momentum", fabio_amt: "volume",
-  aegis_footprint: "order flow", trade_management: "execution", playbook_execution: "execution",
-  grid_bot_protocol: "execution", gabfx_price_action: "price action", macro_aether: "macro", moderator: "moderator"
-});
+/** Agent families (RFC §7), from the indicator manifests (P2, src/indicator-manifests.mjs). */
+export const AGENT_FAMILIES = MANIFEST_FAMILIES;
 export const familyOf = (id) => AGENT_FAMILIES[id] ?? "other";
 
 /** The timeframe a room is scored on (outcome_scores.timeframe). */

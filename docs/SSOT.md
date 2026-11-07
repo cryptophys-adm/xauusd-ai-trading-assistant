@@ -459,6 +459,24 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - **When:** in the parity sweep cron (`10-59/15`), after the backfill. Stuck-state detection runs in the first sweep of each hour.
 - **Read APIs:** `GET /api/scorecards?days=30` (per subject: directional hit rate, WAIT accuracy, missed opportunities, Brier and sessions, plus the open stuck states) and `GET /api/stuck-states`.
 
+### Indicator manifests and registry (RFC_INDICATOR_AGENT_PLATFORM P2, owner go 2026-11-07)
+- **Manifests** (`src/indicator-manifests.mjs`): one per agent. They cover the engines Prophet R38, Prophet R37 and GMI v12.70, the Mizan library, the 14 HUD agents, the desks and the moderator. Each manifest gives:
+  - kind and name;
+  - family;
+  - the Pine source and section it reads;
+  - the reference: `pine_ssot`, `pine_candidate`, `builtin` or `none`;
+  - its parity identity and HUD identity;
+  - the rooms it speaks in;
+  - its scored subjects, its stuck-state field prefix and its shadow family.
+- **Hashed files:** the manifests wrap the existing code without changing any hashed file.
+- **Generated from them:** the HUD roster (`HUD_NAMES`, `HUD_IDS`) and the agent families of the crowd line.
+- **Registry** (`src/indicator-registry.mjs`, `GET /api/indicator-agents`): every manifest with its live state:
+  - **Lifecycle:** `active`, `candidate` (an engine whose H1 identity is not approved) or `not_computed`.
+  - **Parity:** every registry identity, per chart.
+  - **Scorecards:** 30-day scorecards as an indicator and as a room agent per room.
+  - **Stuck states and shadow versions:** the open stuck states and the shadow versions of the agent.
+- Read-only. The P4 auditor in the platform can read it.
+
 ### Crowd line, reputation and scorecards (RFC_INDICATOR_AGENT_PLATFORM P7, owner go 2026-11-07)
 - **Owner decisions of 2026-11-07:** the RFC's proposed values are accepted. That covers the scoring definition (horizon 4 candles, 0.5 × ATR, the v3 WAIT rule), the stuck-state thresholds (8 candles, more than 3 × ATR), and Supertrend first then Order Block (P6).
 - **Room agents scored:**

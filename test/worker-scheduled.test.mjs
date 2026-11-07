@@ -369,3 +369,16 @@ test("the h1_room queue task: waits for the HUD snapshot of a fresh bar, then th
   assert.ok(Number.isFinite(synth.consensus.decided_after_close_s), "the decision records how long after the close it came");
   assert.equal(env.SIGNAL_CACHE.map.has("h1room:lock:" + key), false, "the room's hold is released");
 });
+
+test("P2: GET /api/indicator-agents serves every manifest with its live state", async () => {
+  const { env } = await workerEnv();
+  const r = await worker.fetch(new Request("https://worker.test/api/indicator-agents"), env, execution().ctx);
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.status, "ok");
+  assert.ok(body.agents.length >= 27);
+  const grid = body.agents.find((a) => a.id === "grid_bot_protocol");
+  assert.equal(grid.lifecycle, "not_computed");
+  assert.equal(body.agents.find((a) => a.id === "prophet_r38").lifecycle, "candidate", "no parity approval in an empty database");
+  assert.ok(body.lifecycle_counts.active >= 1);
+});
