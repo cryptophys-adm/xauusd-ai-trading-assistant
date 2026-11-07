@@ -55,6 +55,9 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       - name: Smoke test live Worker
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           node --input-type=module <<'NODE'
           const url = "https://ai.cryptophys.work/health";
@@ -75,4 +78,14 @@ jobs:
             throw new Error("WEBHOOK_SECRET is not configured in the deployed Worker");
           }
           console.log(JSON.stringify({ url, status: response.status, body, readiness: ready }, null, 2));
+          // The read API sits behind Cloudflare Access (owner, 2026-11-07). Once the CI service token
+          // is configured, check both sides: no answer without it, the API with it.
+          const id = process.env.CF_ACCESS_CLIENT_ID, secretValue = process.env.CF_ACCESS_CLIENT_SECRET;
+          if (id && secretValue) {
+            const open = await fetch("https://ai.cryptophys.work/api/decisions", { redirect: "manual", signal: AbortSignal.timeout(15000) });
+            if (open.status === 200) throw new Error("GET /api/decisions answered without Cloudflare Access credentials: the read API is not locked");
+            const authed = await fetch("https://ai.cryptophys.work/api/status", { headers: { "CF-Access-Client-Id": id, "CF-Access-Client-Secret": secretValue }, signal: AbortSignal.timeout(15000) });
+            if (!authed.ok) throw new Error(`GET /api/status with the CI service token failed: HTTP ${authed.status}`);
+            console.log(`read API locked (unauthenticated ${open.status}); service token accepted (${authed.status})`);
+          } else console.log("CF_ACCESS_CLIENT_ID/SECRET not set: the read-API lock is not checked");
           NODE

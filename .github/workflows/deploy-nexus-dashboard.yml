@@ -51,17 +51,25 @@ jobs:
         run: npx --yes wrangler@4.45.0 deploy --config workers/xauusd-nexus-dashboard/wrangler.jsonc
 
       - name: Smoke test
-        # nexus.cryptophys.work is behind Cloudflare Access (owner, 2026-11-07), so an unauthenticated
-        # request gets the Access login redirect, not the dashboard. The custom domain must answer
-        # either with the dashboard or with that redirect; the content checks run against the
-        # Worker's own workers.dev address, which serves the same deployed version.
+        # nexus.cryptophys.work is behind Cloudflare Access (owner, 2026-11-07): without credentials it
+        # answers with the Access login redirect. With the CI service token (repository secrets
+        # CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET) every check runs against the custom domain;
+        # without it, the content checks fall back to the Worker's workers.dev address.
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           node --input-type=module <<'NODE'
           const DOMAIN = "https://nexus.cryptophys.work";
-          const ORIGIN = "https://xauusd-nexus-dashboard.afif-kw.workers.dev";
+          const TOKEN = process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET
+            ? { "CF-Access-Client-Id": process.env.CF_ACCESS_CLIENT_ID, "CF-Access-Client-Secret": process.env.CF_ACCESS_CLIENT_SECRET } : null;
+          const ORIGIN = TOKEN ? DOMAIN : "https://xauusd-nexus-dashboard.afif-kw.workers.dev";
+          const nativeFetch = globalThis.fetch;
+          const fetch = (u, init = {}) => nativeFetch(u, TOKEN && String(u).startsWith(ORIGIN) ? { ...init, headers: { ...(init.headers || {}), ...TOKEN } } : init);
+          console.log(TOKEN ? "using the CI service token against the custom domain" : "no service token: content checks on workers.dev");
           const get = async (u) => { for (let i = 0; i < 10; i++) { try { const r = await fetch(u, { signal: AbortSignal.timeout(20000) }); if (r.ok) return r; } catch {} await new Promise(r => setTimeout(r, 3000)); } return null; };
           let front = null;
-          for (let i = 0; i < 10 && !front; i++) { try { front = await fetch(DOMAIN + "/", { redirect: "manual", signal: AbortSignal.timeout(20000) }); } catch { await new Promise(r => setTimeout(r, 3000)); } }
+          for (let i = 0; i < 10 && !front; i++) { try { front = await nativeFetch(DOMAIN + "/", { redirect: "manual", signal: AbortSignal.timeout(20000) }); } catch { await new Promise(r => setTimeout(r, 3000)); } }
           if (!front) { console.error("custom domain did not answer"); process.exit(1); }
           const location = front.headers.get("location") || "";
           if (front.status >= 300 && front.status < 400 && /^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com\//.test(location)) console.log(`custom domain: protected by Cloudflare Access (${front.status})`);
