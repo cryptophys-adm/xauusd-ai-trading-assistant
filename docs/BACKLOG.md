@@ -75,7 +75,10 @@ reports to the owner.
     3. **Correlations panel:** DXY, US10Y and silver, with their change and the rolling correlation with gold. US10Y needs a new series.
     4. **Aether, the Knowledge Guardian (decision audit, master and learned knowledge, Vectorize).** Draft RFC: `docs/RFC_AETHER_KNOWLEDGE_GUARDIAN.md`, revision 2.
        - **Proposal:** a separate cluster, `cryptophys-aether`, in its own repository, connected to the platform kernel. It owns its Vectorize indexes, separate from the kernel's agent memory, so the state machine and the state market stay apart. It has its own Canon (master knowledge).
-       - **Owner decisions:** A1 to A6 and O5 to O13 (RFC §0.8 and §15). Only the owner can create the repository.
+       - **Owner decisions:** A1 to A6 approved as recommended (2026-11-07).
+       - **Phase A1 done:** compliance checks and decision cards in this repository.
+       - **First finding:** on the latest rooms, more than half of the messages name parity, calibration or verification, against the rule "Agents never mention calibration in their text". The fix belongs to the room prompts; it is a separate PR for owner review.
+       - **Next, A2:** needs the repository `cryptophys-adm/cryptophys-aether`, which only the owner can create. A private `cryptophys-work/aether` exists; the owner decides whether to use it instead.
 10. **Comparator alerts for the new agents (owner).**
     - **Grid Bot Protocol:** the comparator is built (2026-11-07). The GMI HUD candidate alert carries its fields and the `gmi_hud` identity compares them. What remains is the owner step: install the GMI HUD candidate on the H1 chart (`docs/HUD_CANDIDATE_INSTALL.md`). The same install starts parity for the other GMI HUD fields.
     - **Supertrend and Order Blocks (optional):** they have no TradingView comparator yet, so their statements stay unverified (Supertrend counts as computed from verified bars).

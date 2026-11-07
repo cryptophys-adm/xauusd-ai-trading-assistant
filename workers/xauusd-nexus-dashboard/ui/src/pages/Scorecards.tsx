@@ -5,6 +5,39 @@ import { usePoll } from "../lib/usePoll";
 
 const p = (x?: number | null) => (x == null ? "n/a" : `${Math.round(x * 1000) / 10}%`);
 const tone = (a?: number | null, n = 0) => (!n ? "text-slate-500" : (a ?? 0) >= 0.55 ? "text-emerald-300" : (a ?? 0) < 0.45 ? "text-rose-300" : "text-slate-200");
+const CHECK: Record<string, string> = { order_wording: "order or size wording", stance_bias_conflict: "stance against its bias", calibration_talk: "talks about calibration", natural_language: "field names in text", data_scope: "outside its own HUD" };
+const CHART: Record<string, string> = { "15": "15m", "60": "1H", "240": "4H", "1D": "D1" };
+
+/** Agent compliance (RFC_AETHER_KNOWLEDGE_GUARDIAN A1): deterministic rule breaks per 100 room messages. */
+function Compliance() {
+  const { data } = usePoll(() => get("/api/compliance?days=7"), 300_000);
+  const c = (data as any)?.compliance;
+  if (!c) return null;
+  const rows = (c.agents as any[]).filter((a) => a.violations > 0).slice(0, 20);
+  return (
+    <Panel title="Agent compliance (7 days)" right={<Badge tone={c.total.violations ? "amber" : "green"}>{c.total.rate_per_100 ?? 0} per 100 messages</Badge>}>
+      <p className="mb-3 text-[12px] text-slate-400">Deterministic checks of what each agent said against its role and the owner's rules. A check never changes a message or a decision; Aether's guardian reads these rates.</p>
+      {!rows.length ? <Empty>No rule break in {c.total.messages} room messages.</Empty> : (
+        <div className="table-wrap">
+          <table className="tbl">
+            <thead><tr><th>Agent</th><th>Room</th><th>Messages</th><th>Rule breaks</th><th>Per 100</th><th>Most frequent</th></tr></thead>
+            <tbody>{rows.map((a) => {
+              const top = Object.entries(a.by_check as Record<string, any>).sort((x, y) => y[1].count - x[1].count)[0];
+              return (
+                <tr key={a.chart + a.agent}>
+                  <td className="text-slate-200">{a.agent}</td><td className="mono">{CHART[a.chart] ?? a.chart}</td><td className="mono">{a.messages}</td><td className="mono">{a.violations}</td>
+                  <td className={`mono ${(a.rate_per_100 ?? 0) >= 20 ? "text-rose-300" : "text-amber-200"}`}>{a.rate_per_100 ?? "n/a"}</td>
+                  <td className="text-slate-400">{top ? `${CHECK[top[0]] ?? top[0]} (${top[1].count}${top[1].example ? `, e.g. "${top[1].example}"` : ""})` : ""}</td>
+                </tr>
+              );
+            })}</tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 const SUBJECT: Record<string, string> = {
   "chain:h1": "H1 decision (Reasoner)", "indicator:prophet_r38": "Prophet R38 direction", "indicator:prophet_r37": "Prophet R37 direction", "indicator:gmi_v12_70": "GMI v12.70 verdict"
 };
@@ -65,6 +98,7 @@ export default function Scorecards() {
               </div>
             )}
           </Panel>
+          <Compliance />
           {!!d?.stuck_states?.length && (
             <Panel title="Caution: stuck states" right={<Badge tone="amber">{d.stuck_states.length} open</Badge>}>
               <ul className="space-y-1 text-[12px] text-slate-300">{d.stuck_states.map((s: any, i: number) => <li key={i}>{s.field}: unchanged for {s.candles} candles while price moved {s.atr ? Math.round((s.price_range / s.atr) * 10) / 10 : "?"} × ATR</li>)}</ul>

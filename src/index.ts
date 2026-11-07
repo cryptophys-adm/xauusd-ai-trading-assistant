@@ -158,6 +158,8 @@ import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
 import { readGlobalConclusion } from "./global-conclusion.mjs";
 import { readStrategy } from "./strategy-engine.mjs";
 import { runSignalLedger, readLedger } from "./signal-ledger.mjs";
+import { runComplianceChecks, readCompliance } from "./compliance.mjs";
+import { loadDecisionCards } from "./decision-cards.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -2051,6 +2053,26 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/compliance") {
+    // Agent compliance (RFC_AETHER_KNOWLEDGE_GUARDIAN A1): rule breaks per 100 room messages.
+    try {
+      const days = Math.min(30, Math.max(1, Number(url.searchParams.get("days") || "7") || 7));
+      return dashboardJson({ status: "ok", compliance: await readCompliance(env, { days }) });
+    } catch (error) {
+      console.error("compliance_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/decision-cards") {
+    // Decision cards for Aether (RFC_AETHER_KNOWLEDGE_GUARDIAN §6.1): no levels, prices or sizes.
+    try {
+      const chart = url.searchParams.get("chart") || "60";
+      return dashboardJson({ status: "ok", cards: await loadDecisionCards(env, { chart, limit: Number(url.searchParams.get("limit") || "6") || 6 }) });
+    } catch (error) {
+      console.error("decision_cards_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/conclusion/global") {
     try {
       return dashboardJson({ status: "ok", global: await readGlobalConclusion(env) });
@@ -2389,6 +2411,12 @@ export default {
           const ledger = await runSignalLedger(env, { readStrategy });
           if (ledger.status === "ok" && (Number((ledger.added as Record<string, number>).h1_decision) || Number((ledger.added as Record<string, number>).strategy) || Number(ledger.changed))) console.log("signal_ledger", JSON.stringify(ledger));
         } catch (e) { console.error("signal_ledger_failed", e instanceof Error ? e.message : String(e)); }
+        // Agent compliance (RFC_AETHER_KNOWLEDGE_GUARDIAN A1): deterministic rule checks of the room
+        // messages stored since the last run. Read-only over the rooms; never changes a decision.
+        try {
+          const compliance = await runComplianceChecks(env);
+          if (compliance.status === "ok" && Number(compliance.violations)) console.log("compliance_checks", JSON.stringify(compliance));
+        } catch (e) { console.error("compliance_checks_failed", e instanceof Error ? e.message : String(e)); }
         // Health alerts (gap 2, owner decision 2026-11-06): detect operational problems, keep
         // them as open alerts for the Nexus Priority Queue and report state changes to the
         // platform kernel (warning / info, never critical). Non-fatal by design.

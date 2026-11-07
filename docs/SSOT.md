@@ -323,6 +323,19 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - *Agent consensus:* one stacked bar per room of its agents' stances.
   - *Macro drivers 24h:* diverging bars for gold, DXY, WTI oil and USDT dominance, with whether the gold–dollar inverse link holds.
   - *Session clock:* a 24-hour ring of the Tokyo, London and New York sessions in New York time, as the Chronos Matrix defines them, with a needle at now.
+- **Agent compliance and decision cards (Aether phase A1, owner go 2026-11-07; `docs/RFC_AETHER_KNOWLEDGE_GUARDIAN.md`).** Both are read-only over the rooms: they never change a message, a stance, a conclusion or a decision.
+  - **Compliance** (`src/compliance.mjs`, D1 `compliance_checks`, migration 0011): the sweep checks every stored room message once (openings, Consensus Discussion answers, conclusions of the 15m, 1H, 4H and D1 rooms). The checks:
+    - `order_wording`: order, size or lot wording.
+    - `stance_bias_conflict`: BUY with a bearish bias, or SELL with a bullish bias.
+    - `calibration_talk`: parity, calibration or verification named in the text, against the rule "Agents never mention calibration in their text".
+    - `natural_language`: field names, evidence paths or key=value in the text.
+    - `data_scope`: a HUD or indicator agent names another agent's indicator.
+    - `GET /api/compliance?days=7` returns rule breaks per 100 messages per agent and room. Nexus shows them on the Scorecards page.
+  - **Decision cards** (`src/decision-cards.mjs`, `GET /api/decision-cards?chart=60&limit=6`): one card per room conclusion, for Aether. Each card holds:
+    - the conclusion, the crowd line and each agent's final stance, bias, confidence and claim;
+    - the H1 decision and the confirmation booleans;
+    - the open stuck states, the compliance findings, the scored outcomes, and the provenance (scoring version, KB hash, parity).
+    - **No levels:** never an entry, stop, target, plan, zone, key level, close or ATR. Price-like numbers in agent text become "[level]", and a test walks every key and string.
 - **Signal Ledger (owner request 2026-11-07, `src/signal-ledger.mjs`, D1 `signal_ledger`, migration 0010).** Every directional signal, followed to its outcome in R. Advisory only: R multiples of the advice, never money, lots or positions. It never feeds a room, a prompt or a decision.
   - **Sources:**
     - `h1_decision`: the Reasoner's BUY/SELL from `trade_decisions` (entry, stop, one take profit).
