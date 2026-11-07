@@ -39,20 +39,31 @@ export function swings(bars, { lookback = SWING_LOOKBACK, perSide = SWINGS_PER_S
   return { highs, lows };
 }
 
-/** Every raw key level of every chart, deduplicated (the daily set appears in every snapshot). */
+/**
+ * Every raw key level of every chart. A Camarilla level, a pivot or a CPR edge has ONE value: the
+ * daily, weekly and 4H sets appear in several snapshots, computed at different times (production
+ * 2026-11-06: the D1 snapshot still held the 5 November set beside the current one, and both were
+ * counted as two sources). The freshest snapshot wins; "1D" is the daily set ("D").
+ */
 export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null } = {}) {
   const out = [], seen = new Set();
-  const add = (p, kind, tf, label, weight) => {
+  const add = (p, kind, tf, label, weight, { unique = true } = {}) => {
     if (!isNum(p)) return;
-    const key = `${kind}:${tf}:${label}:${r2(p)}`;
+    const key = unique ? `${kind}:${tf}:${label}` : `${kind}:${tf}:${label}:${r2(p)}`;
     if (seen.has(key)) return;
     seen.add(key);
     out.push({ price: r2(p), kind, tf, label, weight: r2(weight * (TF_WEIGHT[tf] ?? 1)) });
   };
-  for (const [chart, snap] of Object.entries(snapshots)) {
-    if (!snap?.huds) continue;
+  const ORDER = ["15", "60", "240", "1D"];
+  const fresh = Object.entries(snapshots).filter(([, snap]) => snap?.huds).sort(([a, x], [b, y]) => {
+    const tx = Date.parse(x.computed_at ?? ""), ty = Date.parse(y.computed_at ?? "");
+    if (Number.isFinite(tx) && Number.isFinite(ty) && tx !== ty) return ty - tx;
+    return ORDER.indexOf(String(x.timeframe ?? a)) - ORDER.indexOf(String(y.timeframe ?? b));
+  });
+  for (const [chart, snap] of fresh) {
     const cam = snap.huds.interstellar_eyes?.fields?.camarilla || {};
-    for (const [tf, lv] of Object.entries(cam)) {
+    for (const [rawTf, lv] of Object.entries(cam)) {
+      const tf = rawTf === "1D" ? "D" : rawTf;
       if (!lv || !TF_NAME[tf]) continue;
       for (const [k, w] of Object.entries(CAMARILLA_WEIGHT)) add(lv[k], "camarilla", tf, `${TF_NAME[tf]} Camarilla ${k.toUpperCase()}`, w);
     }
@@ -73,8 +84,8 @@ export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = nul
   }
   for (const [tf, series] of [["15", bars.M15], ["60", bars.H1], ["240", bars.H4], ["D", bars.D1]]) {
     const { highs, lows } = swings(series);
-    highs.forEach((h) => add(h, "swing", tf, `${TF_NAME[tf]} swing high`, 0.9));
-    lows.forEach((l) => add(l, "swing", tf, `${TF_NAME[tf]} swing low`, 0.9));
+    highs.forEach((h) => add(h, "swing", tf, `${TF_NAME[tf]} swing high`, 0.9, { unique: false }));
+    lows.forEach((l) => add(l, "swing", tf, `${TF_NAME[tf]} swing low`, 0.9, { unique: false }));
   }
   const pd = (bars.D1 || []).at(-1);
   if (pd) {
@@ -89,7 +100,7 @@ export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = nul
   }
   if (isNum(price) && isNum(atrH1)) {
     const lo = price - ROUND_RANGE_ATR * atrH1, hi = price + ROUND_RANGE_ATR * atrH1;
-    for (let p = Math.ceil(lo / 25) * 25; p <= hi; p += 25) add(p, "round", "15", `round ${p}`, p % 50 === 0 ? 0.8 : 0.4);
+    for (let p = Math.ceil(lo / 25) * 25; p <= hi; p += 25) add(p, "round", "15", `round ${p}`, p % 50 === 0 ? 0.8 : 0.4, { unique: false });
   }
   return out.sort((a, b) => a.price - b.price);
 }

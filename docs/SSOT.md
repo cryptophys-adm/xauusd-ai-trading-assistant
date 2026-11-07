@@ -213,7 +213,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - **5m trigger:** a VERIFIED 5m Prophet confirmation in the trade's direction, or the 15m Prophet confirmation. An unverified 5m confirmation never counts.
   - **Key levels: the Key Level Agent** (owner decision 2026-11-06: "not only Camarilla"; `src/key-level-agent.mjs`, `GET /api/key-levels`, deterministic):
     - **Sources:** every key level of every chart, weighted by kind and by timeframe (15m 1, 1H 1.5, 4H 2, daily 2.5, weekly 3):
-      - Camarilla H3/L3 0.6, H4/L4 1.0, H5/L5 0.8, of the 15m, 1H, 4H, daily and weekly sets (from the 15m, 1H, 4H and D1 HUD snapshots; a set shared by several snapshots counts once);
+      - Camarilla H3/L3 0.6, H4/L4 1.0, H5/L5 0.8, of the 15m, 1H, 4H, daily and weekly sets (from the 15m, 1H, 4H and D1 HUD snapshots). Each Camarilla level, pivot and CPR edge has one value, taken from the freshest snapshot: production on 2026-11-06 showed a stale D1 snapshot's daily set counted beside the current one as a second source;
       - the daily and weekly pivot 1.0, and the CPR top and bottom 0.7;
       - the point of control 0.9 and the value area high and low 0.8, of each chart;
       - the last four swing highs and lows (2-bar fractals of the last 60 closed bars) of the 15m, 1H, 4H and D1 charts, 0.9;

@@ -40,6 +40,20 @@ test("every chart's levels are gathered once, weighted by kind and timeframe", (
   assert.equal(TF_WEIGHT.W, 3);
 });
 
+test("one value per Camarilla level and pivot: the freshest snapshot wins, a stale daily set never doubles", () => {
+  // Production 2026-11-06 23:56: "daily Camarilla L3 / daily Camarilla L3": the D1 snapshot still
+  // held the 5 November set ("1D") beside the current one ("D") and both counted as sources.
+  const h1 = { ...snap("60", { "60": camarilla(4040), D: camarilla(4080) }), computed_at: "2026-11-06T23:00:40Z" };
+  const d1 = { ...snap("1D", { "1D": camarilla(3990), "240": camarilla(4000) }), computed_at: "2026-11-05T22:01:00Z" };
+  d1.huds.chronos_matrix = { fields: { daily_cpr: { pivot: 3980, tc: 3985, bc: 3975 } } };
+  const raw = rawLevels({ snapshots: { "1D": d1, "60": h1 } });
+  const daily = raw.filter((l) => l.label === "daily Camarilla L3");
+  assert.equal(daily.length, 1);
+  assert.equal(daily[0].price, 4078, "the current daily set (base 4080 - 2), not the stale one");
+  assert.deepEqual(raw.filter((l) => l.label === "daily pivot").map((l) => l.price), [4020], "the fresh pivot");
+  assert.equal(raw.filter((l) => l.label === "4H Camarilla L3").length, 1, "the stale D1 snapshot's 4H set is the only one here");
+});
+
 test("a candidate needs three sources and at least medium strength (owner decision 2026-11-06)", () => {
   const lv = (price, kind, tf, label, weight) => ({ price, kind, tf, label, weight });
   assert.deepEqual([CANDIDATE_MIN_SOURCES, CANDIDATE_MIN_SCORE], [3, 3]);
