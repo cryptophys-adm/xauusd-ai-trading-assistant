@@ -13,7 +13,7 @@ Read `docs/SSOT.md` first. It is the only canonical description of this system. 
 4. **Never recreate the removed Workers:** `xauusd-mizan-engine`, `xauusd-prophet-engine`, `xauusd-gmi-engine`, `xauusd-market-data-normalizer`, `xauusd-pull-orchestrator` and `xauusd-confluence-controller`. The "8 + 1 Workers" plan in older documents is cancelled.
 5. **Start from the latest `main`.** Do not revive, merge or deploy branches cut from an old base.
 6. **Do not edit `pinescript/ssot/*`.** Local engine trust comes only from the autonomous parity registry. Never mark an engine verified or `production_ready` by hand.
-7. **Inter-Worker calls use RPC Service Bindings.** Do not add shared secrets between Workers.
+7. **Inter-Worker calls use RPC Service Bindings.** Do not add shared secrets between Workers. Nexus reaches the AI Worker's read API only through its `AI_WORKER` binding, never the public URL (docs/SSOT.md §2).
    - Two bindings reach outside this repository, both on the production AI Worker only (docs/SSOT.md §2):
      - `AGENTS` to the Cryptophys Platform `cryptophys-ai-kernel` (`AgentRpc`, `props.host_worker = "xauusd-ai-trading-assistant"`);
      - `AETHER` to `cryptophys-aether` (`KnowledgeIngress`), which receives decision cards only.

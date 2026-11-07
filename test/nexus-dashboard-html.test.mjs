@@ -42,6 +42,13 @@ test("earlier page paths redirect into the SPA", async () => {
 test("Nexus is read-only: no write method reaches the AI Worker, and missing bindings fail closed", async () => {
   const post = await worker.fetch(new Request("https://nexus.test/api/war-room/latest", { method: "POST", body: "{}" }), {});
   assert.equal(post.status, 405);
+  assert.equal((await worker.fetch(new Request("https://nexus.test/api/status"), {})).status, 503, "no public fallback: the AI Worker is reached only through its binding");
+  const seen = [];
+  const aiWorker = { async fetch(req) { seen.push([req.method, new URL(req.url).pathname + new URL(req.url).search]); return new Response(JSON.stringify({ status: "ok" }), { headers: { "content-type": "application/json" } }); } };
+  const proxied = await worker.fetch(new Request("https://nexus.test/api/aether/status?x=1"), { AI_WORKER: aiWorker });
+  assert.equal(proxied.status, 200);
+  assert.deepEqual(seen, [["GET", "/api/aether/status?x=1"]], "proxied through the AI_WORKER binding");
+  assert.equal((await worker.fetch(new Request("https://nexus.test/api/status", { method: "DELETE" }), { AI_WORKER: aiWorker })).status, 405);
   assert.equal((await worker.fetch(new Request("https://nexus.test/api/ohlcv"), {})).status, 503);
   assert.equal((await worker.fetch(new Request("https://nexus.test/api/local-lane"), {})).status, 503);
 });

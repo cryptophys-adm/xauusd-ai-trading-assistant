@@ -24,7 +24,9 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
 - The pull adapter calls:
   - `TV_GATEWAY` → news Worker `TvGateway.ohlcv()`;
   - `AI_WORKER` → AI Worker `LocalComputationIngress.submit()`.
-- The dashboard calls `MARKET_DATA` → pull adapter `MarketDataReader.candles()`.
+- The dashboard calls:
+  - `MARKET_DATA` → pull adapter `MarketDataReader.candles()`;
+  - `AI_WORKER` → the AI Worker's default `fetch` for its read-only `GET /api/*` (owner go 2026-11-07). It replaced a public fetch of `https://ai.cryptophys.work`, so the AI Worker's `/api` can sit behind Cloudflare Access while Nexus keeps working. Only GET and HEAD are forwarded.
 - The AI Worker calls `AGENTS` → Cryptophys Platform `cryptophys-ai-kernel` `AgentRpc` (owner approval 2026-11-05, RFC_INDICATOR_AGENT_PLATFORM P4). This is the only binding to a Worker outside this repository, and it adds no Worker to the topology above.
   - **Identity:** the binding pins `props.host_worker = "xauusd-ai-trading-assistant"`, and there is no secret or token. The kernel lets this Worker act only as the 21 XAUUSD agents registered with that `host_worker` (platform migration 0016), each with `tier_max = 1`. No other Worker, and not the preview config, may carry this binding. `host_worker` never takes another value. `test/ssot-topology.test.mjs` guards both rules.
   - **What is sent** (`src/platform-reports.mjs`, in the parity sweep cron): one advisory report per meaningful event, never per tick.
