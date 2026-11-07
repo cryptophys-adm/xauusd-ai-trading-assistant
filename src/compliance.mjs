@@ -12,14 +12,14 @@
 // Not yet (later phases): the confidence cap of uncalibrated agents, own-data contradiction,
 // moderator crowd mentions and the Reasoner's guard override rate.
 
-import { naturalLanguageErrors } from "./natural-language.mjs";
+import { naturalLanguageErrors, CALIBRATION_TALK } from "./natural-language.mjs";
 import { MANIFESTS } from "./indicator-manifests.mjs";
 
 export const COMPLIANCE_VERSION = "cryptophys.compliance.v1";
 export const CHECKS = Object.freeze(["order_wording", "stance_bias_conflict", "calibration_talk", "natural_language", "data_scope"]);
 
 const ORDER = /\b(?:buy|sell)\s+(?:limit|stop)\b|\b(?:place|placing|open|opening|enter|entering)\s+(?:an?\s+|the\s+)?(?:order|position)\b|\blot(?:s| size)?\b|\bposition siz(?:e|ing)\b|\b(?:stop[- ]loss|take[- ]profit)\s+(?:at|of|to)\b|\b(?:go|going)\s+(?:long|short)\s+at\b/i;
-const CALIBRATION = /\bparity\b|\bcalibrat\w*|\b(?:un)?verified\b/i;
+const CALIBRATION = CALIBRATION_TALK;
 
 /** Distinctive indicator names of the HUD and indicator agents (generic names are left out). */
 const GENERIC = new Set(["prophet", "order_blocks", "trade_management"]);

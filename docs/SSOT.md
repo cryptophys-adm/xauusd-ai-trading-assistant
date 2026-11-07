@@ -447,6 +447,11 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
       - *Computed from verified bars:* a pure formula of closed bars, with no engine internal behind it: the Camarilla levels and bands (The Interstellar Eyes), the daily and weekly central pivot ranges and the trading sessions (Chronos Matrix). It applies only when the candle is in the trusted lane (an approved record exists) and its parity comparison matched, which includes the input bar (open, high, low, close, volume), with no `input_mismatch` (`barsVerified` in `src/hud-store.mjs`). The higher-timeframe bars behind Camarilla and the pivots come from the same TradingView feed and are not compared separately.
       - *Not yet calibrated:* an engine internal no TradingView comparator has checked.
     - Agents never mention calibration in their text.
+      - **Enforcement (2026-11-07, after Aether's first compliance finding):**
+        - A valid room answer (War Room, timeframe room or HUD thread) whose text talks about parity, calibration, comparators, "unverified", "verified by" or "parity-verified" gets one soft correction (`CALIBRATION_CORRECTION`).
+        - The answer is never rejected for this. When the correction fails, keeps talking about calibration or changes the stance, the first answer is kept, and compliance records it.
+        - The rule term "a verified 5m confirmation" is not calibration talk.
+        - The natural-language examples no longer say "verified by parity".
     - A HUD agent with no statement in the first two tiers speaks at confidence ≤ 0.4.
     - The bus shows each agent's evidence, and the moderator weighs verified and bar-computed evidence above uncalibrated readings.
   - **No confirmation, no entry** (owner rule 2026-11-05).

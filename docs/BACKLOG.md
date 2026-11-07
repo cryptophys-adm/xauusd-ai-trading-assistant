@@ -77,7 +77,7 @@ reports to the owner.
        - **Proposal:** a separate cluster, `cryptophys-aether`, in its own repository, connected to the platform kernel. It owns its Vectorize indexes, separate from the kernel's agent memory, so the state machine and the state market stay apart. It has its own Canon (master knowledge).
        - **Owner decisions:** A1 to A6 approved as recommended (2026-11-07).
        - **Phase A1 done:** compliance checks and decision cards in this repository.
-       - **First finding:** on the latest rooms, more than half of the messages name parity, calibration or verification, against the rule "Agents never mention calibration in their text". The fix belongs to the room prompts; it is a separate PR for owner review.
+       - **First finding:** on the latest rooms, more than half of the messages name parity, calibration or verification, against the rule "Agents never mention calibration in their text". Fixed on 2026-11-07. The natural-language rule had used "verified by parity" as its example, so that example is replaced. A room answer that still talks about calibration now gets one soft correction. Watch `GET /api/compliance` for the rate to fall.
        - **Next, A2:** needs the repository `cryptophys-adm/cryptophys-aether`, which only the owner can create. A private `cryptophys-work/aether` exists; the owner decides whether to use it instead.
 10. **Comparator alerts for the new agents (owner).**
     - **Grid Bot Protocol:** the comparator is built (2026-11-07). The GMI HUD candidate alert carries its fields and the `gmi_hud` identity compares them. What remains is the owner step: install the GMI HUD candidate on the H1 chart (`docs/HUD_CANDIDATE_INSTALL.md`). The same install starts parity for the other GMI HUD fields.
