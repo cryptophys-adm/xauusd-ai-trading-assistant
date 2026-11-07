@@ -69,3 +69,16 @@ test("only the production AI Worker binds the Cryptophys Platform kernel, with i
   assert.ok(read(path.join(ROOT, "wrangler.jsonc")).includes("cryptophys-ai-kernel"));
   for (const doc of ["docs/SSOT.md", "AGENTS.md"]) assert.ok(read(path.join(ROOT, doc)).includes("cryptophys-ai-kernel"), `${doc} must document the platform kernel binding`);
 });
+
+test("only the production AI Worker binds Aether, to KnowledgeIngress, with no props and no secret", () => {
+  const configs = files.filter((p) => /wrangler[^/]*\.jsonc?$/.test(p));
+  for (const p of configs) {
+    const rel = path.relative(ROOT, p);
+    const text = read(p);
+    if (!text.includes("cryptophys-aether")) continue;
+    assert.equal(rel, "wrangler.jsonc", `${rel} must not bind Aether (only the production AI Worker pushes decision cards)`);
+    assert.match(text, /\{\s*"binding":\s*"AETHER",\s*"service":\s*"cryptophys-aether",\s*"entrypoint":\s*"KnowledgeIngress"\s*\}/);
+  }
+  assert.ok(read(path.join(ROOT, "wrangler.jsonc")).includes("cryptophys-aether"));
+  for (const doc of ["docs/SSOT.md", "AGENTS.md"]) assert.ok(read(path.join(ROOT, doc)).includes("cryptophys-aether"), `${doc} must document the Aether binding`);
+});

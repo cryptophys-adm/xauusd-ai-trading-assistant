@@ -148,6 +148,14 @@
       "service": "cryptophys-ai-kernel",
       "entrypoint": "AgentRpc",
       "props": { "host_worker": "xauusd-ai-trading-assistant" }
+    },
+    // Aether, the Knowledge Guardian (RFC_AETHER_KNOWLEDGE_GUARDIAN A5, owner go 2026-11-07): the sweep
+    // pushes decision cards (no levels) to cryptophys-aether KnowledgeIngress, hourly. No secret.
+    // Production only; never add it to the preview config.
+    {
+      "binding": "AETHER",
+      "service": "cryptophys-aether",
+      "entrypoint": "KnowledgeIngress"
     }
   ],
   "queues": {
