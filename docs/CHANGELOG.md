@@ -6,6 +6,9 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- docs: RFC `docs/RFC_AETHER_KNOWLEDGE_GUARDIAN.md` (draft, revision 2). Aether is a separate Knowledge Guardian cluster: decision audit, compliance with role and doctrine, its own Canon (master knowledge) and learned knowledge, and self-calibration by proposal (shadow tests; the owner promotes by PR).
+  - Vectorize is recommended separate from the platform's agent memory, so the state machine and the state market stay apart.
+  - It is design only, and it lists the owner decisions needed.
 - feat(nexus): Signal Ledger, the Performance page and a left sidebar.
   - **Ledger:** `src/signal-ledger.mjs` and D1 `signal_ledger` (migration 0010). Every H1 BUY/SELL decision and every triggered strategy setup is followed on closed bars to its outcome in R: fill, target, stop or time exit, with exit at TP1 and at TP2 tracked side by side. It is advisory only: R, never money. The parity sweep runs it.
   - **API:** `GET /api/ledger?days=30` returns the win rate, expectancy, total R, profit factor, drawdown, fill rate, equity curve and signals, per source and in total.
