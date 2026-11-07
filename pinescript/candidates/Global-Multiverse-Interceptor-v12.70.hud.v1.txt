@@ -2821,8 +2821,11 @@ if cta_webhook_enabled and barstate.isconfirmed
 
 // =============================================================================
 // CANDIDATE HUD ALERT — source: gmi_v12_70_hud (H1 + 15m)
+// Grid Bot Protocol (2026-11-07): cshi_viability, deploy_status (1 muddy waters, 2 toxic chop,
+// 3 optimal, 4 trending or dead, in the order of the grid_status chain), muddy_waters, grid_viable.
 // Carries RFC §1.2 HUD fields as numbers, booleans and codes (never *_txt).
 // =============================================================================
+int grid_status_code = is_muddy_waters ? 1 : cshi_grid > 85.0 ? 2 : (cshi_grid >= 50.0 and cshi_grid <= 85.0) ? 3 : 4
 if cta_webhook_enabled and barstate.isconfirmed
-    string cta_gmi_hud_payload = "{\"v\":1,\"source\":\"gmi_v12_70_hud\",\"src\":\"gmi_v12_70_hud\",\"ticker\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.tickerid + "\",\"timeframe\":\"" + timeframe.period + "\",\"tf\":\"" + timeframe.period + "\",\"candle_time\":\"" + str.tostring(time) + "\",\"timestamp\":\"" + str.tostring(time) + "\",\"t\":" + str.tostring(time) + ",\"verdict\":" + str.tostring(verdict_state) + ",\"gate\":" + str.tostring(r10_gate_status) + ",\"gmi_dir\":" + str.tostring(r10_gmi_dir) + ",\"prophet_dir\":" + str.tostring(r10_prophet_consensus_dir) + ",\"conflict\":" + (r10_integration_conflict ? "true" : "false") + ",\"secret\":\"" + cta_webhook_secret + "\"}"
+    string cta_gmi_hud_payload = "{\"v\":1,\"source\":\"gmi_v12_70_hud\",\"src\":\"gmi_v12_70_hud\",\"ticker\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.tickerid + "\",\"timeframe\":\"" + timeframe.period + "\",\"tf\":\"" + timeframe.period + "\",\"candle_time\":\"" + str.tostring(time) + "\",\"timestamp\":\"" + str.tostring(time) + "\",\"t\":" + str.tostring(time) + ",\"verdict\":" + str.tostring(verdict_state) + ",\"gate\":" + str.tostring(r10_gate_status) + ",\"gmi_dir\":" + str.tostring(r10_gmi_dir) + ",\"prophet_dir\":" + str.tostring(r10_prophet_consensus_dir) + ",\"conflict\":" + (r10_integration_conflict ? "true" : "false") + ",\"cshi_viability\":" + str.tostring(cshi_grid) + ",\"deploy_status\":" + str.tostring(grid_status_code) + ",\"muddy_waters\":" + (is_muddy_waters ? "true" : "false") + ",\"grid_viable\":" + (is_grid_viable ? "true" : "false") + ",\"secret\":\"" + cta_webhook_secret + "\"}"
     alert(cta_gmi_hud_payload, alert.freq_all)

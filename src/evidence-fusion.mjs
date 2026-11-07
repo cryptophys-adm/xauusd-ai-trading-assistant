@@ -4,6 +4,12 @@ export const LOCAL_CALCULATION_CONTRACT_VERSION = "cryptophys.local-calculation.
 export const WEBHOOK_EVIDENCE_CONTRACT_VERSION = "cryptophys.webhook-evidence.v1";
 export const NEWS_ANALYSIS_CONTRACT_VERSION = "cryptophys.completed-news-analysis.v1";
 export const LOCAL_ENGINES = Object.freeze(["mizan", "prophet", "gmi"]);
+/**
+ * HUD parity identities (RFC_HUD_AGENTS §3): accepted at ingest and compared by parity like an
+ * engine, but never part of the decision lane (LOCAL_ENGINES): fusion and the H1 chain ignore them.
+ */
+export const HUD_ENGINES = Object.freeze(["gmi_hud"]);
+export const INGEST_ENGINES = Object.freeze([...LOCAL_ENGINES, ...HUD_ENGINES]);
 export const NEWS_MAX_AGE_MS = 75 * 60 * 1000;
 export const LOCAL_CALC_MAX_AGE_MS = 30 * 60 * 1000;
 // Provisional acceptance policy: must be reviewed against the deployed candle-time semantics before production.
@@ -117,7 +123,7 @@ export function validateLocalCalculation(payload, expected = {}, now = Date.now(
   const errors = [];
   if (!isRecord(payload)) return { valid: false, errors: ["payload_must_be_object"] };
   if (payload.schema_version !== LOCAL_CALCULATION_CONTRACT_VERSION) errors.push("unsupported_schema_version");
-  if (!LOCAL_ENGINES.includes(payload.engine)) errors.push("unsupported_engine");
+  if (!INGEST_ENGINES.includes(payload.engine)) errors.push("unsupported_engine");
   if (typeof payload.symbol !== "string" || !payload.symbol.trim()) errors.push("symbol_required");
   if (typeof payload.timeframe !== "string" || !payload.timeframe.trim()) errors.push("timeframe_required");
   if (!timestampMs(payload.candle_time)) errors.push("candle_time_must_be_parseable_timestamp");

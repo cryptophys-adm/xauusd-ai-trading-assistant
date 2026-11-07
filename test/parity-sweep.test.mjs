@@ -276,3 +276,41 @@ test("a candle whose local input bar differs never enters the trusted lane; the 
   assert.equal(second.trust.prophet, true);
   assert.ok(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":prophet"));
 });
+
+test("gmi_hud (Grid Bot comparator) is compared and approved apart; it never enters or blocks the decision lane", async () => {
+  const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
+  const HUD = { verdict: 3, gate: 2, gmi_dir: 1, prophet_dir: 1, conflict: false, cshi_viability: 64, deploy_status: 3, muddy_waters: false, grid_viable: true };
+  const hudRecord = { engine: "gmi_hud", timeframe: "60", provenance: { source_hash: H("c"), implementation_hash: H("2") }, values: { candle, comparable: { gmi_v12_70_hud: HUD } } };
+  const seedHud = async (key, webhook) => {
+    await seedCandle(env, key);
+    if (webhook) await env.WEBHOOK_BUFFER.put("candle:" + key + ":gmi_v12_70_hud", JSON.stringify(webhook));
+    await registerIdentity(env.DB, identityOf(hudRecord));
+    await env.WEBHOOK_BUFFER.put("localcalc-observed:" + key + ":gmi_hud", JSON.stringify(hudRecord));
+  };
+  const base = 1793750400000;
+  // Without the candidate alert there is nothing to compare against.
+  await seedHud(`OANDA:XAUUSD:60:${base}`, null);
+  const none = await reconcileLocalComputation(env, `OANDA:XAUUSD:60:${base}`);
+  assert.equal(none.comparisons.gmi_hud.result, "not_comparable");
+  assert.equal(none.trust.gmi_hud, false);
+
+  for (let i = 23; i >= 0; i -= 1) {
+    const key = `OANDA:XAUUSD:60:${base - i * 3600000}`;
+    await seedHud(key, { ...HUD });
+    await reconcileLocalComputation(env, key);
+  }
+  const key = `OANDA:XAUUSD:60:${base}`;
+  const after = await reconcileLocalComputation(env, key);
+  assert.equal(after.trust.gmi_hud, true, "24 matching candles approve the HUD identity");
+  assert.equal(JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":gmi_hud")).trust_status, "approved_by_parity");
+
+  // A Grid Bot mismatch revokes gmi_hud only: the approved gmi identity and its trusted copy stay.
+  const next = `OANDA:XAUUSD:60:${base + 3600000}`;
+  await seedHud(next, { ...HUD, deploy_status: 2 });
+  const out = await reconcileLocalComputation(env, next);
+  assert.equal(out.comparisons.gmi_hud.result, "mismatch");
+  assert.equal(out.trust.gmi_hud, false);
+  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + next + ":gmi_hud"), null);
+  assert.equal(out.trust.gmi, true);
+  assert.equal(out.trust.prophet, true);
+});

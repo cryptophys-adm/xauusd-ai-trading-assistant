@@ -16,6 +16,8 @@ export const LOCAL_CALCULATION_CONTRACT_VERSION: string;
 export const WEBHOOK_EVIDENCE_CONTRACT_VERSION: string;
 export const NEWS_ANALYSIS_CONTRACT_VERSION: string;
 export const LOCAL_ENGINES: readonly LocalCalculationEngine[];
+export const HUD_ENGINES: readonly string[];
+export const INGEST_ENGINES: readonly string[];
 export const NEWS_MAX_AGE_MS: number;
 export const LOCAL_CALC_MAX_AGE_MS: number;
 export function deriveCandleKey(symbol: string, timeframe: string, candleTime: string): string;

@@ -392,6 +392,52 @@ export const ENGINE_PROVENANCE = Object.freeze({
       ]
     }
   },
+  "gmi_hud": {
+    "source_hash": "b6e5198e5e95a0b93c438190e49081d08e29f6b8f8f125ee5b4984abc57542f2",
+    "implementation_hash": "258596b9ba074dd68980a2595a06685a943102434ef3e813eaa8dcf7a6b8e945",
+    "files": {
+      "sources": [
+        {
+          "path": "pinescript/candidates/Global-Multiverse-Interceptor-v12.70.hud.v1.txt",
+          "sha256": "7df6324071d4c09ef2f29515f8d5b150d66b842323b1a010e29b3a4caac223a7"
+        }
+      ],
+      "implementation": [
+        {
+          "path": "local-engines/gmi/src/pine.mjs",
+          "sha256": "c2387b392a07df4cc0a7cca1c736275db8c824c396974414dad190dfab384111"
+        },
+        {
+          "path": "local-engines/gmi/src/mizan.mjs",
+          "sha256": "7c07c5574d28d7cd4c2d4e496e42d6df55232a51ad5ca1bf2c8c87e0faa61393"
+        },
+        {
+          "path": "local-engines/gmi/src/gmi-core.mjs",
+          "sha256": "1eeb775c372edead53fd2525abc7d1109a4f178c1924cbf114bd7e78cafc3ac9"
+        },
+        {
+          "path": "src/prophet-r37-kernel.mjs",
+          "sha256": "d2d55ae4986d37b6e9274bbbf2ef30eca9c658fefa2de1fcf0d8d6525b7c2c4c"
+        },
+        {
+          "path": "src/prophet-r37-oscillator.mjs",
+          "sha256": "ac3b7099138b99a21d942d5acaf3412c832952fea928d15abbe406344b530f6e"
+        },
+        {
+          "path": "local-engines/producer/src/h1-producer.mjs",
+          "sha256": "4064d1d4d3cc97ee5125b4423c530e5fee1d124673657bbd2ef60cfde7bde9f1"
+        },
+        {
+          "path": "local-engines/producer/src/grid-bot.mjs",
+          "sha256": "331b0c5fa3650998221e966926afa0d8a3ec257351501723718504e538122af1"
+        },
+        {
+          "path": "local-engines/producer/src/gmi-hud-producer.mjs",
+          "sha256": "ff61f8f9c587470fe8cc3d4f8734b8f65e17a81a296db3d26c7d8c7aa8c6021b"
+        }
+      ]
+    }
+  },
   "prophet_d1": {
     "source_hash": "696544c53144af1c1888f3f38b8c8084bcbb78dea3c4c0d571e0fffb224f1ce6",
     "implementation_hash": "8ddfee0378b7abe3dc933e53ee5c967398cde31f660e5177714166dba4d969e6",

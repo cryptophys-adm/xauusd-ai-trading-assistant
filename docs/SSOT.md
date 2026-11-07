@@ -439,7 +439,12 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **What it computes:** Mizan `cshi_engine` on the chart's closed bars. It takes the spread toxicity and the price velocity, each smoothed with `ta.ema` over 5 bars, and the 14-bar efficiency ratio, and turns them into a viability score. The score is ranked over the last 100 bars with `ta.percentrank`.
   - **Deploy status:** GMI's status follows from the rank and the bar's GMI entropy: muddy waters (on), toxic chop (off), optimal (on), or trending / dead (off).
   - **Not HUD fields:** the grid range, trigger, count and TP/SL stay Reasoner output (RFC_HUD_AGENTS §7).
-  - **Calibration:** no comparator exists yet, so it reads as not yet calibrated.
+  - **Comparator (2026-11-07):** the GMI HUD candidate alert (`pinescript/candidates/Global-Multiverse-Interceptor-v12.70.hud.v1.txt`, source `gmi_v12_70_hud`) now also carries `cshi_viability`, `deploy_status` (1 muddy waters, 2 toxic chop, 3 optimal, 4 trending or dead), `muddy_waters` and `grid_viable`.
+    - **Local side:** after each H1 publish, the pull adapter posts a separate `gmi_hud` record (`local-engines/producer/src/gmi-hud-producer.mjs`): the five GMI fields of the H1 `gmi` record plus the Grid Bot fields on the same closed bars. Its result never decides the H1 publish marker.
+    - **Parity:** `gmi_hud` is its own identity (`ENGINE_PROVENANCE.gmi_hud`, `PARITY_FIELDS.gmi_hud`). The parity sweep compares it like an engine; 24 consecutive matching H1 candles approve it.
+    - **Decision lane untouched:** `gmi_hud` is accepted at ingest (`INGEST_ENGINES`) but is not a `LOCAL_ENGINES` member. Fusion and the H1 chain never read it, and its mismatches never revoke `gmi` or block the trusted lane.
+    - **Effect:** its trusted copy only marks the Grid Bot line as verified in the HUD readings (`src/hud-store.mjs`).
+    - **Owner step:** install the GMI HUD candidate on the H1 chart (`docs/HUD_CANDIDATE_INSTALL.md`). Until its alert arrives, the comparison is `not_comparable` and the line stays unverified.
   - **Without GMI:** it is absent when GMI is.
 - **Macro & Aether Sensors complete** (owner decision 2026-11-05: every TradingView metric becomes agent data). `local-engines/producer/src/macro-aether.mjs` computes every row of the Pine HUD for the H1 and M15 snapshots:
   - **Rows:** CONSOL. GRAVITY (TDM profile gravity), Z3 KINETIC SPREAD, MACRO CYCLE (DXY and USDT ROC), EST. MACRO SHIFT (macro kinematics on DXY and USDT 4h), ASSET GRAVITY (WTI RSI14 at the chart timeframe, from the USOIL M15 and H1 series), Q-GRAVITY PULL and MACRO SMR (the FVG reservoir).

@@ -12,7 +12,7 @@
 // has settled. recordComparison dedupes per (identity, candle), so re-running a
 // reconciled candle is a no-op.
 
-import { LOCAL_ENGINES } from "./evidence-fusion.mjs";
+import { LOCAL_ENGINES, HUD_ENGINES, INGEST_ENGINES } from "./evidence-fusion.mjs";
 import {
   identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema,
   recordComparison, isTrusted, policyFromEnv, reclassifyInputOnlyMismatches
@@ -50,14 +50,15 @@ export async function reconcileLocalComputation(env, candleKey) {
   await ensureSchema(env.DB);
   const policy = policyFromEnv(env);
   const observed = {};
-  await Promise.all(LOCAL_ENGINES.map(async engine => {
+  await Promise.all(INGEST_ENGINES.map(async engine => {
     observed[engine] = await readJsonKV(env.WEBHOOK_BUFFER, OBSERVED_PREFIX + candleKey + ":" + engine);
   }));
   // Nothing observed for this candle (for example a 5m candle with no local 5m
   // producer yet): nothing to compare and no trusted record can exist.
-  if (!LOCAL_ENGINES.some(engine => observed[engine])) return { comparisons: {}, trust: {} };
+  if (!INGEST_ENGINES.some(engine => observed[engine])) return { comparisons: {}, trust: {} };
   const comparisons = {};
-  for (const engine of ["prophet", "gmi"]) {
+  // HUD identities (gmi_hud) are compared like the engines but never vouch for the decision lane.
+  for (const engine of ["prophet", "gmi", ...HUD_ENGINES]) {
     const record = observed[engine];
     const id = record ? identityOf(record) : null;
     if (!record || !id) continue;
@@ -73,7 +74,7 @@ export async function reconcileLocalComputation(env, candleKey) {
   // A candle whose local input bar differs from TradingView's final bar never enters the trusted
   // lane, whatever the identity's status: the H1 chain then reads the TradingView evidence for it,
   // until the pull adapter republishes the candle on the final bar and it matches.
-  const inputDiffers = Object.values(comparisons).some((c) => c.result === "input_mismatch");
+  const inputDiffers = ["prophet", "gmi"].some((engine) => comparisons[engine]?.result === "input_mismatch");
   const trust = {};
   for (const engine of LOCAL_ENGINES) {
     const record = observed[engine];
@@ -85,6 +86,18 @@ export async function reconcileLocalComputation(env, candleKey) {
     // visible record whose identity is not (or no longer) approved loses its trusted copy.
     if (record && trust[engine]) await env.WEBHOOK_BUFFER.put(trustedKey, JSON.stringify({ ...record, trust_status: "approved_by_parity" }), LOCAL_TTL);
     else if (record) await env.WEBHOOK_BUFFER.delete(trustedKey);
+  }
+  // A HUD identity's trusted copy (localcalc:<candle>:gmi_hud) only marks HUD fields as verified
+  // (hud-store.mjs); the decision lane reads LOCAL_ENGINES and never sees it.
+  for (const engine of HUD_ENGINES) {
+    const record = observed[engine];
+    const id = record ? identityOf(record) : null;
+    if (!record) continue;
+    const ownInputDiffers = comparisons[engine]?.result === "input_mismatch";
+    trust[engine] = id && !inputDiffers && !ownInputDiffers ? await isTrusted(env.DB, id) : false;
+    const trustedKey = TRUSTED_PREFIX + candleKey + ":" + engine;
+    if (trust[engine]) await env.WEBHOOK_BUFFER.put(trustedKey, JSON.stringify({ ...record, trust_status: "approved_by_parity" }), LOCAL_TTL);
+    else await env.WEBHOOK_BUFFER.delete(trustedKey);
   }
   return { comparisons, trust };
 }

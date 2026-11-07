@@ -1,5 +1,5 @@
 import { WorkerEntrypoint, tracing } from "cloudflare:workers";
-import { buildEvidenceFusion, indicatorPayloadsFromLocal, analysisAllowedForTimeframe, isHudSource, LOCAL_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
+import { buildEvidenceFusion, indicatorPayloadsFromLocal, analysisAllowedForTimeframe, isHudSource, LOCAL_ENGINES, INGEST_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
 import { validateM5Context, freshM5Context } from "./m5-context.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { parseTradingViewJson } from "./tradingview-json.mjs";
@@ -1206,7 +1206,8 @@ async function ingestLocalCalculation(env: Env, payload: unknown): Promise<{ sta
   }
   const key = safeKeyPart(asText(record.candle_key));
   const engine = asText(record.engine);
-  if (!key || !LOCAL_ENGINES.includes(engine as typeof LOCAL_ENGINES[number])) {
+  // HUD parity identities (gmi_hud) are accepted for parity only; the decision lane reads LOCAL_ENGINES.
+  if (!key || !INGEST_ENGINES.includes(engine)) {
     return { status: 400, body: { error: "Invalid candle_key or engine" } };
   }
   const validation = validateLocalCalculation(record, {

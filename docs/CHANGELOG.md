@@ -6,6 +6,12 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(parity): a comparator for the Grid Bot Protocol HUD, the `gmi_hud` identity.
+  - **Pine candidate:** the GMI HUD candidate alert (`gmi_v12_70_hud`) also carries `cshi_viability`, `deploy_status`, `muddy_waters` and `grid_viable`. `pinescript/ssot` is unchanged.
+  - **Local record:** the pull adapter posts a `gmi_hud` record after each H1 publish, and again when it republishes a revised bar. Its result never decides the publish marker.
+  - **Parity:** `gmi_hud` is a separate identity with its own provenance. It is accepted at ingest and compared by the parity sweep, but stays out of the decision lane. The approved `prophet` and `gmi` hashes are unchanged.
+  - **Readings:** the Grid Bot line is verified once `gmi_hud` is approved and its record equals the snapshot.
+  - **Owner step:** install the GMI HUD candidate on the H1 chart.
 - feat(agents): P6, Supertrend and Order Blocks, and the Grid Bot Protocol HUD ported. Three more agents in every room.
   - **Supertrend:** `ta.supertrend(3, 10)` on closed bars. Its H1 direction is scored as `indicator:supertrend`, and its line is a key level.
   - **Order Blocks:** it reads the Prophet R38 order-block filter and GMI's Aegis blocks, so no new definition was needed. Its best blocks are key levels.

@@ -57,6 +57,22 @@ test("store keeps the snapshot per candle and as latest; readings verify only fi
   assert.deepEqual(h.not_computed, ["grid_bot_protocol"]);
 });
 
+test("the Grid Bot line is verified only by an approved gmi_hud record equal to the snapshot", async () => {
+  const grid = { fields: { cshi_viability: 64, viability_score: 0.41, deploy_status: "optimal_on", deploy_status_code: 3, grid_viable: true, muddy_waters: false, entropy: 0.6 },
+    parity: { cshi_viability: "gmi_v12_70_hud.cshi_viability", deploy_status_code: "gmi_v12_70_hud.deploy_status", muddy_waters: "gmi_v12_70_hud.muddy_waters", grid_viable: "gmi_v12_70_hud.grid_viable" } };
+  const env = { SIGNAL_CACHE: kv(), WEBHOOK_BUFFER: kv() };
+  const snap = snapshot({ not_computed: [], huds: { ...snapshot().huds, grid_bot_protocol: grid } });
+  assert.equal((await storeHudSnapshot(env, snap, now)).status, 202);
+  let h = await hudReadings(env, await loadHudSnapshot(env, { timeframe: "60" }));
+  assert.equal(h.readings.grid_bot_protocol.lines[0].verified, false, "no approved gmi_hud record yet");
+  await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":gmi_hud", JSON.stringify({ values: { comparable: { gmi_v12_70_hud: { cshi_viability: 64, deploy_status: 3, muddy_waters: false, grid_viable: true } } } }));
+  h = await hudReadings(env, await loadHudSnapshot(env, { timeframe: "60" }));
+  assert.equal(h.readings.grid_bot_protocol.lines[0].verified, true);
+  await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":gmi_hud", JSON.stringify({ values: { comparable: { gmi_v12_70_hud: { cshi_viability: 64, deploy_status: 2, muddy_waters: false, grid_viable: true } } } }));
+  h = await hudReadings(env, await loadHudSnapshot(env, { timeframe: "60" }));
+  assert.equal(h.readings.grid_bot_protocol.lines[0].verified, false, "a different deploy status is not verified");
+});
+
 function comparisonsDb(rows) {
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE TABLE engine_parity_comparisons (engine TEXT, candle_key TEXT, result TEXT)");
