@@ -545,6 +545,11 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Criteria:** a higher score that is significant, meaning a one-sided exact sign test with p < 0.05 on the bars where the two versions disagree and exactly one is right; no more stuck time (candles inside stuck episodes, § above: ≥ 8 candles with range > 3 × ATR); and a minimum sample of 200 bars. Brier does not apply, because indicator directions carry no confidence. Reference parity applies only to a Pine candidate (RFC decision 1).
   - **Control check:** the control is also checked against the approved local records of the last 24 candles (`matches_approved_local_records`).
 - **Read model.** `GET /api/shadow-versions?days=30` (cached for 5 minutes) and the Nexus page `/shadow`.
+- **P5 review (owner decision 2026-11-07):**
+  - `prophet_r37@latch12` and `prophet_r38@latch8` are stopped; they are listed under `retired` in the view.
+  - `prophet_r37@latch8` runs until 30 decisive pairs or 2026-12-07.
+  - The GMI candidates run until their 200-bar sample (review around 2026-11-14).
+  - Each running candidate carries a `review` with its date, rule, decisive pairs and `due`.
 - **Candidates (P5, 2026-11-05):** `prophet_r37@latch8`, `prophet_r37@latch12` and `prophet_r38@latch8`. The ±3 structure latch expires after 8 or 12 closed H1 bars instead of 50. They are local-only: owner decision 1 (2026-11-05) is that a local-only version is enough, so an improvement is proven by outcome first.
 - **GMI "Prophet risk hold" candidates** (`gmi_v12_70@latch8`, `gmi_v12_70@latch12`). These test the latch where it acts on the chain.
   - **How they work.** GMI needs M1, M15 and higher-timeframe bars, so it is not replayed. Each bar starts from the approved local GMI record of that candle (`localcalc:<key>:gmi`, kept 14 days, last 72 bars tried). `src/gmi-regate.mjs` recomputes only the two points the Prophet structure feeds: `mtf_state` in the initial verdict cascade, and the R10 gate with its risk hold (subtype 1).

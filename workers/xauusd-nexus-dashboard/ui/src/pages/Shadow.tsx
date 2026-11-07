@@ -50,7 +50,15 @@ export default function Shadow() {
                         <tr><td colSpan={7} className="text-[11px] text-slate-500">
                           {k.change} · where they disagree: candidate right {k.paired.candidate_better}, active right {k.paired.control_better} (p {k.paired.p_value ?? "n/a"}) · significantly higher score: {yes(k.criteria.higher_outcome_score)} · no new stuck states: {yes(k.criteria.no_new_stuck_states)} · minimum sample: {yes(k.criteria.minimum_sample)} · reference: {k.reference}
                         </td></tr>
+                        {k.review && <tr><td colSpan={7} className="text-[11px] text-slate-500">
+                          Review by {k.review.by}: {k.review.rule} · decisive pairs {k.review.decisive_pairs} of {k.review.min_decisive_pairs}{k.review.due ? <span className="text-amber-200"> · review due</span> : null}
+                        </td></tr>}
                       </Fragment>
+                    ))}
+                    {(f.retired ?? []).map((r: any) => (
+                      <tr key={r.id}><td colSpan={7} className="text-[11px] text-slate-500">
+                        <span className="mono">{r.id}</span> stopped {r.retired_on}: {r.reason} (at the review: {r.result.differing_stances} stances differed, candidate right {r.result.candidate_better}, active right {r.result.control_better}).
+                      </td></tr>
                     ))}
                   </tbody>
                 </table>

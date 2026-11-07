@@ -51,7 +51,13 @@ reports to the owner.
 7. **Calibrate the 4H and D1 desks.**
    - Install the Prophet R38 and GMI v12.70 alerts on the OANDA:XAUUSD 4-hour and daily charts: "Any alert() function call", same webhook.
    - Until 24 matches (about 4 trading days on H4, about 5 weeks on D1), the 4H and D1 Desks read as not calibrated and speak at confidence 0.4 or lower.
-8. **P5 shadow candidates: keep, stop or retest.** `prophet_r37@latch8`, `prophet_r37@latch12` and `prophet_r38@latch8` run in shadow since 2026-11-05. The first real-data replay showed no significant gain over the active version (Nexus "Shadow versions"). The owner decides whether to keep them collecting, stop them, or retest on a longer window.
+8. **P5 shadow candidates (reviewed 2026-11-07, owner decision).**
+    - **Stopped:** `prophet_r37@latch12` and `prophet_r38@latch8` (`RETIRED_CANDIDATES` in `src/shadow-versions.mjs`).
+      - `prophet_r37@latch12`: 14 stances differed out of 492, the candidate was right 4 times against the active version's 3 (p 0.5).
+      - `prophet_r38@latch8`: 0 stances differed. R38 takes a side only on a confirmed signal, so the latch never changed its stance.
+    - **Kept, with a deadline:** `prophet_r37@latch8`. At the review it was right 4 times against the active version's 5 (p 0.75), and it had 13 % fewer stuck candles. Review it once it has 30 decisive pairs, or on 2026-12-07 at the latest. Stop it then unless it is significantly better.
+    - **Kept until the sample is complete:** `gmi_v12_70@latch8` and `@latch12` (36 of 200 bars at the review). Review around 2026-11-14.
+    - **If every latch candidate stays `not_better`:** the latch expiry is not the improvement, and the cause of the stuck states has to be found elsewhere.
 
 ## Last week's backlog (2026-11-03 to 2026-11-06), merged here on 2026-11-07
 
