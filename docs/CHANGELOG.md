@@ -4,6 +4,12 @@ This file is the single source of truth for repository changes. Topology and
 deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
+## 2026-11-07
+
+- fix(bus): the Workers AI fallback is more reliable (owner decision 2026-11-07).
+  - **Why:** three preview-e2e runs failed on 2026-11-06 (#122, #127, #128) when glm-5.3-flash timed out.
+  - **Timeouts no longer pin the fallback at once:** one timeout sent every later step of a run to the fallback, as in the news thread of #127. Now one timeout falls back for its step only, and the second pins the fallback.
+  - **A truncated fallback answer is retried:** a fallback answer cut off by its token limit, as with the H1 bus moderator of #128, is retried once with twice the budget and a brevity note.
 ## 2026-11-06
 
 - fix(key-levels): each Camarilla level, pivot and CPR edge counts once, from the freshest snapshot. In production at 23:56 the D1 snapshot (still from 5 November) put a second "daily Camarilla L3" beside the current one, which inflated the source count of daily zones.
