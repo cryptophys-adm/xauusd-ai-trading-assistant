@@ -187,7 +187,19 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - Code: `src/multi-agent-bus.mjs`. **Enabled in production since Phase 4 (owner approval 2026-11-04)**: `MULTI_AGENT_BUS_ENABLED` and `LIVE_ROOM_ENABLED` are `"true"` in both `wrangler.jsonc` and `wrangler.preview.jsonc`. Turning a flag back to `"false"` stops new runs at once; stored messages stay readable.
 - **Retired for H1 (owner decision 2026-11-07):** the AI Worker no longer enqueues it; the 1H War Room is the H1 communication bus. The module, its queue handler and the stored messages stay readable, and the news thread still uses its model settings.
 - Until 2026-11-07, after the H1 synthesis was persisted (degraded or complete), the AI Worker enqueued a `multi_agent_bus` task on the existing queue. The task reads that synthesis, runs agents `technical` and `news` for 2 rounds, then a `moderator` consensus. That is at most 5 model calls, with a 300 s wall budget and the `MULTI_AGENT_MAX_CALLS_PER_HOUR` cap; the cap fails closed.
-- Model: `MULTI_AGENT_MODEL` = `@cf/zai-org/glm-5.3-flash` (owner decision 2026-11-04; the same model as the production Counselor, so already proven on this account; strict `json_schema`, `reasoning_effort` low/high). On an error (or a 60 s timeout) the call is retried once with `MULTI_AGENT_FALLBACK_MODEL` = `@cf/zai-org/glm-4.7-flash`, `fallback_used` is recorded, and the primary error is stored as `primary_error` on the message. The H1 chain models are unchanged.
+- **Models per role (owner decision 2026-11-07, model migration).**
+  - **Why:** the Workers AI changelog of 2026-11-05 retires `@cf/zai-org/glm-5.3-flash` and `@cf/nvidia/nemotron-3-120b-a12b` on 2026-11-20 (HTTP 410, error 5028; first announced for 2026-11-15). glm-5.3-flash was also a paid model limited to 20 requests a minute per account, the main source of the rooms' 3021 errors.
+  - **Room agents** (openings, Consensus Discussion, headline tags, plain-language rewrites): `ROOM_AGENT_MODEL` = `@cf/google/gemma-4-26b-a4b-it`, thinking off. Fallback: `ROOM_AGENT_FALLBACK_MODEL` = `@cf/openai/gpt-oss-20b`, low reasoning effort.
+  - **Moderators** (every room conclusion and the News Daily TLDR; `stepRole` in `src/agent-threads.mjs`): `MODERATOR_MODEL` = `@cf/openai/gpt-oss-120b`. Fallback: `MODERATOR_FALLBACK_MODEL` = `@cf/google/gemma-4-26b-a4b-it`.
+  - **News chain** (Analyst, Counselor, Reasoner) and the **H1 Reasoner**: `AI_MODEL_ANALYST`, `AI_MODEL_COUNSELOR` and `AI_MODEL_REASONER` = `@cf/openai/gpt-oss-120b`. The analyst and counselor stages reason at low effort; the Reasoners at medium, with 8192 tokens.
+  - **Request forms:** `modelRequests` in `src/model-text.mjs` builds them per model family.
+    - gpt-oss: Chat Completions with `reasoning_effort` and a strict JSON schema; then without the schema; then the Responses form (`input`, `reasoning.effort`).
+    - gemma-4: `chat_template_kwargs.enable_thinking` false, with the schema, then without.
+    - A form the model rejects (an input-validation error) falls back to the next one and is logged as `model_request_form_rejected`.
+    - `extractModelText` reads the legacy, Chat Completions and Responses API shapes.
+  - **Precedence:** a role's own variable wins. `MULTI_AGENT_MODEL` / `MULTI_AGENT_FALLBACK_MODEL` override every role when set (tests, rollback). An empty fallback turns the fallback off.
+  - **Failures:** on an error (or a 60 s timeout) the call is retried once with the role's fallback. `fallback_used` is recorded, and the primary error is stored as `primary_error` on the message. A pinned primary failure belongs to the failed model only: a room's moderator keeps its own primary when the agents' primary failed.
+  - **Proof:** preview-e2e asserts the role models on the news thread and the War Room. A preview-only `/preview/reasoner-probe` makes one call in the H1 Reasoner's request form.
   - **Fallback reliability** (owner decision 2026-11-06, after three preview-e2e failures that day):
     - A primary **timeout** is transient: the step falls back, and the next step tries the primary again. The second timeout in a run (`PRIMARY_TIMEOUTS_TO_PIN`) sends the rest of the run to the fallback, because each timeout costs up to 60 s of the wall budget. Any other primary error does so at once, as before.
     - A fallback answer cut off by its token limit (`finish_reason` length: the reasoning model spent the budget on hidden reasoning) is asked once more, with twice the budget and a note to answer with the JSON only. This happens only when at least 30 s remain before the deadline. The hourly budgets do not count this one retry.
@@ -210,7 +222,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - `h1`: the H1 decision and the H1 TradingView reading.
     - `news`: the latest news-thread consensus.
   - The moderator must state the H1 decision whenever its stance differs from it.
-  - Primary model only, never the paid fallback. The `LIVE_ROOM_MAX_CALLS_PER_HOUR` cap fails closed: 4 rooms an hour × 3 calls, well under 36.
+  - Each role with its own free-plan fallback since 2026-11-07 (before: primary only, never the paid glm-4.7 fallback). The `LIVE_ROOM_MAX_CALLS_PER_HOUR` cap fails closed: 4 rooms an hour × 3 calls, well under 36.
   - Thread ids are `live15m:<day>`. `GET /api/live` also returns the older `live5m:` history.
   - The 5m context carries the last 12 closed bars (`recent_bars`). The H1 chain strips them.
 - Read APIs: `GET /api/threads?kind=news|h1`, `GET /api/threads/:id` (nested replies; `h1:<candle_key>` serves the stored H1 bus discussions as a thread, history only since 2026-11-07) and `GET /api/live?since=`.
@@ -410,7 +422,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - A BUY or SELL conclusion without the matching confirmation is rejected (`entry_without_confirmation`).
     - Nexus shows the confirmation state under the conclusion.
   - **Quorum (2026-11-06):** within 5 minutes of the close (`WAR_ROOM_QUORUM_WAIT_MS`), a room with fewer than half of its agents heard does not conclude. The queue task is redelivered after 60 seconds (`WarRoomQuorumPending`), and only the failed openings are asked again. Past the wait, the room concludes with whoever spoke. Production 13:15 that day: Workers AI 3021 and 3040 failed 14 of 18 openings, and the room concluded on four agents.
-  - Primary model only, within `WAR_ROOM_MAX_CALLS_PER_HOUR = 112` (about 27 calls per close). Messages are stored in `agent_thread_messages` (thread `warroom:<day>`, steps `brief`, `open:*`, `debate:*` and `conclusion`).
+  - The agents on the room agent model, the moderator on the moderator model, each with its own fallback (since 2026-11-07), within `WAR_ROOM_MAX_CALLS_PER_HOUR = 112` (about 27 calls per close). Messages are stored in `agent_thread_messages` (thread `warroom:<day>`, steps `brief`, `open:*`, `debate:*` and `conclusion`).
   - Read API: `GET /api/war-room/latest[?bar=<iso>]`.
   - When on, it replaces the legacy live room and the per-H1 HUD agents (their budget moves here). Turning it `"false"` restores both.
 - Live: C0, C2, C3, C5, C6 and C7 are built. `HUD_AGENTS_ENABLED` is `"true"` in `wrangler.jsonc` (owner approval 2026-11-05, after the #94 preview-e2e proof). After each H1 synthesis, one agent per computed HUD (13) and a moderator post in Threads 1H, within `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`. At each 15m close, Trade Management, Kinetic Engine, Fabio AMT and Aegis Footprint speak in the live room, within `LIVE_ROOM_MAX_CALLS_PER_HOUR = 48`. Turning the flag to `"false"` stops new HUD posts at once.

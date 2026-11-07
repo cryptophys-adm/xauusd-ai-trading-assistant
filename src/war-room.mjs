@@ -10,7 +10,8 @@
 //   3. Conclusion: the moderator concludes for the Nexus main panel. The H1 decision chain
 //      stays the constraint: a conclusion that differs must say "H1 decision: X", and price
 //      levels come only from the validated H1 chain.
-// Advisory only: stances are discussion positions, never orders. Primary model only.
+// Advisory only: stances are discussion positions, never orders. Agents speak on the room agent
+// model, the moderator on the moderator model, each with its own fallback (2026-11-07).
 // Behind WAR_ROOM_ENABLED; when on, it replaces the legacy live room and the per-H1 HUD
 // agents (owner decision: their budget moves here).
 import { chatMessages } from "./model-text.mjs";
@@ -420,7 +421,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   }
 
   // One budget for the bar, shared by every parallel step (and its correction call).
-  const roomEnv = { ...env, MULTI_AGENT_FALLBACK_MODEL: env.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL };
+  const roomEnv = env;
   const maxPerHour = Number(env.WAR_ROOM_MAX_CALLS_PER_HOUR ?? 112);
   let remaining = 0;
   try { remaining = (Number.isFinite(maxPerHour) ? maxPerHour : 0) - (await callsInLastHour(db, clock(), "warroom")); } catch { remaining = 0; }

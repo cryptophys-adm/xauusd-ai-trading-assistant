@@ -454,6 +454,17 @@ jobs:
           assert.match(tvReading.lines[1].text, /a bullish verdict/, "GMI verdict must be decoded");
           assert.equal(tvReading.bias, "bullish");
 
+          // Model migration (owner decision 2026-11-07): the H1 Reasoner and the news chain run on
+          // gpt-oss-120b. The degraded fixture never calls the Reasoner, so a preview-only probe makes
+          // one call in its request form and must get a parseable decision back.
+          const probeResponse = await fetch(base + "/preview/reasoner-probe", { method: "POST", headers });
+          const probe = await probeResponse.json();
+          console.log("REASONER PROBE " + JSON.stringify(probe, null, 2));
+          assert.equal(probeResponse.status, 200, "the Reasoner model must answer: " + JSON.stringify(probe));
+          assert.equal(probe.model, "@cf/openai/gpt-oss-120b");
+          assert.ok(["BUY", "SELL", "WAIT", "NO_TRADE"].includes(probe.decision?.decision), "the Reasoner returns a parseable decision");
+          assert.ok(!/^\[no answer/.test(probe.text), "the Reasoner answers within its token budget");
+
           // Phase 3a: news thread. The preview has no news ingestion, so a preview-only fixture
           // (PREVIEW_FIXTURES_ENABLED, never set in production) creates one news analysis.
           const fixtureResponse = await fetch(base + "/preview/news-analysis-fixture", { method: "POST", headers });
@@ -476,7 +487,15 @@ jobs:
           }, null, 2));
           assert.equal(threadMessages.length, 5, "news thread: 2 agents x 2 rounds + moderator");
           assert.ok(threadMessages.every(m => m.status === "ok"), "every thread message must be schema-valid model output");
-          assert.ok(threadMessages.some(m => m.fallback_used === false && m.model === "@cf/zai-org/glm-5.3-flash"), "the primary model must answer in the thread");
+          // Per-role models (owner decision 2026-11-07; glm-5.3-flash and nemotron stop answering on
+          // 2026-11-20): the agents speak on gemma-4 (fallback gpt-oss-20b), the moderator concludes on
+          // gpt-oss-120b (fallback gemma-4). The primary of each role must answer at least once.
+          const GEMMA = "@cf/google/gemma-4-26b-a4b-it", OSS120 = "@cf/openai/gpt-oss-120b", OSS20 = "@cf/openai/gpt-oss-20b";
+          const threadAgents = threadMessages.filter(m => m.step !== "moderator"), threadModerator = threadMessages.find(m => m.step === "moderator");
+          assert.ok(threadAgents.every(m => [GEMMA, OSS20].includes(m.model)), "thread agents speak on the room agent model or its fallback");
+          assert.ok(threadAgents.some(m => m.fallback_used === false && m.model === GEMMA), "the room agent model (gemma-4) must answer in the thread");
+          assert.ok([OSS120, GEMMA].includes(threadModerator?.model), "the thread moderator concludes on gpt-oss-120b or its fallback");
+          if (threadModerator?.fallback_used) console.log("::warning::The news thread moderator fell back: " + threadModerator.primary_error);
           assert.ok(threadMessages.every(m => !codeLike(m.insight) && !codeLike(m.summary)), "thread messages must be natural language");
           const r2 = threadMessages.filter(m => m.step.startsWith("r2:"));
           assert.ok(r2.length === 2 && r2.every(m => m.parent_id), "round-2 replies are nested under the other agent's round-1 message");
@@ -528,7 +547,8 @@ jobs:
           const assertWarRoom = (room, ids) => {
             assert.deepEqual((room?.openings || []).map(m => m.id), ids, "one opening per agent on the bus");
             assert.ok(room.openings.every(m => m.status === "ok"), "every opening must be schema-valid model output");
-            assert.ok(room.openings.every(m => m.fallback_used === false && m.model === "@cf/zai-org/glm-5.3-flash"), "the War Room uses the primary model only");
+            assert.ok(room.openings.every(m => [GEMMA, OSS20].includes(m.model)), "War Room agents speak on the room agent model or its fallback");
+            assert.ok(room.openings.filter(m => m.fallback_used === false && m.model === GEMMA).length * 2 >= room.openings.length, "the room agent model (gemma-4) answers at least half of the openings");
             assert.ok(room.debate.some(m => m.id === "risk" && m.status === "ok"), "the Risk Manager answers in the Consensus Discussion");
             // A split room's rebuttals name their targets; in a unanimous room the Risk Manager
             // stress-tests the consensus and may name nobody (src/war-room.mjs validateRebuttal).
@@ -631,6 +651,7 @@ jobs:
             missing_evidence_fail_closed: "PASS",
             duplicate_queue_idempotency: "PASS",
             old_h1_bus_retired: "PASS",
+            reasoner_model_probe: "PASS",
             news_thread_real_models: "PASS",
             war_room_real_models: "PASS",
             h1_hud_snapshot_verified: "PASS",

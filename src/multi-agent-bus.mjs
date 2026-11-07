@@ -6,12 +6,35 @@
 // It is shadow/advisory only: it never writes into the chain's evidence,
 // prompts, decision, entry/SL/TP, size or confidence.
 
-import { chatMessages, cleanModelText, extractJsonObject, extractModelText } from "./model-text.mjs";
+import { chatMessages, cleanModelText, extractJsonObject, extractModelText, MODELS, runModel, responsesIncomplete } from "./model-text.mjs";
 import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, NATURAL_LANGUAGE_CORRECTION, onlyNaturalLanguageErrors } from "./natural-language.mjs";
 import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 
-export const BUS_DEFAULT_MODEL = "@cf/zai-org/glm-5.3-flash";
-export const BUS_DEFAULT_FALLBACK_MODEL = "@cf/zai-org/glm-4.7-flash";
+// Model migration (owner decision 2026-11-07; glm-5.3-flash stops answering on 2026-11-20): room
+// agents speak on gemma-4-26b-a4b-it with thinking off, moderators conclude on gpt-oss-120b.
+export const BUS_DEFAULT_MODEL = MODELS.GEMMA_4;
+export const BUS_DEFAULT_FALLBACK_MODEL = MODELS.GPT_OSS_20B;
+export const MODERATOR_DEFAULT_MODEL = MODELS.GPT_OSS_120B;
+export const MODERATOR_DEFAULT_FALLBACK_MODEL = MODELS.GEMMA_4;
+
+/**
+ * The model of each role. Per-role variables win; MULTI_AGENT_MODEL / MULTI_AGENT_FALLBACK_MODEL
+ * still override every role when set (tests, rollback); otherwise the defaults above. An empty
+ * fallback ("") turns the fallback off.
+ *   agent      ROOM_AGENT_MODEL, ROOM_AGENT_FALLBACK_MODEL (openings, Consensus Discussion, tags)
+ *   moderator  MODERATOR_MODEL, MODERATOR_FALLBACK_MODEL (conclusions, the News Daily TLDR)
+ */
+export const ROLE_MODEL_VARS = Object.freeze({
+  agent: { primary: "ROOM_AGENT_MODEL", fallback: "ROOM_AGENT_FALLBACK_MODEL", defaults: [BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL] },
+  moderator: { primary: "MODERATOR_MODEL", fallback: "MODERATOR_FALLBACK_MODEL", defaults: [MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_FALLBACK_MODEL] }
+});
+export function roleModels(env, role = "agent") {
+  const r = ROLE_MODEL_VARS[role] || ROLE_MODEL_VARS.agent;
+  const set = (k) => env?.[k] != null;
+  const primary = String((set(r.primary) && env[r.primary]) || (set("MULTI_AGENT_MODEL") && env.MULTI_AGENT_MODEL) || r.defaults[0]);
+  const fallback = String(set(r.fallback) ? env[r.fallback] : set("MULTI_AGENT_FALLBACK_MODEL") ? env.MULTI_AGENT_FALLBACK_MODEL : r.defaults[1]);
+  return { primary, fallback };
+}
 export const BUS_AGENTS = Object.freeze(["technical", "news"]);
 export const BUS_ROUNDS = 2;
 export const BUS_MODERATOR_ROUND = 3;
@@ -19,8 +42,8 @@ export const BUS_MODERATOR_ROUND = 3;
 // sequential calls need room beyond 180 s; queue consumers may run 15 minutes.
 export const BUS_WALL_BUDGET_MS = 300_000;
 const PRIMARY_CALL_TIMEOUT_MS = 60_000;
-// glm-5.3-flash always reasons (reasoning cannot be disabled), so leave room
-// for the hidden trace before the JSON answer.
+// Room for a reasoning model's hidden trace before the JSON answer (gpt-oss reasons at low effort;
+// gemma-4 runs with thinking off).
 export const BUS_MAX_TOKENS = Object.freeze({ agent: 3072, moderator: 4096 });
 export const BUS_STANCES = Object.freeze(["BUY", "SELL", "WAIT"]);
 const INSIGHT_MAX = 600;
@@ -276,13 +299,14 @@ export function parseModelObject(result) {
     return { obj: result.response, text: JSON.stringify(result.response) };
   }
   const first = Array.isArray(result?.choices) ? result.choices[0] : null;
-  if (first?.finish_reason === "length" && !(typeof first?.message?.content === "string" && first.message.content.trim())) {
+  const cutOff = first?.finish_reason === "length" || responsesIncomplete(result);
+  if (cutOff && /^\[no answer:/.test(extractModelText(result))) {
     return { obj: null, text: extractModelText(result), truncated: true };
   }
   const text = cleanModelText(extractModelText(result));
   const obj = extractJsonObject(text);
   // An answer cut off by the token limit is recorded as such, not as malformed output.
-  return obj || first?.finish_reason !== "length" ? { obj, text } : { obj: null, text, truncated: true };
+  return obj || !cutOff ? { obj, text } : { obj: null, text, truncated: true };
 }
 
 function usageTokens(result) {
@@ -305,14 +329,9 @@ function withTimeout(promise, ms) {
 // mid-JSON (preview-e2e, PR #95). It gets twice the budget.
 export const FALLBACK_TOKEN_FACTOR = 2;
 
-function requestFor(model, messages, schemaName, schema, maxTokens, effort, primary) {
-  // The primary model (glm-5.3-flash) takes the Chat Completions form with a
-  // strict json_schema and reasoning_effort (low | high | max; "medium" would
-  // map to max). The fallback model gets the plain chat form; its output is
-  // validated the same way afterwards.
-  return primary
-    ? { messages, max_completion_tokens: maxTokens, temperature: 0.1, reasoning_effort: effort, response_format: { type: "json_schema", json_schema: { name: schemaName, strict: true, schema } } }
-    : { messages, max_tokens: maxTokens * FALLBACK_TOKEN_FACTOR, temperature: 0.1 };
+/** One call in the request forms of its model family (model-text.mjs modelRequests). The fallback gets twice the budget. */
+function callModel(env, model, messages, schemaName, schema, maxTokens, effort, primary) {
+  return runModel(env.AI, model, { messages, schemaName, schema, effort, maxTokens: primary ? maxTokens : maxTokens * FALLBACK_TOKEN_FACTOR }).then((r) => r.result);
 }
 
 /**
@@ -346,21 +365,22 @@ export const PRIMARY_TIMEOUTS_TO_PIN = 2;
 export const FALLBACK_RETRY_MIN_MS = 30_000;
 export const FALLBACK_BRIEF_NOTE = "Your previous answer ran out of tokens before the JSON. Reply with the JSON object only. Keep any reasoning very short.";
 
-export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState = {} }) {
-  const primary = String(env?.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL);
-  const fallback = String(env?.MULTI_AGENT_FALLBACK_MODEL || BUS_DEFAULT_FALLBACK_MODEL);
+export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState = {}, role = "agent" }) {
+  const { primary, fallback } = roleModels(env, role);
   const primaryTimeoutMs = Number(env?.BUS_PRIMARY_TIMEOUT_MS) > 0 ? Number(env.BUS_PRIMARY_TIMEOUT_MS) : PRIMARY_CALL_TIMEOUT_MS;
   const attempts = [];
   // Once the primary model is pinned as failed in this run, later steps go straight to
   // the fallback instead of spending the wall budget on the same error again.
-  if (!runState.primaryError) attempts.push({ model: primary, primary: true });
+  // A pin belongs to the model that failed: a room's agents and its moderator use different models.
+  const pinned = Boolean(runState.primaryError) && (runState.primaryErrorModel ?? primary) === primary;
+  if (!pinned) attempts.push({ model: primary, primary: true });
   if (fallback && fallback !== primary) attempts.push({ model: fallback, primary: false });
   if (!attempts.length) attempts.push({ model: primary, primary: true });
   let lastError = null;
   let usage = 0;
   let callPrimaryError = null;
   let extraCalls = 0;
-  const meta = (i) => ({ fallback_used: !attempts[i].primary, primary_error: callPrimaryError || runState.primaryError || null });
+  const meta = (i) => ({ fallback_used: !attempts[i].primary, primary_error: callPrimaryError || (pinned ? runState.primaryError : null) || null });
   const waitMs = Number.isFinite(Number(env?.MODEL_RATE_LIMIT_RETRY_MS)) ? Number(env.MODEL_RATE_LIMIT_RETRY_MS) : RATE_LIMIT_RETRY_MS;
   let rateRetried = false;
   for (let i = 0; i < attempts.length; i++) {
@@ -370,18 +390,16 @@ export async function callBusModel(env, { messages, schemaName, schema, maxToken
     const t0 = clock();
     try {
       const timeout = isPrimary ? Math.min(remaining, primaryTimeoutMs) : remaining;
-      const result = await withTimeout(env.AI.run(model, requestFor(model, messages, schemaName, schema, maxTokens, effort, isPrimary)), timeout);
+      const result = await withTimeout(callModel(env, model, messages, schemaName, schema, maxTokens, effort, isPrimary), timeout);
       usage += usageTokens(result) || 0;
       let parsed = parseModelObject(result);
       if (!isPrimary && parsed.truncated === true && deadline - clock() > FALLBACK_RETRY_MIN_MS) {
         // The fallback spent its budget on hidden reasoning: once more, briefly, with twice the budget.
         console.warn("bus_fallback_truncated_retry", JSON.stringify({ model }));
         const brief = [...messages.slice(0, -1), { ...messages.at(-1), content: `${messages.at(-1)?.content ?? ""}\n\n${FALLBACK_BRIEF_NOTE}` }];
-        const request = { ...requestFor(model, brief, schemaName, schema, maxTokens, effort, false) };
-        request.max_tokens = request.max_tokens * 2;
         extraCalls += 1;
         try {
-          const retry = await withTimeout(env.AI.run(model, request), Math.max(1, deadline - clock()));
+          const retry = await withTimeout(callModel(env, model, brief, schemaName, schema, maxTokens * 2, effort, false), Math.max(1, deadline - clock()));
           usage += usageTokens(retry) || 0;
           parsed = parseModelObject(retry);
         } catch (retryError) {
@@ -404,7 +422,7 @@ export async function callBusModel(env, { messages, schemaName, schema, maxToken
         const timedOut = error?.name === "TimeoutError";
         if (timedOut) runState.primaryTimeouts = (runState.primaryTimeouts || 0) + 1;
         // A timeout pins the fallback only once it repeats in this run; other errors pin at once.
-        if (!timedOut || runState.primaryTimeouts >= PRIMARY_TIMEOUTS_TO_PIN) runState.primaryError = callPrimaryError;
+        if (!timedOut || runState.primaryTimeouts >= PRIMARY_TIMEOUTS_TO_PIN) { runState.primaryError = callPrimaryError; runState.primaryErrorModel = primary; }
         console.warn("bus_primary_model_failed", JSON.stringify({ model, error: message, pinned: Boolean(runState.primaryError) }));
         continue;
       }
@@ -560,7 +578,7 @@ export async function runMultiAgentBus(env, task, { clock = () => Date.now() } =
   } else {
     const opts = {
       messages: moderatorMessages(evidence, transcript), schemaName: "bus_moderator", schema: MODERATOR_JSON_SCHEMA,
-      maxTokens: BUS_MAX_TOKENS.moderator, effort: "high", deadline, clock, runState
+      maxTokens: BUS_MAX_TOKENS.moderator, effort: "high", deadline, clock, runState, role: "moderator"
     };
     const first = await callBusModel(env, opts);
     calls += first.calls || 0;

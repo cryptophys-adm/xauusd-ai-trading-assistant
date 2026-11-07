@@ -95,7 +95,8 @@ test("every agent opens on the bus, the minority and the Risk Manager rebut, the
   assert.equal(room.conclusion.majority, "WAIT");
   assert.equal(room.h1.decision, "WAIT");
   assert.equal(ai.calls.length, 6 + 3 + 1);
-  assert.ok(ai.calls.every(c => c.model === "@cf/zai-org/glm-5.3-flash"), "primary model only");
+  // Per-role models (owner decision 2026-11-07): the agents on gemma-4, the moderator on gpt-oss-120b.
+  assert.deepEqual(ai.calls.map(c => c.model).sort(), [...Array(9).fill("@cf/google/gemma-4-26b-a4b-it"), "@cf/openai/gpt-oss-120b"].sort(), "each role on its primary model");
 
   // Openings stay inside their own role: the HUD agent sees only its HUD reading.
   const kinetic = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content));

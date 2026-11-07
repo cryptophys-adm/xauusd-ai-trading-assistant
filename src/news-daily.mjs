@@ -183,7 +183,7 @@ export async function runNewsDaily(env, { now = Date.now(), clock = () => Date.n
   const maxPerHour = Number(env.NEWS_DAILY_MAX_CALLS_PER_HOUR ?? 6);
   let remaining = 0;
   try { remaining = (Number.isFinite(maxPerHour) ? maxPerHour : 0) - (await callsInLastHour(db, clock(), "newsdaily")); } catch { remaining = 0; }
-  const dailyEnv = { ...env, MULTI_AGENT_FALLBACK_MODEL: env.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL };
+  const dailyEnv = env;
   let calls = 0;
   const step = (base, opts) => {
     const deadline = clock() + STEP_MS;

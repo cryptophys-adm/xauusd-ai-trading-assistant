@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   runMultiAgentBus, readBus, buildMultiAgentBusTask, buildBusEvidence, busEnabled,
   validateAgentOutput, validateModeratorOutput, resetBusSchemaCacheForTests, ensureBusSchema,
-  BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL, BUS_WALL_BUDGET_MS, AGENT_JSON_SCHEMA, MODERATOR_JSON_SCHEMA
+  BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL, MODERATOR_DEFAULT_MODEL, BUS_WALL_BUDGET_MS, AGENT_JSON_SCHEMA, MODERATOR_JSON_SCHEMA
 } from "../src/multi-agent-bus.mjs";
 
 // D1-compatible wrapper over node:sqlite so the real SQL is exercised.
@@ -89,25 +89,26 @@ test("flag false: no model calls, no rows", async () => {
   assert.equal(busEnabled({}), false, "flag defaults to off");
 });
 
-test("flag true: 5 calls in order, all to glm-5.3-flash with strict json_schema", async () => {
+test("flag true: 5 calls in order, agents on gemma-4 (thinking off), the moderator on gpt-oss-120b, all with a strict json_schema", async () => {
   const e = env();
   const result = await runMultiAgentBus(e, task());
   assert.equal(result.status, "complete");
   assert.equal(e.AI.calls.length, 5);
-  assert.ok(e.AI.calls.every(c => c.model === BUS_DEFAULT_MODEL));
+  assert.deepEqual(e.AI.calls.map(c => c.model), [...Array(4).fill(BUS_DEFAULT_MODEL), MODERATOR_DEFAULT_MODEL]);
   const order = e.AI.calls.map(c => c.request.response_format.json_schema.name);
   assert.deepEqual(order, ["bus_agent", "bus_agent", "bus_agent", "bus_agent", "bus_moderator"]);
   for (const c of e.AI.calls) {
     assert.equal(c.request.response_format.type, "json_schema");
     assert.equal(c.request.response_format.json_schema.strict, true);
     assert.equal(c.request.response_format.json_schema.schema.additionalProperties, false);
-    assert.ok(c.request.max_completion_tokens >= 3072);
-    assert.ok(["low", "high"].includes(c.request.reasoning_effort), "never medium (maps to max on glm-5.3-flash)");
+    assert.ok(c.request.max_tokens >= 3072);
   }
-  assert.equal(e.AI.calls[4].request.max_completion_tokens, 4096, "moderator gets a reasoning-sized budget");
+  assert.ok(e.AI.calls.slice(0, 4).every(c => c.request.chat_template_kwargs?.enable_thinking === false), "gemma-4 answers with thinking off");
+  assert.equal(e.AI.calls[4].request.reasoning_effort, "high", "the gpt-oss moderator reasons at high effort");
+  assert.equal(e.AI.calls[4].request.max_tokens, 4096, "moderator gets a reasoning-sized budget");
   const bus = await readBus(e.DB, CANDLE);
   assert.equal(bus.items.length, 5);
-  assert.ok(bus.items.every(m => m.status === "ok" && m.model === BUS_DEFAULT_MODEL && m.fallback_used === false && m.usage_tokens === 120));
+  assert.ok(bus.items.every(m => m.status === "ok" && m.model === (m.agent === "moderator" ? MODERATOR_DEFAULT_MODEL : BUS_DEFAULT_MODEL) && m.fallback_used === false && m.usage_tokens === 120));
   assert.equal(bus.consensus.stance, "WAIT");
   assert.equal(bus.chain_decision, "WAIT");
   assert.equal(bus.agreement_with_chain, true);
@@ -234,12 +235,14 @@ test("a primary-model error falls back, records why, and skips the primary for t
   await runMultiAgentBus(e, task());
   assert.equal(e.AI.calls.filter(c => c.model === BUS_DEFAULT_MODEL).length, 1, "the primary is tried once per run");
   const fallbackCalls = e.AI.calls.filter(c => c.model === BUS_DEFAULT_FALLBACK_MODEL);
-  assert.equal(fallbackCalls.length, 5);
-  assert.ok(fallbackCalls.every(c => c.request.response_format === undefined && c.request.max_tokens > 0), "fallback uses the plain Workers AI chat form");
-  assert.ok(fallbackCalls.every(c => c.request.max_tokens >= 2 * 3072), "the fallback reasoning model gets twice the token budget");
+  assert.equal(fallbackCalls.length, 4, "the four agent steps");
+  assert.ok(fallbackCalls.every(c => c.request.reasoning_effort === "low" && c.request.max_tokens >= 2 * 3072), "the gpt-oss-20b fallback reasons at low effort with twice the budget");
+  assert.equal(e.AI.calls.filter(c => c.model === MODERATOR_DEFAULT_MODEL).length, 1, "a pin belongs to the failed model: the moderator keeps its own primary");
   const bus = await readBus(e.DB, CANDLE);
-  assert.ok(bus.items.every(m => m.fallback_used === true && m.model === BUS_DEFAULT_FALLBACK_MODEL && m.status === "ok"));
-  assert.ok(bus.items.every(m => /5007: model not available/.test(m.primary_error)), "the primary error is stored for diagnosis");
+  const agents = bus.items.filter(m => m.agent !== "moderator");
+  assert.ok(agents.every(m => m.fallback_used === true && m.model === BUS_DEFAULT_FALLBACK_MODEL && m.status === "ok"));
+  assert.ok(agents.every(m => /5007: model not available/.test(m.primary_error)), "the primary error is stored for diagnosis");
+  assert.ok(bus.items.some(m => m.agent === "moderator" && m.fallback_used === false && m.model === MODERATOR_DEFAULT_MODEL));
 });
 
 test("both models failing records agent_failed and still finishes", async () => {

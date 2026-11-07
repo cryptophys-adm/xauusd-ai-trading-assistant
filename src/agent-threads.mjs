@@ -250,12 +250,17 @@ export function rowToThreadMessage(row) {
 }
 
 /** One model step → a stored message. Never throws for model/output problems. */
-async function runStep(env, db, base, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk }) {
+/** Steps that conclude a room speak on the moderator model; every other step on the agent model. */
+export function stepRole(step) {
+  return step === "conclusion" || step === "moderator" || step === "tldr" ? "moderator" : "agent";
+}
+
+async function runStep(env, db, base, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk, role = stepRole(base?.step) }) {
   const ts = new Date(clock()).toISOString();
   if (!(await budgetOk())) {
     return writeMessage(db, { ...base, ts, status: "budget_exhausted", body: { insight: "budget exhausted" } });
   }
-  const call = await callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState });
+  const call = await callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, role });
   const meta = { model: call.model, fallback_used: call.fallback_used, usage_tokens: call.usage_tokens, latency_ms: call.latency_ms ?? null };
   const diag = call.primary_error ? { primary_error: call.primary_error } : {};
   if (call.status !== "answered") {
@@ -272,7 +277,7 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
   if (correction && clock() < deadline && (await budgetOk())) {
     const retry = await callBusModel(env, {
       messages: [...messages, { role: "assistant", content: String(call.text ?? "") }, { role: "user", content: correction }],
-      schemaName, schema, maxTokens, effort, deadline, clock, runState
+      schemaName, schema, maxTokens, effort, deadline, clock, runState, role
     });
     corrections = 1 + (retry.fallback_used ? 1 : 0);
     meta.usage_tokens = sumOrNull(meta.usage_tokens, retry.usage_tokens);
@@ -574,8 +579,8 @@ export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {
   const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, barTime).all()).results || []).map(r => [r.step, rowToThreadMessage(r)]));
   if (existing.has("moderator")) return { status: "already_complete", calls: 0 };
 
-  // The live room never pays for a fallback model: primary only.
-  const roomEnv = { ...env, MULTI_AGENT_FALLBACK_MODEL: env.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL };
+  // Each role falls back to its own model (owner decision 2026-11-07, model migration).
+  const roomEnv = env;
   const deadline = clock() + LIVE_ROOM_WALL_BUDGET_MS;
   const maxPerHour = Number(env.LIVE_ROOM_MAX_CALLS_PER_HOUR ?? 36);
   const runState = { primaryError: null };
@@ -865,7 +870,7 @@ export async function runHudAgents(env, task, { clock = () => Date.now(), loadRe
   const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, candleKey).all()).results || []).map((r) => [r.step, rowToThreadMessage(r)]));
   if (existing.get("moderator")?.status === "ok") return { status: "already_complete", calls: 0 };
 
-  const hudEnv = { ...env, MULTI_AGENT_FALLBACK_MODEL: env.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL };
+  const hudEnv = env;
   const deadline = clock() + HUD_WALL_BUDGET_MS;
   const maxPerHour = Number(env.HUD_AGENTS_MAX_CALLS_PER_HOUR ?? 30);
   const runState = { primaryError: null };

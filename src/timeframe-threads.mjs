@@ -356,7 +356,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
     } });
   }
 
-  const roomEnv = { ...env, MULTI_AGENT_FALLBACK_MODEL: env.MULTI_AGENT_MODEL || BUS_DEFAULT_MODEL };
+  const roomEnv = env;
   const maxPerHour = Number(env.TF_THREADS_MAX_CALLS_PER_HOUR ?? 120);
   let remaining = 0;
   try { remaining = (Number.isFinite(maxPerHour) ? maxPerHour : 0) - (await callsInLastHour(db, clock(), "tf")); } catch { remaining = 0; }
