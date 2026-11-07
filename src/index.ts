@@ -157,6 +157,7 @@ import { storeHudSnapshot, loadHudSnapshot, hudReadings, approvedComparable, bar
 import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
 import { readGlobalConclusion } from "./global-conclusion.mjs";
 import { readStrategy } from "./strategy-engine.mjs";
+import { runSignalLedger, readLedger } from "./signal-ledger.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -2040,6 +2041,16 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/ledger") {
+    // Signal Ledger: every directional signal followed to its outcome in R (advisory, never money).
+    try {
+      const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") || "30") || 30));
+      return dashboardJson({ status: "ok", ledger: await readLedger(env, { days }) });
+    } catch (error) {
+      console.error("ledger_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/conclusion/global") {
     try {
       return dashboardJson({ status: "ok", global: await readGlobalConclusion(env) });
@@ -2372,6 +2383,12 @@ export default {
           try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env))); }
           catch (e) { console.error("shadow_versions_failed", e instanceof Error ? e.message : String(e)); }
         }
+        // Signal Ledger (owner request 2026-11-07): new H1 decisions and strategy setups, each
+        // followed to its outcome in R on the closed bars. Never feeds a room or a decision.
+        try {
+          const ledger = await runSignalLedger(env, { readStrategy });
+          if (ledger.status === "ok" && (Number((ledger.added as Record<string, number>).h1_decision) || Number((ledger.added as Record<string, number>).strategy) || Number(ledger.changed))) console.log("signal_ledger", JSON.stringify(ledger));
+        } catch (e) { console.error("signal_ledger_failed", e instanceof Error ? e.message : String(e)); }
         // Health alerts (gap 2, owner decision 2026-11-06): detect operational problems, keep
         // them as open alerts for the Nexus Priority Queue and report state changes to the
         // platform kernel (warning / info, never critical). Non-fatal by design.

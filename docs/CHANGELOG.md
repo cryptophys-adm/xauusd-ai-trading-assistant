@@ -6,6 +6,11 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(nexus): Signal Ledger, the Performance page and a left sidebar.
+  - **Ledger:** `src/signal-ledger.mjs` and D1 `signal_ledger` (migration 0010). Every H1 BUY/SELL decision and every triggered strategy setup is followed on closed bars to its outcome in R: fill, target, stop or time exit, with exit at TP1 and at TP2 tracked side by side. It is advisory only: R, never money. The parity sweep runs it.
+  - **API:** `GET /api/ledger?days=30` returns the win rate, expectancy, total R, profit factor, drawdown, fill rate, equity curve and signals, per source and in total.
+  - **Nexus:** a Performance page (`#/performance`). Navigation moves to a left sidebar grouped by layer: Live, Analytics, Market and Intelligence. The layers still to build are marked "soon".
+  - **Backlog:** item 11 records the next layers. The proposed calendar source is the ForexFactory weekly export, which needs an owner decision.
 - feat(shadow): P5 review (owner decision). Two latch candidates stopped, deadlines for the rest.
   - **Stopped:** `prophet_r37@latch12` (4 against 3 where the stances differed, p 0.5) and `prophet_r38@latch8` (no stance ever differed, because R38 takes a side only on a confirmed signal). They are no longer computed; their stored outputs stay. The view lists them under `retired`.
   - **Deadlines:** `prophet_r37@latch8` is reviewed at 30 decisive pairs or on 2026-12-07 at the latest. The GMI candidates are reviewed at their 200-bar sample, around 2026-11-14. Each running candidate shows a `review` in `GET /api/shadow-versions` and on the Nexus Shadow page.
