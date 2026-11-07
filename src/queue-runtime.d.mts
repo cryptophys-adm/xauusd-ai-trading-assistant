@@ -51,6 +51,12 @@ export type QueueTask =
       enqueued_at: string;
     }
   | {
+      kind: "h1_room";
+      event_id: string;
+      candle_key: string;
+      enqueued_at: string;
+    }
+  | {
       kind: "multi_agent_bus";
       event_id: string;
       candle_key: string;

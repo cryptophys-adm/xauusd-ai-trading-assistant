@@ -354,3 +354,15 @@ test("a conclusion that failed shows its errors and model for diagnosis", async 
   assert.ok(c.errors.includes("summary_missing"), JSON.stringify(c));
   assert.ok(c.model);
 });
+
+test("the sweep leaves an H1 bar alone while the h1_room task holds its room", async () => {
+  const h1Open = Date.parse("2026-11-07T09:00:00.000Z");
+  const h1Key = "OANDA:XAUUSD:60:" + h1Open;
+  const now = h1Open + 3600_000 + 30 * 60_000;
+  const e = env(fakeAI(), { records: false });
+  await e.SIGNAL_CACHE.put("market-data:v2:series:OANDA:XAUUSD|1h", series(h1Open, 3600_000));
+  await e.SIGNAL_CACHE.put("hud:60:" + h1Key, hudSnapshot(h1Key, "60"));
+  await e.SIGNAL_CACHE.put("h1room:lock:" + h1Key, "held");
+  const out = await runPendingTimeframeThreads(e, { now, clock: () => now, sleep: async () => {} });
+  assert.equal(out.charts.H1, undefined);
+});

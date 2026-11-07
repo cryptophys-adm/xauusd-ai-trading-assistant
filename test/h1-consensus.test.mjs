@@ -83,7 +83,7 @@ test("fail-closed decisions are plain WAITs without prices; the stored summary i
     assert.match(d.reasoning, /stays WAIT/);
   }
   const s = consensusSummary(consensusInput(room()), { overridden: true });
-  assert.deepEqual(Object.keys(s), ["status", "bar_open", "agents_spoke", "roster_size", "room_bias", "conclusion", "guard_overridden"]);
+  assert.deepEqual(Object.keys(s), ["decided_after_close_s", "status", "bar_open", "agents_spoke", "roster_size", "room_bias", "conclusion", "guard_overridden"]);
   assert.equal(s.guard_overridden, true);
 });
 
@@ -98,4 +98,23 @@ test("runAnalysis no longer calls the Analyst or the Counselor and no longer enq
   assert.match(source, /error_code = 'finalizing'.*WHERE candle_key = \? AND status = 'analyzing' AND \(error_code = 'awaiting_consensus'/, "one caller claims the decision");
   assert.match(source, /runPendingTimeframeThreads\(env, \{ onRoom \}\)/);
   assert.match(source, /finalizePendingH1Decisions\(env\)/);
+});
+
+test("the 1H room right after the close: the task waits for the HUD snapshot five minutes at most (owner request 2026-11-07)", async () => {
+  const { buildH1RoomTask, h1RoomGate, H1_ROOM_HUD_WAIT_MS } = await import("../src/h1-consensus.mjs");
+  assert.equal(H1_ROOM_HUD_WAIT_MS, 5 * 60 * 1000);
+  assert.deepEqual(buildH1RoomTask({ candleKey: KEY, enqueuedAt: "t" }), { kind: "h1_room", event_id: `h1_room:${KEY}`, candle_key: KEY, enqueued_at: "t" });
+  assert.throws(() => buildH1RoomTask({ candleKey: "OANDA:XAUUSD:60:x" }), TypeError);
+  const close = OPEN + 3600_000;
+  assert.equal(h1RoomGate({ candleKey: KEY, now: close + 60_000, hudReady: true }), "run");
+  assert.equal(h1RoomGate({ candleKey: KEY, now: close + 60_000, hudReady: false }), "wait_for_hud");
+  assert.equal(h1RoomGate({ candleKey: KEY, now: close + H1_ROOM_HUD_WAIT_MS, hudReady: false }), "run", "then the room runs without it");
+});
+
+test("runAnalysis enqueues the 1H room as soon as it parks the evidence; the queue consumer runs it", async () => {
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  const start = source.indexOf("async function runAnalysis(");
+  const body = source.slice(start, source.indexOf("\n/** Enqueues the 1H room", start));
+  assert.ok(body.indexOf("H1_PENDING_PREFIX") < body.indexOf("enqueueH1Room(env, candleKey)"), "parked first, then the room");
+  assert.match(source, /task\.kind === "h1_room"\) return processH1RoomTask\(env, task\)/);
 });

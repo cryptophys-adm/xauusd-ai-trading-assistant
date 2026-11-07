@@ -318,3 +318,54 @@ test("H1 by Consensus Discussion: the sweep has the Reasoner decide a parked bar
   await sweep();
   assert.equal(prompts.filter(p => /You are the Reasoner/.test(p.text)).length, 1, "a decided bar is never decided again");
 });
+
+test("the h1_room queue task: waits for the HUD snapshot of a fresh bar, then the room and the Reasoner decide at once (owner request 2026-11-07)", async () => {
+  const { env } = await workerEnv();
+  env.TF_THREADS_ENABLED = "true";
+  env.AI_MODEL_REASONER = "@cf/test/reasoner";
+  const prompts = [];
+  const answer = JSON.stringify({ decision: "WAIT", confidence: 0.45, reasoning: "The room leans up but waits for a confirmed buy, so there is no trade for this candle.", entry_price: null, stop_loss: null, take_profit: null, risk_reward: null, position_size_pct: null, trade_plan: null });
+  env.AI = { async run(model, input) { prompts.push({ model, text: (input?.messages || []).map(m => m.content).join("\n") }); return { choices: [{ message: { content: answer }, finish_reason: "stop" }], usage: { total_tokens: 10 } }; } };
+  const deliver = async (body) => {
+    const msg = { id: "m", body, attempts: 1, acked: false, retried: null, ack() { this.acked = true; }, retry(o) { this.retried = o; } };
+    const output = captureConsole();
+    try { await worker.queue({ messages: [msg] }, env); } finally { output.restore(); }
+    return msg;
+  };
+  const hour = 3_600_000;
+
+  // A bar whose close is still ahead and has no HUD snapshot: redelivered in a minute.
+  const fresh = SYMBOL + ":60:" + Math.floor(Date.now() / hour) * hour;
+  const waiting = await deliver({ kind: "h1_room", event_id: "h1_room:" + fresh, candle_key: fresh, enqueued_at: new Date().toISOString() });
+  assert.equal(waiting.acked, false);
+  assert.deepEqual(waiting.retried, { delaySeconds: 60 });
+  assert.equal(prompts.length, 0);
+
+  // A closed bar with its HUD snapshot, its parked evidence and a concluded room.
+  const open = Math.floor(Date.now() / hour) * hour - hour;
+  const key = SYMBOL + ":60:" + open;
+  const db = env.DB.db;
+  db.prepare("INSERT INTO analysis_runs (candle_key, status, attempt_count, started_at, updated_at, error_code, result_json) VALUES (?, 'analyzing', 1, datetime('now'), datetime('now'), 'awaiting_consensus', '{}')").run(key);
+  await env.WEBHOOK_BUFFER.put("h1:pending:" + key, JSON.stringify({
+    candle_key: key, ticker: SYMBOL, timeframe: "60", parked_at: new Date().toISOString(), input_fingerprint: "f", local_primary: true, sources: [],
+    evidence: { candle_key: key, evidence_fusion: { complete: true, missing_evidence: [], validation_errors: [] } }, news_evidence: { available: false }, prophet_metrics: "{}", gmi_metrics: "{}"
+  }));
+  const candles = Array.from({ length: 20 }, (_, i) => { const o = open - (19 - i) * hour; return { open_time: new Date(o).toISOString(), close_time: new Date(o + hour).toISOString(), open: 4000, high: 4010, low: 3990, close: 4005, volume: 100 }; });
+  await env.SIGNAL_CACHE.put("market-data:v2:series:OANDA:XAUUSD|1h", JSON.stringify({ candles }));
+  await env.SIGNAL_CACHE.put("hud:60:" + key, JSON.stringify({ schema_version: "cryptophys.hud-snapshot.v1", timeframe: "60", candle_key: key, huds: {} }));
+  const run = new Date(open).toISOString(), ts = new Date().toISOString();
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_thread_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT NOT NULL, run_id TEXT NOT NULL, step TEXT NOT NULL, parent_id INTEGER, agent TEXT NOT NULL, bar_time TEXT, ts TEXT NOT NULL, stance TEXT, confidence REAL, body_json TEXT NOT NULL, refs_json TEXT, model TEXT, status TEXT NOT NULL, latency_ms INTEGER, fallback_used INTEGER DEFAULT 0, usage_tokens INTEGER, UNIQUE(thread_id, run_id, step))`);
+  const msg = db.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, ts, stance, confidence, body_json, status) VALUES ('tf:H1', ?, ?, ?, ?, ?, ?, ?, ?)");
+  msg.run(run, "brief", "system", ts, null, null, JSON.stringify({ candle_key: key, roster: ["h1", "risk"], hud_snapshot: true }), "info");
+  msg.run(run, "open:h1", "h1", ts, "WAIT", 0.7, JSON.stringify({ claim: "The 1-hour Prophet points up without a confirmed buy.", bias: "BULLISH", name: "1H Desk" }), "ok");
+  msg.run(run, "conclusion", "moderator", ts, "WAIT", 0.6, JSON.stringify({ summary: "The room leans up and waits for a confirmed buy.", bias: "BULLISH", reasons: ["No confirmation yet."], dissent: [] }), "ok");
+
+  const done = await deliver({ kind: "h1_room", event_id: "h1_room:" + key, candle_key: key, enqueued_at: new Date().toISOString() });
+  assert.equal(done.acked, true, JSON.stringify(done.retried));
+  assert.equal(prompts.filter(p => /You are the Reasoner/.test(p.text)).length, 1, "the Reasoner decides right after the room");
+  assert.equal(db.prepare("SELECT status FROM analysis_runs WHERE candle_key = ?").get(key).status, "complete");
+  const synth = JSON.parse(db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ?").get(key).ai_analysis);
+  assert.equal(synth.consensus.status, "concluded");
+  assert.ok(Number.isFinite(synth.consensus.decided_after_close_s), "the decision records how long after the close it came");
+  assert.equal(env.SIGNAL_CACHE.map.has("h1room:lock:" + key), false, "the room's hold is released");
+});

@@ -34,6 +34,31 @@ export const H1_REASONER_GIVE_UP_MS = 2 * 60 * 60 * 1000;
 /** How far back the sweep looks for bars awaiting their decision. */
 export const H1_PENDING_LOOKBACK_MS = 4 * 60 * 60 * 1000;
 
+/**
+ * The 1H room right after the close (owner request 2026-11-07: a faster H1 decision). When the
+ * evidence is parked, an `h1_room` queue task runs the 1H War Room at once instead of waiting for
+ * the next sweep (cron :10, :25, :40, :55) and its 20-minute HUD wait. The task waits for the bar's
+ * HUD snapshot until H1_ROOM_HUD_WAIT_MS after the close (retried every minute), then runs with
+ * whatever is there; a snapshot that arrives later re-convenes the room (#hud), but the decision
+ * already written stays. The sweep remains the fallback, and skips a bar whose room the task holds.
+ */
+export const H1_ROOM_HUD_WAIT_MS = 5 * 60 * 1000;
+export const H1_ROOM_RETRY_S = 60;
+export const H1_ROOM_LOCK_PREFIX = "h1room:lock:";
+export const H1_ROOM_LOCK_TTL_S = 7 * 60;
+
+export function buildH1RoomTask({ candleKey, enqueuedAt = new Date().toISOString() } = {}) {
+  if (!h1BarTimes(candleKey)) throw new TypeError("h1 room task requires an H1 candle key");
+  return { kind: "h1_room", event_id: `h1_room:${candleKey}`, candle_key: candleKey, enqueued_at: enqueuedAt };
+}
+
+/** "run" when the HUD snapshot is there or its wait is over, else "wait_for_hud". */
+export function h1RoomGate({ candleKey, now, hudReady }) {
+  const t = h1BarTimes(candleKey);
+  if (!t || hudReady) return "run";
+  return now - t.close >= H1_ROOM_HUD_WAIT_MS ? "run" : "wait_for_hud";
+}
+
 const H1_MS = 3600_000;
 const DIRECTION = { BUY: 1, SELL: -1 };
 const BIAS_SIGN = { BULLISH: 1, BEARISH: -1, NEUTRAL: 0 };
@@ -140,8 +165,9 @@ export function reasonerUnavailableDecision() {
 }
 
 /** A compact record of the consensus the decision came from, kept in the synthesis. */
-export function consensusSummary(consensus, { overridden = false } = {}) {
+export function consensusSummary(consensus, { overridden = false, decidedAfterCloseS = null } = {}) {
   return {
+    decided_after_close_s: decidedAfterCloseS,
     status: consensus.status, bar_open: consensus.bar_open, agents_spoke: consensus.agents_spoke, roster_size: consensus.roster_size,
     room_bias: consensus.room_bias, conclusion: consensus.conclusion ? { stance: consensus.conclusion.stance, bias: consensus.conclusion.bias, confidence: consensus.conclusion.confidence, summary: consensus.conclusion.summary } : null,
     guard_overridden: overridden
