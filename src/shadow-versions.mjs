@@ -133,12 +133,15 @@ export const CONTROLS = Object.freeze(Object.keys(ENGINE_FAMILIES).map((family) 
  * hold" with it. These candidates expire the latch sooner. They are local-only (option
  * b, RFC §4.3); whether a promotion also needs a Pine candidate is owner decision 1.
  */
-const latch = (family, bars, param, review) => Object.freeze({
+const latch = (family, bars, param, review, origin = null) => Object.freeze({
   id: `${family}@latch${bars}`, family, role: "candidate", timeframe: "60", reference: "none",
   params: Object.freeze({ [param]: bars }),
   change: `the ±3 structure latch expires after ${bars} closed H1 bars instead of 50`,
-  review: Object.freeze(review)
+  review: Object.freeze(review),
+  ...(origin ? { origin: Object.freeze(origin) } : {})
 });
+/** The latch candidate builder, for candidates a person approved in Aether (src/aether-pack.mjs). */
+export const latchCandidate = latch;
 /** Decisive pairs (bars where exactly one of candidate and control is right) a review needs. */
 export const REVIEW_MIN_DECISIVE_PAIRS = 30;
 // P5 review (owner decision 2026-11-07): keep prophet_r37@latch8 until 30 decisive pairs or
@@ -418,7 +421,7 @@ async function buildShadowView(env, { days, now, candidates }) {
       };
       const better = criteria.higher_outcome_score === true && criteria.no_new_stuck_states === true;
       entry.candidates.push({
-        id: cand.id, change: cand.change, params: cand.params, reference: cand.reference ?? "none", lifecycle: "candidate (shadow)",
+        id: cand.id, change: cand.change, params: cand.params, reference: cand.reference ?? "none", lifecycle: "candidate (shadow)", origin: cand.origin ?? null,
         same_bars: shared.length, differing_stances: differ,
         paired: { candidate_better: wins, control_better: losses, p_value: pValue, significance: SHADOW_SIGNIFICANCE },
         scored: mine, control_on_same_bars: theirs,

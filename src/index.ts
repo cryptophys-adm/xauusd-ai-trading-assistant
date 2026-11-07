@@ -44,6 +44,8 @@ export interface Env {
   AETHER?: {
     ingestCards(cards: unknown[]): Promise<{ accepted: number; rejected: Array<{ card_id: string | null; errors: string[] }>; truncated: number }>;
     canonInfo(): Promise<Record<string, unknown>>;
+    // Phase A7: the items a person approved for shadow testing (never a live prompt).
+    learnedPack(): Promise<Record<string, unknown>>;
   };
   XAUUSD_EVENTS: Queue<QueueTask>;
   INGEST_URL?: string;
@@ -166,6 +168,7 @@ import { readStrategy } from "./strategy-engine.mjs";
 import { runSignalLedger, readLedger } from "./signal-ledger.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus } from "./aether-push.mjs";
+import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
@@ -2073,7 +2076,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/aether/status") {
     // Aether A5: the push ledger of decision cards sent to cryptophys-aether (no card content).
     try {
-      return dashboardJson({ status: "ok", aether: await aetherPushStatus(env) });
+      return dashboardJson({ status: "ok", aether: { ...(await aetherPushStatus(env)), learned_pack: await packStatus(env) } });
     } catch (error) {
       console.error("aether_status_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
@@ -2158,7 +2161,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/shadow-versions") {
     try {
       const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") || "30") || 30));
-      return dashboardJson({ status: "ok", ...(await readShadowVersions(env, { days })) });
+      return dashboardJson({ status: "ok", ...(await readShadowVersions(env, { days, candidates: await shadowCandidates(env) })) });
     } catch (error) {
       console.error("shadow_versions_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
@@ -2418,7 +2421,13 @@ export default {
         // RFC_INDICATOR_AGENT_PLATFORM P3: shadow versions, once an hour (first sweep after the
         // H1 close). Computed and scored only; never shown in a room or used by a decision.
         if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) {
-          try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env))); }
+          // Aether A7: pull the learned pack first; approved parameter candidates in TUNING_GRID run
+          // as extra shadow versions (scored only, never in a room). Non-fatal.
+          try {
+            const pulled = await pullLearnedPack(env);
+            if (pulled.status !== "disabled" && (pulled.status !== "ok" || pulled.changed)) console.log("aether_pack", JSON.stringify(pulled));
+          } catch (e) { console.error("aether_pack_failed", e instanceof Error ? e.message : String(e)); }
+          try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env, { candidates: await shadowCandidates(env) }))); }
           catch (e) { console.error("shadow_versions_failed", e instanceof Error ? e.message : String(e)); }
         }
         // Signal Ledger (owner request 2026-11-07): new H1 decisions and strategy setups, each
