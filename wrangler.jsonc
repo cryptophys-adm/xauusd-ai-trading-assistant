@@ -36,9 +36,11 @@
     }
   ],
   "vars": {
-    "AI_MODEL_ANALYST": "@cf/zai-org/glm-4.7-flash",
-    "AI_MODEL_COUNSELOR": "@cf/zai-org/glm-5.3-flash",
-    "AI_MODEL_REASONER": "@cf/nvidia/nemotron-3-120b-a12b",
+    // Model migration (owner decision 2026-11-07): glm-5.3-flash and nemotron-3-120b-a12b stop
+    // answering on 2026-11-20. The news chain and the H1 Reasoner run on gpt-oss-120b.
+    "AI_MODEL_ANALYST": "@cf/openai/gpt-oss-120b",
+    "AI_MODEL_COUNSELOR": "@cf/openai/gpt-oss-120b",
+    "AI_MODEL_REASONER": "@cf/openai/gpt-oss-120b",
     "REQUIRED_SOURCES": "prophet_r38,prophet_r37_ssot,gmi_v12_70",
     // Only H1 webhooks start the AI chain; 5m/15m comparator webhooks are stored for parity only.
     "ANALYSIS_TIMEFRAMES": "60",
@@ -51,8 +53,12 @@
     // Shadow/advisory only: none of them writes into the H1 chain's evidence, prompts or decision.
     "MULTI_AGENT_BUS_ENABLED": "true",
     "MULTI_AGENT_MAX_CALLS_PER_HOUR": "20",
-    "MULTI_AGENT_MODEL": "@cf/zai-org/glm-5.3-flash",
-    "MULTI_AGENT_FALLBACK_MODEL": "@cf/zai-org/glm-4.7-flash",
+    // Per-role models (owner decision 2026-11-07): room agents on gemma-4 (thinking off),
+    // moderators and the News Daily TLDR on gpt-oss-120b; each role with its own fallback.
+    "ROOM_AGENT_MODEL": "@cf/google/gemma-4-26b-a4b-it",
+    "ROOM_AGENT_FALLBACK_MODEL": "@cf/openai/gpt-oss-20b",
+    "MODERATOR_MODEL": "@cf/openai/gpt-oss-120b",
+    "MODERATOR_FALLBACK_MODEL": "@cf/google/gemma-4-26b-a4b-it",
     "LIVE_ROOM_ENABLED": "true",
     // On in production by owner decision (2026-11-05), after the preview-e2e proof of C5 and C6.
     "HUD_AGENTS_ENABLED": "true",
@@ -80,9 +86,9 @@
   ],
   "previews": {
     "vars": {
-      "AI_MODEL_ANALYST": "@cf/zai-org/glm-4.7-flash",
-      "AI_MODEL_COUNSELOR": "@cf/google/gemma-4-26b-a4b-it",
-      "AI_MODEL_REASONER": "@cf/nvidia/nemotron-3-120b-a12b",
+      "AI_MODEL_ANALYST": "@cf/openai/gpt-oss-120b",
+      "AI_MODEL_COUNSELOR": "@cf/openai/gpt-oss-120b",
+      "AI_MODEL_REASONER": "@cf/openai/gpt-oss-120b",
       "REQUIRED_SOURCES": "prophet_r38,prophet_r37_ssot,gmi_v12_70",
       "INGEST_URL": "https://xauusd-fundamental-news-ingestion-preview.workers.dev"
     },

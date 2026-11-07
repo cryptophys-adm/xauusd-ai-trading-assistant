@@ -6,6 +6,25 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(models): the model migration (owner decision 2026-11-07: "as recommended").
+  - **Why:** Workers AI retires `@cf/zai-org/glm-5.3-flash` and `@cf/nvidia/nemotron-3-120b-a12b` on 2026-11-20 (changelog 2026-11-05: HTTP 410, error 5028; first announced for 2026-11-15). glm-5.3-flash was also paid and limited to 20 requests a minute per account, the main source of the rooms' 3021 errors.
+  - **Roles:**
+    - Room agents: gemma-4-26b-a4b-it with thinking off (fallback gpt-oss-20b).
+    - Moderators and the News Daily TLDR: gpt-oss-120b (fallback gemma-4).
+    - News chain and the H1 Reasoner: gpt-oss-120b.
+    - New per-role variables: `ROOM_AGENT_MODEL`, `ROOM_AGENT_FALLBACK_MODEL`, `MODERATOR_MODEL`, `MODERATOR_FALLBACK_MODEL`.
+  - **Change to the recommendation:** it kept Nemotron as the Reasoner, but Nemotron is on the same retirement list, so the Reasoner moves to gpt-oss-120b too.
+  - **Request forms per model family** (`modelRequests`, `runModel`): a form the model rejects falls back to the next one. `extractModelText` reads the Responses API shape of gpt-oss.
+  - **Rooms:** they now use each role's fallback. Before, they ran on the primary only, to avoid the paid, slow glm-4.7 fallback. A pinned primary failure belongs to the failed model only.
+  - **preview-e2e:** it asserts the role models. A preview-only `/preview/reasoner-probe` proves the Reasoner model.
+  - **First preview-e2e run:**
+    - It passed the Reasoner probe (gpt-oss-120b, first request form, 1.4 s), the news thread and the first War Room.
+    - The second War Room's gpt-oss-120b conclusion was rejected. Most likely cause: gpt-oss names agents by id (`trade_management`), which the natural-language rule reads as a field name.
+    - Fixes:
+      - Bus agent ids in a moderator's text and in rebuttals are now written as the agents' names before validation.
+      - A fourth reason is dropped instead of failing the conclusion.
+      - A moderator answer that is still rejected after its correction is asked once from the moderator's fallback model.
+      - A conclusion that failed now shows its errors, model and raw text in the room API.
 - feat(h1): the Reasoner decides the H1 bar last, from the 1H War Room's Consensus Discussion; the Analyst, the Counselor and the old H1 bus are retired (owner decision 2026-11-07).
   - **Why:** the chain decided at the close, before any discussion, so the decision was ambiguous and almost always WAIT. The Analyst and the Counselor ran only in the background (no screen showed their output). In the last 32 production runs the Counselor returned no answer every time, and the Analyst 7 times.
   - **Flow:** complete evidence is parked at the close (no model call). The 1H War Room meets: bus, Consensus Discussion, conclusion. The Reasoner then decides when the room concludes, or 45 minutes after the close at the latest with whoever spoke. Degraded evidence is still a fail-closed WAIT at once.

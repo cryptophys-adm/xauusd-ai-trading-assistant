@@ -95,7 +95,8 @@ test("every agent opens on the bus, the minority and the Risk Manager rebut, the
   assert.equal(room.conclusion.majority, "WAIT");
   assert.equal(room.h1.decision, "WAIT");
   assert.equal(ai.calls.length, 6 + 3 + 1);
-  assert.ok(ai.calls.every(c => c.model === "@cf/zai-org/glm-5.3-flash"), "primary model only");
+  // Per-role models (owner decision 2026-11-07): the agents on gemma-4, the moderator on gpt-oss-120b.
+  assert.deepEqual(ai.calls.map(c => c.model).sort(), [...Array(9).fill("@cf/google/gemma-4-26b-a4b-it"), "@cf/openai/gpt-oss-120b"].sort(), "each role on its primary model");
 
   // Openings stay inside their own role: the HUD agent sees only its HUD reading.
   const kinetic = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content));
@@ -498,4 +499,15 @@ test("TLDR for the right panel: H1 decision with the bus consensus, and the late
   assert.deepEqual([t.h1.decision, t.h1.consensus.summary], ["WAIT", "Both agents wait."]);
   assert.match(t.h1.tldr, /GMI blocks/);
   assert.equal(t.news, null);
+});
+
+test("a moderator that names agents by their ids is read with their names; a fourth reason is dropped (preview-e2e 2026-11-07, gpt-oss-120b)", async () => {
+  const { validateConclusion, agentIdsToNames } = await import("../src/war-room.mjs");
+  const o = { stance: "WAIT", bias: "NEUTRAL", confidence: 0.6, summary: "The room waits: trade_management sees no ready setup.", reasons: ["kinetic_engine reads an orderly regime.", "No entry is confirmed.", "Volatility is normal.", "A fourth reason."], dissent: [] };
+  const r = validateConclusion(o, "WAIT", ["trade_management", "kinetic_engine", "risk"]);
+  assert.equal(r.valid, true, JSON.stringify(r.errors));
+  assert.match(o.summary, /Trade Management sees no ready setup/);
+  assert.equal(o.reasons.length, 3);
+  assert.match(o.reasons[0], /^Kinetic Engine/);
+  assert.equal(agentIdsToNames({ summary: "per h1.decision_field" }, ["risk"]).summary, "per h1.decision_field", "other code-like text is untouched (and still rejected)");
 });

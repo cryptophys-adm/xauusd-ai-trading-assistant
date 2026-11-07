@@ -3,7 +3,7 @@ import { buildEvidenceFusion, indicatorPayloadsFromLocal, analysisAllowedForTime
 import { validateM5Context, freshM5Context } from "./m5-context.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { parseTradingViewJson } from "./tradingview-json.mjs";
-import { chatMessages, cleanModelText, extractJsonObject, extractModelText, MAX_TOKENS } from "./model-text.mjs";
+import { chatMessages, cleanModelText, extractJsonObject, extractModelText, MAX_TOKENS, runModel } from "./model-text.mjs";
 import { knowledgeForPrompt } from "./knowledge-prompt.mjs";
 
 // knowledge-base v4 is generated from the Pine SSOT sources and bundled with the Worker
@@ -53,6 +53,10 @@ export interface Env {
   MULTI_AGENT_MAX_CALLS_PER_HOUR?: string;
   MULTI_AGENT_MODEL?: string;
   MULTI_AGENT_FALLBACK_MODEL?: string;
+  ROOM_AGENT_MODEL?: string;
+  ROOM_AGENT_FALLBACK_MODEL?: string;
+  MODERATOR_MODEL?: string;
+  MODERATOR_FALLBACK_MODEL?: string;
   LIVE_ROOM_ENABLED?: string;
   LIVE_ROOM_MAX_CALLS_PER_HOUR?: string;
   WAR_ROOM_ENABLED?: string;
@@ -181,6 +185,14 @@ function safeKeyPart(value: string): string {
 // reconcileLocalComputation now lives in ./parity-sweep.mjs (shared by the queue
 // tasks and the scheduled parity sweep); OBSERVED_PREFIX and LOCAL_TTL come from
 // there too so the lane's KV layout has a single owner.
+
+/**
+ * One chat call in the request form of its model family (model-text.mjs modelRequests): gpt-oss
+ * takes reasoning_effort (or the Responses form), gemma-4 runs with thinking off.
+ */
+async function aiRun(env: Env, model: string, opts: { messages: unknown[]; maxTokens: number; effort?: string }): Promise<unknown> {
+  return (await runModel(env.AI as unknown as { run: (model: string, input: unknown) => Promise<unknown> }, model, opts)).result;
+}
 
 function extractText(result: unknown): string {
   return cleanModelText(extractRawText(result));
@@ -384,7 +396,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.conversation.id": traceConversationId,
       "gen_ai.request.model": String(env.AI_MODEL_ANALYST as keyof AiModels)
     });
-    return env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
+    return aiRun(env, env.AI_MODEL_ANALYST, {
     messages: chatMessages([
       "You are the Fundamental News Analyst for XAUUSD decision support.",
       "Analyze only the supplied news articles. Do not infer current price action, technical indicators, or unpublished facts.",
@@ -393,9 +405,9 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "Do not produce entry, stop-loss, take-profit, position size, or a technical BUY/SELL order.",
       "NEWS EVIDENCE:", JSON.stringify(evidence)
     ]),
-    max_tokens: MAX_TOKENS.analyst,
-    temperature: 0.1
-  } as never); });
+    maxTokens: MAX_TOKENS.analyst,
+    effort: "low"
+  }); });
   const analystText = extractText(analystResult);
 
   const counselorResult = await tracing.enterSpan("chat", async (span) => {
@@ -406,7 +418,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.conversation.id": traceConversationId,
       "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR as keyof AiModels)
     });
-    return env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
+    return aiRun(env, env.AI_MODEL_COUNSELOR, {
     messages: chatMessages([
       "You are the Fundamental News Counselor.",
       "Use only the news evidence and analyst output. Provide balanced conditional scenarios, not trade execution instructions.",
@@ -415,9 +427,9 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "NEWS EVIDENCE:", JSON.stringify(evidence),
       "ANALYST:", analystText
     ]),
-    max_tokens: MAX_TOKENS.counselor,
-    temperature: 0.1
-  } as never); });
+    maxTokens: MAX_TOKENS.counselor,
+    effort: "low"
+  }); });
   const counselorText = extractText(counselorResult);
 
   const reasonerResult = await tracing.enterSpan("chat", async (span) => {
@@ -428,7 +440,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.conversation.id": traceConversationId,
       "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
     });
-    return env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
+    return aiRun(env, env.AI_MODEL_REASONER, {
     messages: chatMessages([
       "You are the final Fundamental News Reasoner for XAUUSD decision support.",
       "Synthesize only the supplied article evidence, analyst output, and counselor output. This is a fundamental outlook, not a technical trade signal.",
@@ -440,9 +452,9 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "ANALYST:", analystText,
       "COUNSELOR:", counselorText
     ]),
-    max_tokens: MAX_TOKENS.reasoner,
-    temperature: 0.1
-  } as never); });
+    maxTokens: MAX_TOKENS.reasoner,
+    effort: "medium"
+  }); });
   const reasonerText = extractText(reasonerResult);
 
   let recommendation: JsonObject;
@@ -930,11 +942,11 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
           "gen_ai.conversation.id": candleKey,
           "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
         });
-        return env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
+        return aiRun(env, env.AI_MODEL_REASONER, {
           messages: chatMessages(reasonerLines({ evidence, consensus, laneRule: laneRule(parked.local_primary !== false), decisionTextRule: DECISION_TEXT_RULE, tradePlanRule: TRADE_PLAN_RULE })),
-          max_tokens: MAX_TOKENS.reasoner,
-          temperature: 0.1
-        } as never);
+          maxTokens: MAX_TOKENS.reasoner,
+          effort: "medium"
+        });
       });
       reasonerText = extractText(result);
       const guarded = consensusGuard(parseDecision(reasonerText), consensus);
@@ -1291,7 +1303,7 @@ async function runAnalysisFromBundle(
         "gen_ai.conversation.id": bundle.request_id,
         "gen_ai.request.model": String(env.AI_MODEL_ANALYST)
       });
-      return env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
+      return aiRun(env, env.AI_MODEL_ANALYST, {
       messages: chatMessages([
         "You are the Analyst stage in an XAUUSD decision-support pipeline.",
         "Classify the supplied indicator evidence without inventing missing values or prices.",
@@ -1307,9 +1319,9 @@ async function runAnalysisFromBundle(
         "POLICY:",
         knowledge
       ]),
-      max_tokens: MAX_TOKENS.analyst,
-      temperature: 0.1
-    } as never);
+      maxTokens: MAX_TOKENS.analyst,
+      effort: "low"
+    });
     });
     analystText = extractText(analystResult);
 
@@ -1321,7 +1333,7 @@ async function runAnalysisFromBundle(
         "gen_ai.conversation.id": bundle.request_id,
         "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR)
       });
-      return env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
+      return aiRun(env, env.AI_MODEL_COUNSELOR, {
       messages: chatMessages([
         "You are the Counselor stage in an XAUUSD decision-support pipeline.",
         "Use only the JSON evidence and analyst output below. Do not invent prices or indicator definitions.",
@@ -1338,9 +1350,9 @@ async function runAnalysisFromBundle(
         "ANALYST:",
         analystText
       ]),
-      max_tokens: MAX_TOKENS.counselor,
-      temperature: 0.1
-    } as never);
+      maxTokens: MAX_TOKENS.counselor,
+      effort: "low"
+    });
     });
     counselorText = extractText(counselorResult);
 
@@ -1352,7 +1364,7 @@ async function runAnalysisFromBundle(
         "gen_ai.conversation.id": bundle.request_id,
         "gen_ai.request.model": String(env.AI_MODEL_REASONER)
       });
-      return env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
+      return aiRun(env, env.AI_MODEL_REASONER, {
       messages: chatMessages([
         "You are the final Deep Reasoner stage for XAUUSD decision support.",
         "Use only the supplied evidence, analyst output, and counselor output. Do not invent market prices or claim the models verified facts they did not receive.",
@@ -1371,9 +1383,9 @@ async function runAnalysisFromBundle(
         "COUNSELOR:",
         counselorText
       ]),
-      max_tokens: MAX_TOKENS.reasoner,
-      temperature: 0.1
-    } as never);
+      maxTokens: MAX_TOKENS.reasoner,
+      effort: "medium"
+    });
     });
     reasonerText = extractText(reasonerResult);
     decision = await plainDecision(env, parseDecision(reasonerText));
@@ -2208,6 +2220,31 @@ export default {
       ).bind(analysisKey, now, now, 2, JSON.stringify(evidence), "preview fixture", "preview fixture", "Preview fixture reasoner: wait for technical confirmation.", JSON.stringify(recommendation)).run();
       await enqueueNewsThread(env, analysisKey);
       return json({ status: "ok", analysis_key: analysisKey, thread_id: "news:" + analysisKey }, 202);
+    }
+    if (request.method === "POST" && url.pathname === "/preview/reasoner-probe") {
+      // Preview only (PREVIEW_FIXTURES_ENABLED): one call in the H1 Reasoner's request form, so
+      // preview-e2e proves the Reasoner model (model migration 2026-11-07) before production.
+      if (String(env.PREVIEW_FIXTURES_ENABLED || "false") !== "true") return json({ error: "Not found" }, 404);
+      if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
+        return json({ error: "Unauthorized" }, 401);
+      }
+      const t0 = Date.now();
+      try {
+        const { result, variant } = await runModel(env.AI as unknown as { run: (model: string, input: unknown) => Promise<unknown> }, env.AI_MODEL_REASONER, {
+          messages: chatMessages([
+            "You are the Reasoner of an XAUUSD advisory test. Use only the data below.",
+            "The 1H War Room concluded WAIT with a NEUTRAL bias and no confirmed signal.",
+            "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning.",
+            "Set prices to null without exact price evidence. Never imply automatic execution."
+          ]),
+          maxTokens: MAX_TOKENS.reasoner,
+          effort: "medium"
+        });
+        const text = extractText(result);
+        return json({ status: "ok", model: env.AI_MODEL_REASONER, request_form: variant, latency_ms: Date.now() - t0, decision: parseDecision(text), text: text.slice(0, 600) });
+      } catch (error) {
+        return json({ status: "error", model: env.AI_MODEL_REASONER, latency_ms: Date.now() - t0, error: error instanceof Error ? error.message.slice(0, 300) : String(error) }, 502);
+      }
     }
     if (url.pathname === "/news/analyze" && request.method === "POST") {
       if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {

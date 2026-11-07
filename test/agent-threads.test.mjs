@@ -7,7 +7,9 @@ import {
   isFifteenMinuteClose, buildFifteenMinuteCandles
   , runHudAgents, readH1Thread as readH1ThreadForHud, hudEvidenceLines, validateHudAgent, buildHudAgentsTask
 } from "../src/agent-threads.mjs";
-import { BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL } from "../src/multi-agent-bus.mjs";
+import { BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL, MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_FALLBACK_MODEL } from "../src/multi-agent-bus.mjs";
+// Per-role models (owner decision 2026-11-07): agents on the room agent model, the moderator on its own.
+const modelsOf = (calls) => calls.map(c => c.model).sort();
 
 function fakeD1() {
   const db = new DatabaseSync(":memory:");
@@ -105,7 +107,7 @@ test("news thread: post + 5 nested replies, round 2 answers the other agent", as
   const result = await runNewsThread(e, { analysis_key: NEWS_KEY });
   assert.equal(result.status, "complete");
   assert.equal(e.AI.calls.length, 5);
-  assert.ok(e.AI.calls.every(c => c.model === BUS_DEFAULT_MODEL));
+  assert.deepEqual(modelsOf(e.AI.calls), [...Array(4).fill(BUS_DEFAULT_MODEL), MODERATOR_DEFAULT_MODEL].sort(), "four agent steps, one moderator");
   const thread = await readThread(e.DB, `news:${NEWS_KEY}`);
   assert.equal(thread.title, "Fed holds rates");
   assert.deepEqual(thread.post.headlines, ["Fed holds rates", "Dollar slips"]);
@@ -144,12 +146,12 @@ test("news thread: unknown analysis does nothing", async () => {
   assert.equal(e.AI.calls.length, 0);
 });
 
-test("live room: technical, risk (reply to technical), moderator; primary model only", async () => {
+test("live room: technical, risk (reply to technical), moderator; each on its role's primary model", async () => {
   const e = env();
   const result = await runLiveRoomBar(e, { bar_time: BAR });
   assert.equal(result.status, "complete");
   assert.equal(e.AI.calls.length, 3);
-  assert.ok(e.AI.calls.every(c => c.model === BUS_DEFAULT_MODEL));
+  assert.deepEqual(modelsOf(e.AI.calls), [BUS_DEFAULT_MODEL, BUS_DEFAULT_MODEL, MODERATOR_DEFAULT_MODEL].sort());
   const items = await readLive(e.DB, {});
   assert.deepEqual(items.map(m => m.step), ["technical", "risk", "moderator"]);
   assert.equal(items[1].parent_id, items[0].id);
@@ -169,10 +171,13 @@ test("live room: technical, risk (reply to technical), moderator; primary model 
   assert.doesNotMatch(prompts, /tradingview_reading/, "no snake_case key the model could echo into its text");
 });
 
-test("live room never uses the paid fallback model", async () => {
+test("live room: a failing model falls back to its role's fallback; both failing records agent_failed", async () => {
+  // The glm-4.7 fallback was paid and slow, so the room ran primary only; the per-role fallbacks
+  // (owner decision 2026-11-07) are free-plan models.
   const e = env({ AI: fakeAI(() => new Error("primary down")) });
   await runLiveRoomBar(e, { bar_time: BAR });
-  assert.ok(e.AI.calls.every(c => c.model !== BUS_DEFAULT_FALLBACK_MODEL));
+  assert.ok(e.AI.calls.some(c => c.model === BUS_DEFAULT_FALLBACK_MODEL), "the agents try their fallback");
+  assert.ok(e.AI.calls.some(c => c.model === MODERATOR_DEFAULT_FALLBACK_MODEL || c.model === MODERATOR_DEFAULT_MODEL));
   const items = await readLive(e.DB, {});
   assert.ok(items.every(m => m.status === "agent_failed"));
 });
@@ -315,13 +320,14 @@ test("a correction that still reads like code stays invalid_output; schema error
   await runLiveRoomBar(e, { bar_time: BAR });
   const mod = (await readLive(e.DB, {})).find(m => m.step === "moderator");
   assert.equal(mod.status, "invalid_output");
-  assert.equal(mod.corrections, 1);
-  assert.equal(e.AI.calls.length, 4, "exactly one correction attempt");
+  assert.equal(mod.corrections, 2, "one correction, then one answer from the moderator's fallback model");
+  assert.equal(e.AI.calls.length, 5, "exactly one correction attempt and one fallback attempt");
+  assert.deepEqual(e.AI.calls.slice(2).map(c => c.model), [MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_FALLBACK_MODEL]);
 
   resetThreadSchemaCacheForTests();
   const e2 = env({ AI: fakeAI(({ sys }) => /moderator of a live/i.test(sys) ? { stance: "LONG", confidence: 0.6, summary: "Plain words." } : undefined) });
   await runLiveRoomBar(e2, { bar_time: BAR });
-  assert.equal(e2.AI.calls.length, 3, "a schema error is not retried");
+  assert.equal(e2.AI.calls.length, 4, "a schema error gets no correction, only the moderator's fallback model once");
 });
 
 // C0 step 4: the 5m read is VERIFIED only while prophet_m5 and gmi_m5 are parity-approved.
@@ -465,7 +471,7 @@ test("HUD agents: one post per computed HUD, then a moderator; each sees only it
   assert.equal(result.status, "complete");
   assert.equal(result.answered, 2, "tactical_muscles has no reading and is skipped");
   assert.equal(e.AI.calls.length, 3);
-  assert.ok(e.AI.calls.every(c => c.model === BUS_DEFAULT_MODEL), "primary model only");
+  assert.deepEqual(modelsOf(e.AI.calls), [BUS_DEFAULT_MODEL, BUS_DEFAULT_MODEL, MODERATOR_DEFAULT_MODEL].sort(), "each role on its primary model");
   const prophetPrompt = e.AI.calls[0].request.messages.map(m => m.content).join("\n");
   assert.match(prophetPrompt, /You are Prophet/);
   assert.match(prophetPrompt, /Verified by parity: Prophet's structure/);
