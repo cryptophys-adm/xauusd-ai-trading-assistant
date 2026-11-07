@@ -62,7 +62,4 @@ reports to the owner.
 10. **The Grid Bot Protocol HUD** (owner, 2026-11-05).
    - It is the only HUD that is not computed (`not_computed`).
    - It can be ported from the Pine source, but its statements stay "not yet calibrated" until a Pine candidate comparator exists.
-11. **P2: indicator manifests and registry** (RFC_INDICATOR_AGENT_PLATFORM §9).
-    - Manifests wrap the existing engines and HUDs without changing the hashed files. The rosters, readings and agent families (today a table in `src/reputation.mjs`) are generated from them.
-    - `GET /api/indicator-agents` is added.
-12. **P6: Supertrend, then Order Block.** The first new indicator agents through the manifest path (owner decision 4, 2026-11-07: Supertrend first). This needs P2.
+11. **P6: Supertrend, then Order Block.** The first new indicator agents through the manifest path (owner decision 4, 2026-11-07: Supertrend first). P2 shipped on 2026-11-07, so nothing blocks it.

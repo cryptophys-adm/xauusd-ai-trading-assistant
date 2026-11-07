@@ -164,6 +164,7 @@ import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRo
 import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { warRoomEnabled, runWarRoomBar, readWarRoom, readTldr, agentName } from "./war-room.mjs";
 import { reputationOf, familyOf, REPUTATION_VERSION, REPUTATION_PRIOR, WEIGHT_RANGE } from "./reputation.mjs";
+import { indicatorAgents } from "./indicator-registry.mjs";
 import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, SCORING, SCORING_VERSION } from "./outcome-scoring.mjs";
 import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
@@ -2092,6 +2093,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "ok", enabled: tfThreadsEnabled(env), thread });
     } catch (error) {
       console.error("tf_thread_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/indicator-agents") {
+    // P2 (RFC_INDICATOR_AGENT_PLATFORM §9): every indicator agent's manifest with its live state.
+    try {
+      return dashboardJson({ status: "ok", ...(await indicatorAgents(env)) });
+    } catch (error) {
+      console.error("indicator_agents_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
     }
   }

@@ -591,6 +591,10 @@ jobs:
           const scorecardsBody = await scorecardsResponse.json();
           assert.equal(scorecardsResponse.status, 200, "scorecards are served");
           assert.ok(Array.isArray(scorecardsBody.reputation?.rooms?.["15m"]) && Array.isArray(scorecardsBody.reputation?.rooms?.["1H"]), "the room agents' track records are served (P7)");
+          const agentsResponse = await fetch(base + "/api/indicator-agents");
+          const agentsBody = await agentsResponse.json();
+          assert.equal(agentsResponse.status, 200, "the indicator registry is served (P2)");
+          assert.ok(agentsBody.agents.some(a => a.id === "prophet_r38" && a.kind === "engine") && agentsBody.agents.some(a => a.kind === "hud"), "manifests for engines and HUD agents");
           const legacyDashboard = await fetch(base + "/dashboard", { redirect: "manual" });
           assert.equal(legacyDashboard.status, 302, "the old debate/raw dashboard redirects to Nexus");
 
