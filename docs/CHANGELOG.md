@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-06
 
+- fix(key-levels): each Camarilla level, pivot and CPR edge counts once, from the freshest snapshot. In production at 23:56 the D1 snapshot (still from 5 November) put a second "daily Camarilla L3" beside the current one, which inflated the source count of daily zones.
 - feat(nexus): Key Level Agent zones on the chart; a candidate needs three sources and medium strength (owner decision 2026-11-06).
   - **Candidates:** a candidate now needs 3+ independent sources and a score of at least 3 (medium). At two sources, production marked 14 of 18 zones; now 9 of 18.
   - **Chart:** the price chart draws the candidate zones as bands behind the candles, coloured by role and shaded by strength. It also draws the strategy plan's entry, stop, TP1 and TP2 as price lines, with the RRR on the axis label. A "Zones" button toggles them.
