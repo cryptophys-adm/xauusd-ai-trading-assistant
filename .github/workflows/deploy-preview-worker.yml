@@ -629,7 +629,10 @@ jobs:
           while (Date.now() < hudDeadline) {
             const r = await pollFetch(base + "/api/hud/" + encodeURIComponent(key60));
             if (r.ok) hudReading = (await r.json()).hud;
-            if (hudReading?.verified_against_approved_record === true) break;
+            // KV is eventually consistent per key: wait until the prophet trusted copy is visible too (the gmi one can
+            // show first), before checking which Prophet lines it verifies.
+            const verifiedOf = (id) => (hudReading?.readings?.[id]?.lines || []).filter(l => l.verified).length;
+            if (hudReading?.verified_against_approved_record === true && verifiedOf("prophet") > 0) break;
             await new Promise(resolve => setTimeout(resolve, 5000));
           }
           assert.equal(hudReading?.verified_against_approved_record, true, "H1 HUD readings are verified against the approved local record");
