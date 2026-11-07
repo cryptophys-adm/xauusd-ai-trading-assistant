@@ -91,3 +91,11 @@ test("Nexus reaches the AI Worker only through its AI_WORKER Service Binding, ne
   assert.doesNotMatch(src, /await fetch\(AI_WORKER_BASE/, "no public fetch of the AI Worker");
   for (const doc of ["docs/SSOT.md", "AGENTS.md"]) assert.ok(read(path.join(ROOT, doc)).includes("AI_WORKER"), `${doc} must document the Nexus -> AI Worker binding`);
 });
+
+test("the AI Worker and Nexus have no public workers.dev or preview URL (owner, 2026-11-07)", () => {
+  for (const rel of ["wrangler.jsonc", "workers/xauusd-nexus-dashboard/wrangler.jsonc"]) {
+    const text = read(path.join(ROOT, rel));
+    assert.match(text, /"workers_dev":\s*false/, `${rel} must disable workers.dev`);
+    assert.match(text, /"preview_urls":\s*false/, `${rel} must disable preview URLs`);
+  }
+});
