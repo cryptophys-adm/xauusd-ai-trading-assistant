@@ -523,3 +523,33 @@ test("P7: the Live War Room moderator gets the crowd line; the room carries it a
   assert.equal(room.crowd.stances.SELL, 1);
   assert.ok(room.reputation.moderator && room.reputation.risk);
 });
+
+test("an opening that talks about calibration gets one soft correction; it is never rejected for it", async () => {
+  const ai = fakeAI();
+  const run0 = ai.run;
+  const asked = new Map();
+  ai.run = async (model, request) => {
+    const user = request.messages[1].content;
+    const agent = (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1];
+    const isOpening = !/moderator of the XAUUSD Live War Room|Consensus Discussion/.test(request.messages[0].content);
+    if (isOpening && (agent === "technical" || agent === "risk")) {
+      const n = (asked.get(agent) || 0) + 1;
+      asked.set(agent, n);
+      if (n === 2) assert.match(request.messages.at(-1).content, /never mention it/);
+      // technical fixes its wording on the correction; risk keeps talking about parity.
+      const claim = n === 1 || agent === "risk" ? "My data is parity-verified and shows no trigger." : "My data shows no trigger on this candle.";
+      return { choices: [{ message: { content: JSON.stringify({ agent, stance: "WAIT", confidence: 0.5, claim }) }, finish_reason: "stop" }], usage: { total_tokens: 50 } };
+    }
+    return run0(model, request);
+  };
+  const e = env(ai);
+  await runWarRoomBar(e, task());
+  const room = await readWarRoom(e.DB);
+  assert.equal(asked.get("technical"), 2);
+  assert.equal(asked.get("risk"), 2, "one correction only");
+  const technical = room.openings.find((o) => o.id === "technical"), risk = room.openings.find((o) => o.id === "risk");
+  assert.equal(technical.status, "ok");
+  assert.equal(technical.claim, "My data shows no trigger on this candle.", "the corrected wording is kept");
+  assert.equal(risk.status, "ok", "never rejected for calibration talk");
+  assert.match(risk.claim, /parity-verified/, "the first valid answer is kept when the correction fails");
+});

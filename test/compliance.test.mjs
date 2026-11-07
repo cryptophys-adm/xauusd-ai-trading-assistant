@@ -46,7 +46,7 @@ test("the sweep checks each room message once and serves rule breaks per 100 mes
   const add = (thread, step, agent, stance, body, bar = "2026-11-09T10:00:00.000Z") => db.raw.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, bar_time, ts, stance, confidence, body_json, status) VALUES (?, ?, ?, ?, ?, ?, ?, 0.5, ?, 'ok')").run(thread, bar, step, agent, bar, bar, stance, JSON.stringify(body));
   add("tf:H1", "brief", "system", null, { candle_key: "k" });
   add("tf:H1", "open:h1", "h1", "WAIT", { bias: "NEUTRAL", claim: "Flat: nothing is confirmed." });
-  add("tf:H1", "open:risk", "risk", "WAIT", { bias: "NEUTRAL", claim: "The verified volatility is high." });
+  add("tf:H1", "open:risk", "risk", "WAIT", { bias: "NEUTRAL", claim: "The parity-verified volatility is high." });
   add("tf:H1", "conclusion", "moderator", "BUY", { bias: "BEARISH", summary: "Decision BUY, bias bearish." });
   add("news:1", "open:news", "news", "WAIT", { bias: "NEUTRAL", claim: "Use a lot size of one." });
   const env = { DB: db };

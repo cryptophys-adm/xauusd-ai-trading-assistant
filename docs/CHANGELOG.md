@@ -6,6 +6,10 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- fix(rooms): agents stop talking about calibration (Aether's first compliance finding: more than half of the latest room messages broke the owner rule).
+  - **Cause:** the natural-language rule and its correction prompt gave "verified by parity" as their example phrase. The example is replaced.
+  - **Soft correction:** a valid room answer that still mentions parity, calibration, comparators, "unverified", "verified by" or "parity-verified" gets one soft correction within the budget. It is never rejected for this; the first answer is kept when the correction fails or changes the stance.
+  - **One pattern:** the compliance check and the rooms use the same pattern (`CALIBRATION_TALK`).
 - feat(aether): phase A1, agent compliance checks and decision cards (owner go on RFC_AETHER_KNOWLEDGE_GUARDIAN).
   - **Compliance:** `src/compliance.mjs` and D1 `compliance_checks` (migration 0011). Five deterministic checks run once over every stored room message: order or size wording, stance against bias, calibration talk, field names, and data scope. `GET /api/compliance` returns rule breaks per 100 messages; Nexus shows them on the Scorecards page.
   - **Decision cards:** `src/decision-cards.mjs` and `GET /api/decision-cards`. One card per room conclusion, for Aether, with no level, price, plan or size.

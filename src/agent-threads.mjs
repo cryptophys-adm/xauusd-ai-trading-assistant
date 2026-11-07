@@ -10,7 +10,7 @@
 // evidence, prompts or decision. 5m is UNVERIFIED unless parity-approved on 5m (C0).
 
 import { chatMessages } from "./model-text.mjs";
-import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, NATURAL_LANGUAGE_CORRECTION, describeDegradedEvidence } from "./natural-language.mjs";
+import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, NATURAL_LANGUAGE_CORRECTION, describeDegradedEvidence, calibrationTalk, CALIBRATION_CORRECTION } from "./natural-language.mjs";
 import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import { verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
 import { HUD_IDS, HUD_NAMES, calibrationCounts } from "./hud-reading.mjs";
@@ -287,6 +287,23 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
       if (second.valid) { validation = second; finalCall = retry; meta.model = retry.model; meta.fallback_used = meta.fallback_used || retry.fallback_used; }
     }
   }
+  // Calibration talk (owner rule "agents never mention calibration"; Aether compliance found it in
+  // more than half of the room messages, 2026-11-07): a valid room answer that still talks about
+  // parity or calibration gets one soft correction. It is never rejected for it: when the retry
+  // fails or still talks about it, the first valid answer is kept (and compliance records it).
+  if (validation.valid && !corrections && ROOM_THREAD.test(String(base?.thread_id ?? "")) && calibrationTalk(roomText(finalCall.obj)) && clock() < deadline && (await budgetOk())) {
+    const retry = await callBusModel(env, {
+      messages: [...messages, { role: "assistant", content: String(call.text ?? "") }, { role: "user", content: CALIBRATION_CORRECTION }],
+      schemaName, schema, maxTokens, effort, deadline, clock, runState, role
+    });
+    corrections = 1 + (retry.fallback_used ? 1 : 0);
+    meta.usage_tokens = sumOrNull(meta.usage_tokens, retry.usage_tokens);
+    meta.latency_ms = sumOrNull(meta.latency_ms, retry.latency_ms);
+    if (retry.status === "answered" && !retry.truncated) {
+      const second = validate(retry.obj);
+      if (second.valid && !calibrationTalk(roomText(retry.obj)) && retry.obj.stance === finalCall.obj.stance) { validation = second; finalCall = retry; meta.model = retry.model; meta.fallback_used = meta.fallback_used || retry.fallback_used; }
+    }
+  }
   // A conclusion is what the room is for (production of 2026-11-07, preview-e2e: a gpt-oss-120b
   // moderator answer stayed invalid after its correction). A moderator answer that is still
   // rejected is asked once more from the role's fallback model, within the deadline and budget.
@@ -315,6 +332,11 @@ function sumOrNull(a, b) {
 }
 
 const CORRECTION_PROMPT = NATURAL_LANGUAGE_CORRECTION;
+
+/** Room threads whose agents must never talk about calibration: War Rooms, timeframe rooms, HUD threads. */
+const ROOM_THREAD = /^(?:warroom:|tf:|hud)/;
+/** The text fields a room answer shows to readers. */
+export const roomText = (o) => [o?.claim, o?.argument, o?.summary, ...(Array.isArray(o?.reasons) ? o.reasons : [])];
 
 /** Rule errors a single correction call may fix, each with what to tell the model. */
 const RULE_CORRECTIONS = Object.freeze({
