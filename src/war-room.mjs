@@ -3,9 +3,10 @@
 // Every agent discusses in one room at each 15m candle close, in three phases:
 //   1. Communication bus: each agent posts one opening claim from its own data only (one
 //      role per agent, no repeated information).
-//   2. Debate: every agent sees the whole bus; agents whose stance differs from the majority
-//      (at most 7, by confidence) and the Risk Manager rebut named agents. The debate is open
-//      for at most 3 minutes, then closed.
+//   2. Consensus Discussion (owner decision 2026-11-07: the term replaces "debate"; stored step
+//      names keep the "debate:" prefix): every agent sees the whole bus; agents whose bias differs
+//      from the room (at most 7, by confidence) and the Risk Manager answer named agents. It is
+//      open for at most 3 minutes, then closed.
 //   3. Conclusion: the moderator concludes for the Nexus main panel. The H1 decision chain
 //      stays the constraint: a conclusion that differs must say "H1 decision: X", and price
 //      levels come only from the validated H1 chain.
@@ -69,7 +70,7 @@ export function entryAllowed(stance, confirmations) {
   return h1 || m5;
 }
 
-export const SUPPORT_RULE = "A BUY or SELL conclusion also needs at least one agent on the bus or in the debate holding that stance: a confirmation alone never overrules the whole room.";
+export const SUPPORT_RULE = "A BUY or SELL conclusion also needs at least one agent on the bus or in the Consensus Discussion holding that stance: a confirmation alone never overrules the whole room.";
 
 export const NO_CONFIRMATION_RULE =
   "Rule: no confirmation, no entry. BUY needs a confirmed buy signal (the H1 Prophet R38 confirmation, or a VERIFIED 5m Prophet R38 confirmation candle); SELL needs a confirmed sell signal. Without the matching confirmation the stance is WAIT, or HOLD / CLOSE for a position already open.";
@@ -267,7 +268,7 @@ export function selectRebutters(openings, majority, max = WAR_ROOM_MAX_REBUTTALS
 
 /** The debate brief when the action is unanimous but the bias is split. */
 export function biasSplitText(bias) {
-  return `The bus agrees on the action but not on the bias: the room leans ${bias.toLowerCase()}. Argue the bias: rebut the strongest claims that lean the other way (or, if you hold the room's bias, defend it against them), and put those agents' ids in rebuts. Give your own "bias" after the debate; you may change it if the bus convinced you.`;
+  return `The bus agrees on the action but not on the bias: the room leans ${bias.toLowerCase()}. Argue the bias: rebut the strongest claims that lean the other way (or, if you hold the room's bias, defend it against them), and put those agents' ids in rebuts. Give your own "bias" after the Consensus Discussion; you may change it if the bus convinced you.`;
 }
 
 const ROOM_RULES = [
@@ -300,7 +301,7 @@ function rebuttalMessages(agent, own, bus, h1, unanimous, confirmations, roomBia
     ? [NO_CONFIRMATION_RULE + " Rebut every agent on the bus that proposes BUY or SELL without the matching confirmation. CONFIRMATIONS: " + JSON.stringify(confirmations)]
     : [];
   return chatMessages([
-    `You are ${agentName(agent)} in the XAUUSD Live War Room debate${DESK_AGENTS[agent] ? " (" + DESK_AGENTS[agent].role + ")" : ""}. The debate is open for at most 3 minutes.`,
+    `You are ${agentName(agent)} in the XAUUSD Live War Room Consensus Discussion${DESK_AGENTS[agent] ? " (" + DESK_AGENTS[agent].role + ")" : ""}. The Consensus Discussion is open for at most 3 minutes.`,
     RULES_NO_REFS,
     ROOM_RULES,
     unanimous && roomBias && agent !== "risk"
@@ -320,7 +321,7 @@ function rebuttalMessages(agent, own, bus, h1, unanimous, confirmations, roomBia
 
 function conclusionMessages(h1, bus, debate, confirmations) {
   return chatMessages([
-    "You are the moderator of the XAUUSD Live War Room. The debate is closed. Write the conclusion for the main panel.",
+    "You are the moderator of the XAUUSD Live War Room. The Consensus Discussion is closed. Write the conclusion for the main panel.",
     RULES_NO_REFS,
     ROOM_RULES,
     `The H1 decision (${h1.decision}) is the constraint: if your stance differs from it, the summary must say "H1 decision: ${h1.decision}" and why the room still differs.`,
@@ -331,7 +332,7 @@ function conclusionMessages(h1, bus, debate, confirmations) {
     `Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"summary":"<= 360 chars","reasons":["<= 160 chars", "at most 3"],"dissent":["<agent id>"]}`,
     "COMMUNICATION BUS:",
     JSON.stringify(bus),
-    "DEBATE:",
+    "CONSENSUS DISCUSSION:",
     JSON.stringify(debate)
   ]);
 }
@@ -450,7 +451,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   const bus = answered.map(m => ({ id: m.agent, name: agentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, evidence: evidenceNote(m.agent), claim: m.claim }));
   const busAgents = bus.map(b => b.id);
 
-  // Phase 2: the debate, open for at most 3 minutes.
+  // Phase 2: the Consensus Discussion, open for at most 3 minutes.
   const majority = majorityStance(answered, h1.decision);
   const roomBias = majorityBias(answered);
   const rebutters = selectRebutters(answered, majority, WAR_ROOM_MAX_REBUTTALS, { bias: roomBias });

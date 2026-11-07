@@ -24,7 +24,7 @@ export function BiasTag({ bias }: { bias: string }) {
   return <span className={`text-[10px] ${c}`} title="The direction this agent's data leans">bias {bias.toLowerCase()}</span>;
 }
 
-/** One message of a room: an opening on the bus or a rebuttal in the debate. */
+/** One message of a room: an opening on the bus or an answer in the Consensus Discussion. */
 export function Post({ m, text, calibration }: { m: RoomMessage; text?: string | null; calibration?: string | null }) {
   if (m.status !== "ok") {
     return (

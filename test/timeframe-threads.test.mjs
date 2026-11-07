@@ -59,7 +59,7 @@ function fakeAI({ conclusion = null, confidence = 0.35, stances = {}, fail = new
       let content;
       if (/moderator of the XAUUSD/.test(sys)) content = conclusion || { stance: "WAIT", confidence: 0.5, summary: "The four-hour room leans up but has no confirmation yet, so it prefers to wait.", reasons: ["Structure points up without a confirmed signal.", "Volatility is normal for this chart."], dissent: [] };
       else if (fail.has(agent)) throw new Error("3021: rate limiting: inference request per min rate reached");
-      else if (/debate/.test(sys)) content = { agent, stance: stances[agent] || "WAIT", confidence: 0.5, rebuts: [agent === "technical" ? "risk" : "technical"], argument: "The last candles closed near their highs, which argues against fading the move." };
+      else if (/Consensus Discussion/.test(sys)) content = { agent, stance: stances[agent] || "WAIT", confidence: 0.5, rebuts: [agent === "technical" ? "risk" : "technical"], argument: "The last candles closed near their highs, which argues against fading the move." };
       else content = { agent, stance: stances[agent] || "WAIT", confidence, claim: "My own data on this chart supports waiting for the next candle." };
       return { choices: [{ message: { content: JSON.stringify(content) }, finish_reason: "stop" }], usage: { total_tokens: 40 } };
     }
@@ -106,7 +106,7 @@ test("evidence is the closed bar, its HUD snapshot and its local Prophet R38 con
   assert.ok(e.hud.readings.kinetic_engine.available);
   assert.equal(e.confirmations.chart_prophet_r38.buy_confirmed, true);
   assert.equal(e.confirmations.chart_prophet_r38.approved_by_parity, false);
-  assert.equal(e.h1, null, "the H1 desk sits only in the 1H room");
+  assert.ok(!("h1" in e), "no room reads an H1 decision: the Reasoner decides after the 1H room (owner decision 2026-11-07)");
   assert.equal(await tfEvidence(env(fakeAI()), "H4", "OANDA:XAUUSD:240:" + (LAST_OPEN + H4_MS)), null);
 });
 
@@ -165,17 +165,17 @@ test("openings carry a bias; a BUY or SELL conclusion needs an agent holding it"
   const t = await readTimeframeThread(e.DB, "H4");
   assert.equal(t.openings.find((o) => o.id === "kinetic_engine").bias, "BEARISH");
   assert.equal(t.openings.find((o) => o.id === "technical").bias, "NEUTRAL");
-  const prompt = ai.calls.find((x) => /"agent":"technical"/.test(x.request.messages[1].content) && !/debate/.test(x.request.messages[0].content)).request.messages[1].content;
+  const prompt = ai.calls.find((x) => /"agent":"technical"/.test(x.request.messages[1].content) && !/Consensus Discussion/.test(x.request.messages[0].content)).request.messages[1].content;
   assert.match(prompt, /"bias":"BULLISH\|BEARISH\|NEUTRAL"/);
   const mod = ai.calls.find((x) => /moderator of the XAUUSD/.test(x.request.messages[0].content)).request.messages.map((m) => m.content).join("\n");
-  assert.match(mod, /needs at least one agent on the bus or in the debate holding that stance/);
+  assert.match(mod, /needs at least one agent on the bus or in the Consensus Discussion holding that stance/);
 });
 
 test("the 4H Desk reads only its own bar, in words; without local records the room has no 4H Desk", async () => {
   const ai = fakeAI();
   const e = env(ai, { buy: true });
   await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
-  const call = ai.calls.find((c) => /"agent":"h4"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content));
+  const call = ai.calls.find((c) => /"agent":"h4"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content));
   const data = JSON.parse(call.request.messages[1].content.split("EVIDENCE:\n").at(-1).split("YOUR DATA:\n").at(-1));
   assert.equal(data.timeframe, "4-hour");
   assert.equal(data.approved_by_parity, false);
@@ -278,4 +278,46 @@ test("a room that concluded without its HUD snapshot re-convenes once when the s
   assert.equal(after.bar_close, before.bar_close);
   assert.equal(after.phase, "closed");
   assert.deepEqual(await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock }), { status: "already_complete", calls: 0 }, "once only");
+});
+
+test("the 1H room meets before the H1 decision: its desk reads the local records, nobody reads an H1 decision (owner decision 2026-11-07)", async () => {
+  const H1 = 3600_000;
+  const h1Open = Date.parse("2026-11-07T09:00:00.000Z");
+  const h1Key = "OANDA:XAUUSD:60:" + h1Open;
+  const now = h1Open + H1 + 10 * 60_000;
+  const ai = fakeAI();
+  const e = env(ai, { records: false });
+  // A stale H1 synthesis of an earlier bar must not reach the room.
+  e.DB.raw.prepare("INSERT INTO ai_syntheses (candle_key, timeframe, ai_analysis) VALUES (?, '60', ?)").run("OANDA:XAUUSD:60:" + (h1Open - H1), JSON.stringify({ decision: { decision: "SELL", confidence: 0.9, reasoning: "old" } }));
+  await e.SIGNAL_CACHE.put("market-data:v2:series:OANDA:XAUUSD|1h", series(h1Open, H1));
+  await e.SIGNAL_CACHE.put("hud:60:" + h1Key, hudSnapshot(h1Key, "60"));
+  await e.WEBHOOK_BUFFER.put("localcalc:" + h1Key + ":prophet", prophetRecord());
+  const rooms = [];
+  const out = await runPendingTimeframeThreads(e, { now, clock: () => now, sleep: async () => {}, onRoom: async (r) => { rooms.push(r); } });
+  assert.equal(out.charts.H1.status, "complete");
+  assert.deepEqual(rooms.filter((r) => r.chart === "H1").map((r) => [r.key, r.result.status]), [[h1Key, "complete"]], "the caller hears the 1H room conclude");
+
+  const room = await readTimeframeThread(e.DB, "H1", { candleKey: h1Key });
+  assert.equal(room.openings[0].id, "h1");
+  assert.equal(room.openings[0].name, "1H Desk");
+  assert.equal(room.roster[0].calibration, "parity-approved 1H chain");
+  assert.equal(room.conclusion.status, "ok");
+  assert.equal(await readTimeframeThread(e.DB, "H1", { candleKey: "OANDA:XAUUSD:60:" + (h1Open - H1) }), null, "the room of another bar is not this one");
+  const prompts = ai.calls.map((c) => c.request.messages.map((m) => m.content).join("\n"));
+  assert.ok(prompts.every((p) => !/h1_decision|H1 decision chain decided|"SELL","confidence":0.9/.test(p)), "no prompt carries an H1 decision");
+  const desk = prompts.find((p) => /"agent":"h1"/.test(p) && !/Consensus Discussion/.test(p));
+  assert.match(desk, /local Prophet .* of the 1-hour candle that just closed/);
+  assert.match(prompts.find((p) => /moderator of the XAUUSD 1-hour War Room/.test(p)), /The Consensus Discussion is closed\. .*The Reasoner writes the H1 decision after you/);
+});
+
+test("an onRoom failure is recorded on the room and never stops the sweep", async () => {
+  const h1Open = Date.parse("2026-11-07T09:00:00.000Z");
+  const h1Key = "OANDA:XAUUSD:60:" + h1Open;
+  const now = h1Open + 3600_000 + 10 * 60_000;
+  const e = env(fakeAI(), { records: false });
+  await e.SIGNAL_CACHE.put("market-data:v2:series:OANDA:XAUUSD|1h", series(h1Open, 3600_000));
+  await e.SIGNAL_CACHE.put("hud:60:" + h1Key, hudSnapshot(h1Key, "60"));
+  const out = await runPendingTimeframeThreads(e, { now, clock: () => now, sleep: async () => {}, onRoom: async () => { throw new Error("reasoner down"); } });
+  assert.equal(out.charts.H1.status, "complete");
+  assert.equal(out.charts.H1.on_room_error, "reasoner down");
 });

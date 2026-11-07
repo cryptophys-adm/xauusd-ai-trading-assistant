@@ -1,0 +1,16 @@
+export const H1_CHAIN: string;
+export const H1_CONSENSUS_FALLBACK_MS: number;
+export const H1_PENDING_PREFIX: string;
+export const H1_PENDING_TTL_S: number;
+export const AWAITING_CONSENSUS: string;
+export const FINALIZING: string;
+export const H1_REASONER_GIVE_UP_MS: number;
+export const H1_PENDING_LOOKBACK_MS: number;
+export function h1BarTimes(candleKey: string): { open: number; close: number } | null;
+export function finalizeDue(input: { candleKey: string; now: number; roomConcluded: boolean }): boolean;
+export function consensusInput(room: any): Record<string, any>;
+export function reasonerLines(input: { evidence: unknown; consensus: any; laneRule: string; decisionTextRule: string; tradePlanRule: string }): string[];
+export function consensusGuard(decision: Record<string, any>, consensus: any): { decision: Record<string, any>; overridden: boolean };
+export function emptyConsensusDecision(): Record<string, any>;
+export function reasonerUnavailableDecision(): Record<string, any>;
+export function consensusSummary(consensus: any, options?: { overridden?: boolean }): Record<string, any>;

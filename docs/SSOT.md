@@ -5,7 +5,7 @@ This is the single source of truth for the system's topology, ownership and depl
 ## 1. Production topology: exactly four Workers
 | Worker | Source | Deployed by (only on push to `main`) | Role |
 |---|---|---|---|
-| `xauusd-ai-trading-assistant` | `src/`, `wrangler.jsonc` | `deploy-worker.yml` | Webhooks, evidence fusion, autonomous parity registry, the Analyst → Counselor → Reasoner chain, the dashboard read API (`/api/*`) and Telegram |
+| `xauusd-ai-trading-assistant` | `src/`, `wrangler.jsonc` | `deploy-worker.yml` | Webhooks, evidence fusion, autonomous parity registry, the H1 decision (the Reasoner, after the 1H War Room's Consensus Discussion), the dashboard read API (`/api/*`) and Telegram |
 | `xauusd-fundamental-news-ingestion` | `fundamental-news-ingestion/` | `deploy-fundamental-news-ingestion.yml` (Workers Builds also builds it) | Owns the single TradingView MCP OAuth grant at `news.cryptophys.work/oauth/start`. Serves news (`/pull`, cron `:05`, RPC `NewsIngestionService`) and OHLCV (RPC `TvGateway`) |
 | `xauusd-tradingview-pull-adapter` | `market-data-ingestion/`, `local-engines/` | `deploy-market-data-ingestion.yml` | The only owner of local computation for MizanLib, Prophet and GMI (see §3). Serves chart data (RPC `MarketDataReader`) |
 | `xauusd-nexus-dashboard` | `workers/xauusd-nexus-dashboard/` | `deploy-nexus-dashboard.yml` | `nexus.cryptophys.work` serves the UI. `/api/ohlcv` comes from `MarketDataReader`; every other `/api/*` request is proxied to the AI Worker |
@@ -90,6 +90,23 @@ Coverage per Pine parameter is in `docs/LOCAL_COMPUTATION_OWNERSHIP.md`.
 
 The parity sweep cron also backfills `runAnalysis` for any closed H1 candle within the last 2 hours that has no `analysis_runs` row. It does so when the candle's approved local records exist, or as a fail-closed WAIT 30 minutes after the close. Analysis stays idempotent via `claimAnalysisRun`.
 
+### H1 decision by Consensus Discussion (owner decision 2026-11-07, `src/h1-consensus.mjs`)
+- **Why:** the old chain decided at the close, before any discussion: Analyst → Counselor → Reasoner on the evidence alone. The Analyst and the Counselor ran only in the background (no screen showed their output), and in production the Counselor spent its whole token budget on reasoning in 32 of the last 32 runs. Deciding first made the decision ambiguous and almost always WAIT.
+- **Now every input comes from the 1H communication bus, and the Reasoner decides last:**
+  1. At the close, `runAnalysis` fuses the evidence as before. Degraded evidence is still a fail-closed WAIT at once. Complete evidence is parked in KV (`h1:pending:<candle_key>`, 6 hours) and no model runs. The run stays `analyzing`, at the stage `awaiting_consensus` in `analysis_runs.error_code` (the status column has a CHECK constraint).
+  2. The 1H War Room of the bar meets: communication bus, Consensus Discussion, the moderator's conclusion with its decision and bias.
+  3. The Reasoner (`AI_MODEL_REASONER`) writes the H1 decision when the room concludes (the sweep's `onRoom` hook), or 45 minutes after the close at the latest with whoever spoke (owner choice; `H1_CONSENSUS_FALLBACK_MS`, from the sweep). It reads the room (`CONSENSUS`: bus, Consensus Discussion, conclusion) beside the parked evidence.
+- **Rules of the Reasoner:**
+  - The decision follows the room's consensus. A room stance of HOLD or CLOSE becomes WAIT.
+  - A room that concludes WAIT with a bullish or bearish bias may become BUY or SELL in that direction only with the matching confirmed 1-hour Prophet R38 signal and exact prices.
+  - It never decides against the room's bias. A deterministic guard (`consensusGuard`) turns a BUY or SELL against the room's bias, or against a concluded BUY or SELL, into WAIT with the prices cleared.
+  - It departs from the room only for a veto: Prophet R38 `t_enc` 4, a GMI verdict of -3 against a BUY or +3 against a SELL, or missing exact prices. A GMI conflict or a gate of -1 lowers confidence (owner decision 2026-11-06).
+- **Fail-closed:** a room where no agent spoke by the fallback time gives WAIT without a model call. A Reasoner that keeps failing is retried by every sweep, and after 2 hours gives WAIT.
+- **Idempotent:** only the caller that moves the stage from `awaiting_consensus` to `finalizing` decides (a stale `finalizing` is reclaimed after 10 minutes). New evidence of the bar may reclaim a stale `analyzing` run; it then parks the fresher evidence.
+- **Stored:** the synthesis carries `analysis_chain: "consensus_reasoner"`, `consensus` (status concluded, partial or empty; who spoke; the room's bias; the conclusion; whether the guard overrode the Reasoner) and the raw Reasoner output. Persistence is unchanged: `ai_syntheses`, `trade_decisions`, `latest:`, Telegram and `analysis:`.
+- **Read:** `GET /api/threads/timeframe?chart=H1` adds `reasoner_decision` (decided, awaiting the room, or deciding). The Nexus 1H tab ends with it.
+- **Retired:** the Analyst and the Counselor of the H1 chain (they still serve the news analysis), and the old H1 multi-agent bus (the 1H War Room is the bus). The legacy `/analyze` bundle path is unchanged.
+
 ### 5m execution context
 - The evidence key `informational_5m_context` may be surfaced in the fusion bundle. Since B2 it is the
   5m parity record of the bar, reshaped (`local-engines/producer/src/m5-context.mjs`): the pull adapter
@@ -121,12 +138,11 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - 24 matches take about 4 trading days on H4 and about 5 weeks on D1.
     - Until then, H4 and D1 readings are unverified.
   - **Timeframe War Rooms (owner decision 2026-11-06; supersedes the five-desk H4/D1 threads of step 4):** every Thread, D1, 4H, 1H and 15m, is the consensus of all agents, as in the Live War Room. 15m is the Live War Room; `src/timeframe-threads.mjs` runs the 1H, 4H and D1 rooms.
-    - **Phases:** each closed bar of that chart runs the same three phases: every agent opens on the bus, the minority (by confidence) and the Risk Manager debate for at most 3 minutes, and the moderator writes the TLDR.
+    - **Phases:** each closed bar of that chart runs the same three phases: every agent opens on the bus, the minority (by bias and confidence) and the Risk Manager answer named agents in the Consensus Discussion (the term replaces "debate", owner decision 2026-11-07) for at most 3 minutes, and the moderator writes the TLDR.
     - **Agents:** the desks plus one agent per HUD computed on that chart.
       - Desks:
         - The room's own timeframe desk analyses only its chart (owner decision 2026-11-06; `src/timeframe-desk.mjs`):
-          - The 1H Desk reads the H1 decision chain plus the local 1-hour reading.
-          - The 4H Desk and the D1 Desk read the local Prophet R38, R37 and GMI records of the bar, decoded into plain sentences.
+          - The 1H, 4H and D1 Desks read the local Prophet R38, R37 and GMI records of the bar, decoded into plain sentences.
           - A desk whose records parity has not approved is labelled so and speaks at confidence 0.4 or lower.
           - A room without local records for its bar has no own desk.
         - The other desks: the Higher-Timeframe Desk (the conclusion of the 4H Thread on 1H, of the D1 Thread on 4H), the News Analyst (News Daily), the Technical Analyst and the Risk Manager.
@@ -169,7 +185,8 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 
 ### Multi-agent bus (Phase 2, shadow only, `MULTI_AGENT_BUS_ENABLED`)
 - Code: `src/multi-agent-bus.mjs`. **Enabled in production since Phase 4 (owner approval 2026-11-04)**: `MULTI_AGENT_BUS_ENABLED` and `LIVE_ROOM_ENABLED` are `"true"` in both `wrangler.jsonc` and `wrangler.preview.jsonc`. Turning a flag back to `"false"` stops new runs at once; stored messages stay readable.
-- After the H1 synthesis is persisted (degraded or complete), the AI Worker enqueues a `multi_agent_bus` task on the existing queue. The task reads that synthesis, runs agents `technical` and `news` for 2 rounds, then a `moderator` consensus. That is at most 5 model calls, with a 300 s wall budget and the `MULTI_AGENT_MAX_CALLS_PER_HOUR` cap; the cap fails closed.
+- **Retired for H1 (owner decision 2026-11-07):** the AI Worker no longer enqueues it; the 1H War Room is the H1 communication bus. The module, its queue handler and the stored messages stay readable, and the news thread still uses its model settings.
+- Until 2026-11-07, after the H1 synthesis was persisted (degraded or complete), the AI Worker enqueued a `multi_agent_bus` task on the existing queue. The task reads that synthesis, runs agents `technical` and `news` for 2 rounds, then a `moderator` consensus. That is at most 5 model calls, with a 300 s wall budget and the `MULTI_AGENT_MAX_CALLS_PER_HOUR` cap; the cap fails closed.
 - Model: `MULTI_AGENT_MODEL` = `@cf/zai-org/glm-5.3-flash` (owner decision 2026-11-04; the same model as the production Counselor, so already proven on this account; strict `json_schema`, `reasoning_effort` low/high). On an error (or a 60 s timeout) the call is retried once with `MULTI_AGENT_FALLBACK_MODEL` = `@cf/zai-org/glm-4.7-flash`, `fallback_used` is recorded, and the primary error is stored as `primary_error` on the message. The H1 chain models are unchanged.
   - **Fallback reliability** (owner decision 2026-11-06, after three preview-e2e failures that day):
     - A primary **timeout** is transient: the step falls back, and the next step tries the primary again. The second timeout in a run (`PRIMARY_TIMEOUTS_TO_PIN`) sends the rest of the run to the fallback, because each timeout costs up to 60 s of the wall budget. Any other primary error does so at once, as before.
@@ -196,13 +213,13 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - Primary model only, never the paid fallback. The `LIVE_ROOM_MAX_CALLS_PER_HOUR` cap fails closed: 4 rooms an hour × 3 calls, well under 36.
   - Thread ids are `live15m:<day>`. `GET /api/live` also returns the older `live5m:` history.
   - The 5m context carries the last 12 closed bars (`recent_bars`). The H1 chain strips them.
-- Read APIs: `GET /api/threads?kind=news|h1`, `GET /api/threads/:id` (nested replies; `h1:<candle_key>` serves the H1 bus debate as a thread) and `GET /api/live?since=`.
+- Read APIs: `GET /api/threads?kind=news|h1`, `GET /api/threads/:id` (nested replies; `h1:<candle_key>` serves the stored H1 bus discussions as a thread, history only since 2026-11-07) and `GET /api/live?since=`.
 - **Nexus layout (owner decisions 2026-11-05 and 2026-11-06).**
   - **Center, under the chart:** the living War Rooms of every timeframe in one card. Its top is the tab bar `News | 15m | 1H | 4H | D1`, and every page load opens on News (no 5m tab for now).
   - **Each tab** starts with its conclusion directly under the tab bar: the stance in large type, confidence, summary, reasons, dissent, and what binds it.
     - On 15m: the H1 constraint and the entry confirmations.
     - On 1H, 4H and D1: that chart's Prophet R38 confirmation.
-    - Under the conclusion come the communication bus and the debate.
+    - Under the conclusion come the communication bus and the Consensus Discussion. The 1H tab ends with the Reasoner's H1 decision.
   - **Sources:** 15m reads `GET /api/war-room/latest`; 1H, 4H and D1 read `GET /api/threads/timeframe`. The News tab shows the News Daily TLDR and each headline with its bias (`GET /api/news/daily`).
   - **No separate 15m cards:** they repeated the 15m tab.
   - **The active tab drives the page.**
@@ -357,7 +374,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
      - **Technical Analyst:** the 15m candles and the 5m execution read.
      - **Risk Manager.**
      - **One agent per computed 15m HUD** (13).
-  2. **Debate.** At most 8 speakers rebut named agents. The debate is open for at most 3 minutes, then closed.
+  2. **Consensus Discussion** (until 2026-11-07 called the debate; stored steps keep the `debate:` prefix). At most 8 speakers answer named agents. It is open for at most 3 minutes, then closed.
      - **Who speaks** (owner decision 2026-11-06: decision and bias are different things):
        - agents whose action differs from the bus majority;
        - agents whose bias leans against the room's bias (the confidence-weighted bias of the bus, NEUTRAL inside ±0.1; against a NEUTRAL room every leaning agent counts), by confidence;
