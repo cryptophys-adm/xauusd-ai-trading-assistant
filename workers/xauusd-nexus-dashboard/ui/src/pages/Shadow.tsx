@@ -50,6 +50,9 @@ export default function Shadow() {
                         <tr><td colSpan={7} className="text-[11px] text-slate-500">
                           {k.change} · where they disagree: candidate right {k.paired.candidate_better}, active right {k.paired.control_better} (p {k.paired.p_value ?? "n/a"}) · significantly higher score: {yes(k.criteria.higher_outcome_score)} · no new stuck states: {yes(k.criteria.no_new_stuck_states)} · minimum sample: {yes(k.criteria.minimum_sample)} · reference: {k.reference}
                         </td></tr>
+                        {k.origin?.source === "aether" && <tr><td colSpan={7} className="text-[11px] text-violet-300">
+                          From Aether: {k.origin.item_id} v{k.origin.version}, approved by a person for shadow testing only. Hypothesis: {k.origin.hypothesis ?? "n/a"} · metric: {k.origin.metric ?? "n/a"}
+                        </td></tr>}
                         {k.review && <tr><td colSpan={7} className="text-[11px] text-slate-500">
                           Review by {k.review.by}: {k.review.rule} · decisive pairs {k.review.decisive_pairs} of {k.review.min_decisive_pairs}{k.review.due ? <span className="text-amber-200"> · review due</span> : null}
                         </td></tr>}

@@ -6,6 +6,11 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(aether): phase A7, the AI Worker pulls Aether's learned pack; approved parameter candidates run as shadow versions.
+  - **Pull:** `src/aether-pack.mjs`, hourly over the existing `AETHER` binding (`KnowledgeIngress.learnedPack()`). D1 `aether_learned_pack` (migration 0013) keeps the last good pack. A failure keeps it in use.
+  - **Shadow:** an approved `param_candidate` in the reviewed `TUNING_GRID` (`stateMaxAge` 8, 12, 16, 24 for `prophet_r37` and `gmi_v12_70`) becomes a shadow version. At most 3 candidates run per family, and stopped points are never restarted. Nexus `/shadow` marks it "From Aether".
+  - **Text items:** stored and listed in `GET /api/aether/status` only; they reach no prompt.
+  - **Promotion:** stays an owner PR.
 - feat(aether): phase A5, the AI Worker pushes its decision cards to Aether (topology change, owner go 2026-11-07).
   - **Binding:** `AETHER` → `cryptophys-aether` `KnowledgeIngress`, production AI Worker only, no props and no secret. SSOT §2, AGENTS.md rule 7 and the topology test change together.
   - **Push:** `src/aether-push.mjs`, once an hour in the first sweep after the H1 close. It sends the latest cards of each chart whose content changed, checked locally for leaks first. D1 `aether_card_pushes` (migration 0012) keeps the hash last sent and Aether's refusals.

@@ -1,0 +1,10 @@
+export const PACK_VERSION: string;
+export const TUNING_GRID: Readonly<Record<string, Readonly<Record<string, readonly number[]>>>>;
+export const MAX_CANDIDATES_PER_FAMILY: number;
+export function packProblems(pack: unknown): string[];
+export function packCandidates(pack: unknown, options?: Record<string, unknown>): { candidates: Array<Record<string, any>>; ignored: Array<{ item: string; reason: string }> };
+export function pullLearnedPack(env: unknown, options?: { now?: number }): Promise<{ status: string; changed?: boolean; [key: string]: unknown }>;
+export function storedPack(env: unknown): Promise<Record<string, any> | null>;
+export function shadowCandidates(env: unknown, options?: { now?: number }): Promise<any[]>;
+export function packStatus(env: unknown, options?: { now?: number }): Promise<Record<string, unknown>>;
+export function resetAetherPackSchemaCacheForTests(): void;

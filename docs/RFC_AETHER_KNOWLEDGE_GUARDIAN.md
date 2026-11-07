@@ -99,9 +99,9 @@ cryptophys-aether --(service binding AGENTS -> ai-kernel AgentRpc, host_worker=c
 | A2 | **cryptophys-aether** (new) | Worker skeleton, D1 `aether-knowledge`, `KnowledgeIngress` entrypoint, Canon v1 (KB v4 import, doctrine, roles, definitions), CI, tests, dry-run deploy |
 | A3 | platform | Register the `cryptophys-aether` host and its four agents (migration), the report kind `knowledge_audit`, the resource-register rows |
 | A4 | cryptophys-aether | Indexes `aether-canon` and `aether-market` (ensure script, metadata indexes first), batched embedding, auditor and guardian loops, kernel reports |
-| A5 | xauusd | The `AETHER` binding (topology change) and the push from the sweep |
-| A6 | cryptophys-aether + platform | Curator and calibrator, tier 1 proposals, the approved pack export |
-| A7–A9 | xauusd | Shadow knowledge arm, tuning grid, bundled learned pack, first promotion PR (K6 to K9) |
+| A5 | xauusd | The `AETHER` binding (topology change) and the push from the sweep. **Shipped 2026-11-07** (`src/aether-push.mjs`). |
+| A6 | cryptophys-aether + platform | Curator and calibrator, tier 1 proposals, the approved pack export. **Shipped 2026-11-07** (platform TP-028, `cryptophys-aether` `src/knowledge.mjs`). |
+| A7–A9 | xauusd | Shadow knowledge arm, tuning grid, bundled learned pack, first promotion PR (K6 to K9). **A7 first part shipped 2026-11-07:** the pack pull and approved parameter candidates as shadow versions (`src/aether-pack.mjs`). The shadow arm for text items (model calls, A/A run) follows once an item is approved. |
 
 ### 0.8 Owner decisions for revision 2
 

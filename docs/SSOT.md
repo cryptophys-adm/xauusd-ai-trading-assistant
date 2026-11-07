@@ -53,7 +53,8 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
     - Advisory only. A push never changes a room, a decision or a card, and the sweep never waits on Aether.
     - A transport failure is non-fatal and leaves the ledger untouched, so the next hour retries it.
     - Aether never writes here.
-  - **Status:** `GET /api/aether/status` shows the push ledger per chart, the last 24 hours and the latest refusals, without card content.
+  - **The pull (phase A7):** once an hour the same binding also reads `learnedPack()`, the items a person approved for shadow testing. Approved parameter candidates run as shadow versions (see "Shadow indicator versions"); nothing from the pack reaches a room, a prompt or a decision.
+  - **Status:** `GET /api/aether/status` shows the push ledger per chart, the last 24 hours and the latest refusals, without card content, and the learned pack (`learned_pack`).
 
 ## 3. Three AI input lanes (local-primary)
 Owner decision, 2026-11-05: the architecture does not depend on webhooks. Approved local records drive the chain, and TradingView webhooks only calibrate the local engines. `INDICATOR_SOURCE` controls this: `"local"` is the default; `"webhook"` restores the legacy webhook-driven chain as a rollback.
@@ -597,6 +598,15 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **How they work.** GMI needs M1, M15 and higher-timeframe bars, so it is not replayed. Each bar starts from the approved local GMI record of that candle (`localcalc:<key>:gmi`, kept 14 days, last 72 bars tried). `src/gmi-regate.mjs` recomputes only the two points the Prophet structure feeds: `mtf_state` in the initial verdict cascade, and the R10 gate with its risk hold (subtype 1).
   - **Exactness.** With the active structure, the re-gate reproduces GMI's comparable fields exactly (`test/gmi-regate.test.mjs`). In production the control is checked against the approved records.
   - **Sample.** Bars accumulate from the local records forward, so the 200-bar sample takes about a week.
+- **Candidates approved in Aether (phase A7, owner go 2026-11-07):** `src/aether-pack.mjs`.
+  - **The pull.** Once an hour, just before the shadow versions run, the AI Worker pulls Aether's learned pack (`AETHER` → `KnowledgeIngress.learnedPack()`). D1 `aether_learned_pack` (migration `0013`) keeps the last good pack.
+  - **What becomes a candidate.** An approved `param_candidate` item becomes a candidate version (`<family>@latch<value>`, with `origin.source = "aether"`) only when all of these hold:
+    - its family, parameter and value are in the reviewed `TUNING_GRID` (`stateMaxAge` 8, 12, 16 or 24 for `prophet_r37` and `gmi_v12_70`);
+    - it is not already running and was not stopped;
+    - its family runs fewer than 3 candidates.
+  - **Review.** It is reviewed after its 200-bar sample or 30 decisive pairs, at the latest 30 days after it was first pulled.
+  - **Text items** (caution, role reminder) are stored and listed only. They reach no prompt.
+  - **Where to see it.** `GET /api/aether/status` shows the pack under `learned_pack`, with its hash, items, the shadow candidates it started and the items it ignored, and why. Nexus `/shadow` marks those candidates "From Aether".
 - **Promotion** is never automatic. The verdict `better_than_active: ready for owner review` is a proposal; the owner approves a separate promotion PR.
 
 ## 4. Sources and knowledge
