@@ -6,6 +6,9 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(shadow): P5 review (owner decision). Two latch candidates stopped, deadlines for the rest.
+  - **Stopped:** `prophet_r37@latch12` (4 against 3 where the stances differed, p 0.5) and `prophet_r38@latch8` (no stance ever differed, because R38 takes a side only on a confirmed signal). They are no longer computed; their stored outputs stay. The view lists them under `retired`.
+  - **Deadlines:** `prophet_r37@latch8` is reviewed at 30 decisive pairs or on 2026-12-07 at the latest. The GMI candidates are reviewed at their 200-bar sample, around 2026-11-14. Each running candidate shows a `review` in `GET /api/shadow-versions` and on the Nexus Shadow page.
 - feat(parity): a comparator for the Grid Bot Protocol HUD, the `gmi_hud` identity.
   - **Pine candidate:** the GMI HUD candidate alert (`gmi_v12_70_hud`) also carries `cshi_viability`, `deploy_status`, `muddy_waters` and `grid_viable`. `pinescript/ssot` is unchanged.
   - **Local record:** the pull adapter posts a `gmi_hud` record after each H1 publish, and again when it republishes a revised bar. Its result never decides the publish marker.

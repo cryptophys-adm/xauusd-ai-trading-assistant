@@ -7,7 +7,7 @@ import { AGENT_FAMILIES } from "../src/reputation.mjs";
 import { TF_DESKS } from "../src/timeframe-threads.mjs";
 import { DESK_AGENTS } from "../src/war-room.mjs";
 import { registryEntry, lifecycleOf } from "../src/indicator-registry.mjs";
-import { CANDIDATES } from "../src/shadow-versions.mjs";
+import { ENGINE_FAMILIES } from "../src/shadow-versions.mjs";
 
 test("P2: one manifest per agent; the HUD roster and the agent families are generated from them", () => {
   const ids = MANIFESTS.map((x) => x.id);
@@ -23,7 +23,8 @@ test("P2: one manifest per agent; the HUD roster and the agent families are gene
     assert.ok(["engine", "library", "hud", "indicator", "desk", "moderator"].includes(x.kind), x.id);
     assert.ok(["pine_ssot", "pine_candidate", "builtin", "none"].includes(x.reference), x.id);
     if (x.source?.pine) assert.ok(existsSync(new URL("../" + x.source.pine, import.meta.url)), x.source.pine);
-    if (x.shadow_family) assert.ok(CANDIDATES.some((c) => c.family === x.shadow_family), x.shadow_family);
+    // A shadow family runs its control even when it has no candidate (prophet_r38 after the P5 review).
+    if (x.shadow_family) assert.ok(x.shadow_family in ENGINE_FAMILIES, x.shadow_family);
   }
   assert.equal(manifestOf("grid_bot_protocol").computed, true, "ported 2026-11-07");
   assert.equal(manifestOf("supertrend").reference, "builtin");
@@ -46,7 +47,8 @@ test("the registry: lifecycle from the H1 parity identity; parity, scorecards, s
   assert.deepEqual(r38.hud_parity.map((p) => p.engine), ["prophet_hud"], "prophet_hud is its own identity, not a scope of prophet");
   assert.equal(r38.scorecards.indicator[0].hit_rate, 0.55);
   assert.equal(r38.stuck_states.length, 1);
-  assert.ok(r38.shadow_versions.some((v) => v.id === "prophet_r38@latch8"));
+  assert.deepEqual(r38.shadow_versions, [], "prophet_r38@latch8 was stopped at the P5 review");
+  assert.deepEqual(registryEntry(manifestOf("prophet_r37")).shadow_versions.map((v) => v.id), ["prophet_r37@latch8"]);
   const gmi = registryEntry(manifestOf("gmi_v12_70"), { registryRows: rows, cards, stuck });
   assert.equal(gmi.lifecycle, "candidate", "a revoked H1 identity is a candidate again");
   assert.equal(gmi.stuck_states.length, 0, "a closed stuck state is not shown");

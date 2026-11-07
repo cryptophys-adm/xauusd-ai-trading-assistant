@@ -133,18 +133,41 @@ export const CONTROLS = Object.freeze(Object.keys(ENGINE_FAMILIES).map((family) 
  * hold" with it. These candidates expire the latch sooner. They are local-only (option
  * b, RFC §4.3); whether a promotion also needs a Pine candidate is owner decision 1.
  */
-const latch = (family, bars, param) => Object.freeze({
+const latch = (family, bars, param, review) => Object.freeze({
   id: `${family}@latch${bars}`, family, role: "candidate", timeframe: "60", reference: "none",
   params: Object.freeze({ [param]: bars }),
-  change: `the ±3 structure latch expires after ${bars} closed H1 bars instead of 50`
+  change: `the ±3 structure latch expires after ${bars} closed H1 bars instead of 50`,
+  review: Object.freeze(review)
 });
+/** Decisive pairs (bars where exactly one of candidate and control is right) a review needs. */
+export const REVIEW_MIN_DECISIVE_PAIRS = 30;
+// P5 review (owner decision 2026-11-07): keep prophet_r37@latch8 until 30 decisive pairs or
+// 2026-12-07, then stop it unless it is significantly better; keep the GMI candidates until their
+// 200-bar sample, reviewed around 2026-11-14. prophet_r37@latch12 and prophet_r38@latch8 stopped.
 export const CANDIDATES = Object.freeze([
-  latch("prophet_r37", 8, "stateMaxAge"),
-  latch("prophet_r37", 12, "stateMaxAge"),
-  latch("prophet_r38", 8, "state_max_age"),
+  latch("prophet_r37", 8, "stateMaxAge", { by: "2026-12-07", rule: `stop unless significantly better once it has ${REVIEW_MIN_DECISIVE_PAIRS} decisive pairs or on this date` }),
   // The latch's effect on the chain: GMI's "Prophet risk hold" (subtype 1) and mtf_state.
-  latch("gmi_v12_70", 8, "stateMaxAge"),
-  latch("gmi_v12_70", 12, "stateMaxAge")
+  latch("gmi_v12_70", 8, "stateMaxAge", { by: "2026-11-14", rule: "review once the 200-bar minimum sample is reached" }),
+  latch("gmi_v12_70", 12, "stateMaxAge", { by: "2026-11-14", rule: "review once the 200-bar minimum sample is reached" })
+]);
+
+/**
+ * Stopped candidates (P5 review, owner decision 2026-11-07). They are no longer computed; their
+ * stored outputs and scores stay in the database. The result is the 30-day view at the review.
+ */
+export const RETIRED_CANDIDATES = Object.freeze([
+  Object.freeze({
+    id: "prophet_r37@latch12", family: "prophet_r37", retired_on: "2026-11-07",
+    change: "the ±3 structure latch expires after 12 closed H1 bars instead of 50",
+    reason: "the smallest effect of the latch candidates, and less stuck time removed than latch8",
+    result: Object.freeze({ same_bars: 492, differing_stances: 14, candidate_better: 4, control_better: 3, p_value: 0.5, accuracy: 0.426, control_accuracy: 0.424 })
+  }),
+  Object.freeze({
+    id: "prophet_r38@latch8", family: "prophet_r38", retired_on: "2026-11-07",
+    change: "the ±3 structure latch expires after 8 closed H1 bars instead of 50",
+    reason: "R38 takes a side only on a confirmed signal (WAIT on 489 of 492 bars), so the latch never changed its stance: nothing to test",
+    result: Object.freeze({ same_bars: 492, differing_stances: 0, candidate_better: 0, control_better: 0, p_value: null, accuracy: 0.457, control_accuracy: 0.457 })
+  })
 ]);
 
 export function shadowVersions(candidates = CANDIDATES) {
@@ -402,10 +425,12 @@ async function buildShadowView(env, { days, now, candidates }) {
         stuck,
         criteria,
         verdict: !criteria.minimum_sample ? "collecting" : better ? "better_than_active: ready for owner review" : "not_better",
+        review: cand.review ? { ...cand.review, decisive_pairs: wins + losses, min_decisive_pairs: REVIEW_MIN_DECISIVE_PAIRS, due: wins + losses >= REVIEW_MIN_DECISIVE_PAIRS || now >= Date.parse(cand.review.by + "T00:00:00Z") } : null,
         latest: d.outputs.slice(-6).map((o) => ({ close_time: o.close_time, stance: o.stance, ...o.fields }))
       });
     }
     entry.control.latest = c.outputs.slice(-6).map((o) => ({ close_time: o.close_time, stance: o.stance, ...o.fields }));
+    entry.retired = RETIRED_CANDIDATES.filter((r) => r.family === family);
     families.push(entry);
   }
   return { window_days: days, scoring_version: SCORING_VERSION, warmup_bars: SHADOW_WARMUP_BARS, min_sample: SHADOW_MIN_SAMPLE, families };
