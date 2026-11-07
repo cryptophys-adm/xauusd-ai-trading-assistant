@@ -61,7 +61,10 @@ function ConclusionHero({ c, title, waiting, badges, constraint, confirmation }:
   );
 }
 
-/** The communication bus and the debate of one room, under its conclusion. */
+/**
+ * The communication bus and the Consensus Discussion of one room, under its conclusion (owner
+ * decision 2026-11-07: "Consensus Discussion" replaces "debate"; the API field stays `debate`).
+ */
 function Discussion({ room }: { room: any }) {
   const cal: Record<string, unknown> = {};
   for (const a of room.roster ?? []) cal[a.id] = a.calibration;
@@ -70,13 +73,37 @@ function Discussion({ room }: { room: any }) {
     <div className="space-y-3">
       {!!opens.length && <div className="eyebrow pt-1 text-[10px]">Communication bus · {opens.length} agents</div>}
       <div className="space-y-1.5">{opens.map((m: any) => <Post key={m.id} m={m} text={m.claim} calibration={calibrationText(m.calibration ?? cal[m.id])} />)}</div>
-      {!!debate.length && <div className="eyebrow pt-1 text-[10px]">Debate</div>}
+      {!!debate.length && <div className="eyebrow pt-1 text-[10px]">Consensus Discussion</div>}
       <div className="space-y-1.5">{debate.map((m: any) => <Post key={m.id} m={m} text={m.argument} />)}</div>
     </div>
   );
 }
 
-const phaseText = (room: any) => (room.phase === "closed" ? "debate closed" : room.phase === "debate" ? "debate open" : "openings on the bus");
+const phaseText = (room: any) => (room.phase === "closed" ? "discussion closed" : room.phase === "debate" ? "Consensus Discussion open" : "openings on the bus");
+
+/**
+ * The 1H tab ends with the H1 decision (owner decision 2026-11-07): the Reasoner decides last,
+ * from this room's communication bus, Consensus Discussion and conclusion, or 45 minutes after
+ * the close with whoever spoke. Analyst and Counselor are retired.
+ */
+function ReasonerDecision({ r }: { r: any }) {
+  if (!r || r.status === "not_started" || r.status === "unavailable") return null;
+  const pending = r.status === "awaiting_consensus" || r.status === "deciding";
+  return (
+    <section className="glass-inner border-violet-400/20 p-3" aria-label="H1 decision">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="eyebrow text-[10px]">H1 decision · Reasoner</span>
+        {!pending && r.decision && <Stance value={r.decision} />}
+        {!pending && r.confidence != null && <span className="mono text-[11px] text-slate-400">{pct(r.confidence)}</span>}
+        {r.consensus?.status === "partial" && <Badge tone="amber">no conclusion within 45 min</Badge>}
+        {r.consensus?.status === "empty" && <Badge tone="amber">no agent spoke</Badge>}
+      </div>
+      <p className="text-[12px] leading-relaxed text-slate-300">
+        {pending ? `The Reasoner decides after this room concludes, or ${r.fallback_minutes ?? 45} minutes after the close at the latest.` : r.reasoning}
+      </p>
+    </section>
+  );
+}
 
 function RoomTab({ room, tab }: { room: any; tab: Tab }) {
   const label = tabLabel(tab);
@@ -100,8 +127,9 @@ function RoomTab({ room, tab }: { room: any; tab: Tab }) {
   return (
     <div className="space-y-3">
       <ConclusionHero c={room.conclusion} title={`${label} War Room`} badges={badges} constraint={constraint} confirmation={confirmation}
-        waiting={room.phase === "closed" ? "The moderator could not conclude this round." : `The ${label} War Room is in session (${phaseText(room)}); the conclusion follows the debate.`} />
+        waiting={room.phase === "closed" ? "The moderator could not conclude this round." : `The ${label} War Room is in session (${phaseText(room)}); the conclusion follows the Consensus Discussion.`} />
       <Discussion room={room} />
+      {tab === "H1" && <ReasonerDecision r={room.reasoner_decision} />}
     </div>
   );
 }

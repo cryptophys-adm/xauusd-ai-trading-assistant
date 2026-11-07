@@ -155,7 +155,7 @@ import { readGlobalConclusion } from "./global-conclusion.mjs";
 import { readStrategy } from "./strategy-engine.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
-import { busEnabled, buildMultiAgentBusTask, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
+import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
 import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents, m15KeyForClose } from "./agent-threads.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { warRoomEnabled, runWarRoomBar, readWarRoom, readTldr } from "./war-room.mjs";
@@ -163,6 +163,10 @@ import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckSt
 import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
 import { runPendingTimeframeThreads, readTimeframeThread, tfThreadsEnabled } from "./timeframe-threads.mjs";
+import {
+  H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, AWAITING_CONSENSUS, H1_REASONER_GIVE_UP_MS, H1_PENDING_LOOKBACK_MS,
+  h1BarTimes, finalizeDue, consensusInput, reasonerLines, consensusGuard, emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
+} from "./h1-consensus.mjs";
 import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
 import { runHealthAlerts, readHealthAlerts } from "./health-alerts.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
@@ -611,15 +615,6 @@ async function enqueueHudAgents(env: Env, candleKey: string): Promise<void> {
   }
 }
 
-async function enqueueMultiAgentBus(env: Env, candleKey: string, inputFingerprint: string): Promise<void> {
-  await enqueueHudAgents(env, candleKey);
-  if (!busEnabled(env)) return;
-  try {
-    await sendQueueTask(env.XAUUSD_EVENTS, buildMultiAgentBusTask({ candleKey, inputFingerprint }) as unknown as QueueTask);
-  } catch (error) {
-    console.error("bus_enqueue_failed", JSON.stringify({ candle_key: candleKey, error: error instanceof Error ? error.message : String(error) }));
-  }
-}
 
 /**
  * Calibration status per approved identity: when TradingView last confirmed it (a parity
@@ -855,215 +850,201 @@ async function runAnalysis(
     };
     await env.WEBHOOK_BUFFER.put("analysis:" + safeKeyPart(candleKey), JSON.stringify({ ...details, created_at: timestamp, sources: Object.keys(payloads), decision: synthesis }), { expirationTtl: 60 * 60 * 24 * 14 });
     await setAnalysisRunStatus(env, candleKey, "degraded", details, "required_evidence_unavailable");
-    await enqueueMultiAgentBus(env, candleKey, inputFingerprint);
+    await enqueueHudAgents(env, candleKey);
     return { status: "degraded", missing_evidence: fusion.missing_evidence };
   }
 
-  const analystResult = await tracing.enterSpan("chat", async (span) => {
-    span.setAttributes({
-      "gen_ai.operation.name": "chat",
-      "gen_ai.agent.name": "xauusd-decision-agent",
-      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
-      "gen_ai.conversation.id": candleKey,
-      "gen_ai.request.model": String(env.AI_MODEL_ANALYST as keyof AiModels)
-    });
-    return env.AI.run(env.AI_MODEL_ANALYST as keyof AiModels, {
-    messages: chatMessages([
-      "You are the Analyst stage in an XAUUSD decision-support pipeline.",
-      "Classify the supplied indicator evidence without inventing missing values or prices.",
-      "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply EVIDENCE.policy.decision_policy. Never infer a field meaning that is not in the dictionary.",
-      "Prophet is the base directional bias. GMI can validate, block, or defer a setup but must not silently overwrite Prophet's bias.",
-      "Evidence includes the versioned evidence_fusion result, technical source_payloads, all local calculation evidence, and completed fundamental_news_analysis.",
-      laneRule(localPrimary),
-      "If evidence_fusion.complete is false, set directional_bias to NEUTRAL and missing_evidence to true; list every missing_evidence and validation_errors item.",
-      "If news_evidence.available is false, state that completed fundamental news analysis is unavailable. Do NOT invent news.",
-      "If news_evidence.available is true, consider the completed analysis and its underlying article evidence alongside technical evidence.",
-      "If informational_5m_context is present, it is 5m execution context only, labelled VERIFIED 5m (parity-approved) or UNVERIFIED 5m by its verification field; either way it must not change the decision or prices.",
-      "Return JSON only with keys: directional_bias (BULLISH, BEARISH, or NEUTRAL), setup_quality (integer 0-3), missing_evidence (boolean), reasoning.",
-      "Set directional_bias to NEUTRAL and missing_evidence to true if evidence is missing, stale, contradictory, or insufficient.",
-      "EVIDENCE:",
-      JSON.stringify(evidence)
-    ]),
-    max_tokens: MAX_TOKENS.analyst,
-    temperature: 0.1
-  } as never); });
+  // The H1 decision by Consensus Discussion (owner decision 2026-11-07): no model runs at the
+  // close. The fused evidence is parked until the 1H War Room has spoken; the Reasoner then
+  // decides last, from the room's consensus (finalizeH1Decision). Analyst and Counselor are retired.
+  const parkedAt = new Date().toISOString();
+  await env.WEBHOOK_BUFFER.put(H1_PENDING_PREFIX + safeKeyPart(candleKey), JSON.stringify({
+    candle_key: candleKey, ticker, timeframe, parked_at: parkedAt, input_fingerprint: inputFingerprint, local_primary: localPrimary,
+    sources: Object.keys(payloads), evidence, news_evidence: newsEvidence,
+    prophet_metrics: JSON.stringify({ prophet_r38: storedIndicatorMetrics(payloads.prophet_r38), prophet_r37_ssot: storedIndicatorMetrics(payloads.prophet_r37_ssot) }),
+    gmi_metrics: JSON.stringify(storedIndicatorMetrics(payloads.gmi_v12_70))
+  }), { expirationTtl: H1_PENDING_TTL_S });
+  await setAnalysisRunStatus(env, candleKey, "analyzing", { input_fingerprint: inputFingerprint, parked_at: parkedAt, chain: H1_CHAIN, stage: AWAITING_CONSENSUS }, AWAITING_CONSENSUS);
+  // A chart without a War Room (only H1 has one) never gets a consensus: decide now (fail-closed).
+  if (candleKey.split(":")[2] !== "60" || !h1BarTimes(candleKey)) await finalizeH1Decision(env, candleKey, { force: true });
+  return { status: AWAITING_CONSENSUS, missing_evidence: fusion.missing_evidence };
+  });
+}
 
-  const analystText = extractText(analystResult);
-  const counselorResult = await tracing.enterSpan("chat", async (span) => {
-    span.setAttributes({
-      "gen_ai.operation.name": "chat",
-      "gen_ai.agent.name": "xauusd-decision-agent",
-      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
-      "gen_ai.conversation.id": candleKey,
-      "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR as keyof AiModels)
-    });
-    return env.AI.run(env.AI_MODEL_COUNSELOR as keyof AiModels, {
-    messages: chatMessages([
-      "You are the Counselor stage in an XAUUSD decision-support pipeline.",
-      "Use only the JSON evidence and analyst output below. Do not invent prices or indicator definitions.",
-      "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply EVIDENCE.policy.decision_policy. Never infer a field meaning that is not in the dictionary.",
-      "Prophet is the base bias. GMI may validate, block, or defer a Prophet setup; it must not silently overwrite Prophet's bias.",
-      "Use the complete versioned evidence_fusion bundle as the canonical evidence set, including local_calculation_evidence and fundamental_news_analysis.",
-      laneRule(localPrimary),
-      "If evidence_fusion.complete is false, explicitly mark the result degraded and enumerate missing evidence and validation errors.",
-      "If news_evidence.available is false, acknowledge completed fundamental news analysis is unavailable. Do NOT fabricate news.",
-      "If news_evidence.available is true, weigh the completed news analysis and its underlying article evidence in scenarios.",
-      "If informational_5m_context is present, it is 5m execution context only, labelled VERIFIED 5m (parity-approved) or UNVERIFIED 5m by its verification field; either way it must not change the decision or prices.",
-      "Return concise JSON with keys: evidence_summary, bullish_scenario, bearish_scenario, neutral_scenario, confirmations, invalidation, risks, missing_data.",
-      "If the source payloads conflict or fields are unclear, say so explicitly.",
-      "EVIDENCE:",
-      JSON.stringify(evidence),
-      "ANALYST:",
-      analystText
-    ]),
-    max_tokens: MAX_TOKENS.counselor,
-    temperature: 0.1
-  } as never); });
-  const counselorText = extractText(counselorResult);
-
-  const reasonerResult = await tracing.enterSpan("chat", async (span) => {
-    span.setAttributes({
-      "gen_ai.operation.name": "chat",
-      "gen_ai.agent.name": "xauusd-decision-agent",
-      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
-      "gen_ai.conversation.id": candleKey,
-      "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
-    });
-    return env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
-    messages: chatMessages([
-      "You are the final Deep Reasoner stage for XAUUSD decision support.",
-      "Use only the supplied evidence, analyst output, and counselor output. Do not invent market prices or claim the models verified facts they did not receive.",
-      "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply EVIDENCE.policy.decision_policy. Never infer a field meaning that is not in the dictionary.",
-      "Prophet remains the base bias. GMI may validate, block, or wait on a setup. Do not silently reverse Prophet's bias.",
-      laneRule(localPrimary),
-      "If evidence_fusion.complete is false, decision MUST be WAIT or NO_TRADE, confidence and all price/risk fields MUST be null, and reasoning must enumerate missing_evidence and validation_errors.",
-      "If news_evidence.available is false, state completed fundamental news analysis was unavailable. Do NOT claim news supported or contradicted the setup.",
-      "If news_evidence.available is true, incorporate the completed news analysis and its underlying article evidence into final reasoning.",
-      "If informational_5m_context is present, it is 5m execution context only, labelled VERIFIED 5m (parity-approved) or UNVERIFIED 5m by its verification field; either way it must not change the decision or prices.",
-      "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation, trade_plan.", DECISION_TEXT_RULE, TRADE_PLAN_RULE,
-      "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
-      "EVIDENCE:",
-      JSON.stringify(evidence),
-      "ANALYST:",
-      analystText,
-      "COUNSELOR:",
-      counselorText
-    ]),
-    max_tokens: MAX_TOKENS.reasoner,
-    temperature: 0.1
-  } as never); });
-  const reasonerText = extractText(reasonerResult);
-  const parsedDecision = parseDecision(reasonerText);
-  let decision: JsonObject = fusion.complete ? parsedDecision : {
-    ...parsedDecision,
-    decision: "WAIT",
-    confidence: null,
-    entry_price: null,
-    stop_loss: null,
-    take_profit: null,
-    risk_reward: null,
-    position_size_pct: null,
-    reasoning: describeDegradedEvidence(fusion.missing_evidence, fusion.validation_errors)
+/** Evidence-fusion fields kept in analysis_runs.result_json. */
+function fusionDetails(fusion: any): JsonObject {
+  return {
+    schema_version: fusion.schema_version,
+    candle_key: fusion.candle_key,
+    symbol: fusion.symbol,
+    timeframe: fusion.timeframe,
+    candle_time: fusion.candle_time,
+    webhook_sources: fusion.webhook_sources,
+    local_calculation_versions: Object.fromEntries(Object.entries(fusion.local_calculations || {}).map(([name, item]: [string, any]) => [name, item?.calculation_version])),
+    news_analysis_key: asText(fusion.fundamental_news_analysis?.analysis_key),
+    news_analyzed_at: asText(fusion.fundamental_news_analysis?.analyzed_at)
   };
-  if (fusion.complete) decision = await plainDecision(env, decision);
+}
+
+/**
+ * The Reasoner decides LAST (owner decision 2026-11-07): once the 1H War Room of the bar has
+ * concluded, or H1_CONSENSUS_FALLBACK_MS (45 minutes) after the close with whoever spoke, it reads
+ * the room's communication bus, Consensus Discussion and conclusion beside the parked evidence
+ * and writes the H1 decision. An empty room gives a fail-closed WAIT without a model call.
+ * Idempotent: only the caller that moves the run's stage (error_code) from awaiting_consensus to
+ * finalizing decides; status stays "analyzing" until the decision is written (CHECK constraint).
+ */
+async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(), force = false }: { now?: number; force?: boolean } = {}): Promise<JsonObject> {
+  let room: any = null;
+  try { room = await readTimeframeThread(env.DB, "H1", { candleKey }); } catch { room = null; }
+  const consensus = consensusInput(room);
+  if (!force && !finalizeDue({ candleKey, now, roomConcluded: consensus.status === "concluded" })) return { status: "waiting_for_room", consensus: consensus.status };
+  const claim = await env.DB.prepare(
+    "UPDATE analysis_runs SET error_code = 'finalizing', updated_at = datetime('now') WHERE candle_key = ? AND status = 'analyzing' AND (error_code = 'awaiting_consensus' OR (error_code = 'finalizing' AND updated_at < datetime('now', '-10 minutes')))"
+  ).bind(candleKey).run();
+  if (!Number(claim?.meta?.changes || 0)) return { status: "not_pending" };
+  let parked: any = null;
+  try { parked = JSON.parse((await env.WEBHOOK_BUFFER.get(H1_PENDING_PREFIX + safeKeyPart(candleKey))) || "null"); } catch { parked = null; }
+  if (!parked?.evidence) {
+    // A failed run is re-analysed by the backfill, which parks the evidence again.
+    await setAnalysisRunStatus(env, candleKey, "failed", { reason: "The parked evidence of the bar is missing." }, "h1_pending_evidence_missing");
+    return { status: "failed", error: "h1_pending_evidence_missing" };
+  }
+  const evidence = parked.evidence;
+  const fusion = evidence.evidence_fusion || {};
+  const ticker = asText(parked.ticker), timeframe = asText(parked.timeframe);
+  const isH1 = candleKey.split(":")[2] === "60";
+
+  let decision: JsonObject;
+  let reasonerText: string | null = null;
+  let overridden = false;
+  if (consensus.status === "empty") {
+    decision = isH1 ? emptyConsensusDecision() : { ...emptyConsensusDecision(), reasoning: "This chart has no War Room, so there is no consensus to decide from. The decision stays WAIT." };
+  } else {
+    try {
+      const result = await tracing.enterSpan("chat", async (span) => {
+        span.setAttributes({
+          "gen_ai.operation.name": "chat",
+          "gen_ai.agent.name": "xauusd-decision-agent",
+          "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
+          "gen_ai.conversation.id": candleKey,
+          "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
+        });
+        return env.AI.run(env.AI_MODEL_REASONER as keyof AiModels, {
+          messages: chatMessages(reasonerLines({ evidence, consensus, laneRule: laneRule(parked.local_primary !== false), decisionTextRule: DECISION_TEXT_RULE, tradePlanRule: TRADE_PLAN_RULE })),
+          max_tokens: MAX_TOKENS.reasoner,
+          temperature: 0.1
+        } as never);
+      });
+      reasonerText = extractText(result);
+      const guarded = consensusGuard(parseDecision(reasonerText), consensus);
+      overridden = guarded.overridden;
+      decision = await plainDecision(env, guarded.decision as JsonObject);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const bar = h1BarTimes(candleKey);
+      if (!bar || now - bar.close < H1_REASONER_GIVE_UP_MS) {
+        // Back to the queue of the sweep: the next one retries.
+        await setAnalysisRunStatus(env, candleKey, "analyzing", { input_fingerprint: parked.input_fingerprint, parked_at: parked.parked_at, chain: H1_CHAIN, stage: AWAITING_CONSENSUS, last_error: message.slice(0, 300) }, AWAITING_CONSENSUS);
+        return { status: "reasoner_failed", message: message.slice(0, 200) };
+      }
+      decision = reasonerUnavailableDecision();
+    }
+  }
 
   const timestamp = new Date().toISOString();
   const synthesis = {
-    candle_key: candleKey,
-    ticker,
-    timeframe,
-    timestamp,
+    candle_key: candleKey, ticker, timeframe, timestamp,
     evidence_fusion: fusion,
-    analyst_model: env.AI_MODEL_ANALYST,
-    analyst_output: analystText,
-    counselor_model: env.AI_MODEL_COUNSELOR,
-    counselor_output: counselorText,
+    analysis_chain: H1_CHAIN,
+    consensus: consensusSummary(consensus, { overridden }),
     reasoner_model: env.AI_MODEL_REASONER,
     reasoner_output: reasonerText,
-    news_evidence: newsEvidence,
+    news_evidence: parked.news_evidence ?? evidence.news_evidence ?? null,
     decision
   };
-
   await upsertSynthesis(env, {
     candleKey, ticker, timeframe, timestamp,
-    prophetMetrics: JSON.stringify({
-      prophet_r38: storedIndicatorMetrics(payloads.prophet_r38),
-      prophet_r37_ssot: storedIndicatorMetrics(payloads.prophet_r37_ssot)
-    }),
-    gmiMetrics: JSON.stringify(storedIndicatorMetrics(payloads.gmi_v12_70)),
+    prophetMetrics: asText(parked.prophet_metrics) || "{}",
+    gmiMetrics: asText(parked.gmi_metrics) || "{}",
     analysis: JSON.stringify(synthesis),
-    model: [env.AI_MODEL_ANALYST, env.AI_MODEL_COUNSELOR, env.AI_MODEL_REASONER].join(",")
+    model: env.AI_MODEL_REASONER
   });
-
-  const confidence = typeof decision.confidence === "number" ? decision.confidence : null;
-  const entry = typeof decision.entry_price === "number" ? decision.entry_price : null;
-  const stop = typeof decision.stop_loss === "number" ? decision.stop_loss : null;
-  const target = typeof decision.take_profit === "number" ? decision.take_profit : null;
-  const rr = typeof decision.risk_reward === "number" ? decision.risk_reward : null;
-  const size = typeof decision.position_size_pct === "number" ? decision.position_size_pct : null;
-  const reasoning = asText(decision.reasoning) || reasonerText;
-
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const confidence = num(decision.confidence);
+  const reasoning = asText(decision.reasoning) || asText(reasonerText);
+  const action = asText(decision.decision) || "WAIT";
   await upsertTradeDecision(env, {
-    candleKey,
-    decision: asText(decision.decision) || "WAIT",
-    confidence,
-    entry,
-    stop,
-    target,
-    riskReward: rr,
-    size,
-    reasoning
+    candleKey, decision: action, confidence,
+    entry: num(decision.entry_price), stop: num(decision.stop_loss), target: num(decision.take_profit),
+    riskReward: num(decision.risk_reward), size: num(decision.position_size_pct), reasoning
   });
-
-  await env.SIGNAL_CACHE.put("latest:" + safeKeyPart(ticker) + ":" + safeKeyPart(timeframe), JSON.stringify(synthesis), {
-    expirationTtl: 60 * 60 * 24 * 7
-  });
-
-  const message = [
-    "XAUUSD AI DECISION SUPPORT",
-    "Symbol: " + ticker,
-    "Timeframe: " + timeframe,
-    "Candle: " + candleKey,
-    "Decision: " + (asText(decision.decision) || "WAIT"),
-    "Confidence: " + (confidence === null ? "not provided" : Math.round(confidence * 100) + "%"),
-    "Reason: " + reasoning.slice(0, 900),
-    "Note: advisory only; no trade was executed."
-  ].join("\n");
+  await env.SIGNAL_CACHE.put("latest:" + safeKeyPart(ticker) + ":" + safeKeyPart(timeframe), JSON.stringify(synthesis), { expirationTtl: 60 * 60 * 24 * 7 });
   try {
-    await sendTelegram(env, message);
+    await sendTelegram(env, [
+      "XAUUSD AI DECISION SUPPORT",
+      "Symbol: " + ticker,
+      "Timeframe: " + timeframe,
+      "Candle: " + candleKey,
+      "Decision: " + action,
+      "Confidence: " + (confidence === null ? "not provided" : Math.round(confidence * 100) + "%"),
+      "Reason: " + reasoning.slice(0, 900),
+      "Note: advisory only; no trade was executed."
+    ].join("\n"));
   } catch (error) {
     console.error("telegram_delivery_failed", JSON.stringify({ candle_key: candleKey, message: error instanceof Error ? error.message : "Unknown notification error" }));
   }
-
-  const analysisStatus = fusion.complete ? "complete" : "degraded";
   await env.WEBHOOK_BUFFER.put("analysis:" + safeKeyPart(candleKey), JSON.stringify({
-    status: analysisStatus,
-    created_at: timestamp,
-    sources: Object.keys(payloads),
-    decision: synthesis,
-    missing_evidence: fusion.missing_evidence,
-    validation_errors: fusion.validation_errors
+    status: "complete", created_at: timestamp, sources: parked.sources ?? [], decision: synthesis,
+    missing_evidence: fusion.missing_evidence ?? [], validation_errors: fusion.validation_errors ?? []
   }), { expirationTtl: 60 * 60 * 24 * 14 });
-  await setAnalysisRunStatus(env, candleKey, analysisStatus, {
-    input_fingerprint: inputFingerprint,
-    missing_evidence: fusion.missing_evidence,
-    validation_errors: fusion.validation_errors,
+  await setAnalysisRunStatus(env, candleKey, "complete", {
+    input_fingerprint: parked.input_fingerprint,
+    chain: H1_CHAIN,
+    consensus: synthesis.consensus,
+    missing_evidence: fusion.missing_evidence ?? [],
+    validation_errors: fusion.validation_errors ?? [],
     decision: synthesis.decision,
-    evidence_fusion: {
-      schema_version: fusion.schema_version,
-      candle_key: fusion.candle_key,
-      symbol: fusion.symbol,
-      timeframe: fusion.timeframe,
-      candle_time: fusion.candle_time,
-      webhook_sources: fusion.webhook_sources,
-      local_calculation_versions: Object.fromEntries(Object.entries(fusion.local_calculations).map(([name, item]: [string, any]) => [name, item.calculation_version])),
-      news_analysis_key: asText(fusion.fundamental_news_analysis?.analysis_key),
-      news_analyzed_at: asText(fusion.fundamental_news_analysis?.analyzed_at)
-    }
+    evidence_fusion: fusionDetails(fusion)
   }, null);
-  await enqueueMultiAgentBus(env, candleKey, inputFingerprint);
-  return { status: analysisStatus, missing_evidence: fusion.missing_evidence };
-  });
+  await enqueueHudAgents(env, candleKey);
+  return { status: "complete", decision: action, consensus: consensus.status, guard_overridden: overridden };
+}
+
+/** The Reasoner's H1 decision of one bar, for the 1H tab: decided, awaiting the room, or not started. */
+async function reasonerDecisionOf(env: Env, candleKey: string): Promise<JsonObject> {
+  try {
+    const run = await env.DB.prepare("SELECT status, error_code FROM analysis_runs WHERE candle_key = ?").bind(candleKey).first<{ status: string; error_code: string | null }>();
+    if (!run) return { status: "not_started" };
+    if (run.status === "analyzing") return { status: run.error_code === "finalizing" ? "deciding" : "awaiting_consensus", fallback_minutes: H1_CONSENSUS_FALLBACK_MS / 60_000 };
+    const row = await env.DB.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(candleKey).first<{ ai_analysis: string }>();
+    const synth = row ? JSON.parse(row.ai_analysis || "{}") : {};
+    const d = synth.decision || {};
+    return {
+      status: run.status === "complete" ? "decided" : run.status, chain: synth.analysis_chain ?? null,
+      decision: asText(d.decision) || null, confidence: typeof d.confidence === "number" ? d.confidence : null,
+      reasoning: asText(d.reasoning) || null, consensus: synth.consensus ?? null, decided_at: synth.timestamp ?? null
+    };
+  } catch {
+    return { status: "unavailable" };
+  }
+}
+
+/**
+ * The sweep's side of the 45-minute fallback: every H1 bar still awaiting its decision is
+ * finalized once its room concluded or 45 minutes passed since the close.
+ */
+async function finalizePendingH1Decisions(env: Env, now = Date.now()): Promise<JsonObject> {
+  const since = new Date(now - H1_PENDING_LOOKBACK_MS).toISOString().replace("T", " ").slice(0, 19);
+  const rows = ((await env.DB.prepare(
+    "SELECT candle_key FROM analysis_runs WHERE status = 'analyzing' AND (error_code = 'awaiting_consensus' OR (error_code = 'finalizing' AND updated_at < datetime('now', '-10 minutes'))) AND updated_at >= ? ORDER BY candle_key LIMIT 6"
+  ).bind(since).all<{ candle_key: string }>()).results) || [];
+  const out: JsonObject = {};
+  for (const row of rows) {
+    try { out[row.candle_key] = await finalizeH1Decision(env, row.candle_key, { now }); }
+    catch (error) { out[row.candle_key] = { status: "error", message: error instanceof Error ? error.message.slice(0, 200) : String(error) }; }
+  }
+  return { pending: rows.length, results: out };
 }
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (!env.WEBHOOK_SECRET) {
@@ -1830,7 +1811,10 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
         ingest_url: asText(env.INGEST_URL),
         ingest_secret: Boolean(env.INGEST_SECRET),
         webhook_secret: Boolean(env.WEBHOOK_SECRET),
+        // Analyst and Counselor serve the news analysis only; the H1 decision is the Reasoner's,
+        // after the 1H War Room's Consensus Discussion (owner decision 2026-11-07).
         models: { analyst: env.AI_MODEL_ANALYST, counselor: env.AI_MODEL_COUNSELOR, reasoner: env.AI_MODEL_REASONER },
+        h1_chain: H1_CHAIN,
         // local_computation arrives over the LocalComputationIngress RPC entrypoint;
         // "fresh" means a local-vs-webhook parity comparison ran in the last 2 hours.
         // A scheduled sweep (cron 10-59/15) re-reconciles the last closed H1 candles
@@ -2039,6 +2023,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     try {
       const thread = await readTimeframeThread(env.DB, chart);
       if (!thread) return dashboardJson({ status: "not_found", enabled: tfThreadsEnabled(env), chart }, 404);
+      // The 1H tab ends with the Reasoner's H1 decision of that bar (owner decision 2026-11-07).
+      if (chart === "H1" && thread.candle_key) thread.reasoner_decision = await reasonerDecisionOf(env, String(thread.candle_key));
       return dashboardJson({ status: "ok", enabled: tfThreadsEnabled(env), thread });
     } catch (error) {
       console.error("tf_thread_read_failed", error instanceof Error ? error.message : String(error));
@@ -2257,9 +2243,19 @@ export default {
       // Timeframe War Rooms (owner decision 2026-11-06): the D1, 4H and 1H rooms of the bars that
       // just closed, one after another, beside the sweep (a room takes up to about 5.5 minutes).
       // Behind TF_THREADS_ENABLED; idempotent per bar.
-      ctx.waitUntil(runPendingTimeframeThreads(env).then(tf => {
+      // The H1 decision follows its room (owner decision 2026-11-07): the Reasoner runs as soon as
+      // the 1H room concludes, and the sweep finalizes any bar still waiting 45 minutes after its close.
+      const onRoom = async ({ chart, key, result }: { chart: string; key: string; result: Record<string, unknown> }) => {
+        if (chart !== "H1" || (result?.status !== "complete" && result?.status !== "already_complete")) return;
+        const finalized = await finalizeH1Decision(env, key);
+        if (finalized.status !== "not_pending") console.log("h1_consensus_decision", JSON.stringify({ candle_key: key, ...finalized }));
+      };
+      ctx.waitUntil(runPendingTimeframeThreads(env, { onRoom }).then(tf => {
         if (tf.status !== "disabled") console.log("tf_threads", JSON.stringify(tf));
       }).catch(e => console.error("tf_threads_failed", e instanceof Error ? e.message : String(e))));
+      ctx.waitUntil(finalizePendingH1Decisions(env).then(r => {
+        if (Number(r.pending)) console.log("h1_consensus_pending", JSON.stringify(r));
+      }).catch(e => console.error("h1_consensus_pending_failed", e instanceof Error ? e.message : String(e))));
       ctx.waitUntil(reconcileRecentCandles(env).then(async result => {
         try { await backfillRecentAnalyses(env, { loadPayloads: loadWebhookPayloadsFromD1, runAnalysis, setStatus: setAnalysisRunStatus }); } catch (e) { console.error("backfill_failed", e instanceof Error ? e.message : String(e)); }
         // RFC_INDICATOR_AGENT_PLATFORM P1: score statements whose horizon has closed, and

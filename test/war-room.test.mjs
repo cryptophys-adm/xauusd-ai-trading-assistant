@@ -52,7 +52,7 @@ function fakeAI({ stances = {}, biases = {}, conclusion = null, fail = new Set()
       let content;
       if (/moderator of the XAUUSD Live War Room/.test(sys)) content = conclusion || { stance: "WAIT", confidence: 0.6, summary: "Stay flat: the flush has no confirmation and the higher timeframe still says wait.", reasons: ["The 5m read gives no trigger.", "Volatility is high after the flush."], dissent: ["kinetic_engine"] };
       else if (fail.has(agent)) throw new Error("model down");
-      else if (/debate/.test(sys)) content = { agent, stance: stances[agent] || "WAIT", ...(biases[agent] ? { bias: biases[agent] } : {}), confidence: 0.55, rebuts: [agent === "technical" ? "risk" : "technical"], argument: "The flush was on rising volume, which argues against reading it as a stop hunt." };
+      else if (/Consensus Discussion/.test(sys)) content = { agent, stance: stances[agent] || "WAIT", ...(biases[agent] ? { bias: biases[agent] } : {}), confidence: 0.55, rebuts: [agent === "technical" ? "risk" : "technical"], argument: "The flush was on rising volume, which argues against reading it as a stop hunt." };
       else content = { agent, stance: stances[agent] || "WAIT", ...(biases[agent] ? { bias: biases[agent] } : {}), confidence: agent === "kinetic_engine" ? 0.7 : 0.5, claim: "My own data supports waiting for the next candle." };
       return { choices: [{ message: { content: JSON.stringify(content) }, finish_reason: "stop" }], usage: { total_tokens: 50 } };
     }
@@ -98,11 +98,11 @@ test("every agent opens on the bus, the minority and the Risk Manager rebut, the
   assert.ok(ai.calls.every(c => c.model === "@cf/zai-org/glm-5.3-flash"), "primary model only");
 
   // Openings stay inside their own role: the HUD agent sees only its HUD reading.
-  const kinetic = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content));
+  const kinetic = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content));
   const data = JSON.parse(kinetic.request.messages[1].content.split("YOUR DATA:\n")[1]);
   assert.deepEqual(Object.keys(data), ["hud", "timeframe", "reading"]);
   // The debate sees the whole bus.
-  const rebuttal = ai.calls.find(c => /debate/.test(c.request.messages[0].content));
+  const rebuttal = ai.calls.find(c => /Consensus Discussion/.test(c.request.messages[0].content));
   assert.equal(JSON.parse(rebuttal.request.messages[1].content.split("COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):\n")[1]).length, 6);
 
   assert.equal((await runWarRoomBar(e, task())).status, "already_complete", "idempotent per bar");
@@ -114,7 +114,7 @@ test("a unanimous room: the Risk Manager stress-tests the consensus", async () =
   await runWarRoomBar(e, task());
   const room = await readWarRoom(e.DB);
   assert.deepEqual(room.debate.map(d => [d.id, d.status]), [["risk", "ok"]]);
-  const prompt = ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  const prompt = ai.calls.find(c => /Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   assert.match(prompt, /The bus is unanimous\. Stress-test the consensus/);
 });
 
@@ -122,7 +122,7 @@ test("openings read back in roster order, whatever order the parallel steps fini
   // The Higher-Timeframe Desk answers last; the bus still lists htf, news, technical, risk, then the HUDs.
   const slow = fakeAI();
   const run = slow.run;
-  slow.run = async (model, request) => { if (/"agent":"htf"/.test(request.messages[1].content) && !/debate/.test(request.messages[0].content)) await new Promise(r => setTimeout(r, 20)); return run(model, request); };
+  slow.run = async (model, request) => { if (/"agent":"htf"/.test(request.messages[1].content) && !/Consensus Discussion/.test(request.messages[0].content)) await new Promise(r => setTimeout(r, 20)); return run(model, request); };
   const e = env(slow);
   await runWarRoomBar(e, task());
   assert.deepEqual((await readWarRoom(e.DB)).openings.map(o => o.id), ["htf", "news", "technical", "risk", "kinetic_engine", "fabio_amt"]);
@@ -142,7 +142,7 @@ test("no confirmation, no entry: the Risk Manager enforces it and a BUY conclusi
   const room = await readWarRoom(e.DB);
   assert.equal(room.conclusion.status, "invalid_output", "no confirmed buy in this bar: the BUY conclusion is rejected");
   assert.deepEqual(room.confirmations.h1_prophet_r38, { buy_confirmed: false, sell_confirmed: false });
-  const riskOpening = ai.calls.find(c => /"agent":"risk"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  const riskOpening = ai.calls.find(c => /"agent":"risk"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   assert.match(riskOpening, /Rule: no confirmation, no entry/);
   assert.ok(JSON.parse(riskOpening.split("YOUR DATA:\n")[1]).confirmations, "the Risk Manager sees the confirmations");
   const moderator = ai.calls.find(c => /moderator of the XAUUSD Live War Room/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
@@ -175,9 +175,9 @@ test("calibration status is shown once: no disclaimer asked, uncalibrated HUD co
   assert.equal(kinetic.confidence, 0.4, "no verified statement: confidence capped at 0.4 (the model said 0.7)");
   assert.equal(room.openings.find(o => o.id === "fabio_amt").status, "ok", "an id written with a space still names the agent");
   assert.deepEqual(room.roster.find(r => r.id === "kinetic_engine").calibration, { verified_lines: 0, derived_lines: 0, total_lines: room.roster.find(r => r.id === "kinetic_engine").calibration.total_lines });
-  const hudPrompt = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  const hudPrompt = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   assert.match(hudPrompt, /never mention calibration, verification or comparators/);
-  const debate = ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  const debate = ai.calls.find(c => /Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   const bus = JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):\n")[1]);
   assert.equal(bus.find(b => b.id === "kinetic_engine").evidence, "no statement calibrated yet");
   assert.equal(bus.find(b => b.id === "htf").evidence, "parity-approved H1 chain");
@@ -214,9 +214,9 @@ test("computed from verified bars: Camarilla and session statements lift the 0.4
   assert.deepEqual(ok.room.roster.find(r => r.id === "interstellar_eyes").calibration, { verified_lines: 0, derived_lines: 1, total_lines: 1 });
   assert.equal(ok.room.openings.find(o => o.id === "interstellar_eyes").confidence, 0.7, "a statement computed from verified bars lifts the cap");
   assert.equal(ok.room.openings.find(o => o.id === "kinetic_engine").confidence, 0.4, "engine internals stay capped");
-  const prompt = ok.ai.calls.find(c => /"agent":"interstellar_eyes"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request.messages[1].content;
+  const prompt = ok.ai.calls.find(c => /"agent":"interstellar_eyes"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content)).request.messages[1].content;
   assert.match(prompt, /Computed from verified bars: On the daily Camarilla levels/);
-  const debate = ok.ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  const debate = ok.ai.calls.find(c => /Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   const bus = JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):\n")[1]);
   assert.equal(bus.find(b => b.id === "interstellar_eyes").evidence, "1 computed from verified bars (of 1 statement)");
 
@@ -235,7 +235,7 @@ test("a persuaded dissenter concedes in the debate and stays on the record", asy
   ai.run = async (model, request) => {
     const r = await run(model, request);
     const body = JSON.parse(r.choices[0].message.content);
-    if (/debate/.test(request.messages[0].content) && body.agent === "kinetic_engine") {
+    if (/Consensus Discussion/.test(request.messages[0].content) && body.agent === "kinetic_engine") {
       Object.assign(body, { stance: "WAIT", rebuts: ["kinetic_engine"], argument: "The H1 decision is WAIT and my channel read is not calibrated, so I drop my SELL and stay flat." });
       r.choices[0].message.content = JSON.stringify(body);
     }
@@ -250,7 +250,7 @@ test("a persuaded dissenter concedes in the debate and stays on the record", asy
   assert.equal(k.stance, "WAIT");
   assert.deepEqual(k.rebuts, []);
   assert.equal(room.debate.find(d => d.id === "risk").conceded, false);
-  const prompt = ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  const prompt = ai.calls.find(c => /Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   assert.match(prompt, /never your own id/);
 });
 
@@ -279,12 +279,12 @@ test("the 15m Desk reads only the 15m chart; the H1 chain moves to the Higher-Ti
   assert.ok(!approved.room.roster.some(r => r.id === "h1"), "no H1 Desk in the 15m room");
   assert.equal(approved.room.roster.find(r => r.id === "m15").calibration.label, "parity-approved 15m chain");
   assert.equal(approved.room.openings.find(o => o.id === "m15").confidence, 0.8);
-  const m15Prompt = approved.ai.calls.find(c => /"agent":"m15"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request.messages[1].content;
+  const m15Prompt = approved.ai.calls.find(c => /"agent":"m15"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content)).request.messages[1].content;
   const data = JSON.parse(m15Prompt.split("YOUR DATA:\n")[1]);
   assert.equal(data.timeframe, "15 minutes");
   assert.ok(data.reading.some(s => /confirmed SELL/.test(s)), "the 15m Prophet R38 confirmation, in words");
   assert.ok(!("h1_decision" in data), "the 15m Desk does not read the H1 chain");
-  const htfPrompt = approved.ai.calls.find(c => /"agent":"htf"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request.messages[1].content;
+  const htfPrompt = approved.ai.calls.find(c => /"agent":"htf"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content)).request.messages[1].content;
   assert.equal(JSON.parse(htfPrompt.split("YOUR DATA:\n")[1]).h1_decision, "WAIT", "the Higher-Timeframe Desk carries the H1 chain");
 
   const observed = await run("localcalc-observed:");
@@ -310,11 +310,11 @@ test("every opening carries a bias besides its action (owner decision 2026-11-06
   assert.equal(by.kinetic_engine.bias, "BULLISH", "WAIT for the action, but the data leans bullish");
   assert.equal(by.technical.bias, "BEARISH", "case is normalised");
   assert.equal(by.risk.bias, "NEUTRAL", "a missing bias falls back to the stance's direction");
-  const prompt = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/debate/.test(c.request.messages[0].content)).request;
+  const prompt = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content)).request;
   assert.match(prompt.messages[1].content, /"bias":"BULLISH\|BEARISH\|NEUTRAL"/);
   assert.ok(prompt.response_format.json_schema.schema.properties.bias, "the strict schema asks for it");
   assert.equal(validateOpening({ agent: "risk", stance: "WAIT", bias: "UP", confidence: 0.5, claim: "Flat." }, "risk").errors.includes("bias_invalid"), true);
-  const debate = ai.calls.find(c => /debate/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
+  const debate = ai.calls.find(c => /Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   assert.match(JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):\n")[1]).find(b => b.id === "kinetic_engine").bias, /BULLISH/);
 });
 
@@ -336,7 +336,7 @@ test("a moderator that overrules the whole room is asked once to correct its sta
     if (/moderator of the XAUUSD Live War Room/.test(request.messages[0].content)) {
       moderatorCalls += 1;
       const content = moderatorCalls === 1 ? buy : { stance: "WAIT", confidence: 0.6, summary: "The room waits: the confirmation alone does not carry it.", reasons: ["Every agent holds WAIT."], dissent: [] };
-      if (moderatorCalls === 2) assert.match(request.messages.at(-1).content, /at least one agent on the bus or in the debate holding that stance/);
+      if (moderatorCalls === 2) assert.match(request.messages.at(-1).content, /at least one agent on the bus or in the Consensus Discussion holding that stance/);
       return { choices: [{ message: { content: JSON.stringify(content) }, finish_reason: "stop" }], usage: { total_tokens: 50 } };
     }
     return run0(model, request);
@@ -372,7 +372,7 @@ test("a young room with fewer than half of its agents heard waits for quorum; th
   e.AI = ai;
   const second = await runWarRoomBar(e, task(), { clock: young });
   assert.equal(second.status, "complete");
-  const openingCalls = ai.calls.filter((c) => !/debate|moderator/.test(c.request.messages[0].content));
+  const openingCalls = ai.calls.filter((c) => !/Consensus Discussion|moderator/.test(c.request.messages[0].content));
   assert.equal(openingCalls.length, 4, "only the four failed openings are asked again");
   assert.equal(WAR_ROOM_QUORUM_WAIT_MS, 5 * 60_000);
 });
@@ -395,7 +395,7 @@ test("decision and bias: a room that agrees on WAIT but splits on the bias debat
   assert.equal(r.status, "complete");
   const room = await readWarRoom(e.DB);
   assert.deepEqual(room.debate.map((d) => d.id).sort(), ["htf", "kinetic_engine", "news", "risk"].sort(), "the two bullish dissenters, the strongest bearish defender and the Risk Manager");
-  const debatePrompt = ai.calls.find((c) => /debate/.test(c.request.messages[0].content) && /"agent":"kinetic_engine"/.test(c.request.messages[1].content)).request.messages.map((m) => m.content).join("\n");
+  const debatePrompt = ai.calls.find((c) => /Consensus Discussion/.test(c.request.messages[0].content) && /"agent":"kinetic_engine"/.test(c.request.messages[1].content)).request.messages.map((m) => m.content).join("\n");
   assert.match(debatePrompt, /agrees on the action but not on the bias: the room leans bearish/);
   assert.match(debatePrompt, /"bias":"BULLISH\|BEARISH\|NEUTRAL"/);
   assert.equal(room.conclusion.stance, "WAIT");

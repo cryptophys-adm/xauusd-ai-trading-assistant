@@ -260,3 +260,61 @@ test("/api/hud/levels and /api/conclusion/global answer as routes of their own (
   assert.equal(g.body.status, "ok");
   assert.equal(g.body.global.action, "WAIT");
 });
+
+test("H1 by Consensus Discussion: the sweep has the Reasoner decide a parked bar after its room, once; an empty room is a fail-closed WAIT (owner decision 2026-11-07)", async () => {
+  const { env } = await workerEnv();
+  const prompts = [];
+  const answer = JSON.stringify({ decision: "WAIT", confidence: 0.45, reasoning: "The room leans up but waits for a confirmed buy, so there is no trade for this candle.", entry_price: null, stop_loss: null, take_profit: null, risk_reward: null, position_size_pct: null, confirmation: null, invalidation: null, trade_plan: null });
+  env.AI = { async run(model, input) { prompts.push({ model, text: (input?.messages || []).map(m => m.content).join("\n") }); return { response: answer, choices: [{ message: { content: answer }, finish_reason: "stop" }], usage: { total_tokens: 10 } }; } };
+  env.AI_MODEL_REASONER = "@cf/test/reasoner";
+  const hour = 3_600_000;
+  const roomOpen = Math.floor(Date.now() / hour) * hour - hour; // its room concluded
+  const lateOpen = roomOpen - 2 * hour; // no room, long past the 45-minute fallback
+  const db = env.DB.db;
+  for (const open of [roomOpen, lateOpen]) {
+    const key = SYMBOL + ":60:" + open;
+    db.prepare("INSERT INTO analysis_runs (candle_key, status, attempt_count, started_at, updated_at, result_json) VALUES (?, 'analyzing', 1, datetime('now'), datetime('now'), '{}')").run(key); db.prepare("UPDATE analysis_runs SET error_code = 'awaiting_consensus' WHERE candle_key = ?").run(key);
+    await env.WEBHOOK_BUFFER.put("h1:pending:" + key, JSON.stringify({
+      candle_key: key, ticker: SYMBOL, timeframe: "60", parked_at: new Date().toISOString(), input_fingerprint: "f", local_primary: true, sources: ["prophet_r38"],
+      evidence: { candle_key: key, evidence_fusion: { complete: true, missing_evidence: [], validation_errors: [] }, news_evidence: { available: false } },
+      news_evidence: { available: false }, prophet_metrics: "{}", gmi_metrics: "{}"
+    }));
+  }
+  const roomKey = SYMBOL + ":60:" + roomOpen;
+  const run = new Date(roomOpen).toISOString(), ts = new Date().toISOString();
+  const msg = db.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, ts, stance, confidence, body_json, status) VALUES ('tf:H1', ?, ?, ?, ?, ?, ?, ?, ?)");
+  msg.run(run, "brief", "system", ts, null, null, JSON.stringify({ candle_key: roomKey, roster: ["h1", "risk"] }), "info");
+  msg.run(run, "open:h1", "h1", ts, "WAIT", 0.7, JSON.stringify({ claim: "The 1-hour Prophet points up without a confirmed buy.", bias: "BULLISH", name: "1H Desk" }), "ok");
+  msg.run(run, "open:risk", "risk", ts, "WAIT", 0.5, JSON.stringify({ claim: "No entry is confirmed.", bias: "NEUTRAL", name: "Risk Manager" }), "ok");
+  msg.run(run, "conclusion", "moderator", ts, "WAIT", 0.6, JSON.stringify({ summary: "The room leans up and waits for a confirmed buy.", bias: "BULLISH", reasons: ["No confirmation yet."], dissent: [] }), "ok");
+
+  const sweep = async () => {
+    const { ctx, settle } = execution();
+    const output = captureConsole();
+    try { await worker.scheduled({ cron: "10-59/15 * * * *", scheduledTime: Date.now() }, env, ctx); await settle(); } finally { output.restore(); }
+    return output;
+  };
+  const output = await sweep();
+  assert.deepEqual(output.lines.error.filter(l => /h1_consensus|ReferenceError|TypeError/.test(l)), [], output.lines.error.join("\n"));
+  const reasoner = prompts.filter(p => p.model === "@cf/test/reasoner" && /You are the Reasoner/.test(p.text));
+  assert.equal(reasoner.length, 1, "one Reasoner call: the empty room needs none");
+  assert.match(reasoner[0].text, /CONSENSUS:\n\{"status":"concluded"/);
+  assert.match(reasoner[0].text, /"agent":"1H Desk"/);
+  assert.ok(!prompts.some(p => /You are the (Analyst|Counselor) stage in an XAUUSD decision-support pipeline/.test(p.text)), "the Analyst and the Counselor are retired");
+
+  const synth = (open) => JSON.parse(db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ?").get(SYMBOL + ":60:" + open).ai_analysis);
+  const decided = synth(roomOpen);
+  assert.equal(decided.analysis_chain, "consensus_reasoner");
+  assert.equal(decided.consensus.status, "concluded");
+  assert.equal(decided.consensus.room_bias, "BULLISH");
+  assert.equal(decided.decision.decision, "WAIT");
+  assert.equal(decided.analyst_output, undefined);
+  const empty = synth(lateOpen);
+  assert.equal(empty.consensus.status, "empty");
+  assert.match(empty.decision.reasoning, /No agent of the 1H War Room spoke within 45 minutes/);
+  assert.deepEqual(db.prepare("SELECT status FROM analysis_runs WHERE candle_key IN (?, ?) ORDER BY candle_key").all(SYMBOL + ":60:" + lateOpen, roomKey).map(r => r.status), ["complete", "complete"]);
+  assert.equal(db.prepare("SELECT decision FROM trade_decisions WHERE candle_key = ?").get(roomKey).decision, "WAIT");
+
+  await sweep();
+  assert.equal(prompts.filter(p => /You are the Reasoner/.test(p.text)).length, 1, "a decided bar is never decided again");
+});

@@ -6,6 +6,15 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(h1): the Reasoner decides the H1 bar last, from the 1H War Room's Consensus Discussion; the Analyst, the Counselor and the old H1 bus are retired (owner decision 2026-11-07).
+  - **Why:** the chain decided at the close, before any discussion, so the decision was ambiguous and almost always WAIT. The Analyst and the Counselor ran only in the background (no screen showed their output). In the last 32 production runs the Counselor returned no answer every time, and the Analyst 7 times.
+  - **Flow:** complete evidence is parked at the close (no model call). The 1H War Room meets: bus, Consensus Discussion, conclusion. The Reasoner then decides when the room concludes, or 45 minutes after the close at the latest with whoever spoke. Degraded evidence is still a fail-closed WAIT at once.
+  - **Rules:** the decision follows the room's consensus. A WAIT room with a clear bias may become BUY or SELL only with the matching confirmed 1-hour Prophet R38 signal and exact prices. A deterministic guard turns any BUY or SELL against the room into WAIT. Vetoes: Prophet `t_enc` 4, a GMI verdict of ∓3 against the trade, missing prices.
+  - **Fail-closed:** an empty room gives WAIT without a model call. A Reasoner still failing 2 hours after the close gives WAIT.
+  - **1H room:** the 1H Desk reads the local records of the bar (like the 4H and D1 Desks). No room prompt carries an H1 decision any more, and the H1 reference rule of the 1H conclusion is gone.
+  - **Nexus:** the 1H tab ends with the Reasoner's H1 decision (`reasoner_decision` on `GET /api/threads/timeframe?chart=H1`).
+  - **Terms:** "debate" is now "Consensus Discussion" in every room prompt, the Nexus labels and the docs. Stored step names (`debate:*`) and API fields stay for compatibility.
+  - **preview-e2e:** the old bus and Threads 1H checks are replaced by a check that the old bus no longer runs.
 - fix(bus): the Workers AI fallback is more reliable (owner decision 2026-11-07).
   - **Why:** three preview-e2e runs failed on 2026-11-06 (#122, #127, #128) when glm-5.3-flash timed out.
   - **Timeouts no longer pin the fallback at once:** one timeout sent every later step of a run to the fallback, as in the news thread of #127. Now one timeout falls back for its step only, and the second pins the fallback.
