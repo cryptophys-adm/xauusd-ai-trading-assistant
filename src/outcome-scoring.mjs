@@ -237,6 +237,10 @@ export async function h1Statements(env, candleKey) {
   } catch { /* thread tables absent */ }
   const [prophet, gmi] = await Promise.all(["prophet", "gmi"].map(async (e) => parse(await env.WEBHOOK_BUFFER?.get?.("localcalc:" + candleKey + ":" + e))));
   out.push(...indicatorStances(prophet, gmi));
+  // P6: the new indicator agents carried by the H1 HUD snapshot, scored without a model.
+  const snapshot = parse(await env.SIGNAL_CACHE?.get?.("hud:60:" + candleKey));
+  const st = snapshot?.huds?.supertrend?.fields;
+  if (st && (st.direction === 1 || st.direction === -1)) out.push({ subject: "indicator:supertrend", source: "indicator", stance: st.direction === 1 ? "BUY" : "SELL", confidence: null });
   return out;
 }
 

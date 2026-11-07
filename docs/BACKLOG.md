@@ -59,7 +59,5 @@ reports to the owner.
    - `gmi-core-tf.mjs` repeats the approved H1 GMI core.
    - Merging them changes the GMI implementation hash, so the H1 `gmi` identity needs a new 24-candle approval.
    - Schedule it in a calibration window, with the H1 GMI alert active.
-10. **The Grid Bot Protocol HUD** (owner, 2026-11-05).
-   - It is the only HUD that is not computed (`not_computed`).
-   - It can be ported from the Pine source, but its statements stay "not yet calibrated" until a Pine candidate comparator exists.
-11. **P6: Supertrend, then Order Block.** The first new indicator agents through the manifest path (owner decision 4, 2026-11-07: Supertrend first). P2 shipped on 2026-11-07, so nothing blocks it.
+   - It cannot be done without the owner: it edits a hashed engine file (`gmi-core-tf.mjs`), which the project rules allow only in a calibration window the owner opens.
+10. **Comparator alerts for the new agents (owner, optional).** Supertrend, Order Blocks and Grid Bot Protocol (2026-11-07) have no TradingView comparator, so their statements stay unverified (Supertrend counts as computed from verified bars). A Pine candidate alert carrying their fields would let parity approve them, as for the H1 HUD fields.

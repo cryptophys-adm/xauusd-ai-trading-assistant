@@ -447,7 +447,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
 
   // One budget for the bar, shared by every parallel step (and its correction call).
   const roomEnv = env;
-  const maxPerHour = Number(env.WAR_ROOM_MAX_CALLS_PER_HOUR ?? 112);
+  const maxPerHour = Number(env.WAR_ROOM_MAX_CALLS_PER_HOUR ?? 136);
   let remaining = 0;
   try { remaining = (Number.isFinite(maxPerHour) ? maxPerHour : 0) - (await callsInLastHour(db, clock(), "warroom")); } catch { remaining = 0; }
   let calls = 0;

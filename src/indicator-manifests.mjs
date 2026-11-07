@@ -9,8 +9,9 @@
 // and shadow versions (indicator-registry.mjs).
 //
 // kind:      engine (a parity-checked local port of a Pine indicator), library (shared code with
-//            no webhook of its own), hud (one agent per Pine HUD section), desk (a room agent that
-//            reads several sources), moderator.
+//            no webhook of its own), hud (one agent per Pine HUD section), indicator (a new
+//            indicator agent added through this path, P6; carried by the HUD snapshot like a HUD),
+//            desk (a room agent that reads several sources), moderator.
 // reference: pine_ssot (pinescript/ssot, parity through its TradingView alert), pine_candidate
 //            (a candidate alert in pinescript/candidates), builtin (a TradingView built-in),
 //            none (no comparator: read as not yet calibrated).
@@ -45,7 +46,12 @@ export const MANIFESTS = Object.freeze([
   m({ id: "gabfx_price_action", kind: "hud", name: "GABFX Price Action", family: "price action", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 3" }, rooms: ALL_ROOMS }),
   m({ id: "playbook_execution", kind: "hud", name: "Playbook Execution", family: "execution", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 4" }, rooms: ALL_ROOMS }),
   m({ id: "decision_matrix", kind: "hud", name: "Decision Matrix", family: "trend", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 5" }, reference: "pine_ssot", hud_identity: "gmi_hud", rooms: ALL_ROOMS }),
-  m({ id: "grid_bot_protocol", kind: "hud", name: "Grid Bot Protocol", family: "execution", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 6" }, computed: false, rooms: ALL_ROOMS }),
+  m({ id: "grid_bot_protocol", kind: "hud", name: "Grid Bot Protocol", family: "execution", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 6" }, rooms: ALL_ROOMS }),
+
+  // New indicator agents (P6, owner decision 4, 2026-11-07: Supertrend first, then Order Block).
+  // No comparator alert yet: their readings are formulas of verified bars or engine internals.
+  m({ id: "supertrend", kind: "indicator", name: "Supertrend", family: "trend", source: { indicator: "TradingView built-in ta.supertrend(3, 10)", builtin: "ta.supertrend" }, reference: "builtin", rooms: ALL_ROOMS, scored: ["indicator:supertrend"] }),
+  m({ id: "order_blocks", kind: "indicator", name: "Order Blocks", family: "order flow", source: { indicator: "Prophet R38 order-block filter and GMI v12.70 Aegis validated blocks", pine: R38 }, rooms: ALL_ROOMS }),
 
   // Desks: room agents that read several sources (src/war-room.mjs, src/timeframe-threads.mjs).
   m({ id: "m15", kind: "desk", name: "15m Desk", family: "timeframe desk", source: { indicator: "Prophet R38, Prophet R37, GMI v12.70 (15m records)" }, reference: "pine_ssot", identity: "prophet", rooms: ["M15"] }),
@@ -62,8 +68,8 @@ export const MANIFESTS = Object.freeze([
 const byId = new Map(MANIFESTS.map((x) => [x.id, x]));
 export const manifestOf = (id) => byId.get(id) ?? null;
 
-/** The HUD roster, in manifest order (hud-reading.mjs HUD_NAMES / HUD_IDS). */
-export const HUD_MANIFESTS = Object.freeze(MANIFESTS.filter((x) => x.kind === "hud"));
+/** The agents carried by the HUD snapshot (HUD sections and P6 indicators), in manifest order (hud-reading.mjs HUD_NAMES / HUD_IDS). */
+export const HUD_MANIFESTS = Object.freeze(MANIFESTS.filter((x) => x.kind === "hud" || x.kind === "indicator"));
 
 /** Agent families (reputation.mjs): every HUD, desk and the moderator. */
 export const MANIFEST_FAMILIES = Object.freeze(Object.fromEntries(MANIFESTS.filter((x) => x.kind !== "engine" && x.kind !== "library").map((x) => [x.id, x.family])));

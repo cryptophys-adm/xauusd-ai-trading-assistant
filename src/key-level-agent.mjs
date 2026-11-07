@@ -11,6 +11,8 @@
 //   swings           the last swing highs and lows (2-bar fractals) of the 15m, 1H, 4H and D1 bars, 0.9
 //   previous day     high and low 1.0, close 0.6; previous week high and low 1.0
 //   round numbers    every 50 dollars 0.8, every 25 dollars 0.4, near price
+//   order blocks     the best bullish and bearish block of each chart, top and bottom 0.7 (P6, 2026-11-07)
+//   supertrend       the Supertrend line of each chart 0.6 (P6, 2026-11-07)
 // A zone is a run of levels, sorted by price, whose span stays within the tolerance (0.3 x the 1H
 // ATR, at least 1 dollar). Its score is the sum of its weights; its sources are the distinct
 // (kind, timeframe) pairs. Strength: strong (score >= 6), medium (>= 3), weak. Candidate (owner decision
@@ -73,6 +75,16 @@ export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = nul
       add(cpr.pivot, "pivot", tf, `${TF_NAME[tf]} pivot`, 1);
       add(cpr.tc, "pivot", tf, `${TF_NAME[tf]} CPR top`, 0.7);
       add(cpr.bc, "pivot", tf, `${TF_NAME[tf]} CPR bottom`, 0.7);
+    }
+    // P6: the order blocks of each chart and its Supertrend line (a dynamic support or resistance).
+    const obf = snap.huds.order_blocks?.fields || {};
+    const obTf = String(snap.timeframe ?? chart);
+    if (TF_NAME[obTf]) {
+      add(obf.bull_top, "order block", obTf, `${TF_NAME[obTf]} bullish order block top`, 0.7);
+      add(obf.bull_bottom, "order block", obTf, `${TF_NAME[obTf]} bullish order block bottom`, 0.7);
+      add(obf.bear_top, "order block", obTf, `${TF_NAME[obTf]} bearish order block top`, 0.7);
+      add(obf.bear_bottom, "order block", obTf, `${TF_NAME[obTf]} bearish order block bottom`, 0.7);
+      add(snap.huds.supertrend?.fields?.line, "supertrend", obTf, `${TF_NAME[obTf]} Supertrend line`, 0.6);
     }
     const va = snap.huds.fabio_amt?.fields || {};
     const tf = String(snap.timeframe ?? chart);

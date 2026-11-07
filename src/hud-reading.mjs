@@ -209,6 +209,37 @@ export function readHud(agentId, hud = {}) {
       if (f.volume_veto) add("Volume is dead, so the volume veto is active.");
       break;
     }
+    case "grid_bot_protocol": {
+      // Ported 2026-11-07 (Mizan cshi_engine and GMI's deploy status). Grid levels are Reasoner output.
+      const STATUS = {
+        muddy_waters_on: "muddy waters, a high-entropy chop where a grid bot may run",
+        toxic_chop_off: "toxic chop, too erratic for a grid bot",
+        optimal_on: "optimal for a grid bot",
+        trending_off: "trending or dead, so a grid bot should stay off"
+      };
+      if (isNum(f.cshi_viability)) add(`The CSHI grid viability is ${fixed(f.cshi_viability)} percent, so the market is ${STATUS[f.deploy_status] ?? "not classified"}.`);
+      break;
+    }
+    case "supertrend": {
+      // P6: a pure formula of the chart's closed bars (ta.supertrend(3, 10)).
+      if (f.direction === 1 || f.direction === -1) {
+        const up = f.direction === 1;
+        addFromBars(`Supertrend (factor ${f.factor ?? 3}, ATR ${f.atr_period ?? 10}) is ${up ? "bullish" : "bearish"}, with its line at ${price(f.line)} ${up ? "below" : "above"} price${isNum(f.distance_atr) ? `, ${fixed(Math.abs(f.distance_atr))} ATR away` : ""}.`);
+        addFromBars(f.flipped ? `It flipped ${up ? "bullish" : "bearish"} on this closed candle.` : `It has held this side for ${f.bars_since_flip} closed candles since its last flip.`);
+      }
+      break;
+    }
+    case "order_blocks": {
+      // P6: the zones the Prophet R38 order-block filter tracks and GMI's Aegis validated blocks.
+      if (isNum(f.active_bull) || isNum(f.active_bear)) add(`Active order blocks: ${f.active_bull ?? 0} bullish and ${f.active_bear ?? 0} bearish.`);
+      if (isNum(f.bull_top) && isNum(f.bull_bottom)) add(`The best bullish order block runs from ${price(f.bull_bottom)} to ${price(f.bull_top)}${isNum(f.close) ? `, ${f.close >= f.bull_bottom && f.close <= f.bull_top ? "with price inside it" : f.close > f.bull_top ? "below price" : "above price"}` : ""}.`);
+      if (isNum(f.bear_top) && isNum(f.bear_bottom)) add(`The best bearish order block runs from ${price(f.bear_bottom)} to ${price(f.bear_top)}${isNum(f.close) ? `, ${f.close >= f.bear_bottom && f.close <= f.bear_top ? "with price inside it" : f.close < f.bear_bottom ? "above price" : "below price"}` : ""}.`);
+      if (isNum(f.bull_target) || isNum(f.bear_target)) add(`The next opposite block to aim at is ${isNum(f.bull_target) ? `${price(f.bull_target)} for longs` : ""}${isNum(f.bull_target) && isNum(f.bear_target) ? " and " : ""}${isNum(f.bear_target) ? `${price(f.bear_target)} for shorts` : ""}.`);
+      if (OB_FILTER[f.filter_status]) add(`The order-block filter says ${OB_FILTER[f.filter_status]}.`);
+      const inside = [f.in_bull_order_block && "a validated bullish block", f.in_bear_order_block && "a validated bearish block", f.in_bull_mitigation && "a bullish mitigation zone", f.in_bear_mitigation && "a bearish mitigation zone"].filter(Boolean);
+      if (typeof f.in_bull_order_block === "boolean") add(inside.length ? `GMI places price inside ${inside.join(" and ")}.` : "GMI places price outside every validated block and mitigation zone.");
+      break;
+    }
     case "tactical_muscles": {
       if (isNum(f.pct_rank)) add(`The JMA momentum percentile rank is ${f.pct_rank}, ${f.pct_rank >= 90 ? "an overbought extreme" : f.pct_rank <= 10 ? "an oversold extreme" : "away from the extremes"}.`);
       break;

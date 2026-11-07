@@ -377,8 +377,7 @@ test("P2: GET /api/indicator-agents serves every manifest with its live state", 
   const body = await r.json();
   assert.equal(body.status, "ok");
   assert.ok(body.agents.length >= 27);
-  const grid = body.agents.find((a) => a.id === "grid_bot_protocol");
-  assert.equal(grid.lifecycle, "not_computed");
+  assert.ok(body.agents.some((a) => a.id === "supertrend" && a.kind === "indicator"), "the P6 agents are registered");
   assert.equal(body.agents.find((a) => a.id === "prophet_r38").lifecycle, "candidate", "no parity approval in an empty database");
   assert.ok(body.lifecycle_counts.active >= 1);
 });

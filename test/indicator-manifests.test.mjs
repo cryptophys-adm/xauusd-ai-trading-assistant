@@ -13,18 +13,20 @@ test("P2: one manifest per agent; the HUD roster and the agent families are gene
   const ids = MANIFESTS.map((x) => x.id);
   assert.equal(new Set(ids).size, ids.length, "unique ids");
   assert.deepEqual(HUD_IDS, HUD_MANIFESTS.map((x) => x.id));
-  assert.equal(HUD_IDS.length, 14);
+  assert.equal(HUD_IDS.length, 16, "14 HUD sections + the P6 indicator agents");
+  assert.deepEqual(HUD_IDS.slice(-2), ["supertrend", "order_blocks"]);
   assert.equal(HUD_NAMES.kinetic_engine, "Kinetic Engine (TVA)");
   assert.equal(AGENT_FAMILIES, MANIFEST_FAMILIES);
   // Every room agent of the code has a manifest.
   for (const id of [...Object.keys(TF_DESKS), ...Object.keys(DESK_AGENTS), "moderator"]) assert.ok(manifestOf(id), id);
   for (const x of MANIFESTS) {
-    assert.ok(["engine", "library", "hud", "desk", "moderator"].includes(x.kind), x.id);
+    assert.ok(["engine", "library", "hud", "indicator", "desk", "moderator"].includes(x.kind), x.id);
     assert.ok(["pine_ssot", "pine_candidate", "builtin", "none"].includes(x.reference), x.id);
     if (x.source?.pine) assert.ok(existsSync(new URL("../" + x.source.pine, import.meta.url)), x.source.pine);
     if (x.shadow_family) assert.ok(CANDIDATES.some((c) => c.family === x.shadow_family), x.shadow_family);
   }
-  assert.equal(manifestOf("grid_bot_protocol").computed, false, "not computed until ported");
+  assert.equal(manifestOf("grid_bot_protocol").computed, true, "ported 2026-11-07");
+  assert.equal(manifestOf("supertrend").reference, "builtin");
 });
 
 test("the registry: lifecycle from the H1 parity identity; parity, scorecards, stuck states and shadow versions per agent", () => {
@@ -50,6 +52,6 @@ test("the registry: lifecycle from the H1 parity identity; parity, scorecards, s
   assert.equal(gmi.stuck_states.length, 0, "a closed stuck state is not shown");
   const fabio = registryEntry(manifestOf("fabio_amt"), { registryRows: rows, cards, stuck });
   assert.deepEqual(fabio.scorecards.agent.map((a) => [a.room, a.decisive]), [["M15", 28], ["H1", 0]]);
-  assert.equal(registryEntry(manifestOf("grid_bot_protocol"), {}).lifecycle, "not_computed");
+  assert.equal(registryEntry({ ...manifestOf("grid_bot_protocol"), computed: false }, {}).lifecycle, "not_computed");
   assert.equal(lifecycleOf(manifestOf("risk"), []), "active");
 });

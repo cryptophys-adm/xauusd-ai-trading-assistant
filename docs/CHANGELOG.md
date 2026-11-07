@@ -6,6 +6,12 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(agents): P6, Supertrend and Order Blocks, and the Grid Bot Protocol HUD ported. Three more agents in every room.
+  - **Supertrend:** `ta.supertrend(3, 10)` on closed bars. Its H1 direction is scored as `indicator:supertrend`, and its line is a key level.
+  - **Order Blocks:** it reads the Prophet R38 order-block filter and GMI's Aegis blocks, so no new definition was needed. Its best blocks are key levels.
+  - **Grid Bot Protocol:** Mizan `cshi_engine` and GMI's deploy status, from the Pine source. It was the last HUD not computed.
+  - **Hourly caps:** `WAR_ROOM_MAX_CALLS_PER_HOUR` goes from 112 to 136 and `TF_THREADS_MAX_CALLS_PER_HOUR` from 120 to 140, for the three extra openings per room.
+  - **Backlog:** the Grid Bot Protocol and P6 items are done. B4 stays: it needs a calibration window from the owner.
 - feat(agents): P2 of RFC_INDICATOR_AGENT_PLATFORM, indicator manifests and the registry.
   - **Manifests:** `src/indicator-manifests.mjs` gives one manifest per engine, library, HUD agent, desk and the moderator. No hashed file changes.
   - **Generated rosters:** the HUD roster and the agent families of the crowd line are now generated from the manifests.

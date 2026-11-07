@@ -24,11 +24,12 @@ const snapshot = buildHudSnapshot(bundle, { now });
 const h1 = buildH1LocalCalculations(bundle, { now });
 const approved = { ...h1.records.find(r => r.engine === "prophet").values.comparable, ...h1.records.find(r => r.engine === "gmi").values.comparable };
 
-test("14 HUDs are named; 13 are computed locally and Grid Bot Protocol is declared not computed", () => {
-  assert.equal(HUD_IDS.length, 14);
+test("14 HUDs and the P6 indicator agents (Supertrend, Order Blocks) are named, and all are computed locally (Grid Bot Protocol ported 2026-11-07)", () => {
+  assert.equal(HUD_IDS.length, 16, "14 Pine HUD sections + Supertrend + Order Blocks (P6, 2026-11-07)");
   assert.equal(HUD_NAMES.prophet, "Prophet");
-  assert.deepEqual(Object.keys(snapshot.huds).sort(), HUD_IDS.filter(id => id !== "grid_bot_protocol").sort());
-  assert.deepEqual(snapshot.not_computed, ["grid_bot_protocol"]);
+  assert.deepEqual(Object.keys(snapshot.huds).sort(), [...HUD_IDS].sort());
+  assert.deepEqual(snapshot.not_computed, []);
+  assert.ok(["muddy_waters_on", "toxic_chop_off", "optimal_on", "trending_off"].includes(snapshot.huds.grid_bot_protocol.fields.deploy_status));
   assert.equal(snapshot.candle_key, h1.candle_key);
 });
 
