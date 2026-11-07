@@ -95,7 +95,7 @@ cryptophys-aether --(service binding AGENTS -> ai-kernel AgentRpc, host_worker=c
 | Phase | Repository | Content |
 |---|---|---|
 | A0 | xauusd (docs) | This RFC; owner decisions A1 to A6 and O5 to O13 |
-| A1 | xauusd | Compliance checks (K1) and the decision-card builder (K2, without `AuditReadRpc`) |
+| A1 | xauusd | Compliance checks (K1) and the decision-card builder (K2, without `AuditReadRpc`). **Shipped 2026-11-07** (`src/compliance.mjs`, `src/decision-cards.mjs`). |
 | A2 | **cryptophys-aether** (new) | Worker skeleton, D1 `aether-knowledge`, `KnowledgeIngress` entrypoint, Canon v1 (KB v4 import, doctrine, roles, definitions), CI, tests, dry-run deploy |
 | A3 | platform | Register the `cryptophys-aether` host and its four agents (migration), the report kind `knowledge_audit`, the resource-register rows |
 | A4 | cryptophys-aether | Indexes `aether-canon` and `aether-market` (ensure script, metadata indexes first), batched embedding, auditor and guardian loops, kernel reports |

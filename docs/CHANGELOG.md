@@ -6,6 +6,10 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(aether): phase A1, agent compliance checks and decision cards (owner go on RFC_AETHER_KNOWLEDGE_GUARDIAN).
+  - **Compliance:** `src/compliance.mjs` and D1 `compliance_checks` (migration 0011). Five deterministic checks run once over every stored room message: order or size wording, stance against bias, calibration talk, field names, and data scope. `GET /api/compliance` returns rule breaks per 100 messages; Nexus shows them on the Scorecards page.
+  - **Decision cards:** `src/decision-cards.mjs` and `GET /api/decision-cards`. One card per room conclusion, for Aether, with no level, price, plan or size.
+  - **Read-only:** neither changes a message or a decision.
 - docs: RFC `docs/RFC_AETHER_KNOWLEDGE_GUARDIAN.md` (draft, revision 2). Aether is a separate Knowledge Guardian cluster: decision audit, compliance with role and doctrine, its own Canon (master knowledge) and learned knowledge, and self-calibration by proposal (shadow tests; the owner promotes by PR).
   - Vectorize is recommended separate from the platform's agent memory, so the state machine and the state market stay apart.
   - It is design only, and it lists the owner decisions needed.
