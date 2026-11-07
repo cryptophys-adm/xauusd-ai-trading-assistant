@@ -51,22 +51,35 @@ jobs:
         run: npx --yes wrangler@4.45.0 deploy --config workers/xauusd-nexus-dashboard/wrangler.jsonc
 
       - name: Smoke test
+        # nexus.cryptophys.work is behind Cloudflare Access (owner, 2026-11-07), so an unauthenticated
+        # request gets the Access login redirect, not the dashboard. The custom domain must answer
+        # either with the dashboard or with that redirect; the content checks run against the
+        # Worker's own workers.dev address, which serves the same deployed version.
         run: |
           node --input-type=module <<'NODE'
+          const DOMAIN = "https://nexus.cryptophys.work";
+          const ORIGIN = "https://xauusd-nexus-dashboard.afif-kw.workers.dev";
           const get = async (u) => { for (let i = 0; i < 10; i++) { try { const r = await fetch(u, { signal: AbortSignal.timeout(20000) }); if (r.ok) return r; } catch {} await new Promise(r => setTimeout(r, 3000)); } return null; };
-          const page = await get("https://nexus.cryptophys.work/");
+          let front = null;
+          for (let i = 0; i < 10 && !front; i++) { try { front = await fetch(DOMAIN + "/", { redirect: "manual", signal: AbortSignal.timeout(20000) }); } catch { await new Promise(r => setTimeout(r, 3000)); } }
+          if (!front) { console.error("custom domain did not answer"); process.exit(1); }
+          const location = front.headers.get("location") || "";
+          if (front.status >= 300 && front.status < 400 && /^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com\//.test(location)) console.log(`custom domain: protected by Cloudflare Access (${front.status})`);
+          else if (front.ok && (await front.text()).includes('id="root"')) console.log("custom domain: dashboard served");
+          else { console.error(`custom domain: unexpected answer ${front.status} ${location.slice(0, 80)}`); process.exit(1); }
+          const page = await get(ORIGIN + "/");
           const html = page ? await page.text() : "";
           if (!/<!doctype html>/i.test(html) || !html.includes('id="root"')) { console.error("dashboard page not served"); process.exit(1); }
           const script = html.match(/src="(\/assets\/[^"]+\.js)"/);
-          if (!script || !(await get("https://nexus.cryptophys.work" + script[1]))) { console.error("dashboard bundle not served"); process.exit(1); }
-          const status = await get("https://nexus.cryptophys.work/api/status");
+          if (!script || !(await get(ORIGIN + script[1]))) { console.error("dashboard bundle not served"); process.exit(1); }
+          const status = await get(ORIGIN + "/api/status");
           if (!status) { console.error("/api/status proxy failed"); process.exit(1); }
           console.log(JSON.stringify(await status.json(), null, 2).slice(0, 2000));
           // Chart data via the MARKET_DATA RPC binding (market-data Worker may still be deploying: retry).
           let chart = null;
           for (let i = 0; i < 12 && !chart; i++) {
             try {
-              const r = await fetch("https://nexus.cryptophys.work/api/ohlcv?timeframe=H1&limit=50", { signal: AbortSignal.timeout(20000) });
+              const r = await fetch(ORIGIN + "/api/ohlcv?timeframe=H1&limit=50", { signal: AbortSignal.timeout(20000) });
               const body = await r.json().catch(() => null);
               if (r.ok && Array.isArray(body?.candles) && body.candles.length > 0) chart = body;
               else console.log("ohlcv not ready:", r.status, JSON.stringify(body).slice(0, 300));
