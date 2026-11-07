@@ -67,13 +67,15 @@
     "LIVE_ROOM_MAX_CALLS_PER_HOUR": "48",
     // Live War Room 15m (owner decision 2026-11-05): every agent opens on the bus, debates for at
     // most 3 minutes, and the moderator concludes for the main panel. It replaces the legacy live
-    // room and the per-H1 HUD agents. About 27 calls per 15m close.
+    // room and the per-H1 HUD agents. About 30 calls per 15m close since 2026-11-07 (three more
+    // agents: Grid Bot Protocol ported, Supertrend and Order Blocks added, P6), so 136 an hour.
     "WAR_ROOM_ENABLED": "true",
-    "WAR_ROOM_MAX_CALLS_PER_HOUR": "112",
+    "WAR_ROOM_MAX_CALLS_PER_HOUR": "136",
     // Timeframe War Rooms (owner decision 2026-11-06): the 1H, 4H and D1 Threads are War Rooms of
-    // all agents, one per closed bar (about 26 calls each; at most three rooms in one hour).
+    // all agents, one per closed bar (about 29 calls each since 2026-11-07; at most three rooms in
+    // one hour).
     "TF_THREADS_ENABLED": "true",
-    "TF_THREADS_MAX_CALLS_PER_HOUR": "120",
+    "TF_THREADS_MAX_CALLS_PER_HOUR": "140",
     // News Daily (owner decision 2026-11-06): the last 24 hours, each headline tagged once.
     "NEWS_DAILY_ENABLED": "true",
     "NEWS_DAILY_MAX_CALLS_PER_HOUR": "6"

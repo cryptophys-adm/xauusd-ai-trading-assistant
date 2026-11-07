@@ -227,3 +227,11 @@ test("P7: the agents of the Live War Room 15m and the 1H War Room are scored by 
   const again = await scoreRecentStatements(env, { now: Math.max(now, m15Now) });
   assert.equal(again.agent_scores ?? 0, 0, "once per bar");
 });
+
+test("P6: the H1 Supertrend direction is scored as indicator:supertrend from the H1 HUD snapshot", async () => {
+  const { h1Statements } = await import("../src/outcome-scoring.mjs");
+  const key = "OANDA:XAUUSD:60:1";
+  const env = { DB: d1(), SIGNAL_CACHE: kv({ ["hud:60:" + key]: JSON.stringify({ huds: { supertrend: { fields: { direction: -1, line: 4100 } } } }) }), WEBHOOK_BUFFER: kv({}) };
+  const st = (await h1Statements(env, key)).find((s) => s.subject === "indicator:supertrend");
+  assert.deepEqual(st, { subject: "indicator:supertrend", source: "indicator", stance: "SELL", confidence: null });
+});

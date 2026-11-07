@@ -430,11 +430,17 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - A BUY or SELL conclusion without the matching confirmation is rejected (`entry_without_confirmation`).
     - Nexus shows the confirmation state under the conclusion.
   - **Quorum (2026-11-06):** within 5 minutes of the close (`WAR_ROOM_QUORUM_WAIT_MS`), a room with fewer than half of its agents heard does not conclude. The queue task is redelivered after 60 seconds (`WarRoomQuorumPending`), and only the failed openings are asked again. Past the wait, the room concludes with whoever spoke. Production 13:15 that day: Workers AI 3021 and 3040 failed 14 of 18 openings, and the room concluded on four agents.
-  - The agents on the room agent model, the moderator on the moderator model, each with its own fallback (since 2026-11-07), within `WAR_ROOM_MAX_CALLS_PER_HOUR = 112` (about 27 calls per close). Messages are stored in `agent_thread_messages` (thread `warroom:<day>`, steps `brief`, `open:*`, `debate:*` and `conclusion`).
+  - The agents on the room agent model, the moderator on the moderator model, each with its own fallback (since 2026-11-07), within `WAR_ROOM_MAX_CALLS_PER_HOUR = 136` (about 30 calls per close since the three agents of 2026-11-07; 112 before). The timeframe rooms' cap is `TF_THREADS_MAX_CALLS_PER_HOUR = 140` (120 before). Messages are stored in `agent_thread_messages` (thread `warroom:<day>`, steps `brief`, `open:*`, `debate:*` and `conclusion`).
   - Read API: `GET /api/war-room/latest[?bar=<iso>]`.
   - When on, it replaces the legacy live room and the per-H1 HUD agents (their budget moves here). Turning it `"false"` restores both.
 - Live: C0, C2, C3, C5, C6 and C7 are built. `HUD_AGENTS_ENABLED` is `"true"` in `wrangler.jsonc` (owner approval 2026-11-05, after the #94 preview-e2e proof). After each H1 synthesis, one agent per computed HUD (13) and a moderator post in Threads 1H, within `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`. At each 15m close, Trade Management, Kinetic Engine, Fabio AMT and Aegis Footprint speak in the live room, within `LIVE_ROOM_MAX_CALLS_PER_HOUR = 48`. Turning the flag to `"false"` stops new HUD posts at once.
-- Backlog (owner, 2026-11-05): B4 (merge the GMI core copy, needs a new H1 GMI approval in a calibration window) and the Grid Bot Protocol HUD. See `docs/BRIEF_HUD_AGENTS.md`. All open work that waits on the market, a date or the owner is listed in `docs/BACKLOG.md`.
+- Backlog (owner, 2026-11-05): B4 (merge the GMI core copy, needs a new H1 GMI approval in a calibration window). The Grid Bot Protocol HUD was ported on 2026-11-07 (below). All open work that waits on the market, a date or the owner is listed in `docs/BACKLOG.md`.
+- **Grid Bot Protocol ported (2026-11-07, `local-engines/producer/src/grid-bot.mjs`):**
+  - **What it computes:** Mizan `cshi_engine` on the chart's closed bars. It takes the spread toxicity and the price velocity, each smoothed with `ta.ema` over 5 bars, and the 14-bar efficiency ratio, and turns them into a viability score. The score is ranked over the last 100 bars with `ta.percentrank`.
+  - **Deploy status:** GMI's status follows from the rank and the bar's GMI entropy: muddy waters (on), toxic chop (off), optimal (on), or trending / dead (off).
+  - **Not HUD fields:** the grid range, trigger, count and TP/SL stay Reasoner output (RFC_HUD_AGENTS §7).
+  - **Calibration:** no comparator exists yet, so it reads as not yet calibrated.
+  - **Without GMI:** it is absent when GMI is.
 - **Macro & Aether Sensors complete** (owner decision 2026-11-05: every TradingView metric becomes agent data). `local-engines/producer/src/macro-aether.mjs` computes every row of the Pine HUD for the H1 and M15 snapshots:
   - **Rows:** CONSOL. GRAVITY (TDM profile gravity), Z3 KINETIC SPREAD, MACRO CYCLE (DXY and USDT ROC), EST. MACRO SHIFT (macro kinematics on DXY and USDT 4h), ASSET GRAVITY (WTI RSI14 at the chart timeframe, from the USOIL M15 and H1 series), Q-GRAVITY PULL and MACRO SMR (the FVG reservoir).
   - **MTF HURST and MTF Z-SCORE** were already in the snapshot.
@@ -460,7 +466,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - **Read APIs:** `GET /api/scorecards?days=30` (per subject: directional hit rate, WAIT accuracy, missed opportunities, Brier and sessions, plus the open stuck states) and `GET /api/stuck-states`.
 
 ### Indicator manifests and registry (RFC_INDICATOR_AGENT_PLATFORM P2, owner go 2026-11-07)
-- **Manifests** (`src/indicator-manifests.mjs`): one per agent. They cover the engines Prophet R38, Prophet R37 and GMI v12.70, the Mizan library, the 14 HUD agents, the desks and the moderator. Each manifest gives:
+- **Manifests** (`src/indicator-manifests.mjs`): one per agent. They cover the engines Prophet R38, Prophet R37 and GMI v12.70, the Mizan library, the 14 HUD agents, the P6 indicator agents, the desks and the moderator. Each manifest gives:
   - kind and name;
   - family;
   - the Pine source and section it reads;
@@ -476,6 +482,19 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Scorecards:** 30-day scorecards as an indicator and as a room agent per room.
   - **Stuck states and shadow versions:** the open stuck states and the shadow versions of the agent.
 - Read-only. The P4 auditor in the platform can read it.
+
+### New indicator agents: Supertrend and Order Blocks (RFC_INDICATOR_AGENT_PLATFORM P6, 2026-11-07)
+- They are the first agents added through the manifest path (owner decision 4: Supertrend first, then Order Block). Both are computed in the HUD snapshot (`kind: "indicator"`), so they speak in every room, D1 to 15m, like a HUD agent.
+- **Supertrend** (`local-engines/producer/src/supertrend.mjs`):
+  - The TradingView built-in `ta.supertrend(3, 10)`, reproduced on the chart's closed bars: hl2, a Wilder ATR, ratcheting bands, and the direction from the previous line.
+  - **Fields:** direction (1 bullish, -1 bearish), line, whether it flipped on this bar, bars since the flip, and the distance in ATR.
+  - **Reading:** a pure formula of closed bars, so it reads as "computed from verified bars".
+  - **Scoring:** its H1 direction is scored as `indicator:supertrend`. Its line is a key level (0.6 × the chart weight).
+- **Order Blocks:**
+  - No new definition: it reads the zones the parity-approved Prophet R38 order-block filter already tracks, plus GMI's Aegis validated blocks and mitigation zones.
+  - **Fields:** active bullish and bearish blocks; the best block on each side (top and bottom); the next opposite block as a target; the filter status; whether price sits inside a validated block or a mitigation zone.
+  - The best blocks' edges are key levels (0.7 × the chart weight).
+- **Calibration:** neither has a comparator alert yet (reference `builtin` and `none`), so their readings carry no verified statement. The Supertrend reading counts as computed from verified bars.
 
 ### Crowd line, reputation and scorecards (RFC_INDICATOR_AGENT_PLATFORM P7, owner go 2026-11-07)
 - **Owner decisions of 2026-11-07:** the RFC's proposed values are accepted. That covers the scoring definition (horizon 4 candles, 0.5 × ATR, the v3 WAIT rule), the stuck-state thresholds (8 candles, more than 3 × ATR), and Supertrend first then Order Block (P6).

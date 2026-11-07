@@ -103,3 +103,15 @@ test("the agent's reading: zones near price, candidates, and a plain summary", (
   assert.deepEqual(empty.zones, []);
   assert.equal(empty.summary, "No price yet.");
 });
+
+test("P6: each chart's order blocks and Supertrend line are key levels", () => {
+  const s = snap("60", { "60": camarilla(4040) }, {
+    order_blocks: { fields: { bull_top: 4012, bull_bottom: 4006, bear_top: 4090, bear_bottom: 4084 } },
+    supertrend: { fields: { direction: 1, line: 4018.5 } }
+  });
+  const raw = rawLevels({ snapshots: { "60": s } });
+  const ob = raw.filter((l) => l.kind === "order block");
+  assert.deepEqual(ob.map((l) => l.label), ["1H bullish order block bottom", "1H bullish order block top", "1H bearish order block bottom", "1H bearish order block top"]);
+  assert.equal(ob[0].weight, 1.05, "0.7 x 1H 1.5");
+  assert.deepEqual(raw.filter((l) => l.kind === "supertrend").map((l) => [l.label, l.price, l.weight]), [["1H Supertrend line", 4018.5, 0.9]]);
+});

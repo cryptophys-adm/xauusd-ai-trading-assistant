@@ -13,7 +13,8 @@
 // local record (for example "prophet_r38.d_enc"). The AI Worker marks a field verified
 // only when it equals the approved record of the same candle. Every other field is an
 // engine internal that no comparator has checked yet and is read as unverified.
-// A HUD whose data is not computed locally (Grid Bot Protocol) is absent, never invented.
+// A HUD whose data is not computed locally is absent, never invented (Grid Bot Protocol needs the
+// bar's GMI entropy, so it is absent when GMI is).
 //
 // This module is not part of any approved implementation hash: it only imports the
 // hashed engines, so changing it never touches the approved H1 or 5m identities.
@@ -23,6 +24,8 @@ import { computeGmiOnChart } from "../../gmi/src/gmi-core-tf.mjs";
 import { computeGmiOnHtfChart } from "../../gmi/src/gmi-core-htf.mjs";
 import { CHART_TICKERID, prophetR38TEnc, prophetConsensusDir } from "./h1-producer.mjs";
 import { computeMacroAether } from "./macro-aether.mjs";
+import { supertrendFields } from "./supertrend.mjs";
+import { gridBotFields } from "./grid-bot.mjs";
 
 export const HUD_SNAPSHOT_VERSION = "cryptophys.hud-snapshot.v1";
 const CHART = Object.freeze({
@@ -176,7 +179,9 @@ export function buildHudSnapshot(bundle, { chart = "H1", now = Date.now(), minti
       tactical_muscles: hud({ pct_rank: num(gd.pct_rank) }),
       gabfx_price_action: hud({ in_qm_buy: zones.inQmBuy === true, in_qm_sell: zones.inQmSell === true, in_rbs: zones.inRbs === true, in_sbr: zones.inSbr === true }),
       playbook_execution: hud({ htf_state: num(gd.htf_state), mtf_state: num(gd.mtf_state), ltf_state: num(gd.ltf_state), ext_state: num(gd.ext_state) }),
-      decision_matrix: hud({ verdict: num(g.verdict), gate: num(g.gate), conflict: g.conflict === true, branch: typeof gd.branch === "string" ? gd.branch : null, is_chaos: gd.is_chaos === true }, { verdict: GMI("verdict"), gate: GMI("gate"), conflict: GMI("conflict") })
+      decision_matrix: hud({ verdict: num(g.verdict), gate: num(g.gate), conflict: g.conflict === true, branch: typeof gd.branch === "string" ? gd.branch : null, is_chaos: gd.is_chaos === true }, { verdict: GMI("verdict"), gate: GMI("gate"), conflict: GMI("conflict") }),
+      // Ported 2026-11-07 (grid-bot.mjs): Mizan cshi_engine and GMI's deploy status, with the bar's GMI entropy.
+      ...(() => { const gb = gridBotFields(chartBars, { entropy: gd.entropy, mintick }); return gb ? { grid_bot_protocol: hud(gb) } : {}; })()
     } : {}),
     chronos_matrix: hud({
       session_new_york: inSession(ny, 8 * 60, 17 * 60), session_london: inSession(ny, 3 * 60, 12 * 60), session_tokyo: inSession(ny, 19 * 60, 4 * 60),
@@ -191,6 +196,21 @@ export function buildHudSnapshot(bundle, { chart = "H1", now = Date.now(), minti
         in_bull_mitigation: zones.in_mitig_bull === true, in_bear_mitigation: zones.in_mitig_bear === true, volume_veto: zones.veto === true
       } : {})
     }, { d_enc: R38("d_enc") }),
+    // P6 (RFC_INDICATOR_AGENT_PLATFORM, owner decision 4, 2026-11-07): the first new indicator
+    // agents. Supertrend is the TradingView built-in ta.supertrend(3, 10) on the chart's closed
+    // bars (supertrend.mjs). Order Blocks reads the zones the parity-approved Prophet R38 engine
+    // already tracks (its order-block filter) and GMI's Aegis validated blocks and mitigation zones:
+    // no new definition, the Pine sources' own.
+    ...(() => { const st = supertrendFields(chartBars); return st ? { supertrend: hud(st) } : {}; })(),
+    order_blocks: hud({
+      close: round(close, 3),
+      active_bull: num(ob.active_bull_ob_count), active_bear: num(ob.active_bear_ob_count),
+      bull_top: round(ob.best_buy_ob?.top, 3), bull_bottom: round(ob.best_buy_ob?.bottom, 3),
+      bear_top: round(ob.best_sell_ob?.top, 3), bear_bottom: round(ob.best_sell_ob?.bottom, 3),
+      bull_target: round(ob.best_bullish_ob_target?.price, 3), bear_target: round(ob.best_bearish_ob_target?.price, 3),
+      filter_status: typeof ob.ob_filter_status === "string" ? ob.ob_filter_status : null,
+      ...(gmi ? { in_bull_order_block: zones.in_ob_bull === true, in_bear_order_block: zones.in_ob_bear === true, in_bull_mitigation: zones.in_mitig_bull === true, in_bear_mitigation: zones.in_mitig_bear === true } : {})
+    }),
     macro_aether: hud({
       weighted_global_z: round(htf.weighted_global_z), alignment_code: num(htf.alignment_code),
       z_by_timeframe: Object.fromEntries(Object.entries(htf.z_by_timeframe || {}).map(([k, v]) => [k, round(v)])),
@@ -208,7 +228,7 @@ export function buildHudSnapshot(bundle, { chart = "H1", now = Date.now(), minti
     candle_key: [CHART_TICKERID, spec.period, String(openMs)].join(":"),
     candle_time: new Date(openMs).toISOString(),
     computed_at: new Date(now).toISOString(),
-    not_computed: ["grid_bot_protocol", ...(gmi ? [] : ["kinetic_engine", "fabio_amt", "tactical_muscles", "gabfx_price_action", "playbook_execution", "decision_matrix"])],
+    not_computed: Object.keys({ grid_bot_protocol: 1, ...(gmi ? {} : { kinetic_engine: 1, fabio_amt: 1, tactical_muscles: 1, gabfx_price_action: 1, playbook_execution: 1, decision_matrix: 1 }) }).filter((id) => !(id in huds)),
     gmi_error: gmiError,
     huds
   };

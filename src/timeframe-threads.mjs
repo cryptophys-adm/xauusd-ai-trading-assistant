@@ -362,7 +362,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   }
 
   const roomEnv = env;
-  const maxPerHour = Number(env.TF_THREADS_MAX_CALLS_PER_HOUR ?? 120);
+  const maxPerHour = Number(env.TF_THREADS_MAX_CALLS_PER_HOUR ?? 140);
   let remaining = 0;
   try { remaining = (Number.isFinite(maxPerHour) ? maxPerHour : 0) - (await callsInLastHour(db, clock(), "tf")); } catch { remaining = 0; }
   let calls = 0;

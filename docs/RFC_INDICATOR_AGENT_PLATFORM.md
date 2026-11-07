@@ -216,7 +216,7 @@ With dozens of agents, a room cannot post every agent on every bar.
 3. **P3 (this repo): shadow versions.** Candidates are computed and scored on every closed bar, and Nexus gets a shadow view.
 4. **P4 (cloud platform, taskplane): the Indicator Auditor.** `indicators.observe`, the `indicator_audit` report and `indicators.propose`, with a Service Binding to the read API.
 5. **P5: the first improvement.** *(Shipped 2026-11-05 as shadow candidates `prophet_r37@latch8`, `prophet_r37@latch12` and `prophet_r38@latch8`. The first real-data replay shows no significant gain; see the CHANGELOG.)* A bull-trap latch expiry is added as a candidate version of Prophet R37/R38, as a local-only version or as a Pine candidate (owner decision 1). It runs in shadow, the scores are compared, and the owner approves or rejects the promotion.
-6. **P6: Supertrend** as the first new indicator agent through the manifest path, then Order Block.
+6. **P6: Supertrend** as the first new indicator agent through the manifest path, then Order Block. *(Shipped 2026-11-07. Supertrend reproduces `ta.supertrend(3, 10)`; Order Blocks reads the Prophet R38 order-block filter and GMI's Aegis blocks, so no new definition was needed. See docs/SSOT.md.)*
 7. **P7: crowd line, reputation weighting and Nexus scorecards.** *(Shipped 2026-11-07; see docs/SSOT.md "Crowd line, reputation and scorecards". The open phases P2 and P6 are tracked in docs/BACKLOG.md.)*
 
 ## 10. Decisions for the owner
