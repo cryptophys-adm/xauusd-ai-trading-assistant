@@ -30,7 +30,9 @@ export const PARITY_FIELDS = Object.freeze({
     prophet_r38_hud: Object.freeze(["cshi_score", "cycle_intensity", "d_enc", "structure_subtype", "t_enc"])
   }),
   gmi_hud: Object.freeze({
-    gmi_v12_70_hud: Object.freeze(["verdict", "gate", "gmi_dir", "prophet_dir", "conflict"])
+    // The Grid Bot Protocol fields (2026-11-07): CSHI viability, deploy status code (1 muddy waters,
+    // 2 toxic chop, 3 optimal, 4 trending or dead), muddy waters and grid viable.
+    gmi_v12_70_hud: Object.freeze(["verdict", "gate", "gmi_dir", "prophet_dir", "conflict", "cshi_viability", "deploy_status", "muddy_waters", "grid_viable"])
   })
 });
 

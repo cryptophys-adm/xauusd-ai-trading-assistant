@@ -60,4 +60,6 @@ reports to the owner.
    - Merging them changes the GMI implementation hash, so the H1 `gmi` identity needs a new 24-candle approval.
    - Schedule it in a calibration window, with the H1 GMI alert active.
    - It cannot be done without the owner: it edits a hashed engine file (`gmi-core-tf.mjs`), which the project rules allow only in a calibration window the owner opens.
-10. **Comparator alerts for the new agents (owner, optional).** Supertrend, Order Blocks and Grid Bot Protocol (2026-11-07) have no TradingView comparator, so their statements stay unverified (Supertrend counts as computed from verified bars). A Pine candidate alert carrying their fields would let parity approve them, as for the H1 HUD fields.
+10. **Comparator alerts for the new agents (owner).**
+    - **Grid Bot Protocol:** the comparator is built (2026-11-07). The GMI HUD candidate alert carries its fields and the `gmi_hud` identity compares them. What remains is the owner step: install the GMI HUD candidate on the H1 chart (`docs/HUD_CANDIDATE_INSTALL.md`). The same install starts parity for the other GMI HUD fields.
+    - **Supertrend and Order Blocks (optional):** they have no TradingView comparator yet, so their statements stay unverified (Supertrend counts as computed from verified bars).

@@ -56,6 +56,12 @@ export const ENGINE_FILES = {
     sources: ["pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
     implementation: ["local-engines/gmi/src/pine.mjs", "local-engines/gmi/src/mizan.mjs", "local-engines/gmi/src/gmi-core.mjs", "local-engines/gmi/src/gmi-core-htf.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/htf-local-producer.mjs"]
   },
+  // GMI HUD identity (RFC_HUD_AGENTS §3; Grid Bot Protocol comparator, 2026-11-07). Its reference
+  // is the GMI HUD candidate alert, not the ssot payload, and it never enters the H1 decision lane.
+  gmi_hud: {
+    sources: ["pinescript/candidates/Global-Multiverse-Interceptor-v12.70.hud.v1.txt"],
+    implementation: ["local-engines/gmi/src/pine.mjs", "local-engines/gmi/src/mizan.mjs", "local-engines/gmi/src/gmi-core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/grid-bot.mjs", "local-engines/producer/src/gmi-hud-producer.mjs"]
+  },
   prophet_d1: {
     sources: ["pinescript/ssot/The-Prophet-v7.02-R38.txt", "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
     implementation: ["local-engines/prophet-r38/src/core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/htf-local-producer.mjs"]

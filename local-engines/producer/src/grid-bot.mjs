@@ -14,8 +14,10 @@
 //
 // with atr_val = max(ta.atr(14), mintick), eff_rat_loc = lib.efficiency_ratio(close, 14) and e the
 // GMI entropy of the bar. The grid range, trigger, count and TP/SL rows are H1 decision reasoning
-// output (RFC_HUD_AGENTS §7), not HUD fields. No comparator exists yet: the HUD reads as not yet
-// calibrated until a Pine candidate carries these fields.
+// output (RFC_HUD_AGENTS §7), not HUD fields. Comparator (2026-11-07): the GMI HUD candidate alert
+// (pinescript/candidates, source gmi_v12_70_hud) carries cshi_viability, deploy_status,
+// muddy_waters and grid_viable; gmi-hud-producer.mjs publishes the local values as the gmi_hud
+// identity, and parity approves them like any engine (24 consecutive matching H1 candles).
 import { ema, percentrank } from "../../gmi/src/pine.mjs";
 import { pineAtr, prophetEfficiencyRatio } from "../../../src/prophet-r37-oscillator.mjs";
 
@@ -39,6 +41,8 @@ export function cshiSeries(bars, { mintick = 0.001 } = {}) {
 }
 
 export const DEPLOY_STATUS = Object.freeze(["muddy_waters_on", "toxic_chop_off", "optimal_on", "trending_off"]);
+/** The integer code the GMI HUD candidate alert carries (gmi_v12_70_hud.deploy_status): 1 to 4 in the order of GMI's if chain. */
+export const DEPLOY_STATUS_CODE = Object.freeze({ muddy_waters_on: 1, toxic_chop_off: 2, optimal_on: 3, trending_off: 4 });
 
 /** The HUD fields of the last closed bar; null without the bar's GMI entropy. */
 export function gridBotFields(bars, { entropy, mintick = 0.001 } = {}) {
@@ -48,5 +52,8 @@ export function gridBotFields(bars, { entropy, mintick = 0.001 } = {}) {
   const muddy = entropy >= 0.8 && g >= 45 && g <= 85;
   const viable = muddy || (g >= 50 && g <= 85);
   const status = muddy ? "muddy_waters_on" : g > 85 ? "toxic_chop_off" : g >= 50 && g <= 85 ? "optimal_on" : "trending_off";
-  return { cshi_viability: round(g, 1), viability_score: round(viability.at(-1), 4), deploy_status: status, grid_viable: viable, muddy_waters: muddy, entropy: round(entropy, 3) };
+  // cshi_viability keeps 6 decimals: ta.percentrank over 100 bars is a whole percent, and the
+  // rounding only removes the float noise of (count / 100) * 100, so the parity comparison with
+  // the GMI HUD candidate alert and the snapshot see the same number.
+  return { cshi_viability: round(g, 6), viability_score: round(viability.at(-1), 4), deploy_status: status, deploy_status_code: DEPLOY_STATUS_CODE[status], grid_viable: viable, muddy_waters: muddy, entropy: round(entropy, 3) };
 }

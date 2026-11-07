@@ -211,13 +211,14 @@ export function readHud(agentId, hud = {}) {
     }
     case "grid_bot_protocol": {
       // Ported 2026-11-07 (Mizan cshi_engine and GMI's deploy status). Grid levels are Reasoner output.
+      // Verified when the gmi_hud identity is approved against the GMI HUD candidate alert.
       const STATUS = {
         muddy_waters_on: "muddy waters, a high-entropy chop where a grid bot may run",
         toxic_chop_off: "toxic chop, too erratic for a grid bot",
         optimal_on: "optimal for a grid bot",
         trending_off: "trending or dead, so a grid bot should stay off"
       };
-      if (isNum(f.cshi_viability)) add(`The CSHI grid viability is ${fixed(f.cshi_viability)} percent, so the market is ${STATUS[f.deploy_status] ?? "not classified"}.`);
+      if (isNum(f.cshi_viability)) add(`The CSHI grid viability is ${fixed(f.cshi_viability)} percent, so the market is ${STATUS[f.deploy_status] ?? "not classified"}.`, ["cshi_viability", "deploy_status_code"]);
       break;
     }
     case "supertrend": {

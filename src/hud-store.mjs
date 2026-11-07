@@ -58,7 +58,8 @@ export async function loadHudSnapshot(env, { timeframe = "60", candleKey = null 
 /** The approved comparable fields of a candle (prophet_r38, prophet_r37_ssot, gmi_v12_70), or null. */
 export async function approvedComparable(env, candleKey) {
   const out = {};
-  for (const engine of ["prophet", "gmi"]) {
+  // gmi_hud: the HUD parity identity (Grid Bot Protocol fields, source gmi_v12_70_hud).
+  for (const engine of ["prophet", "gmi", "gmi_hud"]) {
     const raw = await env.WEBHOOK_BUFFER?.get?.("localcalc:" + candleKey + ":" + engine);
     if (!raw) continue;
     try { Object.assign(out, JSON.parse(raw)?.values?.comparable || {}); } catch { /* malformed record is ignored */ }

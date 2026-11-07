@@ -181,7 +181,8 @@ export function buildHudSnapshot(bundle, { chart = "H1", now = Date.now(), minti
       playbook_execution: hud({ htf_state: num(gd.htf_state), mtf_state: num(gd.mtf_state), ltf_state: num(gd.ltf_state), ext_state: num(gd.ext_state) }),
       decision_matrix: hud({ verdict: num(g.verdict), gate: num(g.gate), conflict: g.conflict === true, branch: typeof gd.branch === "string" ? gd.branch : null, is_chaos: gd.is_chaos === true }, { verdict: GMI("verdict"), gate: GMI("gate"), conflict: GMI("conflict") }),
       // Ported 2026-11-07 (grid-bot.mjs): Mizan cshi_engine and GMI's deploy status, with the bar's GMI entropy.
-      ...(() => { const gb = gridBotFields(chartBars, { entropy: gd.entropy, mintick }); return gb ? { grid_bot_protocol: hud(gb) } : {}; })()
+      // Parity paths: the gmi_hud identity (gmi-hud-producer.mjs) against the GMI HUD candidate alert.
+      ...(() => { const gb = gridBotFields(chartBars, { entropy: gd.entropy, mintick }); return gb ? { grid_bot_protocol: hud(gb, { cshi_viability: "gmi_v12_70_hud.cshi_viability", deploy_status_code: "gmi_v12_70_hud.deploy_status", muddy_waters: "gmi_v12_70_hud.muddy_waters", grid_viable: "gmi_v12_70_hud.grid_viable" }) } : {}; })()
     } : {}),
     chronos_matrix: hud({
       session_new_york: inSession(ny, 8 * 60, 17 * 60), session_london: inSession(ny, 3 * 60, 12 * 60), session_tokyo: inSession(ny, 19 * 60, 4 * 60),

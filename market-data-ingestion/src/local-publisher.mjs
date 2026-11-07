@@ -9,6 +9,7 @@ import { buildM15LocalCalculations } from "../../local-engines/producer/src/m15-
 import { buildHtfLocalCalculations, HTF_CHARTS } from "../../local-engines/producer/src/htf-local-producer.mjs";
 import { m5ContextFromRecords } from "../../local-engines/producer/src/m5-context.mjs";
 import { buildHudSnapshot } from "../../local-engines/producer/src/hud-snapshot.mjs";
+import { buildGmiHudRecord } from "../../local-engines/producer/src/gmi-hud-producer.mjs";
 
 const PUBLISHED_PREFIX = "market-data:v2:local-published:";
 export const LAST_PUBLISH_KEY = "market-data:v2:local-last-publish";
@@ -19,6 +20,20 @@ const MAX_M5_PUBLISH_DELAY_MS = 9 * 60 * 1000;
 const MAX_PUBLISH_DELAY_MS = 25 * 60 * 1000;
 
 const asString = (v) => (typeof v === "string" ? v : "");
+
+/**
+ * The gmi_hud parity record of a built H1 candle (Grid Bot Protocol comparator, RFC_HUD_AGENTS §3).
+ * Posted apart from the engine records: its result never decides the publish marker, so a HUD
+ * parity failure can neither block nor repeat the H1 engine publish.
+ */
+async function publishGmiHud(env, built, bundle) {
+  let record = null;
+  try { record = buildGmiHudRecord(built, bundle, { mintick: Number(env.CHART_MINTICK) || 0.001 }); }
+  catch (error) { return { engine: "gmi_hud", http_status: null, error: asString(error?.code) || "gmi_hud_failed" }; }
+  if (!record) return { engine: "gmi_hud", http_status: null, error: "not_produced" };
+  try { return await postRecord(env, record); }
+  catch (error) { return { engine: "gmi_hud", http_status: null, error: asString(error?.name) || "post_failed" }; }
+}
 
 async function postRecord(env, record) {
   // RPC Service Binding (entrypoint "LocalComputationIngress" on the AI Worker).
@@ -61,12 +76,14 @@ export async function publishLocalComputation(env, { now = Date.now(), force = f
     }
   }
   const ok = results.every((r) => r.http_status && r.http_status < 300);
+  const hudParity = await publishGmiHud(env, built, resolvedBundle);
   const summary = {
     status: ok ? "published" : "partial_failure",
     candle_key: built.candle_key,
     candle_time: built.candle_time,
     published_at: new Date(now).toISOString(),
     engines: results,
+    hud_parity: hudParity,
     not_produced: built.records.some((r) => r.engine === "gmi") ? [] : ["gmi"],
     gmi_error: built.gmi_error || null,
     // The bar the records were built on, so a later revision of it can be detected.
@@ -122,10 +139,12 @@ export async function republishRevisedH1(env, { now = Date.now(), bundle = null 
       catch (error) { results.push({ engine: record.engine, http_status: null, error: asString(error?.name) || "post_failed" }); }
     }
     const ok = results.every((r) => r.http_status && r.http_status < 300);
+    // The revised bar changes the Grid Bot fields too: republish the HUD parity record with it.
+    const hudParity = await publishGmiHud(env, built, bundleUntil(resolvedBundle, Date.parse(bar.close_time)));
     if (ok) {
       await kv.put(PUBLISHED_PREFIX + candleKey, JSON.stringify({ ...marker, bar: barSnapshot(bar), previous_bar: marker.bar, republished_at: new Date(now).toISOString() }), { expirationTtl: 60 * 60 * 24 * 7 });
     }
-    out.push({ candle_key: candleKey, status: ok ? "republished" : "partial_failure", previous_bar: marker.bar, bar: barSnapshot(bar), engines: results });
+    out.push({ candle_key: candleKey, status: ok ? "republished" : "partial_failure", previous_bar: marker.bar, bar: barSnapshot(bar), engines: results, hud_parity: hudParity });
   }
   return { status: out.length ? "revised" : "unchanged", candles: out };
 }

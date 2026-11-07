@@ -40,7 +40,7 @@
 | `gabfx_price_action` | `qm_zone_code`, `rbs_sbr_status_code` | (b) `diagnostics.zones` |
 | `playbook_execution` | `htf_state_code`, `mtf_state_code`, `ltf_state_code`, `ext_state_code` | (b) |
 | `decision_matrix` | `burst_score`, `verdict`, `gate`, `conflict`, `branch_code`, `is_chaos` | (a) for verdict/gate/conflict; (b) for branch/is_chaos; (c) for burst_score |
-| `grid_bot_protocol` | `cshi_viability_code`, `deploy_status_code` | (c). Grid range/trigger/quantity/TP-SL are H1 decision reasoning output (§7). |
+| `grid_bot_protocol` | `cshi_viability_code`, `deploy_status_code` | (c). Grid range/trigger/quantity/TP-SL are H1 decision reasoning output (§7). Built 2026-11-07 as `cshi_viability`, `deploy_status`, `muddy_waters`, `grid_viable` in `gmi_v12_70_hud`, compared by the `gmi_hud` identity. |
 
 ### 1.3 15m contract (live-room subset only)
 
@@ -62,7 +62,7 @@ Provide the **parity comparator** for HUD fields that are not in `PARITY_FIELDS`
 - Alert payload (`alert()` JSON) carries, per closed H1 bar:
   - All `PARITY_FIELDS` already present (unchanged) — today's `prophet_r38`, `prophet_r37_ssot` and `gmi_v12_70` payloads are emitted unchanged.
   - HUD field codes/levels from §1.2 as **numbers, booleans and small integer codes** — never `*_txt` strings.
-  - It does **not** carry `action_code`, `entry_price`, `invalidation_price`, `candidate_rr`/`ttl`/`conf`, `tp_price`, `tp_reached`, `exit_reason_code`, `sl_level`, `sl_state_code`, `smc_zone_*`, `smc_side_code` or `grid_*` (§7).
+  - It does **not** carry `action_code`, `entry_price`, `invalidation_price`, `candidate_rr`/`ttl`/`conf`, `tp_price`, `tp_reached`, `exit_reason_code`, `sl_level`, `sl_state_code`, `smc_zone_*`, `smc_side_code` or the grid levels `grid_*` (bottom, top, trigger, quantity, TP/SL; §7). The `grid_viable` flag is a HUD state, not a level.
 
 ### 2.3 15m candidate (owner decision: verified data)
 

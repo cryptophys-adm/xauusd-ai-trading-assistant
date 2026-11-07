@@ -19,6 +19,8 @@ Create two "Any alert() function call" alerts pointing at `https://ai.cryptophys
 
 Both alerts carry the original `prophet_r38`, `prophet_r37_ssot` and `gmi_v12_70` payloads byte-for-byte, plus the separate `prophet_r38_hud` and `gmi_v12_70_hud` payloads.
 
+The `gmi_v12_70_hud` payload also carries the Grid Bot Protocol fields (2026-11-07): `cshi_viability`, `deploy_status` (1 muddy waters, 2 toxic chop, 3 optimal, 4 trending or dead), `muddy_waters` and `grid_viable`. The AI Worker compares them with its own `gmi_hud` record for the H1 candle.
+
 ## After install
 
 - The 24-candle parity clock for the HUD identities starts only after the first `*_hud` webhook arrives.

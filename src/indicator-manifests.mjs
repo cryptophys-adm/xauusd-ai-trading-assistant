@@ -22,6 +22,7 @@ export const MANIFEST_VERSION = "cryptophys.indicator-manifest.v1";
 const R38 = "pinescript/ssot/The-Prophet-v7.02-R38.txt";
 const GMI = "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt";
 const MIZAN = "pinescript/ssot/CryptophysMizanLib-uploaded.txt";
+const GMI_HUD_CANDIDATE = "pinescript/candidates/Global-Multiverse-Interceptor-v12.70.hud.v1.txt";
 const ALL_ROOMS = Object.freeze(["M15", "H1", "H4", "D1"]);
 const m = (o) => Object.freeze({ computed: true, rooms: [], scored: [], stuck_prefix: null, shadow_family: null, identity: null, hud_identity: null, reference: "none", ...o });
 
@@ -46,7 +47,8 @@ export const MANIFESTS = Object.freeze([
   m({ id: "gabfx_price_action", kind: "hud", name: "GABFX Price Action", family: "price action", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 3" }, rooms: ALL_ROOMS }),
   m({ id: "playbook_execution", kind: "hud", name: "Playbook Execution", family: "execution", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 4" }, rooms: ALL_ROOMS }),
   m({ id: "decision_matrix", kind: "hud", name: "Decision Matrix", family: "trend", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 5" }, reference: "pine_ssot", hud_identity: "gmi_hud", rooms: ALL_ROOMS }),
-  m({ id: "grid_bot_protocol", kind: "hud", name: "Grid Bot Protocol", family: "execution", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 6" }, rooms: ALL_ROOMS }),
+  // Comparator (2026-11-07): the GMI HUD candidate alert (gmi_v12_70_hud) through the gmi_hud identity.
+  m({ id: "grid_bot_protocol", kind: "hud", name: "Grid Bot Protocol", family: "execution", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 6", candidate: GMI_HUD_CANDIDATE }, reference: "pine_candidate", hud_identity: "gmi_hud", rooms: ALL_ROOMS }),
 
   // New indicator agents (P6, owner decision 4, 2026-11-07: Supertrend first, then Order Block).
   // No comparator alert yet: their readings are formulas of verified bars or engine internals.
