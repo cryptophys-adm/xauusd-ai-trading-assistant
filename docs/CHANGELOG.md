@@ -6,6 +6,11 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(nexus): the GMI chart layers (owner decision 2026-11-08, PR 3 of the key-level plan). A row of toggles above the Nexus chart, kept per viewer:
+  - **On by default:** Zones, Bands (Z-KWW mean, ±1σ and ±1.618σ, EMA 114; `lib/indicators.ts` computes them from the chart's closed bars with the Mizan formulas) and Volume (the session POC, VAH and VAL).
+  - **Fib:** Auto shows the OTE band and the extensions while a setup forms.
+  - **Toggles:** VWAP (5m to 1H), Liquidity (whale zones, FVG targets, QM, RBS/SBR) and Session (true opens).
+  - **Backend:** `GET /api/hud/levels` serves the snapshot's `chart_plane`; each level is named on the price axis.
 - feat(key-levels): the four level readers and the setup type (owner decision 2026-11-08, PR 2 of the key-level plan). `src/level-readers.mjs` reads the chart plane of each HUD snapshot:
   - **Readers:** the Band, Liquidity, Projection and Session agents hand the Key Level Agent their levels with base weights (SSOT §Key levels). `GET /api/key-levels` reports how many levels each reader added, and each zone member names its reader.
   - **Setup type:** `setupType` labels the 15m location as *continuation_pullback* (OTE band or KWW mean, with liquidity with the trade) or *reversal_sweep* (a 1.618σ stretch into a QM level or a whale zone). A setup type counts as a location with the trade. The strategy reports it as `setup`, and the captured strategy inputs keep the chart plane for the replay.

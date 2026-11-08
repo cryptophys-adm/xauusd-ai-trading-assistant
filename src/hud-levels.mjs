@@ -66,6 +66,9 @@ export function hudLevels(snapshot, { barsVerified = false } = {}) {
     camarilla: camarillaRows(eyes, snapshot?.timeframe),
     cpr: { daily: cprRow(chronos.daily_cpr), weekly: cprRow(chronos.weekly_cpr) },
     regime: regime(huds),
-    calibration: { levels: barsVerified ? "computed_from_verified_bars" : "not_yet_calibrated", regime: "not_yet_calibrated" }
+    calibration: { levels: barsVerified ? "computed_from_verified_bars" : "not_yet_calibrated", regime: "not_yet_calibrated" },
+    // Every price object GMI draws on the chart (the producer's chart plane), for the Nexus chart
+    // layers (owner decision 2026-11-08). Unverified context: no TradingView alert carries it.
+    chart_plane: snapshot?.chart_plane && typeof snapshot.chart_plane === "object" ? snapshot.chart_plane : null
   };
 }
