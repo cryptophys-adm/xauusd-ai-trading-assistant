@@ -6,6 +6,11 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(ledger): Telegram alerts from the Signal Ledger (backlog 11.2, owner decision 2026-11-08), in `src/ledger-alerts.mjs`, D1 `ledger_alerts` (migration 0017).
+  - **Events.** A strategy setup triggered, the entry reached, TP1 / the stop / the time limit reached (with R), the TP2 part closed, and a setup cancelled. Each is sent once, over the existing Telegram bot.
+  - **Safe start.** The first run records the existing events without sending them, so the deploy does not flood the chat. At most 5 messages a run; a failed send is retried by the next run.
+  - **Advisory only.** Every message says no order is placed and no position size is given. Off with `LEDGER_ALERTS_ENABLED = "false"`.
+  - Tests: `test/ledger-alerts.test.mjs`.
 - feat(strategy): the economic calendar and the event-risk gate (backlog 11.1, owner decision 2026-11-08), in `src/econ-calendar.mjs`.
   - **Source.** The ForexFactory weekly export, fetched by the sweep at most once an hour and cached. A failed fetch keeps the cache.
   - **Gate.** A High-impact USD event is a caution for the strategy engine (−0.1 confidence) from 2 hours before to 30 minutes after it. It never forces WAIT and never changes the side.

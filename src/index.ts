@@ -186,6 +186,7 @@ import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
 import { tuningView } from "./tuning.mjs";
 import { readCorrelations } from "./correlations.mjs";
 import { refreshCalendar, readCalendar } from "./econ-calendar.mjs";
+import { sendLedgerAlerts } from "./ledger-alerts.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -2480,6 +2481,9 @@ export default {
         try {
           const ledger = await runSignalLedger(env, { readStrategy });
           if (ledger.status === "ok" && (Number((ledger.added as Record<string, number>).h1_decision) || Number((ledger.added as Record<string, number>).strategy) || Number(ledger.changed))) console.log("signal_ledger", JSON.stringify(ledger));
+          // Backlog 11.2 (owner decision 2026-11-08): each new ledger event to the owner's Telegram, once.
+          const alerts = await sendLedgerAlerts(env, { send: (text: string) => sendTelegram(env, text) });
+          if (alerts.status !== "disabled" && (Number(alerts.sent) || Number(alerts.seeded) || Number(alerts.failed))) console.log("ledger_alerts", JSON.stringify(alerts));
         } catch (e) { console.error("signal_ledger_failed", e instanceof Error ? e.message : String(e)); }
         // Aether A8 (owner go 2026-11-08): the strategy engine's inputs once per closed H1 bar (from 40
         // minutes after the close), and the outcomes of earlier captures, for the threshold replay.
