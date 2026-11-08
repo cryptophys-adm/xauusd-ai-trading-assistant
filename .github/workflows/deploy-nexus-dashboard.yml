@@ -60,15 +60,22 @@ jobs:
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           node --input-type=module <<'NODE'
+          import { accessToken, isAccessLogin } from "./scripts/access-token.mjs";
           const DOMAIN = "https://nexus.cryptophys.work";
-          const TOKEN = process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET
-            ? { "CF-Access-Client-Id": process.env.CF_ACCESS_CLIENT_ID, "CF-Access-Client-Secret": process.env.CF_ACCESS_CLIENT_SECRET } : null;
+          // Normalised like the platform's access-headers.sh; problems are reported by shape, never by value.
+          const token = accessToken();
+          if (token.problems.length) { console.error(`CF_ACCESS_CLIENT_ID/SECRET: ${token.problems.join("; ")} (${token.shape})`); process.exit(1); }
+          const TOKEN = token.headers;
           // workers.dev is disabled (owner, 2026-11-07): the content checks need the CI service token.
           if (!TOKEN) { console.error("CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET are required: Nexus has no public workers.dev address"); process.exit(1); }
           const ORIGIN = DOMAIN;
           const nativeFetch = globalThis.fetch;
           const fetch = (u, init = {}) => nativeFetch(u, TOKEN && String(u).startsWith(ORIGIN) ? { ...init, headers: { ...(init.headers || {}), ...TOKEN } } : init);
           console.log("using the CI service token against the custom domain");
+          // The token must get past Access itself: without following redirects, a refusal is a 302 to the login page.
+          const admitted = await nativeFetch(DOMAIN + "/", { redirect: "manual", headers: TOKEN, signal: AbortSignal.timeout(20000) });
+          if (isAccessLogin(admitted)) { console.error(`Cloudflare Access refused the CI service token (${token.shape}). Set CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET to the cryptophys-ci Client ID and its current Client Secret`); process.exit(1); }
+          console.log(`service token admitted by Access (HTTP ${admitted.status})`);
           const get = async (u) => { for (let i = 0; i < 10; i++) { try { const r = await fetch(u, { signal: AbortSignal.timeout(20000) }); if (r.ok) return r; } catch {} await new Promise(r => setTimeout(r, 3000)); } return null; };
           let front = null;
           for (let i = 0; i < 10 && !front; i++) { try { front = await nativeFetch(DOMAIN + "/", { redirect: "manual", signal: AbortSignal.timeout(20000) }); } catch { await new Promise(r => setTimeout(r, 3000)); } }
@@ -79,7 +86,7 @@ jobs:
           else { console.error(`custom domain: unexpected answer ${front.status} ${location.slice(0, 80)}`); process.exit(1); }
           const page = await get(ORIGIN + "/");
           const html = page ? await page.text() : "";
-          if (!/<!doctype html>/i.test(html) || !html.includes('id="root"')) { console.error("dashboard page not served"); process.exit(1); }
+          if (!/<!doctype html>/i.test(html) || !html.includes('id="root"')) { console.error(`dashboard page not served (HTTP ${page?.status ?? "no answer"}, ${page?.headers.get("content-type") ?? "-"}, final URL ${page ? new URL(page.url).origin + new URL(page.url).pathname : "-"})`); process.exit(1); }
           const script = html.match(/src="(\/assets\/[^"]+\.js)"/);
           if (!script || !(await get(ORIGIN + script[1]))) { console.error("dashboard bundle not served"); process.exit(1); }
           const status = await get(ORIGIN + "/api/status");

@@ -4,6 +4,13 @@ This file is the single source of truth for repository changes. Topology and
 deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
+## 2026-11-08
+
+- ci: the deploy smoke tests check the CI Access service token strictly.
+  - **Why:** the AI Worker's token probe followed redirects, so a refused token still ended on the Access login page with HTTP 200 and passed. The first Nexus run with the token (after #148) failed with "dashboard page not served", the same refusal.
+  - **Now:** `scripts/access-token.mjs` normalises the secrets like the platform's `access-headers.sh` (CR/LF, whitespace, a header prefix). Swapped or wrong-shaped values are reported by shape, never by value. The token probes never follow a redirect, so an Access refusal fails with an explicit message.
+  - **Access on `/api/*`:** `ai.cryptophys.work/api/*` is a path destination of the platform's Access application (platform #207, owner option (a)). `/health`, `/ready` and `/webhook` stay public.
+
 ## 2026-11-07
 
 - feat(security): the AI Worker and Nexus have no public `workers.dev` or preview URL (`workers_dev: false`, `preview_urls: false`).
