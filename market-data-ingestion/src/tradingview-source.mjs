@@ -96,6 +96,21 @@ export function mergeCandles(existing, incoming, retain) {
  * Plans the count to request for a series, or null when no new bar can have
  * closed since the cached one. Empty caches bootstrap to the retention depth.
  */
+/**
+ * Gold, FX, oil, the dollar index and yields do not trade from Friday evening to Sunday evening
+ * (UTC). Owner decision 2026-11-08: no pull for those series in that window, so a weekend no longer
+ * spends the TradingView quota on requests that cannot return a new bar (it exhausted the daily
+ * budget of 800 calls, and the context series last in line never got a turn). The window is wide
+ * enough for both daylight-saving offsets: Friday 22:30 UTC to Sunday 22:00 UTC. Crypto trades
+ * every day and is never skipped. An empty series still bootstraps once.
+ */
+export function marketClosed(symbol, nowSec) {
+  if (/^CRYPTOCAP:|^BINANCE:|^COINBASE:/.test(String(symbol))) return false;
+  const d = new Date(nowSec * 1000);
+  const day = d.getUTCDay(), minutes = d.getUTCHours() * 60 + d.getUTCMinutes();
+  return (day === 5 && minutes >= 22 * 60 + 30) || day === 6 || (day === 0 && minutes < 22 * 60);
+}
+
 export function planRequest(spec, cached, nowSec) {
   const last = cached?.candles?.at(-1);
   if (!last) return { symbol: spec.symbol, interval: spec.interval, count: Math.min(spec.retain, MAX_GATEWAY_COUNT), bootstrap: true };
@@ -103,6 +118,7 @@ export function planRequest(spec, cached, nowSec) {
   if (nextCloseSec > nowSec) return null;
   const missing = Math.ceil((nowSec - last.time) / spec.seconds) + 2;
   if (missing >= spec.retain) return { symbol: spec.symbol, interval: spec.interval, count: Math.min(spec.retain, MAX_GATEWAY_COUNT), bootstrap: true };
+  if (marketClosed(spec.symbol, nowSec)) return null;
   return { symbol: spec.symbol, interval: spec.interval, count: Math.max(3, missing), bootstrap: false };
 }
 

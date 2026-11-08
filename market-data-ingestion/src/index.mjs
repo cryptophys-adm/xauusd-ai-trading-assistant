@@ -1,7 +1,7 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
 import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHtfLocalComputation, publishHudSnapshots, republishRevisedH1, LAST_PUBLISH_KEY, LAST_HUD_PUBLISH_KEY } from "./local-publisher.mjs";
-import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, verifyDerivedSeries, settleSeconds, SETTLE_SECONDS } from "./tradingview-source.mjs";
+import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, marketClosed, verifyDerivedSeries, settleSeconds, SETTLE_SECONDS } from "./tradingview-source.mjs";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -335,6 +335,7 @@ export const internals = {
   closedCandlesFromColumns,
   mergeCandles,
   planRequest,
+  marketClosed,
   settleSeconds,
   SETTLE_SECONDS,
   buildBundle,

@@ -11,6 +11,15 @@ const corrWord = (c?: number | null) => (c == null ? "not enough bars" : Math.ab
 const when = (t?: string | null) => (t ? t.slice(5, 16).replace("T", " ") : "");
 
 const pc = (x?: number | null) => (x == null ? "" : `${Math.round(x * 100)}%`);
+// The room's agents (src/macro-room.mjs MACRO_AGENTS), shown before the first session too.
+const ROSTER: [string, string][] = [
+  ["Calendar Agent", "the scheduled US events: the projected effect of each on gold by fixed rules, and the headlines after a release"],
+  ["News Analyst", "the news of the last 24 hours: the daily bias for gold and the headlines behind it"],
+  ["Dollar Analyst", "the US Dollar Index: its recent move and how tightly it has moved against gold"],
+  ["Rates Analyst", "the US 10-year yield: its recent move and the cost of holding gold"],
+  ["Metals Analyst", "silver: whether it confirms or contradicts gold's move"],
+  ["Correlation Analyst", "whether the usual links between gold, the dollar, yields and silver hold now"]
+];
 const sessionWord = (m: any) => (m?.kind === "event" ? "30 minutes after a high-impact US event" : "after a 4-hour close");
 
 /**
@@ -25,7 +34,26 @@ function MacroRoom() {
   return (
     <Panel title="Macro War Room" icon={<Globe2 className="h-3.5 w-3.5 text-cyan-300" />} right={<span className="flex gap-1">{m?.stale ? <Badge tone="amber">stale</Badge> : null}<Badge tone="cyan">context only · never decides</Badge></span>}>
       <p className="mb-3 text-[12px] leading-relaxed text-slate-400">The Calendar Agent, the News Analyst and the dollar, yields, silver and correlation analysts discuss what moves gold. The room meets 20 minutes after every 4-hour close and 30 minutes after a high-impact US event; the moderator concludes the macro bias for the next 4 to 24 hours. Every room's News Analyst reads it, and the Global decision shows it as the MACRO row.</p>
-      {loading && !data ? <Skeleton rows={4} /> : !m ? <Empty>The Macro War Room has not met yet: it meets 20 minutes after the next 4-hour close.</Empty> : (
+      {loading && !data ? <Skeleton rows={4} /> : !m ? (
+        <div className="space-y-3">
+          <Empty>The Macro War Room has not met yet. Its first session is 20 minutes after the first 4-hour close once the market reopens (Sunday evening UTC), or 30 minutes after a high-impact US event.</Empty>
+          <div>
+            <div className="eyebrow mb-1.5 text-[10px]">Agents</div>
+            <div className="grid gap-2 md:grid-cols-2">
+              {ROSTER.map(([name, role]) => (
+                <div key={name} className="glass-inner px-3 py-2">
+                  <div className="mb-0.5 flex items-center gap-2 text-[11px]"><b className="text-slate-100">{name}</b><span className="text-slate-500">waiting for the first session</span></div>
+                  <p className="text-[11.5px] leading-relaxed text-slate-400">{role}</p>
+                </div>
+              ))}
+              <div className="glass-inner px-3 py-2 md:col-span-2">
+                <div className="mb-0.5 text-[11px]"><b className="text-slate-100">Moderator</b></div>
+                <p className="text-[11.5px] leading-relaxed text-slate-400">concludes the macro bias for gold over the next 4 to 24 hours, with its reasons and drivers</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
         <div className="space-y-3">
           <div className="glass-inner border-cyan-400/20 p-3">
             <div className="mb-2 text-[11px] text-slate-500">Session {sessionWord(m)} · {String(m.at ?? "").slice(5, 16).replace("T", " ")} UTC</div>
@@ -101,7 +129,7 @@ export default function Correlations() {
                 {rows.map((a) => (
                   <tr key={a.id}>
                     <td>{a.name} <span className="mono text-slate-500">{a.symbol}</span></td>
-                    {!a.available ? <td colSpan={6} className="text-slate-500">No bars cached yet (the pull adapter adds this series on its next 4h close).</td> : <>
+                    {!a.available ? <td colSpan={6} className="whitespace-normal text-slate-500">No bars cached yet: the pull adapter fetches this series once the market is open.</td> : <>
                       <td className="mono">{a.unit === "bp" ? `${a.last?.toFixed?.(3)}%` : a.last?.toFixed?.(a.id === "dxy" ? 2 : 3)} <span className="text-slate-500">{when(a.last_close_time)}</span></td>
                       {["4h", "1d", "5d"].map((k) => <td key={k} className={"mono " + tone(a.change?.[k])}>{chg(a.change?.[k], a.unit)}</td>)}
                       <td className={"mono " + corrTone(a.correlation.short)} title={`${a.correlation.short_n} bars`}>{a.correlation.short ?? "n/a"} <span className="text-[11px] text-slate-500">{corrWord(a.correlation.short)}</span></td>

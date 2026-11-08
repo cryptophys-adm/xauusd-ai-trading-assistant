@@ -6,6 +6,10 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- fix(market-data): no TradingView pull while the market is closed (owner report 2026-11-08: the Macro War Room page showed no US 10-year data). On the weekend the pull adapter re-requested every gold, oil and dollar series each 5 minutes although no new bar could arrive. That spent the daily budget of 800 TradingView calls (from the owner's quota), and the context series last in line (US 10-year, silver) never got a turn.
+  - Now `marketClosed` skips non-crypto series from Friday 22:30 to Sunday 22:00 UTC (both daylight-saving offsets).
+  - An empty series still bootstraps once, and crypto is pulled every day. The gap is pulled at the reopen. Test added.
+- feat(nexus): the Macro War Room page lists its agents and their roles before the first session, and says when the first session is.
 - feat(macro): the Macro War Room (owner decisions 2026-11-08: the correlations become a room for the news and events that move gold; it meets after every 4-hour close and after a High-impact USD event; context plus a MACRO row in the Global decision), in `src/macro-room.mjs`.
   - **Agents:**
     - the Calendar Agent, with the fixed-rule projections of #163: before a release its bias must follow the consensus lean, and after a release it reads the headlines;
