@@ -466,7 +466,9 @@ test("HUD publisher catches up a missed H4 or D1 snapshot once while that bar is
   assert.equal(d1.length, 1);
   assert.equal(d1[0].candle_key, `OANDA:XAUUSD:1D:${Date.parse(last.open_time)}`);
   const health = await (await worker.fetch(new Request("https://m/health"), e)).json();
-  assert.deepEqual(health.last_hud_publish.charts.D1, { status: "published", candle_key: d1[0].candle_key, catch_up: true });
+  // The chart plane (every price object GMI draws) rides in the snapshot; /health names its version.
+  assert.deepEqual(health.last_hud_publish.charts.D1, { status: "published", candle_key: d1[0].candle_key, catch_up: true, chart_plane: "cryptophys.chart-plane.v1" });
+  assert.equal(d1[0].chart_plane?.version, "cryptophys.chart-plane.v1");
   assert.ok(!JSON.stringify(health).includes(SECRET));
 
   const again = await publishHudSnapshots(e, { now: closeMs + 4 * 3600_000, bundle: b });

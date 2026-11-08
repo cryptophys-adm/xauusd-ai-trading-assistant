@@ -6,6 +6,12 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(producer): the chart plane in every HUD snapshot (owner decision 2026-11-08, PR 1 of the key-level plan). `local-engines/producer/src/chart-plane.mjs` computes every price object GMI v12.70 draws on the chart at the closed 15m, 1H, 4H and D1 bar, from the cached bars (no new TradingView call):
+  - bands: Z-KWW MA, ±1σ and ±1.618σ, EMA 114, VWAP, the TVA channel;
+  - liquidity: FVG open targets, whale zones and mitigation blocks, QM/RBS/SBR, TDM POC/VAH/VAL, LVN and HVN;
+  - projection: the SMC Fibonacci grid, the probability cone, the tactical trendlines and PA lines;
+  - session: True Openings, day and week opens, previous day and week high/low, and the Daily session volume profile.
+  - It rides as `chart_plane`, outside `huds`, so no room agent changes. About 2 KB and under 90 ms per chart. The hashed engine files are untouched. `/health` names the plane's version per chart. Tests: `local-engines/producer/test/chart-plane.test.mjs`.
 - fix(alerts): canonical engine names with their timeframe in the Priority Queue (owner request 2026-11-08). One backend map, `src/engine-names.mjs` (`engineLabel`), names a registry id by its indicator name, chart timeframe and id, e.g. "Parity revoked: GMI v12.70 15m (gmi_m15)". The health alert subjects (and so their kernel reports), `GET /api/parity` (`name`, `label`) and the Nexus parity tables and local-lane line use it; an input mismatch names the bar by its open time, and a room by its SSOT name ("the 1H War Room"). Open alerts take the new subject at the next sweep. A test keeps the Nexus map (`lib/names.ts`) equal to the backend one. Tests: `test/engine-names.test.mjs`, `test/health-alerts.test.mjs`, `test/parity-view.test.mjs`.
 - feat(nexus): the System status page (`#/status`, owner request 2026-11-08), under the War Room in the Live group of the sidebar. It replaces the Worker status panel of the War Room, so the War Room shows only issues.
   - **Workers and lanes:** the AI Worker, the news ingestion and its last hourly pull, TradingView OAuth, the local lane (with the re-earning progress), calibration, the pull adapter's last refresh, the TradingView budget of the day and the freshness of the gold bars. On the weekend, lanes that are expected to be idle show grey.

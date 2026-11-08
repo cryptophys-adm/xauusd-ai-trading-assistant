@@ -102,7 +102,7 @@ const worker = {
         cron: "*/5 * * * *",
         series: SERIES.map(({ symbol, interval, timeframe, retain, role, derived_from }) => ({ symbol, interval, timeframe, retain, role, derived_from: derived_from || null })),
         // The HUD publisher per chart: status and candle only (D1 catch-up, 2026-11-06).
-        last_hud_publish: lastHud ? { published_at: lastHud.published_at ?? null, charts: Object.fromEntries(Object.entries(lastHud.charts || {}).map(([c, r]) => [c, { status: r?.status ?? null, candle_key: r?.candle_key ?? null, ...(r?.catch_up ? { catch_up: true } : {}) }])) } : null,
+        last_hud_publish: lastHud ? { published_at: lastHud.published_at ?? null, charts: Object.fromEntries(Object.entries(lastHud.charts || {}).map(([c, r]) => [c, { status: r?.status ?? null, candle_key: r?.candle_key ?? null, ...(r?.catch_up ? { catch_up: true } : {}), ...(r?.chart_plane ? { chart_plane: r.chart_plane } : {}) }])) } : null,
         last_refresh: lastRefresh ? { status: lastRefresh.status, checked_at: lastRefresh.checked_at, requested: lastRefresh.requested, failed: lastRefresh.failed, quota_cooldown_until: lastRefresh.quota_cooldown_until } : null
       });
     }

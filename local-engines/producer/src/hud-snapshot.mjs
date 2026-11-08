@@ -26,6 +26,7 @@ import { CHART_TICKERID, prophetR38TEnc, prophetConsensusDir } from "./h1-produc
 import { computeMacroAether } from "./macro-aether.mjs";
 import { supertrendFields } from "./supertrend.mjs";
 import { gridBotFields } from "./grid-bot.mjs";
+import { buildChartPlane } from "./chart-plane.mjs";
 
 export const HUD_SNAPSHOT_VERSION = "cryptophys.hud-snapshot.v1";
 const CHART = Object.freeze({
@@ -231,6 +232,10 @@ export function buildHudSnapshot(bundle, { chart = "H1", now = Date.now(), minti
     computed_at: new Date(now).toISOString(),
     not_computed: Object.keys({ grid_bot_protocol: 1, ...(gmi ? {} : { kinetic_engine: 1, fabio_amt: 1, tactical_muscles: 1, gabfx_price_action: 1, playbook_execution: 1, decision_matrix: 1 }) }).filter((id) => !(id in huds)),
     gmi_error: gmiError,
-    huds
+    huds,
+    // Every price object GMI draws on the chart (chart-plane.mjs, owner decision 2026-11-08): read
+    // by the Key Level Agent and the Nexus chart. Not a HUD section, so it creates no room agent;
+    // a failure leaves it null.
+    chart_plane: (() => { try { return buildChartPlane(bundle, { chart, chartBars, mintick }); } catch { return null; } })()
   };
 }

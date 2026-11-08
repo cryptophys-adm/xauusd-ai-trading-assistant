@@ -346,7 +346,7 @@ export async function publishHudSnapshots(env, { now = Date.now(), bundle = null
       const { status, body } = await env.AI_WORKER.submitHud(snapshot);
       const ok = status < 300;
       if (ok) await kv.put(markerKey, "1", { expirationTtl: HUD_MARKER_TTL_S });
-      results[chart] = { status: ok ? "published" : "rejected", ...(late ? { catch_up: true } : {}), candle_key: snapshot.candle_key, http_status: status, error: ok ? null : asString(body?.error) || "ai_worker_rejected" };
+      results[chart] = { status: ok ? "published" : "rejected", ...(late ? { catch_up: true } : {}), candle_key: snapshot.candle_key, chart_plane: snapshot.chart_plane?.version ?? null, http_status: status, error: ok ? null : asString(body?.error) || "ai_worker_rejected" };
     } catch (error) {
       results[chart] = { status: "post_failed", candle_key: snapshot.candle_key, error: asString(error?.name) || "post_failed" };
     }
