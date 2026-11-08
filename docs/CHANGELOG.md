@@ -6,6 +6,13 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(aether): phase A8, part 2. `src/tuning-replay.mjs` adds a deterministic replay of the reputation parameters behind the 1H crowd line, exposed as `replays.crowd` in `GET /api/tuning`.
+  - **Arms:** the control is the active parameters; the candidates are `crowd@prior20`, `crowd@weight0.5-1.5` and `crowd@band0.2`.
+  - **Point-in-time reputation:** a score counts only once its 4-bar horizon has closed before the room. Each room's crowd stance is scored with that stance's outcome on that candle.
+  - **Statistics:** the sign test, Holm, the discovery minimum and the holdout, as for the shadow versions. The crowd is also compared with the moderator on the same rooms.
+  - **Status:** 18 scored 1H rooms on 2026-11-08, so the replay is `collecting` until about 300 rooms.
+  - **Strategy thresholds:** their replay needs the hourly strategy inputs to be stored first, which is an owner decision.
+
 - feat(aether): phase A8, first part. The shadow comparison gains Holm–Bonferroni and a holdout, and `GET /api/tuning` is added (RFC_AETHER §9.3, K7, O12).
   - **Holdout:** the newest 100 shared bars. The discovery test (the 200-bar minimum, the sign test) uses only the bars before them. A candidate must be no worse on the holdout.
   - **Holm:** the discovery p is adjusted across the family's tests of the calendar month, counting live candidates and those stopped that month.

@@ -7,3 +7,5 @@ export const SHADOW_SIGNIFICANCE: number;
 export const REVIEW_MIN_DECISIVE_PAIRS: number;
 export function holmAdjust(pValues: Array<number | null>): Array<number | null>;
 export function holmMonth(now: number): string;
+export function tally(scores: unknown[]): Record<string, any>;
+export function pairedTally(pairs: unknown[]): Record<string, any>;

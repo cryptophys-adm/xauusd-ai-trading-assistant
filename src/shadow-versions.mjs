@@ -333,7 +333,7 @@ export function holmAdjust(pValues) {
 export const holmMonth = (now) => new Date(now).toISOString().slice(0, 7);
 
 /** Paired tally of candidate against control over `pairs` ([candidateScore, controlScore]). */
-function pairedTally(pairs) {
+export function pairedTally(pairs) {
   let wins = 0, losses = 0;
   for (const [s, c] of pairs) {
     if (s.stance === c.stance || !DECIDED(s) || !DECIDED(c)) continue;
@@ -344,7 +344,7 @@ function pairedTally(pairs) {
   return { bars: pairs.length, candidate_better: wins, control_better: losses, p_value: signTestP(wins, losses), accuracy: mine.accuracy, control_accuracy: theirs.accuracy };
 }
 
-function tally(scores) {
+export function tally(scores) {
   const t = { n: 0, directional: { n: 0, hit: 0, miss: 0, neutral: 0 }, wait: { n: 0, hit: 0, missed_opportunity: 0 } };
   for (const s of scores) {
     t.n += 1;

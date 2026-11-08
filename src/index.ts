@@ -182,6 +182,7 @@ import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckSt
 import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
 import { tuningView } from "./tuning.mjs";
+import { readCrowdReplay } from "./tuning-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import {
   H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, H1_ROOM_RETRY_S, H1_ROOM_LOCK_PREFIX, H1_ROOM_LOCK_TTL_S, buildH1RoomTask, h1RoomGate, AWAITING_CONSENSUS, H1_REASONER_GIVE_UP_MS, H1_PENDING_LOOKBACK_MS,
@@ -2172,7 +2173,11 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // Aether A8 (RFC §9, K7): every TUNING_GRID point, running (discovery test with Holm, holdout),
     // stopped or untested. Read-only, built from the cached 30-day shadow view.
     try {
-      return dashboardJson({ status: "ok", ...tuningView(await readShadowVersions(env, { days: 30, candidates: await shadowCandidates(env) })) });
+      const shadow = await readShadowVersions(env, { days: 30, candidates: await shadowCandidates(env) });
+      // A8 part 2: the deterministic replay of the reputation parameters (src/tuning-replay.mjs). Non-fatal.
+      let crowd: unknown = null;
+      try { crowd = await readCrowdReplay(env, { days: 30 }); } catch (error) { console.error("crowd_replay_failed", error instanceof Error ? error.message : String(error)); }
+      return dashboardJson({ status: "ok", ...tuningView(shadow, { crowd }) });
     } catch (error) {
       console.error("tuning_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
