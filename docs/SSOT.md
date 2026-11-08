@@ -455,6 +455,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
           - *Liquidity* (whale zones and mitigation blocks, the nearest FVG targets, QM and RBS/SBR);
           - *Session* (the true day, week and month opens).
         - The levels come from `GET /api/hud/levels`, which now serves the snapshot's `chart_plane`. The 5m chart reads the 15m plane.
+      - **Key Level Agent panel (right):** the level count of each reader (Band, Liquidity, Projection, Session), the setup type at the 15m location with its evidence, the zone ladder and the nearest candidates; hovering a zone lists its levels and their reader.
     - Right: the trading assistant panel (charts).
     - On narrower screens, the side panels move under the center instead of hiding.
     - Shadow versions are at `#/shadow`; `/shadow` redirects there.
