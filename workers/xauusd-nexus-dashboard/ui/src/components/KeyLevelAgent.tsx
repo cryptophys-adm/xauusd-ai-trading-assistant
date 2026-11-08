@@ -33,7 +33,7 @@ function ZoneLadder({ k }: { k: any }) {
             <title>{`${range(z)} · ${z.strength} · ${z.sources} source${z.sources === 1 ? "" : "s"} · score ${z.score}\n${memberLines(z)}`}</title>
             <rect x={L} y={y1 - (h < 3 ? 1 : 0)} width={W - L - R} height={h} rx={2} fill={col} fillOpacity={z.candidate ? OPACITY[z.strength] ?? 0.2 : 0.08} stroke={col} strokeOpacity={z.candidate ? 0.8 : 0.2} strokeWidth={z.candidate ? 1 : 0.5} />
             {z.candidate && (
-              <text x={W - R + 6} y={(y1 + y2) / 2 + 3.5} fontSize="10" fill={col} className="mono">{range(z)} · {z.sources}×</text>
+              <text x={W - R + 6} y={(y1 + y2) / 2 + 3.5} fontSize="10" fill={col} className="mono">{range(z)} · {z.sources} fam.</text>
             )}
           </g>
         );
@@ -48,8 +48,8 @@ function ZoneLadder({ k }: { k: any }) {
  * Key Level Agent (owner decision 2026-11-06): every key level of every chart (Camarilla, pivot
  * ranges, value areas, swings, previous day and week, round numbers, order blocks, Supertrend and,
  * from 2026-11-08, the GMI chart plane through the Band, Liquidity, Projection and Session agents),
- * grouped where they stack. A zone with three or more independent sources and at least medium
- * strength is a candidate key level; the strategy engine places its entries, stops and targets on
+ * grouped where they stack. A zone with three or more independent level families and at least medium
+ * strength is a candidate key level (at most two per side, 2026-11-08); the strategy engine places its entries, stops and targets on
  * these zones, and its setup type (the 15m location) is shown here. Carried by GET /api/conclusion/global.
  */
 export default function KeyLevelAgent() {
@@ -97,7 +97,7 @@ export default function KeyLevelAgent() {
             ))}
           </div>
           <p className="mt-2 text-[10.5px] leading-snug text-slate-500">{k.summary}</p>
-          <p className="mt-1 text-[9.5px] text-slate-600">{k.raw_count} levels from every chart, grouped within {k.tolerance} (0.3 × the 1H ATR). Candidate: three or more independent sources and at least medium strength. Hover a zone for its levels and their reader.</p>
+          <p className="mt-1 text-[9.5px] text-slate-600">{k.raw_count} levels from every chart, grouped within {k.tolerance} (0.3 × the 1H ATR). Candidate: three or more independent families (a family on one chart counts once) and at least medium strength, at most two per side. Hover a zone for its levels and their reader.</p>
         </>
       )}
     </Panel>

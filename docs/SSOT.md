@@ -307,9 +307,9 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
       - **session:** True Openings (year, month, week, day, Asia, London, NY AM, NY PM); day and week open, previous day and week high and low; the Daily session volume profile (30 rows, 70 % value area, from 1m bars on 15m and 1H, 5m on 4H, 15m on D1), current and previous session.
       - **Limits:** path-dependent state is replayed over the engines' 1000-bar window; True Openings come from the 15m bars, so they are the true open at the stated New York time on every chart. Nothing in it is a TradingView alert field: it is unverified context, never a decision. The pull adapter's `/health` names its version per chart (`last_hud_publish.charts.<chart>.chart_plane`).
     - **Zones:** the levels, sorted by price, are grouped while a group's span stays within 0.3 × the 1H ATR (at least 1 dollar).
-      - A zone's score is the sum of its weights, and its sources are its distinct (kind, timeframe) pairs.
+      - **Independence (owner decision 2026-11-08, after the chart plane gave 11 candidates):** a zone's sources are its distinct level FAMILIES (Camarilla, pivot/CPR, value area, swing, previous day/week, round number, order block, Supertrend, and the readers' Band, Liquidity, Projection and Session), not (kind, timeframe) pairs, so one chart's KWW mean, Fibonacci and PA line no longer count as three confirmations. A zone's score adds, per family and timeframe, only the heaviest level.
       - Strength: strong (score ≥ 6), medium (≥ 3) or weak.
-      - **Candidate key level:** a zone with three or more sources and at least medium strength. The owner tightened this on 2026-11-06: at two sources, production marked 14 of 18 zones; at three sources and medium, it marked 9 of 18.
+      - **Candidate key level:** a zone with three or more families and at least medium strength, at most two per side (the strongest, then the nearest; a zone at price always stays; the others read `qualified`). `cryptophys.key-level-agent.v2`. The owner tightened this on 2026-11-06: at two sources, production marked 14 of 18 zones; at three sources and medium, it marked 9 of 18.
       - Role: support, resistance, or "at price".
     - **The strategy plans on the zones:**
       - entry: at a zone with the trade (inside it, or within 0.35 ATR of it), or a pullback to its near edge;

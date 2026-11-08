@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildKeyLevels, rawLevels, clusterLevels, swings, TF_WEIGHT, CANDIDATE_MIN_SOURCES, CANDIDATE_MIN_SCORE } from "../src/key-level-agent.mjs";
+import { buildKeyLevels, rawLevels, clusterLevels, limitCandidates, swings, TF_WEIGHT, CANDIDATE_MIN_SOURCES, CANDIDATE_MIN_SCORE, MAX_CANDIDATES_PER_SIDE, familyOf, KEY_LEVEL_VERSION } from "../src/key-level-agent.mjs";
 
 const camarilla = (base) => ({ h3: base + 8, h4: base + 20, h5: base + 35, l3: base - 2, l4: base - 14, l5: base - 30 });
 const snap = (timeframe, cam, extra = {}) => ({
@@ -114,4 +114,37 @@ test("P6: each chart's order blocks and Supertrend line are key levels", () => {
   assert.deepEqual(ob.map((l) => l.label), ["1H bullish order block bottom", "1H bullish order block top", "1H bearish order block bottom", "1H bearish order block top"]);
   assert.equal(ob[0].weight, 1.05, "0.7 x 1H 1.5");
   assert.deepEqual(raw.filter((l) => l.kind === "supertrend").map((l) => [l.label, l.price, l.weight]), [["1H Supertrend line", 4018.5, 0.9]]);
+});
+
+test("independence (owner decision 2026-11-08): sources are families, a family on one chart adds its heaviest level, two candidates per side", () => {
+  const lv = (price, kind, tf, label, weight) => ({ price, kind, tf, label, weight });
+  assert.equal(KEY_LEVEL_VERSION, "cryptophys.key-level-agent.v2");
+  assert.deepEqual(["whale", "fvg", "volume node", "liquidity"].map(familyOf), ["liquidity", "liquidity", "liquidity", "liquidity"]);
+  assert.deepEqual(["fibonacci", "cone", "trendline", "pa"].map(familyOf), ["projection", "projection", "projection", "projection"]);
+  assert.deepEqual(["open", "session profile"].map(familyOf), ["session", "session"]);
+  assert.equal(familyOf("camarilla"), "camarilla");
+  // One 15m chart: KWW mean (band), Fibonacci 0.5 and PA support (projection) stack: two families, not three sources.
+  const [oneChart] = clusterLevels([
+    lv(100, "band", "15", "15m KWW mean", 1.5), lv(100.2, "fibonacci", "15", "15m Fibonacci 0.5", 1.8), lv(100.4, "pa", "15", "15m PA support", 1.8)
+  ], 2, 105);
+  assert.equal(oneChart.sources, 2);
+  assert.deepEqual(oneChart.families.sort(), ["band", "projection"]);
+  assert.equal(oneChart.candidate, false);
+  assert.equal(oneChart.score, 3.3, "the projection family on 15m adds its heaviest level (1.8), not 3.6");
+  // Five qualified supports and one at price: the two strongest supports stay candidates, the zone at price stays.
+  const levels = [];
+  for (let i = 0; i < 5; i++) {
+    const p = 90 - i * 10;
+    levels.push(lv(p, "camarilla", "D", `daily L${i}`, 2.5 + i * 0.5), lv(p + 0.2, "previous", "D", `prev ${i}`, 2.5), lv(p + 0.4, "round", "15", `round ${i}`, 0.8));
+  }
+  levels.push(lv(99.8, "camarilla", "D", "daily H3", 1.5), lv(100, "value", "60", "1H POC", 1.4), lv(100.2, "swing", "15", "15m swing", 0.9));
+  const zones = clusterLevels(levels.sort((a, b) => a.price - b.price), 1, 100);
+  assert.equal(zones.filter((z) => z.candidate).length, 6, "the rule alone qualifies five supports and the zone at price");
+  limitCandidates(zones, 100);
+  assert.equal(MAX_CANDIDATES_PER_SIDE, 2);
+  const kept = zones.filter((z) => z.candidate);
+  assert.deepEqual(kept.map((z) => z.role).sort(), ["at price", "support", "support"]);
+  assert.deepEqual(kept.filter((z) => z.role === "support").map((z) => z.low).sort((a, b) => a - b), [50, 60], "the strongest two (heaviest daily Camarilla)");
+  assert.equal(zones.filter((z) => z.qualified).length, 3);
+  assert.equal(buildKeyLevels({ snapshots: {}, bars: {}, price: 100, atrH1: 20 }).version, "cryptophys.key-level-agent.v2");
 });
