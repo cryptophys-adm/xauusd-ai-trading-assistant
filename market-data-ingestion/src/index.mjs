@@ -336,6 +336,7 @@ export const internals = {
   mergeCandles,
   planRequest,
   marketClosed,
+  SERIES,
   settleSeconds,
   SETTLE_SECONDS,
   buildBundle,

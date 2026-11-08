@@ -518,3 +518,17 @@ test("no pull while the market is closed (Friday 22:30 to Sunday 22:00 UTC), exc
   assert.equal(internals.planRequest(spec, null, sec("2026-11-08T12:00:00Z")).bootstrap, true, "an empty series still bootstraps once");
   assert.ok(internals.planRequest({ ...spec, symbol: "CRYPTOCAP:USDT" }, { candles: [last] }, sec("2026-11-08T12:00:00Z")), "crypto is pulled on the weekend");
 });
+
+test("the 1m and USOIL 5m series are pulled once per 15 minutes, at the 15m close, with every bar", () => {
+  const sec = (iso) => Date.parse(iso) / 1000;
+  const m1 = internals.SERIES.find((s) => s.key === "OANDA:XAUUSD|1m");
+  assert.equal(internals.SERIES.find((s) => s.key === "TVC:USOIL|5m").cadence, 900);
+  assert.equal(m1.cadence, 900);
+  const last = { time: sec("2026-11-10T09:59:00Z") }; // the bar closing at 10:00 is cached
+  assert.equal(internals.planRequest(m1, { candles: [last] }, sec("2026-11-10T10:05:10Z")), null, "no pull at 10:05");
+  assert.equal(internals.planRequest(m1, { candles: [last] }, sec("2026-11-10T10:10:10Z")), null, "no pull at 10:10");
+  const plan = internals.planRequest(m1, { candles: [last] }, sec("2026-11-10T10:15:10Z"));
+  assert.ok(plan && plan.count >= 15, "at 10:15 the pull brings all fifteen 1m bars");
+  const h1 = { symbol: "OANDA:XAUUSD", interval: "1h", seconds: 3600, retain: 1000 };
+  assert.ok(internals.planRequest(h1, { candles: [{ time: sec("2026-11-10T08:00:00Z") }] }, sec("2026-11-10T10:05:00Z")), "series without a cadence keep their timing");
+});
