@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- fix(market-data): the gold chart stays live (owner decision 2026-11-08, after #166). XAUUSD 1m is pulled every 5 minutes again, so the 5m chart and 5m parity are real-time; only USOIL 5m (macro) keeps the 15-minute cadence. A weekday costs about 440 calls, plus 24 for the news.
 - perf(market-data): the TradingView pulls recalculated for the quota (owner request 2026-11-08). XAUUSD 1m and USOIL 5m are now pulled once per 15 minutes, at the 15m close, instead of every 5 minutes (`cadence: 900`).
   - Every bar is still pulled, so the 5m and 15m engines, the derived series and their parity are unchanged. A local record is compared only when it exists, so skipped 5m bars never break an approval streak.
   - 5m freshness drops from 5 to 15 minutes, and 5m parity samples one 5m bar in three.
