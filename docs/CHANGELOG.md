@@ -6,6 +6,19 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(calendar): the Calendar Agent (owner decisions 2026-11-08: fixed rules plus an AI narrative; context plus a MACRO row in the Global decision), in `src/calendar-agent.mjs`.
+  - **Projection by fixed rules per event kind:** inflation, jobs, wages, growth, surveys, housing, the rate decision, unemployment and claims, Fed speeches. For each USD event it gives:
+    - which way gold usually moves if the actual is above or below the forecast (stronger US data or a hawkish Fed: gold down; unemployment and claims the other way; a speech by its tone);
+    - the consensus lean (forecast against previous, largely priced in);
+    - the status (upcoming, within 2 hours, released, past);
+    - the horizon, from 2 hours before to 4 hours after the event.
+  - **Outcome after release:** the export has no actual figure, so the outcome is read from the headlines.
+  - **Where it is used:**
+    - `GET /api/calendar` adds `projection` per USD event and the `outlook` (High-impact USD events from 6 hours back to 48 hours ahead, and the net consensus lean of the next 24 hours);
+    - the News Daily TLDR prompt reads the outlook and may not reverse a projected direction;
+    - the Risk Desk's calendar lines in the 1H, 4H and D1 rooms carry the projection;
+    - the Nexus calendar page shows the Calendar Agent panel and an "above / below forecast" column.
+  - The Macro War Room that discusses it follows in its own PR. Tests: `test/calendar-agent.test.mjs`.
 - feat(telegram): the H1 decision message is sent only for a BUY or SELL, or when the decision changes from the previous bar's (for example BUY to WAIT); a WAIT after a WAIT is not sent (owner decision 2026-11-08, `src/h1-telegram.mjs`). The same bar processed twice is never sent twice. `H1_TELEGRAM_MODE = "all"` restores one message per bar. Tests: `test/h1-telegram.test.mjs`.
 - fix(nexus): smaller type in the conclusion card (News and room tabs) and the Global decision panel (owner request 2026-11-08). A long decision word (BEARISH, BULLISH or NEUTRAL in the News TLDR) was 52 px wide in a 176 px column and ran into the summary. Now the decision is 36 px, or 26 px for words longer than 5 letters; the bias is 18 px; the summary is 12 px and the reasons and headlines 11.5–12 px. The Global decision is 32 px, or 24 px for long words. Checked at 1440, 1024 and 390 px: no overlap.
 - feat(nexus): the Decision audit and Alerts pages; the Intelligence group no longer reads "soon".

@@ -49,8 +49,10 @@ import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } 
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
 import { eventRisk, gatedEvents } from "./econ-calendar.mjs";
+import { projectEvent } from "./calendar-agent.mjs";
 
-const eventLine = (e) => `${e.title} (${e.currency}, ${e.time.slice(11, 16)} UTC)`;
+// With the Calendar Agent's projection (owner decision 2026-11-08): which way gold usually moves.
+const eventLine = (e, now) => { const p = projectEvent(e, now); return `${e.title} (${e.currency}, ${e.time.slice(11, 16)} UTC)${p ? `: ${p.text}` : ""}`; };
 
 const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson } = threadInternals;
 
@@ -238,7 +240,7 @@ export async function tfEvidence(env, chart, candleKey) {
   try {
     const closeMs = Date.parse(last.close_time);
     const r = eventRisk(await gatedEvents(env, { now: closeMs }), closeMs);
-    if (r.active.length || r.next.length) eventRiskNow = { rule: "a high-impact USD event from 2 hours before to 30 minutes after it is a caution, never a forced wait", due_now: r.active.map(eventLine), next_24h: r.next.map(eventLine) };
+    if (r.active.length || r.next.length) eventRiskNow = { rule: "a high-impact USD event from 2 hours before to 30 minutes after it is a caution, never a forced wait", due_now: r.active.map((e) => eventLine(e, closeMs)), next_24h: r.next.map((e) => eventLine(e, closeMs)) };
   } catch { eventRiskNow = null; }
   return {
     chart, candle_key: candleKey, bar_open: last.open_time, bar_close: last.close_time,

@@ -4,6 +4,8 @@
 // CAUTION for the strategy engine (confidence -0.1, like the other cautions) and is shown to the
 // Risk Desk of the timeframe rooms. It never forces WAIT and never places anything.
 
+import { calendarOutlook, projectEvent } from "./calendar-agent.mjs";
+
 export const CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
 export const CALENDAR_KEY = "calendar:ff:thisweek:v1";
 export const CALENDAR_VERSION = "cryptophys.econ-calendar.v1";
@@ -77,5 +79,10 @@ export async function gatedEvents(env, { now = Date.now() } = {}) {
 export async function readCalendar(env, { now = Date.now() } = {}) {
   const cal = await cachedCalendar(env);
   const events = cal?.events || [];
-  return { version: CALENDAR_VERSION, source: "ForexFactory weekly export", fetched_at: cal?.fetched_at ?? null, events, risk: eventRisk(events, now) };
+  // Calendar Agent (owner decision 2026-11-08): each USD event carries its projected effect on gold.
+  return {
+    version: CALENDAR_VERSION, source: "ForexFactory weekly export", fetched_at: cal?.fetched_at ?? null,
+    events: events.map((e) => { const p = projectEvent(e, now); return p ? { ...e, projection: p } : e; }),
+    risk: eventRisk(events, now), outlook: calendarOutlook(events, now)
+  };
 }
