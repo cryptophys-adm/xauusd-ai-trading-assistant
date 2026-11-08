@@ -654,6 +654,23 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Isolation.** The answers are never shown in a room, on the bus, in the crowd line, to the moderator or the Reasoner, or in a decision.
   - **Where to see it.** `/api/tuning` shows `replays.knowledge`, with the verdicts and the noise rate.
   - **Promotion.** A better note reaches agents only through the bundled pack, in an owner PR (A9).
+- **Bundled learned pack (Aether A9, `src/learned-knowledge.mjs`).** The source is `knowledge/learned/pack.json`, bundled as `src/learned-knowledge.generated.mjs` by `scripts/build-learned-knowledge.mjs --write`, like KB v4. It is empty today.
+  - **How an item gets in.** The script's `--add <export> --tuning <tuning> --items id@v` copies an item only when its shadow verdict is `better_than_active`. That change, in an owner PR, is the promotion (K9).
+  - **Test gates.** Tests fail when the generated module is stale or an item breaks the rules:
+    - plain words, no 3+ digit number and no order wording;
+    - its numbers in its evidence;
+    - provenance with at least 10 cards and the canon hash;
+    - a shadow verdict.
+  - **Selection is deterministic.** An item applies when the agent is in its audience, the chart matches and the situation matches the bar (the session, for a caution; a role reminder always applies).
+  - **Budgets.**
+
+    | Consumer | Notes | Characters |
+    |---|---|---|
+    | Agents | at most 2 | at most 400 |
+    | Moderator | at most 3 | at most 600 |
+
+  - **Where it goes.** The block is placed after the agent's own data in the 1H, 4H and D1 room openings and conclusions. The room brief records `learned_pack` (version, sha and the notes each agent saw).
+  - **Switch.** It is off unless `LEARNED_KNOWLEDGE_ENABLED = "true"`; turning it off restores today's prompts. KB v4 always takes precedence. The 15m War Room and the H1 Reasoner do not read the notes yet.
 - **P5 review (owner decision 2026-11-07):**
   - `prophet_r37@latch12` and `prophet_r38@latch8` are stopped; they are listed under `retired` in the view.
   - `prophet_r37@latch8` runs until 30 decisive pairs or 2026-12-07.

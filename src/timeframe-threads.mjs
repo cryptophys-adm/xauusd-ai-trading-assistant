@@ -46,6 +46,8 @@ import { H1_ROOM_LOCK_PREFIX } from "./h1-consensus.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, stuckCautions, ROOM_TIMEFRAME } from "./reputation.mjs";
 import { agentReputation, listStuckStates } from "./outcome-scoring.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
+import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
+import { sessionOf } from "./outcome-scoring.mjs";
 
 const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson } = threadInternals;
 
@@ -252,7 +254,7 @@ function agentData(agent, ev, spec) {
 
 const deskList = (roster) => roster.filter((id) => TF_DESKS[id]).map((id) => `the ${TF_DESKS[id].name}`).join(", ");
 
-function openingMessages(agent, data, spec, roster, note = null) {
+function openingMessages(agent, data, spec, roster, note = null, learned = null) {
   const desk = TF_DESKS[agent];
   const riskRule = agent === "risk" ? [ruleText(spec) + " Judge every possible entry against the confirmations in your data, and say plainly whether any entry is confirmed."] : [];
   const who = desk
@@ -269,7 +271,9 @@ function openingMessages(agent, data, spec, roster, note = null) {
     ...(note ? [note] : []),
     `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"claim":"<= ${CLAIM_MAX - 40} chars"}`,
     "YOUR DATA:",
-    JSON.stringify(data ?? { available: false })
+    JSON.stringify(data ?? { available: false }),
+    // Aether A9 (src/learned-knowledge.mjs): the bundled learned notes for this agent, only with LEARNED_KNOWLEDGE_ENABLED.
+    ...(learned ? [learned] : [])
   ]);
 }
 
@@ -293,7 +297,7 @@ function rebuttalMessages(agent, own, bus, spec, unanimous, confirmations, roomB
   ]);
 }
 
-function conclusionMessages(spec, bus, debate, confirmations, crowd = null) {
+function conclusionMessages(spec, bus, debate, confirmations, crowd = null, learned = null) {
   return chatMessages([
     `You are the moderator of the XAUUSD ${spec.label} War Room. The Consensus Discussion is closed. Write the TLDR of the ${spec.label} Thread: the consensus of the room on this timeframe.${spec.tab === "1H" ? " The Reasoner writes the H1 decision after you, from this room's consensus." : ""}`,
     RULES_NO_REFS,
@@ -307,7 +311,8 @@ function conclusionMessages(spec, bus, debate, confirmations, crowd = null) {
     "COMMUNICATION BUS:",
     JSON.stringify(bus),
     "CONSENSUS DISCUSSION:",
-    JSON.stringify(debate)
+    JSON.stringify(debate),
+    ...(learned ? [learned] : [])
   ]);
 }
 
@@ -356,10 +361,15 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
     return calibrationNote(c, "no statement calibrated yet");
   };
   const base = (step, agent, parent_id = null) => ({ thread_id: threadId, run_id: runId, step, agent, parent_id, bar_time: ev.bar_close });
+  // Aether A9: the bundled learned notes (deterministic per agent, chart and session); none unless enabled.
+  const learnedCtx = { chart: { H1: "60", H4: "240", D1: "1D" }[chart], session: sessionOf(Date.parse(ev.bar_close)) };
+  const learnedFor = (agent) => learnedBlock(env, { agent, ...learnedCtx });
   if (!existing.has("brief")) {
     await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: {
       chart, candle_key: candleKey, roster, calibration, confirmations: ev.confirmations, bar: ev.technical.candles.at(-1) ?? null,
       hud_snapshot: Boolean(ev.hud),
+      // Which learned pack and notes the room saw (RFC §10); recorded only when the notes are on.
+      ...(learnedKnowledgeEnabled(env) ? { learned_pack: learnedPackInfo(env, { roster, ...learnedCtx }) } : {}),
       higher: ev.higher ? { timeframe: ev.higher.timeframe, stance: ev.higher.stance } : null, news: ev.news ? { consensus: ev.news.consensus } : null
     } });
   }
@@ -382,7 +392,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
     const prior = existing.get("open:" + agent);
     if (prior?.status === "ok") return prior;
     return open(base("open:" + agent, agent), {
-      messages: openingMessages(agent, agentData(agent, ev, spec), spec, roster), schemaName: "tf_room_opening", schema: OPENING_SCHEMA,
+      messages: openingMessages(agent, agentData(agent, ev, spec), spec, roster, null, learnedFor(agent)), schemaName: "tf_room_opening", schema: OPENING_SCHEMA,
       maxTokens: BUS_MAX_TOKENS.agent, effort: "low",
       // A timeframe desk whose records parity has not approved speaks at 0.4 or lower.
       validate: (o) => validateOpening(normalizeTfNames(o, [agent]), agent, { verifiedLines: (agent === "h1" || agent === "h4" || agent === "d1") ? (ev.desk?.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]) }),
@@ -420,7 +430,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   const crowd = buildCrowdLine(finalEntries(answered, debate), await agentReputation(db, ROOM_TIMEFRAME[chart]));
   const conclude = phase(WAR_ROOM_CONCLUSION_MS);
   await conclude(base("conclusion", "moderator"), {
-    messages: conclusionMessages(spec, bus, debate.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument })), ev.confirmations, crowd),
+    messages: conclusionMessages(spec, bus, debate.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument })), ev.confirmations, crowd, learnedFor("moderator")),
     schemaName: "tf_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low",
     validate: (o) => validateTfConclusion(o, { busAgents, confirmations: ev.confirmations, supportStances: new Set([...answered.map((m) => m.stance), ...debate.map((m) => m.stance)]), supportBiases: new Set([...answered, ...debate].map((m) => m.bias || biasOfStance(m.stance))), roomBias }),
     toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map((r) => clip(r, 200)), dissent: [...new Set(o.dissent)], majority, majority_bias: roomBias, crowd }, refs: [] })
@@ -435,7 +445,8 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
         const plan = planShadowCalls({ items: await shadowItems(env), roster, openings: answered, chart });
         return runShadowCalls(env, {
           calls: plan, candleKey, statementClose: ev.bar_close, clock, schema: OPENING_SCHEMA, maxTokens: BUS_MAX_TOKENS.agent,
-          messagesFor: (agent, note) => openingMessages(agent, agentData(agent, ev, spec), spec, roster, note),
+          // Like for like: the live opening's prompt (its bundled notes included) plus the note under test.
+          messagesFor: (agent, note) => openingMessages(agent, agentData(agent, ev, spec), spec, roster, note, learnedFor(agent)),
           validate: (o, agent) => validateOpening(normalizeTfNames(o, [agent]), agent, { verifiedLines: (agent === "h1" || agent === "h4" || agent === "d1") ? (ev.desk?.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]) })
         });
       }

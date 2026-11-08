@@ -6,6 +6,13 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(aether): phase A9 groundwork. The bundled learned pack and its retrieval, in `src/learned-knowledge.mjs` and `scripts/build-learned-knowledge.mjs`.
+  - **The pack.** `knowledge/learned/pack.json` (empty) is generated into `src/learned-knowledge.generated.mjs`. The script adds an item only when its shadow verdict is `better_than_active`.
+  - **Test gates.** Tests check that the generated module is fresh and that every item follows the rules: plain words, no levels, its numbers in its evidence, provenance and a shadow verdict.
+  - **Retrieval.** Selection is deterministic, by audience, chart and session. The budgets are 2 notes and 400 characters for agents, and 3 notes and 600 characters for the moderator.
+  - **Where it goes.** The block follows the data in the 1H, 4H and D1 room openings and conclusions. The brief records `learned_pack`.
+  - **Switch.** It is off unless `LEARNED_KNOWLEDGE_ENABLED`. With the flag off, the prompts are unchanged.
+
 - feat(aether): phase A7, second part. The shadow knowledge arm for approved text items, `src/shadow-knowledge.mjs`.
   - **Default.** Off; it runs only with `SHADOW_KNOWLEDGE_ENABLED = "true"`.
   - **The call.** For up to 2 items, the target agent of the 1H room makes one extra opening call per bar with the note. An A/A call without the note measures the noise (O13).

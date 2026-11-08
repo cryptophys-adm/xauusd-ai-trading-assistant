@@ -1,0 +1,11 @@
+export const LEARNED_PACK_VERSION: string;
+export const TEXT_KINDS: readonly string[];
+export const BUDGETS: Readonly<Record<string, { items: number; chars: number }>>;
+export const LEARNED_HEADER: string;
+export const LEARNED_PACK: Readonly<{ version: string; items: any[]; content_sha256: string }>;
+export function learnedKnowledgeEnabled(env: unknown): boolean;
+export function learnedItemProblems(item: unknown): string[];
+export function noteApplies(item: unknown, ctx: { agent: string; chart: string; session: string }): boolean;
+export function selectNotes(pack: unknown, ctx: { agent: string; chart: string; session: string; role?: string }): any[];
+export function learnedBlock(env: unknown, ctx: { agent: string; chart: string; session: string; pack?: unknown }): string | null;
+export function learnedPackInfo(env: unknown, ctx?: { roster?: string[]; chart?: string; session?: string; pack?: unknown }): Record<string, unknown>;
