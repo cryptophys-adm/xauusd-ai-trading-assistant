@@ -6,6 +6,10 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-07
 
+- feat(security): the AI Worker and Nexus have no public `workers.dev` or preview URL (`workers_dev: false`, `preview_urls: false`).
+  - **Why:** both served the read API and the dashboard to anyone, bypassing the Cloudflare Access on their custom domains.
+  - **Nexus smoke test:** it now needs the CI service token for its content checks.
+  - **Unaffected:** the webhook at `ai.cryptophys.work/webhook` and the isolated `preview-e2e` Worker.
 - feat(nexus): Nexus reaches the AI Worker through a Service Binding (topology change, owner go 2026-11-07, step 1 of locking the read API).
   - **Binding:** `AI_WORKER` → `xauusd-ai-trading-assistant` (default `fetch`) replaces the public fetch of `https://ai.cryptophys.work`.
   - **Why:** the AI Worker's `/api` can now go behind Cloudflare Access while Nexus keeps working. The webhook stays public and secret-protected.
