@@ -14,6 +14,7 @@
 // Nexus shows the open alerts as its Priority Queue (GET /api/health/alerts). Read-only towards
 // the trading chain: an alert never changes a decision, a room or a parity status.
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
+import { engineLabel } from "./engine-names.mjs";
 
 export const HEALTH_AGENT_ID = "xauusd-risk-manager";
 export const HEALTH_REPORTS_PER_HOUR = 3;
@@ -32,6 +33,13 @@ export function resetHealthSchemaCacheForTests() { schemaReady = false; }
 
 const iso = (ms) => new Date(ms).toISOString();
 const hhmm = (ms) => iso(ms).slice(11, 16) + " UTC";
+/** The open time of a candle key ("OANDA:XAUUSD:15:<open ms>") as "2026-11-09 01:15 UTC". */
+function barOf(candleKey) {
+  const ms = Number(String(candleKey).split(":").at(-1));
+  return Number.isFinite(ms) && ms > 0 ? `bar opened ${iso(ms).slice(0, 16).replace("T", " ")} UTC` : String(candleKey);
+}
+/** The timeframe room names of SSOT ("the 1H War Room"). */
+const ROOM_NAMES = Object.freeze({ H1: "1H", H4: "4H", D1: "D1" });
 
 async function rows(db, sql, ...params) {
   try { return (await db.prepare(sql).bind(...params).all()).results || []; } catch { return []; }
@@ -51,14 +59,14 @@ export async function detectHealthIssues(env, now = Date.now()) {
   for (const r of registry) if (!latest.has(r.engine)) latest.set(r.engine, r);
   for (const r of latest.values()) {
     if (r.status !== "revoked") continue;
-    out.push({ key: `parity_revoked:${r.engine}`, kind: "parity_revoked", subject: `Parity revoked: ${r.engine}, ${r.consecutive_matches} of 24 matches toward re-approval`, detail: { engine: r.engine, revoked_at: r.revoked_at, consecutive_matches: r.consecutive_matches } });
+    out.push({ key: `parity_revoked:${r.engine}`, kind: "parity_revoked", subject: `Parity revoked: ${engineLabel(r.engine)}, ${r.consecutive_matches} of 24 matches toward re-approval`, detail: { engine: r.engine, revoked_at: r.revoked_at, consecutive_matches: r.consecutive_matches } });
   }
 
   // 2. Local input bars that differ from TradingView's final bar (one alert per candle).
   for (const r of await rows(db, "SELECT engine, candle_key, detail, compared_at FROM engine_parity_comparisons WHERE result = 'input_mismatch' AND compared_at >= ?", iso(now - 3 * HOUR))) {
     let fields = [];
     try { fields = [...new Set((JSON.parse(r.detail)?.mismatches || []).map((m) => m.field))]; } catch { fields = []; }
-    out.push({ key: `input_mismatch:${r.engine}:${r.candle_key}`, kind: "input_mismatch", one_shot: true, subject: `Local input bar differs from TradingView: ${r.engine} ${r.candle_key.split(":").slice(2).join(":")} (${fields.join(", ") || "bar"}); waiting for the republish`, detail: { engine: r.engine, candle_key: r.candle_key, fields } });
+    out.push({ key: `input_mismatch:${r.engine}:${r.candle_key}`, kind: "input_mismatch", one_shot: true, subject: `Local input bar differs from TradingView: ${engineLabel(r.engine)}, ${barOf(r.candle_key)} (${fields.join(", ") || "bar"}); waiting for the republish`, detail: { engine: r.engine, candle_key: r.candle_key, fields } });
   }
 
   // 3. The latest closed H1 bar is cached but has no local record (pipeline stalled).
@@ -67,7 +75,7 @@ export async function detectHealthIssues(env, now = Date.now()) {
     const key = "OANDA:XAUUSD:60:" + Date.parse(h1.open_time);
     let observed = null;
     try { observed = await env.WEBHOOK_BUFFER?.get?.("localcalc-observed:" + key + ":prophet"); } catch { observed = "unknown"; }
-    if (!observed) out.push({ key: `h1_local_missing:${key}`, kind: "h1_local_missing", subject: `No local H1 record for the bar closed ${hhmm(Date.parse(h1.close_time))}: the H1 chain waits for the backup path`, detail: { candle_key: key } });
+    if (!observed) out.push({ key: `h1_local_missing:${key}`, kind: "h1_local_missing", subject: `No local 1H record for the bar closed ${hhmm(Date.parse(h1.close_time))}: the H1 chain waits for the backup path`, detail: { candle_key: key } });
   }
 
   // 4. Timeframe rooms that did not conclude 45 minutes after their bar closed.
@@ -76,7 +84,7 @@ export async function detectHealthIssues(env, now = Date.now()) {
       const bar = (await seriesCandles(env, "OANDA:XAUUSD|" + series)).filter((c) => Date.parse(c.close_time) <= now - 45 * 60_000).at(-1);
       if (!bar || now - Date.parse(bar.close_time) > 6 * HOUR) continue;
       const done = await rows(db, "SELECT 1 FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? AND step = 'conclusion' AND status = 'ok' LIMIT 1", `tf:${chart}`, bar.open_time);
-      if (!done.length) out.push({ key: `room_unconcluded:${chart}:${bar.open_time}`, kind: "room_unconcluded", subject: `The ${chart} War Room has no conclusion for the bar closed ${hhmm(Date.parse(bar.close_time))}`, detail: { chart, bar_open: bar.open_time } });
+      if (!done.length) out.push({ key: `room_unconcluded:${chart}:${bar.open_time}`, kind: "room_unconcluded", subject: `The ${ROOM_NAMES[chart]} War Room has no conclusion for the bar closed ${hhmm(Date.parse(bar.close_time))}`, detail: { chart, bar_open: bar.open_time } });
     }
   }
 

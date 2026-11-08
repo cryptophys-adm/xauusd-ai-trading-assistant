@@ -22,3 +22,6 @@ export function engineChart(engine?: string | null): string {
   const m = String(engine ?? "").match(/_(m5|m15|h4|d1)$/);
   return m ? ({ m5: "5m", m15: "15m", h4: "4H", d1: "D1" } as Record<string, string>)[m[1]] : "1H";
 }
+
+/** Registry engine id → its canonical title with the timeframe ("gmi_m15" → "GMI v12.70 15m"). */
+export const engineTitle = (engine?: string | null) => `${engineName(String(engine ?? "").replace(/_(m5|m15|h4|d1)$/, ""))} ${engineChart(engine)}`;

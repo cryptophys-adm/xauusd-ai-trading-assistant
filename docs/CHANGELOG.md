@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- fix(alerts): canonical engine names with their timeframe in the Priority Queue (owner request 2026-11-08). One backend map, `src/engine-names.mjs` (`engineLabel`), names a registry id by its indicator name, chart timeframe and id, e.g. "Parity revoked: GMI v12.70 15m (gmi_m15)". The health alert subjects (and so their kernel reports), `GET /api/parity` (`name`, `label`) and the Nexus parity tables and local-lane line use it; an input mismatch names the bar by its open time, and a room by its SSOT name ("the 1H War Room"). Open alerts take the new subject at the next sweep. A test keeps the Nexus map (`lib/names.ts`) equal to the backend one. Tests: `test/engine-names.test.mjs`, `test/health-alerts.test.mjs`, `test/parity-view.test.mjs`.
 - feat(nexus): the System status page (`#/status`, owner request 2026-11-08), under the War Room in the Live group of the sidebar. It replaces the Worker status panel of the War Room, so the War Room shows only issues.
   - **Workers and lanes:** the AI Worker, the news ingestion and its last hourly pull, TradingView OAuth, the local lane (with the re-earning progress), calibration, the pull adapter's last refresh, the TradingView budget of the day and the freshness of the gold bars. On the weekend, lanes that are expected to be idle show grey.
   - **Priority Queue.**

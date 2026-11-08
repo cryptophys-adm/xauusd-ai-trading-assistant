@@ -47,8 +47,9 @@ test("detectors: a revoked identity, an input mismatch and a missing local H1 re
   e.DB.raw.prepare("INSERT INTO engine_parity_comparisons VALUES ('gmi','a','b','OANDA:XAUUSD:60:1','input_mismatch',?,?)").run(JSON.stringify({ mismatches: [{ field: "input:c" }, { field: "input:volume" }] }), iso(NOW - H));
   const issues = await detectHealthIssues(e, NOW);
   assert.deepEqual(issues.map((i) => i.kind).sort(), ["h1_local_missing", "input_mismatch", "parity_revoked"]);
-  assert.match(issues.find((i) => i.kind === "parity_revoked").subject, /prophet, 4 of 24/);
-  assert.match(issues.find((i) => i.kind === "input_mismatch").subject, /input:c, input:volume/);
+  // Canonical names (owner request 2026-11-08): the indicator name, its timeframe and the registry id.
+  assert.match(issues.find((i) => i.kind === "parity_revoked").subject, /^Parity revoked: Prophet R38 \+ R37 1H \(prophet\), 4 of 24/);
+  assert.match(issues.find((i) => i.kind === "input_mismatch").subject, /GMI v12\.70 1H \(gmi\), bar opened 1970-01-01 00:00 UTC \(input:c, input:volume\)/);
 
   const healthy = env();
   const lastClosed = JSON.parse(await healthy.SIGNAL_CACHE.get("market-data:v2:series:OANDA:XAUUSD|1h")).candles.at(-1);
@@ -63,8 +64,10 @@ test("rooms without a conclusion, rate-limited calls, a stale News Daily and a s
   for (let i = 0; i < 12; i++) e.DB.raw.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, status, ts, body_json) VALUES ('tf:H1','x','open:a','agent_failed',?,?)").run(iso(NOW - 10 * 60_000), JSON.stringify({ insight: "agent failed: 3021: rate limiting: inference request per min rate reached" }));
   e.DB.raw.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, status, ts, body_json) VALUES ('warroom:2026-11-06','2026-11-06T07:00:00.000Z','conclusion','ok',?, '{}')").run(iso(NOW - 2 * H));
   e.DB.raw.prepare("INSERT INTO news_analyses VALUES ('k', ?)").run(iso(NOW - H));
-  const kinds = (await detectHealthIssues(e, NOW)).map((i) => i.kind).sort();
+  const issues = await detectHealthIssues(e, NOW);
+  const kinds = issues.map((i) => i.kind).sort();
   assert.deepEqual(kinds, ["model_rate_limited", "news_daily_stale", "room_unconcluded", "war_room_stale"]);
+  assert.match(issues.find((i) => i.kind === "room_unconcluded").subject, /^The 1H War Room has no conclusion/, "rooms carry their SSOT name");
 });
 
 test("an alert opens once with one warning, stays quiet while it holds, and resolves with one info report", async () => {

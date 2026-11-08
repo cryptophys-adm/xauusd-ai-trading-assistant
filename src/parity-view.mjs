@@ -2,17 +2,12 @@
 // identity with its totals, which identity is current per engine, the recent comparisons and the
 // counts of the last 24 hours. Read-only.
 import { ensureSchema, DEFAULT_POLICY } from "./parity-registry.mjs";
+import { engineTimeframe, engineBase, engineName, engineLabel } from "./engine-names.mjs";
+
+export { engineTimeframe, engineBase };
 
 const short = (h) => (typeof h === "string" ? h.slice(0, 8) : null);
 const parse = (s) => { try { return JSON.parse(s); } catch { return null; } };
-
-/** Pure: the timeframe of a registry engine id ("prophet" = H1, "gmi_m15" = 15m, ...). */
-export function engineTimeframe(engine) {
-  const m = String(engine).match(/_(m5|m15|h4|d1)$/);
-  return m ? { m5: "5m", m15: "15m", h4: "4H", d1: "D1" }[m[1]] : "1H";
-}
-/** Pure: the base engine of a registry id ("gmi_m15" -> "gmi"). */
-export const engineBase = (engine) => String(engine).replace(/_(m5|m15|h4|d1)$/, "");
 
 /**
  * Pure: the registry rows shaped for display. An engine can hold several identities (one per
@@ -28,6 +23,7 @@ export function shapeRegistry(rows) {
     const detail = parse(r.last_detail);
     return {
       engine: r.engine, base: engineBase(r.engine), timeframe: engineTimeframe(r.engine),
+      name: engineName(r.engine), label: engineLabel(r.engine),
       current: latest.get(r.engine) === r,
       status: r.status, consecutive_matches: Number(r.consecutive_matches) || 0, promote_after: DEFAULT_POLICY.promoteAfter,
       totals: { matches: Number(r.total_matches) || 0, mismatches: Number(r.total_mismatches) || 0, incomplete: Number(r.total_incomplete) || 0 },
@@ -53,7 +49,7 @@ export async function readParityView(db, { now = Date.now(), limit = 40 } = {}) 
     registry: shapeRegistry(rows),
     recent: recent.map((c) => {
       const d = parse(c.detail);
-      return { engine: c.engine, timeframe: engineTimeframe(c.engine), candle_key: c.candle_key, result: c.result, compared_at: c.compared_at, mismatches: Array.isArray(d?.mismatches) ? d.mismatches.slice(0, 3).map((m) => m?.field ?? m?.path ?? String(m)).filter(Boolean) : [] };
+      return { engine: c.engine, timeframe: engineTimeframe(c.engine), label: engineLabel(c.engine), candle_key: c.candle_key, result: c.result, compared_at: c.compared_at, mismatches: Array.isArray(d?.mismatches) ? d.mismatches.slice(0, 3).map((m) => m?.field ?? m?.path ?? String(m)).filter(Boolean) : [] };
     }),
     last_24h: last24h
   };
