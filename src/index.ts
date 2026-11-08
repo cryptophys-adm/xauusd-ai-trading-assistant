@@ -184,6 +184,7 @@ import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckSt
 import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
 import { tuningView } from "./tuning.mjs";
+import { readCorrelations } from "./correlations.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -2172,6 +2173,14 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "ok", ...(await readShadowVersions(env, { days, candidates: await shadowCandidates(env) })) });
     } catch (error) {
       console.error("shadow_versions_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/correlations") {
+    // Backlog 11.3: DXY, US10Y and silver beside gold on the cached 4h series (context only).
+    try { return dashboardJson({ status: "ok", ...(await readCorrelations(env)) }); }
+    catch (error) {
+      console.error("correlations_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
     }
   }

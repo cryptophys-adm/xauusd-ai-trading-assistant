@@ -34,7 +34,7 @@ test("diagnostics reports null summaries and empty series on a cold cache", asyn
   assert.equal(result.body.budget.used, 0);
   assert.equal(result.body.budget.daily, 800);
   assert.equal(result.body.budget.date, "2026-11-04");
-  assert.equal(result.body.series.length, 12);
+  assert.equal(result.body.series.length, 14);
   assert.ok(result.body.series.every((s) => s.candle_count === 0 && s.latest_close_time === null));
 });
 

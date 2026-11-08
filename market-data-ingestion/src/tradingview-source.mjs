@@ -35,7 +35,11 @@ export const SERIES = Object.freeze([
   { key: "TVC:USOIL|1h", symbol: "TVC:USOIL", interval: "1h", timeframe: "H1", seconds: 3600, retain: 500, role: "external", derived_from: "TVC:USOIL|5m" },
   // GMI reads DXY and USDT only at 240 (macro_kinematics, dxy_close), whatever the chart.
   { key: "TVC:DXY|4h", symbol: "TVC:DXY", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "external" },
-  { key: "CRYPTOCAP:USDT|4h", symbol: "CRYPTOCAP:USDT", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "external" }
+  { key: "CRYPTOCAP:USDT|4h", symbol: "CRYPTOCAP:USDT", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "external" },
+  // Nexus correlations panel (backlog 11.3, 2026-11-08): context only, never in the engine bundle
+  // (buildBundle skips role "context"), last in priority. 2 series x 6 closed 4h bars = about 12 calls a day.
+  { key: "TVC:US10Y|4h", symbol: "TVC:US10Y", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "context" },
+  { key: "OANDA:XAGUSD|4h", symbol: "OANDA:XAGUSD", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "context" }
 ]);
 
 const asString = (value) => (typeof value === "string" ? value : "");
@@ -268,6 +272,8 @@ export async function buildBundle(env, now = Date.now()) {
   const records = await Promise.all(SERIES.map((spec) => readSeries(kv, spec)));
   const timeframes = {}, external = {};
   SERIES.forEach((spec, i) => {
+    // Context series (the Nexus correlations panel) never enter the engine input bundle.
+    if (spec.role === "context") return;
     if (spec.symbol === CANONICAL_SYMBOL) timeframes[spec.timeframe] = frame(records[i], spec);
     else (external[spec.symbol] ||= {})[spec.timeframe] = frame(records[i], spec);
   });

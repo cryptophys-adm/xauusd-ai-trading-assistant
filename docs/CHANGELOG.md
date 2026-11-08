@@ -6,6 +6,14 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(nexus): the correlations panel (backlog 11.3), `#/correlations` and `GET /api/correlations` (`src/correlations.mjs`).
+  - **What it shows.** Gold beside DXY, the US 10-year yield and silver on closed 4h bars:
+    - the last close and the change over 4h, 1 day and 5 days, in basis points for the yield;
+    - the Pearson correlation of 4h returns with gold over 30 and 120 bars;
+    - each series is as-of aligned to gold's 4h closes.
+  - **New series.** The pull adapter pulls `TVC:US10Y` and `OANDA:XAGUSD` 4h as `context` series: about 12 TradingView calls a day, last in priority, never in the engine bundle.
+  - **Isolation.** The panel is context only; nothing reaches a room or a decision.
+
 - feat(aether): phase A9 groundwork. The bundled learned pack and its retrieval, in `src/learned-knowledge.mjs` and `scripts/build-learned-knowledge.mjs`.
   - **The pack.** `knowledge/learned/pack.json` (empty) is generated into `src/learned-knowledge.generated.mjs`. The script adds an item only when its shadow verdict is `better_than_active`.
   - **Test gates.** Tests check that the generated module is fresh and that every item follows the rules: plain words, no levels, its numbers in its evidence, provenance and a shadow verdict.

@@ -18,7 +18,7 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   ] },
   { title: "Market", items: [
     { label: "Economic calendar", href: "#/calendar", key: "calendar", icon: CalendarDays, soon: true },
-    { label: "Correlations", href: "#/correlations", key: "correlations", icon: GitCompareArrows, soon: true }
+    { label: "Correlations", href: "#/correlations", key: "correlations", icon: GitCompareArrows }
   ] },
   { title: "Intelligence", items: [
     { label: "Decision audit", href: "#/audit", key: "audit", icon: BookOpenCheck, soon: true },
