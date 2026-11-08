@@ -65,6 +65,7 @@ export function slimInputs(inputs) {
     news: tldr ? { tldr: { status: tldr.status ?? null, stance: tldr.stance ?? null, confidence: isNum(tldr.confidence) ? tldr.confidence : null } } : null,
     h1Snapshot: snapshot(inputs?.h1Snapshot), m15Snapshot: snapshot(inputs?.m15Snapshot), h4Snapshot: snapshot(inputs?.h4Snapshot), d1Snapshot: snapshot(inputs?.d1Snapshot),
     confirmations: inputs?.confirmations ?? null,
+    m5Price: isNum(inputs?.m5Price) ? inputs.m5Price : null,
     h1Bars: (inputs?.h1Bars || []).map(bar), m15Bars: (inputs?.m15Bars || []).map(bar), h4Bars: (inputs?.h4Bars || []).map(bar),
     d1Bars: (inputs?.d1Bars || []).map(bar), w1Bars: (inputs?.w1Bars || []).map(bar),
     h1Chain: inputs?.h1Chain ? { decision: inputs.h1Chain.decision ?? null, confidence: inputs.h1Chain.confidence ?? null, candle_key: inputs.h1Chain.candle_key ?? null } : null,

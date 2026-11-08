@@ -169,7 +169,7 @@ import { readGlobalConclusion } from "./global-conclusion.mjs";
 import { readStrategy, loadStrategyInputs, buildStrategy } from "./strategy-engine.mjs";
 import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } from "./strategy-inputs.mjs";
 import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
-import { runSignalLedger, readLedger } from "./signal-ledger.mjs";
+import { runSignalLedger, readLedger, ingestStrategy, ensureLedgerSchema } from "./signal-ledger.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus } from "./aether-push.mjs";
 import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
@@ -1799,7 +1799,28 @@ async function consumeQueue(batch: MessageBatch<QueueTask>, env: Env): Promise<v
  * entrypoint "LocalComputationIngress"). RPC methods are not reachable over
  * public HTTP, so internal producers need no shared secret.
  */
-async function ingestM5Context(env: Env, payload: unknown): Promise<{ status: number; body: JsonObject }> {
+/**
+ * Owner decision 2026-11-08 ("the confirmation is critical"): the strategy engine is evaluated at every
+ * closed 5m bar, with that bar's verified Prophet confirmation and close, not only when the 15m room
+ * meets. Deterministic, no model call. A TRIGGERED setup goes to the Signal Ledger at once (the ledger
+ * keeps one per hour and none while one of the same side is open) and its alert to Telegram.
+ */
+async function evaluateStrategyAtM5Close(env: Env, context: Record<string, unknown>): Promise<void> {
+  try {
+    const now = Date.now();
+    const strategy = await readStrategy(env, { now, m5Context: context });
+    if (strategy?.decision !== "BUY" && strategy?.decision !== "SELL") return;
+    await ensureLedgerSchema(env.DB);
+    const added = await ingestStrategy(env, strategy, { now });
+    let alerts: unknown = null;
+    if (added) alerts = await sendLedgerAlerts(env, { send: (text: string) => sendTelegram(env, text) });
+    console.log("strategy_m5", JSON.stringify({ candle_time: context.candle_time, decision: strategy.decision, state: strategy.state, recorded: added, alerts }));
+  } catch (error) {
+    console.error("strategy_m5_failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function ingestM5Context(env: Env, payload: unknown, waitUntil?: (p: Promise<unknown>) => void): Promise<{ status: number; body: JsonObject }> {
   const p = (payload && typeof payload === "object" && !Array.isArray(payload)) ? (payload as Record<string, unknown>) : null;
   if (!p) return { status: 400, body: { error: "Invalid 5m context payload" } };
   const validation = validateM5Context(p, Date.now());
@@ -1811,6 +1832,9 @@ async function ingestM5Context(env: Env, payload: unknown): Promise<{ status: nu
   if (!kv || typeof kv.put !== "function") return { status: 503, body: { error: "kv_not_configured" } };
   const stored = { ...p, received_at: new Date().toISOString() };
   await kv.put("context:m5:latest", JSON.stringify(stored), { expirationTtl: 900 });
+  // Owner decision 2026-11-08: the 5m trigger is checked at every closed 5m bar, beside the reply.
+  const evaluation = evaluateStrategyAtM5Close(env, stored);
+  if (waitUntil) waitUntil(evaluation); else await evaluation;
   // The live room meets at each 15m candle close; every 5m context still refreshes the KV
   // execution context above.
   if ((liveRoomEnabled(env) || warRoomEnabled(env)) && isFifteenMinuteClose(p.candle_time)) {
@@ -1834,7 +1858,7 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
     return ingestLocalCalculation(this.env, record);
   }
   async submitContext(record: unknown): Promise<{ status: number; body: JsonObject }> {
-    return ingestM5Context(this.env, record);
+    return ingestM5Context(this.env, record, (p) => this.ctx.waitUntil(p));
   }
   /** Phase C2: HUD snapshot of a closed H1 or 15m bar (HUD agents only, never decision evidence). */
   async submitHud(snapshot: unknown): Promise<{ status: number; body: JsonObject }> {

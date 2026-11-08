@@ -6,6 +6,11 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(strategy): the 5m trigger is checked at every closed 5m bar (owner decision 2026-11-08, "the confirmation is critical").
+  - **Before:** the strategy read the 5m Prophet confirmation only from the 15m room, so a confirmation on the first or second 5m bar of a 15-minute window was missed.
+  - **Now:** each 5m context from the pull adapter re-evaluates the engine (`evaluateStrategyAtM5Close`) with that bar's confirmation (VERIFIED only while the 5m parity holds) and close. A TRIGGERED setup is recorded in the Signal Ledger at once, and its Telegram alert is sent.
+  - **Also:** `liveM5Inputs` feeds `/api/strategy` and the Global decision; the trigger note names the 5m bar; the strategy inputs capture keeps the 5m price for the replay.
+  - Deterministic, no model call. Tests added.
 - fix(market-data): the gold chart stays live (owner decision 2026-11-08, after #166). XAUUSD 1m is pulled every 5 minutes again, so the 5m chart and 5m parity are real-time; only USOIL 5m (macro) keeps the 15-minute cadence. A weekday costs about 440 calls, plus 24 for the news.
 - perf(market-data): the TradingView pulls recalculated for the quota (owner request 2026-11-08). XAUUSD 1m and USOIL 5m are now pulled once per 15 minutes, at the 15m close, instead of every 5 minutes (`cadence: 900`).
   - Every bar is still pulled, so the 5m and 15m engines, the derived series and their parity are unchanged. A local record is compared only when it exists, so skipped 5m bars never break an approval streak.

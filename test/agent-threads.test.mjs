@@ -589,3 +589,17 @@ test("clip ends at the last full sentence that fits, else at a word with an elli
   assert.ok(clip("x".repeat(50), 20).length <= 20);
   assert.equal(clip(null, 10), "");
 });
+
+test("the strategy reads the latest closed 5m bar: its confirmation counts only while verified, and its close is the price", async () => {
+  const { liveM5Inputs } = await import("../src/strategy-engine.mjs");
+  const e = env();
+  const now = Date.parse(BAR) + 60_000;
+  const before = await liveM5Inputs(e, { now });
+  assert.deepEqual(before.confirmation, { buy_confirmed: true, sell_confirmed: false, verified: false, candle_time: BAR }, "no approved 5m record: unverified");
+  assert.equal(before.price, 4012, "the last 5m close");
+  await seedVerifiedM5(e);
+  assert.equal((await liveM5Inputs(e, { now })).confirmation.verified, true, "the 5m implementations approved: verified");
+  assert.equal(await liveM5Inputs(e, { now: Date.parse(BAR) + 11 * 60_000 }), null, "older than 10 minutes: not live");
+  const ctx = JSON.parse(m5({ sell_confirmed: true, buy_confirmed: false }));
+  assert.equal((await liveM5Inputs({}, { now, context: ctx })).confirmation.sell_confirmed, true, "the context handed in by the 5m ingress wins over the cache");
+});

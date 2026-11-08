@@ -276,6 +276,10 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - **1H setup:** the side is the trend's when the 1H room does not lean against it. With a neutral trend, a 1H lean of 0.3 or more counts when the 15m room agrees.
     - **15m location:** the 15m room must not lean against the side. Price must sit at a key level with the trade (within 0.35 × the 1H ATR(14)) or inside a demand or supply zone (order block, mitigation, QM or flip zone of the 15m HUDs). Otherwise the planned entry is a pullback to the nearest level.
     - **5m trigger:** a VERIFIED 5m Prophet confirmation in the trade's direction, or the 15m Prophet confirmation. An unverified 5m confirmation never counts.
+      - **At every closed 5m bar (owner decision 2026-11-08, "the confirmation is critical"):** the AI Worker re-evaluates the engine when the pull adapter sends a 5m context (`ingestM5Context` → `evaluateStrategyAtM5Close`), with that bar's confirmation (VERIFIED only while `prophet_m5` and `gmi_m5` are approved) and its close as the price. It no longer waits for the 15m room.
+      - A TRIGGERED setup goes to the Signal Ledger at once (one per hour, none while one of the same side is open) and its Telegram alert follows.
+      - The live 5m inputs count while the bar closed at most 10 minutes ago (`liveM5Inputs`); `/api/strategy` and the Global decision read them too.
+      - Deterministic: no model call.
   - **Key levels: the Key Level Agent** (owner decision 2026-11-06: "not only Camarilla"; `src/key-level-agent.mjs`, `GET /api/key-levels`, deterministic):
     - **Sources:** every key level of every chart, weighted by kind and by timeframe (15m 1, 1H 1.5, 4H 2, daily 2.5, weekly 3):
       - Camarilla H3/L3 0.6, H4/L4 1.0, H5/L5 0.8, of the 15m, 1H, 4H, daily and weekly sets (from the 15m, 1H, 4H and D1 HUD snapshots). Each Camarilla level, pivot and CPR edge has one value, taken from the freshest snapshot: production on 2026-11-06 showed a stale D1 snapshot's daily set counted beside the current one as a second source;

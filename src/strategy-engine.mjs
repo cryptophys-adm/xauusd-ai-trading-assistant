@@ -8,6 +8,8 @@
 //   1H  setup            the 1H War Room, aligned with the trend; GMI and Prophet vetoes
 //   15m structure        the 15m War Room must not lean against it; price at a key level
 //   5m  entry trigger    a VERIFIED 5m Prophet confirmation (or the 15m Prophet confirmation)
+//                        (owner decision 2026-11-08: the engine is evaluated at every closed 5m
+//                        bar, with that bar's confirmation and close, not only at the 15m close)
 // Key levels come from the HUD snapshots, which are computed from closed bars: Camarilla 1H, 4H,
 // daily and weekly, the daily and weekly CPR, the 1H value area and the recent 15m swing. The
 // stop sits beyond the next level against the trade, the targets are the next levels with it, and
@@ -21,6 +23,7 @@ import { readNewsDaily } from "./news-daily.mjs";
 import { loadHudSnapshot } from "./hud-store.mjs";
 import { buildKeyLevels } from "./key-level-agent.mjs";
 import { eventRisk, eventCaution, gatedEvents } from "./econ-calendar.mjs";
+import { verifiedM5Reading } from "./m5-verification.mjs";
 
 export const STRATEGY_VERSION = "cryptophys.strategy-engine.v1";
 export const TREND_WEIGHTS = Object.freeze({ D1: 0.5, H4: 0.5 });
@@ -158,7 +161,8 @@ function triggerOf(dir, { confirmations, m15Snapshot }) {
   if (!dir) return { fired: false, source: null, note: "no direction to confirm" };
   const side = dir > 0 ? "buy_confirmed" : "sell_confirmed";
   const m5 = confirmations?.m5_prophet_r38;
-  if (m5?.verified === true && m5[side] === true) return { fired: true, source: "5m", note: `a verified 5m Prophet ${dir > 0 ? "buy" : "sell"} confirmation` };
+  const at = typeof m5?.candle_time === "string" ? ` on the 5m bar closing ${m5.candle_time.slice(11, 16)} UTC` : "";
+  if (m5?.verified === true && m5[side] === true) return { fired: true, source: "5m", note: `a verified 5m Prophet ${dir > 0 ? "buy" : "sell"} confirmation${at}` };
   if (m15Snapshot?.huds?.r37_funnel?.fields?.[side] === true) return { fired: true, source: "15m", note: `a 15m Prophet ${dir > 0 ? "buy" : "sell"} confirmation` };
   if (m5?.[side] === true && m5.verified !== true) return { fired: false, source: null, note: "the 5m confirmation is unverified, so it does not count" };
   return { fired: false, source: null, note: `waiting for a verified 5m (or 15m) Prophet ${dir > 0 ? "buy" : "sell"} confirmation` };
@@ -168,7 +172,7 @@ function triggerOf(dir, { confirmations, m15Snapshot }) {
  * Pure: the strategy from the four War Rooms (every agent's bias), News Daily, the 1H and 15m HUD
  * snapshots, the latest confirmations and the closed 1H and 15m bars.
  */
-export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, calendar = null, now = Date.now() } = {}, params = STRATEGY_PARAMS) {
+export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, calendar = null, m5Price = null, now = Date.now() } = {}, params = STRATEGY_PARAMS) {
   const P = params === STRATEGY_PARAMS ? params : { ...STRATEGY_PARAMS, ...params };
   const LEAN = P.lean, MIN_RRR = P.min_rrr, MIN_CONFIDENCE = P.min_confidence;
   const layers = Object.fromEntries(["D1", "H4", "H1", "M15"].map((k) => [k, roomLayer(k, rooms[k], now)]));
@@ -193,7 +197,8 @@ export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15S
   const alignment = dir && aw ? as / aw : 0;
 
   const atrH1 = atr(h1Bars);
-  const price = [m15Bars.at(-1)?.close, m15Snapshot?.huds?.interstellar_eyes?.fields?.close, h1Snapshot?.huds?.interstellar_eyes?.fields?.close].find(isNum) ?? null;
+  // The latest closed 5m close when the engine runs at a 5m close (owner decision 2026-11-08), else the 15m close.
+  const price = [m5Price, m15Bars.at(-1)?.close, m15Snapshot?.huds?.interstellar_eyes?.fields?.close, h1Snapshot?.huds?.interstellar_eyes?.fields?.close].find(isNum) ?? null;
   // Key Level Agent (owner decision 2026-11-06): the zones where the key levels of every chart stack.
   const keyLevelReading = buildKeyLevels({
     snapshots: { "15": m15Snapshot, "60": h1Snapshot, "240": h4Snapshot, "1D": d1Snapshot },
@@ -250,8 +255,31 @@ async function seriesCandles(env, interval) {
   } catch { return []; }
 }
 
+/** A 5m context counts for the trigger while its bar closed at most this long ago. */
+export const M5_LIVE_MAX_AGE_MS = 10 * 60_000;
+
+/**
+ * The live 5m inputs (owner decision 2026-11-08, "the confirmation is critical"): the Prophet R38
+ * confirmation and the close of the latest closed 5m bar, from its context (the pull adapter sends it
+ * at every 5m close), with VERIFIED only while the 5m implementations are parity-approved. Null when
+ * no fresh context exists.
+ */
+export async function liveM5Inputs(env, { now = Date.now(), context = null } = {}) {
+  let ctx = context;
+  if (!ctx) { try { ctx = JSON.parse((await env?.SIGNAL_CACHE?.get?.("context:m5:latest")) || "null"); } catch { ctx = null; } }
+  const t = Date.parse(String(ctx?.candle_time ?? ""));
+  if (!ctx || !Number.isFinite(t) || now - t > M5_LIVE_MAX_AGE_MS || t > now + 60_000) return null;
+  let verified = false;
+  try { verified = (await verifiedM5Reading(env, ctx.candle_time)).verified === true; } catch { verified = false; }
+  const last = Array.isArray(ctx.recent_bars) ? ctx.recent_bars.at(-1) : null;
+  return {
+    confirmation: { buy_confirmed: ctx.buy_confirmed === true, sell_confirmed: ctx.sell_confirmed === true, verified, candle_time: new Date(t).toISOString() },
+    price: isNum(last?.c) ? last.c : null
+  };
+}
+
 /** Reads the rooms, News Daily, the latest 1H and 15m HUD snapshots and bars: the strategy's inputs. */
-export async function loadStrategyInputs(env, { now = Date.now() } = {}) {
+export async function loadStrategyInputs(env, { now = Date.now(), m5Context = null } = {}) {
   const safe = async (fn) => { try { return await fn(); } catch { return null; } };
   const db = env.DB;
   const [d1, h4, h1, m15, news, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot, h1Bars, m15Bars, h4Bars, d1Bars, w1Bars] = await Promise.all([
@@ -261,9 +289,12 @@ export async function loadStrategyInputs(env, { now = Date.now() } = {}) {
     safe(() => loadHudSnapshot(env, { timeframe: "240" })), safe(() => loadHudSnapshot(env, { timeframe: "1D" })),
     seriesCandles(env, "1h"), seriesCandles(env, "15m"), seriesCandles(env, "4h"), seriesCandles(env, "1D"), seriesCandles(env, "1W")
   ]);
+  const live = await safe(() => liveM5Inputs(env, { now, context: m5Context }));
   return {
     rooms: { D1: d1, H4: h4, H1: h1, M15: m15 }, news, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot,
-    confirmations: m15?.confirmations ?? null,
+    // The H1 confirmation from the latest 15m room; the 5m one from the latest closed 5m bar when fresh.
+    confirmations: live ? { ...(m15?.confirmations ?? {}), m5_prophet_r38: live.confirmation } : (m15?.confirmations ?? null),
+    m5Price: live?.price ?? null,
     // Enough closed bars for the ATR and the Key Level Agent's swings; the last week for its high and low.
     h1Bars: h1Bars.slice(-60), m15Bars: m15Bars.slice(-60), h4Bars: h4Bars.slice(-60), d1Bars: d1Bars.slice(-60), w1Bars: w1Bars.slice(-2),
     h1Chain: m15?.h1 ?? h1?.h1 ?? null,
@@ -274,6 +305,6 @@ export async function loadStrategyInputs(env, { now = Date.now() } = {}) {
 }
 
 /** The strategy from the live inputs (GET /api/strategy). */
-export async function readStrategy(env, { now = Date.now() } = {}) {
-  return buildStrategy(await loadStrategyInputs(env, { now }));
+export async function readStrategy(env, { now = Date.now(), m5Context = null } = {}) {
+  return buildStrategy(await loadStrategyInputs(env, { now, m5Context }));
 }
