@@ -1,5 +1,5 @@
 // Nexus correlations panel (backlog 11.3, owner request 2026-11-07 "Nexus vs KIRA"): DXY, the US
-// 10-year yield and silver beside gold, with their change and the rolling correlation of their 4h
+// 10-year yield, silver and WTI crude oil (2026-11-08) beside gold, with their change and the rolling correlation of their 4h
 // returns with gold's. Deterministic, read-only, from the pull adapter's cached 4h series
 // (SIGNAL_CACHE). Context only: it never reaches a room, a prompt or a decision.
 //
@@ -14,7 +14,11 @@ export const ASSETS = Object.freeze([
   Object.freeze({ id: "dxy", name: "US Dollar Index", symbol: "TVC:DXY", key: "TVC:DXY|4h", unit: "pct" }),
   // A yield: its change is in basis points, and its returns are differences, not ratios.
   Object.freeze({ id: "us10y", name: "US 10-year yield", symbol: "TVC:US10Y", key: "TVC:US10Y|4h", unit: "bp" }),
-  Object.freeze({ id: "silver", name: "Silver", symbol: "OANDA:XAGUSD", key: "OANDA:XAGUSD|4h", unit: "pct" })
+  Object.freeze({ id: "silver", name: "Silver", symbol: "OANDA:XAGUSD", key: "OANDA:XAGUSD|4h", unit: "pct" }),
+  // WTI crude oil (owner request 2026-11-08: oil is the geopolitical and inflation channel). It reuses
+  // the 1h series GMI's ASSET GRAVITY already pulls (derived from USOIL 5m), so it costs no new
+  // TradingView call; the as-of alignment samples it at gold's 4h closes, which gives 4h returns.
+  Object.freeze({ id: "oil", name: "WTI crude oil", symbol: "TVC:USOIL", key: "TVC:USOIL|1h", unit: "pct" })
 ]);
 /** Rolling windows in 4h bars: about one trading week and about one trading month. */
 export const WINDOWS = Object.freeze({ short: 30, long: 120 });
@@ -84,7 +88,7 @@ export function buildCorrelations({ gold, assets }) {
   };
 }
 
-/** GET /api/correlations: from the cached 4h series. */
+/** GET /api/correlations: from the cached 4h series (oil from its 1h series, sampled at gold's 4h closes). */
 export async function readCorrelations(env, { now = Date.now() } = {}) {
   const get = async (key) => { try { return JSON.parse((await env.SIGNAL_CACHE?.get?.(KEY(key))) || "null"); } catch { return null; } };
   const gold = closes(await get(GOLD.key), now);

@@ -393,7 +393,8 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - the Calendar Agent (fixed-rule projections; before a release its bias must follow the consensus lean, after it the headlines decide);
     - the News Analyst;
     - the Dollar Analyst (DXY), the Rates Analyst (US 10-year) and the Metals Analyst (silver): changes and correlation with gold, never a gold price level;
-    - the Correlation Analyst.
+    - the Oil Analyst (owner request 2026-11-08, "geopolitics causes inflation"): WTI crude oil (`TVC:USOIL`, its 1h series derived from the 5m pull GMI already makes, sampled at gold's 4h closes, so no new TradingView call), its changes and correlation with gold, and the News Daily headlines on oil or geopolitics (supply, OPEC, sanctions, conflict, shipping routes). The rule it reads: a supply shock or conflict that lifts oil raises inflation expectations and safe-haven demand, which usually supports gold, unless the same rise pushes yields and Fed expectations higher;
+    - the Correlation Analyst (gold against the dollar, yields, silver and oil).
   - **Phases:**
     - bus;
     - Consensus Discussion: the agents whose bias differs from the room's, at most 4;
@@ -401,7 +402,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Schedule:**
     - 20 minutes after each 4-hour gold close and 30 minutes after a High-impact USD event (same-minute events share a session);
     - each session once, within 3 hours, at most one per sweep;
-    - behind `MACRO_ROOM_ENABLED`, within `MACRO_ROOM_MAX_CALLS_PER_HOUR` (30); about 11 calls a session.
+    - behind `MACRO_ROOM_ENABLED`, within `MACRO_ROOM_MAX_CALLS_PER_HOUR` (30); about 12 calls a session with the Oil Analyst.
   - **Context only:**
     - every room's News Analyst reads the latest conclusion (8 hours fresh);
     - the Global decision shows it as a MACRO row outside the weighted score;
