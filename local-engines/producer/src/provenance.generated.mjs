@@ -393,13 +393,13 @@ export const ENGINE_PROVENANCE = Object.freeze({
     }
   },
   "gmi_hud": {
-    "source_hash": "b6e5198e5e95a0b93c438190e49081d08e29f6b8f8f125ee5b4984abc57542f2",
+    "source_hash": "949acb5ddcae78507bc15ec41bd35ce8ffe984513de1932110ed25cfff911373",
     "implementation_hash": "258596b9ba074dd68980a2595a06685a943102434ef3e813eaa8dcf7a6b8e945",
     "files": {
       "sources": [
         {
           "path": "pinescript/candidates/Global-Multiverse-Interceptor-v12.70.hud.v1.txt",
-          "sha256": "7df6324071d4c09ef2f29515f8d5b150d66b842323b1a010e29b3a4caac223a7"
+          "sha256": "300f573737ca6fa308f38b3716c6d347df67c559f9d4ac555f903e16c9405336"
         }
       ],
       "implementation": [
