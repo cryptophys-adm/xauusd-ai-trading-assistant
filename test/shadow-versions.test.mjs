@@ -111,7 +111,9 @@ test("the shadow view compares each candidate with the control on the same bars,
   assert.equal(c.id, LATCH.id);
   assert.equal(c.same_bars, BARS.length - SHADOW_WARMUP_BARS - 4);
   assert.equal(c.control_on_same_bars.n, c.scored.n);
-  assert.equal(typeof c.criteria.higher_outcome_score, "boolean");
+  assert.equal(c.criteria.higher_outcome_score, null, "no discovery test before its minimum sample (RFC §9.3)");
+  assert.equal(c.criteria.holdout_no_worse, null);
+  assert.equal(c.discovery.bars + c.holdout.bars, c.same_bars);
   assert.equal(typeof c.criteria.no_new_stuck_states, "boolean");
   assert.match(c.criteria.reference_parity, /local-only/);
   assert.equal(c.criteria.minimum_sample, false, "116 bars is below the 200-statement minimum");

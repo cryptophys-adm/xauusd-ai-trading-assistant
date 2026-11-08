@@ -311,6 +311,38 @@ export function signTestP(wins, losses) {
   return Math.min(1, Math.round(tail * 10000) / 10000);
 }
 export const SHADOW_SIGNIFICANCE = 0.05;
+/** RFC §9.3 holdout (O12): the newest shared bars, never used by the discovery test. */
+export const HOLDOUT_BARS = 100;
+
+/**
+ * Holm–Bonferroni step-down adjusted p-values (RFC §9.3, O12), in the input order. A null stays
+ * null and does not count as a test. Adjusted p(i) = max over j <= i of min(1, (m - j + 1) p(j)).
+ */
+export function holmAdjust(pValues) {
+  const tested = pValues.map((p, i) => ({ p, i })).filter((x) => finite(x.p)).sort((a, b) => a.p - b.p || a.i - b.i);
+  const m = tested.length, out = pValues.map(() => null);
+  let running = 0;
+  tested.forEach((x, rank) => {
+    running = Math.max(running, Math.min(1, (m - rank) * x.p));
+    out[x.i] = Math.round(running * 10000) / 10000;
+  });
+  return out;
+}
+
+/** The family's Holm set for one calendar month: its live tests plus the candidates stopped in that month. */
+export const holmMonth = (now) => new Date(now).toISOString().slice(0, 7);
+
+/** Paired tally of candidate against control over `pairs` ([candidateScore, controlScore]). */
+function pairedTally(pairs) {
+  let wins = 0, losses = 0;
+  for (const [s, c] of pairs) {
+    if (s.stance === c.stance || !DECIDED(s) || !DECIDED(c)) continue;
+    if (RIGHT(s) && !RIGHT(c)) wins += 1;
+    else if (!RIGHT(s) && RIGHT(c)) losses += 1;
+  }
+  const mine = tally(pairs.map(([s]) => s)), theirs = tally(pairs.map(([, c]) => c));
+  return { bars: pairs.length, candidate_better: wins, control_better: losses, p_value: signTestP(wins, losses), accuracy: mine.accuracy, control_accuracy: theirs.accuracy };
+}
 
 function tally(scores) {
   const t = { n: 0, directional: { n: 0, hit: 0, miss: 0, neutral: 0 }, wait: { n: 0, hit: 0, missed_opportunity: 0 } };
@@ -358,7 +390,7 @@ async function buildShadowView(env, { days, now, candidates }) {
   const load = async (id) => {
     const outputs = ((await env.DB.prepare("SELECT candle_key, close_time, stance, fields_json FROM shadow_outputs WHERE version_id = ? AND close_time >= ? ORDER BY close_time").bind(id, since).all()).results || [])
       .map((r) => ({ candle_key: r.candle_key, close_time: r.close_time, stance: r.stance, fields: JSON.parse(r.fields_json || "{}") }));
-    const scores = (await env.DB.prepare("SELECT candle_key, stance, result FROM outcome_scores WHERE subject = ? AND timeframe = '60' AND scoring_version = ? AND statement_close >= ?").bind("shadow:" + id, SCORING_VERSION, since).all()).results || [];
+    const scores = (await env.DB.prepare("SELECT candle_key, statement_close, stance, result FROM outcome_scores WHERE subject = ? AND timeframe = '60' AND scoring_version = ? AND statement_close >= ? ORDER BY statement_close").bind("shadow:" + id, SCORING_VERSION, since).all()).results || [];
     return { outputs, scores };
   };
   const data = new Map();
@@ -410,31 +442,56 @@ async function buildShadowView(env, { days, now, candidates }) {
         else if (!RIGHT(s) && RIGHT(c)) losses += 1;
       }
       const pValue = signTestP(wins, losses);
+      // RFC §9.3 (O12): the newest HOLDOUT_BARS shared bars are the holdout; the discovery test
+      // (minimum sample, sign test, Holm) uses only the bars before them.
+      const pairs = shared.map((s) => [s, controlScores.get(s.candle_key)]);
+      const cut = Math.max(0, pairs.length - HOLDOUT_BARS);
+      const discovery = pairedTally(pairs.slice(0, cut)), holdout = pairedTally(pairs.slice(cut));
       const criteria = {
-        higher_outcome_score: mine.accuracy !== null && theirs.accuracy !== null ? mine.accuracy > theirs.accuracy && pValue !== null && pValue < SHADOW_SIGNIFICANCE : null,
+        higher_outcome_score: null, // set below, once the family's Holm adjustment is known
         no_worse_calibration: "not_applicable: indicator directions carry no confidence (Brier needs one)",
         // Stuck time, not episode count: expiring a long latch can split one episode in two
         // while shortening the time spent stuck.
         no_new_stuck_states: STUCK_FIELDS.every((f) => stuck[f].stuck_candles <= controlStuck[f].stuck_candles),
         reference_parity: cand.reference === "none" ? "not_applicable: local-only version (option b); owner decision 1 decides whether promotion needs a Pine candidate" : "pending",
-        minimum_sample: shared.length >= SHADOW_MIN_SAMPLE
+        minimum_sample: discovery.bars >= SHADOW_MIN_SAMPLE,
+        holdout_no_worse: null
       };
-      const better = criteria.higher_outcome_score === true && criteria.no_new_stuck_states === true;
       entry.candidates.push({
         id: cand.id, change: cand.change, params: cand.params, reference: cand.reference ?? "none", lifecycle: "candidate (shadow)", origin: cand.origin ?? null,
         same_bars: shared.length, differing_stances: differ,
         paired: { candidate_better: wins, control_better: losses, p_value: pValue, significance: SHADOW_SIGNIFICANCE },
+        discovery: { ...discovery, p_holm: null },
+        holdout: { ...holdout, required_bars: HOLDOUT_BARS, complete: holdout.bars >= HOLDOUT_BARS },
         scored: mine, control_on_same_bars: theirs,
         stuck,
         criteria,
-        verdict: !criteria.minimum_sample ? "collecting" : better ? "better_than_active: ready for owner review" : "not_better",
+        verdict: "collecting",
         review: cand.review ? { ...cand.review, decisive_pairs: wins + losses, min_decisive_pairs: REVIEW_MIN_DECISIVE_PAIRS, due: wins + losses >= REVIEW_MIN_DECISIVE_PAIRS || now >= Date.parse(cand.review.by + "T00:00:00Z") } : null,
         latest: d.outputs.slice(-6).map((o) => ({ close_time: o.close_time, stance: o.stance, ...o.fields }))
       });
+    }
+    // Holm–Bonferroni across the family's tests of this calendar month (O12): the live candidates
+    // with a full discovery sample, and the candidates stopped this month with their recorded p.
+    const month = holmMonth(now);
+    const retiredThisMonth = RETIRED_CANDIDATES.filter((r) => r.family === family && r.retired_on?.startsWith(month) && finite(r.result?.p_value));
+    const live = entry.candidates.filter((k) => k.criteria.minimum_sample);
+    const adjusted = holmAdjust([...live.map((k) => k.discovery.p_value), ...retiredThisMonth.map((r) => r.result.p_value)]);
+    live.forEach((k, i) => { k.discovery.p_holm = adjusted[i]; });
+    entry.holm = { month, alpha: SHADOW_SIGNIFICANCE, tests: adjusted.filter((p) => p !== null).length, live: live.map((k) => k.id), stopped_this_month: retiredThisMonth.map((r) => r.id) };
+    for (const k of entry.candidates) {
+      const disc = k.discovery, hold = k.holdout;
+      if (!k.criteria.minimum_sample) { k.verdict = "collecting"; continue; }
+      k.criteria.higher_outcome_score = disc.accuracy !== null && disc.control_accuracy !== null
+        ? disc.accuracy > disc.control_accuracy && disc.p_holm !== null && disc.p_holm < SHADOW_SIGNIFICANCE : null;
+      // No worse on the holdout: accuracy at least the control's (paired wins at least losses when undecided).
+      k.criteria.holdout_no_worse = hold.complete && (hold.accuracy !== null && hold.control_accuracy !== null ? hold.accuracy >= hold.control_accuracy : hold.candidate_better >= hold.control_better);
+      const better = k.criteria.higher_outcome_score === true && k.criteria.no_new_stuck_states === true;
+      k.verdict = !better ? "not_better" : k.criteria.holdout_no_worse ? "better_than_active: ready for owner review" : "holdout_failed";
     }
     entry.control.latest = c.outputs.slice(-6).map((o) => ({ close_time: o.close_time, stance: o.stance, ...o.fields }));
     entry.retired = RETIRED_CANDIDATES.filter((r) => r.family === family);
     families.push(entry);
   }
-  return { window_days: days, scoring_version: SCORING_VERSION, warmup_bars: SHADOW_WARMUP_BARS, min_sample: SHADOW_MIN_SAMPLE, families };
+  return { window_days: days, scoring_version: SCORING_VERSION, warmup_bars: SHADOW_WARMUP_BARS, min_sample: SHADOW_MIN_SAMPLE, holdout_bars: HOLDOUT_BARS, holm_month: holmMonth(now), families };
 }

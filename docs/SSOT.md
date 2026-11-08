@@ -593,8 +593,25 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - **Comparison is like for like.** A candidate is compared with its control only on bars scored for both.
   - **Accuracy:** right calls over decided calls. A directional hit and a WAIT hit are right; a miss and a missed opportunity are wrong; a directional neutral is undecided.
   - **Criteria:** a higher score that is significant, meaning a one-sided exact sign test with p < 0.05 on the bars where the two versions disagree and exactly one is right; no more stuck time (candles inside stuck episodes, § above: ≥ 8 candles with range > 3 × ATR); and a minimum sample of 200 bars. Brier does not apply, because indicator directions carry no confidence. Reference parity applies only to a Pine candidate (RFC decision 1).
+  - **Discovery, Holm and holdout (Aether A8, RFC_AETHER §9.3, O12):**
+    - **Holdout:** the newest 100 shared bars. The discovery test (the 200-bar minimum, the sign test) uses only the bars before them.
+    - **Holm:** the discovery p-value is Holm–Bonferroni adjusted across the family's tests of the same calendar month. That set is the live candidates with a full discovery sample, plus the candidates stopped that month with their recorded p.
+    - **Verdicts:**
+
+      | Verdict | Meaning |
+      |---|---|
+      | `collecting` | The discovery sample is not full yet. |
+      | `not_better` | The discovery test did not show a significant improvement. |
+      | `holdout_failed` | Better in discovery, but worse than the control on the holdout. |
+      | `better_than_active: ready for owner review` | Better in discovery and no worse on the holdout. |
   - **Control check:** the control is also checked against the approved local records of the last 24 candles (`matches_approved_local_records`).
 - **Read model.** `GET /api/shadow-versions?days=30` (cached for 5 minutes) and the Nexus page `/shadow`.
+- **Tuning view (Aether A8, `src/tuning.mjs`).** `GET /api/tuning` lists every `TUNING_GRID` point:
+  - **running:** with its verdict, discovery test (Holm-adjusted) and holdout;
+  - **stopped:** with the reason;
+  - **untested.**
+
+  It is read-only and starts nothing. A point starts only when a person approves it in Aether (the calibrator proposes the next untested point) or through a reviewed PR here. The Nexus `/shadow` page shows it as the "Tuning grid" panel.
 - **P5 review (owner decision 2026-11-07):**
   - `prophet_r37@latch12` and `prophet_r38@latch8` are stopped; they are listed under `retired` in the view.
   - `prophet_r37@latch8` runs until 30 decisive pairs or 2026-12-07.
