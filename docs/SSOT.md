@@ -289,6 +289,12 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
       - the last four swing highs and lows (2-bar fractals of the last 60 closed bars) of the 15m, 1H, 4H and D1 charts, 0.9;
       - the previous day high and low 1.0 and close 0.6, and the previous week high and low 1.0;
       - round numbers within four 1H ATRs of price: every 50 dollars 0.8, every 25 dollars 0.4.
+    - **Chart plane (owner decision 2026-11-08, PR 1 of 3; `local-engines/producer/src/chart-plane.mjs`):** every HUD snapshot (15m, 1H, 4H, D1) carries `chart_plane`, every price object GMI v12.70 draws on the chart, as numbers at the closed bar. It is not a HUD section, so it adds no room agent; the Key Level Agent reads it from PR 2, the Nexus chart from PR 3.
+      - **bands:** Z-KWW MA, ±1σ and ±1.618σ with the z-score; Dynamic EMA 114; VWAP (hlc3, reset at the trading day); the adaptive TVA regression channel (2 deviations).
+      - **liquidity:** Aether FVG open targets with their mass; the Spacetime Whale Map (active zones and mitigation blocks, with HP); GABFX QM BUY/SELL and RBS/SBR; the TDM profile POC, VAH, VAL, LVN and HVN.
+      - **projection:** the SMC Fibonacci grid (15 ratios, warped); the probability cone (p90/p10, 50 bars); the tactical trendlines; PA support and resistance.
+      - **session:** True Openings (year, month, week, day, Asia, London, NY AM, NY PM); day and week open, previous day and week high and low; the Daily session volume profile (30 rows, 70 % value area, from 1m bars on 15m and 1H, 5m on 4H, 15m on D1), current and previous session.
+      - **Limits:** path-dependent state is replayed over the engines' 1000-bar window; True Openings come from the 15m bars, so they are the true open at the stated New York time on every chart. Nothing in it is a TradingView alert field: it is unverified context, never a decision. The pull adapter's `/health` names its version per chart (`last_hud_publish.charts.<chart>.chart_plane`).
     - **Zones:** the levels, sorted by price, are grouped while a group's span stays within 0.3 × the 1H ATR (at least 1 dollar).
       - A zone's score is the sum of its weights, and its sources are its distinct (kind, timeframe) pairs.
       - Strength: strong (score ≥ 6), medium (≥ 3) or weak.
