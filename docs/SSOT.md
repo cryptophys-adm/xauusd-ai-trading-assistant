@@ -302,7 +302,12 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - Cautions (−0.1 confidence each):
       - a GMI and Prophet conflict, or a closed GMI gate (−1), on the 1H chart. These were vetoes until the owner loosened them on 2026-11-06: at 14:15 that day they blocked a clear bearish consensus;
       - both the 1H and the 15m regime chaotic;
-      - News Daily leaning against the side at 0.6 or more.
+      - News Daily leaning against the side at 0.6 or more;
+      - **event risk** (backlog 11.1, owner decision 2026-11-08): a High-impact USD event of the economic calendar, from 2 hours before to 30 minutes after it. Never a forced WAIT.
+        - **Source:** `src/econ-calendar.mjs`, the ForexFactory weekly export, fetched by the sweep at most once an hour and cached in `SIGNAL_CACHE` (`calendar:ff:thisweek:v1`). A failed fetch keeps the cache.
+        - **Rooms:** the Risk Desk of the 1H, 4H and D1 rooms sees the events due now and in the next 24 hours.
+        - **Replay:** the strategy inputs record carries the gated events, so the replay reproduces the caution.
+        - **Read model:** `GET /api/calendar` and the Nexus page `#/calendar`.
   - **States:** `NO_SETUP`, `BLOCKED`, `NO_LEVELS`, `SETUP_FORMING` (wait for the pullback), `SETUP_READY` (at the level, waiting for the trigger), `LOW_REWARD`, `LOW_CONFIDENCE` and `TRIGGERED`.
     - The decision is BUY or SELL only when `TRIGGERED`: the trigger fired, no veto, at least 1.5R (`MIN_RRR`) to TP2, and a confidence of at least 0.4. Every other state is WAIT, and it still shows the side, the levels and the RRR.
     - Confidence: 0.6 × the weighted alignment (D1 30, 4H 30, 1H 25, 15m 15), +0.15 at a level, +0.2 when triggered, minus cautions, and −0.1 when any room is stale.
@@ -375,7 +380,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Build and serving:** the source is in `workers/xauusd-nexus-dashboard/ui`. It is built into `ui/dist` and served as Workers Static Assets (`run_worker_first`). The deploy workflow builds it; `validate-nexus-dashboard.yml` builds it on pull requests.
   - **Layout:**
     - Same header, glass panels and status footer as the Console.
-    - **Left sidebar (owner request 2026-11-07):** navigation grouped by analytic layer. Live: War Room. Analytics: Performance (`#/performance`), Scorecards, Shadow versions. Market: Economic calendar, Correlations. Intelligence: Decision audit, Alerts. The layers not built yet (Economic calendar, Decision audit, Alerts) are listed as "soon".
+    - **Left sidebar (owner request 2026-11-07):** navigation grouped by analytic layer. Live: War Room. Analytics: Performance (`#/performance`), Scorecards, Shadow versions. Market: Economic calendar, Correlations. Intelligence: Decision audit, Alerts. The layers not built yet (Decision audit, Alerts) are listed as "soon". The Economic calendar (`#/calendar`) shows the week's events: by default only the High-impact USD ones, with a switch for all. Events inside the gate window are highlighted.
     - **Correlations (`#/correlations`, 2026-11-08).** `GET /api/correlations` (`src/correlations.mjs`) shows gold beside DXY, the US 10-year yield and silver on closed 4h bars:
       - the last close and the change over 4h, 1 day and 5 days (basis points for the yield);
       - the Pearson correlation of 4h returns with gold over 30 bars (about a week) and 120 bars (about a month);

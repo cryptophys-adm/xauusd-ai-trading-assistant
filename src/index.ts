@@ -185,6 +185,7 @@ import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
 import { tuningView } from "./tuning.mjs";
 import { readCorrelations } from "./correlations.mjs";
+import { refreshCalendar, readCalendar } from "./econ-calendar.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -2176,6 +2177,14 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/calendar") {
+    // Backlog 11.1: the week's economic events (ForexFactory export, cached hourly) and the event-risk gate.
+    try { return dashboardJson({ status: "ok", ...(await readCalendar(env)) }); }
+    catch (error) {
+      console.error("calendar_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/correlations") {
     // Backlog 11.3: DXY, US10Y and silver beside gold on the cached 4h series (context only).
     try { return dashboardJson({ status: "ok", ...(await readCorrelations(env)) }); }
@@ -2480,6 +2489,9 @@ export default {
           const scoredInputs = await scoreStrategyCaptures(env);
           // A8 part 4: each threshold arm's decision on the stored hours, computed once (a few hours per sweep).
           const replayed = await replayStrategyCaptures(env);
+          // Backlog 11.1: the economic calendar, refreshed at most once an hour (non-fatal).
+          const calendar = await refreshCalendar(env);
+          if (calendar.status !== "fresh") console.log("econ_calendar", JSON.stringify(calendar));
           // Aether A7: score the shadow note answers and their controls; drop those older than 60 days.
           const shadowScored = await scoreShadowKnowledge(env);
           if (Number(shadowScored.scored)) console.log("shadow_knowledge_scored", JSON.stringify(shadowScored));

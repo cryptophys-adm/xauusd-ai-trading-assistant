@@ -17,7 +17,7 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     { label: "Shadow versions", href: "#/shadow", key: "shadow", icon: FlaskConical }
   ] },
   { title: "Market", items: [
-    { label: "Economic calendar", href: "#/calendar", key: "calendar", icon: CalendarDays, soon: true },
+    { label: "Economic calendar", href: "#/calendar", key: "calendar", icon: CalendarDays },
     { label: "Correlations", href: "#/correlations", key: "correlations", icon: GitCompareArrows }
   ] },
   { title: "Intelligence", items: [
