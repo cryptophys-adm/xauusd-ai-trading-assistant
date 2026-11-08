@@ -191,6 +191,7 @@ import { refreshCalendar, readCalendar } from "./econ-calendar.mjs";
 import { sendLedgerAlerts, readLedgerAlerts } from "./ledger-alerts.mjs";
 import { notifyH1Decision } from "./h1-telegram.mjs";
 import { runPendingMacroRooms, readMacroRoom } from "./macro-room.mjs";
+import { readParityView } from "./parity-view.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -2101,6 +2102,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "ok", ledger: await readLedger(env, { days }) });
     } catch (error) {
       console.error("ledger_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/parity") {
+    // Nexus System status (owner request 2026-11-08): every parity identity, the recent comparisons and the last 24 hours.
+    try {
+      return dashboardJson({ status: "ok", parity: await readParityView(env.DB) });
+    } catch (error) {
+      console.error("parity_view_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
     }
   }

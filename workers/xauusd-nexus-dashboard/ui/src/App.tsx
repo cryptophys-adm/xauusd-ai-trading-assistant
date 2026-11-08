@@ -8,6 +8,7 @@ import Correlations from "./pages/Correlations";
 import Calendar from "./pages/Calendar";
 import Alerts from "./pages/Alerts";
 import Audit from "./pages/Audit";
+import Status from "./pages/Status";
 
 const parse = (hash: string) => hash.replace(/^#\/?/, "").split("/").filter(Boolean)[0] ?? "";
 
@@ -18,7 +19,7 @@ export default function App() {
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);
-  const PAGES: Record<string, () => JSX.Element> = { shadow: Shadow, scorecards: Scorecards, performance: Performance, correlations: Correlations, calendar: Calendar, alerts: Alerts, audit: Audit };
+  const PAGES: Record<string, () => JSX.Element> = { shadow: Shadow, scorecards: Scorecards, performance: Performance, correlations: Correlations, calendar: Calendar, alerts: Alerts, audit: Audit, status: Status };
   const current = route in PAGES ? route : "";
   const Page = PAGES[current] ?? WarRoom;
   return <AppShell current={current}><Page /></AppShell>;

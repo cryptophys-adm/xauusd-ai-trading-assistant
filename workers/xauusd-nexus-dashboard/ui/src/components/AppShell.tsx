@@ -10,7 +10,7 @@ import { useWarRoom } from "../lib/warroom";
 // built are listed as "soon" and are not links.
 type NavItem = { label: string; href: string; key: string; icon: typeof Swords; soon?: boolean };
 export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
-  { title: "Live", items: [{ label: "War Room", href: "#/", key: "", icon: Swords }] },
+  { title: "Live", items: [{ label: "War Room", href: "#/", key: "", icon: Swords }, { label: "System status", href: "#/status", key: "status", icon: Activity }] },
   { title: "Analytics", items: [
     { label: "Performance", href: "#/performance", key: "performance", icon: LineChart },
     { label: "Scorecards", href: "#/scorecards", key: "scorecards", icon: Trophy },
