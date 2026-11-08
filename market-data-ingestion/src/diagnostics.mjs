@@ -47,6 +47,7 @@ export async function readDiagnostics(env, { now = Date.now() } = {}) {
           timeframe: spec.timeframe,
           role: spec.role,
           derived_from: spec.derived_from || null,
+          cadence_seconds: spec.cadence || null,
           candle_count: typeof record?.candle_count === "number" ? record.candle_count : (Array.isArray(record?.candles) ? record.candles.length : 0),
           fetched_at: typeof record?.fetched_at === "string" ? record.fetched_at : null,
           latest_open_time: last?.open_time || null,

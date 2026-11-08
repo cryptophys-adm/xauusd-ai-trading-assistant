@@ -6,6 +6,13 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(nexus): the System status page (`#/status`, owner request 2026-11-08), under the War Room in the Live group of the sidebar. It replaces the Worker status panel of the War Room, so the War Room shows only issues.
+  - **Workers and lanes:** the AI Worker, the news ingestion and its last hourly pull, TradingView OAuth, the local lane (with the re-earning progress), calibration, the pull adapter's last refresh, the TradingView budget of the day and the freshness of the gold bars. On the weekend, lanes that are expected to be idle show grey.
+  - **Priority Queue.**
+  - **Pull adapter:** the budget bar, the last refresh, the last H1 publish, the derived check, and a table of every series with its role, pull cadence, last close and bar count (diagnostics now include `cadence_seconds`).
+  - **Parity:** the new read-only `GET /api/parity` (`src/parity-view.mjs`), with every registry identity (current or older), its streak, totals, last result and implementation hash, the counts of the last 24 hours and the recent comparisons with the mismatched fields.
+  - **War Room:** a "System issues" panel appears only when a lane is amber or red, and links to the page.
+  - Tests: `test/parity-view.test.mjs`.
 - feat(strategy): the 5m trigger is checked at every closed 5m bar (owner decision 2026-11-08, "the confirmation is critical").
   - **Before:** the strategy read the 5m Prophet confirmation only from the 15m room, so a confirmation on the first or second 5m bar of a 15-minute window was missed.
   - **Now:** each 5m context from the pull adapter re-evaluates the engine (`evaluateStrategyAtM5Close`) with that bar's confirmation (VERIFIED only while the 5m parity holds) and close. A TRIGGERED setup is recorded in the Signal Ledger at once, and its Telegram alert is sent.
