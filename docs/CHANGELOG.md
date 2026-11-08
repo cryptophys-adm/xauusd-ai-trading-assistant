@@ -6,6 +6,14 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(aether): phase A7, second part. The shadow knowledge arm for approved text items, `src/shadow-knowledge.mjs`.
+  - **Default.** Off; it runs only with `SHADOW_KNOWLEDGE_ENABLED = "true"`.
+  - **The call.** For up to 2 items, the target agent of the 1H room makes one extra opening call per bar with the note. An A/A call without the note measures the noise (O13).
+  - **Timing and budget.** The calls run after the H1 decision and are capped at 8 calls an hour.
+  - **Storage.** D1 `shadow_agent_outputs` (migration `0016`) holds the answers, with the real opening as the control. Scoring happens in that table, never in `outcome_scores`.
+  - **Visibility.** `/api/tuning` shows `replays.knowledge`, and Nexus shows it in the "Tuning grid" panel.
+  - **Prompt.** The live opening prompt is unchanged: the note is only added in the shadow call.
+
 - feat(aether): phase A8, part 4. The strategy-threshold replay arm, `src/strategy-replay.mjs`.
   - **Engine change.** `buildStrategy(inputs, params)` takes its thresholds; the default `STRATEGY_PARAMS` keeps the live behaviour.
   - **Replay.** Each stored hour gets one decision per arm (control, `strategy@rrr1.2`, `strategy@conf0.3`, `strategy@near0.5`). The decisions are computed once in the sweep and kept in D1 `strategy_replays` (migration `0015`).

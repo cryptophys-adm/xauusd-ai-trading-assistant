@@ -50,6 +50,18 @@ function TuningGrid() {
           </tbody>
         </table>
       </div>
+      {t.replays?.knowledge && (() => {
+        const c = t.replays.knowledge;
+        return (
+          <div className="mt-3 text-[11px] text-slate-400">
+            <p className="mb-1 text-[12px] text-slate-300">{c.name}: {c.enabled ? `on, at most ${c.max_calls_per_hour} calls an hour` : "off (SHADOW_KNOWLEDGE_ENABLED)"}. A/A noise: the same prompt changed the stance on {c.aa_noise.changed} of {c.aa_noise.bars} bars{c.aa_noise.rate != null ? ` (${Math.round(c.aa_noise.rate * 100)}%)` : ""}.</p>
+            {!c.candidates.length && <p>No approved note is being tested.</p>}
+            {c.candidates.map((k: any) => (
+              <p key={k.subject}><span className="mono">{k.subject}</span>: <span className={pointTone({ status: "running", verdict: k.verdict })}>{k.verdict}</span> · {k.answered} of {k.calls} calls answered · stance changed on {k.changed_stance} of {k.same_bars} scored bars · discovery: note right {k.discovery.candidate_better}, opening right {k.discovery.control_better} (Holm p {k.discovery.p_holm ?? "n/a"}) · holdout {k.holdout.bars} of {k.holdout.required_bars}</p>
+            ))}
+          </div>
+        );
+      })()}
       {t.replays?.strategy && (() => {
         const c = t.replays.strategy;
         return (
