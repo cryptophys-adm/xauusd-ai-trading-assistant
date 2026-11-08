@@ -136,3 +136,11 @@ test("steady-state daily MCP demand fits the 800 budget with margin", () => {
   assert.ok(perDay <= 0.8 * budget, `demand ${Math.round(perDay)} a day`);
   assert.ok(SERIES.some((s) => s.key === "TVC:USOIL|5m" && !s.derived_from), "USOIL stays a 5m pull (Macro & Aether WTI)");
 });
+
+test("a one-day budget override applies to its UTC date only", async () => {
+  const { SERIES_INTERNALS } = await import("../src/tradingview-source.mjs");
+  const env = { TV_DAILY_CALL_BUDGET: "800", TV_DAILY_CALL_BUDGET_OVERRIDE: "2026-11-08:1000" };
+  assert.equal(SERIES_INTERNALS.dailyBudget(env, Date.parse("2026-11-08T22:05:00Z")), 1000);
+  assert.equal(SERIES_INTERNALS.dailyBudget(env, Date.parse("2026-11-09T00:00:00Z")), 800, "lapses at the next UTC midnight");
+  assert.equal(SERIES_INTERNALS.dailyBudget({ TV_DAILY_CALL_BUDGET: "800", TV_DAILY_CALL_BUDGET_OVERRIDE: "junk" }, Date.parse("2026-11-08T22:05:00Z")), 800);
+});

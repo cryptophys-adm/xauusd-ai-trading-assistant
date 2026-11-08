@@ -31,6 +31,9 @@
     // Steady state is about 440 a weekday (2026-11-08: USOIL 5m pulled once per 15 minutes, no pull
     // while the market is closed); M5/M15 are derived from M1, USOIL M15/H1 from USOIL M5.
     "TV_DAILY_CALL_BUDGET": "800",
+    // One-day owner override (2026-11-08): the weekend pulls before #165 spent the day's calls and the
+    // market reopens at 22:00 UTC; it lapses by itself at 00:00 UTC. Remove at the next change.
+    "TV_DAILY_CALL_BUDGET_OVERRIDE": "2026-11-08:1000",
     "CHART_MINTICK": "0.001",
     // C0 verified 5m lane: publish 5m local records for parity (timeframe-scoped ids).
     "M5_PARITY_PUBLISH": "true",

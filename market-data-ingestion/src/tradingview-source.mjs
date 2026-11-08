@@ -144,8 +144,21 @@ async function writeSeries(kv, spec, record) {
   await kv.put(SERIES_KEY_PREFIX + spec.key, JSON.stringify(record), { expirationTtl: 60 * 60 * 24 * 30 });
 }
 
+/**
+ * The daily call budget for the UTC date of `now`: TV_DAILY_CALL_BUDGET, unless
+ * TV_DAILY_CALL_BUDGET_OVERRIDE ("YYYY-MM-DD:<calls>") names that date. The override is an owner
+ * decision for one day and lapses at the next UTC midnight by itself (2026-11-08: the weekend
+ * pulls before #165 spent the day's 800 calls, and the market reopens at 22:00 UTC).
+ */
+export function dailyBudget(env, now = Date.now()) {
+  const parsed = Number.parseInt(asString(env?.TV_DAILY_CALL_BUDGET) || "800", 10);
+  const base = Number.isFinite(parsed) ? parsed : 800;
+  const m = asString(env?.TV_DAILY_CALL_BUDGET_OVERRIDE).match(/^(\d{4}-\d{2}-\d{2}):(\d+)$/);
+  return m && m[1] === new Date(now).toISOString().slice(0, 10) ? Number(m[2]) : base;
+}
+
 async function reserveBudget(kv, env, wanted, now) {
-  const daily = Number.parseInt(asString(env.TV_DAILY_CALL_BUDGET) || "800", 10);
+  const daily = dailyBudget(env, now);
   const key = BUDGET_KEY_PREFIX + new Date(now).toISOString().slice(0, 10);
   const used = Number.parseInt((await kv.get(key)) || "0", 10) || 0;
   const allowed = Math.max(0, Math.min(wanted, daily - used));
@@ -360,4 +373,4 @@ export async function verifyDerivedSeries(env, { now = Date.now() } = {}) {
   return summary;
 }
 
-export const SERIES_INTERNALS = { SERIES_KEY_PREFIX, BUDGET_KEY_PREFIX, DERIVED_CHECK_KEY };
+export const SERIES_INTERNALS = { SERIES_KEY_PREFIX, BUDGET_KEY_PREFIX, DERIVED_CHECK_KEY, dailyBudget };
