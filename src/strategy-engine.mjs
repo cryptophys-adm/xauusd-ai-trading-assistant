@@ -24,6 +24,7 @@ import { loadHudSnapshot } from "./hud-store.mjs";
 import { buildKeyLevels } from "./key-level-agent.mjs";
 import { eventRisk, eventCaution, gatedEvents } from "./econ-calendar.mjs";
 import { verifiedM5Reading } from "./m5-verification.mjs";
+import { setupType } from "./level-readers.mjs";
 
 export const STRATEGY_VERSION = "cryptophys.strategy-engine.v1";
 export const TREND_WEIGHTS = Object.freeze({ D1: 0.5, H4: 0.5 });
@@ -99,7 +100,7 @@ function roomLayer(key, room, now) {
  * - The targets are the near edges of the next two MAJOR zones (Key Level Agent candidates), each
  *   at least 0.5 ATR beyond the previous one, or 2R and 3R projections.
  */
-export function tradeLevels({ dir, price, levels, atrH1, inZone = false, nearAtr = STRATEGY_PARAMS.near_atr }) {
+export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNote = null, nearAtr = STRATEGY_PARAMS.near_atr }) {
   if (!dir || !isNum(price) || !isNum(atrH1) || atrH1 <= 0) return null;
   const near = nearAtr * atrH1, gap = 0.5 * atrH1, pad = 0.2 * atrH1;
   const lo = (z) => (isNum(z.low) ? z.low : z.price), hi = (z) => (isNum(z.high) ? z.high : z.price);
@@ -110,7 +111,7 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, nearAtr
   const atZone = nearest && price >= lo(nearest) - near && price <= hi(nearest) + near;
   const atLevel = inZone || Boolean(atZone);
   const entry = atLevel ? price : nearest ? nearEdge(nearest) : price;
-  const entryNote = atZone ? `price holds at ${nearest.label}` : inZone ? "price is inside a demand or supply zone with the trade" : nearest ? `a pullback to ${nearest.label}` : "price";
+  const entryNote = atZone ? `price holds at ${nearest.label}` : inZone ? (zoneNote ?? "price is inside a demand or supply zone with the trade") : nearest ? `a pullback to ${nearest.label}` : "price";
   const stopZone = levels.filter((z) => dir * (entry - farEdge(z)) >= gap).sort((a, b) => dir * (farEdge(b) - farEdge(a)))[0] ?? null;
   let stop = stopZone ? farEdge(stopZone) - dir * pad : null;
   let stopNote = stopZone ? `beyond ${stopZone.label}` : null;
@@ -209,7 +210,12 @@ export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15S
   const zones = { ...(m15Snapshot?.huds?.aegis_footprint?.fields || {}), ...(m15Snapshot?.huds?.gabfx_price_action?.fields || {}) };
   const inZone = dir > 0 ? zones.in_bull_order_block === true || zones.in_bull_mitigation === true || zones.in_qm_buy === true || zones.in_rbs === true
     : dir < 0 ? zones.in_bear_order_block === true || zones.in_bear_mitigation === true || zones.in_qm_sell === true || zones.in_sbr === true : false;
-  const plan = dir ? tradeLevels({ dir, price, levels, atrH1, inZone, nearAtr: P.near_atr }) : null;
+  // The setup type at price (owner decision 2026-11-08): a pullback with the trend into liquidity,
+  // or a stretched sweep into a QM or whale zone, read from the 15m chart plane. It counts as a
+  // location with the trade, like a demand or supply zone.
+  const setup = setupType({ dir, price, m15Plane: m15Snapshot?.chart_plane ?? null, h1Plane: h1Snapshot?.chart_plane ?? null, near: isNum(atrH1) ? P.near_atr * atrH1 : null });
+  const setupNote = setup.type === "none" ? null : `${setup.type === "continuation_pullback" ? "a pullback with the trend" : "a stretched sweep into liquidity"}: ${setup.evidence.join(", ")}`;
+  const plan = dir ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr }) : null;
   const { vetoes, cautions } = riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar, now });
   const trigger = triggerOf(dir, { confirmations, m15Snapshot });
 
@@ -241,6 +247,7 @@ export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15S
     why_direction: why, alignment: r2(alignment), trend: r2(trend),
     price: r2(price), atr_h1: r2(atrH1),
     plan, min_rrr: MIN_RRR,
+    setup: dir ? setup : { type: "none", evidence: [] },
     key_levels: keyLevelReading,
     layers: layerList, trigger, vetoes, cautions,
     h1_chain: h1Chain ? { decision: h1Chain.decision ?? null, confidence: h1Chain.confidence ?? null, candle_key: h1Chain.candle_key ?? null } : null,
