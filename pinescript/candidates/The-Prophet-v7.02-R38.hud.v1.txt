@@ -1144,8 +1144,19 @@ plot(last_sell_passed ? 1.0 : 0.0, title="[DIAG] Sell Previously Passed", displa
 // Secret is an input so credentials are not hard-coded into the script.
 cta_webhook_enabled = input.bool(false, "Enable CTA Webhook")
 cta_webhook_secret = input.string("", "CTA Webhook Secret", confirm=true)
+// Escape user-controlled strings before embedding them in JSON payloads.
+f_json_escape(string value) =>
+    string escaped = str.replace_all(value, "\\", "\\\\")
+    escaped := str.replace_all(escaped, "\"", "\\\"")
+    escaped := str.replace_all(escaped, "\n", "\\n")
+    escaped := str.replace_all(escaped, "\r", "\\r")
+    escaped := str.replace_all(escaped, "\t", "\\t")
+    escaped
+
+string cta_webhook_secret_json = f_json_escape(cta_webhook_secret)
+
 if cta_webhook_enabled and barstate.isconfirmed
-    string cta_prophet_payload = "{\"v\":1,\"source\":\"prophet_r38\",\"src\":\"prophet_r38\",\"ticker\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.tickerid + "\",\"timeframe\":\"" + timeframe.period + "\",\"tf\":\"" + timeframe.period + "\",\"candle_time\":\"" + str.tostring(time) + "\",\"timestamp\":\"" + str.tostring(time) + "\",\"t\":" + str.tostring(time) + ",\"o\":" + str.tostring(open) + ",\"h\":" + str.tostring(high) + ",\"l\":" + str.tostring(low) + ",\"c\":" + str.tostring(close) + ",\"volume\":" + str.tostring(nz(volume, 0)) + ",\"direction\":" + str.tostring(buy_confirmed ? 1 : sell_confirmed ? -1 : 0) + ",\"buy_confirmed\":" + (buy_confirmed ? "true" : "false") + ",\"sell_confirmed\":" + (sell_confirmed ? "true" : "false") + ",\"buy_high_quality\":" + (buy_high_quality ? "true" : "false") + ",\"sell_high_quality\":" + (sell_high_quality ? "true" : "false") + ",\"t_enc\":" + str.tostring(t_enc) + ",\"d_enc\":" + str.tostring(d_enc) + ",\"structure_subtype\":" + str.tostring(prophet_structure_subtype_code) + ",\"secret\":\"" + cta_webhook_secret + "\"}"
+    string cta_prophet_payload = "{\"v\":1,\"source\":\"prophet_r38\",\"src\":\"prophet_r38\",\"ticker\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.tickerid + "\",\"timeframe\":\"" + timeframe.period + "\",\"tf\":\"" + timeframe.period + "\",\"candle_time\":\"" + str.tostring(time) + "\",\"timestamp\":\"" + str.tostring(time) + "\",\"t\":" + str.tostring(time) + ",\"o\":" + str.tostring(open) + ",\"h\":" + str.tostring(high) + ",\"l\":" + str.tostring(low) + ",\"c\":" + str.tostring(close) + ",\"volume\":" + str.tostring(nz(volume, 0)) + ",\"direction\":" + str.tostring(buy_confirmed ? 1 : sell_confirmed ? -1 : 0) + ",\"buy_confirmed\":" + (buy_confirmed ? "true" : "false") + ",\"sell_confirmed\":" + (sell_confirmed ? "true" : "false") + ",\"buy_high_quality\":" + (buy_high_quality ? "true" : "false") + ",\"sell_high_quality\":" + (sell_high_quality ? "true" : "false") + ",\"t_enc\":" + str.tostring(t_enc) + ",\"d_enc\":" + str.tostring(d_enc) + ",\"structure_subtype\":" + str.tostring(prophet_structure_subtype_code) + ",\"secret\":\"" + cta_webhook_secret_json + "\"}"
     alert(cta_prophet_payload, alert.freq_once_per_bar_close)
 
 // =============================================================================
@@ -1153,5 +1164,5 @@ if cta_webhook_enabled and barstate.isconfirmed
 // Carries RFC §1.2 HUD fields as numbers, booleans and codes (never *_txt).
 // =============================================================================
 if cta_webhook_enabled and barstate.isconfirmed
-    string cta_prophet_hud_payload = "{\"v\":1,\"source\":\"prophet_r38_hud\",\"src\":\"prophet_r38_hud\",\"ticker\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.tickerid + "\",\"timeframe\":\"" + timeframe.period + "\",\"tf\":\"" + timeframe.period + "\",\"candle_time\":\"" + str.tostring(time) + "\",\"timestamp\":\"" + str.tostring(time) + "\",\"t\":" + str.tostring(time) + ",\"cshi_score\":" + str.tostring(cshi_score) + ",\"cycle_intensity\":" + str.tostring(inten) + ",\"d_enc\":" + str.tostring(d_enc) + ",\"structure_subtype\":" + str.tostring(prophet_structure_subtype_code) + ",\"t_enc\":" + str.tostring(t_enc) + ",\"secret\":\"" + cta_webhook_secret + "\"}"
+    string cta_prophet_hud_payload = "{\"v\":1,\"source\":\"prophet_r38_hud\",\"src\":\"prophet_r38_hud\",\"ticker\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.tickerid + "\",\"timeframe\":\"" + timeframe.period + "\",\"tf\":\"" + timeframe.period + "\",\"candle_time\":\"" + str.tostring(time) + "\",\"timestamp\":\"" + str.tostring(time) + "\",\"t\":" + str.tostring(time) + ",\"cshi_score\":" + str.tostring(cshi_score) + ",\"cycle_intensity\":" + str.tostring(inten) + ",\"d_enc\":" + str.tostring(d_enc) + ",\"structure_subtype\":" + str.tostring(prophet_structure_subtype_code) + ",\"t_enc\":" + str.tostring(t_enc) + ",\"secret\":\"" + cta_webhook_secret_json + "\"}"
     alert(cta_prophet_hud_payload, alert.freq_once_per_bar_close)
