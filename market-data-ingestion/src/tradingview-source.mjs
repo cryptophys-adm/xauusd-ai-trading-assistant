@@ -22,10 +22,9 @@ const MAX_GATEWAY_COUNT = 8000;
 // derived-series.mjs) and are pulled natively only to bootstrap or to fill a gap the source
 // no longer covers (owner decision 2026-11-05, TradingView MCP budget 800 a day).
 export const SERIES = Object.freeze([
-  // Owner decision 2026-11-08 (quota): the two short series are pulled once per 15 minutes, at the
-  // 15m close, instead of every 5 minutes. The bars stay the same (1m and 5m, all of them), so the
-  // 5m and 15m engines and their parity are unchanged; only 5m freshness drops to 15 minutes.
-  { key: "OANDA:XAUUSD|1m", symbol: CANONICAL_SYMBOL, interval: "1m", timeframe: "M1", seconds: 60, retain: 3000, role: "chart_source", cadence: 900 },
+  // Owner decision 2026-11-08: the gold chart stays live (1m pulled every 5 minutes); only the macro
+  // series USOIL 5m is pulled once per 15 minutes (cadence below).
+  { key: "OANDA:XAUUSD|1m", symbol: CANONICAL_SYMBOL, interval: "1m", timeframe: "M1", seconds: 60, retain: 3000, role: "chart_source" },
   { key: "OANDA:XAUUSD|5m", symbol: CANONICAL_SYMBOL, interval: "5m", timeframe: "M5", seconds: 300, retain: 5000, role: "chart", derived_from: "OANDA:XAUUSD|1m" },
   { key: "OANDA:XAUUSD|15m", symbol: CANONICAL_SYMBOL, interval: "15m", timeframe: "M15", seconds: 900, retain: 2000, role: "htf", derived_from: "OANDA:XAUUSD|1m" },
   { key: "OANDA:XAUUSD|1h", symbol: CANONICAL_SYMBOL, interval: "1h", timeframe: "H1", seconds: 3600, retain: 1000, role: "htf" },
@@ -33,6 +32,8 @@ export const SERIES = Object.freeze([
   { key: "OANDA:XAUUSD|1D", symbol: CANONICAL_SYMBOL, interval: "1D", timeframe: "D1", seconds: 86400, retain: 500, role: "htf" },
   { key: "OANDA:XAUUSD|1W", symbol: CANONICAL_SYMBOL, interval: "1W", timeframe: "W1", seconds: 604800, retain: 260, role: "htf" },
   // USOIL feeds Macro & Aether's ASSET GRAVITY (WTI RSI at the chart timeframe).
+  // Owner decision 2026-11-08 (quota): USOIL 5m is pulled once per 15 minutes, at the 15m close, with
+  // every 5m bar, so GMI's oil input and its parity are unchanged; it was about 276 calls a weekday.
   { key: "TVC:USOIL|5m", symbol: "TVC:USOIL", interval: "5m", timeframe: "M5", seconds: 300, retain: 3000, role: "external", cadence: 900 },
   { key: "TVC:USOIL|15m", symbol: "TVC:USOIL", interval: "15m", timeframe: "M15", seconds: 900, retain: 1000, role: "external", derived_from: "TVC:USOIL|5m" },
   { key: "TVC:USOIL|1h", symbol: "TVC:USOIL", interval: "1h", timeframe: "H1", seconds: 3600, retain: 500, role: "external", derived_from: "TVC:USOIL|5m" },

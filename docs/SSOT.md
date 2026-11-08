@@ -68,7 +68,7 @@ Owner decision, 2026-11-05: the architecture does not depend on webhooks. Approv
 
 1. **Local computation** (decision lane). MizanLib (record id `mizan`), Prophet and GMI are computed by the pull adapter from closed TradingView bars.
    - Since 2026-11-05 (owner decision, TradingView MCP budget 800 calls a day), the pull adapter pulls XAUUSD M1, H1, H4, D1 and W1, USOIL 5m, and DXY and USDT 4h.
-   - **Cadence (2026-11-08, quota):** XAUUSD 1m and USOIL 5m are pulled once per 15 minutes, at the 15m close, with every bar (`cadence: 900`). The other series are pulled once per new closed bar. A weekday costs about 250 calls, plus 24 for the hourly news, against the 800 budget.
+   - **Cadence (2026-11-08, quota, owner decision):** USOIL 5m (macro) is pulled once per 15 minutes, at the 15m close, with every bar (`cadence: 900`). The gold 1m chart stays every 5 minutes. The other series are pulled once per new closed bar. A weekday costs about 440 calls, plus 24 for the hourly news, against the 800 budget.
    - **Weekend (2026-11-08):** no pull for non-crypto series from Friday 22:30 to Sunday 22:00 UTC (`marketClosed`), so a closed market spends no TradingView call. An empty series still bootstraps once, and USDT (crypto) is pulled every day.
    - **Context series (2026-11-08, backlog 11.3).** The pull adapter also pulls `TVC:US10Y` and `OANDA:XAGUSD` 4h (role `context`) for the Nexus correlations panel.
      - **Cost.** About 12 calls a day. They are last in priority.
