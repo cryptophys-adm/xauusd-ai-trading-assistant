@@ -146,3 +146,11 @@ test("the global action is the strategy decision; without a strategy it stays th
   assert.equal(g.h1_decision.decision, "WAIT");
   assert.equal(buildGlobalConclusion({ h1Decision: { decision: "WAIT", confidence: 0 } }).action, "WAIT");
 });
+
+test("at a 5m close the engine uses that bar's close and names the bar of the confirmation", () => {
+  const s = buildStrategy(input({ m5Price: 4041, confirmations: { m5_prophet_r38: { buy_confirmed: true, verified: true, candle_time: "2026-11-06T14:25:00.000Z" } } }));
+  assert.equal(s.price, 4041, "the 5m close is the price");
+  assert.equal(s.state, "TRIGGERED", s.headline);
+  assert.match(s.headline, /verified 5m Prophet buy confirmation on the 5m bar closing 14:25 UTC/);
+  assert.equal(buildStrategy(input()).price, 4040, "without a 5m close the 15m close stays the price");
+});
