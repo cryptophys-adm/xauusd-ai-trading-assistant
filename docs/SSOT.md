@@ -444,6 +444,17 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
       It is context only and reaches no room or decision. On phones the sidebar opens from the menu button.
     - Left: Priority Queue, War Room agents and Worker status.
     - Center: the chart, then the War Rooms card with its tab bar `News | 15m | 1H | 4H | D1`.
+      - **Chart layers (owner decision 2026-11-08, PR 3 of the key-level plan):** a row of toggles above the chart, kept per viewer.
+        - **On by default:**
+          - *Zones* (the Key Level Agent's candidate zones and the strategy plan);
+          - *Bands* (Z-KWW mean, ±1σ and ±1.618σ, and EMA 114, computed in the browser from the chart's closed bars with the Mizan formulas);
+          - *Volume* (the session POC, VAH and VAL of the chart plane).
+        - *Fib*: Auto by default. The OTE band (0.618 to 0.786), 0.5 and the 1.272 and 1.618 extensions of the chart plane's leg show by themselves while a setup forms (SETUP_FORMING to TRIGGERED). The toggle cycles Auto, On and Off.
+        - **Toggles:**
+          - *VWAP* (5m to 1H only);
+          - *Liquidity* (whale zones and mitigation blocks, the nearest FVG targets, QM and RBS/SBR);
+          - *Session* (the true day, week and month opens).
+        - The levels come from `GET /api/hud/levels`, which now serves the snapshot's `chart_plane`. The 5m chart reads the 15m plane.
     - Right: the trading assistant panel (charts).
     - On narrower screens, the side panels move under the center instead of hiding.
     - Shadow versions are at `#/shadow`; `/shadow` redirects there.

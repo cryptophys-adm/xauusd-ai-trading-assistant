@@ -38,6 +38,9 @@ test("levels: missing HUDs give empty sections, never invented numbers", () => {
   assert.deepEqual(out.camarilla, []);
   assert.deepEqual(out.cpr, { daily: null, weekly: null });
   assert.ok(out.regime.axes.every((a) => a.value === null));
+  assert.equal(out.chart_plane, null, "no chart plane in the snapshot: none in the levels");
+  const plane = { version: "cryptophys.chart-plane.v1", bands: { ema_114: 4030 } };
+  assert.deepEqual(hudLevels({ ...snapshot({}), chart_plane: plane }).chart_plane, plane, "the chart plane is served to the Nexus chart layers");
   assert.deepEqual(LEVEL_TIMEFRAMES, ["15", "60", "240", "1D"]);
 });
 
