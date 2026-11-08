@@ -1,6 +1,6 @@
 import { get } from "./api";
 import { usePoll } from "./usePoll";
-import { WORKERS } from "./names";
+import { WORKERS, engineTitle } from "./names";
 
 export type Tone = "green" | "amber" | "red" | "slate";
 export type HealthItem = { key: string; label: string; tone: Tone; detail: string; worker?: string };
@@ -31,7 +31,7 @@ export function healthItems(status: any, lane: any, now = Date.now()): HealthIte
     items.push({
       key: "lane", label: "Local lane", worker: WORKERS.pull.name,
       tone: ai.local_lane?.fresh ? "green" : reEarning ? "amber" : closed ? "slate" : "red",
-      detail: ai.local_lane?.fresh ? "approved local H1 records for the latest bars" : reEarning ? `the H1 identities are re-earning parity: ${progress}/24` : closed ? "market closed: no new H1 bar" : "no approved local H1 record for the last two bars"
+      detail: ai.local_lane?.fresh ? "approved local 1H records for the latest bars" : reEarning ? `${h1.map((x) => engineTitle(x.engine)).filter((v, i, a) => a.indexOf(v) === i).join(" and ")} re-earning parity: ${progress}/24` : closed ? "market closed: no new 1H bar" : "no approved local 1H record for the last two bars"
     });
     if (ai.local_lane?.calibration?.due) items.push({ key: "calibration", label: "Calibration", tone: "amber", detail: "an approved engine has not been compared for its interval" });
   }

@@ -20,6 +20,8 @@ test("the registry view marks the current identity per engine and keeps totals a
   assert.deepEqual(v.filter((r) => r.current).map((r) => [r.engine, r.status]), [["gmi_m15", "approved"], ["prophet", "approved"]]);
   const p = v.find((r) => r.engine === "prophet" && r.current);
   assert.equal(p.implementation, "cccccccc");
+  assert.equal(p.label, "Prophet R38 + R37 1H (prophet)");
+  assert.equal(v.find((r) => r.engine === "gmi_m15").label, "GMI v12.70 15m (gmi_m15)");
   assert.deepEqual(p.last_detail, { compared: 24, mismatches: 0, missing: 0 });
   assert.deepEqual(v.find((r) => r.engine === "gmi_m15").totals, { matches: 92, mismatches: 1, incomplete: 0 });
   assert.equal(v.at(-1).current, false, "an older identity sorts after the current ones");

@@ -6,7 +6,7 @@ import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 import { useSystemHealth, marketClosed } from "../lib/health";
 import { ago, candleWhen } from "../lib/format";
-import { WORKERS, engineName, engineChart } from "../lib/names";
+import { WORKERS, engineTitle } from "../lib/names";
 
 const resultTone = (r?: string | null) => (r === "match" ? "text-emerald-300" : r === "mismatch" ? "text-rose-300" : r === "input_mismatch" ? "text-amber-200" : "text-slate-400");
 const statusTone = (s?: string) => (s === "approved" ? "text-emerald-300" : s === "revoked" ? "text-rose-300" : "text-amber-200");
@@ -81,13 +81,13 @@ function Parity() {
         <label className="mb-2 inline-flex cursor-pointer items-center gap-2 text-[11.5px] text-slate-300"><input type="checkbox" checked={older} onChange={(e) => setOlder(e.target.checked)} /> Show older identities</label>
         <div className="table-wrap">
           <table className="tbl">
-            <thead><tr><th>Engine</th><th>Chart</th><th>Status</th><th>Streak</th><th>Matches</th><th>Mismatches</th><th>Incomplete</th><th>Last 24 h</th><th>Last result</th><th>Implementation</th></tr></thead>
+            <thead><tr><th>Engine</th><th>Status</th><th>Streak</th><th>Matches</th><th>Mismatches</th><th>Incomplete</th><th>Last 24 h</th><th>Last result</th><th>Implementation</th></tr></thead>
             <tbody>
               {rows.map((r: any) => {
                 const d = p.last_24h?.[r.engine] ?? {};
                 return (
                   <tr key={r.engine + r.implementation} className={r.current ? "" : "opacity-50"}>
-                    <td>{engineName(r.base)} <span className="mono text-[10px] text-slate-500">{r.engine}</span></td><td>{r.timeframe}</td>
+                    <td>{engineTitle(r.engine)} <span className="mono text-[10px] text-slate-500">{r.engine}</span></td>
                     <td><span className={statusTone(r.status)}>{r.status}</span></td>
                     <td className="mono">{r.consecutive_matches}/{r.promote_after}</td>
                     <td className="mono">{r.totals.matches}</td><td className="mono">{r.totals.mismatches}</td><td className="mono">{r.totals.incomplete}</td>
@@ -105,11 +105,11 @@ function Parity() {
         {!(p.recent ?? []).length ? <Empty>No comparison yet.</Empty> : (
           <div className="table-wrap">
             <table className="tbl">
-              <thead><tr><th>When</th><th>Engine</th><th>Chart</th><th>Candle</th><th>Result</th><th>Fields</th></tr></thead>
+              <thead><tr><th>When</th><th>Engine</th><th>Candle</th><th>Result</th><th>Fields</th></tr></thead>
               <tbody>
                 {p.recent.map((c: any, i: number) => (
                   <tr key={i}>
-                    <td className="mono">{when(c.compared_at)}</td><td>{engineName(String(c.engine).replace(/_(m5|m15|h4|d1)$/, ""))} <span className="mono text-[10px] text-slate-500">{c.engine}</span></td><td>{c.timeframe ?? engineChart(c.engine)}</td>
+                    <td className="mono">{when(c.compared_at)}</td><td>{engineTitle(c.engine)} <span className="mono text-[10px] text-slate-500">{c.engine}</span></td>
                     <td className="mono text-[11px]">{candleWhen(c.candle_key)}</td><td><span className={resultTone(c.result)}>{c.result}</span></td>
                     <td className="text-[11px] text-slate-400">{(c.mismatches ?? []).join(", ")}</td>
                   </tr>
