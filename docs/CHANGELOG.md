@@ -6,6 +6,13 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(aether): phase A8, part 4. The strategy-threshold replay arm, `src/strategy-replay.mjs`.
+  - **Engine change.** `buildStrategy(inputs, params)` takes its thresholds; the default `STRATEGY_PARAMS` keeps the live behaviour.
+  - **Replay.** Each stored hour gets one decision per arm (control, `strategy@rrr1.2`, `strategy@conf0.3`, `strategy@near0.5`). The decisions are computed once in the sweep and kept in D1 `strategy_replays` (migration `0015`).
+  - **Scoring.** Each decision is scored with the hour's stored outcome, using the sign test, Holm and the holdout.
+  - **Drift check.** The control is checked against the live decision stored at capture.
+  - **Visibility.** `/api/tuning` shows `replays.strategy`, and Nexus shows it in the "Tuning grid" panel.
+
 - feat(aether): phase A8, part 3 (owner go 2026-11-08). The strategy engine's inputs are now recorded once per closed H1 bar, for the strategy-threshold replay.
   - **Capture.** D1 `strategy_inputs` (migration `0014`) holds a slimmed, gzip-compressed record, captured at the first sweep 40 or more minutes after the close, together with the live decision and state.
   - **Equivalence.** A test proves `buildStrategy` on the slim record equals `buildStrategy` on the full inputs, across several engine states.

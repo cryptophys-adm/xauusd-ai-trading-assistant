@@ -27,6 +27,12 @@ export const ALIGNMENT_WEIGHTS = Object.freeze({ D1: 0.3, H4: 0.3, H1: 0.25, M15
 export const MIN_RRR = 1.5;
 export const MIN_CONFIDENCE = 0.4;
 const LEAN = 0.15; // a lean inside +-LEAN is neutral
+/**
+ * The engine's thresholds. buildStrategy takes them as `params` (default: these), so the A8 tuning
+ * replay (src/strategy-replay.mjs) can recompute a stored hour with a candidate set. The live engine
+ * always uses these values; changing one is an owner PR.
+ */
+export const STRATEGY_PARAMS = Object.freeze({ min_rrr: MIN_RRR, min_confidence: MIN_CONFIDENCE, lean: LEAN, strong_h1: 0.3, near_atr: 0.35 });
 const PERIOD_MS = { D1: 86_400_000, H4: 14_400_000, H1: 3_600_000, M15: 900_000 };
 const LAYER = {
   D1: { label: "D1", role: "Macro" },
@@ -89,9 +95,9 @@ function roomLayer(key, room, now) {
  * - The targets are the near edges of the next two MAJOR zones (Key Level Agent candidates), each
  *   at least 0.5 ATR beyond the previous one, or 2R and 3R projections.
  */
-export function tradeLevels({ dir, price, levels, atrH1, inZone = false }) {
+export function tradeLevels({ dir, price, levels, atrH1, inZone = false, nearAtr = STRATEGY_PARAMS.near_atr }) {
   if (!dir || !isNum(price) || !isNum(atrH1) || atrH1 <= 0) return null;
-  const near = 0.35 * atrH1, gap = 0.5 * atrH1, pad = 0.2 * atrH1;
+  const near = nearAtr * atrH1, gap = 0.5 * atrH1, pad = 0.2 * atrH1;
   const lo = (z) => (isNum(z.low) ? z.low : z.price), hi = (z) => (isNum(z.high) ? z.high : z.price);
   const nearEdge = (z) => (dir > 0 ? hi(z) : lo(z)), farEdge = (z) => (dir > 0 ? lo(z) : hi(z));
   // Zones with the trade's back to them: support for a long, resistance for a short.
@@ -157,7 +163,9 @@ function triggerOf(dir, { confirmations, m15Snapshot }) {
  * Pure: the strategy from the four War Rooms (every agent's bias), News Daily, the 1H and 15m HUD
  * snapshots, the latest confirmations and the closed 1H and 15m bars.
  */
-export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, now = Date.now() } = {}) {
+export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, now = Date.now() } = {}, params = STRATEGY_PARAMS) {
+  const P = params === STRATEGY_PARAMS ? params : { ...STRATEGY_PARAMS, ...params };
+  const LEAN = P.lean, MIN_RRR = P.min_rrr, MIN_CONFIDENCE = P.min_confidence;
   const layers = Object.fromEntries(["D1", "H4", "H1", "M15"].map((k) => [k, roomLayer(k, rooms[k], now)]));
   const usable = (k) => layers[k].available && !layers[k].stale;
 
@@ -170,7 +178,7 @@ export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15S
   let dir = 0, why;
   if (trend == null || h1 == null) why = "the trend or the 1-hour room is missing or stale";
   else if (Math.abs(trend) >= LEAN && h1 * Math.sign(trend) > -LEAN) { dir = Math.sign(trend); why = `the trend is ${word(trend)} and the 1-hour room does not lean against it`; }
-  else if (Math.abs(trend) < LEAN && Math.abs(h1) >= 0.3 && m15 != null && m15 * Math.sign(h1) >= LEAN) { dir = Math.sign(h1); why = `the trend is neutral, and the 1-hour and 15-minute rooms both lean ${h1 > 0 ? "bullish" : "bearish"}`; }
+  else if (Math.abs(trend) < LEAN && Math.abs(h1) >= P.strong_h1 && m15 != null && m15 * Math.sign(h1) >= LEAN) { dir = Math.sign(h1); why = `the trend is neutral, and the 1-hour and 15-minute rooms both lean ${h1 > 0 ? "bullish" : "bearish"}`; }
   else why = Math.abs(trend) >= LEAN ? `the trend is ${word(trend)} but the 1-hour room leans ${word(h1)}, against it` : `the trend is neutral and the lower rooms do not agree on a side`;
   if (dir && m15 != null && m15 * dir <= -LEAN) { why = `the trend and the 1-hour setup point ${dir > 0 ? "up" : "down"}, but the 15-minute room leans against them`; dir = 0; }
 
@@ -191,7 +199,7 @@ export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15S
   const zones = { ...(m15Snapshot?.huds?.aegis_footprint?.fields || {}), ...(m15Snapshot?.huds?.gabfx_price_action?.fields || {}) };
   const inZone = dir > 0 ? zones.in_bull_order_block === true || zones.in_bull_mitigation === true || zones.in_qm_buy === true || zones.in_rbs === true
     : dir < 0 ? zones.in_bear_order_block === true || zones.in_bear_mitigation === true || zones.in_qm_sell === true || zones.in_sbr === true : false;
-  const plan = dir ? tradeLevels({ dir, price, levels, atrH1, inZone }) : null;
+  const plan = dir ? tradeLevels({ dir, price, levels, atrH1, inZone, nearAtr: P.near_atr }) : null;
   const { vetoes, cautions } = riskChecks(dir, { h1Snapshot, m15Snapshot, news });
   const trigger = triggerOf(dir, { confirmations, m15Snapshot });
 

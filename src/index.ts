@@ -166,6 +166,7 @@ import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
 import { readGlobalConclusion } from "./global-conclusion.mjs";
 import { readStrategy, loadStrategyInputs, buildStrategy } from "./strategy-engine.mjs";
 import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } from "./strategy-inputs.mjs";
+import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
 import { runSignalLedger, readLedger } from "./signal-ledger.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus } from "./aether-push.mjs";
@@ -2178,9 +2179,10 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       // A8 part 2: the deterministic replay of the reputation parameters (src/tuning-replay.mjs). Non-fatal.
       let crowd: unknown = null;
       try { crowd = await readCrowdReplay(env, { days: 30 }); } catch (error) { console.error("crowd_replay_failed", error instanceof Error ? error.message : String(error)); }
-      let strategyInputs: unknown = null;
+      let strategyInputs: unknown = null, strategy: unknown = null;
       try { strategyInputs = await strategyInputsStatus(env); } catch { strategyInputs = null; }
-      return dashboardJson({ status: "ok", ...tuningView(shadow, { crowd }), strategy_inputs: strategyInputs });
+      try { strategy = await readStrategyReplay(env); } catch (error) { console.error("strategy_replay_failed", error instanceof Error ? error.message : String(error)); }
+      return dashboardJson({ status: "ok", ...tuningView(shadow, { crowd, strategy }), strategy_inputs: strategyInputs });
     } catch (error) {
       console.error("tuning_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
@@ -2461,7 +2463,9 @@ export default {
         try {
           const captured = await captureStrategyInputs(env, { load: loadStrategyInputs, build: buildStrategy });
           const scoredInputs = await scoreStrategyCaptures(env);
-          if (captured.status === "captured" || Number(scoredInputs.scored)) console.log("strategy_inputs", JSON.stringify({ captured, scored: scoredInputs }));
+          // A8 part 4: each threshold arm's decision on the stored hours, computed once (a few hours per sweep).
+          const replayed = await replayStrategyCaptures(env);
+          if (captured.status === "captured" || Number(scoredInputs.scored) || Number(replayed.hours) || Number(replayed.failed)) console.log("strategy_inputs", JSON.stringify({ captured, scored: scoredInputs, replayed }));
         } catch (e) { console.error("strategy_inputs_failed", e instanceof Error ? e.message : String(e)); }
         // Agent compliance (RFC_AETHER_KNOWLEDGE_GUARDIAN A1): deterministic rule checks of the room
         // messages stored since the last run. Read-only over the rooms; never changes a decision.

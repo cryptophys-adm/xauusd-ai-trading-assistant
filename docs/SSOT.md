@@ -630,6 +630,20 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Outcomes.** Once the 4-hour horizon closes, each stance (BUY, SELL, WAIT) is scored once on the 15m bars and stored. The yardstick is 16 bars with doubled thresholds, about 0.5 and 1 H1 ATR. A replay therefore needs no old bars.
   - **Retention.** Kept 60 days.
   - **Isolation.** The table is never sent to the platform or to Aether, and it changes nothing in a room or a decision. `/api/tuning` shows the counts under `strategy_inputs`.
+- **Strategy replay (Aether A8 part 4, `src/strategy-replay.mjs`).** `buildStrategy` takes its thresholds as `params` (default `STRATEGY_PARAMS`, the live values).
+  - **What runs.** Each sweep computes, a few hours at a time, each arm's decision on every stored hour. The results are kept in D1 `strategy_replays` (migration `0015`), and replays of pruned hours are dropped.
+  - **Arms:**
+
+    | Arm | What it changes |
+    |---|---|
+    | `strategy@active` (control) | nothing: the live thresholds |
+    | `strategy@rrr1.2` | the minimum reward to the final target |
+    | `strategy@conf0.3` | the minimum confidence |
+    | `strategy@near0.5` | the ATR distance that counts as "at a key zone" |
+
+  - **Scoring.** Each decision is scored with the hour's stored outcome, using the shared statistics (sign test, Holm, discovery minimum, holdout).
+  - **Drift check.** The control is checked against the live decision stored at capture. A mismatch is reported as `drift`.
+  - **Where to see it.** `/api/tuning` shows `replays.strategy`. A better threshold is a proposal for an owner PR to `src/strategy-engine.mjs`.
 - **P5 review (owner decision 2026-11-07):**
   - `prophet_r37@latch12` and `prophet_r38@latch8` are stopped; they are listed under `retired` in the view.
   - `prophet_r37@latch8` runs until 30 decisive pairs or 2026-12-07.

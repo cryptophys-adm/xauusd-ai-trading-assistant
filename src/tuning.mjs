@@ -19,7 +19,7 @@ export const ACTIVE_VALUES = Object.freeze({ stateMaxAge: 50 });
 const pointId = (family, param, value) => (param === "stateMaxAge" ? `${family}@latch${value}` : `${family}@${param}${value}`);
 
 /** Pure: the tuning view from a shadow view (readShadowVersions). */
-export function tuningView(shadow, { grid = TUNING_GRID, retired = RETIRED_CANDIDATES, crowd = null } = {}) {
+export function tuningView(shadow, { grid = TUNING_GRID, retired = RETIRED_CANDIDATES, crowd = null, strategy = null } = {}) {
   const families = [];
   for (const [family, params] of Object.entries(grid)) {
     const f = (shadow?.families || []).find((x) => x.family === family);
@@ -64,6 +64,7 @@ export function tuningView(shadow, { grid = TUNING_GRID, retired = RETIRED_CANDI
     window_days: shadow?.window_days ?? null,
     families,
     // Deterministic replays of fixed parameters (src/tuning-replay.mjs): the reputation weights behind the crowd line.
-    replays: crowd ? { crowd } : {}
+    // and the strategy-engine thresholds over the stored hourly inputs (src/strategy-replay.mjs).
+    replays: { ...(crowd ? { crowd } : {}), ...(strategy ? { strategy } : {}) }
   };
 }
