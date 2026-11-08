@@ -187,6 +187,7 @@ import { tuningView } from "./tuning.mjs";
 import { readCorrelations } from "./correlations.mjs";
 import { refreshCalendar, readCalendar } from "./econ-calendar.mjs";
 import { sendLedgerAlerts, readLedgerAlerts } from "./ledger-alerts.mjs";
+import { notifyH1Decision } from "./h1-telegram.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -860,7 +861,8 @@ async function runAnalysis(
     });
     await env.SIGNAL_CACHE.put("latest:" + safeKeyPart(ticker) + ":" + safeKeyPart(timeframe), JSON.stringify(synthesis), { expirationTtl: 60 * 60 * 24 * 7 });
     try {
-      await sendTelegram(env, ["XAUUSD AI DECISION SUPPORT", "Symbol: " + ticker, "Timeframe: " + timeframe, "Candle: " + candleKey, "Decision: WAIT", "Reason: " + reasoning.slice(0, 900), "Note: advisory only; no trade was executed."].join("\n"));
+      await notifyH1Decision(env, { candleKey, action: "WAIT", send: (text: string) => sendTelegram(env, text),
+        text: ["XAUUSD AI DECISION SUPPORT", "Symbol: " + ticker, "Timeframe: " + timeframe, "Candle: " + candleKey, "Decision: WAIT", "Reason: " + reasoning.slice(0, 900), "Note: advisory only; no trade was executed."].join("\n") });
     } catch (error) {
       console.error("telegram_delivery_failed", JSON.stringify({ candle_key: candleKey, message: error instanceof Error ? error.message : "Unknown notification error" }));
     }
@@ -1059,7 +1061,8 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
   });
   await env.SIGNAL_CACHE.put("latest:" + safeKeyPart(ticker) + ":" + safeKeyPart(timeframe), JSON.stringify(synthesis), { expirationTtl: 60 * 60 * 24 * 7 });
   try {
-    await sendTelegram(env, [
+    // Owner decision 2026-11-08: only a BUY/SELL or a changed decision is sent (src/h1-telegram.mjs).
+    await notifyH1Decision(env, { candleKey, action, send: (text: string) => sendTelegram(env, text), text: [
       "XAUUSD AI DECISION SUPPORT",
       "Symbol: " + ticker,
       "Timeframe: " + timeframe,
@@ -1068,7 +1071,7 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
       "Confidence: " + (confidence === null ? "not provided" : Math.round(confidence * 100) + "%"),
       "Reason: " + reasoning.slice(0, 900),
       "Note: advisory only; no trade was executed."
-    ].join("\n"));
+    ].join("\n") });
   } catch (error) {
     console.error("telegram_delivery_failed", JSON.stringify({ candle_key: candleKey, message: error instanceof Error ? error.message : "Unknown notification error" }));
   }
@@ -1521,8 +1524,8 @@ async function runAnalysisFromBundle(
   ].join("\n");
   let notified = false;
   try {
-    await sendTelegram(env, message);
-    notified = true;
+    // Owner decision 2026-11-08: only a BUY/SELL or a changed decision is sent (src/h1-telegram.mjs).
+    notified = (await notifyH1Decision(env, { candleKey, action: asText(decision.decision) || "WAIT", text: message, send: (text: string) => sendTelegram(env, text) })).sent;
   } catch {
     notified = false;
   }
