@@ -23,10 +23,11 @@
 // 12) CPR context is diagnostic only: it does NOT change verdict_state, alerts, or VP calculations.
 // 13) Moved Weekly/Daily CPR, width, and CPR × GMI rows into CHRONOS MATRIX; expanded its table and shifted Aegis Footprint down.
 // 14) Consolidated CPR HUD to three rows; added classic daily R1-R3/S1-S3 levels and merged width with CPR × GMI.
+// 15) Added JSON-safe escaping for the user-provided webhook secret in all three CTA alert payloads.
 // VALIDATION: static transformation only. TradingView compilation, replay, and regression NOT yet verified.
 
 // Audit R2: wording/display-only changes applied to user-supplied compile-passing baseline. Verify in TradingView before deployment.
-indicator("Global Multiverse Interceptor [v12.70 THE SINGULARITY] · R10.1.5 SEPARATE CHRONOS HUD", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+indicator("Global Multiverse Interceptor [v12.70 THE SINGULARITY] · R11 CPR CONTEXT ENGINE", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // GLOBAL MULTIVERSE INTERCEPTOR v12.70: THE SINGULARITY (AUDIT WORDING R2)
@@ -517,10 +518,14 @@ else
 
 // --- AETHER FVG & SMR RESERVOIR ---
 [is_fvg_bull, is_fvg_bear] = lib.fvg_detect(high, low, open, close)
-var float[] b_tgt = array.new_float(), var float[] b_mass = array.new_float()
-var label[] b_lbls = array.new_label(), var line[] b_lines = array.new_line()
-var float[] s_tgt = array.new_float(), var float[] s_mass = array.new_float()
-var label[] s_lbls = array.new_label(), var line[] s_lines = array.new_line()
+var float[] b_tgt = array.new_float()
+var float[] b_mass = array.new_float()
+var label[] b_lbls = array.new_label()
+var line[] b_lines = array.new_line()
+var float[] s_tgt = array.new_float()
+var float[] s_mass = array.new_float()
+var label[] s_lbls = array.new_label()
+var line[] s_lines = array.new_line()
 
 float fvg_vol_anom = nz(volume[1] / vol_sma, 1.0)
 
@@ -534,7 +539,8 @@ if is_fvg_bull and fvg_vol_anom >= 0.8
         array.push(b_lbls, label(na)), array.push(b_lines, line(na))
     if array.size(b_tgt) > 20
         array.shift(b_tgt), array.shift(b_mass)
-        label lbl_rm = array.shift(b_lbls), line ln_rm = array.shift(b_lines)
+        label lbl_rm = array.shift(b_lbls)
+        line ln_rm = array.shift(b_lines)
         if not na(lbl_rm)
             label.delete(lbl_rm)
         if not na(ln_rm)
@@ -550,21 +556,24 @@ if is_fvg_bear and fvg_vol_anom >= 0.8
         array.push(s_lbls, label(na)), array.push(s_lines, line(na))
     if array.size(s_tgt) > 20
         array.shift(s_tgt), array.shift(s_mass)
-        label lbl_rm = array.shift(s_lbls), line ln_rm = array.shift(s_lines)
+        label lbl_rm = array.shift(s_lbls)
+        line ln_rm = array.shift(s_lines)
         if not na(lbl_rm)
             label.delete(lbl_rm)
         if not na(ln_rm)
             line.delete(ln_rm)
 
 var float raw_reservoir = 0.0
-float c_in = 0.0, float c_out = 0.0
+float c_in = 0.0
+float c_out = 0.0
 
 if array.size(b_tgt) > 0
     for i = array.size(b_tgt) - 1 to 0
         if low <= array.get(b_tgt, i) 
             c_in += array.get(b_mass, i)
             array.remove(b_tgt, i), array.remove(b_mass, i)
-            label lbl_rm = array.remove(b_lbls, i), line ln_rm = array.remove(b_lines, i)
+            label lbl_rm = array.remove(b_lbls, i)
+            line ln_rm = array.remove(b_lines, i)
             if not na(lbl_rm)
                 label.delete(lbl_rm)
             if not na(ln_rm)
@@ -573,7 +582,8 @@ if array.size(b_tgt) > 0
             float new_m = array.get(b_mass, i) * 0.995
             if new_m < 0.05
                 array.remove(b_tgt, i), array.remove(b_mass, i)
-                label lbl_rm = array.remove(b_lbls, i), line ln_rm = array.remove(b_lines, i)
+                label lbl_rm = array.remove(b_lbls, i)
+                line ln_rm = array.remove(b_lines, i)
                 if not na(lbl_rm)
                     label.delete(lbl_rm)
                 if not na(ln_rm)
@@ -586,7 +596,8 @@ if array.size(s_tgt) > 0
         if high >= array.get(s_tgt, i) 
             c_out += array.get(s_mass, i)
             array.remove(s_tgt, i), array.remove(s_mass, i)
-            label lbl_rm = array.remove(s_lbls, i), line ln_rm = array.remove(s_lines, i)
+            label lbl_rm = array.remove(s_lbls, i)
+            line ln_rm = array.remove(s_lines, i)
             if not na(lbl_rm)
                 label.delete(lbl_rm)
             if not na(ln_rm)
@@ -595,7 +606,8 @@ if array.size(s_tgt) > 0
             float new_m = array.get(s_mass, i) * 0.995 
             if new_m < 0.05
                 array.remove(s_tgt, i), array.remove(s_mass, i)
-                label lbl_rm = array.remove(s_lbls, i), line ln_rm = array.remove(s_lines, i)
+                label lbl_rm = array.remove(s_lbls, i)
+                line ln_rm = array.remove(s_lines, i)
                 if not na(lbl_rm)
                     label.delete(lbl_rm)
                 if not na(ln_rm)
@@ -985,8 +997,7 @@ if barstate.isconfirmed and ob_has_volume_pivot
         node_top_span := supply_span
     else if make_bull_ob
         b_bot := box.new(na, na, na, na, bgcolor=na, border_color=na, text_size=size.tiny, xloc=xloc.bar_index)
-        node_bot_upper := demand_upper
-        node_bot_lower := demand_lower
+        node_bot_upper := demand_upper        node_bot_lower := demand_lower
         node_bot_span := demand_span
 
     array.push(aegis_nodes, AegisNode.new(b_top, b_bot, bar_index - ob_pivot_len, bar_index, node_top_upper, node_top_lower, node_top_span, node_bot_upper, node_bot_lower, node_bot_span, ref_atr, ob_source_high_volume, make_bear_ob, make_bull_ob, -1, 1))
@@ -997,7 +1008,8 @@ if barstate.isconfirmed and ob_has_volume_pivot
     if array.size(aegis_nodes) > 0
         for j = 0 to array.size(aegis_nodes) - 1
             AegisNode candidate = array.get(aegis_nodes, j)
-            if candidate.bot_active                active_bull_nodes += 1
+            if candidate.bot_active
+                active_bull_nodes += 1
             if candidate.top_active
                 active_bear_nodes += 1
     int prune_idx = 0
@@ -1984,8 +1996,7 @@ f_render_visual_c() =>
             label.set_xy(lbl_lvn_bull_1, bar_index + 15, lvn_bull_1)
             label.set_text(lbl_lvn_bull_1, "LVN Bull 1 (Pullback) • " + str.tostring(lvn_bull_1, format.mintick))
         else
-            line.set_xy1(l_lvn_bull_line_1, na, na)
-            label.set_xy(lbl_lvn_bull_1, na, na)
+            line.set_xy1(l_lvn_bull_line_1, na, na)            label.set_xy(lbl_lvn_bull_1, na, na)
 
         if show_lvn_hvn_levels_act and not na(lvn_bear_1)
             line.set_xy1(l_lvn_bear_line_1, bar_index - 30, lvn_bear_1)
@@ -1996,7 +2007,8 @@ f_render_visual_c() =>
             line.set_xy1(l_lvn_bear_line_1, na, na)
             label.set_xy(lbl_lvn_bear_1, na, na)
 
-        if show_lvn_hvn_levels_act and not na(lvn_bull_2)            line.set_xy1(l_lvn_bull_line_2, bar_index - 30, lvn_bull_2)
+        if show_lvn_hvn_levels_act and not na(lvn_bull_2)
+            line.set_xy1(l_lvn_bull_line_2, bar_index - 30, lvn_bull_2)
             line.set_xy2(l_lvn_bull_line_2, bar_index + 15, lvn_bull_2)
             label.set_xy(lbl_lvn_bull_2, bar_index + 15, lvn_bull_2)
             label.set_text(lbl_lvn_bull_2, "LVN Bull 2 (Void/Sqz) • " + str.tostring(lvn_bull_2, format.mintick))
@@ -2731,15 +2743,23 @@ ext_drawCurZone(bool update) =>
     if update and ext_validProfileRange and array.sum(ext_vpGreen) + array.sum(ext_vpRed) > 0
         if not na(ext_pocLine)
             line.delete(ext_pocLine)
+            ext_pocLine := na
         if not na(ext_vahLine)
             line.delete(ext_vahLine)
+            ext_vahLine := na
         if not na(ext_valLine)
             line.delete(ext_valLine)
+            ext_valLine := na
 
         for i = 0 to array.size(ext_redBoxes) - 1
-            if not na(array.get(ext_redBoxes, i))
-                box.delete(array.get(ext_redBoxes, i))
-                box.delete(array.get(ext_greenBoxes, i))
+            box old_red = array.get(ext_redBoxes, i)
+            box old_green = array.get(ext_greenBoxes, i)
+            if not na(old_red)
+                box.delete(old_red)
+                array.set(ext_redBoxes, i, na)
+            if not na(old_green)
+                box.delete(old_green)
+                array.set(ext_greenBoxes, i, na)
         
         float gap = (ext_profHigh - ext_profLow) / ext_resolution
         // Compute historical bar indices arithmetically to avoid dynamic series offsets
@@ -2814,7 +2834,7 @@ ext_drawCurZone(barstate.islast)
 cta_webhook_enabled = input.bool(false, "Enable CTA Webhook")
 cta_webhook_secret = input.string("", "CTA Webhook Secret", confirm=true)
 
-// JSON string escaping for user-controlled values; escape backslashes before quotes.
+// Escape user-controlled strings before embedding them in JSON.
 f_json_escape(string value) =>
     string escaped = str.replace_all(value, "\\", "\\\\")
     escaped := str.replace_all(escaped, "\"", "\\\"")
