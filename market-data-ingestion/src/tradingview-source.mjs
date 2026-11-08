@@ -22,7 +22,10 @@ const MAX_GATEWAY_COUNT = 8000;
 // derived-series.mjs) and are pulled natively only to bootstrap or to fill a gap the source
 // no longer covers (owner decision 2026-11-05, TradingView MCP budget 800 a day).
 export const SERIES = Object.freeze([
-  { key: "OANDA:XAUUSD|1m", symbol: CANONICAL_SYMBOL, interval: "1m", timeframe: "M1", seconds: 60, retain: 3000, role: "chart_source" },
+  // Owner decision 2026-11-08 (quota): the two short series are pulled once per 15 minutes, at the
+  // 15m close, instead of every 5 minutes. The bars stay the same (1m and 5m, all of them), so the
+  // 5m and 15m engines and their parity are unchanged; only 5m freshness drops to 15 minutes.
+  { key: "OANDA:XAUUSD|1m", symbol: CANONICAL_SYMBOL, interval: "1m", timeframe: "M1", seconds: 60, retain: 3000, role: "chart_source", cadence: 900 },
   { key: "OANDA:XAUUSD|5m", symbol: CANONICAL_SYMBOL, interval: "5m", timeframe: "M5", seconds: 300, retain: 5000, role: "chart", derived_from: "OANDA:XAUUSD|1m" },
   { key: "OANDA:XAUUSD|15m", symbol: CANONICAL_SYMBOL, interval: "15m", timeframe: "M15", seconds: 900, retain: 2000, role: "htf", derived_from: "OANDA:XAUUSD|1m" },
   { key: "OANDA:XAUUSD|1h", symbol: CANONICAL_SYMBOL, interval: "1h", timeframe: "H1", seconds: 3600, retain: 1000, role: "htf" },
@@ -30,7 +33,7 @@ export const SERIES = Object.freeze([
   { key: "OANDA:XAUUSD|1D", symbol: CANONICAL_SYMBOL, interval: "1D", timeframe: "D1", seconds: 86400, retain: 500, role: "htf" },
   { key: "OANDA:XAUUSD|1W", symbol: CANONICAL_SYMBOL, interval: "1W", timeframe: "W1", seconds: 604800, retain: 260, role: "htf" },
   // USOIL feeds Macro & Aether's ASSET GRAVITY (WTI RSI at the chart timeframe).
-  { key: "TVC:USOIL|5m", symbol: "TVC:USOIL", interval: "5m", timeframe: "M5", seconds: 300, retain: 3000, role: "external" },
+  { key: "TVC:USOIL|5m", symbol: "TVC:USOIL", interval: "5m", timeframe: "M5", seconds: 300, retain: 3000, role: "external", cadence: 900 },
   { key: "TVC:USOIL|15m", symbol: "TVC:USOIL", interval: "15m", timeframe: "M15", seconds: 900, retain: 1000, role: "external", derived_from: "TVC:USOIL|5m" },
   { key: "TVC:USOIL|1h", symbol: "TVC:USOIL", interval: "1h", timeframe: "H1", seconds: 3600, retain: 500, role: "external", derived_from: "TVC:USOIL|5m" },
   // GMI reads DXY and USDT only at 240 (macro_kinematics, dxy_close), whatever the chart.
@@ -119,6 +122,9 @@ export function planRequest(spec, cached, nowSec) {
   const missing = Math.ceil((nowSec - last.time) / spec.seconds) + 2;
   if (missing >= spec.retain) return { symbol: spec.symbol, interval: spec.interval, count: Math.min(spec.retain, MAX_GATEWAY_COUNT), bootstrap: true };
   if (marketClosed(spec.symbol, nowSec)) return null;
+  // A cadence series is pulled only once a new cadence boundary (the 15m close) has passed since
+  // its last cached bar; the pull then brings every bar up to that boundary.
+  if (spec.cadence && last.time + spec.seconds >= Math.floor(nowSec / spec.cadence) * spec.cadence) return null;
   return { symbol: spec.symbol, interval: spec.interval, count: Math.max(3, missing), bootstrap: false };
 }
 

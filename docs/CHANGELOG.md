@@ -6,6 +6,18 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- perf(market-data): the TradingView pulls recalculated for the quota (owner request 2026-11-08). XAUUSD 1m and USOIL 5m are now pulled once per 15 minutes, at the 15m close, instead of every 5 minutes (`cadence: 900`).
+  - Every bar is still pulled, so the 5m and 15m engines, the derived series and their parity are unchanged. A local record is compared only when it exists, so skipped 5m bars never break an approval streak.
+  - 5m freshness drops from 5 to 15 minutes, and 5m parity samples one 5m bar in three.
+  - Calls on a weekday:
+    | Series | Before | After |
+    |---|---|---|
+    | 1m | 288 | 96 |
+    | USOIL 5m | about 276 | 92 |
+    | Rest (H1, H4, D1, W1, DXY, USDT, US10Y, XAGUSD, the daily derived check) | about 60 | about 60 |
+    | **Total** | **about 620** | **about 250** |
+  - News stays at 24 a day (hourly). A weekend now costs about 12 calls (USDT only).
+  - Test added.
 - fix(market-data): no TradingView pull while the market is closed (owner report 2026-11-08: the Macro War Room page showed no US 10-year data). On the weekend the pull adapter re-requested every gold, oil and dollar series each 5 minutes although no new bar could arrive. That spent the daily budget of 800 TradingView calls (from the owner's quota), and the context series last in line (US 10-year, silver) never got a turn.
   - Now `marketClosed` skips non-crypto series from Friday 22:30 to Sunday 22:00 UTC (both daylight-saving offsets).
   - An empty series still bootstraps once, and crypto is pulled every day. The gap is pulled at the reopen. Test added.
