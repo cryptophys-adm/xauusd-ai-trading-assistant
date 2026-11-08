@@ -17,19 +17,32 @@
 //                    (src/level-readers.mjs, owner decision 2026-11-08): bands, liquidity,
 //                    projection and session, each with its own base weight
 // A zone is a run of levels, sorted by price, whose span stays within the tolerance (0.3 x the 1H
-// ATR, at least 1 dollar). Its score is the sum of its weights; its sources are the distinct
-// (kind, timeframe) pairs. Strength: strong (score >= 6), medium (>= 3), weak. Candidate (owner decision
-// 2026-11-06, tightened after production showed 14 of 18 zones at 2+ sources): 3+ sources and at
-// least medium strength.
+// ATR, at least 1 dollar). Strength: strong (score >= 6), medium (>= 3), weak.
+// Independence (owner decision 2026-11-08, after the chart plane gave 11 candidates): a source is a
+// level FAMILY (Camarilla, pivot, value area, swing, previous day/week, round number, order block,
+// Supertrend, and the readers' band, liquidity, projection and session), not a (kind, timeframe)
+// pair, so one chart's KWW mean, Fibonacci 0.5 and PA line no longer count as three confirmations.
+// The timeframe still weighs a level. A family on one timeframe adds only its heaviest level to the
+// score, so levels of one family that sit together are not summed. Candidate: 3+ families and at
+// least medium strength (owner decision 2026-11-06), and at most MAX_CANDIDATES_PER_SIDE per side
+// (the strongest, then the nearest); a zone "at price" is always kept. The other qualified zones
+// stay zones (qualified, not candidates).
 
 import { readPlane, READERS } from "./level-readers.mjs";
 
-export const KEY_LEVEL_VERSION = "cryptophys.key-level-agent.v1";
+export const KEY_LEVEL_VERSION = "cryptophys.key-level-agent.v2";
 export const TF_WEIGHT = Object.freeze({ "15": 1, "60": 1.5, "240": 2, D: 2.5, "1D": 2.5, W: 3 });
 const TF_NAME = { "15": "15m", "60": "1H", "240": "4H", D: "daily", "1D": "daily", W: "weekly" };
 const CAMARILLA_WEIGHT = { h3: 0.6, l3: 0.6, h4: 1, l4: 1, h5: 0.8, l5: 0.8 };
 const SWING_LOOKBACK = 60, SWINGS_PER_SIDE = 4, ROUND_RANGE_ATR = 4;
-export const CANDIDATE_MIN_SOURCES = 3, CANDIDATE_MIN_SCORE = 3;
+export const CANDIDATE_MIN_SOURCES = 3, CANDIDATE_MIN_SCORE = 3, MAX_CANDIDATES_PER_SIDE = 2;
+/** Level kind -> family: the unit of independence. */
+const FAMILY = Object.freeze({
+  liquidity: "liquidity", whale: "liquidity", fvg: "liquidity", "volume node": "liquidity",
+  fibonacci: "projection", cone: "projection", trendline: "projection", pa: "projection",
+  open: "session", "session profile": "session"
+});
+export const familyOf = (kind) => FAMILY[kind] ?? kind;
 
 const isNum = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
 const r2 = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
@@ -139,19 +152,36 @@ export function clusterLevels(levels, tolerance, price = null) {
   return zones.map((z) => {
     const m = z.members;
     const low = Math.min(...m.map((x) => x.price)), high = Math.max(...m.map((x) => x.price));
-    const score = m.reduce((s, x) => s + x.weight, 0);
-    const center = m.reduce((s, x) => s + x.price * x.weight, 0) / score;
-    const sources = [...new Set(m.map((x) => `${x.kind}:${x.tf}`))];
+    // A family on one timeframe adds its heaviest level only.
+    const best = new Map();
+    for (const x of m) { const k = `${familyOf(x.kind)}:${x.tf}`; best.set(k, Math.max(best.get(k) ?? 0, x.weight)); }
+    const score = [...best.values()].reduce((s, w) => s + w, 0);
+    const center = m.reduce((s, x) => s + x.price * x.weight, 0) / m.reduce((s, x) => s + x.weight, 0);
+    const sources = [...new Set(m.map((x) => familyOf(x.kind)))];
     const strength = score >= 6 ? "strong" : score >= 3 ? "medium" : "weak";
     const sorted = [...m].sort((a, b) => b.weight - a.weight);
     const role = !isNum(price) ? null : price >= low - tolerance / 3 && price <= high + tolerance / 3 ? "at price" : center < price ? "support" : "resistance";
     return {
-      low: r2(low), high: r2(high), price: r2(center), score: r2(score), sources: sources.length,
+      low: r2(low), high: r2(high), price: r2(center), score: r2(score), sources: sources.length, families: sources,
       candidate: sources.length >= CANDIDATE_MIN_SOURCES && score >= CANDIDATE_MIN_SCORE, strength, role,
       label: sorted.slice(0, 3).map((x) => x.label).join(" / ") + (m.length > 3 ? ` +${m.length - 3}` : ""),
       members: sorted.map((x) => ({ price: x.price, label: x.label, kind: x.kind, weight: x.weight, ...(x.reader ? { reader: x.reader } : {}) }))
     };
   });
+}
+
+/**
+ * Pure: at most MAX_CANDIDATES_PER_SIDE candidates per side (support, resistance), the strongest
+ * first, then the nearest; the others keep their zone and read `qualified`. "At price" zones stay.
+ * Mutates and returns `zones`.
+ */
+export function limitCandidates(zones, price = null) {
+  const dist = (z) => (isNum(price) ? Math.abs(z.price - price) : 0);
+  for (const role of ["support", "resistance"]) {
+    const side = zones.filter((z) => z.candidate && z.role === role).sort((a, b) => b.score - a.score || dist(a) - dist(b));
+    for (const z of side.slice(MAX_CANDIDATES_PER_SIDE)) { z.candidate = false; z.qualified = true; }
+  }
+  return zones;
 }
 
 /** The Key Level Agent's reading: every zone near price, the candidates first among equals. */
@@ -160,6 +190,7 @@ export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 
   const raw = rawLevels({ snapshots, bars, price, atrH1 });
   const zones = clusterLevels(raw, tolerance, price);
   const near = isNum(price) && isNum(atrH1) ? zones.filter((z) => Math.abs(z.price - price) <= 4 * atrH1) : zones;
+  limitCandidates(near, price);
   const candidates = near.filter((z) => z.candidate);
   const nearestCandidate = (role) => candidates.filter((z) => z.role === role).sort((a, b) => Math.abs(a.price - price) - Math.abs(b.price - price))[0] ?? null;
   const sup = nearestCandidate("support"), res = nearestCandidate("resistance"), at = candidates.find((z) => z.role === "at price") ?? null;

@@ -103,7 +103,7 @@ export default function PriceChart() {
     const candidates: any[] = showZones ? strategy?.key_levels?.candidates ?? [] : [];
     const zones: ChartZone[] = candidates.map((z) => ({
       low: z.low, high: z.high, color: ZONE_COLOR[z.role] ?? "#64748b", alpha: ZONE_ALPHA[z.strength] ?? 0.08,
-      label: `${fmt(z)} · ${z.strength} · ${z.sources} sources`
+      label: `${fmt(z)} · ${z.strength} · ${z.sources} families`
     }));
     zonesRef.current?.setZones(zones);
     for (const l of planLines.current) series.removePriceLine(l);
