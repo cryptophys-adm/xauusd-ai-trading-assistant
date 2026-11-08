@@ -33,7 +33,7 @@ RPC method `TvGateway.ohlcv(requests)` on `xauusd-fundamental-news-ingestion`, e
 
 - **Access:** only through a Service Binding with `"entrypoint": "TvGateway"`. RPC entrypoints are not reachable over public HTTP, so **no shared secret** is needed. There is no HTTP route for it.
 - **Argument:** `[{ symbol, interval, count, date_to? }]`, 1–12 requests. It returns `{ status, body }` with HTTP-like status codes.
-- **Symbol allowlist:** `TV_GATEWAY_SYMBOLS`, default `OANDA:XAUUSD, TVC:DXY, CRYPTOCAP:USDT, TVC:USOIL`.
+- **Symbol allowlist:** `OANDA:XAUUSD, TVC:DXY, CRYPTOCAP:USDT, TVC:USOIL, TVC:US10Y, OANDA:XAGUSD` by default; `TV_GATEWAY_SYMBOLS` (comma or whitespace separated) adds to it. Each request is validated on its own: an invalid one gets its error in its result slot and the valid ones in the same batch still run (2026-11-08).
 - **Intervals:** `1m 5m 15m 30m 1h 4h 1D 1W`.
 - **`count`:** 1–8000 (the MCP limit for `format=columns`).
 - **Upstream call:** one `tools/call` → `mcp-tv-get-ohlcv` per request with `format: "columns"`.
@@ -110,7 +110,7 @@ RPC method `TvGateway.ohlcv(requests)` on `xauusd-fundamental-news-ingestion`, e
 
 - **Access:** only through a Service Binding with `"entrypoint": "TvGateway"`. RPC entrypoints are not reachable over public HTTP, so **no shared secret** is needed. There is no HTTP route for it.
 - **Argument:** `[{ symbol, interval, count, date_to? }]`, 1–12 requests. It returns `{ status, body }` with HTTP-like status codes.
-- **Symbol allowlist:** `TV_GATEWAY_SYMBOLS`, default `OANDA:XAUUSD, TVC:DXY, CRYPTOCAP:USDT, TVC:USOIL`.
+- **Symbol allowlist:** `OANDA:XAUUSD, TVC:DXY, CRYPTOCAP:USDT, TVC:USOIL, TVC:US10Y, OANDA:XAGUSD` by default; `TV_GATEWAY_SYMBOLS` (comma or whitespace separated) adds to it. Each request is validated on its own: an invalid one gets its error in its result slot and the valid ones in the same batch still run (2026-11-08).
 - **Intervals:** `1m 5m 15m 30m 1h 4h 1D 1W`.
 - **`count`:** 1–8000 (the MCP limit for `format=columns`).
 - **Upstream call:** one `tools/call` → `mcp-tv-get-ohlcv` per request with `format: "columns"`.

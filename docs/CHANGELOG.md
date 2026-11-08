@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- fix(news,ohlcv): the TradingView gateway allows the context series and validates each request alone. US10Y and XAGUSD (added for the Nexus correlations) were never on the gateway's allowlist, and one invalid request rejected the whole batch. At 22:40 UTC on 2026-11-08, after the reopen, a batch carrying them failed whole, gold included (`symbol_not_allowed` for every series); this was also why US10Y stayed empty. The defaults now include `TVC:US10Y` and `OANDA:XAGUSD`, `TV_GATEWAY_SYMBOLS` adds to the defaults instead of replacing them, and an invalid request is answered in its own slot while the valid ones run. Test added.
 - feat(macro): oil in the Macro War Room (owner request 2026-11-08, "geopolitics causes inflation").
   - **Correlations:** a WTI crude oil row (`TVC:USOIL`). It reuses the 1h series derived from the USOIL 5m pull that GMI already makes, sampled at gold's 4h closes, so it needs no new TradingView call.
   - **Oil Analyst:** a new agent in the room. It reads oil's changes, its correlation with gold, and the News Daily headlines on oil or geopolitics (`geopoliticalHeadlines`). Its rule: a supply shock or conflict that lifts oil raises inflation expectations and safe-haven demand, which usually supports gold, unless the same rise pushes yields and Fed expectations higher.

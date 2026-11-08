@@ -9,7 +9,10 @@
 
 export const OHLCV_GATEWAY_CONTRACT = "cryptophys.tv-ohlcv-gateway.v1";
 export const OHLCV_TOOL_NAME_DEFAULT = "mcp-tv-get-ohlcv";
-export const DEFAULT_GATEWAY_SYMBOLS = Object.freeze(["OANDA:XAUUSD", "TVC:DXY", "CRYPTOCAP:USDT", "TVC:USOIL"]);
+// The pull adapter's series (market-data-ingestion SERIES): gold, GMI's DXY, USDT and USOIL, and the
+// Nexus correlations' context series US10Y and silver (2026-11-08: they were missing, so a batch that
+// carried them was rejected whole, gold included).
+export const DEFAULT_GATEWAY_SYMBOLS = Object.freeze(["OANDA:XAUUSD", "TVC:DXY", "CRYPTOCAP:USDT", "TVC:USOIL", "TVC:US10Y", "OANDA:XAGUSD"]);
 export const GATEWAY_INTERVALS = Object.freeze(["1m", "5m", "15m", "30m", "1h", "4h", "1D", "1W"]);
 const MAX_REQUESTS_PER_CALL = 12;
 const MAX_COUNT = 8000; // MCP limit for format=columns
@@ -28,9 +31,10 @@ export function constantTimeEqual(left, right) {
   return diff === 0;
 }
 
+/** The default symbols plus any TV_GATEWAY_SYMBOLS adds (comma or whitespace separated). */
 function allowedSymbols(env) {
-  const configured = asString(env.TV_GATEWAY_SYMBOLS).split(",").map((s) => s.trim()).filter(Boolean);
-  return new Set(configured.length ? configured : DEFAULT_GATEWAY_SYMBOLS);
+  const configured = asString(env.TV_GATEWAY_SYMBOLS).split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  return new Set([...DEFAULT_GATEWAY_SYMBOLS, ...configured]);
 }
 
 /** Validates one OHLCV request. Returns { value } or { error }. */
@@ -152,12 +156,12 @@ export async function runOhlcvRequests(env, raw, deps) {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_REQUESTS_PER_CALL) {
     return { status: 400, body: { contract: OHLCV_GATEWAY_CONTRACT, error: "requests_must_be_1_to_12" } };
   }
-  const requests = [];
-  for (const [index, item] of raw.entries()) {
-    const checked = validateOhlcvRequest(item, env);
-    if (checked.error) return { status: 400, body: { contract: OHLCV_GATEWAY_CONTRACT, error: checked.error, index } };
-    requests.push(checked.value);
-  }
+  // Each request is validated on its own: an invalid one is answered with its error in its slot and
+  // never sinks the valid ones beside it (2026-11-08: one unknown symbol rejected the whole batch, gold
+  // included). Only a batch with no valid request is refused before OAuth or MCP.
+  const checks = raw.map((item) => validateOhlcvRequest(item, env));
+  const firstValid = checks.findIndex((c) => !c.error);
+  if (firstValid < 0) return { status: 400, body: { contract: OHLCV_GATEWAY_CONTRACT, error: checks[0].error, index: 0 } };
 
   const cooldown = await deps.readQuotaCooldown(env);
   if (cooldown) return { status: 503, body: { contract: OHLCV_GATEWAY_CONTRACT, error: "mcp_quota_cooldown_active", quota_cooldown_until: cooldown.until } };
@@ -172,7 +176,9 @@ export async function runOhlcvRequests(env, raw, deps) {
   const endpoint = asString(metadata.mcp_endpoint);
 
   const results = [];
-  for (const args of requests) {
+  for (const [index, check] of checks.entries()) {
+    if (check.error) { results.push({ ok: false, request: raw[index], error: check.error }); continue; }
+    const args = check.value;
     try {
       results.push({ ok: true, request: args, ...(await callOhlcvTool(env, endpoint, accessToken, args, deps)) });
     } catch (error) {
