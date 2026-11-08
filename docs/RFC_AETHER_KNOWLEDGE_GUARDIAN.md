@@ -419,7 +419,7 @@ Items expire after 60 days unless re-validated on fresh bars (decay against regi
 
 - **Agent pattern:** an agent's decisive accuracy in a situation (chart × regime × open stuck field × session) is below its own 30-day baseline with a one-sided binomial p < 0.05 on ≥ 12 decisive calls → `caution` candidate for that agent and the moderator.
 - **Role drift:** a compliance check rate above 5 per 100 messages for 7 days → `role_reminder` candidate quoting the manifest role.
-- **Engine pattern:** a stuck episode family recurring ≥ 3 times in 30 days, or a shadow family whose candidates are all `not_better` → `param_candidate` for the next untested grid point, or a report saying "the cause is elsewhere" (as BACKLOG item 8 anticipates).
+- **Engine pattern:** a stuck episode family recurring ≥ 3 times in 30 days, or a shadow family whose candidates are all `not_better` → `param_candidate` for the next untested grid point, or a report saying "the cause is elsewhere" (as the BACKLOG P5 item anticipates).
 - **Crowd pattern:** the weighted crowd beats the moderator's conclusion on bias (sign test) → reputation-parameter replay proposal.
 
 Vectors serve these rules (finding similar situations, dedup); they never decide.
@@ -500,7 +500,7 @@ Source for limits and pricing: Cloudflare Vectorize docs (`/vectorize/platform/l
 
 1. **Accuracy:** each promoted change shows a significant paired gain in shadow and holds it in reverse shadow; room and Reasoner shrunk accuracy (`reputationOf`) does not fall.
 2. **Calibration:** Brier of agents with a confidence improves; fewer high-confidence misses.
-3. **WAIT quality:** the missed-opportunity rate of the H1 decision and the 1H room falls without a rise in directional misses (BACKLOG item 5, "always WAIT").
+3. **WAIT quality:** the missed-opportunity rate of the H1 decision and the 1H room falls without a rise in directional misses (the BACKLOG "always WAIT" scorecard item).
 4. **Compliance:** violations per 100 messages fall per agent; correction-call, `invalid_output` and `consensusGuard` override rates fall.
 5. **Stuck time:** candles inside stuck episodes fall (engine candidates).
 6. **Knowledge hygiene:** 100 % of items with full provenance; time from candidate to review; rollbacks; expired items.
