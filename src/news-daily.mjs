@@ -16,6 +16,8 @@ import { naturalLanguageErrors } from "./natural-language.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { ensureThreadSchema, rowToThreadMessage, threadInternals } from "./agent-threads.mjs";
+import { cachedCalendar } from "./econ-calendar.mjs";
+import { calendarOutlook } from "./calendar-agent.mjs";
 
 const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson } = threadInternals;
 
@@ -143,7 +145,7 @@ function tagMessages(batch, context) {
   ]);
 }
 
-function tldrMessages(items, context, counts) {
+function tldrMessages(items, context, counts, calendar = null) {
   return chatMessages([
     "You are the News Analyst of the XAUUSD forum. Write the TLDR of the last 24 hours of news for gold: one bias for the day, a short summary and one to three reasons.",
     RULES_NO_REFS,
@@ -153,6 +155,10 @@ function tldrMessages(items, context, counts) {
     "MARKET CONTEXT (last 24 hours):",
     JSON.stringify(context),
     "COUNTS: " + JSON.stringify(counts),
+    ...(calendar?.events?.length ? [
+      "SCHEDULED USD EVENTS (the Calendar Agent's projection by fixed rules; mention a coming event when it can move gold, and read a released event's outcome from the headlines; never reverse the projected direction):",
+      JSON.stringify({ summary: calendar.summary, events: calendar.events.map((e) => ({ title: e.title, time: e.time, status: e.status, projection: e.text })) })
+    ] : []),
     "TAGGED HEADLINES (newest first):",
     JSON.stringify(items.map((i) => ({ title: i.title, published_at: i.published_at, bias: i.bias, why: i.why })))
   ]);
@@ -216,11 +222,14 @@ export async function runNewsDaily(env, { now = Date.now(), clock = () => Date.n
     }
   }
   const counts = countBiases(tagged);
-  await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { digest, window_from: new Date(now - NEWS_DAILY_WINDOW_MS).toISOString(), window_to: new Date(now).toISOString(), context, counts, items: tagged } });
+  // Calendar Agent (owner decision 2026-11-08): the scheduled USD events and their projected effect.
+  let calendar = null;
+  try { calendar = calendarOutlook((await cachedCalendar(env))?.events || [], now); } catch { calendar = null; }
+  await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { digest, window_from: new Date(now - NEWS_DAILY_WINDOW_MS).toISOString(), window_to: new Date(now).toISOString(), context, counts, calendar: calendar?.summary ?? null, items: tagged } });
   const usable = tagged.filter((i) => i.bias);
   if (!usable.length) return { status: "no_tags", calls, items: tagged.length };
   await step(base("tldr", "news"), {
-    messages: tldrMessages(usable, context, counts), schemaName: "news_daily_tldr", schema: TLDR_SCHEMA,
+    messages: tldrMessages(usable, context, counts, calendar), schemaName: "news_daily_tldr", schema: TLDR_SCHEMA,
     maxTokens: BUS_MAX_TOKENS.moderator, effort: "low", validate: validateNewsTldr,
     toBody: (o) => ({ body: { summary: clip(o.summary, 400), reasons: o.reasons.slice(0, 3).map((r) => clip(r, 200)) }, refs: [] })
   });
