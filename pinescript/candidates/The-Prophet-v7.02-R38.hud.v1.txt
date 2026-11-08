@@ -997,7 +997,8 @@ if not na(key_level_atr) and key_level_atr > 0 and array.size(ob_zone_dir) > 0
                 best_bull_ob_tp := bottom
                 best_bull_ob_tp_score := tp_score
         if dir == 1 and inten == -3.0 and top < close and (na(bias_tp_last_hit) or top < bias_tp_last_hit)
-            float tp_score = lib.ob_target_score(age, ob_max_age, touches, zone_width_atr, (close - top) / math.max(key_level_atr, syminfo.mintick))            if na(best_bear_ob_tp_score) or tp_score > best_bear_ob_tp_score
+            float tp_score = lib.ob_target_score(age, ob_max_age, touches, zone_width_atr, (close - top) / math.max(key_level_atr, syminfo.mintick))
+            if na(best_bear_ob_tp_score) or tp_score > best_bear_ob_tp_score
                 best_bear_ob_tp := top
                 best_bear_ob_tp_score := tp_score
 
