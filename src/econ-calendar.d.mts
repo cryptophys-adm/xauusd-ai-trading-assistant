@@ -1,0 +1,11 @@
+export const CALENDAR_URL: string;
+export const CALENDAR_KEY: string;
+export const CALENDAR_VERSION: string;
+export const EVENT_GATE: Readonly<Record<string, any>>;
+export function parseCalendar(rows: unknown): Array<Record<string, any>>;
+export function eventRisk(events: unknown[], now?: number, gate?: unknown): { gate: Record<string, any>; active: any[]; next: any[] };
+export function eventCaution(risk: unknown): string | null;
+export function refreshCalendar(env: unknown, options?: { now?: number; fetchImpl?: typeof fetch }): Promise<Record<string, unknown>>;
+export function cachedCalendar(env: unknown): Promise<Record<string, any> | null>;
+export function gatedEvents(env: unknown, options?: { now?: number }): Promise<any[]>;
+export function readCalendar(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;

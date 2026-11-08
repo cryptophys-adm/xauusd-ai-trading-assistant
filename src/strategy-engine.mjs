@@ -20,6 +20,7 @@ import { readWarRoom } from "./war-room.mjs";
 import { readNewsDaily } from "./news-daily.mjs";
 import { loadHudSnapshot } from "./hud-store.mjs";
 import { buildKeyLevels } from "./key-level-agent.mjs";
+import { eventRisk, eventCaution, gatedEvents } from "./econ-calendar.mjs";
 
 export const STRATEGY_VERSION = "cryptophys.strategy-engine.v1";
 export const TREND_WEIGHTS = Object.freeze({ D1: 0.5, H4: 0.5 });
@@ -129,8 +130,8 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, nearAtr
   };
 }
 
-/** Vetoes and cautions for a direction from the 1H and 15m HUD snapshots and the news. */
-function riskChecks(dir, { h1Snapshot, m15Snapshot, news }) {
+/** Vetoes and cautions for a direction from the 1H and 15m HUD snapshots, the news and the economic calendar. */
+function riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar = null, now = Date.now() }) {
   const vetoes = [], cautions = [];
   const dm = h1Snapshot?.huds?.decision_matrix?.fields || {};
   const tm = h1Snapshot?.huds?.trade_management?.fields || {};
@@ -145,6 +146,10 @@ function riskChecks(dir, { h1Snapshot, m15Snapshot, news }) {
   const chaos = [h1Snapshot, m15Snapshot].filter((s) => s?.huds?.kinetic_engine?.fields?.is_chaos === true).length;
   if (chaos === 2) cautions.push("both the 1-hour and the 15-minute regime read chaotic");
   if (dir && news?.tldr?.status === "ok" && dirOf(news.tldr.stance) === -dir && (news.tldr.confidence ?? 0) >= 0.6) cautions.push(`the last 24 hours of news lean ${String(news.tldr.stance).toLowerCase()}, against the trade`);
+  // Event-risk gate (backlog 11.1, owner decision 2026-11-08): a high-impact USD event from 2 hours
+  // before to 30 minutes after it is a caution, never a forced WAIT.
+  const event = Array.isArray(calendar?.events) ? eventCaution(eventRisk(calendar.events, now)) : null;
+  if (event) cautions.push(event);
   return { vetoes, cautions };
 }
 
@@ -163,7 +168,7 @@ function triggerOf(dir, { confirmations, m15Snapshot }) {
  * Pure: the strategy from the four War Rooms (every agent's bias), News Daily, the 1H and 15m HUD
  * snapshots, the latest confirmations and the closed 1H and 15m bars.
  */
-export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, now = Date.now() } = {}, params = STRATEGY_PARAMS) {
+export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, calendar = null, now = Date.now() } = {}, params = STRATEGY_PARAMS) {
   const P = params === STRATEGY_PARAMS ? params : { ...STRATEGY_PARAMS, ...params };
   const LEAN = P.lean, MIN_RRR = P.min_rrr, MIN_CONFIDENCE = P.min_confidence;
   const layers = Object.fromEntries(["D1", "H4", "H1", "M15"].map((k) => [k, roomLayer(k, rooms[k], now)]));
@@ -200,7 +205,7 @@ export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15S
   const inZone = dir > 0 ? zones.in_bull_order_block === true || zones.in_bull_mitigation === true || zones.in_qm_buy === true || zones.in_rbs === true
     : dir < 0 ? zones.in_bear_order_block === true || zones.in_bear_mitigation === true || zones.in_qm_sell === true || zones.in_sbr === true : false;
   const plan = dir ? tradeLevels({ dir, price, levels, atrH1, inZone, nearAtr: P.near_atr }) : null;
-  const { vetoes, cautions } = riskChecks(dir, { h1Snapshot, m15Snapshot, news });
+  const { vetoes, cautions } = riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar, now });
   const trigger = triggerOf(dir, { confirmations, m15Snapshot });
 
   let confidence = dir ? 0.6 * alignment + (plan?.at_level ? 0.15 : 0) + (trigger.fired ? 0.2 : 0) - 0.1 * cautions.length - (Object.values(layers).some((l) => l.stale) ? 0.1 : 0) : 0;
@@ -261,7 +266,10 @@ export async function loadStrategyInputs(env, { now = Date.now() } = {}) {
     confirmations: m15?.confirmations ?? null,
     // Enough closed bars for the ATR and the Key Level Agent's swings; the last week for its high and low.
     h1Bars: h1Bars.slice(-60), m15Bars: m15Bars.slice(-60), h4Bars: h4Bars.slice(-60), d1Bars: d1Bars.slice(-60), w1Bars: w1Bars.slice(-2),
-    h1Chain: m15?.h1 ?? h1?.h1 ?? null, now
+    h1Chain: m15?.h1 ?? h1?.h1 ?? null,
+    // The gated economic events around now (backlog 11.1); a missing calendar gives no caution.
+    calendar: { events: await gatedEvents(env, { now }).catch(() => []) },
+    now
   };
 }
 

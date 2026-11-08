@@ -68,6 +68,8 @@ export function slimInputs(inputs) {
     h1Bars: (inputs?.h1Bars || []).map(bar), m15Bars: (inputs?.m15Bars || []).map(bar), h4Bars: (inputs?.h4Bars || []).map(bar),
     d1Bars: (inputs?.d1Bars || []).map(bar), w1Bars: (inputs?.w1Bars || []).map(bar),
     h1Chain: inputs?.h1Chain ? { decision: inputs.h1Chain.decision ?? null, confidence: inputs.h1Chain.confidence ?? null, candle_key: inputs.h1Chain.candle_key ?? null } : null,
+    // The gated economic events (backlog 11.1): the event-risk caution must replay like the live one.
+    calendar: Array.isArray(inputs?.calendar?.events) ? { events: inputs.calendar.events.map((e) => ({ title: e.title, currency: e.currency, time: e.time, impact: e.impact })) } : null,
     now: inputs?.now ?? null
   };
 }

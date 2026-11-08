@@ -48,6 +48,9 @@ import { agentReputation, listStuckStates } from "./outcome-scoring.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
+import { eventRisk, gatedEvents } from "./econ-calendar.mjs";
+
+const eventLine = (e) => `${e.title} (${e.currency}, ${e.time.slice(11, 16)} UTC)`;
 
 const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson } = threadInternals;
 
@@ -230,10 +233,17 @@ export async function tfEvidence(env, chart, candleKey) {
   const news = await newsDeskEvidence(db);
   let desk = { available: false, reading: [], approved_by_parity: false };
   try { desk = await chartDeskReading(env, candleKey); } catch { /* no desk reading this bar */ }
+  // Event-risk gate (backlog 11.1): the high-impact USD events around this bar, for the Risk Desk.
+  let eventRiskNow = null;
+  try {
+    const closeMs = Date.parse(last.close_time);
+    const r = eventRisk(await gatedEvents(env, { now: closeMs }), closeMs);
+    if (r.active.length || r.next.length) eventRiskNow = { rule: "a high-impact USD event from 2 hours before to 30 minutes after it is a caution, never a forced wait", due_now: r.active.map(eventLine), next_24h: r.next.map(eventLine) };
+  } catch { eventRiskNow = null; }
   return {
     chart, candle_key: candleKey, bar_open: last.open_time, bar_close: last.close_time,
     technical: { candles, average_range_14: round(ranges.reduce((a, b) => a + b, 0) / Math.max(ranges.length, 1)) },
-    hud, confirmations, higher, news, desk
+    hud, confirmations, higher, news, desk, event_risk: eventRiskNow
   };
 }
 
@@ -246,7 +256,8 @@ function agentData(agent, ev, spec) {
     case "risk": return {
       timeframe: spec.label, ranges: ev.technical.candles.map((c) => round(c.h - c.l)), average_range_14: ev.technical.average_range_14,
       higher_timeframe: ev.higher ? { stance: ev.higher.stance, timeframe: ev.higher.timeframe } : null,
-      news_bias: ev.news?.consensus ?? null, confirmations: ev.confirmations
+      news_bias: ev.news?.consensus ?? null, confirmations: ev.confirmations,
+      ...(ev.event_risk ? { economic_calendar: ev.event_risk } : {})
     };
     default: return { hud: HUD_NAMES[agent], timeframe: spec.label, reading: hudEvidenceLines(ev.hud?.readings?.[agent]) };
   }

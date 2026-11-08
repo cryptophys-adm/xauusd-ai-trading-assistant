@@ -6,6 +6,13 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(strategy): the economic calendar and the event-risk gate (backlog 11.1, owner decision 2026-11-08), in `src/econ-calendar.mjs`.
+  - **Source.** The ForexFactory weekly export, fetched by the sweep at most once an hour and cached. A failed fetch keeps the cache.
+  - **Gate.** A High-impact USD event is a caution for the strategy engine (−0.1 confidence) from 2 hours before to 30 minutes after it. It never forces WAIT and never changes the side.
+  - **Rooms.** The Risk Desk of the 1H, 4H and D1 rooms sees the events due now and in the next 24 hours.
+  - **Replay.** The strategy inputs record carries the gated events, so the replay reproduces the caution.
+  - **Read model.** `GET /api/calendar` and the Nexus page `#/calendar`.
+
 - feat(nexus): the correlations panel (backlog 11.3), `#/correlations` and `GET /api/correlations` (`src/correlations.mjs`).
   - **What it shows.** Gold beside DXY, the US 10-year yield and silver on closed 4h bars:
     - the last close and the change over 4h, 1 day and 5 days, in basis points for the yield;
