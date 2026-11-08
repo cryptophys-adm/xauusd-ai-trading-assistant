@@ -644,6 +644,16 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Scoring.** Each decision is scored with the hour's stored outcome, using the shared statistics (sign test, Holm, discovery minimum, holdout).
   - **Drift check.** The control is checked against the live decision stored at capture. A mismatch is reported as `drift`.
   - **Where to see it.** `/api/tuning` shows `replays.strategy`. A better threshold is a proposal for an owner PR to `src/strategy-engine.mjs`.
+- **Shadow knowledge arm (Aether A7, `src/shadow-knowledge.mjs`).** It is off unless `SHADOW_KNOWLEDGE_ENABLED = "true"`.
+  - **Which items.** At most 2 approved text items of the learned pack (caution or role reminder) are tested at once.
+  - **Which agents.** An agent qualifies when it is in the item's audience, sat in the 1H room and answered there.
+  - **The call.** That agent makes one extra opening call on the same bar, with the same data and prompt plus the note line.
+  - **A/A noise check (O13).** While the first item runs, the same prompt is also asked once more without the note.
+  - **Timing and budget.** The calls run after the room and its H1 decision, never before them. They are capped at `SHADOW_KNOWLEDGE_MAX_CALLS_PER_HOUR` (default 8, at most 24).
+  - **Storage.** Answers go in D1 `shadow_agent_outputs` (migration `0016`), with the agent's real opening stance as the control. Both are scored there on the H1 bars, never in `outcome_scores`, so no scorecard or reputation sees them. Rows are kept 60 days.
+  - **Isolation.** The answers are never shown in a room, on the bus, in the crowd line, to the moderator or the Reasoner, or in a decision.
+  - **Where to see it.** `/api/tuning` shows `replays.knowledge`, with the verdicts and the noise rate.
+  - **Promotion.** A better note reaches agents only through the bundled pack, in an owner PR (A9).
 - **P5 review (owner decision 2026-11-07):**
   - `prophet_r37@latch12` and `prophet_r38@latch8` are stopped; they are listed under `retired` in the view.
   - `prophet_r37@latch8` runs until 30 decisive pairs or 2026-12-07.

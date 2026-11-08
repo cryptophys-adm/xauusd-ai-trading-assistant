@@ -3,3 +3,4 @@ export function runPendingTimeframeThreads(env: unknown, options?: { now?: numbe
 export function readTimeframeThread(db: unknown, chart: string, options?: { candleKey?: string }): Promise<Record<string, any> | null>;
 export function runTimeframeThread(env: unknown, input: { chart: string; candleKey: string }, options?: { clock?: () => number }): Promise<Record<string, any>>;
 export function tfAgentName(id: string): string;
+export function runShadowJob(result: unknown): Promise<Record<string, unknown> | null>;

@@ -185,7 +185,8 @@ import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
 import { tuningView } from "./tuning.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
-import { runPendingTimeframeThreads, runTimeframeThread, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
+import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
+import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
 import {
   H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, H1_ROOM_RETRY_S, H1_ROOM_LOCK_PREFIX, H1_ROOM_LOCK_TTL_S, buildH1RoomTask, h1RoomGate, AWAITING_CONSENSUS, H1_REASONER_GIVE_UP_MS, H1_PENDING_LOOKBACK_MS,
   h1BarTimes, finalizeDue, consensusInput, reasonerLines, consensusGuard, emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
@@ -940,6 +941,9 @@ async function processH1RoomTask(env: Env, task: { candle_key: string }): Promis
     const finalized = await finalizeH1Decision(env, key);
     console.log("h1_consensus_decision", JSON.stringify({ candle_key: key, via: "h1_room", ...finalized }));
   }
+  // Aether A7: the shadow calls of approved notes, after the decision (a no-op when disabled).
+  const shadow = await runShadowJob(result);
+  if (shadow) console.log("shadow_knowledge", JSON.stringify({ candle_key: key, ...shadow }));
 }
 
 /** Evidence-fusion fields kept in analysis_runs.result_json. */
@@ -2182,7 +2186,9 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       let strategyInputs: unknown = null, strategy: unknown = null;
       try { strategyInputs = await strategyInputsStatus(env); } catch { strategyInputs = null; }
       try { strategy = await readStrategyReplay(env); } catch (error) { console.error("strategy_replay_failed", error instanceof Error ? error.message : String(error)); }
-      return dashboardJson({ status: "ok", ...tuningView(shadow, { crowd, strategy }), strategy_inputs: strategyInputs });
+      let knowledge: unknown = null;
+      try { knowledge = await readShadowKnowledge(env); } catch (error) { console.error("shadow_knowledge_read_failed", error instanceof Error ? error.message : String(error)); }
+      return dashboardJson({ status: "ok", ...tuningView(shadow, { crowd, strategy, knowledge }), strategy_inputs: strategyInputs });
     } catch (error) {
       console.error("tuning_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
@@ -2465,6 +2471,10 @@ export default {
           const scoredInputs = await scoreStrategyCaptures(env);
           // A8 part 4: each threshold arm's decision on the stored hours, computed once (a few hours per sweep).
           const replayed = await replayStrategyCaptures(env);
+          // Aether A7: score the shadow note answers and their controls; drop those older than 60 days.
+          const shadowScored = await scoreShadowKnowledge(env);
+          if (Number(shadowScored.scored)) console.log("shadow_knowledge_scored", JSON.stringify(shadowScored));
+          if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) await pruneShadowKnowledge(env);
           if (captured.status === "captured" || Number(scoredInputs.scored) || Number(replayed.hours) || Number(replayed.failed)) console.log("strategy_inputs", JSON.stringify({ captured, scored: scoredInputs, replayed }));
         } catch (e) { console.error("strategy_inputs_failed", e instanceof Error ? e.message : String(e)); }
         // Agent compliance (RFC_AETHER_KNOWLEDGE_GUARDIAN A1): deterministic rule checks of the room

@@ -45,6 +45,7 @@ import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import { H1_ROOM_LOCK_PREFIX } from "./h1-consensus.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, stuckCautions, ROOM_TIMEFRAME } from "./reputation.mjs";
 import { agentReputation, listStuckStates } from "./outcome-scoring.mjs";
+import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 
 const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson } = threadInternals;
 
@@ -251,7 +252,7 @@ function agentData(agent, ev, spec) {
 
 const deskList = (roster) => roster.filter((id) => TF_DESKS[id]).map((id) => `the ${TF_DESKS[id].name}`).join(", ");
 
-function openingMessages(agent, data, spec, roster) {
+function openingMessages(agent, data, spec, roster, note = null) {
   const desk = TF_DESKS[agent];
   const riskRule = agent === "risk" ? [ruleText(spec) + " Judge every possible entry against the confirmations in your data, and say plainly whether any entry is confirmed."] : [];
   const who = desk
@@ -264,6 +265,8 @@ function openingMessages(agent, data, spec, roster) {
     ...riskRule,
     `This is your opening on the communication bus: one claim from your own data only. Do not repeat what other roles cover (the other agents are ${deskList(roster)} and one agent per HUD).`,
     BIAS_RULE,
+    // Aether A7 shadow arm only (src/shadow-knowledge.mjs): a reviewed learned note, never in a live opening.
+    ...(note ? [note] : []),
     `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"claim":"<= ${CLAIM_MAX - 40} chars"}`,
     "YOUR DATA:",
     JSON.stringify(data ?? { available: false })
@@ -422,7 +425,29 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
     validate: (o) => validateTfConclusion(o, { busAgents, confirmations: ev.confirmations, supportStances: new Set([...answered.map((m) => m.stance), ...debate.map((m) => m.stance)]), supportBiases: new Set([...answered, ...debate].map((m) => m.bias || biasOfStance(m.stance))), roomBias }),
     toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map((r) => clip(r, 200)), dissent: [...new Set(o.dissent)], majority, majority_bias: roomBias, crowd }, refs: [] })
   });
-  return { status: "complete", calls, openings: answered.length, rebuttals: debate.length, ...(reconvened ? { reconvened: true } : {}) };
+  const result = { status: "complete", calls, openings: answered.length, rebuttals: debate.length, ...(reconvened ? { reconvened: true } : {}) };
+  // Aether A7 (src/shadow-knowledge.mjs): the shadow calls of the approved notes, handed back as a job
+  // the caller runs after the H1 decision, so they never delay it. Not enumerable: logs never show it.
+  if (chart === "H1" && shadowKnowledgeEnabled(env)) {
+    Object.defineProperty(result, "shadow_job", {
+      enumerable: false,
+      value: async () => {
+        const plan = planShadowCalls({ items: await shadowItems(env), roster, openings: answered, chart });
+        return runShadowCalls(env, {
+          calls: plan, candleKey, statementClose: ev.bar_close, clock, schema: OPENING_SCHEMA, maxTokens: BUS_MAX_TOKENS.agent,
+          messagesFor: (agent, note) => openingMessages(agent, agentData(agent, ev, spec), spec, roster, note),
+          validate: (o, agent) => validateOpening(normalizeTfNames(o, [agent]), agent, { verifiedLines: (agent === "h1" || agent === "h4" || agent === "d1") ? (ev.desk?.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]) })
+        });
+      }
+    });
+  }
+  return result;
+}
+
+/** Runs a room's deferred shadow job (Aether A7), if any. Never throws. */
+export async function runShadowJob(result) {
+  if (typeof result?.shadow_job !== "function") return null;
+  try { return await result.shadow_job(); } catch (error) { return { status: "error", message: error instanceof Error ? error.message.slice(0, 200) : String(error) }; }
 }
 
 /** The latest closed H1 bar key (H1 bars are epoch-aligned). */
@@ -477,10 +502,14 @@ export async function runPendingTimeframeThreads(env, { now = Date.now(), clock 
     spent = Number(out[chart]?.calls) > 0;
     // The H1 decision follows its room (owner decision 2026-11-07): the caller's Reasoner runs
     // as soon as the 1H room concludes. Its failure never stops the next room.
+    const job = out[chart];
     if (onRoom) {
       try { await onRoom({ chart, key, result: out[chart] }); }
       catch (error) { out[chart] = { ...out[chart], on_room_error: error instanceof Error ? error.message.slice(0, 200) : String(error) }; }
     }
+    // Aether A7: the shadow calls of approved notes run after the room's H1 decision.
+    const shadow = await runShadowJob(job);
+    if (shadow) out[chart] = { ...out[chart], shadow_knowledge: shadow };
   }
   return { status: "ok", charts: out };
 }

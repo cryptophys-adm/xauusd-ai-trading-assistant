@@ -1,0 +1,16 @@
+export const SHADOW_KNOWLEDGE_VERSION: string;
+export const MAX_ITEMS: number;
+export const DEFAULT_MAX_CALLS_PER_HOUR: number;
+export const SHADOW_KNOWLEDGE_SCHEMA_SQL: string[];
+export function shadowKnowledgeEnabled(env: unknown): boolean;
+export function maxCallsPerHour(env: unknown): number;
+export function resetShadowKnowledgeSchemaCacheForTests(): void;
+export function subjectOf(agent: string, item: { item_id: string; version: number } | null): string;
+export function noteLine(item: { text: string }): string;
+export function planShadowCalls(input: Record<string, unknown>): Array<Record<string, any>>;
+export function shadowItems(env: unknown): Promise<Array<Record<string, any>>>;
+export function runShadowCalls(env: unknown, options: Record<string, any>): Promise<Record<string, unknown>>;
+export function scoreShadowKnowledge(env: unknown, options?: { now?: number }): Promise<Record<string, unknown>>;
+export function pruneShadowKnowledge(env: unknown, options?: { now?: number; days?: number }): Promise<Record<string, unknown>>;
+export function compareShadowKnowledge(outputs: unknown[], options?: { now?: number }): Record<string, any>;
+export function readShadowKnowledge(env: unknown, options?: { now?: number; days?: number }): Promise<Record<string, any>>;
