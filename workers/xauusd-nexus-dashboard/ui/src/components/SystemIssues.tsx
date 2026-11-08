@@ -17,7 +17,7 @@ export default function SystemIssues() {
         {issues.map((i) => (
           <div key={i.key} className="flex items-start gap-2 text-[11.5px]">
             <span className="mt-1.5"><Dot tone={i.tone} pulse /></span>
-            <span><b className="text-slate-100">{i.label}</b> <span className="text-slate-400">{i.detail}</span></span>
+            <span><b className="text-slate-100">{i.label}</b> <span className="text-slate-400">{i.detail}</span>{i.worker ? <span className="mono block text-[10px] text-slate-500">{i.worker}</span> : null}</span>
           </div>
         ))}
       </div>

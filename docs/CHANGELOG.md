@@ -12,6 +12,7 @@ what changed and when, by merge commit and PR.
   - **Pull adapter:** the budget bar, the last refresh, the last H1 publish, the derived check, and a table of every series with its role, pull cadence, last close and bar count (diagnostics now include `cadence_seconds`).
   - **Parity:** the new read-only `GET /api/parity` (`src/parity-view.mjs`), with every registry identity (current or older), its streak, totals, last result and implementation hash, the counts of the last 24 hours and the recent comparisons with the mismatched fields.
   - **War Room:** a "System issues" panel appears only when a lane is amber or red, and links to the page.
+  - **Canonical names (owner request 2026-11-08):** every label uses the SSOT names (`lib/names.ts`). Each lane names its Worker (`xauusd-ai-trading-assistant`, `xauusd-fundamental-news-ingestion`, `xauusd-tradingview-pull-adapter`), and each engine its indicator (MizanLib, Prophet R38 + R37, GMI v12.70, Prophet HUD, GMI HUD) beside its registry id.
   - Tests: `test/parity-view.test.mjs`.
 - feat(strategy): the 5m trigger is checked at every closed 5m bar (owner decision 2026-11-08, "the confirmation is critical").
   - **Before:** the strategy read the 5m Prophet confirmation only from the 15m room, so a confirmation on the first or second 5m bar of a 15-minute window was missed.
