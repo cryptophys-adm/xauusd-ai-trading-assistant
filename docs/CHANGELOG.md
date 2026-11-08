@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- fix(market-data): the closed-market window follows New York time: no non-crypto pull from Friday 17:30 to Sunday 18:00 New York (Friday 22:30 to Sunday 23:00 UTC in winter, an hour earlier in summer). The fixed Sunday 22:00 UTC reopen was right only in summer: on 2026-11-08 the pull adapter pulled eight series every 5 minutes for an hour before gold opened at 23:00 UTC. The Nexus System status page uses the same window. Test updated for both seasons.
 - fix(news,ohlcv): the TradingView gateway allows the context series and validates each request alone. US10Y and XAGUSD (added for the Nexus correlations) were never on the gateway's allowlist, and one invalid request rejected the whole batch. At 22:40 UTC on 2026-11-08, after the reopen, a batch carrying them failed whole, gold included (`symbol_not_allowed` for every series); this was also why US10Y stayed empty. The defaults now include `TVC:US10Y` and `OANDA:XAGUSD`, `TV_GATEWAY_SYMBOLS` adds to the defaults instead of replacing them, and an invalid request is answered in its own slot while the valid ones run. Test added.
 - feat(macro): oil in the Macro War Room (owner request 2026-11-08, "geopolitics causes inflation").
   - **Correlations:** a WTI crude oil row (`TVC:USOIL`). It reuses the 1h series derived from the USOIL 5m pull that GMI already makes, sampled at gold's 4h closes, so it needs no new TradingView call.
