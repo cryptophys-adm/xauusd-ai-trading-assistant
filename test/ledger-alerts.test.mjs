@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
-import { signalEvents, formatAlert, sendLedgerAlerts, ledgerAlertsEnabled, resetLedgerAlertsSchemaCacheForTests } from "../src/ledger-alerts.mjs";
+import { signalEvents, formatAlert, sendLedgerAlerts, ledgerAlertsEnabled, readLedgerAlerts, resetLedgerAlertsSchemaCacheForTests } from "../src/ledger-alerts.mjs";
 import { ensureLedgerSchema, resetLedgerSchemaCacheForTests } from "../src/signal-ledger.mjs";
 
 const base = { id: "strategy:2026-11-09T10:00:00.000Z", source: "strategy", side: "BUY", entry: 4040, stop: 4028, tp1: 4064, tp2: 4076, confidence: 0.62, opened_at: "2026-11-09T10:05:00.000Z", status: "pending" };
@@ -75,4 +75,26 @@ test("an empty ledger on the first run marks the start, so the first real event 
   env.DB.raw.prepare("INSERT INTO signal_ledger (id, source, opened_at, side, entry, stop, tp1, tp2, status, updated_at) VALUES ('s1', 'strategy', '2026-11-09T11:00:00.000Z', 'SELL', 4040, 4052, 4016, NULL, 'pending', 'x')").run();
   assert.equal((await sendLedgerAlerts(env, { send: async (t) => sent.push(t), now: NOW })).sent, 1);
   assert.match(sent[0], /Setup active: SELL \(entry 4040.00, stop 4052.00, TP1 4016.00\)/);
+});
+
+test("the Alerts page view: read-only, no secret value, recorded and pending events", async () => {
+  resetLedgerAlertsSchemaCacheForTests(); resetLedgerSchemaCacheForTests();
+  const secretEnv = { TELEGRAM_BOT_TOKEN: "bot-token-value-xyz", TELEGRAM_CHAT_ID: "chat-id-value-xyz" };
+  const env = { DB: d1(), ...secretEnv };
+  await ensureLedgerSchema(env.DB);
+  env.DB.raw.exec("DROP TABLE ledger_alerts");
+  const before = await readLedgerAlerts({ DB: env.DB }, { now: NOW });
+  assert.deepEqual([before.enabled, before.bot_configured, before.started, before.pending.length], [false, false, false, 0]);
+  assert.equal(env.DB.raw.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'ledger_alerts'").get().n, 0, "reading never creates the table");
+  const ins = (id, opened) => env.DB.raw.prepare("INSERT INTO signal_ledger (id, source, opened_at, side, entry, stop, tp1, tp2, status, updated_at) VALUES (?, 'strategy', ?, 'BUY', 4040, 4028, 4064, 4076, 'pending', 'x')").run(id, opened);
+  ins("a", "2026-11-09T10:00:00.000Z");
+  await sendLedgerAlerts(env, { send: async () => {}, now: NOW });
+  ins("b", "2026-11-09T11:00:00.000Z");
+  const v = await readLedgerAlerts(env, { now: NOW });
+  assert.deepEqual([v.enabled, v.bot_configured, v.switch_on, v.started], [true, true, true, true]);
+  assert.ok(!JSON.stringify(v).includes("value-xyz"), "no secret value in the view");
+  assert.deepEqual(v.recorded.map((r) => [r.signal_id, r.event, r.status]), [["a", "setup", "seeded"]]);
+  assert.deepEqual(v.pending.map((r) => [r.signal_id, r.event]), [["b", "setup"]]);
+  assert.match(v.pending[0].text, /^XAUUSD ALERT · Strategy engine\nSetup active: BUY/);
+  assert.equal((await readLedgerAlerts({ ...env, LEDGER_ALERTS_ENABLED: "false" }, { now: NOW })).enabled, false);
 });

@@ -82,7 +82,6 @@ D1 with read-only queries; the API paths below name what is checked, not how it 
     - **Owner:** set `SHADOW_KNOWLEDGE_ENABLED` once a text item is approved (a small PR).
     - **Data:** the replays (crowd, strategy thresholds, shadow knowledge) need about 300 scored rooms or hours (18 scored H1 rooms on 2026-11-08). The first strategy capture is due after the market reopens (item 0).
     - **K9, the first promotion PR:** only once a candidate reads `better_than_active: ready for owner review`; the owner approves it.
-    - **Optional:** a Nexus Alerts page (the sidebar entry still reads "soon"); the alerts themselves go to Telegram.
 13. **Comparator alerts for the new agents (owner).**
     - **Grid Bot Protocol:** the comparator is built (2026-11-07). The GMI HUD candidate alert carries its fields and the `gmi_hud` identity compares them. What remains is the owner step: install the GMI HUD candidate on the H1 chart (`docs/HUD_CANDIDATE_INSTALL.md`). The same install starts parity for the other GMI HUD fields.
     - **Supertrend and Order Blocks (optional):** they have no TradingView comparator yet, so their statements stay unverified (Supertrend counts as computed from verified bars).

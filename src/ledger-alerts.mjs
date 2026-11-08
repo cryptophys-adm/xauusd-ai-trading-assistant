@@ -94,3 +94,38 @@ export async function sendLedgerAlerts(env, { send, now = Date.now(), max = 5, d
   if (seeding && out.seeded === 0) await record("_start", "seeded", "seeded");
   return out;
 }
+
+/**
+ * GET /api/alerts: the alert state for the Nexus Alerts page. Read-only: never sends and never
+ * creates the table. `recorded` are events already sent (or seeded at the start); `pending` are
+ * events the next sweep would send (with the text). No secret value is returned, only whether the
+ * bot is configured.
+ */
+export async function readLedgerAlerts(env, { days = 7, now = Date.now(), limit = 50 } = {}) {
+  const switchOn = String(env?.LEDGER_ALERTS_ENABLED ?? "true").trim().toLowerCase() !== "false";
+  const out = { version: LEDGER_ALERTS_VERSION, enabled: ledgerAlertsEnabled(env), switch_on: switchOn, bot_configured: Boolean(env?.TELEGRAM_BOT_TOKEN && env?.TELEGRAM_CHAT_ID), started: false, window_days: days, recorded: [], pending: [] };
+  const db = env?.DB;
+  if (!db) return out;
+  const since = new Date(now - days * 86_400_000).toISOString();
+  let rows = [];
+  try { rows = (await db.prepare("SELECT * FROM signal_ledger WHERE opened_at >= ? ORDER BY opened_at DESC").bind(since).all()).results || []; } catch { rows = []; }
+  let done = [];
+  try {
+    done = (await db.prepare("SELECT signal_id, event, status, sent_at FROM ledger_alerts ORDER BY sent_at DESC LIMIT 500").all()).results || [];
+    out.started = true;
+  } catch { done = []; }
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const doneKeys = new Set(done.map((d) => `${d.signal_id}|${d.event}`));
+  out.recorded = done.filter((d) => d.signal_id !== "_start").slice(0, limit).map((d) => {
+    const row = byId.get(d.signal_id);
+    return { signal_id: d.signal_id, event: d.event, status: d.status, at: d.sent_at, source: row?.source ?? null, side: row?.side ?? null, text: row ? formatAlert(row, d.event) : null };
+  });
+  // Before the first run every existing event would be seeded, not sent: nothing is pending then.
+  if (out.started && done.length) {
+    for (const row of [...rows].reverse()) for (const event of signalEvents(row)) {
+      if (!doneKeys.has(`${row.id}|${event}`)) out.pending.push({ signal_id: row.id, event, source: row.source, side: row.side, text: formatAlert(row, event) });
+    }
+    out.pending = out.pending.slice(0, limit);
+  }
+  return out;
+}

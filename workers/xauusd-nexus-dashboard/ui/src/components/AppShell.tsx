@@ -21,8 +21,8 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     { label: "Correlations", href: "#/correlations", key: "correlations", icon: GitCompareArrows }
   ] },
   { title: "Intelligence", items: [
-    { label: "Decision audit", href: "#/audit", key: "audit", icon: BookOpenCheck, soon: true },
-    { label: "Alerts", href: "#/alerts", key: "alerts", icon: BellRing, soon: true }
+    { label: "Decision audit", href: "#/audit", key: "audit", icon: BookOpenCheck },
+    { label: "Alerts", href: "#/alerts", key: "alerts", icon: BellRing }
   ] }
 ];
 export const NAV = NAV_GROUPS.flatMap((g) => g.items).filter((i) => !i.soon);
