@@ -6,6 +6,14 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(aether): phase A8, part 3 (owner go 2026-11-08). The strategy engine's inputs are now recorded once per closed H1 bar, for the strategy-threshold replay.
+  - **Capture.** D1 `strategy_inputs` (migration `0014`) holds a slimmed, gzip-compressed record, captured at the first sweep 40 or more minutes after the close, together with the live decision and state.
+  - **Equivalence.** A test proves `buildStrategy` on the slim record equals `buildStrategy` on the full inputs, across several engine states.
+  - **Cost.** The inputs are loaded once an hour, not at every sweep.
+  - **Outcomes.** Each stance's 4-hour outcome is scored once on the 15m bars. A capture whose bars left the cache is marked `no_data` after a day.
+  - **Retention and visibility.** Kept 60 days. `/api/tuning` shows the counts under `strategy_inputs`.
+  - **Isolation.** It never reaches a room, a decision, the platform or Aether.
+
 - feat(aether): phase A8, part 2. `src/tuning-replay.mjs` adds a deterministic replay of the reputation parameters behind the 1H crowd line, exposed as `replays.crowd` in `GET /api/tuning`.
   - **Arms:** the control is the active parameters; the candidates are `crowd@prior20`, `crowd@weight0.5-1.5` and `crowd@band0.2`.
   - **Point-in-time reputation:** a score counts only once its 4-bar horizon has closed before the room. Each room's crowd stance is scored with that stance's outcome on that candle.

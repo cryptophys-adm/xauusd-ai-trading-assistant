@@ -621,6 +621,15 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - the crowd stance is scored with the outcome of that stance on that candle.
   - **Statistics:** the same as the shadow versions (sign test, Holm, discovery minimum, holdout). It also reports the weighted crowd against the moderator on the same rooms.
   - **Promotion:** a better set is a proposal for an owner PR to `src/reputation.mjs`.
+- **Strategy inputs (Aether A8 part 3, owner go 2026-11-08, `src/strategy-inputs.mjs`).** These records feed the replay of the strategy-engine thresholds.
+  - **What is stored.** Once per closed H1 bar, at the first sweep 40 or more minutes after the close, the sweep stores what `buildStrategy` reads in D1 `strategy_inputs` (migration `0014`):
+    - each room's agents (status, stance, bias, confidence) and conclusion;
+    - the News Daily TLDR stance, the HUD snapshot fields and the confirmations;
+    - the H1 chain decision and the closed bars.
+  - **Format.** The inputs are slimmed to the fields the engine uses and gzip-compressed. A test proves the slim record gives exactly the strategy of the full inputs. The live decision and state are stored beside them.
+  - **Outcomes.** Once the 4-hour horizon closes, each stance (BUY, SELL, WAIT) is scored once on the 15m bars and stored. The yardstick is 16 bars with doubled thresholds, about 0.5 and 1 H1 ATR. A replay therefore needs no old bars.
+  - **Retention.** Kept 60 days.
+  - **Isolation.** The table is never sent to the platform or to Aether, and it changes nothing in a room or a decision. `/api/tuning` shows the counts under `strategy_inputs`.
 - **P5 review (owner decision 2026-11-07):**
   - `prophet_r37@latch12` and `prophet_r38@latch8` are stopped; they are listed under `retired` in the view.
   - `prophet_r37@latch8` runs until 30 decisive pairs or 2026-12-07.

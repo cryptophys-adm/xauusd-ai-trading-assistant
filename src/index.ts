@@ -164,7 +164,8 @@ import { m5ParityApproved, verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_L
 import { storeHudSnapshot, loadHudSnapshot, hudReadings, approvedComparable, barsVerified } from "./hud-store.mjs";
 import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
 import { readGlobalConclusion } from "./global-conclusion.mjs";
-import { readStrategy } from "./strategy-engine.mjs";
+import { readStrategy, loadStrategyInputs, buildStrategy } from "./strategy-engine.mjs";
+import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } from "./strategy-inputs.mjs";
 import { runSignalLedger, readLedger } from "./signal-ledger.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus } from "./aether-push.mjs";
@@ -2177,7 +2178,9 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       // A8 part 2: the deterministic replay of the reputation parameters (src/tuning-replay.mjs). Non-fatal.
       let crowd: unknown = null;
       try { crowd = await readCrowdReplay(env, { days: 30 }); } catch (error) { console.error("crowd_replay_failed", error instanceof Error ? error.message : String(error)); }
-      return dashboardJson({ status: "ok", ...tuningView(shadow, { crowd }) });
+      let strategyInputs: unknown = null;
+      try { strategyInputs = await strategyInputsStatus(env); } catch { strategyInputs = null; }
+      return dashboardJson({ status: "ok", ...tuningView(shadow, { crowd }), strategy_inputs: strategyInputs });
     } catch (error) {
       console.error("tuning_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
@@ -2452,6 +2455,14 @@ export default {
           const ledger = await runSignalLedger(env, { readStrategy });
           if (ledger.status === "ok" && (Number((ledger.added as Record<string, number>).h1_decision) || Number((ledger.added as Record<string, number>).strategy) || Number(ledger.changed))) console.log("signal_ledger", JSON.stringify(ledger));
         } catch (e) { console.error("signal_ledger_failed", e instanceof Error ? e.message : String(e)); }
+        // Aether A8 (owner go 2026-11-08): the strategy engine's inputs once per closed H1 bar (from 40
+        // minutes after the close), and the outcomes of earlier captures, for the threshold replay.
+        // D1 only; never feeds a room or a decision. Non-fatal.
+        try {
+          const captured = await captureStrategyInputs(env, { load: loadStrategyInputs, build: buildStrategy });
+          const scoredInputs = await scoreStrategyCaptures(env);
+          if (captured.status === "captured" || Number(scoredInputs.scored)) console.log("strategy_inputs", JSON.stringify({ captured, scored: scoredInputs }));
+        } catch (e) { console.error("strategy_inputs_failed", e instanceof Error ? e.message : String(e)); }
         // Agent compliance (RFC_AETHER_KNOWLEDGE_GUARDIAN A1): deterministic rule checks of the room
         // messages stored since the last run. Read-only over the rooms; never changes a decision.
         try {
