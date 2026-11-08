@@ -73,20 +73,20 @@ export default function GlobalDecision() {
     <Panel title="Global decision" icon={<Target className="h-3.5 w-3.5 text-cyan-300" />} right={st && <Badge tone={st.tone}>{st.label}</Badge>}>
       {loading && !g ? <Skeleton rows={5} /> : !g ? <p className="text-[12px] text-slate-500">The global decision is not available yet.</p> : (
         <>
-          <div className="flex items-end gap-4">
+          <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
             <div className="flex flex-col">
               <span className="eyebrow text-[9px]">Decision</span>
-              <div className={`mono text-[40px] font-extrabold leading-none ${stanceColor(decision)}`} style={{ textShadow: "0 0 24px currentColor" }}>{decision}</div>
+              <div className={`mono whitespace-nowrap ${String(decision).length > 5 ? "text-[24px]" : "text-[32px]"} font-extrabold leading-none ${stanceColor(decision)}`} style={{ textShadow: "0 0 18px currentColor" }}>{decision}</div>
             </div>
             {s && (
               <div className="flex flex-col gap-1 pb-1">
                 <span className="eyebrow text-[9px]">Direction</span>
-                <span className={`mono text-[15px] font-bold ${s.direction === "LONG" ? "text-emerald-300" : s.direction === "SHORT" ? "text-rose-300" : "text-slate-400"}`}>{s.direction}</span>
+                <span className={`mono whitespace-nowrap text-[13px] font-bold ${s.direction === "LONG" ? "text-emerald-300" : s.direction === "SHORT" ? "text-rose-300" : "text-slate-400"}`}>{s.direction}</span>
               </div>
             )}
             <div className="flex flex-col gap-1 pb-1">
               <span className="eyebrow text-[9px]" title="The weighted lean of every room and the news">Bias</span>
-              <span className={`mono text-[15px] font-bold ${stanceColor(g.bias)}`}>{g.bias}{g.score != null ? ` ${g.score > 0 ? "+" : ""}${Math.round(g.score * 100)}` : ""}</span>
+              <span className={`mono whitespace-nowrap text-[13px] font-bold ${stanceColor(g.bias)}`}>{g.bias}{g.score != null ? ` ${g.score > 0 ? "+" : ""}${Math.round(g.score * 100)}` : ""}</span>
             </div>
           </div>
           {s && (
@@ -94,7 +94,7 @@ export default function GlobalDecision() {
               confidence {pct(s.confidence)}{s.price != null ? ` · price ${s.price.toFixed(2)}` : ""}{s.atr_h1 != null ? ` · 1H ATR ${s.atr_h1}` : ""}
             </div>
           )}
-          <p className="glass-inner mt-3 px-3 py-2.5 text-[12px] leading-relaxed text-slate-200">{s?.headline ?? g.summary}</p>
+          <p className="glass-inner mt-3 px-3 py-2.5 text-[11.5px] leading-relaxed text-slate-200">{s?.headline ?? g.summary}</p>
 
           <div className="mt-3 space-y-1.5" role="list" aria-label="Timeframes: lean and strategy check">
             {rows.map((r) => (

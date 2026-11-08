@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- fix(nexus): smaller type in the conclusion card (News and room tabs) and the Global decision panel (owner request 2026-11-08). A long decision word (BEARISH, BULLISH or NEUTRAL in the News TLDR) was 52 px wide in a 176 px column and ran into the summary. Now the decision is 36 px, or 26 px for words longer than 5 letters; the bias is 18 px; the summary is 12 px and the reasons and headlines 11.5–12 px. The Global decision is 32 px, or 24 px for long words. Checked at 1440, 1024 and 390 px: no overlap.
 - feat(nexus): the Decision audit and Alerts pages; the Intelligence group no longer reads "soon".
   - **Decision audit (`#/audit`):** the decision cards of the 15m, 1H, 4H and D1 rooms, from `/api/decision-cards`. Each card shows the conclusion, the crowd line, the H1 decision, the open stuck states, every agent's final stance and opening claim, the rule breaks, and the outcomes once scored. The page also shows the rule breaks of the last 7 days and the push status to Aether. No levels.
   - **Alerts (`#/alerts`):** the Telegram alert state from the new read-only `GET /api/alerts`: whether the bot is configured, the events the next sweep would send (with their text), and the recorded ones.

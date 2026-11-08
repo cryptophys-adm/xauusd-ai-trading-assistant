@@ -10,6 +10,10 @@ import { useMarket } from "../lib/market";
 import { TABS, useTab, tabLabel, type Tab } from "../lib/tab";
 import { ago, candleWhen, pct, utc } from "../lib/format";
 
+// The decision word sits in a fixed column beside the summary: long words (BEARISH, BULLISH,
+// NEUTRAL in the News TLDR) get a smaller size so they never run into the paragraph.
+const heroSize = (w?: string | null) => (String(w ?? "").length > 5 ? "text-[26px]" : "text-[36px]");
+
 const side = (x: any) => (x?.buy_confirmed ? "buy confirmed" : x?.sell_confirmed ? "sell confirmed" : "no confirmation");
 
 /**
@@ -29,24 +33,24 @@ function ConclusionHero({ c, title, waiting, badges, constraint, confirmation }:
       </div>
       {!ok ? <p className="text-[12.5px] text-slate-400">{waiting}</p> : (
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-          <div className="flex shrink-0 flex-row items-start gap-6 lg:w-44 lg:flex-col lg:gap-3">
+          <div className="flex min-w-0 shrink-0 flex-row flex-wrap items-start gap-x-6 gap-y-3 lg:w-40 lg:flex-col lg:gap-3">
             <div className="flex flex-col items-start gap-1">
               <span className="eyebrow text-[9px]" title="What to do now, under the confirmation rule">Decision</span>
-              <div className={`mono text-[52px] font-extrabold leading-none ${stanceColor(c.stance)}`} style={{ textShadow: "0 0 28px currentColor" }}>{c.stance}</div>
-              <div className="mono text-[12px] text-slate-400">confidence {pct(c.confidence)}</div>
+              <div className={`mono ${heroSize(c.stance)} whitespace-nowrap font-extrabold leading-none ${stanceColor(c.stance)}`} style={{ textShadow: "0 0 20px currentColor" }}>{c.stance}</div>
+              <div className="mono text-[11px] text-slate-400">confidence {pct(c.confidence)}</div>
             </div>
             {(c.bias ?? c.majority_bias) && (
               <div className="flex flex-col items-start gap-1">
                 <span className="eyebrow text-[9px]" title="Where the weight of the room's evidence leans">Bias</span>
-                <div className={`mono text-[26px] font-bold leading-none ${stanceColor(c.bias ?? c.majority_bias)}`}>{c.bias ?? c.majority_bias}</div>
+                <div className={`mono whitespace-nowrap text-[18px] font-bold leading-none ${stanceColor(c.bias ?? c.majority_bias)}`}>{c.bias ?? c.majority_bias}</div>
                 {c.majority && <div className="text-[11px] text-slate-500">bus majority {c.majority}{c.majority_bias ? ` · leaning ${String(c.majority_bias).toLowerCase()}` : ""}</div>}
               </div>
             )}
             {!(c.bias ?? c.majority_bias) && c.majority && <div className="text-[11px] text-slate-500">bus majority {c.majority}</div>}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="glass-inner px-4 py-3 text-[13px] leading-relaxed text-slate-200">{c.summary}</p>
-            {!!c.reasons?.length && <ul className="mt-3 list-disc space-y-1 pl-5 text-[12.5px] text-slate-300">{c.reasons.map((r: string, i: number) => <li key={i}>{r}</li>)}</ul>}
+            <p className="glass-inner px-3.5 py-2.5 text-[12px] leading-relaxed text-slate-200">{c.summary}</p>
+            {!!c.reasons?.length && <ul className="mt-2.5 list-disc space-y-1 pl-5 text-[11.5px] leading-relaxed text-slate-300">{c.reasons.map((r: string, i: number) => <li key={i}>{r}</li>)}</ul>}
             {!!c.dissent?.length && <p className="mt-2 text-[11px] text-slate-500">Still disagree: {c.dissent.map((d: any) => d.name ?? d).join(", ")}</p>}
           </div>
         </div>
@@ -156,7 +160,7 @@ function NewsTab({ d }: { d: any }) {
         {(d.items ?? []).map((i: any, k: number) => (
           <div key={k} className="glass-inner px-3 py-2.5">
             <div className="mb-1 flex items-center gap-2 text-[10px] text-slate-500">{i.bias ? <Stance value={i.bias} /> : <span>not tagged</span>}<span>{ago(i.published_at)}</span></div>
-            {i.url ? <a href={i.url} target="_blank" rel="noopener noreferrer" className="text-[12.5px] leading-snug text-slate-200 hover:text-cyan-200">{i.title}</a> : <span className="text-[12.5px] text-slate-200">{i.title}</span>}
+            {i.url ? <a href={i.url} target="_blank" rel="noopener noreferrer" className="text-[12px] leading-snug text-slate-200 hover:text-cyan-200">{i.title}</a> : <span className="text-[12px] leading-snug text-slate-200">{i.title}</span>}
             {i.why && <p className="mt-1 text-[11px] text-slate-500">{i.why}</p>}
           </div>
         ))}
