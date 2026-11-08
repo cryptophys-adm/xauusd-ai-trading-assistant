@@ -1,4 +1,5 @@
-import { GitCompareArrows } from "lucide-react";
+import { GitCompareArrows, Globe2 } from "lucide-react";
+import { Stance, stanceColor } from "../components/Stance";
 import { Badge, Empty, Panel, Skeleton } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
@@ -9,6 +10,71 @@ const corrTone = (c?: number | null) => (c == null ? "text-slate-500" : c >= 0.5
 const corrWord = (c?: number | null) => (c == null ? "not enough bars" : Math.abs(c) < 0.2 ? "unrelated" : `${Math.abs(c) >= 0.6 ? "strongly " : ""}${c > 0 ? "with gold" : "against gold"}`);
 const when = (t?: string | null) => (t ? t.slice(5, 16).replace("T", " ") : "");
 
+const pc = (x?: number | null) => (x == null ? "" : `${Math.round(x * 100)}%`);
+const sessionWord = (m: any) => (m?.kind === "event" ? "30 minutes after a high-impact US event" : "after a 4-hour close");
+
+/**
+ * Macro War Room (owner decision 2026-11-08): the Calendar Agent, the News Analyst and the dollar,
+ * yields, silver and correlation analysts discuss what moves gold; the moderator concludes the macro
+ * bias for the next 4 to 24 hours. Context only: it never changes the strategy engine's decision.
+ */
+function MacroRoom() {
+  const { data, loading } = usePoll(() => get("/api/macro"), 120_000);
+  const m = (data as any)?.macro;
+  const c = m?.conclusion?.status === "ok" ? m.conclusion : null;
+  return (
+    <Panel title="Macro War Room" icon={<Globe2 className="h-3.5 w-3.5 text-cyan-300" />} right={<span className="flex gap-1">{m?.stale ? <Badge tone="amber">stale</Badge> : null}<Badge tone="cyan">context only · never decides</Badge></span>}>
+      <p className="mb-3 text-[12px] leading-relaxed text-slate-400">The Calendar Agent, the News Analyst and the dollar, yields, silver and correlation analysts discuss what moves gold. The room meets 20 minutes after every 4-hour close and 30 minutes after a high-impact US event; the moderator concludes the macro bias for the next 4 to 24 hours. Every room's News Analyst reads it, and the Global decision shows it as the MACRO row.</p>
+      {loading && !data ? <Skeleton rows={4} /> : !m ? <Empty>The Macro War Room has not met yet: it meets 20 minutes after the next 4-hour close.</Empty> : (
+        <div className="space-y-3">
+          <div className="glass-inner border-cyan-400/20 p-3">
+            <div className="mb-2 text-[11px] text-slate-500">Session {sessionWord(m)} · {String(m.at ?? "").slice(5, 16).replace("T", " ")} UTC</div>
+            {!c ? <p className="text-[12px] text-slate-400">The room has not concluded yet.</p> : (
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+                <div className="flex shrink-0 flex-col gap-1 sm:w-36">
+                  <span className="eyebrow text-[9px]">Macro bias</span>
+                  <div className={`mono whitespace-nowrap text-[24px] font-extrabold leading-none ${stanceColor(c.bias)}`} style={{ textShadow: "0 0 18px currentColor" }}>{c.bias}</div>
+                  <div className="mono text-[11px] text-slate-400">confidence {pc(c.confidence)}</div>
+                  <div className="text-[10px] text-slate-500">{c.horizon}</div>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="glass-inner px-3 py-2.5 text-[12px] leading-relaxed text-slate-200">{c.summary}</p>
+                  {!!c.reasons?.length && <ul className="mt-2 list-disc space-y-1 pl-5 text-[11.5px] text-slate-300">{c.reasons.map((r: string, i: number) => <li key={i}>{r}</li>)}</ul>}
+                  {!!c.drivers?.length && <p className="mt-2 text-[11px] text-slate-500">Driven by: {c.drivers.join(", ")}</p>}
+                </div>
+              </div>
+            )}
+          </div>
+          <div>
+            <div className="eyebrow mb-1.5 text-[10px]">Communication bus</div>
+            <div className="grid gap-2 md:grid-cols-2">
+              {m.openings.map((o: any) => (
+                <div key={o.agent} className="glass-inner px-3 py-2">
+                  <div className="mb-1 flex items-center gap-2 text-[11px]"><b className="text-slate-100">{o.name}</b>{o.status === "ok" ? <><Stance value={o.bias} /><span className="mono text-slate-500">{pc(o.confidence)}</span></> : <span className="text-slate-500">{o.status}</span>}</div>
+                  {o.claim && <p className="text-[11.5px] leading-relaxed text-slate-300">{o.claim}</p>}
+                </div>
+              ))}
+            </div>
+          </div>
+          {m.debate?.some((d: any) => d.status === "ok") ? (
+            <div>
+              <div className="eyebrow mb-1.5 text-[10px]">Consensus Discussion</div>
+              <div className="space-y-2">
+                {m.debate.filter((d: any) => d.status === "ok").map((d: any) => (
+                  <div key={d.agent} className="glass-inner px-3 py-2">
+                    <div className="mb-1 flex items-center gap-2 text-[11px]"><b className="text-slate-100">{d.name}</b><Stance value={d.bias} /><span className="mono text-slate-500">{pc(d.confidence)}</span></div>
+                    <p className="text-[11.5px] leading-relaxed text-slate-300">{d.argument}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 /** Backlog 11.3: DXY, the US 10-year yield and silver beside gold, with the rolling correlation of 4h returns. */
 export default function Correlations() {
   const { data, loading, error } = usePoll(() => get("/api/correlations"), 300_000);
@@ -16,6 +82,7 @@ export default function Correlations() {
   const rows: any[] = v?.assets ?? [];
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
+      <MacroRoom />
       <Panel title="Correlations" icon={<GitCompareArrows className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone="cyan">context only · never decides</Badge>}>
         <p className="text-[12px] leading-relaxed text-slate-400">Gold beside the US Dollar Index, the US 10-year yield and silver on closed 4h bars. The correlation is of 4h returns with gold's over {v?.windows?.short ?? 30} bars (about a week) and {v?.windows?.long ?? 120} bars (about a month). It describes the recent past; it is not a signal.</p>
       </Panel>

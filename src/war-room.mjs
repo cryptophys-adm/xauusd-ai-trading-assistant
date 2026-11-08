@@ -20,6 +20,7 @@ import { HUD_IDS, HUD_NAMES, calibrationCounts, calibrationNote, calibratedLines
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
+import { macroDeskEvidence } from "./macro-room.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation } from "./reputation.mjs";
 import { agentReputation } from "./outcome-scoring.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
@@ -404,7 +405,9 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   const { evidence, synthesis, confirmations } = live;
   // News Daily (owner decision 2026-11-06): the News Analyst reads the last 24 hours when present.
   const daily = await newsDeskEvidence(db);
-  if (daily) evidence.news = daily;
+  // Macro War Room (owner decision 2026-11-08): the News Analyst also reads the latest macro conclusion.
+  const macro = await macroDeskEvidence(db, { now: Date.parse(barTime) });
+  if (daily) evidence.news = macro ? { ...daily, macro } : daily;
   const decision = parseJson(synthesis?.ai_analysis, {})?.decision || {};
   const h1 = { decision: evidence.h1.decision, confidence: evidence.h1.confidence, candle_key: evidence.h1.candle_key, reasoning: clip(decision.reasoning, 400) };
 
