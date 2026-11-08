@@ -6,6 +6,10 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(nexus): the Decision audit and Alerts pages; the Intelligence group no longer reads "soon".
+  - **Decision audit (`#/audit`):** the decision cards of the 15m, 1H, 4H and D1 rooms, from `/api/decision-cards`. Each card shows the conclusion, the crowd line, the H1 decision, the open stuck states, every agent's final stance and opening claim, the rule breaks, and the outcomes once scored. The page also shows the rule breaks of the last 7 days and the push status to Aether. No levels.
+  - **Alerts (`#/alerts`):** the Telegram alert state from the new read-only `GET /api/alerts`: whether the bot is configured, the events the next sweep would send (with their text), and the recorded ones.
+  - Tests: `readLedgerAlerts` (read-only, no secret value, recorded and pending events).
 - feat(ledger): Telegram alerts from the Signal Ledger (backlog 11.2, owner decision 2026-11-08), in `src/ledger-alerts.mjs`, D1 `ledger_alerts` (migration 0017).
   - **Events.** A strategy setup triggered, the entry reached, TP1 / the stop / the time limit reached (with R), the TP2 part closed, and a setup cancelled. Each is sent once, over the existing Telegram bot.
   - **Safe start.** The first run records the existing events without sending them, so the deploy does not flood the chat. At most 5 messages a run; a failed send is retried by the next run.

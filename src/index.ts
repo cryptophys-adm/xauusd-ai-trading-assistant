@@ -186,7 +186,7 @@ import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
 import { tuningView } from "./tuning.mjs";
 import { readCorrelations } from "./correlations.mjs";
 import { refreshCalendar, readCalendar } from "./econ-calendar.mjs";
-import { sendLedgerAlerts } from "./ledger-alerts.mjs";
+import { sendLedgerAlerts, readLedgerAlerts } from "./ledger-alerts.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -2071,6 +2071,17 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "ok", ledger: await readLedger(env, { days }) });
     } catch (error) {
       console.error("ledger_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/alerts") {
+    // Backlog 11.2: the Telegram alerts of the Signal Ledger (recorded and pending events). Read-only;
+    // says whether the bot is configured, never a secret value.
+    try {
+      const days = Math.min(30, Math.max(1, Number(url.searchParams.get("days") || "7") || 7));
+      return dashboardJson({ status: "ok", alerts: await readLedgerAlerts(env, { days }) });
+    } catch (error) {
+      console.error("alerts_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
     }
   }
