@@ -50,6 +50,17 @@ function TuningGrid() {
           </tbody>
         </table>
       </div>
+      {t.replays?.crowd && (() => {
+        const c = t.replays.crowd;
+        return (
+          <div className="mt-3 text-[11px] text-slate-400">
+            <p className="mb-1 text-[12px] text-slate-300">{c.name}: {c.rooms} scored 1H rooms replayed with each parameter set (reputation point in time, bias from each agent's final stance). Weighted crowd against the moderator: crowd right {c.crowd_vs_moderator.crowd_better}, moderator right {c.crowd_vs_moderator.moderator_better} (p {c.crowd_vs_moderator.p_value ?? "n/a"}).</p>
+            {c.candidates.map((k: any) => (
+              <p key={k.id}><span className="mono">{k.id}</span> {k.change}: <span className={pointTone({ status: "running", verdict: k.verdict })}>{k.verdict}</span> · discovery {k.discovery.bars} rooms, candidate right {k.discovery.candidate_better}, active right {k.discovery.control_better} (Holm p {k.discovery.p_holm ?? "n/a"}) · holdout {k.holdout.bars} of {k.holdout.required_bars}</p>
+            ))}
+          </div>
+        );
+      })()}
     </Panel>
   );
 }

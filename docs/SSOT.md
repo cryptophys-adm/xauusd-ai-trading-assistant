@@ -612,6 +612,15 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **untested.**
 
   It is read-only and starts nothing. A point starts only when a person approves it in Aether (the calibrator proposes the next untested point) or through a reviewed PR here. The Nexus `/shadow` page shows it as the "Tuning grid" panel.
+- **Crowd replay (Aether A8 part 2, `src/tuning-replay.mjs`).** `/api/tuning` also carries `replays.crowd`, a deterministic replay of the reputation parameters behind the 1H room's weighted crowd line. It is cached for 5 minutes, stores nothing and reaches no room.
+  - **Control:** the active parameters (prior 10, weights 0.25–2, 30 days, neutral band 0.1).
+  - **Candidates (reviewed grid, at most 3):** `crowd@prior20`, `crowd@weight0.5-1.5`, `crowd@band0.2`.
+  - **How a room is replayed:**
+    - each agent's reputation is computed point in time, counting only scores whose 4-bar horizon had closed before the room met;
+    - its bias is its final scored stance, the same rule for every arm;
+    - the crowd stance is scored with the outcome of that stance on that candle.
+  - **Statistics:** the same as the shadow versions (sign test, Holm, discovery minimum, holdout). It also reports the weighted crowd against the moderator on the same rooms.
+  - **Promotion:** a better set is a proposal for an owner PR to `src/reputation.mjs`.
 - **P5 review (owner decision 2026-11-07):**
   - `prophet_r37@latch12` and `prophet_r38@latch8` are stopped; they are listed under `retired` in the view.
   - `prophet_r37@latch8` runs until 30 decisive pairs or 2026-12-07.
