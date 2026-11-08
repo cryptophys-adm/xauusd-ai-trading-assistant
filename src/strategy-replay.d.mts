@@ -1,0 +1,11 @@
+export const STRATEGY_REPLAY_VERSION: string;
+export const STRATEGY_CONTROL: Readonly<Record<string, any>>;
+export const STRATEGY_CANDIDATES: ReadonlyArray<Readonly<Record<string, any>>>;
+export const STRATEGY_ARMS: ReadonlyArray<Readonly<Record<string, any>>>;
+export const STRATEGY_REPLAY_SCHEMA_SQL: string[];
+export function resetStrategyReplaySchemaCacheForTests(): void;
+export function resetStrategyReplayCacheForTests(): void;
+export function replayHour(inputs: unknown, arms?: unknown[]): Record<string, { decision: string; state: string }>;
+export function replayStrategyCaptures(env: unknown, options?: { now?: number; limit?: number; arms?: unknown[] }): Promise<Record<string, unknown>>;
+export function compareStrategy(hours: unknown[], options?: Record<string, unknown>): Record<string, any>;
+export function readStrategyReplay(env: unknown, options?: { now?: number; useCache?: boolean }): Promise<Record<string, any>>;

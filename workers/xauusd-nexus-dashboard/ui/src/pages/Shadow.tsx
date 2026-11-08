@@ -50,6 +50,17 @@ function TuningGrid() {
           </tbody>
         </table>
       </div>
+      {t.replays?.strategy && (() => {
+        const c = t.replays.strategy;
+        return (
+          <div className="mt-3 text-[11px] text-slate-400">
+            <p className="mb-1 text-[12px] text-slate-300">{c.name}: {c.hours} stored hours scored ({t.strategy_inputs?.captured ?? "?"} captured, kept {t.strategy_inputs?.retention_days ?? 60} days). The control reproduces the live decision on {c.control.matches_live} of {c.control.scored_hours}{c.control.drift?.length ? <span className="text-amber-200"> · drift on {c.control.drift.join(", ")}</span> : null}.</p>
+            {c.candidates.map((k: any) => (
+              <p key={k.id}><span className="mono">{k.id}</span> {k.change}: <span className={pointTone({ status: "running", verdict: k.verdict })}>{k.verdict}</span> · {k.differing_decisions} hours decided differently · discovery {k.discovery.bars} hours, candidate right {k.discovery.candidate_better}, active right {k.discovery.control_better} (Holm p {k.discovery.p_holm ?? "n/a"}) · holdout {k.holdout.bars} of {k.holdout.required_bars}</p>
+            ))}
+          </div>
+        );
+      })()}
       {t.replays?.crowd && (() => {
         const c = t.replays.crowd;
         return (
