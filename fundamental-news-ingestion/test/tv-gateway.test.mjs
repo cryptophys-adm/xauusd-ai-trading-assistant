@@ -160,3 +160,23 @@ test("generic HTTP 429 from MCP stops the OHLCV batch and opens the shared rate-
   assert.equal(again.body.error, "mcp_quota_cooldown_active");
   assert.equal(calls.length, 1);
 });
+
+test("the pull adapter's context symbols are allowed, and one unknown symbol never sinks gold in the same batch (2026-11-08)", async () => {
+  for (const symbol of ["TVC:US10Y", "OANDA:XAGUSD", "TVC:USOIL", "TVC:DXY", "CRYPTOCAP:USDT", "OANDA:XAUUSD"]) {
+    assert.ok(validateOhlcvRequest({ symbol, interval: "4h", count: 2 }).value, `${symbol} is allowed by default`);
+  }
+  assert.ok(validateOhlcvRequest({ symbol: "TVC:US10Y", interval: "4h", count: 2 }, { TV_GATEWAY_SYMBOLS: "OANDA:XAUUSD" }).value, "a configured list adds to the defaults, never drops them");
+  assert.ok(validateOhlcvRequest({ symbol: "NASDAQ:NVDA", interval: "4h", count: 2 }, { TV_GATEWAY_SYMBOLS: "OANDA:XAUUSD NASDAQ:NVDA" }).value, "whitespace separates too");
+  const env = createEnv();
+  await authorize(env);
+  const calls = installFetch(() => toolText({ success: true, symbol: "OANDA:XAUUSD", interval: "1m", bars: { t: [1793666100], o: [1], h: [2], l: [0.5], c: [1.5], v: [10] } }));
+  const { status, body } = await runTvOhlcv(env, [
+    { symbol: "OANDA:XAUUSD", interval: "1m", count: 1 },
+    { symbol: "BINANCE:BTCUSDT", interval: "4h", count: 1 }
+  ]);
+  assert.equal(status, 200);
+  assert.equal(calls.length, 1, "only the valid request reaches MCP");
+  assert.equal(body.results.length, 2, "one result per request, in order");
+  assert.equal(body.results[0].ok, true);
+  assert.deepEqual([body.results[1].ok, body.results[1].error], [false, "symbol_not_allowed"]);
+});
