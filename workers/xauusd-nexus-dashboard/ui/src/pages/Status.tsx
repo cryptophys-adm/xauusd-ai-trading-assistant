@@ -28,7 +28,7 @@ function Overview() {
           ))}
         </div>
       )}
-      {marketClosed() ? <p className="mt-2 text-[11px] text-slate-500">The market is closed (Friday 22:30 to Sunday 22:00 UTC): grey lanes are expected to be idle.</p> : null}
+      {marketClosed() ? <p className="mt-2 text-[11px] text-slate-500">The market is closed (Friday 17:30 to Sunday 18:00 New York): grey lanes are expected to be idle.</p> : null}
     </Panel>
   );
 }

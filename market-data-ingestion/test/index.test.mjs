@@ -504,19 +504,25 @@ test("HUD publisher also sends the H4 and D1 snapshots of a fresh close, once ea
   }
 });
 
-test("no pull while the market is closed (Friday 22:30 to Sunday 22:00 UTC), except crypto and an empty series", () => {
+test("no pull while the market is closed (Friday 17:30 to Sunday 18:00 New York), except crypto and an empty series", () => {
   const sec = (iso) => Date.parse(iso) / 1000;
   const closed = internals.marketClosed;
-  assert.equal(closed("OANDA:XAUUSD", sec("2026-11-06T22:00:00Z")), false, "Friday before 22:30");
+  // Winter (New York UTC-5): Friday 22:30 to Sunday 23:00 UTC.
+  assert.equal(closed("OANDA:XAUUSD", sec("2026-11-06T22:00:00Z")), false, "Friday before 17:30 New York");
   assert.equal(closed("OANDA:XAUUSD", sec("2026-11-06T22:30:00Z")), true);
   assert.equal(closed("TVC:US10Y", sec("2026-11-07T12:00:00Z")), true, "Saturday");
-  assert.equal(closed("TVC:DXY", sec("2026-11-08T21:59:00Z")), true, "Sunday before 22:00");
-  assert.equal(closed("TVC:DXY", sec("2026-11-08T22:00:00Z")), false, "Sunday evening reopen");
+  assert.equal(closed("TVC:DXY", sec("2026-11-08T22:00:00Z")), true, "Sunday 17:00 New York: gold has not opened yet (2026-11-08 spent an hour of pulls here)");
+  assert.equal(closed("TVC:DXY", sec("2026-11-08T22:59:00Z")), true);
+  assert.equal(closed("TVC:DXY", sec("2026-11-08T23:00:00Z")), false, "Sunday 18:00 New York reopen");
+  // Summer (New York UTC-4): Friday 21:30 to Sunday 22:00 UTC.
+  assert.equal(closed("OANDA:XAUUSD", sec("2026-07-10T21:30:00Z")), true, "summer Friday 17:30 New York");
+  assert.equal(closed("OANDA:XAUUSD", sec("2026-07-12T21:59:00Z")), true);
+  assert.equal(closed("OANDA:XAUUSD", sec("2026-07-12T22:00:00Z")), false, "summer Sunday reopen");
   assert.equal(closed("CRYPTOCAP:USDT", sec("2026-11-07T12:00:00Z")), false, "crypto trades every day");
   const spec = { symbol: "TVC:US10Y", interval: "4h", seconds: 14400, retain: 500 };
   const last = { time: sec("2026-11-06T18:00:00Z") };
   assert.equal(internals.planRequest(spec, { candles: [last] }, sec("2026-11-08T12:00:00Z")), null, "a weekend spends no call");
-  assert.ok(internals.planRequest(spec, { candles: [last] }, sec("2026-11-08T22:05:00Z")), "the gap is pulled at the reopen");
+  assert.ok(internals.planRequest(spec, { candles: [last] }, sec("2026-11-08T23:05:00Z")), "the gap is pulled at the reopen");
   assert.equal(internals.planRequest(spec, null, sec("2026-11-08T12:00:00Z")).bootstrap, true, "an empty series still bootstraps once");
   assert.ok(internals.planRequest({ ...spec, symbol: "CRYPTOCAP:USDT" }, { candles: [last] }, sec("2026-11-08T12:00:00Z")), "crypto is pulled on the weekend");
 });

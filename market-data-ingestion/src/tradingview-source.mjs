@@ -101,18 +101,21 @@ export function mergeCandles(existing, incoming, retain) {
  * closed since the cached one. Empty caches bootstrap to the retention depth.
  */
 /**
- * Gold, FX, oil, the dollar index and yields do not trade from Friday evening to Sunday evening
- * (UTC). Owner decision 2026-11-08: no pull for those series in that window, so a weekend no longer
+ * Gold, FX, oil, the dollar index and yields do not trade from Friday evening to Sunday evening.
+ * Owner decision 2026-11-08: no pull for those series in that window, so a weekend no longer
  * spends the TradingView quota on requests that cannot return a new bar (it exhausted the daily
- * budget of 800 calls, and the context series last in line never got a turn). The window is wide
- * enough for both daylight-saving offsets: Friday 22:30 UTC to Sunday 22:00 UTC. Crypto trades
- * every day and is never skipped. An empty series still bootstraps once.
+ * budget of 800 calls, and the context series last in line never got a turn). The window follows
+ * New York time, so it is right in both daylight-saving seasons: closed from Friday 17:30 to Sunday
+ * 18:00 New York (Friday 22:30 to Sunday 23:00 UTC in winter, Friday 21:30 to Sunday 22:00 UTC in
+ * summer). On 2026-11-08 a fixed Sunday 22:00 UTC reopen spent an hour of pulls before gold opened.
+ * Crypto trades every day and is never skipped. An empty series still bootstraps once.
  */
+const NY_WEEK = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 export function marketClosed(symbol, nowSec) {
   if (/^CRYPTOCAP:|^BINANCE:|^COINBASE:/.test(String(symbol))) return false;
-  const d = new Date(nowSec * 1000);
-  const day = d.getUTCDay(), minutes = d.getUTCHours() * 60 + d.getUTCMinutes();
-  return (day === 5 && minutes >= 22 * 60 + 30) || day === 6 || (day === 0 && minutes < 22 * 60);
+  const p = Object.fromEntries(NY_WEEK.formatToParts(new Date(nowSec * 1000)).map((x) => [x.type, x.value]));
+  const minutes = Number(p.hour) * 60 + Number(p.minute);
+  return (p.weekday === "Fri" && minutes >= 17 * 60 + 30) || p.weekday === "Sat" || (p.weekday === "Sun" && minutes < 18 * 60);
 }
 
 export function planRequest(spec, cached, nowSec) {

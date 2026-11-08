@@ -5,10 +5,12 @@ import { WORKERS, engineTitle } from "./names";
 export type Tone = "green" | "amber" | "red" | "slate";
 export type HealthItem = { key: string; label: string; tone: Tone; detail: string; worker?: string };
 
-/** Gold, the dollar and yields do not trade from Friday 22:30 to Sunday 22:00 UTC (as the pull adapter). */
+/** Gold, the dollar and yields do not trade from Friday 17:30 to Sunday 18:00 New York (as the pull adapter). */
+const NY_WEEK = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 export function marketClosed(now = Date.now()): boolean {
-  const d = new Date(now), day = d.getUTCDay(), m = d.getUTCHours() * 60 + d.getUTCMinutes();
-  return (day === 5 && m >= 22 * 60 + 30) || day === 6 || (day === 0 && m < 22 * 60);
+  const p = Object.fromEntries(NY_WEEK.formatToParts(new Date(now)).map((x) => [x.type, x.value]));
+  const m = Number(p.hour) * 60 + Number(p.minute);
+  return (p.weekday === "Fri" && m >= 17 * 60 + 30) || p.weekday === "Sat" || (p.weekday === "Sun" && m < 18 * 60);
 }
 const age = (iso?: string | null) => { const t = Date.parse(String(iso ?? "")); return Number.isFinite(t) ? Date.now() - t : null; };
 const mins = (ms: number | null) => (ms == null ? "never" : ms < 120_000 ? `${Math.round(ms / 1000)}s ago` : ms < 7_200_000 ? `${Math.round(ms / 60_000)} min ago` : `${Math.round(ms / 3_600_000)} h ago`);
