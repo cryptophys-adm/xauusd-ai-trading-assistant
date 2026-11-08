@@ -7,8 +7,8 @@
 //   3. Conclusion: the moderator writes the macro bias for gold over the next 4 to 24 hours.
 // Agents: the Calendar Agent (the fixed-rule projections of src/calendar-agent.mjs; it may explain
 // them but never reverse them), the News Analyst, the Dollar Analyst (DXY), the Rates Analyst (US
-// 10-year yield), the Metals Analyst (silver) and the Correlation Analyst (whether the usual links
-// hold). Context only (owner decision): the News Analyst of every room reads the conclusion and
+// 10-year yield), the Metals Analyst (silver), the Oil Analyst (WTI crude and the geopolitical
+// headlines, owner request 2026-11-08) and the Correlation Analyst (whether the usual links hold). Context only (owner decision): the News Analyst of every room reads the conclusion and
 // the Global decision shows it as a MACRO row; it never changes the strategy engine's decision.
 // Advisory only: no price level, no order, no position size. Behind MACRO_ROOM_ENABLED, within
 // MACRO_ROOM_MAX_CALLS_PER_HOUR.
@@ -32,7 +32,9 @@ export const MACRO_AGENTS = Object.freeze({
   dollar: { name: "Dollar Analyst", role: "the US Dollar Index: its recent move and how tightly it has moved against gold" },
   rates: { name: "Rates Analyst", role: "the US 10-year yield: its recent move and what it means for the cost of holding gold" },
   silver: { name: "Metals Analyst", role: "silver: whether it confirms or contradicts gold's move" },
-  correlation: { name: "Correlation Analyst", role: "whether the usual links between gold, the dollar, yields and silver hold now or have broken" }
+  // Owner request 2026-11-08: oil is the geopolitical and inflation channel.
+  oil: { name: "Oil Analyst", role: "WTI crude oil and the geopolitical headlines: oil as the channel through which supply shocks and conflict feed inflation and safe-haven demand" },
+  correlation: { name: "Correlation Analyst", role: "whether the usual links between gold, the dollar, yields, silver and oil hold now or have broken" }
 });
 const ROSTER = Object.keys(MACRO_AGENTS);
 const H4 = 4 * 3_600_000;
@@ -96,6 +98,13 @@ const assetData = (row, rule) => row ? {
   rule
 } : { available: false };
 
+/** Words of the news headlines that carry oil supply or geopolitical risk. */
+export const GEOPOLITICAL = /\b(oil|crude|brent|wti|opec|energy|gas|pipeline|refiner\w*|sanction\w*|embargo|tariff\w*|war|conflict|attack\w*|strike\w*|missile\w*|drone\w*|ceasefire|geopolit\w*|iran\w*|israel\w*|gaza|hezbollah|houthi\w*|red sea|hormuz|russia\w*|ukrain\w*|middle east|saudi|venezuela\w*|china|taiwan)\b/i;
+/** Pure: up to six News Daily headlines on oil or geopolitics, with their bias for gold. */
+export function geopoliticalHeadlines(daily) {
+  return (daily?.items || []).filter((i) => typeof i?.title === "string" && GEOPOLITICAL.test(i.title)).slice(0, 6).map((i) => ({ title: i.title, bias: i.bias ?? null }));
+}
+
 /** The evidence of one session: correlations, the calendar outlook, the news and the post-release headlines. */
 export async function macroEvidence(env, { now = Date.now(), at = null } = {}) {
   let corr = null;
@@ -117,7 +126,11 @@ export async function macroEvidence(env, { now = Date.now(), at = null } = {}) {
       dollar: assetData(asset("dxy"), "A stronger dollar usually weighs on gold; a weaker dollar supports it."),
       rates: assetData(asset("us10y"), "Higher yields raise the cost of holding gold, which pays no interest; falling yields support it."),
       silver: assetData(asset("silver"), "Silver moving with gold confirms a metals move; silver diverging weakens it."),
-      correlation: corr ? { gold_change: { last_4_hours: corr.gold?.change?.["4h"] ?? null, last_day: corr.gold?.change?.["1d"] ?? null, last_5_days: corr.gold?.change?.["5d"] ?? null }, links: (corr.assets || []).map((a) => ({ market: a.name, week: a.correlation?.short ?? null, month: a.correlation?.long ?? null })), note: "Gold usually moves against the dollar and yields and with silver; a week that differs from the month means the link is changing." } : { available: false }
+      oil: (() => {
+        const d = assetData(asset("oil"), "Oil is the geopolitical and inflation channel. A supply shock or conflict that lifts oil raises inflation expectations and safe-haven demand, which usually supports gold; if the same rise pushes yields and Fed expectations higher, that weighs on gold. Falling oil eases inflation pressure.");
+        return d.available === false ? d : { ...d, geopolitical_headlines: geopoliticalHeadlines(daily) };
+      })(),
+      correlation: corr ? { gold_change: { last_4_hours: corr.gold?.change?.["4h"] ?? null, last_day: corr.gold?.change?.["1d"] ?? null, last_5_days: corr.gold?.change?.["5d"] ?? null }, links: (corr.assets || []).map((a) => ({ market: a.name, week: a.correlation?.short ?? null, month: a.correlation?.long ?? null })), note: "Gold usually moves against the dollar and yields and with silver; oil links to gold through inflation and geopolitical risk; a week that differs from the month means the link is changing." } : { available: false }
     }
   };
 }

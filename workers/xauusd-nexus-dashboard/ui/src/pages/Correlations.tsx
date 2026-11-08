@@ -18,13 +18,14 @@ const ROSTER: [string, string][] = [
   ["Dollar Analyst", "the US Dollar Index: its recent move and how tightly it has moved against gold"],
   ["Rates Analyst", "the US 10-year yield: its recent move and the cost of holding gold"],
   ["Metals Analyst", "silver: whether it confirms or contradicts gold's move"],
-  ["Correlation Analyst", "whether the usual links between gold, the dollar, yields and silver hold now"]
+  ["Oil Analyst", "WTI crude oil and the geopolitical headlines: supply shocks and conflict feeding inflation and safe-haven demand"],
+  ["Correlation Analyst", "whether the usual links between gold, the dollar, yields, silver and oil hold now"]
 ];
 const sessionWord = (m: any) => (m?.kind === "event" ? "30 minutes after a high-impact US event" : "after a 4-hour close");
 
 /**
  * Macro War Room (owner decision 2026-11-08): the Calendar Agent, the News Analyst and the dollar,
- * yields, silver and correlation analysts discuss what moves gold; the moderator concludes the macro
+ * yields, silver, oil and correlation analysts discuss what moves gold; the moderator concludes the macro
  * bias for the next 4 to 24 hours. Context only: it never changes the strategy engine's decision.
  */
 function MacroRoom() {
@@ -33,7 +34,7 @@ function MacroRoom() {
   const c = m?.conclusion?.status === "ok" ? m.conclusion : null;
   return (
     <Panel title="Macro War Room" icon={<Globe2 className="h-3.5 w-3.5 text-cyan-300" />} right={<span className="flex gap-1">{m?.stale ? <Badge tone="amber">stale</Badge> : null}<Badge tone="cyan">context only · never decides</Badge></span>}>
-      <p className="mb-3 text-[12px] leading-relaxed text-slate-400">The Calendar Agent, the News Analyst and the dollar, yields, silver and correlation analysts discuss what moves gold. The room meets 20 minutes after every 4-hour close and 30 minutes after a high-impact US event; the moderator concludes the macro bias for the next 4 to 24 hours. Every room's News Analyst reads it, and the Global decision shows it as the MACRO row.</p>
+      <p className="mb-3 text-[12px] leading-relaxed text-slate-400">The Calendar Agent, the News Analyst and the dollar, yields, silver, oil and correlation analysts discuss what moves gold. Oil is the geopolitical and inflation channel. The room meets 20 minutes after every 4-hour close and 30 minutes after a high-impact US event; the moderator concludes the macro bias for the next 4 to 24 hours. Every room's News Analyst reads it, and the Global decision shows it as the MACRO row.</p>
       {loading && !data ? <Skeleton rows={4} /> : !m ? (
         <div className="space-y-3">
           <Empty>The Macro War Room has not met yet. Its first session is 20 minutes after the first 4-hour close once the market reopens (Sunday evening UTC), or 30 minutes after a high-impact US event.</Empty>
@@ -103,7 +104,7 @@ function MacroRoom() {
   );
 }
 
-/** Backlog 11.3: DXY, the US 10-year yield and silver beside gold, with the rolling correlation of 4h returns. */
+/** Backlog 11.3: DXY, the US 10-year yield, silver and WTI crude oil beside gold, with the rolling correlation of 4h returns. */
 export default function Correlations() {
   const { data, loading, error } = usePoll(() => get("/api/correlations"), 300_000);
   const v = data as any;
@@ -112,7 +113,7 @@ export default function Correlations() {
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <MacroRoom />
       <Panel title="Correlations" icon={<GitCompareArrows className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone="cyan">context only · never decides</Badge>}>
-        <p className="text-[12px] leading-relaxed text-slate-400">Gold beside the US Dollar Index, the US 10-year yield and silver on closed 4h bars. The correlation is of 4h returns with gold's over {v?.windows?.short ?? 30} bars (about a week) and {v?.windows?.long ?? 120} bars (about a month). It describes the recent past; it is not a signal.</p>
+        <p className="text-[12px] leading-relaxed text-slate-400">Gold beside the US Dollar Index, the US 10-year yield, silver and WTI crude oil on closed 4h bars (oil sampled from its 1h bars at gold's 4h closes). The correlation is of 4h returns with gold's over {v?.windows?.short ?? 30} bars (about a week) and {v?.windows?.long ?? 120} bars (about a month). It describes the recent past; it is not a signal.</p>
       </Panel>
       {loading && !data ? <Panel><Skeleton rows={4} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-rose-300">Correlations unavailable: {error}</p></Panel> : !v ? <Panel><Empty>No data yet.</Empty></Panel> : (
         <Panel title="Gold and its drivers (4h)">
@@ -130,7 +131,7 @@ export default function Correlations() {
                   <tr key={a.id}>
                     <td>{a.name} <span className="mono text-slate-500">{a.symbol}</span></td>
                     {!a.available ? <td colSpan={6} className="whitespace-normal text-slate-500">No bars cached yet: the pull adapter fetches this series once the market is open.</td> : <>
-                      <td className="mono">{a.unit === "bp" ? `${a.last?.toFixed?.(3)}%` : a.last?.toFixed?.(a.id === "dxy" ? 2 : 3)} <span className="text-slate-500">{when(a.last_close_time)}</span></td>
+                      <td className="mono">{a.unit === "bp" ? `${a.last?.toFixed?.(3)}%` : a.last?.toFixed?.(a.id === "dxy" || a.id === "oil" ? 2 : 3)} <span className="text-slate-500">{when(a.last_close_time)}</span></td>
                       {["4h", "1d", "5d"].map((k) => <td key={k} className={"mono " + tone(a.change?.[k])}>{chg(a.change?.[k], a.unit)}</td>)}
                       <td className={"mono " + corrTone(a.correlation.short)} title={`${a.correlation.short_n} bars`}>{a.correlation.short ?? "n/a"} <span className="text-[11px] text-slate-500">{corrWord(a.correlation.short)}</span></td>
                       <td className={"mono " + corrTone(a.correlation.long)} title={`${a.correlation.long_n} bars`}>{a.correlation.long ?? "n/a"} <span className="text-[11px] text-slate-500">{corrWord(a.correlation.long)}</span></td>

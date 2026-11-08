@@ -6,6 +6,12 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(macro): oil in the Macro War Room (owner request 2026-11-08, "geopolitics causes inflation").
+  - **Correlations:** a WTI crude oil row (`TVC:USOIL`). It reuses the 1h series derived from the USOIL 5m pull that GMI already makes, sampled at gold's 4h closes, so it needs no new TradingView call.
+  - **Oil Analyst:** a new agent in the room. It reads oil's changes, its correlation with gold, and the News Daily headlines on oil or geopolitics (`geopoliticalHeadlines`). Its rule: a supply shock or conflict that lifts oil raises inflation expectations and safe-haven demand, which usually supports gold, unless the same rise pushes yields and Fed expectations higher.
+  - **Correlation Analyst:** now covers oil too.
+  - **Nexus:** the Macro War Room page lists the Oil Analyst and the oil row.
+  - **Cost:** about 12 model calls a session, within the 30-per-hour cap. Tests added.
 - feat(nexus): the Key Level Agent panel follows the key-level plan (owner question 2026-11-08). It shows how many levels each reader added (Band, Liquidity, Projection, Session), says when they wait for the chart plane, and shows the strategy's setup type at the 15m location with its evidence. A zone's hover names each level's reader. The candidate rule text now reads three or more sources and at least medium strength (it said two).
 - fix(market-data): a one-day TradingView budget override (owner decision 2026-11-08). The weekend pulls made before #165 spent the day's 800 calls, and the market reopens at 22:00 UTC, two hours before the budget resets. `TV_DAILY_CALL_BUDGET_OVERRIDE` (`"YYYY-MM-DD:<calls>"`) raises the budget for that UTC date only; it is set to `2026-11-08:1000` and lapses by itself at 00:00 UTC. The 800 base is unchanged. Diagnostics report the effective budget. Test added.
 - feat(nexus): the GMI chart layers (owner decision 2026-11-08, PR 3 of the key-level plan). A row of toggles above the Nexus chart, kept per viewer:

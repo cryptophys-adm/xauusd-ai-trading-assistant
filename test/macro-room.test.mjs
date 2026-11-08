@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { resetThreadSchemaCacheForTests } from "../src/agent-threads.mjs";
 import {
   dueSessions, calendarBiasRule, validateMacroOpening, validateMacroRebuttal, validateMacroConclusion, macroMajorityBias,
-  runMacroRoom, runPendingMacroRooms, readMacroRoom, macroDeskEvidence, MACRO_THREAD
+  runMacroRoom, runPendingMacroRooms, readMacroRoom, macroDeskEvidence, MACRO_THREAD, MACRO_AGENTS, geopoliticalHeadlines
 } from "../src/macro-room.mjs";
 import { buildGlobalConclusion } from "../src/global-conclusion.mjs";
 import { CALENDAR_KEY } from "../src/econ-calendar.mjs";
@@ -125,4 +125,31 @@ test("a session: bus, Consensus Discussion, conclusion; read back, fed to the de
   assert.deepEqual([row.action, row.lean, row.weighted], ["BULLISH", 0.62, false]);
   assert.equal(g.score, null, "the macro row never enters the weighted score");
   assert.equal((await runPendingMacroRooms({ ...env, MACRO_ROOM_ENABLED: "false" }, { now: NOW })).status, "disabled");
+});
+
+test("the Oil Analyst speaks from WTI and the geopolitical headlines (owner request 2026-11-08)", async () => {
+  assert.equal(MACRO_AGENTS.oil.name, "Oil Analyst");
+  assert.match(MACRO_AGENTS.correlation.role, /oil/);
+  const daily = { items: [
+    { title: "Oil jumps as Red Sea attacks disrupt tanker traffic", bias: "BULLISH" },
+    { title: "Fed's Waller sees room for a December cut", bias: "BULLISH" },
+    { title: "OPEC+ agrees to extend output cuts", bias: "BULLISH" },
+    { title: "Iran sanctions tighten after talks stall", bias: "BULLISH" }
+  ] };
+  assert.deepEqual(geopoliticalHeadlines(daily).map((h) => h.title), [
+    "Oil jumps as Red Sea attacks disrupt tanker traffic", "OPEC+ agrees to extend output cuts", "Iran sanctions tighten after talks stall"
+  ], "only the oil and geopolitical headlines reach the Oil Analyst");
+  assert.deepEqual(geopoliticalHeadlines(null), []);
+  resetThreadSchemaCacheForTests();
+  const env = makeEnv();
+  // WTI 1h closes rising over the last days: the oil series is cached, so the Oil Analyst opens.
+  const end = Date.parse("2026-11-10T08:00:00.000Z");
+  const oil = { candles: Array.from({ length: 160 }, (_, i) => { const open = end - (160 - i) * H, c = 70 + i * 0.02; return { open_time: new Date(open).toISOString(), close_time: new Date(open + H).toISOString(), open: c, high: c + 0.1, low: c - 0.1, close: c }; }) };
+  await env.SIGNAL_CACHE.put("market-data:v2:series:TVC:USOIL|1h", JSON.stringify(oil));
+  const r = await runPendingMacroRooms(env, { now: NOW, clock: () => NOW });
+  assert.equal(r.openings, 6, "the five agents with data and the Oil Analyst");
+  const oilText = env.AI.calls.find((t) => /"agent":"oil"/.test(t) && !/Consensus Discussion/.test(t));
+  assert.match(oilText, /Oil Analyst/);
+  assert.match(oilText, /geopolitical and inflation channel/);
+  assert.match(oilText, /WTI crude oil/);
 });

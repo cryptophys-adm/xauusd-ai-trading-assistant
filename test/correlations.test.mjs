@@ -49,3 +49,17 @@ test("missing series read as unavailable; the reader uses the cached 4h series",
   assert.ok(view.assets.every((a) => a.available === false && a.correlation.short === null));
   assert.equal(closes({ candles: [{ close: 1, close_time: new Date(T0 + H4).toISOString() }] }, T0).length, 0, "a bar not closed yet is ignored");
 });
+
+test("oil: WTI from its 1h series, sampled at gold's 4h closes, costs no new pull (owner request 2026-11-08)", async () => {
+  const oilSpec = ASSETS.find((a) => a.id === "oil");
+  assert.deepEqual([oilSpec.symbol, oilSpec.key, oilSpec.unit], ["TVC:USOIL", "TVC:USOIL|1h", "pct"]);
+  // Hourly oil closes that rise with gold over each 4h step.
+  const oil1h = [];
+  let v = 70;
+  for (let i = 0; i < gold.length; i++) for (let h = 1; h <= 4; h++) { v *= Math.exp(goldMoves[i] / 4); oil1h.push({ t: T0 + i * H4 + h * 3_600_000, close: v }); }
+  const view = buildCorrelations({ gold, assets: [{ spec: oilSpec, series: oil1h }] });
+  const row = view.assets[0];
+  assert.equal(row.id, "oil");
+  assert.ok(row.correlation.long > 0.9, "4h returns line up with gold's");
+  assert.equal(row.last, oil1h.at(-1).close);
+});
