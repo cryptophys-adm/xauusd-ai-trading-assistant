@@ -6,6 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(nexus): the Key Level Agent panel follows the key-level plan (owner question 2026-11-08). It shows how many levels each reader added (Band, Liquidity, Projection, Session), says when they wait for the chart plane, and shows the strategy's setup type at the 15m location with its evidence. A zone's hover names each level's reader. The candidate rule text now reads three or more sources and at least medium strength (it said two).
 - fix(market-data): a one-day TradingView budget override (owner decision 2026-11-08). The weekend pulls made before #165 spent the day's 800 calls, and the market reopens at 22:00 UTC, two hours before the budget resets. `TV_DAILY_CALL_BUDGET_OVERRIDE` (`"YYYY-MM-DD:<calls>"`) raises the budget for that UTC date only; it is set to `2026-11-08:1000` and lapses by itself at 00:00 UTC. The 800 base is unchanged. Diagnostics report the effective budget. Test added.
 - feat(nexus): the GMI chart layers (owner decision 2026-11-08, PR 3 of the key-level plan). A row of toggles above the Nexus chart, kept per viewer:
   - **On by default:** Zones, Bands (Z-KWW mean, ±1σ and ±1.618σ, EMA 114; `lib/indicators.ts` computes them from the chart's closed bars with the Mizan formulas) and Volume (the session POC, VAH and VAL).
