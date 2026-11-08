@@ -68,7 +68,7 @@ reports to the owner.
    - It cannot be done without the owner: it edits a hashed engine file (`gmi-core-tf.mjs`), which the project rules allow only in a calibration window the owner opens.
 11. **Nexus analytic layers (owner request 2026-11-07, "Nexus vs KIRA").** The Signal Ledger and the Performance page are built. Next, in order:
     1. ~~Economic calendar and the event-risk gate~~: done 2026-11-08 (owner decision: ForexFactory export, USD High impact, a caution from 2 hours before to 30 minutes after; CHANGELOG).
-    2. **Alerts to the owner.** Setup active, entry reached, TP or stop reached. **Owner decision (2026-11-08):** Telegram. In progress.
+    2. ~~Alerts to the owner~~: done 2026-11-08 (owner decision: Telegram; setup, entry, TP/stop/time exit, TP2 close and cancel, each sent once; CHANGELOG).
     3. ~~Correlations panel~~: done 2026-11-08 (`#/correlations`, CHANGELOG).
     4. **Aether, the Knowledge Guardian.** Phases A1 to A8 and the A9 groundwork are built (CHANGELOG 2026-11-07 and 2026-11-08; status in `docs/RFC_AETHER_KNOWLEDGE_GUARDIAN.md` §0.7). What remains waits on data or on the owner:
        - **Owner:** approve or reject the curator's and calibrator's proposals on the Console Knowledge page.

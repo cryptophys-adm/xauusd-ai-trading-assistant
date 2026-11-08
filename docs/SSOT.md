@@ -375,12 +375,21 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - MFE and MAE are kept in R.
   - **Run:** in the parity sweep, every 15 minutes.
   - **Read:** `GET /api/ledger?days=30` returns per source and in total: win rate, expectancy, total R, profit factor, maximum drawdown, fill rate, the equity curve and the signals. Nexus shows it on the Performance page.
+  - **Alerts (backlog 11.2, owner decision 2026-11-08: Telegram; `src/ledger-alerts.mjs`, D1 `ledger_alerts`, migration 0017).** After each ledger run the sweep sends each new ledger event once over the existing Telegram bot (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`):
+    - `setup`: a strategy-engine setup triggered (the H1 decision already has its own Telegram message);
+    - `entry`: the entry was reached;
+    - `exit`: TP1, the stop or the time limit was reached (with the R result);
+    - `closed`: the TP2 part of a two-target setup ended;
+    - `cancelled`: a setup that will no longer fill (invalidated, target before entry, or unfilled).
+    - Each message ends with "Advisory only: no order is placed and no position size is given." It never gives a lot size or a position.
+    - The first run records the events that already exist without sending them, so a deploy never floods the chat. At most 5 messages a run; a failed send is retried by the next run. Only signals opened in the last 7 days are looked at.
+    - Off with `LEDGER_ALERTS_ENABLED = "false"`; nothing is sent without the bot secrets.
 - **Nexus UI (owner decision 2026-11-06).** Nexus uses the obsidian design of the Cerebrum Console (`cryptophys-cloud-platform` `workers/console/ui`), because it will merge into the Console control panel. The `nexus` subdomain will later replace `home`.
   - **Stack:** the same as the Console: React 18, Vite, Tailwind with the obsidian palette, lucide-react, framer-motion, and three.js for the neural-mesh background. The chart uses lightweight-charts.
   - **Build and serving:** the source is in `workers/xauusd-nexus-dashboard/ui`. It is built into `ui/dist` and served as Workers Static Assets (`run_worker_first`). The deploy workflow builds it; `validate-nexus-dashboard.yml` builds it on pull requests.
   - **Layout:**
     - Same header, glass panels and status footer as the Console.
-    - **Left sidebar (owner request 2026-11-07):** navigation grouped by analytic layer. Live: War Room. Analytics: Performance (`#/performance`), Scorecards, Shadow versions. Market: Economic calendar, Correlations. Intelligence: Decision audit, Alerts. The layers not built yet (Decision audit, Alerts) are listed as "soon". The Economic calendar (`#/calendar`) shows the week's events: by default only the High-impact USD ones, with a switch for all. Events inside the gate window are highlighted.
+    - **Left sidebar (owner request 2026-11-07):** navigation grouped by analytic layer. Live: War Room. Analytics: Performance (`#/performance`), Scorecards, Shadow versions. Market: Economic calendar, Correlations. Intelligence: Decision audit, Alerts. The layers not built yet (Decision audit, and the Alerts page; the alerts themselves go to Telegram) are listed as "soon". The Economic calendar (`#/calendar`) shows the week's events: by default only the High-impact USD ones, with a switch for all. Events inside the gate window are highlighted.
     - **Correlations (`#/correlations`, 2026-11-08).** `GET /api/correlations` (`src/correlations.mjs`) shows gold beside DXY, the US 10-year yield and silver on closed 4h bars:
       - the last close and the change over 4h, 1 day and 5 days (basis points for the yield);
       - the Pearson correlation of 4h returns with gold over 30 bars (about a week) and 120 bars (about a month);
