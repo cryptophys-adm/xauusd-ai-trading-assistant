@@ -364,6 +364,25 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - the H1 decision and the confirmation booleans;
     - the open stuck states, the compliance findings, the scored outcomes, and the provenance (scoring version, KB hash, parity).
     - **No levels:** never an entry, stop, target, plan, zone, key level, close or ATR. Price-like numbers in agent text become "[level]", and a test walks every key and string.
+- **Macro War Room (owner decisions 2026-11-08, `src/macro-room.mjs`, thread `macro:XAUUSD`).** The correlations become a room that discusses the news and the scheduled events that move gold.
+  - **Agents:**
+    - the Calendar Agent (fixed-rule projections; before a release its bias must follow the consensus lean, after it the headlines decide);
+    - the News Analyst;
+    - the Dollar Analyst (DXY), the Rates Analyst (US 10-year) and the Metals Analyst (silver): changes and correlation with gold, never a gold price level;
+    - the Correlation Analyst.
+  - **Phases:**
+    - bus;
+    - Consensus Discussion: the agents whose bias differs from the room's, at most 4;
+    - the moderator's macro bias for gold over the next 4 to 24 hours, with reasons and drivers. A BULLISH or BEARISH conclusion needs an agent holding it.
+  - **Schedule:**
+    - 20 minutes after each 4-hour gold close and 30 minutes after a High-impact USD event (same-minute events share a session);
+    - each session once, within 3 hours, at most one per sweep;
+    - behind `MACRO_ROOM_ENABLED`, within `MACRO_ROOM_MAX_CALLS_PER_HOUR` (30); about 11 calls a session.
+  - **Context only:**
+    - every room's News Analyst reads the latest conclusion (8 hours fresh);
+    - the Global decision shows it as a MACRO row outside the weighted score;
+    - it never changes the strategy engine's decision.
+  - **Read:** `GET /api/macro`; Nexus `#/correlations` ("Macro War Room").
 - **Signal Ledger (owner request 2026-11-07, `src/signal-ledger.mjs`, D1 `signal_ledger`, migration 0010).** Every directional signal, followed to its outcome in R. Advisory only: R multiples of the advice, never money, lots or positions. It never feeds a room, a prompt or a decision.
   - **Sources:**
     - `h1_decision`: the Reasoner's BUY/SELL from `trade_decisions` (entry, stop, one take profit).

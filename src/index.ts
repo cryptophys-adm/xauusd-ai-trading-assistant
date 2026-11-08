@@ -71,6 +71,8 @@ export interface Env {
   WAR_ROOM_MAX_CALLS_PER_HOUR?: string;
   TF_THREADS_ENABLED?: string;
   TF_THREADS_MAX_CALLS_PER_HOUR?: string;
+  MACRO_ROOM_ENABLED?: string;
+  MACRO_ROOM_MAX_CALLS_PER_HOUR?: string;
   NEWS_DAILY_ENABLED?: string;
   NEWS_DAILY_MAX_CALLS_PER_HOUR?: string;
   PREVIEW_FIXTURES_ENABLED?: string;
@@ -188,6 +190,7 @@ import { readCorrelations } from "./correlations.mjs";
 import { refreshCalendar, readCalendar } from "./econ-calendar.mjs";
 import { sendLedgerAlerts, readLedgerAlerts } from "./ledger-alerts.mjs";
 import { notifyH1Decision } from "./h1-telegram.mjs";
+import { runPendingMacroRooms, readMacroRoom } from "./macro-room.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -2077,6 +2080,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/macro") {
+    // Macro War Room (owner decision 2026-11-08): the latest session, with its bus, discussion and conclusion.
+    try {
+      return dashboardJson({ status: "ok", macro: await readMacroRoom(env.DB) });
+    } catch (error) {
+      console.error("macro_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/alerts") {
     // Backlog 11.2: the Telegram alerts of the Signal Ledger (recorded and pending events). Read-only;
     // says whether the bot is configured, never a secret value.
@@ -2468,6 +2480,11 @@ export default {
       ctx.waitUntil(finalizePendingH1Decisions(env).then(r => {
         if (Number(r.pending)) console.log("h1_consensus_pending", JSON.stringify(r));
       }).catch(e => console.error("h1_consensus_pending_failed", e instanceof Error ? e.message : String(e))));
+      // Macro War Room (owner decision 2026-11-08): 20 minutes after a 4-hour close and 30 minutes
+      // after a High-impact USD event; at most one session per sweep, in its own waitUntil.
+      ctx.waitUntil(runPendingMacroRooms(env).then(m => {
+        if (m.status !== "disabled" && m.status !== "idle") console.log("macro_room", JSON.stringify(m));
+      }).catch(e => console.error("macro_room_failed", e instanceof Error ? e.message : String(e))));
       ctx.waitUntil(reconcileRecentCandles(env).then(async result => {
         try { await backfillRecentAnalyses(env, { loadPayloads: loadWebhookPayloadsFromD1, runAnalysis, setStatus: setAnalysisRunStatus }); } catch (e) { console.error("backfill_failed", e instanceof Error ? e.message : String(e)); }
         // RFC_INDICATOR_AGENT_PLATFORM P1: score statements whose horizon has closed, and

@@ -50,6 +50,7 @@ import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learne
 import { sessionOf } from "./outcome-scoring.mjs";
 import { eventRisk, gatedEvents } from "./econ-calendar.mjs";
 import { projectEvent } from "./calendar-agent.mjs";
+import { macroDeskEvidence } from "./macro-room.mjs";
 
 // With the Calendar Agent's projection (owner decision 2026-11-08): which way gold usually moves.
 const eventLine = (e, now) => { const p = projectEvent(e, now); return `${e.title} (${e.currency}, ${e.time.slice(11, 16)} UTC)${p ? `: ${p.text}` : ""}`; };
@@ -232,7 +233,10 @@ export async function tfEvidence(env, chart, candleKey) {
   };
 
   const higher = spec.higher ? await latestConclusion(db, spec.higher) : null;
-  const news = await newsDeskEvidence(db);
+  let news = await newsDeskEvidence(db);
+  // Macro War Room (owner decision 2026-11-08): the News Analyst also reads the latest macro conclusion.
+  const macro = await macroDeskEvidence(db, { now: Date.parse(last.close_time) });
+  if (news && macro) news = { ...news, macro };
   let desk = { available: false, reading: [], approved_by_parity: false };
   try { desk = await chartDeskReading(env, candleKey); } catch { /* no desk reading this bar */ }
   // Event-risk gate (backlog 11.1): the high-impact USD events around this bar, for the Risk Desk.

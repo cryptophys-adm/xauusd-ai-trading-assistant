@@ -6,6 +6,30 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(macro): the Macro War Room (owner decisions 2026-11-08: the correlations become a room for the news and events that move gold; it meets after every 4-hour close and after a High-impact USD event; context plus a MACRO row in the Global decision), in `src/macro-room.mjs`.
+  - **Agents:**
+    - the Calendar Agent, with the fixed-rule projections of #163: before a release its bias must follow the consensus lean, and after a release it reads the headlines;
+    - the News Analyst;
+    - the Dollar Analyst (DXY), the Rates Analyst (US 10-year) and the Metals Analyst (silver), each with the 4-hour, 1-day and 5-day change and the correlation with gold over a week and a month;
+    - the Correlation Analyst.
+  - **No gold price level** reaches the agents.
+  - **Phases:**
+    - the bus;
+    - a Consensus Discussion where the agents whose bias differs from the room's answer, at most 4 (if none differ, the Correlation Analyst stress-tests the room);
+    - the moderator's macro bias for gold over the next 4 to 24 hours, with its reasons and its drivers.
+    - A BULLISH or BEARISH conclusion needs an agent holding it.
+  - **Schedule:**
+    - 20 minutes after each 4-hour gold close, after the timeframe rooms' burst;
+    - 30 minutes after a High-impact USD event, with events at the same minute sharing one session;
+    - each session within 3 hours, once, at most one per sweep, in its own `waitUntil`;
+    - behind `MACRO_ROOM_ENABLED` (on in production and preview), within `MACRO_ROOM_MAX_CALLS_PER_HOUR` 30.
+    - A session costs about 11 model calls.
+  - **Consumers (context only):**
+    - the News Analyst of the 15m War Room and of the 1H, 4H and D1 rooms reads the latest conclusion (8 hours fresh);
+    - the Global decision shows a MACRO row that never enters the weighted score;
+    - the strategy engine's decision is unchanged.
+  - **Read and UI:** `GET /api/macro`; the Nexus page `#/correlations` is now the "Macro War Room" (conclusion, bus, discussion, then the correlations table).
+  - Tests: `test/macro-room.test.mjs`.
 - feat(calendar): the Calendar Agent (owner decisions 2026-11-08: fixed rules plus an AI narrative; context plus a MACRO row in the Global decision), in `src/calendar-agent.mjs`.
   - **Projection by fixed rules per event kind:** inflation, jobs, wages, growth, surveys, housing, the rate decision, unemployment and claims, Fed speeches. For each USD event it gives:
     - which way gold usually moves if the actual is above or below the forecast (stronger US data or a hawkish Fed: gold down; unemployment and claims the other way; a speech by its tone);

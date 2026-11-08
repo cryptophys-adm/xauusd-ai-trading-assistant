@@ -63,10 +63,13 @@ export default function GlobalDecision() {
   const s = g?.strategy ?? null;
   const st = s ? STATE_TEXT[s.state] ?? { label: String(s.state).toLowerCase(), tone: "slate" as const } : null;
   const news = g?.timeframes?.find((t: any) => t.key === "NEWS");
+  const macro = g?.timeframes?.find((t: any) => t.key === "MACRO");
   const cf = room?.confirmations;
   const rows = [
     ...(s?.layers ?? []).map((l: any) => ({ key: l.key, label: l.label, role: l.role, lean: l.lean, pass: l.pass, note: l.note, stale: l.stale })),
-    ...(news ? [{ key: "NEWS", label: "News", role: "24h", lean: news.lean, pass: null, note: news.summary ?? "no TLDR yet", stale: news.stale }] : [])
+    ...(news ? [{ key: "NEWS", label: "News", role: "24h", lean: news.lean, pass: null, note: news.summary ?? "no TLDR yet", stale: news.stale }] : []),
+    // Macro War Room (owner decision 2026-11-08): context only, never weighted.
+    ...(macro?.available ? [{ key: "MACRO", label: "Macro", role: "context", lean: macro.lean, pass: null, note: macro.summary ?? "", stale: macro.stale }] : [])
   ];
   const decision = s?.decision ?? g?.action ?? "WAIT";
   return (

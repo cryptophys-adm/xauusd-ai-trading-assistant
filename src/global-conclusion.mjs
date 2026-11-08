@@ -8,6 +8,7 @@
 // falls back to the H1 decision, which stands only when the global bias does not lean against it.
 // Advisory only: no levels, sizes or orders are produced here.
 import { roomLean, loadStrategyInputs, buildStrategy } from "./strategy-engine.mjs";
+import { readMacroRoom } from "./macro-room.mjs";
 
 export { roomLean };
 
@@ -19,7 +20,9 @@ const SPEC = {
   H4: { label: "4H", role: "intraday trend", periodMs: 14_400_000 },
   H1: { label: "1H", role: "swing trend", periodMs: 3_600_000 },
   M15: { label: "15m", role: "structure", periodMs: 900_000 },
-  NEWS: { label: "News", role: "fundamentals", periodMs: 3_600_000 }
+  NEWS: { label: "News", role: "fundamentals", periodMs: 3_600_000 },
+  // Macro War Room (owner decision 2026-11-08): shown as a row, context only, outside the weighted score.
+  MACRO: { label: "Macro", role: "macro room", periodMs: 4 * 3_600_000 }
 };
 
 const direction = (s) => (s === "BUY" || s === "BULLISH" ? 1 : s === "SELL" || s === "BEARISH" ? -1 : 0);
@@ -39,7 +42,7 @@ function newsLean(news) {
 }
 
 /** Pure: the Global Conclusion from the latest rooms, News Daily and the H1 decision. */
-export function buildGlobalConclusion({ d1 = null, h4 = null, h1 = null, m15 = null, news = null, h1Decision = null, strategy = null, now = Date.now() } = {}) {
+export function buildGlobalConclusion({ d1 = null, h4 = null, h1 = null, m15 = null, news = null, macro = null, h1Decision = null, strategy = null, now = Date.now() } = {}) {
   const rooms = { D1: d1, H4: h4, H1: h1, M15: m15 };
   const timeframes = Object.entries(rooms).map(([key, room]) => {
     const at = room?.bar_close ?? room?.bar_time ?? null;
@@ -61,6 +64,14 @@ export function buildGlobalConclusion({ d1 = null, h4 = null, h1 = null, m15 = n
 
   let s = 0, w = 0;
   for (const tf of timeframes) if (isNum(tf.lean)) { s += tf.lean * GLOBAL_WEIGHTS[tf.key]; w += GLOBAL_WEIGHTS[tf.key]; }
+  // The MACRO row is context only (owner decision 2026-11-08): it is shown, never weighted.
+  const mc = macro?.conclusion?.status === "ok" ? macro.conclusion : null;
+  const ml = mc && isNum(mc.confidence) ? r2(direction(mc.bias) * mc.confidence) : null;
+  const macroRow = macro ? {
+    key: "MACRO", label: SPEC.MACRO.label, role: SPEC.MACRO.role, available: Boolean(mc), lean: ml, side: side(ml),
+    action: mc?.bias ?? null, confidence: mc?.confidence ?? null, summary: mc?.summary ?? null, at: mc?.ts ?? macro.at ?? null,
+    stale: Boolean(macro.stale), weighted: false
+  } : null;
   const score = w ? r2(s / w) : null;
   const bias = side(score);
   const leaning = timeframes.filter((tf) => isNum(tf.lean));
@@ -91,7 +102,7 @@ export function buildGlobalConclusion({ d1 = null, h4 = null, h1 = null, m15 = n
     bias, score, action, action_reason: actionReason,
     alignment: { with_bias: withBias, of: leaning.length },
     h1_decision: decision ? { decision, confidence: h1Decision?.confidence ?? null, candle_key: h1Decision?.candle_key ?? null } : null,
-    timeframes, summary, weights: GLOBAL_WEIGHTS,
+    timeframes: macroRow ? [...timeframes, macroRow] : timeframes, summary, weights: GLOBAL_WEIGHTS,
     // Owner decision 2026-11-06: the Global Conclusion and the strategy engine are one "Global
     // decision" in Nexus, so the full strategy (layers, plan, RRR, vetoes) travels here.
     strategy: strategy ?? null
@@ -104,5 +115,7 @@ export async function readGlobalConclusion(env, { now = Date.now() } = {}) {
   const { D1: d1, H4: h4, H1: h1, M15: m15 } = inputs.rooms;
   let strategy = null;
   try { strategy = buildStrategy(inputs); } catch { strategy = null; }
-  return buildGlobalConclusion({ d1, h4, h1, m15, news: inputs.news, h1Decision: inputs.h1Chain, strategy, now });
+  let macro = null;
+  try { macro = await readMacroRoom(env.DB, { now }); } catch { macro = null; }
+  return buildGlobalConclusion({ d1, h4, h1, m15, news: inputs.news, macro, h1Decision: inputs.h1Chain, strategy, now });
 }
