@@ -68,6 +68,9 @@ Owner decision, 2026-11-05: the architecture does not depend on webhooks. Approv
 
 1. **Local computation** (decision lane). MizanLib (record id `mizan`), Prophet and GMI are computed by the pull adapter from closed TradingView bars.
    - Since 2026-11-05 (owner decision, TradingView MCP budget 800 calls a day), the pull adapter pulls XAUUSD M1, H1, H4, D1 and W1, USOIL 5m, and DXY and USDT 4h.
+   - **Context series (2026-11-08, backlog 11.3).** The pull adapter also pulls `TVC:US10Y` and `OANDA:XAGUSD` 4h (role `context`) for the Nexus correlations panel.
+     - **Cost.** About 12 calls a day. They are last in priority.
+     - **Isolation.** They never enter the engine input bundle (`buildBundle` skips them), so local computation and parity are unchanged.
    - It aggregates XAUUSD M5 and M15 from M1, and USOIL M15 and H1 from USOIL 5m. A daily check compares them with native bars.
    - See docs/MARKET_DATA_INGESTION.md.
    - Trust is earned only through the autonomous parity registry: 24 consecutive candles that match TradingView. There is no manual allowlist and no operator approval.
@@ -372,7 +375,13 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Build and serving:** the source is in `workers/xauusd-nexus-dashboard/ui`. It is built into `ui/dist` and served as Workers Static Assets (`run_worker_first`). The deploy workflow builds it; `validate-nexus-dashboard.yml` builds it on pull requests.
   - **Layout:**
     - Same header, glass panels and status footer as the Console.
-    - **Left sidebar (owner request 2026-11-07):** navigation grouped by analytic layer. Live: War Room. Analytics: Performance (`#/performance`), Scorecards, Shadow versions. Market: Economic calendar, Correlations. Intelligence: Decision audit, Alerts. The Market and Intelligence layers are listed as "soon" until they are built. On phones the sidebar opens from the menu button.
+    - **Left sidebar (owner request 2026-11-07):** navigation grouped by analytic layer. Live: War Room. Analytics: Performance (`#/performance`), Scorecards, Shadow versions. Market: Economic calendar, Correlations. Intelligence: Decision audit, Alerts. The layers not built yet (Economic calendar, Decision audit, Alerts) are listed as "soon".
+    - **Correlations (`#/correlations`, 2026-11-08).** `GET /api/correlations` (`src/correlations.mjs`) shows gold beside DXY, the US 10-year yield and silver on closed 4h bars:
+      - the last close and the change over 4h, 1 day and 5 days (basis points for the yield);
+      - the Pearson correlation of 4h returns with gold over 30 bars (about a week) and 120 bars (about a month);
+      - each series is as-of aligned to gold's 4h closes.
+
+      It is context only and reaches no room or decision. On phones the sidebar opens from the menu button.
     - Left: Priority Queue, War Room agents and Worker status.
     - Center: the chart, then the War Rooms card with its tab bar `News | 15m | 1H | 4H | D1`.
     - Right: the trading assistant panel (charts).
