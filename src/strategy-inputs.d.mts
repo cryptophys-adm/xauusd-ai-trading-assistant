@@ -1,0 +1,14 @@
+export const STRATEGY_INPUTS_VERSION: string;
+export const STRATEGY_INPUTS_DAYS: number;
+export const CAPTURE_AFTER_CLOSE_MS: number;
+export const OUTCOME: Readonly<{ horizon: number; k: number; waitTarget: number }>;
+export const STRATEGY_INPUTS_SCHEMA_SQL: string[];
+export function ensureStrategyInputsSchema(db: unknown): Promise<void>;
+export function resetStrategyInputsSchemaCacheForTests(): void;
+export function slimInputs(inputs: unknown): Record<string, any>;
+export function gzipJson(value: unknown): Promise<string>;
+export function gunzipJson(b64: string): Promise<any>;
+export function captureStrategyInputs(env: unknown, options?: { now?: number; load?: (env: any, o: { now: number }) => Promise<any>; build?: (inputs: any) => any }): Promise<Record<string, unknown>>;
+export function stanceOutcomes(m15Bars: unknown[], closeMs: number): Record<string, string> | null;
+export function scoreStrategyCaptures(env: unknown, options?: { now?: number; limit?: number }): Promise<Record<string, unknown>>;
+export function strategyInputsStatus(env: unknown): Promise<Record<string, unknown> | null>;
