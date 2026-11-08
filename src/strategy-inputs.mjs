@@ -53,7 +53,9 @@ const msg = (m) => (m ? { id: m.id ?? m.agent ?? null, status: m.status ?? null,
 const room = (r) => (r ? { bar_close: r.bar_close ?? null, bar_time: r.bar_time ?? null, conclusion: msg(r.conclusion), openings: (r.openings || []).map(msg) } : null);
 const snapshot = (s) => (s?.huds ? {
   timeframe: s.timeframe ?? null, computed_at: s.computed_at ?? null, candle_key: s.candle_key ?? null,
-  huds: Object.fromEntries(Object.entries(s.huds).map(([id, h]) => [id, { fields: h?.fields ?? {} }]))
+  huds: Object.fromEntries(Object.entries(s.huds).map(([id, h]) => [id, { fields: h?.fields ?? {} }])),
+  // The chart plane feeds the level readers and the setup type, so the replay must see it too.
+  ...(s.chart_plane ? { chart_plane: s.chart_plane } : {})
 } : null);
 
 /** Pure: the inputs buildStrategy reads, without the room texts or other unused fields. */

@@ -13,11 +13,16 @@
 //   round numbers    every 50 dollars 0.8, every 25 dollars 0.4, near price
 //   order blocks     the best bullish and bearish block of each chart, top and bottom 0.7 (P6, 2026-11-07)
 //   supertrend       the Supertrend line of each chart 0.6 (P6, 2026-11-07)
+//   chart plane      every GMI chart object of each chart, through the four level readers
+//                    (src/level-readers.mjs, owner decision 2026-11-08): bands, liquidity,
+//                    projection and session, each with its own base weight
 // A zone is a run of levels, sorted by price, whose span stays within the tolerance (0.3 x the 1H
 // ATR, at least 1 dollar). Its score is the sum of its weights; its sources are the distinct
 // (kind, timeframe) pairs. Strength: strong (score >= 6), medium (>= 3), weak. Candidate (owner decision
 // 2026-11-06, tightened after production showed 14 of 18 zones at 2+ sources): 3+ sources and at
 // least medium strength.
+
+import { readPlane, READERS } from "./level-readers.mjs";
 
 export const KEY_LEVEL_VERSION = "cryptophys.key-level-agent.v1";
 export const TF_WEIGHT = Object.freeze({ "15": 1, "60": 1.5, "240": 2, D: 2.5, "1D": 2.5, W: 3 });
@@ -49,12 +54,12 @@ export function swings(bars, { lookback = SWING_LOOKBACK, perSide = SWINGS_PER_S
  */
 export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null } = {}) {
   const out = [], seen = new Set();
-  const add = (p, kind, tf, label, weight, { unique = true } = {}) => {
+  const add = (p, kind, tf, label, weight, { unique = true, reader = null } = {}) => {
     if (!isNum(p)) return;
     const key = unique ? `${kind}:${tf}:${label}` : `${kind}:${tf}:${label}:${r2(p)}`;
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({ price: r2(p), kind, tf, label, weight: r2(weight * (TF_WEIGHT[tf] ?? 1)) });
+    out.push({ price: r2(p), kind, tf, label, weight: r2(weight * (TF_WEIGHT[tf] ?? 1)), ...(reader ? { reader } : {}) });
   };
   const ORDER = ["15", "60", "240", "1D"];
   const fresh = Object.entries(snapshots).filter(([, snap]) => snap?.huds).sort(([a, x], [b, y]) => {
@@ -92,6 +97,12 @@ export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = nul
       add(va.poc, "value", tf, `${TF_NAME[tf]} point of control`, 0.9);
       add(va.vah, "value", tf, `${TF_NAME[tf]} value area high`, 0.8);
       add(va.val, "value", tf, `${TF_NAME[tf]} value area low`, 0.8);
+      // The four level readers of the chart plane. Session levels carry the daily timeframe and
+      // one label for every chart, so the freshest snapshot's value is the one counted.
+      for (const l of readPlane(snap.chart_plane, tf)) {
+        const ltf = l.tf ?? tf;
+        add(l.price, l.kind, ltf, l.tf ? l.label : `${TF_NAME[tf]} ${l.label}`, l.weight, { unique: l.unique !== false, reader: l.reader });
+      }
     }
   }
   for (const [tf, series] of [["15", bars.M15], ["60", bars.H1], ["240", bars.H4], ["D", bars.D1]]) {
@@ -138,7 +149,7 @@ export function clusterLevels(levels, tolerance, price = null) {
       low: r2(low), high: r2(high), price: r2(center), score: r2(score), sources: sources.length,
       candidate: sources.length >= CANDIDATE_MIN_SOURCES && score >= CANDIDATE_MIN_SCORE, strength, role,
       label: sorted.slice(0, 3).map((x) => x.label).join(" / ") + (m.length > 3 ? ` +${m.length - 3}` : ""),
-      members: sorted.map((x) => ({ price: x.price, label: x.label, kind: x.kind, weight: x.weight }))
+      members: sorted.map((x) => ({ price: x.price, label: x.label, kind: x.kind, weight: x.weight, ...(x.reader ? { reader: x.reader } : {}) }))
     };
   });
 }
@@ -158,8 +169,10 @@ export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 
     sup ? `Nearest candidate support ${fmt(sup)}.` : "No candidate support within four 1H ranges.",
     res ? `Nearest candidate resistance ${fmt(res)}.` : "No candidate resistance within four 1H ranges."
   ].filter(Boolean).join(" ");
+  // How many levels each chart-plane reader contributed (the other sources have no reader).
+  const readers = Object.fromEntries(Object.entries(READERS).map(([id, r]) => [id, { name: r.name, role: r.role, levels: raw.filter((l) => l.reader === id).length }]));
   return {
     version: KEY_LEVEL_VERSION, price: r2(price), atr_h1: r2(atrH1), tolerance: r2(tolerance),
-    raw_count: raw.length, zones: near, candidates, summary
+    raw_count: raw.length, readers, zones: near, candidates, summary
   };
 }

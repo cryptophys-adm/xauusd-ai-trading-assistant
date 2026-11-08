@@ -276,6 +276,11 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - **D1 macro trend and 4H intraday trend:** their mean is the trend. A room older than two of its bars is stale and drops out.
     - **1H setup:** the side is the trend's when the 1H room does not lean against it. With a neutral trend, a 1H lean of 0.3 or more counts when the 15m room agrees.
     - **15m location:** the 15m room must not lean against the side. Price must sit at a key level with the trade (within 0.35 × the 1H ATR(14)) or inside a demand or supply zone (order block, mitigation, QM or flip zone of the 15m HUDs). Otherwise the planned entry is a pullback to the nearest level.
+      - **Setup type (owner decision 2026-11-08, `setupType` in `src/level-readers.mjs`):** from the 15m chart plane (and the 1H Fibonacci leg when the 15m has none), deterministic:
+        - *continuation_pullback:* price in the OTE band (0.618 to 0.786) of a leg with the trade, or back at the KWW mean to −1.618σ against it, with liquidity with the trade within 0.35 × the 1H ATR (an open FVG target, the RBS or SBR level, a whale zone or mitigation block on the trade's side);
+        - *reversal_sweep:* price stretched 1.618σ or more against the trade at the QM level or a whale zone with the trade;
+        - otherwise *none*.
+        A setup type counts as a location with the trade, like a demand or supply zone, and the entry note names its evidence. The strategy reports it as `setup`; the captured strategy inputs keep the chart plane, so the replay reads the same setup.
     - **5m trigger:** a VERIFIED 5m Prophet confirmation in the trade's direction, or the 15m Prophet confirmation. An unverified 5m confirmation never counts.
       - **At every closed 5m bar (owner decision 2026-11-08, "the confirmation is critical"):** the AI Worker re-evaluates the engine when the pull adapter sends a 5m context (`ingestM5Context` → `evaluateStrategyAtM5Close`), with that bar's confirmation (VERIFIED only while `prophet_m5` and `gmi_m5` are approved) and its close as the price. It no longer waits for the 15m room.
       - A TRIGGERED setup goes to the Signal Ledger at once (one per hour, none while one of the same side is open) and its Telegram alert follows.
@@ -289,6 +294,12 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
       - the last four swing highs and lows (2-bar fractals of the last 60 closed bars) of the 15m, 1H, 4H and D1 charts, 0.9;
       - the previous day high and low 1.0 and close 0.6, and the previous week high and low 1.0;
       - round numbers within four 1H ATRs of price: every 50 dollars 0.8, every 25 dollars 0.4.
+      - **the four level readers of the chart plane (owner decision 2026-11-08, PR 2 of 3; `src/level-readers.mjs`):**
+        - **Band Agent:** KWW ±1.618σ 0.7, KWW mean 0.5, EMA 114 0.6, VWAP 0.6 (15m and 1H only), TVA channel edges 0.5.
+        - **Liquidity Agent:** RBS/SBR 1.0, QM 0.9, active whale zone edges 0.9, mitigation block edges 0.7, the three nearest open FVG targets per side 0.7 × their mass (clamped 0.3 to 1.5), HVN 0.8, LVN 0.5.
+        - **Projection Agent:** Fibonacci 0.618 and 0.786 (OTE) 0.8, 0.5 0.6, the 1.272 and 1.618 extensions 0.7, the probability cone p90/p10 0.4, the tactical trendlines 0.5, PA support and resistance 0.6.
+        - **Session Agent:** true month and year open 1.0, week and day open 0.8, Asia, London, NY AM and NY PM opens 0.5, the trading day open 0.6 and week open 0.8, the session POC 0.9 and VAH/VAL 0.8. Session levels are one value for every chart: they carry the daily timeframe and the freshest snapshot's value counts once.
+        - The TDM POC/VAH/VAL and the previous day and week high/low are read elsewhere already, so the readers skip them. `GET /api/key-levels` reports how many levels each reader added (`readers`), and each zone member names its reader.
     - **Chart plane (owner decision 2026-11-08, PR 1 of 3; `local-engines/producer/src/chart-plane.mjs`):** every HUD snapshot (15m, 1H, 4H, D1) carries `chart_plane`, every price object GMI v12.70 draws on the chart, as numbers at the closed bar. It is not a HUD section, so it adds no room agent; the Key Level Agent reads it from PR 2, the Nexus chart from PR 3.
       - **bands:** Z-KWW MA, ±1σ and ±1.618σ with the z-score; Dynamic EMA 114; VWAP (hlc3, reset at the trading day); the adaptive TVA regression channel (2 deviations).
       - **liquidity:** Aether FVG open targets with their mass; the Spacetime Whale Map (active zones and mitigation blocks, with HP); GABFX QM BUY/SELL and RBS/SBR; the TDM profile POC, VAH, VAL, LVN and HVN.

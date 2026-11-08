@@ -6,6 +6,10 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(key-levels): the four level readers and the setup type (owner decision 2026-11-08, PR 2 of the key-level plan). `src/level-readers.mjs` reads the chart plane of each HUD snapshot:
+  - **Readers:** the Band, Liquidity, Projection and Session agents hand the Key Level Agent their levels with base weights (SSOT §Key levels). `GET /api/key-levels` reports how many levels each reader added, and each zone member names its reader.
+  - **Setup type:** `setupType` labels the 15m location as *continuation_pullback* (OTE band or KWW mean, with liquidity with the trade) or *reversal_sweep* (a 1.618σ stretch into a QM level or a whale zone). A setup type counts as a location with the trade. The strategy reports it as `setup`, and the captured strategy inputs keep the chart plane for the replay.
+  - Deterministic: no model call. Tests: `test/level-readers.test.mjs`.
 - feat(producer): the chart plane in every HUD snapshot (owner decision 2026-11-08, PR 1 of the key-level plan). `local-engines/producer/src/chart-plane.mjs` computes every price object GMI v12.70 draws on the chart at the closed 15m, 1H, 4H and D1 bar, from the cached bars (no new TradingView call):
   - bands: Z-KWW MA, ±1σ and ±1.618σ, EMA 114, VWAP, the TVA channel;
   - liquidity: FVG open targets, whale zones and mitigation blocks, QM/RBS/SBR, TDM POC/VAH/VAL, LVN and HVN;
