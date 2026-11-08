@@ -181,6 +181,7 @@ import { indicatorAgents } from "./indicator-registry.mjs";
 import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, SCORING, SCORING_VERSION } from "./outcome-scoring.mjs";
 import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
+import { tuningView } from "./tuning.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import {
   H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, H1_ROOM_RETRY_S, H1_ROOM_LOCK_PREFIX, H1_ROOM_LOCK_TTL_S, buildH1RoomTask, h1RoomGate, AWAITING_CONSENSUS, H1_REASONER_GIVE_UP_MS, H1_PENDING_LOOKBACK_MS,
@@ -2164,6 +2165,16 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "ok", ...(await readShadowVersions(env, { days, candidates: await shadowCandidates(env) })) });
     } catch (error) {
       console.error("shadow_versions_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/tuning") {
+    // Aether A8 (RFC §9, K7): every TUNING_GRID point, running (discovery test with Holm, holdout),
+    // stopped or untested. Read-only, built from the cached 30-day shadow view.
+    try {
+      return dashboardJson({ status: "ok", ...tuningView(await readShadowVersions(env, { days: 30, candidates: await shadowCandidates(env) })) });
+    } catch (error) {
+      console.error("tuning_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
     }
   }

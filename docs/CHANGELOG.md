@@ -6,6 +6,12 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-08
 
+- feat(aether): phase A8, first part. The shadow comparison gains Holm–Bonferroni and a holdout, and `GET /api/tuning` is added (RFC_AETHER §9.3, K7, O12).
+  - **Holdout:** the newest 100 shared bars. The discovery test (the 200-bar minimum, the sign test) uses only the bars before them. A candidate must be no worse on the holdout.
+  - **Holm:** the discovery p is adjusted across the family's tests of the calendar month, counting live candidates and those stopped that month.
+  - **Verdicts:** `collecting`, `not_better`, `holdout_failed`, `better_than_active: ready for owner review`.
+  - **Tuning view:** `src/tuning.mjs` lists every `TUNING_GRID` point as running, stopped or untested. It is read-only and starts nothing. Nexus `/shadow` shows it as the "Tuning grid" panel.
+
 - ci: the deploy smoke tests check the CI Access service token strictly.
   - **Why:** the AI Worker's token probe followed redirects, so a refused token still ended on the Access login page with HTTP 200 and passed. The first Nexus run with the token (after #148) failed with "dashboard page not served", the same refusal.
   - **Now:** `scripts/access-token.mjs` normalises the secrets like the platform's `access-headers.sh` (CR/LF, whitespace, a header prefix). Swapped or wrong-shaped values are reported by shape, never by value. The token probes never follow a redirect, so an Access refusal fails with an explicit message.

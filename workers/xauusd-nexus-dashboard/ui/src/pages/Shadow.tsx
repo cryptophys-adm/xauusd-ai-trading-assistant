@@ -22,6 +22,38 @@ function Row({ label, t, s, extra }: { label: string; t: any; s: any; extra?: Re
  * Shadow versions (RFC_INDICATOR_AGENT_PLATFORM P3): candidate indicator versions next to the
  * active control on the same closed H1 bars. Read-only; never shown in a room or used by a decision.
  */
+const pointTone = (pt: any) => (pt.status === "stopped" ? "text-slate-500" : pt.status === "untested" ? "text-slate-400"
+  : pt.verdict?.startsWith("better_than_active") ? "text-emerald-300" : pt.verdict === "collecting" ? "text-amber-200" : "text-rose-300");
+
+/** Aether A8: every TUNING_GRID point, running (discovery with Holm, holdout), stopped or untested. */
+function TuningGrid() {
+  const { data } = usePoll(() => get("/api/tuning"), 300_000);
+  const t = data as any;
+  if (!t?.families?.length) return null;
+  return (
+    <Panel title="Tuning grid" right={<Badge tone="purple">shadow only · owner PR to promote</Badge>}>
+      <p className="mb-3 text-[12px] text-slate-400">Reviewed grid points. A point starts only when a person approves it in Aether or by a reviewed PR. Discovery: {t.statistics.min_discovery_bars}+ bars, one-sided sign test, Holm per family per month ({t.holm_month}); then no worse on the {t.statistics.holdout_bars} newest bars.</p>
+      <div className="table-wrap">
+        <table className="tbl">
+          <thead><tr><th>Family</th><th>Parameter</th><th>Active</th><th>Grid points</th></tr></thead>
+          <tbody>
+            {t.families.map((f: any) => (
+              <tr key={f.family + f.param}>
+                <td className="mono">{f.family}</td><td className="mono">{f.param}</td><td className="mono">{f.active_value ?? "n/a"}</td>
+                <td className="text-[11px]">{f.points.map((pt: any) => (
+                  <span key={pt.value} className={"mr-3 " + pointTone(pt)} title={pt.reason ?? pt.verdict ?? ""}>
+                    <span className="mono">{pt.value}</span> {pt.status === "running" ? `${pt.verdict}${pt.source === "aether" ? " · Aether" : ""}${pt.discovery?.p_holm != null ? ` · Holm p ${pt.discovery.p_holm}` : ""}` : pt.status}
+                  </span>
+                ))}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+  );
+}
+
 export default function Shadow() {
   const { data, loading, error } = usePoll(() => get("/api/shadow-versions"), 300_000);
   const families: any[] = (data as any)?.families ?? [];
@@ -30,6 +62,7 @@ export default function Shadow() {
       <Panel title="Shadow versions" icon={<FlaskConical className="h-3.5 w-3.5 text-violet-300" />} right={<Badge tone="purple">scored only · never decides</Badge>}>
         <p className="text-[12px] leading-relaxed text-slate-400">Candidate indicator versions run beside the active engine on the same closed H1 bars. They are scored by the same outcome scoring and never reach a room, a prompt or a decision. Promotion is the owner's decision and a separate PR.</p>
       </Panel>
+      <TuningGrid />
       {loading && !data ? <Panel><Skeleton rows={6} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-rose-300">Shadow data unavailable: {error}</p></Panel>
         : !families.length ? <Panel><Empty>No shadow data yet.</Empty></Panel> : families.map((f) => {
           const c = f.control;
@@ -50,6 +83,9 @@ export default function Shadow() {
                         <tr><td colSpan={7} className="text-[11px] text-slate-500">
                           {k.change} · where they disagree: candidate right {k.paired.candidate_better}, active right {k.paired.control_better} (p {k.paired.p_value ?? "n/a"}) · significantly higher score: {yes(k.criteria.higher_outcome_score)} · no new stuck states: {yes(k.criteria.no_new_stuck_states)} · minimum sample: {yes(k.criteria.minimum_sample)} · reference: {k.reference}
                         </td></tr>
+                        {k.discovery && <tr><td colSpan={7} className="text-[11px] text-slate-500">
+                          Discovery {k.discovery.bars} bars: candidate right {k.discovery.candidate_better}, active right {k.discovery.control_better} (p {k.discovery.p_value ?? "n/a"}, Holm {k.discovery.p_holm ?? "n/a"}) · holdout {k.holdout.bars} of {k.holdout.required_bars} newest bars: candidate right {k.holdout.candidate_better}, active right {k.holdout.control_better} · no worse on the holdout: {yes(k.criteria.holdout_no_worse)}
+                        </td></tr>}
                         {k.origin?.source === "aether" && <tr><td colSpan={7} className="text-[11px] text-violet-300">
                           From Aether: {k.origin.item_id} v{k.origin.version}, approved by a person for shadow testing only. Hypothesis: {k.origin.hypothesis ?? "n/a"} · metric: {k.origin.metric ?? "n/a"}
                         </td></tr>}
