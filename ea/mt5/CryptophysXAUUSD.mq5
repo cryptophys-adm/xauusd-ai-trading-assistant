@@ -14,17 +14,22 @@
 //|     blackout, when the spread is too wide, when the daily loss   |
 //|     limit is reached, or on a live account unless               |
 //|     AllowLiveAccount is true;                                     |
-//|   - closes its positions and stops when the server says "kill".  |
+//|   - closes its positions and stops when the server says "kill";  |
+//|   - opens nothing new while Omega has it "paused" (open          |
+//|     positions keep their stop and target);                       |
+//|   - reports its open positions (heartbeat) and every closed      |
+//|     position (deal) for Omega, omega.cryptophys.work.            |
 //| Credentials stay in this terminal's inputs. Allow the URL in     |
 //| Tools > Options > Expert Advisors > Allow WebRequest.            |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.00"
+#property version   "1.10"
 
 #include <Trade/Trade.mqh>
 
 input string ApiUrl                = "https://ai.cryptophys.work/api/ea/signal";   // signal endpoint
 input string HeartbeatUrl          = "https://ai.cryptophys.work/api/ea/heartbeat"; // heartbeat endpoint ("" = off)
+input string DealUrl               = "https://ai.cryptophys.work/api/ea/deal";      // closed-position reports ("" = off)
 input string CfAccessClientId      = "";      // Cloudflare Access service token: Client ID
 input string CfAccessClientSecret  = "";      // Cloudflare Access service token: Client Secret
 input string TradeSymbol           = "";      // broker symbol ("" = the chart's symbol), e.g. XAUUSD or GOLD
@@ -47,6 +52,12 @@ string   g_symbol = "";
 string   g_lastSignal = "";
 datetime g_lastHeartbeat = 0;
 string   g_note = "";
+string   g_control = "active";      // active, paused or killed, from the signal
+string   g_closeReason = "";        // why this EA is closing positions right now (opposite, kill)
+string   g_dealQueue[];             // closed-deal reports waiting to be sent (sent from OnTimer)
+ulong    g_closedTickets[];         // positions this EA closed itself, and why (the deal arrives later)
+string   g_closedReasons[];
+double   g_todayMoney = 0.0;        // today's realised + floating result of this EA, account currency
 
 //+------------------------------------------------------------------+
 //| Minimal flat-JSON readers (the server sends one flat object)     |
@@ -122,13 +133,14 @@ bool HttpGet(const string url, string &body)
    return true;
   }
 
-void HttpPostJson(const string url, const string json)
+bool HttpPostJson(const string url, const string json)
   {
-   if(url == "") return;
+   if(url == "") return true;
    char data[], result[];
    string headers;
    StringToCharArray(json, data, 0, StringLen(json), CP_UTF8);
-   WebRequest("POST", url, AccessHeaders() + "Content-Type: application/json\r\n", 5000, data, result, headers);
+   int status = WebRequest("POST", url, AccessHeaders() + "Content-Type: application/json\r\n", 5000, data, result, headers);
+   return status == 200;
   }
 
 //+------------------------------------------------------------------+
@@ -162,6 +174,21 @@ int MyPositions(int &buys, int &sells)
    return buys + sells;
   }
 
+void RememberClose(const ulong position, const string reason)
+  {
+   int n = ArraySize(g_closedTickets);
+   if(n >= 20) { ArrayRemove(g_closedTickets, 0, 1); ArrayRemove(g_closedReasons, 0, 1); n--; }
+   ArrayResize(g_closedTickets, n + 1); ArrayResize(g_closedReasons, n + 1);
+   g_closedTickets[n] = position; g_closedReasons[n] = reason == "" ? "other" : reason;
+  }
+
+string ClosedReasonOf(const ulong position)
+  {
+   for(int i = ArraySize(g_closedTickets) - 1; i >= 0; i--)
+      if(g_closedTickets[i] == position) return g_closedReasons[i];
+   return "other";
+  }
+
 void CloseMine(const int type) // type: -1 all, POSITION_TYPE_BUY or POSITION_TYPE_SELL
   {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -170,6 +197,7 @@ void CloseMine(const int type) // type: -1 all, POSITION_TYPE_BUY or POSITION_TY
       if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber || PositionGetString(POSITION_SYMBOL) != g_symbol) continue;
       if(type >= 0 && PositionGetInteger(POSITION_TYPE) != type) continue;
+      RememberClose(ticket, g_closeReason);
       trade.PositionClose(ticket, SlippagePoints);
      }
   }
@@ -208,6 +236,7 @@ double TodayResultPercent()
       if(ticket == 0 || !PositionSelectByTicket(ticket) || PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       floating += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
      }
+   g_todayMoney = realised + floating;
    double startBalance = AccountInfoDouble(ACCOUNT_BALANCE) - realised;
    if(startBalance <= 0) return 0.0;
    return 100.0 * (realised + floating) / startBalance;
@@ -240,10 +269,21 @@ void ProcessSignal(const string json)
   {
    if(JsonBool(json, "kill"))
      {
-      g_note = "kill switch from the server: positions closed";
+      g_control = "killed";
+      g_note = "kill switch (" + JsonString(json, "kill_source") + "): positions closed";
+      g_closeReason = "kill";
       CloseMine(-1); DeleteMyOrders();
+      g_closeReason = "";
       return;
      }
+   if(JsonBool(json, "paused"))
+     {
+      g_control = "paused";
+      g_note = "paused by Omega: no new entries";
+      DeleteMyOrders();                                   // a pending limit order would be a new entry
+      return;
+     }
+   g_control = "active";
    string id = JsonString(json, "signal_id");
    string side = JsonString(json, "side");
    if(id == "" || (side != "BUY" && side != "SELL")) { g_note = "no BUY or SELL signal"; return; }
@@ -268,7 +308,13 @@ void ProcessSignal(const string json)
 
    int buys, sells;
    MyPositions(buys, sells);
-   if(CloseOnOpposite) { if(isBuy && sells > 0) CloseMine(POSITION_TYPE_SELL); if(!isBuy && buys > 0) CloseMine(POSITION_TYPE_BUY); }
+   if(CloseOnOpposite)
+     {
+      g_closeReason = "opposite";
+      if(isBuy && sells > 0) CloseMine(POSITION_TYPE_SELL);
+      if(!isBuy && buys > 0) CloseMine(POSITION_TYPE_BUY);
+      g_closeReason = "";
+     }
    if(MyPositions(buys, sells) >= MaxPositions) { g_note = "position limit reached"; g_lastSignal = id; return; }
 
    double lots = LotsForRisk(stopDist);
@@ -312,6 +358,35 @@ void ProcessSignal(const string json)
    Print("Cryptophys EA: ", g_note);
   }
 
+// The signal id from an order comment "cpx <open ms>" (the H1 candle key), or "".
+string SignalIdOf(const string comment)
+  {
+   if(StringFind(comment, "cpx ") != 0) return "";
+   return "OANDA:XAUUSD:60:" + StringSubstr(comment, 4);
+  }
+
+// The EA's open positions as a JSON array (side, volume, levels, floating P&L), and their total.
+string PositionsJson(double &floating)
+  {
+   floating = 0.0;
+   string out = "[";
+   int k = 0;
+   for(int i = PositionsTotal() - 1; i >= 0 && k < 20; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber || PositionGetString(POSITION_SYMBOL) != g_symbol) continue;
+      double profit = PositionGetDouble(POSITION_PROFIT), swap = PositionGetDouble(POSITION_SWAP);
+      floating += profit + swap;
+      out += StringFormat("%s{\"ticket\":%I64u,\"side\":\"%s\",\"volume\":%.2f,\"entry\":%.3f,\"sl\":%.3f,\"tp\":%.3f,\"profit\":%.2f,\"swap\":%.2f,\"opened_ms\":%I64d,\"signal_id\":\"%s\"}",
+                          k > 0 ? "," : "", ticket, PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? "BUY" : "SELL",
+                          PositionGetDouble(POSITION_VOLUME), PositionGetDouble(POSITION_PRICE_OPEN), PositionGetDouble(POSITION_SL), PositionGetDouble(POSITION_TP),
+                          profit, swap, (long)PositionGetInteger(POSITION_TIME_MSC), SignalIdOf(PositionGetString(POSITION_COMMENT)));
+      k++;
+     }
+   return out + "]";
+  }
+
 void Heartbeat()
   {
    if(HeartbeatUrl == "" || TimeCurrent() - g_lastHeartbeat < HeartbeatMinutes * 60) return;
@@ -320,9 +395,79 @@ void Heartbeat()
    int n = MyPositions(buys, sells);
    string note = g_note;
    StringReplace(note, "\"", "'");
-   string json = StringFormat("{\"ea\":\"cryptophys-xauusd\",\"version\":\"1.00\",\"mode\":\"%s\",\"trading_allowed\":%s,\"positions\":%d,\"last_signal_id\":\"%s\",\"daily_loss_pct\":%.2f,\"spread_points\":%d,\"note\":\"%s\"}",
-                              AccountMode(), TradingAllowedHere() ? "true" : "false", n, g_lastSignal, -TodayResultPercent(), (int)SymbolInfoInteger(g_symbol, SYMBOL_SPREAD), note);
+   double floating = 0.0;
+   string positions = PositionsJson(floating);
+   double todayPct = TodayResultPercent();
+   double todayMoney = g_todayMoney;
+   string json = StringFormat("{\"ea\":\"cryptophys-xauusd\",\"version\":\"1.10\",\"mode\":\"%s\",\"trading_allowed\":%s,\"control\":\"%s\",\"positions\":%d,\"last_signal_id\":\"%s\",\"daily_loss_pct\":%.2f,\"spread_points\":%d,\"floating_pnl\":%.2f,\"today_pnl\":%.2f,\"currency\":\"%s\",\"terminal_ms\":%I64d,\"note\":\"%s\",\"positions_detail\":%s}",
+                              AccountMode(), TradingAllowedHere() ? "true" : "false", g_control, n, g_lastSignal, -todayPct, (int)SymbolInfoInteger(g_symbol, SYMBOL_SPREAD),
+                              floating, todayMoney, AccountInfoString(ACCOUNT_CURRENCY), (long)TimeCurrent() * 1000, note, positions);
    HttpPostJson(HeartbeatUrl, json);
+  }
+
+//+------------------------------------------------------------------+
+//| Closed positions: queued in OnTradeTransaction, sent in OnTimer  |
+//+------------------------------------------------------------------+
+string DealReason(const long reason, const ulong position)
+  {
+   if(reason == DEAL_REASON_SL) return "sl";
+   if(reason == DEAL_REASON_TP) return "tp";
+   if(reason == DEAL_REASON_SO) return "stopout";
+   if(reason == DEAL_REASON_EXPERT) return ClosedReasonOf(position);
+   if(reason == DEAL_REASON_CLIENT || reason == DEAL_REASON_MOBILE || reason == DEAL_REASON_WEB) return "manual";
+   return "other";
+  }
+
+void QueueDeal(const ulong deal)
+  {
+   if(DealUrl == "" || !HistoryDealSelect(deal)) return;
+   if(HistoryDealGetInteger(deal, DEAL_MAGIC) != MagicNumber || HistoryDealGetString(deal, DEAL_SYMBOL) != g_symbol) return;
+   long entry = HistoryDealGetInteger(deal, DEAL_ENTRY);
+   if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY) return;
+   ulong position = (ulong)HistoryDealGetInteger(deal, DEAL_POSITION_ID);
+   // The closing deal's type is the opposite of the position's side.
+   string side = HistoryDealGetInteger(deal, DEAL_TYPE) == DEAL_TYPE_SELL ? "BUY" : "SELL";
+   double exitPrice = HistoryDealGetDouble(deal, DEAL_PRICE);
+   long closedMs = HistoryDealGetInteger(deal, DEAL_TIME_MSC);
+   string reason = DealReason(HistoryDealGetInteger(deal, DEAL_REASON), position);
+   double entryPrice = 0.0, sl = HistoryDealGetDouble(deal, DEAL_SL), tp = HistoryDealGetDouble(deal, DEAL_TP);
+   long openedMs = 0;
+   string comment = "";
+   if(HistorySelectByPosition(position))
+     {
+      for(int i = 0; i < HistoryDealsTotal(); i++)
+        {
+         ulong d = HistoryDealGetTicket(i);
+         if(d == 0 || HistoryDealGetInteger(d, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+         entryPrice = HistoryDealGetDouble(d, DEAL_PRICE);
+         openedMs = HistoryDealGetInteger(d, DEAL_TIME_MSC);
+         comment = HistoryDealGetString(d, DEAL_COMMENT);
+         break;
+        }
+      HistoryDealSelect(deal);
+     }
+   string json = StringFormat("{\"deal_ticket\":%I64u,\"position_ticket\":%I64u,\"mode\":\"%s\",\"side\":\"%s\",\"volume\":%.2f,\"entry_price\":%.3f,\"exit_price\":%.3f,\"stop_loss\":%.3f,\"take_profit\":%.3f,\"profit\":%.2f,\"commission\":%.2f,\"swap\":%.2f,\"reason\":\"%s\",\"signal_id\":\"%s\",\"opened_ms\":%I64d,\"closed_ms\":%I64d,\"currency\":\"%s\"}",
+                              deal, position, AccountMode(), side, HistoryDealGetDouble(deal, DEAL_VOLUME), entryPrice, exitPrice, sl, tp,
+                              HistoryDealGetDouble(deal, DEAL_PROFIT), HistoryDealGetDouble(deal, DEAL_COMMISSION), HistoryDealGetDouble(deal, DEAL_SWAP),
+                              reason, SignalIdOf(comment), openedMs, closedMs, AccountInfoString(ACCOUNT_CURRENCY));
+   int n = ArraySize(g_dealQueue);
+   if(n >= 50) return;                                   // the server is unreachable for long: keep the oldest 50
+   ArrayResize(g_dealQueue, n + 1);
+   g_dealQueue[n] = json;
+  }
+
+void FlushDeals()
+  {
+   while(ArraySize(g_dealQueue) > 0)
+     {
+      if(!HttpPostJson(DealUrl, g_dealQueue[0])) return;   // retried on the next timer
+      ArrayRemove(g_dealQueue, 0, 1);
+     }
+  }
+
+void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest &request, const MqlTradeResult &result)
+  {
+   if(trans.type == TRADE_TRANSACTION_DEAL_ADD && trans.deal > 0) QueueDeal(trans.deal);
   }
 
 //+------------------------------------------------------------------+
@@ -346,6 +491,7 @@ void OnTimer()
   {
    string body;
    if(HttpGet(ApiUrl, body)) ProcessSignal(body);
+   FlushDeals();
    Heartbeat();
   }
 //+------------------------------------------------------------------+

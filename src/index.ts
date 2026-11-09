@@ -195,6 +195,7 @@ import { readParityView } from "./parity-view.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
 import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weighting.mjs";
 import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
+import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -1909,6 +1910,23 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
   }
 }
 
+/**
+ * Omega Execution Engine (omega.cryptophys.work, workers/xauusd-omega): the only caller, over its
+ * Service Binding. Reads the EA overview and sets the EA control (active, paused, killed). Omega
+ * verifies the Access JWT and passes the person's identity as the actor; the change is audited.
+ */
+export class OmegaGateway extends WorkerEntrypoint<Env> {
+  async overview(): Promise<JsonObject> {
+    return omegaOverview(this.env) as Promise<JsonObject>;
+  }
+  async deals(options: { limit?: number } = {}): Promise<JsonObject> {
+    return { deals: await listDeals(this.env, { limit: options?.limit ?? 200 }) } as JsonObject;
+  }
+  async setControl(input: { mode?: string; reason?: string; actor?: string }): Promise<JsonObject> {
+    return setControl(this.env, input ?? {}) as Promise<JsonObject>;
+  }
+}
+
 const DASHBOARD_CORS = { "access-control-allow-origin": "*" };
 
 function dashboardJson(data: unknown, status = 200): Response {
@@ -2442,12 +2460,28 @@ export default {
       // The EA's state for monitoring (src/ea-signal.mjs); behind Cloudflare Access like every /api/* path.
       let body: unknown;
       try {
-        const limited = await readBodyLimited(request, 4096);
-        if (limited.tooLarge) return json({ error: "Payload exceeds 4 KiB limit" }, 413);
+        const limited = await readBodyLimited(request, 16384);
+        if (limited.tooLarge) return json({ error: "Payload exceeds 16 KiB limit" }, 413);
         body = JSON.parse(limited.text);
       } catch { return json({ error: "Request body must be valid JSON" }, 400); }
       const r = await storeHeartbeat(env, body);
       return json(r, r.ok ? 200 : 400);
+    }
+    if (request.method === "POST" && url.pathname === "/api/ea/deal") {
+      // A position the EA closed (src/ea-execution.mjs, D1 ea_deals, stored once per deal); behind Access.
+      let body: unknown;
+      try {
+        const limited = await readBodyLimited(request, 4096);
+        if (limited.tooLarge) return json({ error: "Payload exceeds 4 KiB limit" }, 413);
+        body = JSON.parse(limited.text);
+      } catch { return json({ error: "Request body must be valid JSON" }, 400); }
+      try {
+        const r = await storeDeal(env, body);
+        return json(r, r.ok ? 200 : 400);
+      } catch (error) {
+        console.error("ea_deal_store_failed", error instanceof Error ? error.message : String(error));
+        return json({ ok: false, error: "store_failed" }, 500);
+      }
     }
     if (request.method === "POST" && url.pathname === "/webhook") {
       return handleWebhook(request, env);

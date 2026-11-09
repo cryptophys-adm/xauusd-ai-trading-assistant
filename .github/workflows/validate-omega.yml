@@ -1,0 +1,32 @@
+name: Validate Omega Worker
+
+# Pull requests that touch the Omega Worker: its tests and the Worker bundle with its static page
+# (no deploy, no secrets).
+on:
+  pull_request:
+    paths:
+      - "workers/xauusd-omega/**"
+      - "test/omega-worker.test.mjs"
+      - ".github/workflows/validate-omega.yml"
+      - ".github/workflows/deploy-omega.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test the Omega Worker
+        run: node --test test/omega-worker.test.mjs
+
+      - name: Validate Worker bundle with assets
+        run: npx --yes wrangler@4.45.0 deploy --dry-run --config workers/xauusd-omega/wrangler.jsonc
