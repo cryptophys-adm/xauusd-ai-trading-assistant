@@ -175,6 +175,63 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       try { return json({ ...(await env.OMEGA.overview()), viewer: { subject: identity.subject, type: identity.type, can_control: canControl } }); }
       catch (error) { console.error("omega_overview_failed", String(error?.message ?? error)); return json({ error: "overview_unavailable" }, 502); }
     }
+    if (route === "GET /api/stream") {
+      const intervalMs = Math.max(250, Math.min(2000, Number(url.searchParams.get("interval_ms") || "500") || 500));
+      const maxTicks = Math.max(1, Math.min(40, Number(url.searchParams.get("max_ticks") || "30") || 30));
+      const viewer = { subject: identity.subject, type: identity.type, can_control: canControl };
+      const enc = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          let lastFp = "";
+          try {
+            for (let i = 0; i < maxTicks; i++) {
+              if (request.signal?.aborted) break;
+              try {
+                const ov = await env.OMEGA.overview();
+                const br = ov?.broker?.bridge || {};
+                const fp = JSON.stringify([
+                  br.bid,
+                  br.ask,
+                  br.spread_points,
+                  br.balance,
+                  br.equity,
+                  br.terminal_connected,
+                  (br.positions || []).map((p) => [p.ticket, p.profit, p.sl, p.tp]),
+                  ov?.signal?.signal_id,
+                  ov?.control?.mode,
+                  ov?.broker?.engine?.enabled,
+                  ov?.broker?.engine?.settings_version,
+                  ov?.broker?.connection?.version,
+                  ov?.broker?.intents?.[0]?.id,
+                  ov?.broker?.intents?.[0]?.status,
+                ]);
+                if (i === 0 || fp !== lastFp || i % 6 === 0) {
+                  lastFp = fp;
+                  controller.enqueue(enc.encode(`event: overview\ndata: ${JSON.stringify({ ...ov, viewer })}\n\n`));
+                } else {
+                  controller.enqueue(enc.encode(`: keepalive\n\n`));
+                }
+              } catch {
+                controller.enqueue(enc.encode(`event: error\ndata: {"error":"overview_unavailable"}\n\n`));
+              }
+              if (i + 1 < maxTicks && !request.signal?.aborted) {
+                await new Promise((r) => setTimeout(r, intervalMs));
+              }
+            }
+          } finally {
+            try { controller.close(); } catch { /* already closed */ }
+          }
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        },
+      });
+    }
     if (route === "GET /api/deals") {
       const limit = Math.max(1, Math.min(500, Number(url.searchParams.get("limit") || "200") || 200));
       try { return json(await env.OMEGA.deals({ limit })); }
@@ -208,7 +265,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (r.response) return r.response;
       return rpc(() => env.OMEGA.clearConnection({ reason: r.body.reason, actor: identity.subject }), "connection_failed");
     }
-    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/deals", "/api/whoami"].includes(path)) return json({ error: "method_not_allowed" }, 405);
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 

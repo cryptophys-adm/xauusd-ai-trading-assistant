@@ -194,6 +194,11 @@ test("under nexus.cryptophys.work/omega: /omega redirects to /omega/, assets and
   assert.equal((await handle(at("/omega/omega.js"), env, opts)).status, 200);
   assert.deepEqual(seen, ["/", "/omega.js"]);
   assert.equal((await (await handle(at("/omega/api/overview"), env, opts)).json()).signal.side, "BUY");
+  const streamRes = await handle(at("/omega/api/stream?max_ticks=2&interval_ms=250"), env, opts);
+  assert.equal(streamRes.status, 200);
+  assert.match(streamRes.headers.get("content-type"), /text\/event-stream/);
+  const streamText = await streamRes.text();
+  assert.match(streamText, /event: overview\ndata: /);
   const post = await handle(at("/omega/api/settings", { method: "POST", body: "{}", headers: { origin: "https://nexus.cryptophys.work", "content-type": "application/json" } }), env, opts);
   assert.equal(post.status, 200, "the Nexus origin is the page's origin there");
   assert.equal((await handle(new Request("https://nexus.cryptophys.work/omega/health"), env, opts)).status, 200);

@@ -18,6 +18,7 @@ export const DEFAULT_TERMINAL_INI = "/opt/mt5-ingestion-gateway/config/terminal_
 export const DEFAULT_TERMINAL_SERVICE = "mt5-terminal.service";
 export const DEFAULT_SYMBOL = "XAUUSD";
 export const DEFAULT_SYNC_MS = 5000;
+export const DEFAULT_STREAM_MIN_MS = 250;
 export const MAX_BACKOFF_MS = 60000;
 export const MAX_SYNC_BODY_BYTES = 65536;
 export const FORBIDDEN_403_LOG_INTERVAL_MS = 60000;
@@ -93,6 +94,8 @@ export function resolveConfig(options = {}) {
   const symbol = String(options.symbol ?? env.OMEGA_SYMBOL ?? DEFAULT_SYMBOL);
   const syncMsRaw = Number(options.syncMs ?? env.OMEGA_SYNC_MS ?? DEFAULT_SYNC_MS);
   const syncMs = Number.isFinite(syncMsRaw) && syncMsRaw > 0 ? syncMsRaw : DEFAULT_SYNC_MS;
+  const streamMinMsRaw = Number(options.streamMinMs ?? env.OMEGA_STREAM_MIN_MS ?? DEFAULT_STREAM_MIN_MS);
+  const streamMinMs = Number.isFinite(streamMinMsRaw) && streamMinMsRaw >= 50 ? streamMinMsRaw : DEFAULT_STREAM_MIN_MS;
 
   return {
     omegaUrl,
@@ -106,6 +109,7 @@ export function resolveConfig(options = {}) {
     takeStartup,
     symbol,
     syncMs,
+    streamMinMs,
   };
 }
 
@@ -255,7 +259,40 @@ export function createDaemon(options = {}) {
           : () => Date.now();
 
   let pendingTimer = null;
+  let wakeTimer = null;
   let sleepResolve = null;
+  let fileWatcher = null;
+  let lastTickCompletedMs = 0;
+
+  function wakeNow() {
+    if (wakeTimer) {
+      clearTimeout(wakeTimer);
+      wakeTimer = null;
+    }
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+    }
+    if (sleepResolve) {
+      const resolve = sleepResolve;
+      sleepResolve = null;
+      resolve();
+    }
+  }
+
+  function requestWake() {
+    if (stopRequested || consecutiveFailures > 0 || !sleepResolve) return;
+    const elapsed = Math.max(0, now() - lastTickCompletedMs);
+    if (elapsed >= config.streamMinMs) {
+      wakeNow();
+    } else if (!wakeTimer) {
+      const remain = Math.max(10, config.streamMinMs - elapsed);
+      wakeTimer = setTimeout(() => {
+        wakeTimer = null;
+        if (!stopRequested && consecutiveFailures === 0) wakeNow();
+      }, remain);
+    }
+  }
 
   const defaultSleep = (ms) =>
     new Promise((resolve) => {
@@ -493,6 +530,18 @@ export function createDaemon(options = {}) {
   function stop() {
     stopRequested = true;
     running = false;
+    if (fileWatcher) {
+      try {
+        fileWatcher.close();
+      } catch {
+        // ignore close errors
+      }
+      fileWatcher = null;
+    }
+    if (wakeTimer) {
+      clearTimeout(wakeTimer);
+      wakeTimer = null;
+    }
     if (pendingTimer) {
       clearTimeout(pendingTimer);
       pendingTimer = null;
@@ -505,7 +554,7 @@ export function createDaemon(options = {}) {
     log({ level: "info", event: "daemon_stopped" });
   }
 
-  async function start({ attachSignals = true } = {}) {
+  async function start({ attachSignals = true, watchFiles = true } = {}) {
     if (running) return;
     running = true;
     stopRequested = false;
@@ -518,6 +567,28 @@ export function createDaemon(options = {}) {
       process.once("SIGINT", onSignal);
     }
 
+    if (
+      watchFiles &&
+      options.watch !== false &&
+      !options.clock &&
+      !options.sleep &&
+      typeof fs.watch === "function"
+    ) {
+      try {
+        fs.mkdirSync(config.omegaFilesDir, { recursive: true });
+        fileWatcher = fs.watch(config.omegaFilesDir, (_eventType, filename) => {
+          if (!filename || filename === "state.json" || filename === "results.txt") {
+            requestWake();
+          }
+        });
+        if (fileWatcher && typeof fileWatcher.on === "function") {
+          fileWatcher.on("error", () => {});
+        }
+      } catch {
+        fileWatcher = null;
+      }
+    }
+
     log({
       level: "info",
       event: "daemon_started",
@@ -525,17 +596,27 @@ export function createDaemon(options = {}) {
       kid: keys.kid,
       omega_url: config.omegaUrl,
       sync_ms: config.syncMs,
+      stream_min_ms: config.streamMinMs,
     });
 
     try {
       while (!stopRequested) {
         const res = await tick();
+        lastTickCompletedMs = now();
         if (stopRequested) break;
         const waitMs = res?.delayMs ?? config.syncMs;
         await sleep(waitMs);
       }
     } finally {
       running = false;
+      if (fileWatcher) {
+        try {
+          fileWatcher.close();
+        } catch {
+          // ignore
+        }
+        fileWatcher = null;
+      }
       if (attachSignals) {
         process.removeListener("SIGTERM", onSignal);
         process.removeListener("SIGINT", onSignal);
@@ -549,6 +630,7 @@ export function createDaemon(options = {}) {
     tick,
     start,
     stop,
+    wake: requestWake,
     getBackoffMs: () => currentBackoffMs,
     getConsecutiveFailures: () => consecutiveFailures,
   };

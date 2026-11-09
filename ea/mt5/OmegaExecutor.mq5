@@ -40,7 +40,8 @@
 
 input long MagicNumber       = 920200; // Magic number for OmegaExecutor orders & positions
 input int  SlippagePoints    = 30;     // Max price deviation in points for market execution
-input int  StateEverySeconds = 2;      // How often omega/state.json is refreshed (seconds)
+input int  StateEverySeconds = 1;      // How often omega/state.json is refreshed on timer (seconds)
+input int  MinTickIntervalMs = 250;    // Minimum interval between tick-driven state.json writes (ms)
 input int  MaxIntentsAgeSeconds = 30;  // ignore an intents.txt older than this (bridge down, terminal restarted)
 
 const string OMEGA_FOLDER    = "omega";
@@ -53,13 +54,22 @@ const string RESULTS_PATH    = "omega/results.txt";
 CTrade   trade;
 string   g_processedIds[];
 datetime g_lastStateAt = 0;
+ulong    g_lastTickWriteMs = 0;
+double   g_lastBid = 0.0;
+double   g_lastAsk = 0.0;
+long     g_lastWriteMs = 0;
 
 //+------------------------------------------------------------------+
 //| Helpers                                                          |
 //+------------------------------------------------------------------+
 long NowUtcMs()
   {
-   return (long)TimeGMT() * 1000;
+   long base = (long)TimeGMT() * 1000;
+   if(base <= g_lastWriteMs && (g_lastWriteMs - base) < 999)
+      g_lastWriteMs = g_lastWriteMs + 1;
+   else
+      g_lastWriteMs = base;
+   return g_lastWriteMs;
   }
 
 string EscapeJson(const string s)
@@ -493,12 +503,32 @@ void OnDeinit(const int reason)
    EventKillTimer();
   }
 
+void OnTick()
+  {
+   ulong nowTick = GetTickCount64();
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   if((bid != g_lastBid || ask != g_lastAsk) &&
+      (g_lastTickWriteMs == 0 || (nowTick - g_lastTickWriteMs) >= (ulong)MathMax(50, MinTickIntervalMs)))
+     {
+      WriteStateJson();
+      g_lastBid = bid;
+      g_lastAsk = ask;
+      g_lastTickWriteMs = nowTick;
+      g_lastStateAt = TimeGMT();
+     }
+   ProcessIntentsFile();
+  }
+
 void OnTimer()
   {
    datetime nowGmt = TimeGMT();
    if(g_lastStateAt == 0 || (nowGmt - g_lastStateAt) >= MathMax(1, StateEverySeconds))
      {
       WriteStateJson();
+      g_lastBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      g_lastAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      g_lastTickWriteMs = GetTickCount64();
       g_lastStateAt = nowGmt;
      }
    ProcessIntentsFile();
