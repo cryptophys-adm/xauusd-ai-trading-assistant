@@ -45,6 +45,7 @@ import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import { H1_ROOM_LOCK_PREFIX } from "./h1-consensus.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, stuckCautions, ROOM_TIMEFRAME, quorumAllows, quorumRule } from "./reputation.mjs";
 import { agentReputation, listStuckStates } from "./outcome-scoring.mjs";
+import { activeWeighting, weightedReputation } from "./weighting.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
@@ -341,6 +342,25 @@ function conclusionMessages(spec, bus, debate, confirmations, crowd = null, lear
 }
 
 /** Runs the War Room of one closed 1H, 4H or D1 bar; idempotent per bar. */
+/**
+ * The weighting of a room's crowd line (src/weighting.mjs, owner decision 2026-11-09): the 1H room,
+ * whose quorum is the H1 decision, uses the active weighting Aether tuned and a person approved; the
+ * 4H and D1 rooms keep the P7 reputation and the default quorum.
+ */
+async function crowdOptions(env, chart) {
+  if (chart !== "H1") return {};
+  const w = await activeWeighting(env);
+  return { quorumShare: w.params.quorum_share, weighting: w.id };
+}
+async function roomReputationMap(env, db, chart) {
+  const base = await agentReputation(db, ROOM_TIMEFRAME[chart]);
+  if (chart !== "H1") return base;
+  try { return await weightedReputation(db, (await activeWeighting(env)).params, { base }); } catch { return base; }
+}
+async function roomCrowd(env, db, chart, entries) {
+  return buildCrowdLine(entries, await roomReputationMap(env, db, chart), await crowdOptions(env, chart));
+}
+
 export async function runTimeframeThread(env, { chart, candleKey }, { clock = () => Date.now() } = {}) {
   const spec = TF_THREAD_CHARTS[chart];
   if (!spec) return { status: "unsupported_chart" };
@@ -452,7 +472,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   }))).filter((m) => m?.status === "ok");
 
   // Phase 3: the TLDR of this timeframe, with the crowd line (P7, RFC §7).
-  const crowd = buildCrowdLine(finalEntries(answered, debate), await agentReputation(db, ROOM_TIMEFRAME[chart]));
+  const crowd = await roomCrowd(env, db, chart, finalEntries(answered, debate));
   const conclude = phase(WAR_ROOM_CONCLUSION_MS);
   await conclude(base("conclusion", "moderator"), {
     messages: conclusionMessages(spec, bus, debate.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument })), ev.confirmations, crowd, learnedFor("moderator")),
@@ -554,7 +574,7 @@ export async function runPendingTimeframeThreads(env, { now = Date.now(), clock 
  * The latest 1H, 4H or D1 room for its Nexus tab: roster, bus, Consensus Discussion (the
  * `debate` field) and TLDR. With `candleKey`, the room of that bar (its latest session).
  */
-export async function readTimeframeThread(db, chart, { candleKey = null } = {}) {
+export async function readTimeframeThread(db, chart, { candleKey = null, env = null } = {}) {
   const spec = TF_THREAD_CHARTS[chart];
   if (!spec) return null;
   await ensureThreadSchema(db);
@@ -579,13 +599,13 @@ export async function readTimeframeThread(db, chart, { candleKey = null } = {}) 
   const c = rows.find((m) => m.step === "conclusion");
   // P7 (RFC §7): each agent's 30-day track record on this chart (with caution flags from the open
   // H1 stuck states in the 1H room), and the room's crowd line.
-  const rep = await agentReputation(db, ROOM_TIMEFRAME[chart]);
+  const rep = await roomReputationMap(env ?? { DB: db }, db, chart);
   let cautions = {};
   if (chart === "H1") { try { cautions = stuckCautions(await listStuckStates(db, { limit: 20 })); } catch { cautions = {}; } }
   const ids = [...new Set([...(brief?.roster || []), "moderator"])];
   return {
     reputation: roomReputation(ids, rep, cautions),
-    crowd: c?.crowd ?? (openings.some((o) => o.status === "ok") ? buildCrowdLine(finalEntries(openings, debate), rep) : null),
+    crowd: c?.crowd ?? (openings.some((o) => o.status === "ok") ? buildCrowdLine(finalEntries(openings, debate), rep, await crowdOptions(env ?? { DB: db }, chart)) : null),
     tf: chart, tab: spec.tab, bar_open: barOpenOf(run), reconvened: String(run).includes("#"), bar_close: brief?.bar_time ?? rows[0]?.bar_time ?? null, candle_key: brief?.candle_key ?? null,
     phase: c?.status === "ok" ? "closed" : debate.length ? "debate" : "opening",
     confirmations: brief?.confirmations ?? null, hud_snapshot: brief?.hud_snapshot ?? null,

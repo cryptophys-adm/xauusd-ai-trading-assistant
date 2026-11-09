@@ -103,7 +103,7 @@ export function consensusInput(room) {
     conclusion,
     // P7 (RFC §7): the deterministic crowd line, weighted by each agent's 30-day track record.
     // weighted_biases (each bias's share of the weight) carries the quorum of the H1 decision.
-    crowd: room?.crowd ? { weighted_bias: room.crowd.weighted_bias, weighted_lean: room.crowd.weighted_lean, weighted_biases: room.crowd.weighted_biases ?? null, disagreement: room.crowd.disagreement, scored_agents: room.crowd.scored_agents, agents: room.crowd.agents, disagreeing_families: room.crowd.disagreeing_families } : null
+    crowd: room?.crowd ? { weighted_bias: room.crowd.weighted_bias, weighted_lean: room.crowd.weighted_lean, weighted_biases: room.crowd.weighted_biases ?? null, disagreement: room.crowd.disagreement, scored_agents: room.crowd.scored_agents, agents: room.crowd.agents, disagreeing_families: room.crowd.disagreeing_families, quorum_share: Number.isFinite(room.crowd.quorum_share) ? room.crowd.quorum_share : QUORUM_SHARE, weighting: room.crowd.weighting ?? null } : null
   };
 }
 
@@ -125,12 +125,13 @@ export function quorumOf(consensus) {
   const bias = SIDE_BIAS[roomStance] ?? null;
   const shares = consensus?.crowd?.weighted_biases ?? null;
   const share = bias && shares && Number.isFinite(shares[bias]) ? shares[bias] : null;
-  const base = { room_stance: roomStance, side_bias: bias, share, needed: QUORUM_SHARE, agents: consensus?.crowd?.agents ?? consensus?.agents_spoke ?? 0 };
+  const needed = Number.isFinite(consensus?.crowd?.quorum_share) ? consensus.crowd.quorum_share : QUORUM_SHARE;
+  const base = { room_stance: roomStance, side_bias: bias, share, needed, weighting: consensus?.crowd?.weighting ?? null, agents: consensus?.crowd?.agents ?? consensus?.agents_spoke ?? 0 };
   if (!c) return { ...base, stance: "WAIT", met: false, reason: "the 1H War Room did not conclude, so there is no quorum to decide from" };
   if (!bias) return { ...base, stance: "WAIT", met: false, reason: `the 1H War Room concluded ${roomStance}, which is not an entry` };
   if (share == null) return { ...base, stance: "WAIT", met: false, reason: "the room has no crowd line, so its quorum cannot be counted" };
   const pct = Math.round(share * 100);
-  if (share <= QUORUM_SHARE) return { ...base, stance: "WAIT", met: false, reason: `the 1H War Room concluded ${roomStance}, but only ${pct}% of the agents' weight leans ${bias.toLowerCase()}, not the majority it needs` };
+  if (share <= needed) return { ...base, stance: "WAIT", met: false, reason: `the 1H War Room concluded ${roomStance}, but only ${pct}% of the agents' weight leans ${bias.toLowerCase()}, not the majority it needs` };
   return { ...base, stance: roomStance, met: true, reason: `the 1H War Room concluded ${roomStance} and ${pct}% of the agents' weight leans ${bias.toLowerCase()}` };
 }
 
@@ -186,7 +187,7 @@ export function reasonerLines({ evidence, consensus, quorum = null, plan = null,
   const q = quorum ?? quorumOf(consensus);
   return [
     "You are the Reasoner, the final stage of the XAUUSD H1 decision. You write the decision LAST, after the Consensus Discussion of the 1H War Room: CONSENSUS holds its communication bus (every agent's opening), the Consensus Discussion (the agents answering each other), the moderator's conclusion with its decision and bias, and the crowd line.",
-    `The H1 decision is the QUORUM of the room, not yours to choose: BUY or SELL only when the moderator concluded BUY or SELL and more than ${Math.round(QUORUM_SHARE * 100)}% of the weight of the agents who spoke (each weighted by its track record, CONSENSUS.crowd.weighted_biases) holds the matching bias; otherwise WAIT. QUORUM gives the result. For a BUY or SELL, PLAN gives the entry, stop and targets from the Key Level Agent's zones: use exactly those prices (entry_price = PLAN.entry, stop_loss = PLAN.stop, take_profit = PLAN.tp1, risk_reward = PLAN.rrr.tp1). If QUORUM is BUY or SELL and PLAN is null, the decision is WAIT. Never set position_size_pct: it is always null.`,
+    `The H1 decision is the QUORUM of the room, not yours to choose: BUY or SELL only when the moderator concluded BUY or SELL and more than ${Math.round(q.needed * 100)}% of the weight of the agents who spoke (each weighted by its track record, CONSENSUS.crowd.weighted_biases) holds the matching bias; otherwise WAIT. QUORUM gives the result. For a BUY or SELL, PLAN gives the entry, stop and targets from the Key Level Agent's zones: use exactly those prices (entry_price = PLAN.entry, stop_loss = PLAN.stop, take_profit = PLAN.tp1, risk_reward = PLAN.rrr.tp1). If QUORUM is BUY or SELL and PLAN is null, the decision is WAIT. Never set position_size_pct: it is always null.`,
     "Use only CONSENSUS, QUORUM, PLAN and EVIDENCE. Do not invent market prices or claim the agents verified facts they did not receive.",
     "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before quoting it, and quote the decoded meaning. Never infer a field meaning that is not in the dictionary.",
     "Indicator signals (the Prophet R38 confirmation and setup state, its trade management t_enc, the GMI verdict, gate and conflict) are arguments the agents weighed in the discussion, not gates and not vetoes: mention them only as the agents used them. Every field describes the closed candle being decided (EVIDENCE.candle_time, the bar that just closed), never the running candle. Local engine values that are not parity-approved are still evidence, read with less weight.",
@@ -235,7 +236,7 @@ export function consensusSummary(consensus, { overridden = false, decidedAfterCl
     status: consensus.status, bar_open: consensus.bar_open, agents_spoke: consensus.agents_spoke, roster_size: consensus.roster_size,
     room_bias: consensus.room_bias, conclusion: consensus.conclusion ? { stance: consensus.conclusion.stance, bias: consensus.conclusion.bias, confidence: consensus.conclusion.confidence, summary: consensus.conclusion.summary } : null,
     // Owner decision 2026-11-09: the decision is the room's quorum (quorumOf).
-    quorum: quorum ? { stance: quorum.stance, room_stance: quorum.room_stance, side_bias: quorum.side_bias, share: quorum.share, needed: quorum.needed, met: quorum.met, reason: quorum.reason } : null,
+    quorum: quorum ? { stance: quorum.stance, room_stance: quorum.room_stance, side_bias: quorum.side_bias, share: quorum.share, needed: quorum.needed, met: quorum.met, reason: quorum.reason, weighting: quorum.weighting ?? null } : null,
     ...(plan !== undefined ? { plan_available: Boolean(plan) } : {}),
     guard_overridden: overridden
   };

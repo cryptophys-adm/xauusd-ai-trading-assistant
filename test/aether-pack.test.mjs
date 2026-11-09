@@ -61,6 +61,9 @@ test("only approved parameter items inside the reviewed TUNING_GRID become shado
   assert.equal(c.review.by, "2026-12-09", "30 days after it was first seen");
   assert.ok(MAX_CANDIDATES_PER_FAMILY === 3);
   assert.equal(CANDIDATES.length, 3, "the hand-written candidates are unchanged");
+  const weighting = { ...param("gmi_v12_70", 16, "k-weighting-quorum-share-0-6"), params: { family: "weighting", grid: "WEIGHTING_GRID.quorum_share", values: { quorum_share: 0.6 }, hypothesis: "h", metric: "m" } };
+  const w = packCandidates(pack([weighting]), { now: NOW });
+  assert.deepEqual([w.candidates.length, w.ignored.length], [0, 0], "a weighting item is activated by src/weighting.mjs, never run as a shadow version");
 });
 
 test("the hourly pull stores the pack, keeps the first-seen time, and fails soft", async () => {
