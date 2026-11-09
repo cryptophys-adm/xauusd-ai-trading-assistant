@@ -23,8 +23,10 @@ const MAX_GATEWAY_COUNT = 8000;
 // no longer covers (owner decision 2026-11-05, TradingView MCP budget 800 a day).
 export const SERIES = Object.freeze([
   // Owner decision 2026-11-08: the gold chart stays live (1m pulled every 5 minutes); only the macro
-  // series USOIL 5m is pulled once per 15 minutes (cadence below).
-  { key: "OANDA:XAUUSD|1m", symbol: CANONICAL_SYMBOL, interval: "1m", timeframe: "M1", seconds: 60, retain: 3000, role: "chart_source" },
+  // series USOIL 5m is pulled once per 15 minutes (cadence below). Since the cron runs every minute
+  // (owner 2026-11-09: the H1 decision within 1 to 2 minutes of the close), the 1m chart keeps its
+  // 5-minute cadence explicitly, so the quota does not change.
+  { key: "OANDA:XAUUSD|1m", symbol: CANONICAL_SYMBOL, interval: "1m", timeframe: "M1", seconds: 60, retain: 3000, role: "chart_source", cadence: 300 },
   { key: "OANDA:XAUUSD|5m", symbol: CANONICAL_SYMBOL, interval: "5m", timeframe: "M5", seconds: 300, retain: 5000, role: "chart", derived_from: "OANDA:XAUUSD|1m" },
   { key: "OANDA:XAUUSD|15m", symbol: CANONICAL_SYMBOL, interval: "15m", timeframe: "M15", seconds: 900, retain: 2000, role: "htf", derived_from: "OANDA:XAUUSD|1m" },
   { key: "OANDA:XAUUSD|1h", symbol: CANONICAL_SYMBOL, interval: "1h", timeframe: "H1", seconds: 3600, retain: 1000, role: "htf" },
@@ -63,7 +65,10 @@ const finite = (x) => typeof x === "number" && Number.isFinite(x);
  * approved H1 identities. Shorter native bars (M1, USOIL 5m) keep no delay, so the 15m War
  * Room is not held back; derived bars inherit their source's timing.
  */
-export const SETTLE_SECONDS = 90;
+// 90 seconds until 2026-11-09; 60 since (owner: the H1 decision within 1 to 2 minutes of the close).
+// A bar TradingView still revises after that is rebuilt and published again (republishRevisedH1), so
+// its parity comparison still runs on the final bar.
+export const SETTLE_SECONDS = 60;
 export function settleSeconds(spec) {
   return spec && !spec.derived_from && spec.seconds >= 3600 ? SETTLE_SECONDS : 0;
 }

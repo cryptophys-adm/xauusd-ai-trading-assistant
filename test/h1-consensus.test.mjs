@@ -152,7 +152,7 @@ test("runAnalysis no longer calls the Analyst or the Counselor and no longer enq
 
 test("the 1H room right after the close: the task waits for the HUD snapshot five minutes at most (owner request 2026-11-07)", async () => {
   const { buildH1RoomTask, h1RoomGate, H1_ROOM_HUD_WAIT_MS } = await import("../src/h1-consensus.mjs");
-  assert.equal(H1_ROOM_HUD_WAIT_MS, 5 * 60 * 1000);
+  assert.equal(H1_ROOM_HUD_WAIT_MS, 2 * 60 * 1000, "the decision within 1 to 2 minutes of the close (owner 2026-11-09)");
   assert.deepEqual(buildH1RoomTask({ candleKey: KEY, enqueuedAt: "t" }), { kind: "h1_room", event_id: `h1_room:${KEY}`, candle_key: KEY, enqueued_at: "t" });
   assert.throws(() => buildH1RoomTask({ candleKey: "OANDA:XAUUSD:60:x" }), TypeError);
   const close = OPEN + 3600_000;

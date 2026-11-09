@@ -72,21 +72,22 @@ test("D1 bars use TradingView session open time and close only after a full sess
   assert.equal(after.length, 2);
 });
 
-test("native H1 and longer bars settle 90 s after their close before they count as closed; M1 does not wait", () => {
+test("native H1 and longer bars settle 60 s after their close before they count as closed; M1 does not wait", () => {
   // Production 2026-11-06: an H1 bar pulled seconds after its close carried a provisional close
   // and volume, and the local record built on it failed parity against the final bar.
   const h1 = SERIES.find((s) => s.interval === "1h" && s.symbol === "OANDA:XAUUSD");
   const m1 = SERIES.find((s) => s.interval === "1m" && s.symbol === "OANDA:XAUUSD");
-  assert.equal(internals.settleSeconds(h1), 90);
+  assert.equal(internals.settleSeconds(h1), 60, "90 s until 2026-11-09; 60 s since (the H1 decision within 1 to 2 minutes)");
   assert.equal(internals.settleSeconds(m1), 0);
   assert.equal(internals.settleSeconds(SERIES.find((s) => s.symbol === "TVC:USOIL" && s.interval === "1h")), 0, "a derived series inherits its source's timing");
   const open = 1_800_000_000 - 3600;
   const bars = { t: [open], o: [1], h: [2], l: [0], c: [1], v: [5] };
   assert.equal(internals.closedCandlesFromColumns(bars, h1, open + 3600 + 30).length, 0, "30 s after the close: not final yet");
-  assert.equal(internals.closedCandlesFromColumns(bars, h1, open + 3600 + 90).length, 1);
+  assert.equal(internals.closedCandlesFromColumns(bars, h1, open + 3600 + 59).length, 0, "59 s after the close: not final yet");
+  assert.equal(internals.closedCandlesFromColumns(bars, h1, open + 3600 + 60).length, 1);
   const last = { time: open - 3600 };
   assert.equal(internals.planRequest(h1, { candles: [last] }, open + 3600 + 30), null, "no pull before the bar settles");
-  assert.ok(internals.planRequest(h1, { candles: [last] }, open + 3600 + 90));
+  assert.ok(internals.planRequest(h1, { candles: [last] }, open + 3600 + 60), "the per-minute cron pulls it one minute after the close");
   const m1Open = 1_800_000_000 - 60;
   assert.equal(internals.closedCandlesFromColumns({ t: [m1Open], o: [1], h: [2], l: [0], c: [1], v: [5] }, m1, m1Open + 60).length, 1);
 });
@@ -538,7 +539,7 @@ test("no pull while the market is closed (Friday 17:30 to Sunday 18:00 New York)
   assert.ok(internals.planRequest({ ...spec, symbol: "CRYPTOCAP:USDT" }, { candles: [last] }, sec("2026-11-08T12:00:00Z")), "crypto is pulled on the weekend");
 });
 
-test("USOIL 5m is pulled once per 15 minutes with every bar; the gold 1m chart stays every 5 minutes", () => {
+test("USOIL 5m is pulled once per 15 minutes with every bar; the gold 1m chart stays every 5 minutes under the per-minute cron", () => {
   const sec = (iso) => Date.parse(iso) / 1000;
   const oil = internals.SERIES.find((s) => s.key === "TVC:USOIL|5m");
   assert.equal(oil.cadence, 900);
@@ -548,8 +549,10 @@ test("USOIL 5m is pulled once per 15 minutes with every bar; the gold 1m chart s
   const plan = internals.planRequest(oil, { candles: [last] }, sec("2026-11-10T10:15:10Z"));
   assert.ok(plan && plan.count >= 3, "at 10:15 the pull brings all three 5m bars");
   const m1 = internals.SERIES.find((s) => s.key === "OANDA:XAUUSD|1m");
-  assert.equal(m1.cadence, undefined, "the gold chart has no cadence");
-  assert.ok(internals.planRequest(m1, { candles: [{ time: sec("2026-11-10T09:59:00Z") }] }, sec("2026-11-10T10:05:10Z")), "gold 1m is pulled at 10:05");
+  assert.equal(m1.cadence, 300, "the cron runs every minute since 2026-11-09; the 1m chart keeps its 5-minute pulls");
+  const m1Last = { candles: [{ time: sec("2026-11-10T09:59:00Z") }] }; // the 1m bar closing at 10:00 is cached
+  for (const t of ["10:01:05", "10:02:05", "10:04:05"]) assert.equal(internals.planRequest(m1, m1Last, sec(`2026-11-10T${t}Z`)), null, `no 1m pull at ${t}`);
+  assert.ok(internals.planRequest(m1, m1Last, sec("2026-11-10T10:05:10Z")), "gold 1m is pulled at 10:05");
 });
 
 test("after a gap, a pull that brought no new bar backs off instead of repeating every run (production 2026-11-09)", async () => {

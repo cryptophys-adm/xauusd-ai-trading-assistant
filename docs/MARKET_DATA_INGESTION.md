@@ -62,7 +62,7 @@ RPC method `TvGateway.ohlcv(requests)` on `xauusd-fundamental-news-ingestion`, e
 
 ## Quota-aware refresh
 
-- A cron runs every 5 minutes. A series is requested only when a new bar of its interval can have closed since the cached one. The first request bootstraps to the retention depth; later requests ask only for the gap plus overlap, merged by bar open time.
+- A cron runs every minute (every 5 minutes until 2026-11-09; the owner wants the H1 decision within 1 to 2 minutes of the close). A series is requested only when a new bar of its interval can have closed since the cached one, and a cadence series (the gold 1m chart every 5 minutes, USOIL 5m every 15) only at its cadence, so the quota does not change. Native bars of 1 hour and longer count as closed 60 seconds after their close (`SETTLE_SECONDS`). The first request bootstraps to the retention depth; later requests ask only for the gap plus overlap, merged by bar open time.
 - **Per-run cap:** `TV_MAX_CALLS_PER_RUN`, default 8, maximum 12. The chart series (M5) is requested first; deferred series follow on the next run.
 - **Daily cap:** `TV_DAILY_CALL_BUDGET` is **800** MCP calls per UTC day, counted in KV. It was 1200 until the owner's decision of 2026-11-05: that evening TradingView suspended the account's MCP access until 00:00 UTC for suspicious volume. It warned that continued volume could mean a one-week suspension, which would stop the local lane for a week.
 - **Derived series** (`derived-series.mjs`, owner decision 2026-11-05):
@@ -138,7 +138,7 @@ RPC method `TvGateway.ohlcv(requests)` on `xauusd-fundamental-news-ingestion`, e
 
 ## Quota-aware refresh
 
-- A cron runs every 5 minutes. A series is requested only when a new bar of its interval can have closed since the cached one. The first request bootstraps to the retention depth; later requests ask only for the gap plus overlap, merged by bar open time.
+- A cron runs every minute (every 5 minutes until 2026-11-09; the owner wants the H1 decision within 1 to 2 minutes of the close). A series is requested only when a new bar of its interval can have closed since the cached one, and a cadence series (the gold 1m chart every 5 minutes, USOIL 5m every 15) only at its cadence, so the quota does not change. Native bars of 1 hour and longer count as closed 60 seconds after their close (`SETTLE_SECONDS`). The first request bootstraps to the retention depth; later requests ask only for the gap plus overlap, merged by bar open time.
 - **Per-run cap:** `TV_MAX_CALLS_PER_RUN`, default 8, maximum 12. The chart series (M5) is requested first; deferred series follow on the next run.
 - **Daily cap:** `TV_DAILY_CALL_BUDGET` is **800** MCP calls per UTC day, counted in KV. It was 1200 until the owner's decision of 2026-11-05: that evening TradingView suspended the account's MCP access until 00:00 UTC for suspicious volume. It warned that continued volume could mean a one-week suspension, which would stop the local lane for a week.
 - **Derived series** (`derived-series.mjs`, owner decision 2026-11-05):

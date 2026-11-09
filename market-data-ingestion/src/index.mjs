@@ -257,6 +257,16 @@ const worker = {
       // Build the bundle once for both publish and informational 5m context.
       let latestBundle = null;
       try { latestBundle = await buildBundle(env); } catch { latestBundle = null; }
+      // Phase C2: HUD snapshots for the HUD agents (flag-gated; never decision evidence). Published
+      // BEFORE the H1 record (2026-11-09): the H1 record parks the evidence and starts the 1H room at
+      // once, and the room waits for its HUD snapshot; published after it, the room lost a retry.
+      try {
+        const hud = await publishHudSnapshots(env, { bundle: latestBundle });
+        const failed = Object.entries(hud.charts || {}).filter(([, r]) => !["published", "already_published", "no_fresh_close"].includes(r.status));
+        if (failed.length) console.error(JSON.stringify({ worker: WORKER_NAME, event: "hud_snapshot_publish_failed", charts: Object.fromEntries(failed.map(([c, r]) => [c, r.status])) }));
+      } catch (error) {
+        console.error(JSON.stringify({ worker: WORKER_NAME, event: "hud_snapshot_publish_failed", code: asString(error?.code) || "publish_failed" }));
+      }
       // Publish the local_computation lane for a newly closed H1 bar (runs on cached data
       // even if this cycle's pull failed; the publisher enforces freshness and dedupe).
       try {
@@ -304,14 +314,6 @@ const worker = {
         }
       } catch (error) {
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_htf_failed", code: asString(error?.code) || "publish_failed" }));
-      }
-      // Phase C2: HUD snapshots for the HUD agents (flag-gated; never decision evidence).
-      try {
-        const hud = await publishHudSnapshots(env, { bundle: latestBundle });
-        const failed = Object.entries(hud.charts || {}).filter(([, r]) => !["published", "already_published", "no_fresh_close"].includes(r.status));
-        if (failed.length) console.error(JSON.stringify({ worker: WORKER_NAME, event: "hud_snapshot_publish_failed", charts: Object.fromEntries(failed.map(([c, r]) => [c, r.status])) }));
-      } catch (error) {
-        console.error(JSON.stringify({ worker: WORKER_NAME, event: "hud_snapshot_publish_failed", code: asString(error?.code) || "publish_failed" }));
       }
       // B2: the 5m execution context of the bar just published, reshaped from its 5m parity
       // record (same values the AI Worker verifies), forwarded once per closed 5m bar. It
