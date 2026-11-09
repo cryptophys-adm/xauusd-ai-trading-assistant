@@ -233,7 +233,10 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     bridge: {
       seen: syncedAge != null && syncedAge < BRIDGE_SEEN_MS, synced_age_ms: syncedAge, kid: b?.kid ?? null, bridge_version: b?.bridge_version ?? null,
       terminal_connected: st?.connected === true, server: st?.server ?? null, trade_mode: st?.account?.trade_mode ?? null, currency: st?.account?.currency ?? null,
-      balance: st?.account?.balance ?? null, equity: st?.account?.equity ?? null, symbol: st?.symbol?.name ?? null, spread_points: st?.symbol?.spread_points ?? null,
+      balance: st?.account?.balance ?? null, equity: st?.account?.equity ?? null, day_start_balance: st?.account?.day_start_balance ?? null, day_realized_pl: st?.account?.day_realized_pl ?? null,
+      symbol: st?.symbol?.name ?? null, bid: st?.symbol?.bid ?? null, ask: st?.symbol?.ask ?? null, spread_points: st?.symbol?.spread_points ?? null,
+      digits: st?.symbol?.digits ?? null, point: st?.symbol?.point ?? null, tick_size: st?.symbol?.tick_size ?? null, tick_value: st?.symbol?.tick_value ?? null,
+      volume_min: st?.symbol?.volume_min ?? null, volume_max: st?.symbol?.volume_max ?? null, volume_step: st?.symbol?.volume_step ?? null, stops_level_points: st?.symbol?.stops_level_points ?? null,
       positions: Array.isArray(st?.positions) ? st.positions : [], state_age_ms: Number.isFinite(st?.received_ms) ? now - st.received_ms : null
     },
     intents: intents.map((r) => ({ ...parse(r.payload, {}), status: r.status, result: parse(r.result), created_ms: r.created_ms, updated_ms: r.updated_ms })),
