@@ -23,7 +23,7 @@ import { readNewsDaily } from "./news-daily.mjs";
 import { loadHudSnapshot } from "./hud-store.mjs";
 import { buildKeyLevels } from "./key-level-agent.mjs";
 import { eventRisk, eventCaution, gatedEvents } from "./econ-calendar.mjs";
-import { verifiedM5Reading } from "./m5-verification.mjs";
+import { verifiedM5Confirmation } from "./m5-verification.mjs";
 import { setupType } from "./level-readers.mjs";
 
 export const STRATEGY_VERSION = "cryptophys.strategy-engine.v1";
@@ -311,7 +311,7 @@ export const M5_LIVE_MAX_AGE_MS = 10 * 60_000;
 /**
  * The live 5m inputs (owner decision 2026-11-08, "the confirmation is critical"): the Prophet R38
  * confirmation and the close of the latest closed 5m bar, from its context (the pull adapter sends it
- * at every 5m close), with VERIFIED only while the 5m implementations are parity-approved. Null when
+ * at every 5m close), with VERIFIED only while the 5m Prophet implementation is parity-approved (verifiedM5Confirmation). Null when
  * no fresh context exists.
  */
 export async function liveM5Inputs(env, { now = Date.now(), context = null } = {}) {
@@ -319,8 +319,9 @@ export async function liveM5Inputs(env, { now = Date.now(), context = null } = {
   if (!ctx) { try { ctx = JSON.parse((await env?.SIGNAL_CACHE?.get?.("context:m5:latest")) || "null"); } catch { ctx = null; } }
   const t = Date.parse(String(ctx?.candle_time ?? ""));
   if (!ctx || !Number.isFinite(t) || now - t > M5_LIVE_MAX_AGE_MS || t > now + 60_000) return null;
+  // The trigger is the Prophet R38 confirmation: verified while the 5m Prophet implementation is parity-approved.
   let verified = false;
-  try { verified = (await verifiedM5Reading(env, ctx.candle_time)).verified === true; } catch { verified = false; }
+  try { verified = (await verifiedM5Confirmation(env, ctx.candle_time)).verified === true; } catch { verified = false; }
   const last = Array.isArray(ctx.recent_bars) ? ctx.recent_bars.at(-1) : null;
   return {
     confirmation: { buy_confirmed: ctx.buy_confirmed === true, sell_confirmed: ctx.sell_confirmed === true, verified, candle_time: new Date(t).toISOString() },

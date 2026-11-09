@@ -200,7 +200,9 @@ export function councilEvidence({ barClose, cards, quorum, guards, context = {} 
   return {
     bar_close: barClose,
     witnesses: cards.map((c) => ({ key: c.key, name: c.label, role: c.role, weight: c.weight, counts: c.available && !c.stale, lean: c.lean, own_decision: c.decision, state: c.state ?? undefined, confidence: c.confidence, summary: c.summary })),
-    quorum: { score: quorum.score, bias: quorum.bias, bullish_weight: quorum.long_share, bearish_weight: quorum.short_share, neutral_weight: quorum.neutral_share, needed: QUORUM_MIN },
+    // Production 2026-11-09 13:15: the council read the weighted lean (0.42) as the quorum. The quorum
+    // is the share of weight leaning one way; the lean is only its strength.
+    quorum: { bullish_share: quorum.long_share, bearish_share: quorum.short_share, neutral_share: quorum.neutral_share, share_needed_above: QUORUM_MIN, weighted_lean: quorum.score, lean_bias: quorum.bias },
     long: side(guards.long), short: side(guards.short),
     context
   };
@@ -212,6 +214,7 @@ export function councilMessages(evidence) {
     "You are the AI Decision Council of the XAUUSD system: the ONE decision for the trader, made at the close of each 15-minute bar.",
     "Witnesses each speak from their own data: the D1, 4H, 1H and 15m War Rooms (their agents' bias as a lean from -1 bearish to +1 bullish, and the room's own decision), News Daily, the Macro War Room and the strategy engine (the multi-timeframe confluence, the key-level plan and the entry trigger). You are the only one who reads across them.",
     "Decide the stance: BUY, SELL or WAIT. A BUY is possible only when long.allowed is true, a SELL only when short.allowed is true; otherwise the guardrails turn it into WAIT, so choose WAIT yourself and say which check is missing. WAIT is always allowed.",
+    `The quorum guardrail is already evaluated in long.checks and short.checks: it compares quorum.bullish_share or quorum.bearish_share (the share of the witnesses' weight leaning that way) with quorum.share_needed_above. quorum.weighted_lean is the strength of the lean from -1 to +1, not the quorum; never compare it with ${QUORUM_MIN}.`,
     "Weigh the witnesses by their weight and by how well their reasoning holds up; the higher timeframes carry the trend, the 15m and 1H rooms carry the setup, the strategy engine carries location and trigger. Cautions (an event, conflicts, chaotic regime) lower your confidence.",
     `Choose entry_type "market" only when the plan's price is at the level (at_level true), else "limit" (the planned pullback). Choose target "tp1" or "tp2": a target needs at least ${MIN_RRR}R.`,
     `confidence is 0 to 1; below ${MIN_CONFIDENCE} a BUY or SELL becomes WAIT. bias is where the weight of the evidence leans (BULLISH, BEARISH or NEUTRAL), even when the stance is WAIT.`,
@@ -306,7 +309,10 @@ export async function loadDecisionInputs(env, { now = Date.now() } = {}) {
 /** Pure: the context the council reads beside the witnesses (no weights). */
 export function councilContext({ inputs = {}, correlations = null, regime = null, previous = null, now = Date.now() }) {
   const risk = eventRisk(inputs.calendar?.events || [], now);
+  const m5 = inputs.confirmations?.m5_prophet_r38 ?? null;
   return {
+    // The 5m entry trigger (the Prophet R38 confirmation of the latest closed 5m bar, when fresh).
+    m5_trigger: m5 ? { buy_confirmed: m5.buy_confirmed === true, sell_confirmed: m5.sell_confirmed === true, verified: m5.verified === true, candle_time: m5.candle_time ?? null } : null,
     events: { active: risk.active.map((e) => ({ title: e.title, time: e.time })), next: risk.next.slice(0, 3).map((e) => ({ title: e.title, time: e.time })) },
     regime_1h: regime ?? null,
     cross_assets: (correlations?.assets || []).filter((a) => a.available).map((a) => ({ name: a.name, change_1d: a.change?.["1d"] ?? null, correlation_with_gold: a.correlation?.short ?? null })),

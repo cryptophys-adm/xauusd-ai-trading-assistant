@@ -387,6 +387,18 @@ test("an approved H1 identity never verifies a 5m record", async () => {
   assert.equal((await verifiedM5Reading(e, "2026-11-04T15:10:00.000Z")).reason, "no_local_5m_record");
 });
 
+test("the 5m trigger needs the Prophet 5m parity only: a revoked GMI 5m leaves the reading unverified, not the confirmation", async () => {
+  const { verifiedM5Reading, verifiedM5Confirmation } = await import("../src/m5-verification.mjs");
+  const e = env();
+  await seedVerifiedM5(e, { approve: false });
+  assert.equal((await verifiedM5Confirmation(e, BAR)).reason, "prophet_m5_parity_not_approved");
+  e.DB.raw.prepare("UPDATE engine_parity_registry SET status = 'approved' WHERE engine = 'prophet_m5'").run();
+  e.DB.raw.prepare("UPDATE engine_parity_registry SET status = 'revoked' WHERE engine = 'gmi_m5'").run();
+  assert.equal((await verifiedM5Confirmation(e, BAR)).verified, true, "production 2026-11-09: gmi_m5 revoked, prophet_m5 approved");
+  assert.equal((await verifiedM5Reading(e, BAR)).verified, false, "the combined reading still needs both");
+  assert.equal((await verifiedM5Confirmation(e, "2026-11-04T15:10:00.000Z")).reason, "no_local_5m_record");
+});
+
 // ---------------------------------------------------------------- HUD agents (Phase C5)
 const HUD_KEY = "OANDA:XAUUSD:60:1793804400000";
 function hudReadingsFixture() {
