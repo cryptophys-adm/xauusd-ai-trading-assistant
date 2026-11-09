@@ -468,3 +468,20 @@ test("a fallback answer cut off by its token limit is asked once more, briefly, 
   const short = await callBusModel({ AI: { run: async (model) => (model === "primary" ? Promise.reject(new Error("5007")) : { choices: [{ message: { content: null }, finish_reason: "length" }] }) }, MULTI_AGENT_MODEL: "primary", MULTI_AGENT_FALLBACK_MODEL: "fallback" }, { messages: [{ role: "user", content: "u" }], schemaName: "x", schema: { type: "object" }, maxTokens: 100, deadline: 10_000, clock: () => now, runState: {} });
   assert.equal(short.truncated, true);
 });
+
+test("the primary leaves time for the fallback; an exhausted budget names no model (post-reopen audit 2026-11-09)", async () => {
+  // Production: the 15m conclusion's primary (gpt-oss-120b) timed out at the deadline, the fallback never
+  // ran, and the row named the fallback with fallback_used = 1.
+  const { callBusModel, FALLBACK_RESERVE_MS } = await import("../src/multi-agent-bus.mjs");
+  const asked = [];
+  const ai = { run: async (model) => { asked.push(model); return { choices: [{ message: { content: "{\"stance\":\"WAIT\"}" }, finish_reason: "stop" }] }; } };
+  const env = { AI: ai, MULTI_AGENT_MODEL: "primary", MULTI_AGENT_FALLBACK_MODEL: "fallback" };
+  const args = { messages: [{ role: "system", content: "s" }, { role: "user", content: "u" }], schemaName: "x", schema: { type: "object" }, maxTokens: 10, clock: () => 0 };
+  assert.equal(FALLBACK_RESERVE_MS, 20_000);
+  const tight = await callBusModel(env, { ...args, deadline: FALLBACK_RESERVE_MS - 5_000, runState: {} });
+  assert.equal(tight.model, "fallback", "too little time for both: the primary is skipped");
+  assert.deepEqual(asked, ["fallback"]);
+  assert.match(tight.primary_error, /skipped/);
+  const none = await callBusModel(env, { ...args, deadline: 0, runState: {} });
+  assert.deepEqual([none.status, none.model, none.fallback_used], ["budget_exhausted", null, false]);
+});
