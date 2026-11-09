@@ -53,11 +53,85 @@ const string RESULTS_PATH    = "omega/results.txt";
 
 CTrade   trade;
 string   g_processedIds[];
+string   g_tradeSymbol = "";
 datetime g_lastStateAt = 0;
 ulong    g_lastTickWriteMs = 0;
 double   g_lastBid = 0.0;
 double   g_lastAsk = 0.0;
 long     g_lastWriteMs = 0;
+
+//+------------------------------------------------------------------+
+//| Automatic Gold / XAUUSD symbol discovery across brokers          |
+//+------------------------------------------------------------------+
+bool IsGoldSymbolName(const string name)
+  {
+   string up = name;
+   StringToUpper(up);
+   return (StringFind(up, "XAUUSD") == 0 || StringFind(up, "GOLD") == 0);
+  }
+
+string ResolveGoldSymbol()
+  {
+   if(g_tradeSymbol != "" && SymbolInfoInteger(g_tradeSymbol, SYMBOL_EXIST))
+     {
+      SymbolSelect(g_tradeSymbol, true);
+      if(SymbolInfoDouble(g_tradeSymbol, SYMBOL_BID) > 0.0)
+         return g_tradeSymbol;
+     }
+
+   if(IsGoldSymbolName(_Symbol) && SymbolInfoInteger(_Symbol, SYMBOL_EXIST))
+     {
+      SymbolSelect(_Symbol, true);
+      if(SymbolInfoDouble(_Symbol, SYMBOL_BID) > 0.0)
+        {
+         g_tradeSymbol = _Symbol;
+         return g_tradeSymbol;
+        }
+     }
+
+   string candidates[] = {
+      "XAUUSD", "XAUUSD.m", "XAUUSDm", "GOLD",
+      "XAUUSD.s", "XAUUSD.v", "XAUUSD.pro", "XAUUSD.r",
+      "XAUUSD.ecn", "XAUUSDc", "XAUUSDz", "GOLD.m", "GOLDm"
+   };
+   string firstExisting = "";
+   for(int i = 0; i < ArraySize(candidates); i++)
+     {
+      string c = candidates[i];
+      if(SymbolInfoInteger(c, SYMBOL_EXIST))
+        {
+         SymbolSelect(c, true);
+         if(firstExisting == "") firstExisting = c;
+         if(SymbolInfoDouble(c, SYMBOL_BID) > 0.0)
+           {
+            g_tradeSymbol = c;
+            return g_tradeSymbol;
+           }
+        }
+     }
+
+   int total = SymbolsTotal(false);
+   for(int i = 0; i < total; i++)
+     {
+      string s = SymbolName(i, false);
+      if(!IsGoldSymbolName(s)) continue;
+      SymbolSelect(s, true);
+      if(firstExisting == "") firstExisting = s;
+      if(SymbolInfoDouble(s, SYMBOL_BID) > 0.0)
+        {
+         g_tradeSymbol = s;
+         return g_tradeSymbol;
+        }
+     }
+
+   if(firstExisting != "")
+     {
+      g_tradeSymbol = firstExisting;
+      return g_tradeSymbol;
+     }
+   g_tradeSymbol = _Symbol;
+   return g_tradeSymbol;
+  }
 
 //+------------------------------------------------------------------+
 //| Helpers                                                          |
@@ -186,9 +260,10 @@ double ComputeTodayRealizedPl()
 
 string BuildPositionsJson()
   {
+   string sym = ResolveGoldSymbol();
    string out = "[";
    int count = 0;
-   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
    long serverMinusUtcSec = (long)(TimeCurrent() - TimeGMT());
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -238,18 +313,19 @@ void WriteStateJson()
    double dayRealizedPl = ComputeTodayRealizedPl();
    double dayStartBalance = balance - dayRealizedPl;
 
-   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE_LOSS);
-   if(tickValue <= 0.0) tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-   double volumeMin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double volumeMax = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   double volumeStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   int stopsLevelPoints = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   int spreadPoints = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   string sym = ResolveGoldSymbol();
+   int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(sym, SYMBOL_POINT);
+   double tickSize = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
+   double tickValue = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE_LOSS);
+   if(tickValue <= 0.0) tickValue = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
+   double volumeMin = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
+   double volumeMax = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
+   double volumeStep = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
+   int stopsLevelPoints = (int)SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL);
+   double bid = SymbolInfoDouble(sym, SYMBOL_BID);
+   double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
+   int spreadPoints = (int)SymbolInfoInteger(sym, SYMBOL_SPREAD);
 
    string positionsJson = BuildPositionsJson();
    long receivedMs = NowUtcMs();
@@ -267,7 +343,7 @@ void WriteStateJson()
       equity,
       dayStartBalance,
       dayRealizedPl,
-      EscapeJson(_Symbol),
+      EscapeJson(sym),
       digits,
       DoubleToString(point, digits),
       DoubleToString(tickSize, digits),
@@ -295,9 +371,10 @@ void WriteStateJson()
 //+------------------------------------------------------------------+
 bool IsValidVolume(const double volume)
   {
-   double vmin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double vmax = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   string sym = ResolveGoldSymbol();
+   double vmin = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
+   double vmax = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
+   double step = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
    if(volume <= 0.0 || vmin <= 0.0 || vmax <= 0.0 || step <= 0.0) return false;
    if(volume < vmin - 1e-8 || volume > vmax + 1e-8) return false;
    double stepsFromMin = (volume - vmin) / step;
@@ -338,17 +415,18 @@ void ExecuteOpenIntent(const string id, const string side, const double volume, 
       return;
      }
 
-   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   string sym = ResolveGoldSymbol();
+   int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
    double normSl = sl > 0.0 ? NormalizeDouble(sl, digits) : 0.0;
    double normTp = tp > 0.0 ? NormalizeDouble(tp, digits) : 0.0;
 
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(SlippagePoints);
-   trade.SetTypeFillingBySymbol(_Symbol);
+   trade.SetTypeFillingBySymbol(sym);
 
    bool ok = (side == "BUY")
-             ? trade.Buy(volume, _Symbol, 0.0, normSl, normTp, id)
-             : trade.Sell(volume, _Symbol, 0.0, normSl, normTp, id);
+             ? trade.Buy(volume, sym, 0.0, normSl, normTp, id)
+             : trade.Sell(volume, sym, 0.0, normSl, normTp, id);
 
    long executedMs = NowUtcMs();
    if(ok)
@@ -488,13 +566,14 @@ int OnInit()
   {
    FolderCreate(OMEGA_FOLDER, 0);
    LoadProcessedIds();
+   string sym = ResolveGoldSymbol();
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(SlippagePoints);
-   trade.SetTypeFillingBySymbol(_Symbol);
+   trade.SetTypeFillingBySymbol(sym);
    EventSetTimer(1);
    WriteStateJson();
    g_lastStateAt = TimeGMT();
-   PrintFormat("OmegaExecutor initialized on %s (magic=%I64d)", _Symbol, MagicNumber);
+   PrintFormat("OmegaExecutor initialized on %s (chart=%s, magic=%I64d)", sym, _Symbol, MagicNumber);
    return INIT_SUCCEEDED;
   }
 
@@ -506,8 +585,9 @@ void OnDeinit(const int reason)
 void OnTick()
   {
    ulong nowTick = GetTickCount64();
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   string sym = ResolveGoldSymbol();
+   double bid = SymbolInfoDouble(sym, SYMBOL_BID);
+   double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
    if((bid != g_lastBid || ask != g_lastAsk) &&
       (g_lastTickWriteMs == 0 || (nowTick - g_lastTickWriteMs) >= (ulong)MathMax(50, MinTickIntervalMs)))
      {
@@ -525,9 +605,10 @@ void OnTimer()
    datetime nowGmt = TimeGMT();
    if(g_lastStateAt == 0 || (nowGmt - g_lastStateAt) >= MathMax(1, StateEverySeconds))
      {
+      string sym = ResolveGoldSymbol();
       WriteStateJson();
-      g_lastBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      g_lastAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      g_lastBid = SymbolInfoDouble(sym, SYMBOL_BID);
+      g_lastAsk = SymbolInfoDouble(sym, SYMBOL_ASK);
       g_lastTickWriteMs = GetTickCount64();
       g_lastStateAt = nowGmt;
      }

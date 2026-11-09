@@ -36,6 +36,119 @@ interface Candle {
 
 type Mt5Tf = "M5" | "M15" | "H1" | "H4" | "D1";
 type ToolboxTab = "trade" | "history" | "intents" | "experts" | "journal";
+type BrokerKey = "monex" | "fxpro" | "dupoin" | "valetax" | "exness" | "custom";
+
+interface BrokerPreset {
+  key: BrokerKey;
+  name: string;
+  company: string;
+  goldSymbol: string;
+  servers: string[];
+}
+
+const BROKER_PRESETS: BrokerPreset[] = [
+  {
+    key: "monex",
+    name: "Monex (MIFX)",
+    company: "PT Monex Investindo Futures",
+    goldSymbol: "XAUUSD.m",
+    servers: ["Monex-Demo", "Monex-Live"],
+  },
+  {
+    key: "fxpro",
+    name: "FxPro",
+    company: "FxPro Group / Global",
+    goldSymbol: "XAUUSD / GOLD",
+    servers: ["FxPro-MT5", "FxPro.Global-MT5", "EFXPro-Live"],
+  },
+  {
+    key: "dupoin",
+    name: "Dupoin",
+    company: "PT Dupoin Futures Indonesia / Intl",
+    goldSymbol: "XAUUSD",
+    servers: [
+      "DupoinFuturesID-Demo",
+      "DupoinFuturesID-Real",
+      "DupoinInternational-Demo",
+      "DupoinInternational-Real",
+    ],
+  },
+  {
+    key: "valetax",
+    name: "Valetax",
+    company: "Valetax International / Global",
+    goldSymbol: "XAUUSD",
+    servers: [
+      "ValetaxIntl-Demo",
+      "ValetaxIntl-Live2",
+      "ValetaxIntl-Live5",
+      "ValetaxIntl-Live7",
+      "ValetaxIntl-Live8",
+      "ValetaxIntl-Live9",
+      "ValetaxGlobal-Live3",
+    ],
+  },
+  {
+    key: "exness",
+    name: "Exness",
+    company: "Exness Technologies Ltd",
+    goldSymbol: "XAUUSDm / XAUUSD",
+    servers: [
+      "Exness-MT5Trial",
+      "Exness-MT5Trial2",
+      "Exness-MT5Trial3",
+      "Exness-MT5Trial4",
+      "Exness-MT5Trial5",
+      "Exness-MT5Trial6",
+      "Exness-MT5Trial7",
+      "Exness-MT5Trial8",
+      "Exness-MT5Trial9",
+      "Exness-MT5Trial10",
+      "Exness-MT5Trial11",
+      "Exness-MT5Trial12",
+      "Exness-MT5Real",
+      "Exness-MT5Real2",
+      "Exness-MT5Real3",
+      "Exness-MT5Real4",
+      "Exness-MT5Real5",
+      "Exness-MT5Real6",
+      "Exness-MT5Real7",
+      "Exness-MT5Real8",
+      "Exness-MT5Real9",
+      "Exness-MT5Real10",
+      "Exness-MT5Real11",
+      "Exness-MT5Real12",
+      "Exness-MT5Real15",
+      "Exness-MT5Real20",
+    ],
+  },
+  {
+    key: "custom",
+    name: "Custom Server",
+    company: "Input Server / Host:Port Manual",
+    goldSymbol: "Auto (XAUUSD / GOLD)",
+    servers: [],
+  },
+];
+
+const GOLD_PAIR_OPTIONS = [
+  { value: "AUTO_GOLD", label: "Auto-Fetch Gold / XAUUSD (Default)" },
+  { value: "XAUUSD", label: "XAUUSD (Standard Spot Gold)" },
+  { value: "XAUUSD.m", label: "XAUUSD.m (Monex / MIFX)" },
+  { value: "XAUUSDm", label: "XAUUSDm (Exness / Valetax)" },
+  { value: "GOLD", label: "GOLD (FxPro / Dupoin)" },
+];
+
+function detectBrokerFromServer(srv: string): BrokerKey {
+  const s = (srv || "").toLowerCase();
+  if (!s) return "monex";
+  if (s.includes("monex") || s.includes("mifx")) return "monex";
+  if (s.includes("fxpro") || s.includes("efxpro")) return "fxpro";
+  if (s.includes("dupoin")) return "dupoin";
+  if (s.includes("valetax")) return "valetax";
+  if (s.includes("exness")) return "exness";
+  return "custom";
+}
 
 const MT5_TFS: { key: Mt5Tf; label: string }[] = [
   { key: "M5", label: "M5" },
@@ -348,7 +461,8 @@ export default function Omega() {
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string>("—");
 
-  // MT5 Web Terminal UI state
+  // MT5 Web Terminal & Separated Setup Mode UI state
+  const [viewMode, setViewMode] = useState<"terminal" | "setup">("terminal");
   const [mt5Tf, setMt5Tf] = useState<Mt5Tf>("M15");
   const [toolboxTab, setToolboxTab] = useState<ToolboxTab>("trade");
   const [showBidAsk, setShowBidAsk] = useState(true);
@@ -358,6 +472,7 @@ export default function Omega() {
   const [tickDir, setTickDir] = useState<"up" | "down" | null>(null);
   const lastBidRef = useRef<number | null>(null);
   const engineDirtyRef = useRef(false);
+  const serverInitRef = useRef(false);
 
   // Control state
   const [controlReason, setControlReason] = useState("");
@@ -366,8 +481,11 @@ export default function Omega() {
   const [controlMsg, setControlMsg] = useState<{ tone: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Broker credentials form state
-  const [bServer, setBServer] = useState("");
+  // Broker & Gold Pairing setup state
+  const [selectedBroker, setSelectedBroker] = useState<BrokerKey>("monex");
+  const [goldPair, setGoldPair] = useState<string>("AUTO_GOLD");
+  const [showPass, setShowPass] = useState<boolean>(false);
+  const [bServer, setBServer] = useState("Monex-Demo");
   const [bLogin, setBLogin] = useState("");
   const [bPassword, setBPassword] = useState("");
   const [brokerMsg, setBrokerMsg] = useState<{ tone: string; text: string } | null>(null);
@@ -399,6 +517,12 @@ export default function Omega() {
         setTickDir(newBid > lastBidRef.current ? "up" : "down");
       }
       lastBidRef.current = newBid;
+    }
+    const activeSrv = ov?.broker?.connection?.server || ov?.broker?.bridge?.server;
+    if (activeSrv && !serverInitRef.current) {
+      serverInitRef.current = true;
+      setBServer(activeSrv);
+      setSelectedBroker(detectBrokerFromServer(activeSrv));
     }
     const eng = ov?.broker?.engine;
     if (eng && !engineDirtyRef.current) {
@@ -626,6 +750,70 @@ export default function Omega() {
         )}
       </Panel>
 
+      {/* Separated Workspace Mode Bar: MT5 Terminal vs Setup & Configuration Center */}
+      <div
+        id="omega-mode-bar"
+        className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-cyan-500/25 bg-[#09101d] px-3.5 py-2.5 shadow-lg"
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            id="tab-terminal-mode"
+            onClick={() => setViewMode("terminal")}
+            className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition ${
+              viewMode === "terminal"
+                ? "border-cyan-400/50 bg-cyan-500/20 text-cyan-100 shadow-[0_0_20px_rgba(34,211,238,0.18)]"
+                : "border-white/10 bg-black/30 text-slate-400 hover:bg-white/5 hover:text-slate-200"
+            }`}
+          >
+            <Terminal className="h-3.5 w-3.5 text-cyan-300" />
+            MT5 Web Terminal &amp; Live Monitor
+          </button>
+          <button
+            type="button"
+            id="tab-setup-mode"
+            onClick={() => setViewMode("setup")}
+            className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition ${
+              viewMode === "setup"
+                ? "border-emerald-400/50 bg-emerald-500/20 text-emerald-100 shadow-[0_0_20px_rgba(16,185,129,0.18)]"
+                : "border-white/10 bg-black/30 text-slate-400 hover:bg-white/5 hover:text-slate-200"
+            }`}
+          >
+            <Sliders className="h-3.5 w-3.5 text-emerald-300" />
+            Setup &amp; Konfigurasi Terpisah (Broker · Server · Gold Pairing · Engine)
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="mono rounded-md border border-white/10 bg-black/40 px-2.5 py-1 text-slate-300">
+            Broker: <strong className="text-cyan-300">{BROKER_PRESETS.find((p) => p.key === selectedBroker)?.name || "Custom"}</strong> ({bServer || serverName})
+          </span>
+          <span className="mono rounded-md border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-amber-200">
+            Default Pair: <strong>Auto Gold / XAUUSD</strong> → {symbolName}
+          </span>
+          <button
+            type="button"
+            id="e-modebar-toggle"
+            disabled={!canControl}
+            onClick={() => {
+              const next = !eEnabled;
+              setEEnabled(next);
+              saveEngine({ enabled: next });
+            }}
+            className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-semibold transition disabled:opacity-40 ${
+              eEnabled
+                ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
+                : "border-rose-400/35 bg-rose-500/10 text-rose-200"
+            }`}
+            title="Klik untuk langsung Toggle Engine Enabled ON / OFF"
+          >
+            <span className={`h-2 w-2 rounded-full ${eEnabled ? "bg-emerald-400 animate-pulse" : "bg-rose-400"}`} />
+            Engine Enabled: {eEnabled ? "ON" : "OFF"}
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-4">
       {/* =====================================================================
           WINDOWS METATRADER 5 TERMINAL — WEB EDITION WORKSTATION
          ===================================================================== */}
@@ -672,18 +860,32 @@ export default function Omega() {
             <button
               type="button"
               onClick={() => {
-                const el = document.getElementById("engine-form");
-                if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+                setViewMode("setup");
+                const el = document.getElementById("setup-center-section");
+                if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
               }}
               className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] font-semibold transition ${
                 algoActive
                   ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
                   : "border-amber-400/35 bg-amber-500/10 text-amber-200"
               }`}
-              title="Click to configure Broker Engine below"
+              title="Click to open Setup & Broker Engine Configuration"
             >
               <span className={`h-2 w-2 rounded-full ${algoActive ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
               Algo Trading: {algoActive ? "ACTIVE" : "OFF / STANDBY"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode("setup");
+                const el = document.getElementById("setup-center-section");
+                if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
+              className="flex items-center gap-1.5 rounded-md border border-cyan-400/35 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold text-cyan-200 transition hover:bg-cyan-500/20"
+            >
+              <Sliders className="h-3 w-3" />
+              Setup Broker &amp; Server
             </button>
 
             <div className="h-4 w-px bg-white/10" />
@@ -1420,228 +1622,420 @@ export default function Omega() {
         ))}
       </div>
 
-      {/* Broker Engine Configuration Deck */}
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Panel
-          title="Broker connection"
-          icon={<KeyRound className="h-3.5 w-3.5 text-cyan-300" />}
-          right={<Badge tone={conn.status === "stored" ? "green" : conn.status === "needs_reentry" ? "amber" : "slate"}>{conn.status || "none"}</Badge>}
-        >
-          <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
-            <dt className="text-slate-500">Status</dt><dd className="text-slate-200">{CONNECTION_TEXT[conn.status] || conn.status || "—"}</dd>
-            <dt className="text-slate-500">Server</dt><dd className="mono text-slate-200">{conn.server || "—"}</dd>
-            <dt className="text-slate-500">Version</dt><dd className="mono text-slate-300">{conn.version ? `v${conn.version}` : "—"}</dd>
-            <dt className="text-slate-500">By</dt><dd className="mono text-slate-300">{conn.updated_by || "—"}</dd>
-            <dt className="text-slate-500">At</dt><dd className="mono text-slate-300">{timeUtc(conn.updated_ms)}</dd>
-          </dl>
-          <form id="broker-form" onSubmit={connectBroker} autoComplete="off" className="space-y-2 border-t border-white/10 pt-3">
-            <div>
-              <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-server">Server</label>
-              <input
-                id="b-server"
-                maxLength={64}
-                placeholder="e.g. Monex-Demo"
-                spellCheck={false}
-                value={bServer}
-                onChange={(ev) => setBServer(ev.target.value)}
-                className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
-              />
+      {/* =====================================================================
+          SEPARATED SETUP & CONFIGURATION CENTER
+          (Broker Selection, Server List, Auto-Fetch Gold/XAUUSD, Login & Engine Toggle)
+         ===================================================================== */}
+      <div
+        id="setup-center-section"
+        className={`flex flex-col gap-4 rounded-xl border p-3.5 transition sm:p-4 ${
+          viewMode === "setup"
+            ? "order-first border-emerald-400/45 bg-[#08111e] shadow-[0_18px_50px_rgba(16,185,129,0.12)]"
+            : "border-cyan-500/20 bg-[#070c16]/90"
+        }`}
+      >
+        {/* Setup Center Header Banner */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-emerald-400/35 bg-emerald-500/15 text-emerald-300">
+                <Sliders className="h-3.5 w-3.5" />
+              </span>
+              <h2 className="text-[13.5px] font-bold tracking-wide text-slate-100">
+                Setup &amp; Configuration Center — Multi-Broker MT5 &amp; Execution Engine
+              </h2>
+              <Badge tone="green">Default Pair: Gold / XAUUSD</Badge>
             </div>
-            <div>
-              <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-login">Login</label>
-              <input
-                id="b-login"
-                maxLength={20}
-                inputMode="numeric"
-                autoComplete="off"
-                spellCheck={false}
-                value={bLogin}
-                onChange={(ev) => setBLogin(ev.target.value)}
-                className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-password">Password</label>
-              <input
-                id="b-password"
-                type="password"
-                maxLength={64}
-                autoComplete="new-password"
-                value={bPassword}
-                onChange={(ev) => setBPassword(ev.target.value)}
-                className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
-              />
-            </div>
-            <div className="flex flex-wrap gap-2 pt-1">
-              <button
-                type="submit"
-                id="b-connect"
-                disabled={!canControl || !br.kid}
-                className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40"
-              >
-                Connect
-              </button>
-              <button
-                type="button"
-                id="b-disconnect"
-                disabled={!canControl || conn.status !== "stored"}
-                onClick={disconnectBroker}
-                className="btn border-rose-400/30 bg-rose-400/10 text-rose-200 disabled:opacity-40"
-              >
-                Disconnect
-              </button>
-            </div>
-            <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
-              <Lock className="h-3 w-3 shrink-0 text-cyan-300" />
-              Encrypted in this browser to the bridge&apos;s key: the server cannot read the login or the password.
+            <p className="mt-1 text-[11.5px] text-slate-400">
+              Pilih broker (<span className="text-slate-200">Monex, FxPro, Dupoin, Valetax, Exness, atau Custom</span>), pilih daftar server resmi MT5, isi User &amp; Password akun, atur pairing default Gold (<span className="mono text-cyan-300">XAUUSD</span>), dan aktifkan toggle <span className="mono text-emerald-300">Engine enabled</span>.
             </p>
-            {brokerMsg ? <p className={`text-[11.5px] ${brokerMsg.tone}`}>{brokerMsg.text}</p> : null}
-          </form>
-        </Panel>
+          </div>
+          {viewMode === "setup" ? (
+            <button
+              type="button"
+              onClick={() => setViewMode("terminal")}
+              className="rounded-lg border border-cyan-400/35 bg-cyan-500/15 px-3 py-1.5 text-[11.5px] font-semibold text-cyan-200 transition hover:bg-cyan-500/25"
+            >
+              ← Kembali ke MT5 Web Terminal
+            </button>
+          ) : null}
+        </div>
 
-        <Panel
-          title="Broker engine"
-          icon={<Sliders className="h-3.5 w-3.5 text-cyan-300" />}
-          right={<Badge tone={effectiveTone}>{effectiveLabel}</Badge>}
-        >
-          <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
-            <dt className="text-slate-500">Effective</dt><dd className="mono text-slate-200">{effectiveLabel}</dd>
-            <dt className="text-slate-500">Live (real account)</dt><dd className={`mono ${e.live_armed ? "text-amber-200" : "text-slate-300"}`}>{e.live_armed ? "armed" : "not armed"}</dd>
-            <dt className="text-slate-500">Risk</dt><dd className="mono text-slate-200">{e.risk_pct != null ? `${e.risk_pct}% of equity` : "—"}</dd>
-            <dt className="text-slate-500">Max positions</dt><dd className="mono text-slate-200">{e.max_positions ?? "—"}</dd>
-            <dt className="text-slate-500">Max daily loss</dt><dd className="mono text-slate-200">{e.max_daily_loss_pct != null ? `${e.max_daily_loss_pct}%` : "—"}</dd>
-            <dt className="text-slate-500">Max spread</dt><dd className="mono text-slate-200">{e.max_spread_points != null ? `${e.max_spread_points} pts` : "—"}</dd>
-            <dt className="text-slate-500">Max signal age</dt><dd className="mono text-slate-200">{e.max_signal_age_ms ? `${Math.round(e.max_signal_age_ms / 60000)} min` : "—"}</dd>
-            <dt className="text-slate-500">Changed by</dt><dd className="mono text-slate-300">{e.updated_by || "—"}</dd>
-          </dl>
-          <form
-            id="engine-form"
-            onSubmit={(ev) => {
-              ev.preventDefault();
-              saveEngine();
-            }}
-            autoComplete="off"
-            className="space-y-2 border-t border-white/10 pt-3"
+        {/* Step 1: Interactive Broker Selector Cards */}
+        <div>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-cyan-300">
+              1. Pilih Broker Resmi MT5 (Monex · FxPro · Dupoin · Valetax · Exness · Custom)
+            </span>
+            <span className="mono text-[11px] text-slate-400">
+              Active Server: <strong className="text-slate-200">{bServer || serverName}</strong>
+            </span>
+          </div>
+          <div id="broker-preset-grid" className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            {BROKER_PRESETS.map((preset) => {
+              const active = selectedBroker === preset.key;
+              return (
+                <button
+                  key={preset.key}
+                  type="button"
+                  data-broker={preset.key}
+                  onClick={() => {
+                    setSelectedBroker(preset.key);
+                    if (preset.servers.length > 0) {
+                      setBServer(preset.servers[0]);
+                    }
+                  }}
+                  className={`flex flex-col items-start justify-between rounded-lg border p-2.5 text-left transition ${
+                    active
+                      ? "border-cyan-400/60 bg-cyan-500/15 text-slate-100 shadow-[0_0_20px_rgba(34,211,238,0.14)]"
+                      : "border-white/10 bg-black/35 text-slate-300 hover:border-white/25 hover:bg-white/5"
+                  }`}
+                >
+                  <div className="flex w-full items-center justify-between gap-1">
+                    <span className="text-[12px] font-bold text-slate-100">{preset.name}</span>
+                    {active ? <span className="h-2 w-2 rounded-full bg-cyan-400" /> : null}
+                  </div>
+                  <span className="mt-0.5 line-clamp-1 text-[10px] text-slate-400">{preset.company}</span>
+                  <div className="mt-2 flex w-full items-center justify-between border-t border-white/10 pt-1.5 text-[10px]">
+                    <span className="mono text-amber-200">{preset.goldSymbol}</span>
+                    <span className="mono text-slate-400">
+                      {preset.servers.length ? `${preset.servers.length} srv` : "manual"}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Step 2, 3, 4: 3-Column Configuration Panels */}
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Panel
+            title="Broker connection"
+            icon={<KeyRound className="h-3.5 w-3.5 text-cyan-300" />}
+            right={<Badge tone={conn.status === "stored" ? "green" : conn.status === "needs_reentry" ? "amber" : "slate"}>{conn.status || "none"}</Badge>}
           >
-            <label className="flex cursor-pointer items-center gap-2 text-[12px] text-slate-200">
-              <input
-                type="checkbox"
-                id="e-enabled"
-                checked={eEnabled}
-                onChange={(ev) => {
-                  setEngineDirty(true);
-                  setEEnabled(ev.target.checked);
-                }}
-              />
-              Engine enabled
-            </label>
-            <div className="grid grid-cols-[1fr_110px] items-center gap-x-3 gap-y-1.5 text-[11px]">
-              <label htmlFor="e-risk" className="text-slate-400">Risk per trade, % of equity</label>
-              <input id="e-risk" type="number" min="0.01" max="2" step="0.01" value={eRisk} onChange={(ev) => { setEngineDirty(true); setERisk(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
-              <label htmlFor="e-maxpos" className="text-slate-400">Max positions</label>
-              <input id="e-maxpos" type="number" min="1" max="5" step="1" value={eMaxPos} onChange={(ev) => { setEngineDirty(true); setEMaxPos(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
-              <label htmlFor="e-loss" className="text-slate-400">Max daily loss, %</label>
-              <input id="e-loss" type="number" min="0.1" max="20" step="0.1" value={eLoss} onChange={(ev) => { setEngineDirty(true); setELoss(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
-              <label htmlFor="e-spread" className="text-slate-400">Max spread, points</label>
-              <input id="e-spread" type="number" min="1" max="1000" step="1" value={eSpread} onChange={(ev) => { setEngineDirty(true); setESpread(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
-              <label htmlFor="e-age" className="text-slate-400">Max signal age, minutes</label>
-              <input id="e-age" type="number" min="1" max="60" step="1" value={eAge} onChange={(ev) => { setEngineDirty(true); setEAge(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
-            </div>
-            <div className="flex flex-wrap gap-2 pt-1">
-              <button type="submit" id="e-save" disabled={!canControl} className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40">
-                Save
-              </button>
-              <button
-                type="button"
-                id="e-arm"
-                disabled={!canControl || e.live_armed || !e.enabled}
-                onClick={() => setLiveConfirmOpen(true)}
-                className="btn border-rose-400/30 bg-rose-400/10 text-rose-200 disabled:opacity-40"
-              >
-                Arm live
-              </button>
-              <button
-                type="button"
-                id="e-disarm"
-                disabled={!canControl || !e.live_armed}
-                onClick={() => saveEngine({ live_armed: false })}
-                className="btn disabled:opacity-40"
-              >
-                Disarm live
-              </button>
-            </div>
-            {liveConfirmOpen ? (
-              <div className="glass-inner space-y-2 p-2.5">
-                <label className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-rose-300" htmlFor="e-live">
-                  Type LIVE to let Omega trade a real account
+            <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+              <dt className="text-slate-500">Status</dt><dd className="text-slate-200">{CONNECTION_TEXT[conn.status] || conn.status || "—"}</dd>
+              <dt className="text-slate-500">Server</dt><dd className="mono text-slate-200">{conn.server || "—"}</dd>
+              <dt className="text-slate-500">Default Pair</dt><dd className="mono text-amber-200">Auto-Fetch Gold ({symbolName})</dd>
+              <dt className="text-slate-500">Version</dt><dd className="mono text-slate-300">{conn.version ? `v${conn.version}` : "—"}</dd>
+              <dt className="text-slate-500">By</dt><dd className="mono text-slate-300">{conn.updated_by || "—"}</dd>
+              <dt className="text-slate-500">At</dt><dd className="mono text-slate-300">{timeUtc(conn.updated_ms)}</dd>
+            </dl>
+            <form id="broker-form" onSubmit={connectBroker} autoComplete="off" className="space-y-2.5 border-t border-white/10 pt-3">
+              {/* Server Dropdown from Selected Broker Preset */}
+              {(() => {
+                const preset = BROKER_PRESETS.find((p) => p.key === selectedBroker);
+                if (!preset || preset.servers.length === 0) return null;
+                return (
+                  <div>
+                    <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300" htmlFor="b-server-select">
+                      Pilih Daftar Server ({preset.name})
+                    </label>
+                    <select
+                      id="b-server-select"
+                      value={preset.servers.includes(bServer) ? bServer : preset.servers[0]}
+                      onChange={(ev) => setBServer(ev.target.value)}
+                      className="mt-1 w-full rounded-md border border-cyan-400/35 bg-[#091322] px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400 focus:outline-none"
+                    >
+                      {preset.servers.map((srv) => (
+                        <option key={srv} value={srv}>
+                          {srv}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })()}
+
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-server">
+                  Server Name (Bisa pilih di atas atau ketik manual)
                 </label>
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    id="e-live"
-                    maxLength={8}
-                    value={liveConfirmText}
-                    onChange={(ev) => setLiveConfirmText(ev.target.value)}
-                    className="w-28 rounded-md border border-white/10 bg-black/40 px-2.5 py-1 text-[12px] text-slate-100"
-                  />
+                <input
+                  id="b-server"
+                  maxLength={64}
+                  placeholder="e.g. Monex-Demo, FxPro-MT5, DupoinFuturesID-Real, ValetaxIntl-Live2, Exness-MT5Trial"
+                  spellCheck={false}
+                  value={bServer}
+                  onChange={(ev) => {
+                    setBServer(ev.target.value);
+                    setSelectedBroker(detectBrokerFromServer(ev.target.value));
+                  }}
+                  className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
+                />
+              </div>
+
+              {/* Default Gold / XAUUSD Pairing Selector */}
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300" htmlFor="b-gold-pair">
+                  Default Pairing Fetch (Gold / XAUUSD)
+                </label>
+                <select
+                  id="b-gold-pair"
+                  value={goldPair}
+                  onChange={(ev) => setGoldPair(ev.target.value)}
+                  className="mt-1 w-full rounded-md border border-amber-400/30 bg-[#0b1320] px-2.5 py-1.5 text-[12px] text-amber-100 focus:border-amber-400 focus:outline-none"
+                >
+                  {GOLD_PAIR_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[10.5px] text-slate-400">
+                  EA otomatis mendeteksi &amp; subscribe simbol Gold broker di Market Watch (<span className="mono text-cyan-300">{symbolName}</span>).
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-login">
+                  User / Login MT5
+                </label>
+                <input
+                  id="b-login"
+                  maxLength={20}
+                  inputMode="numeric"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="Nomor akun MT5"
+                  value={bLogin}
+                  onChange={(ev) => setBLogin(ev.target.value)}
+                  className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-password">
+                    Password MT5
+                  </label>
                   <button
                     type="button"
-                    id="e-live-go"
-                    onClick={() => {
-                      if (liveConfirmText.trim() !== "LIVE") {
-                        setEngineMsg({ tone: "text-amber-200", text: "Type LIVE exactly." });
-                        return;
-                      }
-                      setLiveConfirmOpen(false);
-                      setLiveConfirmText("");
-                      saveEngine({ live_armed: true, confirm: "LIVE" });
-                    }}
-                    className="btn border-rose-400/40 bg-rose-400/20 text-rose-200"
+                    onClick={() => setShowPass((v) => !v)}
+                    className="text-[10px] text-cyan-300 hover:underline"
                   >
-                    Confirm
-                  </button>
-                  <button
-                    type="button"
-                    id="e-live-cancel"
-                    onClick={() => {
-                      setLiveConfirmOpen(false);
-                      setLiveConfirmText("");
-                    }}
-                    className="btn"
-                  >
-                    Cancel
+                    {showPass ? "Hide" : "Show"}
                   </button>
                 </div>
+                <input
+                  id="b-password"
+                  type={showPass ? "text" : "password"}
+                  maxLength={64}
+                  autoComplete="new-password"
+                  placeholder="Password trading / investor MT5"
+                  value={bPassword}
+                  onChange={(ev) => setBPassword(ev.target.value)}
+                  className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
+                />
               </div>
-            ) : null}
-            {engineMsg ? <p className={`text-[11.5px] ${engineMsg.tone}`}>{engineMsg.text}</p> : null}
-          </form>
-        </Panel>
 
-        <Panel
-          title="Bridge & terminal"
-          icon={<Terminal className="h-3.5 w-3.5 text-cyan-300" />}
-          right={<Badge tone={br.seen ? "green" : "red"}>{br.seen ? "bridge online" : "bridge offline"}</Badge>}
-        >
-          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
-            <dt className="text-slate-500">Bridge</dt>
-            <dd className={`mono ${br.seen ? "text-emerald-300" : "text-rose-300"}`}>
-              {br.seen ? `seen ${agoMs(br.synced_age_ms)}` : br.synced_age_ms != null ? `last seen ${agoMs(br.synced_age_ms)}` : "never seen"}
-            </dd>
-            <dt className="text-slate-500">Key id (kid)</dt><dd className="mono text-slate-300">{br.kid || "—"}</dd>
-            <dt className="text-slate-500">Terminal</dt>
-            <dd className={`mono ${br.terminal_connected ? "text-emerald-300" : "text-rose-300"}`}>
-              {br.terminal_connected ? `connected to ${br.server || "?"}` : "not connected"}
-            </dd>
-            <dt className="text-slate-500">Account</dt><dd className={`mono ${br.trade_mode === "real" ? "text-amber-200" : "text-slate-200"}`}>{br.trade_mode || "—"}</dd>
-            <dt className="text-slate-500">Balance</dt><dd className="mono text-slate-200">{balFmt(br.balance, br.currency || "")}</dd>
-            <dt className="text-slate-500">Equity</dt><dd className="mono text-slate-200">{balFmt(br.equity, br.currency || "")}</dd>
-            <dt className="text-slate-500">Symbol</dt><dd className="mono text-slate-200">{br.symbol || "—"}</dd>
-            <dt className="text-slate-500">Bid / Ask</dt><dd className="mono text-slate-200">{br.bid != null && br.ask != null ? `${num(br.bid, digits)} / ${num(br.ask, digits)}` : "—"}</dd>
-            <dt className="text-slate-500">Spread</dt><dd className="mono text-slate-200">{br.spread_points != null ? `${br.spread_points} pts` : "—"}</dd>
-            <dt className="text-slate-500">Positions</dt><dd className="mono text-slate-200">{String((br.positions || []).length)}</dd>
-            <dt className="text-slate-500">Bridge version</dt><dd className="mono text-slate-400">{br.bridge_version || "—"}</dd>
-          </dl>
-        </Panel>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  type="submit"
+                  id="b-connect"
+                  disabled={!canControl || !br.kid}
+                  className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40"
+                >
+                  Connect
+                </button>
+                <button
+                  type="button"
+                  id="b-disconnect"
+                  disabled={!canControl || conn.status !== "stored"}
+                  onClick={disconnectBroker}
+                  className="btn border-rose-400/30 bg-rose-400/10 text-rose-200 disabled:opacity-40"
+                >
+                  Disconnect
+                </button>
+              </div>
+              <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                <Lock className="h-3 w-3 shrink-0 text-cyan-300" />
+                Encrypted in this browser to the bridge&apos;s key: the server cannot read the login or the password.
+              </p>
+              {brokerMsg ? <p className={`text-[11.5px] ${brokerMsg.tone}`}>{brokerMsg.text}</p> : null}
+            </form>
+          </Panel>
+
+          <Panel
+            title="Broker engine"
+            icon={<Sliders className="h-3.5 w-3.5 text-cyan-300" />}
+            right={<Badge tone={effectiveTone}>{effectiveLabel}</Badge>}
+          >
+            <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+              <dt className="text-slate-500">Effective</dt><dd className="mono text-slate-200">{effectiveLabel}</dd>
+              <dt className="text-slate-500">Live (real account)</dt><dd className={`mono ${e.live_armed ? "text-amber-200" : "text-slate-300"}`}>{e.live_armed ? "armed" : "not armed"}</dd>
+              <dt className="text-slate-500">Risk</dt><dd className="mono text-slate-200">{e.risk_pct != null ? `${e.risk_pct}% of equity` : "—"}</dd>
+              <dt className="text-slate-500">Max positions</dt><dd className="mono text-slate-200">{e.max_positions ?? "—"}</dd>
+              <dt className="text-slate-500">Max daily loss</dt><dd className="mono text-slate-200">{e.max_daily_loss_pct != null ? `${e.max_daily_loss_pct}%` : "—"}</dd>
+              <dt className="text-slate-500">Max spread</dt><dd className="mono text-slate-200">{e.max_spread_points != null ? `${e.max_spread_points} pts` : "—"}</dd>
+              <dt className="text-slate-500">Max signal age</dt><dd className="mono text-slate-200">{e.max_signal_age_ms ? `${Math.round(e.max_signal_age_ms / 60000)} min` : "—"}</dd>
+              <dt className="text-slate-500">Changed by</dt><dd className="mono text-slate-300">{e.updated_by || "—"}</dd>
+            </dl>
+            <form
+              id="engine-form"
+              onSubmit={(ev) => {
+                ev.preventDefault();
+                saveEngine();
+              }}
+              autoComplete="off"
+              className="space-y-2.5 border-t border-white/10 pt-3"
+            >
+              {/* Prominent Broker Engine Activation Toggle Card */}
+              <div
+                className={`flex items-center justify-between gap-2 rounded-lg border p-2.5 transition ${
+                  eEnabled
+                    ? "border-emerald-400/40 bg-emerald-500/10"
+                    : "border-white/10 bg-black/35"
+                }`}
+              >
+                <label className="flex cursor-pointer items-center gap-2.5 text-[12px] font-semibold text-slate-100">
+                  <input
+                    type="checkbox"
+                    id="e-enabled"
+                    checked={eEnabled}
+                    onChange={(ev) => {
+                      setEngineDirty(true);
+                      setEEnabled(ev.target.checked);
+                    }}
+                    className="h-4 w-4 accent-emerald-400"
+                  />
+                  <div>
+                    <div>Engine enabled</div>
+                    <div className="text-[10px] font-normal text-slate-400">
+                      Toggle aktivasi eksekusi otomatis Broker Engine
+                    </div>
+                  </div>
+                </label>
+                <button
+                  type="button"
+                  id="e-quick-toggle"
+                  disabled={!canControl}
+                  onClick={() => {
+                    const next = !eEnabled;
+                    setEEnabled(next);
+                    saveEngine({ enabled: next });
+                  }}
+                  className={`rounded-md border px-2.5 py-1 text-[11px] font-bold transition disabled:opacity-40 ${
+                    eEnabled
+                      ? "border-emerald-400/50 bg-emerald-500/20 text-emerald-200"
+                      : "border-slate-500/40 bg-white/5 text-slate-300"
+                  }`}
+                >
+                  {eEnabled ? "ACTIVE (ON)" : "STANDBY (OFF)"}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-[1fr_110px] items-center gap-x-3 gap-y-1.5 text-[11px]">
+                <label htmlFor="e-risk" className="text-slate-400">Risk per trade, % of equity</label>
+                <input id="e-risk" type="number" min="0.01" max="2" step="0.01" value={eRisk} onChange={(ev) => { setEngineDirty(true); setERisk(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                <label htmlFor="e-maxpos" className="text-slate-400">Max positions</label>
+                <input id="e-maxpos" type="number" min="1" max="5" step="1" value={eMaxPos} onChange={(ev) => { setEngineDirty(true); setEMaxPos(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                <label htmlFor="e-loss" className="text-slate-400">Max daily loss, %</label>
+                <input id="e-loss" type="number" min="0.1" max="20" step="0.1" value={eLoss} onChange={(ev) => { setEngineDirty(true); setELoss(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                <label htmlFor="e-spread" className="text-slate-400">Max spread, points</label>
+                <input id="e-spread" type="number" min="1" max="1000" step="1" value={eSpread} onChange={(ev) => { setEngineDirty(true); setESpread(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                <label htmlFor="e-age" className="text-slate-400">Max signal age, minutes</label>
+                <input id="e-age" type="number" min="1" max="60" step="1" value={eAge} onChange={(ev) => { setEngineDirty(true); setEAge(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+              </div>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button type="submit" id="e-save" disabled={!canControl} className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40">
+                  Save
+                </button>
+                <button
+                  type="button"
+                  id="e-arm"
+                  disabled={!canControl || e.live_armed || !e.enabled}
+                  onClick={() => setLiveConfirmOpen(true)}
+                  className="btn border-rose-400/30 bg-rose-400/10 text-rose-200 disabled:opacity-40"
+                >
+                  Arm live
+                </button>
+                <button
+                  type="button"
+                  id="e-disarm"
+                  disabled={!canControl || !e.live_armed}
+                  onClick={() => saveEngine({ live_armed: false })}
+                  className="btn disabled:opacity-40"
+                >
+                  Disarm live
+                </button>
+              </div>
+              {liveConfirmOpen ? (
+                <div className="glass-inner space-y-2 p-2.5">
+                  <label className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-rose-300" htmlFor="e-live">
+                    Type LIVE to let Omega trade a real account
+                  </label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      id="e-live"
+                      maxLength={8}
+                      value={liveConfirmText}
+                      onChange={(ev) => setLiveConfirmText(ev.target.value)}
+                      className="w-28 rounded-md border border-white/10 bg-black/40 px-2.5 py-1 text-[12px] text-slate-100"
+                    />
+                    <button
+                      type="button"
+                      id="e-live-go"
+                      onClick={() => {
+                        if (liveConfirmText.trim() !== "LIVE") {
+                          setEngineMsg({ tone: "text-amber-200", text: "Type LIVE exactly." });
+                          return;
+                        }
+                        setLiveConfirmOpen(false);
+                        setLiveConfirmText("");
+                        saveEngine({ live_armed: true, confirm: "LIVE" });
+                      }}
+                      className="btn border-rose-400/40 bg-rose-400/20 text-rose-200"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      type="button"
+                      id="e-live-cancel"
+                      onClick={() => {
+                        setLiveConfirmOpen(false);
+                        setLiveConfirmText("");
+                      }}
+                      className="btn"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {engineMsg ? <p className={`text-[11.5px] ${engineMsg.tone}`}>{engineMsg.text}</p> : null}
+            </form>
+          </Panel>
+
+          <Panel
+            title="Bridge & terminal"
+            icon={<Terminal className="h-3.5 w-3.5 text-cyan-300" />}
+            right={<Badge tone={br.seen ? "green" : "red"}>{br.seen ? "bridge online" : "bridge offline"}</Badge>}
+          >
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+              <dt className="text-slate-500">Bridge</dt>
+              <dd className={`mono ${br.seen ? "text-emerald-300" : "text-rose-300"}`}>
+                {br.seen ? `seen ${agoMs(br.synced_age_ms)}` : br.synced_age_ms != null ? `last seen ${agoMs(br.synced_age_ms)}` : "never seen"}
+              </dd>
+              <dt className="text-slate-500">Key id (kid)</dt><dd className="mono text-slate-300">{br.kid || "—"}</dd>
+              <dt className="text-slate-500">Terminal</dt>
+              <dd className={`mono ${br.terminal_connected ? "text-emerald-300" : "text-rose-300"}`}>
+                {br.terminal_connected ? `connected to ${br.server || "?"}` : "not connected"}
+              </dd>
+              <dt className="text-slate-500">Account</dt><dd className={`mono ${br.trade_mode === "real" ? "text-amber-200" : "text-slate-200"}`}>{br.trade_mode || "—"}</dd>
+              <dt className="text-slate-500">Balance</dt><dd className="mono text-slate-200">{balFmt(br.balance, br.currency || "")}</dd>
+              <dt className="text-slate-500">Equity</dt><dd className="mono text-slate-200">{balFmt(br.equity, br.currency || "")}</dd>
+              <dt className="text-slate-500">Symbol</dt><dd className="mono text-slate-200">{br.symbol || "—"}</dd>
+              <dt className="text-slate-500">Bid / Ask</dt><dd className="mono text-slate-200">{br.bid != null && br.ask != null ? `${num(br.bid, digits)} / ${num(br.ask, digits)}` : "—"}</dd>
+              <dt className="text-slate-500">Spread</dt><dd className="mono text-slate-200">{br.spread_points != null ? `${br.spread_points} pts` : "—"}</dd>
+              <dt className="text-slate-500">Positions</dt><dd className="mono text-slate-200">{String((br.positions || []).length)}</dd>
+              <dt className="text-slate-500">Bridge version</dt><dd className="mono text-slate-400">{br.bridge_version || "—"}</dd>
+            </dl>
+          </Panel>
+        </div>
+      </div>
       </div>
     </div>
   );
