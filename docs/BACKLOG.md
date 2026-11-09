@@ -17,9 +17,8 @@ filling for the 15m and 1H rooms. What the reopen also showed was fixed the same
 three post-reopen fail-closed bars (#184, #189), the GMI duplicate alerts (#191) and the Prophet
 setup READY state that never reached the decision (#192).
 
-5. **The features of 2026-11-08 on live data (still to verify).**
-   - **Economic calendar (#157):** the Nexus calendar page lists the week's events, and a High-impact USD event adds the caution to the strategy engine from 2 hours before to 30 minutes after it.
-   - **Correlations (#156):** the 4h context series (DXY, US10Y, silver) fill and the Nexus correlations page shows values for 30 and 120 bars.
+5. **The features of 2026-11-08 on live data: the parts that wait for an event.** Verified on 2026-11-09 from D1 (the KV caches themselves are not readable from the session): the Macro War Room of 02:00 UTC read this week's calendar ("No high-impact USD event in the next 24 hours; 2 within 48 hours", its Calendar Agent naming the coming Core CPI) and live correlations (DXY -0.14 % over 4 hours, silver +2.48 %, the weekly correlation with gold), so the calendar fetch and the 4h context series (DXY, US10Y, silver, oil) work. Still open:
+   - **Event gate (#157):** the first High-impact USD event of the week (Core CPI) must add the caution to the strategy engine from 2 hours before to 30 minutes after it, and appear as `event_risk` for the Risk Desk of the timeframe rooms.
    - **Telegram alerts (#158):** the bot secrets are set (the `ledger_alerts` seed row of 2026-11-08 10:55 UTC proves it). No ledger event has happened yet, so no message has been sent; the first BUY or SELL of the week will show whether each event arrives once.
 
 ## After the first days of the new chain
