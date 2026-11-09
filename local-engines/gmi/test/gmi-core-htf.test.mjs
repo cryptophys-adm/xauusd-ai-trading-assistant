@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { computeGmiOnChart } from "../src/gmi-core-tf.mjs";
 import { computeGmiOnHtfChart, GMI_CHART_MINUTES, intrabarTimeframe } from "../src/gmi-core-htf.mjs";
 import { buildHtfLocalCalculations, htfWebhookCandleKey, HTF_CHARTS } from "../../producer/src/htf-local-producer.mjs";
@@ -47,11 +49,28 @@ test("dyn_ltf: M1 below 240, M5 on H4, M15 on D1; H4 and D1 are supported charts
   assert.equal(intrabarTimeframe(1440), "M15");
 });
 
-test("the H4/D1 module equals gmi-core-tf on M15 and H1, so the copy cannot drift", () => {
-  for (const endIso of ["2026-11-03T10:00:00Z", "2026-11-04T00:00:00Z"]) {
-    const bundle = bundleFrom({ endMs: Date.parse(endIso), baseMin: 1, days: 16 });
-    for (const chart of ["M15", "H1"]) assert.deepEqual(computeGmiOnHtfChart(bundle, { chart }), computeGmiOnChart(bundle, { chart }), `${chart} ${endIso}`);
+test("B4: one GMI engine; the tf and htf modules are re-exports of it, so no copy can drift", async () => {
+  const one = await import("../src/gmi-core.mjs");
+  assert.equal(computeGmiOnChart, one.computeGmiOnChart);
+  assert.equal(computeGmiOnHtfChart, one.computeGmiOnChart);
+  assert.equal(GMI_CHART_MINUTES, one.GMI_CHART_MINUTES);
+  for (const file of ["gmi-core-tf.mjs", "gmi-core-htf.mjs"]) {
+    const src = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+    assert.ok(src.split("\n").filter((l) => l.trim() && !l.startsWith("//")).length === 1, `${file} is one export line`);
   }
+});
+
+test("B4 golden outputs: the one engine reproduces the three former modules on every chart", () => {
+  // Fingerprints (sha256 of the whole output, first 16 hex) of the H1 core, gmi-core-tf (5m,
+  // 15m) and gmi-core-htf (4H, D1) on these synthetic markets, taken before the merge on
+  // 2026-11-09. The merge was proven output-identical on 80 bundles across five charts; any later
+  // change to the engine that moves an output fails here and must re-earn parity on purpose.
+  const fp = (o) => createHash("sha256").update(JSON.stringify(o)).digest("hex").slice(0, 16);
+  const m1 = bundleFrom({ endMs: Date.parse("2026-11-03T10:00:00Z"), baseMin: 1, days: 16 });
+  const b5 = bundleFrom({ endMs: Date.parse("2026-11-04T02:00:00Z"), baseMin: 5, days: 60 });
+  const b15 = bundleFrom({ endMs: Date.parse("2026-11-04T22:00:00Z"), baseMin: 15, days: 420 });
+  const golden = { H1: ["4acf71ea82ec4b41", m1], M5: ["c4accf3d6a0615fa", m1], M15: ["15c1aa6285f2594d", m1], H4: ["ab973b1b7fec6991", b5], D1: ["12aa0c05630ffd11", b15] };
+  for (const [chart, [hash, bundle]] of Object.entries(golden)) assert.equal(fp(computeGmiOnChart(bundle, { chart })), hash, chart);
 });
 
 test("GMI on H4 reads 5-minute intrabars and on D1 15-minute intrabars", () => {

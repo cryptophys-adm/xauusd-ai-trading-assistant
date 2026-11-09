@@ -5,7 +5,7 @@ stays the canonical description of the system; `docs/CHANGELOG.md` records what 
 leaves this file when it is done (and enters the CHANGELOG) or when the owner drops it. This is the
 only backlog: the older lists (`docs/BRIEF_HUD_AGENTS.md` §6, `docs/RFC_INDICATOR_AGENT_PLATFORM.md`
 §9 and §10) were merged here on 2026-11-07 (owner request). Item numbers are stable: a number that
-is gone was done or dropped (CHANGELOG 2026-11-09 for items 0 to 4, 8, 9, 13, 16, 17 and 18).
+is gone was done or dropped (CHANGELOG 2026-11-09 for items 0 to 4, 8, 9, 11, 13, 16, 17 and 18).
 
 ## Verified after the reopen (2026-11-09, items 0 to 4 closed)
 
@@ -47,10 +47,6 @@ setup READY state that never reached the decision (#192).
     - **Kept, with a deadline:** `prophet_r37@latch8`. At the review it was right 4 times against the active version's 5 (p 0.75), and it had 13 % fewer stuck candles. Review it once it has 30 decisive pairs, or on 2026-12-07 at the latest. Stop it then unless it is significantly better.
     - **Kept until the sample is complete:** `gmi_v12_70@latch8` and `@latch12` (36 of 200 bars at the review). Review around 2026-11-14 (scheduled). Since #150 a verdict needs 300 shared bars: 200 for discovery (Holm-adjusted per family per month) and the newest 100 as a holdout.
     - **If every latch candidate stays `not_better`:** the latch expiry is not the improvement, and the cause of the stuck states has to be found elsewhere.
-11. **B4: remove the GMI core duplication** (owner, 2026-11-05).
-   - `gmi-core-tf.mjs` repeats the approved H1 GMI core.
-   - Merging them changes the GMI implementation hash, so the H1 `gmi` identity needs a new 24-candle approval.
-   - It cannot be done without the owner: it edits a hashed engine file, which the project rules allow only in a calibration window the owner opens. Since 2026-11-09 the H1 alerts are active again, so the window can be opened any trading day; 24 H1 matches take about one trading day.
 12. **Aether, the Knowledge Guardian** (from the Nexus analytic layers, owner request 2026-11-07). Phases A1 to A8 and the A9 groundwork are built (CHANGELOG 2026-11-07 and 2026-11-08; status in `docs/RFC_AETHER_KNOWLEDGE_GUARDIAN.md` §0.7). What remains waits on data or on the owner:
     - **Owner:** approve or reject the curator's and calibrator's proposals on the Console Knowledge page.
     - **Owner:** set `SHADOW_KNOWLEDGE_ENABLED` once a text item is approved (a small PR).
@@ -61,3 +57,4 @@ setup READY state that never reached the decision (#192).
 ## Calibration in progress
 
 15. **4H and D1 parity** (alerts installed by the owner on 2026-11-09, about 03:30 UTC; H1 and 15m earlier the same morning). The `prophet_h4` / `gmi_h4` identities need 24 matches (about 4 trading days), `prophet_d1` / `gmi_d1` about 5 weeks. Until then the 4H and D1 Desks speak at confidence 0.4 or lower. First receipts to confirm: H4 at 06:00 UTC, D1 at 22:00 UTC on 2026-11-09 (scheduled checks).
+19. **GMI re-approval after B4** (2026-11-09). Every GMI identity re-earns 24 consecutive parity matches against the TradingView alerts: `gmi_m5` about 2 hours, `gmi_m15` about 6 hours, `gmi` and `gmi_hud` (1H) about 24 trading hours, `gmi_h4` about 4 trading days and `gmi_d1` about 5 weeks (both already calibrating). Until `gmi` is approved again, every H1 bar is a fail-closed WAIT (the local lane needs approved MizanLib, Prophet and GMI records), the 5m confirmation does not count (UNVERIFIED 5m) and the 15m desk reads as not calibrated. Owner decision: accepted for the full merge. Check the registry the next day.

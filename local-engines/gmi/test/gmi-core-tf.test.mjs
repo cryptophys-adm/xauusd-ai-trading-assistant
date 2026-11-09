@@ -35,7 +35,7 @@ function aggregatedBundle({ endMs, minutes = 60 * 24 * 16 }) {
   };
 }
 
-test("computeGmiOnChart on H1 is exactly computeGmi (the approved H1 engine)", () => {
+test("computeGmiOnChart on H1 is exactly computeGmi (the H1 decision lane)", () => {
   for (const endIso of ["2026-11-03T10:00:00Z", "2026-11-03T13:00:00Z", "2026-11-04T00:00:00Z"]) {
     const bundle = aggregatedBundle({ endMs: Date.parse(endIso) });
     assert.deepEqual(computeGmiOnChart(bundle, { chart: "H1" }), computeGmi(bundle), endIso);
@@ -53,7 +53,8 @@ test("computeGmiOnChart on M5 evaluates the last closed 5m bar with 5 one-minute
 });
 
 test("computeGmiOnChart rejects unsupported chart timeframes and short history", () => {
-  assert.deepEqual(Object.keys(GMI_CHART_MINUTES), ["M5", "M15", "H1"]);
-  assert.throws(() => computeGmiOnChart({ timeframes: {} }, { chart: "H4" }), /unsupported GMI chart timeframe/);
+  // One engine for every chart since B4 (2026-11-09): 5m to D1.
+  assert.deepEqual(Object.keys(GMI_CHART_MINUTES), ["M5", "M15", "H1", "H4", "D1"]);
+  assert.throws(() => computeGmiOnChart({ timeframes: {} }, { chart: "W1" }), /unsupported GMI chart timeframe/);
   assert.throws(() => computeGmiOnChart({ timeframes: { M5: { candles: [] } } }, { chart: "M5" }), /insufficient chart history/);
 });

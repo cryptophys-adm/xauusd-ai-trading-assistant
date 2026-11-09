@@ -1,8 +1,22 @@
-// Local GMI v12.70 verdict engine (source: pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt).
+// Local GMI v12.70 verdict engine for every chart: 5m, 15m, 1H, 4H and D1
+// (source: pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt).
 // Reproduces the series that feed the CTA webhook fields
 //   verdict (verdict_state), gate (r10_gate_status), gmi_dir, prophet_dir, conflict
-// for a confirmed chart bar, from raw TradingView OHLCV (chart, M1 intrabars,
+// for a confirmed chart bar, from raw TradingView OHLCV (chart, dyn_ltf intrabars,
 // MTF native series). Default indicator inputs are used. Rendering/HUD omitted.
+//
+// B4 (owner, 2026-11-05; done 2026-11-09 with the owner's go for a full re-approval): this one
+// module replaces the three copies it grew from (the H1 core, gmi-core-tf for 5m/15m and
+// gmi-core-htf for 4H/D1). The chart timeframe is a parameter:
+//   - the chart series is bundle.timeframes[chart];
+//   - intrabars follow Pine's dyn_ltf: "1" below 240, "5" on 240 and "15" on daily
+//     (`timeframe.isdaily ? "15" : timeframe.period == "240" ? "5" : "1"`), so the
+//     footprint reads M1, M5 or M15 bars;
+//   - MTF Hurst (15/60/240/D/W): a timeframe equal to the chart is the chart series, one above
+//     it is read realtime-at-close, one below it from its closed bars.
+// computeGmi(bundle) is the 1H chart. gmi-core-tf.mjs and gmi-core-htf.mjs are kept as one-line
+// re-exports, so the producers that import them, and the Prophet and MizanLib identities that
+// hash those producers, did not change. Every GMI identity re-earns its 24 parity matches.
 //
 // Known approximations are listed in GMI_APPROXIMATIONS and must be resolved
 // by the parity registry (webhook comparison), never assumed equal.
@@ -29,6 +43,14 @@ export const GMI_APPROXIMATIONS = Object.freeze([
   "ta.pivothigh/pivotlow tie handling is strict on both sides.",
   "Fundamental override (request.financial) is treated as unavailable for OANDA:XAUUSD (has_funda = false)."
 ]);
+
+/** Supported chart timeframes and their period in minutes. */
+export const GMI_CHART_MINUTES = Object.freeze({ M5: 5, M15: 15, H1: 60, H4: 240, D1: 1440 });
+
+/** Pine dyn_ltf as a bundle timeframe key: M15 on daily, M5 on 240, M1 below. */
+export function intrabarTimeframe(chartMinutes) {
+  return chartMinutes >= 1440 ? "M15" : chartMinutes >= 240 ? "M5" : "M1";
+}
 
 const NY = "America/New_York";
 const nyParts = (ms) => {
@@ -67,15 +89,18 @@ function htfCloseSeriesAt(native, chart, chartCloseMs, htfMs) {
 }
 
 /**
- * computeGmi(bundle, { mintick }) -> { outputs for the last bar, series diagnostics }.
- * bundle.timeframes: H1 (chart), M1, M15, H4, D1, W1 — closed candles with time (sec).
+ * computeGmiOnChart(bundle, { chart, mintick }) -> { outputs for the last bar, series diagnostics }.
+ * chart: "M5", "M15", "H1", "H4" or "D1". bundle.timeframes: the chart series, M1, M15, H1, H4, D1, W1
+ * — closed candles with time (sec).
  */
-export function computeGmi(bundle, { mintick = 0.001, window = 1000, options = {} } = {}) {
+export function computeGmiOnChart(bundle, { chart: chartTf = "H1", mintick = 0.001, window = 1000, options = {} } = {}) {
+  const chartMinutes = GMI_CHART_MINUTES[chartTf];
+  if (!chartMinutes) throw Object.assign(new Error(`unsupported GMI chart timeframe: ${chartTf}`), { code: "unsupported_chart_timeframe" });
   const cfg = { ...GMI_DEFAULTS, ...options };
-  const chart = (bundle?.timeframes?.H1?.candles || []).slice(-window);
+  const chart = (bundle?.timeframes?.[chartTf]?.candles || []).slice(-window);
   const n = chart.length;
   if (n < cfg.vp_lookback + 20) throw Object.assign(new Error(`insufficient chart history: ${n}`), { code: "insufficient_chart_history" });
-  const chartMs = 3600 * 1000;
+  const chartMs = chartMinutes * 60 * 1000;
   const open = chart.map((b) => b.open), high = chart.map((b) => b.high), low = chart.map((b) => b.low);
   const close = chart.map((b) => b.close), volume = chart.map((b) => (isNum(b.volume) ? b.volume : null));
   const hlc3 = chart.map((b) => (b.high + b.low + b.close) / 3);
@@ -123,8 +148,8 @@ export function computeGmi(bundle, { mintick = 0.001, window = 1000, options = {
     return tdmCache.get(i);
   };
 
-  // --- Footprint (M1 intrabars)
-  const intra = intrabarsByChartBar(chart, bundle?.timeframes?.M1?.candles || [], chartMs);
+  // --- Footprint (dyn_ltf intrabars: M1, M5 on H4, M15 on D1)
+  const intra = intrabarsByChartBar(chart, bundle?.timeframes?.[intrabarTimeframe(chartMinutes)]?.candles || [], chartMs);
   const fp = intra.map(footprintFromArrays);
   const buyVol = fp.map((f) => f.buy), sellVol = fp.map((f) => f.sell);
   const barDelta = fp.map((f) => nz(isNum(f.buy) && isNum(f.sell) ? f.buy - f.sell : null, 0));
@@ -298,11 +323,17 @@ export function computeGmi(bundle, { mintick = 0.001, window = 1000, options = {
   // htf_state with MTF Hurst (realtime-at-close)
   const tf = bundle.timeframes;
   const hurstOf = (closes) => (closes.length ? hurstRsLast(closes, 50) : null);
-  const h15 = hurstOf((tf.M15?.candles || []).filter((b) => Date.parse(b.close_time) <= barCloseMs).map((b) => b.close));
-  const h60 = hurstOf(close);
-  const h240 = hurstOf(htfCloseSeriesAt(tf.H4?.candles || [], chart, barCloseMs, 4 * chartMs));
-  const hD = hurstOf(htfCloseSeriesAt(tf.D1?.candles || [], chart, barCloseMs, 24 * chartMs));
-  const hW = hurstOf(htfCloseSeriesAt(tf.W1?.candles || [], chart, barCloseMs, 168 * chartMs));
+  const MIN = 60 * 1000;
+  // request.security on a timeframe equal to the chart is the chart series; above the
+  // chart it is realtime-at-close; below the chart (15 on H1) the last closed bar.
+  const mtfCloses = (key, minutes) => minutes === chartMinutes ? close
+    : minutes > chartMinutes ? htfCloseSeriesAt(tf[key]?.candles || [], chart, barCloseMs, minutes * MIN)
+      : (tf[key]?.candles || []).filter((b) => Date.parse(b.close_time) <= barCloseMs).map((b) => b.close);
+  const h15 = hurstOf(mtfCloses("M15", 15));
+  const h60 = hurstOf(mtfCloses("H1", 60));
+  const h240 = hurstOf(mtfCloses("H4", 240));
+  const hD = hurstOf(mtfCloses("D1", 1440));
+  const hW = hurstOf(mtfCloses("W1", 10080));
   const globalH = nz(h15) * 0.10 + nz(h60) * 0.15 + nz(h240) * 0.25 + nz(hD) * 0.30 + nz(hW) * 0.20;
   const zLocal = isNum(maKww[i]) ? (c - maKww[i]) / Math.max(sigmaKww[i], 0.0001) : null;
   const htfState = ge(e[i], 0.80) ? 0 : (gt(zLocal, 0) && globalH > 0.5 && gt(adjMean[i], 0)) ? 1 : -1;
@@ -400,4 +431,9 @@ export function computeGmi(bundle, { mintick = 0.001, window = 1000, options = {
       zones: { ...g, in_mitig_bull: inMitigBull[i], in_mitig_bear: inMitigBear[i], in_ob_bull: inObBull[i], in_ob_bear: inObBear[i], veto: vetoActive[i] }
     }
   };
+}
+
+/** The 1-hour chart (the H1 decision lane): computeGmiOnChart with chart "H1". */
+export function computeGmi(bundle, { mintick = 0.001, window = 1000, options = {} } = {}) {
+  return computeGmiOnChart(bundle, { chart: "H1", mintick, window, options });
 }
