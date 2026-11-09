@@ -113,6 +113,22 @@ export function atrAt(bars, index, period = SCORING.atrPeriod) {
   return sum / period;
 }
 
+/** A pause longer than this between two bars is a market gap (a weekend or a holiday), not the daily break. */
+export const MAX_BAR_GAP_MS = 2 * 3_600_000;
+
+/**
+ * True when the bars that score the statement at index i are not one continuous run: a bar opens
+ * more than MAX_BAR_GAP_MS after the previous one closed (post-reopen audit 2026-11-09: about 109
+ * Friday statements were scored on Sunday evening's bars). The one-hour daily break is not a gap.
+ */
+export function crossesGap(bars, i, horizon = SCORING.horizon) {
+  for (let j = i + 1; j <= i + horizon && j < bars.length; j++) {
+    const open = Date.parse(bars[j].open_time ?? ""), prevClose = Date.parse(bars[j - 1].close_time ?? "");
+    if (Number.isFinite(open) && Number.isFinite(prevClose) && open - prevClose > MAX_BAR_GAP_MS) return true;
+  }
+  return false;
+}
+
 /** UTC session of a statement by its candle close. */
 export function sessionOf(closeMs) {
   const h = new Date(closeMs).getUTCHours();
@@ -137,6 +153,7 @@ export function scoreStance({ stance, confidence = null, bars, closeMs, horizon 
   const atr = atrAt(bars, i, period);
   if (!finite(atr) || atr <= 0) return { result: "no_data" };
   if (bars.length - 1 - i < horizon) return { result: "pending" };
+  if (crossesGap(bars, i, horizon)) return { result: "no_data", reason: "market_gap" };
   const entry = bars[i].close;
   const threshold = k * atr;
   let maxUp = 0, maxDown = 0;
@@ -324,6 +341,14 @@ export async function scoreRecentStatements(env, { now = Date.now() } = {}) {
     const keyOf = (bar) => `${SYMBOL}:${timeframe}:${Date.parse(bar.open_time)}`;
     const done = new Set(((await env.DB.prepare("SELECT candle_key FROM outcome_runs WHERE timeframe = ? AND scored_at >= ? AND scoring_version = ?").bind(timeframe, new Date(now - 3 * 86_400_000).toISOString(), SCORING_VERSION).all()).results || []).map((r) => r.candle_key));
     const rooms = timeframe === "15" ? await roomStatements(env, ready[0].close_time) : null;
+    // Scores of a bar whose horizon crosses a market gap are removed (rows scored before the gap
+    // check existed); the bar is not scored again.
+    for (const bar of ready) {
+      const i = bars.indexOf(bar);
+      if (!crossesGap(bars, i, SCORING.horizon)) continue;
+      const r = await env.DB.prepare("DELETE FROM outcome_scores WHERE timeframe = ? AND candle_key = ?").bind(timeframe, keyOf(bar)).run();
+      summary.gap_removed = (summary.gap_removed || 0) + Number(r?.meta?.changes || 0);
+    }
     for (const bar of ready) {
       const candleKey = keyOf(bar);
       if (done.has(candleKey)) continue;
