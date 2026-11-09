@@ -1,0 +1,16 @@
+export const OMEGA_SCHEMA_SQL: string[];
+export const INTENT_TTL_MS: number;
+export const STATE_MAX_BYTES: number;
+export const ENVELOPE_MAX_BYTES: number;
+export const CLOSE_MAX_ATTEMPTS: number;
+export function resetOmegaBrokerSchemaForTests(): void;
+export function engineEnvEnabled(env: unknown): boolean;
+export function readSettings(env: unknown): Promise<Record<string, any>>;
+export function writeSettings(env: unknown, input: { body?: unknown; actor: string }, options?: { now?: number }): Promise<Record<string, any>>;
+export function connectionStatus(env: unknown): Promise<Record<string, any>>;
+export function setConnection(env: unknown, input: { envelope?: unknown; server?: unknown; actor: string }, options?: { now?: number }): Promise<Record<string, any>>;
+export function clearConnection(env: unknown, input: { actor: string; reason?: unknown }, options?: { now?: number }): Promise<Record<string, any>>;
+export function bridgeKey(env: unknown, options?: { now?: number }): Promise<Record<string, any> | null>;
+export function executorFrom(state: unknown): Record<string, any> | null;
+export function bridgeSync(env: unknown, input?: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown }, options?: { now?: number; signal?: Record<string, any> }): Promise<Record<string, any>>;
+export function brokerOverview(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;

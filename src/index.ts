@@ -24,6 +24,7 @@ export interface Env {
   /** "off" turns the Decision Engine off: the EA, Telegram and the ledger follow the H1 decision again. */
   DECISION_ENGINE?: string;
   DECISION_TELEGRAM_MODE?: string;
+  OMEGA_ENGINE_ENABLED?: string;
   DB: D1Database;
   SIGNAL_CACHE: KVNamespace;
   WEBHOOK_BUFFER: KVNamespace;
@@ -205,6 +206,7 @@ import { readCrowdReplay } from "./tuning-replay.mjs";
 import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weighting.mjs";
 import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
+import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings } from "./omega-broker.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -1941,19 +1943,36 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
 }
 
 /**
- * Omega Execution Engine (omega.cryptophys.work, workers/xauusd-omega): the only caller, over its
- * Service Binding. Reads the EA overview and sets the EA control (active, paused, killed). Omega
- * verifies the Access JWT and passes the person's identity as the actor; the change is audited.
+ * Omega Execution Engine (workers/xauusd-omega, omega.cryptophys.work and nexus.cryptophys.work/omega):
+ * the only caller, over its Service Binding. Omega verifies the Access JWT and passes the identity as
+ * the actor; every change is audited. v1: the EA overview and the EA control (active, paused, killed).
+ * Phase 2 (owner decisions 2026-11-09, src/omega-broker.mjs): the broker engine settings, the broker
+ * connection (an envelope only the host bridge can open) and the bridge sync that plans the intents.
  */
 export class OmegaGateway extends WorkerEntrypoint<Env> {
   async overview(): Promise<JsonObject> {
-    return omegaOverview(this.env) as Promise<JsonObject>;
+    return { ...(await omegaOverview(this.env)), broker: await brokerOverview(this.env) } as JsonObject;
   }
   async deals(options: { limit?: number } = {}): Promise<JsonObject> {
     return { deals: await listDeals(this.env, { limit: options?.limit ?? 200 }) } as JsonObject;
   }
   async setControl(input: { mode?: string; reason?: string; actor?: string }): Promise<JsonObject> {
     return setControl(this.env, input ?? {}) as Promise<JsonObject>;
+  }
+  async setSettings(input: { body?: unknown; actor: string }): Promise<JsonObject> {
+    return writeSettings(this.env, { body: input?.body, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
+  }
+  async setConnection(input: { envelope?: unknown; server?: unknown; actor: string }): Promise<JsonObject> {
+    return setConnection(this.env, { envelope: input?.envelope, server: input?.server, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
+  }
+  async clearConnection(input: { reason?: unknown; actor: string }): Promise<JsonObject> {
+    return clearConnection(this.env, { reason: input?.reason, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
+  }
+  async bridgeKey(): Promise<JsonObject | null> {
+    return bridgeKey(this.env) as Promise<JsonObject | null>;
+  }
+  async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown }): Promise<JsonObject> {
+    return bridgeSync(this.env, input ?? {}) as Promise<JsonObject>;
   }
 }
 
