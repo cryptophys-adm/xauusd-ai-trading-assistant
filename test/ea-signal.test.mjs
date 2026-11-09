@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { eaSignalFrom, heartbeatFrom, storeHeartbeat, eaStatus, EA_HEARTBEAT_KEY } from "../src/ea-signal.mjs";
+import { eaSignal, eaSignalFrom, heartbeatFrom, storeHeartbeat, eaStatus, EA_HEARTBEAT_KEY } from "../src/ea-signal.mjs";
 
 const OPEN = Date.parse("2026-11-09T06:00:00Z");
 const KEY = "OANDA:XAUUSD:60:" + OPEN;
@@ -49,7 +49,8 @@ test("the heartbeat keeps known fields only, no account number; the status shows
   const env = {
     SIGNAL_CACHE: { get: async (k) => store.get(k) ?? null, put: async (k, v) => { store.set(k, v); } },
     DB: { prepare: () => ({ bind: () => ({ first: async () => ({ candle_key: KEY, ai_analysis: JSON.stringify(BUY) }) }) }) },
-    EA_SIGNALS_ENABLED: "false"
+    EA_SIGNALS_ENABLED: "false",
+    DECISION_ENGINE: "off"
   };
   assert.deepEqual(await storeHeartbeat(env, { mode: "demo", positions: 0 }, { now: OPEN }), { ok: true });
   assert.ok(store.has(EA_HEARTBEAT_KEY));
@@ -57,4 +58,18 @@ test("the heartbeat keeps known fields only, no account number; the status shows
   assert.equal(status.heartbeat.mode, "demo");
   assert.equal(status.signal.side, "BUY");
   assert.equal(status.signal.kill, true, "EA_SIGNALS_ENABLED false is the server's kill switch");
+});
+
+test("while the Decision Engine is on, the EA reads its latest decision (the single SSOT), not the H1 decision", async () => {
+  const close = Date.parse("2026-11-09T13:15:00Z");
+  const key = "OANDA:XAUUSD:15:" + (close - 900_000);
+  const store = new Map([["decision-engine:latest", JSON.stringify({ decision_key: key, stance: "SELL", confidence: 0.64, trade: { side: "SELL", action: "ENTER_LIMIT", entry: 4030, stop: 4052, target: "tp2", tp: 3980, rrr: 2.27 } })]]);
+  const env = {
+    SIGNAL_CACHE: { get: async (k) => store.get(k) ?? null, put: async (k, v) => { store.set(k, v); } },
+    DB: { prepare: () => ({ bind: () => ({ first: async () => ({ candle_key: KEY, ai_analysis: JSON.stringify(BUY) }) }) }) }
+  };
+  const s = await eaSignal(env, { now: close + 60_000 });
+  assert.deepEqual([s.source, s.signal_id, s.side, s.action, s.entry, s.stop, s.tp1], ["decision_engine", key, "SELL", "ENTER_LIMIT", 4030, 4052, 3980]);
+  assert.equal(s.expires_ms, close + 900_000, "the next 15m decision replaces it");
+  assert.equal((await eaSignal({ ...env, DECISION_ENGINE: "off" }, { now: OPEN + 3_700_000 })).side, "BUY", "the kill switch restores the H1 decision");
 });

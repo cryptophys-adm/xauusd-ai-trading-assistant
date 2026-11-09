@@ -5,7 +5,11 @@
 // Sources:
 //   h1_decision  the H1 Reasoner's BUY/SELL (trade_decisions: entry, stop, one take profit);
 //   strategy     the strategy engine's TRIGGERED setups (entry, stop, TP1, TP2), snapshotted by the
-//                sweep, at most one open per side.
+//                sweep, at most one open per side;
+//   decision     the Decision Engine's BUY/SELL (owner decisions 2026-11-09: the single SSOT; entry,
+//                stop and the chosen target), at most one open per side. While the engine is on
+//                (DECISION_ENGINE not "off") it is the only new source; h1_decision and strategy
+//                rows stay for the history.
 //
 // Simulation (deterministic, on closed 15m bars, else 1H bars where 15m bars do not reach):
 //   - The entry is a limit at `entry`. It fills on the first bar whose range reaches it, within
@@ -23,7 +27,7 @@
 export const LEDGER_VERSION = "cryptophys.signal-ledger.v1";
 export const FILL_WINDOW_MS = 8 * 3600_000;
 export const HOLD_MAX_MS = 72 * 3600_000;
-export const SOURCES = Object.freeze(["h1_decision", "strategy"]);
+export const SOURCES = Object.freeze(["decision", "h1_decision", "strategy"]);
 
 const finite = (x) => typeof x === "number" && Number.isFinite(x);
 const r3 = (x) => (finite(x) ? Math.round(x * 1000) / 1000 : null);
@@ -207,6 +211,23 @@ export async function ingestStrategy(env, strategy, { now = Date.now() } = {}) {
   return Number(res?.meta?.changes) || 0;
 }
 
+/**
+ * A Decision Engine BUY or SELL (src/decision-engine.mjs), once per 15m key, and only without an open
+ * decision of the same side. TP1 is the chosen target; TP2 the other one when it lies beyond it.
+ */
+export async function ingestDecision(env, d, { now = Date.now() } = {}) {
+  const t = d?.trade;
+  if (!t || (d.stance !== "BUY" && d.stance !== "SELL") || t.side !== d.stance) return 0;
+  const dir = d.stance === "BUY" ? 1 : -1;
+  const other = t.target === "tp1" ? t.tp2 : null;
+  const s = { side: d.stance, entry: t.entry, stop: t.stop, tp1: t.tp, tp2: finite(other) && dir * (other - t.tp) > 0 ? other : null };
+  if (!validSignal(s)) return 0;
+  const live = await env.DB.prepare("SELECT COUNT(*) AS n FROM signal_ledger WHERE source = 'decision' AND side = ? AND status IN ('pending', 'open')").bind(s.side).first();
+  if (Number(live?.n) > 0) return 0;
+  const res = await env.DB.prepare(insertSql).bind(`decision:${d.decision_key}`, "decision", d.decision_key, d.decided_at ?? iso(now), s.side, s.entry, s.stop, s.tp1, s.tp2, finite(d.confidence) ? r3(d.confidence) : null, String(d.summary ?? "").slice(0, 300), iso(now)).run();
+  return Number(res?.meta?.changes) || 0;
+}
+
 /** Re-simulates every pending or open signal on the latest closed bars. */
 export async function evaluateOpenSignals(env, { now = Date.now(), bars = null } = {}) {
   const live = (await env.DB.prepare("SELECT * FROM signal_ledger WHERE status IN ('pending', 'open')").all()).results || [];
@@ -223,10 +244,10 @@ export async function evaluateOpenSignals(env, { now = Date.now(), bars = null }
 }
 
 /** The sweep's ledger step: ingest new signals, then follow every live one. Never fatal. */
-export async function runSignalLedger(env, { now = Date.now(), readStrategy = null } = {}) {
+export async function runSignalLedger(env, { now = Date.now(), readStrategy = null, h1Decisions = true } = {}) {
   if (!env?.DB) return { status: "unavailable" };
   await ensureLedgerSchema(env.DB);
-  const added = { h1_decision: await ingestH1Decisions(env, { sinceIso: iso(now - 7 * 86_400_000), now }), strategy: 0 };
+  const added = { h1_decision: h1Decisions ? await ingestH1Decisions(env, { sinceIso: iso(now - 7 * 86_400_000), now }) : 0, strategy: 0 };
   if (readStrategy) { try { added.strategy = await ingestStrategy(env, await readStrategy(env, { now }), { now }); } catch { added.strategy = 0; } }
   const changed = await evaluateOpenSignals(env, { now });
   return { status: "ok", added, changed };

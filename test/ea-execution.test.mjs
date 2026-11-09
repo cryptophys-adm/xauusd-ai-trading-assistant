@@ -33,7 +33,8 @@ function env() {
   resetEaExecutionSchemaForTests();
   const DB = d1();
   DB.raw.prepare("INSERT INTO ai_syntheses (candle_key, ai_analysis) VALUES (?, ?)").run(KEY, JSON.stringify(BUY));
-  return { DB, SIGNAL_CACHE: kv() };
+  // The H1 decision feeds the signal here (the Decision Engine's kill switch); test/ea-signal.test.mjs covers the engine.
+  return { DB, SIGNAL_CACHE: kv(), DECISION_ENGINE: "off" };
 }
 const DEAL = { deal_ticket: 7001, position_ticket: 5001, mode: "demo", side: "BUY", volume: 0.05, entry_price: 4107.2, exit_price: 4135.5, profit: 141.5, commission: -0.7, swap: 0, reason: "tp", signal_id: KEY, opened_ms: OPEN + 3_600_000, closed_ms: OPEN + 5 * 3_600_000, currency: "USD", login: 123456 };
 

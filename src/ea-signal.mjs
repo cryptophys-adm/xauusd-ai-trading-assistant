@@ -7,11 +7,14 @@
 //   paused          true when Omega paused the EA: no new entry and no pending order (the EA deletes
 //                   its pending orders); open positions keep their stop and target
 //   blackout        true from 2 hours before to 30 minutes after a High-impact USD event (the event gate)
-//   signal_id       the H1 candle key of the latest BUY or SELL decision ("" without one)
-//   side            BUY, SELL or NONE (the latest H1 decision is WAIT, or no priced decision)
+//   signal_id       the decision key of the latest BUY or SELL ("" without one): since 2026-11-09 the
+//                   Decision Engine's 15m key (src/decision-engine.mjs, the single SSOT); with
+//                   DECISION_ENGINE = "off" the H1 candle key of the latest H1 decision
+//   side            BUY, SELL or NONE (the latest decision is WAIT, or no priced decision)
 //   action          ENTER_MARKET or ENTER_LIMIT (the decision's trade plan)
-//   entry, stop, tp1  the decision's prices (the 1-hour chart's own key levels, src/strategy-engine.mjs)
-//   issued_ms       the close of the decided H1 bar; expires_ms the next H1 close (a new decision)
+//   entry, stop, tp1  the decision's prices (the Key Level Agent's zones, src/strategy-engine.mjs);
+//                   tp1 is the target the decision chose (its TP1 or TP2)
+//   issued_ms       the close of the decided bar; expires_ms the next close of that timeframe (a new decision)
 //   market_price    the last closed 5-minute close of the feed (OANDA), market_ms its close time:
 //                   the EA turns the levels into distances from its broker's price with it
 //   server_ms       the server time
@@ -22,9 +25,11 @@
 // (omega.cryptophys.work, src/ea-execution.mjs) and kept in KV under EA_CONTROL_KEY.
 
 import { eventRisk, gatedEvents } from "./econ-calendar.mjs";
+import { decisionEngineEnabled, readLatestDecision, keyCloseMs } from "./decision-engine.mjs";
 
 export const EA_SIGNAL_VERSION = "cryptophys.ea-signal.v1";
 const H1_MS = 3_600_000;
+const M15_MS = 900_000;
 const SYMBOL = "OANDA:XAUUSD";
 const isPrice = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
 
@@ -52,15 +57,37 @@ export function eaSignalFrom({ candleKey = null, analysis = null, kill = false, 
   };
 }
 
-/** Loads the latest H1 decision, the event gate and the feed price, and builds the signal. Never throws. */
+/**
+ * Pure: the EA's signal from the latest Decision Engine record (src/decision-engine.mjs). A BUY or
+ * SELL with a valid trade; issued at its 15m close, expiring at the next 15m close (the next decision).
+ */
+export function eaSignalFromDecision({ decision = null, kill = false, killSource = "", paused = false, blackout = false, blackoutReason = null, marketPrice = null, marketMs = null, now = Date.now() } = {}) {
+  const base = eaSignalFrom({ kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now });
+  const t = decision?.trade;
+  const side = String(decision?.stance || "").toUpperCase();
+  const close = keyCloseMs(decision?.decision_key);
+  if (!t || !(side === "BUY" || side === "SELL") || t.side !== side || !Number.isFinite(close)) return base;
+  const entry = t.entry, stop = t.stop, tp1 = t.tp;
+  if (![entry, stop, tp1].every(isPrice)) return base;
+  if (side === "BUY" ? !(stop < entry && entry < tp1) : !(tp1 < entry && entry < stop)) return base;
+  return {
+    ...base, signal_id: decision.decision_key, side, action: t.action === "ENTER_LIMIT" ? "ENTER_LIMIT" : "ENTER_MARKET", entry, stop, tp1,
+    risk_reward: Number.isFinite(t.rrr) ? t.rrr : 0, confidence: Number.isFinite(decision.confidence) ? decision.confidence : 0,
+    issued_ms: close, expires_ms: close + M15_MS
+  };
+}
+
+/** Loads the latest decision, the event gate and the feed price, and builds the signal. Never throws. */
 export async function eaSignal(env, { now = Date.now() } = {}) {
   const envKill = String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
   const control = await readControl(env);
   const kill = envKill || control.mode === "killed";
   const killSource = envKill ? "env" : control.mode === "killed" ? "omega" : "";
   const paused = control.mode === "paused";
-  let candleKey = null, analysis = null;
-  try {
+  const engine = decisionEngineEnabled(env);
+  let candleKey = null, analysis = null, decision = null;
+  if (engine) decision = await readLatestDecision(env);
+  else try {
     const row = await env.DB.prepare("SELECT candle_key, ai_analysis FROM ai_syntheses WHERE candle_key LIKE ? ORDER BY id DESC LIMIT 1").bind(`${SYMBOL}:60:%`).first();
     candleKey = row?.candle_key ?? null;
     analysis = row?.ai_analysis ? JSON.parse(row.ai_analysis) : null;
@@ -76,7 +103,8 @@ export async function eaSignal(env, { now = Date.now() } = {}) {
     const last = (Array.isArray(rec?.candles) ? rec.candles : []).filter((c) => isPrice(c?.close) && c.close_time).sort((a, b) => Date.parse(a.close_time) - Date.parse(b.close_time)).at(-1);
     if (last) { marketPrice = last.close; marketMs = Date.parse(last.close_time); }
   } catch { marketPrice = null; }
-  return eaSignalFrom({ candleKey, analysis, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now });
+  if (engine) return { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now }), source: "decision_engine" };
+  return { ...eaSignalFrom({ candleKey, analysis, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now }), source: "h1_decision" };
 }
 
 export const EA_HEARTBEAT_KEY = "ea:heartbeat:last";

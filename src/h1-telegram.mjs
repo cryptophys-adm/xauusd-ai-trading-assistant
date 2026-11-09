@@ -2,6 +2,8 @@
 // when the decision changes from the previous bar's (for example BUY -> WAIT). A WAIT that follows
 // a WAIT is not sent. H1_TELEGRAM_MODE = "all" restores one message per bar. The previous decision
 // is kept in SIGNAL_CACHE; the same bar processed twice with the same decision is never sent twice.
+// Since 2026-11-09 the Decision Engine (src/decision-engine.mjs) is the single decision and sends its
+// own message: while it is on (DECISION_ENGINE not "off") no H1 decision message is sent.
 
 export const H1_TELEGRAM_KEY = "telegram:h1:last-decision:v1";
 const TTL_S = 14 * 86_400;
@@ -21,6 +23,7 @@ export function shouldNotifyH1(action, previous, mode = "changes") {
  * the next bar still compares with the last decision that was recorded.
  */
 export async function notifyH1Decision(env, { candleKey, action, text, send }) {
+  if (String(env?.DECISION_ENGINE ?? "on").trim().toLowerCase() !== "off") return { sent: false, reason: "decision_engine" };
   const kv = env?.SIGNAL_CACHE;
   let prev = null;
   try { prev = JSON.parse((await kv?.get?.(H1_TELEGRAM_KEY)) || "null"); } catch { prev = null; }

@@ -179,7 +179,7 @@ export async function loadOwnTimeframePlanInputs(env) {
 }
 
 /** Vetoes and cautions for a direction from the 1H and 15m HUD snapshots, the news and the economic calendar. */
-function riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar = null, now = Date.now() }) {
+export function riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar = null, now = Date.now() }) {
   const vetoes = [], cautions = [];
   const dm = h1Snapshot?.huds?.decision_matrix?.fields || {};
   const tm = h1Snapshot?.huds?.trade_management?.fields || {};
@@ -202,7 +202,7 @@ function riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar = null, now =
 }
 
 /** The entry trigger in a direction: a verified 5m confirmation or the 15m Prophet confirmation. */
-function triggerOf(dir, { confirmations, m15Snapshot }) {
+export function triggerOf(dir, { confirmations, m15Snapshot }) {
   if (!dir) return { fired: false, source: null, note: "no direction to confirm" };
   const side = dir > 0 ? "buy_confirmed" : "sell_confirmed";
   const m5 = confirmations?.m5_prophet_r38;

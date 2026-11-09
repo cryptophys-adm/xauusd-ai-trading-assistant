@@ -9,7 +9,7 @@ const pct = (x?: number | null) => (x == null ? "n/a" : `${Math.round(x * 1000) 
 const r = (x?: number | null, sign = true) => (x == null ? "n/a" : `${sign && x > 0 ? "+" : ""}${Math.round(x * 100) / 100}R`);
 const px = (x?: number | null) => (x == null ? "" : x.toFixed(2));
 const when = (t?: string | null) => (t ? t.slice(5, 16).replace("T", " ") : "");
-const SOURCE: Record<string, string> = { all: "All signals", h1_decision: "H1 decision (Reasoner)", strategy: "Strategy engine" };
+const SOURCE: Record<string, string> = { all: "All signals", decision: "Decision Engine", h1_decision: "H1 decision (history)", strategy: "Strategy engine (history)" };
 const STATUS_TONE: Record<string, "green" | "amber" | "red" | "slate" | "cyan"> = { pending: "amber", open: "cyan", closed: "slate", cancelled: "slate" };
 
 /** Cumulative R after each closed signal, as an SVG line with a zero line. */
@@ -36,7 +36,7 @@ function EquityCurve({ points }: { points: { t: string; r: number }[] }) {
  * R multiples of the advice, never money, lots or positions.
  */
 export default function Performance() {
-  const [source, setSource] = useState<"all" | "h1_decision" | "strategy">("all");
+  const [source, setSource] = useState<"all" | "decision" | "h1_decision" | "strategy">("all");
   const [policy, setPolicy] = useState<"tp1" | "tp2">("tp1");
   const { data, loading, error } = usePoll(() => get("/api/ledger?days=30"), 120_000);
   const l = (data as any)?.ledger;
@@ -52,7 +52,7 @@ export default function Performance() {
           Every BUY or SELL the system gives is followed on the closed bars after it: the entry fills when price reaches it (within {l?.rules?.fill_window_hours ?? 8} hours), then the trade ends at its target, its stop (−1R) or after {l?.rules?.hold_max_hours ?? 72} hours at the close. A bar that reaches both the stop and the target counts as the stop. The ledger never feeds a room or a decision.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {(["all", "h1_decision", "strategy"] as const).map((s) => <button key={s} type="button" className={toggle(source === s)} onClick={() => setSource(s)}>{SOURCE[s]}</button>)}
+          {(["all", "decision", "h1_decision", "strategy"] as const).map((s) => <button key={s} type="button" className={toggle(source === s)} onClick={() => setSource(s)}>{SOURCE[s]}</button>)}
           <span className="mx-1 h-4 w-px bg-white/10" />
           <button type="button" className={toggle(policy === "tp1")} onClick={() => setPolicy("tp1")}>Exit at TP1</button>
           <button type="button" className={toggle(policy === "tp2")} onClick={() => setPolicy("tp2")}>Exit at TP2</button>
@@ -85,7 +85,7 @@ export default function Performance() {
                   <tbody>
                     {items.map((x) => (
                       <tr key={x.id}>
-                        <td className="mono">{when(x.opened_at)}</td><td className="text-slate-400">{x.source === "h1_decision" ? "H1 decision" : "Strategy"}</td>
+                        <td className="mono">{when(x.opened_at)}</td><td className="text-slate-400">{x.source === "decision" ? "Decision Engine" : x.source === "h1_decision" ? "H1 decision" : "Strategy"}</td>
                         <td className="mono font-bold" style={{ color: x.side === "BUY" ? C.bull : C.bear }}>{x.side}</td>
                         <td className="mono">{px(x.entry)}</td><td className="mono">{px(x.stop)}</td><td className="mono">{px(x.tp1)}</td><td className="mono">{px(x.tp2)}</td>
                         <td><Badge tone={STATUS_TONE[x.status] ?? "slate"}>{x.status}</Badge>{x.ambiguous ? <span className="ml-1 text-[10px] text-amber-200">ambiguous bar</span> : null}</td>

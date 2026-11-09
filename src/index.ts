@@ -21,6 +21,9 @@ import { validateBundle } from "../lib/validation.ts";
 
 export interface Env {
   NEXUS_DASHBOARD_URL?: string;
+  /** "off" turns the Decision Engine off: the EA, Telegram and the ledger follow the H1 decision again. */
+  DECISION_ENGINE?: string;
+  DECISION_TELEGRAM_MODE?: string;
   DB: D1Database;
   SIGNAL_CACHE: KVNamespace;
   WEBHOOK_BUFFER: KVNamespace;
@@ -173,7 +176,8 @@ import { readGlobalConclusion } from "./global-conclusion.mjs";
 import { readStrategy, loadStrategyInputs, buildStrategy, ownTimeframePlan, loadOwnTimeframePlanInputs } from "./strategy-engine.mjs";
 import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } from "./strategy-inputs.mjs";
 import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
-import { runSignalLedger, readLedger, ingestStrategy, ensureLedgerSchema } from "./signal-ledger.mjs";
+import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema } from "./signal-ledger.mjs";
+import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport } from "./aether-push.mjs";
 import { aetherSyncStatus } from "./aether-sync.mjs";
@@ -1813,6 +1817,8 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
       console.log(warRoomEnabled(env) ? "war_room" : "live_room", JSON.stringify({ bar_time: task.bar_time, ...result }));
       // Quorum (production 2026-11-06): redeliver after a model minute; the ok openings are kept.
       if (result?.status === "waiting_for_quorum") throw Object.assign(new Error("war room waiting for quorum"), { name: "WarRoomQuorumPending", retryDelaySeconds: 60 });
+      // Decision Engine (owner decisions 2026-11-09): the single decision, as soon as the 15m room has concluded.
+      if (result?.status === "complete" || result?.status === "already_complete") await decideBar(env, String(task.bar_time));
       return;
     }
     if (task.kind === "hud_agents") {
@@ -1854,7 +1860,26 @@ async function consumeQueue(batch: MessageBatch<QueueTask>, env: Env): Promise<v
  * meets. Deterministic, no model call. A TRIGGERED setup goes to the Signal Ledger at once (the ledger
  * keeps one per hour and none while one of the same side is open) and its alert to Telegram.
  */
+/**
+ * The Decision Engine for one 15m bar (src/decision-engine.mjs): the AI council within guardrails,
+ * stored once per bar; its message to Telegram and a BUY or SELL to the Signal Ledger. Never throws.
+ */
+async function decideBar(env: Env, barClose: string | null, now = Date.now()): Promise<void> {
+  const deps = {
+    send: (text: string) => sendTelegram(env, text),
+    recordSignal: async (d: unknown) => { await ensureLedgerSchema(env.DB); return ingestDecision(env, d); }
+  };
+  try {
+    const result = barClose ? await runDecisionEngine(env, { barClose, now, ...deps }) : await runPendingDecision(env, { now, ...deps });
+    if (result.status !== "disabled" && result.status !== "already_decided" && result.status !== "too_soon" && result.status !== "market_closed") console.log("decision_engine", JSON.stringify(result));
+  } catch (error) {
+    console.error("decision_engine_failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
 async function evaluateStrategyAtM5Close(env: Env, context: Record<string, unknown>): Promise<void> {
+  // While the Decision Engine is on, it is the only decision: the strategy engine is one of its witnesses.
+  if (decisionEngineEnabled(env)) return;
   try {
     const now = Date.now();
     const strategy = await readStrategy(env, { now, m5Context: context });
@@ -2231,9 +2256,28 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/engine/decision") {
+    // The Decision Engine's latest decision (owner decisions 2026-11-09: the single SSOT).
+    try {
+      return dashboardJson({ status: "ok", enabled: decisionEngineEnabled(env), decision: await readLatestDecision(env) });
+    } catch (error) {
+      console.error("engine_decision_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/engine/decisions") {
+    try {
+      return dashboardJson({ status: "ok", enabled: decisionEngineEnabled(env), decisions: await readDecisions(env, { limit: Number(url.searchParams.get("limit") || "24") || 24 }) });
+    } catch (error) {
+      console.error("engine_decisions_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/conclusion/global") {
     try {
-      return dashboardJson({ status: "ok", global: await readGlobalConclusion(env) });
+      // The Decision Engine's decision travels with the witnesses (the rooms, news, macro, strategy).
+      const [global, engine] = await Promise.all([readGlobalConclusion(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null)]);
+      return dashboardJson({ status: "ok", global, engine });
     } catch (error) {
       console.error("global_conclusion_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
@@ -2628,6 +2672,8 @@ export default {
       ctx.waitUntil(runPendingTimeframeThreads(env, { onRoom }).then(tf => {
         if (tf.status !== "disabled") console.log("tf_threads", JSON.stringify(tf));
       }).catch(e => console.error("tf_threads_failed", e instanceof Error ? e.message : String(e))));
+      // Decision Engine fallback: a 15m bar whose room did not trigger the engine is decided by the sweep.
+      ctx.waitUntil(decideBar(env, null));
       ctx.waitUntil(finalizePendingH1Decisions(env).then(r => {
         if (Number(r.pending)) console.log("h1_consensus_pending", JSON.stringify(r));
       }).catch(e => console.error("h1_consensus_pending_failed", e instanceof Error ? e.message : String(e))));
@@ -2681,7 +2727,9 @@ export default {
         // Signal Ledger (owner request 2026-11-07): new H1 decisions and strategy setups, each
         // followed to its outcome in R on the closed bars. Never feeds a room or a decision.
         try {
-          const ledger = await runSignalLedger(env, { readStrategy });
+          // While the Decision Engine is on, only its decisions are new signals (src/decision-engine.mjs).
+          const engineOn = decisionEngineEnabled(env);
+          const ledger = await runSignalLedger(env, { readStrategy: engineOn ? null : readStrategy, h1Decisions: !engineOn });
           if (ledger.status === "ok" && (Number((ledger.added as Record<string, number>).h1_decision) || Number((ledger.added as Record<string, number>).strategy) || Number(ledger.changed))) console.log("signal_ledger", JSON.stringify(ledger));
           // Backlog 11.2 (owner decision 2026-11-08): each new ledger event to the owner's Telegram, once.
           const alerts = await sendLedgerAlerts(env, { send: (text: string) => sendTelegram(env, text) });
