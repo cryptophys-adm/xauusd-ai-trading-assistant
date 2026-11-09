@@ -45,6 +45,6 @@
     "HUD_SNAPSHOT_PUBLISH": "true"
   },
   "triggers": {
-    "crons": ["*/5 * * * *"]
+    "crons": ["* * * * *"]
   }
 }

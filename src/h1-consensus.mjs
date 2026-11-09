@@ -45,8 +45,10 @@ export const H1_PENDING_LOOKBACK_MS = 4 * 60 * 60 * 1000;
  * whatever is there; a snapshot that arrives later re-convenes the room (#hud), but the decision
  * already written stays. The sweep remains the fallback, and skips a bar whose room the task holds.
  */
-export const H1_ROOM_HUD_WAIT_MS = 5 * 60 * 1000;
-export const H1_ROOM_RETRY_S = 60;
+// 5 minutes and a 60-second retry until 2026-11-09; the owner wants the decision within 1 to 2
+// minutes of the close, and the HUD snapshot now arrives in the same pull as the H1 record.
+export const H1_ROOM_HUD_WAIT_MS = 2 * 60 * 1000;
+export const H1_ROOM_RETRY_S = 15;
 export const H1_ROOM_LOCK_PREFIX = "h1room:lock:";
 export const H1_ROOM_LOCK_TTL_S = 7 * 60;
 

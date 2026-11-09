@@ -342,11 +342,12 @@ test("the h1_room queue task: waits for the HUD snapshot of a fresh bar, then th
   };
   const hour = 3_600_000;
 
-  // A bar whose close is still ahead and has no HUD snapshot: redelivered in a minute.
+  // A bar whose close is still ahead and has no HUD snapshot: redelivered in 15 seconds (60 until
+  // 2026-11-09; the owner wants the decision within 1 to 2 minutes of the close).
   const fresh = SYMBOL + ":60:" + Math.floor(Date.now() / hour) * hour;
   const waiting = await deliver({ kind: "h1_room", event_id: "h1_room:" + fresh, candle_key: fresh, enqueued_at: new Date().toISOString() });
   assert.equal(waiting.acked, false);
-  assert.deepEqual(waiting.retried, { delaySeconds: 60 });
+  assert.deepEqual(waiting.retried, { delaySeconds: 15 });
   assert.equal(prompts.length, 0);
 
   // A closed bar with its HUD snapshot, its parked evidence and a concluded room.
