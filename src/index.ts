@@ -47,6 +47,10 @@ export interface Env {
     // Phase A7: the items a person approved for shadow testing (never a live prompt).
     learnedPack(): Promise<Record<string, unknown>>;
   };
+  // Aether's read-only sync checks (hardening 2026-11-09, src/aether-sync.mjs). Production only.
+  AETHER_READER?: {
+    sync(): Promise<Record<string, unknown>>;
+  };
   XAUUSD_EVENTS: Queue<QueueTask>;
   INGEST_URL?: string;
   INGEST_SECRET?: string;
@@ -172,6 +176,7 @@ import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mj
 import { runSignalLedger, readLedger, ingestStrategy, ensureLedgerSchema } from "./signal-ledger.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport } from "./aether-push.mjs";
+import { aetherSyncStatus } from "./aether-sync.mjs";
 import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
@@ -2210,7 +2215,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/aether/status") {
     // Aether A5: the push ledger of decision cards sent to cryptophys-aether (no card content).
     try {
-      return dashboardJson({ status: "ok", aether: { ...(await aetherPushStatus(env)), learned_pack: await packStatus(env) } });
+      return dashboardJson({ status: "ok", aether: { ...(await aetherPushStatus(env)), learned_pack: await packStatus(env), sync: await aetherSyncStatus(env) } });
     } catch (error) {
       console.error("aether_status_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);

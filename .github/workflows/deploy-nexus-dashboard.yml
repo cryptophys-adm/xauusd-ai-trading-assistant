@@ -104,6 +104,20 @@ jobs:
             if (!chart) await new Promise(r => setTimeout(r, 10000));
           }
           if (!chart) { console.error("/api/ohlcv returned no candles"); process.exit(1); }
+          // The Aether page (hardening 2026-11-09): Aether's overview through the AETHER binding, its sync
+          // checks, and never a price.
+          let aether = null;
+          for (let i = 0; i < 6 && !aether; i++) {
+            try {
+              const r = await fetch(ORIGIN + "/api/aether/overview", { signal: AbortSignal.timeout(20000) });
+              const body = await r.json().catch(() => null);
+              if (r.ok && body?.canon?.content_sha256 && body?.sync?.checks) aether = body; else console.log("aether overview not ready:", r.status, JSON.stringify(body).slice(0, 200));
+            } catch (e) { console.log("aether overview error:", e?.name); }
+            if (!aether) await new Promise(r => setTimeout(r, 10000));
+          }
+          if (!aether) { console.error("/api/aether/overview did not answer with the canon and the sync checks"); process.exit(1); }
+          if (/"(entry_price|stop_loss|take_profit|entry|stop|tp1)"\s*:/.test(JSON.stringify(aether))) { console.error("the Aether overview carries a price field"); process.exit(1); }
+          console.log(JSON.stringify({ aether: { canon: aether.canon.content_sha256.slice(0, 12), sync: aether.sync.overall, checks: Object.fromEntries(Object.entries(aether.sync.checks).map(([k, c]) => [k, c.status])) } }));
           const last = chart.candles.at(-1);
           console.log(JSON.stringify({ chart: { symbol: chart.symbol, timeframe: chart.timeframe, count: chart.count, latest_close_time: chart.latest_close_time, last_close: last.close } }));
           NODE

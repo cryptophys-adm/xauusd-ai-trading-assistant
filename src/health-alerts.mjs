@@ -16,6 +16,7 @@
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { engineLabel } from "./engine-names.mjs";
 import { rejectionSummary, REJECTION_TEXT } from "./webhook-rejections.mjs";
+import { aetherSyncStatus, syncAlerts } from "./aether-sync.mjs";
 
 export const HEALTH_AGENT_ID = "xauusd-risk-manager";
 export const HEALTH_REPORTS_PER_HOUR = 3;
@@ -140,6 +141,10 @@ export async function detectHealthIssues(env, now = Date.now()) {
       detail: rej
     });
   }
+
+  // 9. End-to-end sync with Aether (hardening 2026-11-09): each warning check of AetherReader.sync()
+  //    and of this side (KB hash match, this Worker's card push). Production only (binding absent elsewhere).
+  try { out.push(...syncAlerts(await aetherSyncStatus(env, { now }))); } catch { /* never fatal */ }
   return out;
 }
 

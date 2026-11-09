@@ -161,6 +161,13 @@
       "binding": "AETHER",
       "service": "cryptophys-aether",
       "entrypoint": "KnowledgeIngress"
+    },
+    // Aether's read-only sync checks (hardening 2026-11-09): the health alerts read AetherReader.sync()
+    // every 15 minutes and compare Aether's KB hash with this repository's. Production only.
+    {
+      "binding": "AETHER_READER",
+      "service": "cryptophys-aether",
+      "entrypoint": "AetherReader"
     }
   ],
   "queues": {
