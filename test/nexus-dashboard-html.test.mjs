@@ -142,7 +142,26 @@ test("Omega: /omega and /omega/ render inside the Nexus SPA with the left panel;
   assert.match(readFileSync(join(root, "workers/xauusd-nexus-dashboard/ui/src/components/AppShell.tsx"), "utf8"), /href: "\/#\/omega"/);
   assert.match(readFileSync(join(root, "workers/xauusd-nexus-dashboard/ui/src/App.tsx"), "utf8"), /omega: Omega/);
   const omegaUi = readFileSync(join(root, "workers/xauusd-nexus-dashboard/ui/src/pages/Omega.tsx"), "utf8");
-  for (const term of ["/omega/api/overview", "/api/ohlcv?timeframe=", "MetaTrader 5 Web Terminal", "Market Watch", "Navigator", "MT5 Toolbox", "Algo Trading"]) {
+  for (const term of [
+    "/omega/api/overview",
+    "/api/ohlcv?timeframe=",
+    "MetaTrader 5 Web Terminal",
+    "Market Watch",
+    "Navigator",
+    "MT5 Toolbox",
+    "Algo Trading",
+    "Setup & Configuration Center",
+    "FxPro",
+    "Dupoin",
+    "Valetax",
+    "Exness",
+    "Monex",
+    "b-server-select",
+    "b-gold-pair",
+    "AUTO_GOLD",
+    "e-enabled",
+    "e-quick-toggle",
+  ]) {
     assert.ok(omegaUi.includes(term), term);
   }
 });
