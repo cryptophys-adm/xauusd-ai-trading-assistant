@@ -39,7 +39,7 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
     - `xauusd-moderator` (`xauusd_digest`): the War Room 15m conclusion when its stance changes, otherwise at most once an hour.
     - `hud-*` (`hud_digest`): a HUD agent's War Room stance when it moves into or out of BUY or SELL.
     - `xauusd-risk-manager` (`xauusd_digest`, `src/health-alerts.mjs`, owner decision 2026-11-06): system health alerts.
-      - **Detected problems:** a revoked parity identity, an input bar that differs from TradingView, a missing local H1 record, a timeframe room without a conclusion 45 minutes after the close, 10+ calls lost to the Workers AI rate limit in an hour, a stale News Daily, and a stale War Room 15m.
+      - **Detected problems:** a revoked parity identity, an input bar that differs from TradingView, a missing local H1 record, a timeframe room without a conclusion 45 minutes after the close, 10+ calls lost to the Workers AI rate limit in an hour, a stale News Daily, a stale War Room 15m, and TradingView alerts rejected by POST /webhook in the last hour (`webhook_rejected`: the reason from D1 `webhook_rejections`, `src/webhook-rejections.mjs`; lengths only, never the secret).
       - **Subjects:** an engine is named canonically with its timeframe and registry id (`src/engine-names.mjs`, e.g. "GMI v12.70 15m (gmi_m15)"); a room by its name ("the 1H War Room").
       - **Reports:** a `warning` when an alert opens, and an `info` when a lasting alert resolves. At most 3 reports an hour.
       - **Where they live:** D1 `health_alerts` (migration 0009). Nexus shows them as its Priority Queue (`GET /api/health/alerts`).
