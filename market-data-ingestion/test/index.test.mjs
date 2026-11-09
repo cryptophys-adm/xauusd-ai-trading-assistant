@@ -540,3 +540,22 @@ test("USOIL 5m is pulled once per 15 minutes with every bar; the gold 1m chart s
   assert.equal(m1.cadence, undefined, "the gold chart has no cadence");
   assert.ok(internals.planRequest(m1, { candles: [{ time: sec("2026-11-10T09:59:00Z") }] }, sec("2026-11-10T10:05:10Z")), "gold 1m is pulled at 10:05");
 });
+
+test("after a gap, a pull that brought no new bar backs off instead of repeating every run (production 2026-11-09)", async () => {
+  const { planRequest, gapBackoffSeconds } = await import("../src/tradingview-source.mjs");
+  const d1 = SERIES.find((s) => s.key === "OANDA:XAUUSD|1D");
+  const h1 = SERIES.find((s) => s.key === "OANDA:XAUUSD|1h");
+  // Friday's D1 bar opened Thursday 2026-11-05 22:00 UTC; gold reopened Sunday 2026-11-08 23:00 UTC.
+  const last = { time: Date.parse("2026-11-05T22:00:00Z") / 1000, open: 1, high: 1, low: 1, close: 1, volume: 1 };
+  const now = Date.parse("2026-11-09T01:20:00Z") / 1000;
+  assert.ok(planRequest(d1, { candles: [last] }, now), "the first pull after the reopen goes out");
+  const fetched = new Date((now - 600) * 1000).toISOString();
+  assert.equal(planRequest(d1, { candles: [last], fetched_at: fetched }, now), null, "10 minutes after an empty pull: wait");
+  assert.equal(gapBackoffSeconds(d1), 3600);
+  assert.ok(planRequest(d1, { candles: [last], fetched_at: fetched }, now + 3000 + 1), "an hour after the empty pull: again");
+  // A normal hour is not held back: the H1 bar that just closed is pulled on schedule.
+  const h1Last = { ...last, time: Date.parse("2026-11-09T00:00:00Z") / 1000 };
+  const h1Now = Date.parse("2026-11-09T02:02:00Z") / 1000;
+  assert.ok(planRequest(h1, { candles: [h1Last], fetched_at: new Date((h1Now - 60) * 1000).toISOString() }, h1Now));
+  assert.equal(gapBackoffSeconds(h1), 900);
+});

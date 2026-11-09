@@ -118,6 +118,11 @@ export function marketClosed(symbol, nowSec) {
   return (p.weekday === "Fri" && minutes >= 17 * 60 + 30) || p.weekday === "Sat" || (p.weekday === "Sun" && minutes < 18 * 60);
 }
 
+/** The wait between pulls of a series whose last pull after a gap brought no new bar: a quarter of its bar, 1 hour at most. */
+export function gapBackoffSeconds(spec) {
+  return Math.min(Math.max(spec.seconds / 4, 300), 3600);
+}
+
 export function planRequest(spec, cached, nowSec) {
   const last = cached?.candles?.at(-1);
   if (!last) return { symbol: spec.symbol, interval: spec.interval, count: Math.min(spec.retain, MAX_GATEWAY_COUNT), bootstrap: true };
@@ -126,6 +131,13 @@ export function planRequest(spec, cached, nowSec) {
   const missing = Math.ceil((nowSec - last.time) / spec.seconds) + 2;
   if (missing >= spec.retain) return { symbol: spec.symbol, interval: spec.interval, count: Math.min(spec.retain, MAX_GATEWAY_COUNT), bootstrap: true };
   if (marketClosed(spec.symbol, nowSec)) return null;
+  // After a gap (a weekend or a holiday), the bar after the cached one is not the one the clock
+  // expects: the first bar of the week closes hours after the reopen, D1 a whole trading day later.
+  // Production 2026-11-09: gold 1h/4h/1D, DXY, US10Y and XAGUSD were pulled again at every 5-minute
+  // run after the reopen, each pull returning no new bar (the D1 alone about 250 pulls of the 800).
+  // So once a pull after a gap brought nothing new, wait gapBackoffSeconds before the next one.
+  const fetchedSec = Math.floor(Date.parse(cached?.fetched_at || "") / 1000);
+  if (nowSec - last.time > 3 * spec.seconds && Number.isFinite(fetchedSec) && fetchedSec >= nextCloseSec && nowSec - fetchedSec < gapBackoffSeconds(spec)) return null;
   // A cadence series is pulled only once a new cadence boundary (the 15m close) has passed since
   // its last cached bar; the pull then brings every bar up to that boundary.
   if (spec.cadence && last.time + spec.seconds >= Math.floor(nowSec / spec.cadence) * spec.cadence) return null;
