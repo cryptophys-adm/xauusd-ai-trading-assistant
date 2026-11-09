@@ -14,3 +14,6 @@ export function finalEntries(openings: any[], debate: any[]): Array<Record<strin
 export function crowdRule(crowd: any): string;
 export function stuckCautions(stuck: any[]): Record<string, string[]>;
 export function roomReputation(ids: string[], reputation?: Record<string, any>, cautions?: Record<string, string[]>): Record<string, any>;
+export const QUORUM_SHARE: number;
+export function quorumAllows(stance: string, crowd: any, share?: number): boolean;
+export function quorumRule(crowd: any, share?: number): string;

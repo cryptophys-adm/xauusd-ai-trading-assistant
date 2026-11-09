@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildEvidenceFusion, indicatorPayloadsFromLocal, INDICATOR_SOURCES, validateLocalCalculation, containsCredentialFields, stripCredentialFields, LOCAL_CALCULATION_CONTRACT_VERSION, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION } from "../src/evidence-fusion.mjs";
+import { buildEvidenceFusion, CANDLE_ERRORS, indicatorPayloadsFromLocal, INDICATOR_SOURCES, validateLocalCalculation, containsCredentialFields, stripCredentialFields, LOCAL_CALCULATION_CONTRACT_VERSION, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION } from "../src/evidence-fusion.mjs";
 
 const now = Date.parse("2026-11-01T15:00:00.000Z");
 const candleTime = "2026-11-01T14:55:00.000Z";
@@ -317,4 +317,18 @@ test("indicator payloads are derived from approved local records with the alert 
   assert.equal(out.gmi_v12_70.gate, 2);
   assert.equal(out.gmi_v12_70.candle_time, candleTime);
   assert.deepEqual(indicatorPayloadsFromLocal([records[0]], {}), {}, "no prophet/gmi record: nothing is invented");
+});
+
+test("quorum mode (owner decision 2026-11-09): missing news, engines or webhooks are noted, not blocking; a stale candle still blocks", () => {
+  const input = { ...completeInput(), webhookPayloads: {}, webhookLane: "calibration", localCalculations: [local("prophet")], newsAnalysis: null, decisionMode: "quorum" };
+  const result = buildEvidenceFusion(input, now);
+  assert.equal(result.complete, true);
+  assert.equal(result.status, "ready");
+  assert.equal(result.decision_mode, "quorum");
+  assert.deepEqual(result.blocking_errors, []);
+  assert.ok(result.missing_evidence.length > 0, "the gaps stay visible to the agents");
+  assert.equal(buildEvidenceFusion({ ...input, decisionMode: "evidence" }, now).complete, false, "evidence mode still needs every lane");
+  const stale = buildEvidenceFusion(input, now + 3 * 86_400_000);
+  assert.equal(stale.complete, false);
+  assert.ok(stale.blocking_errors.every((e) => CANDLE_ERRORS.includes(e)) && stale.blocking_errors.length > 0);
 });

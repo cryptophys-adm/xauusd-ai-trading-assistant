@@ -166,7 +166,7 @@ import { m5ParityApproved, verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_L
 import { storeHudSnapshot, loadHudSnapshot, hudReadings, approvedComparable, barsVerified } from "./hud-store.mjs";
 import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
 import { readGlobalConclusion } from "./global-conclusion.mjs";
-import { readStrategy, loadStrategyInputs, buildStrategy } from "./strategy-engine.mjs";
+import { readStrategy, loadStrategyInputs, buildStrategy, planForDirection } from "./strategy-engine.mjs";
 import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } from "./strategy-inputs.mjs";
 import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
 import { runSignalLedger, readLedger, ingestStrategy, ensureLedgerSchema } from "./signal-ledger.mjs";
@@ -174,7 +174,7 @@ import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus } from "./aether-push.mjs";
 import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
-import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
+import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
 import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents, m15KeyForClose } from "./agent-threads.mjs";
@@ -197,7 +197,7 @@ import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimef
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
 import {
   H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, H1_ROOM_RETRY_S, H1_ROOM_LOCK_PREFIX, H1_ROOM_LOCK_TTL_S, buildH1RoomTask, h1RoomGate, AWAITING_CONSENSUS, H1_REASONER_GIVE_UP_MS, H1_PENDING_LOOKBACK_MS,
-  h1BarTimes, finalizeDue, consensusInput, reasonerLines, consensusGuard, emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
+  h1BarTimes, finalizeDue, consensusInput, reasonerLines, quorumOf, applyQuorum, emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
 } from "./h1-consensus.mjs";
 import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
 import { runHealthAlerts, readHealthAlerts } from "./health-alerts.mjs";
@@ -243,6 +243,25 @@ async function plainDecision(env: Env, decision: JsonObject): Promise<JsonObject
     console.warn("plain_decision_failed", error instanceof Error ? error.message : String(error));
     return decision;
   }
+}
+
+/**
+ * The Reasoner's answer on the quorum path (owner decision 2026-11-09): only its words and its
+ * confidence count; the direction comes from the room's quorum and the prices from the plan
+ * (applyQuorum), so no price check of the model can downgrade or rewrite its text.
+ */
+function modelDecision(text: string): JsonObject {
+  const parsed = extractJsonObject(text);
+  if (!parsed) return { decision: "WAIT", confidence: null, reasoning: "", confirmation: null, invalidation: null };
+  const confidence = typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence) && parsed.confidence >= 0 && parsed.confidence <= 1 ? parsed.confidence : null;
+  const decision = asText(parsed.decision).toUpperCase();
+  return {
+    decision: ["BUY", "SELL", "WAIT", "NO_TRADE"].includes(decision) ? decision : "WAIT",
+    confidence,
+    reasoning: asText(parsed.reasoning),
+    confirmation: typeof parsed.confirmation === "string" ? parsed.confirmation : null,
+    invalidation: typeof parsed.invalidation === "string" ? parsed.invalidation : null
+  };
 }
 
 function parseDecision(text: string): JsonObject {
@@ -691,7 +710,7 @@ function candleTimeFromKey(candleKey: string): string {
 
 function laneRule(localPrimary: boolean): string {
   return localPrimary
-    ? "Evidence lanes (see input_lanes): source_payloads hold the Prophet R38, Prophet R37 and GMI v12.70 indicator outputs computed locally from raw TradingView OHLCV by engines approved by parity with TradingView (the same fields the TradingView alerts carry, plus prophet_r38.setup_state: the Prophet setup state behind the HUD's READY line, local lane only); local_calculation_evidence holds those local records; tradingview_webhook is calibration only and is not decision evidence; fundamental_news = completed news analysis. Never merge, average, or relabel values across lanes, and attribute every technical claim to its lane."
+    ? "Evidence lanes (see input_lanes): source_payloads hold the Prophet R38, Prophet R37 and GMI v12.70 indicator outputs computed locally from raw TradingView OHLCV (each record's trust_status says whether parity with TradingView approved its engine identity; not_parity_approved records are still evidence) (the same fields the TradingView alerts carry, plus prophet_r38.setup_state: the Prophet setup state behind the HUD's READY line, local lane only); local_calculation_evidence holds those local records; tradingview_webhook is calibration only and is not decision evidence; fundamental_news = completed news analysis. Never merge, average, or relabel values across lanes, and attribute every technical claim to its lane."
     : "Evidence arrives in three separate input lanes (see input_lanes): tradingview_webhook = indicator outputs computed by TradingView (source_payloads); local_computation = outputs computed locally from raw TradingView OHLCV (local_calculation_evidence); fundamental_news = completed news analysis. Never merge, average, or relabel values across lanes. Attribute every technical claim to its lane, and state explicitly where the tradingview_webhook and local_computation lanes agree or disagree.";
 }
 
@@ -709,19 +728,15 @@ async function runAnalysis(
       "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
       "gen_ai.conversation.id": candleKey
     });
-  const [newsAnalysis, localCalculationRaw] = await Promise.all([
-    fetchLatestNewsAnalysis(env),
-    Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get("localcalc:" + safeKeyPart(candleKey) + ":" + engine)))
-  ]);
-  const localCalculations: unknown[] = [];
-  for (const raw of localCalculationRaw) {
-    if (!raw) continue;
-    try { localCalculations.push(JSON.parse(raw)); } catch { /* malformed KV evidence is excluded and reported as missing */ }
-  }
-  // Local-primary architecture (owner decision 2026-11-05): the indicator values the chain
-  // reads are the parity-approved local records. TradingView webhooks only calibrate the
-  // local engines; INDICATOR_SOURCE="webhook" restores the legacy webhook-driven chain.
+  // Local-primary architecture (owner decision 2026-11-05): the indicator values the chain reads
+  // are the local records. Owner decision 2026-11-09: approved by parity or not (a record parity
+  // has not approved is labelled not_parity_approved and read with less weight); the H1 decision
+  // never waits on the TradingView webhooks. INDICATOR_SOURCE="webhook" restores the legacy chain.
   const localPrimary = indicatorSourceMode(env) === "local";
+  const [newsAnalysis, localCalculations] = await Promise.all([
+    fetchLatestNewsAnalysis(env),
+    decisionLocalRecords(env, safeKeyPart(candleKey)) as Promise<unknown[]>
+  ]);
   const payloads: Record<string, WebhookPayload> = localPrimary
     ? indicatorPayloadsFromLocal(localCalculations, { symbol: ticker, timeframe, candleKey }) as Record<string, WebhookPayload>
     : webhookPayloads;
@@ -794,7 +809,9 @@ async function runAnalysis(
     localCalculations,
     newsAnalysis,
     informational5mContext,
-    webhookLane: localPrimary ? "calibration" : "required"
+    webhookLane: localPrimary ? "calibration" : "required",
+    // Owner decision 2026-11-09: the H1 decision is the agents' quorum; only an unusable candle stops it.
+    decisionMode: localPrimary ? "quorum" : "evidence"
   });
   const newsEvidence = {
     available: Boolean(fusion.fundamental_news_analysis),
@@ -813,7 +830,7 @@ async function runAnalysis(
     candle_time: candleTime,
     input_lanes: fusion.input_lanes,
     source_payloads: payloads,
-    indicator_source: localPrimary ? "local_computation_approved_by_parity" : "tradingview_webhook",
+    indicator_source: localPrimary ? "local_computation" : "tradingview_webhook",
     local_calculation_evidence: fusion.local_calculations,
     fundamental_news_analysis: fusion.fundamental_news_analysis,
     informational_5m_context: fusion.informational_5m_context,
@@ -1003,6 +1020,19 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
   let decision: JsonObject;
   let reasonerText: string | null = null;
   let overridden = false;
+  // Owner decision 2026-11-09: the H1 decision is the room's quorum; a BUY or SELL takes its prices
+  // from the Key Level Agent's zones (the strategy engine's tradeLevels), or stays WAIT without them.
+  const quorum = quorumOf(consensus);
+  let plan: JsonObject | null = null;
+  if (quorum.stance === "BUY" || quorum.stance === "SELL") {
+    try {
+      const strategy = buildStrategy(await loadStrategyInputs(env, { now }));
+      plan = planForDirection(strategy, quorum.stance === "BUY" ? 1 : -1) as JsonObject | null;
+    } catch (error) {
+      console.error("h1_quorum_plan_failed", JSON.stringify({ candle_key: candleKey, message: error instanceof Error ? error.message : String(error) }));
+      plan = null;
+    }
+  }
   if (consensus.status === "empty") {
     decision = isH1 ? emptyConsensusDecision() : { ...emptyConsensusDecision(), reasoning: "This chart has no War Room, so there is no consensus to decide from. The decision stays WAIT." };
   } else {
@@ -1016,13 +1046,15 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
           "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
         });
         return aiRun(env, env.AI_MODEL_REASONER, {
-          messages: chatMessages(reasonerLines({ evidence, consensus, laneRule: laneRule(parked.local_primary !== false), decisionTextRule: DECISION_TEXT_RULE, tradePlanRule: TRADE_PLAN_RULE })),
+          messages: chatMessages(reasonerLines({ evidence, consensus, quorum, plan, laneRule: laneRule(parked.local_primary !== false), decisionTextRule: DECISION_TEXT_RULE, tradePlanRule: TRADE_PLAN_RULE })),
           maxTokens: MAX_TOKENS.reasoner,
           effort: "medium"
         });
       });
       reasonerText = extractText(result);
-      const guarded = consensusGuard(parseDecision(reasonerText), consensus);
+      // parseDecision may turn a priced model answer into WAIT (its own price checks); the quorum and
+      // the plan decide regardless, so the model's text and confidence are what it contributes.
+      const guarded = applyQuorum(modelDecision(reasonerText), { quorum, plan });
       overridden = guarded.overridden;
       decision = await plainDecision(env, guarded.decision as JsonObject);
     } catch (error) {
@@ -1042,7 +1074,7 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
     candle_key: candleKey, ticker, timeframe, timestamp,
     evidence_fusion: fusion,
     analysis_chain: H1_CHAIN,
-    consensus: consensusSummary(consensus, { overridden, decidedAfterCloseS: h1BarTimes(candleKey) ? Math.round((Date.now() - (h1BarTimes(candleKey) as { close: number }).close) / 1000) : null }),
+    consensus: consensusSummary(consensus, { overridden, quorum, plan, decidedAfterCloseS: h1BarTimes(candleKey) ? Math.round((Date.now() - (h1BarTimes(candleKey) as { close: number }).close) / 1000) : null }),
     reasoner_model: env.AI_MODEL_REASONER,
     reasoner_output: reasonerText,
     news_evidence: parked.news_evidence ?? evidence.news_evidence ?? null,
@@ -1720,19 +1752,19 @@ async function processLocalCalculationReconcileTask(env: Env, task: Extract<Queu
   // Parity runs on every timeframe; only analysis timeframes (H1 in production) start the AI chain.
   if (!analysisAllowedForTimeframe(task.timeframe, env.ANALYSIS_TIMEFRAMES || "60")) return;
   const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);
-  const localRecords = await Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get("localcalc:" + task.candle_key + ":" + engine)));
-  if (!localRecords.every(Boolean)) {
+  const localRecords = await decisionLocalRecords(env, task.candle_key);
+  if (localRecords.length < LOCAL_ENGINES.length) {
     // Local-primary: these records are the trigger. Right after publication the other
     // engines' records may not be visible here yet (KV across locations), so retry for a
     // few minutes instead of waiting for the 15-minute sweep; the sweep stays the backstop.
     const enqueuedMs = Date.parse(asText(task.enqueued_at));
     if (indicatorSourceMode(env) === "local" && Number.isFinite(enqueuedMs) && Date.now() - enqueuedMs < LOCAL_TRIGGER_RETRY_MS) {
-      throw Object.assign(new Error("approved local records not all visible yet"), { name: "RetryableError" });
+      throw Object.assign(new Error("local records not all visible yet"), { name: "RetryableError" });
     }
     return;
   }
   const payloads = await loadWebhookPayloadsFromD1(env, task.candle_key, required);
-  // Local-primary: the parity-approved local records are enough; webhooks are calibration only.
+  // Local-primary: the local records are enough; webhooks are calibration only.
   if (indicatorSourceMode(env) !== "local" && !required.every(source => payloads[source])) return;
   const existing = await env.WEBHOOK_BUFFER.get("analysis:" + safeKeyPart(task.candle_key));
   if (existing) {

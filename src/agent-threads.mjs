@@ -342,6 +342,7 @@ export const roomText = (o) => [o?.claim, o?.argument, o?.summary, ...(Array.isA
 const RULE_CORRECTIONS = Object.freeze({
   stance_without_support: "A BUY or SELL conclusion needs at least one agent on the bus or in the Consensus Discussion holding that stance; a confirmation alone never overrules the whole room.",
   entry_without_confirmation: "BUY or SELL needs the matching confirmation in the CONFIRMATIONS above; without it the stance is WAIT, or HOLD / CLOSE for a position already open.",
+  entry_without_quorum: "BUY or SELL needs the room's quorum: more than half of the agents' weight holding the matching bias (see the QUORUM RULE above); without it the stance is WAIT, or HOLD / CLOSE for a position already open.",
   bias_without_support: "A BULLISH or BEARISH bias needs at least one agent on the bus or in the Consensus Discussion holding that bias; otherwise the bias is NEUTRAL or the side the agents actually lean."
 });
 

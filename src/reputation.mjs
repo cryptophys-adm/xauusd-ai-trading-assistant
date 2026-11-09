@@ -104,6 +104,26 @@ export function buildCrowdLine(entries, reputation = {}) {
   };
 }
 
+/**
+ * The quorum of a room (owner decision 2026-11-09: "H1 Decision adalah kuorum"). A BUY or SELL
+ * conclusion needs more than QUORUM_SHARE of the weight of the agents who spoke (each weighted by its
+ * track record, the crowd line; Aether tunes the weights later) holding the matching bias: BULLISH for
+ * a BUY, BEARISH for a SELL. HOLD, WAIT and CLOSE need none. Replaces "no confirmation, no entry": an
+ * indicator confirmation is one agent's argument, not a gate.
+ */
+export const QUORUM_SHARE = 0.5;
+export function quorumAllows(stance, crowd, share = QUORUM_SHARE) {
+  const bias = stance === "BUY" ? "BULLISH" : stance === "SELL" ? "BEARISH" : null;
+  if (!bias) return true;
+  const w = crowd?.weighted_biases?.[bias];
+  return Number.isFinite(w) && w > share;
+}
+export function quorumRule(crowd, share = QUORUM_SHARE) {
+  const w = crowd?.weighted_biases ?? {};
+  const pct = (b) => (Number.isFinite(w[b]) ? Math.round(w[b] * 100) + "%" : "unknown");
+  return `QUORUM RULE (owner decision 2026-11-09): BUY needs more than ${Math.round(share * 100)}% of the agents' weight holding a BULLISH bias, SELL more than ${Math.round(share * 100)}% holding a BEARISH bias; otherwise the conclusion is WAIT, or HOLD / CLOSE for a position already open. Now: BULLISH ${pct("BULLISH")}, BEARISH ${pct("BEARISH")}, NEUTRAL ${pct("NEUTRAL")} of the weight. Indicator confirmations (Prophet, GMI) are arguments the agents weigh, never a gate.`;
+}
+
 /** The final stance of each agent of a room: its Consensus Discussion answer, else its opening. */
 export function finalEntries(openings, debate) {
   // Stored messages carry the agent in `agent` (their `id` is the row id); reader output carries it in `id`.

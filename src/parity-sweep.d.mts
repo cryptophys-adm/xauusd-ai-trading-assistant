@@ -1,4 +1,6 @@
 export const OBSERVED_PREFIX: string;
+export const NOT_PARITY_APPROVED: string;
+export function decisionLocalRecords(env: unknown, candleKey: string): Promise<Record<string, any>[]>;
 export const LOCAL_TTL: { expirationTtl: number };
 export const PARITY_SWEEP_CRON: string;
 export const PARITY_SWEEP_LOOKBACK_CANDLES: number;

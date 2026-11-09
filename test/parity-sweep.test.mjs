@@ -314,3 +314,15 @@ test("gmi_hud (Grid Bot comparator) is compared and approved apart; it never ent
   assert.equal(out.trust.gmi, true);
   assert.equal(out.trust.prophet, true);
 });
+
+test("decisionLocalRecords: the approved copy where it exists, else the observed record labelled not_parity_approved", async () => {
+  const { decisionLocalRecords, NOT_PARITY_APPROVED } = await import("../src/parity-sweep.mjs");
+  const env = { WEBHOOK_BUFFER: kv() };
+  const key = "OANDA:XAUUSD:60:1762250400000";
+  await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":prophet", JSON.stringify({ engine: "prophet", trust_status: "approved_by_parity" }));
+  await env.WEBHOOK_BUFFER.put("localcalc-observed:" + key + ":prophet", JSON.stringify({ engine: "prophet" }));
+  await env.WEBHOOK_BUFFER.put("localcalc-observed:" + key + ":gmi", JSON.stringify({ engine: "gmi" }));
+  const records = await decisionLocalRecords(env, key);
+  assert.deepEqual(records.map((r) => [r.engine, r.trust_status]), [["prophet", "approved_by_parity"], ["gmi", NOT_PARITY_APPROVED]], "mizan published nothing, so it is absent");
+  assert.deepEqual(await decisionLocalRecords({}, key), []);
+});

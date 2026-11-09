@@ -51,12 +51,13 @@ test("local-primary: webhooks never start the chain; approved local records do, 
   assert.match(source, /webhookLane: localPrimary \? "calibration" : "required"/);
 });
 
-test("local-primary trigger retries while the other approved records become visible", async () => {
+test("local-primary trigger retries while the other local records become visible", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
   const start = source.indexOf("async function processLocalCalculationReconcileTask(");
   const body = source.slice(start, source.indexOf("\n}\n", start));
-  assert.match(body, /approved local records not all visible yet/);
+  assert.match(body, /local records not all visible yet/);
+  assert.match(body, /decisionLocalRecords\(env, task\.candle_key\)/, "parity-approved or not (owner decision 2026-11-09)");
   assert.match(body, /name: "RetryableError"/);
   assert.match(body, /LOCAL_TRIGGER_RETRY_MS/);
 });

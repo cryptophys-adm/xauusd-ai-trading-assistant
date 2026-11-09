@@ -25,6 +25,8 @@ export const CANDLE_MAX_AGE_MS_BY_TIMEFRAME = Object.freeze({
   W1: 14 * 24 * 60 * 60 * 1000
 });
 const FUTURE_CLOCK_SKEW_MS = 5 * 60 * 1000;
+/** The only errors that stop a quorum decision: the candle itself cannot be decided. */
+export const CANDLE_ERRORS = Object.freeze(["candle_time_invalid", "candle_time_in_future", "timeframe_freshness_policy_unsupported", "candle_stale"]);
 const TIMEFRAME_ALIASES = Object.freeze({
   "1": "M1", "1M": "M1", "M1": "M1",
   "5": "M5", "5M": "M5", "M5": "M5",
@@ -229,7 +231,7 @@ export function indicatorPayloadsFromLocal(localCalculations, { symbol, timefram
 }
 
 export function buildEvidenceFusion(input, now = Date.now()) {
-  const { candleKey, symbol, timeframe, candleTime, webhookPayloads = {}, localCalculations = [], newsAnalysis = null, informational5mContext = null, webhookLane = "required" } = input || {};
+  const { candleKey, symbol, timeframe, candleTime, webhookPayloads = {}, localCalculations = [], newsAnalysis = null, informational5mContext = null, webhookLane = "required", decisionMode = "evidence" } = input || {};
   // webhookLane "calibration": TradingView webhooks only calibrate the local engines
   // (parity registry). They are neither required nor validated as decision evidence.
   const calibrationOnly = webhookLane === "calibration";
@@ -288,7 +290,12 @@ export function buildEvidenceFusion(input, now = Date.now()) {
     errors.push(...newsValidation.errors.map((error) => "news:" + error));
   }
 
-  const complete = missing.length === 0 && errors.length === 0;
+  // decisionMode "quorum" (owner decision 2026-11-09: the H1 decision is the agents' quorum): a
+  // missing or invalid engine record, a missing news analysis or webhook are reported and the agents
+  // read without them; only a candle that cannot be decided (bad, future or stale time) stops the chain.
+  const quorumMode = decisionMode === "quorum";
+  const blocking = quorumMode ? errors.filter((e) => CANDLE_ERRORS.includes(e)) : errors;
+  const complete = quorumMode ? blocking.length === 0 : missing.length === 0 && errors.length === 0;
   // Three separate input lanes. Values are never merged or relabelled across
   // lanes: TradingView-computed indicator outputs (webhook) stay distinct from
   // locally computed outputs (raw TradingView OHLCV -> local engines).
@@ -325,6 +332,8 @@ export function buildEvidenceFusion(input, now = Date.now()) {
     schema_version: EVIDENCE_CONTRACT_VERSION,
     status: complete ? "ready" : "degraded",
     complete,
+    decision_mode: quorumMode ? "quorum" : "evidence",
+    ...(quorumMode ? { blocking_errors: [...new Set(blocking)] } : {}),
     candle_key: candleKey,
     symbol,
     timeframe,

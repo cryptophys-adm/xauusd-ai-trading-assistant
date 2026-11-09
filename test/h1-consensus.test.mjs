@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
-  H1_CONSENSUS_FALLBACK_MS, h1BarTimes, finalizeDue, consensusInput, reasonerLines, consensusGuard,
-  emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
+  H1_CONSENSUS_FALLBACK_MS, h1BarTimes, finalizeDue, consensusInput, reasonerLines, quorumOf, planIsValid, applyQuorum,
+  QUORUM_SHARE, emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
 } from "../src/h1-consensus.mjs";
 
 const OPEN = Date.parse("2026-11-07T09:00:00.000Z");
@@ -46,50 +46,92 @@ test("the consensus input: the communication bus, the Consensus Discussion and t
   assert.equal(consensusInput({ openings: [{ status: "agent_failed" }] }).status, "empty");
 });
 
-test("the Reasoner's prompt: it decides last, follows the consensus, and departs only for a veto", () => {
-  const consensus = consensusInput(room({ status: "ok", stance: "WAIT", bias: "BULLISH", confidence: 0.6, summary: "s", reasons: ["r"], dissent: [] }));
-  const lines = reasonerLines({ evidence: { candle_key: KEY }, consensus, laneRule: "LANES", decisionTextRule: "TEXT", tradePlanRule: "PLAN" });
+const crowd = (BULLISH, BEARISH, NEUTRAL = Math.round((1 - BULLISH - BEARISH) * 1000) / 1000) => ({ weighted_bias: "BULLISH", weighted_lean: 0.3, weighted_biases: { BULLISH, BEARISH, NEUTRAL }, disagreement: 0.5, scored_agents: 2, agents: 3, disagreeing_families: [] });
+const concluded = (stance, bias, shares) => consensusInput({ ...room({ status: "ok", stance, bias, confidence: 0.6, summary: "s", reasons: ["r"], dissent: [] }), crowd: shares });
+const PLAN_BUY = { entry: 4000, stop: 3990, tp1: 4030, tp2: 4050, rrr: { tp1: 3, tp2: 5 }, at_level: true };
+
+test("the H1 decision is the room's quorum (owner decision 2026-11-09): the conclusion and more than half of the weight", () => {
+  assert.equal(QUORUM_SHARE, 0.5);
+  const q = quorumOf(concluded("BUY", "BULLISH", crowd(0.62, 0.1)));
+  assert.equal(q.stance, "BUY");
+  assert.equal(q.met, true);
+  assert.equal(q.share, 0.62);
+  assert.match(q.reason, /concluded BUY and 62% of the agents' weight leans bullish/);
+  assert.equal(quorumOf(concluded("BUY", "BULLISH", crowd(0.5, 0.2))).stance, "WAIT", "exactly half is not a majority");
+  assert.equal(quorumOf(concluded("SELL", "BEARISH", crowd(0.2, 0.7))).stance, "SELL");
+  assert.equal(quorumOf(concluded("SELL", "BEARISH", crowd(0.7, 0.2))).stance, "WAIT", "a SELL needs the bearish weight");
+  assert.equal(quorumOf(concluded("WAIT", "BULLISH", crowd(0.9, 0))).stance, "WAIT", "the room did not conclude an entry");
+  assert.match(quorumOf(concluded("BUY", "BULLISH", null)).reason, /no crowd line/);
+  assert.match(quorumOf(consensusInput(room())).reason, /did not conclude/);
+  // No indicator field is read: the same room with or without a Prophet confirmation gives the same quorum.
+  assert.deepEqual(quorumOf({ ...concluded("BUY", "BULLISH", crowd(0.62, 0.1)), prophet_r38: { buy_confirmed: false } }), q);
+});
+
+test("applyQuorum: direction from the quorum, prices from the plan, never a position size; no valid plan is WAIT", () => {
+  const q = quorumOf(concluded("BUY", "BULLISH", crowd(0.62, 0.1)));
+  assert.equal(planIsValid("BUY", PLAN_BUY), true);
+  assert.equal(planIsValid("SELL", PLAN_BUY), false, "the prices sit on the wrong sides for a SELL");
+  assert.equal(planIsValid("BUY", { ...PLAN_BUY, stop: null }), false);
+  const model = { decision: "WAIT", confidence: 0.4, entry_price: 1, stop_loss: 2, take_profit: 3, risk_reward: 9, position_size_pct: 5, reasoning: "No confirmed buy yet.", trade_plan: null };
+  const a = applyQuorum(model, { quorum: q, plan: PLAN_BUY });
+  assert.equal(a.overridden, true, "the model's WAIT does not overrule the quorum");
+  assert.equal(a.decision.decision, "BUY");
+  assert.equal(a.decision.confidence, 0.62);
+  assert.deepEqual([a.decision.entry_price, a.decision.stop_loss, a.decision.take_profit, a.decision.risk_reward, a.decision.position_size_pct], [4000, 3990, 4030, 3, null]);
+  assert.equal(a.decision.trade_plan.action, "ENTER_MARKET");
+  assert.match(a.decision.reasoning, /^The 1H War Room reached its quorum/);
+  const agree = applyQuorum({ ...model, decision: "BUY", confidence: 0.7, reasoning: "The room buys." }, { quorum: q, plan: { ...PLAN_BUY, at_level: false } });
+  assert.equal(agree.overridden, false);
+  assert.equal(agree.decision.confidence, 0.7);
+  assert.equal(agree.decision.trade_plan.action, "ENTER_LIMIT");
+  assert.equal(agree.decision.reasoning, "The room buys.");
+  const noPlan = applyQuorum({ ...model, decision: "BUY" }, { quorum: q, plan: null });
+  assert.equal(noPlan.decision.decision, "WAIT");
+  assert.equal(noPlan.decision.entry_price, null);
+  assert.match(noPlan.decision.reasoning, /key levels give no valid entry, stop and target/);
+  const noQuorum = applyQuorum({ ...model, decision: "SELL", entry_price: 4000 }, { quorum: quorumOf(concluded("SELL", "BEARISH", crowd(0.6, 0.3))), plan: null });
+  assert.equal(noQuorum.overridden, true);
+  assert.equal(noQuorum.decision.decision, "WAIT");
+  assert.equal(noQuorum.decision.entry_price, null);
+  assert.equal(noQuorum.decision.trade_plan, null);
+  assert.match(noQuorum.decision.reasoning, /^No quorum: /);
+  assert.equal(applyQuorum({ decision: "WAIT", reasoning: "w" }, { quorum: quorumOf(consensusInput(room())) }).overridden, false);
+});
+
+test("the Reasoner's prompt: it writes the quorum's decision with the plan's prices; indicators are arguments, not gates", () => {
+  const consensus = concluded("BUY", "BULLISH", crowd(0.62, 0.1));
+  const lines = reasonerLines({ evidence: { candle_key: KEY }, consensus, plan: PLAN_BUY, laneRule: "LANES", decisionTextRule: "TEXT", tradePlanRule: "PLANRULE" });
   const text = lines.join("\n");
-  assert.match(text, /You decide LAST, after the Consensus Discussion of the 1H War Room/);
-  assert.match(text, /Never decide against the room's bias/);
-  assert.match(text, /t_enc 4/);
-  assert.match(text, /GMI conflict or a GMI gate of -1 lowers your confidence; it never vetoes on its own/);
-  // Owner report 2026-11-09: the closed candle, the READY setup as a trigger, and no invented gate 2 / verdict 3 rule.
+  assert.match(text, /You write the decision LAST, after the Consensus Discussion of the 1H War Room/);
+  assert.match(text, /The H1 decision is the QUORUM of the room, not yours to choose/);
+  assert.match(text, /more than 50% of the weight of the agents who spoke/);
+  assert.match(text, /use exactly those prices/);
+  assert.match(text, /Never set position_size_pct/);
+  assert.match(text, /are arguments the agents weighed in the discussion, not gates and not vetoes/);
   assert.match(text, /closed candle being decided \(EVIDENCE\.candle_time, the bar that just closed\), never the running candle/);
-  assert.match(text, /prophet_r38\.setup_state\.buy_ready \/ sell_ready/);
-  assert.match(text, /gate 1 or 2 \(1 is enough; 2 is full confluence\)/);
-  assert.match(text, /Never demand gate 2 or verdict 3 for an entry/);
-  assert.ok(lines.includes("LANES") && lines.includes("TEXT") && lines.includes("PLAN"));
-  assert.ok(lines.indexOf("CONSENSUS:") < lines.indexOf("EVIDENCE:"));
+  assert.doesNotMatch(text, /t_enc 4|Never decide against the room's bias|gate 1 or 2/, "the old indicator gates are gone");
+  assert.ok(lines.includes("LANES") && lines.includes("TEXT") && lines.includes("PLANRULE"));
+  assert.ok(lines.indexOf("CONSENSUS:") < lines.indexOf("QUORUM:") && lines.indexOf("QUORUM:") < lines.indexOf("PLAN:") && lines.indexOf("PLAN:") < lines.indexOf("EVIDENCE:"));
+  assert.equal(JSON.parse(lines[lines.indexOf("QUORUM:") + 1]).stance, "BUY");
+  assert.equal(JSON.parse(lines[lines.indexOf("PLAN:") + 1]).entry, 4000);
   assert.doesNotMatch(text, /ANALYST:|COUNSELOR:/, "the Analyst and the Counselor are retired");
   const partial = reasonerLines({ evidence: {}, consensus: consensusInput(room()), laneRule: "", decisionTextRule: "", tradePlanRule: "" }).join("\n");
-  assert.match(partial, /did not conclude within 45 minutes of the close: 3 of 4 agents spoke/);
+  assert.match(partial, /did not conclude within 45 minutes of the close: 3 of 4 agents spoke, so there is no quorum/);
 });
 
-test("never against the room: a BUY against a bearish consensus becomes WAIT with prices cleared", () => {
-  const bearish = consensusInput(room({ status: "ok", stance: "WAIT", bias: "BEARISH", confidence: 0.6, summary: "s", reasons: ["r"], dissent: [] }));
-  const buy = { decision: "BUY", confidence: 0.7, entry_price: 4000, stop_loss: 3990, take_profit: 4030, risk_reward: 3, position_size_pct: null, reasoning: "Buy the dip.", trade_plan: { x: 1 } };
-  const g = consensusGuard(buy, bearish);
-  assert.equal(g.overridden, true);
-  assert.equal(g.decision.decision, "WAIT");
-  assert.equal(g.decision.entry_price, null);
-  assert.equal(g.decision.trade_plan, null);
-  assert.match(g.decision.reasoning, /^The 1H War Room's consensus is bearish, so a BUY against it is not taken/);
-  const bullish = consensusInput(room({ status: "ok", stance: "WAIT", bias: "BULLISH", confidence: 0.6, summary: "s", reasons: ["r"], dissent: [] }));
-  assert.equal(consensusGuard(buy, bullish).overridden, false, "with the room");
-  assert.equal(consensusGuard({ ...buy, decision: "SELL" }, consensusInput(room({ status: "ok", stance: "BUY", bias: "NEUTRAL", confidence: 0.6, summary: "s", reasons: ["r"], dissent: [] }))).decision.decision, "WAIT", "against a concluded BUY");
-  assert.equal(consensusGuard({ decision: "WAIT" }, bearish).overridden, false);
-});
-
-test("fail-closed decisions are plain WAITs without prices; the stored summary is compact", () => {
+test("fail-closed decisions are plain WAITs without prices; the stored summary is compact and carries the quorum", () => {
   for (const d of [emptyConsensusDecision(), reasonerUnavailableDecision()]) {
     assert.equal(d.decision, "WAIT");
     assert.equal(d.entry_price, null);
     assert.match(d.reasoning, /stays WAIT/);
   }
   const s = consensusSummary(consensusInput(room()), { overridden: true });
-  assert.deepEqual(Object.keys(s), ["decided_after_close_s", "status", "bar_open", "agents_spoke", "roster_size", "room_bias", "conclusion", "guard_overridden"]);
+  assert.deepEqual(Object.keys(s), ["decided_after_close_s", "status", "bar_open", "agents_spoke", "roster_size", "room_bias", "conclusion", "quorum", "guard_overridden"]);
   assert.equal(s.guard_overridden, true);
+  const c = concluded("BUY", "BULLISH", crowd(0.62, 0.1));
+  const withQ = consensusSummary(c, { quorum: quorumOf(c), plan: PLAN_BUY });
+  assert.equal(withQ.quorum.met, true);
+  assert.equal(withQ.plan_available, true);
 });
 
 test("runAnalysis no longer calls the Analyst or the Counselor and no longer enqueues the old H1 bus", async () => {
