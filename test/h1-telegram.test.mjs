@@ -17,8 +17,8 @@ function kv() {
   return { m, async get(k) { return m.get(k) ?? null; }, async put(k, v) { m.set(k, v); } };
 }
 
-test("bar by bar: what is sent, what is skipped, no duplicate for the same bar", async () => {
-  const env = { SIGNAL_CACHE: kv() };
+test("bar by bar: what is sent, what is skipped, no duplicate for the same bar (Decision Engine off)", async () => {
+  const env = { SIGNAL_CACHE: kv(), DECISION_ENGINE: "off" };
   const sent = [];
   const send = async (t) => { sent.push(t); };
   const run = (candleKey, action) => notifyH1Decision(env, { candleKey, action, text: `${candleKey} ${action}`, send });
@@ -34,8 +34,16 @@ test("bar by bar: what is sent, what is skipped, no duplicate for the same bar",
 });
 
 test("a failed send throws for the caller to log, and works without a cache", async () => {
-  const env = { SIGNAL_CACHE: kv() };
+  const env = { SIGNAL_CACHE: kv(), DECISION_ENGINE: "off" };
   await assert.rejects(notifyH1Decision(env, { candleKey: "b1", action: "SELL", text: "x", send: async () => { throw new Error("telegram down"); } }), /telegram down/);
   assert.equal(env.SIGNAL_CACHE.m.size, 0, "nothing recorded when the send failed");
-  assert.deepEqual(await notifyH1Decision({}, { candleKey: "b1", action: "BUY", text: "x", send: async () => {} }), { sent: true, reason: "directional" });
+  assert.deepEqual(await notifyH1Decision({ DECISION_ENGINE: "off" }, { candleKey: "b1", action: "BUY", text: "x", send: async () => {} }), { sent: true, reason: "directional" });
+});
+
+test("while the Decision Engine is on (the single SSOT), no H1 decision message is sent", async () => {
+  const sent = [];
+  for (const env of [{ SIGNAL_CACHE: kv() }, { SIGNAL_CACHE: kv(), DECISION_ENGINE: "on" }]) {
+    assert.deepEqual(await notifyH1Decision(env, { candleKey: "b1", action: "BUY", text: "x", send: async (t) => { sent.push(t); } }), { sent: false, reason: "decision_engine" });
+  }
+  assert.equal(sent.length, 0);
 });

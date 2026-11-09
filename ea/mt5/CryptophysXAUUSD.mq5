@@ -1,8 +1,9 @@
 //+------------------------------------------------------------------+
 //| CryptophysXAUUSD.mq5                                             |
-//| Expert Advisor for the Cryptophys XAUUSD H1 decision             |
-//| (owner decisions 2026-11-09: "Langsung siap live"; execution on  |
-//| the owner's own MetaTrader 5 terminal).                          |
+//| Expert Advisor for the Cryptophys XAUUSD decision: since 1.11    |
+//| the Decision Engine's 15m decision, the single SSOT (owner       |
+//| decisions 2026-11-09: "Langsung siap live"; execution on the     |
+//| owner's own MetaTrader 5 terminal).                              |
 //|                                                                  |
 //| It polls GET <ApiUrl> (src/ea-signal.mjs, one flat JSON object)  |
 //| through Cloudflare Access with a service token, and:             |
@@ -23,7 +24,7 @@
 //| Tools > Options > Expert Advisors > Allow WebRequest.            |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.10"
+#property version   "1.11"
 
 #include <Trade/Trade.mqh>
 
@@ -36,7 +37,7 @@ input string TradeSymbol           = "";      // broker symbol ("" = the chart's
 input double RiskPercent           = 0.5;     // risk per trade, % of equity
 input double MaxDailyLossPercent   = 2.0;     // no new trade after this loss today, % of the day's starting balance
 input int    MaxSpreadPoints       = 60;      // no entry above this spread (points)
-input int    MaxSignalAgeMinutes   = 45;      // no entry this long after the H1 bar closed
+input int    MaxSignalAgeMinutes   = 10;      // no entry this long after the decided 15m bar closed (the signal expires at the next 15m close)
 input double MaxChaseFraction      = 0.5;     // market entry only within this fraction of the stop distance from the planned entry
 input int    SlippagePoints        = 30;      // max deviation for market orders
 input bool   UseBrokerOffset       = true;    // shift limit levels by (broker price - feed price)
@@ -399,7 +400,7 @@ void Heartbeat()
    string positions = PositionsJson(floating);
    double todayPct = TodayResultPercent();
    double todayMoney = g_todayMoney;
-   string json = StringFormat("{\"ea\":\"cryptophys-xauusd\",\"version\":\"1.10\",\"mode\":\"%s\",\"trading_allowed\":%s,\"control\":\"%s\",\"positions\":%d,\"last_signal_id\":\"%s\",\"daily_loss_pct\":%.2f,\"spread_points\":%d,\"floating_pnl\":%.2f,\"today_pnl\":%.2f,\"currency\":\"%s\",\"terminal_ms\":%I64d,\"note\":\"%s\",\"positions_detail\":%s}",
+   string json = StringFormat("{\"ea\":\"cryptophys-xauusd\",\"version\":\"1.11\",\"mode\":\"%s\",\"trading_allowed\":%s,\"control\":\"%s\",\"positions\":%d,\"last_signal_id\":\"%s\",\"daily_loss_pct\":%.2f,\"spread_points\":%d,\"floating_pnl\":%.2f,\"today_pnl\":%.2f,\"currency\":\"%s\",\"terminal_ms\":%I64d,\"note\":\"%s\",\"positions_detail\":%s}",
                               AccountMode(), TradingAllowedHere() ? "true" : "false", g_control, n, g_lastSignal, -todayPct, (int)SymbolInfoInteger(g_symbol, SYMBOL_SPREAD),
                               floating, todayMoney, AccountInfoString(ACCOUNT_CURRENCY), (long)TimeCurrent() * 1000, note, positions);
    HttpPostJson(HeartbeatUrl, json);

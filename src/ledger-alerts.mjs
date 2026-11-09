@@ -1,6 +1,7 @@
 // Alerts to the owner (backlog 11.2, owner decision 2026-11-08: Telegram). Each Signal Ledger event is
 // sent once over the AI Worker's existing Telegram bot:
-//   setup      a strategy-engine setup triggered (the H1 decision has its own Telegram message);
+//   setup      a strategy-engine setup triggered (the H1 decision and the Decision Engine send their
+//              own Telegram message, so their rows start at the entry);
 //   entry      the entry price was reached;
 //   exit       the first target, the stop or the time limit was reached;
 //   closed     the final target or exit of a two-target setup;
@@ -31,7 +32,7 @@ export function ledgerAlertsEnabled(env) {
   return String(env?.LEDGER_ALERTS_ENABLED ?? "true").trim().toLowerCase() !== "false" && Boolean(env?.TELEGRAM_BOT_TOKEN && env?.TELEGRAM_CHAT_ID);
 }
 
-const SOURCE = { strategy: "Strategy engine", h1_decision: "H1 decision" };
+const SOURCE = { decision: "Decision Engine", strategy: "Strategy engine", h1_decision: "H1 decision" };
 const finite = (x) => typeof x === "number" && Number.isFinite(x);
 const px = (x) => (finite(x) ? x.toFixed(2) : "n/a");
 const rr = (x) => (finite(x) ? `${x > 0 ? "+" : ""}${Math.round(x * 100) / 100}R` : "n/a");

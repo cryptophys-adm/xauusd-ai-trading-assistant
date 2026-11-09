@@ -14,10 +14,12 @@ type Ctx = {
   global: any | null;
   /** The strategy engine's decision, key levels and RRR (carried by the Global Conclusion). */
   strategy: any | null;
+  /** The Decision Engine's latest decision, the single SSOT (src/decision-engine.mjs of the AI Worker). */
+  engine: any | null;
   loading: boolean;
   error: string | null;
 };
-const MarketContext = createContext<Ctx>({ threads: {}, news: null, m5: null, global: null, strategy: null, loading: true, error: null });
+const MarketContext = createContext<Ctx>({ threads: {}, news: null, m5: null, global: null, strategy: null, engine: null, loading: true, error: null });
 
 /**
  * The 1H, 4H and D1 Threads, News Daily, the 5m context and the Global Conclusion, refreshed every 60 s and shared by
@@ -31,10 +33,10 @@ export function MarketProvider({ children }: { children: ReactNode }) {
       get("/api/m5-context").catch(() => null),
       get("/api/conclusion/global").catch(() => null),
     ]);
-    return { threads: { D1: d1?.thread ?? null, H4: h4?.thread ?? null, H1: h1?.thread ?? null }, news: news?.daily ?? null, m5: m5?.context ?? null, global: glob?.global ?? null, strategy: glob?.global?.strategy ?? null };
+    return { threads: { D1: d1?.thread ?? null, H4: h4?.thread ?? null, H1: h1?.thread ?? null }, news: news?.daily ?? null, m5: m5?.context ?? null, global: glob?.global ?? null, strategy: glob?.global?.strategy ?? null, engine: glob?.engine ?? null };
   }, 60_000);
   const v = poll.data as any;
-  const value: Ctx = { threads: v?.threads ?? {}, news: v?.news ?? null, m5: v?.m5 ?? null, global: v?.global ?? null, strategy: v?.strategy ?? null, loading: poll.loading && !v, error: poll.error };
+  const value: Ctx = { threads: v?.threads ?? {}, news: v?.news ?? null, m5: v?.m5 ?? null, global: v?.global ?? null, strategy: v?.strategy ?? null, engine: v?.engine ?? null, loading: poll.loading && !v, error: poll.error };
   return <MarketContext.Provider value={value}>{children}</MarketContext.Provider>;
 }
 
