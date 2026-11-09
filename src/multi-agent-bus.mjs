@@ -363,6 +363,8 @@ export function isRateLimited(error) {
  */
 export const PRIMARY_TIMEOUTS_TO_PIN = 2;
 export const FALLBACK_RETRY_MIN_MS = 30_000;
+/** Time a primary call leaves for the fallback model after it. */
+export const FALLBACK_RESERVE_MS = 20_000;
 export const FALLBACK_BRIEF_NOTE = "Your previous answer ran out of tokens before the JSON. Reply with the JSON object only. Keep any reasoning very short.";
 
 export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState = {}, role = "agent", skipPrimary = null }) {
@@ -387,10 +389,15 @@ export async function callBusModel(env, { messages, schemaName, schema, maxToken
   for (let i = 0; i < attempts.length; i++) {
     const { model, primary: isPrimary } = attempts[i];
     const remaining = deadline - clock();
-    if (remaining <= 0) return { status: "budget_exhausted", model, ...meta(i), usage_tokens: usage || null, calls: i };
+    // Nothing was asked of this model: the row names no model and no fallback use.
+    if (remaining <= 0) return { status: "budget_exhausted", model: null, fallback_used: false, primary_error: meta(i).primary_error, usage_tokens: usage || null, calls: i };
+    // The primary leaves FALLBACK_RESERVE_MS for the fallback after it (production 2026-11-09: the
+    // 15m conclusion's primary timed out at the deadline, the fallback never ran).
+    const reserve = isPrimary && i < attempts.length - 1 ? FALLBACK_RESERVE_MS : 0;
+    if (isPrimary && reserve && remaining <= reserve) { callPrimaryError = `${model}: skipped, ${Math.round(remaining / 1000)} s left for the fallback`; continue; }
     const t0 = clock();
     try {
-      const timeout = isPrimary ? Math.min(remaining, primaryTimeoutMs) : remaining;
+      const timeout = isPrimary ? Math.min(remaining - reserve, primaryTimeoutMs) : remaining;
       const result = await withTimeout(callModel(env, model, messages, schemaName, schema, maxTokens, effort, isPrimary), timeout);
       usage += usageTokens(result) || 0;
       let parsed = parseModelObject(result);
