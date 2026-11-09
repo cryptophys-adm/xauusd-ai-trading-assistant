@@ -151,7 +151,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   decision, entry/SL/TP, risk/reward, position size or confidence.
 - **5m parity records (C0 step 3).** The pull adapter also publishes full mizan, prophet and gmi records for every closed 5m bar (`local-engines/producer/src/m5-local-producer.mjs`, behind `M5_PARITY_PUBLISH`). They have timeframe `"5"` and candle key `OANDA:XAUUSD:5:<open ms>`.
   - The records earn their own approval under the timeframe-scoped ids `prophet_m5`, `gmi_m5` and `mizan_m5`, separate from the approved H1 ids. The parity sweep revisits the last six closed 5m candles.
-  - GMI on the 5m chart runs `local-engines/gmi/src/gmi-core-tf.mjs`, a timeframe-parameterised copy of `gmi-core.mjs`. `gmi-core.mjs` stays byte-identical, because it is part of the approved H1 hash. A test proves the copy equals `computeGmi` on H1.
+  - GMI on every chart (5m, 15m, 1H, 4H, D1) runs one engine, `local-engines/gmi/src/gmi-core.mjs` (`computeGmiOnChart`; `computeGmi` is the 1H chart). B4 (owner go for the full re-approval, 2026-11-09) merged the three copies it had grown into: the H1 core, `gmi-core-tf.mjs` (5m, 15m) and `gmi-core-htf.mjs` (4H, D1). The merge was proven output-identical to all three on 80 synthetic bundles across the five charts, and `test/gmi-core-htf.test.mjs` pins golden output fingerprints of the former modules. `gmi-core-tf.mjs` and `gmi-core-htf.mjs` remain as one-line re-exports, so the producers that import them, and the Prophet and MizanLib identities that hash those producers, did not change; every GMI identity (`gmi`, `gmi_m5`, `gmi_m15`, `gmi_h4`, `gmi_d1`, `gmi_hud`) re-earns its 24 parity matches.
   - The provenance has its own `prophet_m5` and `gmi_m5` entries, so 5m code changes never change the H1 hashes.
 - **Verified 15m lane** (owner decision 2026-11-05, same design as 5m).
   - The pull adapter publishes mizan, prophet and gmi records for every closed 15m bar. The producer is `local-engines/producer/src/m15-local-producer.mjs`, behind `M15_PARITY_PUBLISH`, with timeframe `"15"` and candle key `OANDA:XAUUSD:15:<open ms>`, the same key as the 15m HUD snapshot.
@@ -161,9 +161,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - **H4 and D1 lane** (owner decision 2026-11-05: Threads per timeframe D1, H4, H1 and 15m).
   - **Records:** the pull adapter publishes mizan, prophet and gmi records for every closed H4 and D1 bar. The producer is `local-engines/producer/src/htf-local-producer.mjs`, behind `HTF_PARITY_PUBLISH`.
   - **Timeframes and keys:** the timeframes are `"240"` and `"1D"`, as Pine v6 `timeframe.period` reports them. The candle keys are `OANDA:XAUUSD:240:<open ms>` and `OANDA:XAUUSD:1D:<open ms>`.
-  - **GMI engine:** GMI runs on `local-engines/gmi/src/gmi-core-htf.mjs`, a copy of `gmi-core-tf.mjs` that adds the H4 and D1 charts and Pine's `dyn_ltf` intrabars (M5 on H4, M15 on D1).
-    - `gmi-core-tf.mjs` stays byte-identical, so the `gmi_m5` and `gmi_m15` hashes do not move.
-    - A test proves the copy equals `gmi-core-tf.mjs` on M15 and H1.
+  - **GMI engine:** the one GMI engine (`gmi-core.mjs`, re-exported as `gmi-core-htf.mjs` for the H4/D1 producer) with Pine's `dyn_ltf` intrabars: M1 below 240, M5 on H4, M15 on D1.
   - **Identities:** the records earn their own approvals as `prophet_h4`, `gmi_h4`, `prophet_d1` and `gmi_d1`, each with its own provenance entry. No other hash changed.
   - **Sweep:** OANDA H4 and D1 bars open at 17:00 New York, not on epoch multiples. The parity sweep therefore takes the last two closed H4 and D1 keys from the cached native bars (`closedHtfCandleKeys`), never from the clock.
   - **Calibration:** the owner installs the Prophet R38 and GMI alerts on the 4-hour and daily charts, set to "Any alert() function call" with the same webhook.
@@ -178,7 +176,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
           - A desk whose records parity has not approved is labelled so and speaks at confidence 0.4 or lower.
           - A room without local records for its bar has no own desk.
         - The other desks: the Higher-Timeframe Desk (the conclusion of the 4H Thread on 1H, of the D1 Thread on 4H), the News Analyst (News Daily), the Technical Analyst and the Risk Manager.
-      - HUD agents come from that bar's HUD snapshot. The pull adapter now also publishes H4 and D1 HUD snapshots (`hud-snapshot.mjs`, timeframes `"240"` and `"1D"`, GMI from `gmi-core-htf.mjs`).
+      - HUD agents come from that bar's HUD snapshot. The pull adapter now also publishes H4 and D1 HUD snapshots (`hud-snapshot.mjs`, timeframes `"240"` and `"1D"`, GMI from the one engine in `gmi-core.mjs`).
         - Fresh windows after the close: H1 25 minutes, M15 9, H4 30, D1 60.
         - **Catch-up (owner decision 2026-11-06):** an H4 or D1 bar whose snapshot was never sent in that window is sent once while it is still the chart's latest close (H4 up to 4 hours, D1 up to 72 hours, which covers the weekend). It is built on the bundle cut at the bar's close, so it is the snapshot that bar would have had. The marker `market-data:v2:hud-published:<candle_key>` (4 days) keeps every bar to one send. H1 and M15 have no catch-up: their rooms move on with every bar.
         - The pull adapter's `GET /health` shows `last_hud_publish`: each chart's status and candle key, and `catch_up` when a bar was sent late.
@@ -566,7 +564,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - Read API: `GET /api/war-room/latest[?bar=<iso>]`.
   - When on, it replaces the legacy live room and the per-H1 HUD agents (their budget moves here). Turning it `"false"` restores both.
 - Live: C0, C2, C3, C5, C6 and C7 are built. `HUD_AGENTS_ENABLED` is `"true"` in `wrangler.jsonc` (owner approval 2026-11-05, after the #94 preview-e2e proof). After each H1 synthesis, one agent per computed HUD (13) and a moderator post in Threads 1H, within `HUD_AGENTS_MAX_CALLS_PER_HOUR = 30`. At each 15m close, Trade Management, Kinetic Engine, Fabio AMT and Aegis Footprint speak in the live room, within `LIVE_ROOM_MAX_CALLS_PER_HOUR = 48`. Turning the flag to `"false"` stops new HUD posts at once.
-- Backlog (owner, 2026-11-05): B4 (merge the GMI core copy, needs a new H1 GMI approval in a calibration window). The Grid Bot Protocol HUD was ported on 2026-11-07 (below). All open work that waits on the market, a date or the owner is listed in `docs/BACKLOG.md`.
+- Backlog (owner, 2026-11-05): B4 (merge the GMI core copy) was done on 2026-11-09 with the owner's go for the full re-approval (one GMI engine, above). The Grid Bot Protocol HUD was ported on 2026-11-07 (below). All open work that waits on the market, a date or the owner is listed in `docs/BACKLOG.md`.
 - **Grid Bot Protocol ported (2026-11-07, `local-engines/producer/src/grid-bot.mjs`):**
   - **What it computes:** Mizan `cshi_engine` on the chart's closed bars. It takes the spread toxicity and the price velocity, each smoothed with `ta.ema` over 5 bars, and the 14-bar efficiency ratio, and turns them into a viability score. The score is ranked over the last 100 bars with `ta.percentrank`.
   - **Deploy status:** GMI's status follows from the rank and the bar's GMI entropy: muddy waters (on), toxic chop (off), optimal (on), or trending / dead (off).
