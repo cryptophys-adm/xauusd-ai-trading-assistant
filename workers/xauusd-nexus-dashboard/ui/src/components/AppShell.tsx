@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { motion } from "framer-motion";
 import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, Home, LineChart, Menu, ShieldCheck, Sparkles, Swords, Trophy, X, Zap } from "lucide-react";
 import { Dot } from "./ui";
@@ -11,8 +11,8 @@ import { useWarRoom } from "../lib/warroom";
 type NavItem = { label: string; href: string; key: string; icon: typeof Swords; soon?: boolean };
 export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   { title: "Live", items: [{ label: "War Room", href: "/#/", key: "", icon: Swords }, { label: "System status", href: "/#/status", key: "status", icon: Activity }] },
-  // Omega (owner decisions 2026-11-09): its own page, served by the xauusd-omega Worker at /omega/ (not a hash route).
-  { title: "Execution", items: [{ label: "Omega", href: "/omega/", key: "omega", icon: Zap }] },
+  // Omega (owner decisions 2026-11-09): rendered in the main pane beside the left sidebar (#/omega and /omega/) behind the same Cloudflare Access sign-in; /omega/api/* forwards to xauusd-omega.
+  { title: "Execution", items: [{ label: "Omega", href: "/#/omega", key: "omega", icon: Zap }] },
   { title: "Analytics", items: [
     { label: "Performance", href: "/#/performance", key: "performance", icon: LineChart },
     { label: "Scorecards", href: "/#/scorecards", key: "scorecards", icon: Trophy },
@@ -41,6 +41,14 @@ export default function AppShell({ current, children }: { current: string; child
   const { room, error } = useWarRoom();
   const live = !error && !!room;
 
+  const navigate = (e: MouseEvent<HTMLAnchorElement>, href: string) => {
+    setOpen(false);
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    window.history.pushState(null, "", href);
+    window.dispatchEvent(new Event("popstate"));
+  };
+
   const sideNav = (mobile: boolean) => (
     <div className="flex flex-col gap-4">
       {NAV_GROUPS.map((g) => (
@@ -56,7 +64,7 @@ export default function AppShell({ current, children }: { current: string; child
                 </span>
               );
               return (
-                <a key={item.key} href={item.href} onClick={() => setOpen(false)} aria-current={active ? "page" : undefined}
+                <a key={item.key} href={item.href} onClick={(e) => navigate(e, item.href)} aria-current={active ? "page" : undefined}
                   className={`${cls} ${active ? "border-cyan-400/40 bg-cyan-400/10 text-white" : "border-transparent text-slate-400 hover:border-white/10 hover:bg-white/5 hover:text-white"}`}>
                   <item.icon className={`h-4 w-4 ${active ? "text-cyan-300" : "text-slate-500"}`} />{item.label}
                 </a>
@@ -72,7 +80,7 @@ export default function AppShell({ current, children }: { current: string; child
     <div className="min-h-screen text-slate-100">
       <header className="border-b border-white/10 bg-obsidian-panel/90 backdrop-blur">
         <div className="mx-auto flex max-w-[1680px] items-center gap-3 px-3 py-3 sm:px-6 sm:py-4">
-          <a href="/#/" className="flex items-center gap-3" aria-label="Nexus War Room">
+          <a href="/#/" onClick={(e) => navigate(e, "/#/")} className="flex items-center gap-3" aria-label="Nexus War Room">
             <motion.div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-cyan-400/40 bg-cyan-400/10 sm:h-11 sm:w-11"
               animate={{ boxShadow: ["0 0 0 rgba(34,211,238,0)", "0 0 22px rgba(34,211,238,0.35)", "0 0 0 rgba(34,211,238,0)"] }}
               transition={{ duration: 4, repeat: Infinity }}>
@@ -84,7 +92,7 @@ export default function AppShell({ current, children }: { current: string; child
             </div>
           </a>
           <div className="ml-auto hidden items-center gap-2 sm:flex">
-            <span className="chip border-emerald-400/20 bg-emerald-400/10 text-emerald-300"><ShieldCheck className="h-3 w-3" />Advisory only</span>
+            <span className="chip border-emerald-400/20 bg-emerald-400/10 text-emerald-300"><ShieldCheck className="h-3 w-3" />{current === "omega" ? "Execution · Access protected" : "Advisory only"}</span>
             <span className={`chip ${live ? "border-amber-400/20 bg-amber-400/10 text-amber-200" : "border-rose-400/20 bg-rose-400/10 text-rose-300"}`}>
               <Dot tone={live ? "green" : "red"} pulse={live} />{live ? "Room live" : "Room offline"}
             </span>

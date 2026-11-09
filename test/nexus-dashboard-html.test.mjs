@@ -119,14 +119,19 @@ test("a grouped left sidebar routes the analytic layers; the Performance page re
   assert.doesNotMatch(perf, /lot size|balance|equity \$|position size/i, "advisory only: R multiples, never money or size");
 });
 
-test("Omega: /omega and /omega/* are forwarded unchanged to the xauusd-omega Worker (OMEGA_PAGE), nothing else is", async () => {
+test("Omega: /omega and /omega/ render inside the Nexus SPA with the left panel; /omega/api/* forwards unchanged to xauusd-omega (OMEGA_PAGE)", async () => {
   const forwarded = [];
   const OMEGA_PAGE = { async fetch(req) { forwarded.push([req.method, new URL(req.url).pathname, req.headers.get("cf-access-jwt-assertion"), await req.text()]); return new Response("omega", { status: 200 }); } };
   const env = { ASSETS: assets, OMEGA_PAGE };
   const post = new Request("https://nexus.test/omega/api/settings", { method: "POST", body: "{\"enabled\":true}", headers: { "cf-access-jwt-assertion": "jwt", "content-type": "application/json" } });
   assert.equal(await (await worker.fetch(post, env)).text(), "omega");
-  assert.equal((await worker.fetch(new Request("https://nexus.test/omega"), env)).status, 200);
-  assert.deepEqual(forwarded, [["POST", "/omega/api/settings", "jwt", "{\"enabled\":true}"], ["GET", "/omega", null, ""]]);
+  const overview = new Request("https://nexus.test/omega/api/overview", { headers: { "cf-access-jwt-assertion": "jwt" } });
+  assert.equal(await (await worker.fetch(overview, env)).text(), "omega");
+  const page = await worker.fetch(new Request("https://nexus.test/omega/"), env);
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /id="root"/);
+  assert.equal(page.headers.get("cache-control"), "no-store");
+  assert.deepEqual(forwarded, [["POST", "/omega/api/settings", "jwt", "{\"enabled\":true}"], ["GET", "/omega/api/overview", "jwt", ""]]);
   for (const path of ["/omegax", "/api/omega", "/omega.js"]) {
     await worker.fetch(new Request(`https://nexus.test${path}`), env);
   }
@@ -134,5 +139,7 @@ test("Omega: /omega and /omega/* are forwarded unchanged to the xauusd-omega Wor
   assert.equal((await worker.fetch(new Request("https://nexus.test/omega/"), { ASSETS: assets })).status, 503, "no binding");
   const wrangler = readFileSync(join(root, "workers/xauusd-nexus-dashboard/wrangler.jsonc"), "utf8");
   assert.match(wrangler, /"binding": "OMEGA_PAGE",\s*"service": "xauusd-omega"/);
-  assert.match(readFileSync(join(root, "workers/xauusd-nexus-dashboard/ui/src/components/AppShell.tsx"), "utf8"), /href: "\/omega\/"/);
+  assert.match(readFileSync(join(root, "workers/xauusd-nexus-dashboard/ui/src/components/AppShell.tsx"), "utf8"), /href: "\/#\/omega"/);
+  assert.match(readFileSync(join(root, "workers/xauusd-nexus-dashboard/ui/src/App.tsx"), "utf8"), /omega: Omega/);
+  assert.match(readFileSync(join(root, "workers/xauusd-nexus-dashboard/ui/src/pages/Omega.tsx"), "utf8"), /\/omega\/api\/overview/);
 });
