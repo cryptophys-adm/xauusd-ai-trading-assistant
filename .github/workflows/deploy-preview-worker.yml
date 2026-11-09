@@ -569,14 +569,16 @@ jobs:
             assert.ok(room.conclusion.reasons.length >= 1 && room.conclusion.reasons.length <= 3);
             // Owner decision 2026-11-06: the conclusion gives the decision and the room's bias.
             assert.ok(["BULLISH", "BEARISH", "NEUTRAL"].includes(room.conclusion.bias), "the conclusion carries the bias beside the decision");
+            // Owner decisions 2026-11-09: every answer names the metrics it decided from.
+            assert.ok(room.openings.every(m => Array.isArray(m.metrics) && m.metrics.length), "every opening names its metrics");
             const texts = [...room.openings.map(m => m.claim), ...room.debate.map(m => m.argument), room.conclusion.summary, ...room.conclusion.reasons];
             assert.ok(texts.every(t => t && !codeLike(t)), "War Room messages must be natural language");
           };
           const room1 = await waitWarRoom(barTime);
           warRoomProof("WAR ROOM PROOF", room1);
-          // Owner decision 2026-11-06: the 15m room has no H1 Desk; the Higher-Timeframe Desk carries
-          // the H1 chain. No 15m local records are posted for this bar, so there is no 15m Desk.
-          assertWarRoom(room1, ["htf", "news", "technical", "risk"]);
+          // Owner decisions 2026-11-09: independent rooms, no Higher-Timeframe Desk; the 15m room never
+          // reads the H1 chain. No 15m local records are posted for this bar, so there is no 15m Desk.
+          assertWarRoom(room1, ["news", "technical", "risk"]);
           // Strategy engine (owner decision 2026-11-06): served from the live rooms; deterministic.
           const strategyResponse = await fetch(base + "/api/strategy");
           assert.equal(strategyResponse.status, 200, "the strategy engine is served");
@@ -656,7 +658,7 @@ jobs:
           assert.equal(context2.status, 200, "second m5 context");
           const room2 = await waitWarRoom(barTime2);
           warRoomProof("WAR ROOM HUD PROOF", room2);
-          assertWarRoom(room2, ["htf", "news", "technical", "risk", "trade_management", "kinetic_engine"]);
+          assertWarRoom(room2, ["news", "technical", "risk", "trade_management", "kinetic_engine"]);
           const tldr = await (await fetch(base + "/api/tldr")).json();
           assert.equal(tldr.status, "ok", "the right-panel TLDR endpoint answers");
           assert.ok(tldr.h1?.decision && tldr.news?.thread_id, "TLDR covers Threads 1H and the news thread");
