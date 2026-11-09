@@ -426,11 +426,11 @@ export default function Omega() {
 
       {/* Statistics KPIs */}
       <div className="grid gap-3 sm:grid-cols-3">
-        {[
+        {([
           ["Today (UTC)", st.today],
           ["7 days", st.week],
           ["30 days", st.month],
-        ].map(([label, x]: [string, any]) => (
+        ] as [string, any][]).map(([label, x]) => (
           <Kpi
             key={label}
             label={label}
