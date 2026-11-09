@@ -75,7 +75,10 @@ export default {
 
     if (url.pathname === "/omega" || url.pathname.startsWith("/omega/")) {
       if (typeof env.OMEGA_PAGE?.fetch !== "function") return json({ error: "omega_binding_missing" }, 503);
-      return env.OMEGA_PAGE.fetch(request);
+      // Owner 2026-11-09: /omega and /omega/ render the Nexus SPA shell with the left navigation panel,
+      // while /omega/api/* and /omega/health forward unchanged to xauusd-omega.
+      const isPage = (url.pathname === "/omega" || url.pathname === "/omega/") && (request.method === "GET" || request.method === "HEAD") && Boolean(env.ASSETS);
+      if (!isPage) return env.OMEGA_PAGE.fetch(request);
     }
 
     if (url.pathname.startsWith("/api/")) {
@@ -102,7 +105,7 @@ export default {
 
     if (env.ASSETS && (request.method === "GET" || request.method === "HEAD")) {
       // Page paths of the SPA (no hash): the shell; the app reads the path.
-      const shell = url.pathname === "/aether" || url.pathname === "/aether/";
+      const shell = url.pathname === "/aether" || url.pathname === "/aether/" || url.pathname === "/omega" || url.pathname === "/omega/";
       const res = await env.ASSETS.fetch(shell ? new Request(url.origin + "/", { method: request.method, headers: request.headers }) : request);
       const headers = new Headers(res.headers);
       // Hashed bundles are immutable; the HTML shell is always revalidated.
