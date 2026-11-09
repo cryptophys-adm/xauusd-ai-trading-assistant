@@ -4,6 +4,7 @@ import SystemIssues from "../components/SystemIssues";
 import ThreadsPanel from "../components/ThreadsPanel";
 import PriorityQueue from "../components/PriorityQueue";
 import AssistantPanel from "../components/AssistantPanel";
+import GlobalDecision from "../components/GlobalDecision";
 import { MarketProvider } from "../lib/market";
 import { TabProvider } from "../lib/tab";
 
@@ -32,8 +33,11 @@ export default function WarRoom() {
         <main className="flex min-w-0 flex-1 flex-col gap-4">
           <div className="flex flex-col gap-4 xl:hidden"><PriorityQueue /><SystemIssues /></div>
           <PriceChart />
+          <div className="lg:hidden">
+            <GlobalDecision />
+          </div>
           <ThreadsPanel className="h-[78vh] min-h-[480px]" />
-          <AssistantPanel className="lg:hidden" />
+          <AssistantPanel className="lg:hidden" hideGlobalDecision />
           <div className="xl:hidden"><Roster /></div>
         </main>
         <aside className="hidden w-[360px] shrink-0 lg:block">

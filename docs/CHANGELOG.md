@@ -5,6 +5,19 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-09
+- feat(nexus-ui): refine Nexus Live War Room UI/UX with timeframe sync, layer presets, collapsible assistant sections, and mobile decision-first flow (`workers/xauusd-nexus-dashboard/ui`):
+  - **Timeframe Synchronization & Quick Presets** (`workers/xauusd-nexus-dashboard/ui/src/components/PriceChart.tsx`):
+    - Synchronized chart timeframe with active War Room tab (`News` → `1H`, `15m` → `15m`, `1H` → `1H`, `4H` → `4H`, `D1` → `D1`) with a 1-click `Synced` / `Unlinked` toggle button in the chart header. Manual timeframe selection cleanly unlinks sync without disruption.
+    - Added 1-click chart layer presets (`Clean` [pure price action], `Structure` [zones, bands, volume], `Full` [all overlays]) directly adjacent to layer chips while preserving exact `>Zones<` selector.
+  - **Mobile Decision-First Layout** (`workers/xauusd-nexus-dashboard/ui/src/pages/WarRoom.tsx`):
+    - On mobile / tablet screens (`< lg`), renders `GlobalDecision` immediately under `PriceChart` and above `ThreadsPanel`, eliminating the need to scroll past 78vh of discussion threads to inspect current execution bias, entry, stop, and targets.
+    - Passed `hideGlobalDecision` to secondary mobile `AssistantPanel` to eliminate duplicate decision cards.
+  - **Structured Collapsible Assistant Panel** (`workers/xauusd-nexus-dashboard/ui/src/components/AssistantPanel.tsx`):
+    - Grouped the 8 stacked assistant cards (~2,200px scroll) into 3 collapsible sections with toggle headers and count badges: *Decision & Plan* (`GlobalDecision`, `KeyLevels`), *Structure & Regime* (`SentimentCard`, `TrendLadder`, `RegimeCard`), and *Macro & Sessions* (`ConsensusCard`, `MacroDrivers`, `SessionClock`).
+    - Preserved all required test assertions and component ordering contracts.
+  - **Broker Execution Linkage** (`workers/xauusd-nexus-dashboard/ui/src/components/AppShell.tsx`):
+    - Added live MT5 Execution status badge (`MT5 Execution` / `MT5 Live`) in the header linking directly to `/#/omega` for 1-click navigation between market intelligence and broker execution.
+  - **100% English Platform Standard**: Standardized all UI copy, tooltips, and badges to English.
 - feat(omega-ui): standardize Omega UI to English and eliminate duplicate controls (`workers/xauusd-nexus-dashboard/ui/src/pages/Omega.tsx`):
   - Standardized all UI copy, input labels, tooltips, placeholders, and status banners strictly to English as the platform standard language.
   - Eliminated duplicate navigation tabs and buttons:
