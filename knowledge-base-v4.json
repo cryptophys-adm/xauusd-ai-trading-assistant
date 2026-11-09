@@ -535,7 +535,7 @@
     "gmi_role": "validate, block or wait on Prophet setups; must not silently overwrite Prophet's bias",
     "candle_semantics": "Every field describes the closed candle being decided: the bar that just closed (candle_time / candle_key), never the running candle. The alerts fire at bar close and the local engines compute the last closed bar. 'On the closed candle' below means that bar.",
     "h1_decision_mode": "agent_quorum",
-    "h1_decision": "Owner decision 2026-11-09: the H1 decision is the quorum of the 1H War Room, independent of the TradingView webhooks, of parity approval and of any single indicator signal. BUY or SELL only when the moderator concluded BUY or SELL AND more than the quorum share (50% by default) of the weight of the agents who spoke holds the matching bias; each agent's weight comes from its own track record under the active weighting equation, which Aether tunes and a person approves in the Console (src/weighting.mjs) (BULLISH for a BUY, BEARISH for a SELL). Otherwise WAIT. The entry, stop and target come from the Key Level Agent's zones through the strategy engine; without a valid entry, stop and target the decision is WAIT (the only hard rule besides the quorum).",
+    "h1_decision": "Owner decision 2026-11-09: the H1 decision is the quorum of the 1H War Room, independent of the TradingView webhooks, of parity approval and of any single indicator signal. BUY or SELL only when the moderator concluded BUY or SELL AND more than the quorum share (50% by default) of the weight of the agents who spoke holds the matching bias; each agent's weight comes from its own track record on this timeframe, in the bar's market regime, under the active weighting equation, which is tuned automatically per timeframe (src/weighting.mjs) (BULLISH for a BUY, BEARISH for a SELL). Otherwise WAIT. The entry, stop and target come from the Key Level Agent's zones through the strategy engine; without a valid entry, stop and target the decision is WAIT (the only hard rule besides the quorum).",
     "indicators_are_arguments": "The rules below are how the agents read the indicators in the discussion. They are arguments that raise or lower an agent's stance and confidence, never gates or vetoes of the H1 decision.",
     "entry_trigger": "The Prophet entry trigger is either the one-bar event (prophet_r38.buy_confirmed / sell_confirmed true on the closed candle) or the setup still READY (prophet_r38.setup_state.buy_ready / sell_ready: the confirmation passed within the current setup's confirmation window and the cycle alignment still holds; the Prophet HUD's READY line). It is an argument for an entry, read together with the GMI conditions on the same closed candle.",
     "long_arguments": [
@@ -657,6 +657,6 @@
       }
     },
     "reference_count": 59,
-    "content_sha256": "fa40bb17c65344378fa93099547b2ad174c13f0780f85f381fb8f3bce5456df9"
+    "content_sha256": "0e23c15b9c1d044638441aca1c82af119b46f0fbd43cca194c75a07f907e245e"
   }
 }

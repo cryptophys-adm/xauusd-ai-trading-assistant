@@ -24,6 +24,7 @@ import { macroDeskEvidence } from "./macro-room.mjs";
 import { matchRebuts } from "./rebut-names.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, quorumRule } from "./reputation.mjs";
 import { agentReputation } from "./outcome-scoring.mjs";
+import { roomWeighting } from "./weighting.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import {
   ROOM_STANCES, ensureThreadSchema, isFifteenMinuteClose, liveEvidence, m15KeyForClose,
@@ -558,7 +559,10 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
 
   // Phase 3: the conclusion for the main panel, with the crowd line (P7, RFC §7) and its quorum.
   if (!answered.length) return { status: "no_openings", calls };
-  const crowd = buildCrowdLine(finalEntries(answered, debate), await agentReputation(db, "15"));
+  // The 15m timeframe's own active weighting, in the regime of this bar (owner decisions 2026-11-09).
+  let w15 = { reputation: await agentReputation(db, "15"), quorumShare: undefined, weighting: null, regime: null };
+  try { w15 = await roomWeighting(env, db, "15", { closeMs: Date.parse(barTime), base: w15.reputation }); } catch { /* P7 reputation */ }
+  const crowd = buildCrowdLine(finalEntries(answered, debate), w15.reputation, { quorumShare: w15.quorumShare, weighting: w15.weighting, regime: w15.regime });
   const conclude = phase(WAR_ROOM_CONCLUSION_MS);
   await conclude(base("conclusion", "moderator"), {
     messages: conclusionMessages(anonBus, debate.map(m => ({ ref: refs.toRef.get(m.agent) ?? null, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: (m.rebuts || []).map((r) => refs.toRef.get(r) ?? r), metrics: m.metrics ?? [], argument: m.argument })), crowd),

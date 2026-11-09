@@ -172,7 +172,7 @@ import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mj
 import { runSignalLedger, readLedger, ingestStrategy, ensureLedgerSchema } from "./signal-ledger.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport } from "./aether-push.mjs";
-import { pullLearnedPack, shadowCandidates, packStatus, storedPack } from "./aether-pack.mjs";
+import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
@@ -193,7 +193,8 @@ import { notifyH1Decision } from "./h1-telegram.mjs";
 import { runPendingMacroRooms, readMacroRoom } from "./macro-room.mjs";
 import { readParityView } from "./parity-view.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
-import { applyWeighting } from "./weighting.mjs";
+import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weighting.mjs";
+import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -2298,11 +2299,23 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/ea/signal") {
+    // The MT5 Expert Advisor's signal (owner decisions 2026-11-09, src/ea-signal.mjs): one flat object.
+    // Behind Cloudflare Access (ai.cryptophys.work/api/*): the EA sends a service token.
+    try { return dashboardJson(await eaSignal(env)); }
+    catch (error) { console.error("ea_signal_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ kill: true, side: "NONE", error: "unavailable" }, 500); }
+  }
+  if (url.pathname === "/api/ea/status") {
+    try { return dashboardJson({ status: "ok", ...(await eaStatus(env)) }); }
+    catch (error) { console.error("ea_status_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
+  }
   if (url.pathname === "/api/weighting") {
     // The H1 quorum weighting (src/weighting.mjs): the active point, each agent's own weight, the replay
     // of the neighbouring grid points (discovery with Holm, holdout), the reverse shadow and the history.
     try {
-      return dashboardJson({ status: "ok", ...(await readWeightingReplay(env, { days: 30 })) });
+      const tf = url.searchParams.get("timeframe") || "60";
+      if (!(WEIGHTING_TIMEFRAMES as readonly string[]).includes(tf)) return dashboardJson({ status: "error", error: "timeframe must be one of 15, 60, 240, 1D" }, 400);
+      return dashboardJson({ status: "ok", ...(await readWeightingReplay(env, { timeframe: tf })) });
     } catch (error) {
       console.error("weighting_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
@@ -2424,6 +2437,17 @@ export default {
           ingest_secret: Boolean(env.INGEST_SECRET)
         }
       });
+    }
+    if (request.method === "POST" && url.pathname === "/api/ea/heartbeat") {
+      // The EA's state for monitoring (src/ea-signal.mjs); behind Cloudflare Access like every /api/* path.
+      let body: unknown;
+      try {
+        const limited = await readBodyLimited(request, 4096);
+        if (limited.tooLarge) return json({ error: "Payload exceeds 4 KiB limit" }, 413);
+        body = JSON.parse(limited.text);
+      } catch { return json({ error: "Request body must be valid JSON" }, 400); }
+      const r = await storeHeartbeat(env, body);
+      return json(r, r.ok ? 200 : 400);
     }
     if (request.method === "POST" && url.pathname === "/webhook") {
       return handleWebhook(request, env);
@@ -2594,16 +2618,26 @@ export default {
           } catch (e) { console.error("aether_pack_failed", e instanceof Error ? e.message : String(e)); }
           try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env, { candidates: await shadowCandidates(env) }))); }
           catch (e) { console.error("shadow_versions_failed", e instanceof Error ? e.message : String(e)); }
-          // Weighting tuning (owner decision 2026-11-09): replay the H1 quorum under the grid points next
-          // to the active weighting, activate a point a person approved in the Console (when the replay
-          // still rates it better), roll back one the reverse shadow finds worse, and report to Aether.
-          try {
-            const replay = await readWeightingReplay(env, { days: 30, useCache: false });
-            const applied = await applyWeighting(env, { pack: (await storedPack(env))?.pack ?? null, replay });
-            if (applied.status !== "unchanged") console.log("weighting", JSON.stringify(applied));
-            const pushed = await pushWeightingReport(env, applied.status === "activated" || applied.status === "rolled_back" ? await readWeightingReplay(env, { days: 30, useCache: false }) : replay);
-            if (pushed.status !== "disabled" && pushed.status !== "unchanged") console.log("weighting_report", JSON.stringify(pushed));
-          } catch (e) { console.error("weighting_failed", e instanceof Error ? e.message : String(e)); }
+          // Auto-tuning per timeframe (owner decisions 2026-11-09: no operator; each timeframe independent):
+          // replay each room's quorum under the grid points next to its active weighting, activate the best
+          // point the replay rates better on discovery and holdout, roll back one the reverse shadow finds
+          // worse, tell the owner on Telegram, and report to Aether (audit). The 15m and 1H rooms every
+          // hour, the 4H room every four hours, the daily room once a day.
+          const hourNow = new Date(event.scheduledTime || Date.now()).getUTCHours();
+          for (const timeframe of ["15", "60", ...(hourNow % 4 === 2 ? ["240"] : []), ...(hourNow === 23 ? ["1D"] : [])]) {
+            try {
+              let replay = await readWeightingReplay(env, { timeframe, useCache: false });
+              const applied = await applyWeighting(env, { timeframe, replay });
+              if (applied.status !== "unchanged") console.log("weighting", JSON.stringify(applied));
+              const line = weightingMessage(applied);
+              if (line) {
+                try { await sendTelegram(env, line); } catch (e) { console.error("weighting_telegram_failed", e instanceof Error ? e.message : String(e)); }
+                replay = await readWeightingReplay(env, { timeframe, useCache: false });
+              }
+              const pushed = await pushWeightingReport(env, replay);
+              if (pushed.status !== "disabled" && pushed.status !== "unchanged") console.log("weighting_report", JSON.stringify({ timeframe, ...pushed }));
+            } catch (e) { console.error("weighting_failed", JSON.stringify({ timeframe, message: e instanceof Error ? e.message : String(e) })); }
+          }
         }
         // Signal Ledger (owner request 2026-11-07): new H1 decisions and strategy setups, each
         // followed to its outcome in R on the closed bars. Never feeds a room or a decision.

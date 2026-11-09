@@ -1,0 +1,11 @@
+export const REGIME_LOOKBACK: number;
+export const ATR_PERIOD: number;
+export const ER_PERIOD: number;
+export const TREND_ER: number;
+export const REGIMES: readonly string[];
+export const REGIME_SERIES: Readonly<Record<string, string>>;
+export function atrShares(bars: unknown[]): Array<number | null>;
+export function regimeAt(bars: unknown[], i: number, shares?: Array<number | null>): string | null;
+export function regimeMap(bars: unknown[]): Map<number, string>;
+export function loadRegimeMap(env: unknown, timeframe: string): Promise<Map<number, string>>;
+export function regimeAtClose(map: Map<number, string>, closeMs: number): string | null;

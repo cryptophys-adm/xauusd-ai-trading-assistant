@@ -418,6 +418,6 @@ test("P7: the moderator gets the crowd line; the room carries it and every agent
   assert.deepEqual(Object.keys(thread.reputation).sort(), ["fabio_amt", "h4", "kinetic_engine", "moderator", "risk", "technical"].sort());
   assert.equal(thread.reputation.kinetic_engine.weight, 1, "no record yet");
   assert.equal(thread.reputation.kinetic_engine.family, "trend");
-  assert.equal(thread.crowd.quorum_share, 0.5, "the 4H room keeps the default quorum");
-  assert.equal(thread.crowd.weighting, undefined, "only the 1H room uses the tuned weighting");
+  assert.equal(thread.crowd.quorum_share, 0.5, "the 4H room's own default quorum");
+  assert.equal(thread.crowd.weighting, "weighting@p10-r0.25_2-d30-h0-b0-q0.5-g0-v0", "every timeframe uses its own weighting (owner decisions 2026-11-09)");
 });

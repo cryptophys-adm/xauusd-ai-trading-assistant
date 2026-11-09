@@ -19,7 +19,7 @@ Read `docs/SSOT.md` first. It is the only canonical description of this system. 
      - `AETHER` to `cryptophys-aether` (`KnowledgeIngress`), which receives decision cards only.
    - Never copy either one to another Worker or to the preview config, and never change `host_worker`.
    - Kernel denials are final: no retry loops, and no switching agent ids.
-8. **Advisory only.** No broker integration and no automatic execution.
+8. **The server never trades.** No broker integration and no broker credential in this repository's Workers, and no position size from the server. Since the owner's decisions of 2026-11-09 ("Langsung siap live", execution by an EA on the owner's terminal), the owner's own MetaTrader 5 Expert Advisor (`ea/mt5/CryptophysXAUUSD.mq5`) may execute the H1 decision it reads from `GET /api/ea/signal` (behind Cloudflare Access); it sizes each trade from the owner's risk input on the owner's terminal, and a live account trades only with `AllowLiveAccount`. The kill switch is `EA_SIGNALS_ENABLED = "false"`. Kernel reports and decision cards still never carry a price.
 
 ## Before opening a PR
 - `npm test` (it includes `test/ssot-topology.test.mjs`) and `npx tsc --noEmit -p .`.

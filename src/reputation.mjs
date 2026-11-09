@@ -67,7 +67,7 @@ export function reputationFromScorecards(cards, timeframe) {
  * its final stance; `reputation` is reputationFromScorecards for the room's timeframe (an agent
  * without a record weighs 1).
  */
-export function buildCrowdLine(entries, reputation = {}, { quorumShare = QUORUM_SHARE, weighting = null } = {}) {
+export function buildCrowdLine(entries, reputation = {}, { quorumShare = QUORUM_SHARE, weighting = null, regime = null } = {}) {
   const list = (entries || []).filter((e) => e && e.id && e.id !== "moderator");
   const stances = {}, biases = { BULLISH: 0, BEARISH: 0, NEUTRAL: 0 }, weighted = { BULLISH: 0, BEARISH: 0, NEUTRAL: 0 };
   let sum = 0, wsum = 0, lean = 0;
@@ -102,8 +102,9 @@ export function buildCrowdLine(entries, reputation = {}, { quorumShare = QUORUM_
     scored_agents: list.filter((e) => reputation?.[e.id]?.decisive > 0).length,
     families: fams, disagreeing_families: against,
     // The quorum this crowd line is judged by, and the weighting it was built with (src/weighting.mjs).
-    quorum_share: quorumShare,
-    ...(weighting ? { weighting } : {})
+    quorum_share: Number.isFinite(quorumShare) ? quorumShare : QUORUM_SHARE,
+    ...(weighting ? { weighting } : {}),
+    ...(regime ? { regime } : {})
   };
 }
 
