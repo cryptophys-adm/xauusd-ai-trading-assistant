@@ -9,7 +9,7 @@ export function familyOf(id: string): string;
 export function biasOf(entry: unknown): "BULLISH" | "BEARISH" | "NEUTRAL";
 export function reputationOf(card: any): Record<string, any>;
 export function reputationFromScorecards(cards: any[], timeframe: string): Record<string, any>;
-export function buildCrowdLine(entries: any[], reputation?: Record<string, any>, options?: { quorumShare?: number; weighting?: string | null }): Record<string, any>;
+export function buildCrowdLine(entries: any[], reputation?: Record<string, any>, options?: { quorumShare?: number; weighting?: string | null; regime?: string | null }): Record<string, any>;
 export function finalEntries(openings: any[], debate: any[]): Array<Record<string, any>>;
 export function crowdRule(crowd: any): string;
 export function stuckCautions(stuck: any[]): Record<string, string[]>;

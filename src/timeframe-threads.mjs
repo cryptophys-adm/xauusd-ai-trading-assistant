@@ -46,7 +46,7 @@ import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import { H1_ROOM_LOCK_PREFIX } from "./h1-consensus.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, stuckCautions, ROOM_TIMEFRAME, quorumAllows, quorumRule } from "./reputation.mjs";
 import { agentReputation, listStuckStates } from "./outcome-scoring.mjs";
-import { activeWeighting, weightedReputation } from "./weighting.mjs";
+import { roomWeighting } from "./weighting.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
@@ -339,22 +339,24 @@ function conclusionMessages(spec, bus, debate, confirmations, crowd = null, lear
 
 /** Runs the War Room of one closed 1H, 4H or D1 bar; idempotent per bar. */
 /**
- * The weighting of a room's crowd line (src/weighting.mjs, owner decision 2026-11-09): the 1H room,
- * whose quorum is the H1 decision, uses the active weighting Aether tuned and a person approved; the
- * 4H and D1 rooms keep the P7 reputation and the default quorum.
+ * The weighting of a room's crowd line (src/weighting.mjs, owner decisions 2026-11-09): every room uses
+ * its own timeframe's active weighting (tuned automatically), in the regime of its own bar.
  */
-async function crowdOptions(env, chart) {
-  if (chart !== "H1") return {};
-  const w = await activeWeighting(env);
-  return { quorumShare: w.params.quorum_share, weighting: w.id };
-}
-async function roomReputationMap(env, db, chart) {
+async function roomWeightingFor(env, db, chart, closeMs = Date.now()) {
   const base = await agentReputation(db, ROOM_TIMEFRAME[chart]);
-  if (chart !== "H1") return base;
-  try { return await weightedReputation(db, (await activeWeighting(env)).params, { base }); } catch { return base; }
+  try { return await roomWeighting(env, db, ROOM_TIMEFRAME[chart], { closeMs, base }); }
+  catch { return { reputation: base, quorumShare: undefined, weighting: null, regime: null }; }
 }
-async function roomCrowd(env, db, chart, entries) {
-  return buildCrowdLine(entries, await roomReputationMap(env, db, chart), await crowdOptions(env, chart));
+async function roomReputationMap(env, db, chart, closeMs) {
+  return (await roomWeightingFor(env, db, chart, closeMs)).reputation;
+}
+async function crowdOptions(env, chart, closeMs) {
+  const w = await roomWeightingFor(env, env.DB, chart, closeMs);
+  return { quorumShare: w.quorumShare, weighting: w.weighting, regime: w.regime };
+}
+async function roomCrowd(env, db, chart, entries, closeMs) {
+  const w = await roomWeightingFor(env, db, chart, closeMs);
+  return buildCrowdLine(entries, w.reputation, { quorumShare: w.quorumShare, weighting: w.weighting, regime: w.regime });
 }
 
 export async function runTimeframeThread(env, { chart, candleKey }, { clock = () => Date.now() } = {}) {
@@ -470,7 +472,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   }))).filter((m) => m?.status === "ok");
 
   // Phase 3: the TLDR of this timeframe, with the crowd line (P7, RFC §7).
-  const crowd = await roomCrowd(env, db, chart, finalEntries(answered, debate));
+  const crowd = await roomCrowd(env, db, chart, finalEntries(answered, debate), Date.parse(ev.bar_close));
   const conclude = phase(WAR_ROOM_CONCLUSION_MS);
   await conclude(base("conclusion", "moderator"), {
     messages: conclusionMessages(spec, anonBus, debate.map((m) => ({ ref: refs.toRef.get(m.agent) ?? null, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: (m.rebuts || []).map((r) => refs.toRef.get(r) ?? r), metrics: m.metrics ?? [], argument: m.argument })), ev.confirmations, crowd, learnedFor("moderator")),

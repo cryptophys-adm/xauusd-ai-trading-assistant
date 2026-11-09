@@ -268,3 +268,21 @@ test("scoreRecentStatements removes scores whose horizon crossed a market gap an
   assert.equal(r.gap_removed, 1);
   assert.equal(env.DB.raw.prepare("SELECT COUNT(*) AS n FROM outcome_scores WHERE candle_key = ?").get(key).n, 0);
 });
+
+test("4H and daily rooms are scored too (owner decisions 2026-11-09: every timeframe earns its own record); a weekend is no gap on the daily chart", async () => {
+  const { agentStatements, SCORED_TIMEFRAMES, DAILY_MAX_GAP_MS } = await import("../src/outcome-scoring.mjs");
+  assert.deepEqual(Object.keys(SCORED_TIMEFRAMES).sort(), ["15", "1D", "240", "60"]);
+  const db = d1();
+  const key = "OANDA:XAUUSD:240:" + T0;
+  const run = new Date(T0).toISOString();
+  const put = (step, agent, stance, body) => db.raw.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, ts, stance, confidence, body_json, status) VALUES ('tf:H4', ?, ?, ?, ?, ?, 0.5, ?, ?)").run(run, step, agent, new Date(T0 + 4 * H).toISOString(), stance, JSON.stringify(body), step === "brief" ? "info" : "ok");
+  put("brief", "system", null, { candle_key: key });
+  put("open:h4", "h4", "BUY", { claim: "c" });
+  put("conclusion", "moderator", "WAIT", { summary: "s" });
+  const byKey = await agentStatements({ DB: db }, "240", new Date(T0 - 4 * H).toISOString());
+  assert.deepEqual(byKey.get(key).map((s) => [s.subject, s.stance]).sort(), [["agent:h4", "BUY"], ["agent:moderator", "WAIT"]]);
+  const day = (i) => ({ open_time: new Date(T0 + i * 86_400_000).toISOString(), close_time: new Date(T0 + (i + 1) * 86_400_000).toISOString() });
+  const weekend = [day(0), day(1), { open_time: new Date(T0 + 4 * 86_400_000).toISOString(), close_time: new Date(T0 + 5 * 86_400_000).toISOString() }];
+  assert.equal(crossesGap(weekend, 0, 2), false, "Friday to Monday on the daily chart");
+  assert.ok(DAILY_MAX_GAP_MS > 2 * 86_400_000);
+});

@@ -29,7 +29,10 @@ const SYMBOL = "OANDA:XAUUSD";
 const SERIES_KEY_PREFIX = "market-data:v2:series:";
 export const SCORED_TIMEFRAMES = Object.freeze({
   "60": { series: SYMBOL + "|1h", ms: 3_600_000, lookback: 36 },
-  "15": { series: SYMBOL + "|15m", ms: 900_000, lookback: 96 }
+  "15": { series: SYMBOL + "|15m", ms: 900_000, lookback: 96 },
+  // Owner decisions 2026-11-09: every timeframe's room earns its own track record (auto-tuning per timeframe).
+  "240": { series: SYMBOL + "|4h", ms: 4 * 3_600_000, lookback: 12 },
+  "1D": { series: SYMBOL + "|1D", ms: 86_400_000, lookback: 6 }
 });
 
 export const OUTCOME_SCHEMA_SQL = [
@@ -124,10 +127,15 @@ export const MAX_BAR_GAP_MS = 2 * 3_600_000;
 export function crossesGap(bars, i, horizon = SCORING.horizon) {
   for (let j = i + 1; j <= i + horizon && j < bars.length; j++) {
     const open = Date.parse(bars[j].open_time ?? ""), prevClose = Date.parse(bars[j - 1].close_time ?? "");
-    if (Number.isFinite(open) && Number.isFinite(prevClose) && open - prevClose > MAX_BAR_GAP_MS) return true;
+    // Daily bars run through the weekend (Friday's bar then Monday's): only a longer pause is a gap.
+    const span = prevClose - Date.parse(bars[j - 1].open_time ?? "");
+    const maxGap = Number.isFinite(span) && span >= 20 * 3_600_000 ? DAILY_MAX_GAP_MS : MAX_BAR_GAP_MS;
+    if (Number.isFinite(open) && Number.isFinite(prevClose) && open - prevClose > maxGap) return true;
   }
   return false;
 }
+/** The gap on the daily chart: longer than a weekend (owner decisions 2026-11-09: D1 rooms are scored). */
+export const DAILY_MAX_GAP_MS = 3.5 * 86_400_000;
 
 /** UTC session of a statement by its candle close. */
 export function sessionOf(closeMs) {
@@ -297,13 +305,16 @@ export async function agentStatements(env, timeframe, sinceIso) {
     if (timeframe === "15") {
       const rows = (await env.DB.prepare("SELECT run_id, bar_time, step, agent, stance, confidence FROM agent_thread_messages WHERE thread_id LIKE 'warroom:%' AND status = 'ok' AND bar_time >= ? AND (step LIKE 'open:%' OR step LIKE 'debate:%' OR step = 'conclusion') ORDER BY run_id, CASE WHEN step LIKE 'open:%' THEN 0 ELSE 1 END").bind(sinceIso).all()).results || [];
       for (const r of rows) add(r.bar_time, r);
-    } else if (timeframe === "60") {
-      const rows = (await env.DB.prepare("SELECT m.run_id, m.step, m.agent, m.stance, m.confidence, json_extract(b.body_json, '$.candle_key') AS candle_key FROM agent_thread_messages m JOIN agent_thread_messages b ON b.thread_id = m.thread_id AND b.run_id = m.run_id AND b.step = 'brief' WHERE m.thread_id = 'tf:H1' AND m.status = 'ok' AND m.ts >= ? AND (m.step LIKE 'open:%' OR m.step LIKE 'debate:%' OR m.step = 'conclusion') ORDER BY m.run_id, CASE WHEN m.step LIKE 'open:%' THEN 0 ELSE 1 END").bind(sinceIso).all()).results || [];
+    } else if (TF_THREAD[timeframe]) {
+      const rows = (await env.DB.prepare("SELECT m.run_id, m.step, m.agent, m.stance, m.confidence, json_extract(b.body_json, '$.candle_key') AS candle_key FROM agent_thread_messages m JOIN agent_thread_messages b ON b.thread_id = m.thread_id AND b.run_id = m.run_id AND b.step = 'brief' WHERE m.thread_id = ? AND m.status = 'ok' AND m.ts >= ? AND (m.step LIKE 'open:%' OR m.step LIKE 'debate:%' OR m.step = 'conclusion') ORDER BY m.run_id, CASE WHEN m.step LIKE 'open:%' THEN 0 ELSE 1 END").bind(TF_THREAD[timeframe], sinceIso).all()).results || [];
       for (const r of rows) add(r.candle_key, r);
     }
   } catch { /* thread tables absent */ }
   return new Map([...byKey].map(([k, m]) => [k, [...m.values()].map(({ run_id: _r, step: _s, ...st }) => st)]));
 }
+
+/** The thread of each timeframe room scored by its brief's candle key (the 15m room is keyed by bar time). */
+const TF_THREAD = Object.freeze({ "60": "tf:H1", "240": "tf:H4", "1D": "tf:D1" });
 
 /** The outcome_runs timeframe that marks a bar whose room agents were scored. */
 export const AGENT_RUN_SUFFIX = ":agents";
@@ -353,7 +364,7 @@ export async function scoreRecentStatements(env, { now = Date.now() } = {}) {
       const candleKey = keyOf(bar);
       if (done.has(candleKey)) continue;
       const closeMs = Date.parse(bar.close_time);
-      const statements = timeframe === "60" ? await h1Statements(env, candleKey) : rooms.get(bar.close_time) || [];
+      const statements = timeframe === "60" ? await h1Statements(env, candleKey) : timeframe === "15" ? rooms.get(bar.close_time) || [] : [];
       let written = 0;
       for (const st of statements) {
         const score = scoreStance({ stance: st.stance, confidence: st.confidence, bars, closeMs });
@@ -368,11 +379,11 @@ export async function scoreRecentStatements(env, { now = Date.now() } = {}) {
     // P7: the room agents of the same bars, once per bar (their own run marker).
     const agentRun = timeframe + AGENT_RUN_SUFFIX;
     const agentsDone = new Set(((await env.DB.prepare("SELECT candle_key FROM outcome_runs WHERE timeframe = ? AND scored_at >= ? AND scoring_version = ?").bind(agentRun, new Date(now - 3 * 86_400_000).toISOString(), SCORING_VERSION).all()).results || []).map((r) => r.candle_key));
-    const byKey = await agentStatements(env, timeframe, timeframe === "60" ? new Date(Date.parse(ready[0].open_time) - 3_600_000).toISOString() : ready[0].close_time);
+    const byKey = await agentStatements(env, timeframe, TF_THREAD[timeframe] ? new Date(Date.parse(ready[0].open_time) - spec.ms).toISOString() : ready[0].close_time);
     for (const bar of ready) {
       const candleKey = keyOf(bar);
       if (agentsDone.has(candleKey)) continue;
-      const statements = byKey.get(timeframe === "60" ? candleKey : bar.close_time) || [];
+      const statements = byKey.get(TF_THREAD[timeframe] ? candleKey : bar.close_time) || [];
       if (!statements.length) continue;
       const closeMs = Date.parse(bar.close_time);
       let written = 0;

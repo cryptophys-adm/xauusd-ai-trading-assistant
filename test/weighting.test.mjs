@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import {
   WEIGHTING_DEFAULT, WEIGHTING_GRID, weightingId, weightingProblems, neighbourPoints, agentWeight, weightFromSums,
-  weightingDecision, rollbackDecision, applyWeighting, activeWeighting, weightingState, resetWeightingCacheForTests,
-  ACTIVATION_COOLDOWN_DAYS, ROLLBACK_MIN_ROOMS
+  autoDecision, rollbackDecision, applyWeighting, activeWeighting, weightingState, resetWeightingCacheForTests,
+  ACTIVATION_COOLDOWN_DAYS, ROLLBACK_MIN_ROOMS, quorumFor, weightingMessage, completePoint
 } from "../src/weighting.mjs";
-import { replayQuorum, compareWeighting, loadH1Rooms } from "../src/weighting-replay.mjs";
+import { replayQuorum, compareWeighting, loadH1Rooms, loadRooms } from "../src/weighting-replay.mjs";
+import { regimeMap, regimeAt, atrShares, REGIMES } from "../src/market-regime.mjs";
 import { reputationOf, buildCrowdLine, quorumAllows } from "../src/reputation.mjs";
 import { quorumOf, consensusInput } from "../src/h1-consensus.mjs";
 import { weightingReport } from "../src/aether-push.mjs";
@@ -43,7 +44,8 @@ test("the default equation is exactly the P7 reputation weight; the grid holds t
   assert.equal(w.weight, reputationOf(card).weight);
   assert.equal(w.decisive, 30);
   assert.deepEqual(weightingProblems(WEIGHTING_DEFAULT), []);
-  assert.equal(weightingId(WEIGHTING_DEFAULT), "weighting@p10-r0.25_2-d30-h0-b0-q0.5");
+  assert.equal(weightingId(WEIGHTING_DEFAULT), "weighting@p10-r0.25_2-d30-h0-b0-q0.5-g0-v0");
+  assert.deepEqual(weightingProblems(completePoint({ prior: 10, weight_range: [0.25, 2], days: 30, half_life_days: null, calibration_beta: 0, quorum_share: 0.6 })), [], "a v2 point gains the regime keys at their defaults");
   assert.ok(weightingProblems({ ...WEIGHTING_DEFAULT, quorum_share: 0.7 }).includes("off_grid:quorum_share"));
   assert.ok(weightingProblems({ ...WEIGHTING_DEFAULT, extra: 1 }).includes("unknown_key:extra"));
   const points = neighbourPoints(WEIGHTING_DEFAULT);
@@ -97,7 +99,7 @@ test("compareWeighting: the quorum 0.6 point wins on discovery and holdout; unto
   const { rooms, outcome } = market();
   const r = compareWeighting({ rows: [], rooms, outcome, now: T0 + 20 * DAY, moderator: new Map(rooms.map((x) => [x.candle_key, "BUY"])) });
   const q6 = r.candidates.find((c) => c.id === weightingId({ ...WEIGHTING_DEFAULT, quorum_share: 0.6 }));
-  assert.equal(q6.verdict, "better_than_active: ready for approval in the Console");
+  assert.equal(q6.verdict, "better_than_active: activated automatically");
   assert.ok(q6.discovery.p_holm < 0.05 && q6.holdout.complete);
   const q55 = r.candidates.find((c) => c.id === weightingId({ ...WEIGHTING_DEFAULT, quorum_share: 0.55 }));
   assert.equal(q55.differing_decisions, 0);
@@ -109,45 +111,67 @@ test("compareWeighting: the quorum 0.6 point wins on discovery and holdout; unto
   assert.equal(report.candidates.find((c) => c.id === q6.id).verdict, q6.verdict);
 });
 
-test("activation: an approved grid point the replay rates better; holds, refusals, cooldown and the reverse shadow", () => {
-  const params = { ...WEIGHTING_DEFAULT, quorum_share: 0.6 };
-  const id = weightingId(params);
-  const item = (values, v = 1) => ({ item_id: "learned:weighting:q", version: v, kind: "param_candidate", label: "learned", params: { family: "weighting", grid: "WEIGHTING_GRID", values }, proposal_id: "p1" });
-  const replayWith = (verdict) => ({ candidates: [{ id, verdict, change: "BUY or SELL needs more than 60% of the weight" }] });
+test("automatic choice (owner decisions 2026-11-09, no operator): the best better point; cooldown; never a rolled-back point; the reverse shadow", () => {
+  const q6 = { ...WEIGHTING_DEFAULT, quorum_share: 0.6 }, hl7 = { ...WEIGHTING_DEFAULT, half_life_days: 7 };
+  const cand = (params, verdict, p_holm, accuracy = 0.62) => ({ id: weightingId(params), params, verdict, change: "c", discovery: { p_holm, accuracy, control_accuracy: 0.55 }, holdout: { accuracy: 0.6 } });
   const state = { id: weightingId(WEIGHTING_DEFAULT), params: WEIGHTING_DEFAULT, history: [] };
   const now = T0 + 30 * DAY;
-  assert.equal(weightingDecision({ items: [] }, state, replayWith("x"), { now }).action, "none");
-  assert.equal(weightingDecision({ items: [item(params)] }, state, replayWith("better_than_active: ready for approval in the Console"), { now }).action, "activate");
-  assert.equal(weightingDecision({ items: [item(params)] }, state, replayWith("holdout_failed"), { now }).action, "hold", "the data must still agree");
-  assert.equal(weightingDecision({ items: [item({ ...params, quorum_share: 0.9 })] }, state, replayWith("better_than_active"), { now }).action, "refuse");
-  assert.equal(weightingDecision({ items: [item(params)] }, { ...state, history: [{ kind: "activated", at: new Date(now - DAY).toISOString(), item: "other@1" }] }, replayWith("better_than_active"), { now }).action, "hold", `${ACTIVATION_COOLDOWN_DAYS}-day cooldown`);
-  assert.equal(weightingDecision({ items: [item(params)] }, { ...state, history: [{ kind: "rolled_back", at: new Date(now - 30 * DAY).toISOString(), item: "learned:weighting:q@1" }] }, replayWith("better_than_active"), { now }).action, "none", "a rolled-back item never returns");
+  assert.equal(autoDecision(state, { candidates: [cand(q6, "not_better", 0.01)] }, { now }).action, "none");
+  const d = autoDecision(state, { candidates: [cand(q6, "better_than_active: activated automatically", 0.03), cand(hl7, "better_than_active: activated automatically", 0.01)] }, { now });
+  assert.equal(d.action, "activate");
+  assert.equal(d.id, weightingId(hl7), "the lowest Holm-adjusted p first");
+  assert.equal(autoDecision({ ...state, history: [{ kind: "activated", at: new Date(now - DAY).toISOString() }] }, { candidates: [cand(q6, "better_than_active", 0.01)] }, { now }).action, "none", `${ACTIVATION_COOLDOWN_DAYS}-day cooldown`);
+  assert.equal(autoDecision({ ...state, history: [{ kind: "rolled_back", from: weightingId(q6), at: new Date(now - 30 * DAY).toISOString() }] }, { candidates: [cand(q6, "better_than_active", 0.01)] }, { now }).action, "none", "a rolled-back point never returns");
   assert.equal(rollbackDecision({ previous: WEIGHTING_DEFAULT }, { reverse: { rooms: ROLLBACK_MIN_ROOMS - 1, previous_better: 30, active_better: 2, p_value: 0.001 } }).rollback, false);
   assert.equal(rollbackDecision({ previous: WEIGHTING_DEFAULT }, { reverse: { rooms: ROLLBACK_MIN_ROOMS, previous_better: 30, active_better: 2, p_value: 0.001 } }).rollback, true);
   assert.equal(rollbackDecision({ previous: WEIGHTING_DEFAULT }, { reverse: { rooms: 300, previous_better: 12, active_better: 10, p_value: 0.4 } }).rollback, false);
 });
 
-test("applyWeighting end to end on D1: activate, the room uses it, the kill switch, the automatic rollback", async () => {
+test("applyWeighting end to end on D1, per timeframe: activates by itself, the kill switch, the rollback, the Telegram line", async () => {
   const env = { DB: d1() };
   const params = { ...WEIGHTING_DEFAULT, quorum_share: 0.6 };
-  const pack = { items: [{ item_id: "learned:weighting:q", version: 1, kind: "param_candidate", label: "learned", params: { family: "weighting", grid: "WEIGHTING_GRID", values: params }, proposal_id: "p1" }] };
-  const replay = { candidates: [{ id: weightingId(params), verdict: "better_than_active: ready for approval in the Console", change: "q" }] };
+  const replay = { candidates: [{ id: weightingId(params), params, verdict: "better_than_active: activated automatically", change: "BUY or SELL needs more than 60% of the weight", discovery: { p_holm: 0.01, accuracy: 0.62, control_accuracy: 0.54 }, holdout: { accuracy: 0.6 } }] };
   const now = T0 + 40 * DAY;
-  assert.equal((await activeWeighting(env)).mode, "default");
-  const a = await applyWeighting(env, { pack, replay, now });
+  assert.equal((await activeWeighting(env, { timeframe: "240" })).mode, "default");
+  const a = await applyWeighting(env, { timeframe: "240", replay, now });
   assert.equal(a.status, "activated");
-  const w = await activeWeighting(env, { now, useCache: false });
+  assert.match(weightingMessage(a), /^Auto-tuning \(4-hour room\): new weighting active\. Change: BUY or SELL needs more than 60% of the weight\. Replay: right in 62% of decided calls against 54% before/);
+  const w = await activeWeighting(env, { timeframe: "240", now, useCache: false });
   assert.equal(w.id, weightingId(params));
-  assert.equal(w.mode, "activated");
-  assert.equal(w.source.proposal_id, "p1");
-  assert.equal((await activeWeighting({ ...env, WEIGHTING_MODE: "default" })).params.quorum_share, 0.5, "kill switch");
-  assert.equal((await applyWeighting(env, { pack, replay, now: now + H })).status, "unchanged", "the item was handled");
-  const back = await applyWeighting(env, { pack, replay: { ...replay, reverse: { rooms: 150, previous_better: 40, active_better: 5, p_value: 0.0001 } }, now: now + 10 * DAY });
+  assert.equal((await activeWeighting(env, { timeframe: "60", useCache: false })).mode, "default", "the 1H room has its own state");
+  assert.equal((await activeWeighting({ ...env, WEIGHTING_MODE: "default" }, { timeframe: "240" })).params.quorum_share, 0.5, "kill switch");
+  assert.equal((await applyWeighting(env, { timeframe: "240", replay, now: now + 3600_000 })).status, "unchanged", "cooldown");
+  const back = await applyWeighting(env, { timeframe: "240", replay: { ...replay, reverse: { rooms: 150, previous_better: 40, active_better: 5, p_value: 0.0001 } }, now: now + 10 * DAY });
   assert.equal(back.status, "rolled_back");
-  const s = await weightingState(env, { useCache: false });
+  assert.match(weightingMessage(back), /rolled back to the previous point/);
+  const s = await weightingState(env, { timeframe: "240", useCache: false });
   assert.equal(s.id, weightingId(WEIGHTING_DEFAULT));
   assert.deepEqual(s.history.map((h) => h.kind), ["activated", "rolled_back"]);
-  assert.equal((await applyWeighting(env, { pack, replay, now: now + 30 * DAY })).status, "unchanged", "never re-activated");
+  assert.equal((await applyWeighting(env, { timeframe: "240", replay, now: now + 30 * DAY })).status, "unchanged", "never re-activated");
+  assert.equal(weightingMessage({ status: "unchanged" }), null);
+});
+
+test("regimes: volatility tercile x efficiency ratio from the timeframe's own bars; the regime component and the high-volatility quorum", () => {
+  const bars = [];
+  for (let i = 0; i < 200; i++) {
+    const trend = i > 150 ? (i - 150) * 2 : 0, range = i > 185 ? 6 : 1;
+    const c = 4000 + trend + (i % 2 ? 0.3 : -0.3);
+    bars.push({ open: c, high: c + range, low: c - range, close: c, open_time: new Date(T0 + i * H).toISOString(), close_time: new Date(T0 + (i + 1) * H).toISOString() });
+  }
+  const map = regimeMap(bars);
+  assert.equal(regimeAt(bars, 10, atrShares(bars)), null, "no regime without history");
+  assert.equal(map.get(T0 + 200 * H), "high-trending");
+  assert.match(map.get(T0 + 120 * H), /-ranging$/);
+  assert.ok([...map.values()].every((r) => REGIMES.includes(r)));
+  assert.equal(quorumFor({ ...WEIGHTING_DEFAULT, high_vol_quorum_bonus: 0.1 }, "high-trending"), 0.6);
+  assert.equal(quorumFor({ ...WEIGHTING_DEFAULT, high_vol_quorum_bonus: 0.1 }, "normal-trending"), 0.5);
+  // An agent right in trends and wrong in ranges: the regime component follows the bar's regime.
+  const at = T0 + 20 * DAY;
+  const rows = [...Array.from({ length: 30 }, (_, i) => ({ close_ms: T0 + i * H, result: "hit", brier: null, regime: "high-trending" })), ...Array.from({ length: 30 }, (_, i) => ({ close_ms: T0 + (40 + i) * H, result: "miss", brier: null, regime: "low-ranging" }))];
+  const p = { ...WEIGHTING_DEFAULT, regime_prior: 10 };
+  assert.ok(agentWeight(rows, p, at, { regime: "high-trending" }).weight > agentWeight(rows, WEIGHTING_DEFAULT, at).weight);
+  assert.ok(agentWeight(rows, p, at, { regime: "low-ranging" }).weight < agentWeight(rows, WEIGHTING_DEFAULT, at).weight);
+  assert.equal(agentWeight(rows, p, at, { regime: null }).weight, agentWeight(rows, WEIGHTING_DEFAULT, at).weight, "no regime: the whole record");
 });
 
 test("the crowd line carries its quorum share and weighting; quorumAllows and quorumOf obey it", () => {
@@ -181,4 +205,13 @@ test("loadH1Rooms: the final bias per agent (debate over opening), the latest se
   assert.equal(rooms[0].close_ms, T0 + H);
   assert.equal(rooms[0].bias, "BULLISH");
   assert.deepEqual(rooms[0].entries, [{ agent: "a", bias: "BULLISH" }, { agent: "b", bias: "BULLISH" }], "the #hud session and the debate answer win");
+  // The 15m room: thread warroom:<day>, keyed by its bar time (close); the outcome key is the bar's open.
+  const close = T0 + 2 * H;
+  const put15 = (step, agent, stance, body) => db.db.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, ts, stance, body_json, status, bar_time) VALUES ('warroom:2026-10-01', ?, ?, ?, ?, ?, ?, 'ok', ?)").run(new Date(close).toISOString(), step, agent, new Date(close).toISOString(), stance, JSON.stringify(body), new Date(close).toISOString());
+  db.db.exec("ALTER TABLE agent_thread_messages ADD COLUMN bar_time TEXT");
+  put15("open:x", "x", "SELL", { bias: "BEARISH" });
+  put15("conclusion", "moderator", "WAIT", { bias: "BEARISH" });
+  const r15 = await loadRooms(db, "15", "2026-09-01T00:00:00Z");
+  assert.equal(r15[0].candle_key, "OANDA:XAUUSD:15:" + (close - 900_000));
+  assert.equal(r15[0].close_ms, close);
 });

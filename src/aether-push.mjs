@@ -114,8 +114,8 @@ export async function aetherPushStatus(env, { now = Date.now() } = {}) {
 // ---------------------------------------------------------------- the weighting report (2026-11-09)
 
 export const WEIGHTING_REPORT_VERSION = "cryptophys.weighting-report.v1";
-const WEIGHTING_PUSH_SQL = `CREATE TABLE IF NOT EXISTS aether_weighting_pushes (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
+const WEIGHTING_PUSH_SQL = `CREATE TABLE IF NOT EXISTS aether_weighting_report_pushes (
+  timeframe TEXT PRIMARY KEY,
   content_sha TEXT NOT NULL,
   status TEXT NOT NULL,
   detail TEXT,
@@ -130,6 +130,8 @@ export function weightingReport(replay, { now = Date.now() } = {}) {
   const stat = (t) => (t ? { bars: t.bars, candidate_better: t.candidate_better, control_better: t.control_better, p_value: t.p_value, ...(t.p_holm !== undefined ? { p_holm: t.p_holm } : {}), accuracy: t.accuracy, control_accuracy: t.control_accuracy, ...(t.complete !== undefined ? { complete: t.complete, required_bars: t.required_bars } : {}) } : null);
   return {
     version: WEIGHTING_REPORT_VERSION, equation: replay?.equation ?? null, generated_at: new Date(now).toISOString(),
+    // Owner decisions 2026-11-09: the tuning activates by itself; Aether audits, it proposes nothing.
+    mode: "auto", timeframe: replay?.timeframe ?? "60", regimes: replay?.regimes ?? null,
     window_days: replay?.window_days ?? null, rooms: replay?.rooms ?? 0,
     active: replay?.active ? { id: replay.active.id, params: replay.active.params, activated_at: replay.active.activated_at ?? null, change: replay.active.change } : null,
     control: replay?.control ? { scored_rooms: replay.control.scored_rooms, accuracy: replay.control.accuracy, entries_taken: replay.control.entries_taken, moderator_agreement: replay.control.moderator_agreement } : null,
@@ -149,13 +151,13 @@ export async function pushWeightingReport(env, replay, { now = Date.now() } = {}
   const report = weightingReport(replay, { now });
   const { generated_at: _g, ...content } = report;
   const sha = await sha256(JSON.stringify(content));
-  const prev = await env.DB.prepare("SELECT content_sha, status FROM aether_weighting_pushes WHERE id = 1").first();
+  const prev = await env.DB.prepare("SELECT content_sha, status FROM aether_weighting_report_pushes WHERE timeframe = ?").bind(report.timeframe).first();
   if (prev?.content_sha === sha && prev.status === "accepted") return { status: "unchanged" };
   let res;
   try { res = await env.AETHER.ingestWeightingReport(report); }
   catch (e) { return { status: "transport_failed", error: String(e?.message ?? e).slice(0, 200) }; }
   const status = res?.accepted ? "accepted" : "rejected";
-  await env.DB.prepare("INSERT INTO aether_weighting_pushes (id, content_sha, status, detail, pushed_at) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET content_sha = excluded.content_sha, status = excluded.status, detail = excluded.detail, pushed_at = excluded.pushed_at")
-    .bind(sha, status, res?.reason ? String(res.reason).slice(0, 300) : null, new Date(now).toISOString()).run();
+  await env.DB.prepare("INSERT INTO aether_weighting_report_pushes (timeframe, content_sha, status, detail, pushed_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(timeframe) DO UPDATE SET content_sha = excluded.content_sha, status = excluded.status, detail = excluded.detail, pushed_at = excluded.pushed_at")
+    .bind(report.timeframe, sha, status, res?.reason ? String(res.reason).slice(0, 300) : null, new Date(now).toISOString()).run();
   return { status, candidates: report.candidates.length, ...(res?.reason ? { reason: String(res.reason).slice(0, 120) } : {}) };
 }
