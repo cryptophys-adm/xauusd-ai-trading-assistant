@@ -2,9 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { resetThreadSchemaCacheForTests } from "../src/agent-threads.mjs";
+import { quorumAllows, quorumRule } from "../src/reputation.mjs";
 import {
   runTimeframeThread, runPendingTimeframeThreads, readTimeframeThread, validateTfConclusion, tfEvidence,
-  tfThreadsEnabled, tfEntryAllowed, closedH1Key, TF_THREAD_CHARTS, TF_DESKS, TF_HUD_WAIT_MS, TF_ROOM_GAP_MS, TF_QUORUM_WAIT_MS
+  tfThreadsEnabled, closedH1Key, TF_THREAD_CHARTS, TF_DESKS, TF_HUD_WAIT_MS, TF_ROOM_GAP_MS, TF_QUORUM_WAIT_MS
 } from "../src/timeframe-threads.mjs";
 
 const H4_MS = 4 * 3600_000;
@@ -86,22 +87,30 @@ test("1H, 4H and D1 run here as War Rooms; desks have one role each", () => {
   assert.equal(closedH1Key(Date.parse("2026-11-06T01:10:00Z")), "OANDA:XAUUSD:60:" + Date.parse("2026-11-06T00:00:00Z"));
 });
 
-test("the TLDR: plain summary, one to three reasons, dissent by id, no entry without confirmation, 1H names the H1 decision", () => {
-  const ok = { stance: "WAIT", confidence: 0.5, summary: "The room waits for confirmation.", reasons: ["Structure points up.", " "], dissent: ["Technical Analyst"] };
+test("the TLDR: plain summary, one to three reasons, dissent by id, no entry without the quorum, 1H names the H1 decision", () => {
+  const ok = { stance: "WAIT", confidence: 0.5, summary: "The room waits for a clearer lean.", reasons: ["Structure points up.", " "], dissent: ["Technical Analyst"] };
   assert.equal(validateTfConclusion(ok, { busAgents: ["technical", "risk"] }).valid, true);
   assert.deepEqual(ok.dissent, ["technical"], "a name in dissent maps to its id");
   const buy = { stance: "BUY", confidence: 0.6, summary: "The room leans to buy.", reasons: ["Momentum is up."], dissent: [] };
-  const none = { chart_prophet_r38: { buy_confirmed: false, sell_confirmed: false } };
-  assert.ok(validateTfConclusion({ ...buy }, { confirmations: none }).errors.includes("entry_without_confirmation"));
-  assert.equal(validateTfConclusion({ ...buy }, { confirmations: { chart_prophet_r38: { buy_confirmed: true } } }).valid, true);
+  // Owner decision 2026-11-09: a BUY or SELL needs more than half of the agents' weight on its side, not a Prophet confirmation.
+  const split = { weighted_biases: { BULLISH: 0.5, BEARISH: 0.2, NEUTRAL: 0.3 } };
+  assert.ok(validateTfConclusion({ ...buy }, { crowd: split }).errors.includes("entry_without_quorum"));
+  assert.ok(validateTfConclusion({ ...buy }, { crowd: null }).errors.includes("entry_without_quorum"), "no crowd line, no quorum");
+  assert.equal(validateTfConclusion({ ...buy }, { crowd: { weighted_biases: { BULLISH: 0.6, BEARISH: 0.1, NEUTRAL: 0.3 } } }).valid, true);
+  assert.ok(validateTfConclusion({ ...buy, stance: "SELL" }, { crowd: { weighted_biases: { BULLISH: 0.6, BEARISH: 0.1, NEUTRAL: 0.3 } } }).errors.includes("entry_without_quorum"));
+  assert.equal(validateTfConclusion({ ...ok, dissent: [], stance: "HOLD" }, { crowd: split }).valid, true, "HOLD needs no quorum");
   assert.ok(validateTfConclusion({ ...ok, dissent: [] }, { h1Decision: "BUY" }).errors.includes("h1_reference_missing"));
-  assert.equal(validateTfConclusion({ ...ok, dissent: [], summary: "H1 decision: BUY, but the room waits for confirmation." }, { h1Decision: "BUY" }).valid, true);
-  assert.equal(tfEntryAllowed("HOLD", none), true);
-  // Owner report 2026-11-09: the setup still READY after its one-bar event counts as the confirmation.
-  const ready = { chart_prophet_r38: { buy_confirmed: false, sell_confirmed: false, buy_setup_ready: true, sell_setup_ready: false } };
-  assert.equal(tfEntryAllowed("BUY", ready), true, "a BUY setup still READY allows a BUY");
-  assert.equal(tfEntryAllowed("SELL", ready), false, "and never a SELL");
-  assert.equal(validateTfConclusion({ ...buy }, { confirmations: ready }).valid, true);
+  assert.equal(validateTfConclusion({ ...ok, dissent: [], summary: "H1 decision: BUY, but the room waits for a clearer lean." }, { h1Decision: "BUY" }).valid, true);
+});
+
+test("the quorum helpers: a strict majority of the weight on the matching bias; the rule names the shares", () => {
+  assert.equal(quorumAllows("BUY", { weighted_biases: { BULLISH: 0.51 } }), true);
+  assert.equal(quorumAllows("BUY", { weighted_biases: { BULLISH: 0.5 } }), false);
+  assert.equal(quorumAllows("SELL", { weighted_biases: { BEARISH: 0.8 } }), true);
+  assert.equal(quorumAllows("WAIT", null), true);
+  const rule = quorumRule({ weighted_biases: { BULLISH: 0.62, BEARISH: 0.1, NEUTRAL: 0.28 } });
+  assert.match(rule, /BULLISH 62%, BEARISH 10%, NEUTRAL 28%/);
+  assert.match(rule, /never a gate/);
 });
 
 test("evidence is the closed bar, its HUD snapshot and its local Prophet R38 confirmation; a bar not in the series gives none", async () => {
@@ -141,21 +150,20 @@ test("a 4H War Room: every agent opens, the debate runs, the moderator concludes
   assert.equal(await readTimeframeThread(e.DB, "W1"), null);
 });
 
-test("HUD agents with no verified statement speak at confidence <= 0.4; desks keep theirs", async () => {
+test("no parity cap in the timeframe rooms: every agent keeps its confidence; the calibration stays a label (owner decision 2026-11-09)", async () => {
   const e = env(fakeAI({ confidence: 0.9 }));
   await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
   const by = Object.fromEntries((await readTimeframeThread(e.DB, "H4")).openings.map((p) => [p.id, p]));
-  assert.equal(by.kinetic_engine.confidence, 0.4);
+  assert.equal(by.kinetic_engine.confidence, 0.9);
   assert.equal(by.technical.confidence, 0.9);
-  assert.equal(by.h4.confidence, 0.4, "a 4H Desk on records parity has not approved speaks at 0.4 or lower");
+  assert.equal(by.h4.confidence, 0.9, "a 4H Desk on records parity has not approved speaks at its own confidence");
   assert.equal(by.h4.calibration, "4H local records, not parity approved");
 });
 
 test("openings carry a bias; a BUY or SELL conclusion needs an agent holding it", async () => {
-  const conf = { chart_prophet_r38: { buy_confirmed: true, sell_confirmed: false } };
   const c = { stance: "BUY", confidence: 0.6, summary: "The room buys the confirmed signal.", reasons: ["Prophet R38 confirmed a buy."], dissent: [] };
-  assert.ok(validateTfConclusion({ ...c }, { busAgents: ["technical"], confirmations: conf, supportStances: new Set(["WAIT"]) }).errors.includes("stance_without_support"));
-  assert.equal(validateTfConclusion({ ...c }, { busAgents: ["technical"], confirmations: conf, supportStances: new Set(["BUY", "WAIT"]) }).valid, true);
+  assert.ok(validateTfConclusion({ ...c }, { busAgents: ["technical"], supportStances: new Set(["WAIT"]) }).errors.includes("stance_without_support"));
+  assert.equal(validateTfConclusion({ ...c }, { busAgents: ["technical"], supportStances: new Set(["BUY", "WAIT"]) }).valid, true);
 
   const ai = fakeAI();
   const run0 = ai.run;

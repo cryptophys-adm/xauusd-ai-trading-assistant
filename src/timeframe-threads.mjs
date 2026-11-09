@@ -16,10 +16,10 @@
 // local computation only, never from a webhook: the bars, the HUD snapshot and the local Prophet
 // R38, R37 and GMI records of the bar.
 //
-// Rules, as in the Live War Room: one role per agent and no repetition; HUD statements are
-// marked verified only where they equal a parity-approved record, and an agent with no
-// verified statement speaks at confidence <= 0.4; no confirmation, no entry (BUY or SELL needs
-// that chart's Prophet R38 confirmation). Advisory only: stances are discussion positions, never
+// Rules: one role per agent and no repetition; HUD statements are marked verified only where
+// they equal a parity-approved record (a label, not a cap: owner decision 2026-11-09). A BUY or
+// SELL conclusion needs the room's quorum (reputation.mjs quorumAllows): more than half of the
+// agents' track-record weight holding the matching bias. Indicator confirmations are arguments. Advisory only: stances are discussion positions, never
 // orders, and no price level comes from here.
 //
 // The 1H room comes BEFORE the H1 decision (owner decision 2026-11-07): its bus, Consensus
@@ -30,12 +30,12 @@
 // (TF_THREADS_MAX_CALLS_PER_HOUR).
 import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors } from "./natural-language.mjs";
-import { HUD_IDS, HUD_NAMES, calibrationCounts, calibrationNote, calibratedLines } from "./hud-reading.mjs";
+import { HUD_IDS, HUD_NAMES, calibrationCounts, calibrationNote } from "./hud-reading.mjs";
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { ensureThreadSchema, rowToThreadMessage, ROOM_STANCES, hudEvidenceLines, threadInternals } from "./agent-threads.mjs";
 import {
-  validateOpening, validateRebuttal, majorityStance, selectRebutters, UNCALIBRATED_CONFIDENCE_CAP, BIAS_RULE, SUPPORT_RULE, stanceSupported,
+  validateOpening, validateRebuttal, majorityStance, selectRebutters, BIAS_RULE, SUPPORT_RULE, stanceSupported,
   majorityBias, biasOfStance, biasSplitText, DECISION_BIAS_RULE, conclusionBiasErrors, agentIdsToNames,
   WAR_ROOM_OPENING_MS, WAR_ROOM_DEBATE_MS, WAR_ROOM_CONCLUSION_MS
 } from "./war-room.mjs";
@@ -43,7 +43,7 @@ import { closedHtfCandleKeys, OBSERVED_PREFIX } from "./parity-sweep.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import { H1_ROOM_LOCK_PREFIX } from "./h1-consensus.mjs";
-import { buildCrowdLine, finalEntries, crowdRule, roomReputation, stuckCautions, ROOM_TIMEFRAME } from "./reputation.mjs";
+import { buildCrowdLine, finalEntries, crowdRule, roomReputation, stuckCautions, ROOM_TIMEFRAME, quorumAllows, quorumRule } from "./reputation.mjs";
 import { agentReputation, listStuckStates } from "./outcome-scoring.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
@@ -104,18 +104,13 @@ export function tfAgentName(id) {
 }
 
 /**
- * No confirmation, no entry: BUY or SELL needs that chart's Prophet R38 confirmation on the closed
- * bar, or its setup still READY (owner report 2026-11-09: the confirmation passed within the
- * current setup's confirmation window and the cycle alignment still holds; the HUD's READY line).
+ * The quorum decides (owner decision 2026-11-09, replacing "no confirmation, no entry"): a BUY or SELL
+ * conclusion needs the weighted majority of the agents who spoke holding the matching bias
+ * (quorumAllows, src/reputation.mjs). The chart's Prophet R38 confirmation and setup state stay in the
+ * evidence as arguments the agents weigh.
  */
-export function tfEntryAllowed(stance, confirmations) {
-  if (stance !== "BUY" && stance !== "SELL") return true;
-  const c = confirmations?.chart_prophet_r38;
-  const side = stance === "BUY" ? "buy" : "sell";
-  return c?.[`${side}_confirmed`] === true || c?.[`${side}_setup_ready`] === true;
-}
 const ruleText = (spec) =>
-  `Rule: no confirmation, no entry. BUY needs a confirmed buy signal of the ${spec.label} Prophet R38 on the closed bar, or its BUY setup still READY (the confirmation passed within the setup's confirmation window and the bullish cycle alignment holds); SELL needs the confirmed sell signal or the SELL setup READY. Without either the stance is WAIT, or HOLD / CLOSE for a position already open.`;
+  `Rule: the room's quorum decides. A BUY or SELL conclusion of the ${spec.label} room needs more than half of the agents' weight (each weighted by its track record) holding the matching bias; otherwise the stance is WAIT, or HOLD / CLOSE for a position already open. The ${spec.label} Prophet R38 confirmation and setup state, the trade management and the GMI verdict are arguments to weigh, not gates.`;
 
 const OPENING_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
@@ -151,10 +146,10 @@ function normalizeTfNames(o, busAgents) {
 
 /**
  * The moderator's TLDR of one timeframe: stance, summary, one to three reasons and the dissent.
- * BUY or SELL needs the chart's confirmation; on 1H a stance that differs from the H1 decision
+ * BUY or SELL needs the room's quorum (when the crowd line is given); a stance that differs from the H1 decision
  * must name it.
  */
-export function validateTfConclusion(o, { busAgents = [], confirmations = null, h1Decision = null, supportStances = null, supportBiases = null, roomBias = "NEUTRAL" } = {}) {
+export function validateTfConclusion(o, { busAgents = [], crowd = undefined, h1Decision = null, supportStances = null, supportBiases = null, roomBias = "NEUTRAL" } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
   agentIdsToNames(o, busAgents, tfAgentName);
   const errors = [];
@@ -166,7 +161,7 @@ export function validateTfConclusion(o, { busAgents = [], confirmations = null, 
     const h1 = h1Decision ? String(h1Decision).toUpperCase() : null;
     if (h1 && ROOM_STANCES.includes(o.stance) && o.stance !== h1 && !new RegExp(`H1[^.]{0,40}${h1}`, "i").test(o.summary)) errors.push("h1_reference_missing");
   }
-  if (confirmations && !tfEntryAllowed(o.stance, confirmations)) errors.push("entry_without_confirmation");
+  if (crowd !== undefined && !quorumAllows(o.stance, crowd)) errors.push("entry_without_quorum");
   if (!stanceSupported(o.stance, supportStances)) errors.push("stance_without_support");
   errors.push(...conclusionBiasErrors(o, { supportBiases, roomBias }));
   if (Array.isArray(o.reasons)) o.reasons = o.reasons.filter((r) => !(typeof r === "string" && !r.trim()));
@@ -285,10 +280,10 @@ const deskList = (roster) => roster.filter((id) => TF_DESKS[id]).map((id) => `th
 
 function openingMessages(agent, data, spec, roster, note = null, learned = null) {
   const desk = TF_DESKS[agent];
-  const riskRule = agent === "risk" ? [ruleText(spec) + " Judge every possible entry against the confirmations in your data, and say plainly whether any entry is confirmed."] : [];
+  const riskRule = agent === "risk" ? [ruleText(spec) + " Judge the risk of every possible entry: volatility, conflicts between timeframes, the indicator readings in your data and what would invalidate the move, and say plainly whether you would take it."] : [];
   const who = desk
     ? `You are the ${desk.name} in the XAUUSD ${spec.label} War Room, which meets at every closed ${spec.label} candle. Your only role: ${desk.role}.`
-    : `You are ${HUD_NAMES[agent]}, one agent per Pine HUD, in the XAUUSD ${spec.label} War Room. You speak only about the ${HUD_NAMES[agent]} HUD on the ${spec.label} candle that just closed. Lean on the statements marked verified by parity or computed from verified bars. The readers already see your calibration status once, next to your name: never mention calibration, verification or comparators in your claim. When every statement is not yet calibrated, keep your confidence at or below ${UNCALIBRATED_CONFIDENCE_CAP}.`;
+    : `You are ${HUD_NAMES[agent]}, one agent per Pine HUD, in the XAUUSD ${spec.label} War Room. You speak only about the ${HUD_NAMES[agent]} HUD on the ${spec.label} candle that just closed. Lean on the statements marked verified by parity or computed from verified bars. The readers already see your calibration status once, next to your name: never mention calibration, verification or comparators in your claim. Give the confidence your reading supports: your weight in the room comes from your track record.`;
   return chatMessages([
     who,
     RULES_NO_REFS,
@@ -307,7 +302,7 @@ function openingMessages(agent, data, spec, roster, note = null, learned = null)
 }
 
 function rebuttalMessages(agent, own, bus, spec, unanimous, confirmations, roomBias = null) {
-  const riskRule = agent === "risk" ? [ruleText(spec) + " Rebut every agent on the bus that proposes BUY or SELL without the matching confirmation. CONFIRMATIONS: " + JSON.stringify(confirmations)] : [];
+  const riskRule = agent === "risk" ? [ruleText(spec) + " Rebut every agent on the bus whose BUY or SELL ignores a risk you see. INDICATOR READINGS (arguments, not gates): " + JSON.stringify(confirmations)] : [];
   return chatMessages([
     `You are ${tfAgentName(agent)} in the XAUUSD ${spec.label} War Room Consensus Discussion${TF_DESKS[agent] ? " (" + TF_DESKS[agent].role + ")" : ""}. The Consensus Discussion is open for at most 3 minutes.`,
     RULES_NO_REFS,
@@ -332,7 +327,7 @@ function conclusionMessages(spec, bus, debate, confirmations, crowd = null, lear
     RULES_NO_REFS,
     ROOM_RULES,
     ...(crowd ? [crowdRule(crowd)] : []),
-    ruleText(spec) + " The conclusion obeys it: BUY or SELL only with the matching confirmation below. CONFIRMATIONS: " + JSON.stringify(confirmations),
+    ruleText(spec) + " The conclusion obeys it. " + (crowd ? quorumRule(crowd) : "There is no crowd line, so there is no quorum: the conclusion is WAIT, HOLD or CLOSE.") + " INDICATOR READINGS (arguments, not gates): " + JSON.stringify(confirmations),
     SUPPORT_RULE,
     DECISION_BIAS_RULE + " A BULLISH or BEARISH bias needs at least one agent holding it.",
     "Weigh claims by their argument and by their evidence, not by the number of agents: a claim built on data verified by parity, or computed from verified bars, outweighs one built on uncalibrated readings (each bus entry states which). No repetition: the summary states the conclusion once, each reason adds something new, and dissent lists the ids of agents whose stance or bias still differs from yours. In the summary and reasons, call agents by their names, never by an id, and never discuss calibration itself.",
@@ -423,8 +418,9 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
     return open(base("open:" + agent, agent), {
       messages: openingMessages(agent, agentData(agent, ev, spec), spec, roster, null, learnedFor(agent)), schemaName: "tf_room_opening", schema: OPENING_SCHEMA,
       maxTokens: BUS_MAX_TOKENS.agent, effort: "low",
-      // A timeframe desk whose records parity has not approved speaks at 0.4 or lower.
-      validate: (o) => validateOpening(normalizeTfNames(o, [agent]), agent, { verifiedLines: (agent === "h1" || agent === "h4" || agent === "d1") ? (ev.desk?.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]) }),
+      // No parity cap on the confidence (owner decision 2026-11-09: "confidences sesuai kapasitasnya");
+      // each agent's weight in the quorum comes from its track record (P7), which Aether tunes.
+      validate: (o) => validateOpening(normalizeTfNames(o, [agent]), agent),
       toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), bias: o.bias, name: tfAgentName(agent) }, refs: [] })
     });
   }));
@@ -461,7 +457,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   await conclude(base("conclusion", "moderator"), {
     messages: conclusionMessages(spec, bus, debate.map((m) => ({ id: m.agent, name: tfAgentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument })), ev.confirmations, crowd, learnedFor("moderator")),
     schemaName: "tf_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low",
-    validate: (o) => validateTfConclusion(o, { busAgents, confirmations: ev.confirmations, supportStances: new Set([...answered.map((m) => m.stance), ...debate.map((m) => m.stance)]), supportBiases: new Set([...answered, ...debate].map((m) => m.bias || biasOfStance(m.stance))), roomBias }),
+    validate: (o) => validateTfConclusion(o, { busAgents, crowd, supportStances: new Set([...answered.map((m) => m.stance), ...debate.map((m) => m.stance)]), supportBiases: new Set([...answered, ...debate].map((m) => m.bias || biasOfStance(m.stance))), roomBias }),
     toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map((r) => clip(r, 200)), dissent: [...new Set(o.dissent)], majority, majority_bias: roomBias, crowd }, refs: [] })
   });
   const result = { status: "complete", calls, openings: answered.length, rebuttals: debate.length, ...(reconvened ? { reconvened: true } : {}) };
@@ -476,7 +472,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
           calls: plan, candleKey, statementClose: ev.bar_close, clock, schema: OPENING_SCHEMA, maxTokens: BUS_MAX_TOKENS.agent,
           // Like for like: the live opening's prompt (its bundled notes included) plus the note under test.
           messagesFor: (agent, note) => openingMessages(agent, agentData(agent, ev, spec), spec, roster, note, learnedFor(agent)),
-          validate: (o, agent) => validateOpening(normalizeTfNames(o, [agent]), agent, { verifiedLines: (agent === "h1" || agent === "h4" || agent === "d1") ? (ev.desk?.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]) })
+          validate: (o, agent) => validateOpening(normalizeTfNames(o, [agent]), agent)
         });
       }
     });

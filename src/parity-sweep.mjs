@@ -39,6 +39,29 @@ async function readJsonKV(kv, key) {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
+/** trust_status of a local record that parity has not (or not yet) approved. */
+export const NOT_PARITY_APPROVED = "not_parity_approved";
+
+/**
+ * The local engine records the H1 decision reads for a candle (owner decision 2026-11-09: no waiting
+ * on parity, no dependence on the TradingView webhooks). For each decision engine: the
+ * parity-approved copy when it exists (trust_status approved_by_parity), else the observed record as
+ * published, labelled not_parity_approved, so the agents read it with less weight instead of the bar
+ * failing closed. An engine that published nothing for the candle is simply absent.
+ */
+export async function decisionLocalRecords(env, candleKey) {
+  const kv = env?.WEBHOOK_BUFFER;
+  if (!kv?.get) return [];
+  const out = [];
+  for (const engine of LOCAL_ENGINES) {
+    const trusted = await readJsonKV(kv, TRUSTED_PREFIX + candleKey + ":" + engine);
+    if (trusted) { out.push(trusted); continue; }
+    const observed = await readJsonKV(kv, OBSERVED_PREFIX + candleKey + ":" + engine);
+    if (observed) out.push({ ...observed, trust_status: NOT_PARITY_APPROVED });
+  }
+  return out;
+}
+
 /**
  * Autonomous provenance reconciliation for one candle. Compares every observed
  * local engine output with TradingView's webhook outputs for the same candle,
@@ -237,9 +260,10 @@ export async function backfillRecentAnalyses(env, { now = Date.now(), lookback =
         // Local-primary: approved local records drive the chain; webhooks are calibration only.
         // A candle whose approved local records never arrived is still recorded, as a
         // fail-closed WAIT, once the local publish window has passed.
-        const trusted = await Promise.all(LOCAL_ENGINES.map(engine => env.WEBHOOK_BUFFER.get(TRUSTED_PREFIX + candleKey + ":" + engine)));
+        // Owner decision 2026-11-09: approved or not, the published records start the chain.
+        const records = await decisionLocalRecords(env, candleKey);
         const closedMs = openMs + H1_SECONDS * 1000;
-        if (!trusted.every(Boolean) && now - closedMs < LOCAL_MISSING_AFTER_MS) continue;
+        if (records.length < LOCAL_ENGINES.length && now - closedMs < LOCAL_MISSING_AFTER_MS) continue;
       } else if (!required.every(source => payloads[source])) continue;
       const lastColon = candleKey.lastIndexOf(":");
       const rest = candleKey.slice(0, lastColon);

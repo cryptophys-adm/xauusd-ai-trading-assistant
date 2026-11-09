@@ -134,6 +134,26 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNot
   };
 }
 
+const zoneText = (z) => `${z.candidate ? "the" : "a"} ${z.low === z.high ? z.low.toFixed(2) : `${z.low.toFixed(2)}–${z.high.toFixed(2)}`} ${z.candidate ? "key zone" : "level"} (${z.label})`;
+/** The Key Level Agent's zones as tradeLevels input: candidates are the major zones. */
+function zoneLevels(zones) {
+  return (zones || []).filter((z) => isNum(z.low) && isNum(z.high)).map((z) => ({ low: z.low, high: z.high, price: z.price, major: z.candidate, label: zoneText(z) }));
+}
+
+/**
+ * The plan for a direction chosen elsewhere (owner decision 2026-11-09: the H1 decision is the 1H War
+ * Room's quorum; its prices come from here). The same tradeLevels as the strategy, on the strategy's
+ * price, 1H ATR and Key Level Agent zones; the strategy's own location (at a level, or inside a
+ * demand or supply zone) counts only when the strategy points the same way. Null without a price,
+ * an ATR or a direction.
+ */
+export function planForDirection(strategy, dir) {
+  if (!strategy || !(dir === 1 || dir === -1)) return null;
+  const sameWay = (strategy.direction === "LONG" && dir > 0) || (strategy.direction === "SHORT" && dir < 0);
+  const setupNote = sameWay && strategy.setup?.type && strategy.setup.type !== "none" ? `${strategy.setup.type === "continuation_pullback" ? "a pullback with the trend" : "a stretched sweep into liquidity"}: ${(strategy.setup.evidence || []).join(", ")}` : null;
+  return tradeLevels({ dir, price: strategy.price, levels: zoneLevels(strategy.key_levels?.zones), atrH1: strategy.atr_h1, inZone: Boolean(sameWay && strategy.plan?.at_level), zoneNote: setupNote });
+}
+
 /** Vetoes and cautions for a direction from the 1H and 15m HUD snapshots, the news and the economic calendar. */
 function riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar = null, now = Date.now() }) {
   const vetoes = [], cautions = [];
@@ -205,8 +225,7 @@ export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15S
     snapshots: { "15": m15Snapshot, "60": h1Snapshot, "240": h4Snapshot, "1D": d1Snapshot },
     bars: { M15: m15Bars, H1: h1Bars, H4: h4Bars, D1: d1Bars, W1: w1Bars }, price, atrH1
   });
-  const zoneText = (z) => `${z.candidate ? "the" : "a"} ${z.low === z.high ? z.low.toFixed(2) : `${z.low.toFixed(2)}–${z.high.toFixed(2)}`} ${z.candidate ? "key zone" : "level"} (${z.label})`;
-  const levels = keyLevelReading.zones.map((z) => ({ low: z.low, high: z.high, price: z.price, major: z.candidate, label: zoneText(z) }));
+  const levels = zoneLevels(keyLevelReading.zones);
   const zones = { ...(m15Snapshot?.huds?.aegis_footprint?.fields || {}), ...(m15Snapshot?.huds?.gabfx_price_action?.fields || {}) };
   const inZone = dir > 0 ? zones.in_bull_order_block === true || zones.in_bull_mitigation === true || zones.in_qm_buy === true || zones.in_rbs === true
     : dir < 0 ? zones.in_bear_order_block === true || zones.in_bear_mitigation === true || zones.in_qm_sell === true || zones.in_sbr === true : false;

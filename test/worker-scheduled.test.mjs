@@ -173,9 +173,11 @@ test("parity sweep cron: approves the candle's local records and the backfill ru
   const registry = Object.fromEntries(env.DB.db.prepare("SELECT engine, status FROM engine_parity_registry").all().map(r => [r.engine, r.status]));
   assert.equal(registry.prophet, "approved");
   assert.equal(registry.gmi, "approved");
-  const run = env.DB.db.prepare("SELECT status FROM analysis_runs WHERE candle_key = ?").get(candleKey);
+  const run = env.DB.db.prepare("SELECT status, error_code FROM analysis_runs WHERE candle_key = ?").get(candleKey);
   assert.ok(run, "the backfill must start the candle's analysis");
-  assert.ok(["complete", "degraded"].includes(run.status), "analysis status: " + run.status);
+  // Quorum mode (owner decision 2026-11-09): missing news no longer degrades the bar, so its
+  // evidence is parked for the 1H War Room and the decision waits for the room's quorum.
+  assert.ok(["complete", "degraded"].includes(run.status) || (run.status === "analyzing" && run.error_code === "awaiting_consensus"), "analysis status: " + run.status + " " + run.error_code);
 });
 
 test("news cron: a missing news ingestion fails into a logged error, never an exception", async () => {
@@ -199,7 +201,12 @@ test("B2: the H1 chain labels the 5m context VERIFIED 5m only while the 5m ident
     values: { comparable: engine === "prophet" ? { prophet_r38: values.prophet_r38, prophet_r37_ssot: values.prophet_r37_ssot } : { gmi_v12_70: values.gmi_v12_70 } }
   });
   const context = { schema_version: "cryptophys.local-context.v1", engine: "prophet_r38_5m", trust_status: "informational_unverified", source: "m5_parity_record", symbol: SYMBOL, timeframe: "5", candle_key: key5, candle_time: new Date(closeMs).toISOString(), bias: "BULLISH", buy_confirmed: true, sell_confirmed: false, d_enc: -1, t_enc: 2, received_at: new Date().toISOString() };
-  const fusionOf = (env, candleKey) => JSON.parse(env.DB.db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ?").get(candleKey).ai_analysis).evidence_fusion;
+  // The evidence is parked for the 1H War Room (quorum mode, 2026-11-09), or already decided.
+  const fusionOf = async (env, candleKey) => {
+    const row = env.DB.db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ?").get(candleKey);
+    if (row) return JSON.parse(row.ai_analysis).evidence_fusion;
+    return JSON.parse(await env.WEBHOOK_BUFFER.get("h1:pending:" + candleKey)).evidence.evidence_fusion;
+  };
 
   for (const approved of [true, false]) {
     const { env } = await workerEnv();
@@ -212,7 +219,7 @@ test("B2: the H1 chain labels the 5m context VERIFIED 5m only while the 5m ident
         .run(engine + "_m5", record.provenance.source_hash, record.provenance.implementation_hash, approved ? "approved" : "candidate", approved ? 24 : 19, now, now);
     }
     const { candleKey } = await sweepLastClosedCandle(env);
-    const m5 = fusionOf(env, candleKey).informational_5m_context;
+    const m5 = (await fusionOf(env, candleKey)).informational_5m_context;
     assert.equal(m5.candle_key, key5);
     assert.equal(m5.verification.verified, approved);
     assert.equal(m5.verification.label, approved ? "VERIFIED 5m" : "UNVERIFIED 5m");

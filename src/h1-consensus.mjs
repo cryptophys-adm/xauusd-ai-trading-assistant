@@ -16,6 +16,9 @@
 //
 // Advisory only: no broker, no orders. Prices come only from the evidence, never from the room.
 import { majorityBias } from "./war-room.mjs";
+import { QUORUM_SHARE } from "./reputation.mjs";
+
+export { QUORUM_SHARE };
 
 export const H1_CHAIN = "consensus_reasoner";
 export const H1_CONSENSUS_FALLBACK_MS = 45 * 60 * 1000;
@@ -60,8 +63,6 @@ export function h1RoomGate({ candleKey, now, hudReady }) {
 }
 
 const H1_MS = 3600_000;
-const DIRECTION = { BUY: 1, SELL: -1 };
-const BIAS_SIGN = { BULLISH: 1, BEARISH: -1, NEUTRAL: 0 };
 
 /** Bar open and close (ms) of a "<symbol>:60:<open ms>" candle key; null when unreadable. */
 export function h1BarTimes(candleKey) {
@@ -101,53 +102,112 @@ export function consensusInput(room) {
     consensus_discussion: discussion,
     conclusion,
     // P7 (RFC §7): the deterministic crowd line, weighted by each agent's 30-day track record.
-    crowd: room?.crowd ? { weighted_bias: room.crowd.weighted_bias, weighted_lean: room.crowd.weighted_lean, disagreement: room.crowd.disagreement, scored_agents: room.crowd.scored_agents, agents: room.crowd.agents, disagreeing_families: room.crowd.disagreeing_families } : null
+    // weighted_biases (each bias's share of the weight) carries the quorum of the H1 decision.
+    crowd: room?.crowd ? { weighted_bias: room.crowd.weighted_bias, weighted_lean: room.crowd.weighted_lean, weighted_biases: room.crowd.weighted_biases ?? null, disagreement: room.crowd.disagreement, scored_agents: room.crowd.scored_agents, agents: room.crowd.agents, disagreeing_families: room.crowd.disagreeing_families } : null
   };
 }
 
-/** The Reasoner's prompt lines: it decides last, from the room's consensus and the evidence. */
-export function reasonerLines({ evidence, consensus, laneRule, decisionTextRule, tradePlanRule }) {
-  return [
-    "You are the Reasoner, the final stage of the XAUUSD H1 decision. You decide LAST, after the Consensus Discussion of the 1H War Room: CONSENSUS holds its communication bus (every agent's opening), the Consensus Discussion (the agents answering each other) and the moderator's conclusion with its decision and bias.",
-    "Use only CONSENSUS and EVIDENCE. Do not invent market prices or claim the agents verified facts they did not receive.",
-    "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before reasoning, and quote the decoded meaning. Apply EVIDENCE.policy.decision_policy. Never infer a field meaning that is not in the dictionary.",
-    "The decision follows the consensus of the room: the conclusion's decision and bias, weighed by the arguments and by how much of each agent's evidence is verified. A room stance of HOLD or CLOSE is about an open position: your decision is then WAIT. If the room concluded WAIT with a BULLISH or BEARISH bias, you may decide BUY or SELL in that direction only when EVIDENCE holds the matching 1-hour Prophet R38 entry trigger and exact prices for the plan; otherwise WAIT, and say which way the room leans.",
-    "Every field describes the closed candle being decided (EVIDENCE.candle_time, the bar that just closed), never the running candle. The Prophet R38 entry trigger is either prophet_r38.buy_confirmed / sell_confirmed on that closed candle (a one-bar event) or prophet_r38.setup_state.buy_ready / sell_ready (the local lane's setup state: the confirmation passed within the current setup's confirmation window, setup_state.buy_pass_age or sell_pass_age bars ago, and the cycle alignment still holds; the Prophet HUD's READY line). GMI validates the same closed candle: conflict false and gate 1 or 2 (1 is enough; 2 is full confluence), verdict not -3 against a BUY and not 3 against a SELL, and t_enc not 4 against a BUY. Never demand gate 2 or verdict 3 for an entry.",
-    "Never decide against the room's bias. Depart from the room's decision only for a veto in EVIDENCE: Prophet R38 trade management t_enc 4 (ruthless cut loss, a veto for longs), a GMI verdict of -3 against a BUY or +3 against a SELL, or missing exact price evidence; then decide WAIT and name the veto. A GMI conflict or a GMI gate of -1 lowers your confidence; it never vetoes on its own.",
-    "CONSENSUS.crowd is the deterministic crowd line: every agent's final bias weighted by its 30-day track record. A weighted crowd that leans against the room's conclusion, or a high disagreement (above 0.7), lowers your confidence; it never reverses the room's bias on its own.",
-    consensus?.status === "partial"
-      ? `The room did not conclude within 45 minutes of the close: ${consensus.agents_spoke} of ${consensus.roster_size} agents spoke. Decide from the bus and the discussion that exist, and keep your confidence lower for it.`
-      : "The room concluded: name its decision and bias once in the reasoning, and if your decision differs, say why.",
-    laneRule,
-    "If news_evidence.available is false, state completed fundamental news analysis was unavailable. Do NOT claim news supported or contradicted the setup.",
-    "If news_evidence.available is true, incorporate the completed news analysis and its underlying article evidence into final reasoning.",
-    "If informational_5m_context is present, it is 5m execution context only, labelled VERIFIED 5m (parity-approved) or UNVERIFIED 5m by its verification field; either way it must not change the decision or prices.",
-    "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation, trade_plan.", decisionTextRule, tradePlanRule,
-    "Set decision to WAIT or NO_TRADE and prices to null if exact price evidence is absent. Never imply automatic execution.",
-    "CONSENSUS:",
-    JSON.stringify(consensus),
-    "EVIDENCE:",
-    JSON.stringify(evidence)
-  ];
+/**
+ * The H1 decision is the quorum of the 1H War Room (owner decision 2026-11-09: "H1 Decision adalah
+ * kuorum"; independent of the TradingView webhooks and of any single indicator signal). BUY or SELL
+ * only when the moderator concluded BUY or SELL AND more than QUORUM_SHARE of the weight of the
+ * agents who spoke (each weighted by its track record, the P7 crowd line; Aether tunes the weights
+ * later) holds the matching bias (BULLISH for a BUY, BEARISH for a SELL). Anything else is WAIT. The
+ * Prophet confirmation, its trade management and the GMI verdict are arguments the agents weigh in
+ * the discussion, never a gate or a veto here.
+ */
+const SIDE_BIAS = { BUY: "BULLISH", SELL: "BEARISH" };
+
+/** Pure: the quorum result of a consensus input. */
+export function quorumOf(consensus) {
+  const c = consensus?.conclusion ?? null;
+  const roomStance = c ? String(c.stance || "").toUpperCase() : null;
+  const bias = SIDE_BIAS[roomStance] ?? null;
+  const shares = consensus?.crowd?.weighted_biases ?? null;
+  const share = bias && shares && Number.isFinite(shares[bias]) ? shares[bias] : null;
+  const base = { room_stance: roomStance, side_bias: bias, share, needed: QUORUM_SHARE, agents: consensus?.crowd?.agents ?? consensus?.agents_spoke ?? 0 };
+  if (!c) return { ...base, stance: "WAIT", met: false, reason: "the 1H War Room did not conclude, so there is no quorum to decide from" };
+  if (!bias) return { ...base, stance: "WAIT", met: false, reason: `the 1H War Room concluded ${roomStance}, which is not an entry` };
+  if (share == null) return { ...base, stance: "WAIT", met: false, reason: "the room has no crowd line, so its quorum cannot be counted" };
+  const pct = Math.round(share * 100);
+  if (share <= QUORUM_SHARE) return { ...base, stance: "WAIT", met: false, reason: `the 1H War Room concluded ${roomStance}, but only ${pct}% of the agents' weight leans ${bias.toLowerCase()}, not the majority it needs` };
+  return { ...base, stance: roomStance, met: true, reason: `the 1H War Room concluded ${roomStance} and ${pct}% of the agents' weight leans ${bias.toLowerCase()}` };
+}
+
+const isPrice = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
+/** A plan whose entry, stop and first target exist and sit on the right sides of the entry. */
+export function planIsValid(stance, plan) {
+  if (!plan || !isPrice(plan.entry) || !isPrice(plan.stop) || !isPrice(plan.tp1)) return false;
+  return stance === "BUY" ? plan.stop < plan.entry && plan.entry < plan.tp1 : stance === "SELL" ? plan.tp1 < plan.entry && plan.entry < plan.stop : false;
 }
 
 const PRICE_KEYS = ["entry_price", "stop_loss", "take_profit", "risk_reward", "position_size_pct"];
+const r2 = (x) => Math.round(x * 100) / 100;
 
 /**
- * Never against the room: a BUY or SELL whose direction contradicts the room's bias (or its
- * concluded BUY / SELL) becomes WAIT with prices cleared. Everything else passes unchanged.
+ * Deterministic: the H1 decision is the quorum's, with the plan's prices (the Key Level Agent's zones
+ * through the strategy engine). The Reasoner explains it; it never chooses the direction or the
+ * prices. Without a valid plan a quorum BUY or SELL stays WAIT (the only price rule, owner decision
+ * 2026-11-09). No position size is ever given (advisory only).
  */
-export function consensusGuard(decision, consensus) {
-  const d = String(decision?.decision || "").toUpperCase();
-  const dir = DIRECTION[d];
-  if (!dir || !consensus) return { decision, overridden: false };
-  const roomDir = BIAS_SIGN[consensus.room_bias] || 0;
-  const concludedDir = DIRECTION[consensus.conclusion?.stance] || 0;
-  if (roomDir !== -dir && concludedDir !== -dir) return { decision, overridden: false };
-  const lean = roomDir === -dir ? String(consensus.room_bias).toLowerCase() : consensus.conclusion.stance === "SELL" ? "bearish" : "bullish";
-  const out = { ...decision, decision: "WAIT", ...Object.fromEntries(PRICE_KEYS.map((k) => [k, null])), trade_plan: null,
-    reasoning: `The 1H War Room's consensus is ${lean}, so a ${d} against it is not taken: the decision stays WAIT. ${String(decision.reasoning || "").trim()}`.trim() };
-  return { decision: out, overridden: true };
+export function applyQuorum(decision, { quorum, plan = null } = {}) {
+  const model = String(decision?.decision || "").toUpperCase();
+  const text = String(decision?.reasoning || "").trim();
+  const cleared = { ...Object.fromEntries(PRICE_KEYS.map((k) => [k, null])), trade_plan: null };
+  const stance = quorum?.stance === "BUY" || quorum?.stance === "SELL" ? quorum.stance : "WAIT";
+  if (stance === "WAIT") {
+    const reasoning = model === "BUY" || model === "SELL" ? `No quorum: ${quorum?.reason ?? "the room did not reach its quorum"}, so the decision stays WAIT. ${text}`.trim() : text || `No quorum: ${quorum?.reason ?? "the room did not reach its quorum"}, so the decision stays WAIT.`;
+    return { decision: { ...decision, ...cleared, decision: "WAIT", reasoning }, overridden: model === "BUY" || model === "SELL" };
+  }
+  if (!planIsValid(stance, plan)) {
+    return { decision: { ...decision, ...cleared, decision: "WAIT", reasoning: `The quorum is reached (${quorum.reason}), but the key levels give no valid entry, stop and target, so the decision stays WAIT. ${model === "WAIT" || model === "NO_TRADE" ? text : ""}`.trim() }, overridden: model !== "WAIT" };
+  }
+  const confidence = model === stance && Number.isFinite(decision?.confidence) ? decision.confidence : r2(Math.min(0.95, quorum.share));
+  const out = {
+    ...decision,
+    decision: stance, confidence,
+    entry_price: plan.entry, stop_loss: plan.stop, take_profit: plan.tp1,
+    risk_reward: Number.isFinite(plan.rrr?.tp1) ? plan.rrr.tp1 : null, position_size_pct: null,
+    trade_plan: {
+      action: plan.at_level ? "ENTER_MARKET" : "ENTER_LIMIT", entry: plan.entry, invalidation: plan.stop, take_profit: plan.tp1,
+      exit_reason: "NONE", progressive_stop: null, zone: null
+    },
+    reasoning: model === stance ? text : `The 1H War Room reached its quorum: ${quorum.reason}, so the decision is ${stance}. ${text}`.trim()
+  };
+  return { decision: out, overridden: model !== stance };
+}
+
+/**
+ * The Reasoner's prompt lines (owner decision 2026-11-09): the decision is already fixed by the
+ * room's QUORUM and its prices by the PLAN; the Reasoner writes it and explains it from the
+ * consensus and the evidence. applyQuorum enforces both whatever the model returns.
+ */
+export function reasonerLines({ evidence, consensus, quorum = null, plan = null, laneRule, decisionTextRule, tradePlanRule }) {
+  const q = quorum ?? quorumOf(consensus);
+  return [
+    "You are the Reasoner, the final stage of the XAUUSD H1 decision. You write the decision LAST, after the Consensus Discussion of the 1H War Room: CONSENSUS holds its communication bus (every agent's opening), the Consensus Discussion (the agents answering each other), the moderator's conclusion with its decision and bias, and the crowd line.",
+    `The H1 decision is the QUORUM of the room, not yours to choose: BUY or SELL only when the moderator concluded BUY or SELL and more than ${Math.round(QUORUM_SHARE * 100)}% of the weight of the agents who spoke (each weighted by its track record, CONSENSUS.crowd.weighted_biases) holds the matching bias; otherwise WAIT. QUORUM gives the result. For a BUY or SELL, PLAN gives the entry, stop and targets from the Key Level Agent's zones: use exactly those prices (entry_price = PLAN.entry, stop_loss = PLAN.stop, take_profit = PLAN.tp1, risk_reward = PLAN.rrr.tp1). If QUORUM is BUY or SELL and PLAN is null, the decision is WAIT. Never set position_size_pct: it is always null.`,
+    "Use only CONSENSUS, QUORUM, PLAN and EVIDENCE. Do not invent market prices or claim the agents verified facts they did not receive.",
+    "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before quoting it, and quote the decoded meaning. Never infer a field meaning that is not in the dictionary.",
+    "Indicator signals (the Prophet R38 confirmation and setup state, its trade management t_enc, the GMI verdict, gate and conflict) are arguments the agents weighed in the discussion, not gates and not vetoes: mention them only as the agents used them. Every field describes the closed candle being decided (EVIDENCE.candle_time, the bar that just closed), never the running candle. Local engine values that are not parity-approved are still evidence, read with less weight.",
+    consensus?.status === "partial"
+      ? `The room did not conclude within 45 minutes of the close: ${consensus.agents_spoke} of ${consensus.roster_size} agents spoke, so there is no quorum and the decision is WAIT; say which way the bus leans.`
+      : "Name the room's conclusion, its bias and the quorum once in the reasoning; say what the main arguments were and what the dissenting agents said.",
+    laneRule,
+    "If news_evidence.available is false, state completed fundamental news analysis was unavailable. Do NOT claim news supported or contradicted the setup.",
+    "If news_evidence.available is true, incorporate the completed news analysis and its underlying article evidence into final reasoning.",
+    "If informational_5m_context is present, it is 5m execution context only, labelled VERIFIED 5m or UNVERIFIED 5m by its verification field; it never changes the decision or the prices.",
+    "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation, trade_plan.", decisionTextRule, tradePlanRule,
+    "For WAIT set every price to null. Never imply automatic execution.",
+    "CONSENSUS:",
+    JSON.stringify(consensus),
+    "QUORUM:",
+    JSON.stringify(q),
+    "PLAN:",
+    JSON.stringify(plan),
+    "EVIDENCE:",
+    JSON.stringify(evidence)
+  ];
 }
 
 /** The fail-closed WAIT when the room produced nothing by the fallback time. */
@@ -169,11 +229,14 @@ export function reasonerUnavailableDecision() {
 }
 
 /** A compact record of the consensus the decision came from, kept in the synthesis. */
-export function consensusSummary(consensus, { overridden = false, decidedAfterCloseS = null } = {}) {
+export function consensusSummary(consensus, { overridden = false, decidedAfterCloseS = null, quorum = null, plan = undefined } = {}) {
   return {
     decided_after_close_s: decidedAfterCloseS,
     status: consensus.status, bar_open: consensus.bar_open, agents_spoke: consensus.agents_spoke, roster_size: consensus.roster_size,
     room_bias: consensus.room_bias, conclusion: consensus.conclusion ? { stance: consensus.conclusion.stance, bias: consensus.conclusion.bias, confidence: consensus.conclusion.confidence, summary: consensus.conclusion.summary } : null,
+    // Owner decision 2026-11-09: the decision is the room's quorum (quorumOf).
+    quorum: quorum ? { stance: quorum.stance, room_stance: quorum.room_stance, side_bias: quorum.side_bias, share: quorum.share, needed: quorum.needed, met: quorum.met, reason: quorum.reason } : null,
+    ...(plan !== undefined ? { plan_available: Boolean(plan) } : {}),
     guard_overridden: overridden
   };
 }

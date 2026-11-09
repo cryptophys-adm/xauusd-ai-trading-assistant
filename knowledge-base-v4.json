@@ -534,25 +534,27 @@
     "base_bias_source": "prophet_r37_ssot.direction (persistent consensus). prophet_r38.direction/buy_confirmed/sell_confirmed are entry TRIGGER events, not bias.",
     "gmi_role": "validate, block or wait on Prophet setups; must not silently overwrite Prophet's bias",
     "candle_semantics": "Every field describes the closed candle being decided: the bar that just closed (candle_time / candle_key), never the running candle. The alerts fire at bar close and the local engines compute the last closed bar. 'On the closed candle' below means that bar.",
-    "entry_trigger": "The Prophet entry trigger is either the one-bar event (prophet_r38.buy_confirmed / sell_confirmed true on the closed candle) or the setup still READY (prophet_r38.setup_state.buy_ready / sell_ready: the confirmation passed within the current setup's confirmation window and the cycle alignment still holds; the Prophet HUD's READY line). A trigger alone is never enough: the GMI conditions are checked on the same closed candle.",
-    "actionable_long_requires": [
-      "entry trigger: prophet_r38.buy_confirmed == true on the closed candle (prefer buy_high_quality), or prophet_r38.setup_state.buy_ready == true (local lane; see field_dictionary.prophet_r38.fields.setup_state)",
-      "gmi_v12_70.conflict == false and gmi_v12_70.gate in {1, 2} (1 is sufficient; 2 = full confluence; never require gate 2)",
-      "gmi_v12_70.verdict != -3 (never require verdict 3), and prophet_r38.t_enc != 4"
+    "h1_decision_mode": "agent_quorum",
+    "h1_decision": "Owner decision 2026-11-09: the H1 decision is the quorum of the 1H War Room, independent of the TradingView webhooks, of parity approval and of any single indicator signal. BUY or SELL only when the moderator concluded BUY or SELL AND more than 50% of the weight of the agents who spoke (each weighted by its track record, the P7 crowd line; Aether tunes the weights) holds the matching bias (BULLISH for a BUY, BEARISH for a SELL). Otherwise WAIT. The entry, stop and target come from the Key Level Agent's zones through the strategy engine; without a valid entry, stop and target the decision is WAIT (the only hard rule besides the quorum).",
+    "indicators_are_arguments": "The rules below are how the agents read the indicators in the discussion. They are arguments that raise or lower an agent's stance and confidence, never gates or vetoes of the H1 decision.",
+    "entry_trigger": "The Prophet entry trigger is either the one-bar event (prophet_r38.buy_confirmed / sell_confirmed true on the closed candle) or the setup still READY (prophet_r38.setup_state.buy_ready / sell_ready: the confirmation passed within the current setup's confirmation window and the cycle alignment still holds; the Prophet HUD's READY line). It is an argument for an entry, read together with the GMI conditions on the same closed candle.",
+    "long_arguments": [
+      "for: prophet_r38.buy_confirmed == true on the closed candle (stronger with buy_high_quality), or prophet_r38.setup_state.buy_ready == true",
+      "for: gmi_v12_70.conflict == false and gmi_v12_70.gate in {1, 2} (1 = validated; 2 = full confluence)",
+      "against: gmi_v12_70.verdict == -3, prophet_r38.t_enc == 4, gmi_v12_70.conflict == true or gate == -1"
     ],
-    "actionable_short_requires": [
-      "entry trigger: prophet_r38.sell_confirmed == true on the closed candle (prefer sell_high_quality), or prophet_r38.setup_state.sell_ready == true (local lane)",
-      "gmi_v12_70.conflict == false and gmi_v12_70.gate in {1, 2} (1 is sufficient; never require gate 2)",
-      "gmi_v12_70.verdict != 3 (never require verdict -3)"
+    "short_arguments": [
+      "for: prophet_r38.sell_confirmed == true on the closed candle (stronger with sell_high_quality), or prophet_r38.setup_state.sell_ready == true",
+      "for: gmi_v12_70.conflict == false and gmi_v12_70.gate in {1, 2}",
+      "against: gmi_v12_70.verdict == 3, gmi_v12_70.conflict == true or gate == -1"
     ],
     "always_wait_when": [
-      "any required lane is missing or evidence fusion is incomplete",
-      "gmi_v12_70.conflict == true or gate == -1",
-      "gmi_v12_70.verdict is 0 because of chaos, entropy trap or volume veto, and there is neither a confirmed Prophet trigger nor a READY setup",
-      "webhook and approved local values disagree on a decisive field"
+      "the 1H War Room did not conclude BUY or SELL, or its quorum is not reached",
+      "the key levels give no valid entry, stop and target for the quorum's direction",
+      "the closed candle itself is missing or stale (news and indicator lanes that are missing are noted, not blocking)"
     ],
     "risk_management_signals": [
-      "t_enc 4 (RUTHLESS CUT LOSS) is the only management veto; t_enc 5 is a hold, not a veto",
+      "t_enc 4 (RUTHLESS CUT LOSS) is a strong argument against holding or entering; t_enc 5 is a hold",
       "gmi verdict 4 (extension) and -1 (exhaustion) mean review risk on existing positions; they are not entries"
     ],
     "reversal_requires_explicit_auditable_evidence": true,
@@ -569,7 +571,7 @@
     "Decode every numeric field with this field_dictionary before reasoning; quote the decoded meaning (for example 'd_enc -3 = bullish structure state').",
     "Separate reported indicator values from model interpretation, and attribute each value to its lane.",
     "State missing or conflicting evidence explicitly; never invent prices, levels or indicator states.",
-    "Entry, stop and target prices may only come from supplied candle OHLC values; otherwise leave them null and decide WAIT.",
+    "Entry, stop and target prices may only come from the supplied plan (the Key Level Agent's zones) or candle OHLC values; otherwise leave them null and decide WAIT.",
     "Give bullish, bearish and neutral scenarios when evidence is mixed."
   ],
   "limitations": [
@@ -655,6 +657,6 @@
       }
     },
     "reference_count": 59,
-    "content_sha256": "6f5979ddc6783b637d50dcf830b5ff97b079aa729f435a622c6e39ed76b06a39"
+    "content_sha256": "62ff25c407bfcee47998eca314cc491f7aeabc0d6caf921a642583a8efd92887"
   }
 }

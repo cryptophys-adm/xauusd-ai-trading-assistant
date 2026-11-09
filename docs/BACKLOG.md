@@ -23,13 +23,13 @@ setup READY state that never reached the decision (#192).
 
 ## After the first days of the new chain
 
-6. **Scorecard: is the decision still "always WAIT"?** The owner's starting problem (2026-11-06). Every H1 decision since the reopen was WAIT with a bullish bias; #192 (the setup READY state as an entry trigger) is the first change aimed at it, so check early, about Wednesday 2026-11-12, and again after a week (about 2026-11-16).
+6. **Scorecard: is the decision still "always WAIT"?** The owner's starting problem (2026-11-06). Every H1 decision since the reopen was WAIT with a bullish bias; #192 (the setup READY state as an entry trigger) and the quorum decision (2026-11-09, indicators as arguments, not gates) are the changes aimed at it, so check early, about Wednesday 2026-11-12, and again after a week (about 2026-11-16).
    - The split of BUY, SELL and WAIT from the H1 Reasoner and from the strategy engine.
-   - How often the consensus guard overrode the Reasoner (0 of 4 on 2026-11-09).
+   - How often the room reached its quorum (`consensus.quorum.met`) and how often the Reasoner's own decision differed from it (`guard_overridden`); how often a quorum stayed WAIT for lack of a valid plan (`plan_available` false).
    - How often the room or the Reasoner cited `setup_state` (READY) and what came of those bars.
    - The outcome scoring of those decisions (Nexus Scorecards page).
    - How often the weighted crowd line differs from the room's conclusion.
-   - Then decide with the owner whether the rules need loosening or tightening.
+   - Then decide with the owner whether the quorum share (0.5) or the rules need loosening or tightening, and whether the 15m Live War Room and the strategy engine should follow the quorum too (they still require the Prophet confirmation).
 
 ## After 2026-11-20 (Workers AI retires glm-5.3-flash and nemotron-3-120b-a12b)
 
@@ -57,4 +57,4 @@ setup READY state that never reached the decision (#192).
 ## Calibration in progress
 
 15. **4H and D1 parity** (alerts installed by the owner on 2026-11-09, about 03:30 UTC; H1 and 15m earlier the same morning). The `prophet_h4` / `gmi_h4` identities need 24 matches (about 4 trading days), `prophet_d1` / `gmi_d1` about 5 weeks. Until then the 4H and D1 Desks speak at confidence 0.4 or lower. First receipts to confirm: H4 at 06:00 UTC, D1 at 22:00 UTC on 2026-11-09 (scheduled checks).
-19. **GMI re-approval after B4** (2026-11-09). Every GMI identity re-earns 24 consecutive parity matches against the TradingView alerts: `gmi_m5` about 2 hours, `gmi_m15` about 6 hours, `gmi` and `gmi_hud` (1H) about 24 trading hours, `gmi_h4` about 4 trading days and `gmi_d1` about 5 weeks (both already calibrating). Until `gmi` is approved again, every H1 bar is a fail-closed WAIT (the local lane needs approved MizanLib, Prophet and GMI records), the 5m confirmation does not count (UNVERIFIED 5m) and the 15m desk reads as not calibrated. Owner decision: accepted for the full merge. Check the registry the next day.
+19. **GMI re-approval after B4** (2026-11-09). Every GMI identity re-earns 24 consecutive parity matches against the TradingView alerts: `gmi_m5` about 2 hours, `gmi_m15` about 6 hours, `gmi` and `gmi_hud` (1H) about 24 trading hours, `gmi_h4` about 4 trading days and `gmi_d1` about 5 weeks (both already calibrating). Since the quorum change of 2026-11-09 the H1 decision no longer waits for it: the chain reads the GMI record as `not_parity_approved` meanwhile. Until the 5m and 15m identities are approved again, the 5m confirmation reads UNVERIFIED 5m and the 15m desk not calibrated. Check the registry the next day.

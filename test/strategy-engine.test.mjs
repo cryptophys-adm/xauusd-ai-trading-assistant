@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildStrategy, tradeLevels, atr, roomLean, MIN_RRR } from "../src/strategy-engine.mjs";
+import { buildStrategy, tradeLevels, planForDirection, atr, roomLean, MIN_RRR } from "../src/strategy-engine.mjs";
 import { buildGlobalConclusion } from "../src/global-conclusion.mjs";
 
 const NOW = Date.parse("2026-11-06T14:20:00Z");
@@ -153,4 +153,16 @@ test("at a 5m close the engine uses that bar's close and names the bar of the co
   assert.equal(s.state, "TRIGGERED", s.headline);
   assert.match(s.headline, /verified 5m Prophet buy confirmation on the 5m bar closing 14:25 UTC/);
   assert.equal(buildStrategy(input()).price, 4040, "without a 5m close the 15m close stays the price");
+});
+
+test("planForDirection: the plan for the quorum's direction, on the strategy's price, ATR and key zones (owner decision 2026-11-09)", () => {
+  const zones = [{ low: 96, high: 97, price: 96.5, label: "support zone", candidate: true }, { low: 99, high: 99.8, price: 99.4, label: "entry zone", candidate: true }, { low: 103, high: 104, price: 103.5, label: "first target", candidate: true }, { low: 106, high: 107, price: 106.5, label: "second target", candidate: true }];
+  const strategy = { direction: "NONE", price: 100, atr_h1: 2, key_levels: { zones }, plan: null };
+  const long = planForDirection(strategy, 1);
+  assert.deepEqual([long.entry, long.stop, long.tp1, long.tp2], [100, 98.6, 103, 106], "the same levels as tradeLevels on the zones");
+  const short = planForDirection({ ...strategy, price: 102.8 }, -1);
+  assert.deepEqual([short.entry, short.stop, short.tp1], [102.8, 104.4, 99.8]);
+  assert.equal(planForDirection(strategy, 0), null);
+  assert.equal(planForDirection(null, 1), null);
+  assert.equal(planForDirection({ ...strategy, atr_h1: null }, 1), null, "no ATR, no plan");
 });
