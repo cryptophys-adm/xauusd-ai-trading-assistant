@@ -553,3 +553,9 @@ test("an opening that talks about calibration gets one soft correction; it is ne
   assert.equal(risk.status, "ok", "never rejected for calibration talk");
   assert.match(risk.claim, /parity-verified/, "the first valid answer is kept when the correction fails");
 });
+
+test("rebuttal targets match an agent's id or display name in any spelling (production 2026-11-09: rebuts_invalid)", async () => {
+  const { normalizeRebuts } = await import("../src/war-room.mjs");
+  const bus = ["aegis_footprint", "macro_aether", "kinetic_engine", "risk"];
+  assert.deepEqual(normalizeRebuts(["aegis_footprint_matrix", "macro_aether_sensors", "the kinetic_engine", "Kinetic Engine (TVA)", "unknown"], bus), ["aegis_footprint", "macro_aether", "kinetic_engine", "kinetic_engine", "unknown"]);
+});

@@ -153,3 +153,9 @@ test("the Oil Analyst speaks from WTI and the geopolitical headlines (owner requ
   assert.match(oilText, /geopolitical and inflation channel/);
   assert.match(oilText, /WTI crude oil/);
 });
+
+test("a rebuttal may name an agent by any spelling of its name (production 2026-11-09: rebuts_invalid)", () => {
+  const o = { agent: "dollar", bias: "BULLISH", confidence: 0.5, rebuts: ["The News Analyst", "calendar_agent"], argument: "The dollar is soft." };
+  assert.deepEqual(validateMacroRebuttal(o, "dollar", ["dollar", "news", "calendar"]).errors, []);
+  assert.deepEqual(o.rebuts, ["news", "calendar"]);
+});
