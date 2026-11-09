@@ -19,7 +19,7 @@ export const KB_V4_CONTENT = {
 
   input_lanes: {
     tradingview_webhook: "Indicator outputs computed by TradingView on the closed 1H candle. Three webhook sources: prophet_r38 (The Prophet v7.02 R38 indicator), prophet_r37_ssot (the shared Prophet structure core computed inside GMI from MizanLib) and gmi_v12_70 (Global Multiverse Interceptor v12.70). Ground truth for the indicator state.",
-    local_computation: "Recomputed locally from raw TradingView OHLCV by three local engines: MizanLib (record engine id 'mizan'), Prophet (engine id 'prophet') and GMI (engine id 'gmi'). Only trust local values whose trust_status is approved_by_parity (24 consecutive candles matched the webhook field by field). values.diagnostics are unverified internals: use them only to explain, never as decisive evidence.",
+    local_computation: "Recomputed locally from raw TradingView OHLCV by three local engines: MizanLib (record engine id 'mizan'), Prophet (engine id 'prophet') and GMI (engine id 'gmi'). Only trust local values whose trust_status is approved_by_parity (24 consecutive candles matched the webhook field by field). values.diagnostics are unverified internals: use them only to explain, never as decisive evidence. The Prophet record also carries values.setup (surfaced as prophet_r38.setup_state): the Prophet setup state behind the HUD's READY line, derived from the same R38 logic; no alert carries it, so parity never compares it.",
     local_engines: {
       MizanLib: "engine id 'mizan'. Shared library core (prophet_structure_core, calculate_prophet_tensor) used by both Prophet and GMI. It has no webhook of its own; it is trusted only while an approved Prophet and an approved GMI both declare this MizanLib identity as their dependency.",
       Prophet: "engine id 'prophet'. values.comparable.prophet_r38 is compared with the prophet_r38 webhook and values.comparable.prophet_r37_ssot with the prophet_r37_ssot webhook.",
@@ -98,7 +98,37 @@ export const KB_V4_CONTENT = {
           ]
         },
         d_enc: { see: "structure_core.d_enc" },
-        structure_subtype: { see: "structure_core.subtype" }
+        structure_subtype: { see: "structure_core.subtype" },
+        setup_state: {
+          lane: "local_computation only. Not a TradingView alert field: the local Prophet engine derives it from the same R38 setup logic that drives the HUD's entry instruction, and parity never compares it.",
+          meaning: "The Prophet setup STATE of the closed candle, which outlives the one-bar buy_confirmed / sell_confirmed event. The HUD shows 'BUY · READY' while the buy setup is still inside its confirmation window (3 closed bars on 1H), the gate passed within this setup and the bullish cycle alignment (inten == 3) still holds; the alert payload only carries the event bar, so on the following bars buy_confirmed is false while the HUD still reads READY.",
+          fields: {
+            buy_ready: "decision_buy_setup_active and last_buy_passed: the HUD's BUY · READY before its macro check. Counts as the Prophet entry trigger for a long on this closed candle.",
+            sell_ready: "Mirror of buy_ready for a short (inten == -3).",
+            buy_pass_age: "Closed bars since the bar where buy_confirmed was true within the current setup (0 on the event bar itself); null when the current setup has not passed.",
+            sell_pass_age: "Mirror of buy_pass_age.",
+            confirmation_window: "The setup's confirmation window in closed bars (3 on 1H).",
+            buy_setup_active: "latest_is_buy and buy_window_active and inten == 3: a buy setup inside its window with the bullish cycle alignment.",
+            sell_setup_active: "Mirror for a sell setup (inten == -3).",
+            buy_passed: "The buy gate passed within the current setup (Pine last_buy_passed).",
+            sell_passed: "Mirror of buy_passed.",
+            superseded_by_trend: "'BUY' when a buy setup inside its window meets a bearish cycle alignment (inten == -3), 'SELL' for the mirror, else null. Not an entry.",
+            macro_z_bull: "Pine is_macro_bull: the KWW z-score (50) is above 0. The GMI z-alignment half of buy_macro_ok is not reproduced locally; the GMI validator rules cover it.",
+            macro_z_bear: "Pine is_macro_bear: the z-score is below 0.",
+            gate_status: "The engine's gate reading: BUY_CONFIRMED, BUY_WAIT_PRICE, BUY_WAIT_STRUCTURE, BUY_WAIT_VOLUME, BUY_WAIT (mirror for SELL) or NO_ACTIVE_SETUP.",
+            instruction: "BUY_READY, SELL_READY, BUY_SETUP_SUPERSEDED_BY_TREND, SELL_SETUP_SUPERSEDED_BY_TREND, a *_WAIT_* gate reading while a setup is active, or NO_SETUP.",
+            buy_confirmed: "The one-bar event of this closed candle, repeated here so the state can be checked against the record.",
+            sell_confirmed: "Mirror of buy_confirmed."
+          },
+          refs: [
+            ref("prophet_r38", 424, "bool decision_buy_setup_active = latest_is_buy and buy_window_active and inten == 3.0"),
+            ref("prophet_r38", 426, "bool buy_setup_superseded_by_trend"),
+            ref("prophet_r38", 428, "bool last_buy_passed"),
+            ref("prophet_r38", 655, "bool buy_macro_ok = is_macro_bull and gmi_z_alignment_code == 1"),
+            ref("prophet_r38", 675, "\"BUY · READY\""),
+            ref("prophet_r38", 93, "confirmation_window = auto_window")
+          ]
+        }
       }
     },
 
@@ -228,20 +258,22 @@ export const KB_V4_CONTENT = {
     prophet_is_base_bias: true,
     base_bias_source: "prophet_r37_ssot.direction (persistent consensus). prophet_r38.direction/buy_confirmed/sell_confirmed are entry TRIGGER events, not bias.",
     gmi_role: "validate, block or wait on Prophet setups; must not silently overwrite Prophet's bias",
+    candle_semantics: "Every field describes the closed candle being decided: the bar that just closed (candle_time / candle_key), never the running candle. The alerts fire at bar close and the local engines compute the last closed bar. 'On the closed candle' below means that bar.",
+    entry_trigger: "The Prophet entry trigger is either the one-bar event (prophet_r38.buy_confirmed / sell_confirmed true on the closed candle) or the setup still READY (prophet_r38.setup_state.buy_ready / sell_ready: the confirmation passed within the current setup's confirmation window and the cycle alignment still holds; the Prophet HUD's READY line). A trigger alone is never enough: the GMI conditions are checked on the same closed candle.",
     actionable_long_requires: [
-      "prophet_r38.buy_confirmed == true on this candle (prefer buy_high_quality)",
-      "gmi_v12_70.conflict == false and gmi_v12_70.gate in {1, 2} (2 = full confluence)",
-      "gmi_v12_70.verdict != -3, and prophet_r38.t_enc != 4"
+      "entry trigger: prophet_r38.buy_confirmed == true on the closed candle (prefer buy_high_quality), or prophet_r38.setup_state.buy_ready == true (local lane; see field_dictionary.prophet_r38.fields.setup_state)",
+      "gmi_v12_70.conflict == false and gmi_v12_70.gate in {1, 2} (1 is sufficient; 2 = full confluence; never require gate 2)",
+      "gmi_v12_70.verdict != -3 (never require verdict 3), and prophet_r38.t_enc != 4"
     ],
     actionable_short_requires: [
-      "prophet_r38.sell_confirmed == true on this candle (prefer sell_high_quality)",
-      "gmi_v12_70.conflict == false and gmi_v12_70.gate in {1, 2}",
-      "gmi_v12_70.verdict != 3"
+      "entry trigger: prophet_r38.sell_confirmed == true on the closed candle (prefer sell_high_quality), or prophet_r38.setup_state.sell_ready == true (local lane)",
+      "gmi_v12_70.conflict == false and gmi_v12_70.gate in {1, 2} (1 is sufficient; never require gate 2)",
+      "gmi_v12_70.verdict != 3 (never require verdict -3)"
     ],
     always_wait_when: [
       "any required lane is missing or evidence fusion is incomplete",
       "gmi_v12_70.conflict == true or gate == -1",
-      "gmi_v12_70.verdict is 0 because of chaos, entropy trap or volume veto, and there is no confirmed Prophet trigger",
+      "gmi_v12_70.verdict is 0 because of chaos, entropy trap or volume veto, and there is neither a confirmed Prophet trigger nor a READY setup",
       "webhook and approved local values disagree on a decisive field"
     ],
     risk_management_signals: [

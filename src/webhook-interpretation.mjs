@@ -103,11 +103,23 @@ function interpretProphet(r38, r37) {
   const tm = has38 ? TRADE_MANAGEMENT[num(r38.t_enc)] ?? "not reported" : null;
   const confirmed = buy ? 1 : sell ? -1 : 0;
   const confirmationLean = bEnc === 3 ? 1 : bEnc === -3 || bEnc === -4 ? -1 : 0;
+  // The setup state of the local lane (owner report 2026-11-09): the HUD's READY line, which
+  // outlives the one-bar confirmation event. Read only when the record carries it.
+  const setup = has38 && present(r38.setup_state) ? r38.setup_state : null;
+  const ready = setup?.buy_ready === true ? 1 : setup?.sell_ready === true ? -1 : 0;
+  const bars = (n) => (n === 1 ? "1 bar" : `${n} bars`);
+  const setupText = !setup ? ""
+    : ready && !confirmed
+      ? ` Its ${ready > 0 ? "BUY" : "SELL"} setup is still READY: the confirmation passed ${Number.isInteger(ready > 0 ? setup.buy_pass_age : setup.sell_pass_age) ? bars(ready > 0 ? setup.buy_pass_age : setup.sell_pass_age) + " ago" : "earlier"}, inside its ${Number.isInteger(setup.confirmation_window) ? bars(setup.confirmation_window) : ""} confirmation window, and the ${ready > 0 ? "bullish" : "bearish"} cycle alignment holds.`
+      : setup.superseded_by_trend
+        ? ` Its ${setup.superseded_by_trend} setup was superseded by the opposite cycle alignment.`
+        : "";
   return {
     source: "Prophet",
     confirmed,
-    lean: confirmed || dir || structure.lean || confirmationLean,
-    text: `Prophet: ${signal}.${direction} The structure shows ${structure.text}${confirmation ? `, and ${confirmation}` : ""}.${event}${tm ? ` Its trade-management state is ${tm}.` : ""}`
+    setup_ready: ready,
+    lean: confirmed || ready || dir || structure.lean || confirmationLean,
+    text: `Prophet: ${signal}.${setupText}${direction} The structure shows ${structure.text}${confirmation ? `, and ${confirmation}` : ""}.${event}${tm ? ` Its trade-management state is ${tm}.` : ""}`
   };
 }
 

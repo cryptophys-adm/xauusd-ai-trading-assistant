@@ -54,6 +54,11 @@ test("the Reasoner's prompt: it decides last, follows the consensus, and departs
   assert.match(text, /Never decide against the room's bias/);
   assert.match(text, /t_enc 4/);
   assert.match(text, /GMI conflict or a GMI gate of -1 lowers your confidence; it never vetoes on its own/);
+  // Owner report 2026-11-09: the closed candle, the READY setup as a trigger, and no invented gate 2 / verdict 3 rule.
+  assert.match(text, /closed candle being decided \(EVIDENCE\.candle_time, the bar that just closed\), never the running candle/);
+  assert.match(text, /prophet_r38\.setup_state\.buy_ready \/ sell_ready/);
+  assert.match(text, /gate 1 or 2 \(1 is enough; 2 is full confluence\)/);
+  assert.match(text, /Never demand gate 2 or verdict 3 for an entry/);
   assert.ok(lines.includes("LANES") && lines.includes("TEXT") && lines.includes("PLAN"));
   assert.ok(lines.indexOf("CONSENSUS:") < lines.indexOf("EVIDENCE:"));
   assert.doesNotMatch(text, /ANALYST:|COUNSELOR:/, "the Analyst and the Counselor are retired");

@@ -103,13 +103,19 @@ export function tfAgentName(id) {
   return id === "moderator" ? "Moderator" : String(id);
 }
 
-/** No confirmation, no entry: BUY or SELL needs that chart's Prophet R38 confirmation. */
+/**
+ * No confirmation, no entry: BUY or SELL needs that chart's Prophet R38 confirmation on the closed
+ * bar, or its setup still READY (owner report 2026-11-09: the confirmation passed within the
+ * current setup's confirmation window and the cycle alignment still holds; the HUD's READY line).
+ */
 export function tfEntryAllowed(stance, confirmations) {
   if (stance !== "BUY" && stance !== "SELL") return true;
-  return confirmations?.chart_prophet_r38?.[stance === "BUY" ? "buy_confirmed" : "sell_confirmed"] === true;
+  const c = confirmations?.chart_prophet_r38;
+  const side = stance === "BUY" ? "buy" : "sell";
+  return c?.[`${side}_confirmed`] === true || c?.[`${side}_setup_ready`] === true;
 }
 const ruleText = (spec) =>
-  `Rule: no confirmation, no entry. BUY needs a confirmed buy signal of the ${spec.label} Prophet R38; SELL needs a confirmed sell signal. Without the matching confirmation the stance is WAIT, or HOLD / CLOSE for a position already open.`;
+  `Rule: no confirmation, no entry. BUY needs a confirmed buy signal of the ${spec.label} Prophet R38 on the closed bar, or its BUY setup still READY (the confirmation passed within the setup's confirmation window and the bullish cycle alignment holds); SELL needs the confirmed sell signal or the SELL setup READY. Without either the stance is WAIT, or HOLD / CLOSE for a position already open.`;
 
 const OPENING_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
@@ -222,11 +228,17 @@ export async function tfEvidence(env, chart, candleKey) {
 
   const prophet = await localProphet(env, candleKey);
   const r38 = prophet?.record?.values?.comparable?.prophet_r38 || null;
+  const setup = prophet?.record?.values?.setup || null;
   const funnel = snapshot?.huds?.r37_funnel?.fields || null;
   const confirmations = {
     chart_prophet_r38: {
       buy_confirmed: (r38?.buy_confirmed ?? funnel?.buy_confirmed) === true,
       sell_confirmed: (r38?.sell_confirmed ?? funnel?.sell_confirmed) === true,
+      // The setup state (owner report 2026-11-09): READY while the confirmation that passed is
+      // still inside its window and the cycle alignment holds; the local record carries it.
+      buy_setup_ready: setup?.buy_ready === true,
+      sell_setup_ready: setup?.sell_ready === true,
+      ...(setup ? { setup_pass_age: setup.buy_ready ? setup.buy_pass_age : setup.sell_ready ? setup.sell_pass_age : null, setup_window: setup.confirmation_window ?? null, setup_instruction: setup.instruction ?? null } : {}),
       approved_by_parity: prophet?.approved === true,
       source: r38 ? "the local Prophet R38 record of this bar" : funnel ? "the R37 funnel HUD of this bar" : "not available"
     }

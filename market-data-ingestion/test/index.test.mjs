@@ -240,6 +240,13 @@ test("publisher posts mizan+prophet+gmi local_computation for the latest closed 
   assert.deepEqual(ai.posts.map((p) => p.body.engine), ["mizan", "prophet", "gmi", "gmi_hud"]);
   assert.equal(first.candle_key, `OANDA:XAUUSD:60:${lastH1.time * 1000}`);
   assert.equal(ai.posts[1].body.values.candle.c, lastH1.close);
+  // The Prophet setup state rides on the prophet record (owner report 2026-11-09), consistent with its events.
+  const setup = ai.posts[1].body.values.setup;
+  assert.equal(first.prophet_setup.status, "attached", JSON.stringify(first.prophet_setup));
+  assert.equal(setup.confirmation_window, 3);
+  assert.equal(setup.buy_confirmed, ai.posts[1].body.values.comparable.prophet_r38.buy_confirmed);
+  assert.equal(typeof setup.buy_ready, "boolean");
+  assert.equal(ai.posts[2].body.values.setup, undefined, "only the prophet record carries it");
   assert.deepEqual(first.not_produced, []);
   assert.equal(first.hud_parity.engine, "gmi_hud");
   assert.equal(first.hud_parity.http_status, 202);
