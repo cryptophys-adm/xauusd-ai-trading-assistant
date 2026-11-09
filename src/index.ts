@@ -201,6 +201,7 @@ import {
 } from "./h1-consensus.mjs";
 import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
 import { runHealthAlerts, readHealthAlerts } from "./health-alerts.mjs";
+import { classifyRejection, recordRejection } from "./webhook-rejections.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
 import { DECISION_TEXT_RULE, plainDecisionText } from "./plain-decision.mjs";
@@ -1156,6 +1157,11 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   const headerSecret = request.headers.get("x-webhook-secret") || "";
   const bodySecret = asText(body.secret);
   if (headerSecret !== env.WEBHOOK_SECRET && bodySecret !== env.WEBHOOK_SECRET) {
+    // Keep why (no part of either secret) so a 401 in TradingView's log can be explained.
+    await recordRejection(env.DB, classifyRejection({ headerSecret, bodySecret, expected: env.WEBHOOK_SECRET }), {
+      source: asText(body.source), timeframe: asText(body.timeframe), candleTime: asText(body.candle_time || body.timestamp),
+      contentType: request.headers.get("content-type"), userAgent: request.headers.get("user-agent")
+    });
     return json({ error: "Unauthorized" }, 401);
   }
 

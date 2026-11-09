@@ -1,0 +1,37 @@
+name: Inspect AI Worker versions (read-only)
+
+# Read-only (owner report 2026-11-09, every TradingView alert answered 401): lists the production AI
+# Worker's deployments and versions, which name each version's trigger (an upload, or a secret
+# change with `wrangler secret put` or the dashboard), and the NAMES of its secrets. It never
+# deploys, never changes a secret and never prints a secret value (Cloudflare does not return one).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Deployments, versions and secret names
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "== deployments (newest last)"
+          npx wrangler deployments list --name xauusd-ai-trading-assistant
+          echo "== versions"
+          npx wrangler versions list --name xauusd-ai-trading-assistant
+          echo "== secret names"
+          npx wrangler secret list --name xauusd-ai-trading-assistant | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const x of JSON.parse(s.slice(s.indexOf("["))))console.log(x.name, x.type)}catch{console.log("secret list unavailable")}})'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

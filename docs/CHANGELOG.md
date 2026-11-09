@@ -4,6 +4,9 @@ This file is the single source of truth for repository changes. Topology and
 deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
+## 2026-11-09
+- feat(webhook): a rejected TradingView alert says why (owner report 2026-11-09: every alert since the week open answered "401 Unauthorized"; the Pine candidates' five payloads are valid JSON with the `secret` field, so the Worker kept no trace of what it refused). POST /webhook now stores each 401 in D1 `webhook_rejections` with its reason: no secret (empty CTA Webhook Secret input), extra whitespace, letter case, a different length, or a different secret of the same length. It keeps lengths, source, timeframe, candle time, content type and user agent, never a character of either secret; at most 300 rows an hour, pruned after 14 days. The response stays a bare "Unauthorized". A `webhook_rejected` health alert (Priority Queue, `xauusd-risk-manager`) opens while rejections arrive and resolves an hour after the last. New read-only workflow `inspect-ai-worker.yml` (manual) lists the AI Worker's deployments, versions (an upload or a secret change) and secret names, never a value.
+
 ## 2026-11-08
 
 - fix(key-levels): fewer, independent candidate zones (owner report 2026-11-08: 11 candidates, too noisy). The four chart-plane readers added about eleven level kinds on four charts, and a source was a (kind, timeframe) pair, so one 15m chart's KWW mean, Fibonacci and PA line made three "sources". A source is now a level family (twelve families), a family on one timeframe adds only its heaviest level to the score, and at most two candidates per side remain (strongest, then nearest; a zone at price stays; the rest read `qualified`). `cryptophys.key-level-agent.v2`. The Nexus panel and chart say "families". Tests added.

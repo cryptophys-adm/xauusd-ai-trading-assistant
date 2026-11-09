@@ -1,0 +1,93 @@
+// Webhook rejections (owner report 2026-11-09: every TradingView alert since the week open answered
+// "401 Unauthorized" while the owner holds that the secret did not change).
+//
+// A rejected POST /webhook used to leave no trace: TradingView's alert log showed "401" and the
+// Worker kept nothing. Now each rejection is one D1 row that says WHY, without ever storing or
+// returning the secret or any part of it:
+//   secret_missing         neither the body `secret` nor the x-webhook-secret header carries one
+//                          (the indicator's "CTA Webhook Secret" input is empty in the alert);
+//   secret_whitespace      the secret matches once leading/trailing spaces or line breaks are cut
+//                          (a paste with a space or a newline);
+//   secret_case            it matches ignoring letter case;
+//   secret_length_differs  a different secret: its length differs from WEBHOOK_SECRET's;
+//   secret_mismatch        a different secret of the same length.
+// Only lengths, never characters, are kept; the rows hold source, timeframe, candle time and the
+// request's content type and user agent, and are pruned after 14 days. The health detector opens
+// a "webhook_rejected" alert (Priority Queue) while rejections keep arriving.
+
+export const WEBHOOK_REJECTIONS_SQL =
+  "CREATE TABLE IF NOT EXISTS webhook_rejections (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TEXT NOT NULL, reason TEXT NOT NULL, secret_field TEXT NOT NULL, received_len INTEGER NOT NULL, expected_len INTEGER NOT NULL, source TEXT, timeframe TEXT, candle_time TEXT, content_type TEXT, user_agent TEXT)";
+const RETENTION_MS = 14 * 24 * 3600_000;
+export const MAX_PER_HOUR = 300;
+
+export const REJECTION_TEXT = Object.freeze({
+  secret_missing: "the alert carries no secret (the indicator's CTA Webhook Secret input is empty in this alert)",
+  secret_whitespace: "the secret has extra spaces or a line break around it",
+  secret_case: "the secret differs only in letter case",
+  secret_length_differs: "a different secret (its length differs from the Worker's)",
+  secret_mismatch: "a different secret of the same length"
+});
+
+/**
+ * Pure: why a request's secrets do not match `expected`. Returns null when one matches. Never
+ * returns any character of either secret.
+ */
+export function classifyRejection({ headerSecret = "", bodySecret = "", expected = "" } = {}) {
+  if (!expected) return null;
+  if (headerSecret === expected || bodySecret === expected) return null;
+  const field = bodySecret ? "body" : headerSecret ? "header" : "none";
+  const got = bodySecret || headerSecret;
+  const out = (reason) => ({ reason, secret_field: field, received_len: got.length, expected_len: expected.length });
+  if (!got) return out("secret_missing");
+  const candidates = [bodySecret, headerSecret].filter(Boolean);
+  if (candidates.some((s) => s.trim() === expected)) return out("secret_whitespace");
+  if (candidates.some((s) => s.toLowerCase() === expected.toLowerCase())) return out("secret_case");
+  return out(got.length !== expected.length ? "secret_length_differs" : "secret_mismatch");
+}
+
+const clip = (v, n) => (typeof v === "string" && v ? v.slice(0, n) : null);
+
+/** Stores one rejection row and prunes rows past the retention. Never throws. */
+export async function recordRejection(db, rejection, { source = null, timeframe = null, candleTime = null, contentType = null, userAgent = null } = {}, now = Date.now()) {
+  if (!db || !rejection) return false;
+  try {
+    await db.prepare(WEBHOOK_REJECTIONS_SQL).run();
+    // A flood of unauthenticated requests must not fill D1: at most MAX_PER_HOUR rows an hour.
+    const recent = await db.prepare("SELECT COUNT(*) AS n FROM webhook_rejections WHERE received_at >= ?").bind(new Date(now - 3600_000).toISOString()).first();
+    if (Number(recent?.n) >= MAX_PER_HOUR) return false;
+    await db.prepare(
+      "INSERT INTO webhook_rejections (received_at, reason, secret_field, received_len, expected_len, source, timeframe, candle_time, content_type, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).bind(new Date(now).toISOString(), rejection.reason, rejection.secret_field, rejection.received_len, rejection.expected_len, clip(source, 40), clip(timeframe, 8), clip(candleTime, 24), clip(contentType, 60), clip(userAgent, 80)).run();
+    await db.prepare("DELETE FROM webhook_rejections WHERE received_at < ?").bind(new Date(now - RETENTION_MS).toISOString()).run();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Rejections since `sinceMs`: { count, first_at, last_at, reasons: { reason: n }, sources: [..],
+ * received_lengths: [..], expected_len }. Never throws; an absent table reads as none.
+ */
+export async function rejectionSummary(db, sinceMs) {
+  const empty = { count: 0, first_at: null, last_at: null, reasons: {}, sources: [], received_lengths: [], expected_len: null };
+  if (!db) return empty;
+  let rows = [];
+  try {
+    rows = (await db.prepare("SELECT received_at, reason, received_len, expected_len, source FROM webhook_rejections WHERE received_at >= ? ORDER BY received_at").bind(new Date(sinceMs).toISOString()).all()).results || [];
+  } catch {
+    return empty;
+  }
+  if (!rows.length) return empty;
+  const reasons = {};
+  for (const r of rows) reasons[r.reason] = (reasons[r.reason] || 0) + 1;
+  return {
+    count: rows.length,
+    first_at: rows[0].received_at,
+    last_at: rows.at(-1).received_at,
+    reasons,
+    sources: [...new Set(rows.map((r) => r.source).filter(Boolean))].sort(),
+    received_lengths: [...new Set(rows.map((r) => Number(r.received_len)))].sort((a, b) => a - b),
+    expected_len: Number(rows.at(-1).expected_len)
+  };
+}

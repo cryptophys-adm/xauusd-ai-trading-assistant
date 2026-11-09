@@ -15,6 +15,7 @@
 // the trading chain: an alert never changes a decision, a room or a parity status.
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { engineLabel } from "./engine-names.mjs";
+import { rejectionSummary, REJECTION_TEXT } from "./webhook-rejections.mjs";
 
 export const HEALTH_AGENT_ID = "xauusd-risk-manager";
 export const HEALTH_REPORTS_PER_HOUR = 3;
@@ -111,6 +112,18 @@ export async function detectHealthIssues(env, now = Date.now()) {
     if (m5 && now - Date.parse(m5.close_time) < 20 * 60_000 && (!Number.isFinite(roomMs) || now - roomMs > 45 * 60_000)) {
       out.push({ key: "war_room_stale", kind: "war_room_stale", subject: `The Live War Room 15m has not met since ${Number.isFinite(roomMs) ? hhmm(roomMs) : "it was enabled"} while 5m bars keep closing`, detail: { last_room: room?.r ?? null, last_m5_close: m5.close_time } });
     }
+  }
+
+  // 8. TradingView alerts rejected by POST /webhook (401) in the last hour: the reason, never the secret.
+  const rej = await rejectionSummary(db, now - HOUR);
+  if (rej.count > 0) {
+    const [top] = Object.entries(rej.reasons).sort((a, b) => b[1] - a[1]);
+    const lengths = top[0] === "secret_missing" ? "" : `; secret length received ${rej.received_lengths.join("/")}, the Worker's ${rej.expected_len}`;
+    out.push({
+      key: "webhook_rejected", kind: "webhook_rejected",
+      subject: `TradingView webhook rejected (401): ${rej.count} alert${rej.count === 1 ? "" : "s"} since ${hhmm(Date.parse(rej.first_at))} (${rej.sources.join(", ") || "unknown source"}): ${REJECTION_TEXT[top[0]] || top[0]}${lengths}`,
+      detail: rej
+    });
   }
   return out;
 }
