@@ -150,3 +150,16 @@ test("backfill retries a degraded run while its evidence may still arrive (produ
   await backfillRecentAnalyses({ ...env, DB: dbWith({ status: "degraded", attempt_count: 4 }) }, { now: closeMs + 10 * 60_000, lookback: 1, loadPayloads: async () => ({}), runAnalysis: run });
   assert.equal(runs.length, 1, "no retry past the attempt cap");
 });
+
+test("the backfill records nothing for a closed-market hour (post-reopen audit 2026-11-09)", async () => {
+  const { goldClosedAt } = await import("../src/parity-sweep.mjs");
+  assert.equal(goldClosedAt(Date.parse("2026-11-07T10:00:00Z")), true, "Saturday");
+  assert.equal(goldClosedAt(Date.parse("2026-11-08T22:00:00Z")), true, "Sunday 17:00 New York");
+  assert.equal(goldClosedAt(Date.parse("2026-11-08T23:00:00Z")), false, "Sunday 18:00 New York: open");
+  assert.equal(goldClosedAt(Date.parse("2026-11-06T21:00:00Z")), false, "Friday 16:00 New York: the last hour");
+  assert.equal(goldClosedAt(Date.parse("2026-11-06T22:00:00Z")), true, "Friday 17:00 New York");
+  const runs = [];
+  const db = { prepare() { return { bind() { return { async first() { return null; } }; } }; } };
+  await backfillRecentAnalyses({ DB: db, WEBHOOK_BUFFER: kv({}) }, { now: Date.parse("2026-11-07T12:40:00Z"), lookback: 2, loadPayloads: async () => ({}), runAnalysis: async (_e, k) => { runs.push(k); } });
+  assert.deepEqual(runs, [], "Saturday: no fail-closed WAIT");
+});

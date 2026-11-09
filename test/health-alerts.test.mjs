@@ -123,3 +123,19 @@ test("a denial is final and never retried; without the binding alerts are still 
   assert.deepEqual(r.published, []);
   assert.equal((await readHealthAlerts(local.DB, { now: NOW })).open[0].kind, "war_room_stale");
 });
+
+test("the stale War Room check counts from the first bar after a market gap and dates an old meeting (production 2026-11-08 23:12)", async () => {
+  // Friday's last 5m bar closed 22:00 UTC; the market reopened Sunday 23:00; it is 23:12.
+  const now = Date.parse("2026-11-08T23:12:00Z");
+  const friday = Array.from({ length: 6 }, (_, i) => { const o = Date.parse("2026-11-06T21:30:00Z") + i * 300_000; return { open_time: iso(o), close_time: iso(o + 300_000), close: 4000 }; });
+  const sunday = Array.from({ length: 2 }, (_, i) => { const o = Date.parse("2026-11-08T23:00:00Z") + i * 300_000; return { open_time: iso(o), close_time: iso(o + 300_000), close: 4000 }; });
+  const e = env({ WAR_ROOM_ENABLED: "true", SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|5m": JSON.stringify({ candles: [...friday, ...sunday] }) }) });
+  e.DB.raw.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, status, ts, body_json) VALUES ('warroom:x', '2026-11-06T22:00:00.000Z', 'conclusion', 'ok', '1', '{}')").run();
+  assert.ok(!(await detectHealthIssues(e, now)).some((i) => i.kind === "war_room_stale"), "12 minutes into the new session: not stale");
+  const later = Date.parse("2026-11-09T00:00:00Z");
+  const more = [...friday, ...sunday, ...Array.from({ length: 10 }, (_, i) => { const o = Date.parse("2026-11-08T23:10:00Z") + i * 300_000; return { open_time: iso(o), close_time: iso(o + 300_000), close: 4000 }; })];
+  const e2 = env({ WAR_ROOM_ENABLED: "true", SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|5m": JSON.stringify({ candles: more }) }) });
+  e2.DB.raw.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, status, ts, body_json) VALUES ('warroom:x', '2026-11-06T22:00:00.000Z', 'conclusion', 'ok', '1', '{}')").run();
+  const stale = (await detectHealthIssues(e2, later)).find((i) => i.kind === "war_room_stale");
+  assert.match(stale.subject, /has not met since 2026-11-06 22:00 UTC/);
+});
