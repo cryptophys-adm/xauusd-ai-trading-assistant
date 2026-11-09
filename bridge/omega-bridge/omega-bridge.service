@@ -1,0 +1,21 @@
+[Unit]
+Description=Cryptophys Omega Broker Bridge
+After=network-online.target mt5-terminal.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/omega-bridge
+EnvironmentFile=/etc/omega-bridge/env
+ExecStart=/usr/bin/node /opt/omega-bridge/bin/omega-bridge.mjs
+Restart=always
+RestartSec=5
+MemoryMax=128M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=omega-bridge
+
+[Install]
+WantedBy=multi-user.target
