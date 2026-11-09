@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { classifyRejection, recordRejection, rejectionSummary, webhookLaneStatus, MAX_PER_HOUR } from "../src/webhook-rejections.mjs";
+import { classifyRejection, recordRejection, rejectionSummary, webhookLaneStatus, fingerprint, resetRejectionSchemaCacheForTests, MAX_PER_HOUR } from "../src/webhook-rejections.mjs";
 import { detectHealthIssues } from "../src/health-alerts.mjs";
 
 const EXPECTED = "a1b2c3d4e5f6";
@@ -78,4 +78,20 @@ test("System status lane: the last accepted alert and the last hour's rejections
   assert.deepEqual((await rejectionSummary(db, NOW - 3600_000)).received_lengths, [12], "the probe's length 1 is not the alerts'");
   const quiet = await webhookLaneStatus(d1(), NOW);
   assert.deepEqual([quiet.last_accepted_at, quiet.rejected_last_hour, quiet.top_reason], [null, 0, null]);
+});
+
+test("fingerprints: the first 8 hex of each secret's SHA-256, added to a table of the first release, never the secret", async () => {
+  const { createHash } = await import("node:crypto");
+  const fp = (v) => createHash("sha256").update(v).digest("hex").slice(0, 8);
+  assert.equal(await fingerprint("abc"), "ba7816bf", "the same as sha256sum");
+  assert.equal(await fingerprint(""), null);
+  resetRejectionSchemaCacheForTests();
+  const db = d1();
+  // The production table of #181 has no fingerprint columns.
+  db.raw.exec("CREATE TABLE webhook_rejections (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TEXT NOT NULL, reason TEXT NOT NULL, secret_field TEXT NOT NULL, received_len INTEGER NOT NULL, expected_len INTEGER NOT NULL, source TEXT, timeframe TEXT, candle_time TEXT, content_type TEXT, user_agent TEXT)");
+  const sent = "0123456789abcdef0123456789abcdef", held = "fedcba9876543210fedcba9876543210";
+  assert.equal(await recordRejection(db, classifyRejection({ bodySecret: sent, expected: held }), { source: "gmi_v12_70", receivedSecret: sent, expectedSecret: held }, NOW), true);
+  const row = db.raw.prepare("SELECT * FROM webhook_rejections").get();
+  assert.deepEqual([row.received_fp, row.expected_fp], [fp(sent), fp(held)]);
+  assert.ok(!JSON.stringify(row).includes(sent) && !JSON.stringify(row).includes(held));
 });
