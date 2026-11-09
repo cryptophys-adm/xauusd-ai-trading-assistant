@@ -1,16 +1,15 @@
 import { useEffect, useState } from "react";
-import { Clock3, Compass, Gauge, Globe2, Layers3, Radar, Users } from "lucide-react";
+import { Clock3, Compass, Gauge, Globe2, Radar, Users } from "lucide-react";
 import { Badge, Panel, Skeleton } from "./ui";
 import { Stance } from "./Stance";
-import { C, DivergingBar, Donut, LevelLadder, RegimeRadar, SentimentGauge, StackedBar, leanColor } from "./charts";
+import { C, DivergingBar, Donut, RegimeRadar, SentimentGauge, StackedBar, leanColor } from "./charts";
 import { useMarket, roomLean, stanceMix, m5Lean, leanLabel, interpretation } from "../lib/market";
 import { useWarRoom } from "../lib/warroom";
 import { useTab, tabLabel, TAB_HUD_TF } from "../lib/tab";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
-import { utc } from "../lib/format";
 import GlobalDecision from "./GlobalDecision";
-import KeyLevelAgent from "./KeyLevelAgent";
+import KeyLevels from "./KeyLevels";
 
 
 function SentimentCard() {
@@ -77,12 +76,7 @@ function TrendLadder({ ladder }: { ladder: ReturnType<typeof useLadder> }) {
   );
 }
 
-const BAND_TEXT: Record<string, string> = {
-  above_h6: "above H6", h5_h6: "between H5 and H6", h4_h5: "in the H4–H5 breakout zone", h3_h4: "between H3 and H4", l3_h3: "inside the H3–L3 range",
-  l4_l3: "between L4 and L3", l5_l4: "in the L4–L5 breakdown zone", l6_l5: "between L6 and L5", below_l6: "below L6"
-};
-
-/** Camarilla/CPR ladder and regime radar of the active tab's chart (News reads the 1-hour chart). */
+/** Camarilla/CPR levels and regime radar of the active tab's chart (News reads the 1-hour chart). */
 function useLevels() {
   const { tab } = useTab();
   const tf = TAB_HUD_TF[tab];
@@ -91,37 +85,6 @@ function useLevels() {
 }
 
 const chartName = (tab: string) => (tab === "NEWS" ? "1H" : tabLabel(tab as any));
-
-function LevelsCard({ levels, loading, tab }: { levels: any; loading: boolean; tab: string }) {
-  const [pick, setPick] = useState<string | null>(null);
-  const sets = levels?.camarilla ?? [];
-  const set = sets.find((s: any) => s.tf === pick) ?? sets[0];
-  useEffect(() => setPick(null), [tab]);
-  const verified = levels?.calibration?.levels === "computed_from_verified_bars";
-  return (
-    <Panel title={`Levels · ${chartName(tab)}`} icon={<Layers3 className="h-3.5 w-3.5 text-amber-300" />}
-      right={levels && <Badge tone={verified ? "green" : "slate"}>{verified ? "from verified bars" : "not yet calibrated"}</Badge>}>
-      {loading ? <Skeleton rows={5} /> : !set ? <p className="text-[12px] text-slate-500">No HUD snapshot for this chart yet.</p> : (
-        <>
-          {sets.length > 1 && (
-            <div className="mb-2 flex gap-1">
-              {sets.map((s: any) => (
-                <button key={s.tf} type="button" onClick={() => setPick(s.tf)}
-                  className={`rounded-md border px-2 py-0.5 text-[10px] ${s.tf === set.tf ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-100" : "border-white/10 text-slate-400 hover:text-slate-200"}`}>{s.label}</button>
-              ))}
-            </div>
-          )}
-          <LevelLadder levels={set.levels} close={levels.close} daily={levels.cpr?.daily} weekly={levels.cpr?.weekly} />
-          <p className="mt-1 text-[11px] text-slate-400">
-            Close <span className="mono text-slate-200">{levels.close?.toFixed(2) ?? "—"}</span> is {BAND_TEXT[set.band] ?? "off the ladder"} of the {String(set.label).toLowerCase()} Camarilla
-            {levels.cpr?.daily?.position ? `, ${levels.cpr.daily.position === "above_tc" ? "above" : levels.cpr.daily.position === "below_bc" ? "below" : "inside"} the daily pivot range` : ""}.
-          </p>
-          <p className="mt-1 text-[10px] text-slate-600">Snapshot {utc(levels.computed_at)} · Camarilla and pivots are formulas of closed bars.</p>
-        </>
-      )}
-    </Panel>
-  );
-}
 
 function regimeText(axes: any[]) {
   const v = Object.fromEntries(axes.map((a) => [a.key, a.value]));
@@ -242,9 +205,10 @@ function SessionClock() {
 }
 
 /**
- * Right panel, charts only: the Global Conclusion first, then sentiment, trend by timeframe, the
- * level ladder and regime radar of the active tab's chart, agent consensus, macro drivers and the
- * session clock.
+ * Right panel, charts only: the Global Conclusion first, then the key levels (the Camarilla set of
+ * the active tab's chart and the Key Level Agent's zones on one price axis, backlog item 18),
+ * sentiment, trend by timeframe, the regime radar of the active tab's chart, agent consensus, macro
+ * drivers and the session clock.
  */
 export default function AssistantPanel({ className }: { className?: string }) {
   const ladder = useLadder();
@@ -253,10 +217,9 @@ export default function AssistantPanel({ className }: { className?: string }) {
     <div className={className}>
       <div className="space-y-4">
         <GlobalDecision />
-        <KeyLevelAgent />
+        <KeyLevels levels={levels} loading={loading} tab={tab} />
         <SentimentCard />
         <TrendLadder ladder={ladder} />
-        <LevelsCard levels={levels} loading={loading} tab={tab} />
         <RegimeCard levels={levels} loading={loading} tab={tab} />
         <ConsensusCard ladder={ladder} />
         <MacroDrivers />

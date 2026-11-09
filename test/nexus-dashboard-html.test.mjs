@@ -85,9 +85,14 @@ test("the UI keeps the Console's obsidian palette and calls only same-origin rea
   assert.ok(assistant.indexOf("<GlobalDecision") >= 0 && assistant.indexOf("<GlobalDecision") < assistant.indexOf("<SentimentCard"), "the global decision leads the right panel");
   assert.doesNotMatch(assistant, /GlobalConclusion|StrategyPanel/, "the two former cards are merged");
   // Key Level Agent (owner decision 2026-11-06): the candidate zones of every chart's key levels.
-  const keyLevels = ui("src/components/KeyLevelAgent.tsx");
-  for (const word of ["Key Level Agent", "candidate zones", "key_levels", "sources"]) assert.ok(keyLevels.includes(word), word);
-  assert.ok(assistant.indexOf("<KeyLevelAgent") > assistant.indexOf("<GlobalDecision"), "the zones follow the decision");
+  // Backlog item 18 (owner approval 2026-11-09): one Key levels panel with the active tab's
+  // Camarilla set and the agent's zones on one price axis, replacing the Levels card.
+  const keyLevels = ui("src/components/KeyLevels.tsx");
+  for (const word of ["Key levels", "Key Level Agent", "candidate zones", "key_levels", "sources", "camarilla", "Camarilla · pivots", "Zones · every chart", "KeyLevelMap"]) assert.ok(keyLevels.includes(word), word);
+  assert.match(keyLevels, /gradientUnits="userSpaceOnUse"/, "the price line paints on a zero-height line");
+  assert.match(keyLevels, /useId\(\)\.replace\(\/:\/g, ""\)/, "no colon in a url(#…) reference");
+  assert.ok(assistant.indexOf("<KeyLevels") > assistant.indexOf("<GlobalDecision"), "the zones follow the decision");
+  assert.doesNotMatch(assistant, /LevelsCard|<KeyLevelAgent|LevelLadder/, "the Levels card and the Key Level Agent panel are one panel");
   // Owner request 2026-11-06: the zones are drawn on the chart, with the plan's price lines.
   const chartSrc = ui("src/components/PriceChart.tsx");
   assert.match(chartSrc, /attachPrimitive\(zonesRef\.current\)/);

@@ -5,7 +5,7 @@ stays the canonical description of the system; `docs/CHANGELOG.md` records what 
 leaves this file when it is done (and enters the CHANGELOG) or when the owner drops it. This is the
 only backlog: the older lists (`docs/BRIEF_HUD_AGENTS.md` §6, `docs/RFC_INDICATOR_AGENT_PLATFORM.md`
 §9 and §10) were merged here on 2026-11-07 (owner request). Item numbers are stable: a number that
-is gone was done or dropped (CHANGELOG 2026-11-09 for items 0 to 4, 8, 9, 13, 16 and 17).
+is gone was done or dropped (CHANGELOG 2026-11-09 for items 0 to 4, 8, 9, 13, 16, 17 and 18).
 
 ## Verified after the reopen (2026-11-09, items 0 to 4 closed)
 
@@ -61,7 +61,3 @@ setup READY state that never reached the decision (#192).
 ## Calibration in progress
 
 15. **4H and D1 parity** (alerts installed by the owner on 2026-11-09, about 03:30 UTC; H1 and 15m earlier the same morning). The `prophet_h4` / `gmi_h4` identities need 24 matches (about 4 trading days), `prophet_d1` / `gmi_d1` about 5 weeks. Until then the 4H and D1 Desks speak at confidence 0.4 or lower. First receipts to confirm: H4 at 06:00 UTC, D1 at 22:00 UTC on 2026-11-09 (scheduled checks).
-
-## Next improvements (owner to confirm)
-
-18. **Nexus: merge the Levels and Key Level Agent panels** (proposal 2026-11-08, measured: KLA v2 shows 5 candidate zones against 19 in v1). One panel with the ladder and the agent's zones side by side; waits for the owner's yes.

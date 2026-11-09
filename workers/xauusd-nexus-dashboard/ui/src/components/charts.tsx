@@ -97,61 +97,6 @@ export function StackedBar({ mix, height = 10 }: { mix: Record<string, number>; 
   );
 }
 
-type Levels = { h6: number; h5: number; h4: number; h3: number; l3: number; l4: number; l5: number; l6: number };
-type Cpr = { pivot: number; tc: number; bc: number; position?: string | null } | null;
-
-/**
- * Vertical price ladder: one Camarilla set (H6 down to L6) with the H3–L3 range, the H4–H5
- * breakout and L4–L5 breakdown zones shaded, the daily and weekly pivot ranges as bands, and the
- * close as a marker (clamped to an edge with an arrow when it is outside the ladder).
- */
-export function LevelLadder({ levels, close, daily, weekly, height = 300 }: { levels: Levels; close: number | null; daily?: Cpr; weekly?: Cpr; height?: number }) {
-  const W = 300, padT = 10, padB = 10, x0 = 70, x1 = 236;
-  // Keep the ladder on the Camarilla set: the close and a pivot range near it extend it by at most
-  // a quarter of its span; a pivot range further away shows as an edge marker with its price.
-  const span = levels.h6 - levels.l6 || 1;
-  const near = (p: number) => p <= levels.h6 + span * 0.25 && p >= levels.l6 - span * 0.25;
-  const vals = [levels.h6, levels.l6, ...(close != null ? [close] : []), ...[daily, weekly].flatMap((c) => (c && near(c.pivot) ? [c.tc, c.bc] : []))];
-  const hi = Math.min(Math.max(...vals), levels.h6 + span * 0.25), lo = Math.max(Math.min(...vals), levels.l6 - span * 0.25);
-  const y = (p: number) => padT + ((hi - p) / (hi - lo || 1)) * (height - padT - padB);
-  const yc = (p: number) => Math.max(padT, Math.min(height - padB, y(p)));
-  const zone = (a: number, b: number, color: string, op: number) => <rect x={x0} width={x1 - x0} y={yc(Math.max(a, b))} height={Math.max(1, yc(Math.min(a, b)) - yc(Math.max(a, b)))} fill={color} opacity={op} />;
-  const rows: [keyof Levels, string, string][] = [["h6", "H6", C.bull], ["h5", "H5", C.bull], ["h4", "H4", C.bull], ["h3", "H3", C.wait], ["l3", "L3", C.wait], ["l4", "L4", C.bear], ["l5", "L5", C.bear], ["l6", "L6", C.bear]];
-  const out = close == null ? null : close > hi ? "up" : close < lo ? "down" : null;
-  const band = (c: Cpr, label: string, color: string) => c && (c.pivot > hi || c.pivot < lo ? (
-    <text key={label} x={x1} y={c.pivot > hi ? padT + 2 : height - 2} textAnchor="end" fontSize="8.5" fill={color} className="mono">{c.pivot > hi ? "▲" : "▼"} {label} {c.pivot.toFixed(2)}</text>
-  ) : (
-    <g key={label}>
-      <rect x={x1 - 34} width={30} y={yc(c.tc)} height={Math.max(2, yc(c.bc) - yc(c.tc))} fill={color} opacity={0.55} rx={2} />
-      <line x1={x1 - 38} x2={x1} y1={yc(c.pivot)} y2={yc(c.pivot)} stroke={color} strokeWidth={1.2} strokeDasharray="2 2" />
-      <text x={x1 + 4} y={yc(c.pivot) + 3} fontSize="8" fill={color}>{label}</text>
-    </g>
-  ));
-  return (
-    <svg viewBox={`0 0 ${W} ${height}`} className="w-full" role="img" aria-label={`Camarilla ladder, close ${close ?? "unknown"}`}>
-      {zone(levels.h3, levels.l3, C.wait, 0.08)}
-      {zone(levels.h4, levels.h5, C.bull, 0.1)}
-      {zone(levels.l4, levels.l5, C.bear, 0.1)}
-      {rows.map(([k, name, color]) => (
-        <g key={k}>
-          <line x1={x0} x2={x1} y1={y(levels[k])} y2={y(levels[k])} stroke={color} strokeOpacity={k === "h3" || k === "l3" || k === "h4" || k === "l4" ? 0.9 : 0.45} strokeWidth={k === "h4" || k === "l4" ? 1.6 : 1} />
-          <text x={x0 - 6} y={y(levels[k]) + 3} textAnchor="end" fontSize="9" fill={color} className="mono">{name} {levels[k].toFixed(2)}</text>
-        </g>
-      ))}
-      {band(daily ?? null, "D pivot", C.cyan)}
-      {band(weekly ?? null, "W pivot", C.violet)}
-      {close != null && (
-        <g>
-          <line x1={x0 - 2} x2={x1 + 2} y1={yc(close)} y2={yc(close)} stroke="#e2e8f0" strokeWidth={2} />
-          <polygon points={`${x1 + 2},${yc(close)} ${x1 + 9},${yc(close) - 4} ${x1 + 9},${yc(close) + 4}`} fill="#e2e8f0" />
-          <rect x={x0 + 4} y={yc(close) - 15} width={78} height={13} rx={3} fill="#0b1220" stroke="#e2e8f0" strokeOpacity={0.4} />
-          <text x={x0 + 43} y={yc(close) - 5.5} textAnchor="middle" fontSize="9" fontWeight="700" fill="#e2e8f0" className="mono">{out === "up" ? "▲ " : out === "down" ? "▼ " : ""}{close.toFixed(2)}</text>
-        </g>
-      )}
-    </svg>
-  );
-}
-
 /** Radar of axes in [0, 1] (a hexagon for six). A missing value is drawn at the centre, dashed. */
 export function RegimeRadar({ axes, size = 220, color = C.cyan }: { axes: { key: string; label: string; value: number | null }[]; size?: number; color?: string }) {
   const n = axes.length, cx = 110, cy = 104, R = 72;
