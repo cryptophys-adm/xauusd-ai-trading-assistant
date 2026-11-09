@@ -201,7 +201,7 @@ import {
 } from "./h1-consensus.mjs";
 import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
 import { runHealthAlerts, readHealthAlerts } from "./health-alerts.mjs";
-import { classifyRejection, recordRejection } from "./webhook-rejections.mjs";
+import { classifyRejection, recordRejection, webhookLaneStatus } from "./webhook-rejections.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
 import { DECISION_TEXT_RULE, plainDecisionText } from "./plain-decision.mjs";
@@ -1922,9 +1922,12 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       localRecordFresh = (await Promise.all(recent.map(key => env.WEBHOOK_BUFFER.get("localcalc:" + key + ":prophet")))).some(Boolean);
     } catch { localRecordFresh = false; }
     const lastMs = lastComparison ? Date.parse(lastComparison) : NaN;
+    // The TradingView alert lane: the last accepted alert and the last hour's 401s (never the secret).
+    const webhook = await webhookLaneStatus(env.DB).catch(() => null);
     return dashboardJson({
       ai_worker: {
         status: "ok",
+        webhook,
         ingest_url: asText(env.INGEST_URL),
         ingest_secret: Boolean(env.INGEST_SECRET),
         webhook_secret: Boolean(env.WEBHOOK_SECRET),

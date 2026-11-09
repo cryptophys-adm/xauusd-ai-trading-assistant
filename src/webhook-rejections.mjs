@@ -79,15 +79,44 @@ export async function rejectionSummary(db, sinceMs) {
     return empty;
   }
   if (!rows.length) return empty;
-  const reasons = {};
-  for (const r of rows) reasons[r.reason] = (reasons[r.reason] || 0) + 1;
+  const reasons = {}, lengths = {};
+  for (const r of rows) {
+    reasons[r.reason] = (reasons[r.reason] || 0) + 1;
+    (lengths[r.reason] ||= new Set()).add(Number(r.received_len));
+  }
+  const top = Object.entries(reasons).sort((a, b) => b[1] - a[1])[0][0];
   return {
     count: rows.length,
     first_at: rows[0].received_at,
     last_at: rows.at(-1).received_at,
     reasons,
+    top_reason: top,
     sources: [...new Set(rows.map((r) => r.source).filter(Boolean))].sort(),
-    received_lengths: [...new Set(rows.map((r) => Number(r.received_len)))].sort((a, b) => a - b),
+    // The lengths of the most frequent reason's secrets (a stray probe does not blur them).
+    received_lengths: [...lengths[top]].sort((a, b) => a - b),
     expected_len: Number(rows.at(-1).expected_len)
+  };
+}
+
+/**
+ * The TradingView alert lane for Nexus System status: the last accepted alert (D1
+ * webhook_sources) and the rejections of the last hour. Never throws.
+ */
+export async function webhookLaneStatus(db, now = Date.now()) {
+  let last = null;
+  try {
+    last = await db.prepare("SELECT source, candle_key, received_at FROM webhook_sources ORDER BY received_at DESC LIMIT 1").first();
+  } catch { last = null; }
+  // webhook_sources.received_at is SQLite datetime('now'): "YYYY-MM-DD HH:MM:SS" in UTC.
+  const lastAt = last?.received_at ? new Date(String(last.received_at).replace(" ", "T") + (String(last.received_at).endsWith("Z") ? "" : "Z")).toISOString() : null;
+  const rejected = await rejectionSummary(db, now - 3600_000);
+  return {
+    last_accepted_at: lastAt,
+    last_accepted_source: last?.source ?? null,
+    rejected_last_hour: rejected.count,
+    rejected_sources: rejected.sources,
+    top_reason: rejected.top_reason ?? null,
+    top_reason_text: rejected.top_reason ? REJECTION_TEXT[rejected.top_reason] ?? rejected.top_reason : null,
+    last_rejected_at: rejected.last_at
   };
 }
