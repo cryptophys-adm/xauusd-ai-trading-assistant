@@ -20,6 +20,7 @@ import { readCorrelations } from "./correlations.mjs";
 import { cachedCalendar } from "./econ-calendar.mjs";
 import { calendarOutlook } from "./calendar-agent.mjs";
 import { readNewsDaily } from "./news-daily.mjs";
+import { matchRebuts } from "./rebut-names.mjs";
 
 const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit } = threadInternals;
 
@@ -165,6 +166,7 @@ export function validateMacroRebuttal(o, agent, busAgents, { requiredBias = null
   if (!MACRO_BIASES.includes(o.bias)) errors.push("bias_invalid");
   if (requiredBias && o.bias !== requiredBias) errors.push(`calendar_projection_reversed:${requiredBias}`);
   if (!inUnit(o.confidence)) errors.push("confidence_out_of_range");
+  if (Array.isArray(o.rebuts)) o.rebuts = matchRebuts(o.rebuts, busAgents, macroAgentName);
   if (!Array.isArray(o.rebuts) || o.rebuts.some((id) => id === agent || !busAgents.includes(id))) errors.push("rebuts_invalid");
   if (typeof o.argument !== "string" || !o.argument.trim()) errors.push("argument_missing");
   else errors.push(...naturalLanguageErrors(o.argument));

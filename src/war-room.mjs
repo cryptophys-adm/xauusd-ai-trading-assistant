@@ -21,6 +21,7 @@ import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
 import { macroDeskEvidence } from "./macro-room.mjs";
+import { matchRebuts } from "./rebut-names.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation } from "./reputation.mjs";
 import { agentReputation } from "./outcome-scoring.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
@@ -165,11 +166,9 @@ export function validateOpening(o, agent, { verifiedLines = null } = {}) {
   return { valid: errors.length === 0, errors };
 }
 
-/** Rebuttal targets as bus ids: an agent's display name is accepted for its id. */
+/** Rebuttal targets as bus ids: an agent's id or display name in any spelling with the same slug (src/rebut-names.mjs). */
 export function normalizeRebuts(rebuts, busAgents) {
-  if (!Array.isArray(rebuts)) return null;
-  const byName = new Map(busAgents.map(id => [agentName(id).toLowerCase(), id]));
-  return rebuts.map(r => (busAgents.includes(r) ? r : byName.get(String(r ?? "").trim().toLowerCase()) ?? r));
+  return matchRebuts(rebuts, busAgents, agentName);
 }
 
 /**
