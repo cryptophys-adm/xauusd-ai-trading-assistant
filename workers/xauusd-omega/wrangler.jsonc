@@ -24,7 +24,8 @@
   // The Worker verifies the Access JWT itself (fail closed). ACCESS_AUD is added by the deploy workflow
   // when the Access application's audience can be resolved; the team domain is fixed.
   "vars": {
-    "ACCESS_TEAM_DOMAIN": "cryptophys.cloudflareaccess.com"
+    "ACCESS_TEAM_DOMAIN": "cryptophys.cloudflareaccess.com",
+    "OMEGA_BRIDGE_CLIENT_ID": ""
   },
   // Static page (no build step). run_worker_first: the JWT is checked before any asset is served.
   "assets": {

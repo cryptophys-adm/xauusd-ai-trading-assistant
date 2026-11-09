@@ -51,3 +51,9 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 .mode.active { color: var(--green); } .mode.paused { color: var(--amber); } .mode.killed { color: var(--red); }
 .foot { padding: 18px 20px 28px; text-align: center; font-size: 11px; color: var(--dim); }
 :focus-visible { outline: 2px solid rgba(57,208,216,0.7); outline-offset: 2px; }
+.section-title { margin: 8px 0 0; font-size: 12px; font-weight: 700; letter-spacing: 0.28em; text-transform: uppercase; color: var(--purple); }
+.hint { margin: 0; font-size: 11px; color: var(--muted); }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.fields { display: grid; grid-template-columns: 1fr 110px; gap: 6px 10px; align-items: center; }
+.fields .field { width: 100%; }
+@media (max-width: 420px) { .fields { grid-template-columns: 1fr; } main { padding: 14px 16px; } }

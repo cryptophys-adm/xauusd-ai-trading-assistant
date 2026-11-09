@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { motion } from "framer-motion";
-import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, Home, LineChart, Menu, ShieldCheck, Sparkles, Swords, Trophy, X } from "lucide-react";
+import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, Home, LineChart, Menu, ShieldCheck, Sparkles, Swords, Trophy, X, Zap } from "lucide-react";
 import { Dot } from "./ui";
 import { useWarRoom } from "../lib/warroom";
 
@@ -11,6 +11,8 @@ import { useWarRoom } from "../lib/warroom";
 type NavItem = { label: string; href: string; key: string; icon: typeof Swords; soon?: boolean };
 export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   { title: "Live", items: [{ label: "War Room", href: "/#/", key: "", icon: Swords }, { label: "System status", href: "/#/status", key: "status", icon: Activity }] },
+  // Omega (owner decisions 2026-11-09): its own page, served by the xauusd-omega Worker at /omega/ (not a hash route).
+  { title: "Execution", items: [{ label: "Omega", href: "/omega/", key: "omega", icon: Zap }] },
   { title: "Analytics", items: [
     { label: "Performance", href: "/#/performance", key: "performance", icon: LineChart },
     { label: "Scorecards", href: "/#/scorecards", key: "scorecards", icon: Trophy },

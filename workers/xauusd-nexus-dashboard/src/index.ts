@@ -33,6 +33,7 @@ interface Env {
   MARKET_DATA?: MarketDataReader;
   AETHER?: AetherReader;
   AI_WORKER?: { fetch(request: Request): Promise<Response> };
+  OMEGA_PAGE?: { fetch(request: Request): Promise<Response> };
   ASSETS?: { fetch(request: Request): Promise<Response> };
 }
 
@@ -70,6 +71,11 @@ export default {
       } catch {
         return json({ error: "aether_unavailable" }, 502);
       }
+    }
+
+    if (url.pathname === "/omega" || url.pathname.startsWith("/omega/")) {
+      if (typeof env.OMEGA_PAGE?.fetch !== "function") return json({ error: "omega_binding_missing" }, 503);
+      return env.OMEGA_PAGE.fetch(request);
     }
 
     if (url.pathname.startsWith("/api/")) {

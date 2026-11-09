@@ -113,3 +113,100 @@ test("the page script writes values as text, never as HTML", async () => {
   assert.doesNotMatch(html, /<script(?![^>]*src=)/, "no inline script");
   assert.doesNotMatch(html, /style="/, "no inline style");
 });
+
+// ---------------------------------------------------------------- phase 2: broker engine routes
+
+function broker() {
+  const calls = [];
+  const rec = (name) => async (input) => { calls.push([name, input]); return { ok: true }; };
+  return {
+    calls,
+    overview: async () => ({ signal: { side: "BUY" }, broker: { engine: {} } }),
+    deals: async () => ({ deals: [] }),
+    setControl: rec("setControl"), setSettings: rec("setSettings"), setConnection: rec("setConnection"), clearConnection: rec("clearConnection"),
+    bridgeKey: async () => ({ kid: "0123456789abcdef", public_key: "AAAA", synced_age_ms: 1000 }),
+    bridgeSync: async (input) => { calls.push(["bridgeSync", input]); return { ok: true, intents: [], connection: null, settings_version: 1 }; }
+  };
+}
+const BRIDGE_ID = "4b0e7f.access";
+
+test("the bridge sync: only the service token named by OMEGA_BRIDGE_CLIENT_ID; nobody when it is empty", async () => {
+  resetKeyCacheForTests();
+  const O = broker();
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const body = { kid: "0123456789abcdef", public_key: "AAAA", bridge_version: "1.0.0", state: { connected: true }, results: [] };
+  const sync = async (claims, env) => handle(new Request("https://nexus.cryptophys.work/omega/api/bridge/sync", {
+    method: "POST", body: JSON.stringify(body), headers: { "cf-access-jwt-assertion": await jwt(claims), "content-type": "application/json" }
+  }), env, opts);
+  const off = await sync({ common_name: BRIDGE_ID }, { ...ENV_BASE, OMEGA: O, OMEGA_BRIDGE_CLIENT_ID: "" });
+  assert.deepEqual([off.status, (await off.json()).error], [403, "bridge_not_configured"]);
+  const env = { ...ENV_BASE, OMEGA: O, OMEGA_BRIDGE_CLIENT_ID: BRIDGE_ID };
+  assert.equal((await sync({ common_name: "someone-else.access" }, env)).status, 403, "another service token");
+  assert.equal((await sync({ email: "owner@example.com" }, env)).status, 403, "a person never syncs as the bridge");
+  const ok = await sync({ common_name: BRIDGE_ID }, env);
+  assert.equal(ok.status, 200);
+  assert.deepEqual(O.calls.at(-1), ["bridgeSync", { state: { connected: true }, results: [], publicKey: "AAAA", kid: "0123456789abcdef", bridgeVersion: "1.0.0" }]);
+  const big = new Request("https://omega.cryptophys.work/api/bridge/sync", { method: "POST", body: "x".repeat(70_000), headers: { "cf-access-jwt-assertion": await jwt({ common_name: BRIDGE_ID }) } });
+  assert.equal((await handle(big, env, opts)).status, 413);
+  assert.equal((await handle(req("/api/bridge/sync", { token: await jwt({ common_name: BRIDGE_ID }) }), env, opts)).status, 405);
+});
+
+test("settings and connection changes: a person, same origin, JSON; the actor is the Access email", async () => {
+  resetKeyCacheForTests();
+  const O = broker();
+  const env = { ...ENV_BASE, OMEGA: O };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const person = await jwt({ email: "Owner@Example.com" });
+  const svc = await jwt({ common_name: "ci.access" });
+  const call = (path, method, body, extra = {}) => handle(req(path, { token: person, method, body, ...extra }), env, opts);
+
+  assert.equal((await call("/api/settings", "POST", { enabled: true })).status, 200);
+  assert.deepEqual(O.calls.at(-1), ["setSettings", { body: { enabled: true }, actor: "owner@example.com" }]);
+  assert.equal((await call("/api/connection", "POST", { server: "Monex-Demo", envelope: { v: 1 } })).status, 200);
+  assert.deepEqual(O.calls.at(-1), ["setConnection", { envelope: { v: 1 }, server: "Monex-Demo", actor: "owner@example.com" }]);
+  assert.equal((await call("/api/connection", "DELETE", { reason: "switch" })).status, 200);
+  assert.deepEqual(O.calls.at(-1), ["clearConnection", { reason: "switch", actor: "owner@example.com" }]);
+  const n = O.calls.length;
+  for (const [path, method, body] of [["/api/settings", "POST", { enabled: true }], ["/api/connection", "POST", { server: "S" }], ["/api/connection", "DELETE", { reason: "r" }]]) {
+    assert.equal((await handle(req(path, { token: svc, method, body }), env, opts)).status, 403, `${method} ${path}: service token`);
+    assert.equal((await call(path, method, body, { origin: "https://nexus.cryptophys.work" })).status, 403, `${method} ${path}: another origin`);
+    assert.equal((await call(path, method, body, { type: "text/plain" })).status, 415, `${method} ${path}: not JSON`);
+  }
+  assert.equal((await call("/api/settings", "POST", [1, 2])).status, 400, "an array is not a body");
+  assert.equal(O.calls.length, n, "nothing refused reached the gateway");
+  assert.equal((await call("/api/settings", "GET")).status, 405);
+  const key = await handle(req("/api/bridge/key", { token: svc }), env, opts);
+  assert.deepEqual(await key.json(), { kid: "0123456789abcdef", public_key: "AAAA", synced_age_ms: 1000 });
+  assert.equal((await handle(req("/api/bridge/key", { token: person }), { ...env, OMEGA: { ...O, bridgeKey: async () => null } }, opts)).status, 404);
+});
+
+test("under nexus.cryptophys.work/omega: /omega redirects to /omega/, assets and the API keep their own paths, same-origin holds", async () => {
+  resetKeyCacheForTests();
+  const O = broker();
+  const seen = [];
+  const env = { ...ENV_BASE, OMEGA: O, ASSETS: { fetch: async (r) => { seen.push(new URL(r.url).pathname); return new Response("ok"); } } };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const token = await jwt({ email: "owner@example.com" });
+  const at = (path, init = {}) => new Request(`https://nexus.cryptophys.work${path}`, { ...init, headers: { "cf-access-jwt-assertion": token, ...(init.headers || {}) } });
+  const redirect = await handle(at("/omega?x=1"), env, opts);
+  assert.deepEqual([redirect.status, redirect.headers.get("location")], [301, "https://nexus.cryptophys.work/omega/?x=1"]);
+  assert.equal((await handle(at("/omega/"), env, opts)).status, 200);
+  assert.equal((await handle(at("/omega/omega.js"), env, opts)).status, 200);
+  assert.deepEqual(seen, ["/", "/omega.js"]);
+  assert.equal((await (await handle(at("/omega/api/overview"), env, opts)).json()).signal.side, "BUY");
+  const post = await handle(at("/omega/api/settings", { method: "POST", body: "{}", headers: { origin: "https://nexus.cryptophys.work", "content-type": "application/json" } }), env, opts);
+  assert.equal(post.status, 200, "the Nexus origin is the page's origin there");
+  assert.equal((await handle(new Request("https://nexus.cryptophys.work/omega/health"), env, opts)).status, 200);
+});
+
+test("the page uses relative URLs only and loads the envelope module; the broker forms exist", async () => {
+  const { readFileSync } = await import("node:fs");
+  const js = readFileSync(new URL("../workers/xauusd-omega/public/omega.js", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../workers/xauusd-omega/public/index.html", import.meta.url), "utf8");
+  assert.doesNotMatch(js, /fetch\("\/|from "\//, "no absolute fetch or import");
+  assert.doesNotMatch(html, /(href|src)="\//, "no absolute asset");
+  assert.match(js, /from "\.\/omega-crypto\.js"/);
+  for (const id of ["b-server", "b-login", "b-password", "e-enabled", "e-risk", "e-arm", "e-live"]) assert.ok(html.includes(`id="${id}"`), id);
+  assert.match(html, /type="password"/);
+  assert.match(js, /"b-login", "b-password"\]\) document\.getElementById\(id\)\.value = ""/, "the credentials are cleared after a submit");
+});
