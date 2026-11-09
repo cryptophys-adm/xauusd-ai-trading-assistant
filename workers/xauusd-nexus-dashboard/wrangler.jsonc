@@ -31,6 +31,11 @@
       "binding": "AETHER",
       "service": "cryptophys-aether",
       "entrypoint": "AetherReader"
+    },
+    // Omega (owner decision 2026-11-09: nexus.cryptophys.work/omega): /omega/* forwarded unchanged.
+    {
+      "binding": "OMEGA_PAGE",
+      "service": "xauusd-omega"
     }
   ],
   // Nexus UI (React SPA in the Cerebrum Console obsidian design), built from ui/ into ui/dist by the

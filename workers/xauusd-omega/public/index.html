@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Omega · XAUUSD Execution Engine</title>
-<link rel="stylesheet" href="/omega.css">
-<script type="module" src="/omega.js"></script>
+<link rel="stylesheet" href="omega.css">
+<script type="module" src="omega.js"></script>
 </head>
 <body>
 <header class="top">
@@ -39,7 +39,52 @@
   <section class="card wide"><h2>Open positions</h2><div class="table-wrap" data-slot="positions"></div></section>
   <section class="card wide"><h2>Closed deals</h2><div class="table-wrap" data-slot="deals"></div></section>
   <section class="card wide"><h2>Control audit</h2><div class="table-wrap" data-slot="events"></div></section>
+
+  <h1 class="section-title">Broker engine</h1>
+  <section class="grid">
+    <article class="card" id="card-broker"><h2>Broker connection</h2><div class="body" data-slot="broker"></div>
+      <form id="broker-form" class="control" autocomplete="off">
+        <label class="label" for="b-server">Server</label>
+        <input class="field" id="b-server" maxlength="64" placeholder="e.g. Monex-Demo" spellcheck="false">
+        <label class="label" for="b-login">Login</label>
+        <input class="field" id="b-login" maxlength="20" inputmode="numeric" autocomplete="off" spellcheck="false">
+        <label class="label" for="b-password">Password</label>
+        <input class="field" id="b-password" type="password" maxlength="64" autocomplete="new-password">
+        <div class="row">
+          <button type="submit" class="btn btn-approve" id="b-connect">Connect</button>
+          <button type="button" class="btn btn-danger" id="b-disconnect">Disconnect</button>
+        </div>
+        <p class="hint">Encrypted in this browser to the bridge's key: the server cannot read the login or the password.</p>
+        <p class="msg" id="broker-msg" role="status"></p>
+      </form>
+    </article>
+    <article class="card" id="card-engine"><h2>Engine</h2><div class="body" data-slot="engine"></div>
+      <form id="engine-form" class="control" autocomplete="off">
+        <label class="check"><input type="checkbox" id="e-enabled"> Engine enabled</label>
+        <div class="fields">
+          <label class="label" for="e-risk">Risk per trade, % of equity</label><input class="field" id="e-risk" type="number" min="0.01" max="2" step="0.01">
+          <label class="label" for="e-maxpos">Max positions</label><input class="field" id="e-maxpos" type="number" min="1" max="5" step="1">
+          <label class="label" for="e-loss">Max daily loss, %</label><input class="field" id="e-loss" type="number" min="0.1" max="20" step="0.1">
+          <label class="label" for="e-spread">Max spread, points</label><input class="field" id="e-spread" type="number" min="1" max="1000" step="1">
+          <label class="label" for="e-age">Max signal age, minutes</label><input class="field" id="e-age" type="number" min="1" max="60" step="1">
+        </div>
+        <div class="row">
+          <button type="submit" class="btn btn-approve" id="e-save">Save</button>
+          <button type="button" class="btn btn-danger" id="e-arm">Arm live</button>
+          <button type="button" class="btn" id="e-disarm">Disarm live</button>
+        </div>
+        <div class="live-confirm" hidden>
+          <label class="label" for="e-live">Type LIVE to let Omega trade a real account</label>
+          <div class="row"><input class="field" id="e-live" maxlength="8"><button type="button" class="btn btn-danger" id="e-live-go">Confirm</button><button type="button" class="btn" id="e-live-cancel">Cancel</button></div>
+        </div>
+        <p class="msg" id="engine-msg" role="status"></p>
+      </form>
+    </article>
+    <article class="card" id="card-bridge"><h2>Bridge &amp; terminal</h2><div class="body" data-slot="bridge"></div></article>
+  </section>
+  <section class="card wide"><h2>Intents</h2><div class="table-wrap" data-slot="intents"></div></section>
+  <section class="card wide"><h2>Engine events</h2><div class="table-wrap" data-slot="omega-events"></div></section>
 </main>
-<footer class="foot">Omega shows and controls the EA on your MT5 terminal. The server never sizes a trade, never places an order and holds no broker credential. Updated <span id="updated">—</span>.</footer>
+<footer class="foot">Omega controls the EA and, when you enable it, trades through the bridge on your MT5 host. The engine is off until you enable it; a real account also needs Arm live. Updated <span id="updated">—</span>.</footer>
 </body>
 </html>

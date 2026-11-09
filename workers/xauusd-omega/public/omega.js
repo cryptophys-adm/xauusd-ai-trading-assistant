@@ -1,5 +1,8 @@
-// Omega page: polls /api/overview and sets the EA control. Every value is written with textContent
-// (never as HTML), and the page's only script is this same-origin file (CSP script-src 'self').
+// Omega page: polls ./api/overview, sets the EA control, and runs the broker engine's settings and
+// connection. Every value is written with textContent (never as HTML); scripts are same-origin files
+// only (CSP script-src 'self'); every URL is relative so the page works at omega.cryptophys.work/ and
+// at nexus.cryptophys.work/omega/.
+import { buildEnvelope } from "./omega-crypto.js";
 
 const POLL_MS = 15_000;
 let viewer = { can_control: false };
@@ -97,12 +100,131 @@ function render(o) {
     (o.control_events || []).map((e) => [time(Date.parse(e.at)), e.previous_mode, el("span", { class: e.mode === "killed" ? "bad" : e.mode === "paused" ? "warn" : "ok" }, e.mode), e.actor, e.reason || "—"]),
     "No control change yet."));
 
+  renderBroker(o.broker || null);
   document.getElementById("updated").textContent = new Date().toISOString().slice(11, 19) + " UTC";
+}
+
+// ---------------------------------------------------------------- broker engine
+
+let broker = null;
+let engineDirty = false;
+const INTENT_TONE = { done: "ok", failed: "bad", expired: "warn", pending: "info", sent: "info" };
+const CONNECTION_TEXT = {
+  none: "No broker connection stored.",
+  stored: "Stored; the bridge applies it at its next sync.",
+  needs_reentry: "The bridge's key changed: enter the credentials again.",
+  cleared: "Disconnected; the bridge clears the terminal login."
+};
+
+function renderBroker(b) {
+  broker = b;
+  if (!b) {
+    for (const name of ["broker", "engine", "bridge"]) fill(name, el("p", { class: "dim" }, "The broker engine is not available."));
+    return;
+  }
+  const e = b.engine || {}, c = b.connection || {}, br = b.bridge || {};
+  const effective = !e.env_enabled ? ["off (server switch OMEGA_ENGINE_ENABLED)", "bad"] : !e.enabled ? ["off (enable it below)", "warn"] : ["on", "ok"];
+
+  fill("broker", kv([
+    ["Status", CONNECTION_TEXT[c.status] || c.status || "—", c.status === "stored" ? "ok" : c.status === "needs_reentry" ? "warn" : ""],
+    ["Server", c.server || "—"], ["Version", c.version ? `v${c.version}` : "—"], ["By", c.updated_by || "—"], ["At", time(c.updated_ms)]
+  ]));
+
+  fill("engine", kv([
+    ["Effective", effective[0], effective[1]],
+    ["Live (real account)", e.live_armed ? "armed" : "not armed", e.live_armed ? "warn" : ""],
+    ["Risk", e.risk_pct != null ? `${e.risk_pct}% of equity` : "—"], ["Max positions", e.max_positions ?? "—"],
+    ["Max daily loss", e.max_daily_loss_pct != null ? `${e.max_daily_loss_pct}%` : "—"], ["Max spread", e.max_spread_points != null ? `${e.max_spread_points} pts` : "—"],
+    ["Max signal age", e.max_signal_age_ms ? `${Math.round(e.max_signal_age_ms / 60000)} min` : "—"], ["Changed by", e.updated_by || "—"]
+  ]));
+  if (!engineDirty) {
+    document.getElementById("e-enabled").checked = e.enabled === true;
+    document.getElementById("e-risk").value = e.risk_pct ?? "";
+    document.getElementById("e-maxpos").value = e.max_positions ?? "";
+    document.getElementById("e-loss").value = e.max_daily_loss_pct ?? "";
+    document.getElementById("e-spread").value = e.max_spread_points ?? "";
+    document.getElementById("e-age").value = e.max_signal_age_ms ? Math.round(e.max_signal_age_ms / 60000) : "";
+  }
+
+  fill("bridge", kv([
+    ["Bridge", br.seen ? `seen ${ago(br.synced_age_ms)}` : br.synced_age_ms != null ? `last seen ${ago(br.synced_age_ms)}` : "never seen", br.seen ? "ok" : "bad"],
+    ["Terminal", br.terminal_connected ? `connected to ${br.server || "?"}` : "not connected", br.terminal_connected ? "ok" : "bad"],
+    ["Account", br.trade_mode || "—", br.trade_mode === "real" ? "warn" : ""], ["Balance", money(br.balance, br.currency || "")], ["Equity", money(br.equity, br.currency || "")],
+    ["Symbol", br.symbol || "—"], ["Spread", br.spread_points != null ? `${br.spread_points} pts` : "—"], ["Positions", String((br.positions || []).length)],
+    ["Bridge version", br.bridge_version || "—"]
+  ]));
+
+  const controls = viewer.can_control;
+  for (const id of ["b-connect", "b-disconnect", "e-save", "e-arm", "e-disarm"]) document.getElementById(id).disabled = !controls;
+  document.getElementById("b-connect").disabled = !controls || !br.kid;
+  document.getElementById("b-disconnect").disabled = !controls || c.status !== "stored";
+  document.getElementById("e-arm").disabled = !controls || e.live_armed || !e.enabled;
+  document.getElementById("e-disarm").disabled = !controls || !e.live_armed;
+
+  fill("intents", table(["Created", "Id", "Kind", "Side", "Volume", "SL", "TP", "Status", "Result"],
+    (b.intents || []).map((i) => [time(i.created_ms), i.id, i.kind, i.side || "—", i.volume != null ? num(i.volume) : "—", i.sl != null ? num(i.sl, 3) : "—", i.tp != null ? num(i.tp, 3) : "—",
+      el("span", { class: INTENT_TONE[i.status] || "" }, i.status), i.result ? (i.result.ok ? `ticket ${i.result.ticket ?? "?"}` : i.result.error || "failed") : "—"]),
+    "No intent yet."));
+  fill("omega-events", table(["At", "By", "Action", "Detail"],
+    (b.events || []).map((x) => [time(x.ms), x.actor, x.action, x.detail ? JSON.stringify(x.detail).slice(0, 160) : "—"]),
+    "No engine event yet."));
+}
+
+async function send(path, method, body) {
+  const r = await fetch(path, { method, credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body) });
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok || out.ok === false) throw new Error(out.error || `HTTP ${r.status}`);
+  return out;
+}
+function say(id, cls, text) { const m = document.getElementById(id); m.className = `msg ${cls}`; m.textContent = text; }
+
+async function connectBroker() {
+  const server = document.getElementById("b-server").value.trim();
+  const login = document.getElementById("b-login").value.trim();
+  const password = document.getElementById("b-password").value;
+  if (!server || !login || !password) { say("broker-msg", "warn", "Fill in the server, login and password."); return; }
+  say("broker-msg", "", "Encrypting…");
+  try {
+    const kr = await fetch("./api/bridge/key", { headers: { accept: "application/json" }, credentials: "same-origin" });
+    const key = await kr.json().catch(() => ({}));
+    if (!kr.ok) throw new Error(key.error || `HTTP ${kr.status}`);
+    const envelope = await buildEnvelope(key.public_key, key.kid, { server, login, password });
+    const out = await send("./api/connection", "POST", { server, envelope });
+    say("broker-msg", "ok", `Stored v${out.version} for ${out.server}. The bridge logs the terminal in at its next sync.`);
+  } catch (e) {
+    say("broker-msg", "bad", `Refused: ${e.message}`);
+  } finally {
+    for (const id of ["b-login", "b-password"]) document.getElementById(id).value = "";
+    await load();
+  }
+}
+
+async function disconnectBroker() {
+  const reason = window.prompt("Reason to disconnect the broker account?");
+  if (!reason || !reason.trim()) return;
+  try { await send("./api/connection", "DELETE", { reason: reason.trim() }); say("broker-msg", "ok", "Disconnected."); }
+  catch (e) { say("broker-msg", "bad", `Refused: ${e.message}`); }
+  await load();
+}
+
+async function saveEngine(extra = {}) {
+  const n = (id) => { const v = document.getElementById(id).value; return v === "" ? undefined : Number(v); };
+  const body = {
+    enabled: document.getElementById("e-enabled").checked,
+    risk_pct: n("e-risk"), max_positions: n("e-maxpos"), max_daily_loss_pct: n("e-loss"), max_spread_points: n("e-spread"), max_signal_age_min: n("e-age"),
+    ...extra
+  };
+  try {
+    await send("./api/settings", "POST", body);
+    engineDirty = false;
+    say("engine-msg", "ok", extra.live_armed === true ? "Live armed." : extra.live_armed === false ? "Live disarmed." : "Saved.");
+  } catch (e) { say("engine-msg", "bad", `Refused: ${e.message}`); }
+  await load();
 }
 
 async function load() {
   try {
-    const r = await fetch("/api/overview", { headers: { accept: "application/json" }, credentials: "same-origin" });
+    const r = await fetch("./api/overview", { headers: { accept: "application/json" }, credentials: "same-origin" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     render(await r.json());
   } catch (e) {
@@ -117,7 +239,7 @@ async function setControl(mode, confirm) {
   busy = true;
   msg.className = "msg"; msg.textContent = "Sending…";
   try {
-    const r = await fetch("/api/control", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode, reason, confirm }) });
+    const r = await fetch("./api/control", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode, reason, confirm }) });
     const body = await r.json().catch(() => ({}));
     if (!r.ok || !body.ok) throw new Error(body.error || `HTTP ${r.status}`);
     msg.className = "msg ok"; msg.textContent = `Control set to ${mode}. The EA applies it at its next poll.`;
@@ -146,6 +268,22 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   document.getElementById("kill-cancel").addEventListener("click", () => { confirmBox.hidden = true; document.getElementById("confirm").value = ""; });
   document.getElementById("control-form").addEventListener("submit", (e) => e.preventDefault());
+
+  document.getElementById("broker-form").addEventListener("submit", (e) => { e.preventDefault(); connectBroker(); });
+  document.getElementById("b-disconnect").addEventListener("click", disconnectBroker);
+  const engineForm = document.getElementById("engine-form");
+  engineForm.addEventListener("input", () => { engineDirty = true; });
+  engineForm.addEventListener("submit", (e) => { e.preventDefault(); saveEngine(); });
+  const liveBox = document.querySelector(".live-confirm");
+  document.getElementById("e-arm").addEventListener("click", () => { liveBox.hidden = false; document.getElementById("e-live").focus(); });
+  document.getElementById("e-live-cancel").addEventListener("click", () => { liveBox.hidden = true; document.getElementById("e-live").value = ""; });
+  document.getElementById("e-live-go").addEventListener("click", () => {
+    const typed = document.getElementById("e-live").value.trim();
+    if (typed !== "LIVE") { say("engine-msg", "warn", "Type LIVE exactly."); return; }
+    liveBox.hidden = true; document.getElementById("e-live").value = "";
+    saveEngine({ live_armed: true, confirm: "LIVE" });
+  });
+  document.getElementById("e-disarm").addEventListener("click", () => saveEngine({ live_armed: false }));
   load();
   setInterval(load, POLL_MS);
 });

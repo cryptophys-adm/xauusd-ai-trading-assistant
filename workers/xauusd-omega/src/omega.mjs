@@ -1,20 +1,25 @@
 /**
- * xauusd-omega (omega.cryptophys.work): the Omega Execution Engine page (owner decisions 2026-11-09:
- * a page separate from Nexus and Aether; monitor + control; its own subdomain; per-position data).
+ * xauusd-omega: the Omega Execution Engine page, at omega.cryptophys.work and at
+ * nexus.cryptophys.work/omega (Nexus forwards /omega/* here through its OMEGA_PAGE binding).
  *
- * The EA on the owner's MT5 terminal executes. Omega shows the signal, the EA's heartbeat and open
- * positions, the closed deals and their statistics, and sets the EA control: active, paused (no new
- * entries) or killed (the EA closes its positions and stops). It reads and writes only through the
- * OMEGA Service Binding to the AI Worker's OmegaGateway entrypoint (RPC, no secret, no public API).
+ * v1 (PR #205): the signal, the EA heartbeat and positions, the closed deals and their statistics, and
+ * the EA control (active, paused, killed).
+ * Phase 2 (owner decisions 2026-11-09: "Omega memegang akses broker"; the page takes the broker's
+ * server, login and password; "Bridge di host ini"; "Mati sampai Anda aktifkan"): the broker engine
+ * (src/omega-engine.mjs, src/omega-broker.mjs in the AI Worker) plans the trades and sizes them, and the
+ * bridge on the owner's MT5 host executes them (docs/OMEGA_BRIDGE_PROTOCOL.md). The page encrypts the
+ * credentials in the browser to the bridge's public key: no Worker can read the login or the password.
+ * Data path: only the OMEGA Service Binding to the AI Worker's OmegaGateway entrypoint (RPC).
  *
  * Security (fail closed, whether or not the edge Access policy covers the hostname yet):
  *   - every request but /health needs a valid Cloudflare Access JWT (RS256 against the team's keys,
  *     issuer, expiry, and the audience when ACCESS_AUD is set);
- *   - a change (POST /api/control) needs a person (never a service token), a same-origin request,
- *     a JSON body, a reason to pause or kill, and the typed confirmation KILL to kill. The person's
- *     Access email is the actor recorded in the audit (D1 ea_control_events).
- * Unrelated to the legacy "omega" swarm of cryptophys-cloud-platform (prohibited, never migrated):
- * Omega never signs, never places an order and holds no broker credential.
+ *   - a change (control, settings, connection) needs a person (never a service token), a same-origin
+ *     JSON request; pause and kill need a reason, kill the typed KILL, live trading the typed LIVE.
+ *     The person's Access email is the actor in the audit;
+ *   - POST /api/bridge/sync accepts only the service token whose client id is OMEGA_BRIDGE_CLIENT_ID
+ *     (empty: every bridge is refused).
+ * Unrelated to the legacy "omega" swarm of cryptophys-cloud-platform (prohibited, never migrated).
  */
 
 const CLOCK_SKEW_SECONDS = 60;
@@ -22,6 +27,7 @@ const JWKS_TTL_MS = 10 * 60 * 1000;
 const TEAM_DOMAIN = /^[a-z0-9-]+\.cloudflareaccess\.com$/;
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
 const MODES = ["active", "paused", "killed"];
+const BRIDGE_BODY_MAX = 64 * 1024;
 
 let jwksCache = null;
 export function resetKeyCacheForTests() { jwksCache = null; }
@@ -102,58 +108,114 @@ export function controlRequest(body) {
   return { mode, reason };
 }
 
+/** Nexus forwards nexus.cryptophys.work/omega/* here unchanged (OMEGA_PAGE binding); "/omega" alone is redirected. */
+export const PATH_PREFIX = "/omega";
+
+/** Reads a same-origin JSON body from a person; returns { body } or { response }. */
+async function personJson(request, url, identity, maxBytes) {
+  if (identity.type !== "user") return { response: json({ error: "forbidden", hint: "a person makes this change, never a service token" }, 403) };
+  if (request.headers.get("origin") !== url.origin) return { response: json({ error: "cross_origin_refused" }, 403) };
+  if (!String(request.headers.get("content-type") || "").toLowerCase().startsWith("application/json")) return { response: json({ error: "content_type_must_be_json" }, 415) };
+  const text = await request.text();
+  if (text.length > maxBytes) return { response: json({ error: "body_too_large" }, 413) };
+  try {
+    const body = JSON.parse(text);
+    if (!body || typeof body !== "object" || Array.isArray(body)) return { response: json({ error: "body must be a JSON object" }, 400) };
+    return { body };
+  } catch { return { response: json({ error: "invalid_json" }, 400) }; }
+}
+
+async function rpc(fn, failure) {
+  try {
+    const r = await fn();
+    return json(r, r?.ok === false ? 400 : 200);
+  } catch (error) {
+    console.error(failure, String(error?.message ?? error));
+    return json({ error: failure }, 502);
+  }
+}
+
 export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
   const url = new URL(request.url);
-  if (url.pathname === "/health") return json({ status: "ok", service: "xauusd-omega" });
+  if (url.pathname === PATH_PREFIX) return Response.redirect(`${url.origin}${PATH_PREFIX}/${url.search}`, 301);
+  // Under the prefix the page and API keep their own paths; every link in the page is relative.
+  const path = url.pathname.startsWith(`${PATH_PREFIX}/`) ? url.pathname.slice(PATH_PREFIX.length) : url.pathname;
+  if (path === "/health") return json({ status: "ok", service: "xauusd-omega" });
 
   const token = request.headers.get("cf-access-jwt-assertion");
-  if (!token) return json({ error: "access_denied", hint: "omega.cryptophys.work is reached through Cloudflare Access" }, 403);
+  if (!token) return json({ error: "access_denied", hint: "Omega is reached through Cloudflare Access" }, 403);
   const auth = await verifyAccessJwt(token, env, { fetchImpl, now });
   if (!auth.ok) {
     console.warn(JSON.stringify({ event: "access_denied", reason: auth.reason }));
     return json({ error: "access_denied" }, auth.reason === "access_not_configured" ? 503 : 403);
   }
   const identity = auth.identity;
+  const canControl = identity.type === "user";
 
-  if (url.pathname.startsWith("/api/")) {
+  if (path.startsWith("/api/")) {
     if (!env.OMEGA || typeof env.OMEGA.overview !== "function") return json({ error: "omega_binding_missing" }, 503);
-    if (request.method === "GET" && url.pathname === "/api/whoami") return json({ subject: identity.subject, type: identity.type, can_control: identity.type === "user" });
-    if (request.method === "GET" && url.pathname === "/api/overview") {
-      try { return json({ ...(await env.OMEGA.overview()), viewer: { subject: identity.subject, type: identity.type, can_control: identity.type === "user" } }); }
+    const route = `${request.method} ${path}`;
+
+    // The host bridge (docs/OMEGA_BRIDGE_PROTOCOL.md): one Access service token, named by its client id.
+    if (path === "/api/bridge/sync") {
+      if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+      const expected = String(env.OMEGA_BRIDGE_CLIENT_ID || "");
+      if (!expected) return json({ error: "bridge_not_configured" }, 403);
+      if (identity.type !== "service_token" || identity.subject !== expected) return json({ error: "forbidden", hint: "only the Omega bridge's service token syncs" }, 403);
+      const text = await request.text();
+      if (text.length > BRIDGE_BODY_MAX) return json({ error: "body_too_large" }, 413);
+      let body;
+      try { body = JSON.parse(text); } catch { return json({ error: "invalid_json" }, 400); }
+      if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "body must be a JSON object" }, 400);
+      return rpc(() => env.OMEGA.bridgeSync({ state: body.state ?? null, results: body.results ?? [], publicKey: body.public_key, kid: body.kid, bridgeVersion: body.bridge_version }), "sync_failed");
+    }
+
+    if (route === "GET /api/whoami") return json({ subject: identity.subject, type: identity.type, can_control: canControl });
+    if (route === "GET /api/overview") {
+      try { return json({ ...(await env.OMEGA.overview()), viewer: { subject: identity.subject, type: identity.type, can_control: canControl } }); }
       catch (error) { console.error("omega_overview_failed", String(error?.message ?? error)); return json({ error: "overview_unavailable" }, 502); }
     }
-    if (request.method === "GET" && url.pathname === "/api/deals") {
+    if (route === "GET /api/deals") {
       const limit = Math.max(1, Math.min(500, Number(url.searchParams.get("limit") || "200") || 200));
       try { return json(await env.OMEGA.deals({ limit })); }
       catch { return json({ error: "deals_unavailable" }, 502); }
     }
-    if (url.pathname === "/api/control") {
-      if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-      if (identity.type !== "user") return json({ error: "forbidden", hint: "a person changes the EA control, never a service token" }, 403);
-      const origin = request.headers.get("origin");
-      if (origin !== url.origin) return json({ error: "cross_origin_refused" }, 403);
-      if (!String(request.headers.get("content-type") || "").toLowerCase().startsWith("application/json")) return json({ error: "content_type_must_be_json" }, 415);
-      let body;
+    if (route === "GET /api/bridge/key") {
       try {
-        const text = await request.text();
-        if (text.length > 2048) return json({ error: "body_too_large" }, 413);
-        body = JSON.parse(text);
-      } catch { return json({ error: "invalid_json" }, 400); }
-      const req = controlRequest(body);
-      if (req.error) return json({ error: req.error }, 400);
-      try {
-        const r = await env.OMEGA.setControl({ mode: req.mode, reason: req.reason, actor: identity.subject });
-        return json(r, r?.ok ? 200 : 400);
-      } catch (error) {
-        console.error("omega_control_failed", String(error?.message ?? error));
-        return json({ error: "control_failed" }, 502);
-      }
+        const key = await env.OMEGA.bridgeKey();
+        return key ? json(key) : json({ error: "bridge_not_seen", hint: "start the Omega bridge on the MT5 host first" }, 404);
+      } catch { return json({ error: "bridge_unavailable" }, 502); }
     }
+    if (route === "POST /api/control") {
+      const r = await personJson(request, url, identity, 2048);
+      if (r.response) return r.response;
+      const req = controlRequest(r.body);
+      if (req.error) return json({ error: req.error }, 400);
+      return rpc(() => env.OMEGA.setControl({ mode: req.mode, reason: req.reason, actor: identity.subject }), "control_failed");
+    }
+    if (route === "POST /api/settings") {
+      const r = await personJson(request, url, identity, 2048);
+      if (r.response) return r.response;
+      return rpc(() => env.OMEGA.setSettings({ body: r.body, actor: identity.subject }), "settings_failed");
+    }
+    if (route === "POST /api/connection") {
+      const r = await personJson(request, url, identity, 16384);
+      if (r.response) return r.response;
+      return rpc(() => env.OMEGA.setConnection({ envelope: r.body.envelope, server: r.body.server, actor: identity.subject }), "connection_failed");
+    }
+    if (route === "DELETE /api/connection") {
+      const r = await personJson(request, url, identity, 2048);
+      if (r.response) return r.response;
+      return rpc(() => env.OMEGA.clearConnection({ reason: r.body.reason, actor: identity.subject }), "connection_failed");
+    }
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/deals", "/api/whoami"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 
   if (env.ASSETS && (request.method === "GET" || request.method === "HEAD")) {
-    const res = await env.ASSETS.fetch(request);
+    const assetUrl = new URL(url);
+    assetUrl.pathname = path;
+    const res = await env.ASSETS.fetch(path === url.pathname ? request : new Request(assetUrl.toString(), { method: request.method, headers: request.headers }));
     const headers = new Headers(res.headers);
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) headers.set(k, v);
     headers.set("cache-control", "no-store");
