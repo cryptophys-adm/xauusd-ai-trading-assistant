@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import {
   SCORING, SCORING_VERSION, atrAt, scoreStance, normalizeStance, sessionOf, detectStuckStates, indicatorStances,
-  scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, resetOutcomeSchemaCacheForTests
+  scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, resetOutcomeSchemaCacheForTests, crossesGap, MAX_BAR_GAP_MS
 } from "../src/outcome-scoring.mjs";
 
 const H = 3_600_000;
@@ -104,7 +104,7 @@ function d1() {
   for (const name of readdirSync(new URL("../migrations/", import.meta.url)).filter(n => n.endsWith(".sql")).sort()) db.exec(readFileSync(new URL("../migrations/" + name, import.meta.url), "utf8"));
   const stmt = (sql, params = []) => ({
     bind: (...a) => stmt(sql, a.map(v => (v === undefined ? null : v))),
-    async run() { db.prepare(sql).run(...params); return { success: true }; },
+    async run() { const r = db.prepare(sql).run(...params); return { success: true, meta: { changes: Number(r.changes) } }; },
     async first() { return db.prepare(sql).get(...params) ?? null; },
     async all() { return { results: db.prepare(sql).all(...params) }; }
   });
@@ -234,4 +234,37 @@ test("P6: the H1 Supertrend direction is scored as indicator:supertrend from the
   const env = { DB: d1(), SIGNAL_CACHE: kv({ ["hud:60:" + key]: JSON.stringify({ huds: { supertrend: { fields: { direction: -1, line: 4100 } } } }) }), WEBHOOK_BUFFER: kv({}) };
   const st = (await h1Statements(env, key)).find((s) => s.subject === "indicator:supertrend");
   assert.deepEqual(st, { subject: "indicator:supertrend", source: "indicator", stance: "SELL", confidence: null });
+});
+
+test("a statement whose horizon crosses a market gap is not scored; the daily break is not a gap (post-reopen audit 2026-11-09)", () => {
+  // Friday 20:00-21:00 bar, then the weekend: the next bars open Sunday 23:00.
+  const fri = barsFrom([...base, [100, 101, 99, 100]], { start: Date.parse("2026-11-06T06:00:00Z") });
+  const sun = barsFrom([[100, 120, 99, 118], [118, 125, 117, 124], [124, 126, 123, 125], [125, 126, 124, 125]], { start: Date.parse("2026-11-08T23:00:00Z") });
+  const bars = [...fri, ...sun];
+  const i = fri.length - 1;
+  assert.equal(MAX_BAR_GAP_MS, 2 * H);
+  assert.equal(crossesGap(bars, i, 4), true);
+  assert.deepEqual(scoreStance({ stance: "WAIT", bars, closeMs: closeOf(bars, i) }), { result: "no_data", reason: "market_gap" });
+  // A one-hour daily break (22:00 to 23:00 UTC) is not a gap: the bar is scored.
+  const before = barsFrom([...base, [100, 101, 99, 100]], { start: Date.parse("2026-11-09T07:00:00Z") });
+  const after = barsFrom([[100, 101, 99, 100], [100, 101, 99, 100], [100, 101, 99, 100], [100, 101, 99, 100]], { start: Date.parse("2026-11-09T23:00:00Z") });
+  const daily = [...before, ...after];
+  assert.equal(crossesGap(daily, before.length - 1, 4), false);
+  assert.equal(scoreStance({ stance: "WAIT", bars: daily, closeMs: closeOf(daily, before.length - 1) }).result, "hit");
+});
+
+test("scoreRecentStatements removes scores whose horizon crossed a market gap and does not score them again", async () => {
+  resetOutcomeSchemaCacheForTests();
+  const fri = barsFrom([...base, [100, 101, 99, 100]], { start: Date.parse("2026-11-06T06:00:00Z") });
+  const sun = barsFrom([[100, 120, 99, 118], [118, 125, 117, 124], [124, 126, 123, 125], [125, 126, 124, 125]], { start: Date.parse("2026-11-08T23:00:00Z") });
+  const h1 = [...fri, ...sun];
+  const key = "OANDA:XAUUSD:60:" + Date.parse(fri.at(-1).open_time);
+  const env = { DB: d1(), SIGNAL_CACHE: kv({}), WEBHOOK_BUFFER: kv({}) };
+  await scoreRecentStatements(env, { now: Date.parse("2026-11-09T04:00:00Z") });
+  // A score written before the gap check existed (production: Friday statements scored on Sunday's bars).
+  env.DB.raw.prepare("INSERT INTO outcome_scores (subject, source, timeframe, candle_key, statement_close, stance, result, scoring_version, scored_at) VALUES ('agent:technical', 'room', '60', ?, ?, 'WAIT', 'missed_opportunity', ?, '2026-11-09T03:00:00Z')").run(key, fri.at(-1).close_time, SCORING_VERSION);
+  env.SIGNAL_CACHE = kv({ "market-data:v2:series:OANDA:XAUUSD|1h": JSON.stringify({ candles: h1 }) });
+  const r = await scoreRecentStatements(env, { now: Date.parse(h1.at(-1).close_time) + 60_000 });
+  assert.equal(r.gap_removed, 1);
+  assert.equal(env.DB.raw.prepare("SELECT COUNT(*) AS n FROM outcome_scores WHERE candle_key = ?").get(key).n, 0);
 });
