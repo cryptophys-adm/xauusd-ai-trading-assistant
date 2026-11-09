@@ -160,24 +160,88 @@ export function biasSupported(bias, supportBiases) {
 export const INDEPENDENCE_RULE = 'Independence: speak only from YOUR DATA, on this timeframe only. Never name or quote another agent or role, and never use another timeframe\'s room, desk or decision. Say in "metrics" which metrics you decided from (one to four, in plain words, for example "the 14-bar average range" or "the Prophet R38 buy confirmation"), and argue from those metrics.';
 export const METRICS_MAX = 4;
 
+/**
+ * Pure: recovers a "metrics" list that a model wrote INSIDE its text field (production 2026-11-09,
+ * 10:00-12:00 UTC: claims ending in `","metrics":["...", ...]}` plus stray tokens such as
+ * `<|file_separator|>`), and cuts the text where the leaked field began. Returns true when repaired.
+ */
+export function repairLeakedMetrics(o, key) {
+  if (!o || typeof o !== "object" || Array.isArray(o.metrics) || typeof o[key] !== "string") return false;
+  const m = /\\*"\s*,\s*\\*"metrics\\*"\s*:\s*\[([\s\S]*?)\]/.exec(o[key]);
+  if (!m) return false;
+  const items = [...m[1].matchAll(/\\*"((?:[^"\\]|\\(?!"))+?)\\*"/g)].map((x) => x[1].trim()).filter(Boolean);
+  if (!items.length) return false;
+  o.metrics = items;
+  o[key] = o[key].slice(0, m.index).replace(/\s+$/, "");
+  return true;
+}
+
+/** Strips trailing model control tokens (`<|...|>`) and dangling JSON from a text field. */
+export function stripModelTokens(text) {
+  if (typeof text !== "string") return text;
+  return text.replace(/\s*<\|[a-z_]+\|>[\s\S]*$/i, "").replace(/\s*[{\[]\s*"?\s*$/, "").trim();
+}
+
+/**
+ * The metrics an agent decided from when its answer named none even after the correction: its own
+ * data source (owner decisions 2026-11-09 allow an indicator as a metric, for example "the Prophet
+ * R38 buy confirmation"); desks get their data in plain words, never a role name. The message is
+ * marked metrics_inferred, so compliance (and Aether) still sees that the model left it out.
+ */
+const INFERRED_METRICS = Object.freeze({
+  technical: ["the closed candles and moving averages"], risk: ["volatility and event risk"], news: ["the latest news analysis"],
+  m15: ["the 15-minute trend and key levels"], h1: ["the 1-hour trend and key levels"], h4: ["the 4-hour trend and key levels"], d1: ["the daily trend and key levels"],
+  moderator: ["the room's weighted bias"]
+});
+export function inferredMetrics(agent) {
+  if (INFERRED_METRICS[agent]) return [...INFERRED_METRICS[agent]];
+  const name = agentName(agent);
+  return [name && name !== agent ? `the ${name.replace(/^the\s+/i, "")} readings` : "this timeframe's own data"];
+}
+
+/** Normalises an answer's text before any check: recovers leaked metrics and strips model tokens. */
+export function normalizeAnswerText(o) {
+  if (!o || typeof o !== "object") return o;
+  if (!Array.isArray(o.metrics)) for (const key of ["claim", "argument", "summary"]) if (repairLeakedMetrics(o, key)) break;
+  for (const key of ["claim", "argument", "summary"]) if (typeof o[key] === "string") o[key] = stripModelTokens(o[key]);
+  return o;
+}
+
 /** Pure: the errors of an answer's "metrics" list (1 to 4 plain-language entries). */
 export function metricsErrors(o) {
   if (!o || typeof o !== "object") return [];
+  normalizeAnswerText(o);
   if (!Array.isArray(o.metrics)) return ["metrics_missing"];
   o.metrics = o.metrics.filter((m) => typeof m === "string" && m.trim()).map((m) => m.trim().slice(0, 80)).slice(0, METRICS_MAX);
   if (!o.metrics.length) return ["metrics_missing"];
   return o.metrics.flatMap((m) => naturalLanguageErrors(m));
 }
 
-/** Pure: "names_an_agent" when `text` names one of `names` (whole words, any case). */
+/** A role name (an agent that is a person-like desk), as opposed to an indicator's name. */
+const ROLE_NAME = /\b(analyst|manager|desk|moderator|agent)\b/i;
+/** Speech, opinion and possession: what turns an indicator's name into a reference to the agent. */
+const ACTOR_AFTER = "(?:'s\\s+(?:view|argument|claim|point|case|call|stance|opinion)|\\s+(?:\\w+\\s+){0,2}?(?:says|said|argues|argued|claims|claimed|thinks|believes|suggests|suggested|warns|warned|agrees|agreed|disagrees|notes|noted|insists|wants|is right|is wrong|agent|desk))";
+const ACTOR_BEFORE = "(?:according to|as|with|unlike|agree with|disagree with|per)\\s+(?:the\\s+)?";
+
+/**
+ * Pure: "names_an_agent" when `text` refers to another agent (whole words, any case).
+ * - A role name (Risk Manager, News Analyst, a Desk, the Moderator) never appears.
+ * - Most agents carry their indicator's name (Supertrend, Prophet, Order Blocks), which is also a
+ *   metric the owner allows ("the Prophet R38 buy confirmation"). Such a name counts only when it
+ *   is used as an actor: "Supertrend says", "the Prophet's view", "according to Order Blocks".
+ *   Production 2026-11-09 lost valid room answers that cited "the Supertrend has held" as a metric.
+ */
 export function namesErrors(text, names = []) {
   if (typeof text !== "string" || !text) return [];
   const t = text.toLowerCase();
   for (const n of names) {
-    const name = String(n || "").trim().toLowerCase().replace(/^the\s+/, "");
+    const full = String(n || "").trim();
+    const name = full.toLowerCase().replace(/^the\s+/, "").replace(/\s*\([^)]*\)\s*$/, "");
     if (name.length < 4) continue;
-    const re = new RegExp(`(^|[^a-z0-9])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`);
-    if (re.test(t)) return ["names_an_agent"];
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const bound = (s) => new RegExp(`(^|[^a-z0-9])${s}([^a-z0-9]|$)`);
+    if (ROLE_NAME.test(full)) { if (bound(esc).test(t)) return ["names_an_agent"]; continue; }
+    if (new RegExp(`(^|[^a-z0-9])${esc}${ACTOR_AFTER}`).test(t) || new RegExp(`${ACTOR_BEFORE}${esc}([^a-z0-9]|$)`).test(t)) return ["names_an_agent"];
   }
   return [];
 }
@@ -204,6 +268,7 @@ export const UNCALIBRATED_CONFIDENCE_CAP = 0.4;
 
 export function validateOpening(o, agent, { verifiedLines = null, forbiddenNames = [] } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
+  normalizeAnswerText(o);
   const errors = [];
   if (!sameAgent(o.agent, agent)) errors.push("agent_mismatch");
   else o.agent = agent;
@@ -235,6 +300,7 @@ export function normalizeRebuts(rebuts, busAgents) {
  */
 export function validateRebuttal(o, agent, busAgents, { unanimous = false, ownStance = null, ownBias = null, forbiddenNames = [], refs = null } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
+  normalizeAnswerText(o);
   agentIdsToNames(o, busAgents);
   // The anonymous bus (#n) maps back to agent ids.
   if (refs && Array.isArray(o.rebuts)) o.rebuts = o.rebuts.map(refs.idOf);
@@ -296,6 +362,7 @@ export function agentIdsToNames(o, ids, nameOf = agentName) {
 }
 
 export function validateConclusion(o, h1Decision, busAgents, confirmations = null, { supportStances = null, supportBiases = null, roomBias = "NEUTRAL", crowd = undefined, forbiddenNames = null, refs = null } = {}) {
+  if (forbiddenNames) normalizeAnswerText(o);
   agentIdsToNames(o, busAgents);
   if (refs && o && typeof o === "object" && Array.isArray(o.dissent)) o.dissent = o.dissent.map(refs.idOf);
   // At most three reasons are kept (a fourth is dropped, not a reason to lose the conclusion).
@@ -515,7 +582,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     const deadline = clock() + ms;
     const runState = { primaryError: null };
     const budgetOk = async () => clock() < deadline && remaining-- > 0;
-    return (stepBase, opts) => { calls += 1; return runStep(roomEnv, db, stepBase, { ...opts, deadline, clock, runState, budgetOk }); };
+    return (stepBase, opts) => { calls += 1; return runStep(roomEnv, db, stepBase, { inferMetrics: (b) => inferredMetrics(b?.agent), ...opts, deadline, clock, runState, budgetOk }); };
   };
 
   // Phase 1: the communication bus.
