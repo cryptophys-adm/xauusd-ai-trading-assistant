@@ -1,5 +1,5 @@
 // Omega broker engine (owner decisions 2026-11-09: "Omega memegang akses broker"; "Mati sampai Anda
-// aktifkan"). Pure: turns the H1 signal, the Omega control, the engine settings and the bridge's last
+// aktifkan"). Pure: turns the EA signal (GET /api/ea/signal: the Decision Engine's 15m decision since #212), the Omega control, the engine settings and the bridge's last
 // executor state into order intents for the owner's MT5 terminal (docs/OMEGA_BRIDGE_PROTOCOL.md).
 // It runs only when the bridge syncs (src/omega-broker.mjs), never on a cron, and never calls anything.
 //
@@ -22,7 +22,8 @@ export const OMEGA_DEFAULTS = Object.freeze({
   max_positions: 1,
   max_daily_loss_pct: 2,
   max_spread_points: 60,
-  max_signal_age_ms: 20 * 60_000
+  // Like the EA (1.11): the Decision Engine decides at every 15m close, so a signal is fresh for 10 minutes.
+  max_signal_age_ms: 10 * 60_000
 });
 export const RISK_PCT_MAX = 2;
 export const EXECUTOR_MAX_AGE_MS = 60_000;

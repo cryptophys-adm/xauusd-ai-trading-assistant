@@ -89,6 +89,10 @@ test("entry gates: expired, too old, blackout, paused, spread, positions, daily 
     assert.ok(codes(r).includes(code), `${code}: got ${codes(r)}`);
   }
   assert.equal(plan({ executor: ex({ account: { ...EXECUTOR.account, equity: 9_801 } }) }).intents.length, 1, "a loss just under the limit still trades");
+  // The Decision Engine's 15m signal (since #212): fresh for 10 minutes by default, like the EA 1.11.
+  const m15 = { ...SIGNAL, expires_ms: ISSUED + 900_000 };
+  assert.equal(plan({ signal: m15, now: ISSUED + 9 * 60_000, executor: ex({ received_ms: ISSUED + 9 * 60_000 - 1000 }) }).intents.length, 1);
+  assert.deepEqual(codes(plan({ signal: m15, now: ISSUED + 11 * 60_000, executor: ex({ received_ms: ISSUED + 11 * 60_000 - 1000 }) })), ["signal_too_old"]);
 });
 
 test("a real account needs live armed for an open, but an opposite position is still closed", () => {
