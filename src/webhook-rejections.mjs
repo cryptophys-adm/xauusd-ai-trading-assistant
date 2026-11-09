@@ -12,11 +12,17 @@
 //   secret_length_differs  a different secret: its length differs from WEBHOOK_SECRET's;
 //   secret_mismatch        a different secret of the same length.
 // Only lengths, never characters, are kept; the rows hold source, timeframe, candle time and the
-// request's content type and user agent, and are pruned after 14 days. The health detector opens
+// request's content type and user agent, and are pruned after 14 days.
+// Fingerprints (owner report 2026-11-09, after the secret was rotated and set in both places and
+// the 5m alerts still answered 401 with two different 32-character secrets): each row also keeps the
+// first 8 hex characters of the SHA-256 of the received secret and of WEBHOOK_SECRET. The owner
+// hashes the candidate values on their own machine (printf '%s' "<value>" | sha256sum) and sees
+// which one the alerts send and which one the Worker holds. 32 bits of the hash of a random
+// 32-character secret do not help guess it; the fingerprints never leave D1. The health detector opens
 // a "webhook_rejected" alert (Priority Queue) while rejections keep arriving.
 
 export const WEBHOOK_REJECTIONS_SQL =
-  "CREATE TABLE IF NOT EXISTS webhook_rejections (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TEXT NOT NULL, reason TEXT NOT NULL, secret_field TEXT NOT NULL, received_len INTEGER NOT NULL, expected_len INTEGER NOT NULL, source TEXT, timeframe TEXT, candle_time TEXT, content_type TEXT, user_agent TEXT)";
+  "CREATE TABLE IF NOT EXISTS webhook_rejections (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TEXT NOT NULL, reason TEXT NOT NULL, secret_field TEXT NOT NULL, received_len INTEGER NOT NULL, expected_len INTEGER NOT NULL, source TEXT, timeframe TEXT, candle_time TEXT, content_type TEXT, user_agent TEXT, received_fp TEXT, expected_fp TEXT)";
 const RETENTION_MS = 14 * 24 * 3600_000;
 export const MAX_PER_HOUR = 300;
 
@@ -47,17 +53,36 @@ export function classifyRejection({ headerSecret = "", bodySecret = "", expected
 
 const clip = (v, n) => (typeof v === "string" && v ? v.slice(0, n) : null);
 
+/** The first 8 hex characters of the SHA-256 of a value (null for an empty one). */
+export async function fingerprint(value) {
+  if (typeof value !== "string" || !value) return null;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest).slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// The table of the first release had no fingerprint columns: add them once per isolate.
+let columnsReady = false;
+async function ensureColumns(db) {
+  if (columnsReady) return;
+  for (const col of ["received_fp", "expected_fp"]) {
+    try { await db.prepare(`ALTER TABLE webhook_rejections ADD COLUMN ${col} TEXT`).run(); } catch { /* already there */ }
+  }
+  columnsReady = true;
+}
+export function resetRejectionSchemaCacheForTests() { columnsReady = false; }
+
 /** Stores one rejection row and prunes rows past the retention. Never throws. */
-export async function recordRejection(db, rejection, { source = null, timeframe = null, candleTime = null, contentType = null, userAgent = null } = {}, now = Date.now()) {
+export async function recordRejection(db, rejection, { source = null, timeframe = null, candleTime = null, contentType = null, userAgent = null, receivedSecret = "", expectedSecret = "" } = {}, now = Date.now()) {
   if (!db || !rejection) return false;
   try {
     await db.prepare(WEBHOOK_REJECTIONS_SQL).run();
+    await ensureColumns(db);
     // A flood of unauthenticated requests must not fill D1: at most MAX_PER_HOUR rows an hour.
     const recent = await db.prepare("SELECT COUNT(*) AS n FROM webhook_rejections WHERE received_at >= ?").bind(new Date(now - 3600_000).toISOString()).first();
     if (Number(recent?.n) >= MAX_PER_HOUR) return false;
     await db.prepare(
-      "INSERT INTO webhook_rejections (received_at, reason, secret_field, received_len, expected_len, source, timeframe, candle_time, content_type, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ).bind(new Date(now).toISOString(), rejection.reason, rejection.secret_field, rejection.received_len, rejection.expected_len, clip(source, 40), clip(timeframe, 8), clip(candleTime, 24), clip(contentType, 60), clip(userAgent, 80)).run();
+      "INSERT INTO webhook_rejections (received_at, reason, secret_field, received_len, expected_len, source, timeframe, candle_time, content_type, user_agent, received_fp, expected_fp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).bind(new Date(now).toISOString(), rejection.reason, rejection.secret_field, rejection.received_len, rejection.expected_len, clip(source, 40), clip(timeframe, 8), clip(candleTime, 24), clip(contentType, 60), clip(userAgent, 80), await fingerprint(receivedSecret), await fingerprint(expectedSecret)).run();
     await db.prepare("DELETE FROM webhook_rejections WHERE received_at < ?").bind(new Date(now - RETENTION_MS).toISOString()).run();
     return true;
   } catch {
