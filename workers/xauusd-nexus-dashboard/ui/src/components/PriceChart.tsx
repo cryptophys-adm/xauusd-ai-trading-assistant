@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
-import { CandlestickChart } from "lucide-react";
+import { CandlestickChart, Link2, Unlink2 } from "lucide-react";
 import clsx from "clsx";
 import { Panel } from "./ui";
 import { get } from "../lib/api";
 import { useMarket } from "../lib/market";
+import { useTab } from "../lib/tab";
 import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
 import { bandSeries, type Bar } from "../lib/indicators";
 
@@ -50,6 +51,8 @@ export default function PriceChart() {
   const candles = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volume = useRef<ISeriesApi<"Histogram"> | null>(null);
   const lines = useRef<Partial<Record<LineKey, ISeriesApi<"Line">>>>({});
+  const { tab } = useTab();
+  const [syncWithRoom, setSyncWithRoom] = useState<boolean>(() => { try { return localStorage.getItem("nexus.chartSync") !== "off"; } catch { return true; } });
   const [tf, setTf] = useState<string>(() => { try { return localStorage.getItem("nexus.chartTf") || "H1"; } catch { return "H1"; } });
   const zonesRef = useRef<ZonesPrimitive | null>(null);
   const layerZonesRef = useRef<ZonesPrimitive | null>(null);
@@ -61,6 +64,63 @@ export default function PriceChart() {
   const [layers, setLayers] = useState<Layers>(readLayers);
   const { global: g } = useMarket();
   const [head, setHead] = useState<{ last?: number; change?: number; pct?: number; basis?: string; closed?: string; error?: string }>({});
+
+  // Synchronize chart timeframe with active War Room tab unless unlinked by user.
+  useEffect(() => {
+    if (!syncWithRoom) return;
+    const targetTf = tab === "NEWS" ? "H1" : tab;
+    setTf(targetTf);
+  }, [tab, syncWithRoom]);
+
+  const handleSelectTf = (key: string) => {
+    setTf(key);
+    try { localStorage.setItem("nexus.chartTf", key); } catch { /* per-viewer convenience */ }
+    const targetTf = tab === "NEWS" ? "H1" : tab;
+    if (key !== targetTf && syncWithRoom) {
+      setSyncWithRoom(false);
+      try { localStorage.setItem("nexus.chartSync", "off"); } catch { /* per-viewer convenience */ }
+    }
+  };
+
+  const toggleSync = () => {
+    setSyncWithRoom((prev) => {
+      const next = !prev;
+      try { localStorage.setItem("nexus.chartSync", next ? "on" : "off"); } catch { /* per-viewer convenience */ }
+      if (next) {
+        const targetTf = tab === "NEWS" ? "H1" : tab;
+        setTf(targetTf);
+      }
+      return next;
+    });
+  };
+
+  const applyPreset = (name: "clean" | "structure" | "full") => {
+    if (name === "clean") {
+      setShowZones(false);
+      const next: Layers = { bands: false, volume: false, vwap: false, liquidity: false, session: false, fib: "off" };
+      setLayers(next);
+      try {
+        localStorage.setItem("nexus.chartZones", "off");
+        localStorage.setItem("nexus.chartLayers", JSON.stringify(next));
+      } catch { /* ignore */ }
+    } else if (name === "structure") {
+      setShowZones(true);
+      const next: Layers = { bands: true, volume: true, vwap: false, liquidity: false, session: false, fib: "auto" };
+      setLayers(next);
+      try {
+        localStorage.setItem("nexus.chartZones", "on");
+        localStorage.setItem("nexus.chartLayers", JSON.stringify(next));
+      } catch { /* ignore */ }
+    } else if (name === "full") {
+      setShowZones(true);
+      const next: Layers = { bands: true, volume: true, vwap: true, liquidity: true, session: true, fib: "on" };
+      setLayers(next);
+      try {
+        localStorage.setItem("nexus.chartZones", "on");
+        localStorage.setItem("nexus.chartLayers", JSON.stringify(next));
+      } catch { /* ignore */ }
+    }
+  };
 
   const setLayer = <K extends keyof Layers>(k: K, v: Layers[K]) => setLayers((cur) => {
     const next = { ...cur, [k]: v };
@@ -229,15 +289,30 @@ export default function PriceChart() {
         {head.change != null && <span className={clsx("mono text-[12px]", up ? "text-emerald-400" : "text-rose-400")}>{up ? "+" : ""}{head.change.toFixed(2)} ({up ? "+" : ""}{head.pct?.toFixed(2)}%)</span>}</span>}
       icon={<CandlestickChart className="h-4 w-4 text-amber-300" />}
       right={
-        <div className="flex gap-1" role="tablist" aria-label="Chart timeframe">
-          {TFS.map(([key, label]) => (
-            <button key={key} type="button" role="tab" aria-selected={tf === key}
-              onClick={() => { setTf(key); try { localStorage.setItem("nexus.chartTf", key); } catch { /* per-viewer convenience only */ } }}
-              className={clsx("rounded-md border px-2.5 py-1 text-[11px] font-semibold transition", tf === key ? "border-cyan-400/40 bg-cyan-400/10 text-white" : "border-white/10 text-slate-400 hover:text-white")}>{label}</button>
-          ))}
+        <div className="flex items-center gap-1.5" role="tablist" aria-label="Chart timeframe">
+          <button type="button" onClick={toggleSync}
+            title={syncWithRoom ? "Chart timeframe is synced with War Room tab. Click to unlink." : "Chart timeframe is unlinked. Click to sync with War Room tab."}
+            className={clsx("flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold transition",
+              syncWithRoom ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-200" : "border-white/10 text-slate-500 hover:border-white/20 hover:text-slate-300")}>
+            {syncWithRoom ? <Link2 className="h-3 w-3" /> : <Unlink2 className="h-3 w-3" />}
+            <span className="hidden sm:inline">{syncWithRoom ? "Synced" : "Unlinked"}</span>
+          </button>
+          <div className="flex gap-1">
+            {TFS.map(([key, label]) => (
+              <button key={key} type="button" role="tab" aria-selected={tf === key}
+                onClick={() => handleSelectTf(key)}
+                className={clsx("rounded-md border px-2.5 py-1 text-[11px] font-semibold transition", tf === key ? "border-cyan-400/40 bg-cyan-400/10 text-white" : "border-white/10 text-slate-400 hover:text-white")}>{label}</button>
+            ))}
+          </div>
         </div>
       }>
       <div className="mb-2 flex flex-wrap items-center gap-1" aria-label="Chart layers">
+        <div className="mr-1 flex items-center gap-1 border-r border-white/10 pr-2">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Preset</span>
+          <button type="button" onClick={() => applyPreset("clean")} title="Candlesticks only: clear all indicator overlays" className="rounded px-1.5 py-0.5 text-[10px] font-medium text-slate-400 hover:bg-white/5 hover:text-white transition">Clean</button>
+          <button type="button" onClick={() => applyPreset("structure")} title="Standard confluence: Zones, Bands, Volume" className="rounded px-1.5 py-0.5 text-[10px] font-medium text-slate-400 hover:bg-white/5 hover:text-white transition">Structure</button>
+          <button type="button" onClick={() => applyPreset("full")} title="Full confluence: Zones, Bands, Volume, Fib, VWAP, Liquidity, Session" className="rounded px-1.5 py-0.5 text-[10px] font-medium text-slate-400 hover:bg-white/5 hover:text-white transition">Full</button>
+        </div>
         <button type="button" aria-pressed={showZones} title="Key Level Agent zones and the strategy plan" className={chip(showZones)}
           onClick={() => setShowZones((v) => { try { localStorage.setItem("nexus.chartZones", v ? "off" : "on"); } catch { /* per-viewer convenience only */ } return !v; })}>Zones</button>
         <button type="button" aria-pressed={layers.bands} title="Z-KWW mean, ±1σ and ±1.618σ, and EMA 114" className={chip(layers.bands)} onClick={() => setLayer("bands", !layers.bands)}>Bands</button>

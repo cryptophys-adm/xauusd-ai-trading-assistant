@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Clock3, Compass, Gauge, Globe2, Radar, Users } from "lucide-react";
+import { ChevronDown, ChevronRight, Clock3, Compass, Gauge, Globe2, Radar, Users } from "lucide-react";
 import { Badge, Panel, Skeleton } from "./ui";
 import { Stance } from "./Stance";
 import { C, DivergingBar, Donut, RegimeRadar, SentimentGauge, StackedBar, leanColor } from "./charts";
@@ -204,26 +204,83 @@ function SessionClock() {
   );
 }
 
+function SectionToggle({
+  title,
+  count,
+  open,
+  onToggle
+}: {
+  title: string;
+  count: number;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="flex w-full items-center justify-between rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2 text-left transition hover:border-white/10 hover:bg-white/[0.04]"
+      aria-expanded={open}>
+      <span className="flex items-center gap-2">
+        {open ? <ChevronDown className="h-3.5 w-3.5 text-cyan-400" /> : <ChevronRight className="h-3.5 w-3.5 text-slate-500" />}
+        <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">{title}</span>
+      </span>
+      <span className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[9px] font-mono text-slate-400">{count}</span>
+    </button>
+  );
+}
+
 /**
  * Right panel, charts only: the Global Conclusion first, then the key levels (the Camarilla set of
  * the active tab's chart and the Key Level Agent's zones on one price axis, backlog item 18),
  * sentiment, trend by timeframe, the regime radar of the active tab's chart, agent consensus, macro
  * drivers and the session clock.
+ * Organized into 3 collapsible sections for focused analysis on desktop and mobile.
  */
-export default function AssistantPanel({ className }: { className?: string }) {
+export default function AssistantPanel({ className, hideGlobalDecision }: { className?: string; hideGlobalDecision?: boolean }) {
   const ladder = useLadder();
   const { tab, levels, loading } = useLevels();
+  const [openSections, setOpenSections] = useState({ decision: true, structure: true, macro: true });
+
+  const toggle = (key: keyof typeof openSections) => setOpenSections((s) => ({ ...s, [key]: !s[key] }));
+
   return (
     <div className={className}>
-      <div className="space-y-4">
-        <GlobalDecision />
-        <KeyLevels levels={levels} loading={loading} tab={tab} />
-        <SentimentCard />
-        <TrendLadder ladder={ladder} />
-        <RegimeCard levels={levels} loading={loading} tab={tab} />
-        <ConsensusCard ladder={ladder} />
-        <MacroDrivers />
-        <SessionClock />
+      <div className="space-y-3">
+        {/* Section 1: Decision & Plan */}
+        <div className="space-y-3">
+          <SectionToggle title="Decision & Plan" count={hideGlobalDecision ? 1 : 2} open={openSections.decision} onToggle={() => toggle("decision")} />
+          {openSections.decision && (
+            <div className="space-y-4">
+              {!hideGlobalDecision && <GlobalDecision />}
+              <KeyLevels levels={levels} loading={loading} tab={tab} />
+            </div>
+          )}
+        </div>
+
+        {/* Section 2: Market Structure & Regime */}
+        <div className="space-y-3">
+          <SectionToggle title="Structure & Regime" count={3} open={openSections.structure} onToggle={() => toggle("structure")} />
+          {openSections.structure && (
+            <div className="space-y-4">
+              <SentimentCard />
+              <TrendLadder ladder={ladder} />
+              <RegimeCard levels={levels} loading={loading} tab={tab} />
+            </div>
+          )}
+        </div>
+
+        {/* Section 3: Macro Context & Sessions */}
+        <div className="space-y-3">
+          <SectionToggle title="Macro & Sessions" count={3} open={openSections.macro} onToggle={() => toggle("macro")} />
+          {openSections.macro && (
+            <div className="space-y-4">
+              <ConsensusCard ladder={ladder} />
+              <MacroDrivers />
+              <SessionClock />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
