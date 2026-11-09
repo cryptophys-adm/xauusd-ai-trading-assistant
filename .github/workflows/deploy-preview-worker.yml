@@ -404,10 +404,14 @@ jobs:
           assert.ok((queueReady?.registry_status_counts?.approved ?? 0) >= 2,
             "Prophet and GMI identities must be promoted only after Queue-driven parity: " + JSON.stringify(queueReady));
           assert.ok(latestDecision, "Queue consumer must persist an asynchronous analysis synthesis");
-          assert.equal(latestDecision.evidence_fusion.complete, false,
-            "fixture without fresh news must remain degraded");
+          // Quorum mode (owner decision 2026-11-09): missing news is noted, not blocking; only a
+          // missing or stale closed candle stops the decision.
+          assert.equal(latestDecision.evidence_fusion.decision_mode, "quorum", "the local-primary chain fuses in quorum mode");
+          assert.equal(latestDecision.evidence_fusion.complete, true,
+            "a fixture without fresh news is not degraded in quorum mode");
+          assert.deepEqual(latestDecision.evidence_fusion.blocking_errors, [], "the fresh closed candle has no blocking error");
           assert.ok(latestDecision.evidence_fusion.missing_evidence?.includes("fundamental_news_analysis"),
-            "fresh completed news must remain a mandatory missing-evidence blocker in this fixture test");
+            "the missing news analysis stays visible in the evidence");
           assert.ok(!latestDecision.evidence_fusion.missing_evidence?.some(item => item.startsWith("local_calculation:")),
             "all three local calculation contract records should have been fused");
 
@@ -425,12 +429,13 @@ jobs:
           const finalDecisionResponse = await fetch(base + "/api/decision/" + encodeURIComponent(candleKey));
           const finalDecision = await finalDecisionResponse.json();
           assert.equal(finalDecision.synthesis?.timestamp, firstSynthesisTimestamp,
-            "duplicate queue delivery must not rerun the same degraded AI analysis");
+            "duplicate queue delivery must not rerun the same analysis");
 
           // The old H1 multi-agent bus and its Threads 1H (h1:<candle>) are retired (owner decision
           // 2026-11-07): the 1H War Room is the H1 communication bus, and the Reasoner decides after
-          // its Consensus Discussion. The degraded fixture above is a fail-closed WAIT without any model.
-          assert.equal(finalDecision.synthesis?.decision?.decision, "WAIT", "degraded evidence stays a fail-closed WAIT");
+          // its Consensus Discussion. The fixture above is an M5 candle with no War Room, so it has no
+          // consensus and no quorum: a WAIT without any model.
+          assert.equal(finalDecision.synthesis?.decision?.decision, "WAIT", "no War Room, no quorum: the decision stays WAIT");
           const oldBus = await pollFetch(base + "/api/bus?candle_key=" + encodeURIComponent(candleKey));
           const oldBusItems = oldBus.ok ? ((await oldBus.json()).items || []) : [];
           assert.equal(oldBusItems.length, 0, "the old H1 multi-agent bus never runs for a candle");
@@ -455,7 +460,7 @@ jobs:
           assert.equal(tvReading.bias, "bullish");
 
           // Model migration (owner decision 2026-11-07): the H1 Reasoner and the news chain run on
-          // gpt-oss-120b. The degraded fixture never calls the Reasoner, so a preview-only probe makes
+          // gpt-oss-120b. The fixture (no War Room) never calls the Reasoner, so a preview-only probe makes
           // one call in its request form and must get a parseable decision back.
           const probeResponse = await fetch(base + "/preview/reasoner-probe", { method: "POST", headers });
           const probe = await probeResponse.json();
