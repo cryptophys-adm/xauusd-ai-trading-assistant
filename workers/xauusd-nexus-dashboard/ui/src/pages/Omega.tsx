@@ -1,13 +1,49 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { Activity, Cpu, KeyRound, Lock, Power, Radio, Server, ShieldAlert, Sliders, Terminal, Zap } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  Activity,
+  Bot,
+  CandlestickChart,
+  KeyRound,
+  Layers,
+  Lock,
+  Power,
+  Radio,
+  Sliders,
+  Terminal,
+  Zap,
+} from "lucide-react";
+import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
 import { Badge, Dot, Empty, Kpi, Panel, Skeleton } from "../components/ui";
+import { get } from "../lib/api";
 
 /**
- * Omega Execution Engine & Broker Bridge page inside the Nexus SPA (owner 2026-11-09:
- * integrated into the Nexus left sidebar navigation at nexus.cryptophys.work/omega/ and /#/omega
- * so every page sits behind the same Cloudflare Access login).
- * Calls same-origin /omega/api/* routes forwarded to xauusd-omega (OMEGA_PAGE binding).
+ * Omega Execution Engine & Windows MetaTrader 5 Web Terminal inside the Nexus SPA
+ * (owner 2026-11-09: integrated into the Nexus left sidebar navigation at
+ * nexus.cryptophys.work/omega/ and /#/omega behind Cloudflare Access, upgraded with a
+ * full Windows MT5 Terminal — Web Edition workstation).
+ * Calls same-origin /omega/api/* routes forwarded to xauusd-omega (OMEGA_PAGE binding)
+ * and /api/ohlcv for the MT5 terminal candlestick chart.
  */
+
+interface Candle {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+
+type Mt5Tf = "M5" | "M15" | "H1" | "H4" | "D1";
+type ToolboxTab = "trade" | "history" | "intents" | "experts" | "journal";
+
+const MT5_TFS: { key: Mt5Tf; label: string }[] = [
+  { key: "M5", label: "M5" },
+  { key: "M15", label: "M15" },
+  { key: "H1", label: "H1" },
+  { key: "H4", label: "H4" },
+  { key: "D1", label: "D1" },
+];
 
 const b64 = (bytes: ArrayBuffer | Uint8Array) => {
   let s = "";
@@ -35,12 +71,18 @@ async function buildEnvelope(publicKeySpkiBase64: string, kid: string, creds: { 
 const num = (v?: number | null, d = 2) => (typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "—");
 const money = (v?: number | null, cur = "") =>
   typeof v === "number" && Number.isFinite(v) ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}${cur ? " " + cur : ""}` : "—";
+const balFmt = (v?: number | null, cur = "") =>
+  typeof v === "number" && Number.isFinite(v)
+    ? `${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${cur ? " " + cur : ""}`
+    : "—";
 const toneCls = (v?: number | null) => (typeof v !== "number" || v === 0 ? "text-slate-300" : v > 0 ? "text-emerald-300" : "text-rose-300");
 const timeUtc = (ms?: number | null) => (ms ? new Date(ms).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "—");
 const agoMs = (ms?: number | null) => {
   if (ms == null) return "never";
+  const s = Math.round(ms / 1000);
+  if (s < 45) return `${Math.max(1, s)}s ago`;
   const m = Math.round(ms / 60000);
-  return m < 1 ? "just now" : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
+  return m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
 };
 
 const CONNECTION_TEXT: Record<string, string> = {
@@ -73,11 +115,226 @@ async function omegaJson(path: string, method = "GET", body?: unknown) {
   return data;
 }
 
+function Mt5ChartCanvas({
+  tf,
+  symbol,
+  server,
+  digits,
+  bid,
+  ask,
+  spreadPoints,
+  signal,
+  positions,
+  showBidAsk,
+  showPlan,
+  showPositions,
+}: {
+  tf: Mt5Tf;
+  symbol: string;
+  server: string;
+  digits: number;
+  bid?: number | null;
+  ask?: number | null;
+  spreadPoints?: number | null;
+  signal: any;
+  positions: any[];
+  showBidAsk: boolean;
+  showPlan: boolean;
+  showPositions: boolean;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const linesRef = useRef<IPriceLine[]>([]);
+  const [candles, setCandles] = useState<Candle[]>([]);
+  const [hover, setHover] = useState<Candle | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const loadCandles = () => {
+      get<{ candles: Candle[] }>(`/api/ohlcv?timeframe=${tf}&limit=300`)
+        .then((r) => {
+          if (alive) setCandles(r.candles || []);
+        })
+        .catch(() => {
+          if (alive) setCandles([]);
+        });
+    };
+    loadCandles();
+    const id = window.setInterval(loadCandles, 20_000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [tf]);
+
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el) return;
+    const chart = createChart(el, {
+      autoSize: true,
+      layout: {
+        background: { color: "#060a12" },
+        textColor: "#8b9bb4",
+        fontFamily: "ui-monospace, JetBrains Mono, monospace",
+      },
+      grid: {
+        vertLines: { color: "rgba(34, 211, 238, 0.05)" },
+        horzLines: { color: "rgba(34, 211, 238, 0.05)" },
+      },
+      crosshair: { mode: 0 },
+      rightPriceScale: { borderColor: "rgba(255,255,255,0.09)" },
+      timeScale: { borderColor: "rgba(255,255,255,0.09)", timeVisible: true, secondsVisible: false },
+    });
+    const series = chart.addCandlestickSeries({
+      upColor: "#3fb950",
+      downColor: "#f85149",
+      borderUpColor: "#3fb950",
+      borderDownColor: "#f85149",
+      wickUpColor: "#3fb950",
+      wickDownColor: "#f85149",
+      priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+    });
+    const vol = chart.addHistogramSeries({
+      priceFormat: { type: "volume" },
+      priceScaleId: "vol",
+    });
+    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
+    chartRef.current = chart;
+    seriesRef.current = series;
+    volRef.current = vol;
+
+    return () => {
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
+      volRef.current = null;
+      linesRef.current = [];
+    };
+  }, []);
+
+  useEffect(() => {
+    const series = seriesRef.current;
+    const vol = volRef.current;
+    const chart = chartRef.current;
+    if (!series || !vol || !chart) return;
+    const sorted = [...candles]
+      .filter((c) => Number.isFinite(c.time) && Number.isFinite(c.open) && Number.isFinite(c.close))
+      .sort((a, b) => a.time - b.time);
+    series.setData(sorted.map((c) => ({ time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close })));
+    vol.setData(
+      sorted.map((c) => ({
+        time: c.time as UTCTimestamp,
+        value: c.volume ?? 0,
+        color: c.close >= c.open ? "rgba(63,185,80,0.28)" : "rgba(248,81,73,0.28)",
+      }))
+    );
+
+    const sub = (param: any) => {
+      if (!param?.time) {
+        setHover(null);
+        return;
+      }
+      const found = sorted.find((c) => c.time === param.time);
+      setHover(found || null);
+    };
+    chart.subscribeCrosshairMove(sub);
+    return () => chart.unsubscribeCrosshairMove(sub);
+  }, [candles]);
+
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    for (const l of linesRef.current) {
+      try {
+        series.removePriceLine(l);
+      } catch {
+        // ignore removed line
+      }
+    }
+    linesRef.current = [];
+    const addLine = (price: number | null | undefined, title: string, color: string, style = LineStyle.Dashed, lineWidth: 1 | 2 = 1) => {
+      if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) return;
+      linesRef.current.push(series.createPriceLine({ price, color, lineWidth, lineStyle: style, axisLabelVisible: true, title }));
+    };
+
+    if (showBidAsk) {
+      addLine(bid, "BID", "#3fb950", LineStyle.Solid, 1);
+      addLine(ask, "ASK", "#f85149", LineStyle.Solid, 1);
+    }
+    if (showPlan && signal && signal.side && signal.side !== "NONE") {
+      addLine(signal.entry, `15m ${signal.side} ENTRY`, "#22d3ee", LineStyle.Dashed, 1);
+      addLine(signal.stop, "15m SL", "#fb7185", LineStyle.Dashed, 1);
+      addLine(signal.tp1, "15m TP", "#34d399", LineStyle.Dashed, 1);
+    }
+    if (showPositions && Array.isArray(positions)) {
+      for (const p of positions) {
+        const entryPrice = p.open_price ?? p.entry;
+        const isBuy = p.side === "BUY";
+        addLine(entryPrice, `#${p.ticket} ${p.side} ${num(p.volume, 2)}`, isBuy ? "#3fb950" : "#f85149", LineStyle.Solid, 2);
+        addLine(p.sl, `#${p.ticket} SL`, "#fb7185", LineStyle.Dotted, 1);
+        addLine(p.tp, `#${p.ticket} TP`, "#34d399", LineStyle.Dotted, 1);
+      }
+    }
+  }, [candles, bid, ask, signal, positions, showBidAsk, showPlan, showPositions]);
+
+  const last = hover || candles[candles.length - 1];
+
+  return (
+    <div className="relative h-[430px] w-full bg-[#060a12]">
+      {/* MT5 Top-Left Chart Watermark & OHLC Bar */}
+      <div className="pointer-events-none absolute left-2.5 top-2 z-10 flex flex-col gap-0.5 rounded bg-black/55 px-2.5 py-1.5 backdrop-blur-sm border border-white/5">
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="mono font-bold text-cyan-300">
+            {symbol}, {tf}
+          </span>
+          <span className="text-slate-400">·</span>
+          <span className="text-slate-300">{server || "MetaTrader 5 Terminal"}</span>
+          <span className="rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300">
+            EA: OmegaExecutor (magic 920200)
+          </span>
+        </div>
+        {last ? (
+          <div className="mono flex flex-wrap items-center gap-2.5 text-[10.5px] text-slate-400">
+            <span>O {num(last.open, digits)}</span>
+            <span>H {num(last.high, digits)}</span>
+            <span>L {num(last.low, digits)}</span>
+            <span className={last.close >= last.open ? "text-emerald-300" : "text-rose-300"}>C {num(last.close, digits)}</span>
+            {last.volume != null ? <span>V {Math.round(last.volume)}</span> : null}
+          </div>
+        ) : (
+          <div className="mono text-[10.5px] text-slate-500">Loading XAUUSD candles…</div>
+        )}
+      </div>
+
+      {/* Live Broker Bid/Ask Overlay Pill */}
+      <div className="pointer-events-none absolute right-16 top-2 z-10 flex items-center gap-1.5 rounded bg-black/65 px-2.5 py-1 text-[11px] backdrop-blur-sm border border-white/10">
+        <span className="text-slate-400">Bid</span>
+        <span className="mono font-bold text-emerald-300">{num(bid, digits)}</span>
+        <span className="text-slate-600">/</span>
+        <span className="text-slate-400">Ask</span>
+        <span className="mono font-bold text-rose-300">{num(ask, digits)}</span>
+        {spreadPoints != null ? <span className="mono ml-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-amber-200">{spreadPoints} pts</span> : null}
+      </div>
+
+      <div ref={hostRef} className="h-full w-full" />
+    </div>
+  );
+}
+
 export default function Omega() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string>("—");
+
+  // MT5 Web Terminal UI state
+  const [mt5Tf, setMt5Tf] = useState<Mt5Tf>("M15");
+  const [toolboxTab, setToolboxTab] = useState<ToolboxTab>("trade");
+  const [showBidAsk, setShowBidAsk] = useState(true);
+  const [showPlan, setShowPlan] = useState(true);
+  const [showPositions, setShowPositions] = useState(true);
 
   // Control state
   const [controlReason, setControlReason] = useState("");
@@ -128,7 +385,7 @@ export default function Omega() {
 
   useEffect(() => {
     load();
-    const t = window.setInterval(load, 15_000);
+    const t = window.setInterval(load, 10_000);
     return () => window.clearInterval(t);
   }, [engineDirty]);
 
@@ -218,7 +475,7 @@ export default function Omega() {
   if (loading && !data) {
     return (
       <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
-        <Panel title="Omega · Execution Engine" icon={<Zap className="h-3.5 w-3.5 text-cyan-300" />}>
+        <Panel title="Omega · Execution Engine & MT5 Web Terminal" icon={<Zap className="h-3.5 w-3.5 text-cyan-300" />}>
           <Skeleton rows={5} />
         </Panel>
       </div>
@@ -233,11 +490,21 @@ export default function Omega() {
   const b = data?.broker || null;
   const viewer = data?.viewer || { can_control: false };
   const canControl = Boolean(viewer.can_control);
-  const cur = hb?.currency || "";
 
   const e = b?.engine || {};
   const conn = b?.connection || {};
   const br = b?.bridge || {};
+  const cur = br.currency || hb?.currency || "USD";
+  const digits = typeof br.digits === "number" && br.digits >= 0 ? br.digits : 2;
+  const symbolName = br.symbol || "XAUUSD.m";
+  const serverName = br.server || conn.server || "Broker Server";
+  const positionsList: any[] = hb?.positions_detail?.length ? hb.positions_detail : br?.positions || [];
+  const floatingPnl =
+    typeof hb?.floating_pnl === "number"
+      ? hb.floating_pnl
+      : positionsList.reduce((acc, p) => acc + (typeof p.profit === "number" ? p.profit : 0), 0);
+  const algoActive = Boolean(e.env_enabled && e.enabled && c.mode !== "paused" && c.mode !== "killed");
+
   const effectiveLabel = !e.env_enabled
     ? "off (server switch OMEGA_ENGINE_ENABLED)"
     : !e.enabled
@@ -247,17 +514,25 @@ export default function Omega() {
 
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
+      {/* Top Status Banner */}
       <Panel
-        title="Omega · XAUUSD Execution Engine"
+        title="Omega · XAUUSD Execution Engine & MT5 Web Terminal"
         icon={<Zap className="h-3.5 w-3.5 text-cyan-300" />}
         right={
           <div className="flex flex-wrap items-center gap-1.5">
-            <Badge tone={ea.connected ? "green" : "red"}>
-              <Dot tone={ea.connected ? "green" : "red"} pulse={ea.connected} />
-              {ea.connected ? "EA connected" : "EA offline"}
+            <Badge tone={br.terminal_connected ? "green" : "red"}>
+              <Dot tone={br.terminal_connected ? "green" : "red"} pulse={br.terminal_connected} />
+              {br.terminal_connected ? `MT5: ${serverName}` : "MT5 disconnected"}
             </Badge>
-            <Badge tone={hb?.mode === "live" ? "amber" : "cyan"}>
-              {hb?.mode ? `${hb.mode} account` : "account unknown"}
+            <Badge tone={br.seen ? "green" : "red"}>
+              <Dot tone={br.seen ? "green" : "red"} pulse={br.seen} />
+              {br.seen ? "Bridge online" : "Bridge offline"}
+            </Badge>
+            <Badge tone={algoActive ? "green" : "amber"}>
+              Algo Trading: {algoActive ? "ON" : "STANDBY"}
+            </Badge>
+            <Badge tone={br.trade_mode === "real" || hb?.mode === "live" ? "amber" : "cyan"}>
+              {br.trade_mode ? `${br.trade_mode} account` : hb?.mode ? `${hb.mode} account` : "account unknown"}
             </Badge>
             <Badge tone={c.mode === "killed" ? "red" : c.mode === "paused" ? "amber" : "green"}>
               control: {c.mode || "active"}
@@ -276,13 +551,645 @@ export default function Omega() {
         {error ? (
           <p className="text-[12px] text-rose-300">Omega error: {error}</p>
         ) : (
-          <p className="text-[12px] leading-relaxed text-slate-400">
-            Omega monitors and controls the MT5 EA and, when enabled, plans and sizes trades from the Decision Engine&apos;s 15m decision and executes them through the outbound bridge on the MT5 host. Broker credentials are encrypted in this browser to the bridge&apos;s RSA-3072 public key. Updated <span className="mono text-slate-300">{updatedAt}</span>.
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[12px] leading-relaxed text-slate-400">
+            <p>
+              Live Web Edition of the Windows MetaTrader 5 Terminal synchronized every 5 seconds with the host MT5 terminal (<span className="mono text-slate-200">{serverName}</span> · <span className="mono text-cyan-300">{symbolName}</span>) and the 15m Decision Engine SSOT. Credentials are RSA-OAEP + AES-256-GCM encrypted in-browser.
+            </p>
+            <span className="mono text-[11px] text-slate-300">Updated {updatedAt}</span>
+          </div>
         )}
       </Panel>
 
-      {/* Signal, Control, Expert Advisor */}
+      {/* =====================================================================
+          WINDOWS METATRADER 5 TERMINAL — WEB EDITION WORKSTATION
+         ===================================================================== */}
+      <div className="overflow-hidden rounded-xl border border-cyan-500/25 bg-[#070b13] shadow-[0_20px_60px_rgba(0,0,0,0.65)]">
+        {/* Windows MT5 Application Title Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-gradient-to-r from-[#0d1526] via-[#0a101d] to-[#0d1526] px-3.5 py-2">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-6 w-6 items-center justify-center rounded bg-cyan-500/15 border border-cyan-400/30 text-cyan-300">
+              <Terminal className="h-3.5 w-3.5" />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[12.5px] font-bold tracking-wide text-slate-100">
+                MetaTrader 5 Web Terminal
+              </span>
+              <span className="mono rounded bg-white/5 px-2 py-0.5 text-[11px] text-cyan-300 border border-white/10">
+                {serverName} · {br.trade_mode ? br.trade_mode.toUpperCase() : "DEMO"} · {symbolName},{mt5Tf}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 text-[11px]">
+            <div className="flex items-center gap-1.5 text-slate-300">
+              <Dot tone={br.terminal_connected ? "green" : "red"} pulse={br.terminal_connected} />
+              <span className="mono">
+                {br.terminal_connected ? "Connected" : "Offline"} · Sync {agoMs(br.synced_age_ms)}
+              </span>
+            </div>
+            <div className="hidden sm:flex items-center gap-1 rounded border border-white/10 bg-black/40 px-2 py-0.5 text-slate-400">
+              <span>Window</span>
+              <span>·</span>
+              <span>Market Watch (Ctrl+M)</span>
+              <span>·</span>
+              <span>Navigator (Ctrl+N)</span>
+              <span>·</span>
+              <span>Toolbox (Ctrl+T)</span>
+            </div>
+          </div>
+        </div>
+
+        {/* MT5 Standard Top Toolbar (Algo Trading, Timeframes, Overlay Toggles, Live Account Strip) */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-[#0b111e] px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Algo Trading Master Status Button */}
+            <button
+              type="button"
+              onClick={() => {
+                const el = document.getElementById("engine-form");
+                if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+              }}
+              className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] font-semibold transition ${
+                algoActive
+                  ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
+                  : "border-amber-400/35 bg-amber-500/10 text-amber-200"
+              }`}
+              title="Click to configure Broker Engine below"
+            >
+              <span className={`h-2 w-2 rounded-full ${algoActive ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
+              Algo Trading: {algoActive ? "ACTIVE" : "OFF / STANDBY"}
+            </button>
+
+            <div className="h-4 w-px bg-white/10" />
+
+            {/* Timeframe Selector */}
+            <div className="flex items-center gap-1 rounded-md border border-white/10 bg-black/40 p-0.5">
+              {MT5_TFS.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setMt5Tf(t.key)}
+                  className={`mono rounded px-2 py-0.5 text-[11px] font-semibold transition ${
+                    mt5Tf === t.key
+                      ? "bg-cyan-500/25 text-cyan-200 border border-cyan-400/40"
+                      : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="h-4 w-px bg-white/10" />
+
+            {/* Chart Layer Toggles */}
+            <div className="flex flex-wrap items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setShowBidAsk((v) => !v)}
+                className={`rounded border px-2 py-0.5 text-[11px] transition ${
+                  showBidAsk
+                    ? "border-emerald-400/35 bg-emerald-500/10 text-emerald-200"
+                    : "border-white/10 bg-black/30 text-slate-400"
+                }`}
+              >
+                Bid/Ask Lines
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowPlan((v) => !v)}
+                className={`rounded border px-2 py-0.5 text-[11px] transition ${
+                  showPlan
+                    ? "border-cyan-400/35 bg-cyan-500/10 text-cyan-200"
+                    : "border-white/10 bg-black/30 text-slate-400"
+                }`}
+              >
+                15m Signal Plan
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowPositions((v) => !v)}
+                className={`rounded border px-2 py-0.5 text-[11px] transition ${
+                  showPositions
+                    ? "border-amber-400/35 bg-amber-500/10 text-amber-200"
+                    : "border-white/10 bg-black/30 text-slate-400"
+                }`}
+              >
+                MT5 Positions ({positionsList.length})
+              </button>
+            </div>
+          </div>
+
+          {/* Right Quick Account Readout */}
+          <div className="mono flex flex-wrap items-center gap-3 text-[11.5px]">
+            <div>
+              <span className="text-slate-500">Balance: </span>
+              <span className="font-bold text-slate-100">{balFmt(br.balance, cur)}</span>
+            </div>
+            <div>
+              <span className="text-slate-500">Equity: </span>
+              <span className="font-bold text-cyan-300">{balFmt(br.equity, cur)}</span>
+            </div>
+            <div>
+              <span className="text-slate-500">Floating: </span>
+              <span className={`font-bold ${toneCls(floatingPnl)}`}>{money(floatingPnl, cur)}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* MT5 Main Split Workspace: Left Dock (Market Watch + Navigator) & Center Chart */}
+        <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr]">
+          {/* Left Dock: Market Watch + Contract Spec + Navigator */}
+          <div className="flex flex-col border-b border-white/10 bg-[#080d18] lg:border-b-0 lg:border-r">
+            {/* Market Watch Header */}
+            <div className="flex items-center justify-between border-b border-white/10 bg-[#0d1525] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+              <span className="flex items-center gap-1.5">
+                <CandlestickChart className="h-3.5 w-3.5 text-cyan-300" />
+                Market Watch · {symbolName}
+              </span>
+              <span className="mono text-[10px] text-slate-400">{br.spread_points != null ? `${br.spread_points} pts` : "—"}</span>
+            </div>
+
+            {/* MT5 One-Click Trading Style Dual Bid / Ask Box */}
+            <div className="grid grid-cols-2 gap-2 p-2.5 border-b border-white/10 bg-black/25">
+              <div className="rounded-lg border border-rose-500/30 bg-gradient-to-b from-rose-500/15 to-rose-950/20 px-2.5 py-2 text-center">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-rose-300">BID (SELL)</div>
+                <div className="mono mt-0.5 text-lg font-extrabold text-rose-200">{num(br.bid, digits)}</div>
+              </div>
+              <div className="rounded-lg border border-emerald-500/30 bg-gradient-to-b from-emerald-500/15 to-emerald-950/20 px-2.5 py-2 text-center">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">ASK (BUY)</div>
+                <div className="mono mt-0.5 text-lg font-extrabold text-emerald-200">{num(br.ask, digits)}</div>
+              </div>
+            </div>
+
+            {/* Market Watch Symbol Table */}
+            <div className="border-b border-white/10 px-2.5 py-2">
+              <table className="w-full text-left text-[11px]">
+                <thead>
+                  <tr className="border-b border-white/10 text-[10px] uppercase text-slate-500">
+                    <th className="pb-1">Symbol</th>
+                    <th className="pb-1 text-right">Bid</th>
+                    <th className="pb-1 text-right">Ask</th>
+                    <th className="pb-1 text-right"> {!s.market_price ? "Pts" : "Spread"}</th>
+                  </tr>
+                </thead>
+                <tbody className="mono divide-y divide-white/5">
+                  <tr className="bg-cyan-500/5">
+                    <td className="py-1.5 font-bold text-cyan-300">{symbolName}</td>
+                    <td className="py-1.5 text-right text-emerald-300">{num(br.bid, digits)}</td>
+                    <td className="py-1.5 text-right text-rose-300">{num(br.ask, digits)}</td>
+                    <td className="py-1.5 text-right text-amber-200">{br.spread_points ?? "—"}</td>
+                  </tr>
+                  {s.market_price ? (
+                    <tr>
+                      <td className="py-1 text-slate-400">XAUUSD (Feed)</td>
+                      <td className="py-1 text-right text-slate-300" colSpan={2}>
+                        {num(s.market_price, 2)}
+                      </td>
+                      <td className="py-1 text-right text-slate-500">SSOT</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Symbol Contract Specification */}
+            <div className="border-b border-white/10 px-3 py-2">
+              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                Symbol Specification ({symbolName})
+              </div>
+              <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]">
+                <dt className="text-slate-500">Digits / Point</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.digits ?? "—"} / {br.point ?? "—"}
+                </dd>
+                <dt className="text-slate-500">Tick Size / Val</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.tick_size ?? "—"} / {br.tick_value != null ? num(br.tick_value, 2) : "—"}
+                </dd>
+                <dt className="text-slate-500">Volume Min / Max</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.volume_min ?? "—"} / {br.volume_max ?? "—"}
+                </dd>
+                <dt className="text-slate-500">Volume Step</dt>
+                <dd className="mono text-right text-slate-300">{br.volume_step ?? "—"}</dd>
+                <dt className="text-slate-500">Stops Level</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.stops_level_points != null ? `${br.stops_level_points} pts` : "—"}
+                </dd>
+              </dl>
+            </div>
+
+            {/* MT5 Navigator Tree (Ctrl+N) */}
+            <div className="flex items-center justify-between border-b border-white/10 bg-[#0d1525] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+              <span className="flex items-center gap-1.5">
+                <Layers className="h-3.5 w-3.5 text-cyan-300" />
+                Navigator
+              </span>
+              <span className="mono text-[10px] text-slate-400">Ctrl+N</span>
+            </div>
+            <div className="flex-1 space-y-2 px-3 py-2.5 text-[11.5px]">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Accounts</div>
+                <div className="mt-1 flex items-center justify-between rounded bg-white/[0.03] px-2 py-1 border border-white/5">
+                  <span className="mono text-slate-200 truncate">{serverName}</span>
+                  <Badge tone={br.terminal_connected ? "green" : "red"}>
+                    {br.trade_mode || "demo"}
+                  </Badge>
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Expert Advisors</div>
+                <div className="mt-1 space-y-1">
+                  <div className="flex items-center justify-between rounded bg-cyan-500/[0.07] px-2 py-1 border border-cyan-400/20">
+                    <span className="mono flex items-center gap-1.5 text-cyan-200">
+                      <Bot className="h-3 w-3 text-cyan-300" />
+                      OmegaExecutor
+                    </span>
+                    <span className="mono text-[10px] text-emerald-300">
+                      {br.terminal_connected ? `${symbolName}, M1` : "standby"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between rounded bg-white/[0.02] px-2 py-1 border border-white/5">
+                    <span className="mono text-slate-300">CryptophysXAUUSD</span>
+                    <span className="mono text-[10px] text-slate-400">
+                      {ea.connected ? `v${hb?.version || "1.11"}` : "direct EA"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">15m Decision Engine</div>
+                <div className="mt-1 flex items-center justify-between rounded bg-white/[0.03] px-2 py-1 border border-white/5">
+                  <span className="text-slate-300">Active Stance</span>
+                  <span
+                    className={`mono font-bold ${
+                      s.side === "BUY" ? "text-emerald-300" : s.side === "SELL" ? "text-rose-300" : "text-slate-400"
+                    }`}
+                  >
+                    {!s.side || s.side === "NONE" ? "WAIT / NO TRADE" : `${s.side} (${num(s.entry, 2)})`}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Center / Right MT5 Interactive Candlestick Chart */}
+          <div className="flex flex-col">
+            <Mt5ChartCanvas
+              tf={mt5Tf}
+              symbol={symbolName}
+              server={serverName}
+              digits={digits}
+              bid={br.bid}
+              ask={br.ask}
+              spreadPoints={br.spread_points}
+              signal={s}
+              positions={positionsList}
+              showBidAsk={showBidAsk}
+              showPlan={showPlan}
+              showPositions={showPositions}
+            />
+          </div>
+        </div>
+
+        {/* =================================================================
+            MT5 BOTTOM DOCK — TOOLBOX (Ctrl+T): Trade | History | Intents | Experts | Journal
+           ================================================================= */}
+        <div className="border-t border-white/10 bg-[#080d18]">
+          {/* Toolbox Tab Strip */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-[#0d1525] px-3 py-1.5">
+            <div className="flex flex-wrap items-center gap-1">
+              {(
+                [
+                  ["trade", `Trade (${positionsList.length})`],
+                  ["history", `History (${(data?.deals || []).length})`],
+                  ["intents", `Order Intents (${(b?.intents || []).length})`],
+                  ["experts", `Experts (${(b?.events || []).length + (data?.control_events || []).length})`],
+                  ["journal", "Journal & Bridge"],
+                ] as [ToolboxTab, string][]
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setToolboxTab(key)}
+                  className={`rounded px-2.5 py-1 text-[11.5px] font-semibold transition ${
+                    toolboxTab === key
+                      ? "bg-cyan-500/20 text-cyan-200 border border-cyan-400/35"
+                      : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <span className="mono text-[10.5px] text-slate-400">
+              MT5 Toolbox · {serverName} · {symbolName}
+            </span>
+          </div>
+
+          {/* Tab 1: TRADE (Open Positions + Classic MT5 Account Summary Row) */}
+          {toolboxTab === "trade" ? (
+            <div>
+              <div className="table-wrap max-h-[240px] overflow-y-auto">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th>Ticket</th>
+                      <th>Time (UTC)</th>
+                      <th>Type</th>
+                      <th>Volume</th>
+                      <th>Open Price</th>
+                      <th>S / L</th>
+                      <th>T / P</th>
+                      <th>Current Price</th>
+                      <th>Profit ({cur})</th>
+                      <th>Intent / Signal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {positionsList.length === 0 ? (
+                      <tr>
+                        <td colSpan={11} className="py-4 text-center text-[12px] text-slate-500">
+                          No open positions in MetaTrader 5 ({serverName}). Waiting for the next actionable 15m Decision Engine signal.
+                        </td>
+                      </tr>
+                    ) : (
+                      positionsList.map((p: any) => {
+                        const isBuy = p.side === "BUY";
+                        const curPrice = isBuy ? br.bid : br.ask;
+                        return (
+                          <tr key={p.ticket}>
+                            <td className="mono font-bold text-cyan-300">{symbolName}</td>
+                            <td className="mono">{String(p.ticket)}</td>
+                            <td className="mono">{timeUtc(p.opened_ms)}</td>
+                            <td className={`mono font-bold ${isBuy ? "text-emerald-300" : "text-rose-300"}`}>{p.side}</td>
+                            <td className="mono">{num(p.volume, 2)}</td>
+                            <td className="mono">{num(p.entry ?? p.open_price, digits)}</td>
+                            <td className="mono text-rose-300">{num(p.sl, digits)}</td>
+                            <td className="mono text-emerald-300">{num(p.tp, digits)}</td>
+                            <td className="mono text-slate-200">{num(curPrice, digits)}</td>
+                            <td className={`mono font-bold ${toneCls(p.profit)}`}>{money(p.profit, cur)}</td>
+                            <td className="mono text-[11px] text-slate-400">{p.signal_id || p.intent_id || "—"}</td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Classic Windows MT5 Gray/Obsidian Account Summary Footer Row */}
+              <div className="mono flex flex-wrap items-center justify-between gap-3 border-t border-white/10 bg-[#0c1322] px-3.5 py-2 text-[11.5px]">
+                <div className="flex flex-wrap items-center gap-4">
+                  <span>
+                    <strong className="text-slate-400">Balance:</strong>{" "}
+                    <span className="font-bold text-slate-100">{balFmt(br.balance, cur)}</span>
+                  </span>
+                  <span>
+                    <strong className="text-slate-400">Equity:</strong>{" "}
+                    <span className="font-bold text-cyan-300">{balFmt(br.equity, cur)}</span>
+                  </span>
+                  <span>
+                    <strong className="text-slate-400">Floating P/L:</strong>{" "}
+                    <span className={`font-bold ${toneCls(floatingPnl)}`}>{money(floatingPnl, cur)}</span>
+                  </span>
+                  <span>
+                    <strong className="text-slate-400">Day Realized P/L:</strong>{" "}
+                    <span className={`font-bold ${toneCls(br.day_realized_pl)}`}>{money(br.day_realized_pl, cur)}</span>
+                  </span>
+                  <span>
+                    <strong className="text-slate-400">Day Start Balance:</strong>{" "}
+                    <span className="text-slate-300">{balFmt(br.day_start_balance, cur)}</span>
+                  </span>
+                </div>
+                <div className="text-slate-400">
+                  Risk/Trade: <span className="text-slate-200">{e.risk_pct ?? 0.5}%</span> · Max Pos:{" "}
+                  <span className="text-slate-200">{e.max_positions ?? 1}</span>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {/* Tab 2: HISTORY (Closed Deals) */}
+          {toolboxTab === "history" ? (
+            <div className="table-wrap max-h-[260px] overflow-y-auto">
+              {!(data?.deals || []).length ? (
+                <div className="p-4">
+                  <Empty>No closed deal reported yet.</Empty>
+                </div>
+              ) : (
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Closed (UTC)</th>
+                      <th>Deal Ticket</th>
+                      <th>Side</th>
+                      <th>Volume</th>
+                      <th>Entry Price</th>
+                      <th>Exit Price</th>
+                      <th>Net P/L</th>
+                      <th>Reason</th>
+                      <th>Account Mode</th>
+                      <th>Signal ID</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(data.deals || []).map((d: any, idx: number) => {
+                      const net = (d.profit ?? 0) + (d.commission ?? 0) + (d.swap ?? 0);
+                      return (
+                        <tr key={d.deal_ticket ?? idx}>
+                          <td className="mono">{timeUtc(d.closed_ms)}</td>
+                          <td className="mono">{d.deal_ticket ?? "—"}</td>
+                          <td className={`mono font-bold ${d.side === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{d.side}</td>
+                          <td className="mono">{num(d.volume, 2)}</td>
+                          <td className="mono">{num(d.entry_price, digits)}</td>
+                          <td className="mono">{num(d.exit_price, digits)}</td>
+                          <td className={`mono font-bold ${toneCls(net)}`}>{money(net, d.currency || cur)}</td>
+                          <td className="mono">{d.reason || "—"}</td>
+                          <td className="mono">{d.mode || "—"}</td>
+                          <td className="mono text-[11px]">{d.signal_id || "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          ) : null}
+
+          {/* Tab 3: ORDER INTENTS (Engine -> Bridge Queue) */}
+          {toolboxTab === "intents" ? (
+            <div className="table-wrap max-h-[260px] overflow-y-auto">
+              {!(b?.intents || []).length ? (
+                <div className="p-4">
+                  <Empty>No order intent emitted yet. Intents appear here when the 15m Decision Engine triggers an entry or exit.</Empty>
+                </div>
+              ) : (
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Created (UTC)</th>
+                      <th>Intent ID</th>
+                      <th>Kind</th>
+                      <th>Side</th>
+                      <th>Volume</th>
+                      <th>SL</th>
+                      <th>TP</th>
+                      <th>Status</th>
+                      <th>MT5 Execution Result</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(b.intents || []).map((i: any) => (
+                      <tr key={i.id}>
+                        <td className="mono">{timeUtc(i.created_ms)}</td>
+                        <td className="mono">{i.id}</td>
+                        <td className="mono">{i.kind}</td>
+                        <td className={`mono font-bold ${i.side === "BUY" ? "text-emerald-300" : i.side === "SELL" ? "text-rose-300" : ""}`}>
+                          {i.side || "—"}
+                        </td>
+                        <td className="mono">{i.volume != null ? num(i.volume, 2) : "—"}</td>
+                        <td className="mono">{i.sl != null ? num(i.sl, digits) : "—"}</td>
+                        <td className="mono">{i.tp != null ? num(i.tp, digits) : "—"}</td>
+                        <td>
+                          <Badge tone={INTENT_TONE[i.status] || "slate"}>{i.status}</Badge>
+                        </td>
+                        <td className="mono text-[11px]">
+                          {i.result ? (i.result.ok ? `ticket ${i.result.ticket ?? "?"}` : i.result.error || "failed") : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          ) : null}
+
+          {/* Tab 4: EXPERTS (Engine & Control Audit Log) */}
+          {toolboxTab === "experts" ? (
+            <div className="table-wrap max-h-[260px] overflow-y-auto">
+              {!(b?.events || []).length && !(data?.control_events || []).length ? (
+                <div className="p-4">
+                  <Empty>No expert or control events logged yet.</Empty>
+                </div>
+              ) : (
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Time (UTC)</th>
+                      <th>Source / Actor</th>
+                      <th>Action</th>
+                      <th>Message / Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(b?.events || []).map((x: any, idx: number) => (
+                      <tr key={`m-e-${idx}`}>
+                        <td className="mono">{timeUtc(x.ms)}</td>
+                        <td className="mono">{x.actor}</td>
+                        <td className="mono text-cyan-300">{x.action}</td>
+                        <td className="mono text-[11px] text-slate-300">
+                          {x.detail ? JSON.stringify(x.detail).slice(0, 160) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                    {(data?.control_events || []).map((ev: any, idx: number) => (
+                      <tr key={`m-c-${idx}`}>
+                        <td className="mono">{timeUtc(Date.parse(ev.at))}</td>
+                        <td className="mono">{ev.actor}</td>
+                        <td className="mono text-amber-200">{`${ev.previous_mode} → ${ev.mode}`}</td>
+                        <td className="text-[11px] text-slate-300">{ev.reason || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          ) : null}
+
+          {/* Tab 5: JOURNAL (Terminal & Bridge Telemetry) */}
+          {toolboxTab === "journal" ? (
+            <div className="grid gap-3 p-3.5 sm:grid-cols-2 lg:grid-cols-4 text-[11.5px]">
+              <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">Host Bridge Daemon</div>
+                <dl className="mt-1.5 space-y-1">
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Status</dt>
+                    <dd className="mono text-emerald-300">{br.seen ? `online (${agoMs(br.synced_age_ms)})` : "offline"}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Version</dt>
+                    <dd className="mono text-slate-200">{br.bridge_version || "—"}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">RSA Key ID</dt>
+                    <dd className="mono text-slate-300">{br.kid || "—"}</dd>
+                  </div>
+                </dl>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">MT5 Terminal Session</div>
+                <dl className="mt-1.5 space-y-1">
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Broker Server</dt>
+                    <dd className="mono text-slate-200">{serverName}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Trade Mode</dt>
+                    <dd className="mono text-slate-200">{br.trade_mode || "—"}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">State Age</dt>
+                    <dd className="mono text-slate-300">{agoMs(br.state_age_ms)}</dd>
+                  </div>
+                </dl>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">Encrypted Credentials</div>
+                <dl className="mt-1.5 space-y-1">
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Envelope</dt>
+                    <dd className="mono text-slate-200">{conn.status || "none"} {conn.version ? `(v${conn.version})` : ""}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Cipher</dt>
+                    <dd className="mono text-slate-300">RSA-OAEP-3072 + AES-GCM</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Updated</dt>
+                    <dd className="mono text-slate-400">{timeUtc(conn.updated_ms)}</dd>
+                  </div>
+                </dl>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">Execution Safety Gates</div>
+                <dl className="mt-1.5 space-y-1">
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Engine Switch</dt>
+                    <dd className="mono text-slate-200">{effectiveLabel}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Live Armed</dt>
+                    <dd className="mono text-slate-200">{e.live_armed ? "yes" : "no (demo safe)"}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Max Spread / Loss</dt>
+                    <dd className="mono text-slate-300">
+                      {e.max_spread_points ?? 35} pts / {e.max_daily_loss_pct ?? 2}%
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {/* =====================================================================
+          SIGNAL, CONTROL & EXPERT ADVISOR DECK
+         ===================================================================== */}
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel title="Signal (Decision Engine 15m)" icon={<Radio className="h-3.5 w-3.5 text-cyan-300" />}>
           <div
@@ -409,17 +1316,17 @@ export default function Omega() {
 
         <Panel title="Expert Advisor" icon={<Activity className="h-3.5 w-3.5 text-cyan-300" />}>
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
-            <dt className="text-slate-500">Heartbeat</dt><dd className={`mono ${ea.connected ? "text-emerald-300" : "text-rose-300"}`}>{agoMs(ea.heartbeat_age_ms)}</dd>
-            <dt className="text-slate-500">Version</dt><dd className="mono text-slate-300">{hb?.version || "—"}</dd>
-            <dt className="text-slate-500">Trading allowed</dt><dd className={`mono ${hb && !hb.trading_allowed ? "text-amber-200" : "text-slate-300"}`}>{hb ? (hb.trading_allowed ? "yes" : "no") : "—"}</dd>
-            <dt className="text-slate-500">EA control seen</dt><dd className="mono text-slate-300">{hb?.control || "—"}</dd>
-            <dt className="text-slate-500">Positions</dt><dd className="mono text-slate-200">{hb?.positions ?? "—"}</dd>
-            <dt className="text-slate-500">Floating P&amp;L</dt><dd className={`mono ${toneCls(hb?.floating_pnl)}`}>{money(hb?.floating_pnl, cur)}</dd>
-            <dt className="text-slate-500">Today P&amp;L</dt><dd className={`mono ${toneCls(hb?.today_pnl)}`}>{money(hb?.today_pnl, cur)}</dd>
+            <dt className="text-slate-500">Heartbeat</dt><dd className={`mono ${ea.connected ? "text-emerald-300" : "text-slate-400"}`}>{agoMs(ea.heartbeat_age_ms)}</dd>
+            <dt className="text-slate-500">Bridge Executor</dt><dd className={`mono ${br.terminal_connected ? "text-emerald-300" : "text-rose-300"}`}>{br.terminal_connected ? `OmegaExecutor (${symbolName})` : "disconnected"}</dd>
+            <dt className="text-slate-500">Trading allowed</dt><dd className={`mono ${hb && !hb.trading_allowed ? "text-amber-200" : "text-slate-300"}`}>{hb ? (hb.trading_allowed ? "yes" : "no") : br.terminal_connected ? "yes (via bridge)" : "—"}</dd>
+            <dt className="text-slate-500">EA control seen</dt><dd className="mono text-slate-300">{hb?.control || c.mode || "active"}</dd>
+            <dt className="text-slate-500">Positions</dt><dd className="mono text-slate-200">{hb?.positions ?? positionsList.length}</dd>
+            <dt className="text-slate-500">Floating P&amp;L</dt><dd className={`mono ${toneCls(floatingPnl)}`}>{money(floatingPnl, cur)}</dd>
+            <dt className="text-slate-500">Today P&amp;L</dt><dd className={`mono ${toneCls(hb?.today_pnl ?? br.day_realized_pl)}`}>{money(hb?.today_pnl ?? br.day_realized_pl, cur)}</dd>
             <dt className="text-slate-500">Daily loss</dt><dd className="mono text-slate-300">{hb?.daily_loss_pct != null ? `${num(hb.daily_loss_pct)}%` : "—"}</dd>
-            <dt className="text-slate-500">Spread</dt><dd className="mono text-slate-300">{hb?.spread_points != null ? `${hb.spread_points} pts` : "—"}</dd>
-            <dt className="text-slate-500">Last signal</dt><dd className="mono truncate text-slate-400">{hb?.last_signal_id || "—"}</dd>
-            <dt className="text-slate-500">Note</dt><dd className="text-slate-400">{hb?.note || "—"}</dd>
+            <dt className="text-slate-500">Spread</dt><dd className="mono text-slate-300">{(br.spread_points ?? hb?.spread_points) != null ? `${br.spread_points ?? hb?.spread_points} pts` : "—"}</dd>
+            <dt className="text-slate-500">Last signal</dt><dd className="mono truncate text-slate-400">{hb?.last_signal_id || s.signal_id || "—"}</dd>
+            <dt className="text-slate-500">Note</dt><dd className="text-slate-400">{hb?.note || (br.terminal_connected ? "Synced via Omega Bridge" : "—")}</dd>
           </dl>
         </Panel>
       </div>
@@ -444,7 +1351,7 @@ export default function Omega() {
         ))}
       </div>
 
-      {/* Broker Engine Section */}
+      {/* Broker Engine Configuration Deck */}
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel
           title="Broker connection"
@@ -657,141 +1564,14 @@ export default function Omega() {
               {br.terminal_connected ? `connected to ${br.server || "?"}` : "not connected"}
             </dd>
             <dt className="text-slate-500">Account</dt><dd className={`mono ${br.trade_mode === "real" ? "text-amber-200" : "text-slate-200"}`}>{br.trade_mode || "—"}</dd>
-            <dt className="text-slate-500">Balance</dt><dd className="mono text-slate-200">{money(br.balance, br.currency || "")}</dd>
-            <dt className="text-slate-500">Equity</dt><dd className="mono text-slate-200">{money(br.equity, br.currency || "")}</dd>
+            <dt className="text-slate-500">Balance</dt><dd className="mono text-slate-200">{balFmt(br.balance, br.currency || "")}</dd>
+            <dt className="text-slate-500">Equity</dt><dd className="mono text-slate-200">{balFmt(br.equity, br.currency || "")}</dd>
             <dt className="text-slate-500">Symbol</dt><dd className="mono text-slate-200">{br.symbol || "—"}</dd>
+            <dt className="text-slate-500">Bid / Ask</dt><dd className="mono text-slate-200">{br.bid != null && br.ask != null ? `${num(br.bid, digits)} / ${num(br.ask, digits)}` : "—"}</dd>
             <dt className="text-slate-500">Spread</dt><dd className="mono text-slate-200">{br.spread_points != null ? `${br.spread_points} pts` : "—"}</dd>
             <dt className="text-slate-500">Positions</dt><dd className="mono text-slate-200">{String((br.positions || []).length)}</dd>
             <dt className="text-slate-500">Bridge version</dt><dd className="mono text-slate-400">{br.bridge_version || "—"}</dd>
           </dl>
-        </Panel>
-      </div>
-
-      {/* Intents and Open Positions */}
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Panel title="Intents (broker engine → bridge)" icon={<Cpu className="h-3.5 w-3.5 text-cyan-300" />}>
-          {!(b?.intents || []).length ? (
-            <Empty>No intent yet.</Empty>
-          ) : (
-            <div className="table-wrap">
-              <table className="tbl">
-                <thead>
-                  <tr><th>Created</th><th>Id</th><th>Kind</th><th>Side</th><th>Volume</th><th>SL</th><th>TP</th><th>Status</th><th>Result</th></tr>
-                </thead>
-                <tbody>
-                  {(b.intents || []).map((i: any) => (
-                    <tr key={i.id}>
-                      <td className="mono">{timeUtc(i.created_ms)}</td>
-                      <td className="mono">{i.id}</td>
-                      <td className="mono">{i.kind}</td>
-                      <td className={`mono ${i.side === "BUY" ? "text-emerald-300" : i.side === "SELL" ? "text-rose-300" : ""}`}>{i.side || "—"}</td>
-                      <td className="mono">{i.volume != null ? num(i.volume) : "—"}</td>
-                      <td className="mono">{i.sl != null ? num(i.sl, 3) : "—"}</td>
-                      <td className="mono">{i.tp != null ? num(i.tp, 3) : "—"}</td>
-                      <td><Badge tone={INTENT_TONE[i.status] || "slate"}>{i.status}</Badge></td>
-                      <td className="mono text-[11px]">{i.result ? (i.result.ok ? `ticket ${i.result.ticket ?? "?"}` : i.result.error || "failed") : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
-
-        <Panel title="Open positions" icon={<Server className="h-3.5 w-3.5 text-cyan-300" />}>
-          {!(hb?.positions_detail || br?.positions || []).length ? (
-            <Empty>{hb || br?.seen ? "No open position." : "No heartbeat or bridge state from MT5 yet."}</Empty>
-          ) : (
-            <div className="table-wrap">
-              <table className="tbl">
-                <thead>
-                  <tr><th>Ticket</th><th>Side</th><th>Volume</th><th>Entry</th><th>Stop</th><th>Target</th><th>P&amp;L</th><th>Opened</th><th>Signal / Intent</th></tr>
-                </thead>
-                <tbody>
-                  {(hb?.positions_detail || br?.positions || []).map((p: any) => (
-                    <tr key={p.ticket}>
-                      <td className="mono">{String(p.ticket)}</td>
-                      <td className={`mono ${p.side === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{p.side}</td>
-                      <td className="mono">{num(p.volume)}</td>
-                      <td className="mono">{num(p.entry ?? p.open_price, 3)}</td>
-                      <td className="mono">{num(p.sl, 3)}</td>
-                      <td className="mono">{num(p.tp, 3)}</td>
-                      <td className={`mono ${toneCls(p.profit)}`}>{money(p.profit, cur || br?.currency || "")}</td>
-                      <td className="mono">{timeUtc(p.opened_ms)}</td>
-                      <td className="mono text-[11px]">{p.signal_id || p.intent_id || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
-      </div>
-
-      {/* Closed Deals and Audits */}
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Panel title="Closed deals" icon={<Activity className="h-3.5 w-3.5 text-cyan-300" />}>
-          {!(data?.deals || []).length ? (
-            <Empty>No closed deal reported yet.</Empty>
-          ) : (
-            <div className="table-wrap">
-              <table className="tbl">
-                <thead>
-                  <tr><th>Closed</th><th>Side</th><th>Volume</th><th>Entry</th><th>Exit</th><th>Net</th><th>Reason</th><th>Mode</th><th>Signal</th></tr>
-                </thead>
-                <tbody>
-                  {(data.deals || []).map((d: any, idx: number) => {
-                    const net = (d.profit ?? 0) + (d.commission ?? 0) + (d.swap ?? 0);
-                    return (
-                      <tr key={d.deal_ticket ?? idx}>
-                        <td className="mono">{timeUtc(d.closed_ms)}</td>
-                        <td className={`mono ${d.side === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{d.side}</td>
-                        <td className="mono">{num(d.volume)}</td>
-                        <td className="mono">{num(d.entry_price, 3)}</td>
-                        <td className="mono">{num(d.exit_price, 3)}</td>
-                        <td className={`mono ${toneCls(net)}`}>{money(net, d.currency || "")}</td>
-                        <td className="mono">{d.reason}</td>
-                        <td className="mono">{d.mode}</td>
-                        <td className="mono text-[11px]">{d.signal_id || "—"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
-
-        <Panel title="Engine & control audit" icon={<ShieldAlert className="h-3.5 w-3.5 text-cyan-300" />}>
-          {!(b?.events || []).length && !(data?.control_events || []).length ? (
-            <Empty>No audit event yet.</Empty>
-          ) : (
-            <div className="table-wrap">
-              <table className="tbl">
-                <thead>
-                  <tr><th>At</th><th>By</th><th>Action</th><th>Detail</th></tr>
-                </thead>
-                <tbody>
-                  {(b?.events || []).map((x: any, idx: number) => (
-                    <tr key={`e-${idx}`}>
-                      <td className="mono">{timeUtc(x.ms)}</td>
-                      <td className="mono">{x.actor}</td>
-                      <td className="mono text-cyan-300">{x.action}</td>
-                      <td className="mono text-[11px] text-slate-400">{x.detail ? JSON.stringify(x.detail).slice(0, 140) : "—"}</td>
-                    </tr>
-                  ))}
-                  {(data?.control_events || []).map((ev: any, idx: number) => (
-                    <tr key={`c-${idx}`}>
-                      <td className="mono">{timeUtc(Date.parse(ev.at))}</td>
-                      <td className="mono">{ev.actor}</td>
-                      <td className="mono text-amber-200">{`${ev.previous_mode} → ${ev.mode}`}</td>
-                      <td className="text-[11px] text-slate-400">{ev.reason || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
         </Panel>
       </div>
     </div>

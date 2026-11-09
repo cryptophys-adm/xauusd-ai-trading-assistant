@@ -167,7 +167,13 @@ test("the overview has no envelope, login, password or public key; the key route
   const text = JSON.stringify(await brokerOverview(e, { now: NOW }));
   for (const bad of ["envelope", "wrapped_key", "ciphertext", "5550123", "hunter2", "login", "password", SPKI.slice(10, 40)]) assert.ok(!text.includes(bad), bad);
   assert.deepEqual(Object.keys(await bridgeKey(e, { now: NOW })).sort(), ["kid", "public_key", "synced_age_ms"]);
-  assert.equal(JSON.parse(text).engine.env_enabled, true);
+  const parsed = JSON.parse(text);
+  assert.equal(parsed.engine.env_enabled, true);
+  assert.equal(parsed.bridge.bid, 4101);
+  assert.equal(parsed.bridge.ask, 4101.2);
+  assert.equal(parsed.bridge.digits, 2);
+  assert.equal(parsed.bridge.volume_step, 0.01);
+  assert.equal(parsed.bridge.day_start_balance, 10_000);
 });
 
 test("the sync refuses a missing key id or an oversized state", async () => {
