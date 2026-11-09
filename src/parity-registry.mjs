@@ -119,6 +119,20 @@ export function requiredSourcesFor(engine) {
  * supply a required value), or "not_comparable" (engine has no webhook map or
  * webhooks are not all present yet).
  */
+/**
+ * The engine internals behind a mismatch, kept in the comparison detail (2026-11-09: the GMI
+ * gmi_dir mismatches on 5m conflict bars, where Pine and the local engine reset the verdict to 0
+ * after gmi_dir was taken, so only gmi_dir shows that the verdict branch BEFORE the reset
+ * differed). Unverified internals, for diagnosis only; never compared.
+ */
+const DIAGNOSTIC_KEYS = ["branch", "htf_state", "mtf_state", "ltf_state", "ext_state", "fp_status", "is_chaos", "entropy", "intrabars"];
+function localDiagnostics(record) {
+  const d = isRecord(record?.values?.diagnostics) ? record.values.diagnostics : null;
+  if (!d) return {};
+  const out = Object.fromEntries(DIAGNOSTIC_KEYS.filter((k) => k in d).map((k) => [k, d[k]]));
+  return Object.keys(out).length ? { local_diagnostics: out } : {};
+}
+
 export function compareWithWebhooks(record, webhookPayloads, policy = DEFAULT_POLICY) {
   const engine = record?.engine;
   const fieldMap = PARITY_FIELDS[engine];
@@ -155,7 +169,7 @@ export function compareWithWebhooks(record, webhookPayloads, policy = DEFAULT_PO
   // (production 2026-11-06). That says nothing against the implementation, so it is recorded
   // apart and does not revoke; repeated input mismatches still do (see recordComparison).
   if (mismatches.length && mismatches.every((m) => String(m.field).startsWith("input:"))) return { status: "input_mismatch", compared, mismatches, missing: uniqueMissing };
-  if (mismatches.length) return { status: "mismatch", compared, mismatches, missing: uniqueMissing };
+  if (mismatches.length) return { status: "mismatch", compared, mismatches, missing: uniqueMissing, ...localDiagnostics(record) };
   if (uniqueMissing.length) return { status: "incomplete", compared, mismatches: [], missing: uniqueMissing };
   return { status: "match", compared, mismatches: [], missing: [] };
 }
@@ -238,7 +252,7 @@ export async function recordComparison(db, id, candleKey, comparison, policy = D
     ).bind(id.engine, id.sourceHash, id.implementationHash, candleKey, INPUT_MISMATCH_REVOKE_AFTER - 1).all())?.results || [];
     if (previous.length === INPUT_MISMATCH_REVOKE_AFTER - 1 && previous.every((r) => r.result === "input_mismatch")) { status = "mismatch"; escalated = true; }
   }
-  const detail = JSON.stringify({ compared: comparison.compared, mismatches: comparison.mismatches.slice(0, 20), missing: comparison.missing.slice(0, 40), ...(escalated ? { reason: "repeated_input_mismatch" } : {}) });
+  const detail = JSON.stringify({ compared: comparison.compared, mismatches: comparison.mismatches.slice(0, 20), missing: comparison.missing.slice(0, 40), ...(escalated ? { reason: "repeated_input_mismatch" } : {}), ...(comparison.local_diagnostics ? { local_diagnostics: comparison.local_diagnostics } : {}) });
   const inserted = await db.prepare(
     `INSERT INTO engine_parity_comparisons (engine, source_hash, implementation_hash, candle_key, result, detail, compared_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)

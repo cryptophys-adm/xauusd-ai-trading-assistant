@@ -287,3 +287,19 @@ test("one-time reconciliation: input-only revocations are restored; indicator an
   assert.equal(row.total_mismatches, 0);
   assert.deepEqual(await reclassifyInputOnlyMismatches(db), { reclassified: 0, restored: [] }, "idempotent");
 });
+
+test("a mismatch keeps the local engine's diagnostics (the verdict branch before a conflict reset) in its detail", async () => {
+  const record = local("gmi", { gmi_v12_70: { verdict: 0, gate: -1, gmi_dir: 0, prophet_dir: 1, conflict: true } });
+  record.values.diagnostics = { branch: "none", ltf_state: 0, is_chaos: false, entropy: 0.42, zones: { veto: false }, vah: 1 };
+  const mismatch = compareWithWebhooks(record, webhooks({ gmi_v12_70: { ...candle, verdict: 0, gate: -1, gmi_dir: -1, prophet_dir: 1, conflict: true } }), DEFAULT_POLICY);
+  assert.equal(mismatch.status, "mismatch");
+  assert.deepEqual(mismatch.local_diagnostics, { branch: "none", ltf_state: 0, is_chaos: false, entropy: 0.42 }, "only the listed internals, never zones or levels");
+  const db = d1();
+  await ensureSchema(db);
+  const id = identityOf(record);
+  await registerIdentity(db, id);
+  await recordComparison(db, id, "kd", mismatch, DEFAULT_POLICY);
+  const row = await db.prepare("SELECT detail FROM engine_parity_comparisons WHERE candle_key = 'kd'").first();
+  assert.equal(JSON.parse(row.detail).local_diagnostics.branch, "none");
+  assert.equal(compareWithWebhooks({ ...record, values: { ...record.values, comparable: { gmi_v12_70: { verdict: 0, gate: -1, gmi_dir: -1, prophet_dir: 1, conflict: true } } } }, webhooks({ gmi_v12_70: { ...candle, verdict: 0, gate: -1, gmi_dir: -1, prophet_dir: 1, conflict: true } })).local_diagnostics, undefined, "a match carries none");
+});
