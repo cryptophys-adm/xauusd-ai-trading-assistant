@@ -232,6 +232,8 @@ export async function publishM15LocalComputation(env, { now = Date.now(), force 
   }
   const markerKey = PUBLISHED_PREFIX + built.candle_key;
   if (!force && (await kv.get(markerKey))) return { status: "already_published", candle_key: built.candle_key };
+  // The Prophet setup state on the 15m chart (backlog item 16, 2026-11-09), for the 15m Thread.
+  const prophetSetup = attachProphetSetup(built, resolvedBundle, { chart: "M15", mintick: Number(env.CHART_MINTICK) || 0.001 });
   const results = [];
   for (const record of built.records) {
     try {
@@ -249,7 +251,8 @@ export async function publishM15LocalComputation(env, { now = Date.now(), force 
     published_at: new Date(now).toISOString(),
     engines: results,
     not_produced: built.records.some((r) => r.engine === "gmi") ? [] : ["gmi"],
-    gmi_error: built.gmi_error || null
+    gmi_error: built.gmi_error || null,
+    prophet_setup: prophetSetup
   };
   if (ok) await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 });
   await kv.put(LAST_M15_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
@@ -285,6 +288,8 @@ export async function publishHtfLocalComputation(env, { now = Date.now(), force 
     }
     const markerKey = PUBLISHED_PREFIX + built.candle_key;
     if (!force && (await kv.get(markerKey))) { charts[chart] = { status: "already_published", candle_key: built.candle_key }; continue; }
+    // The Prophet setup state on the H4 / D1 chart (backlog item 16, 2026-11-09), for its Thread.
+    const prophetSetup = attachProphetSetup(built, resolvedBundle, { chart, mintick: Number(env.CHART_MINTICK) || 0.001 });
     const results = [];
     for (const record of built.records) {
       try { results.push(await postRecord(env, record)); }
@@ -294,7 +299,8 @@ export async function publishHtfLocalComputation(env, { now = Date.now(), force 
     charts[chart] = {
       status: ok ? "published" : "partial_failure", timeframe: HTF_CHARTS[chart].period,
       candle_key: built.candle_key, candle_time: built.candle_time, published_at: new Date(now).toISOString(),
-      engines: results, not_produced: built.records.some((r) => r.engine === "gmi") ? [] : ["gmi"], gmi_error: built.gmi_error || null
+      engines: results, not_produced: built.records.some((r) => r.engine === "gmi") ? [] : ["gmi"], gmi_error: built.gmi_error || null,
+      prophet_setup: prophetSetup
     };
     if (ok) await kv.put(markerKey, JSON.stringify(charts[chart]), { expirationTtl: 60 * 60 * 24 * 3 });
   }

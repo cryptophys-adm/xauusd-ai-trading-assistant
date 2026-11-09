@@ -378,6 +378,10 @@ test("15m publisher is off unless M15_PARITY_PUBLISH is true, then posts timefra
   assert.equal(first.candle_key, `OANDA:XAUUSD:15:${lastM15.time * 1000}`);
   assert.deepEqual(ai.posts.map((p) => p.body.engine), ["mizan", "prophet", "gmi"]);
   assert.ok(ai.posts.every((p) => p.body.timeframe === "15" && p.body.candle_key === first.candle_key));
+  // The Prophet setup state rides on the 15m prophet record too (backlog item 16, 2026-11-09).
+  assert.equal(first.prophet_setup.status, "attached", JSON.stringify(first.prophet_setup));
+  assert.equal(ai.posts[1].body.values.setup.confirmation_window, 3, "15m window: 3 closed bars");
+  assert.equal(ai.posts[1].body.values.setup.buy_confirmed, ai.posts[1].body.values.comparable.prophet_r38.buy_confirmed);
   assert.equal(JSON.parse(await e.MARKET_DATA_CACHE.get(LAST_M15_PUBLISH_KEY)).candle_key, first.candle_key);
   assert.equal((await publishM15LocalComputation(e, { now })).status, "already_published");
   assert.equal((await publishM15LocalComputation(e, { now: now + 20 * 60_000 })).status, "no_fresh_m15_close");

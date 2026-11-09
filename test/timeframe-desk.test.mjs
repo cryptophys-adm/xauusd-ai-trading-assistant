@@ -26,6 +26,17 @@ test("observed records that parity has not approved are read, but labelled so", 
   assert.equal(chartDeskLabel("D1", r), "D1 local records, not parity approved");
 });
 
+test("the setup state of the record reaches the desk: READY after the one-bar event (backlog item 16)", async () => {
+  const later = { values: { comparable: { prophet_r38: { direction: 0, buy_confirmed: false, sell_confirmed: false, t_enc: 0, d_enc: 1 }, prophet_r37_ssot: { d_enc: 1, b_enc: 1 } },
+    setup: { buy_ready: true, sell_ready: false, buy_pass_age: 1, confirmation_window: 3, superseded_by_trend: null, instruction: "BUY_READY" } } };
+  const env = { WEBHOOK_BUFFER: kv({ [`localcalc:${KEY}:prophet`]: JSON.stringify(later) }) };
+  const r = await chartDeskReading(env, KEY);
+  assert.deepEqual([r.buy_confirmed, r.buy_setup_ready, r.sell_setup_ready], [false, true, false]);
+  assert.ok(r.reading.some((s) => /BUY setup is still READY: the confirmation passed 1 bar ago/.test(s)), r.reading.join(" | "));
+  const plain = await chartDeskReading({ WEBHOOK_BUFFER: kv({ [`localcalc:${KEY}:prophet`]: JSON.stringify(prophet) }) }, KEY);
+  assert.deepEqual([plain.buy_setup_ready, plain.sell_setup_ready], [false, false], "no setup in the record: no READY");
+});
+
 test("no record at all means no desk, never an invented reading", async () => {
   const r = await chartDeskReading({ WEBHOOK_BUFFER: kv() }, KEY);
   assert.equal(r.available, false);
