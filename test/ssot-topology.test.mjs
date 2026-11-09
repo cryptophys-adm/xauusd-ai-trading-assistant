@@ -85,6 +85,9 @@ test("only the production AI Worker binds Aether's KnowledgeIngress; Nexus binds
     }
     assert.equal(rel, "wrangler.jsonc", `${rel} must not bind Aether (only the production AI Worker pushes decision cards)`);
     assert.match(text, /\{\s*"binding":\s*"AETHER",\s*"service":\s*"cryptophys-aether",\s*"entrypoint":\s*"KnowledgeIngress"\s*\}/);
+    // The health alerts read the sync checks (hardening 2026-11-09): the read-only entrypoint only.
+    assert.match(text, /\{\s*"binding":\s*"AETHER_READER",\s*"service":\s*"cryptophys-aether",\s*"entrypoint":\s*"AetherReader"\s*\}/);
+    assert.equal((text.match(/"service":\s*"cryptophys-aether"/g) || []).length, 2, "exactly the two Aether bindings");
   }
   assert.ok(read(path.join(ROOT, "wrangler.jsonc")).includes("cryptophys-aether"));
   for (const doc of ["docs/SSOT.md", "AGENTS.md"]) assert.ok(read(path.join(ROOT, doc)).includes("cryptophys-aether"), `${doc} must document the Aether binding`);

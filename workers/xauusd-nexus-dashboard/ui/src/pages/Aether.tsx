@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BookOpenCheck, Brain, Cpu, Database, ScrollText, ShieldAlert, Sparkles, Scale } from "lucide-react";
+import { Activity, BookOpenCheck, Brain, Cpu, Database, ScrollText, ShieldAlert, Sparkles, Scale } from "lucide-react";
 import { Badge, Empty, Kpi, Panel, Skeleton } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
@@ -113,6 +113,53 @@ function Weighting({ reports }: { reports: any[] }) {
   );
 }
 
+const CHECK_LABEL: Record<string, string> = {
+  reachable: "Aether reachable from the AI Worker", kb_match: "KB v4 hash: xauusd = Aether canon", local_push: "AI Worker pushes decision cards",
+  ingest: "Aether receives decision cards", canon_index: "Canon indexed in Vectorize", embed_backlog: "Card embedding backlog", ai_budget: "Aether AI budget"
+};
+const checkLabel = (k: string) => CHECK_LABEL[k] ?? CHECK_LABEL[k.replace(/^aether_/, "")] ?? (k.replace(/^aether_/, "").startsWith("weighting_") ? `Weighting report ${TF_LABEL[k.replace(/^(aether_)?weighting_/, "")] ?? k}` : k);
+const checkTone = (s?: string): "green" | "amber" | "slate" => (s === "ok" ? "green" : s === "warn" ? "amber" : "slate");
+
+/** End-to-end sync (hardening 2026-11-09): Aether's own checks plus the AI Worker's (KB match, push, reachability). */
+function Sync({ aether, worker }: { aether: any; worker: any }) {
+  const rows: [string, any][] = [
+    ...Object.entries(worker?.checks || {}).filter(([k]) => !k.startsWith("aether_")),
+    ...Object.entries(aether?.checks || {})
+  ];
+  const warn = rows.some(([, c]) => c?.status === "warn");
+  return (
+    <Panel title="End-to-end sync · xauusd → Aether → Nexus" icon={<Activity className="h-3.5 w-3.5" />}
+      right={<Badge tone={warn ? "amber" : "green"}>{warn ? "attention" : "in sync"}{aether?.market_open === false ? " · market closed" : ""}</Badge>}>
+      {!rows.length ? <Empty>No sync status yet.</Empty> : (
+        <div className="table-wrap">
+          <table className="tbl">
+            <thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
+            <tbody>
+              {rows.map(([k, c]) => (
+                <tr key={k}>
+                  <td>{checkLabel(k)}</td>
+                  <td><Badge tone={checkTone(c?.status)}>{c?.status ?? "n/a"}</Badge></td>
+                  <td className="mono text-[11px] text-slate-400">
+                    {c?.age_minutes != null ? `${c.age_minutes} min ago (limit ${c.limit_minutes})` : ""}
+                    {c?.last_at && c?.age_minutes == null ? ago(c.last_at) : ""}
+                    {c?.pending != null ? `${c.pending} pending${c.oldest_minutes ? `, oldest ${c.oldest_minutes} min` : ""}` : ""}
+                    {c?.local ? `xauusd ${c.local} · Aether ${c.aether ?? "n/a"}` : ""}
+                    {c?.canon ? `canon ${c.canon} · indexed ${c.indexed_canon ?? "none"}` : ""}
+                    {c?.used != null ? `${c.used}/${c.limit}` : ""}
+                    {c?.error ? String(c.error) : ""}
+                    {c?.hint ? ` · ${c.hint}` : c?.note ? ` · ${c.note}` : ""}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="mt-2 text-[11px] text-slate-500">Checked every 15 minutes by the AI Worker's health alerts; a warning opens an alert in the Priority Queue. "idle": the market was closed during the check's window.</p>
+    </Panel>
+  );
+}
+
 function Guardian({ g }: { g: any }) {
   const rows = g?.findings || [];
   return (
@@ -179,6 +226,7 @@ function Canon({ c }: { c: any }) {
 
 export default function Aether() {
   const { data, error, loading } = usePoll(() => get("/api/aether/overview"), 120_000);
+  const { data: status } = usePoll(() => get("/api/aether/status"), 120_000);
   const o = data as any;
   if (!o) return (
     <div className="space-y-4">
@@ -201,6 +249,7 @@ export default function Aether() {
         <Kpi label="AI budget today" value={`${ai.used_today ?? 0}/${ai.daily_limit ?? 0}`} sub="embeddings only" color={ai.used_today >= ai.daily_limit ? "#f85149" : "#d29922"} icon={<Cpu className="h-3 w-3" />} />
         <Kpi label="Vector indexes" value={o.indexes?.canon?.indexed ? "in sync" : "pending"} sub={`${o.indexes?.canon?.vectors ?? 0} canon vectors · ${o.indexes?.market?.pending_cards ?? 0} cards to embed`} color={o.indexes?.canon?.indexed ? "#3fb950" : "#d29922"} icon={<Brain className="h-3 w-3" />} />
       </div>
+      <Sync aether={o.sync} worker={(status as any)?.aether?.sync} />
       <Weighting reports={o.weighting || []} />
       <div className="grid gap-4 xl:grid-cols-2">
         <Guardian g={o.guardian} />
