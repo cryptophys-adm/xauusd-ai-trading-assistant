@@ -2,9 +2,12 @@ name: Deploy Omega Execution Engine Worker
 
 # Deploys `xauusd-omega` (omega.cryptophys.work, owner decisions 2026-11-09) on main. A static page
 # plus /api/* routes that reach the AI Worker's OmegaGateway entrypoint over a Service Binding. The
-# Worker verifies the Cloudflare Access JWT itself (fail closed): ACCESS_AUD is resolved here when
-# the deploy token can read Access applications (or the optional secret CLOUDFLARE_ACCESS_API_TOKEN),
-# otherwise the audience is not checked and the signature, issuer and expiry still are.
+# Worker verifies the Cloudflare Access JWT itself (fail closed) and answers no /api/* route without
+# ACCESS_AUD. The audience is resolved here: from the Access API when a token can read applications
+# (optional secret CLOUDFLARE_ACCESS_API_TOKEN), otherwise from Cloudflare Access's own login redirect
+# for omega.cryptophys.work (its `kid` is the application's AUD), checked by the CI service token
+# reading /api/status after the deploy. Before Access covers the host, it deploys without one: only
+# the empty page shell is served then. Re-run this workflow after Provision Cloudflare Access.
 on:
   push:
     branches: [main]
@@ -41,7 +44,7 @@ jobs:
       - name: Test the Omega Worker
         run: node --test test/omega-worker.test.mjs
 
-      - name: Resolve the Access audience (best effort)
+      - name: Resolve the Access audience
         env:
           TOKEN: ${{ secrets.CLOUDFLARE_ACCESS_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
         run: |
@@ -52,11 +55,19 @@ jobs:
           if [ -n "$account" ]; then
             aud="$(api "/accounts/${account}/access/apps?per_page=1000" | jq -r '[.result[]? | select(.name == "cryptophys-cloud-platform")] | if length == 1 then .[0].aud else empty end' 2>/dev/null || true)"
           fi
+          source="Access API"
+          if ! [[ "$aud" =~ ^[0-9a-f]{64}$ ]]; then
+            # Cloudflare Access sends an anonymous visitor to its login page with the application's AUD as `kid`.
+            location="$(curl --silent --proto '=https' --max-time 20 --output /dev/null --write-out '%{redirect_url}' https://omega.cryptophys.work/ || true)"
+            if [[ "$location" =~ ^https://cryptophys\.cloudflareaccess\.com/cdn-cgi/access/login/omega\.cryptophys\.work\?(.*\&)?kid=([0-9a-f]{64})(\&|$) ]]; then
+              aud="${BASH_REMATCH[2]}"; source="the Access login redirect"
+            fi
+          fi
           if [[ "$aud" =~ ^[0-9a-f]{64}$ ]]; then
             echo "ACCESS_AUD=${aud}" >> "$GITHUB_ENV"
-            echo "Access audience resolved: the Worker checks it."
+            echo "Access audience resolved from ${source}: the Worker enforces it."
           else
-            echo "::warning::The Access audience could not be resolved (the token cannot read Access applications). The Worker still verifies the JWT signature, issuer and expiry. Add the secret CLOUDFLARE_ACCESS_API_TOKEN (Access: Apps and Policies Read) to also check the audience."
+            echo "::notice::Cloudflare Access does not cover omega.cryptophys.work yet, so no audience: the Worker serves only the empty page shell and refuses every /api/* route (503). Run Provision Cloudflare Access, then re-run this workflow."
           fi
 
       - name: Validate Worker bundle
@@ -91,20 +102,24 @@ jobs:
           if (!front) { console.error("omega.cryptophys.work did not answer"); process.exit(1); }
           if (isAccessLogin(front)) {
             console.log(`custom domain: protected by Cloudflare Access (${front.status})`);
+            if (!process.env.ACCESS_AUD) { console.error("Access covers the host but no audience was resolved"); process.exit(1); }
             const token = accessToken();
             if (token.problems.length || !token.headers) { console.error(`CF_ACCESS_CLIENT_ID/SECRET: ${token.problems.join("; ") || "not set"} (${token.shape})`); process.exit(1); }
-            let body = null;
-            for (let i = 0; i < 12 && !body; i++) {
+            // The CI token reads /api/status (the audience matched and the OmegaGateway binding answers)
+            // and must be refused EA data.
+            let status = null;
+            for (let i = 0; i < 12 && !status; i++) {
               try {
-                const r = await fetch(DOMAIN + "/api/overview", { headers: token.headers, signal: AbortSignal.timeout(20000) });
+                const r = await fetch(DOMAIN + "/api/status", { headers: token.headers, signal: AbortSignal.timeout(20000) });
                 const j = await r.json().catch(() => null);
-                if (r.ok && j?.signal && j?.control) body = j; else console.log("overview not ready:", r.status, JSON.stringify(j).slice(0, 200));
-              } catch (e) { console.log("overview error:", e?.name); }
-              if (!body) await wait(10000);
+                if (r.ok && j?.status === "ok") status = j; else console.log("status not ready:", r.status, JSON.stringify(j).slice(0, 200));
+              } catch (e) { console.log("status error:", e?.name); }
+              if (!status) await wait(10000);
             }
-            if (!body) { console.error("/api/overview did not answer through the OmegaGateway binding"); process.exit(1); }
-            if (body.viewer?.can_control) { console.error("a service token must never be able to change the control"); process.exit(1); }
-            console.log(JSON.stringify({ control: body.control.mode, signal: body.signal.side, ea_connected: body.ea?.connected, deals: body.deals?.length }));
+            if (!status) { console.error("/api/status did not answer: wrong audience or the OmegaGateway binding is missing"); process.exit(1); }
+            console.log(JSON.stringify(status));
+            const data = await fetch(DOMAIN + "/api/overview", { headers: token.headers, signal: AbortSignal.timeout(20000) });
+            if (data.status !== 403) { console.error(`a service token must not read EA data (HTTP ${data.status})`); process.exit(1); }
             const page = await fetch(DOMAIN + "/", { headers: token.headers, signal: AbortSignal.timeout(20000) });
             const html = await page.text();
             if (!page.ok || !html.includes("Omega")) { console.error(`page not served (HTTP ${page.status})`); process.exit(1); }
@@ -112,7 +127,7 @@ jobs:
           } else if (front.status === 403) {
             const j = await front.json().catch(() => null);
             if (j?.error !== "access_denied") { console.error(`unexpected 403 body ${JSON.stringify(j)}`); process.exit(1); }
-            console.log("::notice::omega.cryptophys.work is deployed and refuses every request without an Access JWT. Run the platform workflow 'Provision Cloudflare Access' (PROVISION) so Access covers the hostname and the owner can sign in.");
+            console.log("::notice::omega.cryptophys.work is deployed and refuses every request without an Access JWT. Run the platform workflow 'Provision Cloudflare Access' (PROVISION), then re-run this workflow so the Worker gets the audience.");
           } else {
             console.error(`custom domain: unexpected answer ${front.status} ${front.headers.get("location") || ""}`.slice(0, 200));
             process.exit(1);

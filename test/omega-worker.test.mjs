@@ -66,10 +66,25 @@ test("every route but /health needs the JWT; reads go through the OmegaGateway b
   const body = await ok.json();
   assert.equal(body.signal.side, "BUY");
   assert.deepEqual(body.viewer, { subject: "owner@example.com", type: "user", can_control: true });
-  const svc = await (await handle(req("/api/overview", { token: await jwt({ common_name: "ci.access" }) }), env, opts)).json();
-  assert.equal(svc.viewer.can_control, false, "a service token reads only");
+  const ci = await jwt({ common_name: "ci.access" });
+  assert.equal((await handle(req("/api/overview", { token: ci }), env, opts)).status, 403, "a service token never reads positions or P&L");
+  assert.equal((await handle(req("/api/deals", { token: ci }), env, opts)).status, 403);
+  assert.equal((await handle(req("/api/whoami", { token: ci }), env, opts)).status, 403);
+  const st = await handle(req("/api/status", { token: ci }), env, opts);
+  assert.equal(st.status, 200);
+  assert.deepEqual(await st.json(), { status: "ok", control_mode: "active", ea_connected: false, viewer_type: "service_token" }, "status: the control mode and the connection, nothing else");
   assert.equal((await (await handle(req("/api/deals?limit=9999", { token: await jwt({ email: "a@b.c" }) }), env, opts)).json()).limit, 500);
   assert.equal((await handle(req("/api/overview", { token: await jwt({ email: "a@b.c" }) }), { ...ENV_BASE }, opts)).status, 503, "no binding");
+  // Without the audience, no data route answers; only the empty page shell is served.
+  const noAud = { ACCESS_TEAM_DOMAIN: TEAM, OMEGA: O, ASSETS: { fetch: async () => new Response("<!doctype html>") } };
+  const anyAud = await jwt({ email: "owner@example.com", aud: ["c".repeat(64)] });
+  for (const path of ["/api/overview", "/api/status", "/api/deals"]) {
+    const r = await handle(req(path, { token: anyAud }), noAud, opts);
+    assert.equal(r.status, 503, path);
+    assert.equal((await r.json()).error, "audience_not_configured");
+  }
+  assert.equal((await handle(req("/api/control", { token: anyAud, method: "POST", body: { mode: "paused", reason: "x" } }), noAud, opts)).status, 503);
+  assert.equal((await handle(req("/", { token: anyAud }), noAud, opts)).status, 200, "the shell has no data");
 });
 
 test("a control change: a person, same origin, JSON, a reason, KILL typed; the actor is the Access email", async () => {

@@ -38,7 +38,7 @@ The owner's MT5 terminal executes the H1 decision. The server only publishes the
 Owner decisions of 2026-11-09: a page separate from Nexus and Aether, on its own subdomain, to monitor and control the EA.
 - **Shows:** the signal, the control, the EA's heartbeat (connected when younger than 15 minutes), its open positions, the closed deals with today's, 7-day and 30-day statistics (net P&L, win rate, profit factor, maximum drawdown) and the control audit.
 - **Controls:** **Pause entries** (no new entry; open positions keep their stop and target), **Resume**, and **Kill** (the EA closes its positions and orders and stops; type `KILL` to confirm). Pausing or killing needs a reason. Only a signed-in person can change the control, never a service token; each change is recorded with the person's Access email (D1 `ea_control_events`). The EA applies it at its next poll (30 seconds).
-- **Access:** behind the platform's Cloudflare Access application (owner sign-in). The Worker also verifies the Access JWT itself and refuses every request without one, so it stays closed even before Access covers the hostname.
+- **Access:** behind the platform's Cloudflare Access application (owner sign-in). The Worker also verifies the Access JWT itself, including its audience, and serves no data without the audience, so it stays closed even before Access covers the hostname. Only a signed-in person sees positions, deals and P&L; a service token (CI, an external agent, the EA's own token) reads only the control mode and whether the EA is connected.
 - The server-wide switch `EA_SIGNALS_ENABLED = "false"` stays above Omega: while it is on, Omega's control has no effect.
 
 ## Stopping

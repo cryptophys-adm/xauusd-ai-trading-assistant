@@ -10,6 +10,11 @@
  * Security (fail closed, whether or not the edge Access policy covers the hostname yet):
  *   - every request but /health needs a valid Cloudflare Access JWT (RS256 against the team's keys,
  *     issuer, expiry, and the audience when ACCESS_AUD is set);
+ *   - no /api/* route answers without ACCESS_AUD (503 audience_not_configured): without the audience
+ *     only the empty page shell is served, so a JWT of another Access application never reads data;
+ *   - EA data (overview, deals, whoami) is for a person only. A service token (the CI token, an
+ *     external agent such as the EA's own token) reads only /api/status: the control mode and
+ *     whether the EA is connected, never a position, a price or a P&L;
  *   - a change (POST /api/control) needs a person (never a service token), a same-origin request,
  *     a JSON body, a reason to pause or kill, and the typed confirmation KILL to kill. The person's
  *     Access email is the actor recorded in the audit (D1 ea_control_events).
@@ -22,6 +27,7 @@ const JWKS_TTL_MS = 10 * 60 * 1000;
 const TEAM_DOMAIN = /^[a-z0-9-]+\.cloudflareaccess\.com$/;
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
 const MODES = ["active", "paused", "killed"];
+const AUD_PATTERN = /^[0-9a-f]{64}$/;
 
 let jwksCache = null;
 export function resetKeyCacheForTests() { jwksCache = null; }
@@ -116,7 +122,16 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
   const identity = auth.identity;
 
   if (url.pathname.startsWith("/api/")) {
+    if (!AUD_PATTERN.test(String(env.ACCESS_AUD || ""))) return json({ error: "audience_not_configured", hint: "re-run the Deploy Omega workflow once Cloudflare Access covers omega.cryptophys.work" }, 503);
     if (!env.OMEGA || typeof env.OMEGA.overview !== "function") return json({ error: "omega_binding_missing" }, 503);
+    if (request.method === "GET" && url.pathname === "/api/status") {
+      // Any admitted identity (the deploy smoke test's CI token): no position, price or P&L.
+      try {
+        const o = await env.OMEGA.overview();
+        return json({ status: "ok", control_mode: o?.control?.mode ?? "active", ea_connected: Boolean(o?.ea?.connected), viewer_type: identity.type });
+      } catch { return json({ error: "status_unavailable" }, 502); }
+    }
+    if (identity.type !== "user") return json({ error: "forbidden", hint: "EA data is for a signed-in person; a service token reads /api/status only" }, 403);
     if (request.method === "GET" && url.pathname === "/api/whoami") return json({ subject: identity.subject, type: identity.type, can_control: identity.type === "user" });
     if (request.method === "GET" && url.pathname === "/api/overview") {
       try { return json({ ...(await env.OMEGA.overview()), viewer: { subject: identity.subject, type: identity.type, can_control: identity.type === "user" } }); }
