@@ -306,7 +306,8 @@ test("H1 by Consensus Discussion: the sweep has the Reasoner decide a parked bar
   const reasoner = prompts.filter(p => p.model === "@cf/test/reasoner" && /You are the Reasoner/.test(p.text));
   assert.equal(reasoner.length, 1, "one Reasoner call: the empty room needs none");
   assert.match(reasoner[0].text, /CONSENSUS:\n\{"status":"concluded"/);
-  assert.match(reasoner[0].text, /"agent":"1H Desk"/);
+  assert.match(reasoner[0].text, /"communication_bus":\[\{"ref":"#1"/, "the Reasoner reads the anonymous bus (owner decisions 2026-11-09)");
+  assert.doesNotMatch(reasoner[0].text.split("CONSENSUS:")[1], /1H Desk|Risk Manager/, "never a name");
   assert.ok(!prompts.some(p => /You are the (Analyst|Counselor) stage in an XAUUSD decision-support pipeline/.test(p.text)), "the Analyst and the Counselor are retired");
 
   const synth = (open) => JSON.parse(db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ?").get(SYMBOL + ":60:" + open).ai_analysis);

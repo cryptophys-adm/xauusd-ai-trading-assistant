@@ -87,10 +87,16 @@ const ok = (m) => m && m.status === "ok";
  *   empty:     no room, or no agent spoke.
  */
 export function consensusInput(room) {
-  const bus = (room?.openings || []).filter(ok).map((m) => ({ agent: m.name, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, evidence: m.calibration ?? null, claim: m.claim }));
-  const discussion = (room?.debate || []).filter(ok).map((m) => ({ agent: m.name, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, answers: m.rebuts_names ?? [], argument: m.argument }));
+  // Anonymous (owner decisions 2026-11-09): the Reasoner sees "#n" references and each statement's
+  // metrics, never an agent's name, and names metrics in its own text.
+  const order = [...(room?.roster || []).map((r) => r.id ?? r), ...(room?.openings || []).map((m) => m.id)];
+  const refOf = new Map();
+  for (const id of order) if (id && !refOf.has(id)) refOf.set(id, `#${refOf.size + 1}`);
+  const ref = (id) => refOf.get(id ?? "") ?? null;
+  const bus = (room?.openings || []).filter(ok).map((m) => ({ ref: ref(m.id), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, evidence: m.calibration ?? null, metrics: m.metrics ?? [], claim: m.claim }));
+  const discussion = (room?.debate || []).filter(ok).map((m) => ({ ref: ref(m.id), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, answers: (m.rebuts || []).map((r) => ref(r) ?? "#?"), metrics: m.metrics ?? [], argument: m.argument }));
   const c = room?.conclusion?.status === "ok" ? room.conclusion : null;
-  const conclusion = c ? { stance: c.stance, bias: c.bias ?? null, confidence: c.confidence, summary: c.summary, reasons: c.reasons ?? [], dissent: (c.dissent || []).map((d) => d.name ?? d) } : null;
+  const conclusion = c ? { stance: c.stance, bias: c.bias ?? null, confidence: c.confidence, summary: c.summary, reasons: c.reasons ?? [], metrics: c.metrics ?? [], dissent: (c.dissent || []).map((d) => ref(d?.id ?? d) ?? "#?") } : null;
   const roomBias = conclusion?.bias || (bus.length ? majorityBias(bus) : "NEUTRAL");
   return {
     status: conclusion ? "concluded" : bus.length ? "partial" : "empty",
@@ -187,17 +193,17 @@ export function reasonerLines({ evidence, consensus, quorum = null, plan = null,
   const q = quorum ?? quorumOf(consensus);
   return [
     "You are the Reasoner, the final stage of the XAUUSD H1 decision. You write the decision LAST, after the Consensus Discussion of the 1H War Room: CONSENSUS holds its communication bus (every agent's opening), the Consensus Discussion (the agents answering each other), the moderator's conclusion with its decision and bias, and the crowd line.",
-    `The H1 decision is the QUORUM of the room, not yours to choose: BUY or SELL only when the moderator concluded BUY or SELL and more than ${Math.round(q.needed * 100)}% of the weight of the agents who spoke (each weighted by its track record, CONSENSUS.crowd.weighted_biases) holds the matching bias; otherwise WAIT. QUORUM gives the result. For a BUY or SELL, PLAN gives the entry, stop and targets from the Key Level Agent's zones: use exactly those prices (entry_price = PLAN.entry, stop_loss = PLAN.stop, take_profit = PLAN.tp1, risk_reward = PLAN.rrr.tp1). If QUORUM is BUY or SELL and PLAN is null, the decision is WAIT. Never set position_size_pct: it is always null.`,
+    `The H1 decision is the QUORUM of the room, not yours to choose: BUY or SELL only when the moderator concluded BUY or SELL and more than ${Math.round(q.needed * 100)}% of the weight of the agents who spoke (each weighted by its track record, CONSENSUS.crowd.weighted_biases) holds the matching bias; otherwise WAIT. QUORUM gives the result. For a BUY or SELL, PLAN gives the entry, stop and targets from the 1-hour chart's own key-level zones: use exactly those prices (entry_price = PLAN.entry, stop_loss = PLAN.stop, take_profit = PLAN.tp1, risk_reward = PLAN.rrr.tp1). If QUORUM is BUY or SELL and PLAN is null, the decision is WAIT. Never set position_size_pct: it is always null.`,
     "Use only CONSENSUS, QUORUM, PLAN and EVIDENCE. Do not invent market prices or claim the agents verified facts they did not receive.",
     "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before quoting it, and quote the decoded meaning. Never infer a field meaning that is not in the dictionary.",
     "Indicator signals (the Prophet R38 confirmation and setup state, its trade management t_enc, the GMI verdict, gate and conflict) are arguments the agents weighed in the discussion, not gates and not vetoes: mention them only as the agents used them. Every field describes the closed candle being decided (EVIDENCE.candle_time, the bar that just closed), never the running candle. Local engine values that are not parity-approved are still evidence, read with less weight.",
+    "Independence (owner decisions 2026-11-09): the room's statements are anonymous (#n). Never name an agent or a role, and never use another timeframe's room or decision: say which metrics carried the decision and which metrics the dissent rests on.",
     consensus?.status === "partial"
       ? `The room did not conclude within 45 minutes of the close: ${consensus.agents_spoke} of ${consensus.roster_size} agents spoke, so there is no quorum and the decision is WAIT; say which way the bus leans.`
-      : "Name the room's conclusion, its bias and the quorum once in the reasoning; say what the main arguments were and what the dissenting agents said.",
+      : "Name the room's conclusion, its bias and the quorum once in the reasoning; say which metrics carried the decision and which metrics the dissent rests on.",
     laneRule,
     "If news_evidence.available is false, state completed fundamental news analysis was unavailable. Do NOT claim news supported or contradicted the setup.",
     "If news_evidence.available is true, incorporate the completed news analysis and its underlying article evidence into final reasoning.",
-    "If informational_5m_context is present, it is 5m execution context only, labelled VERIFIED 5m or UNVERIFIED 5m by its verification field; it never changes the decision or the prices.",
     "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation, trade_plan.", decisionTextRule, tradePlanRule,
     "For WAIT set every price to null. Never imply automatic execution.",
     "CONSENSUS:",
@@ -207,8 +213,20 @@ export function reasonerLines({ evidence, consensus, quorum = null, plan = null,
     "PLAN:",
     JSON.stringify(plan),
     "EVIDENCE:",
-    JSON.stringify(evidence)
+    // This timeframe only (owner decisions 2026-11-09): the 5m context stays in the stored fusion, not here.
+    JSON.stringify(ownTimeframeEvidence(evidence))
   ];
+}
+
+/** Pure: the evidence without another timeframe's data (the 5m execution context). */
+export function ownTimeframeEvidence(evidence) {
+  if (!evidence || typeof evidence !== "object") return evidence;
+  const { informational_5m_context: _m5, ...rest } = evidence;
+  if (rest.evidence_fusion && typeof rest.evidence_fusion === "object") {
+    const { informational_5m_context: _f5, ...fusion } = rest.evidence_fusion;
+    rest.evidence_fusion = fusion;
+  }
+  return rest;
 }
 
 /** The fail-closed WAIT when the room produced nothing by the fallback time. */

@@ -58,10 +58,10 @@ function fakeAI({ conclusion = null, confidence = 0.35, stances = {}, fail = new
       const sys = request.messages[0].content, user = request.messages[1].content;
       const agent = (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1];
       let content;
-      if (/moderator of the XAUUSD/.test(sys)) content = conclusion || { stance: "WAIT", confidence: 0.5, summary: "The four-hour room leans up but has no confirmation yet, so it prefers to wait.", reasons: ["Structure points up without a confirmed signal.", "Volatility is normal for this chart."], dissent: [] };
+      if (/moderator of the XAUUSD/.test(sys)) content = conclusion || { stance: "WAIT", confidence: 0.5, summary: "The four-hour room leans up but has no confirmation yet, so it prefers to wait.", reasons: ["Structure points up without a confirmed signal.", "Volatility is normal for this chart."], dissent: [], metrics: ["the closed candles of this chart"] };
       else if (fail.has(agent)) throw new Error("3021: rate limiting: inference request per min rate reached");
-      else if (/Consensus Discussion/.test(sys)) content = { agent, stance: stances[agent] || "WAIT", confidence: 0.5, rebuts: [agent === "technical" ? "risk" : "technical"], argument: "The last candles closed near their highs, which argues against fading the move." };
-      else content = { agent, stance: stances[agent] || "WAIT", confidence, claim: "My own data on this chart supports waiting for the next candle." };
+      else if (/Consensus Discussion/.test(sys)) content = { agent, stance: stances[agent] || "WAIT", confidence: 0.5, rebuts: [agent === "technical" ? "risk" : "technical"], argument: "The last candles closed near their highs, which argues against fading the move.", metrics: ["the closing position of the last candles"] };
+      else content = { agent, stance: stances[agent] || "WAIT", confidence, claim: "My own data on this chart supports waiting for the next candle.", metrics: ["my own readings of this chart"] };
       return { choices: [{ message: { content: JSON.stringify(content) }, finish_reason: "stop" }], usage: { total_tokens: 40 } };
     }
   };
@@ -80,7 +80,7 @@ test.beforeEach(() => resetThreadSchemaCacheForTests());
 test("1H, 4H and D1 run here as War Rooms; desks have one role each", () => {
   assert.deepEqual(Object.keys(TF_THREAD_CHARTS), ["H1", "H4", "D1"]);
   assert.deepEqual(Object.values(TF_THREAD_CHARTS).map((c) => c.tab), ["1H", "4H", "D1"]);
-  assert.deepEqual(Object.keys(TF_DESKS), ["h1", "h4", "d1", "htf", "news", "technical", "risk"]);
+  assert.deepEqual(Object.keys(TF_DESKS), ["h1", "h4", "d1", "news", "technical", "risk"], "no Higher-Timeframe Desk (independent rooms, owner decision 2026-11-09)");
   assert.deepEqual(["h1", "h4", "d1"].map((id) => TF_DESKS[id].name), ["1H Desk", "4H Desk", "D1 Desk"], "each room has its own timeframe desk");
   assert.equal(tfThreadsEnabled({ TF_THREADS_ENABLED: "true" }), true);
   assert.equal(tfThreadsEnabled({}), false);
@@ -199,14 +199,40 @@ test("the 4H Desk reads only its own bar, in words; without local records the ro
   assert.ok(!(await readTimeframeThread(none.DB, "H4")).roster.some((a) => a.id === "h4"));
 });
 
-test("the 4H room's Higher-Timeframe Desk reads the D1 Thread's conclusion", async () => {
-  const e = env(fakeAI());
+test("independent rooms (owner decisions 2026-11-09): the 4H room never reads the D1 Thread; the bus is anonymous; every answer names its metrics", async () => {
+  const ai = fakeAI({ stances: { technical: "BUY" } });
+  const e = env(ai);
   const d1Open = Date.parse("2026-11-04T22:00:00.000Z");
   e.SIGNAL_CACHE.put("market-data:v2:series:OANDA:XAUUSD|1D", series(d1Open, 24 * 3600_000));
   await runTimeframeThread(e, { chart: "D1", candleKey: "OANDA:XAUUSD:1D:" + d1Open }, { clock: fixedClock });
   const ev = await tfEvidence(e, "H4", H4_KEY);
-  assert.equal(ev.higher.timeframe, "daily");
-  assert.equal(ev.higher.stance, "WAIT");
+  assert.equal(ev.higher, null, "no higher-timeframe conclusion in the evidence");
+  await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
+  const h4Calls = ai.calls.filter((c) => /4-hour War Room/.test(c.request.messages[0].content));
+  const text = h4Calls.map((c) => c.request.messages.map((m) => m.content).join("\n")).join("\n");
+  assert.doesNotMatch(text, /Higher-Timeframe Desk|daily Thread|the other agents are/, "no other timeframe and no roster of names");
+  const rebut = h4Calls.find((c) => /Consensus Discussion/.test(c.request.messages[0].content));
+  const busJson = rebut.request.messages[1].content.split("COMMUNICATION BUS (ref, stance, bias, confidence, evidence, metrics, claim):")[1];
+  assert.match(busJson, /"ref":"#\d+"/);
+  assert.doesNotMatch(busJson, /"name"|Technical Analyst|Risk Manager|4H Desk/, "the discussion sees references, never names");
+  const thread = await readTimeframeThread(e.DB, "H4");
+  assert.ok(thread.openings.every((o) => o.status !== "ok" || o.metrics.length > 0), "every opening names its metrics");
+  assert.ok(thread.conclusion);
+});
+
+test("validators: an agent naming another agent gets a correction; metrics are required", async () => {
+  const { validateOpening, validateRebuttal, namesErrors, busRefs } = await import("../src/war-room.mjs");
+  const base = { agent: "technical", stance: "WAIT", bias: "NEUTRAL", confidence: 0.5, metrics: ["the closed candles"] };
+  assert.equal(validateOpening({ ...base, claim: "The candles are flat." }, "technical", { forbiddenNames: ["Risk Manager"] }).valid, true);
+  assert.ok(validateOpening({ ...base, claim: "I agree with the Risk Manager." }, "technical", { forbiddenNames: ["Risk Manager"] }).errors.includes("names_an_agent"));
+  assert.ok(validateOpening({ ...base, metrics: [], claim: "Flat." }, "technical").errors.includes("metrics_missing"));
+  const refs = busRefs(["technical", "risk"]);
+  const r = { agent: "technical", stance: "WAIT", bias: "NEUTRAL", confidence: 0.5, rebuts: ["#2"], argument: "The average range is too wide for an entry.", metrics: ["the average range"] };
+  const v = validateRebuttal(r, "technical", ["technical", "risk"], { refs });
+  assert.equal(v.valid, true);
+  assert.deepEqual(r.rebuts, ["risk"], "a #n reference maps back to the agent id");
+  assert.deepEqual(namesErrors("Prophet R38 confirmed", ["The Prophet"]), ["names_an_agent"], "another agent's indicator by name counts as naming it");
+  assert.deepEqual(namesErrors("the trend holds", ["The Prophet"]), [], "\"the\" alone never matches");
 });
 
 test("the hourly budget caps the calls: the rest are stored as budget_exhausted", async () => {
@@ -232,7 +258,7 @@ test("the pending runner is off behind the flag, waits for the HUD snapshot, the
   assert.equal(out.charts.D1, undefined, "no daily series cached: no D1 key");
 });
 
-test("due rooms run one after another, the higher timeframe first: the 4H room reads the D1 conclusion just written", async () => {
+test("due rooms run one after another (one burst at a time); no room reads another", async () => {
   const ai = fakeAI();
   const e = env(ai);
   const d1Open = Date.parse("2026-11-04T22:00:00.000Z"); // closes with the 4H bar, at 22:00
@@ -245,7 +271,7 @@ test("due rooms run one after another, the higher timeframe first: the 4H room r
   assert.deepEqual(slept, [TF_ROOM_GAP_MS], "one gap between the two rooms, for the per-minute model limit");
   assert.equal(out.charts.D1.status, "complete");
   const h4 = await readTimeframeThread(e.DB, "H4");
-  assert.ok(h4.roster.some((a) => a.id === "htf"), "the 4H room has the Higher-Timeframe Desk");
+  assert.ok(!h4.roster.some((a) => a.id === "htf"), "no Higher-Timeframe Desk");
   const firstH4Call = ai.calls.findIndex((c) => /4-hour War Room/.test(c.request.messages[0].content));
   const lastD1Call = ai.calls.map((c) => /daily War Room/.test(c.request.messages[0].content)).lastIndexOf(true);
   assert.ok(lastD1Call < firstH4Call, "no 4H call before the D1 room is done");

@@ -22,7 +22,7 @@ import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
 import { macroDeskEvidence } from "./macro-room.mjs";
 import { matchRebuts } from "./rebut-names.mjs";
-import { buildCrowdLine, finalEntries, crowdRule, roomReputation } from "./reputation.mjs";
+import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, quorumRule } from "./reputation.mjs";
 import { agentReputation } from "./outcome-scoring.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import {
@@ -30,7 +30,7 @@ import {
   hudEvidenceLines, rowToThreadMessage, validateRoomModerator, threadInternals
 } from "./agent-threads.mjs";
 
-const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson } = threadInternals;
+const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, ROOM_RULES_INDEPENDENT, clip, inUnit, parseJson } = threadInternals;
 
 export const WAR_ROOM_OPENING_MS = 90_000;
 export const WAR_ROOM_DEBATE_MS = 180_000; // owner: the debate is open for at most 3 minutes
@@ -57,11 +57,12 @@ export function warRoomEnabled(env) {
  */
 export const DESK_AGENTS = Object.freeze({
   m15: { name: "15m Desk", role: "the local Prophet (signal, direction, structure, trade management) and GMI computation of the 15m candle that just closed: this timeframe's own signal" },
-  htf: { name: "Higher-Timeframe Desk", role: "the H1 decision chain, its TradingView reading and the latest 1H War Room conclusion: the higher-timeframe constraint" },
   news: { name: "News Analyst", role: "the fundamental news of the last 24 hours: the daily bias for gold and the headlines behind it" },
-  technical: { name: "Technical Analyst", role: "price action only: the closed 15m candles and the 5m execution read" },
-  risk: { name: "Risk Manager", role: "risk only: volatility, conflicts between timeframes, what would invalidate a move, and the rule no confirmation, no entry" }
+  technical: { name: "Technical Analyst", role: "price action only: the closed 15m candles" },
+  risk: { name: "Risk Manager", role: "risk only: the volatility of the 15m chart, the 15m Prophet R38 confirmation and what would invalidate a move" }
 });
+/** Retired 2026-11-09 (independent rooms): kept only to name the agent in stored rooms. */
+const RETIRED_DESK_NAMES = Object.freeze({ htf: "Higher-Timeframe Desk" });
 
 /**
  * Owner rule (2026-11-05): no confirmation, no entry. A BUY needs a confirmed buy signal from the
@@ -88,24 +89,25 @@ const LEGACY_DESK_NAMES = Object.freeze({ h1: "H1 Desk" });
 export function agentName(id) {
   if (DESK_AGENTS[id]) return DESK_AGENTS[id].name;
   if (LEGACY_DESK_NAMES[id]) return LEGACY_DESK_NAMES[id];
+  if (RETIRED_DESK_NAMES[id]) return RETIRED_DESK_NAMES[id];
   if (HUD_NAMES[id]) return HUD_NAMES[id];
   return id === "moderator" ? "Moderator" : String(id);
 }
 
 const OPENING_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
-  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, claim: { type: "string" } },
-  required: ["agent", "stance", "bias", "confidence", "claim"]
+  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, claim: { type: "string" }, metrics: { type: "array", items: { type: "string" } } },
+  required: ["agent", "stance", "bias", "confidence", "claim", "metrics"]
 });
 const REBUTTAL_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
-  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, rebuts: { type: "array", items: { type: "string" } }, argument: { type: "string" } },
-  required: ["agent", "stance", "bias", "confidence", "rebuts", "argument"]
+  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, rebuts: { type: "array", items: { type: "string" } }, argument: { type: "string" }, metrics: { type: "array", items: { type: "string" } } },
+  required: ["agent", "stance", "bias", "confidence", "rebuts", "argument", "metrics"]
 });
 const CONCLUSION_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
-  properties: { stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, summary: { type: "string" }, reasons: { type: "array", items: { type: "string" } }, dissent: { type: "array", items: { type: "string" } } },
-  required: ["stance", "bias", "confidence", "summary", "reasons", "dissent"]
+  properties: { stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, summary: { type: "string" }, reasons: { type: "array", items: { type: "string" } }, dissent: { type: "array", items: { type: "string" } }, metrics: { type: "array", items: { type: "string" } } },
+  required: ["stance", "bias", "confidence", "summary", "reasons", "dissent", "metrics"]
 });
 
 /** "interstellar eyes" or "Interstellar-Eyes" name the agent interstellar_eyes (production 16:00). */
@@ -148,10 +150,58 @@ export function biasSupported(bias, supportBiases) {
   return bias === "NEUTRAL" || !supportBiases || supportBiases.has(bias);
 }
 
+/**
+ * Independence (owner decisions 2026-11-09): every agent speaks only from its own data on its own
+ * timeframe, never names another agent and never uses another timeframe's room or decision; it says
+ * which metrics it decided from. The Consensus Discussion stays inside each timeframe's room, over an
+ * anonymous bus: each statement is shown as "#n" with its metrics, never with the agent's name.
+ */
+export const INDEPENDENCE_RULE = 'Independence: speak only from YOUR DATA, on this timeframe only. Never name or quote another agent or role, and never use another timeframe\'s room, desk or decision. Say in "metrics" which metrics you decided from (one to four, in plain words, for example "the 14-bar average range" or "the Prophet R38 buy confirmation"), and argue from those metrics.';
+export const METRICS_MAX = 4;
+
+/** Pure: the errors of an answer's "metrics" list (1 to 4 plain-language entries). */
+export function metricsErrors(o) {
+  if (!o || typeof o !== "object") return [];
+  if (!Array.isArray(o.metrics)) return ["metrics_missing"];
+  o.metrics = o.metrics.filter((m) => typeof m === "string" && m.trim()).map((m) => m.trim().slice(0, 80)).slice(0, METRICS_MAX);
+  if (!o.metrics.length) return ["metrics_missing"];
+  return o.metrics.flatMap((m) => naturalLanguageErrors(m));
+}
+
+/** Pure: "names_an_agent" when `text` names one of `names` (whole words, any case). */
+export function namesErrors(text, names = []) {
+  if (typeof text !== "string" || !text) return [];
+  const t = text.toLowerCase();
+  for (const n of names) {
+    const name = String(n || "").trim().toLowerCase().replace(/^the\s+/, "");
+    if (name.length < 4) continue;
+    const re = new RegExp(`(^|[^a-z0-9])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`);
+    if (re.test(t)) return ["names_an_agent"];
+  }
+  return [];
+}
+
+/** The names an agent may not write: every other agent of the room (its own HUD name is its data source). */
+export function forbiddenNamesFor(agent, roster, nameOf = agentName) {
+  return (roster || []).filter((id) => id !== agent).map(nameOf);
+}
+
+/** The desk role names nobody writes (the moderator and the Reasoner cite metrics, not roles). */
+export function deskNames(nameOf = agentName, ids = Object.keys(DESK_AGENTS)) {
+  return [...ids.map(nameOf), "Higher-Timeframe Desk", "Moderator"];
+}
+
+/** Anonymous bus references (#1, #2, ...) in roster order, and back. */
+export function busRefs(roster) {
+  const toRef = new Map(), toId = new Map();
+  (roster || []).forEach((id, i) => { toRef.set(id, `#${i + 1}`); toId.set(`#${i + 1}`, id); });
+  return { toRef, toId, idOf: (r) => toId.get(String(r ?? "").trim()) ?? toId.get("#" + String(r ?? "").trim().replace(/^#/, "")) ?? r };
+}
+
 /** Calibration cap (owner decision A): a HUD agent with no verified statement speaks at <= 0.4. */
 export const UNCALIBRATED_CONFIDENCE_CAP = 0.4;
 
-export function validateOpening(o, agent, { verifiedLines = null } = {}) {
+export function validateOpening(o, agent, { verifiedLines = null, forbiddenNames = [] } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
   const errors = [];
   if (!sameAgent(o.agent, agent)) errors.push("agent_mismatch");
@@ -160,7 +210,8 @@ export function validateOpening(o, agent, { verifiedLines = null } = {}) {
   if (!ROOM_STANCES.includes(o.stance)) errors.push("stance_invalid");
   if (!inUnit(o.confidence)) errors.push("confidence_out_of_range");
   if (typeof o.claim !== "string" || !o.claim.trim()) errors.push("claim_missing");
-  else errors.push(...naturalLanguageErrors(o.claim));
+  else errors.push(...naturalLanguageErrors(o.claim), ...namesErrors(o.claim, forbiddenNames));
+  errors.push(...metricsErrors(o));
   // A missing bias falls back to the action's direction; a malformed one is an error.
   if (o.bias == null || o.bias === "") o.bias = biasOfStance(o.stance);
   else if (ROOM_BIASES.includes(String(o.bias).trim().toUpperCase())) o.bias = String(o.bias).trim().toUpperCase();
@@ -181,9 +232,11 @@ export function normalizeRebuts(rebuts, busAgents) {
  *   Production wrote rebuts [itself] or [] for every such concession and lost it as
  *   rebuts_invalid; it is now kept, with its own id dropped and `conceded: true`.
  */
-export function validateRebuttal(o, agent, busAgents, { unanimous = false, ownStance = null, ownBias = null } = {}) {
+export function validateRebuttal(o, agent, busAgents, { unanimous = false, ownStance = null, ownBias = null, forbiddenNames = [], refs = null } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
   agentIdsToNames(o, busAgents);
+  // The anonymous bus (#n) maps back to agent ids.
+  if (refs && Array.isArray(o.rebuts)) o.rebuts = o.rebuts.map(refs.idOf);
   const errors = [];
   if (!sameAgent(o.agent, agent)) errors.push("agent_mismatch");
   else o.agent = agent;
@@ -201,7 +254,8 @@ export function validateRebuttal(o, agent, busAgents, { unanimous = false, ownSt
   if (!rebuts || (!rebuts.length && !unanimous && !conceded) || rebuts.some(r => r === agent || !busAgents.includes(r))) errors.push("rebuts_invalid");
   else { o.rebuts = rebuts; if (conceded) o.conceded = true; }
   if (typeof o.argument !== "string" || !o.argument.trim()) errors.push("argument_missing");
-  else errors.push(...naturalLanguageErrors(o.argument));
+  else errors.push(...naturalLanguageErrors(o.argument), ...namesErrors(o.argument, forbiddenNames));
+  errors.push(...metricsErrors(o));
   return { valid: errors.length === 0, errors };
 }
 
@@ -240,14 +294,21 @@ export function agentIdsToNames(o, ids, nameOf = agentName) {
   return o;
 }
 
-export function validateConclusion(o, h1Decision, busAgents, confirmations = null, { supportStances = null, supportBiases = null, roomBias = "NEUTRAL" } = {}) {
+export function validateConclusion(o, h1Decision, busAgents, confirmations = null, { supportStances = null, supportBiases = null, roomBias = "NEUTRAL", crowd = undefined, forbiddenNames = null, refs = null } = {}) {
   agentIdsToNames(o, busAgents);
+  if (refs && o && typeof o === "object" && Array.isArray(o.dissent)) o.dissent = o.dissent.map(refs.idOf);
   // At most three reasons are kept (a fourth is dropped, not a reason to lose the conclusion).
   if (o && typeof o === "object" && Array.isArray(o.reasons) && o.reasons.length > 3) o.reasons = o.reasons.filter(r => !(typeof r === "string" && !r.trim())).slice(0, 3);
   const base = validateRoomModerator(o, h1Decision);
   const errors = [...base.errors, ...conclusionBiasErrors(o, { supportBiases, roomBias })];
   if (o && typeof o === "object" && confirmations && !entryAllowed(o.stance, confirmations)) errors.push("entry_without_confirmation");
+  // The independent 15m room (owner decision 2026-11-09) is judged by its own quorum, like every room.
+  if (o && typeof o === "object" && crowd !== undefined && !quorumAllows(o.stance, crowd)) errors.push("entry_without_quorum");
   if (o && typeof o === "object" && !stanceSupported(o.stance, supportStances)) errors.push("stance_without_support");
+  if (o && typeof o === "object" && forbiddenNames) {
+    errors.push(...namesErrors(o.summary, forbiddenNames), ...(Array.isArray(o.reasons) ? o.reasons.flatMap((r) => namesErrors(r, forbiddenNames)) : []));
+    errors.push(...metricsErrors(o));
+  }
   if (o && typeof o === "object") {
     // A blank trailing entry (seen in preview 2026-11-05: three reasons and "") carries no
     // content: drop blanks before judging the list instead of failing the whole conclusion.
@@ -300,64 +361,65 @@ export function biasSplitText(bias) {
 
 const ROOM_RULES = [
   "Room stances: BUY, SELL, HOLD (keep an existing position), WAIT (stay flat), CLOSE (exit an existing position). They are discussion positions only.",
-  "Never give entry, stop loss, take profit or position size: price levels come only from the validated H1 decision chain."
+  "Never give entry, stop loss, take profit or position size: price levels are not part of a room."
 ].join("\n");
 
-function openingMessages(agent, data, h1) {
+function openingMessages(agent, data) {
   const desk = DESK_AGENTS[agent];
-  const riskRule = agent === "risk" ? [NO_CONFIRMATION_RULE + " Judge every possible entry against the confirmations in your data, and say plainly whether any entry is confirmed."] : [];
+  const riskRule = agent === "risk" ? ["Judge the risk of every possible entry from your data: the 15m volatility, the 15m Prophet R38 confirmation and what would invalidate the move, and say plainly whether you would take it."] : [];
   const who = desk
     ? `You are the ${desk.name} in the XAUUSD Live War Room, which meets at every 15m candle close. Your only role: ${desk.role}.`
     : `You are ${HUD_NAMES[agent]}, one agent per Pine HUD, in the XAUUSD Live War Room, which meets at every 15m candle close. You speak only about the ${HUD_NAMES[agent]} HUD on the 15m candle that just closed. Lean on the statements marked verified by parity or computed from verified bars. The readers already see your calibration status once, next to your name: never mention calibration, verification or comparators in your claim. When every statement is not yet calibrated, keep your confidence at or below ${UNCALIBRATED_CONFIDENCE_CAP}.`;
   return chatMessages([
     who,
-    RULES_NO_REFS,
+    ROOM_RULES_INDEPENDENT,
     ROOM_RULES,
+    INDEPENDENCE_RULE,
     ...riskRule,
-    "This is your opening on the communication bus: one claim from your own data only. Do not repeat what other roles cover (the other agents are the 15m Desk, the Higher-Timeframe Desk, the News Analyst, the Technical Analyst, the Risk Manager and one agent per HUD).",
-    `The H1 decision is ${h1.decision}.`,
+    "This is your opening on the communication bus: one claim from your own data only.",
     BIAS_RULE,
-    `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"claim":"<= ${CLAIM_MAX - 40} chars"}`,
+    `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"claim":"<= ${CLAIM_MAX - 40} chars","metrics":["<the metrics you decided from, plain words>"]}`,
     "YOUR DATA:",
     JSON.stringify(data)
   ]);
 }
 
-function rebuttalMessages(agent, own, bus, h1, unanimous, confirmations, roomBias = null) {
-  const riskRule = agent === "risk"
-    ? [NO_CONFIRMATION_RULE + " Rebut every agent on the bus that proposes BUY or SELL without the matching confirmation. CONFIRMATIONS: " + JSON.stringify(confirmations)]
-    : [];
+/** The anonymous bus (owner decision 2026-11-09): "#n", stance, bias, confidence, evidence, metrics, claim; never a name. */
+export function anonymousBus(bus, refs) {
+  return bus.map((b) => ({ ref: refs.toRef.get(b.id) ?? null, stance: b.stance, bias: b.bias ?? null, confidence: b.confidence, evidence: b.evidence ?? null, metrics: b.metrics ?? [], claim: b.claim }));
+}
+
+function rebuttalMessages(agent, own, bus, unanimous, roomBias = null) {
+  const risk = agent === "risk" ? ["As the Risk Manager, challenge every statement on the bus that proposes BUY or SELL: which metric would invalidate it on this chart."] : [];
   return chatMessages([
-    `You are ${agentName(agent)} in the XAUUSD Live War Room Consensus Discussion${DESK_AGENTS[agent] ? " (" + DESK_AGENTS[agent].role + ")" : ""}. The Consensus Discussion is open for at most 3 minutes.`,
-    RULES_NO_REFS,
+    `You are ${agentName(agent)} in the Consensus Discussion of the XAUUSD Live War Room (15m). The bus below holds every opening of this bar, anonymously.`,
+    ROOM_RULES_INDEPENDENT,
     ROOM_RULES,
-    unanimous && roomBias && agent !== "risk"
-      ? biasSplitText(roomBias)
-      : unanimous
-        ? "The bus is unanimous. Stress-test the consensus: challenge the claim most likely to be wrong, put that agent's id in rebuts, and say what would invalidate the consensus. Add only new reasoning from your own role; never restate a claim."
-        : "Rebut the strongest claims you disagree with and put those agents' ids in rebuts. Add only new reasoning from your own role; never restate your opening or another agent's claim. You may change your stance or your bias if the bus convinced you: then put the ids of the agents who convinced you in rebuts (or leave it empty), never your own id.",
-    ...riskRule,
-    "In the argument, call agents by their names (for example the Kinetic Engine), never by an id. Each bus entry says how much of that agent's data is verified by parity or computed from verified bars: weigh that evidence above uncalibrated readings, and never discuss calibration itself.",
-    `The H1 decision is ${h1.decision}.`,
-    `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"rebuts":["<agent id>"],"argument":"<= ${ARGUMENT_MAX - 40} chars"}`,
-    "YOUR OPENING: " + JSON.stringify({ stance: own.stance, bias: own.bias ?? null, confidence: own.confidence, claim: own.claim }),
-    "COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):",
+    INDEPENDENCE_RULE,
+    ...risk,
+    ...(roomBias ? [biasSplitText(roomBias)] : []),
+    unanimous
+      ? "The bus is unanimous. Stress-test the consensus: challenge the statement most likely to be wrong, put its reference in rebuts, and say which metric would invalidate the consensus. Add only new reasoning from your own metrics; never restate a claim."
+      : "Rebut the statements you disagree with and put their references (#n) in rebuts. Argue from your own metrics against theirs; never restate your opening or another claim. You may change your stance or your bias if the bus convinced you: then put the references of the statements that convinced you in rebuts (or leave it empty).",
+    "Refer to bus statements only by their # reference, and only in the rebuts field: the argument names metrics, never an agent or a role.",
+    `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"rebuts":["#n"],"argument":"<= ${ARGUMENT_MAX - 40} chars","metrics":["<the metrics you argue from>"]}`,
+    "YOUR OPENING: " + JSON.stringify({ stance: own.stance, bias: own.bias ?? null, confidence: own.confidence, metrics: own.metrics ?? [], claim: own.claim }),
+    "COMMUNICATION BUS (ref, stance, bias, confidence, evidence, metrics, claim):",
     JSON.stringify(bus)
   ]);
 }
 
-function conclusionMessages(h1, bus, debate, confirmations, crowd = null) {
+function conclusionMessages(bus, debate, crowd = null) {
   return chatMessages([
-    "You are the moderator of the XAUUSD Live War Room. The Consensus Discussion is closed. Write the conclusion for the main panel.",
+    "You are the moderator of the XAUUSD Live War Room (15m). The Consensus Discussion is closed. Write the conclusion for the main panel from this timeframe's statements only.",
     ...(crowd ? [crowdRule(crowd)] : []),
-    RULES_NO_REFS,
+    ROOM_RULES_INDEPENDENT,
     ROOM_RULES,
-    `The H1 decision (${h1.decision}) is the constraint: if your stance differs from it, the summary must say "H1 decision: ${h1.decision}" and why the room still differs.`,
-    NO_CONFIRMATION_RULE + " The conclusion obeys it: BUY or SELL only with the matching confirmation below. CONFIRMATIONS: " + JSON.stringify(confirmations),
+    (crowd ? quorumRule(crowd) : "There is no crowd line, so there is no quorum: the conclusion is WAIT, HOLD or CLOSE.") + " The conclusion obeys it.",
     SUPPORT_RULE,
-    DECISION_BIAS_RULE + " A BULLISH or BEARISH bias needs at least one agent holding it.",
-    "Weigh claims by their argument and by their evidence, not by the number of agents: a claim built on data verified by parity, or computed from verified bars, outweighs one built on uncalibrated readings (each bus entry states which). No repetition: the summary states the conclusion once, each reason adds something new, and dissent lists the ids of agents whose stance or bias still differs from yours (never an agent that agrees with both). In the summary and reasons, call agents by their names, never by an id, and never discuss calibration itself.",
-    `Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"summary":"<= 360 chars","reasons":["<= 160 chars", "at most 3"],"dissent":["<agent id>"]}`,
+    DECISION_BIAS_RULE + " A BULLISH or BEARISH bias needs at least one statement holding it.",
+    "Weigh statements by their metrics and their evidence, not by their number: a statement built on data verified by parity, or computed from verified bars, outweighs one built on uncalibrated readings (each entry states which). No repetition: the summary states the conclusion once, each reason adds something new. In the summary and reasons name the metrics that decided, never an agent or a role; dissent lists the # references of statements whose stance or bias still differs from yours. Never discuss calibration itself.",
+    `Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"summary":"<= 360 chars","reasons":["<= 160 chars", "at most 3"],"dissent":["#n"],"metrics":["<the metrics that decided>"]}`,
     "COMMUNICATION BUS:",
     JSON.stringify(bus),
     "CONSENSUS DISCUSSION:",
@@ -365,30 +427,24 @@ function conclusionMessages(h1, bus, debate, confirmations, crowd = null) {
   ]);
 }
 
-/** The latest ok conclusion of a timeframe room (for the Higher-Timeframe Desk), or null. */
-async function latestRoomConclusion(db, threadId) {
-  try {
-    const row = await db.prepare("SELECT run_id, stance, confidence, body_json FROM agent_thread_messages WHERE thread_id = ? AND step = 'conclusion' AND status = 'ok' ORDER BY run_id DESC LIMIT 1").bind(threadId).first();
-    if (!row) return null;
-    const body = parseJson(row.body_json, {}) || {};
-    return { bar_open: String(row.run_id).split("#")[0], stance: row.stance, bias: body.bias ?? null, confidence: row.confidence, summary: body.summary ?? null };
-  } catch { return null; }
-}
-
-/** Each agent's own data: one role each, nothing shared that another role covers. */
-function agentData(agent, evidence, hud, h1Detail, confirmations, desk15, oneHour) {
+/** Each agent's own data on the 15m chart only (owner decision 2026-11-09: no other timeframe, no other agent). */
+function agentData(agent, evidence, hud, confirmations, desk15) {
   switch (agent) {
     case "m15": return { timeframe: "15 minutes", reading: desk15.reading, approved_by_parity: desk15.approved_by_parity };
-    case "htf": return { h1_decision: h1Detail.decision, confidence: h1Detail.confidence, reasoning: h1Detail.reasoning, tradingview_h1: evidence.h1.tradingview, one_hour_room: oneHour };
     case "news": return evidence.news ? { window: evidence.news.window ?? "the latest hourly batch", consensus: evidence.news.consensus, confidence: evidence.news.confidence, summary: evidence.news.summary, reasons: evidence.news.reasons, counts: evidence.news.counts, headlines: evidence.news.headlines } : { available: false, note: "no news consensus yet" };
-    case "technical": return { candles_15m: evidence.m15.candles, execution_5m: { label: evidence.m5.label, bias: evidence.m5.bias, reading: evidence.m5.reading?.summary ?? null, last_bars: evidence.m5.recent_bars.slice(-6) } };
+    case "technical": return { candles_15m: evidence.m15.candles };
     case "risk": {
       const c = evidence.m15.candles;
       const ranges = c.map(x => Math.round((x.h - x.l) * 100) / 100);
-      return { candles_15m: c, ranges_15m: ranges, h1_decision: evidence.h1.decision, h1_confidence: evidence.h1.confidence, news_consensus: evidence.news?.consensus ?? null, execution_5m_label: evidence.m5.label, confirmations };
+      return { candles_15m: c, ranges_15m: ranges, confirmations };
     }
     default: return { hud: HUD_NAMES[agent], timeframe: "15 minutes", reading: hudEvidenceLines(hud?.readings?.[agent]) };
   }
+}
+
+/** The 15m chart's own Prophet R38 confirmation and setup state, from the 15m desk reading. */
+function m15Confirmations(desk15) {
+  return { chart_prophet_r38: { buy_confirmed: desk15?.buy_confirmed === true, sell_confirmed: desk15?.sell_confirmed === true, buy_setup_ready: desk15?.buy_setup_ready === true, sell_setup_ready: desk15?.sell_setup_ready === true, approved_by_parity: desk15?.approved_by_parity === true, source: desk15?.available ? "the local Prophet R38 record of this 15m bar" : "not available" } };
 }
 
 /**
@@ -403,14 +459,13 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   if (!isFifteenMinuteClose(barTime)) return { status: "not_15m_close", calls: 0 };
   const live = await liveEvidence(env, task, barTime);
   if (live.status) return { status: live.status, calls: 0 };
-  const { evidence, synthesis, confirmations } = live;
+  // Owner decisions 2026-11-09: the room is independent of every other timeframe. It reads the closed
+  // 15m candles, its own 15m HUD snapshot and local records and the news; never the H1 chain, the 1H
+  // room or the 5m lane. (liveEvidence still builds the 15m candles from the 5m bars of the feed.)
+  const { evidence } = live;
   // News Daily (owner decision 2026-11-06): the News Analyst reads the last 24 hours when present.
   const daily = await newsDeskEvidence(db);
-  // Macro War Room (owner decision 2026-11-08): the News Analyst also reads the latest macro conclusion.
-  const macro = await macroDeskEvidence(db, { now: Date.parse(barTime) });
-  if (daily) evidence.news = macro ? { ...daily, macro } : daily;
-  const decision = parseJson(synthesis?.ai_analysis, {})?.decision || {};
-  const h1 = { decision: evidence.h1.decision, confidence: evidence.h1.confidence, candle_key: evidence.h1.candle_key, reasoning: clip(decision.reasoning, 400) };
+  if (daily) evidence.news = daily;
 
   let hud = null;
   try {
@@ -422,15 +477,15 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   // The 15m Desk: the 15m local records of the candle that just closed (owner decision 2026-11-06).
   let desk15 = { available: false, reading: [], approved_by_parity: false };
   try { desk15 = await chartDeskReading(env, m15KeyForClose(barTime)); } catch { /* no desk this bar */ }
-  const oneHour = await latestRoomConclusion(db, "tf:H1");
-  const roster = [...(desk15.available ? ["m15"] : []), "htf", "news", "technical", "risk", ...HUD_IDS.filter(id => hud?.readings?.[id]?.available)];
+  const confirmations = m15Confirmations(desk15);
+  const roster = [...(desk15.available ? ["m15"] : []), "news", "technical", "risk", ...HUD_IDS.filter(id => hud?.readings?.[id]?.available)];
+  const refs = busRefs(roster);
   // Evidence status, shown once per agent (owner decision A): no agent repeats it in its text.
   const calibration = Object.fromEntries(roster.map(id => {
     const lines = hud?.readings?.[id]?.lines;
     if (Array.isArray(lines)) return [id, calibrationCounts(lines)];
     if (id === "m15") return [id, { label: chartDeskLabel("15m", desk15) }];
-    if (id === "htf") return [id, { label: "parity-approved H1 chain" }];
-    if (id === "technical" || id === "risk") return [id, { label: evidence.m5.label }];
+    if (id === "technical" || id === "risk") return [id, { label: "closed 15m bars" }];
     return [id, { label: "news analysis" }];
   }));
   const evidenceNote = (id) => {
@@ -446,7 +501,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   if (existing.get("conclusion")?.status === "ok") return { status: "already_complete", calls: 0 };
   const base = (step, agent, parent_id = null) => ({ thread_id: threadId, run_id: barTime, step, agent, parent_id, bar_time: barTime });
   if (!existing.has("brief")) {
-    await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { roster, calibration, h1: { ...h1, reasoning: undefined }, confirmations, m5_label: evidence.m5.label, m15_close: evidence.m15.candles.at(-1) ?? null, news: evidence.news } });
+    await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { roster, calibration, confirmations, independent: true, m15_close: evidence.m15.candles.at(-1) ?? null, news: evidence.news } });
   }
 
   // One budget for the bar, shared by every parallel step (and its correction call).
@@ -468,21 +523,22 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     const prior = existing.get("open:" + agent);
     if (prior?.status === "ok") return prior;
     return open(base("open:" + agent, agent), {
-      messages: openingMessages(agent, agentData(agent, evidence, hud, h1, confirmations, desk15, oneHour), h1), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
+      messages: openingMessages(agent, agentData(agent, evidence, hud, confirmations, desk15)), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
       // An unapproved 15m chain speaks like any uncalibrated agent: at 0.4 or lower.
-      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateOpening(o, agent, { verifiedLines: agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]) }),
-      toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), bias: o.bias, name: agentName(agent) }, refs: [] })
+      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateOpening(o, agent, { verifiedLines: agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]), forbiddenNames: forbiddenNamesFor(agent, roster) }),
+      toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), bias: o.bias, metrics: o.metrics, name: agentName(agent) }, refs: [] })
     });
   }));
   const answered = openings.filter(m => m?.status === "ok");
   if (answered.length && answered.length * 2 < roster.length && clock() - Date.parse(barTime) < WAR_ROOM_QUORUM_WAIT_MS) {
     return { status: "waiting_for_quorum", calls, openings: answered.length, roster: roster.length };
   }
-  const bus = answered.map(m => ({ id: m.agent, name: agentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, evidence: evidenceNote(m.agent), claim: m.claim }));
+  const bus = answered.map(m => ({ id: m.agent, name: agentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, evidence: evidenceNote(m.agent), metrics: m.metrics ?? [], claim: m.claim }));
   const busAgents = bus.map(b => b.id);
+  const anonBus = anonymousBus(bus, refs);
 
-  // Phase 2: the Consensus Discussion, open for at most 3 minutes.
-  const majority = majorityStance(answered, h1.decision);
+  // Phase 2: the Consensus Discussion inside this timeframe, open for at most 3 minutes.
+  const majority = majorityStance(answered, "WAIT");
   const roomBias = majorityBias(answered);
   const rebutters = selectRebutters(answered, majority, WAR_ROOM_MAX_REBUTTALS, { bias: roomBias });
   const unanimous = answered.every(m => m.stance === majority);
@@ -494,21 +550,21 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     if (prior?.status === "ok") return prior;
     const own = answered.find(m => m.agent === agent);
     return debateStep(base("debate:" + agent, agent, openingId.get(agent) ?? null), {
-      messages: rebuttalMessages(agent, own, bus, h1, unanimous, confirmations, biasSplit), schemaName: "war_room_rebuttal", schema: REBUTTAL_SCHEMA,
-      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateRebuttal(o, agent, busAgents, { unanimous, ownStance: own?.stance ?? null, ownBias: own?.bias ?? null }),
-      toBody: (o) => ({ body: { argument: clip(o.argument, ARGUMENT_MAX), bias: o.bias, rebuts: [...new Set(o.rebuts)].slice(0, 4), ...(o.conceded ? { conceded: true } : {}), name: agentName(agent) }, refs: [] })
+      messages: rebuttalMessages(agent, own, anonBus, unanimous, biasSplit), schemaName: "war_room_rebuttal", schema: REBUTTAL_SCHEMA,
+      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateRebuttal(o, agent, busAgents, { unanimous, ownStance: own?.stance ?? null, ownBias: own?.bias ?? null, forbiddenNames: forbiddenNamesFor(agent, roster), refs }),
+      toBody: (o) => ({ body: { argument: clip(o.argument, ARGUMENT_MAX), bias: o.bias, rebuts: [...new Set(o.rebuts)].slice(0, 4), metrics: o.metrics, ...(o.conceded ? { conceded: true } : {}), name: agentName(agent) }, refs: [] })
     });
   }))).filter(m => m?.status === "ok");
 
-  // Phase 3: the conclusion for the main panel, with the crowd line (P7, RFC §7).
+  // Phase 3: the conclusion for the main panel, with the crowd line (P7, RFC §7) and its quorum.
   if (!answered.length) return { status: "no_openings", calls };
   const crowd = buildCrowdLine(finalEntries(answered, debate), await agentReputation(db, "15"));
   const conclude = phase(WAR_ROOM_CONCLUSION_MS);
   await conclude(base("conclusion", "moderator"), {
-    messages: conclusionMessages(h1, bus, debate.map(m => ({ id: m.agent, name: agentName(m.agent), stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: m.rebuts, argument: m.argument })), confirmations, crowd),
+    messages: conclusionMessages(anonBus, debate.map(m => ({ ref: refs.toRef.get(m.agent) ?? null, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: (m.rebuts || []).map((r) => refs.toRef.get(r) ?? r), metrics: m.metrics ?? [], argument: m.argument })), crowd),
     schemaName: "war_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low",
-    validate: (o) => validateConclusion(o, h1.decision, busAgents, confirmations, { supportStances: new Set([...answered.map(m => m.stance), ...debate.map(m => m.stance)]), supportBiases: new Set([...answered.map(biasOf), ...debate.map(biasOf)]), roomBias }),
-    toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map(r => clip(r, 200)), dissent: [...new Set(o.dissent)], majority, majority_bias: roomBias, h1_decision: h1.decision, crowd }, refs: [] })
+    validate: (o) => validateConclusion(o, null, busAgents, null, { supportStances: new Set([...answered.map(m => m.stance), ...debate.map(m => m.stance)]), supportBiases: new Set([...answered.map(biasOf), ...debate.map(biasOf)]), roomBias, crowd, forbiddenNames: deskNames(), refs }),
+    toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map(r => clip(r, 200)), dissent: [...new Set(o.dissent)], metrics: o.metrics, majority, majority_bias: roomBias, crowd }, refs: [] })
   });
   return { status: "complete", calls, openings: answered.length, rebuttals: debate.length };
 }
@@ -523,7 +579,7 @@ export async function readWarRoom(db, { barTime = null } = {}) {
   const rows = ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(`warroom:${run.slice(0, 10)}`, run).all()).results || []).map(rowToThreadMessage);
   if (!rows.length) return null;
   const brief = rows.find(m => m.step === "brief") || null;
-  const pick = (m) => ({ id: m.agent, name: agentName(m.agent), status: m.status, model: m.model, fallback_used: m.fallback_used, errors: m.errors, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, ts: m.ts, claim: m.claim, argument: m.argument, rebuts: m.rebuts, rebuts_names: (m.rebuts || []).map(agentName), conceded: m.conceded === true });
+  const pick = (m) => ({ id: m.agent, name: agentName(m.agent), status: m.status, model: m.model, fallback_used: m.fallback_used, errors: m.errors, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, ts: m.ts, claim: m.claim, argument: m.argument, rebuts: m.rebuts, rebuts_names: (m.rebuts || []).map(agentName), conceded: m.conceded === true, metrics: m.metrics ?? [] });
   // Steps run in parallel, so rows land in completion order: show them in roster order.
   const order = new Map((brief?.roster || []).map((id, i) => [id, i]));
   const byRoster = (a, b) => (order.get(a.id) ?? 99) - (order.get(b.id) ?? 99);

@@ -191,6 +191,16 @@ const RULES_NO_REFS = RULES.replace(
   "This answer has no refs field: never write refs, evidence paths, field names or JSON keys in your text. Name every source in plain words (for example \"the H1 decision\" or \"the Prophet HUD\")."
 );
 
+// The independent rooms (owner decisions 2026-11-09): no H1 chain authority, no 5m lane, and sources
+// named as metrics, never as another agent.
+const ROOM_RULES_INDEPENDENT = [
+  "Advisory only: never produce entry, stop loss, take profit or position size, and never place or recommend executing an order. Stances are discussion positions, not orders.",
+  "A local_computation engine counts as trusted only when its trust_status is approved_by_parity; untrusted readings are still evidence, read with less weight.",
+  "This answer has no refs field: never write refs, evidence paths, field names or JSON keys in your text. Name every source as a metric in plain words (for example \"the 14-bar average range\" or \"the Prophet R38 buy confirmation\").",
+  NATURAL_LANGUAGE_RULE,
+  "Return only one JSON object that matches the required schema."
+].join("\n");
+
 async function callsInLastHour(db, now, kindPrefix) {
   const cutoff = new Date(now - 60 * 60 * 1000).toISOString();
   const row = await db.prepare(
@@ -343,7 +353,9 @@ const RULE_CORRECTIONS = Object.freeze({
   stance_without_support: "A BUY or SELL conclusion needs at least one agent on the bus or in the Consensus Discussion holding that stance; a confirmation alone never overrules the whole room.",
   entry_without_confirmation: "BUY or SELL needs the matching confirmation in the CONFIRMATIONS above; without it the stance is WAIT, or HOLD / CLOSE for a position already open.",
   entry_without_quorum: "BUY or SELL needs the room's quorum: more than half of the agents' weight holding the matching bias (see the QUORUM RULE above); without it the stance is WAIT, or HOLD / CLOSE for a position already open.",
-  bias_without_support: "A BULLISH or BEARISH bias needs at least one agent on the bus or in the Consensus Discussion holding that bias; otherwise the bias is NEUTRAL or the side the agents actually lean."
+  bias_without_support: "A BULLISH or BEARISH bias needs at least one agent on the bus or in the Consensus Discussion holding that bias; otherwise the bias is NEUTRAL or the side the agents actually lean.",
+  names_an_agent: "Your text named another agent or role. Never name an agent: say which metrics the argument rests on instead (for example \"the 14-bar average range\" or \"the Prophet R38 buy confirmation\"), and refer to bus statements only by their # reference in the JSON fields, never in the text.",
+  metrics_missing: "Your answer had no \"metrics\": list the one to four metrics you decided from, in plain words."
 });
 
 /**
@@ -491,8 +503,9 @@ export function validateRoomModerator(obj, h1Decision) {
   if (!ROOM_STANCES.includes(obj.stance)) errors.push("stance_invalid");
   if (!inUnit(obj.confidence)) errors.push("confidence_out_of_range");
   if (typeof obj.summary !== "string" || !obj.summary.trim()) errors.push("summary_missing");
-  const h1 = String(h1Decision || "WAIT").toUpperCase();
-  if (errors.length === 0 && obj.stance !== h1 && !new RegExp(`H1[^.]{0,40}${h1}`, "i").test(obj.summary)) errors.push("h1_reference_missing");
+  // An independent room (owner decision 2026-11-09) passes no H1 decision: nothing to reference.
+  const h1 = h1Decision == null ? null : String(h1Decision || "WAIT").toUpperCase();
+  if (h1 && errors.length === 0 && obj.stance !== h1 && !new RegExp(`H1[^.]{0,40}${h1}`, "i").test(obj.summary)) errors.push("h1_reference_missing");
   if (typeof obj.summary === "string") errors.push(...naturalLanguageErrors(obj.summary));
   return { valid: errors.length === 0, errors };
 }
@@ -966,4 +979,4 @@ export async function readHudThread(db, candleKey) {
 }
 
 /** Shared with the War Room (src/war-room.mjs): one storage, budget and step runner. */
-export const threadInternals = Object.freeze({ runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson, INSIGHT_MAX });
+export const threadInternals = Object.freeze({ runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, ROOM_RULES_INDEPENDENT, clip, inUnit, parseJson, INSIGHT_MAX });
