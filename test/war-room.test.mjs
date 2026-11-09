@@ -50,10 +50,10 @@ function fakeAI({ stances = {}, biases = {}, conclusion = null, fail = new Set()
       const sys = request.messages[0].content, user = request.messages[1].content;
       const agent = (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1];
       let content;
-      if (/moderator of the XAUUSD Live War Room/.test(sys)) content = conclusion || { stance: "WAIT", confidence: 0.6, summary: "Stay flat: the flush has no confirmation and the higher timeframe still says wait.", reasons: ["The 5m read gives no trigger.", "Volatility is high after the flush."], dissent: ["kinetic_engine"] };
+      if (/moderator of the XAUUSD Live War Room/.test(sys)) content = conclusion || { stance: "WAIT", confidence: 0.6, summary: "Stay flat: the flush has no confirmation and the higher timeframe still says wait.", reasons: ["The 5m read gives no trigger.", "Volatility is high after the flush."], dissent: ["kinetic_engine"], metrics: ["the closed 15m candles"] };
       else if (fail.has(agent)) throw new Error("model down");
-      else if (/Consensus Discussion/.test(sys)) content = { agent, stance: stances[agent] || "WAIT", ...(biases[agent] ? { bias: biases[agent] } : {}), confidence: 0.55, rebuts: [agent === "technical" ? "risk" : "technical"], argument: "The flush was on rising volume, which argues against reading it as a stop hunt." };
-      else content = { agent, stance: stances[agent] || "WAIT", ...(biases[agent] ? { bias: biases[agent] } : {}), confidence: agent === "kinetic_engine" ? 0.7 : 0.5, claim: "My own data supports waiting for the next candle." };
+      else if (/Consensus Discussion/.test(sys)) content = { agent, stance: stances[agent] || "WAIT", ...(biases[agent] ? { bias: biases[agent] } : {}), confidence: 0.55, rebuts: [agent === "technical" ? "risk" : "technical"], argument: "The flush was on rising volume, which argues against reading it as a stop hunt.", metrics: ["the volume of the flush candle"] };
+      else content = { agent, stance: stances[agent] || "WAIT", ...(biases[agent] ? { bias: biases[agent] } : {}), confidence: agent === "kinetic_engine" ? 0.7 : 0.5, claim: "My own data supports waiting for the next candle.", metrics: ["my own readings of this chart"] };
       return { choices: [{ message: { content: JSON.stringify(content) }, finish_reason: "stop" }], usage: { total_tokens: 50 } };
     }
   };
@@ -67,6 +67,10 @@ function env(ai, overrides = {}) {
   return { DB: d1, AI: ai, SIGNAL_CACHE: kv({ ["hud:15:" + K15]: JSON.stringify(hudSnapshot()) }), WEBHOOK_BUFFER: kv(), WAR_ROOM_ENABLED: "true", WAR_ROOM_MAX_CALLS_PER_HOUR: "112", ...overrides };
 }
 const task = () => buildLiveRoomTask({ barTime: BAR, context: m5Context() });
+/** The anonymous bus (owner decisions 2026-11-09): "#n" in roster order. */
+const BUS_HEADER = "COMMUNICATION BUS (ref, stance, bias, confidence, evidence, metrics, claim):\n";
+const busOf = (prompt) => JSON.parse(prompt.split(BUS_HEADER)[1]);
+const refOf = (room, id) => "#" + (room.roster.map(r => r.id).indexOf(id) + 1);
 
 test.beforeEach(() => resetThreadSchemaCacheForTests());
 
@@ -85,26 +89,31 @@ test("every agent opens on the bus, the minority and the Risk Manager rebut, the
   assert.equal(result.status, "complete");
   const room = await readWarRoom(e.DB);
   assert.equal(room.phase, "closed");
-  assert.deepEqual(room.roster.map(r => r.id), ["htf", "news", "technical", "risk", "kinetic_engine", "fabio_amt"], "desks, then one agent per computed 15m HUD (no 15m records here, so no 15m Desk)");
-  assert.equal(room.openings.length, 6);
+  assert.deepEqual(room.roster.map(r => r.id), ["news", "technical", "risk", "kinetic_engine", "fabio_amt"], "desks, then one agent per computed 15m HUD (no 15m records here, so no 15m Desk; no Higher-Timeframe Desk since 2026-11-09)");
+  assert.equal(room.openings.length, 5);
   assert.ok(room.openings.every(o => o.status === "ok" && o.claim));
   assert.deepEqual(room.debate.map(d => d.id).sort(), ["kinetic_engine", "risk", "technical"], "the two SELL agents (minority) and the Risk Manager");
   assert.ok(room.debate.every(d => d.rebuts.length && d.rebuts_names.length));
   assert.equal(room.conclusion.stance, "WAIT");
   assert.deepEqual(room.conclusion.dissent, [{ id: "kinetic_engine", name: "Kinetic Engine (TVA)" }]);
   assert.equal(room.conclusion.majority, "WAIT");
-  assert.equal(room.h1.decision, "WAIT");
-  assert.equal(ai.calls.length, 6 + 3 + 1);
+  assert.equal(room.h1, null, "the 15m room reads no H1 decision (independent rooms, owner decision 2026-11-09)");
+  assert.ok(room.openings.every(o => o.metrics.length), "every opening names its metrics");
+  assert.equal(ai.calls.length, 5 + 3 + 1);
   // Per-role models (owner decision 2026-11-07): the agents on gemma-4, the moderator on gpt-oss-120b.
-  assert.deepEqual(ai.calls.map(c => c.model).sort(), [...Array(9).fill("@cf/google/gemma-4-26b-a4b-it"), "@cf/openai/gpt-oss-120b"].sort(), "each role on its primary model");
+  assert.deepEqual(ai.calls.map(c => c.model).sort(), [...Array(8).fill("@cf/google/gemma-4-26b-a4b-it"), "@cf/openai/gpt-oss-120b"].sort(), "each role on its primary model");
 
   // Openings stay inside their own role: the HUD agent sees only its HUD reading.
   const kinetic = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content));
   const data = JSON.parse(kinetic.request.messages[1].content.split("YOUR DATA:\n")[1]);
   assert.deepEqual(Object.keys(data), ["hud", "timeframe", "reading"]);
-  // The debate sees the whole bus.
+  // The debate sees the whole bus, anonymously: references and metrics, never names.
   const rebuttal = ai.calls.find(c => /Consensus Discussion/.test(c.request.messages[0].content));
-  assert.equal(JSON.parse(rebuttal.request.messages[1].content.split("COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):\n")[1]).length, 6);
+  const anon = busOf(rebuttal.request.messages[1].content);
+  assert.equal(anon.length, 5);
+  assert.deepEqual(anon.map(b => b.ref), ["#1", "#2", "#3", "#4", "#5"]);
+  assert.ok(anon.every(b => !("name" in b) && !("id" in b)));
+  assert.doesNotMatch(ai.calls.map(c => c.request.messages.map(m => m.content).join("\n")).join("\n"), /The H1 decision is|Higher-Timeframe Desk|execution_5m/, "no other timeframe anywhere");
 
   assert.equal((await runWarRoomBar(e, task())).status, "already_complete", "idempotent per bar");
 });
@@ -120,43 +129,35 @@ test("a unanimous room: the Risk Manager stress-tests the consensus", async () =
 });
 
 test("openings read back in roster order, whatever order the parallel steps finished in", async () => {
-  // The Higher-Timeframe Desk answers last; the bus still lists htf, news, technical, risk, then the HUDs.
+  // The News Analyst answers last; the bus still lists news, technical, risk, then the HUDs.
   const slow = fakeAI();
   const run = slow.run;
-  slow.run = async (model, request) => { if (/"agent":"htf"/.test(request.messages[1].content) && !/Consensus Discussion/.test(request.messages[0].content)) await new Promise(r => setTimeout(r, 20)); return run(model, request); };
+  slow.run = async (model, request) => { if (/"agent":"news"/.test(request.messages[1].content) && !/Consensus Discussion/.test(request.messages[0].content)) await new Promise(r => setTimeout(r, 20)); return run(model, request); };
   const e = env(slow);
   await runWarRoomBar(e, task());
-  assert.deepEqual((await readWarRoom(e.DB)).openings.map(o => o.id), ["htf", "news", "technical", "risk", "kinetic_engine", "fabio_amt"]);
+  assert.deepEqual((await readWarRoom(e.DB)).openings.map(o => o.id), ["news", "technical", "risk", "kinetic_engine", "fabio_amt"]);
 });
 
-test("no confirmation, no entry: the Risk Manager enforces it and a BUY conclusion needs a confirmed buy", async () => {
+test("the 15m room is judged by its own quorum (owner decisions 2026-11-09); the legacy confirmation rule stays for the old room", async () => {
   const none = { h1_prophet_r38: { buy_confirmed: false, sell_confirmed: false }, m5_prophet_r38: { buy_confirmed: true, sell_confirmed: false, verified: false } };
   assert.equal(entryAllowed("WAIT", none), true);
-  assert.equal(entryAllowed("BUY", none), false, "an UNVERIFIED 5m confirmation does not count");
-  assert.equal(entryAllowed("BUY", { ...none, m5_prophet_r38: { ...none.m5_prophet_r38, verified: true } }), true, "a VERIFIED 5m confirmation candle does");
-  assert.equal(entryAllowed("SELL", { ...none, h1_prophet_r38: { buy_confirmed: false, sell_confirmed: true } }), true);
-  // Owner report 2026-11-09: the H1 setup still READY after its one-bar event counts as the H1 confirmation.
-  assert.equal(entryAllowed("BUY", { ...none, h1_prophet_r38: { buy_confirmed: false, sell_confirmed: false, buy_setup_ready: true } }), true, "a BUY setup still READY allows a BUY");
-  assert.equal(entryAllowed("SELL", { ...none, h1_prophet_r38: { buy_confirmed: false, sell_confirmed: false, buy_setup_ready: true } }), false, "and never a SELL");
+  assert.equal(entryAllowed("BUY", none), false, "legacy: an UNVERIFIED 5m confirmation does not count");
 
-  const buy = { stance: "BUY", confidence: 0.6, summary: "H1 decision: WAIT, but the room buys the dip.", reasons: ["Momentum turned up."], dissent: [] };
-  const ai = fakeAI({ conclusion: buy });
+  const buy = { stance: "BUY", bias: "BULLISH", confidence: 0.6, summary: "Decision BUY, bias bullish: the closed candles push higher.", reasons: ["Momentum turned up."], dissent: [], metrics: ["the closed 15m candles"] };
+  const ai = fakeAI({ conclusion: buy, stances: { technical: "BUY" }, biases: { technical: "BULLISH" } });
   const e = env(ai);
   await runWarRoomBar(e, task());
   const room = await readWarRoom(e.DB);
-  assert.equal(room.conclusion.status, "invalid_output", "no confirmed buy in this bar: the BUY conclusion is rejected");
-  assert.deepEqual(room.confirmations.h1_prophet_r38, { buy_confirmed: false, sell_confirmed: false, buy_setup_ready: false, sell_setup_ready: false });
-  const riskOpening = ai.calls.find(c => /"agent":"risk"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
-  assert.match(riskOpening, /Rule: no confirmation, no entry/);
-  assert.ok(JSON.parse(riskOpening.split("YOUR DATA:\n")[1]).confirmations, "the Risk Manager sees the confirmations");
+  assert.equal(room.conclusion.status, "invalid_output", "one bullish agent of five is no quorum: the BUY conclusion is rejected");
+  assert.deepEqual(Object.keys(room.confirmations), ["chart_prophet_r38"], "only the 15m chart's own Prophet R38");
   const moderator = ai.calls.find(c => /moderator of the XAUUSD Live War Room/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
-  assert.match(moderator, /no confirmation, no entry[\s\S]*CONFIRMATIONS/);
+  assert.match(moderator, /QUORUM RULE/);
+  assert.doesNotMatch(moderator, /H1 decision/);
 
-  // With a confirmed H1 buy, and an agent on the bus holding BUY (owner decision 2026-11-06),
-  // the same conclusion is accepted.
+  // With the room's weight on the bullish side, the same conclusion is accepted.
   resetThreadSchemaCacheForTests();
-  const e2 = env(fakeAI({ conclusion: buy, stances: { technical: "BUY" } }));
-  e2.DB.raw.prepare("UPDATE ai_syntheses SET prophet_metrics = ?").run(JSON.stringify({ prophet_r38: { direction: 1, buy_confirmed: true } }));
+  const bullish = Object.fromEntries(["news", "technical", "risk", "kinetic_engine", "fabio_amt"].map(id => [id, "BULLISH"]));
+  const e2 = env(fakeAI({ conclusion: buy, stances: { technical: "BUY" }, biases: bullish }));
   await runWarRoomBar(e2, task());
   assert.equal((await readWarRoom(e2.DB)).conclusion.status, "ok");
 });
@@ -182,10 +183,9 @@ test("calibration status is shown once: no disclaimer asked, uncalibrated HUD co
   const hudPrompt = ai.calls.find(c => /"agent":"kinetic_engine"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   assert.match(hudPrompt, /never mention calibration, verification or comparators/);
   const debate = ai.calls.find(c => /Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
-  const bus = JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):\n")[1]);
-  assert.equal(bus.find(b => b.id === "kinetic_engine").evidence, "no statement calibrated yet");
-  assert.equal(bus.find(b => b.id === "htf").evidence, "parity-approved H1 chain");
-  assert.match(debate, /call agents by their names/);
+  const bus = busOf(debate);
+  assert.equal(bus.find(b => b.ref === refOf(room, "kinetic_engine")).evidence, "no statement calibrated yet");
+  assert.match(debate, /never an agent or a role/);
 });
 
 test("computed from verified bars: Camarilla and session statements lift the 0.4 cap only when the candle's bar matched TradingView", async () => {
@@ -221,8 +221,8 @@ test("computed from verified bars: Camarilla and session statements lift the 0.4
   const prompt = ok.ai.calls.find(c => /"agent":"interstellar_eyes"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content)).request.messages[1].content;
   assert.match(prompt, /Computed from verified bars: On the daily Camarilla levels/);
   const debate = ok.ai.calls.find(c => /Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
-  const bus = JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):\n")[1]);
-  assert.equal(bus.find(b => b.id === "interstellar_eyes").evidence, "1 computed from verified bars (of 1 statement)");
+  const bus = busOf(debate);
+  assert.equal(bus.find(b => b.ref === refOf(ok.room, "interstellar_eyes")).evidence, "1 computed from verified bars (of 1 statement)");
 
   for (const [label, args] of [["no comparison yet", { approved: true }], ["the bar differed from TradingView", { approved: true, comparison: "input_mismatch" }], ["no approved record", { approved: false, comparison: "match" }]]) {
     const r = await run(args);
@@ -240,7 +240,7 @@ test("a persuaded dissenter concedes in the debate and stays on the record", asy
     const r = await run(model, request);
     const body = JSON.parse(r.choices[0].message.content);
     if (/Consensus Discussion/.test(request.messages[0].content) && body.agent === "kinetic_engine") {
-      Object.assign(body, { stance: "WAIT", rebuts: ["kinetic_engine"], argument: "The H1 decision is WAIT and my channel read is not calibrated, so I drop my SELL and stay flat." });
+      Object.assign(body, { stance: "WAIT", rebuts: ["kinetic_engine"], argument: "My channel read is not calibrated, so I drop my SELL and stay flat." });
       r.choices[0].message.content = JSON.stringify(body);
     }
     return r;
@@ -255,10 +255,10 @@ test("a persuaded dissenter concedes in the debate and stays on the record", asy
   assert.deepEqual(k.rebuts, []);
   assert.equal(room.debate.find(d => d.id === "risk").conceded, false);
   const prompt = ai.calls.find(c => /Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
-  assert.match(prompt, /never your own id/);
+  assert.match(prompt, /or leave it empty/);
 });
 
-test("the 15m Desk reads only the 15m chart; the H1 chain moves to the Higher-Timeframe Desk (owner decision 2026-11-06)", async () => {
+test("the 15m Desk reads only the 15m chart; no desk reads the H1 chain (owner decisions 2026-11-06 and 2026-11-09)", async () => {
   const p = { values: { comparable: { prophet_r38: { direction: -1, buy_confirmed: false, sell_confirmed: true, t_enc: 0, d_enc: -1 }, prophet_r37_ssot: { d_enc: -1, b_enc: -1 } } } };
   const g = { values: { comparable: { gmi_v12_70: { verdict: -2, gate: 1, gmi_dir: -1, prophet_dir: -1, conflict: false } } } };
   const run = async (prefix) => {
@@ -279,7 +279,8 @@ test("the 15m Desk reads only the 15m chart; the H1 chain moves to the Higher-Ti
   };
 
   const approved = await run("localcalc:");
-  assert.deepEqual(approved.room.roster.slice(0, 2).map(r => [r.id, r.name]), [["m15", "15m Desk"], ["htf", "Higher-Timeframe Desk"]]);
+  assert.deepEqual(approved.room.roster.slice(0, 2).map(r => [r.id, r.name]), [["m15", "15m Desk"], ["news", "News Analyst"]]);
+  assert.ok(!approved.room.roster.some(r => r.id === "htf"), "no Higher-Timeframe Desk");
   assert.ok(!approved.room.roster.some(r => r.id === "h1"), "no H1 Desk in the 15m room");
   assert.equal(approved.room.roster.find(r => r.id === "m15").calibration.label, "parity-approved 15m chain");
   assert.equal(approved.room.openings.find(o => o.id === "m15").confidence, 0.8);
@@ -288,8 +289,7 @@ test("the 15m Desk reads only the 15m chart; the H1 chain moves to the Higher-Ti
   assert.equal(data.timeframe, "15 minutes");
   assert.ok(data.reading.some(s => /confirmed SELL/.test(s)), "the 15m Prophet R38 confirmation, in words");
   assert.ok(!("h1_decision" in data), "the 15m Desk does not read the H1 chain");
-  const htfPrompt = approved.ai.calls.find(c => /"agent":"htf"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content)).request.messages[1].content;
-  assert.equal(JSON.parse(htfPrompt.split("YOUR DATA:\n")[1]).h1_decision, "WAIT", "the Higher-Timeframe Desk carries the H1 chain");
+  assert.equal(approved.room.confirmations.chart_prophet_r38.sell_confirmed, true, "the room's own 15m Prophet R38 confirmation");
 
   const observed = await run("localcalc-observed:");
   assert.equal(observed.room.roster.find(r => r.id === "m15").calibration.label, "15m local records, not parity approved");
@@ -319,7 +319,7 @@ test("every opening carries a bias besides its action (owner decision 2026-11-06
   assert.ok(prompt.response_format.json_schema.schema.properties.bias, "the strict schema asks for it");
   assert.equal(validateOpening({ agent: "risk", stance: "WAIT", bias: "UP", confidence: 0.5, claim: "Flat." }, "risk").errors.includes("bias_invalid"), true);
   const debate = ai.calls.find(c => /Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
-  assert.match(JSON.parse(debate.split("COMMUNICATION BUS (id, name, stance, bias, confidence, evidence, claim):\n")[1]).find(b => b.id === "kinetic_engine").bias, /BULLISH/);
+  assert.match(busOf(debate).find(b => b.ref === refOf(room, "kinetic_engine")).bias, /BULLISH/);
 });
 
 test("a BUY or SELL conclusion needs an agent on the bus or in the debate holding it (owner decision 2026-11-06)", () => {
@@ -332,14 +332,14 @@ test("a BUY or SELL conclusion needs an agent on the bus or in the debate holdin
 });
 
 test("a moderator that overrules the whole room is asked once to correct its stance", async () => {
-  const buy = { stance: "BUY", confidence: 0.6, summary: "H1 decision: WAIT, but the room buys the confirmed signal.", reasons: ["The H1 Prophet confirmed a buy."], dissent: [] };
+  const buy = { stance: "BUY", confidence: 0.6, summary: "H1 decision: WAIT, but the room buys the confirmed signal.", reasons: ["The H1 Prophet confirmed a buy."], dissent: [], metrics: ["the Prophet buy confirmation"] };
   let moderatorCalls = 0;
   const ai = fakeAI();
   const run0 = ai.run;
   ai.run = async (model, request) => {
     if (/moderator of the XAUUSD Live War Room/.test(request.messages[0].content)) {
       moderatorCalls += 1;
-      const content = moderatorCalls === 1 ? buy : { stance: "WAIT", confidence: 0.6, summary: "The room waits: the confirmation alone does not carry it.", reasons: ["Every agent holds WAIT."], dissent: [] };
+      const content = moderatorCalls === 1 ? buy : { stance: "WAIT", confidence: 0.6, summary: "The room waits: the confirmation alone does not carry it.", reasons: ["Every agent holds WAIT."], dissent: [], metrics: ["the stances on the bus"] };
       if (moderatorCalls === 2) assert.match(request.messages.at(-1).content, /at least one agent on the bus or in the Consensus Discussion holding that stance/);
       return { choices: [{ message: { content: JSON.stringify(content) }, finish_reason: "stop" }], usage: { total_tokens: 50 } };
     }
@@ -366,23 +366,23 @@ test("a young room with fewer than half of its agents heard waits for quorum; th
   // Production 13:15 (2026-11-06): Workers AI 3021 and 3040 failed 14 of 18 openings and the room
   // concluded on four agents. Within the quorum wait the queue redelivers the task instead.
   const young = () => Date.parse(BAR) + 90_000;
-  const e = env(fakeAI({ fail: new Set(["news", "technical", "risk", "kinetic_engine"]) }));
+  const e = env(fakeAI({ fail: new Set(["news", "technical", "risk"]) }));
   const first = await runWarRoomBar(e, task(), { clock: young });
   assert.equal(first.status, "waiting_for_quorum");
   assert.equal(first.openings, 2);
-  assert.equal(first.roster, 6);
-  assert.equal((await readWarRoom(e.DB)).conclusion, null, "no conclusion from two agents out of six");
+  assert.equal(first.roster, 5);
+  assert.equal((await readWarRoom(e.DB)).conclusion, null, "no conclusion from two agents out of five");
   const ai = fakeAI();
   e.AI = ai;
   const second = await runWarRoomBar(e, task(), { clock: young });
   assert.equal(second.status, "complete");
   const openingCalls = ai.calls.filter((c) => !/Consensus Discussion|moderator/.test(c.request.messages[0].content));
-  assert.equal(openingCalls.length, 4, "only the four failed openings are asked again");
+  assert.equal(openingCalls.length, 3, "only the three failed openings are asked again");
   assert.equal(WAR_ROOM_QUORUM_WAIT_MS, 5 * 60_000);
 });
 
 test("past the quorum wait the room concludes with whoever spoke", async () => {
-  const e = env(fakeAI({ fail: new Set(["news", "technical", "risk", "kinetic_engine"]) }));
+  const e = env(fakeAI({ fail: new Set(["news", "technical", "risk"]) }));
   const r = await runWarRoomBar(e, task(), { clock: () => Date.parse(BAR) + WAR_ROOM_QUORUM_WAIT_MS + 1 });
   assert.equal(r.status, "complete");
   assert.equal(r.openings, 2);
@@ -391,14 +391,14 @@ test("past the quorum wait the room concludes with whoever spoke", async () => {
 test("decision and bias: a room that agrees on WAIT but splits on the bias debates the bias", async () => {
   // Production 13:30 (2026-11-06): all 18 agents said WAIT, 11 leaned bearish and 3 bullish, and
   // only the Risk Manager debated. Owner: distinguish the decision from the bias.
-  const biases = { htf: "BULLISH", news: "BEARISH", technical: "BEARISH", risk: "BEARISH", kinetic_engine: "BULLISH", fabio_amt: "BEARISH" };
-  const conclusion = { stance: "WAIT", bias: "BEARISH", confidence: 0.6, summary: "Decision WAIT, bias bearish: most desks lean down but nothing is confirmed.", reasons: ["No confirmed sell candle yet."], dissent: ["kinetic_engine", "htf"] };
+  const biases = { news: "BEARISH", technical: "BEARISH", risk: "BEARISH", kinetic_engine: "BULLISH", fabio_amt: "BEARISH" };
+  const conclusion = { stance: "WAIT", bias: "BEARISH", confidence: 0.6, summary: "Decision WAIT, bias bearish: most readings lean down but nothing is confirmed.", reasons: ["No confirmed sell candle yet."], dissent: ["kinetic_engine"], metrics: ["the biases on the bus"] };
   const ai = fakeAI({ biases, conclusion });
   const e = env(ai);
   const r = await runWarRoomBar(e, task());
   assert.equal(r.status, "complete");
   const room = await readWarRoom(e.DB);
-  assert.deepEqual(room.debate.map((d) => d.id).sort(), ["htf", "kinetic_engine", "news", "risk"].sort(), "the two bullish dissenters, the strongest bearish defender and the Risk Manager");
+  assert.deepEqual(room.debate.map((d) => d.id).sort(), ["kinetic_engine", "news", "risk"].sort(), "the bullish dissenter, the strongest bearish defender and the Risk Manager");
   const debatePrompt = ai.calls.find((c) => /Consensus Discussion/.test(c.request.messages[0].content) && /"agent":"kinetic_engine"/.test(c.request.messages[1].content)).request.messages.map((m) => m.content).join("\n");
   assert.match(debatePrompt, /agrees on the action but not on the bias: the room leans bearish/);
   assert.match(debatePrompt, /"bias":"BULLISH\|BEARISH\|NEUTRAL"/);
@@ -430,7 +430,7 @@ test("selection by bias: dissenters against the room's bias, its strongest holde
   assert.deepEqual(selectRebutters(openings, "WAIT", 8, { bias: "NEUTRAL" }), ["a", "d", "b", "c", "risk"], "against a neutral room every leaning agent dissents; no defender");
   assert.deepEqual(selectRebutters(openings.map((x) => ({ ...x, bias: "BEARISH" })), "WAIT", 8, { bias: "BEARISH" }), ["risk"], "one bias, one action: the Risk Manager stress-tests");
   assert.equal(selectRebutters(Array.from({ length: 12 }, (_, i) => o("x" + i, "WAIT", "BULLISH", i / 12)).concat(o("y", "WAIT", "BEARISH", 1), o("risk", "WAIT", "BEARISH", 1)), "WAIT", 8, { bias: "BEARISH" }).length, 8, "at most eight speakers");
-  const r = { agent: "c", stance: "WAIT", bias: "BEARISH", confidence: 0.5, rebuts: [], argument: "The bearish desks convinced me." };
+  const r = { agent: "c", stance: "WAIT", bias: "BEARISH", confidence: 0.5, rebuts: [], argument: "The bearish readings convinced me.", metrics: ["the bearish readings"] };
   assert.equal(validateRebuttal(r, "c", ["a", "c"], { ownStance: "WAIT", ownBias: "BULLISH" }).valid, true);
   assert.equal(r.conceded, true, "a changed bias is a concession");
 });
@@ -470,25 +470,25 @@ test("selection and validators", () => {
   assert.equal(validateRebuttal({ agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: ["risk"], argument: "No." }, "risk", ["risk", "h1"]).valid, false, "an agent that keeps its stance never rebuts only itself");
   assert.equal(validateRebuttal({ agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: ["ghost"], argument: "No." }, "risk", ["risk", "h1"]).valid, false, "rebuts must name a bus agent");
   assert.ok(Object.keys(DESK_AGENTS).every(k => DESK_AGENTS[k].role));
-  const named = { agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: ["H1 Desk"], argument: "The higher timeframe could flip." };
+  const named = { agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: ["H1 Desk"], argument: "The higher timeframe could flip.", metrics: ["the volatility of the chart"] };
   assert.equal(validateRebuttal(named, "risk", ["risk", "h1"]).valid, true, "a display name maps to its id");
   assert.deepEqual(named.rebuts, ["h1"]);
-  const empty = { agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: [], argument: "Nothing to rebut, but a volatility spike would invalidate waiting." };
+  const empty = { agent: "risk", stance: "WAIT", confidence: 0.5, rebuts: [], argument: "Nothing to rebut, but a volatility spike would invalidate waiting.", metrics: ["the volatility of the chart"] };
   assert.equal(validateRebuttal(empty, "risk", ["risk", "h1"]).valid, false, "a split room needs named targets");
   assert.equal(validateRebuttal(empty, "risk", ["risk", "h1"], { unanimous: true }).valid, true, "a unanimous room lets the Risk Manager stress-test without a target");
 
   // A dissenter persuaded by the bus concedes: production wrote rebuts ["news"] (itself) or [] when
   // the News Analyst dropped SELL for WAIT, and the concession was lost as rebuts_invalid.
   const bus = ["h1", "news", "risk"];
-  const selfRebut = { agent: "news", stance: "WAIT", confidence: 0.55, rebuts: ["news"], argument: "My bearish read stands, but the H1 decision is WAIT, so I drop my SELL and stay flat." };
+  const selfRebut = { agent: "news", stance: "WAIT", confidence: 0.55, rebuts: ["news"], argument: "My bearish read stands, but the H1 decision is WAIT, so I drop my SELL and stay flat.", metrics: ["the volatility of the chart"] };
   assert.equal(validateRebuttal(selfRebut, "news", bus, { ownStance: "SELL" }).valid, true, "changing stance is a concession");
   assert.deepEqual(selfRebut.rebuts, []);
   assert.equal(selfRebut.conceded, true);
-  const noTarget = { agent: "news", stance: "WAIT", confidence: 0.55, rebuts: [], argument: "I drop my SELL and stay flat until the H1 chain confirms." };
+  const noTarget = { agent: "news", stance: "WAIT", confidence: 0.55, rebuts: [], argument: "I drop my SELL and stay flat until the H1 chain confirms.", metrics: ["the volatility of the chart"] };
   assert.equal(validateRebuttal(noTarget, "news", bus, { ownStance: "SELL" }).valid, true);
-  const kept = { agent: "news", stance: "SELL", confidence: 0.6, rebuts: ["news"], argument: "I keep my SELL: the dollar bid is real." };
+  const kept = { agent: "news", stance: "SELL", confidence: 0.6, rebuts: ["news"], argument: "I keep my SELL: the dollar bid is real.", metrics: ["the volatility of the chart"] };
   assert.equal(validateRebuttal(kept, "news", bus, { ownStance: "SELL" }).valid, false, "keeping the stance still needs a named target");
-  const mixed = { agent: "news", stance: "WAIT", confidence: 0.55, rebuts: ["news", "Risk Manager"], argument: "The Risk Manager is right about volatility, so I move to WAIT." };
+  const mixed = { agent: "news", stance: "WAIT", confidence: 0.55, rebuts: ["news", "Risk Manager"], argument: "The Risk Manager is right about volatility, so I move to WAIT.", metrics: ["the volatility of the chart"] };
   assert.equal(validateRebuttal(mixed, "news", bus, { ownStance: "SELL" }).valid, true, "its own id beside real targets is dropped");
   assert.deepEqual(mixed.rebuts, ["risk"]);
   assert.equal(mixed.conceded, true);
@@ -522,7 +522,7 @@ test("P7: the Live War Room moderator gets the crowd line; the room carries it a
   const moderator = ai.calls.find(c => /moderator of the XAUUSD Live War Room/.test(c.request.messages[0].content));
   assert.match(moderator.request.messages.map(m => m.content).join("\n"), /CROWD LINE \(deterministic:/);
   const room = await readWarRoom(e.DB);
-  assert.equal(room.crowd.agents, 6);
+  assert.equal(room.crowd.agents, 5);
   assert.equal(room.crowd.stances.SELL, 1);
   assert.ok(room.reputation.moderator && room.reputation.risk);
 });
@@ -541,7 +541,7 @@ test("an opening that talks about calibration gets one soft correction; it is ne
       if (n === 2) assert.match(request.messages.at(-1).content, /never mention it/);
       // technical fixes its wording on the correction; risk keeps talking about parity.
       const claim = n === 1 || agent === "risk" ? "My data is parity-verified and shows no trigger." : "My data shows no trigger on this candle.";
-      return { choices: [{ message: { content: JSON.stringify({ agent, stance: "WAIT", confidence: 0.5, claim }) }, finish_reason: "stop" }], usage: { total_tokens: 50 } };
+      return { choices: [{ message: { content: JSON.stringify({ agent, stance: "WAIT", confidence: 0.5, claim, metrics: ["the closed 15m candles"] }) }, finish_reason: "stop" }], usage: { total_tokens: 50 } };
     }
     return run0(model, request);
   };

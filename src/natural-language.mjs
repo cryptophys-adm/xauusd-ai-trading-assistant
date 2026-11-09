@@ -35,7 +35,7 @@ export const CALIBRATION_CORRECTION =
 export const NATURAL_LANGUAGE_CORRECTION =
   "Your answer was rejected: its text reads like code (a field name, a word with underscores, a key path with dots, or key=value). " +
   "Return the same JSON object with the same stance and confidence, but rewrite every text field in plain sentences a trader would write. " +
-  "Describe evidence in words (for example \"the H1 decision\", \"the 5m bias\", \"the 15m Prophet buy signal\") and never copy a key from the evidence.";
+  "Describe evidence in words (for example \"the 14-bar average range\", \"the closing position of the last candle\", \"the Prophet buy signal on this chart\") and never copy a key from the evidence.";
 
 /** True when every validation error is a natural-language error (so one correction may fix it). */
 export const onlyNaturalLanguageErrors = (errors) => Array.isArray(errors) && errors.length > 0 && errors.every((e) => String(e).startsWith("not_natural_language:"));
@@ -43,7 +43,7 @@ export const onlyNaturalLanguageErrors = (errors) => Array.isArray(errors) && er
 export const NATURAL_LANGUAGE_RULE =
   "Write insight, summary and dissent in plain natural language for a trader, like a short forum post. " +
   "Never copy a key name or key path from the evidence into that text, and never write words joined by underscores or dots, or key=value pairs. " +
-  "Describe evidence in words instead, for example \"the H1 decision is WAIT\", \"the 5m bias is bullish\" or \"the 15m Prophet gives a buy signal\". " +
+  "Describe evidence in words instead, for example \"the 14-bar average range is wide\", \"the last candle closed near its high\" or \"the Prophet gives a buy signal on this chart\". " +
   "Evidence paths go only in the refs array.";
 
 const ENGINE_NAMES = { mizan: "MizanLib", prophet: "Prophet", gmi: "GMI" };

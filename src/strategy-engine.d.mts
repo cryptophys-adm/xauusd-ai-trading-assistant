@@ -11,3 +11,5 @@ export function liveM5Inputs(env: any, options?: { now?: number; context?: any }
 export function loadStrategyInputs(env: any, options?: { now?: number; m5Context?: any }): Promise<Record<string, any>>;
 export function readStrategy(env: any, options?: { now?: number; m5Context?: any }): Promise<Record<string, any>>;
 export function planForDirection(strategy: any, dir: number): Record<string, any> | null;
+export function ownTimeframePlan(inputs: { snapshot?: unknown; bars?: unknown[] }, dir: number): Record<string, any> | null;
+export function loadOwnTimeframePlanInputs(env: unknown): Promise<{ snapshot: unknown; bars: unknown[] }>;

@@ -8,12 +8,12 @@ import {
 
 const OPEN = Date.parse("2026-11-07T09:00:00.000Z");
 const KEY = "OANDA:XAUUSD:60:" + OPEN;
-const op = (id, name, stance, bias, confidence, extra = {}) => ({ id, name, status: "ok", stance, bias, confidence, calibration: "parity-approved 1H chain", claim: name + " claim.", ...extra });
+const op = (id, name, stance, bias, confidence, extra = {}) => ({ id, name, status: "ok", stance, bias, confidence, calibration: "parity-approved 1H chain", claim: "My own metrics read " + stance + ".", ...extra });
 const room = (conclusion = null) => ({
   bar_open: new Date(OPEN).toISOString(),
   roster: [{ id: "h1" }, { id: "technical" }, { id: "risk" }, { id: "kinetic_engine" }],
   openings: [op("h1", "1H Desk", "WAIT", "BULLISH", 0.7), op("technical", "Technical Analyst", "WAIT", "BULLISH", 0.6), op("risk", "Risk Manager", "WAIT", "NEUTRAL", 0.5), { id: "kinetic_engine", name: "Kinetic Engine", status: "agent_failed" }],
-  debate: [{ ...op("risk", "Risk Manager", "WAIT", "NEUTRAL", 0.5), argument: "No confirmation yet.", rebuts_names: ["1H Desk"] }],
+  debate: [{ ...op("risk", "Risk Manager", "WAIT", "NEUTRAL", 0.5), argument: "No confirmation yet.", rebuts: ["h1"], rebuts_names: ["1H Desk"] }],
   conclusion
 });
 
@@ -27,15 +27,18 @@ test("the Reasoner decides when the room concluded, or 45 minutes after the clos
   assert.equal(finalizeDue({ candleKey: KEY, now: close + 45 * 60_000, roomConcluded: false }), true, "the fallback");
 });
 
-test("the consensus input: the communication bus, the Consensus Discussion and the conclusion, by name", () => {
+test("the consensus input: the communication bus, the Consensus Discussion and the conclusion, anonymously (#n, owner decisions 2026-11-09)", () => {
   const concluded = consensusInput(room({ status: "ok", stance: "WAIT", bias: "BULLISH", confidence: 0.6, summary: "The room leans up and waits for a confirmed buy.", reasons: ["r"], dissent: [{ id: "risk", name: "Risk Manager" }] }));
   assert.equal(concluded.status, "concluded");
   assert.equal(concluded.agents_spoke, 3, "a failed opening is not on the bus");
   assert.equal(concluded.roster_size, 4);
-  assert.deepEqual(concluded.communication_bus.map((b) => b.agent), ["1H Desk", "Technical Analyst", "Risk Manager"]);
+  assert.deepEqual(concluded.communication_bus.map((b) => b.ref), ["#1", "#2", "#3"], "roster order");
+  assert.ok(concluded.communication_bus.every((b) => !("agent" in b) && !("name" in b)), "never a name");
   assert.equal(concluded.communication_bus[0].evidence, "parity-approved 1H chain");
-  assert.deepEqual(concluded.consensus_discussion[0].answers, ["1H Desk"]);
-  assert.deepEqual(concluded.conclusion.dissent, ["Risk Manager"]);
+  assert.deepEqual(concluded.consensus_discussion[0].ref, "#3");
+  assert.deepEqual(concluded.consensus_discussion[0].answers, ["#1"]);
+  assert.deepEqual(concluded.conclusion.dissent, ["#3"]);
+  assert.doesNotMatch(JSON.stringify(concluded), /1H Desk|Risk Manager|Technical Analyst/);
   assert.equal(concluded.room_bias, "BULLISH");
 
   const partial = consensusInput(room());
@@ -164,4 +167,17 @@ test("runAnalysis enqueues the 1H room as soon as it parks the evidence; the que
   const body = source.slice(start, source.indexOf("\n/** Enqueues the 1H room", start));
   assert.ok(body.indexOf("H1_PENDING_PREFIX") < body.indexOf("enqueueH1Room(env, candleKey)"), "parked first, then the room");
   assert.match(source, /task\.kind === "h1_room"\) return processH1RoomTask\(env, task\)/);
+});
+
+test("the Reasoner reads this timeframe only: no 5m context, no names, metrics instead (owner decisions 2026-11-09)", async () => {
+  const { ownTimeframeEvidence } = await import("../src/h1-consensus.mjs");
+  const ev = { candle_key: KEY, informational_5m_context: { label: "VERIFIED 5m" }, evidence_fusion: { complete: true, informational_5m_context: { x: 1 } } };
+  const own = ownTimeframeEvidence(ev);
+  assert.equal(own.informational_5m_context, undefined);
+  assert.equal(own.evidence_fusion.informational_5m_context, undefined);
+  assert.equal(own.evidence_fusion.complete, true);
+  const text = reasonerLines({ evidence: ev, consensus: consensusInput(room()), laneRule: "", decisionTextRule: "", tradePlanRule: "" }).join("\n");
+  assert.doesNotMatch(text, /informational_5m_context|VERIFIED 5m/);
+  assert.match(text, /Never name an agent or a role/);
+  assert.match(text, /which metrics carried the decision/);
 });

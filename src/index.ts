@@ -166,7 +166,7 @@ import { m5ParityApproved, verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_L
 import { storeHudSnapshot, loadHudSnapshot, hudReadings, approvedComparable, barsVerified } from "./hud-store.mjs";
 import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
 import { readGlobalConclusion } from "./global-conclusion.mjs";
-import { readStrategy, loadStrategyInputs, buildStrategy, planForDirection } from "./strategy-engine.mjs";
+import { readStrategy, loadStrategyInputs, buildStrategy, ownTimeframePlan, loadOwnTimeframePlanInputs } from "./strategy-engine.mjs";
 import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } from "./strategy-inputs.mjs";
 import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
 import { runSignalLedger, readLedger, ingestStrategy, ensureLedgerSchema } from "./signal-ledger.mjs";
@@ -1028,8 +1028,8 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
   let plan: JsonObject | null = null;
   if (quorum.stance === "BUY" || quorum.stance === "SELL") {
     try {
-      const strategy = buildStrategy(await loadStrategyInputs(env, { now }));
-      plan = planForDirection(strategy, quorum.stance === "BUY" ? 1 : -1) as JsonObject | null;
+      // The 1-hour chart's own levels only (owner decisions 2026-11-09: independent timeframes).
+      plan = ownTimeframePlan(await loadOwnTimeframePlanInputs(env), quorum.stance === "BUY" ? 1 : -1) as JsonObject | null;
     } catch (error) {
       console.error("h1_quorum_plan_failed", JSON.stringify({ candle_key: candleKey, message: error instanceof Error ? error.message : String(error) }));
       plan = null;

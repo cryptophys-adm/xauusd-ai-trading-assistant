@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildStrategy, tradeLevels, planForDirection, atr, roomLean, MIN_RRR } from "../src/strategy-engine.mjs";
+import { buildStrategy, tradeLevels, planForDirection, ownTimeframePlan, atr, roomLean, MIN_RRR } from "../src/strategy-engine.mjs";
 import { buildGlobalConclusion } from "../src/global-conclusion.mjs";
 
 const NOW = Date.parse("2026-11-06T14:20:00Z");
@@ -165,4 +165,14 @@ test("planForDirection: the plan for the quorum's direction, on the strategy's p
   assert.equal(planForDirection(strategy, 0), null);
   assert.equal(planForDirection(null, 1), null);
   assert.equal(planForDirection({ ...strategy, atr_h1: null }, 1), null, "no ATR, no plan");
+});
+
+test("ownTimeframePlan: the H1 plan from the 1-hour chart alone (independent timeframes, owner decisions 2026-11-09)", () => {
+  const bars = Array.from({ length: 40 }, (_, i) => ({ open: 100 + i * 0.1, high: 101 + i * 0.1, low: 99 + i * 0.1, close: 100 + i * 0.1 + 0.05, open_time: new Date(Date.UTC(2026, 10, 5, i)).toISOString(), close_time: new Date(Date.UTC(2026, 10, 5, i + 1)).toISOString() }));
+  const plan = ownTimeframePlan({ snapshot: null, bars }, 1);
+  assert.equal(plan.source, "1H chart only");
+  assert.equal(plan.reference_price, bars.at(-1).close);
+  assert.ok(plan.stop < plan.entry && plan.entry < plan.tp1);
+  assert.equal(ownTimeframePlan({ snapshot: null, bars: [] }, 1), null, "no bars, no plan");
+  assert.equal(ownTimeframePlan({ snapshot: null, bars }, 0), null);
 });

@@ -171,6 +171,12 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Calibration:** the owner installs the Prophet R38 and GMI alerts on the 4-hour and daily charts, set to "Any alert() function call" with the same webhook.
     - 24 matches take about 4 trading days on H4 and about 5 weeks on D1.
     - Until then, H4 and D1 readings are unverified.
+  - **Independent rooms (owner decisions 2026-11-09: "masing-masing timeframe independent, masing-masing agent harus independent dilarang untuk refer ke agent atau timeframe lain"; "output masing-masing agen dilarang menyebutkan nama agent tetapi metrics apa yang dia gunakan"; "consensus discussion tetap ada per masing-masing timeframe"):** this supersedes every cross-timeframe and cross-agent rule below.
+    - **One timeframe per room.** The 15m, 1H, 4H and D1 rooms each read only their own chart: its closed bars, its HUD snapshot, its local records and the news. The Higher-Timeframe Desk is retired (`htf` stays only as a name for stored rooms). The 15m room no longer reads the H1 decision, the 1H room or the 5m lane, and its moderator no longer names an H1 decision. The News Analyst no longer reads the Macro War Room. The Risk Manager reads its chart's volatility, its own Prophet R38 reading and the economic calendar, no longer another room's news bias or higher timeframe.
+    - **The Consensus Discussion stays, inside each timeframe**, over an anonymous bus: every statement appears as `#n` (roster order) with its stance, bias, confidence, evidence label, metrics and claim, never with an agent's name. Rebuttals and the moderator's dissent use `#n` references, mapped back to agent ids for storage and Nexus.
+    - **Metrics, not names.** Every opening, rebuttal and conclusion carries `metrics` (one to four plain-language metrics it decided from). A text that names another agent (`names_an_agent`; its own HUD name is its data source and allowed) or lacks metrics (`metrics_missing`) gets one correction call. The moderator and the Reasoner never write a desk or role name. The shared base rules for rooms (`ROOM_RULES_INDEPENDENT`) drop "the H1 decision chain is authoritative" and the 5m lane.
+    - **The 15m room is judged by its own quorum** (`entry_without_quorum` on its crowd line), like the 1H, 4H and D1 rooms; its confirmations are the 15m chart's own Prophet R38 reading. The legacy `entryAllowed` stays only for the retired live room.
+    - **The H1 decision** reads the anonymous consensus, never the 5m context (`ownTimeframeEvidence`), and takes its prices from the 1-hour chart's own key levels (`ownTimeframePlan`: the Key Level Agent over the 1H HUD snapshot and the 1H bars, the 1H ATR and the last 1H close). The strategy engine and the Global Conclusion stay multi-timeframe readers; they are not room agents.
   - **Timeframe War Rooms (owner decision 2026-11-06; supersedes the five-desk H4/D1 threads of step 4):** every Thread, D1, 4H, 1H and 15m, is the consensus of all agents, as in the Live War Room. 15m is the Live War Room; `src/timeframe-threads.mjs` runs the 1H, 4H and D1 rooms.
     - **Phases:** each closed bar of that chart runs the same three phases: every agent opens on the bus, the minority (by bias and confidence) and the Risk Manager answer named agents in the Consensus Discussion (the term replaces "debate", owner decision 2026-11-07) for at most 3 minutes, and the moderator writes the TLDR.
     - **Agents:** the desks plus one agent per HUD computed on that chart.
@@ -179,7 +185,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
           - The 1H, 4H and D1 Desks read the local Prophet R38, R37 and GMI records of the bar, decoded into plain sentences.
           - A desk whose records parity has not approved is labelled so; it speaks at its own confidence (owner decision 2026-11-09).
           - A room without local records for its bar has no own desk.
-        - The other desks: the Higher-Timeframe Desk (the conclusion of the 4H Thread on 1H, of the D1 Thread on 4H), the News Analyst (News Daily), the Technical Analyst and the Risk Manager.
+        - The other desks: the News Analyst (News Daily), the Technical Analyst and the Risk Manager. The Higher-Timeframe Desk is retired (independent rooms, 2026-11-09).
       - HUD agents come from that bar's HUD snapshot. The pull adapter now also publishes H4 and D1 HUD snapshots (`hud-snapshot.mjs`, timeframes `"240"` and `"1D"`, GMI from the one engine in `gmi-core.mjs`).
         - Fresh windows after the close: H1 25 minutes, M15 9, H4 30, D1 60.
         - **Catch-up (owner decision 2026-11-06):** an H4 or D1 bar whose snapshot was never sent in that window is sent once while it is still the chart's latest close (H4 up to 4 hours, D1 up to 72 hours, which covers the weekend). It is built on the bundle cut at the bar's close, so it is the snapshot that bar would have had. The marker `market-data:v2:hud-published:<candle_key>` (4 days) keeps every bar to one send. H1 and M15 have no catch-up: their rooms move on with every bar.
@@ -187,7 +193,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - **No webhook dependency:** the rooms run on local computation only: closed bars, the HUD snapshot and the local Prophet R38 record of the bar.
     - **Calibration:** a HUD statement is verified only where it equals a parity-approved record, and computed from verified bars only where the bar's parity comparison matched (see "Calibration status once"). This is a label, not a cap: since 2026-11-09 the agents of these rooms speak at their own confidence and their weight comes from their track record.
     - **Quorum, not confirmation** (owner decision 2026-11-09): a BUY or SELL conclusion needs more than half of the agents' track-record weight holding the matching bias (`entry_without_quorum`, one correction call, then rejected). The chart's Prophet R38 confirmation or setup still READY (`values.setup.buy_ready` / `sell_ready` of the local record; the desk's reading `chartDeskReading` returns `buy_setup_ready` / `sell_setup_ready`) is an argument the agents weigh, listed for the moderator as "indicator readings (arguments, not gates)". The 1H conclusion names the H1 decision when it differs.
-    - **Schedule:** the rooms run from the parity sweep cron in their own `waitUntil`, one after another, the higher timeframe first (D1, 4H, 1H), so each Higher-Timeframe Desk reads the conclusion just written and the model sees one room's burst at a time. They run behind `TF_THREADS_ENABLED`, within `TF_THREADS_MAX_CALLS_PER_HOUR` (production 120, preview 150; about 26 calls per room).
+    - **Schedule:** the rooms run from the parity sweep cron in their own `waitUntil`, one after another (D1, 4H, 1H), so the model sees one room's burst at a time; no room reads another (2026-11-09). They run behind `TF_THREADS_ENABLED`, within `TF_THREADS_MAX_CALLS_PER_HOUR` (production 120, preview 150; about 26 calls per room).
       - A bar waits up to 20 minutes for its HUD snapshot, then runs with the desks only.
       - **Re-convene:** a room that concluded without its HUD snapshot meets once more, for the same bar, when the snapshot arrives late (the catch-up above). The second session is stored as run `<bar open>#hud`, which sorts after the first, so the tab, the Global Conclusion and the room below read it. The API reports the bar open without the suffix and `reconvened: true`.
       - Rooms of one sweep are 65 seconds apart: one room spends about 22 calls within a minute, and the Workers AI per-minute limit is shared.
@@ -518,9 +524,9 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - **Live War Room 15m** (`src/war-room.mjs`, behind `WAR_ROOM_ENABLED`, on in production; owner decision 2026-11-05). At every 15m close, every agent discusses in one room, in three phases:
   1. **Communication bus.** Each agent posts one opening claim from its own data only. The agents (owner decision 2026-11-06: the 15m room has no H1 Desk):
      - **15m Desk:** the parity-approved 15m Prophet R38, R37 and GMI records of the candle, in plain sentences. It speaks at 0.4 or lower when they are not approved.
-     - **Higher-Timeframe Desk:** the H1 chain, its TradingView reading and the latest 1H War Room conclusion. The H1 decision still binds the moderator.
+     - **Higher-Timeframe Desk:** retired 2026-11-09 (independent rooms); the 15m room no longer reads the H1 chain.
      - **News Analyst.**
-     - **Technical Analyst:** the 15m candles and the 5m execution read.
+     - **Technical Analyst:** the 15m candles (the 5m execution read is retired, 2026-11-09).
      - **Risk Manager.**
      - **One agent per computed 15m HUD** (13).
   2. **Consensus Discussion** (until 2026-11-07 called the debate; stored steps keep the `debate:` prefix). At most 8 speakers answer named agents. It is open for at most 3 minutes, then closed.
@@ -542,7 +548,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **A BUY or SELL conclusion needs support** (owner decision 2026-11-06).
     - At least one agent on the bus or in the debate must hold that stance; a confirmation alone never overrules the whole room.
     - A conclusion that breaks this rule, or "no confirmation, no entry", gets one correction call telling the moderator which rule it broke, then is rejected. The 1H, 4H and D1 rooms apply the support rule and the quorum instead of the confirmation (2026-11-09).
-  - The H1 decision is the constraint: a conclusion that differs must say "H1 decision: X". Price levels come only from the validated H1 chain.
+  - Until 2026-11-09 the H1 decision was the constraint ("H1 decision: X"); the independent 15m room no longer reads it. Price levels never come from a room.
   - **Calibration status once** (owner decision 2026-11-05, option A).
     - The brief stores each agent's evidence status: for a HUD agent, its verified lines, its lines computed from verified bars and its total lines; otherwise the source label. Nexus shows it once, as a badge next to the agent.
     - **Three tiers per HUD statement** (`src/hud-reading.mjs`, owner decision 2026-11-06, option 1):
