@@ -597,6 +597,17 @@ export default function Omega() {
 
   const connectBroker = async (ev: FormEvent) => {
     ev.preventDefault();
+    const isLocked = Boolean(
+      (data?.broker?.connection?.status === "stored" && data?.broker?.connection?.server) ||
+      data?.broker?.bridge?.terminal_connected
+    );
+    if (isLocked) {
+      setBrokerMsg({
+        tone: "text-amber-200",
+        text: "Akun MT5 sedang aktif terhubung. Silakan klik Disconnect terlebih dahulu sebelum mengganti broker/server.",
+      });
+      return;
+    }
     const server = bServer.trim();
     const login = bLogin.trim();
     const password = bPassword;
@@ -627,7 +638,7 @@ export default function Omega() {
     if (!reason || !reason.trim()) return;
     try {
       await omegaJson("/omega/api/connection", "DELETE", { reason: reason.trim() });
-      setBrokerMsg({ tone: "text-emerald-300", text: "Disconnected." });
+      setBrokerMsg({ tone: "text-emerald-300", text: "Disconnected. Konfigurasi broker & server kini terbuka (Unlocked)." });
     } catch (e: any) {
       setBrokerMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
     }
@@ -697,6 +708,9 @@ export default function Omega() {
       ? "off (enable it below)"
       : "on";
   const effectiveTone: "red" | "amber" | "green" = !e.env_enabled ? "red" : !e.enabled ? "amber" : "green";
+
+  const accountActive = Boolean((conn.status === "stored" && conn.server) || br.terminal_connected);
+  const configLocked = accountActive;
 
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
@@ -785,9 +799,16 @@ export default function Omega() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
-          <span className="mono rounded-md border border-white/10 bg-black/40 px-2.5 py-1 text-slate-300">
-            Broker: <strong className="text-cyan-300">{BROKER_PRESETS.find((p) => p.key === selectedBroker)?.name || "Custom"}</strong> ({bServer || serverName})
-          </span>
+          {configLocked ? (
+            <span className="mono flex items-center gap-1.5 rounded-md border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1 text-emerald-200">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Sesi MT5 Aktif: <strong className="text-emerald-100">{serverName}</strong> (Terkunci)</span>
+            </span>
+          ) : (
+            <span className="mono rounded-md border border-white/10 bg-black/40 px-2.5 py-1 text-slate-300">
+              Broker: <strong className="text-cyan-300">{BROKER_PRESETS.find((p) => p.key === selectedBroker)?.name || "Custom"}</strong> ({bServer || serverName})
+            </span>
+          )}
           <span className="mono rounded-md border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-amber-200">
             Default Pair: <strong>Auto Gold / XAUUSD</strong> → {symbolName}
           </span>
@@ -813,11 +834,12 @@ export default function Omega() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-4">
-      {/* =====================================================================
-          WINDOWS METATRADER 5 TERMINAL — WEB EDITION WORKSTATION
-         ===================================================================== */}
-      <div className="overflow-hidden rounded-xl border border-cyan-500/25 bg-[#070b13] shadow-[0_20px_60px_rgba(0,0,0,0.65)]">
+      {viewMode === "terminal" ? (
+        <div className="flex flex-col gap-4">
+        {/* =====================================================================
+            WINDOWS METATRADER 5 TERMINAL — WEB EDITION WORKSTATION
+           ===================================================================== */}
+        <div className="overflow-hidden rounded-xl border border-cyan-500/25 bg-[#070b13] shadow-[0_20px_60px_rgba(0,0,0,0.65)]">
         {/* Windows MT5 Application Title Bar */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-gradient-to-r from-[#0d1526] via-[#0a101d] to-[#0d1526] px-3.5 py-2">
           <div className="flex items-center gap-2.5">
@@ -1621,18 +1643,16 @@ export default function Omega() {
           />
         ))}
       </div>
-
+      </div>
+      ) : (
+      <div className="flex flex-col gap-4">
       {/* =====================================================================
           SEPARATED SETUP & CONFIGURATION CENTER
           (Broker Selection, Server List, Auto-Fetch Gold/XAUUSD, Login & Engine Toggle)
          ===================================================================== */}
       <div
         id="setup-center-section"
-        className={`flex flex-col gap-4 rounded-xl border p-3.5 transition sm:p-4 ${
-          viewMode === "setup"
-            ? "order-first border-emerald-400/45 bg-[#08111e] shadow-[0_18px_50px_rgba(16,185,129,0.12)]"
-            : "border-cyan-500/20 bg-[#070c16]/90"
-        }`}
+        className="flex flex-col gap-4 rounded-xl border border-emerald-400/45 bg-[#08111e] p-3.5 shadow-[0_18px_50px_rgba(16,185,129,0.12)] transition sm:p-4"
       >
         {/* Setup Center Header Banner */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
@@ -1650,15 +1670,14 @@ export default function Omega() {
               Pilih broker (<span className="text-slate-200">Monex, FxPro, Dupoin, Valetax, Exness, atau Custom</span>), pilih daftar server resmi MT5, isi User &amp; Password akun, atur pairing default Gold (<span className="mono text-cyan-300">XAUUSD</span>), dan aktifkan toggle <span className="mono text-emerald-300">Engine enabled</span>.
             </p>
           </div>
-          {viewMode === "setup" ? (
-            <button
-              type="button"
-              onClick={() => setViewMode("terminal")}
-              className="rounded-lg border border-cyan-400/35 bg-cyan-500/15 px-3 py-1.5 text-[11.5px] font-semibold text-cyan-200 transition hover:bg-cyan-500/25"
-            >
-              ← Kembali ke MT5 Web Terminal
-            </button>
-          ) : null}
+          <button
+            type="button"
+            onClick={() => setViewMode("terminal")}
+            className="flex items-center gap-1.5 rounded-lg border border-cyan-400/35 bg-cyan-500/15 px-3 py-1.5 text-[11.5px] font-semibold text-cyan-200 transition hover:bg-cyan-500/25"
+          >
+            <Terminal className="h-3.5 w-3.5" />
+            ← Kembali ke MT5 Web Terminal &amp; Live Monitor
+          </button>
         </div>
 
         {/* Step 1: Interactive Broker Selector Cards */}
@@ -1668,7 +1687,11 @@ export default function Omega() {
               1. Pilih Broker Resmi MT5 (Monex · FxPro · Dupoin · Valetax · Exness · Custom)
             </span>
             <span className="mono text-[11px] text-slate-400">
-              Active Server: <strong className="text-slate-200">{bServer || serverName}</strong>
+              {configLocked ? (
+                <span className="text-emerald-300">🔒 Terkunci pada sesi aktif: <strong className="text-slate-100">{serverName}</strong></span>
+              ) : (
+                <>Active Server: <strong className="text-slate-200">{bServer || serverName}</strong></>
+              )}
             </span>
           </div>
           <div id="broker-preset-grid" className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
@@ -1679,7 +1702,9 @@ export default function Omega() {
                   key={preset.key}
                   type="button"
                   data-broker={preset.key}
+                  disabled={configLocked && !active}
                   onClick={() => {
+                    if (configLocked) return;
                     setSelectedBroker(preset.key);
                     if (preset.servers.length > 0) {
                       setBServer(preset.servers[0]);
@@ -1688,12 +1713,23 @@ export default function Omega() {
                   className={`flex flex-col items-start justify-between rounded-lg border p-2.5 text-left transition ${
                     active
                       ? "border-cyan-400/60 bg-cyan-500/15 text-slate-100 shadow-[0_0_20px_rgba(34,211,238,0.14)]"
-                      : "border-white/10 bg-black/35 text-slate-300 hover:border-white/25 hover:bg-white/5"
+                      : configLocked
+                        ? "border-white/5 bg-black/20 text-slate-500 opacity-40 cursor-not-allowed"
+                        : "border-white/10 bg-black/35 text-slate-300 hover:border-white/25 hover:bg-white/5"
                   }`}
+                  title={configLocked && !active ? "Akun sedang aktif terhubung. Disconnect terlebih dahulu untuk berganti broker." : undefined}
                 >
                   <div className="flex w-full items-center justify-between gap-1">
                     <span className="text-[12px] font-bold text-slate-100">{preset.name}</span>
-                    {active ? <span className="h-2 w-2 rounded-full bg-cyan-400" /> : null}
+                    {active ? (
+                      <span className="flex items-center gap-1 rounded bg-cyan-500/20 px-1.5 py-0.5 text-[9px] font-bold text-cyan-300 border border-cyan-400/30">
+                        {configLocked ? "🔒 ACTIVE" : "SELECTED"}
+                      </span>
+                    ) : configLocked ? (
+                      <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-500">
+                        OFF
+                      </span>
+                    ) : null}
                   </div>
                   <span className="mt-0.5 line-clamp-1 text-[10px] text-slate-400">{preset.company}</span>
                   <div className="mt-2 flex w-full items-center justify-between border-t border-white/10 pt-1.5 text-[10px]">
@@ -1724,6 +1760,19 @@ export default function Omega() {
               <dt className="text-slate-500">At</dt><dd className="mono text-slate-300">{timeUtc(conn.updated_ms)}</dd>
             </dl>
             <form id="broker-form" onSubmit={connectBroker} autoComplete="off" className="space-y-2.5 border-t border-white/10 pt-3">
+              {/* Active Connection Locked Banner */}
+              {configLocked ? (
+                <div className="rounded-lg border border-emerald-400/40 bg-emerald-500/10 p-2.5 text-[11.5px] text-emerald-200">
+                  <div className="flex items-center gap-2 font-semibold">
+                    <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>Sesi Akun MT5 Aktif: {serverName} ({br.trade_mode ? br.trade_mode.toUpperCase() : "DEMO"})</span>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+                    Konfigurasi broker lain, server, dan kredensial saat ini <strong>OFF / Terkunci</strong> untuk melindungi sesi aktif. Klik tombol <strong>Disconnect</strong> di bawah jika Anda ingin berganti server/broker akun lain.
+                  </p>
+                </div>
+              ) : null}
+
               {/* Server Dropdown from Selected Broker Preset */}
               {(() => {
                 const preset = BROKER_PRESETS.find((p) => p.key === selectedBroker);
@@ -1731,13 +1780,16 @@ export default function Omega() {
                 return (
                   <div>
                     <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300" htmlFor="b-server-select">
-                      Pilih Daftar Server ({preset.name})
+                      Pilih Daftar Server ({preset.name}) {configLocked ? "(Terkunci)" : ""}
                     </label>
                     <select
                       id="b-server-select"
+                      disabled={configLocked}
                       value={preset.servers.includes(bServer) ? bServer : preset.servers[0]}
                       onChange={(ev) => setBServer(ev.target.value)}
-                      className="mt-1 w-full rounded-md border border-cyan-400/35 bg-[#091322] px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400 focus:outline-none"
+                      className={`mt-1 w-full rounded-md border border-cyan-400/35 bg-[#091322] px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400 focus:outline-none ${
+                        configLocked ? "cursor-not-allowed opacity-50 bg-black/40" : ""
+                      }`}
                     >
                       {preset.servers.map((srv) => (
                         <option key={srv} value={srv}>
@@ -1751,10 +1803,11 @@ export default function Omega() {
 
               <div>
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-server">
-                  Server Name (Bisa pilih di atas atau ketik manual)
+                  Server Name {configLocked ? "(Terkunci)" : "(Bisa pilih di atas atau ketik manual)"}
                 </label>
                 <input
                   id="b-server"
+                  disabled={configLocked}
                   maxLength={64}
                   placeholder="e.g. Monex-Demo, FxPro-MT5, DupoinFuturesID-Real, ValetaxIntl-Live2, Exness-MT5Trial"
                   spellCheck={false}
@@ -1763,20 +1816,25 @@ export default function Omega() {
                     setBServer(ev.target.value);
                     setSelectedBroker(detectBrokerFromServer(ev.target.value));
                   }}
-                  className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
+                  className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none ${
+                    configLocked ? "cursor-not-allowed opacity-50 bg-black/40" : ""
+                  }`}
                 />
               </div>
 
               {/* Default Gold / XAUUSD Pairing Selector */}
               <div>
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300" htmlFor="b-gold-pair">
-                  Default Pairing Fetch (Gold / XAUUSD)
+                  Default Pairing Fetch (Gold / XAUUSD) {configLocked ? "(Terkunci)" : ""}
                 </label>
                 <select
                   id="b-gold-pair"
+                  disabled={configLocked}
                   value={goldPair}
                   onChange={(ev) => setGoldPair(ev.target.value)}
-                  className="mt-1 w-full rounded-md border border-amber-400/30 bg-[#0b1320] px-2.5 py-1.5 text-[12px] text-amber-100 focus:border-amber-400 focus:outline-none"
+                  className={`mt-1 w-full rounded-md border border-amber-400/30 bg-[#0b1320] px-2.5 py-1.5 text-[12px] text-amber-100 focus:border-amber-400 focus:outline-none ${
+                    configLocked ? "cursor-not-allowed opacity-50 bg-black/40" : ""
+                  }`}
                 >
                   {GOLD_PAIR_OPTIONS.map((opt) => (
                     <option key={opt.value} value={opt.value}>
@@ -1791,43 +1849,51 @@ export default function Omega() {
 
               <div>
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-login">
-                  User / Login MT5
+                  User / Login MT5 {configLocked ? "(Terkunci)" : ""}
                 </label>
                 <input
                   id="b-login"
+                  disabled={configLocked}
                   maxLength={20}
                   inputMode="numeric"
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder="Nomor akun MT5"
+                  placeholder={configLocked ? `Terkunci: Akun aktif di ${serverName}` : "Nomor akun MT5"}
                   value={bLogin}
                   onChange={(ev) => setBLogin(ev.target.value)}
-                  className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
+                  className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none ${
+                    configLocked ? "cursor-not-allowed opacity-50 bg-black/40" : ""
+                  }`}
                 />
               </div>
 
               <div>
                 <div className="flex items-center justify-between">
                   <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-password">
-                    Password MT5
+                    Password MT5 {configLocked ? "(Terkunci)" : ""}
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowPass((v) => !v)}
-                    className="text-[10px] text-cyan-300 hover:underline"
-                  >
-                    {showPass ? "Hide" : "Show"}
-                  </button>
+                  {!configLocked ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowPass((v) => !v)}
+                      className="text-[10px] text-cyan-300 hover:underline"
+                    >
+                      {showPass ? "Hide" : "Show"}
+                    </button>
+                  ) : null}
                 </div>
                 <input
                   id="b-password"
+                  disabled={configLocked}
                   type={showPass ? "text" : "password"}
                   maxLength={64}
                   autoComplete="new-password"
-                  placeholder="Password trading / investor MT5"
+                  placeholder={configLocked ? "•••••••• (Tersimpan aman & terenkripsi)" : "Password trading / investor MT5"}
                   value={bPassword}
                   onChange={(ev) => setBPassword(ev.target.value)}
-                  className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
+                  className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none ${
+                    configLocked ? "cursor-not-allowed opacity-50 bg-black/40" : ""
+                  }`}
                 />
               </div>
 
@@ -1835,15 +1901,16 @@ export default function Omega() {
                 <button
                   type="submit"
                   id="b-connect"
-                  disabled={!canControl || !br.kid}
+                  disabled={!canControl || !br.kid || configLocked}
                   className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40"
+                  title={configLocked ? "Akun sudah terhubung. Disconnect terlebih dahulu untuk mengganti." : undefined}
                 >
-                  Connect
+                  {configLocked ? "Connected (Locked)" : "Connect"}
                 </button>
                 <button
                   type="button"
                   id="b-disconnect"
-                  disabled={!canControl || conn.status !== "stored"}
+                  disabled={!canControl || (conn.status !== "stored" && !br.terminal_connected)}
                   onClick={disconnectBroker}
                   className="btn border-rose-400/30 bg-rose-400/10 text-rose-200 disabled:opacity-40"
                 >
@@ -2037,6 +2104,7 @@ export default function Omega() {
         </div>
       </div>
       </div>
+      )}
     </div>
   );
 }
