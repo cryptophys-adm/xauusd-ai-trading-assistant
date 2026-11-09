@@ -243,6 +243,25 @@ function Mt5ChartCanvas({
     return () => chart.unsubscribeCrosshairMove(sub);
   }, [candles]);
 
+  // Real-time tick update on the active candlestick bar as MT5 broker ticks stream in
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series || typeof bid !== "number" || !Number.isFinite(bid) || bid <= 0 || candles.length === 0) return;
+    const lastBar = candles[candles.length - 1];
+    if (!lastBar || !Number.isFinite(lastBar.time)) return;
+    try {
+      series.update({
+        time: lastBar.time as UTCTimestamp,
+        open: lastBar.open,
+        high: Math.max(lastBar.high, bid),
+        low: Math.min(lastBar.low, bid),
+        close: bid,
+      });
+    } catch {
+      // ignore if chart series is resetting
+    }
+  }, [bid, candles]);
+
   useEffect(() => {
     const series = seriesRef.current;
     if (!series) return;
@@ -335,6 +354,10 @@ export default function Omega() {
   const [showBidAsk, setShowBidAsk] = useState(true);
   const [showPlan, setShowPlan] = useState(true);
   const [showPositions, setShowPositions] = useState(true);
+  const [streamLive, setStreamLive] = useState(false);
+  const [tickDir, setTickDir] = useState<"up" | "down" | null>(null);
+  const lastBidRef = useRef<number | null>(null);
+  const engineDirtyRef = useRef(false);
 
   // Control state
   const [controlReason, setControlReason] = useState("");
@@ -361,21 +384,37 @@ export default function Omega() {
   const [liveConfirmText, setLiveConfirmText] = useState("");
   const [engineMsg, setEngineMsg] = useState<{ tone: string; text: string } | null>(null);
 
+  useEffect(() => {
+    engineDirtyRef.current = engineDirty;
+  }, [engineDirty]);
+
+  const applyOverview = (ov: any) => {
+    setData(ov);
+    setError(null);
+    setLoading(false);
+    setUpdatedAt(new Date().toISOString().slice(11, 19) + " UTC");
+    const newBid = ov?.broker?.bridge?.bid;
+    if (typeof newBid === "number" && Number.isFinite(newBid)) {
+      if (lastBidRef.current != null && newBid !== lastBidRef.current) {
+        setTickDir(newBid > lastBidRef.current ? "up" : "down");
+      }
+      lastBidRef.current = newBid;
+    }
+    const eng = ov?.broker?.engine;
+    if (eng && !engineDirtyRef.current) {
+      setEEnabled(eng.enabled === true);
+      setERisk(eng.risk_pct != null ? String(eng.risk_pct) : "");
+      setEMaxPos(eng.max_positions != null ? String(eng.max_positions) : "");
+      setELoss(eng.max_daily_loss_pct != null ? String(eng.max_daily_loss_pct) : "");
+      setESpread(eng.max_spread_points != null ? String(eng.max_spread_points) : "");
+      setEAge(eng.max_signal_age_ms ? String(Math.round(eng.max_signal_age_ms / 60000)) : "");
+    }
+  };
+
   const load = async () => {
     try {
       const ov = await omegaJson("/omega/api/overview");
-      setData(ov);
-      setError(null);
-      setUpdatedAt(new Date().toISOString().slice(11, 19) + " UTC");
-      const eng = ov?.broker?.engine;
-      if (eng && !engineDirty) {
-        setEEnabled(eng.enabled === true);
-        setERisk(eng.risk_pct != null ? String(eng.risk_pct) : "");
-        setEMaxPos(eng.max_positions != null ? String(eng.max_positions) : "");
-        setELoss(eng.max_daily_loss_pct != null ? String(eng.max_daily_loss_pct) : "");
-        setESpread(eng.max_spread_points != null ? String(eng.max_spread_points) : "");
-        setEAge(eng.max_signal_age_ms ? String(Math.round(eng.max_signal_age_ms / 60000)) : "");
-      }
+      applyOverview(ov);
     } catch (e: any) {
       setError(e?.message || "Failed to load Omega overview");
     } finally {
@@ -385,9 +424,32 @@ export default function Omega() {
 
   useEffect(() => {
     load();
-    const t = window.setInterval(load, 10_000);
-    return () => window.clearInterval(t);
-  }, [engineDirty]);
+    let es: EventSource | null = null;
+    if (typeof EventSource !== "undefined") {
+      try {
+        es = new EventSource("/omega/api/stream");
+        es.addEventListener("overview", (ev: MessageEvent) => {
+          try {
+            const parsed = JSON.parse(ev.data);
+            setStreamLive(true);
+            applyOverview(parsed);
+          } catch {
+            // ignore malformed frame
+          }
+        });
+        es.onerror = () => {
+          setStreamLive(false);
+        };
+      } catch {
+        es = null;
+      }
+    }
+    const t = window.setInterval(load, 8_000);
+    return () => {
+      if (es) es.close();
+      window.clearInterval(t);
+    };
+  }, []);
 
   const sendControl = async (mode: string, confirm?: string) => {
     const reason = controlReason.trim();
@@ -528,6 +590,10 @@ export default function Omega() {
               <Dot tone={br.seen ? "green" : "red"} pulse={br.seen} />
               {br.seen ? "Bridge online" : "Bridge offline"}
             </Badge>
+            <Badge tone={streamLive ? "green" : "cyan"}>
+              <Dot tone={streamLive ? "green" : "cyan"} pulse={streamLive} />
+              {streamLive ? "SSE Live Stream" : "Live Sync"}
+            </Badge>
             <Badge tone={algoActive ? "green" : "amber"}>
               Algo Trading: {algoActive ? "ON" : "STANDBY"}
             </Badge>
@@ -553,7 +619,7 @@ export default function Omega() {
         ) : (
           <div className="flex flex-wrap items-center justify-between gap-2 text-[12px] leading-relaxed text-slate-400">
             <p>
-              Live Web Edition of the Windows MetaTrader 5 Terminal synchronized every 5 seconds with the host MT5 terminal (<span className="mono text-slate-200">{serverName}</span> · <span className="mono text-cyan-300">{symbolName}</span>) and the 15m Decision Engine SSOT. Credentials are RSA-OAEP + AES-256-GCM encrypted in-browser.
+              Live Web Edition of the Windows MetaTrader 5 Terminal streaming in real time (<span className="mono text-emerald-300">OnTick + SSE</span>) from the host MT5 terminal (<span className="mono text-slate-200">{serverName}</span> · <span className="mono text-cyan-300">{symbolName}</span>) and the 15m Decision Engine SSOT. Credentials are RSA-OAEP + AES-256-GCM encrypted in-browser.
             </p>
             <span className="mono text-[11px] text-slate-300">Updated {updatedAt}</span>
           </div>
@@ -707,7 +773,10 @@ export default function Omega() {
                 <CandlestickChart className="h-3.5 w-3.5 text-cyan-300" />
                 Market Watch · {symbolName}
               </span>
-              <span className="mono text-[10px] text-slate-400">{br.spread_points != null ? `${br.spread_points} pts` : "—"}</span>
+              <span className="mono flex items-center gap-1 text-[10px] text-slate-400">
+                {tickDir === "up" ? <span className="text-emerald-300">▲</span> : tickDir === "down" ? <span className="text-rose-300">▼</span> : null}
+                {br.spread_points != null ? `${br.spread_points} pts` : "—"}
+              </span>
             </div>
 
             {/* MT5 One-Click Trading Style Dual Bid / Ask Box */}
