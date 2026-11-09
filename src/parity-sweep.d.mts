@@ -32,3 +32,4 @@ export function reconcileRecentCandles(env: unknown, options?: { now?: number; l
 export function backfillRecentAnalyses(env: unknown, options?: { now?: number; lookback?: number; loadPayloads?: any; runAnalysis?: any; setStatus?: any }): Promise<{ triggered: number; candle_keys: string[] }>;
 export const LOCAL_MISSING_AFTER_MS: number;
 export const BACKFILL_MAX_ATTEMPTS: number;
+export const DEGRADED_RETRY_MS: number;

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { loadWebhookPayloadsFromD1 } from "../src/webhook-payloads.mjs";
-import { backfillRecentAnalyses, closedH1CandleKeys, LOCAL_MISSING_AFTER_MS } from "../src/parity-sweep.mjs";
+import { backfillRecentAnalyses, closedH1CandleKeys, LOCAL_MISSING_AFTER_MS, DEGRADED_RETRY_MS } from "../src/parity-sweep.mjs";
 
 function kv(map = {}) {
   const m = new Map(Object.entries(map));
@@ -125,6 +125,28 @@ test("backfill retries a failed analysis (for example a model timeout) up to the
   assert.equal(runs.length, 1, "a failed run is retried");
   await backfillRecentAnalyses({ DB: dbWith({ status: "failed", attempt_count: 4 }), WEBHOOK_BUFFER: kv(trusted) }, { now, lookback: 1, loadPayloads: async () => ({}), runAnalysis: run });
   assert.equal(runs.length, 1, "no retry past the attempt cap");
-  await backfillRecentAnalyses({ DB: dbWith({ status: "degraded", attempt_count: 1 }), WEBHOOK_BUFFER: kv(trusted) }, { now, lookback: 1, loadPayloads: async () => ({}), runAnalysis: run });
-  assert.equal(runs.length, 1, "a recorded fail-closed run is final");
+  await backfillRecentAnalyses({ DB: dbWith({ status: "complete", attempt_count: 1 }), WEBHOOK_BUFFER: kv(trusted) }, { now, lookback: 1, loadPayloads: async () => ({}), runAnalysis: run });
+  assert.equal(runs.length, 1, "a complete run is final");
+});
+
+test("backfill retries a degraded run while its evidence may still arrive (production 2026-11-09: news one minute late)", async () => {
+  // Every H1 run since the reopen fired at :05:35 and the hourly news landed at :06:50, so each bar
+  // was recorded degraded (news_analysis_stale) and stayed WAIT. The retry re-runs the chain; the
+  // claim itself only succeeds when the evidence fingerprint changed.
+  const closeMs = Date.parse("2026-11-09T01:00:00.000Z");
+  const [key] = closedH1CandleKeys(closeMs + 10 * 60_000, { lookback: 1 });
+  const trusted = Object.fromEntries(["mizan", "prophet", "gmi"].map(e => ["localcalc:" + key + ":" + e, "{}"]));
+  const runs = [];
+  const dbWith = (row) => ({ prepare(sql) {
+    if (sql.includes("analysis_runs")) return { bind() { return { async first() { return row; } }; } };
+    return { bind() { return { async all() { return { results: [] }; } }; } };
+  } });
+  const run = async (_e, k) => { runs.push(k); };
+  const env = { DB: dbWith({ status: "degraded", attempt_count: 1 }), WEBHOOK_BUFFER: kv(trusted) };
+  await backfillRecentAnalyses(env, { now: closeMs + 10 * 60_000, lookback: 1, loadPayloads: async () => ({}), runAnalysis: run });
+  assert.deepEqual(runs, [key], "10 minutes after the close: retried");
+  await backfillRecentAnalyses(env, { now: closeMs + DEGRADED_RETRY_MS + 60_000, lookback: 2, loadPayloads: async () => ({}), runAnalysis: run });
+  assert.equal(runs.filter((k) => k === key).length, 1, "past the retry window: final");
+  await backfillRecentAnalyses({ ...env, DB: dbWith({ status: "degraded", attempt_count: 4 }) }, { now: closeMs + 10 * 60_000, lookback: 1, loadPayloads: async () => ({}), runAnalysis: run });
+  assert.equal(runs.length, 1, "no retry past the attempt cap");
 });
