@@ -34,6 +34,16 @@ export function resetHealthSchemaCacheForTests() { schemaReady = false; }
 
 const iso = (ms) => new Date(ms).toISOString();
 const hhmm = (ms) => iso(ms).slice(11, 16) + " UTC";
+/** "23:00 UTC" within the last 12 hours, "2026-11-06 22:00 UTC" before that. */
+const whenUtc = (ms, now) => (now - ms < 12 * HOUR ? hhmm(ms) : iso(ms).slice(0, 16).replace("T", " ") + " UTC");
+/** The open of the first bar after the last pause longer than 2 hours (a weekend or a holiday), or -Infinity. */
+function sessionStartMs(bars) {
+  for (let i = bars.length - 1; i > 0; i--) {
+    const open = Date.parse(bars[i].open_time ?? ""), prevClose = Date.parse(bars[i - 1].close_time ?? "");
+    if (Number.isFinite(open) && Number.isFinite(prevClose) && open - prevClose > 2 * HOUR) return open;
+  }
+  return -Infinity;
+}
 /** The open time of a candle key ("OANDA:XAUUSD:15:<open ms>") as "2026-11-09 01:15 UTC". */
 function barOf(candleKey) {
   const ms = Number(String(candleKey).split(":").at(-1));
@@ -106,11 +116,16 @@ export async function detectHealthIssues(env, now = Date.now()) {
 
   // 7. The Live War Room 15m stopped while 5m bars keep closing.
   if (String(env.WAR_ROOM_ENABLED || "").toLowerCase() === "true") {
-    const m5 = (await seriesCandles(env, "OANDA:XAUUSD|5m")).at(-1);
+    const m5Bars = await seriesCandles(env, "OANDA:XAUUSD|5m");
+    const m5 = m5Bars.at(-1);
     const [room] = await rows(db, "SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id LIKE 'warroom:%'");
     const roomMs = Date.parse(room?.r ?? "");
-    if (m5 && now - Date.parse(m5.close_time) < 20 * 60_000 && (!Number.isFinite(roomMs) || now - roomMs > 45 * 60_000)) {
-      out.push({ key: "war_room_stale", kind: "war_room_stale", subject: `The Live War Room 15m has not met since ${Number.isFinite(roomMs) ? hhmm(roomMs) : "it was enabled"} while 5m bars keep closing`, detail: { last_room: room?.r ?? null, last_m5_close: m5.close_time } });
+    // After a market gap the room cannot have met before the first bars of the new session: the
+    // 45 minutes count from the session's first 5m bar (production 2026-11-08 23:12, twelve minutes
+    // after the reopen, read "has not met since 22:00 UTC", which was Friday).
+    const since = Math.max(Number.isFinite(roomMs) ? roomMs : -Infinity, sessionStartMs(m5Bars));
+    if (m5 && now - Date.parse(m5.close_time) < 20 * 60_000 && (!Number.isFinite(since) || now - since > 45 * 60_000)) {
+      out.push({ key: "war_room_stale", kind: "war_room_stale", subject: `The Live War Room 15m has not met since ${Number.isFinite(roomMs) ? whenUtc(roomMs, now) : "it was enabled"} while 5m bars keep closing`, detail: { last_room: room?.r ?? null, last_m5_close: m5.close_time } });
     }
   }
 

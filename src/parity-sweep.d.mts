@@ -33,3 +33,4 @@ export function backfillRecentAnalyses(env: unknown, options?: { now?: number; l
 export const LOCAL_MISSING_AFTER_MS: number;
 export const BACKFILL_MAX_ATTEMPTS: number;
 export const DEGRADED_RETRY_MS: number;
+export function goldClosedAt(ms: number): boolean;
