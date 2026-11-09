@@ -65,6 +65,8 @@ export function packCandidates(pack, { existing = CANDIDATES, retired = RETIRED_
   for (const c of existing) perFamily.set(c.family, (perFamily.get(c.family) || 0) + 1);
   for (const it of Array.isArray(pack?.items) ? pack.items : []) {
     if (it?.kind !== "param_candidate") continue;
+    // The H1 quorum weighting is activated by src/weighting.mjs, not run as a shadow version.
+    if (it?.params?.family === "weighting") continue;
     const key = `${it.item_id}@${it.version}`;
     const p = it.params || {};
     const entries = Object.entries(p.values || {});
