@@ -269,7 +269,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **No separate 15m cards:** they repeated the 15m tab.
   - **The active tab drives the page.**
     - The left panel lists the desks and HUD agents of that tab's room, with their stance and calibration. On the News tab it shows the News Analyst.
-    - The level ladder and regime radar on the right show that tab's chart. News uses the 1-hour chart.
+    - The Camarilla set and pivot ranges of the Key levels panel, and the regime radar, on the right show that tab's chart. News uses the 1-hour chart.
 - **Strategy engine** (owner decision 2026-11-06: "the decision is the consensus of all agents, not three"; `src/strategy-engine.mjs`, `GET /api/strategy`; deterministic, no model call, computed on read).
   - **Why:** the H1 chain's three models (Analyst, Counselor, Reasoner) apply the policy rules, which need a Prophet R38 trigger on the H1 candle itself, so the decision was almost always WAIT. Meanwhile the rooms' agents leaned clearly one way.
   - **Top-down layers** (every room's lean is the confidence-weighted bias of all its agents):
@@ -351,7 +351,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - Bands are coloured by role (support green, resistance red, at price cyan) and shaded by strength. Labels show only where there is room.
     - The strategy plan's entry, stop, TP1 and TP2 are drawn as price lines, with the RRR on the axis label.
     - The "Zones" button toggles both, and is remembered per viewer.
-  - *Key Level Agent* (second): the zones on one price axis around price, with candidates coloured by role and shaded by strength; the six nearest candidate zones with their range, strength and leading levels (hover lists every level); and the agent's summary.
+  - *Key levels* (second; one panel since backlog item 18, owner approval 2026-11-09, `ui/src/components/KeyLevels.tsx`, which replaced the separate Levels card and Key Level Agent panel): one price axis for both. Left lane: the Camarilla set of the active tab's chart (H6 to L6, the H3–L3 range shaded; a set picker when the snapshot carries several) with the daily and weekly pivot ranges. Right lane: the Key Level Agent's zones of every chart, candidates coloured by role and shaded by strength. The price is one dashed line across both. The axis is fitted to price, the candidate zones and H3/L3/H4/L4, plus anything within half again of that reach; a level beyond it is listed at its edge with its price. Below: the close's place in the Camarilla, the six nearest candidate zones with their range, strength and leading levels (hover lists every level), and the agent's summary. Without the Global Conclusion the panel shows the Camarilla side alone.
   - *Global Conclusion* (data only, no card of its own; `GET /api/conclusion/global`, `src/global-conclusion.mjs`, deterministic, no model call). One multi-timeframe summary of the D1, 4H, 1H and 15m War Rooms and News Daily:
     - the global bias from the weighted room leans (below);
     - a heat strip of the five leans, with stale rooms faded;
@@ -456,7 +456,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
           - *Liquidity* (whale zones and mitigation blocks, the nearest FVG targets, QM and RBS/SBR);
           - *Session* (the true day, week and month opens).
         - The levels come from `GET /api/hud/levels`, which now serves the snapshot's `chart_plane`. The 5m chart reads the 15m plane.
-      - **Key Level Agent panel (right):** the level count of each reader (Band, Liquidity, Projection, Session), the setup type at the 15m location with its evidence, the zone ladder and the nearest candidates; hovering a zone lists its levels and their reader.
+      - **Key levels panel (right):** the level count of each reader (Band, Liquidity, Projection, Session), the setup type at the 15m location with its evidence, the Camarilla set and the zones on one price axis, and the nearest candidates; hovering a zone lists its levels and their reader.
     - Right: the trading assistant panel (charts).
     - On narrower screens, the side panels move under the center instead of hiding.
     - Shadow versions are at `#/shadow`; `/shadow` redirects there.
