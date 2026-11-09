@@ -70,12 +70,19 @@ test("only the production AI Worker binds the Cryptophys Platform kernel, with i
   for (const doc of ["docs/SSOT.md", "AGENTS.md"]) assert.ok(read(path.join(ROOT, doc)).includes("cryptophys-ai-kernel"), `${doc} must document the platform kernel binding`);
 });
 
-test("only the production AI Worker binds Aether, to KnowledgeIngress, with no props and no secret", () => {
+test("only the production AI Worker binds Aether's KnowledgeIngress; Nexus binds only the read-only AetherReader; no props, no secret", () => {
   const configs = files.filter((p) => /wrangler[^/]*\.jsonc?$/.test(p));
+  const READ_ONLY = "workers/xauusd-nexus-dashboard/wrangler.jsonc";
   for (const p of configs) {
     const rel = path.relative(ROOT, p);
     const text = read(p);
     if (!text.includes("cryptophys-aether")) continue;
+    if (rel === READ_ONLY) {
+      // The Aether page (owner 2026-11-09): a read-only entrypoint, never KnowledgeIngress.
+      assert.match(text, /\{\s*"binding":\s*"AETHER",\s*"service":\s*"cryptophys-aether",\s*"entrypoint":\s*"AetherReader"\s*\}/);
+      assert.doesNotMatch(text, /KnowledgeIngress/, "Nexus never pushes decision cards");
+      continue;
+    }
     assert.equal(rel, "wrangler.jsonc", `${rel} must not bind Aether (only the production AI Worker pushes decision cards)`);
     assert.match(text, /\{\s*"binding":\s*"AETHER",\s*"service":\s*"cryptophys-aether",\s*"entrypoint":\s*"KnowledgeIngress"\s*\}/);
   }

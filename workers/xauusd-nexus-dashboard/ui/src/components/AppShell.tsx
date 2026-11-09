@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { motion } from "framer-motion";
-import { Activity, BellRing, BookOpenCheck, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, Home, LineChart, Menu, ShieldCheck, Sparkles, Swords, Trophy, X } from "lucide-react";
+import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, Home, LineChart, Menu, ShieldCheck, Sparkles, Swords, Trophy, X } from "lucide-react";
 import { Dot } from "./ui";
 import { useWarRoom } from "../lib/warroom";
 
@@ -10,19 +10,20 @@ import { useWarRoom } from "../lib/warroom";
 // built are listed as "soon" and are not links.
 type NavItem = { label: string; href: string; key: string; icon: typeof Swords; soon?: boolean };
 export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
-  { title: "Live", items: [{ label: "War Room", href: "#/", key: "", icon: Swords }, { label: "System status", href: "#/status", key: "status", icon: Activity }] },
+  { title: "Live", items: [{ label: "War Room", href: "/#/", key: "", icon: Swords }, { label: "System status", href: "/#/status", key: "status", icon: Activity }] },
   { title: "Analytics", items: [
-    { label: "Performance", href: "#/performance", key: "performance", icon: LineChart },
-    { label: "Scorecards", href: "#/scorecards", key: "scorecards", icon: Trophy },
-    { label: "Shadow versions", href: "#/shadow", key: "shadow", icon: FlaskConical }
+    { label: "Performance", href: "/#/performance", key: "performance", icon: LineChart },
+    { label: "Scorecards", href: "/#/scorecards", key: "scorecards", icon: Trophy },
+    { label: "Shadow versions", href: "/#/shadow", key: "shadow", icon: FlaskConical }
   ] },
   { title: "Market", items: [
-    { label: "Economic calendar", href: "#/calendar", key: "calendar", icon: CalendarDays },
-    { label: "Macro War Room", href: "#/correlations", key: "correlations", icon: GitCompareArrows }
+    { label: "Economic calendar", href: "/#/calendar", key: "calendar", icon: CalendarDays },
+    { label: "Macro War Room", href: "/#/correlations", key: "correlations", icon: GitCompareArrows }
   ] },
   { title: "Intelligence", items: [
-    { label: "Decision audit", href: "#/audit", key: "audit", icon: BookOpenCheck },
-    { label: "Alerts", href: "#/alerts", key: "alerts", icon: BellRing }
+    { label: "Aether", href: "/aether", key: "aether", icon: Brain },
+    { label: "Decision audit", href: "/#/audit", key: "audit", icon: BookOpenCheck },
+    { label: "Alerts", href: "/#/alerts", key: "alerts", icon: BellRing }
   ] }
 ];
 export const NAV = NAV_GROUPS.flatMap((g) => g.items).filter((i) => !i.soon);
@@ -69,7 +70,7 @@ export default function AppShell({ current, children }: { current: string; child
     <div className="min-h-screen text-slate-100">
       <header className="border-b border-white/10 bg-obsidian-panel/90 backdrop-blur">
         <div className="mx-auto flex max-w-[1680px] items-center gap-3 px-3 py-3 sm:px-6 sm:py-4">
-          <a href="#/" className="flex items-center gap-3" aria-label="Nexus War Room">
+          <a href="/#/" className="flex items-center gap-3" aria-label="Nexus War Room">
             <motion.div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-cyan-400/40 bg-cyan-400/10 sm:h-11 sm:w-11"
               animate={{ boxShadow: ["0 0 0 rgba(34,211,238,0)", "0 0 22px rgba(34,211,238,0.35)", "0 0 0 rgba(34,211,238,0)"] }}
               transition={{ duration: 4, repeat: Infinity }}>

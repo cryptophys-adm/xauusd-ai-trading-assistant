@@ -9,8 +9,11 @@ import Calendar from "./pages/Calendar";
 import Alerts from "./pages/Alerts";
 import Audit from "./pages/Audit";
 import Status from "./pages/Status";
+import Aether from "./pages/Aether";
 
-const parse = (hash: string) => hash.replace(/^#\/?/, "").split("/").filter(Boolean)[0] ?? "";
+const first = (s: string) => s.split("/").filter(Boolean)[0] ?? "";
+// A hash route (#/shadow) wins; without a hash, the path names the page (nexus.cryptophys.work/aether).
+const parse = (hash: string) => (hash ? first(hash.replace(/^#\/?/, "")) : first(window.location.pathname));
 
 export default function App() {
   const [route, setRoute] = useState(() => parse(window.location.hash));
@@ -19,7 +22,7 @@ export default function App() {
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);
-  const PAGES: Record<string, () => JSX.Element> = { shadow: Shadow, scorecards: Scorecards, performance: Performance, correlations: Correlations, calendar: Calendar, alerts: Alerts, audit: Audit, status: Status };
+  const PAGES: Record<string, () => JSX.Element> = { shadow: Shadow, scorecards: Scorecards, performance: Performance, correlations: Correlations, calendar: Calendar, alerts: Alerts, audit: Audit, status: Status, aether: Aether };
   const current = route in PAGES ? route : "";
   const Page = PAGES[current] ?? WarRoom;
   return <AppShell current={current}><Page /></AppShell>;
