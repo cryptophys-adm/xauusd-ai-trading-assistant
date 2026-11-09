@@ -24,6 +24,7 @@
 // 13) Moved Weekly/Daily CPR, width, and CPR × GMI rows into CHRONOS MATRIX; expanded its table and shifted Aegis Footprint down.
 // 14) Consolidated CPR HUD to three rows; added classic daily R1-R3/S1-S3 levels and merged width with CPR × GMI.
 // 15) Added JSON-safe escaping for the user-provided webhook secret in all three CTA alert payloads.
+// 16) CTA webhook alerts fire once per bar close (alert.freq_once_per_bar_close), as in Prophet R38: freq_all sent each payload twice per 5m bar.
 // VALIDATION: static transformation only. TradingView compilation, replay, and regression NOT yet verified.
 
 // Audit R2: wording/display-only changes applied to user-supplied compile-passing baseline. Verify in TradingView before deployment.
