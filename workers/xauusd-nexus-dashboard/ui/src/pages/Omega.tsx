@@ -125,7 +125,7 @@ const BROKER_PRESETS: BrokerPreset[] = [
   {
     key: "custom",
     name: "Custom Server",
-    company: "Input Server / Host:Port Manual",
+    company: "Manual Server / Host:Port Input",
     goldSymbol: "Auto (XAUUSD / GOLD)",
     servers: [],
   },
@@ -604,7 +604,7 @@ export default function Omega() {
     if (isLocked) {
       setBrokerMsg({
         tone: "text-amber-200",
-        text: "Akun MT5 sedang aktif terhubung. Silakan klik Disconnect terlebih dahulu sebelum mengganti broker/server.",
+        text: "An MT5 account is currently connected. Please click Disconnect before switching broker or server.",
       });
       return;
     }
@@ -638,7 +638,7 @@ export default function Omega() {
     if (!reason || !reason.trim()) return;
     try {
       await omegaJson("/omega/api/connection", "DELETE", { reason: reason.trim() });
-      setBrokerMsg({ tone: "text-emerald-300", text: "Disconnected. Konfigurasi broker & server kini terbuka (Unlocked)." });
+      setBrokerMsg({ tone: "text-emerald-300", text: "Disconnected. Broker and server configuration is now unlocked." });
     } catch (e: any) {
       setBrokerMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
     }
@@ -794,7 +794,7 @@ export default function Omega() {
             }`}
           >
             <Sliders className="h-3.5 w-3.5 text-emerald-300" />
-            Setup &amp; Konfigurasi Terpisah (Broker · Server · Gold Pairing · Engine)
+            Setup &amp; Configuration Center (Broker · Server · Gold Pairing · Engine)
           </button>
         </div>
 
@@ -802,7 +802,7 @@ export default function Omega() {
           {configLocked ? (
             <span className="mono flex items-center gap-1.5 rounded-md border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1 text-emerald-200">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Sesi MT5 Aktif: <strong className="text-emerald-100">{serverName}</strong> (Terkunci)</span>
+              <span>Active MT5 Session: <strong className="text-emerald-100">{serverName}</strong> (Locked)</span>
             </span>
           ) : (
             <span className="mono rounded-md border border-white/10 bg-black/40 px-2.5 py-1 text-slate-300">
@@ -812,25 +812,14 @@ export default function Omega() {
           <span className="mono rounded-md border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-amber-200">
             Default Pair: <strong>Auto Gold / XAUUSD</strong> → {symbolName}
           </span>
-          <button
-            type="button"
-            id="e-modebar-toggle"
-            disabled={!canControl}
-            onClick={() => {
-              const next = !eEnabled;
-              setEEnabled(next);
-              saveEngine({ enabled: next });
-            }}
-            className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-semibold transition disabled:opacity-40 ${
-              eEnabled
-                ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
-                : "border-rose-400/35 bg-rose-500/10 text-rose-200"
-            }`}
-            title="Klik untuk langsung Toggle Engine Enabled ON / OFF"
-          >
-            <span className={`h-2 w-2 rounded-full ${eEnabled ? "bg-emerald-400 animate-pulse" : "bg-rose-400"}`} />
-            Engine Enabled: {eEnabled ? "ON" : "OFF"}
-          </button>
+          <span className={`mono flex items-center gap-1.5 rounded-md border px-2.5 py-1 ${
+            algoActive
+              ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
+              : "border-slate-700/60 bg-black/40 text-slate-400"
+          }`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${algoActive ? "bg-emerald-400 animate-pulse" : "bg-slate-500"}`} />
+            Algo Trading: <strong className={algoActive ? "text-emerald-100" : "text-slate-300"}>{algoActive ? "ON" : "STANDBY"}</strong>
+          </span>
         </div>
       </div>
 
@@ -878,36 +867,24 @@ export default function Omega() {
         {/* MT5 Standard Top Toolbar (Algo Trading, Timeframes, Overlay Toggles, Live Account Strip) */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-[#0b111e] px-3 py-2">
           <div className="flex flex-wrap items-center gap-2">
-            {/* Algo Trading Master Status Button */}
+            {/* Algo Trading Master Direct Toggle Button */}
             <button
               type="button"
+              disabled={!canControl}
               onClick={() => {
-                setViewMode("setup");
-                const el = document.getElementById("setup-center-section");
-                if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+                const next = !eEnabled;
+                setEEnabled(next);
+                saveEngine({ enabled: next });
               }}
-              className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] font-semibold transition ${
-                algoActive
-                  ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
-                  : "border-amber-400/35 bg-amber-500/10 text-amber-200"
+              className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] font-semibold transition disabled:opacity-40 ${
+                eEnabled
+                  ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
+                  : "border-rose-400/35 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20"
               }`}
-              title="Click to open Setup & Broker Engine Configuration"
+              title="Click to toggle Algo Trading (Broker Engine) ON / OFF"
             >
-              <span className={`h-2 w-2 rounded-full ${algoActive ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
-              Algo Trading: {algoActive ? "ACTIVE" : "OFF / STANDBY"}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setViewMode("setup");
-                const el = document.getElementById("setup-center-section");
-                if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-              }}
-              className="flex items-center gap-1.5 rounded-md border border-cyan-400/35 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold text-cyan-200 transition hover:bg-cyan-500/20"
-            >
-              <Sliders className="h-3 w-3" />
-              Setup Broker &amp; Server
+              <span className={`h-2 w-2 rounded-full ${eEnabled ? "bg-emerald-400 animate-pulse" : "bg-rose-400"}`} />
+              Algo Trading: {eEnabled ? "ON" : "OFF"}
             </button>
 
             <div className="h-4 w-px bg-white/10" />
@@ -1667,28 +1644,20 @@ export default function Omega() {
               <Badge tone="green">Default Pair: Gold / XAUUSD</Badge>
             </div>
             <p className="mt-1 text-[11.5px] text-slate-400">
-              Pilih broker (<span className="text-slate-200">Monex, FxPro, Dupoin, Valetax, Exness, atau Custom</span>), pilih daftar server resmi MT5, isi User &amp; Password akun, atur pairing default Gold (<span className="mono text-cyan-300">XAUUSD</span>), dan aktifkan toggle <span className="mono text-emerald-300">Engine enabled</span>.
+              Select an official MT5 broker (<span className="text-slate-200">Monex, FxPro, Dupoin, Valetax, Exness, or Custom</span>), choose a server, enter account credentials, configure default Gold pairing (<span className="mono text-cyan-300">XAUUSD</span>), and enable the <span className="mono text-emerald-300">Engine enabled</span> toggle.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setViewMode("terminal")}
-            className="flex items-center gap-1.5 rounded-lg border border-cyan-400/35 bg-cyan-500/15 px-3 py-1.5 text-[11.5px] font-semibold text-cyan-200 transition hover:bg-cyan-500/25"
-          >
-            <Terminal className="h-3.5 w-3.5" />
-            ← Kembali ke MT5 Web Terminal &amp; Live Monitor
-          </button>
         </div>
 
         {/* Step 1: Interactive Broker Selector Cards */}
         <div>
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <span className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-cyan-300">
-              1. Pilih Broker Resmi MT5 (Monex · FxPro · Dupoin · Valetax · Exness · Custom)
+              1. Select Official MT5 Broker (Monex · FxPro · Dupoin · Valetax · Exness · Custom)
             </span>
             <span className="mono text-[11px] text-slate-400">
               {configLocked ? (
-                <span className="text-emerald-300">🔒 Terkunci pada sesi aktif: <strong className="text-slate-100">{serverName}</strong></span>
+                <span className="text-emerald-300">🔒 Locked to active session: <strong className="text-slate-100">{serverName}</strong></span>
               ) : (
                 <>Active Server: <strong className="text-slate-200">{bServer || serverName}</strong></>
               )}
@@ -1717,7 +1686,7 @@ export default function Omega() {
                         ? "border-white/5 bg-black/20 text-slate-500 opacity-40 cursor-not-allowed"
                         : "border-white/10 bg-black/35 text-slate-300 hover:border-white/25 hover:bg-white/5"
                   }`}
-                  title={configLocked && !active ? "Akun sedang aktif terhubung. Disconnect terlebih dahulu untuk berganti broker." : undefined}
+                  title={configLocked && !active ? "An MT5 account is currently connected. Disconnect first to switch brokers." : undefined}
                 >
                   <div className="flex w-full items-center justify-between gap-1">
                     <span className="text-[12px] font-bold text-slate-100">{preset.name}</span>
@@ -1765,10 +1734,10 @@ export default function Omega() {
                 <div className="rounded-lg border border-emerald-400/40 bg-emerald-500/10 p-2.5 text-[11.5px] text-emerald-200">
                   <div className="flex items-center gap-2 font-semibold">
                     <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>Sesi Akun MT5 Aktif: {serverName} ({br.trade_mode ? br.trade_mode.toUpperCase() : "DEMO"})</span>
+                    <span>Active MT5 Account Session: {serverName} ({br.trade_mode ? br.trade_mode.toUpperCase() : "DEMO"})</span>
                   </div>
                   <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
-                    Konfigurasi broker lain, server, dan kredensial saat ini <strong>OFF / Terkunci</strong> untuk melindungi sesi aktif. Klik tombol <strong>Disconnect</strong> di bawah jika Anda ingin berganti server/broker akun lain.
+                    Other broker presets, servers, and credentials are currently <strong>OFF / Locked</strong> to protect the active trading session. Click <strong>Disconnect</strong> below to switch accounts or change broker.
                   </p>
                 </div>
               ) : null}
@@ -1780,7 +1749,7 @@ export default function Omega() {
                 return (
                   <div>
                     <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300" htmlFor="b-server-select">
-                      Pilih Daftar Server ({preset.name}) {configLocked ? "(Terkunci)" : ""}
+                      Select Server ({preset.name}) {configLocked ? "(Locked)" : ""}
                     </label>
                     <select
                       id="b-server-select"
@@ -1803,7 +1772,7 @@ export default function Omega() {
 
               <div>
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-server">
-                  Server Name {configLocked ? "(Terkunci)" : "(Bisa pilih di atas atau ketik manual)"}
+                  Server Name {configLocked ? "(Locked)" : "(Select above or enter manually)"}
                 </label>
                 <input
                   id="b-server"
@@ -1825,7 +1794,7 @@ export default function Omega() {
               {/* Default Gold / XAUUSD Pairing Selector */}
               <div>
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300" htmlFor="b-gold-pair">
-                  Default Pairing Fetch (Gold / XAUUSD) {configLocked ? "(Terkunci)" : ""}
+                  Default Pairing Fetch (Gold / XAUUSD) {configLocked ? "(Locked)" : ""}
                 </label>
                 <select
                   id="b-gold-pair"
@@ -1843,13 +1812,13 @@ export default function Omega() {
                   ))}
                 </select>
                 <p className="mt-1 text-[10.5px] text-slate-400">
-                  EA otomatis mendeteksi &amp; subscribe simbol Gold broker di Market Watch (<span className="mono text-cyan-300">{symbolName}</span>).
+                  EA automatically discovers &amp; subscribes to the broker&apos;s active Gold symbol in Market Watch (<span className="mono text-cyan-300">{symbolName}</span>).
                 </p>
               </div>
 
               <div>
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-login">
-                  User / Login MT5 {configLocked ? "(Terkunci)" : ""}
+                  User / Login MT5 {configLocked ? "(Locked)" : ""}
                 </label>
                 <input
                   id="b-login"
@@ -1858,7 +1827,7 @@ export default function Omega() {
                   inputMode="numeric"
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder={configLocked ? `Terkunci: Akun aktif di ${serverName}` : "Nomor akun MT5"}
+                  placeholder={configLocked ? `Locked: Active on ${serverName}` : "MT5 account login number"}
                   value={bLogin}
                   onChange={(ev) => setBLogin(ev.target.value)}
                   className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none ${
@@ -1870,7 +1839,7 @@ export default function Omega() {
               <div>
                 <div className="flex items-center justify-between">
                   <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-password">
-                    Password MT5 {configLocked ? "(Terkunci)" : ""}
+                    Password MT5 {configLocked ? "(Locked)" : ""}
                   </label>
                   {!configLocked ? (
                     <button
@@ -1888,7 +1857,7 @@ export default function Omega() {
                   type={showPass ? "text" : "password"}
                   maxLength={64}
                   autoComplete="new-password"
-                  placeholder={configLocked ? "•••••••• (Tersimpan aman & terenkripsi)" : "Password trading / investor MT5"}
+                  placeholder={configLocked ? "•••••••• (Securely stored & encrypted)" : "Trading or investor password"}
                   value={bPassword}
                   onChange={(ev) => setBPassword(ev.target.value)}
                   className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none ${
@@ -1903,7 +1872,7 @@ export default function Omega() {
                   id="b-connect"
                   disabled={!canControl || !br.kid || configLocked}
                   className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40"
-                  title={configLocked ? "Akun sudah terhubung. Disconnect terlebih dahulu untuk mengganti." : undefined}
+                  title={configLocked ? "Account already connected. Disconnect first to switch." : undefined}
                 >
                   {configLocked ? "Connected (Locked)" : "Connect"}
                 </button>
@@ -1971,7 +1940,7 @@ export default function Omega() {
                   <div>
                     <div>Engine enabled</div>
                     <div className="text-[10px] font-normal text-slate-400">
-                      Toggle aktivasi eksekusi otomatis Broker Engine
+                      Toggle automatic execution for the Broker Engine
                     </div>
                   </div>
                 </label>

@@ -163,7 +163,7 @@ test("Omega: /omega and /omega/ render inside the Nexus SPA with the left panel;
     "e-quick-toggle",
     "configLocked",
     "Connected (Locked)",
-    "Sesi MT5 Aktif",
+    "Active MT5 Session",
   ]) {
     assert.ok(omegaUi.includes(term), term);
   }
