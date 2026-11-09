@@ -52,6 +52,7 @@ setup READY state that never reached the decision (#192).
     - **Owner:** set `SHADOW_KNOWLEDGE_ENABLED` once a text item is approved (a small PR).
     - **Data:** the replays (crowd, strategy thresholds, shadow knowledge) need about 300 scored rooms or hours (18 scored H1 rooms on 2026-11-08; the 15m room scored 351 statements in the first six hours of 2026-11-09).
     - **K9, the first promotion PR:** only once a candidate reads `better_than_active: ready for owner review`; the owner approves it.
+    - **The H1 quorum weighting** (2026-11-09, SSOT "The H1 quorum weighting"): the replay needs 300 concluded and scored 1H rooms (about two weeks of trading) before any point can be rated `better_than_active`. Then Aether's calibrator proposes one in the Console; **owner:** approve or reject it there (approval activates it within the hour). Check `GET /api/weighting` around 2026-11-23.
 14. **Rotate the TradingView webhook secret before publishing** (owner decision 2026-11-09: deferred to the final step before publish). The current secret was visible in a status-line screenshot during the 401 diagnosis. Steps: PowerShell `New-Guid` one-liner, GitHub secret `TV_WEBHOOK_SECRET`, run `set-webhook-secret.yml` as a new run (never "Re-run"), the indicators' "CTA Webhook Secret" input, then delete and recreate every alert (an alert keeps the inputs it was created with). Keep "Indicator arguments" off in the chart's status line.
 
 ## Calibration in progress

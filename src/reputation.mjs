@@ -67,7 +67,7 @@ export function reputationFromScorecards(cards, timeframe) {
  * its final stance; `reputation` is reputationFromScorecards for the room's timeframe (an agent
  * without a record weighs 1).
  */
-export function buildCrowdLine(entries, reputation = {}) {
+export function buildCrowdLine(entries, reputation = {}, { quorumShare = QUORUM_SHARE, weighting = null } = {}) {
   const list = (entries || []).filter((e) => e && e.id && e.id !== "moderator");
   const stances = {}, biases = { BULLISH: 0, BEARISH: 0, NEUTRAL: 0 }, weighted = { BULLISH: 0, BEARISH: 0, NEUTRAL: 0 };
   let sum = 0, wsum = 0, lean = 0;
@@ -100,7 +100,10 @@ export function buildCrowdLine(entries, reputation = {}) {
     weighted_lean: r3(weightedLean), weighted_bias: crowdBias,
     disagreement: r3(disagreement),
     scored_agents: list.filter((e) => reputation?.[e.id]?.decisive > 0).length,
-    families: fams, disagreeing_families: against
+    families: fams, disagreeing_families: against,
+    // The quorum this crowd line is judged by, and the weighting it was built with (src/weighting.mjs).
+    quorum_share: quorumShare,
+    ...(weighting ? { weighting } : {})
   };
 }
 
@@ -112,13 +115,13 @@ export function buildCrowdLine(entries, reputation = {}) {
  * indicator confirmation is one agent's argument, not a gate.
  */
 export const QUORUM_SHARE = 0.5;
-export function quorumAllows(stance, crowd, share = QUORUM_SHARE) {
+export function quorumAllows(stance, crowd, share = Number.isFinite(crowd?.quorum_share) ? crowd.quorum_share : QUORUM_SHARE) {
   const bias = stance === "BUY" ? "BULLISH" : stance === "SELL" ? "BEARISH" : null;
   if (!bias) return true;
   const w = crowd?.weighted_biases?.[bias];
   return Number.isFinite(w) && w > share;
 }
-export function quorumRule(crowd, share = QUORUM_SHARE) {
+export function quorumRule(crowd, share = Number.isFinite(crowd?.quorum_share) ? crowd.quorum_share : QUORUM_SHARE) {
   const w = crowd?.weighted_biases ?? {};
   const pct = (b) => (Number.isFinite(w[b]) ? Math.round(w[b] * 100) + "%" : "unknown");
   return `QUORUM RULE (owner decision 2026-11-09): BUY needs more than ${Math.round(share * 100)}% of the agents' weight holding a BULLISH bias, SELL more than ${Math.round(share * 100)}% holding a BEARISH bias; otherwise the conclusion is WAIT, or HOLD / CLOSE for a position already open. Now: BULLISH ${pct("BULLISH")}, BEARISH ${pct("BEARISH")}, NEUTRAL ${pct("NEUTRAL")} of the weight. Indicator confirmations (Prophet, GMI) are arguments the agents weigh, never a gate.`;

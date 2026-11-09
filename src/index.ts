@@ -171,8 +171,8 @@ import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } fr
 import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
 import { runSignalLedger, readLedger, ingestStrategy, ensureLedgerSchema } from "./signal-ledger.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
-import { pushDecisionCards, aetherPushStatus } from "./aether-push.mjs";
-import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
+import { pushDecisionCards, aetherPushStatus, pushWeightingReport } from "./aether-push.mjs";
+import { pullLearnedPack, shadowCandidates, packStatus, storedPack } from "./aether-pack.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
@@ -193,6 +193,8 @@ import { notifyH1Decision } from "./h1-telegram.mjs";
 import { runPendingMacroRooms, readMacroRoom } from "./macro-room.mjs";
 import { readParityView } from "./parity-view.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
+import { applyWeighting } from "./weighting.mjs";
+import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
 import {
@@ -998,7 +1000,7 @@ function fusionDetails(fusion: any): JsonObject {
  */
 async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(), force = false }: { now?: number; force?: boolean } = {}): Promise<JsonObject> {
   let room: any = null;
-  try { room = await readTimeframeThread(env.DB, "H1", { candleKey }); } catch { room = null; }
+  try { room = await readTimeframeThread(env.DB, "H1", { candleKey, env }); } catch { room = null; }
   const consensus = consensusInput(room);
   if (!force && !finalizeDue({ candleKey, now, roomConcluded: consensus.status === "concluded" })) return { status: "waiting_for_room", consensus: consensus.status };
   const claim = await env.DB.prepare(
@@ -2252,7 +2254,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     const chart = ({ "1H": "H1", "4H": "H4", D: "D1", "1D": "D1" } as Record<string, string>)[asked] ?? asked;
     if (!["H1", "H4", "D1"].includes(chart)) return dashboardJson({ status: "error", error: "chart must be H1, H4 or D1" }, 400);
     try {
-      const thread = await readTimeframeThread(env.DB, chart);
+      const thread = await readTimeframeThread(env.DB, chart, { env });
       if (!thread) return dashboardJson({ status: "not_found", enabled: tfThreadsEnabled(env), chart }, 404);
       // The 1H tab ends with the Reasoner's H1 decision of that bar (owner decision 2026-11-07).
       if (chart === "H1" && thread.candle_key) thread.reasoner_decision = await reasonerDecisionOf(env, String(thread.candle_key));
@@ -2293,6 +2295,16 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     try { return dashboardJson({ status: "ok", ...(await readCorrelations(env)) }); }
     catch (error) {
       console.error("correlations_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/weighting") {
+    // The H1 quorum weighting (src/weighting.mjs): the active point, each agent's own weight, the replay
+    // of the neighbouring grid points (discovery with Holm, holdout), the reverse shadow and the history.
+    try {
+      return dashboardJson({ status: "ok", ...(await readWeightingReplay(env, { days: 30 })) });
+    } catch (error) {
+      console.error("weighting_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
     }
   }
@@ -2582,6 +2594,16 @@ export default {
           } catch (e) { console.error("aether_pack_failed", e instanceof Error ? e.message : String(e)); }
           try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env, { candidates: await shadowCandidates(env) }))); }
           catch (e) { console.error("shadow_versions_failed", e instanceof Error ? e.message : String(e)); }
+          // Weighting tuning (owner decision 2026-11-09): replay the H1 quorum under the grid points next
+          // to the active weighting, activate a point a person approved in the Console (when the replay
+          // still rates it better), roll back one the reverse shadow finds worse, and report to Aether.
+          try {
+            const replay = await readWeightingReplay(env, { days: 30, useCache: false });
+            const applied = await applyWeighting(env, { pack: (await storedPack(env))?.pack ?? null, replay });
+            if (applied.status !== "unchanged") console.log("weighting", JSON.stringify(applied));
+            const pushed = await pushWeightingReport(env, applied.status === "activated" || applied.status === "rolled_back" ? await readWeightingReplay(env, { days: 30, useCache: false }) : replay);
+            if (pushed.status !== "disabled" && pushed.status !== "unchanged") console.log("weighting_report", JSON.stringify(pushed));
+          } catch (e) { console.error("weighting_failed", e instanceof Error ? e.message : String(e)); }
         }
         // Signal Ledger (owner request 2026-11-07): new H1 decisions and strategy setups, each
         // followed to its outcome in R on the closed bars. Never feeds a room or a decision.
