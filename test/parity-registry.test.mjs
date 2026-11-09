@@ -290,10 +290,16 @@ test("one-time reconciliation: input-only revocations are restored; indicator an
 
 test("a mismatch keeps the local engine's diagnostics (the verdict branch before a conflict reset) in its detail", async () => {
   const record = local("gmi", { gmi_v12_70: { verdict: 0, gate: -1, gmi_dir: 0, prophet_dir: 1, conflict: true } });
-  record.values.diagnostics = { branch: "none", ltf_state: 0, is_chaos: false, entropy: 0.42, zones: { veto: false }, vah: 1 };
+  record.values.diagnostics = { branch: "none", ltf_state: 0, is_chaos: false, entropy: 0.42, pct_rank: 8.5, s_omega: -0.2, zones: { veto: false, in_ob_bear: true, level: 4100 }, vah: 1, val: 0.5, poc: 0.7 };
   const mismatch = compareWithWebhooks(record, webhooks({ gmi_v12_70: { ...candle, verdict: 0, gate: -1, gmi_dir: -1, prophet_dir: 1, conflict: true } }), DEFAULT_POLICY);
   assert.equal(mismatch.status, "mismatch");
-  assert.deepEqual(mismatch.local_diagnostics, { branch: "none", ltf_state: 0, is_chaos: false, entropy: 0.42 }, "only the listed internals, never zones or levels");
+  assert.deepEqual(mismatch.local_diagnostics, { branch: "none", ltf_state: 0, is_chaos: false, entropy: 0.42, pct_rank: 8.5, s_omega: -0.2, value_area: "above_vah", zones: { veto: false, in_ob_bear: true } }, "the listed internals and the zone flags, never a level");
+  assert.ok(!JSON.stringify(mismatch.local_diagnostics).includes("4100"), "no price");
+  const placed = local("gmi", { gmi_v12_70: { verdict: 0, gate: -1, gmi_dir: 0, prophet_dir: 1, conflict: true } });
+  placed.values.diagnostics = { branch: "jma_long", vah: 4100, val: 4090 };
+  placed.values.candle = { c: 4095 };
+  const inside = compareWithWebhooks(placed, webhooks({ gmi_v12_70: { ...candle, verdict: 0, gate: -1, gmi_dir: -1, prophet_dir: 1, conflict: true } }), DEFAULT_POLICY);
+  assert.deepEqual(inside.local_diagnostics, { branch: "jma_long", value_area: "inside" }, "the value area only as the close's position");
   const db = d1();
   await ensureSchema(db);
   const id = identityOf(record);

@@ -123,13 +123,27 @@ export function requiredSourcesFor(engine) {
  * The engine internals behind a mismatch, kept in the comparison detail (2026-11-09: the GMI
  * gmi_dir mismatches on 5m conflict bars, where Pine and the local engine reset the verdict to 0
  * after gmi_dir was taken, so only gmi_dir shows that the verdict branch BEFORE the reset
- * differed). Unverified internals, for diagnosis only; never compared.
+ * differed). Unverified internals, for diagnosis only; never compared. Never a price: the value
+ * area enters only as the close's position against it, the zones only as their flags.
+ * 2026-11-09 (5m bar 08:35 UTC): the local branch was jma_long (+3) where Pine's verdict before the
+ * reset was -3, so the JMA inputs (pct_rank, the kinetics) and the zone flags are kept too.
  */
-const DIAGNOSTIC_KEYS = ["branch", "htf_state", "mtf_state", "ltf_state", "ext_state", "fp_status", "is_chaos", "entropy", "intrabars"];
+const DIAGNOSTIC_KEYS = ["branch", "htf_state", "mtf_state", "ltf_state", "ext_state", "fp_status", "is_chaos", "entropy", "intrabars", "pct_rank", "s_theta", "s_omega", "s_alpha", "global_h"];
+const isFiniteNum = (x) => typeof x === "number" && Number.isFinite(x);
+function valueAreaPosition(close, vah, val) {
+  if (![close, vah, val].every(isFiniteNum)) return null;
+  return close > vah ? "above_vah" : close < val ? "below_val" : "inside";
+}
 function localDiagnostics(record) {
   const d = isRecord(record?.values?.diagnostics) ? record.values.diagnostics : null;
   if (!d) return {};
   const out = Object.fromEntries(DIAGNOSTIC_KEYS.filter((k) => k in d).map((k) => [k, d[k]]));
+  const position = valueAreaPosition(record?.values?.candle?.c, d.vah, d.val);
+  if (position) out.value_area = position;
+  if (isRecord(d.zones)) {
+    const flags = Object.entries(d.zones).filter(([, v]) => typeof v === "boolean");
+    if (flags.length) out.zones = Object.fromEntries(flags);
+  }
   return Object.keys(out).length ? { local_diagnostics: out } : {};
 }
 
