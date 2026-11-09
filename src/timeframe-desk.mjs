@@ -14,28 +14,35 @@ async function readRecord(env, candleKey, engine) {
   for (const [prefix, approved] of [["localcalc:", true], [OBSERVED_PREFIX, false]]) {
     try {
       const raw = await env?.WEBHOOK_BUFFER?.get?.(prefix + candleKey + ":" + engine);
-      if (raw) return { comparable: JSON.parse(raw)?.values?.comparable || {}, approved };
+      if (raw) {
+        const values = JSON.parse(raw)?.values || {};
+        return { comparable: values.comparable || {}, setup: values.setup && typeof values.setup === "object" ? values.setup : null, approved };
+      }
     } catch { /* unreadable: try the next copy */ }
   }
   return null;
 }
 
 /**
- * The desk's reading of one bar: plain sentences, whether parity approved the records, and the
- * Prophet R38 confirmations. `available` is false when neither record exists.
+ * The desk's reading of one bar: plain sentences, whether parity approved the records, the
+ * Prophet R38 confirmations and its setup state (READY outlives the one-bar event; backlog item
+ * 16, 2026-11-09). `available` is false when neither record exists.
  */
 export async function chartDeskReading(env, candleKey) {
   const [p, g] = await Promise.all([readRecord(env, candleKey, "prophet"), readRecord(env, candleKey, "gmi")]);
-  if (!p && !g) return { available: false, approved_by_parity: false, reading: [], buy_confirmed: false, sell_confirmed: false };
+  if (!p && !g) return { available: false, approved_by_parity: false, reading: [], buy_confirmed: false, sell_confirmed: false, buy_setup_ready: false, sell_setup_ready: false };
   const r38 = p?.comparable?.prophet_r38 ?? null;
-  const read = interpretWebhooks({ prophetR38: r38 || undefined, prophetR37: p?.comparable?.prophet_r37_ssot || undefined, gmi: g?.comparable?.gmi_v12_70 || undefined });
+  const setup = p?.setup ?? null;
+  const read = interpretWebhooks({ prophetR38: r38 ? { ...r38, ...(setup ? { setup_state: setup } : {}) } : undefined, prophetR37: p?.comparable?.prophet_r37_ssot || undefined, gmi: g?.comparable?.gmi_v12_70 || undefined });
   const reading = read.available ? [read.summary.replace(/ The .* alert has not arrived\.$/, ""), ...read.lines.map((l) => l.text)] : [];
   return {
     available: reading.length > 0,
     approved_by_parity: [p, g].filter(Boolean).every((x) => x.approved),
     reading,
     buy_confirmed: r38?.buy_confirmed === true,
-    sell_confirmed: r38?.sell_confirmed === true
+    sell_confirmed: r38?.sell_confirmed === true,
+    buy_setup_ready: setup?.buy_ready === true,
+    sell_setup_ready: setup?.sell_ready === true
   };
 }
 

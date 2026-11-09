@@ -8,11 +8,12 @@
 // events travel in the alert payloads, so the decision lane never saw the state and read every
 // later bar as "no signal".
 //
-// This module reproduces that state from the same R38 core outputs the H1 producer uses, and
-// local-publisher attaches it to the prophet record as values.setup. It lives OUTSIDE the hashed
-// engine files on purpose: h1-producer.mjs and core.mjs are part of every parity identity, and a
-// change there would make the approved engines re-earn their 24 matches. values.setup is not a
-// comparable field (no alert carries it), so parity never compares it.
+// This module reproduces that state from the same R38 core outputs the producers use, and
+// local-publisher attaches it to the prophet record of each chart as values.setup (H1 first,
+// then 15m, H4 and D1: backlog item 16, 2026-11-09). It lives OUTSIDE the hashed engine files on
+// purpose: the producers and core.mjs are part of every parity identity, and a change there would
+// make the approved engines re-earn their 24 matches. values.setup is not a comparable field (no
+// alert carries it), so parity never compares it.
 //
 // Pine (The-Prophet-v7.02-R38, non-legacy):
 //   decision_buy_setup_active = latest_is_buy and buy_window_active and inten == 3.0      (line 424)
@@ -25,8 +26,20 @@
 import { calculateProphetR38Core } from "../../prophet-r38/src/core.mjs";
 
 export const PROPHET_SETUP_VERSION = "cryptophys.prophet-setup.v1";
-// Same slice as h1-producer.mjs (H1_WINDOW), so the core sees the same bars.
-const H1_WINDOW = 1000;
+const TICKERID = "OANDA:XAUUSD";
+
+/**
+ * How each producer builds its Prophet R38 input, mirrored here so the core sees the same bars:
+ * the series, the window (every producer slices the last 1000 bars), Pine's timeframe.period and
+ * the chart minutes. The H1 producer passes its own slice as the H1 higher timeframe; the others
+ * pass the unsliced H1 series.
+ */
+export const SETUP_CHARTS = Object.freeze({
+  H1: Object.freeze({ series: "H1", period: "60", minutes: 60, window: 1000, h1_from_slice: true }),
+  M15: Object.freeze({ series: "M15", period: "15", minutes: 15, window: 1000, h1_from_slice: false }),
+  H4: Object.freeze({ series: "H4", period: "240", minutes: 240, window: 1000, h1_from_slice: false }),
+  D1: Object.freeze({ series: "D1", period: "1D", minutes: 1440, window: 1000, h1_from_slice: false })
+});
 
 const finite = (x) => typeof x === "number" && Number.isFinite(x);
 const bars = (frame) => (Array.isArray(frame?.candles) ? frame.candles : []);
@@ -90,35 +103,43 @@ export function prophetSetupState(outputs) {
 }
 
 /**
- * The H1 setup state built exactly as the H1 producer builds its record: the last H1_WINDOW H1
- * bars, confirmed, with the native TradingView higher timeframes. Returns { candle_key, state }.
+ * The setup state of a chart built exactly as its producer builds the record: the last 1000 bars
+ * of the chart's series, confirmed, with the native TradingView higher timeframes.
+ * Returns { candle_key, state }; { candle_key: null, state: null } without bars.
  */
-export function h1ProphetSetup(bundle, { mintick = 0.001 } = {}) {
-  const h1 = bars(bundle?.timeframes?.H1).slice(-H1_WINDOW);
-  const last = h1.at(-1);
+export function chartProphetSetup(bundle, chart = "H1", { mintick = 0.001 } = {}) {
+  const spec = SETUP_CHARTS[chart];
+  if (!spec) throw Object.assign(new Error(`unsupported chart: ${chart}`), { code: "unsupported_chart" });
+  const series = bars(bundle?.timeframes?.[spec.series]).slice(-spec.window);
+  const last = series.at(-1);
   if (!last) return { candle_key: null, state: null };
-  const r38 = calculateProphetR38Core(h1.map((b) => ({ ...b, confirmed: true })), {
-    timeframe_minutes: 60,
+  const r38 = calculateProphetR38Core(series.map((b) => ({ ...b, confirmed: true })), {
+    timeframe_minutes: spec.minutes,
     gmi_closed_only: true,
     mintick,
     higher_timeframes: {
-      M15: bars(bundle.timeframes.M15), H1: h1, H4: bars(bundle.timeframes.H4),
+      M15: bars(bundle.timeframes.M15), H1: spec.h1_from_slice ? series : bars(bundle.timeframes.H1), H4: bars(bundle.timeframes.H4),
       D1: bars(bundle.timeframes.D1), W1: bars(bundle.timeframes.W1)
     }
   });
-  return { candle_key: "OANDA:XAUUSD:60:" + Date.parse(last.open_time), state: prophetSetupState(r38.outputs) };
+  return { candle_key: `${TICKERID}:${spec.period}:${Date.parse(last.open_time)}`, state: prophetSetupState(r38.outputs) };
+}
+
+/** The H1 chart (the first carrier, #192). */
+export function h1ProphetSetup(bundle, opts = {}) {
+  return chartProphetSetup(bundle, "H1", opts);
 }
 
 /**
- * Attaches values.setup to the prophet record of a built H1 candle when the state is for the same
+ * Attaches values.setup to the prophet record of a built candle when the state is for the same
  * candle and agrees with the record's one-bar events; otherwise leaves the record untouched and
  * says why. Never throws: a failure here must not block the engine publish.
  */
-export function attachProphetSetup(built, bundle, { mintick = 0.001 } = {}) {
+export function attachProphetSetup(built, bundle, { chart = "H1", mintick = 0.001 } = {}) {
   const record = (built?.records || []).find((r) => r?.engine === "prophet");
   if (!record) return { status: "no_prophet_record" };
   let setup;
-  try { setup = h1ProphetSetup(bundle, { mintick }); }
+  try { setup = chartProphetSetup(bundle, chart, { mintick }); }
   catch (error) { return { status: "setup_failed", error: typeof error?.code === "string" ? error.code : String(error?.message || "").slice(0, 120) }; }
   if (!setup.state) return { status: "no_state" };
   if (setup.candle_key !== built.candle_key) return { status: "candle_mismatch" };

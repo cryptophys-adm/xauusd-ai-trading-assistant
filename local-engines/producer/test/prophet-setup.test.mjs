@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { prophetSetupState, h1ProphetSetup, attachProphetSetup, PROPHET_SETUP_VERSION } from "../src/prophet-setup.mjs";
+import { prophetSetupState, h1ProphetSetup, chartProphetSetup, attachProphetSetup, PROPHET_SETUP_VERSION, SETUP_CHARTS } from "../src/prophet-setup.mjs";
 import { buildH1LocalCalculations } from "../src/h1-producer.mjs";
+import { buildM15LocalCalculations } from "../src/m15-local-producer.mjs";
+import { buildHtfLocalCalculations } from "../src/htf-local-producer.mjs";
 import { validateLocalCalculation, containsCredentialFields } from "../../../src/evidence-fusion.mjs";
 import { identityOf } from "../../../src/parity-registry.mjs";
 
@@ -84,6 +86,28 @@ test("attached to the H1 prophet record: same candle, same events, valid contrac
   assert.equal(containsCredentialFields(prophet), false);
   assert.equal(built.records.find((r) => r.engine === "gmi").values.setup, undefined);
   assert.equal(h1ProphetSetup(bundle()).candle_key, built.candle_key);
+});
+
+test("the 15m, H4 and D1 charts carry the state too, keyed and sliced like their producers (backlog item 16)", () => {
+  const b = bundle();
+  // The M15 series ends with the 09:45 bar, closed at 10:00; `now` (10:03) is after that close.
+  const m15 = buildM15LocalCalculations(b, { now });
+  assert.equal(attachProphetSetup(m15, bundle(), { chart: "M15" }).status, "attached");
+  const m15Setup = m15.records.find((r) => r.engine === "prophet").values.setup;
+  assert.equal(m15Setup.confirmation_window, 3, "15m: 3 closed bars (timeframe > 5 minutes)");
+  assert.equal(m15Setup.buy_confirmed, m15.records[1].values.comparable.prophet_r38.buy_confirmed);
+  assert.equal(chartProphetSetup(bundle(), "M15").candle_key, m15.candle_key);
+  for (const chart of ["H4", "D1"]) {
+    const built = buildHtfLocalCalculations(b, { chart, now: Date.parse("2026-11-03T10:03:00Z") });
+    const result = attachProphetSetup(built, bundle(), { chart });
+    assert.equal(result.status, "attached", `${chart}: ${JSON.stringify(result)}`);
+    const setup = built.records.find((r) => r.engine === "prophet").values.setup;
+    assert.equal(setup.version, PROPHET_SETUP_VERSION);
+    assert.equal(setup.buy_confirmed, built.records.find((r) => r.engine === "prophet").values.comparable.prophet_r38.buy_confirmed);
+    assert.equal(chartProphetSetup(bundle(), chart).candle_key, built.candle_key, `${chart}: Pine timeframe.period ${SETUP_CHARTS[chart].period}`);
+  }
+  assert.equal(attachProphetSetup(m15, bundle(), { chart: "H1" }).status, "candle_mismatch", "the wrong chart never attaches");
+  assert.throws(() => chartProphetSetup(bundle(), "M5"), /unsupported chart/);
 });
 
 test("a state for another candle, or one that disagrees with the record, is not attached", () => {
