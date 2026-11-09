@@ -194,6 +194,7 @@ import { runPendingMacroRooms, readMacroRoom } from "./macro-room.mjs";
 import { readParityView } from "./parity-view.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
 import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weighting.mjs";
+import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -2298,6 +2299,16 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/ea/signal") {
+    // The MT5 Expert Advisor's signal (owner decisions 2026-11-09, src/ea-signal.mjs): one flat object.
+    // Behind Cloudflare Access (ai.cryptophys.work/api/*): the EA sends a service token.
+    try { return dashboardJson(await eaSignal(env)); }
+    catch (error) { console.error("ea_signal_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ kill: true, side: "NONE", error: "unavailable" }, 500); }
+  }
+  if (url.pathname === "/api/ea/status") {
+    try { return dashboardJson({ status: "ok", ...(await eaStatus(env)) }); }
+    catch (error) { console.error("ea_status_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
+  }
   if (url.pathname === "/api/weighting") {
     // The H1 quorum weighting (src/weighting.mjs): the active point, each agent's own weight, the replay
     // of the neighbouring grid points (discovery with Holm, holdout), the reverse shadow and the history.
@@ -2426,6 +2437,17 @@ export default {
           ingest_secret: Boolean(env.INGEST_SECRET)
         }
       });
+    }
+    if (request.method === "POST" && url.pathname === "/api/ea/heartbeat") {
+      // The EA's state for monitoring (src/ea-signal.mjs); behind Cloudflare Access like every /api/* path.
+      let body: unknown;
+      try {
+        const limited = await readBodyLimited(request, 4096);
+        if (limited.tooLarge) return json({ error: "Payload exceeds 4 KiB limit" }, 413);
+        body = JSON.parse(limited.text);
+      } catch { return json({ error: "Request body must be valid JSON" }, 400); }
+      const r = await storeHeartbeat(env, body);
+      return json(r, r.ok ? 200 : 400);
     }
     if (request.method === "POST" && url.pathname === "/webhook") {
       return handleWebhook(request, env);
