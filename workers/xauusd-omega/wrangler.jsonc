@@ -25,7 +25,7 @@
   // when the Access application's audience can be resolved; the team domain is fixed.
   "vars": {
     "ACCESS_TEAM_DOMAIN": "cryptophys.cloudflareaccess.com",
-    "OMEGA_BRIDGE_CLIENT_ID": ""
+    "OMEGA_BRIDGE_CLIENT_ID": "71282ac4d693191beed607578d375dff.access"
   },
   // Static page (no build step). run_worker_first: the JWT is checked before any asset is served.
   "assets": {
