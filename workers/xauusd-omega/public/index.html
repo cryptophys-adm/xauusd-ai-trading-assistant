@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Omega · XAUUSD Execution Engine</title>
+<link rel="stylesheet" href="/omega.css">
+<script type="module" src="/omega.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">Ω</span><div><div class="title">Omega</div><div class="sub">XAUUSD Execution Engine</div></div></div>
+  <div class="chips" id="chips"></div>
+  <div class="who" id="who"></div>
+</header>
+<main id="root">
+  <section class="grid">
+    <article class="card" id="card-signal"><h2>Signal</h2><div class="body" data-slot="signal"><p class="dim">Loading…</p></div></article>
+    <article class="card" id="card-control"><h2>Control</h2><div class="body" data-slot="control"></div>
+      <form id="control-form" class="control" autocomplete="off">
+        <label class="label" for="reason">Reason</label>
+        <input class="field" id="reason" name="reason" maxlength="200" placeholder="Required to pause or kill">
+        <div class="row">
+          <button type="button" class="btn btn-approve" data-mode="active">Resume</button>
+          <button type="button" class="btn" data-mode="paused">Pause entries</button>
+          <button type="button" class="btn btn-danger" data-mode="killed">Kill (close all)</button>
+        </div>
+        <div class="kill-confirm" hidden>
+          <label class="label" for="confirm">Type KILL to close every EA position and stop the EA</label>
+          <div class="row"><input class="field" id="confirm" maxlength="8"><button type="button" class="btn btn-danger" id="kill-go">Confirm kill</button><button type="button" class="btn" id="kill-cancel">Cancel</button></div>
+        </div>
+        <p class="msg" id="control-msg" role="status"></p>
+      </form>
+    </article>
+    <article class="card" id="card-ea"><h2>Expert Advisor</h2><div class="body" data-slot="ea"></div></article>
+  </section>
+  <section class="grid stats" data-slot="stats"></section>
+  <section class="card wide"><h2>Open positions</h2><div class="table-wrap" data-slot="positions"></div></section>
+  <section class="card wide"><h2>Closed deals</h2><div class="table-wrap" data-slot="deals"></div></section>
+  <section class="card wide"><h2>Control audit</h2><div class="table-wrap" data-slot="events"></div></section>
+</main>
+<footer class="foot">Omega shows and controls the EA on your MT5 terminal. The server never sizes a trade, never places an order and holds no broker credential. Updated <span id="updated">—</span>.</footer>
+</body>
+</html>

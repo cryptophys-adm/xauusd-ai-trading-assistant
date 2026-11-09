@@ -2,13 +2,14 @@
 
 This is the single source of truth for the system's topology, ownership and deployment. If any other document disagrees with this one, this one wins and the other document is historical. Last reconciled: 2026-11-07. Change log: docs/CHANGELOG.md.
 
-## 1. Production topology: exactly four Workers
+## 1. Production topology: exactly five Workers
 | Worker | Source | Deployed by (only on push to `main`) | Role |
 |---|---|---|---|
 | `xauusd-ai-trading-assistant` | `src/`, `wrangler.jsonc` | `deploy-worker.yml` | Webhooks, evidence fusion, autonomous parity registry, the H1 decision (the Reasoner, after the 1H War Room's Consensus Discussion), the dashboard read API (`/api/*`) and Telegram |
 | `xauusd-fundamental-news-ingestion` | `fundamental-news-ingestion/` | `deploy-fundamental-news-ingestion.yml` (Workers Builds also builds it) | Owns the single TradingView MCP OAuth grant at `news.cryptophys.work/oauth/start`. Serves news (`/pull`, cron `:05`, RPC `NewsIngestionService`) and OHLCV (RPC `TvGateway`) |
 | `xauusd-tradingview-pull-adapter` | `market-data-ingestion/`, `local-engines/` | `deploy-market-data-ingestion.yml` | The only owner of local computation for MizanLib, Prophet and GMI (see §3). Serves chart data (RPC `MarketDataReader`) |
 | `xauusd-nexus-dashboard` | `workers/xauusd-nexus-dashboard/` | `deploy-nexus-dashboard.yml` | `nexus.cryptophys.work` serves the UI. `/api/ohlcv` comes from `MarketDataReader`; every other `/api/*` request is proxied to the AI Worker |
+| `xauusd-omega` | `workers/xauusd-omega/` | `deploy-omega.yml` | `omega.cryptophys.work`, the Omega Execution Engine (owner decisions 2026-11-09): shows the MT5 EA and sets its control (active, paused, killed) through the AI Worker's `OmegaGateway` RPC entrypoint; verifies the Access JWT itself. Never places an order |
 
 Removed on 2026-11-04 and **never to be redeployed**:
 - `xauusd-mizan-engine`, `xauusd-prophet-engine` and `xauusd-gmi-engine`: stubs that reported `production_ready: true` without computing anything.
@@ -646,6 +647,14 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - The EA (`ea/mt5/CryptophysXAUUSD.mq5`, guide `docs/EA_MT5.md`) runs on the owner's MetaTrader 5 terminal: it sizes from `RiskPercent` of equity and the stop distance, keeps the plan's stop and target distances, and never enters on an old or expired signal, in a blackout, above the spread limit, after the daily loss limit, beyond its position limit, or on a real account without `AllowLiveAccount`. `kill` closes its positions.
 - `POST /api/ea/heartbeat` keeps the EA's last state in KV (`ea:heartbeat:last`, 2 days; no account number); `GET /api/ea/status` shows it beside the signal.
 - The EA authenticates with a Cloudflare Access service token named `cryptophys-agent-*`, admitted by the platform's **Provision Cloudflare Access** workflow. The server holds no broker credential and gives no position size.
+
+### Omega Execution Engine (owner decisions 2026-11-09: a page separate from Nexus and Aether; monitor + control; its own subdomain; per-position data from the EA)
+- **Worker** `xauusd-omega` (`workers/xauusd-omega`), custom domain `omega.cryptophys.work`, no workers.dev or preview URL. A static page (no build) and `/api/overview`, `/api/deals`, `/api/whoami`, `POST /api/control`. Its only data path is the Service Binding `OMEGA` to the AI Worker's RPC entrypoint `OmegaGateway` (`overview`, `deals`, `setControl`).
+- **Access:** the hostname is in the platform's Access application (`PUBLIC_HOSTNAMES` of `provision-access.yml`, ADR-0010 amendment of 2026-11-09). The Worker verifies the `Cf-Access-Jwt-Assertion` JWT itself on every request but `/health` (RS256 against `cryptophys.cloudflareaccess.com`, issuer, expiry, and the audience when the deploy could resolve `ACCESS_AUD`), so it fails closed. A control change needs a person (never a service token), a same-origin JSON request, a reason to pause or kill and the typed `KILL`; the page has a strict CSP (same-origin script and style, no inline code).
+- **Control** (`src/ea-execution.mjs`, KV `ea:control`): `active`, `paused` (the signal carries `paused`: the EA makes no new entry and deletes its pending orders) or `killed` (the signal's `kill`, `kill_source` `omega`: the EA closes its positions and stops). Each change is audited in D1 `ea_control_events` (time, previous and new mode, reason, the Access email). `EA_SIGNALS_ENABLED = "false"` stays above it (`kill_source` `env`).
+- **EA data:** the heartbeat (`POST /api/ea/heartbeat`, 16 KiB) keeps up to 20 open positions (`positions_detail`: ticket, side, volume, entry, stop, target, profit, swap, open time, signal) and the floating and today's P&L; each closed position is `POST /api/ea/deal` into D1 `ea_deals` (once per deal ticket and close time; side, volume, entry and exit, stop and target, profit, commission, swap, reason, signal, open and close times, account mode and currency). No account number anywhere.
+- **Statistics** (`dealStats`, net = profit + commission + swap): trades, wins, win rate, net, profit factor, average win and loss, maximum drawdown; today (UTC), 7 and 30 days.
+- Omega never places an order, never sizes a position and holds no broker credential. It is unrelated to the legacy `omega` execution swarm of `cryptophys-cloud-platform`, which stays prohibited and was never migrated.
 
 ### Room quorum weighting, tuned automatically per timeframe (owner decisions 2026-11-09, `src/weighting.mjs`, `src/weighting-replay.mjs`, `src/market-regime.mjs`)
 - **Owner decisions of 2026-11-09:** "nanti aether yang akan membuat tuning persamaan pembobotan berdasarkan hasil learning, masing-masing agent akan diberi score pembobotan sendiri"; then auto-tuning without an operator ("Otomatis + pengaman"), adapting to volatility and market dynamics ("Per regime + shrinkage … berlaku masing-masing timeframe independent"). This replaces the first release's activation by approval in the Console.

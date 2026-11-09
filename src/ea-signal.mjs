@@ -2,7 +2,10 @@
 // live"; execution by an EA on the owner's own terminal, ea/mt5/CryptophysXAUUSD.mq5).
 //
 // GET /api/ea/signal returns ONE flat JSON object the EA can read without a JSON library:
-//   kill            true when EA_SIGNALS_ENABLED is "false": the EA closes its positions and stops
+//   kill            true when EA_SIGNALS_ENABLED is "false" or Omega set the EA to "killed": the EA
+//                   closes its positions and stops (kill_source: "env" or "omega")
+//   paused          true when Omega paused the EA: no new entry and no pending order (the EA deletes
+//                   its pending orders); open positions keep their stop and target
 //   blackout        true from 2 hours before to 30 minutes after a High-impact USD event (the event gate)
 //   signal_id       the H1 candle key of the latest BUY or SELL decision ("" without one)
 //   side            BUY, SELL or NONE (the latest H1 decision is WAIT, or no priced decision)
@@ -14,7 +17,9 @@
 //   server_ms       the server time
 // The server never sizes a position and never holds a broker credential: the EA sizes each trade
 // from the owner's risk input, on the owner's terminal. POST /api/ea/heartbeat keeps the EA's last
-// state (mode, positions, last signal, daily loss) for monitoring; it carries no account number.
+// state (mode, positions with their levels and floating P&L, last signal, daily loss) for monitoring;
+// it carries no account number. The control (active, paused, killed) is set by Omega
+// (omega.cryptophys.work, src/ea-execution.mjs) and kept in KV under EA_CONTROL_KEY.
 
 import { eventRisk, gatedEvents } from "./econ-calendar.mjs";
 
@@ -24,9 +29,10 @@ const SYMBOL = "OANDA:XAUUSD";
 const isPrice = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
 
 /** Pure: the EA's signal from the latest H1 synthesis (ai_analysis JSON) and the context. */
-export function eaSignalFrom({ candleKey = null, analysis = null, kill = false, blackout = false, blackoutReason = null, marketPrice = null, marketMs = null, now = Date.now() } = {}) {
+export function eaSignalFrom({ candleKey = null, analysis = null, kill = false, killSource = "", paused = false, blackout = false, blackoutReason = null, marketPrice = null, marketMs = null, now = Date.now() } = {}) {
   const base = {
-    version: EA_SIGNAL_VERSION, kill: Boolean(kill), blackout: Boolean(blackout), blackout_reason: blackoutReason ?? "",
+    version: EA_SIGNAL_VERSION, kill: Boolean(kill), kill_source: kill ? String(killSource || "env") : "", paused: Boolean(paused) && !kill,
+    blackout: Boolean(blackout), blackout_reason: blackoutReason ?? "",
     signal_id: "", side: "NONE", action: "", entry: 0, stop: 0, tp1: 0, risk_reward: 0, confidence: 0,
     issued_ms: 0, expires_ms: 0, market_price: isPrice(marketPrice) ? marketPrice : 0, market_ms: Number.isFinite(marketMs) ? marketMs : 0, server_ms: now
   };
@@ -48,7 +54,11 @@ export function eaSignalFrom({ candleKey = null, analysis = null, kill = false, 
 
 /** Loads the latest H1 decision, the event gate and the feed price, and builds the signal. Never throws. */
 export async function eaSignal(env, { now = Date.now() } = {}) {
-  const kill = String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
+  const envKill = String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
+  const control = await readControl(env);
+  const kill = envKill || control.mode === "killed";
+  const killSource = envKill ? "env" : control.mode === "killed" ? "omega" : "";
+  const paused = control.mode === "paused";
   let candleKey = null, analysis = null;
   try {
     const row = await env.DB.prepare("SELECT candle_key, ai_analysis FROM ai_syntheses WHERE candle_key LIKE ? ORDER BY id DESC LIMIT 1").bind(`${SYMBOL}:60:%`).first();
@@ -66,14 +76,35 @@ export async function eaSignal(env, { now = Date.now() } = {}) {
     const last = (Array.isArray(rec?.candles) ? rec.candles : []).filter((c) => isPrice(c?.close) && c.close_time).sort((a, b) => Date.parse(a.close_time) - Date.parse(b.close_time)).at(-1);
     if (last) { marketPrice = last.close; marketMs = Date.parse(last.close_time); }
   } catch { marketPrice = null; }
-  return eaSignalFrom({ candleKey, analysis, kill, blackout, blackoutReason, marketPrice, marketMs, now });
+  return eaSignalFrom({ candleKey, analysis, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now });
 }
 
 export const EA_HEARTBEAT_KEY = "ea:heartbeat:last";
 const HEARTBEAT_FIELDS = Object.freeze({
   ea: "string", version: "string", mode: "string", trading_allowed: "boolean", positions: "number",
-  last_signal_id: "string", daily_loss_pct: "number", spread_points: "number", note: "string"
+  last_signal_id: "string", daily_loss_pct: "number", spread_points: "number", note: "string",
+  control: "string", floating_pnl: "number", today_pnl: "number", currency: "string", terminal_ms: "number"
 });
+const POSITION_FIELDS = Object.freeze({
+  ticket: "number", side: "string", volume: "number", entry: "number", sl: "number", tp: "number",
+  profit: "number", swap: "number", opened_ms: "number", signal_id: "string"
+});
+export const HEARTBEAT_MAX_POSITIONS = 20;
+/** The heartbeat fields the server keeps (positions_detail holds the open positions). */
+export const HEARTBEAT_FIELD_NAMES = Object.freeze([...Object.keys(HEARTBEAT_FIELDS), "positions_detail"]);
+
+/** Pure: one open position of a heartbeat (known fields only), or null. */
+export function positionFrom(p) {
+  if (!p || typeof p !== "object" || Array.isArray(p)) return null;
+  const out = {};
+  for (const [k, type] of Object.entries(POSITION_FIELDS)) {
+    const v = p[k];
+    if (typeof v === type && (type !== "number" || Number.isFinite(v))) out[k] = type === "string" ? String(v).slice(0, 80) : v;
+  }
+  out.side = String(out.side || "").toUpperCase();
+  if (!(out.side === "BUY" || out.side === "SELL") || !Number.isFinite(out.ticket)) return null;
+  return out;
+}
 
 /** Pure: the heartbeat kept from an EA's POST body: only the known fields, no account number. */
 export function heartbeatFrom(body, { now = Date.now() } = {}) {
@@ -81,10 +112,26 @@ export function heartbeatFrom(body, { now = Date.now() } = {}) {
   const out = { received_at: new Date(now).toISOString() };
   for (const [k, type] of Object.entries(HEARTBEAT_FIELDS)) {
     const v = body[k];
-    if (typeof v === type) out[k] = type === "string" ? String(v).slice(0, 120) : v;
+    if (typeof v === type && (type !== "number" || Number.isFinite(v))) out[k] = type === "string" ? String(v).slice(0, 120) : v;
   }
   if (!["demo", "live", "contest"].includes(out.mode)) out.mode = "unknown";
+  if (Array.isArray(body.positions_detail)) out.positions_detail = body.positions_detail.slice(0, HEARTBEAT_MAX_POSITIONS).map(positionFrom).filter(Boolean);
   return out;
+}
+
+// ---------------------------------------------------------------- control (Omega)
+
+export const EA_CONTROL_KEY = "ea:control";
+export const CONTROL_MODES = Object.freeze(["active", "paused", "killed"]);
+const DEFAULT_CONTROL = Object.freeze({ mode: "active", reason: "", actor: "", at: null });
+
+/** The EA control set by Omega (KV), or "active". Never throws. */
+export async function readControl(env) {
+  try {
+    const c = JSON.parse((await env?.SIGNAL_CACHE?.get?.(EA_CONTROL_KEY)) || "null");
+    if (c && CONTROL_MODES.includes(c.mode)) return { ...DEFAULT_CONTROL, ...c };
+  } catch { /* the default */ }
+  return { ...DEFAULT_CONTROL };
 }
 
 /** Stores an EA heartbeat (KV, 2 days). */
@@ -99,5 +146,5 @@ export async function storeHeartbeat(env, body, { now = Date.now() } = {}) {
 export async function eaStatus(env, { now = Date.now() } = {}) {
   let heartbeat = null;
   try { heartbeat = JSON.parse((await env.SIGNAL_CACHE?.get?.(EA_HEARTBEAT_KEY)) || "null"); } catch { heartbeat = null; }
-  return { signal: await eaSignal(env, { now }), heartbeat };
+  return { signal: await eaSignal(env, { now }), heartbeat, control: await readControl(env) };
 }

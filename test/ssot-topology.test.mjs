@@ -1,5 +1,5 @@
 // Guards the canonical topology in docs/SSOT.md and AGENTS.md: no Wrangler
-// config may declare a Worker outside the four production Workers, the removed
+// config may declare a Worker outside the five production Workers, the removed
 // legacy Workers may never come back, and the live docs agree with each other.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PRODUCTION = ["xauusd-ai-trading-assistant", "xauusd-fundamental-news-ingestion", "xauusd-tradingview-pull-adapter", "xauusd-nexus-dashboard"];
+const PRODUCTION = ["xauusd-ai-trading-assistant", "xauusd-fundamental-news-ingestion", "xauusd-tradingview-pull-adapter", "xauusd-nexus-dashboard", "xauusd-omega"];
 const PREVIEW_ONLY = ["xauusd-ai-trading-assistant-preview"];
 const REMOVED = ["xauusd-mizan-engine", "xauusd-prophet-engine", "xauusd-gmi-engine", "xauusd-market-data-normalizer", "xauusd-pull-orchestrator", "xauusd-confluence-controller"];
 const SKIP = new Set(["node_modules", ".git", "recovered"]);

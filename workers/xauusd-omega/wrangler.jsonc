@@ -1,0 +1,38 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "xauusd-omega",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-10-31",
+  // Omega Execution Engine (owner decisions 2026-11-09): its own subdomain, separate from Nexus and
+  // Aether, behind Cloudflare Access. No public workers.dev or preview URL.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "omega.cryptophys.work",
+      "custom_domain": true
+    }
+  ],
+  // The only data path: the AI Worker's OmegaGateway entrypoint (RPC over a Service Binding, no secret).
+  "services": [
+    {
+      "binding": "OMEGA",
+      "service": "xauusd-ai-trading-assistant",
+      "entrypoint": "OmegaGateway"
+    }
+  ],
+  // The Worker verifies the Access JWT itself (fail closed). ACCESS_AUD is added by the deploy workflow
+  // when the Access application's audience can be resolved; the team domain is fixed.
+  "vars": {
+    "ACCESS_TEAM_DOMAIN": "cryptophys.cloudflareaccess.com"
+  },
+  // Static page (no build step). run_worker_first: the JWT is checked before any asset is served.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "observability": {
+    "enabled": true
+  }
+}

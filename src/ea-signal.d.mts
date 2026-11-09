@@ -5,3 +5,9 @@ export function eaSignal(env: unknown, options?: { now?: number }): Promise<Reco
 export function heartbeatFrom(body: unknown, options?: { now?: number }): Record<string, any> | null;
 export function storeHeartbeat(env: unknown, body: unknown, options?: { now?: number }): Promise<{ ok: boolean; error?: string }>;
 export function eaStatus(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export const EA_CONTROL_KEY: string;
+export const CONTROL_MODES: readonly string[];
+export const HEARTBEAT_MAX_POSITIONS: number;
+export function positionFrom(p: unknown): Record<string, any> | null;
+export function readControl(env: unknown): Promise<{ mode: string; reason: string; actor: string; at: string | null }>;
+export const HEARTBEAT_FIELD_NAMES: readonly string[];
