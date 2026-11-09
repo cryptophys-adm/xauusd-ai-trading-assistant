@@ -25,6 +25,12 @@
     {
       "binding": "AI_WORKER",
       "service": "xauusd-ai-trading-assistant"
+    },
+    // Aether's read-only overview for the Aether page (/aether, owner 2026-11-09): RPC, no secret.
+    {
+      "binding": "AETHER",
+      "service": "cryptophys-aether",
+      "entrypoint": "AetherReader"
     }
   ],
   // Nexus UI (React SPA in the Cerebrum Console obsidian design), built from ui/ into ui/dist by the

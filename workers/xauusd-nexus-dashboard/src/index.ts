@@ -5,6 +5,9 @@
  * ui/dist and served as Workers Static Assets), plus read-only data routes:
  *   GET /api/ohlcv       closed TradingView bars via the MarketDataReader RPC (no secret, no MCP call)
  *   GET /api/local-lane  read-only diagnostics of the pull adapter
+ *   GET /api/aether/overview  Aether's read-only overview, via its AetherReader RPC (the Aether page)
+ *   GET /aether          the SPA's Aether page (owner 2026-11-09: nexus.cryptophys.work/aether, behind
+ *                        the same Cloudflare Access sign-in as the rest of Nexus)
  *   GET /api/*           everything else is proxied to the AI Worker's read-only dashboard API, over the
  *                        AI_WORKER Service Binding (never the public internet, so the AI Worker's /api
  *                        can sit behind Cloudflare Access without breaking Nexus)
@@ -23,8 +26,12 @@ interface MarketDataReader {
   candles(options: { timeframe?: string; limit?: number }): Promise<{ status: number; body: unknown }>;
   diagnostics(): Promise<{ status: number; body: unknown }>;
 }
+interface AetherReader {
+  overview(): Promise<unknown>;
+}
 interface Env {
   MARKET_DATA?: MarketDataReader;
+  AETHER?: AetherReader;
   AI_WORKER?: { fetch(request: Request): Promise<Response> };
   ASSETS?: { fetch(request: Request): Promise<Response> };
 }
@@ -56,6 +63,15 @@ export default {
       }
     }
 
+    if (request.method === "GET" && url.pathname === "/api/aether/overview") {
+      if (typeof env.AETHER?.overview !== "function") return json({ error: "aether_binding_missing" }, 503);
+      try {
+        return new Response(JSON.stringify(await env.AETHER.overview()), { status: 200, headers: { ...JSON_HEADERS, "cache-control": "no-store" } });
+      } catch {
+        return json({ error: "aether_unavailable" }, 502);
+      }
+    }
+
     if (url.pathname.startsWith("/api/")) {
       // Read-only: only GET and HEAD reach the AI Worker from Nexus.
       if (request.method !== "GET" && request.method !== "HEAD") return json({ error: "method_not_allowed" }, 405);
@@ -79,7 +95,9 @@ export default {
     if (url.pathname === "/dashboard") return Response.redirect(url.origin + "/", 302);
 
     if (env.ASSETS && (request.method === "GET" || request.method === "HEAD")) {
-      const res = await env.ASSETS.fetch(request);
+      // Page paths of the SPA (no hash): the shell; the app reads the path.
+      const shell = url.pathname === "/aether" || url.pathname === "/aether/";
+      const res = await env.ASSETS.fetch(shell ? new Request(url.origin + "/", { method: request.method, headers: request.headers }) : request);
       const headers = new Headers(res.headers);
       // Hashed bundles are immutable; the HTML shell is always revalidated.
       headers.set("cache-control", url.pathname.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-store");
@@ -88,6 +106,6 @@ export default {
       return new Response(res.body, { status: res.status, headers });
     }
 
-    return json({ error: "Not found", endpoints: ["GET /", "GET /#/shadow", "GET /api/ohlcv", "GET /api/local-lane", "GET /api/*"] }, 404);
+    return json({ error: "Not found", endpoints: ["GET /", "GET /#/shadow", "GET /aether", "GET /api/ohlcv", "GET /api/local-lane", "GET /api/aether/overview", "GET /api/*"] }, 404);
   }
 };
