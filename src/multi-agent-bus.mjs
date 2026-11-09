@@ -148,7 +148,7 @@ function pick(object, keys) {
 }
 
 const WEBHOOK_FIELDS = {
-  prophet_r38: ["direction", "buy_confirmed", "sell_confirmed", "buy_high_quality", "sell_high_quality", "t_enc", "d_enc", "structure_subtype", "o", "h", "l", "c", "volume", "candle_time"],
+  prophet_r38: ["direction", "buy_confirmed", "sell_confirmed", "buy_high_quality", "sell_high_quality", "t_enc", "d_enc", "structure_subtype", "setup_state", "o", "h", "l", "c", "volume", "candle_time"],
   prophet_r37_ssot: ["direction", "d_enc", "b_enc", "structure_subtype", "bull_event", "bear_event", "candle_time"],
   gmi_v12_70: ["verdict", "gate", "gmi_dir", "prophet_dir", "conflict", "candle_time"]
 };

@@ -97,6 +97,11 @@ test("the TLDR: plain summary, one to three reasons, dissent by id, no entry wit
   assert.ok(validateTfConclusion({ ...ok, dissent: [] }, { h1Decision: "BUY" }).errors.includes("h1_reference_missing"));
   assert.equal(validateTfConclusion({ ...ok, dissent: [], summary: "H1 decision: BUY, but the room waits for confirmation." }, { h1Decision: "BUY" }).valid, true);
   assert.equal(tfEntryAllowed("HOLD", none), true);
+  // Owner report 2026-11-09: the setup still READY after its one-bar event counts as the confirmation.
+  const ready = { chart_prophet_r38: { buy_confirmed: false, sell_confirmed: false, buy_setup_ready: true, sell_setup_ready: false } };
+  assert.equal(tfEntryAllowed("BUY", ready), true, "a BUY setup still READY allows a BUY");
+  assert.equal(tfEntryAllowed("SELL", ready), false, "and never a SELL");
+  assert.equal(validateTfConclusion({ ...buy }, { confirmations: ready }).valid, true);
 });
 
 test("evidence is the closed bar, its HUD snapshot and its local Prophet R38 confirmation; a bar not in the series gives none", async () => {

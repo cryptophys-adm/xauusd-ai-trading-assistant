@@ -221,6 +221,9 @@ export function indicatorPayloadsFromLocal(localCalculations, { symbol, timefram
       o: candle.o, h: candle.h, l: candle.l, c: candle.c, volume: candle.volume,
       ...fields
     };
+    // The Prophet setup state (local lane only, owner report 2026-11-09): the HUD's READY line
+    // that outlives the one-bar buy_confirmed / sell_confirmed events. Never a parity field.
+    if (source === "prophet_r38" && isRecord(record.values.setup)) out[source].setup_state = record.values.setup;
   }
   return out;
 }

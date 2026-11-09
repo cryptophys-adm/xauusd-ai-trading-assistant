@@ -591,8 +591,14 @@ export async function liveEvidence(env, task, barTime) {
   // parity-approved Prophet R38 record behind the latest H1 decision; the 5m one from the bar's
   // 5m context, and it counts only while the 5m lane is VERIFIED.
   const r38 = parseJson(synth?.prophet_metrics, {})?.prophet_r38 || {};
+  // setup_state (owner report 2026-11-09): the Prophet setup still READY after its one-bar event.
+  const setup = r38.setup_state && typeof r38.setup_state === "object" ? r38.setup_state : null;
   const confirmations = {
-    h1_prophet_r38: { buy_confirmed: r38.buy_confirmed === true, sell_confirmed: r38.sell_confirmed === true },
+    h1_prophet_r38: {
+      buy_confirmed: r38.buy_confirmed === true, sell_confirmed: r38.sell_confirmed === true,
+      buy_setup_ready: setup?.buy_ready === true, sell_setup_ready: setup?.sell_ready === true,
+      ...(setup ? { setup_pass_age: setup.buy_ready ? setup.buy_pass_age : setup.sell_ready ? setup.sell_pass_age : null, setup_window: setup.confirmation_window ?? null, setup_instruction: setup.instruction ?? null } : {})
+    },
     m5_prophet_r38: { buy_confirmed: m5Raw.buy_confirmed === true, sell_confirmed: m5Raw.sell_confirmed === true, verified: m5Verified.verified === true }
   };
   return { evidence, synthesis: synth, confirmations };

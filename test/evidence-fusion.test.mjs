@@ -300,6 +300,8 @@ test("indicator payloads are derived from approved local records with the alert 
     const r = local(engine);
     r.trust_status = "approved_by_parity";
     r.values = { candle: { o: 1, h: 2, l: 0.5, c: 1.5, volume: 10 }, comparable: comparable[engine] || {} };
+    // The Prophet setup state rides on the prophet record (owner report 2026-11-09).
+    if (engine === "prophet") r.values.setup = { buy_ready: true, buy_pass_age: 1, confirmation_window: 3, instruction: "BUY_READY" };
     return r;
   });
   const out = indicatorPayloadsFromLocal(records, { symbol, timeframe, candleKey });
@@ -308,6 +310,9 @@ test("indicator payloads are derived from approved local records with the alert 
   assert.equal(out.prophet_r38.trust_status, "approved_by_parity");
   assert.equal(out.prophet_r38.buy_confirmed, true);
   assert.equal(out.prophet_r38.c, 1.5);
+  assert.deepEqual(out.prophet_r38.setup_state, { buy_ready: true, buy_pass_age: 1, confirmation_window: 3, instruction: "BUY_READY" }, "the setup state travels with prophet_r38 only");
+  assert.equal(out.prophet_r37_ssot.setup_state, undefined);
+  assert.equal(out.gmi_v12_70.setup_state, undefined);
   assert.equal(out.prophet_r37_ssot.d_enc, 1);
   assert.equal(out.gmi_v12_70.gate, 2);
   assert.equal(out.gmi_v12_70.candle_time, candleTime);

@@ -135,6 +135,9 @@ test("no confirmation, no entry: the Risk Manager enforces it and a BUY conclusi
   assert.equal(entryAllowed("BUY", none), false, "an UNVERIFIED 5m confirmation does not count");
   assert.equal(entryAllowed("BUY", { ...none, m5_prophet_r38: { ...none.m5_prophet_r38, verified: true } }), true, "a VERIFIED 5m confirmation candle does");
   assert.equal(entryAllowed("SELL", { ...none, h1_prophet_r38: { buy_confirmed: false, sell_confirmed: true } }), true);
+  // Owner report 2026-11-09: the H1 setup still READY after its one-bar event counts as the H1 confirmation.
+  assert.equal(entryAllowed("BUY", { ...none, h1_prophet_r38: { buy_confirmed: false, sell_confirmed: false, buy_setup_ready: true } }), true, "a BUY setup still READY allows a BUY");
+  assert.equal(entryAllowed("SELL", { ...none, h1_prophet_r38: { buy_confirmed: false, sell_confirmed: false, buy_setup_ready: true } }), false, "and never a SELL");
 
   const buy = { stance: "BUY", confidence: 0.6, summary: "H1 decision: WAIT, but the room buys the dip.", reasons: ["Momentum turned up."], dissent: [] };
   const ai = fakeAI({ conclusion: buy });
@@ -142,7 +145,7 @@ test("no confirmation, no entry: the Risk Manager enforces it and a BUY conclusi
   await runWarRoomBar(e, task());
   const room = await readWarRoom(e.DB);
   assert.equal(room.conclusion.status, "invalid_output", "no confirmed buy in this bar: the BUY conclusion is rejected");
-  assert.deepEqual(room.confirmations.h1_prophet_r38, { buy_confirmed: false, sell_confirmed: false });
+  assert.deepEqual(room.confirmations.h1_prophet_r38, { buy_confirmed: false, sell_confirmed: false, buy_setup_ready: false, sell_setup_ready: false });
   const riskOpening = ai.calls.find(c => /"agent":"risk"/.test(c.request.messages[1].content) && !/Consensus Discussion/.test(c.request.messages[0].content)).request.messages.map(m => m.content).join("\n");
   assert.match(riskOpening, /Rule: no confirmation, no entry/);
   assert.ok(JSON.parse(riskOpening.split("YOUR DATA:\n")[1]).confirmations, "the Risk Manager sees the confirmations");

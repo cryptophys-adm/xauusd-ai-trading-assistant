@@ -10,6 +10,7 @@ import { buildHtfLocalCalculations, HTF_CHARTS } from "../../local-engines/produ
 import { m5ContextFromRecords } from "../../local-engines/producer/src/m5-context.mjs";
 import { buildHudSnapshot } from "../../local-engines/producer/src/hud-snapshot.mjs";
 import { buildGmiHudRecord } from "../../local-engines/producer/src/gmi-hud-producer.mjs";
+import { attachProphetSetup } from "../../local-engines/producer/src/prophet-setup.mjs";
 
 const PUBLISHED_PREFIX = "market-data:v2:local-published:";
 export const LAST_PUBLISH_KEY = "market-data:v2:local-last-publish";
@@ -66,6 +67,9 @@ export async function publishLocalComputation(env, { now = Date.now(), force = f
   }
   const markerKey = PUBLISHED_PREFIX + built.candle_key;
   if (!force && (await kv.get(markerKey))) return { status: "already_published", candle_key: built.candle_key };
+  // The Prophet setup state (the HUD's READY line) rides on the prophet record as values.setup
+  // (owner report 2026-11-09). Computed outside the hashed engine files; never blocks the publish.
+  const prophetSetup = attachProphetSetup(built, resolvedBundle, { mintick: Number(env.CHART_MINTICK) || 0.001 });
 
   const results = [];
   for (const record of built.records) {
@@ -86,6 +90,7 @@ export async function publishLocalComputation(env, { now = Date.now(), force = f
     hud_parity: hudParity,
     not_produced: built.records.some((r) => r.engine === "gmi") ? [] : ["gmi"],
     gmi_error: built.gmi_error || null,
+    prophet_setup: prophetSetup,
     // The bar the records were built on, so a later revision of it can be detected.
     bar: barSnapshot(lastH1)
   };
@@ -133,6 +138,7 @@ export async function republishRevisedH1(env, { now = Date.now(), bundle = null 
       continue;
     }
     if (built.candle_key !== candleKey) { out.push({ candle_key: candleKey, status: "candle_key_mismatch" }); continue; }
+    attachProphetSetup(built, bundleUntil(resolvedBundle, Date.parse(bar.close_time)), { mintick: Number(env.CHART_MINTICK) || 0.001 });
     const results = [];
     for (const record of built.records) {
       try { results.push(await postRecord(env, record)); }

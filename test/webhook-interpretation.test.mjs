@@ -53,6 +53,19 @@ test("Prophet's direction comes from the R37 consensus even when R38 has no sign
   for (const t of [r.lines[0].text, onlyR37.lines[0].text]) assert.deepEqual(naturalLanguageErrors(t), []);
 });
 
+test("the Prophet setup still READY after its one-bar event is read as the HUD reads it (owner report 2026-11-09)", () => {
+  const setup = { buy_ready: true, sell_ready: false, buy_pass_age: 2, confirmation_window: 3, superseded_by_trend: null, instruction: "BUY_READY" };
+  const r = interpretWebhooks({ prophetR38: { direction: 0, buy_confirmed: false, sell_confirmed: false, t_enc: 0, d_enc: 0, setup_state: setup }, prophetR37: { direction: 0, d_enc: 0, b_enc: 1 } });
+  assert.match(r.lines[0].text, /^Prophet: no buy or sell confirmation on this closed candle\. Its BUY setup is still READY: the confirmation passed 2 bars ago, inside its 3 bars confirmation window, and the bullish cycle alignment holds\./);
+  assert.equal(r.bias, "bullish", "the READY setup is the lean");
+  assert.deepEqual(naturalLanguageErrors(r.lines[0].text), []);
+  const superseded = interpretWebhooks({ prophetR38: { direction: 0, buy_confirmed: false, sell_confirmed: false, t_enc: 0, d_enc: 0, setup_state: { ...setup, buy_ready: false, superseded_by_trend: "BUY", instruction: "BUY_SETUP_SUPERSEDED_BY_TREND" } } });
+  assert.match(superseded.lines[0].text, /Its BUY setup was superseded by the opposite cycle alignment\./);
+  assert.equal(superseded.bias, "neutral");
+  const plain = interpretWebhooks({ prophetR38: { direction: 0, buy_confirmed: false, sell_confirmed: false, t_enc: 0, d_enc: 0 } });
+  assert.doesNotMatch(plain.lines[0].text, /setup/, "no setup state, no setup sentence");
+});
+
 test("structure breaks use the Pine subtype names", () => {
   const sub = (d, s) => interpretWebhooks({ prophetR38: { direction: 0, t_enc: 0, d_enc: d, structure_subtype: s } }).lines[0].text;
   assert.match(sub(3, 1), /bull trap/);

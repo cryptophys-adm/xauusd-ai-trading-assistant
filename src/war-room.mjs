@@ -66,19 +66,21 @@ export const DESK_AGENTS = Object.freeze({
 /**
  * Owner rule (2026-11-05): no confirmation, no entry. A BUY needs a confirmed buy signal from the
  * H1 Prophet R38 or a VERIFIED 5m Prophet R38 confirmation candle; a SELL needs a confirmed sell.
+ * Owner report 2026-11-09: the H1 Prophet R38 setup still READY counts as the H1 confirmation
+ * (the confirmation passed within the setup's confirmation window and the cycle alignment holds).
  */
 export function entryAllowed(stance, confirmations) {
   if (stance !== "BUY" && stance !== "SELL") return true;
-  const side = stance === "BUY" ? "buy_confirmed" : "sell_confirmed";
-  const h1 = confirmations?.h1_prophet_r38?.[side] === true;
-  const m5 = confirmations?.m5_prophet_r38?.verified === true && confirmations.m5_prophet_r38[side] === true;
+  const side = stance === "BUY" ? "buy" : "sell";
+  const h1 = confirmations?.h1_prophet_r38?.[`${side}_confirmed`] === true || confirmations?.h1_prophet_r38?.[`${side}_setup_ready`] === true;
+  const m5 = confirmations?.m5_prophet_r38?.verified === true && confirmations.m5_prophet_r38[`${side}_confirmed`] === true;
   return h1 || m5;
 }
 
 export const SUPPORT_RULE = "A BUY or SELL conclusion also needs at least one agent on the bus or in the Consensus Discussion holding that stance: a confirmation alone never overrules the whole room.";
 
 export const NO_CONFIRMATION_RULE =
-  "Rule: no confirmation, no entry. BUY needs a confirmed buy signal (the H1 Prophet R38 confirmation, or a VERIFIED 5m Prophet R38 confirmation candle); SELL needs a confirmed sell signal. Without the matching confirmation the stance is WAIT, or HOLD / CLOSE for a position already open.";
+  "Rule: no confirmation, no entry. BUY needs a confirmed buy signal (the H1 Prophet R38 confirmation on the closed bar, or its BUY setup still READY: the confirmation passed within the setup's confirmation window and the bullish cycle alignment holds; or a VERIFIED 5m Prophet R38 confirmation candle); SELL needs the confirmed sell signal or the SELL setup READY. Without either the stance is WAIT, or HOLD / CLOSE for a position already open.";
 
 /** Names of desks that earlier rooms used, so their stored messages still read by name. */
 const LEGACY_DESK_NAMES = Object.freeze({ h1: "H1 Desk" });
