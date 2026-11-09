@@ -591,7 +591,7 @@ export const KNOWLEDGE_BASE_V4 = Object.freeze({
         "implementation_hash": "ffe55c39d9c20e61fb9814d04d3d56f435c0324e20a905432f4d9c9cac788d39"
       },
       "gmi_hud": {
-        "source_hash": "949acb5ddcae78507bc15ec41bd35ce8ffe984513de1932110ed25cfff911373",
+        "source_hash": "1bf3c79ea6c1cac5eaf16a593cdcc5719e2730af6fe79d244b80a796382c41f4",
         "implementation_hash": "258596b9ba074dd68980a2595a06685a943102434ef3e813eaa8dcf7a6b8e945"
       },
       "prophet_d1": {
