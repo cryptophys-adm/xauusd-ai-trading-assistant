@@ -113,7 +113,7 @@ Owner decision, 2026-11-05: the architecture does not depend on webhooks. Approv
 
 Coverage per Pine parameter is in `docs/LOCAL_COMPUTATION_OWNERSHIP.md`.
 
-The parity sweep cron also backfills `runAnalysis` for any closed H1 candle within the last 2 hours that has no `analysis_runs` row. It does so when the candle's approved local records exist, or as a fail-closed WAIT 30 minutes after the close. Analysis stays idempotent via `claimAnalysisRun`.
+The parity sweep cron also backfills `runAnalysis` for any closed H1 candle within the last 2 hours that has no `analysis_runs` row. It does so when the candle's approved local records exist, or as a fail-closed WAIT 30 minutes after the close. Analysis stays idempotent via `claimAnalysisRun`. A failed run is retried up to 4 attempts; a degraded run (required evidence missing, typically the hourly news landing a minute after the local publish) is retried within 45 minutes of the close, and the claim succeeds only when the evidence fingerprint changed.
 
 ### H1 decision by Consensus Discussion (owner decision 2026-11-07, `src/h1-consensus.mjs`)
 - **Why:** the old chain decided at the close, before any discussion: Analyst → Counselor → Reasoner on the evidence alone. The Analyst and the Counselor ran only in the background (no screen showed their output), and in production the Counselor spent its whole token budget on reasoning in 32 of the last 32 runs. Deciding first made the decision ambiguous and almost always WAIT.

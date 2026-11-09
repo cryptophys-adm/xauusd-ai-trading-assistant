@@ -198,6 +198,8 @@ export async function reconcileRecentCandles(env, { now = Date.now(), lookback =
 export const LOCAL_MISSING_AFTER_MS = 30 * 60 * 1000;
 /** Attempts after which a failed analysis is no longer retried by the backfill. */
 export const BACKFILL_MAX_ATTEMPTS = 4;
+/** After an H1 close, a degraded run is retried this long when its evidence changed. */
+export const DEGRADED_RETRY_MS = 45 * 60 * 1000;
 
 export async function backfillRecentAnalyses(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, loadPayloads = null, runAnalysis = null, setStatus = null } = {}) {
   const required = String(env?.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(v=>v.trim()).filter(Boolean);
@@ -211,8 +213,14 @@ export async function backfillRecentAnalyses(env, { now = Date.now(), lookback =
     try {
       const existing = await env.DB.prepare("SELECT status, attempt_count FROM analysis_runs WHERE candle_key = ?").bind(candleKey).first();
       // A run that failed (for example a Workers AI timeout) is retried here, like the queue
-      // retries it, up to BACKFILL_MAX_ATTEMPTS; every other recorded status is final.
-      if (existing && !(existing.status === "failed" && Number(existing.attempt_count || 0) < BACKFILL_MAX_ATTEMPTS)) continue;
+      // retries it, up to BACKFILL_MAX_ATTEMPTS. A degraded run (required evidence missing) is
+      // retried within DEGRADED_RETRY_MS of the close: the evidence often arrives minutes later
+      // (production 2026-11-09: every H1 run fired at :05:35, the hourly news at :06:50, so each
+      // bar stayed a degraded WAIT). The claim only succeeds when the evidence fingerprint
+      // changed, so an unchanged degraded bar is not analysed twice. Every other status is final.
+      const retryFailed = existing?.status === "failed" && Number(existing.attempt_count || 0) < BACKFILL_MAX_ATTEMPTS;
+      const retryDegraded = existing?.status === "degraded" && Number(existing.attempt_count || 0) < BACKFILL_MAX_ATTEMPTS && now - (openMs + H1_SECONDS * 1000) <= DEGRADED_RETRY_MS;
+      if (existing && !retryFailed && !retryDegraded) continue;
       const payloads = (loadPayloads ? await loadPayloads(env, candleKey, required) : null) || {};
       if (localPrimary) {
         // Local-primary: approved local records drive the chain; webhooks are calibration only.
