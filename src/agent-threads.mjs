@@ -265,7 +265,7 @@ export function stepRole(step) {
   return step === "conclusion" || step === "moderator" || step === "tldr" ? "moderator" : "agent";
 }
 
-async function runStep(env, db, base, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk, role = stepRole(base?.step) }) {
+async function runStep(env, db, base, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk, role = stepRole(base?.step), inferMetrics = null }) {
   const ts = new Date(clock()).toISOString();
   if (!(await budgetOk())) {
     return writeMessage(db, { ...base, ts, status: "budget_exhausted", body: { insight: "budget exhausted" } });
@@ -283,6 +283,7 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
   // without budget or past the wall deadline.
   let corrections = 0;
   let finalCall = call;
+  let retryObj = null;
   const correction = !validation.valid && !call.truncated ? correctionFor(validation.errors) : null;
   if (correction && clock() < deadline && (await budgetOk())) {
     const retry = await callBusModel(env, {
@@ -295,6 +296,7 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
     if (retry.status === "answered" && !retry.truncated) {
       const second = validate(retry.obj);
       if (second.valid) { validation = second; finalCall = retry; meta.model = retry.model; meta.fallback_used = meta.fallback_used || retry.fallback_used; }
+      else if (second.errors?.length && second.errors.every((e) => e === "metrics_missing")) retryObj = { call: retry, errors: second.errors };
     }
   }
   // Calibration talk (owner rule "agents never mention calibration"; Aether compliance found it in
@@ -328,7 +330,24 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
       if (third.valid) { validation = third; finalCall = alt; meta.model = alt.model; meta.fallback_used = true; diag.primary_error = alt.primary_error; }
     }
   }
-  const extra = corrections ? { corrections } : {};
+  // Metrics (owner decisions 2026-11-09): an answer whose ONLY remaining problem after its correction
+  // is a missing metrics list is kept with the metrics of its own data source, marked
+  // metrics_inferred (production 2026-11-09 10:00-12:00 UTC: most room answers were lost this way,
+  // the rooms did not conclude and the H1 decision stalled). Every other error still rejects it.
+  let inferred = false;
+  if (!validation.valid && typeof inferMetrics === "function") {
+    const options = [retryObj?.call, (validation.errors || []).length && validation.errors.every((e) => e === "metrics_missing") ? finalCall : null].filter((c) => c?.obj && typeof c.obj === "object");
+    for (const c of options) {
+      c.obj.metrics = inferMetrics(base);
+      const again = validate(c.obj);
+      if (again.valid) {
+        validation = again; inferred = true;
+        if (c !== finalCall) { finalCall = c; meta.model = c.model; meta.fallback_used = meta.fallback_used || c.fallback_used; }
+        break;
+      }
+    }
+  }
+  const extra = { ...(corrections ? { corrections } : {}), ...(inferred ? { metrics_inferred: true } : {}) };
   if (!validation.valid) {
     return writeMessage(db, { ...base, ts, ...meta, status: "invalid_output", body: { insight: clip(call.text, RAW_MAX), errors: validation.errors, ...extra, ...diag } });
   }

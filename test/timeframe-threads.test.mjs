@@ -231,7 +231,9 @@ test("validators: an agent naming another agent gets a correction; metrics are r
   const v = validateRebuttal(r, "technical", ["technical", "risk"], { refs });
   assert.equal(v.valid, true);
   assert.deepEqual(r.rebuts, ["risk"], "a #n reference maps back to the agent id");
-  assert.deepEqual(namesErrors("Prophet R38 confirmed", ["The Prophet"]), ["names_an_agent"], "another agent's indicator by name counts as naming it");
+  // An indicator's name is a metric the owner allows; it names the agent only as an actor (2026-11-09 fix).
+  assert.deepEqual(namesErrors("Prophet R38 confirmed", ["The Prophet"]), [], "an indicator reading is a metric, not the agent");
+  assert.deepEqual(namesErrors("The Prophet says buy now", ["The Prophet"]), ["names_an_agent"], "the indicator as a speaker is the agent");
   assert.deepEqual(namesErrors("the trend holds", ["The Prophet"]), [], "\"the\" alone never matches");
 });
 
@@ -420,4 +422,57 @@ test("P7: the moderator gets the crowd line; the room carries it and every agent
   assert.equal(thread.reputation.kinetic_engine.family, "trend");
   assert.equal(thread.crowd.quorum_share, 0.5, "the 4H room's own default quorum");
   assert.equal(thread.crowd.weighting, "weighting@p10-r0.25_2-d30-h0-b0-q0.5-g0-v0", "every timeframe uses its own weighting (owner decisions 2026-11-09)");
+});
+
+test("room resilience (production 2026-11-09): leaked metrics are repaired, indicator metrics are not agent names, a missing metrics list is inferred", async () => {
+  const { repairLeakedMetrics, namesErrors, validateOpening, validateRebuttal, inferredMetrics } = await import("../src/war-room.mjs");
+  // Exactly as stored at 11:42 UTC (open:prophet): the metrics leaked into the claim, with a model token.
+  const leaked = { agent: "prophet", stance: "WAIT", bias: "BEARISH", confidence: 0.6, claim: 'The market is currently trapped in noisy, inefficient movement with weak trend strength. Stay flat until a setup activates.\\",\\"metrics\\":[\\"the Prophet signal\\",\\"the Prophet structure\\",\\"the Prophet momentum\\",\\"the efficiency ratio\\"]} <|file_separator|> { \"  ' };
+  const v = validateOpening(leaked, "prophet", { forbiddenNames: ["Supertrend", "Risk Manager"] });
+  assert.equal(v.valid, true, JSON.stringify(v.errors));
+  assert.deepEqual(leaked.metrics, ["the Prophet signal", "the Prophet structure", "the Prophet momentum", "the efficiency ratio"]);
+  assert.equal(leaked.claim, "The market is currently trapped in noisy, inefficient movement with weak trend strength. Stay flat until a setup activates.");
+  const plain = { claim: 'Bullish order flow is present.","metrics":["lower layer order flow","rising momentum"]}' };
+  assert.equal(repairLeakedMetrics(plain, "claim"), true);
+  assert.deepEqual(plain.metrics, ["lower layer order flow", "rising momentum"]);
+  assert.equal(repairLeakedMetrics({ claim: "No leak here.", metrics: ["x"] }, "claim"), false);
+
+  // The rebuttal of 11:43 UTC (debate:aegis_footprint) cited the Supertrend as a metric: valid now.
+  const names = ["Supertrend", "Order Blocks", "The Prophet", "Risk Manager", "News Analyst"];
+  assert.deepEqual(namesErrors("The Supertrend has held for ten candles, confirming the strength.", names), []);
+  for (const actor of ["Supertrend says the trend is over.", "I disagree with the Prophet here.", "According to Order Blocks the zone held.", "The Prophet's view is too early.", "As the Risk Manager noted, volatility is high."]) {
+    assert.deepEqual(namesErrors(actor, names), ["names_an_agent"], actor);
+  }
+  assert.deepEqual(namesErrors("Volatility is high, which the risk manager role would weigh.", names), ["names_an_agent"], "a role name never appears");
+  const rebut = { agent: "aegis_footprint", stance: "BUY", bias: "BULLISH", confidence: 0.75, rebuts: ["#2"], argument: "Buyers control the recent order flow. The Supertrend has held for ten candles, confirming the strength.", metrics: ["recent order flow"] };
+  assert.equal(validateRebuttal(rebut, "aegis_footprint", ["aegis_footprint", "supertrend"], { forbiddenNames: names, refs: { idOf: (r) => (r === "#2" ? "supertrend" : r) } }).valid, true);
+
+  assert.deepEqual(inferredMetrics("risk"), ["volatility and event risk"], "a desk's data in plain words, never its role name");
+  assert.match(inferredMetrics("supertrend")[0], /Supertrend readings/);
+});
+
+test("a room answer that still omits its metrics after the correction is kept, marked metrics_inferred", async () => {
+  const calls = [];
+  const ai = {
+    calls,
+    run: async (model, request) => {
+      calls.push(request);
+      const sys = request.messages[0].content, user = request.messages[1].content;
+      const agent = (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1];
+      let content;
+      if (/moderator of the XAUUSD/.test(sys)) content = { stance: "WAIT", confidence: 0.5, summary: "The room waits for a clearer lean.", reasons: ["Structure is mixed."], dissent: [], metrics: ["the closed candles of this chart"] };
+      else if (/Consensus Discussion/.test(sys)) content = { agent, stance: "WAIT", confidence: 0.5, rebuts: [agent === "technical" ? "#1" : "#2"], argument: "The last candles closed mid-range, so there is nothing to chase." };
+      else content = { agent, stance: "WAIT", confidence: 0.35, claim: "My own data on this chart supports waiting for the next candle." };
+      return { choices: [{ message: { content: JSON.stringify(content) }, finish_reason: "stop" }], usage: { total_tokens: 40 } };
+    }
+  };
+  const e = env(ai);
+  await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
+  const thread = await readTimeframeThread(e.DB, "H4");
+  const ok = thread.openings.filter((o) => o.status === "ok");
+  assert.ok(ok.length >= 3, `openings kept: ${ok.length}`);
+  assert.ok(ok.every((o) => Array.isArray(o.metrics) && o.metrics.length > 0), "each kept opening carries metrics");
+  const rows = (await e.DB.prepare("SELECT body_json FROM agent_thread_messages WHERE step LIKE 'open:%' AND status = 'ok'").all()).results || [];
+  assert.ok(rows.length >= 3 && rows.every((r) => JSON.parse(r.body_json).metrics_inferred === true), "each kept opening is marked metrics_inferred in its stored body");
+  assert.ok(thread.conclusion, "the room concludes");
 });

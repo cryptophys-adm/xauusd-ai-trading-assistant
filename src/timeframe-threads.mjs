@@ -37,7 +37,7 @@ import { ensureThreadSchema, rowToThreadMessage, ROOM_STANCES, hudEvidenceLines,
 import {
   validateOpening, validateRebuttal, majorityStance, selectRebutters, BIAS_RULE, SUPPORT_RULE, stanceSupported,
   majorityBias, biasOfStance, biasSplitText, DECISION_BIAS_RULE, conclusionBiasErrors, agentIdsToNames,
-  INDEPENDENCE_RULE, namesErrors, metricsErrors, forbiddenNamesFor, busRefs, anonymousBus, deskNames,
+  INDEPENDENCE_RULE, namesErrors, metricsErrors, forbiddenNamesFor, busRefs, anonymousBus, deskNames, inferredMetrics, normalizeAnswerText,
   WAR_ROOM_OPENING_MS, WAR_ROOM_DEBATE_MS, WAR_ROOM_CONCLUSION_MS
 } from "./war-room.mjs";
 import { closedHtfCandleKeys, OBSERVED_PREFIX } from "./parity-sweep.mjs";
@@ -153,6 +153,7 @@ function normalizeTfNames(o, busAgents) {
  */
 export function validateTfConclusion(o, { busAgents = [], crowd = undefined, h1Decision = null, supportStances = null, supportBiases = null, roomBias = "NEUTRAL", forbiddenNames = null, refs = null } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
+  if (forbiddenNames) normalizeAnswerText(o);
   agentIdsToNames(o, busAgents, tfAgentName);
   if (refs && Array.isArray(o.dissent)) o.dissent = o.dissent.map(refs.idOf);
   const errors = [];
@@ -424,7 +425,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
     const deadline = clock() + ms;
     const runState = { primaryError: null };
     const budgetOk = async () => clock() < deadline && remaining-- > 0;
-    return (stepBase, opts) => { calls += 1; return runStep(roomEnv, db, stepBase, { ...opts, deadline, clock, runState, budgetOk }); };
+    return (stepBase, opts) => { calls += 1; return runStep(roomEnv, db, stepBase, { inferMetrics: (b) => inferredMetrics(b?.agent), ...opts, deadline, clock, runState, budgetOk }); };
   };
 
   // Phase 1: the communication bus.
