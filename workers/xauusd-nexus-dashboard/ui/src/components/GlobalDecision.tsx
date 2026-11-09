@@ -88,12 +88,15 @@ export default function GlobalDecision() {
   const macro = g?.timeframes?.find((t: any) => t.key === "MACRO");
   const cf = room?.confirmations;
   const strategyRows = [
-    ...(s?.layers ?? []).map((l: any) => ({ key: l.key, label: l.label, role: l.role, lean: l.lean, pass: l.pass, note: l.note, stale: l.stale, weight: null })),
+    ...(s?.layers ?? []).map((l: any) => ({ key: l.key, label: l.label, role: l.role, lean: l.lean, pass: l.pass, note: l.note, stale: l.stale, weight: null, trigger: l.key === "M5" ? (l.note ?? "") : null })),
     ...(news ? [{ key: "NEWS", label: "News", role: "24h", lean: news.lean, pass: null, note: news.summary ?? "no TLDR yet", stale: news.stale, weight: null }] : []),
     ...(macro?.available ? [{ key: "MACRO", label: "Macro", role: "context", lean: macro.lean, pass: null, note: macro.summary ?? "", stale: macro.stale, weight: null }] : [])
   ];
-  const witnessRows = (e?.witnesses ?? []).map((w: any) => ({ key: w.key, label: w.key === "STRATEGY" ? "Strat" : w.label, role: w.decision ? `${w.role ?? ""}`.slice(0, 18) : w.role, lean: w.lean, pass: w.available && !w.stale ? (w.lean == null ? null : e.stance === "BUY" ? w.lean >= 0.15 : e.stance === "SELL" ? w.lean <= -0.15 : null) : false, note: [w.decision ? `decision ${w.decision}` : null, w.summary].filter(Boolean).join(" · "), stale: w.stale || !w.available, weight: w.weight }));
-  const rows = e ? witnessRows : strategyRows;
+  const witnessRows = (e?.witnesses ?? []).map((w: any) => ({ trigger: null as string | null, key: w.key, label: w.key === "STRATEGY" ? "Strat" : w.label, role: w.decision ? `${w.role ?? ""}`.slice(0, 18) : w.role, lean: w.lean, pass: w.available && !w.stale ? (w.lean == null ? null : e.stance === "BUY" ? w.lean >= 0.15 : e.stance === "SELL" ? w.lean <= -0.15 : null) : false, note: [w.decision ? `decision ${w.decision}` : null, w.summary].filter(Boolean).join(" · "), stale: w.stale || !w.available, weight: w.weight }));
+  // The 5m row is the entry trigger (a Prophet R38 confirmation), not a lean: it shows its state.
+  const m5 = e?.context?.m5_trigger;
+  const m5Text = !e ? null : !m5 ? "no fresh 5m bar" : m5.buy_confirmed || m5.sell_confirmed ? `${m5.buy_confirmed ? "buy" : "sell"} confirmed${m5.verified ? "" : " (unverified)"}` : "no confirmation";
+  const rows = e ? [...witnessRows, { key: "M5", label: "5m", role: "trigger", lean: null, pass: m5 && (m5.buy_confirmed || m5.sell_confirmed) ? m5.verified : null, note: `the Prophet R38 confirmation of the latest closed 5m bar${m5?.candle_time ? ` (${utc(m5.candle_time)})` : ""}`, stale: false, weight: null, trigger: m5Text }] : strategyRows;
   const decision = e?.stance ?? s?.decision ?? g?.action ?? "WAIT";
   const lead = e ? (e.stance === "SELL" ? "short" : e.stance === "BUY" ? "long" : (e.quorum?.short_share ?? 0) > (e.quorum?.long_share ?? 0) ? "short" : "long") : null;
   return (
@@ -165,8 +168,14 @@ export default function GlobalDecision() {
                 <Pass v={r.pass} />
                 <span className="mono w-9 shrink-0 font-bold text-slate-100">{r.label}</span>
                 <span className="w-20 shrink-0 truncate text-[9.5px] uppercase tracking-[0.12em] text-slate-500">{r.weight != null ? `${Math.round(r.weight * 100)}% · ${r.role ?? ""}` : r.role}</span>
-                <div className={`min-w-0 flex-1 ${r.stale ? "opacity-40" : ""}`}><DivergingBar value={r.lean} height={6} /></div>
-                <span className="w-28 shrink-0 text-right text-[10px]" style={{ color: leanColor(r.lean) }}>{leanLabel(r.lean)}{r.lean != null ? ` ${r.lean > 0 ? "+" : ""}${Math.round(r.lean * 100)}` : ""}</span>
+                {r.trigger != null ? (
+                  <span className="min-w-0 flex-1 truncate text-right text-[10px] text-slate-300">{r.trigger}</span>
+                ) : (
+                  <>
+                    <div className={`min-w-0 flex-1 ${r.stale ? "opacity-40" : ""}`}><DivergingBar value={r.lean} height={6} /></div>
+                    <span className="w-28 shrink-0 text-right text-[10px]" style={{ color: leanColor(r.lean) }}>{leanLabel(r.lean)}{r.lean != null ? ` ${r.lean > 0 ? "+" : ""}${Math.round(r.lean * 100)}` : ""}</span>
+                  </>
+                )}
               </div>
             ))}
             <p className="pt-0.5 text-[9.5px] text-slate-600">{e ? "Witnesses: each room, the news, the macro room and the strategy engine, with its weight in the quorum. Hover a row for its own decision and summary." : "Lean: the confidence-weighted mean of the agents' biases in that room, −100 bearish to +100 bullish. Hover a row for its note."}</p>

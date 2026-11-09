@@ -53,6 +53,25 @@ export async function verifiedM5Reading(env, closeIso) {
   };
 }
 
+/**
+ * Whether the 5m Prophet confirmation of the bar that closes at closeIso is verified: the local
+ * Prophet record of that 5m bar exists and its implementation (prophet_m5) is parity-approved.
+ * The entry trigger is a Prophet confirmation, so it needs Prophet's parity only (owner question
+ * 2026-11-09 "kenapa 5m sebagai trigger selalu no data?": requiring the GMI 5m parity too left the
+ * trigger unverified all day while gmi_m5 was revoked). The combined reading above still needs both.
+ */
+export async function verifiedM5Confirmation(env, closeIso) {
+  const candleKey = m5CandleKeyForClose(closeIso);
+  if (!candleKey || !env?.WEBHOOK_BUFFER || !env?.DB) return { verified: false, reason: "unavailable" };
+  const prophet = parse(await env.WEBHOOK_BUFFER.get(OBSERVED_PREFIX + candleKey + ":prophet"));
+  if (!prophet) return { verified: false, reason: "no_local_5m_record", candle_key: candleKey };
+  const id = identityOf(prophet);
+  if (!id || !id.engine.endsWith("_m5")) return { verified: false, reason: "not_a_5m_identity", candle_key: candleKey };
+  await ensureSchema(env.DB);
+  if (!(await isTrusted(env.DB, id))) return { verified: false, reason: "prophet_m5_parity_not_approved", candle_key: candleKey };
+  return { verified: true, candle_key: candleKey };
+}
+
 /** Whether both 5m implementations currently hold an approved registry row. */
 export async function m5ParityApproved(db) {
   if (!db) return false;

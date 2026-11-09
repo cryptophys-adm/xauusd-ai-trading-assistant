@@ -118,6 +118,9 @@ test("the evidence carries both sides' plans; the prompt names the guardrails; t
   assert.equal(ev.witnesses.length, 7);
   const text = councilMessages(ev).map((m) => m.content).join("\n");
   assert.match(text, /only when long\.allowed is true/);
+  assert.equal(ev.quorum.bullish_share, 0.95);
+  assert.equal(ev.quorum.share_needed_above, 0.5);
+  assert.match(text, /weighted_lean is the strength/, "production 13:15: the lean is never read as the quorum");
   const rec = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded, assessment: a, now: NOW });
   assert.equal(rec.source, "fallback");
   assert.match(rec.summary, /^Decision WAIT, bias bullish/);
