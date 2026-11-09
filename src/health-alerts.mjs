@@ -117,7 +117,7 @@ export async function detectHealthIssues(env, now = Date.now()) {
   // 8. TradingView alerts rejected by POST /webhook (401) in the last hour: the reason, never the secret.
   const rej = await rejectionSummary(db, now - HOUR);
   if (rej.count > 0) {
-    const [top] = Object.entries(rej.reasons).sort((a, b) => b[1] - a[1]);
+    const top = [rej.top_reason];
     const lengths = top[0] === "secret_missing" ? "" : `; secret length received ${rej.received_lengths.join("/")}, the Worker's ${rej.expected_len}`;
     out.push({
       key: "webhook_rejected", kind: "webhook_rejected",
