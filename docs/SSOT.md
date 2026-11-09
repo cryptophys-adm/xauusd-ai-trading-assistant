@@ -785,6 +785,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 3. Work from the latest `main`. Branches cut from an old base must not be merged or deployed.
 4. A PR is mergeable only when CI is green (`test`, `preview-e2e`, Workers Builds) and the change is described against this SSOT.
 5. A topology change requires editing this file, `AGENTS.md` and `test/ssot-topology.test.mjs` in the same PR, and the owner's explicit approval.
+6. **Ops dispatch (owner request 2026-11-09, backlog item 17).** The automation operator's GitHub access cannot call `workflow_dispatch` or re-run a job. `.github/workflows/ops-dispatch.yml` runs on a push to the operator branch `claude/vibrant-mccarthy-dq5xs7` whose head commit adds exactly one `ops/requests/<UTC timestamp>-<name>.json` (`{"workflow": "deploy-worker.yml"}`), and dispatches that workflow on `main`, with no inputs, then follows it to completion. Allow-list: `deploy-worker.yml`, `deploy-nexus-dashboard.yml`, `deploy-market-data-ingestion.yml`, `deploy-fundamental-news-ingestion.yml` and the read-only `inspect-ai-worker.yml`; never `set-webhook-secret.yml`. Rule 1 holds: a deploy is still the deploy workflow on `main`, the same run the owner starts with "Run workflow". A branch reset onto `main` never replays a request (`test/ops-dispatch.test.mjs`).
 
 ## 6. Owner-only actions
 - TradingView OAuth re-authorization at `https://news.cryptophys.work/oauth/start`.

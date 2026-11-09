@@ -5,7 +5,7 @@ stays the canonical description of the system; `docs/CHANGELOG.md` records what 
 leaves this file when it is done (and enters the CHANGELOG) or when the owner drops it. This is the
 only backlog: the older lists (`docs/BRIEF_HUD_AGENTS.md` §6, `docs/RFC_INDICATOR_AGENT_PLATFORM.md`
 §9 and §10) were merged here on 2026-11-07 (owner request). Item numbers are stable: a number that
-is gone was done or dropped (CHANGELOG 2026-11-09 for items 0 to 4, 8, 9, 13 and 16).
+is gone was done or dropped (CHANGELOG 2026-11-09 for items 0 to 4, 8, 9, 13, 16 and 17).
 
 ## Verified after the reopen (2026-11-09, items 0 to 4 closed)
 
@@ -65,5 +65,4 @@ setup READY state that never reached the decision (#192).
 
 ## Next improvements (owner to confirm)
 
-17. **Ops dispatch for this repository.** The session's GitHub access cannot run or re-run workflows (403 on `workflow_dispatch` and `rerun`), so a deploy or inspection run after a secret change needs the owner's click. The platform repository solves this with `ops-dispatch.yml`: a push of a small file to the session branch runs a workflow from an allow-list. Here the allow-list would be the deploy and inspection workflows only, never `set-webhook-secret.yml`.
 18. **Nexus: merge the Levels and Key Level Agent panels** (proposal 2026-11-08, measured: KLA v2 shows 5 candidate zones against 19 in v1). One panel with the ladder and the agent's zones side by side; waits for the owner's yes.

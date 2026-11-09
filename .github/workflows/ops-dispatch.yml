@@ -1,0 +1,91 @@
+name: Ops Dispatch
+
+# Lets the repository's automation operator (the Claude session branch) start the deploy and
+# inspection workflows by committing a request file, because its GitHub integration cannot call
+# the workflow_dispatch API (403 on dispatch and re-run; owner request 2026-11-09, backlog item 17).
+# Modelled on the platform repository's ops-dispatch.yml.
+#
+# - Runs only for pushes to the operator branch whose head commit adds exactly one file under
+#   ops/requests/. Each request is therefore a reviewed-by-history Git commit.
+# - Dispatches only allow-listed workflows, always on main, with no inputs: the same run the
+#   owner starts with the "Run workflow" button. AGENTS.md rule 1 holds: a deploy still runs the
+#   deploy workflow on main; nothing is deployed from the operator branch.
+# - Never set-webhook-secret.yml (it writes a Worker secret) and never decommission-legacy-workers.yml.
+# - Waits for the dispatched run and mirrors its result.
+#
+# Request file format (ops/requests/<UTC timestamp>-<name>.json):
+#   {"workflow": "deploy-worker.yml"}
+
+on:
+  push:
+    branches: [claude/vibrant-mccarthy-dq5xs7]
+    paths: ["ops/requests/**.json"]
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: ops-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout request commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Dispatch the requested workflow and follow it to completion
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff --name-only --diff-filter=A HEAD~1 HEAD -- 'ops/requests/*.json')
+          # A push whose head commit adds no request (the operator branch being reset onto main, or a
+          # code commit) dispatches nothing; it is not an error.
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::notice::The head commit adds no ops/requests/*.json file; nothing to dispatch."
+            exit 0
+          fi
+          # Resetting the operator branch onto main re-pushes main's head commit. If a request was
+          # squash-merged into main, that commit "adds" an already-handled request: never replay it.
+          compare="$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${GITHUB_SHA}" --jq .status)"
+          if [[ "$compare" == "identical" || "$compare" == "behind" ]]; then
+            echo "::notice::The head commit is already on main (a branch reset); request not replayed."
+            exit 0
+          fi
+          [[ ${#files[@]} -eq 1 ]] || { echo "::error::A request commit must add exactly one ops/requests/*.json file (found ${#files[@]})"; exit 1; }
+          request="${files[0]}"
+          echo "Request: ${request}"
+          jq -e 'type == "object" and (.workflow | type == "string") and ((.inputs // {}) == {})' "$request" >/dev/null \
+            || { echo "::error::Malformed request (an object with a workflow string and no inputs)"; exit 1; }
+
+          workflow="$(jq -r .workflow "$request")"
+          case "$workflow" in
+            deploy-worker.yml|deploy-nexus-dashboard.yml|deploy-market-data-ingestion.yml|deploy-fundamental-news-ingestion.yml) ref=main ;;
+            inspect-ai-worker.yml) ref=main ;; # read-only: deployments, versions, secret names
+            *) echo "::error::Workflow ${workflow} is not allow-listed"; exit 1 ;;
+          esac
+
+          started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$ref"
+          echo "Dispatched ${workflow} on ${ref}"
+
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --event workflow_dispatch --branch "$ref" \
+              --limit 5 --json databaseId,createdAt --jq "[.[] | select(.createdAt >= \"${started}\")] | sort_by(.createdAt) | .[0].databaseId // empty")"
+            [[ -n "$run_id" ]] && break
+            sleep 4
+          done
+          [[ -n "$run_id" ]] || { echo "::error::Dispatched run did not appear"; exit 1; }
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          echo "Run: ${url}"
+          echo "### Ops dispatch: \`${workflow}\` on \`${ref}\` → [run ${run_id}](${url})" >> "$GITHUB_STEP_SUMMARY"
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --interval 15 --exit-status
