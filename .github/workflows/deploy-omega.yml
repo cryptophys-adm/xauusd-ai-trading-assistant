@@ -5,9 +5,9 @@ name: Deploy Omega Execution Engine Worker
 # Worker verifies the Cloudflare Access JWT itself (fail closed) and answers no /api/* route without
 # ACCESS_AUD. The audience is resolved here: from the Access API when a token can read applications
 # (optional secret CLOUDFLARE_ACCESS_API_TOKEN), otherwise from Cloudflare Access's own login redirect
-# for omega.cryptophys.work (its `kid` is the application's AUD), checked by the CI service token
-# reading /api/status after the deploy. Before Access covers the host, it deploys without one: only
-# the empty page shell is served then. Re-run this workflow after Provision Cloudflare Access.
+# for nexus.cryptophys.work (its `kid` is the AUD of the platform application, which Omega shares:
+# owner 2026-11-09, Omega is reached at nexus.cryptophys.work/omega). Without one, only the empty page
+# shell is served.
 on:
   push:
     branches: [main]
@@ -57,9 +57,10 @@ jobs:
           fi
           source="Access API"
           if ! [[ "$aud" =~ ^[0-9a-f]{64}$ ]]; then
-            # Cloudflare Access sends an anonymous visitor to its login page with the application's AUD as `kid`.
-            location="$(curl --silent --proto '=https' --max-time 20 --output /dev/null --write-out '%{redirect_url}' https://omega.cryptophys.work/ || true)"
-            if [[ "$location" =~ ^https://cryptophys\.cloudflareaccess\.com/cdn-cgi/access/login/omega\.cryptophys\.work\?(.*\&)?kid=([0-9a-f]{64})(\&|$) ]]; then
+            # Cloudflare Access sends an anonymous visitor of nexus.cryptophys.work (the platform application,
+            # which Omega shares) to its login page with the application's AUD as `kid`.
+            location="$(curl --silent --proto '=https' --max-time 20 --output /dev/null --write-out '%{redirect_url}' https://nexus.cryptophys.work/ || true)"
+            if [[ "$location" =~ ^https://cryptophys\.cloudflareaccess\.com/cdn-cgi/access/login/nexus\.cryptophys\.work\?(.*\&)?kid=([0-9a-f]{64})(\&|$) ]]; then
               aud="${BASH_REMATCH[2]}"; source="the Access login redirect"
             fi
           fi
@@ -67,7 +68,8 @@ jobs:
             echo "ACCESS_AUD=${aud}" >> "$GITHUB_ENV"
             echo "Access audience resolved from ${source}: the Worker enforces it."
           else
-            echo "::notice::Cloudflare Access does not cover omega.cryptophys.work yet, so no audience: the Worker serves only the empty page shell and refuses every /api/* route (503). Run Provision Cloudflare Access, then re-run this workflow."
+            echo "::error::The Access audience could not be resolved from the Access API or the nexus.cryptophys.work login redirect."
+            exit 1
           fi
 
       - name: Validate Worker bundle
@@ -127,7 +129,7 @@ jobs:
           } else if (front.status === 403) {
             const j = await front.json().catch(() => null);
             if (j?.error !== "access_denied") { console.error(`unexpected 403 body ${JSON.stringify(j)}`); process.exit(1); }
-            console.log("::notice::omega.cryptophys.work is deployed and refuses every request without an Access JWT. Run the platform workflow 'Provision Cloudflare Access' (PROVISION), then re-run this workflow so the Worker gets the audience.");
+            console.log("::notice::omega.cryptophys.work is not in Cloudflare Access (Omega is reached at nexus.cryptophys.work/omega): the Worker refuses every request without an Access JWT.");
           } else {
             console.error(`custom domain: unexpected answer ${front.status} ${front.headers.get("location") || ""}`.slice(0, 200));
             process.exit(1);
