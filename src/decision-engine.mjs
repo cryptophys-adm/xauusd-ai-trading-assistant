@@ -462,6 +462,9 @@ export function assess(loaded, { now = Date.now(), env = null } = {}) {
 /** Pure: the whole decision record from the loaded inputs, their assessment and the council's result (or null). */
 export function buildDecisionRecord({ key, barClose, loaded, assessment = null, council = null, previous = null, now = Date.now(), decidedAt = new Date(now).toISOString(), env = null }) {
   const { inputs = {}, strategy = null } = loaded || {};
+  const MODE = String(env?.TRADING_MODE ?? "intraday").trim().toLowerCase();
+  const MODE_QUORUM_MIN = MODE === "scalp" ? 0.45 : MODE === "swing" ? 0.6 : 0.5;
+  const MODE_MIN_RRR = MODE === "scalp" ? 1.2 : MODE === "swing" ? 2.0 : 1.5;
   const { cards, quorum, guards } = assessment ?? assess(loaded, { now, env });
   const answer = council?.answer ?? null;
   const d = decide({ answer, guards, strategy, quorum });
@@ -496,7 +499,7 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     cautions, vetoes: { long: guards.long.vetoes, short: guards.short.vetoes },
     context: councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, now }),
     strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline, price: strategy.price, atr_h1: strategy.atr_h1 } : null,
-    weights: WITNESS_WEIGHTS, rules: { quorum_min: QUORUM_MIN, min_rrr: MIN_RRR, min_confidence: MIN_CONFIDENCE },
+    trading_mode: MODE, weights: WITNESS_WEIGHTS, rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE },
     advisory: "The server places no order and gives no position size; the EA sizes each trade from the owner's risk input."
   };
 }
