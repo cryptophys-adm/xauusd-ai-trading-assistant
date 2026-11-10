@@ -30,7 +30,8 @@ function PlanLadder({ plan, long, minRrr }: { plan: any; long: boolean; minRrr: 
     { k: "TP2", price: plan.tp2, note: plan.tp2_note, rr: plan.rrr?.tp2, tone: "text-emerald-300" },
     { k: "TP1", price: plan.tp1, note: plan.tp1_note, rr: plan.rrr?.tp1, tone: "text-emerald-300/80" },
     { k: "Entry", price: plan.entry, note: plan.entry_note, rr: null, tone: "text-cyan-200" },
-    { k: "Stop", price: plan.stop, note: plan.stop_note, rr: null, tone: "text-rose-300" }
+    { k: "Stop", price: plan.stop, note: plan.stop_note, rr: null, tone: "text-rose-300" },
+    { k: "SL+", price: plan.progressive_stop, note: "progressive stop (breakeven)", rr: null, tone: "text-amber-300" }
   ];
   const ordered = long ? rows : [...rows].reverse();
   return (
@@ -70,7 +71,7 @@ function Guardrails({ side, g }: { side: string; g: any }) {
 
 /** The trade of a decision as the plan ladder's input (the chosen target carries its note). */
 function tradePlan(t: any) {
-  return { entry: t.entry, stop: t.stop, tp1: t.tp1, tp2: t.tp2, risk: t.risk, rrr: t.rrr_all, at_level: t.at_level, entry_note: t.entry_note, stop_note: t.stop_note, tp1_note: t.target === "tp1" ? `target · ${t.tp_note ?? ""}` : "", tp2_note: t.target === "tp2" ? `target · ${t.tp_note ?? ""}` : "" };
+  return { entry: t.entry, stop: t.stop, tp1: t.tp1, tp2: t.tp2, risk: t.risk, rrr: t.rrr_all, at_level: t.at_level, entry_note: t.entry_note, stop_note: t.stop_note, progressive_stop: t.progressive_stop, tp1_note: t.target === "tp1" ? `target · ${t.tp_note ?? ""}` : "", tp2_note: t.target === "tp2" ? `target · ${t.tp_note ?? ""}` : "" };
 }
 
 /**

@@ -133,6 +133,7 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNot
     stop: r2(stop), stop_note: stopNote, risk: r2(risk),
     tp1: r2(tp1), tp1_note: t1 ? t1.label : "a 2R projection",
     tp2: r2(tp2), tp2_note: t2 ? t2.label : "a projection beyond the first target",
+    progressive_stop: r2(entry),
     rrr: { tp1: rr(tp1), tp2: rr(tp2) }
   };
 }
