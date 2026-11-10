@@ -81,7 +81,7 @@ export default function Performance() {
             {!items.length ? <Empty>No directional signal yet in the last 30 days. The ledger records each H1 BUY or SELL and each triggered strategy setup from 2026-11-07.</Empty> : (
               <div className="table-wrap">
                 <table className="tbl">
-                  <thead><tr><th>Opened (UTC)</th><th>Source</th><th>Side</th><th>Entry</th><th>Stop</th><th>TP1</th><th>TP2</th><th>Status</th><th>Exit</th><th>R at TP1</th><th>R at TP2</th><th>MFE / MAE</th></tr></thead>
+                  <thead><tr><th>Opened (UTC)</th><th>Source</th><th>Side</th><th>Entry</th><th>Stop</th><th>TP1</th><th>TP2</th><th>Status</th><th>Exit</th><th>R at TP1</th><th>R at TP2</th><th>SL+</th><th>MFE / MAE</th></tr></thead>
                   <tbody>
                     {items.map((x) => (
                       <tr key={x.id}>
@@ -92,6 +92,7 @@ export default function Performance() {
                         <td className="text-slate-400">{x.exit_reason ? x.exit_reason.replace(/_/g, " ") : x.status === "open" ? `open ${r(x.open_r)}` : ""}</td>
                         <td className="mono" style={{ color: (x.r_tp1 ?? 0) > 0 ? C.bull : (x.r_tp1 ?? 0) < 0 ? C.bear : undefined }}>{x.r_tp1 == null ? "" : r(x.r_tp1)}</td>
                         <td className="mono" style={{ color: (x.r_tp2 ?? 0) > 0 ? C.bull : (x.r_tp2 ?? 0) < 0 ? C.bear : undefined }}>{x.r_tp2 == null ? "" : r(x.r_tp2)}</td>
+                        <td className="mono text-slate-400">{x.sl_plus_triggered ? `yes${x.sl_plus_at ? ` · ${when(x.sl_plus_at)}` : ""}` : "—"}</td>
                         <td className="mono text-slate-400">{x.mfe_r == null ? "" : `${r(x.mfe_r)} / ${r(x.mae_r, false)}`}</td>
                       </tr>
                     ))}

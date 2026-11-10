@@ -254,6 +254,7 @@ export function tradeFor(side, plan, { entryType = "market", target = "tp1" } = 
   return {
     side, action: market ? "ENTER_MARKET" : "ENTER_LIMIT", entry: plan.entry, stop: plan.stop, target: t, tp: plan[t],
     tp1: plan.tp1, tp2: plan.tp2, risk: plan.risk, rrr: plan.rrr?.[t] ?? null, rrr_all: plan.rrr ?? null,
+    progressive_stop: plan.progressive_stop ?? null,
     entry_note: plan.entry_note, stop_note: plan.stop_note, tp_note: plan[`${t}_note`] ?? null, at_level: plan.at_level === true
   };
 }
@@ -281,7 +282,7 @@ const WITNESS_KEYS = ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY"];
 
 /** Pure: the council's evidence (the witnesses, the quorum, both sides' guardrails and plans, the context). */
 export function councilEvidence({ barClose, cards, quorum, guards, context = {} }) {
-  const plan = (g) => (g.plan ? { entry: g.plan.entry, entry_note: g.plan.entry_note, at_level: g.plan.at_level, stop: g.plan.stop, stop_note: g.plan.stop_note, tp1: g.plan.tp1, tp1_note: g.plan.tp1_note, tp2: g.plan.tp2, tp2_note: g.plan.tp2_note, reward_to_risk: g.plan.rrr } : null);
+  const plan = (g) => (g.plan ? { entry: g.plan.entry, entry_note: g.plan.entry_note, at_level: g.plan.at_level, stop: g.plan.stop, stop_note: g.plan.stop_note, tp1: g.plan.tp1, tp1_note: g.plan.tp1_note, tp2: g.plan.tp2, tp2_note: g.plan.tp2_note, progressive_stop: g.plan.progressive_stop ?? null, reward_to_risk: g.plan.rrr } : null);
   const side = (g) => ({ allowed: g.allowed, checks: g.checks.map((c) => ({ check: c.id, pass: c.pass, detail: c.detail })), plan: plan(g), vetoes: g.vetoes, cautions: g.cautions });
   return {
     bar_close: barClose,
