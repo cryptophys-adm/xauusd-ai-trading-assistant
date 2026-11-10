@@ -100,7 +100,7 @@ export default function GlobalDecision() {
   const rows = e ? [...witnessRows, { key: "M5", label: "5m", role: "trigger", lean: null, pass: m5 && (m5.buy_confirmed || m5.sell_confirmed) ? m5.verified : null, note: `the Prophet R38 confirmation of the latest closed 5m bar${m5?.candle_time ? ` (${utc(m5.candle_time)})` : ""}`, stale: false, weight: null, trigger: m5Text }] : strategyRows;
   const decision = e?.stance ?? s?.decision ?? g?.action ?? "WAIT";
   const [mode, setMode] = useState<string>(e?.trading_mode ?? "intraday");
-  useEffect(() => { fetch("/api/trading-mode").then((r) => r.json()).then((d) => { if (d?.mode) setMode(d.mode); }).catch(() => {}); }, []);
+  useEffect(() => { fetch("/api/trading-mode", { credentials: "include" }).then((r) => r.json()).then((d) => { if (d?.mode) setMode(d.mode); else console.warn("trading-mode no data", d); }).catch((e) => console.warn("trading-mode fetch failed", e)); }, []);
   const lead = e ? (e.stance === "SELL" ? "short" : e.stance === "BUY" ? "long" : (e.quorum?.short_share ?? 0) > (e.quorum?.long_share ?? 0) ? "short" : "long") : null;
   return (
     <Panel title={e ? "Decision Engine" : "Global decision"} icon={<Target className="h-3.5 w-3.5 text-cyan-300" />}
