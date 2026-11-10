@@ -135,7 +135,6 @@ function RoomTab({ room, tab }: { room: any; tab: Tab }) {
         waiting={room.phase === "closed" ? "The moderator could not conclude this round." : `The ${label} War Room is in session (${phaseText(room)}); the conclusion follows the Consensus Discussion.`} />
       {room.crowd && <CrowdLine crowd={room.crowd} conclusionBias={room.conclusion?.status === "ok" ? room.conclusion.bias : null} />}
       <Discussion room={room} />
-      {tab === "H1" && <ReasonerDecision r={room.reasoner_decision} />}
     </div>
   );
 }
