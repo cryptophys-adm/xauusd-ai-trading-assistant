@@ -26,8 +26,8 @@
 | **B‑06** | Update `riskChecks` to use composite sentiment and macro score for swing mode | AGY | DONE | 2h |
 | **B‑07** | Make blackout window configurable (`env.BLACKOUT_MINUTES`) and replace hard‑coded values | AGY | DONE | 1h |
 | **B‑08** | UI: Add mode selector dropdown, live metric panel, guardrail explainability in `GlobalDecision.tsx` | AGY | TODO | 5h |
-| **B‑09** | Write mode‑specific unit tests and back‑testing scripts | AGY | TODO | 4h |
-| **B‑10** | Update CI workflow to run the new tests | AGY | TODO | 1h |
+| **B‑09** | Write mode‑specific unit tests and back‑testing scripts | AGY | DONE | 4h |
+| **B‑10** | Update CI workflow to run the new tests | AGY | DONE | 1h |
 
 ---
 
