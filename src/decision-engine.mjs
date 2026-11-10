@@ -312,7 +312,9 @@ export function keyLevelsLean({ price = null, zones = [], atrH1 = null } = {}) {
   const unit = isNum(atrH1) && atrH1 > 0 ? atrH1 : null;
   const fmt = (d) => (unit ? `${r2(d / unit)} ATR` : r2(d));
   let lean;
-  if (dSup != null && dRes != null) lean = dSup + dRes > 0 ? 0.6 * (dRes - dSup) / (dRes + dSup) : 0;
+  // Production 2026-11-10 15:00: price sat in a zone 0.09 ATR under resistance and the plain ratio gave
+  // +0.6. Squeezed between two zones there is no edge: the gap counts in at least one 1H ATR.
+  if (dSup != null && dRes != null) { const span = Math.max(dRes + dSup, unit ?? 0); lean = span > 0 ? 0.6 * (dRes - dSup) / span : 0; }
   else if (dSup != null) lean = unit && dSup <= unit ? 0.3 : 0;
   else lean = unit && dRes <= unit ? -0.3 : 0;
   const parts = [dSup != null ? `${fmt(dSup)} above support` : null, dRes != null ? `${fmt(dRes)} below resistance` : null].filter(Boolean);
