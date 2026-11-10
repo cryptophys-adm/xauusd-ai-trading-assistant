@@ -132,6 +132,14 @@ export function quorumOf(cards) {
  * `inputs` are the strategy engine's inputs (snapshots, news, calendar, confirmations).
  */
 export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, now = Date.now() }) {
+  // ---- Adaptive mode handling ------------------------------------------------
+  // Expected env variable set via Cloudflare Workers environment
+  const MODE = (process && process.env && process.env.TRADING_MODE) || "intraday";
+  // Adaptive thresholds per mode
+  const QUORUM_MIN = MODE === "scalp" ? 0.45 : MODE === "swing" ? 0.6 : 0.5;
+  const MIN_RRR = MODE === "scalp" ? 1.2 : MODE === "swing" ? 2.0 : 1.5;
+  const LEAN = MODE === "scalp" ? 0.10 : MODE === "swing" ? 0.20 : 0.15;
+
   const side = stanceOf(dir);
   const card = (k) => (cards || []).find((c) => c.key === k);
   const checks = [];
