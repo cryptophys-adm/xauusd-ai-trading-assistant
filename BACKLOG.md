@@ -30,6 +30,7 @@
 | **B‑10** | Update CI workflow to run the new tests | AGY | DONE | 1h |
 | **B‑11** | Proposal: Global Decision as continuously tuned linear weighted model (issue #226) | AGY | TODO | 8h |
 | **B‑12** | Proposal: Aether-governed Omega policy (issue #227) | AGY | TODO | 6h |
+| **B‑13** | Proposal: Progressive Stop Loss SL+ (issue #229) | AGY | TODO | 10h |
 
 ---
 
