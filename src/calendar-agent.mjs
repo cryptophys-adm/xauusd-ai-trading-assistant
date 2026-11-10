@@ -28,7 +28,7 @@ export const EVENT_RULES = Object.freeze([
   { kind: "fed_speech", re: /fomc|fed chair|powell|fed .*speaks|federal reserve|press conference|monetary policy|beige book/i, higher: null, why: "a hawkish tone lifts the dollar and yields, a dovish tone does the opposite" },
   { kind: "inflation", re: /\bcpi\b|consumer price|\bppi\b|producer price|\bpce\b|price index|inflation/i, higher: "usd_up", why: "hotter inflation delays rate cuts and lifts real yields" },
   { kind: "wages", re: /average hourly earnings|wage|employment cost/i, higher: "usd_up", why: "faster wage growth feeds inflation and keeps rates high" },
-  { kind: "jobs", re: /non-?farm|nfp|adp|employment change|jolts|job openings/i, higher: "usd_up", why: "stronger hiring supports the dollar and higher rates" },
+  { kind: "jobs", re: /non[- ]?farm|nfp|adp|employment change|jolts|job openings/i, higher: "usd_up", why: "stronger hiring supports the dollar and higher rates" },
   { kind: "growth", re: /\bgdp\b|retail sales|durable goods|industrial production|factory orders/i, higher: "usd_up", why: "stronger growth supports the dollar and yields" },
   { kind: "surveys", re: /\bpmi\b|\bism\b|consumer confidence|consumer sentiment|empire state|philly fed|manufacturing index/i, higher: "usd_up", why: "stronger activity surveys support the dollar" },
   { kind: "housing", re: /housing|home sales|building permits|pending home/i, higher: "usd_up", why: "a firmer housing market supports the dollar slightly" }
@@ -61,9 +61,16 @@ const word = (s) => (s > 0 ? "gold up" : s < 0 ? "gold down" : "no clear effect"
 export function matchRelease(e, releases = []) {
   const t = Date.parse(e?.time);
   if (!Number.isFinite(t)) return null;
-  const near = (releases || []).filter((r) => Math.abs(Date.parse(r.time) - t) <= 10 * 60_000);
   const kind = ruleOf(e.title).kind;
-  return near.find((r) => r.kind === kind && (r.actual != null || r.forecast != null)) ?? near.find((r) => r.kind === kind) ?? null;
+  const near = (releases || []).filter((r) => Math.abs(Date.parse(r.time) - t) <= 10 * 60_000 && r.kind === kind);
+  if (!near.length) return null;
+  // ForexFactory and TradingView name the same release differently ("Core CPI m/m" and "Core Inflation
+  // Rate MoM"; production 2026-11-10): the headline and the core print share a minute, so the match
+  // prefers the same "core" word and the same period (month, quarter or year).
+  const words = (x) => { const s = String(x || "").toLowerCase(); return { core: /\bcore\b/.test(s), period: /y\/y|yoy|year/.test(s) ? "y" : /q\/q|qoq|quarter|annuali[sz]ed/.test(s) ? "q" : /m\/m|mom|month/.test(s) ? "m" : null }; };
+  const want = words(e.title);
+  const score = (r) => { const w = words(r.title); return (w.core === want.core ? 2 : 0) + (want.period && w.period === want.period ? 1 : 0) + (r.actual != null ? 0.5 : 0); };
+  return near.slice().sort((a, b) => score(b) - score(a))[0];
 }
 
 const fmtNum = (v, unit) => (v == null ? "n/a" : `${Math.round(v * 1000) / 1000}${unit === "%" ? "%" : ""}`);

@@ -134,3 +134,24 @@ test("upserts keep the first actual and never invent one", async () => {
   assert.deepEqual({ ...row }, { actual: 210000, gold_direction: -1 }, "stronger hiring weighs on gold; a later answer without the actual keeps it");
   assert.equal(await upsertReleases(db, [{ title: "ECB rate", time: CPI, currency: "EUR", actual: 2 }]), 0, "USD only");
 });
+
+test("production 2026-11-10: TradingView's titles: Non Farm Payrolls is a jobs release; the core and the headline print are matched apart", async () => {
+  const { ruleOf } = await import("../src/calendar-agent.mjs");
+  assert.equal(ruleOf("Non Farm Payrolls").kind, "jobs");
+  assert.equal(surpriseOf({ title: "Non Farm Payrolls", actual: 165000, forecast: 65000 }).gold_direction, -1, "stronger hiring weighs on gold");
+  const releases = [
+    { title: "Inflation Rate MoM", time: CPI, kind: "inflation", actual: 0.4, forecast: 0.3 },
+    { title: "Core Inflation Rate MoM", time: CPI, kind: "inflation", actual: 0.3, forecast: 0.2 },
+    { title: "Inflation Rate YoY", time: CPI, kind: "inflation", actual: 3.1, forecast: 3.0 }
+  ];
+  assert.equal(matchRelease({ title: "Core CPI m/m", time: CPI }, releases).title, "Core Inflation Rate MoM");
+  assert.equal(matchRelease({ title: "CPI m/m", time: CPI }, releases).title, "Inflation Rate MoM");
+  assert.equal(matchRelease({ title: "CPI y/y", time: CPI }, releases).title, "Inflation Rate YoY");
+  // A stored "other" row is re-classified at the next sweep.
+  resetEconSchemaCacheForTests();
+  const env = { DB: fakeD1(), SIGNAL_CACHE: kv() };
+  env.DB.raw.exec("CREATE TABLE IF NOT EXISTS econ_releases (release_key TEXT PRIMARY KEY, series TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, currency TEXT NOT NULL, time TEXT NOT NULL, importance INTEGER, actual REAL, forecast REAL, previous REAL, unit TEXT, surprise REAL, surprise_z REAL, gold_direction INTEGER, reaction_json TEXT, fetched_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
+  env.DB.raw.prepare("INSERT INTO econ_releases (release_key, series, kind, title, currency, time, actual, forecast, surprise, gold_direction, fetched_at, updated_at) VALUES ('k', 's', 'other', 'Non Farm Payrolls', 'USD', ?, 165000, 65000, 100000, -1, 'x', 'x')").run("2026-11-06T13:30:00.000Z");
+  await refreshEconReleases(env, { now: Date.parse("2026-11-10T18:40:00Z"), gatedEvents: [] });
+  assert.equal(env.DB.raw.prepare("SELECT kind FROM econ_releases").get().kind, "jobs");
+});
