@@ -39,3 +39,5 @@ type RunOptions = { now?: number; clock?: () => number; send?: ((text: string) =
 export function runDecisionEngine(env: any, options: RunOptions & { barClose: string }): Promise<Record<string, any>>;
 export function marketOpenAt(ms: number): boolean;
 export function runPendingDecision(env: any, options?: RunOptions): Promise<Record<string, any>>;
+export const EXTENDED_WITNESS_WEIGHTS: Readonly<Record<string, number>>;
+export function decisionWeightedEnabled(env: unknown): boolean;

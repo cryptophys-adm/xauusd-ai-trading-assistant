@@ -47,6 +47,8 @@ export const SYMBOL = "OANDA:XAUUSD";
 const M15_MS = 900_000;
 /** Witness weights (sum 1). A missing or stale witness drops out and the rest renormalise. */
 export const WITNESS_WEIGHTS = Object.freeze({ D1: 0.2, H4: 0.2, H1: 0.2, M15: 0.15, NEWS: 0.1, MACRO: 0.05, STRATEGY: 0.1 });
+export const EXTENDED_WITNESS_WEIGHTS = Object.freeze({ D1: 0.16, H4: 0.16, H1: 0.16, M15: 0.12, NEWS: 0.08, MACRO: 0.04, STRATEGY: 0.08, KEY_LEVELS: 0.05, REGIME: 0.05, TREND_TF: 0.05, MACRO_DRIVERS: 0.03, SESSION: 0.02 });
+export function decisionWeightedEnabled(env) { return String(env?.GLOBAL_DECISION_WEIGHTED ?? "false").trim().toLowerCase() === "true"; }
 export const QUORUM_MIN = 0.5;
 export const LEAN = 0.15;
 export const QUORUM_DECAY_PER_HOUR = 0.9;
@@ -100,7 +102,7 @@ export const keyCloseMs = (key) => Number(String(key ?? "").split(":").pop()) + 
  * room) and the strategy engine. Each: lean in [-1, 1] (the room's agents' confidence-weighted bias),
  * the witness's own decision and confidence, its summary, and whether it counts (available, not stale).
  */
-export function witnessCards({ global = null, strategy = null } = {}) {
+export function witnessCards({ global = null, strategy = null, context = {}, env = null } = {}) {
   const rows = new Map((global?.timeframes || []).map((t) => [t.key, t]));
   const cards = [];
   for (const key of ["D1", "H4", "H1", "M15", "NEWS", "MACRO"]) {
@@ -120,9 +122,23 @@ export function witnessCards({ global = null, strategy = null } = {}) {
     decision: strategy?.decision ?? null, state: strategy?.state ?? null, confidence: isNum(strategy?.confidence) ? strategy.confidence : null,
     summary: clip(strategy?.headline, 400) || null, at: null
   });
+  if (decisionWeightedEnabled(env)) {
+    const dir = (strategy?.direction === "LONG" ? 1 : strategy?.direction === "SHORT" ? -1 : 0);
+    const atLevel = Boolean(strategy?.plan?.at_level);
+    const align = isNum(strategy?.alignment) ? strategy.alignment : 0;
+    const keyLean = strategy ? r2(dir * Math.max(atLevel ? 0.5 : 0.2, align * 0.5)) : null;
+    cards.push({ key: "KEY_LEVELS", label: "Key levels", role: "zones", weight: EXTENDED_WITNESS_WEIGHTS.KEY_LEVELS, available: Boolean(strategy?.plan), stale: false, lean: keyLean, side: sideOf(keyLean), decision: null, confidence: null, summary: clip(strategy?.plan?.entry_note, 200) || null, at: null });
+    const regimeLean = (typeof context?.regime === "string" && /trend/i.test(context.regime)) ? (dir || 0) * 0.3 : null;
+    cards.push({ key: "REGIME", label: "Regime", role: "1H regime", weight: EXTENDED_WITNESS_WEIGHTS.REGIME, available: regimeLean != null, stale: false, lean: regimeLean, side: sideOf(regimeLean), decision: null, confidence: null, summary: context?.regime ?? null, at: null });
+    const trendLean = isNum(strategy?.trend) ? strategy.trend : null;
+    cards.push({ key: "TREND_TF", label: "Trend TF", role: "cross-TF trend", weight: EXTENDED_WITNESS_WEIGHTS.TREND_TF, available: trendLean != null, stale: false, lean: trendLean, side: sideOf(trendLean), decision: null, confidence: null, summary: null, at: null });
+    const macroLean = isNum(context?.macroLean) ? context.macroLean : null;
+    cards.push({ key: "MACRO_DRIVERS", label: "Macro drivers", role: "correlations", weight: EXTENDED_WITNESS_WEIGHTS.MACRO_DRIVERS, available: macroLean != null, stale: false, lean: macroLean, side: sideOf(macroLean), decision: null, confidence: null, summary: null, at: null });
+    const sessionLean = null; // placeholder; session clock is context only
+    cards.push({ key: "SESSION", label: "Session", role: "session clock", weight: EXTENDED_WITNESS_WEIGHTS.SESSION, available: false, stale: false, lean: sessionLean, side: sideOf(sessionLean), decision: null, confidence: null, summary: null, at: null });
+  }
   return cards;
 }
-
 /** Pure: the weighted quorum of the counting witnesses: the score and each side's share of the weight. */
 const _decayFactor = (c, now, decayPerHour) => {
   const t = Date.parse(String(c?.at ?? ""));
@@ -463,8 +479,9 @@ export async function notifyDecision(env, d, send) {
 
 /** Pure: the witnesses, the quorum and both sides' guardrails (with their plans) from the loaded inputs. */
 export function assess(loaded, { now = Date.now(), env = null } = {}) {
-  const { inputs = {}, strategy = null, global = null, macro = null } = loaded || {};
-  const cards = witnessCards({ global, strategy });
+  const { inputs = {}, strategy = null, global = null, macro = null, correlations = null, regime = null } = loaded || {};
+  const context = { regime, correlations, macroLean: isNum(macro?.lean) ? macro.lean : (isNum(macro?.score) ? macro.score : null) };
+  const cards = witnessCards({ global, strategy, context, env });
   const quorum = quorumOf(cards, { now });
   const guards = { long: guardrailsFor(1, { cards, quorum, strategy, inputs, macro, now, env }), short: guardrailsFor(-1, { cards, quorum, strategy, inputs, macro, now, env }) };
   return { cards, quorum, guards };
