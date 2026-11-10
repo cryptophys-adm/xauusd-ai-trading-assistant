@@ -14,3 +14,4 @@ export function bridgeKey(env: unknown, options?: { now?: number }): Promise<Rec
 export function executorFrom(state: unknown): Record<string, any> | null;
 export function bridgeSync(env: unknown, input?: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown }, options?: { now?: number; signal?: Record<string, any> }): Promise<Record<string, any>>;
 export function brokerOverview(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function applyOmegaPolicy(env: unknown, options?: { now?: number }): Promise<Record<string, unknown>>;

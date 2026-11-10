@@ -208,7 +208,7 @@ import { readCrowdReplay } from "./tuning-replay.mjs";
 import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weighting.mjs";
 import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
-import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings } from "./omega-broker.mjs";
+import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy } from "./omega-broker.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -2817,6 +2817,11 @@ export default {
           const health = await runHealthAlerts(env);
           if (health.opened || health.resolved || (Array.isArray(health.published) && health.published.length)) console.log("health_alerts", JSON.stringify(health));
         } catch (e) { console.error("health_alerts_failed", e instanceof Error ? e.message : String(e)); }
+        // Proposal #227 (Aether-governed Omega policy): apply Aether-pushed policy from KV within hard bounds.
+        try {
+          const omegaPolicy = await applyOmegaPolicy(env);
+          if (omegaPolicy.status === "applied") console.log("omega_policy", JSON.stringify(omegaPolicy));
+        } catch (e) { console.error("omega_policy_failed", e instanceof Error ? e.message : String(e)); }
         // RFC_INDICATOR_AGENT_PLATFORM P4: advisory reports to the Cryptophys Platform kernel.
         // Non-fatal by design; a no-op without the AGENTS binding (preview, tests).
         try {

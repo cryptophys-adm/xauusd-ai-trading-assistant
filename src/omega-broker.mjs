@@ -243,3 +243,36 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     events: events.map((r) => ({ ms: r.ms, actor: r.actor, action: r.action, detail: parse(r.detail) }))
   };
 }
+
+
+// ---------------------------------------------------------------- Aether-governed policy (proposal #227)
+
+export const OMEGA_POLICY_BOUNDS = Object.freeze({
+  risk_pct: { min: 0.1, max: 2.0 },
+  max_positions: { min: 1, max: 3 },
+  max_daily_loss_pct: { min: 1, max: 5 },
+  max_spread_points: { min: 30, max: 120 },
+  max_signal_age_ms: { min: 300000, max: 600000 }
+});
+
+function clamp(v, b) { return Math.min(b.max, Math.max(b.min, v)); }
+
+export async function applyOmegaPolicy(env, { now = Date.now() } = {}) {
+  if (String(env?.OMEGA_POLICY_AUTO ?? "false").trim().toLowerCase() !== "true") return { status: "disabled" };
+  let raw = null;
+  try { raw = await env?.SIGNAL_CACHE?.get?.("omega:policy"); } catch { raw = null; }
+  if (!raw) return { status: "no_policy" };
+  let policy = null;
+  try { policy = JSON.parse(raw); } catch { return { status: "invalid_policy" }; }
+  if (!policy || typeof policy !== "object") return { status: "invalid_policy" };
+  const current = await readSettings(env);
+  const body = { ...current.settings };
+  for (const k of Object.keys(OMEGA_POLICY_BOUNDS)) {
+    if (policy[k] != null && Number.isFinite(Number(policy[k]))) {
+      body[k] = clamp(Number(policy[k]), OMEGA_POLICY_BOUNDS[k]);
+    }
+  }
+  const r = await writeSettings(env, { body, actor: "aether" }, { now });
+  if (!r.ok) return { status: "failed", error: r.error };
+  return { status: "applied", settings: r.settings, version: r.version };
+}
