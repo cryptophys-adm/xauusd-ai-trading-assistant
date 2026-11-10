@@ -10,7 +10,6 @@ import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 import GlobalDecision from "./GlobalDecision";
 import KeyLevels from "./KeyLevels";
-import OrganismCard from "./OrganismCard";
 
 
 function SentimentCard() {
@@ -263,7 +262,7 @@ function SectionToggle({
 export default function AssistantPanel({ className, hideGlobalDecision }: { className?: string; hideGlobalDecision?: boolean }) {
   const ladder = useLadder();
   const { tab, levels, loading } = useLevels();
-  const [openSections, setOpenSections] = useState({ decision: true, structure: true, macro: true, organism: true });
+  const [openSections, setOpenSections] = useState({ decision: true, structure: true, macro: true });
 
   const toggle = (key: keyof typeof openSections) => setOpenSections((s) => ({ ...s, [key]: !s[key] }));
 
@@ -301,16 +300,6 @@ export default function AssistantPanel({ className, hideGlobalDecision }: { clas
               <ConsensusCard ladder={ladder} />
               <MacroDrivers />
               <SessionClock />
-            </div>
-          )}
-        </div>
-
-        {/* Section 4: Digital Organism & Metabolism */}
-        <div className="space-y-3">
-          <SectionToggle title="Digital Organism" count={1} open={openSections.organism} onToggle={() => toggle("organism")} />
-          {openSections.organism && (
-            <div className="space-y-4">
-              <OrganismCard />
             </div>
           )}
         </div>
