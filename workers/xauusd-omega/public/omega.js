@@ -173,10 +173,14 @@ function renderBroker(b) {
 }
 
 async function send(path, method, body) {
-  const r = await fetch(path, { method, credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body) });
-  const out = await r.json().catch(() => ({}));
-  if (!r.ok || out.ok === false) throw new Error(out.error || `HTTP ${r.status}`);
-  return out;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const r = await fetch(path, { method, credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: body == null ? undefined : JSON.stringify(body), signal: ctrl.signal });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok || out.ok === false) throw new Error(out.error || `HTTP ${r.status}`);
+    return out;
+  } finally { clearTimeout(timer); }
 }
 function say(id, cls, text) { const m = document.getElementById(id); m.className = `msg ${cls}`; m.textContent = text; }
 
