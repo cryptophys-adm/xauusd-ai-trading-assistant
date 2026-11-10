@@ -59,6 +59,12 @@ export function simulateSignal(signal, bars, { now = Date.now(), fillWindowMs = 
   const opened = toMs(signal.opened_at);
   const after = bars.filter((b) => toMs(b.open_time) >= opened && toMs(b.close_time) <= now);
 
+  // Progressive stop (SL+): when price reaches halfway to TP1, move the stop to breakeven (entry)
+  // or to the provided progressive_stop level. This simulates locking profit.
+  const hasPlus = finite(signal.progressive_stop);
+  const ps = hasPlus ? signal.progressive_stop : stop;
+  const trigger = hasPlus ? (entry + dir * 0.5 * Math.abs(tp1 - entry)) : (dir > 0 ? Infinity : -Infinity);
+
   let filledAt = null, i = 0;
   for (; i < after.length; i++) {
     const b = after[i];
@@ -74,17 +80,20 @@ export function simulateSignal(signal, bars, { now = Date.now(), fillWindowMs = 
 
   const fillMs = toMs(filledAt);
   const policy = (target) => {
-    let mfe = 0, mae = 0, ambiguous = false;
+    let mfe = 0, mae = 0, ambiguous = false, slPlus = false, slPlusAt = null;
+    let currentStop = stop;
     for (let k = i; k < after.length; k++) {
       const b = after[k];
       const favorable = dir > 0 ? b.high : b.low, adverse = dir > 0 ? b.low : b.high;
       mfe = Math.max(mfe, R(favorable)); mae = Math.min(mae, R(adverse));
-      const hitStop = beyond(b, stop, dir < 0), hitTarget = beyond(b, target, dir > 0);
-      if (hitStop) { ambiguous = hitTarget; return { result: "stop", r: -1, exit_price: stop, closed_at: b.close_time, bars: k - i + 1, mfe, mae: -1, ambiguous }; }
-      if (hitTarget) return { result: "target", r: R(target), exit_price: target, closed_at: b.close_time, bars: k - i + 1, mfe: Math.max(mfe, R(target)), mae, ambiguous };
-      if (toMs(b.close_time) - fillMs >= holdMaxMs) return { result: "time", r: R(b.close), exit_price: b.close, closed_at: b.close_time, bars: k - i + 1, mfe, mae, ambiguous };
+      // trigger SL+ when price reaches halfway to target
+      if (!slPlus && beyond(b, trigger, dir > 0)) { slPlus = true; slPlusAt = b.close_time; currentStop = ps; }
+      const hitStop = beyond(b, currentStop, dir < 0), hitTarget = beyond(b, target, dir > 0);
+      if (hitStop) { ambiguous = hitTarget; return { result: "stop", r: R(currentStop), exit_price: currentStop, closed_at: b.close_time, bars: k - i + 1, mfe, mae: R(currentStop), ambiguous, sl_plus: slPlus, sl_plus_at: slPlusAt }; }
+      if (hitTarget) return { result: "target", r: R(target), exit_price: target, closed_at: b.close_time, bars: k - i + 1, mfe: Math.max(mfe, R(target)), mae, ambiguous, sl_plus: slPlus, sl_plus_at: slPlusAt };
+      if (toMs(b.close_time) - fillMs >= holdMaxMs) return { result: "time", r: R(b.close), exit_price: b.close, closed_at: b.close_time, bars: k - i + 1, mfe, mae, ambiguous, sl_plus: slPlus, sl_plus_at: slPlusAt };
     }
-    return { result: "open", r: after.length > i ? R(after.at(-1).close) : 0, mfe, mae, bars: after.length - i };
+    return { result: "open", r: after.length > i ? R(after.at(-1).close) : 0, mfe, mae, bars: after.length - i, sl_plus: slPlus, sl_plus_at: slPlusAt };
   };
   const p1 = policy(tp1), p2 = tp2 != null ? policy(tp2) : null;
   const done = p1.result !== "open" && (p2 == null || p2.result !== "open");
@@ -94,7 +103,8 @@ export function simulateSignal(signal, bars, { now = Date.now(), fillWindowMs = 
     r_tp1: p1.result === "open" ? null : p1.r, r_tp2: p2 && p2.result !== "open" ? p2.r : null,
     open_r: p1.result === "open" ? p1.r : null,
     exit_price: p1.exit_price ?? null, bars_held: p1.bars, mfe_r: r3(p1.mfe), mae_r: r3(p1.mae),
-    ambiguous: Boolean(p1.ambiguous || p2?.ambiguous)
+    ambiguous: Boolean(p1.ambiguous || p2?.ambiguous),
+    sl_plus_triggered: p1.sl_plus ? 1 : 0, sl_plus_at: p1.sl_plus_at ?? null
   };
 }
 
@@ -129,6 +139,7 @@ export function ledgerView(items, { days }) {
       signals: list.length, pending: count("pending"), open: count("open"), closed: count("closed"), cancelled,
       fill_rate: list.length - count("pending") ? r3(filled / (list.length - count("pending"))) : null,
       ambiguous: list.filter((x) => x.ambiguous).length,
+      sl_plus: list.filter((x) => x.sl_plus_triggered).length,
       tp1: performance(list, "tp1"), tp2: performance(list.filter((x) => finite(x.tp2)), "tp2")
     };
   };
@@ -151,10 +162,12 @@ export const LEDGER_SCHEMA_SQL = [
     opened_at TEXT NOT NULL,
     side TEXT NOT NULL CHECK (side IN ('BUY', 'SELL')),
     entry REAL NOT NULL, stop REAL NOT NULL, tp1 REAL NOT NULL, tp2 REAL,
+    progressive_stop REAL,
     confidence REAL, note TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'open', 'closed', 'cancelled')),
     filled_at TEXT, closed_at TEXT, exit_reason TEXT, exit_price REAL,
     r_tp1 REAL, r_tp2 REAL, open_r REAL, mfe_r REAL, mae_r REAL, bars_held INTEGER, ambiguous INTEGER NOT NULL DEFAULT 0,
+    sl_plus_triggered INTEGER NOT NULL DEFAULT 0, sl_plus_at TEXT,
     updated_at TEXT NOT NULL
   )`,
   "CREATE INDEX IF NOT EXISTS idx_signal_ledger_opened ON signal_ledger(opened_at)",
@@ -165,6 +178,9 @@ export function resetLedgerSchemaCacheForTests() { schemaReady = false; }
 export async function ensureLedgerSchema(db) {
   if (schemaReady) return;
   for (const sql of LEDGER_SCHEMA_SQL) await db.prepare(sql).run();
+  for (const col of ["progressive_stop REAL", "sl_plus_triggered INTEGER NOT NULL DEFAULT 0", "sl_plus_at TEXT"]) {
+    try { await db.prepare(`ALTER TABLE signal_ledger ADD COLUMN ${col}`).run(); } catch { /* exists */ }
+  }
   schemaReady = true;
 }
 
@@ -183,7 +199,7 @@ export async function ledgerBars(env) {
   return [...h1.filter((b) => toMs(b.close_time) <= start), ...m15];
 }
 
-const insertSql = "INSERT OR IGNORE INTO signal_ledger (id, source, candle_key, opened_at, side, entry, stop, tp1, tp2, confidence, note, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)";
+const insertSql = "INSERT OR IGNORE INTO signal_ledger (id, source, candle_key, opened_at, side, entry, stop, tp1, tp2, progressive_stop, confidence, note, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)";
 
 /** New H1 Reasoner BUY/SELL decisions since `sinceIso` (each candle once). */
 export async function ingestH1Decisions(env, { sinceIso, now = Date.now() }) {
@@ -192,7 +208,7 @@ export async function ingestH1Decisions(env, { sinceIso, now = Date.now() }) {
   for (const r of rows) {
     const s = { side: r.decision, entry: r.entry_price, stop: r.stop_loss, tp1: r.take_profit, tp2: null };
     if (!validSignal(s)) continue;
-    const res = await env.DB.prepare(insertSql).bind("h1_decision:" + r.candle_key, "h1_decision", r.candle_key, iso(toMs(r.created_at)), s.side, s.entry, s.stop, s.tp1, null, r.confidence ?? null, null, iso(now)).run();
+    const res = await env.DB.prepare(insertSql).bind("h1_decision:" + r.candle_key, "h1_decision", r.candle_key, iso(toMs(r.created_at)), s.side, s.entry, s.stop, s.tp1, null, null, r.confidence ?? null, null, iso(now)).run();
     added += Number(res?.meta?.changes) || 0;
   }
   return added;
@@ -207,7 +223,7 @@ export async function ingestStrategy(env, strategy, { now = Date.now() } = {}) {
   const live = await env.DB.prepare("SELECT COUNT(*) AS n FROM signal_ledger WHERE source = 'strategy' AND side = ? AND status IN ('pending', 'open')").bind(s.side).first();
   if (Number(live?.n) > 0) return 0;
   const hour = Math.floor(now / 3600_000) * 3600_000;
-  const res = await env.DB.prepare(insertSql).bind(`strategy:${iso(hour)}`, "strategy", strategy.h1_chain?.candle_key ?? null, iso(now), s.side, s.entry, s.stop, s.tp1, s.tp2, finite(strategy.confidence) ? r3(strategy.confidence) : null, String(strategy.headline ?? "").slice(0, 300), iso(now)).run();
+  const res = await env.DB.prepare(insertSql).bind(`strategy:${iso(hour)}`, "strategy", strategy.h1_chain?.candle_key ?? null, iso(now), s.side, s.entry, s.stop, s.tp1, s.tp2, finite(plan.progressive_stop) ? plan.progressive_stop : null, finite(strategy.confidence) ? r3(strategy.confidence) : null, String(strategy.headline ?? "").slice(0, 300), iso(now)).run();
   return Number(res?.meta?.changes) || 0;
 }
 
@@ -224,7 +240,7 @@ export async function ingestDecision(env, d, { now = Date.now() } = {}) {
   if (!validSignal(s)) return 0;
   const live = await env.DB.prepare("SELECT COUNT(*) AS n FROM signal_ledger WHERE source = 'decision' AND side = ? AND status IN ('pending', 'open')").bind(s.side).first();
   if (Number(live?.n) > 0) return 0;
-  const res = await env.DB.prepare(insertSql).bind(`decision:${d.decision_key}`, "decision", d.decision_key, d.decided_at ?? iso(now), s.side, s.entry, s.stop, s.tp1, s.tp2, finite(d.confidence) ? r3(d.confidence) : null, String(d.summary ?? "").slice(0, 300), iso(now)).run();
+  const res = await env.DB.prepare(insertSql).bind(`decision:${d.decision_key}`, "decision", d.decision_key, d.decided_at ?? iso(now), s.side, s.entry, s.stop, s.tp1, s.tp2, finite(t.progressive_stop) ? t.progressive_stop : null, finite(d.confidence) ? r3(d.confidence) : null, String(d.summary ?? "").slice(0, 300), iso(now)).run();
   return Number(res?.meta?.changes) || 0;
 }
 
@@ -236,8 +252,8 @@ export async function evaluateOpenSignals(env, { now = Date.now(), bars = null }
   let changed = 0;
   for (const s of live) {
     const o = simulateSignal(s, closed, { now });
-    await env.DB.prepare("UPDATE signal_ledger SET status = ?, filled_at = ?, closed_at = ?, exit_reason = ?, exit_price = ?, r_tp1 = ?, r_tp2 = ?, open_r = ?, mfe_r = ?, mae_r = ?, bars_held = ?, ambiguous = ?, updated_at = ? WHERE id = ?")
-      .bind(o.status, o.filled_at ?? null, o.closed_at ?? null, o.exit_reason ?? null, o.exit_price ?? null, o.r_tp1 ?? null, o.r_tp2 ?? null, o.open_r ?? null, o.mfe_r ?? null, o.mae_r ?? null, o.bars_held ?? null, o.ambiguous ? 1 : 0, iso(now), s.id).run();
+    await env.DB.prepare("UPDATE signal_ledger SET status = ?, filled_at = ?, closed_at = ?, exit_reason = ?, exit_price = ?, r_tp1 = ?, r_tp2 = ?, open_r = ?, mfe_r = ?, mae_r = ?, bars_held = ?, ambiguous = ?, sl_plus_triggered = ?, sl_plus_at = ?, updated_at = ? WHERE id = ?")
+      .bind(o.status, o.filled_at ?? null, o.closed_at ?? null, o.exit_reason ?? null, o.exit_price ?? null, o.r_tp1 ?? null, o.r_tp2 ?? null, o.open_r ?? null, o.mfe_r ?? null, o.mae_r ?? null, o.bars_held ?? null, o.ambiguous ? 1 : 0, o.sl_plus_triggered ? 1 : 0, o.sl_plus_at ?? null, iso(now), s.id).run();
     if (o.status !== s.status) changed += 1;
   }
   return changed;
