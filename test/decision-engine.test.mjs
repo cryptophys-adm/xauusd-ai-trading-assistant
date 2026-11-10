@@ -294,6 +294,8 @@ test("the extended witnesses are independent: price vs zones, 1H trend quality, 
   assert.match(kl.summary, /0\.2 ATR above support and 3 ATR below resistance/);
   assert.equal(keyLevelsLean({ price: 4029, zones: [{ low: 3995, high: 3998, role: "support", candidate: true }, { low: 4030, high: 4032, role: "resistance", candidate: true }], atrH1: 10 }).lean < 0, true, "under resistance: bearish");
   assert.equal(keyLevelsLean({ price: null, zones: [] }), null);
+  const squeezed = keyLevelsLean({ price: 4040, zones: [{ low: 4036, high: 4041, price: 4038, role: "at price", candidate: true }, { low: 4041.8, high: 4044, price: 4043, role: "resistance", candidate: true }], atrH1: 20 });
+  assert.ok(Math.abs(squeezed.lean) < 0.1, `production 15:00: in a zone 0.09 ATR under resistance there is no edge (${squeezed.lean})`);
   const up = Array.from({ length: 21 }, (_, i) => ({ close: 4000 + i * 2 + (i % 2 ? 1 : 0) }));
   const rg = regimeLean({ h1Bars: up, regime: { sensors: { trend: 0.62 }, chaos: false } });
   assert.ok(rg.lean > 0.5, JSON.stringify(rg));
