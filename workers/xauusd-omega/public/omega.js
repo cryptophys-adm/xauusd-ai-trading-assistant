@@ -174,7 +174,7 @@ function renderBroker(b) {
 
 async function send(path, method, body) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 10000);
+  const timer = setTimeout(() => ctrl.abort(), 30000);
   try {
     const r = await fetch(path, { method, credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: body == null ? undefined : JSON.stringify(body), signal: ctrl.signal });
     const out = await r.json().catch(() => ({}));
@@ -207,9 +207,10 @@ async function connectBroker() {
 
 async function disconnectBroker() {
   const reason = "disconnect requested from omega page";
-  try { await send("./api/connection", "DELETE", { reason }); say("broker-msg", "ok", "Disconnected."); }
-  catch (e) { say("broker-msg", "bad", `Refused: ${e.message}`); }
-  await load();
+  say("broker-msg", "", "Disconnecting…");
+  send("./api/connection", "DELETE", { reason })
+    .then(() => { say("broker-msg", "ok", "Disconnected."); load(); })
+    .catch((e) => { say("broker-msg", "bad", `Refused: ${e.message}`); load(); });
 }
 
 async function saveEngine(extra = {}) {
