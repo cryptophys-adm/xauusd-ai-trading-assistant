@@ -134,3 +134,58 @@ test("settings: merged onto the stored ones; enabled false disarms live; LIVE ne
   assert.match(settingsFrom({ enabled: "yes" }).error, /enabled/);
   assert.ok(settingsFrom([]).error);
 });
+
+test("mean reversal early exit closes active positions before SL hit", () => {
+  const signal = {
+    action: "EXIT",
+    mean_reversal: true,
+    issued_ms: NOW,
+    expires_ms: NOW + 10 * 60_000,
+    entry: 4100, stop: 4095, tp1: 4110
+  };
+  const executor = {
+    ...EXECUTOR,
+    positions: [{ ticket: 998877, side: "BUY", volume: 0.1, open_price: 4098, sl: 4095, tp: 4110, profit: 20 }]
+  };
+  const { intents, notes } = planIntents({
+    signal,
+    settings: { enabled: true, live_armed: true },
+    executor,
+    now: NOW,
+    engineEnabled: true
+  });
+  assert.equal(intents.length, 1);
+  assert.equal(intents[0].kind, "close");
+  assert.equal(intents[0].ticket, 998877);
+  assert.equal(intents[0].reason, "mean_reversal");
+  assert.ok(notes.some((n) => n.code === "mean_reversal_exit"));
+});
+
+test("extended TP expands runner take profit on strong momentum", () => {
+  const signal = {
+    side: "BUY",
+    action: "ENTER_BUY",
+    issued_ms: NOW,
+    expires_ms: NOW + 10 * 60_000,
+    entry: 4100, stop: 4095, tp1: 4110,
+    tp2: 4130, // Extended TP target
+    confidence: 0.9
+  };
+  const executor = {
+    ...EXECUTOR,
+    positions: [{ ticket: 554433, side: "BUY", volume: 0.1, open_price: 4100, sl: 4095, tp: 4110, profit: 100 }]
+  };
+  const { intents } = planIntents({
+    signal,
+    settings: { enabled: true, live_armed: true, max_positions: 2 },
+    executor,
+    now: NOW,
+    engineEnabled: true
+  });
+  const modifyTp = intents.find((it) => it.kind === "modify_tp");
+  assert.ok(modifyTp, "modify_tp intent emitted");
+  assert.equal(modifyTp.ticket, 554433);
+  assert.equal(modifyTp.tp, 4130);
+  assert.equal(modifyTp.reason, "extended_tp");
+});
+

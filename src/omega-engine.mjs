@@ -128,6 +128,20 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   }
 
   const side = signal?.side === "BUY" || signal?.side === "SELL" ? signal.side : null;
+
+  // Mean Reversal / Early Exit: close positions if signal explicitly indicates reversal or exit
+  if (signal?.action === "EXIT" || signal?.action === "REVERSAL" || signal?.mean_reversal === true || signal?.early_exit === true) {
+    for (const p of positions) {
+      if (p.ticket != null && !intents.some((it) => it.ticket === p.ticket)) {
+        intents.push({ id: `cl:${p.ticket}:rev`, kind: "close", ticket: p.ticket, reason: "mean_reversal" });
+      }
+    }
+    if (intents.length) {
+      note("mean_reversal_exit");
+      return { intents, notes };
+    }
+  }
+
   for (const p of positions) {
     if (side && (p.side === "BUY" || p.side === "SELL") && p.side !== side && p.ticket != null) {
       intents.push({ id: closeId(p.ticket), kind: "close", ticket: p.ticket, reason: "opposite" });
@@ -192,5 +206,25 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
       intents.push({ id: `ms:${p.ticket}:${entry}`, kind: "modify_sl", ticket: p.ticket, sl: entry, tp: p.tp, reason: "trailing" });
     }
   }
+
+  // Extended TP: expand TP when strong momentum or extended TP targets (tp2 / extended_tp) are provided
+  const targetExtTp = positive(signal?.extended_tp) ? signal.extended_tp : positive(signal?.tp2) ? signal.tp2 : null;
+  if (targetExtTp != null) {
+    for (const p of sameSide) {
+      if (p.ticket == null) continue;
+      const curTp = Number(p.tp);
+      const isExtended = buy ? (targetExtTp > curTp + 0.1) : (targetExtTp < curTp - 0.1);
+      if (isExtended && !intents.some((it) => it.ticket === p.ticket && it.kind === "modify_tp")) {
+        intents.push({
+          id: `mt:${p.ticket}:${Math.round(targetExtTp * 100)}`,
+          kind: "modify_tp",
+          ticket: p.ticket,
+          tp: roundTo(targetExtTp, sym.digits),
+          reason: "extended_tp"
+        });
+      }
+    }
+  }
+
   return { intents, notes };
 }

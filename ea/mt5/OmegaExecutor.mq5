@@ -44,6 +44,15 @@ input int  StateEverySeconds = 1;      // How often omega/state.json is refreshe
 input int  MinTickIntervalMs = 250;    // Minimum interval between tick-driven state.json writes (ms)
 input int  MaxIntentsAgeSeconds = 30;  // ignore an intents.txt older than this (bridge down, terminal restarted)
 
+//--- Profit Protection & Local Risk Management (Owner Approved)
+input bool   AutoBreakEvenEnabled   = true;  // Auto SL+ (Break-Even) enabled
+input int    BreakEvenTriggerPoints = 150;   // Profit points to lock SL+ (150 pts = $1.50)
+input int    BreakEvenLockPoints    = 20;    // Profit points secured in SL+ (20 pts = $0.20)
+input bool   TrailingStopEnabled    = true;  // Micro Trailing Stop enabled
+input int    TrailingStartPoints    = 250;   // Profit points before trailing activates (250 pts = $2.50)
+input int    TrailingDistancePoints = 150;   // Distance of trailing stop from current price
+input int    TrailingStepPoints     = 30;    // Minimum step to modify trailing SL
+
 const string OMEGA_FOLDER    = "omega";
 const string STATE_TMP_PATH  = "omega/state.tmp";
 const string STATE_JSON_PATH = "omega/state.json";
@@ -495,6 +504,36 @@ void ExecuteModifySlIntent(const string id, const ulong ticket, const double new
       AppendResult(id, false, ticket, trade.ResultRetcodeDescription(), executedMs);
   }
 
+void ExecuteModifyTpIntent(const string id, const ulong ticket, const double newTp)
+  {
+   long nowMs = NowUtcMs();
+   if(ticket == 0 || !PositionSelectByTicket(ticket))
+     {
+      AppendResult(id, false, ticket, "position_not_found", nowMs);
+      return;
+     }
+   if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
+     {
+      AppendResult(id, false, ticket, "foreign_magic", nowMs);
+      return;
+     }
+   double sl = PositionGetDouble(POSITION_SL);
+   double currentTp = PositionGetDouble(POSITION_TP);
+   if(newTp == currentTp)
+     {
+      AppendResult(id, true, ticket, "already_at_tp", nowMs);
+      return;
+     }
+   trade.SetExpertMagicNumber(MagicNumber);
+   trade.SetDeviationInPoints(SlippagePoints);
+   bool ok = trade.PositionModify(ticket, sl, newTp);
+   long executedMs = NowUtcMs();
+   if(ok)
+      AppendResult(id, true, ticket, "", executedMs);
+   else
+      AppendResult(id, false, ticket, trade.ResultRetcodeDescription(), executedMs);
+  }
+
 void ExecuteCloseAllIntent(const string id)
   {
    trade.SetExpertMagicNumber(MagicNumber);
@@ -587,6 +626,8 @@ void ProcessIntentsFile()
          ExecuteCloseAllIntent(id);
       else if(kind == "modify_sl")
          ExecuteModifySlIntent(id, ticket, sl);
+      else if(kind == "modify_tp")
+         ExecuteModifyTpIntent(id, ticket, tp);
       else
          AppendResult(id, false, 0, "unknown_intent_kind", NowUtcMs());
      }
@@ -615,8 +656,106 @@ void OnDeinit(const int reason)
    EventKillTimer();
   }
 
+//+------------------------------------------------------------------+
+//| Manage Local SL+ (Break-Even) and Micro Trailing Stop            |
+//+------------------------------------------------------------------+
+void ManageTrailingAndBreakEven()
+  {
+   if(!AutoBreakEvenEnabled && !TrailingStopEnabled) return;
+
+   string sym = ResolveGoldSymbol();
+   if(sym == "") return;
+   double bid = SymbolInfoDouble(sym, SYMBOL_BID);
+   double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
+   double point = SymbolInfoDouble(sym, SYMBOL_POINT);
+   int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   if(point <= 0.0 || digits <= 0) return;
+
+   int total = PositionsTotal();
+   for(int i = total - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != sym) continue;
+
+      long posType = PositionGetInteger(POSITION_TYPE);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double currentSl = PositionGetDouble(POSITION_SL);
+      double currentTp = PositionGetDouble(POSITION_TP);
+
+      if(posType == POSITION_TYPE_BUY)
+        {
+         double profitPoints = (bid - openPrice) / point;
+         // 1. Auto Break-Even (SL+)
+         if(AutoBreakEvenEnabled && profitPoints >= BreakEvenTriggerPoints)
+           {
+            double beSl = NormalizeDouble(openPrice + (BreakEvenLockPoints * point), digits);
+            if(currentSl < beSl - (point * 0.5))
+              {
+               trade.SetExpertMagicNumber(MagicNumber);
+               trade.SetDeviationInPoints(SlippagePoints);
+               if(trade.PositionModify(ticket, beSl, currentTp))
+                 {
+                  PrintFormat("Auto SL+ triggered for BUY #%I64d: moved SL to %.2f (profit=%.1f pts)", ticket, beSl, profitPoints);
+                  currentSl = beSl;
+                 }
+              }
+           }
+         // 2. Trailing Stop
+         if(TrailingStopEnabled && profitPoints >= TrailingStartPoints)
+           {
+            double targetSl = NormalizeDouble(bid - (TrailingDistancePoints * point), digits);
+            if(targetSl > currentSl + (TrailingStepPoints * point))
+              {
+               trade.SetExpertMagicNumber(MagicNumber);
+               trade.SetDeviationInPoints(SlippagePoints);
+               if(trade.PositionModify(ticket, targetSl, currentTp))
+                 {
+                  PrintFormat("Trailing Stop adjusted for BUY #%I64d: SL moved to %.2f", ticket, targetSl);
+                 }
+              }
+           }
+        }
+      else if(posType == POSITION_TYPE_SELL)
+        {
+         double profitPoints = (openPrice - ask) / point;
+         // 1. Auto Break-Even (SL+)
+         if(AutoBreakEvenEnabled && profitPoints >= BreakEvenTriggerPoints)
+           {
+            double beSl = NormalizeDouble(openPrice - (BreakEvenLockPoints * point), digits);
+            if(currentSl == 0.0 || currentSl > beSl + (point * 0.5))
+              {
+               trade.SetExpertMagicNumber(MagicNumber);
+               trade.SetDeviationInPoints(SlippagePoints);
+               if(trade.PositionModify(ticket, beSl, currentTp))
+                 {
+                  PrintFormat("Auto SL+ triggered for SELL #%I64d: moved SL to %.2f (profit=%.1f pts)", ticket, beSl, profitPoints);
+                  currentSl = beSl;
+                 }
+              }
+           }
+         // 2. Trailing Stop
+         if(TrailingStopEnabled && profitPoints >= TrailingStartPoints)
+           {
+            double targetSl = NormalizeDouble(ask + (TrailingDistancePoints * point), digits);
+            if(currentSl == 0.0 || targetSl < currentSl - (TrailingStepPoints * point))
+              {
+               trade.SetExpertMagicNumber(MagicNumber);
+               trade.SetDeviationInPoints(SlippagePoints);
+               if(trade.PositionModify(ticket, targetSl, currentTp))
+                 {
+                  PrintFormat("Trailing Stop adjusted for SELL #%I64d: SL moved to %.2f", ticket, targetSl);
+                 }
+              }
+           }
+        }
+     }
+  }
+
 void OnTick()
   {
+   ManageTrailingAndBreakEven();
    ulong nowTick = GetTickCount64();
    string sym = ResolveGoldSymbol();
    double bid = SymbolInfoDouble(sym, SYMBOL_BID);
@@ -635,6 +774,7 @@ void OnTick()
 
 void OnTimer()
   {
+   ManageTrailingAndBreakEven();
    datetime nowGmt = TimeGMT();
    if(g_lastStateAt == 0 || (nowGmt - g_lastStateAt) >= MathMax(1, StateEverySeconds))
      {
