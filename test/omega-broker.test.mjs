@@ -181,3 +181,26 @@ test("the sync refuses a missing key id or an oversized state", async () => {
   assert.equal((await sync(e, { kid: "nope" })).ok, false);
   assert.equal((await sync(e, { state: { ...STATE, positions: Array.from({ length: 50 }, () => ({ ticket: 1, side: "BUY", intent_id: "x".repeat(31) })), server: "x".repeat(64) } })).ok, true, "50 positions fit");
 });
+
+test("autonomous watchdog: Cerebrum dispatches self-healing remediation and throttles anti-flapping", async () => {
+  const e = env();
+  await sync(e);
+  await setConnection(e, { envelope: await buildEnvelope(SPKI, KID, { server: "S", login: "5550123", password: "hunter2" }), server: "S", actor: "o" });
+
+  // 1. Algo trading disabled triggers remediation
+  const res1 = await sync(e, { state: { ...STATE, trade_allowed: false } }, { now: NOW });
+  assert.ok(res1.recovery, "recovery directive dispatched");
+  assert.equal(res1.recovery.directive, "remediate_algo_trading");
+  assert.equal(res1.recovery.reason, "trade_allowed_false");
+
+  // 2. Anti-flapping cooldown prevents second dispatch immediately
+  const res2 = await sync(e, { state: { ...STATE, trade_allowed: false } }, { now: NOW + 10_000 });
+  assert.equal(res2.recovery, undefined, "recovery throttled within 3m cooldown");
+
+  // 3. Overview surfaces autonomous watchdog state
+  const ov = await brokerOverview(e, { now: NOW + 15_000 });
+  assert.equal(ov.autonomous_watchdog?.active, true);
+  assert.equal(ov.autonomous_watchdog?.agent, "agent:cerebrum");
+  assert.equal(ov.autonomous_watchdog?.last_recovery?.directive, "remediate_algo_trading");
+});
+

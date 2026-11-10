@@ -199,3 +199,32 @@ export function clearCredentials(iniText) {
 
   return serializeIniBlocks(blocks, eol, hasTrailingNewline);
 }
+
+/**
+ * Pure function to ensure automated live trading permissions in MT5 INI text:
+ * guarantees `Enable=1`, `Enabled=1`, `AllowLiveTrading=1`, `Account=0`, `Profile=0`.
+ *
+ * @param {string} iniText
+ * @returns {string}
+ */
+export function ensureLiveTradingSettings(iniText) {
+  const eol = iniText.includes("\r\n") ? "\r\n" : "\n";
+  const hasTrailingNewline = iniText.endsWith("\r\n") || iniText.endsWith("\n");
+
+  const rawLines = iniText.length === 0 ? [] : iniText.split(/\r?\n/);
+  if (hasTrailingNewline && rawLines.length > 0 && rawLines[rawLines.length - 1] === "") {
+    rawLines.pop();
+  }
+
+  const blocks = parseIniBlocks(rawLines);
+  mutateSection(blocks, "Experts", [
+    ["Enable", "1"],
+    ["Enabled", "1"],
+    ["AllowLiveTrading", "1"],
+    ["AllowDllImport", "0"],
+    ["Account", "0"],
+    ["Profile", "0"],
+  ]);
+
+  return serializeIniBlocks(blocks, eol, hasTrailingNewline);
+}

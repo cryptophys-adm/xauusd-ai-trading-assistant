@@ -10,7 +10,7 @@ import {
   resolveOmegaDir,
   writeIntents,
 } from "./files.mjs";
-import { applyCredentials, clearCredentials } from "./ini.mjs";
+import { applyCredentials, clearCredentials, ensureLiveTradingSettings } from "./ini.mjs";
 import { DEFAULT_STATE_DIR, loadOrCreateKeyPair } from "./keys.mjs";
 
 export const BRIDGE_VERSION = "1.0.0";
@@ -24,6 +24,7 @@ export const MAX_BACKOFF_MS = 60000;
 export const MAX_SYNC_BODY_BYTES = 65536;
 export const FORBIDDEN_403_LOG_INTERVAL_MS = 60000;
 export const FORBIDDEN_403_HINT = "check OMEGA_BRIDGE_CLIENT_ID / the Access service token";
+export const RECOVERY_COOLDOWN_MS = 180000;
 
 const REDACTED_KEYS = new Set([
   "login",
@@ -348,6 +349,80 @@ export function createDaemon(options = {}) {
     return Math.min(MAX_BACKOFF_MS, config.syncMs * Math.pow(2, failures));
   }
 
+  let lastRecoveryMs = -Infinity;
+
+  async function handleAutonomousRecovery(recovery) {
+    if (!recovery || typeof recovery !== "object") return;
+    const directive = String(recovery.directive || "");
+    const reason = String(recovery.reason || "");
+    const actionId = String(recovery.action_id || `rec:${now()}`);
+
+    const elapsed = now() - lastRecoveryMs;
+    if (elapsed < RECOVERY_COOLDOWN_MS) {
+      log({
+        level: "warn",
+        event: "autonomous_recovery_throttled",
+        directive,
+        reason,
+        cooldown_remaining_sec: Math.max(1, Math.round((RECOVERY_COOLDOWN_MS - elapsed) / 1000)),
+      });
+      return;
+    }
+
+    lastRecoveryMs = now();
+    log({
+      level: "warn",
+      event: "autonomous_recovery_triggered",
+      directive,
+      reason,
+      action_id: actionId,
+    });
+
+    try {
+      // 1. Dismiss any blocking dialogs on DISPLAY=:99 (Wine Mono, modal popups)
+      try {
+        await invokeExec(execFn, "sh", [
+          "-c",
+          "command -v xdotool >/dev/null 2>&1 && DISPLAY=:99 xdotool key Escape || true",
+        ]);
+      } catch {
+        /* ignore xdotool failures */
+      }
+
+      // 2. Ensure terminal ini has clean live trading settings (Account=0, Profile=0, Enabled=1)
+      if (fs.existsSync(config.terminalIni)) {
+        try {
+          const currentIni = fs.readFileSync(config.terminalIni, "utf8");
+          const cleanedIni = ensureLiveTradingSettings(currentIni);
+          if (cleanedIni !== currentIni) {
+            writeTerminalIniPreservingOwner(config.terminalIni, cleanedIni, fs);
+          }
+        } catch {
+          /* ignore ini parse error */
+        }
+      }
+
+      // 3. Restart terminal service to recover frozen state or apply clean trading permissions
+      if (directive === "restart_terminal" || directive === "remediate_algo_trading") {
+        await invokeExec(execFn, "systemctl", ["restart", config.terminalService]);
+        log({
+          level: "info",
+          event: "autonomous_recovery_completed",
+          directive,
+          service: config.terminalService,
+          action_id: actionId,
+        });
+      }
+    } catch (err) {
+      log({
+        level: "error",
+        event: "autonomous_recovery_failed",
+        directive,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   async function tick() {
     const state = readState(config.omegaFilesDir, { fs });
     if (state && !state.connected) {
@@ -524,6 +599,30 @@ export function createDaemon(options = {}) {
               version: conn.version,
               error: err instanceof Error ? err.message : "connection_apply_failed",
             });
+          }
+        }
+      }
+    }
+
+    if (appliedConnection !== true) {
+      if (payload?.recovery && typeof payload.recovery === "object") {
+        await handleAutonomousRecovery(payload.recovery);
+      } else if (state) {
+        const isDegraded = state.connected === false || state.trade_allowed === false;
+        const isStale = Number.isFinite(state.received_ms) && (now() - Number(state.received_ms) > 60_000);
+        if (isDegraded || isStale) {
+          const d = new Date(now());
+          const day = d.getUTCDay(), hour = d.getUTCHours();
+          const isWeekend = (day === 5 && hour >= 22) || day === 6 || (day === 0 && hour < 22);
+          if (!isWeekend || state.trade_allowed === false) {
+            const applied = readAppliedState(config.stateDir, fs);
+            if (applied?.server) {
+              await handleAutonomousRecovery({
+                directive: state.trade_allowed === false ? "remediate_algo_trading" : "restart_terminal",
+                reason: state.trade_allowed === false ? "local_trade_allowed_false" : "local_terminal_frozen",
+                action_id: `rec:local:${now()}`,
+              });
+            }
           }
         }
       }

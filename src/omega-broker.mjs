@@ -130,6 +130,7 @@ export function executorFrom(state) {
   const a = state.account ?? {}, s = state.symbol ?? {};
   return {
     connected: state.connected === true,
+    trade_allowed: typeof state.trade_allowed === "boolean" ? state.trade_allowed : (state.connected === true ? true : null),
     server: typeof state.server === "string" ? state.server.slice(0, 64) : null,
     received_ms: n(state.received_ms),
     terminal_error: typeof state.terminal_error === "string" ? state.terminal_error.slice(0, 200) : null,
@@ -214,7 +215,53 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   const open = await db.prepare("SELECT id, payload FROM omega_intents WHERE status IN ('pending', 'sent') ORDER BY created_ms, id").all();
   const intents = (open.results ?? []).map((r) => parse(r.payload)).filter(Boolean);
   await db.prepare("UPDATE omega_intents SET status = 'sent', updated_ms = ? WHERE status = 'pending'").bind(now).run();
-  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes };
+
+  // Cerebrum Autonomous Watchdog: evaluate MT5 terminal health & dispatch self-healing directives
+  let recovery = null;
+  if (conn?.status === "stored") {
+    const recentFailedAlgo = (Array.isArray(results) ? results : []).some(
+      (r) => typeof r?.error === "string" && (r.error.includes("algo_trading_disabled") || r.error.includes("automated trading disabled"))
+    );
+    const algoDisabled = executor?.trade_allowed === false || recentFailedAlgo;
+
+    const d = new Date(now);
+    const day = d.getUTCDay(), hour = d.getUTCHours();
+    const isWeekend = (day === 5 && hour >= 22) || day === 6 || (day === 0 && hour < 22);
+    const terminalDisconnected = executor?.connected === false;
+    const isStale = Number.isFinite(executor?.received_ms) && (now - Number(executor.received_ms) > 60_000);
+
+    let candidateDirective = null;
+    let candidateReason = null;
+
+    if (algoDisabled) {
+      candidateDirective = "remediate_algo_trading";
+      candidateReason = recentFailedAlgo ? "recent_intent_algo_disabled" : "trade_allowed_false";
+    } else if (!isWeekend && (terminalDisconnected || isStale)) {
+      candidateDirective = "restart_terminal";
+      candidateReason = terminalDisconnected ? "terminal_disconnected" : "chart_frozen_stale_quote";
+    }
+
+    if (candidateDirective) {
+      const lastRec = await db.prepare("SELECT ms FROM omega_events WHERE actor = 'agent:cerebrum' AND action = 'autonomous_recovery' ORDER BY id DESC LIMIT 1").first();
+      const lastMs = Number(lastRec?.ms || 0);
+      if (now - lastMs >= 180_000) {
+        const actionId = `rec:${now}`;
+        recovery = {
+          directive: candidateDirective,
+          reason: candidateReason,
+          action_id: actionId,
+        };
+        await event(db, now, "agent:cerebrum", "autonomous_recovery", {
+          directive: candidateDirective,
+          reason: candidateReason,
+          action_id: actionId,
+          status: "dispatched",
+        });
+      }
+    }
+  }
+
+  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, ...(recovery ? { recovery } : {}) };
 }
 
 // ---------------------------------------------------------------- overview (for the page)
@@ -229,6 +276,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
   const syncedAge = b?.synced_ms ? now - Number(b.synced_ms) : null;
   const intents = (await db.prepare("SELECT payload, status, result, created_ms, updated_ms FROM omega_intents ORDER BY created_ms DESC, id DESC LIMIT 50").all()).results ?? [];
   const events = (await db.prepare("SELECT ms, actor, action, detail FROM omega_events ORDER BY id DESC LIMIT 20").all()).results ?? [];
+  const lastRec = await db.prepare("SELECT ms, detail FROM omega_events WHERE actor = 'agent:cerebrum' AND action = 'autonomous_recovery' ORDER BY id DESC LIMIT 1").first();
+
   return {
     engine: { env_enabled: engineEnvEnabled(env), ...settings.settings, settings_version: settings.version, updated_by: settings.updated_by, updated_ms: settings.updated_ms },
     connection: { version: connection.version, status: connection.status, server: connection.server, updated_by: connection.updated_by, updated_ms: connection.updated_ms },
@@ -243,6 +292,13 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       digits: st?.symbol?.digits ?? null, point: st?.symbol?.point ?? null, tick_size: st?.symbol?.tick_size ?? null, tick_value: st?.symbol?.tick_value ?? null,
       volume_min: st?.symbol?.volume_min ?? null, volume_max: st?.symbol?.volume_max ?? null, volume_step: st?.symbol?.volume_step ?? null, stops_level_points: st?.symbol?.stops_level_points ?? null,
       positions: Array.isArray(st?.positions) ? st.positions : [], state_age_ms: Number.isFinite(st?.received_ms) ? now - st.received_ms : null
+    },
+    autonomous_watchdog: {
+      active: true,
+      agent: "agent:cerebrum",
+      policy: "self_healing_v1",
+      anti_flapping_cooldown_sec: 180,
+      last_recovery: lastRec ? { ms: lastRec.ms, ...parse(lastRec.detail, {}) } : null,
     },
     intents: intents.map((r) => ({ ...parse(r.payload, {}), status: r.status, result: parse(r.result), created_ms: r.created_ms, updated_ms: r.updated_ms })),
     events: events.map((r) => ({ ms: r.ms, actor: r.actor, action: r.action, detail: parse(r.detail) }))

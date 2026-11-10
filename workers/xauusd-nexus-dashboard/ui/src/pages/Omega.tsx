@@ -4,11 +4,13 @@ import {
   AlertTriangle,
   Bot,
   CandlestickChart,
+  Cpu,
   KeyRound,
   Layers,
   Lock,
   Power,
   Radio,
+  ShieldCheck,
   Sliders,
   Terminal,
   Zap,
@@ -36,7 +38,7 @@ interface Candle {
 }
 
 type Mt5Tf = "M5" | "M15" | "H1" | "H4" | "D1";
-type ToolboxTab = "trade" | "history" | "intents" | "terminal" | "experts" | "journal";
+type ToolboxTab = "trade" | "history" | "intents" | "state_machine" | "events";
 type BrokerKey = "monex" | "fxpro" | "dupoin" | "valetax" | "exness" | "custom";
 
 interface BrokerPreset {
@@ -475,16 +477,8 @@ export default function Omega() {
   const engineDirtyRef = useRef(false);
   const serverInitRef = useRef(false);
 
-  // MT5 VPS Diagnostics & command copy helper
-  const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
+  // Raw state inspector
   const [showRawState, setShowRawState] = useState(false);
-  const copyCmd = (cmd: string) => {
-    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(cmd);
-    }
-    setCopiedCmd(cmd);
-    setTimeout(() => setCopiedCmd(null), 2500);
-  };
 
   // Control state
   const [controlReason, setControlReason] = useState("");
@@ -704,6 +698,7 @@ export default function Omega() {
   const e = b?.engine || {};
   const conn = b?.connection || {};
   const br = b?.bridge || {};
+  const watchdog = b?.autonomous_watchdog || null;
   const cur = br.currency || hb?.currency || "USD";
   const digits = typeof br.digits === "number" && br.digits >= 0 ? br.digits : 2;
   const symbolName = br.symbol || "XAUUSD.m";
@@ -905,7 +900,7 @@ export default function Omega() {
             {/* MT5 Terminal VPS Execution Health Pill */}
             <button
               type="button"
-              onClick={() => setToolboxTab("terminal")}
+              onClick={() => setToolboxTab("state_machine")}
               className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] font-semibold transition ${
                 !br.terminal_connected
                   ? "border-rose-500/40 bg-rose-500/15 text-rose-300 hover:bg-rose-500/25"
@@ -915,10 +910,10 @@ export default function Omega() {
               }`}
               title={
                 !br.terminal_connected
-                  ? "MT5 Terminal is DISCONNECTED on VPS! Click for diagnostics."
+                  ? "MT5 Terminal is DISCONNECTED on VPS! Cerebrum Watchdog supervising recovery."
                   : !br.trade_allowed
-                  ? "MT5 Terminal Algo Trading is DISABLED! Orders will fail. Click to troubleshoot."
-                  : "MT5 Terminal on VPS is LIVE and automated trade execution is ALLOWED. Click for telemetry."
+                  ? "MT5 Terminal Algo Trading is DISABLED! Cerebrum Watchdog auto-healing active."
+                  : "MT5 Terminal on VPS is LIVE and automated trade execution is ALLOWED. Supervised by Cerebrum."
               }
             >
               <span
@@ -996,16 +991,16 @@ export default function Omega() {
               </button>
               <button
                 type="button"
-                onClick={() => setToolboxTab("terminal")}
-                className={`flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] font-semibold transition ${
-                  toolboxTab === "terminal"
+                onClick={() => setToolboxTab("state_machine")}
+                className={`flex items-center gap-1.5 rounded border px-2 py-0.5 text-[11px] font-semibold transition ${
+                  toolboxTab === "state_machine"
                     ? "border-cyan-400/50 bg-cyan-500/20 text-cyan-200"
                     : "border-white/10 bg-black/30 text-slate-300 hover:border-cyan-400/30 hover:text-cyan-200"
                 }`}
-                title="Open Headless MT5 Terminal Diagnostics & Remote Control"
+                title="View Autonomous Cerebrum Pipeline & State Machine"
               >
-                <Terminal className="h-3 w-3 text-cyan-400" />
-                VPS Diagnostics
+                <Cpu className="h-3 w-3 text-cyan-400" />
+                Pipeline State
               </button>
             </div>
           </div>
@@ -1027,29 +1022,29 @@ export default function Omega() {
           </div>
         </div>
 
-        {/* Headless VPS Warning Banner: surfaced if MT5 is disconnected or algo trading is blocked */}
+        {/* Autonomous Cerebrum Watchdog Self-Healing Banner */}
         {conn.status === "stored" && (!br.terminal_connected || !br.trade_allowed) ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rose-500/30 bg-gradient-to-r from-rose-950/70 via-amber-950/40 to-black/70 px-4 py-2 text-[12px] text-rose-200">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/30 bg-gradient-to-r from-amber-950/70 via-cyan-950/40 to-black/70 px-4 py-2 text-[12px] text-amber-200">
             <div className="flex items-center gap-2.5">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 animate-pulse" />
+              <Cpu className="h-4 w-4 shrink-0 text-cyan-400 animate-spin" />
               <div>
                 <span className="font-bold text-white">
-                  {!br.terminal_connected ? "MT5 Terminal Offline on VPS: " : "MT5 Algo Trading Disabled: "}
+                  Cerebrum Self-Healing Active:{" "}
                 </span>
                 <span className="text-slate-300">
                   {!br.terminal_connected
-                    ? "Terminal session is disconnected from broker. Real-time chart updates and order intents are suspended."
-                    : "Terminal is streaming quotes, but automated order execution is disabled in MT5. Intents will fail with 'algo_trading_disabled'."}
+                    ? "Terminal session disconnected. Cerebrum Watchdog is autonomously recovering the connection."
+                    : "Algo trading permission restricted. Cerebrum Watchdog is auto-correcting terminal INI parameters."}
                 </span>
               </div>
             </div>
             <button
               type="button"
-              onClick={() => setToolboxTab("terminal")}
+              onClick={() => setToolboxTab("state_machine")}
               className="flex items-center gap-1.5 rounded-md border border-cyan-400/40 bg-cyan-500/20 px-2.5 py-1 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/30 transition"
             >
-              <Terminal className="h-3 w-3" />
-              Inspect VPS Diagnostics
+              <Activity className="h-3 w-3" />
+              View State Machine
             </button>
           </div>
         ) : null}
@@ -1225,9 +1220,8 @@ export default function Omega() {
                   ["trade", `Trade (${positionsList.length})`],
                   ["history", `History (${(data?.deals || []).length})`],
                   ["intents", `Order Intents (${(b?.intents || []).length})`],
-                  ["terminal", "MT5 Terminal (VPS)"],
-                  ["experts", `Experts (${(b?.events || []).length + (data?.control_events || []).length})`],
-                  ["journal", "Journal & Bridge"],
+                  ["state_machine", "Autonomous State Machine"],
+                  ["events", `Events & Journal (${(b?.events || []).length + (data?.control_events || []).length})`],
                 ] as [ToolboxTab, string][]
               ).map(([key, label]) => (
                 <button
@@ -1430,228 +1424,256 @@ export default function Omega() {
             </div>
           ) : null}
 
-          {/* Tab: MT5 TERMINAL VPS TELEMETRY & DIAGNOSTICS */}
-          {toolboxTab === "terminal" ? (
-            <div className="space-y-3.5 p-3.5 text-[12px]">
-              {/* Top 4 Diagnostic Metric Cards */}
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                {/* Card 1: Algo Trading Status */}
-                <div
-                  className={`rounded-lg border p-3 ${
-                    br.trade_allowed
-                      ? "border-emerald-500/30 bg-emerald-950/20"
-                      : "border-rose-500/40 bg-rose-950/25"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                      Algo Trading Permission
-                    </span>
-                    <Badge tone={br.trade_allowed ? "green" : "red"}>
-                      {br.trade_allowed ? "ENABLED" : "DISABLED"}
-                    </Badge>
+          {/* Tab 4: AUTONOMOUS STATE MACHINE & SELF-HEALING WATCHDOG */}
+          {toolboxTab === "state_machine" ? (
+            <div className="space-y-4 p-4 text-[12px]">
+              {/* Header Banner: Autonomous System Architecture */}
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cyan-500/30 bg-gradient-to-r from-cyan-950/40 via-[#0a1220] to-[#0c1628] p-3.5">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-400/40 bg-cyan-500/10 text-cyan-300">
+                    <Cpu className="h-5 w-5 animate-pulse" />
                   </div>
-                  <div className="mt-2 flex items-center gap-1.5 text-[14px] font-extrabold text-white">
-                    <span
-                      className={`h-2.5 w-2.5 rounded-full ${
-                        br.trade_allowed ? "bg-emerald-400 animate-pulse" : "bg-rose-500"
-                      }`}
-                    />
-                    {br.trade_allowed ? "Trading Allowed (Active)" : "Algo Trading Blocked"}
-                  </div>
-                  <p className="mt-1 text-[11px] text-slate-400 leading-snug">
-                    {br.trade_allowed
-                      ? "OmegaExecutor is authorized by MT5 to execute live market orders and trailing stops automatically."
-                      : "MT5 terminal or MQL5 has automated trading disabled. Orders will be rejected with 'algo_trading_disabled'."}
-                  </p>
-                </div>
-
-                {/* Card 2: Broker Session & Connection */}
-                <div className="rounded-lg border border-white/10 bg-black/30 p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                      Broker Session
-                    </span>
-                    <Badge tone={br.terminal_connected ? "green" : "red"}>
-                      {br.terminal_connected ? "CONNECTED" : "OFFLINE"}
-                    </Badge>
-                  </div>
-                  <div className="mt-2 text-[14px] font-extrabold text-cyan-200">
-                    {serverName || "Not Connected"}
-                  </div>
-                  <div className="mt-1 flex items-center justify-between text-[11px] text-slate-400">
-                    <span>
-                      Mode: <strong className="text-slate-200 uppercase">{br.trade_mode || "demo"}</strong>
-                    </span>
-                    <span>
-                      Feed Age: <strong className="mono text-slate-200">{agoMs(br.state_age_ms)}</strong>
-                    </span>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold uppercase tracking-wider text-white">
+                        Cerebrum Autonomous Self-Healing Pipeline
+                      </span>
+                      <span className="mono rounded border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+                        {watchdog?.active ? "AUTONOMOUS · ACTIVE" : "SUPERVISED"}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-slate-400">
+                      Zero human intervention required. Cerebrum continuously monitors MT5 terminal heartbeat, recovers blocking dialogs, corrects INI permissions, and heals connectivity autonomously.
+                    </p>
                   </div>
                 </div>
 
-                {/* Card 3: Headless VPS Environment */}
-                <div className="rounded-lg border border-white/10 bg-black/30 p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                      VPS Headless Display
-                    </span>
-                    <span className="mono rounded border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-300">
-                      DISPLAY=:99
-                    </span>
-                  </div>
-                  <div className="mt-2 text-[14px] font-extrabold text-slate-100">
-                    Wine Staging (x86_64)
-                  </div>
-                  <div className="mt-1 flex items-center justify-between text-[11px] text-slate-400">
-                    <span>
-                      Bridge: <strong className="text-emerald-300">v{br.bridge_version || "1.0.0"}</strong>
-                    </span>
-                    <span>
-                      Sync: <strong className="mono text-slate-200">{br.seen ? agoMs(br.synced_age_ms) : "offline"}</strong>
-                    </span>
-                  </div>
-                </div>
-
-                {/* Card 4: Symbol Execution Specs */}
-                <div className="rounded-lg border border-white/10 bg-black/30 p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                      Symbol Specs
-                    </span>
-                    <span className="mono font-bold text-amber-300">{symbolName}</span>
-                  </div>
-                  <div className="mt-2 grid grid-cols-2 gap-x-2 text-[11px]">
-                    <div>
-                      <span className="text-slate-500">Stops Level: </span>
-                      <strong className="mono text-slate-200">{br.stops_level_points ?? 0} pts</strong>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Spread: </span>
-                      <strong className="mono text-amber-200">{br.spread_points ?? "—"} pts</strong>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Min Lot: </span>
-                      <strong className="mono text-slate-200">{br.volume_min ?? "—"}</strong>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Tick Val: </span>
-                      <strong className="mono text-slate-200">${num(br.tick_value, 2)}</strong>
-                    </div>
-                  </div>
+                <div className="flex items-center gap-2 text-[11px]">
+                  <span className="text-slate-400">Policy:</span>
+                  <span className="mono font-semibold text-cyan-200">{watchdog?.policy || "self_healing_v1"}</span>
+                  <span className="text-slate-600">|</span>
+                  <span className="text-slate-400">Anti-Flap Cooldown:</span>
+                  <span className="mono font-semibold text-slate-200">{watchdog?.anti_flapping_cooldown_sec || 180}s</span>
                 </div>
               </div>
 
-              {/* Section: Headless Pre-flight Checklist & Remote Control */}
-              <div className="grid gap-3.5 lg:grid-cols-2">
-                {/* Checklist */}
-                <div className="rounded-lg border border-white/10 bg-[#0c1424] p-3.5">
-                  <div className="flex items-center justify-between border-b border-white/10 pb-2">
-                    <h4 className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-cyan-300">
-                      <Activity className="h-3.5 w-3.5" />
-                      Headless Pre-Flight Health Checklist
-                    </h4>
-                    <span className="text-[10px] text-slate-400">Runtime Telemetry</span>
+              {/* 5-Stage Interactive State Machine Pipeline */}
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                {/* Node 1: Cerebrum Cloud Supervisor */}
+                <div className="flex flex-col justify-between rounded-lg border border-cyan-500/30 bg-black/40 p-3">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400">
+                        1. Cloud Brain
+                      </span>
+                      <Badge tone="green">SUPERVISED</Badge>
+                    </div>
+                    <div className="mt-2 text-[13px] font-extrabold text-white">
+                      Cerebrum Watchdog
+                    </div>
+                    <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Agent</span>
+                        <span className="mono font-semibold text-cyan-200">{watchdog?.agent || "agent:cerebrum"}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Supervision</span>
+                        <span className="text-emerald-300">Autonomous</span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="mt-2.5 divide-y divide-white/5 text-[11.5px]">
-                    <div className="flex items-center justify-between py-1.5">
-                      <span className="text-slate-300">1. Host Bridge Daemon Sync</span>
-                      <span className={`mono font-semibold ${br.seen ? "text-emerald-300" : "text-rose-400"}`}>
-                        {br.seen ? `Online (${agoMs(br.synced_age_ms)})` : "Offline"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between py-1.5">
-                      <span className="text-slate-300">2. MT5 Terminal Heartbeat</span>
-                      <span
-                        className={`mono font-semibold ${
-                          br.state_age_ms != null && br.state_age_ms < 60000 ? "text-emerald-300" : "text-rose-400"
-                        }`}
-                      >
-                        {br.state_age_ms != null && br.state_age_ms < 60000
-                          ? `Streaming (${agoMs(br.state_age_ms)})`
-                          : "Stale / Offline"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between py-1.5">
-                      <span className="text-slate-300">3. Broker Session &amp; Login</span>
-                      <span className={`mono font-semibold ${br.terminal_connected ? "text-emerald-300" : "text-rose-400"}`}>
-                        {br.terminal_connected ? `Connected (${serverName})` : "Disconnected"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between py-1.5">
-                      <span className="text-slate-300">4. Automated Trading (Algo Trading)</span>
-                      <span className={`mono font-bold ${br.trade_allowed ? "text-emerald-300" : "text-rose-400"}`}>
-                        {br.trade_allowed ? "Allowed (Active)" : "Blocked (algo_trading_disabled)"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between py-1.5">
-                      <span className="text-slate-300">5. Market Quote Streaming</span>
-                      <span className={`mono font-semibold ${(br.spread_points ?? 0) > 0 ? "text-emerald-300" : "text-amber-300"}`}>
-                        {(br.spread_points ?? 0) > 0 ? `Spread ${br.spread_points} pts (Live)` : "Stale or Market Closed"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between py-1.5">
-                      <span className="text-slate-300">6. Cloud Execution Engine Switch</span>
-                      <span className={`mono font-semibold ${eEnabled && c.mode !== "killed" ? "text-emerald-300" : "text-amber-300"}`}>
-                        {c.mode === "killed" ? "KILLED" : eEnabled ? "Enabled (Armed)" : "Disabled (Off)"}
-                      </span>
-                    </div>
+                  <div className="mt-2.5 border-t border-white/5 pt-2 text-[10px] text-slate-400">
+                    Self-healing directives dispatched on sync
                   </div>
                 </div>
 
-                {/* VPS Remote Control & Terminal Quick Commands */}
-                <div className="rounded-lg border border-white/10 bg-[#0c1424] p-3.5">
-                  <div className="flex items-center justify-between border-b border-white/10 pb-2">
-                    <h4 className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-cyan-300">
-                      <Terminal className="h-3.5 w-3.5" />
-                      VPS Terminal Headless Quick Commands
-                    </h4>
-                    <span className="text-[10px] text-slate-400">Click command to copy</span>
+                {/* Node 2: Host Bridge Daemon */}
+                <div className="flex flex-col justify-between rounded-lg border border-white/10 bg-black/40 p-3">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        2. Host Bridge
+                      </span>
+                      <Badge tone={br.seen ? "green" : "red"}>
+                        {br.seen ? "SYNCED" : "OFFLINE"}
+                      </Badge>
+                    </div>
+                    <div className="mt-2 text-[13px] font-extrabold text-slate-100">
+                      Omega Bridge Daemon
+                    </div>
+                    <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Sync Age</span>
+                        <span className="mono text-emerald-300">{br.seen ? agoMs(br.synced_age_ms) : "—"}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Key ID</span>
+                        <span className="mono text-slate-300 truncate max-w-[90px]">{br.kid || "—"}</span>
+                      </div>
+                    </div>
                   </div>
-                  <p className="mt-2 text-[11px] text-slate-400">
-                    Since MT5 runs headless on your VPS without a visual desktop, use these instant maintenance commands:
-                  </p>
-                  <div className="mt-2 space-y-1.5">
-                    {[
-                      { label: "Check Services Status", cmd: "systemctl status mt5-terminal omega-bridge --no-pager" },
-                      { label: "Take Headless MT5 Screenshot", cmd: "DISPLAY=:99 import -window root /tmp/screen_mt5.png" },
-                      { label: "Restart MT5 Terminal Service", cmd: "systemctl restart mt5-terminal" },
-                      { label: "Restart Omega Bridge Daemon", cmd: "systemctl restart omega-bridge" },
-                      { label: "Inspect Live Terminal Log", cmd: "journalctl -u mt5-terminal -n 50 --no-pager" },
-                    ].map((item) => (
-                      <div
-                        key={item.label}
-                        onClick={() => copyCmd(item.cmd)}
-                        className="group flex cursor-pointer items-center justify-between rounded border border-white/5 bg-black/40 px-2.5 py-1.5 hover:border-cyan-400/40 hover:bg-cyan-950/20 transition"
-                        title="Click to copy to clipboard"
-                      >
-                        <div className="min-w-0 pr-2">
-                          <div className="text-[10px] uppercase text-slate-500 group-hover:text-cyan-300">{item.label}</div>
-                          <div className="mono truncate text-[11px] text-slate-300">{item.cmd}</div>
-                        </div>
-                        <span className="mono shrink-0 rounded bg-white/5 px-2 py-0.5 text-[10px] text-slate-400 group-hover:bg-cyan-500/20 group-hover:text-cyan-200">
-                          {copiedCmd === item.cmd ? "Copied!" : "Copy"}
+                  <div className="mt-2.5 border-t border-white/5 pt-2 text-[10px] text-slate-400">
+                    RSA-3072 + AES-GCM encrypted
+                  </div>
+                </div>
+
+                {/* Node 3: MT5 Terminal Service */}
+                <div className="flex flex-col justify-between rounded-lg border border-white/10 bg-black/40 p-3">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        3. MT5 Terminal
+                      </span>
+                      <Badge tone={br.state_age_ms != null && br.state_age_ms < 60000 ? "green" : "red"}>
+                        {br.state_age_ms != null && br.state_age_ms < 60000 ? "STREAMING" : "STALE"}
+                      </Badge>
+                    </div>
+                    <div className="mt-2 text-[13px] font-extrabold text-slate-100">
+                      Wine MT5 Service
+                    </div>
+                    <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Heartbeat</span>
+                        <span className="mono text-emerald-300">{agoMs(br.state_age_ms)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Display</span>
+                        <span className="mono text-slate-300">DISPLAY=:99</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-2.5 border-t border-white/5 pt-2 text-[10px] text-slate-400">
+                    EA: OmegaExecutor (MQL5)
+                  </div>
+                </div>
+
+                {/* Node 4: Broker Gateway & Market */}
+                <div className="flex flex-col justify-between rounded-lg border border-white/10 bg-black/40 p-3">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        4. Broker Gateway
+                      </span>
+                      <Badge tone={br.terminal_connected && br.trade_allowed ? "green" : "red"}>
+                        {br.terminal_connected ? (br.trade_allowed ? "READY" : "ALGO BLOCKED") : "DISCONNECTED"}
+                      </Badge>
+                    </div>
+                    <div className="mt-2 text-[13px] font-extrabold text-cyan-200 truncate">
+                      {serverName}
+                    </div>
+                    <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Mode</span>
+                        <span className="mono uppercase text-slate-200">{br.trade_mode || "demo"}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Permission</span>
+                        <span className={`font-semibold ${br.trade_allowed ? "text-emerald-300" : "text-rose-400"}`}>
+                          {br.trade_allowed ? "Allowed" : "Disabled"}
                         </span>
                       </div>
-                    ))}
+                    </div>
+                  </div>
+                  <div className="mt-2.5 border-t border-white/5 pt-2 text-[10px] text-slate-400">
+                    {symbolName} · Spread {br.spread_points ?? 0} pts
+                  </div>
+                </div>
+
+                {/* Node 5: Cloud Decision Engine */}
+                <div className="flex flex-col justify-between rounded-lg border border-white/10 bg-black/40 p-3">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        5. Decision Engine
+                      </span>
+                      <Badge tone={c.mode === "killed" ? "red" : eEnabled ? "green" : "amber"}>
+                        {c.mode === "killed" ? "KILLED" : eEnabled ? "ARMED" : "IDLE"}
+                      </Badge>
+                    </div>
+                    <div className="mt-2 text-[13px] font-extrabold text-slate-100">
+                      15m Engine
+                    </div>
+                    <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Mode</span>
+                        <span className="mono uppercase text-slate-200">{c.mode || "active"}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Live Trade</span>
+                        <span className="mono text-slate-300">{e.live_armed ? "Armed" : "Demo safe"}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-2.5 border-t border-white/5 pt-2 text-[10px] text-slate-400">
+                    Signal: {s.side || "NONE"}
                   </div>
                 </div>
               </div>
 
-              {/* Section: Raw State JSON Inspector (Collapsible) */}
+              {/* Autonomous Self-Healing Audit Trail Card */}
+              <div className="rounded-lg border border-white/10 bg-[#0c1424] p-3.5">
+                <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                  <h4 className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-cyan-300">
+                    <ShieldCheck className="h-4 w-4 text-emerald-400" />
+                    Autonomous Recovery Audit Trail
+                  </h4>
+                  <span className="mono text-[10px] text-slate-400">
+                    Self-Healing Guardian Log
+                  </span>
+                </div>
+
+                {watchdog?.last_recovery ? (
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="rounded border border-white/5 bg-black/30 p-2.5">
+                      <div className="text-[10px] uppercase text-slate-500">Last Directive</div>
+                      <div className="mono mt-1 text-[12px] font-bold text-amber-300">
+                        {watchdog.last_recovery.directive}
+                      </div>
+                    </div>
+                    <div className="rounded border border-white/5 bg-black/30 p-2.5">
+                      <div className="text-[10px] uppercase text-slate-500">Trigger Reason</div>
+                      <div className="mono mt-1 text-[12px] font-bold text-slate-200">
+                        {watchdog.last_recovery.reason}
+                      </div>
+                    </div>
+                    <div className="rounded border border-white/5 bg-black/30 p-2.5">
+                      <div className="text-[10px] uppercase text-slate-500">Timestamp</div>
+                      <div className="mono mt-1 text-[12px] text-cyan-200">
+                        {timeUtc(watchdog.last_recovery.ms)} ({agoMs(Date.now() - watchdog.last_recovery.ms)})
+                      </div>
+                    </div>
+                    <div className="rounded border border-white/5 bg-black/30 p-2.5">
+                      <div className="text-[10px] uppercase text-slate-500">Guardian Status</div>
+                      <div className="mono mt-1 text-[12px] font-semibold text-emerald-300">
+                        Executed & Cooled Down
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-3 flex items-center gap-2 rounded border border-emerald-500/20 bg-emerald-950/15 p-3 text-[11.5px] text-emerald-200">
+                    <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-400" />
+                    <span>
+                      All pipeline nodes running nominal. No recovery interventions required in the current session.
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Collapsible Raw State JSON Inspector */}
               <div className="rounded-lg border border-white/10 bg-[#0c1424] p-3">
                 <div className="flex items-center justify-between">
                   <div>
                     <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300">
-                      Raw MT5 Broker State (omega/state.json)
+                      Raw MT5 State Inspector (omega/state.json)
                     </span>
-                    <span className="ml-2 text-[10px] text-slate-500">Live JSON emitted by OmegaExecutor EA</span>
+                    <span className="ml-2 text-[10px] text-slate-500">Direct telemetry stream</span>
                   </div>
                   <button
                     type="button"
                     onClick={() => setShowRawState((v) => !v)}
                     className="rounded border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-slate-300 hover:bg-white/10 transition"
                   >
-                    {showRawState ? "Hide Raw JSON" : "Inspect Raw State JSON"}
+                    {showRawState ? "Hide JSON" : "Inspect Raw State"}
                   </button>
                 </div>
                 {showRawState ? (
@@ -1685,6 +1707,7 @@ export default function Omega() {
                         state_age_ms: br.state_age_ms,
                         bridge_sync_age_ms: br.synced_age_ms,
                         kid: br.kid,
+                        autonomous_watchdog: watchdog,
                       },
                       null,
                       2
@@ -1695,12 +1718,12 @@ export default function Omega() {
             </div>
           ) : null}
 
-          {/* Tab 5: EXPERTS (Engine & Control Audit Log) */}
-          {toolboxTab === "experts" ? (
+          {/* Tab 5: EVENTS & AUDIT JOURNAL */}
+          {toolboxTab === "events" ? (
             <div className="table-wrap max-h-[260px] overflow-y-auto">
               {!(b?.events || []).length && !(data?.control_events || []).length ? (
                 <div className="p-4">
-                  <Empty>No expert or control events logged yet.</Empty>
+                  <Empty>No events logged yet.</Empty>
                 </div>
               ) : (
                 <table className="tbl">
@@ -1716,7 +1739,7 @@ export default function Omega() {
                     {(b?.events || []).map((x: any, idx: number) => (
                       <tr key={`m-e-${idx}`}>
                         <td className="mono">{timeUtc(x.ms)}</td>
-                        <td className="mono">{x.actor}</td>
+                        <td className="mono font-semibold text-slate-300">{x.actor}</td>
                         <td className="mono text-cyan-300">{x.action}</td>
                         <td className="mono text-[11px] text-slate-300">
                           {x.detail ? JSON.stringify(x.detail).slice(0, 160) : "—"}
@@ -1726,7 +1749,7 @@ export default function Omega() {
                     {(data?.control_events || []).map((ev: any, idx: number) => (
                       <tr key={`m-c-${idx}`}>
                         <td className="mono">{timeUtc(Date.parse(ev.at))}</td>
-                        <td className="mono">{ev.actor}</td>
+                        <td className="mono font-semibold text-slate-300">{ev.actor}</td>
                         <td className="mono text-amber-200">{`${ev.previous_mode} → ${ev.mode}`}</td>
                         <td className="text-[11px] text-slate-300">{ev.reason || "—"}</td>
                       </tr>
@@ -1734,82 +1757,6 @@ export default function Omega() {
                   </tbody>
                 </table>
               )}
-            </div>
-          ) : null}
-
-          {/* Tab 5: JOURNAL (Terminal & Bridge Telemetry) */}
-          {toolboxTab === "journal" ? (
-            <div className="grid gap-3 p-3.5 sm:grid-cols-2 lg:grid-cols-4 text-[11.5px]">
-              <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">Host Bridge Daemon</div>
-                <dl className="mt-1.5 space-y-1">
-                  <div className="flex justify-between">
-                    <dt className="text-slate-500">Status</dt>
-                    <dd className="mono text-emerald-300">{br.seen ? `online (${agoMs(br.synced_age_ms)})` : "offline"}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-slate-500">Version</dt>
-                    <dd className="mono text-slate-200">{br.bridge_version || "—"}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-slate-500">RSA Key ID</dt>
-                    <dd className="mono text-slate-300">{br.kid || "—"}</dd>
-                  </div>
-                </dl>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">MT5 Terminal Session</div>
-                <dl className="mt-1.5 space-y-1">
-                  <div className="flex justify-between">
-                    <dt className="text-slate-500">Broker Server</dt>
-                    <dd className="mono text-slate-200">{serverName}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-slate-500">Trade Mode</dt>
-                    <dd className="mono text-slate-200">{br.trade_mode || "—"}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-slate-500">State Age</dt>
-                    <dd className="mono text-slate-300">{agoMs(br.state_age_ms)}</dd>
-                  </div>
-                </dl>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">Encrypted Credentials</div>
-                <dl className="mt-1.5 space-y-1">
-                  <div className="flex justify-between">
-                    <dt className="text-slate-500">Envelope</dt>
-                    <dd className="mono text-slate-200">{conn.status || "none"} {conn.version ? `(v${conn.version})` : ""}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-slate-500">Cipher</dt>
-                    <dd className="mono text-slate-300">RSA-OAEP-3072 + AES-GCM</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-slate-500">Updated</dt>
-                    <dd className="mono text-slate-400">{timeUtc(conn.updated_ms)}</dd>
-                  </div>
-                </dl>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">Execution Safety Gates</div>
-                <dl className="mt-1.5 space-y-1">
-                  <div className="flex justify-between">
-                    <dt className="text-slate-500">Engine Switch</dt>
-                    <dd className="mono text-slate-200">{effectiveLabel}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-slate-500">Live Armed</dt>
-                    <dd className="mono text-slate-200">{e.live_armed ? "yes" : "no (demo safe)"}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-slate-500">Max Spread / Loss</dt>
-                    <dd className="mono text-slate-300">
-                      {e.max_spread_points ?? 35} pts / {e.max_daily_loss_pct ?? 2}%
-                    </dd>
-                  </div>
-                </dl>
-              </div>
             </div>
           ) : null}
         </div>
