@@ -56,6 +56,17 @@ export const COUNCIL_DEADLINE_MS = 90_000;
 /** The sweep decides a bar whose 15m room did not trigger the engine this long after its close. */
 export const SWEEP_AFTER_MS = 4 * 60_000;
 export const DECISION_LATEST_KEY = "decision-engine:latest";
+export const TRADING_MODE_KEY = "trading:mode";
+/** Runtime trading mode: env first, then KV (UI selector), default intraday. */
+export async function tradingMode(env) {
+  const envMode = String(env?.TRADING_MODE ?? "").trim().toLowerCase();
+  if (["scalp", "intraday", "swing"].includes(envMode)) return envMode;
+  try {
+    const v = String(await env?.SIGNAL_CACHE?.get?.(TRADING_MODE_KEY) ?? "").trim().toLowerCase();
+    if (["scalp", "intraday", "swing"].includes(v)) return v;
+  } catch { /* ignore */ }
+  return "intraday";
+}
 export const DECISION_TELEGRAM_KEY = "telegram:decision-engine:last:v1";
 
 const STANCES = ["BUY", "SELL", "WAIT"];
@@ -541,6 +552,7 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     await ensureDecisionSchema(env.DB);
     if (await env.DB.prepare("SELECT 1 AS x FROM engine_decisions WHERE decision_key = ?").bind(key).first()) return { status: "already_decided", decision_key: key };
     const previous = await readLatestDecision(env);
+    try { env.TRADING_MODE = await tradingMode(env); } catch { /* keep env */ }
     const data = loaded ?? await loadDecisionInputs(env, { now });
     const assessment = assess(data, { now, env });
     const context = councilContext({ inputs: data.inputs, correlations: data.correlations, regime: data.regime, previous, now });

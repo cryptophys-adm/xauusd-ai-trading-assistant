@@ -147,7 +147,7 @@ export default function GlobalDecision() {
           {e && (
             <div className="glass-inner mt-3 flex flex-wrap items-center gap-2 px-3 py-2 text-[11px] text-slate-300">
               <span className="eyebrow text-[9px]">Mode</span>
-              <select className="rounded border border-white/10 bg-slate-900 px-2 py-1 text-[11px] text-slate-200" value={e.trading_mode ?? "intraday"} disabled title="Set by env.TRADING_MODE">
+              <select className="rounded border border-white/10 bg-slate-900 px-2 py-1 text-[11px] text-slate-200" value={e.trading_mode ?? "intraday"} onChange={async (ev) => { await fetch("/api/trading-mode", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: ev.target.value }) }); window.location.reload(); }} title="Active selector (stored in KV)">
                 <option value="scalp">scalp</option>
                 <option value="intraday">intraday</option>
                 <option value="swing">swing</option>

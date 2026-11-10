@@ -23,6 +23,8 @@ export interface Env {
   NEXUS_DASHBOARD_URL?: string;
   /** "off" turns the Decision Engine off: the EA, Telegram and the ledger follow the H1 decision again. */
   DECISION_ENGINE?: string;
+  /** Runtime trading mode override (scalp|intraday|swing); KV-backed selector takes precedence. */
+  TRADING_MODE?: string;
   DECISION_TELEGRAM_MODE?: string;
   OMEGA_ENGINE_ENABLED?: string;
   DB: D1Database;
@@ -178,7 +180,7 @@ import { readStrategy, loadStrategyInputs, buildStrategy, ownTimeframePlan, load
 import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } from "./strategy-inputs.mjs";
 import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
 import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema } from "./signal-ledger.mjs";
-import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions } from "./decision-engine.mjs";
+import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, TRADING_MODE_KEY } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport } from "./aether-push.mjs";
 import { aetherSyncStatus } from "./aether-sync.mjs";
@@ -2301,6 +2303,23 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       console.error("engine_decisions_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
     }
+  }
+  if (url.pathname === "/api/trading-mode") {
+    if (request.method === "GET") {
+      try { return dashboardJson({ status: "ok", mode: await tradingMode(env) }); }
+      catch (error) { console.error("trading_mode_failed", error); return dashboardJson({ status: "error" }, 500); }
+    }
+    if (request.method === "POST") {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const mode = String((body as any)?.mode ?? "").trim().toLowerCase();
+        if (!["scalp", "intraday", "swing"].includes(mode)) return dashboardJson({ status: "error", error: "invalid mode" }, 400);
+        await env.SIGNAL_CACHE?.put?.(TRADING_MODE_KEY, mode);
+        env.TRADING_MODE = mode;
+        return dashboardJson({ status: "ok", mode });
+      } catch (error) { console.error("trading_mode_set_failed", error); return dashboardJson({ status: "error" }, 500); }
+    }
+    return dashboardJson({ status: "error", error: "method not allowed" }, 405);
   }
   if (url.pathname === "/api/conclusion/global") {
     try {

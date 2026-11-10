@@ -402,5 +402,12 @@ export async function loadStrategyInputs(env, { now = Date.now(), m5Context = nu
 
 /** The strategy from the live inputs (GET /api/strategy). */
 export async function readStrategy(env, { now = Date.now(), m5Context = null } = {}) {
-  return buildStrategy(await loadStrategyInputs(env, { now, m5Context }));
+  let mode = String(env?.TRADING_MODE ?? "").trim().toLowerCase();
+  if (!["scalp", "intraday", "swing"].includes(mode)) {
+    try {
+      const v = String(await env?.SIGNAL_CACHE?.get?.("trading:mode") ?? "").trim().toLowerCase();
+      if (["scalp", "intraday", "swing"].includes(v)) mode = v; else mode = "intraday";
+    } catch { mode = "intraday"; }
+  }
+  return buildStrategy(await loadStrategyInputs(env, { now, m5Context }), { mode });
 }
