@@ -137,6 +137,9 @@ async function rpc(fn, failure) {
 
 export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
   const url = new URL(request.url);
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, DELETE, OPTIONS", "access-control-allow-headers": "content-type, accept", "access-control-max-age": "86400" } });
+  }
   if (url.pathname === PATH_PREFIX) return Response.redirect(`${url.origin}${PATH_PREFIX}/${url.search}`, 301);
   // Under the prefix the page and API keep their own paths; every link in the page is relative.
   const path = url.pathname.startsWith(`${PATH_PREFIX}/`) ? url.pathname.slice(PATH_PREFIX.length) : url.pathname;

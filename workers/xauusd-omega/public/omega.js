@@ -176,7 +176,9 @@ async function send(path, method, body) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 30000);
   try {
-    const r = await fetch(path, { method, credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: body == null ? undefined : JSON.stringify(body), signal: ctrl.signal });
+    const headers = { accept: "application/json" };
+    if (body != null) headers["content-type"] = "application/json";
+    const r = await fetch(path, { method, credentials: "same-origin", headers, body: body == null ? undefined : JSON.stringify(body), signal: ctrl.signal });
     const out = await r.json().catch(() => ({}));
     if (!r.ok || out.ok === false) throw new Error(out.error || `HTTP ${r.status}`);
     return out;
