@@ -144,6 +144,18 @@ export default function GlobalDecision() {
               confidence {pct(s.confidence)}{s.price != null ? ` · price ${s.price.toFixed(2)}` : ""}{s.atr_h1 != null ? ` · 1H ATR ${s.atr_h1}` : ""}
             </div>
           )}
+          {e && (
+            <div className="glass-inner mt-3 flex flex-wrap items-center gap-2 px-3 py-2 text-[11px] text-slate-300">
+              <span className="eyebrow text-[9px]">Mode</span>
+              <select className="rounded border border-white/10 bg-slate-900 px-2 py-1 text-[11px] text-slate-200" value={e.trading_mode ?? "intraday"} disabled title="Set by env.TRADING_MODE">
+                <option value="scalp">scalp</option>
+                <option value="intraday">intraday</option>
+                <option value="swing">swing</option>
+              </select>
+              <span className="ml-2 eyebrow text-[9px]">Live metrics</span>
+              <span className="mono">conf {pct(e.confidence)} · quorum {pct(e.quorum?.long_share)}/{pct(e.quorum?.short_share)} · latency {e.latency_seconds}s</span>
+            </div>
+          )}
           <p className="glass-inner mt-3 px-3 py-2.5 text-[11.5px] leading-relaxed text-slate-200">{e?.summary ?? s?.headline ?? g.summary}</p>
           {e && !!(e.reasons?.length || e.risks?.length) && (
             <ul className="mt-2 space-y-1 text-[11px]">
@@ -159,6 +171,11 @@ export default function GlobalDecision() {
           {e && (
             <div className="mt-3 space-y-1.5" aria-label="Guardrails">
               <Guardrails side={lead === "short" ? "SELL" : "BUY"} g={lead === "short" ? e.guardrails?.short : e.guardrails?.long} />
+              <ul className="mt-1 space-y-0.5 text-[10px] text-slate-500">
+                {(lead === "short" ? e.guardrails?.short?.checks : e.guardrails?.long?.checks ?? []).map((c: any) => (
+                  <li key={c.id}><span className="mono text-slate-400">{c.id}</span>: {c.detail}</li>
+                ))}
+              </ul>
             </div>
           )}
 
