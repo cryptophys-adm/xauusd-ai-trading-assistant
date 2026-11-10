@@ -42,6 +42,17 @@ export function floorToStep(v, step) {
 }
 
 /**
+ * Daily Rollover Quarantine Window (21:55 - 22:15 UTC):
+ * Prevents opening new positions when interbank liquidity dries up and broker spreads widen dramatically.
+ */
+export function isRolloverQuarantine(nowMs = Date.now()) {
+  const d = new Date(nowMs);
+  const h = d.getUTCHours();
+  const m = d.getUTCMinutes();
+  return (h === 21 && m >= 55) || (h === 22 && m < 15);
+}
+
+/**
  * Validates a settings change and merges it onto the stored settings (unspecified fields keep their
  * stored value). `enabled: false` disarms live; arming live needs confirm "LIVE" and enabled.
  */
@@ -162,7 +173,8 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     [account.trade_mode !== "demo" && S.live_armed !== true, "live_not_armed"],
     [recent.has(id) || positions.some((p) => p.intent_id === id), "already_opened"],
     [positions.length - intents.length >= S.max_positions || sameSide.length >= S.max_positions, "max_positions"],
-    [!finite(sym.spread_points) || sym.spread_points > S.max_spread_points, "spread"]
+    [!finite(sym.spread_points) || sym.spread_points > S.max_spread_points, "spread"],
+    [isRolloverQuarantine(now), "rollover_quarantine"]
   ];
   for (const [blocked, code] of gates) if (blocked) { note(code); return { intents, notes }; }
 
@@ -221,6 +233,34 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
           ticket: p.ticket,
           tp: roundTo(targetExtTp, sym.digits),
           reason: "extended_tp"
+        });
+      }
+    }
+  }
+
+  // Partial Scale-Out (TP1 Runner): if volume >= 0.02 and position reached >= +1.5R or TP1 target,
+  // close 50% volume to bank profit and let remainder run risk-free
+  for (const p of sameSide) {
+    if (p.ticket == null) continue;
+    const vol = Number(p.volume);
+    if (!Number.isFinite(vol) || vol < 0.02) continue;
+    const openPrice = Number(p.open_price);
+    const profit = Number(p.profit);
+    if (!Number.isFinite(openPrice) || !Number.isFinite(profit) || profit <= 0) continue;
+
+    const stopDistCurrent = Math.abs(openPrice - Number(p.sl || openPrice));
+    const distCurrent = buy ? (sym.bid - openPrice) : (openPrice - sym.ask);
+    const rMultiple = stopDistCurrent > 0 ? (distCurrent / stopDistCurrent) : 0;
+
+    if (rMultiple >= 1.5 || (buy && sym.bid >= p.tp) || (!buy && sym.ask <= p.tp)) {
+      const scaleVolume = floorToStep(vol / 2, sym.volume_step);
+      if (scaleVolume >= sym.volume_min && !intents.some((it) => it.ticket === p.ticket && it.kind === "partial_close")) {
+        intents.push({
+          id: `ps:${p.ticket}:${Math.round(vol * 100)}`,
+          kind: "partial_close",
+          ticket: p.ticket,
+          volume: scaleVolume,
+          reason: "tp1_scale_out"
         });
       }
     }

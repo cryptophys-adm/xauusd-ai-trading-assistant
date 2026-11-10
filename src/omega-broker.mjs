@@ -45,6 +45,24 @@ const event = (db, ms, actor, action, detail) =>
   db.prepare("INSERT INTO omega_events (ms, actor, action, detail) VALUES (?, ?, ?, ?)").bind(ms, String(actor || "system"), action, detail == null ? null : JSON.stringify(detail)).run();
 export const engineEnvEnabled = (env) => env?.OMEGA_ENGINE_ENABLED === "true";
 
+export async function sendOmegaTelegram(env, message) {
+  if (!env?.TELEGRAM_BOT_TOKEN || !env?.TELEGRAM_CHAT_ID) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: env.TELEGRAM_CHAT_ID,
+        text: message,
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      })
+    });
+  } catch {
+    /* non-blocking notification */
+  }
+}
+
 // ---------------------------------------------------------------- settings
 
 export async function readSettings(env) {
@@ -178,9 +196,24 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   for (const r of Array.isArray(results) ? results.slice(0, 100) : []) {
     if (typeof r?.id !== "string") continue;
     const result = { ok: r.ok === true, ticket: Number.isFinite(r.ticket) ? r.ticket : null, error: typeof r.error === "string" ? r.error.slice(0, 200) : null, executed_ms: Number.isFinite(r.executed_ms) ? r.executed_ms : null };
+    const existing = await db.prepare("SELECT status, payload FROM omega_intents WHERE id = ?").bind(r.id).first();
     // A late result still lands on an expired intent: the terminal is the truth about what happened.
     await db.prepare("UPDATE omega_intents SET status = ?, result = ?, updated_ms = ? WHERE id = ? AND status IN ('pending', 'sent', 'expired')")
       .bind(result.ok ? "done" : "failed", JSON.stringify(result), now, r.id).run();
+    if (existing && (existing.status === "pending" || existing.status === "sent")) {
+      const p = parse(existing.payload, {});
+      if (result.ok) {
+        if (p?.kind === "open") {
+          await sendOmegaTelegram(env, `🟢 <b>Omega Order Executed (Monex)</b>\nTicket: <code>#${result.ticket || "—"}</code>\nSide: <b>${p.side}</b> | Volume: <code>${p.volume}</code>\nEntry: <code>${p.entry || "—"}</code> | SL: <code>${p.sl}</code> | TP: <code>${p.tp}</code>`);
+        } else if (p?.kind === "close" || p?.kind === "partial_close") {
+          await sendOmegaTelegram(env, `💰 <b>Omega Position ${p.kind === "partial_close" ? "Scaled Out (50%)" : "Closed"}</b>\nTicket: <code>#${result.ticket || p.ticket || "—"}</code>\nReason: <code>${p.reason || "executed"}</code>`);
+        } else if (p?.kind === "modify_tp") {
+          await sendOmegaTelegram(env, `🎯 <b>Extended TP Expanded (Runner)</b>\nTicket: <code>#${p.ticket}</code>\nNew TP: <code>${p.tp}</code>`);
+        }
+      } else if (result.error) {
+        await sendOmegaTelegram(env, `⚠️ <b>Omega Intent Rejected</b>\nTicket: <code>#${result.ticket || p?.ticket || "—"}</code>\nKind: <code>${p?.kind || "—"}</code>\nError: <code>${result.error}</code>`);
+      }
+    }
   }
   await db.prepare("UPDATE omega_intents SET status = 'expired', updated_ms = ? WHERE status IN ('pending', 'sent') AND created_ms < ?").bind(now, now - INTENT_TTL_MS).run();
 
@@ -257,6 +290,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           action_id: actionId,
           status: "dispatched",
         });
+        await sendOmegaTelegram(env, `🤖 <b>Cerebrum Self-Healing Action</b>\nDirective: <code>${candidateDirective}</code>\nReason: <code>${candidateReason}</code>\nStatus: <b>Dispatched to VPS Host Bridge</b>`);
       }
     }
   }

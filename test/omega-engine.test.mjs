@@ -189,3 +189,51 @@ test("extended TP expands runner take profit on strong momentum", () => {
   assert.equal(modifyTp.reason, "extended_tp");
 });
 
+test("rollover quarantine gate blocks open intents between 21:55 and 22:15 UTC", () => {
+  const quarantineNow = Date.UTC(2026, 10, 10, 22, 5, 0); // 22:05 UTC (in quarantine)
+  const signal = {
+    side: "BUY",
+    action: "ENTER_BUY",
+    issued_ms: quarantineNow,
+    expires_ms: quarantineNow + 10 * 60_000,
+    entry: 4100, stop: 4095, tp1: 4110
+  };
+  const { intents, notes } = planIntents({
+    signal,
+    settings: { enabled: true, live_armed: true },
+    executor: { ...EXECUTOR, received_ms: quarantineNow - 1_000 },
+    now: quarantineNow,
+    engineEnabled: true
+  });
+  assert.equal(intents.length, 0);
+  assert.ok(notes.some((n) => n.code === "rollover_quarantine"));
+});
+
+test("partial scale out closes 50% volume at TP1 when volume >= 0.02", () => {
+  const signal = {
+    side: "BUY",
+    action: "ENTER_BUY",
+    issued_ms: NOW,
+    expires_ms: NOW + 10 * 60_000,
+    entry: 4100, stop: 4095, tp1: 4110
+  };
+  const executor = {
+    ...EXECUTOR,
+    // open_price 4090 with current bid 4101 is +11 pts (> 2R vs 5 pt stop 4085)
+    positions: [{ ticket: 771122, side: "BUY", volume: 0.04, open_price: 4090, sl: 4085, tp: 4110, profit: 80 }]
+  };
+  const { intents } = planIntents({
+    signal,
+    settings: { enabled: true, live_armed: true, max_positions: 2 },
+    executor,
+    now: NOW,
+    engineEnabled: true
+  });
+  const partial = intents.find((it) => it.kind === "partial_close");
+  assert.ok(partial, "partial_close intent emitted");
+  assert.equal(partial.ticket, 771122);
+  assert.equal(partial.volume, 0.02);
+  assert.equal(partial.reason, "tp1_scale_out");
+});
+
+

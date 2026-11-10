@@ -474,6 +474,34 @@ void ExecuteCloseIntent(const string id, const ulong ticket)
       AppendResult(id, false, ticket, trade.ResultRetcodeDescription(), executedMs);
   }
 
+void ExecutePartialCloseIntent(const string id, const ulong ticket, const double closeVolume)
+  {
+   long nowMs = NowUtcMs();
+   if(ticket == 0 || !PositionSelectByTicket(ticket))
+     {
+      AppendResult(id, false, ticket, "position_not_found", nowMs);
+      return;
+     }
+   if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
+     {
+      AppendResult(id, false, ticket, "foreign_magic", nowMs);
+      return;
+     }
+
+   double currentVol = PositionGetDouble(POSITION_VOLUME);
+   double volToClose = (closeVolume > 0.0 && closeVolume < currentVol) ? closeVolume : (currentVol / 2.0);
+   volToClose = NormalizeDouble(volToClose, 2);
+
+   trade.SetExpertMagicNumber(MagicNumber);
+   trade.SetDeviationInPoints(SlippagePoints);
+   bool ok = trade.PositionClosePartial(ticket, volToClose, SlippagePoints);
+   long executedMs = NowUtcMs();
+   if(ok)
+      AppendResult(id, true, ticket, "", executedMs);
+   else
+      AppendResult(id, false, ticket, trade.ResultRetcodeDescription(), executedMs);
+  }
+
 void ExecuteModifySlIntent(const string id, const ulong ticket, const double newSl)
   {
    long nowMs = NowUtcMs();
@@ -622,6 +650,8 @@ void ProcessIntentsFile()
          ExecuteOpenIntent(id, side, volume, sl, tp);
       else if(kind == "close")
          ExecuteCloseIntent(id, ticket);
+      else if(kind == "partial_close")
+         ExecutePartialCloseIntent(id, ticket, volume);
       else if(kind == "close_all")
          ExecuteCloseAllIntent(id);
       else if(kind == "modify_sl")
