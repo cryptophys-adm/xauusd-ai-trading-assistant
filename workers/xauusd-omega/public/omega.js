@@ -206,9 +206,8 @@ async function connectBroker() {
 }
 
 async function disconnectBroker() {
-  const reason = window.prompt("Reason to disconnect the broker account?");
-  if (!reason || !reason.trim()) return;
-  try { await send("./api/connection", "DELETE", { reason: reason.trim() }); say("broker-msg", "ok", "Disconnected."); }
+  const reason = "disconnect requested from omega page";
+  try { await send("./api/connection", "DELETE", { reason }); say("broker-msg", "ok", "Disconnected."); }
   catch (e) { say("broker-msg", "bad", `Refused: ${e.message}`); }
   await load();
 }
