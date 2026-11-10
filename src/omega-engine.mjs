@@ -178,7 +178,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   if (volume > sym.volume_max) volume = floorToStep(sym.volume_max, sym.volume_step);
   if (!positive(volume) || volume < sym.volume_min) { note("volume_below_min"); return { intents, notes }; }
 
-  intents.push({ id, kind: "open", side, volume, sl, tp, signal_issued_ms: issued, reason: "signal" });
+  intents.push({ id, kind: "open", side, volume, entry: price, sl, tp, signal_issued_ms: issued, reason: "signal" });
 
   // Progressive stop (SL+): move an open position's stop to breakeven when trailing_stop_r is set.
   if (S.trailing_stop_r > 0) {

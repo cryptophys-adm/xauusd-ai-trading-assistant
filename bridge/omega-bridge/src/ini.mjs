@@ -145,7 +145,11 @@ export function applyCredentials(
 
   mutateSection(blocks, "Experts", [
     ["Enable", "1"],
+    ["Enabled", "1"],
     ["AllowLiveTrading", "1"],
+    ["AllowDllImport", "0"],
+    ["Account", "0"],
+    ["Profile", "0"],
   ]);
 
   if (takeStartup) {

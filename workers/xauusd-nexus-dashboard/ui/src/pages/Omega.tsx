@@ -1309,6 +1309,7 @@ export default function Omega() {
                       <th>Kind</th>
                       <th>Side</th>
                       <th>Volume</th>
+                      <th>Entry</th>
                       <th>SL</th>
                       <th>TP</th>
                       <th>Status</th>
@@ -1325,6 +1326,7 @@ export default function Omega() {
                           {i.side || "—"}
                         </td>
                         <td className="mono">{i.volume != null ? num(i.volume, 2) : "—"}</td>
+                        <td className="mono">{i.entry != null ? num(i.entry, digits) : (i.side === "BUY" ? "Market (Ask)" : i.side === "SELL" ? "Market (Bid)" : "—")}</td>
                         <td className="mono">{i.sl != null ? num(i.sl, digits) : "—"}</td>
                         <td className="mono">{i.tp != null ? num(i.tp, digits) : "—"}</td>
                         <td>
