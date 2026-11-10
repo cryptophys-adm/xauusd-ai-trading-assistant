@@ -2305,21 +2305,17 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     }
   }
   if (url.pathname === "/api/trading-mode") {
-    if (request.method === "GET") {
-      try { return dashboardJson({ status: "ok", mode: await tradingMode(env) }); }
-      catch (error) { console.error("trading_mode_failed", error); return dashboardJson({ status: "error" }, 500); }
-    }
-    if (request.method === "POST") {
+    const asked = String(url.searchParams.get("mode") ?? "").trim().toLowerCase();
+    if (asked) {
+      if (!["scalp", "intraday", "swing"].includes(asked)) return dashboardJson({ status: "error", error: "invalid mode" }, 400);
       try {
-        const body = await request.json().catch(() => ({}));
-        const mode = String((body as any)?.mode ?? "").trim().toLowerCase();
-        if (!["scalp", "intraday", "swing"].includes(mode)) return dashboardJson({ status: "error", error: "invalid mode" }, 400);
-        await env.SIGNAL_CACHE?.put?.(TRADING_MODE_KEY, mode);
-        env.TRADING_MODE = mode;
-        return dashboardJson({ status: "ok", mode });
+        await env.SIGNAL_CACHE?.put?.(TRADING_MODE_KEY, asked);
+        env.TRADING_MODE = asked;
+        return dashboardJson({ status: "ok", mode: asked });
       } catch (error) { console.error("trading_mode_set_failed", error); return dashboardJson({ status: "error" }, 500); }
     }
-    return dashboardJson({ status: "error", error: "method not allowed" }, 405);
+    try { return dashboardJson({ status: "ok", mode: await tradingMode(env) }); }
+    catch (error) { console.error("trading_mode_failed", error); return dashboardJson({ status: "error" }, 500); }
   }
   if (url.pathname === "/api/conclusion/global") {
     try {
