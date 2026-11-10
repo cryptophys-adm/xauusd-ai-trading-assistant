@@ -175,14 +175,35 @@ function nyHour(d: Date) {
 const pt = (r: number, h: number) => { const a = ((h * 15 - 90) * Math.PI) / 180; return [60 + r * Math.cos(a), 60 + r * Math.sin(a)] as const; };
 const arcH = (r: number, a: number, b: number) => { const [x0, y0] = pt(r, a), [x1, y1] = pt(r, b); return `M ${x0} ${y0} A ${r} ${r} 0 ${(b - a) * 15 > 180 ? 1 : 0} 1 ${x1} ${y1}`; };
 
+/** XAUUSD trades from Sunday 22:00 to Friday 22:00 UTC (the Decision Engine's market_open guardrail). */
+function marketOpen(d: Date): boolean {
+  const day = d.getUTCDay(), h = d.getUTCHours();
+  return !(day === 6 || (day === 5 && h >= 22) || (day === 0 && h < 22));
+}
+/** The next weekly close (Friday 22:00 UTC) while open, or the reopen (Sunday 22:00 UTC) while closed. */
+function nextChange(d: Date, open: boolean): Date {
+  const n = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 22));
+  while (n.getUTCDay() !== (open ? 5 : 0) || n.getTime() <= d.getTime()) n.setUTCDate(n.getUTCDate() + 1);
+  return n;
+}
+const inHours = (ms: number) => { const m = Math.max(0, Math.round(ms / 60_000)); return m >= 1440 ? `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h` : `${Math.floor(m / 60)}h ${m % 60}m`; };
+
 function SessionClock() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const t = window.setInterval(() => setNow(new Date()), 60_000); return () => window.clearInterval(t); }, []);
   const h = nyHour(now);
-  const active = SESSIONS.filter((s) => (h >= s.from && h < s.to) || (h + 24 >= s.from && h + 24 < s.to));
+  const open = marketOpen(now);
+  const active = open ? SESSIONS.filter((s) => (h >= s.from && h < s.to) || (h + 24 >= s.from && h + 24 < s.to)) : [];
   const [nx, ny] = pt(46, h);
+  const change = nextChange(now, open);
+  const day = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", weekday: "long", day: "numeric", month: "short", year: "numeric" }).format(now);
+  const time = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(now);
   return (
-    <Panel title="Session clock" icon={<Clock3 className="h-3.5 w-3.5 text-cyan-300" />}>
+    <Panel title="Session clock" icon={<Clock3 className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone={open ? "green" : "red"}>{open ? "market open" : "market closed"}</Badge>}>
+      <div className="mb-2 flex items-baseline justify-between text-[11px]">
+        <span className="text-slate-200">{day}</span>
+        <span className="mono text-slate-400">{time} UTC</span>
+      </div>
       <div className="flex items-center gap-3">
         <svg viewBox="0 0 120 120" width={112} height={112} role="img" aria-label={`Active sessions: ${active.map((s) => s.name).join(", ") || "none"}`}>
           {SESSIONS.map((s) => <path key={s.name} d={arcH(s.r, s.from, s.to)} stroke={s.color} strokeWidth="6" fill="none" strokeLinecap="round" opacity={active.includes(s) ? 1 : 0.3} />)}
@@ -197,7 +218,8 @@ function SessionClock() {
               <span className="mono text-[10px] text-slate-500">{String(s.from % 24).padStart(2, "0")}–{String(s.to % 24).padStart(2, "0")}</span>
             </div>
           ))}
-          <p className="pt-1 text-[10px] text-slate-500">{active.length > 1 ? `${active.map((s) => s.name).join(" and ")} overlap: the most liquid hours.` : active.length ? `${active[0].name} session.` : "Between sessions: thin liquidity."} New York time.</p>
+          <p className="pt-1 text-[10px] text-slate-500">{!open ? "Weekend: the market is closed." : active.length > 1 ? `${active.map((s) => s.name).join(" and ")} overlap: the most liquid hours.` : active.length ? `${active[0].name} session.` : "Between sessions: thin liquidity."} New York time.</p>
+          <p className="text-[10px] text-slate-500">{open ? "Closes" : "Opens"} {new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(change)} UTC · in {inHours(change.getTime() - now.getTime())}</p>
         </div>
       </div>
     </Panel>

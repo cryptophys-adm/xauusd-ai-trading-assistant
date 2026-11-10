@@ -38,6 +38,7 @@ import { readMacroRoom } from "./macro-room.mjs";
 import { readCorrelations } from "./correlations.mjs";
 import { loadRegimeMap, regimeAtClose } from "./market-regime.mjs";
 import { eventRisk } from "./econ-calendar.mjs";
+import { hudLevels } from "./hud-levels.mjs";
 import { callBusModel, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { naturalLanguageErrors, onlyNaturalLanguageErrors, NATURAL_LANGUAGE_CORRECTION } from "./natural-language.mjs";
 import { shouldNotifyH1 } from "./h1-telegram.mjs";
@@ -135,7 +136,9 @@ export function witnessCards({ global = null, strategy = null, context = {}, env
     const macroLean = isNum(context?.macroLean) ? context.macroLean : null;
     cards.push({ key: "MACRO_DRIVERS", label: "Macro drivers", role: "correlations", weight: EXTENDED_WITNESS_WEIGHTS.MACRO_DRIVERS, available: macroLean != null, stale: false, lean: macroLean, side: sideOf(macroLean), decision: null, confidence: null, summary: null, at: null });
     const sessionLean = null; // placeholder; session clock is context only
-    cards.push({ key: "SESSION", label: "Session", role: "session clock", weight: EXTENDED_WITNESS_WEIGHTS.SESSION, available: false, stale: false, lean: sessionLean, side: sideOf(sessionLean), decision: null, confidence: null, summary: null, at: null });
+    const se = context?.session;
+    const sessionText = se ? `${se.day} ${se.date} ${se.time_utc} UTC, market ${se.market_open ? `open, ${se.active.length ? se.active.join(" and ") : "between sessions"} (${se.liquidity} liquidity)` : "closed"}` : null;
+    cards.push({ key: "SESSION", label: "Session", role: "session clock", weight: EXTENDED_WITNESS_WEIGHTS.SESSION, available: false, stale: false, lean: sessionLean, side: sideOf(sessionLean), decision: null, confidence: null, summary: sessionText, at: null });
   }
   return cards;
 }
@@ -195,6 +198,96 @@ export function compositeSentiment({ news = null, macro = null, newsLean = null,
   return r2(parts.reduce((s, p) => s + p.v * p.w, 0) / tw);
 }
 
+// ---------------------------------------------------------------- market context (owner 2026-11-09)
+// "masukan sentiment, regime, macro drivers dan juga session (perlu ditambah hari tanggal dan market
+// open/closed) menjadi pertimbangan global decision": the right panel's cards go to the council in
+// `context.market`, give deterministic cautions, and a closed market is a guardrail.
+
+/** New York clock hours of the sessions, as the Chronos Matrix (and the Nexus session clock) define them. */
+export const SESSIONS = Object.freeze([
+  Object.freeze({ name: "Tokyo", from: 19, to: 28 }),
+  Object.freeze({ name: "London", from: 3, to: 12 }),
+  Object.freeze({ name: "New York", from: 8, to: 17 })
+]);
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+function nyHour(ms) {
+  try {
+    const p = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "numeric", hourCycle: "h23" }).formatToParts(new Date(ms));
+    return Number(p.find((x) => x.type === "hour")?.value ?? 0) + Number(p.find((x) => x.type === "minute")?.value ?? 0) / 60;
+  } catch { return (new Date(ms).getUTCHours() + 19) % 24; }
+}
+
+/** Pure: the session at `now`: day and date (UTC), market open or closed, the active sessions, the next change. */
+export function sessionAt(now) {
+  const d = new Date(now), h = nyHour(now);
+  const open = marketOpenAt(now);
+  const active = open ? SESSIONS.filter((x) => (h >= x.from && h < x.to) || (h + 24 >= x.from && h + 24 < x.to)).map((x) => x.name) : [];
+  // The next weekly close (Friday 22:00 UTC) while open, or the reopen (Sunday 22:00 UTC) while closed.
+  const next = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 22));
+  while (next.getUTCDay() !== (open ? 5 : 0) || next.getTime() <= now) next.setUTCDate(next.getUTCDate() + 1);
+  return {
+    day: DAYS[d.getUTCDay()], date: d.toISOString().slice(0, 10), time_utc: d.toISOString().slice(11, 16), new_york_hour: Math.floor(h),
+    market_open: open, active, overlap: active.length > 1,
+    liquidity: !open ? "closed" : active.length > 1 ? "high" : active.length ? "normal" : "thin",
+    next_change: { to: open ? "closed" : "open", at: next.toISOString(), minutes: Math.round((next.getTime() - now) / 60_000) }
+  };
+}
+
+/** Pure: the regime of a HUD snapshot (the Nexus regime radar's sensors, 0 to 1) and the bar regime label. */
+export function regimeOf(snapshot, label = null) {
+  const r = snapshot ? hudLevels(snapshot).regime : null;
+  const v = Object.fromEntries((r?.axes || []).map((a) => [a.key, a.value]));
+  const character = v.trend == null ? null : v.trend > 0.6 ? "trending" : v.trend < 0.45 ? "mean-reverting" : "weakly trending";
+  return { label: label ?? null, character, chaos: r?.chaos === true, stretch_z: isNum(r?.z) ? r2(r.z) : null, sensors: v };
+}
+
+/**
+ * Pure: the macro drivers of the last 24 hours (News Daily's market context, as on the Nexus card) and
+ * the cross-asset correlations; `lean` is the dollar's pull on gold (a falling dollar is bullish).
+ */
+export function macroDriversOf(context = null, correlations = null) {
+  const pctOf = (k) => (isNum(context?.[k]?.change_24h_percent) ? r2(context[k].change_24h_percent) : null);
+  const drivers = { gold: pctOf("gold"), dollar: pctOf("dollar"), oil: pctOf("oil"), usdt_dominance: pctOf("usdt") };
+  const link = drivers.gold == null || drivers.dollar == null ? null : Math.sign(drivers.gold) === -Math.sign(drivers.dollar) ? "inverse (usual)" : "same way (the inverse link is off)";
+  const lean = drivers.dollar == null ? null : r2(Math.max(-1, Math.min(1, -drivers.dollar / 0.5)));
+  return { change_24h_percent: drivers, gold_dollar_link: link, lean, cross_assets: (correlations?.assets || []).filter((a) => a.available).map((a) => ({ name: a.name, change_1d: a.change?.["1d"] ?? null, correlation_with_gold: a.correlation?.short ?? null })) };
+}
+
+/** Pure: the market sentiment: the witnesses' weighted lean, the composite (news and macro) and the 24-hour headlines. */
+export function sentimentOf({ quorum = null, news = null, macro = null } = {}) {
+  const c = news?.counts ?? {};
+  return {
+    weighted_lean: quorum?.score ?? null, bias: quorum?.bias ?? null, composite: compositeSentiment({ news, macro }),
+    headlines: { bullish: Number(c.bullish) || 0, bearish: Number(c.bearish) || 0, neutral: Number(c.neutral) || 0 },
+    news_tldr: news?.tldr?.status === "ok" ? { stance: news.tldr.stance ?? null, confidence: news.tldr.confidence ?? null } : null
+  };
+}
+
+/** Pure: the right panel's market context: sentiment, regime (15m and 1H), macro drivers and the session. */
+export function marketContextOf(loaded, quorum = null, now = Date.now()) {
+  const { inputs = {}, correlations = null, regime = null, macro = null } = loaded || {};
+  return {
+    sentiment: sentimentOf({ quorum, news: inputs.news ?? null, macro }),
+    regime: { m15: regimeOf(inputs.m15Snapshot ?? null), h1: regimeOf(inputs.h1Snapshot ?? null, typeof regime === "string" ? regime : null) },
+    macro_drivers: macroDriversOf(inputs.news?.context ?? null, correlations),
+    session: sessionAt(now)
+  };
+}
+
+/** Pure: the cautions the market context gives a side (never a block; the council weighs them). */
+export function contextCautions(dir, market = null) {
+  const out = [];
+  const session = market?.session, h1 = market?.regime?.h1, m15 = market?.regime?.m15, macro = market?.macro_drivers;
+  if (session?.market_open && session.liquidity === "thin") out.push("between the trading sessions: thin liquidity");
+  if (session?.market_open && session.next_change?.to === "closed" && session.next_change.minutes <= 120) out.push(`the market closes for the weekend in ${session.next_change.minutes} minutes`);
+  const z = h1?.stretch_z;
+  if (isNum(z) && Math.abs(z) >= 2.5 && Math.sign(z) === dir) out.push(`price is stretched ${Math.abs(z)} standard deviations ${dir > 0 ? "above" : "below"} its 1-hour mean, in the trade's direction`);
+  if (m15?.chaos && !h1?.chaos) out.push("the 15-minute regime reads chaotic");
+  const dx = macro?.change_24h_percent?.dollar;
+  if (isNum(dx) && Math.abs(dx) >= 0.3 && Math.sign(dx) === dir) out.push(`the dollar ${dx > 0 ? "rose" : "fell"} ${Math.abs(dx)}% in 24 hours, against a ${dir > 0 ? "long" : "short"} in gold`);
+  return out;
+}
+
 // ---------------------------------------------------------------- guardrails
 
 /**
@@ -214,6 +307,9 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
   const card = (k) => (cards || []).find((c) => c.key === k);
   const checks = [];
   const add = (id, pass, detail) => checks.push({ id, pass: Boolean(pass), detail });
+  // The session (owner 2026-11-09): no entry while the market is closed.
+  const session = inputs.market?.session ?? sessionAt(now);
+  add("market_open", session.market_open, `${session.day} ${session.date} ${session.time_utc} UTC: the market is ${session.market_open ? "open" : "closed"}`);
   const fresh = ["M15", "H1"].filter((k) => !(card(k)?.available && !card(k)?.stale));
   add("fresh", !fresh.length, fresh.length ? `the ${fresh.map((k) => card(k)?.label ?? k).join(" and ")} room ${fresh.length > 1 ? "are" : "is"} missing or stale` : "the 15m and 1H rooms are current");
   const share = dir > 0 ? quorum.long_share : quorum.short_share;
@@ -237,7 +333,8 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
   add("levels", Boolean(plan), plan ? `entry ${plan.entry_note}, stop ${plan.stop_note}` : "no key-level plan (price, 1H range or zones missing)");
   const best = plan ? Math.max(plan.rrr?.tp1 ?? 0, plan.rrr?.tp2 ?? 0) : 0;
   add("reward", Boolean(plan) && best >= MIN_RRR, plan ? `${best}R to the best target (at least ${MIN_RRR}R needed)` : "no plan");
-  return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions: risk.cautions };
+  const cautions = [...risk.cautions, ...contextCautions(dir, inputs.market ?? null)];
+  return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions };
 }
 
 /**
@@ -302,6 +399,7 @@ export function councilMessages(evidence) {
     "Witnesses each speak from their own data: the D1, 4H, 1H and 15m War Rooms (their agents' bias as a lean from -1 bearish to +1 bullish, and the room's own decision), News Daily, the Macro War Room and the strategy engine (the multi-timeframe confluence, the key-level plan and the entry trigger). You are the only one who reads across them.",
     "Decide the stance: BUY, SELL or WAIT. A BUY is possible only when long.allowed is true, a SELL only when short.allowed is true; otherwise the guardrails turn it into WAIT, so choose WAIT yourself and say which check is missing. WAIT is always allowed.",
     `The quorum guardrail is already evaluated in long.checks and short.checks: it compares quorum.bullish_share or quorum.bearish_share (the share of the witnesses' weight leaning that way) with quorum.share_needed_above. quorum.weighted_lean is the strength of the lean from -1 to +1, not the quorum; never compare it with ${QUORUM_MIN}.`,
+    "context.market holds the right panel's cards: the market sentiment (the witnesses' weighted lean, the news and macro composite, the 24-hour headlines), the regime of the 15m and 1H charts (trending or mean-reverting, chaos, stretch), the macro drivers (gold, the dollar, oil and USDT dominance over 24 hours, the gold-dollar link, cross-asset correlations) and the session (day, date, market open or closed, the active sessions and their liquidity, the next close or open). Weigh them: they confirm or weaken the witnesses and explain the cautions.",
     "Weigh the witnesses by their weight and by how well their reasoning holds up; the higher timeframes carry the trend, the 15m and 1H rooms carry the setup, the strategy engine carries location and trigger. Cautions (an event, conflicts, chaotic regime) lower your confidence.",
     `Choose entry_type "market" only when the plan's price is at the level (at_level true), else "limit" (the planned pullback). Choose target "tp1" or "tp2": a target needs at least ${MIN_RRR}R.`,
     `confidence is 0 to 1; below ${MIN_CONFIDENCE} a BUY or SELL becomes WAIT. bias is where the weight of the evidence leans (BULLISH, BEARISH or NEUTRAL), even when the stance is WAIT.`,
@@ -394,7 +492,7 @@ export async function loadDecisionInputs(env, { now = Date.now() } = {}) {
 }
 
 /** Pure: the context the council reads beside the witnesses (no weights). */
-export function councilContext({ inputs = {}, correlations = null, regime = null, previous = null, now = Date.now() }) {
+export function councilContext({ inputs = {}, correlations = null, regime = null, previous = null, market = null, now = Date.now() }) {
   const risk = eventRisk(inputs.calendar?.events || [], now);
   const m5 = inputs.confirmations?.m5_prophet_r38 ?? null;
   return {
@@ -403,6 +501,8 @@ export function councilContext({ inputs = {}, correlations = null, regime = null
     events: { active: risk.active.map((e) => ({ title: e.title, time: e.time })), next: risk.next.slice(0, 3).map((e) => ({ title: e.title, time: e.time })) },
     regime_1h: regime ?? null,
     cross_assets: (correlations?.assets || []).filter((a) => a.available).map((a) => ({ name: a.name, change_1d: a.change?.["1d"] ?? null, correlation_with_gold: a.correlation?.short ?? null })),
+    // The right panel's cards (owner 2026-11-09): sentiment, regime, macro drivers and the session.
+    market: market ?? { session: sessionAt(now), macro_drivers: macroDriversOf(inputs.news?.context ?? null, correlations) },
     h1_decision: inputs.h1Chain ? { decision: inputs.h1Chain.decision ?? null, confidence: inputs.h1Chain.confidence ?? null } : null,
     previous_decision: previous ? { stance: previous.stance, confidence: previous.confidence, at: previous.bar_close } : null
   };
@@ -481,11 +581,17 @@ export async function notifyDecision(env, d, send) {
 /** Pure: the witnesses, the quorum and both sides' guardrails (with their plans) from the loaded inputs. */
 export function assess(loaded, { now = Date.now(), env = null } = {}) {
   const { inputs = {}, strategy = null, global = null, macro = null, correlations = null, regime = null } = loaded || {};
-  const context = { regime, correlations, macroLean: isNum(macro?.lean) ? macro.lean : (isNum(macro?.score) ? macro.score : null) };
+  // The right panel's cards (owner 2026-11-09): the macro drivers' lean feeds MACRO_DRIVERS when the
+  // macro room carries none, and the session describes SESSION (context: a session has no direction).
+  const drivers = macroDriversOf(inputs.news?.context ?? null, correlations);
+  const session = sessionAt(now);
+  const context = { regime, correlations, macroLean: isNum(macro?.lean) ? macro.lean : (isNum(macro?.score) ? macro.score : drivers.lean), session };
   const cards = witnessCards({ global, strategy, context, env });
   const quorum = quorumOf(cards, { now });
-  const guards = { long: guardrailsFor(1, { cards, quorum, strategy, inputs, macro, now, env }), short: guardrailsFor(-1, { cards, quorum, strategy, inputs, macro, now, env }) };
-  return { cards, quorum, guards };
+  const market = marketContextOf(loaded, quorum, now);
+  const withMarket = { ...inputs, market };
+  const guards = { long: guardrailsFor(1, { cards, quorum, strategy, inputs: withMarket, macro, now, env }), short: guardrailsFor(-1, { cards, quorum, strategy, inputs: withMarket, macro, now, env }) };
+  return { cards, quorum, guards, market };
 }
 
 /** Pure: the whole decision record from the loaded inputs, their assessment and the council's result (or null). */
@@ -494,7 +600,7 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
   const MODE = String(env?.TRADING_MODE ?? "intraday").trim().toLowerCase();
   const MODE_QUORUM_MIN = MODE === "scalp" ? 0.45 : MODE === "swing" ? 0.6 : 0.5;
   const MODE_MIN_RRR = MODE === "scalp" ? 1.2 : MODE === "swing" ? 2.0 : 1.5;
-  const { cards, quorum, guards } = assessment ?? assess(loaded, { now, env });
+  const { cards, quorum, guards, market } = assessment ?? assess(loaded, { now, env });
   const answer = council?.answer ?? null;
   const d = decide({ answer, guards, strategy, quorum });
   let text;
@@ -526,7 +632,7 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     quorum, witnesses: cards,
     guardrails: { long: { allowed: guards.long.allowed, checks: guards.long.checks }, short: { allowed: guards.short.allowed, checks: guards.short.checks } },
     cautions, vetoes: { long: guards.long.vetoes, short: guards.short.vetoes },
-    context: councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, now }),
+    context: councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, market, now }),
     strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline, price: strategy.price, atr_h1: strategy.atr_h1 } : null,
     trading_mode: MODE, weights: WITNESS_WEIGHTS, rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE },
     advisory: "The server places no order and gives no position size; the EA sizes each trade from the owner's risk input."
@@ -573,7 +679,7 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     try { env.TRADING_MODE = await tradingMode(env); } catch { /* keep env */ }
     const data = loaded ?? await loadDecisionInputs(env, { now });
     const assessment = assess(data, { now, env });
-    const context = councilContext({ inputs: data.inputs, correlations: data.correlations, regime: data.regime, previous, now });
+    const context = councilContext({ inputs: data.inputs, correlations: data.correlations, regime: data.regime, previous, market: assessment.market, now });
     const council = await askCouncil(env, councilEvidence({ barClose: closeIso, cards: assessment.cards, quorum: assessment.quorum, guards: assessment.guards, context }), { clock });
     const record = buildDecisionRecord({ key, barClose: closeIso, loaded: data, assessment, council, previous, now, decidedAt: new Date(clock()).toISOString(), env });
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
