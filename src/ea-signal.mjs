@@ -70,10 +70,11 @@ export function eaSignalFromDecision({ decision = null, kill = false, killSource
   const entry = t.entry, stop = t.stop, tp1 = t.tp;
   if (![entry, stop, tp1].every(isPrice)) return base;
   if (side === "BUY" ? !(stop < entry && entry < tp1) : !(tp1 < entry && entry < stop)) return base;
+  const decidedMs = Date.parse(String(decision?.decided_at ?? "")) || close;
   return {
     ...base, signal_id: decision.decision_key, side, action: t.action === "ENTER_LIMIT" ? "ENTER_LIMIT" : "ENTER_MARKET", entry, stop, tp1,
     risk_reward: Number.isFinite(t.rrr) ? t.rrr : 0, confidence: Number.isFinite(decision.confidence) ? decision.confidence : 0,
-    issued_ms: close, expires_ms: close + M15_MS
+    issued_ms: close, expires_ms: close + M15_MS, decided_ms: decidedMs
   };
 }
 

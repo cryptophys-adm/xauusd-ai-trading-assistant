@@ -131,10 +131,11 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const account = executor.account ?? {}, sym = executor.symbol ?? {};
   const issued = signal.issued_ms, id = openId(issued, side);
   const sameSide = positions.filter((p) => p.side === side);
+  const decided = finite(signal.decided_ms) ? signal.decided_ms : issued;
   const gates = [
     [!finite(issued) || !finite(signal.expires_ms), "bad_signal"],
     [now >= signal.expires_ms, "expired"],
-    [now - issued > S.max_signal_age_ms, "signal_too_old"],
+    [now - decided > S.max_signal_age_ms, "signal_too_old"],
     [signal.blackout === true, "blackout"],
     [signal.paused === true || control?.mode === "paused", "paused"],
     [account.trade_mode !== "demo" && S.live_armed !== true, "live_not_armed"],
@@ -154,6 +155,13 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const stopDist = Math.abs(signal.entry - signal.stop), tpDist = Math.abs(signal.tp1 - signal.entry);
   const minDist = (finite(sym.stops_level_points) ? sym.stops_level_points : 0) * sym.point;
   if (stopDist <= minDist || tpDist <= minDist) { note("stops_level"); return { intents, notes }; }
+
+  if (signal.action === "ENTER_LIMIT") {
+    const priceAway = buy ? sym.ask > signal.entry + 0.35 * stopDist : sym.bid < signal.entry - 0.35 * stopDist;
+    if (priceAway) { note("waiting_for_pullback"); return { intents, notes }; }
+  }
+  const breached = buy ? sym.bid <= signal.stop : sym.ask >= signal.stop;
+  if (breached) { note("stop_breached"); return { intents, notes }; }
 
   const price = buy ? sym.ask : sym.bid;
   const sl = roundTo(buy ? price - stopDist : price + stopDist, sym.digits);
