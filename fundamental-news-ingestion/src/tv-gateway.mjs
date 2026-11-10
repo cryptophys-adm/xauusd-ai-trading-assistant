@@ -101,6 +101,20 @@ export function normalizeOhlcvColumns(tool) {
 
 async function callOhlcvTool(env, endpoint, accessToken, args, deps) {
   const toolName = asString(env.TV_MCP_OHLCV_TOOL_NAME || OHLCV_TOOL_NAME_DEFAULT);
+  const tool = await callMcpTool(env, endpoint, accessToken, toolName, args, deps, "get_ohlcv");
+  const columns = normalizeOhlcvColumns(tool);
+  return {
+    symbol: asString(tool.symbol) || args.symbol,
+    interval: asString(tool.interval) || args.interval,
+    count: columns.t.length,
+    has_more: tool.has_more === true,
+    next_date_to: asString(tool.next_date_to) || null,
+    bars: columns
+  };
+}
+
+/** One MCP tools/call; returns the tool's JSON object or throws with the quota and rate-limit codes. */
+async function callMcpTool(env, endpoint, accessToken, toolName, args, deps, label) {
   const response = await deps.fetch(endpoint, {
     method: "POST",
     headers: {
@@ -123,7 +137,7 @@ async function callOhlcvTool(env, endpoint, accessToken, args, deps) {
     const retryAfterSeconds = Number.parseInt(String(response.headers?.get?.("retry-after") || ""), 10);
     const retryAfterMs = Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1000 : null;
     throw Object.assign(new Error(
-      quota ? "TradingView MCP tool quota exceeded" : rateLimited ? "TradingView MCP rate limited (HTTP 429)" : "TradingView MCP get_ohlcv failed"
+      quota ? "TradingView MCP tool quota exceeded" : rateLimited ? "TradingView MCP rate limited (HTTP 429)" : `TradingView MCP ${label} failed`
     ), {
       code: quota ? "mcp_quota_exceeded" : rateLimited ? "mcp_rate_limited" : (response.ok ? "mcp_tool_error" : "mcp_upstream_error"),
       status: quota ? 429 : (response.ok ? 502 : response.status),
@@ -132,17 +146,100 @@ async function callOhlcvTool(env, endpoint, accessToken, args, deps) {
         : rateLimited ? deps.rateLimitCooldownUntil(retryAfterMs) : null
     });
   }
-  const tool = parseToolResult(payload);
-  if (!tool) throw Object.assign(new Error("get_ohlcv returned no parsable content"), { code: "invalid_ohlcv_payload", status: 502 });
-  const columns = normalizeOhlcvColumns(tool);
-  return {
-    symbol: asString(tool.symbol) || args.symbol,
-    interval: asString(tool.interval) || args.interval,
-    count: columns.t.length,
-    has_more: tool.has_more === true,
-    next_date_to: asString(tool.next_date_to) || null,
-    bars: columns
-  };
+  const tool = parseToolResult(payload) ?? parseToolArray(payload);
+  if (!tool) throw Object.assign(new Error(`${label} returned no parsable content`), { code: label === "get_ohlcv" ? "invalid_ohlcv_payload" : "invalid_tool_payload", status: 502 });
+  return tool;
+}
+
+/** A tool result whose text content is a JSON array, wrapped as { events }. */
+function parseToolArray(payload) {
+  for (const item of Array.isArray(payload?.result?.content) ? payload.result.content : []) {
+    if (item?.type === "text" && typeof item.text === "string") {
+      try { const parsed = JSON.parse(item.text); if (Array.isArray(parsed)) return { events: parsed }; } catch { /* next */ }
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------- economic calendar (2026-11-10)
+// Owner 2026-11-10: the Calendar Agent needs the released value. The ForexFactory export has only the
+// forecast and the previous value; TradingView's economic calendar has the actual too, past windows
+// included (data since 2003-09-01). Same OAuth grant, same account-wide quota cooldown.
+
+export const CALENDAR_GATEWAY_CONTRACT = "cryptophys.tv-calendar-gateway.v1";
+export const CALENDAR_TOOL_NAME_DEFAULT = "mcp-tv-get-economic-calendar";
+const CALENDAR_MAX_SPAN_MS = 35 * 86_400_000;
+const CALENDAR_EARLIEST = Date.parse("2003-09-01T00:00:00Z");
+const DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?Z)?$/;
+
+/** Validates one calendar request: an RFC3339 or YYYY-MM-DD window of at most 35 days, USD by default. */
+export function validateCalendarRequest(raw) {
+  if (!isRecord(raw)) return { error: "request_must_be_object" };
+  const from = asString(raw.date_from).trim(), to = asString(raw.date_to).trim();
+  if (!DATE_RE.test(from) || !DATE_RE.test(to)) return { error: "invalid_date" };
+  const a = Date.parse(from), b = Date.parse(to);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b < a || b - a > CALENDAR_MAX_SPAN_MS || a < CALENDAR_EARLIEST) return { error: "invalid_window" };
+  const currencies = asString(raw.currencies || "USD").trim().toUpperCase();
+  if (!/^[A-Z]{3}(,[A-Z]{3})*$/.test(currencies)) return { error: "invalid_currencies" };
+  const imp = raw.min_importance == null ? 1 : Number(raw.min_importance);
+  if (![-1, 0, 1].includes(imp)) return { error: "invalid_min_importance" };
+  return { value: { date_from: from, date_to: to, currencies, min_importance: imp } };
+}
+
+const numOf = (v) => {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v !== "string") return null;
+  const m = v.trim().replace(/,/g, "").match(/^([+-]?\d+(?:\.\d+)?)\s*([KMBT%]?)/i);
+  if (!m) return null;
+  const n = Number(m[1]);
+  const mult = { K: 1e3, M: 1e6, B: 1e9, T: 1e12 }[m[2].toUpperCase()] ?? 1;
+  return Number.isFinite(n) ? n * mult : null;
+};
+const firstNum = (...vs) => { for (const v of vs) { const n = numOf(v); if (n != null) return n; } return null; };
+
+/** Normalizes the calendar tool's events (field names vary): only events with a title and a time. */
+export function normalizeCalendarEvents(tool) {
+  const list = Array.isArray(tool?.events) ? tool.events : Array.isArray(tool?.data) ? tool.data : Array.isArray(tool?.result) ? tool.result : Array.isArray(tool?.items) ? tool.items : [];
+  const out = [];
+  for (const e of list) {
+    if (!isRecord(e)) continue;
+    const title = asString(e.title || e.indicator || e.name || e.event).trim().slice(0, 140);
+    const t = Date.parse(asString(e.date || e.time || e.datetime || e.release_time || e.timestamp));
+    if (!title || !Number.isFinite(t)) continue;
+    out.push({
+      id: asString(e.id || e.event_id).slice(0, 64) || null, title, time: new Date(t).toISOString(),
+      country: asString(e.country).toUpperCase().slice(0, 4) || null, currency: asString(e.currency).toUpperCase().slice(0, 4) || null,
+      importance: Number.isFinite(Number(e.importance)) ? Number(e.importance) : null,
+      actual: firstNum(e.actualRaw, e.actual_raw, e.actual), forecast: firstNum(e.forecastRaw, e.forecast_raw, e.forecast), previous: firstNum(e.previousRaw, e.previous_raw, e.previous),
+      unit: asString(e.unit).slice(0, 16) || null, scale: asString(e.scale).slice(0, 8) || null, period: asString(e.period).slice(0, 24) || null
+    });
+  }
+  return out.sort((x, y) => x.time.localeCompare(y.time));
+}
+
+/** The economic calendar of one window through the TvGateway, under the same quota cooldown as OHLCV. */
+export async function runEconomicCalendar(env, raw, deps) {
+  const check = validateCalendarRequest(raw);
+  if (check.error) return { status: 400, body: { contract: CALENDAR_GATEWAY_CONTRACT, error: check.error } };
+  const cooldown = await deps.readQuotaCooldown(env);
+  if (cooldown) return { status: 503, body: { contract: CALENDAR_GATEWAY_CONTRACT, error: "mcp_quota_cooldown_active", quota_cooldown_until: cooldown.until } };
+  let metadata, accessToken;
+  try {
+    metadata = await deps.fetchOAuthMetadata(env);
+    accessToken = await deps.getValidAccessToken(env, metadata);
+  } catch (error) {
+    return { status: 503, body: { contract: CALENDAR_GATEWAY_CONTRACT, error: asString(error?.code) || "oauth_unavailable" } };
+  }
+  try {
+    const tool = await callMcpTool(env, asString(metadata.mcp_endpoint), accessToken, asString(env.TV_MCP_CALENDAR_TOOL_NAME || CALENDAR_TOOL_NAME_DEFAULT), check.value, deps, "get_economic_calendar");
+    return { status: 200, body: { contract: CALENDAR_GATEWAY_CONTRACT, fetched_at: new Date().toISOString(), request: check.value, events: normalizeCalendarEvents(tool) } };
+  } catch (error) {
+    if (error?.code === "mcp_quota_exceeded" || error?.code === "mcp_rate_limited") {
+      try { await deps.writeQuotaCooldown(env, error.quota_cooldown_until, error.code === "mcp_rate_limited" ? "provider_rate_limited" : "provider_quota_exceeded"); } catch { /* best effort */ }
+      return { status: 429, body: { contract: CALENDAR_GATEWAY_CONTRACT, error: error.code, quota_cooldown_until: error.quota_cooldown_until } };
+    }
+    return { status: 502, body: { contract: CALENDAR_GATEWAY_CONTRACT, error: asString(error?.code) || "mcp_request_failed" } };
+  }
 }
 
 /**

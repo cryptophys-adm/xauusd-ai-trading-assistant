@@ -37,7 +37,9 @@ import { buildGlobalConclusion } from "./global-conclusion.mjs";
 import { readMacroRoom } from "./macro-room.mjs";
 import { readCorrelations } from "./correlations.mjs";
 import { loadRegimeMap, regimeAtClose } from "./market-regime.mjs";
-import { eventRisk } from "./econ-calendar.mjs";
+import { eventRisk, cachedCalendar } from "./econ-calendar.mjs";
+import { calendarOutlook } from "./calendar-agent.mjs";
+import { calendarIntel } from "./econ-releases.mjs";
 import { hudLevels } from "./hud-levels.mjs";
 import { callBusModel, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { naturalLanguageErrors, onlyNaturalLanguageErrors, NATURAL_LANGUAGE_CORRECTION } from "./natural-language.mjs";
@@ -268,12 +270,28 @@ export function sentimentOf({ quorum = null, news = null, macro = null } = {}) {
 
 /** Pure: the right panel's market context: sentiment, regime (15m and 1H), macro drivers and the session. */
 export function marketContextOf(loaded, quorum = null, now = Date.now()) {
-  const { inputs = {}, correlations = null, regime = null, macro = null } = loaded || {};
+  const { inputs = {}, correlations = null, regime = null, macro = null, calendar = null } = loaded || {};
   return {
     sentiment: sentimentOf({ quorum, news: inputs.news ?? null, macro }),
+    calendar: calendarContextOf(calendar),
     regime: { m15: regimeOf(inputs.m15Snapshot ?? null), h1: regimeOf(inputs.h1Snapshot ?? null, typeof regime === "string" ? regime : null) },
     macro_drivers: macroDriversOf(inputs.news?.context ?? null, correlations),
     session: sessionAt(now)
+  };
+}
+
+/**
+ * Pure: the Calendar Agent's view for the council (owner 2026-11-10): the releases still inside their
+ * horizon with actual, forecast, surprise and the rule's effect on gold, the learned horizon, and the
+ * next events with their scenario. Null without a calendar.
+ */
+export function calendarContextOf(outlook) {
+  if (!outlook) return null;
+  const pick = (p) => ({ title: p.title, time: p.time, status: p.status, horizon_hours_after: p.horizon?.hours_after ?? null, horizon_learned: p.horizon?.learned === true, ...(p.release ? { release: p.release } : {}), ...(p.history ? { history: p.history } : {}), scenario: p.text });
+  return {
+    summary: outlook.summary, consensus_lean: outlook.consensus_lean ?? 0, surprise_lean: outlook.surprise_lean ?? 0,
+    released: (outlook.events || []).filter((p) => p.status === "released").map(pick),
+    next: (outlook.events || []).filter((p) => p.status === "upcoming" || p.status === "imminent").slice(0, 3).map(pick)
   };
 }
 
@@ -288,6 +306,11 @@ export function contextCautions(dir, market = null) {
   if (m15?.chaos && !h1?.chaos) out.push("the 15-minute regime reads chaotic");
   const dx = macro?.change_24h_percent?.dollar;
   if (isNum(dx) && Math.abs(dx) >= 0.3 && Math.sign(dx) === dir) out.push(`the dollar ${dx > 0 ? "rose" : "fell"} ${Math.abs(dx)}% in 24 hours, against a ${dir > 0 ? "long" : "short"} in gold`);
+  // A release inside its horizon whose surprise points against the trade (owner 2026-11-10).
+  for (const p of market?.calendar?.released || []) {
+    const r = p.release;
+    if (r && r.gold_direction && r.gold_direction === -dir && Math.abs(r.surprise_z ?? 0) >= 0.5) out.push(`${p.title} surprised ${r.surprise_z > 0 ? "+" : ""}${r.surprise_z} standard deviations, which by its rule ${r.gold_direction > 0 ? "lifts" : "weighs on"} gold, against a ${dir > 0 ? "long" : "short"}, inside its ${p.horizon_hours_after}-hour horizon`);
+  }
   return out;
 }
 
@@ -496,6 +519,7 @@ export function councilMessages(evidence) {
     "Witnesses each speak from their own data: the D1, 4H, 1H and 15m War Rooms (their agents' bias as a lean from -1 bearish to +1 bullish, and the room's own decision), News Daily, the Macro War Room and the strategy engine (the multi-timeframe confluence, the key-level plan and the entry trigger). You are the only one who reads across them.",
     "Decide the stance: BUY, SELL or WAIT. A BUY is possible only when long.allowed is true, a SELL only when short.allowed is true; otherwise the guardrails turn it into WAIT, so choose WAIT yourself and say which check is missing. WAIT is always allowed.",
     `The quorum guardrail is already evaluated in long.checks and short.checks: it compares quorum.bullish_share or quorum.bearish_share (the share of the witnesses' weight leaning that way) with quorum.share_needed_above. quorum.weighted_lean is the strength of the lean from -1 to +1, not the quorum; never compare it with ${QUORUM_MIN}.`,
+    "context.market.calendar is the Calendar Agent: each release still inside its horizon with its actual against the forecast, the surprise in standard deviations, the rule's effect on gold (gold_direction +1 up, -1 down) and, when enough past releases are measured, the learned horizon and how often gold followed the rule. A large surprise inside its horizon outweighs a weak technical lean; a release gold has not followed reliably weighs less.",
     "context.market holds the right panel's cards: the market sentiment (the witnesses' weighted lean, the news and macro composite, the 24-hour headlines), the regime of the 15m and 1H charts (trending or mean-reverting, chaos, stretch), the macro drivers (gold, the dollar, oil and USDT dominance over 24 hours, the gold-dollar link, cross-asset correlations) and the session (day, date, market open or closed, the active sessions and their liquidity, the next close or open). Weigh them: they confirm or weaken the witnesses and explain the cautions.",
     "Weigh the witnesses by their weight and by how well their reasoning holds up; the higher timeframes carry the trend, the 15m and 1H rooms carry the setup, the strategy engine carries location and trigger. Cautions (an event, conflicts, chaotic regime) lower your confidence.",
     `Choose entry_type "market" only when the plan's price is at the level (at_level true), else "limit" (the planned pullback). Choose target "tp1" or "tp2": a target needs at least ${MIN_RRR}R.`,
@@ -585,7 +609,9 @@ export async function loadDecisionInputs(env, { now = Date.now() } = {}) {
   const global = buildGlobalConclusion({ d1, h4, h1, m15, news: inputs.news, macro, h1Decision: inputs.h1Chain, strategy, now });
   const correlations = await safe(() => readCorrelations(env, { now }));
   const regime = await safe(async () => regimeAtClose(await loadRegimeMap(env, "60"), now));
-  return { inputs, strategy, macro, global, correlations, regime };
+  // The Calendar Agent with the released values, surprises and learned horizons (owner 2026-11-10).
+  const calendar = await safe(async () => calendarOutlook((await cachedCalendar(env))?.events || [], now, { intel: await calendarIntel(env, { now }) }));
+  return { inputs, strategy, macro, global, correlations, regime, calendar };
 }
 
 /** Pure: the context the council reads beside the witnesses (no weights). */

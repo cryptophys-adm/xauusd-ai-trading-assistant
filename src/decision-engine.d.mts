@@ -54,3 +54,4 @@ export function regimeLean(input?: { h1Bars?: any[]; regime?: any; n?: number })
 export function trendTfLean(input?: { d1Bars?: any[]; h4Bars?: any[]; h1Bars?: any[] }): { lean: number; summary: string } | null;
 export function macroDriversLean(input?: { newsContext?: any; correlations?: any }): { lean: number; summary: string } | null;
 export function independentWitnesses(loaded?: any): Record<string, { lean: number; summary: string } | null>;
+export function calendarContextOf(outlook: any): Record<string, any> | null;

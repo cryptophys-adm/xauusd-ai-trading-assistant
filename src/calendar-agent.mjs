@@ -54,7 +54,21 @@ const goldOf = (usd) => (usd === "usd_up" ? -1 : usd === "usd_down" ? 1 : 0);
 const word = (s) => (s > 0 ? "gold up" : s < 0 ? "gold down" : "no clear effect");
 
 /** Pure: the projection of one event at `now`. Only USD events are projected. */
-export function projectEvent(e, now = Date.now()) {
+/**
+ * Pure: the stored release (src/econ-releases.mjs) of a calendar event: the same minute within 10, the
+ * same event kind first. Null when none.
+ */
+export function matchRelease(e, releases = []) {
+  const t = Date.parse(e?.time);
+  if (!Number.isFinite(t)) return null;
+  const near = (releases || []).filter((r) => Math.abs(Date.parse(r.time) - t) <= 10 * 60_000);
+  const kind = ruleOf(e.title).kind;
+  return near.find((r) => r.kind === kind && (r.actual != null || r.forecast != null)) ?? near.find((r) => r.kind === kind) ?? null;
+}
+
+const fmtNum = (v, unit) => (v == null ? "n/a" : `${Math.round(v * 1000) / 1000}${unit === "%" ? "%" : ""}`);
+
+export function projectEvent(e, now = Date.now(), { release = null, stat = null } = {}) {
   if (!e || e.currency !== "USD") return null;
   const rule = ruleOf(e.title);
   const t = Date.parse(e.time);
@@ -64,17 +78,36 @@ export function projectEvent(e, now = Date.now()) {
   // market prices in before the release; it is half as strong as a surprise and only a lean.
   let consensus = 0;
   if (beat && forecast != null && previous != null && forecast !== previous) consensus = Math.sign(forecast - previous) * beat;
-  const status = now < t - HORIZON.before_ms ? "upcoming" : now <= t ? "imminent" : now <= t + HORIZON.after_ms ? "released" : "past";
+  // The learned horizon of the event kind (owner 2026-11-10), else the fixed 4 hours.
+  const afterMs = stat?.horizon_hours > 0 ? stat.horizon_hours * 3_600_000 : HORIZON.after_ms;
+  const status = now < t - HORIZON.before_ms ? "upcoming" : now <= t ? "imminent" : now <= t + afterMs ? "released" : "past";
   const lines = beat
     ? [`Above forecast: ${word(beat)}; below forecast: ${word(-beat)} (${rule.why}).`]
     : [`No number: a hawkish tone means gold down, a dovish tone gold up (${rule.why}).`];
   if (consensus) lines.push(`The forecast is ${forecast > previous ? "above" : "below"} the previous reading, so the consensus already leans ${word(consensus)}; much of that is priced in.`);
-  if (status === "released") lines.push("Released: the outcome is read from the headlines.");
+  // After the release (owner 2026-11-10): the actual against the forecast, its surprise and the rule's
+  // effect on gold, with what gold did after the past releases of this kind.
+  const released = release && release.actual != null && now >= t;
+  let surprise = null;
+  if (released) {
+    const dir = release.gold_direction ?? 0;
+    surprise = { actual: release.actual, forecast: release.forecast ?? null, previous: release.previous ?? null, surprise: release.surprise ?? null, surprise_z: release.surprise_z ?? null, gold_direction: dir };
+    lines.push(`Released: actual ${fmtNum(release.actual, release.unit)} against a forecast of ${fmtNum(release.forecast, release.unit)}${release.surprise_z != null ? ` (a surprise of ${release.surprise_z > 0 ? "+" : ""}${release.surprise_z} standard deviations)` : ""}, so by rule ${dir ? word(dir) : "no clear effect"}.`);
+  } else if (status === "released") lines.push("Released: no actual value is stored yet, so the outcome is read from the headlines.");
+  if (stat?.samples) {
+    lines.push(stat.horizon_hours == null
+      ? `Only ${stat.samples} past releases of this kind are measured, so the 4-hour horizon stands.`
+      : stat.horizon_hours > 0
+        ? `In ${stat.samples} past releases of this kind gold moved the rule's way ${Math.round((stat.horizons?.[`${stat.horizon_hours}h`]?.hit_rate ?? 0) * 100)}% of the time up to ${stat.horizon_hours} hours after${stat.peak ? `, most strongly after ${stat.peak.at.replace("h", " hours")}` : ""}.`
+        : `In ${stat.samples} past releases of this kind gold did not follow the rule reliably at any horizon.`);
+  }
   return {
     title: e.title, time: e.time, impact: e.impact, kind: rule.kind, generic: Boolean(rule.generic),
     gold_if_above_forecast: beat || null, gold_if_below_forecast: beat ? -beat : null,
     consensus_lean: consensus, status,
-    horizon: { from: new Date(t - HORIZON.before_ms).toISOString(), to: new Date(t + HORIZON.after_ms).toISOString() },
+    horizon: { from: new Date(t - HORIZON.before_ms).toISOString(), to: new Date(t + afterMs).toISOString(), hours_after: afterMs / 3_600_000, learned: stat?.horizon_hours > 0 },
+    ...(surprise ? { release: surprise } : {}),
+    ...(stat?.samples ? { history: { samples: stat.samples, horizon_hours: stat.horizon_hours, peak: stat.peak } } : {}),
     text: lines.join(" ")
   };
 }
@@ -84,16 +117,22 @@ export function projectEvent(e, now = Date.now()) {
  * to 48 hours ahead with their projection, and the net consensus lean of the next 24 hours
  * (-1 bearish to +1 bullish for gold; 0 when nothing leans).
  */
-export function calendarOutlook(events, now = Date.now(), { impacts = ["High"] } = {}) {
+export function calendarOutlook(events, now = Date.now(), { impacts = ["High"], intel = null } = {}) {
   const list = (events || [])
     .filter((e) => e.currency === "USD" && impacts.includes(e.impact))
     .filter((e) => { const t = Date.parse(e.time); return t >= now - 6 * 3_600_000 && t <= now + 48 * 3_600_000; })
-    .map((e) => projectEvent(e, now)).filter(Boolean);
+    .map((e) => projectEvent(e, now, { release: matchRelease(e, intel?.releases), stat: intel?.stats?.[ruleOf(e.title).kind] ?? null })).filter(Boolean);
   const next24 = list.filter((p) => { const t = Date.parse(p.time); return t > now && t <= now + 24 * 3_600_000; });
   const leaning = next24.filter((p) => p.consensus_lean);
   const lean = leaning.length ? Math.round((leaning.reduce((s, p) => s + p.consensus_lean, 0) / next24.length) * 100) / 100 : 0;
+  // The surprise lean of the releases still inside their horizon (owner 2026-11-10): the rule's direction
+  // weighted by the size of the surprise, -1 to +1.
+  const live = list.filter((p) => p.status === "released" && p.release && p.release.gold_direction);
+  const surpriseLean = live.length ? Math.round(Math.max(-1, Math.min(1, live.reduce((s, p) => s + p.release.gold_direction * Math.min(1, Math.abs(p.release.surprise_z ?? 1) / 1.5), 0) / live.length)) * 100) / 100 : 0;
   return {
     version: CALENDAR_AGENT_VERSION,
+    surprise_lean: surpriseLean,
+    released: live.map((p) => ({ title: p.title, time: p.time, ...p.release, horizon_to: p.horizon.to, learned_horizon: p.horizon.learned })),
     events: list,
     next_24h: next24.length,
     consensus_lean: lean,

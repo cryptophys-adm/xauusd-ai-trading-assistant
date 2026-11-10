@@ -180,3 +180,33 @@ test("the pull adapter's context symbols are allowed, and one unknown symbol nev
   assert.equal(body.results[0].ok, true);
   assert.deepEqual([body.results[1].ok, body.results[1].error], [false, "symbol_not_allowed"]);
 });
+
+test("the economic calendar: validated window, the released values normalised, the same quota cooldown", async () => {
+  const { validateCalendarRequest, normalizeCalendarEvents } = await import("../src/tv-gateway.mjs");
+  const { runTvEconomicCalendar } = await import(new URL("../src/index.mjs", import.meta.url).href);
+  assert.deepEqual(validateCalendarRequest({ date_from: "2026-11-10", date_to: "2026-11-10T23:59:59Z" }).value, { date_from: "2026-11-10", date_to: "2026-11-10T23:59:59Z", currencies: "USD", min_importance: 1 });
+  assert.equal(validateCalendarRequest({ date_from: "2026-11-01", date_to: "2026-12-31" }).error, "invalid_window", "at most 35 days");
+  assert.equal(validateCalendarRequest({ date_from: "2000-01-01", date_to: "2000-01-02" }).error, "invalid_window", "no data before 2003-09-01");
+  assert.equal(validateCalendarRequest({ date_from: "today", date_to: "2026-11-10" }).error, "invalid_date");
+  const events = normalizeCalendarEvents({ events: [
+    { id: "e1", title: "CPI m/m", date: "2026-11-10T13:30:00Z", country: "US", currency: "USD", importance: 1, actual: "0.4%", forecast: "0.3%", previous: "0.2%", actualRaw: 0.4, forecastRaw: 0.3, previousRaw: 0.2, unit: "%" },
+    { indicator: "Fed Chair Speaks", date: "2026-11-10T18:00:00Z", currency: "USD" },
+    { title: "no time" }
+  ] });
+  assert.equal(events.length, 2);
+  assert.deepEqual([events[0].title, events[0].actual, events[0].forecast, events[0].previous], ["CPI m/m", 0.4, 0.3, 0.2]);
+  assert.equal(events[1].actual, null, "a speech has no number");
+  const env = createEnv();
+  await authorize(env);
+  const calls = installFetch(() => toolText({ events: [{ title: "CPI m/m", date: "2026-11-10T13:30:00Z", currency: "USD", actual: "0.4%", forecast: "0.3%" }] }));
+  const r = await runTvEconomicCalendar(env, { date_from: "2026-11-10", date_to: "2026-11-10T23:59:59Z" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(calls[0].params.name, "mcp-tv-get-economic-calendar");
+  assert.deepEqual(calls[0].params.arguments, { date_from: "2026-11-10", date_to: "2026-11-10T23:59:59Z", currencies: "USD", min_importance: 1 });
+  assert.equal(r.body.events[0].actual, 0.4);
+  installFetch(() => jsonResponse({ jsonrpc: "2.0", id: 1, result: { isError: true, content: [{ type: "text", text: "TOOL_QUOTA_EXCEEDED: try again in 1 hour" }] } }));
+  const q = await runTvEconomicCalendar(env, { date_from: "2026-11-10", date_to: "2026-11-10" });
+  assert.equal(q.status, 429);
+  const blocked = await runTvEconomicCalendar(env, { date_from: "2026-11-10", date_to: "2026-11-10" });
+  assert.equal(blocked.body.error, "mcp_quota_cooldown_active", "the cooldown stops the next call, as for OHLCV");
+});
