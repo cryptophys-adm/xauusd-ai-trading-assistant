@@ -23,7 +23,8 @@ export const OMEGA_DEFAULTS = Object.freeze({
   max_daily_loss_pct: 2,
   max_spread_points: 60,
   // Like the EA (1.11): the Decision Engine decides at every 15m close, so a signal is fresh for 10 minutes.
-  max_signal_age_ms: 10 * 60_000
+  max_signal_age_ms: 10 * 60_000,
+  policy_auto: false
 });
 export const RISK_PCT_MAX = 2;
 export const EXECUTOR_MAX_AGE_MS = 60_000;
@@ -67,6 +68,10 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS) {
     const m = body.max_signal_age_min;
     if (!finite(m) || m < 1 || m > 60) return { error: "max_signal_age_min must be a number from 1 to 60" };
     out.max_signal_age_ms = Math.round(m * 60_000);
+  }
+  if (body.policy_auto !== undefined) {
+    if (typeof body.policy_auto !== "boolean") return { error: "policy_auto must be true or false" };
+    out.policy_auto = body.policy_auto;
   }
   if (body.live_armed !== undefined) {
     if (typeof body.live_armed !== "boolean") return { error: "live_armed must be true or false" };

@@ -139,6 +139,7 @@ function renderBroker(b) {
   ]));
   if (!engineDirty) {
     document.getElementById("e-enabled").checked = e.enabled === true;
+    document.getElementById("e-policy-auto").checked = e.policy_auto === true;
     document.getElementById("e-risk").value = e.risk_pct ?? "";
     document.getElementById("e-maxpos").value = e.max_positions ?? "";
     document.getElementById("e-loss").value = e.max_daily_loss_pct ?? "";
@@ -211,6 +212,7 @@ async function saveEngine(extra = {}) {
   const n = (id) => { const v = document.getElementById(id).value; return v === "" ? undefined : Number(v); };
   const body = {
     enabled: document.getElementById("e-enabled").checked,
+    policy_auto: document.getElementById("e-policy-auto").checked,
     risk_pct: n("e-risk"), max_positions: n("e-maxpos"), max_daily_loss_pct: n("e-loss"), max_spread_points: n("e-spread"), max_signal_age_min: n("e-age"),
     ...extra
   };

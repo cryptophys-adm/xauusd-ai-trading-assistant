@@ -258,14 +258,15 @@ export const OMEGA_POLICY_BOUNDS = Object.freeze({
 function clamp(v, b) { return Math.min(b.max, Math.max(b.min, v)); }
 
 export async function applyOmegaPolicy(env, { now = Date.now() } = {}) {
-  if (String(env?.OMEGA_POLICY_AUTO ?? "false").trim().toLowerCase() !== "true") return { status: "disabled" };
+  const current = await readSettings(env);
+  const envOn = String(env?.OMEGA_POLICY_AUTO ?? "").trim().toLowerCase() === "true";
+  if (!envOn && current.settings?.policy_auto !== true) return { status: "disabled" };
   let raw = null;
   try { raw = await env?.SIGNAL_CACHE?.get?.("omega:policy"); } catch { raw = null; }
   if (!raw) return { status: "no_policy" };
   let policy = null;
   try { policy = JSON.parse(raw); } catch { return { status: "invalid_policy" }; }
   if (!policy || typeof policy !== "object") return { status: "invalid_policy" };
-  const current = await readSettings(env);
   const body = { ...current.settings };
   for (const k of Object.keys(OMEGA_POLICY_BOUNDS)) {
     if (policy[k] != null && Number.isFinite(Number(policy[k]))) {
