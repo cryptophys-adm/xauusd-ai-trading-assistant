@@ -6,6 +6,7 @@ import {
   runDecisionEngine, runPendingDecision, readLatestDecision, readDecisions, decisionKeyFor, keyCloseMs, notifyDecision, decisionMessage,
   resetDecisionSchemaCacheForTests, decisionEngineEnabled, WITNESS_WEIGHTS, DECISION_LATEST_KEY
 } from "../src/decision-engine.mjs";
+import { sessionAt, regimeOf, macroDriversOf, sentimentOf, contextCautions, marketContextOf } from "../src/decision-engine.mjs";
 import { eaSignalFromDecision } from "../src/ea-signal.mjs";
 import { ingestDecision, ensureLedgerSchema, resetLedgerSchemaCacheForTests, SOURCES } from "../src/signal-ledger.mjs";
 
@@ -61,7 +62,7 @@ test("witnesses: every room, the news, the macro room and the strategy, weighted
 test("guardrails: the long passes; the short fails quorum and confirmation; stale rooms and vetoes block", () => {
   const { guards } = assess(loadedOf(), { now: NOW });
   assert.equal(guards.long.allowed, true, JSON.stringify(guards.long.checks));
-  assert.deepEqual(guards.long.checks.map((c) => c.id), ["fresh", "quorum", "confirmation", "no_veto", "levels", "reward"]);
+  assert.deepEqual(guards.long.checks.map((c) => c.id), ["market_open", "fresh", "quorum", "confirmation", "no_veto", "levels", "reward"]);
   assert.equal(guards.long.plan.entry, 4000);
   assert.equal(guards.short.allowed, false);
   assert.deepEqual(guards.short.checks.filter((c) => !c.pass).map((c) => c.id), ["quorum", "confirmation"]);
@@ -226,4 +227,48 @@ test("the EA signal from the decision: the chosen target, issued at the 15m clos
   assert.equal(eaSignalFromDecision({ decision: { decision_key: key, stance: "WAIT", trade: null } }).side, "NONE");
   assert.equal(eaSignalFromDecision({ decision: { decision_key: key, stance: "BUY", trade: { ...trade, stop: 4010 } } }).side, "NONE", "levels on the wrong side are never sent");
   assert.equal(eaSignalFromDecision({ decision: null }).side, "NONE");
+});
+
+test("the market context: the session with day, date and market state; regime; macro drivers; sentiment", () => {
+  const mon = sessionAt(Date.parse("2026-11-09T13:20:00Z"));
+  assert.deepEqual([mon.day, mon.date, mon.market_open, mon.liquidity], ["Monday", "2026-11-09", true, "high"]);
+  assert.deepEqual(mon.active, ["London", "New York"]);
+  assert.deepEqual([mon.next_change.to, mon.next_change.at], ["closed", "2026-11-13T22:00:00.000Z"], "the weekly close, Friday 22:00 UTC");
+  const sat = sessionAt(Date.parse("2026-11-07T10:00:00Z"));
+  assert.deepEqual([sat.day, sat.market_open, sat.liquidity, sat.next_change.at], ["Saturday", false, "closed", "2026-11-08T22:00:00.000Z"]);
+  assert.equal(sessionAt(Date.parse("2026-11-09T22:30:00Z")).liquidity, "thin", "after New York, before Tokyo");
+  const reg = regimeOf({ huds: { prophet: { fields: { hurst: 0.7, efficiency_ratio: 0.6, kww_zscore: 2.8 } }, kinetic_engine: { fields: { is_chaos: false, entropy: 0.4 } } } }, "high-trending");
+  assert.deepEqual([reg.label, reg.character, reg.chaos, reg.stretch_z], ["high-trending", "trending", false, 2.8]);
+  assert.equal(regimeOf(null).character, null);
+  const macro = macroDriversOf({ gold: { change_24h_percent: 0.8 }, dollar: { change_24h_percent: -0.42 }, oil: { change_24h_percent: 1.1 } });
+  assert.deepEqual(macro.change_24h_percent, { gold: 0.8, dollar: -0.42, oil: 1.1, usdt_dominance: null });
+  assert.equal(macro.gold_dollar_link, "inverse (usual)");
+  assert.equal(macro.lean, 0.84, "a falling dollar pulls gold up");
+  assert.deepEqual(sentimentOf({ quorum: { score: 0.42, bias: "BULLISH" }, news: { counts: { bullish: 5, bearish: 2 } } }).headlines, { bullish: 5, bearish: 2, neutral: 0 });
+  const fri = { session: sessionAt(Date.parse("2026-11-13T21:00:00Z")), regime: { h1: { stretch_z: -2.6 } }, macro_drivers: macroDriversOf({ dollar: { change_24h_percent: -0.42 } }) };
+  const cautions = contextCautions(-1, fri);
+  assert.equal(cautions.length, 3, JSON.stringify(cautions));
+  assert.match(cautions.join(" | "), /closes for the weekend in 60 minutes/);
+  assert.match(cautions.join(" | "), /stretched 2\.6 standard deviations below/);
+  assert.match(cautions.join(" | "), /dollar fell 0\.42%/);
+  assert.deepEqual(contextCautions(1, { session: mon, regime: { h1: { stretch_z: -2.6 } }, macro_drivers: macro }), [], "with the trade: no caution");
+});
+
+test("a closed market never trades; the record and the council carry the market context", () => {
+  const loaded = loadedOf();
+  const a = assess(loaded, { now: Date.parse("2026-11-07T10:00:00Z") });
+  assert.equal(a.guards.long.allowed, false);
+  assert.match(a.guards.long.checks[0].detail, /Saturday 2026-11-07 10:00 UTC: the market is closed/);
+  const open = assess(loaded, { now: NOW });
+  assert.deepEqual(Object.keys(open.market), ["sentiment", "regime", "macro_drivers", "session"]);
+  const rec = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded, assessment: open, now: NOW });
+  assert.equal(rec.context.market.session.day, "Monday");
+  assert.ok(rec.context.market.sentiment && rec.context.market.regime && rec.context.market.macro_drivers);
+  const text = councilMessages(councilEvidence({ barClose: CLOSE, cards: open.cards, quorum: open.quorum, guards: open.guards, context: rec.context })).map((m) => m.content).join("\n");
+  assert.match(text, /macro drivers/);
+  assert.match(text, /"session":\{"day":"Monday"/);
+  assert.equal(marketContextOf(loaded, open.quorum, NOW).session.market_open, true);
+  const weighted = witnessCards({ global: globalOf(), strategy: STRATEGY, context: { session: sessionAt(NOW), macroLean: 0.84 }, env: { GLOBAL_DECISION_WEIGHTED: "true" } });
+  assert.match(weighted.find((c) => c.key === "SESSION").summary, /^Monday 2026-11-09 13:16 UTC, market open, London and New York \(high liquidity\)/);
+  assert.equal(weighted.find((c) => c.key === "MACRO_DRIVERS").lean, 0.84);
 });

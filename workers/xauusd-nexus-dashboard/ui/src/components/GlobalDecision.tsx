@@ -52,7 +52,7 @@ function PlanLadder({ plan, long, minRrr }: { plan: any; long: boolean; minRrr: 
   );
 }
 
-const CHECK_TEXT: Record<string, string> = { fresh: "rooms current", quorum: "quorum", confirmation: "confirmation", no_veto: "no veto", levels: "key-level plan", reward: "reward ≥ 1.5R", confidence: "confidence" };
+const CHECK_TEXT: Record<string, string> = { market_open: "market open", fresh: "rooms current", quorum: "quorum", confirmation: "confirmation", no_veto: "no veto", levels: "key-level plan", reward: "reward ≥ 1.5R", confidence: "confidence" };
 
 /** The Decision Engine's guardrails for one side: one chip per check. */
 function Guardrails({ side, g }: { side: string; g: any }) {
@@ -64,6 +64,30 @@ function Guardrails({ side, g }: { side: string; g: any }) {
         <span key={c.id} title={c.detail} className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 ${c.pass ? "border-emerald-400/20 text-emerald-200/90" : "border-rose-400/25 text-rose-200/90"}`}>
           {c.pass ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}{CHECK_TEXT[c.id] ?? c.id}
         </span>
+      ))}
+    </div>
+  );
+}
+
+/** The right panel's cards as the council read them: sentiment, regime, macro drivers, session. */
+function MarketContext({ c }: { c: any }) {
+  if (!c) return null;
+  const sig = (v: number | null | undefined) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v}%`);
+  const s = c.sentiment, r = c.regime, m = c.macro_drivers, se = c.session;
+  const rows = [
+    s && { k: "Sentiment", v: `${String(s.bias ?? "neutral").toLowerCase()}${s.weighted_lean != null ? ` ${s.weighted_lean > 0 ? "+" : ""}${Math.round(s.weighted_lean * 100)}` : ""} · headlines ▲${s.headlines?.bullish ?? 0} ▼${s.headlines?.bearish ?? 0} ·${s.headlines?.neutral ?? 0}${s.news_tldr ? ` · news ${String(s.news_tldr.stance).toLowerCase()}` : ""}` },
+    r && { k: "Regime", v: `1H ${r.h1?.label ?? r.h1?.character ?? "—"}${r.h1?.chaos ? " (chaos)" : ""}${r.h1?.stretch_z != null ? ` · z ${r.h1.stretch_z}` : ""} · 15m ${r.m15?.character ?? "—"}${r.m15?.chaos ? " (chaos)" : ""}` },
+    m && { k: "Macro 24h", v: `gold ${sig(m.change_24h_percent?.gold)} · DXY ${sig(m.change_24h_percent?.dollar)} · oil ${sig(m.change_24h_percent?.oil)}${m.gold_dollar_link ? ` · link ${m.gold_dollar_link}` : ""}` },
+    se && { k: "Session", v: `${se.day} ${se.date} ${se.time_utc} UTC · ${se.market_open ? `open · ${se.active?.length ? se.active.join(" + ") : "between sessions"} (${se.liquidity} liquidity)` : "market closed"}` }
+  ].filter(Boolean) as { k: string; v: string }[];
+  if (!rows.length) return null;
+  return (
+    <div className="glass-inner mt-3 divide-y divide-white/5" aria-label="Market context the council read">
+      {rows.map((x) => (
+        <div key={x.k} className="flex gap-2 px-3 py-1.5 text-[10.5px]">
+          <span className="w-16 shrink-0 text-[9.5px] uppercase tracking-[0.12em] text-slate-500">{x.k}</span>
+          <span className="min-w-0 flex-1 text-slate-300">{x.v}</span>
+        </div>
       ))}
     </div>
   );
@@ -201,6 +225,8 @@ export default function GlobalDecision() {
             ))}
             <p className="pt-0.5 text-[9.5px] text-slate-600">{e ? "Witnesses: each room, the news, the macro room and the strategy engine, with its weight in the quorum. Hover a row for its own decision and summary." : "Lean: the confidence-weighted mean of the agents' biases in that room, −100 bearish to +100 bullish. Hover a row for its note."}</p>
           </div>
+
+          {e && <MarketContext c={e.context?.market} />}
 
           {e?.trade ? <PlanLadder plan={tradePlan(e.trade)} long={e.trade.side === "BUY"} minRrr={e.rules?.min_rrr ?? 1.5} /> : !e && s?.plan && <PlanLadder plan={s.plan} long={s.direction === "LONG"} minRrr={s.min_rrr ?? 1.5} />}
 
