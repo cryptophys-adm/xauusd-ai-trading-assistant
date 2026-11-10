@@ -187,8 +187,11 @@ test("ini: applyCredentials and clearCredentials preserve comments, unrelated ke
   assert.ok(updated.includes("NewsEnable=0\r\n"));
   assert.ok(updated.includes("KeepPrivate=1\r\n"));
   assert.ok(updated.includes("AllowDllImport=0\r\n"));
-  assert.ok(updated.includes("Account=1\r\n"));
-  assert.ok(updated.includes("Profile=1\r\n"));
+  // ed156d9 (2026-11-10, "allow algorithmic trading permanently"): the bridge sets [Experts] Account=0 and
+  // Profile=0, so MT5 keeps algorithmic trading on when the account or profile changes.
+  assert.ok(updated.includes("Account=0\r\n"));
+  assert.ok(updated.includes("Profile=0\r\n"));
+  assert.equal(updated.includes("Account=1\r\n"), false);
 
   // Credentials and Experts flags updated
   assert.ok(updated.includes("Login=998877\r\n"));
@@ -233,7 +236,7 @@ test("ini: applyCredentials and clearCredentials preserve comments, unrelated ke
     symbol: "XAUUSD.m",
   });
   assert.ok(fromEmpty.includes("[Common]\nLogin=12345\nServer=Monex-Demo\nPassword=pw"));
-  assert.ok(fromEmpty.includes("[Experts]\nEnable=1\nAllowLiveTrading=1"));
+  assert.ok(fromEmpty.includes("[Experts]\nEnable=1\nEnabled=1\nAllowLiveTrading=1\nAllowDllImport=0\nAccount=0\nProfile=0"));
   assert.ok(fromEmpty.includes("[StartUp]\nExpert=OmegaExecutor\nSymbol=XAUUSD.m\nPeriod=M1"));
 });
 
