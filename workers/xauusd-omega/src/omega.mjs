@@ -260,6 +260,10 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (r.response) return r.response;
       return rpc(() => env.OMEGA.setConnection({ envelope: r.body.envelope, server: r.body.server, actor: identity.subject }), "connection_failed");
     }
+    if (request.method === "GET" && path === "/api/connection" && url.searchParams.get("disconnect") === "1") {
+      const reason = (url.searchParams.get("reason") || "disconnect requested from omega page").slice(0, 200);
+      return rpc(() => env.OMEGA.clearConnection({ reason, actor: identity.subject }), "connection_failed");
+    }
     if (route === "DELETE /api/connection") {
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;

@@ -208,7 +208,7 @@ async function connectBroker() {
 async function disconnectBroker() {
   const reason = "disconnect requested from omega page";
   say("broker-msg", "", "Disconnecting…");
-  send("./api/connection", "DELETE", { reason })
+  send(`./api/connection?disconnect=1&reason=${encodeURIComponent(reason)}`, "GET")
     .then(() => { say("broker-msg", "ok", "Disconnected."); load(); })
     .catch((e) => { say("broker-msg", "bad", `Refused: ${e.message}`); load(); });
 }
