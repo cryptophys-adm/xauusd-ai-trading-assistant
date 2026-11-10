@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { Check, Minus, ShieldAlert, Target, X } from "lucide-react";
 import { Badge, Panel, Skeleton } from "./ui";
 import { Stance, stanceColor } from "./Stance";
@@ -98,10 +99,12 @@ export default function GlobalDecision() {
   const m5Text = !e ? null : !m5 ? "no fresh 5m bar" : m5.buy_confirmed || m5.sell_confirmed ? `${m5.buy_confirmed ? "buy" : "sell"} confirmed${m5.verified ? "" : " (unverified)"}` : "no confirmation";
   const rows = e ? [...witnessRows, { key: "M5", label: "5m", role: "trigger", lean: null, pass: m5 && (m5.buy_confirmed || m5.sell_confirmed) ? m5.verified : null, note: `the Prophet R38 confirmation of the latest closed 5m bar${m5?.candle_time ? ` (${utc(m5.candle_time)})` : ""}`, stale: false, weight: null, trigger: m5Text }] : strategyRows;
   const decision = e?.stance ?? s?.decision ?? g?.action ?? "WAIT";
+  const [mode, setMode] = useState<string>(e?.trading_mode ?? "intraday");
+  useEffect(() => { fetch("/api/trading-mode").then((r) => r.json()).then((d) => { if (d?.mode) setMode(d.mode); }).catch(() => {}); }, []);
   const lead = e ? (e.stance === "SELL" ? "short" : e.stance === "BUY" ? "long" : (e.quorum?.short_share ?? 0) > (e.quorum?.long_share ?? 0) ? "short" : "long") : null;
   return (
     <Panel title={e ? "Decision Engine" : "Global decision"} icon={<Target className="h-3.5 w-3.5 text-cyan-300" />}
-      right={e ? <div className="flex items-center gap-1.5"><Badge tone="slate">{e.trading_mode ?? "intraday"}</Badge><Badge tone={e.source === "council" ? "cyan" : "amber"}>{e.source === "council" ? "AI council" : "fallback"}</Badge></div> : st && <Badge tone={st.tone}>{st.label}</Badge>}>
+      right={e ? <div className="flex items-center gap-1.5"><Badge tone="slate">{mode}</Badge><Badge tone={e.source === "council" ? "cyan" : "amber"}>{e.source === "council" ? "AI council" : "fallback"}</Badge></div> : st && <Badge tone={st.tone}>{st.label}</Badge>}>
       {loading && !g && !e ? <Skeleton rows={5} /> : !g && !e ? <p className="text-[12px] text-slate-500">The decision is not available yet.</p> : (
         <>
           <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
@@ -147,7 +150,7 @@ export default function GlobalDecision() {
           {e && (
             <div className="glass-inner mt-3 flex flex-wrap items-center gap-2 px-3 py-2 text-[11px] text-slate-300">
               <span className="eyebrow text-[9px]">Mode</span>
-              <select className="rounded border border-white/10 bg-slate-900 px-2 py-1 text-[11px] text-slate-200" value={e.trading_mode ?? "intraday"} onChange={async (ev) => { await fetch("/api/trading-mode", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: ev.target.value }) }); window.location.reload(); }} title="Active selector (stored in KV)">
+              <select className="rounded border border-white/10 bg-slate-900 px-2 py-1 text-[11px] text-slate-200" value={mode} onChange={async (ev) => { await fetch("/api/trading-mode", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: ev.target.value }) }); window.location.reload(); }} title="Active selector (stored in KV)">
                 <option value="scalp">scalp</option>
                 <option value="intraday">intraday</option>
                 <option value="swing">swing</option>
