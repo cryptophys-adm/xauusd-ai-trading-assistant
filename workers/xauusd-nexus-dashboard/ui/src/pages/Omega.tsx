@@ -598,8 +598,7 @@ export default function Omega() {
   const connectBroker = async (ev: FormEvent) => {
     ev.preventDefault();
     const isLocked = Boolean(
-      (data?.broker?.connection?.status === "stored" && data?.broker?.connection?.server) ||
-      data?.broker?.bridge?.terminal_connected
+      data?.broker?.connection?.status === "stored" && data?.broker?.connection?.server
     );
     if (isLocked) {
       setBrokerMsg({
@@ -634,10 +633,10 @@ export default function Omega() {
   };
 
   const disconnectBroker = async () => {
-    const reason = window.prompt("Reason to disconnect the broker account?");
-    if (!reason || !reason.trim()) return;
+    const reason = "disconnect requested from nexus dashboard";
+    setBrokerMsg({ tone: "text-slate-300", text: "Disconnecting…" });
     try {
-      await omegaJson("/omega/api/connection", "DELETE", { reason: reason.trim() });
+      await omegaJson(`/omega/api/connection?disconnect=1&reason=${encodeURIComponent(reason)}`, "GET");
       setBrokerMsg({ tone: "text-emerald-300", text: "Disconnected. Broker and server configuration is now unlocked." });
     } catch (e: any) {
       setBrokerMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
@@ -709,7 +708,7 @@ export default function Omega() {
       : "on";
   const effectiveTone: "red" | "amber" | "green" = !e.env_enabled ? "red" : !e.enabled ? "amber" : "green";
 
-  const accountActive = Boolean((conn.status === "stored" && conn.server) || br.terminal_connected);
+  const accountActive = Boolean(conn.status === "stored" && conn.server);
   const configLocked = accountActive;
 
   return (

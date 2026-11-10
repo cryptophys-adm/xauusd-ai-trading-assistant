@@ -456,6 +456,8 @@ export function createDaemon(options = {}) {
         try {
           const existingIni = fs.existsSync(config.terminalIni) ? fs.readFileSync(config.terminalIni, "utf8") : "";
           writeTerminalIniPreservingOwner(config.terminalIni, clearCredentials(existingIni), fs);
+          const statePath = path.join(config.omegaFilesDir, "state.json");
+          if (fs.existsSync(statePath)) { try { fs.unlinkSync(statePath); } catch { /* ignore */ } }
           await invokeExec(execFn, "systemctl", ["restart", config.terminalService]);
           writeAppliedState(config.stateDir, { version: conn.version, server: null, applied_ms: now() }, fs);
           appliedConnection = true;

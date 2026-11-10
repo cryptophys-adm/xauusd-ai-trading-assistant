@@ -107,7 +107,8 @@ export async function clearConnection(env, { actor, reason }, { now = Date.now()
   if (!why) return { ok: false, error: "a reason is required to disconnect" };
   const cur = await connectionStatus(env);
   const version = cur.version + 1;
-  await env.DB.prepare("UPDATE omega_connection SET version = ?, status = 'cleared', envelope = NULL, updated_by = ?, updated_ms = ? WHERE id = 1").bind(version, actor, now).run();
+  await env.DB.prepare("UPDATE omega_connection SET version = ?, status = 'cleared', server = NULL, envelope = NULL, updated_by = ?, updated_ms = ? WHERE id = 1").bind(version, actor, now).run();
+  await env.DB.prepare("UPDATE omega_bridge SET state = NULL WHERE id = 1").run();
   await event(env.DB, now, actor, "connection_cleared", { reason: why, version });
   return { ok: true, version, status: "cleared" };
 }
@@ -232,7 +233,9 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     connection: { version: connection.version, status: connection.status, server: connection.server, updated_by: connection.updated_by, updated_ms: connection.updated_ms },
     bridge: {
       seen: syncedAge != null && syncedAge < BRIDGE_SEEN_MS, synced_age_ms: syncedAge, kid: b?.kid ?? null, bridge_version: b?.bridge_version ?? null,
-      terminal_connected: st?.connected === true, server: st?.server ?? null, trade_mode: st?.account?.trade_mode ?? null, currency: st?.account?.currency ?? null,
+      terminal_connected: Boolean(st?.connected === true && connection.status === "stored" && (now - Number(st?.received_ms || 0) < 60_000)),
+      trade_allowed: Boolean(st?.trade_allowed === true && connection.status === "stored" && (now - Number(st?.received_ms || 0) < 60_000)),
+      server: connection.status === "stored" ? (st?.server ?? null) : null, trade_mode: st?.account?.trade_mode ?? null, currency: st?.account?.currency ?? null,
       balance: st?.account?.balance ?? null, equity: st?.account?.equity ?? null, day_start_balance: st?.account?.day_start_balance ?? null, day_realized_pl: st?.account?.day_realized_pl ?? null,
       symbol: st?.symbol?.name ?? null, bid: st?.symbol?.bid ?? null, ask: st?.symbol?.ask ?? null, spread_points: st?.symbol?.spread_points ?? null,
       digits: st?.symbol?.digits ?? null, point: st?.symbol?.point ?? null, tick_size: st?.symbol?.tick_size ?? null, tick_value: st?.symbol?.tick_value ?? null,
