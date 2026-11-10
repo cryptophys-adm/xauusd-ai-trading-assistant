@@ -28,6 +28,7 @@
 | **B‑08** | UI: Add mode selector dropdown, live metric panel, guardrail explainability in `GlobalDecision.tsx` | AGY | DONE | 5h |
 | **B‑09** | Write mode‑specific unit tests and back‑testing scripts | AGY | DONE | 4h |
 | **B‑10** | Update CI workflow to run the new tests | AGY | DONE | 1h |
+| **B‑11** | Proposal: Global Decision as continuously tuned linear weighted model (issue #226) | AGY | TODO | 8h |
 
 ---
 
