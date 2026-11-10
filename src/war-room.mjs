@@ -27,10 +27,11 @@ import { agentReputation } from "./outcome-scoring.mjs";
 import { roomWeighting } from "./weighting.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import {
-  ROOM_STANCES, ensureThreadSchema, isFifteenMinuteClose, liveEvidence, m15KeyForClose,
+  ROOM_STANCES, ensureThreadSchema, isFifteenMinuteClose, liveEvidence, m15KeyForClose, buildLiveRoomTask,
   hudEvidenceLines, rowToThreadMessage, validateRoomModerator, threadInternals
 } from "./agent-threads.mjs";
 
+const FIFTEEN_MINUTES_MS = 900_000;
 const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, ROOM_RULES_INDEPENDENT, clip, inUnit, parseJson } = threadInternals;
 
 export const WAR_ROOM_OPENING_MS = 90_000;
@@ -638,6 +639,39 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map(r => clip(r, 200)), dissent: [...new Set(o.dissent)], metrics: o.metrics, majority, majority_bias: roomBias, crowd }, refs: [] })
   });
   return { status: "complete", calls, openings: answered.length, rebuttals: debate.length };
+}
+
+/** XAUUSD trades from Sunday 22:00 to Friday 22:00 UTC. */
+function marketOpenAt(ms) {
+  const d = new Date(ms), day = d.getUTCDay(), h = d.getUTCHours();
+  return !(day === 6 || (day === 5 && h >= 22) || (day === 0 && h < 22));
+}
+
+/** The sweep runs a missed room this long after its bar closed (the queue's room normally starts within 2 minutes). */
+export const MISSED_ROOM_AFTER_MS = 4 * 60_000;
+
+/**
+ * Sweep fallback (production 2026-11-10 13:10-14:10: the 5m bars kept arriving while the 5m context was
+ * not published, so the 15m rooms of 13:15 to 14:00 never met and the Decision Engine decided without
+ * them): the room of the last closed 15m bar meets from the cached 5m series when it has not started
+ * at all MISSED_ROOM_AFTER_MS after the close. A room that already started is left to its queue task.
+ */
+export async function runMissedWarRoom(env, { now = Date.now(), clock = () => Date.now() } = {}) {
+  if (!warRoomEnabled(env)) return { status: "disabled" };
+  if (!env?.DB) return { status: "unavailable" };
+  const close = Math.floor(now / FIFTEEN_MINUTES_MS) * FIFTEEN_MINUTES_MS;
+  if (now - close < MISSED_ROOM_AFTER_MS) return { status: "too_soon" };
+  if (!marketOpenAt(close - 1)) return { status: "market_closed" };
+  const barTime = new Date(close).toISOString();
+  await ensureThreadSchema(env.DB);
+  const started = await env.DB.prepare("SELECT 1 AS x FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? AND step = 'brief'").bind(`warroom:${barTime.slice(0, 10)}`, barTime).first();
+  if (started) return { status: "already_started", bar_time: barTime };
+  try {
+    const result = await runWarRoomBar(env, { ...buildLiveRoomTask({ barTime }), fallback: true }, { clock });
+    return { status: "ran", bar_time: barTime, result };
+  } catch (e) {
+    return { status: "failed", bar_time: barTime, error: String(e?.message ?? e).slice(0, 200) };
+  }
 }
 
 /** The latest War Room run (or the one at barTime): brief, bus, debate and conclusion. */

@@ -562,3 +562,29 @@ test("rebuttal targets match an agent's id or display name in any spelling (prod
   const bus = ["aegis_footprint", "macro_aether", "kinetic_engine", "risk"];
   assert.deepEqual(normalizeRebuts(["aegis_footprint_matrix", "macro_aether_sensors", "the kinetic_engine", "Kinetic Engine (TVA)", "unknown"], bus), ["aegis_footprint", "macro_aether", "kinetic_engine", "kinetic_engine", "unknown"]);
 });
+
+test("the sweep's missed room: meets from the cached 5m series when the 5m context never came; once; never too early or on the weekend", async () => {
+  const { runMissedWarRoom, MISSED_ROOM_AFTER_MS } = await import("../src/war-room.mjs");
+  const { m5ContextFromSeries } = await import("../src/agent-threads.mjs");
+  resetThreadSchemaCacheForTests();
+  // BAR is Thursday 2026-11-05 14:45; the cached 5m series holds the closed bars up to it, no context.
+  const candles = Array.from({ length: 12 }, (_, i) => { const close = Date.parse(BAR) - (11 - i) * 300_000; return { open_time: new Date(close - 300_000).toISOString(), close_time: new Date(close).toISOString(), open: 4100 + i, high: 4103 + i, low: 4098 + i, close: 4101 + i, volume: 10 }; });
+  const e = env(fakeAI());
+  await e.SIGNAL_CACHE.put("market-data:v2:series:OANDA:XAUUSD|5m", JSON.stringify({ candles }));
+  const ctx = await m5ContextFromSeries(e.SIGNAL_CACHE, BAR);
+  assert.equal(ctx.recent_bars.length, 12);
+  assert.deepEqual([ctx.buy_confirmed, ctx.sell_confirmed, ctx.bias], [false, false, null], "no confirmation is claimed from bare bars");
+  assert.equal(await m5ContextFromSeries(e.SIGNAL_CACHE, "2026-11-05T15:00:00.000Z"), null, "the bar is not cached yet");
+  const now = Date.parse(BAR) + MISSED_ROOM_AFTER_MS + 60_000;
+  assert.deepEqual(await runMissedWarRoom(e, { now: Date.parse(BAR) + 60_000 }), { status: "too_soon" });
+  const r = await runMissedWarRoom(e, { now, clock: () => now });
+  assert.equal(r.status, "ran", JSON.stringify(r));
+  assert.equal(r.result.status, "complete", JSON.stringify(r.result));
+  assert.equal((await readWarRoom(e.DB, { barTime: BAR })).conclusion.status, "ok", "the room concluded");
+  assert.equal((await runMissedWarRoom(e, { now, clock: () => now })).status, "already_started", "never twice");
+  assert.deepEqual(await runMissedWarRoom(e, { now: Date.parse("2026-11-07T12:10:00Z") }), { status: "market_closed" });
+  // Without cached bars for the bar either, nothing meets.
+  resetThreadSchemaCacheForTests();
+  const empty = env(fakeAI());
+  assert.equal((await runMissedWarRoom(empty, { now, clock: () => now })).result.status, "no_m5_bars");
+});

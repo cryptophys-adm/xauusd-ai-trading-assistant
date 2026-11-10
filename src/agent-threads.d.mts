@@ -33,3 +33,4 @@ export function hudEvidenceLines(reading: unknown): string[];
 export function runHudAgents(env: unknown, task: { candle_key: string }, options?: { clock?: () => number; loadReadings?: (env: any, candleKey: string) => Promise<any> }): Promise<{ status: string; calls: number; agents?: number; answered?: number }>;
 export function readHudThread(db: unknown, candleKey: string): Promise<Array<Record<string, any>>>;
 export const HUD_LIVE_ROOM_AGENTS: readonly string[];
+export function m5ContextFromSeries(kv: any, barTime: string): Promise<Record<string, any> | null>;

@@ -191,7 +191,7 @@ import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
 import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents, m15KeyForClose } from "./agent-threads.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
-import { warRoomEnabled, runWarRoomBar, readWarRoom, readTldr, agentName } from "./war-room.mjs";
+import { warRoomEnabled, runWarRoomBar, runMissedWarRoom, readWarRoom, readTldr, agentName } from "./war-room.mjs";
 import { reputationOf, familyOf, REPUTATION_VERSION, REPUTATION_PRIOR, WEIGHT_RANGE } from "./reputation.mjs";
 import { indicatorAgents } from "./indicator-registry.mjs";
 import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, SCORING, SCORING_VERSION } from "./outcome-scoring.mjs";
@@ -2771,8 +2771,11 @@ export default {
       ctx.waitUntil(runPendingTimeframeThreads(env, { onRoom }).then(tf => {
         if (tf.status !== "disabled") console.log("tf_threads", JSON.stringify(tf));
       }).catch(e => console.error("tf_threads_failed", e instanceof Error ? e.message : String(e))));
-      // Decision Engine fallback: a 15m bar whose room did not trigger the engine is decided by the sweep.
-      ctx.waitUntil(decideBar(env, null));
+      // Decision Engine fallback: a 15m bar whose room did not trigger the engine is decided by the sweep,
+      // after the room itself meets from the cached 5m series when it never started (runMissedWarRoom).
+      ctx.waitUntil(runMissedWarRoom(env).then(r => {
+        if (r.status === "ran" || r.status === "failed") console.log("war_room_missed", JSON.stringify(r));
+      }).catch(e => console.error("war_room_missed_failed", e instanceof Error ? e.message : String(e))).then(() => decideBar(env, null)));
       ctx.waitUntil(finalizePendingH1Decisions(env).then(r => {
         if (Number(r.pending)) console.log("h1_consensus_pending", JSON.stringify(r));
       }).catch(e => console.error("h1_consensus_pending_failed", e instanceof Error ? e.message : String(e))));

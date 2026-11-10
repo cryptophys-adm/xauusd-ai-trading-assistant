@@ -564,11 +564,39 @@ function roomModeratorMessages(evidence, transcript) {
  * Returns { evidence } or { status } when the bar is stale; throws RetryableError while the 5m
  * context of this bar is not visible yet. Shared by the live room and the War Room.
  */
+/**
+ * The 5m context of the bar that closed at barTime, rebuilt from the cached closed 5m series (the
+ * same TradingView bars the pull adapter publishes), or null when that bar is not cached yet.
+ * Only the bars: no bias and no confirmation.
+ */
+export async function m5ContextFromSeries(kv, barTime) {
+  const record = parseJson(await kv?.get?.("market-data:v2:series:OANDA:XAUUSD|5m"), null);
+  const t = Date.parse(barTime);
+  const bars = (Array.isArray(record?.candles) ? record.candles : [])
+    .filter((b) => Number.isFinite(Date.parse(b?.close_time ?? "")) && Date.parse(b.close_time) <= t && [b.open, b.high, b.low, b.close].every((v) => typeof v === "number" && Number.isFinite(v)))
+    .sort((a, b) => Date.parse(a.close_time) - Date.parse(b.close_time));
+  if (!bars.length || Date.parse(bars.at(-1).close_time) !== t) return null;
+  return {
+    candle_time: new Date(t).toISOString(), source: "cached 5m series (missed-room fallback)",
+    bias: null, buy_confirmed: false, sell_confirmed: false,
+    recent_bars: bars.slice(-12).map((b) => ({ t: new Date(Date.parse(b.close_time)).toISOString(), o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume ?? null }))
+  };
+}
+
 export async function liveEvidence(env, task, barTime) {
   const db = env.DB;
   const kv = env.SIGNAL_CACHE;
   const fromTask = task.context && typeof task.context === "object" ? task.context : null;
-  const m5Raw = fromTask || parseJson(await kv?.get?.("context:m5:latest"), null);
+  let m5Raw = fromTask || parseJson(await kv?.get?.("context:m5:latest"), null);
+  // The sweep's missed-room fallback (production 2026-11-10 13:10-14:10: the 5m bars kept arriving in
+  // the cache while the 5m local records and their context were not published, so no 15m room met):
+  // without the bar's own context, the closed 5m bars of the cached series stand in. No Prophet 5m
+  // confirmation is claimed from them.
+  if (task.fallback === true && Date.parse(m5Raw?.candle_time ?? "") !== Date.parse(barTime)) {
+    const fromSeries = await m5ContextFromSeries(kv, barTime);
+    if (!fromSeries) return { status: "no_m5_bars" };
+    m5Raw = fromSeries;
+  }
   const m5At = Date.parse(m5Raw?.candle_time ?? "");
   if (!Number.isFinite(m5At)) throw Object.assign(new Error("m5 context not visible yet"), { name: "RetryableError" });
   if (m5At < Date.parse(barTime)) throw Object.assign(new Error("m5 context not visible yet"), { name: "RetryableError" });
