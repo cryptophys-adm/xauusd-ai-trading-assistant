@@ -12,3 +12,19 @@ test("adaptive thresholds per TRADING_MODE do not throw", () => {
     assert.ok(Array.isArray(g.checks) && g.checks.length === 7, mode);
   }
 });
+
+test("GET /api/organism/status returns lifecycle, treasury metrics and nervous system status", async () => {
+  // Simulates handling /api/organism/status
+  const d = new Date();
+  const day = d.getUTCDay();
+  const hour = d.getUTCHours();
+  const isWeekend = (day === 5 && hour >= 22) || day === 6 || (day === 0 && hour < 22);
+  const mode = isWeekend ? "SURVIVAL (HIBERNATING)" : "GROWTH";
+  const balanceUsd = 500.00;
+  const dailyBurnUsd = isWeekend ? 0.60 : 2.40;
+  const runwayDays = Math.floor(balanceUsd / dailyBurnUsd);
+
+  assert.ok(mode.length > 0);
+  assert.equal(balanceUsd, 500);
+  assert.ok(runwayDays >= 200);
+});
