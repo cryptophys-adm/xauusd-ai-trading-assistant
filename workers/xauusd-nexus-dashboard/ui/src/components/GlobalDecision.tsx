@@ -73,8 +73,11 @@ function Guardrails({ side, g }: { side: string; g: any }) {
 function MarketContext({ c }: { c: any }) {
   if (!c) return null;
   const sig = (v: number | null | undefined) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v}%`);
-  const s = c.sentiment, r = c.regime, m = c.macro_drivers, se = c.session;
+  const s = c.sentiment, r = c.regime, m = c.macro_drivers, se = c.session, cal = c.calendar;
+  const rel = cal?.released?.find((x: any) => x.release);
+  const nxt = cal?.next?.[0];
   const rows = [
+    cal && (rel || nxt) && { k: "Calendar", v: rel ? `${rel.title}: actual ${rel.release.actual} vs ${rel.release.forecast ?? "—"} (${rel.release.surprise_z > 0 ? "+" : ""}${rel.release.surprise_z}σ) → gold ${rel.release.gold_direction > 0 ? "up" : rel.release.gold_direction < 0 ? "down" : "neutral"} · horizon ${rel.horizon_hours_after}h${rel.horizon_learned ? " (learned)" : ""}` : `next: ${nxt.title} ${String(nxt.time).slice(11, 16)} UTC` },
     s && { k: "Sentiment", v: `${String(s.bias ?? "neutral").toLowerCase()}${s.weighted_lean != null ? ` ${s.weighted_lean > 0 ? "+" : ""}${Math.round(s.weighted_lean * 100)}` : ""} · headlines ▲${s.headlines?.bullish ?? 0} ▼${s.headlines?.bearish ?? 0} ·${s.headlines?.neutral ?? 0}${s.news_tldr ? ` · news ${String(s.news_tldr.stance).toLowerCase()}` : ""}` },
     r && { k: "Regime", v: `1H ${r.h1?.label ?? r.h1?.character ?? "—"}${r.h1?.chaos ? " (chaos)" : ""}${r.h1?.stretch_z != null ? ` · z ${r.h1.stretch_z}` : ""} · 15m ${r.m15?.character ?? "—"}${r.m15?.chaos ? " (chaos)" : ""}` },
     m && { k: "Macro 24h", v: `gold ${sig(m.change_24h_percent?.gold)} · DXY ${sig(m.change_24h_percent?.dollar)} · oil ${sig(m.change_24h_percent?.oil)}${m.gold_dollar_link ? ` · link ${m.gold_dollar_link}` : ""}` },

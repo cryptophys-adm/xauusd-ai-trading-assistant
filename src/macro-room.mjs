@@ -19,6 +19,7 @@ import { ensureThreadSchema, rowToThreadMessage, threadInternals } from "./agent
 import { readCorrelations } from "./correlations.mjs";
 import { cachedCalendar } from "./econ-calendar.mjs";
 import { calendarOutlook } from "./calendar-agent.mjs";
+import { calendarIntel } from "./econ-releases.mjs";
 import { readNewsDaily } from "./news-daily.mjs";
 import { matchRebuts } from "./rebut-names.mjs";
 
@@ -42,6 +43,8 @@ const H4 = 4 * 3_600_000;
 /** The 4-hour session waits for the timeframe rooms' burst; the event session for the first reaction. */
 export const AFTER_4H_CLOSE_MS = 20 * 60_000;
 export const AFTER_EVENT_MS = 30 * 60_000;
+/** The follow-up session after a High-impact USD event (owner 2026-11-10): the reaction inside its horizon. */
+export const EVENT_FOLLOW_UP_MS = 2 * 3_600_000;
 const SESSION_WINDOW_MS = 3 * 3_600_000;
 const MAX_REBUTTALS = 4;
 const CLAIM_MAX = 320, ARGUMENT_MAX = 420;
@@ -78,6 +81,15 @@ export function dueSessions({ goldLastClose = null, events = [], now = Date.now(
     if (Number.isFinite(t) && now >= t + AFTER_EVENT_MS && now <= t + SESSION_WINDOW_MS) times.add(t);
   }
   for (const t of [...times].sort()) out.push({ run_id: `event:${new Date(t).toISOString()}`, kind: "event", at: new Date(t).toISOString() });
+  // A second session 2 hours after the release (owner 2026-11-10: the room meets again while the event's
+  // horizon runs), with the released value and gold's first reaction.
+  const follow = new Set();
+  for (const e of events || []) {
+    if (e?.currency !== "USD" || e?.impact !== "High") continue;
+    const t = Date.parse(e.time);
+    if (Number.isFinite(t) && now >= t + EVENT_FOLLOW_UP_MS && now <= t + EVENT_FOLLOW_UP_MS + SESSION_WINDOW_MS) follow.add(t);
+  }
+  for (const t of [...follow].sort()) out.push({ run_id: `event2:${new Date(t).toISOString()}`, kind: "event_follow_up", at: new Date(t).toISOString() });
   return out.filter((s) => !done.has(s.run_id));
 }
 
@@ -88,7 +100,13 @@ export function dueSessions({ goldLastClose = null, events = [], now = Date.now(
  */
 export function calendarBiasRule(outlook) {
   if (!outlook?.events?.length) return "NEUTRAL";
-  if (outlook.events.some((p) => p.status === "released")) return null;
+  const released = outlook.events.filter((p) => p.status === "released");
+  if (released.length) {
+    // Owner 2026-11-10: with the released value stored, the bias follows the surprise by the event's rule
+    // (the agent explains it, never reverses it); a release without its value leaves the agent free.
+    if (released.every((p) => p.release)) return side(outlook.surprise_lean ?? 0);
+    return null;
+  }
   return side(outlook.consensus_lean);
 }
 
@@ -111,7 +129,10 @@ export async function macroEvidence(env, { now = Date.now(), at = null } = {}) {
   let corr = null;
   try { corr = await readCorrelations(env, { now }); } catch { corr = null; }
   let outlook = null;
-  try { outlook = calendarOutlook((await cachedCalendar(env))?.events || [], now); } catch { outlook = null; }
+  // The released values, surprises and learned horizons (src/econ-releases.mjs, owner 2026-11-10).
+  let intel = null;
+  try { intel = await calendarIntel(env, { now }); } catch { intel = null; }
+  try { outlook = calendarOutlook((await cachedCalendar(env))?.events || [], now, { intel }); } catch { outlook = null; }
   let daily = null;
   try { daily = await readNewsDaily(env.DB); } catch { daily = null; }
   const released = (outlook?.events || []).filter((p) => p.status === "released").map((p) => Date.parse(p.time));
@@ -122,9 +143,18 @@ export async function macroEvidence(env, { now = Date.now(), at = null } = {}) {
   return {
     at, gold_last_close: corr?.gold?.last_close_time ?? null, outlook,
     data: {
-      calendar: outlook ? { summary: outlook.summary, consensus_lean: outlook.consensus_lean, events: outlook.events.map((p) => ({ title: p.title, time: p.time, status: p.status, projection: p.text })), headlines_after_release: headlinesAfter } : { available: false },
+      calendar: outlook ? {
+        summary: outlook.summary, consensus_lean: outlook.consensus_lean, surprise_lean: outlook.surprise_lean ?? 0,
+        events: outlook.events.map((p) => ({ title: p.title, time: p.time, status: p.status, projection: p.text, release: p.release ?? null, horizon_hours_after: p.horizon?.hours_after ?? null, horizon_learned: p.horizon?.learned === true })),
+        headlines_after_release: headlinesAfter
+      } : { available: false },
       news: news ?? { available: false },
-      dollar: assetData(asset("dxy"), "A stronger dollar usually weighs on gold; a weaker dollar supports it."),
+      dollar: (() => {
+        const d = assetData(asset("dxy"), "A stronger dollar usually weighs on gold; a weaker dollar supports it.");
+        // USDT dominance (the Nexus Macro drivers card, owner 2026-11-10): money parked in the dollar stablecoin, a risk-off gauge.
+        const usdt = daily?.context?.usdt?.change_24h_percent;
+        return typeof usdt === "number" && Number.isFinite(usdt) ? { ...d, usdt_dominance_change_24h_percent: Math.round(usdt * 100) / 100, usdt_rule: "Rising USDT dominance means money moving to the dollar stablecoin (risk-off in crypto); read it beside the dollar index." } : d;
+      })(),
       rates: assetData(asset("us10y"), "Higher yields raise the cost of holding gold, which pays no interest; falling yields support it."),
       silver: assetData(asset("silver"), "Silver moving with gold confirms a metals move; silver diverging weakens it."),
       oil: (() => {
@@ -199,7 +229,7 @@ function openingMessages(agent, data, session, requiredBias) {
       : "An event was just released: read its outcome from the headlines after the release, against the projection, and say whether the surprise pointed gold up or down."]
     : [];
   return chatMessages([
-    `You are the ${a.name} in the XAUUSD Macro War Room, which discusses the news and the scheduled events that move gold. This session: ${session.kind === "event" ? "30 minutes after a high-impact US event" : "after a 4-hour close"}. Your only role: ${a.role}.`,
+    `You are the ${a.name} in the XAUUSD Macro War Room, which discusses the news and the scheduled events that move gold. This session: ${session.kind === "event" ? "30 minutes after a high-impact US event" : session.kind === "event_follow_up" ? "2 hours after a high-impact US event, inside its horizon: judge whether gold's reaction follows the released surprise" : "after a 4-hour close"}. Your only role: ${a.role}.`,
     RULES_NO_REFS,
     RULES,
     ...calendarRule,
@@ -356,6 +386,6 @@ export async function macroDeskEvidence(db, { now = Date.now() } = {}) {
   try {
     const m = await readMacroRoom(db, { now });
     if (!m || m.stale || m.conclusion?.status !== "ok") return null;
-    return { macro_bias: m.conclusion.bias, confidence: m.conclusion.confidence, summary: m.conclusion.summary, horizon: m.conclusion.horizon, session: m.kind === "event" ? "after a high-impact US event" : "after a 4-hour close" };
+    return { macro_bias: m.conclusion.bias, confidence: m.conclusion.confidence, summary: m.conclusion.summary, horizon: m.conclusion.horizon, session: m.kind === "event" ? "after a high-impact US event" : m.kind === "event2" || m.kind === "event_follow_up" ? "2 hours after a high-impact US event" : "after a 4-hour close" };
   } catch { return null; }
 }

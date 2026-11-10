@@ -1,0 +1,16 @@
+export const ECON_RELEASES_VERSION: string;
+export const REACTION_HOURS: readonly number[];
+export const MIN_HORIZON_SAMPLES: number;
+export const HORIZON_HIT_RATE: number;
+export const BACKFILL_DAYS: number;
+export const ECON_SCHEMA_SQL: string[];
+export function releaseKey(e: { currency?: string; time: string; title: string }): string;
+export function seriesOf(title: string): string;
+export function resetEconSchemaCacheForTests(): void;
+export function ensureEconSchema(db: unknown): Promise<void>;
+export function surpriseOf(release: Record<string, any>, past?: number[]): Record<string, any> | null;
+export function reactionOf(release: Record<string, any>, bars: Record<string, number[]>): Record<string, any> | null;
+export function horizonStats(rows: Record<string, any>[]): Record<string, any>;
+export function upsertReleases(db: unknown, events: Record<string, any>[], options?: { now?: number }): Promise<number>;
+export function refreshEconReleases(env: any, options?: { now?: number; gatedEvents?: any[] }): Promise<Record<string, any>>;
+export function calendarIntel(env: any, options?: { now?: number }): Promise<Record<string, any>>;

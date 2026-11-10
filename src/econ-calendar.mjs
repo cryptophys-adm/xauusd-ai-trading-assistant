@@ -4,7 +4,8 @@
 // CAUTION for the strategy engine (confidence -0.1, like the other cautions) and is shown to the
 // Risk Desk of the timeframe rooms. It never forces WAIT and never places anything.
 
-import { calendarOutlook, projectEvent } from "./calendar-agent.mjs";
+import { calendarOutlook, projectEvent, matchRelease, ruleOf } from "./calendar-agent.mjs";
+import { calendarIntel } from "./econ-releases.mjs";
 
 export const CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
 export const CALENDAR_KEY = "calendar:ff:thisweek:v1";
@@ -79,10 +80,14 @@ export async function gatedEvents(env, { now = Date.now() } = {}) {
 export async function readCalendar(env, { now = Date.now() } = {}) {
   const cal = await cachedCalendar(env);
   const events = cal?.events || [];
+  // The released values, surprises and learned horizons (src/econ-releases.mjs, owner 2026-11-10).
+  let intel = null;
+  try { intel = await calendarIntel(env, { now }); } catch { intel = null; }
   // Calendar Agent (owner decision 2026-11-08): each USD event carries its projected effect on gold.
   return {
-    version: CALENDAR_VERSION, source: "ForexFactory weekly export", fetched_at: cal?.fetched_at ?? null,
-    events: events.map((e) => { const p = projectEvent(e, now); return p ? { ...e, projection: p } : e; }),
-    risk: eventRisk(events, now), outlook: calendarOutlook(events, now)
+    version: CALENDAR_VERSION, source: "ForexFactory weekly export; released values from TradingView's economic calendar", fetched_at: cal?.fetched_at ?? null,
+    events: events.map((e) => { const p = projectEvent(e, now, { release: matchRelease(e, intel?.releases), stat: intel?.stats?.[ruleOf(e.title).kind] ?? null }); return p ? { ...e, projection: p } : e; }),
+    risk: eventRisk(events, now), outlook: calendarOutlook(events, now, { intel }),
+    releases: intel ? { history: intel.history ?? null, horizons: intel.stats ?? {} } : null
   };
 }

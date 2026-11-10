@@ -260,7 +260,7 @@ test("a closed market never trades; the record and the council carry the market 
   assert.equal(a.guards.long.allowed, false);
   assert.match(a.guards.long.checks[0].detail, /Saturday 2026-11-07 10:00 UTC: the market is closed/);
   const open = assess(loaded, { now: NOW });
-  assert.deepEqual(Object.keys(open.market), ["sentiment", "regime", "macro_drivers", "session"]);
+  assert.deepEqual(Object.keys(open.market), ["sentiment", "calendar", "regime", "macro_drivers", "session"]);
   const rec = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded, assessment: open, now: NOW });
   assert.equal(rec.context.market.session.day, "Monday");
   assert.ok(rec.context.market.sentiment && rec.context.market.regime && rec.context.market.macro_drivers);

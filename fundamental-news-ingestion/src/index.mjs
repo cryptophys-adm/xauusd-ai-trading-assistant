@@ -1,4 +1,4 @@
-import { runOhlcvRequests } from "./tv-gateway.mjs";
+import { runOhlcvRequests, runEconomicCalendar } from "./tv-gateway.mjs";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -1188,6 +1188,24 @@ export async function runNewsPull(env, ctx, { forceRefresh = false } = {}) {
   const response = await handlePull(request, env, ctx, { forceRefresh: forceRefresh === true });
   const body = await response.json().catch(() => ({}));
   return { ...body, rpc_http_status: response.status };
+}
+
+export function runTvEconomicCalendar(env, request) {
+  return runEconomicCalendar(env, request, gatewayDeps());
+}
+
+function gatewayDeps() {
+  return {
+    fetch: (...args) => fetch(...args),
+    requestId: () => randomBase64Url(12),
+    fetchOAuthMetadata,
+    getValidAccessToken,
+    readQuotaCooldown,
+    writeQuotaCooldown,
+    parseQuotaCooldownUntil,
+    rateLimitCooldownUntil,
+    extractMcpErrorText
+  };
 }
 
 export function runTvOhlcv(env, requests) {

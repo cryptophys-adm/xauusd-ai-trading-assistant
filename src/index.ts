@@ -38,6 +38,9 @@ export interface Env {
   CONFLUENCE_HANDOFF_SECRET?: string;
   NEWS_INGESTION?: {
     pull(options?: { forceRefresh?: boolean; origin?: string }): Promise<Record<string, unknown>>;
+    // Economic releases (owner 2026-11-10): TradingView's calendar with actuals, and gold's 1H history.
+    economicCalendar?(request: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>;
+    goldHistory?(count?: number): Promise<{ status: number; body: Record<string, unknown> }>;
   };
   // Cryptophys Platform AI Kernel (RFC_INDICATOR_AGENT_PLATFORM P4). Production only; the
   // caller identity is pinned in the binding props, there is no secret.
@@ -199,7 +202,8 @@ import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
 import { tuningView } from "./tuning.mjs";
 import { readCorrelations } from "./correlations.mjs";
-import { refreshCalendar, readCalendar } from "./econ-calendar.mjs";
+import { refreshCalendar, readCalendar, gatedEvents } from "./econ-calendar.mjs";
+import { refreshEconReleases } from "./econ-releases.mjs";
 import { sendLedgerAlerts, readLedgerAlerts } from "./ledger-alerts.mjs";
 import { notifyH1Decision } from "./h1-telegram.mjs";
 import { runPendingMacroRooms, readMacroRoom } from "./macro-room.mjs";
@@ -2848,6 +2852,9 @@ export default {
           // Backlog 11.1: the economic calendar, refreshed at most once an hour (non-fatal).
           const calendar = await refreshCalendar(env);
           if (calendar.status !== "fresh") console.log("econ_calendar", JSON.stringify(calendar));
+          // The released values, surprises and gold's reactions (src/econ-releases.mjs, owner 2026-11-10).
+          const releases = await refreshEconReleases(env, { gatedEvents: await gatedEvents(env) });
+          if (releases.live || releases.backfill || releases.reactions || releases.status !== "ok") console.log("econ_releases", JSON.stringify(releases));
           // Aether A7: score the shadow note answers and their controls; drop those older than 60 days.
           const shadowScored = await scoreShadowKnowledge(env);
           if (Number(shadowScored.scored)) console.log("shadow_knowledge_scored", JSON.stringify(shadowScored));

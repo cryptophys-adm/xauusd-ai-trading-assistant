@@ -1,7 +1,7 @@
 // Worker entry module. Kept separate from index.mjs so unit tests can import
 // index.mjs under Node without the `cloudflare:workers` runtime module.
 import { WorkerEntrypoint } from "cloudflare:workers";
-import worker, { runTvOhlcv, runNewsPull } from "./index.mjs";
+import worker, { runTvOhlcv, runTvEconomicCalendar, runNewsPull } from "./index.mjs";
 
 /**
  * RPC-only OHLCV gateway for internal Workers (Service Binding with
@@ -13,6 +13,10 @@ export class TvGateway extends WorkerEntrypoint {
   async ohlcv(requests) {
     return runTvOhlcv(this.env, requests);
   }
+  /** The economic calendar of one window, with the released values (owner 2026-11-10). */
+  async economicCalendar(request) {
+    return runTvEconomicCalendar(this.env, request);
+  }
 }
 
 /**
@@ -23,6 +27,16 @@ export class TvGateway extends WorkerEntrypoint {
 export class NewsIngestionService extends WorkerEntrypoint {
   async pull(options = {}) {
     return runNewsPull(this.env, this.ctx, { forceRefresh: options?.forceRefresh === true });
+  }
+  /**
+   * The AI Worker's Calendar Agent (owner 2026-11-10): the released values of the economic calendar,
+   * and gold's 1-hour history to learn each event kind's reaction horizon. Same quota cooldown.
+   */
+  async economicCalendar(request) {
+    return runTvEconomicCalendar(this.env, request);
+  }
+  async goldHistory(count = 6000) {
+    return runTvOhlcv(this.env, [{ symbol: "OANDA:XAUUSD", interval: "1h", count: Math.max(100, Math.min(8000, Number(count) || 6000)) }]);
   }
 }
 
