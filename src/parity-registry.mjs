@@ -293,9 +293,10 @@ export async function recordComparison(db, id, candleKey, comparison, policy = D
          total_matches = total_matches + 1,
          status = CASE WHEN status <> 'approved' AND consecutive_matches + 1 >= ? THEN 'approved' ELSE status END,
          approved_at = CASE WHEN status <> 'approved' AND consecutive_matches + 1 >= ? THEN ? ELSE approved_at END,
+         revoked_at = CASE WHEN status = 'approved' OR consecutive_matches + 1 >= ? THEN NULL ELSE revoked_at END,
          last_candle_key = ?, last_result = 'match', last_detail = ?, updated_at = ?
        WHERE engine = ? AND source_hash = ? AND implementation_hash = ?`
-    ).bind(policy.promoteAfter, policy.promoteAfter, now, candleKey, detail, now, ...key).run();
+    ).bind(policy.promoteAfter, policy.promoteAfter, policy.promoteAfter, now, candleKey, detail, now, ...key).run();
   } else if (comparison.status === "mismatch") {
     await db.prepare(
       `UPDATE engine_parity_registry SET
