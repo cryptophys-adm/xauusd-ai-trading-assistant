@@ -50,10 +50,10 @@ test("witnesses: every room, the news, the macro room and the strategy, weighted
   assert.deepEqual(cards.map((c) => c.key), ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY"]);
   assert.equal(Object.values(WITNESS_WEIGHTS).reduce((a, b) => a + b, 0).toFixed(6), "1.000000");
   assert.equal(cards.at(-1).lean, 0.6, "the strategy leans its direction by its confidence");
-  const q = quorumOf(cards);
-  assert.equal(q.long_share, 0.95, "all but the neutral macro room lean bullish");
+  const q = quorumOf(cards, { now: NOW });
+  assert.equal(q.long_share, 1, "all directional witnesses lean bullish (G-06: neutral excluded from denominator)");
   assert.equal(q.short_share, 0);
-  const stale = quorumOf(witnessCards({ global: globalOf({ D1: { stale: true }, H4: { available: false, lean: null } }), strategy: STRATEGY }));
+  const stale = quorumOf(witnessCards({ global: globalOf({ D1: { stale: true }, H4: { available: false, lean: null } }), strategy: STRATEGY }), { now: NOW });
   assert.equal(stale.weight, 0.6, "a stale or missing witness drops out and the rest renormalise");
   assert.equal(quorumOf([]).score, null);
 });
@@ -118,7 +118,7 @@ test("the evidence carries both sides' plans; the prompt names the guardrails; t
   assert.equal(ev.witnesses.length, 7);
   const text = councilMessages(ev).map((m) => m.content).join("\n");
   assert.match(text, /only when long\.allowed is true/);
-  assert.equal(ev.quorum.bullish_share, 0.95);
+  assert.equal(ev.quorum.bullish_share, 1);
   assert.equal(ev.quorum.share_needed_above, 0.5);
   assert.match(text, /weighted_lean is the strength/, "production 13:15: the lean is never read as the quorum");
   const rec = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded, assessment: a, now: NOW });
