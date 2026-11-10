@@ -179,5 +179,18 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   if (!positive(volume) || volume < sym.volume_min) { note("volume_below_min"); return { intents, notes }; }
 
   intents.push({ id, kind: "open", side, volume, sl, tp, signal_issued_ms: issued, reason: "signal" });
+
+  // Progressive stop (SL+): move an open position's stop to breakeven when trailing_stop_r is set.
+  if (S.trailing_stop_r > 0) {
+    for (const p of positions) {
+      if (p.ticket == null) continue;
+      const entry = Number(p.entry), curSl = Number(p.sl);
+      if (!Number.isFinite(entry) || !Number.isFinite(curSl)) continue;
+      if (Math.abs(curSl - entry) < 1e-9) continue;
+      const profit = Number(p.profit);
+      if (!Number.isFinite(profit) || profit <= 0) continue;
+      intents.push({ id: `ms:${p.ticket}:${entry}`, kind: "modify_sl", ticket: p.ticket, sl: entry, tp: p.tp, reason: "trailing" });
+    }
+  }
   return { intents, notes };
 }

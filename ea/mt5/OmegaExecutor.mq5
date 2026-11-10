@@ -464,6 +464,36 @@ void ExecuteCloseIntent(const string id, const ulong ticket)
       AppendResult(id, false, ticket, trade.ResultRetcodeDescription(), executedMs);
   }
 
+void ExecuteModifySlIntent(const string id, const ulong ticket, const double newSl)
+  {
+   long nowMs = NowUtcMs();
+   if(ticket == 0 || !PositionSelectByTicket(ticket))
+     {
+      AppendResult(id, false, ticket, "position_not_found", nowMs);
+      return;
+     }
+   if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
+     {
+      AppendResult(id, false, ticket, "foreign_magic", nowMs);
+      return;
+     }
+   double tp = PositionGetDouble(POSITION_TP);
+   double currentSl = PositionGetDouble(POSITION_SL);
+   if(newSl == currentSl)
+     {
+      AppendResult(id, true, ticket, "already_at_sl", nowMs);
+      return;
+     }
+   trade.SetExpertMagicNumber(MagicNumber);
+   trade.SetDeviationInPoints(SlippagePoints);
+   bool ok = trade.PositionModify(ticket, newSl, tp);
+   long executedMs = NowUtcMs();
+   if(ok)
+      AppendResult(id, true, ticket, "", executedMs);
+   else
+      AppendResult(id, false, ticket, trade.ResultRetcodeDescription(), executedMs);
+  }
+
 void ExecuteCloseAllIntent(const string id)
   {
    trade.SetExpertMagicNumber(MagicNumber);
@@ -554,6 +584,8 @@ void ProcessIntentsFile()
          ExecuteCloseIntent(id, ticket);
       else if(kind == "close_all")
          ExecuteCloseAllIntent(id);
+      else if(kind == "modify_sl")
+         ExecuteModifySlIntent(id, ticket, sl);
       else
          AppendResult(id, false, 0, "unknown_intent_kind", NowUtcMs());
      }
