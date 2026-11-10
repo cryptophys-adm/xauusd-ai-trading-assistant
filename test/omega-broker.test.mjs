@@ -204,3 +204,52 @@ test("autonomous watchdog: Cerebrum dispatches self-healing remediation and thro
   assert.equal(ov.autonomous_watchdog?.last_recovery?.directive, "remediate_algo_trading");
 });
 
+test("institutional execution telemetry: overview exposes TCA, SOR failover, macro risk and volatility", async () => {
+  const e = env();
+  await bridgeKey(e); // initializes schema
+
+  // Sync bridge with completed intent reporting TCA metrics (fill price & slippage)
+  const intentId = "open:1794222000000:B";
+  await e.DB.prepare("INSERT INTO omega_intents (id, kind, payload, status, created_ms, updated_ms) VALUES (?, 'open', ?, 'sent', ?, ?)")
+    .bind(intentId, JSON.stringify({ id: intentId, kind: "open", side: "BUY", volume: 0.05, entry: 4050.0, sl: 4045.0, tp: 4060.0 }), NOW, NOW).run();
+
+  await bridgeSync(e, {
+    kid: KID,
+    publicKey: SPKI,
+    bridgeVersion: "1.0.0",
+    state: {
+      connected: true,
+      trade_allowed: true,
+      server: "Monex-Demo",
+      received_ms: NOW + 1_000,
+      symbol: { name: "XAUUSD.m", atr_value: 3.5, atr_points: 350, bid: 4050.2, ask: 4050.4, spread_points: 20 }
+    },
+    results: [
+      { id: intentId, ok: true, ticket: 109988, executed_ms: NOW + 350, fill_price: 4050.2, slippage_pts: 2 }
+    ]
+  }, { now: NOW + 2_000 });
+
+  const ov = await brokerOverview(e, { now: NOW + 2_000 });
+
+  // 1. TCA telemetry
+  assert.equal(ov.tca.samples_count, 1);
+  assert.equal(ov.tca.avg_latency_ms, 350);
+  assert.equal(ov.tca.avg_slippage_points, 2);
+  assert.equal(ov.tca.quality, "PRIME");
+
+  // 2. Smart Order Router (SOR)
+  assert.equal(ov.sor.mode, "auto_failover");
+  assert.equal(ov.sor.primary_broker, "Monex-Demo");
+  assert.equal(ov.sor.status, "OPTIMAL");
+  assert.equal(ov.sor.failover_ready, true);
+
+  // 3. Volatility Telemetry
+  assert.equal(ov.volatility.atr_points, 350);
+  assert.equal(ov.volatility.regime, "NORMAL");
+  assert.equal(ov.volatility.adaptive_enabled, true);
+
+  // 4. Macro Risk Telemetry
+  assert.equal(typeof ov.macro_risk.blackout, "boolean");
+});
+
+

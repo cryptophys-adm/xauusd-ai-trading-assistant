@@ -163,13 +163,27 @@ export function parseResultsText(text) {
     const okRaw = parts[1].trim();
     const ok = okRaw === "1" || okRaw.toLowerCase() === "true";
     const ticketRaw = parts[2].trim();
-    const executedMsRaw = parts[parts.length - 1].trim();
-    const errorRaw = parts
-      .slice(3, parts.length - 1)
-      .join(";")
-      .trim();
 
-    const executedNum = Number(executedMsRaw);
+    let executedNum = 0;
+    let errorRaw = "";
+    let fillPriceNum = null;
+    let slippagePtsNum = null;
+
+    if (parts.length >= 7) {
+      errorRaw = parts[3].trim();
+      executedNum = Number(parts[4].trim());
+      const fp = Number(parts[5].trim());
+      if (Number.isFinite(fp) && fp > 0) fillPriceNum = fp;
+      const sp = Number(parts[6].trim());
+      if (Number.isFinite(sp)) slippagePtsNum = sp;
+    } else {
+      executedNum = Number(parts[parts.length - 1].trim());
+      errorRaw = parts
+        .slice(3, parts.length - 1)
+        .join(";")
+        .trim();
+    }
+
     const entry = {
       id,
       ok,
@@ -184,6 +198,12 @@ export function parseResultsText(text) {
     }
     if (errorRaw !== "") {
       entry.error = errorRaw;
+    }
+    if (fillPriceNum !== null) {
+      entry.fill_price = fillPriceNum;
+    }
+    if (slippagePtsNum !== null) {
+      entry.slippage_pts = slippagePtsNum;
     }
 
     seenIds.add(id);

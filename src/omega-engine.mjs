@@ -25,7 +25,9 @@ export const OMEGA_DEFAULTS = Object.freeze({
   // Like the EA (1.11): the Decision Engine decides at every 15m close, so a signal is fresh for 10 minutes.
   max_signal_age_ms: 10 * 60_000,
   policy_auto: false,
-  trailing_stop_r: 0
+  trailing_stop_r: 0,
+  adaptive_volatility: true,
+  sor_mode: "auto_failover"
 });
 export const RISK_PCT_MAX = 2;
 export const EXECUTOR_MAX_AGE_MS = 60_000;
@@ -85,6 +87,16 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS) {
   if (body.policy_auto !== undefined) {
     if (typeof body.policy_auto !== "boolean") return { error: "policy_auto must be true or false" };
     out.policy_auto = body.policy_auto;
+  }
+  if (body.adaptive_volatility !== undefined) {
+    if (typeof body.adaptive_volatility !== "boolean") return { error: "adaptive_volatility must be true or false" };
+    out.adaptive_volatility = body.adaptive_volatility;
+  }
+  if (body.sor_mode !== undefined) {
+    if (typeof body.sor_mode !== "string" || !["primary_only", "auto_failover"].includes(body.sor_mode)) {
+      return { error: "sor_mode must be 'primary_only' or 'auto_failover'" };
+    }
+    out.sor_mode = body.sor_mode;
   }
   if (body.live_armed !== undefined) {
     if (typeof body.live_armed !== "boolean") return { error: "live_armed must be true or false" };
@@ -185,9 +197,24 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const buy = side === "BUY";
   const planOk = buy ? signal.stop < signal.entry && signal.entry < signal.tp1 : signal.tp1 < signal.entry && signal.entry < signal.stop;
   if (!planOk) { note("plan_wrong_side"); return { intents, notes }; }
-  const stopDist = Math.abs(signal.entry - signal.stop), tpDist = Math.abs(signal.tp1 - signal.entry);
+  let stopDist = Math.abs(signal.entry - signal.stop), tpDist = Math.abs(signal.tp1 - signal.entry);
   const minDist = (finite(sym.stops_level_points) ? sym.stops_level_points : 0) * sym.point;
   if (stopDist <= minDist || tpDist <= minDist) { note("stops_level"); return { intents, notes }; }
+
+  // Adaptive Volatility Stop: if ATR is available, ensure stopDist >= 0.75 * ATR to prevent noise stop-outs
+  if (S.adaptive_volatility !== false && positive(sym.atr_value)) {
+    const minAtrDist = sym.atr_value * 0.75;
+    if (stopDist < minAtrDist) {
+      stopDist = roundTo(minAtrDist, sym.digits);
+    }
+  }
+
+  // Detect Volatility Regime
+  const atrPts = positive(sym.atr_points) ? sym.atr_points : (positive(sym.atr_value) && sym.point ? Math.round(sym.atr_value / sym.point) : null);
+  const volRegime = atrPts == null ? "NORMAL" : (atrPts > 500 ? "HIGH" : atrPts < 150 ? "LOW" : "NORMAL");
+  if (volRegime !== "NORMAL") {
+    note(`vol_regime_${volRegime.toLowerCase()}`);
+  }
 
   if (signal.action === "ENTER_LIMIT") {
     const priceAway = buy ? sym.ask > signal.entry + 0.35 * stopDist : sym.bid < signal.entry - 0.35 * stopDist;
@@ -204,7 +231,9 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   if (volume > sym.volume_max) volume = floorToStep(sym.volume_max, sym.volume_step);
   if (!positive(volume) || volume < sym.volume_min) { note("volume_below_min"); return { intents, notes }; }
 
-  intents.push({ id, kind: "open", side, volume, entry: price, sl, tp, signal_issued_ms: issued, reason: "signal" });
+  const openIntent = { id, kind: "open", side, volume, entry: price, sl, tp, signal_issued_ms: issued, reason: "signal" };
+  if (volRegime !== "NORMAL") openIntent.vol_regime = volRegime;
+  intents.push(openIntent);
 
   // Progressive stop (SL+): move an open position's stop to breakeven when trailing_stop_r is set.
   if (S.trailing_stop_r > 0) {

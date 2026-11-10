@@ -236,4 +236,22 @@ test("partial scale out closes 50% volume at TP1 when volume >= 0.02", () => {
   assert.equal(partial.reason, "tp1_scale_out");
 });
 
+test("dynamic volatility & ATR stop: widens stop floor and normalizes risk sizing in high-volatility regime", () => {
+  // Baseline stop distance in SIGNAL is 5.0 (4100 entry, 4095 stop)
+  // If ATR is 8.0, 0.75 * ATR = 6.0 > 5.0
+  const highVolExecutor = ex({
+    symbol: { ...EXECUTOR.symbol, atr_value: 8.0, atr_points: 800 }
+  });
+  const r = plan({ executor: highVolExecutor });
+  assert.equal(r.intents.length, 1);
+  const openIntent = r.intents[0];
+  // Entry = 4101.2, stop distance widened to 6.0 -> SL = 4095.2
+  assert.equal(openIntent.entry, 4101.2);
+  assert.equal(openIntent.sl, 4095.2);
+  // Volume scaled down: 50 USD risk / (600 ticks * 1) = 0.08 lot (instead of 0.10 lot)
+  assert.equal(openIntent.volume, 0.08);
+  assert.ok(codes(r).includes("vol_regime_high"));
+});
+
+
 
