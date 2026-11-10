@@ -2317,6 +2317,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     try { return dashboardJson({ status: "ok", mode: await tradingMode(env) }); }
     catch (error) { console.error("trading_mode_failed", error); return dashboardJson({ status: "error" }, 500); }
   }
+  if (url.pathname === "/api/deals") {
+    try {
+      const limit = Math.max(1, Math.min(500, Number(url.searchParams.get("limit") || "200") || 200));
+      return dashboardJson({ status: "ok", deals: await listDeals(env, { limit }) });
+    } catch (error) {
+      console.error("deals_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "deals_unavailable" }, 500);
+    }
+  }
   if (url.pathname === "/api/conclusion/global") {
     try {
       // The Decision Engine's decision travels with the witnesses (the rooms, news, macro, strategy).
