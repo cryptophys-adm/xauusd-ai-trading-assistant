@@ -268,9 +268,10 @@ test("a closed market never trades; the record and the council carry the market 
   assert.match(text, /macro drivers/);
   assert.match(text, /"session":\{"day":"Monday"/);
   assert.equal(marketContextOf(loaded, open.quorum, NOW).session.market_open, true);
-  const weighted = witnessCards({ global: globalOf(), strategy: STRATEGY, context: { session: sessionAt(NOW), macroLean: 0.84 }, env: { GLOBAL_DECISION_WEIGHTED: "true" } });
+  const weighted = witnessCards({ global: globalOf(), strategy: STRATEGY, context: { session: sessionAt(NOW), independent: { macro_drivers: { lean: 0.84, summary: "DXY -0.42% in 24h" } } }, env: { GLOBAL_DECISION_WEIGHTED: "true" } });
   assert.match(weighted.find((c) => c.key === "SESSION").summary, /^Monday 2026-11-09 13:16 UTC, market open, London and New York \(high liquidity\)/);
   assert.equal(weighted.find((c) => c.key === "MACRO_DRIVERS").lean, 0.84);
+  assert.equal(weighted.find((c) => c.key === "REGIME").available, false, "no data of its own: the witness drops out");
 });
 
 test("GLOBAL_DECISION_WEIGHTED: every witness takes its B-11 weight (sum 1), and production turns it on", async () => {
@@ -283,4 +284,31 @@ test("GLOBAL_DECISION_WEIGHTED: every witness takes its B-11 weight (sum 1), and
   assert.equal(activeWitnessWeights({}), WITNESS_WEIGHTS);
   const { readFileSync } = await import("node:fs");
   assert.match(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"), /"GLOBAL_DECISION_WEIGHTED": "true"/, "owner 2026-11-10: on in production");
+});
+
+test("the extended witnesses are independent: price vs zones, 1H trend quality, price vs averages, dollar and yields", async () => {
+  const { keyLevelsLean, regimeLean, trendTfLean, macroDriversLean, independentWitnesses } = await import("../src/decision-engine.mjs");
+  // Price 4000, ATR 10: support 3995-3998 (0.2 ATR away), resistance 4030 (3 ATR away): a bounce lean.
+  const kl = keyLevelsLean({ price: 4000, zones: [{ low: 3995, high: 3998, price: 3996.5, role: "support", candidate: true }, { low: 4030, high: 4032, price: 4031, role: "resistance", candidate: true }], atrH1: 10 });
+  assert.equal(kl.lean, 0.53, "0.6 x (30 - 2) / (30 + 2)");
+  assert.match(kl.summary, /0\.2 ATR above support and 3 ATR below resistance/);
+  assert.equal(keyLevelsLean({ price: 4029, zones: [{ low: 3995, high: 3998, role: "support", candidate: true }, { low: 4030, high: 4032, role: "resistance", candidate: true }], atrH1: 10 }).lean < 0, true, "under resistance: bearish");
+  assert.equal(keyLevelsLean({ price: null, zones: [] }), null);
+  const up = Array.from({ length: 21 }, (_, i) => ({ close: 4000 + i * 2 + (i % 2 ? 1 : 0) }));
+  const rg = regimeLean({ h1Bars: up, regime: { sensors: { trend: 0.62 }, chaos: false } });
+  assert.ok(rg.lean > 0.5, JSON.stringify(rg));
+  assert.equal(regimeLean({ h1Bars: up, regime: { sensors: { trend: 0.62 }, chaos: true } }).lean, 0, "chaos: no direction");
+  assert.ok(regimeLean({ h1Bars: up, regime: { sensors: { trend: 0.4 } } }).lean < rg.lean, "mean-reverting: weaker");
+  const bars = (n, slope) => Array.from({ length: n }, (_, i) => { const c = 4000 + i * slope; return { open: c, high: c + 3, low: c - 3, close: c }; });
+  const tt = trendTfLean({ d1Bars: bars(30, 5), h4Bars: bars(30, 2), h1Bars: bars(30, -1) });
+  assert.match(tt.summary, /^D1 \+1, 4H \+1, 1H -/);
+  assert.ok(tt.lean > 0.5);
+  assert.equal(trendTfLean({}), null);
+  const md = macroDriversLean({ newsContext: { dollar: { change_24h_percent: 0.25 } }, correlations: { assets: [{ id: "us10y", available: true, change: { "1d": 5 } }] } });
+  assert.equal(md.lean, -0.5, "a stronger dollar and higher yields weigh on gold");
+  assert.equal(macroDriversLean({}), null);
+  // Independence: flipping the strategy engine's direction changes none of them.
+  const loaded = { inputs: { h1Bars: up, d1Bars: bars(30, 5), h4Bars: bars(30, 2), news: { context: { dollar: { change_24h_percent: -0.2 } } } }, strategy: { ...STRATEGY, direction: "LONG", alignment: 0.9 } };
+  const a = independentWitnesses(loaded), b = independentWitnesses({ ...loaded, strategy: { ...loaded.strategy, direction: "SHORT", alignment: 0.1, plan: null } });
+  assert.deepEqual(a, b, "no extended witness reads the strategy's direction");
 });

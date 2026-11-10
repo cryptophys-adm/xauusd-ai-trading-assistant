@@ -32,7 +32,7 @@
 // switch: DECISION_ENGINE = "off" restores the H1 decision for the EA, Telegram and the ledger.
 // The server never sizes a position; prices come only from the key-level plan.
 
-import { loadStrategyInputs, buildStrategy, planForDirection, riskChecks, triggerOf, STRATEGY_PARAMS } from "./strategy-engine.mjs";
+import { loadStrategyInputs, buildStrategy, planForDirection, riskChecks, triggerOf, STRATEGY_PARAMS, atr } from "./strategy-engine.mjs";
 import { buildGlobalConclusion } from "./global-conclusion.mjs";
 import { readMacroRoom } from "./macro-room.mjs";
 import { readCorrelations } from "./correlations.mjs";
@@ -129,21 +129,19 @@ export function witnessCards({ global = null, strategy = null, context = {}, env
     summary: clip(strategy?.headline, 400) || null, at: null
   });
   if (decisionWeightedEnabled(env)) {
-    const dir = (strategy?.direction === "LONG" ? 1 : strategy?.direction === "SHORT" ? -1 : 0);
-    const atLevel = Boolean(strategy?.plan?.at_level);
-    const align = isNum(strategy?.alignment) ? strategy.alignment : 0;
-    const keyLean = strategy ? r2(dir * Math.max(atLevel ? 0.5 : 0.2, align * 0.5)) : null;
-    cards.push({ key: "KEY_LEVELS", label: "Key levels", role: "zones", weight: EXTENDED_WITNESS_WEIGHTS.KEY_LEVELS, available: Boolean(strategy?.plan), stale: false, lean: keyLean, side: sideOf(keyLean), decision: null, confidence: null, summary: clip(strategy?.plan?.entry_note, 200) || null, at: null });
-    const regimeLean = (typeof context?.regime === "string" && /trend/i.test(context.regime)) ? (dir || 0) * 0.3 : null;
-    cards.push({ key: "REGIME", label: "Regime", role: "1H regime", weight: EXTENDED_WITNESS_WEIGHTS.REGIME, available: regimeLean != null, stale: false, lean: regimeLean, side: sideOf(regimeLean), decision: null, confidence: null, summary: context?.regime ?? null, at: null });
-    const trendLean = isNum(strategy?.trend) ? strategy.trend : null;
-    cards.push({ key: "TREND_TF", label: "Trend TF", role: "cross-TF trend", weight: EXTENDED_WITNESS_WEIGHTS.TREND_TF, available: trendLean != null, stale: false, lean: trendLean, side: sideOf(trendLean), decision: null, confidence: null, summary: null, at: null });
-    const macroLean = isNum(context?.macroLean) ? context.macroLean : null;
-    cards.push({ key: "MACRO_DRIVERS", label: "Macro drivers", role: "correlations", weight: EXTENDED_WITNESS_WEIGHTS.MACRO_DRIVERS, available: macroLean != null, stale: false, lean: macroLean, side: sideOf(macroLean), decision: null, confidence: null, summary: null, at: null });
-    const sessionLean = null; // placeholder; session clock is context only
+    // Owner 2026-11-10 ("buat witness baru benar-benar independen"): each extended witness reads its own
+    // data (price against the Key Level Agent's zones, the 1H bars and sensors, the D1/4H/1H bars, the
+    // dollar and yields), never the strategy engine's direction or a room's lean (independentWitnesses).
+    const ind = context?.independent ?? {};
+    const push = (key, label, role, w) => cards.push({ key, label, role, weight: EXTENDED_WITNESS_WEIGHTS[key], available: isNum(w?.lean), stale: false, lean: isNum(w?.lean) ? w.lean : null, side: sideOf(w?.lean), decision: null, confidence: null, summary: w?.summary ?? null, at: null });
+    push("KEY_LEVELS", "Key levels", "price vs zones", ind.key_levels);
+    push("REGIME", "Regime", "1H trend quality", ind.regime);
+    push("TREND_TF", "Trend TF", "price vs averages", ind.trend_tf);
+    push("MACRO_DRIVERS", "Macro drivers", "dollar and yields", ind.macro_drivers);
     const se = context?.session;
     const sessionText = se ? `${se.day} ${se.date} ${se.time_utc} UTC, market ${se.market_open ? `open, ${se.active.length ? se.active.join(" and ") : "between sessions"} (${se.liquidity} liquidity)` : "closed"}` : null;
-    cards.push({ key: "SESSION", label: "Session", role: "session clock", weight: EXTENDED_WITNESS_WEIGHTS.SESSION, available: false, stale: false, lean: sessionLean, side: sideOf(sessionLean), decision: null, confidence: null, summary: sessionText, at: null });
+    // A session has no direction: context only.
+    cards.push({ key: "SESSION", label: "Session", role: "session clock", weight: EXTENDED_WITNESS_WEIGHTS.SESSION, available: false, stale: false, lean: null, side: sideOf(null), decision: null, confidence: null, summary: sessionText, at: null });
   }
   return cards;
 }
@@ -291,6 +289,98 @@ export function contextCautions(dir, market = null) {
   const dx = macro?.change_24h_percent?.dollar;
   if (isNum(dx) && Math.abs(dx) >= 0.3 && Math.sign(dx) === dir) out.push(`the dollar ${dx > 0 ? "rose" : "fell"} ${Math.abs(dx)}% in 24 hours, against a ${dir > 0 ? "long" : "short"} in gold`);
   return out;
+}
+
+// ---------------------------------------------------------------- independent extended witnesses
+const clamp1 = (v) => Math.max(-1, Math.min(1, v));
+const closesOf = (bars) => (bars || []).filter((b) => isNum(b?.close));
+
+/**
+ * Pure: KEY_LEVELS from price against the Key Level Agent's zones only. Near support leans bullish
+ * (a bounce), near resistance bearish, scaled to at most 0.6: 0.6 x (distance to resistance - distance
+ * to support) / (sum). A zone at price counts as the side price holds (above its centre: support).
+ */
+export function keyLevelsLean({ price = null, zones = [], atrH1 = null } = {}) {
+  if (!isNum(price)) return null;
+  const zs = (zones || []).filter((z) => isNum(z?.low) && isNum(z?.high));
+  const major = zs.some((z) => z.candidate) ? zs.filter((z) => z.candidate) : zs;
+  const sup = major.filter((z) => z.role === "support" || (z.role === "at price" && price >= (z.price ?? (z.low + z.high) / 2)));
+  const res = major.filter((z) => z.role === "resistance" || (z.role === "at price" && price < (z.price ?? (z.low + z.high) / 2)));
+  const dSup = sup.length ? Math.min(...sup.map((z) => Math.max(0, price - z.high))) : null;
+  const dRes = res.length ? Math.min(...res.map((z) => Math.max(0, z.low - price))) : null;
+  if (dSup == null && dRes == null) return null;
+  const unit = isNum(atrH1) && atrH1 > 0 ? atrH1 : null;
+  const fmt = (d) => (unit ? `${r2(d / unit)} ATR` : r2(d));
+  let lean;
+  if (dSup != null && dRes != null) lean = dSup + dRes > 0 ? 0.6 * (dRes - dSup) / (dRes + dSup) : 0;
+  else if (dSup != null) lean = unit && dSup <= unit ? 0.3 : 0;
+  else lean = unit && dRes <= unit ? -0.3 : 0;
+  const parts = [dSup != null ? `${fmt(dSup)} above support` : null, dRes != null ? `${fmt(dRes)} below resistance` : null].filter(Boolean);
+  return { lean: r2(lean), summary: `price is ${parts.join(" and ")}` };
+}
+
+/**
+ * Pure: REGIME from the 1H bars and sensors only: the direction of the last 20 closed 1H bars times
+ * their efficiency (net move / path), full in a persistent market (Hurst at least 0.55), 0.6 in between,
+ * 0.3 when mean-reverting (Hurst under 0.45); 0 in chaos.
+ */
+export function regimeLean({ h1Bars = [], regime = null, n = 20 } = {}) {
+  const c = closesOf(h1Bars).slice(-(n + 1)).map((b) => b.close);
+  if (c.length < 6) return null;
+  const net = c.at(-1) - c[0];
+  let path = 0;
+  for (let i = 1; i < c.length; i++) path += Math.abs(c[i] - c[i - 1]);
+  const er = path > 0 ? Math.abs(net) / path : 0;
+  const hurst = regime?.sensors?.trend;
+  const k = isNum(hurst) ? (hurst >= 0.55 ? 1 : hurst < 0.45 ? 0.3 : 0.6) : 0.6;
+  const lean = regime?.chaos ? 0 : clamp1(Math.sign(net) * er * k);
+  return { lean: r2(lean), summary: `${regime?.chaos ? "chaotic; " : ""}1H efficiency ${r2(er)} over ${c.length - 1} bars, ${net >= 0 ? "up" : "down"}${isNum(hurst) ? `, Hurst ${r2(hurst)}` : ""}` };
+}
+
+/**
+ * Pure: TREND_TF from the closed bars only: on D1, 4H and 1H, (close - 20-bar mean) / (2 x 14-bar ATR),
+ * each within [-1, 1], weighted 0.4, 0.35 and 0.25 (a missing timeframe drops out).
+ */
+export function trendTfLean({ d1Bars = [], h4Bars = [], h1Bars = [] } = {}) {
+  const one = (bars) => {
+    const c = closesOf(bars);
+    if (c.length < 20) return null;
+    const mean = c.slice(-20).reduce((t, b) => t + b.close, 0) / 20;
+    const a = atr(c.slice(-30));
+    return isNum(a) && a > 0 ? clamp1((c.at(-1).close - mean) / (2 * a)) : null;
+  };
+  const parts = [["D1", one(d1Bars), 0.4], ["4H", one(h4Bars), 0.35], ["1H", one(h1Bars), 0.25]].filter((p) => isNum(p[1]));
+  if (!parts.length) return null;
+  const w = parts.reduce((t, p) => t + p[2], 0);
+  return { lean: r2(parts.reduce((t, p) => t + p[1] * p[2], 0) / w), summary: parts.map(([k, v]) => `${k} ${v >= 0 ? "+" : ""}${r2(v)}`).join(", ") };
+}
+
+/**
+ * Pure: MACRO_DRIVERS from the dollar and yields only (not the macro room, which is its own witness):
+ * -0.6 x (DXY 24h % / 0.5) - 0.4 x (US 10-year 1-day change in bp / 10), within [-1, 1].
+ */
+export function macroDriversLean({ newsContext = null, correlations = null } = {}) {
+  const dxy = isNum(newsContext?.dollar?.change_24h_percent) ? newsContext.dollar.change_24h_percent : null;
+  const us10 = (correlations?.assets || []).find((a) => a.id === "us10y" && a.available);
+  const bp = isNum(us10?.change?.["1d"]) ? us10.change["1d"] : null;
+  if (dxy == null && bp == null) return null;
+  const parts = [dxy != null ? [-dxy / 0.5, 0.6] : null, bp != null ? [-bp / 10, 0.4] : null].filter(Boolean);
+  const w = parts.reduce((t, p) => t + p[1], 0);
+  return { lean: r2(clamp1(parts.reduce((t, p) => t + clamp1(p[0]) * p[1], 0) / w)), summary: [dxy != null ? `DXY ${dxy > 0 ? "+" : ""}${r2(dxy)}% in 24h` : null, bp != null ? `US 10-year ${bp > 0 ? "+" : ""}${r2(bp)} bp in a day` : null].filter(Boolean).join(", ") };
+}
+
+/** Pure: the four independent extended witnesses from the loaded inputs. */
+export function independentWitnesses(loaded = {}) {
+  const { inputs = {}, strategy = null, correlations = null } = loaded || {};
+  const h1Regime = regimeOf(inputs.h1Snapshot ?? null);
+  const price = isNum(strategy?.price) ? strategy.price : closesOf(inputs.m15Bars).at(-1)?.close ?? closesOf(inputs.h1Bars).at(-1)?.close ?? null;
+  const atrH1 = isNum(strategy?.atr_h1) ? strategy.atr_h1 : atr(closesOf(inputs.h1Bars));
+  return {
+    key_levels: keyLevelsLean({ price, zones: strategy?.key_levels?.zones ?? [], atrH1 }),
+    regime: regimeLean({ h1Bars: inputs.h1Bars ?? [], regime: h1Regime }),
+    trend_tf: trendTfLean({ d1Bars: inputs.d1Bars ?? [], h4Bars: inputs.h4Bars ?? [], h1Bars: inputs.h1Bars ?? [] }),
+    macro_drivers: macroDriversLean({ newsContext: inputs.news?.context ?? null, correlations })
+  };
 }
 
 // ---------------------------------------------------------------- guardrails
@@ -586,11 +676,10 @@ export async function notifyDecision(env, d, send) {
 /** Pure: the witnesses, the quorum and both sides' guardrails (with their plans) from the loaded inputs. */
 export function assess(loaded, { now = Date.now(), env = null } = {}) {
   const { inputs = {}, strategy = null, global = null, macro = null, correlations = null, regime = null } = loaded || {};
-  // The right panel's cards (owner 2026-11-09): the macro drivers' lean feeds MACRO_DRIVERS when the
-  // macro room carries none, and the session describes SESSION (context: a session has no direction).
-  const drivers = macroDriversOf(inputs.news?.context ?? null, correlations);
+  // The extended witnesses read their own data (owner 2026-11-10), and the session describes SESSION
+  // (context: a session has no direction).
   const session = sessionAt(now);
-  const context = { regime, correlations, macroLean: isNum(macro?.lean) ? macro.lean : (isNum(macro?.score) ? macro.score : drivers.lean), session };
+  const context = { regime, correlations, session, independent: independentWitnesses(loaded) };
   const cards = witnessCards({ global, strategy, context, env });
   const quorum = quorumOf(cards, { now });
   const market = marketContextOf(loaded, quorum, now);

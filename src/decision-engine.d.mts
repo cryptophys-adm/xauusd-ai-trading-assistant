@@ -49,3 +49,8 @@ export function sentimentOf(input?: { quorum?: any; news?: any; macro?: any }): 
 export function contextCautions(dir: number, market?: any): string[];
 export function marketContextOf(loaded: any, quorum?: any, now?: number): Record<string, any>;
 export function activeWitnessWeights(env: unknown): Readonly<Record<string, number>>;
+export function keyLevelsLean(input?: { price?: number | null; zones?: any[]; atrH1?: number | null }): { lean: number; summary: string } | null;
+export function regimeLean(input?: { h1Bars?: any[]; regime?: any; n?: number }): { lean: number; summary: string } | null;
+export function trendTfLean(input?: { d1Bars?: any[]; h4Bars?: any[]; h1Bars?: any[] }): { lean: number; summary: string } | null;
+export function macroDriversLean(input?: { newsContext?: any; correlations?: any }): { lean: number; summary: string } | null;
+export function independentWitnesses(loaded?: any): Record<string, { lean: number; summary: string } | null>;
