@@ -174,7 +174,7 @@ export async function upsertReleases(db, events, { now = Date.now() } = {}) {
     const iso = new Date(now).toISOString();
     await db.prepare(`INSERT INTO econ_releases (release_key, series, kind, title, currency, time, importance, actual, forecast, previous, unit, surprise, surprise_z, gold_direction, fetched_at, updated_at)
       VALUES (?, ?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(release_key) DO UPDATE SET actual = COALESCE(excluded.actual, actual), forecast = COALESCE(excluded.forecast, forecast), previous = COALESCE(excluded.previous, previous),
+      ON CONFLICT(release_key) DO UPDATE SET kind = excluded.kind, actual = COALESCE(excluded.actual, actual), forecast = COALESCE(excluded.forecast, forecast), previous = COALESCE(excluded.previous, previous),
         surprise = COALESCE(excluded.surprise, surprise), surprise_z = COALESCE(excluded.surprise_z, surprise_z), gold_direction = COALESCE(excluded.gold_direction, gold_direction), updated_at = excluded.updated_at`)
       .bind(key, series, kind, e.title, new Date(Date.parse(e.time)).toISOString(), isNum(e.importance) ? e.importance : null, isNum(e.actual) ? e.actual : null, isNum(e.forecast) ? e.forecast : null, isNum(e.previous) ? e.previous : null, e.unit ?? null,
         sp?.surprise ?? null, sp?.surprise_z ?? null, sp ? sp.gold_direction : null, iso, iso).run();
@@ -246,6 +246,14 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
         const r = await callCalendar(env, dayRange(t));
         out.live = r.ok ? { day, events: await upsertReleases(db, r.events, { now }) } : { day, error: r.error };
       }
+    }
+    // Rows stored before a rule learned their title (production 2026-11-10: "Non Farm Payrolls" read as
+    // "other"): re-classified, with the rule's effect on gold.
+    for (const r of ((await db.prepare("SELECT release_key, title, surprise FROM econ_releases WHERE kind = 'other' LIMIT 50").all()).results || [])) {
+      const rule = ruleOf(r.title);
+      if (rule.kind === "other") continue;
+      const dir = isNum(r.surprise) && r.surprise !== 0 ? goldOf(rule.higher) * Math.sign(r.surprise) : null;
+      await db.prepare("UPDATE econ_releases SET kind = ?, gold_direction = COALESCE(?, gold_direction), updated_at = ? WHERE release_key = ?").bind(rule.kind, dir, new Date(now).toISOString(), r.release_key).run();
     }
     // (2) Back-fill, one window an hour.
     if (new Date(now).getUTCMinutes() < 25) {
