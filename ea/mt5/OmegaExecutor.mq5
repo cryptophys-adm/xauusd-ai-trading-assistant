@@ -334,7 +334,7 @@ void WriteStateJson()
       "{\"connected\":%s,\"server\":\"%s\","
       "\"account\":{\"trade_mode\":\"%s\",\"currency\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"day_start_balance\":%.2f,\"day_realized_pl\":%.2f},"
       "\"symbol\":{\"name\":\"%s\",\"digits\":%d,\"point\":%s,\"tick_size\":%s,\"tick_value\":%s,\"volume_min\":%.4f,\"volume_max\":%.4f,\"volume_step\":%.4f,\"stops_level_points\":%d,\"bid\":%s,\"ask\":%s,\"spread_points\":%d},"
-      "\"positions\":%s,\"received_ms\":%I64d}",
+      "\"positions\":%s,\"trade_allowed\":%s,\"received_ms\":%I64d}",
       connected ? "true" : "false",
       server,
       tradeMode,
@@ -356,6 +356,7 @@ void WriteStateJson()
       DoubleToString(ask, digits),
       spreadPoints,
       positionsJson,
+      (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && MQLInfoInteger(MQL_TRADE_ALLOWED)) ? "true" : "false",
       receivedMs
    );
 
