@@ -46,5 +46,18 @@
   },
   "triggers": {
     "crons": ["* * * * *"]
+  },
+  // Workers Logs (2026-11-10): production 13:10-14:10 UTC the 5m local records stopped publishing and
+  // nothing kept this Worker's logs to say why. Persisted logs, one invocation log per cron run (1,440 a
+  // day) plus the Worker's own event lines (only unusual statuses are logged); no traces.
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    }
   }
 }
