@@ -101,7 +101,7 @@ export default function GlobalDecision() {
   const lead = e ? (e.stance === "SELL" ? "short" : e.stance === "BUY" ? "long" : (e.quorum?.short_share ?? 0) > (e.quorum?.long_share ?? 0) ? "short" : "long") : null;
   return (
     <Panel title={e ? "Decision Engine" : "Global decision"} icon={<Target className="h-3.5 w-3.5 text-cyan-300" />}
-      right={e ? <Badge tone={e.source === "council" ? "cyan" : "amber"}>{e.source === "council" ? "AI council" : "fallback"}</Badge> : st && <Badge tone={st.tone}>{st.label}</Badge>}>
+      right={e ? <div className="flex items-center gap-1.5"><Badge tone="slate">{e.trading_mode ?? "intraday"}</Badge><Badge tone={e.source === "council" ? "cyan" : "amber"}>{e.source === "council" ? "AI council" : "fallback"}</Badge></div> : st && <Badge tone={st.tone}>{st.label}</Badge>}>
       {loading && !g && !e ? <Skeleton rows={5} /> : !g && !e ? <p className="text-[12px] text-slate-500">The decision is not available yet.</p> : (
         <>
           <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
