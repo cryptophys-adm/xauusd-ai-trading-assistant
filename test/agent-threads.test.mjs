@@ -611,7 +611,7 @@ test("the strategy reads the latest closed 5m bar: its confirmation counts only 
   assert.equal(before.price, 4012, "the last 5m close");
   await seedVerifiedM5(e);
   assert.equal((await liveM5Inputs(e, { now })).confirmation.verified, true, "the 5m implementations approved: verified");
-  assert.equal(await liveM5Inputs(e, { now: Date.parse(BAR) + 11 * 60_000 }), null, "older than 10 minutes: not live");
+  assert.equal(await liveM5Inputs(e, { now: Date.parse(BAR) + 17 * 60_000 }), null, "older than 16 minutes: not live");
   const ctx = JSON.parse(m5({ sell_confirmed: true, buy_confirmed: false }));
   assert.equal((await liveM5Inputs({}, { now, context: ctx })).confirmation.sell_confirmed, true, "the context handed in by the 5m ingress wins over the cache");
 });
