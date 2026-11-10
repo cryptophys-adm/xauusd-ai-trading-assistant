@@ -48,3 +48,4 @@ export function macroDriversOf(context?: any, correlations?: any): Record<string
 export function sentimentOf(input?: { quorum?: any; news?: any; macro?: any }): Record<string, any>;
 export function contextCautions(dir: number, market?: any): string[];
 export function marketContextOf(loaded: any, quorum?: any, now?: number): Record<string, any>;
+export function activeWitnessWeights(env: unknown): Readonly<Record<string, number>>;

@@ -272,3 +272,15 @@ test("a closed market never trades; the record and the council carry the market 
   assert.match(weighted.find((c) => c.key === "SESSION").summary, /^Monday 2026-11-09 13:16 UTC, market open, London and New York \(high liquidity\)/);
   assert.equal(weighted.find((c) => c.key === "MACRO_DRIVERS").lean, 0.84);
 });
+
+test("GLOBAL_DECISION_WEIGHTED: every witness takes its B-11 weight (sum 1), and production turns it on", async () => {
+  const { activeWitnessWeights, EXTENDED_WITNESS_WEIGHTS } = await import("../src/decision-engine.mjs");
+  const on = { GLOBAL_DECISION_WEIGHTED: "true" };
+  const cards = witnessCards({ global: globalOf(), strategy: STRATEGY, context: { session: sessionAt(NOW), macroLean: 0.84, regime: "normal-trending" }, env: on });
+  assert.equal(cards.reduce((t, c) => t + c.weight, 0).toFixed(6), "1.000000", "the B-11 weights sum to 1");
+  assert.equal(cards.find((c) => c.key === "D1").weight, EXTENDED_WITNESS_WEIGHTS.D1);
+  assert.equal(witnessCards({ global: globalOf(), strategy: STRATEGY }).find((c) => c.key === "D1").weight, WITNESS_WEIGHTS.D1, "off: the base weights");
+  assert.equal(activeWitnessWeights({}), WITNESS_WEIGHTS);
+  const { readFileSync } = await import("node:fs");
+  assert.match(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"), /"GLOBAL_DECISION_WEIGHTED": "true"/, "owner 2026-11-10: on in production");
+});

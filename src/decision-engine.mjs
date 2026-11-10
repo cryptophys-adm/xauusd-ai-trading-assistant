@@ -49,6 +49,8 @@ const M15_MS = 900_000;
 /** Witness weights (sum 1). A missing or stale witness drops out and the rest renormalise. */
 export const WITNESS_WEIGHTS = Object.freeze({ D1: 0.2, H4: 0.2, H1: 0.2, M15: 0.15, NEWS: 0.1, MACRO: 0.05, STRATEGY: 0.1 });
 export const EXTENDED_WITNESS_WEIGHTS = Object.freeze({ D1: 0.16, H4: 0.16, H1: 0.16, M15: 0.12, NEWS: 0.08, MACRO: 0.04, STRATEGY: 0.08, KEY_LEVELS: 0.05, REGIME: 0.05, TREND_TF: 0.05, MACRO_DRIVERS: 0.03, SESSION: 0.02 });
+/** The witness weights in force: the B-11 set while GLOBAL_DECISION_WEIGHTED is on, else the base set. */
+export function activeWitnessWeights(env) { return decisionWeightedEnabled(env) ? EXTENDED_WITNESS_WEIGHTS : WITNESS_WEIGHTS; }
 export function decisionWeightedEnabled(env) { return String(env?.GLOBAL_DECISION_WEIGHTED ?? "false").trim().toLowerCase() === "true"; }
 export const QUORUM_MIN = 0.5;
 export const LEAN = 0.15;
@@ -105,12 +107,15 @@ export const keyCloseMs = (key) => Number(String(key ?? "").split(":").pop()) + 
  */
 export function witnessCards({ global = null, strategy = null, context = {}, env = null } = {}) {
   const rows = new Map((global?.timeframes || []).map((t) => [t.key, t]));
+  // With GLOBAL_DECISION_WEIGHTED (owner 2026-11-10: on) every witness takes its B-11 weight, so the
+  // extended witnesses hold their designed 20 % instead of being added on top of a full set.
+  const W = activeWitnessWeights(env);
   const cards = [];
   for (const key of ["D1", "H4", "H1", "M15", "NEWS", "MACRO"]) {
     const t = rows.get(key);
     const lean = isNum(t?.lean) ? r2(t.lean) : null;
     cards.push({
-      key, label: t?.label ?? key, role: t?.role ?? null, weight: WITNESS_WEIGHTS[key],
+      key, label: t?.label ?? key, role: t?.role ?? null, weight: W[key],
       available: Boolean(t?.available) && lean != null, stale: Boolean(t?.stale), lean, side: sideOf(lean),
       decision: t?.action ?? null, confidence: isNum(t?.confidence) ? r2(t.confidence) : null, summary: clip(t?.summary, 400) || null, at: t?.at ?? null
     });
@@ -118,7 +123,7 @@ export function witnessCards({ global = null, strategy = null, context = {}, env
   const dir = dirOf(strategy?.direction);
   const sLean = strategy ? r2(dir * Math.max(isNum(strategy.alignment) ? strategy.alignment : 0, isNum(strategy.confidence) ? strategy.confidence : 0)) : null;
   cards.push({
-    key: "STRATEGY", label: "Strategy", role: "multi-timeframe confluence", weight: WITNESS_WEIGHTS.STRATEGY,
+    key: "STRATEGY", label: "Strategy", role: "multi-timeframe confluence", weight: W.STRATEGY,
     available: Boolean(strategy), stale: false, lean: sLean, side: sideOf(sLean),
     decision: strategy?.decision ?? null, state: strategy?.state ?? null, confidence: isNum(strategy?.confidence) ? strategy.confidence : null,
     summary: clip(strategy?.headline, 400) || null, at: null
@@ -634,7 +639,7 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     cautions, vetoes: { long: guards.long.vetoes, short: guards.short.vetoes },
     context: councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, market, now }),
     strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline, price: strategy.price, atr_h1: strategy.atr_h1 } : null,
-    trading_mode: MODE, weights: WITNESS_WEIGHTS, rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE },
+    trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: activeWitnessWeights(env), rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE },
     advisory: "The server places no order and gives no position size; the EA sizes each trade from the owner's risk input."
   };
 }

@@ -39,6 +39,10 @@
     }
   ],
   "vars": {
+    // Decision Engine (owner 2026-11-10: "nyalakan GLOBAL_DECISION_WEIGHTED"): the B-11 extended witnesses
+    // (key levels, regime, cross-timeframe trend, macro drivers; session as context) count in the quorum
+    // with the B-11 weights. "false" restores the seven base witnesses.
+    "GLOBAL_DECISION_WEIGHTED": "true",
     // Model migration (owner decision 2026-11-07): glm-5.3-flash and nemotron-3-120b-a12b stop
     // answering on 2026-11-20. The news chain and the H1 Reasoner run on gpt-oss-120b.
     "AI_MODEL_ANALYST": "@cf/openai/gpt-oss-120b",
