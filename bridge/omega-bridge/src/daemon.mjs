@@ -6,6 +6,7 @@ import {
   DEFAULT_OMEGA_FILES_DIR,
   consumeResults,
   readState,
+  readTerminalLastError,
   resolveOmegaDir,
   writeIntents,
 } from "./files.mjs";
@@ -349,6 +350,15 @@ export function createDaemon(options = {}) {
 
   async function tick() {
     const state = readState(config.omegaFilesDir, { fs });
+    if (state && !state.connected) {
+      try {
+        const terminalDir = path.resolve(config.omegaFilesDir, "../../..");
+        const lastErr = readTerminalLastError(terminalDir, { fs });
+        if (lastErr) state.terminal_error = lastErr;
+      } catch {
+        /* ignore log read errors */
+      }
+    }
     const freshResults = consumeResults(config.omegaFilesDir, { fs, now });
     for (const r of freshResults) {
       if (r && r.id && !reportedResultIds.has(r.id) && !pendingResultsById.has(r.id)) {

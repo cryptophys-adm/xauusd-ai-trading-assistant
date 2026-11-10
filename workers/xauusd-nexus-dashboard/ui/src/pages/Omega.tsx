@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Activity,
+  AlertTriangle,
   Bot,
   CandlestickChart,
   KeyRound,
@@ -598,7 +599,9 @@ export default function Omega() {
   const connectBroker = async (ev: FormEvent) => {
     ev.preventDefault();
     const isLocked = Boolean(
-      data?.broker?.connection?.status === "stored" && data?.broker?.connection?.server
+      data?.broker?.connection?.status === "stored" &&
+      data?.broker?.connection?.server &&
+      data?.broker?.bridge?.terminal_connected
     );
     if (isLocked) {
       setBrokerMsg({
@@ -708,7 +711,9 @@ export default function Omega() {
       : "on";
   const effectiveTone: "red" | "amber" | "green" = !e.env_enabled ? "red" : !e.enabled ? "amber" : "green";
 
-  const accountActive = Boolean(conn.status === "stored" && conn.server);
+  const accountActive = Boolean(
+    conn.status === "stored" && conn.server && br.terminal_connected
+  );
   const configLocked = accountActive;
 
   return (
@@ -1873,7 +1878,11 @@ export default function Omega() {
                   className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40"
                   title={configLocked ? "Account already connected. Disconnect first to switch." : undefined}
                 >
-                  {configLocked ? "Connected (Locked)" : "Connect"}
+                  {configLocked
+                    ? "Connected (Locked)"
+                    : conn.status === "stored" && !br.terminal_connected
+                    ? "Reconnect / Update"
+                    : "Connect"}
                 </button>
                 <button
                   type="button"
@@ -1885,6 +1894,23 @@ export default function Omega() {
                   Disconnect
                 </button>
               </div>
+
+              {conn.status === "stored" && !br.terminal_connected ? (
+                <div className="rounded border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11.5px] text-amber-200">
+                  <div className="flex items-center gap-1.5 font-semibold text-amber-300">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    MT5 Terminal Belum Terhubung
+                  </div>
+                  <p className="mt-1 text-slate-300">
+                    Kredensial tersimpan untuk <strong className="text-white">{serverName}</strong>, tetapi otorisasi ke broker belum berhasil
+                    {br.terminal_error ? `: "${br.terminal_error}"` : " (kemungkinan user login salah, password salah, atau demo expired)."}.
+                  </p>
+                  <p className="mt-1 text-[11px] text-slate-400">
+                    Periksa kembali server, login, dan password di atas, lalu klik <strong>Reconnect / Update</strong>.
+                  </p>
+                </div>
+              ) : null}
+
               <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
                 <Lock className="h-3 w-3 shrink-0 text-cyan-300" />
                 Encrypted in this browser to the bridge&apos;s key: the server cannot read the login or the password.

@@ -132,6 +132,7 @@ export function executorFrom(state) {
     connected: state.connected === true,
     server: typeof state.server === "string" ? state.server.slice(0, 64) : null,
     received_ms: n(state.received_ms),
+    terminal_error: typeof state.terminal_error === "string" ? state.terminal_error.slice(0, 200) : null,
     account: { trade_mode: ["demo", "real", "contest"].includes(a.trade_mode) ? a.trade_mode : null, currency: typeof a.currency === "string" ? a.currency.slice(0, 8) : null, balance: n(a.balance), equity: n(a.equity), day_start_balance: n(a.day_start_balance), day_realized_pl: n(a.day_realized_pl) },
     symbol: { name: typeof s.name === "string" ? s.name.slice(0, 32) : null, digits: Number.isInteger(s.digits) ? s.digits : null, point: n(s.point), tick_size: n(s.tick_size), tick_value: n(s.tick_value), volume_min: n(s.volume_min), volume_max: n(s.volume_max), volume_step: n(s.volume_step), stops_level_points: n(s.stops_level_points), bid: n(s.bid), ask: n(s.ask), spread_points: n(s.spread_points) },
     positions: (Array.isArray(state.positions) ? state.positions : []).slice(0, 50).map((p) => ({
@@ -235,6 +236,7 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       seen: syncedAge != null && syncedAge < BRIDGE_SEEN_MS, synced_age_ms: syncedAge, kid: b?.kid ?? null, bridge_version: b?.bridge_version ?? null,
       terminal_connected: Boolean(st?.connected === true && connection.status === "stored" && (now - Number(st?.received_ms || 0) < 60_000)),
       trade_allowed: Boolean(st?.trade_allowed === true && connection.status === "stored" && (now - Number(st?.received_ms || 0) < 60_000)),
+      terminal_error: st?.connected !== true ? (st?.terminal_error ?? null) : null,
       server: connection.status === "stored" ? (st?.server ?? null) : null, trade_mode: st?.account?.trade_mode ?? null, currency: st?.account?.currency ?? null,
       balance: st?.account?.balance ?? null, equity: st?.account?.equity ?? null, day_start_balance: st?.account?.day_start_balance ?? null, day_realized_pl: st?.account?.day_realized_pl ?? null,
       symbol: st?.symbol?.name ?? null, bid: st?.symbol?.bid ?? null, ask: st?.symbol?.ask ?? null, spread_points: st?.symbol?.spread_points ?? null,

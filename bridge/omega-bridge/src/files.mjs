@@ -257,3 +257,36 @@ export function consumeResults(
   pruneDoneResults(targetDir, { fs, maxKeep });
   return parsed;
 }
+
+/**
+ * Read the last relevant error from MT5 terminal logs (logs/YYYYMMDD.log)
+ * e.g. authorization failed, connection dropped, or symbol sync timeout.
+ *
+ * @param {string} terminalDir
+ * @param {{ fs?: typeof nodeFs }} [options]
+ * @returns {string | null}
+ */
+export function readTerminalLastError(terminalDir, { fs = nodeFs } = {}) {
+  try {
+    const logsDir = path.join(terminalDir, "logs");
+    if (!fs.existsSync(logsDir)) return null;
+    const files = fs.readdirSync(logsDir).filter((f) => /^\d{8}\.log$/.test(f)).sort().reverse();
+    if (files.length === 0) return null;
+    const buf = fs.readFileSync(path.join(logsDir, files[0]));
+    const str = buf.toString("utf16le");
+    const lines = str.split(/\r?\n/).filter(Boolean);
+    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 50); i--) {
+      const line = lines[i];
+      if (line.includes("failed") || line.includes("timeout") || line.includes("authorization")) {
+        const parts = line.split("\t");
+        const msg = parts.length >= 5 ? parts.slice(4).join(" ") : line;
+        if (msg.includes("failed") || msg.includes("timeout") || msg.includes("error")) {
+          return msg.trim().slice(0, 160);
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
