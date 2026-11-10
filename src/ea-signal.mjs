@@ -24,7 +24,7 @@
 // it carries no account number. The control (active, paused, killed) is set by Omega
 // (omega.cryptophys.work, src/ea-execution.mjs) and kept in KV under EA_CONTROL_KEY.
 
-import { eventRisk, gatedEvents } from "./econ-calendar.mjs";
+import { gatedEvents } from "./econ-calendar.mjs";
 import { decisionEngineEnabled, readLatestDecision, keyCloseMs } from "./decision-engine.mjs";
 
 export const EA_SIGNAL_VERSION = "cryptophys.ea-signal.v1";
@@ -95,8 +95,16 @@ export async function eaSignal(env, { now = Date.now() } = {}) {
   } catch { analysis = null; }
   let blackout = false, blackoutReason = null;
   try {
-    const r = eventRisk(await gatedEvents(env, { now }), now);
-    if (r.active.length) { blackout = true; blackoutReason = r.active.map((e) => e.title ?? e.event ?? "high-impact USD event").join("; ").slice(0, 160); }
+    const blackoutMinutes = Number(env?.BLACKOUT_MINUTES);
+    const beforeMs = Math.max(0, (Number.isFinite(blackoutMinutes) ? blackoutMinutes : (Number(env?.BLACKOUT_BEFORE_MINUTES) || 120))) * 60_000;
+    const afterMs = Math.max(0, (Number.isFinite(blackoutMinutes) ? blackoutMinutes : (Number(env?.BLACKOUT_AFTER_MINUTES) || 30))) * 60_000;
+    const events = await gatedEvents(env, { now });
+    const active = (Array.isArray(events) ? events : []).filter((e) => {
+      const t = Date.parse(e?.time ?? e?.date ?? e?.datetime ?? e?.start ?? "");
+      if (!Number.isFinite(t)) return false;
+      return now >= t - beforeMs && now <= t + afterMs;
+    });
+    if (active.length) { blackout = true; blackoutReason = active.map((e) => e.title ?? e.event ?? e.name ?? "high-impact USD event").join("; ").slice(0, 160); }
   } catch { blackout = false; }
   let marketPrice = null, marketMs = null;
   try {

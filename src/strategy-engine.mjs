@@ -25,6 +25,7 @@ import { buildKeyLevels } from "./key-level-agent.mjs";
 import { eventRisk, eventCaution, gatedEvents } from "./econ-calendar.mjs";
 import { verifiedM5Confirmation } from "./m5-verification.mjs";
 import { setupType } from "./level-readers.mjs";
+import { orderImbalance } from "./producer/m5-orderbook.mjs";
 
 export const STRATEGY_VERSION = "cryptophys.strategy-engine.v1";
 export const TREND_WEIGHTS = Object.freeze({ D1: 0.5, H4: 0.5 });
@@ -181,7 +182,33 @@ export async function loadOwnTimeframePlanInputs(env) {
 }
 
 /** Vetoes and cautions for a direction from the 1H and 15m HUD snapshots, the news and the economic calendar. */
-export function riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar = null, now = Date.now() }) {
+export function compositeSentimentLocal({ news = null, macro = null, newsLean = null, macroScore = null } = {}) {
+  let nl = isNum(newsLean) ? newsLean : null;
+  if (nl == null && news) {
+    if (isNum(news.lean)) nl = news.lean;
+    else if (news.counts) {
+      const c = news.counts;
+      const b = Number(c.bullish) || 0, s = Number(c.bearish) || 0, n = Number(c.neutral) || 0;
+      if (b + s + n) nl = (b - s) / (b + s + n);
+    } else if (news?.tldr?.status === "ok") {
+      nl = (news.tldr.stance === "BUY" || news.tldr.stance === "BULLISH" ? 1 : news.tldr.stance === "SELL" || news.tldr.stance === "BEARISH" ? -1 : 0) * (isNum(news.tldr.confidence) ? news.tldr.confidence : 0.5);
+    }
+  }
+  let ms = isNum(macroScore) ? macroScore : null;
+  if (ms == null && macro) {
+    const mc = macro?.conclusion?.status === "ok" ? macro.conclusion : macro?.conclusion ?? null;
+    if (mc && isNum(mc.confidence)) ms = (mc.bias === "BULLISH" || mc.bias === "BUY" ? 1 : mc.bias === "BEARISH" || mc.bias === "SELL" ? -1 : 0) * mc.confidence;
+    else if (isNum(macro.lean)) ms = macro.lean;
+    else if (isNum(macro.score)) ms = macro.score;
+  }
+  const parts = [];
+  if (isNum(nl)) parts.push({ v: nl, w: 0.5 });
+  if (isNum(ms)) parts.push({ v: ms, w: 0.5 });
+  if (!parts.length) return null;
+  const tw = parts.reduce((s, p) => s + p.w, 0);
+  return Math.round((parts.reduce((s, p) => s + p.v * p.w, 0) / tw) * 100) / 100;
+}
+export function riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar = null, macro = null, macroScore = null, composite = null, mode = null, tradingMode = null, env = null, now = Date.now() }) {
   const vetoes = [], cautions = [];
   const dm = h1Snapshot?.huds?.decision_matrix?.fields || {};
   const tm = h1Snapshot?.huds?.trade_management?.fields || {};
@@ -200,6 +227,12 @@ export function riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar = null
   // before to 30 minutes after it is a caution, never a forced WAIT.
   const event = Array.isArray(calendar?.events) ? eventCaution(eventRisk(calendar.events, now)) : null;
   if (event) cautions.push(event);
+  const MODE = String(mode ?? tradingMode ?? env?.TRADING_MODE ?? "intraday").trim().toLowerCase();
+  const cs = isNum(composite) ? composite : compositeSentimentLocal({ news, macro, macroScore });
+  if (MODE === "swing" && isNum(cs) && dir) {
+    if (dir * cs <= -0.6) vetoes.push("swing mode: composite sentiment leans strongly against the trade");
+    else if (dir * cs < 0) cautions.push("swing mode: composite sentiment leans against the trade");
+  }
   return { vetoes, cautions };
 }
 
@@ -225,7 +258,7 @@ export function triggerOf(dir, { confirmations, m15Snapshot }) {
  * Pure: the strategy from the four War Rooms (every agent's bias), News Daily, the 1H and 15m HUD
  * snapshots, the latest confirmations and the closed 1H and 15m bars.
  */
-export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, calendar = null, m5Price = null, now = Date.now() } = {}, params = STRATEGY_PARAMS) {
+export function buildStrategy({ rooms = {}, news = null, macro = null, macroScore = null, mode = null, tradingMode = null, env = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, calendar = null, m5Price = null, now = Date.now() } = {}, params = STRATEGY_PARAMS) {
   const P = params === STRATEGY_PARAMS ? params : { ...STRATEGY_PARAMS, ...params };
   const LEAN = P.lean, MIN_RRR = P.min_rrr, MIN_CONFIDENCE = P.min_confidence;
   const layers = Object.fromEntries(["D1", "H4", "H1", "M15"].map((k) => [k, roomLayer(k, rooms[k], now)]));
@@ -267,7 +300,7 @@ export function buildStrategy({ rooms = {}, news = null, h1Snapshot = null, m15S
   const setup = setupType({ dir, price, m15Plane: m15Snapshot?.chart_plane ?? null, h1Plane: h1Snapshot?.chart_plane ?? null, near: isNum(atrH1) ? P.near_atr * atrH1 : null });
   const setupNote = setup.type === "none" ? null : `${setup.type === "continuation_pullback" ? "a pullback with the trend" : "a stretched sweep into liquidity"}: ${setup.evidence.join(", ")}`;
   const plan = dir ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr }) : null;
-  const { vetoes, cautions } = riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar, now });
+  const { vetoes, cautions } = riskChecks(dir, { h1Snapshot, m15Snapshot, news, macro, macroScore, mode: mode ?? tradingMode ?? env?.TRADING_MODE, env, calendar, now });
   const trigger = triggerOf(dir, { confirmations, m15Snapshot });
 
   let confidence = dir ? 0.6 * alignment + (plan?.at_level ? 0.15 : 0) + (trigger.fired ? 0.2 : 0) - 0.1 * cautions.length - (Object.values(layers).some((l) => l.stale) ? 0.1 : 0) : 0;
@@ -336,7 +369,8 @@ export async function liveM5Inputs(env, { now = Date.now(), context = null } = {
   const recentSell = recent.some((c) => c?.sell_confirmed === true && now - Date.parse(c.candle_time) <= M5_LIVE_MAX_AGE_MS);
   return {
     confirmation: { buy_confirmed: ctx.buy_confirmed === true || recentBuy, sell_confirmed: ctx.sell_confirmed === true || recentSell, verified, candle_time: new Date(t).toISOString() },
-    price: isNum(last?.c) ? last.c : null
+    price: isNum(last?.c) ? last.c : null,
+    order_imbalance: orderImbalance(ctx)
   };
 }
 

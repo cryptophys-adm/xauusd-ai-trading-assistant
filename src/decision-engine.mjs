@@ -49,6 +49,7 @@ const M15_MS = 900_000;
 export const WITNESS_WEIGHTS = Object.freeze({ D1: 0.2, H4: 0.2, H1: 0.2, M15: 0.15, NEWS: 0.1, MACRO: 0.05, STRATEGY: 0.1 });
 export const QUORUM_MIN = 0.5;
 export const LEAN = 0.15;
+export const QUORUM_DECAY_PER_HOUR = 0.9;
 export const MIN_RRR = STRATEGY_PARAMS.min_rrr;
 export const MIN_CONFIDENCE = STRATEGY_PARAMS.min_confidence;
 export const COUNCIL_DEADLINE_MS = 90_000;
@@ -112,17 +113,59 @@ export function witnessCards({ global = null, strategy = null } = {}) {
 }
 
 /** Pure: the weighted quorum of the counting witnesses: the score and each side's share of the weight. */
-export function quorumOf(cards) {
+const _decayFactor = (c, now, decayPerHour) => {
+  const t = Date.parse(String(c?.at ?? ""));
+  if (!Number.isFinite(t)) return 1;
+  const ageHours = Math.max(0, (now - t) / 3_600_000);
+  const f = Number(decayPerHour);
+  if (!Number.isFinite(f) || f <= 0 || f > 1) return 1;
+  return Math.pow(f, ageHours);
+};
+export function quorumOf(cards, { now = Date.now(), decayPerHour = QUORUM_DECAY_PER_HOUR } = {}) {
   const counting = (cards || []).filter((c) => c.available && !c.stale && isNum(c.lean));
-  const total = counting.reduce((s, c) => s + c.weight, 0);
-  if (!total) return { score: null, bias: "NEUTRAL", long_share: 0, short_share: 0, neutral_share: 0, witnesses: 0, weight: 0 };
-  const share = (pred) => r2(counting.filter(pred).reduce((s, c) => s + c.weight, 0) / total);
-  const score = r2(counting.reduce((s, c) => s + c.weight * c.lean, 0) / total);
+  const decayed = counting.map((c) => ({ ...c, _w: c.weight * _decayFactor(c, now, decayPerHour) }));
+  const allWeight = decayed.reduce((s, c) => s + c._w, 0);
+  if (!allWeight) return { score: null, bias: "NEUTRAL", long_share: 0, short_share: 0, neutral_share: 0, witnesses: 0, weight: 0 };
+  // Neutral witnesses are excluded from the quorum denominator (G-06): only directional weight counts.
+  const directional = decayed.filter((c) => Math.abs(c.lean) >= LEAN);
+  const dirWeight = directional.reduce((s, c) => s + c._w, 0);
+  const total = dirWeight > 0 ? dirWeight : allWeight;
+  const share = (pred) => r2(directional.filter(pred).reduce((s, c) => s + c._w, 0) / total);
+  const score = r2(decayed.reduce((s, c) => s + c._w * c.lean, 0) / allWeight);
   return {
     score, bias: sideOf(score),
-    long_share: share((c) => c.lean >= LEAN), short_share: share((c) => c.lean <= -LEAN), neutral_share: share((c) => Math.abs(c.lean) < LEAN),
-    witnesses: counting.length, weight: r2(total)
+    long_share: share((c) => c.lean >= LEAN), short_share: share((c) => c.lean <= -LEAN),
+    neutral_share: r2((allWeight - dirWeight) / allWeight),
+    witnesses: counting.length, weight: r2(allWeight)
   };
+}
+
+// ---------------------------------------------------------------- composite sentiment
+export function compositeSentiment({ news = null, macro = null, newsLean = null, macroScore = null } = {}) {
+  let nl = isNum(newsLean) ? newsLean : null;
+  if (nl == null && news) {
+    if (isNum(news.lean)) nl = news.lean;
+    else if (news.counts) {
+      const c = news.counts;
+      const b = Number(c.bullish) || 0, s = Number(c.bearish) || 0, n = Number(c.neutral) || 0;
+      if (b + s + n) nl = (b - s) / (b + s + n);
+    } else if (news?.tldr?.status === "ok") {
+      nl = dirOf(news.tldr.stance) * (isNum(news.tldr.confidence) ? news.tldr.confidence : 0.5);
+    }
+  }
+  let ms = isNum(macroScore) ? macroScore : null;
+  if (ms == null && macro) {
+    const mc = macro?.conclusion?.status === "ok" ? macro.conclusion : macro?.conclusion ?? null;
+    if (mc && isNum(mc.confidence)) ms = dirOf(mc.bias ?? mc.stance ?? mc.action) * mc.confidence;
+    else if (isNum(macro.lean)) ms = macro.lean;
+    else if (isNum(macro.score)) ms = macro.score;
+  }
+  const parts = [];
+  if (isNum(nl)) parts.push({ v: nl, w: 0.5 });
+  if (isNum(ms)) parts.push({ v: ms, w: 0.5 });
+  if (!parts.length) return null;
+  const tw = parts.reduce((s, p) => s + p.w, 0);
+  return r2(parts.reduce((s, p) => s + p.v * p.w, 0) / tw);
 }
 
 // ---------------------------------------------------------------- guardrails
@@ -131,10 +174,10 @@ export function quorumOf(cards) {
  * Pure: the guardrails for one side (dir +1 long, -1 short) and the plan the side would trade.
  * `inputs` are the strategy engine's inputs (snapshots, news, calendar, confirmations).
  */
-export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, now = Date.now() }) {
+export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro = null, now = Date.now(), env = null }) {
   // ---- Adaptive mode handling ------------------------------------------------
-  // Expected env variable set via Cloudflare Workers environment
-  const MODE = (process && process.env && process.env.TRADING_MODE) || "intraday";
+  // Cloudflare Workers: env is threaded in; process.env does not exist here.
+  const MODE = String(env?.TRADING_MODE ?? "intraday").trim().toLowerCase();
   // Adaptive thresholds per mode
   const QUORUM_MIN = MODE === "scalp" ? 0.45 : MODE === "swing" ? 0.6 : 0.5;
   const MIN_RRR = MODE === "scalp" ? 1.2 : MODE === "swing" ? 2.0 : 1.5;
@@ -161,7 +204,7 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, now =
   try { trigger = triggerOf(dir, { confirmations: inputs.confirmations ?? null, m15Snapshot: inputs.m15Snapshot ?? null }); } catch { /* none */ }
   add("confirmation", roomConfirmed.length > 0 || trigger.fired, roomConfirmed.length ? `the ${roomConfirmed.map((k) => card(k).label).join(" and ")} room decided ${side}` : trigger.fired ? trigger.note : `no room decided ${side} and ${trigger.note}`);
   let risk = { vetoes: [], cautions: [] };
-  try { risk = riskChecks(dir, { h1Snapshot: inputs.h1Snapshot ?? null, m15Snapshot: inputs.m15Snapshot ?? null, news: inputs.news ?? null, calendar: inputs.calendar ?? null, now }); } catch { /* none */ }
+  try { risk = riskChecks(dir, { h1Snapshot: inputs.h1Snapshot ?? null, m15Snapshot: inputs.m15Snapshot ?? null, news: inputs.news ?? null, macro: macro ?? inputs.macro ?? null, calendar: inputs.calendar ?? null, mode: env?.TRADING_MODE ?? null, env, now }); } catch { /* none */ }
   add("no_veto", !risk.vetoes.length, risk.vetoes.length ? risk.vetoes.join("; ") : "no veto");
   const plan = planForDirection(strategy, dir);
   add("levels", Boolean(plan), plan ? `entry ${plan.entry_note}, stop ${plan.stop_note}` : "no key-level plan (price, 1H range or zones missing)");
@@ -408,18 +451,18 @@ export async function notifyDecision(env, d, send) {
 }
 
 /** Pure: the witnesses, the quorum and both sides' guardrails (with their plans) from the loaded inputs. */
-export function assess(loaded, { now = Date.now() } = {}) {
-  const { inputs = {}, strategy = null, global = null } = loaded || {};
+export function assess(loaded, { now = Date.now(), env = null } = {}) {
+  const { inputs = {}, strategy = null, global = null, macro = null } = loaded || {};
   const cards = witnessCards({ global, strategy });
-  const quorum = quorumOf(cards);
-  const guards = { long: guardrailsFor(1, { cards, quorum, strategy, inputs, now }), short: guardrailsFor(-1, { cards, quorum, strategy, inputs, now }) };
+  const quorum = quorumOf(cards, { now });
+  const guards = { long: guardrailsFor(1, { cards, quorum, strategy, inputs, macro, now, env }), short: guardrailsFor(-1, { cards, quorum, strategy, inputs, macro, now, env }) };
   return { cards, quorum, guards };
 }
 
 /** Pure: the whole decision record from the loaded inputs, their assessment and the council's result (or null). */
-export function buildDecisionRecord({ key, barClose, loaded, assessment = null, council = null, previous = null, now = Date.now(), decidedAt = new Date(now).toISOString() }) {
+export function buildDecisionRecord({ key, barClose, loaded, assessment = null, council = null, previous = null, now = Date.now(), decidedAt = new Date(now).toISOString(), env = null }) {
   const { inputs = {}, strategy = null } = loaded || {};
-  const { cards, quorum, guards } = assessment ?? assess(loaded, { now });
+  const { cards, quorum, guards } = assessment ?? assess(loaded, { now, env });
   const answer = council?.answer ?? null;
   const d = decide({ answer, guards, strategy, quorum });
   let text;
@@ -496,10 +539,10 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     if (await env.DB.prepare("SELECT 1 AS x FROM engine_decisions WHERE decision_key = ?").bind(key).first()) return { status: "already_decided", decision_key: key };
     const previous = await readLatestDecision(env);
     const data = loaded ?? await loadDecisionInputs(env, { now });
-    const assessment = assess(data, { now });
+    const assessment = assess(data, { now, env });
     const context = councilContext({ inputs: data.inputs, correlations: data.correlations, regime: data.regime, previous, now });
     const council = await askCouncil(env, councilEvidence({ barClose: closeIso, cards: assessment.cards, quorum: assessment.quorum, guards: assessment.guards, context }), { clock });
-    const record = buildDecisionRecord({ key, barClose: closeIso, loaded: data, assessment, council, previous, now, decidedAt: new Date(clock()).toISOString() });
+    const record = buildDecisionRecord({ key, barClose: closeIso, loaded: data, assessment, council, previous, now, decidedAt: new Date(clock()).toISOString(), env });
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(key, closeIso, record.decided_at, record.stance, record.confidence ?? null, record.source, JSON.stringify(record)).run();
     if (!Number(ins?.meta?.changes)) return { status: "already_decided", decision_key: key };
