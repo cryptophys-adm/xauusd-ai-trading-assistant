@@ -2225,9 +2225,17 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   }
   if (url.pathname === "/api/ledger") {
     // Signal Ledger: every directional signal followed to its outcome in R (advisory, never money).
+    // Plus synchronized Omega MT5 broker execution & TCA telemetry.
     try {
       const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") || "30") || 30));
-      return dashboardJson({ status: "ok", ledger: await readLedger(env, { days }) });
+      const [ledger, omega] = await Promise.all([
+        readLedger(env, { days }),
+        brokerOverview(env).catch((err) => {
+          console.warn("brokerOverview in ledger endpoint failed:", err);
+          return null;
+        })
+      ]);
+      return dashboardJson({ status: "ok", ledger, omega });
     } catch (error) {
       console.error("ledger_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
