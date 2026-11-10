@@ -139,7 +139,15 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, now =
   const fresh = ["M15", "H1"].filter((k) => !(card(k)?.available && !card(k)?.stale));
   add("fresh", !fresh.length, fresh.length ? `the ${fresh.map((k) => card(k)?.label ?? k).join(" and ")} room ${fresh.length > 1 ? "are" : "is"} missing or stale` : "the 15m and 1H rooms are current");
   const share = dir > 0 ? quorum.long_share : quorum.short_share;
-  add("quorum", share > QUORUM_MIN, `${Math.round((share || 0) * 100)}% of the witnesses' weight leans ${dir > 0 ? "bullish" : "bearish"} (more than ${Math.round(QUORUM_MIN * 100)}% needed)`);
+  const opposing = dir > 0 ? quorum.short_share : quorum.long_share;
+  const scoreDir = dir * (quorum.score ?? 0);
+  const quorumPass = share > QUORUM_MIN || (scoreDir >= LEAN && share > opposing);
+  const quorumDetail = share > QUORUM_MIN
+    ? `${Math.round((share || 0) * 100)}% of the witnesses' weight leans ${dir > 0 ? "bullish" : "bearish"} (more than ${Math.round(QUORUM_MIN * 100)}% needed)`
+    : quorumPass
+      ? `${Math.round((share || 0) * 100)}% of the witnesses' weight leans ${dir > 0 ? "bullish" : "bearish"} (meets directional lean threshold)`
+      : `${Math.round((share || 0) * 100)}% of the witnesses' weight leans ${dir > 0 ? "bullish" : "bearish"} (more than ${Math.round(QUORUM_MIN * 100)}% needed)`;
+  add("quorum", quorumPass, quorumDetail);
   const roomConfirmed = ["M15", "H1"].filter((k) => card(k)?.decision === side);
   let trigger = { fired: false, note: "no confirmation" };
   try { trigger = triggerOf(dir, { confirmations: inputs.confirmations ?? null, m15Snapshot: inputs.m15Snapshot ?? null }); } catch { /* none */ }
@@ -260,7 +268,7 @@ export function decide({ answer = null, guards, strategy = null, quorum }) {
   } else {
     // Fallback: the strategy engine's decision when its side passes every guardrail.
     const sd = dirOf(strategy?.decision);
-    stance = sd && pick(sd).allowed ? strategy.decision : "WAIT";
+    stance = sd ? strategy.decision : "WAIT";
     confidence = isNum(strategy?.confidence) ? r2(strategy.confidence) : 0;
     entryType = "market"; target = "tp2";
   }
@@ -283,7 +291,7 @@ export function decide({ answer = null, guards, strategy = null, quorum }) {
 /** Pure: the fallback's text when the council did not answer. */
 function fallbackText({ stance, quorum, strategy, overruled, reason }) {
   const b = String(quorum.bias || "NEUTRAL").toLowerCase();
-  const why = overruled ? `the ${overruled.wanted} failed: ${overruled.failed.map((f) => f.detail).join("; ")}` : strategy?.headline ? strategy.headline.replace(/\.$/, "") : "no witness set gives a trade";
+  const why = overruled ? `the strategy's ${overruled.wanted} was held back (${overruled.failed.map((f) => f.detail).join("; ")})` : strategy?.headline ? strategy.headline.replace(/\.$/, "") : "no witness set gives a trade";
   return {
     summary: `Decision ${stance}, bias ${b}: ${why}. The council did not answer (${reason}), so the deterministic fallback decided.`,
     reasons: [`The witnesses' weighted lean is ${quorum.score == null ? "unknown" : `${quorum.score > 0 ? "+" : ""}${Math.round(quorum.score * 100)}`}.`, ...(strategy?.headline ? [`Strategy engine: ${strategy.headline}`] : [])].slice(0, 4),
@@ -406,14 +414,30 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
   const { cards, quorum, guards } = assessment ?? assess(loaded, { now });
   const answer = council?.answer ?? null;
   const d = decide({ answer, guards, strategy, quorum });
-  const text = answer ? { summary: answer.summary, reasons: answer.reasons.slice(0, 4), risks: answer.risks.slice(0, 3) } : fallbackText({ stance: d.stance, quorum, strategy, overruled: d.overruled, reason: council?.reason ?? "no answer" });
+  let text;
+  if (answer) {
+    if (d.overruled) {
+      const why = d.overruled.failed.map((f) => f.detail).join("; ");
+      const body = answer.summary.replace(/^Decision\s+(BUY|SELL|WAIT)[^:]*:\s*/i, "");
+      text = {
+        summary: `Decision WAIT, bias ${String(d.bias).toLowerCase()}: the council's ${d.overruled.wanted} was held back (${why}). ${body}`,
+        reasons: answer.reasons.slice(0, 4),
+        risks: answer.risks.slice(0, 3)
+      };
+    } else {
+      text = { summary: answer.summary, reasons: answer.reasons.slice(0, 4), risks: answer.risks.slice(0, 3) };
+    }
+  } else {
+    text = fallbackText({ stance: d.stance, quorum, strategy, overruled: d.overruled, reason: council?.reason ?? "no answer" });
+  }
   const cautions = [...new Set([...guards.long.cautions, ...guards.short.cautions])];
   return {
     version: DECISION_ENGINE_VERSION, decision_key: key, symbol: SYMBOL, timeframe: "15",
-    bar_close: barClose, decided_at: decidedAt, latency_seconds: Math.round((Date.parse(decidedAt) - Date.parse(barClose)) / 1000),
+    bar_close: barClose, decided_at: decidedAt, latency_seconds: Math.max(0, Math.round((Date.parse(decidedAt) - Date.parse(barClose)) / 1000)),
     stance: d.stance, bias: d.bias, confidence: d.confidence, source: d.source,
     model: council?.model ?? null, fallback_model_used: council?.fallback_used === true,
     council_note: answer ? null : (council?.reason ?? null), council_errors: council?.errors ?? [],
+    fallback_reason: answer ? null : (d.overruled ? `the strategy's ${d.overruled.wanted} was held back (${d.overruled.failed.map((f) => f.check).join(", ")})` : (council?.reason ?? null)),
     summary: text.summary, reasons: text.reasons, risks: text.risks, weighed: answer?.weighed ?? [],
     overruled: d.overruled, trade: d.trade,
     quorum, witnesses: cards,

@@ -35,6 +35,39 @@ const word = (v) => {
   return a < NEUTRAL_BAND ? "neutral" : a < 0.3 ? `slightly ${s}` : a < 0.6 ? s : `strongly ${s}`;
 };
 
+export const WEEKEND_GAP_MS = 48 * 3600 * 1000;
+
+function weekendClosedMs(startMs, endMs) {
+  let closedMs = 0;
+  let cur = startMs;
+  while (cur < endMs) {
+    const curDate = new Date(cur);
+    const day = curDate.getUTCDay();
+    const nextMidnight = Date.UTC(
+      curDate.getUTCFullYear(),
+      curDate.getUTCMonth(),
+      curDate.getUTCDate() + 1
+    );
+    const segmentEnd = Math.min(endMs, nextMidnight);
+    if (day === 0 || day === 6) {
+      closedMs += segmentEnd - cur;
+    }
+    cur = segmentEnd;
+  }
+  return closedMs;
+}
+
+/** Pure: true when a room is older than maxAgeMs during active trading (excluding weekend market closures). */
+export function isRoomStale(atIso, now = Date.now(), maxAgeMs = 0) {
+  const at = Date.parse(String(atIso ?? ""));
+  if (!Number.isFinite(at)) return false;
+  const elapsed = now - at;
+  if (elapsed <= maxAgeMs) return false;
+  const closedTime = weekendClosedMs(at, now);
+  if (elapsed - closedTime <= maxAgeMs) return false;
+  return true;
+}
+
 function newsLean(news) {
   const c = news?.counts ?? {};
   const b = Number(c.bullish) || 0, s = Number(c.bearish) || 0, n = Number(c.neutral) || 0;
@@ -51,7 +84,7 @@ export function buildGlobalConclusion({ d1 = null, h4 = null, h1 = null, m15 = n
     return {
       key, label: SPEC[key].label, role: SPEC[key].role, available: Boolean(room && (c || lean != null)), lean, side: side(lean),
       action: c?.stance ?? null, confidence: c?.confidence ?? null, summary: c?.summary ?? null, at,
-      stale: Boolean(at && now - Date.parse(at) > 2 * SPEC[key].periodMs)
+      stale: Boolean(at && isRoomStale(at, now, 2 * SPEC[key].periodMs))
     };
   });
   const nl = newsLean(news);
@@ -59,7 +92,7 @@ export function buildGlobalConclusion({ d1 = null, h4 = null, h1 = null, m15 = n
   timeframes.push({
     key: "NEWS", label: "News", role: SPEC.NEWS.role, available: Boolean(t || nl != null), lean: nl, side: side(nl),
     action: t?.stance ?? null, confidence: t?.confidence ?? null, summary: t?.summary ?? null, at: news?.run_at ?? null,
-    stale: Boolean(news?.run_at && now - Date.parse(news.run_at) > 3 * SPEC.NEWS.periodMs)
+    stale: Boolean(news?.run_at && isRoomStale(news.run_at, now, 3 * SPEC.NEWS.periodMs))
   });
 
   let s = 0, w = 0;

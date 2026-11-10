@@ -1906,7 +1906,17 @@ async function ingestM5Context(env: Env, payload: unknown, waitUntil?: (p: Promi
   }
   const kv = env.SIGNAL_CACHE;
   if (!kv || typeof kv.put !== "function") return { status: 503, body: { error: "kv_not_configured" } };
-  const stored = { ...p, received_at: new Date().toISOString() };
+  let recentConfirmations: Array<{ buy_confirmed: boolean; sell_confirmed: boolean; candle_time: string }> = [];
+  try {
+    const prev = JSON.parse((await kv.get("context:m5:latest")) || "null");
+    if (Array.isArray(prev?.recent_confirmations)) {
+      recentConfirmations = prev.recent_confirmations.filter((c: any) => Date.now() - Date.parse(c.candle_time) <= 16 * 60_000);
+    }
+  } catch { /* ignore */ }
+  if (p.buy_confirmed === true || p.sell_confirmed === true) {
+    recentConfirmations.push({ buy_confirmed: p.buy_confirmed === true, sell_confirmed: p.sell_confirmed === true, candle_time: String(p.candle_time) });
+  }
+  const stored = { ...p, recent_confirmations: recentConfirmations, received_at: new Date().toISOString() };
   await kv.put("context:m5:latest", JSON.stringify(stored), { expirationTtl: 900 });
   // Owner decision 2026-11-08: the 5m trigger is checked at every closed 5m bar, beside the reply.
   const evaluation = evaluateStrategyAtM5Close(env, stored);

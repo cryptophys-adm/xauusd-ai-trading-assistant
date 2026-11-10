@@ -121,7 +121,9 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNot
   const targetEdge = (z) => (dir > 0 ? lo(z) : hi(z));
   const ahead = levels.filter((z) => z.major !== false && dir * (targetEdge(z) - entry) >= gap).sort((a, b) => dir * (targetEdge(a) - targetEdge(b)));
   const t1 = ahead[0] ?? null;
-  const t2 = t1 ? ahead.find((z) => dir * (targetEdge(z) - targetEdge(t1)) >= gap) ?? null : null;
+  const t2 = t1
+    ? ahead.find((z) => dir * (targetEdge(z) - targetEdge(t1)) >= gap && Math.abs(targetEdge(z) - entry) / risk >= 1.5) ?? null
+    : null;
   const tp1 = t1 ? targetEdge(t1) : entry + dir * 2 * risk;
   const tp2 = t2 ? targetEdge(t2) : entry + dir * Math.max(3 * risk, Math.abs(tp1 - entry) + risk);
   const rr = (tp) => r2(Math.abs(tp - entry) / risk);
@@ -201,14 +203,20 @@ export function riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar = null
   return { vetoes, cautions };
 }
 
-/** The entry trigger in a direction: a verified 5m confirmation or the 15m Prophet confirmation. */
+/** The entry trigger in a direction: a verified 5m confirmation or the 15m Prophet confirmation/setup state. */
 export function triggerOf(dir, { confirmations, m15Snapshot }) {
   if (!dir) return { fired: false, source: null, note: "no direction to confirm" };
   const side = dir > 0 ? "buy_confirmed" : "sell_confirmed";
+  const readySide = dir > 0 ? "buy_setup_ready" : "sell_setup_ready";
   const m5 = confirmations?.m5_prophet_r38;
   const at = typeof m5?.candle_time === "string" ? ` on the 5m bar closing ${m5.candle_time.slice(11, 16)} UTC` : "";
   if (m5?.verified === true && m5[side] === true) return { fired: true, source: "5m", note: `a verified 5m Prophet ${dir > 0 ? "buy" : "sell"} confirmation${at}` };
+  const c15 = confirmations?.chart_prophet_r38;
+  if (c15?.[side] === true) return { fired: true, source: "15m", note: `a 15m Prophet ${dir > 0 ? "buy" : "sell"} confirmation` };
+  if (c15?.[readySide] === true) return { fired: true, source: "15m", note: `a 15m Prophet ${dir > 0 ? "buy" : "sell"} setup is ready` };
   if (m15Snapshot?.huds?.r37_funnel?.fields?.[side] === true) return { fired: true, source: "15m", note: `a 15m Prophet ${dir > 0 ? "buy" : "sell"} confirmation` };
+  if (m15Snapshot?.huds?.prophet?.fields?.[side] === true) return { fired: true, source: "15m", note: `a 15m Prophet ${dir > 0 ? "buy" : "sell"} confirmation` };
+  if (m15Snapshot?.huds?.prophet?.fields?.[readySide] === true) return { fired: true, source: "15m", note: `a 15m Prophet ${dir > 0 ? "buy" : "sell"} setup is ready` };
   if (m5?.[side] === true && m5.verified !== true) return { fired: false, source: null, note: "the 5m confirmation is unverified, so it does not count" };
   return { fired: false, source: null, note: `waiting for a verified 5m (or 15m) Prophet ${dir > 0 ? "buy" : "sell"} confirmation` };
 }
@@ -306,7 +314,7 @@ async function seriesCandles(env, interval) {
 }
 
 /** A 5m context counts for the trigger while its bar closed at most this long ago. */
-export const M5_LIVE_MAX_AGE_MS = 10 * 60_000;
+export const M5_LIVE_MAX_AGE_MS = 16 * 60_000;
 
 /**
  * The live 5m inputs (owner decision 2026-11-08, "the confirmation is critical"): the Prophet R38
@@ -323,8 +331,11 @@ export async function liveM5Inputs(env, { now = Date.now(), context = null } = {
   let verified = false;
   try { verified = (await verifiedM5Confirmation(env, ctx.candle_time)).verified === true; } catch { verified = false; }
   const last = Array.isArray(ctx.recent_bars) ? ctx.recent_bars.at(-1) : null;
+  const recent = Array.isArray(ctx.recent_confirmations) ? ctx.recent_confirmations : [];
+  const recentBuy = recent.some((c) => c?.buy_confirmed === true && now - Date.parse(c.candle_time) <= M5_LIVE_MAX_AGE_MS);
+  const recentSell = recent.some((c) => c?.sell_confirmed === true && now - Date.parse(c.candle_time) <= M5_LIVE_MAX_AGE_MS);
   return {
-    confirmation: { buy_confirmed: ctx.buy_confirmed === true, sell_confirmed: ctx.sell_confirmed === true, verified, candle_time: new Date(t).toISOString() },
+    confirmation: { buy_confirmed: ctx.buy_confirmed === true || recentBuy, sell_confirmed: ctx.sell_confirmed === true || recentSell, verified, candle_time: new Date(t).toISOString() },
     price: isNum(last?.c) ? last.c : null
   };
 }
