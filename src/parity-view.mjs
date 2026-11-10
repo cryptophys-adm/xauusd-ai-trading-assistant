@@ -44,6 +44,16 @@ export async function readParityView(db, { now = Date.now(), limit = 40 } = {}) 
   const day = (await db.prepare("SELECT engine, result, COUNT(*) AS n FROM engine_parity_comparisons WHERE compared_at >= ? GROUP BY engine, result").bind(since).all()).results || [];
   const last24h = {};
   for (const d of day) (last24h[d.engine] ||= {})[d.result] = Number(d.n) || 0;
+  const health = shapeRegistry(rows)
+    .filter((r) => r.current)
+    .map((r) => ({
+      engine: r.engine, base: r.base, timeframe: r.timeframe, label: r.label,
+      status: r.status, consecutive_matches: r.consecutive_matches, promote_after: r.promote_after,
+      mismatches_24h: (last24h[r.engine]?.mismatch || 0) + (last24h[r.engine]?.input_mismatch || 0),
+      revoked: Boolean(r.revoked_at),
+      ok: r.status === "approved" && !r.revoked_at && ((last24h[r.engine]?.mismatch || 0) === 0)
+    }))
+    .sort((a, b) => Number(a.ok) - Number(b.ok) || a.engine.localeCompare(b.engine));
   return {
     policy: { promote_after: DEFAULT_POLICY.promoteAfter, rule: "an identity is approved after consecutive matching candles; any indicator mismatch revokes it; an incomplete comparison neither advances nor resets the streak" },
     registry: shapeRegistry(rows),
@@ -51,6 +61,7 @@ export async function readParityView(db, { now = Date.now(), limit = 40 } = {}) 
       const d = parse(c.detail);
       return { engine: c.engine, timeframe: engineTimeframe(c.engine), label: engineLabel(c.engine), candle_key: c.candle_key, result: c.result, compared_at: c.compared_at, mismatches: Array.isArray(d?.mismatches) ? d.mismatches.slice(0, 3).map((m) => m?.field ?? m?.path ?? String(m)).filter(Boolean) : [] };
     }),
-    last_24h: last24h
+    last_24h: last24h,
+    health
   };
 }
