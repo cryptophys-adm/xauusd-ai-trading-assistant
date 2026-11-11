@@ -13,7 +13,7 @@
 
 import { ingestCorpus, ingestCorpusMacro, ingestMt5Calendar } from "./corpus-oracle.mjs";
 import { eaSignal, readControl } from "./ea-signal.mjs";
-import { storeDeal } from "./ea-execution.mjs";
+import { storeDeal, dealStats } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 
@@ -273,7 +273,8 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           signal_id: d.signal_id,
           opened_ms: d.opened_ms,
           closed_ms: d.closed_ms,
-          currency: executor?.account?.currency || "USD"
+          currency: executor?.account?.currency || "USD",
+          source: d.source
         }, { now });
       } catch {
         // Ignored; deals persistence should not disrupt sync cycle
@@ -553,25 +554,78 @@ export const OMEGA_POLICY_BOUNDS = Object.freeze({
 
 function clamp(v, b) { return Math.min(b.max, Math.max(b.min, v)); }
 
-export async function applyOmegaPolicy(env, { now = Date.now() } = {}) {
+// B-12 (issue #227, owner 2026-11-11 "All"): Aether's policy pack, pulled hourly by pullOmegaPolicy
+// (src/omega-policy.mjs) into KV omega:policy, applied here within the hard bounds above only while the
+// owner's switch is on (OMEGA_POLICY_AUTO or the page's policy_auto). Each change is audited
+// (omega_events "settings", actor aether) and reported; after OMEGA_POLICY_ROLLBACK_TRADES Omega trades
+// under it, a policy whose profit factor is below 1 and below the one before it is reverted (actor
+// aether-rollback) and its doctrine sha is not applied again.
+export const OMEGA_POLICY_KEY = "omega:policy";
+export const OMEGA_POLICY_APPLIED_KEY = "omega:policy:applied";
+export const OMEGA_POLICY_ROLLBACK_TRADES = 50;
+const POLICY_FIELDS = Object.keys(OMEGA_POLICY_BOUNDS);
+const pick = (o) => Object.fromEntries(POLICY_FIELDS.filter((k) => o?.[k] != null).map((k) => [k, o[k]]));
+
+async function omegaTradeStats(env, { sinceMs = null, beforeMs = null, limit = OMEGA_POLICY_ROLLBACK_TRADES } = {}) {
+  try {
+    const where = ["source = 'omega'"], args = [];
+    if (sinceMs != null) { where.push("closed_ms > ?"); args.push(sinceMs); }
+    if (beforeMs != null) { where.push("closed_ms <= ?"); args.push(beforeMs); }
+    const order = sinceMs != null ? "ASC" : "DESC";
+    const rows = (await env.DB.prepare(`SELECT profit, commission, swap FROM ea_deals WHERE ${where.join(" AND ")} ORDER BY closed_ms ${order} LIMIT ?`).bind(...args, limit).all())?.results || [];
+    return dealStats(rows);
+  } catch { return dealStats([]); }
+}
+
+export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } = {}) {
   const current = await readSettings(env);
   const envOn = String(env?.OMEGA_POLICY_AUTO ?? "").trim().toLowerCase() === "true";
   if (!envOn && current.settings?.policy_auto !== true) return { status: "disabled" };
+  const kv = env?.SIGNAL_CACHE;
+  let applied = null;
+  try { applied = JSON.parse((await kv?.get?.(OMEGA_POLICY_APPLIED_KEY)) || "null"); } catch { applied = null; }
+
+  // The rollback check of the policy in force.
+  if (applied && !applied.evaluated) {
+    const after = await omegaTradeStats(env, { sinceMs: Date.parse(applied.at) });
+    if (after.trades >= OMEGA_POLICY_ROLLBACK_TRADES) {
+      const before = applied.baseline;
+      const worse = after.profit_factor != null && after.profit_factor < 1 && (before?.profit_factor == null || after.profit_factor < before.profit_factor);
+      const record = { ...applied, evaluated: true, evaluated_at: new Date(now).toISOString(), after };
+      if (worse) {
+        const r = await writeSettings(env, { body: { ...current.settings, ...applied.from }, actor: "aether-rollback" }, { now });
+        record.rolled_back = r.ok === true;
+        record.rejected_shas = [...new Set([...(applied.rejected_shas || []), applied.sha])];
+        await kv?.put?.(OMEGA_POLICY_APPLIED_KEY, JSON.stringify(record));
+        if (typeof notify === "function") await notify(`XAUUSD SYSTEM · Omega policy rolled back: after ${after.trades} trades its profit factor was ${after.profit_factor} (before: ${before?.profit_factor ?? "—"}). The previous risk settings are back; this doctrine version will not be applied again.`).catch(() => {});
+        return { status: "rolled_back", after, before };
+      }
+      await kv?.put?.(OMEGA_POLICY_APPLIED_KEY, JSON.stringify(record));
+    }
+  }
+
   let raw = null;
-  try { raw = await env?.SIGNAL_CACHE?.get?.("omega:policy"); } catch { raw = null; }
+  try { raw = await kv?.get?.(OMEGA_POLICY_KEY); } catch { raw = null; }
   if (!raw) return { status: "no_policy" };
   let policy = null;
   try { policy = JSON.parse(raw); } catch { return { status: "invalid_policy" }; }
   if (!policy || typeof policy !== "object") return { status: "invalid_policy" };
+  if (policy.doctrine_sha && (applied?.rejected_shas || []).includes(policy.doctrine_sha)) return { status: "rejected_sha" };
   const body = { ...current.settings };
-  for (const k of Object.keys(OMEGA_POLICY_BOUNDS)) {
-    if (policy[k] != null && Number.isFinite(Number(policy[k]))) {
-      body[k] = clamp(Number(policy[k]), OMEGA_POLICY_BOUNDS[k]);
-    }
+  for (const k of POLICY_FIELDS) {
+    if (policy[k] != null && Number.isFinite(Number(policy[k]))) body[k] = clamp(Number(policy[k]), OMEGA_POLICY_BOUNDS[k]);
   }
+  const from = pick(current.settings), to = pick(body);
+  if (POLICY_FIELDS.every((k) => from[k] === to[k])) return { status: "unchanged" };
   const r = await writeSettings(env, { body, actor: "aether" }, { now });
   if (!r.ok) return { status: "failed", error: r.error };
-  return { status: "applied", settings: r.settings, version: r.version };
+  const baseline = await omegaTradeStats(env, { beforeMs: now });
+  await kv?.put?.(OMEGA_POLICY_APPLIED_KEY, JSON.stringify({ sha: policy.doctrine_sha ?? null, at: new Date(now).toISOString(), from, to, baseline, evaluated: false, rejected_shas: applied?.rejected_shas || [] }));
+  if (typeof notify === "function") {
+    const changes = POLICY_FIELDS.filter((k) => from[k] !== to[k]).map((k) => `${k.replace(/_/g, " ")} ${from[k] ?? "—"} → ${to[k]}`).join(", ");
+    await notify(`XAUUSD SYSTEM · Omega policy applied from Aether's doctrine: ${changes}. It is checked after ${OMEGA_POLICY_ROLLBACK_TRADES} Omega trades and rolled back if it loses.`).catch(() => {});
+  }
+  return { status: "applied", settings: r.settings, version: r.version, from, to };
 }
 
 /**
