@@ -14,5 +14,8 @@ export function bridgeKey(env: unknown, options?: { now?: number }): Promise<Rec
 export function executorFrom(state: unknown): Record<string, any> | null;
 export function bridgeSync(env: unknown, input?: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown; corpusMacro?: unknown; calendar?: unknown }, options?: { now?: number; signal?: Record<string, any> }): Promise<Record<string, any>>;
 export function brokerOverview(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
-export function applyOmegaPolicy(env: unknown, options?: { now?: number }): Promise<Record<string, unknown>>;
+export function applyOmegaPolicy(env: unknown, options?: { now?: number; notify?: ((text: string) => Promise<void>) | null }): Promise<Record<string, unknown>>;
+export const OMEGA_POLICY_KEY: string;
+export const OMEGA_POLICY_APPLIED_KEY: string;
+export const OMEGA_POLICY_ROLLBACK_TRADES: number;
 export function closePosition(env: unknown, input?: { ticket?: unknown; reason?: string; actor?: string }, options?: { now?: number }): Promise<Record<string, any>>;

@@ -57,6 +57,7 @@ export interface Env {
     canonInfo(): Promise<Record<string, unknown>>;
     // Phase A7: the items a person approved for shadow testing (never a live prompt).
     learnedPack(): Promise<Record<string, unknown>>;
+    omegaPolicy?(): Promise<Record<string, unknown>>;
     // The Knowledge Council's facts (owner 2026-11-11, src/doctrine-facts.mjs).
     ingestDoctrineFacts?(facts: unknown): Promise<Record<string, unknown>>;
   };
@@ -199,6 +200,7 @@ import { fetchEffectiveDoctrine } from "./doctrine-consumer.mjs";
 import { aetherSyncStatus } from "./aether-sync.mjs";
 import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
+import { pullOmegaPolicy } from "./omega-policy.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
@@ -3050,10 +3052,13 @@ export default {
             }
           }
         } catch (e) { console.error("health_alerts_failed", e instanceof Error ? e.message : String(e)); }
-        // Proposal #227 (Aether-governed Omega policy): apply Aether-pushed policy from KV within hard bounds.
+        // B-12 (issue #227): Aether's policy pack, pulled hourly; applied within hard bounds only behind the owner's
+        // switch, audited, reported to Telegram and rolled back after 50 losing Omega trades.
         try {
-          const omegaPolicy = await applyOmegaPolicy(env);
-          if (omegaPolicy.status === "applied") console.log("omega_policy", JSON.stringify(omegaPolicy));
+          const pulled = await pullOmegaPolicy(env);
+          if (pulled.status !== "fresh" && pulled.status !== "unavailable") console.log("omega_policy_pull", JSON.stringify(pulled));
+          const omegaPolicy = await applyOmegaPolicy(env, { notify: (text: string) => sendTelegram(env, text) });
+          if (omegaPolicy.status === "applied" || omegaPolicy.status === "rolled_back") console.log("omega_policy", JSON.stringify(omegaPolicy));
         } catch (e) { console.error("omega_policy_failed", e instanceof Error ? e.message : String(e)); }
         // RFC_INDICATOR_AGENT_PLATFORM P4: advisory reports to the Cryptophys Platform kernel.
         // Non-fatal by design; a no-op without the AGENTS binding (preview, tests).
