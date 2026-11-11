@@ -11,7 +11,7 @@ import worker, { runTvOhlcv, runTvEconomicCalendar, runNewsPull, gatewayStatus }
  */
 export class TvGateway extends WorkerEntrypoint {
   async ohlcv(requests) {
-    return runTvOhlcv(this.env, requests);
+    return runTvOhlcv(this.env, requests, "pull_adapter");
   }
   /** The economic calendar of one window, with the released values (owner 2026-11-10). */
   async economicCalendar(request) {
@@ -40,7 +40,7 @@ export class NewsIngestionService extends WorkerEntrypoint {
     return gatewayStatus(this.env);
   }
   async goldHistory(count = 6000) {
-    return runTvOhlcv(this.env, [{ symbol: "OANDA:XAUUSD", interval: "1h", count: Math.max(100, Math.min(8000, Number(count) || 6000)) }]);
+    return runTvOhlcv(this.env, [{ symbol: "OANDA:XAUUSD", interval: "1h", count: Math.max(100, Math.min(8000, Number(count) || 6000)) }], "gold_history");
   }
 }
 

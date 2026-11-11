@@ -1,3 +1,4 @@
+import { countingFetch, readUsage, recordUsage, usageTally } from "./provider-usage.mjs";
 import { runOhlcvRequests, runEconomicCalendar } from "./tv-gateway.mjs";
 
 const JSON_HEADERS = {
@@ -689,7 +690,7 @@ function parseQuotaCooldownUntil(message, now = Date.now()) {
   return new Date(until).toISOString();
 }
 
-async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
+async function invokeMcpGetNews(env, metadata, accessToken, symbols, doFetch = (...args) => fetch(...args)) {
   const endpoint = asString(metadata.mcp_endpoint || env.TV_MCP_ENDPOINT || `${getBaseUrl(env)}/mcp`);
   const limit = parsePositiveInt(env.TV_MCP_MAX_ARTICLES, 20);
   const toolName = asString(env.TV_MCP_NEWS_TOOL_NAME || "mcp-tv-get-news");
@@ -706,7 +707,7 @@ async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
       }
     };
 
-    const response = await fetch(endpoint, {
+    const response = await doFetch(endpoint, {
       method: "POST",
       headers: {
         accept: "application/json",
@@ -791,7 +792,9 @@ async function invokeMcpGetNews(env, metadata, accessToken, symbols) {
   };
 }
 
-async function invokeMcpGetNewsWithRetry(env, metadata, accessToken, symbols) {
+async function invokeMcpGetNewsWithRetry(env, metadata, accessToken, symbols, tally = null) {
+  // Each provider request is counted per caller (src/provider-usage.mjs).
+  const doFetch = tally ? countingFetch(tally) : (...args) => fetch(...args);
   const maxAttempts = parsePositiveInt(env.TV_MCP_MAX_RETRIES, 3);
   let lastError = null;
 
@@ -807,11 +810,12 @@ async function invokeMcpGetNewsWithRetry(env, metadata, accessToken, symbols) {
       }
     }
     try {
-      const payload = await invokeMcpGetNews(env, metadata, accessToken, symbols);
+      const payload = await invokeMcpGetNews(env, metadata, accessToken, symbols, doFetch);
       return { payload, attempt };
     } catch (error) {
       lastError = error;
       if (error?.code === "mcp_quota_exceeded" || error?.code === "mcp_rate_limited") {
+        if (tally && error.code === "mcp_quota_exceeded") tally.quota_exceeded = true;
         // Quota suspension or generic HTTP 429: open the shared cooldown and do
         // not retry, so no invocation keeps spending provider quota.
         try {
@@ -1030,17 +1034,30 @@ async function readLastScheduledPull(env) {
  * every OHLCV and news pull paused until 00:00 UTC, and no alert said why). Read-only: booleans,
  * times and reasons, never a token.
  */
+/** The day's calls in short: total, failed, per caller, and when the quota ran out. */
+function summarizeUsage(day) {
+  if (!day) return null;
+  return {
+    date: day.date, total: day.total, failed: day.failed,
+    by_caller: Object.fromEntries(Object.entries(day.by_caller || {}).map(([caller, v]) => [caller, v.calls])),
+    quota_exceeded_at: day.quota_exceeded_at, quota_exceeded_by: day.quota_exceeded_by
+  };
+}
+
 export async function gatewayStatus(env) {
   const token = await getStoredToken(env);
   const tokenExpiresAt = Number.parseInt(String(token?.expires_at || ""), 10);
   const hasUsableAccessToken = Boolean(asString(token?.access_token)) && (!Number.isFinite(tokenExpiresAt) || tokenExpiresAt > nowSeconds());
   const cooldown = await readQuotaCooldown(env);
   const last = await readLastScheduledPull(env);
+  const usage = await readUsage(env);
   return {
     oauth_authorized: hasUsableAccessToken || Boolean(asString(token?.refresh_token)),
     cooldown_until: cooldown?.until || null,
     cooldown_reason: cooldown?.reason || null,
-    last_news_pull: last ? { status: last.status ?? null, checked_at: last.checked_at ?? null, failure_reason: last.failure_reason ?? null } : null
+    last_news_pull: last ? { status: last.status ?? null, checked_at: last.checked_at ?? null, failure_reason: last.failure_reason ?? null } : null,
+    // The provider calls this gateway made today, per caller (src/provider-usage.mjs): counts only.
+    calls_today: summarizeUsage(usage?.today)
   };
 }
 
@@ -1073,7 +1090,10 @@ async function buildHealth(env) {
     ohlcv_gateway: "rpc:TvGateway",
     provider_cooldown_until: providerCooldown?.until || null,
     provider_cooldown_reason: providerCooldown?.reason || null,
-    last_scheduled_ingest: await readLastScheduledPull(env)
+    last_scheduled_ingest: await readLastScheduledPull(env),
+    // TradingView MCP calls this gateway made, per caller and UTC hour, today and yesterday
+    // (2026-11-11: the account's quota ran out at 13:05 UTC and nothing said who had spent it).
+    provider_calls: await readUsage(env)
   };
 }
 
@@ -1147,7 +1167,12 @@ async function handlePull(request, env, ctx, options = {}) {
   }
 
   try {
-    const { payload, attempt } = await invokeMcpGetNewsWithRetry(env, metadata, accessToken, symbols);
+    // Who spent the provider quota (2026-11-11): the scheduled pull, the AI Worker's RPC or POST /pull.
+    const tally = usageTally(asString(options.caller) || "news_http");
+    let pulled;
+    try { pulled = await invokeMcpGetNewsWithRetry(env, metadata, accessToken, symbols, tally); }
+    finally { await recordUsage(env, tally); }
+    const { payload, attempt } = pulled;
     const recentArticles = filterRecentArticles(parseArticlesFromMcpPayload(payload));
     // Scheduled pulls warm the shared cache; only a consumer pull may mark
     // articles as emitted, otherwise the AI Worker could miss fresh news.
@@ -1204,18 +1229,30 @@ export async function runNewsPull(env, ctx, { forceRefresh = false } = {}) {
     method: "POST",
     headers: { authorization: `Bearer ${asString(env.INGEST_SECRET)}` }
   });
-  const response = await handlePull(request, env, ctx, { forceRefresh: forceRefresh === true });
+  const response = await handlePull(request, env, ctx, { forceRefresh: forceRefresh === true, caller: "news_ai_worker" });
   const body = await response.json().catch(() => ({}));
   return { ...body, rpc_http_status: response.status };
 }
 
-export function runTvEconomicCalendar(env, request) {
-  return runEconomicCalendar(env, request, gatewayDeps());
+/** Runs one gateway job with its provider calls counted for `caller` (src/provider-usage.mjs). */
+async function counted(env, caller, run) {
+  const tally = usageTally(caller);
+  try {
+    const result = await run(gatewayDeps(tally));
+    if (result?.body?.error === "mcp_quota_exceeded") tally.quota_exceeded = true;
+    return result;
+  } finally {
+    await recordUsage(env, tally);
+  }
 }
 
-function gatewayDeps() {
+export function runTvEconomicCalendar(env, request, caller = "calendar") {
+  return counted(env, caller, (deps) => runEconomicCalendar(env, request, deps));
+}
+
+function gatewayDeps(tally = null) {
   return {
-    fetch: (...args) => fetch(...args),
+    fetch: tally ? countingFetch(tally) : (...args) => fetch(...args),
     requestId: () => randomBase64Url(12),
     fetchOAuthMetadata,
     getValidAccessToken,
@@ -1227,18 +1264,8 @@ function gatewayDeps() {
   };
 }
 
-export function runTvOhlcv(env, requests) {
-  return runOhlcvRequests(env, requests, {
-    fetch: (...args) => fetch(...args),
-    requestId: () => randomBase64Url(12),
-    fetchOAuthMetadata,
-    getValidAccessToken,
-    readQuotaCooldown,
-    writeQuotaCooldown,
-    parseQuotaCooldownUntil,
-    rateLimitCooldownUntil,
-    extractMcpErrorText
-  });
+export function runTvOhlcv(env, requests, caller = "pull_adapter") {
+  return counted(env, caller, (deps) => runOhlcvRequests(env, requests, deps));
 }
 
 export const internals = {
@@ -1295,7 +1322,7 @@ export default {
       });
       // One scheduled invocation performs one pull only. Empty results are valid
       // and must not trigger a second quota-consuming provider request.
-      const response = await handlePull(request, env, ctx, { skipSeenTracking: true });
+      const response = await handlePull(request, env, ctx, { skipSeenTracking: true, caller: "news_cron" });
       const payload = await response.json().catch(() => ({}));
       const pullAttempt = 1;
       const articles = Array.isArray(payload.articles) ? payload.articles : [];
