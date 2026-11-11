@@ -9,14 +9,18 @@
 // than FALLBACK_STALE_S behind) and the market trades, the broker's closed M1 bars from the Corpus
 // Oracle (the AI Worker's corpusBars RPC; only Omega's active broker, pair and user) are merged into the
 // OANDA:XAUUSD 1m series, marked src "mt5". The 5m and 15m series aggregate from it as always, and the
-// 1H series aggregates from it during the fallback. Every touched series records `fallback.since_sec`;
+// 1H, 4H and daily series aggregate from it during the fallback, on the grid of their last native bar
+// (owner 2026-11-11: the AI Worker's input as with TradingView, no regression); only a bucket the 1m
+// series covers from its start (it keeps about 50 hours, so the weekly bar waits for TradingView, as its
+// close does). Every touched series records `fallback.since_sec`;
 // the bundle then says feed "mt5_fallback", and every record and 5m context built on it carries it.
 //
 // Healing: once the gateway answers again, refreshSeries pulls each native series back over the
 // fallback range (healPlan) and the native bars overwrite the broker bars (newer data wins); the derived
 // series re-aggregate that range from the healed 1m series (deriveSeries).
 //
-// Switch: FEED_FALLBACK_MODE = "auto" (replace while TradingView is down) | "off".
+// Switch: the owner's switch in the War Room (KV FEED_FALLBACK_KEY, written by the AI Worker through Omega;
+// owner 2026-11-11), else FEED_FALLBACK_MODE = "auto" (replace while TradingView is down) | "off".
 
 import { SERIES, readSeries, writeSeries, mergeCandles, marketClosed } from "./tradingview-source.mjs";
 import { aggregateCandles } from "./derived-series.mjs";
@@ -26,12 +30,23 @@ export const FALLBACK_STALE_S = 10 * 60;
 export const FALLBACK_TRIGGERS = Object.freeze(new Set(["mcp_quota_cooldown_active", "mcp_quota_exceeded", "gateway_unavailable", "daily_budget_exhausted"]));
 const SYMBOL = "OANDA:XAUUSD";
 const SOURCE_KEY = `${SYMBOL}|1m`;
-/** The series rebuilt from the broker's M1 during a fallback: 5m and 15m (derived as always) and 1H. */
-const REBUILT = Object.freeze([`${SYMBOL}|5m`, `${SYMBOL}|15m`, `${SYMBOL}|1h`]);
+/** The series rebuilt from the broker's M1 during a fallback: 5m and 15m (derived as always), 1H, 4H and D1. */
+const REBUILT = Object.freeze([`${SYMBOL}|5m`, `${SYMBOL}|15m`, `${SYMBOL}|1h`, `${SYMBOL}|4h`, `${SYMBOL}|1D`]);
+/** The owner's switch in the War Room, in the KV namespace shared with the AI Worker (src/feed.mjs there). */
+export const FEED_FALLBACK_KEY = "market-data:v2:feed-fallback-mode";
 const finite = (x) => typeof x === "number" && Number.isFinite(x);
 
 export function fallbackMode(env) {
   return String(env?.FEED_FALLBACK_MODE ?? "off").trim().toLowerCase() === "auto" ? "auto" : "off";
+}
+
+/** The mode in force: the owner's switch when set, else FEED_FALLBACK_MODE. Never throws. */
+export async function resolveFallbackMode(env) {
+  try {
+    const r = JSON.parse((await env?.MARKET_DATA_CACHE?.get?.(FEED_FALLBACK_KEY)) || "null");
+    if (r?.mode === "auto" || r?.mode === "off") return { mode: r.mode, source: "owner" };
+  } catch { /* the default below */ }
+  return { mode: fallbackMode(env), source: "env" };
 }
 
 /** Pure: the broker's closed M1 bars as series candles (src "mt5"), oldest first; malformed bars dropped. */
@@ -59,7 +74,8 @@ export function gatewayDown(pullStatus, m1Record, nowSec) {
  * down. Never throws; returns what it did.
  */
 export async function applyMt5Fallback(env, pullStatus, { now = Date.now() } = {}) {
-  if (fallbackMode(env) === "off") return { status: "off" };
+  const resolved = await resolveFallbackMode(env);
+  if (resolved.mode === "off") return { status: "off", mode_source: resolved.source };
   const kv = env?.MARKET_DATA_CACHE;
   if (!kv || typeof env?.AI_WORKER?.corpusBars !== "function") return { status: "unavailable" };
   const nowSec = Math.floor(now / 1000);
@@ -82,7 +98,12 @@ export async function applyMt5Fallback(env, pullStatus, { now = Date.now() } = {
       const spec = SERIES.find((s) => s.key === key);
       const own = await readSeries(kv, spec);
       const after = own?.candles?.at(-1)?.time ?? -Infinity;
-      const bars = aggregateCandles(candles, { seconds: spec.seconds, sourceSeconds: 60, nowSec, after }).map((c) => ({ ...c, src: "mt5" }));
+      // The grid of the last bar of the series (OANDA's 4H, daily and weekly bars open at the session start).
+      const anchor = Number.isFinite(after) ? after : 0;
+      const firstMinute = candles[0]?.time ?? Infinity;
+      const bars = aggregateCandles(candles, { seconds: spec.seconds, sourceSeconds: 60, nowSec, after, anchor })
+        .filter((c) => c.time >= firstMinute) // a bucket the 1m series does not cover from its start is not built
+        .map((c) => ({ ...c, src: "mt5" }));
       if (!bars.length) continue;
       const merged = mergeCandles(own?.candles, bars, spec.retain);
       const ownSince = Math.min(own?.fallback?.since_sec ?? Infinity, bars[0].time);

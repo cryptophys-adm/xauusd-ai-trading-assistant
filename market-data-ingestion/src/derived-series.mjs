@@ -22,13 +22,16 @@
 const finite = (x) => typeof x === "number" && Number.isFinite(x);
 
 /** Aggregates closed source candles into complete `spec.seconds` buckets opening after `after`. */
-export function aggregateCandles(source, { seconds, sourceSeconds, nowSec, fetchedAtSec = -Infinity, after = -Infinity }) {
+// `anchor` (seconds) places the buckets on another grid than the epoch's: OANDA's 4H, daily and weekly bars
+// open at the session's start (22:00 UTC in winter), so a fallback built from minutes follows the last
+// native bar of the series (MT5 fallback, 2026-11-11).
+export function aggregateCandles(source, { seconds, sourceSeconds, nowSec, fetchedAtSec = -Infinity, after = -Infinity, anchor = 0 }) {
   const sorted = [...(source || [])].filter((c) => finite(c?.time)).sort((a, b) => a.time - b.time);
   if (!sorted.length) return [];
   const observedThrough = Math.max(sorted.at(-1).time + sourceSeconds, finite(fetchedAtSec) ? fetchedAtSec - sourceSeconds : -Infinity);
   const buckets = new Map();
   for (const c of sorted) {
-    const start = Math.floor(c.time / seconds) * seconds;
+    const start = anchor + Math.floor((c.time - anchor) / seconds) * seconds;
     if (start <= after) continue;
     const list = buckets.get(start) || [];
     list.push(c);
