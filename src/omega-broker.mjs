@@ -13,6 +13,7 @@
 
 import { ingestCorpus } from "./corpus-oracle.mjs";
 import { eaSignal, readControl } from "./ea-signal.mjs";
+import { storeDeal } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 
@@ -25,7 +26,7 @@ export const OMEGA_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS omega_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ms INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT)`
 ];
 export const INTENT_TTL_MS = 2 * 60_000;
-export const STATE_MAX_BYTES = 32 * 1024;
+export const STATE_MAX_BYTES = 64 * 1024;
 export const ENVELOPE_MAX_BYTES = 8 * 1024;
 const BRIDGE_SEEN_MS = 2 * 60_000;
 const SERVER_RE = /^[A-Za-z0-9._ -]{1,64}$/;
@@ -198,6 +199,24 @@ export function executorFrom(state) {
       magic: Number.isInteger(o?.magic) ? o.magic : null,
       source: typeof o?.source === "string" ? o.source.slice(0, 16) : null,
       placed_ms: n(o?.placed_ms)
+    })),
+    deals: (Array.isArray(state.deals) ? state.deals : []).slice(0, 100).map((d) => ({
+      deal_ticket: n(d?.deal_ticket),
+      position_ticket: n(d?.position_ticket),
+      symbol: typeof d?.symbol === "string" ? d.symbol.slice(0, 32) : null,
+      side: d?.side === "BUY" || d?.side === "SELL" ? d.side : null,
+      volume: n(d?.volume),
+      entry_price: n(d?.entry_price),
+      exit_price: n(d?.exit_price),
+      profit: n(d?.profit),
+      commission: n(d?.commission),
+      swap: n(d?.swap),
+      reason: typeof d?.reason === "string" ? d.reason.slice(0, 16) : null,
+      signal_id: typeof d?.signal_id === "string" ? d.signal_id.slice(0, 80) : null,
+      magic: Number.isInteger(d?.magic) ? d.magic : null,
+      source: typeof d?.source === "string" ? d.source.slice(0, 16) : null,
+      opened_ms: n(d?.opened_ms),
+      closed_ms: n(d?.closed_ms)
     }))
   };
 }
@@ -233,6 +252,34 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   await db.prepare("UPDATE omega_bridge SET kid = ?, public_key = ?, bridge_version = ?, state = ?, synced_ms = ? WHERE id = 1")
     .bind(kid, publicKey, String(bridgeVersion ?? "").slice(0, 32), stateText, now).run();
   if (prev?.kid && prev.kid !== kid) await event(db, now, "bridge", "bridge_key_changed", { from: prev.kid, to: kid });
+
+  // Persist closed deals reported by MT5 terminal
+  if (Array.isArray(executor?.deals) && executor.deals.length > 0) {
+    for (const d of executor.deals) {
+      if (!d?.deal_ticket || !d?.closed_ms) continue;
+      try {
+        await storeDeal(env, {
+          deal_ticket: d.deal_ticket,
+          position_ticket: d.position_ticket,
+          mode: executor?.account?.trade_mode || "unknown",
+          side: d.side || "BUY",
+          volume: d.volume || 0.01,
+          entry_price: d.entry_price,
+          exit_price: d.exit_price,
+          profit: d.profit || 0,
+          commission: d.commission || 0,
+          swap: d.swap || 0,
+          reason: d.reason || "closed",
+          signal_id: d.signal_id,
+          opened_ms: d.opened_ms,
+          closed_ms: d.closed_ms,
+          currency: executor?.account?.currency || "USD"
+        }, { now });
+      } catch {
+        // Ignored; deals persistence should not disrupt sync cycle
+      }
+    }
+  }
 
   for (const r of Array.isArray(results) ? results.slice(0, 100) : []) {
     if (typeof r?.id !== "string") continue;
@@ -466,6 +513,7 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       atr_value: atrVal, atr_points: atrPts,
       positions: Array.isArray(st?.positions) ? st.positions : [],
       orders: Array.isArray(st?.orders) ? st.orders : [],
+      deals: Array.isArray(st?.deals) ? st.deals : [],
       state_age_ms: Number.isFinite(st?.received_ms) ? now - st.received_ms : null
     },
     autonomous_watchdog: {

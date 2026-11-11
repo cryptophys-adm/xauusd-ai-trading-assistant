@@ -1997,7 +1997,21 @@ export class OwnerNotifier extends WorkerEntrypoint<Env> {
 
 export class OmegaGateway extends WorkerEntrypoint<Env> {
   async overview(): Promise<JsonObject> {
-    return { ...(await omegaOverview(this.env)), broker: await brokerOverview(this.env) } as JsonObject;
+    const ea = (await omegaOverview(this.env)) as Record<string, any>;
+    const broker = (await brokerOverview(this.env)) as Record<string, any>;
+    const eaDeals = Array.isArray(ea?.deals) ? ea.deals : [];
+    const bridgeDeals = Array.isArray(broker?.bridge?.deals) ? broker.bridge.deals : [];
+    const dealsMap = new Map();
+    for (const d of bridgeDeals) {
+      if (d?.deal_ticket) dealsMap.set(d.deal_ticket, d);
+    }
+    for (const d of eaDeals) {
+      if (d?.deal_ticket) dealsMap.set(d.deal_ticket, d);
+    }
+    const combinedDeals = Array.from(dealsMap.values()).sort(
+      (a: any, b: any) => (Number(b.closed_ms) || 0) - (Number(a.closed_ms) || 0)
+    );
+    return { ...ea, deals: combinedDeals, broker } as JsonObject;
   }
   async deals(options: { limit?: number } = {}): Promise<JsonObject> {
     return { deals: await listDeals(this.env, { limit: options?.limit ?? 200 }) } as JsonObject;

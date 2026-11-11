@@ -60,7 +60,7 @@ async function ensureSchema(db) {
 const DAY_MS = 86_400_000;
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
 const text = (v, max) => (typeof v === "string" ? v.trim().slice(0, max) : "");
-export const DEAL_REASONS = Object.freeze(["tp", "sl", "opposite", "kill", "expiry", "manual", "stopout", "other"]);
+export const DEAL_REASONS = Object.freeze(["tp", "sl", "opposite", "kill", "expiry", "manual", "stopout", "stop_out", "expert", "closed", "other"]);
 
 /** Pure: a closed deal from the EA's POST body (known fields only, no account number), or an error. */
 export function dealFrom(body, { now = Date.now() } = {}) {

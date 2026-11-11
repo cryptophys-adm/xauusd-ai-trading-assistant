@@ -479,6 +479,36 @@ function SlPlusPricePoint({ item }: { item: any }) {
  * Omega Live Execution Panel (Pure MT5 Real Trading Broker View).
  */
 function OmegaExecutionPanel({ omega }: { omega: any }) {
+  const [closingTicket, setClosingTicket] = useState<number | null>(null);
+  const [exitNotice, setExitNotice] = useState<{ tone: string; text: string } | null>(null);
+
+  const handleExitPosition = async (ticket: number) => {
+    const isConfirmed = window.confirm(`Exit position #${ticket} now in MetaTrader 5?\nThis will immediately override active TP/SL and close the position.`);
+    if (!isConfirmed) return;
+    setClosingTicket(ticket);
+    try {
+      const res = await fetch("/omega/api/position/close", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ ticket, reason: "manual_user_exit" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      setExitNotice({
+        tone: "text-emerald-300",
+        text: `Exit requested for position #${ticket}. The MT5 terminal will close it within 2 seconds.`,
+      });
+    } catch (err: any) {
+      setExitNotice({
+        tone: "text-rose-300",
+        text: `Failed to exit #${ticket}: ${err?.message || "error"}`,
+      });
+    } finally {
+      setClosingTicket(null);
+    }
+  };
+
   if (!omega) {
     return (
       <Panel title="Omega Broker Execution · Live Terminal" icon={<Cpu className="h-4 w-4 text-cyan-400" />}>
@@ -627,6 +657,11 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
           </div>
         }
       >
+        {exitNotice ? (
+          <div className="mb-3 rounded-lg border border-white/10 bg-[#0d1525] p-2.5">
+            <p className={`text-[11.5px] font-semibold ${exitNotice.tone}`}>{exitNotice.text}</p>
+          </div>
+        ) : null}
         {!positions.length ? (
           <Empty>No open floating positions in the live Monex MT5 terminal.</Empty>
         ) : (
@@ -645,6 +680,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                   <th>Take Profit</th>
                   <th>Swap</th>
                   <th>Floating P&L ($)</th>
+                  <th className="text-right">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -685,6 +721,24 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                         style={{ color: pProf >= 0 ? C.bull : C.bear }}
                       >
                         {pProf >= 0 ? "+" : ""}${pProf.toFixed(2)}
+                      </td>
+                      <td className="text-right">
+                        <button
+                          type="button"
+                          disabled={closingTicket === p.ticket}
+                          onClick={() => handleExitPosition(p.ticket)}
+                          className="inline-flex items-center gap-1 rounded bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 hover:border-rose-400 active:scale-95 transition disabled:opacity-50"
+                          title="Exit position immediately in MetaTrader 5 (interrupts TP/SL)"
+                        >
+                          {closingTicket === p.ticket ? (
+                            <span className="inline-flex items-center gap-1">
+                              <span className="inline-block h-2 w-2 rounded-full bg-rose-400 animate-ping" />
+                              EXITING…
+                            </span>
+                          ) : (
+                            "EXIT ✕"
+                          )}
+                        </button>
                       </td>
                     </tr>
                   );

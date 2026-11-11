@@ -729,6 +729,9 @@ export default function Omega() {
   const serverName = br.server || conn.server || "Broker Server";
   const positionsList: any[] = hb?.positions_detail?.length ? hb.positions_detail : br?.positions || [];
   const ordersList: any[] = br?.orders || [];
+  const dealsList: any[] = (Array.isArray(data?.deals) && data.deals.length > 0)
+    ? data.deals
+    : (Array.isArray(br?.deals) ? br.deals : []);
   const floatingPnl =
     typeof hb?.floating_pnl === "number"
       ? hb.floating_pnl
@@ -1258,7 +1261,7 @@ export default function Omega() {
               {(
                 [
                   ["trade", `Trade (${positionsList.length}${ordersList.length ? ` + ${ordersList.length} ord` : ""})`],
-                  ["history", `History (${(data?.deals || []).length})`],
+                  ["history", `History (${dealsList.length})`],
                   ["intents", `Order Intents (${(b?.intents || []).length})`],
                   ["state_machine", "Autonomous State Machine"],
                   ["tca_sor", "Execution & TCA / SOR"],
@@ -1463,7 +1466,7 @@ export default function Omega() {
           {/* Tab 2: HISTORY (Closed Deals) */}
           {toolboxTab === "history" ? (
             <div className="table-wrap max-h-[260px] overflow-y-auto">
-              {!(data?.deals || []).length ? (
+              {!dealsList.length ? (
                 <div className="p-4">
                   <Empty>No closed deal reported yet.</Empty>
                 </div>
@@ -1473,6 +1476,7 @@ export default function Omega() {
                     <tr>
                       <th>Closed (UTC)</th>
                       <th>Deal Ticket</th>
+                      <th>Source</th>
                       <th>Side</th>
                       <th>Volume</th>
                       <th>Entry Price</th>
@@ -1480,24 +1484,45 @@ export default function Omega() {
                       <th>Net P/L</th>
                       <th>Reason</th>
                       <th>Account Mode</th>
-                      <th>Signal ID</th>
+                      <th>Signal / Comment</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(data.deals || []).map((d: any, idx: number) => {
+                    {dealsList.map((d: any, idx: number) => {
                       const net = (d.profit ?? 0) + (d.commission ?? 0) + (d.swap ?? 0);
+                      const isManual = d.source === "manual" || d.magic === 0;
+                      const isOmega = d.source === "omega" || d.magic === 920200 || String(d.signal_id || "").startsWith("open:");
                       return (
                         <tr key={d.deal_ticket ?? idx}>
                           <td className="mono">{timeUtc(d.closed_ms)}</td>
-                          <td className="mono">{d.deal_ticket ?? "—"}</td>
+                          <td className="mono font-semibold">#{d.deal_ticket ?? "—"}</td>
+                          <td>
+                            {isManual ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
+                                📱 MANUAL / MOBILE
+                              </span>
+                            ) : isOmega ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
+                                🤖 OMEGA AI
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-400/30">
+                                EXTERNAL
+                              </span>
+                            )}
+                          </td>
                           <td className={`mono font-bold ${d.side === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{d.side}</td>
                           <td className="mono">{num(d.volume, 2)}</td>
                           <td className="mono">{num(d.entry_price, digits)}</td>
                           <td className="mono">{num(d.exit_price, digits)}</td>
                           <td className={`mono font-bold ${toneCls(net)}`}>{money(net, d.currency || cur)}</td>
-                          <td className="mono">{d.reason || "—"}</td>
-                          <td className="mono">{d.mode || "—"}</td>
-                          <td className="mono text-[11px]">{d.signal_id || "—"}</td>
+                          <td className="mono">
+                            <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10.5px]">
+                              {d.reason || "closed"}
+                            </span>
+                          </td>
+                          <td className="mono text-slate-400">{d.mode || "live"}</td>
+                          <td className="mono text-[11px] text-slate-400">{d.signal_id || (isManual ? "Manual Discretionary" : "—")}</td>
                         </tr>
                       );
                     })}

@@ -404,6 +404,107 @@ string BuildOrdersJson()
    return out + "]";
   }
 
+string BuildDealsJson()
+  {
+   string defaultSym = ResolveGoldSymbol();
+   int defaultDigits = (int)SymbolInfoInteger(defaultSym, SYMBOL_DIGITS);
+   long serverMinusUtcSec = (long)(TimeCurrent() - TimeGMT());
+   datetime fromTime = TimeCurrent() - 30 * 86400; // last 30 days
+   string out = "[";
+   int count = 0;
+   int maxDeals = 100;
+
+   if(HistorySelect(fromTime, TimeCurrent()))
+     {
+      int total = HistoryDealsTotal();
+      for(int i = total - 1; i >= 0 && count < maxDeals; i--)
+        {
+         ulong dealTicket = HistoryDealGetTicket(i);
+         if(dealTicket == 0) continue;
+
+         long entry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+         if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY && entry != DEAL_ENTRY_INOUT) continue;
+
+         ulong posId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+         long dealType = HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+         string side = (dealType == DEAL_TYPE_SELL) ? "BUY" : "SELL";
+
+         string dealSym = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+         int dealDigits = (int)SymbolInfoInteger(dealSym, SYMBOL_DIGITS);
+         if(dealDigits <= 0) dealDigits = defaultDigits;
+
+         double volume = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+         double exitPrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+         double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+         double comm = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+         double swap = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+
+         long magic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+         string source = "external";
+         if(magic == MagicNumber) source = "omega";
+         else if(magic == 0) source = "manual";
+
+         long dealReason = HistoryDealGetInteger(dealTicket, DEAL_REASON);
+         string reason = "closed";
+         if(dealReason == DEAL_REASON_CLIENT) reason = "manual";
+         else if(dealReason == DEAL_REASON_EXPERT) reason = "expert";
+         else if(dealReason == DEAL_REASON_TP) reason = "tp";
+         else if(dealReason == DEAL_REASON_SL) reason = "sl";
+         else if(dealReason == DEAL_REASON_SO) reason = "stop_out";
+
+         string comment = EscapeJson(HistoryDealGetString(dealTicket, DEAL_COMMENT));
+
+         long closedTimeMsc = HistoryDealGetInteger(dealTicket, DEAL_TIME_MSC);
+         long closedUtcMs = closedTimeMsc > 0
+                           ? (closedTimeMsc - serverMinusUtcSec * 1000)
+                           : (((long)HistoryDealGetInteger(dealTicket, DEAL_TIME) - serverMinusUtcSec) * 1000);
+
+         double entryPrice = exitPrice;
+         long openedUtcMs = closedUtcMs;
+         for(int j = 0; j < total; j++)
+           {
+            ulong inTicket = HistoryDealGetTicket(j);
+            if((ulong)HistoryDealGetInteger(inTicket, DEAL_POSITION_ID) == posId &&
+               HistoryDealGetInteger(inTicket, DEAL_ENTRY) == DEAL_ENTRY_IN)
+              {
+               entryPrice = HistoryDealGetDouble(inTicket, DEAL_PRICE);
+               long inTimeMsc = HistoryDealGetInteger(inTicket, DEAL_TIME_MSC);
+               openedUtcMs = inTimeMsc > 0
+                             ? (inTimeMsc - serverMinusUtcSec * 1000)
+                             : (((long)HistoryDealGetInteger(inTicket, DEAL_TIME) - serverMinusUtcSec) * 1000);
+               long inType = HistoryDealGetInteger(inTicket, DEAL_TYPE);
+               if(inType == DEAL_TYPE_BUY) side = "BUY";
+               else if(inType == DEAL_TYPE_SELL) side = "SELL";
+               break;
+              }
+           }
+
+         out += StringFormat(
+            "%s{\"deal_ticket\":%I64u,\"position_ticket\":%I64u,\"symbol\":\"%s\",\"side\":\"%s\",\"volume\":%.4f,\"entry_price\":%s,\"exit_price\":%s,\"profit\":%.2f,\"commission\":%.2f,\"swap\":%.2f,\"reason\":\"%s\",\"signal_id\":\"%s\",\"magic\":%I64d,\"source\":\"%s\",\"opened_ms\":%I64d,\"closed_ms\":%I64d}",
+            count > 0 ? "," : "",
+            dealTicket,
+            posId,
+            EscapeJson(dealSym),
+            side,
+            volume,
+            DoubleToString(entryPrice, dealDigits),
+            DoubleToString(exitPrice, dealDigits),
+            profit,
+            comm,
+            swap,
+            reason,
+            comment,
+            magic,
+            source,
+            openedUtcMs,
+            closedUtcMs
+         );
+         count++;
+        }
+     }
+   return out + "]";
+  }
+
 double GetCurrentAtr(const string sym)
   {
    if(g_atrHandle == INVALID_HANDLE && sym != "")
@@ -444,13 +545,13 @@ void WriteStateJson()
 
    string positionsJson = BuildPositionsJson();
    string ordersJson = BuildOrdersJson();
+   string dealsJson = BuildDealsJson();
    long receivedMs = NowUtcMs();
 
    string json = StringFormat(
       "{\"connected\":%s,\"server\":\"%s\","
       "\"account\":{\"trade_mode\":\"%s\",\"currency\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"day_start_balance\":%.2f,\"day_realized_pl\":%.2f},"
-      "\"symbol\":{\"name\":\"%s\",\"digits\":%d,\"point\":%s,\"tick_size\":%s,\"tick_value\":%s,\"volume_min\":%.4f,\"volume_max\":%.4f,\"volume_step\":%.4f,\"stops_level_points\":%d,\"bid\":%s,\"ask\":%s,\"spread_points\":%d,\"atr_value\":%.2f,\"atr_points\":%d},"
-      "\"positions\":%s,\"orders\":%s,\"trade_allowed\":%s,\"received_ms\":%I64d}",
+      "\"symbol\":{\"name\":\"%s\",\"digits\":%d,\"point\":%s,\"tick_size\":%s,\"tick_value\":%s,\"volume_min\":%.4f,\"volume_max\":%.4f,\"volume_step\":%.4f,\"stops_level_points\":%d,\"bid\":%s,\"ask\":%s,\"spread_points\":%d,\"atr_value\":%.2f,\"atr_points\":%d},",
       connected ? "true" : "false",
       server,
       tradeMode,
@@ -472,9 +573,12 @@ void WriteStateJson()
       DoubleToString(ask, digits),
       spreadPoints,
       atrValue,
-      atrPoints,
-      positionsJson,
-      ordersJson,
+      atrPoints
+   );
+   json += "\"positions\":" + positionsJson + ",";
+   json += "\"orders\":" + ordersJson + ",";
+   json += "\"deals\":" + dealsJson + ",";
+   json += StringFormat("\"trade_allowed\":%s,\"received_ms\":%I64d}",
       (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && MQLInfoInteger(MQL_TRADE_ALLOWED)) ? "true" : "false",
       receivedMs
    );

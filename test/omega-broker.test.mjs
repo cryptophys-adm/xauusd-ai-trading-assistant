@@ -312,4 +312,68 @@ test("closePosition queues a pending manual close intent and records an audit ev
   assert.equal(bad.error, "invalid_ticket");
 });
 
+test("history & closed deals: executorFrom parses deals, bridgeSync persists them to ea_deals, and overview surfaces them", async () => {
+  const sampleDeals = [
+    {
+      deal_ticket: 88801,
+      position_ticket: 77701,
+      symbol: "XAUUSD.m",
+      side: "BUY",
+      volume: 0.02,
+      entry_price: 2650.5,
+      exit_price: 2655.0,
+      profit: 9.0,
+      commission: -0.1,
+      swap: 0.0,
+      reason: "tp",
+      signal_id: "open:1794222000000:B",
+      magic: 920200,
+      source: "omega",
+      opened_ms: NOW - 60000,
+      closed_ms: NOW - 1000
+    },
+    {
+      deal_ticket: 88802,
+      position_ticket: 77702,
+      symbol: "XAUUSD.m",
+      side: "SELL",
+      volume: 0.05,
+      entry_price: 2660.0,
+      exit_price: 2658.0,
+      profit: 10.0,
+      commission: -0.25,
+      swap: 0.0,
+      reason: "manual",
+      signal_id: null,
+      magic: 0,
+      source: "manual",
+      opened_ms: NOW - 120000,
+      closed_ms: NOW - 500
+    }
+  ];
+
+  const exec = executorFrom({ ...STATE, deals: sampleDeals });
+  assert.equal(exec.deals.length, 2);
+  assert.equal(exec.deals[0].deal_ticket, 88801);
+  assert.equal(exec.deals[0].source, "omega");
+  assert.equal(exec.deals[1].deal_ticket, 88802);
+  assert.equal(exec.deals[1].source, "manual");
+
+  const e = env();
+  await sync(e, { state: { ...STATE, deals: sampleDeals } });
+
+  // 1. Check brokerOverview contains deals in bridge
+  const ov = await brokerOverview(e, { now: NOW });
+  assert.equal(ov.bridge.deals.length, 2);
+  assert.equal(ov.bridge.deals[0].deal_ticket, 88801);
+  assert.equal(ov.bridge.deals[1].source, "manual");
+
+  // 2. Check ea_deals table was populated by bridgeSync
+  const storedDeals = (await e.DB.prepare("SELECT * FROM ea_deals ORDER BY closed_ms DESC").all()).results;
+  assert.equal(storedDeals.length, 2);
+  assert.equal(storedDeals[0].deal_ticket, 88802);
+  assert.equal(storedDeals[1].deal_ticket, 88801);
+  assert.equal(storedDeals[1].reason, "tp");
+});
+
 
