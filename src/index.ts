@@ -189,7 +189,8 @@ import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mj
 import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema } from "./signal-ledger.mjs";
 import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, TRADING_MODE_KEY } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
-import { pushDecisionCards, aetherPushStatus, pushWeightingReport } from "./aether-push.mjs";
+import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport } from "./aether-push.mjs";
+import { applyWitnessTuning, readWitnessTuning, witnessTuningMessage, witnessTuningReport } from "./witness-tuning.mjs";
 import { pushDoctrineFacts } from "./doctrine-facts.mjs";
 import { fetchEffectiveDoctrine } from "./doctrine-consumer.mjs";
 import { aetherSyncStatus } from "./aether-sync.mjs";
@@ -2542,6 +2543,12 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     try { return dashboardJson({ status: "ok", ...(await eaStatus(env)) }); }
     catch (error) { console.error("ea_status_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
   }
+  if (url.pathname === "/api/weighting/engine") {
+    // The Decision Engine's witness weights (src/witness-tuning.mjs): the active set, the replay of the
+    // sets next to it (discovery with Holm, holdout), the reverse shadow, the replay fidelity and the history.
+    try { return dashboardJson({ status: "ok", ...(await readWitnessTuning(env)) }); }
+    catch (error) { console.error("witness_tuning_read_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
+  }
   if (url.pathname === "/api/weighting") {
     // The H1 quorum weighting (src/weighting.mjs): the active point, each agent's own weight, the replay
     // of the neighbouring grid points (discovery with Holm, holdout), the reverse shadow and the history.
@@ -2892,6 +2899,21 @@ export default {
               if (pushed.status !== "disabled" && pushed.status !== "unchanged") console.log("weighting_report", JSON.stringify({ timeframe, ...pushed }));
             } catch (e) { console.error("weighting_failed", JSON.stringify({ timeframe, message: e instanceof Error ? e.message : String(e) })); }
           }
+          // The Decision Engine's witness weights, the same protocol (owner 2026-11-11: "harusnya bobot itu
+          // dinamis sesuai dengan auto tune yang ada di aether"): replay the stored decisions under the sets
+          // next to the active one, activate or roll back automatically, tell the owner, report to Aether.
+          try {
+            let replay = await readWitnessTuning(env, { useCache: false });
+            const applied = await applyWitnessTuning(env, { replay });
+            if (applied.status !== "unchanged") console.log("witness_tuning", JSON.stringify(applied));
+            const line = witnessTuningMessage(applied);
+            if (line) {
+              try { await sendTelegram(env, line); } catch (e) { console.error("witness_tuning_telegram_failed", e instanceof Error ? e.message : String(e)); }
+              replay = await readWitnessTuning(env, { useCache: false });
+            }
+            const pushed = await pushWitnessTuningReport(env, witnessTuningReport(replay));
+            if (pushed.status !== "disabled" && pushed.status !== "unchanged") console.log("witness_tuning_report", JSON.stringify(pushed));
+          } catch (e) { console.error("witness_tuning_failed", e instanceof Error ? e.message : String(e)); }
         }
         // Signal Ledger (owner request 2026-11-07): new H1 decisions and strategy setups, each
         // followed to its outcome in R on the closed bars. Never feeds a room or a decision.

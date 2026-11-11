@@ -13,6 +13,7 @@ import { DEFAULT_POLICY } from "./parity-registry.mjs";
 import { blackoutWindow } from "./ea-signal.mjs";
 import { OMEGA_DEFAULTS, RISK_PCT_MAX, ROLLOVER_QUARANTINE_UTC } from "./omega-engine.mjs";
 import { readSettings } from "./omega-broker.mjs";
+import { activeWitnessTuning, tuningFrozen } from "./witness-tuning.mjs";
 
 export const DOCTRINE_FACTS_SCHEMA = "cryptophys.doctrine-facts.v1";
 
@@ -31,10 +32,14 @@ export async function nexusFacts(env) {
   const t = modeThresholds(mode);
   const guards = guardrailIds({ ...env, TRADING_MODE: t.mode });
   const { beforeMs, afterMs } = blackoutWindow(env);
+  // The weights in force: the auto-tuned set when one is active (src/witness-tuning.mjs).
+  let weights = { ...activeWitnessWeights(env) };
+  try { weights = { ...(await activeWitnessTuning(env)).weights }; } catch { /* the static set */ }
   return {
     "decision.engine_enabled": decisionEngineEnabled(env),
     "decision.cadence": "15m",
-    "decision.witness_weights": { ...activeWitnessWeights(env) },
+    "decision.witness_weights": weights,
+    "decision.witness_tuning": tuningFrozen(env) ? "default" : "auto",
     "decision.guardrails": guards,
     "decision.confirmation_required": guards.includes("confirmation"),
     "decision.trading_mode": t.mode,
