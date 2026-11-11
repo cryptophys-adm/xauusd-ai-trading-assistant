@@ -256,7 +256,8 @@ export async function publishM15LocalComputation(env, { now = Date.now(), force 
   };
   if (ok) await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 });
   await kv.put(LAST_M15_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
-  return summary;
+  // The records go back to the caller (not to KV) for the broker shadow lane (src/broker-shadow.mjs).
+  return { ...summary, records: built.records };
 }
 
 /** H4/D1 lane (owner decision 2026-11-05): last publish summary per chart. */

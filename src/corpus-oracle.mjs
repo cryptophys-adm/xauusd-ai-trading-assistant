@@ -225,7 +225,8 @@ export async function corpusStatus(env, { now = Date.now() } = {}) {
       basis_m15: corpusBasis(m15.map((b) => ({ close_ms: b.close_ms, close: b.close })), reference)
     });
   }
-  return { mode, phase: 1, feeds_local_lane: false, sources, macro };
+  // Phase 2 (2026-11-11): the broker shadow lane's agreement with TradingView's engines; it feeds nothing.
+  return { mode, phase: 2, feeds_local_lane: false, sources, macro, shadow: await brokerShadowSummary(env, { now }) };
 }
 
 // ---------------------------------------------------------------- the MT5 fallback, stage 2 (2026-11-11)
@@ -360,5 +361,66 @@ export async function readMt5Calendar(env, { fromMs, toMs } = {}) {
     return rows.map((r) => ({ id: r.value_id, title: r.title, time: r.time, country: "US", currency: "USD", importance: r.importance, actual: r.actual, forecast: r.forecast, previous: r.previous, unit: r.unit, source: "mt5" }));
   } catch {
     return [];
+  }
+}
+
+// ---------------------------------------------------------------- phase 2: the broker shadow lane (2026-11-11)
+// The pull adapter runs the 15m engines once more on the broker's M15 bars and sends the field-by-field
+// agreement with TradingView's records (market-data-ingestion/src/broker-shadow.mjs). Kept here, shown on
+// the corpus status; it feeds no parity, room, decision or signal.
+const SHADOW_SCHEMA = `CREATE TABLE IF NOT EXISTS broker_shadow (
+  candle_key TEXT NOT NULL, engine TEXT NOT NULL, source TEXT, fields INTEGER NOT NULL, matched INTEGER NOT NULL,
+  mismatched_json TEXT, direction_match INTEGER, recorded_ms INTEGER NOT NULL, PRIMARY KEY (candle_key, engine))`;
+const SHADOW_ENGINES = Object.freeze(["prophet", "gmi", "mizan"]);
+const SHADOW_KEEP_MS = 30 * 86_400_000;
+
+/** RPC from the pull adapter: one 15m bar's agreement per engine. Never throws. */
+export async function recordBrokerShadow(env, payload, { now = Date.now() } = {}) {
+  const db = env?.DB;
+  if (!db || !payload || typeof payload !== "object") return { ok: false, error: "unavailable" };
+  const key = clean(payload.candle_key, 80);
+  if (!/^[A-Z]+:[A-Z0-9]+:15:\d+$/.test(key)) return { ok: false, error: "invalid_candle_key" };
+  try {
+    await db.prepare(SHADOW_SCHEMA).run();
+    let stored = 0;
+    for (const [engine, e] of Object.entries(payload.engines || {})) {
+      if (!SHADOW_ENGINES.includes(engine) || !finite(e?.fields) || !finite(e?.matched) || e.matched > e.fields) continue;
+      const mismatched = Array.isArray(e.mismatched) ? e.mismatched.slice(0, 20).map((m) => clean(m, 80)) : [];
+      const dm = e.direction_match === true ? 1 : e.direction_match === false ? 0 : null;
+      await db.prepare(`INSERT INTO broker_shadow (candle_key, engine, source, fields, matched, mismatched_json, direction_match, recorded_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(candle_key, engine) DO UPDATE SET fields = excluded.fields, matched = excluded.matched, mismatched_json = excluded.mismatched_json, direction_match = excluded.direction_match, recorded_ms = excluded.recorded_ms`)
+        .bind(key, engine, clean(payload.source, 80) || null, e.fields, e.matched, JSON.stringify(mismatched), dm, now).run();
+      stored += 1;
+    }
+    await db.prepare("DELETE FROM broker_shadow WHERE recorded_ms < ?").bind(now - SHADOW_KEEP_MS).run();
+    return { ok: true, stored };
+  } catch (error) {
+    return { ok: false, error: String(error?.message ?? error).slice(0, 120) };
+  }
+}
+
+/** The shadow lane's agreement over the last `days`, per engine. Never throws. */
+export async function brokerShadowSummary(env, { now = Date.now(), days = 7 } = {}) {
+  try {
+    await env.DB.prepare(SHADOW_SCHEMA).run();
+    const rows = (await env.DB.prepare("SELECT engine, fields, matched, mismatched_json, direction_match FROM broker_shadow WHERE recorded_ms >= ?").bind(now - days * 86_400_000).all())?.results || [];
+    const out = {};
+    for (const engine of SHADOW_ENGINES) {
+      const list = rows.filter((r) => r.engine === engine);
+      if (!list.length) continue;
+      const fields = list.reduce((n, r) => n + r.fields, 0), matched = list.reduce((n, r) => n + r.matched, 0);
+      const withDir = list.filter((r) => r.direction_match != null);
+      const counts = {};
+      for (const r of list) for (const f of JSON.parse(r.mismatched_json || "[]")) counts[f] = (counts[f] || 0) + 1;
+      out[engine] = {
+        bars: list.length,
+        field_agreement: fields ? Math.round((matched / fields) * 1000) / 1000 : null,
+        direction_agreement: withDir.length ? Math.round((withDir.filter((r) => r.direction_match === 1).length / withDir.length) * 1000) / 1000 : null,
+        most_different: Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5).map(([field, bars]) => ({ field, bars }))
+      };
+    }
+    return { days, engines: out };
+  } catch {
+    return { days, engines: {} };
   }
 }

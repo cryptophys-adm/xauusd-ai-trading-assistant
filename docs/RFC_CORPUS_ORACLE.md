@@ -52,6 +52,25 @@ from exactly the terminal, broker, symbol and user that Omega trades with.
 - **Plans.** Omega's plan could then read levels on the broker's own scale instead of distances
   from the TradingView price.
 
+## Phase 2 as built (2026-11-11, owner: "All", the deferred plans)
+
+- **Shadow lane, no identity.** At each 15m close the TradingView lane publishes, the pull adapter runs
+  the same 15m producer once more on the broker's M15 bars. Those bars are aggregated from the corpus' M1
+  through `corpusBars`, cached in KV `market-data:v2:broker-shadow:m15`, and extended with the new minutes
+  only. Every other series stays TradingView's (`market-data-ingestion/src/broker-shadow.mjs`).
+- **Agreement, not parity.** The two records' comparable fields are compared field by field. Only the
+  agreement goes to the AI Worker (`LocalComputationIngress.recordBrokerShadow`, D1 `broker_shadow`,
+  30 days): fields, fields that match, the fields that differ, and whether the direction agrees.
+  - A broker identity cannot earn TradingView's parity, because its input bars differ by the basis.
+    The lane therefore registers no identity and feeds no parity, room, decision or signal.
+- **Measured** on `GET /api/corpus/status` under `shadow`: per engine over 7 days, the bars, the field
+  and direction agreement, and the fields that differ most. It needs 400 broker M15 bars, about 4 trading
+  days of corpus.
+- **Skipped while the MT5 fallback runs**, since both lanes would then read the broker's bars.
+- **Switch:** `BROKER_SHADOW_MODE` on the pull adapter, `on` (default) or `off`.
+- **What comes next is the owner's decision:** a basis-adjusted comparison, and whether a broker lane may
+  ever feed Omega's plans.
+
 ## Switches
 
 - `CORPUS_ORACLE_MODE` (AI Worker): `off`, the default, which ignores the corpus; or `shadow`, which

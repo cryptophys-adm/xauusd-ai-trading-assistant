@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { aggregateBars, corpusBasis, corpusMode, corpusSource, corpusStatus, ingestCorpus, readCorpusBars, resetCorpusSchemaCacheForTests, validateCorpus, ingestCorpusMacro, readMacroBars, validateCorpusMacro, ingestMt5Calendar, readMt5Calendar } from "../src/corpus-oracle.mjs";
+import { aggregateBars, corpusBasis, corpusMode, corpusSource, corpusStatus, ingestCorpus, readCorpusBars, resetCorpusSchemaCacheForTests, validateCorpus, ingestCorpusMacro, readMacroBars, validateCorpusMacro, ingestMt5Calendar, readMt5Calendar, recordBrokerShadow, brokerShadowSummary } from "../src/corpus-oracle.mjs";
 import { feedAt, keyCloseOf } from "../src/feed.mjs";
 import { bridgeSync, resetOmegaBrokerSchemaForTests } from "../src/omega-broker.mjs";
 
@@ -170,4 +170,22 @@ test("stage 2: the macro symbols' bars and the MQL5 calendar, only from Omega's 
   assert.equal((await ingestMt5Calendar(env, cal, { executor: EXECUTOR, now: NOW })).events, 1, "USD within 30 days only");
   const events = await readMt5Calendar(env, { fromMs: Date.parse("2026-11-06T00:00:00Z"), toMs: Date.parse("2026-11-06T23:59:59Z") });
   assert.deepEqual(events.map((e) => [e.title, e.time, e.actual, e.forecast, e.source]), [["Nonfarm Payrolls", "2026-11-06T13:30:00.000Z", 119, 50, "mt5"]]);
+});
+
+test("phase 2: the broker shadow lane's agreement per 15m bar and engine, summarised on the corpus status; never a price", async () => {
+  resetCorpusSchemaCacheForTests();
+  const db = d1();
+  const env = { DB: db, CORPUS_ORACLE_MODE: "shadow" };
+  const key = (i) => `OANDA:XAUUSD:15:${T0 + i * 15 * M}`;
+  assert.equal((await recordBrokerShadow(env, { candle_key: "OANDA:XAUUSD:60:1", engines: {} })).error, "invalid_candle_key", "15m only");
+  await recordBrokerShadow(env, { candle_key: key(0), source: "mt5:monex-live:XAUUSD", engines: { prophet: { fields: 10, matched: 10, mismatched: [], direction_match: true }, gmi: { fields: 5, matched: 4, mismatched: ["gmi_v12_70.gate"], direction_match: true }, other: { fields: 1, matched: 1 } } }, { now: NOW });
+  await recordBrokerShadow(env, { candle_key: key(1), engines: { prophet: { fields: 10, matched: 8, mismatched: ["prophet_r38.t_enc", "prophet_r38.d_enc"], direction_match: false }, gmi: { fields: 5, matched: 9 } } }, { now: NOW });
+  const s = await brokerShadowSummary(env, { now: NOW });
+  assert.deepEqual(s.engines.prophet, { bars: 2, field_agreement: 0.9, direction_agreement: 0.5, most_different: [{ field: "prophet_r38.d_enc", bars: 1 }, { field: "prophet_r38.t_enc", bars: 1 }] });
+  assert.equal(s.engines.gmi.bars, 1, "matched above fields is refused");
+  assert.equal(s.engines.other, undefined, "unknown engines are refused");
+  const status = await corpusStatus(env, { now: NOW });
+  assert.equal(status.phase, 2);
+  assert.equal(status.feeds_local_lane, false);
+  assert.deepEqual(status.shadow.engines.prophet.bars, 2);
 });
