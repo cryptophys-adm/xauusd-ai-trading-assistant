@@ -44,7 +44,8 @@ test("extractModelText reads chat.completion content and never returns the raw o
 
 // Model migration (owner decision 2026-11-07): glm-5.3-flash and nemotron-3-120b-a12b stop answering
 // on 2026-11-20; each model family takes its own request form.
-import { MODELS, modelFamily, modelRequests, isRequestShapeError, runModel, responsesIncomplete, extractModelText } from "../src/model-text.mjs";
+import { readFileSync } from "node:fs";
+import { MODELS, RETIRED_MODELS, modelFamily, modelRequests, isRequestShapeError, runModel, responsesIncomplete, extractModelText } from "../src/model-text.mjs";
 import { roleModels, parseModelObject, MODERATOR_DEFAULT_MODEL, BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL } from "../src/multi-agent-bus.mjs";
 import { stepRole } from "../src/agent-threads.mjs";
 
@@ -52,7 +53,7 @@ const msgs = [{ role: "system", content: "s" }, { role: "user", content: "u" }];
 const schema = { type: "object", properties: { a: { type: "string" } }, required: ["a"], additionalProperties: false };
 
 test("request forms per model family: gpt-oss reasons by effort, gemma-4 answers with thinking off", () => {
-  assert.deepEqual(["@cf/openai/gpt-oss-120b", "@cf/google/gemma-4-26b-a4b-it", "@cf/zai-org/glm-5.3-flash", "@cf/zai-org/glm-4.7-flash", "@cf/nvidia/nemotron-3-120b-a12b", "x"].map(modelFamily), ["gpt-oss", "gemma-4", "glm-5", "glm-4", "nemotron", "chat"]);
+  assert.deepEqual(["@cf/openai/gpt-oss-120b", "@cf/google/gemma-4-26b-a4b-it", "@cf/zai-org/glm-4.7-flash", "x"].map(modelFamily), ["gpt-oss", "gemma-4", "glm-4", "chat"]);
   const oss = modelRequests(MODELS.GPT_OSS_120B, { messages: msgs, maxTokens: 900, effort: "high", schemaName: "x", schema });
   assert.equal(oss.length, 3);
   assert.deepEqual(oss[0].response_format, { type: "json_schema", json_schema: { name: "x", strict: true, schema } });
@@ -66,7 +67,6 @@ test("request forms per model family: gpt-oss reasons by effort, gemma-4 answers
   assert.ok(gemma.every((r) => r.chat_template_kwargs.enable_thinking === false && r.max_tokens === 500));
   assert.ok(gemma[0].response_format && !gemma[1].response_format);
   assert.equal(modelRequests("@cf/zai-org/glm-4.7-flash", { messages: msgs, maxTokens: 100 })[0].max_tokens, 200, "glm-4.7 reasons without effort control: twice the budget");
-  assert.equal(modelRequests("@cf/zai-org/glm-5.3-flash", { messages: msgs, maxTokens: 100, effort: "medium" })[0].reasoning_effort, "low", "never medium on glm-5.3 (maps to max)");
 });
 
 test("a request form the model rejects falls back to the next; any other error is thrown", async () => {
@@ -101,4 +101,16 @@ test("models per role: the role's variable, then MULTI_AGENT_MODEL, then the def
   assert.deepEqual(roleModels({ MULTI_AGENT_MODEL: "m", MULTI_AGENT_FALLBACK_MODEL: "" }, "moderator"), { primary: "m", fallback: "" }, "the legacy variables override every role");
   assert.deepEqual(roleModels({ MULTI_AGENT_MODEL: "m", MODERATOR_MODEL: "mod", MODERATOR_FALLBACK_MODEL: "f" }, "moderator"), { primary: "mod", fallback: "f" });
   assert.deepEqual(["conclusion", "moderator", "tldr", "open:risk", "debate:risk", "tag:1", "technical"].map(stepRole), ["moderator", "moderator", "moderator", "agent", "agent", "agent", "agent"]);
+});
+
+test("no model retired on 2026-11-20 is a default or configured in either wrangler config (owner 2026-11-11)", () => {
+  const retired = new Set(RETIRED_MODELS);
+  for (const m of [...Object.values(MODELS), BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL, MODERATOR_DEFAULT_MODEL]) assert.ok(!retired.has(m), `default ${m}`);
+  for (const file of ["wrangler.jsonc", "wrangler.preview.jsonc"]) {
+    const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8").replace(/\/\/[^\n]*/g, "");
+    const configured = [...text.matchAll(/"(@cf\/[^"]+)"/g)].map((m) => m[1]);
+    assert.ok(configured.length > 0, `${file} configures models`);
+    for (const m of configured) assert.ok(!retired.has(m), `${file}: ${m} is retired on 2026-11-20`);
+  }
+  assert.equal(modelFamily("@cf/openai/gpt-oss-120b"), "gpt-oss", "the H1 and news-chain Reasoner stays on gpt-oss-120b (owner: same class as nemotron)");
 });

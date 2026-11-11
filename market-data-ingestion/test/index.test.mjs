@@ -573,3 +573,21 @@ test("after a gap, a pull that brought no new bar backs off instead of repeating
   assert.ok(planRequest(h1, { candles: [h1Last], fetched_at: new Date((h1Now - 60) * 1000).toISOString() }, h1Now));
   assert.equal(gapBackoffSeconds(h1), 900);
 });
+
+test("an idle up_to_date minute writes no refresh summary; a change or a 30-minute-old summary does (KV writes, 2026-11-11)", async () => {
+  const { writeRefreshStatus, STATUS_REWRITE_MS } = await import("../src/index.mjs");
+  const kv = new MemoryKV();
+  let puts = 0;
+  const put = kv.put.bind(kv);
+  kv.put = async (k, v, o) => { puts += 1; return put(k, v, o); };
+  const t0 = Date.parse("2026-11-11T02:00:00.000Z");
+  const idle = (at) => ({ status: "up_to_date", requested: 0, updated: [], derived: [], checked_at: new Date(at).toISOString() });
+  assert.equal(await writeRefreshStatus(kv, idle(t0), t0), true, "the first summary is written");
+  for (let m = 1; m < 30; m++) assert.equal(await writeRefreshStatus(kv, idle(t0 + m * 60_000), t0 + m * 60_000), false, `minute ${m} is idle`);
+  assert.equal(puts, 1);
+  assert.equal(await writeRefreshStatus(kv, { ...idle(t0 + 5 * 60_000), derived: [{ series: "m5" }] }, t0 + 5 * 60_000), true, "a derived bar is written");
+  assert.equal(await writeRefreshStatus(kv, { status: "ok", requested: 2, updated: ["m1"], checked_at: new Date(t0 + 6 * 60_000).toISOString() }, t0 + 6 * 60_000), true, "a pull is written");
+  assert.equal(await writeRefreshStatus(kv, idle(t0 + 7 * 60_000), t0 + 7 * 60_000), true, "a new status is written");
+  assert.equal(await writeRefreshStatus(kv, idle(t0 + 7 * 60_000 + STATUS_REWRITE_MS + 1), t0 + 7 * 60_000 + STATUS_REWRITE_MS + 1), true, "an old summary is refreshed");
+  assert.equal(await writeRefreshStatus(undefined, idle(t0), t0), false, "no binding, no write");
+});

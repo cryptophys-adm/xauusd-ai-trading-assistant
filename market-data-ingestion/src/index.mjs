@@ -34,12 +34,29 @@ function constantTimeEqual(left, right) {
   return diff === 0;
 }
 
+/**
+ * The cron runs every minute, so writing the refresh summary on every run cost 1,440 KV writes a
+ * day on its own (owner 2026-11-11, resource management: "KV writes"). The summary is written when
+ * something happened (a pull, an update, a derived bar, an error or a new status) or when the stored
+ * one is older than STATUS_REWRITE_MS; an idle "up_to_date" minute writes nothing.
+ */
+export const STATUS_REWRITE_MS = 30 * 60_000;
+export async function writeRefreshStatus(kv, summary, now = Date.now()) {
+  if (!kv) return false;
+  let previous = null;
+  try { previous = JSON.parse((await kv.get(STATUS_KEY)) || "null"); } catch { previous = null; }
+  const quiet = summary.status === "up_to_date" && !(summary.requested > 0) && !(summary.updated?.length) && !(summary.derived?.length);
+  const fresh = previous?.status === summary.status && Date.parse(previous?.checked_at || "") > now - STATUS_REWRITE_MS;
+  if (quiet && fresh) return false;
+  await kv.put(STATUS_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
+  return true;
+}
+
 async function pull(env, options = {}) {
   const result = await refreshSeries(env, options);
-  const summary = { ...result, checked_at: new Date().toISOString() };
-  if (env.MARKET_DATA_CACHE) {
-    await env.MARKET_DATA_CACHE.put(STATUS_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
-  }
+  const now = Date.now();
+  const summary = { ...result, checked_at: new Date(now).toISOString() };
+  await writeRefreshStatus(env.MARKET_DATA_CACHE, summary, now);
   return summary;
 }
 

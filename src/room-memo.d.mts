@@ -1,0 +1,10 @@
+export const ROOM_MEMO_SCHEMA_SQL: string[];
+export const ROOM_MEMO_TTL_MS: number;
+export function roomMemoEnabled(env: unknown): boolean;
+export function memoKind(threadId: unknown): string;
+export function memoEligible(base: unknown): boolean;
+export function inputHash(parts: unknown): Promise<string>;
+export function ensureRoomMemoSchema(db: unknown): Promise<void>;
+export function resetRoomMemoSchemaCacheForTests(): void;
+export function memoLookup(db: unknown, opts: { kind: string; step: string; hash: string; now?: number; ttlMs?: number }): Promise<Record<string, any> | null>;
+export function memoStore(db: unknown, opts: { kind: string; step: string; hash: string; messageId?: number | null; model?: string | null; answer: unknown; now?: number }): Promise<boolean>;

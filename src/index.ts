@@ -211,6 +211,8 @@ import { readCorrelations } from "./correlations.mjs";
 import { refreshCalendar, readCalendar, gatedEvents } from "./econ-calendar.mjs";
 import { refreshEconReleases } from "./econ-releases.mjs";
 import { sendLedgerAlerts, readLedgerAlerts } from "./ledger-alerts.mjs";
+import { readAiUsage } from "./ai-usage.mjs";
+import { roomMemoEnabled } from "./room-memo.mjs";
 import { notifyH1Decision } from "./h1-telegram.mjs";
 import { runPendingMacroRooms, readMacroRoom } from "./macro-room.mjs";
 import { readParityView } from "./parity-view.mjs";
@@ -247,8 +249,13 @@ function safeKeyPart(value: string): string {
  * One chat call in the request form of its model family (model-text.mjs modelRequests): gpt-oss
  * takes reasoning_effort (or the Responses form), gemma-4 runs with thinking off.
  */
-async function aiRun(env: Env, model: string, opts: { messages: unknown[]; maxTokens: number; effort?: string }): Promise<unknown> {
-  return (await runModel(env.AI as unknown as { run: (model: string, input: unknown) => Promise<unknown> }, model, opts)).result;
+async function aiRun(env: Env, model: string, opts: { messages: unknown[]; maxTokens: number; effort?: string }, source = "h1_chain"): Promise<unknown> {
+  // The usage meter (src/ai-usage.mjs): the H1 chain's analyst, counselor and reasoner calls.
+  const meter = env.DB ? { db: env.DB, source } : null;
+  return (await runModel(env.AI as unknown as { run: (model: string, input: unknown) => Promise<unknown> }, model, { ...opts, meter })).result;
+}
+function aiRunAs(source: string, env: Env, model: string, opts: { messages: unknown[]; maxTokens: number; effort?: string }): Promise<unknown> {
+  return aiRun(env, model, opts, source);
 }
 
 function extractText(result: unknown): string {
@@ -472,7 +479,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.conversation.id": traceConversationId,
       "gen_ai.request.model": String(env.AI_MODEL_ANALYST as keyof AiModels)
     });
-    return aiRun(env, env.AI_MODEL_ANALYST, {
+    return aiRunAs("h1_analyst", env, env.AI_MODEL_ANALYST, {
     messages: chatMessages([
       "You are the Fundamental News Analyst for XAUUSD decision support.",
       "Analyze only the supplied news articles. Do not infer current price action, technical indicators, or unpublished facts.",
@@ -494,7 +501,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.conversation.id": traceConversationId,
       "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR as keyof AiModels)
     });
-    return aiRun(env, env.AI_MODEL_COUNSELOR, {
+    return aiRunAs("h1_counselor", env, env.AI_MODEL_COUNSELOR, {
     messages: chatMessages([
       "You are the Fundamental News Counselor.",
       "Use only the news evidence and analyst output. Provide balanced conditional scenarios, not trade execution instructions.",
@@ -516,7 +523,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.conversation.id": traceConversationId,
       "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
     });
-    return aiRun(env, env.AI_MODEL_REASONER, {
+    return aiRunAs("h1_reasoner", env, env.AI_MODEL_REASONER, {
     messages: chatMessages([
       "You are the final Fundamental News Reasoner for XAUUSD decision support.",
       "Synthesize only the supplied article evidence, analyst output, and counselor output. This is a fundamental outlook, not a technical trade signal.",
@@ -1073,7 +1080,7 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
           "gen_ai.conversation.id": candleKey,
           "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
         });
-        return aiRun(env, env.AI_MODEL_REASONER, {
+        return aiRunAs("h1_reasoner", env, env.AI_MODEL_REASONER, {
           messages: chatMessages(reasonerLines({ evidence, consensus, quorum, plan, laneRule: laneRule(parked.local_primary !== false), decisionTextRule: DECISION_TEXT_RULE, tradePlanRule: TRADE_PLAN_RULE })),
           maxTokens: MAX_TOKENS.reasoner,
           effort: "medium"
@@ -1444,7 +1451,7 @@ async function runAnalysisFromBundle(
         "gen_ai.conversation.id": bundle.request_id,
         "gen_ai.request.model": String(env.AI_MODEL_ANALYST)
       });
-      return aiRun(env, env.AI_MODEL_ANALYST, {
+      return aiRunAs("h1_analyst", env, env.AI_MODEL_ANALYST, {
       messages: chatMessages([
         "You are the Analyst stage in an XAUUSD decision-support pipeline.",
         "Classify the supplied indicator evidence without inventing missing values or prices.",
@@ -1474,7 +1481,7 @@ async function runAnalysisFromBundle(
         "gen_ai.conversation.id": bundle.request_id,
         "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR)
       });
-      return aiRun(env, env.AI_MODEL_COUNSELOR, {
+      return aiRunAs("h1_counselor", env, env.AI_MODEL_COUNSELOR, {
       messages: chatMessages([
         "You are the Counselor stage in an XAUUSD decision-support pipeline.",
         "Use only the JSON evidence and analyst output below. Do not invent prices or indicator definitions.",
@@ -1505,7 +1512,7 @@ async function runAnalysisFromBundle(
         "gen_ai.conversation.id": bundle.request_id,
         "gen_ai.request.model": String(env.AI_MODEL_REASONER)
       });
-      return aiRun(env, env.AI_MODEL_REASONER, {
+      return aiRunAs("h1_reasoner", env, env.AI_MODEL_REASONER, {
       messages: chatMessages([
         "You are the final Deep Reasoner stage for XAUUSD decision support.",
         "Use only the supplied evidence, analyst output, and counselor output. Do not invent market prices or claim the models verified facts they did not receive.",
@@ -2274,6 +2281,17 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "ok", alerts: await readLedgerAlerts(env, { days }) });
     } catch (error) {
       console.error("alerts_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/ai-usage") {
+    // Owner 2026-11-11 ("kurangi neuron/hari"): Workers AI tokens and estimated neurons per day, source
+    // and model, with the room memo counters (src/ai-usage.mjs, src/room-memo.mjs). Read-only.
+    try {
+      const days = Math.min(31, Math.max(1, Number(url.searchParams.get("days") || "2") || 2));
+      return dashboardJson({ status: "ok", usage: await readAiUsage(env.DB, { days }), room_memo_enabled: roomMemoEnabled(env) });
+    } catch (error) {
+      console.error("ai_usage_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
     }
   }
