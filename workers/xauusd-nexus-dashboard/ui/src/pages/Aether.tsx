@@ -12,7 +12,7 @@ import { ago } from "../lib/format";
  */
 
 const TIMEFRAMES = ["15", "60", "240", "1D"] as const;
-const TF_LABEL: Record<string, string> = { "15": "15m", "60": "1H", "240": "4H", "1D": "D1" };
+const TF_LABEL: Record<string, string> = { "15": "15m", "60": "1H", "240": "4H", "1D": "D1", engine: "Decision Engine witnesses" };
 const pct = (x?: number | null) => (x == null ? "n/a" : `${Math.round(x * 1000) / 10}%`);
 const num = (x?: number | null, d = 2) => (x == null ? "n/a" : x.toFixed(d));
 const short = (s?: string | null, n = 12) => (s ? s.slice(0, n) : "n/a");
@@ -94,6 +94,100 @@ function Weighting({ reports }: { reports: any[] }) {
             <div className="glass-inner p-3 text-[12px]">
               <div className="label">Reverse shadow (rollback check)</div>
               {r.reverse ? <p className="text-slate-300">Previous <span className="mono">{r.reverse.previous_id}</span> against the active point on {r.reverse.rooms} rooms since {r.reverse.since ? ago(r.reverse.since) : "n/a"}: {pct(r.reverse.previous_accuracy)} vs {pct(r.reverse.active_accuracy)}, p {r.reverse.p_value ?? "n/a"}. A rollback needs 100 rooms and p &lt; 0.05.</p>
+                : <p className="text-slate-500">No activation yet, so nothing to roll back.</p>}
+            </div>
+            <div>
+              <div className="label">History</div>
+              {(r.history || []).length ? (r.history || []).map((h: any, i: number) => (
+                <div key={i} className="flex flex-wrap items-center gap-2 py-0.5 text-[11px]">
+                  <Badge tone={h.kind === "rolled_back" ? "red" : h.kind === "activated" ? "green" : "slate"}>{h.kind}</Badge>
+                  <span className="mono text-slate-300">{h.id ?? ""}</span><span className="text-slate-500">{h.at ? ago(h.at) : ""}</span>
+                  {h.reason && <span className="text-slate-500">· {String(h.reason).slice(0, 120)}</span>}
+                </div>
+              )) : <Empty>No activation or rollback yet.</Empty>}
+            </div>
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+/** The B-11 starting set (src/decision-engine.mjs EXTENDED_WITNESS_WEIGHTS), the reference each tuned set is drawn against. */
+const B11: Record<string, number> = { D1: 0.16, H4: 0.16, H1: 0.16, M15: 0.12, NEWS: 0.08, MACRO: 0.04, STRATEGY: 0.08, KEY_LEVELS: 0.05, REGIME: 0.05, TREND_TF: 0.05, MACRO_DRIVERS: 0.03, SESSION: 0.02 };
+const WITNESS_LABEL: Record<string, string> = { D1: "Daily room", H4: "4H room", H1: "1H room", M15: "15m room", NEWS: "News Daily", MACRO: "Macro room", STRATEGY: "Strategy", KEY_LEVELS: "Key levels", REGIME: "Regime", TREND_TF: "Trend TF", MACRO_DRIVERS: "Macro drivers", SESSION: "Session" };
+const SOURCE_TEXT: Record<string, string> = { auto_tuned: "auto-tuned set", default: "B-11 default", base: "base set (weighting off)" };
+
+/**
+ * The Decision Engine's witness weights (owner 2026-11-11: "harusnya bobot itu dinamis sesuai dengan auto
+ * tune yang ada di aether"): xauusd's report of timeframe "engine", as Aether stored it for the audit.
+ */
+function WitnessWeights({ reports }: { reports: any[] }) {
+  const r = (reports || []).find((x) => x.timeframe === "engine");
+  const active: Record<string, number> = r?.active?.params || {};
+  const keys = Object.keys(B11);
+  const max = Math.max(0.28, ...keys.map((k) => active[k] ?? 0));
+  const best = [...(r?.candidates || [])].sort((a: any, b: any) => ((b.discovery?.bars ?? 0) + (b.holdout?.bars ?? 0)) - ((a.discovery?.bars ?? 0) + (a.holdout?.bars ?? 0)))[0];
+  return (
+    <Panel title="Decision Engine witness weights" icon={<Scale className="h-3.5 w-3.5" />} right={<Badge tone="purple">auto-tuned · audited</Badge>}>
+      {!r ? <Empty>No witness-weighting report yet. xauusd sends one each hour, in the first sweep after the 1H close.</Empty> : (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-3">
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+              <dt className="text-slate-500">In force</dt><dd className="mono text-slate-200">{SOURCE_TEXT[r.active?.source] ?? r.active?.source ?? "n/a"} <span className="text-slate-500">{r.active?.id ?? ""}</span></dd>
+              <dt className="text-slate-500">Change</dt><dd className="text-slate-300">{r.active?.change ?? "n/a"}</dd>
+              <dt className="text-slate-500">Activated</dt><dd className="mono">{r.active?.activated_at ? ago(r.active.activated_at) : "never (B-11)"}</dd>
+              <dt className="text-slate-500">Decisions replayed</dt><dd className="mono">{r.rooms} {r.window_days ? `(${r.window_days} days)` : ""} · scored {r.control?.scored_rooms ?? "n/a"} · right {pct(r.control?.accuracy)}</dd>
+              <dt className="text-slate-500">Replay fidelity</dt><dd className="mono">{r.replay_fidelity?.checks ? `${pct(r.replay_fidelity.share)} of ${r.replay_fidelity.checks} quorum checks match the record` : "n/a"}</dd>
+              <dt className="text-slate-500">Report</dt><dd className="mono">{r.received_at ? ago(r.received_at) : "n/a"}</dd>
+            </dl>
+            <div>
+              <div className="label">Weights in force (bar) against B-11 (marker)</div>
+              {keys.map((k) => {
+                const w = active[k];
+                const d = w == null ? null : w - B11[k];
+                return (
+                  <div key={k} className="grid grid-cols-[110px_1fr_52px_60px] items-center gap-2 py-0.5 text-[11px]">
+                    <span className="truncate text-slate-400">{WITNESS_LABEL[k]}</span>
+                    <div className="relative h-1.5 w-full rounded-full bg-white/5">
+                      <div className="h-1.5 rounded-full bg-cyan-400/70" style={{ width: `${w == null ? 0 : Math.max(2, Math.round((w / max) * 100))}%` }} />
+                      <div className="absolute -top-0.5 h-2.5 w-px bg-amber-300/80" style={{ left: `${Math.round((B11[k] / max) * 100)}%` }} title={`B-11 ${pct(B11[k])}`} />
+                    </div>
+                    <span className="mono text-right text-slate-200">{pct(w)}</span>
+                    <span className={`mono text-right ${d == null || Math.abs(d) < 0.0005 ? "text-slate-500" : d > 0 ? "text-emerald-300" : "text-rose-300"}`}>{d == null ? "n/a" : Math.abs(d) < 0.0005 ? "=" : `${d > 0 ? "+" : ""}${Math.round(d * 1000) / 10}pp`}</span>
+                  </div>
+                );
+              })}
+            </div>
+            {best && (
+              <div className="glass-inner p-3 text-[12px]">
+                <div className="label">Closest to a verdict</div>
+                <p className="text-slate-300">{best.change ?? best.changed}: discovery {best.discovery?.bars ?? 0} of 200 decisions, holdout {best.holdout?.bars ?? 0} of {best.holdout?.required_bars ?? 100}.</p>
+                <div className="mt-1"><Bar value={Math.min(200, best.discovery?.bars ?? 0)} max={200} /></div>
+              </div>
+            )}
+          </div>
+          <div className="space-y-3">
+            <div className="table-wrap">
+              <table className="tbl">
+                <thead><tr><th>Candidate</th><th>Verdict</th><th>Discovery</th><th>Holm p</th><th>Holdout</th></tr></thead>
+                <tbody>
+                  {(r.candidates || []).slice(0, 12).map((c: any) => (
+                    <tr key={c.id}>
+                      <td title={c.id}>{c.change ?? c.changed ?? c.id}</td>
+                      <td className={`mono ${verdictTone(c.verdict)}`}>{c.verdict ?? "n/a"}</td>
+                      <td className="mono">{c.discovery ? `${pct(c.discovery.accuracy)} vs ${pct(c.discovery.control_accuracy)} (${c.discovery.bars ?? 0})` : "n/a"}</td>
+                      <td className="mono">{c.discovery?.p_holm ?? "n/a"}</td>
+                      <td className="mono">{c.holdout ? `${pct(c.holdout.accuracy)} vs ${pct(c.holdout.control_accuracy)}${c.holdout.complete ? "" : " · open"}` : "n/a"}</td>
+                    </tr>
+                  ))}
+                  {!(r.candidates || []).length && <tr><td colSpan={5} className="text-slate-500">No candidate replayed yet.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <div className="glass-inner p-3 text-[12px]">
+              <div className="label">Reverse shadow (rollback check)</div>
+              {r.reverse ? <p className="text-slate-300">Previous <span className="mono">{r.reverse.previous_id}</span> against the weights in force on {r.reverse.rooms} decisions since {r.reverse.since ? ago(r.reverse.since) : "n/a"}: {pct(r.reverse.previous_accuracy)} vs {pct(r.reverse.active_accuracy)}, p {r.reverse.p_value ?? "n/a"}. A rollback needs 100 decisions and p &lt; 0.05.</p>
                 : <p className="text-slate-500">No activation yet, so nothing to roll back.</p>}
             </div>
             <div>
@@ -512,7 +606,7 @@ export default function Aether() {
   return (
     <div className="space-y-4">
       <Panel title="Aether · Knowledge Guardian" icon={<Brain className="h-3.5 w-3.5" />} right={<Badge tone="purple">advisory only · read-only view</Badge>}>
-        <p className="text-[12px] leading-relaxed text-slate-400">Aether keeps the canon, stores every room's decision card, audits agent compliance, proposes learned knowledge for shadow testing and audits the automatic room weighting. It never changes a decision and never holds a price. Updated {ago(o.generated_at)}.</p>
+        <p className="text-[12px] leading-relaxed text-slate-400">Aether keeps the canon, stores every room's decision card, audits agent compliance, proposes learned knowledge for shadow testing and audits the automatic room and witness weighting. It never changes a decision and never holds a price. Updated {ago(o.generated_at)}.</p>
       </Panel>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi label="Decision cards" value={String(totalCards)} sub={charts.map(([k, v]) => `${TF_LABEL[k] ?? k} ${v.cards}`).join(" · ") || "none yet"} color="#39d0d8" icon={<Database className="h-3 w-3" />} />
@@ -522,6 +616,7 @@ export default function Aether() {
       </div>
       <NexusAnalyticsBridge analytics={analytics} />
       <Sync aether={o.sync} worker={(status as any)?.aether?.sync} />
+      <WitnessWeights reports={o.weighting || []} />
       <Weighting reports={o.weighting || []} />
       <div className="grid gap-4 xl:grid-cols-2">
         <Guardian g={o.guardian} />
