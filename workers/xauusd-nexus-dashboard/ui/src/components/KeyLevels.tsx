@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { Fragment, useEffect, useId, useState } from "react";
 import { Crosshair } from "lucide-react";
 import { Badge, Panel, Skeleton } from "./ui";
 import { C } from "./charts";
@@ -24,6 +24,17 @@ const isNum = (v: any): v is number => typeof v === "number" && Number.isFinite(
 const chartName = (tab: string) => (tab === "NEWS" ? "1H" : tabLabel(tab as any));
 
 type Cpr = { pivot: number; tc: number; bc: number; position?: string | null } | null | undefined;
+
+/** The price between the listed zones: the zones above it sit over this row, the ones below it under it. */
+function PriceRow({ price }: { price: number }) {
+  return (
+    <div className="flex items-center gap-2 px-2.5 text-[10px] text-slate-300" aria-label={`price ${price.toFixed(2)}`}>
+      <span className="h-px flex-1 border-t border-dashed border-slate-500/60" />
+      <span className="mono">price {price.toFixed(2)}</span>
+      <span className="h-px flex-1 border-t border-dashed border-slate-500/60" />
+    </div>
+  );
+}
 
 /**
  * One price axis for both: on the left the Camarilla set of the active tab's chart with the daily
@@ -138,7 +149,11 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
   const set = sets.find((s) => s.tf === pick) ?? sets[0] ?? null;
   const verified = levels?.calibration?.levels === "computed_from_verified_bars";
   const hasK = k && isNum(k.price);
-  const cands = hasK ? ((k.candidates ?? []) as any[]).slice().sort((a, b) => Math.abs(a.price - k.price) - Math.abs(b.price - k.price)).slice(0, 6) : [];
+  // The six candidates nearest to price, listed by price from the highest down, as on the map (owner
+  // 2026-11-11: "disusun sesuai level harga supaya tidak ambigu"), with the price row where it falls.
+  const cands = hasK ? ((k.candidates ?? []) as any[]).slice().sort((a, b) => Math.abs(a.price - k.price) - Math.abs(b.price - k.price)).slice(0, 6)
+    .sort((a, b) => b.high - a.high || b.low - a.low) : [];
+  const priceRow = hasK ? cands.filter((z) => (z.low + z.high) / 2 > k.price).length : -1;
   const busy = (loading && !g) || (levelsLoading && !levels);
   return (
     <Panel title={`Key levels · ${chartName(tab)}`} icon={<Crosshair className="h-3.5 w-3.5 text-violet-300" />}
@@ -193,13 +208,17 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
           {cands.length > 0 && (
             <div className="mt-2 space-y-1">
               {cands.map((z: any, i: number) => (
-                <div key={i} className="glass-inner flex items-center gap-2 px-2.5 py-1.5 text-[11px]" title={memberLines(z)}>
-                  <i className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: ROLE_COLOR[z.role] ?? C.muted }} />
-                  <span className="mono w-32 shrink-0 text-slate-100">{range(z)}</span>
-                  <span className="w-16 shrink-0 text-[10px] uppercase tracking-[0.12em] text-slate-500">{z.strength}</span>
-                  <span className="min-w-0 flex-1 truncate text-[10.5px] text-slate-400">{z.label}</span>
-                </div>
+                <Fragment key={i}>
+                  {i === priceRow && <PriceRow price={k.price} />}
+                  <div className="glass-inner flex items-center gap-2 px-2.5 py-1.5 text-[11px]" title={memberLines(z)}>
+                    <i className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: ROLE_COLOR[z.role] ?? C.muted }} />
+                    <span className="mono w-32 shrink-0 text-slate-100">{range(z)}</span>
+                    <span className="w-16 shrink-0 text-[10px] uppercase tracking-[0.12em] text-slate-500">{z.strength}</span>
+                    <span className="min-w-0 flex-1 truncate text-[10.5px] text-slate-400">{z.label}</span>
+                  </div>
+                </Fragment>
               ))}
+              {priceRow === cands.length && <PriceRow price={k.price} />}
             </div>
           )}
           {hasK && <p className="mt-2 text-[10.5px] leading-snug text-slate-500">{k.summary}</p>}
