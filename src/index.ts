@@ -228,7 +228,7 @@ import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition } from "./omega-broker.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars } from "./corpus-oracle.mjs";
-import { feedAt, keyCloseOf } from "./feed.mjs";
+import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -2047,6 +2047,20 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   }
   async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown }): Promise<JsonObject> {
     return bridgeSync(this.env, input ?? {}) as Promise<JsonObject>;
+  }
+  /** The MT5 fallback switch and its state (owner 2026-11-11), for the War Room through Omega. */
+  async feedFallback(): Promise<JsonObject> {
+    return readFeedFallback(this.env) as Promise<JsonObject>;
+  }
+  /** A person switches the MT5 fallback on ("auto") or off, with a reason; audited and sent to Telegram. */
+  async setFeedFallback(input: { mode?: string; reason?: string; actor?: string }): Promise<JsonObject> {
+    const result = await setFeedFallback(this.env, input ?? {}) as JsonObject;
+    if (result.ok === true && result.changed === true) {
+      const on = result.mode === "auto";
+      const text = `XAUUSD SYSTEM · MT5 fallback switched ${on ? "ON" : "OFF"} by the owner (${String(input?.reason ?? "").slice(0, 160)}). ${on ? "While TradingView is down, prices come from the broker's MT5 bars and decisions trade on them." : "While TradingView is down, prices stop and decisions hold WAIT."}`;
+      try { await sendTelegram(this.env, text); } catch (e) { console.error("feed_fallback_telegram_failed", e instanceof Error ? e.message : String(e)); }
+    }
+    return result;
   }
   async closePosition(input: { ticket: number; reason?: string; actor?: string }): Promise<JsonObject> {
     return closePosition(this.env, input ?? {}) as Promise<JsonObject>;

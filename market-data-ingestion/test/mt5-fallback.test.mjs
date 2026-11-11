@@ -1,7 +1,7 @@
 // The MT5 fallback (docs/RFC_MT5_FALLBACK.md; owner 2026-11-11). src/mt5-fallback.mjs.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyMt5Fallback, brokerCandles, gatewayDown, fallbackMode, FALLBACK_STALE_S } from "../src/mt5-fallback.mjs";
+import { applyMt5Fallback, brokerCandles, gatewayDown, fallbackMode, resolveFallbackMode, FALLBACK_STALE_S, FEED_FALLBACK_KEY } from "../src/mt5-fallback.mjs";
 import { SERIES, SERIES_INTERNALS, readSeries, refreshSeries, healPlan, buildBundle } from "../src/tradingview-source.mjs";
 
 class MemoryKV {
@@ -118,4 +118,43 @@ test("F4. healing: TradingView back, the native series are pulled over the fallb
   assert.equal(m5.candles.find((x) => x.time === T0).close, 4030.5);
   assert.equal(m5.candles.find((x) => x.time === T0).src, undefined);
   assert.equal((await buildBundle(env, nowSec * 1000)).feed, "tradingview");
+});
+
+test("F5. the owner's switch (War Room, 2026-11-11) wins over FEED_FALLBACK_MODE", async () => {
+  const kv = new MemoryKV();
+  await tradingViewCache(kv);
+  const ai = aiWorker(brokerRows(10));
+  const now = (T0 + 10 * 60 + 5) * 1000;
+  await kv.put(FEED_FALLBACK_KEY, JSON.stringify({ mode: "off", actor: "owner@example.com", reason: "test" }));
+  const off = await applyMt5Fallback({ MARKET_DATA_CACHE: kv, AI_WORKER: ai, FEED_FALLBACK_MODE: "auto" }, "mcp_quota_cooldown_active", { now });
+  assert.deepEqual([off.status, off.mode_source], ["off", "owner"]);
+  assert.equal(ai.calls.length, 0);
+  await kv.put(FEED_FALLBACK_KEY, JSON.stringify({ mode: "auto", actor: "owner@example.com", reason: "test" }));
+  assert.deepEqual(await resolveFallbackMode({ MARKET_DATA_CACHE: kv }), { mode: "auto", source: "owner" });
+  assert.equal((await applyMt5Fallback({ MARKET_DATA_CACHE: kv, AI_WORKER: ai }, "mcp_quota_cooldown_active", { now })).status, "active", "on without the env switch");
+  await kv.put(FEED_FALLBACK_KEY, "not json");
+  assert.deepEqual(await resolveFallbackMode({ MARKET_DATA_CACHE: kv, FEED_FALLBACK_MODE: "auto" }), { mode: "auto", source: "env" });
+});
+
+test("F6. 4H and daily bars from the broker's minutes follow the series' own grid (OANDA's session start, 22:00 UTC)", async () => {
+  const kv = new MemoryKV();
+  const sec = (iso) => Date.parse(iso) / 1000;
+  const at = (s) => new Date(s * 1000).toISOString();
+  // TradingView until 13:00 UTC Thursday; the 4H series' last bar 10:00, the daily one Tuesday 22:00.
+  const m1 = [];
+  for (let t = sec("2027-01-13T21:00:00Z"); t < sec("2027-01-14T13:00:00Z"); t += 60) m1.push(bar(t, 60, 4040, 4041, 4039, 4040.5));
+  await put(kv, "OANDA:XAUUSD|1m", { fetched_at: at(sec("2027-01-14T13:00:00Z")), candles: m1 });
+  await put(kv, "OANDA:XAUUSD|4h", { candles: [bar(sec("2027-01-14T06:00:00Z"), 14400, 4030, 4045, 4025, 4040), bar(sec("2027-01-14T10:00:00Z"), 14400, 4040, 4046, 4035, 4041)] });
+  await put(kv, "OANDA:XAUUSD|1D", { candles: [bar(sec("2027-01-12T22:00:00Z"), 86400, 4000, 4050, 3990, 4030)] });
+  const rows = [];
+  for (let t = sec("2027-01-14T13:00:00Z"); t < sec("2027-01-14T22:30:00Z"); t += 60) rows.push({ t: t * 1000, o: 4020, h: 4022, l: 4018, c: 4021, v: 5 });
+  const r = await applyMt5Fallback({ MARKET_DATA_CACHE: kv, AI_WORKER: aiWorker(rows), FEED_FALLBACK_MODE: "auto" }, "mcp_quota_cooldown_active", { now: Date.parse("2027-01-14T22:31:05Z") });
+  assert.equal(r.status, "active", JSON.stringify(r));
+  const h4 = (await readSeries(kv, spec("OANDA:XAUUSD|4h"))).candles.filter((c) => c.src === "mt5");
+  assert.deepEqual(h4.map((c) => c.open_time), ["2027-01-14T14:00:00.000Z", "2027-01-14T18:00:00.000Z"], "on the 22/02/06/10/14/18 grid, not the epoch's 12/16/20");
+  assert.equal(h4[0].high, 4022);
+  const d1 = (await readSeries(kv, spec("OANDA:XAUUSD|1D"))).candles.filter((c) => c.src === "mt5");
+  assert.deepEqual(d1.map((c) => c.open_time), ["2027-01-13T22:00:00.000Z"], "Wednesday 22:00 to Thursday 22:00, TradingView's minutes then the broker's");
+  assert.deepEqual([d1[0].open, d1[0].close, d1[0].low], [4040, 4021, 4018]);
+  assert.equal((await readSeries(kv, spec("OANDA:XAUUSD|1W"))), null, "the weekly bar waits for TradingView");
 });

@@ -6,12 +6,13 @@ import PriorityQueue from "../components/PriorityQueue";
 import AssistantPanel from "../components/AssistantPanel";
 import GlobalDecision from "../components/GlobalDecision";
 import OrganismCard from "../components/OrganismCard";
+import FeedFallbackCard from "../components/FeedFallbackCard";
 import { MarketProvider } from "../lib/market";
 import { TabProvider } from "../lib/tab";
 
 /**
  * Owner decision 2026-11-06:
- * - Left: the Digital Organism card (top), Priority Queue (health alerts), system issues (only when a
+ * - Left: the Digital Organism card (top), the MT5 fallback switch (2026-11-11), Priority Queue (health alerts), system issues (only when a
  *   lane is amber or red) and the agents of the room in the active tab.
  * - Center: the chart, and under it the living War Rooms of every timeframe in one tabbed card
  *   (News | 15m | 1H | 4H | D1, opening on News); each tab starts with its conclusion.
@@ -27,12 +28,13 @@ export default function WarRoom() {
       <div className="mx-auto flex max-w-[1680px] gap-5 px-3 py-3 sm:px-6 sm:py-5">
         <aside className="hidden w-[260px] shrink-0 flex-col gap-4 xl:flex">
           <OrganismCard />
+          <FeedFallbackCard />
           <PriorityQueue />
           <SystemIssues />
           <Roster />
         </aside>
         <main className="flex min-w-0 flex-1 flex-col gap-4">
-          <div className="flex flex-col gap-4 xl:hidden"><OrganismCard /><PriorityQueue /><SystemIssues /></div>
+          <div className="flex flex-col gap-4 xl:hidden"><OrganismCard /><FeedFallbackCard /><PriorityQueue /><SystemIssues /></div>
           <PriceChart />
           <div className="lg:hidden">
             <GlobalDecision />

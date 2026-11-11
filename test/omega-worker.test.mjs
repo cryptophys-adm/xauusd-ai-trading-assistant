@@ -218,3 +218,25 @@ test("the page uses relative URLs only and loads the envelope module; the broker
   assert.match(html, /type="password"/);
   assert.match(js, /"b-login", "b-password"\]\) document\.getElementById\(id\)\.value = ""/, "the credentials are cleared after a submit");
 });
+
+test("the MT5 fallback switch (War Room, 2026-11-11): read when signed in; changed by a person, same origin, a reason", async () => {
+  resetKeyCacheForTests();
+  const calls = [];
+  const O = { ...omega(), feedFallback: async () => ({ mode: "auto", active: true }), setFeedFallback: async (input) => { calls.push(input); return { ok: true, mode: input.mode, changed: true }; } };
+  const env = { ...ENV_BASE, OMEGA: O };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const person = await jwt({ email: "Owner@Example.com" });
+  const read = await handle(req("/api/feed-fallback", { token: person }), env, opts);
+  assert.equal(read.status, 200);
+  assert.deepEqual(await read.json(), { mode: "auto", active: true, can_control: true });
+  const post = (body, extra = {}) => handle(req("/api/feed-fallback", { token: person, method: "POST", body, ...extra }), env, opts);
+  assert.equal((await post({ mode: "off", reason: "TradingView only" })).status, 200);
+  assert.deepEqual(calls.at(-1), { mode: "off", reason: "TradingView only", actor: "owner@example.com" });
+  assert.equal((await post({ mode: "off" })).status, 400, "a reason is required");
+  assert.equal((await post({ mode: "on", reason: "x" })).status, 400, "auto or off only");
+  assert.equal((await post({ mode: "auto", reason: "x" }, { origin: "https://evil.example" })).status, 403, "cross-origin refused");
+  assert.equal((await handle(req("/api/feed-fallback", { token: await jwt({ common_name: "ci.access" }), method: "POST", body: { mode: "auto", reason: "x" } }), env, opts)).status, 403, "a service token never changes it");
+  assert.equal((await handle(req("/api/feed-fallback", { token: person, method: "DELETE" }), env, opts)).status, 405);
+  assert.equal((await handle(req("/api/feed-fallback"), env, opts)).status, 403, "no JWT, nothing");
+  assert.equal(calls.length, 1);
+});
