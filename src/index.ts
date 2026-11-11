@@ -192,6 +192,7 @@ import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport } from "./aether-push.mjs";
 import { pushDoctrineFacts } from "./doctrine-facts.mjs";
 import { aetherSyncStatus } from "./aether-sync.mjs";
+import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
@@ -2292,6 +2293,16 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "ok", aether: { ...(await aetherPushStatus(env)), learned_pack: await packStatus(env), sync: await aetherSyncStatus(env) } });
     } catch (error) {
       console.error("aether_status_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/aether/nexus-analytics") {
+    // Intelligent Aether Bridge: exposes synthesized Nexus Analytics telemetry feeding the quorum weighting engine.
+    try {
+      const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") || "30") || 30));
+      return dashboardJson({ status: "ok", ...(await collectNexusAnalytics(env, { days })) });
+    } catch (error) {
+      console.error("nexus_analytics_api_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
     }
   }

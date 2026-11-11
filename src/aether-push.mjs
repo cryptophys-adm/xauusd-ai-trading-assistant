@@ -10,6 +10,7 @@
 // Aether, and a transport failure leaves the ledger untouched so the next hour retries it.
 
 import { loadDecisionCards, cardLeaks } from "./decision-cards.mjs";
+import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 
 export const AETHER_PUSH_VERSION = "cryptophys.aether-push.v1";
 /** Cards per chart each hour. Wide enough to resend a card when its outcome lands (horizon 4 candles). */
@@ -126,7 +127,7 @@ const WEIGHTING_PUSH_SQL = `CREATE TABLE IF NOT EXISTS aether_weighting_report_p
  * Pure: the weighting report for Aether's calibrator, from readWeightingReplay. Parameters, ids,
  * counts, accuracies and p-values only: no price, level or size.
  */
-export function weightingReport(replay, { now = Date.now() } = {}) {
+export function weightingReport(replay, { now = Date.now(), nexusAnalytics = null } = {}) {
   const stat = (t) => (t ? { bars: t.bars, candidate_better: t.candidate_better, control_better: t.control_better, p_value: t.p_value, ...(t.p_holm !== undefined ? { p_holm: t.p_holm } : {}), accuracy: t.accuracy, control_accuracy: t.control_accuracy, ...(t.complete !== undefined ? { complete: t.complete, required_bars: t.required_bars } : {}) } : null);
   return {
     version: WEIGHTING_REPORT_VERSION, equation: replay?.equation ?? null, generated_at: new Date(now).toISOString(),
@@ -139,16 +140,26 @@ export function weightingReport(replay, { now = Date.now() } = {}) {
     holm: replay?.holm ?? null,
     candidates: (replay?.candidates || []).map((c) => ({ id: c.id, changed: c.changed, change: c.change, params: c.params, verdict: c.verdict, same_rooms: c.same_rooms, differing_decisions: c.differing_decisions, discovery: stat(c.discovery), holdout: stat(c.holdout) })),
     reverse: replay?.reverse ?? null,
-    history: (replay?.history || []).slice(-10)
+    history: (replay?.history || []).slice(-10),
+    nexus_analytics: nexusAnalytics ?? replay?.nexus_analytics ?? null
   };
 }
 
 /** Sweep step, hourly: sends the weighting report when it changed. Never throws for an Aether failure. */
-export async function pushWeightingReport(env, replay, { now = Date.now() } = {}) {
+export async function pushWeightingReport(env, replay, { now = Date.now(), nexusAnalytics = null } = {}) {
   if (typeof env?.AETHER?.ingestWeightingReport !== "function") return { status: "disabled" };
   if (!env.DB || !replay) return { status: "unavailable" };
   await env.DB.prepare(WEIGHTING_PUSH_SQL).run();
-  const report = weightingReport(replay, { now });
+
+  let analytics = nexusAnalytics;
+  if (!analytics && env?.DB) {
+    try { analytics = await collectNexusAnalytics(env, { now }); } catch {}
+  }
+  if (analytics && typeof env?.AETHER?.ingestNexusAnalytics === "function") {
+    try { await env.AETHER.ingestNexusAnalytics(analytics); } catch {}
+  }
+
+  const report = weightingReport(replay, { now, nexusAnalytics: analytics });
   const { generated_at: _g, ...content } = report;
   const sha = await sha256(JSON.stringify(content));
   const prev = await env.DB.prepare("SELECT content_sha, status FROM aether_weighting_report_pushes WHERE timeframe = ?").bind(report.timeframe).first();

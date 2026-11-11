@@ -108,10 +108,12 @@ export function neighbourPoints(active = WEIGHTING_DEFAULT) {
   return out;
 }
 
-/** Pure: the quorum share of a point in a regime. */
-export function quorumFor(params, regime = null) {
+/** Pure: the quorum share of a point in a regime, adapting with dynamic analytics feedback. */
+export function quorumFor(params, regime = null, { analytics = null } = {}) {
   const p = { ...WEIGHTING_DEFAULT, ...params };
-  return r3(p.quorum_share + (String(regime ?? "").startsWith("high") ? p.high_vol_quorum_bonus : 0));
+  const volBonus = String(regime ?? "").startsWith("high") ? p.high_vol_quorum_bonus : 0;
+  const frictionBonus = analytics?.quorum_weighting_input?.friction_surcharge ?? 0;
+  return r3(clamp(p.quorum_share + volBonus + frictionBonus, 0.45, 0.75));
 }
 
 /**
@@ -119,7 +121,7 @@ export function quorumFor(params, regime = null) {
  * { close_ms, result, brier, regime }; only those whose outcome was known at `at` (close + horizon)
  * and within `days` count. Returns { weight, accuracy, calibration, decisive, n }.
  */
-export function agentWeight(rows, params, at, { horizonMs = SCORING.horizon * 3_600_000, regime = null } = {}) {
+export function agentWeight(rows, params, at, { horizonMs = SCORING.horizon * 3_600_000, regime = null, discount = 1, isStuck = false } = {}) {
   const p = { ...WEIGHTING_DEFAULT, ...params };
   const g = { H: 0, D: 0, B: 0, NB: 0, n: 0 }, r = { H: 0, D: 0 };
   for (const row of rows || []) {
@@ -132,16 +134,18 @@ export function agentWeight(rows, params, at, { horizonMs = SCORING.horizon * 3_
     }
     if (Number.isFinite(row.brier)) { g.B += d * (0.25 - row.brier); g.NB += d; }
   }
-  return weightFromSums(g, p, regime ? r : null);
+  return weightFromSums(g, p, regime ? r : null, { discount, isStuck });
 }
 
 /** Pure: the weight from decay-weighted sums (shared by the live path and the replay). */
-export function weightFromSums({ H = 0, D = 0, B = 0, NB = 0, n = 0 }, params, regimeSums = null) {
+export function weightFromSums({ H = 0, D = 0, B = 0, NB = 0, n = 0 }, params, regimeSums = null, { discount = 1, isStuck = false } = {}) {
   const p = { ...WEIGHTING_DEFAULT, ...params };
+  if (isStuck) return { weight: p.weight_range[0], accuracy: null, calibration: null, decisive: r3(D), n, stuck: true };
   const accG = (H + p.prior / 2) / (D + p.prior);
   const acc = p.regime_prior != null && regimeSums ? (regimeSums.H + p.regime_prior * accG) / (regimeSums.D + p.regime_prior) : accG;
   const cal = NB ? B / (0.25 * (NB + p.prior)) : 0;
-  const weight = clamp(2 * acc * (1 + p.calibration_beta * cal), p.weight_range[0], p.weight_range[1]);
+  const d = Number.isFinite(discount) ? clamp(discount, 0.25, 1.0) : 1;
+  const weight = clamp(2 * acc * (1 + p.calibration_beta * cal) * d, p.weight_range[0], p.weight_range[1]);
   return { weight: r3(weight), accuracy: r3(acc), calibration: r3(cal), decisive: r3(D), n };
 }
 

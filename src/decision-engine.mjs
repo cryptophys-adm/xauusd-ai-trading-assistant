@@ -93,6 +93,7 @@ const STANCES = ["BUY", "SELL", "WAIT"];
 const BIASES = ["BULLISH", "BEARISH", "NEUTRAL"];
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
 const r2 = (v) => (isNum(v) ? Math.round(v * 100) / 100 : null);
+const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const clip = (s, n) => String(s ?? "").slice(0, n);
 const dirOf = (s) => (s === "BUY" || s === "BULLISH" || s === "LONG" ? 1 : s === "SELL" || s === "BEARISH" || s === "SHORT" ? -1 : 0);
 const sideOf = (v) => (!isNum(v) || Math.abs(v) < LEAN ? "NEUTRAL" : v > 0 ? "BULLISH" : "BEARISH");
@@ -169,22 +170,37 @@ const _decayFactor = (c, now, decayPerHour) => {
   if (!Number.isFinite(f) || f <= 0 || f > 1) return 1;
   return Math.pow(f, ageHours);
 };
-export function quorumOf(cards, { now = Date.now(), decayPerHour = QUORUM_DECAY_PER_HOUR } = {}) {
+export function quorumOf(cards, { now = Date.now(), decayPerHour = QUORUM_DECAY_PER_HOUR, analytics = null } = {}) {
   const counting = (cards || []).filter((c) => c.available && !c.stale && isNum(c.lean));
-  const decayed = counting.map((c) => ({ ...c, _w: c.weight * _decayFactor(c, now, decayPerHour) }));
+  const decayed = counting.map((c) => {
+    let w = c.weight * _decayFactor(c, now, decayPerHour);
+    // Apply agent-level compliance discount or stuck disqualification from Nexus Analytics & Intelligent Aether
+    if (analytics?.quorum_weighting_input?.agent_weight_discounts?.[c.key] !== undefined) {
+      w *= analytics.quorum_weighting_input.agent_weight_discounts[c.key];
+    }
+    return { ...c, _w: w };
+  });
   const allWeight = decayed.reduce((s, c) => s + c._w, 0);
-  if (!allWeight) return { score: null, bias: "NEUTRAL", long_share: 0, short_share: 0, neutral_share: 0, witnesses: 0, weight: 0 };
+  if (!allWeight) return { score: null, bias: "NEUTRAL", long_share: 0, short_share: 0, neutral_share: 0, witnesses: 0, weight: 0, share_needed_above: 0.5 };
   // Neutral witnesses are excluded from the quorum denominator (G-06): only directional weight counts.
   const directional = decayed.filter((c) => Math.abs(c.lean) >= LEAN);
   const dirWeight = directional.reduce((s, c) => s + c._w, 0);
   const total = dirWeight > 0 ? dirWeight : allWeight;
   const share = (pred) => r2(directional.filter(pred).reduce((s, c) => s + c._w, 0) / total);
   const score = r2(decayed.reduce((s, c) => s + c._w * c.lean, 0) / allWeight);
+
+  // Dynamic Quorum Consensus floor adapted via Nexus Analytics & Aether (execution friction + volatility)
+  const baseShare = 0.5;
+  const friction = analytics?.quorum_weighting_input?.friction_surcharge ?? 0;
+  const vol = analytics?.quorum_weighting_input?.volatility_surcharge ?? 0;
+  const shareNeededAbove = r2(clamp(baseShare + friction + vol, 0.45, 0.75));
+
   return {
     score, bias: sideOf(score),
     long_share: share((c) => c.lean >= LEAN), short_share: share((c) => c.lean <= -LEAN),
     neutral_share: r2((allWeight - dirWeight) / allWeight),
-    witnesses: counting.length, weight: r2(allWeight)
+    witnesses: counting.length, weight: r2(allWeight),
+    share_needed_above: shareNeededAbove
   };
 }
 
@@ -714,14 +730,14 @@ export async function notifyDecision(env, d, send) {
 }
 
 /** Pure: the witnesses, the quorum and both sides' guardrails (with their plans) from the loaded inputs. */
-export function assess(loaded, { now = Date.now(), env = null } = {}) {
+export function assess(loaded, { now = Date.now(), env = null, analytics = null } = {}) {
   const { inputs = {}, strategy = null, global = null, macro = null, correlations = null, regime = null } = loaded || {};
   // The extended witnesses read their own data (owner 2026-11-10), and the session describes SESSION
   // (context: a session has no direction).
   const session = sessionAt(now);
   const context = { regime, correlations, session, independent: independentWitnesses(loaded) };
   const cards = witnessCards({ global, strategy, context, env });
-  const quorum = quorumOf(cards, { now });
+  const quorum = quorumOf(cards, { now, analytics });
   const market = marketContextOf(loaded, quorum, now);
   const withMarket = { ...inputs, market };
   const guards = { long: guardrailsFor(1, { cards, quorum, strategy, inputs: withMarket, macro, now, env }), short: guardrailsFor(-1, { cards, quorum, strategy, inputs: withMarket, macro, now, env }) };
@@ -729,10 +745,10 @@ export function assess(loaded, { now = Date.now(), env = null } = {}) {
 }
 
 /** Pure: the whole decision record from the loaded inputs, their assessment and the council's result (or null). */
-export function buildDecisionRecord({ key, barClose, loaded, assessment = null, council = null, previous = null, now = Date.now(), decidedAt = new Date(now).toISOString(), env = null }) {
+export function buildDecisionRecord({ key, barClose, loaded, assessment = null, council = null, previous = null, now = Date.now(), decidedAt = new Date(now).toISOString(), env = null, analytics = null }) {
   const { inputs = {}, strategy = null } = loaded || {};
   const { mode: MODE, quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR } = modeThresholds(env?.TRADING_MODE);
-  const { cards, quorum, guards, market } = assessment ?? assess(loaded, { now, env });
+  const { cards, quorum, guards, market } = assessment ?? assess(loaded, { now, env, analytics });
   const answer = council?.answer ?? null;
   const d = decide({ answer, guards, strategy, quorum });
   let text;
