@@ -65,7 +65,8 @@
     "OMEGA_ENGINE_ENABLED": "true",
     // Corpus Oracle phase 1 (owner 2026-11-11): "shadow" keeps the broker M1 corpus of Omega's active
     // broker, pair and user; "off" ignores it. It feeds no decision in phase 1.
-    "CORPUS_ORACLE_MODE": "off",
+    // Owner 2026-11-11 ("Nyalakan, host sudah #243"): collect the broker corpus for the MT5 fallback (docs/RFC_MT5_FALLBACK.md).
+    "CORPUS_ORACLE_MODE": "shadow",
     "INGEST_URL": "https://news.cryptophys.work",
     // Multi-agent bus, news threads and live 5m room: ON in production (Phase 4, owner approval 2026-11-04).
     // Shadow/advisory only: none of them writes into the H1 chain's evidence, prompts or decision.

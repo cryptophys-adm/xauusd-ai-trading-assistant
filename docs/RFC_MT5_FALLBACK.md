@@ -48,12 +48,12 @@ newer data, and the gap re-pull covers the outage, so the series heals itself.
 
    It stops at the first native M1 pull that succeeds.
 
-4. **Scale (the basis).** The broker's price is not OANDA's price. While both feeds run, the Corpus
-   Oracle measures the offset (broker minus TradingView) on the overlapping minutes
-   (`GET /api/corpus/status`).
-   - At the start of a fallback, the median offset of the last 24 hours is frozen and subtracted
-     from the broker bars. Levels, zones and the rooms' memory then stay on one scale.
-   - With fewer than 120 overlapping minutes, the bars go in unadjusted, and the records say so.
+4. **Scale: the broker's raw price** (owner choice 2026-11-11).
+   - The broker's bars go in as they are, without a basis adjustment.
+   - Levels can step by the broker-to-OANDA offset when a fallback starts and ends.
+   - The Corpus Oracle keeps measuring that offset while both feeds run (`GET /api/corpus/status`).
+     Each fallback record carries the last measured basis, so an outcome scored across a switch can
+     be read with it.
 
 5. **The series.**
    - Fallback bars are merged into `OANDA:XAUUSD|1m` with `src: "mt5"`. M5 and M15 derive as today.
@@ -74,14 +74,14 @@ newer data, and the gap re-pull covers the outage, so the series heals itself.
    - The rooms meet again, and the `fresh` guardrail passes.
    - Every decision made on fallback bars records `feed: "mt5_fallback"`.
    - It carries a caution: "market data from the broker (MT5 fallback); news and macro are stale".
-   - Owner choice 1 below decides what such a decision may do.
+   - It trades as usual (owner choice 2026-11-11): the same guardrails, no cap, executed by Omega and
+     the EA.
 
 8. **Execution.** Omega already trades on the broker's price and converts the plan into distances from
-   it. On fallback bars the plan sits on the basis-adjusted broker scale, so the conversion stays the
-   same.
+   it. On fallback bars the plan is already on the broker's scale.
 
 9. **Visibility.**
-   - The `market_data_stale` alert (#256) says when the fallback is on and with which basis.
+   - The `market_data_stale` alert (#256) says when the fallback is on.
    - The 5m context and Nexus show a "Broker feed (MT5 fallback)" badge.
    - Telegram reports the start and the end.
 
@@ -99,15 +99,12 @@ Rollout:
 2. `FEED_FALLBACK_MODE = shadow`.
 3. `FEED_FALLBACK_MODE = auto`.
 
-## Owner choices
+## Owner choices (decided 2026-11-11)
 
-1. **What a fallback decision may do:**
-   - (a) Trade as usual.
-   - (b) Trade with its confidence capped.
-   - (c) Advisory only: decided and shown, never executed by Omega or the EA.
-2. **Scale:** basis-adjusted (recommended, so levels stay continuous) or the broker's raw price.
-3. **Start collecting now:** `CORPUS_ORACLE_MODE = shadow` today. Also confirm that the MT5 host runs
-   the #243 bridge and executor, with `CorpusOracleEnabled` on.
+1. **What a fallback decision may do:** trade as usual.
+2. **Scale:** the broker's raw price.
+3. **Collection:** `CORPUS_ORACLE_MODE = shadow` from #256. The MT5 host runs the #243 bridge and
+   executor, with `CorpusOracleEnabled` on.
 
 ## Out of scope
 
