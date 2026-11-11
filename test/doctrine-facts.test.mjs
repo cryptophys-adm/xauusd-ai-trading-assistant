@@ -14,8 +14,10 @@ test("the facts report: both seats, the Decision Engine's thresholds per trading
   assert.equal(n["decision.trading_mode"], "intraday");
   assert.deepEqual([n["decision.quorum_min"], n["decision.lean"], n["decision.min_rrr"], n["decision.min_confidence"]], [0.5, 0.15, 1.5, 0.4]);
   assert.ok(Math.abs(Object.values(n["decision.witness_weights"]).reduce((s, w) => s + w, 0) - 1) < 1e-9);
-  assert.deepEqual(n["decision.guardrails"], ["market_open", "fresh", "quorum", "confirmation", "no_veto", "levels", "reward", "confidence"]);
-  assert.equal(n["decision.confirmation_required"], true);
+  assert.deepEqual(n["decision.guardrails"], ["market_open", "fresh", "quorum", "no_veto", "levels", "reward", "confidence"]);
+  // Owner 2026-11-11: the confirmation candle is the trigger of a market order, not a gate of the decision.
+  assert.equal(n["decision.confirmation_required"], false);
+  assert.equal(n["decision.execution_trigger"], "prophet_candle_for_market_orders");
   assert.deepEqual([n["calendar.blackout_before_min"], n["calendar.blackout_after_min"], n["parity.approval_candles"], n["weighting.mode"]], [120, 30, 24, "auto"]);
   assert.ok(Object.keys(n).every((k) => !k.startsWith("omega.")) && Object.keys(o).every((k) => k.startsWith("omega.")), "each fact in its own seat");
   assert.deepEqual([o["omega.risk_pct"], o["omega.max_spread_points"], o["omega.max_signal_age_min"], o["omega.rollover_quarantine_utc"]], [0.5, 60, 10, "21:55-22:15"]);

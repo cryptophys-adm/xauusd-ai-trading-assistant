@@ -42,6 +42,8 @@ export async function nexusFacts(env) {
     "decision.witness_tuning": tuningFrozen(env) ? "default" : "auto",
     "decision.guardrails": guards,
     "decision.confirmation_required": guards.includes("confirmation"),
+    // Owner 2026-11-11: the confirmation candle is the entry trigger (src/ea-signal.mjs entryTriggerFor).
+    "decision.execution_trigger": "prophet_candle_for_market_orders",
     "decision.trading_mode": t.mode,
     "decision.quorum_min": t.quorum_min,
     "decision.lean": t.lean,

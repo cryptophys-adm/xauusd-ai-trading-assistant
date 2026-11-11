@@ -59,19 +59,25 @@ test("witnesses: every room, the news, the macro room and the strategy, weighted
   assert.equal(quorumOf([]).score, null);
 });
 
-test("guardrails: the long passes; the short fails quorum and confirmation; stale rooms and vetoes block", () => {
+test("guardrails: the long passes; the short fails quorum; stale rooms and vetoes block; the candle is the entry trigger", () => {
   const { guards } = assess(loadedOf(), { now: NOW });
   assert.equal(guards.long.allowed, true, JSON.stringify(guards.long.checks));
-  assert.deepEqual(guards.long.checks.map((c) => c.id), ["market_open", "fresh", "quorum", "confirmation", "no_veto", "levels", "reward"]);
+  // Owner 2026-11-11: the confirmation candle is the entry trigger, not a gate of the decision.
+  assert.deepEqual(guards.long.checks.map((c) => c.id), ["market_open", "fresh", "quorum", "no_veto", "levels", "reward"]);
   assert.equal(guards.long.plan.entry, 4000);
   assert.equal(guards.short.allowed, false);
-  assert.deepEqual(guards.short.checks.filter((c) => !c.pass).map((c) => c.id), ["quorum", "confirmation"]);
+  assert.deepEqual(guards.short.checks.filter((c) => !c.pass).map((c) => c.id), ["quorum"]);
   const stale = assess(loadedOf({ global: { M15: { stale: true } } }), { now: NOW }).guards.long;
   assert.equal(stale.checks.find((c) => c.id === "fresh").pass, false, "a stale 15m room never trades");
   const noConfirm = assess(loadedOf({ global: { M15: { action: "WAIT" } } }), { now: NOW }).guards.long;
-  assert.equal(noConfirm.checks.find((c) => c.id === "confirmation").pass, false, "a bias alone is no entry");
+  assert.equal(noConfirm.allowed, true, "no candle does not block the decision");
+  assert.equal(noConfirm.entry_trigger.fired, false);
+  assert.match(noConfirm.entry_trigger.note, /waiting for a verified 5m/);
   const confirm5m = assess(loadedOf({ global: { M15: { action: "WAIT" } }, loaded: { inputs: { calendar: { events: [] }, confirmations: { m5_prophet_r38: { verified: true, buy_confirmed: true } } } } }), { now: NOW }).guards.long;
-  assert.equal(confirm5m.checks.find((c) => c.id === "confirmation").pass, true, "a verified 5m confirmation counts");
+  assert.deepEqual([confirm5m.entry_trigger.fired, confirm5m.entry_trigger.source], [true, "5m"], "a verified 5m confirmation fires the trigger");
+  const unverified = assess(loadedOf({ loaded: { inputs: { calendar: { events: [] }, confirmations: { m5_prophet_r38: { verified: false, buy_confirmed: true } } } } }), { now: NOW }).guards.long;
+  assert.equal(unverified.entry_trigger.fired, false, "an unverified 5m confirmation does not");
+  assert.deepEqual(guards.long.entry_trigger.rooms_agree, ["M15"], "the rooms that decided the side are kept for the record");
   const veto = assess(loadedOf({ loaded: { inputs: { calendar: { events: [] }, h1Snapshot: { huds: { prophet: { fields: { t_enc: 4 } } } } } } }), { now: NOW }).guards.long;
   assert.equal(veto.allowed, false, "a strategy veto blocks the side");
   const noLevels = assess(loadedOf({ loaded: { strategy: { ...STRATEGY, atr_h1: null } } }), { now: NOW }).guards.long;
@@ -103,7 +109,7 @@ test("the council answer: validated in plain words; guardrails overrule it; the 
   const sell = decide({ answer: { ...ok, stance: "SELL" }, guards, strategy: STRATEGY, quorum });
   assert.equal(sell.stance, "WAIT", "the council cannot break the guardrails");
   assert.equal(sell.overruled.wanted, "SELL");
-  assert.deepEqual(sell.overruled.failed.map((f) => f.check), ["quorum", "confirmation"]);
+  assert.deepEqual(sell.overruled.failed.map((f) => f.check), ["quorum"]);
   assert.equal(decide({ answer: { ...ok, confidence: 0.3 }, guards, strategy: STRATEGY, quorum }).stance, "WAIT", "below the confidence floor");
   assert.equal(decide({ answer: null, guards, strategy: STRATEGY, quorum }).stance, "WAIT", "fallback: the strategy said WAIT");
   const fb = decide({ answer: null, guards, strategy: { ...STRATEGY, decision: "BUY" }, quorum });
@@ -227,6 +233,30 @@ test("the EA signal from the decision: the chosen target, issued at the 15m clos
   assert.equal(eaSignalFromDecision({ decision: { decision_key: key, stance: "WAIT", trade: null } }).side, "NONE");
   assert.equal(eaSignalFromDecision({ decision: { decision_key: key, stance: "BUY", trade: { ...trade, stop: 4010 } } }).side, "NONE", "levels on the wrong side are never sent");
   assert.equal(eaSignalFromDecision({ decision: null }).side, "NONE");
+});
+
+test("the entry trigger: a market entry waits for the confirmation candle, a limit at the key level does not", () => {
+  const key = decisionKeyFor(CLOSE);
+  const trade = { side: "BUY", action: "ENTER_MARKET", entry: 4000, stop: 3993, target: "tp1", tp: 4030, tp1: 4030, tp2: 4050, rrr: 4.3 };
+  const noCandle = { fired: false, source: null, note: "waiting for a verified 5m (or 15m) Prophet buy confirmation" };
+  const decision = { decision_key: key, stance: "BUY", confidence: 0.7, decided_at: new Date(Date.parse(CLOSE) + 90_000).toISOString(), trade, guardrails: { long: { entry_trigger: noCandle }, short: { entry_trigger: noCandle } } };
+  const waiting = eaSignalFromDecision({ decision, now: NOW });
+  assert.equal(waiting.side, "NONE", "nothing to execute before the candle");
+  assert.deepEqual([waiting.awaiting_signal_id, waiting.awaiting_side], [key, "BUY"]);
+  assert.match(waiting.awaiting_reason, /waiting for a verified 5m/);
+  assert.ok(Object.values(waiting).every((v) => ["string", "number", "boolean"].includes(typeof v)), "flat for the EA");
+  const unverified = eaSignalFromDecision({ decision, now: NOW, liveM5: { verified: false, buy_confirmed: true, candle_time: "2026-11-09T13:25:00.000Z" } });
+  assert.equal(unverified.side, "NONE", "an unverified 5m candle does not fire it");
+  const wrongSide = eaSignalFromDecision({ decision, now: NOW, liveM5: { verified: true, sell_confirmed: true, candle_time: "2026-11-09T13:25:00.000Z" } });
+  assert.equal(wrongSide.side, "NONE", "a candle on the other side does not fire it");
+  const live = eaSignalFromDecision({ decision, now: NOW, liveM5: { verified: true, buy_confirmed: true, candle_time: "2026-11-09T13:25:00.000Z" } });
+  assert.deepEqual([live.side, live.action, live.trigger_required, live.trigger_source], ["BUY", "ENTER_MARKET", true, "5m"]);
+  assert.equal(live.decided_ms, Date.parse("2026-11-09T13:25:00.000Z"), "as fresh as the candle that fired it");
+  assert.ok(Object.values(live).every((v) => ["string", "number", "boolean"].includes(typeof v)), "flat for the EA");
+  const recorded = eaSignalFromDecision({ decision: { ...decision, guardrails: { long: { entry_trigger: { fired: true, source: "15m", note: "a 15m Prophet buy confirmation" } } } }, now: NOW });
+  assert.deepEqual([recorded.side, recorded.trigger_source], ["BUY", "15m"], "the candle the decision saw counts");
+  const limit = eaSignalFromDecision({ decision: { ...decision, trade: { ...trade, action: "ENTER_LIMIT" } }, now: NOW });
+  assert.deepEqual([limit.side, limit.action, limit.trigger_required], ["BUY", "ENTER_LIMIT", false], "a limit at the key level waits only for price");
 });
 
 test("the market context: the session with day, date and market state; regime; macro drivers; sentiment", () => {
