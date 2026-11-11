@@ -499,6 +499,22 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
   const valuation = Number((br as Record<string, unknown>)?.[["equ", "ity"].join("")] ?? (accountFunds + floatingPl));
   const floatingRatio = accountFunds > 0 ? (floatingPl / accountFunds) * 100 : 0;
 
+  // Extract dynamic slippage and latency metrics directly from intents
+  const completedIntents = intents.filter((it) => it.status === "done" && it.result?.ok);
+  const measuredSlippages = completedIntents
+    .map((it) => it.result?.slippage_pts)
+    .filter((v): v is number => typeof v === "number");
+  const dynamicAvgSlippage = measuredSlippages.length
+    ? Number((measuredSlippages.reduce((a, b) => a + Math.abs(b), 0) / measuredSlippages.length).toFixed(1))
+    : tca.avg_slippage_points;
+
+  const measuredLatencies = completedIntents
+    .map((it) => it.result?.latency_ms ?? (it.created_ms && it.result?.executed_ms ? it.result.executed_ms - it.created_ms : null))
+    .filter((v): v is number => typeof v === "number" && v > 0);
+  const dynamicAvgLatency = measuredLatencies.length
+    ? Math.round(measuredLatencies.reduce((a, b) => a + b, 0) / measuredLatencies.length)
+    : tca.avg_latency_ms;
+
   return (
     <div className="space-y-4">
       {/* Broker KPI Metrics Header */}
@@ -526,21 +542,21 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
         />
         <Kpi
           label="Average Slippage"
-          value={tca.avg_slippage_points != null ? `${tca.avg_slippage_points} pts` : "2.0 pts"}
-          sub={`Max: ${tca.max_slippage_points ?? 3} pts · ${tca.samples_count ?? 14} fills`}
+          value={dynamicAvgSlippage != null ? `${dynamicAvgSlippage} pts` : "0.0 pts"}
+          sub={`Max: ${tca.max_slippage_points ?? 0} pts · ${completedIntents.length} fills`}
           color={C.cyan}
           icon={<Sliders className="h-3.5 w-3.5 text-cyan-400" />}
         />
         <Kpi
           label="Execution Latency"
-          value={tca.avg_latency_ms != null ? `${tca.avg_latency_ms} ms` : "< 800 ms"}
-          sub={`Route: ${sor.active_route || "Monex-Demo"}`}
+          value={dynamicAvgLatency != null ? `${dynamicAvgLatency} ms` : "n/a"}
+          sub={`Route: ${sor.active_route || br.server || "Monex-Demo"}`}
           color={C.violet}
           icon={<Zap className="h-3.5 w-3.5 text-violet-400" />}
         />
         <Kpi
           label="Execution Quality"
-          value={tca.quality || "PRIME"}
+          value={tca.quality || (dynamicAvgSlippage != null && dynamicAvgSlippage <= 5 ? "PRIME" : "ACCEPTABLE")}
           sub={`SOR: ${sor.mode || "Auto Failover"}`}
           color={tca.quality === "PRIME" ? C.bull : C.wait}
           icon={<ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />}
@@ -552,12 +568,12 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
         <Panel
           title="Smart Order Router (SOR) & Redundancy"
           icon={<Compass className="h-3.5 w-3.5 text-cyan-400" />}
-          right={<Badge tone="green">{sor.status || "OPTIMAL"}</Badge>}
+          right={<Badge tone="green">{sor.status || (br.terminal_connected ? "OPTIMAL" : "STANDBY")}</Badge>}
         >
           <div className="grid grid-cols-2 gap-3 pt-1 text-[11px]">
             <div>
               <span className="text-[10px] uppercase text-slate-500">Primary Gateway</span>
-              <p className="mono font-semibold text-slate-200">{sor.primary_broker || "Monex-Demo"}</p>
+              <p className="mono font-semibold text-slate-200">{sor.primary_broker || br.server || "Monex-Demo"}</p>
             </div>
             <div>
               <span className="text-[10px] uppercase text-slate-500">Standby Route</span>
@@ -565,7 +581,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
             </div>
             <div>
               <span className="text-[10px] uppercase text-slate-500">Bridge Latency</span>
-              <p className="mono font-semibold text-emerald-400">{sor.bridge_latency_ms ?? 120} ms</p>
+              <p className="mono font-semibold text-emerald-400">{br.synced_age_ms != null ? `${br.synced_age_ms} ms` : "n/a"}</p>
             </div>
             <div>
               <span className="text-[10px] uppercase text-slate-500">Failover Ready</span>
@@ -582,11 +598,11 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
           <div className="grid grid-cols-2 gap-3 pt-1 text-[11px]">
             <div>
               <span className="text-[10px] uppercase text-slate-500">Current ATR M15</span>
-              <p className="mono font-semibold text-slate-200">{vol.atr_value ? `$${vol.atr_value}` : "$2.80"}</p>
+              <p className="mono font-semibold text-slate-200">{vol.atr_value != null ? `$${vol.atr_value}` : (br.spread_points ? `${br.spread_points} pts` : "Active")}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">ATR Points</span>
-              <p className="mono font-semibold text-slate-200">{vol.atr_points ?? 280} pts</p>
+              <span className="text-[10px] uppercase text-slate-500">Spread Points</span>
+              <p className="mono font-semibold text-slate-200">{br.spread_points != null ? `${br.spread_points} pts` : "n/a"}</p>
             </div>
             <div>
               <span className="text-[10px] uppercase text-slate-500">Dynamic Risk Model</span>
@@ -607,7 +623,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
         right={
           <div className="flex items-center gap-2">
             <Dot tone={positions.length > 0 ? "green" : "slate"} pulse={positions.length > 0} />
-            <span className="text-[11px] text-slate-400">MT5 Terminal Live</span>
+            <span className="text-[11px] text-slate-400">{positions.length > 0 ? "In Market" : "Terminal Idle"}</span>
           </div>
         }
       >
@@ -623,7 +639,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                   <th>Side</th>
                   <th>Volume</th>
                   <th>Open Price</th>
-                  <th>Current Price</th>
+                  <th>Current Bid/Ask</th>
                   <th>Stop Loss</th>
                   <th>Take Profit</th>
                   <th>Swap</th>
@@ -633,22 +649,24 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
               <tbody>
                 {positions.map((p) => {
                   const pProf = Number(p.profit) || 0;
+                  const pSide = p.side || p.type || "SELL";
+                  const curPx = pSide === "SELL" ? br.ask : br.bid;
                   return (
                     <tr key={p.ticket}>
                       <td className="mono font-bold text-cyan-300">#{p.ticket}</td>
-                      <td className="mono font-semibold">{p.symbol || "XAUUSD.m"}</td>
+                      <td className="mono font-semibold">{p.symbol || br.symbol || "XAUUSD.m"}</td>
                       <td
                         className="mono font-bold"
-                        style={{ color: p.type === "BUY" ? C.bull : C.bear }}
+                        style={{ color: pSide === "BUY" ? C.bull : C.bear }}
                       >
-                        {p.type}
+                        {pSide}
                       </td>
                       <td className="mono">{p.volume ?? 0.01}</td>
-                      <td className="mono">{px(p.open_price)}</td>
-                      <td className="mono">{px(p.current_price ?? p.open_price)}</td>
+                      <td className="mono font-semibold text-slate-200">{px(p.open_price)}</td>
+                      <td className="mono text-slate-300">{curPx != null ? px(curPx) : px(p.current_price ?? p.open_price)}</td>
                       <td className="mono text-rose-300">{px(p.sl)}</td>
                       <td className="mono text-emerald-300">{px(p.tp)}</td>
-                      <td className="mono text-slate-400">{usd(p.swap, false)}</td>
+                      <td className="mono text-slate-400">{p.swap != null ? usd(p.swap, false) : "$0.00"}</td>
                       <td
                         className="mono font-bold"
                         style={{ color: pProf >= 0 ? C.bull : C.bear }}
@@ -684,30 +702,36 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                   <th>Target Price</th>
                   <th>Fill Price</th>
                   <th>Slippage</th>
+                  <th>Latency</th>
                   <th>Ticket</th>
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody>
-                {intents.slice(0, 10).map((it, idx) => (
-                  <tr key={it.id || idx}>
-                    <td className="mono text-slate-400">{it.created_ms ? when(new Date(it.created_ms).toISOString()) : "—"}</td>
-                    <td className="mono text-cyan-300">{String(it.id || it.intent_id || "intent").slice(0, 18)}</td>
-                    <td className="mono font-bold" style={{ color: it.side === "BUY" ? C.bull : C.bear }}>{it.side}</td>
-                    <td className="mono">{it.volume ?? 0.01}</td>
-                    <td className="mono">{px(it.price)}</td>
-                    <td className="mono font-medium text-slate-200">{px(it.result?.fill_price ?? it.price)}</td>
-                    <td className="mono">
-                      {it.result?.slippage_pts != null ? (
-                        <span style={{ color: Math.abs(it.result.slippage_pts) <= 3 ? C.bull : C.bear }}>
-                          {it.result.slippage_pts > 0 ? "+" : ""}{it.result.slippage_pts} pts
-                        </span>
-                      ) : "—"}
-                    </td>
-                    <td className="mono text-amber-300">#{it.result?.ticket ?? "—"}</td>
-                    <td><Badge tone={it.status === "done" ? "green" : "amber"}>{it.status || "done"}</Badge></td>
-                  </tr>
-                ))}
+                {intents.slice(0, 10).map((it, idx) => {
+                  const itLat = it.result?.latency_ms ?? (it.created_ms && it.result?.executed_ms ? it.result.executed_ms - it.created_ms : null);
+                  const itSlip = it.result?.slippage_pts;
+                  return (
+                    <tr key={it.id || idx}>
+                      <td className="mono text-slate-400">{it.created_ms ? when(new Date(it.created_ms).toISOString()) : "—"}</td>
+                      <td className="mono text-cyan-300">{String(it.id || it.intent_id || "intent").slice(0, 18)}</td>
+                      <td className="mono font-bold" style={{ color: it.side === "BUY" ? C.bull : C.bear }}>{it.side}</td>
+                      <td className="mono">{it.volume ?? 0.01}</td>
+                      <td className="mono">{px(it.price || it.entry)}</td>
+                      <td className="mono font-medium text-slate-200">{px(it.result?.fill_price ?? it.price ?? it.entry)}</td>
+                      <td className="mono">
+                        {itSlip != null ? (
+                          <span style={{ color: Math.abs(itSlip) <= 3 ? C.bull : C.bear }}>
+                            {itSlip > 0 ? "+" : ""}{itSlip} pts
+                          </span>
+                        ) : "—"}
+                      </td>
+                      <td className="mono text-violet-300">{itLat != null ? `${itLat} ms` : "—"}</td>
+                      <td className="mono text-amber-300">{it.result?.ticket ? `#${it.result.ticket}` : "—"}</td>
+                      <td><Badge tone={it.status === "done" ? "green" : it.status === "failed" ? "red" : "amber"}>{it.status || "done"}</Badge></td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -718,8 +742,9 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
 }
 
 /**
- * Disparity & Knowledge Engine: Comparative Analysis of Theoretical Signal vs Live MT5 Execution.
- * Formatted for Aether Ingress & Knowledge Guardian.
+ * Disparity & Knowledge Engine: 100% Dynamic Comparative Analysis of Theoretical Signal vs Live MT5 Execution.
+ * Dynamically computes all disparities from runtime state (no static text / state).
+ * Curated for Aether Knowledge Guardian ingress.
  */
 function DisparityKnowledgePanel({
   items,
@@ -730,116 +755,191 @@ function DisparityKnowledgePanel({
   omega: any;
   days: number;
 }) {
+  const br = omega?.bridge || {};
   const tca = omega?.tca || {};
   const intents: any[] = omega?.intents || [];
-  const positions: any[] = omega?.bridge?.positions || [];
+  const positions: any[] = br.positions || [];
 
-  // Match items with real execution intents
-  const matches = useMemo(() => {
+  // Dynamically reconcile AI signals with real execution positions & intents
+  const dynamicMatches = useMemo(() => {
     return items.map((signal) => {
       const sigTime = new Date(signal.opened_at).getTime();
+
+      // Find matching intent by ID, timestamp within 15 mins, or side
       const matchedIntent = intents.find((it) => {
+        if (it.id && signal.id && it.id.includes(signal.id)) return true;
         if (!it.created_ms) return false;
-        return Math.abs(it.created_ms - sigTime) <= 600_000;
+        return Math.abs(it.created_ms - sigTime) <= 900_000;
       });
 
-      const matchedPos = positions.find(
-        (p) => p.type === signal.side && Math.abs(Number(p.open_price) - Number(signal.entry)) < 2.0
-      );
+      // Find matching position in MT5 by intent_id, ticket, or side & entry price proximity
+      const matchedPos = positions.find((p) => {
+        if (p.intent_id && matchedIntent?.id && p.intent_id === matchedIntent.id) return true;
+        if (p.ticket && matchedIntent?.result?.ticket && p.ticket === matchedIntent.result.ticket) return true;
+        const pSide = p.side || p.type;
+        return pSide === signal.side && Math.abs(Number(p.open_price) - Number(signal.entry)) < 3.0;
+      });
 
-      const fillPrice = matchedIntent?.result?.fill_price ?? matchedPos?.open_price ?? signal.entry;
-      const slippagePts = matchedIntent?.result?.slippage_pts ?? Math.round(Math.abs(fillPrice - signal.entry) * 10);
-      const latencyMs = matchedIntent?.result?.latency_ms ?? tca.avg_latency_ms ?? 650;
-      const ticket = matchedIntent?.result?.ticket ?? matchedPos?.ticket;
+      const fillPrice = matchedPos?.open_price ?? matchedIntent?.result?.fill_price ?? signal.entry;
+      const priceGap = fillPrice - signal.entry;
+      // Favorable slippage: for SELL higher fill is positive; for BUY lower fill is positive
+      const dirFactor = signal.side === "SELL" ? 1 : -1;
+      const slippagePoints = matchedIntent?.result?.slippage_pts ?? Number((priceGap * 10 * dirFactor).toFixed(1));
+
+      const latencyMs = matchedIntent?.result?.latency_ms
+        ?? (matchedIntent?.created_ms && matchedIntent?.result?.executed_ms ? matchedIntent.result.executed_ms - matchedIntent.created_ms : null)
+        ?? (matchedPos?.opened_ms && matchedIntent?.created_ms ? matchedPos.opened_ms - matchedIntent.created_ms : null);
+
+      const ticket = matchedPos?.ticket ?? matchedIntent?.result?.ticket ?? null;
+      const realSl = matchedPos?.sl ?? null;
+      const realTp = matchedPos?.tp ?? null;
+      const realProfit = matchedPos?.profit != null ? Number(matchedPos.profit) : null;
+      const realSwap = matchedPos?.swap != null ? Number(matchedPos.swap) : 0;
 
       return {
         ...signal,
         fillPrice,
-        slippagePts,
+        priceGap,
+        slippagePoints,
         latencyMs,
         ticket,
-        hasRealExecution: Boolean(ticket || matchedIntent),
+        realSl,
+        realTp,
+        realProfit,
+        realSwap,
+        isLivePosition: Boolean(matchedPos),
+        hasExecutionRecord: Boolean(ticket || matchedIntent),
       };
     });
-  }, [items, intents, positions, tca]);
+  }, [items, intents, positions]);
 
-  // Aggregate Disparity Metrics
-  const closed = items.filter((x) => x.status === "closed" && Number.isFinite(x.r_tp1));
-  const avgSlippage = tca.avg_slippage_points ?? 2.0;
-  const maxSlippage = tca.max_slippage_points ?? 4.0;
-  const avgLatency = tca.avg_latency_ms ?? 650;
+  // Dynamic Aggregation from Actual Matches and Live Telemetry
+  const executedRecords = dynamicMatches.filter((m) => m.hasExecutionRecord);
+  const slippagesList = executedRecords.map((m) => m.slippagePoints).filter((v): v is number => typeof v === "number");
+  const latenciesList = executedRecords.map((m) => m.latencyMs).filter((v): v is number => typeof v === "number" && v > 0);
 
-  // Fidelity Score: Alpha Extraction Fidelity (percentage of theoretical edge realized in MT5)
-  // Estimated as 100% minus the drag from slippage points and latency friction
-  const slippageDragPct = (avgSlippage / 100) * 1.5; // normalized friction
-  const fidelityScore = Math.max(88, Math.min(98.5, 96.0 - slippageDragPct));
+  const dynamicAvgSlippage = slippagesList.length
+    ? Number((slippagesList.reduce((a, b) => a + Math.abs(b), 0) / slippagesList.length).toFixed(1))
+    : (tca.avg_slippage_points ?? 0.0);
 
-  // Synthesized Aether Knowledge Card Payload
-  const aetherKnowledgePayload = {
+  const dynamicMaxSlippage = slippagesList.length
+    ? Number(Math.max(...slippagesList.map((s) => Math.abs(s))).toFixed(1))
+    : (tca.max_slippage_points ?? 0.0);
+
+  const dynamicAvgLatency = latenciesList.length
+    ? Math.round(latenciesList.reduce((a, b) => a + b, 0) / latenciesList.length)
+    : (tca.avg_latency_ms ?? 0);
+
+  const dynamicLiveSpread = Number(br.spread_points ?? 0);
+  const dynamicTotalSwap = positions.reduce((sum, p) => sum + (Number(p.swap) || 0), 0);
+  const dynamicFloatingPl = positions.reduce((sum, p) => sum + (Number(p.profit) || 0), 0);
+
+  // Dynamic Alpha Fidelity Calculation:
+  // Derived strictly from measured fill slippage friction, latency overhead, and broker spread
+  const slippagePenalty = Math.min(10, dynamicAvgSlippage * 0.8);
+  const latencyPenalty = dynamicAvgLatency > 0 ? Math.min(5, (dynamicAvgLatency / 1000) * 1.5) : 0;
+  const spreadPenalty = dynamicLiveSpread > 0 ? Math.min(5, (dynamicLiveSpread / 30) * 1.2) : 0;
+  const dynamicFidelityScore = Number(Math.max(75.0, Math.min(99.5, 98.8 - slippagePenalty - latencyPenalty - spreadPenalty)).toFixed(1));
+  const dynamicFrictionDrag = Number((100 - dynamicFidelityScore).toFixed(1));
+
+  // Dynamic Count of favorable vs adverse fills
+  const favorableCount = slippagesList.filter((s) => s > 0).length;
+  const adverseCount = slippagesList.filter((s) => s < 0).length;
+  const neutralCount = slippagesList.filter((s) => s === 0).length;
+
+  // Fully Dynamic Aether Knowledge Observations based purely on evaluated values
+  const dynamicObservations: string[] = [
+    executedRecords.length > 0
+      ? `Reconciliation matched ${executedRecords.length} live execution orders against AI signals with an average slippage of ${dynamicAvgSlippage} points (max: ${dynamicMaxSlippage} pts).`
+      : `Evaluating baseline telemetry: 0 active executions matched in this window.`,
+    dynamicAvgLatency > 0
+      ? `Host execution bridge measured round-trip dispatch latency averaging ${dynamicAvgLatency} ms from Worker intent to MT5 fill.`
+      : `Bridge latency awaiting round-trip execution benchmark sample.`,
+    positions.length > 0
+      ? `MT5 terminal currently holds ${positions.length} open position(s) with cumulative net floating P&L of ${dynamicFloatingPl >= 0 ? "+" : ""}$${dynamicFloatingPl.toFixed(2)} and $${dynamicTotalSwap.toFixed(2)} accrued swap.`
+      : `No open risk exposed on MT5 terminal; capital baseline preserved.`,
+    dynamicLiveSpread > 0
+      ? `Active broker spread on ${br.symbol || "XAUUSD.m"} is dynamically quoted at ${dynamicLiveSpread} points (Bid: ${px(br.bid)} / Ask: ${px(br.ask)}).`
+      : `Broker quote spread is currently being refreshed by bridge daemon.`,
+  ];
+
+  // Dynamic Actionable Governance Directive
+  const dynamicGovernanceDirective = dynamicAvgSlippage <= 5 && (dynamicAvgLatency === 0 || dynamicAvgLatency <= 1500)
+    ? "EXECUTION_HEALTHY_MAINTAIN_AUTO_FAILOVER"
+    : dynamicAvgSlippage > 10
+    ? "SLIPPAGE_ELEVATED_TIGHTEN_ENTRY_BUFFERS"
+    : "MONITOR_BRIDGE_TRANSMISSION_TELEMETRY";
+
+  // Dynamic Machine-Readable Aether Payload
+  const dynamicAetherPayload = {
     card_type: "execution_disparity_synthesis",
-    schema_version: "2.1.0",
+    schema_version: "2.2.0",
     generated_at: new Date().toISOString(),
     lookback_window_days: days,
     telemetry: {
       signals_analyzed: items.length,
-      closed_trades: closed.length,
-      fidelity_score: Number((fidelityScore / 100).toFixed(3)),
-      avg_slippage_points: avgSlippage,
-      max_slippage_points: maxSlippage,
-      avg_latency_ms: avgLatency,
-      drawdown_drag_amplification: 1.08,
+      executed_orders_matched: executedRecords.length,
+      fidelity_score: Number((dynamicFidelityScore / 100).toFixed(3)),
+      friction_drag_pct: dynamicFrictionDrag,
+      avg_slippage_points: dynamicAvgSlippage,
+      max_slippage_points: dynamicMaxSlippage,
+      avg_latency_ms: dynamicAvgLatency,
+      live_spread_points: dynamicLiveSpread,
+      live_positions_count: positions.length,
+      net_floating_usd: dynamicFloatingPl,
+      total_swap_usd: dynamicTotalSwap,
+      slippage_profile: {
+        favorable_fills: favorableCount,
+        neutral_fills: neutralCount,
+        adverse_fills: adverseCount,
+      },
     },
-    observations: [
-      `Slippage is strictly bounded (avg ${avgSlippage} pts) within Monex Prime Execution threshold (<= 5 pts).`,
-      `Latency friction is optimal (avg ${avgLatency} ms) across the direct Linux Wine to Cloudflare Worker bridge.`,
-      `Dynamic Volatility ATR M15 sizing successfully prevents position liquidation spikes during economic releases.`,
-      `Progressive SL+ locked breakeven on high-momentum excursions without premature stop-out.`
-    ],
-    governance_action: "MAINTAIN_AUTO_FAILOVER_AND_PRIME_ROUTE",
+    observations: dynamicObservations,
+    governance_directive: dynamicGovernanceDirective,
   };
 
   return (
     <div className="space-y-4">
-      {/* Fidelity & Disparity Overview */}
+      {/* Dynamic Fidelity & Disparity Overview KPI */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
         <Kpi
           label="Alpha Fidelity Score"
-          value={`${fidelityScore.toFixed(1)}%`}
-          sub="Edge capture rate vs theory"
-          color={C.bull}
+          value={`${dynamicFidelityScore}%`}
+          sub={`Friction drag: ${dynamicFrictionDrag}%`}
+          color={dynamicFidelityScore >= 90 ? C.bull : C.wait}
           icon={<BrainCircuit className="h-3.5 w-3.5 text-emerald-400" />}
         />
         <Kpi
           label="Price Disparity (Slippage)"
-          value={`±${avgSlippage} pts`}
-          sub={`Peak spread: ${maxSlippage} pts`}
-          color={C.cyan}
+          value={dynamicAvgSlippage > 0 ? `±${dynamicAvgSlippage} pts` : "0.0 pts"}
+          sub={`Peak: ${dynamicMaxSlippage} pts · ${slippagesList.length} samples`}
+          color={dynamicAvgSlippage <= 5 ? C.cyan : C.bear}
           icon={<Split className="h-3.5 w-3.5 text-cyan-400" />}
         />
         <Kpi
           label="Bridge Transmission Lag"
-          value={`${avgLatency} ms`}
-          sub="Signal dispatch to MT5 fill"
+          value={dynamicAvgLatency > 0 ? `${dynamicAvgLatency} ms` : "n/a"}
+          sub={latenciesList.length ? `${latenciesList.length} round-trip benchmarks` : "Bridge connected"}
           color={C.violet}
           icon={<Zap className="h-3.5 w-3.5 text-violet-400" />}
         />
         <Kpi
-          label="Drawdown Friction Drag"
-          value="+8.0%"
-          sub="Spread & swap vs pure R math"
-          color={C.wait}
-          icon={<TrendingDown className="h-3.5 w-3.5 text-amber-400" />}
+          label="Broker Spread Quoted"
+          value={dynamicLiveSpread > 0 ? `${dynamicLiveSpread} pts` : "n/a"}
+          sub={`Bid: ${px(br.bid)} · Ask: ${px(br.ask)}`}
+          color={dynamicLiveSpread <= 30 ? C.bull : C.wait}
+          icon={<Activity className="h-3.5 w-3.5 text-amber-400" />}
         />
       </div>
 
-      {/* Disparity Metric Comparison Matrix */}
+      {/* Dynamic Disparity Comparison Matrix */}
       <Panel
         title="Comprehensive Disparity Matrix: AI Theory vs Broker Reality"
         icon={<Gauge className="h-3.5 w-3.5 text-cyan-400" />}
-        right={<Badge tone="green">Disparity Analysis</Badge>}
+        right={<Badge tone="green">Dynamically Computed</Badge>}
       >
         <p className="mb-3 text-[12px] leading-relaxed text-slate-400">
-          Evaluates the quantitative gap between pure advisory mathematics ($R$-multiples calculated on closed bars) and real-world order execution under Monex MetaTrader 5 (spread, slippage, swap, latency, and fill probability).
+          Quantifies the exact mathematical gap between pure advisory expectations ($R$-multiples calculated on closed bars) and live MetaTrader 5 broker reality (realized fill prices, execution latency, dynamic spread, and active Stop Loss modifications).
         </p>
 
         <div className="table-wrap">
@@ -850,100 +950,145 @@ function DisparityKnowledgePanel({
                 <th>AI Signal (Theoretical)</th>
                 <th>Omega MT5 (Real Broker)</th>
                 <th>Observed Disparity</th>
-                <th>Impact & Assessment</th>
+                <th>Dynamic Assessment</th>
               </tr>
             </thead>
             <tbody>
+              {/* Row 1: Entry Fill */}
               <tr>
                 <td className="font-semibold text-slate-200">Entry Fill Pricing</td>
                 <td className="mono text-cyan-300">Exact Bar Close ($0 Slippage)</td>
-                <td className="mono text-slate-200">Market Execution with Spread</td>
-                <td className="mono text-emerald-400">Avg {avgSlippage} pts (±$0.20/oz)</td>
-                <td><Badge tone="green">PRIME · Well within 5 pts target</Badge></td>
+                <td className="mono text-slate-200">
+                  {executedRecords[0]?.fillPrice ? px(executedRecords[0].fillPrice) : "Real Market Execution"}
+                </td>
+                <td className="mono" style={{ color: dynamicAvgSlippage <= 3 ? C.bull : dynamicAvgSlippage <= 10 ? C.wait : C.bear }}>
+                  Avg {dynamicAvgSlippage} pts ({favorableCount} favorable / {adverseCount} adverse)
+                </td>
+                <td>
+                  <Badge tone={dynamicAvgSlippage <= 5 ? "green" : dynamicAvgSlippage <= 15 ? "amber" : "red"}>
+                    {dynamicAvgSlippage <= 5 ? "PRIME · Within 5 pts bound" : "ACCEPTABLE SLIPPAGE"}
+                  </Badge>
+                </td>
               </tr>
+
+              {/* Row 2: Latency */}
               <tr>
                 <td className="font-semibold text-slate-200">Execution Latency</td>
                 <td className="mono text-cyan-300">Instantaneous (0 ms)</td>
-                <td className="mono text-slate-200">Host Bridge Round-Trip</td>
-                <td className="mono text-violet-300">{avgLatency} ms</td>
-                <td><Badge tone="green">OPTIMAL · Sub-second execution</Badge></td>
+                <td className="mono text-slate-200">Host Wine Bridge Round-Trip</td>
+                <td className="mono text-violet-300">
+                  {dynamicAvgLatency > 0 ? `${dynamicAvgLatency} ms measured lag` : "Sub-second bridge"}
+                </td>
+                <td>
+                  <Badge tone={dynamicAvgLatency > 0 && dynamicAvgLatency <= 1000 ? "green" : "cyan"}>
+                    {dynamicAvgLatency > 0 && dynamicAvgLatency <= 800 ? "SUB-SECOND HIGH VELOCITY" : "OPTIMAL DISPATCH"}
+                  </Badge>
+                </td>
               </tr>
+
+              {/* Row 3: Progressive Stop (SL+) */}
               <tr>
                 <td className="font-semibold text-slate-200">Progressive Stop (SL+)</td>
                 <td className="mono text-cyan-300">Mathematical Halfway Point</td>
-                <td className="mono text-slate-200">Dynamic EA Stop Order Mod</td>
-                <td className="mono text-slate-300">0 to 1 pt slippage on mod</td>
-                <td><Badge tone="green">ACCURATE · Capital fully protected</Badge></td>
+                <td className="mono text-slate-200">
+                  {positions[0]?.sl ? `Terminal SL: ${px(positions[0].sl)}` : "Dynamic EA Order Mod"}
+                </td>
+                <td className="mono text-slate-300">
+                  {executedRecords.filter((m) => m.sl_plus_triggered).length} of {executedRecords.length} triggered
+                </td>
+                <td>
+                  <Badge tone={executedRecords.some((m) => m.sl_plus_triggered) ? "green" : "slate"}>
+                    {executedRecords.some((m) => m.sl_plus_triggered) ? "PROTECTED CAPITAL" : "MONITORING EXCURSION"}
+                  </Badge>
+                </td>
               </tr>
+
+              {/* Row 4: Overnight Swap */}
               <tr>
                 <td className="font-semibold text-slate-200">Overnight Financing</td>
-                <td className="mono text-cyan-300">Frictionless (No Swap)</td>
-                <td className="mono text-slate-200">Broker Daily Swap Debits</td>
-                <td className="mono text-amber-300">~$1.20 to $4.50 / night</td>
-                <td><Badge tone="amber">SLIGHT DRAG · Negligible on intraday</Badge></td>
+                <td className="mono text-cyan-300">Frictionless ($0.00 Swap)</td>
+                <td className="mono text-slate-200">Broker Daily Swap Ledger</td>
+                <td className="mono" style={{ color: dynamicTotalSwap < 0 ? C.bear : C.wait }}>
+                  {dynamicTotalSwap !== 0 ? usd(dynamicTotalSwap, true) : "$0.00 Swap Accrued"}
+                </td>
+                <td>
+                  <Badge tone={dynamicTotalSwap === 0 ? "green" : "amber"}>
+                    {dynamicTotalSwap === 0 ? "ZERO FINANCING DRAG" : "ACTIVE FINANCING DEBIT"}
+                  </Badge>
+                </td>
               </tr>
+
+              {/* Row 5: Live P&L Realization */}
               <tr>
-                <td className="font-semibold text-slate-200">Drawdown Depth</td>
-                <td className="mono text-cyan-300">Closed-Bar Path ($R$)</td>
-                <td className="mono text-slate-200">Intrabar Tick Fluctuation</td>
-                <td className="mono text-amber-300">+8.0% Drawdown Drag</td>
-                <td><Badge tone="cyan">BUFFERED · Sizing model accommodates</Badge></td>
+                <td className="font-semibold text-slate-200">Market Return Realization</td>
+                <td className="mono text-cyan-300">Theoretical R Multiples</td>
+                <td className="mono text-slate-200">
+                  {positions.length > 0 ? `${positions.length} Positions: ${dynamicFloatingPl >= 0 ? "+" : ""}$${dynamicFloatingPl.toFixed(2)}` : "No Open Risk"}
+                </td>
+                <td className="mono" style={{ color: dynamicFloatingPl >= 0 ? C.bull : C.bear }}>
+                  {dynamicFloatingPl >= 0 ? "+" : ""}${dynamicFloatingPl.toFixed(2)} USD Realized
+                </td>
+                <td>
+                  <Badge tone={dynamicFloatingPl >= 0 ? "green" : "cyan"}>
+                    {dynamicFloatingPl >= 0 ? "POSITIVE ALPHA EXTRACTION" : "DRAWDOWN WITHIN ATR RISK"}
+                  </Badge>
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
       </Panel>
 
-      {/* Aether Knowledge Ingress Synthesis */}
+      {/* Aether Knowledge Ingress Synthesis Panel */}
       <Panel
-        title="Aether Knowledge Synthesis · Machine-Readable Card"
+        title="Aether Knowledge Synthesis · Machine-Readable Ingress Card"
         icon={<Sparkles className="h-3.5 w-3.5 text-amber-400" />}
         right={
           <div className="flex items-center gap-2">
             <Badge tone="purple">RFC Aether Knowledge Guardian</Badge>
-            <Badge tone="green">Auto-Curated</Badge>
+            <Badge tone="green">Dynamically Curated</Badge>
           </div>
         }
       >
         <p className="mb-2 text-[12px] text-slate-400">
-          This structured knowledge payload is continuously compiled from execution telemetries and fed into Aether for autonomous strategy calibration, rule verification, and risk bounds tuning.
+          Compiled dynamically from live runtime telemetries and streamed to Aether for autonomous strategy calibration, rule verification, and risk bounds tuning.
         </p>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {/* Key Takeaways */}
-          <div className="space-y-2 rounded-lg border border-white/5 bg-white/[0.02] p-3 text-[11px]">
-            <span className="font-semibold text-cyan-300">Expert Advisor Knowledge Takeaways:</span>
+          {/* Key Dynamic Insights */}
+          <div className="space-y-2.5 rounded-lg border border-white/5 bg-white/[0.02] p-3 text-[11px]">
+            <span className="font-semibold text-cyan-300">Dynamically Evaluated Telemetry Insights:</span>
             <ul className="list-disc space-y-1.5 pl-4 text-slate-300">
-              {aetherKnowledgePayload.observations.map((obs, idx) => (
+              {dynamicObservations.map((obs, idx) => (
                 <li key={idx} className="leading-relaxed">{obs}</li>
               ))}
             </ul>
             <div className="mt-3 border-t border-white/5 pt-2 text-slate-400">
-              <span className="font-semibold text-emerald-400">Actionable Rule:</span> Monex execution slippage and latency are within the institutional Prime envelope; keep SOR auto-failover armed.
+              <span className="font-semibold text-emerald-400">Autonomous Directive:</span> {dynamicGovernanceDirective.replace(/_/g, " ")}
             </div>
           </div>
 
-          {/* JSON Telemetry Payload for Aether */}
+          {/* Machine-Readable JSON Telemetry for Aether */}
           <div className="overflow-hidden rounded-lg border border-white/10 bg-[#080d15] p-3">
             <div className="mb-1.5 flex items-center justify-between text-[10px] text-slate-500">
               <span className="mono font-semibold text-slate-400">AETHER_INGRESS_PAYLOAD.json</span>
-              <span className="mono text-emerald-400">VALIDATED 2.1.0</span>
+              <span className="mono text-emerald-400">LIVE DYNAMIC COMPILATION</span>
             </div>
             <pre className="mono max-h-[190px] overflow-auto text-[10px] leading-relaxed text-cyan-300/90">
-              {JSON.stringify(aetherKnowledgePayload, null, 2)}
+              {JSON.stringify(dynamicAetherPayload, null, 2)}
             </pre>
           </div>
         </div>
       </Panel>
 
-      {/* Disparity Drilldown Table */}
+      {/* Dynamic Disparity Drilldown Table */}
       <Panel
-        title={`Signal vs Fill Disparity Records (${matches.length})`}
+        title={`Signal vs Fill Disparity Records (${dynamicMatches.length} signals)`}
         icon={<Layers className="h-3.5 w-3.5 text-cyan-400" />}
-        right={<Badge tone="cyan">{days}D Telemetry</Badge>}
+        right={<Badge tone="cyan">{days}D Telemetry Window</Badge>}
       >
-        {!matches.length ? (
-          <Empty>No signal-to-order matches recorded in this window.</Empty>
+        {!dynamicMatches.length ? (
+          <Empty>No signal records in the selected window.</Empty>
         ) : (
           <div className="table-wrap">
             <table className="tbl">
@@ -953,31 +1098,35 @@ function DisparityKnowledgePanel({
                   <th>Side</th>
                   <th>AI Target Entry</th>
                   <th>MT5 Fill Price</th>
-                  <th>Price Gap (Slippage)</th>
+                  <th>Observed Slippage</th>
                   <th>Bridge Latency</th>
                   <th>SL+ Level</th>
                   <th>Ticket</th>
-                  <th>Disparity Status</th>
+                  <th>Match Status</th>
                 </tr>
               </thead>
               <tbody>
-                {matches.map((m) => (
+                {dynamicMatches.map((m) => (
                   <tr key={m.id}>
                     <td className="mono text-slate-400">{when(m.opened_at)}</td>
                     <td className="mono font-bold" style={{ color: m.side === "BUY" ? C.bull : C.bear }}>{m.side}</td>
                     <td className="mono">{px(m.entry)}</td>
                     <td className="mono font-semibold text-slate-200">{px(m.fillPrice)}</td>
                     <td className="mono">
-                      <span style={{ color: Math.abs(m.slippagePts) <= 3 ? C.bull : C.bear }}>
-                        {m.slippagePts > 0 ? "+" : ""}{m.slippagePts} pts
-                      </span>
+                      {m.slippagePoints != null ? (
+                        <span style={{ color: m.slippagePoints >= 0 ? C.bull : Math.abs(m.slippagePoints) <= 5 ? C.wait : C.bear }}>
+                          {m.slippagePoints > 0 ? "+" : ""}{m.slippagePoints} pts
+                        </span>
+                      ) : "—"}
                     </td>
-                    <td className="mono text-violet-300">{m.latencyMs} ms</td>
+                    <td className="mono text-violet-300">{m.latencyMs != null ? `${m.latencyMs} ms` : "—"}</td>
                     <td className="mono"><SlPlusPricePoint item={m} /></td>
                     <td className="mono text-amber-300">{m.ticket ? `#${m.ticket}` : "—"}</td>
                     <td>
-                      {m.hasRealExecution ? (
-                        <Badge tone="green">HARMONIZED</Badge>
+                      {m.isLivePosition ? (
+                        <Badge tone="green"><Dot tone="green" pulse /> LIVE ON MT5</Badge>
+                      ) : m.hasExecutionRecord ? (
+                        <Badge tone="cyan">FILLED</Badge>
                       ) : (
                         <Badge tone="slate">THEORETICAL</Badge>
                       )}
@@ -1047,7 +1196,7 @@ export default function Performance() {
         }
       >
         <p className="text-[12px] leading-relaxed text-slate-400">
-          Every BUY or SELL from the Decision Engine (15m Multi-Agent Consensus) is followed on closed bars: entry fills within {l?.rules?.fill_window_hours ?? 8} hours, then reaches its target, stop (−1R), or exits at close after {l?.rules?.hold_max_hours ?? 72} hours. Disparities between pure theoretical math and live MT5 broker execution are synthesized for Aether knowledge ingestion.
+          Every BUY or SELL from the Decision Engine (15m Multi-Agent Consensus) is followed on closed bars: entry fills within {l?.rules?.fill_window_hours ?? 8} hours, then reaches its target, stop (−1R), or exits at close after {l?.rules?.hold_max_hours ?? 72} hours. Disparities between pure theoretical math and live MT5 broker execution are dynamically synthesized for Aether knowledge ingestion.
         </p>
 
         {/* View Mode & Time Window Tabs */}
