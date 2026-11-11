@@ -77,6 +77,8 @@ export const COUNCIL_DEADLINE_MS = 90_000;
 /** The sweep decides a bar whose 15m room did not trigger the engine this long after its close. */
 export const SWEEP_AFTER_MS = 4 * 60_000;
 export const DECISION_LATEST_KEY = "decision-engine:latest";
+/** The caution of a decision made on the MT5 fallback feed (docs/RFC_MT5_FALLBACK.md). */
+export const MT5_FALLBACK_CAUTION = "Market data comes from the broker's MT5 bars because TradingView is down; news and the macro series are stale.";
 export const TRADING_MODE_KEY = "trading:mode";
 /** Runtime trading mode: env first, then KV (UI selector), default intraday. */
 export async function tradingMode(env) {
@@ -794,6 +796,9 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   const market = marketContextOf(loaded, quorum, now);
   const withMarket = { ...inputs, market };
   const guards = { long: guardrailsFor(1, { cards, quorum, strategy, inputs: withMarket, macro, now, env: effectiveEnv }), short: guardrailsFor(-1, { cards, quorum, strategy, inputs: withMarket, macro, now, env: effectiveEnv }) };
+  // MT5 fallback (owner 2026-11-11: trade as usual): the decision stands on the broker's bars while
+  // TradingView is down; news and the macro series are stale, which the council should weigh.
+  if (inputs?.m5Feed === "mt5_fallback") for (const g of [guards.long, guards.short]) g.cautions = [...g.cautions, MT5_FALLBACK_CAUTION];
   return { cards, quorum, guards, market, witness_weights: { ...activeWitnessWeights(effectiveEnv) }, witness_weights_source: source, witness_weights_id: tuned?.id ?? null };
 }
 
@@ -835,6 +840,8 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     cautions, vetoes: { long: guards.long.vetoes, short: guards.short.vetoes },
     context: councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, market, now }),
     strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline, price: strategy.price, atr_h1: strategy.atr_h1 } : null,
+    // The price feed the decision stood on: TradingView, or the broker's bars (MT5 fallback).
+    feed: inputs?.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview",
     trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE },
     advisory: "The server places no order and gives no position size; the EA sizes each trade from the owner's risk input.",
     // The deployed Worker version that decided (2026-11-11: a deploy outside GitHub Actions put back an older build unseen).

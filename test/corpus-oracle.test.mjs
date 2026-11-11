@@ -3,7 +3,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { aggregateBars, corpusBasis, corpusMode, corpusSource, corpusStatus, ingestCorpus, resetCorpusSchemaCacheForTests, validateCorpus } from "../src/corpus-oracle.mjs";
+import { aggregateBars, corpusBasis, corpusMode, corpusSource, corpusStatus, ingestCorpus, readCorpusBars, resetCorpusSchemaCacheForTests, validateCorpus } from "../src/corpus-oracle.mjs";
+import { feedAt, keyCloseOf } from "../src/feed.mjs";
 import { bridgeSync, resetOmegaBrokerSchemaForTests } from "../src/omega-broker.mjs";
 
 function d1() {
@@ -109,4 +110,29 @@ test("the bridge sync takes the corpus and answers the cursor; without it, the s
   assert.equal(withCorpus.ok, true);
   assert.equal(withCorpus.corpus_cursor_ms, T0 + 59 * M);
   assert.equal(corpusSource(" Monex-Live ", "xauusd"), "mt5:monex-live:XAUUSD");
+});
+
+test("the MT5 fallback reads the active source's bars after a time; the feed of a candle follows the 1m fallback mark", async () => {
+  resetCorpusSchemaCacheForTests();
+  const db = d1();
+  db.raw.exec("CREATE TABLE omega_connection (id INTEGER PRIMARY KEY, version INTEGER, status TEXT, server TEXT)");
+  db.raw.prepare("INSERT INTO omega_connection (id, version, status, server) VALUES (1, 3, 'stored', 'Monex-Live')").run();
+  assert.deepEqual(await readCorpusBars({ DB: db }, { sinceMs: 0 }), { source: null, bars: [] }, "off reads nothing");
+  const env = { DB: db, CORPUS_ORACLE_MODE: "shadow" };
+  assert.deepEqual(await readCorpusBars(env), { source: null, bars: [] }, "nothing collected yet");
+  await ingestCorpus(env, corpus(), { executor: EXECUTOR, now: NOW });
+  const r = await readCorpusBars(env, { sinceMs: T0 + 49 * M, limit: 5 });
+  assert.equal(r.source, "mt5:monex-live:XAUUSD");
+  assert.deepEqual(r.bars.map((b) => b.t), [50, 51, 52, 53, 54].map((i) => T0 + i * M), "after the time, oldest first, limited");
+  assert.deepEqual(Object.keys(r.bars[0]).sort(), ["c", "h", "l", "o", "t", "v"]);
+
+  assert.equal(keyCloseOf(`OANDA:XAUUSD:5:${T0}`), T0 + 5 * M);
+  assert.equal(keyCloseOf(`OANDA:XAUUSD:60:${T0}`), T0 + 60 * M);
+  assert.equal(keyCloseOf("nonsense"), null);
+  const kv = (rec) => ({ SIGNAL_CACHE: { get: async (k) => (k === "market-data:v2:series:OANDA:XAUUSD|1m" ? JSON.stringify(rec) : null) } });
+  assert.equal(await feedAt(kv({ candles: [] }), T0), "tradingview");
+  const marked = kv({ fallback: { since_sec: T0 / 1000 }, candles: [] });
+  assert.equal(await feedAt(marked, T0), "tradingview", "a candle that closed before the fallback");
+  assert.equal(await feedAt(marked, T0 + 5 * M), "mt5_fallback");
+  assert.equal(await feedAt({}, T0 + 5 * M), "tradingview");
 });

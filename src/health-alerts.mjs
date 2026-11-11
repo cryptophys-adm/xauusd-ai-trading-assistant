@@ -88,6 +88,22 @@ export async function marketDataIssue(env, now = Date.now()) {
   };
 }
 
+/**
+ * The MT5 fallback is on (docs/RFC_MT5_FALLBACK.md): the pull adapter feeds the XAUUSD 1m series from the
+ * broker's bars and marks it `fallback`. Says so while it lasts (decisions trade on the broker's price).
+ */
+export async function marketDataFallbackIssue(env) {
+  let rec = null;
+  try { rec = JSON.parse((await env.SIGNAL_CACHE?.get?.("market-data:v2:series:OANDA:XAUUSD|1m")) || "null"); } catch { rec = null; }
+  const since = Number(rec?.fallback?.since_sec);
+  if (!Number.isFinite(since)) return null;
+  return {
+    key: "market_data_fallback", kind: "market_data_fallback",
+    subject: `Market data from the broker's MT5 bars since ${iso(since * 1000).slice(0, 16).replace("T", " ")} UTC (TradingView is down). Rooms and decisions run on the broker's price; news and the macro series wait.`,
+    detail: { since: iso(since * 1000), source: typeof rec.fallback.source === "string" ? rec.fallback.source : null }
+  };
+}
+
 /** The problems that hold now: [{ key, kind, subject, detail, one_shot? }]. Never throws. */
 export async function detectHealthIssues(env, now = Date.now()) {
   const db = env.DB;
@@ -176,6 +192,8 @@ export async function detectHealthIssues(env, now = Date.now()) {
   try {
     const issue = await marketDataIssue(env, now);
     if (issue) out.push(issue);
+    const fallback = await marketDataFallbackIssue(env);
+    if (fallback) out.push(fallback);
   } catch { /* never fatal */ }
 
   // 9. End-to-end sync with Aether (hardening 2026-11-09): each warning check of AetherReader.sync()

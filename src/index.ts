@@ -227,7 +227,8 @@ import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition } from "./omega-broker.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
-import { corpusStatus } from "./corpus-oracle.mjs";
+import { corpusStatus, readCorpusBars } from "./corpus-oracle.mjs";
+import { feedAt, keyCloseOf } from "./feed.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -1341,6 +1342,8 @@ async function ingestLocalCalculation(env: Env, payload: unknown): Promise<{ sta
     calculation_version: record.calculation_version,
     values: record.values,
     provenance: record.provenance,
+    // The MT5 fallback (docs/RFC_MT5_FALLBACK.md): built on the broker's bars while TradingView was down.
+    ...(record.feed === "mt5_fallback" || (await feedAt(env, keyCloseOf(key) ?? NaN)) === "mt5_fallback" ? { feed: "mt5_fallback" } : {}),
     received_at: new Date().toISOString()
   };
   // Persist the observed output and identity before queueing reconciliation.
@@ -1942,7 +1945,9 @@ async function ingestM5Context(env: Env, payload: unknown, waitUntil?: (p: Promi
   if (p.buy_confirmed === true || p.sell_confirmed === true) {
     recentConfirmations.push({ buy_confirmed: p.buy_confirmed === true, sell_confirmed: p.sell_confirmed === true, candle_time: String(p.candle_time) });
   }
-  const stored = { ...p, recent_confirmations: recentConfirmations, received_at: new Date().toISOString() };
+  // The MT5 fallback (docs/RFC_MT5_FALLBACK.md): a 5m bar built on the broker's bars says so.
+  const feed = (await feedAt(env, Date.parse(String(p.candle_time)))) === "mt5_fallback" ? "mt5_fallback" : (p.feed === "mt5_fallback" ? "mt5_fallback" : "tradingview");
+  const stored = { ...p, feed, recent_confirmations: recentConfirmations, received_at: new Date().toISOString() };
   await kv.put("context:m5:latest", JSON.stringify(stored), { expirationTtl: 900 });
   // Owner decision 2026-11-08: the 5m trigger is checked at every closed 5m bar, beside the reply.
   const evaluation = evaluateStrategyAtM5Close(env, stored);
@@ -1975,6 +1980,13 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
   /** Phase C2: HUD snapshot of a closed H1 or 15m bar (HUD agents only, never decision evidence). */
   async submitHud(snapshot: unknown): Promise<{ status: number; body: JsonObject }> {
     return storeHudSnapshot(this.env, snapshot) as Promise<{ status: number; body: JsonObject }>;
+  }
+  /**
+   * The MT5 fallback (docs/RFC_MT5_FALLBACK.md): the broker's closed M1 bars from the Corpus Oracle,
+   * for the pull adapter while the TradingView gateway is down. Read-only.
+   */
+  async corpusBars(request: { since_ms?: number; limit?: number } = {}): Promise<Record<string, unknown>> {
+    return readCorpusBars(this.env, { sinceMs: Number(request?.since_ms) || 0, limit: Number(request?.limit) || undefined });
   }
 }
 
@@ -3015,8 +3027,9 @@ export default {
           // stood still for hours behind a TradingView quota and only the stale decisions showed it).
           for (const [list, state] of [[health.opened_alerts, "open"], [health.resolved_alerts, "resolved"]] as const) {
             for (const a of (Array.isArray(list) ? list : []) as Array<{ kind?: string; subject?: string }>) {
-              if (a.kind !== "market_data_stale") continue;
-              try { await sendTelegram(env, state === "open" ? `XAUUSD SYSTEM · ${a.subject}` : "XAUUSD SYSTEM · Market data is flowing again; rooms, news and parity resume."); }
+              if (a.kind !== "market_data_stale" && a.kind !== "market_data_fallback") continue;
+              const back = a.kind === "market_data_fallback" ? "XAUUSD SYSTEM · TradingView is back; the broker's bars were replaced and the MT5 fallback ended." : "XAUUSD SYSTEM · Market data is flowing again; rooms, news and parity resume.";
+              try { await sendTelegram(env, state === "open" ? `XAUUSD SYSTEM · ${a.subject}` : back); }
               catch (e) { console.error("market_data_telegram_failed", e instanceof Error ? e.message : String(e)); }
             }
           }

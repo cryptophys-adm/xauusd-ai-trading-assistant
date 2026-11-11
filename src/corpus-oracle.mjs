@@ -164,6 +164,31 @@ export async function ingestCorpus(env, corpus, { executor = null, now = Date.no
   return { mode: "shadow", source: v.source, stored, refused: v.refused, cursor_ms: last?.t ?? null };
 }
 
+/** The most bars one corpusBars read returns (about a day of M1). */
+export const CORPUS_READ_MAX = 1500;
+
+/**
+ * The MT5 fallback's read (docs/RFC_MT5_FALLBACK.md; owner 2026-11-11): the closed M1 bars of the
+ * active source (the one updated last) opening after `sinceMs`, oldest first, at most `limit`.
+ * Only bars from Omega's active broker, pair and user are ever stored, so the source is that user's.
+ * Returns { source, bars: [{ t, o, h, l, c, v }] }; an empty list when the corpus is off or empty.
+ */
+export async function readCorpusBars(env, { sinceMs = 0, limit = CORPUS_READ_MAX } = {}) {
+  const db = env?.DB;
+  if (corpusMode(env) === "off" || !db) return { source: null, bars: [] };
+  try {
+    await ensureSchema(db);
+    const src = await db.prepare("SELECT source, server, symbol FROM corpus_sources WHERE last_minute_ms IS NOT NULL ORDER BY updated_ms DESC LIMIT 1").first();
+    if (!src) return { source: null, bars: [] };
+    const n = Math.max(1, Math.min(CORPUS_READ_MAX, Number(limit) || CORPUS_READ_MAX));
+    const since = finite(Number(sinceMs)) ? Number(sinceMs) : 0;
+    const rows = ((await db.prepare("SELECT minute_ms AS t, o, h, l, c, tick_volume AS v FROM corpus_bars WHERE source = ? AND minute_ms > ? ORDER BY minute_ms LIMIT ?").bind(src.source, since, n).all()).results) || [];
+    return { source: src.source, server: src.server, symbol: src.symbol, bars: rows.map((r) => ({ t: Number(r.t), o: Number(r.o), h: Number(r.h), l: Number(r.l), c: Number(r.c), v: r.v == null ? null : Number(r.v) })) };
+  } catch {
+    return { source: null, bars: [] };
+  }
+}
+
 /** The status for GET /api/corpus/status: sources, freshness, completeness and the basis. Never throws. */
 export async function corpusStatus(env, { now = Date.now() } = {}) {
   const mode = corpusMode(env);

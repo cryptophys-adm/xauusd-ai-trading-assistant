@@ -85,6 +85,10 @@ export async function reconcileLocalComputation(env, candleKey) {
     const record = observed[engine];
     const id = record ? identityOf(record) : null;
     if (!record || !id) continue;
+    // Built on the broker's bars while TradingView was down (MT5 fallback, docs/RFC_MT5_FALLBACK.md):
+    // TradingView's output for this candle is computed on other bars, so the comparison neither earns
+    // nor costs an approval. The implementation is unchanged, so its trust stands.
+    if (record.feed === "mt5_fallback") { comparisons[engine] = { result: "fallback_skipped", counted: false, mismatches: [], missing: [] }; continue; }
     const webhooks = {};
     for (const source of requiredSourcesFor(engine)) {
       const payload = await readJsonKV(env.WEBHOOK_BUFFER, "candle:" + candleKey + ":" + source);
