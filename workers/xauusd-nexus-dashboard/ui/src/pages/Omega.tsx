@@ -2371,14 +2371,14 @@ export default function Omega() {
                 <div className="rounded border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11.5px] text-amber-200">
                   <div className="flex items-center gap-1.5 font-semibold text-amber-300">
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                    MT5 Terminal Belum Terhubung
+                    MT5 Terminal Not Connected
                   </div>
                   <p className="mt-1 text-slate-300">
-                    Kredensial tersimpan untuk <strong className="text-white">{serverName}</strong>, tetapi otorisasi ke broker belum berhasil
-                    {br.terminal_error ? `: "${br.terminal_error}"` : " (kemungkinan user login salah, password salah, atau demo expired)."}.
+                    Credentials stored for <strong className="text-white">{serverName}</strong>, but broker authorization has not succeeded
+                    {br.terminal_error ? `: "${br.terminal_error}"` : " (possible incorrect user login, invalid password, or expired demo)."}.
                   </p>
                   <p className="mt-1 text-[11px] text-slate-400">
-                    Periksa kembali server, login, dan password di atas, lalu klik <strong>Reconnect / Update</strong>.
+                    Please verify the server, login, and password above, then click <strong>Reconnect / Update</strong>.
                   </p>
                 </div>
               ) : null}
