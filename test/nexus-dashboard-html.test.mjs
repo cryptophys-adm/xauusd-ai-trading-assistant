@@ -91,6 +91,9 @@ test("the UI keeps the Console's obsidian palette and calls only same-origin rea
   for (const word of ["Key levels", "Key Level Agent", "candidate zones", "key_levels", "sources", "camarilla", "Camarilla · pivots", "Zones · every chart", "KeyLevelMap"]) assert.ok(keyLevels.includes(word), word);
   assert.match(keyLevels, /gradientUnits="userSpaceOnUse"/, "the price line paints on a zero-height line");
   assert.match(keyLevels, /useId\(\)\.replace\(\/:\/g, ""\)/, "no colon in a url(#…) reference");
+  // Owner 2026-11-11: the listed zones run by price from the highest down, with the price row between.
+  assert.match(keyLevels, /\.sort\(\(a, b\) => b\.high - a\.high \|\| b\.low - a\.low\)/, "the list runs by price, highest first");
+  assert.match(keyLevels, /i === priceRow && <PriceRow/, "the price row sits where price falls");
   assert.ok(assistant.indexOf("<KeyLevels") > assistant.indexOf("<GlobalDecision"), "the zones follow the decision");
   assert.doesNotMatch(assistant, /LevelsCard|<KeyLevelAgent|LevelLadder/, "the Levels card and the Key Level Agent panel are one panel");
   // Owner request 2026-11-06: the zones are drawn on the chart, with the plan's price lines.
