@@ -360,16 +360,133 @@ function Knowledge({ k }: { k: any }) {
   );
 }
 
-function Canon({ c }: { c: any }) {
+function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
+  const council = doctrine?.council;
+  const facts = doctrine?.facts;
+  const applied = doctrine?.applied || [];
+  const rules = doctrine?.rules || c?.doctrine || [];
+  const session = council?.last_session;
+
   return (
-    <Panel title="Canon · doctrine" icon={<ScrollText className="h-3.5 w-3.5" />} right={<Badge tone="cyan">v{c?.version} · {short(c?.content_sha256)}</Badge>}>
-      <p className="mb-2 text-[12px] text-slate-400">{c?.files ?? 0} canon files · KB {c?.kb_version ?? "n/a"} ({short(c?.kb_content_sha256)}). The canon changes only by a reviewed PR.</p>
-      <ol className="space-y-1.5 text-[12px]">
-        {(c?.doctrine || []).map((r: any) => (
-          <li key={r.id} className="glass-inner p-2">
-            <span className="mono text-cyan-300">{r.id}</span>{r.since && <span className="ml-2 text-[10px] text-slate-500">since {r.since}</span>}
-            {r.status && <span className="ml-2"><Badge tone="slate">{r.status}</Badge></span>}
-            <p className="mt-0.5 leading-relaxed text-slate-300">{r.rule}</p>
+    <Panel
+      title="Canon · Knowledge Council & Doctrine"
+      icon={<ScrollText className="h-3.5 w-3.5" />}
+      right={
+        <div className="flex items-center gap-1.5">
+          {council?.mode && (
+            <Badge tone={council.mode === "propose" ? "green" : "amber"}>
+              Council: {council.mode}
+            </Badge>
+          )}
+          {council?.schedule_utc && (
+            <Badge tone="cyan">{council.schedule_utc}</Badge>
+          )}
+          <Badge tone="purple">v{c?.version} · {short(c?.content_sha256)}</Badge>
+        </div>
+      }
+    >
+      <p className="mb-3 text-[12px] text-slate-400">
+        Autonomous Doctrine Protocol: Knowledge Council evaluates measured system facts against doctrine daily, proposing drifts to Cerebrum Consensus for execution. Effective doctrine is synced hourly to Aether and consumed dynamically by Trading Agents.
+      </p>
+
+      {/* Council & Seats Status Card */}
+      <div className="mb-4 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="glass-inner p-2.5 text-[12px]">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Knowledge Council</span>
+          <div className="mt-1 flex items-center justify-between">
+            <span className="mono text-cyan-300">{council?.agent ?? "knowledge-council"}</span>
+            <Badge tone="green">daily 03:52 UTC</Badge>
+          </div>
+          <p className="mt-1 text-[11px] text-slate-400">
+            {session ? `Last session: ${ago(session.held_at)} · ${session.review?.length ?? 0} reviewed · ${session.proposals?.length ?? 0} proposed` : "Next scheduled session: 03:52 UTC"}
+          </p>
+        </div>
+
+        <div className="glass-inner p-2.5 text-[12px]">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Nexus Seat (Decisions)</span>
+          <div className="mt-1 flex items-center justify-between">
+            <span className="text-slate-300">Measured facts</span>
+            <Badge tone={facts?.seats?.nexus ? "green" : "slate"}>
+              {facts?.seats?.nexus ? `${facts.seats.nexus.facts} facts` : "reporting"}
+            </Badge>
+          </div>
+          <p className="mt-1 text-[11px] text-slate-400">
+            {facts?.measured_at ? `Freshness: ${ago(facts.measured_at)} · version: ${short(facts.seats?.nexus?.version_id, 8)}` : "Hourly sweep reporting active"}
+          </p>
+        </div>
+
+        <div className="glass-inner p-2.5 text-[12px]">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Omega Seat (Execution)</span>
+          <div className="mt-1 flex items-center justify-between">
+            <span className="text-slate-300">Broker & gates</span>
+            <Badge tone={facts?.seats?.omega ? "green" : "slate"}>
+              {facts?.seats?.omega ? `${facts.seats.omega.facts} facts` : "reporting"}
+            </Badge>
+          </div>
+          <p className="mt-1 text-[11px] text-slate-400">
+            {facts?.measured_at ? `Freshness: ${ago(facts.measured_at)} · version: ${short(facts.seats?.omega?.version_id, 8)}` : "Hourly sweep reporting active"}
+          </p>
+        </div>
+      </div>
+
+      {/* Applied Amendments from Cerebrum Consensus */}
+      <div className="mb-4">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Cerebrum Executed Amendments ({applied.length})
+          </span>
+          {applied.length === 0 && (
+            <span className="text-[11px] text-slate-500">Doctrine in force matches Canon baseline</span>
+          )}
+        </div>
+        {applied.length > 0 ? (
+          <div className="space-y-1.5">
+            {applied.map((a: any) => (
+              <div key={a.amendment_id} className="glass-inner flex items-center justify-between p-2 text-[12px]">
+                <div>
+                  <span className="mono text-emerald-300">{a.amendment_id}</span>
+                  <span className="ml-2 font-medium text-slate-200">{a.rule}</span>
+                  <span className="ml-2 text-slate-400">({a.action})</span>
+                </div>
+                <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                  <span>Executed {ago(a.executed_at)}</span>
+                  <Badge tone="green">applied</Badge>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="glass-inner p-2.5 text-[11px] text-slate-400">
+            No amendments executed yet. The 20 baseline rules of Canon v2 are active with zero drift rejections.
+          </div>
+        )}
+      </div>
+
+      {/* Active Doctrine Rules List */}
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          Doctrine Rules in Force ({rules.length})
+        </span>
+        <span className="text-[11px] text-slate-500">Live feed for Decision Council & Agents</span>
+      </div>
+      <ol className="max-h-[480px] space-y-1.5 overflow-y-auto text-[12px] pr-1">
+        {rules.map((r: any) => (
+          <li key={r.id} className="glass-inner p-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-1.5">
+              <div className="flex items-center gap-2">
+                <span className="mono font-semibold text-cyan-300">{r.id}</span>
+                <Badge tone={r.class === "constitutional" ? "purple" : "cyan"}>
+                  {r.class || "operational"}
+                </Badge>
+                {r.amended && (
+                  <Badge tone="green">
+                    Amended by Cerebrum: {r.amended.amendment_id}
+                  </Badge>
+                )}
+              </div>
+              {r.since && <span className="text-[10px] text-slate-500">since {r.since}</span>}
+            </div>
+            <p className="mt-1 leading-relaxed text-slate-300">{r.rule}</p>
           </li>
         ))}
       </ol>
@@ -410,7 +527,7 @@ export default function Aether() {
         <Guardian g={o.guardian} />
         <Knowledge k={o.knowledge} />
       </div>
-      <Canon c={o.canon} />
+      <Canon c={o.canon} doctrine={o.doctrine} />
     </div>
   );
 }

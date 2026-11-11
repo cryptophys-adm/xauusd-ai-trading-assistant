@@ -44,6 +44,7 @@ import { hudLevels } from "./hud-levels.mjs";
 import { callBusModel, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { naturalLanguageErrors, onlyNaturalLanguageErrors, NATURAL_LANGUAGE_CORRECTION } from "./natural-language.mjs";
 import { shouldNotifyH1 } from "./h1-telegram.mjs";
+import { fetchEffectiveDoctrine, formatDoctrineDirectives } from "./doctrine-consumer.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
@@ -541,6 +542,7 @@ export function councilEvidence({ barClose, cards, quorum, guards, context = {} 
 
 /** Pure: the council's messages. */
 export function councilMessages(evidence) {
+  const doctrineSnippet = evidence?.context?.doctrine ? `\n\n${evidence.context.doctrine}` : "";
   const system = [
     "You are the AI Decision Council of the XAUUSD system: the ONE decision for the trader, made at the close of each 15-minute bar.",
     "Witnesses each speak from their own data: the D1, 4H, 1H and 15m War Rooms (their agents' bias as a lean from -1 bearish to +1 bullish, and the room's own decision), News Daily, the Macro War Room and the strategy engine (the multi-timeframe confluence, the key-level plan and the entry trigger). You are the only one who reads across them.",
@@ -553,7 +555,7 @@ export function councilMessages(evidence) {
     `confidence is 0 to 1; below ${MIN_CONFIDENCE} a BUY or SELL becomes WAIT. bias is where the weight of the evidence leans (BULLISH, BEARISH or NEUTRAL), even when the stance is WAIT.`,
     "Never invent a price: the levels come only from the plans in the evidence. Never mention position size. Write summary, reasons and risks in plain sentences a trader would write: no field names, no words joined by underscores or dots, no key=value. The summary starts with the stance and the bias, for example \"Decision WAIT, bias bullish: ...\". Give one to four reasons and up to three risks. In weighed, list the witness keys you relied on most.",
     "Return only the JSON object."
-  ].join(" ");
+  ].join(" ") + doctrineSnippet;
   return [
     { role: "system", content: system },
     { role: "user", content: `EVIDENCE:\n${JSON.stringify(evidence)}` }
@@ -828,6 +830,12 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     const data = loaded ?? await loadDecisionInputs(env, { now });
     const assessment = assess(data, { now, env });
     const context = councilContext({ inputs: data.inputs, correlations: data.correlations, regime: data.regime, previous, market: assessment.market, now });
+    try {
+      const doctrinePayload = await fetchEffectiveDoctrine(env, { now });
+      if (doctrinePayload?.rules?.length) {
+        context.doctrine = formatDoctrineDirectives(doctrinePayload.rules, { role: "council" });
+      }
+    } catch { /* keep context */ }
     const council = await askCouncil(env, councilEvidence({ barClose: closeIso, cards: assessment.cards, quorum: assessment.quorum, guards: assessment.guards, context }), { clock });
     const record = buildDecisionRecord({ key, barClose: closeIso, loaded: data, assessment, council, previous, now, decidedAt: new Date(clock()).toISOString(), env });
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, ?, ?, ?)")

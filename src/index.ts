@@ -191,6 +191,7 @@ import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLates
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport } from "./aether-push.mjs";
 import { pushDoctrineFacts } from "./doctrine-facts.mjs";
+import { fetchEffectiveDoctrine } from "./doctrine-consumer.mjs";
 import { aetherSyncStatus } from "./aether-sync.mjs";
 import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
@@ -2308,7 +2309,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/aether/status") {
     // Aether A5: the push ledger of decision cards sent to cryptophys-aether (no card content).
     try {
-      return dashboardJson({ status: "ok", aether: { ...(await aetherPushStatus(env)), learned_pack: await packStatus(env), sync: await aetherSyncStatus(env) } });
+      return dashboardJson({ status: "ok", aether: { ...(await aetherPushStatus(env)), learned_pack: await packStatus(env), sync: await aetherSyncStatus(env), doctrine: await fetchEffectiveDoctrine(env) } });
     } catch (error) {
       console.error("aether_status_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
@@ -2929,6 +2930,11 @@ export default {
             const facts = await pushDoctrineFacts(env);
             if (facts.status !== "ok" && facts.status !== "disabled") console.log("doctrine_facts", JSON.stringify(facts));
           } catch (e) { console.error("doctrine_facts_failed", e instanceof Error ? e.message : String(e)); }
+          // Sync live effective doctrine from Aether into KV cache for agent consumption
+          try {
+            const doc = await fetchEffectiveDoctrine(env, { force: true });
+            if (doc.source === "aether") console.log("doctrine_synced", JSON.stringify({ version: doc.version, rules: doc.rules.length, applied: doc.applied.length }));
+          } catch (e) { console.error("doctrine_sync_failed", e instanceof Error ? e.message : String(e)); }
         }
         // Health alerts (gap 2, owner decision 2026-11-06): detect operational problems, keep
         // them as open alerts for the Nexus Priority Queue and report state changes to the
