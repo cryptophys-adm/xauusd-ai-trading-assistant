@@ -222,6 +222,7 @@ import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weight
 import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy } from "./omega-broker.mjs";
+import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus } from "./corpus-oracle.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
@@ -1980,6 +1981,18 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
  * Phase 2 (owner decisions 2026-11-09, src/omega-broker.mjs): the broker engine settings, the broker
  * connection (an envelope only the host bridge can open) and the bridge sync that plans the intents.
  */
+/**
+ * Owner notifications from the Cerebrum kernel (owner 2026-11-11: "buat notif telegram jika ada yang
+ * perlu approve owner di semua cerebrum"): the kernel's Service Binding OWNER_TELEGRAM calls notify()
+ * when something waits for the owner's approval (src/owner-notify.mjs). Plain text to the owner's
+ * Telegram, links only to the Cerebrum Console, rate-limited; nothing else is reachable here.
+ */
+export class OwnerNotifier extends WorkerEntrypoint<Env> {
+  async notify(input: unknown): Promise<JsonObject> {
+    return notifyOwner(this.env, input, { send: (text: string) => sendTelegram(this.env, text) }) as Promise<JsonObject>;
+  }
+}
+
 export class OmegaGateway extends WorkerEntrypoint<Env> {
   async overview(): Promise<JsonObject> {
     return { ...(await omegaOverview(this.env)), broker: await brokerOverview(this.env) } as JsonObject;
