@@ -170,7 +170,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       let body;
       try { body = JSON.parse(text); } catch { return json({ error: "invalid_json" }, 400); }
       if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "body must be a JSON object" }, 400);
-      return rpc(() => env.OMEGA.bridgeSync({ state: body.state ?? null, results: body.results ?? [], publicKey: body.public_key, kid: body.kid, bridgeVersion: body.bridge_version, corpus: body.corpus ?? null }), "sync_failed");
+      return rpc(() => env.OMEGA.bridgeSync({ state: body.state ?? null, results: body.results ?? [], publicKey: body.public_key, kid: body.kid, bridgeVersion: body.bridge_version, corpus: body.corpus ?? null, corpusMacro: body.corpus_macro ?? null, calendar: body.calendar ?? null }), "sync_failed");
     }
 
     if (route === "GET /api/whoami") return json({ subject: identity.subject, type: identity.type, can_control: canControl });

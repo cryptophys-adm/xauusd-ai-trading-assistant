@@ -1,7 +1,7 @@
 // The MT5 fallback (docs/RFC_MT5_FALLBACK.md; owner 2026-11-11). src/mt5-fallback.mjs.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyMt5Fallback, brokerCandles, gatewayDown, fallbackMode, resolveFallbackMode, FALLBACK_STALE_S, FEED_FALLBACK_KEY } from "../src/mt5-fallback.mjs";
+import { applyMt5Fallback, applyMacroFallback, syntheticDxy, brokerCandles, gatewayDown, fallbackMode, resolveFallbackMode, FALLBACK_STALE_S, FEED_FALLBACK_KEY } from "../src/mt5-fallback.mjs";
 import { SERIES, SERIES_INTERNALS, readSeries, refreshSeries, healPlan, buildBundle } from "../src/tradingview-source.mjs";
 
 class MemoryKV {
@@ -157,4 +157,50 @@ test("F6. 4H and daily bars from the broker's minutes follow the series' own gri
   assert.deepEqual(d1.map((c) => c.open_time), ["2027-01-13T22:00:00.000Z"], "Wednesday 22:00 to Thursday 22:00, TradingView's minutes then the broker's");
   assert.deepEqual([d1[0].open, d1[0].close, d1[0].low], [4040, 4021, 4018]);
   assert.equal((await readSeries(kv, spec("OANDA:XAUUSD|1W"))), null, "the weekly bar waits for TradingView");
+});
+
+test("F7. stage 2: oil, silver and the dollar index from the broker's macro symbols, on their own grids, only buckets the minutes cover", async () => {
+  const kv = new MemoryKV();
+  await tradingViewCache(kv);
+  const sec = (iso) => Date.parse(iso) / 1000;
+  // T0 is 2027-01-15T08:00Z. Native caches: USOIL 5m to 07:55, silver and DXY 4H to the 02:00 bar (06:00 close).
+  await put(kv, "TVC:USOIL|5m", { candles: [bar(T0 - 300, 300, 70, 70.2, 69.9, 70.1)] });
+  await put(kv, "OANDA:XAGUSD|4h", { candles: [bar(sec("2027-01-15T02:00:00Z"), 14400, 50, 51, 49, 50.5)] });
+  await put(kv, "TVC:DXY|4h", { candles: [bar(sec("2027-01-15T02:00:00Z"), 14400, 99, 99.5, 98.8, 99.2)] });
+  const px = { XAGUSD: 50.2, USOIL: 70.4, EURUSD: 1.1, USDJPY: 150, GBPUSD: 1.3, USDCAD: 1.35, USDSEK: 10.5, USDCHF: 0.9 };
+  const minutes = (base, fromIso, n) => Array.from({ length: n }, (_, i) => ({ t: (sec(fromIso) + i * 60) * 1000, o: px[base], h: px[base] * 1.001, l: px[base] * 0.999, c: px[base], v: 3 }));
+  const corpus = {
+    XAUUSD: brokerRows(70),
+    USOIL: minutes("USOIL", "2027-01-15T07:00:00Z", 130),
+    XAGUSD: minutes("XAGUSD", "2027-01-15T05:00:00Z", 190), // from 05:00: covers the 06:00 bucket's start
+    ...Object.fromEntries(["EURUSD", "USDJPY", "GBPUSD", "USDCAD", "USDSEK", "USDCHF"].map((b) => [b, minutes(b, b === "USDSEK" ? "2027-01-15T06:30:00Z" : "2027-01-15T05:00:00Z", b === "USDSEK" ? 160 : 190)]))
+  };
+  const ai = { async corpusBars(req) { const base = req.base || "XAUUSD"; return { source: req.base ? `mt5macro:monex-demo:${base}` : "mt5:monex-demo:XAUUSD.M", bars: (corpus[base] || []).filter((r) => r.t > req.since_ms) }; } };
+  const now = (T0 + 70 * 60 + 5) * 1000; // 09:10
+  const r = await applyMt5Fallback({ MARKET_DATA_CACHE: kv, AI_WORKER: ai, FEED_FALLBACK_MODE: "auto" }, "mcp_quota_cooldown_active", { now });
+  assert.equal(r.status, "active");
+  const oil5 = (await readSeries(kv, spec("TVC:USOIL|5m")));
+  assert.ok(oil5.candles.filter((c) => c.src === "mt5").length >= 13, "oil 5m from 08:00 to 09:05");
+  assert.equal(oil5.fallback.source, "mt5macro:monex-demo:USOIL");
+  assert.equal((await readSeries(kv, spec("TVC:USOIL|1h"))).candles.filter((c) => c.src === "mt5").map((c) => c.open_time).join(), "2027-01-15T07:00:00.000Z,2027-01-15T08:00:00.000Z");
+  // Silver's 06:00-10:00 bucket has not closed at 09:10: nothing yet; at 10:01 it is built.
+  assert.equal((await readSeries(kv, spec("OANDA:XAGUSD|4h"))).fallback, undefined);
+  corpus.XAGUSD = minutes("XAGUSD", "2027-01-15T05:00:00Z", 300);
+  for (const b of ["EURUSD", "USDJPY", "GBPUSD", "USDCAD", "USDCHF"]) corpus[b] = minutes(b, "2027-01-15T05:00:00Z", 300);
+  corpus.USDSEK = minutes("USDSEK", "2027-01-15T06:30:00Z", 210);
+  const later = await applyMacroFallback({ MARKET_DATA_CACHE: kv, AI_WORKER: ai }, { now: Date.parse("2027-01-15T10:01:05Z") });
+  const xag = (await readSeries(kv, spec("OANDA:XAGUSD|4h"))).candles.filter((c) => c.src === "mt5");
+  assert.deepEqual(xag.map((c) => [c.open_time, c.close]), [["2027-01-15T06:00:00.000Z", 50.2]]);
+  // The dollar index: USDSEK starts at 06:30, so the 06:00 bucket is not covered by all six and is not built.
+  assert.equal((await readSeries(kv, spec("TVC:DXY|4h"))).candles.filter((c) => c.src === "mt5").length, 0, JSON.stringify(later));
+});
+
+test("F8. the ICE dollar index from the six pairs, minute by minute", () => {
+  const row = (t, c) => ({ t, o: c, h: c, l: c, c });
+  const rows = { EURUSD: [row(0, 1.1), row(60000, 1.1)], USDJPY: [row(0, 150), row(60000, 150)], GBPUSD: [row(0, 1.3), row(60000, 1.3)], USDCAD: [row(0, 1.35), row(60000, 1.35)], USDSEK: [row(0, 10.5)], USDCHF: [row(0, 0.9), row(60000, 0.9)] };
+  const dxy = syntheticDxy(rows);
+  assert.equal(dxy.length, 1, "only minutes where all six pairs have a bar");
+  const expected = 50.14348112 * Math.pow(1.1, -0.576) * Math.pow(150, 0.136) * Math.pow(1.3, -0.119) * Math.pow(1.35, 0.091) * Math.pow(10.5, 0.042) * Math.pow(0.9, 0.036);
+  assert.ok(Math.abs(dxy[0].c - expected) < 0.001, `${dxy[0].c} vs ${expected}`);
+  assert.ok(dxy[0].c > 90 && dxy[0].c < 120, "a plausible index level");
 });

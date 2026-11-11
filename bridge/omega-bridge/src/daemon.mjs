@@ -10,11 +10,13 @@ import {
   resolveOmegaDir,
   writeIntents,
   readCorpus,
+  readCorpusMacro,
+  readCalendar,
 } from "./files.mjs";
 import { applyCredentials, clearCredentials, ensureLiveTradingSettings } from "./ini.mjs";
 import { DEFAULT_STATE_DIR, loadOrCreateKeyPair } from "./keys.mjs";
 
-export const BRIDGE_VERSION = "1.0.0";
+export const BRIDGE_VERSION = "1.1.0";
 export const DEFAULT_OMEGA_URL = "https://nexus.cryptophys.work/omega";
 export const DEFAULT_TERMINAL_INI = "/opt/mt5-ingestion-gateway/config/terminal_gateway.ini";
 export const DEFAULT_TERMINAL_SERVICE = "mt5-terminal.service";
@@ -207,10 +209,12 @@ async function invokeExec(execFn, cmd, args) {
   return await execFn(cmd, args);
 }
 
-function buildBoundedSyncBody({ kid, publicKeyBase64, state, results, corpus = null }) {
+function buildBoundedSyncBody({ kid, publicKeyBase64, state, results, corpus = null, corpusMacro = null, calendar = null }) {
   let currentResults = Array.isArray(results) ? [...results] : [];
   let currentState = state ? { ...state } : null;
   let currentCorpus = corpus;
+  let currentMacro = corpusMacro;
+  let currentCalendar = calendar;
 
   const serialize = () =>
     JSON.stringify({
@@ -220,9 +224,18 @@ function buildBoundedSyncBody({ kid, publicKeyBase64, state, results, corpus = n
       state: currentState,
       results: currentResults,
       ...(currentCorpus ? { corpus: currentCorpus } : {}),
+      ...(currentMacro ? { corpus_macro: currentMacro } : {}),
+      ...(currentCalendar ? { calendar: currentCalendar } : {}),
     });
 
   let body = serialize();
+  // The MT5 fallback's stage 2 (calendar, then the macro bars) goes first: it is sent again next time.
+  if (Buffer.byteLength(body, "utf8") > MAX_SYNC_BODY_BYTES && currentCalendar) { currentCalendar = null; body = serialize(); }
+  while (Buffer.byteLength(body, "utf8") > MAX_SYNC_BODY_BYTES && currentMacro) {
+    const halved = currentMacro.series.map((s) => ({ ...s, bars: s.bars.slice(0, Math.floor(s.bars.length / 2)) })).filter((s) => s.bars.length);
+    currentMacro = halved.length && halved.some((s, i) => s.bars.length < currentMacro.series[i]?.bars.length) ? { ...currentMacro, series: halved } : null;
+    body = serialize();
+  }
   // The corpus has the lowest priority: it is halved, then dropped, before any result or the state.
   while (Buffer.byteLength(body, "utf8") > MAX_SYNC_BODY_BYTES && currentCorpus) {
     currentCorpus = currentCorpus.bars.length > 1 ? { ...currentCorpus, bars: currentCorpus.bars.slice(0, Math.floor(currentCorpus.bars.length / 2)) } : null;
@@ -344,6 +357,8 @@ export function createDaemon(options = {}) {
 
   let consecutiveFailures = 0;
   let corpusCursorMs = null; // Corpus Oracle: the newest broker minute the server kept
+  let macroCursors = {}; // stage 2: per macro base, the newest minute the server kept
+  let calendarSentMs = null; // stage 2: the calendar file the server took last
   let currentBackoffMs = config.syncMs;
   let last403LogMs = -Infinity;
   let running = false;
@@ -453,12 +468,18 @@ export function createDaemon(options = {}) {
     const resultsToSend = Array.from(pendingResultsById.values());
     // Corpus Oracle: only the bars after the server's cursor (none until the server answers one).
     const corpus = readCorpus(config.omegaFilesDir, { fs, afterMs: corpusCursorMs });
+    // Stage 2 of the MT5 fallback: macro bars after each base's cursor, and the calendar when it changed.
+    // Until the server answers a base's cursor, its bars wait (the corpus is off on the server).
+    const corpusMacro = corpusCursorMs != null ? readCorpusMacro(config.omegaFilesDir, { fs, afterMsByBase: macroCursors }) : null;
+    const calendar = corpusCursorMs != null ? readCalendar(config.omegaFilesDir, { fs, afterWrittenMs: calendarSentMs }) : null;
     const { body, sentResults } = buildBoundedSyncBody({
       kid: keys.kid,
       publicKeyBase64: keys.publicKeyBase64,
       state,
       results: resultsToSend,
       corpus,
+      corpusMacro,
+      calendar,
     });
 
     const syncUrl = `${config.omegaUrl}/api/bridge/sync`;
@@ -545,6 +566,10 @@ export function createDaemon(options = {}) {
     writeIntents(config.omegaFilesDir, intents, { fs, now });
     // The server's corpus cursor: the newest broker minute it kept (null while the Corpus Oracle is off).
     if (typeof payload?.corpus_cursor_ms === "number" && Number.isFinite(payload.corpus_cursor_ms)) corpusCursorMs = payload.corpus_cursor_ms;
+    if (payload?.corpus_macro_cursors && typeof payload.corpus_macro_cursors === "object") {
+      for (const [base, ms] of Object.entries(payload.corpus_macro_cursors)) if (Number.isFinite(ms)) macroCursors[base] = ms;
+    }
+    if (typeof payload?.calendar_seen_ms === "number" && Number.isFinite(payload.calendar_seen_ms)) calendarSentMs = payload.calendar_seen_ms;
 
     let appliedConnection = false;
     const conn = payload?.connection;

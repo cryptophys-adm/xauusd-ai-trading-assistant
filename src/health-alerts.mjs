@@ -105,7 +105,7 @@ export async function marketDataFallbackIssue(env) {
   if (!Number.isFinite(since)) return null;
   return {
     key: "market_data_fallback", kind: "market_data_fallback",
-    subject: `Market data from the broker's MT5 bars since ${iso(since * 1000).slice(0, 16).replace("T", " ")} UTC (TradingView is down). Rooms and decisions run on the broker's price; news and the macro series wait.`,
+    subject: `Market data from the broker's MT5 bars since ${iso(since * 1000).slice(0, 16).replace("T", " ")} UTC (TradingView is down). Rooms and decisions run on the broker's price (silver, oil and the dollar index too when the broker sends them); news, the 10-year yield and USDT dominance wait.`,
     detail: { since: iso(since * 1000), source: typeof rec.fallback.source === "string" ? rec.fallback.source : null }
   };
 }

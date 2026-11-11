@@ -65,8 +65,19 @@ newer data, and the gap re-pull covers the outage, so the series heals itself.
      the grid of their last native bar, OANDA's session start (22:00 UTC in winter), not the broker's
      server midnight; only a bucket the 1m series (about 50 hours) covers from its start. W1 waits for
      TradingView. All heal at the next native pull.
-   - USOIL, DXY, US10Y, XAGUSD and USDT dominance have no broker source. They stay stale, and their
-     witnesses drop out (the Macro room, macro drivers, correlations).
+   - Stage 2 (2026-11-11, owner: "intinya input untuk AI Worker bisa sama persis tidak ada regresi"):
+     the executor also writes the broker's M1 bars of the macro symbols (`omega/corpus_macro.json`:
+     silver, oil, and the six pairs of the ICE dollar index; the broker's names are found with the gold
+     symbol's prefix and suffix) and the terminal's USD economic calendar (`omega/calendar.json`, MQL5
+     Calendar, with the released values). The bridge sends them after per-base cursors; the AI Worker
+     keeps them under `mt5macro:<server>:<BASE>` and in D1 `mt5_calendar`, from Omega's active broker
+     and user only. During a fallback the pull adapter rebuilds TVC:USOIL 5m/15m/1H, OANDA:XAGUSD 4H
+     and TVC:DXY 4H (computed per minute: 50.14348112 x EURUSD^-0.576 x USDJPY^0.136 x
+     GBPUSD^-0.119 x USDCAD^0.091 x USDSEK^0.042 x USDCHF^0.036, only where all six have a bar), on
+     their own grids and only for covered buckets. When TradingView's calendar fails, the released
+     value comes from the MQL5 calendar, matched to the waiting row of the same minute and kind.
+   - US10Y, USDT dominance and news have no broker source. They stay stale, and their witnesses drop
+     out.
    - News stays stale, so News Daily drops out. Weights renormalise as they already do.
 
 6. **Local engines and parity.**

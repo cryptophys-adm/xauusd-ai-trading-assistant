@@ -48,7 +48,13 @@ export function validateCorpus(corpus, { executor = null, connection = null, now
   if (server !== clean(connection.server)) return { ok: false, error: "broker_mismatch" };
   if (!executor || clean(executor.server) !== server) return { ok: false, error: "executor_broker_mismatch" };
   if (clean(executor.symbol?.name, 32) !== symbol) return { ok: false, error: "pair_mismatch" };
-  const rows = Array.isArray(corpus.bars) ? corpus.bars.slice(-CORPUS_MAX_BARS_PER_SYNC) : [];
+  const { bars, refused } = validBars(corpus.bars, now);
+  return { ok: true, source: corpusSource(server, symbol), server, symbol, connection_version: Number(connection.version), bars, refused };
+}
+
+/** Pure: closed, aligned, ordered, consistent M1 bars of the last 14 days; the others are counted. */
+function validBars(rowsIn, now) {
+  const rows = Array.isArray(rowsIn) ? rowsIn.slice(-CORPUS_MAX_BARS_PER_SYNC) : [];
   const bars = [];
   let refused = 0, last = -Infinity;
   for (const b of rows) {
@@ -59,7 +65,7 @@ export function validateCorpus(corpus, { executor = null, connection = null, now
     last = t;
     bars.push({ t, o, h, l, c, v: finite(v) && v >= 0 ? Math.round(v) : null, s: finite(s) && s >= 0 ? Math.round(s) : null });
   }
-  return { ok: true, source: corpusSource(server, symbol), server, symbol, connection_version: Number(connection.version), bars, refused };
+  return { bars, refused };
 }
 
 /** Pure: M1 bars aggregated to `minutes` (5, 15, 60), keyed by the bar's close; only complete bars. */
@@ -178,7 +184,8 @@ export async function readCorpusBars(env, { sinceMs = 0, limit = CORPUS_READ_MAX
   if (corpusMode(env) === "off" || !db) return { source: null, bars: [] };
   try {
     await ensureSchema(db);
-    const src = await db.prepare("SELECT source, server, symbol FROM corpus_sources WHERE last_minute_ms IS NOT NULL ORDER BY updated_ms DESC LIMIT 1").first();
+    // The traded pair's source (mt5:...), never a macro symbol's (mt5macro:...).
+    const src = await db.prepare("SELECT source, server, symbol FROM corpus_sources WHERE last_minute_ms IS NOT NULL AND source LIKE 'mt5:%' ORDER BY updated_ms DESC LIMIT 1").first();
     if (!src) return { source: null, bars: [] };
     const n = Math.max(1, Math.min(CORPUS_READ_MAX, Number(limit) || CORPUS_READ_MAX));
     const since = finite(Number(sinceMs)) ? Number(sinceMs) : 0;
@@ -195,7 +202,10 @@ export async function corpusStatus(env, { now = Date.now() } = {}) {
   const db = env?.DB;
   if (!db) return { mode, sources: [] };
   try { await ensureSchema(db); } catch { return { mode, sources: [] }; }
-  const rows = ((await db.prepare("SELECT * FROM corpus_sources ORDER BY updated_ms DESC LIMIT 8").all().catch(() => ({ results: [] }))).results) || [];
+  const rows = ((await db.prepare("SELECT * FROM corpus_sources WHERE source NOT LIKE 'mt5macro:%' ORDER BY updated_ms DESC LIMIT 8").all().catch(() => ({ results: [] }))).results) || [];
+  // The macro symbols (MT5 fallback, stage 2): freshness and counts only; their basis is not gold's.
+  const macro = (((await db.prepare("SELECT source, symbol, last_minute_ms, stored, refused FROM corpus_sources WHERE source LIKE 'mt5macro:%' ORDER BY source").all().catch(() => ({ results: [] }))).results) || [])
+    .map((m) => ({ source: m.source, symbol: m.symbol, last_bar_age_s: finite(m.last_minute_ms) ? Math.max(0, Math.round((now - m.last_minute_ms - MINUTE) / 1000)) : null, stored: m.stored, refused: m.refused }));
   let reference = [];
   try {
     const rec = JSON.parse((await env.SIGNAL_CACHE?.get?.(SERIES_KEY)) || "null");
@@ -215,5 +225,140 @@ export async function corpusStatus(env, { now = Date.now() } = {}) {
       basis_m15: corpusBasis(m15.map((b) => ({ close_ms: b.close_ms, close: b.close })), reference)
     });
   }
-  return { mode, phase: 1, feeds_local_lane: false, sources };
+  return { mode, phase: 1, feeds_local_lane: false, sources, macro };
+}
+
+// ---------------------------------------------------------------- the MT5 fallback, stage 2 (2026-11-11)
+// Owner 2026-11-11: the AI Worker's input as with TradingView, no regression. Besides the traded pair,
+// the executor sends the broker's closed M1 bars of the macro symbols the pull adapter reads from
+// TradingView (silver, oil, and the six pairs of the ICE dollar index, from which DXY is computed) and
+// the USD economic calendar of MQL5 with its released values. Same rules: only from Omega's active
+// broker and user (the terminal's server equals the stored connection's and the executor's); only the
+// listed bases; the bars validated as the pair's. Sources `mt5macro:<server>:<BASE>`, so the pair's
+// source is never mistaken for one. Read by the pull adapter (corpusBars with a base) and by the
+// economic-calendar step when TradingView's calendar fails.
+
+export const MACRO_BASES = Object.freeze(["XAGUSD", "USOIL", "EURUSD", "USDJPY", "GBPUSD", "USDCAD", "USDSEK", "USDCHF"]);
+export const macroSource = (server, base) => `mt5macro:${clean(server).toLowerCase()}:${base}`;
+const baseOf = (b) => clean(b, 16).toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+/** Pure: the macro corpus checked against Omega's active broker and user. */
+export function validateCorpusMacro(payload, { executor = null, connection = null, now = Date.now() } = {}) {
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.series)) return { ok: false, error: "no_corpus_macro" };
+  if (!connection || connection.status !== "stored" || !finite(Number(connection.version))) return { ok: false, error: "no_active_user" };
+  const server = clean(payload.server);
+  if (!server) return { ok: false, error: "server_required" };
+  if (server !== clean(connection.server)) return { ok: false, error: "broker_mismatch" };
+  if (!executor || clean(executor.server) !== server) return { ok: false, error: "executor_broker_mismatch" };
+  const series = [];
+  let refusedSeries = 0;
+  for (const s of payload.series.slice(0, 16)) {
+    const base = baseOf(s?.base);
+    if (!MACRO_BASES.includes(base) || series.some((x) => x.base === base)) { refusedSeries += 1; continue; }
+    const { bars, refused } = validBars(s.bars, now);
+    series.push({ base, symbol: clean(s?.symbol, 32), source: macroSource(server, base), bars, refused });
+  }
+  return { ok: true, server, connection_version: Number(connection.version), series, refused_series: refusedSeries };
+}
+
+/** Bridge sync step: stores the macro bars; returns each base's cursor. Never throws; off with the corpus. */
+export async function ingestCorpusMacro(env, payload, { executor = null, now = Date.now() } = {}) {
+  if (corpusMode(env) === "off" || !payload) return { mode: corpusMode(env), cursors: null };
+  try {
+    const db = env.DB;
+    await ensureSchema(db);
+    const connection = await db.prepare("SELECT version, status, server FROM omega_connection WHERE id = 1").first().catch(() => null);
+    const v = validateCorpusMacro(payload, { executor, connection, now });
+    if (!v.ok) return { mode: "shadow", error: v.error, cursors: null };
+    const cursors = {};
+    let stored = 0;
+    for (const s of v.series) {
+      let n = 0;
+      for (const b of s.bars) {
+        const r = await db.prepare("INSERT OR IGNORE INTO corpus_bars (source, minute_ms, o, h, l, c, tick_volume, spread_points, connection_version, received_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .bind(s.source, b.t, b.o, b.h, b.l, b.c, b.v, b.s, v.connection_version, now).run();
+        if (Number(r?.meta?.changes)) n += 1;
+      }
+      const last = await db.prepare("SELECT MAX(minute_ms) AS t FROM corpus_bars WHERE source = ?").bind(s.source).first();
+      await db.prepare(`INSERT INTO corpus_sources (source, server, symbol, connection_version, last_minute_ms, stored, refused, last_error, updated_ms) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
+        ON CONFLICT(source) DO UPDATE SET symbol = excluded.symbol, connection_version = excluded.connection_version, last_minute_ms = excluded.last_minute_ms, stored = stored + excluded.stored, refused = refused + excluded.refused, last_error = NULL, updated_ms = excluded.updated_ms`)
+        .bind(s.source, v.server, s.symbol || s.base, v.connection_version, last?.t ?? null, n, s.refused, now).run();
+      if (last?.t != null) cursors[s.base] = Number(last.t);
+      stored += n;
+    }
+    return { mode: "shadow", stored, cursors };
+  } catch (error) {
+    return { mode: "shadow", error: String(error?.message ?? error).slice(0, 120), cursors: null };
+  }
+}
+
+/** The active broker's M1 bars of one macro base after a time, oldest first. Never throws. */
+export async function readMacroBars(env, { base, sinceMs = 0, limit = CORPUS_READ_MAX } = {}) {
+  const db = env?.DB;
+  const b = baseOf(base);
+  if (corpusMode(env) === "off" || !db || !MACRO_BASES.includes(b)) return { source: null, bars: [] };
+  try {
+    await ensureSchema(db);
+    const src = await db.prepare("SELECT source, server, symbol FROM corpus_sources WHERE last_minute_ms IS NOT NULL AND source LIKE ? ORDER BY updated_ms DESC LIMIT 1").bind(`mt5macro:%:${b}`).first();
+    if (!src) return { source: null, bars: [] };
+    const n = Math.max(1, Math.min(CORPUS_READ_MAX, Number(limit) || CORPUS_READ_MAX));
+    const rows = ((await db.prepare("SELECT minute_ms AS t, o, h, l, c, tick_volume AS v FROM corpus_bars WHERE source = ? AND minute_ms > ? ORDER BY minute_ms LIMIT ?").bind(src.source, finite(Number(sinceMs)) ? Number(sinceMs) : 0, n).all()).results) || [];
+    return { source: src.source, server: src.server, symbol: src.symbol, base: b, bars: rows.map((r) => ({ t: Number(r.t), o: Number(r.o), h: Number(r.h), l: Number(r.l), c: Number(r.c), v: r.v == null ? null : Number(r.v) })) };
+  } catch {
+    return { source: null, bars: [] };
+  }
+}
+
+// The USD economic calendar of MQL5 (the terminal's built-in calendar, with released values).
+const CALENDAR_SCHEMA = `CREATE TABLE IF NOT EXISTS mt5_calendar (
+  value_id TEXT PRIMARY KEY, title TEXT NOT NULL, time TEXT NOT NULL, currency TEXT NOT NULL, importance INTEGER,
+  actual REAL, forecast REAL, previous REAL, unit TEXT, received_ms INTEGER NOT NULL)`;
+const CALENDAR_KEEP_MS = 30 * 86_400_000;
+const numOrNull = (x) => (typeof x === "number" && Number.isFinite(x) ? x : null);
+
+/** Pure: MQL5 calendar events from Omega's active broker, USD only, within 30 days back and 3 ahead. */
+export function validateMt5Calendar(payload, { executor = null, connection = null, now = Date.now() } = {}) {
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.events)) return { ok: false, error: "no_calendar" };
+  if (!connection || connection.status !== "stored") return { ok: false, error: "no_active_user" };
+  const server = clean(payload.server);
+  if (!server || server !== clean(connection.server) || !executor || clean(executor.server) !== server) return { ok: false, error: "broker_mismatch" };
+  const events = [];
+  for (const e of payload.events.slice(0, 400)) {
+    const t = Number(e?.time_ms), title = clean(e?.title, 140), currency = clean(e?.currency, 4).toUpperCase();
+    if (!title || currency !== "USD" || !finite(t) || t < now - CALENDAR_KEEP_MS || t > now + 3 * 86_400_000) continue;
+    events.push({ value_id: clean(String(e?.value_id ?? ""), 32) || `${t}:${title}`, title, time: new Date(t).toISOString(), currency, importance: finite(Number(e?.importance)) ? Number(e.importance) : null, actual: numOrNull(e?.actual), forecast: numOrNull(e?.forecast), previous: numOrNull(e?.previous), unit: clean(e?.unit, 16) || null });
+  }
+  return { ok: true, events };
+}
+
+/** Bridge sync step: stores the MQL5 calendar. Never throws; off with the corpus. */
+export async function ingestMt5Calendar(env, payload, { executor = null, now = Date.now() } = {}) {
+  if (corpusMode(env) === "off" || !payload) return { mode: corpusMode(env) };
+  try {
+    const db = env.DB;
+    const connection = await db.prepare("SELECT version, status, server FROM omega_connection WHERE id = 1").first().catch(() => null);
+    const v = validateMt5Calendar(payload, { executor, connection, now });
+    if (!v.ok) return { mode: "shadow", error: v.error };
+    await db.prepare(CALENDAR_SCHEMA).run();
+    for (const e of v.events) {
+      await db.prepare(`INSERT INTO mt5_calendar (value_id, title, time, currency, importance, actual, forecast, previous, unit, received_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(value_id) DO UPDATE SET actual = COALESCE(excluded.actual, actual), forecast = COALESCE(excluded.forecast, forecast), previous = COALESCE(excluded.previous, previous), received_ms = excluded.received_ms`)
+        .bind(e.value_id, e.title, e.time, e.currency, e.importance, e.actual, e.forecast, e.previous, e.unit, now).run();
+    }
+    await db.prepare("DELETE FROM mt5_calendar WHERE time < ?").bind(new Date(now - CALENDAR_KEEP_MS).toISOString()).run();
+    return { mode: "shadow", events: v.events.length };
+  } catch (error) {
+    return { mode: "shadow", error: String(error?.message ?? error).slice(0, 120) };
+  }
+}
+
+/** The MQL5 calendar's USD events in a window, in the gateway's normalized shape. Never throws. */
+export async function readMt5Calendar(env, { fromMs, toMs } = {}) {
+  try {
+    await env.DB.prepare(CALENDAR_SCHEMA).run();
+    const rows = (await env.DB.prepare("SELECT * FROM mt5_calendar WHERE time >= ? AND time <= ? ORDER BY time").bind(new Date(fromMs).toISOString(), new Date(toMs).toISOString()).all())?.results || [];
+    return rows.map((r) => ({ id: r.value_id, title: r.title, time: r.time, country: "US", currency: "USD", importance: r.importance, actual: r.actual, forecast: r.forecast, previous: r.previous, unit: r.unit, source: "mt5" }));
+  } catch {
+    return [];
+  }
 }

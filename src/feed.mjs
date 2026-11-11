@@ -51,7 +51,7 @@ export async function readFeedFallback(env, { now = Date.now() } = {}) {
   const since = await fallbackSinceMs(env);
   let corpus = null, events = [];
   try {
-    const src = await env?.DB?.prepare?.("SELECT source, last_minute_ms FROM corpus_sources WHERE last_minute_ms IS NOT NULL ORDER BY updated_ms DESC LIMIT 1").first();
+    const src = await env?.DB?.prepare?.("SELECT source, last_minute_ms FROM corpus_sources WHERE last_minute_ms IS NOT NULL AND source LIKE 'mt5:%' ORDER BY updated_ms DESC LIMIT 1").first();
     if (src) corpus = { source: src.source, last_bar_close: new Date(Number(src.last_minute_ms) + 60_000).toISOString(), age_s: Math.max(0, Math.round((now - Number(src.last_minute_ms) - 60_000) / 1000)) };
   } catch { corpus = null; }
   try {

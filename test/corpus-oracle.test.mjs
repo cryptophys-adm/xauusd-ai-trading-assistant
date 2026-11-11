@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { aggregateBars, corpusBasis, corpusMode, corpusSource, corpusStatus, ingestCorpus, readCorpusBars, resetCorpusSchemaCacheForTests, validateCorpus } from "../src/corpus-oracle.mjs";
+import { aggregateBars, corpusBasis, corpusMode, corpusSource, corpusStatus, ingestCorpus, readCorpusBars, resetCorpusSchemaCacheForTests, validateCorpus, ingestCorpusMacro, readMacroBars, validateCorpusMacro, ingestMt5Calendar, readMt5Calendar } from "../src/corpus-oracle.mjs";
 import { feedAt, keyCloseOf } from "../src/feed.mjs";
 import { bridgeSync, resetOmegaBrokerSchemaForTests } from "../src/omega-broker.mjs";
 
@@ -135,4 +135,39 @@ test("the MT5 fallback reads the active source's bars after a time; the feed of 
   assert.equal(await feedAt(marked, T0), "tradingview", "a candle that closed before the fallback");
   assert.equal(await feedAt(marked, T0 + 5 * M), "mt5_fallback");
   assert.equal(await feedAt({}, T0 + 5 * M), "tradingview");
+});
+
+test("stage 2: the macro symbols' bars and the MQL5 calendar, only from Omega's active broker; the pair's source is never a macro one", async () => {
+  resetCorpusSchemaCacheForTests();
+  const db = d1();
+  db.raw.exec("CREATE TABLE omega_connection (id INTEGER PRIMARY KEY, version INTEGER, status TEXT, server TEXT)");
+  db.raw.prepare("INSERT INTO omega_connection (id, version, status, server) VALUES (1, 3, 'stored', 'Monex-Live')").run();
+  const env = { DB: db, CORPUS_ORACLE_MODE: "shadow" };
+  const series = (base, n = 60, px = 1.1) => ({ base, symbol: `${base}.m`, bars: Array.from({ length: n }, (_, i) => [T0 + i * M, px, px + 0.001, px - 0.001, px + 0.0005, 10, 2]) });
+  const payload = { server: "Monex-Live", series: [series("XAGUSD", 60, 50), series("EURUSD"), series("BTCUSD"), series("eurusd")] };
+  const v = validateCorpusMacro(payload, { executor: EXECUTOR, connection: CONN, now: NOW });
+  assert.deepEqual(v.series.map((s) => s.base), ["XAGUSD", "EURUSD"]);
+  assert.equal(v.refused_series, 2, "an unknown base and a repeated one");
+  assert.equal(validateCorpusMacro({ ...payload, server: "Other-Live" }, { executor: EXECUTOR, connection: CONN, now: NOW }).error, "broker_mismatch");
+  assert.deepEqual(await ingestCorpusMacro({ DB: db }, payload, { executor: EXECUTOR, now: NOW }), { mode: "off", cursors: null });
+  await ingestCorpus(env, corpus(), { executor: EXECUTOR, now: NOW });
+  const r = await ingestCorpusMacro(env, payload, { executor: EXECUTOR, now: NOW + 1000 });
+  assert.deepEqual(r.cursors, { XAGUSD: T0 + 59 * M, EURUSD: T0 + 59 * M });
+  assert.equal((await readCorpusBars(env, { sinceMs: 0 })).source, "mt5:monex-live:XAUUSD", "the pair's source, though a macro source is newer");
+  const xag = await readMacroBars(env, { base: "xagusd", sinceMs: T0 + 57 * M });
+  assert.deepEqual([xag.source, xag.symbol, xag.bars.length, xag.bars[0].c], ["mt5macro:monex-live:XAGUSD", "XAGUSD.m", 2, 50.0005]);
+  assert.deepEqual(await readMacroBars(env, { base: "US10Y" }), { source: null, bars: [] }, "no broker source for the yield");
+  const status = await corpusStatus(env, { now: NOW });
+  assert.deepEqual(status.sources.map((s) => s.source), ["mt5:monex-live:XAUUSD"]);
+  assert.deepEqual(status.macro.map((s) => s.source), ["mt5macro:monex-live:EURUSD", "mt5macro:monex-live:XAGUSD"]);
+
+  const cal = { server: "Monex-Live", written_ms: NOW, events: [
+    { value_id: "1", title: "Nonfarm Payrolls", currency: "USD", time_ms: Date.parse("2026-11-06T13:30:00Z"), importance: 3, actual: 119, forecast: 50, previous: 22, unit: "0" },
+    { value_id: "2", title: "German CPI", currency: "EUR", time_ms: Date.parse("2026-11-06T07:00:00Z"), importance: 3, actual: 2 },
+    { value_id: "3", title: "Old", currency: "USD", time_ms: NOW - 40 * 86_400_000, importance: 3, actual: 1 }
+  ] };
+  assert.equal((await ingestMt5Calendar(env, { ...cal, server: "Other-Live" }, { executor: EXECUTOR, now: NOW })).error, "broker_mismatch");
+  assert.equal((await ingestMt5Calendar(env, cal, { executor: EXECUTOR, now: NOW })).events, 1, "USD within 30 days only");
+  const events = await readMt5Calendar(env, { fromMs: Date.parse("2026-11-06T00:00:00Z"), toMs: Date.parse("2026-11-06T23:59:59Z") });
+  assert.deepEqual(events.map((e) => [e.title, e.time, e.actual, e.forecast, e.source]), [["Nonfarm Payrolls", "2026-11-06T13:30:00.000Z", 119, 50, "mt5"]]);
 });

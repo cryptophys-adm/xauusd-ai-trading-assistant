@@ -11,7 +11,7 @@
 // Statuses: connection none | stored | needs_reentry | cleared; intent pending → sent → done | failed,
 // or expired when the bridge did not report it within INTENT_TTL_MS.
 
-import { ingestCorpus } from "./corpus-oracle.mjs";
+import { ingestCorpus, ingestCorpusMacro, ingestMt5Calendar } from "./corpus-oracle.mjs";
 import { eaSignal, readControl } from "./ea-signal.mjs";
 import { storeDeal } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
@@ -240,7 +240,7 @@ async function withAttempt(db, it) {
  * One bridge sync: store its key and state, apply its results, plan, and return what it must do.
  * @returns {{ intents: object[], connection: null | object, settings_version: number }}
  */
-export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVersion, corpus = null } = {}, { now = Date.now(), signal: signalIn } = {}) {
+export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVersion, corpus = null, corpusMacro = null, calendar = null } = {}, { now = Date.now(), signal: signalIn } = {}) {
   await ensureSchema(env.DB);
   const db = env.DB;
   if (typeof kid !== "string" || !KID_RE.test(kid) || typeof publicKey !== "string" || !B64_RE.test(publicKey) || publicKey.length > 1024) return { ok: false, error: "kid and public_key are required" };
@@ -401,8 +401,16 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   if (corpus) {
     try { corpusCursor = (await ingestCorpus(env, corpus, { executor, now })).cursor_ms ?? null; } catch { corpusCursor = null; }
   }
+  // The MT5 fallback, stage 2 (2026-11-11): the macro symbols' bars and the MQL5 calendar, same rules.
+  let macroCursors = null, calendarSeen = null;
+  if (corpusMacro) {
+    try { macroCursors = (await ingestCorpusMacro(env, corpusMacro, { executor, now })).cursors ?? null; } catch { macroCursors = null; }
+  }
+  if (calendar) {
+    try { const r = await ingestMt5Calendar(env, calendar, { executor, now }); calendarSeen = r.events != null && Number.isFinite(Number(calendar.written_ms)) ? Number(calendar.written_ms) : null; } catch { calendarSeen = null; }
+  }
 
-  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, ...(recovery ? { recovery } : {}) };
+  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, ...(recovery ? { recovery } : {}) };
 }
 
 // ---------------------------------------------------------------- overview (for the page)
