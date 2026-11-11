@@ -55,6 +55,18 @@ jobs:
           # messages behind (War Room, analysis and retries), and the next run's consumer drains them
           # first: on PR #114 the next run's analysis waited past its 90 s window behind them. The
           # Worker of every earlier run is deleted, so its messages can only delay this run.
+          # A queue has one consumer. An earlier run whose cleanup did not finish (cancelled, or the
+          # cleanup step failed) leaves its preview Worker attached, and this run's deploy then fails
+          # with "already has a consumer" [code: 11004] (2026-11-11, PR #257: xauusd-ai-preview-43040669884).
+          # Detach and delete every earlier preview Worker the queue still names. Only names of this
+          # workflow's own Workers (xauusd-ai-preview-<run id>) are touched, never another consumer.
+          QUEUE_INFO="$(npx wrangler queues info xauusd-webhook-events-preview --config wrangler.preview.jsonc 2>&1 || true)"
+          for STALE in $(printf '%s\n' "$QUEUE_INFO" | grep -Eo 'xauusd-ai-preview-[0-9]+' | sort -u); do
+            if [ "$STALE" = "xauusd-ai-preview-${GITHUB_RUN_ID}" ]; then continue; fi
+            echo "Detaching the stale preview consumer $STALE left by an earlier run."
+            npx wrangler queues consumer worker remove xauusd-webhook-events-preview "$STALE" --config wrangler.preview.jsonc || echo "Could not detach $STALE; the deploy below reports it."
+            npx wrangler delete --name "$STALE" --config wrangler.preview.jsonc --force || echo "Could not delete $STALE; inspect Cloudflare account state."
+          done
           npx wrangler queues purge xauusd-webhook-events-preview --force --config wrangler.preview.jsonc || echo "Preview queue purge unavailable; continuing."
           PREVIEW_WORKER_NAME="xauusd-ai-preview-${GITHUB_RUN_ID}"
           echo "PREVIEW_WORKER_NAME=$PREVIEW_WORKER_NAME" >> "$GITHUB_ENV"
