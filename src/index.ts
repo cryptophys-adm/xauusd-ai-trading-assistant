@@ -57,6 +57,7 @@ export interface Env {
     canonInfo(): Promise<Record<string, unknown>>;
     // Phase A7: the items a person approved for shadow testing (never a live prompt).
     learnedPack(): Promise<Record<string, unknown>>;
+    omegaPolicy?(): Promise<Record<string, unknown>>;
     // The Knowledge Council's facts (owner 2026-11-11, src/doctrine-facts.mjs).
     ingestDoctrineFacts?(facts: unknown): Promise<Record<string, unknown>>;
   };
@@ -199,6 +200,7 @@ import { fetchEffectiveDoctrine } from "./doctrine-consumer.mjs";
 import { aetherSyncStatus } from "./aether-sync.mjs";
 import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
+import { pullOmegaPolicy } from "./omega-policy.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
@@ -227,8 +229,8 @@ import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition } from "./omega-broker.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
-import { corpusStatus, readCorpusBars } from "./corpus-oracle.mjs";
-import { feedAt, keyCloseOf } from "./feed.mjs";
+import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
+import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -1985,7 +1987,13 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
    * The MT5 fallback (docs/RFC_MT5_FALLBACK.md): the broker's closed M1 bars from the Corpus Oracle,
    * for the pull adapter while the TradingView gateway is down. Read-only.
    */
-  async corpusBars(request: { since_ms?: number; limit?: number } = {}): Promise<Record<string, unknown>> {
+  /** Corpus Oracle phase 2: the broker shadow lane's agreement for one 15m bar (feeds nothing). */
+  async recordBrokerShadow(payload: unknown): Promise<Record<string, unknown>> {
+    return recordBrokerShadow(this.env, payload);
+  }
+  async corpusBars(request: { since_ms?: number; limit?: number; base?: string } = {}): Promise<Record<string, unknown>> {
+    // With a base (stage 2: XAGUSD, USOIL, the DXY pairs): that macro symbol's bars; else the traded pair's.
+    if (typeof request?.base === "string" && request.base) return readMacroBars(this.env, { base: request.base, sinceMs: Number(request?.since_ms) || 0, limit: Number(request?.limit) || undefined });
     return readCorpusBars(this.env, { sinceMs: Number(request?.since_ms) || 0, limit: Number(request?.limit) || undefined });
   }
 }
@@ -2045,8 +2053,22 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   async bridgeKey(): Promise<JsonObject | null> {
     return bridgeKey(this.env) as Promise<JsonObject | null>;
   }
-  async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown }): Promise<JsonObject> {
+  async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown; corpusMacro?: unknown; calendar?: unknown }): Promise<JsonObject> {
     return bridgeSync(this.env, input ?? {}) as Promise<JsonObject>;
+  }
+  /** The MT5 fallback switch and its state (owner 2026-11-11), for the War Room through Omega. */
+  async feedFallback(): Promise<JsonObject> {
+    return readFeedFallback(this.env) as Promise<JsonObject>;
+  }
+  /** A person switches the MT5 fallback on ("auto") or off, with a reason; audited and sent to Telegram. */
+  async setFeedFallback(input: { mode?: string; reason?: string; actor?: string }): Promise<JsonObject> {
+    const result = await setFeedFallback(this.env, input ?? {}) as JsonObject;
+    if (result.ok === true && result.changed === true) {
+      const on = result.mode === "auto";
+      const text = `XAUUSD SYSTEM · MT5 fallback switched ${on ? "ON" : "OFF"} by the owner (${String(input?.reason ?? "").slice(0, 160)}). ${on ? "While TradingView is down, prices come from the broker's MT5 bars and decisions trade on them." : "While TradingView is down, prices stop and decisions hold WAIT."}`;
+      try { await sendTelegram(this.env, text); } catch (e) { console.error("feed_fallback_telegram_failed", e instanceof Error ? e.message : String(e)); }
+    }
+    return result;
   }
   async closePosition(input: { ticket: number; reason?: string; actor?: string }): Promise<JsonObject> {
     return closePosition(this.env, input ?? {}) as Promise<JsonObject>;
@@ -2984,7 +3006,7 @@ export default {
           const calendar = await refreshCalendar(env);
           if (calendar.status !== "fresh") console.log("econ_calendar", JSON.stringify(calendar));
           // The released values, surprises and gold's reactions (src/econ-releases.mjs, owner 2026-11-10).
-          const releases = await refreshEconReleases(env, { gatedEvents: await gatedEvents(env) });
+          const releases = await refreshEconReleases(env, { gatedEvents: await gatedEvents(env), readMt5: readMt5Calendar });
           if (releases.live || releases.backfill || releases.reactions || releases.status !== "ok") console.log("econ_releases", JSON.stringify(releases));
           // Aether A7: score the shadow note answers and their controls; drop those older than 60 days.
           const shadowScored = await scoreShadowKnowledge(env);
@@ -3034,10 +3056,13 @@ export default {
             }
           }
         } catch (e) { console.error("health_alerts_failed", e instanceof Error ? e.message : String(e)); }
-        // Proposal #227 (Aether-governed Omega policy): apply Aether-pushed policy from KV within hard bounds.
+        // B-12 (issue #227): Aether's policy pack, pulled hourly; applied within hard bounds only behind the owner's
+        // switch, audited, reported to Telegram and rolled back after 50 losing Omega trades.
         try {
-          const omegaPolicy = await applyOmegaPolicy(env);
-          if (omegaPolicy.status === "applied") console.log("omega_policy", JSON.stringify(omegaPolicy));
+          const pulled = await pullOmegaPolicy(env);
+          if (pulled.status !== "fresh" && pulled.status !== "unavailable") console.log("omega_policy_pull", JSON.stringify(pulled));
+          const omegaPolicy = await applyOmegaPolicy(env, { notify: (text: string) => sendTelegram(env, text) });
+          if (omegaPolicy.status === "applied" || omegaPolicy.status === "rolled_back") console.log("omega_policy", JSON.stringify(omegaPolicy));
         } catch (e) { console.error("omega_policy_failed", e instanceof Error ? e.message : String(e)); }
         // RFC_INDICATOR_AGENT_PLATFORM P4: advisory reports to the Cryptophys Platform kernel.
         // Non-fatal by design; a no-op without the AGENTS binding (preview, tests).

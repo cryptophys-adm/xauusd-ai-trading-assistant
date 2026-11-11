@@ -148,7 +148,11 @@ test("the market data stopping is an alert that names the gateway's cooldown, an
   const issue = await marketDataIssue(stale, at);
   assert.equal(issue.kind, "market_data_stale");
   assert.match(issue.subject, /^Market data stopped: the last XAUUSD 5m bar closed 13:00 UTC; the TradingView gateway is paused until 2026-11-12 00:00 UTC \(the provider's quota is used up\)\./);
-  assert.deepEqual(issue.detail.gateway, { cooldown_until: "2026-11-12T00:00:00.000Z", cooldown_reason: "provider_quota_exceeded", oauth_authorized: true });
+  assert.deepEqual(issue.detail.gateway, { cooldown_until: "2026-11-12T00:00:00.000Z", cooldown_reason: "provider_quota_exceeded", oauth_authorized: true, calls_today: null });
+  const counted = env({ SIGNAL_CACHE: stale.SIGNAL_CACHE, NEWS_INGESTION: { gatewayStatus: async () => ({ oauth_authorized: true, cooldown_until: "2026-11-12T00:00:00.000Z", cooldown_reason: "provider_quota_exceeded", calls_today: { date: "2026-11-11", total: 412, failed: 1, by_caller: { news_cron: 72, pull_adapter: 300, calendar: 40 }, quota_exceeded_at: "2026-11-11T13:05:00.000Z", quota_exceeded_by: "pull_adapter" } }) } });
+  const withCalls = await marketDataIssue(counted, at);
+  assert.match(withCalls.subject, / This system made 412 TradingView calls today \(pull adapter 300, news cron 72, calendar 40\)\.$/);
+  assert.equal(withCalls.detail.gateway.calls_today.quota_exceeded_by, "pull_adapter");
   const r = await runHealthAlerts(stale, { now: at });
   assert.ok(r.opened_alerts.some((a) => a.kind === "market_data_stale" && /^Market data stopped/.test(a.subject)), "the sweep sends this one to Telegram");
 

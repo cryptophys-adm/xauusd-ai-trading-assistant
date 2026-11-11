@@ -54,12 +54,15 @@ export function resetEaExecutionSchemaForTests() { schemaReady = false; }
 async function ensureSchema(db) {
   if (schemaReady) return;
   for (const sql of EA_EXECUTION_SCHEMA_SQL) await db.prepare(sql).run();
+  // B-12 (2026-11-11): who opened the position (omega, manual, external, ea), for Omega's policy rollback.
+  try { await db.prepare("ALTER TABLE ea_deals ADD COLUMN source TEXT").run(); } catch { /* already there */ }
   schemaReady = true;
 }
 
 const DAY_MS = 86_400_000;
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
 const text = (v, max) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+export const DEAL_SOURCES = Object.freeze(["omega", "manual", "external", "ea"]);
 export const DEAL_REASONS = Object.freeze(["tp", "sl", "opposite", "kill", "expiry", "manual", "stopout", "stop_out", "expert", "closed", "other"]);
 
 /** Pure: a closed deal from the EA's POST body (known fields only, no account number), or an error. */
@@ -99,10 +102,10 @@ export async function storeDeal(env, body, { now = Date.now() } = {}) {
   await ensureSchema(env.DB);
   const d = deal;
   const r = await env.DB.prepare(
-    `INSERT INTO ea_deals (deal_ticket, position_ticket, mode, side, volume, entry_price, exit_price, stop_loss, take_profit, profit, commission, swap, reason, signal_id, opened_ms, closed_ms, currency, received_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO ea_deals (deal_ticket, position_ticket, mode, side, volume, entry_price, exit_price, stop_loss, take_profit, profit, commission, swap, reason, signal_id, opened_ms, closed_ms, currency, received_at, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (deal_ticket, closed_ms) DO NOTHING`
-  ).bind(d.deal_ticket, d.position_ticket, d.mode, d.side, d.volume, d.entry_price, d.exit_price, d.stop_loss, d.take_profit, d.profit, d.commission, d.swap, d.reason, d.signal_id, d.opened_ms, d.closed_ms, d.currency, new Date(now).toISOString()).run();
+  ).bind(d.deal_ticket, d.position_ticket, d.mode, d.side, d.volume, d.entry_price, d.exit_price, d.stop_loss, d.take_profit, d.profit, d.commission, d.swap, d.reason, d.signal_id, d.opened_ms, d.closed_ms, d.currency, new Date(now).toISOString(), DEAL_SOURCES.includes(body?.source) ? body.source : null).run();
   return { ok: true, stored: Number(r?.meta?.changes ?? 0) > 0 };
 }
 

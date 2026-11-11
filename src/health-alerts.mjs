@@ -81,10 +81,16 @@ export async function marketDataIssue(env, now = Date.now()) {
   const cause = Number.isFinite(until) && until > now
     ? `; the TradingView gateway is paused until ${iso(until).slice(0, 16).replace("T", " ")} UTC (${gw.cooldown_reason === "provider_quota_exceeded" ? "the provider's quota is used up" : String(gw.cooldown_reason || "cooldown").replace(/_/g, " ")})`
     : gw && gw.oauth_authorized === false ? "; the TradingView gateway is not authorized (OAuth)" : "";
+  // The gateway's own count of today's TradingView calls per caller (2026-11-11: nothing said who had spent
+  // the quota). Calls made outside this system on the same account are not in it.
+  const calls = gw?.calls_today && Number(gw.calls_today.total) > 0 ? gw.calls_today : null;
+  const spent = calls
+    ? ` This system made ${calls.total} TradingView calls today (${Object.entries(calls.by_caller || {}).sort((x, y) => y[1] - x[1]).map(([k, n]) => `${k.replace(/_/g, " ")} ${n}`).join(", ")}).`
+    : "";
   return {
     key: "market_data_stale", kind: "market_data_stale",
-    subject: `Market data stopped: the last XAUUSD 5m bar closed ${whenUtc(lastMs, now)}${cause}. Rooms, news and parity wait; the Decision Engine holds WAIT while its rooms are stale.`,
-    detail: { last_m5_close: iso(lastMs), gateway: gw ? { cooldown_until: gw.cooldown_until ?? null, cooldown_reason: gw.cooldown_reason ?? null, oauth_authorized: gw.oauth_authorized ?? null } : null }
+    subject: `Market data stopped: the last XAUUSD 5m bar closed ${whenUtc(lastMs, now)}${cause}. Rooms, news and parity wait; the Decision Engine holds WAIT while its rooms are stale.${spent}`,
+    detail: { last_m5_close: iso(lastMs), gateway: gw ? { cooldown_until: gw.cooldown_until ?? null, cooldown_reason: gw.cooldown_reason ?? null, oauth_authorized: gw.oauth_authorized ?? null, calls_today: calls } : null }
   };
 }
 
@@ -99,7 +105,7 @@ export async function marketDataFallbackIssue(env) {
   if (!Number.isFinite(since)) return null;
   return {
     key: "market_data_fallback", kind: "market_data_fallback",
-    subject: `Market data from the broker's MT5 bars since ${iso(since * 1000).slice(0, 16).replace("T", " ")} UTC (TradingView is down). Rooms and decisions run on the broker's price; news and the macro series wait.`,
+    subject: `Market data from the broker's MT5 bars since ${iso(since * 1000).slice(0, 16).replace("T", " ")} UTC (TradingView is down). Rooms and decisions run on the broker's price (silver, oil and the dollar index too when the broker sends them); news, the 10-year yield and USDT dominance wait.`,
     detail: { since: iso(since * 1000), source: typeof rec.fallback.source === "string" ? rec.fallback.source : null }
   };
 }

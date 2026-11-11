@@ -73,6 +73,67 @@ export function readCorpus(dir = resolveOmegaDir(), { fs = nodeFs, afterMs = nul
   }
 }
 
+/** MT5 fallback, stage 2 (2026-11-11): the macro bases the server accepts. */
+export const CORPUS_MACRO_BASES = Object.freeze(["XAGUSD", "USOIL", "EURUSD", "USDJPY", "GBPUSD", "USDCAD", "USDSEK", "USDCHF"]);
+
+/**
+ * Read `corpus_macro.json` (OmegaExecutor.mq5, once per closed M1 bar): the broker's closed M1 bars of
+ * the macro symbols (silver, oil, the dollar index's six pairs), one series per base. Per base, only bars
+ * after the server's cursor for it. Null when missing, invalid or empty.
+ *
+ * @param {string} [dir]
+ * @param {{ fs?: typeof nodeFs, afterMsByBase?: Record<string, number> | null }} [options]
+ */
+export function readCorpusMacro(dir = resolveOmegaDir(), { fs = nodeFs, afterMsByBase = null } = {}) {
+  try {
+    const p = path.join(dir, "corpus_macro.json");
+    if (!fs.existsSync(p)) return null;
+    const raw = JSON.parse(fs.readFileSync(p, "utf8").replace(/^\uFEFF/, "").replace(/\0+$/g, "").trim());
+    const ascii = (v, n) => String(v ?? "").replace(/[^\x20-\x7E]/g, "").trim().slice(0, n);
+    if (!raw || !Array.isArray(raw.series)) return null;
+    const series = [];
+    for (const s of raw.series.slice(0, 16)) {
+      const base = ascii(s?.base, 16).toUpperCase();
+      if (!CORPUS_MACRO_BASES.includes(base) || !Array.isArray(s?.bars)) continue;
+      const after = afterMsByBase && Number.isFinite(afterMsByBase[base]) ? afterMsByBase[base] : null;
+      const bars = s.bars
+        .filter((b) => Array.isArray(b) && b.length >= 5 && b.slice(0, 5).every((x) => typeof x === "number" && Number.isFinite(x)))
+        .map((b) => b.slice(0, 7).map((x) => (typeof x === "number" && Number.isFinite(x) ? x : null)))
+        .filter((b) => after == null || b[0] > after)
+        .slice(-CORPUS_MAX_BARS);
+      if (bars.length) series.push({ base, symbol: ascii(s.symbol, 32), bars });
+    }
+    return series.length ? { server: ascii(raw.server, 64), series } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read `calendar.json` (OmegaExecutor.mq5, every few minutes): the USD economic calendar of the
+ * terminal (MQL5), with the released values. Null when missing, invalid or not newer than `afterWrittenMs`.
+ *
+ * @param {string} [dir]
+ * @param {{ fs?: typeof nodeFs, afterWrittenMs?: number | null }} [options]
+ */
+export function readCalendar(dir = resolveOmegaDir(), { fs = nodeFs, afterWrittenMs = null } = {}) {
+  try {
+    const p = path.join(dir, "calendar.json");
+    if (!fs.existsSync(p)) return null;
+    const raw = JSON.parse(fs.readFileSync(p, "utf8").replace(/^\uFEFF/, "").replace(/\0+$/g, "").trim());
+    const ascii = (v, n) => String(v ?? "").replace(/[^\x20-\x7E]/g, "").trim().slice(0, n);
+    if (!raw || !Array.isArray(raw.events) || !Number.isFinite(raw.written_ms)) return null;
+    if (afterWrittenMs != null && raw.written_ms <= afterWrittenMs) return null;
+    const num = (x) => (typeof x === "number" && Number.isFinite(x) ? x : null);
+    const events = raw.events.slice(0, 400)
+      .filter((e) => e && Number.isFinite(e.time_ms) && ascii(e.title, 140))
+      .map((e) => ({ value_id: ascii(String(e.value_id ?? ""), 32), title: ascii(e.title, 140), currency: ascii(e.currency, 4), time_ms: e.time_ms, importance: num(e.importance), actual: num(e.actual), forecast: num(e.forecast), previous: num(e.previous), unit: ascii(e.unit, 16) }));
+    return { server: ascii(raw.server, 64), written_ms: raw.written_ms, events };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read `state.json` written by the EA. Returns `null` if missing or on any parse error.
  * Never includes account login/number.

@@ -29,7 +29,7 @@
 | **B‑09** | Write mode‑specific unit tests and back‑testing scripts | AGY | DONE | 4h |
 | **B‑10** | Update CI workflow to run the new tests | AGY | DONE | 1h |
 | **B‑11** | Proposal: Global Decision as continuously tuned linear weighted model (issue #226) | AGY | TODO | 8h |
-| **B‑12** | Proposal: Aether-governed Omega policy (issue #227) | AGY | TODO | 6h |
+| **B‑12** | Proposal: Aether-governed Omega policy (issue #227) | AGY | DONE (2026-11-11: pack from Aether's doctrine, behind OMEGA_POLICY_AUTO, audit, Telegram, rollback after 50 trades) | 6h |
 | **B‑13** | Progressive Stop Loss SL+ (issue #229) | AGY | DONE | 10h |
 
 ---

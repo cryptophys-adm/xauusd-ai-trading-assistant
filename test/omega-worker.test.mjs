@@ -146,7 +146,7 @@ test("the bridge sync: only the service token named by OMEGA_BRIDGE_CLIENT_ID; n
   const ok = await sync({ common_name: BRIDGE_ID }, env);
   assert.equal(ok.status, 200);
   // The Corpus Oracle's corpus (owner 2026-11-11) is forwarded as is; null when the bridge sent none.
-  assert.deepEqual(O.calls.at(-1), ["bridgeSync", { state: { connected: true }, results: [], publicKey: "AAAA", kid: "0123456789abcdef", bridgeVersion: "1.0.0", corpus: null }]);
+  assert.deepEqual(O.calls.at(-1), ["bridgeSync", { state: { connected: true }, results: [], publicKey: "AAAA", kid: "0123456789abcdef", bridgeVersion: "1.0.0", corpus: null, corpusMacro: null, calendar: null }]);
   const big = new Request("https://omega.cryptophys.work/api/bridge/sync", { method: "POST", body: "x".repeat(70_000), headers: { "cf-access-jwt-assertion": await jwt({ common_name: BRIDGE_ID }) } });
   assert.equal((await handle(big, env, opts)).status, 413);
   assert.equal((await handle(req("/api/bridge/sync", { token: await jwt({ common_name: BRIDGE_ID }) }), env, opts)).status, 405);
@@ -217,4 +217,26 @@ test("the page uses relative URLs only and loads the envelope module; the broker
   for (const id of ["b-server", "b-login", "b-password", "e-enabled", "e-risk", "e-arm", "e-live"]) assert.ok(html.includes(`id="${id}"`), id);
   assert.match(html, /type="password"/);
   assert.match(js, /"b-login", "b-password"\]\) document\.getElementById\(id\)\.value = ""/, "the credentials are cleared after a submit");
+});
+
+test("the MT5 fallback switch (War Room, 2026-11-11): read when signed in; changed by a person, same origin, a reason", async () => {
+  resetKeyCacheForTests();
+  const calls = [];
+  const O = { ...omega(), feedFallback: async () => ({ mode: "auto", active: true }), setFeedFallback: async (input) => { calls.push(input); return { ok: true, mode: input.mode, changed: true }; } };
+  const env = { ...ENV_BASE, OMEGA: O };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const person = await jwt({ email: "Owner@Example.com" });
+  const read = await handle(req("/api/feed-fallback", { token: person }), env, opts);
+  assert.equal(read.status, 200);
+  assert.deepEqual(await read.json(), { mode: "auto", active: true, can_control: true });
+  const post = (body, extra = {}) => handle(req("/api/feed-fallback", { token: person, method: "POST", body, ...extra }), env, opts);
+  assert.equal((await post({ mode: "off", reason: "TradingView only" })).status, 200);
+  assert.deepEqual(calls.at(-1), { mode: "off", reason: "TradingView only", actor: "owner@example.com" });
+  assert.equal((await post({ mode: "off" })).status, 400, "a reason is required");
+  assert.equal((await post({ mode: "on", reason: "x" })).status, 400, "auto or off only");
+  assert.equal((await post({ mode: "auto", reason: "x" }, { origin: "https://evil.example" })).status, 403, "cross-origin refused");
+  assert.equal((await handle(req("/api/feed-fallback", { token: await jwt({ common_name: "ci.access" }), method: "POST", body: { mode: "auto", reason: "x" } }), env, opts)).status, 403, "a service token never changes it");
+  assert.equal((await handle(req("/api/feed-fallback", { token: person, method: "DELETE" }), env, opts)).status, 405);
+  assert.equal((await handle(req("/api/feed-fallback"), env, opts)).status, 403, "no JWT, nothing");
+  assert.equal(calls.length, 1);
 });

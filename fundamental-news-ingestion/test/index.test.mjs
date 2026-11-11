@@ -847,3 +847,51 @@ test("gatewayStatus reports the quota cooldown and OAuth state for the AI Worker
   const none = await gatewayStatus(createEnv());
   assert.deepEqual([none.cooldown_until, none.cooldown_reason], [null, null]);
 });
+
+test("provider calls are counted per caller and hour; the quota's end names who hit it (2026-11-11)", async () => {
+  const { runTvOhlcv, runTvEconomicCalendar, gatewayStatus } = await import(moduleUrl.href);
+  const env = createEnv();
+  await env.OAUTH_STORE.put("tv_mcp:oauth_token", JSON.stringify({ access_token: "valid-token", refresh_token: "refresh-token", expires_at: Math.floor(Date.now() / 1000) + 3600 }));
+  let mcpCalls = 0;
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).includes(".well-known/oauth-authorization-server")) {
+      return jsonResponse({ authorization_endpoint: "https://mcp.example.com/oauth/authorize", token_endpoint: "https://mcp.example.com/oauth/token", token_endpoint_auth_methods_supported: ["none"] });
+    }
+    if (String(url).includes("/mcp")) {
+      mcpCalls += 1;
+      const body = JSON.parse(init.body);
+      if (body.params.name === "mcp-tv-get-news") return jsonResponse({ result: { data: { headlines: [{ id: `n${mcpCalls}`, title: "Gold holds", url: `https://news.example.com/${mcpCalls}`, published_at: new Date().toISOString(), symbols: ["OANDA:XAUUSD"] }] } } });
+      if (body.params.name === "mcp-tv-get-economic-calendar") return jsonResponse({ result: { structuredContent: { events: [] } } });
+      if (mcpCalls >= 7) return jsonResponse({ error: { code: -32000, message: "TOOL_QUOTA_EXCEEDED: tool call quota exceeded" } }, { status: 429 });
+      return jsonResponse({ result: { structuredContent: { bars: { t: [1, 2], o: [1, 1], h: [2, 2], l: [0.5, 0.5], c: [1.5, 1.5], v: [1, 1] } } } });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  // The cron's news pull: one call per symbol.
+  await worker.scheduled({ scheduledTime: Date.now(), cron: "5 * * * *" }, env, createCtx());
+  // The AI Worker's calendar and the pull adapter's batch of two.
+  assert.equal((await runTvEconomicCalendar(env, { date_from: "2026-11-01", date_to: "2026-11-10" })).status, 200);
+  const ok = await runTvOhlcv(env, [{ symbol: "OANDA:XAUUSD", interval: "1m", count: 5 }, { symbol: "OANDA:XAUUSD", interval: "1h", count: 5 }]);
+  assert.equal(ok.status, 200);
+  // The next batch runs into the quota: the first call is refused, the second never made.
+  const refused = await runTvOhlcv(env, [{ symbol: "OANDA:XAUUSD", interval: "1m", count: 5 }, { symbol: "OANDA:XAUUSD", interval: "1h", count: 5 }]);
+  assert.equal(refused.status, 429);
+  // In the cooldown the gateway calls nobody, and nothing is counted.
+  await runTvOhlcv(env, [{ symbol: "OANDA:XAUUSD", interval: "1m", count: 5 }]);
+  assert.equal(mcpCalls, 7);
+
+  const health = await (await worker.fetch(new Request("https://news.example.com/health"), env, createCtx())).json();
+  const today = health.provider_calls.today;
+  assert.equal(today.total, 7);
+  assert.deepEqual(Object.fromEntries(Object.entries(today.by_caller).map(([k, v]) => [k, v.calls])), { pull_adapter: 3, calendar: 1, news_cron: 3 });
+  assert.equal(today.by_caller.pull_adapter.failed, 1);
+  assert.equal(today.by_hour.reduce((a, b) => a + b, 0), 7);
+  assert.equal(today.quota_exceeded_by, "pull_adapter");
+  assert.ok(today.quota_exceeded_at);
+  assert.equal(health.provider_calls.yesterday.total, 0);
+  const status = await gatewayStatus(env);
+  assert.deepEqual(status.calls_today.by_caller, { pull_adapter: 3, calendar: 1, news_cron: 3 });
+  assert.equal(status.calls_today.quota_exceeded_by, "pull_adapter");
+  assert.doesNotMatch(JSON.stringify(health.provider_calls) + JSON.stringify(status), /valid-token|refresh-token|ingest-secret/);
+});

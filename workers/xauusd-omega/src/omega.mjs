@@ -170,7 +170,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       let body;
       try { body = JSON.parse(text); } catch { return json({ error: "invalid_json" }, 400); }
       if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "body must be a JSON object" }, 400);
-      return rpc(() => env.OMEGA.bridgeSync({ state: body.state ?? null, results: body.results ?? [], publicKey: body.public_key, kid: body.kid, bridgeVersion: body.bridge_version, corpus: body.corpus ?? null }), "sync_failed");
+      return rpc(() => env.OMEGA.bridgeSync({ state: body.state ?? null, results: body.results ?? [], publicKey: body.public_key, kid: body.kid, bridgeVersion: body.bridge_version, corpus: body.corpus ?? null, corpusMacro: body.corpus_macro ?? null, calendar: body.calendar ?? null }), "sync_failed");
     }
 
     if (route === "GET /api/whoami") return json({ subject: identity.subject, type: identity.type, can_control: canControl });
@@ -272,6 +272,20 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (r.response) return r.response;
       return rpc(() => env.OMEGA.clearConnection({ reason: r.body.reason, actor: identity.subject }), "connection_failed");
     }
+    // The MT5 fallback switch (owner 2026-11-11): read by anyone signed in, changed by a person with a reason.
+    if (route === "GET /api/feed-fallback") {
+      if (typeof env.OMEGA.feedFallback !== "function") return json({ error: "feed_fallback_unavailable" }, 503);
+      return rpc(async () => ({ ...(await env.OMEGA.feedFallback()), can_control: canControl }), "feed_fallback_failed");
+    }
+    if (route === "POST /api/feed-fallback") {
+      const r = await personJson(request, url, identity, 2048);
+      if (r.response) return r.response;
+      const mode = typeof r.body.mode === "string" ? r.body.mode : "";
+      const reason = typeof r.body.reason === "string" ? r.body.reason.trim().slice(0, 200) : "";
+      if (mode !== "auto" && mode !== "off") return json({ error: "mode must be auto or off" }, 400);
+      if (!reason) return json({ error: "a reason is required" }, 400);
+      return rpc(() => env.OMEGA.setFeedFallback({ mode, reason, actor: identity.subject }), "feed_fallback_failed");
+    }
     if (route === "POST /api/position/close") {
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;
@@ -279,7 +293,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (!Number.isFinite(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
       return rpc(() => env.OMEGA.closePosition({ ticket, reason: r.body?.reason, actor: identity.subject }), "close_position_failed");
     }
-    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close"].includes(path)) return json({ error: "method_not_allowed" }, 405);
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 
