@@ -20,6 +20,7 @@ import { pairedTally, holmAdjust, holmMonth, SHADOW_MIN_SAMPLE, SHADOW_SIGNIFICA
 import { WEIGHTING_DEFAULT, WEIGHTING_GRID, WEIGHTING_VERSION, weightingId, weightingChange, neighbourPoints, weightFromSums, loadAgentRows, agentWeight, weightingState, quorumFor, TF_MS } from "./weighting.mjs";
 import { familyOf } from "./reputation.mjs";
 import { regimeMap, REGIME_SERIES } from "./market-regime.mjs";
+import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 
 export const WEIGHTING_REPLAY_VERSION = "cryptophys.weighting-replay.v2";
 const DAY_MS = 86_400_000;
@@ -34,7 +35,7 @@ export const REPLAY_DAYS = Object.freeze({ "15": 10, "60": 30, "240": 90, "1D": 
  * ({ agent, close_ms, result, brier, regime }) sorted by close_ms; `rooms` ({ candle_key, close_ms,
  * bias, regime, entries: [{ agent, bias }] }) sorted by close_ms. Returns Map candle_key -> { stance, share }.
  */
-export function replayQuorum(params, rows, rooms, { horizonMs = SCORING.horizon * 3_600_000 } = {}) {
+export function replayQuorum(params, rows, rooms, { horizonMs = SCORING.horizon * 3_600_000, analytics = null } = {}) {
   const p = { ...WEIGHTING_DEFAULT, ...params };
   const hl = p.half_life_days ? p.half_life_days * DAY_MS : null;
   const origin = rows.length ? rows[0].close_ms : 0;
@@ -70,15 +71,15 @@ export function replayQuorum(params, rows, rooms, { horizonMs = SCORING.horizon 
     }
     const side = SIDE[room.bias];
     const share = side && total ? weighted[room.bias] / total : null;
-    out.set(room.candle_key, { stance: side && share > quorumFor(p, room.regime) ? side : "WAIT", share: r3(share) });
+    out.set(room.candle_key, { stance: side && share > quorumFor(p, room.regime, { analytics }) ? side : "WAIT", share: r3(share) });
   }
   return out;
 }
 
 /** Pure: the comparison of the arms. `outcome(candle_key, stance)` scores a stance on that candle. */
-export function compareWeighting({ rows, rooms, outcome, active = WEIGHTING_DEFAULT, previous = null, activatedAt = null, now = Date.now(), moderator = new Map(), horizonMs = SCORING.horizon * 3_600_000, timeframe = "60" }) {
+export function compareWeighting({ rows, rooms, outcome, active = WEIGHTING_DEFAULT, previous = null, activatedAt = null, now = Date.now(), moderator = new Map(), horizonMs = SCORING.horizon * 3_600_000, timeframe = "60", analytics = null }) {
   const scoreArm = (params) => {
-    const decisions = replayQuorum(params, rows, rooms, { horizonMs });
+    const decisions = replayQuorum(params, rows, rooms, { horizonMs, analytics });
     const scored = new Map();
     for (const room of rooms) {
       const d = decisions.get(room.candle_key);
@@ -181,11 +182,15 @@ export async function loadRooms(db, timeframe, sinceIso) {
 export async function loadH1Rooms(db, sinceIso) { return loadRooms(db, "60", sinceIso); }
 
 /** Loads a timeframe's rooms, scores and state, and replays the weighting arms (cached 5 minutes). */
-export async function readWeightingReplay(env, { timeframe = "60", days = REPLAY_DAYS[timeframe] ?? 30, now = Date.now(), useCache = true } = {}) {
+export async function readWeightingReplay(env, { timeframe = "60", days = REPLAY_DAYS[timeframe] ?? 30, now = Date.now(), useCache = true, analytics = null } = {}) {
   const ck = `${timeframe}:${days}`;
   const hit = cache.get(ck);
   if (useCache && hit && now - hit.at < READ_CACHE_MS) return hit.value;
   await ensureOutcomeSchema(env.DB);
+  let activeAnalytics = analytics;
+  if (!activeAnalytics && env?.DB) {
+    try { activeAnalytics = await collectNexusAnalytics(env, { now, days }); } catch {}
+  }
   const state = await weightingState(env, { timeframe, now });
   const tfMs = TF_MS[timeframe];
   const windowStart = now - days * DAY_MS;
@@ -214,10 +219,20 @@ export async function readWeightingReplay(env, { timeframe = "60", days = REPLAY
     return ["hit", "miss", "neutral", "missed_opportunity"].includes(s.result) ? s.result : null;
   };
   const moderator = new Map(rooms.map((r) => [r.candle_key, r.stance]));
-  const comparison = compareWeighting({ rows, rooms, outcome, active: state.params, previous: state.previous, activatedAt: state.activated_at, now, moderator, horizonMs: SCORING.horizon * tfMs, timeframe });
+  const comparison = compareWeighting({ rows, rooms, outcome, active: state.params, previous: state.previous, activatedAt: state.activated_at, now, moderator, horizonMs: SCORING.horizon * tfMs, timeframe, analytics: activeAnalytics });
   // Each agent's own weight now, under the active weighting (for the report and Nexus).
-  const agents = [...byAgent].map(([agent, list]) => ({ agent, family: familyOf(agent), ...agentWeight(list, state.params, now, { horizonMs: 0 }) })).sort((a, b) => b.weight - a.weight);
-  const value = { window_days: days, active: { id: state.id, params: state.params, activated_at: state.activated_at, source: state.source, change: weightingChange(state.params) }, agents, ...comparison, history: (state.history || []).slice(-10) };
+  const agentDiscounts = activeAnalytics?.quorum_weighting_input?.agent_weight_discounts ?? {};
+  const disqualified = new Set(activeAnalytics?.quorum_weighting_input?.disqualified_agents || []);
+  const agents = [...byAgent].map(([agent, list]) => ({
+    agent,
+    family: familyOf(agent),
+    ...agentWeight(list, state.params, now, {
+      horizonMs: 0,
+      discount: agentDiscounts[agent] ?? 1,
+      isStuck: disqualified.has(agent)
+    })
+  })).sort((a, b) => b.weight - a.weight);
+  const value = { window_days: days, active: { id: state.id, params: state.params, activated_at: state.activated_at, source: state.source, change: weightingChange(state.params) }, agents, ...comparison, history: (state.history || []).slice(-10), nexus_analytics: activeAnalytics };
   if (useCache) cache.set(ck, { at: now, value });
   return value;
 }
