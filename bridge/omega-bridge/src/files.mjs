@@ -42,6 +42,37 @@ function sanitizeState(raw) {
   return state;
 }
 
+/** Corpus Oracle (owner 2026-11-11): at most this many closed M1 bars go with one sync. */
+export const CORPUS_MAX_BARS = 240;
+
+/**
+ * Read `corpus.json` (Corpus Oracle, written by OmegaExecutor.mq5 once per closed M1 bar): the broker's
+ * closed M1 bars of the symbol the executor trades, [t_ms UTC, open, high, low, close, tick_volume,
+ * spread]. Only bars after `afterMs` (the server's cursor) are returned. Null when missing or invalid.
+ * Never a login or an account number: the file carries the server name, the symbol and bars only.
+ *
+ * @param {string} [dir]
+ * @param {{ fs?: typeof nodeFs, afterMs?: number | null }} [options]
+ */
+export function readCorpus(dir = resolveOmegaDir(), { fs = nodeFs, afterMs = null } = {}) {
+  try {
+    const p = path.join(dir, "corpus.json");
+    if (!fs.existsSync(p)) return null;
+    const raw = JSON.parse(fs.readFileSync(p, "utf8").replace(/^\uFEFF/, "").replace(/\0+$/g, "").trim());
+    const ascii = (v, n) => String(v ?? "").replace(/[^\x20-\x7E]/g, "").trim().slice(0, n);
+    if (!raw || raw.timeframe !== "M1" || !Array.isArray(raw.bars)) return null;
+    const bars = raw.bars
+      .filter((b) => Array.isArray(b) && b.length >= 5 && b.slice(0, 5).every((x) => typeof x === "number" && Number.isFinite(x)))
+      .map((b) => b.slice(0, 7).map((x) => (typeof x === "number" && Number.isFinite(x) ? x : null)))
+      .filter((b) => afterMs == null || b[0] > afterMs)
+      .slice(-CORPUS_MAX_BARS);
+    if (!bars.length) return null;
+    return { server: ascii(raw.server, 64), symbol: ascii(raw.symbol, 32), timeframe: "M1", bars };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read `state.json` written by the EA. Returns `null` if missing or on any parse error.
  * Never includes account login/number.

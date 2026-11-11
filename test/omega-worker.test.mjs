@@ -145,7 +145,8 @@ test("the bridge sync: only the service token named by OMEGA_BRIDGE_CLIENT_ID; n
   assert.equal((await sync({ email: "owner@example.com" }, env)).status, 403, "a person never syncs as the bridge");
   const ok = await sync({ common_name: BRIDGE_ID }, env);
   assert.equal(ok.status, 200);
-  assert.deepEqual(O.calls.at(-1), ["bridgeSync", { state: { connected: true }, results: [], publicKey: "AAAA", kid: "0123456789abcdef", bridgeVersion: "1.0.0" }]);
+  // The Corpus Oracle's corpus (owner 2026-11-11) is forwarded as is; null when the bridge sent none.
+  assert.deepEqual(O.calls.at(-1), ["bridgeSync", { state: { connected: true }, results: [], publicKey: "AAAA", kid: "0123456789abcdef", bridgeVersion: "1.0.0", corpus: null }]);
   const big = new Request("https://omega.cryptophys.work/api/bridge/sync", { method: "POST", body: "x".repeat(70_000), headers: { "cf-access-jwt-assertion": await jwt({ common_name: BRIDGE_ID }) } });
   assert.equal((await handle(big, env, opts)).status, 413);
   assert.equal((await handle(req("/api/bridge/sync", { token: await jwt({ common_name: BRIDGE_ID }) }), env, opts)).status, 405);

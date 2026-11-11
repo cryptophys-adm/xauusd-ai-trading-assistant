@@ -582,3 +582,44 @@ test("daemon: applies new connection once, restarts terminal once, skips same ve
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("Corpus Oracle: readCorpus returns the closed M1 bars after the cursor; the daemon sends them and follows the server's cursor", async () => {
+  const { readCorpus } = await import("../src/files.mjs");
+  const tmpDir = makeTempDir();
+  try {
+    const mt5FilesDir = path.join(tmpDir, "mt5-files", "omega");
+    fs.mkdirSync(mt5FilesDir, { recursive: true });
+    const T0 = 1794391200000;
+    const bars = Array.from({ length: 5 }, (_, i) => [T0 + i * 60000, 4100 + i, 4101 + i, 4099 + i, 4100.5 + i, 100, 18]);
+    fs.writeFileSync(path.join(mt5FilesDir, "corpus.json"), "﻿" + JSON.stringify({ server: "Monex-Live", symbol: "XAUUSD", timeframe: "M1", digits: 2, utc_offset_s: 7200, written_ms: T0 + 300000, bars, login: 123 }));
+    const all = readCorpus(mt5FilesDir);
+    assert.deepEqual([all.server, all.symbol, all.timeframe, all.bars.length], ["Monex-Live", "XAUUSD", "M1", 5]);
+    assert.equal(all.login, undefined, "never a login");
+    assert.equal(readCorpus(mt5FilesDir, { afterMs: T0 + 2 * 60000 }).bars.length, 2);
+    assert.equal(readCorpus(mt5FilesDir, { afterMs: T0 + 9 * 60000 }), null);
+    fs.writeFileSync(path.join(mt5FilesDir, "corpus.json"), "{not json");
+    assert.equal(readCorpus(mt5FilesDir), null);
+    fs.writeFileSync(path.join(mt5FilesDir, "corpus.json"), JSON.stringify({ server: "Monex-Live", symbol: "XAUUSD", timeframe: "M1", bars }));
+
+    const bodies = [];
+    let cursor = null;
+    const daemon = createDaemon({
+      omegaUrl: "https://nexus.cryptophys.work/omega", cfAccessClientId: "cid", cfAccessClientSecret: "secret",
+      stateDir: path.join(tmpDir, "state"), mt5FilesDir, terminalIni: path.join(tmpDir, "t.ini"), terminalService: "mt5.service",
+      syncMs: 5000, now: () => T0 + 400000, logs: [], stdout: { write() {} }, exec: async () => {},
+      fetch: async (url, init) => { bodies.push(JSON.parse(init.body)); return { status: 200, json: async () => ({ ok: true, intents: [], connection: null, corpus_cursor_ms: cursor }) }; },
+    });
+    await daemon.tick();
+    assert.equal(bodies[0].corpus.bars.length, 5, "no cursor yet: every bar");
+    cursor = T0 + 3 * 60000;
+    await daemon.tick(); // the server answers its cursor
+    await daemon.tick();
+    assert.equal(bodies[2].corpus.bars.length, 1, "after the cursor only the newer bar");
+    cursor = T0 + 4 * 60000;
+    await daemon.tick();
+    await daemon.tick();
+    assert.equal(bodies[4].corpus, undefined, "nothing new: no corpus in the body");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

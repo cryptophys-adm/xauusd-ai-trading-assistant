@@ -1,0 +1,12 @@
+export const CORPUS_TIMEFRAME: string;
+export const CORPUS_MAX_BARS_PER_SYNC: number;
+export const CORPUS_KEEP_MS: number;
+export const CORPUS_SCHEMA_SQL: readonly string[];
+export function corpusMode(env: unknown): "off" | "shadow";
+export function corpusSource(server: unknown, symbol: unknown): string;
+export function validateCorpus(corpus: any, options?: { executor?: any; connection?: any; now?: number }): Record<string, any>;
+export function aggregateBars(bars: Array<{ t: number; o: number; h: number; l: number; c: number; v?: number | null }>, minutes: number): Array<Record<string, number>>;
+export function corpusBasis(broker: Array<{ close_ms: number; close: number }>, reference: Array<{ close_ms: number; close: number }>): Record<string, number | null>;
+export function resetCorpusSchemaCacheForTests(): void;
+export function ingestCorpus(env: any, corpus: any, options?: { executor?: any; now?: number }): Promise<Record<string, any>>;
+export function corpusStatus(env: any, options?: { now?: number }): Promise<Record<string, any>>;

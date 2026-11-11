@@ -218,6 +218,7 @@ import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weight
 import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy } from "./omega-broker.mjs";
+import { corpusStatus } from "./corpus-oracle.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -1992,7 +1993,7 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   async bridgeKey(): Promise<JsonObject | null> {
     return bridgeKey(this.env) as Promise<JsonObject | null>;
   }
-  async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown }): Promise<JsonObject> {
+  async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown }): Promise<JsonObject> {
     return bridgeSync(this.env, input ?? {}) as Promise<JsonObject>;
   }
 }
@@ -2487,6 +2488,12 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // Behind Cloudflare Access (ai.cryptophys.work/api/*): the EA sends a service token.
     try { return dashboardJson(await eaSignal(env)); }
     catch (error) { console.error("ea_signal_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ kill: true, side: "NONE", error: "unavailable" }, 500); }
+  }
+  if (url.pathname === "/api/corpus/status") {
+    // Corpus Oracle phase 1 (owner 2026-11-11, src/corpus-oracle.mjs): the broker corpus from Omega's
+    // active broker, pair and user; freshness, completeness and the basis against the TradingView feed.
+    try { return dashboardJson({ status: "ok", ...(await corpusStatus(env)) }); }
+    catch (error) { console.error("corpus_status_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
   }
   if (url.pathname === "/api/ea/status") {
     try { return dashboardJson({ status: "ok", ...(await eaStatus(env)) }); }
