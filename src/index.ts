@@ -2891,7 +2891,7 @@ export default {
       ctx.waitUntil(finalizePendingH1Decisions(env).then(r => {
         if (Number(r.pending)) console.log("h1_consensus_pending", JSON.stringify(r));
       }).catch(e => console.error("h1_consensus_pending_failed", e instanceof Error ? e.message : String(e))));
-      // Macro War Room (owner decision 2026-11-08): 20 minutes after a 4-hour close and 30 minutes
+      // Macro War Room (owner decisions 2026-11-08, hourly 2026-11-11): 20 minutes after a 1-hour close and 30 minutes
       // after a High-impact USD event; at most one session per sweep, in its own waitUntil.
       ctx.waitUntil(runPendingMacroRooms(env).then(m => {
         if (m.status !== "disabled" && m.status !== "idle") console.log("macro_room", JSON.stringify(m));

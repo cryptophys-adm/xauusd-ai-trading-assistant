@@ -1,7 +1,8 @@
 // Macro War Room (owner decisions 2026-11-08): the market correlations become a room that discusses
-// the news and the scheduled events that move gold. It meets 20 minutes after every 4-hour close
-// (after the timeframe rooms' burst) and once 30 minutes after a High-impact USD event, in the same
-// three phases as the other rooms:
+// the news and the scheduled events that move gold. It meets 20 minutes after every 1-hour close
+// (owner 2026-11-11: "session update per 1H close"; it met after every 4-hour close before), after the
+// 1H room's burst, and once 30 minutes after a High-impact USD event, in the same three phases as the
+// other rooms:
 //   1. Communication bus: every agent opens with one claim from its own data only;
 //   2. Consensus Discussion: the agents whose bias differs from the room's answer named agents;
 //   3. Conclusion: the moderator writes the macro bias for gold over the next 4 to 24 hours.
@@ -39,9 +40,12 @@ export const MACRO_AGENTS = Object.freeze({
   correlation: { name: "Correlation Analyst", role: "whether the usual links between gold, the dollar, yields, silver and oil hold now or have broken" }
 });
 const ROSTER = Object.keys(MACRO_AGENTS);
-const H4 = 4 * 3_600_000;
-/** The 4-hour session waits for the timeframe rooms' burst; the event session for the first reaction. */
-export const AFTER_4H_CLOSE_MS = 20 * 60_000;
+/** The gold 1-hour series whose close starts the hourly session (the pull adapter's cache). */
+export const GOLD_H1_KEY = "market-data:v2:series:OANDA:XAUUSD|1h";
+/** The hourly session waits for the 1H room's burst; the event session for the first reaction. */
+export const AFTER_1H_CLOSE_MS = 20 * 60_000;
+/** An hourly session runs until the next 1-hour close at the latest; a missed hour is never replayed. */
+export const HOURLY_SESSION_WINDOW_MS = 3_600_000;
 export const AFTER_EVENT_MS = 30 * 60_000;
 /** The follow-up session after a High-impact USD event (owner 2026-11-10): the reaction inside its horizon. */
 export const EVENT_FOLLOW_UP_MS = 2 * 3_600_000;
@@ -66,14 +70,14 @@ export function macroMajorityBias(openings) {
 }
 
 /**
- * Pure: the sessions due at `now`: the latest closed 4-hour gold bar (from 20 minutes after its close,
- * for 3 hours) and every High-impact USD event released 30 minutes to 3 hours ago. Events at the
- * same minute share one session. `done` holds the run ids already concluded.
+ * Pure: the sessions due at `now`: the latest closed 1-hour gold bar (from 20 minutes after its close,
+ * until the next close) and every High-impact USD event released 30 minutes to 3 hours ago. Events at
+ * the same minute share one session. `done` holds the run ids already concluded.
  */
 export function dueSessions({ goldLastClose = null, events = [], now = Date.now(), done = new Set() } = {}) {
   const out = [];
-  const t4 = Date.parse(goldLastClose ?? "");
-  if (Number.isFinite(t4) && now >= t4 + AFTER_4H_CLOSE_MS && now <= t4 + SESSION_WINDOW_MS) out.push({ run_id: `4h:${new Date(t4).toISOString()}`, kind: "4h", at: new Date(t4).toISOString() });
+  const t1 = Date.parse(goldLastClose ?? "");
+  if (Number.isFinite(t1) && now >= t1 + AFTER_1H_CLOSE_MS && now <= t1 + HOURLY_SESSION_WINDOW_MS) out.push({ run_id: `1h:${new Date(t1).toISOString()}`, kind: "1h", at: new Date(t1).toISOString() });
   const times = new Set();
   for (const e of events || []) {
     if (e?.currency !== "USD" || e?.impact !== "High") continue;
@@ -119,6 +123,22 @@ const assetData = (row, rule) => row ? {
 
 /** Words of the news headlines that carry oil supply or geopolitical risk. */
 export const GEOPOLITICAL = /\b(oil|crude|brent|wti|opec|energy|gas|pipeline|refiner\w*|sanction\w*|embargo|tariff\w*|war|conflict|attack\w*|strike\w*|missile\w*|drone\w*|ceasefire|geopolit\w*|iran\w*|israel\w*|gaza|hezbollah|houthi\w*|red sea|hormuz|russia\w*|ukrain\w*|middle east|saudi|venezuela\w*|china|taiwan)\b/i;
+/** The close time (ISO) of the latest closed gold 1-hour bar at `now`, or null. Never throws. */
+export async function goldLastHourClose(env, now = Date.now()) {
+  try {
+    const rec = JSON.parse((await env?.SIGNAL_CACHE?.get?.(GOLD_H1_KEY)) || "null");
+    const closes = (Array.isArray(rec?.candles) ? rec.candles : []).map((c) => Date.parse(c?.close_time ?? "")).filter((t) => Number.isFinite(t) && t <= now);
+    return closes.length ? new Date(Math.max(...closes)).toISOString() : null;
+  } catch { return null; }
+}
+
+/** The words for a session kind ("after a 1-hour close"); stored 4-hour sessions keep their name. */
+export function macroSessionWord(kind) {
+  return kind === "event" ? "30 minutes after a high-impact US event"
+    : kind === "event2" || kind === "event_follow_up" ? "2 hours after a high-impact US event"
+    : kind === "4h" ? "after a 4-hour close" : "after a 1-hour close";
+}
+
 /** Pure: up to six News Daily headlines on oil or geopolitics, with their bias for gold. */
 export function geopoliticalHeadlines(daily) {
   return (daily?.items || []).filter((i) => typeof i?.title === "string" && GEOPOLITICAL.test(i.title)).slice(0, 6).map((i) => ({ title: i.title, bias: i.bias ?? null }));
@@ -229,7 +249,7 @@ function openingMessages(agent, data, session, requiredBias) {
       : "An event was just released: read its outcome from the headlines after the release, against the projection, and say whether the surprise pointed gold up or down."]
     : [];
   return chatMessages([
-    `You are the ${a.name} in the XAUUSD Macro War Room, which discusses the news and the scheduled events that move gold. This session: ${session.kind === "event" ? "30 minutes after a high-impact US event" : session.kind === "event_follow_up" ? "2 hours after a high-impact US event, inside its horizon: judge whether gold's reaction follows the released surprise" : "after a 4-hour close"}. Your only role: ${a.role}.`,
+    `You are the ${a.name} in the XAUUSD Macro War Room, which discusses the news and the scheduled events that move gold. This session: ${session.kind === "event" ? "30 minutes after a high-impact US event" : session.kind === "event_follow_up" ? "2 hours after a high-impact US event, inside its horizon: judge whether gold's reaction follows the released surprise" : macroSessionWord(session.kind)}. Your only role: ${a.role}.`,
     RULES_NO_REFS,
     RULES,
     ...calendarRule,
@@ -348,11 +368,10 @@ export async function runPendingMacroRooms(env, { now = Date.now(), clock = () =
   if (!macroRoomEnabled(env) || !env?.DB) return { status: "disabled" };
   try {
     await ensureThreadSchema(env.DB);
-    let corr = null;
-    try { corr = await readCorrelations(env, { now }); } catch { corr = null; }
+    const goldLastClose = await goldLastHourClose(env, now);
     const events = (await cachedCalendar(env))?.events || [];
     const rows = (await env.DB.prepare("SELECT DISTINCT run_id FROM agent_thread_messages WHERE thread_id = ? AND step = 'conclusion' AND status = 'ok' AND ts >= ?").bind(MACRO_THREAD, new Date(now - 2 * 86_400_000).toISOString()).all()).results || [];
-    const due = dueSessions({ goldLastClose: corr?.gold?.last_close_time ?? null, events, now, done: new Set(rows.map((r) => r.run_id)) });
+    const due = dueSessions({ goldLastClose, events, now, done: new Set(rows.map((r) => r.run_id)) });
     if (!due.length) return { status: "idle" };
     const session = due[0];
     return { session: session.run_id, ...(await runMacroRoom(env, session, { clock, now })) };
@@ -386,6 +405,6 @@ export async function macroDeskEvidence(db, { now = Date.now() } = {}) {
   try {
     const m = await readMacroRoom(db, { now });
     if (!m || m.stale || m.conclusion?.status !== "ok") return null;
-    return { macro_bias: m.conclusion.bias, confidence: m.conclusion.confidence, summary: m.conclusion.summary, horizon: m.conclusion.horizon, session: m.kind === "event" ? "after a high-impact US event" : m.kind === "event2" || m.kind === "event_follow_up" ? "2 hours after a high-impact US event" : "after a 4-hour close" };
+    return { macro_bias: m.conclusion.bias, confidence: m.conclusion.confidence, summary: m.conclusion.summary, horizon: m.conclusion.horizon, session: m.kind === "event" ? "after a high-impact US event" : macroSessionWord(m.kind) };
   } catch { return null; }
 }
