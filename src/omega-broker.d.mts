@@ -12,6 +12,6 @@ export function setConnection(env: unknown, input: { envelope?: unknown; server?
 export function clearConnection(env: unknown, input: { actor: string; reason?: unknown }, options?: { now?: number }): Promise<Record<string, any>>;
 export function bridgeKey(env: unknown, options?: { now?: number }): Promise<Record<string, any> | null>;
 export function executorFrom(state: unknown): Record<string, any> | null;
-export function bridgeSync(env: unknown, input?: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown }, options?: { now?: number; signal?: Record<string, any> }): Promise<Record<string, any>>;
+export function bridgeSync(env: unknown, input?: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown }, options?: { now?: number; signal?: Record<string, any> }): Promise<Record<string, any>>;
 export function brokerOverview(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
 export function applyOmegaPolicy(env: unknown, options?: { now?: number }): Promise<Record<string, unknown>>;

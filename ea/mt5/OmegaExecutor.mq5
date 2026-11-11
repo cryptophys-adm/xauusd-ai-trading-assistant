@@ -43,6 +43,9 @@ input int  SlippagePoints    = 30;     // Max price deviation in points for mark
 input int  StateEverySeconds = 1;      // How often omega/state.json is refreshed on timer (seconds)
 input int  MinTickIntervalMs = 250;    // Minimum interval between tick-driven state.json writes (ms)
 input int  MaxIntentsAgeSeconds = 30;  // ignore an intents.txt older than this (bridge down, terminal restarted)
+// Corpus Oracle (owner 2026-11-11): the broker's closed M1 bars of the traded symbol for the local lane.
+input bool CorpusOracleEnabled = true; // write omega/corpus.json once per closed M1 bar
+input int  CorpusBars          = 120;  // closed M1 bars kept in corpus.json (10 to 240)
 
 //--- Profit Protection & Local Risk Management (Owner Approved)
 input bool   AutoBreakEvenEnabled   = true;  // Auto SL+ (Break-Even) enabled
@@ -64,6 +67,8 @@ const string STATE_JSON_PATH = "omega/state.json";
 const string INTENTS_PATH    = "omega/intents.txt";
 const string PROCESSED_PATH  = "omega/processed.txt";
 const string RESULTS_PATH    = "omega/results.txt";
+const string CORPUS_TMP_PATH  = "omega/corpus.tmp";
+const string CORPUS_JSON_PATH = "omega/corpus.json";
 
 CTrade   trade;
 string   g_processedIds[];
@@ -73,6 +78,7 @@ ulong    g_lastTickWriteMs = 0;
 double   g_lastBid = 0.0;
 double   g_lastAsk = 0.0;
 long     g_lastWriteMs = 0;
+datetime g_lastCorpusBar = 0;
 int      g_atrHandle = INVALID_HANDLE;
 
 //+------------------------------------------------------------------+
@@ -399,6 +405,52 @@ void WriteStateJson()
    FileWriteString(h, json);
    FileClose(h);
    FileMove(STATE_TMP_PATH, 0, STATE_JSON_PATH, FILE_REWRITE);
+  }
+
+//+------------------------------------------------------------------+
+//| Corpus Oracle writer (omega/corpus.tmp -> omega/corpus.json)     |
+//| The broker's closed M1 bars of the traded symbol, oldest first:  |
+//| [t_ms UTC, open, high, low, close, tick_volume, spread]. The     |
+//| bridge sends the bars after the server's cursor with each sync.  |
+//| No login and no account number: server name, symbol and bars.    |
+//+------------------------------------------------------------------+
+int ServerUtcOffsetSeconds()
+  {
+   // Broker bar times are server time; brokers sit on whole quarter hours from UTC.
+   long diff = (long)(TimeTradeServer() - TimeGMT());
+   return (int)(MathRound(diff / 900.0) * 900);
+  }
+
+void WriteCorpusJson()
+  {
+   if(!CorpusOracleEnabled) return;
+   string sym = ResolveGoldSymbol();
+   datetime lastClosed = iTime(sym, PERIOD_M1, 1);
+   if(lastClosed == 0 || lastClosed == g_lastCorpusBar) return;
+   int n = (int)MathMax(10, MathMin(240, CorpusBars));
+   MqlRates rates[];
+   ArraySetAsSeries(rates, false);
+   int got = CopyRates(sym, PERIOD_M1, 1, n, rates); // from shift 1: closed bars only, oldest first
+   if(got <= 0) return;
+   int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   int offset = ServerUtcOffsetSeconds();
+   string bars = "";
+   for(int i = 0; i < got; i++)
+     {
+      long tMs = ((long)rates[i].time - offset) * 1000;
+      if(i > 0) bars += ",";
+      bars += StringFormat("[%I64d,%s,%s,%s,%s,%I64d,%d]", tMs,
+                           DoubleToString(rates[i].open, digits), DoubleToString(rates[i].high, digits),
+                           DoubleToString(rates[i].low, digits), DoubleToString(rates[i].close, digits),
+                           rates[i].tick_volume, rates[i].spread);
+     }
+   string json = StringFormat("{\"server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M1\",\"digits\":%d,\"utc_offset_s\":%d,\"written_ms\":%I64d,\"bars\":[%s]}",
+                              EscapeJson(AccountInfoString(ACCOUNT_SERVER)), EscapeJson(sym), digits, offset, NowUtcMs(), bars);
+   int h = FileOpen(CORPUS_TMP_PATH, FILE_WRITE | FILE_TXT | FILE_ANSI);
+   if(h == INVALID_HANDLE) return;
+   FileWriteString(h, json);
+   FileClose(h);
+   if(FileMove(CORPUS_TMP_PATH, 0, CORPUS_JSON_PATH, FILE_REWRITE)) g_lastCorpusBar = lastClosed;
   }
 
 //+------------------------------------------------------------------+
@@ -875,6 +927,7 @@ void OnTimer()
       g_lastTickWriteMs = GetTickCount64();
       g_lastStateAt = nowGmt;
      }
+   WriteCorpusJson();
    ProcessIntentsFile();
   }
 //+------------------------------------------------------------------+

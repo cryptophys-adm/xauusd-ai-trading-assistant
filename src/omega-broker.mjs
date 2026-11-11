@@ -11,6 +11,7 @@
 // Statuses: connection none | stored | needs_reentry | cleared; intent pending → sent → done | failed,
 // or expired when the bridge did not report it within INTENT_TTL_MS.
 
+import { ingestCorpus } from "./corpus-oracle.mjs";
 import { eaSignal, readControl } from "./ea-signal.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
@@ -196,7 +197,7 @@ async function withAttempt(db, it) {
  * One bridge sync: store its key and state, apply its results, plan, and return what it must do.
  * @returns {{ intents: object[], connection: null | object, settings_version: number }}
  */
-export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVersion } = {}, { now = Date.now(), signal: signalIn } = {}) {
+export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVersion, corpus = null } = {}, { now = Date.now(), signal: signalIn } = {}) {
   await ensureSchema(env.DB);
   const db = env.DB;
   if (typeof kid !== "string" || !KID_RE.test(kid) || typeof publicKey !== "string" || !B64_RE.test(publicKey) || publicKey.length > 1024) return { ok: false, error: "kid and public_key are required" };
@@ -323,7 +324,14 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     }
   }
 
-  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, ...(recovery ? { recovery } : {}) };
+  // Corpus Oracle (owner 2026-11-11): the broker's closed M1 bars of Omega's active broker, pair and
+  // user, kept for the local lane's phase 2; off unless CORPUS_ORACLE_MODE = "shadow". Never blocks a sync.
+  let corpusCursor = null;
+  if (corpus) {
+    try { corpusCursor = (await ingestCorpus(env, corpus, { executor, now })).cursor_ms ?? null; } catch { corpusCursor = null; }
+  }
+
+  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, ...(recovery ? { recovery } : {}) };
 }
 
 // ---------------------------------------------------------------- overview (for the page)

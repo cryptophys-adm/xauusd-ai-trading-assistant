@@ -9,6 +9,7 @@ import {
   readTerminalLastError,
   resolveOmegaDir,
   writeIntents,
+  readCorpus,
 } from "./files.mjs";
 import { applyCredentials, clearCredentials, ensureLiveTradingSettings } from "./ini.mjs";
 import { DEFAULT_STATE_DIR, loadOrCreateKeyPair } from "./keys.mjs";
@@ -206,9 +207,10 @@ async function invokeExec(execFn, cmd, args) {
   return await execFn(cmd, args);
 }
 
-function buildBoundedSyncBody({ kid, publicKeyBase64, state, results }) {
+function buildBoundedSyncBody({ kid, publicKeyBase64, state, results, corpus = null }) {
   let currentResults = Array.isArray(results) ? [...results] : [];
   let currentState = state ? { ...state } : null;
+  let currentCorpus = corpus;
 
   const serialize = () =>
     JSON.stringify({
@@ -217,9 +219,15 @@ function buildBoundedSyncBody({ kid, publicKeyBase64, state, results }) {
       public_key: publicKeyBase64,
       state: currentState,
       results: currentResults,
+      ...(currentCorpus ? { corpus: currentCorpus } : {}),
     });
 
   let body = serialize();
+  // The corpus has the lowest priority: it is halved, then dropped, before any result or the state.
+  while (Buffer.byteLength(body, "utf8") > MAX_SYNC_BODY_BYTES && currentCorpus) {
+    currentCorpus = currentCorpus.bars.length > 1 ? { ...currentCorpus, bars: currentCorpus.bars.slice(0, Math.floor(currentCorpus.bars.length / 2)) } : null;
+    body = serialize();
+  }
   while (Buffer.byteLength(body, "utf8") > MAX_SYNC_BODY_BYTES && currentResults.length > 1) {
     currentResults = currentResults.slice(0, Math.max(1, Math.floor(currentResults.length / 2)));
     body = serialize();
@@ -335,6 +343,7 @@ export function createDaemon(options = {}) {
   const keys = loadOrCreateKeyPair(config.stateDir, { fs });
 
   let consecutiveFailures = 0;
+  let corpusCursorMs = null; // Corpus Oracle: the newest broker minute the server kept
   let currentBackoffMs = config.syncMs;
   let last403LogMs = -Infinity;
   let running = false;
@@ -442,11 +451,14 @@ export function createDaemon(options = {}) {
     }
 
     const resultsToSend = Array.from(pendingResultsById.values());
+    // Corpus Oracle: only the bars after the server's cursor (none until the server answers one).
+    const corpus = readCorpus(config.omegaFilesDir, { fs, afterMs: corpusCursorMs });
     const { body, sentResults } = buildBoundedSyncBody({
       kid: keys.kid,
       publicKeyBase64: keys.publicKeyBase64,
       state,
       results: resultsToSend,
+      corpus,
     });
 
     const syncUrl = `${config.omegaUrl}/api/bridge/sync`;
@@ -531,6 +543,8 @@ export function createDaemon(options = {}) {
 
     const intents = Array.isArray(payload?.intents) ? payload.intents : [];
     writeIntents(config.omegaFilesDir, intents, { fs, now });
+    // The server's corpus cursor: the newest broker minute it kept (null while the Corpus Oracle is off).
+    if (typeof payload?.corpus_cursor_ms === "number" && Number.isFinite(payload.corpus_cursor_ms)) corpusCursorMs = payload.corpus_cursor_ms;
 
     let appliedConnection = false;
     const conn = payload?.connection;

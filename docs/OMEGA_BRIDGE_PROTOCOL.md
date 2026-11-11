@@ -29,6 +29,7 @@ Content-Type: application/json
 | `public_key` | string | the bridge's RSA-3072 public key, SPKI DER, standard base64 |
 | `state` | object or null | the executor state below; `null` when the EA has not written one (or it does not parse) |
 | `results` | array | the outcome of each intent the EA executed since the last sync |
+| `corpus` | object, optional | Corpus Oracle (owner 2026-11-11, docs/RFC_CORPUS_ORACLE.md): `{ "server", "symbol", "timeframe": "M1", "bars": [[t_ms UTC, open, high, low, close, tick_volume, spread], …] }`, the closed M1 bars of `omega/corpus.json` after the server's last `corpus_cursor_ms`, at most 240; cut first when the body is too large. Never a login or an account number. |
 
 `state` (written by `OmegaExecutor.mq5`; the bridge forwards it as is):
 
@@ -68,6 +69,7 @@ Content-Type: application/json
   "intents": [ { "id": "open:1794225600000:B", "kind": "open", "side": "BUY", "volume": 0.1, "sl": 4096.2, "tp": 4111.2, "signal_issued_ms": 1794225600000, "reason": "signal" } ],
   "connection": null,
   "settings_version": 3,
+  "corpus_cursor_ms": null,
   "notes": [ { "code": "spread" } ]
 }
 ```
@@ -89,6 +91,10 @@ Content-Type: application/json
   newer than the last applied.
 
 `notes` are the planner's reasons for not trading (for logs only).
+
+`corpus_cursor_ms` is the newest broker minute the AI Worker kept from Omega's active broker, pair and
+user (`null` while `CORPUS_ORACLE_MODE` is `off` or the corpus was refused); the bridge then sends only
+newer bars.
 
 Errors: 400 `{ "ok": false, "error": … }` for a bad body (e.g. `kid and public_key are required`,
 `state_too_large`), 413 above 64 KiB, 502 `sync_failed` when the AI Worker is unreachable (retry with
