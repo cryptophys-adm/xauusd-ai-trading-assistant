@@ -27,6 +27,7 @@ import {
   Zap,
 } from "lucide-react";
 import { Badge, Dot, Empty, Kpi, Panel, Skeleton } from "../components/ui";
+import { ExitConfirmModal, type ExitTargetPosition } from "../components/ExitConfirmModal";
 import { C } from "../components/charts";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
@@ -481,10 +482,13 @@ function SlPlusPricePoint({ item }: { item: any }) {
 function OmegaExecutionPanel({ omega }: { omega: any }) {
   const [closingTicket, setClosingTicket] = useState<number | null>(null);
   const [exitNotice, setExitNotice] = useState<{ tone: string; text: string } | null>(null);
+  const [exitModalPosition, setExitModalPosition] = useState<ExitTargetPosition | null>(null);
 
-  const handleExitPosition = async (ticket: number) => {
-    const isConfirmed = window.confirm(`Exit position #${ticket} now in MetaTrader 5?\nThis will immediately override active TP/SL and close the position.`);
-    if (!isConfirmed) return;
+  const requestExitPosition = (pos: ExitTargetPosition) => {
+    setExitModalPosition(pos);
+  };
+
+  const confirmExitPosition = async (ticket: number) => {
     setClosingTicket(ticket);
     try {
       const res = await fetch("/omega/api/position/close", {
@@ -499,6 +503,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
         tone: "text-emerald-300",
         text: `Exit requested for position #${ticket}. The MT5 terminal will close it within 2 seconds.`,
       });
+      setExitModalPosition(null);
     } catch (err: any) {
       setExitNotice({
         tone: "text-rose-300",
@@ -726,7 +731,19 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                         <button
                           type="button"
                           disabled={closingTicket === p.ticket}
-                          onClick={() => handleExitPosition(p.ticket)}
+                          onClick={() =>
+                            requestExitPosition({
+                              ticket: p.ticket,
+                              symbol: p.symbol || br.symbol || "XAUUSD.m",
+                              side: pSide,
+                              volume: p.volume,
+                              open_price: p.open_price,
+                              profit: pProf,
+                              sl: p.sl,
+                              tp: p.tp,
+                              currency: "USD",
+                            })
+                          }
                           className="inline-flex items-center gap-1 rounded bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 hover:border-rose-400 active:scale-95 transition disabled:opacity-50"
                           title="Exit position immediately in MetaTrader 5 (interrupts TP/SL)"
                         >
@@ -804,6 +821,15 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
           </div>
         )}
       </Panel>
+
+      {/* Styled Obsidian/Nexus Confirmation Modal for Market Exit */}
+      <ExitConfirmModal
+        position={exitModalPosition}
+        isOpen={Boolean(exitModalPosition)}
+        onClose={() => setExitModalPosition(null)}
+        onConfirm={confirmExitPosition}
+        isSubmitting={closingTicket !== null}
+      />
     </div>
   );
 }
