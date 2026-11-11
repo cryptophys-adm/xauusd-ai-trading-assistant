@@ -1,0 +1,10 @@
+export const AI_USAGE_SCHEMA_SQL: string[];
+export const NEURON_RATES: Readonly<Record<string, { input: number; output: number }>>;
+export const FREE_NEURONS_PER_DAY: number;
+export const USD_PER_1K_NEURONS: number;
+export function ensureAiUsageSchema(db: unknown): Promise<void>;
+export function resetAiUsageSchemaCacheForTests(): void;
+export function usageSplit(result: unknown): { prompt: number; completion: number };
+export function recordAiUsage(db: unknown, event?: { source?: string; model?: string | null; outcome?: "ok" | "failed" | "timeout" | "memo_hit" | "memo_same" | "reused"; prompt?: number; completion?: number; now?: number }): Promise<boolean>;
+export function neuronsOf(model: string, prompt: number, completion: number): number | null;
+export function readAiUsage(db: unknown, opts?: { days?: number; now?: number }): Promise<Record<string, any>>;

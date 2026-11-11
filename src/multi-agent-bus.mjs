@@ -9,6 +9,7 @@
 import { chatMessages, cleanModelText, extractJsonObject, extractModelText, MODELS, runModel, responsesIncomplete } from "./model-text.mjs";
 import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, NATURAL_LANGUAGE_CORRECTION, onlyNaturalLanguageErrors } from "./natural-language.mjs";
 import { interpretWebhookRow } from "./webhook-interpretation.mjs";
+import { recordAiUsage } from "./ai-usage.mjs";
 
 // Model migration (owner decision 2026-11-07; glm-5.3-flash stops answering on 2026-11-20): room
 // agents speak on gemma-4-26b-a4b-it with thinking off, moderators conclude on gpt-oss-120b.
@@ -331,7 +332,9 @@ export const FALLBACK_TOKEN_FACTOR = 2;
 
 /** One call in the request forms of its model family (model-text.mjs modelRequests). The fallback gets twice the budget. */
 function callModel(env, model, messages, schemaName, schema, maxTokens, effort, primary) {
-  return runModel(env.AI, model, { messages, schemaName, schema, effort, maxTokens: primary ? maxTokens : maxTokens * FALLBACK_TOKEN_FACTOR }).then((r) => r.result);
+  // The usage meter (src/ai-usage.mjs) labels each call with its schema name: war_room_opening, tf_room_rebuttal, ...
+  const meter = env?.DB?.prepare ? { db: env.DB, source: schemaName || "bus" } : null;
+  return runModel(env.AI, model, { messages, schemaName, schema, effort, maxTokens: primary ? maxTokens : maxTokens * FALLBACK_TOKEN_FACTOR, meter }).then((r) => r.result);
 }
 
 /**
@@ -418,6 +421,8 @@ export async function callBusModel(env, { messages, schemaName, schema, maxToken
     } catch (error) {
       lastError = error;
       const message = error?.name === "TimeoutError" ? "timeout" : clip(error?.message || String(error) || "model_error", 300);
+      // An abandoned call is still billed when it finishes; the meter counts the abandonment.
+      if (error?.name === "TimeoutError") await recordAiUsage(env?.DB, { source: schemaName || "bus", model, outcome: "timeout", now: clock() });
       if (!rateRetried && isRateLimited(error) && deadline - clock() > waitMs + 5_000) {
         rateRetried = true;
         console.warn("bus_model_rate_limited", JSON.stringify({ model, retry_in_ms: waitMs }));

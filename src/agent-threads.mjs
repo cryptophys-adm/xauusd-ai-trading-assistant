@@ -16,6 +16,8 @@ import { verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-
 import { HUD_IDS, HUD_NAMES, calibrationCounts } from "./hud-reading.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
+import { memoEligible, memoKind, inputHash, memoLookup, memoStore, roomMemoEnabled } from "./room-memo.mjs";
+import { recordAiUsage } from "./ai-usage.mjs";
 import {
   callBusModel, roleModels, buildBusEvidence, validateAgentOutput, validateModeratorOutput,
   AGENT_JSON_SCHEMA, MODERATOR_JSON_SCHEMA, BUS_DEFAULT_MODEL, BUS_MAX_TOKENS, busEnabled
@@ -201,10 +203,11 @@ const ROOM_RULES_INDEPENDENT = [
   "Return only one JSON object that matches the required schema."
 ].join("\n");
 
+/** Model calls of the last hour (a step answered from the room memo made none). */
 async function callsInLastHour(db, now, kindPrefix) {
   const cutoff = new Date(now - 60 * 60 * 1000).toISOString();
   const row = await db.prepare(
-    "SELECT COALESCE(SUM(1 + COALESCE(fallback_used, 0) + COALESCE(json_extract(body_json, '$.corrections'), 0)), 0) AS n FROM agent_thread_messages WHERE ts >= ? AND status NOT IN ('budget_exhausted', 'skipped', 'info') AND thread_id LIKE ?"
+    "SELECT COALESCE(SUM(1 + COALESCE(fallback_used, 0) + COALESCE(json_extract(body_json, '$.corrections'), 0)), 0) AS n FROM agent_thread_messages WHERE ts >= ? AND status NOT IN ('budget_exhausted', 'skipped', 'info') AND json_extract(body_json, '$.reused') IS NULL AND thread_id LIKE ?"
   ).bind(cutoff, `${kindPrefix}:%`).first();
   const n = Number(row?.n);
   if (!Number.isFinite(n)) throw new Error("thread_budget_unavailable");
@@ -267,14 +270,44 @@ export function stepRole(step) {
 
 async function runStep(env, db, base, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk, role = stepRole(base?.step), inferMetrics = null }) {
   const ts = new Date(clock()).toISOString();
+  // Room memo (src/room-memo.mjs): the same request as a stored answer has that answer. Reused with
+  // ROOM_MEMO_ENABLED (after it passes this room's validation again), otherwise only counted.
+  const memo = memoEligible(base) ? { kind: memoKind(base.thread_id), step: base.step, hash: await inputHash([roleModels(env, role).primary, schemaName, messages]) } : null;
+  const memoRow = memo ? await memoLookup(db, { ...memo, now: clock() }) : null;
+  if (memoRow && roomMemoEnabled(env)) {
+    const obj = parseJson(memoRow.answer_json, null);
+    const again = obj && typeof obj === "object" ? validate(obj) : { valid: false };
+    if (again.valid) {
+      await recordAiUsage(db, { source: schemaName, model: memoRow.model, outcome: "reused", now: clock() });
+      const { body, refs } = toBody(obj);
+      return writeMessage(db, { ...base, ts, model: memoRow.model, fallback_used: false, usage_tokens: 0, latency_ms: 0, status: "ok", stance: obj.stance, confidence: obj.confidence, body: { ...body, reused: true, reused_from: memoRow.message_id ?? null, input_hash: memo.hash }, refs });
+    }
+  }
+  if (memoRow) await recordAiUsage(db, { source: schemaName, model: memoRow.model, outcome: "memo_hit", now: clock() });
+  const stored = await runStepCall(env, db, base, { ts, messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk, role, inferMetrics, memoHash: memo?.hash ?? null });
+  const msg = stored.message;
+  if (memo && msg?.status === "ok" && stored.memoAnswer) {
+    if (memoRow && memoRow.stance === msg.stance && (memoRow.bias ?? null) === (stored.memoAnswer.bias ?? null)) await recordAiUsage(db, { source: schemaName, model: memoRow.model, outcome: "memo_same", now: clock() });
+    await memoStore(db, { ...memo, messageId: msg.id, model: msg.model, answer: stored.memoAnswer, now: clock() });
+  }
+  return msg;
+}
+
+const cloneObj = (o) => (o && typeof o === "object" ? JSON.parse(JSON.stringify(o)) : null);
+
+/** The model call of one step and its corrections; returns the stored message and, when it may be memoised, the raw answer. */
+async function runStepCall(env, db, base, { ts, messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk, role, inferMetrics, memoHash }) {
+  const done = (message, memoAnswer = null) => message.then((m) => ({ message: m, memoAnswer }));
   if (!(await budgetOk())) {
-    return writeMessage(db, { ...base, ts, status: "budget_exhausted", body: { insight: "budget exhausted" } });
+    return done(writeMessage(db, { ...base, ts, status: "budget_exhausted", body: { insight: "budget exhausted" } }));
   }
   const call = await callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, role });
+  // The answer as the model gave it, before validation normalises it in place (for the memo).
+  const rawOf = new Map([[call, cloneObj(call.obj)]]);
   const meta = { model: call.model, fallback_used: call.fallback_used, usage_tokens: call.usage_tokens, latency_ms: call.latency_ms ?? null };
   const diag = call.primary_error ? { primary_error: call.primary_error } : {};
   if (call.status !== "answered") {
-    return writeMessage(db, { ...base, ts, ...meta, status: call.status, body: { insight: call.status === "budget_exhausted" ? "budget exhausted" : "agent failed: " + (call.error || "error"), ...diag } });
+    return done(writeMessage(db, { ...base, ts, ...meta, status: call.status, body: { insight: call.status === "budget_exhausted" ? "budget exhausted" : "agent failed: " + (call.error || "error"), ...diag } }));
   }
   let validation = call.truncated ? { valid: false, errors: ["finish_reason_length"] } : validate(call.obj);
   // An answer that is valid except that its text reads like code (a field name or key path), or a
@@ -293,6 +326,7 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
     corrections = 1 + (retry.fallback_used ? 1 : 0);
     meta.usage_tokens = sumOrNull(meta.usage_tokens, retry.usage_tokens);
     meta.latency_ms = sumOrNull(meta.latency_ms, retry.latency_ms);
+    rawOf.set(retry, cloneObj(retry.obj));
     if (retry.status === "answered" && !retry.truncated) {
       const second = validate(retry.obj);
       if (second.valid) { validation = second; finalCall = retry; meta.model = retry.model; meta.fallback_used = meta.fallback_used || retry.fallback_used; }
@@ -311,6 +345,7 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
     corrections = 1 + (retry.fallback_used ? 1 : 0);
     meta.usage_tokens = sumOrNull(meta.usage_tokens, retry.usage_tokens);
     meta.latency_ms = sumOrNull(meta.latency_ms, retry.latency_ms);
+    rawOf.set(retry, cloneObj(retry.obj));
     if (retry.status === "answered" && !retry.truncated) {
       const second = validate(retry.obj);
       if (second.valid && !calibrationTalk(roomText(retry.obj)) && retry.obj.stance === finalCall.obj.stance) { validation = second; finalCall = retry; meta.model = retry.model; meta.fallback_used = meta.fallback_used || retry.fallback_used; }
@@ -349,10 +384,12 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
   }
   const extra = { ...(corrections ? { corrections } : {}), ...(inferred ? { metrics_inferred: true } : {}) };
   if (!validation.valid) {
-    return writeMessage(db, { ...base, ts, ...meta, status: "invalid_output", body: { insight: clip(call.text, RAW_MAX), errors: validation.errors, ...extra, ...diag } });
+    return done(writeMessage(db, { ...base, ts, ...meta, status: "invalid_output", body: { insight: clip(call.text, RAW_MAX), errors: validation.errors, ...extra, ...diag, ...(memoHash ? { input_hash: memoHash } : {}) } }));
   }
   const { body, refs } = toBody(finalCall.obj);
-  return writeMessage(db, { ...base, ts, ...meta, status: "ok", stance: finalCall.obj.stance, confidence: finalCall.obj.confidence, body: { ...body, ...extra, ...diag }, refs });
+  // Memoised only: the primary model's answer, valid without inferred metrics.
+  const memoAnswer = memoHash && !inferred && !meta.fallback_used ? (rawOf.get(finalCall) ?? null) : null;
+  return done(writeMessage(db, { ...base, ts, ...meta, status: "ok", stance: finalCall.obj.stance, confidence: finalCall.obj.confidence, body: { ...body, ...extra, ...diag, ...(memoHash ? { input_hash: memoHash } : {}) }, refs }), memoAnswer);
 }
 
 function sumOrNull(a, b) {

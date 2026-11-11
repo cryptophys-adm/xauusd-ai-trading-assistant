@@ -114,20 +114,23 @@ export function tfAgentName(id) {
 const ruleText = (spec) =>
   `Rule: the room's quorum decides. A BUY or SELL conclusion of the ${spec.label} room needs more than half of the agents' weight (each weighted by its track record) holding the matching bias; otherwise the stance is WAIT, or HOLD / CLOSE for a position already open. The ${spec.label} Prophet R38 confirmation and setup state, the trade management and the GMI verdict are arguments to weigh, not gates.`;
 
+// The rooms require a "metrics" list (owner decisions 2026-11-09, war-room.mjs metricsErrors). Strict JSON
+// schemas without it (until 2026-11-11) made the model drop the list every time: each answer then cost a
+// correction call and was kept with inferred metrics (production 2026-11-10: 438 corrections in 874 tf answers).
 const OPENING_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
-  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, claim: { type: "string" } },
-  required: ["agent", "stance", "bias", "confidence", "claim"]
+  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, claim: { type: "string" }, metrics: { type: "array", items: { type: "string" } } },
+  required: ["agent", "stance", "bias", "confidence", "claim", "metrics"]
 });
 const REBUTTAL_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
-  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, rebuts: { type: "array", items: { type: "string" } }, argument: { type: "string" } },
-  required: ["agent", "stance", "bias", "confidence", "rebuts", "argument"]
+  properties: { agent: { type: "string" }, stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, rebuts: { type: "array", items: { type: "string" } }, argument: { type: "string" }, metrics: { type: "array", items: { type: "string" } } },
+  required: ["agent", "stance", "bias", "confidence", "rebuts", "argument", "metrics"]
 });
 const CONCLUSION_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
-  properties: { stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, summary: { type: "string" }, reasons: { type: "array", items: { type: "string" } }, dissent: { type: "array", items: { type: "string" } } },
-  required: ["stance", "bias", "confidence", "summary", "reasons", "dissent"]
+  properties: { stance: { type: "string", enum: [...ROOM_STANCES] }, bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] }, confidence: { type: "number" }, summary: { type: "string" }, reasons: { type: "array", items: { type: "string" } }, dissent: { type: "array", items: { type: "string" } }, metrics: { type: "array", items: { type: "string" } } },
+  required: ["stance", "bias", "confidence", "summary", "reasons", "dissent", "metrics"]
 });
 
 const ROOM_RULES = [
@@ -337,6 +340,9 @@ function conclusionMessages(spec, bus, debate, confirmations, crowd = null, lear
     ...(learned ? [learned] : [])
   ]);
 }
+
+/** The strict JSON schemas of the 1H, 4H and D1 rooms (exported for the schema test). */
+export const TF_ROOM_SCHEMAS = Object.freeze({ opening: OPENING_SCHEMA, rebuttal: REBUTTAL_SCHEMA, conclusion: CONCLUSION_SCHEMA });
 
 /** Runs the War Room of one closed 1H, 4H or D1 bar; idempotent per bar. */
 /**

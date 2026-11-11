@@ -2,6 +2,7 @@
 // text of every response shape (legacy `response`, Chat Completions, Responses API). Instruct and reasoning models must be called with chat `messages`
 // so their chat template is applied; raw `prompt` completion made
 // glm-4.7-flash and gemma emit degenerate text ("* * * *", code fragments).
+import { recordAiUsage, usageSplit } from "./ai-usage.mjs";
 
 const SYSTEM_SUFFIX = "Answer in English. Follow the requested output format exactly. Never repeat characters or symbols as filler.";
 
@@ -138,12 +139,18 @@ export function isRequestShapeError(error) {
  */
 export async function runModel(ai, model, opts) {
   const variants = modelRequests(model, opts);
+  // opts.meter = { db, source }: the call's tokens (src/ai-usage.mjs). Recorded when the call settles,
+  // also after a caller gave up at its timeout, since Workers AI bills a call that finishes.
+  const meter = opts?.meter?.db ? opts.meter : null;
   let lastError = null;
   for (let i = 0; i < variants.length; i++) {
     try {
-      return { result: await ai.run(model, variants[i]), variant: i };
+      const result = await ai.run(model, variants[i]);
+      if (meter) { const u = usageSplit(result); await recordAiUsage(meter.db, { source: meter.source, model, outcome: "ok", prompt: u.prompt, completion: u.completion }); }
+      return { result, variant: i };
     } catch (error) {
       lastError = error;
+      if (meter && !isRequestShapeError(error)) await recordAiUsage(meter.db, { source: meter.source, model, outcome: "failed" });
       if (i === variants.length - 1 || !isRequestShapeError(error)) throw error;
       console.warn("model_request_form_rejected", JSON.stringify({ model, variant: i, error: String(error?.message || error).slice(0, 200) }));
     }
