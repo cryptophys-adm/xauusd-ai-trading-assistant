@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   witnessCards, quorumOf, guardrailsFor, tradeFor, validateCouncil, decide, assess, buildDecisionRecord, councilEvidence, councilMessages,
   runDecisionEngine, runPendingDecision, readLatestDecision, readDecisions, decisionKeyFor, keyCloseMs, notifyDecision, decisionMessage,
-  resetDecisionSchemaCacheForTests, decisionEngineEnabled, WITNESS_WEIGHTS, DECISION_LATEST_KEY
+  resetDecisionSchemaCacheForTests, decisionEngineEnabled, WITNESS_WEIGHTS, DECISION_LATEST_KEY, askCouncil, COUNCIL_MAX_TOKENS, heartbeatMinutes
 } from "../src/decision-engine.mjs";
 import { sessionAt, regimeOf, macroDriversOf, sentimentOf, contextCautions, marketContextOf } from "../src/decision-engine.mjs";
 import { eaSignalFromDecision } from "../src/ea-signal.mjs";
@@ -313,4 +313,55 @@ test("the extended witnesses are independent: price vs zones, 1H trend quality, 
   const loaded = { inputs: { h1Bars: up, d1Bars: bars(30, 5), h4Bars: bars(30, 2), news: { context: { dollar: { change_24h_percent: -0.2 } } } }, strategy: { ...STRATEGY, direction: "LONG", alignment: 0.9 } };
   const a = independentWitnesses(loaded), b = independentWitnesses({ ...loaded, strategy: { ...loaded.strategy, direction: "SHORT", alignment: 0.1, plan: null } });
   assert.deepEqual(a, b, "no extended witness reads the strategy's direction");
+});
+
+test("Telegram heartbeat (owner 2026-11-11): one message after an hour without a change, then hourly; \"0\" turns it off", async () => {
+  const env = { SIGNAL_CACHE: kv() };
+  const sent = [];
+  const send = async (t) => { sent.push(t); };
+  const t0 = Date.parse("2026-11-11T01:32:00Z");
+  const d = (key, stance, minutes) => ({ decision_key: key, stance, bias: "NEUTRAL", confidence: 0.38, source: "council", bar_close: new Date(t0 - 2 * 60_000 + minutes * 60_000).toISOString(), summary: `Decision ${stance}.`, trade: null, overruled: null });
+  assert.equal((await notifyDecision(env, d("a", "SELL", 0), send, { now: t0 })).reason, "changed");
+  assert.equal((await notifyDecision(env, d("b", "WAIT", 15), send, { now: t0 + 15 * 60_000 })).reason, "changed", "SELL -> WAIT");
+  assert.equal((await notifyDecision(env, d("c", "WAIT", 30), send, { now: t0 + 30 * 60_000 })).reason, "unchanged");
+  assert.equal((await notifyDecision(env, d("d", "WAIT", 60), send, { now: t0 + 60 * 60_000 })).reason, "unchanged", "45 minutes since the last message");
+  const hb = await notifyDecision(env, d("e", "WAIT", 75), send, { now: t0 + 75 * 60_000 });
+  assert.deepEqual([hb.sent, hb.reason], [true, "heartbeat"]);
+  assert.match(sent.at(-1), /still WAIT/);
+  assert.match(sent.at(-1), /No change since the 15m bar of 01:45 UTC/, "since the bar the stance changed");
+  assert.equal((await notifyDecision(env, d("f", "WAIT", 90), send, { now: t0 + 90 * 60_000 })).reason, "unchanged", "the hour restarts at the heartbeat");
+  assert.equal((await notifyDecision(env, d("g", "WAIT", 135), send, { now: t0 + 135 * 60_000 })).reason, "heartbeat");
+  assert.equal(sent.length, 4);
+  // Off, and a state written before the heartbeat existed (no sent_at) never sends a burst at deploy.
+  const off = { SIGNAL_CACHE: kv(), DECISION_TELEGRAM_HEARTBEAT_MINUTES: "0" };
+  await off.SIGNAL_CACHE.put("telegram:decision-engine:last:v1", JSON.stringify({ stance: "WAIT", decision_key: "x", at: "2026-11-10T00:00:00.000Z" }));
+  assert.equal((await notifyDecision(off, d("h", "WAIT", 0), send, { now: t0 })).reason, "unchanged");
+  const legacy = { SIGNAL_CACHE: kv() };
+  await legacy.SIGNAL_CACHE.put("telegram:decision-engine:last:v1", JSON.stringify({ stance: "WAIT", decision_key: "x", at: "2026-11-10T00:00:00.000Z" }));
+  assert.equal((await notifyDecision(legacy, d("i", "WAIT", 0), send, { now: t0 })).reason, "unchanged", "legacy state: the hour starts now");
+  assert.equal(heartbeatMinutes({}), 60);
+  assert.equal(heartbeatMinutes({ DECISION_TELEGRAM_HEARTBEAT_MINUTES: "bad" }), 60);
+});
+
+test("the council (owner 2026-11-11): a cut-off answer is asked once more, briefly, with twice the budget; a still invalid one once from the fallback model", async () => {
+  const calls = [];
+  const cutThenOk = { run: async (model, request) => {
+    calls.push({ model, max: request.max_tokens, text: request.messages.map((m) => m.content).join("\n") });
+    if (calls.length === 1) return { choices: [{ message: { content: '{"stance":"BUY","summary":"Decision BUY because' }, finish_reason: "length" }] };
+    return { choices: [{ message: { content: JSON.stringify(BUY_ANSWER) }, finish_reason: "stop" }] };
+  } };
+  const ev = councilEvidence({ barClose: CLOSE, cards: [], quorum: { lean: 0, weight: 0 }, guards: { long: { allowed: false, checks: [] }, short: { allowed: false, checks: [] } }, context: {} });
+  const r = await askCouncil({ AI: cutThenOk, MODEL_RATE_LIMIT_RETRY_MS: "0" }, ev, { clock: () => NOW });
+  assert.equal(r.answer?.stance, "BUY", JSON.stringify(r));
+  assert.equal(r.retries, 1);
+  assert.equal(calls[0].max, COUNCIL_MAX_TOKENS);
+  assert.equal(calls[1].max, COUNCIL_MAX_TOKENS * 2);
+  assert.match(calls[1].text, /ran out of tokens before the JSON/);
+  // An answer that stays invalid: one call on the moderator's fallback model, then the deterministic fallback.
+  const models = [];
+  const invalid = { run: async (model) => { models.push(model); return { choices: [{ message: { content: JSON.stringify({ stance: "MAYBE" }) }, finish_reason: "stop" }] }; } };
+  const bad = await askCouncil({ AI: invalid, MODEL_RATE_LIMIT_RETRY_MS: "0" }, ev, { clock: () => NOW });
+  assert.equal(bad.answer, null);
+  assert.match(bad.reason, /^invalid answer/);
+  assert.deepEqual(models, ["@cf/openai/gpt-oss-120b", "@cf/google/gemma-4-26b-a4b-it"]);
 });
