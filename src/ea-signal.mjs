@@ -79,6 +79,14 @@ export function eaSignalFromDecision({ decision = null, kill = false, killSource
 }
 
 /** Loads the latest decision, the event gate and the feed price, and builds the signal. Never throws. */
+/** The EA's event blackout in force: BLACKOUT_MINUTES on both sides, else BLACKOUT_BEFORE_MINUTES (120) and BLACKOUT_AFTER_MINUTES (30). */
+export function blackoutWindow(env) {
+  const both = Number(env?.BLACKOUT_MINUTES);
+  const beforeMs = Math.max(0, (Number.isFinite(both) ? both : (Number(env?.BLACKOUT_BEFORE_MINUTES) || 120))) * 60_000;
+  const afterMs = Math.max(0, (Number.isFinite(both) ? both : (Number(env?.BLACKOUT_AFTER_MINUTES) || 30))) * 60_000;
+  return { beforeMs, afterMs };
+}
+
 export async function eaSignal(env, { now = Date.now() } = {}) {
   const envKill = String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
   const control = await readControl(env);
@@ -95,9 +103,7 @@ export async function eaSignal(env, { now = Date.now() } = {}) {
   } catch { analysis = null; }
   let blackout = false, blackoutReason = null;
   try {
-    const blackoutMinutes = Number(env?.BLACKOUT_MINUTES);
-    const beforeMs = Math.max(0, (Number.isFinite(blackoutMinutes) ? blackoutMinutes : (Number(env?.BLACKOUT_BEFORE_MINUTES) || 120))) * 60_000;
-    const afterMs = Math.max(0, (Number.isFinite(blackoutMinutes) ? blackoutMinutes : (Number(env?.BLACKOUT_AFTER_MINUTES) || 30))) * 60_000;
+    const { beforeMs, afterMs } = blackoutWindow(env);
     const events = await gatedEvents(env, { now });
     const active = (Array.isArray(events) ? events : []).filter((e) => {
       const t = Date.parse(e?.time ?? e?.date ?? e?.datetime ?? e?.start ?? "");

@@ -76,6 +76,19 @@ export async function tradingMode(env) {
 }
 export const DECISION_TELEGRAM_KEY = "telegram:decision-engine:last:v1";
 
+/** The trading modes' thresholds (owner 2026-11-10). Unknown modes read as intraday. Doctrine: engine_thresholds. */
+export const MODE_THRESHOLDS = Object.freeze({
+  scalp: Object.freeze({ quorum_min: 0.45, min_rrr: 1.2, lean: 0.1 }),
+  intraday: Object.freeze({ quorum_min: 0.5, min_rrr: 1.5, lean: 0.15 }),
+  swing: Object.freeze({ quorum_min: 0.6, min_rrr: 2.0, lean: 0.2 })
+});
+/** Pure: the mode and its thresholds. */
+export function modeThresholds(mode) {
+  const m = String(mode ?? "intraday").trim().toLowerCase();
+  const key = Object.hasOwn(MODE_THRESHOLDS, m) ? m : "intraday";
+  return { mode: key, ...MODE_THRESHOLDS[key] };
+}
+
 const STANCES = ["BUY", "SELL", "WAIT"];
 const BIASES = ["BULLISH", "BEARISH", "NEUTRAL"];
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
@@ -415,13 +428,8 @@ export function independentWitnesses(loaded = {}) {
  * `inputs` are the strategy engine's inputs (snapshots, news, calendar, confirmations).
  */
 export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro = null, now = Date.now(), env = null }) {
-  // ---- Adaptive mode handling ------------------------------------------------
-  // Cloudflare Workers: env is threaded in; process.env does not exist here.
-  const MODE = String(env?.TRADING_MODE ?? "intraday").trim().toLowerCase();
-  // Adaptive thresholds per mode
-  const QUORUM_MIN = MODE === "scalp" ? 0.45 : MODE === "swing" ? 0.6 : 0.5;
-  const MIN_RRR = MODE === "scalp" ? 1.2 : MODE === "swing" ? 2.0 : 1.5;
-  const LEAN = MODE === "scalp" ? 0.10 : MODE === "swing" ? 0.20 : 0.15;
+  // Adaptive thresholds per trading mode (Cloudflare Workers: env is threaded in; no process.env).
+  const { mode: MODE, quorum_min: QUORUM_MIN, min_rrr: MIN_RRR, lean: LEAN } = modeThresholds(env?.TRADING_MODE);
 
   const side = stanceOf(dir);
   const card = (k) => (cards || []).find((c) => c.key === k);
@@ -454,7 +462,7 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
   const best = plan ? Math.max(plan.rrr?.tp1 ?? 0, plan.rrr?.tp2 ?? 0) : 0;
   add("reward", Boolean(plan) && best >= MIN_RRR, plan ? `${best}R to the best target (at least ${MIN_RRR}R needed)` : "no plan");
   const cautions = [...risk.cautions, ...contextCautions(dir, inputs.market ?? null)];
-  return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions };
+  return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions, min_rrr: MIN_RRR };
 }
 
 /**
@@ -462,9 +470,11 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
  * when price is at the level (else a limit at the planned pullback), and the chosen target only when
  * it pays at least MIN_RRR (else the other one). Null when no target pays enough.
  */
-export function tradeFor(side, plan, { entryType = "limit", target = "tp1" } = {}) {
+export function tradeFor(side, plan, { entryType = "limit", target = "tp1", minRrr = MIN_RRR } = {}) {
   if (!plan || !(side === "BUY" || side === "SELL")) return null;
-  const pays = (t) => isNum(plan[t]) && (plan.rrr?.[t] ?? 0) >= MIN_RRR;
+  // The trading mode's reward threshold (audit 2026-11-11: scalp passed its 1.2R guardrail, then
+  // tradeFor still asked 1.5R and turned the trade into WAIT).
+  const pays = (t) => isNum(plan[t]) && (plan.rrr?.[t] ?? 0) >= minRrr;
   // Quick Win Priority: Default target is "tp1" at the nearest key level. If the chosen target doesn't pay 1.5R, alternate.
   const t = pays(target) ? target : pays(target === "tp1" ? "tp2" : "tp1") ? (target === "tp1" ? "tp2" : "tp1") : null;
   if (!t) return null;
@@ -578,8 +588,9 @@ export function decide({ answer = null, guards, strategy = null, quorum }) {
     if (!g.allowed) overruled = { by: "guardrail", wanted: stance, failed: g.checks.filter((c) => !c.pass).map((c) => ({ check: c.id, detail: c.detail })) };
     else if (confidence < MIN_CONFIDENCE) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "confidence", detail: `confidence ${Math.round(confidence * 100)}% is below ${Math.round(MIN_CONFIDENCE * 100)}%` }] };
     else {
-      trade = tradeFor(stance, g.plan, { entryType, target });
-      if (!trade) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "reward", detail: `no target pays ${MIN_RRR}R` }] };
+      const minRrr = isNum(g.min_rrr) ? g.min_rrr : MIN_RRR;
+      trade = tradeFor(stance, g.plan, { entryType, target, minRrr });
+      if (!trade) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "reward", detail: `no target pays ${minRrr}R` }] };
     }
     if (overruled) stance = "WAIT";
   }
@@ -720,9 +731,7 @@ export function assess(loaded, { now = Date.now(), env = null } = {}) {
 /** Pure: the whole decision record from the loaded inputs, their assessment and the council's result (or null). */
 export function buildDecisionRecord({ key, barClose, loaded, assessment = null, council = null, previous = null, now = Date.now(), decidedAt = new Date(now).toISOString(), env = null }) {
   const { inputs = {}, strategy = null } = loaded || {};
-  const MODE = String(env?.TRADING_MODE ?? "intraday").trim().toLowerCase();
-  const MODE_QUORUM_MIN = MODE === "scalp" ? 0.45 : MODE === "swing" ? 0.6 : 0.5;
-  const MODE_MIN_RRR = MODE === "scalp" ? 1.2 : MODE === "swing" ? 2.0 : 1.5;
+  const { mode: MODE, quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR } = modeThresholds(env?.TRADING_MODE);
   const { cards, quorum, guards, market } = assessment ?? assess(loaded, { now, env });
   const answer = council?.answer ?? null;
   const d = decide({ answer, guards, strategy, quorum });

@@ -16,6 +16,11 @@
   "ai": {
     "binding": "AI"
   },
+  // The deployed version id (owner 2026-11-11): the Knowledge Council's Nexus and Omega facts carry it,
+  // so a doctrine difference counts only when measured twice from the same version.
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
   "d1_databases": [
     {
       "binding": "DB",

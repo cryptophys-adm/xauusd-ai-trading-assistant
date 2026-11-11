@@ -12,3 +12,4 @@ export function positionFrom(p: unknown): Record<string, any> | null;
 export function readControl(env: unknown): Promise<{ mode: string; reason: string; actor: string; at: string | null }>;
 export const HEARTBEAT_FIELD_NAMES: readonly string[];
 export function eaSignalFromDecision(input: Record<string, any>): Record<string, any>;
+export function blackoutWindow(env: unknown): { beforeMs: number; afterMs: number };

@@ -25,3 +25,4 @@ export function planIntents(input?: {
   engineEnabled?: boolean;
   recentIntentIds?: string[];
 }): { intents: Record<string, any>[]; notes: { code: string }[] };
+export const ROLLOVER_QUARANTINE_UTC: string;
