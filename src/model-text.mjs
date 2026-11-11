@@ -67,13 +67,28 @@ export const MODELS = Object.freeze({
   GPT_OSS_20B: "@cf/openai/gpt-oss-20b"
 });
 
+/**
+ * Workers AI retires these models on 2026-11-20 (changelog 2026-11-05; HTTP 410, error 5028).
+ * No configured or default model may be one of them (test/model-text.test.mjs checks both
+ * wrangler configs). Owner 2026-11-11: "ganti juga semua model yang berpotensi dihentikan".
+ */
+export const RETIRED_MODELS = Object.freeze([
+  "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b", "@cf/nvidia/nemotron-3-120b-a12b",
+  "@cf/deepseek-ai/deepseek-v4-pro-0813", "@cf/deepseek-ai/deepseek-v4-flash-0731", "@cf/qwen/qwq-32b",
+  "@cf/qwen/qwen3-30b-a3b-fp8", "@cf/moonshotai/kimi-k2.6", "@cf/moonshotai/kimi-k2.7-code",
+  "@cf/zai-org/glm-5.2", "@cf/zai-org/glm-5.3-flash", "@cf/meta-llama/llama-2-7b-chat-hf-lora",
+  "@cf/google/gemma-2b-it-lora", "@cf/google/gemma-7b-it-lora", "@cf/meta/llama-3.1-8b-instruct-fp8",
+  "@cf/meta/llama-3.2-1b-instruct", "@cf/meta/llama-3.2-3b-instruct", "@cf/myshell-ai/melotts",
+  "@cf/stabilityai/stable-diffusion-xl-base-1.0", "@cf/runwayml/stable-diffusion-v1-5-inpainting",
+  "@cf/bytedance/stable-diffusion-xl-lightning", "@cf/lykon/dreamshaper-8-lcm", "@cf/openai/whisper-tiny-en",
+  "@cf/llava-hf/llava-1.5-7b-hf", "@cf/google/embeddinggemma-300m"
+]);
+
 export function modelFamily(model) {
   const m = String(model ?? "").toLowerCase();
   if (m.includes("gpt-oss")) return "gpt-oss";
   if (m.includes("gemma-4")) return "gemma-4";
-  if (m.includes("glm-5")) return "glm-5";
   if (m.includes("glm-4")) return "glm-4";
-  if (m.includes("nemotron")) return "nemotron";
   return "chat";
 }
 
@@ -88,9 +103,8 @@ const GPT_OSS_EFFORT = { low: "low", medium: "medium", high: "high", max: "high"
  *             without the schema, then the Responses form ({ input, reasoning: { effort } }).
  *   gemma-4   thinking off (chat_template_kwargs.enable_thinking false) with a JSON schema, then
  *             without it.
- *   glm-5     max_completion_tokens, reasoning_effort and a strict JSON schema (until 2026-11-20).
  *   glm-4     the plain chat form; a reasoning model without reasoning_effort, so twice the budget.
- *   nemotron  the plain chat form (until 2026-11-20).
+ * The glm-5 and nemotron forms were removed with those models (retired 2026-11-20, RETIRED_MODELS).
  */
 export function modelRequests(model, { messages, maxTokens, effort = "low", schemaName = null, schema = null, temperature = 0.1 }) {
   const rf = schema ? { response_format: { type: "json_schema", json_schema: { name: schemaName || "answer", strict: true, schema } } } : {};
@@ -104,9 +118,7 @@ export function modelRequests(model, { messages, maxTokens, effort = "low", sche
       const chat = { messages, max_tokens: maxTokens, temperature, chat_template_kwargs: { enable_thinking: false } };
       return schema ? [{ ...chat, ...rf }, chat] : [chat];
     }
-    case "glm-5": return [{ messages, max_completion_tokens: maxTokens, temperature, reasoning_effort: effort === "medium" ? "low" : effort, ...rf }];
     case "glm-4": return [{ messages, max_tokens: maxTokens * 2, temperature }];
-    case "nemotron": return [{ messages, max_tokens: maxTokens, temperature }];
     default: {
       const chat = { messages, max_tokens: maxTokens, temperature };
       return schema ? [{ ...chat, ...rf }, chat] : [chat];
