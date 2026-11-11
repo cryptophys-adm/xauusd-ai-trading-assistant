@@ -85,7 +85,9 @@ test("HUD changes matter only into or out of BUY/SELL", () => {
   assert.equal(hudChangeMatters("SELL", "WAIT"), true);
   assert.equal(hudChangeMatters("WAIT", "HOLD"), false);
   assert.equal(hudChangeMatters("WAIT", "WAIT"), false);
-  assert.equal(Object.keys(HUD_PLATFORM_IDS).length, 13);
+  // 13 until 2026-11-11; R37 Funnel, GABFX Price Action and Playbook Execution were dismantled (platform 0047).
+  assert.equal(Object.keys(HUD_PLATFORM_IDS).length, 10);
+  for (const gone of ["r37_funnel", "gabfx_price_action", "playbook_execution", "grid_bot_protocol"]) assert.equal(HUD_PLATFORM_IDS[gone], undefined, gone);
   for (const id of Object.values(HUD_PLATFORM_IDS)) assert.match(id, /^hud-[a-z0-9-]+$/);
 });
 

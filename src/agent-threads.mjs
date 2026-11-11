@@ -13,7 +13,7 @@ import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, NATURAL_LANGUAGE_CORRECTION, describeDegradedEvidence, calibrationTalk, CALIBRATION_CORRECTION } from "./natural-language.mjs";
 import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import { verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
-import { HUD_IDS, HUD_NAMES, calibrationCounts } from "./hud-reading.mjs";
+import { HUD_NAMES, calibrationCounts, hudAgentsIn } from "./hud-reading.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { memoEligible, memoKind, inputHash, memoLookup, memoStore, roomMemoEnabled } from "./room-memo.mjs";
@@ -1020,7 +1020,7 @@ export async function runHudAgents(env, task, { clock = () => Date.now(), loadRe
     try { return (await callsInLastHour(db, clock(), "hud%")) < (Number.isFinite(maxPerHour) ? maxPerHour : 0); } catch { return false; }
   };
   const transcript = [];
-  for (const id of HUD_IDS) {
+  for (const id of hudAgentsIn("H1")) {
     const reading = hud.readings[id];
     if (!reading?.available) continue;
     const step = `hud:${id}`;

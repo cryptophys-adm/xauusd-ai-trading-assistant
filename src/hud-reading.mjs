@@ -26,6 +26,13 @@ export const HUD_READING_VERSION = "cryptophys.hud-reading.v2";
  */
 export const HUD_NAMES = Object.freeze(Object.fromEntries(HUD_MANIFESTS.map((x) => [x.id, x.name])));
 export const HUD_IDS = Object.freeze(Object.keys(HUD_NAMES));
+/**
+ * The HUD agents that speak in a room ("M15", "H1", "H4", "D1"), from their manifests' rooms. A dismantled
+ * agent (owner 2026-11-11) speaks in none; its HUD section stays in the snapshot.
+ */
+export function hudAgentsIn(room) {
+  return HUD_MANIFESTS.filter((x) => x.rooms.includes(room)).map((x) => x.id);
+}
 
 const R38_GATE = {
   NO_ACTIVE_SETUP: "no buy or sell setup is active",

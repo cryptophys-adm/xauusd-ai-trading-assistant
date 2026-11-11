@@ -173,3 +173,18 @@ test("R8. memo keys: the War Room's daily thread is one family; the hash covers 
   assert.notEqual(a, await inputHash(["m", "s", messages("y")]));
   assert.notEqual(a, await inputHash(["other-model", "s", messages("x")]), "a model change is a new request");
 });
+
+test("R9. dismantled HUD agents (owner 2026-11-11: \"dismantle sekarang\") speak in no room; their HUD sections stay computed", async () => {
+  const { hudAgentsIn, HUD_IDS } = await import("../src/hud-reading.mjs");
+  const { MANIFESTS } = await import("../src/indicator-manifests.mjs");
+  const gone = ["r37_funnel", "gabfx_price_action", "playbook_execution", "grid_bot_protocol"];
+  for (const room of ["M15", "H1", "H4", "D1"]) {
+    const ids = hudAgentsIn(room);
+    for (const id of gone) assert.ok(!ids.includes(id), `${id} is not in the ${room} roster`);
+    assert.ok(ids.includes("prophet") && ids.includes("fabio_amt"), `${room} keeps the other HUD agents`);
+  }
+  for (const id of gone) {
+    assert.ok(HUD_IDS.includes(id), `${id} stays a section of the HUD snapshot`);
+    assert.equal(MANIFESTS.find((m) => m.id === id).dismantled.on, "2026-11-11");
+  }
+});

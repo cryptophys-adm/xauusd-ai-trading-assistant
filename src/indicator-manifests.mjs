@@ -16,6 +16,8 @@
 //            (a candidate alert in pinescript/candidates), builtin (a TradingView built-in),
 //            none (no comparator: read as not yet calibrated).
 // lifecycle: computed false is "not_computed"; otherwise the registry decides (indicator-registry).
+// dismantled: the agent no longer speaks in any room (rooms: []); its HUD section is still computed
+//            in the snapshot (the R37 funnel stays a confirmation source of the 1H/4H/D1 rooms).
 
 export const MANIFEST_VERSION = "cryptophys.indicator-manifest.v1";
 
@@ -34,7 +36,7 @@ export const MANIFESTS = Object.freeze([
   m({ id: "mizan", kind: "library", name: "CryptophysMizanLib", family: "library", source: { indicator: "CryptophysMizanLib", pine: MIZAN }, reference: "pine_ssot", identity: "mizan" }),
 
   // HUD agents: one per Pine HUD section (owner decision 2026-11-05: agent name = HUD name).
-  m({ id: "r37_funnel", kind: "hud", name: "R37 Funnel", family: "structure", source: { indicator: "Prophet R38", pine: R38, section: "funnel_table" }, reference: "pine_ssot", hud_identity: "prophet_hud", rooms: ALL_ROOMS }),
+  m({ id: "r37_funnel", kind: "hud", name: "R37 Funnel", family: "structure", source: { indicator: "Prophet R38", pine: R38, section: "funnel_table" }, reference: "pine_ssot", hud_identity: "prophet_hud", dismantled: { on: "2026-11-11", why: "owner: dismantle sekarang; 15m War Room 2026-11-08..11: NEUTRAL in 87-97 % of about 190 openings, never a BUY or SELL" }, rooms: [] }),
   m({ id: "prophet", kind: "hud", name: "Prophet", family: "structure", source: { indicator: "Prophet R38", pine: R38, section: "hud" }, reference: "pine_ssot", hud_identity: "prophet_hud", rooms: ALL_ROOMS }),
   m({ id: "trade_management", kind: "hud", name: "Trade Management", family: "execution", source: { indicator: "Prophet R38", pine: R38, section: "trade_management_hud" }, reference: "pine_ssot", hud_identity: "gmi_hud", rooms: ALL_ROOMS }),
   m({ id: "interstellar_eyes", kind: "hud", name: "The Interstellar Eyes", family: "levels", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_main col 0" }, rooms: ALL_ROOMS }),
@@ -44,11 +46,11 @@ export const MANIFESTS = Object.freeze([
   m({ id: "aegis_footprint", kind: "hud", name: "Aegis Footprint Matrix", family: "order flow", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_aegis lower" }, reference: "pine_ssot", hud_identity: "prophet_hud", rooms: ALL_ROOMS }),
   m({ id: "tactical_muscles", kind: "hud", name: "Tactical Muscles", family: "momentum", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 1" }, rooms: ALL_ROOMS }),
   m({ id: "macro_aether", kind: "hud", name: "Macro & Aether Sensors", family: "macro", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 2" }, rooms: ALL_ROOMS }),
-  m({ id: "gabfx_price_action", kind: "hud", name: "GABFX Price Action", family: "price action", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 3" }, rooms: ALL_ROOMS }),
-  m({ id: "playbook_execution", kind: "hud", name: "Playbook Execution", family: "execution", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 4" }, rooms: ALL_ROOMS }),
+  m({ id: "gabfx_price_action", kind: "hud", name: "GABFX Price Action", family: "price action", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 3" }, dismantled: { on: "2026-11-11", why: "owner: dismantle sekarang; 15m War Room 2026-11-08..11: NEUTRAL in 87-97 % of about 190 openings, never a BUY or SELL" }, rooms: [] }),
+  m({ id: "playbook_execution", kind: "hud", name: "Playbook Execution", family: "execution", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 4" }, dismantled: { on: "2026-11-11", why: "owner: dismantle sekarang; 15m War Room 2026-11-08..11: NEUTRAL in 87-97 % of about 190 openings, never a BUY or SELL" }, rooms: [] }),
   m({ id: "decision_matrix", kind: "hud", name: "Decision Matrix", family: "trend", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 5" }, reference: "pine_ssot", hud_identity: "gmi_hud", rooms: ALL_ROOMS }),
   // Comparator (2026-11-07): the GMI HUD candidate alert (gmi_v12_70_hud) through the gmi_hud identity.
-  m({ id: "grid_bot_protocol", kind: "hud", name: "Grid Bot Protocol", family: "execution", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 6", candidate: GMI_HUD_CANDIDATE }, reference: "pine_candidate", hud_identity: "gmi_hud", rooms: ALL_ROOMS }),
+  m({ id: "grid_bot_protocol", kind: "hud", name: "Grid Bot Protocol", family: "execution", source: { indicator: "GMI v12.70", pine: GMI, section: "hud_tdm section 6", candidate: GMI_HUD_CANDIDATE }, reference: "pine_candidate", hud_identity: "gmi_hud", dismantled: { on: "2026-11-11", why: "owner: dismantle sekarang; 15m War Room 2026-11-08..11: NEUTRAL in 87-97 % of about 190 openings, never a BUY or SELL" }, rooms: [] }),
 
   // New indicator agents (P6, owner decision 4, 2026-11-07: Supertrend first, then Order Block).
   // No comparator alert yet: their readings are formulas of verified bars or engine internals.
