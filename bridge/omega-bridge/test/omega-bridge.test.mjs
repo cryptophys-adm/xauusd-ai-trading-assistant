@@ -482,7 +482,7 @@ test("daemon: applies new connection once, restarts terminal once, skips same ve
       cmd: "systemctl",
       args: ["restart", "mt5-terminal.service"],
     });
-    assert.equal(syncBodies[0].bridge_version, "1.0.0");
+    assert.equal(syncBodies[0].bridge_version, "1.1.0");
     assert.equal(syncBodies[0].kid, daemon.keys.kid);
     assert.equal(syncBodies[0].public_key, daemon.keys.publicKeyBase64);
     assert.equal(syncBodies[0].results.length, 1);
@@ -622,4 +622,22 @@ test("Corpus Oracle: readCorpus returns the closed M1 bars after the cursor; the
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+test("MT5 fallback stage 2: corpus_macro.json per base after its cursor; calendar.json only when newer", async () => {
+  const { readCorpusMacro, readCalendar } = await import("../src/files.mjs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omega-macro-"));
+  assert.equal(readCorpusMacro(dir), null, "no file");
+  const bars = (n) => Array.from({ length: n }, (_, i) => [1_000_000 * 60_000 + i * 60_000, 1, 2, 0.5, 1.5, 3, 1]);
+  fs.writeFileSync(path.join(dir, "corpus_macro.json"), JSON.stringify({ server: "Monex-Demo", series: [
+    { base: "XAGUSD", symbol: "XAGUSD.m", bars: bars(5) }, { base: "eurusd", symbol: "EURUSD.m", bars: bars(3) }, { base: "BTCUSD", symbol: "BTCUSD.m", bars: bars(3) }
+  ] }));
+  const all = readCorpusMacro(dir);
+  assert.deepEqual(all.series.map((s) => [s.base, s.bars.length]), [["XAGUSD", 5], ["EURUSD", 3]], "known bases only, upper case");
+  const after = readCorpusMacro(dir, { afterMsByBase: { XAGUSD: bars(5)[3][0], EURUSD: bars(3)[2][0] } });
+  assert.deepEqual(after.series.map((s) => [s.base, s.bars.length]), [["XAGUSD", 1]], "only bars after each base's cursor");
+  fs.writeFileSync(path.join(dir, "calendar.json"), JSON.stringify({ server: "Monex-Demo", written_ms: 500, events: [{ value_id: "9", title: "Nonfarm Payrolls", currency: "USD", time_ms: 1, importance: 3, actual: 119, forecast: null }, { title: "" }] }));
+  const cal = readCalendar(dir);
+  assert.deepEqual([cal.written_ms, cal.events.length, cal.events[0].actual, cal.events[0].forecast], [500, 1, 119, null]);
+  assert.equal(readCalendar(dir, { afterWrittenMs: 500 }), null, "the server already took this file");
 });

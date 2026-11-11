@@ -227,7 +227,7 @@ import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition } from "./omega-broker.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
-import { corpusStatus, readCorpusBars } from "./corpus-oracle.mjs";
+import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar } from "./corpus-oracle.mjs";
 import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
@@ -1985,7 +1985,9 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
    * The MT5 fallback (docs/RFC_MT5_FALLBACK.md): the broker's closed M1 bars from the Corpus Oracle,
    * for the pull adapter while the TradingView gateway is down. Read-only.
    */
-  async corpusBars(request: { since_ms?: number; limit?: number } = {}): Promise<Record<string, unknown>> {
+  async corpusBars(request: { since_ms?: number; limit?: number; base?: string } = {}): Promise<Record<string, unknown>> {
+    // With a base (stage 2: XAGUSD, USOIL, the DXY pairs): that macro symbol's bars; else the traded pair's.
+    if (typeof request?.base === "string" && request.base) return readMacroBars(this.env, { base: request.base, sinceMs: Number(request?.since_ms) || 0, limit: Number(request?.limit) || undefined });
     return readCorpusBars(this.env, { sinceMs: Number(request?.since_ms) || 0, limit: Number(request?.limit) || undefined });
   }
 }
@@ -2045,7 +2047,7 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   async bridgeKey(): Promise<JsonObject | null> {
     return bridgeKey(this.env) as Promise<JsonObject | null>;
   }
-  async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown }): Promise<JsonObject> {
+  async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown; corpusMacro?: unknown; calendar?: unknown }): Promise<JsonObject> {
     return bridgeSync(this.env, input ?? {}) as Promise<JsonObject>;
   }
   /** The MT5 fallback switch and its state (owner 2026-11-11), for the War Room through Omega. */
@@ -2998,7 +3000,7 @@ export default {
           const calendar = await refreshCalendar(env);
           if (calendar.status !== "fresh") console.log("econ_calendar", JSON.stringify(calendar));
           // The released values, surprises and gold's reactions (src/econ-releases.mjs, owner 2026-11-10).
-          const releases = await refreshEconReleases(env, { gatedEvents: await gatedEvents(env) });
+          const releases = await refreshEconReleases(env, { gatedEvents: await gatedEvents(env), readMt5: readMt5Calendar });
           if (releases.live || releases.backfill || releases.reactions || releases.status !== "ok") console.log("econ_releases", JSON.stringify(releases));
           // Aether A7: score the shadow note answers and their controls; drop those older than 60 days.
           const shadowScored = await scoreShadowKnowledge(env);

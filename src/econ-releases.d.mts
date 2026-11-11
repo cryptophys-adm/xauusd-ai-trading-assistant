@@ -12,5 +12,6 @@ export function surpriseOf(release: Record<string, any>, past?: number[]): Recor
 export function reactionOf(release: Record<string, any>, bars: Record<string, number[]>): Record<string, any> | null;
 export function horizonStats(rows: Record<string, any>[]): Record<string, any>;
 export function upsertReleases(db: unknown, events: Record<string, any>[], options?: { now?: number }): Promise<number>;
-export function refreshEconReleases(env: any, options?: { now?: number; gatedEvents?: any[] }): Promise<Record<string, any>>;
+export function refreshEconReleases(env: any, options?: { now?: number; gatedEvents?: any[]; readMt5?: ((env: any, o: { fromMs: number; toMs: number }) => Promise<any[]>) | null }): Promise<Record<string, any>>;
 export function calendarIntel(env: any, options?: { now?: number }): Promise<Record<string, any>>;
+export function applyMt5Actuals(db: any, events: any[], options?: { now?: number }): Promise<number>;

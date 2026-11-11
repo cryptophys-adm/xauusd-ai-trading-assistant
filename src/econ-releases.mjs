@@ -183,6 +183,26 @@ export async function upsertReleases(db, events, { now = Date.now() } = {}) {
   return n;
 }
 
+/**
+ * The MT5 fallback, stage 2 (2026-11-11): released values from the MQL5 calendar (src/corpus-oracle.mjs
+ * readMt5Calendar) while TradingView's calendar is down. MQL5 names the events its own way ("Nonfarm
+ * Payrolls" for "Non Farm Payrolls"), so a value goes to the row of the same minute and kind when one
+ * waits for its actual (the series' history stays one), else it is stored under its own title.
+ */
+export async function applyMt5Actuals(db, events, { now = Date.now() } = {}) {
+  await ensureEconSchema(db);
+  let n = 0;
+  for (const e of events || []) {
+    if (!isNum(e?.actual) || !e?.title || !Number.isFinite(Date.parse(e.time))) continue;
+    const t = Date.parse(e.time);
+    const rows = ((await db.prepare("SELECT title FROM econ_releases WHERE time >= ? AND time <= ? AND actual IS NULL").bind(new Date(t - 60_000).toISOString(), new Date(t + 60_000).toISOString()).all()).results || []);
+    const kind = ruleOf(e.title).kind;
+    const match = rows.find((r) => kind !== "other" && ruleOf(r.title).kind === kind) || (rows.length === 1 ? rows[0] : null);
+    n += await upsertReleases(db, [{ ...e, title: match ? match.title : e.title, time: new Date(t).toISOString() }], { now });
+  }
+  return n;
+}
+
 const dayRange = (ms) => { const d = new Date(ms).toISOString().slice(0, 10); return { date_from: `${d}T00:00:00Z`, date_to: `${d}T23:59:59Z` }; };
 
 async function callCalendar(env, request) {
@@ -228,7 +248,7 @@ async function goldHistory(env, now) {
  * sweep of each hour, one 14-day window of history back to BACKFILL_DAYS; (3) the reactions of releases
  * whose 24 hours have passed, from gold's 1H history.
  */
-export async function refreshEconReleases(env, { now = Date.now(), gatedEvents = [] } = {}) {
+export async function refreshEconReleases(env, { now = Date.now(), gatedEvents = [], readMt5 = null } = {}) {
   const db = env?.DB, kv = env?.SIGNAL_CACHE;
   if (!db) return { status: "unavailable" };
   const out = { status: "ok", live: null, backfill: null, reactions: 0 };
@@ -244,7 +264,13 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
       if (!Number(have?.n) && !(Number.isFinite(last) && now - last < 10 * 60_000)) {
         await kv?.put?.(LIVE_MARKER(day), new Date(now).toISOString(), { expirationTtl: 2 * DAY });
         const r = await callCalendar(env, dayRange(t));
-        out.live = r.ok ? { day, events: await upsertReleases(db, r.events, { now }) } : { day, error: r.error };
+        if (r.ok) out.live = { day, events: await upsertReleases(db, r.events, { now }) };
+        else {
+          // TradingView's calendar is down: the broker terminal's (MQL5) released values, when the bridge sent them.
+          const range = dayRange(t);
+          const mt5 = typeof readMt5 === "function" ? await readMt5(env, { fromMs: Date.parse(range.date_from), toMs: Date.parse(range.date_to) }) : [];
+          out.live = mt5.length ? { day, source: "mt5", tradingview_error: r.error, events: await applyMt5Actuals(db, mt5, { now }) } : { day, error: r.error };
+        }
       }
     }
     // Rows stored before a rule learned their title (production 2026-11-10: "Non Farm Payrolls" read as

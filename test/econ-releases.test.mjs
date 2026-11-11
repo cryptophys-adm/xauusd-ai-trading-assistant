@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import {
   surpriseOf, reactionOf, horizonStats, upsertReleases, refreshEconReleases, calendarIntel, releaseKey, seriesOf,
-  resetEconSchemaCacheForTests, MIN_HORIZON_SAMPLES
+  resetEconSchemaCacheForTests, MIN_HORIZON_SAMPLES, applyMt5Actuals
 } from "../src/econ-releases.mjs";
 import { calendarOutlook, matchRelease, projectEvent } from "../src/calendar-agent.mjs";
 import { calendarBiasRule, dueSessions } from "../src/macro-room.mjs";
@@ -154,4 +154,31 @@ test("production 2026-11-10: TradingView's titles: Non Farm Payrolls is a jobs r
   env.DB.raw.prepare("INSERT INTO econ_releases (release_key, series, kind, title, currency, time, actual, forecast, surprise, gold_direction, fetched_at, updated_at) VALUES ('k', 's', 'other', 'Non Farm Payrolls', 'USD', ?, 165000, 65000, 100000, -1, 'x', 'x')").run("2026-11-06T13:30:00.000Z");
   await refreshEconReleases(env, { now: Date.parse("2026-11-10T18:40:00Z"), gatedEvents: [] });
   assert.equal(env.DB.raw.prepare("SELECT kind FROM econ_releases").get().kind, "jobs");
+});
+
+test("MT5 fallback stage 2: while TradingView's calendar is down, the broker terminal's released value fills the waiting row of the same minute and kind", async () => {
+  resetEconSchemaCacheForTests();
+  const NFP = "2026-11-06T13:30:00.000Z";
+  const db = fakeD1();
+  // TradingView's row, released value not yet in (its own title).
+  await upsertReleases(db, [{ title: "Non Farm Payrolls", time: NFP, currency: "USD", importance: 1, forecast: 50, previous: 22 }]);
+  const n = await applyMt5Actuals(db, [{ title: "Nonfarm Payrolls", time: NFP, currency: "USD", actual: 119, forecast: 50, previous: 22, source: "mt5" }, { title: "No value yet", time: NFP, currency: "USD", actual: null }]);
+  assert.equal(n, 1, "only an event with a released value");
+  const rows = db.raw.prepare("SELECT title, actual, forecast FROM econ_releases").all();
+  assert.deepEqual(rows.map((r) => [r.title, r.actual, r.forecast]), [["Non Farm Payrolls", 119, 50]], "one row, TradingView's title, the broker's value");
+  await applyMt5Actuals(db, [{ title: "Initial Jobless Claims", time: "2026-11-06T13:31:00.000Z", currency: "USD", actual: 210, forecast: 215 }]);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM econ_releases").get().n, 2, "no waiting row of its kind: stored under its own title");
+
+  // The sweep: TradingView's calendar fails, the MT5 events of the day are used.
+  resetEconSchemaCacheForTests();
+  const now = Date.parse(NFP) + 10 * 60_000;
+  const env = { DB: fakeD1(), SIGNAL_CACHE: kv(), NEWS_INGESTION: { economicCalendar: async () => ({ status: 503, body: { error: "mcp_quota_cooldown_active" } }) } };
+  const seen = [];
+  const readMt5 = async (_env, range) => { seen.push(range); return [{ title: "Nonfarm Payrolls", time: NFP, currency: "USD", actual: 119, forecast: 50, previous: 22, source: "mt5" }]; };
+  const r = await refreshEconReleases(env, { now, gatedEvents: [{ title: "Non-Farm Employment Change", currency: "USD", impact: "High", time: NFP }], readMt5 });
+  assert.deepEqual(r.live, { day: "2026-11-06", source: "mt5", tradingview_error: "mcp_quota_cooldown_active", events: 1 });
+  assert.deepEqual(seen[0], { fromMs: Date.parse("2026-11-06T00:00:00Z"), toMs: Date.parse("2026-11-06T23:59:59Z") });
+  resetEconSchemaCacheForTests();
+  const none = await refreshEconReleases({ DB: fakeD1(), SIGNAL_CACHE: kv(), NEWS_INGESTION: env.NEWS_INGESTION }, { now, gatedEvents: [{ title: "x", currency: "USD", impact: "High", time: NFP }], readMt5: async () => [] });
+  assert.deepEqual(none.live, { day: "2026-11-06", error: "mcp_quota_cooldown_active" }, "nothing from the broker: the error stands");
 });

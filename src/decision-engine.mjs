@@ -78,7 +78,7 @@ export const COUNCIL_DEADLINE_MS = 90_000;
 export const SWEEP_AFTER_MS = 4 * 60_000;
 export const DECISION_LATEST_KEY = "decision-engine:latest";
 /** The caution of a decision made on the MT5 fallback feed (docs/RFC_MT5_FALLBACK.md). */
-export const MT5_FALLBACK_CAUTION = "Market data comes from the broker's MT5 bars because TradingView is down; news and the macro series are stale.";
+export const MT5_FALLBACK_CAUTION = "Market data comes from the broker's MT5 bars because TradingView is down; the dollar index is computed from the broker's currency pairs, and news, the 10-year yield and USDT dominance are stale.";
 export const TRADING_MODE_KEY = "trading:mode";
 /** Runtime trading mode: env first, then KV (UI selector), default intraday. */
 export async function tradingMode(env) {

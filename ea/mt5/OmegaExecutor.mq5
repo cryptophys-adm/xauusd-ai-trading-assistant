@@ -34,7 +34,7 @@
 //|     manually on a chart profile when OMEGA_TAKE_STARTUP=false.   |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.00"
+#property version   "1.10"
 
 #include <Trade/Trade.mqh>
 
@@ -46,6 +46,14 @@ input int  MaxIntentsAgeSeconds = 30;  // ignore an intents.txt older than this 
 // Corpus Oracle (owner 2026-11-11): the broker's closed M1 bars of the traded symbol for the local lane.
 input bool CorpusOracleEnabled = true; // write omega/corpus.json once per closed M1 bar
 input int  CorpusBars          = 120;  // closed M1 bars kept in corpus.json (10 to 240)
+// MT5 fallback, stage 2 (owner 2026-11-11: the AI Worker's input as with TradingView): the broker's M1 bars
+// of the macro symbols (silver, oil, the six pairs of the dollar index) and the USD economic calendar.
+// Each entry is a base name; "|" lists alternatives (the first that exists at this broker is used, with the
+// gold symbol's prefix and suffix, e.g. ".m", tried first). The first name is the base the server knows.
+input bool   CorpusMacroEnabled = true;  // write omega/corpus_macro.json once per closed M1 bar
+input string CorpusMacroSymbols = "XAGUSD,USOIL|XTIUSD|WTI|USOUSD|WTIUSD|CL-OIL,EURUSD,USDJPY,GBPUSD,USDCAD,USDSEK,USDCHF";
+input int    CorpusMacroBars    = 240;   // closed M1 bars per macro symbol (10 to 240)
+input bool   CalendarEnabled    = true;  // write omega/calendar.json (USD, moderate and high importance) every 5 minutes
 
 //--- Profit Protection & Local Risk Management (Owner Approved)
 input bool   AutoBreakEvenEnabled   = true;  // Auto SL+ (Break-Even) enabled
@@ -69,6 +77,10 @@ const string PROCESSED_PATH  = "omega/processed.txt";
 const string RESULTS_PATH    = "omega/results.txt";
 const string CORPUS_TMP_PATH  = "omega/corpus.tmp";
 const string CORPUS_JSON_PATH = "omega/corpus.json";
+const string CORPUS_MACRO_TMP_PATH  = "omega/corpus_macro.tmp";
+const string CORPUS_MACRO_JSON_PATH = "omega/corpus_macro.json";
+const string CALENDAR_TMP_PATH  = "omega/calendar.tmp";
+const string CALENDAR_JSON_PATH = "omega/calendar.json";
 
 CTrade   trade;
 string   g_processedIds[];
@@ -79,6 +91,8 @@ double   g_lastBid = 0.0;
 double   g_lastAsk = 0.0;
 long     g_lastWriteMs = 0;
 datetime g_lastCorpusBar = 0;
+datetime g_lastMacroBar = 0;
+datetime g_lastCalendarAt = 0;
 int      g_atrHandle = INVALID_HANDLE;
 
 //+------------------------------------------------------------------+
@@ -637,6 +651,141 @@ void WriteCorpusJson()
   }
 
 //+------------------------------------------------------------------+
+//| MT5 fallback, stage 2: macro symbols and the economic calendar   |
+//+------------------------------------------------------------------+
+// The broker's name for a base: the gold symbol's prefix and suffix around it first (XAUUSD.m -> EURUSD.m),
+// then the base itself. Empty when the broker has none of the alternatives.
+string ResolveMacroSymbol(const string alternatives)
+  {
+   string gold = ResolveGoldSymbol();
+   string upGold = gold;
+   StringToUpper(upGold);
+   int p = StringFind(upGold, "XAUUSD");
+   string prefix = (p > 0) ? StringSubstr(gold, 0, p) : "";
+   string suffix = (p >= 0) ? StringSubstr(gold, p + 6) : "";
+   string alts[];
+   int n = StringSplit(alternatives, '|', alts);
+   for(int i = 0; i < n; i++)
+     {
+      string name = alts[i];
+      StringTrimLeft(name);
+      StringTrimRight(name);
+      if(name == "") continue;
+      string candidates[2];
+      candidates[0] = prefix + name + suffix;
+      candidates[1] = name;
+      for(int k = 0; k < 2; k++)
+        {
+         if(k == 1 && candidates[1] == candidates[0]) continue;
+         if((bool)SymbolInfoInteger(candidates[k], SYMBOL_EXIST))
+           {
+            SymbolSelect(candidates[k], true);
+            return candidates[k];
+           }
+        }
+     }
+   return "";
+  }
+
+void WriteCorpusMacroJson()
+  {
+   if(!CorpusMacroEnabled) return;
+   string gold = ResolveGoldSymbol();
+   datetime lastClosed = iTime(gold, PERIOD_M1, 1);
+   if(lastClosed == 0 || lastClosed == g_lastMacroBar) return;
+   int n = (int)MathMax(10, MathMin(240, CorpusMacroBars));
+   int offset = ServerUtcOffsetSeconds();
+   string entries[];
+   int count = StringSplit(CorpusMacroSymbols, ',', entries);
+   string series = "";
+   int written = 0;
+   for(int e = 0; e < count; e++)
+     {
+      string alternatives = entries[e];
+      StringTrimLeft(alternatives);
+      StringTrimRight(alternatives);
+      if(alternatives == "") continue;
+      string parts[];
+      StringSplit(alternatives, '|', parts);
+      string base = parts[0];
+      StringToUpper(base);
+      string sym = ResolveMacroSymbol(alternatives);
+      if(sym == "") continue;
+      MqlRates rates[];
+      ArraySetAsSeries(rates, false);
+      int got = CopyRates(sym, PERIOD_M1, 1, n, rates); // closed bars only, oldest first
+      if(got <= 0) continue;
+      int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+      string bars = "";
+      for(int i = 0; i < got; i++)
+        {
+         long tMs = ((long)rates[i].time - offset) * 1000;
+         if(i > 0) bars += ",";
+         bars += StringFormat("[%I64d,%s,%s,%s,%s,%I64d,%d]", tMs,
+                              DoubleToString(rates[i].open, digits), DoubleToString(rates[i].high, digits),
+                              DoubleToString(rates[i].low, digits), DoubleToString(rates[i].close, digits),
+                              rates[i].tick_volume, rates[i].spread);
+        }
+      if(written > 0) series += ",";
+      series += StringFormat("{\"base\":\"%s\",\"symbol\":\"%s\",\"digits\":%d,\"bars\":[%s]}", EscapeJson(base), EscapeJson(sym), digits, bars);
+      written++;
+     }
+   if(written == 0) { g_lastMacroBar = lastClosed; return; }
+   string json = StringFormat("{\"server\":\"%s\",\"timeframe\":\"M1\",\"utc_offset_s\":%d,\"written_ms\":%I64d,\"series\":[%s]}",
+                              EscapeJson(AccountInfoString(ACCOUNT_SERVER)), offset, NowUtcMs(), series);
+   int h = FileOpen(CORPUS_MACRO_TMP_PATH, FILE_WRITE | FILE_TXT | FILE_ANSI);
+   if(h == INVALID_HANDLE) return;
+   FileWriteString(h, json);
+   FileClose(h);
+   if(FileMove(CORPUS_MACRO_TMP_PATH, 0, CORPUS_MACRO_JSON_PATH, FILE_REWRITE)) g_lastMacroBar = lastClosed;
+  }
+
+string CalendarNumber(const bool has, const double value)
+  {
+   if(!has) return "null";
+   return DoubleToString(value, 6);
+  }
+
+// The terminal's USD economic calendar (MQL5 Calendar): 7 days back, 2 ahead, moderate and high
+// importance, with the released, forecast and previous values. Times are converted to UTC.
+void WriteCalendarJson()
+  {
+   if(!CalendarEnabled) return;
+   datetime nowGmt = TimeGMT();
+   if(g_lastCalendarAt != 0 && (nowGmt - g_lastCalendarAt) < 300) return;
+   g_lastCalendarAt = nowGmt;
+   int offset = ServerUtcOffsetSeconds();
+   datetime serverNow = TimeTradeServer();
+   MqlCalendarValue values[];
+   int got = CalendarValueHistory(values, serverNow - 7 * 86400, serverNow + 2 * 86400, "US", "USD");
+   if(got <= 0) return;
+   string events = "";
+   int written = 0;
+   for(int i = 0; i < got && written < 400; i++)
+     {
+      MqlCalendarEvent ev;
+      if(!CalendarEventById(values[i].event_id, ev)) continue;
+      if(ev.importance != CALENDAR_IMPORTANCE_HIGH && ev.importance != CALENDAR_IMPORTANCE_MODERATE) continue;
+      long tMs = ((long)values[i].time - offset) * 1000;
+      int importance = (ev.importance == CALENDAR_IMPORTANCE_HIGH) ? 3 : 2;
+      if(written > 0) events += ",";
+      events += StringFormat("{\"value_id\":\"%I64u\",\"title\":\"%s\",\"currency\":\"USD\",\"time_ms\":%I64d,\"importance\":%d,\"actual\":%s,\"forecast\":%s,\"previous\":%s,\"unit\":\"%d\"}",
+                             values[i].id, EscapeJson(ev.name), tMs, importance,
+                             CalendarNumber(values[i].HasActualValue(), values[i].GetActualValue()),
+                             CalendarNumber(values[i].HasForecastValue(), values[i].GetForecastValue()),
+                             CalendarNumber(values[i].HasPreviousValue(), values[i].GetPreviousValue()),
+                             (int)ev.unit);
+      written++;
+     }
+   string json = StringFormat("{\"server\":\"%s\",\"written_ms\":%I64d,\"events\":[%s]}", EscapeJson(AccountInfoString(ACCOUNT_SERVER)), NowUtcMs(), events);
+   int h = FileOpen(CALENDAR_TMP_PATH, FILE_WRITE | FILE_TXT | FILE_ANSI);
+   if(h == INVALID_HANDLE) return;
+   FileWriteString(h, json);
+   FileClose(h);
+   FileMove(CALENDAR_TMP_PATH, 0, CALENDAR_JSON_PATH, FILE_REWRITE);
+  }
+
+//+------------------------------------------------------------------+
 //| Intent execution                                                 |
 //+------------------------------------------------------------------+
 bool IsValidVolume(const double volume)
@@ -1114,6 +1263,8 @@ void OnTimer()
       g_lastStateAt = nowGmt;
      }
    WriteCorpusJson();
+   WriteCorpusMacroJson();
+   WriteCalendarJson();
    ProcessIntentsFile();
   }
 //+------------------------------------------------------------------+
