@@ -145,6 +145,27 @@ export function weightingReport(replay, { now = Date.now(), nexusAnalytics = nul
   };
 }
 
+/**
+ * Sweep step, hourly: sends the Decision Engine's witness-weighting report (src/witness-tuning.mjs,
+ * timeframe "engine") when it changed. Never throws for an Aether failure.
+ */
+export async function pushWitnessTuningReport(env, report) {
+  if (typeof env?.AETHER?.ingestWeightingReport !== "function") return { status: "disabled" };
+  if (!env.DB || !report) return { status: "unavailable" };
+  await env.DB.prepare(WEIGHTING_PUSH_SQL).run();
+  const { generated_at: _g, ...content } = report;
+  const sha = await sha256(JSON.stringify(content));
+  const prev = await env.DB.prepare("SELECT content_sha, status FROM aether_weighting_report_pushes WHERE timeframe = ?").bind(report.timeframe).first();
+  if (prev?.content_sha === sha && prev.status === "accepted") return { status: "unchanged" };
+  let res;
+  try { res = await env.AETHER.ingestWeightingReport(report); }
+  catch (e) { return { status: "transport_failed", error: String(e?.message ?? e).slice(0, 200) }; }
+  const status = res?.accepted ? "accepted" : "rejected";
+  await env.DB.prepare("INSERT INTO aether_weighting_report_pushes (timeframe, content_sha, status, detail, pushed_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(timeframe) DO UPDATE SET content_sha = excluded.content_sha, status = excluded.status, detail = excluded.detail, pushed_at = excluded.pushed_at")
+    .bind(report.timeframe, sha, status, res?.reason ? String(res.reason).slice(0, 300) : null, report.generated_at ?? new Date().toISOString()).run();
+  return { status, candidates: (report.candidates || []).length, ...(res?.reason ? { reason: String(res.reason).slice(0, 120) } : {}) };
+}
+
 /** Sweep step, hourly: sends the weighting report when it changed. Never throws for an Aether failure. */
 export async function pushWeightingReport(env, replay, { now = Date.now(), nexusAnalytics = null } = {}) {
   if (typeof env?.AETHER?.ingestWeightingReport !== "function") return { status: "disabled" };

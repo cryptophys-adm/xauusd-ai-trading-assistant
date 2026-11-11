@@ -45,7 +45,7 @@ import { callBusModel, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { naturalLanguageErrors, onlyNaturalLanguageErrors, NATURAL_LANGUAGE_CORRECTION } from "./natural-language.mjs";
 import { shouldNotifyH1 } from "./h1-telegram.mjs";
 import { fetchEffectiveDoctrine, formatDoctrineDirectives } from "./doctrine-consumer.mjs";
-import { deriveWitnessWeights, validateWitnessWeights } from "./witness-weighting.mjs";
+import { activeWitnessTuning } from "./witness-tuning.mjs";
 import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
@@ -54,7 +54,10 @@ const M15_MS = 900_000;
 /** Witness weights (sum 1). A missing or stale witness drops out and the rest renormalise. */
 export const WITNESS_WEIGHTS = Object.freeze({ D1: 0.2, H4: 0.2, H1: 0.2, M15: 0.15, NEWS: 0.1, MACRO: 0.05, STRATEGY: 0.1 });
 export const EXTENDED_WITNESS_WEIGHTS = Object.freeze({ D1: 0.16, H4: 0.16, H1: 0.16, M15: 0.12, NEWS: 0.08, MACRO: 0.04, STRATEGY: 0.08, KEY_LEVELS: 0.05, REGIME: 0.05, TREND_TF: 0.05, MACRO_DRIVERS: 0.03, SESSION: 0.02 });
-/** The witness weights in force: dynamic Aether adaptive weights if injected/enabled, else B-11 set while GLOBAL_DECISION_WEIGHTED is on, else the base set. */
+/**
+ * The witness weights in force: the auto-tuned set the run loaded (env.DYNAMIC_WITNESS_WEIGHTS, from
+ * src/witness-tuning.mjs) when present, else the B-11 set while GLOBAL_DECISION_WEIGHTED is on, else the base set.
+ */
 export function activeWitnessWeights(env) {
   if (env?.DYNAMIC_WITNESS_WEIGHTS && typeof env.DYNAMIC_WITNESS_WEIGHTS === "object") {
     return env.DYNAMIC_WITNESS_WEIGHTS;
@@ -767,23 +770,24 @@ export async function notifyDecision(env, d, send, { now = Date.now() } = {}) {
 }
 
 /** Pure: the witnesses, the quorum and both sides' guardrails (with their plans) from the loaded inputs. */
-export function assess(loaded, { now = Date.now(), env = null, analytics = null } = {}) {
+export function assess(loaded, { now = Date.now(), env = null, analytics = null, witnessWeights = null } = {}) {
   const { inputs = {}, strategy = null, global = null, macro = null, correlations = null, regime = null } = loaded || {};
   // The extended witnesses read their own data (owner 2026-11-10), and the session describes SESSION
   // (context: a session has no direction).
   const session = sessionAt(now);
   const context = { regime, correlations, session, independent: independentWitnesses(loaded) };
-  let effectiveEnv = env;
-  if (decisionWeightedEnabled(env) && !env?.DYNAMIC_WITNESS_WEIGHTS) {
-    const dynamicWeights = deriveWitnessWeights({ regime, analytics });
-    effectiveEnv = { ...env, DYNAMIC_WITNESS_WEIGHTS: dynamicWeights, WITNESS_WEIGHTS_SOURCE: "aether_adaptive" };
-  }
+  // The witness weights (owner 2026-11-11: "harusnya bobot itu dinamis sesuai dengan auto tune yang ada di
+  // aether"): the set the auto-tuning activated (src/witness-tuning.mjs: replay, discovery and holdout,
+  // reverse shadow), loaded by runDecisionEngine; else B-11 (source "default") or the base set ("base").
+  const tuned = witnessWeights && decisionWeightedEnabled(env) && witnessWeights.weights && typeof witnessWeights.weights === "object" ? witnessWeights : null;
+  const effectiveEnv = tuned ? { ...env, DYNAMIC_WITNESS_WEIGHTS: tuned.weights } : env;
+  const source = tuned ? (tuned.source ?? "default") : decisionWeightedEnabled(env) ? "default" : "base";
   const cards = witnessCards({ global, strategy, context, env: effectiveEnv });
   const quorum = quorumOf(cards, { now, analytics });
   const market = marketContextOf(loaded, quorum, now);
   const withMarket = { ...inputs, market };
   const guards = { long: guardrailsFor(1, { cards, quorum, strategy, inputs: withMarket, macro, now, env: effectiveEnv }), short: guardrailsFor(-1, { cards, quorum, strategy, inputs: withMarket, macro, now, env: effectiveEnv }) };
-  return { cards, quorum, guards, market, witness_weights: effectiveEnv?.DYNAMIC_WITNESS_WEIGHTS ?? activeWitnessWeights(env), witness_weights_source: effectiveEnv?.WITNESS_WEIGHTS_SOURCE ?? "baseline_prior" };
+  return { cards, quorum, guards, market, witness_weights: { ...activeWitnessWeights(effectiveEnv) }, witness_weights_source: source, witness_weights_id: tuned?.id ?? null };
 }
 
 /** Pure: the whole decision record from the loaded inputs, their assessment and the council's result (or null). */
@@ -824,7 +828,7 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     cautions, vetoes: { long: guards.long.vetoes, short: guards.short.vetoes },
     context: councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, market, now }),
     strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline, price: strategy.price, atr_h1: strategy.atr_h1 } : null,
-    trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? activeWitnessWeights(env)), witness_weights_source: (assessment?.witness_weights_source ?? "baseline_prior"), rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE },
+    trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE },
     advisory: "The server places no order and gives no position size; the EA sizes each trade from the owner's risk input."
   };
 }
@@ -899,7 +903,9 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     const previous = await readLatestDecision(env);
     try { env.TRADING_MODE = await tradingMode(env); } catch { /* keep env */ }
     const data = loaded ?? await loadDecisionInputs(env, { now });
-    const assessment = assess(data, { now, env, analytics: data.analytics });
+    let witnessWeights = null;
+    try { witnessWeights = await activeWitnessTuning(env, { now }); } catch { witnessWeights = null; }
+    const assessment = assess(data, { now, env, analytics: data.analytics, witnessWeights });
     const context = councilContext({ inputs: data.inputs, correlations: data.correlations, regime: data.regime, previous, market: assessment.market, now });
     try {
       const doctrinePayload = await fetchEffectiveDoctrine(env, { now });
