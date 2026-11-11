@@ -27,6 +27,9 @@
   ],
   "vars": {
     "TV_MAX_CALLS_PER_RUN": "8",
+    // The MT5 fallback (docs/RFC_MT5_FALLBACK.md; owner 2026-11-11: trade as usual, the broker's raw price):
+    // "auto" replaces the 1m chart source with the broker's bars while TradingView is down; "off" never.
+    "FEED_FALLBACK_MODE": "auto",
     // Owner decision 2026-11-05 after a TradingView MCP suspension: 800 a day (was 1200).
     // Steady state is about 440 a weekday (2026-11-08: USOIL 5m pulled once per 15 minutes, no pull
     // while the market is closed); M5/M15 are derived from M1, USOIL M15/H1 from USOIL M5.

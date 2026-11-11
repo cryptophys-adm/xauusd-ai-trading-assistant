@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { runHealthAlerts, readHealthAlerts, detectHealthIssues, resetHealthSchemaCacheForTests, HEALTH_AGENT_ID, HEALTH_REPORTS_PER_HOUR, marketDataIssue } from "../src/health-alerts.mjs";
+import { runHealthAlerts, readHealthAlerts, detectHealthIssues, resetHealthSchemaCacheForTests, HEALTH_AGENT_ID, HEALTH_REPORTS_PER_HOUR, marketDataIssue, marketDataFallbackIssue } from "../src/health-alerts.mjs";
 
 const NOW = Date.parse("2026-11-06T09:30:00.000Z");
 const H = 3600_000;
@@ -163,4 +163,20 @@ test("the market data stopping is an alert that names the gateway's cooldown, an
   assert.equal(await marketDataIssue(stale, Date.parse("2026-11-14T10:00:00.000Z")), null, "Saturday: the market is closed");
   assert.equal(await marketDataIssue(stale, Date.parse("2026-11-11T21:40:00.000Z")), null, "the daily break");
   assert.equal(await marketDataIssue(stale, Date.parse("2026-11-11T23:10:00.000Z")), null, "within 30 minutes after the break");
+});
+
+test("the MT5 fallback is an alert while the 1m series holds the broker's bars, and resolves when TradingView heals it", async () => {
+  const at = Date.parse("2026-11-11T14:30:00.000Z");
+  const since = Date.parse("2026-11-11T13:01:00.000Z") / 1000;
+  const m1 = (fallback) => JSON.stringify({ candles: [], ...(fallback ? { fallback: { since_sec: since, source: "mt5:monex-demo:XAUUSD.M" } } : {}) });
+  const on = env({ SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|1m": m1(true) }) });
+  const issue = await marketDataFallbackIssue(on);
+  assert.equal(issue.kind, "market_data_fallback");
+  assert.match(issue.subject, /^Market data from the broker's MT5 bars since 2026-11-11 13:01 UTC/);
+  assert.doesNotMatch(issue.subject, /\d{4}\.\d/, "no price");
+  const r = await runHealthAlerts(on, { now: at });
+  assert.ok(r.opened_alerts.some((a) => a.kind === "market_data_fallback"));
+  const healed = env({ SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|1m": m1(false) }), DB: on.DB });
+  assert.equal(await marketDataFallbackIssue(healed), null);
+  assert.ok((await runHealthAlerts(healed, { now: at + 60_000 })).resolved_alerts.some((a) => a.kind === "market_data_fallback"));
 });

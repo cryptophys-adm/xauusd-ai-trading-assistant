@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   witnessCards, quorumOf, guardrailsFor, tradeFor, validateCouncil, decide, assess, buildDecisionRecord, councilEvidence, councilMessages,
   runDecisionEngine, runPendingDecision, readLatestDecision, readDecisions, decisionKeyFor, keyCloseMs, notifyDecision, decisionMessage,
-  resetDecisionSchemaCacheForTests, decisionEngineEnabled, WITNESS_WEIGHTS, DECISION_LATEST_KEY, askCouncil, COUNCIL_MAX_TOKENS, heartbeatMinutes
+  resetDecisionSchemaCacheForTests, decisionEngineEnabled, WITNESS_WEIGHTS, DECISION_LATEST_KEY, askCouncil, COUNCIL_MAX_TOKENS, heartbeatMinutes, MT5_FALLBACK_CAUTION
 } from "../src/decision-engine.mjs";
 import { sessionAt, regimeOf, macroDriversOf, sentimentOf, contextCautions, marketContextOf } from "../src/decision-engine.mjs";
 import { eaSignalFromDecision } from "../src/ea-signal.mjs";
@@ -394,4 +394,18 @@ test("the council (owner 2026-11-11): a cut-off answer is asked once more, brief
   assert.equal(bad.answer, null);
   assert.match(bad.reason, /^invalid answer/);
   assert.deepEqual(models, ["@cf/openai/gpt-oss-120b", "@cf/google/gemma-4-26b-a4b-it"]);
+});
+
+test("the MT5 fallback (owner 2026-11-11: trade as usual): the same guardrails, a caution and the feed on the record", () => {
+  const usual = buildDecisionRecord({ key: "k", barClose: CLOSE, loaded: loadedOf(), now: NOW });
+  assert.equal(usual.feed, "tradingview");
+  assert.ok(!usual.cautions.includes(MT5_FALLBACK_CAUTION));
+  const loaded = loadedOf({ loaded: { inputs: { calendar: { events: [] }, m5Feed: "mt5_fallback" } } });
+  const a = assess(loaded, { now: NOW });
+  assert.equal(a.guards.long.allowed, true, "no extra gate");
+  assert.ok(a.guards.long.cautions.includes(MT5_FALLBACK_CAUTION) && a.guards.short.cautions.includes(MT5_FALLBACK_CAUTION));
+  const r = buildDecisionRecord({ key: "k", barClose: CLOSE, loaded, assessment: a, now: NOW });
+  assert.equal(r.feed, "mt5_fallback");
+  assert.equal(r.cautions.filter((c) => c === MT5_FALLBACK_CAUTION).length, 1);
+  assert.doesNotMatch(MT5_FALLBACK_CAUTION, /\d{3,}|\d\.\d/, "no price in the caution");
 });

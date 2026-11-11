@@ -1,4 +1,5 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
+import { applyMt5Fallback } from "./mt5-fallback.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
 import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHtfLocalComputation, publishHudSnapshots, republishRevisedH1, LAST_PUBLISH_KEY, LAST_HUD_PUBLISH_KEY } from "./local-publisher.mjs";
 import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, marketClosed, verifyDerivedSeries, settleSeconds, SETTLE_SECONDS } from "./tradingview-source.mjs";
@@ -254,8 +255,10 @@ const worker = {
 
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil((async () => {
+      let pullStatus = null;
       try {
         const pulled = await pull(env);
+        pullStatus = pulled?.status ?? null;
         // Daily derived-vs-native check (a few calls, once per UTC day); skipped while the
         // gateway reports a quota cooldown.
         if (!["mcp_quota_cooldown_active", "gateway_unavailable", "daily_budget_exhausted"].includes(pulled?.status)) {
@@ -263,6 +266,7 @@ const worker = {
           if (check.status !== "not_due") console.log(JSON.stringify({ worker: WORKER_NAME, event: "derived_series_check", status: check.status, series: check.series?.map((x) => ({ series: x.series, compared: x.compared, mismatched: x.mismatched, error: x.error })) }));
         }
       } catch (error) {
+        pullStatus = asString(error?.code) || "market_data_pull_failed";
         // Keep logs sanitized: never log URLs, secrets, request headers or raw provider payloads.
         console.error(JSON.stringify({
           worker: WORKER_NAME,
@@ -270,6 +274,14 @@ const worker = {
           code: asString(error?.code) || "market_data_pull_failed",
           checked_at: new Date().toISOString()
         }));
+      }
+      // The MT5 fallback (docs/RFC_MT5_FALLBACK.md): while TradingView is down, the broker's closed M1 bars
+      // stand in for the chart source, before the bundle is built for the engines and the 5m context.
+      try {
+        const fallback = await applyMt5Fallback(env, pullStatus);
+        if (!["off", "inactive", "market_closed"].includes(fallback.status)) console.log(JSON.stringify({ worker: WORKER_NAME, event: "mt5_fallback", ...fallback }));
+      } catch (error) {
+        console.error(JSON.stringify({ worker: WORKER_NAME, event: "mt5_fallback_failed", code: asString(error?.code) || "fallback_failed" }));
       }
       // Build the bundle once for both publish and informational 5m context.
       let latestBundle = null;

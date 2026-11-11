@@ -371,7 +371,9 @@ export async function liveM5Inputs(env, { now = Date.now(), context = null } = {
   return {
     confirmation: { buy_confirmed: ctx.buy_confirmed === true || recentBuy, sell_confirmed: ctx.sell_confirmed === true || recentSell, verified, candle_time: new Date(t).toISOString() },
     price: isNum(last?.c) ? last.c : null,
-    order_imbalance: orderImbalance(ctx)
+    order_imbalance: orderImbalance(ctx),
+    // The MT5 fallback (docs/RFC_MT5_FALLBACK.md): this 5m bar came from the broker while TradingView was down.
+    feed: ctx.feed === "mt5_fallback" ? "mt5_fallback" : "tradingview"
   };
 }
 
@@ -392,6 +394,7 @@ export async function loadStrategyInputs(env, { now = Date.now(), m5Context = nu
     // The H1 confirmation from the latest 15m room; the 5m one from the latest closed 5m bar when fresh.
     confirmations: live ? { ...(m15?.confirmations ?? {}), m5_prophet_r38: live.confirmation } : (m15?.confirmations ?? null),
     m5Price: live?.price ?? null,
+    m5Feed: live?.feed ?? null,
     // Enough closed bars for the ATR and the Key Level Agent's swings; the last week for its high and low.
     h1Bars: h1Bars.slice(-60), m15Bars: m15Bars.slice(-60), h4Bars: h4Bars.slice(-60), d1Bars: d1Bars.slice(-60), w1Bars: w1Bars.slice(-2),
     h1Chain: m15?.h1 ?? h1?.h1 ?? null,

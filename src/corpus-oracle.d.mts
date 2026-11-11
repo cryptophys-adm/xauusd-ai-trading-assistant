@@ -10,3 +10,5 @@ export function corpusBasis(broker: Array<{ close_ms: number; close: number }>, 
 export function resetCorpusSchemaCacheForTests(): void;
 export function ingestCorpus(env: any, corpus: any, options?: { executor?: any; now?: number }): Promise<Record<string, any>>;
 export function corpusStatus(env: any, options?: { now?: number }): Promise<Record<string, any>>;
+export const CORPUS_READ_MAX: number;
+export function readCorpusBars(env: any, options?: { sinceMs?: number; limit?: number }): Promise<{ source: string | null; server?: string; symbol?: string; bars: Array<{ t: number; o: number; h: number; l: number; c: number; v: number | null }> }>;

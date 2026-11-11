@@ -16,6 +16,7 @@ const BUDGET_KEY_PREFIX = "market-data:v2:mcp-calls:";
 /** KV key of the last refresh summary, written by every pull cycle. */
 export const LAST_REFRESH_KEY = "market-data:v2:last-refresh";
 const MAX_GATEWAY_COUNT = 8000;
+const HEAL_EVERY_MIN = 5;
 
 // Order is priority: the chart source (M1) is refreshed first when the per-run call
 // budget is tight. `derived_from` series are built locally from their source (see
@@ -128,6 +129,20 @@ export function gapBackoffSeconds(spec) {
   return Math.min(Math.max(spec.seconds / 4, 300), 3600);
 }
 
+/**
+ * Healing after the MT5 fallback (src/mt5-fallback.mjs): a native series whose cache holds broker bars
+ * since `fallback.since_sec` is pulled back over that range, so TradingView's bars overwrite them.
+ * Null when the series holds no fallback bars.
+ */
+export function healPlan(spec, cached, nowSec) {
+  const since = Number(cached?.fallback?.since_sec);
+  if (spec.derived_from || !Number.isFinite(since)) return null;
+  // Once per 5 minutes: while the gateway is still in cooldown every attempt reserves the daily budget.
+  if (Math.floor(nowSec / 60) % HEAL_EVERY_MIN !== 0) return null;
+  const count = Math.min(spec.retain, MAX_GATEWAY_COUNT, Math.ceil((nowSec - since) / spec.seconds) + 3);
+  return { symbol: spec.symbol, interval: spec.interval, count, bootstrap: false, heal: true };
+}
+
 export function planRequest(spec, cached, nowSec) {
   const last = cached?.candles?.at(-1);
   if (!last) return { symbol: spec.symbol, interval: spec.interval, count: Math.min(spec.retain, MAX_GATEWAY_COUNT), bootstrap: true };
@@ -160,7 +175,7 @@ export async function readSeries(kv, spec) {
   return readJson(kv, SERIES_KEY_PREFIX + spec.key);
 }
 
-async function writeSeries(kv, spec, record) {
+export async function writeSeries(kv, spec, record) {
   await kv.put(SERIES_KEY_PREFIX + spec.key, JSON.stringify(record), { expirationTtl: 60 * 60 * 24 * 30 });
 }
 
@@ -228,9 +243,9 @@ export async function refreshSeries(env, { now = Date.now(), force = false } = {
       if (own.length && sourceCovers(own.at(-1), source, spec.seconds)) plan = null;
       else plan = planRequest(spec, cached[index], nowSec);
     } else {
-      plan = force && cached[index]?.candles?.length
+      plan = healPlan(spec, cached[index], nowSec) ?? (force && cached[index]?.candles?.length
         ? { symbol: spec.symbol, interval: spec.interval, count: 5, bootstrap: false }
-        : planRequest(spec, cached[index], nowSec);
+        : planRequest(spec, cached[index], nowSec));
     }
     if (plan) planned.push({ spec, index, plan });
   });
@@ -296,16 +311,23 @@ async function deriveSeries(kv, records, now, skip) {
     const source = sourceRecord?.candles || [];
     if (!own.length || !sourceCovers(own.at(-1), source, spec.seconds)) continue;
     const fetchedAtSec = Math.floor(Date.parse(sourceRecord?.fetched_at || "") / 1000);
-    const incoming = aggregateCandles(source, { seconds: spec.seconds, sourceSeconds: sourceSpec.seconds, nowSec, fetchedAtSec, after: own.at(-1).time });
+    // Healing after the MT5 fallback: once the source holds TradingView's bars again, the buckets built
+    // from broker minutes are aggregated again from the fallback's start.
+    const ownSince = Number(records[index]?.fallback?.since_sec);
+    const healing = Number.isFinite(ownSince) && !sourceRecord?.fallback;
+    const after = healing ? Math.floor(ownSince / spec.seconds) * spec.seconds - 1 : own.at(-1).time;
+    const incoming = aggregateCandles(source, { seconds: spec.seconds, sourceSeconds: sourceSpec.seconds, nowSec, fetchedAtSec, after });
     if (!incoming.length) continue;
     const candles = mergeCandles(own, incoming, spec.retain);
     await writeSeries(kv, spec, {
       series: spec.key, symbol: spec.symbol, interval: spec.interval, timeframe: spec.timeframe,
       fetched_at: new Date(now).toISOString(), derived_from: spec.derived_from, candle_count: candles.length,
       volume_available: candles.length > 0 && candles.every((c) => c.volume !== null),
+      // A series still fed by broker minutes keeps its fallback mark until the source heals.
+      ...(records[index]?.fallback && !healing ? { fallback: records[index].fallback } : {}),
       candles
     });
-    out.push({ series: spec.key, derived: incoming.length, stored: candles.length });
+    out.push({ series: spec.key, derived: incoming.length, stored: candles.length, ...(healing ? { healed: true } : {}) });
   }
   return out;
 }
@@ -347,6 +369,8 @@ export async function buildBundle(env, now = Date.now()) {
     },
     fetched_at: fetchedTimes.length ? new Date(Math.max(...fetchedTimes)).toISOString() : null,
     assembled_at: new Date(now).toISOString(),
+    // The MT5 fallback (src/mt5-fallback.mjs): the chart source holds the broker's bars while TradingView is down.
+    feed: records[SERIES.findIndex((s) => s.key === `${CANONICAL_SYMBOL}|1m`)]?.fallback ? "mt5_fallback" : "tradingview",
     latest_closed_m5_close_time: m5.at(-1)?.close_time || null,
     volume_available: m5.length > 0 && m5.every((c) => c.volume !== null),
     timeframes,

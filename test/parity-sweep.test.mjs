@@ -326,3 +326,19 @@ test("decisionLocalRecords: the approved copy where it exists, else the observed
   assert.deepEqual(records.map((r) => [r.engine, r.trust_status]), [["prophet", "approved_by_parity"], ["gmi", NOT_PARITY_APPROVED]], "mizan published nothing, so it is absent");
   assert.deepEqual(await decisionLocalRecords({}, key), []);
 });
+
+test("a record built on the MT5 fallback feed neither earns nor costs parity trust", async () => {
+  const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
+  const candleKey = "OANDA:XAUUSD:60:1793750400000";
+  await seedCandle(env, candleKey);
+  for (const engine of ["prophet", "gmi"]) {
+    const k = "localcalc-observed:" + candleKey + ":" + engine;
+    await env.WEBHOOK_BUFFER.put(k, JSON.stringify({ ...JSON.parse(await env.WEBHOOK_BUFFER.get(k)), feed: "mt5_fallback" }));
+  }
+  const r = await reconcileLocalComputation(env, candleKey);
+  assert.equal(r.trust.prophet, false);
+  assert.deepEqual([r.comparisons.prophet.result, r.comparisons.gmi.result], ["fallback_skipped", "fallback_skipped"]);
+  const { n } = await env.DB.prepare("SELECT COUNT(*) AS n FROM engine_parity_comparisons").first();
+  assert.equal(Number(n), 0, "no comparison recorded");
+  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":prophet"), null);
+});

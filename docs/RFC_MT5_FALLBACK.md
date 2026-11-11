@@ -43,10 +43,12 @@ newer data, and the gap re-pull covers the outage, so the series heals itself.
 3. **When the fallback starts.** At a pull, the pull adapter switches the M1 chart source to the
    broker when both of these hold:
    - The market trades.
-   - The TradingView gateway is in cooldown (`TvGateway`'s pull answers `mcp_quota_cooldown_active`
-     or `daily_budget_exhausted`), or the M1 series is more than 10 minutes behind.
+   - The TradingView gateway is down (the pull answers `mcp_quota_cooldown_active`, `mcp_quota_exceeded`,
+     `gateway_unavailable` or `daily_budget_exhausted`), or the M1 series is more than 10 minutes behind.
 
-   It stops at the first native M1 pull that succeeds.
+   It stops at the first native M1 pull that succeeds. While a series carries the fallback mark, the
+   pull adapter tries that pull once every 5 minutes (`healPlan`), so a cooldown does not spend the
+   daily budget.
 
 4. **Scale: the broker's raw price** (owner choice 2026-11-11).
    - The broker's bars go in as they are, without a basis adjustment.
@@ -57,8 +59,10 @@ newer data, and the gap re-pull covers the outage, so the series heals itself.
 
 5. **The series.**
    - Fallback bars are merged into `OANDA:XAUUSD|1m` with `src: "mt5"`. M5 and M15 derive as today.
-   - H1, H4 and D1 are native pulls today. During a fallback, their bars are aggregated from M1
+   - H1 is a native pull today. During a fallback, its bars are aggregated from M1
      (`aggregateCandles`), also marked `src: "mt5"`.
+   - H4 and D1 keep their last native bar: their bucket alignment at the broker and at OANDA differ
+     around the daily break, and a fallback of hours rarely closes one. They heal at the next pull.
    - USOIL, DXY, US10Y, XAGUSD and USDT dominance have no broker source. They stay stale, and their
      witnesses drop out (the Macro room, macro drivers, correlations).
    - News stays stale, so News Daily drops out. Weights renormalise as they already do.
@@ -73,7 +77,8 @@ newer data, and the gap re-pull covers the outage, so the series heals itself.
 7. **The decision.**
    - The rooms meet again, and the `fresh` guardrail passes.
    - Every decision made on fallback bars records `feed: "mt5_fallback"`.
-   - It carries a caution: "market data from the broker (MT5 fallback); news and macro are stale".
+   - It carries a caution (`MT5_FALLBACK_CAUTION`): "Market data comes from the broker's MT5 bars
+     because TradingView is down; news and the macro series are stale."
    - It trades as usual (owner choice 2026-11-11): the same guardrails, no cap, executed by Omega and
      the EA.
 
@@ -81,9 +86,10 @@ newer data, and the gap re-pull covers the outage, so the series heals itself.
    it. On fallback bars the plan is already on the broker's scale.
 
 9. **Visibility.**
-   - The `market_data_stale` alert (#256) says when the fallback is on.
-   - The 5m context and Nexus show a "Broker feed (MT5 fallback)" badge.
-   - Telegram reports the start and the end.
+   - A `market_data_fallback` alert is open while the M1 series carries the mark. Telegram reports
+     its start and its end.
+   - The 5m context (`context:m5:latest`) and every decision record carry `feed`. A Nexus badge is a
+     follow-up.
 
 10. **Cost.** No TradingView call during a fallback. The pull adapter's daily budget is untouched.
 
@@ -91,13 +97,22 @@ newer data, and the gap re-pull covers the outage, so the series heals itself.
 
 `FEED_FALLBACK_MODE` on the pull adapter:
 - `off`: no fallback.
-- `shadow`: build the fallback series under a separate key, measured only.
-- `auto`: replace the M1 source while TradingView is down.
+- `auto` (production since this change): replace the M1 source while TradingView is down.
 
-Rollout:
-1. `CORPUS_ORACLE_MODE = shadow`, for at least one trading day, to collect bars and the basis.
-2. `FEED_FALLBACK_MODE = shadow`.
-3. `FEED_FALLBACK_MODE = auto`.
+A fallback can only use bars the Corpus Oracle has collected (`CORPUS_ORACLE_MODE = shadow` since
+#256). Until the corpus holds bars after the last TradingView minute, the step answers
+`no_broker_bars` and changes nothing. A separate `shadow` mode was not built: the owner chose to trade
+as usual, and the fallback is measured by its records (`feed`) and the corpus basis.
+
+## Implementation
+
+- AI Worker: `readCorpusBars` (`src/corpus-oracle.mjs`) behind `LocalComputationIngress.corpusBars`;
+  `src/feed.mjs` (`feedAt`, from the 1m series' `fallback.since_sec` in the shared KV); records and the
+  5m context store `feed`; the parity sweep answers `fallback_skipped`; the Decision Engine adds the
+  caution and `feed`; health alert `market_data_fallback`.
+- Pull adapter: `market-data-ingestion/src/mt5-fallback.mjs` (`applyMt5Fallback`, after each pull and
+  before the bundle); `healPlan` and the derived re-aggregation in `tradingview-source.mjs`; the bundle
+  says `feed`.
 
 ## Owner choices (decided 2026-11-11)
 
