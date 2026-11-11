@@ -13,6 +13,13 @@ export const PROVIDER = "TradingView MCP (mcp-tv-get-ohlcv via xauusd-fundamenta
 export const CANONICAL_SYMBOL = "OANDA:XAUUSD";
 const SERIES_KEY_PREFIX = "market-data:v2:series:";
 const BUDGET_KEY_PREFIX = "market-data:v2:mcp-calls:";
+// The gateway's quota cooldown as last reported to this adapter. 2026-11-11: after the provider quota ran
+// out at 13:05 UTC, every minute's run still reserved its calls from the daily budget although the gateway
+// refused them without calling TradingView; by evening the budget read exhausted, which would have blocked
+// the pulls had the cooldown ended before midnight. While it holds, no call is planned against the budget.
+const GATEWAY_COOLDOWN_KEY = "market-data:v2:gateway-cooldown";
+/** Gateway answers that never reached TradingView: their reservation goes back to the budget. */
+const NO_PROVIDER_CALL = new Set(["mcp_quota_cooldown_active", "gateway_not_configured"]);
 /** KV key of the last refresh summary, written by every pull cycle. */
 export const LAST_REFRESH_KEY = "market-data:v2:last-refresh";
 const MAX_GATEWAY_COUNT = 8000;
@@ -201,6 +208,22 @@ async function reserveBudget(kv, env, wanted, now) {
   return { allowed, used: used + allowed, daily };
 }
 
+/** Gives back calls reserved for a run the gateway refused before calling TradingView. */
+async function releaseBudget(kv, count, now) {
+  if (!(count > 0)) return;
+  const key = BUDGET_KEY_PREFIX + new Date(now).toISOString().slice(0, 10);
+  const used = Number.parseInt((await kv.get(key)) || "0", 10) || 0;
+  await kv.put(key, String(Math.max(0, used - count)), { expirationTtl: 60 * 60 * 48 });
+}
+
+/** The gateway's quota cooldown end (ms) while it holds, else null. */
+async function knownCooldownUntil(kv, now) {
+  let rec = null;
+  try { rec = JSON.parse((await kv.get(GATEWAY_COOLDOWN_KEY)) || "null"); } catch { rec = null; }
+  const until = Date.parse(rec?.until || "");
+  return Number.isFinite(until) && until > now ? until : null;
+}
+
 async function callGateway(env, requests) {
   // RPC Service Binding (entrypoint "TvGateway" on the news Worker): not
   // reachable over public HTTP, so no shared secret is involved.
@@ -254,6 +277,13 @@ export async function refreshSeries(env, { now = Date.now(), force = false } = {
     return { status: "up_to_date", requested: 0, updated: [], derived };
   }
 
+  // The gateway's quota cooldown holds: nothing is reserved or asked; the derived series still extend.
+  const cooldownUntil = await knownCooldownUntil(kv, now);
+  if (cooldownUntil) {
+    const derived = await deriveSeries(kv, cached, now, new Set());
+    return { status: "mcp_quota_cooldown_active", quota_cooldown_until: new Date(cooldownUntil).toISOString(), requested: 0, deferred: planned.length, updated: [], failed: [], derived };
+  }
+
   const budget = await reserveBudget(kv, env, Math.min(perRun, planned.length), now);
   const batch = planned.slice(0, budget.allowed);
   if (batch.length === 0) return { status: "daily_budget_exhausted", requested: 0, updated: [], budget };
@@ -264,6 +294,19 @@ export async function refreshSeries(env, { now = Date.now(), force = false } = {
   } catch (error) {
     gatewayError = error;
     results = Array.isArray(error.partial) ? error.partial : [];
+  }
+  if (gatewayError) {
+    const code = asString(gatewayError.code);
+    const until = Date.parse(asString(gatewayError.quota_cooldown_until));
+    // Remember the cooldown until it ends, so the next runs neither reserve nor call.
+    if (Number.isFinite(until) && until > now) {
+      await kv.put(GATEWAY_COOLDOWN_KEY, JSON.stringify({ until: new Date(until).toISOString(), code, seen_at: new Date(now).toISOString() }), { expirationTtl: Math.max(60, Math.ceil((until - now) / 1000)) });
+    }
+    if (NO_PROVIDER_CALL.has(code) && results.length === 0) {
+      await releaseBudget(kv, batch.length, now);
+      budget.used = Math.max(0, budget.used - batch.length);
+      budget.released = batch.length;
+    }
   }
 
   const updated = [], failed = [];
@@ -417,4 +460,4 @@ export async function verifyDerivedSeries(env, { now = Date.now() } = {}) {
   return summary;
 }
 
-export const SERIES_INTERNALS = { SERIES_KEY_PREFIX, BUDGET_KEY_PREFIX, DERIVED_CHECK_KEY, dailyBudget };
+export const SERIES_INTERNALS = { SERIES_KEY_PREFIX, BUDGET_KEY_PREFIX, DERIVED_CHECK_KEY, GATEWAY_COOLDOWN_KEY, dailyBudget };
