@@ -47,6 +47,8 @@ const DAY_MS = 86_400_000;
 const SERIES_KEY = "market-data:v2:series:OANDA:XAUUSD|15m";
 const LABEL = Object.freeze({ D1: "daily room", H4: "4-hour room", H1: "1-hour room", M15: "15-minute room", NEWS: "News Daily", MACRO: "Macro room", STRATEGY: "strategy engine", KEY_LEVELS: "key levels", REGIME: "regime", TREND_TF: "trend timeframes", MACRO_DRIVERS: "macro drivers", SESSION: "session" });
 const SCORED = new Set(["hit", "miss", "neutral", "missed_opportunity"]);
+/** Recorded checks that no longer gate a decision. */
+export const NON_GATING = Object.freeze(new Set(["confirmation"]));
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
 const r4 = (x) => Math.round(x * 10_000) / 10_000;
 const r3 = (x) => (isNum(x) ? Math.round(x * 1000) / 1000 : null);
@@ -134,7 +136,9 @@ export function replayDecision(d, weights) {
     const opposing = dir > 0 ? q.short_share : q.long_share;
     return share > t.quorum_min || (dir * (q.score ?? 0) >= t.lean && share > opposing);
   };
-  const allowed = (dir) => quorumPass(dir) && d.checks[dir > 0 ? "long" : "short"].every((c) => c.id === "quorum" || c.pass === true);
+  // "confirmation" no longer gates a decision (owner 2026-11-11: the candle is the entry trigger), so an
+  // older record's confirmation check is not applied: every decision is replayed under today's rule.
+  const allowed = (dir) => quorumPass(dir) && d.checks[dir > 0 ? "long" : "short"].every((c) => c.id === "quorum" || NON_GATING.has(c.id) || c.pass === true);
   const long = allowed(1), short = allowed(-1);
   const stance = long && short ? (q.long_share >= q.short_share ? "BUY" : "SELL") : long ? "BUY" : short ? "SELL" : "WAIT";
   return { stance, long, short, quorum: { long: quorumPass(1), short: quorumPass(-1), long_share: q.long_share, short_share: q.short_share } };

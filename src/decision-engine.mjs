@@ -16,12 +16,15 @@
 // Guardrails (deterministic; the council can never break them). A BUY or SELL needs, for its side:
 //   fresh         the 15m and the 1H rooms are available and not stale;
 //   quorum        more than half of the witnesses' weight leans that way (QUORUM_MIN);
-//   confirmation  the 15m or the 1H room decided that side under its confirmation rule, or a verified
-//                 5m (or 15m) Prophet confirmation printed that way;
 //   no veto       none of the strategy engine's vetoes for that side;
 //   levels        a plan from the Key Level Agent's zones (planForDirection), never a model price;
 //   reward        at least MIN_RRR reward-to-risk to the chosen target;
 //   confidence    the council's confidence is at least MIN_CONFIDENCE.
+// The confirmation candle is the ENTRY TRIGGER, not a gate of the decision (owner 2026-11-11, "apa
+// sebaiknya masuk sebagai penentu setup entry saja ?" -> yes): in 87 decisions from 2026-11-10 14:45 the
+// 5m Prophet confirmation never printed at a 15m close, so the gate only ever passed through the rooms.
+// Each side carries entry_trigger (a verified 5m or a 15m Prophet confirmation on that side); a market
+// entry waits for it at execution (src/ea-signal.mjs, checked live), a limit at the key level does not.
 // A council answer that breaks one becomes WAIT, with the reason kept (overruled). When the model
 // fails or its answer is invalid, the deterministic fallback decides: the strategy engine's decision
 // when its side passes every guardrail, otherwise WAIT. A high-impact USD event stays a caution
@@ -477,10 +480,11 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
       ? `${Math.round((share || 0) * 100)}% of the witnesses' weight leans ${dir > 0 ? "bullish" : "bearish"} (meets directional lean threshold)`
       : `${Math.round((share || 0) * 100)}% of the witnesses' weight leans ${dir > 0 ? "bullish" : "bearish"} (more than ${Math.round(QUORUM_MIN * 100)}% needed)`;
   add("quorum", quorumPass, quorumDetail);
-  const roomConfirmed = ["M15", "H1"].filter((k) => card(k)?.decision === side);
-  let trigger = { fired: false, note: "no confirmation" };
+  // The entry trigger (owner 2026-11-11): recorded with the side, never a gate of the decision.
+  let trigger = { fired: false, source: null, note: "no confirmation" };
   try { trigger = triggerOf(dir, { confirmations: inputs.confirmations ?? null, m15Snapshot: inputs.m15Snapshot ?? null }); } catch { /* none */ }
-  add("confirmation", roomConfirmed.length > 0 || trigger.fired, roomConfirmed.length ? `the ${roomConfirmed.map((k) => card(k).label).join(" and ")} room decided ${side}` : trigger.fired ? trigger.note : `no room decided ${side} and ${trigger.note}`);
+  const roomConfirmed = ["M15", "H1"].filter((k) => card(k)?.decision === side);
+  const entryTrigger = { fired: trigger.fired === true, source: trigger.fired ? (trigger.source ?? null) : null, note: trigger.note ?? null, rooms_agree: roomConfirmed };
   let risk = { vetoes: [], cautions: [] };
   try { risk = riskChecks(dir, { h1Snapshot: inputs.h1Snapshot ?? null, m15Snapshot: inputs.m15Snapshot ?? null, news: inputs.news ?? null, macro: macro ?? inputs.macro ?? null, calendar: inputs.calendar ?? null, mode: env?.TRADING_MODE ?? null, env, now }); } catch { /* none */ }
   add("no_veto", !risk.vetoes.length, risk.vetoes.length ? risk.vetoes.join("; ") : "no veto");
@@ -489,7 +493,7 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
   const best = plan ? Math.max(plan.rrr?.tp1 ?? 0, plan.rrr?.tp2 ?? 0) : 0;
   add("reward", Boolean(plan) && best >= MIN_RRR, plan ? `${best}R to the best target (at least ${MIN_RRR}R needed)` : "no plan");
   const cautions = [...risk.cautions, ...contextCautions(dir, inputs.market ?? null)];
-  return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions, min_rrr: MIN_RRR };
+  return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions, min_rrr: MIN_RRR, entry_trigger: entryTrigger };
 }
 
 /**
@@ -510,7 +514,9 @@ export function tradeFor(side, plan, { entryType = "limit", target = "tp1", minR
     side, action: market ? "ENTER_MARKET" : "ENTER_LIMIT", entry: plan.entry, stop: plan.stop, target: t, tp: plan[t],
     tp1: plan.tp1, tp2: plan.tp2, risk: plan.risk, rrr: plan.rrr?.[t] ?? null, rrr_all: plan.rrr ?? null,
     progressive_stop: plan.progressive_stop ?? null,
-    entry_note: plan.entry_note, stop_note: plan.stop_note, tp_note: plan[`${t}_note`] ?? null, at_level: plan.at_level === true
+    entry_note: plan.entry_note, stop_note: plan.stop_note, tp_note: plan[`${t}_note`] ?? null, at_level: plan.at_level === true,
+    // A market entry waits for the confirmation candle at execution; a limit at the key level waits for price.
+    trigger_required: market
   };
 }
 
@@ -538,7 +544,7 @@ const WITNESS_KEYS = ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY"];
 /** Pure: the council's evidence (the witnesses, the quorum, both sides' guardrails and plans, the context). */
 export function councilEvidence({ barClose, cards, quorum, guards, context = {} }) {
   const plan = (g) => (g.plan ? { entry: g.plan.entry, entry_note: g.plan.entry_note, at_level: g.plan.at_level, stop: g.plan.stop, stop_note: g.plan.stop_note, tp1: g.plan.tp1, tp1_note: g.plan.tp1_note, tp2: g.plan.tp2, tp2_note: g.plan.tp2_note, progressive_stop: g.plan.progressive_stop ?? null, reward_to_risk: g.plan.rrr } : null);
-  const side = (g) => ({ allowed: g.allowed, checks: g.checks.map((c) => ({ check: c.id, pass: c.pass, detail: c.detail })), plan: plan(g), vetoes: g.vetoes, cautions: g.cautions });
+  const side = (g) => ({ allowed: g.allowed, checks: g.checks.map((c) => ({ check: c.id, pass: c.pass, detail: c.detail })), entry_trigger: g.entry_trigger ? { fired: g.entry_trigger.fired, note: g.entry_trigger.note } : null, plan: plan(g), vetoes: g.vetoes, cautions: g.cautions });
   return {
     bar_close: barClose,
     witnesses: cards.map((c) => ({ key: c.key, name: c.label, role: c.role, weight: c.weight, counts: c.available && !c.stale, lean: c.lean, own_decision: c.decision, state: c.state ?? undefined, confidence: c.confidence, summary: c.summary })),
@@ -561,6 +567,7 @@ export function councilMessages(evidence) {
     "context.market.calendar is the Calendar Agent: each release still inside its horizon with its actual against the forecast, the surprise in standard deviations, the rule's effect on gold (gold_direction +1 up, -1 down) and, when enough past releases are measured, the learned horizon and how often gold followed the rule. A large surprise inside its horizon outweighs a weak technical lean; a release gold has not followed reliably weighs less.",
     "context.market holds the right panel's cards: the market sentiment (the witnesses' weighted lean, the news and macro composite, the 24-hour headlines), the regime of the 15m and 1H charts (trending or mean-reverting, chaos, stretch), the macro drivers (gold, the dollar, oil and USDT dominance over 24 hours, the gold-dollar link, cross-asset correlations) and the session (day, date, market open or closed, the active sessions and their liquidity, the next close or open). Weigh them: they confirm or weaken the witnesses and explain the cautions.",
     "Weigh the witnesses by their weight and by how well their reasoning holds up; the higher timeframes carry the trend, the 15m and 1H rooms carry the setup, the strategy engine carries location and trigger. Cautions (an event, conflicts, chaotic regime) lower your confidence.",
+    "The confirmation candle (a verified 5m or a 15m Prophet confirmation, in long.entry_trigger and short.entry_trigger) is the entry trigger, not a condition of your stance: decide the side from the witnesses inside the guardrails. A market entry waits for that candle before it is executed; a limit entry at the key level waits only for price, so prefer 'limit' while entry_trigger has not fired.",
     "Prioritize target 'tp1' (structural quick win at the nearest strong key level / liquidity pool) to avoid prolonged floating duration risk. Use 'limit' entry at the key level pullback rather than chasing market momentum. A target needs at least 1.5R.",
     `confidence is 0 to 1; below ${MIN_CONFIDENCE} a BUY or SELL becomes WAIT. bias is where the weight of the evidence leans (BULLISH, BEARISH or NEUTRAL), even when the stance is WAIT.`,
     "Never invent a price: the levels come only from the plans in the evidence. Never mention position size. Write summary, reasons and risks in plain sentences a trader would write: no field names, no words joined by underscores or dots, no key=value. The summary starts with the stance and the bias, for example \"Decision WAIT, bias bullish: ...\". Give one to four reasons and up to three risks. In weighed, list the witness keys you relied on most.",
@@ -824,7 +831,7 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     summary: text.summary, reasons: text.reasons, risks: text.risks, weighed: answer?.weighed ?? [],
     overruled: d.overruled, trade: d.trade,
     quorum, witnesses: cards,
-    guardrails: { long: { allowed: guards.long.allowed, checks: guards.long.checks }, short: { allowed: guards.short.allowed, checks: guards.short.checks } },
+    guardrails: { long: { allowed: guards.long.allowed, checks: guards.long.checks, entry_trigger: guards.long.entry_trigger ?? null }, short: { allowed: guards.short.allowed, checks: guards.short.checks, entry_trigger: guards.short.entry_trigger ?? null } },
     cautions, vetoes: { long: guards.long.vetoes, short: guards.short.vetoes },
     context: councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, market, now }),
     strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline, price: strategy.price, atr_h1: strategy.atr_h1 } : null,

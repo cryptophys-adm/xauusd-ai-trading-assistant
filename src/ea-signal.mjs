@@ -26,6 +26,7 @@
 
 import { gatedEvents } from "./econ-calendar.mjs";
 import { decisionEngineEnabled, readLatestDecision, keyCloseMs } from "./decision-engine.mjs";
+import { liveM5Inputs } from "./strategy-engine.mjs";
 
 export const EA_SIGNAL_VERSION = "cryptophys.ea-signal.v1";
 const H1_MS = 3_600_000;
@@ -58,10 +59,31 @@ export function eaSignalFrom({ candleKey = null, analysis = null, kill = false, 
 }
 
 /**
+ * Pure: the entry trigger of a decision's trade (owner 2026-11-11: the confirmation candle is the entry
+ * trigger, not a gate of the decision). A market entry needs a Prophet confirmation on its side: the
+ * one the decision recorded (a verified 5m or a 15m one at the close), or a verified 5m one printed since
+ * (`live`, from liveM5Inputs, read when the EA or Omega asks). A limit at the key level needs none.
+ */
+export function entryTriggerFor(decision, { live = null } = {}) {
+  const t = decision?.trade;
+  const side = String(decision?.stance || "").toUpperCase();
+  const required = t?.action === "ENTER_MARKET";
+  const recorded = decision?.guardrails?.[side === "BUY" ? "long" : "short"]?.entry_trigger ?? null;
+  const key = side === "BUY" ? "buy_confirmed" : "sell_confirmed";
+  const liveFired = live?.verified === true && live?.[key] === true;
+  if (recorded?.fired === true) return { required, fired: true, source: recorded.source ?? "decision", note: recorded.note ?? null };
+  // A record written before 2026-11-11 has no entry_trigger: its BUY or SELL already passed the confirmation gate.
+  if (!recorded) return { required, fired: true, source: "decision", note: "the decision passed the confirmation gate of its time" };
+  if (liveFired) return { required, fired: true, source: "5m", at_ms: Date.parse(String(live.candle_time ?? "")) || null, note: `a verified 5m Prophet ${side === "BUY" ? "buy" : "sell"} confirmation${typeof live.candle_time === "string" ? ` on the 5m bar closing ${live.candle_time.slice(11, 16)} UTC` : ""}` };
+  return { required, fired: false, source: null, note: `waiting for a verified 5m (or 15m) Prophet ${side === "BUY" ? "buy" : "sell"} confirmation` };
+}
+
+/**
  * Pure: the EA's signal from the latest Decision Engine record (src/decision-engine.mjs). A BUY or
  * SELL with a valid trade; issued at its 15m close, expiring at the next 15m close (the next decision).
+ * A market entry is sent only once its entry trigger fired; until then the signal says what it awaits.
  */
-export function eaSignalFromDecision({ decision = null, kill = false, killSource = "", paused = false, blackout = false, blackoutReason = null, marketPrice = null, marketMs = null, now = Date.now() } = {}) {
+export function eaSignalFromDecision({ decision = null, kill = false, killSource = "", paused = false, blackout = false, blackoutReason = null, marketPrice = null, marketMs = null, now = Date.now(), liveM5 = null } = {}) {
   const base = eaSignalFrom({ kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now });
   const t = decision?.trade;
   const side = String(decision?.stance || "").toUpperCase();
@@ -71,10 +93,18 @@ export function eaSignalFromDecision({ decision = null, kill = false, killSource
   if (![entry, stop, tp1].every(isPrice)) return base;
   if (side === "BUY" ? !(stop < entry && entry < tp1) : !(tp1 < entry && entry < stop)) return base;
   const decidedMs = Date.parse(String(decision?.decided_at ?? "")) || close;
+  const trigger = entryTriggerFor(decision, { live: liveM5 });
+  if (trigger.required && !trigger.fired) {
+    // Nothing to execute yet: the EA and Omega see no side; the signal says what the setup waits for.
+    // Flat fields only: the EA parses a flat JSON object.
+    return { ...base, awaiting_signal_id: decision.decision_key, awaiting_side: side, awaiting_reason: String(trigger.note ?? ""), awaiting_expires_ms: close + M15_MS };
+  }
   return {
-    ...base, signal_id: decision.decision_key, side, action: t.action === "ENTER_LIMIT" ? "ENTER_LIMIT" : "ENTER_MARKET", entry, stop, tp1,
+    ...base, trigger_required: trigger.required, trigger_source: String(trigger.source ?? ""),
+    signal_id: decision.decision_key, side, action: t.action === "ENTER_LIMIT" ? "ENTER_LIMIT" : "ENTER_MARKET", entry, stop, tp1,
     risk_reward: Number.isFinite(t.rrr) ? t.rrr : 0, confidence: Number.isFinite(decision.confidence) ? decision.confidence : 0,
-    issued_ms: close, expires_ms: close + M15_MS, decided_ms: decidedMs
+    // A market entry triggered live by a later 5m candle is as fresh as that candle (Omega's signal-age gate).
+    issued_ms: close, expires_ms: close + M15_MS, decided_ms: Number.isFinite(trigger.at_ms) && trigger.at_ms > decidedMs ? trigger.at_ms : decidedMs
   };
 }
 
@@ -118,7 +148,10 @@ export async function eaSignal(env, { now = Date.now() } = {}) {
     const last = (Array.isArray(rec?.candles) ? rec.candles : []).filter((c) => isPrice(c?.close) && c.close_time).sort((a, b) => Date.parse(a.close_time) - Date.parse(b.close_time)).at(-1);
     if (last) { marketPrice = last.close; marketMs = Date.parse(last.close_time); }
   } catch { marketPrice = null; }
-  if (engine) return { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now }), source: "decision_engine" };
+  // The live 5m confirmation (verified while the 5m Prophet implementation is parity-approved) for a market entry.
+  let liveM5 = null;
+  if (engine && decision?.trade?.action === "ENTER_MARKET") { try { liveM5 = (await liveM5Inputs(env, { now }))?.confirmation ?? null; } catch { liveM5 = null; } }
+  if (engine) return { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now, liveM5 }), source: "decision_engine" };
   return { ...eaSignalFrom({ candleKey, analysis, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now }), source: "h1_decision" };
 }
 

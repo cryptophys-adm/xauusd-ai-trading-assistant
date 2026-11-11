@@ -35,12 +35,12 @@ const IDS = ["market_open", "fresh", "quorum", "confirmation", "no_veto", "level
 /**
  * A decision where the daily room leans bullish against News Daily and the Macro room: under B-11 the
  * long holds 57% of the weight (BUY); with News Daily's weight up it falls under half (the short
- * fails its confirmation, so WAIT).
+ * has no key-level plan, so WAIT). A recorded "confirmation" check no longer gates (owner 2026-11-11).
  */
 const decision = (i, over = {}) => ({
   key: `OANDA:XAUUSD:15:${T0 + i * M15}`, close_ms: T0 + (i + 1) * M15, mode: "intraday", decided_ms: T0 + (i + 1) * M15 + 60_000,
   witnesses: [{ key: "D1", available: true, stale: false, lean: 0.5, at: null }, { key: "NEWS", available: true, stale: false, lean: -0.5, at: null }, { key: "MACRO", available: true, stale: false, lean: -0.5, at: null }, { key: "SESSION", available: false, stale: false, lean: null, at: null }],
-  checks: { long: PASS(IDS), short: IDS.map((id) => ({ id, pass: id !== "confirmation" && id !== "quorum" })) },
+  checks: { long: PASS(IDS), short: IDS.map((id) => ({ id, pass: id !== "levels" && id !== "quorum" })) },
   recorded_weights: { ...EXTENDED_WITNESS_WEIGHTS }, recorded_quorum: { long: true, short: false },
   ...over
 });
@@ -82,7 +82,9 @@ test("W2. the replay recomputes the quorum check under other weights; every othe
   const r = replayDecision(d, up);
   assert.equal(r.quorum.long, false);
   assert.equal(r.quorum.short, true, "the short now holds the quorum");
-  assert.equal(r.stance, "WAIT", "but its confirmation failed, so WAIT");
+  assert.equal(r.stance, "WAIT", "but it has no key-level plan, so WAIT");
+  const oldRecord = decision(0, { checks: { long: IDS.map((id) => ({ id, pass: id !== "confirmation" })), short: decision(0).checks.short } });
+  assert.equal(replayDecision(oldRecord, EXTENDED_WITNESS_WEIGHTS).stance, "BUY", "an older record's failed confirmation no longer gates");
   const blocked = decision(0, { checks: { long: IDS.map((id) => ({ id, pass: id !== "reward" })), short: decision(0).checks.short } });
   assert.equal(replayDecision(blocked, EXTENDED_WITNESS_WEIGHTS).stance, "WAIT", "a failed recorded check still blocks");
   assert.equal(replayDecision(decision(0, { checks: { long: [], short: [] } }), EXTENDED_WITNESS_WEIGHTS), null);
