@@ -133,6 +133,54 @@ export const closeAllId = (key) => `ka:${key}`;
 /**
  * @returns {{ intents: object[], notes: { code: string }[] }}
  */
+/**
+ * Pure: the management of the positions already open (audit 2026-11-11), on every sync whatever the
+ * entry gates say. `skipTickets` are positions being closed in the same plan.
+ *   break-even  with trailing_stop_r > 0: a position at trailing_stop_r R or more moves its stop to its
+ *               open price (R from the open price and the stop before break-even);
+ *   extended    a farther TP2 or extended target of the current signal moves the take-profit of the
+ *               positions on the signal's side;
+ *   scale-out   a position of 0.02 lots or more at 1.5R or its target banks half, once per position.
+ */
+export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [] } = {}) {
+  const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
+  const out = [];
+  if (!finite(sym.bid) || !finite(sym.ask)) return out;
+  const digits = Number.isInteger(sym.digits) ? sym.digits : 2;
+  const skip = new Set(skipTickets.filter((t) => t != null));
+  const recent = new Set(recentIntentIds);
+  const scaledBefore = (ticket) => [...recent].some((rid) => String(rid).startsWith(`ps:${ticket}:`));
+  const targetExtTp = positive(signal?.extended_tp) ? signal.extended_tp : positive(signal?.tp2) ? signal.tp2 : null;
+  for (const p of positions) {
+    if (p?.ticket == null || skip.has(p.ticket) || (p.side !== "BUY" && p.side !== "SELL")) continue;
+    const buy = p.side === "BUY";
+    const open = Number(p.open_price ?? p.entry), curSl = Number(p.sl), curTp = Number(p.tp), vol = Number(p.volume);
+    if (!Number.isFinite(open)) continue;
+    const move = buy ? sym.bid - open : open - sym.ask;
+    const atBreakEven = Number.isFinite(curSl) && (buy ? curSl >= open - 1e-9 : curSl <= open + 1e-9);
+    const risk = Number.isFinite(curSl) && !atBreakEven ? Math.abs(open - curSl) : 0;
+    const r = risk > 0 ? move / risk : 0;
+
+    if (S.trailing_stop_r > 0 && !atBreakEven && risk > 0 && r >= S.trailing_stop_r) {
+      out.push({ id: `ms:${p.ticket}:be`, kind: "modify_sl", ticket: p.ticket, sl: roundTo(open, digits), tp: Number.isFinite(curTp) ? curTp : null, reason: "break_even" });
+    }
+
+    if (targetExtTp != null && p.side === side && Number.isFinite(curTp) && (buy ? targetExtTp > curTp + 0.1 : targetExtTp < curTp - 0.1)) {
+      out.push({ id: `mt:${p.ticket}:${Math.round(targetExtTp * 100)}`, kind: "modify_tp", ticket: p.ticket, tp: roundTo(targetExtTp, digits), reason: "extended_tp" });
+    }
+
+    const atTarget = Number.isFinite(curTp) && (buy ? sym.bid >= curTp : sym.ask <= curTp);
+    if (Number.isFinite(vol) && vol >= 0.02 && move > 0 && !scaledBefore(p.ticket) && (r >= 1.5 || atTarget)) {
+      const step = positive(sym.volume_step) ? sym.volume_step : 0.01;
+      const scaleVolume = floorToStep(vol / 2, step);
+      if (scaleVolume >= (positive(sym.volume_min) ? sym.volume_min : 0.01)) {
+        out.push({ id: `ps:${p.ticket}:${Math.round(vol * 100)}`, kind: "partial_close", ticket: p.ticket, volume: scaleVolume, reason: "tp1_scale_out" });
+      }
+    }
+  }
+  return out;
+}
+
 export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [] } = {}) {
   const intents = [], notes = [];
   const note = (code) => notes.push({ code });
@@ -171,12 +219,19 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
       intents.push({ id: closeId(p.ticket), kind: "close", ticket: p.ticket, reason: "opposite" });
     }
   }
+  const account = executor.account ?? {}, sym = executor.symbol ?? {};
+
+  // Position management runs on every sync, whatever the entry gates say (audit 2026-11-11, owner:
+  // "perbaiki"): a blackout, the rollover quarantine, a pause, a wide spread or a full book only stop
+  // NEW entries; the positions already open keep their break-even, extended target and scale-out.
+  intents.push(...manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket) }));
+
   if (!side) { note("no_side"); return { intents, notes }; }
 
-  const account = executor.account ?? {}, sym = executor.symbol ?? {};
   const issued = signal.issued_ms, id = openId(issued, side);
   const sameSide = positions.filter((p) => p.side === side);
   const decided = finite(signal.decided_ms) ? signal.decided_ms : issued;
+  const closing = intents.filter((it) => it.kind === "close").length;
   const gates = [
     [!finite(issued) || !finite(signal.expires_ms), "bad_signal"],
     [now >= signal.expires_ms, "expired"],
@@ -185,7 +240,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     [signal.paused === true || control?.mode === "paused", "paused"],
     [account.trade_mode !== "demo" && S.live_armed !== true, "live_not_armed"],
     [recent.has(id) || positions.some((p) => p.intent_id === id), "already_opened"],
-    [positions.length - intents.length >= S.max_positions || sameSide.length >= S.max_positions, "max_positions"],
+    [positions.length - closing >= S.max_positions || sameSide.length >= S.max_positions, "max_positions"],
     [!finite(sym.spread_points) || sym.spread_points > S.max_spread_points, "spread"],
     [isRolloverQuarantine(now), "rollover_quarantine"]
   ];
@@ -198,15 +253,20 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const buy = side === "BUY";
   const planOk = buy ? signal.stop < signal.entry && signal.entry < signal.tp1 : signal.tp1 < signal.entry && signal.entry < signal.stop;
   if (!planOk) { note("plan_wrong_side"); return { intents, notes }; }
-  let stopDist = Math.abs(signal.entry - signal.stop), tpDist = Math.abs(signal.tp1 - signal.entry);
+  const planStopDist = Math.abs(signal.entry - signal.stop);
+  let stopDist = planStopDist, tpDist = Math.abs(signal.tp1 - signal.entry);
   const minDist = (finite(sym.stops_level_points) ? sym.stops_level_points : 0) * sym.point;
   if (stopDist <= minDist || tpDist <= minDist) { note("stops_level"); return { intents, notes }; }
 
-  // Adaptive Volatility Stop: if ATR is available, ensure stopDist >= 0.75 * ATR to prevent noise stop-outs
+  // Adaptive Volatility Stop: if ATR is available, ensure stopDist >= 0.75 * ATR to prevent noise
+  // stop-outs. The target moves with it, so the trade keeps the plan's reward-to-risk that the
+  // Decision Engine checked (audit 2026-11-11: a widened stop with the plan's target cut the R).
   if (S.adaptive_volatility !== false && positive(sym.atr_value)) {
     const minAtrDist = sym.atr_value * 0.75;
     if (stopDist < minAtrDist) {
       stopDist = roundTo(minAtrDist, sym.digits);
+      tpDist = roundTo(tpDist * stopDist / planStopDist, sym.digits);
+      note("adaptive_stop");
     }
   }
 
@@ -235,66 +295,5 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const openIntent = { id, kind: "open", side, volume, entry: price, sl, tp, signal_issued_ms: issued, reason: "signal" };
   if (volRegime !== "NORMAL") openIntent.vol_regime = volRegime;
   intents.push(openIntent);
-
-  // Progressive stop (SL+): move an open position's stop to breakeven when trailing_stop_r is set.
-  if (S.trailing_stop_r > 0) {
-    for (const p of positions) {
-      if (p.ticket == null) continue;
-      const entry = Number(p.entry), curSl = Number(p.sl);
-      if (!Number.isFinite(entry) || !Number.isFinite(curSl)) continue;
-      if (Math.abs(curSl - entry) < 1e-9) continue;
-      const profit = Number(p.profit);
-      if (!Number.isFinite(profit) || profit <= 0) continue;
-      intents.push({ id: `ms:${p.ticket}:${entry}`, kind: "modify_sl", ticket: p.ticket, sl: entry, tp: p.tp, reason: "trailing" });
-    }
-  }
-
-  // Extended TP: expand TP when strong momentum or extended TP targets (tp2 / extended_tp) are provided
-  const targetExtTp = positive(signal?.extended_tp) ? signal.extended_tp : positive(signal?.tp2) ? signal.tp2 : null;
-  if (targetExtTp != null) {
-    for (const p of sameSide) {
-      if (p.ticket == null) continue;
-      const curTp = Number(p.tp);
-      const isExtended = buy ? (targetExtTp > curTp + 0.1) : (targetExtTp < curTp - 0.1);
-      if (isExtended && !intents.some((it) => it.ticket === p.ticket && it.kind === "modify_tp")) {
-        intents.push({
-          id: `mt:${p.ticket}:${Math.round(targetExtTp * 100)}`,
-          kind: "modify_tp",
-          ticket: p.ticket,
-          tp: roundTo(targetExtTp, sym.digits),
-          reason: "extended_tp"
-        });
-      }
-    }
-  }
-
-  // Partial Scale-Out (TP1 Runner): if volume >= 0.02 and position reached >= +1.5R or TP1 target,
-  // close 50% volume to bank profit and let remainder run risk-free
-  for (const p of sameSide) {
-    if (p.ticket == null) continue;
-    const vol = Number(p.volume);
-    if (!Number.isFinite(vol) || vol < 0.02) continue;
-    const openPrice = Number(p.open_price);
-    const profit = Number(p.profit);
-    if (!Number.isFinite(openPrice) || !Number.isFinite(profit) || profit <= 0) continue;
-
-    const stopDistCurrent = Math.abs(openPrice - Number(p.sl || openPrice));
-    const distCurrent = buy ? (sym.bid - openPrice) : (openPrice - sym.ask);
-    const rMultiple = stopDistCurrent > 0 ? (distCurrent / stopDistCurrent) : 0;
-
-    if (rMultiple >= 1.5 || (buy && sym.bid >= p.tp) || (!buy && sym.ask <= p.tp)) {
-      const scaleVolume = floorToStep(vol / 2, sym.volume_step);
-      if (scaleVolume >= sym.volume_min && !intents.some((it) => it.ticket === p.ticket && it.kind === "partial_close")) {
-        intents.push({
-          id: `ps:${p.ticket}:${Math.round(vol * 100)}`,
-          kind: "partial_close",
-          ticket: p.ticket,
-          volume: scaleVolume,
-          reason: "tp1_scale_out"
-        });
-      }
-    }
-  }
-
   return { intents, notes };
 }

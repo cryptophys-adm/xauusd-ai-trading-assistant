@@ -26,3 +26,4 @@ export function planIntents(input?: {
   recentIntentIds?: string[];
 }): { intents: Record<string, any>[]; notes: { code: string }[] };
 export const ROLLOVER_QUARANTINE_UTC: string;
+export function manageIntents(input?: { positions?: any[]; sym?: any; settings?: any; signal?: any; side?: string | null; recentIntentIds?: string[]; skipTickets?: unknown[] }): Array<Record<string, any>>;

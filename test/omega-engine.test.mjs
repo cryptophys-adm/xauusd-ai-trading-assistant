@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planIntents, settingsFrom, floorToStep, OMEGA_DEFAULTS, INTENT_ID_MAX, openId, closeId, closeAllId } from "../src/omega-engine.mjs";
+import { planIntents, manageIntents, settingsFrom, floorToStep, OMEGA_DEFAULTS, INTENT_ID_MAX, openId, closeId, closeAllId } from "../src/omega-engine.mjs";
 
 const ISSUED = Date.parse("2026-11-09T11:00:00Z");
 const NOW = ISSUED + 5 * 60_000;
@@ -251,7 +251,55 @@ test("dynamic volatility & ATR stop: widens stop floor and normalizes risk sizin
   // Volume scaled down: 50 USD risk / (600 ticks * 1) = 0.08 lot (instead of 0.10 lot)
   assert.equal(openIntent.volume, 0.08);
   assert.ok(codes(r).includes("vol_regime_high"));
+  // Audit 2026-11-11: the target moves with the widened stop, so the plan's 2R holds (10 / 5 = 12 / 6).
+  assert.equal(openIntent.tp, 4113.2);
+  assert.ok(codes(r).includes("adaptive_stop"));
+  assert.equal(Math.round(((openIntent.tp - openIntent.entry) / (openIntent.entry - openIntent.sl)) * 1000) / 1000, 2);
 });
 
 
 
+
+
+test("audit 2026-11-11: open positions are managed whatever the entry gates say (blackout, pause, spread, rollover, full book, no side)", () => {
+  const positions = [{ ticket: 9001, side: "BUY", volume: 0.04, open_price: 4090, sl: 4085, tp: 4110, profit: 80 }];
+  const gated = [
+    ["blackout", { signal: { ...SIGNAL, blackout: true } }],
+    ["paused", { control: { mode: "paused" } }],
+    ["spread", { executor: ex({ positions, symbol: { ...EXECUTOR.symbol, spread_points: 500 } }) }],
+    ["rollover_quarantine", { now: Date.parse("2026-11-09T22:00:00Z"), signal: { ...SIGNAL, issued_ms: Date.parse("2026-11-09T21:55:00Z"), expires_ms: Date.parse("2026-11-09T23:00:00Z") }, executor: ex({ positions, received_ms: Date.parse("2026-11-09T22:00:00Z") - 1000 }) }],
+    ["max_positions", {}],
+    ["no_side", { signal: { ...SIGNAL, side: "NONE" } }]
+  ];
+  for (const [code, over] of gated) {
+    const r = plan({ settings: { ...ON, trailing_stop_r: 1, max_positions: code === "max_positions" ? 1 : 3 }, executor: ex({ positions }), ...over });
+    assert.ok(codes(r).includes(code), `${code}: ${JSON.stringify(codes(r))}`);
+    assert.ok(!r.intents.some((it) => it.kind === "open"), `${code}: no new entry`);
+    assert.ok(r.intents.some((it) => it.kind === "modify_sl" && it.sl === 4090 && it.reason === "break_even"), `${code}: break-even still applied`);
+    assert.ok(r.intents.some((it) => it.kind === "partial_close" && it.ticket === 9001), `${code}: scale-out still applied`);
+  }
+  // Engine off and a stale executor still plan nothing; a kill still closes everything.
+  assert.deepEqual(plan({ engineEnabled: false, executor: ex({ positions }) }).intents, []);
+  assert.deepEqual(plan({ executor: ex({ positions, received_ms: NOW - 120_000 }) }).intents, []);
+  assert.equal(plan({ signal: { ...SIGNAL, kill: true }, executor: ex({ positions }) }).intents[0].kind, "close_all");
+});
+
+test("audit 2026-11-11: break-even reads the executor's open_price and waits for trailing_stop_r R; scale-out banks half once per position", () => {
+  const sym = EXECUTOR.symbol; // bid 4101, ask 4101.2
+  const S = { ...ON, trailing_stop_r: 1 };
+  // +11 on a 5 stop = 2.2R: break-even at the open price; a position already at break-even is left alone.
+  assert.deepEqual(manageIntents({ positions: [{ ticket: 1, side: "BUY", volume: 0.01, open_price: 4090, sl: 4085, tp: 4110 }], sym, settings: S }).map((i) => [i.kind, i.sl]), [["modify_sl", 4090]]);
+  assert.deepEqual(manageIntents({ positions: [{ ticket: 1, side: "BUY", volume: 0.01, open_price: 4090, sl: 4090, tp: 4110 }], sym, settings: S }), []);
+  // +1 on a 5 stop = 0.2R: below trailing_stop_r, no break-even (it used to fire on any profit, and never on open_price).
+  assert.deepEqual(manageIntents({ positions: [{ ticket: 2, side: "BUY", volume: 0.01, open_price: 4100, sl: 4095, tp: 4110 }], sym, settings: S }), []);
+  // SELL: open 4112, ask 4101.2 = +10.8 on a 5 stop.
+  assert.deepEqual(manageIntents({ positions: [{ ticket: 3, side: "SELL", volume: 0.01, open_price: 4112, sl: 4117, tp: 4090 }], sym, settings: S }).map((i) => [i.kind, i.sl]), [["modify_sl", 4112]]);
+  assert.deepEqual(manageIntents({ positions: [{ ticket: 1, side: "BUY", volume: 0.01, open_price: 4090, sl: 4085, tp: 4110 }], sym, settings: { ...ON, trailing_stop_r: 0 } }), [], "trailing_stop_r 0: no break-even");
+  // Scale-out: once per position (the remaining half is never halved again).
+  const pos = [{ ticket: 7, side: "BUY", volume: 0.04, open_price: 4090, sl: 4085, tp: 4110 }];
+  const first = manageIntents({ positions: pos, sym, settings: ON });
+  assert.deepEqual(first.map((i) => [i.kind, i.volume, i.id]), [["partial_close", 0.02, "ps:7:4"]]);
+  assert.deepEqual(manageIntents({ positions: [{ ...pos[0], volume: 0.02 }], sym, settings: ON, recentIntentIds: ["ps:7:4"] }), []);
+  // A position being closed in the same plan is not managed.
+  assert.deepEqual(manageIntents({ positions: pos, sym, settings: S, skipTickets: [7] }), []);
+});
