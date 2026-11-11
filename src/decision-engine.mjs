@@ -712,12 +712,32 @@ export function decisionMessage(d) {
   ].join("\n");
 }
 
+/** Minutes without a Decision Engine message before a heartbeat is sent (owner 2026-11-11); "0" turns it off. */
+export const DECISION_HEARTBEAT_MINUTES = 60;
+export function heartbeatMinutes(env) {
+  const v = Number(env?.DECISION_TELEGRAM_HEARTBEAT_MINUTES ?? DECISION_HEARTBEAT_MINUTES);
+  return Number.isFinite(v) && v >= 0 ? v : DECISION_HEARTBEAT_MINUTES;
+}
+
+/** The heartbeat: the stance still holds, since when, and this bar's reading. */
+export function heartbeatMessage(d, since) {
+  const at = (iso) => String(iso ?? "").slice(11, 16) + " UTC";
+  return [
+    `XAUUSD DECISION ENGINE · still ${d.stance}`,
+    `No change ${since ? `since the 15m bar of ${at(since)}` : "to report"}. Bar closed ${at(d.bar_close)} · bias ${String(d.bias).toLowerCase()} · confidence ${Math.round((d.confidence || 0) * 100)}% · ${d.source === "council" ? "AI council" : "fallback"}.`,
+    clip(d.summary, 300),
+    "Heartbeat: the engine decides every 15m bar and writes here when the stance changes, or once an hour without a change.",
+    "Advisory only: the server places no order and gives no position size."
+  ].join("\n");
+}
+
 /**
  * Sends the decision to Telegram when the stance is new: a BUY or SELL after a different stance, or
  * any change (BUY -> WAIT). The same stance on the next bar is not sent again; DECISION_TELEGRAM_MODE
- * = "all" sends every BUY or SELL bar.
+ * = "all" sends every BUY or SELL bar. With no message for DECISION_TELEGRAM_HEARTBEAT_MINUTES (owner
+ * 2026-11-11: "telegram bot lebih dari 1 jam tidak mengirim pesan"), one heartbeat says the stance holds.
  */
-export async function notifyDecision(env, d, send) {
+export async function notifyDecision(env, d, send, { now = Date.now() } = {}) {
   if (typeof send !== "function") return { sent: false, reason: "no_sender" };
   const kv = env?.SIGNAL_CACHE;
   let prev = null;
@@ -726,9 +746,16 @@ export async function notifyDecision(env, d, send) {
   const all = String(env?.DECISION_TELEGRAM_MODE ?? "changes").trim().toLowerCase() === "all";
   const changed = prev?.stance ? prev.stance !== d.stance : d.stance !== "WAIT";
   const notify = all ? shouldNotifyH1(d.stance, prev?.stance ?? null, "changes") : changed;
+  const since = prev && prev.stance === d.stance ? (prev.since ?? null) : d.bar_close;
+  // A state written before the heartbeat existed has no sent_at: count from now, never a burst at deploy.
+  const lastSent = Date.parse(prev?.sent_at ?? "") || (prev ? now : NaN);
+  const minutes = heartbeatMinutes(env);
+  const heartbeat = !notify && minutes > 0 && Number.isFinite(lastSent) && now - lastSent >= minutes * 60_000;
   if (notify) await send(decisionMessage(d));
-  try { await kv?.put?.(DECISION_TELEGRAM_KEY, JSON.stringify({ stance: d.stance, decision_key: d.decision_key, at: new Date().toISOString() }), { expirationTtl: 14 * 86_400 }); } catch { /* best effort */ }
-  return { sent: notify, reason: notify ? "changed" : "unchanged" };
+  else if (heartbeat) await send(heartbeatMessage(d, since));
+  const sentAt = notify || heartbeat ? new Date(now).toISOString() : (Number.isFinite(lastSent) ? new Date(lastSent).toISOString() : null);
+  try { await kv?.put?.(DECISION_TELEGRAM_KEY, JSON.stringify({ stance: d.stance, decision_key: d.decision_key, at: new Date(now).toISOString(), since, sent_at: sentAt }), { expirationTtl: 14 * 86_400 }); } catch { /* best effort */ }
+  return { sent: notify || heartbeat, reason: notify ? "changed" : heartbeat ? "heartbeat" : "unchanged" };
 }
 
 /** Pure: the witnesses, the quorum and both sides' guardrails (with their plans) from the loaded inputs. */
@@ -789,27 +816,58 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
   };
 }
 
-/** Asks the council (one call, one plain-language correction). Never throws. */
+/**
+ * The council's output budget (owner 2026-11-11). gpt-oss-120b reasons before its JSON and the reasoning
+ * shares the budget: at 4096 tokens 2 of 14 answers were cut off (2026-11-11 01:30 and 04:00 UTC) while a
+ * normal answer uses about 1,000. A cut-off answer is asked once more, briefly, with twice the budget.
+ */
+export const COUNCIL_MAX_TOKENS = 6144;
+export const COUNCIL_RETRY_MIN_MS = 20_000;
+const COUNCIL_BRIEF_NOTE = "Your previous answer ran out of tokens before the JSON. Reply with the JSON object only. Keep any reasoning very short.";
+
+/**
+ * Asks the council. Never throws. Besides one plain-language correction, an answer cut off by its token
+ * limit is asked once more, briefly, with twice the budget; an answer that is still invalid is asked once
+ * from the moderator role's fallback model (as the rooms' conclusions are), within the deadline.
+ */
 export async function askCouncil(env, evidence, { clock = () => Date.now(), deadlineMs = COUNCIL_DEADLINE_MS } = {}) {
   if (!env?.AI) return { answer: null, reason: "no model binding", errors: [] };
   const deadline = clock() + deadlineMs;
   const runState = {};
-  let messages = councilMessages(evidence);
+  const base = councilMessages(evidence);
+  let messages = base;
   let errors = [];
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await callBusModel(env, { messages, schemaName: "decision_council", schema: COUNCIL_JSON_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low", deadline, clock, runState, role: "moderator" });
+  let maxTokens = COUNCIL_MAX_TOKENS;
+  let skipPrimary = null;
+  let corrected = false, briefed = false, fellBack = false;
+  let last = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const r = await callBusModel(env, { messages, schemaName: "decision_council", schema: COUNCIL_JSON_SCHEMA, maxTokens, effort: "low", deadline, clock, runState, role: "moderator", skipPrimary });
     if (r.status !== "answered") return { answer: null, reason: r.status === "budget_exhausted" ? "out of time" : `model failed: ${clip(r.error, 120)}`, errors, model: r.model ?? null };
+    last = r;
     const obj = r.obj && typeof r.obj === "object" ? { ...r.obj } : null;
-    const v = validateCouncil(obj);
-    if (v.valid) return { answer: obj, model: r.model, fallback_used: r.fallback_used === true, errors };
+    const v = r.truncated ? { valid: false, errors: ["answer_cut_off"] } : validateCouncil(obj);
+    if (v.valid) return { answer: obj, model: r.model, fallback_used: r.fallback_used === true, errors, ...(attempt ? { retries: attempt } : {}) };
     errors = v.errors;
-    if (attempt === 0 && onlyNaturalLanguageErrors(v.errors)) {
+    const timeLeft = deadline - clock() > COUNCIL_RETRY_MIN_MS;
+    if (r.truncated && !briefed && timeLeft) {
+      briefed = true; maxTokens = COUNCIL_MAX_TOKENS * 2;
+      messages = [...base.slice(0, -1), { ...base.at(-1), content: `${base.at(-1)?.content ?? ""}\n\n${COUNCIL_BRIEF_NOTE}` }];
+      continue;
+    }
+    if (!r.truncated && !corrected && onlyNaturalLanguageErrors(v.errors)) {
+      corrected = true;
       messages = [...messages, { role: "assistant", content: clip(r.text, 4000) }, { role: "user", content: NATURAL_LANGUAGE_CORRECTION }];
       continue;
     }
-    return { answer: null, reason: r.truncated ? "answer cut off" : `invalid answer (${v.errors.join(", ")})`, errors, model: r.model };
+    if (!fellBack && !r.fallback_used && timeLeft) {
+      fellBack = true; skipPrimary = `${r.truncated ? "answer cut off" : `invalid_output (${v.errors.slice(0, 4).join(", ")})`}`;
+      messages = base; maxTokens = COUNCIL_MAX_TOKENS;
+      continue;
+    }
+    break;
   }
-  return { answer: null, reason: "invalid answer", errors };
+  return { answer: null, reason: last?.truncated ? "answer cut off" : `invalid answer (${errors.join(", ")})`, errors, model: last?.model ?? null };
 }
 
 /**
@@ -843,7 +901,7 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     if (!Number(ins?.meta?.changes)) return { status: "already_decided", decision_key: key };
     try { await env.SIGNAL_CACHE?.put?.(DECISION_LATEST_KEY, JSON.stringify(record), { expirationTtl: 2 * 86_400 }); } catch { /* D1 has it */ }
     let telegram = null, ledger = null;
-    try { telegram = await notifyDecision(env, record, send); } catch (e) { telegram = { sent: false, reason: `failed: ${clip(e?.message ?? e, 120)}` }; }
+    try { telegram = await notifyDecision(env, record, send, { now: clock() }); } catch (e) { telegram = { sent: false, reason: `failed: ${clip(e?.message ?? e, 120)}` }; }
     if (record.trade && typeof recordSignal === "function") { try { ledger = await recordSignal(record); } catch { ledger = 0; } }
     return { status: "decided", decision_key: key, stance: record.stance, source: record.source, confidence: record.confidence, latency_seconds: record.latency_seconds, overruled: Boolean(record.overruled), telegram, ledger };
   } catch (e) {
