@@ -45,6 +45,8 @@ import { callBusModel, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { naturalLanguageErrors, onlyNaturalLanguageErrors, NATURAL_LANGUAGE_CORRECTION } from "./natural-language.mjs";
 import { shouldNotifyH1 } from "./h1-telegram.mjs";
 import { fetchEffectiveDoctrine, formatDoctrineDirectives } from "./doctrine-consumer.mjs";
+import { deriveWitnessWeights, validateWitnessWeights } from "./witness-weighting.mjs";
+import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
@@ -52,8 +54,13 @@ const M15_MS = 900_000;
 /** Witness weights (sum 1). A missing or stale witness drops out and the rest renormalise. */
 export const WITNESS_WEIGHTS = Object.freeze({ D1: 0.2, H4: 0.2, H1: 0.2, M15: 0.15, NEWS: 0.1, MACRO: 0.05, STRATEGY: 0.1 });
 export const EXTENDED_WITNESS_WEIGHTS = Object.freeze({ D1: 0.16, H4: 0.16, H1: 0.16, M15: 0.12, NEWS: 0.08, MACRO: 0.04, STRATEGY: 0.08, KEY_LEVELS: 0.05, REGIME: 0.05, TREND_TF: 0.05, MACRO_DRIVERS: 0.03, SESSION: 0.02 });
-/** The witness weights in force: the B-11 set while GLOBAL_DECISION_WEIGHTED is on, else the base set. */
-export function activeWitnessWeights(env) { return decisionWeightedEnabled(env) ? EXTENDED_WITNESS_WEIGHTS : WITNESS_WEIGHTS; }
+/** The witness weights in force: dynamic Aether adaptive weights if injected/enabled, else B-11 set while GLOBAL_DECISION_WEIGHTED is on, else the base set. */
+export function activeWitnessWeights(env) {
+  if (env?.DYNAMIC_WITNESS_WEIGHTS && typeof env.DYNAMIC_WITNESS_WEIGHTS === "object") {
+    return env.DYNAMIC_WITNESS_WEIGHTS;
+  }
+  return decisionWeightedEnabled(env) ? EXTENDED_WITNESS_WEIGHTS : WITNESS_WEIGHTS;
+}
 export function decisionWeightedEnabled(env) { return String(env?.GLOBAL_DECISION_WEIGHTED ?? "false").trim().toLowerCase() === "true"; }
 export const QUORUM_MIN = 0.5;
 export const LEAN = 0.15;
@@ -150,7 +157,7 @@ export function witnessCards({ global = null, strategy = null, context = {}, env
     // data (price against the Key Level Agent's zones, the 1H bars and sensors, the D1/4H/1H bars, the
     // dollar and yields), never the strategy engine's direction or a room's lean (independentWitnesses).
     const ind = context?.independent ?? {};
-    const push = (key, label, role, w) => cards.push({ key, label, role, weight: EXTENDED_WITNESS_WEIGHTS[key], available: isNum(w?.lean), stale: false, lean: isNum(w?.lean) ? w.lean : null, side: sideOf(w?.lean), decision: null, confidence: null, summary: w?.summary ?? null, at: null });
+    const push = (key, label, role, w) => cards.push({ key, label, role, weight: W[key] ?? EXTENDED_WITNESS_WEIGHTS[key], available: isNum(w?.lean), stale: false, lean: isNum(w?.lean) ? w.lean : null, side: sideOf(w?.lean), decision: null, confidence: null, summary: w?.summary ?? null, at: null });
     push("KEY_LEVELS", "Key levels", "price vs zones", ind.key_levels);
     push("REGIME", "Regime", "1H trend quality", ind.regime);
     push("TREND_TF", "Trend TF", "price vs averages", ind.trend_tf);
@@ -158,7 +165,7 @@ export function witnessCards({ global = null, strategy = null, context = {}, env
     const se = context?.session;
     const sessionText = se ? `${se.day} ${se.date} ${se.time_utc} UTC, market ${se.market_open ? `open, ${se.active.length ? se.active.join(" and ") : "between sessions"} (${se.liquidity} liquidity)` : "closed"}` : null;
     // A session has no direction: context only.
-    cards.push({ key: "SESSION", label: "Session", role: "session clock", weight: EXTENDED_WITNESS_WEIGHTS.SESSION, available: false, stale: false, lean: null, side: sideOf(null), decision: null, confidence: null, summary: sessionText, at: null });
+    cards.push({ key: "SESSION", label: "Session", role: "session clock", weight: W.SESSION ?? EXTENDED_WITNESS_WEIGHTS.SESSION, available: false, stale: false, lean: null, side: sideOf(null), decision: null, confidence: null, summary: sessionText, at: null });
   }
   return cards;
 }
@@ -765,12 +772,17 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null 
   // (context: a session has no direction).
   const session = sessionAt(now);
   const context = { regime, correlations, session, independent: independentWitnesses(loaded) };
-  const cards = witnessCards({ global, strategy, context, env });
+  let effectiveEnv = env;
+  if (decisionWeightedEnabled(env) && !env?.DYNAMIC_WITNESS_WEIGHTS) {
+    const dynamicWeights = deriveWitnessWeights({ regime, analytics });
+    effectiveEnv = { ...env, DYNAMIC_WITNESS_WEIGHTS: dynamicWeights, WITNESS_WEIGHTS_SOURCE: "aether_adaptive" };
+  }
+  const cards = witnessCards({ global, strategy, context, env: effectiveEnv });
   const quorum = quorumOf(cards, { now, analytics });
   const market = marketContextOf(loaded, quorum, now);
   const withMarket = { ...inputs, market };
-  const guards = { long: guardrailsFor(1, { cards, quorum, strategy, inputs: withMarket, macro, now, env }), short: guardrailsFor(-1, { cards, quorum, strategy, inputs: withMarket, macro, now, env }) };
-  return { cards, quorum, guards, market };
+  const guards = { long: guardrailsFor(1, { cards, quorum, strategy, inputs: withMarket, macro, now, env: effectiveEnv }), short: guardrailsFor(-1, { cards, quorum, strategy, inputs: withMarket, macro, now, env: effectiveEnv }) };
+  return { cards, quorum, guards, market, witness_weights: effectiveEnv?.DYNAMIC_WITNESS_WEIGHTS ?? activeWitnessWeights(env), witness_weights_source: effectiveEnv?.WITNESS_WEIGHTS_SOURCE ?? "baseline_prior" };
 }
 
 /** Pure: the whole decision record from the loaded inputs, their assessment and the council's result (or null). */
@@ -811,7 +823,7 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     cautions, vetoes: { long: guards.long.vetoes, short: guards.short.vetoes },
     context: councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, market, now }),
     strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline, price: strategy.price, atr_h1: strategy.atr_h1 } : null,
-    trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: activeWitnessWeights(env), rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE },
+    trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? activeWitnessWeights(env)), witness_weights_source: (assessment?.witness_weights_source ?? "baseline_prior"), rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE },
     advisory: "The server places no order and gives no position size; the EA sizes each trade from the owner's risk input."
   };
 }
