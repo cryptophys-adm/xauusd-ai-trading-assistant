@@ -16,7 +16,7 @@
 // agents (owner decision: their budget moves here).
 import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors } from "./natural-language.mjs";
-import { HUD_IDS, HUD_NAMES, calibrationCounts, calibrationNote, calibratedLines } from "./hud-reading.mjs";
+import { HUD_NAMES, calibrationCounts, calibrationNote, calibratedLines, hudAgentsIn } from "./hud-reading.mjs";
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
@@ -547,7 +547,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   let desk15 = { available: false, reading: [], approved_by_parity: false };
   try { desk15 = await chartDeskReading(env, m15KeyForClose(barTime)); } catch { /* no desk this bar */ }
   const confirmations = m15Confirmations(desk15);
-  const roster = [...(desk15.available ? ["m15"] : []), "news", "technical", "risk", ...HUD_IDS.filter(id => hud?.readings?.[id]?.available)];
+  const roster = [...(desk15.available ? ["m15"] : []), "news", "technical", "risk", ...hudAgentsIn("M15").filter(id => hud?.readings?.[id]?.available)];
   const refs = busRefs(roster);
   // Evidence status, shown once per agent (owner decision A): no agent repeats it in its text.
   const calibration = Object.fromEntries(roster.map(id => {

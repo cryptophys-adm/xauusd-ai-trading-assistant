@@ -30,7 +30,7 @@
 // (TF_THREADS_MAX_CALLS_PER_HOUR).
 import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors } from "./natural-language.mjs";
-import { HUD_IDS, HUD_NAMES, calibrationCounts, calibrationNote } from "./hud-reading.mjs";
+import { HUD_NAMES, calibrationCounts, calibrationNote, hudAgentsIn } from "./hud-reading.mjs";
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { ensureThreadSchema, rowToThreadMessage, ROOM_STANCES, hudEvidenceLines, threadInternals } from "./agent-threads.mjs";
@@ -394,7 +394,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   const ownDesk = ev.desk?.available ? { H1: "h1", H4: "h4", D1: "d1" }[chart] : null;
   const roster = [
     ...(ownDesk ? [ownDesk] : []), ...(ev.news ? ["news"] : []), "technical", "risk",
-    ...HUD_IDS.filter((id) => ev.hud?.readings?.[id]?.available)
+    ...hudAgentsIn(chart).filter((id) => ev.hud?.readings?.[id]?.available)
   ];
   const calibration = Object.fromEntries(roster.map((id) => {
     const lines = ev.hud?.readings?.[id]?.lines;

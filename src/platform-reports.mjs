@@ -28,9 +28,8 @@ export const MODERATOR_HEARTBEAT_MS = 55 * 60_000;
 const SYMBOL = "OANDA:XAUUSD";
 const DIRECTIONAL = new Set(["BUY", "SELL"]);
 
-/** War Room HUD agent id → platform agent id (migration 0016 on the platform). */
+/** War Room HUD agent id → platform agent id (migration 0016 on the platform; the four dismantled HUD agents were deleted by 0047 on 2026-11-11). */
 export const HUD_PLATFORM_IDS = Object.freeze({
-  r37_funnel: "hud-r37-funnel",
   prophet: "hud-prophet",
   trade_management: "hud-trade-management",
   interstellar_eyes: "hud-interstellar-eyes",
@@ -40,8 +39,6 @@ export const HUD_PLATFORM_IDS = Object.freeze({
   aegis_footprint: "hud-aegis-footprint-matrix",
   tactical_muscles: "hud-tactical-muscles",
   macro_aether: "hud-macro-aether-sensors",
-  gabfx_price_action: "hud-gabfx-price-action",
-  playbook_execution: "hud-playbook-execution",
   decision_matrix: "hud-decision-matrix"
 });
 
