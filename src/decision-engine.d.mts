@@ -39,7 +39,7 @@ export function notifyDecision(env: any, decision: any, send: ((text: string) =>
 export const DECISION_HEARTBEAT_MINUTES: number;
 export function heartbeatMinutes(env: unknown): number;
 export function heartbeatMessage(decision: any, since: string | null): string;
-export function assess(loaded: any, options?: { now?: number; env?: any }): { cards: any[]; quorum: any; guards: any; market: any };
+export function assess(loaded: any, options?: { now?: number; env?: any; analytics?: any }): { cards: any[]; quorum: any; guards: any; market: any; witness_weights?: Record<string, number>; witness_weights_source?: string };
 export function buildDecisionRecord(input: Record<string, any>): Record<string, any>;
 export function askCouncil(env: any, evidence: unknown, options?: { clock?: () => number; deadlineMs?: number }): Promise<Record<string, any>>;
 type RunOptions = { now?: number; clock?: () => number; send?: ((text: string) => Promise<void>) | null; recordSignal?: ((decision: any) => Promise<number>) | null; loaded?: any };
