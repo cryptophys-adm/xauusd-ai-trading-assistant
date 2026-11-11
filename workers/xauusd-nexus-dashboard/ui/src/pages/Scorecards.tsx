@@ -16,7 +16,7 @@ function Compliance() {
   const rows = (c.agents as any[]).filter((a) => a.violations > 0).slice(0, 20);
   return (
     <Panel title="Agent Compliance & Safety Audit (7 days)" icon={<ShieldAlert className="h-3.5 w-3.5 text-amber-300" />} right={<Badge tone={c.total.violations ? "amber" : "green"}>{c.total.rate_per_100 ?? 0} per 100 messages</Badge>}>
-      <p className="mb-3 text-[12px] text-slate-400">Pemeriksaan deterministik terhadap kepatuhan prompt agent dengan batasan sistem. Konsumen: Guardian Aether membaca rate ini untuk memvalidasi stabilitas persona agen.</p>
+      <p className="mb-3 text-[12px] text-slate-400">Deterministic checks of agent prompt compliance against system constraints. Primary Consumer: Aether Guardian evaluates these rates to validate persona stability and rule discipline.</p>
       {!rows.length ? <Empty>No rule break in {c.total.messages} room messages.</Empty> : (
         <div className="table-wrap">
           <table className="tbl">
@@ -201,13 +201,13 @@ export default function Scorecards() {
         right={<Badge tone="purple">30-day rolling · price action only</Badge>}
       >
         <p className="text-[12px] leading-relaxed text-slate-400">
-          Sistem pembobotan reputasi deterministik untuk seluruh agen War Room. Setiap stance dievaluasi secara matematis terhadap {d?.scoring?.horizon ?? 4} candle mendatang: BUY/SELL dianggap <span className="text-emerald-300 font-semibold">Hit</span> bila harga menyentuh {d?.scoring?.thresholdAtr ?? 0.5} x ATR searah terlebih dahulu, dan WAIT dianggap akurat bila tidak ada pergerakan {d?.scoring?.waitTargetAtr ?? 1} x ATR.
-          Akurasi ini dikonversi menjadi <strong>Crowd Weight Multiplier</strong> (x0.25 hingga x2.00) yang digunakan oleh Decision Engine saat menghitung Quorum Voting.
+          Deterministic reputation weighting system for all War Room agents. Every stance is scored mathematically against the next {d?.scoring?.horizon ?? 4} closed candles: BUY/SELL is considered a <span className="text-emerald-300 font-semibold">Hit</span> when price moves {d?.scoring?.thresholdAtr ?? 0.5} x ATR its way first, while WAIT is accurate when no {d?.scoring?.waitTargetAtr ?? 1} x ATR directional move occurs.
+          This accuracy is transformed into a <strong>Crowd Weight Multiplier</strong> (x0.25 to x2.00) used by the Decision Engine in quorum consensus voting.
         </p>
 
         {/* Consumer Badges */}
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3 text-[11px]">
-          <span className="text-slate-400">Konsumen Utama:</span>
+          <span className="text-slate-400">Primary Consumers:</span>
           <Badge tone="cyan">War Room Decision Weighting</Badge>
           <Badge tone="purple">Aether Epigenetic Learning</Badge>
           <Badge tone="green">Indicator Registry Fault Detection</Badge>
@@ -350,7 +350,7 @@ export default function Scorecards() {
           {/* Stuck States Alert */}
           {!!d?.stuck_states?.length && (
             <Panel title="Caution: Open Indicator Stuck States" icon={<ShieldAlert className="h-4 w-4 text-amber-400" />} right={<Badge tone="amber">{d.stuck_states.length} open</Badge>}>
-              <p className="mb-2 text-[12px] text-slate-400">Indikator yang membeku atau nilai state tidak bereaksi terhadap pergerakan ATR pasar. Registry secara otomatis menolak voting agen saat stuck state terdeteksi.</p>
+              <p className="mb-2 text-[12px] text-slate-400">Frozen indicator fields or unresponsive state values during active ATR market moves. The indicator registry automatically disqualifies an agent's voting power when a stuck state is detected.</p>
               <div className="table-wrap">
                 <table className="tbl">
                   <thead>

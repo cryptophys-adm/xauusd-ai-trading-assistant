@@ -59,7 +59,7 @@ function TuningGrid() {
       right={<Badge tone="purple">Shadow Validation · Owner PR to Promote</Badge>}
     >
       <p className="mb-3 text-[12px] text-slate-400">
-        Grid pengujian parameter berbasis statistik ketat: Discovery &ge; {t.statistics.min_discovery_bars} bars, One-sided Sign Test, Holm-Bonferroni correction per family per month ({t.holm_month}), diikuti validasi Holdout out-of-sample pada {t.statistics.holdout_bars} candle terkini.
+        Rigorous statistical parameter grid testing: Discovery &ge; {t.statistics.min_discovery_bars} bars, one-sided sign test, Holm-Bonferroni family-wise error correction per month ({t.holm_month}), followed by out-of-sample holdout validation on the newest {t.statistics.holdout_bars} closed candles.
       </p>
 
       {/* Grid Families Table */}
@@ -107,7 +107,7 @@ function TuningGrid() {
               <Badge tone={c.enabled ? "green" : "slate"}>{c.enabled ? `Active · Max ${c.max_calls_per_hour}/hr` : "Disabled"}</Badge>
             </div>
             <p className="mb-3 text-[11px] text-slate-400">
-              Noise baseline A/A: prompt identik merubah stance pada {c.aa_noise.changed} dari {c.aa_noise.bars} bars ({c.aa_noise.rate != null ? `${Math.round(c.aa_noise.rate * 100)}%` : "0%"} stochastic jitter threshold).
+              A/A noise baseline: identical prompts changed stance on {c.aa_noise.changed} of {c.aa_noise.bars} bars ({c.aa_noise.rate != null ? `${Math.round(c.aa_noise.rate * 100)}%` : "0%"} stochastic model jitter threshold).
             </p>
             {!c.candidates.length ? (
               <Empty>No approved Aether note currently in shadow testing.</Empty>
@@ -224,13 +224,13 @@ export default function Shadow() {
         right={<Badge tone="purple">Out-of-Band Simulation · Zero Risk</Badge>}
       >
         <p className="text-[12px] leading-relaxed text-slate-400">
-          Arena pengujian paralel di mana formula indikator dan hipotesis baru dievaluasi berdampingan dengan engine aktif (<span className="text-slate-200 font-semibold">Active Control</span>) pada candle H1 tertutup yang sama.
-          Sistem menggunakan uji signifikansi statistik non-parametrik (Holm-Bonferroni Sign Test) dan validasi Holdout out-of-sample. Promosi ke produksi dilakukan via reviewed Pull Request atau otomatisasi Epigenetic Promotion Aether.
+          Parallel out-of-band testing arena where candidate indicator algorithms and knowledge hypotheses run alongside the active engine (<span className="text-slate-200 font-semibold">Active Control</span>) on identical closed H1 bars.
+          The platform enforces non-parametric statistical tests (Holm-Bonferroni Sign Test) and out-of-sample holdout validation. Production promotion requires a reviewed Pull Request or autonomous Epigenetic Promotion via Aether.
         </p>
 
         {/* Consumer Badges */}
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3 text-[11px]">
-          <span className="text-slate-400">Konsumen Utama:</span>
+          <span className="text-slate-400">Primary Consumers:</span>
           <Badge tone="purple">Epigenetic Promotion Engine (Aether A7/A8)</Badge>
           <Badge tone="cyan">Weighting Replay Statistical Sentry</Badge>
           <Badge tone="green">Reverse Shadow Rollback Guard</Badge>
