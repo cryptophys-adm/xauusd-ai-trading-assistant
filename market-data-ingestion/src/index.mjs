@@ -1,5 +1,6 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { applyMt5Fallback } from "./mt5-fallback.mjs";
+import { runBrokerShadow } from "./broker-shadow.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
 import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHtfLocalComputation, publishHudSnapshots, republishRevisedH1, LAST_PUBLISH_KEY, LAST_HUD_PUBLISH_KEY } from "./local-publisher.mjs";
 import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, marketClosed, verifyDerivedSeries, settleSeconds, SETTLE_SECONDS } from "./tradingview-source.mjs";
@@ -330,6 +331,11 @@ const worker = {
         const publishedM15 = await publishM15LocalComputation(env, { bundle: latestBundle });
         if (!["m15_publish_disabled", "no_fresh_m15_close", "already_published"].includes(publishedM15.status)) {
           console.log(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_m15", status: publishedM15.status, candle_key: publishedM15.candle_key || null, gmi_error: publishedM15.gmi_error || null }));
+        }
+        // Corpus Oracle phase 2: the same engines on the broker's M15 bars, compared; feeds nothing.
+        if (publishedM15.status === "published" || publishedM15.status === "partial_failure") {
+          const shadow = await runBrokerShadow(env, { bundle: latestBundle, tvRecords: publishedM15.records, candleKey: publishedM15.candle_key });
+          if (!["off", "unavailable"].includes(shadow.status)) console.log(JSON.stringify({ worker: WORKER_NAME, event: "broker_shadow", ...shadow }));
         }
       } catch (error) {
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "local_computation_publish_m15_failed", code: asString(error?.code) || "publish_failed" }));

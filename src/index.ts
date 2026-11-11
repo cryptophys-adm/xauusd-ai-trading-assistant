@@ -229,7 +229,7 @@ import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition } from "./omega-broker.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
-import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar } from "./corpus-oracle.mjs";
+import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
 import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
@@ -1987,6 +1987,10 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
    * The MT5 fallback (docs/RFC_MT5_FALLBACK.md): the broker's closed M1 bars from the Corpus Oracle,
    * for the pull adapter while the TradingView gateway is down. Read-only.
    */
+  /** Corpus Oracle phase 2: the broker shadow lane's agreement for one 15m bar (feeds nothing). */
+  async recordBrokerShadow(payload: unknown): Promise<Record<string, unknown>> {
+    return recordBrokerShadow(this.env, payload);
+  }
   async corpusBars(request: { since_ms?: number; limit?: number; base?: string } = {}): Promise<Record<string, unknown>> {
     // With a base (stage 2: XAGUSD, USOIL, the DXY pairs): that macro symbol's bars; else the traded pair's.
     if (typeof request?.base === "string" && request.base) return readMacroBars(this.env, { base: request.base, sinceMs: Number(request?.since_ms) || 0, limit: Number(request?.limit) || undefined });

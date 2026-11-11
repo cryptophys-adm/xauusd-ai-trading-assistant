@@ -20,3 +20,5 @@ export function readMacroBars(env: any, options?: { base?: string; sinceMs?: num
 export function validateMt5Calendar(payload: any, options?: { executor?: any; connection?: any; now?: number }): Record<string, any>;
 export function ingestMt5Calendar(env: any, payload: any, options?: { executor?: any; now?: number }): Promise<Record<string, any>>;
 export function readMt5Calendar(env: any, options?: { fromMs: number; toMs: number }): Promise<Array<Record<string, any>>>;
+export function recordBrokerShadow(env: any, payload: any, options?: { now?: number }): Promise<Record<string, any>>;
+export function brokerShadowSummary(env: any, options?: { now?: number; days?: number }): Promise<Record<string, any>>;
