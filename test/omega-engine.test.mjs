@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planIntents, manageIntents, settingsFrom, floorToStep, OMEGA_DEFAULTS, INTENT_ID_MAX, openId, closeId, closeAllId } from "../src/omega-engine.mjs";
+import { planIntents, manageIntents, settingsFrom, floorToStep, OMEGA_DEFAULTS, INTENT_ID_MAX, openId, closeId, closeAllId, isOmegaOwned } from "../src/omega-engine.mjs";
 
 const ISSUED = Date.parse("2026-11-09T11:00:00Z");
 const NOW = ISSUED + 5 * 60_000;
@@ -302,4 +302,46 @@ test("audit 2026-11-11: break-even reads the executor's open_price and waits for
   assert.deepEqual(manageIntents({ positions: [{ ...pos[0], volume: 0.02 }], sym, settings: ON, recentIntentIds: ["ps:7:4"] }), []);
   // A position being closed in the same plan is not managed.
   assert.deepEqual(manageIntents({ positions: pos, sym, settings: S, skipTickets: [7] }), []);
+});
+
+test("isOmegaOwned accurately separates bot trades from manual mobile orders", () => {
+  assert.equal(isOmegaOwned({ ticket: 1, source: "omega" }), true);
+  assert.equal(isOmegaOwned({ ticket: 2, magic: 920200 }), true);
+  assert.equal(isOmegaOwned({ ticket: 3, intent_id: "open:1794389400000:S" }), true);
+  assert.equal(isOmegaOwned({ ticket: 4, source: "manual" }), false);
+  assert.equal(isOmegaOwned({ ticket: 5, magic: 0 }), false);
+  assert.equal(isOmegaOwned({ ticket: 6, source: "external", magic: 12345 }), false);
+  // Legacy fixture fallback
+  assert.equal(isOmegaOwned({ ticket: 7, side: "BUY", open_price: 4000 }), true);
+});
+
+test("manual/mobile positions are protected: not auto-closed on opposite signal or mean reversal, not trailed, but counted in max_positions", () => {
+  const manualPos = { ticket: 109082132, symbol: "XAUUSD.m", side: "SELL", volume: 0.02, open_price: 4063.4, sl: 0, tp: 0, profit: 28.34, magic: 0, source: "manual" };
+  const omegaPos = { ticket: 109121707, symbol: "XAUUSD.m", side: "SELL", volume: 0.01, open_price: 4048.67, sl: 4058.76, tp: 4012.73, profit: -0.56, magic: 920200, source: "omega" };
+
+  // 1. BUY signal arrives: only omega SELL position gets opposite close intent, manual position is untouched!
+  const rOpp = plan({ signal: { ...SIGNAL, side: "BUY" }, executor: ex({ positions: [manualPos, omegaPos] }) });
+  const closeIntents = rOpp.intents.filter((i) => i.kind === "close");
+  assert.equal(closeIntents.length, 1);
+  assert.equal(closeIntents[0].ticket, 109121707, "only omega position closed on opposite signal");
+  assert.ok(!rOpp.intents.some((i) => i.ticket === 109082132), "manual mobile position must NEVER be auto-closed");
+
+  // 2. Mean Reversal signal arrives: only omega position closed
+  const rRev = plan({ signal: { ...SIGNAL, action: "REVERSAL", mean_reversal: true }, executor: ex({ positions: [manualPos, omegaPos] }) });
+  const revCloses = rRev.intents.filter((i) => i.kind === "close");
+  assert.equal(revCloses.length, 1);
+  assert.equal(revCloses[0].ticket, 109121707);
+
+  // 3. manageIntents (break-even / trailing): manual position is skipped
+  const sym = EXECUTOR.symbol; // bid 4101, ask 4101.2
+  const mng = manageIntents({ positions: [manualPos, omegaPos], sym, settings: { ...ON, trailing_stop_r: 1 } });
+  assert.ok(!mng.some((i) => i.ticket === 109082132), "trailing/break-even must never modify manual positions");
+
+  // 4. Max positions account exposure: manual positions count towards max_positions
+  const rMax = plan({ signal: { ...SIGNAL, side: "SELL", stop: 4105, tp1: 4090 }, settings: { ...ON, max_positions: 1 }, executor: ex({ positions: [manualPos] }) });
+  assert.ok(codes(rMax).includes("max_positions"), "account max_positions gate counts manual positions to prevent over-leverage");
+
+  // 5. Emergency kill switch still closes all positions for account safety
+  const rKill = plan({ signal: { ...SIGNAL, kill: true }, executor: ex({ positions: [manualPos, omegaPos] }) });
+  assert.equal(rKill.intents[0].kind, "close_all");
 });

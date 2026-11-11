@@ -172,8 +172,32 @@ export function executorFrom(state) {
       atr_points: n(s.atr_points)
     },
     positions: (Array.isArray(state.positions) ? state.positions : []).slice(0, 50).map((p) => ({
-      ticket: n(p?.ticket), side: p?.side === "BUY" || p?.side === "SELL" ? p.side : null, volume: n(p?.volume), open_price: n(p?.open_price), sl: n(p?.sl), tp: n(p?.tp), profit: n(p?.profit),
-      intent_id: typeof p?.intent_id === "string" ? p.intent_id.slice(0, 31) : null, opened_ms: n(p?.opened_ms)
+      ticket: n(p?.ticket),
+      symbol: typeof p?.symbol === "string" ? p.symbol.slice(0, 32) : null,
+      side: p?.side === "BUY" || p?.side === "SELL" ? p.side : null,
+      volume: n(p?.volume),
+      open_price: n(p?.open_price),
+      sl: n(p?.sl),
+      tp: n(p?.tp),
+      profit: n(p?.profit),
+      intent_id: typeof p?.intent_id === "string" ? p.intent_id.slice(0, 31) : null,
+      magic: Number.isInteger(p?.magic) ? p.magic : null,
+      source: typeof p?.source === "string" ? p.source.slice(0, 16) : null,
+      opened_ms: n(p?.opened_ms)
+    })),
+    orders: (Array.isArray(state.orders) ? state.orders : []).slice(0, 50).map((o) => ({
+      ticket: n(o?.ticket),
+      symbol: typeof o?.symbol === "string" ? o.symbol.slice(0, 32) : null,
+      type: typeof o?.type === "string" ? o.type.slice(0, 16) : null,
+      volume_initial: n(o?.volume_initial),
+      volume_current: n(o?.volume_current),
+      price_open: n(o?.price_open),
+      sl: n(o?.sl),
+      tp: n(o?.tp),
+      comment: typeof o?.comment === "string" ? o.comment.slice(0, 64) : null,
+      magic: Number.isInteger(o?.magic) ? o.magic : null,
+      source: typeof o?.source === "string" ? o.source.slice(0, 16) : null,
+      placed_ms: n(o?.placed_ms)
     }))
   };
 }
@@ -440,7 +464,9 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       digits: st?.symbol?.digits ?? null, point: st?.symbol?.point ?? null, tick_size: st?.symbol?.tick_size ?? null, tick_value: st?.symbol?.tick_value ?? null,
       volume_min: st?.symbol?.volume_min ?? null, volume_max: st?.symbol?.volume_max ?? null, volume_step: st?.symbol?.volume_step ?? null, stops_level_points: st?.symbol?.stops_level_points ?? null,
       atr_value: atrVal, atr_points: atrPts,
-      positions: Array.isArray(st?.positions) ? st.positions : [], state_age_ms: Number.isFinite(st?.received_ms) ? now - st.received_ms : null
+      positions: Array.isArray(st?.positions) ? st.positions : [],
+      orders: Array.isArray(st?.orders) ? st.orders : [],
+      state_age_ms: Number.isFinite(st?.received_ms) ? now - st.received_ms : null
     },
     autonomous_watchdog: {
       active: true,
@@ -490,4 +516,31 @@ export async function applyOmegaPolicy(env, { now = Date.now() } = {}) {
   const r = await writeSettings(env, { body, actor: "aether" }, { now });
   if (!r.ok) return { status: "failed", error: r.error };
   return { status: "applied", settings: r.settings, version: r.version };
+}
+
+/**
+ * Manual user interrupt / exit: queue a close intent for an open MT5 position (ticket).
+ * Dispatched immediately via bridgeSync on the next bridge poll cycle (<=2s).
+ */
+export async function closePosition(env, { ticket, reason = "manual_user_exit", actor = "user" } = {}, { now = Date.now() } = {}) {
+  await ensureSchema(env.DB);
+  const db = env.DB;
+  const numTicket = Number(ticket);
+  if (!Number.isFinite(numTicket) || numTicket <= 0) {
+    return { ok: false, error: "invalid_ticket" };
+  }
+  const cleanReason = String(reason || "manual_user_exit").slice(0, 64);
+  const id = `manual:close:${numTicket}:${now}`;
+  const payload = {
+    id,
+    kind: "close",
+    ticket: numTicket,
+    reason: cleanReason,
+    actor: String(actor || "user").slice(0, 64)
+  };
+
+  await db.prepare("INSERT INTO omega_intents (id, kind, payload, status, created_ms, updated_ms) VALUES (?, ?, ?, 'pending', ?, ?)").bind(id, "close", JSON.stringify(payload), now, now).run();
+  await event(db, now, actor, "position_manual_close_requested", { ticket: numTicket, reason: cleanReason, intent_id: id });
+
+  return { ok: true, intent_id: id, ticket: numTicket };
 }

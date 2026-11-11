@@ -222,7 +222,7 @@ import { readCrowdReplay } from "./tuning-replay.mjs";
 import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weighting.mjs";
 import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
-import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy } from "./omega-broker.mjs";
+import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition } from "./omega-broker.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus } from "./corpus-oracle.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
@@ -2018,6 +2018,9 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   }
   async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown }): Promise<JsonObject> {
     return bridgeSync(this.env, input ?? {}) as Promise<JsonObject>;
+  }
+  async closePosition(input: { ticket: number; reason?: string; actor?: string }): Promise<JsonObject> {
+    return closePosition(this.env, input ?? {}) as Promise<JsonObject>;
   }
 }
 

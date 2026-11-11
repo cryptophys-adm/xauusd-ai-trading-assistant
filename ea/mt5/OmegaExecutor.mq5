@@ -286,16 +286,26 @@ double ComputeTodayRealizedPl()
 string BuildPositionsJson()
   {
    string sym = ResolveGoldSymbol();
+   int defaultDigits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   long serverMinusUtcSec = (long)(TimeCurrent() - TimeGMT());
    string out = "[";
    int count = 0;
-   int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
-   long serverMinusUtcSec = (long)(TimeCurrent() - TimeGMT());
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+
+      string posSym = PositionGetString(POSITION_SYMBOL);
+      int posDigits = (int)SymbolInfoInteger(posSym, SYMBOL_DIGITS);
+      if(posDigits <= 0) posDigits = defaultDigits;
+
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      string source = "external";
+      if(magic == MagicNumber)
+         source = "omega";
+      else if(magic == 0)
+         source = "manual";
 
       string side = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? "BUY" : "SELL";
       double volume = PositionGetDouble(POSITION_VOLUME);
@@ -310,17 +320,84 @@ string BuildPositionsJson()
                          : (((long)PositionGetInteger(POSITION_TIME) - serverMinusUtcSec) * 1000);
 
       out += StringFormat(
-         "%s{\"ticket\":%I64u,\"side\":\"%s\",\"volume\":%.4f,\"open_price\":%s,\"sl\":%s,\"tp\":%s,\"profit\":%.2f,\"intent_id\":\"%s\",\"opened_ms\":%I64d}",
+         "%s{\"ticket\":%I64u,\"symbol\":\"%s\",\"side\":\"%s\",\"volume\":%.4f,\"open_price\":%s,\"sl\":%s,\"tp\":%s,\"profit\":%.2f,\"intent_id\":\"%s\",\"magic\":%I64d,\"source\":\"%s\",\"opened_ms\":%I64d}",
          count > 0 ? "," : "",
          ticket,
+         EscapeJson(posSym),
          side,
          volume,
-         DoubleToString(openPrice, digits),
-         DoubleToString(sl, digits),
-         DoubleToString(tp, digits),
+         DoubleToString(openPrice, posDigits),
+         DoubleToString(sl, posDigits),
+         DoubleToString(tp, posDigits),
          profit,
          intentId,
+         magic,
+         source,
          openedUtcMs
+      );
+      count++;
+     }
+   return out + "]";
+  }
+
+string BuildOrdersJson()
+  {
+   string sym = ResolveGoldSymbol();
+   int defaultDigits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   long serverMinusUtcSec = (long)(TimeCurrent() - TimeGMT());
+   string out = "[";
+   int count = 0;
+
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = OrderGetTicket(i);
+      if(ticket == 0 || !OrderSelect(ticket)) continue;
+
+      string orderSym = OrderGetString(ORDER_SYMBOL);
+      int orderDigits = (int)SymbolInfoInteger(orderSym, SYMBOL_DIGITS);
+      if(orderDigits <= 0) orderDigits = defaultDigits;
+
+      long orderType = OrderGetInteger(ORDER_TYPE);
+      string typeStr = "OTHER";
+      if(orderType == ORDER_TYPE_BUY_LIMIT) typeStr = "BUY_LIMIT";
+      else if(orderType == ORDER_TYPE_SELL_LIMIT) typeStr = "SELL_LIMIT";
+      else if(orderType == ORDER_TYPE_BUY_STOP) typeStr = "BUY_STOP";
+      else if(orderType == ORDER_TYPE_SELL_STOP) typeStr = "SELL_STOP";
+      else if(orderType == ORDER_TYPE_BUY_STOP_LIMIT) typeStr = "BUY_STOP_LIMIT";
+      else if(orderType == ORDER_TYPE_SELL_STOP_LIMIT) typeStr = "SELL_STOP_LIMIT";
+
+      double volInit = OrderGetDouble(ORDER_VOLUME_INITIAL);
+      double volCurr = OrderGetDouble(ORDER_VOLUME_CURRENT);
+      double priceOpen = OrderGetDouble(ORDER_PRICE_OPEN);
+      double sl = OrderGetDouble(ORDER_SL);
+      double tp = OrderGetDouble(ORDER_TP);
+      long magic = OrderGetInteger(ORDER_MAGIC);
+      string comment = EscapeJson(OrderGetString(ORDER_COMMENT));
+
+      string source = "external";
+      if(magic == MagicNumber) source = "omega";
+      else if(magic == 0) source = "manual";
+
+      long setupTimeMsc = OrderGetInteger(ORDER_TIME_SETUP_MSC);
+      long placedUtcMs = setupTimeMsc > 0
+                        ? (setupTimeMsc - serverMinusUtcSec * 1000)
+                        : (((long)OrderGetInteger(ORDER_TIME_SETUP) - serverMinusUtcSec) * 1000);
+
+      out += StringFormat(
+         "%s{\"ticket\":%I64u,\"symbol\":\"%s\",\"type\":\"%s\",\"volume_initial\":%.4f,\"volume_current\":%.4f,\"price_open\":%s,\"sl\":%s,\"tp\":%s,\"comment\":\"%s\",\"magic\":%I64d,\"source\":\"%s\",\"placed_ms\":%I64d}",
+         count > 0 ? "," : "",
+         ticket,
+         EscapeJson(orderSym),
+         typeStr,
+         volInit,
+         volCurr,
+         DoubleToString(priceOpen, orderDigits),
+         DoubleToString(sl, orderDigits),
+         DoubleToString(tp, orderDigits),
+         comment,
+         magic,
+         source,
+         placedUtcMs
       );
       count++;
      }
@@ -366,13 +443,14 @@ void WriteStateJson()
    int atrPoints = (point > 0.0 && atrValue > 0.0) ? (int)MathRound(atrValue / point) : 0;
 
    string positionsJson = BuildPositionsJson();
+   string ordersJson = BuildOrdersJson();
    long receivedMs = NowUtcMs();
 
    string json = StringFormat(
       "{\"connected\":%s,\"server\":\"%s\","
       "\"account\":{\"trade_mode\":\"%s\",\"currency\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"day_start_balance\":%.2f,\"day_realized_pl\":%.2f},"
       "\"symbol\":{\"name\":\"%s\",\"digits\":%d,\"point\":%s,\"tick_size\":%s,\"tick_value\":%s,\"volume_min\":%.4f,\"volume_max\":%.4f,\"volume_step\":%.4f,\"stops_level_points\":%d,\"bid\":%s,\"ask\":%s,\"spread_points\":%d,\"atr_value\":%.2f,\"atr_points\":%d},"
-      "\"positions\":%s,\"trade_allowed\":%s,\"received_ms\":%I64d}",
+      "\"positions\":%s,\"orders\":%s,\"trade_allowed\":%s,\"received_ms\":%I64d}",
       connected ? "true" : "false",
       server,
       tradeMode,
@@ -396,6 +474,7 @@ void WriteStateJson()
       atrValue,
       atrPoints,
       positionsJson,
+      ordersJson,
       (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && MQLInfoInteger(MQL_TRADE_ALLOWED)) ? "true" : "false",
       receivedMs
    );
@@ -554,13 +633,17 @@ void ExecuteCloseIntent(const string id, const ulong ticket)
       AppendResult(id, false, ticket, "position_not_found", nowMs);
       return;
      }
-   if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
+   long posMagic = PositionGetInteger(POSITION_MAGIC);
+   if(posMagic != MagicNumber)
      {
-      AppendResult(id, false, ticket, "foreign_magic", nowMs);
-      return;
+      if(StringFind(id, "manual") < 0 && StringFind(id, "kill") < 0 && StringFind(id, "force") < 0)
+        {
+         AppendResult(id, false, ticket, "foreign_magic", nowMs);
+         return;
+        }
      }
 
-   trade.SetExpertMagicNumber(MagicNumber);
+   trade.SetExpertMagicNumber(posMagic == MagicNumber ? MagicNumber : 0);
    trade.SetDeviationInPoints(SlippagePoints);
    bool ok = trade.PositionClose(ticket, SlippagePoints);
    long executedMs = NowUtcMs();
@@ -660,7 +743,6 @@ void ExecuteModifyTpIntent(const string id, const ulong ticket, const double new
 
 void ExecuteCloseAllIntent(const string id)
   {
-   trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(SlippagePoints);
 
    bool allOk = true;
@@ -670,7 +752,7 @@ void ExecuteCloseAllIntent(const string id)
      {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      trade.SetExpertMagicNumber(PositionGetInteger(POSITION_MAGIC));
       if(!trade.PositionClose(ticket, SlippagePoints))
         {
          allOk = false;
@@ -682,7 +764,7 @@ void ExecuteCloseAllIntent(const string id)
      {
       ulong orderTicket = OrderGetTicket(i);
       if(orderTicket == 0 || !OrderSelect(orderTicket)) continue;
-      if(OrderGetInteger(ORDER_MAGIC) != MagicNumber) continue;
+      trade.SetExpertMagicNumber(OrderGetInteger(ORDER_MAGIC));
       if(!trade.OrderDelete(orderTicket))
         {
          allOk = false;

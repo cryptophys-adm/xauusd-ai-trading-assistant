@@ -272,7 +272,14 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (r.response) return r.response;
       return rpc(() => env.OMEGA.clearConnection({ reason: r.body.reason, actor: identity.subject }), "connection_failed");
     }
-    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami"].includes(path)) return json({ error: "method_not_allowed" }, 405);
+    if (route === "POST /api/position/close") {
+      const r = await personJson(request, url, identity, 2048);
+      if (r.response) return r.response;
+      const ticket = Number(r.body?.ticket);
+      if (!Number.isFinite(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
+      return rpc(() => env.OMEGA.closePosition({ ticket, reason: r.body?.reason, actor: identity.subject }), "close_position_failed");
+    }
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 

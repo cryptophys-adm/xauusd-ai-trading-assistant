@@ -635,6 +635,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
               <thead>
                 <tr>
                   <th>Ticket</th>
+                  <th>Source</th>
                   <th>Symbol</th>
                   <th>Side</th>
                   <th>Volume</th>
@@ -651,9 +652,21 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                   const pProf = Number(p.profit) || 0;
                   const pSide = p.side || p.type || "SELL";
                   const curPx = pSide === "SELL" ? br.ask : br.bid;
+                  const isManual = p.source === "manual" || p.magic === 0;
                   return (
                     <tr key={p.ticket}>
                       <td className="mono font-bold text-cyan-300">#{p.ticket}</td>
+                      <td>
+                        {isManual ? (
+                          <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
+                            📱 MANUAL
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
+                            🤖 OMEGA AI
+                          </span>
+                        )}
+                      </td>
                       <td className="mono font-semibold">{p.symbol || br.symbol || "XAUUSD.m"}</td>
                       <td
                         className="mono font-bold"

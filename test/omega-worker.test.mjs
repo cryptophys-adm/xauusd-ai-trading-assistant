@@ -123,7 +123,7 @@ function broker() {
     calls,
     overview: async () => ({ signal: { side: "BUY" }, broker: { engine: {} } }),
     deals: async () => ({ deals: [] }),
-    setControl: rec("setControl"), setSettings: rec("setSettings"), setConnection: rec("setConnection"), clearConnection: rec("clearConnection"),
+    setControl: rec("setControl"), setSettings: rec("setSettings"), setConnection: rec("setConnection"), clearConnection: rec("clearConnection"), closePosition: rec("closePosition"),
     bridgeKey: async () => ({ kid: "0123456789abcdef", public_key: "AAAA", synced_age_ms: 1000 }),
     bridgeSync: async (input) => { calls.push(["bridgeSync", input]); return { ok: true, intents: [], connection: null, settings_version: 1 }; }
   };
@@ -167,8 +167,10 @@ test("settings and connection changes: a person, same origin, JSON; the actor is
   assert.deepEqual(O.calls.at(-1), ["setConnection", { envelope: { v: 1 }, server: "Monex-Demo", actor: "owner@example.com" }]);
   assert.equal((await call("/api/connection", "DELETE", { reason: "switch" })).status, 200);
   assert.deepEqual(O.calls.at(-1), ["clearConnection", { reason: "switch", actor: "owner@example.com" }]);
+  assert.equal((await call("/api/position/close", "POST", { ticket: 109121707, reason: "manual_user_exit" })).status, 200);
+  assert.deepEqual(O.calls.at(-1), ["closePosition", { ticket: 109121707, reason: "manual_user_exit", actor: "owner@example.com" }]);
   const n = O.calls.length;
-  for (const [path, method, body] of [["/api/settings", "POST", { enabled: true }], ["/api/connection", "POST", { server: "S" }], ["/api/connection", "DELETE", { reason: "r" }]]) {
+  for (const [path, method, body] of [["/api/settings", "POST", { enabled: true }], ["/api/connection", "POST", { server: "S" }], ["/api/connection", "DELETE", { reason: "r" }], ["/api/position/close", "POST", { ticket: 109121707 }]]) {
     assert.equal((await handle(req(path, { token: svc, method, body }), env, opts)).status, 403, `${method} ${path}: service token`);
     assert.equal((await call(path, method, body, { origin: "https://nexus.cryptophys.work" })).status, 403, `${method} ${path}: another origin`);
     assert.equal((await call(path, method, body, { type: "text/plain" })).status, 415, `${method} ${path}: not JSON`);

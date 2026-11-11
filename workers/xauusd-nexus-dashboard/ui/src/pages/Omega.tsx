@@ -488,6 +488,7 @@ export default function Omega() {
   const [killConfirmText, setKillConfirmText] = useState("");
   const [controlMsg, setControlMsg] = useState<{ tone: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [closingTicket, setClosingTicket] = useState<number | null>(null);
 
   // Broker & Gold Pairing setup state
   const [selectedBroker, setSelectedBroker] = useState<BrokerKey>("monex");
@@ -678,6 +679,27 @@ export default function Omega() {
     await load();
   };
 
+  const handleExitPosition = async (ticket: number) => {
+    const isConfirmed = window.confirm(`Exit position #${ticket} now in MetaTrader 5?\nThis will immediately override active TP/SL and close the position.`);
+    if (!isConfirmed) return;
+    setClosingTicket(ticket);
+    try {
+      await omegaJson("/omega/api/position/close", "POST", { ticket, reason: "manual_user_exit" });
+      setControlMsg({
+        tone: "text-emerald-300",
+        text: `Exit requested for position #${ticket}. The MT5 terminal will close it within 2 seconds.`,
+      });
+      await load();
+    } catch (err: any) {
+      setControlMsg({
+        tone: "text-rose-300",
+        text: `Failed to exit #${ticket}: ${err?.message || "error"}`,
+      });
+    } finally {
+      setClosingTicket(null);
+    }
+  };
+
   if (loading && !data) {
     return (
       <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
@@ -706,10 +728,13 @@ export default function Omega() {
   const symbolName = br.symbol || "XAUUSD.m";
   const serverName = br.server || conn.server || "Broker Server";
   const positionsList: any[] = hb?.positions_detail?.length ? hb.positions_detail : br?.positions || [];
+  const ordersList: any[] = br?.orders || [];
   const floatingPnl =
     typeof hb?.floating_pnl === "number"
       ? hb.floating_pnl
-      : positionsList.reduce((acc, p) => acc + (typeof p.profit === "number" ? p.profit : 0), 0);
+      : (typeof br?.equity === "number" && typeof br?.balance === "number")
+        ? br.equity - br.balance
+        : positionsList.reduce((acc, p) => acc + (typeof p.profit === "number" ? p.profit : 0), 0);
   const algoActive = Boolean(e.env_enabled && e.enabled && c.mode !== "paused" && c.mode !== "killed");
 
   const effectiveLabel = !e.env_enabled
@@ -1232,7 +1257,7 @@ export default function Omega() {
             <div className="flex flex-wrap items-center gap-1">
               {(
                 [
-                  ["trade", `Trade (${positionsList.length})`],
+                  ["trade", `Trade (${positionsList.length}${ordersList.length ? ` + ${ordersList.length} ord` : ""})`],
                   ["history", `History (${(data?.deals || []).length})`],
                   ["intents", `Order Intents (${(b?.intents || []).length})`],
                   ["state_machine", "Autonomous State Machine"],
@@ -1268,6 +1293,7 @@ export default function Omega() {
                     <tr>
                       <th>Symbol</th>
                       <th>Ticket</th>
+                      <th>Source</th>
                       <th>Time (UTC)</th>
                       <th>Type</th>
                       <th>Volume</th>
@@ -1277,12 +1303,13 @@ export default function Omega() {
                       <th>Current Price</th>
                       <th>Profit ({cur})</th>
                       <th>Intent / Signal</th>
+                      <th className="text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {positionsList.length === 0 ? (
                       <tr>
-                        <td colSpan={11} className="py-4 text-center text-[12px] text-slate-500">
+                        <td colSpan={13} className="py-4 text-center text-[12px] text-slate-500">
                           No open positions in MetaTrader 5 ({serverName}). Waiting for the next actionable 15m Decision Engine signal.
                         </td>
                       </tr>
@@ -1290,19 +1317,54 @@ export default function Omega() {
                       positionsList.map((p: any) => {
                         const isBuy = p.side === "BUY";
                         const curPrice = isBuy ? br.bid : br.ask;
+                        const isManual = p.source === "manual" || p.magic === 0;
+                        const isOmega = p.source === "omega" || p.magic === 920200 || String(p.intent_id || "").startsWith("open:");
                         return (
                           <tr key={p.ticket}>
-                            <td className="mono font-bold text-cyan-300">{symbolName}</td>
-                            <td className="mono">{String(p.ticket)}</td>
+                            <td className="mono font-bold text-cyan-300">{p.symbol || symbolName}</td>
+                            <td className="mono">#{String(p.ticket)}</td>
+                            <td>
+                              {isManual ? (
+                                <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
+                                  📱 MANUAL / MOBILE
+                                </span>
+                              ) : isOmega ? (
+                                <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
+                                  🤖 OMEGA AI
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 rounded bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-400/30">
+                                  EXTERNAL
+                                </span>
+                              )}
+                            </td>
                             <td className="mono">{timeUtc(p.opened_ms)}</td>
                             <td className={`mono font-bold ${isBuy ? "text-emerald-300" : "text-rose-300"}`}>{p.side}</td>
                             <td className="mono">{num(p.volume, 2)}</td>
                             <td className="mono">{num(p.entry ?? p.open_price, digits)}</td>
-                            <td className="mono text-rose-300">{num(p.sl, digits)}</td>
-                            <td className="mono text-emerald-300">{num(p.tp, digits)}</td>
+                            <td className="mono text-rose-300">{p.sl ? num(p.sl, digits) : "—"}</td>
+                            <td className="mono text-emerald-300">{p.tp ? num(p.tp, digits) : "—"}</td>
                             <td className="mono text-slate-200">{num(curPrice, digits)}</td>
                             <td className={`mono font-bold ${toneCls(p.profit)}`}>{money(p.profit, cur)}</td>
-                            <td className="mono text-[11px] text-slate-400">{p.signal_id || p.intent_id || "—"}</td>
+                            <td className="mono text-[11px] text-slate-400">{p.signal_id || p.intent_id || (isManual ? "Manual Discretionary" : "—")}</td>
+                            <td className="text-right">
+                              <button
+                                type="button"
+                                disabled={closingTicket === p.ticket}
+                                onClick={() => handleExitPosition(p.ticket)}
+                                className="inline-flex items-center gap-1 rounded bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 hover:border-rose-400 active:scale-95 transition disabled:opacity-50"
+                                title="Exit position immediately in MetaTrader 5 (interrupts TP/SL)"
+                              >
+                                {closingTicket === p.ticket ? (
+                                  <span className="inline-flex items-center gap-1">
+                                    <span className="inline-block h-2 w-2 rounded-full bg-rose-400 animate-ping" />
+                                    EXITING…
+                                  </span>
+                                ) : (
+                                  "EXIT ✕"
+                                )}
+                              </button>
+                            </td>
                           </tr>
                         );
                       })
@@ -1310,6 +1372,61 @@ export default function Omega() {
                   </tbody>
                 </table>
               </div>
+
+              {ordersList.length > 0 && (
+                <div className="border-t border-white/10 bg-[#060a12]">
+                  <div className="border-b border-white/5 bg-[#090f1b] px-3.5 py-1 text-[11px] font-semibold text-slate-400">
+                    Pending Orders ({ordersList.length})
+                  </div>
+                  <div className="table-wrap max-h-[160px] overflow-y-auto">
+                    <table className="tbl">
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          <th>Order Ticket</th>
+                          <th>Source</th>
+                          <th>Placed (UTC)</th>
+                          <th>Type</th>
+                          <th>Volume</th>
+                          <th>Order Price</th>
+                          <th>S / L</th>
+                          <th>T / P</th>
+                          <th>Comment</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ordersList.map((o: any) => {
+                          const isManualOrd = o.source === "manual" || o.magic === 0;
+                          return (
+                            <tr key={o.ticket}>
+                              <td className="mono font-bold text-cyan-300">{o.symbol || symbolName}</td>
+                              <td className="mono">#{String(o.ticket)}</td>
+                              <td>
+                                {isManualOrd ? (
+                                  <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
+                                    📱 MANUAL / MOBILE
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
+                                    🤖 OMEGA AI
+                                  </span>
+                                )}
+                              </td>
+                              <td className="mono">{timeUtc(o.placed_ms)}</td>
+                              <td className="mono font-semibold text-amber-200">{o.type}</td>
+                              <td className="mono">{num(o.volume_current ?? o.volume_initial, 2)}</td>
+                              <td className="mono text-slate-200">{num(o.price_open, digits)}</td>
+                              <td className="mono text-rose-300">{o.sl ? num(o.sl, digits) : "—"}</td>
+                              <td className="mono text-emerald-300">{o.tp ? num(o.tp, digits) : "—"}</td>
+                              <td className="mono text-[11px] text-slate-400">{o.comment || "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               {/* Classic Windows MT5 Gray/Obsidian Account Summary Footer Row */}
               <div className="mono flex flex-wrap items-center justify-between gap-3 border-t border-white/10 bg-[#0c1322] px-3.5 py-2 text-[11.5px]">

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, generateKeyPairSync, privateDecrypt, createDecipheriv, constants } from "node:crypto";
-import { bridgeSync, brokerOverview, setConnection, clearConnection, writeSettings, readSettings, bridgeKey, executorFrom, resetOmegaBrokerSchemaForTests, INTENT_TTL_MS } from "../src/omega-broker.mjs";
+import { bridgeSync, brokerOverview, setConnection, clearConnection, writeSettings, readSettings, bridgeKey, executorFrom, resetOmegaBrokerSchemaForTests, INTENT_TTL_MS, closePosition } from "../src/omega-broker.mjs";
 import { buildEnvelope, keyId } from "../workers/xauusd-omega/public/omega-crypto.js";
 
 function d1() {
@@ -250,6 +250,66 @@ test("institutional execution telemetry: overview exposes TCA, SOR failover, mac
 
   // 4. Macro Risk Telemetry
   assert.equal(typeof ov.macro_risk.blackout, "boolean");
+});
+
+test("observability: executor preserves positions with source, magic, symbol and reports pending orders", async () => {
+  const st = {
+    connected: true,
+    server: "Monex-Demo",
+    account: { trade_mode: "demo", currency: "USD", balance: 1000, equity: 1025 },
+    symbol: { name: "XAUUSD.m", digits: 2, bid: 4050, ask: 4050.2 },
+    positions: [
+      { ticket: 101, symbol: "XAUUSD.m", side: "SELL", volume: 0.01, open_price: 4055, sl: 4065, tp: 4035, profit: 5, magic: 920200, source: "omega" },
+      { ticket: 102, symbol: "XAUUSD.m", side: "SELL", volume: 0.02, open_price: 4060, sl: 0, tp: 0, profit: 20, magic: 0, source: "manual" }
+    ],
+    orders: [
+      { ticket: 201, symbol: "XAUUSD.m", type: "BUY_LIMIT", volume_initial: 0.01, volume_current: 0.01, price_open: 4040, sl: 4030, tp: 4060, magic: 0, source: "manual" }
+    ]
+  };
+  const exec = executorFrom(st);
+  assert.equal(exec.positions.length, 2);
+  assert.deepEqual(exec.positions[0], {
+    ticket: 101, symbol: "XAUUSD.m", side: "SELL", volume: 0.01, open_price: 4055, sl: 4065, tp: 4035, profit: 5,
+    intent_id: null, magic: 920200, source: "omega", opened_ms: null
+  });
+  assert.deepEqual(exec.positions[1], {
+    ticket: 102, symbol: "XAUUSD.m", side: "SELL", volume: 0.02, open_price: 4060, sl: 0, tp: 0, profit: 20,
+    intent_id: null, magic: 0, source: "manual", opened_ms: null
+  });
+  assert.equal(exec.orders.length, 1);
+  assert.deepEqual(exec.orders[0], {
+    ticket: 201, symbol: "XAUUSD.m", type: "BUY_LIMIT", volume_initial: 0.01, volume_current: 0.01, price_open: 4040, sl: 4030, tp: 4060,
+    comment: null, magic: 0, source: "manual", placed_ms: null
+  });
+
+  const e = env();
+  await sync(e, { state: st });
+  const ov = await brokerOverview(e, { now: NOW });
+  assert.equal(ov.bridge.positions.length, 2);
+  assert.equal(ov.bridge.positions[1].source, "manual");
+  assert.equal(ov.bridge.orders.length, 1);
+  assert.equal(ov.bridge.orders[0].source, "manual");
+});
+
+test("closePosition queues a pending manual close intent and records an audit event", async () => {
+  const e = env();
+  const res = await closePosition(e, { ticket: 109082132, reason: "manual_override_tp_sl", actor: "owner@example.com" }, { now: NOW });
+  assert.equal(res.ok, true);
+  assert.equal(res.ticket, 109082132);
+  assert.ok(res.intent_id.startsWith("manual:close:109082132:"));
+
+  // Verify it appears in pending intents query
+  const row = await e.DB.prepare("SELECT * FROM omega_intents WHERE id = ?").bind(res.intent_id).first();
+  assert.equal(row.kind, "close");
+  assert.equal(row.status, "pending");
+  const payload = JSON.parse(row.payload);
+  assert.equal(payload.ticket, 109082132);
+  assert.equal(payload.reason, "manual_override_tp_sl");
+
+  // Verify invalid ticket rejected
+  const bad = await closePosition(e, { ticket: 0 });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error, "invalid_ticket");
 });
 
 

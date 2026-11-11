@@ -131,6 +131,22 @@ export const closeId = (ticket) => `cl:${ticket}:opp`;
 export const closeAllId = (key) => `ka:${key}`;
 
 /**
+ * Distinguish Omega-owned algorithmic positions from discretionary manual/mobile or external positions.
+ * Automated trade lifecycle rules (opposite close, mean reversal, trailing SL, scale-out) strictly touch
+ * only Omega-owned positions. Discretionary positions are monitored for total account risk but never
+ * auto-closed or trailed by the AI engine.
+ */
+export function isOmegaOwned(p) {
+  if (!p) return false;
+  if (p.source === "omega") return true;
+  if (p.magic === 920200) return true;
+  if (typeof p.intent_id === "string" && p.intent_id.startsWith("open:")) return true;
+  if (p.source === "manual" || p.source === "external" || p.magic === 0) return false;
+  // Fallback for legacy unit tests without source/magic annotations
+  return true;
+}
+
+/**
  * @returns {{ intents: object[], notes: { code: string }[] }}
  */
 /**
@@ -152,7 +168,7 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
   const scaledBefore = (ticket) => [...recent].some((rid) => String(rid).startsWith(`ps:${ticket}:`));
   const targetExtTp = positive(signal?.extended_tp) ? signal.extended_tp : positive(signal?.tp2) ? signal.tp2 : null;
   for (const p of positions) {
-    if (p?.ticket == null || skip.has(p.ticket) || (p.side !== "BUY" && p.side !== "SELL")) continue;
+    if (p?.ticket == null || skip.has(p.ticket) || (p.side !== "BUY" && p.side !== "SELL") || !isOmegaOwned(p)) continue;
     const buy = p.side === "BUY";
     const open = Number(p.open_price ?? p.entry), curSl = Number(p.sl), curTp = Number(p.tp), vol = Number(p.volume);
     if (!Number.isFinite(open)) continue;
@@ -201,10 +217,10 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
 
   const side = signal?.side === "BUY" || signal?.side === "SELL" ? signal.side : null;
 
-  // Mean Reversal / Early Exit: close positions if signal explicitly indicates reversal or exit
+  // Mean Reversal / Early Exit: close positions if signal explicitly indicates reversal or exit (Omega-owned only)
   if (signal?.action === "EXIT" || signal?.action === "REVERSAL" || signal?.mean_reversal === true || signal?.early_exit === true) {
     for (const p of positions) {
-      if (p.ticket != null && !intents.some((it) => it.ticket === p.ticket)) {
+      if (p.ticket != null && isOmegaOwned(p) && !intents.some((it) => it.ticket === p.ticket)) {
         intents.push({ id: `cl:${p.ticket}:rev`, kind: "close", ticket: p.ticket, reason: "mean_reversal" });
       }
     }
@@ -215,7 +231,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   }
 
   for (const p of positions) {
-    if (side && (p.side === "BUY" || p.side === "SELL") && p.side !== side && p.ticket != null) {
+    if (side && (p.side === "BUY" || p.side === "SELL") && p.side !== side && p.ticket != null && isOmegaOwned(p)) {
       intents.push({ id: closeId(p.ticket), kind: "close", ticket: p.ticket, reason: "opposite" });
     }
   }
