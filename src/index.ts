@@ -191,6 +191,7 @@ import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLates
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport } from "./aether-push.mjs";
 import { applyWitnessTuning, readWitnessTuning, witnessTuningMessage, witnessTuningReport } from "./witness-tuning.mjs";
+import { runTuneStep, readTuneRuns } from "./tune-runs.mjs";
 import { pushDoctrineFacts } from "./doctrine-facts.mjs";
 import { fetchEffectiveDoctrine } from "./doctrine-consumer.mjs";
 import { aetherSyncStatus } from "./aether-sync.mjs";
@@ -2546,6 +2547,12 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     try { return dashboardJson({ status: "ok", ...(await eaStatus(env)) }); }
     catch (error) { console.error("ea_status_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
   }
+  if (url.pathname === "/api/tuning/runs") {
+    // The auto-tuning steps of the sweep (src/tune-runs.mjs): the latest run of each step and the recent
+    // runs (?step=weighting:15|weighting:60|weighting:240|weighting:1D|witness, ?limit=).
+    try { return dashboardJson({ status: "ok", ...(await readTuneRuns(env, { step: url.searchParams.get("step"), limit: Number(url.searchParams.get("limit")) || 48 })) }); }
+    catch (error) { console.error("tune_runs_read_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
+  }
   if (url.pathname === "/api/weighting/engine") {
     // The Decision Engine's witness weights (src/witness-tuning.mjs): the active set, the replay of the
     // sets next to it (discovery with Holm, holdout), the reverse shadow, the replay fidelity and the history.
@@ -2888,8 +2895,10 @@ export default {
           // worse, tell the owner on Telegram, and report to Aether (audit). The 15m and 1H rooms every
           // hour, the 4H room every four hours, the daily room once a day.
           const hourNow = new Date(event.scheduledTime || Date.now()).getUTCHours();
+          // Every step leaves a row in D1 auto_tune_runs (src/tune-runs.mjs; owner 2026-11-11: "ya buat catatan
+          // hasil auto-tune di D1"): the deployed version, what the replay saw, what was applied and pushed.
           for (const timeframe of ["15", "60", ...(hourNow % 4 === 2 ? ["240"] : []), ...(hourNow === 23 ? ["1D"] : [])]) {
-            try {
+            const run = await runTuneStep(env, `weighting:${timeframe}`, async () => {
               let replay = await readWeightingReplay(env, { timeframe, useCache: false });
               const applied = await applyWeighting(env, { timeframe, replay });
               if (applied.status !== "unchanged") console.log("weighting", JSON.stringify(applied));
@@ -2900,23 +2909,29 @@ export default {
               }
               const pushed = await pushWeightingReport(env, replay);
               if (pushed.status !== "disabled" && pushed.status !== "unchanged") console.log("weighting_report", JSON.stringify({ timeframe, ...pushed }));
-            } catch (e) { console.error("weighting_failed", JSON.stringify({ timeframe, message: e instanceof Error ? e.message : String(e) })); }
+              return { replay, applied, pushed };
+            });
+            if (run.error) console.error("weighting_failed", JSON.stringify({ timeframe, message: run.error }));
           }
           // The Decision Engine's witness weights, the same protocol (owner 2026-11-11: "harusnya bobot itu
           // dinamis sesuai dengan auto tune yang ada di aether"): replay the stored decisions under the sets
           // next to the active one, activate or roll back automatically, tell the owner, report to Aether.
-          try {
-            let replay = await readWitnessTuning(env, { useCache: false });
-            const applied = await applyWitnessTuning(env, { replay });
-            if (applied.status !== "unchanged") console.log("witness_tuning", JSON.stringify(applied));
-            const line = witnessTuningMessage(applied);
-            if (line) {
-              try { await sendTelegram(env, line); } catch (e) { console.error("witness_tuning_telegram_failed", e instanceof Error ? e.message : String(e)); }
-              replay = await readWitnessTuning(env, { useCache: false });
-            }
-            const pushed = await pushWitnessTuningReport(env, witnessTuningReport(replay));
-            if (pushed.status !== "disabled" && pushed.status !== "unchanged") console.log("witness_tuning_report", JSON.stringify(pushed));
-          } catch (e) { console.error("witness_tuning_failed", e instanceof Error ? e.message : String(e)); }
+          {
+            const run = await runTuneStep(env, "witness", async () => {
+              let replay = await readWitnessTuning(env, { useCache: false });
+              const applied = await applyWitnessTuning(env, { replay });
+              if (applied.status !== "unchanged") console.log("witness_tuning", JSON.stringify(applied));
+              const line = witnessTuningMessage(applied);
+              if (line) {
+                try { await sendTelegram(env, line); } catch (e) { console.error("witness_tuning_telegram_failed", e instanceof Error ? e.message : String(e)); }
+                replay = await readWitnessTuning(env, { useCache: false });
+              }
+              const pushed = await pushWitnessTuningReport(env, witnessTuningReport(replay));
+              if (pushed.status !== "disabled" && pushed.status !== "unchanged") console.log("witness_tuning_report", JSON.stringify(pushed));
+              return { replay, applied, pushed };
+            });
+            if (run.error) console.error("witness_tuning_failed", run.error);
+          }
         }
         // Signal Ledger (owner request 2026-11-07): new H1 decisions and strategy setups, each
         // followed to its outcome in R on the closed bars. Never feeds a room or a decision.

@@ -829,7 +829,9 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     context: councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, market, now }),
     strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline, price: strategy.price, atr_h1: strategy.atr_h1 } : null,
     trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE },
-    advisory: "The server places no order and gives no position size; the EA sizes each trade from the owner's risk input."
+    advisory: "The server places no order and gives no position size; the EA sizes each trade from the owner's risk input.",
+    // The deployed Worker version that decided (2026-11-11: a deploy outside GitHub Actions put back an older build unseen).
+    worker_version: typeof env?.CF_VERSION_METADATA?.id === "string" ? env.CF_VERSION_METADATA.id : null
   };
 }
 
