@@ -47,6 +47,7 @@ export function floorToStep(v, step) {
  * Daily Rollover Quarantine Window (21:55 - 22:15 UTC):
  * Prevents opening new positions when interbank liquidity dries up and broker spreads widen dramatically.
  */
+export const ROLLOVER_QUARANTINE_UTC = "21:55-22:15";
 export function isRolloverQuarantine(nowMs = Date.now()) {
   const d = new Date(nowMs);
   const h = d.getUTCHours();

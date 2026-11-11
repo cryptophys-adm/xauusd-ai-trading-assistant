@@ -55,7 +55,11 @@ export interface Env {
     canonInfo(): Promise<Record<string, unknown>>;
     // Phase A7: the items a person approved for shadow testing (never a live prompt).
     learnedPack(): Promise<Record<string, unknown>>;
+    // The Knowledge Council's facts (owner 2026-11-11, src/doctrine-facts.mjs).
+    ingestDoctrineFacts?(facts: unknown): Promise<Record<string, unknown>>;
   };
+  // The deployed version (wrangler version_metadata); the doctrine facts carry its id.
+  CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
   // Aether's read-only sync checks (hardening 2026-11-09, src/aether-sync.mjs). Production only.
   AETHER_READER?: {
     sync(): Promise<Record<string, unknown>>;
@@ -186,6 +190,7 @@ import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedg
 import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, TRADING_MODE_KEY } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport } from "./aether-push.mjs";
+import { pushDoctrineFacts } from "./doctrine-facts.mjs";
 import { aetherSyncStatus } from "./aether-sync.mjs";
 import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
@@ -2882,6 +2887,12 @@ export default {
             const pushed = await pushDecisionCards(env);
             if (pushed.status !== "disabled" && (pushed.status !== "ok" || Number(pushed.pushed))) console.log("aether_push", JSON.stringify(pushed));
           } catch (e) { console.error("aether_push_failed", e instanceof Error ? e.message : String(e)); }
+          // The Knowledge Council's Nexus and Omega seats (owner 2026-11-11): the facts this Worker runs
+          // with, hourly; Aether proposes lasting doctrine differences to Cerebrum, which executes them.
+          try {
+            const facts = await pushDoctrineFacts(env);
+            if (facts.status !== "ok" && facts.status !== "disabled") console.log("doctrine_facts", JSON.stringify(facts));
+          } catch (e) { console.error("doctrine_facts_failed", e instanceof Error ? e.message : String(e)); }
         }
         // Health alerts (gap 2, owner decision 2026-11-06): detect operational problems, keep
         // them as open alerts for the Nexus Priority Queue and report state changes to the
