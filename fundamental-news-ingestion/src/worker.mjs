@@ -1,7 +1,7 @@
 // Worker entry module. Kept separate from index.mjs so unit tests can import
 // index.mjs under Node without the `cloudflare:workers` runtime module.
 import { WorkerEntrypoint } from "cloudflare:workers";
-import worker, { runTvOhlcv, runTvEconomicCalendar, runNewsPull } from "./index.mjs";
+import worker, { runTvOhlcv, runTvEconomicCalendar, runNewsPull, gatewayStatus } from "./index.mjs";
 
 /**
  * RPC-only OHLCV gateway for internal Workers (Service Binding with
@@ -34,6 +34,10 @@ export class NewsIngestionService extends WorkerEntrypoint {
    */
   async economicCalendar(request) {
     return runTvEconomicCalendar(this.env, request);
+  }
+  /** The gateway's quota cooldown, OAuth state and last news pull (read-only), for the AI Worker's health check. */
+  async gatewayStatus() {
+    return gatewayStatus(this.env);
   }
   async goldHistory(count = 6000) {
     return runTvOhlcv(this.env, [{ symbol: "OANDA:XAUUSD", interval: "1h", count: Math.max(100, Math.min(8000, Number(count) || 6000)) }]);

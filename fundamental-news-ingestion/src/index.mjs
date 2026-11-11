@@ -1025,6 +1025,25 @@ async function readLastScheduledPull(env) {
   }
 }
 
+/**
+ * The gateway's state for the AI Worker's health check (2026-11-11 13:05 UTC: the provider quota ran out,
+ * every OHLCV and news pull paused until 00:00 UTC, and no alert said why). Read-only: booleans,
+ * times and reasons, never a token.
+ */
+export async function gatewayStatus(env) {
+  const token = await getStoredToken(env);
+  const tokenExpiresAt = Number.parseInt(String(token?.expires_at || ""), 10);
+  const hasUsableAccessToken = Boolean(asString(token?.access_token)) && (!Number.isFinite(tokenExpiresAt) || tokenExpiresAt > nowSeconds());
+  const cooldown = await readQuotaCooldown(env);
+  const last = await readLastScheduledPull(env);
+  return {
+    oauth_authorized: hasUsableAccessToken || Boolean(asString(token?.refresh_token)),
+    cooldown_until: cooldown?.until || null,
+    cooldown_reason: cooldown?.reason || null,
+    last_news_pull: last ? { status: last.status ?? null, checked_at: last.checked_at ?? null, failure_reason: last.failure_reason ?? null } : null
+  };
+}
+
 async function buildHealth(env) {
   const symbols = parseCsv(env.TV_MCP_SYMBOLS, DEFAULT_SYMBOLS);
   const token = await getStoredToken(env);
