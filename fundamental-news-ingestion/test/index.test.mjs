@@ -833,3 +833,17 @@ test("rate-limit cooldown length honours Retry-After within 30 s .. 15 min", () 
   assert.equal(len(120_000), 120_000);
   assert.equal(len(3 * 60 * 60 * 1000), 15 * 60 * 1000, "maximum 15 min");
 });
+
+test("gatewayStatus reports the quota cooldown and OAuth state for the AI Worker, never a token", async () => {
+  const { gatewayStatus } = await import(moduleUrl.href);
+  const env = createEnv();
+  const until = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString();
+  await env.OAUTH_STORE.put("tv_mcp:quota_cooldown_until", JSON.stringify({ until, reason: "provider_quota_exceeded" }));
+  const status = await gatewayStatus(env);
+  assert.equal(status.cooldown_until, until);
+  assert.equal(status.cooldown_reason, "provider_quota_exceeded");
+  assert.equal(status.oauth_authorized, false);
+  assert.doesNotMatch(JSON.stringify(status), /token|secret/i);
+  const none = await gatewayStatus(createEnv());
+  assert.deepEqual([none.cooldown_until, none.cooldown_reason], [null, null]);
+});

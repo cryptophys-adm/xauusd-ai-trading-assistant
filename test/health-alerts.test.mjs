@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { runHealthAlerts, readHealthAlerts, detectHealthIssues, resetHealthSchemaCacheForTests, HEALTH_AGENT_ID, HEALTH_REPORTS_PER_HOUR } from "../src/health-alerts.mjs";
+import { runHealthAlerts, readHealthAlerts, detectHealthIssues, resetHealthSchemaCacheForTests, HEALTH_AGENT_ID, HEALTH_REPORTS_PER_HOUR, marketDataIssue } from "../src/health-alerts.mjs";
 
 const NOW = Date.parse("2026-11-06T09:30:00.000Z");
 const H = 3600_000;
@@ -138,4 +138,29 @@ test("the stale War Room check counts from the first bar after a market gap and 
   e2.DB.raw.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, status, ts, body_json) VALUES ('warroom:x', '2026-11-06T22:00:00.000Z', 'conclusion', 'ok', '1', '{}')").run();
   const stale = (await detectHealthIssues(e2, later)).find((i) => i.kind === "war_room_stale");
   assert.match(stale.subject, /has not met since 2026-11-06 22:00 UTC/);
+});
+
+test("the market data stopping is an alert that names the gateway's cooldown, and resolves when bars flow (production 2026-11-11 13:05)", async () => {
+  const at = Date.parse("2026-11-11T14:30:00.000Z"); // Wednesday, market open
+  const M5 = 5 * 60_000;
+  const gateway = { gatewayStatus: async () => ({ oauth_authorized: true, cooldown_until: "2026-11-12T00:00:00.000Z", cooldown_reason: "provider_quota_exceeded" }) };
+  const stale = env({ SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|1h": series(at - 2 * H, H), "market-data:v2:series:OANDA:XAUUSD|5m": series(Date.parse("2026-11-11T12:55:00.000Z"), M5) }), NEWS_INGESTION: gateway });
+  const issue = await marketDataIssue(stale, at);
+  assert.equal(issue.kind, "market_data_stale");
+  assert.match(issue.subject, /^Market data stopped: the last XAUUSD 5m bar closed 13:00 UTC; the TradingView gateway is paused until 2026-11-12 00:00 UTC \(the provider's quota is used up\)\./);
+  assert.deepEqual(issue.detail.gateway, { cooldown_until: "2026-11-12T00:00:00.000Z", cooldown_reason: "provider_quota_exceeded", oauth_authorized: true });
+  const r = await runHealthAlerts(stale, { now: at });
+  assert.ok(r.opened_alerts.some((a) => a.kind === "market_data_stale" && /^Market data stopped/.test(a.subject)), "the sweep sends this one to Telegram");
+
+  const fresh = env({ SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|1h": series(at - 2 * H, H), "market-data:v2:series:OANDA:XAUUSD|5m": series(at - 2 * M5, M5) }), DB: stale.DB });
+  assert.equal(await marketDataIssue(fresh, at), null);
+  const back = await runHealthAlerts(fresh, { now: at + M5 });
+  assert.ok(back.resolved_alerts.some((a) => a.kind === "market_data_stale"), "and the resolution");
+
+  const noGateway = env({ SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|5m": series(Date.parse("2026-11-11T12:55:00.000Z"), M5) }) });
+  assert.match((await marketDataIssue(noGateway, at)).subject, /closed 13:00 UTC\. Rooms/, "without the gateway it still says the data stopped");
+  assert.equal(await marketDataIssue(env(), at), null, "no 5m series is no market-data lane");
+  assert.equal(await marketDataIssue(stale, Date.parse("2026-11-14T10:00:00.000Z")), null, "Saturday: the market is closed");
+  assert.equal(await marketDataIssue(stale, Date.parse("2026-11-11T21:40:00.000Z")), null, "the daily break");
+  assert.equal(await marketDataIssue(stale, Date.parse("2026-11-11T23:10:00.000Z")), null, "within 30 minutes after the break");
 });

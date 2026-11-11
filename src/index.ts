@@ -41,6 +41,8 @@ export interface Env {
     // Economic releases (owner 2026-11-10): TradingView's calendar with actuals, and gold's 1H history.
     economicCalendar?(request: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>;
     goldHistory?(count?: number): Promise<{ status: number; body: Record<string, unknown> }>;
+    // The gateway's quota cooldown and OAuth state (read-only), for the market-data health alert.
+    gatewayStatus?(): Promise<Record<string, unknown>>;
   };
   // Cryptophys Platform AI Kernel (RFC_INDICATOR_AGENT_PLATFORM P4). Production only; the
   // caller identity is pinned in the binding props, there is no secret.
@@ -3009,6 +3011,15 @@ export default {
         try {
           const health = await runHealthAlerts(env);
           if (health.opened || health.resolved || (Array.isArray(health.published) && health.published.length)) console.log("health_alerts", JSON.stringify(health));
+          // The market data stopping (or coming back) goes to the owner's Telegram once (2026-11-11: the feed
+          // stood still for hours behind a TradingView quota and only the stale decisions showed it).
+          for (const [list, state] of [[health.opened_alerts, "open"], [health.resolved_alerts, "resolved"]] as const) {
+            for (const a of (Array.isArray(list) ? list : []) as Array<{ kind?: string; subject?: string }>) {
+              if (a.kind !== "market_data_stale") continue;
+              try { await sendTelegram(env, state === "open" ? `XAUUSD SYSTEM · ${a.subject}` : "XAUUSD SYSTEM · Market data is flowing again; rooms, news and parity resume."); }
+              catch (e) { console.error("market_data_telegram_failed", e instanceof Error ? e.message : String(e)); }
+            }
+          }
         } catch (e) { console.error("health_alerts_failed", e instanceof Error ? e.message : String(e)); }
         // Proposal #227 (Aether-governed Omega policy): apply Aether-pushed policy from KV within hard bounds.
         try {

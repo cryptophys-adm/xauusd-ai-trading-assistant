@@ -60,6 +60,34 @@ async function seriesCandles(env, key) {
   try { const r = JSON.parse((await env.SIGNAL_CACHE?.get?.("market-data:v2:series:" + key)) || "null"); return Array.isArray(r?.candles) ? r.candles : []; } catch { return []; }
 }
 
+/** XAUUSD trades from Sunday 22:00 to Friday 22:00 UTC, with a daily break around 21:00-23:00 UTC. */
+function feedExpected(ms) {
+  const d = new Date(ms), day = d.getUTCDay(), h = d.getUTCHours();
+  if (day === 6 || (day === 5 && h >= 21) || (day === 0 && h < 23)) return false;
+  return h !== 21 && h !== 22;
+}
+export const MARKET_DATA_STALE_MS = 30 * 60_000;
+
+/** The market-data alert, or null: the latest XAUUSD 5m bar is older than MARKET_DATA_STALE_MS while the market trades. */
+export async function marketDataIssue(env, now = Date.now()) {
+  if (!feedExpected(now) || !feedExpected(now - MARKET_DATA_STALE_MS)) return null;
+  const last = (await seriesCandles(env, "OANDA:XAUUSD|5m")).at(-1);
+  const lastMs = Date.parse(last?.close_time ?? "");
+  // No 5m series at all is no market-data lane (a preview, a test): nothing to watch.
+  if (!Number.isFinite(lastMs) || now - lastMs <= MARKET_DATA_STALE_MS) return null;
+  let gw = null;
+  try { gw = typeof env?.NEWS_INGESTION?.gatewayStatus === "function" ? await env.NEWS_INGESTION.gatewayStatus() : null; } catch { gw = null; }
+  const until = Date.parse(gw?.cooldown_until ?? "");
+  const cause = Number.isFinite(until) && until > now
+    ? `; the TradingView gateway is paused until ${iso(until).slice(0, 16).replace("T", " ")} UTC (${gw.cooldown_reason === "provider_quota_exceeded" ? "the provider's quota is used up" : String(gw.cooldown_reason || "cooldown").replace(/_/g, " ")})`
+    : gw && gw.oauth_authorized === false ? "; the TradingView gateway is not authorized (OAuth)" : "";
+  return {
+    key: "market_data_stale", kind: "market_data_stale",
+    subject: `Market data stopped: the last XAUUSD 5m bar closed ${whenUtc(lastMs, now)}${cause}. Rooms, news and parity wait; the Decision Engine holds WAIT while its rooms are stale.`,
+    detail: { last_m5_close: iso(lastMs), gateway: gw ? { cooldown_until: gw.cooldown_until ?? null, cooldown_reason: gw.cooldown_reason ?? null, oauth_authorized: gw.oauth_authorized ?? null } : null }
+  };
+}
+
 /** The problems that hold now: [{ key, kind, subject, detail, one_shot? }]. Never throws. */
 export async function detectHealthIssues(env, now = Date.now()) {
   const db = env.DB;
@@ -142,6 +170,14 @@ export async function detectHealthIssues(env, now = Date.now()) {
     });
   }
 
+  // 10. The market data stopped while XAUUSD trades (production 2026-11-11 13:05 UTC: the TradingView quota ran
+  //     out until 00:00 UTC; prices, rooms, news and parity stood still and no alert said why, because the
+  //     war-room check above waits for 5m bars that keep closing). The gateway says why when it can.
+  try {
+    const issue = await marketDataIssue(env, now);
+    if (issue) out.push(issue);
+  } catch { /* never fatal */ }
+
   // 9. End-to-end sync with Aether (hardening 2026-11-09): each warning check of AetherReader.sync()
   //    and of this side (KB hash match, this Worker's card push). Production only (binding absent elsewhere).
   try { out.push(...syncAlerts(await aetherSyncStatus(env, { now }))); } catch { /* never fatal */ }
@@ -174,6 +210,7 @@ export async function runHealthAlerts(env, { now = Date.now(), detect = detectHe
   const open = await rows(db, "SELECT * FROM health_alerts WHERE status = 'open'");
   const openKeys = new Set(open.map((r) => r.alert_key));
   let opened = 0, resolved = 0;
+  const openedAlerts = [], resolvedAlerts = [];
 
   for (const a of active) {
     if (openKeys.has(a.key)) {
@@ -188,11 +225,13 @@ export async function runHealthAlerts(env, { now = Date.now(), detect = detectHe
       "ON CONFLICT(alert_key) DO UPDATE SET status = 'open', subject = excluded.subject, detail = excluded.detail, opened_at = excluded.opened_at, resolved_at = NULL, reported_open_at = NULL, reported_resolved_at = NULL, report_outcome = NULL, updated_at = excluded.updated_at"
     ).bind(a.key, a.kind, a.subject, JSON.stringify(a.detail ?? null), a.one_shot ? 1 : 0, nowIso, nowIso).run();
     opened += 1;
+    openedAlerts.push({ key: a.key, kind: a.kind, subject: a.subject });
   }
   for (const r of open) {
     if (activeKeys.has(r.alert_key)) continue;
     await db.prepare("UPDATE health_alerts SET status = 'resolved', resolved_at = ?, updated_at = ? WHERE alert_key = ?").bind(nowIso, nowIso, r.alert_key).run();
     resolved += 1;
+    resolvedAlerts.push({ key: r.alert_key, kind: r.kind, subject: r.subject });
   }
 
   // Reports: openings first (oldest first), then resolutions of lasting alerts.
@@ -214,7 +253,7 @@ export async function runHealthAlerts(env, { now = Date.now(), detect = detectHe
       budget -= 1;
     }
   }
-  return { status: "ok", active: active.length, opened, resolved, published };
+  return { status: "ok", active: active.length, opened, resolved, published, opened_alerts: openedAlerts, resolved_alerts: resolvedAlerts };
 }
 
 /** Open alerts and those resolved in the last 24 hours, for the Nexus Priority Queue. */
