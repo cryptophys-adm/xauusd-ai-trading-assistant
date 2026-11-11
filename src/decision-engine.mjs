@@ -462,9 +462,10 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
  * when price is at the level (else a limit at the planned pullback), and the chosen target only when
  * it pays at least MIN_RRR (else the other one). Null when no target pays enough.
  */
-export function tradeFor(side, plan, { entryType = "market", target = "tp1" } = {}) {
+export function tradeFor(side, plan, { entryType = "limit", target = "tp1" } = {}) {
   if (!plan || !(side === "BUY" || side === "SELL")) return null;
   const pays = (t) => isNum(plan[t]) && (plan.rrr?.[t] ?? 0) >= MIN_RRR;
+  // Quick Win Priority: Default target is "tp1" at the nearest key level. If the chosen target doesn't pay 1.5R, alternate.
   const t = pays(target) ? target : pays(target === "tp1" ? "tp2" : "tp1") ? (target === "tp1" ? "tp2" : "tp1") : null;
   if (!t) return null;
   const market = entryType !== "limit" && plan.at_level === true;
@@ -522,7 +523,7 @@ export function councilMessages(evidence) {
     "context.market.calendar is the Calendar Agent: each release still inside its horizon with its actual against the forecast, the surprise in standard deviations, the rule's effect on gold (gold_direction +1 up, -1 down) and, when enough past releases are measured, the learned horizon and how often gold followed the rule. A large surprise inside its horizon outweighs a weak technical lean; a release gold has not followed reliably weighs less.",
     "context.market holds the right panel's cards: the market sentiment (the witnesses' weighted lean, the news and macro composite, the 24-hour headlines), the regime of the 15m and 1H charts (trending or mean-reverting, chaos, stretch), the macro drivers (gold, the dollar, oil and USDT dominance over 24 hours, the gold-dollar link, cross-asset correlations) and the session (day, date, market open or closed, the active sessions and their liquidity, the next close or open). Weigh them: they confirm or weaken the witnesses and explain the cautions.",
     "Weigh the witnesses by their weight and by how well their reasoning holds up; the higher timeframes carry the trend, the 15m and 1H rooms carry the setup, the strategy engine carries location and trigger. Cautions (an event, conflicts, chaotic regime) lower your confidence.",
-    `Choose entry_type "market" only when the plan's price is at the level (at_level true), else "limit" (the planned pullback). Choose target "tp1" or "tp2": a target needs at least ${MIN_RRR}R.`,
+    "Prioritize target 'tp1' (structural quick win at the nearest strong key level / liquidity pool) to avoid prolonged floating duration risk. Use 'limit' entry at the key level pullback rather than chasing market momentum. A target needs at least 1.5R.",
     `confidence is 0 to 1; below ${MIN_CONFIDENCE} a BUY or SELL becomes WAIT. bias is where the weight of the evidence leans (BULLISH, BEARISH or NEUTRAL), even when the stance is WAIT.`,
     "Never invent a price: the levels come only from the plans in the evidence. Never mention position size. Write summary, reasons and risks in plain sentences a trader would write: no field names, no words joined by underscores or dots, no key=value. The summary starts with the stance and the bias, for example \"Decision WAIT, bias bullish: ...\". Give one to four reasons and up to three risks. In weighed, list the witness keys you relied on most.",
     "Return only the JSON object."
@@ -568,7 +569,7 @@ export function decide({ answer = null, guards, strategy = null, quorum }) {
     const sd = dirOf(strategy?.decision);
     stance = sd ? strategy.decision : "WAIT";
     confidence = isNum(strategy?.confidence) ? r2(strategy.confidence) : 0;
-    entryType = "market"; target = "tp2";
+    entryType = "limit"; target = "tp1";
   }
   const dir = dirOf(stance);
   let trade = null;

@@ -168,7 +168,9 @@ export default function PriceChart() {
     zonesRef.current?.setZones(zones);
     for (const l of planLines.current) series.removePriceLine(l);
     planLines.current = [];
-    const p = showZones ? strategy?.plan : null;
+    // No setup on chart unless decision is explicitly clear (Owner directive 2026-11-11)
+    const hasClearDecision = strategy?.decision === "BUY" || strategy?.decision === "SELL" || g?.engine?.stance === "BUY" || g?.engine?.stance === "SELL";
+    const p = showZones && hasClearDecision ? strategy?.plan : null;
     if (p) {
       const line = (price: number | null | undefined, title: string, color: string, style: LineStyle) => {
         if (typeof price === "number") planLines.current.push(series.createPriceLine({ price, title, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true }));

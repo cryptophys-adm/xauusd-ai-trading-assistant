@@ -398,10 +398,12 @@ function Mt5ChartCanvas({
       addLine(bid, "BID", "#3fb950", LineStyle.Solid, 1);
       addLine(ask, "ASK", "#f85149", LineStyle.Solid, 1);
     }
-    if (showPlan && signal && signal.side && signal.side !== "NONE") {
-      addLine(signal.entry, `15m ${signal.side} ENTRY`, "#22d3ee", LineStyle.Dashed, 1);
+    // No setup on chart unless decision is explicitly clear (Owner directive 2026-11-11)
+    const hasClearDecision = showPlan && signal && (signal.side === "BUY" || signal.side === "SELL") && !signal.paused && !signal.kill;
+    if (hasClearDecision) {
+      addLine(signal.entry, `15m ${signal.side} ENTRY (Key Level)`, "#22d3ee", LineStyle.Dashed, 1);
       addLine(signal.stop, "15m SL", "#fb7185", LineStyle.Dashed, 1);
-      addLine(signal.tp1, "15m TP", "#34d399", LineStyle.Dashed, 1);
+      addLine(signal.tp1, "15m TP1 (Quick Win)", "#34d399", LineStyle.Dashed, 1);
     }
     if (showPositions && Array.isArray(positions)) {
       for (const p of positions) {
