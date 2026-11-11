@@ -648,7 +648,8 @@ export async function loadDecisionInputs(env, { now = Date.now() } = {}) {
   const regime = await safe(async () => regimeAtClose(await loadRegimeMap(env, "60"), now));
   // The Calendar Agent with the released values, surprises and learned horizons (owner 2026-11-10).
   const calendar = await safe(async () => calendarOutlook((await cachedCalendar(env))?.events || [], now, { intel: await calendarIntel(env, { now }) }));
-  return { inputs, strategy, macro, global, correlations, regime, calendar };
+  const analytics = await safe(async () => collectNexusAnalytics(env, { now, days: 30 }));
+  return { inputs, strategy, macro, global, correlations, regime, calendar, analytics };
 }
 
 /** Pure: the context the council reads beside the witnesses (no weights). */
@@ -898,7 +899,7 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     const previous = await readLatestDecision(env);
     try { env.TRADING_MODE = await tradingMode(env); } catch { /* keep env */ }
     const data = loaded ?? await loadDecisionInputs(env, { now });
-    const assessment = assess(data, { now, env });
+    const assessment = assess(data, { now, env, analytics: data.analytics });
     const context = councilContext({ inputs: data.inputs, correlations: data.correlations, regime: data.regime, previous, market: assessment.market, now });
     try {
       const doctrinePayload = await fetchEffectiveDoctrine(env, { now });
