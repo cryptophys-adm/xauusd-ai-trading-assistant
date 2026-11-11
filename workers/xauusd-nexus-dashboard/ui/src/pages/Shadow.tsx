@@ -1,86 +1,194 @@
-import { Fragment } from "react";
-import { FlaskConical } from "lucide-react";
+import { useState } from "react";
+import { FlaskConical, GitPullRequest, CheckCircle, AlertTriangle, Activity, BarChart2, Zap, ArrowRight, ShieldCheck } from "lucide-react";
 import { Badge, Empty, Panel, Skeleton } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 
 const p = (x?: number | null) => (x == null ? "n/a" : `${Math.round(x * 1000) / 10}%`);
 const stuck = (s: any) => ["d_enc", "b_enc", "subtype"].map((f) => `${f} ${s?.[f]?.episodes ?? "?"}`).join(", ");
-const yes = (b: unknown) => (b === true ? <span className="text-emerald-300">yes</span> : b === false ? <span className="text-rose-300">no</span> : <span className="text-slate-500">{String(b)}</span>);
+const yes = (b: unknown) => (b === true ? <span className="font-semibold text-emerald-300">PASS</span> : b === false ? <span className="font-semibold text-rose-300">FAIL</span> : <span className="text-slate-500">{String(b)}</span>);
 
-function Row({ label, t, s, extra }: { label: string; t: any; s: any; extra?: React.ReactNode }) {
-  return (
-    <tr>
-      <td className="mono">{label}</td><td className="mono">{t.n}</td><td className="mono">{p(t.accuracy)}</td>
-      <td className="mono">{p(t.directional.hit_rate)} ({t.directional.n})</td><td className="mono">{p(t.wait.accuracy)} ({t.wait.n})</td>
-      <td className="mono">{s ? stuck(s) : ""}</td><td>{extra}</td>
-    </tr>
-  );
+const pointTone = (pt: any) => (
+  pt.status === "stopped" ? "text-slate-500" :
+  pt.status === "untested" ? "text-slate-400" :
+  pt.verdict?.startsWith("better_than_active") ? "text-emerald-300 font-bold" :
+  pt.verdict === "collecting" ? "text-amber-200" :
+  "text-rose-300"
+);
+
+function verdictBadge(verdict: string) {
+  if (verdict?.startsWith("better_than_active")) return <Badge tone="green">BETTER (PROMOTION READY)</Badge>;
+  if (verdict === "collecting") return <Badge tone="amber">COLLECTING SAMPLE</Badge>;
+  if (verdict === "control") return <Badge tone="slate">ACTIVE CONTROL</Badge>;
+  return <Badge tone="red">{verdict || "NOT BETTER"}</Badge>;
 }
 
-/**
- * Shadow versions (RFC_INDICATOR_AGENT_PLATFORM P3): candidate indicator versions next to the
- * active control on the same closed H1 bars. Read-only; never shown in a room or used by a decision.
- */
-const pointTone = (pt: any) => (pt.status === "stopped" ? "text-slate-500" : pt.status === "untested" ? "text-slate-400"
-  : pt.verdict?.startsWith("better_than_active") ? "text-emerald-300" : pt.verdict === "collecting" ? "text-amber-200" : "text-rose-300");
+/** Visual SVG Comparative Delta Bar: Candidate vs Control Head-to-Head */
+function HeadToHeadGraph({ candidateBetter, controlBetter, candidateName, controlName }: { candidateBetter: number; controlBetter: number; candidateName: string; controlName: string }) {
+  const total = (candidateBetter || 0) + (controlBetter || 0);
+  if (total === 0) return <div className="text-[11px] text-slate-500 italic">No disagreement bars evaluated yet.</div>;
+  const candPct = Math.round((candidateBetter / total) * 100);
+  const ctrlPct = 100 - candPct;
+
+  return (
+    <div className="space-y-1.5 py-1">
+      <div className="flex items-center justify-between text-[11px] mono">
+        <span className="text-emerald-300 font-semibold">{candidateName}: {candidateBetter} wins ({candPct}%)</span>
+        <span className="text-rose-300 font-semibold">{controlName}: {controlBetter} wins ({ctrlPct}%)</span>
+      </div>
+      <div className="relative flex h-3 w-full overflow-hidden rounded-full bg-white/[0.06]">
+        <div className="h-full bg-emerald-400 transition-all duration-500" style={{ width: `${candPct}%` }} title={`${candidateName}: ${candPct}%`} />
+        <div className="h-full bg-rose-400 transition-all duration-500" style={{ width: `${ctrlPct}%` }} title={`${controlName}: ${ctrlPct}%`} />
+        {/* 50% Marker */}
+        <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-white/40 z-10" />
+      </div>
+    </div>
+  );
+}
 
 /** Aether A8: every TUNING_GRID point, running (discovery with Holm, holdout), stopped or untested. */
 function TuningGrid() {
   const { data } = usePoll(() => get("/api/tuning"), 300_000);
   const t = data as any;
   if (!t?.families?.length) return null;
+
   return (
-    <Panel title="Tuning grid" right={<Badge tone="purple">shadow only · owner PR to promote</Badge>}>
-      <p className="mb-3 text-[12px] text-slate-400">Reviewed grid points. A point starts only when a person approves it in Aether or by a reviewed PR. Discovery: {t.statistics.min_discovery_bars}+ bars, one-sided sign test, Holm per family per month ({t.holm_month}); then no worse on the {t.statistics.holdout_bars} newest bars.</p>
-      <div className="table-wrap">
+    <Panel
+      title="Dynamic Parameter Tuning Grid (Statistical Validation)"
+      icon={<Zap className="h-3.5 w-3.5 text-cyan-400" />}
+      right={<Badge tone="purple">Shadow Validation · Owner PR to Promote</Badge>}
+    >
+      <p className="mb-3 text-[12px] text-slate-400">
+        Grid pengujian parameter berbasis statistik ketat: Discovery &ge; {t.statistics.min_discovery_bars} bars, One-sided Sign Test, Holm-Bonferroni correction per family per month ({t.holm_month}), diikuti validasi Holdout out-of-sample pada {t.statistics.holdout_bars} candle terkini.
+      </p>
+
+      {/* Grid Families Table */}
+      <div className="table-wrap mb-4">
         <table className="tbl">
-          <thead><tr><th>Family</th><th>Parameter</th><th>Active</th><th>Grid points</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Family Engine</th>
+              <th>Tested Parameter</th>
+              <th>Active Value (Control)</th>
+              <th>Candidate Grid Values & Verdicts</th>
+            </tr>
+          </thead>
           <tbody>
             {t.families.map((f: any) => (
               <tr key={f.family + f.param}>
-                <td className="mono">{f.family}</td><td className="mono">{f.param}</td><td className="mono">{f.active_value ?? "n/a"}</td>
-                <td className="text-[11px]">{f.points.map((pt: any) => (
-                  <span key={pt.value} className={"mr-3 " + pointTone(pt)} title={pt.reason ?? pt.verdict ?? ""}>
-                    <span className="mono">{pt.value}</span> {pt.status === "running" ? `${pt.verdict}${pt.source === "aether" ? " · Aether" : ""}${pt.discovery?.p_holm != null ? ` · Holm p ${pt.discovery.p_holm}` : ""}` : pt.status}
-                  </span>
-                ))}</td>
+                <td className="font-semibold text-slate-200">{f.family}</td>
+                <td className="mono text-cyan-300">{f.param}</td>
+                <td className="mono"><Badge tone="slate">{f.active_value ?? "n/a"}</Badge></td>
+                <td className="text-[11px]">
+                  <div className="flex flex-wrap gap-2">
+                    {f.points.map((pt: any) => (
+                      <span key={pt.value} className={`rounded px-2 py-0.5 border border-white/5 bg-white/[0.03] ${pointTone(pt)}`} title={pt.reason ?? pt.verdict ?? ""}>
+                        <span className="mono font-bold">{pt.value}</span> : {pt.status === "running" ? `${pt.verdict}${pt.discovery?.p_holm != null ? ` (Holm p ${pt.discovery.p_holm})` : ""}` : pt.status}
+                      </span>
+                    ))}
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {/* Aether Knowledge Candidates Table */}
       {t.replays?.knowledge && (() => {
         const c = t.replays.knowledge;
         return (
-          <div className="mt-3 text-[11px] text-slate-400">
-            <p className="mb-1 text-[12px] text-slate-300">{c.name}: {c.enabled ? `on, at most ${c.max_calls_per_hour} calls an hour` : "off (SHADOW_KNOWLEDGE_ENABLED)"}. A/A noise: the same prompt changed the stance on {c.aa_noise.changed} of {c.aa_noise.bars} bars{c.aa_noise.rate != null ? ` (${Math.round(c.aa_noise.rate * 100)}%)` : ""}.</p>
-            {!c.candidates.length && <p>No approved note is being tested.</p>}
-            {c.candidates.map((k: any) => (
-              <p key={k.subject}><span className="mono">{k.subject}</span>: <span className={pointTone({ status: "running", verdict: k.verdict })}>{k.verdict}</span> · {k.answered} of {k.calls} calls answered · stance changed on {k.changed_stance} of {k.same_bars} scored bars · discovery: note right {k.discovery.candidate_better}, opening right {k.discovery.control_better} (Holm p {k.discovery.p_holm ?? "n/a"}) · holdout {k.holdout.bars} of {k.holdout.required_bars}</p>
-            ))}
+          <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.02] p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-[12px] font-semibold text-violet-300 flex items-center gap-1.5">
+                <ShieldCheck className="h-3.5 w-3.5 text-violet-400" />
+                {c.name} — Aether Knowledge Hypotheses (A/A Baseline)
+              </span>
+              <Badge tone={c.enabled ? "green" : "slate"}>{c.enabled ? `Active · Max ${c.max_calls_per_hour}/hr` : "Disabled"}</Badge>
+            </div>
+            <p className="mb-3 text-[11px] text-slate-400">
+              Noise baseline A/A: prompt identik merubah stance pada {c.aa_noise.changed} dari {c.aa_noise.bars} bars ({c.aa_noise.rate != null ? `${Math.round(c.aa_noise.rate * 100)}%` : "0%"} stochastic jitter threshold).
+            </p>
+            {!c.candidates.length ? (
+              <Empty>No approved Aether note currently in shadow testing.</Empty>
+            ) : (
+              <div className="table-wrap">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Note Subject</th>
+                      <th>Calls (Ans/Tot)</th>
+                      <th>Stance Delta</th>
+                      <th>Discovery Head-to-Head</th>
+                      <th>Holm p-value</th>
+                      <th>Holdout Bars</th>
+                      <th>Verdict</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {c.candidates.map((k: any) => (
+                      <tr key={k.subject}>
+                        <td className="mono font-semibold text-slate-200">{k.subject}</td>
+                        <td className="mono">{k.answered}/{k.calls}</td>
+                        <td className="mono text-amber-200">{k.changed_stance} of {k.same_bars} bars</td>
+                        <td className="mono text-[11px]">
+                          <span className="text-emerald-300">Note: {k.discovery.candidate_better}</span> vs <span className="text-rose-300">Base: {k.discovery.control_better}</span>
+                        </td>
+                        <td className="mono text-slate-300">{k.discovery.p_holm ?? "n/a"}</td>
+                        <td className="mono">{k.holdout.bars}/{k.holdout.required_bars}</td>
+                        <td>{verdictBadge(k.verdict)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         );
       })()}
+
+      {/* Strategy Replay Candidates Table */}
       {t.replays?.strategy && (() => {
         const c = t.replays.strategy;
         return (
-          <div className="mt-3 text-[11px] text-slate-400">
-            <p className="mb-1 text-[12px] text-slate-300">{c.name}: {c.hours} stored hours scored ({t.strategy_inputs?.captured ?? "?"} captured, kept {t.strategy_inputs?.retention_days ?? 60} days). The control reproduces the live decision on {c.control.matches_live} of {c.control.scored_hours}{c.control.drift?.length ? <span className="text-amber-200"> · drift on {c.control.drift.join(", ")}</span> : null}.</p>
-            {c.candidates.map((k: any) => (
-              <p key={k.id}><span className="mono">{k.id}</span> {k.change}: <span className={pointTone({ status: "running", verdict: k.verdict })}>{k.verdict}</span> · {k.differing_decisions} hours decided differently · discovery {k.discovery.bars} hours, candidate right {k.discovery.candidate_better}, active right {k.discovery.control_better} (Holm p {k.discovery.p_holm ?? "n/a"}) · holdout {k.holdout.bars} of {k.holdout.required_bars}</p>
-            ))}
-          </div>
-        );
-      })()}
-      {t.replays?.crowd && (() => {
-        const c = t.replays.crowd;
-        return (
-          <div className="mt-3 text-[11px] text-slate-400">
-            <p className="mb-1 text-[12px] text-slate-300">{c.name}: {c.rooms} scored 1H rooms replayed with each parameter set (reputation point in time, bias from each agent's final stance). Weighted crowd against the moderator: crowd right {c.crowd_vs_moderator.crowd_better}, moderator right {c.crowd_vs_moderator.moderator_better} (p {c.crowd_vs_moderator.p_value ?? "n/a"}).</p>
-            {c.candidates.map((k: any) => (
-              <p key={k.id}><span className="mono">{k.id}</span> {k.change}: <span className={pointTone({ status: "running", verdict: k.verdict })}>{k.verdict}</span> · discovery {k.discovery.bars} rooms, candidate right {k.discovery.candidate_better}, active right {k.discovery.control_better} (Holm p {k.discovery.p_holm ?? "n/a"}) · holdout {k.holdout.bars} of {k.holdout.required_bars}</p>
-            ))}
+          <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.02] p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-[12px] font-semibold text-cyan-300 flex items-center gap-1.5">
+                <Activity className="h-3.5 w-3.5 text-cyan-400" />
+                {c.name} — Strategy Input Replays
+              </span>
+              <span className="mono text-[11px] text-slate-400">{c.hours} scored hours ({t.strategy_inputs?.captured ?? "?"} captured)</span>
+            </div>
+            <div className="table-wrap">
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th>Candidate ID</th>
+                    <th>Logic Delta</th>
+                    <th>Differing Decisions</th>
+                    <th>Discovery Comparison</th>
+                    <th>Holm p-value</th>
+                    <th>Holdout Progress</th>
+                    <th>Verdict</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {c.candidates.map((k: any) => (
+                    <tr key={k.id}>
+                      <td className="mono font-semibold text-slate-200">{k.id}</td>
+                      <td className="text-slate-300 text-[11px]">{k.change}</td>
+                      <td className="mono text-amber-200">{k.differing_decisions} hrs</td>
+                      <td className="mono text-[11px]">
+                        <span className="text-emerald-300">Cand: {k.discovery.candidate_better}</span> vs <span className="text-rose-300">Ctrl: {k.discovery.control_better}</span>
+                      </td>
+                      <td className="mono text-slate-300">{k.discovery.p_holm ?? "n/a"}</td>
+                      <td className="mono">{k.holdout.bars}/{k.holdout.required_bars}</td>
+                      <td>{verdictBadge(k.verdict)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         );
       })()}
@@ -91,54 +199,217 @@ function TuningGrid() {
 export default function Shadow() {
   const { data, loading, error } = usePoll(() => get("/api/shadow-versions"), 300_000);
   const families: any[] = (data as any)?.families ?? [];
+
+  // Aggregated Shadow Telemetry
+  let totalCandidates = 0;
+  let promotionReadyCount = 0;
+  let collectingCount = 0;
+  let totalBarsEvaluated = 0;
+
+  for (const f of families) {
+    totalBarsEvaluated = Math.max(totalBarsEvaluated, f.control?.outputs || 0);
+    for (const c of f.candidates || []) {
+      totalCandidates++;
+      if (c.verdict?.startsWith("better_than_active")) promotionReadyCount++;
+      else if (c.verdict === "collecting") collectingCount++;
+    }
+  }
+
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
-      <Panel title="Shadow versions" icon={<FlaskConical className="h-3.5 w-3.5 text-violet-300" />} right={<Badge tone="purple">scored only · never decides</Badge>}>
-        <p className="text-[12px] leading-relaxed text-slate-400">Candidate indicator versions run beside the active engine on the same closed H1 bars. They are scored by the same outcome scoring and never reach a room, a prompt or a decision. Promotion is the owner's decision and a separate PR.</p>
+      {/* Header Panel */}
+      <Panel
+        title="Shadow Testing & Epigenetic Promotion Arena"
+        icon={<FlaskConical className="h-4 w-4 text-violet-300" />}
+        right={<Badge tone="purple">Out-of-Band Simulation · Zero Risk</Badge>}
+      >
+        <p className="text-[12px] leading-relaxed text-slate-400">
+          Arena pengujian paralel di mana formula indikator dan hipotesis baru dievaluasi berdampingan dengan engine aktif (<span className="text-slate-200 font-semibold">Active Control</span>) pada candle H1 tertutup yang sama.
+          Sistem menggunakan uji signifikansi statistik non-parametrik (Holm-Bonferroni Sign Test) dan validasi Holdout out-of-sample. Promosi ke produksi dilakukan via reviewed Pull Request atau otomatisasi Epigenetic Promotion Aether.
+        </p>
+
+        {/* Consumer Badges */}
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3 text-[11px]">
+          <span className="text-slate-400">Konsumen Utama:</span>
+          <Badge tone="purple">Epigenetic Promotion Engine (Aether A7/A8)</Badge>
+          <Badge tone="cyan">Weighting Replay Statistical Sentry</Badge>
+          <Badge tone="green">Reverse Shadow Rollback Guard</Badge>
+          <Badge tone="slate">Lead Quant PR Reviewer</Badge>
+        </div>
       </Panel>
+
+      {/* KPI Overview Cards */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="glass p-3 sm:p-4">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            <FlaskConical className="h-3.5 w-3.5 text-violet-400" />
+            <span>Active Shadow Arms</span>
+          </div>
+          <div className="mono mt-2 text-[22px] font-extrabold text-violet-300 sm:text-[26px]">
+            {totalCandidates}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">Across {families.length} engine families</div>
+        </div>
+
+        <div className="glass p-3 sm:p-4">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            <GitPullRequest className="h-3.5 w-3.5 text-emerald-400" />
+            <span>Promotion Ready</span>
+          </div>
+          <div className="mono mt-2 text-[22px] font-extrabold text-emerald-300 sm:text-[26px]">
+            {promotionReadyCount}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">{promotionReadyCount ? "Holm p < 0.05 & Holdout Pass" : "No candidate qualifies yet"}</div>
+        </div>
+
+        <div className="glass p-3 sm:p-4">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            <Activity className="h-3.5 w-3.5 text-amber-400" />
+            <span>Collecting Sample</span>
+          </div>
+          <div className="mono mt-2 text-[22px] font-extrabold text-amber-300 sm:text-[26px]">
+            {collectingCount}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">Target &ge; 50 decisive pairs</div>
+        </div>
+
+        <div className="glass p-3 sm:p-4">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            <BarChart2 className="h-3.5 w-3.5 text-cyan-400" />
+            <span>Evaluated Candle Series</span>
+          </div>
+          <div className="mono mt-2 text-[22px] font-extrabold text-cyan-300 sm:text-[26px]">
+            {totalBarsEvaluated}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">Paired H1 closed candles</div>
+        </div>
+      </div>
+
+      {/* Dynamic Parameter Tuning Grid */}
       <TuningGrid />
-      {loading && !data ? <Panel><Skeleton rows={6} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-rose-300">Shadow data unavailable: {error}</p></Panel>
-        : !families.length ? <Panel><Empty>No shadow data yet.</Empty></Panel> : families.map((f) => {
+
+      {loading && !data ? (
+        <Panel><Skeleton rows={6} /></Panel>
+      ) : error && !data ? (
+        <Panel><p className="text-[12px] text-rose-300">Shadow data unavailable: {error}</p></Panel>
+      ) : !families.length ? (
+        <Panel><Empty>No shadow version data yet.</Empty></Panel>
+      ) : (
+        families.map((f) => {
           const c = f.control;
           return (
-            <Panel key={f.name} title={f.name}>
-              <p className="mb-3 text-[12px] text-slate-400">Control {c.id}: {c.outputs} stored outputs; matches the approved local records on {c.matches_approved_local_records.agree} of {c.matches_approved_local_records.compared} recent candles.</p>
+            <Panel
+              key={f.name}
+              title={`Engine Family: ${f.name.toUpperCase()}`}
+              right={<Badge tone="slate">Active: {c.id}</Badge>}
+            >
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[12px] text-slate-400">
+                <span>
+                  Control <strong className="text-slate-200">{c.id}</strong>: {c.outputs} total outputs recorded · Matches approved local calculations on{" "}
+                  <strong className="text-emerald-300">{c.matches_approved_local_records.agree}</strong> of {c.matches_approved_local_records.compared} candles.
+                </span>
+                <span className="mono text-[11px]">Accuracy: {p(c.scored?.accuracy)} · Directional: {p(c.scored?.directional?.hit_rate)}</span>
+              </div>
+
+              {/* Tabular Candidate Comparison */}
               <div className="table-wrap">
                 <table className="tbl">
-                  <thead><tr><th>Version</th><th>Scored</th><th>Accuracy</th><th>BUY/SELL hit rate</th><th>WAIT accuracy</th><th>Stuck episodes</th><th>Verdict</th></tr></thead>
+                  <thead>
+                    <tr>
+                      <th>Candidate Version / Arm</th>
+                      <th>Sample (Bars)</th>
+                      <th>Accuracy Delta</th>
+                      <th>Head-to-Head Win/Loss</th>
+                      <th>Holm Significance (p)</th>
+                      <th>Holdout Validation</th>
+                      <th>Stuck States</th>
+                      <th>Verdict</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    <Row label={`${c.id} (active)`} t={c.scored} s={c.stuck} extra={<span className="text-slate-500">control</span>} />
-                    {!f.candidates.length && <tr><td colSpan={7} className="text-slate-500">No candidate version yet.</td></tr>}
-                    {f.candidates.map((k: any) => (
-                      <Fragment key={k.id}>
-                        <Row label={k.id} t={k.scored} s={k.stuck} extra={
-                          <span className={k.verdict.startsWith("better_than_active") ? "text-emerald-300" : k.verdict === "collecting" ? "text-amber-200" : "text-rose-300"}>{k.verdict}</span>} />
-                        <Row label={`  control on the same ${k.same_bars} bars`} t={k.control_on_same_bars} s={null} extra={<span className="text-slate-500">{k.differing_stances} stances differ</span>} />
-                        <tr><td colSpan={7} className="text-[11px] text-slate-500">
-                          {k.change} · where they disagree: candidate right {k.paired.candidate_better}, active right {k.paired.control_better} (p {k.paired.p_value ?? "n/a"}) · significantly higher score: {yes(k.criteria.higher_outcome_score)} · no new stuck states: {yes(k.criteria.no_new_stuck_states)} · minimum sample: {yes(k.criteria.minimum_sample)} · reference: {k.reference}
-                        </td></tr>
-                        {k.discovery && <tr><td colSpan={7} className="text-[11px] text-slate-500">
-                          Discovery {k.discovery.bars} bars: candidate right {k.discovery.candidate_better}, active right {k.discovery.control_better} (p {k.discovery.p_value ?? "n/a"}, Holm {k.discovery.p_holm ?? "n/a"}) · holdout {k.holdout.bars} of {k.holdout.required_bars} newest bars: candidate right {k.holdout.candidate_better}, active right {k.holdout.control_better} · no worse on the holdout: {yes(k.criteria.holdout_no_worse)}
-                        </td></tr>}
-                        {k.origin?.source === "aether" && <tr><td colSpan={7} className="text-[11px] text-violet-300">
-                          From Aether: {k.origin.item_id} v{k.origin.version}, approved by a person for shadow testing only. Hypothesis: {k.origin.hypothesis ?? "n/a"} · metric: {k.origin.metric ?? "n/a"}
-                        </td></tr>}
-                        {k.review && <tr><td colSpan={7} className="text-[11px] text-slate-500">
-                          Review by {k.review.by}: {k.review.rule} · decisive pairs {k.review.decisive_pairs} of {k.review.min_decisive_pairs}{k.review.due ? <span className="text-amber-200"> · review due</span> : null}
-                        </td></tr>}
-                      </Fragment>
-                    ))}
-                    {(f.retired ?? []).map((r: any) => (
-                      <tr key={r.id}><td colSpan={7} className="text-[11px] text-slate-500">
-                        <span className="mono">{r.id}</span> stopped {r.retired_on}: {r.reason} (at the review: {r.result.differing_stances} stances differed, candidate right {r.result.candidate_better}, active right {r.result.control_better}).
-                      </td></tr>
-                    ))}
+                    {/* Control Row */}
+                    <tr className="bg-white/[0.02]">
+                      <td>
+                        <div className="font-semibold text-slate-200 flex items-center gap-1.5">
+                          <span>{c.id}</span>
+                          <Badge tone="slate">CONTROL (ACTIVE)</Badge>
+                        </div>
+                      </td>
+                      <td className="mono">{c.scored?.n ?? 0}</td>
+                      <td className="mono text-slate-300">{p(c.scored?.accuracy)}</td>
+                      <td className="text-slate-500 text-[11px]">— Baseline Reference —</td>
+                      <td className="mono text-slate-500">—</td>
+                      <td className="mono text-slate-500">—</td>
+                      <td className="mono text-[11px] text-slate-400">{c.stuck ? stuck(c.stuck) : "None"}</td>
+                      <td>{verdictBadge("control")}</td>
+                    </tr>
+
+                    {/* Candidate Rows */}
+                    {!f.candidates.length ? (
+                      <tr><td colSpan={8} className="py-4 text-center text-slate-500">No candidate version currently competing in this family.</td></tr>
+                    ) : (
+                      f.candidates.map((k: any) => (
+                        <tr key={k.id} className="border-t border-white/5">
+                          <td>
+                            <div className="font-semibold text-slate-200">{k.id}</div>
+                            <div className="text-[11px] text-slate-400 mt-0.5">{k.change}</div>
+                            {k.origin?.source === "aether" && (
+                              <div className="mt-1 text-[10px] text-violet-300 flex items-center gap-1">
+                                <Zap className="h-3 w-3" />
+                                <span>Aether Hypothesis: {k.origin.hypothesis ?? k.origin.item_id}</span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="mono text-slate-300">
+                            <div>{k.scored?.n ?? 0} bars</div>
+                            <div className="text-[10px] text-amber-200">{k.differing_stances} diff</div>
+                          </td>
+                          <td>
+                            <div className="mono font-bold text-slate-200">{p(k.scored?.accuracy)}</div>
+                            <div className="text-[10px] text-slate-400">Dir: {p(k.scored?.directional?.hit_rate)}</div>
+                          </td>
+                          <td className="w-[200px]">
+                            <HeadToHeadGraph
+                              candidateBetter={k.paired?.candidate_better ?? 0}
+                              controlBetter={k.paired?.control_better ?? 0}
+                              candidateName={k.id}
+                              controlName={c.id}
+                            />
+                          </td>
+                          <td className="mono">
+                            <div className={k.paired?.p_value != null && k.paired.p_value < 0.05 ? "text-emerald-300 font-bold" : "text-slate-400"}>
+                              p = {k.discovery?.p_holm ?? k.paired?.p_value ?? "n/a"}
+                            </div>
+                            <div className="text-[10px] text-slate-500">Sign Test {yes(k.criteria?.higher_outcome_score)}</div>
+                          </td>
+                          <td className="mono">
+                            <div>{k.holdout?.bars ?? 0}/{k.holdout?.required_bars ?? 30} bars</div>
+                            <div className="text-[10px]">{yes(k.criteria?.holdout_no_worse)}</div>
+                          </td>
+                          <td className="mono text-[11px]">{yes(k.criteria?.no_new_stuck_states)}</td>
+                          <td>{verdictBadge(k.verdict)}</td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
+
+              {/* Retired Candidate Audit Trail */}
+              {!!f.retired?.length && (
+                <div className="mt-3 border-t border-white/5 pt-2 text-[11px] text-slate-500">
+                  <span className="font-semibold text-slate-400">Retired Candidates: </span>
+                  {f.retired.map((r: any) => (
+                    <span key={r.id} className="mr-3">
+                      <span className="mono">{r.id}</span> ({r.reason}, stopped {r.retired_on})
+                    </span>
+                  ))}
+                </div>
+              )}
             </Panel>
           );
-        })}
+        })
+      )}
     </div>
   );
 }
