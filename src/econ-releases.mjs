@@ -234,7 +234,7 @@ export function horizonStats(rows) {
   }
   const out = {};
   for (const [kind, list] of byKind) {
-    const st = kindStats(list, REACTION_HOURS);
+    const st = kindStats(list, REACTION_HOURS, { pick: "peak" });
     const peak = Object.entries(st.horizons).filter(([, x]) => x.n >= MIN_HORIZON_SAMPLES).sort((a, b) => b[1].mean_atr - a[1].mean_atr)[0];
     out[kind] = { ...st, peak: st.horizon_hours != null && peak ? { at: peak[0], mean_atr: peak[1].mean_atr, hit_rate: peak[1].hit_rate } : null };
   }
@@ -243,11 +243,11 @@ export function horizonStats(rows) {
 
 /**
  * Pure: one kind's signed moves (one object per release, keyed "<h>h") at each of `hours`: the count, the
- * mean and the hit rate; the learned horizon is the longest hour with a hit rate of at least
- * HORIZON_HIT_RATE and a positive mean (0 when none; null under MIN_HORIZON_SAMPLES releases), with its
- * hit rate and mean. Shared by the reaction after a release and the drift before it.
+ * mean and the hit rate; the learned horizon is, among the hours with a hit rate of at least
+ * HORIZON_HIT_RATE and a positive mean, the longest (`pick` "longest") or the one with the largest mean
+ * ("peak") (0 when none; null under MIN_HORIZON_SAMPLES releases), with its hit rate and mean. Shared by the reaction after a release and the drift before it.
  */
-function kindStats(list, hours) {
+function kindStats(list, hours, { pick = "longest" } = {}) {
   const horizons = {};
   for (const h of hours) {
     const v = list.map((x) => x[`${h}h`]).filter(isNum);
@@ -256,7 +256,12 @@ function kindStats(list, hours) {
   }
   const enough = list.length >= MIN_HORIZON_SAMPLES;
   const good = hours.filter((h) => { const x = horizons[`${h}h`]; return x && x.n >= MIN_HORIZON_SAMPLES && x.hit_rate >= HORIZON_HIT_RATE && x.mean_atr > 0; });
-  const learned = enough && good.length ? Math.max(...good) : null;
+  // "longest" (the drift before a release): the longest qualifying hour. "peak" (the reaction after it; owner
+  // 2026-11-12: "ya perbaiki horizon reaksi pakai peak 2 jam"): the qualifying hour with the largest mean
+  // move, so a strong first hours' reaction is not diluted by a weak day (inflation: 2 h at 91 %, not 24 h at 56 %).
+  const learned = !enough || !good.length ? null
+    : pick === "peak" ? good.reduce((a, b) => (horizons[`${b}h`].mean_atr > horizons[`${a}h`].mean_atr ? b : a))
+    : Math.max(...good);
   return {
     samples: list.length, horizons,
     horizon_hours: enough ? learned ?? 0 : null,

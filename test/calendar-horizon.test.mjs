@@ -194,3 +194,22 @@ test("the contrarian option (owner 2026-11-12: \"ya buatkan opsi kontrarian untu
   assert.equal(calendarContrarianMode({}), "off");
   assert.equal(calendarContrarianMode({ CALENDAR_CONTRARIAN: "on" }), "on");
 });
+
+test("the reaction horizon is the peak (owner 2026-11-12: \"ya perbaiki horizon reaksi pakai peak 2 jam\"): production inflation, 2 h at 91 % instead of 24 h at 56 %", async () => {
+  const { horizonStats } = await import("../src/econ-releases.mjs");
+  const { surpriseStrength } = await import("../src/calendar-agent.mjs");
+  // 34 inflation releases shaped like production 2026-11-12: hit 76/91/76/65/56 % at 1/2/4/8/24 h, the largest mean at 2 h.
+  const hits = { "1h": 26, "2h": 31, "4h": 26, "8h": 22, "24h": 19 }, size = { "1h": 1.4, "2h": 1.9, "4h": 2.1, "8h": 2, "24h": 3 };
+  const rows = Array.from({ length: 34 }, (_, i) => ({ kind: "inflation", gold_direction: -1, reaction_json: JSON.stringify({ signed: Object.fromEntries(Object.keys(hits).map((h) => [h, i < hits[h] ? size[h] : -1])) }) }));
+  const st = horizonStats(rows).inflation;
+  assert.equal(st.horizons["2h"].hit_rate, 0.912);
+  assert.ok(st.horizons["2h"].mean_atr > st.horizons["24h"].mean_atr, "the largest mean is at 2 h");
+  assert.deepEqual([st.horizon_hours, st.hit_rate], [2, 0.912], "the peak, not the longest qualifying hour (24 h, 56 %)");
+  assert.equal(surpriseStrength({ horizon_hours: st.horizon_hours, hit_rate: st.hit_rate }), 1, "a 91 % reaction weighs whole (was 0.24 at 24 h)");
+  // The release is weighed for 2 hours after it, at full strength, then leaves the quorum.
+  const e = { title: "Core PPI m/m", currency: "USD", impact: "High", time: CPI, forecast: "0.2%", previous: "0.3%" };
+  const release = { title: "Core PPI m/m", kind: "inflation", time: CPI, actual: 0.4, forecast: 0.2, previous: 0.3, surprise: 0.2, surprise_z: 2, gold_direction: -1 };
+  const intel = { releases: [release], stats: { inflation: st }, pre_stats: {} };
+  assert.deepEqual([calendarWitness(calendarOutlook([e], Date.parse(CPI) + H, { intel })).lean], [-1]);
+  assert.equal(calendarWitness(calendarOutlook([e], Date.parse(CPI) + 3 * H, { intel })).lean, null, "past its 2-hour peak horizon");
+});

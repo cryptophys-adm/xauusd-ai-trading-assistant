@@ -60,7 +60,9 @@ test("gold's reaction after a release, in ATR and signed by the rule; the learne
   const rows = Array.from({ length: 6 }, (_, i) => row({ "1h": 0.5, "2h": 0.8, "4h": i < 5 ? 0.6 : -0.2, "8h": i < 2 ? 0.3 : -0.4, "24h": -0.5 }));
   const st = horizonStats(rows).inflation;
   assert.equal(st.samples, 6);
-  assert.equal(st.horizon_hours, 4, "the longest horizon where gold still followed the rule 55% of the time");
+  // Owner 2026-11-12 ("pakai peak"): the qualifying hour with the largest mean move (2h: +0.8, 100 %), not the
+  // longest one (4h: +0.47, 83 %).
+  assert.deepEqual([st.horizon_hours, st.hit_rate, st.mean_atr], [2, 1, 0.8], "the peak among the hours where gold followed the rule 55% of the time");
   assert.deepEqual([st.peak.at, st.peak.mean_atr], ["2h", 0.8]);
   assert.equal(horizonStats(rows.slice(0, MIN_HORIZON_SAMPLES - 1)).inflation.horizon_hours, null, "too few releases: the fixed horizon stands");
 });
@@ -109,7 +111,7 @@ test("the Calendar Agent after the release: actual, surprise, the rule's effect 
   assert.equal(p.status, "released");
   assert.equal(p.horizon.hours_after, 6, "the learned horizon replaces the fixed 4 hours");
   assert.match(p.text, /actual 0\.4% against a forecast of 0\.3% \(a surprise of \+1\.8 standard deviations\), so by rule gold down/);
-  assert.match(p.text, /12 past releases of this kind gold moved the rule's way 67% of the time up to 6 hours after, most strongly after 2 hours/);
+  assert.match(p.text, /12 past releases of this kind gold moved the rule's way 67% of the time 6 hours after, its strongest reaction, so the release's effect is weighed until then/);
   assert.equal(projectEvent(event, Date.parse(CPI) + 5 * 3_600_000, {}).status, "past", "without a learned horizon the fixed 4 hours stand");
   const outlook = calendarOutlook([event], now, { intel: { releases: [release], stats: { inflation: stat } } });
   assert.equal(outlook.surprise_lean, -1, "a large surprise inside its horizon: gold down");
