@@ -40,7 +40,7 @@ test("B3. 2026-11-12 00:32 replayed: a second short does not join a short whose 
   assert.ok(codes(r).includes("same_side_unprotected"), JSON.stringify(codes(r)));
   // Once the first short is protected (its stop at or below its open price), a second may open: it
   // risks nothing more, so the budget is the equity above the floor.
-  const safe = { ...first, sl: 3979.5 };
+  const safe = { ...first, open_price: 3990, sl: 3985 };
   const ok = plan({ signal, now: ISSUED + 1_080_000, executor: { ...executor({ balance: 5000, equity: 5000, day_start_balance: 5000 }, [safe]), received_ms: ISSUED + 1_079_000 } });
   assert.equal(opens(ok).length, 1, JSON.stringify(codes(ok)));
   // The opposite side is not stacking: a BUY position against a SELL signal is closed, as before.
@@ -52,7 +52,8 @@ test("B3. 2026-11-12 00:32 replayed: a second short does not join a short whose 
 test("B4. the open risk at the stops: from the broker's price, nothing for a protected position, the whole account for a position without a stop", () => {
   const short = { side: "SELL", volume: 0.02, open_price: 3981.38, sl: 3990.17 };
   assert.equal(Math.round(openRiskAtStops([short], SYM) * 100) / 100, 19.94, "(3990.17 - ask 3980.20) x 2 lots of 0.01");
-  assert.equal(openRiskAtStops([{ ...short, sl: 3979 }], SYM), 0, "a stop below the ask on a short is locked profit");
+  // A protected short (open 3990, stop 3985, ask 3980.20): only the floating profit it could give back, 4.80 x 2.
+  assert.equal(Math.round(openRiskAtStops([{ ...short, open_price: 3990, sl: 3985 }], SYM) * 100) / 100, 9.6);
   assert.equal(openRiskAtStops([{ ...short, sl: null }], SYM), Infinity);
   assert.equal(openRiskAtStops([{ ...short, symbol: "XAGUSD" }], SYM), 0, "another symbol is not valued on this one's price");
   assert.equal(isProtected({ side: "SELL", open_price: 3980, sl: 3980 }), true);

@@ -234,9 +234,11 @@ export function isProtected(p) {
 }
 
 /**
- * What the positions would lose from the broker's current price to their stops, in account money (pure).
- * A protected position adds nothing; a position without a stop, or without what it takes to value it,
- * counts as the whole account (it blocks a new entry rather than hide unbounded risk).
+ * What the positions would lose from the broker's current price to their stops, in account money (pure):
+ * the equity, which carries their floating profit and loss, minus this is the equity if every stop is hit.
+ * A protected position adds only the floating profit it could give back; a position without a stop, or
+ * without what it takes to value it, counts as the whole account (it blocks a new entry rather than hide
+ * unbounded risk).
  */
 export function openRiskAtStops(positions = [], sym = {}) {
   let total = 0;
