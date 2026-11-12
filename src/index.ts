@@ -229,6 +229,7 @@ import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
 import { omegaHealth } from "./omega-health.mjs";
 import { organismStatus } from "./organism-status.mjs";
+import { organismDna } from "./organism.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition } from "./omega-broker.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
@@ -2029,6 +2030,17 @@ export class OwnerNotifier extends WorkerEntrypoint<Env> {
  * the execution host's liveness for the AI Mesh page (src/omega-health.mjs). health() only: no control, no
  * account figures; OmegaGateway stays bound to the Omega Worker alone.
  */
+/**
+ * Owner 2026-11-12 ("DNA untuk XAUUSD dan Omega dengan auto-register"): the platform Forge's Service Binding
+ * EXT_ORGANISM_XAUUSD reads this repository's DNA (organism.json, src/organism.mjs) for its organism census.
+ * dna() only: read-only, no registry access here; the platform decides what to register by consensus.
+ */
+export class OrganismDna extends WorkerEntrypoint<Env> {
+  async dna(): Promise<JsonObject> {
+    return organismDna() as unknown as JsonObject;
+  }
+}
+
 export class OmegaHealth extends WorkerEntrypoint<Env> {
   async health(): Promise<JsonObject> {
     return omegaHealth(this.env) as Promise<JsonObject>;
