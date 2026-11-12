@@ -191,7 +191,7 @@ import { readGlobalConclusion } from "./global-conclusion.mjs";
 import { readStrategy, loadStrategyInputs, buildStrategy, ownTimeframePlan, loadOwnTimeframePlanInputs } from "./strategy-engine.mjs";
 import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } from "./strategy-inputs.mjs";
 import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
-import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema, readExecutionReport } from "./signal-ledger.mjs";
+import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema, readExecutionReport, LEDGER_CRON } from "./signal-ledger.mjs";
 import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, TRADING_MODE_KEY } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport, pushExecutionReport } from "./aether-push.mjs";
@@ -2663,6 +2663,27 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   return dashboardJson({ error: "Not found" }, 404);
 }
 
+/**
+ * Signal Ledger (owner request 2026-11-07; every 5 minutes since 2026-11-12, "ya kerjakan keduanya"):
+ * new signals, each followed to its outcome in R on the closed bars (1m where the 1m series reaches),
+ * then each new ledger event to Telegram once, then the execution report to Aether when it changed.
+ * Never feeds a room or a decision. Never throws.
+ */
+async function runLedgerStep(env: Env): Promise<void> {
+  try {
+    // While the Decision Engine is on, only its decisions are new signals (src/decision-engine.mjs).
+    const engineOn = decisionEngineEnabled(env);
+    const ledger = await runSignalLedger(env, { readStrategy: engineOn ? null : readStrategy, h1Decisions: !engineOn });
+    if (ledger.status === "ok" && (Number((ledger.added as Record<string, number>).h1_decision) || Number((ledger.added as Record<string, number>).strategy) || Number(ledger.changed))) console.log("signal_ledger", JSON.stringify(ledger));
+    // Backlog 11.2 (owner decision 2026-11-08): each new ledger event to the owner's Telegram, once.
+    const alerts = await sendLedgerAlerts(env, { send: (text: string) => sendTelegram(env, text) });
+    if (alerts.status !== "disabled" && (Number(alerts.sent) || Number(alerts.seeded) || Number(alerts.failed))) console.log("ledger_alerts", JSON.stringify(alerts));
+    // The plan and the Omega policy per trading mode, in R, to Aether when it changed (owner 2026-11-12).
+    const execution = await pushExecutionReport(env, await readExecutionReport(env));
+    if (execution.status !== "disabled" && execution.status !== "unchanged") console.log("execution_report", JSON.stringify(execution));
+  } catch (e) { console.error("signal_ledger_failed", e instanceof Error ? e.message : String(e)); }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -2882,6 +2903,10 @@ export default {
     return consumeQueue(batch, env);
   },
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    if (event.cron === LEDGER_CRON) {
+      ctx.waitUntil(runLedgerStep(env));
+      return;
+    }
     if (event.cron === PARITY_SWEEP_CRON) {
       // Idempotent re-reconciliation of the most recently closed H1 candles. The
       // per-event reconcile tasks run within seconds of evidence arrival and can
@@ -2978,20 +3003,7 @@ export default {
             if (run.error) console.error("witness_tuning_failed", run.error);
           }
         }
-        // Signal Ledger (owner request 2026-11-07): new H1 decisions and strategy setups, each
-        // followed to its outcome in R on the closed bars. Never feeds a room or a decision.
-        try {
-          // While the Decision Engine is on, only its decisions are new signals (src/decision-engine.mjs).
-          const engineOn = decisionEngineEnabled(env);
-          const ledger = await runSignalLedger(env, { readStrategy: engineOn ? null : readStrategy, h1Decisions: !engineOn });
-          if (ledger.status === "ok" && (Number((ledger.added as Record<string, number>).h1_decision) || Number((ledger.added as Record<string, number>).strategy) || Number(ledger.changed))) console.log("signal_ledger", JSON.stringify(ledger));
-          // Backlog 11.2 (owner decision 2026-11-08): each new ledger event to the owner's Telegram, once.
-          const alerts = await sendLedgerAlerts(env, { send: (text: string) => sendTelegram(env, text) });
-          if (alerts.status !== "disabled" && (Number(alerts.sent) || Number(alerts.seeded) || Number(alerts.failed))) console.log("ledger_alerts", JSON.stringify(alerts));
-          // The plan and the Omega policy per trading mode, in R, to Aether when it changed (owner 2026-11-12).
-          const execution = await pushExecutionReport(env, await readExecutionReport(env));
-          if (execution.status !== "disabled" && execution.status !== "unchanged") console.log("execution_report", JSON.stringify(execution));
-        } catch (e) { console.error("signal_ledger_failed", e instanceof Error ? e.message : String(e)); }
+        // The Signal Ledger runs on its own 5-minute schedule (LEDGER_CRON, runLedgerStep below).
         // Aether A8 (owner go 2026-11-08): the strategy engine's inputs once per closed H1 bar (from 40
         // minutes after the close), and the outcomes of earlier captures, for the threshold replay.
         // D1 only; never feeds a room or a decision. Non-fatal.

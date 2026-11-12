@@ -27,6 +27,8 @@
 import { keyLevelPlan, isProtected, OMEGA_DEFAULTS } from "./omega-engine.mjs";
 
 export const LEDGER_VERSION = "cryptophys.signal-ledger.v1";
+/** The ledger's own schedule (owner 2026-11-12): every 5 minutes, 2 minutes past each 5m close. */
+export const LEDGER_CRON = "2-59/5 * * * *";
 export const FILL_WINDOW_MS = 8 * 3600_000;
 export const HOLD_MAX_MS = 72 * 3600_000;
 export const SOURCES = Object.freeze(["decision", "h1_decision", "strategy"]);
@@ -115,20 +117,24 @@ export function simulateSignal(signal, bars, { now = Date.now(), fillWindowMs = 
 // intraday, swing, dan scalping. Ini digunakan untuk inputan ke aether dan selanjutnya akan menjadi
 // knowledge"). A third policy on the same Decision Engine signals: what the Omega engine
 // (src/omega-engine.mjs) would have done with each one, replayed on the feed's closed 15m bars.
-//   entry     at market on the first bar after the decided bar (Omega trades a signal only until the
-//             next close); an ENTER_LIMIT plan waits for price within 0.35 x the stop distance of the
-//             entry inside that bar. The stop and the target keep the plan's distances from the fill.
+//   entry     at market on the first bar after the decision's time (on 1m bars the minute after it was
+//             decided; on older 15m bars the bar after the decided bar). Omega trades a signal only
+//             until the next close and within max_signal_age of the decision: an ENTER_LIMIT plan waits
+//             that long for price within 0.35 x the stop distance of the entry. The stop and the target
+//             keep the plan's distances from the fill.
 //   gates     the day's loss limit and risk budget in R (max_daily_loss_pct / risk_pct of the Omega
 //             settings), the open positions' risk at their stops, max_positions and no stacking on an
 //             unprotected position; the budget caps the size (a fraction of 1R) like the lot cap.
-//   manage    at every bar close, the latest decision's quorum power and key levels drive
+//   manage    at every bar close (every minute on 1m bars), the latest decision already made then:
+//             its quorum power and key levels drive
 //             keyLevelPlan (SL+ behind passed levels, trailing TP, the close on a reversed power); an
 //             opposite decision closes the trade; HOLD_MAX_MS ends it at the bar's close.
 // Every trade carries its trading mode (scalp, intraday, swing: the mode decides the target and Omega's
 // rules follow it), so the policy is measured per mode. Approximations, said in the view's rules: the
 // feed's bars (no broker basis, no spread but a fixed one), no 5m stop or adaptive stop, the 5m ATR
-// as the 15m ATR / sqrt 3 and the 5m swing as the last 15m bar, no scale-out (Omega trades 0.01 lot).
-export const OMEGA_POLICY_VERSION = "cryptophys.ledger-omega.v1";
+// as the 15m ATR(14) / sqrt 3 and the 5m swing as the last 15 minutes, no scale-out (Omega trades 0.01
+// lot), no wait for the 5m entry trigger.
+export const OMEGA_POLICY_VERSION = "cryptophys.ledger-omega.v2";
 export const OMEGA_SIM = Object.freeze({ spread: 0.2, atr_period: 14, limit_pullback: 0.35, broker_day_utc: 22 });
 export const TRADING_MODES = Object.freeze(["scalp", "intraday", "swing"]);
 const M15 = 15 * 60_000;
@@ -155,25 +161,41 @@ export function decisionLevels(raw) {
     .filter((z) => z.low > 0 && z.high >= z.low).sort((a, b) => a.low - b.low);
 }
 
-/** Pure: the fill of a signal under Omega's entry rule, or why it did not trade. */
-export function omegaEntry(signal, bars, { now = Date.now() } = {}) {
+const spanMs = (b) => toMs(b.close_time) - toMs(b.open_time);
+
+/**
+ * Pure: the fill of a signal under Omega's entry rule, or why it did not trade. The window runs from the
+ * decision (`opened_at`, never before the decided bar's close) to the next close or `maxAgeMs` after the
+ * decision, whichever comes first. On 1m bars the first bar is the one opening after the decision; on a
+ * 15m (or longer) bar, the bar that opens at the decided bar's close.
+ */
+export function omegaEntry(signal, bars, { now = Date.now(), maxAgeMs = OMEGA_DEFAULTS.max_signal_age_ms } = {}) {
   const closeMs = decisionCloseMs(signal.candle_key);
   if (!finite(closeMs)) return { status: "skipped", gate: "no_decision_bar" };
-  const k = bars.findIndex((b) => toMs(b.open_time) >= closeMs);
+  const opened = toMs(signal.opened_at);
+  const decidedMs = finite(opened) ? Math.max(closeMs, opened) : closeMs;
+  const until = Math.min(closeMs + M15, decidedMs + maxAgeMs);
+  const k = bars.findIndex((b) => toMs(b.open_time) >= closeMs && (spanMs(b) >= M15 || toMs(b.open_time) >= decidedMs));
   if (k < 0 || toMs(bars[k].close_time) > now) return now - closeMs > HOLD_MAX_MS ? { status: "skipped", gate: "no_bars" } : { status: "pending" };
-  const b = bars[k];
-  if (toMs(b.open_time) >= closeMs + M15) return { status: "skipped", gate: "expired" };
+  if (toMs(bars[k].open_time) >= until) return { status: "skipped", gate: "expired" };
   const dir = signal.side === "BUY" ? 1 : -1, stopDist = Math.abs(signal.entry - signal.stop);
-  let fill = b.open;
-  if (String(signal.entry_action || "").toUpperCase() === "ENTER_LIMIT") {
-    const limit = signal.entry + dir * OMEGA_SIM.limit_pullback * stopDist;
-    if (dir * (b.open - limit) > 0) {
-      if (!(dir > 0 ? b.low <= limit : b.high >= limit)) return { status: "skipped", gate: "waiting_for_pullback", bar: k };
+  const limitPlan = String(signal.entry_action || "").toUpperCase() === "ENTER_LIMIT";
+  const limit = signal.entry + dir * OMEGA_SIM.limit_pullback * stopDist;
+  for (let j = k; j < bars.length && toMs(bars[j].open_time) < until; j++) {
+    const b = bars[j];
+    if (toMs(b.close_time) > now) return { status: "pending" };
+    let fill = b.open;
+    if (limitPlan && dir * (b.open - limit) > 0) {
+      if (!(dir > 0 ? b.low <= limit : b.high >= limit)) continue;
       fill = limit;
     }
+    if (!finite(fill) || dir * (fill - signal.stop) <= 0) return { status: "skipped", gate: "stop_breached", bar: j };
+    return { status: "filled", bar: j, fill, filled_at: b.open_time };
   }
-  if (!finite(fill) || dir * (fill - signal.stop) <= 0) return { status: "skipped", gate: "stop_breached", bar: k };
-  return { status: "filled", bar: k, fill, filled_at: b.open_time };
+  // The window passed (or the data ends inside it while it is still open).
+  const lastOpen = bars.filter((b) => toMs(b.close_time) <= now).at(-1);
+  if (now < until && (!lastOpen || toMs(lastOpen.close_time) < until)) return { status: "pending" };
+  return { status: "skipped", gate: limitPlan ? "waiting_for_pullback" : "expired", bar: k };
 }
 
 /**
@@ -181,8 +203,8 @@ export function omegaEntry(signal, bars, { now = Date.now() } = {}) {
  * the engine's decisions oldest first ({ close_ms, stance, power, levels }); `gate` the account gate
  * at the fill ({ code } to skip, { size } to trade a fraction of 1R), decided once by the caller.
  */
-export function simulateOmega(signal, bars, { decisions = [], gate = null, now = Date.now(), holdMaxMs = HOLD_MAX_MS } = {}) {
-  const e = omegaEntry(signal, bars, { now });
+export function simulateOmega(signal, bars, { decisions = [], gate = null, now = Date.now(), holdMaxMs = HOLD_MAX_MS, atrBars = null, maxAgeMs = OMEGA_DEFAULTS.max_signal_age_ms } = {}) {
+  const e = omegaEntry(signal, bars, { now, maxAgeMs });
   if (e.status !== "filled") return { omega_status: e.status, gate: e.gate ?? null };
   if (gate?.code) return { omega_status: "skipped", gate: gate.code, filled_at: e.filled_at };
   const size = finite(gate?.size) ? Math.max(0, Math.min(1, gate.size)) : 1;
@@ -196,7 +218,14 @@ export function simulateOmega(signal, bars, { decisions = [], gate = null, now =
     omega_status: "closed", exit, r: R(price), size: r3(size), filled_at: e.filled_at, closed_at: b.close_time, bars: k - e.bar + 1,
     mfe_r: r3(Math.max(mfe, R(price))), mae_r: r3(Math.min(mae, R(price))), protected_at: protectedAt, sl_moves: slMoves, tp_moves: tpMoves, band
   });
-  let d = 0;
+  // The 5m ATR from the 15m bars closed by then; the 5m swing from the last 15 minutes of bars.
+  const m15 = (atrBars ?? bars).filter((b) => spanMs(b) === M15);
+  let a = -1;
+  const atr5At = (t) => { while (a + 1 < m15.length && toMs(m15[a + 1].close_time) <= t) a += 1; const v = a >= 1 ? atrAt(m15, a) : null; return v ? v / Math.sqrt(3) : null; };
+  const swingAt = (k, t) => { let lo = bars[k].low, hi = bars[k].high; for (let j = k - 1; j >= 0 && toMs(bars[j].close_time) > t - M15; j--) { lo = Math.min(lo, bars[j].low); hi = Math.max(hi, bars[j].high); } return { lo, hi }; };
+  // A decision counts from when it was made (at_ms), not from its bar's close.
+  const known = (x) => (finite(x.at_ms) ? x.at_ms : x.close_ms);
+  let d = -1;
   for (let k = e.bar; k < bars.length; k++) {
     const b = bars[k], closeMs = toMs(b.close_time);
     if (closeMs > now) break;
@@ -208,14 +237,14 @@ export function simulateOmega(signal, bars, { decisions = [], gate = null, now =
     if (dir * (adverse - sl) <= 0) return out(protectedAt ? "sl_plus" : "stop", sl, b, k);
     if (dir * (favorable - tp) >= 0) return out(tpMoves ? "trailed_target" : "target", tp, b, k);
     if (closeMs - fillMs >= holdMaxMs) return out("time", b.close, b, k);
-    while (d + 1 < decisions.length && decisions[d + 1].close_ms <= closeMs) d += 1;
-    const dec = decisions[d] && decisions[d].close_ms <= closeMs ? decisions[d] : null;
+    while (d + 1 < decisions.length && known(decisions[d + 1]) <= closeMs) d += 1;
+    const dec = d >= 0 ? decisions[d] : null;
     if (!dec) continue;
     if (dec.close_ms > ownClose && (dec.stance === "BUY" || dec.stance === "SELL") && dec.stance !== signal.side) return out("opposite", b.close, b, k);
     if (!dec.levels?.length) continue;
-    const atr = atrAt(bars, k);
+    const swing = swingAt(k, closeMs);
     const sym = { digits: 2, point: 0.01, spread_points: Math.round(OMEGA_SIM.spread / 0.01), stops_level_points: 0, bid: b.close, ask: b.close + OMEGA_SIM.spread };
-    const sig = { power: finite(dec.power) ? Math.max(-1, Math.min(1, dec.power)) : 0, power_ms: finite(dec.power) ? dec.close_ms : 0, m5_atr: atr ? atr / Math.sqrt(3) : null, m5_swing_low: b.low, m5_swing_high: b.high };
+    const sig = { power: finite(dec.power) ? Math.max(-1, Math.min(1, dec.power)) : 0, power_ms: finite(dec.power) ? dec.close_ms : 0, m5_atr: atr5At(closeMs), m5_swing_low: swing.lo, m5_swing_high: swing.hi };
     const plan = keyLevelPlan({ position: { side: signal.side, open_price: fill, sl, tp }, sym, signal: sig, levels: dec.levels, now: closeMs });
     band = plan.band;
     if (plan.close) return out("power_reversal", buy ? sym.bid : sym.ask, b, k);
@@ -312,7 +341,8 @@ export function ledgerView(items, { days }) {
     version: LEDGER_VERSION, window_days: days,
     rules: {
       fill_window_hours: FILL_WINDOW_MS / 3600_000, hold_max_hours: HOLD_MAX_MS / 3600_000, same_bar: "stop first (conservative)", unit: "R, never money",
-      omega: { version: OMEGA_POLICY_VERSION, entry: "market on the bar after the decision (a limit plan within 0.35 x the stop distance)", management: "key levels by quorum power (SL+, trailing TP, close on a reversed power), opposite decision, 72 h", gates: "daily loss limit and risk budget in R, max positions, no stacking", approximations: "feed bars, fixed spread, no 5m or adaptive stop, no scale-out" }
+      bars: "1m where the 1m series reaches (about two days), else 15m, else 1H; followed every 5 minutes",
+      omega: { version: OMEGA_POLICY_VERSION, entry: "market the minute after the decision (a limit plan waits up to the signal's age for price within 0.35 x the stop distance)", management: "every minute: key levels by quorum power (SL+, trailing TP, close on a reversed power), the opposite decision once made, 72 h", gates: "daily loss limit and risk budget in R, max positions, no stacking", approximations: "feed bars, fixed spread, no 5m or adaptive stop, no 5m entry trigger, no scale-out" }
     },
     all: block(by(null)), by_source: Object.fromEntries(SOURCES.map((s) => [s, block(by(s))])),
     by_mode: Object.fromEntries(TRADING_MODES.map((m) => [m, block(decisions.filter((x) => x.trading_mode === m))])),
@@ -363,11 +393,27 @@ async function series(env, interval) {
   } catch { return []; }
 }
 
-/** Closed 15m bars, with 1H bars before the first 15m bar (the 15m series is shorter). */
+/**
+ * Pure: one bar series of the finest bars available at each time, oldest first: 1m bars where the 1m
+ * series reaches (about two days), 15m bars before them, 1H bars before those (owner 2026-11-12: "ya
+ * kerjakan keduanya" — entries and exits at the minute they happen, not at the 15m close).
+ */
+export function stitchBars({ m1 = [], m15 = [], h1 = [] } = {}) {
+  const m1Start = m1.length ? toMs(m1[0].open_time) : Infinity;
+  const m15Part = m15.filter((b) => toMs(b.close_time) <= m1Start);
+  const m15Start = m15Part.length ? toMs(m15Part[0].open_time) : m1Start;
+  return [...h1.filter((b) => toMs(b.close_time) <= m15Start), ...m15Part, ...m1];
+}
+
+/** The ledger's bars ({ bars: stitched 1m, 15m and 1H; m15: the 15m bars for the ATR }). */
+export async function ledgerSeries(env) {
+  const [m1, m15, h1] = await Promise.all([series(env, "1m"), series(env, "15m"), series(env, "1h")]);
+  return { bars: stitchBars({ m1, m15, h1 }), m15 };
+}
+
+/** The stitched closed bars (1m, then 15m, then 1H further back). */
 export async function ledgerBars(env) {
-  const [m15, h1] = await Promise.all([series(env, "15m"), series(env, "1h")]);
-  const start = m15.length ? toMs(m15[0].open_time) : Infinity;
-  return [...h1.filter((b) => toMs(b.close_time) <= start), ...m15];
+  return (await ledgerSeries(env)).bars;
 }
 
 const insertSql = "INSERT OR IGNORE INTO signal_ledger (id, source, candle_key, opened_at, side, entry, stop, tp1, tp2, progressive_stop, confidence, note, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)";
@@ -422,9 +468,9 @@ export async function ingestDecision(env, d, { now = Date.now() } = {}) {
 export async function loadDecisionStream(env, sinceIso) {
   let rows = [];
   try {
-    rows = (await env.DB.prepare("SELECT decision_key, stance, json_extract(decision_json, '$.quorum.score') AS power, json_extract(decision_json, '$.key_levels') AS levels, json_extract(decision_json, '$.trading_mode') AS mode, json_extract(decision_json, '$.trade.action') AS action FROM engine_decisions WHERE bar_close >= ? ORDER BY bar_close").bind(sinceIso).all()).results || [];
+    rows = (await env.DB.prepare("SELECT decision_key, stance, decided_at, json_extract(decision_json, '$.quorum.score') AS power, json_extract(decision_json, '$.key_levels') AS levels, json_extract(decision_json, '$.trading_mode') AS mode, json_extract(decision_json, '$.trade.action') AS action FROM engine_decisions WHERE bar_close >= ? ORDER BY bar_close").bind(sinceIso).all()).results || [];
   } catch { return []; }
-  return rows.map((r) => ({ key: r.decision_key, close_ms: decisionCloseMs(r.decision_key), stance: r.stance, power: r.power == null || !Number.isFinite(Number(r.power)) ? null : Number(r.power), levels: decisionLevels(r.levels), mode: TRADING_MODES.includes(r.mode) ? r.mode : null, action: r.action ?? null }))
+  return rows.map((r) => ({ key: r.decision_key, close_ms: decisionCloseMs(r.decision_key), at_ms: finite(toMs(r.decided_at)) ? toMs(r.decided_at) : null, stance: r.stance, power: r.power == null || !Number.isFinite(Number(r.power)) ? null : Number(r.power), levels: decisionLevels(r.levels), mode: TRADING_MODES.includes(r.mode) ? r.mode : null, action: r.action ?? null }))
     .filter((d) => finite(d.close_ms)).sort((a, b) => a.close_ms - b.close_ms);
 }
 
@@ -442,9 +488,9 @@ const bookOf = (r) => { const j = parseJson(r.omega_json) || {}; return { id: r.
  * The Omega policy of the decision rows `rows` (oldest first) on the closed 15m bars. Each trade's
  * account gate is decided once, at its fill, from the other Omega trades, and kept in omega_json.
  */
-export async function evaluateOmega(env, rows, bars, { now = Date.now() } = {}) {
+export async function evaluateOmega(env, rows, bars, { now = Date.now(), m15 = null } = {}) {
   if (!rows.length) return 0;
-  const m15 = bars.filter((b) => toMs(b.close_time) - toMs(b.open_time) === M15);
+  const atrBars = m15 ?? bars.filter((b) => spanMs(b) === M15);
   const since = Math.min(...rows.map((r) => toMs(r.opened_at)).filter(finite));
   if (!finite(since)) return 0;
   const decisions = await loadDecisionStream(env, iso(since - 2 * M15));
@@ -459,10 +505,10 @@ export async function evaluateOmega(env, rows, bars, { now = Date.now() } = {}) 
     const stored = parseJson(s.omega_json);
     let gate = stored?.gate ?? null;
     if (!gate) {
-      const e = omegaEntry(sig, m15, { now });
+      const e = omegaEntry(sig, bars, { now, maxAgeMs: settings.max_signal_age_ms });
       if (e.status === "filled") gate = omegaGate({ side: s.side, fillMs: toMs(e.filled_at), others: [...book.values()].filter((o) => o.id !== s.id), settings });
     }
-    const o = simulateOmega(sig, m15, { decisions, gate, now });
+    const o = simulateOmega(sig, bars, { decisions, gate, now, atrBars, maxAgeMs: settings.max_signal_age_ms });
     const traded = o.omega_status === "open" || o.omega_status === "closed";
     book.set(s.id, { id: s.id, side: s.side, filled_at: traded ? o.filled_at : null, closed_at: o.omega_status === "closed" ? o.closed_at : null, r: o.r ?? null, size: o.size ?? null, protected_at: o.protected_at ?? null });
     const json = { gate, protected_at: o.protected_at ?? null, sl_moves: o.sl_moves ?? 0, tp_moves: o.tp_moves ?? 0, mfe_r: o.mfe_r ?? null, mae_r: o.mae_r ?? null, open_r: o.open_r ?? null, band: o.band ?? null, bars: o.bars ?? null };
@@ -474,12 +520,13 @@ export async function evaluateOmega(env, rows, bars, { now = Date.now() } = {}) 
 }
 
 /** Re-simulates every pending or open signal on the latest closed bars. */
-export async function evaluateOpenSignals(env, { now = Date.now(), bars = null } = {}) {
+export async function evaluateOpenSignals(env, { now = Date.now(), bars = null, m15 = null } = {}) {
   const live = (await env.DB.prepare("SELECT * FROM signal_ledger WHERE status IN ('pending', 'open')").all()).results || [];
-  const closed = bars ?? await ledgerBars(env);
+  const loaded = bars ? { bars, m15 } : await ledgerSeries(env);
+  const closed = loaded.bars;
   // The Omega policy: live decision trades, and decisions from before it existed while their bars are
-  // still in the 15m series (omega_status NULL), once.
-  const firstM15 = closed.find((b) => toMs(b.close_time) - toMs(b.open_time) === M15);
+  // still in the 15m or 1m series (omega_status NULL), once.
+  const firstM15 = closed.find((b) => spanMs(b) <= M15);
   const omegaRows = (await env.DB.prepare("SELECT * FROM signal_ledger WHERE source = 'decision' AND (omega_status IN ('pending', 'open') OR (omega_status IS NULL AND opened_at >= ?))").bind(firstM15 ? firstM15.open_time : iso(now)).all()).results || [];
   if (!live.length && !omegaRows.length) return 0;
   let changed = 0;
@@ -489,7 +536,7 @@ export async function evaluateOpenSignals(env, { now = Date.now(), bars = null }
       .bind(o.status, o.filled_at ?? null, o.closed_at ?? null, o.exit_reason ?? null, o.exit_price ?? null, o.r_tp1 ?? null, o.r_tp2 ?? null, o.open_r ?? null, o.mfe_r ?? null, o.mae_r ?? null, o.bars_held ?? null, o.ambiguous ? 1 : 0, o.sl_plus_triggered ? 1 : 0, o.sl_plus_at ?? null, iso(now), s.id).run();
     if (o.status !== s.status) changed += 1;
   }
-  try { changed += await evaluateOmega(env, omegaRows, closed, { now }); } catch (e) { console.error("ledger_omega_failed", String(e?.message ?? e).slice(0, 200)); }
+  try { changed += await evaluateOmega(env, omegaRows, closed, { now, m15: loaded.m15 }); } catch (e) { console.error("ledger_omega_failed", String(e?.message ?? e).slice(0, 200)); }
   return changed;
 }
 

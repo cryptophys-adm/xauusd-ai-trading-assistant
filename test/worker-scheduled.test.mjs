@@ -390,3 +390,35 @@ test("P2: GET /api/indicator-agents serves every manifest with its live state", 
   assert.equal(body.agents.find((a) => a.id === "prophet_r38").lifecycle, "candidate", "no parity approval in an empty database");
   assert.ok(body.lifecycle_counts.active >= 1);
 });
+
+test("ledger cron (owner 2026-11-12, every 5 minutes): follows a decision on the 1m bars, alone; no news analysis, and the parity sweep no longer runs it", async () => {
+  const { env } = await workerEnv();
+  const wrangler = await readFile(join(root, "wrangler.jsonc"), "utf8");
+  assert.match(wrangler, /"2-59\/5 \* \* \* \*"/, "the ledger cron is deployed");
+  const source = await readFile(join(root, "src/index.ts"), "utf8");
+  assert.equal(source.match(/runSignalLedger\(/g)?.length, 1, "the ledger runs in its own step only, not in the parity sweep");
+  // A Decision Engine SELL decided 30 s after its 15m bar closed, and the 1m bars after it.
+  const now = Math.floor(Date.now() / 60_000) * 60_000;
+  const barOpen = Math.floor((now - 60 * 60_000) / 900_000) * 900_000;
+  const close = barOpen + 900_000;
+  const key = `${SYMBOL}:15:${barOpen}`;
+  env.DB.db.prepare("INSERT INTO signal_ledger (id, source, candle_key, opened_at, side, entry, stop, tp1, status, updated_at) VALUES (?, 'decision', ?, ?, 'SELL', 4000, 4010, 3985, 'pending', ?)").run("decision:" + key, key, new Date(close + 30_000).toISOString(), new Date(close).toISOString());
+  const m1 = [];
+  for (let t = close; t + 60_000 <= now; t += 60_000) {
+    const i = (t - close) / 60_000;
+    const c = i < 3 ? 4000 : i < 6 ? 3995 : 3984;
+    m1.push({ open_time: new Date(t).toISOString(), close_time: new Date(t + 60_000).toISOString(), open: i === 0 ? 4000 : c + 0.5, high: Math.max(c + 1, i === 0 ? 4000.5 : c + 1), low: c - 1, close: c });
+  }
+  await env.SIGNAL_CACHE.put("market-data:v2:series:OANDA:XAUUSD|1m", JSON.stringify({ candles: m1 }));
+  const { ctx, settle } = execution();
+  const output = captureConsole();
+  try { await worker.scheduled({ cron: "2-59/5 * * * *", scheduledTime: now }, env, ctx); await settle(); } finally { output.restore(); }
+  assert.deepEqual(output.lines.error.filter((l) => /signal_ledger_failed|ledger_omega_failed|TypeError|ReferenceError/.test(l)), []);
+  assert.ok(!output.lines.log.some((l) => /fundamental news analysis/.test(l)) && !output.lines.error.some((l) => /news analysis failed/.test(l)), "the ledger cron runs no news analysis");
+  const row = env.DB.db.prepare("SELECT status, filled_at, exit_reason, closed_at, r_tp1, omega_status, omega_filled_at, omega_exit FROM signal_ledger").get();
+  // The plan's limit fills in the first minute after the decision; its target (3985) is reached at minute 6.
+  assert.equal(row.filled_at, new Date(close + 60_000).toISOString());
+  assert.deepEqual([row.status, row.exit_reason, row.r_tp1, row.closed_at], ["closed", "target", 1.5, new Date(close + 7 * 60_000).toISOString()]);
+  // Omega sells at the open of the minute after the decision and takes its target the same minute as the plan.
+  assert.deepEqual([row.omega_status, row.omega_filled_at, row.omega_exit], ["closed", new Date(close + 60_000).toISOString(), "target"]);
+});
