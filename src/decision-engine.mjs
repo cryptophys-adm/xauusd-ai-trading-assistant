@@ -165,7 +165,7 @@ export function witnessCards({ global = null, strategy = null, context = {}, env
     // data (price against the Key Level Agent's zones, the 1H bars and sensors, the D1/4H/1H bars, the
     // dollar and yields), never the strategy engine's direction or a room's lean (independentWitnesses).
     const ind = context?.independent ?? {};
-    const push = (key, label, role, w) => cards.push({ key, label, role, weight: W[key] ?? EXTENDED_WITNESS_WEIGHTS[key], available: isNum(w?.lean), stale: false, lean: isNum(w?.lean) ? w.lean : null, side: sideOf(w?.lean), decision: null, confidence: null, summary: w?.summary ?? null, at: null });
+    const push = (key, label, role, w) => cards.push({ key, label, role, weight: W[key] ?? EXTENDED_WITNESS_WEIGHTS[key], available: isNum(w?.lean), stale: w?.stale === true, lean: isNum(w?.lean) ? w.lean : null, side: sideOf(w?.lean), decision: null, confidence: null, summary: w?.summary ?? null, at: null });
     push("KEY_LEVELS", "Key levels", "price vs zones", ind.key_levels);
     push("REGIME", "Regime", "1H trend quality", ind.regime);
     push("TREND_TF", "Trend TF", "price vs averages", ind.trend_tf);
@@ -295,12 +295,15 @@ export function regimeOf(snapshot, label = null) {
  * Pure: the macro drivers of the last 24 hours (News Daily's market context, as on the Nexus card) and
  * the cross-asset correlations; `lean` is the dollar's pull on gold (a falling dollar is bullish).
  */
-export function macroDriversOf(context = null, correlations = null) {
+export function macroDriversOf(context = null, correlations = null, now = Date.now()) {
   const pctOf = (k) => (isNum(context?.[k]?.change_24h_percent) ? r2(context[k].change_24h_percent) : null);
   const drivers = { gold: pctOf("gold"), dollar: pctOf("dollar"), oil: pctOf("oil"), usdt_dominance: pctOf("usdt") };
+  // The dollar's pull (the lean, the gold-dollar link and the dollar caution) only while fresh, as MACRO_DRIVERS.
+  const dollarStale = drivers.dollar != null && !macroInputFresh(context?.dollar?.as_of, now);
+  if (dollarStale) drivers.dollar = null;
   const link = drivers.gold == null || drivers.dollar == null ? null : Math.sign(drivers.gold) === -Math.sign(drivers.dollar) ? "inverse (usual)" : "same way (the inverse link is off)";
   const lean = drivers.dollar == null ? null : r2(Math.max(-1, Math.min(1, -drivers.dollar / 0.5)));
-  return { change_24h_percent: drivers, gold_dollar_link: link, lean, cross_assets: (correlations?.assets || []).filter((a) => a.available).map((a) => ({ name: a.name, change_1d: a.change?.["1d"] ?? null, correlation_with_gold: a.correlation?.short ?? null })) };
+  return { change_24h_percent: drivers, dollar_stale: dollarStale, dollar_as_of: context?.dollar?.as_of ?? null, gold_dollar_link: link, lean, cross_assets: (correlations?.assets || []).filter((a) => a.available).map((a) => ({ name: a.name, change_1d: a.change?.["1d"] ?? null, correlation_with_gold: a.correlation?.short ?? null })) };
 }
 
 /** Pure: the market sentiment: the witnesses' weighted lean, the composite (news and macro) and the 24-hour headlines. */
@@ -320,7 +323,7 @@ export function marketContextOf(loaded, quorum = null, now = Date.now()) {
     sentiment: sentimentOf({ quorum, news: inputs.news ?? null, macro }),
     calendar: calendarContextOf(calendar),
     regime: { m15: regimeOf(inputs.m15Snapshot ?? null), h1: regimeOf(inputs.h1Snapshot ?? null, typeof regime === "string" ? regime : null) },
-    macro_drivers: macroDriversOf(inputs.news?.context ?? null, correlations),
+    macro_drivers: macroDriversOf(inputs.news?.context ?? null, correlations, now),
     session: sessionAt(now)
   };
 }
@@ -426,21 +429,43 @@ export function trendTfLean({ d1Bars = [], h4Bars = [], h1Bars = [] } = {}) {
 }
 
 /**
- * Pure: MACRO_DRIVERS from the dollar and yields only (not the macro room, which is its own witness):
- * -0.6 x (DXY 24h % / 0.5) - 0.4 x (US 10-year 1-day change in bp / 10), within [-1, 1].
+ * The macro drivers read 4-hour series (TVC:DXY and TVC:US10Y): a value counts while its last bar closed
+ * within two bars (8 hours), the rule of the rooms (2 x the period). Owner 2026-11-12: "kerjakan perbaikan
+ * cek kesegaran macro drivers". On 2026-11-11 the TradingView quota ran out at 13:05 UTC and the dollar's
+ * 24-hour change of the last News Daily kept counting for hours. A value whose age is unknown counts as
+ * stale: it cannot be vouched for.
  */
-export function macroDriversLean({ newsContext = null, correlations = null } = {}) {
-  const dxy = isNum(newsContext?.dollar?.change_24h_percent) ? newsContext.dollar.change_24h_percent : null;
+export const MACRO_DRIVERS_MAX_AGE_MS = 8 * 3_600_000;
+export function macroInputFresh(iso, now = Date.now()) {
+  const t = Date.parse(String(iso ?? ""));
+  return Number.isFinite(t) && t <= now + 60_000 && now - t <= MACRO_DRIVERS_MAX_AGE_MS;
+}
+
+/**
+ * Pure: MACRO_DRIVERS from the dollar and yields only (not the macro room, which is its own witness):
+ * -0.6 x (DXY 24h % / 0.5) - 0.4 x (US 10-year 1-day change in bp / 10), within [-1, 1]. Each input
+ * counts only while fresh (`macroInputFresh`); a stale one drops out and the other carries the lean; with
+ * both stale the witness is stale and does not count.
+ */
+export function macroDriversLean({ newsContext = null, correlations = null, now = Date.now() } = {}) {
+  const dollar = newsContext?.dollar;
+  const dxyRaw = isNum(dollar?.change_24h_percent) ? dollar.change_24h_percent : null;
   const us10 = (correlations?.assets || []).find((a) => a.id === "us10y" && a.available);
-  const bp = isNum(us10?.change?.["1d"]) ? us10.change["1d"] : null;
-  if (dxy == null && bp == null) return null;
+  const bpRaw = isNum(us10?.change?.["1d"]) ? us10.change["1d"] : null;
+  if (dxyRaw == null && bpRaw == null) return null;
+  const dxy = dxyRaw != null && macroInputFresh(dollar?.as_of, now) ? dxyRaw : null;
+  const bp = bpRaw != null && macroInputFresh(us10?.last_close_time, now) ? bpRaw : null;
+  const staleText = [dxyRaw != null && dxy == null ? `DXY last bar ${dollar?.as_of ?? "of unknown age"}` : null, bpRaw != null && bp == null ? `US 10-year last bar ${us10?.last_close_time ?? "of unknown age"}` : null].filter(Boolean);
+  if (dxy == null && bp == null) return { lean: null, stale: true, summary: `stale: ${staleText.join(", ")}` };
   const parts = [dxy != null ? [-dxy / 0.5, 0.6] : null, bp != null ? [-bp / 10, 0.4] : null].filter(Boolean);
   const w = parts.reduce((t, p) => t + p[1], 0);
-  return { lean: r2(clamp1(parts.reduce((t, p) => t + clamp1(p[0]) * p[1], 0) / w)), summary: [dxy != null ? `DXY ${dxy > 0 ? "+" : ""}${r2(dxy)}% in 24h` : null, bp != null ? `US 10-year ${bp > 0 ? "+" : ""}${r2(bp)} bp in a day` : null].filter(Boolean).join(", ") };
+  const asOf = [dxy != null ? dollar.as_of : null, bp != null ? us10.last_close_time : null].filter(Boolean).sort()[0] ?? null;
+  const summary = [dxy != null ? `DXY ${dxy > 0 ? "+" : ""}${r2(dxy)}% in 24h` : null, bp != null ? `US 10-year ${bp > 0 ? "+" : ""}${r2(bp)} bp in a day` : null].filter(Boolean).join(", ");
+  return { lean: r2(clamp1(parts.reduce((t, p) => t + clamp1(p[0]) * p[1], 0) / w)), stale: false, as_of: asOf, summary: staleText.length ? `${summary} (left out, stale: ${staleText.join(", ")})` : summary };
 }
 
 /** Pure: the four independent extended witnesses from the loaded inputs. */
-export function independentWitnesses(loaded = {}) {
+export function independentWitnesses(loaded = {}, { now = Date.now() } = {}) {
   const { inputs = {}, strategy = null, correlations = null } = loaded || {};
   const h1Regime = regimeOf(inputs.h1Snapshot ?? null);
   const price = isNum(strategy?.price) ? strategy.price : closesOf(inputs.m15Bars).at(-1)?.close ?? closesOf(inputs.h1Bars).at(-1)?.close ?? null;
@@ -449,7 +474,7 @@ export function independentWitnesses(loaded = {}) {
     key_levels: keyLevelsLean({ price, zones: strategy?.key_levels?.zones ?? [], atrH1 }),
     regime: regimeLean({ h1Bars: inputs.h1Bars ?? [], regime: h1Regime }),
     trend_tf: trendTfLean({ d1Bars: inputs.d1Bars ?? [], h4Bars: inputs.h4Bars ?? [], h1Bars: inputs.h1Bars ?? [] }),
-    macro_drivers: macroDriversLean({ newsContext: inputs.news?.context ?? null, correlations })
+    macro_drivers: macroDriversLean({ newsContext: inputs.news?.context ?? null, correlations, now })
   };
 }
 
@@ -675,7 +700,7 @@ export function councilContext({ inputs = {}, correlations = null, regime = null
     regime_1h: regime ?? null,
     cross_assets: (correlations?.assets || []).filter((a) => a.available).map((a) => ({ name: a.name, change_1d: a.change?.["1d"] ?? null, correlation_with_gold: a.correlation?.short ?? null })),
     // The right panel's cards (owner 2026-11-09): sentiment, regime, macro drivers and the session.
-    market: market ?? { session: sessionAt(now), macro_drivers: macroDriversOf(inputs.news?.context ?? null, correlations) },
+    market: market ?? { session: sessionAt(now), macro_drivers: macroDriversOf(inputs.news?.context ?? null, correlations, now) },
     h1_decision: inputs.h1Chain ? { decision: inputs.h1Chain.decision ?? null, confidence: inputs.h1Chain.confidence ?? null } : null,
     previous_decision: previous ? { stance: previous.stance, confidence: previous.confidence, at: previous.bar_close } : null
   };
@@ -784,7 +809,7 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // The extended witnesses read their own data (owner 2026-11-10), and the session describes SESSION
   // (context: a session has no direction).
   const session = sessionAt(now);
-  const context = { regime, correlations, session, independent: independentWitnesses(loaded) };
+  const context = { regime, correlations, session, independent: independentWitnesses(loaded, { now }) };
   // The witness weights (owner 2026-11-11: "harusnya bobot itu dinamis sesuai dengan auto tune yang ada di
   // aether"): the set the auto-tuning activated (src/witness-tuning.mjs: replay, discovery and holdout,
   // reverse shadow), loaded by runDecisionEngine; else B-11 (source "default") or the base set ("base").
