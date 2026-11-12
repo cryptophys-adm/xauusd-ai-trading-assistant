@@ -8,3 +8,4 @@ export const WEIGHTING_REPORT_VERSION: string;
 export function weightingReport(replay: unknown, options?: { now?: number }): Record<string, any>;
 export function pushWitnessTuningReport(env: unknown, report: unknown): Promise<Record<string, any> & { status: string }>;
 export function pushWeightingReport(env: unknown, replay: unknown, options?: { now?: number }): Promise<Record<string, any> & { status: string }>;
+export function pushExecutionReport(env: unknown, report: unknown): Promise<Record<string, any> & { status: string }>;

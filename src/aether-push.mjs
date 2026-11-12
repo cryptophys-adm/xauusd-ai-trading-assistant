@@ -193,3 +193,32 @@ export async function pushWeightingReport(env, replay, { now = Date.now(), nexus
     .bind(report.timeframe, sha, status, res?.reason ? String(res.reason).slice(0, 300) : null, new Date(now).toISOString()).run();
   return { status, candidates: report.candidates.length, ...(res?.reason ? { reason: String(res.reason).slice(0, 120) } : {}) };
 }
+
+// The execution report (owner 2026-11-12: the Omega policy per trading mode in the Signal Ledger "untuk
+// inputan ke aether dan selanjutnya akan menjadi knowledge"): R multiples and times per mode, never a
+// price. Sent when its content changed; Aether's curator turns a measured gap into a knowledge item.
+const EXECUTION_PUSH_SQL = `CREATE TABLE IF NOT EXISTS aether_execution_report_pushes (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  content_sha TEXT NOT NULL,
+  status TEXT NOT NULL,
+  detail TEXT,
+  pushed_at TEXT NOT NULL
+)`;
+
+/** Sweep step: sends the execution report when it changed. Never throws for an Aether failure. */
+export async function pushExecutionReport(env, report) {
+  if (typeof env?.AETHER?.ingestExecutionReport !== "function") return { status: "disabled" };
+  if (!env.DB || !report) return { status: "unavailable" };
+  await env.DB.prepare(EXECUTION_PUSH_SQL).run();
+  const { generated_at: _g, ...content } = report;
+  const sha = await sha256(JSON.stringify(content));
+  const prev = await env.DB.prepare("SELECT content_sha, status FROM aether_execution_report_pushes WHERE id = 1").first();
+  if (prev?.content_sha === sha && prev.status === "accepted") return { status: "unchanged" };
+  let res;
+  try { res = await env.AETHER.ingestExecutionReport(report); }
+  catch (e) { return { status: "transport_failed", error: String(e?.message ?? e).slice(0, 200) }; }
+  const status = res?.accepted ? "accepted" : "rejected";
+  await env.DB.prepare("INSERT INTO aether_execution_report_pushes (id, content_sha, status, detail, pushed_at) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET content_sha = excluded.content_sha, status = excluded.status, detail = excluded.detail, pushed_at = excluded.pushed_at")
+    .bind(sha, status, res?.reason ? String(res.reason).slice(0, 300) : null, report.generated_at ?? new Date().toISOString()).run();
+  return { status, trades: (report.trades || []).length, ...(res?.reason ? { reason: String(res.reason).slice(0, 120) } : {}) };
+}
