@@ -463,7 +463,8 @@ function Mt5ChartCanvas({
   const last = hover || candles[candles.length - 1];
 
   return (
-    <div className="relative h-[430px] w-full bg-[#060a12]">
+    // Fills the whole chart column (owner 2026-11-12: "tidak ada space kosong dibawah sumbu waktu"); at least 430 px.
+    <div className="relative h-full min-h-[430px] w-full flex-1 bg-[#060a12]">
       {/* MT5 Top-Left Chart Watermark & OHLC Bar */}
       <div className="pointer-events-none absolute left-2.5 top-2 z-10 flex flex-col gap-0.5 rounded bg-black/55 px-2.5 py-1.5 backdrop-blur-sm border border-white/5">
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -499,12 +500,6 @@ function Mt5ChartCanvas({
         {spreadPoints != null ? <span className="mono ml-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-amber-200">{spreadPoints} pts</span> : null}
       </div>
 
-      {showKeyLevels && keyZones.length > 0 ? (
-        <div className="pointer-events-none absolute bottom-7 left-2.5 z-10 rounded bg-black/55 px-2 py-1 text-[10px] text-slate-400 backdrop-blur-sm border border-white/5">
-          <span style={{ color: KEY_ROLE_COLOR.support }}>support</span> · <span style={{ color: KEY_ROLE_COLOR.resistance }}>resistance</span> · <span style={{ color: KEY_ROLE_COLOR["at price"] }}>at price</span>
-          <span className="ml-1.5">KL = War Room key-level zone, on feed prices (OANDA); broker prices may differ by a few cents</span>
-        </div>
-      ) : null}
       <div ref={hostRef} className="h-full w-full" />
     </div>
   );
@@ -1078,7 +1073,8 @@ export default function Omega() {
               <button
                 type="button"
                 onClick={() => setShowKeyLevels((v) => !v)}
-                title="The War Room's key-level zones (Key Level Agent), the six nearest to price"
+                // The legend lives here, not over the chart's volume (owner 2026-11-12: "hilangkan label yang menutupi volume").
+                title="KL = War Room key-level zone (Key Level Agent), the six nearest to price; green support, red resistance, cyan at price; on feed prices (OANDA); broker prices may differ by a few cents"
                 className={`rounded border px-2 py-0.5 text-[11px] transition ${
                   showKeyLevels
                     ? "border-violet-400/35 bg-violet-500/10 text-violet-200"
@@ -1300,8 +1296,8 @@ export default function Omega() {
             </div>
           </div>
 
-          {/* Center / Right MT5 Interactive Candlestick Chart */}
-          <div className="flex flex-col">
+          {/* Center / Right MT5 Interactive Candlestick Chart: stretches to the row's height (the sidebar's) */}
+          <div className="flex min-h-[430px] flex-col">
             <Mt5ChartCanvas
               tf={mt5Tf}
               symbol={symbolName}
