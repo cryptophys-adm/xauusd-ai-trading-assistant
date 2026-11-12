@@ -144,6 +144,32 @@ export async function bridgeKey(env, { now = Date.now() } = {}) {
 
 // ---------------------------------------------------------------- bridge sync
 
+/** The minimum OmegaExecutor that leaves stop and target to Omega and reports it (owner 2026-11-12). */
+export const EXECUTOR_MIN_VERSION = "1.12";
+const versionAtLeast = (v, min) => {
+  const a = String(v).split(".").map(Number), b = String(min).split(".").map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) { const x = a[i] || 0, y = b[i] || 0; if (x !== y) return x > y; }
+  return true;
+};
+
+/**
+ * Pure: the executor's self-report (OmegaExecutor 1.12+): { name, version, auto_break_even, trailing_stop,
+ * dynamic_atr_stop, local_management, up_to_date }, or null when the EA reports nothing (1.11 and older).
+ * `local_management` is true while the EA still moves stops on the terminal beside Omega.
+ */
+export function executorInfoFrom(x) {
+  if (!x || typeof x !== "object" || Array.isArray(x)) return null;
+  const version = typeof x.version === "string" && /^\d+(\.\d+){0,3}$/.test(x.version) ? x.version : null;
+  const flag = (v) => (typeof v === "boolean" ? v : null);
+  const be = flag(x.auto_break_even), tr = flag(x.trailing_stop);
+  return {
+    name: typeof x.name === "string" ? x.name.replace(/[^\w.-]/g, "").slice(0, 32) : null,
+    version, auto_break_even: be, trailing_stop: tr, dynamic_atr_stop: flag(x.dynamic_atr_stop),
+    local_management: be === true || tr === true,
+    up_to_date: version != null && versionAtLeast(version, EXECUTOR_MIN_VERSION)
+  };
+}
+
 /** The executor state as the bridge reports it; anything malformed is null (the engine then waits). */
 export function executorFrom(state) {
   if (!state || typeof state !== "object" || Array.isArray(state)) return null;
@@ -155,6 +181,8 @@ export function executorFrom(state) {
     server: typeof state.server === "string" ? state.server.slice(0, 64) : null,
     received_ms: n(state.received_ms),
     terminal_error: typeof state.terminal_error === "string" ? state.terminal_error.slice(0, 200) : null,
+    // OmegaExecutor 1.12+: its version and whether it still moves stops by itself (null when not reported).
+    executor: executorInfoFrom(state.executor),
     account: { trade_mode: ["demo", "real", "contest"].includes(a.trade_mode) ? a.trade_mode : null, currency: typeof a.currency === "string" ? a.currency.slice(0, 8) : null, balance: n(a.balance), equity: n(a.equity), day_start_balance: n(a.day_start_balance), day_realized_pl: n(a.day_realized_pl) },
     symbol: {
       name: typeof s.name === "string" ? s.name.slice(0, 32) : null,
@@ -234,6 +262,22 @@ async function withAttempt(db, it) {
   if (rows.some((r) => r.status === "pending" || r.status === "sent")) return null;
   if (rows.length >= CLOSE_MAX_ATTEMPTS) return null;
   return { ...it, id: `${it.id}:${rows.length}` };
+}
+
+/**
+ * Pure: what Omega makes of the executor's self-report, for the pages: `status` "ok" (current, local
+ * management off), "local_management" (the EA still moves stops beside Omega), "outdated" (older than
+ * EXECUTOR_MIN_VERSION) or "unknown" (it reports nothing: 1.11 or older), with a line to show.
+ */
+export function executorStatus(info) {
+  if (!info) return { status: "unknown", version: null, auto_break_even: null, trailing_stop: null, note: `OmegaExecutor does not report its version or inputs: install ${EXECUTOR_MIN_VERSION} or newer` };
+  const base = { version: info.version, auto_break_even: info.auto_break_even, trailing_stop: info.trailing_stop, dynamic_atr_stop: info.dynamic_atr_stop };
+  if (info.local_management) {
+    const on = [info.auto_break_even ? "AutoBreakEvenEnabled" : null, info.trailing_stop ? "TrailingStopEnabled" : null].filter(Boolean).join(" and ");
+    return { status: "local_management", ...base, note: `${on} still on in the EA: it moves stops beside Omega; set false in its inputs (F7)` };
+  }
+  if (!info.up_to_date) return { status: "outdated", ...base, note: `OmegaExecutor ${info.version ?? "?"} is older than ${EXECUTOR_MIN_VERSION}` };
+  return { status: "ok", ...base, note: `OmegaExecutor ${info.version}: stop and target left to Omega` };
 }
 
 /**
@@ -513,6 +557,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       terminal_connected: Boolean(st?.connected === true && connection.status === "stored" && (now - Number(st?.received_ms || 0) < 60_000)),
       trade_allowed: Boolean(st?.trade_allowed === true && connection.status === "stored" && (now - Number(st?.received_ms || 0) < 60_000)),
       terminal_error: st?.connected !== true ? (st?.terminal_error ?? null) : null,
+      // The EA's self-report (1.12+): its version, its local break-even and trailing, and what Omega makes of it.
+      executor: executorStatus(st?.executor),
       server: connection.status === "stored" ? (st?.server ?? null) : null, trade_mode: st?.account?.trade_mode ?? null, currency: st?.account?.currency ?? null,
       balance: st?.account?.balance ?? null, equity: st?.account?.equity ?? null, day_start_balance: st?.account?.day_start_balance ?? null, day_realized_pl: st?.account?.day_realized_pl ?? null,
       symbol: st?.symbol?.name ?? null, bid: st?.symbol?.bid ?? null, ask: st?.symbol?.ask ?? null, spread_points: st?.symbol?.spread_points ?? null,

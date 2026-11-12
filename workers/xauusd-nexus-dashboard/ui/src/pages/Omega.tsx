@@ -1812,6 +1812,13 @@ export default function Omega() {
                           {br.trade_allowed ? "Allowed" : "Disabled"}
                         </span>
                       </div>
+                      {/* OmegaExecutor 1.12+ reports its version and whether it still moves stops beside Omega. */}
+                      <div className="flex justify-between" title={br.executor?.note ?? ""}>
+                        <span className="text-slate-500">EA</span>
+                        <span className={`font-semibold ${br.executor?.status === "ok" ? "text-emerald-300" : br.executor?.status === "local_management" ? "text-rose-400" : "text-amber-300"}`}>
+                          {br.executor?.version ? `v${br.executor.version}` : "v?"} · {br.executor?.status === "ok" ? "stops by Omega" : br.executor?.status === "local_management" ? "local trailing ON" : br.executor?.status === "outdated" ? "update EA" : "not reported"}
+                        </span>
+                      </div>
                     </div>
                   </div>
                   <div className="mt-2.5 border-t border-white/5 pt-2 text-[10px] text-slate-400">
