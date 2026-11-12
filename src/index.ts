@@ -232,6 +232,7 @@ import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, 
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
 import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mjs";
+import { storeBrokerTrigger } from "./broker-trigger.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
@@ -1988,6 +1989,10 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
    * The MT5 fallback (docs/RFC_MT5_FALLBACK.md): the broker's closed M1 bars from the Corpus Oracle,
    * for the pull adapter while the TradingView gateway is down. Read-only.
    */
+  /** 5m execution for Omega (docs/RFC_OMEGA_5M_EXECUTION.md): the broker 5m bar's trigger and structure. */
+  async submitBrokerTrigger(payload: unknown): Promise<Record<string, unknown>> {
+    return storeBrokerTrigger(this.env, payload);
+  }
   /** Corpus Oracle phase 2: the broker shadow lane's agreement for one 15m bar (feeds nothing). */
   async recordBrokerShadow(payload: unknown): Promise<Record<string, unknown>> {
     return recordBrokerShadow(this.env, payload);

@@ -46,13 +46,18 @@ export function compareComparable(a, b, prefix = "") {
 }
 
 /** The broker's M15 bars, cached and extended with the new minutes. Never throws; [] when none. */
-export async function brokerM15(env, { now = Date.now() } = {}) {
+export function brokerM15(env, { now = Date.now() } = {}) {
+  return brokerSeries(env, { now, seconds: M15_S, key: BROKER_M15_KEY });
+}
+
+/** The broker's bars of `seconds` (5m, 15m) from the corpus' M1, cached in `key` and extended with the new minutes. */
+export async function brokerSeries(env, { now = Date.now(), seconds, key } = {}) {
   const kv = env?.MARKET_DATA_CACHE;
   let cached = [];
-  try { cached = JSON.parse((await kv?.get?.(BROKER_M15_KEY)) || "null")?.candles || []; } catch { cached = []; }
+  try { cached = JSON.parse((await kv?.get?.(key)) || "null")?.candles || []; } catch { cached = []; }
   const nowSec = Math.floor(now / 1000);
   const lastSec = cached.at(-1)?.time ?? null;
-  let since = lastSec != null ? (lastSec + M15_S) * 1000 - 60_000 : now - FIRST_FETCH_DAYS * 86_400_000;
+  let since = lastSec != null ? (lastSec + seconds) * 1000 - 60_000 : now - FIRST_FETCH_DAYS * 86_400_000;
   const minutes = [];
   let source = null;
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -64,12 +69,12 @@ export async function brokerM15(env, { now = Date.now() } = {}) {
     since = bars.at(-1).t;
   }
   const after = lastSec ?? -Infinity;
-  const fresh = aggregateCandles(brokerCandles(minutes, nowSec), { seconds: M15_S, sourceSeconds: 60, nowSec, after });
+  const fresh = aggregateCandles(brokerCandles(minutes, nowSec), { seconds, sourceSeconds: 60, nowSec, after });
   // A bucket the fetched minutes do not cover from its start is not built (the first fetch's oldest one).
   const firstMinute = minutes.length ? Math.floor(minutes[0].t / 1000) : Infinity;
   const added = lastSec != null ? fresh : fresh.filter((c) => c.time >= firstMinute);
   const candles = [...cached, ...added].slice(-KEEP_BARS);
-  if (added.length) await kv?.put?.(BROKER_M15_KEY, JSON.stringify({ source, candles }));
+  if (added.length) await kv?.put?.(key, JSON.stringify({ source, candles }));
   return { source, candles };
 }
 

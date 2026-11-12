@@ -20,7 +20,7 @@ test("sizing worked example: 0.5 % of 10 000 at a 5.00 stop with tick 0.01 worth
   const r = plan();
   assert.deepEqual(r.notes, []);
   assert.equal(r.intents.length, 1);
-  assert.deepEqual(r.intents[0], { id: "open:" + ISSUED + ":B", kind: "open", side: "BUY", volume: 0.1, entry: 4101.2, sl: 4096.2, tp: 4111.2, signal_issued_ms: ISSUED, reason: "signal" });
+  assert.deepEqual(r.intents[0], { id: "open:" + ISSUED + ":B", kind: "open", side: "BUY", volume: 0.1, entry: 4101.2, sl: 4096.2, tp: 4111.2, signal_issued_ms: ISSUED, reason: "signal", stop_source: "plan", trigger_source: null });
   const sell = plan({ signal: { ...SIGNAL, side: "SELL", stop: 4105, tp1: 4090 } }).intents[0];
   assert.deepEqual([sell.side, sell.volume, sell.sl, sell.tp], ["SELL", 0.1, 4106, 4091], "SELL from the bid: 4101 + 5, 4101 - 10");
 });

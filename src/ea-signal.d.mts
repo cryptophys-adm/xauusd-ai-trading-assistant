@@ -12,5 +12,5 @@ export function positionFrom(p: unknown): Record<string, any> | null;
 export function readControl(env: unknown): Promise<{ mode: string; reason: string; actor: string; at: string | null }>;
 export const HEARTBEAT_FIELD_NAMES: readonly string[];
 export function eaSignalFromDecision(input: Record<string, any>): Record<string, any>;
-export function entryTriggerFor(decision: any, options?: { live?: any }): { required: boolean; fired: boolean; source: string | null; note: string | null; at_ms?: number | null };
+export function entryTriggerFor(decision: any, options?: { live?: any; broker?: any }): { required: boolean; fired: boolean; source: string | null; note: string | null; at_ms?: number | null };
 export function blackoutWindow(env: unknown): { beforeMs: number; afterMs: number };

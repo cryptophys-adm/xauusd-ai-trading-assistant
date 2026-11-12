@@ -24,6 +24,7 @@
 // it carries no account number. The control (active, paused, killed) is set by Omega
 // (omega.cryptophys.work, src/ea-execution.mjs) and kept in KV under EA_CONTROL_KEY.
 
+import { readBrokerTrigger, brokerTriggerFields } from "./broker-trigger.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
 import { decisionEngineEnabled, readLatestDecision, keyCloseMs } from "./decision-engine.mjs";
 import { liveM5Inputs } from "./strategy-engine.mjs";
@@ -64,7 +65,7 @@ export function eaSignalFrom({ candleKey = null, analysis = null, kill = false, 
  * one the decision recorded (a verified 5m or a 15m one at the close), or a verified 5m one printed since
  * (`live`, from liveM5Inputs, read when the EA or Omega asks). A limit at the key level needs none.
  */
-export function entryTriggerFor(decision, { live = null } = {}) {
+export function entryTriggerFor(decision, { live = null, broker = null } = {}) {
   const t = decision?.trade;
   const side = String(decision?.stance || "").toUpperCase();
   const required = t?.action === "ENTER_MARKET";
@@ -74,6 +75,15 @@ export function entryTriggerFor(decision, { live = null } = {}) {
   if (recorded?.fired === true) return { required, fired: true, source: recorded.source ?? "decision", note: recorded.note ?? null };
   // A record written before 2026-11-11 has no entry_trigger: its BUY or SELL already passed the confirmation gate.
   if (!recorded) return { required, fired: true, source: "decision", note: "the decision passed the confirmation gate of its time" };
+  // 5m execution (docs/RFC_OMEGA_5M_EXECUTION.md, owner 2026-11-12): once the broker's 5m lane is ready, its
+  // confirmation on one of the 3 broker 5m bars after the decision's close is the trigger; TradingView's 5m
+  // stands in only while the broker lane is not ready or not fresh.
+  const close = keyCloseMs(decision?.decision_key);
+  if (broker?.latest?.ready === true && Number.isFinite(close)) {
+    const hit = (broker.recent || []).filter((b) => b?.ready === true && b[key] === true && b.close_ms > close && b.close_ms <= close + 3 * 5 * 60_000).sort((a, b) => a.close_ms - b.close_ms)[0];
+    if (hit) return { required, fired: true, source: "broker_5m", at_ms: hit.close_ms, note: `a broker 5m Prophet ${side === "BUY" ? "buy" : "sell"} confirmation on the 5m bar closing ${new Date(hit.close_ms).toISOString().slice(11, 16)} UTC` };
+    return { required, fired: false, source: null, note: `waiting for a broker 5m Prophet ${side === "BUY" ? "buy" : "sell"} confirmation (3 bars after the decision)` };
+  }
   if (liveFired) return { required, fired: true, source: "5m", at_ms: Date.parse(String(live.candle_time ?? "")) || null, note: `a verified 5m Prophet ${side === "BUY" ? "buy" : "sell"} confirmation${typeof live.candle_time === "string" ? ` on the 5m bar closing ${live.candle_time.slice(11, 16)} UTC` : ""}` };
   return { required, fired: false, source: null, note: `waiting for a verified 5m (or 15m) Prophet ${side === "BUY" ? "buy" : "sell"} confirmation` };
 }
@@ -83,7 +93,7 @@ export function entryTriggerFor(decision, { live = null } = {}) {
  * SELL with a valid trade; issued at its 15m close, expiring at the next 15m close (the next decision).
  * A market entry is sent only once its entry trigger fired; until then the signal says what it awaits.
  */
-export function eaSignalFromDecision({ decision = null, kill = false, killSource = "", paused = false, blackout = false, blackoutReason = null, marketPrice = null, marketMs = null, now = Date.now(), liveM5 = null } = {}) {
+export function eaSignalFromDecision({ decision = null, kill = false, killSource = "", paused = false, blackout = false, blackoutReason = null, marketPrice = null, marketMs = null, now = Date.now(), liveM5 = null, broker = null } = {}) {
   const base = eaSignalFrom({ kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now });
   const t = decision?.trade;
   const side = String(decision?.stance || "").toUpperCase();
@@ -93,7 +103,7 @@ export function eaSignalFromDecision({ decision = null, kill = false, killSource
   if (![entry, stop, tp1].every(isPrice)) return base;
   if (side === "BUY" ? !(stop < entry && entry < tp1) : !(tp1 < entry && entry < stop)) return base;
   const decidedMs = Date.parse(String(decision?.decided_at ?? "")) || close;
-  const trigger = entryTriggerFor(decision, { live: liveM5 });
+  const trigger = entryTriggerFor(decision, { live: liveM5, broker });
   if (trigger.required && !trigger.fired) {
     // Nothing to execute yet: the EA and Omega see no side; the signal says what the setup waits for.
     // Flat fields only: the EA parses a flat JSON object.
@@ -151,8 +161,10 @@ export async function eaSignal(env, { now = Date.now() } = {}) {
   // The live 5m confirmation (verified while the 5m Prophet implementation is parity-approved) for a market entry.
   let liveM5 = null;
   if (engine && decision?.trade?.action === "ENTER_MARKET") { try { liveM5 = (await liveM5Inputs(env, { now }))?.confirmation ?? null; } catch { liveM5 = null; } }
-  if (engine) return { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now, liveM5 }), source: "decision_engine" };
-  return { ...eaSignalFrom({ candleKey, analysis, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now }), source: "h1_decision" };
+  // The broker's 5m lane (docs/RFC_OMEGA_5M_EXECUTION.md): the trigger and, for Omega, the 5m stop and management fields.
+  const broker = await readBrokerTrigger(env, { now });
+  if (engine) return { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now, liveM5, broker }), ...brokerTriggerFields(broker), source: "decision_engine" };
+  return { ...eaSignalFrom({ candleKey, analysis, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now }), ...brokerTriggerFields(broker), source: "h1_decision" };
 }
 
 export const EA_HEARTBEAT_KEY = "ea:heartbeat:last";

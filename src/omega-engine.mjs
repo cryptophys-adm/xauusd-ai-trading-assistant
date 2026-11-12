@@ -26,6 +26,9 @@ export const OMEGA_DEFAULTS = Object.freeze({
   max_signal_age_ms: 10 * 60_000,
   policy_auto: false,
   trailing_stop_r: 0,
+  // 5m execution (docs/RFC_OMEGA_5M_EXECUTION.md, owner 2026-11-12): a stop tightened to the broker's 5m
+  // structure may raise the lot at most to this many times the lot at the plan's stop.
+  tight_stop_max_lot_factor: 1.5,
   adaptive_volatility: true,
   sor_mode: "auto_failover"
 });
@@ -78,7 +81,8 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS) {
     ?? num("max_daily_loss_pct", 0.1, 20)
     ?? num("max_spread_points", 1, 1000)
     ?? num("max_signal_age_ms", 60_000, 60 * 60_000, { integer: true })
-    ?? num("trailing_stop_r", 0, 5);
+    ?? num("trailing_stop_r", 0, 5)
+    ?? num("tight_stop_max_lot_factor", 1, 2);
   if (err) return { error: err };
   if (body.max_signal_age_min !== undefined) {
     const m = body.max_signal_age_min;
@@ -177,8 +181,31 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
     const risk = Number.isFinite(curSl) && !atBreakEven ? Math.abs(open - curSl) : 0;
     const r = risk > 0 ? move / risk : 0;
 
+    // 5m management (docs/RFC_OMEGA_5M_EXECUTION.md, owner 2026-11-12), from the broker's last 5m bars:
+    // a confirmation against the position closes it once it is 0.5R in profit (or already protected);
+    // from 1R (or once protected) the stop follows the 5m structure, only in the position's favour.
+    const m5 = signal?.m5_source === "broker" && finite(signal.m5_close_ms) ? signal : null;
+    const protectedPos = atBreakEven && move > 0;
+    if (m5 && m5.m5_ready === true && move > 0 && (protectedPos || r >= 0.5) && (buy ? m5.m5_sell === true : m5.m5_buy === true)) {
+      out.push({ id: `cl:${p.ticket}:o5:${Math.floor(m5.m5_close_ms / 60_000)}`, kind: "close", ticket: p.ticket, reason: "opposite_5m" });
+      continue;
+    }
+    let movedSl = false;
     if (S.trailing_stop_r > 0 && !atBreakEven && risk > 0 && r >= S.trailing_stop_r) {
       out.push({ id: `ms:${p.ticket}:be`, kind: "modify_sl", ticket: p.ticket, sl: roundTo(open, digits), tp: Number.isFinite(curTp) ? curTp : null, reason: "break_even" });
+      movedSl = true;
+    }
+    if (!movedSl && m5 && finite(m5.m5_atr) && (protectedPos || r >= 1)) {
+      const point = positive(sym.point) ? sym.point : Math.pow(10, -digits);
+      const spreadPx = (finite(sym.spread_points) ? sym.spread_points : 0) * point;
+      const buffer = Math.max(2 * spreadPx, 0.1 * m5.m5_atr);
+      const floorPx = (finite(sym.stops_level_points) ? sym.stops_level_points : 0) * point + spreadPx;
+      const target = buy ? roundTo(m5.m5_swing_low - buffer, digits) : roundTo(m5.m5_swing_high + buffer, digits);
+      const better = Number.isFinite(curSl) ? (buy ? target > curSl + point : target < curSl - point) : true;
+      const room = buy ? target < sym.bid - floorPx : target > sym.ask + floorPx;
+      if (finite(target) && target > 0 && better && room) {
+        out.push({ id: `ms:${p.ticket}:t5:${Math.floor(m5.m5_close_ms / 60_000)}`, kind: "modify_sl", ticket: p.ticket, sl: target, tp: Number.isFinite(curTp) ? curTp : null, reason: "trail_5m" });
+      }
     }
 
     if (targetExtTp != null && p.side === side && Number.isFinite(curTp) && (buy ? targetExtTp > curTp + 0.1 : targetExtTp < curTp - 0.1)) {
@@ -274,10 +301,25 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const minDist = (finite(sym.stops_level_points) ? sym.stops_level_points : 0) * sym.point;
   if (stopDist <= minDist || tpDist <= minDist) { note("stops_level"); return { intents, notes }; }
 
+  // 5m execution (docs/RFC_OMEGA_5M_EXECUTION.md, owner 2026-11-12): a market entry's stop moves to the
+  // broker's 5m structure (the swing of the last 3 broker 5m bars beyond a buffer of 2 spreads or 0.1
+  // 5m ATR), never wider than the plan's and never closer than 0.5 5m ATR (or the stop level plus 3
+  // spreads). The target stays the plan's, so the RRR rises; the lot is capped below.
+  let tight = false;
+  if (signal.action !== "ENTER_LIMIT" && signal.m5_source === "broker" && positive(signal.m5_atr) && positive(buy ? signal.m5_swing_low : signal.m5_swing_high)) {
+    const spreadPx = (finite(sym.spread_points) ? sym.spread_points : 0) * sym.point;
+    const buffer = Math.max(2 * spreadPx, 0.1 * signal.m5_atr);
+    const px = buy ? sym.ask : sym.bid;
+    const d = buy ? px - (signal.m5_swing_low - buffer) : (signal.m5_swing_high + buffer) - px;
+    const floorDist = Math.max(0.5 * signal.m5_atr, minDist + 3 * spreadPx);
+    if (finite(d) && d >= floorDist && d < stopDist) { stopDist = roundTo(d, sym.digits); tight = true; note("stop_5m"); }
+  }
+
   // Adaptive Volatility Stop: if ATR is available, ensure stopDist >= 0.75 * ATR to prevent noise
   // stop-outs. The target moves with it, so the trade keeps the plan's reward-to-risk that the
   // Decision Engine checked (audit 2026-11-11: a widened stop with the plan's target cut the R).
-  if (S.adaptive_volatility !== false && positive(sym.atr_value)) {
+  // A 5m stop keeps its own floor above.
+  if (!tight && S.adaptive_volatility !== false && positive(sym.atr_value)) {
     const minAtrDist = sym.atr_value * 0.75;
     if (stopDist < minAtrDist) {
       stopDist = roundTo(minAtrDist, sym.digits);
@@ -305,10 +347,16 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const tp = roundTo(buy ? price + tpDist : price - tpDist, sym.digits);
   const lossPerLot = (Math.abs(price - sl) / sym.tick_size) * sym.tick_value;
   let volume = floorToStep((account.equity * S.risk_pct / 100) / lossPerLot, sym.volume_step);
+  if (tight) {
+    // The money at risk stays within risk_pct; the lot is capped at tight_stop_max_lot_factor x the lot at the plan's stop.
+    const planVolume = (account.equity * S.risk_pct / 100) / ((planStopDist / sym.tick_size) * sym.tick_value);
+    const cap = floorToStep(planVolume * (finite(S.tight_stop_max_lot_factor) ? S.tight_stop_max_lot_factor : 1.5), sym.volume_step);
+    if (volume > cap) { volume = cap; note("lot_capped_5m"); }
+  }
   if (volume > sym.volume_max) volume = floorToStep(sym.volume_max, sym.volume_step);
   if (!positive(volume) || volume < sym.volume_min) { note("volume_below_min"); return { intents, notes }; }
 
-  const openIntent = { id, kind: "open", side, volume, entry: price, sl, tp, signal_issued_ms: issued, reason: "signal" };
+  const openIntent = { id, kind: "open", side, volume, entry: price, sl, tp, signal_issued_ms: issued, reason: "signal", stop_source: tight ? "stop_5m" : "plan", trigger_source: typeof signal.trigger_source === "string" ? signal.trigger_source : null };
   if (volRegime !== "NORMAL") openIntent.vol_regime = volRegime;
   intents.push(openIntent);
   return { intents, notes };
