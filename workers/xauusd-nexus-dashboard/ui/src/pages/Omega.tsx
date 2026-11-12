@@ -21,6 +21,7 @@ import { ExitConfirmModal, type ExitTargetPosition } from "../components/ExitCon
 import { get } from "../lib/api";
 import { C } from "../components/charts";
 import { nearestCandidates, withAlpha, type KeyZone } from "../lib/keyZones";
+import { KeyZoneBands } from "../lib/keyZoneBands";
 
 /**
  * Omega Execution Engine & Windows MetaTrader 5 Web Terminal inside the Nexus SPA
@@ -236,7 +237,8 @@ async function omegaJson(path: string, method = "GET", body?: unknown) {
 
 const KEY_ROLE_COLOR: Record<string, string> = { support: C.bull, resistance: C.bear, "at price": C.cyan };
 const KEY_ROLE_SHORT: Record<string, string> = { support: "S", resistance: "R", "at price": "at price" };
-const KEY_STRENGTH_ALPHA: Record<string, number> = { strong: 0.95, medium: 0.7, weak: 0.45 };
+// Transparent blocks (owner 2026-11-12): the fill's opacity by strength, the label's readable.
+const KEY_STRENGTH_FILL: Record<string, number> = { strong: 0.2, medium: 0.13, weak: 0.08 };
 
 /** The War Room's key-level zones (GET /api/conclusion/global → strategy.key_levels), refreshed every 60 s. */
 function useKeyZones(): KeyZone[] {
@@ -291,6 +293,7 @@ function Mt5ChartCanvas({
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const linesRef = useRef<IPriceLine[]>([]);
+  const bandsRef = useRef<KeyZoneBands | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [hover, setHover] = useState<Candle | null>(null);
 
@@ -345,6 +348,9 @@ function Mt5ChartCanvas({
       priceScaleId: "vol",
     });
     chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
+    const bands = new KeyZoneBands();
+    series.attachPrimitive(bands);
+    bandsRef.current = bands;
     chartRef.current = chart;
     seriesRef.current = series;
     volRef.current = vol;
@@ -354,6 +360,7 @@ function Mt5ChartCanvas({
       chartRef.current = null;
       seriesRef.current = null;
       volRef.current = null;
+      bandsRef.current = null;
       linesRef.current = [];
     };
   }, []);
@@ -422,17 +429,14 @@ function Mt5ChartCanvas({
       linesRef.current.push(series.createPriceLine({ price, color, lineWidth, lineStyle: style, axisLabelVisible: true, title }));
     };
 
-    // Key levels from the War Room (owner 2026-11-12): the Key Level Agent's six candidate zones nearest to price,
-    // each as its upper and lower edge, coloured by role and shaded by strength. They are on the feed's prices
-    // (OANDA via TradingView), like the candles; the broker's bid, ask and positions may differ by a few cents.
-    if (showKeyLevels) {
-      for (const z of keyZones) {
-        const color = withAlpha(KEY_ROLE_COLOR[z.role ?? ""] ?? C.muted, KEY_STRENGTH_ALPHA[z.strength ?? ""] ?? 0.4);
-        const label = `KL ${KEY_ROLE_SHORT[z.role ?? ""] ?? "zone"} · ${z.strength ?? "—"}`;
-        addLine(z.high, label, color, LineStyle.LargeDashed, 1);
-        if (z.low !== z.high) addLine(z.low, "", color, LineStyle.LargeDashed, 1);
-      }
-    }
+    // Key levels from the War Room (owner 2026-11-12): the Key Level Agent's six candidate zones nearest to price, as
+    // transparent blocks from low to high behind the candles, coloured by role and shaded by strength, never as lines,
+    // so every line on the chart is the bid, ask, plan or a position. They are on the feed's prices (OANDA via
+    // TradingView), like the candles; the broker's bid, ask and positions may differ by a few cents.
+    bandsRef.current?.setZones(showKeyLevels ? keyZones.map((z) => {
+      const base = KEY_ROLE_COLOR[z.role ?? ""] ?? C.muted;
+      return { low: z.low, high: z.high, fill: withAlpha(base, KEY_STRENGTH_FILL[z.strength ?? ""] ?? 0.1), text: withAlpha(base, 0.85), label: `KL ${KEY_ROLE_SHORT[z.role ?? ""] ?? "zone"} · ${z.strength ?? "—"}` };
+    }) : []);
     if (showBidAsk) {
       addLine(bid, "BID", "#3fb950", LineStyle.Solid, 1);
       addLine(ask, "ASK", "#f85149", LineStyle.Solid, 1);
