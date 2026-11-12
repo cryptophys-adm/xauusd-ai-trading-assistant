@@ -34,6 +34,7 @@
 
 import { readPlane, READERS } from "./level-readers.mjs";
 import { detectPatterns, patternLevels } from "./chart-patterns.mjs";
+import { patternFactor } from "./pattern-calibration.mjs";
 
 export const KEY_LEVEL_VERSION = "cryptophys.key-level-agent.v2";
 export const TF_WEIGHT = Object.freeze({ "15": 1, "60": 1.5, "240": 2, D: 2.5, "1D": 2.5, W: 3 });
@@ -70,7 +71,7 @@ export function swings(bars, { lookback = SWING_LOOKBACK, perSide = SWINGS_PER_S
  * 2026-11-06: the D1 snapshot still held the 5 November set beside the current one, and both were
  * counted as two sources). The freshest snapshot wins; "1D" is the daily set ("D").
  */
-export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = null } = {}) {
+export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = null, factorOf = () => 1 } = {}) {
   const out = [], seen = new Set();
   const add = (p, kind, tf, label, weight, { unique = true, reader = null } = {}) => {
     if (!isNum(p)) return;
@@ -131,7 +132,7 @@ export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = nul
   // The Projection Agent's chart patterns (precomputed by buildKeyLevels: { "15": [...], "60": [...] }).
   for (const [tf, list] of Object.entries(patterns || {})) {
     if (!TF_NAME[tf]) continue;
-    for (const l of patternLevels(list)) add(l.price, l.kind, tf, `${TF_NAME[tf]} ${l.label}`, l.weight, { unique: false, reader: "projection" });
+    for (const l of patternLevels(list, { factorOf })) add(l.price, l.kind, tf, `${TF_NAME[tf]} ${l.label}`, l.weight, { unique: false, reader: "projection" });
   }
   const pd = (bars.D1 || []).at(-1);
   if (pd) {
@@ -209,10 +210,11 @@ export function chartPatterns(bars = {}, { events = [] } = {}) {
  * "off" leaves the chart patterns out (CHART_PATTERNS_MODE); `events` are the released figures for the
  * event patterns ([{ time, gold_direction, title }]).
  */
-export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [] } = {}) {
+export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null } = {}) {
   const tolerance = Math.max(1, isNum(atrH1) ? 0.3 * atrH1 : 1);
   const found = patterns === "off" ? {} : chartPatterns(bars, { events });
-  const raw = rawLevels({ snapshots, bars, price, atrH1, patterns: found });
+  // The patterns' measured record on gold (src/pattern-calibration.mjs) scales their weights.
+  const raw = rawLevels({ snapshots, bars, price, atrH1, patterns: found, factorOf: (id) => patternFactor(calibration, id) });
   const zones = clusterLevels(raw, tolerance, price);
   const near = isNum(price) && isNum(atrH1) ? zones.filter((z) => Math.abs(z.price - price) <= 4 * atrH1) : zones;
   limitCandidates(near, price);

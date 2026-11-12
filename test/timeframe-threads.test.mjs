@@ -80,7 +80,7 @@ test.beforeEach(() => resetThreadSchemaCacheForTests());
 test("1H, 4H and D1 run here as War Rooms; desks have one role each", () => {
   assert.deepEqual(Object.keys(TF_THREAD_CHARTS), ["H1", "H4", "D1"]);
   assert.deepEqual(Object.values(TF_THREAD_CHARTS).map((c) => c.tab), ["1H", "4H", "D1"]);
-  assert.deepEqual(Object.keys(TF_DESKS), ["h1", "h4", "d1", "news", "technical", "risk"], "no Higher-Timeframe Desk (independent rooms, owner decision 2026-11-09)");
+  assert.deepEqual(Object.keys(TF_DESKS), ["h1", "h4", "d1", "news", "technical", "risk", "projection"], "no Higher-Timeframe Desk (independent rooms, owner decision 2026-11-09); the Projection Agent speaks in every room (owner 2026-11-12)");
   assert.deepEqual(["h1", "h4", "d1"].map((id) => TF_DESKS[id].name), ["1H Desk", "4H Desk", "D1 Desk"], "each room has its own timeframe desk");
   assert.equal(tfThreadsEnabled({ TF_THREADS_ENABLED: "true" }), true);
   assert.equal(tfThreadsEnabled({}), false);
@@ -129,7 +129,7 @@ test("a 4H War Room: every agent opens, the debate runs, the moderator concludes
   const e = env(ai);
   const r = await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
   assert.equal(r.status, "complete");
-  assert.equal(r.openings, 5, "the 4H Desk, technical, risk and the two HUD agents");
+  assert.equal(r.openings, 6, "the 4H Desk, technical, risk, the Projection Agent and the two HUD agents");
   assert.equal(r.rebuttals, 2, "the minority HUD agent and the Risk Manager");
   for (const call of ai.calls) assert.doesNotMatch(call.request.messages.map((m) => m.content).join("\n"), /lot size|take_profit/i);
 
@@ -139,9 +139,10 @@ test("a 4H War Room: every agent opens, the debate runs, the moderator concludes
   assert.equal(thread.conclusion.stance, "WAIT");
   assert.ok(["BULLISH", "BEARISH", "NEUTRAL"].includes(thread.conclusion.bias), "the conclusion carries the bias beside the decision");
   assert.equal(thread.conclusion.majority_bias, thread.conclusion.bias);
-  assert.deepEqual(thread.openings.map((p) => p.id), ["h4", "technical", "risk", "kinetic_engine", "fabio_amt"]);
+  assert.deepEqual(thread.openings.map((p) => p.id), ["h4", "technical", "risk", "projection", "kinetic_engine", "fabio_amt"]);
   assert.equal(thread.openings[0].name, "4H Desk");
-  assert.equal(thread.openings[3].calibration, "not yet calibrated");
+  assert.equal(thread.openings[3].name, "Projection Agent");
+  assert.equal(thread.openings[4].calibration, "not yet calibrated");
   assert.deepEqual(thread.debate.map((d) => d.id), ["risk", "kinetic_engine"]);
   assert.ok(thread.debate[0].rebuts_names.length >= 1);
 
@@ -280,16 +281,16 @@ test("due rooms run one after another (one burst at a time); no room reads anoth
 });
 
 test("a room with fewer than half of its agents heard waits for the next sweep, which retries only the failed openings", async () => {
-  const e = env(fakeAI({ fail: new Set(["technical", "risk", "kinetic_engine"]) }));
+  const e = env(fakeAI({ fail: new Set(["technical", "risk", "projection", "kinetic_engine"]) }));
   const first = await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
   assert.equal(first.status, "waiting_for_quorum");
-  assert.equal((await readTimeframeThread(e.DB, "H4")).conclusion, null, "no TLDR from one agent out of four");
+  assert.equal((await readTimeframeThread(e.DB, "H4")).conclusion, null, "no TLDR from two agents out of six");
   const ai = fakeAI();
   e.AI = ai;
   const second = await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
   assert.equal(second.status, "complete");
   const openingCalls = ai.calls.filter((c) => /Required JSON: \{"agent":"\w+","stance":"BUY\|SELL\|HOLD\|WAIT\|CLOSE","bias":"BULLISH\|BEARISH\|NEUTRAL","confidence":0\.\.1,"claim"/.test(c.request.messages[1].content));
-  assert.equal(openingCalls.length, 3, "only the three failed openings are asked again");
+  assert.equal(openingCalls.length, 4, "only the four failed openings are asked again");
 });
 
 test("past the quorum wait a room concludes with whoever spoke", async () => {
@@ -304,7 +305,7 @@ test("a room that concluded without its HUD snapshot re-convenes once when the s
   assert.equal((await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock })).status, "complete");
   const before = await readTimeframeThread(e.DB, "H4");
   assert.equal(before.hud_snapshot, false);
-  assert.deepEqual(before.roster.map((a) => a.id), ["h4", "technical", "risk"]);
+  assert.deepEqual(before.roster.map((a) => a.id), ["h4", "technical", "risk", "projection"]);
   assert.deepEqual(await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock }), { status: "already_complete", calls: 0 }, "no snapshot yet: nothing to add");
 
   // Owner decision 2026-11-06 (D1 catch-up): the pull adapter publishes the missed snapshot late.
@@ -314,7 +315,7 @@ test("a room that concluded without its HUD snapshot re-convenes once when the s
   assert.equal(again.reconvened, true);
   const after = await readTimeframeThread(e.DB, "H4");
   assert.equal(after.hud_snapshot, true);
-  assert.deepEqual(after.roster.map((a) => a.id), ["h4", "technical", "risk", "kinetic_engine", "fabio_amt"]);
+  assert.deepEqual(after.roster.map((a) => a.id), ["h4", "technical", "risk", "projection", "kinetic_engine", "fabio_amt"]);
   assert.equal(after.bar_open, before.bar_open, "the same bar, one room");
   assert.equal(after.bar_close, before.bar_close);
   assert.equal(after.phase, "closed");
@@ -413,11 +414,11 @@ test("P7: the moderator gets the crowd line; the room carries it and every agent
   const e = env(ai);
   await runTimeframeThread(e, { chart: "H4", candleKey: H4_KEY }, { clock: fixedClock });
   const moderator = ai.calls.find((c) => /moderator of the XAUUSD 4-hour War Room/.test(c.request.messages[0].content));
-  assert.match(moderator.request.messages.map((m) => m.content).join("\n"), /CROWD LINE \(deterministic: .*0 of 5 agents have a record\): the weighted crowd leans/);
+  assert.match(moderator.request.messages.map((m) => m.content).join("\n"), /CROWD LINE \(deterministic: .*0 of 6 agents have a record\): the weighted crowd leans/);
   const thread = await readTimeframeThread(e.DB, "H4");
-  assert.equal(thread.crowd.agents, 5);
+  assert.equal(thread.crowd.agents, 6);
   assert.equal(thread.crowd.stances.SELL, 1);
-  assert.deepEqual(Object.keys(thread.reputation).sort(), ["fabio_amt", "h4", "kinetic_engine", "moderator", "risk", "technical"].sort());
+  assert.deepEqual(Object.keys(thread.reputation).sort(), ["fabio_amt", "h4", "kinetic_engine", "moderator", "projection", "risk", "technical"].sort());
   assert.equal(thread.reputation.kinetic_engine.weight, 1, "no record yet");
   assert.equal(thread.reputation.kinetic_engine.family, "trend");
   assert.equal(thread.crowd.quorum_share, 0.5, "the 4H room's own default quorum");

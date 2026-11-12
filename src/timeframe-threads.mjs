@@ -43,6 +43,8 @@ import {
 import { closedHtfCandleKeys, OBSERVED_PREFIX } from "./parity-sweep.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
+import { projectionReading } from "./projection-agent.mjs";
+import { readPatternCalibration } from "./pattern-calibration.mjs";
 import { H1_ROOM_LOCK_PREFIX } from "./h1-consensus.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, stuckCautions, ROOM_TIMEFRAME, quorumAllows, quorumRule } from "./reputation.mjs";
 import { agentReputation, listStuckStates } from "./outcome-scoring.mjs";
@@ -71,7 +73,8 @@ export const TF_DESKS = Object.freeze({
   d1: { name: "D1 Desk", role: "the local Prophet (signal, direction, structure, trade management) and GMI computation of the daily candle that just closed: this timeframe's own signal" },
   news: { name: "News Analyst", role: "the fundamental news of the last 24 hours: the daily bias for gold and the headlines behind it" },
   technical: { name: "Technical Analyst", role: "price action only: the last closed candles of this chart" },
-  risk: { name: "Risk Manager", role: "risk only: the volatility of this chart, this chart's own indicator readings and economic calendar, and what would invalidate a move" }
+  risk: { name: "Risk Manager", role: "risk only: the volatility of this chart, this chart's own indicator readings and economic calendar, and what would invalidate a move" },
+  projection: { name: "Projection Agent", role: "where a move projects on this chart: Fibonacci, the probability cone, trendlines and the chart patterns, each pattern with its record on gold" }
 });
 export const TF_ROOM_MAX_REBUTTALS = 8;
 const CLAIM_MAX = 320;
@@ -258,7 +261,11 @@ export async function tfEvidence(env, chart, candleKey) {
   return {
     chart, candle_key: candleKey, bar_open: last.open_time, bar_close: last.close_time,
     technical: { candles, average_range_14: round(ranges.reduce((a, b) => a + b, 0) / Math.max(ranges.length, 1)) },
-    hud, confirmations, higher, news, desk, event_risk: eventRiskNow
+    hud, confirmations, higher, news, desk, event_risk: eventRiskNow,
+    // The Projection Agent (owner 2026-11-12): this chart's patterns and projection levels, no price.
+    projection: await (async () => {
+      try { return projectionReading({ bars, plane: snapshot?.chart_plane ?? null, calibration: await readPatternCalibration(env), timeframe: spec.label }); } catch { return null; }
+    })()
   };
 }
 
@@ -266,6 +273,7 @@ function agentData(agent, ev, spec) {
   switch (agent) {
     case "h1": case "h4": case "d1": return { timeframe: spec.label, reading: ev.desk.reading, approved_by_parity: ev.desk.approved_by_parity };
     case "news": return ev.news;
+    case "projection": return ev.projection ?? { available: false };
     case "technical": return { timeframe: spec.label, closed_candles: ev.technical.candles };
     case "risk": return {
       timeframe: spec.label, ranges: ev.technical.candles.map((c) => round(c.h - c.l)), average_range_14: ev.technical.average_range_14,
@@ -393,7 +401,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   // The room's own timeframe desk first: the 1H, 4H or D1 Desk with the local records of the bar.
   const ownDesk = ev.desk?.available ? { H1: "h1", H4: "h4", D1: "d1" }[chart] : null;
   const roster = [
-    ...(ownDesk ? [ownDesk] : []), ...(ev.news ? ["news"] : []), "technical", "risk",
+    ...(ownDesk ? [ownDesk] : []), ...(ev.news ? ["news"] : []), "technical", "risk", ...(ev.projection?.available ? ["projection"] : []),
     ...hudAgentsIn(chart).filter((id) => ev.hud?.readings?.[id]?.available)
   ];
   const calibration = Object.fromEntries(roster.map((id) => {

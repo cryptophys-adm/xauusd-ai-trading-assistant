@@ -26,6 +26,8 @@ import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, 
 import { agentReputation } from "./outcome-scoring.mjs";
 import { roomWeighting } from "./weighting.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
+import { projectionReading } from "./projection-agent.mjs";
+import { readPatternCalibration } from "./pattern-calibration.mjs";
 import {
   ROOM_STANCES, ensureThreadSchema, isFifteenMinuteClose, liveEvidence, m15KeyForClose, buildLiveRoomTask,
   hudEvidenceLines, rowToThreadMessage, validateRoomModerator, threadInternals
@@ -61,7 +63,8 @@ export const DESK_AGENTS = Object.freeze({
   m15: { name: "15m Desk", role: "the local Prophet (signal, direction, structure, trade management) and GMI computation of the 15m candle that just closed: this timeframe's own signal" },
   news: { name: "News Analyst", role: "the fundamental news of the last 24 hours: the daily bias for gold and the headlines behind it" },
   technical: { name: "Technical Analyst", role: "price action only: the closed 15m candles" },
-  risk: { name: "Risk Manager", role: "risk only: the volatility of the 15m chart, the 15m Prophet R38 confirmation and what would invalidate a move" }
+  risk: { name: "Risk Manager", role: "risk only: the volatility of the 15m chart, the 15m Prophet R38 confirmation and what would invalidate a move" },
+  projection: { name: "Projection Agent", role: "where a move projects on the 15m chart: Fibonacci, the probability cone, trendlines and the chart patterns, each pattern with its record on gold" }
 });
 /** Retired 2026-11-09 (independent rooms): kept only to name the agent in stored rooms. */
 const RETIRED_DESK_NAMES = Object.freeze({ htf: "Higher-Timeframe Desk" });
@@ -191,6 +194,7 @@ export function stripModelTokens(text) {
  */
 const INFERRED_METRICS = Object.freeze({
   technical: ["the closed candles and moving averages"], risk: ["volatility and event risk"], news: ["the latest news analysis"],
+  projection: ["the chart patterns, Fibonacci levels and trendlines"],
   m15: ["the 15-minute trend and key levels"], h1: ["the 1-hour trend and key levels"], h4: ["the 4-hour trend and key levels"], d1: ["the daily trend and key levels"],
   moderator: ["the room's weighted bias"]
 });
@@ -497,8 +501,17 @@ function conclusionMessages(bus, debate, crowd = null) {
 }
 
 /** Each agent's own data on the 15m chart only (owner decision 2026-11-09: no other timeframe, no other agent). */
-function agentData(agent, evidence, hud, confirmations, desk15) {
+/** The cached 15m series of the feed (the Projection Agent reads the last 60 closed bars). */
+async function seriesOf15(env) {
+  try {
+    const r = JSON.parse((await env.SIGNAL_CACHE?.get?.("market-data:v2:series:OANDA:XAUUSD|15m")) || "null");
+    return Array.isArray(r?.candles) ? r.candles : [];
+  } catch { return []; }
+}
+
+function agentData(agent, evidence, hud, confirmations, desk15, projection = null) {
   switch (agent) {
+    case "projection": return projection ?? { available: false };
     case "m15": return { timeframe: "15 minutes", reading: desk15.reading, approved_by_parity: desk15.approved_by_parity };
     case "news": return evidence.news ? { window: evidence.news.window ?? "the latest hourly batch", consensus: evidence.news.consensus, confidence: evidence.news.confidence, summary: evidence.news.summary, reasons: evidence.news.reasons, counts: evidence.news.counts, headlines: evidence.news.headlines } : { available: false, note: "no news consensus yet" };
     case "technical": return { candles_15m: evidence.m15.candles };
@@ -536,25 +549,33 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   const daily = await newsDeskEvidence(db);
   if (daily) evidence.news = daily;
 
-  let hud = null;
+  let hud = null, plane = null;
   try {
     const key15 = m15KeyForClose(barTime);
     const carried = task.hud && typeof task.hud === "object" && task.hud.candle_key === key15 ? task.hud : null;
     const snapshot = carried || await loadHudSnapshot(env, { timeframe: "15", candleKey: key15 });
+    plane = snapshot?.chart_plane ?? null;
     hud = snapshot ? await hudReadings(env, snapshot) : null;
   } catch { hud = null; }
+  // The Projection Agent (owner 2026-11-12): the 15m chart's patterns and projection levels, no price.
+  let projection = null;
+  try {
+    const closeMs = Date.parse(barTime);
+    const bars15 = (await seriesOf15(env)).filter((b) => Date.parse(b.close_time) <= closeMs);
+    projection = projectionReading({ bars: bars15, plane, calibration: await readPatternCalibration(env), timeframe: "15 minutes" });
+  } catch { projection = null; }
   // The 15m Desk: the 15m local records of the candle that just closed (owner decision 2026-11-06).
   let desk15 = { available: false, reading: [], approved_by_parity: false };
   try { desk15 = await chartDeskReading(env, m15KeyForClose(barTime)); } catch { /* no desk this bar */ }
   const confirmations = m15Confirmations(desk15);
-  const roster = [...(desk15.available ? ["m15"] : []), "news", "technical", "risk", ...hudAgentsIn("M15").filter(id => hud?.readings?.[id]?.available)];
+  const roster = [...(desk15.available ? ["m15"] : []), "news", "technical", "risk", ...(projection?.available ? ["projection"] : []), ...hudAgentsIn("M15").filter(id => hud?.readings?.[id]?.available)];
   const refs = busRefs(roster);
   // Evidence status, shown once per agent (owner decision A): no agent repeats it in its text.
   const calibration = Object.fromEntries(roster.map(id => {
     const lines = hud?.readings?.[id]?.lines;
     if (Array.isArray(lines)) return [id, calibrationCounts(lines)];
     if (id === "m15") return [id, { label: chartDeskLabel("15m", desk15) }];
-    if (id === "technical" || id === "risk") return [id, { label: "closed 15m bars" }];
+    if (id === "technical" || id === "risk" || id === "projection") return [id, { label: "closed 15m bars" }];
     return [id, { label: "news analysis" }];
   }));
   const evidenceNote = (id) => {
@@ -592,7 +613,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     const prior = existing.get("open:" + agent);
     if (prior?.status === "ok") return prior;
     return open(base("open:" + agent, agent), {
-      messages: openingMessages(agent, agentData(agent, evidence, hud, confirmations, desk15)), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
+      messages: openingMessages(agent, agentData(agent, evidence, hud, confirmations, desk15, projection)), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
       // An unapproved 15m chain speaks like any uncalibrated agent: at 0.4 or lower.
       maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateOpening(o, agent, { verifiedLines: agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]), forbiddenNames: forbiddenNamesFor(agent, roster) }),
       toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), bias: o.bias, metrics: o.metrics, name: agentName(agent) }, refs: [] })
