@@ -102,9 +102,11 @@ function roomLayer(key, room, now) {
  * - The targets are the near edges of the next two MAJOR zones (Key Level Agent candidates), each
  *   at least 0.5 ATR beyond the previous one, or 2R and 3R projections.
  */
-export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNote = null, nearAtr = STRATEGY_PARAMS.near_atr }) {
+export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNote = null, nearAtr = STRATEGY_PARAMS.near_atr, targetGapAtr = 0.5 }) {
   if (!dir || !isNum(price) || !isNum(atrH1) || atrH1 <= 0) return null;
   const near = nearAtr * atrH1, gap = 0.5 * atrH1, pad = 0.2 * atrH1;
+  // How far beyond the entry the first target must lie (0.5 ATR; scalp 0.25 ATR, owner 2026-11-12).
+  const tgap = targetGapAtr * atrH1;
   const lo = (z) => (isNum(z.low) ? z.low : z.price), hi = (z) => (isNum(z.high) ? z.high : z.price);
   const nearEdge = (z) => (dir > 0 ? hi(z) : lo(z)), farEdge = (z) => (dir > 0 ? lo(z) : hi(z));
   // Zones with the trade's back to them: support for a long, resistance for a short.
@@ -121,7 +123,7 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNot
   if (!isNum(risk0) || risk0 > 2.5 * atrH1) { stop = entry - dir * 1.5 * atrH1; stopNote = "1.5 times the 1H average range"; }
   const risk = Math.abs(entry - stop);
   const targetEdge = (z) => (dir > 0 ? lo(z) : hi(z));
-  const ahead = levels.filter((z) => z.major !== false && dir * (targetEdge(z) - entry) >= gap).sort((a, b) => dir * (targetEdge(a) - targetEdge(b)));
+  const ahead = levels.filter((z) => z.major !== false && dir * (targetEdge(z) - entry) >= tgap).sort((a, b) => dir * (targetEdge(a) - targetEdge(b)));
   const t1 = ahead[0] ?? null;
   const t2 = t1
     ? ahead.find((z) => dir * (targetEdge(z) - targetEdge(t1)) >= gap && Math.abs(targetEdge(z) - entry) / risk >= 1.5) ?? null
@@ -140,10 +142,16 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNot
 }
 
 const zoneText = (z) => `${z.candidate ? "the" : "a"} ${z.low === z.high ? z.low.toFixed(2) : `${z.low.toFixed(2)}–${z.high.toFixed(2)}`} ${z.candidate ? "key zone" : "level"} (${z.label})`;
-/** The Key Level Agent's zones as tradeLevels input: candidates are the major zones. */
-function zoneLevels(zones) {
-  return (zones || []).filter((z) => isNum(z.low) && isNum(z.high)).map((z) => ({ low: z.low, high: z.high, price: z.price, major: z.candidate, label: zoneText(z) }));
+/**
+ * The Key Level Agent's zones as tradeLevels input: candidates are the major zones; with `qualified`,
+ * also the zones that qualified as candidates but were left out by the cap of two per side.
+ */
+function zoneLevels(zones, { qualified = false } = {}) {
+  return (zones || []).filter((z) => isNum(z.low) && isNum(z.high)).map((z) => ({ low: z.low, high: z.high, price: z.price, major: z.candidate === true || (qualified && z.qualified === true), label: zoneText(z) }));
 }
+
+/** The scalp target's search (owner 2026-11-12, production 13:00 UTC): the nearest key level 0.25 ATR or more ahead, qualified zones included. */
+export const SCALP_TARGET = Object.freeze({ targetGapAtr: 0.25, qualified: true });
 
 /**
  * The plan for a direction chosen elsewhere (owner decision 2026-11-09: the H1 decision is the 1H War
@@ -152,11 +160,11 @@ function zoneLevels(zones) {
  * demand or supply zone) counts only when the strategy points the same way. Null without a price,
  * an ATR or a direction.
  */
-export function planForDirection(strategy, dir) {
+export function planForDirection(strategy, dir, { scalp = false } = {}) {
   if (!strategy || !(dir === 1 || dir === -1)) return null;
   const sameWay = (strategy.direction === "LONG" && dir > 0) || (strategy.direction === "SHORT" && dir < 0);
   const setupNote = sameWay && strategy.setup?.type && strategy.setup.type !== "none" ? `${strategy.setup.type === "continuation_pullback" ? "a pullback with the trend" : "a stretched sweep into liquidity"}: ${(strategy.setup.evidence || []).join(", ")}` : null;
-  return tradeLevels({ dir, price: strategy.price, levels: zoneLevels(strategy.key_levels?.zones), atrH1: strategy.atr_h1, inZone: Boolean(sameWay && strategy.plan?.at_level), zoneNote: setupNote });
+  return tradeLevels({ dir, price: strategy.price, levels: zoneLevels(strategy.key_levels?.zones, { qualified: scalp && SCALP_TARGET.qualified }), atrH1: strategy.atr_h1, inZone: Boolean(sameWay && strategy.plan?.at_level), zoneNote: setupNote, ...(scalp ? { targetGapAtr: SCALP_TARGET.targetGapAtr } : {}) });
 }
 
 /**

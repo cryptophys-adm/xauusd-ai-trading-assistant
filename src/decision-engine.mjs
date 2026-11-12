@@ -551,9 +551,9 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
   let risk = { vetoes: [], cautions: [], supports: [] };
   try { risk = riskChecks(dir, { h1Snapshot: inputs.h1Snapshot ?? null, m15Snapshot: inputs.m15Snapshot ?? null, news: inputs.news ?? null, macro: macro ?? inputs.macro ?? null, calendar: inputs.calendar ?? null, mode: env?.TRADING_MODE ?? null, env, now }); } catch { /* none */ }
   add("no_veto", !risk.vetoes.length, risk.vetoes.length ? risk.vetoes.join("; ") : "no veto");
-  const plan = planForDirection(strategy, dir);
-  add("levels", Boolean(plan), plan ? `entry ${plan.entry_note}, stop ${plan.stop_note}` : "no key-level plan (price, 1H range or zones missing)");
   const nearest = modeThresholds(env?.TRADING_MODE).target === "nearest";
+  const plan = planForDirection(strategy, dir, { scalp: nearest });
+  add("levels", Boolean(plan), plan ? `entry ${plan.entry_note}, stop ${plan.stop_note}` : "no key-level plan (price, 1H range or zones missing)");
   if (nearest) {
     // Scalp: the target is the nearest key level ahead (the plan's first target), whatever it pays.
     const atLevel = Boolean(plan) && isNum(plan.tp1) && plan.tp1_note !== TP1_PROJECTION;
@@ -874,10 +874,10 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
 /** The first target's note when no key level lies ahead (src/strategy-engine.mjs tradeLevels). */
 export const TP1_PROJECTION = "a 2R projection";
 export const KEY_LEVELS_KEPT = 12;
-/** Pure: the Key Level Agent's candidate zones nearest to price ({ low, high }, lowest first), or []. */
+/** Pure: the Key Level Agent's candidate (and qualified) zones nearest to price ({ low, high }, lowest first), or []. */
 export function keyLevelsAround(strategy, n = KEY_LEVELS_KEPT) {
   const price = strategy?.price;
-  const zones = (strategy?.key_levels?.zones || []).filter((z) => z?.candidate && isNum(z.low) && isNum(z.high) && z.low <= z.high);
+  const zones = (strategy?.key_levels?.zones || []).filter((z) => (z?.candidate || z?.qualified) && isNum(z.low) && isNum(z.high) && z.low <= z.high);
   if (!isNum(price) || !zones.length) return [];
   const dist = (z) => (price < z.low ? z.low - price : price > z.high ? price - z.high : 0);
   return zones.sort((a, b) => dist(a) - dist(b)).slice(0, n).map((z) => ({ low: r2(z.low), high: r2(z.high) })).sort((a, b) => a.low - b.low);

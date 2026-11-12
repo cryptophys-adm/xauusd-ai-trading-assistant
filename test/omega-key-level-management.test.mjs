@@ -117,3 +117,27 @@ test("P9. OmegaExecutor no longer moves stops by itself: its local break-even an
   assert.match(ea, /input bool\s+TrailingStopEnabled\s+= false;/);
   assert.match(ea, /#property version\s+"1\.1[1-9]"/, "1.11 turned them off; later versions keep them off");
 });
+
+test("P10. production 13:00 UTC replayed: the scalp target is the nearest key level 0.25 ATR ahead, qualified zones included", () => {
+  // Price 3936.81 inside a resistance zone, 1H ATR 17.55; the two support candidates sit 2.12 and 8.13 below,
+  // the third support (3887.05-3891.63) was left out by the cap of two candidates per side. Before: the first
+  // target had to be 0.5 ATR (8.78) away and a candidate, so no key level was ahead and the SELL turned WAIT.
+  const zones = [
+    { low: 3887.05, high: 3891.63, price: 3889, candidate: false, qualified: true, label: "previous week low" },
+    { low: 3923.88, high: 3928.68, price: 3926, candidate: true, label: "4H swing low" },
+    { low: 3929.98, high: 3934.69, price: 3932, candidate: true, label: "15m Camarilla L4" },
+    { low: 3937.38, high: 3941.27, price: 3939, candidate: true, label: "daily Camarilla L4" },
+    { low: 3974.93, high: 3979.43, price: 3977, candidate: true, label: "1H Camarilla H4" }
+  ];
+  const strategy = { decision: "WAIT", direction: "SHORT", price: 3936.81, atr_h1: 17.55, key_levels: { zones }, plan: { at_level: true } };
+  const quorum = { long_share: 0, short_share: 1, score: -0.6, bias: "BEARISH" };
+  const scalp = guardrailsFor(-1, { cards: [], quorum, strategy, inputs: {}, env: { TRADING_MODE: "scalp" } });
+  const reward = scalp.checks.find((c) => c.id === "reward");
+  assert.equal(reward.pass, true, reward.detail);
+  assert.equal(scalp.plan.tp1, 3928.68, "the 3923.88-3928.68 zone, 8.13 below (0.46 ATR), is now the target");
+  // Intraday keeps 0.5 ATR and candidates only.
+  const intraday = guardrailsFor(-1, { cards: [], quorum, strategy, inputs: {}, env: { TRADING_MODE: "intraday" } });
+  assert.notEqual(intraday.plan.tp1, 3928.68);
+  // The record keeps the qualified zone too, so Omega trails with it.
+  assert.deepEqual(keyLevelsAround(strategy, 12).map((z) => z.low), [3887.05, 3923.88, 3929.98, 3937.38, 3974.93]);
+});
