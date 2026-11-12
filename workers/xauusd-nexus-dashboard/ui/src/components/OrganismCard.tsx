@@ -1,110 +1,91 @@
-import { Activity, Cpu, HeartPulse, ShieldCheck, Sparkles, Zap } from "lucide-react";
+import type { ReactNode } from "react";
+import { Activity, Clock, HeartPulse, Radio, Server, Sparkles } from "lucide-react";
 import { Badge, Dot, Panel, Skeleton } from "./ui";
 import { usePoll } from "../lib/usePoll";
 import { get } from "../lib/api";
 
+/**
+ * Owner 2026-11-12 ("ya bersihkan sekalian"): measured only. GET /api/organism/status returns the market session,
+ * the Decision Engine's latest decision time, Omega's EA heartbeat and bridge sync, and the count of recent deals.
+ * There is no treasury, quota or power mode here (the platform's Metabolism holds the treasury). A value the
+ * route did not measure shows "—".
+ */
 interface OrganismData {
   status: string;
   organism?: {
-    lifecycle: string;
-    mode: string;
-    market_state: string;
-    treasury?: {
-      power_mode?: string;
-      ai_quota_percent?: number;
-    };
-    nervous_system?: {
-      decision_engine_ssot?: string;
-      deals_count?: number;
-      omega_bridge?: string;
-      canon_sync?: string;
-    };
+    market_state?: "open" | "closed";
+    decision_engine?: { enabled?: boolean; latest_bar_close?: string | null; latest_decided_at?: string | null };
+    omega?: { engine_enabled?: boolean; control_mode?: string | null; ea_connected?: boolean; ea_heartbeat_age_ms?: number | null; bridge_connected?: boolean; bridge_sync_age_ms?: number | null };
+    deals?: { recent_count?: number | null; window?: string };
+    observed_at?: string;
   };
-  timestamp?: string;
+}
+
+const age = (ms?: number | null): string => {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return "—";
+  const s = Math.round(ms / 1000);
+  return s < 90 ? `${s}s ago` : s < 5400 ? `${Math.round(s / 60)}m ago` : s < 172800 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`;
+};
+const since = (iso?: string | null): string => {
+  const t = iso ? Date.parse(iso) : NaN;
+  return Number.isFinite(t) ? age(Date.now() - t) : "—";
+};
+
+function Row({ icon, label, value, tone = "text-slate-300" }: { icon: ReactNode; label: string; value: string; tone?: string }) {
+  return (
+    <div className="flex items-center justify-between text-slate-300">
+      <span className="flex items-center gap-1.5">{icon}<span>{label}</span></span>
+      <span className={`mono text-[10px] ${tone}`}>{value}</span>
+    </div>
+  );
 }
 
 export default function OrganismCard() {
-  const { data, loading } = usePoll<OrganismData>(() => get<OrganismData>("/api/organism/status"), 30_000);
+  const { data, loading, error } = usePoll<OrganismData>(() => get<OrganismData>("/api/organism/status"), 30_000);
   const org = data?.organism;
-
-  const isGrowth = org?.mode?.includes("GROWTH") ?? true;
-  const isSurvival = org?.mode?.includes("SURVIVAL") ?? false;
-  const tone = isSurvival ? "amber" : isGrowth ? "emerald" : "cyan";
+  const de = org?.decision_engine, om = org?.omega;
+  const market = org?.market_state ?? "—";
 
   return (
     <Panel
       title="Digital Organism"
       icon={<Sparkles className="h-3.5 w-3.5 text-emerald-400" />}
-      right={
-        <Badge tone={tone === "amber" ? "amber" : "cyan"}>
-          {org?.lifecycle ? "Autonomous · Living Mesh" : "Active"}
-        </Badge>
-      }
+      right={<Badge tone="cyan">measured</Badge>}
     >
       {loading && !org ? (
         <Skeleton rows={4} />
+      ) : !org ? (
+        <div className="text-[11px] text-slate-500">{error ? `Status not available: ${error}` : "Status not available."}</div>
       ) : (
         <div className="space-y-2.5">
-          {/* Mode & Operational State */}
           <div className="glass-inner flex items-center justify-between px-3 py-2">
             <div className="flex items-center gap-2">
-              <Dot tone={isSurvival ? "amber" : "green"} pulse />
+              <Dot tone={market === "open" ? "green" : "amber"} pulse={market === "open"} />
               <div>
-                <div className="text-[10px] uppercase tracking-wider text-slate-400">Power Mode</div>
-                <div className="mono text-xs font-bold text-white">
-                  {org?.mode ?? "GROWTH (Full Capacity)"}
-                </div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-400">Market State</div>
+                <div className="mono text-xs font-semibold uppercase text-cyan-300">{market}</div>
               </div>
             </div>
             <div className="text-right">
-              <div className="text-[10px] uppercase tracking-wider text-slate-400">Market State</div>
-              <div className="mono text-xs font-semibold uppercase text-cyan-300">
-                {org?.market_state ?? "OPEN"}
-              </div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-400">Omega control</div>
+              <div className="mono text-xs font-bold uppercase text-white">{om?.control_mode ?? "—"}</div>
             </div>
           </div>
 
-          {/* Living Mesh & Nervous System Subsystems */}
           <div className="space-y-1.5 pt-0.5 text-[11px]">
-            <div className="flex items-center justify-between text-slate-300">
-              <span className="flex items-center gap-1.5">
-                <HeartPulse className="h-3 w-3 text-cyan-400" />
-                <span>15m Decision SSOT</span>
-              </span>
-              <span className="mono text-[10px] text-emerald-400">Awareness Active</span>
-            </div>
-
-            <div className="flex items-center justify-between text-slate-300">
-              <span className="flex items-center gap-1.5">
-                <Zap className="h-3 w-3 text-amber-400" />
-                <span>Omega Broker Bridge</span>
-              </span>
-              <span className="mono text-[10px] text-cyan-300">
-                {org?.nervous_system?.omega_bridge === "armed" ? "Armed Live" : "Bridge Ready"}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between text-slate-300">
-              <span className="flex items-center gap-1.5">
-                <ShieldCheck className="h-3 w-3 text-purple-400" />
-                <span>Aether Canon Sync</span>
-              </span>
-              <span className="mono text-[10px] text-purple-300">SHA-256 Verified</span>
-            </div>
-
-            <div className="flex items-center justify-between text-slate-300">
-              <span className="flex items-center gap-1.5">
-                <Cpu className="h-3 w-3 text-emerald-400" />
-                <span>Compute Allocation</span>
-              </span>
-              <span className="mono text-[10px] text-emerald-300">
-                {org?.treasury?.ai_quota_percent ?? 150}% AI Quota
-              </span>
-            </div>
-          </div>
-
-          <div className="border-t border-white/5 pt-1.5 text-[10px] text-slate-500 leading-tight">
-            Self-governing closed loop · Homeostasis active across all mesh nodes.
+            <Row icon={<HeartPulse className="h-3 w-3 text-cyan-400" />} label="Decision Engine"
+              value={de?.enabled === true ? `on · last decision ${since(de.latest_decided_at)}` : de?.enabled === false ? "off" : "—"}
+              tone={de?.enabled ? "text-emerald-400" : "text-slate-400"} />
+            <Row icon={<Radio className="h-3 w-3 text-amber-400" />} label="Omega EA heartbeat"
+              value={`${om?.ea_connected === true ? "fresh" : om?.ea_heartbeat_age_ms != null ? "stale" : "never seen"} · ${age(om?.ea_heartbeat_age_ms)}`}
+              tone={om?.ea_connected ? "text-emerald-400" : "text-amber-300"} />
+            <Row icon={<Server className="h-3 w-3 text-purple-400" />} label="VPS bridge sync"
+              value={`${om?.bridge_connected === true ? "fresh" : om?.bridge_sync_age_ms != null ? "stale" : "never seen"} · ${age(om?.bridge_sync_age_ms)}`}
+              tone={om?.bridge_connected ? "text-emerald-400" : "text-amber-300"} />
+            <Row icon={<Activity className="h-3 w-3 text-emerald-400" />} label="Omega engine"
+              value={om?.engine_enabled === true ? "on" : om?.engine_enabled === false ? "off" : "—"} />
+            <Row icon={<Clock className="h-3 w-3 text-slate-400" />} label="Recent deals"
+              value={org.deals?.recent_count != null ? `${org.deals.recent_count} (${org.deals.window ?? "recent"})` : "—"} />
           </div>
         </div>
       )}

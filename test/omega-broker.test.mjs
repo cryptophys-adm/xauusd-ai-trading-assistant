@@ -174,6 +174,7 @@ test("the overview has no envelope, login, password or public key; the key route
   assert.equal(parsed.bridge.digits, 2);
   assert.equal(parsed.bridge.volume_step, 0.01);
   assert.equal(parsed.bridge.day_start_balance, 10_000);
+  assert.deepEqual({ ...parsed.route, bridge_sync_age_ms: undefined }, { active_route: "Monex-Demo", status: "trading", failover: "none", bridge_sync_age_ms: undefined }, "the route is the terminal's own server");
 });
 
 test("the sync refuses a missing key id or an oversized state", async () => {
@@ -204,7 +205,7 @@ test("autonomous watchdog: Cerebrum dispatches self-healing remediation and thro
   assert.equal(ov.autonomous_watchdog?.last_recovery?.directive, "remediate_algo_trading");
 });
 
-test("institutional execution telemetry: overview exposes TCA, SOR failover, macro risk and volatility", async () => {
+test("institutional execution telemetry: overview exposes TCA, the measured order route, macro risk and volatility", async () => {
   const e = env();
   await bridgeKey(e); // initializes schema
 
@@ -237,11 +238,13 @@ test("institutional execution telemetry: overview exposes TCA, SOR failover, mac
   assert.equal(ov.tca.avg_slippage_points, 2);
   assert.equal(ov.tca.quality, "PRIME");
 
-  // 2. Smart Order Router (SOR)
-  assert.equal(ov.sor.mode, "auto_failover");
-  assert.equal(ov.sor.primary_broker, "Monex-Demo");
-  assert.equal(ov.sor.status, "OPTIMAL");
-  assert.equal(ov.sor.failover_ready, true);
+  // 2. The order route: measured only, no invented broker names or failover (owner 2026-11-12)
+  assert.equal(ov.sor, undefined);
+  assert.equal(ov.route.status, "no_connection", "no stored connection: no route is claimed");
+  assert.equal(ov.route.active_route, null);
+  assert.equal(ov.route.failover, "none");
+  assert.equal(typeof ov.route.bridge_sync_age_ms, "number");
+  assert.doesNotMatch(JSON.stringify(ov.route), /HotStandby|Monex/, "a route name comes only from the terminal's state");
 
   // 3. Volatility Telemetry
   assert.equal(ov.volatility.atr_points, 350);

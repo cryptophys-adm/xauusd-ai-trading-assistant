@@ -524,7 +524,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
 
   const br = omega.bridge || {};
   const tca = omega.tca || {};
-  const sor = omega.sor || {};
+  const route = omega.route || {};
   const vol = omega.volatility || {};
   const positions: any[] = br.positions || [];
   const intents: any[] = omega.intents || [];
@@ -557,14 +557,14 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
         <Kpi
           label="Broker Capital"
           value={`$${accountFunds.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-          sub={br.server ? `Server: ${br.server}` : "Monex Demo"}
+          sub={br.server ? `Server: ${br.server}` : "Server: —"}
           color="#e2e8f0"
           icon={<DollarSign className="h-3.5 w-3.5 text-slate-400" />}
         />
         <Kpi
           label="Live Valuation"
           value={`$${valuation.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-          sub={`Margin: ${br.trade_mode || "Demo Hedging"}`}
+          sub={`Account: ${br.trade_mode || "—"}`}
           color={valuation >= accountFunds ? C.bull : C.bear}
           icon={<TrendingUp className="h-3.5 w-3.5 text-cyan-400" />}
         />
@@ -577,22 +577,22 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
         />
         <Kpi
           label="Average Slippage"
-          value={dynamicAvgSlippage != null ? `${dynamicAvgSlippage} pts` : "0.0 pts"}
-          sub={`Max: ${tca.max_slippage_points ?? 0} pts · ${completedIntents.length} fills`}
+          value={dynamicAvgSlippage != null ? `${dynamicAvgSlippage} pts` : "—"}
+          sub={`Max: ${tca.max_slippage_points ?? "—"} pts · ${completedIntents.length} fills`}
           color={C.cyan}
           icon={<Sliders className="h-3.5 w-3.5 text-cyan-400" />}
         />
         <Kpi
           label="Execution Latency"
           value={dynamicAvgLatency != null ? `${dynamicAvgLatency} ms` : "n/a"}
-          sub={`Route: ${sor.active_route || br.server || "Monex-Demo"}`}
+          sub={`Route: ${route.active_route || "—"}`}
           color={C.violet}
           icon={<Zap className="h-3.5 w-3.5 text-violet-400" />}
         />
         <Kpi
           label="Execution Quality"
-          value={tca.quality || (dynamicAvgSlippage != null && dynamicAvgSlippage <= 5 ? "PRIME" : "ACCEPTABLE")}
-          sub={`SOR: ${sor.mode || "Auto Failover"}`}
+          value={tca.quality || (dynamicAvgSlippage != null ? (dynamicAvgSlippage <= 5 ? "PRIME" : "ACCEPTABLE") : "—")}
+          sub={`${tca.samples_count ?? 0} measured fills`}
           color={tca.quality === "PRIME" ? C.bull : C.wait}
           icon={<ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />}
         />
@@ -601,26 +601,26 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
       {/* SOR & Volatility Telemetry Panel */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <Panel
-          title="Smart Order Router (SOR) & Redundancy"
+          title="Order Route"
           icon={<Compass className="h-3.5 w-3.5 text-cyan-400" />}
-          right={<Badge tone="green">{sor.status || (br.terminal_connected ? "OPTIMAL" : "STANDBY")}</Badge>}
+          right={<Badge tone={route.status === "trading" ? "green" : "amber"}>{route.status || "—"}</Badge>}
         >
           <div className="grid grid-cols-2 gap-3 pt-1 text-[11px]">
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Primary Gateway</span>
-              <p className="mono font-semibold text-slate-200">{sor.primary_broker || br.server || "Monex-Demo"}</p>
+              <span className="text-[10px] uppercase text-slate-500">Active Route</span>
+              <p className="mono font-semibold text-slate-200">{route.active_route || "—"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Standby Route</span>
-              <p className="mono font-semibold text-slate-200">{sor.standby_broker || "HotStandby-Backup"}</p>
+              <span className="text-[10px] uppercase text-slate-500">Failover</span>
+              <p className="mono font-semibold text-slate-200">{route.failover === "none" ? "none (single route)" : (route.failover || "—")}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Bridge Latency</span>
-              <p className="mono font-semibold text-emerald-400">{br.synced_age_ms != null ? `${br.synced_age_ms} ms` : "n/a"}</p>
+              <span className="text-[10px] uppercase text-slate-500">Bridge Sync</span>
+              <p className="mono font-semibold text-emerald-400">{route.bridge_sync_age_ms != null ? `${Math.round(route.bridge_sync_age_ms / 1000)}s ago` : "—"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Failover Ready</span>
-              <p className="mono font-semibold text-cyan-400">{sor.failover_ready ? "ARMED & READY" : "STANDBY"}</p>
+              <span className="text-[10px] uppercase text-slate-500">Terminal</span>
+              <p className="mono font-semibold text-cyan-400">{br.terminal_connected === true ? "connected" : br.terminal_connected === false ? "not connected" : "—"}</p>
             </div>
           </div>
         </Panel>
