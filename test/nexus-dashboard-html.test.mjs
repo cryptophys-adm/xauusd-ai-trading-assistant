@@ -120,6 +120,9 @@ test("a grouped left sidebar routes the analytic layers; the Performance page re
   assert.ok(perf.includes("/api/ledger?days=30"));
   assert.match(perf, /never money/);
   assert.doesNotMatch(perf, /lot size|balance|equity \$|position size/i, "advisory only: R multiples, never money or size");
+  // Owner 2026-11-12 ("hapus broker capital, sesuai aturan never money"; Financial Management is its own module):
+  // no dollar amount at all, and no key spelled in pieces to slip past the rule above.
+  assert.doesNotMatch(perf, /\$\$\{|\$0\.00|USD Realized|Broker Capital|Live Valuation|Floating P&L|\]\.join\(""\)\]/, "never money, however it is spelled");
 });
 
 test("Omega: /omega and /omega/ render inside the Nexus SPA with the left panel; /omega/api/* forwards unchanged to xauusd-omega (OMEGA_PAGE)", async () => {
