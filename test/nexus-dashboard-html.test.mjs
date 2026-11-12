@@ -92,7 +92,9 @@ test("the UI keeps the Console's obsidian palette and calls only same-origin rea
   assert.match(keyLevels, /gradientUnits="userSpaceOnUse"/, "the price line paints on a zero-height line");
   assert.match(keyLevels, /useId\(\)\.replace\(\/:\/g, ""\)/, "no colon in a url(#…) reference");
   // Owner 2026-11-11: the listed zones run by price from the highest down, with the price row between.
-  assert.match(keyLevels, /\.sort\(\(a, b\) => b\.high - a\.high \|\| b\.low - a\.low\)/, "the list runs by price, highest first");
+  // The selection is shared with the Omega chart since 2026-11-12 (ui/src/lib/keyZones.ts).
+  assert.match(keyLevels, /nearestCandidates\(k, 6\)/);
+  assert.match(ui("src/lib/keyZones.ts"), /\.sort\(\(a, b\) => b\.high - a\.high \|\| b\.low - a\.low\)/, "the list runs by price, highest first");
   assert.match(keyLevels, /i === priceRow && <PriceRow/, "the price row sits where price falls");
   assert.ok(assistant.indexOf("<KeyLevels") > assistant.indexOf("<GlobalDecision"), "the zones follow the decision");
   assert.doesNotMatch(assistant, /LevelsCard|<KeyLevelAgent|LevelLadder/, "the Levels card and the Key Level Agent panel are one panel");
