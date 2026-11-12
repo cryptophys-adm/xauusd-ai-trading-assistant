@@ -323,12 +323,83 @@ function UnderwaterDrawdownChart({
   );
 }
 
+type Policy = "tp1" | "tp2" | "omega";
+const MODES = ["scalp", "intraday", "swing"] as const;
+const OMEGA_EXIT: Record<string, string> = { target: "target", trailed_target: "trailed TP", stop: "stop", sl_plus: "SL+", power_reversal: "power reversed", opposite: "opposite", time: "time" };
+
+/**
+ * The plan's targets and the Omega policy per trading mode (owner 2026-11-12: "kebijakan Omega di
+ * Signal Ledger sesuai dengan mode intraday, swing, dan scalping"), the same signals under each.
+ */
+function ModePolicyTable({ byMode }: { byMode: any }) {
+  if (!byMode) return <Empty>No per-mode data yet.</Empty>;
+  const cell = (p: any) =>
+    !p?.trades ? (
+      <span className="text-slate-500">—</span>
+    ) : (
+      <span className="mono">
+        <span style={{ color: (p.total_r ?? 0) >= 0 ? C.bull : C.bear }}>{r(p.total_r)}</span>
+        <span className="text-slate-500"> · {p.trades} · WR {pct(p.win_rate)} · E {r(p.expectancy_r)}</span>
+      </span>
+    );
+  return (
+    <div className="table-wrap">
+      <table className="tbl">
+        <thead>
+          <tr>
+            <th>Mode</th>
+            <th>Signals</th>
+            <th>Plan · TP1</th>
+            <th>Plan · TP2</th>
+            <th>Omega policy</th>
+            <th>Omega max DD</th>
+            <th>Same signals: Omega vs TP1</th>
+            <th>Omega skipped</th>
+          </tr>
+        </thead>
+        <tbody>
+          {MODES.map((m) => {
+            const b = byMode[m];
+            const o = b?.omega;
+            const pr = o?.paired;
+            return (
+              <tr key={m}>
+                <td className="font-semibold capitalize text-slate-200">{m}</td>
+                <td className="mono">{b?.signals ?? 0}</td>
+                <td>{cell(b?.tp1)}</td>
+                <td>{cell(b?.tp2)}</td>
+                <td>{cell(o)}</td>
+                <td className="mono text-rose-300">{o?.trades ? (o.max_drawdown_r ? `−${o.max_drawdown_r}R` : "0R") : "—"}</td>
+                <td className="mono">
+                  {pr?.trades ? (
+                    <>
+                      {r(pr.omega_r)} vs {r(pr.plan_r)}
+                      <span className="text-slate-500"> · Omega better {pr.omega_better} · TP1 better {pr.plan_better} of {pr.trades}</span>
+                    </>
+                  ) : (
+                    <span className="text-slate-500">—</span>
+                  )}
+                </td>
+                <td className="text-[11px] text-slate-400">
+                  {Object.entries(o?.skipped ?? {})
+                    .map(([k, v]) => `${k.replace(/_/g, " ")} (${v})`)
+                    .join(" · ") || "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 /**
  * Outcome Distribution Histogram (Buckets of R-multiples).
  */
-function OutcomeDistributionHistogram({ items, policy }: { items: any[]; policy: "tp1" | "tp2" }) {
-  const rKey = policy === "tp2" ? "r_tp2" : "r_tp1";
-  const closed = items.filter((x) => x.status === "closed" && Number.isFinite(x[rKey]));
+function OutcomeDistributionHistogram({ items, policy }: { items: any[]; policy: Policy }) {
+  const rKey = policy === "tp2" ? "r_tp2" : policy === "omega" ? "r_omega" : "r_tp1";
+  const closed = items.filter((x) => (policy === "omega" ? x.omega_status : x.status) === "closed" && Number.isFinite(x[rKey]));
 
   const buckets = useMemo(() => {
     const b = [
@@ -1164,7 +1235,7 @@ function DisparityKnowledgePanel({
 export default function Performance() {
   const [viewMode, setViewMode] = useState<ViewMode>("signal_ledger");
   const [days, setDays] = useState<number>(30);
-  const [policy, setPolicy] = useState<"tp1" | "tp2">("tp1");
+  const [policy, setPolicy] = useState<Policy>("tp1");
 
   const queryUrl = days === 30 ? "/api/ledger?days=30" : `/api/ledger?days=${days}`;
   const { data, loading, error, refresh } = usePoll(
@@ -1277,6 +1348,14 @@ export default function Performance() {
             >
               Exit at TP2
             </button>
+            <button
+              type="button"
+              className={toggle(policy === "omega")}
+              onClick={() => setPolicy("omega")}
+              title="What the Omega engine would have done: market entry, the day's gates, SL+ and trailing TP at key levels by the quorum power"
+            >
+              Omega policy
+            </button>
             <span className="mx-1 h-4 w-px bg-white/10" />
             <Badge tone="cyan">Engine: Decision Engine (Active)</Badge>
           </div>
@@ -1349,6 +1428,18 @@ export default function Performance() {
                 />
               </div>
 
+              {/* The plan's targets and the Omega policy per trading mode */}
+              <Panel
+                title="Policy per Trading Mode · Plan targets vs Omega"
+                icon={<Layers className="h-3.5 w-3.5 text-cyan-400" />}
+                right={<Badge tone="purple">to Aether as knowledge</Badge>}
+              >
+                <ModePolicyTable byMode={l?.by_mode} />
+                <p className="mt-2 text-[11px] text-slate-500">
+                  Omega: {l?.rules?.omega?.entry ?? "market entry on the bar after the decision"}; {l?.rules?.omega?.management ?? "key-level management"}; gates: {l?.rules?.omega?.gates ?? "the day's loss limit"}. Approximations: {l?.rules?.omega?.approximations ?? "feed bars"}. R per trade, sized by the day's budget.
+                </p>
+              </Panel>
+
               {/* Interactive Equity Curve & Underwater Chart */}
               <Panel
                 title={`Cumulative Equity Curve · Decision Engine (${days}D Window)`}
@@ -1417,14 +1508,17 @@ export default function Performance() {
                           <th>Progressive SL+ (Real Price)</th>
                           <th>TP1</th>
                           <th>TP2</th>
+                          <th>Mode</th>
                           <th>Status</th>
                           <th>R Result</th>
+                          <th>Omega</th>
                           <th>MFE / MAE</th>
                         </tr>
                       </thead>
                       <tbody>
                         {items.map((x) => {
                           const rVal = policy === "tp2" ? x.r_tp2 : x.r_tp1;
+                          const om = x.omega_status;
                           return (
                             <tr key={x.id}>
                               <td className="mono">{when(x.opened_at)}</td>
@@ -1442,6 +1536,7 @@ export default function Performance() {
                               </td>
                               <td className="mono text-emerald-300">{px(x.tp1)}</td>
                               <td className="mono text-emerald-400">{px(x.tp2)}</td>
+                              <td className="text-slate-300 capitalize">{x.trading_mode ?? "—"}</td>
                               <td>
                                 <Badge tone={STATUS_TONE[x.status] ?? "slate"}>{x.status}</Badge>
                                 {x.ambiguous ? (
@@ -1467,6 +1562,20 @@ export default function Performance() {
                                   )
                                 ) : (
                                   r(rVal)
+                                )}
+                              </td>
+                              <td className="mono">
+                                {om === "closed" ? (
+                                  <span style={{ color: (x.r_omega ?? 0) > 0 ? C.bull : (x.r_omega ?? 0) < 0 ? C.bear : undefined }}>
+                                    {r(x.r_omega)}{" "}
+                                    <span className="text-[10px] text-slate-400">{OMEGA_EXIT[x.omega_exit] ?? x.omega_exit}</span>
+                                  </span>
+                                ) : om === "skipped" ? (
+                                  <span className="text-[10px] text-amber-200">{String(x.omega_gate ?? "skipped").replace(/_/g, " ")}</span>
+                                ) : om ? (
+                                  <span className="text-cyan-300">{om}</span>
+                                ) : (
+                                  "—"
                                 )}
                               </td>
                               <td className="mono text-slate-400">
