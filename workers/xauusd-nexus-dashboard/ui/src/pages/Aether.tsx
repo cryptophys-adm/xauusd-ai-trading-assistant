@@ -114,8 +114,9 @@ function Weighting({ reports }: { reports: any[] }) {
 }
 
 /** The B-11 starting set (src/decision-engine.mjs EXTENDED_WITNESS_WEIGHTS), the reference each tuned set is drawn against. */
-const B11: Record<string, number> = { D1: 0.16, H4: 0.16, H1: 0.16, M15: 0.12, NEWS: 0.08, MACRO: 0.04, STRATEGY: 0.08, KEY_LEVELS: 0.05, REGIME: 0.05, TREND_TF: 0.05, MACRO_DRIVERS: 0.03, SESSION: 0.02 };
-const WITNESS_LABEL: Record<string, string> = { D1: "Daily room", H4: "4H room", H1: "1H room", M15: "15m room", NEWS: "News Daily", MACRO: "Macro room", STRATEGY: "Strategy", KEY_LEVELS: "Key levels", REGIME: "Regime", TREND_TF: "Trend TF", MACRO_DRIVERS: "Macro drivers", SESSION: "Session" };
+// src/decision-engine.mjs EXTENDED_WITNESS_WEIGHTS (CALENDAR 0.08 since 2026-11-12, inside a release's horizon only).
+const B11: Record<string, number> = { D1: 0.1469, H4: 0.1469, H1: 0.1469, M15: 0.1103, NEWS: 0.0735, MACRO: 0.0367, STRATEGY: 0.0735, KEY_LEVELS: 0.0459, REGIME: 0.0459, TREND_TF: 0.0459, MACRO_DRIVERS: 0.0276, SESSION: 0.02, CALENDAR: 0.08 };
+const WITNESS_LABEL: Record<string, string> = { D1: "Daily room", H4: "4H room", H1: "1H room", M15: "15m room", NEWS: "News Daily", MACRO: "Macro room", STRATEGY: "Strategy", KEY_LEVELS: "Key levels", REGIME: "Regime", TREND_TF: "Trend TF", MACRO_DRIVERS: "Macro drivers", SESSION: "Session", CALENDAR: "Calendar (release horizon)" };
 const SOURCE_TEXT: Record<string, string> = { auto_tuned: "auto-tuned set", default: "B-11 default", base: "base set (weighting off)" };
 
 /**

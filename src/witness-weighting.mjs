@@ -20,22 +20,24 @@
 
 export const WITNESS_KEYS = Object.freeze([
   "D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY",
-  "KEY_LEVELS", "REGIME", "TREND_TF", "MACRO_DRIVERS", "SESSION"
+  "KEY_LEVELS", "REGIME", "TREND_TF", "MACRO_DRIVERS", "SESSION", "CALENDAR"
 ]);
 
 export const WITNESS_PRIORS = Object.freeze({
-  D1: 0.16,
-  H4: 0.16,
-  H1: 0.16,
-  M15: 0.12,
-  NEWS: 0.08,
-  MACRO: 0.04,
-  STRATEGY: 0.08,
-  KEY_LEVELS: 0.05,
-  REGIME: 0.05,
-  TREND_TF: 0.05,
-  MACRO_DRIVERS: 0.03,
-  SESSION: 0.02
+  D1: 0.1469,
+  H4: 0.1469,
+  H1: 0.1469,
+  M15: 0.1103,
+  NEWS: 0.0735,
+  MACRO: 0.0367,
+  STRATEGY: 0.0735,
+  KEY_LEVELS: 0.0459,
+  REGIME: 0.0459,
+  TREND_TF: 0.0459,
+  MACRO_DRIVERS: 0.0276,
+  SESSION: 0.02,
+  // The economic calendar inside a release's horizon (owner 2026-11-12); src/decision-engine.mjs.
+  CALENDAR: 0.08
 });
 
 export const WITNESS_MIN_WEIGHT = 0.02; // 2% minimum floor (preserves diversity)
@@ -48,7 +50,7 @@ const round4 = (x) => Math.round(x * 10_000) / 10_000;
 
 /**
  * Validates and normalises a witness weights dictionary.
- * Ensures all 12 keys exist, values are within [min, max], and sum = 1.0.
+ * Ensures all 13 keys exist, values are within [min, max], and sum = 1.0.
  */
 export function validateWitnessWeights(weights) {
   if (!weights || typeof weights !== "object" || Array.isArray(weights)) {

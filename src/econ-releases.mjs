@@ -21,6 +21,8 @@ import { ruleOf } from "./calendar-agent.mjs";
 
 export const ECON_RELEASES_VERSION = "cryptophys.econ-releases.v1";
 export const REACTION_HOURS = Object.freeze([1, 2, 4, 8, 24]);
+/** The hours before a release over which gold's drift toward the consensus is measured (owner 2026-11-12). */
+export const PRE_HOURS = Object.freeze([1, 2, 4, 8]);
 export const MIN_HORIZON_SAMPLES = 5;
 export const HORIZON_HIT_RATE = 0.55;
 export const BACKFILL_DAYS = 400;
@@ -65,6 +67,13 @@ export function resetEconSchemaCacheForTests() { schemaReady = false; }
 export async function ensureEconSchema(db) {
   if (schemaReady) return;
   for (const sql of ECON_SCHEMA_SQL) await db.prepare(sql).run();
+  // The pre-release drift (owner 2026-11-12), added after the table. A failed ALTER is accepted only when
+  // the column is there, so a transient error is retried at the next call instead of cached.
+  try { await db.prepare("ALTER TABLE econ_releases ADD COLUMN pre_json TEXT").run(); }
+  catch (error) {
+    const cols = ((await db.prepare("PRAGMA table_info(econ_releases)").all()).results || []).map((c) => c.name);
+    if (!cols.includes("pre_json")) throw error;
+  }
   schemaReady = true;
 }
 
@@ -104,13 +113,18 @@ function atrBefore(bars, i, n = 14) {
  * open of the hour holding the release to the close h hours later, in the ATR of the 14 hours before,
  * signed by the rule's direction. Null when the bars do not cover the release and its first hour.
  */
-export function reactionOf({ time, gold_direction }, bars) {
+/** Pure: the index of the 1H bar holding the release (the last opening at or before it), or -1. */
+function releaseBarIndex(time, bars) {
   const t = Math.floor(Date.parse(time) / 1000);
-  if (!bars?.t?.length || !Number.isFinite(t)) return null;
-  // Binary search: the last bar opening at or before the release, which must hold it.
+  if (!bars?.t?.length || !Number.isFinite(t)) return -1;
   let lo = 0, hi = bars.t.length - 1, i = -1;
   while (lo <= hi) { const mid = (lo + hi) >> 1; if (bars.t[mid] <= t) { i = mid; lo = mid + 1; } else hi = mid - 1; }
-  if (i < 0 || t >= bars.t[i] + 3600) return null;
+  return i >= 0 && t < bars.t[i] + 3600 ? i : -1;
+}
+
+export function reactionOf({ time, gold_direction }, bars) {
+  const i = releaseBarIndex(time, bars);
+  if (i < 0) return null;
   const atr = atrBefore(bars, i);
   if (!isNum(atr) || atr <= 0) return null;
   const base = bars.o[i];
@@ -128,6 +142,61 @@ export function reactionOf({ time, gold_direction }, bars) {
 }
 
 /**
+ * Pure: the consensus of a release for gold before it comes out (the Calendar Agent's rule): a forecast
+ * above the previous reading is "firmer expected", so the consensus leans the way a beat would move
+ * gold; +1 gold up, -1 gold down, 0 without a forecast, a previous reading, a rule or a change.
+ */
+export function consensusOf({ title, forecast, previous }) {
+  const beat = goldOf(ruleOf(title).higher);
+  return beat && isNum(forecast) && isNum(previous) && forecast !== previous ? Math.sign(forecast - previous) * beat : 0;
+}
+
+/**
+ * Pure: gold's drift before a release (owner 2026-11-12: "ada tendensi market bergerak sesuai proyeksi
+ * horizon menjelang release economic calendar"): the move from the open of the bar h hours before the
+ * release hour to the open of the release hour, in the ATR of the 14 hours before it, signed by the
+ * consensus (positive = gold drifted the consensus way). Null when the bars do not hold the release.
+ */
+export function preDriftOf(release, bars) {
+  const i = releaseBarIndex(release?.time, bars);
+  if (i < 0) return null;
+  const atr = atrBefore(bars, i);
+  if (!isNum(atr) || atr <= 0) return null;
+  const consensus = consensusOf(release);
+  const base = bars.o[i];
+  const out = { atr: r3(atr), consensus, moves: {}, signed: {} };
+  for (const h of PRE_HOURS) {
+    const j = i - h;
+    if (j < 0) break;
+    // A market gap (the weekend) inside the window: the hour count no longer measures time.
+    if (bars.t[i] - bars.t[j] > (h + 6) * 3600) break;
+    const move = (base - bars.o[j]) / atr;
+    out.moves[`${h}h`] = r3(move);
+    out.signed[`${h}h`] = consensus ? r3(move * consensus) : null;
+  }
+  return Object.keys(out.moves).length ? out : null;
+}
+
+/**
+ * Pure: per event kind, the pre-release drift: at each of PRE_HOURS the mean signed move and how often
+ * gold drifted the consensus way, over the releases that had a consensus; the learned pre-release
+ * horizon is the longest one with a hit rate of at least HORIZON_HIT_RATE and a positive mean (0 when
+ * none; null under MIN_HORIZON_SAMPLES releases).
+ */
+export function preDriftStats(rows) {
+  const byKind = new Map();
+  for (const r of rows || []) {
+    const pre = typeof r.pre_json === "string" ? safeParse(r.pre_json) : r.pre ?? null;
+    if (!pre?.signed || !pre.consensus) continue;
+    if (!byKind.has(r.kind)) byKind.set(r.kind, []);
+    byKind.get(r.kind).push(pre.signed);
+  }
+  const out = {};
+  for (const [kind, list] of byKind) out[kind] = kindStats(list, PRE_HOURS);
+  return out;
+}
+
+/**
  * Pure: per event kind, the mean signed move and the hit rate at each horizon, and the learned horizon
  * (the longest one with a hit rate of at least HORIZON_HIT_RATE and a positive mean; null under
  * MIN_HORIZON_SAMPLES releases).
@@ -142,22 +211,35 @@ export function horizonStats(rows) {
   }
   const out = {};
   for (const [kind, list] of byKind) {
-    const horizons = {};
-    for (const h of REACTION_HOURS) {
-      const v = list.map((s) => s[`${h}h`]).filter(isNum);
-      if (!v.length) continue;
-      horizons[`${h}h`] = { n: v.length, mean_atr: r3(v.reduce((a, b) => a + b, 0) / v.length), hit_rate: r3(v.filter((x) => x > 0).length / v.length) };
-    }
-    const enough = list.length >= MIN_HORIZON_SAMPLES;
-    const good = REACTION_HOURS.filter((h) => { const x = horizons[`${h}h`]; return x && x.n >= MIN_HORIZON_SAMPLES && x.hit_rate >= HORIZON_HIT_RATE && x.mean_atr > 0; });
-    const peak = Object.entries(horizons).filter(([, x]) => x.n >= MIN_HORIZON_SAMPLES).sort((a, b) => b[1].mean_atr - a[1].mean_atr)[0];
-    out[kind] = {
-      samples: list.length, horizons,
-      horizon_hours: enough ? (good.length ? Math.max(...good) : 0) : null,
-      peak: enough && peak ? { at: peak[0], mean_atr: peak[1].mean_atr, hit_rate: peak[1].hit_rate } : null
-    };
+    const st = kindStats(list, REACTION_HOURS);
+    const peak = Object.entries(st.horizons).filter(([, x]) => x.n >= MIN_HORIZON_SAMPLES).sort((a, b) => b[1].mean_atr - a[1].mean_atr)[0];
+    out[kind] = { ...st, peak: st.horizon_hours != null && peak ? { at: peak[0], mean_atr: peak[1].mean_atr, hit_rate: peak[1].hit_rate } : null };
   }
   return out;
+}
+
+/**
+ * Pure: one kind's signed moves (one object per release, keyed "<h>h") at each of `hours`: the count, the
+ * mean and the hit rate; the learned horizon is the longest hour with a hit rate of at least
+ * HORIZON_HIT_RATE and a positive mean (0 when none; null under MIN_HORIZON_SAMPLES releases), with its
+ * hit rate and mean. Shared by the reaction after a release and the drift before it.
+ */
+function kindStats(list, hours) {
+  const horizons = {};
+  for (const h of hours) {
+    const v = list.map((x) => x[`${h}h`]).filter(isNum);
+    if (!v.length) continue;
+    horizons[`${h}h`] = { n: v.length, mean_atr: r3(v.reduce((a, b) => a + b, 0) / v.length), hit_rate: r3(v.filter((x) => x > 0).length / v.length) };
+  }
+  const enough = list.length >= MIN_HORIZON_SAMPLES;
+  const good = hours.filter((h) => { const x = horizons[`${h}h`]; return x && x.n >= MIN_HORIZON_SAMPLES && x.hit_rate >= HORIZON_HIT_RATE && x.mean_atr > 0; });
+  const learned = enough && good.length ? Math.max(...good) : null;
+  return {
+    samples: list.length, horizons,
+    horizon_hours: enough ? learned ?? 0 : null,
+    hit_rate: learned ? horizons[`${learned}h`].hit_rate : null,
+    mean_atr: learned ? horizons[`${learned}h`].mean_atr : null
+  };
 }
 function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
 
@@ -246,7 +328,8 @@ async function goldHistory(env, now) {
  * Sweep step. Never throws. (1) The day of a High-impact USD event released 2 minutes to 3 hours ago
  * whose actual is not stored, at most once per sweep and once every 10 minutes per day; (2) at the first
  * sweep of each hour, one 14-day window of history back to BACKFILL_DAYS; (3) the reactions of releases
- * whose 24 hours have passed, from gold's 1H history.
+ * whose 24 hours have passed, from gold's 1H history; (4) the pre-release drift of every release whose
+ * hour has begun, history included.
  */
 export async function refreshEconReleases(env, { now = Date.now(), gatedEvents = [], readMt5 = null } = {}) {
   const db = env?.DB, kv = env?.SIGNAL_CACHE;
@@ -279,7 +362,8 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
       const rule = ruleOf(r.title);
       if (rule.kind === "other") continue;
       const dir = isNum(r.surprise) && r.surprise !== 0 ? goldOf(rule.higher) * Math.sign(r.surprise) : null;
-      await db.prepare("UPDATE econ_releases SET kind = ?, gold_direction = COALESCE(?, gold_direction), updated_at = ? WHERE release_key = ?").bind(rule.kind, dir, new Date(now).toISOString(), r.release_key).run();
+      // pre_json cleared: its consensus was measured without the rule, so it is measured again (step 4).
+      await db.prepare("UPDATE econ_releases SET kind = ?, gold_direction = COALESCE(?, gold_direction), pre_json = NULL, updated_at = ? WHERE release_key = ?").bind(rule.kind, dir, new Date(now).toISOString(), r.release_key).run();
     }
     // (2) Back-fill, one window an hour.
     if (new Date(now).getUTCMinutes() < 25) {
@@ -293,8 +377,10 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
     }
     // (3) Reactions: releases with an actual whose 24 hours have passed and no reaction yet.
     const pending = ((await db.prepare("SELECT * FROM econ_releases WHERE actual IS NOT NULL AND reaction_json IS NULL AND time <= ? ORDER BY time DESC LIMIT 400").bind(new Date(now - 25 * HOUR).toISOString()).all()).results || []);
+    let history;
+    const historyOnce = async () => (history === undefined ? (history = await goldHistory(env, now)) : history);
     if (pending.length) {
-      const bars = await goldHistory(env, now);
+      const bars = await historyOnce();
       if (bars) {
         const first = bars.t[0] * 1000;
         for (const r of pending) {
@@ -305,6 +391,24 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
         }
       }
     }
+    // (4) The pre-release drift (owner 2026-11-12) of every release whose hour has begun, history included,
+    // at the first sweep of each hour (it feeds the statistics, not a live decision).
+    const prePending = new Date(now).getUTCMinutes() < 25 ? ((await db.prepare("SELECT release_key, title, time, forecast, previous FROM econ_releases WHERE pre_json IS NULL AND time <= ? ORDER BY time DESC LIMIT 400").bind(new Date(now - 5 * 60_000).toISOString()).all()).results || []) : [];
+    if (prePending.length) {
+      const bars = await historyOnce();
+      if (bars) {
+        const first = bars.t[0] * 1000, last = bars.t.at(-1) * 1000;
+        out.pre = 0;
+        for (const r of prePending) {
+          const pre = preDriftOf(r, bars);
+          const t = Date.parse(r.time);
+          // Before the history, or an hour the history has passed without a bar (market closed): never
+          // measurable, so it is not retried.
+          const value = pre ? JSON.stringify(pre) : t < first + 9 * HOUR || t + HOUR <= last ? JSON.stringify({ unavailable: "not in the 1H history" }) : null;
+          if (value) { await db.prepare("UPDATE econ_releases SET pre_json = ?, updated_at = ? WHERE release_key = ?").bind(value, new Date(now).toISOString(), r.release_key).run(); out.pre += 1; }
+        }
+      }
+    }
   } catch (e) {
     out.status = "failed"; out.error = String(e?.message ?? e).slice(0, 200);
   }
@@ -312,19 +416,22 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
 }
 
 /**
- * The Calendar Agent's release intelligence at `now`: the releases of the last 6 hours and the next 48
+ * The Calendar Agent's release intelligence at `now`: the releases of the last 24 hours and the next 48
  * with their surprise, and the horizon statistics per event kind. Never throws.
  */
 export async function calendarIntel(env, { now = Date.now() } = {}) {
   const db = env?.DB;
-  if (!db) return { version: ECON_RELEASES_VERSION, releases: [], stats: {} };
+  if (!db) return { version: ECON_RELEASES_VERSION, releases: [], stats: {}, pre_stats: {} };
   try {
     await ensureEconSchema(db);
-    const releases = ((await db.prepare("SELECT release_key, series, kind, title, time, actual, forecast, previous, unit, surprise, surprise_z, gold_direction FROM econ_releases WHERE time >= ? AND time <= ? ORDER BY time").bind(new Date(now - 6 * HOUR).toISOString(), new Date(now + 48 * HOUR).toISOString()).all()).results || []);
+    const releases = ((await db.prepare("SELECT release_key, series, kind, title, time, actual, forecast, previous, unit, surprise, surprise_z, gold_direction FROM econ_releases WHERE time >= ? AND time <= ? ORDER BY time").bind(new Date(now - 24 * HOUR).toISOString(), new Date(now + 48 * HOUR).toISOString()).all()).results || []);
     const rows = ((await db.prepare("SELECT kind, gold_direction, reaction_json FROM econ_releases WHERE reaction_json IS NOT NULL AND gold_direction IS NOT NULL AND gold_direction <> 0").all()).results || []);
+    // Its own try: the pre-release statistics never take the releases and the reaction statistics down.
+    let preRows = [];
+    try { preRows = ((await db.prepare("SELECT kind, pre_json FROM econ_releases WHERE pre_json IS NOT NULL").all()).results || []); } catch { preRows = []; }
     const counts = await db.prepare("SELECT COUNT(*) AS n, SUM(CASE WHEN actual IS NOT NULL THEN 1 ELSE 0 END) AS released, MIN(time) AS since FROM econ_releases").first();
-    return { version: ECON_RELEASES_VERSION, releases, stats: horizonStats(rows), history: { releases: Number(counts?.n) || 0, with_actual: Number(counts?.released) || 0, since: counts?.since ?? null } };
+    return { version: ECON_RELEASES_VERSION, releases, stats: horizonStats(rows), pre_stats: preDriftStats(preRows), history: { releases: Number(counts?.n) || 0, with_actual: Number(counts?.released) || 0, since: counts?.since ?? null } };
   } catch {
-    return { version: ECON_RELEASES_VERSION, releases: [], stats: {} };
+    return { version: ECON_RELEASES_VERSION, releases: [], stats: {}, pre_stats: {} };
   }
 }

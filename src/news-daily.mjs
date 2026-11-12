@@ -18,6 +18,7 @@ import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
 import { ensureThreadSchema, rowToThreadMessage, threadInternals } from "./agent-threads.mjs";
 import { cachedCalendar } from "./econ-calendar.mjs";
 import { calendarOutlook } from "./calendar-agent.mjs";
+import { calendarIntel } from "./econ-releases.mjs";
 
 const { runStep, writeMessage, upsertThread, callsInLastHour, RULES_NO_REFS, clip, inUnit, parseJson } = threadInternals;
 
@@ -224,7 +225,9 @@ export async function runNewsDaily(env, { now = Date.now(), clock = () => Date.n
   const counts = countBiases(tagged);
   // Calendar Agent (owner decision 2026-11-08): the scheduled USD events and their projected effect.
   let calendar = null;
-  try { calendar = calendarOutlook((await cachedCalendar(env))?.events || [], now); } catch { calendar = null; }
+  // With the release intelligence (owner 2026-11-12): the TLDR reads the consensus at the strength the
+  // Calendar Agent, the Macro War Room and the Decision Engine hold it.
+  try { calendar = calendarOutlook((await cachedCalendar(env))?.events || [], now, { intel: await calendarIntel(env, { now }) }); } catch { calendar = null; }
   await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { digest, window_from: new Date(now - NEWS_DAILY_WINDOW_MS).toISOString(), window_to: new Date(now).toISOString(), context, counts, calendar: calendar?.summary ?? null, items: tagged } });
   const usable = tagged.filter((i) => i.bias);
   if (!usable.length) return { status: "no_tags", calls, items: tagged.length };

@@ -165,7 +165,7 @@ export async function macroEvidence(env, { now = Date.now(), at = null } = {}) {
     data: {
       calendar: outlook ? {
         summary: outlook.summary, consensus_lean: outlook.consensus_lean, surprise_lean: outlook.surprise_lean ?? 0,
-        events: outlook.events.map((p) => ({ title: p.title, time: p.time, status: p.status, projection: p.text, release: p.release ?? null, horizon_hours_after: p.horizon?.hours_after ?? null, horizon_learned: p.horizon?.learned === true })),
+        events: outlook.events.map((p) => ({ title: p.title, time: p.time, status: p.status, projection: p.text, consensus_lean: p.consensus_lean ?? 0, pre_release: p.pre_release ?? null, horizon_hours_before: p.horizon?.hours_before ?? null, release: p.release ?? null, horizon_hours_after: p.horizon?.hours_after ?? null, horizon_learned: p.horizon?.learned === true })),
         headlines_after_release: headlinesAfter
       } : { available: false },
       news: news ?? { available: false },
