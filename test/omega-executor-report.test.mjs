@@ -9,9 +9,19 @@ import { planIntents, OMEGA_DEFAULTS } from "../src/omega-engine.mjs";
 
 const ea = readFileSync(new URL("../ea/mt5/OmegaExecutor.mq5", import.meta.url), "utf8");
 
-test("E1. OmegaExecutor 1.12 writes its version and inputs into state.json; the version constant matches #property", () => {
-  assert.match(ea, /#property version\s+"1\.12"/);
-  assert.match(ea, /const string OMEGA_EXECUTOR_VERSION = "1\.12";/);
+const versionAtLeastForTest = (v, min) => { const a = v.split(".").map(Number), b = min.split(".").map(Number); for (let i = 0; i < 2; i++) { if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0); } return true; };
+
+test("E0. since 1.13 the EA writes no macro bars by default (owner 2026-11-12: the broker supplies XAUUSD only); the calendar stays", () => {
+  assert.match(ea, /#property version\s+"1\.13"/);
+  assert.match(ea, /input bool\s+CorpusMacroEnabled = false;/);
+  assert.match(ea, /input bool\s+CalendarEnabled\s+= true;/);
+  assert.match(ea, /if\(!CorpusMacroEnabled\) return;/);
+});
+
+test("E1. OmegaExecutor (1.12+) writes its version and inputs into state.json; the version constant matches #property", () => {
+  const prop = ea.match(/#property version\s+"(\d+\.\d+)"/)?.[1];
+  assert.ok(prop && versionAtLeastForTest(prop, "1.12"), "1.12 or later");
+  assert.ok(ea.includes(`const string OMEGA_EXECUTOR_VERSION = "${prop}";`), "the constant equals #property");
   assert.match(ea, /\\"executor\\":\{\\"name\\":\\"OmegaExecutor\\",\\"version\\":\\"%s\\",\\"auto_break_even\\":%s,\\"trailing_stop\\":%s,\\"dynamic_atr_stop\\":%s\}/);
   assert.match(ea, /AutoBreakEvenEnabled \? "true" : "false",\s*TrailingStopEnabled \? "true" : "false"/);
   assert.equal(EXECUTOR_MIN_VERSION, "1.12");
