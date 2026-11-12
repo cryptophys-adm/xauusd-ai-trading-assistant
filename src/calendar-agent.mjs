@@ -140,7 +140,7 @@ export function projectEvent(e, now = Date.now(), { release = null, stat = null,
     lines.push(stat.horizon_hours == null
       ? `Only ${stat.samples} past releases of this kind are measured, so the 4-hour horizon stands.`
       : stat.horizon_hours > 0
-        ? `In ${stat.samples} past releases of this kind gold moved the rule's way ${Math.round((stat.horizons?.[`${stat.horizon_hours}h`]?.hit_rate ?? 0) * 100)}% of the time up to ${stat.horizon_hours} hours after${stat.peak ? `, most strongly after ${stat.peak.at.replace("h", " hours")}` : ""}.`
+        ? `In ${stat.samples} past releases of this kind gold moved the rule's way ${Math.round((stat.hit_rate ?? stat.horizons?.[`${stat.horizon_hours}h`]?.hit_rate ?? 0) * 100)}% of the time ${stat.horizon_hours} hour${stat.horizon_hours > 1 ? "s" : ""} after, its strongest reaction, so the release's effect is weighed until then.`
         : `In ${stat.samples} past releases of this kind gold did not follow the rule reliably at any horizon.`);
   }
   return {
