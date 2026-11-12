@@ -108,7 +108,10 @@ export function simulateSignal(signal, bars, { now = Date.now(), fillWindowMs = 
     open_r: p1.result === "open" ? p1.r : null,
     exit_price: p1.exit_price ?? null, bars_held: p1.bars, mfe_r: r3(p1.mfe), mae_r: r3(p1.mae),
     ambiguous: Boolean(p1.ambiguous || p2?.ambiguous),
-    sl_plus_triggered: p1.sl_plus ? 1 : 0, sl_plus_at: p1.sl_plus_at ?? null
+    sl_plus_triggered: p1.sl_plus ? 1 : 0, sl_plus_at: p1.sl_plus_at ?? null,
+    // Each policy's own exit time (the setup's lifecycle: TP1 reached while the TP2 part runs on).
+    tp1_closed_at: p1.result === "open" ? null : p1.closed_at, tp2_closed_at: p2 && p2.result !== "open" ? p2.closed_at : null,
+    tp2_exit_reason: p2 && p2.result !== "open" ? p2.result : null
   };
 }
 
@@ -379,7 +382,7 @@ export function resetLedgerSchemaCacheForTests() { schemaReady = false; }
 export async function ensureLedgerSchema(db) {
   if (schemaReady) return;
   for (const sql of LEDGER_SCHEMA_SQL) await db.prepare(sql).run();
-  for (const col of ["progressive_stop REAL", "sl_plus_triggered INTEGER NOT NULL DEFAULT 0", "sl_plus_at TEXT", ...OMEGA_COLUMNS]) {
+  for (const col of ["progressive_stop REAL", "sl_plus_triggered INTEGER NOT NULL DEFAULT 0", "sl_plus_at TEXT", "tp1_closed_at TEXT", "tp2_closed_at TEXT", "tp2_exit_reason TEXT", ...OMEGA_COLUMNS]) {
     try { await db.prepare(`ALTER TABLE signal_ledger ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
   schemaReady = true;
@@ -532,8 +535,8 @@ export async function evaluateOpenSignals(env, { now = Date.now(), bars = null, 
   let changed = 0;
   for (const s of live) {
     const o = simulateSignal(s, closed, { now });
-    await env.DB.prepare("UPDATE signal_ledger SET status = ?, filled_at = ?, closed_at = ?, exit_reason = ?, exit_price = ?, r_tp1 = ?, r_tp2 = ?, open_r = ?, mfe_r = ?, mae_r = ?, bars_held = ?, ambiguous = ?, sl_plus_triggered = ?, sl_plus_at = ?, updated_at = ? WHERE id = ?")
-      .bind(o.status, o.filled_at ?? null, o.closed_at ?? null, o.exit_reason ?? null, o.exit_price ?? null, o.r_tp1 ?? null, o.r_tp2 ?? null, o.open_r ?? null, o.mfe_r ?? null, o.mae_r ?? null, o.bars_held ?? null, o.ambiguous ? 1 : 0, o.sl_plus_triggered ? 1 : 0, o.sl_plus_at ?? null, iso(now), s.id).run();
+    await env.DB.prepare("UPDATE signal_ledger SET status = ?, filled_at = ?, closed_at = ?, exit_reason = ?, exit_price = ?, r_tp1 = ?, r_tp2 = ?, open_r = ?, mfe_r = ?, mae_r = ?, bars_held = ?, ambiguous = ?, sl_plus_triggered = ?, sl_plus_at = ?, tp1_closed_at = ?, tp2_closed_at = ?, tp2_exit_reason = ?, updated_at = ? WHERE id = ?")
+      .bind(o.status, o.filled_at ?? null, o.closed_at ?? null, o.exit_reason ?? null, o.exit_price ?? null, o.r_tp1 ?? null, o.r_tp2 ?? null, o.open_r ?? null, o.mfe_r ?? null, o.mae_r ?? null, o.bars_held ?? null, o.ambiguous ? 1 : 0, o.sl_plus_triggered ? 1 : 0, o.sl_plus_at ?? null, o.tp1_closed_at ?? null, o.tp2_closed_at ?? null, o.tp2_exit_reason ?? null, iso(now), s.id).run();
     if (o.status !== s.status) changed += 1;
   }
   try { changed += await evaluateOmega(env, omegaRows, closed, { now, m15: loaded.m15 }); } catch (e) { console.error("ledger_omega_failed", String(e?.message ?? e).slice(0, 200)); }
@@ -620,4 +623,59 @@ export async function readExecutionReport(env, { now = Date.now() } = {}) {
   await ensureLedgerSchema(env.DB);
   const rows = (await env.DB.prepare("SELECT * FROM signal_ledger WHERE source = 'decision' AND opened_at >= ?").bind(iso(now - EXECUTION_REPORT_DAYS * 86_400_000)).all()).results || [];
   return executionReport(rows, { now });
+}
+
+// ---------------------------------------------------------------------------
+// The live setup (owner 2026-11-12: "ya kerjakan semua nomor jika memang lebih baik": a signal's lifecycle
+// in one card, its levels locked from the moment it was given). A Decision Engine setup is the ledger's
+// row: its entry, stop and targets never change after the decision that opened it, whatever the later
+// 15m decisions say; those count as confirmations (same side) or opposite calls while it lives.
+
+export const SETUP_RECENT_MS = 2 * 3600_000;
+
+/** Pure: one ledger row as a setup's lifecycle (steps with their times, the R so far, Omega's side of it). */
+export function setupLifecycle(row, { decisions = [], now = Date.now() } = {}) {
+  const opened = toMs(row.opened_at);
+  const end = toMs(row.closed_at) || now;
+  const since = decisions.filter((d) => d.close_ms > decisionCloseMs(row.candle_key) && d.close_ms <= end);
+  const tp1Hit = row.exit_reason === "target" && (row.tp1_closed_at || row.closed_at);
+  const stopped = row.exit_reason === "stop";
+  const phase = row.status === "pending" ? "awaiting_entry"
+    : row.status === "cancelled" ? "cancelled"
+    : row.status === "open" ? (tp1Hit ? "tp1" : "open")
+    : row.exit_reason === "target" ? (row.tp2_exit_reason === "target" ? "tp2" : "tp1")
+    : stopped ? (row.sl_plus_triggered ? "sl_plus" : "stopped") : (row.exit_reason ?? "closed");
+  return {
+    id: row.id, side: row.side, mode: row.trading_mode ?? null, opened_at: row.opened_at, status: row.status, phase,
+    locked: { entry: row.entry, stop: row.stop, tp1: row.tp1, tp2: row.tp2 ?? null, progressive_stop: row.progressive_stop ?? null },
+    steps: {
+      signal: row.opened_at,
+      entry: row.filled_at ?? null,
+      sl_plus: row.sl_plus_at ?? null,
+      tp1: tp1Hit ? (row.tp1_closed_at ?? row.closed_at) : null,
+      tp2: row.tp2_exit_reason === "target" ? row.tp2_closed_at : null,
+      invalidated: stopped ? (row.tp1_closed_at ?? row.closed_at) : null,
+      cancelled: row.status === "cancelled" ? { at: row.closed_at, reason: row.exit_reason } : null
+    },
+    fill_deadline: finite(opened) ? iso(opened + FILL_WINDOW_MS) : null,
+    r: { tp1: row.r_tp1 ?? null, tp2: row.r_tp2 ?? null, open: row.open_r ?? null, mfe: row.mfe_r ?? null, mae: row.mae_r ?? null },
+    omega: row.omega_status ? { status: row.omega_status, gate: row.omega_gate ?? null, exit: row.omega_exit ?? null, r: row.r_omega ?? null, filled_at: row.omega_filled_at ?? null, closed_at: row.omega_closed_at ?? null } : null,
+    decisions_since: { same: since.filter((d) => d.stance === row.side).length, opposite: since.filter((d) => (d.stance === "BUY" || d.stance === "SELL") && d.stance !== row.side).length, wait: since.filter((d) => d.stance === "WAIT").length }
+  };
+}
+
+/** The Decision Engine setups still live, and those that ended in the last SETUP_RECENT_MS, newest first. */
+export async function activeSetups(env, { now = Date.now(), limit = 3 } = {}) {
+  if (!env?.DB) return [];
+  // A read path: no schema work (the ledger step owns it); a missing column reads as undefined.
+  try {
+    const rows = (await env.DB.prepare("SELECT * FROM signal_ledger WHERE source = 'decision' AND (status IN ('pending', 'open') OR closed_at >= ?) ORDER BY opened_at DESC LIMIT ?").bind(iso(now - SETUP_RECENT_MS), limit).all()).results || [];
+    if (!rows.length) return [];
+    const oldest = Math.min(...rows.map((r) => decisionCloseMs(r.candle_key)).filter(finite));
+    let decisions = [];
+    if (finite(oldest)) {
+      try { decisions = ((await env.DB.prepare("SELECT decision_key, stance FROM engine_decisions WHERE bar_close > ? ORDER BY bar_close").bind(iso(oldest)).all()).results || []).map((d) => ({ close_ms: decisionCloseMs(d.decision_key), stance: d.stance })); } catch { decisions = []; }
+    }
+    return rows.map((r) => setupLifecycle(r, { decisions, now }));
+  } catch { return []; }
 }

@@ -191,7 +191,7 @@ import { readGlobalConclusion } from "./global-conclusion.mjs";
 import { readStrategy, loadStrategyInputs, buildStrategy, ownTimeframePlan, loadOwnTimeframePlanInputs } from "./strategy-engine.mjs";
 import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } from "./strategy-inputs.mjs";
 import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
-import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema, readExecutionReport, LEDGER_CRON } from "./signal-ledger.mjs";
+import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema, readExecutionReport, LEDGER_CRON, activeSetups } from "./signal-ledger.mjs";
 import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, TRADING_MODE_KEY } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport, pushExecutionReport } from "./aether-push.mjs";
@@ -2486,8 +2486,10 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/conclusion/global") {
     try {
       // The Decision Engine's decision travels with the witnesses (the rooms, news, macro, strategy).
-      const [global, engine] = await Promise.all([readGlobalConclusion(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null)]);
-      return dashboardJson({ status: "ok", global, engine });
+      const on = decisionEngineEnabled(env);
+      const [global, engine, setups] = await Promise.all([readGlobalConclusion(env), on ? readLatestDecision(env) : Promise.resolve(null), on ? activeSetups(env) : Promise.resolve([])]);
+      // The live setups with their locked levels and lifecycle (src/signal-ledger.mjs activeSetups).
+      return dashboardJson({ status: "ok", global, engine, setups });
     } catch (error) {
       console.error("global_conclusion_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
