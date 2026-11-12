@@ -155,16 +155,104 @@ export function isOmegaOwned(p) {
 /**
  * @returns {{ intents: object[], notes: { code: string }[] }}
  */
+// Key-level management (owner 2026-11-12: "semua dikontrol dari omega bukan EA", "atur SL+ dan Trailing
+// TP juga harus berdasarkan keylevel menyesuaikan Bull/Bear Power", "Bull/Bear power dihasilkan decision
+// engine hasil quorum", "Tutup jika Power berbalik"). Power is the latest decision's quorum score, signed
+// for the position (+ with it, - against it).
+export const POWER_STRONG = 0.5;
+export const POWER_WEAK = 0.2;
+export const POWER_FRESH_MS = 35 * 60_000;
+
+/** Pure: the signal's key levels on the broker's scale ({ low, high }, lowest first), or null without a known basis. */
+export function brokerKeyLevels(signal) {
+  if (signal?.feed_basis_known !== true || !finite(signal.feed_basis) || typeof signal.key_levels !== "string" || !signal.key_levels) return null;
+  const out = [];
+  for (const part of signal.key_levels.split(",")) {
+    const [lo, hi] = part.split(":").map(Number);
+    if (positive(lo) && positive(hi) && lo <= hi) out.push({ low: lo + signal.feed_basis, high: hi + signal.feed_basis });
+  }
+  return out.length ? out.sort((a, b) => a.low - b.low) : null;
+}
+
+/** Pure: the power band of a signed power: "strong" (with the position), "weak", "reversed" (strongly against) or "normal". */
+export function powerBand(p) {
+  if (!finite(p)) return "normal";
+  if (p <= -POWER_STRONG) return "reversed";
+  if (p >= POWER_STRONG) return "strong";
+  if (p < POWER_WEAK) return "weak";
+  return "normal";
+}
+
+/**
+ * Pure: one position's key-level plan: { close } when the power turned strongly against a position in
+ * profit; else { sl, tp, band } (each null when unchanged).
+ *   SL+          once price has passed a key level beyond the entry, the stop locks a small profit
+ *                (break-even plus max(2 spreads, the buffer)) and steps behind the passed levels: with a
+ *                strong power behind the one before the last passed (room to run), normally behind the
+ *                last passed, with a weak power at the tighter of that and the broker's 5m swing.
+ *   trailing TP  near the take-profit (within max(0.5 x 5m ATR, 3 spreads, 0.2 x the open-to-target
+ *                distance)) with a strong power, the target moves to the next key level and the stop to
+ *                the old target, less the buffer; with a weaker power the target stays and is taken.
+ * The stop only moves in the position's favour and keeps the broker's stop distance from price.
+ */
+export function keyLevelPlan({ position: p, sym, signal, levels, now = Date.now() }) {
+  const buy = p.side === "BUY", dir = buy ? 1 : -1;
+  const open = Number(p.open_price ?? p.entry), curSl = Number(p.sl), curTp = Number(p.tp);
+  const digits = Number.isInteger(sym.digits) ? sym.digits : 2;
+  const point = positive(sym.point) ? sym.point : Math.pow(10, -digits);
+  const spreadPx = (finite(sym.spread_points) ? sym.spread_points : 0) * point;
+  const atr5 = positive(signal?.m5_atr) ? signal.m5_atr : null;
+  const buffer = Math.max(2 * spreadPx, atr5 ? 0.1 * atr5 : 0, point);
+  const floorPx = (finite(sym.stops_level_points) ? sym.stops_level_points : 0) * point + spreadPx;
+  const price = buy ? sym.bid : sym.ask;
+  const fresh = finite(signal?.power_ms) && signal.power_ms > 0 && now - signal.power_ms <= POWER_FRESH_MS;
+  const band = fresh ? powerBand(dir * signal.power) : "normal";
+  const move = dir * (price - open);
+  if (band === "reversed" && move > 0) return { close: true, band };
+
+  const behind = (z) => (buy ? z.low - buffer : z.high + buffer);
+  const better = (a, b) => (!finite(b) ? true : buy ? a > b + point : a < b - point);
+  const room = (sl) => (buy ? sl < sym.bid - floorPx : sl > sym.ask + floorPx);
+  const candidates = [];
+  // SL+: the key levels wholly beyond the entry that price has passed, nearest to price first.
+  const passed = levels.filter((z) => (buy ? z.low > open && z.high < price - buffer : z.high < open && z.low > price + buffer)).sort((a, b) => (buy ? b.high - a.high : a.low - b.low));
+  if (passed.length) {
+    const lock = open + dir * Math.max(2 * spreadPx, buffer);
+    let sl = band === "strong" ? (passed[1] ? behind(passed[1]) : lock) : behind(passed[0]);
+    if (band === "weak" && positive(buy ? signal?.m5_swing_low : signal?.m5_swing_high)) {
+      const swing = buy ? signal.m5_swing_low - buffer : signal.m5_swing_high + buffer;
+      if (better(swing, sl)) sl = swing;
+    }
+    if (!better(sl, lock)) sl = lock;
+    candidates.push(sl);
+  }
+  // Trailing TP: near the target with a strong power, the next key level beyond it.
+  let tp = null;
+  if (finite(curTp) && curTp > 0 && band === "strong") {
+    const near = Math.max(atr5 ? 0.5 * atr5 : 0, 3 * spreadPx, 0.2 * Math.abs(curTp - open));
+    if (dir * (curTp - price) <= near) {
+      const next = levels.filter((z) => (buy ? z.low > curTp + buffer : z.high < curTp - buffer)).sort((a, b) => (buy ? a.low - b.low : b.high - a.high))[0];
+      if (next) { tp = roundTo(buy ? next.low : next.high, digits); candidates.push(curTp - dir * buffer); }
+    }
+  }
+  const valid = candidates.map((x) => roundTo(x, digits)).filter((x) => x > 0 && room(x) && better(x, curSl));
+  const sl = valid.length ? valid.reduce((a, b) => (buy ? Math.max(a, b) : Math.min(a, b))) : null;
+  return { sl, tp, band };
+}
+
 /**
  * Pure: the management of the positions already open (audit 2026-11-11), on every sync whatever the
  * entry gates say. `skipTickets` are positions being closed in the same plan.
+ *   key levels  with the signal's key levels on a known basis (owner 2026-11-12): SL+, trailing TP and
+ *               the close on a reversed power (keyLevelPlan); they replace the 5m trail and the extended
+ *               target, which remain the fallback without key levels;
  *   break-even  with trailing_stop_r > 0: a position at trailing_stop_r R or more moves its stop to its
  *               open price (R from the open price and the stop before break-even);
  *   extended    a farther TP2 or extended target of the current signal moves the take-profit of the
  *               positions on the signal's side;
  *   scale-out   a position of 0.02 lots or more at 1.5R or its target banks half, once per position.
  */
-export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [] } = {}) {
+export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [], now = Date.now() } = {}) {
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
   const out = [];
   if (!finite(sym.bid) || !finite(sym.ask)) return out;
@@ -173,6 +261,7 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
   const recent = new Set(recentIntentIds);
   const scaledBefore = (ticket) => [...recent].some((rid) => String(rid).startsWith(`ps:${ticket}:`));
   const targetExtTp = positive(signal?.extended_tp) ? signal.extended_tp : positive(signal?.tp2) ? signal.tp2 : null;
+  const levels = brokerKeyLevels(signal);
   for (const p of positions) {
     if (p?.ticket == null || skip.has(p.ticket) || (p.side !== "BUY" && p.side !== "SELL") || !isOmegaOwned(p)) continue;
     const buy = p.side === "BUY";
@@ -193,11 +282,24 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
       continue;
     }
     let movedSl = false;
-    if (S.trailing_stop_r > 0 && !atBreakEven && risk > 0 && r >= S.trailing_stop_r) {
+    // Key-level management: SL+, trailing TP, and the close when the power turned against a winner.
+    if (levels) {
+      const k = keyLevelPlan({ position: p, sym, signal, levels, now });
+      if (k.close) {
+        out.push({ id: `cl:${p.ticket}:pw:${Math.floor(signal.power_ms / 60_000)}`, kind: "close", ticket: p.ticket, reason: "power_reversal" });
+        continue;
+      }
+      if (k.sl != null) {
+        out.push({ id: `ms:${p.ticket}:k:${Math.round(k.sl * 100)}`, kind: "modify_sl", ticket: p.ticket, sl: k.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `sl_key_level_${k.band}` });
+        movedSl = true;
+      }
+      if (k.tp != null) out.push({ id: `mt:${p.ticket}:${Math.round(k.tp * 100)}`, kind: "modify_tp", ticket: p.ticket, tp: k.tp, reason: "trail_tp_key_level" });
+    }
+    if (!movedSl && S.trailing_stop_r > 0 && !atBreakEven && risk > 0 && r >= S.trailing_stop_r) {
       out.push({ id: `ms:${p.ticket}:be`, kind: "modify_sl", ticket: p.ticket, sl: roundTo(open, digits), tp: Number.isFinite(curTp) ? curTp : null, reason: "break_even" });
       movedSl = true;
     }
-    if (!movedSl && m5 && finite(m5.m5_atr) && (protectedPos || r >= 1)) {
+    if (!levels && !movedSl && m5 && finite(m5.m5_atr) && (protectedPos || r >= 1)) {
       const point = positive(sym.point) ? sym.point : Math.pow(10, -digits);
       const spreadPx = (finite(sym.spread_points) ? sym.spread_points : 0) * point;
       const buffer = Math.max(2 * spreadPx, 0.1 * m5.m5_atr);
@@ -210,7 +312,7 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
       }
     }
 
-    if (targetExtTp != null && p.side === side && Number.isFinite(curTp) && (buy ? targetExtTp > curTp + 0.1 : targetExtTp < curTp - 0.1)) {
+    if (!levels && targetExtTp != null && p.side === side && Number.isFinite(curTp) && (buy ? targetExtTp > curTp + 0.1 : targetExtTp < curTp - 0.1)) {
       out.push({ id: `mt:${p.ticket}:${Math.round(targetExtTp * 100)}`, kind: "modify_tp", ticket: p.ticket, tp: roundTo(targetExtTp, digits), reason: "extended_tp" });
     }
 
@@ -298,7 +400,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // Position management runs on every sync, whatever the entry gates say (audit 2026-11-11, owner:
   // "perbaiki"): a blackout, the rollover quarantine, a pause, a wide spread or a full book only stop
   // NEW entries; the positions already open keep their break-even, extended target and scale-out.
-  intents.push(...manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket) }));
+  intents.push(...manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket), now }));
 
   if (!side) { note("no_side"); return { intents, notes }; }
 
@@ -362,7 +464,8 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     const minAtrDist = sym.atr_value * 0.75;
     if (stopDist < minAtrDist) {
       stopDist = roundTo(minAtrDist, sym.digits);
-      tpDist = roundTo(tpDist * stopDist / planStopDist, sym.digits);
+      // Scalp (owner 2026-11-12): the target stays at the nearest key level, whatever the stop.
+      if (signal.trading_mode !== "scalp") tpDist = roundTo(tpDist * stopDist / planStopDist, sym.digits);
       note("adaptive_stop");
     }
   }

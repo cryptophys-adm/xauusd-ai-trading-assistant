@@ -124,3 +124,11 @@ bars, about 1.5 days after 2026-11-11 14:16 UTC.
 - Intent ids use minutes (`ms:<ticket>:t5:<minute>`, `cl:<ticket>:o5:<minute>`) to stay within the bridge's
   31 characters.
 - Tests: `test/broker-trigger.test.mjs`, `market-data-ingestion/test/broker-trigger.test.mjs`.
+
+## Amendment 2026-11-12: key-level management
+
+Owner: "semua dikontrol dari omega bukan EA, untuk mode scalping jangan TP berdasarkan RRR tapi target di Key Level terdekat, atur SL+ dan Trailing TP juga harus berdasarkan keylevel menyesuaikan Bull/Bear Power". Answers: Power is the Decision Engine's quorum score; no RRR limit; close when the power reverses.
+
+- The 5m trail of section 4 is replaced by the key-level SL+ while the signal carries key levels on a known broker basis; it stays the fallback without one. The opposite 5m exit stays.
+- The broker's 5m swing is still used: with a weak power the SL+ takes the tighter of the last passed key level and the 5m swing.
+- See `docs/SSOT.md` (Omega, "Key-level management") for the rules and `test/omega-key-level-management.test.mjs`.

@@ -97,7 +97,9 @@ export const DECISION_TELEGRAM_KEY = "telegram:decision-engine:last:v1";
 
 /** The trading modes' thresholds (owner 2026-11-10). Unknown modes read as intraday. Doctrine: engine_thresholds. */
 export const MODE_THRESHOLDS = Object.freeze({
-  scalp: Object.freeze({ quorum_min: 0.45, min_rrr: 1.2, lean: 0.1 }),
+  // Scalp (owner 2026-11-12: "untuk mode scalping jangan TP berdasarkan RRR tapi target di Key Level
+  // terdekat", "Tanpa batas RRR"): the target is the nearest key level ahead, with no reward minimum.
+  scalp: Object.freeze({ quorum_min: 0.45, min_rrr: 0, lean: 0.1, target: "nearest" }),
   intraday: Object.freeze({ quorum_min: 0.5, min_rrr: 1.5, lean: 0.15 }),
   swing: Object.freeze({ quorum_min: 0.6, min_rrr: 2.0, lean: 0.2 })
 });
@@ -551,10 +553,17 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
   add("no_veto", !risk.vetoes.length, risk.vetoes.length ? risk.vetoes.join("; ") : "no veto");
   const plan = planForDirection(strategy, dir);
   add("levels", Boolean(plan), plan ? `entry ${plan.entry_note}, stop ${plan.stop_note}` : "no key-level plan (price, 1H range or zones missing)");
-  const best = plan ? Math.max(plan.rrr?.tp1 ?? 0, plan.rrr?.tp2 ?? 0) : 0;
-  add("reward", Boolean(plan) && best >= MIN_RRR, plan ? `${best}R to the best target (at least ${MIN_RRR}R needed)` : "no plan");
+  const nearest = modeThresholds(env?.TRADING_MODE).target === "nearest";
+  if (nearest) {
+    // Scalp: the target is the nearest key level ahead (the plan's first target), whatever it pays.
+    const atLevel = Boolean(plan) && isNum(plan.tp1) && plan.tp1_note !== TP1_PROJECTION;
+    add("reward", atLevel, !plan ? "no plan" : atLevel ? `the target is the nearest key level, ${plan.tp1_note} (${plan.rrr?.tp1 ?? 0}R; scalp: no reward-to-risk minimum)` : "no key level ahead for the scalp target");
+  } else {
+    const best = plan ? Math.max(plan.rrr?.tp1 ?? 0, plan.rrr?.tp2 ?? 0) : 0;
+    add("reward", Boolean(plan) && best >= MIN_RRR, plan ? `${best}R to the best target (at least ${MIN_RRR}R needed)` : "no plan");
+  }
   const cautions = [...risk.cautions, ...contextCautions(dir, inputs.market ?? null)];
-  return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions, supports: risk.supports ?? [], min_rrr: MIN_RRR, entry_trigger: entryTrigger };
+  return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions, supports: risk.supports ?? [], min_rrr: MIN_RRR, target_rule: nearest ? "nearest" : "rrr", entry_trigger: entryTrigger };
 }
 
 /**
@@ -685,7 +694,8 @@ export function decide({ answer = null, guards, strategy = null, quorum }) {
     else if (confidence < MIN_CONFIDENCE) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "confidence", detail: `confidence ${Math.round(confidence * 100)}% is below ${Math.round(MIN_CONFIDENCE * 100)}%` }] };
     else {
       const minRrr = isNum(g.min_rrr) ? g.min_rrr : MIN_RRR;
-      trade = tradeFor(stance, g.plan, { entryType, target, minRrr });
+      // Scalp: always the nearest key level (the plan's first target), whatever the council chose.
+      trade = tradeFor(stance, g.plan, { entryType, target: g.target_rule === "nearest" ? "tp1" : target, minRrr });
       if (!trade) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "reward", detail: `no target pays ${minRrr}R` }] };
     }
     if (overruled) stance = "WAIT";
@@ -861,6 +871,18 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   return { cards, quorum, guards, market, witness_weights: { ...activeWitnessWeights(effectiveEnv) }, witness_weights_source: source, witness_weights_id: tuned?.id ?? null };
 }
 
+/** The first target's note when no key level lies ahead (src/strategy-engine.mjs tradeLevels). */
+export const TP1_PROJECTION = "a 2R projection";
+export const KEY_LEVELS_KEPT = 12;
+/** Pure: the Key Level Agent's candidate zones nearest to price ({ low, high }, lowest first), or []. */
+export function keyLevelsAround(strategy, n = KEY_LEVELS_KEPT) {
+  const price = strategy?.price;
+  const zones = (strategy?.key_levels?.zones || []).filter((z) => z?.candidate && isNum(z.low) && isNum(z.high) && z.low <= z.high);
+  if (!isNum(price) || !zones.length) return [];
+  const dist = (z) => (price < z.low ? z.low - price : price > z.high ? price - z.high : 0);
+  return zones.sort((a, b) => dist(a) - dist(b)).slice(0, n).map((z) => ({ low: r2(z.low), high: r2(z.high) })).sort((a, b) => a.low - b.low);
+}
+
 /** Pure: the whole decision record from the loaded inputs, their assessment and the council's result (or null). */
 export function buildDecisionRecord({ key, barClose, loaded, assessment = null, council = null, previous = null, now = Date.now(), decidedAt = new Date(now).toISOString(), env = null, analytics = null }) {
   const { inputs = {}, strategy = null } = loaded || {};
@@ -899,6 +921,9 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     cautions, vetoes: { long: guards.long.vetoes, short: guards.short.vetoes }, supports: { long: guards.long.supports ?? [], short: guards.short.supports ?? [] },
     context: councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, market, now }),
     strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline, price: strategy.price, atr_h1: strategy.atr_h1 } : null,
+    // The Key Level Agent's candidate zones around price, on the feed's scale (owner 2026-11-12): Omega's
+    // stop and target follow them while a position is open (src/omega-engine.mjs).
+    key_levels: keyLevelsAround(strategy),
     // The price feed the decision stood on: TradingView, or the broker's bars (MT5 fallback).
     feed: inputs?.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview",
     trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE },
