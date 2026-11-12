@@ -55,6 +55,7 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
   - **Cursors and status:** cursors live in D1 `platform_publications` (migration `0007`). `GET /api/platform/status` shows `whoami("xauusd-moderator")`, cached for 5 minutes, and the publications.
   - The platform reads this Worker only through `GET /api/decisions`, and it never writes here.
 - **Inbound from the platform (owner 2026-11-11: "buat notif telegram jika ada yang perlu approve owner di semua cerebrum"):** the Cerebrum kernel (`cryptophys-ai-kernel`, binding `OWNER_TELEGRAM`) calls this Worker's RPC entrypoint `OwnerNotifier.notify` when something waits for the owner's approval in Cerebrum (knowledge proposals, critical consensus actions, recovery plans), and when it is resolved. The text is built here from bounded fields (`src/owner-notify.mjs`: plain text, links only to the Cerebrum Console, at most 12 an hour) and sent with this Worker's own Telegram bot; the platform holds no Telegram credential. Nothing else is reachable through that entrypoint.
+- **Omega health for the platform's AI Mesh (owner 2026-11-12: "bagaimana kita juga ingin menampilkan remote vps atau omega engine dengan EA nya bisa termonitor di Ai Mesh"):** the kernel (`cryptophys-ai-kernel`, binding `XAUUSD_OMEGA_HEALTH`) calls this Worker's RPC entrypoint `OmegaHealth.health()` (`src/omega-health.mjs`, schema `omega-health.v1`). It reads the EA heartbeat (KV `ea:heartbeat:last`: age, fresh within 15 minutes, version, mode, trading allowed, open positions), the Omega control mode, and the VPS bridge's last sync (D1 `omega_bridge`: age, fresh within 2 minutes, bridge version, and the terminal's connected and trade-allowed while its state is under a minute old and the credentials are stored). It writes nothing, returns no account figure, server name or credential, and an unmeasured value is null. Nothing else is reachable through that entrypoint.
 - The AI Worker calls `AETHER` → `cryptophys-aether` `KnowledgeIngress` (Aether, the Knowledge Guardian; RFC_AETHER_KNOWLEDGE_GUARDIAN phase A5, owner go 2026-11-07). It is the second binding to a Worker outside this repository, and it adds no Worker to the topology above.
   - **Identity:** no props, no secret or token. Aether accepts calls only through a Service Binding in this account. No other Worker, and not the preview config, may carry this binding. `test/ssot-topology.test.mjs` guards it.
   - **What is sent** (`src/aether-push.mjs`, once an hour in the first parity sweep after the H1 close): the decision cards of `src/decision-cards.mjs`.
@@ -439,9 +440,9 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - Consensus Discussion: the agents whose bias differs from the room's, at most 4;
     - the moderator's macro bias for gold over the next 4 to 24 hours, with reasons and drivers. A BULLISH or BEARISH conclusion needs an agent holding it.
   - **Schedule:**
-    - 20 minutes after each 4-hour gold close and 30 minutes after a High-impact USD event (same-minute events share a session);
-    - each session once, within 3 hours, at most one per sweep;
-    - behind `MACRO_ROOM_ENABLED`, within `MACRO_ROOM_MAX_CALLS_PER_HOUR` (30); about 12 calls a session with the Oil Analyst.
+    - 20 minutes after each 1-hour gold close (owner 2026-11-11, "session update per 1H close"; after each 4-hour close before), from the cached `OANDA:XAUUSD|1h` series, until the next 1-hour close (a missed hour is not replayed); and 30 minutes after a High-impact USD event (same-minute events share a session), within 3 hours;
+    - each session once, at most one per sweep (the sweeps at :25 run the hourly session);
+    - behind `MACRO_ROOM_ENABLED`, within `MACRO_ROOM_MAX_CALLS_PER_HOUR` (30); about 12 calls a session with the Oil Analyst, so an hour with an event session stays within the limit.
   - **Context only:**
     - every room's News Analyst reads the latest conclusion (8 hours fresh);
     - the Global decision shows it as a MACRO row outside the weighted score;

@@ -12,7 +12,7 @@ import { CALENDAR_KEY } from "../src/econ-calendar.mjs";
 const H = 3_600_000;
 const NOW = Date.parse("2026-11-10T08:25:00.000Z");
 
-test("sessions: 20 minutes after a 4-hour close, 30 minutes after a high-impact USD event, each once", () => {
+test("sessions: 20 minutes after a 1-hour close, 30 minutes after a high-impact USD event, each once", () => {
   const close = "2026-11-10T08:00:00.000Z";
   const ev = [
     { title: "CPI m/m", currency: "USD", impact: "High", time: "2026-11-10T07:30:00.000Z" },
@@ -20,11 +20,12 @@ test("sessions: 20 minutes after a 4-hour close, 30 minutes after a high-impact 
     { title: "ZEW", currency: "EUR", impact: "High", time: "2026-11-10T07:30:00.000Z" },
     { title: "Crude Oil Inventories", currency: "USD", impact: "Medium", time: "2026-11-10T07:30:00.000Z" }
   ];
-  assert.deepEqual(dueSessions({ goldLastClose: close, events: ev, now: NOW }).map((s) => s.run_id), ["4h:2026-11-10T08:00:00.000Z", "event:2026-11-10T07:30:00.000Z"], "same-minute events share one session");
+  assert.deepEqual(dueSessions({ goldLastClose: close, events: ev, now: NOW }).map((s) => s.run_id), ["1h:2026-11-10T08:00:00.000Z", "event:2026-11-10T07:30:00.000Z"], "same-minute events share one session");
   assert.deepEqual(dueSessions({ goldLastClose: close, now: Date.parse("2026-11-10T08:10:00Z") }), [], "too soon after the close");
-  assert.deepEqual(dueSessions({ goldLastClose: close, now: Date.parse("2026-11-10T11:30:00Z") }), [], "the window has passed (a weekend close never runs again)");
+  assert.deepEqual(dueSessions({ goldLastClose: close, now: Date.parse("2026-11-10T08:55:00Z") }).map((s) => s.kind), ["1h"], "still due until the next 1-hour close");
+  assert.deepEqual(dueSessions({ goldLastClose: close, now: Date.parse("2026-11-10T09:01:00Z") }), [], "the window has passed at the next close (a weekend close never runs again)");
   assert.deepEqual(dueSessions({ events: ev, now: Date.parse("2026-11-10T07:50:00Z") }), [], "too soon after the event");
-  assert.deepEqual(dueSessions({ goldLastClose: close, events: ev, now: NOW, done: new Set(["4h:2026-11-10T08:00:00.000Z"]) }).map((s) => s.kind), ["event"]);
+  assert.deepEqual(dueSessions({ goldLastClose: close, events: ev, now: NOW, done: new Set(["1h:2026-11-10T08:00:00.000Z"]) }).map((s) => s.kind), ["event"]);
 });
 
 test("the Calendar Agent's bias follows the fixed rules before a release and is free after it", () => {
@@ -58,11 +59,11 @@ function fakeD1() {
   });
   return { prepare: (sql) => wrap(sql), raw: db };
 }
-function series(first, last, count = 40) {
+function series(first, last, count = 40, span = 4 * H) {
   const end = Date.parse("2026-11-10T08:00:00.000Z");
   return JSON.stringify({ candles: Array.from({ length: count }, (_, i) => {
-    const open = end - (count - i) * 4 * H, c = first + ((last - first) * i) / (count - 1) + (i % 3) * 0.1;
-    return { open_time: new Date(open).toISOString(), close_time: new Date(open + 4 * H).toISOString(), open: c, high: c + 1, low: c - 1, close: c };
+    const open = end - (count - i) * span, c = first + ((last - first) * i) / (count - 1) + (i % 3) * 0.1;
+    return { open_time: new Date(open).toISOString(), close_time: new Date(open + span).toISOString(), open: c, high: c + 1, low: c - 1, close: c };
   }) });
 }
 /** Agents answer from their id: the dollar and yields fall (gold up); the calendar holds its rule. */
@@ -90,6 +91,8 @@ function fakeAI() {
 function makeEnv() {
   const m = new Map(Object.entries({
     "market-data:v2:series:OANDA:XAUUSD|4h": series(4000, 4080),
+    // The hourly session starts from the gold 1-hour close (owner 2026-11-11), the last one at 08:00.
+    "market-data:v2:series:OANDA:XAUUSD|1h": series(4060, 4080, 40, H),
     "market-data:v2:series:TVC:DXY|4h": series(101, 99),
     "market-data:v2:series:TVC:US10Y|4h": series(4.4, 4.2),
     "market-data:v2:series:OANDA:XAGUSD|4h": series(48, 49),
@@ -103,7 +106,7 @@ test("a session: bus, Consensus Discussion, conclusion; read back, fed to the de
   const env = makeEnv();
   const clock = () => NOW;
   const r = await runPendingMacroRooms(env, { now: NOW, clock });
-  assert.equal(r.session, "4h:2026-11-10T08:00:00.000Z");
+  assert.equal(r.session, "1h:2026-11-10T08:00:00.000Z");
   assert.equal(r.status, "complete");
   assert.equal(r.openings, 5, "no News Daily yet: five agents");
   const calText = env.AI.calls.find((t) => /"agent":"calendar"/.test(t) && !/Consensus Discussion/.test(t));
@@ -114,10 +117,10 @@ test("a session: bus, Consensus Discussion, conclusion; read back, fed to the de
   assert.deepEqual(m.conclusion.drivers, ["Dollar Analyst", "Rates Analyst"]);
   assert.ok(m.debate.some((d) => d.agent === "calendar"), "the dissenting Calendar Agent answers in the discussion");
   assert.equal(m.openings.find((o) => o.agent === "calendar").bias, "BEARISH");
-  assert.deepEqual(await macroDeskEvidence(env.DB, { now: NOW }), { macro_bias: "BULLISH", confidence: 0.62, summary: m.conclusion.summary, horizon: "next 4 to 24 hours", session: "after a 4-hour close" });
+  assert.deepEqual(await macroDeskEvidence(env.DB, { now: NOW }), { macro_bias: "BULLISH", confidence: 0.62, summary: m.conclusion.summary, horizon: "next 4 to 24 hours", session: "after a 1-hour close" });
   assert.equal(await macroDeskEvidence(env.DB, { now: NOW + 9 * H }), null, "stale after 8 hours");
   const before = env.AI.calls.length;
-  assert.equal((await runMacroRoom(env, { run_id: r.session, kind: "4h", at: "2026-11-10T08:00:00.000Z" }, { clock, now: NOW })).status, "already_complete");
+  assert.equal((await runMacroRoom(env, { run_id: r.session, kind: "1h", at: "2026-11-10T08:00:00.000Z" }, { clock, now: NOW })).status, "already_complete");
   assert.equal((await runPendingMacroRooms(env, { now: NOW, clock })).status, "idle");
   assert.equal(env.AI.calls.length, before, "a concluded session never spends again");
   const g = buildGlobalConclusion({ macro: m, now: NOW });

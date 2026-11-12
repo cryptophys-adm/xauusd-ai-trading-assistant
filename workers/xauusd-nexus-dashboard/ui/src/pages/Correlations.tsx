@@ -21,7 +21,8 @@ const ROSTER: [string, string][] = [
   ["Oil Analyst", "WTI crude oil and the geopolitical headlines: supply shocks and conflict feeding inflation and safe-haven demand"],
   ["Correlation Analyst", "whether the usual links between gold, the dollar, yields, silver and oil hold now"]
 ];
-const sessionWord = (m: any) => (m?.kind === "event" ? "30 minutes after a high-impact US event" : "after a 4-hour close");
+// src/macro-room.mjs macroSessionWord: hourly since 2026-11-11; stored 4-hour sessions keep their name.
+const sessionWord = (m: any) => (m?.kind === "event" ? "30 minutes after a high-impact US event" : m?.kind === "event2" || m?.kind === "event_follow_up" ? "2 hours after a high-impact US event" : m?.kind === "4h" ? "after a 4-hour close" : "after a 1-hour close");
 
 /**
  * Macro War Room (owner decision 2026-11-08): the Calendar Agent, the News Analyst and the dollar,
@@ -34,10 +35,10 @@ function MacroRoom() {
   const c = m?.conclusion?.status === "ok" ? m.conclusion : null;
   return (
     <Panel title="Macro War Room" icon={<Globe2 className="h-3.5 w-3.5 text-cyan-300" />} right={<span className="flex gap-1">{m?.stale ? <Badge tone="amber">stale</Badge> : null}<Badge tone="cyan">context only · never decides</Badge></span>}>
-      <p className="mb-3 text-[12px] leading-relaxed text-slate-400">The Calendar Agent, the News Analyst and the dollar, yields, silver, oil and correlation analysts discuss what moves gold. Oil is the geopolitical and inflation channel. The room meets 20 minutes after every 4-hour close and 30 minutes after a high-impact US event; the moderator concludes the macro bias for the next 4 to 24 hours. Every room's News Analyst reads it, and the Global decision shows it as the MACRO row.</p>
+      <p className="mb-3 text-[12px] leading-relaxed text-slate-400">The Calendar Agent, the News Analyst and the dollar, yields, silver, oil and correlation analysts discuss what moves gold. Oil is the geopolitical and inflation channel. The room meets 20 minutes after every 1-hour close and 30 minutes after a high-impact US event; the moderator concludes the macro bias for the next 4 to 24 hours. Every room's News Analyst reads it, and the Global decision shows it as the MACRO row.</p>
       {loading && !data ? <Skeleton rows={4} /> : !m ? (
         <div className="space-y-3">
-          <Empty>The Macro War Room has not met yet. Its first session is 20 minutes after the first 4-hour close once the market reopens (Sunday evening UTC), or 30 minutes after a high-impact US event.</Empty>
+          <Empty>The Macro War Room has not met yet. Its first session is 20 minutes after the first 1-hour close once the market reopens (Sunday evening UTC), or 30 minutes after a high-impact US event.</Empty>
           <div>
             <div className="eyebrow mb-1.5 text-[10px]">Agents</div>
             <div className="grid gap-2 md:grid-cols-2">
