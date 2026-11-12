@@ -924,6 +924,9 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     // The Key Level Agent's candidate zones around price, on the feed's scale (owner 2026-11-12): Omega's
     // stop and target follow them while a position is open (src/omega-engine.mjs).
     key_levels: keyLevelsAround(strategy),
+    // The Projection Agent's chart patterns behind those levels (src/chart-patterns.mjs): which pattern, on
+    // which chart, and whether it broke out; kept so each pattern's outcome on gold can be measured.
+    chart_patterns: (strategy?.key_levels?.patterns || []).slice(0, 16).map((p) => ({ tf: p.tf, id: p.id, status: p.status, direction: p.direction, upper: p.upper, lower: p.lower, target: p.target })),
     // The price feed the decision stood on: TradingView, or the broker's bars (MT5 fallback).
     feed: inputs?.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview",
     trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE },

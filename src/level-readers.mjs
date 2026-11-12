@@ -11,7 +11,10 @@
 //                     0.8, LVN 0.5 (a thin area price crosses fast, not a wall).
 //   Projection Agent  Fibonacci OTE 0.618 and 0.786 0.8, 0.5 0.6, extensions 1.272 and 1.618 0.7
 //                     (targets), the probability cone p90/p10 0.4, the tactical trendlines at the bar
-//                     0.5, PA support and resistance 0.6.
+//                     0.5, PA support and resistance 0.6. Since 2026-11-12 also the chart patterns of
+//                     each chart's closed bars (src/chart-patterns.mjs: 53 chart patterns and the event
+//                     patterns that exist for gold): breakout lines, broken lines and measured targets,
+//                     added by the Key Level Agent under this reader.
 //   Session Agent     True Openings: month 1.0, year 1.0, week and day 0.8, Asia, London, NY AM, NY PM
 //                     0.5; the trading day open 0.6 and week open 0.8; the session profile POC 0.9,
 //                     VAH and VAL 0.8. Session levels are one value for every chart, so they carry
@@ -23,7 +26,7 @@ export const LEVEL_READERS_VERSION = "cryptophys.level-readers.v1";
 export const READERS = Object.freeze({
   band: { name: "Band Agent", role: "where price is stretched from its mean (KWW, EMA 114, VWAP, TVA)" },
   liquidity: { name: "Liquidity Agent", role: "where orders wait (FVG, whale zones, QM, RBS/SBR, LVN/HVN)" },
-  projection: { name: "Projection Agent", role: "where a move projects (Fibonacci, the probability cone, trendlines)" },
+  projection: { name: "Projection Agent", role: "where a move projects (Fibonacci, the probability cone, trendlines, chart patterns)" },
   session: { name: "Session Agent", role: "the opens and the session volume profile" }
 });
 

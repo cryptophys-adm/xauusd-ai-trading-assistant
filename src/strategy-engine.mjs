@@ -23,6 +23,7 @@ import { readNewsDaily } from "./news-daily.mjs";
 import { loadHudSnapshot } from "./hud-store.mjs";
 import { buildKeyLevels } from "./key-level-agent.mjs";
 import { eventRisk, eventCaution, gatedEvents } from "./econ-calendar.mjs";
+import { recentReleases } from "./econ-releases.mjs";
 import { verifiedM5Confirmation } from "./m5-verification.mjs";
 import { setupType } from "./level-readers.mjs";
 import { orderImbalance } from "./producer/m5-orderbook.mjs";
@@ -267,7 +268,7 @@ export function triggerOf(dir, { confirmations, m15Snapshot }) {
  * Pure: the strategy from the four War Rooms (every agent's bias), News Daily, the 1H and 15m HUD
  * snapshots, the latest confirmations and the closed 1H and 15m bars.
  */
-export function buildStrategy({ rooms = {}, news = null, macro = null, macroScore = null, mode = null, tradingMode = null, env = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, calendar = null, m5Price = null, now = Date.now() } = {}, params = STRATEGY_PARAMS) {
+export function buildStrategy({ rooms = {}, news = null, macro = null, macroScore = null, mode = null, tradingMode = null, env = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, calendar = null, releases = [], m5Price = null, now = Date.now() } = {}, params = STRATEGY_PARAMS) {
   const P = params === STRATEGY_PARAMS ? params : { ...STRATEGY_PARAMS, ...params };
   const LEAN = P.lean, MIN_RRR = P.min_rrr, MIN_CONFIDENCE = P.min_confidence;
   const layers = Object.fromEntries(["D1", "H4", "H1", "M15"].map((k) => [k, roomLayer(k, rooms[k], now)]));
@@ -297,7 +298,9 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
   // Key Level Agent (owner decision 2026-11-06): the zones where the key levels of every chart stack.
   const keyLevelReading = buildKeyLevels({
     snapshots: { "15": m15Snapshot, "60": h1Snapshot, "240": h4Snapshot, "1D": d1Snapshot },
-    bars: { M15: m15Bars, H1: h1Bars, H4: h4Bars, D1: d1Bars, W1: w1Bars }, price, atrH1
+    bars: { M15: m15Bars, H1: h1Bars, H4: h4Bars, D1: d1Bars, W1: w1Bars }, price, atrH1,
+    // The Projection Agent's chart patterns (owner 2026-11-12); the released figures feed the event patterns.
+    patterns: chartPatternsMode(env), events: releases
   });
   const levels = zoneLevels(keyLevelReading.zones);
   const zones = { ...(m15Snapshot?.huds?.aegis_footprint?.fields || {}), ...(m15Snapshot?.huds?.gabfx_price_action?.fields || {}) };
@@ -408,8 +411,15 @@ export async function loadStrategyInputs(env, { now = Date.now(), m5Context = nu
     h1Chain: m15?.h1 ?? h1?.h1 ?? null,
     // The gated economic events around now (backlog 11.1); a missing calendar gives no caution.
     calendar: { events: await gatedEvents(env, { now }).catch(() => []) },
+    // The released figures with a direction for gold: the events of the Projection Agent's event patterns.
+    releases: (await safe(() => recentReleases(env, { now }))) ?? [],
     now
   };
+}
+
+/** The Projection Agent's chart patterns: CHART_PATTERNS_MODE = "on" (default) | "off". */
+export function chartPatternsMode(env) {
+  return String(env?.CHART_PATTERNS_MODE ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
 }
 
 /** The strategy from the live inputs (GET /api/strategy). */
