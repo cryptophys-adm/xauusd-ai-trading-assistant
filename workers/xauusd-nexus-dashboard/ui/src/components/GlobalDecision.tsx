@@ -6,6 +6,7 @@ import { DivergingBar, leanColor } from "./charts";
 import { useMarket, leanLabel } from "../lib/market";
 import { useWarRoom } from "../lib/warroom";
 import { candleWhen, pct, utc } from "../lib/format";
+import SetupLifecycle, { zoneAt } from "./SetupLifecycle";
 
 const STATE_TEXT: Record<string, { label: string; tone: "green" | "amber" | "red" | "cyan" | "slate" | "purple" }> = {
   TRIGGERED: { label: "triggered", tone: "green" },
@@ -126,10 +127,41 @@ const STATUS_NOTE: Record<WitnessStatus, string | null> = {
   no_data: "nothing to read: left out of the quorum"
 };
 
-/** The trade of a decision as the plan ladder's input (the chosen target carries its note). */
-function tradePlan(t: any) {
-  return { entry: t.entry, stop: t.stop, tp1: t.tp1, tp2: t.tp2, risk: t.risk, rrr: t.rrr_all, at_level: t.at_level, entry_note: t.entry_note, stop_note: t.stop_note, progressive_stop: t.progressive_stop, tp1_note: t.target === "tp1" ? `target · ${t.tp_note ?? ""}` : "", tp2_note: t.target === "tp2" ? `target · ${t.tp_note ?? ""}` : "" };
+/** The trade of a decision as the plan ladder's input (the chosen target carries its note; the entry its key-level zone). */
+function tradePlan(t: any, levels?: any[]) {
+  const z = zoneAt(levels, t.entry);
+  return { entry: t.entry, stop: t.stop, tp1: t.tp1, tp2: t.tp2, risk: t.risk, rrr: t.rrr_all, at_level: t.at_level, entry_note: [z ? `zone ${z.low.toFixed(2)}–${z.high.toFixed(2)}` : null, t.entry_note].filter(Boolean).join(" · "), stop_note: t.stop_note, progressive_stop: t.progressive_stop, tp1_note: t.target === "tp1" ? `target · ${t.tp_note ?? ""}` : "", tp2_note: t.target === "tp2" ? `target · ${t.tp_note ?? ""}` : "" };
 }
+
+/**
+ * The witnesses' lean split into the technical side (the rooms, the strategy engine, key levels, regime,
+ * trend) and the fundamental side (news, the macro room, the dollar and yields, the calendar), each the
+ * weighted mean lean of its witnesses that count, with its share of the weight (owner 2026-11-12). The
+ * session is context and weighs nothing.
+ */
+const TECH = new Set(["D1", "H4", "H1", "M15", "STRATEGY", "KEY_LEVELS", "REGIME", "TREND_TF"]);
+const FUND = new Set(["NEWS", "MACRO", "MACRO_DRIVERS", "CALENDAR"]);
+function biasSplit(witnesses: any[] = []) {
+  const counted = witnesses.filter((w) => { const st = witnessStatus(w); return (st === "counts" || st === "neutral") && w.weight > 0; });
+  const total = counted.reduce((t, w) => t + w.weight, 0);
+  const side = (set: Set<string>) => {
+    const ws = counted.filter((w) => set.has(w.key));
+    const wt = ws.reduce((t, w) => t + w.weight, 0);
+    return wt > 0 ? { lean: ws.reduce((t, w) => t + w.weight * w.lean, 0) / wt, share: total > 0 ? wt / total : 0 } : null;
+  };
+  return { tech: side(TECH), fund: side(FUND) };
+}
+const signed = (x: number) => `${x > 0 ? "+" : ""}${Math.round(x * 100)}`;
+
+/** Seconds to `ms` (re-rendered every second while mounted). */
+function useCountdown(ms: number | null) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const id = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(id); }, []);
+  return ms == null ? null : Math.max(0, Math.round((ms - now) / 1000));
+}
+const mmss = (sec: number) => `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`;
+
+const TREND_TONE: Record<string, string> = { up: "text-emerald-300", down: "text-rose-300", expanding: "text-amber-300", contracting: "text-slate-300" };
 
 /**
  * Decision Engine (owner decisions 2026-11-09): the ONE decision, the single SSOT for the EA, Telegram,
@@ -139,7 +171,15 @@ function tradePlan(t: any) {
  * off), the card shows the strategy engine's view as before. From GET /api/conclusion/global.
  */
 export default function GlobalDecision() {
-  const { global: g, engine: e, loading } = useMarket();
+  const { global: g, engine: e, setups, loading } = useMarket();
+  // The live setups (levels locked at their decision); without one, the last that ended in the past 2 hours.
+  const live = (setups ?? []).filter((x: any) => x.status === "pending" || x.status === "open");
+  const shown = live.length ? live : (setups ?? []).slice(0, 1);
+  // The decision's own plan is shown only when no live setup of its side holds locked levels already.
+  const planIsNew = !!e?.trade && !live.some((x: any) => x.side === e.trade.side);
+  const nextClose = e?.bar_close ? Date.parse(e.bar_close) + 15 * 60_000 : null;
+  const left = useCountdown(nextClose);
+  const split = e ? biasSplit(e.witnesses) : null;
   const { room } = useWarRoom();
   const s = g?.strategy ?? null;
   const st = s ? STATE_TEXT[s.state] ?? { label: String(s.state).toLowerCase(), tone: "slate" as const } : null;
@@ -183,7 +223,30 @@ export default function GlobalDecision() {
                 <div className="flex flex-col gap-1 pb-1">
                   <span className="eyebrow text-[9px]" title="The witnesses' weighted lean">Quorum</span>
                   <span className="mono whitespace-nowrap text-[13px] font-bold text-slate-200">{e.quorum?.score != null ? `${e.quorum.score > 0 ? "+" : ""}${Math.round(e.quorum.score * 100)}` : "—"}<span className="ml-1 text-[10px] font-normal text-slate-500">▲{pct(e.quorum?.long_share)} ▼{pct(e.quorum?.short_share)}</span></span>
+                  {/* All the witnesses' weight: leaning long, neither way, short. The quorum's ▲▼ shares are of the
+                      directional weight only, so here they are scaled by it (1 - the neutral share). */}
+                  {(() => {
+                    const n = e.quorum?.neutral_share ?? 0, dir = Math.max(0, 1 - n);
+                    const lo = (e.quorum?.long_share ?? 0) * dir, sh = (e.quorum?.short_share ?? 0) * dir;
+                    return (
+                      <div className="flex h-1.5 w-32 overflow-hidden rounded-full bg-white/5" title={`of all the witnesses' weight: ${pct(lo)} leans long, ${pct(n)} neither way, ${pct(sh)} short`}>
+                        <span className="bg-emerald-400/80" style={{ width: `${lo * 100}%` }} />
+                        <span className="bg-slate-500/60" style={{ width: `${n * 100}%` }} />
+                        <span className="bg-rose-400/80" style={{ width: `${sh * 100}%` }} />
+                      </div>
+                    );
+                  })()}
                 </div>
+                {split && (split.tech || split.fund) && (
+                  <div className="flex flex-col gap-1 pb-1" title="The weighted lean of the technical witnesses (rooms, strategy, key levels, regime, trend) and of the fundamental ones (news, macro, dollar and yields, calendar), with their share of the weight">
+                    <span className="eyebrow text-[9px]">Technical · Fundamental</span>
+                    <span className="mono whitespace-nowrap text-[12px] font-bold">
+                      {split.tech ? <span className={split.tech.lean > 0 ? "text-emerald-300" : split.tech.lean < 0 ? "text-rose-300" : "text-slate-300"}>{signed(split.tech.lean)}<span className="ml-0.5 text-[10px] font-normal text-slate-500">{pct(split.tech.share)}</span></span> : "—"}
+                      <span className="mx-1.5 text-slate-600">·</span>
+                      {split.fund ? <span className={split.fund.lean > 0 ? "text-emerald-300" : split.fund.lean < 0 ? "text-rose-300" : "text-slate-300"}>{signed(split.fund.lean)}<span className="ml-0.5 text-[10px] font-normal text-slate-500">{pct(split.fund.share)}</span></span> : "—"}
+                    </span>
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -203,12 +266,22 @@ export default function GlobalDecision() {
           {e ? (
             <div className="mono mt-2 text-[11px] text-slate-400">
               confidence {pct(e.confidence)} · 15m close {utc(e.bar_close)} · decided in {e.latency_seconds}s{e.strategy?.price != null ? ` · price ${e.strategy.price.toFixed(2)}` : ""}
+              {left != null && <span className={left > 0 ? "text-cyan-300" : "text-slate-500"} title={e.trade ? "The signal is valid until the next 15m close, when the next decision replaces it" : "The next decision comes after the next 15m close"}> · {e.trade ? "valid" : "next decision"} {left > 0 ? `${mmss(left)}` : "due"}</span>}
             </div>
           ) : s && (
             <div className="mono mt-2 text-[11px] text-slate-400">
               confidence {pct(s.confidence)}{s.price != null ? ` · price ${s.price.toFixed(2)}` : ""}{s.atr_h1 != null ? ` · 1H ATR ${s.atr_h1}` : ""}
             </div>
           )}
+          {e?.structure && (e.structure.h4 || e.structure.h1 || e.structure.m15) && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10.5px]" aria-label="Swing structure" title="The last two confirmed swing highs (HH higher / LH lower) and lows (HL higher / LL lower) of each chart: display only, not a witness">
+              <span className="eyebrow text-[9px]">Structure</span>
+              {([["4H", e.structure.h4], ["1H", e.structure.h1], ["15m", e.structure.m15]] as const).map(([k, v]: any) => (
+                <span key={k} className="mono rounded-full border border-white/10 px-1.5 py-0.5"><span className="text-slate-400">{k}</span> <span className={v ? TREND_TONE[v.trend] ?? "text-slate-300" : "text-slate-600"}>{v?.label ?? "—"}</span></span>
+              ))}
+            </div>
+          )}
+          {e && shown.map((x: any) => <SetupLifecycle key={x.id} setup={x} levels={e.key_levels} />)}
           {e && (
             <div className="glass-inner mt-3 flex flex-wrap items-center gap-2 px-3 py-2 text-[11px] text-slate-300">
               <span className="eyebrow text-[9px]">Mode</span>
@@ -217,8 +290,6 @@ export default function GlobalDecision() {
                 <option value="intraday">intraday</option>
                 <option value="swing">swing</option>
               </select>
-              <span className="ml-2 eyebrow text-[9px]">Live metrics</span>
-              <span className="mono">conf {pct(e.confidence)} · quorum {pct(e.quorum?.long_share)}/{pct(e.quorum?.short_share)} · latency {e.latency_seconds}s</span>
             </div>
           )}
           <p className="glass-inner mt-3 px-3 py-2.5 text-[11.5px] leading-relaxed text-slate-200">{e?.summary ?? s?.headline ?? g.summary}</p>
@@ -266,7 +337,7 @@ export default function GlobalDecision() {
 
           {e && <MarketContext c={e.context?.market} />}
 
-          {e?.trade ? <PlanLadder plan={tradePlan(e.trade)} long={e.trade.side === "BUY"} minRrr={e.rules?.min_rrr ?? 1.5} /> : !e && s?.plan && <PlanLadder plan={s.plan} long={s.direction === "LONG"} minRrr={s.min_rrr ?? 1.5} />}
+          {e?.trade ? (planIsNew ? <PlanLadder plan={tradePlan(e.trade, e.key_levels)} long={e.trade.side === "BUY"} minRrr={e.rules?.min_rrr ?? 1.5} /> : <p className="mt-3 text-[10.5px] text-slate-500">This {e.trade.side} confirms the live setup above; its levels stay as they were locked.</p>) : !e && s?.plan && <PlanLadder plan={s.plan} long={s.direction === "LONG"} minRrr={s.min_rrr ?? 1.5} />}
 
           {e ? !!e.cautions?.length && (
             <ul className="mt-3 space-y-1 text-[11px]">

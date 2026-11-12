@@ -266,6 +266,7 @@ test("/api/hud/levels and /api/conclusion/global answer as routes of their own (
   assert.equal(g.status, 200);
   assert.equal(g.body.status, "ok");
   assert.equal(g.body.global.action, "WAIT");
+  assert.deepEqual(g.body.setups, [], "the live setups travel with the decision (none here)");
 });
 
 test("H1 by Consensus Discussion: the sweep has the Reasoner decide a parked bar after its room, once; an empty room is a fail-closed WAIT (owner decision 2026-11-07)", async () => {

@@ -6,3 +6,4 @@ export function ensureLedgerSchema(db: unknown): Promise<void>;
 export function ingestStrategy(env: unknown, strategy: any, options?: { now?: number }): Promise<number>;
 export function ingestDecision(env: unknown, decision: any, options?: { now?: number }): Promise<number>;
 export function readExecutionReport(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function activeSetups(env: unknown, options?: { now?: number; limit?: number }): Promise<any[]>;
