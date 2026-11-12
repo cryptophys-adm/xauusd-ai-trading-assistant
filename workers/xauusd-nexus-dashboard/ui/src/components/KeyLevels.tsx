@@ -5,6 +5,7 @@ import { C } from "./charts";
 import { useMarket } from "../lib/market";
 import { tabLabel } from "../lib/tab";
 import { utc } from "../lib/format";
+import { nearestCandidates } from "../lib/keyZones";
 
 const ROLE_COLOR: Record<string, string> = { support: C.bull, resistance: C.bear, "at price": C.cyan };
 const OPACITY: Record<string, number> = { strong: 0.55, medium: 0.35, weak: 0.18 };
@@ -151,8 +152,7 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
   const hasK = k && isNum(k.price);
   // The six candidates nearest to price, listed by price from the highest down, as on the map (owner
   // 2026-11-11: "disusun sesuai level harga supaya tidak ambigu"), with the price row where it falls.
-  const cands = hasK ? ((k.candidates ?? []) as any[]).slice().sort((a, b) => Math.abs(a.price - k.price) - Math.abs(b.price - k.price)).slice(0, 6)
-    .sort((a, b) => b.high - a.high || b.low - a.low) : [];
+  const cands = hasK ? (nearestCandidates(k, 6) as any[]) : [];
   const priceRow = hasK ? cands.filter((z) => (z.low + z.high) / 2 > k.price).length : -1;
   const busy = (loading && !g) || (levelsLoading && !levels);
   return (

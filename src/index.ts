@@ -228,6 +228,7 @@ import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weight
 import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
 import { omegaHealth } from "./omega-health.mjs";
+import { organismStatus } from "./organism-status.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition } from "./omega-broker.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
@@ -2460,46 +2461,9 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     }
   }
   if (url.pathname === "/api/organism/status") {
+    // Measured only (owner 2026-11-12): no treasury, quota or sync label that nothing measured.
     try {
-      const d = new Date();
-      const day = d.getUTCDay();
-      const hour = d.getUTCHours();
-      const isWeekend = (day === 5 && hour >= 22) || day === 6 || (day === 0 && hour < 22);
-      let dealsCount = 0;
-      let totalProfit = 0;
-      try {
-        const deals = await listDeals(env, { limit: 50 });
-        dealsCount = deals.length;
-        totalProfit = deals.reduce((acc, deal) => acc + (Number(deal.profit) || 0), 0);
-      } catch {}
-      const mode = isWeekend ? "SURVIVAL (HIBERNATING)" : "GROWTH";
-      const balanceUsd = 500.00;
-      const dailyBurnUsd = isWeekend ? 0.60 : 2.40;
-      const runwayDays = Math.floor(balanceUsd / dailyBurnUsd);
-      const aiQuotaPercent = isWeekend ? 25 : 150;
-      return dashboardJson({
-        status: "ok",
-        organism: {
-          lifecycle: "autonomous",
-          mode,
-          market_state: isWeekend ? "closed" : "open",
-          treasury: {
-            balance_usd: balanceUsd,
-            daily_burn_usd: dailyBurnUsd,
-            runway_days: runwayDays,
-            power_mode: mode.split(" ")[0],
-            ai_quota_percent: aiQuotaPercent
-          },
-          nervous_system: {
-            decision_engine_ssot: "15m",
-            deals_count: dealsCount,
-            net_profit_estimate: totalProfit,
-            omega_bridge: env.OMEGA_ENGINE_ENABLED === "true" ? "armed" : "standby",
-            canon_sync: "synchronized"
-          }
-        },
-        timestamp: new Date().toISOString()
-      });
+      return dashboardJson({ status: "ok", organism: await organismStatus(env), timestamp: new Date().toISOString() });
     } catch (error) {
       console.error("organism_status_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
