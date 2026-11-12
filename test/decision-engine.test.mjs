@@ -270,12 +270,17 @@ test("the market context: the session with day, date and market state; regime; m
   const reg = regimeOf({ huds: { prophet: { fields: { hurst: 0.7, efficiency_ratio: 0.6, kww_zscore: 2.8 } }, kinetic_engine: { fields: { is_chaos: false, entropy: 0.4 } } } }, "high-trending");
   assert.deepEqual([reg.label, reg.character, reg.chaos, reg.stretch_z], ["high-trending", "trending", false, 2.8]);
   assert.equal(regimeOf(null).character, null);
-  const macro = macroDriversOf({ gold: { change_24h_percent: 0.8 }, dollar: { change_24h_percent: -0.42 }, oil: { change_24h_percent: 1.1 } });
+  const MON = Date.parse("2026-11-09T13:20:00Z"), DXY_AT = "2026-11-09T12:00:00.000Z";
+  const macro = macroDriversOf({ gold: { change_24h_percent: 0.8 }, dollar: { change_24h_percent: -0.42, as_of: DXY_AT }, oil: { change_24h_percent: 1.1 } }, null, MON);
   assert.deepEqual(macro.change_24h_percent, { gold: 0.8, dollar: -0.42, oil: 1.1, usdt_dominance: null });
   assert.equal(macro.gold_dollar_link, "inverse (usual)");
   assert.equal(macro.lean, 0.84, "a falling dollar pulls gold up");
+  // 2026-11-12: a dollar change whose last DXY bar closed over 8 hours ago (or at an unknown time) is left out.
+  const old = macroDriversOf({ gold: { change_24h_percent: 0.8 }, dollar: { change_24h_percent: -0.42, as_of: DXY_AT } }, null, MON + 9 * 3_600_000);
+  assert.deepEqual([old.change_24h_percent.dollar, old.dollar_stale, old.lean, old.gold_dollar_link], [null, true, null, null]);
+  assert.equal(macroDriversOf({ dollar: { change_24h_percent: -0.42 } }, null, MON).dollar_stale, true, "no time: stale");
   assert.deepEqual(sentimentOf({ quorum: { score: 0.42, bias: "BULLISH" }, news: { counts: { bullish: 5, bearish: 2 } } }).headlines, { bullish: 5, bearish: 2, neutral: 0 });
-  const fri = { session: sessionAt(Date.parse("2026-11-13T21:00:00Z")), regime: { h1: { stretch_z: -2.6 } }, macro_drivers: macroDriversOf({ dollar: { change_24h_percent: -0.42 } }) };
+  const fri = { session: sessionAt(Date.parse("2026-11-13T21:00:00Z")), regime: { h1: { stretch_z: -2.6 } }, macro_drivers: macroDriversOf({ dollar: { change_24h_percent: -0.42, as_of: "2026-11-13T20:00:00.000Z" } }, null, Date.parse("2026-11-13T21:00:00Z")) };
   const cautions = contextCautions(-1, fri);
   assert.equal(cautions.length, 3, JSON.stringify(cautions));
   assert.match(cautions.join(" | "), /closes for the weekend in 60 minutes/);
@@ -336,9 +341,23 @@ test("the extended witnesses are independent: price vs zones, 1H trend quality, 
   assert.match(tt.summary, /^D1 \+1, 4H \+1, 1H -/);
   assert.ok(tt.lean > 0.5);
   assert.equal(trendTfLean({}), null);
-  const md = macroDriversLean({ newsContext: { dollar: { change_24h_percent: 0.25 } }, correlations: { assets: [{ id: "us10y", available: true, change: { "1d": 5 } }] } });
-  assert.equal(md.lean, -0.5, "a stronger dollar and higher yields weigh on gold");
+  const T = Date.parse("2026-11-12T10:30:00Z"), BAR = "2026-11-12T08:00:00.000Z", OLD = "2026-11-11T12:00:00.000Z";
+  const ctx = (as_of) => ({ dollar: { change_24h_percent: 0.25, as_of } });
+  const us10 = (last_close_time) => ({ assets: [{ id: "us10y", available: true, last_close_time, change: { "1d": 5 } }] });
+  const md = macroDriversLean({ newsContext: ctx(BAR), correlations: us10(BAR), now: T });
+  assert.deepEqual([md.lean, md.stale, md.as_of], [-0.5, false, BAR], "a stronger dollar and higher yields weigh on gold");
   assert.equal(macroDriversLean({}), null);
+  // Freshness (owner 2026-11-12): each input counts while its last 4-hour bar closed within 8 hours.
+  const yieldsOnly = macroDriversLean({ newsContext: ctx(OLD), correlations: us10(BAR), now: T });
+  assert.deepEqual([yieldsOnly.lean, yieldsOnly.stale], [-0.5, false], "the stale dollar drops out; the yields carry the lean");
+  assert.match(yieldsOnly.summary, /^US 10-year \+5 bp in a day \(left out, stale: DXY last bar 2026-11-11T12:00:00.000Z\)$/);
+  const both = macroDriversLean({ newsContext: ctx(OLD), correlations: us10(OLD), now: T });
+  assert.deepEqual([both.lean, both.stale], [null, true], "both stale: the witness is stale");
+  assert.equal(macroDriversLean({ newsContext: { dollar: { change_24h_percent: 0.25 } }, now: T }).stale, true, "no time: stale");
+  const cards = witnessCards({ global: globalOf(), strategy: STRATEGY, context: { session: sessionAt(T), independent: { macro_drivers: both } }, env: { GLOBAL_DECISION_WEIGHTED: "true" } });
+  const card = cards.find((c) => c.key === "MACRO_DRIVERS");
+  assert.deepEqual([card.available, card.stale], [false, true], "shown stale, not counted");
+  assert.equal(quorumOf(cards).witnesses, quorumOf(cards.filter((c) => c.key !== "MACRO_DRIVERS")).witnesses);
   // Independence: flipping the strategy engine's direction changes none of them.
   const loaded = { inputs: { h1Bars: up, d1Bars: bars(30, 5), h4Bars: bars(30, 2), news: { context: { dollar: { change_24h_percent: -0.2 } } } }, strategy: { ...STRATEGY, direction: "LONG", alignment: 0.9 } };
   const a = independentWitnesses(loaded), b = independentWitnesses({ ...loaded, strategy: { ...loaded.strategy, direction: "SHORT", alignment: 0.1, plan: null } });
