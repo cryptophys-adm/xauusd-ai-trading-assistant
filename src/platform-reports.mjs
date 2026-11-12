@@ -8,7 +8,10 @@
 //   - xauusd-reasoner: every new H1 chain decision (warning on a BUY<->SELL flip);
 //   - xauusd-moderator: the War Room conclusion when its stance changes, otherwise at
 //     most once an hour;
-//   - hud-*: a HUD agent's War Room stance when it moves into or out of BUY/SELL.
+//   - hud-*: one report per HUD agent per 15-minute sweep at most (the kernel allows 4 an hour), over
+//     the 15m War Room and the 1H, 4H and 1D rooms: when a stance moves into or out of BUY/SELL or the
+//     directional bias flips (BULLISH<->BEARISH) on any timeframe, otherwise a heartbeat with the
+//     agent's reading on every timeframe when it has published nothing for 6 hours.
 //
 // Rules (platform contract, docs/SSOT.md §2):
 //   - Advisory observations only: no order wording, no size, no lots, no levels.
@@ -21,9 +24,12 @@
 //   - `critical` is never used here; it opens a GitHub issue on the platform.
 
 import { readWarRoom } from "./war-room.mjs";
+import { HUD_NAMES } from "./hud-reading.mjs";
 
 export const PLATFORM_HOST_WORKER = "xauusd-ai-trading-assistant";
 export const PLATFORM_CALL_TIMEOUT_MS = 5000;
+export const PLATFORM_REPORT_TIMEOUT_MS = 15000;
+export const HUD_HEARTBEAT_MS = 6 * 3_600_000;
 export const MODERATOR_HEARTBEAT_MS = 55 * 60_000;
 const SYMBOL = "OANDA:XAUUSD";
 const DIRECTIONAL = new Set(["BUY", "SELL"]);
@@ -45,10 +51,14 @@ export const HUD_PLATFORM_IDS = Object.freeze({
 export const PUBLICATIONS_SCHEMA_SQL =
   "CREATE TABLE IF NOT EXISTS platform_publications (agent_id TEXT PRIMARY KEY, last_key TEXT, last_stance TEXT, published_at TEXT, outcome TEXT, reason TEXT, report_id TEXT, attempts INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)";
 
+export const HUD_CURSORS_SCHEMA_SQL =
+  "CREATE TABLE IF NOT EXISTS platform_hud_cursors (agent_id TEXT NOT NULL, timeframe TEXT NOT NULL, last_key TEXT, last_stance TEXT, last_bias TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (agent_id, timeframe))";
+
 let schemaReady = false;
 async function ensureSchema(db) {
   if (schemaReady) return;
   await db.prepare(PUBLICATIONS_SCHEMA_SQL).run();
+  await db.prepare(HUD_CURSORS_SCHEMA_SQL).run();
   schemaReady = true;
 }
 export function resetPlatformSchemaCacheForTests() { schemaReady = false; }
@@ -73,7 +83,7 @@ function candleOpenIso(candleKey) {
  * `success`; `denied` and `rejected` are final (the cursor advances); `failed` means a
  * transport error or a timeout, retried once by the next sweep.
  */
-export async function publishToPlatform(env, agentId, report, { timeoutMs = PLATFORM_CALL_TIMEOUT_MS } = {}) {
+export async function publishToPlatform(env, agentId, report, { timeoutMs = PLATFORM_REPORT_TIMEOUT_MS } = {}) {
   if (!platformEnabled(env)) return { outcome: "disabled" };
   let timer;
   try {
@@ -120,12 +130,6 @@ async function record(db, agentId, { key, stance, outcome, reason = null, report
   }
 }
 
-/** Records a baseline without publishing (a HUD agent's first observed stance). */
-async function baseline(db, agentId, key, stance, nowIso) {
-  await db.prepare(
-    "INSERT INTO platform_publications (agent_id, last_key, last_stance, outcome, attempts, updated_at) VALUES (?, ?, ?, 'baseline', 0, ?) ON CONFLICT(agent_id) DO NOTHING"
-  ).bind(agentId, key, stance, nowIso).run();
-}
 
 // ------------------------------------------------------------------ report builders (pure)
 
@@ -186,23 +190,63 @@ export function moderatorReport(room, previous) {
   };
 }
 
-export function hudReport(room, opening, previousStance, calibration) {
-  const stance = String(opening.stance || "").toUpperCase();
+export function hudTimeframeChange(cursor, opening) {
+  if (!cursor || !opening || opening.status !== "ok" || !opening.stance) return null;
+  const stance = String(opening.stance).toUpperCase();
+  const lastStance = cursor.last_stance ? String(cursor.last_stance).toUpperCase() : null;
+  if (hudChangeMatters(lastStance, stance)) return { kind: "stance" };
+  const bias = String(opening.bias || "").toUpperCase();
+  const lastBias = cursor.last_bias ? String(cursor.last_bias).toUpperCase() : null;
+  if ((bias === "BULLISH" || bias === "BEARISH") && (lastBias === "BULLISH" || lastBias === "BEARISH") && bias !== lastBias) return { kind: "bias" };
+  return null;
+}
+
+const HUD_TF_ORDER = ["15", "60", "240", "1D"];
+const HUD_TF_LABEL = { "15": "15m", "60": "1H", "240": "4H", "1D": "1D" };
+
+export function hudDigestReport(agentName, event, timeframes, calibration) {
+  const ev = String(event || "");
+  const ordered = [...(Array.isArray(timeframes) ? timeframes : [])].sort((a, b) => HUD_TF_ORDER.indexOf(String(a?.timeframe)) - HUD_TF_ORDER.indexOf(String(b?.timeframe)));
+  const bodyTfs = ordered.map((t) => ({
+    timeframe: t?.timeframe,
+    bar_close: t?.bar_close ?? t?.bar_key ?? null,
+    stance: t?.stance != null ? String(t.stance).toUpperCase() : null,
+    previous_stance: t?.previous_stance != null ? String(t.previous_stance).toUpperCase() : null,
+    bias: t?.bias != null ? String(t.bias).toUpperCase() : null,
+    previous_bias: t?.previous_bias != null ? String(t.previous_bias).toUpperCase() : null,
+    confidence: conf(t?.confidence),
+    changed: !!t?.changed,
+    change_kind: t?.change_kind ?? null,
+    claim: clip(t?.claim, 300)
+  }));
+  let subject;
+  if (ev === "change") {
+    const parts = ordered
+      .filter((t) => t?.changed)
+      .map((t) => {
+        const label = HUD_TF_LABEL[String(t?.timeframe)] || String(t?.timeframe);
+        if (t?.change_kind === "bias") return `${label} bias ${String(t.previous_bias).toUpperCase()} to ${String(t.bias).toUpperCase()}`;
+        return `${label} stance ${String(t.previous_stance).toUpperCase()} to ${String(t.stance).toUpperCase()}`;
+      });
+    subject = clip(`${agentName}: ${parts.join("; ")} (${SYMBOL})`, 200);
+  } else {
+    const parts = ordered.map((t) => {
+      const label = HUD_TF_LABEL[String(t?.timeframe)] || String(t?.timeframe);
+      return `${label} ${String(t?.stance).toUpperCase()}/${String(t?.bias || "").toLowerCase()}`;
+    });
+    subject = clip(`${agentName} reading: ${parts.join(", ")} (${SYMBOL})`, 200);
+  }
   return {
     kind: "hud_digest",
     severity: "info",
-    subject: clip(`${opening.name} moved ${previousStance} to ${stance}, confidence ${conf(opening.confidence) ?? "n/a"} (${SYMBOL} 15m bar ${hhmm(room.bar_time)})`, 200),
+    subject,
     ai_status: "deterministic",
     body: {
-      observation: "HUD agent stance change in the Live War Room 15m",
+      observation: ev === "change" ? "HUD agent change across timeframes" : "HUD agent reading across timeframes",
       symbol: SYMBOL,
-      timeframe: "15",
-      bar_close: room.bar_time,
-      hud_agent: opening.id,
-      previous_stance: previousStance,
-      stance,
-      confidence: conf(opening.confidence),
-      claim: clip(opening.claim, 600),
+      event: ev,
+      hud_agent: agentName,
+      timeframes: bodyTfs,
       calibration: calibration ?? null,
       source: PLATFORM_HOST_WORKER
     }
@@ -217,6 +261,24 @@ export function hudChangeMatters(previous, next) {
 
 // ------------------------------------------------------------------ sweep
 
+
+export async function readTimeframeOpenings(db) {
+  const out = { "60": null, "240": null, "1D": null };
+  const threads = { "60": "tf:H1", "240": "tf:H4", "1D": "tf:D1" };
+  for (const [tf, threadId] of Object.entries(threads)) {
+    try {
+      const maxRow = await db.prepare("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id = ?").bind(threadId).first();
+      const runId = maxRow?.r;
+      if (runId == null) { out[tf] = null; continue; }
+      const rows = (await db.prepare("SELECT agent, status, stance, confidence, json_extract(body_json, '$.bias') AS bias, json_extract(body_json, '$.claim') AS claim FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? AND step LIKE 'open:%'").bind(threadId, runId).all()).results || [];
+      out[tf] = { bar_key: runId, openings: rows.map((r) => ({ id: r.agent, status: r.status, stance: r.stance, bias: r.bias, confidence: r.confidence, claim: r.claim })) };
+    } catch {
+      out[tf] = null;
+    }
+  }
+  return out;
+}
+
 async function send(env, db, agentId, key, stance, report, nowIso, summary) {
   const res = await publishToPlatform(env, agentId, report);
   const advance = res.outcome !== "failed"; // only a transport failure or timeout is retried
@@ -228,7 +290,7 @@ async function send(env, db, agentId, key, stance, report, nowIso, summary) {
  * Publishes every pending event once. Called from the parity sweep cron (every 15
  * minutes). Returns a summary; never throws for a platform-side problem.
  */
-export async function publishPlatformReports(env, { now = Date.now(), readRoom = readWarRoom } = {}) {
+export async function publishPlatformReports(env, { now = Date.now(), readRoom = readWarRoom, readTimeframes = readTimeframeOpenings } = {}) {
   if (!platformEnabled(env)) return { status: "disabled" };
   if (!env?.DB) return { status: "unavailable" };
   await ensureSchema(env.DB);
@@ -245,7 +307,7 @@ export async function publishPlatformReports(env, { now = Date.now(), readRoom =
     }
   }
 
-  // 2. War Room conclusion → xauusd-moderator; HUD stance changes → hud-*.
+  // 2. War Room conclusion → xauusd-moderator.
   let room = null;
   try { room = await readRoom(env.DB); } catch { room = null; }
   if (room?.conclusion?.status === "ok" && room.conclusion.stance) {
@@ -257,20 +319,62 @@ export async function publishPlatformReports(env, { now = Date.now(), readRoom =
     if (prev?.last_key !== room.bar_time && (changed || due)) {
       await send(env, env.DB, "xauusd-moderator", room.bar_time, stance, moderatorReport(room, prev), nowIso, summary);
     }
-    const calibration = new Map((room.roster || []).map((r) => [r.id, r.calibration]));
-    for (const opening of room.openings || []) {
-      const agentId = HUD_PLATFORM_IDS[opening.id];
-      if (!agentId || opening.status !== "ok" || !opening.stance) continue;
-      const next = String(opening.stance).toUpperCase();
-      const prevHud = state.get(agentId);
-      if (!prevHud?.last_stance) { await baseline(env.DB, agentId, room.bar_time, next, nowIso); continue; }
-      if (prevHud.last_key === room.bar_time) continue;
-      if (hudChangeMatters(prevHud.last_stance, next)) {
-        await send(env, env.DB, agentId, room.bar_time, next, hudReport(room, opening, prevHud.last_stance, calibration.get(opening.id)), nowIso, summary);
-      } else if (prevHud.last_stance !== next) {
-        // A non-directional move (e.g. WAIT -> HOLD) updates the baseline silently.
-        await env.DB.prepare("UPDATE platform_publications SET last_key = ?, last_stance = ?, updated_at = ? WHERE agent_id = ?").bind(room.bar_time, next, nowIso, agentId).run();
-      }
+  }
+
+  // 3. HUD agents (owner 2026-11-12: "seharusnya tidak idle dan berkontribusi ke semua TimeFrame"): one
+  //    report per agent per sweep at most, over the 15m War Room and the 1H, 4H and 1D rooms.
+  let rooms = {};
+  try { rooms = (await readTimeframes(env.DB)) || {}; } catch { rooms = {}; }
+  if (room?.bar_time) rooms = { ...rooms, "15": { bar_key: room.bar_time, openings: room.openings || [] } };
+  const cursorRows = (await env.DB.prepare("SELECT agent_id, timeframe, last_key, last_stance, last_bias, created_at FROM platform_hud_cursors").all()).results || [];
+  const cursorsOf = new Map();
+  for (const r of cursorRows) { if (!cursorsOf.has(r.agent_id)) cursorsOf.set(r.agent_id, new Map()); cursorsOf.get(r.agent_id).set(r.timeframe, r); }
+  const calibration = new Map((room?.roster || []).map((r) => [r.id, r.calibration]));
+
+  for (const [hudId, agentId] of Object.entries(HUD_PLATFORM_IDS)) {
+    const cursors = cursorsOf.get(agentId) ?? new Map();
+    const observed = [];
+    for (const tf of HUD_TF_ORDER) {
+      const rm = rooms[tf];
+      const opening = rm?.bar_key && Array.isArray(rm.openings) ? rm.openings.find((o) => o?.id === hudId) : null;
+      if (!opening || opening.status !== "ok" || !opening.stance) continue;
+      const cursor = cursors.get(tf) ?? null;
+      const fresh = cursor?.last_key !== rm.bar_key;
+      const change = fresh ? hudTimeframeChange(cursor, opening) : null;
+      observed.push({ tf, key: rm.bar_key, opening, cursor, fresh, change });
+    }
+    if (!observed.length) continue;
+
+    // Heartbeat reference: the last publication, else when the agent was first observed (this sweep included).
+    const created = [...cursors.values()].map((c) => c.created_at).filter(Boolean).sort()[0] ?? "";
+    const refMs = Date.parse(state.get(agentId)?.published_at || created);
+    const changed = observed.filter((o) => o.change);
+    const heartbeatDue = cursors.size > 0 && Number.isFinite(refMs) && now - refMs >= HUD_HEARTBEAT_MS;
+    const event = changed.length ? "change" : heartbeatDue ? "heartbeat" : null;
+
+    let advance = true;
+    if (event) {
+      const timeframes = observed.map((o) => ({
+        timeframe: o.tf, bar_close: o.key, stance: o.opening.stance, previous_stance: o.cursor?.last_stance ?? null,
+        bias: o.opening.bias ?? null, previous_bias: o.cursor?.last_bias ?? null, confidence: o.opening.confidence,
+        changed: Boolean(o.change), change_kind: o.change?.kind ?? null, claim: o.opening.claim ?? null
+      }));
+      const report = hudDigestReport(HUD_NAMES[hudId] ?? hudId, event, timeframes, calibration.get(hudId) ?? null);
+      const o15 = observed.find((o) => o.tf === "15");
+      const newest = observed.map((o) => o.key).sort().at(-1);
+      const before = summary.published.length;
+      await send(env, env.DB, agentId, newest, o15 ? String(o15.opening.stance).toUpperCase() : null, report, nowIso, summary);
+      advance = summary.published[before]?.outcome !== "failed"; // a transport failure or timeout is retried next sweep
+    }
+    if (!advance) continue;
+    for (const o of observed) {
+      if (!o.fresh) continue;
+      const bias = String(o.opening.bias || "").toUpperCase();
+      const lastBias = bias === "BULLISH" || bias === "BEARISH" ? bias : (o.cursor?.last_bias ?? null);
+      await env.DB.prepare(
+        "INSERT INTO platform_hud_cursors (agent_id, timeframe, last_key, last_stance, last_bias, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT(agent_id, timeframe) DO UPDATE SET last_key = excluded.last_key, last_stance = excluded.last_stance, last_bias = excluded.last_bias, updated_at = excluded.updated_at"
+      ).bind(agentId, o.tf, o.key, String(o.opening.stance).toUpperCase(), lastBias, nowIso, nowIso).run();
     }
   }
   return summary;

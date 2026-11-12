@@ -1,4 +1,17 @@
 export const PLATFORM_HOST_WORKER: string;
+export const PLATFORM_CALL_TIMEOUT_MS: number;
+export const PLATFORM_REPORT_TIMEOUT_MS: number;
+export const HUD_HEARTBEAT_MS: number;
+export const HUD_CURSORS_SCHEMA_SQL: string;
+export const PUBLICATIONS_SCHEMA_SQL: string;
 export function platformEnabled(env: unknown): boolean;
-export function publishPlatformReports(env: unknown, options?: { now?: number }): Promise<{ status: string; published?: Record<string, unknown>[] }>;
+export function publishToPlatform(env: unknown, agentId: unknown, report: unknown, options?: { timeoutMs?: number }): Promise<{ outcome: string; reason?: string; report_id?: string | null }>;
+export function publishPlatformReports(env: unknown, options?: { now?: number; readRoom?: (db: unknown) => Promise<unknown>; readTimeframes?: (db: unknown) => Promise<unknown> }): Promise<{ status: string; published?: Record<string, unknown>[] }>;
 export function platformStatus(env: unknown, options?: { now?: number }): Promise<Record<string, unknown>>;
+export function readTimeframeOpenings(db: unknown): Promise<Record<string, { bar_key: unknown; openings: unknown[] } | null>>;
+export function hudTimeframeChange(cursor: unknown, opening: unknown): { kind: "stance" | "bias" } | null;
+export function hudDigestReport(agentName: unknown, event: unknown, timeframes: unknown, calibration: unknown): Record<string, unknown>;
+export function hudChangeMatters(previous: unknown, next: unknown): boolean;
+export const HUD_PLATFORM_IDS: Record<string, string>;
+export function resetPlatformSchemaCacheForTests(): void;
+export function resetWhoamiCacheForTests(): void;
