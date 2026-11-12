@@ -55,6 +55,19 @@ setup READY state that never reached the decision (#192).
     - **The room quorum weighting** (2026-11-09, SSOT "Room quorum weighting"): tuned automatically per timeframe, no approval. A point needs 300 concluded and scored rooms of its timeframe before it can be activated: about 4 days on 15m, two weeks on 1H, about 2 months on 4H and more than a year on D1. Watch the Telegram messages, the Nexus Aether page (`nexus.cryptophys.work/aether`, weighting per timeframe) and `GET /api/weighting?timeframe=60`: the 15m room reaches 300 rooms first (137 at 11:11 UTC on 2026-11-09), the 1H room from about 2026-11-23.
 14. **Rotate the TradingView webhook secret before publishing** (owner decision 2026-11-09: deferred to the final step before publish). The current secret was visible in a status-line screenshot during the 401 diagnosis. Steps: PowerShell `New-Guid` one-liner, GitHub secret `TV_WEBHOOK_SECRET`, run `set-webhook-secret.yml` as a new run (never "Re-run"), the indicators' "CTA Webhook Secret" input, then delete and recreate every alert (an alert keeps the inputs it was created with). Keep "Indicator arguments" off in the chart's status line.
 
+## Waits for the Financial Management module
+
+20. **Money figures on the Omega page** (owner 2026-11-12: "ya tunda sampai modul Financial Management, masukan backlog"). The Nexus Performance page shows no money since #267 (owner: "hapus broker capital, sesuai aturan never money; catatan kita akan membuat modul sendiri terkait Financial Management").
+    - **What remains:** the Omega page in Nexus (`workers/xauusd-nexus-dashboard/ui/src/pages/Omega.tsx`) still shows account and position money in the account currency:
+      - P&L, swap and balance figures (`money()` and `cur`);
+      - the P&L in the exit confirmation (`ExitConfirmModal`).
+    - **These stay until the module exists.** The never-money test covers only the Performance page.
+    - **When the module is designed:** move every account figure there, then drop it from the Omega page:
+      - balance, equity, floating and realised P&L, swap, day start balance and day P&L;
+      - any treasury.
+    - **Then extend the never-money test** to the Omega page.
+    - **Owner:** decide the module's scope and where it lives (Nexus or the platform Console) before it starts.
+
 ## Calibration in progress
 
 15. **4H and D1 parity** (alerts installed by the owner on 2026-11-09, about 03:30 UTC; H1 and 15m earlier the same morning). The `prophet_h4` / `gmi_h4` identities need 24 matches (about 4 trading days), `prophet_d1` / `gmi_d1` about 5 weeks. Until then the 4H and D1 Desks speak at confidence 0.4 or lower. First receipts to confirm: H4 at 06:00 UTC, D1 at 22:00 UTC on 2026-11-09 (scheduled checks).
