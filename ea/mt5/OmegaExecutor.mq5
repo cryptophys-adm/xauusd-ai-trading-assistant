@@ -34,7 +34,7 @@
 //|     manually on a chart profile when OMEGA_TAKE_STARTUP=false.   |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.11"
+#property version   "1.12"
 
 #include <Trade/Trade.mqh>
 
@@ -72,6 +72,7 @@ input bool   DynamicAtrStopEnabled  = true;  // Adaptive ATR-based SL+ and Trail
 input double AtrMultiplierTrigger   = 1.0;   // Break-even trigger multiplier of ATR (1.0 = 1x ATR)
 input double AtrMultiplierTrailing  = 1.5;   // Trailing distance multiplier of ATR (1.5 = 1.5x ATR)
 
+const string OMEGA_EXECUTOR_VERSION = "1.12"; // keep equal to #property version
 const string OMEGA_FOLDER    = "omega";
 const string STATE_TMP_PATH  = "omega/state.tmp";
 const string STATE_JSON_PATH = "omega/state.json";
@@ -595,6 +596,14 @@ void WriteStateJson()
    json += "\"positions\":" + positionsJson + ",";
    json += "\"orders\":" + ordersJson + ",";
    json += "\"deals\":" + dealsJson + ",";
+   // Since 1.12 (owner 2026-11-12: "tambahkan versi EA dan status input ke server"): the server checks that
+   // this EA leaves the stop and the target to Omega (its local break-even and trailing off).
+   json += StringFormat("\"executor\":{\"name\":\"OmegaExecutor\",\"version\":\"%s\",\"auto_break_even\":%s,\"trailing_stop\":%s,\"dynamic_atr_stop\":%s},",
+      OMEGA_EXECUTOR_VERSION,
+      AutoBreakEvenEnabled ? "true" : "false",
+      TrailingStopEnabled ? "true" : "false",
+      DynamicAtrStopEnabled ? "true" : "false"
+   );
    json += StringFormat("\"trade_allowed\":%s,\"received_ms\":%I64d}",
       (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && MQLInfoInteger(MQL_TRADE_ALLOWED)) ? "true" : "false",
       receivedMs

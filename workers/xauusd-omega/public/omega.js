@@ -153,7 +153,10 @@ function renderBroker(b) {
     ["Algo trading", br.trade_allowed === true ? "allowed" : "DISABLED (enable in MT5)", br.trade_allowed === true ? "ok" : "bad"],
     ["Account", br.trade_mode || "—", br.trade_mode === "real" ? "warn" : ""], ["Balance", money(br.balance, br.currency || "")], ["Equity", money(br.equity, br.currency || "")],
     ["Symbol", br.symbol || "—"], ["Spread", br.spread_points != null ? `${br.spread_points} pts` : "—"], ["Positions", String((br.positions || []).length)],
-    ["Bridge version", br.bridge_version || "—"]
+    ["Bridge version", br.bridge_version || "—"],
+    // OmegaExecutor 1.12+ reports its version and whether it still moves stops beside Omega.
+    ["EA", br.executor?.version ? `OmegaExecutor ${br.executor.version}` : "version not reported", br.executor?.status === "ok" ? "ok" : br.executor?.status === "unknown" ? "warn" : "bad"],
+    ["EA stop control", br.executor?.status === "ok" ? "Omega only (local break-even and trailing off)" : br.executor?.note || "—", br.executor?.status === "ok" ? "ok" : br.executor?.status === "local_management" ? "bad" : "warn"]
   ]));
 
   const controls = viewer.can_control;

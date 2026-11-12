@@ -375,6 +375,9 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     return { intents, notes };
   }
 
+  // The EA still moves stops by itself (OmegaExecutor 1.12+ reports it): said, never a gate.
+  if (executor.executor?.local_management === true) note("ea_local_management");
+
   const side = signal?.side === "BUY" || signal?.side === "SELL" ? signal.side : null;
 
   // Mean Reversal / Early Exit: close positions if signal explicitly indicates reversal or exit (Omega-owned only)
