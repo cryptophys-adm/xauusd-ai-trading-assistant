@@ -36,13 +36,15 @@ test("K3. the Omega chart draws each zone as a transparent block, never a line, 
   assert.match(omega, /series\.attachPrimitive\(bands\)/);
   assert.match(omega, /bandsRef\.current\?\.setZones\(showKeyLevels \? keyZones\.map/);
   assert.match(omega, /KEY_STRENGTH_FILL/);
+  // Owner 2026-11-12: "label rentang harga juga ditampilkan di atas zone".
+  assert.match(omega, /\$\{num\(z\.low, digits\)\}–\$\{num\(z\.high, digits\)\}/, "the label carries the zone's price range");
   assert.doesNotMatch(omega, /addLine\(z\.(high|low)/, "no zone is a price line");
   assert.doesNotMatch(omega, /LargeDashed/);
   assert.match(omega, /on feed prices \(OANDA\); broker prices may differ/);
-  assert.match(omega, /showKeyLevels, keyZones|keyZones, showKeyLevels\]\);/, "the blocks redraw when the zones change");
+  assert.match(omega, /keyZones, showKeyLevels, digits\]\);/, "the blocks redraw when the zones, the toggle or the digits change");
 });
 
-test("K4. the blocks: a translucent band from low to high behind the candles, a thin zone still visible, its label inside or above", async () => {
+test("K4. the blocks: a translucent band from low to high behind the candles, a thin zone still visible, its label above it", async () => {
   const { KeyZoneBands } = await import("../workers/xauusd-nexus-dashboard/ui/src/lib/keyZoneBands.ts");
   const bands = new KeyZoneBands();
   let updates = 0;
@@ -53,22 +55,26 @@ test("K4. the blocks: a translucent band from low to high behind the candles, a 
     { low: 3999.9, high: 4000, fill: "rgba(34, 211, 238, 0.13)", text: "rgba(34, 211, 238, 0.85)", label: "KL at price · medium" }
   ]);
   assert.equal(updates, 1, "a new set redraws the chart");
-  const [view] = bands.paneViews();
-  assert.equal(view.zOrder(), "bottom", "behind the candles");
+  const [bandView, labelView] = bands.paneViews();
+  assert.deepEqual([bandView.zOrder(), labelView.zOrder()], ["bottom", "top"], "the bands behind the candles, the labels in front");
   const ops = [];
-  const ctx = { set fillStyle(v) { ops.push(["style", v]); }, set font(v) {}, set textBaseline(v) { ops.push(["baseline", v]); }, fillRect: (...a) => ops.push(["rect", ...a]), fillText: (t, x, y) => ops.push(["text", t, x, y]) };
+  const ctx = { set fillStyle(v) { ops.push(["style", v]); }, set font(v) {}, set textBaseline(v) { ops.push(["baseline", v]); }, fillRect: (...a) => ops.push(["rect", ...a]), fillText: (t, x, y) => ops.push(["text", t, x, y]), measureText: (t) => ({ width: t.length * 10 }) };
   const target = { useBitmapCoordinateSpace: (f) => f({ context: ctx, bitmapSize: { width: 1000, height: 800 }, verticalPixelRatio: 2, horizontalPixelRatio: 2 }) };
-  const r = view.renderer();
-  r.draw(target);
-  assert.equal(ops.length, 0, "nothing in the foreground");
+  const r = { drawBackground: (t) => bandView.renderer().draw(t), draw: (t) => labelView.renderer().draw(t) };
   r.drawBackground(target);
   const rects = ops.filter((o) => o[0] === "rect");
   assert.deepEqual(rects[0], ["rect", 0, 160, 1000, 40], "4012-4010: y 80-100 css, 160-200 bitmap, the pane's whole width");
   assert.deepEqual(rects[1], ["rect", 0, 398, 1000, 6], "a 1-px zone (y 200-201) is drawn 3 px tall around it (199-202)");
-  assert.deepEqual(ops.filter((o) => o[0] === "baseline").map((o) => o[1]), ["top", "bottom"], "the label inside a tall band, above a thin one");
   assert.ok(ops.some((o) => o[0] === "style" && o[1] === "rgba(248, 81, 73, 0.2)"), "translucent fill");
-  bands.detached();
+  assert.equal(ops.filter((o) => o[0] === "text").length, 0, "no text behind the candles");
   ops.length = 0;
+  r.draw(target);
+  assert.deepEqual(ops.filter((o) => o[0] === "text").map((o) => [o[1], o[3]]), [["KL R · strong", 158], ["KL at price · medium", 396]], "the labels in front, just above each zone's top edge");
+  assert.deepEqual(ops.filter((o) => o[0] === "baseline").map((o) => o[1]), ["bottom"]);
+  assert.equal(ops.filter((o) => o[0] === "rect").length, 2, "each label on a dark backing");
+  ops.length = 0;
+  bands.detached();
   r.drawBackground(target);
+  r.draw(target);
   assert.equal(ops.length, 0, "detached: nothing drawn");
 });

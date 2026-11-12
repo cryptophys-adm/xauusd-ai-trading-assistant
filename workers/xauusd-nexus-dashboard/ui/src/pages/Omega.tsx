@@ -431,11 +431,12 @@ function Mt5ChartCanvas({
 
     // Key levels from the War Room (owner 2026-11-12): the Key Level Agent's six candidate zones nearest to price, as
     // transparent blocks from low to high behind the candles, coloured by role and shaded by strength, never as lines,
+    // each labelled above with its role, strength and price range (owner 2026-11-12),
     // so every line on the chart is the bid, ask, plan or a position. They are on the feed's prices (OANDA via
     // TradingView), like the candles; the broker's bid, ask and positions may differ by a few cents.
     bandsRef.current?.setZones(showKeyLevels ? keyZones.map((z) => {
       const base = KEY_ROLE_COLOR[z.role ?? ""] ?? C.muted;
-      return { low: z.low, high: z.high, fill: withAlpha(base, KEY_STRENGTH_FILL[z.strength ?? ""] ?? 0.1), text: withAlpha(base, 0.85), label: `KL ${KEY_ROLE_SHORT[z.role ?? ""] ?? "zone"} · ${z.strength ?? "—"}` };
+      return { low: z.low, high: z.high, fill: withAlpha(base, KEY_STRENGTH_FILL[z.strength ?? ""] ?? 0.1), text: withAlpha(base, 0.85), label: `KL ${KEY_ROLE_SHORT[z.role ?? ""] ?? "zone"} · ${z.strength ?? "—"} · ${z.low === z.high ? num(z.low, digits) : `${num(z.low, digits)}–${num(z.high, digits)}`}` };
     }) : []);
     if (showBidAsk) {
       addLine(bid, "BID", "#3fb950", LineStyle.Solid, 1);
@@ -457,7 +458,7 @@ function Mt5ChartCanvas({
         addLine(p.tp, `#${p.ticket} TP`, "#34d399", LineStyle.Dotted, 1);
       }
     }
-  }, [candles, bid, ask, signal, positions, showBidAsk, showPlan, showPositions, keyZones, showKeyLevels]);
+  }, [candles, bid, ask, signal, positions, showBidAsk, showPlan, showPositions, keyZones, showKeyLevels, digits]);
 
   const last = hover || candles[candles.length - 1];
 
