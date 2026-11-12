@@ -17,7 +17,8 @@ test("the facts report: both seats, the Decision Engine's thresholds per trading
   assert.deepEqual(n["decision.guardrails"], ["market_open", "fresh", "quorum", "no_veto", "levels", "reward", "confidence"]);
   // Owner 2026-11-11: the confirmation candle is the trigger of a market order, not a gate of the decision.
   assert.equal(n["decision.confirmation_required"], false);
-  assert.equal(n["decision.execution_trigger"], "prophet_candle_for_market_orders");
+  // 2026-11-12: the broker's 5m confirmation times market orders while OMEGA_EXEC_5M is on (the default).
+  assert.equal(n["decision.execution_trigger"], "prophet_candle_for_market_orders_broker_5m");
   assert.deepEqual([n["calendar.blackout_before_min"], n["calendar.blackout_after_min"], n["parity.approval_candles"], n["weighting.mode"]], [120, 30, 24, "auto"]);
   assert.ok(Object.keys(n).every((k) => !k.startsWith("omega.")) && Object.keys(o).every((k) => k.startsWith("omega.")), "each fact in its own seat");
   assert.deepEqual([o["omega.risk_pct"], o["omega.max_spread_points"], o["omega.max_signal_age_min"], o["omega.rollover_quarantine_utc"]], [0.5, 60, 10, "21:55-22:15"]);
@@ -25,6 +26,7 @@ test("the facts report: both seats, the Decision Engine's thresholds per trading
   const scalp = await doctrineFacts({ TRADING_MODE: "scalp", WEIGHTING_MODE: "default", BLACKOUT_MINUTES: "60" });
   assert.deepEqual([scalp.seats.nexus.facts["decision.quorum_min"], scalp.seats.nexus.facts["decision.min_rrr"], scalp.seats.nexus.facts["weighting.mode"], scalp.seats.nexus.facts["calendar.blackout_before_min"]], [0.45, 1.2, "default", 60]);
   assert.equal((await doctrineFacts({ DECISION_ENGINE: "off" })).seats.nexus.facts["decision.engine_enabled"], false);
+  assert.equal((await doctrineFacts({ OMEGA_EXEC_5M: "off" })).seats.nexus.facts["decision.execution_trigger"], "prophet_candle_for_market_orders", "the switch off: TradingView's 5m or 15m confirmation");
   assert.ok(guardrailIds({}).includes("quorum"));
 });
 

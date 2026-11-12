@@ -5,6 +5,7 @@
 // with the doctrine of its canon once a day and proposes each lasting difference to the Cerebrum
 // consensus, which executes it. Every value here is read from the running code, its variables and the
 // stored Omega settings: never typed in. No price, level, size or account appears.
+import { exec5mMode } from "./broker-trigger.mjs";
 import { activeWitnessWeights, decisionEngineEnabled, guardrailsFor, MIN_CONFIDENCE, modeThresholds, tradingMode } from "./decision-engine.mjs";
 import { QUORUM_SHARE } from "./reputation.mjs";
 import { UNCALIBRATED_CONFIDENCE_CAP } from "./war-room.mjs";
@@ -43,7 +44,8 @@ export async function nexusFacts(env) {
     "decision.guardrails": guards,
     "decision.confirmation_required": guards.includes("confirmation"),
     // Owner 2026-11-11: the confirmation candle is the entry trigger (src/ea-signal.mjs entryTriggerFor).
-    "decision.execution_trigger": "prophet_candle_for_market_orders",
+    // 2026-11-12 (docs/RFC_OMEGA_5M_EXECUTION.md): the broker's 5m confirmation, within 3 bars, while OMEGA_EXEC_5M is on.
+    "decision.execution_trigger": exec5mMode(env) === "on" ? "prophet_candle_for_market_orders_broker_5m" : "prophet_candle_for_market_orders",
     "decision.trading_mode": t.mode,
     "decision.quorum_min": t.quorum_min,
     "decision.lean": t.lean,

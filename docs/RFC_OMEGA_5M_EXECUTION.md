@@ -1,5 +1,7 @@
 # RFC: 5m execution for Omega: the entry's timing and the position's management
 
+Status: built 2026-11-12 (the sections below describe what runs; see "As built").
+
 Owner, 2026-11-11: "ya rancang A+C, timing dari broker langsung". 15m decides, 5m times the entry (A) and
 manages the position (C), and the 5m bars come from the broker's MT5 terminal.
 
@@ -25,7 +27,8 @@ manages the position (C), and the 5m bars come from the broker's MT5 terminal.
 - **Output.** For the last closed broker 5m bar: `buy_confirmed`, `sell_confirmed`, the swing high and low
   of the last 3 bars, and the 5m ATR(14).
 - **Hand-off.** The output goes to the AI Worker (`LocalComputationIngress.submitBrokerTrigger`), which
-  stores it in KV `trigger:broker:m5:latest` for 15 minutes.
+  stores it in KV `trigger:broker:m5:latest` with the last 6 bars (30-minute TTL). It is read as fresh
+  while its last bar closed at most 6 minutes ago.
 - **Latency.** The bridge carries each closed broker minute within seconds, and the cron runs every minute.
   A 5m confirmation is therefore known within about 70 seconds of its close, not up to 5 minutes.
 
@@ -71,17 +74,19 @@ These run in `manageIntents` on each bridge sync, for Omega's own positions only
   (TradingView 5m or 15m) to `prophet_candle_for_market_orders_broker_5m`. The Aether canon is amended
   by PR, as with #255 and aether#17.
 - **Measurement.** The broker 5m trigger is not parity-verified: its bars differ from OANDA's by the
-  basis. The broker shadow lane (#263) is extended to 5m, so the agreement of the broker's 5m
-  confirmations with TradingView's is measured on `GET /api/corpus/status`.
+  basis. Extending the broker shadow lane (#263) to 5m, to measure the agreement of the broker's 5m
+  confirmations with TradingView's on `GET /api/corpus/status`, is left for a follow-up (not built).
 - **Records.** Every Omega intent records which trigger and which stop it used: `broker_5m` or `tv_5m`,
   and `stop_5m` or `plan`. Outcomes can then be compared by source.
 
 ### 6. Switch
 
-`OMEGA_EXEC_5M` controls the three parts (timing, tighter stop, management):
+`OMEGA_EXEC_5M` (AI Worker) controls the three parts (timing, tighter stop, management):
 - `off`: today's behaviour.
-- `shadow`: compute and log what each part would do, and change no intent.
-- `on`: active.
+- `on` (default): active.
+
+The `shadow` value proposed here was not built: the owner chose everything on at once (decision 3).
+`BROKER_TRIGGER_MODE` (pull adapter, `on` by default) stops the broker 5m lane itself.
 
 ## Trade-offs
 
@@ -95,14 +100,27 @@ These run in `manageIntents` on each bridge sync, for Omega's own positions only
 
 ## Rollout
 
-1. **Before the code:** the broker corpus holds 400 M5 bars (about 1.5 days after 2026-11-11 14:16 UTC).
-2. **Timing on, tighter stop and management in shadow** for at least 30 Omega trades. The records then
-   compare the shadow stop and trailing against what happened.
-3. **All on** with the owner's go. Omega's policy rollback (B-12) still watches the profit factor.
+All on from the deploy (owner decision 3 below). The broker timing starts once the corpus holds 400 M5
+bars, about 1.5 days after 2026-11-11 14:16 UTC.
 
-## Decisions for the owner
+## Owner decisions (2026-11-12)
 
-1. The window: 3 broker 5m bars (the default above), or fewer.
-2. Whether `tight_stop_max_lot_factor` 1.5 is acceptable, or 1.0 (same lot, a tighter stop only lowers
-   the risk).
-3. The rollout: as above (the stop and management in shadow first), or everything on at once.
+1. **Window:** 3 broker 5m bars.
+2. **Lot cap:** `tight_stop_max_lot_factor` 1.5.
+3. **Rollout:** everything on at once ("Semua langsung aktif"). `OMEGA_EXEC_5M = "on"` from the deploy.
+   The timing waits for 400 broker M5 bars and uses TradingView's 5m until then. The tighter stop and
+   the 5m management work as soon as the broker's 5m structure is fresh. Omega's policy rollback
+   (B-12) still watches the profit factor.
+
+## As built (2026-11-12)
+
+- AI Worker: `src/broker-trigger.mjs` (store, read, signal fields), `entryTriggerFor` in `src/ea-signal.mjs`,
+  `planIntents` and `manageIntents` in `src/omega-engine.mjs`, `submitBrokerTrigger` in `src/index.ts`.
+- Pull adapter: `market-data-ingestion/src/broker-trigger.mjs` (`runBrokerTrigger`, `structureOf`), run
+  every minute after the bundle is built; the broker M5 bars are cached in KV
+  `market-data:v2:broker-trigger:m5`.
+- Below 400 broker M5 bars the lane sends the structure only (`ready: false`): the 5m stop and the 5m
+  management work, and the entry's timing stays TradingView's.
+- Intent ids use minutes (`ms:<ticket>:t5:<minute>`, `cl:<ticket>:o5:<minute>`) to stay within the bridge's
+  31 characters.
+- Tests: `test/broker-trigger.test.mjs`, `market-data-ingestion/test/broker-trigger.test.mjs`.

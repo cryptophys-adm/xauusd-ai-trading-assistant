@@ -1,6 +1,7 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
 import { applyMt5Fallback } from "./mt5-fallback.mjs";
 import { runBrokerShadow } from "./broker-shadow.mjs";
+import { runBrokerTrigger } from "./broker-trigger.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
 import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHtfLocalComputation, publishHudSnapshots, republishRevisedH1, LAST_PUBLISH_KEY, LAST_HUD_PUBLISH_KEY } from "./local-publisher.mjs";
 import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, marketClosed, verifyDerivedSeries, settleSeconds, SETTLE_SECONDS } from "./tradingview-source.mjs";
@@ -287,6 +288,13 @@ const worker = {
       // Build the bundle once for both publish and informational 5m context.
       let latestBundle = null;
       try { latestBundle = await buildBundle(env); } catch { latestBundle = null; }
+      // 5m execution for Omega (docs/RFC_OMEGA_5M_EXECUTION.md): the broker 5m bar's trigger and structure.
+      try {
+        const trigger = await runBrokerTrigger(env, { bundle: latestBundle });
+        if (!["off", "unavailable", "already_sent"].includes(trigger.status)) console.log(JSON.stringify({ worker: WORKER_NAME, event: "broker_trigger", ...trigger }));
+      } catch (error) {
+        console.error(JSON.stringify({ worker: WORKER_NAME, event: "broker_trigger_failed", code: asString(error?.code) || "broker_trigger_failed" }));
+      }
       // Phase C2: HUD snapshots for the HUD agents (flag-gated; never decision evidence). Published
       // BEFORE the H1 record (2026-11-09): the H1 record parks the evidence and starts the 1H room at
       // once, and the room waits for its HUD snapshot; published after it, the room lost a retry.
