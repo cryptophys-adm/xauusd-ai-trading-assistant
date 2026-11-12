@@ -92,7 +92,9 @@ test("the UI keeps the Console's obsidian palette and calls only same-origin rea
   assert.match(keyLevels, /gradientUnits="userSpaceOnUse"/, "the price line paints on a zero-height line");
   assert.match(keyLevels, /useId\(\)\.replace\(\/:\/g, ""\)/, "no colon in a url(#…) reference");
   // Owner 2026-11-11: the listed zones run by price from the highest down, with the price row between.
-  assert.match(keyLevels, /\.sort\(\(a, b\) => b\.high - a\.high \|\| b\.low - a\.low\)/, "the list runs by price, highest first");
+  // The selection is shared with the Omega chart since 2026-11-12 (ui/src/lib/keyZones.ts).
+  assert.match(keyLevels, /nearestCandidates\(k, 6\)/);
+  assert.match(ui("src/lib/keyZones.ts"), /\.sort\(\(a, b\) => b\.high - a\.high \|\| b\.low - a\.low\)/, "the list runs by price, highest first");
   assert.match(keyLevels, /i === priceRow && <PriceRow/, "the price row sits where price falls");
   assert.ok(assistant.indexOf("<KeyLevels") > assistant.indexOf("<GlobalDecision"), "the zones follow the decision");
   assert.doesNotMatch(assistant, /LevelsCard|<KeyLevelAgent|LevelLadder/, "the Levels card and the Key Level Agent panel are one panel");
@@ -120,6 +122,9 @@ test("a grouped left sidebar routes the analytic layers; the Performance page re
   assert.ok(perf.includes("/api/ledger?days=30"));
   assert.match(perf, /never money/);
   assert.doesNotMatch(perf, /lot size|balance|equity \$|position size/i, "advisory only: R multiples, never money or size");
+  // Owner 2026-11-12 ("hapus broker capital, sesuai aturan never money"; Financial Management is its own module):
+  // no dollar amount at all, and no key spelled in pieces to slip past the rule above.
+  assert.doesNotMatch(perf, /\$\$\{|\$0\.00|USD Realized|Broker Capital|Live Valuation|Floating P&L|\]\.join\(""\)\]/, "never money, however it is spelled");
 });
 
 test("Omega: /omega and /omega/ render inside the Nexus SPA with the left panel; /omega/api/* forwards unchanged to xauusd-omega (OMEGA_PAGE)", async () => {

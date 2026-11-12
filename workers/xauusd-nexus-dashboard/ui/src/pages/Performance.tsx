@@ -12,7 +12,6 @@ import {
   Compass,
   Cpu,
   Crosshair,
-  DollarSign,
   Gauge,
   Layers,
   LineChart,
@@ -34,7 +33,6 @@ import { usePoll } from "../lib/usePoll";
 
 const pct = (x?: number | null) => (x == null ? "n/a" : `${Math.round(x * 1000) / 10}%`);
 const r = (x?: number | null, sign = true) => (x == null ? "n/a" : `${sign && (x ?? 0) > 0 ? "+" : ""}${Math.round((x ?? 0) * 100) / 100}R`);
-const usd = (x?: number | null, sign = true) => (x == null ? "$0.00" : `${sign && (x ?? 0) > 0 ? "+" : ""}$${Math.abs(x ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 const px = (x?: number | null) => (x == null ? "" : x.toFixed(2));
 const when = (t?: string | null) => (t ? t.slice(5, 16).replace("T", " ") : "");
 
@@ -524,15 +522,11 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
 
   const br = omega.bridge || {};
   const tca = omega.tca || {};
-  const sor = omega.sor || {};
+  const route = omega.route || {};
   const vol = omega.volatility || {};
   const positions: any[] = br.positions || [];
   const intents: any[] = omega.intents || [];
 
-  const floatingPl = positions.reduce((sum, p) => sum + (Number(p.profit) || 0), 0);
-  const accountFunds = Number((br as Record<string, unknown>)?.[["bal", "ance"].join("")] ?? 0);
-  const valuation = Number((br as Record<string, unknown>)?.[["equ", "ity"].join("")] ?? (accountFunds + floatingPl));
-  const floatingRatio = accountFunds > 0 ? (floatingPl / accountFunds) * 100 : 0;
 
   // Extract dynamic slippage and latency metrics directly from intents
   const completedIntents = intents.filter((it) => it.status === "done" && it.result?.ok);
@@ -552,47 +546,26 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
 
   return (
     <div className="space-y-4">
-      {/* Broker KPI Metrics Header */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <Kpi
-          label="Broker Capital"
-          value={`$${accountFunds.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-          sub={br.server ? `Server: ${br.server}` : "Monex Demo"}
-          color="#e2e8f0"
-          icon={<DollarSign className="h-3.5 w-3.5 text-slate-400" />}
-        />
-        <Kpi
-          label="Live Valuation"
-          value={`$${valuation.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-          sub={`Margin: ${br.trade_mode || "Demo Hedging"}`}
-          color={valuation >= accountFunds ? C.bull : C.bear}
-          icon={<TrendingUp className="h-3.5 w-3.5 text-cyan-400" />}
-        />
-        <Kpi
-          label="Floating P&L"
-          value={`${floatingPl >= 0 ? "+" : ""}$${floatingPl.toFixed(2)}`}
-          sub={`${floatingRatio >= 0 ? "+" : ""}${floatingRatio.toFixed(2)}% net`}
-          color={floatingPl >= 0 ? C.bull : C.bear}
-          icon={<Activity className="h-3.5 w-3.5 text-emerald-400" />}
-        />
+      {/* Execution KPI header: advisory only, never money (owner 2026-11-12: Financial Management is its own module) */}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <Kpi
           label="Average Slippage"
-          value={dynamicAvgSlippage != null ? `${dynamicAvgSlippage} pts` : "0.0 pts"}
-          sub={`Max: ${tca.max_slippage_points ?? 0} pts · ${completedIntents.length} fills`}
+          value={dynamicAvgSlippage != null ? `${dynamicAvgSlippage} pts` : "—"}
+          sub={`Max: ${tca.max_slippage_points ?? "—"} pts · ${completedIntents.length} fills`}
           color={C.cyan}
           icon={<Sliders className="h-3.5 w-3.5 text-cyan-400" />}
         />
         <Kpi
           label="Execution Latency"
           value={dynamicAvgLatency != null ? `${dynamicAvgLatency} ms` : "n/a"}
-          sub={`Route: ${sor.active_route || br.server || "Monex-Demo"}`}
+          sub={`Route: ${route.active_route || "—"}`}
           color={C.violet}
           icon={<Zap className="h-3.5 w-3.5 text-violet-400" />}
         />
         <Kpi
           label="Execution Quality"
-          value={tca.quality || (dynamicAvgSlippage != null && dynamicAvgSlippage <= 5 ? "PRIME" : "ACCEPTABLE")}
-          sub={`SOR: ${sor.mode || "Auto Failover"}`}
+          value={tca.quality || (dynamicAvgSlippage != null ? (dynamicAvgSlippage <= 5 ? "PRIME" : "ACCEPTABLE") : "—")}
+          sub={`${tca.samples_count ?? 0} measured fills`}
           color={tca.quality === "PRIME" ? C.bull : C.wait}
           icon={<ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />}
         />
@@ -601,26 +574,26 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
       {/* SOR & Volatility Telemetry Panel */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <Panel
-          title="Smart Order Router (SOR) & Redundancy"
+          title="Order Route"
           icon={<Compass className="h-3.5 w-3.5 text-cyan-400" />}
-          right={<Badge tone="green">{sor.status || (br.terminal_connected ? "OPTIMAL" : "STANDBY")}</Badge>}
+          right={<Badge tone={route.status === "trading" ? "green" : "amber"}>{route.status || "—"}</Badge>}
         >
           <div className="grid grid-cols-2 gap-3 pt-1 text-[11px]">
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Primary Gateway</span>
-              <p className="mono font-semibold text-slate-200">{sor.primary_broker || br.server || "Monex-Demo"}</p>
+              <span className="text-[10px] uppercase text-slate-500">Active Route</span>
+              <p className="mono font-semibold text-slate-200">{route.active_route || "—"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Standby Route</span>
-              <p className="mono font-semibold text-slate-200">{sor.standby_broker || "HotStandby-Backup"}</p>
+              <span className="text-[10px] uppercase text-slate-500">Failover</span>
+              <p className="mono font-semibold text-slate-200">{route.failover === "none" ? "none (single route)" : (route.failover || "—")}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Bridge Latency</span>
-              <p className="mono font-semibold text-emerald-400">{br.synced_age_ms != null ? `${br.synced_age_ms} ms` : "n/a"}</p>
+              <span className="text-[10px] uppercase text-slate-500">Bridge Sync</span>
+              <p className="mono font-semibold text-emerald-400">{route.bridge_sync_age_ms != null ? `${Math.round(route.bridge_sync_age_ms / 1000)}s ago` : "—"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Failover Ready</span>
-              <p className="mono font-semibold text-cyan-400">{sor.failover_ready ? "ARMED & READY" : "STANDBY"}</p>
+              <span className="text-[10px] uppercase text-slate-500">Terminal</span>
+              <p className="mono font-semibold text-cyan-400">{br.terminal_connected === true ? "connected" : br.terminal_connected === false ? "not connected" : "—"}</p>
             </div>
           </div>
         </Panel>
@@ -633,7 +606,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
           <div className="grid grid-cols-2 gap-3 pt-1 text-[11px]">
             <div>
               <span className="text-[10px] uppercase text-slate-500">Current ATR M15</span>
-              <p className="mono font-semibold text-slate-200">{vol.atr_value != null ? `$${vol.atr_value}` : (br.spread_points ? `${br.spread_points} pts` : "Active")}</p>
+              <p className="mono font-semibold text-slate-200">{vol.atr_value != null ? String(vol.atr_value) : "—"}</p>
             </div>
             <div>
               <span className="text-[10px] uppercase text-slate-500">Spread Points</span>
@@ -683,14 +656,11 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                   <th>Current Bid/Ask</th>
                   <th>Stop Loss</th>
                   <th>Take Profit</th>
-                  <th>Swap</th>
-                  <th>Floating P&L ($)</th>
                   <th className="text-right">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {positions.map((p) => {
-                  const pProf = Number(p.profit) || 0;
                   const pSide = p.side || p.type || "SELL";
                   const curPx = pSide === "SELL" ? br.ask : br.bid;
                   const isManual = p.source === "manual" || p.magic === 0;
@@ -720,13 +690,6 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                       <td className="mono text-slate-300">{curPx != null ? px(curPx) : px(p.current_price ?? p.open_price)}</td>
                       <td className="mono text-rose-300">{px(p.sl)}</td>
                       <td className="mono text-emerald-300">{px(p.tp)}</td>
-                      <td className="mono text-slate-400">{p.swap != null ? usd(p.swap, false) : "$0.00"}</td>
-                      <td
-                        className="mono font-bold"
-                        style={{ color: pProf >= 0 ? C.bull : C.bear }}
-                      >
-                        {pProf >= 0 ? "+" : ""}${pProf.toFixed(2)}
-                      </td>
                       <td className="text-right">
                         <button
                           type="button"
@@ -738,10 +701,8 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                               side: pSide,
                               volume: p.volume,
                               open_price: p.open_price,
-                              profit: pProf,
                               sl: p.sl,
                               tp: p.tp,
-                              currency: "USD",
                             })
                           }
                           className="inline-flex items-center gap-1 rounded bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 hover:border-rose-400 active:scale-95 transition disabled:opacity-50"
@@ -886,8 +847,6 @@ function DisparityKnowledgePanel({
       const ticket = matchedPos?.ticket ?? matchedIntent?.result?.ticket ?? null;
       const realSl = matchedPos?.sl ?? null;
       const realTp = matchedPos?.tp ?? null;
-      const realProfit = matchedPos?.profit != null ? Number(matchedPos.profit) : null;
-      const realSwap = matchedPos?.swap != null ? Number(matchedPos.swap) : 0;
 
       return {
         ...signal,
@@ -898,8 +857,6 @@ function DisparityKnowledgePanel({
         ticket,
         realSl,
         realTp,
-        realProfit,
-        realSwap,
         isLivePosition: Boolean(matchedPos),
         hasExecutionRecord: Boolean(ticket || matchedIntent),
       };
@@ -924,8 +881,6 @@ function DisparityKnowledgePanel({
     : (tca.avg_latency_ms ?? 0);
 
   const dynamicLiveSpread = Number(br.spread_points ?? 0);
-  const dynamicTotalSwap = positions.reduce((sum, p) => sum + (Number(p.swap) || 0), 0);
-  const dynamicFloatingPl = positions.reduce((sum, p) => sum + (Number(p.profit) || 0), 0);
 
   // Dynamic Alpha Fidelity Calculation:
   // Derived strictly from measured fill slippage friction, latency overhead, and broker spread
@@ -949,8 +904,8 @@ function DisparityKnowledgePanel({
       ? `Host execution bridge measured round-trip dispatch latency averaging ${dynamicAvgLatency} ms from Worker intent to MT5 fill.`
       : `Bridge latency awaiting round-trip execution benchmark sample.`,
     positions.length > 0
-      ? `MT5 terminal currently holds ${positions.length} open position(s) with cumulative net floating P&L of ${dynamicFloatingPl >= 0 ? "+" : ""}$${dynamicFloatingPl.toFixed(2)} and $${dynamicTotalSwap.toFixed(2)} accrued swap.`
-      : `No open risk exposed on MT5 terminal; capital baseline preserved.`,
+      ? `MT5 terminal currently holds ${positions.length} open position(s).`
+      : `No open position on the MT5 terminal.`,
     dynamicLiveSpread > 0
       ? `Active broker spread on ${br.symbol || "XAUUSD.m"} is dynamically quoted at ${dynamicLiveSpread} points (Bid: ${px(br.bid)} / Ask: ${px(br.ask)}).`
       : `Broker quote spread is currently being refreshed by bridge daemon.`,
@@ -979,8 +934,6 @@ function DisparityKnowledgePanel({
       avg_latency_ms: dynamicAvgLatency,
       live_spread_points: dynamicLiveSpread,
       live_positions_count: positions.length,
-      net_floating_usd: dynamicFloatingPl,
-      total_swap_usd: dynamicTotalSwap,
       slippage_profile: {
         favorable_fills: favorableCount,
         neutral_fills: neutralCount,
@@ -1096,37 +1049,6 @@ function DisparityKnowledgePanel({
                 </td>
               </tr>
 
-              {/* Row 4: Overnight Swap */}
-              <tr>
-                <td className="font-semibold text-slate-200">Overnight Financing</td>
-                <td className="mono text-cyan-300">Frictionless ($0.00 Swap)</td>
-                <td className="mono text-slate-200">Broker Daily Swap Ledger</td>
-                <td className="mono" style={{ color: dynamicTotalSwap < 0 ? C.bear : C.wait }}>
-                  {dynamicTotalSwap !== 0 ? usd(dynamicTotalSwap, true) : "$0.00 Swap Accrued"}
-                </td>
-                <td>
-                  <Badge tone={dynamicTotalSwap === 0 ? "green" : "amber"}>
-                    {dynamicTotalSwap === 0 ? "ZERO FINANCING DRAG" : "ACTIVE FINANCING DEBIT"}
-                  </Badge>
-                </td>
-              </tr>
-
-              {/* Row 5: Live P&L Realization */}
-              <tr>
-                <td className="font-semibold text-slate-200">Market Return Realization</td>
-                <td className="mono text-cyan-300">Theoretical R Multiples</td>
-                <td className="mono text-slate-200">
-                  {positions.length > 0 ? `${positions.length} Positions: ${dynamicFloatingPl >= 0 ? "+" : ""}$${dynamicFloatingPl.toFixed(2)}` : "No Open Risk"}
-                </td>
-                <td className="mono" style={{ color: dynamicFloatingPl >= 0 ? C.bull : C.bear }}>
-                  {dynamicFloatingPl >= 0 ? "+" : ""}${dynamicFloatingPl.toFixed(2)} USD Realized
-                </td>
-                <td>
-                  <Badge tone={dynamicFloatingPl >= 0 ? "green" : "cyan"}>
-                    {dynamicFloatingPl >= 0 ? "POSITIVE ALPHA EXTRACTION" : "DRAWDOWN WITHIN ATR RISK"}
-                  </Badge>
-                </td>
-              </tr>
             </tbody>
           </table>
         </div>

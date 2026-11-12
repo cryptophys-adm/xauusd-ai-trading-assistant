@@ -461,15 +461,14 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     quality: executionQuality
   };
 
-  // Smart Order Router (SOR) & Redundancy
-  const sor = {
-    mode: settings.settings?.sor_mode || "auto_failover",
-    primary_broker: "Monex-Demo",
-    standby_broker: "HotStandby-Backup",
-    active_route: connection.status === "stored" ? (st?.server ?? "Monex-Demo") : "None",
-    status: (st?.connected === true && st?.trade_allowed === true) ? "OPTIMAL" : "STANDBY_TRIGGER_READY",
-    failover_ready: true,
-    bridge_latency_ms: syncedAge != null ? syncedAge : null,
+  // The order route (owner 2026-11-12: no invented broker names or failover). One route: the owner's stored
+  // connection on the bridge's terminal. No standby broker and no failover exist, so none is claimed.
+  const stateFresh = Number.isFinite(st?.received_ms) && now - Number(st.received_ms) < 60_000;
+  const route = {
+    active_route: connection.status === "stored" ? (st?.server ?? null) : null,
+    status: connection.status !== "stored" ? "no_connection" : !stateFresh ? "unknown" : st?.connected !== true ? "disconnected" : st?.trade_allowed === true ? "trading" : "trade_disabled",
+    failover: "none",
+    bridge_sync_age_ms: syncedAge
   };
 
   // Macro Risk & Real-Time Economic Calendar
@@ -533,7 +532,7 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       last_recovery: lastRec ? { ms: lastRec.ms, ...parse(lastRec.detail, {}) } : null,
     },
     tca,
-    sor,
+    route,
     macro_risk: macroRisk,
     volatility,
     intents: intents.map((r) => ({ ...parse(r.payload, {}), status: r.status, result: parse(r.result), created_ms: r.created_ms, updated_ms: r.updated_ms })),

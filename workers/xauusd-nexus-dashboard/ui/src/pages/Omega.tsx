@@ -19,6 +19,8 @@ import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesAp
 import { Badge, Dot, Empty, Kpi, Panel, Skeleton } from "../components/ui";
 import { ExitConfirmModal, type ExitTargetPosition } from "../components/ExitConfirmModal";
 import { get } from "../lib/api";
+import { C } from "../components/charts";
+import { nearestCandidates, withAlpha, type KeyZone } from "../lib/keyZones";
 
 /**
  * Omega Execution Engine & Windows MetaTrader 5 Web Terminal inside the Nexus SPA
@@ -232,6 +234,27 @@ async function omegaJson(path: string, method = "GET", body?: unknown) {
   return data;
 }
 
+const KEY_ROLE_COLOR: Record<string, string> = { support: C.bull, resistance: C.bear, "at price": C.cyan };
+const KEY_ROLE_SHORT: Record<string, string> = { support: "S", resistance: "R", "at price": "at price" };
+const KEY_STRENGTH_ALPHA: Record<string, number> = { strong: 0.95, medium: 0.7, weak: 0.45 };
+
+/** The War Room's key-level zones (GET /api/conclusion/global → strategy.key_levels), refreshed every 60 s. */
+function useKeyZones(): KeyZone[] {
+  const [zones, setZones] = useState<KeyZone[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      get<any>("/api/conclusion/global")
+        .then((r) => { if (alive) setZones(nearestCandidates(r?.global?.strategy?.key_levels, 6)); })
+        .catch(() => { if (alive) setZones([]); });
+    };
+    load();
+    const id = window.setInterval(load, 60_000);
+    return () => { alive = false; window.clearInterval(id); };
+  }, []);
+  return zones;
+}
+
 function Mt5ChartCanvas({
   tf,
   symbol,
@@ -245,6 +268,8 @@ function Mt5ChartCanvas({
   showBidAsk,
   showPlan,
   showPositions,
+  keyZones,
+  showKeyLevels,
 }: {
   tf: Mt5Tf;
   symbol: string;
@@ -258,6 +283,8 @@ function Mt5ChartCanvas({
   showBidAsk: boolean;
   showPlan: boolean;
   showPositions: boolean;
+  keyZones: KeyZone[];
+  showKeyLevels: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -395,6 +422,17 @@ function Mt5ChartCanvas({
       linesRef.current.push(series.createPriceLine({ price, color, lineWidth, lineStyle: style, axisLabelVisible: true, title }));
     };
 
+    // Key levels from the War Room (owner 2026-11-12): the Key Level Agent's six candidate zones nearest to price,
+    // each as its upper and lower edge, coloured by role and shaded by strength. They are on the feed's prices
+    // (OANDA via TradingView), like the candles; the broker's bid, ask and positions may differ by a few cents.
+    if (showKeyLevels) {
+      for (const z of keyZones) {
+        const color = withAlpha(KEY_ROLE_COLOR[z.role ?? ""] ?? C.muted, KEY_STRENGTH_ALPHA[z.strength ?? ""] ?? 0.4);
+        const label = `KL ${KEY_ROLE_SHORT[z.role ?? ""] ?? "zone"} · ${z.strength ?? "—"}`;
+        addLine(z.high, label, color, LineStyle.LargeDashed, 1);
+        if (z.low !== z.high) addLine(z.low, "", color, LineStyle.LargeDashed, 1);
+      }
+    }
     if (showBidAsk) {
       addLine(bid, "BID", "#3fb950", LineStyle.Solid, 1);
       addLine(ask, "ASK", "#f85149", LineStyle.Solid, 1);
@@ -415,7 +453,7 @@ function Mt5ChartCanvas({
         addLine(p.tp, `#${p.ticket} TP`, "#34d399", LineStyle.Dotted, 1);
       }
     }
-  }, [candles, bid, ask, signal, positions, showBidAsk, showPlan, showPositions]);
+  }, [candles, bid, ask, signal, positions, showBidAsk, showPlan, showPositions, keyZones, showKeyLevels]);
 
   const last = hover || candles[candles.length - 1];
 
@@ -456,6 +494,12 @@ function Mt5ChartCanvas({
         {spreadPoints != null ? <span className="mono ml-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-amber-200">{spreadPoints} pts</span> : null}
       </div>
 
+      {showKeyLevels && keyZones.length > 0 ? (
+        <div className="pointer-events-none absolute bottom-7 left-2.5 z-10 rounded bg-black/55 px-2 py-1 text-[10px] text-slate-400 backdrop-blur-sm border border-white/5">
+          <span style={{ color: KEY_ROLE_COLOR.support }}>support</span> · <span style={{ color: KEY_ROLE_COLOR.resistance }}>resistance</span> · <span style={{ color: KEY_ROLE_COLOR["at price"] }}>at price</span>
+          <span className="ml-1.5">KL = War Room key-level zone, on feed prices (OANDA); broker prices may differ by a few cents</span>
+        </div>
+      ) : null}
       <div ref={hostRef} className="h-full w-full" />
     </div>
   );
@@ -474,6 +518,8 @@ export default function Omega() {
   const [showBidAsk, setShowBidAsk] = useState(true);
   const [showPlan, setShowPlan] = useState(true);
   const [showPositions, setShowPositions] = useState(true);
+  const [showKeyLevels, setShowKeyLevels] = useState(true);
+  const keyZones = useKeyZones();
   const [streamLive, setStreamLive] = useState(false);
   const [tickDir, setTickDir] = useState<"up" | "down" | null>(null);
   const lastBidRef = useRef<number | null>(null);
@@ -1026,6 +1072,18 @@ export default function Omega() {
               </button>
               <button
                 type="button"
+                onClick={() => setShowKeyLevels((v) => !v)}
+                title="The War Room's key-level zones (Key Level Agent), the six nearest to price"
+                className={`rounded border px-2 py-0.5 text-[11px] transition ${
+                  showKeyLevels
+                    ? "border-violet-400/35 bg-violet-500/10 text-violet-200"
+                    : "border-white/10 bg-black/30 text-slate-400"
+                }`}
+              >
+                Key Levels ({keyZones.length})
+              </button>
+              <button
+                type="button"
                 onClick={() => setToolboxTab("state_machine")}
                 className={`flex items-center gap-1.5 rounded border px-2 py-0.5 text-[11px] font-semibold transition ${
                   toolboxTab === "state_machine"
@@ -1252,6 +1310,8 @@ export default function Omega() {
               showBidAsk={showBidAsk}
               showPlan={showPlan}
               showPositions={showPositions}
+              keyZones={keyZones}
+              showKeyLevels={showKeyLevels}
             />
           </div>
         </div>

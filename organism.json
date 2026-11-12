@@ -1,0 +1,314 @@
+{
+  "$comment": "The XAUUSD organs' DNA for the Cryptophys platform census (owner 2026-11-12, ADR-0013 external organs). Served read-only by the AI Worker's OrganismDna RPC entrypoint (src/organism.mjs). test/organism-dna.test.mjs keeps it equal to the code: the agents that report to the kernel and every AI task the Workers run.",
+  "schema": "xauusd-organism.v1",
+  "organs": [
+    {
+      "$schema_version": 1,
+      "service": "xauusd-ai-trading-assistant",
+      "display_name": "XAUUSD AI Engine",
+      "kind": "service",
+      "deploy_unit": null,
+      "access": false,
+      "rollback": false,
+      "drift": {
+        "via": "rpc",
+        "binding": "EXT_XAUUSD_AI"
+      },
+      "agents": [
+        {
+          "id": "xauusd-reasoner",
+          "display_name": "Reasoner",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
+        },
+        {
+          "id": "xauusd-moderator",
+          "display_name": "Moderator",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
+        },
+        {
+          "id": "xauusd-risk-manager",
+          "display_name": "Risk Manager",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
+        },
+        {
+          "id": "hud-prophet",
+          "display_name": "Prophet",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
+        },
+        {
+          "id": "hud-trade-management",
+          "display_name": "Trade Management",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
+        },
+        {
+          "id": "hud-interstellar-eyes",
+          "display_name": "The Interstellar Eyes",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
+        },
+        {
+          "id": "hud-kinetic-engine-tva",
+          "display_name": "Kinetic Engine (TVA)",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
+        },
+        {
+          "id": "hud-fabio-amt-sensors",
+          "display_name": "Fabio AMT Sensors",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
+        },
+        {
+          "id": "hud-chronos-matrix",
+          "display_name": "Chronos Matrix",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
+        },
+        {
+          "id": "hud-aegis-footprint-matrix",
+          "display_name": "Aegis Footprint Matrix",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
+        },
+        {
+          "id": "hud-tactical-muscles",
+          "display_name": "Tactical Muscles",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
+        },
+        {
+          "id": "hud-macro-aether-sensors",
+          "display_name": "Macro & Aether Sensors",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
+        },
+        {
+          "id": "hud-decision-matrix",
+          "display_name": "Decision Matrix",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
+        }
+      ],
+      "engines": [
+        {
+          "task": "bus_agent"
+        },
+        {
+          "task": "bus_moderator"
+        },
+        {
+          "task": "decision_council"
+        },
+        {
+          "task": "h1_analyst"
+        },
+        {
+          "task": "h1_counselor"
+        },
+        {
+          "task": "h1_reasoner"
+        },
+        {
+          "task": "hud_agent"
+        },
+        {
+          "task": "hud_moderator"
+        },
+        {
+          "task": "live_hud_agent"
+        },
+        {
+          "task": "macro_room_conclusion"
+        },
+        {
+          "task": "macro_room_opening"
+        },
+        {
+          "task": "macro_room_rebuttal"
+        },
+        {
+          "task": "news_daily_tags"
+        },
+        {
+          "task": "news_daily_tldr"
+        },
+        {
+          "task": "plain_decision"
+        },
+        {
+          "task": "room_agent"
+        },
+        {
+          "task": "room_moderator"
+        },
+        {
+          "task": "tf_room_conclusion"
+        },
+        {
+          "task": "tf_room_opening"
+        },
+        {
+          "task": "tf_room_rebuttal"
+        },
+        {
+          "task": "thread_agent"
+        },
+        {
+          "task": "thread_moderator"
+        },
+        {
+          "task": "war_room_conclusion"
+        },
+        {
+          "task": "war_room_opening"
+        },
+        {
+          "task": "war_room_rebuttal"
+        }
+      ]
+    },
+    {
+      "$schema_version": 1,
+      "service": "xauusd-fundamental-news-ingestion",
+      "display_name": "XAUUSD TradingView MCP Gateway",
+      "kind": "service",
+      "deploy_unit": null,
+      "access": false,
+      "rollback": false,
+      "drift": {
+        "via": "rpc",
+        "binding": "EXT_XAUUSD_NEWS"
+      },
+      "agents": [],
+      "engines": []
+    },
+    {
+      "$schema_version": 1,
+      "service": "xauusd-tradingview-pull-adapter",
+      "display_name": "XAUUSD Market Data Adapter",
+      "kind": "service",
+      "deploy_unit": null,
+      "access": false,
+      "rollback": false,
+      "drift": {
+        "via": "rpc",
+        "binding": "EXT_XAUUSD_PULL_ADAPTER"
+      },
+      "agents": [],
+      "engines": []
+    },
+    {
+      "$schema_version": 1,
+      "service": "xauusd-nexus-dashboard",
+      "display_name": "XAUUSD Nexus Dashboard",
+      "kind": "portal",
+      "deploy_unit": null,
+      "access": false,
+      "rollback": false,
+      "drift": {
+        "via": "rpc",
+        "binding": "EXT_XAUUSD_NEXUS"
+      },
+      "agents": [],
+      "engines": []
+    },
+    {
+      "$schema_version": 1,
+      "service": "xauusd-omega",
+      "display_name": "XAUUSD Omega Execution Engine",
+      "kind": "portal",
+      "deploy_unit": null,
+      "access": false,
+      "rollback": false,
+      "drift": {
+        "via": "rpc",
+        "binding": "EXT_XAUUSD_OMEGA"
+      },
+      "agents": [],
+      "engines": []
+    }
+  ]
+}
