@@ -75,6 +75,11 @@ export function matchRelease(e, releases = []) {
 
 const fmtNum = (v, unit) => (v == null ? "n/a" : `${Math.round(v * 1000) / 1000}${unit === "%" ? "%" : ""}`);
 
+/** A released surprise's pull on gold: the rule's direction weighted by the surprise's size (1.5 SD and more: whole). */
+export function surprisePull(release) {
+  return (release?.gold_direction || 0) * Math.min(1, Math.abs(release?.surprise_z ?? 1) / 1.5);
+}
+
 /**
  * The strength of a consensus lean from the measured pre-release drift (owner 2026-11-12): unmeasured
  * (fewer than 5 releases with a consensus) it stays whole, as before; with a learned pre-release horizon
@@ -152,15 +157,17 @@ export function projectEvent(e, now = Date.now(), { release = null, stat = null,
 export function calendarOutlook(events, now = Date.now(), { impacts = ["High"], intel = null } = {}) {
   const list = (events || [])
     .filter((e) => e.currency === "USD" && impacts.includes(e.impact))
-    .filter((e) => { const t = Date.parse(e.time); return t >= now - 6 * 3_600_000 && t <= now + 48 * 3_600_000; })
-    .map((e) => projectEvent(e, now, { release: matchRelease(e, intel?.releases), stat: intel?.stats?.[ruleOf(e.title).kind] ?? null, pre: intel?.pre_stats?.[ruleOf(e.title).kind] ?? null })).filter(Boolean);
+    // Up to a day back (the longest learned reaction horizon, 24 hours); past 6 hours only while still inside its horizon.
+    .filter((e) => { const t = Date.parse(e.time); return t >= now - 24 * 3_600_000 && t <= now + 48 * 3_600_000; })
+    .map((e) => projectEvent(e, now, { release: matchRelease(e, intel?.releases), stat: intel?.stats?.[ruleOf(e.title).kind] ?? null, pre: intel?.pre_stats?.[ruleOf(e.title).kind] ?? null })).filter(Boolean)
+    .filter((p) => Date.parse(p.time) >= now - 6 * 3_600_000 || p.status === "released");
   const next24 = list.filter((p) => { const t = Date.parse(p.time); return t > now && t <= now + 24 * 3_600_000; });
   const leaning = next24.filter((p) => p.consensus_lean);
   const lean = leaning.length ? Math.round((leaning.reduce((s, p) => s + p.consensus_lean, 0) / next24.length) * 100) / 100 : 0;
   // The surprise lean of the releases still inside their horizon (owner 2026-11-10): the rule's direction
   // weighted by the size of the surprise, -1 to +1.
   const live = list.filter((p) => p.status === "released" && p.release && p.release.gold_direction);
-  const surpriseLean = live.length ? Math.round(Math.max(-1, Math.min(1, live.reduce((s, p) => s + p.release.gold_direction * Math.min(1, Math.abs(p.release.surprise_z ?? 1) / 1.5), 0) / live.length)) * 100) / 100 : 0;
+  const surpriseLean = live.length ? Math.round(Math.max(-1, Math.min(1, live.reduce((s, p) => s + surprisePull(p.release), 0) / live.length)) * 100) / 100 : 0;
   return {
     version: CALENDAR_AGENT_VERSION,
     surprise_lean: surpriseLean,

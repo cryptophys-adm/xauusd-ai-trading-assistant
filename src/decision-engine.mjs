@@ -41,7 +41,7 @@ import { readMacroRoom } from "./macro-room.mjs";
 import { readCorrelations } from "./correlations.mjs";
 import { loadRegimeMap, regimeAtClose } from "./market-regime.mjs";
 import { eventRisk, cachedCalendar } from "./econ-calendar.mjs";
-import { calendarOutlook, surpriseStrength } from "./calendar-agent.mjs";
+import { calendarOutlook, surpriseStrength, surprisePull } from "./calendar-agent.mjs";
 import { calendarIntel } from "./econ-releases.mjs";
 import { hudLevels } from "./hud-levels.mjs";
 import { callBusModel, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
@@ -360,12 +360,11 @@ export function calendarContextOf(outlook) {
  */
 export function calendarWitness(outlook) {
   const events = outlook?.events || [];
-  const after = events.filter((p) => p.status === "released" && p.release?.gold_direction);
-  if (after.length) {
-    const parts = after.map((p) => {
-      const pull = p.release.gold_direction * Math.min(1, Math.abs(p.release.surprise_z ?? 1) / 1.5);
-      return { p, v: pull * surpriseStrength(p.history ? { horizon_hours: p.history.horizon_hours, hit_rate: p.history.hit_rate } : null) };
-    });
+  // A kind whose reaction gold has not followed reliably (strength 0) does not lean, like a held-back consensus.
+  const parts = events.filter((p) => p.status === "released" && p.release?.gold_direction)
+    .map((p) => ({ p, v: surprisePull(p.release) * surpriseStrength(p.history ? { horizon_hours: p.history.horizon_hours, hit_rate: p.history.hit_rate } : null) }))
+    .filter((x) => x.v);
+  if (parts.length) {
     const lean = r2(clamp1(parts.reduce((t, x) => t + x.v, 0) / parts.length));
     return { phase: "after", lean, summary: parts.map(({ p, v }) => `${p.title} released ${p.release.surprise_z != null ? `${p.release.surprise_z > 0 ? "+" : ""}${p.release.surprise_z} SD ` : ""}→ ${r2(v)} until ${String(p.horizon?.to ?? "").slice(11, 16)} UTC`).join("; ") };
   }

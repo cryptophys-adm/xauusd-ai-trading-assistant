@@ -67,8 +67,13 @@ export function resetEconSchemaCacheForTests() { schemaReady = false; }
 export async function ensureEconSchema(db) {
   if (schemaReady) return;
   for (const sql of ECON_SCHEMA_SQL) await db.prepare(sql).run();
-  // The pre-release drift (owner 2026-11-12), added after the table.
-  try { await db.prepare("ALTER TABLE econ_releases ADD COLUMN pre_json TEXT").run(); } catch { /* already there */ }
+  // The pre-release drift (owner 2026-11-12), added after the table. A failed ALTER is accepted only when
+  // the column is there, so a transient error is retried at the next call instead of cached.
+  try { await db.prepare("ALTER TABLE econ_releases ADD COLUMN pre_json TEXT").run(); }
+  catch (error) {
+    const cols = ((await db.prepare("PRAGMA table_info(econ_releases)").all()).results || []).map((c) => c.name);
+    if (!cols.includes("pre_json")) throw error;
+  }
   schemaReady = true;
 }
 
@@ -187,22 +192,7 @@ export function preDriftStats(rows) {
     byKind.get(r.kind).push(pre.signed);
   }
   const out = {};
-  for (const [kind, list] of byKind) {
-    const horizons = {};
-    for (const h of PRE_HOURS) {
-      const v = list.map((x) => x[`${h}h`]).filter(isNum);
-      if (!v.length) continue;
-      horizons[`${h}h`] = { n: v.length, mean_atr: r3(v.reduce((a, b) => a + b, 0) / v.length), hit_rate: r3(v.filter((x) => x > 0).length / v.length) };
-    }
-    const enough = list.length >= MIN_HORIZON_SAMPLES;
-    const good = PRE_HOURS.filter((h) => { const x = horizons[`${h}h`]; return x && x.n >= MIN_HORIZON_SAMPLES && x.hit_rate >= HORIZON_HIT_RATE && x.mean_atr > 0; });
-    const horizon = enough ? (good.length ? Math.max(...good) : 0) : null;
-    out[kind] = {
-      samples: list.length, horizons, horizon_hours: horizon,
-      hit_rate: horizon ? horizons[`${horizon}h`].hit_rate : null,
-      mean_atr: horizon ? horizons[`${horizon}h`].mean_atr : null
-    };
-  }
+  for (const [kind, list] of byKind) out[kind] = kindStats(list, PRE_HOURS);
   return out;
 }
 
@@ -221,24 +211,35 @@ export function horizonStats(rows) {
   }
   const out = {};
   for (const [kind, list] of byKind) {
-    const horizons = {};
-    for (const h of REACTION_HOURS) {
-      const v = list.map((s) => s[`${h}h`]).filter(isNum);
-      if (!v.length) continue;
-      horizons[`${h}h`] = { n: v.length, mean_atr: r3(v.reduce((a, b) => a + b, 0) / v.length), hit_rate: r3(v.filter((x) => x > 0).length / v.length) };
-    }
-    const enough = list.length >= MIN_HORIZON_SAMPLES;
-    const good = REACTION_HOURS.filter((h) => { const x = horizons[`${h}h`]; return x && x.n >= MIN_HORIZON_SAMPLES && x.hit_rate >= HORIZON_HIT_RATE && x.mean_atr > 0; });
-    const peak = Object.entries(horizons).filter(([, x]) => x.n >= MIN_HORIZON_SAMPLES).sort((a, b) => b[1].mean_atr - a[1].mean_atr)[0];
-    const learned = enough && good.length ? Math.max(...good) : null;
-    out[kind] = {
-      samples: list.length, horizons,
-      horizon_hours: enough ? (good.length ? Math.max(...good) : 0) : null,
-      hit_rate: learned ? horizons[`${learned}h`].hit_rate : null,
-      peak: enough && peak ? { at: peak[0], mean_atr: peak[1].mean_atr, hit_rate: peak[1].hit_rate } : null
-    };
+    const st = kindStats(list, REACTION_HOURS);
+    const peak = Object.entries(st.horizons).filter(([, x]) => x.n >= MIN_HORIZON_SAMPLES).sort((a, b) => b[1].mean_atr - a[1].mean_atr)[0];
+    out[kind] = { ...st, peak: st.horizon_hours != null && peak ? { at: peak[0], mean_atr: peak[1].mean_atr, hit_rate: peak[1].hit_rate } : null };
   }
   return out;
+}
+
+/**
+ * Pure: one kind's signed moves (one object per release, keyed "<h>h") at each of `hours`: the count, the
+ * mean and the hit rate; the learned horizon is the longest hour with a hit rate of at least
+ * HORIZON_HIT_RATE and a positive mean (0 when none; null under MIN_HORIZON_SAMPLES releases), with its
+ * hit rate and mean. Shared by the reaction after a release and the drift before it.
+ */
+function kindStats(list, hours) {
+  const horizons = {};
+  for (const h of hours) {
+    const v = list.map((x) => x[`${h}h`]).filter(isNum);
+    if (!v.length) continue;
+    horizons[`${h}h`] = { n: v.length, mean_atr: r3(v.reduce((a, b) => a + b, 0) / v.length), hit_rate: r3(v.filter((x) => x > 0).length / v.length) };
+  }
+  const enough = list.length >= MIN_HORIZON_SAMPLES;
+  const good = hours.filter((h) => { const x = horizons[`${h}h`]; return x && x.n >= MIN_HORIZON_SAMPLES && x.hit_rate >= HORIZON_HIT_RATE && x.mean_atr > 0; });
+  const learned = enough && good.length ? Math.max(...good) : null;
+  return {
+    samples: list.length, horizons,
+    horizon_hours: enough ? learned ?? 0 : null,
+    hit_rate: learned ? horizons[`${learned}h`].hit_rate : null,
+    mean_atr: learned ? horizons[`${learned}h`].mean_atr : null
+  };
 }
 function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
 
@@ -361,7 +362,8 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
       const rule = ruleOf(r.title);
       if (rule.kind === "other") continue;
       const dir = isNum(r.surprise) && r.surprise !== 0 ? goldOf(rule.higher) * Math.sign(r.surprise) : null;
-      await db.prepare("UPDATE econ_releases SET kind = ?, gold_direction = COALESCE(?, gold_direction), updated_at = ? WHERE release_key = ?").bind(rule.kind, dir, new Date(now).toISOString(), r.release_key).run();
+      // pre_json cleared: its consensus was measured without the rule, so it is measured again (step 4).
+      await db.prepare("UPDATE econ_releases SET kind = ?, gold_direction = COALESCE(?, gold_direction), pre_json = NULL, updated_at = ? WHERE release_key = ?").bind(rule.kind, dir, new Date(now).toISOString(), r.release_key).run();
     }
     // (2) Back-fill, one window an hour.
     if (new Date(now).getUTCMinutes() < 25) {
@@ -389,8 +391,9 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
         }
       }
     }
-    // (4) The pre-release drift (owner 2026-11-12) of every release whose hour has begun, history included.
-    const prePending = ((await db.prepare("SELECT release_key, title, time, forecast, previous FROM econ_releases WHERE pre_json IS NULL AND time <= ? ORDER BY time DESC LIMIT 400").bind(new Date(now - 5 * 60_000).toISOString()).all()).results || []);
+    // (4) The pre-release drift (owner 2026-11-12) of every release whose hour has begun, history included,
+    // at the first sweep of each hour (it feeds the statistics, not a live decision).
+    const prePending = new Date(now).getUTCMinutes() < 25 ? ((await db.prepare("SELECT release_key, title, time, forecast, previous FROM econ_releases WHERE pre_json IS NULL AND time <= ? ORDER BY time DESC LIMIT 400").bind(new Date(now - 5 * 60_000).toISOString()).all()).results || []) : [];
     if (prePending.length) {
       const bars = await historyOnce();
       if (bars) {
@@ -399,8 +402,9 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
         for (const r of prePending) {
           const pre = preDriftOf(r, bars);
           const t = Date.parse(r.time);
-          // Outside the history, or a hole in it a day old: never measurable, so it is not retried.
-          const value = pre ? JSON.stringify(pre) : t < first + 9 * HOUR || t < last - DAY ? JSON.stringify({ unavailable: "not in the 1H history" }) : null;
+          // Before the history, or an hour the history has passed without a bar (market closed): never
+          // measurable, so it is not retried.
+          const value = pre ? JSON.stringify(pre) : t < first + 9 * HOUR || t + HOUR <= last ? JSON.stringify({ unavailable: "not in the 1H history" }) : null;
           if (value) { await db.prepare("UPDATE econ_releases SET pre_json = ?, updated_at = ? WHERE release_key = ?").bind(value, new Date(now).toISOString(), r.release_key).run(); out.pre += 1; }
         }
       }
@@ -412,7 +416,7 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
 }
 
 /**
- * The Calendar Agent's release intelligence at `now`: the releases of the last 6 hours and the next 48
+ * The Calendar Agent's release intelligence at `now`: the releases of the last 24 hours and the next 48
  * with their surprise, and the horizon statistics per event kind. Never throws.
  */
 export async function calendarIntel(env, { now = Date.now() } = {}) {
@@ -420,9 +424,11 @@ export async function calendarIntel(env, { now = Date.now() } = {}) {
   if (!db) return { version: ECON_RELEASES_VERSION, releases: [], stats: {}, pre_stats: {} };
   try {
     await ensureEconSchema(db);
-    const releases = ((await db.prepare("SELECT release_key, series, kind, title, time, actual, forecast, previous, unit, surprise, surprise_z, gold_direction FROM econ_releases WHERE time >= ? AND time <= ? ORDER BY time").bind(new Date(now - 6 * HOUR).toISOString(), new Date(now + 48 * HOUR).toISOString()).all()).results || []);
+    const releases = ((await db.prepare("SELECT release_key, series, kind, title, time, actual, forecast, previous, unit, surprise, surprise_z, gold_direction FROM econ_releases WHERE time >= ? AND time <= ? ORDER BY time").bind(new Date(now - 24 * HOUR).toISOString(), new Date(now + 48 * HOUR).toISOString()).all()).results || []);
     const rows = ((await db.prepare("SELECT kind, gold_direction, reaction_json FROM econ_releases WHERE reaction_json IS NOT NULL AND gold_direction IS NOT NULL AND gold_direction <> 0").all()).results || []);
-    const preRows = ((await db.prepare("SELECT kind, pre_json FROM econ_releases WHERE pre_json IS NOT NULL").all()).results || []);
+    // Its own try: the pre-release statistics never take the releases and the reaction statistics down.
+    let preRows = [];
+    try { preRows = ((await db.prepare("SELECT kind, pre_json FROM econ_releases WHERE pre_json IS NOT NULL").all()).results || []); } catch { preRows = []; }
     const counts = await db.prepare("SELECT COUNT(*) AS n, SUM(CASE WHEN actual IS NOT NULL THEN 1 ELSE 0 END) AS released, MIN(time) AS since FROM econ_releases").first();
     return { version: ECON_RELEASES_VERSION, releases, stats: horizonStats(rows), pre_stats: preDriftStats(preRows), history: { releases: Number(counts?.n) || 0, with_actual: Number(counts?.released) || 0, since: counts?.since ?? null } };
   } catch {

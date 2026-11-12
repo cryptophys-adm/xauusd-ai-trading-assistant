@@ -97,6 +97,17 @@ test("the CALENDAR witness: the consensus inside the pre-release horizon, the su
   assert.deepEqual([after.phase, after.lean], ["after", -0.6], "-1 x min(1, 2/1.5) x strength 0.6");
   const gone = calendarWitness(outlook(Date.parse(CPI) + 5 * H, { releases: [release], stats: { inflation: { samples: 20, horizon_hours: 4, hit_rate: 0.65 } } }));
   assert.equal(gone.lean, null, "past its horizon");
+  // Review 2026-11-12: a kind gold has not followed after its releases (strength 0) does not lean, and the
+  // consensus of an imminent release still counts.
+  const unreliable = { releases: [release], stats: { inflation: { samples: 20, horizon_hours: 0, hit_rate: null } } };
+  const nfp = { title: "Non-Farm Employment Change", currency: "USD", impact: "High", time: "2026-11-10T15:00:00.000Z", forecast: "150K", previous: "120K" };
+  const mixed = calendarWitness(calendarOutlook([e, nfp], Date.parse(CPI) + H, { intel: { pre_stats: {}, ...unreliable } }));
+  assert.deepEqual([mixed.phase, mixed.lean], ["before", -1], "the NFP consensus (stronger jobs: gold down), not a 0 from the CPI");
+  // A learned 24-hour reaction keeps the release in the outlook past 6 hours.
+  const long = calendarOutlook([e], Date.parse(CPI) + 10 * H, { intel: { releases: [release], stats: { inflation: { samples: 20, horizon_hours: 24, hit_rate: 0.8 } }, pre_stats: {} } });
+  assert.equal(long.events[0]?.status, "released", "10 hours after, inside its 24-hour horizon");
+  assert.equal(calendarWitness(long).phase, "after");
+  assert.equal(calendarOutlook([e], Date.parse(CPI) + 10 * H, { intel: { releases: [release], stats: {}, pre_stats: {} } }).events.length, 0, "past its 4-hour horizon and 6 hours: gone, as before");
   // On the card and in the quorum: 0.08 of the weight inside a horizon, out of it otherwise.
   const ON = { GLOBAL_DECISION_WEIGHTED: "true" };
   const global = { timeframes: [{ key: "D1", available: true, lean: 0.5 }, { key: "H1", available: true, lean: 0.5 }] };
@@ -123,6 +134,8 @@ test("the weights: CALENDAR 0.08, the others' B-11 shares kept outside a horizon
   assert.deepEqual([migrated.CALENDAR, migrated.SESSION, WITNESS_KEYS.length], [0.08, 0.02, 13]);
   assert.ok(migrated.D1 > migrated.H4, "the tuned order is kept");
   assert.equal(withCalendarWeight(EXTENDED_WITNESS_WEIGHTS), EXTENDED_WITNESS_WEIGHTS, "a set with it is left alone");
+  const oldB11 = { D1: 0.16, H4: 0.16, H1: 0.16, M15: 0.12, NEWS: 0.08, MACRO: 0.04, STRATEGY: 0.08, KEY_LEVELS: 0.05, REGIME: 0.05, TREND_TF: 0.05, MACRO_DRIVERS: 0.03, SESSION: 0.02 };
+  assert.deepEqual(withCalendarWeight(oldB11), { ...EXTENDED_WITNESS_WEIGHTS }, "a stored copy of the old B-11 set is the new B-11 set");
 });
 
 test("the sweep measures the drift before every release whose hour has begun, history included, once", async () => {
@@ -133,11 +146,18 @@ test("the sweep measures the drift before every release whose hour has begun, hi
   DB.raw.prepare("INSERT INTO econ_releases (release_key, series, kind, title, currency, time, forecast, previous, fetched_at, updated_at) VALUES ('k1', 'cpi', 'inflation', 'CPI m/m', 'USD', ?, 0.4, 0.3, 'x', 'x')").run(CPI);
   DB.raw.prepare("INSERT INTO econ_releases (release_key, series, kind, title, currency, time, forecast, previous, fetched_at, updated_at) VALUES ('k2', 'cpi', 'inflation', 'CPI m/m', 'USD', '2026-11-11T13:30:00.000Z', 0.4, 0.3, 'x', 'x')").run();
   const env = { DB, SIGNAL_CACHE: kv(), NEWS_INGESTION: { goldHistory: async () => ({ status: 200, body: { results: [{ ok: true, bars: bars(Date.parse("2026-11-09T00:00:00Z"), 60, (i) => 4000 - i) }] } }) } };
-  const r = await refreshEconReleases(env, { now: Date.parse(CPI) + 10 * 60_000, gatedEvents: [] });
+  assert.equal((await refreshEconReleases(env, { now: Date.parse(CPI) + 10 * 60_000, gatedEvents: [] })).pre, undefined, "only at the first sweep of an hour");
+  const r = await refreshEconReleases(env, { now: Date.parse("2026-11-10T14:10:00Z"), gatedEvents: [] });
   assert.equal(r.pre, 1, JSON.stringify(r));
   assert.match(DB.raw.prepare("SELECT pre_json FROM econ_releases WHERE release_key = 'k1'").get().pre_json, /"consensus":-1/);
   assert.equal(DB.raw.prepare("SELECT pre_json FROM econ_releases WHERE release_key = 'k2'").get().pre_json, null, "not yet released");
-  assert.equal((await refreshEconReleases(env, { now: Date.parse(CPI) + 20 * 60_000, gatedEvents: [] })).pre, undefined, "measured once");
+  assert.equal((await refreshEconReleases(env, { now: Date.parse("2026-11-10T15:10:00Z"), gatedEvents: [] })).pre, undefined, "measured once");
+  // A row re-classified from "other" is measured again: its consensus had no rule.
+  DB.raw.prepare("UPDATE econ_releases SET kind = 'other', title = 'Non Farm Payrolls', pre_json = '{\"consensus\":0,\"signed\":{}}' WHERE release_key = 'k1'").run();
+  await refreshEconReleases(env, { now: Date.parse("2026-11-10T16:40:00Z"), gatedEvents: [] });
+  assert.deepEqual({ ...DB.raw.prepare("SELECT kind, pre_json FROM econ_releases WHERE release_key = 'k1'").get() }, { kind: "jobs", pre_json: null });
+  await refreshEconReleases(env, { now: Date.parse("2026-11-10T17:10:00Z"), gatedEvents: [] });
+  assert.match(DB.raw.prepare("SELECT pre_json FROM econ_releases WHERE release_key = 'k1'").get().pre_json, /"consensus":-1/, "measured again with the jobs rule");
   const intel = await calendarIntel(env, { now: Date.parse(CPI) });
-  assert.equal(intel.pre_stats.inflation.samples, 1);
+  assert.equal(intel.pre_stats.jobs.samples, 1);
 });
