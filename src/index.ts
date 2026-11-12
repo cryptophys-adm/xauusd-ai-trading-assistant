@@ -192,6 +192,7 @@ import { readStrategy, loadStrategyInputs, buildStrategy, ownTimeframePlan, load
 import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } from "./strategy-inputs.mjs";
 import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
 import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema, readExecutionReport, LEDGER_CRON, activeSetups } from "./signal-ledger.mjs";
+import { runPatternCalibration, readPatternCalibration } from "./pattern-calibration.mjs";
 import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, TRADING_MODE_KEY } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport, pushExecutionReport } from "./aether-push.mjs";
@@ -2483,6 +2484,10 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/patterns/calibration") {
+    // The chart patterns' measured record on gold and the weight factors in force (src/pattern-calibration.mjs).
+    return dashboardJson({ status: "ok", calibration: await readPatternCalibration(env) });
+  }
   if (url.pathname === "/api/conclusion/global") {
     try {
       // The Decision Engine's decision travels with the witnesses (the rooms, news, macro, strategy).
@@ -3006,6 +3011,11 @@ export default {
           }
         }
         // The Signal Ledger runs on its own 5-minute schedule (LEDGER_CRON, runLedgerStep below).
+        // The chart patterns' calibration on gold, once an hour (src/pattern-calibration.mjs, owner 2026-11-12).
+        if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) {
+          const calibrated = await runPatternCalibration(env);
+          if (calibrated.status !== "disabled") console.log("pattern_calibration", JSON.stringify(calibrated));
+        }
         // Aether A8 (owner go 2026-11-08): the strategy engine's inputs once per closed H1 bar (from 40
         // minutes after the close), and the outcomes of earlier captures, for the threshold replay.
         // D1 only; never feeds a room or a decision. Non-fatal.

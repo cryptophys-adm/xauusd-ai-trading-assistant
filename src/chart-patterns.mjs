@@ -634,16 +634,22 @@ export function detectPatterns(bars, { events = [], max = MAX_PATTERNS_PER_CHART
 /**
  * Pure: the levels a pattern gives the Projection Agent. Forming: its two breakout lines. Broken out: the
  * broken line (where a throwback or pullback returns) and the measured target; the other line stays, lighter.
+ * `factorOf(id)` scales a broken-out pattern's weights by its measured record on gold
+ * (src/pattern-calibration.mjs; 1, the default weights, until a pattern has enough breakouts), at most 1.
  */
-export function patternLevels(patterns) {
+export function patternLevels(patterns, { factorOf = () => 1 } = {}) {
   const out = [];
-  const add = (price, label, weight) => { if (num(price) && price > 0) out.push({ price, kind: "pattern", label, weight, unique: false }); };
+  let f = 1;
+  const add = (price, label, weight) => { if (num(price) && price > 0) out.push({ price, kind: "pattern", label, weight: Math.min(1, Math.round(weight * f * 1000) / 1000), unique: false }); };
   for (const p of Array.isArray(patterns) ? patterns : []) {
+    f = 1;
     if (p.status === "forming") {
       add(p.upper, `${p.name}: upper breakout line`, 0.6);
       add(p.lower, `${p.name}: lower breakout line`, 0.6);
       continue;
     }
+    const factor = Number(factorOf(p.id));
+    f = Number.isFinite(factor) && factor > 0 ? factor : 1;
     const up = p.direction > 0, word = p.status === "busted" ? "busted " : "";
     add(up ? p.upper : p.lower, `${word}${p.name}: broken ${up ? "upper" : "lower"} line (${up ? "throwback" : "pullback"} level)`, 0.8);
     add(p.target, `${word}${p.name}: measured target`, p.status === "busted" ? 0.6 : 0.7);

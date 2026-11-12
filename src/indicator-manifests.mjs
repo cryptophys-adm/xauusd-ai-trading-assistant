@@ -66,6 +66,8 @@ export const MANIFESTS = Object.freeze([
   m({ id: "news", kind: "desk", name: "News Analyst", family: "fundamentals", source: { indicator: "News Daily" }, rooms: ALL_ROOMS }),
   m({ id: "technical", kind: "desk", name: "Technical Analyst", family: "price action", source: { indicator: "closed candles of the room's chart" }, rooms: ALL_ROOMS }),
   m({ id: "risk", kind: "desk", name: "Risk Manager", family: "risk", source: { indicator: "volatility, confirmations, conflicts" }, rooms: ALL_ROOMS }),
+  // Owner 2026-11-12: "Projection Agent sekarang harus masuk ke room" (src/projection-agent.mjs).
+  m({ id: "projection", kind: "desk", name: "Projection Agent", family: "projection", source: { indicator: "Fibonacci, the probability cone, trendlines and the chart patterns of the room's chart" }, rooms: ALL_ROOMS }),
   m({ id: "moderator", kind: "moderator", name: "Moderator", family: "moderator", source: { indicator: "the room's bus, Consensus Discussion and crowd line" }, rooms: ALL_ROOMS })
 ]);
 

@@ -94,7 +94,8 @@
     // minutes late, so the window can hold five rooms; at 15:15 four rooms held 113 calls and the 15m
     // conclusion ran out (budget_exhausted). Five rooms of about 32 calls, with headroom. The cap only
     // bounds a runaway: a room still makes the same calls.
-    "WAR_ROOM_MAX_CALLS_PER_HOUR": "170",
+    // 2026-11-12: 185 with the Projection Agent in the room (one more opening and rebuttal per room).
+    "WAR_ROOM_MAX_CALLS_PER_HOUR": "185",
     // Timeframe War Rooms (owner decision 2026-11-06): the 1H, 4H and D1 Threads are War Rooms of
     // all agents, one per closed bar (about 29 calls each since 2026-11-07; at most three rooms in
     // one hour).
