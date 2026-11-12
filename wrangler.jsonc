@@ -107,7 +107,7 @@
     // Room memo (owner 2026-11-11, "kurangi neuron/hari tanpa mengurangi kapabilitas"): a room step whose
     // whole request equals one answered before reuses that answer (src/room-memo.mjs). "false" = shadow:
     // the hits and the stance agreement are only counted (GET /api/ai-usage) until the owner's go.
-    "ROOM_MEMO_ENABLED": "false",
+    "ROOM_MEMO_ENABLED": "true",
     // Decision Engine Telegram heartbeat (owner 2026-11-11: "telegram bot lebih dari 1 jam tidak mengirim pesan"):
     // one "still WAIT/BUY/SELL" message after this many minutes without a message; "0" turns it off.
     "DECISION_TELEGRAM_HEARTBEAT_MINUTES": "60"
