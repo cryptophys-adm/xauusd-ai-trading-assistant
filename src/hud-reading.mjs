@@ -151,7 +151,7 @@ export function readHud(agentId, hud = {}) {
       // The direction above (R37 consensus) is Prophet's bias; this line is its setup and cycles,
       // worded so the two never read as conflicting biases.
       if (R38_GATE[f.gate_status]) {
-        const risk = f.t_enc === 4 ? "; a risk veto calls for reducing risk" : f.t_enc === 3 ? "; a reversal is being watched" : "";
+        const risk = f.t_enc === 4 ? "; a risk veto calls for cutting longs, as the structure broke down" : f.t_enc === 3 ? "; a reversal is being watched" : "";
         add(`Prophet's setup: ${R38_GATE[f.gate_status]}, and ${cycle(f.cycle_intensity)}${risk}.`);
       } else add(`On the cycle read, ${cycle(f.cycle_intensity)}.`);
       const parts = [];

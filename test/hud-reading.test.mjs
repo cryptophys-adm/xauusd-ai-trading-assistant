@@ -86,7 +86,7 @@ test("Prophet reads its setup: the setup gate and the cycles, like the Prophet H
   const mixed = readHud("prophet", { fields: { ...base, cycle_intensity: 1, gate_status: "NO_ACTIVE_SETUP" } });
   assert.ok(mixed.lines.some(l => l.text === "Prophet's setup: no buy or sell setup is active, and the three Prophet cycles do not agree."));
   const risk = readHud("prophet", { fields: { ...base, t_enc: 4, cycle_intensity: -3, gate_status: "SELL_CONFIRMED" } });
-  assert.ok(risk.lines.some(l => /^Prophet's setup: the sell setup is confirmed, and all three Prophet cycles point down; a risk veto calls for reducing risk\.$/.test(l.text)));
+  assert.ok(risk.lines.some(l => /^Prophet's setup: the sell setup is confirmed, and all three Prophet cycles point down; a risk veto calls for cutting longs, as the structure broke down\.$/.test(l.text)));
   // Without the setup gate the cycle line stays as it was.
   assert.ok(readHud("prophet", { fields: { ...base, cycle_intensity: 3 } }).lines.some(l => l.text === "On the cycle read, all three Prophet cycles point up."));
   for (const r of [bull, mixed, risk]) for (const l of r.lines) assert.deepEqual(naturalLanguageErrors(l.text), [], l.text);

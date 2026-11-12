@@ -13,5 +13,5 @@ export function readStrategy(env: any, options?: { now?: number; m5Context?: any
 export function planForDirection(strategy: any, dir: number): Record<string, any> | null;
 export function ownTimeframePlan(inputs: { snapshot?: unknown; bars?: unknown[] }, dir: number): Record<string, any> | null;
 export function loadOwnTimeframePlanInputs(env: unknown): Promise<{ snapshot: unknown; bars: unknown[] }>;
-export function riskChecks(dir: number, input: Record<string, any>): { vetoes: string[]; cautions: string[] };
+export function riskChecks(dir: number, input: Record<string, any>): { vetoes: string[]; cautions: string[]; supports: string[] };
 export function triggerOf(dir: number, input: Record<string, any>): { fired: boolean; source: string | null; note: string };

@@ -176,3 +176,17 @@ test("ownTimeframePlan: the H1 plan from the 1-hour chart alone (independent tim
   assert.equal(ownTimeframePlan({ snapshot: null, bars: [] }, 1), null, "no bars, no plan");
   assert.equal(ownTimeframePlan({ snapshot: null, bars }, 0), null);
 });
+
+test("Prophet t_enc 4 (RUTHLESS CUT LOSS, a bearish structure break) blocks a long and supports a short (owner 2026-11-12: \"jadikan ini sebagai opportunity\")", async () => {
+  const { riskChecks } = await import("../src/strategy-engine.mjs");
+  const h1Snapshot = { huds: { prophet: { fields: { t_enc: 4 } } } };
+  const long = riskChecks(1, { h1Snapshot, m15Snapshot: null, news: null });
+  assert.equal(long.vetoes.length, 1);
+  assert.match(long.vetoes[0], /so no long/);
+  assert.deepEqual(long.supports, []);
+  const short = riskChecks(-1, { h1Snapshot, m15Snapshot: null, news: null });
+  assert.deepEqual(short.vetoes, [], "production 07:01-08:46: eight bearish decisions were held at WAIT by this veto");
+  assert.equal(short.supports.length, 1);
+  assert.deepEqual(riskChecks(-1, { h1Snapshot: { huds: { prophet: { fields: { t_enc: 1 } } } }, m15Snapshot: null, news: null }).supports, [], "only t_enc 4");
+  assert.deepEqual(riskChecks(0, { h1Snapshot, m15Snapshot: null, news: null }), { vetoes: [], cautions: [], supports: [] }, "no side: nothing");
+});

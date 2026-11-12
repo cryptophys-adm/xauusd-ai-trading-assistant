@@ -546,7 +546,7 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
   try { trigger = triggerOf(dir, { confirmations: inputs.confirmations ?? null, m15Snapshot: inputs.m15Snapshot ?? null }); } catch { /* none */ }
   const roomConfirmed = ["M15", "H1"].filter((k) => card(k)?.decision === side);
   const entryTrigger = { fired: trigger.fired === true, source: trigger.fired ? (trigger.source ?? null) : null, note: trigger.note ?? null, rooms_agree: roomConfirmed };
-  let risk = { vetoes: [], cautions: [] };
+  let risk = { vetoes: [], cautions: [], supports: [] };
   try { risk = riskChecks(dir, { h1Snapshot: inputs.h1Snapshot ?? null, m15Snapshot: inputs.m15Snapshot ?? null, news: inputs.news ?? null, macro: macro ?? inputs.macro ?? null, calendar: inputs.calendar ?? null, mode: env?.TRADING_MODE ?? null, env, now }); } catch { /* none */ }
   add("no_veto", !risk.vetoes.length, risk.vetoes.length ? risk.vetoes.join("; ") : "no veto");
   const plan = planForDirection(strategy, dir);
@@ -554,7 +554,7 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
   const best = plan ? Math.max(plan.rrr?.tp1 ?? 0, plan.rrr?.tp2 ?? 0) : 0;
   add("reward", Boolean(plan) && best >= MIN_RRR, plan ? `${best}R to the best target (at least ${MIN_RRR}R needed)` : "no plan");
   const cautions = [...risk.cautions, ...contextCautions(dir, inputs.market ?? null)];
-  return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions, min_rrr: MIN_RRR, entry_trigger: entryTrigger };
+  return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions, supports: risk.supports ?? [], min_rrr: MIN_RRR, entry_trigger: entryTrigger };
 }
 
 /**
@@ -605,7 +605,7 @@ const WITNESS_KEYS = ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY"];
 /** Pure: the council's evidence (the witnesses, the quorum, both sides' guardrails and plans, the context). */
 export function councilEvidence({ barClose, cards, quorum, guards, context = {} }) {
   const plan = (g) => (g.plan ? { entry: g.plan.entry, entry_note: g.plan.entry_note, at_level: g.plan.at_level, stop: g.plan.stop, stop_note: g.plan.stop_note, tp1: g.plan.tp1, tp1_note: g.plan.tp1_note, tp2: g.plan.tp2, tp2_note: g.plan.tp2_note, progressive_stop: g.plan.progressive_stop ?? null, reward_to_risk: g.plan.rrr } : null);
-  const side = (g) => ({ allowed: g.allowed, checks: g.checks.map((c) => ({ check: c.id, pass: c.pass, detail: c.detail })), entry_trigger: g.entry_trigger ? { fired: g.entry_trigger.fired, note: g.entry_trigger.note } : null, plan: plan(g), vetoes: g.vetoes, cautions: g.cautions });
+  const side = (g) => ({ allowed: g.allowed, checks: g.checks.map((c) => ({ check: c.id, pass: c.pass, detail: c.detail })), entry_trigger: g.entry_trigger ? { fired: g.entry_trigger.fired, note: g.entry_trigger.note } : null, plan: plan(g), vetoes: g.vetoes, cautions: g.cautions, supports: g.supports ?? [] });
   return {
     bar_close: barClose,
     witnesses: cards.map((c) => ({ key: c.key, name: c.label, role: c.role, weight: c.weight, counts: c.available && !c.stale, lean: c.lean, own_decision: c.decision, state: c.state ?? undefined, confidence: c.confidence, summary: c.summary })),
@@ -896,7 +896,7 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     overruled: d.overruled, trade: d.trade,
     quorum, witnesses: cards,
     guardrails: { long: { allowed: guards.long.allowed, checks: guards.long.checks, entry_trigger: guards.long.entry_trigger ?? null }, short: { allowed: guards.short.allowed, checks: guards.short.checks, entry_trigger: guards.short.entry_trigger ?? null } },
-    cautions, vetoes: { long: guards.long.vetoes, short: guards.short.vetoes },
+    cautions, vetoes: { long: guards.long.vetoes, short: guards.short.vetoes }, supports: { long: guards.long.supports ?? [], short: guards.short.supports ?? [] },
     context: councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, market, now }),
     strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline, price: strategy.price, atr_h1: strategy.atr_h1 } : null,
     // The price feed the decision stood on: TradingView, or the broker's bars (MT5 fallback).

@@ -271,6 +271,7 @@ export const KB_V4_CONTENT = {
     short_arguments: [
       "for: prophet_r38.sell_confirmed == true on the closed candle (stronger with sell_high_quality), or prophet_r38.setup_state.sell_ready == true",
       "for: gmi_v12_70.conflict == false and gmi_v12_70.gate in {1, 2}",
+      "for: prophet_r38.t_enc == 4 (RUTHLESS CUT LOSS comes only from d_enc 3, a bearish structure break: longs get out, a short has support)",
       "against: gmi_v12_70.verdict == 3, gmi_v12_70.conflict == true or gate == -1"
     ],
     always_wait_when: [
@@ -279,7 +280,7 @@ export const KB_V4_CONTENT = {
       "the closed candle itself is missing or stale (news and indicator lanes that are missing are noted, not blocking)"
     ],
     risk_management_signals: [
-      "t_enc 4 (RUTHLESS CUT LOSS) is a strong argument against holding or entering; t_enc 5 is a hold",
+      "t_enc 4 (RUTHLESS CUT LOSS, from d_enc 3, a bearish structure break) is a strong argument against holding or entering a long, and supports a short; t_enc 5 is a hold",
       "gmi verdict 4 (extension) and -1 (exhaustion) mean review risk on existing positions; they are not entries"
     ],
     reversal_requires_explicit_auditable_evidence: true,
