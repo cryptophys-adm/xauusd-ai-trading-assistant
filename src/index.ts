@@ -227,6 +227,7 @@ import { readCrowdReplay } from "./tuning-replay.mjs";
 import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weighting.mjs";
 import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
+import { omegaHealth } from "./omega-health.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition } from "./omega-broker.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
@@ -2014,6 +2015,17 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
 export class OwnerNotifier extends WorkerEntrypoint<Env> {
   async notify(input: unknown): Promise<JsonObject> {
     return notifyOwner(this.env, input, { send: (text: string) => sendTelegram(this.env, text) }) as Promise<JsonObject>;
+  }
+}
+
+/**
+ * Owner 2026-11-12 ("Omega dan EA di AI Mesh"): the platform kernel's Service Binding XAUUSD_OMEGA_HEALTH reads
+ * the execution host's liveness for the AI Mesh page (src/omega-health.mjs). health() only: no control, no
+ * account figures; OmegaGateway stays bound to the Omega Worker alone.
+ */
+export class OmegaHealth extends WorkerEntrypoint<Env> {
+  async health(): Promise<JsonObject> {
+    return omegaHealth(this.env) as Promise<JsonObject>;
   }
 }
 
