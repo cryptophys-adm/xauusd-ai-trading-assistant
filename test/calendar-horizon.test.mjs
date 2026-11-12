@@ -161,3 +161,36 @@ test("the sweep measures the drift before every release whose hour has begun, hi
   const intel = await calendarIntel(env, { now: Date.parse(CPI) });
   assert.equal(intel.pre_stats.jobs.samples, 1);
 });
+
+test("the contrarian option (owner 2026-11-12: \"ya buatkan opsi kontrarian untuk survei\"): a significant drift against the consensus leans the other way", async () => {
+  const { binomialTail, calendarContrarianMode, CONTRARIAN_P_MAX } = await import("../src/econ-releases.mjs");
+  assert.ok(Math.abs(binomialTail(21, 29) - 0.0121) < 0.001, "production surveys at 4h: 21 of 29 against");
+  assert.equal(binomialTail(0, 10), 1);
+  assert.ok(binomialTail(12, 19) > CONTRARIAN_P_MAX, "'other' at 2h, 12 of 19: not significant");
+  // Surveys as measured in production 2026-11-12: against the consensus 66 % at 1-2h, 72 % at 4h, 62 % at 8h.
+  const row = (s) => ({ kind: "surveys", pre_json: JSON.stringify({ consensus: 1, signed: s }) });
+  const rows = Array.from({ length: 29 }, (_, i) => row({ "1h": i < 10 ? 0.2 : -0.4, "2h": i < 10 ? 0.2 : -0.4, "4h": i < 8 ? 0.3 : -0.8, "8h": i < 11 ? 0.4 : -0.7 }));
+  const st = preDriftStats(rows).surveys;
+  assert.deepEqual([st.horizon_hours, st.contrarian_hours, st.against_rate], [0, 4, 0.724], "4h is the longest significant hour (8h: 18 of 29, p 0.13)");
+  assert.ok(st.against_p < 0.05 && st.against_mean_atr < 0);
+  assert.equal(consensusStrength(st), 0, "the option off: held at 0, as before");
+  assert.equal(consensusStrength(st, { contrarian: true }), -0.9, "on: the other way, (0.724 - 0.5) / 0.25");
+  assert.equal(consensusStrength({ samples: 9, horizon_hours: 0, contrarian_hours: 0 }, { contrarian: true }), 0, "nothing significant: 0");
+  assert.equal(consensusStrength({ samples: 9, horizon_hours: 4, hit_rate: 0.7 }, { contrarian: true }), 0.8, "a kind that drifts with the consensus is unchanged");
+  // The Calendar Agent: an ISM print with a higher forecast (the consensus leans gold down) leans gold up, from 4 hours before.
+  const ism = { title: "ISM Manufacturing PMI", currency: "USD", impact: "High", time: CPI, forecast: "49.5", previous: "48.7" };
+  const at3 = Date.parse(CPI) - 3 * H;
+  const on = projectEvent(ism, at3, { pre: st, contrarian: true });
+  assert.equal(on.kind, "surveys");
+  assert.deepEqual([on.status, on.consensus_lean, on.horizon.hours_before, on.pre_release.contrarian], ["imminent", 0.9, 4, true]);
+  assert.match(on.text, /gold drifted against the consensus 72% of the time over the 4 hours before it .* so the lean is contrarian: gold up at 0\.9 from 4 hours before/);
+  const off = projectEvent(ism, at3, { pre: st });
+  assert.deepEqual([off.status, off.consensus_lean], ["upcoming", 0], "off: the fixed 2-hour window and no lean");
+  // Through the release intelligence and into the CALENDAR witness.
+  const o = calendarOutlook([ism], at3, { intel: { releases: [], stats: {}, pre_stats: { surveys: st }, contrarian: true } });
+  const w = calendarWitness(o);
+  assert.deepEqual([w.phase, w.lean], ["before", 0.9]);
+  assert.match(w.summary, /contrarian: against 72% over 4h/);
+  assert.equal(calendarContrarianMode({}), "off");
+  assert.equal(calendarContrarianMode({ CALENDAR_CONTRARIAN: "on" }), "on");
+});
