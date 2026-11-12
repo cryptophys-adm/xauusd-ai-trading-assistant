@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { hudLevels, LEVEL_TIMEFRAMES } from "../src/hud-levels.mjs";
-import { buildGlobalConclusion, roomLean, GLOBAL_WEIGHTS } from "../src/global-conclusion.mjs";
+import { buildGlobalConclusion, roomLean, newsLean, GLOBAL_WEIGHTS } from "../src/global-conclusion.mjs";
 
 const snapshot = (huds, extra = {}) => ({ candle_key: "OANDA:XAUUSD:60:1793952000000", timeframe: "60", computed_at: "2026-11-06T10:00:40.000Z", huds, ...extra });
 const eyes = { fields: { close: 4050, camarilla: { "60": { h6: 4120, h5: 4100, h4: 4080, h3: 4065, l3: 4035, l4: 4020, l5: 4000, l6: 3980 }, D: { h6: 4300, h5: 4200, h4: 4100, h3: 4070, l3: 4010, l4: 3990, l5: 3900, l6: 3800 }, nope: null }, band: { "60": "l3_h3", D: "l3_h3" } } };
@@ -70,9 +70,21 @@ test("global conclusion: bias from the weighted rooms and news, action bound by 
   assert.deepEqual(g.timeframes.map((t) => t.key), ["D1", "H4", "H1", "M15", "NEWS"]);
   assert.equal(g.alignment.with_bias, 4, "D1, 4H, 1H and news lean bullish; 15m is neutral");
   assert.equal(g.alignment.of, 5);
-  assert.match(g.summary, /^Global bias strongly bullish \(\+63\), 4 of 5 agreeing: D1 strongly bullish/);
+  // News leans 0.7 x the TLDR (+0.6) + 0.3 x the headlines ((12 - 4) / 20 = +0.4) = +0.54 (owner 2026-11-12).
+  assert.equal(g.timeframes.find((t) => t.key === "NEWS").lean, 0.54);
+  assert.match(g.summary, /^Global bias strongly bullish \(\+64\), 4 of 5 agreeing: D1 strongly bullish/);
   assert.match(g.summary, /H1 decision is BUY/);
   assert.equal(Object.values(GLOBAL_WEIGHTS).reduce((s, w) => s + w, 0).toFixed(2), "1.00");
+});
+
+test("News leans with its TLDR, tempered by the headlines; the headlines alone without a TLDR", () => {
+  // Production 2026-11-12 00:32: a BEARISH TLDR at 0.72 over mostly neutral headlines read -0.10 from the headlines alone.
+  const counts = { bullish: 3, bearish: 5, neutral: 12 };
+  assert.equal(newsLean({ tldr: { status: "ok", stance: "BEARISH", confidence: 0.72 }, counts }), -0.53);
+  assert.equal(newsLean({ tldr: { status: "failed" }, counts }), -0.1);
+  assert.equal(newsLean({ tldr: { status: "ok", stance: "NEUTRAL", confidence: 0.8 }, counts }), -0.03, "a neutral TLDR leaves the headlines' balance, tempered");
+  assert.equal(newsLean({ tldr: { status: "ok", stance: "BULLISH", confidence: 0.5 } }), 0.5, "no headline counts: the TLDR");
+  assert.equal(newsLean(null), null);
 });
 
 test("global conclusion: an H1 entry against the other timeframes becomes WAIT; WAIT stays WAIT; missing rooms drop out", () => {

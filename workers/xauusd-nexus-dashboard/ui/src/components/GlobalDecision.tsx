@@ -96,6 +96,35 @@ function MarketContext({ c }: { c: any }) {
   );
 }
 
+/**
+ * A witness's status (owner 2026-11-12: "bedakan status antara stale dan tidak ada keputusan"). Only
+ * "stale" means old data. "no direction" is fresh data that leans neither way (|lean| < 0.15, e.g. the
+ * regime in chaos), and it still counts toward the quorum. "context" is the session clock, which never
+ * leans. "no data" is a witness with nothing to read.
+ */
+type WitnessStatus = "counts" | "neutral" | "stale" | "context" | "no_data";
+const LEAN_BAND = 0.15;
+function witnessStatus(w: any): WitnessStatus {
+  if (w?.stale) return "stale";
+  if (w?.key === "SESSION") return "context";
+  if (!w?.available || w?.lean == null) return "no_data";
+  return Math.abs(w.lean) < LEAN_BAND ? "neutral" : "counts";
+}
+const STATUS_TAG: Record<WitnessStatus, { text: string; cls: string } | null> = {
+  counts: null,
+  neutral: { text: "no direction", cls: "text-slate-400" },
+  stale: { text: "stale", cls: "text-amber-300" },
+  context: { text: "context", cls: "text-cyan-300/70" },
+  no_data: { text: "no data", cls: "text-slate-500" }
+};
+const STATUS_NOTE: Record<WitnessStatus, string | null> = {
+  counts: null,
+  neutral: "fresh, leans neither way (counts toward the quorum)",
+  stale: "stale data: left out of the quorum",
+  context: "context only: no direction, no weight in the quorum",
+  no_data: "nothing to read: left out of the quorum"
+};
+
 /** The trade of a decision as the plan ladder's input (the chosen target carries its note). */
 function tradePlan(t: any) {
   return { entry: t.entry, stop: t.stop, tp1: t.tp1, tp2: t.tp2, risk: t.risk, rrr: t.rrr_all, at_level: t.at_level, entry_note: t.entry_note, stop_note: t.stop_note, progressive_stop: t.progressive_stop, tp1_note: t.target === "tp1" ? `target · ${t.tp_note ?? ""}` : "", tp2_note: t.target === "tp2" ? `target · ${t.tp_note ?? ""}` : "" };
@@ -121,7 +150,11 @@ export default function GlobalDecision() {
     ...(news ? [{ key: "NEWS", label: "News", role: "24h", lean: news.lean, pass: null, note: news.summary ?? "no TLDR yet", stale: news.stale, weight: null }] : []),
     ...(macro?.available ? [{ key: "MACRO", label: "Macro", role: "context", lean: macro.lean, pass: null, note: macro.summary ?? "", stale: macro.stale, weight: null }] : [])
   ];
-  const witnessRows = (e?.witnesses ?? []).map((w: any) => ({ trigger: null as string | null, key: w.key, label: w.key === "STRATEGY" ? "Strat" : w.label, role: w.decision ? `${w.role ?? ""}`.slice(0, 18) : w.role, lean: w.lean, pass: w.available && !w.stale ? (w.lean == null ? null : e.stance === "BUY" ? w.lean >= 0.15 : e.stance === "SELL" ? w.lean <= -0.15 : null) : false, note: [w.decision ? `decision ${w.decision}` : null, w.summary].filter(Boolean).join(" · "), stale: w.stale || !w.available, weight: w.weight }));
+  const witnessRows = (e?.witnesses ?? []).map((w: any) => {
+    const status = witnessStatus(w);
+    const pass = status !== "counts" ? null : e.stance === "BUY" ? w.lean >= LEAN_BAND : e.stance === "SELL" ? w.lean <= -LEAN_BAND : null;
+    return { trigger: null as string | null, key: w.key, label: w.key === "STRATEGY" ? "Strat" : w.label, role: w.decision ? `${w.role ?? ""}`.slice(0, 18) : w.role, lean: w.lean, pass, status, note: [STATUS_NOTE[status], w.decision ? `decision ${w.decision}` : null, w.summary].filter(Boolean).join(" · "), stale: status === "stale" || status === "no_data", weight: w.weight };
+  });
   // The 5m row is the entry trigger (a Prophet R38 confirmation), not a lean: it shows its state.
   const m5 = e?.context?.m5_trigger;
   const m5Text = !e ? null : !m5 ? "no fresh 5m bar" : m5.buy_confirmed || m5.sell_confirmed ? `${m5.buy_confirmed ? "buy" : "sell"} confirmed${m5.verified ? "" : " (unverified)"}` : "no confirmation";
@@ -216,6 +249,7 @@ export default function GlobalDecision() {
                 <Pass v={r.pass} />
                 <span className="mono w-9 shrink-0 font-bold text-slate-100">{r.label}</span>
                 <span className="w-20 shrink-0 truncate text-[9.5px] uppercase tracking-[0.12em] text-slate-500">{r.weight != null ? `${Math.round(r.weight * 100)}% · ${r.role ?? ""}` : r.role}</span>
+                {r.status && STATUS_TAG[r.status as WitnessStatus] ? <span className={`shrink-0 text-[9px] uppercase tracking-[0.1em] ${STATUS_TAG[r.status as WitnessStatus]!.cls}`}>{STATUS_TAG[r.status as WitnessStatus]!.text}</span> : null}
                 {r.trigger != null ? (
                   <span className="min-w-0 flex-1 truncate text-right text-[10px] text-slate-300">{r.trigger}</span>
                 ) : (

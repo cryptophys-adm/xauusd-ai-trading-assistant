@@ -68,10 +68,21 @@ export function isRoomStale(atIso, now = Date.now(), maxAgeMs = 0) {
   return true;
 }
 
-function newsLean(news) {
+/**
+ * News Daily's lean (owner 2026-11-12, "setuju kerjakan 1 dan 2"). With a concluded TLDR it leans with
+ * the TLDR's stance x confidence, tempered by the balance of the day's headlines (0.7 / 0.3); without
+ * one, the headlines' balance alone. Production 2026-11-12 00:32: a BEARISH TLDR at 0.72 over mostly
+ * neutral headlines read -0.10 from the headlines alone, too weak to count against a long or a short.
+ */
+export const NEWS_TLDR_SHARE = 0.7;
+export function newsLean(news) {
   const c = news?.counts ?? {};
   const b = Number(c.bullish) || 0, s = Number(c.bearish) || 0, n = Number(c.neutral) || 0;
-  return b + s + n ? r2((b - s) / (b + s + n)) : null;
+  const headlines = b + s + n ? (b - s) / (b + s + n) : null;
+  const t = news?.tldr?.status === "ok" ? news.tldr : null;
+  const tldr = t && isNum(t.confidence) ? direction(t.stance) * Math.max(0, Math.min(1, t.confidence)) : null;
+  if (tldr == null) return headlines == null ? null : r2(headlines);
+  return r2(headlines == null ? tldr : NEWS_TLDR_SHARE * tldr + (1 - NEWS_TLDR_SHARE) * headlines);
 }
 
 /** Pure: the Global Conclusion from the latest rooms, News Daily and the H1 decision. */
