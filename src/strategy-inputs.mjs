@@ -73,6 +73,8 @@ export function slimInputs(inputs) {
     h1Chain: inputs?.h1Chain ? { decision: inputs.h1Chain.decision ?? null, confidence: inputs.h1Chain.confidence ?? null, candle_key: inputs.h1Chain.candle_key ?? null } : null,
     // The gated economic events (backlog 11.1): the event-risk caution must replay like the live one.
     calendar: Array.isArray(inputs?.calendar?.events) ? { events: inputs.calendar.events.map((e) => ({ title: e.title, currency: e.currency, time: e.time, impact: e.impact })) } : null,
+    // The released figures of the Projection Agent's event patterns: the replay must see them too.
+    releases: Array.isArray(inputs?.releases) ? inputs.releases.map((e) => ({ title: e.title, time: e.time, gold_direction: e.gold_direction })) : [],
     now: inputs?.now ?? null
   };
 }

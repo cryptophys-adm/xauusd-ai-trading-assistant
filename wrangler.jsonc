@@ -102,6 +102,8 @@
     // The Calendar Agent's contrarian pre-release drift (owner 2026-11-12: "ya buatkan opsi kontrarian untuk
     // survei"): a kind whose gold drifted against the consensus significantly leans the other way. "off" holds it at 0.
     "CALENDAR_CONTRARIAN": "on",
+    // The Projection Agent's chart patterns (src/chart-patterns.mjs, owner 2026-11-12): "on" | "off".
+    "CHART_PATTERNS_MODE": "on",
     "MACRO_ROOM_ENABLED": "true",
     "MACRO_ROOM_MAX_CALLS_PER_HOUR": "30",
     // News Daily (owner decision 2026-11-06): the last 24 hours, each headline tagged once.

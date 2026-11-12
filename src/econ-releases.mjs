@@ -444,6 +444,21 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
 }
 
 /** CALENDAR_CONTRARIAN (owner 2026-11-12): "on" lets a significant contrarian pre-release drift lean the other way. */
+/**
+ * The released figures of the last `days` with a direction for gold, newest first: the events of the
+ * Projection Agent's event patterns (src/chart-patterns.mjs). Never throws; [] without a database.
+ */
+export async function recentReleases(env, { now = Date.now(), days = 5, limit = 12 } = {}) {
+  const db = env?.DB;
+  if (!db) return [];
+  try {
+    await ensureEconSchema(db);
+    const rows = ((await db.prepare("SELECT title, time, gold_direction FROM econ_releases WHERE time >= ? AND time <= ? AND actual IS NOT NULL AND gold_direction IS NOT NULL AND gold_direction <> 0 ORDER BY time DESC LIMIT ?")
+      .bind(new Date(now - days * 86_400_000).toISOString(), new Date(now).toISOString(), limit).all()).results || []);
+    return rows.map((r) => ({ title: String(r.title ?? "").slice(0, 80), time: r.time, gold_direction: Number(r.gold_direction) > 0 ? 1 : -1 }));
+  } catch { return []; }
+}
+
 export function calendarContrarianMode(env) {
   return String(env?.CALENDAR_CONTRARIAN ?? "off").trim().toLowerCase() === "on" ? "on" : "off";
 }

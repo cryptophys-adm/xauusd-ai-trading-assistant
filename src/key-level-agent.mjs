@@ -16,6 +16,10 @@
 //   chart plane      every GMI chart object of each chart, through the four level readers
 //                    (src/level-readers.mjs, owner decision 2026-11-08): bands, liquidity,
 //                    projection and session, each with its own base weight
+//   chart patterns   the Projection Agent's pattern knowledge (src/chart-patterns.mjs, owner
+//                    2026-11-12): the breakout lines of the patterns of the 15m, 1H, 4H and D1 bars
+//                    0.6, a broken line 0.8 (where a throwback or pullback returns), the measured
+//                    target 0.7, the other line 0.5; they count in the projection family
 // A zone is a run of levels, sorted by price, whose span stays within the tolerance (0.3 x the 1H
 // ATR, at least 1 dollar). Strength: strong (score >= 6), medium (>= 3), weak.
 // Independence (owner decision 2026-11-08, after the chart plane gave 11 candidates): a source is a
@@ -29,6 +33,7 @@
 // stay zones (qualified, not candidates).
 
 import { readPlane, READERS } from "./level-readers.mjs";
+import { detectPatterns, patternLevels } from "./chart-patterns.mjs";
 
 export const KEY_LEVEL_VERSION = "cryptophys.key-level-agent.v2";
 export const TF_WEIGHT = Object.freeze({ "15": 1, "60": 1.5, "240": 2, D: 2.5, "1D": 2.5, W: 3 });
@@ -39,7 +44,7 @@ export const CANDIDATE_MIN_SOURCES = 3, CANDIDATE_MIN_SCORE = 3, MAX_CANDIDATES_
 /** Level kind -> family: the unit of independence. */
 const FAMILY = Object.freeze({
   liquidity: "liquidity", whale: "liquidity", fvg: "liquidity", "volume node": "liquidity",
-  fibonacci: "projection", cone: "projection", trendline: "projection", pa: "projection",
+  fibonacci: "projection", cone: "projection", trendline: "projection", pa: "projection", pattern: "projection",
   open: "session", "session profile": "session"
 });
 export const familyOf = (kind) => FAMILY[kind] ?? kind;
@@ -65,7 +70,7 @@ export function swings(bars, { lookback = SWING_LOOKBACK, perSide = SWINGS_PER_S
  * 2026-11-06: the D1 snapshot still held the 5 November set beside the current one, and both were
  * counted as two sources). The freshest snapshot wins; "1D" is the daily set ("D").
  */
-export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null } = {}) {
+export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = null } = {}) {
   const out = [], seen = new Set();
   const add = (p, kind, tf, label, weight, { unique = true, reader = null } = {}) => {
     if (!isNum(p)) return;
@@ -122,6 +127,11 @@ export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = nul
     const { highs, lows } = swings(series);
     highs.forEach((h) => add(h, "swing", tf, `${TF_NAME[tf]} swing high`, 0.9, { unique: false }));
     lows.forEach((l) => add(l, "swing", tf, `${TF_NAME[tf]} swing low`, 0.9, { unique: false }));
+  }
+  // The Projection Agent's chart patterns (precomputed by buildKeyLevels: { "15": [...], "60": [...] }).
+  for (const [tf, list] of Object.entries(patterns || {})) {
+    if (!TF_NAME[tf]) continue;
+    for (const l of patternLevels(list)) add(l.price, l.kind, tf, `${TF_NAME[tf]} ${l.label}`, l.weight, { unique: false, reader: "projection" });
   }
   const pd = (bars.D1 || []).at(-1);
   if (pd) {
@@ -184,10 +194,25 @@ export function limitCandidates(zones, price = null) {
   return zones;
 }
 
-/** The Key Level Agent's reading: every zone near price, the candidates first among equals. */
-export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null } = {}) {
+/** Pure: the chart patterns of each chart's closed bars, by timeframe ({ "15": [...], "60": [...], "240": [...], D: [...] }). */
+export function chartPatterns(bars = {}, { events = [] } = {}) {
+  const out = {};
+  for (const [tf, series] of [["15", bars.M15], ["60", bars.H1], ["240", bars.H4], ["D", bars.D1]]) {
+    const found = detectPatterns(series, { events });
+    if (found.length) out[tf] = found;
+  }
+  return out;
+}
+
+/**
+ * The Key Level Agent's reading: every zone near price, the candidates first among equals. `patterns`
+ * "off" leaves the chart patterns out (CHART_PATTERNS_MODE); `events` are the released figures for the
+ * event patterns ([{ time, gold_direction, title }]).
+ */
+export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [] } = {}) {
   const tolerance = Math.max(1, isNum(atrH1) ? 0.3 * atrH1 : 1);
-  const raw = rawLevels({ snapshots, bars, price, atrH1 });
+  const found = patterns === "off" ? {} : chartPatterns(bars, { events });
+  const raw = rawLevels({ snapshots, bars, price, atrH1, patterns: found });
   const zones = clusterLevels(raw, tolerance, price);
   const near = isNum(price) && isNum(atrH1) ? zones.filter((z) => Math.abs(z.price - price) <= 4 * atrH1) : zones;
   limitCandidates(near, price);
@@ -204,6 +229,8 @@ export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 
   const readers = Object.fromEntries(Object.entries(READERS).map(([id, r]) => [id, { name: r.name, role: r.role, levels: raw.filter((l) => l.reader === id).length }]));
   return {
     version: KEY_LEVEL_VERSION, price: r2(price), atr_h1: r2(atrH1), tolerance: r2(tolerance),
-    raw_count: raw.length, readers, zones: near, candidates, summary
+    raw_count: raw.length, readers, zones: near, candidates, summary,
+    // The Projection Agent's chart patterns, by chart (their levels are among the zones' members).
+    patterns: Object.entries(found).flatMap(([tf, list]) => list.map((p) => ({ tf, chart: TF_NAME[tf], ...p })))
   };
 }
