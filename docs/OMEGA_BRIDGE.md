@@ -29,6 +29,8 @@ Owner decisions 2026-11-09: Omega (`xauusd-omega`, `https://nexus.cryptophys.wor
 ## Host Installation
 
 ### 1. Copy `OmegaExecutor.mq5` and compile in MetaEditor
+Since 1.11 (2026-11-12) the EA's local break-even and micro trailing are off by default: Omega alone moves stops and targets. A chart that keeps inputs from an older attachment keeps its old values, so after recompiling, re-attach the EA (or set `AutoBreakEvenEnabled` and `TrailingStopEnabled` to false in its inputs).
+
 Copy `ea/mt5/OmegaExecutor.mq5` into the Wine prefix's `MQL5/Experts/` directory and compile it into `OmegaExecutor.ex5`:
 
 ```bash

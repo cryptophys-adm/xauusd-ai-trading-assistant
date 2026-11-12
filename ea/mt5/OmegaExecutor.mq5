@@ -34,7 +34,7 @@
 //|     manually on a chart profile when OMEGA_TAKE_STARTUP=false.   |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.10"
+#property version   "1.11"
 
 #include <Trade/Trade.mqh>
 
@@ -55,11 +55,14 @@ input string CorpusMacroSymbols = "XAGUSD,USOIL|XTIUSD|WTI|USOUSD|WTIUSD|CL-OIL,
 input int    CorpusMacroBars    = 240;   // closed M1 bars per macro symbol (10 to 240)
 input bool   CalendarEnabled    = true;  // write omega/calendar.json (USD, moderate and high importance) every 5 minutes
 
-//--- Profit Protection & Local Risk Management (Owner Approved)
-input bool   AutoBreakEvenEnabled   = true;  // Auto SL+ (Break-Even) enabled
+//--- Profit Protection & Local Risk Management
+// Off by default since 1.11 (owner 2026-11-12: "semua dikontrol dari omega bukan EA"): the Omega server
+// moves the stop and the target from the key levels and the Decision Engine's quorum power. Turning these
+// on again makes this EA move stops on its own, beside Omega.
+input bool   AutoBreakEvenEnabled   = false; // Auto SL+ (Break-Even) enabled
 input int    BreakEvenTriggerPoints = 150;   // Profit points to lock SL+ (150 pts = $1.50)
 input int    BreakEvenLockPoints    = 20;    // Profit points secured in SL+ (20 pts = $0.20)
-input bool   TrailingStopEnabled    = true;  // Micro Trailing Stop enabled
+input bool   TrailingStopEnabled    = false; // Micro Trailing Stop enabled
 input int    TrailingStartPoints    = 250;   // Profit points before trailing activates (250 pts = $2.50)
 input int    TrailingDistancePoints = 150;   // Distance of trailing stop from current price
 input int    TrailingStepPoints     = 30;    // Minimum step to modify trailing SL

@@ -24,7 +24,7 @@ test("the facts report: both seats, the Decision Engine's thresholds per trading
   assert.deepEqual([o["omega.risk_pct"], o["omega.max_spread_points"], o["omega.max_signal_age_min"], o["omega.rollover_quarantine_utc"]], [0.5, 60, 10, "21:55-22:15"]);
   assert.doesNotMatch(JSON.stringify(f), /entry|stop_loss|take_profit|login|password|account/i);
   const scalp = await doctrineFacts({ TRADING_MODE: "scalp", WEIGHTING_MODE: "default", BLACKOUT_MINUTES: "60" });
-  assert.deepEqual([scalp.seats.nexus.facts["decision.quorum_min"], scalp.seats.nexus.facts["decision.min_rrr"], scalp.seats.nexus.facts["weighting.mode"], scalp.seats.nexus.facts["calendar.blackout_before_min"]], [0.45, 1.2, "default", 60]);
+  assert.deepEqual([scalp.seats.nexus.facts["decision.quorum_min"], scalp.seats.nexus.facts["decision.min_rrr"], scalp.seats.nexus.facts["weighting.mode"], scalp.seats.nexus.facts["calendar.blackout_before_min"]], [0.45, 0, "default", 60], "scalp: the nearest key level, no reward minimum (owner 2026-11-12)");
   assert.equal((await doctrineFacts({ DECISION_ENGINE: "off" })).seats.nexus.facts["decision.engine_enabled"], false);
   assert.equal((await doctrineFacts({ OMEGA_EXEC_5M: "off" })).seats.nexus.facts["decision.execution_trigger"], "prophet_candle_for_market_orders", "the switch off: TradingView's 5m or 15m confirmation");
   assert.ok(guardrailIds({}).includes("quorum"));
@@ -48,7 +48,8 @@ test("the push: a no-op without the binding, never throws, reports the result", 
 });
 
 test("audit fix: the trade honours its trading mode's reward threshold (scalp 1.2R was turned into WAIT by a fixed 1.5R)", () => {
-  assert.deepEqual(modeThresholds("SCALP"), { mode: "scalp", quorum_min: 0.45, min_rrr: 1.2, lean: 0.1 });
+  // Since 2026-11-12 the scalp target is the nearest key level, with no reward minimum ("Tanpa batas RRR").
+  assert.deepEqual(modeThresholds("SCALP"), { mode: "scalp", quorum_min: 0.45, min_rrr: 0, lean: 0.1, target: "nearest" });
   assert.equal(modeThresholds("unknown").mode, "intraday");
   const plan = { entry: 100, stop: 99, tp1: 101.3, tp2: 101.35, rrr: { tp1: 1.3, tp2: 1.35 }, at_level: false };
   assert.equal(tradeFor("BUY", plan), null, `the default stays ${MIN_RRR}R`);

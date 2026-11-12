@@ -25,6 +25,7 @@
 // (omega.cryptophys.work, src/ea-execution.mjs) and kept in KV under EA_CONTROL_KEY.
 
 import { readBrokerTrigger, brokerTriggerFields } from "./broker-trigger.mjs";
+import { readCorpusBars } from "./corpus-oracle.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
 import { decisionEngineEnabled, readLatestDecision, keyCloseMs } from "./decision-engine.mjs";
 import { liveM5Inputs } from "./strategy-engine.mjs";
@@ -118,6 +119,46 @@ export function eaSignalFromDecision({ decision = null, kill = false, killSource
   };
 }
 
+/**
+ * Pure: the broker's price minus the feed's, the median over the feed's closed 5m bars matched with the
+ * broker's M1 bar closing at the same minute (at least 3 of them), or null. Omega moves the key levels,
+ * which are on the feed's scale, onto the broker's with it.
+ */
+export function feedBasis(brokerM1 = [], feedCandles = []) {
+  const closeAt = new Map((brokerM1 || []).filter((b) => Number.isFinite(b?.t) && isPrice(b?.c)).map((b) => [b.t + 60_000, b.c]));
+  const offs = (feedCandles || []).map((c) => ({ ms: Date.parse(String(c?.close_time ?? "")), close: c?.close })).filter((c) => Number.isFinite(c.ms) && isPrice(c.close) && closeAt.has(c.ms)).map((c) => closeAt.get(c.ms) - c.close).sort((a, b) => a - b);
+  if (offs.length < 3) return null;
+  const mid = Math.floor(offs.length / 2);
+  const median = offs.length % 2 ? offs[mid] : (offs[mid - 1] + offs[mid]) / 2;
+  return Math.round(median * 100) / 100;
+}
+
+/**
+ * Pure: the flat fields Omega's position management reads from the latest decision, whatever its stance
+ * (owner 2026-11-12: "atur SL+ dan Trailing TP juga harus berdasarkan keylevel menyesuaikan Bull/Bear
+ * Power"; "Bull/Bear power dihasilkan decision engine hasil quorum"). `power` is the quorum's score
+ * (-1 bearish to +1 bullish) at `power_ms`, the decision's close; `key_levels` the Key Level Agent's
+ * candidate zones on the feed's scale ("low:high" joined by ","); `feed_basis` the broker minus the feed.
+ * Flat values only: the EA parses a flat JSON object and ignores these.
+ */
+export function managementFields(decision, { basis = null } = {}) {
+  const close = keyCloseMs(decision?.decision_key);
+  const score = decision?.quorum?.score;
+  const levels = (Array.isArray(decision?.key_levels) ? decision.key_levels : []).filter((z) => isPrice(z?.low) && isPrice(z?.high) && z.low <= z.high);
+  return {
+    trading_mode: typeof decision?.trading_mode === "string" ? decision.trading_mode : "",
+    power: Number.isFinite(score) ? Math.max(-1, Math.min(1, score)) : 0,
+    power_ms: Number.isFinite(close) && Number.isFinite(score) ? close : 0,
+    key_levels: levels.map((z) => `${z.low}:${z.high}`).join(","),
+    feed_basis: Number.isFinite(basis) ? basis : 0,
+    feed_basis_known: Number.isFinite(basis)
+  };
+}
+
+const BASIS_TTL_MS = 5 * 60_000;
+let basisMemo = { at: 0, basis: null };
+export function resetFeedBasisMemoForTests() { basisMemo = { at: 0, basis: null }; }
+
 /** Loads the latest decision, the event gate and the feed price, and builds the signal. Never throws. */
 /** The EA's event blackout in force: BLACKOUT_MINUTES on both sides, else BLACKOUT_BEFORE_MINUTES (120) and BLACKOUT_AFTER_MINUTES (30). */
 export function blackoutWindow(env) {
@@ -152,10 +193,11 @@ export async function eaSignal(env, { now = Date.now() } = {}) {
     });
     if (active.length) { blackout = true; blackoutReason = active.map((e) => e.title ?? e.event ?? e.name ?? "high-impact USD event").join("; ").slice(0, 160); }
   } catch { blackout = false; }
-  let marketPrice = null, marketMs = null;
+  let marketPrice = null, marketMs = null, feedCandles = [];
   try {
     const rec = JSON.parse((await env.SIGNAL_CACHE?.get?.(`market-data:v2:series:${SYMBOL}|5m`)) || "null");
-    const last = (Array.isArray(rec?.candles) ? rec.candles : []).filter((c) => isPrice(c?.close) && c.close_time).sort((a, b) => Date.parse(a.close_time) - Date.parse(b.close_time)).at(-1);
+    feedCandles = (Array.isArray(rec?.candles) ? rec.candles : []).filter((c) => isPrice(c?.close) && c.close_time).sort((a, b) => Date.parse(a.close_time) - Date.parse(b.close_time));
+    const last = feedCandles.at(-1);
     if (last) { marketPrice = last.close; marketMs = Date.parse(last.close_time); }
   } catch { marketPrice = null; }
   // The live 5m confirmation (verified while the 5m Prophet implementation is parity-approved) for a market entry.
@@ -163,7 +205,19 @@ export async function eaSignal(env, { now = Date.now() } = {}) {
   if (engine && decision?.trade?.action === "ENTER_MARKET") { try { liveM5 = (await liveM5Inputs(env, { now }))?.confirmation ?? null; } catch { liveM5 = null; } }
   // The broker's 5m lane (docs/RFC_OMEGA_5M_EXECUTION.md): the trigger and, for Omega, the 5m stop and management fields.
   const broker = await readBrokerTrigger(env, { now });
-  if (engine) return { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now, liveM5, broker }), ...brokerTriggerFields(broker), source: "decision_engine" };
+  if (engine) {
+    // The broker's basis against the feed over the last two hours of closed 5m bars (the key levels' scale).
+    // Kept for 5 minutes per isolate: the bridge syncs every few seconds and the basis moves slowly.
+    let basis = basisMemo.at && now - basisMemo.at < BASIS_TTL_MS ? basisMemo.basis : null;
+    if (!(basisMemo.at && now - basisMemo.at < BASIS_TTL_MS)) {
+      try {
+        const recent = feedCandles.slice(-24);
+        if (recent.length) basis = feedBasis((await readCorpusBars(env, { sinceMs: Date.parse(recent[0].close_time) - 120_000 })).bars, recent);
+      } catch { basis = null; }
+      basisMemo = { at: now, basis };
+    }
+    return { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now, liveM5, broker }), ...brokerTriggerFields(broker), ...managementFields(decision, { basis }), source: "decision_engine" };
+  }
   return { ...eaSignalFrom({ candleKey, analysis, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now }), ...brokerTriggerFields(broker), source: "h1_decision" };
 }
 
