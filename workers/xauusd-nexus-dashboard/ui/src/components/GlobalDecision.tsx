@@ -106,7 +106,8 @@ type WitnessStatus = "counts" | "neutral" | "stale" | "context" | "no_data";
 const LEAN_BAND = 0.15;
 function witnessStatus(w: any): WitnessStatus {
   if (w?.stale) return "stale";
-  if (w?.key === "SESSION") return "context";
+  // The session never leans; the calendar leans only inside a release's horizon (owner 2026-11-12).
+  if (w?.key === "SESSION" || (w?.key === "CALENDAR" && !w?.available)) return "context";
   if (!w?.available || w?.lean == null) return "no_data";
   return Math.abs(w.lean) < LEAN_BAND ? "neutral" : "counts";
 }
@@ -121,7 +122,7 @@ const STATUS_NOTE: Record<WitnessStatus, string | null> = {
   counts: null,
   neutral: "fresh, leans neither way (counts toward the quorum)",
   stale: "stale data: left out of the quorum",
-  context: "context only: no direction, no weight in the quorum",
+  context: "context only: no direction, no weight in the quorum (the calendar counts only inside a release's horizon)",
   no_data: "nothing to read: left out of the quorum"
 };
 

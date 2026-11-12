@@ -242,6 +242,26 @@ async function ensureSchema(db) {
 const parse = (s) => { try { return JSON.parse(s); } catch { return null; } };
 export const tuningFrozen = (env) => String(env?.WITNESS_TUNING_MODE ?? "").trim().toLowerCase() === "default";
 
+/**
+ * Pure: a set stored before the CALENDAR witness (owner 2026-11-12) with it added at its prior: the tuned
+ * witnesses give it its weight in proportion, the fixed ones (the session) keep theirs. Any other set is
+ * returned as it is.
+ */
+export function withCalendarWeight(w) {
+  if (!w || typeof w !== "object" || "CALENDAR" in w) return w;
+  const cal = WITNESS_PRIORS.CALENDAR;
+  const tuned = TUNED_WITNESSES.filter((k) => k !== "CALENDAR");
+  const fixed = WITNESS_KEYS.filter((k) => !TUNED_WITNESSES.includes(k)).reduce((s, k) => s + (Number(w[k]) || 0), 0);
+  const rest = tuned.reduce((s, k) => s + (Number(w[k]) || 0), 0);
+  if (!(rest > 0)) return w;
+  const f = (1 - fixed - cal) / rest;
+  const out = { ...w, CALENDAR: cal };
+  for (const k of tuned) out[k] = Math.round((Number(w[k]) || 0) * f * 10_000) / 10_000;
+  const drift = Math.round((1 - WITNESS_KEYS.reduce((s, k) => s + out[k], 0)) * 10_000) / 10_000;
+  if (drift) { const top = tuned.reduce((a, b) => (out[a] >= out[b] ? a : b)); out[top] = Math.round((out[top] + drift) * 10_000) / 10_000; }
+  return out;
+}
+
 /** The stored state, or the B-11 default. Never throws. */
 export async function witnessTuningState(env, { now = Date.now(), useCache = true } = {}) {
   const fallback = { weights: { ...EXTENDED_WITNESS_WEIGHTS }, id: witnessWeightsId(EXTENDED_WITNESS_WEIGHTS), previous: null, source: null, activated_at: null, history: [], stored: false };
@@ -251,9 +271,9 @@ export async function witnessTuningState(env, { now = Date.now(), useCache = tru
   try {
     await ensureSchema(env.DB);
     const row = await env.DB.prepare("SELECT active_json, previous_json, source_json, activated_at, history_json FROM witness_weighting_state WHERE id = 'engine'").first();
-    const weights = row ? parse(row.active_json) : null;
+    const weights = row ? withCalendarWeight(parse(row.active_json)) : null;
     if (weights && !witnessWeightsProblems(weights).length) {
-      const previous = row.previous_json ? parse(row.previous_json) : null;
+      const previous = row.previous_json ? withCalendarWeight(parse(row.previous_json)) : null;
       value = { weights, id: witnessWeightsId(weights), previous: previous && !witnessWeightsProblems(previous).length ? previous : null, source: parse(row.source_json), activated_at: row.activated_at, history: parse(row.history_json) || [], stored: true };
     }
   } catch { value = fallback; }

@@ -41,7 +41,7 @@ import { readMacroRoom } from "./macro-room.mjs";
 import { readCorrelations } from "./correlations.mjs";
 import { loadRegimeMap, regimeAtClose } from "./market-regime.mjs";
 import { eventRisk, cachedCalendar } from "./econ-calendar.mjs";
-import { calendarOutlook } from "./calendar-agent.mjs";
+import { calendarOutlook, surpriseStrength } from "./calendar-agent.mjs";
 import { calendarIntel } from "./econ-releases.mjs";
 import { hudLevels } from "./hud-levels.mjs";
 import { callBusModel, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
@@ -56,7 +56,10 @@ export const SYMBOL = "OANDA:XAUUSD";
 const M15_MS = 900_000;
 /** Witness weights (sum 1). A missing or stale witness drops out and the rest renormalise. */
 export const WITNESS_WEIGHTS = Object.freeze({ D1: 0.2, H4: 0.2, H1: 0.2, M15: 0.15, NEWS: 0.1, MACRO: 0.05, STRATEGY: 0.1 });
-export const EXTENDED_WITNESS_WEIGHTS = Object.freeze({ D1: 0.16, H4: 0.16, H1: 0.16, M15: 0.12, NEWS: 0.08, MACRO: 0.04, STRATEGY: 0.08, KEY_LEVELS: 0.05, REGIME: 0.05, TREND_TF: 0.05, MACRO_DRIVERS: 0.03, SESSION: 0.02 });
+// CALENDAR (owner 2026-11-12: "horizon news release mempengaruhi bobot", 0.08): the economic calendar
+// counts only inside a release's horizon. The other witnesses gave it 0.08 in proportion (the session's
+// 0.02 floor kept), so outside a horizon, when CALENDAR drops out, their shares are the B-11 ones.
+export const EXTENDED_WITNESS_WEIGHTS = Object.freeze({ D1: 0.1469, H4: 0.1469, H1: 0.1469, M15: 0.1103, NEWS: 0.0735, MACRO: 0.0367, STRATEGY: 0.0735, KEY_LEVELS: 0.0459, REGIME: 0.0459, TREND_TF: 0.0459, MACRO_DRIVERS: 0.0276, SESSION: 0.02, CALENDAR: 0.08 });
 /**
  * The witness weights in force: the auto-tuned set the run loaded (env.DYNAMIC_WITNESS_WEIGHTS, from
  * src/witness-tuning.mjs) when present, else the B-11 set while GLOBAL_DECISION_WEIGHTED is on, else the base set.
@@ -170,6 +173,8 @@ export function witnessCards({ global = null, strategy = null, context = {}, env
     push("REGIME", "Regime", "1H trend quality", ind.regime);
     push("TREND_TF", "Trend TF", "price vs averages", ind.trend_tf);
     push("MACRO_DRIVERS", "Macro drivers", "dollar and yields", ind.macro_drivers);
+    const cw = calendarWitness(context?.calendar ?? null);
+    cards.push({ key: "CALENDAR", label: "Calendar", role: "release horizon", weight: W.CALENDAR ?? EXTENDED_WITNESS_WEIGHTS.CALENDAR, available: isNum(cw?.lean), stale: false, lean: isNum(cw?.lean) ? cw.lean : null, side: sideOf(cw?.lean), decision: null, confidence: null, summary: cw?.summary ?? null, at: null, phase: cw?.phase ?? null });
     const se = context?.session;
     const sessionText = se ? `${se.day} ${se.date} ${se.time_utc} UTC, market ${se.market_open ? `open, ${se.active.length ? se.active.join(" and ") : "between sessions"} (${se.liquidity} liquidity)` : "closed"}` : null;
     // A session has no direction: context only.
@@ -335,12 +340,42 @@ export function marketContextOf(loaded, quorum = null, now = Date.now()) {
  */
 export function calendarContextOf(outlook) {
   if (!outlook) return null;
-  const pick = (p) => ({ title: p.title, time: p.time, status: p.status, horizon_hours_after: p.horizon?.hours_after ?? null, horizon_learned: p.horizon?.learned === true, ...(p.release ? { release: p.release } : {}), ...(p.history ? { history: p.history } : {}), scenario: p.text });
+  const pick = (p) => ({ title: p.title, time: p.time, status: p.status, horizon_hours_before: p.horizon?.hours_before ?? null, horizon_hours_after: p.horizon?.hours_after ?? null, horizon_learned: p.horizon?.learned === true, ...(p.pre_release ? { pre_release: p.pre_release } : {}), ...(p.release ? { release: p.release } : {}), ...(p.history ? { history: p.history } : {}), scenario: p.text });
   return {
     summary: outlook.summary, consensus_lean: outlook.consensus_lean ?? 0, surprise_lean: outlook.surprise_lean ?? 0,
     released: (outlook.events || []).filter((p) => p.status === "released").map(pick),
     next: (outlook.events || []).filter((p) => p.status === "upcoming" || p.status === "imminent").slice(0, 3).map(pick)
   };
+}
+
+/**
+ * Pure: the CALENDAR witness (owner 2026-11-12: "horizon news release mempengaruhi bobot"), from the
+ * Calendar Agent's outlook. It leans only inside a release's horizon:
+ *   - after a release, inside its (learned) horizon: the surprise's pull on gold (the rule's direction
+ *     scaled by the surprise), times the strength of the kind's measured reaction (consensusStrength of
+ *     its post-release hit rate; whole while unmeasured);
+ *   - otherwise before a release, inside its (learned) pre-release horizon: the consensus lean, already
+ *     scaled by the measured pre-release drift (src/calendar-agent.mjs).
+ * Outside every horizon it has no lean (context; it drops out of the quorum).
+ */
+export function calendarWitness(outlook) {
+  const events = outlook?.events || [];
+  const after = events.filter((p) => p.status === "released" && p.release?.gold_direction);
+  if (after.length) {
+    const parts = after.map((p) => {
+      const pull = p.release.gold_direction * Math.min(1, Math.abs(p.release.surprise_z ?? 1) / 1.5);
+      return { p, v: pull * surpriseStrength(p.history ? { horizon_hours: p.history.horizon_hours, hit_rate: p.history.hit_rate } : null) };
+    });
+    const lean = r2(clamp1(parts.reduce((t, x) => t + x.v, 0) / parts.length));
+    return { phase: "after", lean, summary: parts.map(({ p, v }) => `${p.title} released ${p.release.surprise_z != null ? `${p.release.surprise_z > 0 ? "+" : ""}${p.release.surprise_z} SD ` : ""}→ ${r2(v)} until ${String(p.horizon?.to ?? "").slice(11, 16)} UTC`).join("; ") };
+  }
+  const before = events.filter((p) => p.status === "imminent" && p.consensus_lean);
+  if (before.length) {
+    const lean = r2(clamp1(before.reduce((t, p) => t + p.consensus_lean, 0) / before.length));
+    return { phase: "before", lean, summary: before.map((p) => `${p.title} at ${String(p.time).slice(11, 16)} UTC: consensus ${r2(p.consensus_lean)}${p.pre_release?.horizon_hours > 0 ? ` (drift ${Math.round(p.pre_release.hit_rate * 100)}% over ${p.pre_release.horizon_hours}h)` : ""}`).join("; ") };
+  }
+  const imminent = events.filter((p) => p.status === "imminent");
+  return { phase: imminent.length ? "before" : null, lean: null, summary: imminent.length ? `${imminent.map((p) => p.title).join(", ")} ahead, no consensus held` : "no release inside its horizon" };
 }
 
 /** Pure: the cautions the market context gives a side (never a block; the council weighs them). */
@@ -591,7 +626,7 @@ export function councilMessages(evidence) {
     "Witnesses each speak from their own data: the D1, 4H, 1H and 15m War Rooms (their agents' bias as a lean from -1 bearish to +1 bullish, and the room's own decision), News Daily, the Macro War Room and the strategy engine (the multi-timeframe confluence, the key-level plan and the entry trigger). You are the only one who reads across them.",
     "Decide the stance: BUY, SELL or WAIT. A BUY is possible only when long.allowed is true, a SELL only when short.allowed is true; otherwise the guardrails turn it into WAIT, so choose WAIT yourself and say which check is missing. WAIT is always allowed.",
     `The quorum guardrail is already evaluated in long.checks and short.checks: it compares quorum.bullish_share or quorum.bearish_share (the share of the witnesses' weight leaning that way) with quorum.share_needed_above. quorum.weighted_lean is the strength of the lean from -1 to +1, not the quorum; never compare it with ${QUORUM_MIN}.`,
-    "context.market.calendar is the Calendar Agent: each release still inside its horizon with its actual against the forecast, the surprise in standard deviations, the rule's effect on gold (gold_direction +1 up, -1 down) and, when enough past releases are measured, the learned horizon and how often gold followed the rule. A large surprise inside its horizon outweighs a weak technical lean; a release gold has not followed reliably weighs less.",
+    "context.market.calendar is the Calendar Agent: each release still inside its horizon with its actual against the forecast, the surprise in standard deviations, the rule's effect on gold (gold_direction +1 up, -1 down) and, when enough past releases are measured, the learned horizon and how often gold followed the rule. A large surprise inside its horizon outweighs a weak technical lean; a release gold has not followed reliably weighs less. Before a release (owner 2026-11-12), pre_release says how often gold drifted the consensus way in the hours before past releases of the kind and the consensus lean's strength from it; horizon_hours_before is the learned window. The CALENDAR witness weighs the calendar only inside a release's horizon (the consensus before, the surprise after) and is out of the quorum otherwise.",
     "context.market holds the right panel's cards: the market sentiment (the witnesses' weighted lean, the news and macro composite, the 24-hour headlines), the regime of the 15m and 1H charts (trending or mean-reverting, chaos, stretch), the macro drivers (gold, the dollar, oil and USDT dominance over 24 hours, the gold-dollar link, cross-asset correlations) and the session (day, date, market open or closed, the active sessions and their liquidity, the next close or open). Weigh them: they confirm or weaken the witnesses and explain the cautions.",
     "Weigh the witnesses by their weight and by how well their reasoning holds up; the higher timeframes carry the trend, the 15m and 1H rooms carry the setup, the strategy engine carries location and trigger. Cautions (an event, conflicts, chaotic regime) lower your confidence.",
     "The confirmation candle (a verified 5m or a 15m Prophet confirmation, in long.entry_trigger and short.entry_trigger) is the entry trigger, not a condition of your stance: decide the side from the witnesses inside the guardrails. A market entry waits for that candle before it is executed; a limit entry at the key level waits only for price, so prefer 'limit' while entry_trigger has not fired.",
@@ -809,7 +844,7 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // The extended witnesses read their own data (owner 2026-11-10), and the session describes SESSION
   // (context: a session has no direction).
   const session = sessionAt(now);
-  const context = { regime, correlations, session, independent: independentWitnesses(loaded, { now }) };
+  const context = { regime, correlations, session, calendar: loaded?.calendar ?? null, independent: independentWitnesses(loaded, { now }) };
   // The witness weights (owner 2026-11-11: "harusnya bobot itu dinamis sesuai dengan auto tune yang ada di
   // aether"): the set the auto-tuning activated (src/witness-tuning.mjs: replay, discovery and holdout,
   // reverse shadow), loaded by runDecisionEngine; else B-11 (source "default") or the base set ("base").
