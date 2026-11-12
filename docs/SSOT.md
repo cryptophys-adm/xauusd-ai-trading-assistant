@@ -368,7 +368,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - TP1 and TP2: the next two major levels with the trade, each at least 0.5 ATR beyond the previous one, or 2R and 3R projections;
     - RRR to each target.
   - **Vetoes and cautions:**
-    - Vetoes (state `BLOCKED`): a Prophet cut loss (t_enc 4), or a strong GMI verdict against the side (∓3), on the 1H chart.
+    - Vetoes (state `BLOCKED`): a Prophet cut loss (t_enc 4) against a **long** only, or a strong GMI verdict against the side (∓3), on the 1H chart. Prophet R38 sets t_enc 4 "RUTHLESS CUT LOSS" only from d_enc 3, a bearish structure break (a bull trap or a true breakdown without a strong trend); its bullish mirror d_enc −3 is t_enc 1 "PYRAMID BULL". So for a short it is a **support** (`supports`, +0.1 confidence; the Decision Engine records `supports` per side), never a veto (owner 2026-11-12: "setuju … justru jadikan ini sebagai opportunity"; production 07:01–08:46 UTC held eight bearish decisions, quorum −0.65 to −0.76 with every other short guardrail passing, at WAIT because it vetoed both sides).
     - Cautions (−0.1 confidence each):
       - a GMI and Prophet conflict, or a closed GMI gate (−1), on the 1H chart. These were vetoes until the owner loosened them on 2026-11-06: at 14:15 that day they blocked a clear bearish consensus;
       - both the 1H and the 15m regime chaotic;

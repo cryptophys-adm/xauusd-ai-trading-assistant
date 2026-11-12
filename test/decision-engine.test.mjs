@@ -78,8 +78,14 @@ test("guardrails: the long passes; the short fails quorum; stale rooms and vetoe
   const unverified = assess(loadedOf({ loaded: { inputs: { calendar: { events: [] }, confirmations: { m5_prophet_r38: { verified: false, buy_confirmed: true } } } } }), { now: NOW }).guards.long;
   assert.equal(unverified.entry_trigger.fired, false, "an unverified 5m confirmation does not");
   assert.deepEqual(guards.long.entry_trigger.rooms_agree, ["M15"], "the rooms that decided the side are kept for the record");
-  const veto = assess(loadedOf({ loaded: { inputs: { calendar: { events: [] }, h1Snapshot: { huds: { prophet: { fields: { t_enc: 4 } } } } } } }), { now: NOW }).guards.long;
-  assert.equal(veto.allowed, false, "a strategy veto blocks the side");
+  // Prophet t_enc 4 (RUTHLESS CUT LOSS, a bearish structure break) blocks a long only, and supports a short
+  // (owner 2026-11-12: production 07:01-08:46 held eight bearish decisions at WAIT when it vetoed both sides).
+  const cut = assess(loadedOf({ loaded: { inputs: { calendar: { events: [] }, h1Snapshot: { huds: { prophet: { fields: { t_enc: 4 } } } } } } }), { now: NOW }).guards;
+  assert.equal(cut.long.allowed, false, "a strategy veto blocks the side");
+  assert.match(cut.long.checks.find((c) => c.id === "no_veto").detail, /ruthless cut loss .* so no long/);
+  assert.equal(cut.short.checks.find((c) => c.id === "no_veto").pass, true, "it never blocks a short");
+  assert.deepEqual(cut.short.supports, ["Prophet signals a ruthless cut loss for longs on the 1-hour chart: the structure broke down, which supports a short"]);
+  assert.deepEqual(cut.long.supports, []);
   const noLevels = assess(loadedOf({ loaded: { strategy: { ...STRATEGY, atr_h1: null } } }), { now: NOW }).guards.long;
   assert.deepEqual(noLevels.checks.filter((c) => !c.pass).map((c) => c.id), ["levels", "reward"], "no price without a key-level plan");
 });

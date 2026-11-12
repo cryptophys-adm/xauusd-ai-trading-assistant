@@ -210,7 +210,7 @@ export function compositeSentimentLocal({ news = null, macro = null, newsLean = 
   return Math.round((parts.reduce((s, p) => s + p.v * p.w, 0) / tw) * 100) / 100;
 }
 export function riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar = null, macro = null, macroScore = null, composite = null, mode = null, tradingMode = null, env = null, now = Date.now() }) {
-  const vetoes = [], cautions = [];
+  const vetoes = [], cautions = [], supports = [];
   const dm = h1Snapshot?.huds?.decision_matrix?.fields || {};
   const tm = h1Snapshot?.huds?.trade_management?.fields || {};
   const prophet = h1Snapshot?.huds?.prophet?.fields || {};
@@ -218,7 +218,15 @@ export function riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar = null
   // -0.1 confidence), not vetoes; production 14:15 had a clear bearish consensus blocked by them.
   if (dm.conflict === true || tm.conflict === true) cautions.push("GMI and Prophet conflict on the 1-hour chart");
   if (dm.gate === -1 || tm.gate === -1) cautions.push("the GMI confluence gate is closed on the 1-hour chart");
-  if (prophet.t_enc === 4) vetoes.push("Prophet signals a ruthless cut loss on the 1-hour chart");
+  // Prophet R38 t_enc 4 "RUTHLESS CUT LOSS" comes only from d_enc 3, a bearish structure break on the 1-hour
+  // chart (a bull trap or a true breakdown without a strong trend); its bullish mirror, d_enc -3, is t_enc 1
+  // "PYRAMID BULL". It tells longs to get out, so it blocks a long only. Owner 2026-11-12 ("setuju … justru
+  // jadikan ini sebagai opportunity"): production 07:01-08:46 UTC held eight bearish decisions (quorum -0.65 to
+  // -0.76, every other short guardrail passed) at WAIT because it vetoed both sides; for a short it is support.
+  if (prophet.t_enc === 4) {
+    if (dir > 0) vetoes.push("Prophet signals a ruthless cut loss on the 1-hour chart: the structure broke down, so no long");
+    else if (dir < 0) supports.push("Prophet signals a ruthless cut loss for longs on the 1-hour chart: the structure broke down, which supports a short");
+  }
   if (dir > 0 && dm.verdict === -3) vetoes.push("the GMI verdict is a strong sell on the 1-hour chart");
   if (dir < 0 && dm.verdict === 3) vetoes.push("the GMI verdict is a strong buy on the 1-hour chart");
   const chaos = [h1Snapshot, m15Snapshot].filter((s) => s?.huds?.kinetic_engine?.fields?.is_chaos === true).length;
@@ -234,7 +242,7 @@ export function riskChecks(dir, { h1Snapshot, m15Snapshot, news, calendar = null
     if (dir * cs <= -0.6) vetoes.push("swing mode: composite sentiment leans strongly against the trade");
     else if (dir * cs < 0) cautions.push("swing mode: composite sentiment leans against the trade");
   }
-  return { vetoes, cautions };
+  return { vetoes, cautions, supports };
 }
 
 /** The entry trigger in a direction: a verified 5m confirmation or the 15m Prophet confirmation/setup state. */
@@ -301,10 +309,10 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
   const setup = setupType({ dir, price, m15Plane: m15Snapshot?.chart_plane ?? null, h1Plane: h1Snapshot?.chart_plane ?? null, near: isNum(atrH1) ? P.near_atr * atrH1 : null });
   const setupNote = setup.type === "none" ? null : `${setup.type === "continuation_pullback" ? "a pullback with the trend" : "a stretched sweep into liquidity"}: ${setup.evidence.join(", ")}`;
   const plan = dir ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr }) : null;
-  const { vetoes, cautions } = riskChecks(dir, { h1Snapshot, m15Snapshot, news, macro, macroScore, mode: mode ?? tradingMode ?? env?.TRADING_MODE, env, calendar, now });
+  const { vetoes, cautions, supports } = riskChecks(dir, { h1Snapshot, m15Snapshot, news, macro, macroScore, mode: mode ?? tradingMode ?? env?.TRADING_MODE, env, calendar, now });
   const trigger = triggerOf(dir, { confirmations, m15Snapshot });
 
-  let confidence = dir ? 0.6 * alignment + (plan?.at_level ? 0.15 : 0) + (trigger.fired ? 0.2 : 0) - 0.1 * cautions.length - (Object.values(layers).some((l) => l.stale) ? 0.1 : 0) : 0;
+  let confidence = dir ? 0.6 * alignment + (plan?.at_level ? 0.15 : 0) + (trigger.fired ? 0.2 : 0) - 0.1 * cautions.length + 0.1 * supports.length - (Object.values(layers).some((l) => l.stale) ? 0.1 : 0) : 0;
   confidence = r2(Math.max(0, Math.min(0.95, confidence)));
 
   let state, decision = "WAIT", headline;
@@ -334,7 +342,7 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
     plan, min_rrr: MIN_RRR,
     setup: dir ? setup : { type: "none", evidence: [] },
     key_levels: keyLevelReading,
-    layers: layerList, trigger, vetoes, cautions,
+    layers: layerList, trigger, vetoes, cautions, supports,
     h1_chain: h1Chain ? { decision: h1Chain.decision ?? null, confidence: h1Chain.confidence ?? null, candle_key: h1Chain.candle_key ?? null } : null,
     advisory: "Advisory only: no orders are placed and no position size is given."
   };
