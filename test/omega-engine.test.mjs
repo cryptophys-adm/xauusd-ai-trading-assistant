@@ -88,7 +88,9 @@ test("entry gates: expired, too old, blackout, paused, spread, positions, daily 
     assert.equal(r.intents.filter((i) => i.kind === "open").length, 0, code);
     assert.ok(codes(r).includes(code), `${code}: got ${codes(r)}`);
   }
-  assert.equal(plan({ executor: ex({ account: { ...EXECUTOR.account, equity: 9_801 } }) }).intents.length, 1, "a loss just under the limit still trades");
+  // Since 2026-11-12 a loss just under the limit trades only what the daily risk budget still allows.
+  assert.deepEqual(codes(plan({ executor: ex({ account: { ...EXECUTOR.account, equity: 9_801 } }) })), ["daily_risk_budget"], "1.00 of budget left: not even the minimum lot at a 5.00 stop");
+  assert.equal(plan({ executor: ex({ account: { ...EXECUTOR.account, equity: 9_900 } }) }).intents[0].volume, 0.09, "100 of budget left: the full 0.5 % lot");
   // The Decision Engine's 15m signal (since #212): fresh for 10 minutes by default, like the EA 1.11.
   const m15 = { ...SIGNAL, expires_ms: ISSUED + 900_000 };
   assert.equal(plan({ signal: m15, now: ISSUED + 9 * 60_000, executor: ex({ received_ms: ISSUED + 9 * 60_000 - 1000 }) }).intents.length, 1);
