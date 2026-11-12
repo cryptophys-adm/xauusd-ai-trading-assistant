@@ -10,9 +10,11 @@
 //   executor  missing, not connected, or written more than EXECUTOR_MAX_AGE_MS ago → nothing.
 //   opposite  a position against the signal's side is closed (allowed when paused or not armed).
 //   open      BUY/SELL, not expired, not older than max_signal_age_ms, no blackout, not paused, a real
-//             account only when live_armed, spread, max positions, the daily loss limit, one open per
-//             signal; SL/TP keep the signal's distances from the broker's own price; the volume risks
-//             risk_pct of equity at the stop.
+//             account only when live_armed, spread, max positions, no stacking on a side whose positions
+//             are not yet protected, the daily loss limit, one open per signal; SL/TP keep the signal's
+//             distances from the broker's own price; the volume risks risk_pct of equity at the stop,
+//             capped by the daily risk budget (equity above the daily loss floor less the open risk at
+//             the stops).
 // Intent ids are deterministic and at most 31 characters (they become the MT5 order comment).
 
 export const OMEGA_DEFAULTS = Object.freeze({
@@ -224,6 +226,33 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
   return out;
 }
 
+/** A position whose stop sits at or beyond its open price (break-even or locked profit) risks nothing more. */
+export function isProtected(p) {
+  const open = Number(p?.open_price ?? p?.entry), sl = Number(p?.sl);
+  if (!Number.isFinite(open) || !Number.isFinite(sl) || sl <= 0) return false;
+  return p.side === "BUY" ? sl >= open - 1e-9 : p.side === "SELL" ? sl <= open + 1e-9 : false;
+}
+
+/**
+ * What the positions would lose from the broker's current price to their stops, in account money (pure).
+ * A protected position adds nothing; a position without a stop, or without what it takes to value it,
+ * counts as the whole account (it blocks a new entry rather than hide unbounded risk).
+ */
+export function openRiskAtStops(positions = [], sym = {}) {
+  let total = 0;
+  for (const p of positions) {
+    if (p?.side !== "BUY" && p?.side !== "SELL") continue;
+    if (p.symbol && sym.name && p.symbol !== sym.name) continue;
+    const sl = Number(p.sl), vol = Number(p.volume);
+    if (!Number.isFinite(sl) || sl <= 0 || !Number.isFinite(vol) || vol <= 0 || !positive(sym.tick_size) || !positive(sym.tick_value)) return Infinity;
+    const exit = p.side === "BUY" ? sym.bid : sym.ask;
+    if (!finite(exit)) return Infinity;
+    const dist = p.side === "BUY" ? exit - sl : sl - exit;
+    if (dist > 0) total += (dist / sym.tick_size) * sym.tick_value * vol;
+  }
+  return total;
+}
+
 export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [] } = {}) {
   const intents = [], notes = [];
   const note = (code) => notes.push({ code });
@@ -285,13 +314,21 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     [recent.has(id) || positions.some((p) => p.intent_id === id), "already_opened"],
     [positions.length - closing >= S.max_positions || sameSide.length >= S.max_positions, "max_positions"],
     [!finite(sym.spread_points) || sym.spread_points > S.max_spread_points, "spread"],
-    [isRolloverQuarantine(now), "rollover_quarantine"]
+    [isRolloverQuarantine(now), "rollover_quarantine"],
+    // No stacking (owner 2026-11-12, "larangan tumpuk posisi"): a second position on a side opens only
+    // once every position already on that side is protected (its stop at or beyond its open price).
+    [sameSide.some((p) => !isProtected(p)), "same_side_unprotected"]
   ];
   for (const [blocked, code] of gates) if (blocked) { note(code); return { intents, notes }; }
 
   const needed = [account.equity, account.day_start_balance, signal.entry, signal.stop, signal.tp1, sym.bid, sym.ask, sym.point, sym.tick_size, sym.tick_value, sym.volume_step, sym.volume_min, sym.volume_max];
   if (!needed.every(positive) || !Number.isInteger(sym.digits)) { note("bad_input"); return { intents, notes }; }
-  if (account.equity - account.day_start_balance <= -account.day_start_balance * S.max_daily_loss_pct / 100) { note("daily_loss_limit"); return { intents, notes }; }
+  const lossFloor = account.day_start_balance * (1 - S.max_daily_loss_pct / 100);
+  if (account.equity <= lossFloor) { note("daily_loss_limit"); return { intents, notes }; }
+  // Daily risk budget (owner 2026-11-12): what the day can still lose is the equity above the daily
+  // loss floor less what the open positions would lose at their stops; a new entry risks at most that.
+  const budget = account.equity - openRiskAtStops(positions.filter((p) => !intents.some((it) => it.kind === "close" && it.ticket === p.ticket)), sym) - lossFloor;
+  if (!(budget > 0)) { note("daily_risk_budget"); return { intents, notes }; }
 
   const buy = side === "BUY";
   const planOk = buy ? signal.stop < signal.entry && signal.entry < signal.tp1 : signal.tp1 < signal.entry && signal.entry < signal.stop;
@@ -355,6 +392,9 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   }
   if (volume > sym.volume_max) volume = floorToStep(sym.volume_max, sym.volume_step);
   if (!positive(volume) || volume < sym.volume_min) { note("volume_below_min"); return { intents, notes }; }
+  const budgetVolume = floorToStep(budget / lossPerLot, sym.volume_step);
+  if (budgetVolume < sym.volume_min) { note("daily_risk_budget"); return { intents, notes }; }
+  if (volume > budgetVolume) { volume = budgetVolume; note("lot_capped_daily_budget"); }
 
   const openIntent = { id, kind: "open", side, volume, entry: price, sl, tp, signal_issued_ms: issued, reason: "signal", stop_source: tight ? "stop_5m" : "plan", trigger_source: typeof signal.trigger_source === "string" ? signal.trigger_source : null };
   if (volRegime !== "NORMAL") openIntent.vol_regime = volRegime;
