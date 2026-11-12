@@ -847,7 +847,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Scoring.** Each decision is scored with the hour's stored outcome, using the shared statistics (sign test, Holm, discovery minimum, holdout).
   - **Drift check.** The control is checked against the live decision stored at capture. A mismatch is reported as `drift`.
   - **Where to see it.** `/api/tuning` shows `replays.strategy`. A better threshold is a proposal for an owner PR to `src/strategy-engine.mjs`.
-- **Shadow knowledge arm (Aether A7, `src/shadow-knowledge.mjs`).** It is off unless `SHADOW_KNOWLEDGE_ENABLED = "true"`.
+- **Shadow knowledge arm (Aether A7, `src/shadow-knowledge.mjs`).** It is off unless `SHADOW_KNOWLEDGE_ENABLED = "true"`; production sets it on since 2026-11-12 (owner: "mode production harus active semua").
   - **Which items.** At most 2 approved text items of the learned pack (caution or role reminder) are tested at once.
   - **Which agents.** An agent qualifies when it is in the item's audience, sat in the 1H room and answered there.
   - **The call.** That agent makes one extra opening call on the same bar, with the same data and prompt plus the note line.
@@ -873,7 +873,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     | Moderator | at most 3 | at most 600 |
 
   - **Where it goes.** The block is placed after the agent's own data in the 1H, 4H and D1 room openings and conclusions. The room brief records `learned_pack` (version, sha and the notes each agent saw).
-  - **Switch.** It is off unless `LEARNED_KNOWLEDGE_ENABLED = "true"`; turning it off restores today's prompts. KB v4 always takes precedence. The 15m War Room and the H1 Reasoner do not read the notes yet.
+  - **Switch.** It is off unless `LEARNED_KNOWLEDGE_ENABLED = "true"` (on in production since 2026-11-12; the bundled pack is empty until an owner PR adds an item); turning it off restores today's prompts. KB v4 always takes precedence. The 15m War Room and the H1 Reasoner do not read the notes yet.
 - **P5 review (owner decision 2026-11-07):**
   - `prophet_r37@latch12` and `prophet_r38@latch8` are stopped; they are listed under `retired` in the view.
   - `prophet_r37@latch8` runs until 30 decisive pairs or 2026-12-07.
