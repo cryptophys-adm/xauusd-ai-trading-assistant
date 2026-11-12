@@ -34,7 +34,7 @@
 //|     manually on a chart profile when OMEGA_TAKE_STARTUP=false.   |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.12"
+#property version   "1.13"
 
 #include <Trade/Trade.mqh>
 
@@ -50,7 +50,9 @@ input int  CorpusBars          = 120;  // closed M1 bars kept in corpus.json (10
 // of the macro symbols (silver, oil, the six pairs of the dollar index) and the USD economic calendar.
 // Each entry is a base name; "|" lists alternatives (the first that exists at this broker is used, with the
 // gold symbol's prefix and suffix, e.g. ".m", tried first). The first name is the base the server knows.
-input bool   CorpusMacroEnabled = true;  // write omega/corpus_macro.json once per closed M1 bar
+// Off by default since 1.13 (owner 2026-11-12: "seharusnya memang tidak perlu selain XAUUSD saja", "data makro
+// dimatikan di mt5"): the broker supplies XAUUSD only. True again writes the macro bars beside it.
+input bool   CorpusMacroEnabled = false; // write omega/corpus_macro.json once per closed M1 bar
 input string CorpusMacroSymbols = "XAGUSD,USOIL|XTIUSD|WTI|USOUSD|WTIUSD|CL-OIL,EURUSD,USDJPY,GBPUSD,USDCAD,USDSEK,USDCHF";
 input int    CorpusMacroBars    = 240;   // closed M1 bars per macro symbol (10 to 240)
 input bool   CalendarEnabled    = true;  // write omega/calendar.json (USD, moderate and high importance) every 5 minutes
@@ -72,7 +74,7 @@ input bool   DynamicAtrStopEnabled  = true;  // Adaptive ATR-based SL+ and Trail
 input double AtrMultiplierTrigger   = 1.0;   // Break-even trigger multiplier of ATR (1.0 = 1x ATR)
 input double AtrMultiplierTrailing  = 1.5;   // Trailing distance multiplier of ATR (1.5 = 1.5x ATR)
 
-const string OMEGA_EXECUTOR_VERSION = "1.12"; // keep equal to #property version
+const string OMEGA_EXECUTOR_VERSION = "1.13"; // keep equal to #property version
 const string OMEGA_FOLDER    = "omega";
 const string STATE_TMP_PATH  = "omega/state.tmp";
 const string STATE_JSON_PATH = "omega/state.json";
