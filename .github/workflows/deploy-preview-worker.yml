@@ -72,7 +72,8 @@ jobs:
           echo "PREVIEW_WORKER_NAME=$PREVIEW_WORKER_NAME" >> "$GITHUB_ENV"
           # A brand-new Worker can briefly read back as "does not exist" (code 10007) right after
           # its first upload; retry that eventual-consistency error. A Cloudflare API outage
-          # (5xx, "no healthy upstream": PR #115, before any deploy or test ran) is retried too,
+          # (5xx, "no healthy upstream": PR #115, before any deploy or test ran) or transient
+          # queue-consumer update error (10013) is retried too,
           # with a longer backoff (30, 60, 90 s). Every other error fails at once.
           for attempt in 1 2 3 4; do
             set +e
@@ -84,6 +85,9 @@ jobs:
             if printf '%s' "$DEPLOY_OUTPUT" | grep -q 'code: 10007'; then
               echo "Preview deploy hit Cloudflare code 10007 (attempt $attempt); retrying in 10s." >&2
               sleep 10
+            elif printf '%s' "$DEPLOY_OUTPUT" | grep -q 'code: 10013'; then
+              echo "Cloudflare queue API returned code 10013 (attempt $attempt); retrying in $((attempt * 30))s." >&2
+              sleep $((attempt * 30))
             elif printf '%s' "$DEPLOY_OUTPUT" | grep -Eq -- '-> 5[0-9]{2} |no healthy upstream'; then
               echo "Cloudflare API unavailable (attempt $attempt); retrying in $((attempt * 30))s." >&2
               sleep $((attempt * 30))
