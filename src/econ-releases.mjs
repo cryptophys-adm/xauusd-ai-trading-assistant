@@ -25,6 +25,8 @@ export const REACTION_HOURS = Object.freeze([1, 2, 4, 8, 24]);
 export const PRE_HOURS = Object.freeze([1, 2, 4, 8]);
 export const MIN_HORIZON_SAMPLES = 5;
 export const HORIZON_HIT_RATE = 0.55;
+/** A contrarian pre-release drift counts only below this one-sided binomial p (owner 2026-11-12). */
+export const CONTRARIAN_P_MAX = 0.05;
 export const BACKFILL_DAYS = 400;
 const BACKFILL_WINDOW_DAYS = 14;
 const HOUR = 3_600_000, DAY = 86_400_000;
@@ -192,8 +194,29 @@ export function preDriftStats(rows) {
     byKind.get(r.kind).push(pre.signed);
   }
   const out = {};
-  for (const [kind, list] of byKind) out[kind] = kindStats(list, PRE_HOURS);
+  for (const [kind, list] of byKind) {
+    const st = kindStats(list, PRE_HOURS);
+    // The contrarian drift (owner 2026-11-12: "ya buatkan opsi kontrarian untuk survei"): a kind without a
+    // learned horizon whose gold drifted against the consensus at least HORIZON_HIT_RATE of the time, with
+    // a negative mean, and significantly (one-sided binomial p < CONTRARIAN_P_MAX): the longest such hour.
+    const against = st.horizon_hours === 0 ? PRE_HOURS.map((h) => {
+      const x = st.horizons[`${h}h`];
+      if (!x || x.n < MIN_HORIZON_SAMPLES || !(x.mean_atr < 0)) return null;
+      const k = x.n - Math.round(x.hit_rate * x.n);
+      const p = binomialTail(k, x.n);
+      return k / x.n >= HORIZON_HIT_RATE && p < CONTRARIAN_P_MAX ? { h, rate: r3(k / x.n), p: r3(p), mean_atr: x.mean_atr } : null;
+    }).filter(Boolean) : [];
+    const best = against.at(-1) ?? null;
+    out[kind] = { ...st, contrarian_hours: st.horizon_hours === 0 ? best?.h ?? 0 : null, against_rate: best?.rate ?? null, against_p: best?.p ?? null, against_mean_atr: best?.mean_atr ?? null };
+  }
   return out;
+}
+
+/** Pure: the one-sided binomial tail P(X >= k) for n fair trials. */
+export function binomialTail(k, n) {
+  let c = 1, p = 0;
+  for (let i = 0; i <= n; i++) { if (i >= k) p += c; c = (c * (n - i)) / (i + 1); }
+  return p / 2 ** n;
 }
 
 /**
@@ -415,6 +438,11 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
   return out;
 }
 
+/** CALENDAR_CONTRARIAN (owner 2026-11-12): "on" lets a significant contrarian pre-release drift lean the other way. */
+export function calendarContrarianMode(env) {
+  return String(env?.CALENDAR_CONTRARIAN ?? "off").trim().toLowerCase() === "on" ? "on" : "off";
+}
+
 /**
  * The Calendar Agent's release intelligence at `now`: the releases of the last 24 hours and the next 48
  * with their surprise, and the horizon statistics per event kind. Never throws.
@@ -430,7 +458,7 @@ export async function calendarIntel(env, { now = Date.now() } = {}) {
     let preRows = [];
     try { preRows = ((await db.prepare("SELECT kind, pre_json FROM econ_releases WHERE pre_json IS NOT NULL").all()).results || []); } catch { preRows = []; }
     const counts = await db.prepare("SELECT COUNT(*) AS n, SUM(CASE WHEN actual IS NOT NULL THEN 1 ELSE 0 END) AS released, MIN(time) AS since FROM econ_releases").first();
-    return { version: ECON_RELEASES_VERSION, releases, stats: horizonStats(rows), pre_stats: preDriftStats(preRows), history: { releases: Number(counts?.n) || 0, with_actual: Number(counts?.released) || 0, since: counts?.since ?? null } };
+    return { version: ECON_RELEASES_VERSION, releases, stats: horizonStats(rows), pre_stats: preDriftStats(preRows), contrarian: calendarContrarianMode(env) === "on", history: { releases: Number(counts?.n) || 0, with_actual: Number(counts?.released) || 0, since: counts?.since ?? null } };
   } catch {
     return { version: ECON_RELEASES_VERSION, releases: [], stats: {}, pre_stats: {} };
   }
