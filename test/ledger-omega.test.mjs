@@ -149,3 +149,30 @@ test("O6. D1: a decision is ingested with its mode, followed under Omega to its 
   assert.equal(sent.length, 1);
   assert.equal((await pushExecutionReport(env, report)).status, "disabled");
 });
+
+test("O7. 1m bars (owner 2026-11-12, \"ya kerjakan keduanya\"): stitched after the 15m bars; Omega fills the minute after the decision and waits for a limit only within the signal's age", async () => {
+  const { stitchBars } = await import("../src/signal-ledger.mjs");
+  const one = (start, n, span, px = 4000) => Array.from({ length: n }, (_, i) => ({ open_time: new Date(start + i * span).toISOString(), close_time: new Date(start + (i + 1) * span).toISOString(), open: px, high: px + 1, low: px - 1, close: px }));
+  const T = OPEN + 4 * M;
+  const s = stitchBars({ h1: one(OPEN - 4 * 3600_000, 4, 3600_000), m15: one(OPEN, 8, M), m1: one(T, 30, 60_000) });
+  assert.deepEqual([s.length, s[0].open_time, s.at(-31).close_time, s.at(-30).open_time], [4 + 4 + 30, new Date(OPEN - 4 * 3600_000).toISOString(), new Date(T).toISOString(), new Date(T).toISOString()], "1H, then 15m up to the first 1m bar, then 1m");
+  // Decided 2.5 minutes after the decided bar's close: Omega's market entry is the open of the third minute.
+  const decided = { ...SELL, opened_at: new Date(OPEN + M + 150_000).toISOString() };
+  const m1 = (rows, start = OPEN + M) => rows.map(([open, high, low, close], i) => ({ open_time: new Date(start + i * 60_000).toISOString(), close_time: new Date(start + (i + 1) * 60_000).toISOString(), open, high, low, close }));
+  const e = omegaEntry(decided, m1([[3999, 4000, 3998, 3999], [3999, 4000, 3998, 3999], [3998, 3999, 3997, 3998], [3998, 3999, 3997, 3998]]), { now: late });
+  assert.deepEqual([e.status, e.fill, e.filled_at], ["filled", 3998, new Date(OPEN + M + 3 * 60_000).toISOString()]);
+  // A limit plan waits up to max_signal_age (10 minutes) for price to come back within 0.35 x the stop distance.
+  const limit = { ...decided, entry_action: "ENTER_LIMIT" };
+  const away = Array.from({ length: 6 }, () => [3990, 3991, 3989, 3990]);
+  const back = m1([...away, [3990, 3997, 3989, 3996], [3996, 3997, 3995, 3996]]);
+  const f = omegaEntry(limit, back, { now: late });
+  assert.deepEqual([f.status, f.fill, f.filled_at], ["filled", 3996.5, new Date(OPEN + M + 6 * 60_000).toISOString()]);
+  const never = m1(Array.from({ length: 20 }, () => [3990, 3991, 3989, 3990]));
+  assert.equal(omegaEntry(limit, never, { now: late }).gate, "waiting_for_pullback");
+  assert.equal(omegaEntry(limit, never.slice(0, 5), { now: OPEN + M + 8 * 60_000 }).status, "pending", "the window is still open");
+  // A decision counts from when it was made: an opposite decision decided 3 minutes after its close
+  // closes the trade at the minute it is known, not at its bar's close.
+  const bars1 = m1(Array.from({ length: 25 }, () => [3999, 4000, 3998, 3999]));
+  const opp = simulateOmega(decided, bars1, { decisions: [{ ...dec(OPEN, "SELL", -0.4), at_ms: OPEN + M + 150_000 }, { ...dec(OPEN + M, "BUY", 0.6), at_ms: OPEN + 2 * M + 180_000 }], now: late });
+  assert.deepEqual([opp.exit, opp.closed_at], ["opposite", new Date(OPEN + 2 * M + 180_000).toISOString()]);
+});

@@ -1282,7 +1282,7 @@ export default function Performance() {
         }
       >
         <p className="text-[12px] leading-relaxed text-slate-400">
-          Every BUY or SELL from the Decision Engine (15m Multi-Agent Consensus) is followed on closed bars: entry fills within {l?.rules?.fill_window_hours ?? 8} hours, then reaches its target, stop (−1R), or exits at close after {l?.rules?.hold_max_hours ?? 72} hours. Disparities between pure theoretical math and live MT5 broker execution are dynamically synthesized for Aether knowledge ingestion.
+          Every BUY or SELL from the Decision Engine (15m Multi-Agent Consensus) is followed on closed bars ({l?.rules?.bars ?? "1m where available, else 15m"}): entry fills within {l?.rules?.fill_window_hours ?? 8} hours, then reaches its target, stop (−1R), or exits at close after {l?.rules?.hold_max_hours ?? 72} hours. Disparities between pure theoretical math and live MT5 broker execution are dynamically synthesized for Aether knowledge ingestion.
         </p>
 
         {/* View Mode & Time Window Tabs */}

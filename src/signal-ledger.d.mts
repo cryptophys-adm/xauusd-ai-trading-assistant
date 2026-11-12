@@ -1,4 +1,5 @@
 export const LEDGER_VERSION: string;
+export const LEDGER_CRON: string;
 export function runSignalLedger(env: unknown, options?: { now?: number; readStrategy?: ((env: any, options?: { now?: number }) => Promise<any>) | null; h1Decisions?: boolean }): Promise<Record<string, unknown>>;
 export function readLedger(env: unknown, options?: { days?: number; now?: number }): Promise<Record<string, unknown>>;
 export function ensureLedgerSchema(db: unknown): Promise<void>;
