@@ -115,7 +115,15 @@ test("B4. the hourly run retrains when stale, keeps the model in KV, and the rep
   assert.ok(r1.report && r1.skills.tight_long > 0);
   assert.ok(env.SIGNAL_CACHE.m.has(MODEL_BASELINE_KEY));
   assert.equal((await runModelBaseline(env, { now: T0 + 10 * 60_000, loadRows: async () => rows })).status, "fresh");
-  assert.equal((await runModelBaseline(env, { now: T0 + BASELINE.retrain_ms + 1, loadRows: async () => rows })).status, "ok");
+  assert.ok(!("gbm" in r1.report), "no decision model yet: the report is as before");
+  // The daily decision model rides along (owner 2026-11-13: "lanjutkan perluas model report gbm ke Aether"); a failing read drops it.
+  const gbm = { model_id: "gbm@2026-11-13T04:22Z", trained_at: "2026-11-13T04:22:00Z", rows: 300, features: ["w_h1_lean"], status: "ok", models: {}, checks: {} };
+  const r2 = await runModelBaseline(env, { now: T0 + BASELINE.retrain_ms + 1, loadRows: async () => rows, loadGbm: async () => gbm });
+  assert.equal(r2.status, "ok");
+  assert.equal(r2.report.gbm.model_id, "gbm@2026-11-13T04:22Z");
+  assert.equal(r2.report.gbm.connected, false);
+  const r3 = await runModelBaseline(env, { now: T0 + 2 * (BASELINE.retrain_ms + 1), loadRows: async () => rows, loadGbm: async () => { throw new Error("kv down"); } });
+  assert.ok(r3.report && !("gbm" in r3.report));
   const status = baselineStatus(await readBaseline(env));
   assert.ok(status.checks.tight_long.auc > 0.7);
   assert.ok(!("models" in status), "the API shows scores and top features, not the weights");

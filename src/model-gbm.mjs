@@ -88,3 +88,21 @@ export function gbmStatus(gbm, prospective = null) {
   const top = Object.fromEntries(Object.entries(gbm.models || {}).map(([id, m]) => [id, m.top_features ?? []]));
   return { version: gbm.version, model_id: gbm.model_id, trained_at: gbm.trained_at, rows: gbm.rows, features: (gbm.features || []).length, status: gbm.status, checks: gbm.checks, top_features: top, prospective: prospective ?? {} };
 }
+
+/**
+ * Pure: the gbm's block in the model report for Aether (owner 2026-11-13: "lanjutkan perluas model report gbm
+ * ke Aether"): the trainer's walk-forward checks, the prospective record and the features it split on by gain;
+ * never a tree, a threshold or a leaf. Shadow only, so `connected` is always false. Null without a model.
+ */
+export function gbmReport(gbm, prospective = {}) {
+  if (!gbm || !gbm.model_id) return null;
+  const SCORES = ["train", "n", "hit_rate", "brier", "brier_base", "skill", "auc", "picked", "picked_mean_r", "all_mean_r"];
+  const walk_forward = {};
+  for (const [id, check] of Object.entries(gbm.checks || {})) {
+    if (check?.status !== "ok") continue;
+    const scores = Object.fromEntries(SCORES.filter((k) => k in check).map((k) => [k, num(check[k]) ? check[k] : null]));
+    const top = (gbm.models?.[id]?.top_features || []).slice(0, 12).filter((f) => /^[a-z0-9_]{1,64}$/.test(String(f?.feature)) && num(f?.gain)).map((f) => ({ feature: f.feature, gain: f.gain }));
+    walk_forward[id] = { ...scores, top_features: top };
+  }
+  return { model_id: gbm.model_id, trained_at: gbm.trained_at, rows: Number(gbm.rows) || 0, features: (gbm.features || []).length, status: gbm.status === "ok" ? "ok" : "not_enough_rows", walk_forward, prospective: prospective || {}, connected: false };
+}

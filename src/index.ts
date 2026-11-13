@@ -2735,7 +2735,7 @@ async function runLedgerStep(env: Env): Promise<void> {
   if (dataset.status === "failed" || Number(dataset.added) || Number(dataset.labeled) || Number(dataset.wide) || Number(dataset.unavailable)) console.log("model_dataset", JSON.stringify(dataset));
   // The baseline model learns by itself every hour from the labeled rows (src/model-baseline.mjs, shadow
   // only), and its report goes to Aether as knowledge (owner 2026-11-13: "strengthen autonomous learning").
-  const baseline = await runModelBaseline(env, { loadRows: () => loadLabeledRows(env, { limit: 2000 }), loadLiveNotes: async () => ((await readLearnedLive(env)) as { items?: unknown[] } | null)?.items ?? [] });
+  const baseline = await runModelBaseline(env, { loadRows: () => loadLabeledRows(env, { limit: 2000 }), loadLiveNotes: async () => ((await readLearnedLive(env)) as { items?: unknown[] } | null)?.items ?? [], loadGbm: () => readGbm(env) });
   if (baseline.status !== "fresh" && baseline.status !== "disabled") {
     const { report, ...summary } = baseline as Record<string, unknown>;
     const pushed = report ? await pushModelReport(env, report).catch((e) => ({ status: "failed", error: String(e) })) : null;
