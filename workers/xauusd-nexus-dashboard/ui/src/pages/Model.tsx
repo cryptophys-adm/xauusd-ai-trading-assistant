@@ -200,7 +200,7 @@ export default function Model() {
   const hrs = (r: any, dflt: number) => (r ? r.horizon_ms / 3_600_000 : dflt);
   const labelHint = d ? `Tight: ${d.rules?.target_atr ?? 1.5} ATR target / ${d.rules?.stop_atr ?? 1} ATR stop, ${hrs(d.rules, 4)}h. Wide: ${d.wide_rules?.target_atr ?? 4.5} / ${d.wide_rules?.stop_atr ?? 3} ATR, ${hrs(d.wide_rules, 12)}h.` : undefined;
   return (
-    <div className="flex flex-col gap-4">
+    <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <Panel title="Learning pipeline" icon={<GitBranch className="h-3.5 w-3.5 text-cyan-300" />}>
         {loading ? <Skeleton rows={3} /> : <Pipeline dataset={d} baseline={b} gbm={g} live={l} />}
       </Panel>
