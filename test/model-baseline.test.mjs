@@ -105,8 +105,13 @@ test("B3. shadow predictions, the prospective record and the report for Aether c
 test("B4. the hourly run retrains when stale, keeps the model in KV, and the report reaches Aether", async () => {
   const env = { SIGNAL_CACHE: kv() };
   const rows = syntheticRows();
-  const r1 = await runModelBaseline(env, { now: T0, loadRows: async () => rows });
+  const r1 = await runModelBaseline(env, { now: T0, loadRows: async () => rows, loadLiveNotes: async () => [{ item_id: "k-a", version: 1, status: "live", agents: ["risk"], chart: "60", promoted_at: "2026-11-01T00:00:00Z", text: "not sent" }] });
   assert.equal(r1.status, "ok");
+  // For Cerebrum: the gate state and the live notes travel with the report (ids and agents, not the text).
+  assert.equal(r1.report.promotion.status, "not_promoted");
+  assert.equal(r1.report.gate.min_n, 300);
+  assert.deepEqual(r1.report.live_notes.map((n) => [n.item_id, n.status, n.agents[0]]), [["k-a", "live", "risk"]]);
+  assert.ok(!("text" in r1.report.live_notes[0]));
   assert.ok(r1.report && r1.skills.tight_long > 0);
   assert.ok(env.SIGNAL_CACHE.m.has(MODEL_BASELINE_KEY));
   assert.equal((await runModelBaseline(env, { now: T0 + 10 * 60_000, loadRows: async () => rows })).status, "fresh");

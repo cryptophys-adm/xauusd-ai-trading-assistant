@@ -232,7 +232,7 @@ export function gateMessage(previous, next) {
 }
 
 /** Pure: the report for Aether (cryptophys.model-report.v1): measures and feature names only, never a price. */
-export function modelReport(baseline, prospective, { now = Date.now() } = {}) {
+export function modelReport(baseline, prospective, { now = Date.now(), liveNotes = [] } = {}) {
   if (!baseline || baseline.status !== "ok") return null;
   const models = {};
   for (const [id, check] of Object.entries(baseline.checks || {})) {
@@ -240,7 +240,11 @@ export function modelReport(baseline, prospective, { now = Date.now() } = {}) {
     const { train_from, test_from, status, ...scores } = check;
     models[id] = { ...scores, top_features: (baseline.models[id]?.top_features || []).map((f) => ({ feature: f.feature, weight: f.weight })) };
   }
-  return { schema: MODEL_REPORT_SCHEMA, generated_at: new Date(now).toISOString(), model_id: baseline.model_id, rows: baseline.rows, label_sets: LABEL_SETS, walk_forward: models, prospective: prospective || {} };
+  // For Cerebrum (owner 2026-11-13: "Pastikan Modul training ini punya visualisasi di cerebrum"): whether the
+  // model is connected to the council and the gate it must pass, and the learned notes live by themselves.
+  const promotion = baseline.promotion ? { status: baseline.promotion.status, set: baseline.promotion.set ?? null, reason: String(baseline.promotion.reason ?? "").slice(0, 400), since: baseline.promotion.since ?? null } : null;
+  const live_notes = (liveNotes || []).slice(0, 20).map((n) => ({ item_id: String(n.item_id), version: Number(n.version), status: String(n.status), agents: (n.agents || []).map(String).slice(0, 8), chart: n.chart ?? null, promoted_at: n.promoted_at ?? null, retired_at: n.retired_at ?? null, reason: n.reason ? String(n.reason).slice(0, 300) : null }));
+  return { schema: MODEL_REPORT_SCHEMA, generated_at: new Date(now).toISOString(), model_id: baseline.model_id, rows: baseline.rows, label_sets: LABEL_SETS, walk_forward: models, prospective: prospective || {}, promotion, gate: { ...GATE }, live_notes };
 }
 
 /** The stored baseline, or null (mode off, none yet, unreadable). */
@@ -261,7 +265,7 @@ export function baselineStatus(baseline) {
  * BASELINE.retrain_ms, keep it in KV, and return the report for Aether. `loadRows` gives the labeled rows.
  * Never throws.
  */
-export async function runModelBaseline(env, { now = Date.now(), loadRows } = {}) {
+export async function runModelBaseline(env, { now = Date.now(), loadRows, loadLiveNotes = async () => [] } = {}) {
   if (modelBaselineMode(env) === "off") return { status: "disabled" };
   if (!env?.SIGNAL_CACHE || typeof loadRows !== "function") return { status: "unavailable" };
   try {
@@ -275,6 +279,6 @@ export async function runModelBaseline(env, { now = Date.now(), loadRows } = {})
     baseline.promotion = gate.status === "promoted" && !baseline.models[`${gate.set}_long`] ? { status: "not_promoted", set: null, reason: `${gate.set}: no trained model` } : { ...gate, since: gate.status === "promoted" && current?.promotion?.set === gate.set ? current.promotion.since : gate.status === "promoted" ? baseline.trained_at : null };
     await env.SIGNAL_CACHE.put(MODEL_BASELINE_KEY, JSON.stringify(baseline), { expirationTtl: 7 * 86_400 });
     const skills = Object.fromEntries(Object.entries(baseline.checks).map(([id, c]) => [id, c.status === "ok" ? c.skill : c.status]));
-    return { status: baseline.status, model_id: baseline.model_id, rows: rows.length, skills, promotion: baseline.promotion.status, gate_message: gateMessage(current?.promotion, baseline.promotion), report: modelReport(baseline, baseline.prospective, { now }) };
+    return { status: baseline.status, model_id: baseline.model_id, rows: rows.length, skills, promotion: baseline.promotion.status, gate_message: gateMessage(current?.promotion, baseline.promotion), report: modelReport(baseline, baseline.prospective, { now, liveNotes: await loadLiveNotes().catch(() => []) }) };
   } catch (e) { return { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; }
 }
