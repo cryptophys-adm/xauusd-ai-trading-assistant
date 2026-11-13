@@ -187,7 +187,7 @@ export default function Scorecards() {
 
   // Aggregated system metrics
   const scoredAgents = allAgents.filter((a) => typeof a.accuracy === "number");
-  const avgAccuracy = scoredAgents.length ? Math.round((scoredAgents.reduce((s, a) => s + a.accuracy, 0) / scoredAgents.length) * 1000) / 10 : 50;
+  const avgAccuracy = scoredAgents.length ? Math.round((scoredAgents.reduce((s, a) => s + a.accuracy, 0) / scoredAgents.length) * 1000) / 10 : null;
   const topAgent = [...scoredAgents].sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0))[0];
   const bestBrier = [...scoredAgents].filter((a) => a.brier != null).sort((a, b) => a.brier - b.brier)[0];
   const totalCalls = allAgents.reduce((s, a) => s + (a.decisive || 0), 0);
@@ -211,7 +211,7 @@ export default function Scorecards() {
             <span>Avg accuracy</span>
           </div>
           <div className="mono mt-2 text-[22px] font-extrabold text-cyan-300 sm:text-[26px]">
-            {avgAccuracy}%
+            {avgAccuracy != null ? `${avgAccuracy}%` : "n/a"}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">{scoredAgents.length} agents scored</div>
         </div>
@@ -257,10 +257,12 @@ export default function Scorecards() {
       ) : (
         <>
           {/* Visual Graph: Leaderboard Bar Charts */}
-          <Panel title="Leaderboard" icon={<BarChart2 className="h-3.5 w-3.5 text-cyan-400" />}>
-            <LeaderboardGraph rows={h1Agents} title="1H room" />
-            <LeaderboardGraph rows={m15Agents} title="15m room" />
-          </Panel>
+          {h1Agents.length || m15Agents.length ? (
+            <Panel title="Leaderboard" icon={<BarChart2 className="h-3.5 w-3.5 text-cyan-400" />}>
+              <LeaderboardGraph rows={h1Agents} title="1H room" />
+              <LeaderboardGraph rows={m15Agents} title="15m room" />
+            </Panel>
+          ) : null}
 
           {/* Tab Navigation for Tabular Data */}
           <div className="flex items-center gap-2 border-b border-white/5 pb-2">
