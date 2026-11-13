@@ -51,6 +51,8 @@ import { fetchEffectiveDoctrine, formatDoctrineDirectives } from "./doctrine-con
 import { activeWitnessTuning } from "./witness-tuning.mjs";
 import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 import { marketStructure } from "./market-structure.mjs";
+import { learnedBlock } from "./learned-knowledge.mjs";
+import { sessionOf } from "./outcome-scoring.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
@@ -627,9 +629,15 @@ export function councilEvidence({ barClose, cards, quorum, guards, context = {} 
   };
 }
 
-/** Pure: the council's messages. */
-export function councilMessages(evidence) {
-  const doctrineSnippet = evidence?.context?.doctrine ? `\n\n${evidence.context.doctrine}` : "";
+/** The learned notes' consumer id of the council (Aether items address it in `audience.agents`). */
+export const COUNCIL_AGENT = "council";
+
+/**
+ * Pure: the council's messages. `learned` is the bundled learned notes' block for the council (Aether A9,
+ * owner 2026-11-13: "strengthen autonomous learning & knowledge looping"), or null.
+ */
+export function councilMessages(evidence, { learned = null } = {}) {
+  const doctrineSnippet = (evidence?.context?.doctrine ? `\n\n${evidence.context.doctrine}` : "") + (learned ? `\n\n${learned}` : "");
   const system = [
     "You are the AI Decision Council of the XAUUSD system: the ONE decision for the trader, made at the close of each 15-minute bar.",
     "Witnesses each speak from their own data: the D1, 4H, 1H and 15m War Rooms (their agents' bias as a lean from -1 bearish to +1 bullish, and the room's own decision), News Daily, the Macro War Room and the strategy engine (the multi-timeframe confluence, the key-level plan and the entry trigger). You are the only one who reads across them.",
@@ -958,7 +966,10 @@ export async function askCouncil(env, evidence, { clock = () => Date.now(), dead
   if (!env?.AI) return { answer: null, reason: "no model binding", errors: [] };
   const deadline = clock() + deadlineMs;
   const runState = {};
-  const base = councilMessages(evidence);
+  // The council's learned notes (chart 15, the bar's session); none unless LEARNED_KNOWLEDGE_ENABLED.
+  const closeMs = Date.parse(evidence?.bar_close ?? "");
+  const learned = Number.isFinite(closeMs) ? learnedBlock(env, { agent: COUNCIL_AGENT, chart: "15", session: sessionOf(closeMs) }) : null;
+  const base = councilMessages(evidence, { learned });
   let messages = base;
   let errors = [];
   let maxTokens = COUNCIL_MAX_TOKENS;

@@ -23,7 +23,8 @@ import { newsDeskEvidence } from "./news-daily.mjs";
 import { macroDeskEvidence } from "./macro-room.mjs";
 import { matchRebuts } from "./rebut-names.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, quorumRule } from "./reputation.mjs";
-import { agentReputation } from "./outcome-scoring.mjs";
+import { agentReputation, sessionOf } from "./outcome-scoring.mjs";
+import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { roomWeighting } from "./weighting.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import { projectionReading } from "./projection-agent.mjs";
@@ -437,7 +438,7 @@ const ROOM_RULES = [
   "Never give entry, stop loss, take profit or position size: price levels are not part of a room."
 ].join("\n");
 
-function openingMessages(agent, data) {
+function openingMessages(agent, data, learned = null) {
   const desk = DESK_AGENTS[agent];
   const riskRule = agent === "risk" ? ["Judge the risk of every possible entry from your data: the 15m volatility, the 15m Prophet R38 confirmation and what would invalidate the move, and say plainly whether you would take it."] : [];
   const who = desk
@@ -453,7 +454,9 @@ function openingMessages(agent, data) {
     BIAS_RULE,
     `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"claim":"<= ${CLAIM_MAX - 40} chars","metrics":["<the metrics you decided from, plain words>"]}`,
     "YOUR DATA:",
-    JSON.stringify(data)
+    JSON.stringify(data),
+    // Aether A9 (src/learned-knowledge.mjs): the bundled learned notes for this agent, only with LEARNED_KNOWLEDGE_ENABLED.
+    ...(learned ? [learned] : [])
   ]);
 }
 
@@ -482,7 +485,7 @@ function rebuttalMessages(agent, own, bus, unanimous, roomBias = null) {
   ]);
 }
 
-function conclusionMessages(bus, debate, crowd = null) {
+function conclusionMessages(bus, debate, crowd = null, learned = null) {
   return chatMessages([
     "You are the moderator of the XAUUSD Live War Room (15m). The Consensus Discussion is closed. Write the conclusion for the main panel from this timeframe's statements only.",
     ...(crowd ? [crowdRule(crowd)] : []),
@@ -496,7 +499,8 @@ function conclusionMessages(bus, debate, crowd = null) {
     "COMMUNICATION BUS:",
     JSON.stringify(bus),
     "CONSENSUS DISCUSSION:",
-    JSON.stringify(debate)
+    JSON.stringify(debate),
+    ...(learned ? [learned] : [])
   ]);
 }
 
@@ -590,8 +594,13 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, barTime).all()).results || []).map(r => [r.step, rowToThreadMessage(r)]));
   if (existing.get("conclusion")?.status === "ok") return { status: "already_complete", calls: 0 };
   const base = (step, agent, parent_id = null) => ({ thread_id: threadId, run_id: barTime, step, agent, parent_id, bar_time: barTime });
+  // Aether A9 in the 15m room too (owner 2026-11-13: "strengthen autonomous learning & knowledge looping"):
+  // the bundled learned notes per agent, chart 15 and the bar's session; none unless LEARNED_KNOWLEDGE_ENABLED.
+  const learnedCtx = { chart: "15", session: sessionOf(Date.parse(barTime)) };
+  const learnedFor = (agent) => learnedBlock(env, { agent, ...learnedCtx });
   if (!existing.has("brief")) {
-    await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { roster, calibration, confirmations, independent: true, m15_close: evidence.m15.candles.at(-1) ?? null, news: evidence.news } });
+    await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { roster, calibration, confirmations, independent: true, m15_close: evidence.m15.candles.at(-1) ?? null, news: evidence.news,
+      ...(learnedKnowledgeEnabled(env) ? { learned_pack: learnedPackInfo(env, { roster, ...learnedCtx }) } : {}) } });
   }
 
   // One budget for the bar, shared by every parallel step (and its correction call).
@@ -613,7 +622,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     const prior = existing.get("open:" + agent);
     if (prior?.status === "ok") return prior;
     return open(base("open:" + agent, agent), {
-      messages: openingMessages(agent, agentData(agent, evidence, hud, confirmations, desk15, projection)), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
+      messages: openingMessages(agent, agentData(agent, evidence, hud, confirmations, desk15, projection), learnedFor(agent)), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
       // An unapproved 15m chain speaks like any uncalibrated agent: at 0.4 or lower.
       maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateOpening(o, agent, { verifiedLines: agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]), forbiddenNames: forbiddenNamesFor(agent, roster) }),
       toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), bias: o.bias, metrics: o.metrics, name: agentName(agent) }, refs: [] })
@@ -654,7 +663,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   const crowd = buildCrowdLine(finalEntries(answered, debate), w15.reputation, { quorumShare: w15.quorumShare, weighting: w15.weighting, regime: w15.regime });
   const conclude = phase(WAR_ROOM_CONCLUSION_MS);
   await conclude(base("conclusion", "moderator"), {
-    messages: conclusionMessages(anonBus, debate.map(m => ({ ref: refs.toRef.get(m.agent) ?? null, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: (m.rebuts || []).map((r) => refs.toRef.get(r) ?? r), metrics: m.metrics ?? [], argument: m.argument })), crowd),
+    messages: conclusionMessages(anonBus, debate.map(m => ({ ref: refs.toRef.get(m.agent) ?? null, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: (m.rebuts || []).map((r) => refs.toRef.get(r) ?? r), metrics: m.metrics ?? [], argument: m.argument })), crowd, learnedFor("moderator")),
     schemaName: "war_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low",
     validate: (o) => validateConclusion(o, null, busAgents, null, { supportStances: new Set([...answered.map(m => m.stance), ...debate.map(m => m.stance)]), supportBiases: new Set([...answered.map(biasOf), ...debate.map(biasOf)]), roomBias, crowd, forbiddenNames: deskNames(), refs }),
     toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map(r => clip(r, 200)), dissent: [...new Set(o.dissent)], metrics: o.metrics, majority, majority_bias: roomBias, crowd }, refs: [] })

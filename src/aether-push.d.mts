@@ -9,3 +9,4 @@ export function weightingReport(replay: unknown, options?: { now?: number }): Re
 export function pushWitnessTuningReport(env: unknown, report: unknown): Promise<Record<string, any> & { status: string }>;
 export function pushWeightingReport(env: unknown, replay: unknown, options?: { now?: number }): Promise<Record<string, any> & { status: string }>;
 export function pushExecutionReport(env: unknown, report: unknown): Promise<Record<string, any> & { status: string }>;
+export function pushModelReport(env: unknown, report: unknown): Promise<Record<string, any> & { status: string }>;

@@ -69,8 +69,9 @@ setup READY state that never reached the decision (#192).
 
 ## The platform's own model
 
-21. **A custom model from the platform's knowledge** (owner 2026-11-13: "end goalnya mampu membuat custom model sendiri dari knowledge ini khusus untuk EA dan XAUUSD Trading Assistant"; `docs/RFC_CUSTOM_MODEL.md`). Step 1, the dataset, is built (SSOT "Custom model dataset"). Next:
-    - **Baseline** (logistic regression in the Worker), recorded next to each decision in shadow: the bar every later model must beat.
+21. **A custom model from the platform's knowledge** (owner 2026-11-13: "end goalnya mampu membuat custom model sendiri dari knowledge ini khusus untuk EA dan XAUUSD Trading Assistant"; `docs/RFC_CUSTOM_MODEL.md`). Steps 1 and 2 are built (SSOT "Custom model dataset"): the dataset with a tight and a wide label set, and the self-trained baseline (hourly, walk-forward, shadow predictions, prospective record, report to Aether). Next:
+    - **Verdict of the baseline**: once its prospective record holds 300 decisions per model, compare it with the active Decision Engine on the same decisions (RFC §4); the owner decides whether it becomes a witness.
+    - **Aether's use of the model report**: the curator could turn a feature the models keep leaning on, or one that never carries information, into a proposal; council notes (consumer `council`) cannot be shadow-tested yet, since the shadow arm runs the 1H room only.
     - **Decision model**: a GitHub Actions workflow trains gradient-boosted trees on the labeled rows (read from D1 through the Cloudflare API), validates walk-forward, exports ONNX and stores it in Cloudflare; judged in shadow against the active Decision Engine and the baseline (300 decisions, Holm, holdout). Needs about 1000 to 2000 labeled rows (a few weeks).
     - **The EA reads the ONNX model**, advice only until the owner promotes it.
     - **Language model**: a QLoRA fine-tune on Kaggle from the scored room statements, served as a Workers AI LoRA; after months of scored rooms.

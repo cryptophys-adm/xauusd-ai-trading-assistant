@@ -14,9 +14,16 @@
 // Never feeds a room, a decision or Omega: it only records. Switch: MODEL_DATASET_MODE = "on" (default) | "off".
 import { ledgerSeries, atrAt, toMs, sessionAt } from "./signal-ledger.mjs";
 import { WITNESS_PRIORS } from "./witness-weighting.mjs";
+import { readBaseline, shadowPredictions } from "./model-baseline.mjs";
 
 export const MODEL_DATASET_VERSION = "cryptophys.model-dataset.v1";
 export const LABEL_RULES = Object.freeze({ stop_atr: 1, target_atr: 1.5, horizon_ms: 4 * 3600_000, atr_period: 14 });
+/**
+ * The second label set (owner 2026-11-13, "strengthen autonomous learning"): the tight set's 1 ATR stop is
+ * far inside the Decision Engine's own plans (about 4 ATR on 2026-11-13), so most rows ended at a stop on
+ * both sides. The wide set is closer to a plan's scale: the stop 3 ATR away, the target 4.5 ATR, 12 hours.
+ */
+export const WIDE_RULES = Object.freeze({ stop_atr: 3, target_atr: 4.5, horizon_ms: 12 * 3600_000, atr_period: 14 });
 /** A row whose bars never arrive (a gap in every series) stops waiting after this. */
 export const LABEL_GIVE_UP_MS = 7 * 86_400_000;
 const BATCH = 200;
@@ -172,11 +179,17 @@ export const MODEL_DATASET_SCHEMA_SQL = [
   "CREATE INDEX IF NOT EXISTS idx_model_dataset_status ON model_dataset(label_status, bar_close)",
   "CREATE INDEX IF NOT EXISTS idx_model_dataset_close ON model_dataset(bar_close)"
 ];
+/** Columns added after v1 (2026-11-13): the wide label set and the baseline's shadow predictions. */
+const ADDED_COLUMNS = ["wide_status TEXT NOT NULL DEFAULT 'pending'", "wide_json TEXT", "wide_labeled_at TEXT", "shadow_json TEXT"];
 let schemaReady = false;
 export function resetModelDatasetSchemaForTests() { schemaReady = false; }
 async function ensureSchema(db) {
   if (schemaReady) return;
   for (const sql of MODEL_DATASET_SCHEMA_SQL) await db.prepare(sql).run();
+  for (const col of ADDED_COLUMNS) {
+    try { await db.prepare(`ALTER TABLE model_dataset ADD COLUMN ${col}`).run(); } catch { /* exists */ }
+  }
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_model_dataset_wide ON model_dataset(wide_status, bar_close)").run();
   schemaReady = true;
 }
 
@@ -191,9 +204,13 @@ function barIndex(m15, closeMs) {
   return -1;
 }
 
+/** Pure: a label for the stored row ({ outcome, r, mfe, mae }), compact. */
+const compact = (l) => ({ outcome: l.outcome, r: l.r ?? null, mfe: l.mfe ?? null, mae: l.mae ?? null });
+
 /**
- * Every ledger step (5 minutes): new decisions become rows (features at their close), and rows whose
- * 4-hour horizon has passed get their labels. Idempotent, at most 200 of each per run. Never throws.
+ * Every ledger step (5 minutes): new decisions become rows (features at their close, and the baseline
+ * model's shadow predictions made before them), and rows whose horizons have passed get their labels
+ * (the tight set after 4 hours, the wide set after 12). Idempotent, at most 200 of each per run. Never throws.
  */
 export async function runModelDataset(env, { now = Date.now(), series = null } = {}) {
   if (modelDatasetMode(env) === "off") return { status: "disabled" };
@@ -202,6 +219,7 @@ export async function runModelDataset(env, { now = Date.now(), series = null } =
     await ensureSchema(env.DB);
     const { bars, m15 } = series ?? (await ledgerSeries(env));
     const created = new Date(now).toISOString();
+    const baseline = await readBaseline(env);
     // 1. New decisions (backfills the stored history on the first runs).
     const fresh = (await env.DB.prepare("SELECT d.decision_key, d.bar_close, d.stance, d.decision_json FROM engine_decisions d WHERE NOT EXISTS (SELECT 1 FROM model_dataset m WHERE m.decision_key = d.decision_key) ORDER BY d.bar_close LIMIT ?").bind(BATCH).all()).results || [];
     let added = 0;
@@ -212,8 +230,10 @@ export async function runModelDataset(env, { now = Date.now(), series = null } =
       const k = barIndex(m15, toMs(r.bar_close));
       const atr = k >= 1 ? atrAt(m15, k, LABEL_RULES.atr_period) : null;
       const features = datasetFeatures({ ...decision, bar_close: decision.bar_close ?? r.bar_close }, { atr, bars: k >= 0 ? barFeatures(m15, k, atr) : {} });
-      const res = await env.DB.prepare("INSERT OR IGNORE INTO model_dataset (decision_key, bar_close, version, stance, features_json, ref_close, atr, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(r.decision_key, r.bar_close, MODEL_DATASET_VERSION, r.stance, JSON.stringify(features), k >= 0 ? m15[k].close : null, num(atr) ? r4(atr) : null, created).run();
+      // The baseline's predictions only for a decision made after the model was trained (point in time).
+      const shadow = baseline && Date.parse(baseline.trained_at) <= toMs(r.bar_close) ? shadowPredictions(baseline, features) : null;
+      const res = await env.DB.prepare("INSERT OR IGNORE INTO model_dataset (decision_key, bar_close, version, stance, features_json, ref_close, atr, shadow_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(r.decision_key, r.bar_close, MODEL_DATASET_VERSION, r.stance, JSON.stringify(features), k >= 0 ? m15[k].close : null, num(atr) ? r4(atr) : null, shadow ? JSON.stringify(shadow) : null, created).run();
       added += Number(res?.meta?.changes) || 0;
     }
     // 2. Labels once the horizon is covered by closed bars.
@@ -236,7 +256,26 @@ export async function runModelDataset(env, { now = Date.now(), series = null } =
         .bind(long.outcome, long.r, long.mfe, long.mae, short.outcome, short.r, short.mfe, short.mae, created, r.decision_key).run();
       labeled += 1;
     }
-    return { status: "ok", added, labeled, unavailable };
+    // 3. The wide label set once its 12 hours are covered.
+    const wideDue = new Date(now - WIDE_RULES.horizon_ms).toISOString();
+    const widePending = (await env.DB.prepare("SELECT decision_key, bar_close, ref_close, atr FROM model_dataset WHERE wide_status = 'pending' AND bar_close <= ? ORDER BY bar_close LIMIT ?").bind(wideDue, BATCH).all()).results || [];
+    let wide = 0;
+    for (const r of widePending) {
+      const fromMs = toMs(r.bar_close);
+      const long = tripleBarrier(bars, { fromMs, ref: r.ref_close, atr: r.atr, side: 1, rules: WIDE_RULES });
+      const short = tripleBarrier(bars, { fromMs, ref: r.ref_close, atr: r.atr, side: -1, rules: WIDE_RULES });
+      if (long.outcome === "pending" || long.outcome === "no_bars" || short.outcome === "pending") {
+        if (!num(r.ref_close) || !num(r.atr) || long.outcome === "no_bars" || now - fromMs > LABEL_GIVE_UP_MS) {
+          await env.DB.prepare("UPDATE model_dataset SET wide_status = 'unavailable', wide_labeled_at = ? WHERE decision_key = ?").bind(created, r.decision_key).run();
+          unavailable += 1;
+        }
+        continue;
+      }
+      await env.DB.prepare("UPDATE model_dataset SET wide_status = 'labeled', wide_json = ?, wide_labeled_at = ? WHERE decision_key = ?")
+        .bind(JSON.stringify({ long: compact(long), short: compact(short) }), created, r.decision_key).run();
+      wide += 1;
+    }
+    return { status: "ok", added, labeled, wide, unavailable };
   } catch (e) { return { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; }
 }
 
@@ -250,7 +289,9 @@ export async function readModelDatasetSummary(env) {
     const latest = await env.DB.prepare("SELECT features_json FROM model_dataset ORDER BY bar_close DESC LIMIT 1").first();
     let features = 0;
     try { features = Object.keys(JSON.parse(latest?.features_json || "{}")).length; } catch { features = 0; }
-    return { version: MODEL_DATASET_VERSION, rules: { ...LABEL_RULES }, by_status: by, outcomes, latest_feature_count: features };
+    const wide = (await env.DB.prepare("SELECT wide_status AS status, COUNT(*) AS n FROM model_dataset GROUP BY wide_status").all()).results || [];
+    const shadow = await env.DB.prepare("SELECT COUNT(*) AS n FROM model_dataset WHERE shadow_json IS NOT NULL").first();
+    return { version: MODEL_DATASET_VERSION, rules: { ...LABEL_RULES }, wide_rules: { ...WIDE_RULES }, by_status: by, outcomes, wide_by_status: wide, shadow_predictions: Number(shadow?.n) || 0, latest_feature_count: features };
   } catch { return null; }
 }
 
@@ -263,16 +304,32 @@ export async function readModelDataset(env, { since = "", limit = 1000 } = {}) {
   await ensureSchema(env.DB);
   const n = Math.max(1, Math.min(2000, Number(limit) || 1000));
   const rows = (await env.DB.prepare(
-    "SELECT m.decision_key, m.bar_close, m.version, m.stance, m.features_json, m.long_outcome, m.long_r, m.long_mfe, m.long_mae, m.short_outcome, m.short_r, m.short_mfe, m.short_mae, l.r_tp1 AS plan_r_tp1, l.r_omega AS plan_r_omega, l.omega_status AS plan_omega_status " +
+    "SELECT m.decision_key, m.bar_close, m.version, m.stance, m.features_json, m.long_outcome, m.long_r, m.long_mfe, m.long_mae, m.short_outcome, m.short_r, m.short_mfe, m.short_mae, m.wide_json, m.shadow_json, l.r_tp1 AS plan_r_tp1, l.r_omega AS plan_r_omega, l.omega_status AS plan_omega_status " +
     "FROM model_dataset m LEFT JOIN signal_ledger l ON l.id = 'decision:' || m.decision_key WHERE m.label_status = 'labeled' AND m.bar_close > ? ORDER BY m.bar_close LIMIT ?"
   ).bind(String(since || ""), n).all().catch(() => env.DB.prepare(
-    "SELECT decision_key, bar_close, version, stance, features_json, long_outcome, long_r, long_mfe, long_mae, short_outcome, short_r, short_mfe, short_mae FROM model_dataset WHERE label_status = 'labeled' AND bar_close > ? ORDER BY bar_close LIMIT ?"
+    "SELECT decision_key, bar_close, version, stance, features_json, long_outcome, long_r, long_mfe, long_mae, short_outcome, short_r, short_mfe, short_mae, wide_json, shadow_json FROM model_dataset WHERE label_status = 'labeled' AND bar_close > ? ORDER BY bar_close LIMIT ?"
   ).bind(String(since || ""), n).all())).results || [];
   const out = rows.map((r) => {
-    let features = {};
-    try { features = JSON.parse(r.features_json); } catch { features = {}; }
-    const { features_json, ...rest } = r;
-    return { ...rest, features };
+    const { features_json, wide_json, shadow_json, ...rest } = r;
+    return { ...rest, features: parse(features_json) ?? {}, wide: parse(wide_json), shadow: parse(shadow_json) };
   });
-  return { version: MODEL_DATASET_VERSION, rules: { ...LABEL_RULES }, rows: out, next: out.length === n ? out.at(-1).bar_close : null };
+  return { version: MODEL_DATASET_VERSION, rules: { ...LABEL_RULES }, wide_rules: { ...WIDE_RULES }, rows: out, next: out.length === n ? out.at(-1).bar_close : null };
+}
+
+const parse = (text) => { try { return text ? JSON.parse(text) : null; } catch { return null; } };
+
+/**
+ * The labeled rows the baseline learns from, oldest first (the newest `limit`): features, both label sets
+ * (the wide one once labeled) and the shadow predictions made before each decision.
+ */
+export async function loadLabeledRows(env, { limit = 4000 } = {}) {
+  await ensureSchema(env.DB);
+  const rows = (await env.DB.prepare("SELECT bar_close, features_json, long_outcome, long_r, short_outcome, short_r, wide_status, wide_json, shadow_json FROM model_dataset WHERE label_status = 'labeled' ORDER BY bar_close DESC LIMIT ?").bind(limit).all()).results || [];
+  return rows.reverse().map((r) => {
+    const wide = r.wide_status === "labeled" ? parse(r.wide_json) : null;
+    return {
+      bar_close: r.bar_close, features: parse(r.features_json) ?? {}, shadow: parse(r.shadow_json),
+      labels: { tight: { long: { outcome: r.long_outcome, r: r.long_r }, short: { outcome: r.short_outcome, r: r.short_r } }, ...(wide ? { wide } : {}) }
+    };
+  });
 }

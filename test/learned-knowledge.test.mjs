@@ -72,3 +72,16 @@ test("the build script adds only items with a better_than_active shadow verdict"
   assert.throws(() => run("c2@1"), /not_better|shadow verdict/);
   assert.throws(() => run("zz@1"), /not in the export/);
 });
+
+test("the learned notes also reach the 15m room's agents and the Decision Engine council (chart 15)", async () => {
+  const { councilMessages, COUNCIL_AGENT } = await import("../src/decision-engine.mjs");
+  const pack = { items: [item("k1", { audience: { agents: [COUNCIL_AGENT, "moderator"], charts: ["15"] }, situation: { chart: "15", session: "london" } })] };
+  const env = { LEARNED_KNOWLEDGE_ENABLED: "true" };
+  const block = learnedBlock(env, { agent: COUNCIL_AGENT, chart: "15", session: "london", pack });
+  assert.ok(block?.startsWith(LEARNED_HEADER));
+  assert.equal(learnedBlock(env, { agent: COUNCIL_AGENT, chart: "15", session: "asia", pack }), null, "another session: no note");
+  assert.equal(learnedBlock({}, { agent: COUNCIL_AGENT, chart: "15", session: "london", pack }), null, "off: no note");
+  const [system] = councilMessages({ context: {} }, { learned: block });
+  assert.ok(system.content.endsWith(block), "the council reads the notes after its rules");
+  assert.ok(!councilMessages({ context: {} })[0].content.includes(LEARNED_HEADER), "no notes: today's prompt");
+});

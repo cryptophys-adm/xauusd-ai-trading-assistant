@@ -222,3 +222,29 @@ export async function pushExecutionReport(env, report) {
     .bind(sha, status, res?.reason ? String(res.reason).slice(0, 300) : null, report.generated_at ?? new Date().toISOString()).run();
   return { status, trades: (report.trades || []).length, ...(res?.reason ? { reason: String(res.reason).slice(0, 120) } : {}) };
 }
+
+const MODEL_PUSH_SQL = `CREATE TABLE IF NOT EXISTS aether_model_report_pushes (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  model_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  detail TEXT,
+  pushed_at TEXT NOT NULL
+)`;
+
+/**
+ * Hourly, after the baseline model retrained (src/model-baseline.mjs, owner 2026-11-13: "strengthen
+ * autonomous learning & knowledge looping"): its report (cryptophys.model-report.v1: walk-forward and
+ * prospective scores, the features it leaned on; never a price) to Aether as knowledge. Never throws.
+ */
+export async function pushModelReport(env, report) {
+  if (typeof env?.AETHER?.ingestModelReport !== "function") return { status: "disabled" };
+  if (!env.DB || !report) return { status: "unavailable" };
+  await env.DB.prepare(MODEL_PUSH_SQL).run();
+  let res;
+  try { res = await env.AETHER.ingestModelReport(report); }
+  catch (e) { return { status: "transport_failed", error: String(e?.message ?? e).slice(0, 200) }; }
+  const status = res?.accepted ? "accepted" : "rejected";
+  await env.DB.prepare("INSERT INTO aether_model_report_pushes (id, model_id, status, detail, pushed_at) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET model_id = excluded.model_id, status = excluded.status, detail = excluded.detail, pushed_at = excluded.pushed_at")
+    .bind(String(report.model_id), status, res?.reason ? String(res.reason).slice(0, 300) : null, report.generated_at ?? new Date().toISOString()).run();
+  return { status, model_id: report.model_id, ...(res?.reason ? { reason: String(res.reason).slice(0, 120) } : {}) };
+}
