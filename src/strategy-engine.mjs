@@ -147,7 +147,7 @@ const zoneText = (z) => `${z.candidate ? "the" : "a"} ${z.low === z.high ? z.low
  * The Key Level Agent's zones as tradeLevels input: candidates are the major zones; with `qualified`,
  * also the zones that qualified as candidates but were left out by the cap of two per side.
  */
-function zoneLevels(zones, { qualified = false } = {}) {
+export function zoneLevels(zones, { qualified = false } = {}) {
   return (zones || []).filter((z) => isNum(z.low) && isNum(z.high)).map((z) => ({ low: z.low, high: z.high, price: z.price, major: z.candidate === true || (qualified && z.qualified === true), label: zoneText(z) }));
 }
 
