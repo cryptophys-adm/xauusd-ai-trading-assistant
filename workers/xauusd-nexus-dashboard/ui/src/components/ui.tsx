@@ -2,13 +2,26 @@ import { motion } from "framer-motion";
 import clsx from "clsx";
 import type { ReactNode } from "react";
 
-export function Panel({ title, icon, right, children, className }: { title?: ReactNode; icon?: ReactNode; right?: ReactNode; children: ReactNode; className?: string }) {
+/**
+ * An explanation kept out of the layout (owner 2026-11-13: no paragraphs of notes on a production page):
+ * a small info mark whose text shows on hover or focus.
+ */
+export function Hint({ text, className }: { text: string; className?: string }) {
+  return (
+    <span tabIndex={0} role="note" aria-label={text} title={text}
+      className={clsx("inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-white/15 text-[9px] font-semibold normal-case leading-none tracking-normal text-slate-500 outline-none hover:border-white/30 hover:text-slate-300 focus:border-cyan-400/50 focus:text-slate-200", className)}>
+      i
+    </span>
+  );
+}
+
+export function Panel({ title, icon, right, hint, children, className }: { title?: ReactNode; icon?: ReactNode; right?: ReactNode; hint?: string; children: ReactNode; className?: string }) {
   return (
     <motion.section initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, ease: "easeOut" }}
       className={clsx("glass p-4", className)}>
       {(title || right) && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="eyebrow flex items-center gap-2">{icon}{title}</h2>
+          <h2 className="eyebrow flex items-center gap-2">{icon}{title}{hint && <Hint text={hint} />}</h2>
           {right}
         </div>
       )}
