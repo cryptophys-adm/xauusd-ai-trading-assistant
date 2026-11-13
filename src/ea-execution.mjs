@@ -95,7 +95,12 @@ export function dealFrom(body, { now = Date.now() } = {}) {
   };
 }
 
-/** Stores a closed deal once (a repeated report of the same deal changes nothing). */
+/**
+ * Stores a closed deal once (a repeated report of the same deal changes nothing). Once per deal ticket:
+ * the Omega bridge reports each closed deal on every sync, and its times can move by a second from one
+ * sync to the next (seen 2026-11-13: 116,821 rows for 36 deals), so (deal_ticket, closed_ms) alone did not
+ * hold a repeat back. An MT5 deal ticket is unique on its account.
+ */
 export async function storeDeal(env, body, { now = Date.now() } = {}) {
   const { deal, error } = dealFrom(body, { now });
   if (error) return { ok: false, error };
@@ -103,20 +108,25 @@ export async function storeDeal(env, body, { now = Date.now() } = {}) {
   const d = deal;
   const r = await env.DB.prepare(
     `INSERT INTO ea_deals (deal_ticket, position_ticket, mode, side, volume, entry_price, exit_price, stop_loss, take_profit, profit, commission, swap, reason, signal_id, opened_ms, closed_ms, currency, received_at, source)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+     WHERE NOT EXISTS (SELECT 1 FROM ea_deals WHERE deal_ticket = ?)
      ON CONFLICT (deal_ticket, closed_ms) DO NOTHING`
-  ).bind(d.deal_ticket, d.position_ticket, d.mode, d.side, d.volume, d.entry_price, d.exit_price, d.stop_loss, d.take_profit, d.profit, d.commission, d.swap, d.reason, d.signal_id, d.opened_ms, d.closed_ms, d.currency, new Date(now).toISOString(), DEAL_SOURCES.includes(body?.source) ? body.source : null).run();
+  ).bind(d.deal_ticket, d.position_ticket, d.mode, d.side, d.volume, d.entry_price, d.exit_price, d.stop_loss, d.take_profit, d.profit, d.commission, d.swap, d.reason, d.signal_id, d.opened_ms, d.closed_ms, d.currency, new Date(now).toISOString(), DEAL_SOURCES.includes(body?.source) ? body.source : null, d.deal_ticket).run();
   return { ok: true, stored: Number(r?.meta?.changes ?? 0) > 0 };
 }
+
+/** SQL: only the first stored row of each deal ticket (older duplicates are skipped wherever deals are read). */
+export const FIRST_OF_DEAL = "id IN (SELECT MIN(id) FROM ea_deals GROUP BY deal_ticket)";
 
 /** Recent closed deals, newest first. Never throws. */
 export async function listDeals(env, { limit = 50, sinceMs = null } = {}) {
   try {
     await ensureSchema(env.DB);
     const n = Math.max(1, Math.min(500, Math.round(Number(limit) || 50)));
+    // One row per deal ticket (the first stored): rows stored twice before 2026-11-13 are not counted again.
     const q = sinceMs == null
-      ? env.DB.prepare("SELECT * FROM ea_deals ORDER BY closed_ms DESC LIMIT ?").bind(n)
-      : env.DB.prepare("SELECT * FROM ea_deals WHERE closed_ms >= ? ORDER BY closed_ms DESC LIMIT ?").bind(sinceMs, n);
+      ? env.DB.prepare(`SELECT * FROM ea_deals WHERE ${FIRST_OF_DEAL} ORDER BY closed_ms DESC LIMIT ?`).bind(n)
+      : env.DB.prepare(`SELECT * FROM ea_deals WHERE closed_ms >= ? AND ${FIRST_OF_DEAL} ORDER BY closed_ms DESC LIMIT ?`).bind(sinceMs, n);
     return (await q.all())?.results || [];
   } catch { return []; }
 }

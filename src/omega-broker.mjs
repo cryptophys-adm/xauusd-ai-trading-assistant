@@ -13,7 +13,7 @@
 
 import { ingestCorpus, ingestCorpusMacro, ingestMt5Calendar } from "./corpus-oracle.mjs";
 import { eaSignal, readControl } from "./ea-signal.mjs";
-import { storeDeal, dealStats } from "./ea-execution.mjs";
+import { storeDeal, dealStats, FIRST_OF_DEAL } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 
@@ -616,7 +616,8 @@ const pick = (o) => Object.fromEntries(POLICY_FIELDS.filter((k) => o?.[k] != nul
 
 async function omegaTradeStats(env, { sinceMs = null, beforeMs = null, limit = OMEGA_POLICY_ROLLBACK_TRADES } = {}) {
   try {
-    const where = ["source = 'omega'"], args = [];
+    // One row per deal (FIRST_OF_DEAL): the policy's rollback check counts each Omega trade once.
+    const where = ["source = 'omega'", FIRST_OF_DEAL], args = [];
     if (sinceMs != null) { where.push("closed_ms > ?"); args.push(sinceMs); }
     if (beforeMs != null) { where.push("closed_ms <= ?"); args.push(beforeMs); }
     const order = sinceMs != null ? "ASC" : "DESC";

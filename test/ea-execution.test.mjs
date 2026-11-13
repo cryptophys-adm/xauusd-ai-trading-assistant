@@ -54,7 +54,12 @@ test("a deal is stored once; the list is newest first; the statistics use the ne
   const e = env();
   assert.deepEqual(await storeDeal(e, DEAL), { ok: true, stored: true });
   assert.deepEqual(await storeDeal(e, DEAL), { ok: true, stored: false }, "a repeated report changes nothing");
+  // The bridge re-reports a closed deal on every sync and its times can move by a second (2026-11-13:
+  // 116,821 rows for 36 deals): the same deal ticket is still stored once.
+  assert.deepEqual(await storeDeal(e, { ...DEAL, opened_ms: (DEAL.opened_ms ?? 0) + 1000, closed_ms: DEAL.closed_ms + 1000 }), { ok: true, stored: false });
   await storeDeal(e, { ...DEAL, deal_ticket: 7002, side: "SELL", profit: -60, commission: -0.7, reason: "sl", closed_ms: DEAL.closed_ms + 3_600_000 });
+  // A duplicate stored before the fix is read once.
+  e.DB.raw.prepare("INSERT INTO ea_deals (deal_ticket, mode, side, volume, profit, reason, closed_ms, received_at) VALUES (7001, 'demo', 'BUY', 0.01, 999, 'tp', ?, 'x')").run(DEAL.closed_ms + 2000);
   const deals = await listDeals(e);
   assert.deepEqual(deals.map((d) => d.deal_ticket), [7002, 7001]);
   const s = dealStats(deals);
