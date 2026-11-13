@@ -234,7 +234,7 @@ export default function Shadow() {
         right={<Badge tone="purple">Out-of-Band Simulation · Zero Risk</Badge>}
       >
         <p className="text-[12px] leading-relaxed text-slate-400">
-          Parallel out-of-band testing arena where candidate indicator algorithms and knowledge hypotheses run alongside the active engine (<span className="text-slate-200 font-semibold">Active Control</span>) on identical closed H1 bars.
+          Parallel out-of-band testing arena where candidate indicator algorithms and knowledge hypotheses run alongside the active engine (<span className="text-slate-200 font-semibold">Active Control</span>) on the same closed bars (1H for the indicator candidates and the 1H rooms; 15m for the 15m War Room and the council).
           The platform enforces non-parametric statistical tests (Holm-Bonferroni Sign Test) and out-of-sample holdout validation. Parameter candidates are promoted by a reviewed Pull Request; a knowledge note that reads better than active goes live by itself for the agents and chart it was tested on (see Model &amp; Learning) and retires by itself if it gets worse.
         </p>
 
@@ -393,7 +393,7 @@ export default function Shadow() {
                             <div className="text-[10px] text-slate-500">Sign Test {yes(k.criteria?.higher_outcome_score)}</div>
                           </td>
                           <td className="mono">
-                            <div>{k.holdout?.bars ?? 0}/{k.holdout?.required_bars ?? 30} bars</div>
+                            <div>{k.holdout?.bars ?? 0}/{k.holdout?.required_bars ?? "?"} bars</div>
                             <div className="text-[10px]">{yes(k.criteria?.holdout_no_worse)}</div>
                           </td>
                           <td className="mono text-[11px]">{yes(k.criteria?.no_new_stuck_states)}</td>

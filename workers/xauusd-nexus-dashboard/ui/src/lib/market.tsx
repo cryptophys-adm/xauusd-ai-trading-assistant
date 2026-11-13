@@ -87,7 +87,8 @@ export function leanLabel(v: number | null | undefined): string {
   if (v == null) return "no data";
   const a = Math.abs(v);
   const side = v > 0 ? "bullish" : "bearish";
-  return a < 0.1 ? "neutral" : a < 0.3 ? `slightly ${side}` : a < 0.6 ? side : `strongly ${side}`;
+  // The quorum's own band (src/decision-engine.mjs LEAN): below it a witness has no direction.
+  return a < 0.15 ? "neutral" : a < 0.3 ? `slightly ${side}` : a < 0.6 ? side : `strongly ${side}`;
 }
 
 const ACTION_ONLY = /\b(consensus|settles?|agrees?|stay flat|no (directional )?entry|confirmation rule)\b|^(the )?(room|moderator|h1 decision)\b/i;

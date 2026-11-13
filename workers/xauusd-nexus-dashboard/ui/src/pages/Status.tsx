@@ -36,10 +36,11 @@ function Overview() {
 function PullAdapter() {
   const { lane } = useSystemHealth();
   if (!lane) return null;
-  const used = Number(lane.budget?.used) || 0, daily = Number(lane.budget?.daily) || 800;
+  const used = Number(lane.budget?.used) || 0, dailyRaw = Number(lane.budget?.daily);
+  const daily = Number.isFinite(dailyRaw) && dailyRaw > 0 ? dailyRaw : null;
   return (
-    <Panel title={`Pull adapter · ${WORKERS.pull.name}`} icon={<Database className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone={used >= 0.9 * daily ? "amber" : "cyan"}>{used}/{daily} calls today</Badge>}>
-      <div className="mb-2 h-1.5 overflow-hidden rounded bg-white/5"><div className="h-full bg-cyan-400/60" style={{ width: `${Math.min(100, (used / daily) * 100)}%` }} /></div>
+    <Panel title={`Pull adapter · ${WORKERS.pull.name}`} icon={<Database className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone={daily != null && used >= 0.9 * daily ? "amber" : "cyan"}>{daily != null ? `${used}/${daily} calls today` : `${used} calls today`}</Badge>}>
+      <div className="mb-2 h-1.5 overflow-hidden rounded bg-white/5"><div className="h-full bg-cyan-400/60" style={{ width: daily != null ? `${Math.min(100, (used / daily) * 100)}%` : "0%" }} /></div>
       <p className="mb-2 text-[11.5px] text-slate-400">
         Last refresh: <b className="text-slate-200">{lane.last_refresh?.status ?? "none"}</b> {ago(lane.last_refresh?.checked_at)}
         {lane.last_publish?.status ? <> · last H1 publish: <b className="text-slate-200">{lane.last_publish.status}</b> {ago(lane.last_publish.published_at)}</> : null}

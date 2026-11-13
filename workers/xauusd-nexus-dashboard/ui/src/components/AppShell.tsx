@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, ShieldCheck, Sparkles, Swords, Trophy, X, Zap } from "lucide-react";
 import { Dot } from "./ui";
 import { useWarRoom } from "../lib/warroom";
+import { marketClosed } from "../lib/health";
 
 // Same header, glass panels and footer as the Cerebrum Console (cryptophys-cloud-platform
 // workers/console/ui; Nexus joins the Console in phase 2, ADR-0008). Navigation is a grouped left
@@ -41,7 +42,10 @@ function Clock() {
 export default function AppShell({ current, children }: { current: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const { room, error } = useWarRoom();
-  const live = !error && !!room;
+  // "Room live" only while the 15m room is current (owner 2026-11-13: not green on an old room).
+  const roomMs = Date.parse(String(room?.bar_close ?? room?.bar_time ?? ""));
+  const closed = marketClosed();
+  const live = !error && !!room && Number.isFinite(roomMs) && Date.now() - roomMs < 45 * 60_000;
 
   const navigate = (e: MouseEvent<HTMLAnchorElement>, href: string) => {
     setOpen(false);
@@ -102,7 +106,7 @@ export default function AppShell({ current, children }: { current: string; child
             </a>
             <span className="chip border-emerald-400/20 bg-emerald-400/10 text-emerald-300"><ShieldCheck className="h-3 w-3" />{current === "omega" ? "Execution · Access protected" : "Advisory only"}</span>
             <span className={`chip ${live ? "border-amber-400/20 bg-amber-400/10 text-amber-200" : "border-rose-400/20 bg-rose-400/10 text-rose-300"}`}>
-              <Dot tone={live ? "green" : "red"} pulse={live} />{live ? "Room live" : "Room offline"}
+              <Dot tone={live ? "green" : closed ? "slate" : "red"} pulse={live} />{live ? "Room live" : closed ? "Market closed" : !room ? "Room offline" : "Room behind"}
             </span>
             <span className="chip border-white/10 bg-white/[0.04] text-slate-300"><Clock /></span>
           </div>
