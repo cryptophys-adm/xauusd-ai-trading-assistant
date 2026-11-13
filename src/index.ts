@@ -193,6 +193,7 @@ import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } fr
 import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
 import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema, readExecutionReport, LEDGER_CRON, activeSetups } from "./signal-ledger.mjs";
 import { runPatternCalibration, readPatternCalibration } from "./pattern-calibration.mjs";
+import { runPlanLearning, readPlanLearning, planAdviceFor, planLearningMode } from "./plan-learning.mjs";
 import { runModelDataset, readModelDataset, readModelDatasetSummary, loadLabeledRows } from "./model-dataset.mjs";
 import { runModelBaseline, readBaseline, baselineStatus, prospectiveRecord } from "./model-baseline.mjs";
 import { readGbm, gbmStatus } from "./model-gbm.mjs";
@@ -2501,6 +2502,20 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // The chart patterns' measured record on gold and the weight factors in force (src/pattern-calibration.mjs).
     return dashboardJson({ status: "ok", calibration: await readPatternCalibration(env) });
   }
+  if (url.pathname === "/api/plan-learning") {
+    // The plan learner (src/plan-learning.mjs, shadow): each entry and stop arm against the plan on gold's
+    // own price action, the pick per market condition, the walk-forward verdict, and what it would place
+    // for the latest decision. Advice only: no decision and no order reads it.
+    try {
+      const [state, latest] = await Promise.all([readPlanLearning(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null)]);
+      const d = latest as Record<string, any> | null;
+      const trade = d?.trade ? { decision_key: d.decision_key, bar_close: d.bar_close, side: d.trade.side, entry: d.trade.entry, stop: d.trade.stop, tp: d.trade.tp, rrr: d.trade.rrr ?? null } : null;
+      return dashboardJson({ status: "ok", mode: planLearningMode(env), learning: state, latest: trade ? { plan: trade, advice: planAdviceFor(d, state) } : null });
+    } catch (error) {
+      console.error("plan_learning_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/model/dataset/summary") {
     // The custom model's dataset: rows by label status, outcomes per side (src/model-dataset.mjs).
     return dashboardJson({ status: "ok", dataset: await readModelDatasetSummary(env) });
@@ -2737,6 +2752,10 @@ async function runLedgerStep(env: Env): Promise<void> {
   // per deal ticket (owner 2026-11-13: "setuju, bersihkan duplikat deal lewat PR").
   const deals = await dedupeDeals(env);
   if (deals.status !== "clean") console.log("ea_deals_dedupe", JSON.stringify(deals));
+  // The plan learner (owner 2026-11-13, docs/RFC_PLAN_LEARNING.md): the engine's plans replayed with other
+  // entries and stops on the bars that followed. Shadow only; it reads decisions and never writes one.
+  const plans = await runPlanLearning(env);
+  if (plans.status !== "unchanged" && plans.status !== "disabled") console.log("plan_learning", JSON.stringify(plans));
   // The custom model's dataset (owner 2026-11-13, docs/RFC_CUSTOM_MODEL.md): features and labels per decision.
   const dataset = await runModelDataset(env);
   if (dataset.status === "failed" || Number(dataset.added) || Number(dataset.labeled) || Number(dataset.wide) || Number(dataset.unavailable)) console.log("model_dataset", JSON.stringify(dataset));
