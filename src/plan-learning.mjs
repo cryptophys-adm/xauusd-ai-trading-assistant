@@ -8,7 +8,8 @@
 //              side, stop and target (the engine repeats a plan every 15 minutes while it stands). It lives
 //              until the engine stops repeating it; an entry may fill only while it lives (at most 8 hours).
 //   grid       each setup is replayed once per arm on the Signal Ledger's bars (1m where the 1m series
-//              reaches, 15m before) with the ledger's own simulation (simulateSignal, SL+ at halfway):
+//              reaches, 15m before) with the ledger's own simulation (simulateSignal, SL+ at halfway); a
+//              plan at its level is entered at market on the first bar, as Omega enters it:
 //                entry shift   0, 0.1, 0.2 or 0.3 x the 1H ATR deeper than the plan's entry (toward the
 //                              stop: a better price, fewer fills);
 //                stop scale    0.5, 0.65, 0.8, 1 or 1.25 x the plan's stop distance, from the plan's entry.
@@ -22,14 +23,15 @@
 //              MIN_PICK setups: one large outlier never moves a plan), else the plan as it is.
 //   referee    walk-forward: for each setup the learner sees only setups resolved before it opened, picks,
 //              and its pick is compared with the plan on that setup. A one-sided sign test on the older
-//              part, the newest part held out; "better_than_plan" needs both.
+//              part of the independent setups (none open while another runs), the newest part held out;
+//              "better_than_plan" needs both.
 // Shadow only: nothing here reaches a room, a decision, the EA signal or Omega. Applying a learned plan is
 // a later, owner-approved step. Switch: PLAN_LEARNING_MODE = "shadow" (default) | "off".
 
 import { simulateSignal, ledgerSeries, toMs, decisionCloseMs, validSignal, FILL_WINDOW_MS, TRADING_MODES } from "./signal-ledger.mjs";
 import { signTestP, SHADOW_SIGNIFICANCE } from "./shadow-versions.mjs";
 
-export const PLAN_LEARNING_VERSION = "cryptophys.plan-learning.v1";
+export const PLAN_LEARNING_VERSION = "cryptophys.plan-learning.v2";
 export const PLAN_LEARNING_KEY = "plan-learning:state:v1";
 export const ENTRY_SHIFTS = Object.freeze([0, 0.1, 0.2, 0.3]);
 export const STOP_SCALES = Object.freeze([0.5, 0.65, 0.8, 1, 1.25]);
@@ -42,9 +44,10 @@ export const PLAN_RULES = Object.freeze({
   prior: 20,                 // the shrinkage, in setups
   margin_r: 0.05,            // a pick must promise at least this much R per setup over the plan
   min_pick_setups: 20,       // an arm is picked only once it was replayed on this many setups
-  min_setups: 100,           // the referee's minimum of resolved setups
-  min_decisive: 30,          // and of setups where the pick and the plan ended differently
-  holdout_share: 0.25, holdout_min: 20,
+  market_band: 0.35,         // a plan at its level fills at market within this share of its stop distance (as Omega)
+  min_setups: 60,            // the referee's minimum of independent setups (none open while another runs)
+  min_decisive: 20,          // and of those where the pick and the plan ended differently
+  holdout_share: 0.25, holdout_min: 15,
   window_days: 2,            // decisions read at each run
   backfill_days: 30,         // and at the first run, when no setup is stored yet
   learn_days: 90             // resolved setups the learner reads
@@ -120,8 +123,15 @@ export function replaySetup(setup, bars, { now = Date.now() } = {}) {
   if (!after.length || toMs(after[0].open_time) - setup.opened_ms > 3 * M15) return { status: now - setup.opened_ms > 2 * DAY ? "unavailable" : "open", results: {} };
   const results = {};
   let open = false, last = setup.opened_ms;
+  // A plan at its level is entered at market, as Omega enters it (production 2026-11-13: one plan in
+  // four counted as never filled because price had left the exact entry in the minute the council took):
+  // on the first bar after the decision, when its open is within MARKET_BAND of the plan's stop distance
+  // from the entry. The arm keeps its stop and target distances from that fill. A deeper entry stays a limit.
+  const dir = setup.side === "BUY" ? 1 : -1, first = after[0].open;
+  const market = setup.at_level === true && finite(first) && Math.abs(first - setup.entry) <= PLAN_RULES.market_band * dir * (setup.entry - setup.stop);
+  const filled = market ? { ...setup, entry: first, stop: r2(setup.stop + first - setup.entry), tp1: r2(setup.tp1 + first - setup.entry) } : null;
   for (const arm of PLAN_ARMS) {
-    const v = variantOf(setup, arm);
+    const v = variantOf(arm.entry_shift === 0 && filled ? filled : setup, arm);
     if (!v) { results[arm.id] = { s: "invalid", r: null, f: 0 }; continue; }
     const sim = simulateSignal({ side: v.side, entry: v.entry, stop: v.stop, tp1: v.tp1, progressive_stop: v.entry, opened_at: iso(setup.opened_ms) }, after, { now, fillWindowMs: fillWindowOf(setup), holdMaxMs: PLAN_RULES.hold_max_ms });
     if (sim.status === "closed") results[arm.id] = { s: sim.exit_reason, r: r3(sim.r_tp1), f: 1 };
@@ -191,18 +201,25 @@ export function walkForward(setups, rules = PLAN_RULES) {
     if (known !== at) { state = learn(byResolved.slice(0, known), { prior: rules.prior, margin: rules.margin_r, minPick: rules.min_pick_setups }); at = known; }
     const pick = pickFor(state, s.context);
     const d = pick === CONTROL_ARM ? 0 : diffOf(s, pick) ?? 0;
-    steps.push({ pick, d });
+    steps.push({ pick, d, opened_ms: s.opened_ms, resolved_ms: s.resolved_ms ?? s.opened_ms });
   }
+  // The engine writes a new plan at almost every 15m close, so setups overlap and share one price move
+  // (production 2026-11-13: 189 setups in four days, 1.2 decisions each). The sign test counts only setups
+  // that opened after the one counted before them had ended, as independent trades.
+  const independent = [];
+  let free = -Infinity;
+  for (const x of steps) if (x.opened_ms >= free) { independent.push(x); free = x.resolved_ms; }
   const part = (xs) => {
     const wins = xs.filter((x) => x.d > 0).length, losses = xs.filter((x) => x.d < 0).length;
     return { setups: xs.length, picked: xs.filter((x) => x.pick !== CONTROL_ARM).length, pick_better: wins, plan_better: losses, mean_diff: xs.length ? r3(xs.reduce((a, x) => a + x.d, 0) / xs.length) : null, p_value: signTestP(wins, losses) };
   };
-  const hold = list.length >= rules.min_setups ? Math.max(rules.holdout_min, Math.round(list.length * rules.holdout_share)) : 0;
-  const discovery = part(steps.slice(0, steps.length - hold)), holdout = hold ? part(steps.slice(-hold)) : null;
+  const n = independent.length;
+  const hold = n >= rules.min_setups ? Math.max(rules.holdout_min, Math.round(n * rules.holdout_share)) : 0;
+  const discovery = part(independent.slice(0, n - hold)), holdout = hold ? part(independent.slice(-hold)) : null;
   const decisive = discovery.pick_better + discovery.plan_better;
-  const verdict = list.length < rules.min_setups || decisive < rules.min_decisive ? "collecting"
+  const verdict = n < rules.min_setups || decisive < rules.min_decisive ? "collecting"
     : finite(discovery.p_value) && discovery.p_value < SHADOW_SIGNIFICANCE && discovery.mean_diff > 0 && holdout && holdout.mean_diff > 0 ? "better_than_plan" : "not_better";
-  return { setups: list.length, discovery, holdout, verdict, needs: { setups: rules.min_setups, decisive: rules.min_decisive } };
+  return { setups: list.length, independent: n, all: part(steps), discovery, holdout, verdict, needs: { independent: rules.min_setups, decisive: rules.min_decisive } };
 }
 
 /**
@@ -335,6 +352,8 @@ export async function runPlanLearning(env, { now = Date.now(), bars = null } = {
       }
     }
     await runAll(db, writes);
+    // A setup replayed by an older version of the rules is replayed again.
+    await db.prepare("UPDATE plan_setups SET status = 'open', results_json = NULL, resolved_at = NULL, version = ? WHERE version <> ? AND status IN ('resolved', 'unavailable')").bind(PLAN_LEARNING_VERSION, PLAN_LEARNING_VERSION).run();
     // The setups the engine no longer repeats are replayed until every arm is final.
     const open = ((await db.prepare("SELECT * FROM plan_setups WHERE status = 'open' AND last_seen_at <= ? ORDER BY opened_at LIMIT 200").bind(iso(now - PLAN_RULES.setup_gap_ms)).all()).results || []).map(fromRow);
     let resolved = 0, unavailable = 0;
@@ -365,7 +384,7 @@ async function buildState(db, { now }) {
   return {
     version: PLAN_LEARNING_VERSION, generated_at: iso(now), mode: "shadow",
     grid: { entry_shifts: ENTRY_SHIFTS, stop_scales: STOP_SCALES, control: CONTROL_ARM },
-    rules: { prior: PLAN_RULES.prior, margin_r: PLAN_RULES.margin_r, min_pick_setups: PLAN_RULES.min_pick_setups, min_risk_atr: PLAN_RULES.min_risk_atr, hold_max_hours: PLAN_RULES.hold_max_ms / HOUR, fill_window_max_hours: FILL_WINDOW_MS / HOUR, learn_days: PLAN_RULES.learn_days, significance: SHADOW_SIGNIFICANCE },
+    rules: { market_band: PLAN_RULES.market_band, prior: PLAN_RULES.prior, margin_r: PLAN_RULES.margin_r, min_pick_setups: PLAN_RULES.min_pick_setups, min_risk_atr: PLAN_RULES.min_risk_atr, hold_max_hours: PLAN_RULES.hold_max_ms / HOUR, fill_window_max_hours: FILL_WINDOW_MS / HOUR, learn_days: PLAN_RULES.learn_days, significance: SHADOW_SIGNIFICANCE },
     setups: { resolved: rows.length, open: Number(counts.open) || 0, unavailable: Number(counts.unavailable) || 0, since: counts.since ?? null },
     // The grid is learned on the default agent's plans; every agent's own record stands beside it.
     learned: learn(rows.filter((s) => s.agent === DEFAULT_PLAN_AGENT)),
