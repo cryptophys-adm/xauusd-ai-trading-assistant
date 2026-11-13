@@ -1,0 +1,14 @@
+export const STRATEGY_AGENTS_VERSION: string;
+export const DEFAULT_AGENT: string;
+export const AGENT_STATUSES: ReadonlyArray<string>;
+export const PROJECTION_NOTE: string;
+export const AGENT_RULES: Readonly<Record<string, any>>;
+export const STRATEGY_AGENTS: ReadonlyArray<Readonly<{ id: string; version: number; label: string; fits: string; plan(dir: number, ctx: Record<string, any>): Record<string, any> | null }>>;
+export const AGENT_IDS: ReadonlyArray<string>;
+export function finishPlan(agent: string, dir: number, parts: Record<string, any>, ctx: Record<string, any>): Record<string, any> | null;
+export function strategyAgentsMode(env: unknown): "on" | "off";
+export function agentStatuses(env: unknown): Record<string, string>;
+export function agentContext(input?: Record<string, any>): Record<string, any>;
+export function agentPlans(dir: number, ctx: Record<string, any>, statuses?: Record<string, string>): Record<string, { status: string; plan: Record<string, any> }>;
+export function agentCatalog(statuses?: Record<string, string>): Array<{ id: string; label: string; version: number; status: string; fits: string }>;
+export function slimPlan(p: Record<string, any>): Record<string, any>;

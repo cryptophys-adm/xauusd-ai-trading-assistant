@@ -83,22 +83,24 @@ export function variantOf(plan, arm) {
 /**
  * Pure: the setups of `decisions` (BUY or SELL, oldest first: { key, close_ms, decided_at, side, entry,
  * stop, tp1, atr_h1, mode, action, at_level, regime }). A decision repeating the stop and the target of
- * the latest setup of its side within the gap extends that setup; any other opens a new one.
+ * the latest setup of its side and strategy agent (`agent`, the default agent without one) within the gap
+ * extends that setup; any other opens a new one.
  */
 export function setupsFrom(decisions) {
-  const out = [], cur = { BUY: null, SELL: null };
+  const out = [], cur = {};
   for (const d of decisions || []) {
     if (!finite(d?.close_ms) || !finite(d.atr_h1) || d.atr_h1 <= 0 || !validSignal({ side: d.side, entry: d.entry, stop: d.stop, tp1: d.tp1 })) continue;
-    const c = cur[d.side], tol = PLAN_RULES.same_setup_atr * d.atr_h1;
+    const agent = typeof d.agent === "string" && d.agent ? d.agent : DEFAULT_PLAN_AGENT, slot = `${d.side}:${agent}`;
+    const c = cur[slot], tol = PLAN_RULES.same_setup_atr * d.atr_h1;
     if (c && d.close_ms - c.last_seen_ms <= PLAN_RULES.setup_gap_ms && Math.abs(d.stop - c.stop) <= tol && Math.abs(d.tp1 - c.tp1) <= tol) { c.last_seen_ms = d.close_ms; c.decisions += 1; continue; }
     const s = {
-      setup_key: `${d.key}:${d.side}`, decision_key: d.key, agent: DEFAULT_PLAN_AGENT, opened_ms: d.close_ms, decided_ms: finite(toMs(d.decided_at)) ? Math.max(toMs(d.decided_at), d.close_ms) : d.close_ms, last_seen_ms: d.close_ms, decisions: 1,
+      setup_key: agent === DEFAULT_PLAN_AGENT ? `${d.key}:${d.side}` : `${d.key}:${d.side}:${agent}`, decision_key: d.key, agent, opened_ms: d.close_ms, decided_ms: finite(toMs(d.decided_at)) ? Math.max(toMs(d.decided_at), d.close_ms) : d.close_ms, last_seen_ms: d.close_ms, decisions: 1,
       side: d.side, entry: d.entry, stop: d.stop, tp1: d.tp1, atr_h1: d.atr_h1,
       mode: TRADING_MODES.includes(d.mode) ? d.mode : null, action: d.action === "ENTER_MARKET" ? "ENTER_MARKET" : "ENTER_LIMIT", at_level: d.at_level === true || d.at_level === 1,
       regime: typeof d.regime === "string" && d.regime ? d.regime : null
     };
     s.context = contextOf(s);
-    out.push(s); cur[d.side] = s;
+    out.push(s); cur[slot] = s;
   }
   return out;
 }
@@ -248,10 +250,45 @@ async function loadDecisions(db, sinceIso) {
   const rows = (await db.prepare(`SELECT decision_key, decided_at, stance,
       json_extract(decision_json, '$.trade.side') AS side, json_extract(decision_json, '$.trade.entry') AS entry, json_extract(decision_json, '$.trade.stop') AS stop,
       json_extract(decision_json, '$.trade.tp') AS tp, json_extract(decision_json, '$.trade.action') AS action, json_extract(decision_json, '$.trade.at_level') AS at_level,
-      json_extract(decision_json, '$.strategy.atr_h1') AS atr_h1, json_extract(decision_json, '$.trading_mode') AS mode, json_extract(decision_json, '$.context.regime_1h') AS regime
+      json_extract(decision_json, '$.strategy.atr_h1') AS atr_h1, json_extract(decision_json, '$.trading_mode') AS mode, json_extract(decision_json, '$.context.regime_1h') AS regime,
+      json_extract(decision_json, '$.strategy_plans') AS plans
     FROM engine_decisions WHERE stance IN ('BUY', 'SELL') AND bar_close >= ? ORDER BY bar_close`).bind(sinceIso).all()).results || [];
-  return rows.filter((r) => r.side === r.stance).map((r) => ({ key: r.decision_key, close_ms: decisionCloseMs(r.decision_key), decided_at: r.decided_at, side: r.side, entry: Number(r.entry), stop: Number(r.stop), tp1: Number(r.tp), atr_h1: Number(r.atr_h1), mode: r.mode, action: r.action, at_level: r.at_level === 1 || r.at_level === true, regime: r.regime }))
-    .filter((d) => finite(d.close_ms)).sort((a, b) => a.close_ms - b.close_ms);
+  return rows.filter((r) => r.side === r.stance).flatMap(decisionPlans).filter((d) => finite(d.close_ms)).sort((a, b) => a.close_ms - b.close_ms);
+}
+
+/**
+ * Pure: the plans one directional decision row holds, one per strategy agent that saw its setup on the
+ * decided side (`plans`: the record's strategy_plans, src/strategy-agents.mjs). A decision of before the
+ * agents holds one: its trade, the default agent's.
+ */
+export function decisionPlans(r) {
+  const base = { key: r.decision_key, close_ms: decisionCloseMs(r.decision_key), decided_at: r.decided_at, side: r.side, atr_h1: Number(r.atr_h1), mode: r.mode, regime: r.regime };
+  let plans = r.plans;
+  if (typeof plans === "string") { try { plans = JSON.parse(plans); } catch { plans = null; } }
+  const mine = plans && typeof plans === "object" ? plans[r.side === "BUY" ? "long" : "short"] : null;
+  const list = Object.entries(mine && typeof mine === "object" ? mine : {}).filter(([, p]) => p && typeof p === "object")
+    .map(([agent, p]) => ({ ...base, agent, entry: Number(p.entry), stop: Number(p.stop), tp1: Number(p.tp1), action: p.at_level ? "ENTER_MARKET" : "ENTER_LIMIT", at_level: p.at_level === true }));
+  if (list.length) return list;
+  return [{ ...base, agent: DEFAULT_PLAN_AGENT, entry: Number(r.entry), stop: Number(r.stop), tp1: Number(r.tp), action: r.action, at_level: r.at_level === 1 || r.at_level === true }];
+}
+
+/**
+ * Pure: each strategy agent's own record on its resolved setups (its plan as it is, the control arm): the
+ * setups, the mean R per setup, how often it filled and reached its target, and the same per context.
+ */
+export function agentRecords(setups) {
+  const by = {};
+  for (const s of setups || []) {
+    const x = s.results?.[CONTROL_ARM];
+    if (!finite(x?.r)) continue;
+    const a = (by[s.agent ?? DEFAULT_PLAN_AGENT] ??= { n: 0, r: 0, f: 0, t: 0, st: 0, ctx: {} });
+    const c = (a.ctx[s.context] ??= { n: 0, r: 0 });
+    a.n += 1; a.r += x.r; a.f += x.f ? 1 : 0; a.t += x.s === "target" ? 1 : 0; a.st += x.s === "stop" ? 1 : 0; c.n += 1; c.r += x.r;
+  }
+  return Object.keys(by).sort().map((agent) => {
+    const a = by[agent];
+    return { agent, setups: a.n, mean_r: r3(a.r / a.n), fill_rate: r3(a.f / a.n), target_rate: a.f ? r3(a.t / a.f) : null, stop_rate: a.f ? r3(a.st / a.f) : null, contexts: Object.keys(a.ctx).sort().map((context) => ({ context, setups: a.ctx[context].n, mean_r: r3(a.ctx[context].r / a.ctx[context].n) })) };
+  });
 }
 
 /** One D1 batch (one subrequest: the first run stores the whole stored history), else one statement at a time. */
@@ -330,8 +367,10 @@ async function buildState(db, { now }) {
     grid: { entry_shifts: ENTRY_SHIFTS, stop_scales: STOP_SCALES, control: CONTROL_ARM },
     rules: { prior: PLAN_RULES.prior, margin_r: PLAN_RULES.margin_r, min_pick_setups: PLAN_RULES.min_pick_setups, min_risk_atr: PLAN_RULES.min_risk_atr, hold_max_hours: PLAN_RULES.hold_max_ms / HOUR, fill_window_max_hours: FILL_WINDOW_MS / HOUR, learn_days: PLAN_RULES.learn_days, significance: SHADOW_SIGNIFICANCE },
     setups: { resolved: rows.length, open: Number(counts.open) || 0, unavailable: Number(counts.unavailable) || 0, since: counts.since ?? null },
-    learned: learn(rows),
-    walk_forward: walkForward(rows)
+    // The grid is learned on the default agent's plans; every agent's own record stands beside it.
+    learned: learn(rows.filter((s) => s.agent === DEFAULT_PLAN_AGENT)),
+    walk_forward: walkForward(rows.filter((s) => s.agent === DEFAULT_PLAN_AGENT)),
+    agents: agentRecords(rows)
   };
 }
 

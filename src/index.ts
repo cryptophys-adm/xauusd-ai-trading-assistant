@@ -194,6 +194,7 @@ import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mj
 import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema, readExecutionReport, LEDGER_CRON, activeSetups } from "./signal-ledger.mjs";
 import { runPatternCalibration, readPatternCalibration } from "./pattern-calibration.mjs";
 import { runPlanLearning, readPlanLearning, planAdviceFor, planLearningMode } from "./plan-learning.mjs";
+import { agentStatuses, agentCatalog, strategyAgentsMode, DEFAULT_AGENT } from "./strategy-agents.mjs";
 import { runModelDataset, readModelDataset, readModelDatasetSummary, loadLabeledRows } from "./model-dataset.mjs";
 import { runModelBaseline, readBaseline, baselineStatus, prospectiveRecord } from "./model-baseline.mjs";
 import { readGbm, gbmStatus } from "./model-gbm.mjs";
@@ -2501,6 +2502,24 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/patterns/calibration") {
     // The chart patterns' measured record on gold and the weight factors in force (src/pattern-calibration.mjs).
     return dashboardJson({ status: "ok", calibration: await readPatternCalibration(env) });
+  }
+  if (url.pathname === "/api/strategy-agents") {
+    // The strategy agents (src/strategy-agents.mjs): the registry with each agent's status and what it is
+    // made for, its measured record from the plan learner, and for the latest decision each agent's plan
+    // and the one the trade took.
+    try {
+      const [state, latest] = await Promise.all([readPlanLearning(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null)]);
+      const d = latest as Record<string, any> | null;
+      const records = ((state as Record<string, any> | null)?.agents ?? []) as Array<Record<string, any>>;
+      return dashboardJson({
+        status: "ok", mode: strategyAgentsMode(env), default_agent: DEFAULT_AGENT,
+        agents: agentCatalog(agentStatuses(env)).map((a) => ({ ...a, record: records.find((r) => r.agent === a.id) ?? null })),
+        latest: d ? { decision_key: d.decision_key, bar_close: d.bar_close, stance: d.stance, chosen: d.trade ? (d.trade.strategy ?? DEFAULT_AGENT) : null, plans: d.strategy_plans ?? null } : null
+      });
+    } catch (error) {
+      console.error("strategy_agents_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
   }
   if (url.pathname === "/api/plan-learning") {
     // The plan learner (src/plan-learning.mjs, shadow): each entry and stop arm against the plan on gold's

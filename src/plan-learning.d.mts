@@ -15,6 +15,8 @@ export function setupsFrom(decisions: unknown[]): Array<Record<string, any>>;
 export function fillWindowOf(s: unknown): number;
 export function replaySetup(setup: unknown, bars: unknown[], options?: { now?: number }): { status: string; results: Record<string, any>; resolved_ms?: number };
 export function learn(setups: unknown[], options?: { prior?: number; margin?: number; minPick?: number }): Record<string, any>;
+export function decisionPlans(row: Record<string, any>): Array<Record<string, any>>;
+export function agentRecords(setups: unknown[]): Array<Record<string, any>>;
 export function pickFor(state: unknown, context: string): string;
 export function walkForward(setups: unknown[], rules?: Record<string, number>): Record<string, any>;
 export function planAdviceFor(decision: unknown, state: unknown): Record<string, any> | null;

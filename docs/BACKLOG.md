@@ -82,6 +82,13 @@ setup READY state that never reached the decision (#192).
     - **Owner:** applying the learned entry and stop to the Decision Engine's trade (inside the guardrails, the reward threshold checked again) changes what Omega trades; it starts only on the owner's word after a `better_than_plan` verdict. Also the owner's: whether that step then runs by itself like the weight tuning.
     - **Later arms:** the stop at the broker's 15m swing, the target by the reach of past moves, the speed of the approach as context.
 
+## Strategy agents
+
+24. **Pluggable strategy agents, chosen by the council** (owner 2026-11-13: "kita perlu agent yang bisa dibongkar pasang menyesuaikan strategy yang tepat yang dipilih oleh council"; `docs/RFC_STRATEGY_AGENTS.md`). Step 1 is built (SSOT "Strategy agents"): the registry, four agents, the record and the measurement in shadow, the council's choice among live agents.
+    - **Owner:** how an agent becomes live, because a live agent changes what Omega trades. Either the owner's switch per agent (`STRATEGY_AGENTS_LIVE`, then a control on the page), or by itself once its measured record qualifies and off again when it no longer does (as the learned notes and the baseline model), or live at once on the demo account.
+    - **Next:** each agent's record in the council's evidence; the Nexus panel (registry, records, the agent each decision took); more agents (a momentum continuation on the 5m structure, a session-open range break, a news-release fade).
+    - **Waits for data:** the agents' records start with the first decisions after the deploy; the stored history holds no agent plans.
+
 ## Calibration in progress
 
 15. **4H and D1 parity** (alerts installed by the owner on 2026-11-09). The 1H, 15m and 5m identities are approved (`prophet` 41, `prophet_m15` 360, `prophet_m5` 866 consecutive matches on 2026-11-12). Still calibrating (2026-11-13): `prophet_h4` and `gmi_h4` at 20 of 24 (about one more trading day), `prophet_d1` 3 and `gmi_d1` 2 of 24 (weeks). `gmi_m5` was revoked again on 2026-11-13 (5 of 24 toward re-approval at 09:26 UTC); `prophet_m5` re-approved. `gmi_m5` matches about 98 to 99 % of 5m bars (2 to 3 mismatches a day, 22 on 2026-11-12 in one run of six bars from 10:05 UTC), and almost every mismatch is in the higher-timeframe gate (`gate`, `conflict`, sometimes `gmi_dir`) while the 15m and 1H GMI match every bar: likely the 5m alert reading a forming higher-timeframe bar. To study if it keeps revoking; it does not touch the decision (the 5m trigger is Prophet R38, approved). Until then the 4H and D1 Desks speak at confidence 0.4 or lower.

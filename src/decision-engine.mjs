@@ -56,6 +56,7 @@ import { effectiveLearnedPack } from "./learned-live.mjs";
 import { modelAdvice } from "./model-dataset.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
+import { agentStatuses, agentContext, agentPlans, agentCatalog, slimPlan, AGENT_IDS, DEFAULT_AGENT } from "./strategy-agents.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
@@ -609,7 +610,9 @@ export function tradeFor(side, plan, { entryType = "limit", target = "tp1", minR
     progressive_stop: plan.progressive_stop ?? null,
     entry_note: plan.entry_note, stop_note: plan.stop_note, tp_note: plan[`${t}_note`] ?? null, at_level: plan.at_level === true,
     // A market entry waits for the confirmation candle at execution; a limit at the key level waits for price.
-    trigger_required: market
+    trigger_required: market,
+    // The strategy agent whose plan this is, when it is not the default agent's.
+    ...(plan.agent && plan.agent !== DEFAULT_AGENT ? { strategy: plan.agent, setup: plan.setup ?? null } : {})
   };
 }
 
@@ -624,6 +627,8 @@ export const COUNCIL_JSON_SCHEMA = Object.freeze({
     confidence: { type: "number" },
     entry_type: { type: "string", enum: ["market", "limit"] },
     target: { type: "string", enum: ["tp1", "tp2"] },
+    // The strategy agent whose plan the trade takes (src/strategy-agents.mjs); optional: the default agent's otherwise.
+    strategy: { type: "string", enum: [...AGENT_IDS] },
     summary: { type: "string" },
     reasons: { type: "array", items: { type: "string" } },
     risks: { type: "array", items: { type: "string" } },
@@ -634,10 +639,31 @@ export const COUNCIL_JSON_SCHEMA = Object.freeze({
 
 const WITNESS_KEYS = ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY"];
 
+/** Pure: a side's live agents with a plan the guardrails accept, the default first: [[id, { status, plan }]]. */
+export function liveAgentPlans(g) {
+  const all = Object.entries(g?.plans || {}).filter(([id, a]) => a?.status === "live" && a.plan && (id === DEFAULT_AGENT || agentPlanPasses(a.plan, g)));
+  return all.sort(([a], [b]) => (a === DEFAULT_AGENT ? -1 : b === DEFAULT_AGENT ? 1 : 0));
+}
+
+/** Pure: the reward guardrail on an agent's own plan: scalp needs a real level as the first target, the other modes MIN_RRR to the best target. */
+export function agentPlanPasses(plan, g) {
+  if (!plan || !isNum(plan.entry) || !isNum(plan.stop) || !isNum(plan.tp1)) return false;
+  if (g?.target_rule === "nearest") return plan.tp1_note !== TP1_PROJECTION;
+  return Math.max(plan.rrr?.tp1 ?? 0, plan.rrr?.tp2 ?? 0) >= (isNum(g?.min_rrr) ? g.min_rrr : MIN_RRR);
+}
+
 /** Pure: the council's evidence (the witnesses, the quorum, both sides' guardrails and plans, the context). */
 export function councilEvidence({ barClose, cards, quorum, guards, context = {} }) {
   const plan = (g) => (g.plan ? { entry: g.plan.entry, entry_note: g.plan.entry_note, at_level: g.plan.at_level, stop: g.plan.stop, stop_note: g.plan.stop_note, tp1: g.plan.tp1, tp1_note: g.plan.tp1_note, tp2: g.plan.tp2, tp2_note: g.plan.tp2_note, progressive_stop: g.plan.progressive_stop ?? null, reward_to_risk: g.plan.rrr } : null);
-  const side = (g) => ({ allowed: g.allowed, checks: g.checks.map((c) => ({ check: c.id, pass: c.pass, detail: c.detail })), entry_trigger: g.entry_trigger ? { fired: g.entry_trigger.fired, note: g.entry_trigger.note } : null, plan: plan(g), vetoes: g.vetoes, cautions: g.cautions, supports: g.supports ?? [] });
+  // The strategies the council may choose from on a side: only when a live agent other than the default
+  // sees its setup there (else the evidence is as before: one plan).
+  const strategies = (g) => {
+    const live = liveAgentPlans(g);
+    if (live.length < 2) return null;
+    const catalog = agentCatalog();
+    return live.map(([id, a]) => ({ id, name: catalog.find((c) => c.id === id)?.label ?? id, made_for: catalog.find((c) => c.id === id)?.fits ?? null, setup: a.plan.setup ?? null, plan: plan({ plan: a.plan }) }));
+  };
+  const side = (g) => ({ allowed: g.allowed, checks: g.checks.map((c) => ({ check: c.id, pass: c.pass, detail: c.detail })), entry_trigger: g.entry_trigger ? { fired: g.entry_trigger.fired, note: g.entry_trigger.note } : null, plan: plan(g), ...(strategies(g) ? { strategies: strategies(g) } : {}), vetoes: g.vetoes, cautions: g.cautions, supports: g.supports ?? [] });
   return {
     bar_close: barClose,
     witnesses: cards.map((c) => ({ key: c.key, name: c.label, role: c.role, weight: c.weight, counts: c.available && !c.stale, lean: c.lean, own_decision: c.decision, state: c.state ?? undefined, confidence: c.confidence, summary: c.summary })),
@@ -670,6 +696,7 @@ export function councilMessages(evidence, { learned = null } = {}) {
     "Prioritize target 'tp1' (structural quick win at the nearest strong key level / liquidity pool) to avoid prolonged floating duration risk. Use 'limit' entry at the key level pullback rather than chasing market momentum. A target needs at least 1.5R.",
     `confidence is 0 to 1; below ${MIN_CONFIDENCE} a BUY or SELL becomes WAIT. bias is where the weight of the evidence leans (BULLISH, BEARISH or NEUTRAL), even when the stance is WAIT.`,
     "Never invent a price: the levels come only from the plans in the evidence. Never mention position size. Write summary, reasons and risks in plain sentences a trader would write: no field names, no words joined by underscores or dots, no key=value. The summary starts with the stance and the bias, for example \"Decision WAIT, bias bullish: ...\". Give one to four reasons and up to three risks. In weighed, list the witness keys you relied on most.",
+    ...(evidence?.long?.strategies || evidence?.short?.strategies ? ["A side may list strategies: the strategy agents that see their own setup on the chart now, each with what it is made for (made_for), the setup it sees and its own plan. Choose the one whose made_for matches the price action the witnesses describe (the regime, the structure, how price came to the level) and return its id in strategy; the trade then takes that agent's entry, stop and targets. Without a clear match keep the first one. The side and the guardrails are decided as before; a strategy only changes where the trade enters, stops and targets."] : []),
     ...(evidence?.context?.model ? ["context.model is the platform's own model, trained on this system's past decisions and connected only after it beat the base rate on decisions it had not seen: long_target_first and short_target_first are its chances for each side against their base rates. Weigh it like a witness; it never overrides the guardrails or the levels."] : []),
     "Return only the JSON object."
   ].join(" ") + doctrineSnippet;
@@ -690,6 +717,7 @@ export function validateCouncil(o) {
   if (!isNum(o.confidence) || o.confidence < 0 || o.confidence > 1) errors.push("confidence_invalid");
   if (!["market", "limit"].includes(o.entry_type)) o.entry_type = "limit";
   if (!["tp1", "tp2"].includes(o.target)) o.target = "tp1";
+  if (!AGENT_IDS.includes(o.strategy)) delete o.strategy;
   if (typeof o.summary !== "string" || !o.summary.trim()) errors.push("summary_missing");
   if (!Array.isArray(o.reasons) || !o.reasons.length || o.reasons.some((r) => typeof r !== "string")) errors.push("reasons_invalid");
   if (!Array.isArray(o.risks) || o.risks.some((r) => typeof r !== "string")) o.risks = [];
@@ -705,10 +733,10 @@ export function validateCouncil(o) {
 export function decide({ answer = null, guards, strategy = null, quorum }) {
   const pick = (dir) => (dir > 0 ? guards.long : guards.short);
   let source = answer ? "council" : "fallback";
-  let stance, confidence, entryType, target, overruled = null;
+  let stance, confidence, entryType, target, overruled = null, chosen = null;
   if (answer) {
     stance = answer.stance; confidence = r2(Math.max(0, Math.min(0.95, answer.confidence)));
-    entryType = answer.entry_type; target = answer.target;
+    entryType = answer.entry_type; target = answer.target; chosen = answer.strategy ?? null;
   } else {
     // Fallback: the strategy engine's decision when its side passes every guardrail.
     const sd = dirOf(strategy?.decision);
@@ -724,8 +752,12 @@ export function decide({ answer = null, guards, strategy = null, quorum }) {
     else if (confidence < MIN_CONFIDENCE) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "confidence", detail: `confidence ${Math.round(confidence * 100)}% is below ${Math.round(MIN_CONFIDENCE * 100)}%` }] };
     else {
       const minRrr = isNum(g.min_rrr) ? g.min_rrr : MIN_RRR;
+      // The council's strategy agent, when it is live and its plan passes the reward guardrail; else the
+      // default agent's plan, as before the agents.
+      const agent = chosen && chosen !== DEFAULT_AGENT ? liveAgentPlans(g).find(([id]) => id === chosen)?.[1] ?? null : null;
       // Scalp: always the nearest key level (the plan's first target), whatever the council chose.
-      trade = tradeFor(stance, g.plan, { entryType, target: g.target_rule === "nearest" ? "tp1" : target, minRrr });
+      const opts = { entryType, target: g.target_rule === "nearest" ? "tp1" : target, minRrr };
+      trade = (agent ? tradeFor(stance, agent.plan, opts) : null) ?? tradeFor(stance, g.plan, opts);
       if (!trade) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "reward", detail: `no target pays ${minRrr}R` }] };
     }
     if (overruled) stance = "WAIT";
@@ -825,6 +857,8 @@ export function decisionMessage(d) {
     `XAUUSD DECISION ENGINE · ${d.stance}`,
     `15m bar closed ${String(d.bar_close).slice(11, 16)} UTC · bias ${String(d.bias).toLowerCase()} · confidence ${Math.round((d.confidence || 0) * 100)}% · ${d.source === "council" ? "AI council" : "fallback"}`,
     ...(t ? [`${t.action === "ENTER_MARKET" ? "Market" : "Limit"} ${t.side} at ${px(t.entry)}, stop ${px(t.stop)}, target ${t.target.toUpperCase()} ${px(t.tp)} (${t.rrr}R)`] : []),
+    // The strategy agent the council chose, when it is not the default agent's plan.
+    ...(t?.strategy ? [`Strategy: ${agentCatalog().find((a) => a.id === t.strategy)?.label ?? t.strategy}${t.setup ? ` (${t.setup})` : ""}`] : []),
     clip(d.summary, 700),
     ...(d.overruled ? [`Guardrail: ${d.overruled.wanted} held back (${d.overruled.failed.map((f) => f.check).join(", ")}).`] : []),
     "Advisory only: the server places no order and gives no position size."
@@ -898,7 +932,22 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // MT5 fallback (owner 2026-11-11: trade as usual): the decision stands on the broker's bars while
   // TradingView is down; news and the macro series are stale, which the council should weigh.
   if (inputs?.m5Feed === "mt5_fallback") for (const g of [guards.long, guards.short]) g.cautions = [...g.cautions, MT5_FALLBACK_CAUTION];
+  // The strategy agents (owner 2026-11-13, src/strategy-agents.mjs): each agent's own plan per side. The
+  // guardrail's plan is the default agent's; a live agent's plan may be chosen by the council, a shadow
+  // agent's is only recorded and measured.
+  const statuses = agentStatuses(env);
+  const scalp = modeThresholds(env?.TRADING_MODE).target === "nearest";
+  for (const [dir, g] of [[1, guards.long], [-1, guards.short]]) {
+    try { g.plans = agentPlans(dir, agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: g.plan }), statuses); } catch { g.plans = {}; }
+  }
   return { cards, quorum, guards, market, witness_weights: { ...activeWitnessWeights(effectiveEnv) }, witness_weights_source: source, witness_weights_id: tuned?.id ?? null };
+}
+
+/** Pure: both sides' agent plans as the record keeps them ({ long: { id: { status, entry, stop, ... } }, short }), or null without any. */
+export function strategyPlansOf(guards) {
+  const side = (g) => Object.fromEntries(Object.entries(g?.plans || {}).map(([id, a]) => [id, { status: a.status, ...slimPlan(a.plan) }]));
+  const long = side(guards?.long), short = side(guards?.short);
+  return Object.keys(long).length || Object.keys(short).length ? { long, short } : null;
 }
 
 /** The first target's note when no key level lies ahead (src/strategy-engine.mjs tradeLevels). */
@@ -957,6 +1006,9 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     // The Key Level Agent's candidate zones around price, on the feed's scale (owner 2026-11-12): Omega's
     // stop and target follow them while a position is open (src/omega-engine.mjs).
     key_levels: keyLevelsAround(strategy),
+    // Every strategy agent's own plan per side (src/strategy-agents.mjs), live or shadow: what each would
+    // have traded here, kept so the plan learner can measure each agent on the bars that follow.
+    strategy_plans: strategyPlansOf(assessment?.guards ?? guards),
     // The Projection Agent's chart patterns behind those levels (src/chart-patterns.mjs): which pattern, on
     // which chart, and whether it broke out; kept so each pattern's outcome on gold can be measured.
     chart_patterns: (strategy?.key_levels?.patterns || []).slice(0, 16).map((p) => ({ tf: p.tf, id: p.id, status: p.status, direction: p.direction, upper: p.upper, lower: p.lower, target: p.target })),
