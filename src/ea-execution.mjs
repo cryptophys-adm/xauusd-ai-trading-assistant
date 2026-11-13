@@ -112,7 +112,13 @@ export async function storeDeal(env, body, { now = Date.now() } = {}) {
      WHERE NOT EXISTS (SELECT 1 FROM ea_deals WHERE deal_ticket = ?)
      ON CONFLICT DO NOTHING`
   ).bind(d.deal_ticket, d.position_ticket, d.mode, d.side, d.volume, d.entry_price, d.exit_price, d.stop_loss, d.take_profit, d.profit, d.commission, d.swap, d.reason, d.signal_id, d.opened_ms, d.closed_ms, d.currency, new Date(now).toISOString(), DEAL_SOURCES.includes(body?.source) ? body.source : null, d.deal_ticket).run();
-  return { ok: true, stored: Number(r?.meta?.changes ?? 0) > 0 };
+  const stored = Number(r?.meta?.changes ?? 0) > 0;
+  // A deal first stored without its source (before the column existed, 2026-11-11) takes it from a later
+  // report: after the clean-up of 2026-11-13 kept each ticket's first row, 25 deals had none, and the
+  // Omega policy's rollback check counts source 'omega' only.
+  const source = DEAL_SOURCES.includes(body?.source) ? body.source : null;
+  if (!stored && source) await env.DB.prepare("UPDATE ea_deals SET source = ? WHERE deal_ticket = ? AND source IS NULL").bind(source, d.deal_ticket).run();
+  return { ok: true, stored };
 }
 
 /**

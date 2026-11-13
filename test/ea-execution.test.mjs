@@ -165,3 +165,15 @@ test("the duplicate deal rows stored before the fix are removed in batches, then
   assert.throws(() => e.DB.raw.prepare("INSERT INTO ea_deals (deal_ticket, mode, side, volume, profit, reason, closed_ms, received_at) VALUES (7001, 'demo', 'BUY', 0.01, 1, 'tp', 1, 'x')").run(), /UNIQUE/);
   assert.deepEqual(await storeDeal(e, { ...DEAL, closed_ms: DEAL.closed_ms + 9000 }), { ok: true, stored: false }, "a re-report still stores nothing");
 });
+
+test("a deal stored without its source takes it from a later report, and never changes a source it has", async () => {
+  const e = env();
+  resetEaExecutionSchemaForTests();
+  await listDeals(e);
+  e.DB.raw.prepare("INSERT INTO ea_deals (deal_ticket, mode, side, volume, profit, reason, closed_ms, received_at) VALUES (8001, 'demo', 'SELL', 0.01, 5, 'tp', 1000, 'x')").run();
+  assert.deepEqual(await storeDeal(e, { ...DEAL, deal_ticket: 8001, source: "omega" }), { ok: true, stored: false });
+  assert.equal(e.DB.raw.prepare("SELECT source FROM ea_deals WHERE deal_ticket = 8001").get().source, "omega");
+  await storeDeal(e, { ...DEAL, deal_ticket: 8001, source: "manual" });
+  assert.equal(e.DB.raw.prepare("SELECT source FROM ea_deals WHERE deal_ticket = 8001").get().source, "omega", "a source once set stays");
+  assert.equal(e.DB.raw.prepare("SELECT COUNT(*) AS n FROM ea_deals WHERE deal_ticket = 8001").get().n, 1);
+});
