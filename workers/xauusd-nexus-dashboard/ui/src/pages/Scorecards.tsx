@@ -15,9 +15,8 @@ function Compliance() {
   if (!c) return null;
   const rows = (c.agents as any[]).filter((a) => a.violations > 0).slice(0, 20);
   return (
-    <Panel title="Agent Compliance & Safety Audit (7 days)" icon={<ShieldAlert className="h-3.5 w-3.5 text-amber-300" />} right={<Badge tone={c.total.violations ? "amber" : "green"}>{c.total.rate_per_100 ?? 0} per 100 messages</Badge>}>
-      <p className="mb-3 text-[12px] text-slate-400">Deterministic checks of agent prompt compliance against system constraints. Primary Consumer: Aether Guardian evaluates these rates to validate persona stability and rule discipline.</p>
-      {!rows.length ? <Empty>No rule break in {c.total.messages} room messages.</Empty> : (
+    <Panel title="Rule compliance, 7d" icon={<ShieldAlert className="h-3.5 w-3.5 text-amber-300" />} right={<Badge tone={c.total.violations ? "amber" : "green"}>{c.total.rate_per_100 ?? 0} per 100 msgs</Badge>}>
+      {!rows.length ? <Empty>No rule breaks in {c.total.messages} messages.</Empty> : (
         <div className="table-wrap">
           <table className="tbl">
             <thead>
@@ -26,8 +25,8 @@ function Compliance() {
                 <th>Room</th>
                 <th>Messages</th>
                 <th>Rule breaks</th>
-                <th>Violation Rate</th>
-                <th>Primary Discrepancy</th>
+                <th>Rate</th>
+                <th>Top check</th>
               </tr>
             </thead>
             <tbody>{rows.map((a) => {
@@ -89,13 +88,13 @@ function LeaderboardGraph({ rows, title }: { rows: any[]; title: string }) {
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2 text-[12px] font-semibold text-slate-200">
           <BarChart2 className="h-3.5 w-3.5 text-cyan-400" />
-          <span>{title} — Accuracy & Crowd Multiplier Distribution</span>
+          <span>{title}</span>
         </div>
         <div className="flex items-center gap-4 text-[11px] text-slate-400">
-          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-400" /> &gt;= 55% Edge</span>
-          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-slate-400" /> 45-55% Neutral</span>
-          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-rose-400" /> &lt; 45% Lag</span>
-          <span className="flex items-center gap-1.5 text-cyan-300 font-mono">| 50% Baseline</span>
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-400" /> &ge; 55%</span>
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-slate-400" /> 45–55%</span>
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-rose-400" /> &lt; 45%</span>
+          <span className="flex items-center gap-1.5 text-cyan-300 font-mono">| 50%</span>
         </div>
       </div>
       <div className="space-y-2.5">
@@ -127,20 +126,20 @@ function LeaderboardGraph({ rows, title }: { rows: any[]; title: string }) {
 }
 
 function AgentTable({ rows }: { rows: any[] }) {
-  if (!rows.length) return <Empty>No scored calls yet: an agent's calls are scored once the next four candles have closed.</Empty>;
+  if (!rows.length) return <Empty>No scored calls yet.</Empty>;
   return (
     <div className="table-wrap">
       <table className="tbl">
         <thead>
           <tr>
-            <th>Agent Name</th>
+            <th>Agent</th>
             <th>Family</th>
             <th>Sample</th>
-            <th>Accuracy (Hit / Decisive)</th>
-            <th>BUY/SELL Hit Rate</th>
-            <th>WAIT Accuracy</th>
-            <th>Brier Score</th>
-            <th>Crowd Weight</th>
+            <th>Accuracy</th>
+            <th>Hit rate</th>
+            <th>WAIT acc.</th>
+            <th>Brier</th>
+            <th>Weight</th>
           </tr>
         </thead>
         <tbody>
@@ -153,7 +152,7 @@ function AgentTable({ rows }: { rows: any[] }) {
               <tr key={r.id}>
                 <td className="font-semibold text-slate-200">{r.name}</td>
                 <td className="text-slate-400"><Badge tone="slate">{r.family}</Badge></td>
-                <td className="mono text-slate-300">{r.decisive} <span className="text-[10px] text-slate-500">({r.n ?? 0} tot)</span></td>
+                <td className="mono text-slate-300">{r.decisive} <span className="text-[10px] text-slate-500">/ {r.n ?? 0}</span></td>
                 <td><RateBar value={r.accuracy} toneClass={r.accuracy >= 0.55 ? "bg-emerald-400" : r.accuracy < 0.45 ? "bg-rose-400" : "bg-slate-400"} /></td>
                 <td><RateBar value={r.hit_rate} toneClass="bg-cyan-400" /></td>
                 <td><RateBar value={r.wait_accuracy} toneClass="bg-violet-400" /></td>
@@ -197,15 +196,11 @@ export default function Scorecards() {
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       {/* Header Panel */}
       <Panel
-        title="Agent Performance Scorecards & Dynamic Reputation"
+        title="Agent scorecards"
         icon={<Trophy className="h-4 w-4 text-amber-300" />}
-        right={<Badge tone="purple">30-day rolling · price action only</Badge>}
+        hint={`30-day window. Each call is scored on the next ${d?.scoring?.horizon ?? 4} closed bars; accuracy sets the crowd weight${d?.reputation?.weight_range ? ` (x${d.reputation.weight_range[0]}–x${d.reputation.weight_range[1]})` : ""}.`}
       >
-        <p className="text-[12px] leading-relaxed text-slate-400">
-          Deterministic reputation weighting system for all War Room agents. Every stance is scored mathematically against the next {d?.scoring?.horizon ?? 4} closed candles: BUY/SELL is considered a <span className="text-emerald-300 font-semibold">Hit</span> when price moves {d?.scoring?.thresholdAtr ?? 0.5} x ATR its way first, while WAIT is accurate when no {d?.scoring?.waitTargetAtr ?? 1} x ATR directional move occurs.
-          This accuracy becomes the agent's <strong>reputation weight</strong> (2 × its shrunk accuracy, within {d?.reputation?.weight_range ? `x${d.reputation.weight_range[0]} to x${d.reputation.weight_range[1]}` : "its range"}), which weighs the agent in its room's crowd line and weighted lean; the Decision Engine reads each room as one witness.
-        </p>
-
+        {null}
       </Panel>
 
       {/* KPI Overview Cards */}
@@ -213,45 +208,45 @@ export default function Scorecards() {
         <div className="glass p-3 sm:p-4">
           <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
             <TrendingUp className="h-3.5 w-3.5 text-cyan-400" />
-            <span>Avg Agent Accuracy</span>
+            <span>Avg accuracy</span>
           </div>
           <div className="mono mt-2 text-[22px] font-extrabold text-cyan-300 sm:text-[26px]">
             {avgAccuracy}%
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">Across {scoredAgents.length} scored agents</div>
+          <div className="mt-1 text-[11px] text-slate-500">{scoredAgents.length} agents scored</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
           <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
             <Award className="h-3.5 w-3.5 text-emerald-400" />
-            <span>Top Crowd Weight</span>
+            <span>Top weight</span>
           </div>
           <div className="mono mt-2 truncate text-[22px] font-extrabold text-emerald-300 sm:text-[26px]">
             {topAgent ? topAgent.name : "n/a"}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">{topAgent ? `x${topAgent.weight} multiplier (${p(topAgent.accuracy)})` : "Collecting"}</div>
+          <div className="mt-1 text-[11px] text-slate-500">{topAgent ? `x${topAgent.weight} · ${p(topAgent.accuracy)}` : "—"}</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
           <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
             <CheckCircle2 className="h-3.5 w-3.5 text-violet-400" />
-            <span>Best Calibration</span>
+            <span>Best calibration</span>
           </div>
           <div className="mono mt-2 truncate text-[22px] font-extrabold text-violet-300 sm:text-[26px]">
             {bestBrier ? bestBrier.name : "n/a"}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">{bestBrier ? `Brier ${bestBrier.brier}` : "Calculating"}</div>
+          <div className="mt-1 text-[11px] text-slate-500">{bestBrier ? `Brier ${bestBrier.brier}` : "—"}</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
           <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
             <Activity className="h-3.5 w-3.5 text-amber-400" />
-            <span>Total Evaluated Calls</span>
+            <span>Scored calls</span>
           </div>
           <div className="mono mt-2 text-[22px] font-extrabold text-amber-300 sm:text-[26px]">
             {totalCalls}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">Past 30 trading days</div>
+          <div className="mt-1 text-[11px] text-slate-500">Last 30 days</div>
         </div>
       </div>
 
@@ -262,9 +257,9 @@ export default function Scorecards() {
       ) : (
         <>
           {/* Visual Graph: Leaderboard Bar Charts */}
-          <Panel title="Reputation & Precision Leaderboard Graph" icon={<BarChart2 className="h-3.5 w-3.5 text-cyan-400" />}>
-            <LeaderboardGraph rows={h1Agents} title="1H War Room Consensus Agents" />
-            <LeaderboardGraph rows={m15Agents} title="15m Tactical Live War Room Agents" />
+          <Panel title="Leaderboard" icon={<BarChart2 className="h-3.5 w-3.5 text-cyan-400" />}>
+            <LeaderboardGraph rows={h1Agents} title="1H room" />
+            <LeaderboardGraph rows={m15Agents} title="15m room" />
           </Panel>
 
           {/* Tab Navigation for Tabular Data */}
@@ -273,53 +268,53 @@ export default function Scorecards() {
               onClick={() => setActiveTab("all")}
               className={`rounded-lg px-3 py-1.5 text-[12px] font-semibold transition ${activeTab === "all" ? "bg-cyan-500/20 text-cyan-200 border border-cyan-400/30" : "text-slate-400 hover:text-slate-200"}`}
             >
-              All Scored Engines ({allAgents.length + others.length})
+              All ({allAgents.length + others.length})
             </button>
             <button
               onClick={() => setActiveTab("1H")}
               className={`rounded-lg px-3 py-1.5 text-[12px] font-semibold transition ${activeTab === "1H" ? "bg-cyan-500/20 text-cyan-200 border border-cyan-400/30" : "text-slate-400 hover:text-slate-200"}`}
             >
-              1H War Room ({h1Agents.length})
+              1H room ({h1Agents.length})
             </button>
             <button
               onClick={() => setActiveTab("15m")}
               className={`rounded-lg px-3 py-1.5 text-[12px] font-semibold transition ${activeTab === "15m" ? "bg-cyan-500/20 text-cyan-200 border border-cyan-400/30" : "text-slate-400 hover:text-slate-200"}`}
             >
-              15m Live Room ({m15Agents.length})
+              15m room ({m15Agents.length})
             </button>
             <button
               onClick={() => setActiveTab("indicators")}
               className={`rounded-lg px-3 py-1.5 text-[12px] font-semibold transition ${activeTab === "indicators" ? "bg-cyan-500/20 text-cyan-200 border border-cyan-400/30" : "text-slate-400 hover:text-slate-200"}`}
             >
-              H1 Reasoner & Indicators ({others.length})
+              Reasoner & indicators ({others.length})
             </button>
           </div>
 
           {/* Tabular Panels */}
           {(activeTab === "all" || activeTab === "1H") && (
-            <Panel title="1H War Room Agents Track Record" right={<Badge tone="cyan">{h1Agents.length} agents</Badge>}>
+            <Panel title="1H room agents" right={<Badge tone="cyan">{h1Agents.length} agents</Badge>}>
               <AgentTable rows={h1Agents} />
             </Panel>
           )}
 
           {(activeTab === "all" || activeTab === "15m") && (
-            <Panel title="15m Tactical Live War Room Agents Track Record" right={<Badge tone="purple">{m15Agents.length} agents</Badge>}>
+            <Panel title="15m room agents" right={<Badge tone="purple">{m15Agents.length} agents</Badge>}>
               <AgentTable rows={m15Agents} />
             </Panel>
           )}
 
           {(activeTab === "all" || activeTab === "indicators") && (
-            <Panel title="H1 Reasoner & Algorithmic Indicators" right={<Badge tone="slate">{others.length} subjects</Badge>}>
-              {!others.length ? <Empty>No scored H1 calls yet.</Empty> : (
+            <Panel title="Reasoner & indicators" right={<Badge tone="slate">{others.length} subjects</Badge>}>
+              {!others.length ? <Empty>No scored calls yet.</Empty> : (
                 <div className="table-wrap">
                   <table className="tbl">
                     <thead>
                       <tr>
-                        <th>Subject Entity</th>
-                        <th>Scored Sample</th>
-                        <th>BUY/SELL Hit Rate</th>
-                        <th>WAIT Accuracy</th>
-                        <th>Brier Calibration</th>
+                        <th>Subject</th>
+                        <th>Sample</th>
+                        <th>Hit rate</th>
+                        <th>WAIT acc.</th>
+                        <th>Brier</th>
                       </tr>
                     </thead>
                     <tbody>{others.map((s) => (
@@ -342,16 +337,15 @@ export default function Scorecards() {
 
           {/* Stuck States Alert */}
           {!!d?.stuck_states?.length && (
-            <Panel title="Caution: Open Indicator Stuck States" icon={<ShieldAlert className="h-4 w-4 text-amber-400" />} right={<Badge tone="amber">{d.stuck_states.length} open</Badge>}>
-              <p className="mb-2 text-[12px] text-slate-400">Frozen indicator fields or unresponsive state values during active ATR market moves. The indicator registry automatically disqualifies an agent's voting power when a stuck state is detected.</p>
+            <Panel title="Stuck indicator states" icon={<ShieldAlert className="h-4 w-4 text-amber-400" />} hint="A stuck field disables the affected agent's vote." right={<Badge tone="amber">{d.stuck_states.length} open</Badge>}>
               <div className="table-wrap">
                 <table className="tbl">
                   <thead>
                     <tr>
-                      <th>Frozen Field</th>
-                      <th>Stuck Duration</th>
-                      <th>ATR Range Moved</th>
-                      <th>Status Action</th>
+                      <th>Field</th>
+                      <th>Duration</th>
+                      <th>ATR moved</th>
+                      <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -360,7 +354,7 @@ export default function Scorecards() {
                         <td className="mono text-amber-200">{s.field}</td>
                         <td className="mono">{s.candles} candles</td>
                         <td className="mono">{s.atr ? Math.round((s.price_range / s.atr) * 10) / 10 : "?"} x ATR</td>
-                        <td><Badge tone="red">Voting Disabled</Badge></td>
+                        <td><Badge tone="red">Vote disabled</Badge></td>
                       </tr>
                     ))}
                   </tbody>

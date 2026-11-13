@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { FlaskConical, GitPullRequest, CheckCircle, AlertTriangle, Activity, BarChart2, Zap, ArrowRight, ShieldCheck } from "lucide-react";
-import { Badge, Empty, Panel, Skeleton } from "../components/ui";
+import { FlaskConical, GitPullRequest, Activity, BarChart2, Zap, ShieldCheck } from "lucide-react";
+import { Badge, Empty, Hint, Panel, Skeleton } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 
@@ -17,16 +17,16 @@ const pointTone = (pt: any) => (
 );
 
 function verdictBadge(verdict: string) {
-  if (verdict?.startsWith("better_than_active")) return <Badge tone="green">BETTER (PROMOTION READY)</Badge>;
-  if (verdict === "collecting") return <Badge tone="amber">COLLECTING SAMPLE</Badge>;
-  if (verdict === "control") return <Badge tone="slate">ACTIVE CONTROL</Badge>;
+  if (verdict?.startsWith("better_than_active")) return <Badge tone="green">BETTER</Badge>;
+  if (verdict === "collecting") return <Badge tone="amber">COLLECTING</Badge>;
+  if (verdict === "control") return <Badge tone="slate">CONTROL</Badge>;
   return <Badge tone="red">{verdict || "NOT BETTER"}</Badge>;
 }
 
 /** Visual SVG Comparative Delta Bar: Candidate vs Control Head-to-Head */
 function HeadToHeadGraph({ candidateBetter, controlBetter, candidateName, controlName }: { candidateBetter: number; controlBetter: number; candidateName: string; controlName: string }) {
   const total = (candidateBetter || 0) + (controlBetter || 0);
-  if (total === 0) return <div className="text-[11px] text-slate-500 italic">No disagreement bars evaluated yet.</div>;
+  if (total === 0) return <div className="text-[11px] text-slate-500 italic">No paired bars yet.</div>;
   const candPct = Math.round((candidateBetter / total) * 100);
   const ctrlPct = 100 - candPct;
 
@@ -62,23 +62,20 @@ function TuningGrid() {
 
   return (
     <Panel
-      title="Dynamic Parameter Tuning Grid (Statistical Validation)"
+      title="Parameter tuning"
       icon={<Zap className="h-3.5 w-3.5 text-cyan-400" />}
-      right={<Badge tone="purple">Shadow Validation · Parameters: owner PR · Notes: live by themselves</Badge>}
+      hint={`Discovery ≥ ${t.statistics.min_discovery_bars} bars, Holm-corrected sign test (${t.holm_month}), then a ${t.statistics.holdout_bars}-bar holdout.`}
     >
-      <p className="mb-3 text-[12px] text-slate-400">
-        Rigorous statistical parameter grid testing: Discovery &ge; {t.statistics.min_discovery_bars} bars, one-sided sign test, Holm-Bonferroni family-wise error correction per month ({t.holm_month}), followed by out-of-sample holdout validation on the newest {t.statistics.holdout_bars} closed candles.
-      </p>
 
       {/* Grid Families Table */}
       <div className="table-wrap mb-4">
         <table className="tbl">
           <thead>
             <tr>
-              <th>Family Engine</th>
-              <th>Tested Parameter</th>
-              <th>Active Value (Control)</th>
-              <th>Candidate Grid Values & Verdicts</th>
+              <th>Family</th>
+              <th>Parameter</th>
+              <th>Active</th>
+              <th>Candidates</th>
             </tr>
           </thead>
           <tbody>
@@ -110,27 +107,28 @@ function TuningGrid() {
             <div className="mb-2 flex items-center justify-between">
               <span className="text-[12px] font-semibold text-violet-300 flex items-center gap-1.5">
                 <ShieldCheck className="h-3.5 w-3.5 text-violet-400" />
-                {c.name} — Aether Knowledge Hypotheses (A/A Baseline)
+                Knowledge notes <span className="mono font-normal text-slate-500">{c.name}</span>
               </span>
-              <Badge tone={c.enabled ? "green" : "slate"}>{c.enabled ? `Active · Max ${c.max_calls_per_hour}/hr` : "Disabled"}</Badge>
+              <Badge tone={c.enabled ? "green" : "slate"}>{c.enabled ? `enabled · ${c.max_calls_per_hour}/h` : "disabled"}</Badge>
             </div>
-            <p className="mb-3 text-[11px] text-slate-400">
-              A/A noise baseline: identical prompts changed stance on {c.aa_noise.changed} of {c.aa_noise.bars} bars ({c.aa_noise.rate != null ? `${Math.round(c.aa_noise.rate * 100)}%` : "0%"} stochastic model jitter threshold).
+            <p className="mb-3 flex items-center gap-1.5 text-[11px] text-slate-400">
+              A/A noise: {c.aa_noise.changed} of {c.aa_noise.bars} bars ({c.aa_noise.rate != null ? `${Math.round(c.aa_noise.rate * 100)}%` : "0%"})
+              <Hint text="Stance changes from identical prompts: the noise floor." />
             </p>
             {!c.candidates.length ? (
-              <Empty>No approved Aether note currently in shadow testing.</Empty>
+              <Empty>No notes in shadow.</Empty>
             ) : (
               <div className="table-wrap">
                 <table className="tbl">
                   <thead>
                     <tr>
                       <th>Arm</th>
-                      <th>Note Subject</th>
-                      <th>Calls (Ans/Tot)</th>
-                      <th>Stance Delta</th>
-                      <th>Discovery Head-to-Head</th>
-                      <th>Holm p-value</th>
-                      <th>Holdout Bars</th>
+                      <th>Note</th>
+                      <th>Calls</th>
+                      <th>Stance changes</th>
+                      <th>Head-to-head</th>
+                      <th>Holm p</th>
+                      <th>Holdout</th>
                       <th>Verdict</th>
                     </tr>
                   </thead>
@@ -165,20 +163,20 @@ function TuningGrid() {
             <div className="mb-2 flex items-center justify-between">
               <span className="text-[12px] font-semibold text-cyan-300 flex items-center gap-1.5">
                 <Activity className="h-3.5 w-3.5 text-cyan-400" />
-                {c.name} — Strategy Input Replays
+                Strategy replays <span className="mono font-normal text-slate-500">{c.name}</span>
               </span>
-              <span className="mono text-[11px] text-slate-400">{c.hours} scored hours ({t.strategy_inputs?.captured ?? "?"} captured)</span>
+              <span className="mono text-[11px] text-slate-400">{c.hours}h scored · {t.strategy_inputs?.captured ?? "?"} captured</span>
             </div>
             <div className="table-wrap">
               <table className="tbl">
                 <thead>
                   <tr>
-                    <th>Candidate ID</th>
-                    <th>Logic Delta</th>
-                    <th>Differing Decisions</th>
-                    <th>Discovery Comparison</th>
-                    <th>Holm p-value</th>
-                    <th>Holdout Progress</th>
+                    <th>Candidate</th>
+                    <th>Change</th>
+                    <th>Differing</th>
+                    <th>Head-to-head</th>
+                    <th>Holm p</th>
+                    <th>Holdout</th>
                     <th>Verdict</th>
                   </tr>
                 </thead>
@@ -229,23 +227,11 @@ export default function Shadow() {
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       {/* Header Panel */}
       <Panel
-        title="Shadow Testing & Epigenetic Promotion Arena"
+        title="Shadow testing"
         icon={<FlaskConical className="h-4 w-4 text-violet-300" />}
-        right={<Badge tone="purple">Out-of-Band Simulation · Zero Risk</Badge>}
+        hint="Candidates run beside the active version on the same closed bars. Parameters promote via PR; notes promote automatically."
       >
-        <p className="text-[12px] leading-relaxed text-slate-400">
-          Parallel out-of-band testing arena where candidate indicator algorithms and knowledge hypotheses run alongside the active engine (<span className="text-slate-200 font-semibold">Active Control</span>) on the same closed bars (1H for the indicator candidates and the 1H rooms; 15m for the 15m War Room and the council).
-          The platform enforces non-parametric statistical tests (Holm-Bonferroni Sign Test) and out-of-sample holdout validation. Parameter candidates are promoted by a reviewed Pull Request; a knowledge note that reads better than active goes live by itself for the agents and chart it was tested on (see Model &amp; Learning) and retires by itself if it gets worse.
-        </p>
-
-        {/* Consumer Badges */}
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3 text-[11px]">
-          <span className="text-slate-400">Primary Consumers:</span>
-          <Badge tone="purple">Epigenetic Promotion Engine (Aether A7/A8)</Badge>
-          <Badge tone="cyan">Weighting Replay Statistical Sentry</Badge>
-          <Badge tone="green">Reverse Shadow Rollback Guard</Badge>
-          <Badge tone="slate">Lead Quant PR Reviewer</Badge>
-        </div>
+        {null}
       </Panel>
 
       {/* KPI Overview Cards */}
@@ -253,45 +239,45 @@ export default function Shadow() {
         <div className="glass p-3 sm:p-4">
           <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
             <FlaskConical className="h-3.5 w-3.5 text-violet-400" />
-            <span>Active Shadow Arms</span>
+            <span>Candidates</span>
           </div>
           <div className="mono mt-2 text-[22px] font-extrabold text-violet-300 sm:text-[26px]">
             {totalCandidates}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">Across {families.length} engine families</div>
+          <div className="mt-1 text-[11px] text-slate-500">{families.length} families</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
           <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
             <GitPullRequest className="h-3.5 w-3.5 text-emerald-400" />
-            <span>Promotion Ready</span>
+            <span>Ready</span>
           </div>
           <div className="mono mt-2 text-[22px] font-extrabold text-emerald-300 sm:text-[26px]">
             {promotionReadyCount}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">{promotionReadyCount ? "Holm p < 0.05 & Holdout Pass" : "No candidate qualifies yet"}</div>
+          <div className="mt-1 text-[11px] text-slate-500">{promotionReadyCount ? "p < 0.05 + holdout" : "None yet"}</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
           <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
             <Activity className="h-3.5 w-3.5 text-amber-400" />
-            <span>Collecting Sample</span>
+            <span>Collecting</span>
           </div>
           <div className="mono mt-2 text-[22px] font-extrabold text-amber-300 sm:text-[26px]">
             {collectingCount}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">Target &ge; 50 decisive pairs</div>
+          <div className="mt-1 text-[11px] text-slate-500">&ge; 50 pairs</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
           <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
             <BarChart2 className="h-3.5 w-3.5 text-cyan-400" />
-            <span>Evaluated Candle Series</span>
+            <span>Bars evaluated</span>
           </div>
           <div className="mono mt-2 text-[22px] font-extrabold text-cyan-300 sm:text-[26px]">
             {totalBarsEvaluated}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">Paired H1 closed candles</div>
+          <div className="mt-1 text-[11px] text-slate-500">H1 closed bars</div>
         </div>
       </div>
 
@@ -303,20 +289,20 @@ export default function Shadow() {
       ) : error && !data ? (
         <Panel><p className="text-[12px] text-rose-300">Shadow data unavailable: {error}</p></Panel>
       ) : !families.length ? (
-        <Panel><Empty>No shadow version data yet.</Empty></Panel>
+        <Panel><Empty>No data yet.</Empty></Panel>
       ) : (
         families.map((f) => {
           const c = f.control;
           return (
             <Panel
               key={f.name}
-              title={`Engine Family: ${f.name.toUpperCase()}`}
+              title={f.name.toUpperCase()}
               right={<Badge tone="slate">Active: {c.id}</Badge>}
             >
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[12px] text-slate-400">
                 <span>
-                  Control <strong className="text-slate-200">{c.id}</strong>: {c.outputs} total outputs recorded · Matches approved local calculations on{" "}
-                  <strong className="text-emerald-300">{c.matches_approved_local_records.agree}</strong> of {c.matches_approved_local_records.compared} candles.
+                  Control <strong className="text-slate-200">{c.id}</strong>: {c.outputs} outputs · local match{" "}
+                  <strong className="text-emerald-300">{c.matches_approved_local_records.agree}</strong>/{c.matches_approved_local_records.compared}
                 </span>
                 <span className="mono text-[11px]">Accuracy: {p(c.scored?.accuracy)} · Directional: {p(c.scored?.directional?.hit_rate)}</span>
               </div>
@@ -326,13 +312,13 @@ export default function Shadow() {
                 <table className="tbl">
                   <thead>
                     <tr>
-                      <th>Candidate Version / Arm</th>
-                      <th>Sample (Bars)</th>
-                      <th>Accuracy Delta</th>
-                      <th>Head-to-Head Win/Loss</th>
-                      <th>Holm Significance (p)</th>
-                      <th>Holdout Validation</th>
-                      <th>Stuck States</th>
+                      <th>Candidate</th>
+                      <th>Bars</th>
+                      <th>Accuracy</th>
+                      <th>Head-to-head</th>
+                      <th>Holm p</th>
+                      <th>Holdout</th>
+                      <th>Stuck</th>
                       <th>Verdict</th>
                     </tr>
                   </thead>
@@ -342,12 +328,12 @@ export default function Shadow() {
                       <td>
                         <div className="font-semibold text-slate-200 flex items-center gap-1.5">
                           <span>{c.id}</span>
-                          <Badge tone="slate">CONTROL (ACTIVE)</Badge>
+                          <Badge tone="slate">ACTIVE</Badge>
                         </div>
                       </td>
                       <td className="mono">{c.scored?.n ?? 0}</td>
                       <td className="mono text-slate-300">{p(c.scored?.accuracy)}</td>
-                      <td className="text-slate-500 text-[11px]">— Baseline Reference —</td>
+                      <td className="text-slate-500 text-[11px]">—</td>
                       <td className="mono text-slate-500">—</td>
                       <td className="mono text-slate-500">—</td>
                       <td className="mono text-[11px] text-slate-400">{c.stuck ? stuck(c.stuck) : "None"}</td>
@@ -356,7 +342,7 @@ export default function Shadow() {
 
                     {/* Candidate Rows */}
                     {!f.candidates.length ? (
-                      <tr><td colSpan={8} className="py-4 text-center text-slate-500">No candidate version currently competing in this family.</td></tr>
+                      <tr><td colSpan={8} className="py-4 text-center text-slate-500">No candidates.</td></tr>
                     ) : (
                       f.candidates.map((k: any) => (
                         <tr key={k.id} className="border-t border-white/5">
@@ -366,7 +352,7 @@ export default function Shadow() {
                             {k.origin?.source === "aether" && (
                               <div className="mt-1 text-[10px] text-violet-300 flex items-center gap-1">
                                 <Zap className="h-3 w-3" />
-                                <span>Aether Hypothesis: {k.origin.hypothesis ?? k.origin.item_id}</span>
+                                <span>Aether: {k.origin.hypothesis ?? k.origin.item_id}</span>
                               </div>
                             )}
                           </td>
@@ -390,7 +376,7 @@ export default function Shadow() {
                             <div className={k.paired?.p_value != null && k.paired.p_value < 0.05 ? "text-emerald-300 font-bold" : "text-slate-400"}>
                               p = {k.discovery?.p_holm ?? k.paired?.p_value ?? "n/a"}
                             </div>
-                            <div className="text-[10px] text-slate-500">Sign Test {yes(k.criteria?.higher_outcome_score)}</div>
+                            <div className="text-[10px] text-slate-500">Sign test {yes(k.criteria?.higher_outcome_score)}</div>
                           </td>
                           <td className="mono">
                             <div>{k.holdout?.bars ?? 0}/{k.holdout?.required_bars ?? "?"} bars</div>
@@ -408,10 +394,10 @@ export default function Shadow() {
               {/* Retired Candidate Audit Trail */}
               {!!f.retired?.length && (
                 <div className="mt-3 border-t border-white/5 pt-2 text-[11px] text-slate-500">
-                  <span className="font-semibold text-slate-400">Retired Candidates: </span>
+                  <span className="font-semibold text-slate-400">Retired: </span>
                   {f.retired.map((r: any) => (
                     <span key={r.id} className="mr-3">
-                      <span className="mono">{r.id}</span> ({r.reason}, stopped {r.retired_on})
+                      <span className="mono">{r.id}</span> ({r.reason}, {r.retired_on})
                     </span>
                   ))}
                 </div>
