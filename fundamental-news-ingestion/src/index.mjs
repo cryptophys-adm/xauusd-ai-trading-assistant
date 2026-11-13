@@ -1063,11 +1063,14 @@ export async function gatewayStatus(env) {
 
 async function buildHealth(env) {
   const symbols = parseCsv(env.TV_MCP_SYMBOLS, DEFAULT_SYMBOLS);
-  const token = await getStoredToken(env);
+  // Every KV read at once: the Drift Detector gives /health 5 seconds, and sequential reads on a cold
+  // isolate took longer once (2026-11-13 02:00 UTC).
+  const [token, providerCooldown, lastScheduledPull, providerCalls] = await Promise.all([
+    getStoredToken(env), readQuotaCooldown(env), readLastScheduledPull(env), readUsage(env)
+  ]);
   const tokenExpiresAt = Number.parseInt(String(token?.expires_at || ""), 10);
   const hasUsableAccessToken = Boolean(asString(token?.access_token)) && (!Number.isFinite(tokenExpiresAt) || tokenExpiresAt > nowSeconds());
   const hasRefreshToken = Boolean(asString(token?.refresh_token));
-  const providerCooldown = await readQuotaCooldown(env);
 
   return {
     worker: WORKER_NAME,
@@ -1090,10 +1093,10 @@ async function buildHealth(env) {
     ohlcv_gateway: "rpc:TvGateway",
     provider_cooldown_until: providerCooldown?.until || null,
     provider_cooldown_reason: providerCooldown?.reason || null,
-    last_scheduled_ingest: await readLastScheduledPull(env),
+    last_scheduled_ingest: lastScheduledPull,
     // TradingView MCP calls this gateway made, per caller and UTC hour, today and yesterday
     // (2026-11-11: the account's quota ran out at 13:05 UTC and nothing said who had spent it).
-    provider_calls: await readUsage(env)
+    provider_calls: providerCalls
   };
 }
 

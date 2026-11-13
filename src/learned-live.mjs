@@ -3,7 +3,8 @@
 // (src/shadow-knowledge.mjs) waited for an owner PR to enter the bundled pack. Now, once an hour:
 //   promote  a text item whose shadow verdict reads "better_than_active" (discovery better than the
 //            agent's own opening, Holm-adjusted p < 0.05, the newest 100 bars no worse) goes live for
-//            exactly what was tested: the tested agent(s), on the 1H chart (the shadow arm runs the 1H
+//            exactly what was tested: the tested agent(s), on the chart(s) tested (the 1H room, the 15m
+//            War Room, or the council on 15m, since 2026-11-13; before, the shadow arm ran the 1H
 //            room only), never the moderator or another chart;
 //   retire   a live item leaves when (a) Aether's pack no longer carries it (a person rejected it), or
 //            (b) the agent's scored 1H statements since the promotion are significantly worse than its
@@ -15,9 +16,10 @@
 import { LEARNED_PACK } from "./learned-knowledge.mjs";
 import { storedPack } from "./aether-pack.mjs";
 import { tally } from "./shadow-versions.mjs";
+import { scoreStance } from "./outcome-scoring.mjs";
 
 export const LEARNED_LIVE_VERSION = "cryptophys.learned-live.v1";
-export const LIVE_RULES = Object.freeze({ chart: "60", min_decided: 40, alpha: 0.05, cache_ms: 5 * 60_000 });
+export const LIVE_RULES = Object.freeze({ chart: "60", charts: Object.freeze(["15", "60"]), min_decided: 40, alpha: 0.05, cache_ms: 5 * 60_000 });
 const TEXT_KINDS = new Set(["caution", "role_reminder"]);
 const PRICE = /\b\d{3,}(?:[.,]\d+)?\b/;
 const ORDER = /\b(?:buy|sell|long|short|entry|stop[- ]?loss|take[- ]?profit|lot|leverage|position size)\b/i;
@@ -57,7 +59,8 @@ export function liveItemProblems(it) {
   if (!Number.isInteger(it.version) || it.version < 1) out.push("version_invalid");
   const agents = it.audience?.agents;
   if (!Array.isArray(agents) || !agents.length || agents.includes("moderator") || !agents.every((a) => typeof a === "string" && /^[a-z0-9][a-z0-9_-]{1,39}$/.test(a))) out.push("audience_invalid");
-  if (JSON.stringify(it.audience?.charts) !== JSON.stringify([LIVE_RULES.chart])) out.push("audience_charts_invalid");
+  const charts = it.audience?.charts;
+  if (!Array.isArray(charts) || !charts.length || !charts.every((c) => LIVE_RULES.charts.includes(c))) out.push("audience_charts_invalid");
   const text = typeof it.text === "string" ? it.text.trim() : "";
   if (!text || text.length > 400) out.push("text_length");
   if (PRICE.test(text)) out.push("text_price_like_number");
@@ -95,15 +98,18 @@ export function planPromotions({ candidates = [], packItems = [], live = [], ret
     if (liveKeys.has(k)) continue;
     const it = inPack.get(k);
     if (!it || !TEXT_KINDS.has(it.kind)) continue;
+    // Exactly what was tested: the agents and the charts of the better verdicts (the 1H room, the 15m War
+    // Room, or the council on the 15m chart, since 2026-11-13).
+    const charts = [...new Set(list.map((c) => c.chart ?? rules.chart))].sort();
     const item = {
       item_id: it.item_id, version: it.version, kind: it.kind, label: "learned",
-      audience: { agents: [...new Set(list.map((c) => c.agent))].sort(), charts: [rules.chart] },
-      situation: { ...(it.situation || {}), chart: rules.chart }, text: String(it.text ?? "").trim(),
+      audience: { agents: [...new Set(list.map((c) => c.agent))].sort(), charts },
+      situation: { ...(it.situation || {}), ...(charts.length === 1 ? { chart: charts[0] } : {}) }, text: String(it.text ?? "").trim(),
       content_sha256: it.content_sha256 ?? null,
       review: { shadow_verdict: list[0].verdict, promoted_on: new Date(now).toISOString().slice(0, 10), auto: true }
     };
     if (liveItemProblems(item).length) continue;
-    const verdict = list.map((c) => ({ agent: c.agent, discovery: c.discovery, holdout: c.holdout, paired: c.paired }));
+    const verdict = list.map((c) => ({ agent: c.agent, chart: c.chart ?? rules.chart, discovery: c.discovery, holdout: c.holdout, paired: c.paired }));
     promote.push({ item, verdict });
   }
   for (const l of live) {
@@ -118,6 +124,22 @@ export function planPromotions({ candidates = [], packItems = [], live = [], ret
     if (p < rules.alpha) retire.push({ ...l, reason: `worse live: ${right} of ${decided} decided calls right since the promotion, against ${Math.round(base * 100)}% in the test (p ${Math.round(p * 1000) / 1000})` });
   }
   return { promote, retire };
+}
+
+/**
+ * The council's own record since a promotion: each Decision Engine stance scored on the 15m bars like a
+ * room statement (src/outcome-scoring.mjs scoreStance), since the council has no outcome_scores subject.
+ */
+async function councilScores(env, sinceIso, now) {
+  const decisions = (await env.DB.prepare("SELECT bar_close, stance FROM engine_decisions WHERE bar_close >= ? ORDER BY bar_close").bind(sinceIso).all()).results || [];
+  if (!decisions.length) return [];
+  let bars = [];
+  try {
+    const record = JSON.parse((await env.SIGNAL_CACHE?.get?.("market-data:v2:series:OANDA:XAUUSD|15m")) || "null");
+    bars = (Array.isArray(record?.candles) ? record.candles : []).filter((c) => [c.open, c.high, c.low, c.close].every(Number.isFinite) && c.close_time && Date.parse(c.close_time) <= now).sort((a, b) => Date.parse(a.close_time) - Date.parse(b.close_time));
+  } catch { bars = []; }
+  return decisions.map((d) => ({ stance: d.stance, result: scoreStance({ stance: d.stance, bars, closeMs: Date.parse(d.bar_close) }).result }))
+    .filter((r) => !["pending", "no_data", "not_scored"].includes(r.result));
 }
 
 async function liveRows(db) {
@@ -161,7 +183,8 @@ export async function effectiveLearnedPack(env, { now = Date.now(), bundled = LE
 export function promotionMessage({ promoted = [], retired = [] } = {}) {
   if (!promoted.length && !retired.length) return null;
   const lines = ["🧠 Learned notes (autonomous)"];
-  for (const p of promoted) lines.push(`+ live: ${p.item.item_id} v${p.item.version} for ${p.item.audience.agents.join(", ")} on the 1H room: better than the agent's own opening in shadow (${p.verdict.map((v) => `p_holm ${v.discovery?.p_holm ?? "?"}`).join(", ")}).`);
+  const where = (charts) => (charts || []).map((c) => (c === "15" ? "15m" : "1H")).join(" and ");
+  for (const p of promoted) lines.push(`+ live: ${p.item.item_id} v${p.item.version} for ${p.item.audience.agents.join(", ")} on the ${where(p.item.audience.charts)} chart: better than its own answer in shadow (${p.verdict.map((v) => `p_holm ${v.discovery?.p_holm ?? "?"}`).join(", ")}).`);
   for (const r of retired) lines.push(`− retired: ${r.item_id} v${r.version}: ${r.reason}.`);
   return lines.join("\n");
 }
@@ -189,8 +212,11 @@ export async function runLearnedPromotion(env, { knowledge, now = Date.now() } =
     for (const l of live) {
       const rows = [];
       for (const agent of l.item.audience.agents) {
-        const r = (await env.DB.prepare("SELECT stance, result FROM outcome_scores WHERE subject = ? AND timeframe = ? AND statement_close >= ?").bind(`agent:${agent}`, LIVE_RULES.chart, l.promoted_at).all()).results || [];
-        rows.push(...r);
+        for (const chart of l.item.audience.charts || [LIVE_RULES.chart]) {
+          if (agent === "council") { rows.push(...await councilScores(env, l.promoted_at, now)); continue; }
+          const r = (await env.DB.prepare("SELECT stance, result FROM outcome_scores WHERE subject = ? AND timeframe = ? AND statement_close >= ?").bind(`agent:${agent}`, chart, l.promoted_at).all()).results || [];
+          rows.push(...r);
+        }
       }
       scored[`${l.item_id}@${l.version}`] = rows;
     }

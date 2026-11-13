@@ -15,11 +15,11 @@ const openings = [
 ];
 const roster = ["h1", "technical", "risk", "r37_funnel", "gmi"];
 
-test("off by default; on only with SHADOW_KNOWLEDGE_ENABLED=true; the hourly cap defaults to 8", () => {
+test("off by default; on only with SHADOW_KNOWLEDGE_ENABLED=true; the hourly cap defaults to 16 (shared by the 1H room, the 15m War Room and the council since 2026-11-13)", () => {
   assert.equal(shadowKnowledgeEnabled({}), false);
   assert.equal(shadowKnowledgeEnabled({ SHADOW_KNOWLEDGE_ENABLED: "false" }), false);
   assert.equal(shadowKnowledgeEnabled({ SHADOW_KNOWLEDGE_ENABLED: "true" }), true);
-  assert.equal(maxCallsPerHour({}), 8);
+  assert.equal(maxCallsPerHour({}), 16);
   assert.equal(maxCallsPerHour({ SHADOW_KNOWLEDGE_MAX_CALLS_PER_HOUR: "100" }), 24, "capped");
 });
 
@@ -120,4 +120,24 @@ test("a note that is right where the opening was wrong, over the sample, is bett
   assert.equal(k.discovery.control_better, 0);
   assert.equal(k.verdict, "better_than_active: ready for owner review");
   assert.deepEqual(view.aa_noise, { bars: 320, changed: 32, rate: 0.1 });
+});
+
+test("since 2026-11-13 the arm also runs on the 15m War Room and the council, with 15m subjects and 15m scoring", async () => {
+  const { chartOfSubject, SHADOW_CHARTS } = await import("../src/shadow-knowledge.mjs");
+  const m15 = item("w1", ["risk"], "caution", { audience: { agents: ["risk"], charts: ["15"] } });
+  const council = item("k1", ["council"], "caution", { audience: { agents: ["council"], charts: ["15"] } });
+  const h1Only = item("h1", ["risk"]);
+  // The 15m War Room: its own roster and openings; a 1H item is not tested there, nor is the council's.
+  const room = planShadowCalls({ items: [h1Only, council, m15], roster: ["risk", "technical"], openings: [{ agent: "risk", status: "ok", stance: "SELL" }], chart: "M15" });
+  assert.deepEqual(room.map((c) => [c.subject, c.arm]), [["shadow-agent:risk@w1v1@15", "note"], ["shadow-agent:risk@aa@15", "aa"]]);
+  // The council: one call against the decided stance.
+  const dec = planShadowCalls({ items: [m15, council], roster: ["council"], openings: [{ agent: "council", status: "ok", stance: "WAIT" }], chart: "M15" });
+  assert.deepEqual(dec.map((c) => [c.subject, c.control_stance]), [["shadow-agent:council@k1v1@15", "WAIT"], ["shadow-agent:council@aa@15", "WAIT"]]);
+  // The 1H plan is unchanged and the 1H subjects keep their form.
+  assert.deepEqual(planShadowCalls({ items: [m15], roster: ["risk"], openings: [{ agent: "risk", status: "ok", stance: "SELL" }] }), []);
+  assert.deepEqual([chartOfSubject("shadow-agent:risk@w1v1@15"), chartOfSubject("shadow-agent:risk@w1v1")], ["15", "60"]);
+  assert.deepEqual(SHADOW_CHARTS, { H1: "60", M15: "15" });
+  // The comparison carries the chart, so a promotion goes live on the chart it was tested on.
+  const k = compareShadowKnowledge([{ subject: "shadow-agent:risk@w1v1@15", agent: "risk", item_id: "w1", item_version: 1, arm: "note", statement_close: "2026-11-13T01:00:00Z", status: "ok", stance: "SELL", control_stance: "WAIT", result: "hit", control_result: "neutral" }]);
+  assert.equal(k.candidates[0].chart, "15");
 });

@@ -25,6 +25,7 @@ import { matchRebuts } from "./rebut-names.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, quorumRule } from "./reputation.mjs";
 import { agentReputation, sessionOf } from "./outcome-scoring.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
+import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { effectiveLearnedPack } from "./learned-live.mjs";
 import { roomWeighting } from "./weighting.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
@@ -439,7 +440,7 @@ const ROOM_RULES = [
   "Never give entry, stop loss, take profit or position size: price levels are not part of a room."
 ].join("\n");
 
-function openingMessages(agent, data, learned = null) {
+function openingMessages(agent, data, learned = null, note = null) {
   const desk = DESK_AGENTS[agent];
   const riskRule = agent === "risk" ? ["Judge the risk of every possible entry from your data: the 15m volatility, the 15m Prophet R38 confirmation and what would invalidate the move, and say plainly whether you would take it."] : [];
   const who = desk
@@ -453,6 +454,8 @@ function openingMessages(agent, data, learned = null) {
     ...riskRule,
     "This is your opening on the communication bus: one claim from your own data only.",
     BIAS_RULE,
+    // Aether A7 shadow arm only (src/shadow-knowledge.mjs): a learned note under test, never in a live opening.
+    ...(note ? [note] : []),
     `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"claim":"<= ${CLAIM_MAX - 40} chars","metrics":["<the metrics you decided from, plain words>"]}`,
     "YOUR DATA:",
     JSON.stringify(data),
@@ -671,7 +674,24 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     validate: (o) => validateConclusion(o, null, busAgents, null, { supportStances: new Set([...answered.map(m => m.stance), ...debate.map(m => m.stance)]), supportBiases: new Set([...answered.map(biasOf), ...debate.map(biasOf)]), roomBias, crowd, forbiddenNames: deskNames(), refs }),
     toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map(r => clip(r, 200)), dissent: [...new Set(o.dissent)], metrics: o.metrics, majority, majority_bias: roomBias, crowd }, refs: [] })
   });
-  return { status: "complete", calls, openings: answered.length, rebuttals: debate.length };
+  const result = { status: "complete", calls, openings: answered.length, rebuttals: debate.length };
+  // Aether A7 on the 15m chart (owner 2026-11-13, "1-3"): the shadow calls of the learned notes under test,
+  // handed back as a job the caller runs after the decision, so they never delay it. Not enumerable.
+  if (shadowKnowledgeEnabled(env)) {
+    Object.defineProperty(result, "shadow_job", {
+      enumerable: false,
+      value: async () => {
+        const plan = planShadowCalls({ items: await shadowItems(env), roster, openings: answered, chart: "M15" });
+        return runShadowCalls(env, {
+          calls: plan, candleKey: m15KeyForClose(barTime), statementClose: barTime, clock, schema: OPENING_SCHEMA, schemaName: "war_room_opening", maxTokens: BUS_MAX_TOKENS.agent,
+          // Like for like: the live opening's prompt (its learned notes included) plus the note under test.
+          messagesFor: (agent, note) => openingMessages(agent, agentData(agent, evidence, hud, confirmations, desk15, projection), learnedFor(agent), note),
+          validate: (o, agent) => validateOpening(o, agent, { verifiedLines: agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]), forbiddenNames: forbiddenNamesFor(agent, roster) })
+        });
+      }
+    });
+  }
+  return result;
 }
 
 /** XAUUSD trades from Sunday 22:00 to Friday 22:00 UTC. */

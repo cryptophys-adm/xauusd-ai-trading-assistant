@@ -68,9 +68,13 @@ export async function recordUsage(env, tally, now = Date.now()) {
 /** One day's calls, all callers: { date, total, failed, by_caller, by_hour, quota_exceeded_at, quota_exceeded_by }. */
 async function readDay(kv, day) {
   const out = { date: day, total: 0, failed: 0, by_caller: {}, by_hour: Array(24).fill(0), quota_exceeded_at: null, quota_exceeded_by: null };
-  for (const caller of USAGE_CALLERS) {
-    let rec = null;
-    try { rec = JSON.parse((await kv.get(keyOf(day, caller))) || "null"); } catch { rec = null; }
+  // Every caller's record in parallel (2026-11-13: twelve sequential KV reads, with the rest of /health,
+  // took a cold isolate past the Drift Detector's 5-second probe at 02:00 UTC).
+  const records = await Promise.all(USAGE_CALLERS.map(async (caller) => {
+    try { return JSON.parse((await kv.get(keyOf(day, caller))) || "null"); } catch { return null; }
+  }));
+  for (const [i, caller] of USAGE_CALLERS.entries()) {
+    const rec = records[i];
     if (!rec || !(Number(rec.calls) > 0)) continue;
     out.total += Number(rec.calls) || 0;
     out.failed += Number(rec.failed) || 0;
@@ -89,7 +93,8 @@ export async function readUsage(env, now = Date.now()) {
   const kv = env?.OAUTH_STORE;
   if (!kv) return null;
   try {
-    return { today: await readDay(kv, dayOf(now)), yesterday: await readDay(kv, dayOf(now - DAY_MS)) };
+    const [today, yesterday] = await Promise.all([readDay(kv, dayOf(now)), readDay(kv, dayOf(now - DAY_MS))]);
+    return { today, yesterday };
   } catch {
     return null;
   }
