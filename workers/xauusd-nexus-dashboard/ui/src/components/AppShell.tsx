@@ -114,7 +114,7 @@ export default function AppShell({ current, children }: { current: string; child
       {open && (
         <nav className="border-b border-white/10 bg-obsidian-bar px-3 py-3 md:hidden" aria-label="Nexus">
           {sideNav(true)}
-          <a href="https://console.cryptophys.work" className="mt-2 inline-flex items-center gap-3 rounded-md px-4 py-3 text-[13px] font-semibold text-slate-400 hover:text-white"><Home className="h-4 w-4 text-slate-500" />Cerebrum Console</a>
+          <a href="https://nexus.cryptophys.work/console/" className="mt-2 inline-flex items-center gap-3 rounded-md px-4 py-3 text-[13px] font-semibold text-slate-400 hover:text-white"><Home className="h-4 w-4 text-slate-500" />Cerebrum Console</a>
         </nav>
       )}
 
@@ -131,7 +131,7 @@ export default function AppShell({ current, children }: { current: string; child
       <footer className="sticky bottom-0 z-20 border-t border-white/10 bg-obsidian-foot/95 backdrop-blur">
         <div className="mx-auto flex max-w-[1680px] items-center gap-4 overflow-x-auto px-3 py-3 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-500 sm:px-6">
           {["War Room 15m", "Threads D1 · 4H · 1H", "News Daily", "Local engines", "Parity", "Workers AI", "D1"].map((s) => <span key={s} className="whitespace-nowrap">{s}</span>)}
-          <a href="https://console.cryptophys.work" target="_blank" rel="noopener noreferrer" className="ml-auto inline-flex items-center gap-1 whitespace-nowrap text-cyan-300/80 hover:text-cyan-200">Console <ExternalLink className="h-3 w-3" /></a>
+          <a href="https://nexus.cryptophys.work/console/" target="_blank" rel="noopener noreferrer" className="ml-auto inline-flex items-center gap-1 whitespace-nowrap text-cyan-300/80 hover:text-cyan-200">Console <ExternalLink className="h-3 w-3" /></a>
         </div>
       </footer>
     </div>
