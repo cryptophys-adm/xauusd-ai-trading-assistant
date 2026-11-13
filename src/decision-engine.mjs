@@ -56,7 +56,7 @@ import { effectiveLearnedPack } from "./learned-live.mjs";
 import { modelAdvice } from "./model-dataset.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
-import { agentStatuses, agentContext, agentPlans, agentCatalog, priceActionReading, slimPlan, AGENT_IDS, DEFAULT_AGENT } from "./strategy-agents.mjs";
+import { agentStatuses, agentContext, agentPlans, agentCatalog, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT } from "./strategy-agents.mjs";
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
@@ -613,7 +613,7 @@ export function tradeFor(side, plan, { entryType = "limit", target = "tp1", minR
     // A market entry waits for the confirmation candle at execution; a limit at the key level waits for price.
     trigger_required: market,
     // The strategy agent whose plan this is, when it is not the default agent's.
-    ...(plan.agent && plan.agent !== DEFAULT_AGENT ? { strategy: plan.agent, setup: plan.setup ?? null } : {})
+    ...(plan.agent && plan.agent !== DEFAULT_AGENT ? { strategy: plan.agent, setup: plan.setup ?? null, ...(plan.pattern ? { pattern: plan.pattern } : {}) } : {})
   };
 }
 
@@ -670,7 +670,12 @@ export function councilEvidence({ barClose, cards, quorum, guards, context = {},
       const here = (r.contexts || []).find((c) => c.context === condition) ?? null;
       return { setups: r.setups, mean_r_per_setup: r.mean_r, filled: r.fill_rate, reached_target: r.target_rate, in_this_market_condition: here ? { setups: here.setups, mean_r_per_setup: here.mean_r } : null };
     };
-    return live.map(([id, a]) => ({ id, name: catalog.find((c) => c.id === id)?.label ?? id, made_for: catalog.find((c) => c.id === id)?.fits ?? null, setup: a.plan.setup ?? null, record: record(id), plan: plan({ plan: a.plan }) }));
+    // A pattern family's plan names its pattern: that pattern's own trades here, when it has any.
+    const patternRecord = (id, pattern) => {
+      const x = pattern ? ((Array.isArray(agentRecords) ? agentRecords : []).find((r) => r?.agent === id)?.patterns || []).find((q) => q.pattern === pattern) : null;
+      return x ? { setups: x.setups, mean_r_per_setup: x.mean_r } : null;
+    };
+    return live.map(([id, a]) => ({ id, name: catalog.find((c) => c.id === id)?.label ?? id, made_for: catalog.find((c) => c.id === id)?.fits ?? null, setup: a.plan.setup ?? null, record: record(id), ...(a.plan.pattern ? { this_pattern_record: patternRecord(id, a.plan.pattern) } : {}), plan: plan({ plan: a.plan }) }));
   };
   const side = (g) => ({ allowed: g.allowed, checks: g.checks.map((c) => ({ check: c.id, pass: c.pass, detail: c.detail })), entry_trigger: g.entry_trigger ? { fired: g.entry_trigger.fired, note: g.entry_trigger.note } : null, plan: plan(g), ...(strategies(g) ? { strategies: strategies(g) } : {}), vetoes: g.vetoes, cautions: g.cautions, supports: g.supports ?? [] });
   return {
@@ -949,8 +954,10 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // agent's is only recorded and measured.
   const statuses = agentStatuses(env, { records: agentRecords });
   const scalp = modeThresholds(env?.TRADING_MODE).target === "nearest";
+  // The patterns the breaker holds back: their own trades here lost (a pattern family skips them).
+  const heldPatterns = suspendedPatterns(agentRecords).map((x) => x.id);
   for (const [dir, g] of [[1, guards.long], [-1, guards.short]]) {
-    try { g.plans = agentPlans(dir, agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: g.plan, calibration: inputs.patternCalibration ?? null }), statuses); } catch { g.plans = {}; }
+    try { g.plans = agentPlans(dir, agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: g.plan, calibration: inputs.patternCalibration ?? null, suspendedPatterns: heldPatterns }), statuses); } catch { g.plans = {}; }
   }
   // The Projection Agent's reading of the price action, for the council's choice of strategy.
   let priceAction = [];

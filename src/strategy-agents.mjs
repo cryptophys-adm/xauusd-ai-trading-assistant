@@ -23,6 +23,7 @@
 // "on" (default) | "off" (only zone_pullback; nothing else is computed or recorded).
 
 import { planForDirection, zoneLevels, SCALP_TARGET } from "./strategy-engine.mjs";
+import { patternInfo, PATTERN_CATALOG } from "./chart-patterns.mjs";
 
 export const STRATEGY_AGENTS_VERSION = "cryptophys.strategy-agents.v1";
 export const DEFAULT_AGENT = "zone_pullback";
@@ -34,7 +35,7 @@ export const AGENT_RULES = Object.freeze({
   sweep: Object.freeze({ bars: 3, lookback: 12, through_atr: 0.05 }),
   breakout: Object.freeze({ bars: 6, base_bars: 3, beyond_atr: 0.1, retest_atr: 0.15 }),
   range: Object.freeze({ bars: 32, min_bars: 24, min_atr: 1, max_atr: 4, zone: 0.35, at: 0.2, entry: 0.15, stop_atr: 0.25, far: 0.1 }),
-  pattern: Object.freeze({ charts: Object.freeze(["15", "60"]), retest_atr: 0.15, stop_height: 0.5, stop_max_atr: 1.25, min_factor: 1, council_max: 6 })
+  pattern: Object.freeze({ charts: Object.freeze(["15", "60"]), retest_atr: 0.15, momentum_atr: 0.35, min_factor: 1, council_max: 6 })
 });
 
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
@@ -165,45 +166,88 @@ const rangeFade = Object.freeze({
   }
 });
 
+/**
+ * The pattern families (owner 2026-11-13: the Projection Agent's 53 chart patterns and 10 event patterns,
+ * each family a strategy of its own; "benar"). A family is traded by its own rule, the patterns' own way
+ * of being confirmed and of failing, written here from the method and to be measured on gold:
+ *   entry   "retest": these patterns return to the line they broke, so the entry waits there (or is at
+ *           price within RETEST_ATR of it); "momentum": these run from the breakout, so the entry is at
+ *           price within the wider MOMENTUM_ATR of the line.
+ *   stop    behind the broken line: either a share of the pattern's height (a move that far back says
+ *           the reversal failed), or the pattern's other line (a close beyond it is the busted pattern),
+ *           never farther than `cap` x the 1H ATR.
+ *   target  `first`: the share of the measured move the first target takes (curves reach half the measure
+ *           far more often than the whole); the second target is the measured target, or half the
+ *           pattern's height beyond it when the first already is the whole measure.
+ */
+export const PATTERN_FAMILIES = Object.freeze({
+  peaks: Object.freeze({ label: "Reversal tops and bottoms", what: "double and triple tops and bottoms, head-and-shoulders, three falling peaks and three rising valleys", entry: "retest", stop: Object.freeze({ height: 0.5, cap: 1.25 }), first: 1, style: "A reversal: price closed through the pattern's confirmation line. Enter on the return to that line, the stop half the pattern's height back inside it." }),
+  lines: Object.freeze({ label: "Triangles, wedges and rectangles", what: "triangles, wedges, rectangles, broadening formations and diamonds", entry: "retest", stop: Object.freeze({ other: true, cap: 1 }), first: 1, style: "A breakout from two boundary lines. Enter on the return to the broken line, the stop beyond the pattern's other line, where the pattern would be busted." }),
+  curve: Object.freeze({ label: "Rounded turns", what: "cup with handle, rounding tops and bottoms, scallops and bump-and-run reversals", entry: "retest", stop: Object.freeze({ height: 0.33, cap: 1.25 }), first: 0.5, style: "A slow rounded turn that broke its rim. Enter on the return to the rim, the stop a third of the pattern's height behind it, the first target half the measured move." }),
+  bars: Object.freeze({ label: "Spike pairs", what: "horns and pipes", entry: "retest", stop: Object.freeze({ other: true, cap: 1.25 }), first: 1, style: "Two spikes that marked a turn. Enter on the return to the level they broke, the stop beyond the spikes' own extreme." }),
+  pole: Object.freeze({ label: "Flags and pennants", what: "flags, pennants and the high and tight flag", entry: "momentum", stop: Object.freeze({ other: true, cap: 1 }), first: 1, style: "A pause after a sharp run that broke the way of the run. These seldom return: enter near the breakout, the stop beyond the flag's other side, the target the pole's length." }),
+  gaps: Object.freeze({ label: "Gaps and islands", what: "gaps, island reversals and long islands", entry: "retest", stop: Object.freeze({ other: true, cap: 1 }), first: 1, style: "A gap that held. Enter on the return to the gap's edge, the stop beyond its other edge." }),
+  legs: Object.freeze({ label: "Measured moves", what: "the measured move up and down", entry: "momentum", stop: Object.freeze({ other: true, cap: 1.25 }), first: 1, style: "A second leg starting after the pause between two legs. Enter as the pause breaks, the stop beyond the pause, the target a second leg as long as the first." }),
+  event: Object.freeze({ label: "Release patterns", what: "the dead-cat bounce and its inverse, the bullish and bearish release surprise and the release flag", entry: "momentum", stop: Object.freeze({ other: true, cap: 1.25 }), first: 1, style: "A high-impact USD release moved price and the pattern after it broke. Enter near the break, the stop beyond the pattern's other side." })
+});
+/** A pattern is held back once its own record is negative over this many resolved setups. */
+export const PATTERN_BREAKER = Object.freeze({ min_setups: 15 });
+
 /** A pattern's measured record on gold (src/pattern-calibration.mjs), or null: { n, rate, factor, active }. */
 const recordOf = (calibration, id) => { const r = calibration?.patterns?.[id]; return r && isNum(r.rate) ? r : null; };
+/** The family of a pattern that applies to gold (the five event patterns without a gold event belong to none). */
+const familyOf = (id) => { const info = patternInfo(id); return info?.applies ? (info.part === "event" ? "event" : info.group) : null; };
 
-const patternBreakout = Object.freeze({
-  id: "pattern_breakout", version: 1, label: "Pattern breakout",
-  fits: "A chart pattern the Projection Agent sees broken out on the 15m or 1H chart, its measured target not reached yet: enter on the return to the broken line, the stop half the pattern's height behind that line, the first target the pattern's measured target. A busted pattern is traded the way it broke. A pattern whose measured record on gold is below the rate of all patterns is left out.",
-  plan(dir, ctx) {
-    const R = AGENT_RULES.pattern;
-    if (!isNum(ctx.price)) return null;
-    const gap = (ctx.scalp ? SCALP_TARGET.targetGapAtr : AGENT_RULES.target_gap_atr) * ctx.atr;
-    const line = (p) => (dir > 0 ? p.upper : p.lower);
-    const fit = (ctx.patterns || []).filter((p) => R.charts.includes(String(p?.tf)) && p.status !== "forming" && p.direction === dir && [line(p), p.target, p.height].every(isNum) && p.height > 0)
-      // Price has not fallen back into the pattern, and the measured target is still ahead of the entry.
-      .filter((p) => dir * (ctx.price - line(p)) >= -R.retest_atr * ctx.atr)
-      .map((p) => ({ p, rec: recordOf(ctx.calibration, p.id) }))
-      // The Projection Agent's own record decides: a measured pattern below the rate of all patterns is left out.
-      .filter(({ rec }) => !(rec?.active && isNum(rec.factor) && rec.factor < R.min_factor))
-      // The best measured record first, then the lower chart, then the freshest.
-      .sort((a, b) => (b.rec?.active ? b.rec.factor : 1) - (a.rec?.active ? a.rec.factor : 1) || Number(a.p.tf) - Number(b.p.tf) || (a.p.bars_ago ?? 0) - (b.p.bars_ago ?? 0));
-    for (const { p, rec } of fit) {
-      const broken = line(p), retesting = Math.abs(ctx.price - broken) <= R.retest_atr * ctx.atr;
-      const entry = retesting ? ctx.price : broken;
-      if (dir * (p.target - entry) < gap) continue;
-      const chart = p.chart ?? (p.tf === "15" ? "15m" : "1H"), word = p.status === "busted" ? "busted " : "";
-      const plan = finishPlan(this.id, dir, {
-        entry, atLevel: retesting, stop: broken - dir * (Math.min(R.stop_height * p.height, R.stop_max_atr * ctx.atr) + AGENT_RULES.pad_atr * ctx.atr),
-        entryNote: retesting ? `price is at the broken ${dir > 0 ? "upper" : "lower"} line of the ${chart} ${word}${p.name}` : `a return to the broken ${dir > 0 ? "upper" : "lower"} line of the ${chart} ${word}${p.name}`,
-        stopNote: `half the pattern's height behind the broken line`,
-        setup: `the Projection Agent's ${chart} ${word}${p.name}, broken ${dir > 0 ? "upward" : "downward"}${rec ? ` (on gold it reached its target ${Math.round(rec.rate * 100)}% of ${rec.n} times${rec.active ? "" : ", too few to weigh"})` : " (no record on gold yet)"}`,
-        targets: { tp1: p.target, tp1_note: `${chart} ${word}${p.name}: measured target`, tp2: p.target + dir * 0.5 * p.height, tp2_note: "half the pattern's height beyond the measured target" }
-      }, ctx);
-      if (plan) return plan;
+/** One strategy agent per pattern family: the Projection Agent's broken-out patterns of that family, by the family's rule. */
+function patternAgent(family) {
+  const F = PATTERN_FAMILIES[family], R = AGENT_RULES.pattern;
+  const band = F.entry === "momentum" ? R.momentum_atr : R.retest_atr;
+  return Object.freeze({
+    id: `pattern_${family}`, version: 1, label: F.label, family,
+    fits: `${F.style} The Projection Agent's ${F.what}, broken out or busted on the 15m or 1H chart with the measured target still ahead; a pattern whose measured record on gold is below the rate of all patterns, or whose own trades here lost, is left out.`,
+    plan(dir, ctx) {
+      if (!isNum(ctx.price)) return null;
+      const gap = (ctx.scalp ? SCALP_TARGET.targetGapAtr : AGENT_RULES.target_gap_atr) * ctx.atr;
+      const line = (p) => (dir > 0 ? p.upper : p.lower), other = (p) => (dir > 0 ? p.lower : p.upper);
+      const held = Array.isArray(ctx.suspendedPatterns) ? ctx.suspendedPatterns : [];
+      const fit = (ctx.patterns || []).filter((p) => R.charts.includes(String(p?.tf)) && familyOf(p.id) === family && p.status !== "forming" && p.direction === dir && [line(p), p.target, p.height].every(isNum) && p.height > 0)
+        // Price has not fallen back into the pattern.
+        .filter((p) => dir * (ctx.price - line(p)) >= -R.retest_atr * ctx.atr)
+        // The pattern's own trades here: held back by the breaker.
+        .filter((p) => !held.includes(p.id))
+        .map((p) => ({ p, rec: recordOf(ctx.calibration, p.id) }))
+        // The Projection Agent's own record decides: a measured pattern below the rate of all patterns is left out.
+        .filter(({ rec }) => !(rec?.active && isNum(rec.factor) && rec.factor < R.min_factor))
+        // The best measured record first, then the lower chart, then the freshest.
+        .sort((a, b) => (b.rec?.active ? b.rec.factor : 1) - (a.rec?.active ? a.rec.factor : 1) || Number(a.p.tf) - Number(b.p.tf) || (a.p.bars_ago ?? 0) - (b.p.bars_ago ?? 0));
+      for (const { p, rec } of fit) {
+        const broken = line(p), near = Math.abs(ctx.price - broken) <= band * ctx.atr;
+        const entry = near ? ctx.price : broken;
+        const tp1 = F.first === 1 ? p.target : broken + F.first * (p.target - broken);
+        if (dir * (tp1 - entry) < gap) continue;
+        const cap = F.stop.cap * ctx.atr, far = other(p);
+        const structural = F.stop.other && isNum(far) && dir * (broken - far) > 0;
+        const back = structural ? Math.min(dir * (broken - far), cap) : Math.min((F.stop.height ?? 0.5) * p.height, cap);
+        const chart = p.chart ?? (String(p.tf) === "15" ? "15m" : "1H"), word = p.status === "busted" ? "busted " : "", name = `${chart} ${word}${p.name}`;
+        const plan = finishPlan(this.id, dir, {
+          entry, atLevel: near, stop: broken - dir * (back + AGENT_RULES.pad_atr * ctx.atr),
+          entryNote: near ? `price is at the broken ${dir > 0 ? "upper" : "lower"} line of the ${name}` : `a return to the broken ${dir > 0 ? "upper" : "lower"} line of the ${name}`,
+          stopNote: back >= cap ? `${F.stop.cap} times the 1H average range behind the broken line (the pattern is larger)` : structural ? "beyond the pattern's other line" : `${F.stop.height === 0.5 ? "half" : "a third of"} the pattern's height behind the broken line`,
+          setup: `the Projection Agent's ${name}, broken ${dir > 0 ? "upward" : "downward"}${rec ? ` (on gold it reached its target ${Math.round(rec.rate * 100)}% of ${rec.n} times${rec.active ? "" : ", too few to weigh"})` : " (no record on gold yet)"}`,
+          targets: F.first === 1
+            ? { tp1: p.target, tp1_note: `${name}: measured target`, tp2: p.target + dir * 0.5 * p.height, tp2_note: "half the pattern's height beyond the measured target" }
+            : { tp1, tp1_note: `${name}: half the measured move`, tp2: p.target, tp2_note: `${name}: measured target` }
+        }, ctx);
+        if (plan) return { ...plan, pattern: p.id, chart };
+      }
+      return null;
     }
-    return null;
-  }
-});
+  });
+}
+const PATTERN_AGENTS = Object.freeze(Object.keys(PATTERN_FAMILIES).map(patternAgent));
 
 /** The registry: adding or removing a strategy is one entry here. */
-export const STRATEGY_AGENTS = Object.freeze([zonePullback, sweepReversal, breakoutRetest, rangeFade, patternBreakout]);
+export const STRATEGY_AGENTS = Object.freeze([zonePullback, sweepReversal, breakoutRetest, rangeFade, ...PATTERN_AGENTS]);
 export const AGENT_IDS = Object.freeze(STRATEGY_AGENTS.map((a) => a.id));
 
 export function strategyAgentsMode(env) {
@@ -227,6 +271,12 @@ export function suspendedAgents(records) {
     .map((r) => ({ id: r.agent, setups: r.setups, mean_r: r.mean_r }));
 }
 
+/** Pure: the patterns the breaker holds back: [{ id, agent, setups, mean_r }] from the agents' records (their `patterns`). */
+export function suspendedPatterns(records) {
+  return (Array.isArray(records) ? records : []).flatMap((r) => (Array.isArray(r?.patterns) ? r.patterns : []).filter((x) => typeof x?.pattern === "string" && isNum(x.mean_r) && isNum(x.setups) && x.setups >= PATTERN_BREAKER.min_setups && x.mean_r < 0)
+    .map((x) => ({ id: x.pattern, agent: r.agent, setups: x.setups, mean_r: x.mean_r })));
+}
+
 /** Pure: each agent's status. The default agent is always live; "off" wins over "live"; the breaker turns a live agent with a negative record to shadow. */
 export function agentStatuses(env, { records = null } = {}) {
   const on = strategyAgentsMode(env) === "on", live = idList(env?.STRATEGY_AGENTS_LIVE), off = idList(env?.STRATEGY_AGENTS_OFF);
@@ -240,16 +290,20 @@ export function agentStatuses(env, { records = null } = {}) {
  */
 export async function syncAgentBreaker(env, records, { send = null, now = Date.now() } = {}) {
   try {
+    const on = strategyAgentsMode(env) === "on";
     const wanted = idList(env?.STRATEGY_AGENTS_LIVE).filter((id) => !idList(env?.STRATEGY_AGENTS_OFF).includes(id));
-    const held = strategyAgentsMode(env) === "on" ? suspendedAgents(records).filter((x) => wanted.includes(x.id)) : [];
+    const held = on ? suspendedAgents(records).filter((x) => wanted.includes(x.id)) : [];
+    // A pattern of a family the switches set live (a suspended family says it once for all its patterns).
+    const patterns = on ? suspendedPatterns(records).filter((x) => wanted.includes(x.agent) && !held.some((h) => h.id === x.agent)) : [];
     const before = JSON.parse((await env?.SIGNAL_CACHE?.get?.(AGENT_BREAKER_KEY)) || "null")?.ids ?? [];
-    const ids = held.map((x) => x.id).sort();
+    const ids = [...held.map((x) => x.id), ...patterns.map((x) => `pattern:${x.id}`)].sort();
     if (JSON.stringify(ids) === JSON.stringify([...before].sort())) return { status: "unchanged", suspended: ids };
     await env?.SIGNAL_CACHE?.put?.(AGENT_BREAKER_KEY, JSON.stringify({ ids, at: new Date(now).toISOString() }));
-    const label = (id) => STRATEGY_AGENTS.find((a) => a.id === id)?.label ?? id;
+    const label = (id) => (id.startsWith("pattern:") ? `The ${patternInfo(id.slice(8))?.name ?? id.slice(8)} pattern` : STRATEGY_AGENTS.find((a) => a.id === id)?.label ?? id);
     const lines = [
       ...held.filter((x) => !before.includes(x.id)).map((x) => `${label(x.id)} is suspended: ${x.mean_r}R per setup over ${x.setups} setups. It stays measured in shadow and returns by itself when its record is no longer negative.`),
-      ...before.filter((id) => !ids.includes(id)).map((id) => `${label(id)} is live again: its record is no longer negative.`)
+      ...patterns.filter((x) => !before.includes(`pattern:${x.id}`)).map((x) => `${label(`pattern:${x.id}`)} is held back: ${x.mean_r}R per setup over ${x.setups} setups of its own. The rest of its family trades on.`),
+      ...before.filter((id) => !ids.includes(id)).map((id) => `${label(id)} is ${id.startsWith("pattern:") ? "traded" : "live"} again: its record is no longer negative.`)
     ];
     if (lines.length && typeof send === "function") await send(["XAUUSD STRATEGY AGENTS", ...lines].join("\n"));
     return { status: "changed", suspended: ids, told: lines.length };
@@ -259,13 +313,14 @@ export async function syncAgentBreaker(env, records, { send = null, now = Date.n
 }
 
 /** Pure: the agents' context of a direction from the strategy engine's output and the decision's inputs. */
-export function agentContext({ strategy = null, bars = [], regime = null, scalp = false, basePlan = undefined, calibration = null } = {}) {
+export function agentContext({ strategy = null, bars = [], regime = null, scalp = false, basePlan = undefined, calibration = null, suspendedPatterns = [] } = {}) {
   return {
     strategy, scalp: scalp === true, regime: typeof regime === "string" ? regime : null, basePlan,
     // The Projection Agent's reading (owner 2026-11-13: "libatkan Projection Agent karena dia yang punya
     // knowledge terkait price action"): the chart patterns it detected on each chart and each pattern's
     // measured record on gold.
     patterns: Array.isArray(strategy?.key_levels?.patterns) ? strategy.key_levels.patterns : [], calibration: calibration ?? null,
+    suspendedPatterns: Array.isArray(suspendedPatterns) ? suspendedPatterns : [],
     price: isNum(strategy?.price) ? strategy.price : null, atr: isNum(strategy?.atr_h1) ? strategy.atr_h1 : null,
     levels: zoneLevels(strategy?.key_levels?.zones, { qualified: scalp === true && SCALP_TARGET.qualified }),
     bars: (bars || []).filter((b) => [b?.high, b?.low, b?.close].every(isNum))
@@ -294,7 +349,11 @@ export function agentPlans(dir, ctx, statuses) {
 
 /** Pure: the registry as the council and the pages read it (`suspended`: held back by the breaker). */
 export function agentCatalog(statuses, { suspended = [] } = {}) {
-  return STRATEGY_AGENTS.map((a) => ({ id: a.id, label: a.label, version: a.version, status: statuses?.[a.id] ?? (a.id === DEFAULT_AGENT ? "live" : "shadow"), ...(suspended.includes(a.id) ? { suspended: true } : {}), fits: a.fits }));
+  return STRATEGY_AGENTS.map((a) => ({
+    id: a.id, label: a.label, version: a.version, status: statuses?.[a.id] ?? (a.id === DEFAULT_AGENT ? "live" : "shadow"), ...(suspended.includes(a.id) ? { suspended: true } : {}), fits: a.fits,
+    // A pattern family: the patterns of the Projection Agent's catalogue it trades.
+    ...(a.family ? { family: a.family, patterns: PATTERN_CATALOG.filter((p) => p.applies && familyOf(p.id) === a.family).map((p) => ({ id: p.id, name: p.name })) } : {})
+  }));
 }
 
 const BREAK_WORD = { 1: "broke out upward", "-1": "broke out downward", 0: "not broken out yet" };
@@ -313,4 +372,4 @@ export function priceActionReading(patterns, calibration = null) {
 }
 
 /** Pure: an agent's plan as the decision record keeps it (levels and why; the notes stay in the trade). */
-export const slimPlan = (p) => ({ entry: p.entry, stop: p.stop, tp1: p.tp1, tp2: p.tp2, at_level: p.at_level === true, rrr: p.rrr ?? null, setup: p.setup ?? null });
+export const slimPlan = (p) => ({ entry: p.entry, stop: p.stop, tp1: p.tp1, tp2: p.tp2, at_level: p.at_level === true, rrr: p.rrr ?? null, setup: p.setup ?? null, ...(p.pattern ? { pattern: p.pattern } : {}) });

@@ -194,7 +194,7 @@ import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mj
 import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema, readExecutionReport, LEDGER_CRON, activeSetups } from "./signal-ledger.mjs";
 import { runPatternCalibration, readPatternCalibration } from "./pattern-calibration.mjs";
 import { runPlanLearning, readPlanLearning, planAdviceFor, planLearningMode } from "./plan-learning.mjs";
-import { agentStatuses, agentCatalog, strategyAgentsMode, suspendedAgents, syncAgentBreaker, DEFAULT_AGENT } from "./strategy-agents.mjs";
+import { agentStatuses, agentCatalog, strategyAgentsMode, suspendedAgents, suspendedPatterns, syncAgentBreaker, DEFAULT_AGENT } from "./strategy-agents.mjs";
 import { runModelDataset, readModelDataset, readModelDatasetSummary, loadLabeledRows } from "./model-dataset.mjs";
 import { runModelBaseline, readBaseline, baselineStatus, prospectiveRecord } from "./model-baseline.mjs";
 import { readGbm, gbmStatus } from "./model-gbm.mjs";
@@ -2514,6 +2514,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({
         status: "ok", mode: strategyAgentsMode(env), default_agent: DEFAULT_AGENT,
         agents: agentCatalog(agentStatuses(env, { records }), { suspended: suspendedAgents(records).map((x) => x.id) }).map((a) => ({ ...a, record: records.find((r) => r.agent === a.id) ?? null })),
+        // The patterns the breaker holds back (their own trades here lost; the rest of the family trades on).
+        suspended_patterns: suspendedPatterns(records),
         latest: d ? { decision_key: d.decision_key, bar_close: d.bar_close, stance: d.stance, chosen: d.trade ? (d.trade.strategy ?? DEFAULT_AGENT) : null, plans: d.strategy_plans ?? null } : null
       });
     } catch (error) {

@@ -100,7 +100,9 @@ export function setupsFrom(decisions) {
       setup_key: agent === DEFAULT_PLAN_AGENT ? `${d.key}:${d.side}` : `${d.key}:${d.side}:${agent}`, decision_key: d.key, agent, opened_ms: d.close_ms, decided_ms: finite(toMs(d.decided_at)) ? Math.max(toMs(d.decided_at), d.close_ms) : d.close_ms, last_seen_ms: d.close_ms, decisions: 1,
       side: d.side, entry: d.entry, stop: d.stop, tp1: d.tp1, atr_h1: d.atr_h1,
       mode: TRADING_MODES.includes(d.mode) ? d.mode : null, action: d.action === "ENTER_MARKET" ? "ENTER_MARKET" : "ENTER_LIMIT", at_level: d.at_level === true || d.at_level === 1,
-      regime: typeof d.regime === "string" && d.regime ? d.regime : null
+      regime: typeof d.regime === "string" && d.regime ? d.regime : null,
+      // A pattern family's plan: the Projection Agent's pattern it traded.
+      pattern: typeof d.pattern === "string" && d.pattern ? d.pattern : null
     };
     s.context = contextOf(s);
     out.push(s); cur[slot] = s;
@@ -260,6 +262,8 @@ export function resetPlanLearningSchemaCacheForTests() { schemaReady = false; }
 export async function ensurePlanLearningSchema(db) {
   if (schemaReady) return;
   for (const sql of PLAN_LEARNING_SCHEMA_SQL) await db.prepare(sql).run();
+  // The pattern of a pattern family's setup (2026-11-13; the table of before has no such column).
+  try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN pattern TEXT").run(); } catch { /* exists */ }
   schemaReady = true;
 }
 
@@ -284,7 +288,7 @@ export function decisionPlans(r) {
   if (typeof plans === "string") { try { plans = JSON.parse(plans); } catch { plans = null; } }
   const mine = plans && typeof plans === "object" ? plans[r.side === "BUY" ? "long" : "short"] : null;
   const list = Object.entries(mine && typeof mine === "object" ? mine : {}).filter(([, p]) => p && typeof p === "object")
-    .map(([agent, p]) => ({ ...base, agent, entry: Number(p.entry), stop: Number(p.stop), tp1: Number(p.tp1), action: p.at_level ? "ENTER_MARKET" : "ENTER_LIMIT", at_level: p.at_level === true }));
+    .map(([agent, p]) => ({ ...base, agent, entry: Number(p.entry), stop: Number(p.stop), tp1: Number(p.tp1), action: p.at_level ? "ENTER_MARKET" : "ENTER_LIMIT", at_level: p.at_level === true, pattern: typeof p.pattern === "string" ? p.pattern : null }));
   if (list.length) return list;
   return [{ ...base, agent: DEFAULT_PLAN_AGENT, entry: Number(r.entry), stop: Number(r.stop), tp1: Number(r.tp), action: r.action, at_level: r.at_level === 1 || r.at_level === true }];
 }
@@ -298,13 +302,16 @@ export function agentRecords(setups) {
   for (const s of setups || []) {
     const x = s.results?.[CONTROL_ARM];
     if (!finite(x?.r)) continue;
-    const a = (by[s.agent ?? DEFAULT_PLAN_AGENT] ??= { n: 0, r: 0, f: 0, t: 0, st: 0, ctx: {} });
+    const a = (by[s.agent ?? DEFAULT_PLAN_AGENT] ??= { n: 0, r: 0, f: 0, t: 0, st: 0, ctx: {}, pat: {} });
     const c = (a.ctx[s.context] ??= { n: 0, r: 0 });
     a.n += 1; a.r += x.r; a.f += x.f ? 1 : 0; a.t += x.s === "target" ? 1 : 0; a.st += x.s === "stop" ? 1 : 0; c.n += 1; c.r += x.r;
+    if (s.pattern) { const q = (a.pat[s.pattern] ??= { n: 0, r: 0, t: 0, f: 0 }); q.n += 1; q.r += x.r; q.f += x.f ? 1 : 0; q.t += x.s === "target" ? 1 : 0; }
   }
   return Object.keys(by).sort().map((agent) => {
     const a = by[agent];
-    return { agent, setups: a.n, mean_r: r3(a.r / a.n), fill_rate: r3(a.f / a.n), target_rate: a.f ? r3(a.t / a.f) : null, stop_rate: a.f ? r3(a.st / a.f) : null, contexts: Object.keys(a.ctx).sort().map((context) => ({ context, setups: a.ctx[context].n, mean_r: r3(a.ctx[context].r / a.ctx[context].n) })) };
+    return { agent, setups: a.n, mean_r: r3(a.r / a.n), fill_rate: r3(a.f / a.n), target_rate: a.f ? r3(a.t / a.f) : null, stop_rate: a.f ? r3(a.st / a.f) : null, contexts: Object.keys(a.ctx).sort().map((context) => ({ context, setups: a.ctx[context].n, mean_r: r3(a.ctx[context].r / a.ctx[context].n) })),
+      // A pattern family: each pattern's own record (the breaker holds a losing pattern back, not its family).
+      ...(Object.keys(a.pat).length ? { patterns: Object.keys(a.pat).sort().map((pattern) => ({ pattern, setups: a.pat[pattern].n, mean_r: r3(a.pat[pattern].r / a.pat[pattern].n), fill_rate: r3(a.pat[pattern].f / a.pat[pattern].n), target_rate: a.pat[pattern].f ? r3(a.pat[pattern].t / a.pat[pattern].f) : null })) } : {}) };
   });
 }
 
@@ -318,7 +325,7 @@ async function runAll(db, statements) {
 const fromRow = (r) => {
   let results = null;
   try { results = r.results_json ? JSON.parse(r.results_json) : null; } catch { results = null; }
-  const s = { setup_key: r.setup_key, decision_key: r.decision_key, agent: r.agent ?? DEFAULT_PLAN_AGENT, opened_ms: toMs(r.opened_at), decided_ms: toMs(r.decided_at), last_seen_ms: toMs(r.last_seen_at), decisions: Number(r.decisions) || 1, side: r.side, entry: r.entry, stop: r.stop, tp1: r.tp1, atr_h1: r.atr_h1, mode: r.mode ?? null, action: r.action ?? null, at_level: r.at_level === 1, regime: r.regime ?? null, context: r.context, status: r.status, resolved_ms: r.resolved_at ? toMs(r.resolved_at) : null, results };
+  const s = { setup_key: r.setup_key, decision_key: r.decision_key, agent: r.agent ?? DEFAULT_PLAN_AGENT, pattern: r.pattern ?? null, opened_ms: toMs(r.opened_at), decided_ms: toMs(r.decided_at), last_seen_ms: toMs(r.last_seen_at), decisions: Number(r.decisions) || 1, side: r.side, entry: r.entry, stop: r.stop, tp1: r.tp1, atr_h1: r.atr_h1, mode: r.mode ?? null, action: r.action ?? null, at_level: r.at_level === 1, regime: r.regime ?? null, context: r.context, status: r.status, resolved_ms: r.resolved_at ? toMs(r.resolved_at) : null, results };
   return s;
 };
 
@@ -343,8 +350,8 @@ export async function runPlanLearning(env, { now = Date.now(), bars = null } = {
       if (!k) {
         // A plan already running when the window starts is the tail of an older setup, not a new one.
         if (!empty && s.opened_ms - since < HOUR) continue;
-        writes.push(db.prepare("INSERT OR IGNORE INTO plan_setups (setup_key, decision_key, agent, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)")
-          .bind(s.setup_key, s.decision_key, s.agent, iso(s.opened_ms), iso(s.decided_ms), iso(s.last_seen_ms), s.decisions, s.side, s.entry, s.stop, s.tp1, s.atr_h1, s.mode, s.action, s.at_level ? 1 : 0, s.regime, s.context, PLAN_LEARNING_VERSION, stamp));
+        writes.push(db.prepare("INSERT OR IGNORE INTO plan_setups (setup_key, decision_key, agent, pattern, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)")
+          .bind(s.setup_key, s.decision_key, s.agent, s.pattern ?? null, iso(s.opened_ms), iso(s.decided_ms), iso(s.last_seen_ms), s.decisions, s.side, s.entry, s.stop, s.tp1, s.atr_h1, s.mode, s.action, s.at_level ? 1 : 0, s.regime, s.context, PLAN_LEARNING_VERSION, stamp));
         added += 1;
       } else if (k.status === "open" && toMs(k.last_seen_at) < s.last_seen_ms) {
         writes.push(db.prepare("UPDATE plan_setups SET last_seen_at = ?, decisions = ?, updated_at = ? WHERE setup_key = ? AND status = 'open'").bind(iso(s.last_seen_ms), s.decisions, stamp, s.setup_key));
