@@ -1,6 +1,6 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { motion } from "framer-motion";
-import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, ShieldCheck, Swords, Trophy, X, Zap } from "lucide-react";
+import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, Puzzle, ShieldCheck, Swords, Trophy, X, Zap } from "lucide-react";
 import { Dot } from "./ui";
 import { useWarRoom } from "../lib/warroom";
 import { marketClosed } from "../lib/health";
@@ -27,6 +27,7 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     { label: "Aether", href: "/aether", key: "aether", icon: Brain },
     // How the platform learns from its own decisions (owner 2026-11-13: "pastikan semua ada visualisasi").
     { label: "Model & Learning", href: "/#/model", key: "model", icon: GraduationCap },
+    { label: "Strategy agents", href: "/#/strategy", key: "strategy", icon: Puzzle },
     { label: "Decision audit", href: "/#/audit", key: "audit", icon: BookOpenCheck },
     { label: "Alerts", href: "/#/alerts", key: "alerts", icon: BellRing }
   ] }
