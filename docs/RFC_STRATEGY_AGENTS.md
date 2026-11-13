@@ -1,6 +1,6 @@
 # RFC: strategy agents (pluggable strategies, chosen by the council)
 
-Status: step 1 built on 2026-11-13. Canonical state: `docs/SSOT.md` ("Strategy agents"); open steps:
+Status: steps 1 to 4 built on 2026-11-13; every agent is live in production since the owner's decision of that day. Canonical state: `docs/SSOT.md` ("Strategy agents"); open steps:
 `docs/BACKLOG.md` item 24.
 
 ## 0. Goal
@@ -51,7 +51,11 @@ A stop is never closer than 0.25 ATR; a plan with more than 2.5 ATR of risk is n
   then takes that agent's entry, stop and targets. Naming none, or one that is not live, keeps the
   default agent's plan.
 
-`zone_pullback` is always live. The others start in shadow. Switches: `STRATEGY_AGENTS_LIVE` and
+`zone_pullback` is always live. The others are shadow by default in code and live in production since
+2026-11-13 (owner: "live sekarang langsung implementasi karena strategi lebih related dengan key level
+bukan decision"). A breaker suspends a live agent whose measured record is negative over at least 30
+resolved setups (back to shadow, still measured) and lets it back when the record is no longer negative;
+the owner hears of each change on Telegram. Switches: `STRATEGY_AGENTS_LIVE` and
 `STRATEGY_AGENTS_OFF` (comma-separated ids), `STRATEGY_AGENTS_MODE` (`on`, or `off` for the default agent
 only). With every other agent in shadow the council's evidence, its prompt and every trade are exactly
 as before.
@@ -66,10 +70,8 @@ the Signal Ledger's bars: setups, mean R per setup, fill rate, target and stop r
 
 1. Built: the registry, four agents, the record in shadow, the measurement, the council's choice among
    live agents (inactive while only the default is live).
-2. Making an agent live. Open for the owner (BACKLOG item 24): by the owner's switch, or by itself once
-   its measured record qualifies, as the learned notes and the baseline model connect themselves.
-3. The agents' records in the council's evidence, so the choice leans on what each agent earned in the
-   present regime.
-4. Nexus: the registry, each agent's record and the agent each decision took.
+2. Built: every agent live (owner 2026-11-13), with the breaker.
+3. Built: each agent's record in the council's evidence, overall and in the present market condition.
+4. Built: Nexus Strategy agents page (the registry, the records, the agent each decision took).
 5. More agents (each a registry entry): a momentum continuation on the 5m structure, a session-open
    range break, a news-release fade.

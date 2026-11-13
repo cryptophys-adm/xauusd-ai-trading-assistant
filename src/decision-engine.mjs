@@ -57,6 +57,7 @@ import { modelAdvice } from "./model-dataset.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
 import { agentStatuses, agentContext, agentPlans, agentCatalog, slimPlan, AGENT_IDS, DEFAULT_AGENT } from "./strategy-agents.mjs";
+import { readPlanLearning, contextOf } from "./plan-learning.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
@@ -653,7 +654,7 @@ export function agentPlanPasses(plan, g) {
 }
 
 /** Pure: the council's evidence (the witnesses, the quorum, both sides' guardrails and plans, the context). */
-export function councilEvidence({ barClose, cards, quorum, guards, context = {} }) {
+export function councilEvidence({ barClose, cards, quorum, guards, context = {}, agentRecords = null, condition = null }) {
   const plan = (g) => (g.plan ? { entry: g.plan.entry, entry_note: g.plan.entry_note, at_level: g.plan.at_level, stop: g.plan.stop, stop_note: g.plan.stop_note, tp1: g.plan.tp1, tp1_note: g.plan.tp1_note, tp2: g.plan.tp2, tp2_note: g.plan.tp2_note, progressive_stop: g.plan.progressive_stop ?? null, reward_to_risk: g.plan.rrr } : null);
   // The strategies the council may choose from on a side: only when a live agent other than the default
   // sees its setup there (else the evidence is as before: one plan).
@@ -661,7 +662,15 @@ export function councilEvidence({ barClose, cards, quorum, guards, context = {} 
     const live = liveAgentPlans(g);
     if (live.length < 2) return null;
     const catalog = agentCatalog();
-    return live.map(([id, a]) => ({ id, name: catalog.find((c) => c.id === id)?.label ?? id, made_for: catalog.find((c) => c.id === id)?.fits ?? null, setup: a.plan.setup ?? null, plan: plan({ plan: a.plan }) }));
+    // What each strategy earned on this system's own setups (the plan learner's replay, in R per setup),
+    // overall and in the present market condition; null while it has no resolved setup.
+    const record = (id) => {
+      const r = (Array.isArray(agentRecords) ? agentRecords : []).find((x) => x?.agent === id);
+      if (!r) return null;
+      const here = (r.contexts || []).find((c) => c.context === condition) ?? null;
+      return { setups: r.setups, mean_r_per_setup: r.mean_r, filled: r.fill_rate, reached_target: r.target_rate, in_this_market_condition: here ? { setups: here.setups, mean_r_per_setup: here.mean_r } : null };
+    };
+    return live.map(([id, a]) => ({ id, name: catalog.find((c) => c.id === id)?.label ?? id, made_for: catalog.find((c) => c.id === id)?.fits ?? null, setup: a.plan.setup ?? null, record: record(id), plan: plan({ plan: a.plan }) }));
   };
   const side = (g) => ({ allowed: g.allowed, checks: g.checks.map((c) => ({ check: c.id, pass: c.pass, detail: c.detail })), entry_trigger: g.entry_trigger ? { fired: g.entry_trigger.fired, note: g.entry_trigger.note } : null, plan: plan(g), ...(strategies(g) ? { strategies: strategies(g) } : {}), vetoes: g.vetoes, cautions: g.cautions, supports: g.supports ?? [] });
   return {
@@ -696,7 +705,7 @@ export function councilMessages(evidence, { learned = null } = {}) {
     "Prioritize target 'tp1' (structural quick win at the nearest strong key level / liquidity pool) to avoid prolonged floating duration risk. Use 'limit' entry at the key level pullback rather than chasing market momentum. A target needs at least 1.5R.",
     `confidence is 0 to 1; below ${MIN_CONFIDENCE} a BUY or SELL becomes WAIT. bias is where the weight of the evidence leans (BULLISH, BEARISH or NEUTRAL), even when the stance is WAIT.`,
     "Never invent a price: the levels come only from the plans in the evidence. Never mention position size. Write summary, reasons and risks in plain sentences a trader would write: no field names, no words joined by underscores or dots, no key=value. The summary starts with the stance and the bias, for example \"Decision WAIT, bias bullish: ...\". Give one to four reasons and up to three risks. In weighed, list the witness keys you relied on most.",
-    ...(evidence?.long?.strategies || evidence?.short?.strategies ? ["A side may list strategies: the strategy agents that see their own setup on the chart now, each with what it is made for (made_for), the setup it sees and its own plan. Choose the one whose made_for matches the price action the witnesses describe (the regime, the structure, how price came to the level) and return its id in strategy; the trade then takes that agent's entry, stop and targets. Without a clear match keep the first one. The side and the guardrails are decided as before; a strategy only changes where the trade enters, stops and targets."] : []),
+    ...(evidence?.long?.strategies || evidence?.short?.strategies ? ["A side may list strategies: the strategy agents that see their own setup on the chart now, each with what it is made for (made_for), the setup it sees and its own plan. Choose the one whose made_for matches the price action the witnesses describe (the regime, the structure, how price came to the level) and return its id in strategy; the trade then takes that agent's entry, stop and targets. Each strategy's record is what it earned on this system's own past setups, in R per setup, overall and in the present market condition: weigh it with the number of setups behind it, and treat a strategy without a record as untested. Without a clear match keep the first one. The side and the guardrails are decided as before; a strategy only changes where the trade enters, stops and targets."] : []),
     ...(evidence?.context?.model ? ["context.model is the platform's own model, trained on this system's past decisions and connected only after it beat the base rate on decisions it had not seen: long_target_first and short_target_first are its chances for each side against their base rates. Weigh it like a witness; it never overrides the guardrails or the levels."] : []),
     "Return only the JSON object."
   ].join(" ") + doctrineSnippet;
@@ -912,7 +921,7 @@ export async function notifyDecision(env, d, send, { now = Date.now() } = {}) {
 }
 
 /** Pure: the witnesses, the quorum and both sides' guardrails (with their plans) from the loaded inputs. */
-export function assess(loaded, { now = Date.now(), env = null, analytics = null, witnessWeights = null } = {}) {
+export function assess(loaded, { now = Date.now(), env = null, analytics = null, witnessWeights = null, agentRecords = null } = {}) {
   const { inputs = {}, strategy = null, global = null, macro = null, correlations = null, regime = null } = loaded || {};
   // The extended witnesses read their own data (owner 2026-11-10), and the session describes SESSION
   // (context: a session has no direction).
@@ -935,7 +944,7 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // The strategy agents (owner 2026-11-13, src/strategy-agents.mjs): each agent's own plan per side. The
   // guardrail's plan is the default agent's; a live agent's plan may be chosen by the council, a shadow
   // agent's is only recorded and measured.
-  const statuses = agentStatuses(env);
+  const statuses = agentStatuses(env, { records: agentRecords });
   const scalp = modeThresholds(env?.TRADING_MODE).target === "nearest";
   for (const [dir, g] of [[1, guards.long], [-1, guards.short]]) {
     try { g.plans = agentPlans(dir, agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: g.plan }), statuses); } catch { g.plans = {}; }
@@ -1099,7 +1108,10 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     const data = loaded ?? await loadDecisionInputs(env, { now });
     let witnessWeights = null;
     try { witnessWeights = await activeWitnessTuning(env, { now }); } catch { witnessWeights = null; }
-    const assessment = assess(data, { now, env, analytics: data.analytics, witnessWeights });
+    // The strategy agents' measured records (the plan learner's state): the breaker and the council read them.
+    let agentRecords = null;
+    try { agentRecords = (await readPlanLearning(env))?.agents ?? null; } catch { agentRecords = null; }
+    const assessment = assess(data, { now, env, analytics: data.analytics, witnessWeights, agentRecords });
     const context = councilContext({ inputs: data.inputs, correlations: data.correlations, regime: data.regime, previous, market: assessment.market, now });
     try {
       const doctrinePayload = await fetchEffectiveDoctrine(env, { now });
@@ -1117,7 +1129,7 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
       context, feed: inputs.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview", tradingMode: modeThresholds(env?.TRADING_MODE).mode
     });
     if (advice) context.model = advice;
-    const evidence = councilEvidence({ barClose: closeIso, cards: assessment.cards, quorum: assessment.quorum, guards: assessment.guards, context });
+    const evidence = councilEvidence({ barClose: closeIso, cards: assessment.cards, quorum: assessment.quorum, guards: assessment.guards, context, agentRecords, condition: contextOf({ mode: modeThresholds(env?.TRADING_MODE).mode, regime: data.regime }) });
     const council = await askCouncil(env, evidence, { clock });
     if (advice) council.model_advice = advice;
     const record = buildDecisionRecord({ key, barClose: closeIso, loaded: data, assessment, council, previous, now, decidedAt: new Date(clock()).toISOString(), env });

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  STRATEGY_AGENTS, AGENT_IDS, DEFAULT_AGENT, PROJECTION_NOTE, agentStatuses, agentContext, agentPlans, agentCatalog, finishPlan, slimPlan, strategyAgentsMode
+  STRATEGY_AGENTS, AGENT_IDS, DEFAULT_AGENT, PROJECTION_NOTE, AGENT_BREAKER, AGENT_BREAKER_KEY, suspendedAgents, syncAgentBreaker, agentStatuses, agentContext, agentPlans, agentCatalog, finishPlan, slimPlan, strategyAgentsMode
 } from "../src/strategy-agents.mjs";
 import { tradeLevels, planForDirection } from "../src/strategy-engine.mjs";
 import { assess, buildDecisionRecord, decisionKeyFor, decisionMessage, decide, councilEvidence, councilMessages, validateCouncil, liveAgentPlans, agentPlanPasses, strategyPlansOf, tradeFor, TP1_PROJECTION, COUNCIL_JSON_SCHEMA } from "../src/decision-engine.mjs";
@@ -221,4 +221,63 @@ test("end to end: a sweep on the 15m bars reaches the record in shadow, and the 
   assert.deepEqual([live.trade.strategy, live.trade.entry, live.trade.stop, live.trade.tp, live.trade.rrr], ["sweep_reversal", 4000, 3992.5, 4030, 4]);
   assert.deepEqual(record({ STRATEGY_AGENTS_LIVE: "sweep_reversal" }, null).trade, shadow.trade);
   assert.doesNotMatch(JSON.stringify(live), /lot|position_size|volume/i);
+});
+
+test("the breaker: a live agent with a negative record over enough setups goes back to shadow and returns by itself; the owner hears once", async () => {
+  const LIVE = { STRATEGY_AGENTS_LIVE: "sweep_reversal,breakout_retest,range_fade" };
+  const rec = (agent, setups, mean_r) => ({ agent, setups, mean_r, fill_rate: 1, target_rate: 0.4, contexts: [] });
+  assert.deepEqual(agentStatuses(LIVE), { zone_pullback: "live", sweep_reversal: "live", breakout_retest: "live", range_fade: "live" });
+  const records = [rec("zone_pullback", 200, -0.3), rec("sweep_reversal", 30, -0.01), rec("breakout_retest", 29, -0.9), rec("range_fade", 80, 0)];
+  assert.deepEqual(suspendedAgents(records), [{ id: "sweep_reversal", setups: 30, mean_r: -0.01 }], "the default agent is never suspended; 29 setups are too few; zero is not negative");
+  assert.deepEqual(agentStatuses(LIVE, { records }), { zone_pullback: "live", sweep_reversal: "shadow", breakout_retest: "live", range_fade: "live" });
+  assert.deepEqual(agentStatuses({}, { records }), { zone_pullback: "live", sweep_reversal: "shadow", breakout_retest: "shadow", range_fade: "shadow" });
+  assert.deepEqual(agentCatalog(agentStatuses(LIVE, { records }), { suspended: ["sweep_reversal"] }).map((a) => [a.id, a.status, a.suspended === true]), [["zone_pullback", "live", false], ["sweep_reversal", "shadow", true], ["breakout_retest", "live", false], ["range_fade", "live", false]]);
+  assert.deepEqual(suspendedAgents(null), []);
+  assert.equal(AGENT_BREAKER.min_setups, 30);
+  // Telegram: once per change, and nothing for an agent the switches never set live.
+  const m = new Map(), sent = [];
+  const env = { ...LIVE, SIGNAL_CACHE: { get: async (k) => m.get(k) ?? null, put: async (k, v) => { m.set(k, v); } } };
+  const send = async (t) => { sent.push(t); };
+  assert.deepEqual(await syncAgentBreaker(env, [rec("range_fade", 5, -1)], { send }), { status: "unchanged", suspended: [] });
+  const first = await syncAgentBreaker(env, records, { send });
+  assert.deepEqual([first.status, first.suspended, sent.length], ["changed", ["sweep_reversal"], 1]);
+  assert.match(sent[0], /^XAUUSD STRATEGY AGENTS\nSweep reversal is suspended: -0\.01R per setup over 30 setups\./);
+  assert.equal((await syncAgentBreaker(env, records, { send })).status, "unchanged");
+  assert.equal(sent.length, 1);
+  assert.deepEqual(JSON.parse(m.get(AGENT_BREAKER_KEY)).ids, ["sweep_reversal"]);
+  const back = await syncAgentBreaker(env, [rec("sweep_reversal", 40, 0.05)], { send });
+  assert.deepEqual([back.status, back.suspended], ["changed", []]);
+  assert.match(sent[1], /Sweep reversal is live again/);
+  assert.deepEqual(await syncAgentBreaker({ SIGNAL_CACHE: env.SIGNAL_CACHE }, records, { send }), { status: "unchanged", suspended: [] }, "not set live by the switches: nothing to tell");
+});
+
+test("the council reads each strategy's record, overall and in the present market condition; a suspended agent is not offered", () => {
+  const args = (g, extra = {}) => ({ barClose: "2026-11-10T10:00:00.000Z", cards: [], quorum: { long_share: 0.7, short_share: 0.1, neutral_share: 0.2, score: 0.5, bias: "BULLISH" }, guards: { long: g, short: blocked }, context: {}, ...extra });
+  const agentRecords = [
+    { agent: "zone_pullback", setups: 189, mean_r: 0.49, fill_rate: 0.95, target_rate: 0.4, contexts: [{ context: "scalp|low-ranging", setups: 80, mean_r: 0.31 }] },
+    { agent: "sweep_reversal", setups: 12, mean_r: 0.2, fill_rate: 1, target_rate: 0.5, contexts: [{ context: "scalp|high-trending", setups: 12, mean_r: 0.2 }] }
+  ];
+  const ev = councilEvidence(args(guard("live"), { agentRecords, condition: "scalp|low-ranging" }));
+  assert.deepEqual(ev.long.strategies.map((s) => [s.id, s.record]), [
+    ["zone_pullback", { setups: 189, mean_r_per_setup: 0.49, filled: 0.95, reached_target: 0.4, in_this_market_condition: { setups: 80, mean_r_per_setup: 0.31 } }],
+    ["sweep_reversal", { setups: 12, mean_r_per_setup: 0.2, filled: 1, reached_target: 0.5, in_this_market_condition: null }]
+  ]);
+  assert.ok(councilMessages(ev)[0].content.includes("treat a strategy without a record as untested"));
+  assert.equal(councilEvidence(args(guard("live"))).long.strategies[1].record, null, "no record yet");
+  // End to end: the breaker's record reaches assess, and the suspended agent is recorded but not offered.
+  const CLOSE = "2026-11-10T10:00:00.000Z", NOW = Date.parse(CLOSE) + 60_000;
+  const r = (key, lean, action = "WAIT") => ({ key, label: key, role: key, available: true, lean, action, confidence: 0.6, summary: `${key} reads the chart.`, at: CLOSE, stale: false });
+  const zones = [{ low: 3995, high: 3998, price: 3996.5, candidate: true }, { low: 3980, high: 3980, price: 3980, candidate: true }, { low: 4030, high: 4032, price: 4031, candidate: true }, { low: 4050, high: 4050, price: 4050, candidate: true }];
+  const loaded = {
+    inputs: { calendar: { events: [] }, m15Bars: bars([...flat(10, 3999, 4003, 4001), [3993.5, 4001, 3996], [3995.5, 4000.5, 4000]]) },
+    strategy: { decision: "WAIT", state: "SETUP_READY", direction: "LONG", confidence: 0.6, alignment: 0.5, headline: "The long setup is ready.", price: 4000, atr_h1: 10, key_levels: { zones }, plan: { at_level: true } },
+    global: { timeframes: [r("D1", 0.5), r("H4", 0.4), r("H1", 0.3), r("M15", 0.35, "BUY"), r("NEWS", 0.2), r("MACRO", 0.1)] }, correlations: null, regime: "normal-trending"
+  };
+  const env = { STRATEGY_AGENTS_LIVE: "sweep_reversal" };
+  const liveNow = assess(loaded, { now: NOW, env }).guards.long;
+  assert.equal(liveNow.plans.sweep_reversal.status, "live");
+  assert.deepEqual(councilEvidence(args(liveNow)).long.strategies.map((s) => s.id), ["zone_pullback", "sweep_reversal"]);
+  const held = assess(loaded, { now: NOW, env, agentRecords: [{ agent: "sweep_reversal", setups: 40, mean_r: -0.2 }] }).guards.long;
+  assert.equal(held.plans.sweep_reversal.status, "shadow");
+  assert.equal("strategies" in councilEvidence(args(held)).long, false);
 });

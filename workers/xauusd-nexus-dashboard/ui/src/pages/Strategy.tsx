@@ -34,7 +34,7 @@ function Registry({ agents, chosen }: { agents: any[]; chosen: string | null }) 
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 {chosen === a.id ? <Badge tone="cyan">in use</Badge> : null}
-                <Badge tone={tone(a.status)}>{a.status}</Badge>
+                {a.suspended ? <Badge tone="amber">suspended</Badge> : <Badge tone={tone(a.status)}>{a.status}</Badge>}
               </div>
             </div>
             <div className="mt-1 text-[11px] text-slate-400">{String(a.fits ?? "").split(":")[0]}</div>
@@ -155,8 +155,8 @@ export default function Strategy() {
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <Panel title="Strategy agents" icon={<Puzzle className="h-3.5 w-3.5 text-cyan-300" />}
-        hint="Each agent is one way of trading price action. The council picks the side; a live agent may be chosen for the plan, a shadow agent is recorded and measured only."
-        right={s ? <Badge tone="slate">{agents.filter((a) => a.status === "live").length} live · {agents.filter((a) => a.status === "shadow").length} shadow</Badge> : null}>
+        hint="Each agent is one way of trading price action. The council picks the side; a live agent may be chosen for the plan, a shadow agent is recorded and measured only. A live agent with a negative record over 30 setups is suspended until its record recovers."
+        right={s ? <Badge tone="slate">{agents.filter((a) => a.status === "live").length} live · {agents.filter((a) => a.status === "shadow" && !a.suspended).length} shadow{agents.some((a) => a.suspended) ? ` · ${agents.filter((a) => a.suspended).length} suspended` : ""}</Badge> : null}>
         {loading ? <Skeleton rows={4} /> : agentsPoll.error && !s ? <Empty>Unavailable ({agentsPoll.error}).</Empty> : <Registry agents={agents} chosen={latest?.stance && latest.stance !== "WAIT" ? latest.chosen : null} />}
       </Panel>
 
