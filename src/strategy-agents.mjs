@@ -35,7 +35,8 @@ export const AGENT_RULES = Object.freeze({
   sweep: Object.freeze({ bars: 3, lookback: 12, through_atr: 0.05 }),
   breakout: Object.freeze({ bars: 6, base_bars: 3, beyond_atr: 0.1, retest_atr: 0.15 }),
   range: Object.freeze({ bars: 32, min_bars: 24, min_atr: 1, max_atr: 4, zone: 0.35, at: 0.2, entry: 0.15, stop_atr: 0.25, far: 0.1 }),
-  pattern: Object.freeze({ charts: Object.freeze(["15", "60"]), retest_atr: 0.15, momentum_atr: 0.35, min_factor: 1, council_max: 6 })
+  pattern: Object.freeze({ charts: Object.freeze(["15", "60"]), retest_atr: 0.15, momentum_atr: 0.35, min_factor: 1, council_max: 6 }),
+  inside: Object.freeze({ family: "lines", min_width_atr: 0.8, zone: 0.25, beyond_atr: 0.1, at_atr: 0.15, entry: 0.05, stop_atr: 0.25, far: 0.1 })
 });
 
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
@@ -112,7 +113,7 @@ const sweepReversal = Object.freeze({
 });
 
 const breakoutRetest = Object.freeze({
-  id: "breakout_retest", version: 1, label: "Breakout retest",
+  id: "breakout_retest", version: 1, label: "Break and retest",
   fits: "A trend continuing: within the last six 15m bars a bar closed beyond a key zone that had held price back for at least three bars, and no bar has closed back through it. Enter on the retest of the broken zone's edge, the stop behind the zone (or the breakout bar), the target at the next key level. Not for a range, where breaks fail.",
   plan(dir, ctx) {
     const R = AGENT_RULES.breakout, bars = ctx.bars || [];
@@ -214,7 +215,7 @@ function patternAgent(family) {
         // Price has not fallen back into the pattern.
         .filter((p) => dir * (ctx.price - line(p)) >= -R.retest_atr * ctx.atr)
         // The pattern's own trades here: held back by the breaker.
-        .filter((p) => !held.includes(p.id))
+        .filter((p) => !held.includes(`${this.id}:${p.id}`))
         .map((p) => ({ p, rec: recordOf(ctx.calibration, p.id) }))
         // The Projection Agent's own record decides: a measured pattern below the rate of all patterns is left out.
         .filter(({ rec }) => !(rec?.active && isNum(rec.factor) && rec.factor < R.min_factor))
@@ -246,8 +247,48 @@ function patternAgent(family) {
 }
 const PATTERN_AGENTS = Object.freeze(Object.keys(PATTERN_FAMILIES).map(patternAgent));
 
+/**
+ * Inside the pattern (owner 2026-11-13, "approve all": a pattern that has not broken yet was not traded).
+ * A pattern with two boundary lines that is still forming (a rectangle, a broadening formation, a wide
+ * triangle, wedge or diamond) swings between its lines: at one line, trade the swing toward the other.
+ * Up or down alike: a long from the lower line, a short from the upper line. The stop is just beyond the
+ * line the trade leans on (a close beyond it is the family's break, traded by pattern_lines the other
+ * way); the targets are the middle of the pattern and its far line. Lines closer together than
+ * MIN_WIDTH x the 1H ATR leave no room and are left alone.
+ */
+const patternInside = Object.freeze({
+  id: "pattern_inside", version: 1, label: "Inside the pattern", covers: AGENT_RULES.inside.family,
+  fits: "A pattern with two boundary lines that has not broken yet (a rectangle, a broadening formation, a wide triangle, wedge or diamond) and price at one of its lines: trade the swing to the other line, a long from the lower line or a short from the upper one, the stop just beyond the line it leans on. Not when the lines are close together, and not once a bar has closed beyond a line: that is the break, another strategy.",
+  plan(dir, ctx) {
+    const R = AGENT_RULES.inside;
+    if (!isNum(ctx.price)) return null;
+    const held = Array.isArray(ctx.suspendedPatterns) ? ctx.suspendedPatterns : [];
+    const fit = (ctx.patterns || []).filter((p) => AGENT_RULES.pattern.charts.includes(String(p?.tf)) && familyOf(p.id) === R.family && p.status === "forming" && [p.upper, p.lower].every(isNum) && p.upper - p.lower >= R.min_width_atr * ctx.atr)
+      .filter((p) => !held.includes(`${this.id}:${p.id}`))
+      // The lower chart first, then the freshest.
+      .sort((a, b) => Number(a.tf) - Number(b.tf) || (a.bars_ago ?? 0) - (b.bars_ago ?? 0));
+    for (const p of fit) {
+      const width = p.upper - p.lower, edge = dir > 0 ? p.lower : p.upper, far = dir > 0 ? p.upper : p.lower;
+      // Price is in the part of the pattern next to the line, or a hair beyond it.
+      const from = dir * (ctx.price - edge);
+      if (from < -R.beyond_atr * ctx.atr || from > R.zone * width) continue;
+      const at = Math.abs(ctx.price - edge) <= R.at_atr * ctx.atr;
+      const chart = p.chart ?? (String(p.tf) === "15" ? "15m" : "1H"), name = `forming ${chart} ${p.name}`, line = dir > 0 ? "lower" : "upper", other = dir > 0 ? "upper" : "lower";
+      const plan = finishPlan(this.id, dir, {
+        entry: at ? ctx.price : edge + dir * R.entry * width, atLevel: at, stop: edge - dir * R.stop_atr * ctx.atr,
+        entryNote: at ? `price is at the ${line} line of the ${name}` : `a return to the ${line} line of the ${name}`,
+        stopNote: `beyond the pattern's ${line} line`,
+        setup: `the Projection Agent's ${name}, not broken yet: a swing from its ${line} line toward its ${other} line`,
+        targets: { tp1: edge + dir * 0.5 * width, tp1_note: `the middle of the ${name}`, tp2: far - dir * R.far * width, tp2_note: `the ${other} line of the ${name}` }
+      }, ctx);
+      if (plan) return { ...plan, pattern: p.id, chart };
+    }
+    return null;
+  }
+});
+
 /** The registry: adding or removing a strategy is one entry here. */
-export const STRATEGY_AGENTS = Object.freeze([zonePullback, sweepReversal, breakoutRetest, rangeFade, ...PATTERN_AGENTS]);
+export const STRATEGY_AGENTS = Object.freeze([zonePullback, sweepReversal, breakoutRetest, rangeFade, ...PATTERN_AGENTS, patternInside]);
 export const AGENT_IDS = Object.freeze(STRATEGY_AGENTS.map((a) => a.id));
 
 export function strategyAgentsMode(env) {
@@ -271,7 +312,10 @@ export function suspendedAgents(records) {
     .map((r) => ({ id: r.agent, setups: r.setups, mean_r: r.mean_r }));
 }
 
-/** Pure: the patterns the breaker holds back: [{ id, agent, setups, mean_r }] from the agents' records (their `patterns`). */
+/**
+ * Pure: the patterns the breaker holds back: [{ id, agent, setups, mean_r }] from the agents' records (their
+ * `patterns`). Per agent: a pattern's breaks and its swings inside are different trades with their own record.
+ */
 export function suspendedPatterns(records) {
   return (Array.isArray(records) ? records : []).flatMap((r) => (Array.isArray(r?.patterns) ? r.patterns : []).filter((x) => typeof x?.pattern === "string" && isNum(x.mean_r) && isNum(x.setups) && x.setups >= PATTERN_BREAKER.min_setups && x.mean_r < 0)
     .map((x) => ({ id: x.pattern, agent: r.agent, setups: x.setups, mean_r: x.mean_r })));
@@ -296,13 +340,16 @@ export async function syncAgentBreaker(env, records, { send = null, now = Date.n
     // A pattern of a family the switches set live (a suspended family says it once for all its patterns).
     const patterns = on ? suspendedPatterns(records).filter((x) => wanted.includes(x.agent) && !held.some((h) => h.id === x.agent)) : [];
     const before = JSON.parse((await env?.SIGNAL_CACHE?.get?.(AGENT_BREAKER_KEY)) || "null")?.ids ?? [];
-    const ids = [...held.map((x) => x.id), ...patterns.map((x) => `pattern:${x.id}`)].sort();
+    const key = (x) => `pattern:${x.agent}:${x.id}`;
+    const ids = [...held.map((x) => x.id), ...patterns.map(key)].sort();
     if (JSON.stringify(ids) === JSON.stringify([...before].sort())) return { status: "unchanged", suspended: ids };
     await env?.SIGNAL_CACHE?.put?.(AGENT_BREAKER_KEY, JSON.stringify({ ids, at: new Date(now).toISOString() }));
-    const label = (id) => (id.startsWith("pattern:") ? `The ${patternInfo(id.slice(8))?.name ?? id.slice(8)} pattern` : STRATEGY_AGENTS.find((a) => a.id === id)?.label ?? id);
+    const agentLabel = (id) => STRATEGY_AGENTS.find((a) => a.id === id)?.label ?? id;
+    // "pattern:<agent>:<pattern>": a pattern is judged per agent (its breaks and its swings inside are different trades).
+    const label = (id) => { if (!id.startsWith("pattern:")) return agentLabel(id); const [, agent, pattern] = id.split(":"); return `The ${patternInfo(pattern)?.name ?? pattern} pattern (${agentLabel(agent)})`; };
     const lines = [
       ...held.filter((x) => !before.includes(x.id)).map((x) => `${label(x.id)} is suspended: ${x.mean_r}R per setup over ${x.setups} setups. It stays measured in shadow and returns by itself when its record is no longer negative.`),
-      ...patterns.filter((x) => !before.includes(`pattern:${x.id}`)).map((x) => `${label(`pattern:${x.id}`)} is held back: ${x.mean_r}R per setup over ${x.setups} setups of its own. The rest of its family trades on.`),
+      ...patterns.filter((x) => !before.includes(key(x))).map((x) => `${label(key(x))} is held back: ${x.mean_r}R per setup over ${x.setups} setups of its own. The rest of its family trades on.`),
       ...before.filter((id) => !ids.includes(id)).map((id) => `${label(id)} is ${id.startsWith("pattern:") ? "traded" : "live"} again: its record is no longer negative.`)
     ];
     if (lines.length && typeof send === "function") await send(["XAUUSD STRATEGY AGENTS", ...lines].join("\n"));
@@ -352,11 +399,13 @@ export function agentCatalog(statuses, { suspended = [] } = {}) {
   return STRATEGY_AGENTS.map((a) => ({
     id: a.id, label: a.label, version: a.version, status: statuses?.[a.id] ?? (a.id === DEFAULT_AGENT ? "live" : "shadow"), ...(suspended.includes(a.id) ? { suspended: true } : {}), fits: a.fits,
     // A pattern family: the patterns of the Projection Agent's catalogue it trades.
-    ...(a.family ? { family: a.family, patterns: PATTERN_CATALOG.filter((p) => p.applies && familyOf(p.id) === a.family).map((p) => ({ id: p.id, name: p.name })) } : {})
+    ...(a.family ? { family: a.family } : {}),
+    // The patterns it trades: its own family, or (inside the pattern) the family whose forming patterns it swings in.
+    ...(a.family || a.covers ? { patterns: PATTERN_CATALOG.filter((p) => p.applies && familyOf(p.id) === (a.family ?? a.covers)).map((p) => ({ id: p.id, name: p.name })) } : {})
   }));
 }
 
-const BREAK_WORD = { 1: "broke out upward", "-1": "broke out downward", 0: "not broken out yet" };
+const BREAK_WORD = { 1: "broke upward", "-1": "broke downward", 0: "not broken yet" };
 /**
  * Pure: the Projection Agent's reading of the price action for the council's choice of strategy: the chart
  * patterns of the 15m, 1H and 4H charts (broken-out ones first), each with its status, the way it broke and
