@@ -18,6 +18,7 @@ import {
 import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
 import { Badge, Dot, Empty, Kpi, Panel, Skeleton } from "../components/ui";
 import { ExitConfirmModal, type ExitTargetPosition } from "../components/ExitConfirmModal";
+import OmegaWhy from "../components/OmegaWhy";
 import { get } from "../lib/api";
 import { C } from "../components/charts";
 import { nearestCandidates, withAlpha, type KeyZone } from "../lib/keyZones";
@@ -2181,6 +2182,11 @@ export default function Omega() {
             <dt className="text-slate-500">Blackout</dt><dd className={`mono ${s.blackout ? "text-amber-200" : "text-slate-300"}`}>{s.blackout ? s.blackout_reason || "yes" : "no"}</dd>
             <dt className="text-slate-500">Signal id</dt><dd className="mono truncate text-slate-400">{s.signal_id || "—"}</dd>
           </dl>
+          {/* Why Omega is or is not entering now (owner 2026-11-13: "pastikan semua ada visualisasi") */}
+          <div className="mt-3 border-t border-white/5 pt-3">
+            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Omega right now</div>
+            <OmegaWhy codes={b?.planner?.codes} sinceMs={b?.planner?.since_ms} />
+          </div>
         </Panel>
 
         <Panel title="Control" icon={<Power className="h-3.5 w-3.5 text-cyan-300" />}>

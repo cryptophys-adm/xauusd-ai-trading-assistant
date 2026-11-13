@@ -198,4 +198,12 @@ test("O8. the ledger fills a limit only inside the band, and a row past TP1 or a
   assert.equal(await ingestDecision(env, decision(3)), 1, "past TP1 (still followed to TP2): no longer holds new signals");
   env.DB.raw.prepare("UPDATE signal_ledger SET status = 'open', sl_plus_triggered = 1 WHERE id = ?").run(`decision:${key(OPEN + 3 * M)}`);
   assert.equal(await ingestDecision(env, decision(4)), 1, "stop at break-even: protected");
+  // Each held-back decision leaves a trace, with the row that held it and why (owner 2026-11-13: visualisation).
+  const held = env.DB.raw.prepare("SELECT decision_key, side, blocking_id, reason FROM signal_ledger_held ORDER BY held_at").all().map((r) => ({ ...r }));
+  assert.deepEqual(held.map((r) => [r.decision_key, r.side, r.blocking_id]), [[key(OPEN + M), "SELL", `decision:${key(OPEN)}`], [key(OPEN + 2 * M), "SELL", `decision:${key(OPEN)}`]]);
+  assert.match(held[0].reason, /waits for its fill/);
+  assert.match(held[1].reason, /open and not yet protected/);
+  const view = await readLedger(env, { now: OPEN + 6 * M });
+  assert.equal(view.held.count, 2);
+  assert.equal(view.held.items[0].decision_key, key(OPEN + 2 * M), "newest first");
 });

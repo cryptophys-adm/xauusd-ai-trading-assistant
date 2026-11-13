@@ -1487,6 +1487,36 @@ export default function Performance() {
                 </Panel>
               </div>
 
+              {/* The decisions the no-stacking rule held back (owner 2026-11-13: "pastikan semua ada visualisasi") */}
+              <Panel
+                title={`Held back by the ledger · no stacking (${l?.held?.count ?? 0} in ${days} days)`}
+                icon={<Layers className="h-3.5 w-3.5 text-amber-300" />}
+                right={<Badge tone="amber">not traded, not counted</Badge>}
+              >
+                <p className="mb-2 text-[11px] text-slate-500">
+                  A BUY or SELL is not added while an earlier one of the same side still waits for its fill, or is open without protection (no TP1 yet and no SL+). Omega applies the same rule. These decisions are not in the results above.
+                </p>
+                {!(l?.held?.items ?? []).length ? (
+                  <Empty>No decision was held back in the last {days} days.</Empty>
+                ) : (
+                  <div className="table-wrap max-h-[240px] overflow-y-auto">
+                    <table className="tbl">
+                      <thead><tr><th>Decision (UTC)</th><th>Side</th><th>Held back because</th><th>By</th></tr></thead>
+                      <tbody>
+                        {(l.held.items as any[]).map((h) => (
+                          <tr key={h.decision_key}>
+                            <td className="mono text-[11px]">{String(h.held_at).replace("T", " ").slice(0, 16)}</td>
+                            <td className={`mono font-semibold ${h.side === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{h.side}</td>
+                            <td className="text-[11px] text-slate-300">{h.reason}</td>
+                            <td className="mono text-[10.5px] text-slate-500">{String(h.blocking_id ?? "").replace("decision:", "")}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Panel>
+
               {/* Signal Ledger Detail Table with Real SL+ Price Points */}
               <Panel
                 title={`Signal Ledger Records (${items.length} records · ${days} Days)`}
