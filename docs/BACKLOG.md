@@ -74,6 +74,14 @@ setup READY state that never reached the decision (#192).
     - **Language model**: a QLoRA fine-tune on Kaggle from the scored room statements, served as a Workers AI LoRA; after months of scored rooms.
     - **While the repository is public** (the owner makes it private after the reset): no row, feature table or weight in a commit, workflow log or artifact.
 
+## The plan learner
+
+23. **Entry and risk learned from price action** (owner 2026-11-13: "Kita butuh strategy modul learning yang adaptif terhadap price action supaya entry dan resiko lebih presisi"; `docs/RFC_PLAN_LEARNING.md`). Step 1 is built (SSOT "Plan learner"): shadow only, `GET /api/plan-learning`.
+    - **Next:** the Nexus panel (the grid, the pick per context, the learned plan beside the latest decision's plan).
+    - **Waits for data:** the referee needs 100 resolved setups and 30 decisive ones (about two weeks at 15 setups a trading day) before it reads `better_than_plan` or `not_better`.
+    - **Owner:** applying the learned entry and stop to the Decision Engine's trade (inside the guardrails, the reward threshold checked again) changes what Omega trades; it starts only on the owner's word after a `better_than_plan` verdict. Also the owner's: whether that step then runs by itself like the weight tuning.
+    - **Later arms:** the stop at the broker's 15m swing, the target by the reach of past moves, the speed of the approach as context.
+
 ## Calibration in progress
 
 15. **4H and D1 parity** (alerts installed by the owner on 2026-11-09). The 1H, 15m and 5m identities are approved (`prophet` 41, `prophet_m15` 360, `prophet_m5` 866 consecutive matches on 2026-11-12). Still calibrating (2026-11-13): `prophet_h4` and `gmi_h4` at 20 of 24 (about one more trading day), `prophet_d1` 3 and `gmi_d1` 2 of 24 (weeks). `gmi_m5` was revoked again on 2026-11-13 (5 of 24 toward re-approval at 09:26 UTC); `prophet_m5` re-approved. `gmi_m5` matches about 98 to 99 % of 5m bars (2 to 3 mismatches a day, 22 on 2026-11-12 in one run of six bars from 10:05 UTC), and almost every mismatch is in the higher-timeframe gate (`gate`, `conflict`, sometimes `gmi_dir`) while the 15m and 1H GMI match every bar: likely the 5m alert reading a forming higher-timeframe bar. To study if it keeps revoking; it does not touch the decision (the 5m trigger is Prophet R38, approved). Until then the 4H and D1 Desks speak at confidence 0.4 or lower.
