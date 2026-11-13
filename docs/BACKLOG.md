@@ -67,6 +67,15 @@ setup READY state that never reached the decision (#192).
     - **Then extend the never-money test** to the Omega page.
     - **Owner:** decide the module's scope and where it lives (Nexus or the platform Console) before it starts.
 
+## The platform's own model
+
+21. **A custom model from the platform's knowledge** (owner 2026-11-13: "end goalnya mampu membuat custom model sendiri dari knowledge ini khusus untuk EA dan XAUUSD Trading Assistant"; `docs/RFC_CUSTOM_MODEL.md`). Step 1, the dataset, is built (SSOT "Custom model dataset"). Next:
+    - **Baseline** (logistic regression in the Worker), recorded next to each decision in shadow: the bar every later model must beat.
+    - **Decision model**: a GitHub Actions workflow trains gradient-boosted trees on the labeled rows (read from D1 through the Cloudflare API), validates walk-forward, exports ONNX and stores it in Cloudflare; judged in shadow against the active Decision Engine and the baseline (300 decisions, Holm, holdout). Needs about 1000 to 2000 labeled rows (a few weeks).
+    - **The EA reads the ONNX model**, advice only until the owner promotes it.
+    - **Language model**: a QLoRA fine-tune on Kaggle from the scored room statements, served as a Workers AI LoRA; after months of scored rooms.
+    - **While the repository is public** (the owner makes it private after the reset): no row, feature table or weight in a commit, workflow log or artifact.
+
 ## Calibration in progress
 
 15. **4H and D1 parity** (alerts installed by the owner on 2026-11-09). The 1H, 15m and 5m identities are approved (`prophet` 41, `prophet_m15` 360, `prophet_m5` 866 consecutive matches on 2026-11-12). Still calibrating: `prophet_h4` and `gmi_h4` at 17 of 24 (about two more trading days), `prophet_d1` 3 and `gmi_d1` 2 of 24 (weeks). Until then the 4H and D1 Desks speak at confidence 0.4 or lower.

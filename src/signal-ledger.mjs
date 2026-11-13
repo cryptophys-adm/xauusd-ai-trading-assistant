@@ -149,7 +149,8 @@ export const sessionAt = (ms) => { const h = new Date(ms).getUTCHours(); return 
 /** The start of the broker day holding `ms` (MT5 server midnight at 22:00 UTC). */
 export const brokerDayStart = (ms) => { const h = OMEGA_SIM.broker_day_utc * 3600_000, day = 86_400_000; return Math.floor((ms - h) / day) * day + h; };
 
-function atrAt(bars, k, period = OMEGA_SIM.atr_period) {
+/** Pure: the mean true range of `bars` over the `period` bars ending at index `k` (null before bar 1). */
+export function atrAt(bars, k, period = OMEGA_SIM.atr_period) {
   const from = Math.max(1, k - period + 1);
   let sum = 0, n = 0;
   for (let j = from; j <= k; j++) { const b = bars[j], p = bars[j - 1]; sum += Math.max(b.high - b.low, Math.abs(b.high - p.close), Math.abs(b.low - p.close)); n += 1; }
