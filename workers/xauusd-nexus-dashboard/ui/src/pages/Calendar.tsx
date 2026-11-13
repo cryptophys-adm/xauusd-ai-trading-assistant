@@ -23,7 +23,7 @@ export default function Calendar() {
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <Panel title="Economic calendar" icon={<CalendarDays className="h-3.5 w-3.5 text-cyan-300" />} hint={hint}
-        right={<span className="flex items-center gap-2"><span className="mono text-[10.5px] text-slate-500">updated {v?.fetched_at ? `${v.fetched_at.slice(5, 16).replace("T", " ")} UTC` : "—"}</span>{v?.risk?.active?.length ? <Badge tone="amber">event risk</Badge> : <Badge tone="cyan">no event risk</Badge>}</span>}>
+        right={<span className="flex items-center gap-2"><span className="mono text-[10.5px] text-slate-500">updated {v?.fetched_at ? `${v.fetched_at.slice(5, 16).replace("T", " ")} UTC` : "—"}</span>{v?.risk?.active?.length ? <Badge tone="amber">event risk</Badge> : v?.fetched_at ? <Badge tone="cyan">no event risk</Badge> : null}</span>}>
         <label className="inline-flex cursor-pointer items-center gap-2 text-[12px] text-slate-300"><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> All currencies and impacts</label>
       </Panel>
       {v?.outlook ? (

@@ -249,9 +249,7 @@ function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { q
         <div className="glass-inner p-3">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
             <span>Fidelity</span>
-            <Badge tone={frictionSurcharge > 0 ? "amber" : "green"}>
-              {frictionSurcharge > 0 ? `+${pct(frictionSurcharge)} friction` : "OK"}
-            </Badge>
+            {frictionSurcharge > 0 ? <Badge tone="amber">+{pct(frictionSurcharge)} friction</Badge> : fidelity != null ? <Badge tone="green">OK</Badge> : null}
           </div>
           <div className="mono mt-1 text-[20px] font-bold text-slate-200">{fidelity != null ? `${fidelity}%` : "—"}</div>
           <div className="mono mt-1 text-[11px] text-slate-500">
@@ -262,9 +260,7 @@ function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { q
         <div className="glass-inner p-3">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
             <span>Agent accuracy</span>
-            <Badge tone={disqualified.length > 0 ? "red" : "green"}>
-              {disqualified.length > 0 ? `${disqualified.length} disqualified` : "OK"}
-            </Badge>
+            {disqualified.length > 0 ? <Badge tone="red">{disqualified.length} disqualified</Badge> : scorecards?.avg_accuracy != null ? <Badge tone="green">OK</Badge> : null}
           </div>
           <div className="mono mt-1 text-[20px] font-bold text-slate-200">{pct(scorecards?.avg_accuracy)}</div>
           <div className="mono mt-1 text-[11px] text-slate-500">
@@ -288,7 +284,7 @@ function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { q
         <div className="glass-inner p-3">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
             <span>Shadow & regime</span>
-            <Badge tone="purple">{regime?.regime ?? "normal"}</Badge>
+            {regime?.regime ? <Badge tone="purple">{regime.regime}</Badge> : null}
           </div>
           <div className="mono mt-1 text-[20px] font-bold text-violet-300">{shadow?.promotion_ready ?? 0} ready</div>
           <div className="mono mt-1 text-[11px] text-slate-500">
@@ -368,7 +364,7 @@ function Sync({ aether, worker }: { aether: any; worker: any }) {
   const warn = rows.some(([, c]) => c?.status === "warn");
   return (
     <Panel title="Sync status" icon={<Activity className="h-3.5 w-3.5" />} hint={`Checked every 15 minutes; a warning raises a Priority Queue alert. "idle" means the market was closed.`}
-      right={<Badge tone={warn ? "amber" : "green"}>{warn ? "attention" : "in sync"}{aether?.market_open === false ? " · market closed" : ""}</Badge>}>
+      right={rows.length ? <Badge tone={warn ? "amber" : "green"}>{warn ? "attention" : "in sync"}{aether?.market_open === false ? " · market closed" : ""}</Badge> : null}>
       {!rows.length ? <Empty>No sync status yet.</Empty> : (
         <div className="table-wrap">
           <table className="tbl">
@@ -583,7 +579,7 @@ export default function Aether() {
   const guard = d0 ? { quorum_min: d0.rules?.quorum_min ?? null, mode: d0.trading_mode ?? null } : null;
   const o = data as any;
   if (!o) return (
-    <div className="space-y-4">
+    <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <Panel title="Aether" icon={<Brain className="h-3.5 w-3.5" />}>
         {loading && !error ? <Skeleton rows={4} /> : <Empty>Aether unavailable ({error ?? "no answer"}).</Empty>}
       </Panel>
@@ -593,7 +589,7 @@ export default function Aether() {
   const totalCards = charts.reduce((s, [, v]) => s + (v?.cards ?? 0), 0);
   const ai = o.ai || {};
   return (
-    <div className="space-y-4">
+    <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <Panel title="Aether" icon={<Brain className="h-3.5 w-3.5" />} hint="Knowledge guardian: keeps the canon, stores decision cards, audits compliance and weighting. Never changes a decision."
         right={<Badge tone="slate">updated {ago(o.generated_at)}</Badge>}>
         {null}
