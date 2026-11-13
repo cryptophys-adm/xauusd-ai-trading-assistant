@@ -47,7 +47,7 @@ export function omegaReason(code: string) {
 
 /** The planner's current notes as a short list; `sinceMs` is when they last changed. */
 export default function OmegaWhy({ codes, sinceMs }: { codes: string[] | null | undefined; sinceMs?: number | null }) {
-  if (!codes?.length) return <p className="text-[11px] text-slate-500">No planner note yet: Omega has not synced with the terminal.</p>;
+  if (!codes?.length) return <p className="text-[11px] text-slate-500">No planner notes yet.</p>;
   const items = codes.map((c) => ({ code: c, ...omegaReason(c) }));
   const blocked = items.some((i) => i.kind === "block");
   return (

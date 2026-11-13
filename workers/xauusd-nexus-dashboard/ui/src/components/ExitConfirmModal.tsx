@@ -45,11 +45,8 @@ export function ExitConfirmModal({
             </div>
             <div>
               <h3 id="exit-modal-title" className="text-[15px] font-bold text-white tracking-wide">
-                Immediate Market Exit
+                Close position
               </h3>
-              <p className="text-[11px] text-slate-400">
-                MetaTrader 5 · Manual TP / SL Override
-              </p>
             </div>
           </div>
           <button
@@ -66,12 +63,12 @@ export function ExitConfirmModal({
         {/* Position Details Card */}
         <div className="mt-4 rounded-xl border border-white/10 bg-black/40 p-3.5 space-y-2 text-[12px]">
           <div className="flex items-center justify-between">
-            <span className="text-slate-400 text-[11px] uppercase tracking-wider font-semibold">Position Ticket</span>
+            <span className="text-slate-400 text-[11px] uppercase tracking-wider font-semibold">Ticket</span>
             <span className="mono font-bold text-cyan-300">#{position.ticket}</span>
           </div>
 
           <div className="flex items-center justify-between">
-            <span className="text-slate-400 text-[11px] uppercase tracking-wider font-semibold">Instrument & Order</span>
+            <span className="text-slate-400 text-[11px] uppercase tracking-wider font-semibold">Position</span>
             <div className="flex items-center gap-2">
               <span className="mono font-semibold text-slate-200">{position.symbol || "XAUUSD.m"}</span>
               <span
@@ -111,7 +108,7 @@ export function ExitConfirmModal({
         <div className="mt-3 flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11px] text-amber-200 leading-relaxed">
           <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
           <span>
-            Executing this order will send an immediate market close to the MT5 bridge, overriding active Take Profit &amp; Stop Loss targets.
+            Closes at market now. The position's SL and TP are cancelled.
           </span>
         </div>
 
@@ -123,7 +120,7 @@ export function ExitConfirmModal({
             disabled={isSubmitting}
             className="btn rounded-lg px-3.5 py-2 text-[12px] font-semibold text-slate-300 hover:text-white transition"
           >
-            Cancel / Keep Position
+            Cancel
           </button>
           <button
             type="button"
@@ -134,11 +131,11 @@ export function ExitConfirmModal({
             {isSubmitting ? (
               <>
                 <span className="inline-block h-2.5 w-2.5 rounded-full bg-white animate-ping" />
-                Closing Position…
+                Closing…
               </>
             ) : (
               <>
-                Exit Position Now ✕
+                Close at market
               </>
             )}
           </button>

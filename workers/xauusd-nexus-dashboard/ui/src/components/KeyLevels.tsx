@@ -155,10 +155,14 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
   const cands = hasK ? (nearestCandidates(k, 6) as any[]) : [];
   const priceRow = hasK ? cands.filter((z) => (z.low + z.high) / 2 > k.price).length : -1;
   const busy = (loading && !g) || (levelsLoading && !levels);
+  const hint = [
+    `Camarilla${levels?.computed_at ? ` snapshot ${utc(levels.computed_at)}` : ""}, daily (cyan) and weekly (violet) pivots.`,
+    hasK ? `Zones: ${k.raw_count} levels within ${k.tolerance}. Hover a zone for its levels.` : ""
+  ].filter(Boolean).join(" ");
   return (
-    <Panel title={`Key levels · ${chartName(tab)}`} icon={<Crosshair className="h-3.5 w-3.5 text-violet-300" />}
-      right={hasK ? <Badge tone="purple">{k.candidates?.length ?? 0} candidate zones</Badge> : null}>
-      {busy ? <Skeleton rows={5} /> : !hasK && !set ? <p className="text-[12px] text-slate-500">No price and no HUD snapshot for this chart yet.</p> : (
+    <Panel title={`Key levels · ${chartName(tab)}`} icon={<Crosshair className="h-3.5 w-3.5 text-violet-300" />} hint={hint}
+      right={hasK ? <Badge tone="purple">{k.candidates?.length ?? 0} candidates</Badge> : null}>
+      {busy ? <Skeleton rows={5} /> : !hasK && !set ? <p className="text-[12px] text-slate-500">No level data yet.</p> : (
         <>
           {hasK && (
             <div className="mb-2 grid grid-cols-4 gap-1" aria-label="Level readers">
@@ -174,15 +178,15 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
             </div>
           )}
           {hasK && (!k.readers || READERS.every(([id]) => !k.readers?.[id]?.levels)) ? (
-            <p className="mb-2 text-[10px] text-slate-500">The four readers wait for the GMI chart plane of the next HUD snapshot.</p>
+            <p className="mb-2 text-[10px] text-slate-500">Readers waiting for the next HUD snapshot.</p>
           ) : null}
           {(() => {
             const st = g?.strategy?.setup;
             if (!st || !g?.strategy?.direction || g.strategy.direction === "NONE") return null;
             return (
               <div className="glass-inner mb-2 px-2.5 py-1.5 text-[11px]">
-                <span className="text-[9.5px] uppercase tracking-[0.12em] text-slate-500">Setup at the 15m location · {g.strategy.direction.toLowerCase()}</span>
-                <div className={st.type === "none" ? "text-slate-400" : "font-semibold text-emerald-200"}>{SETUP_LABEL[st.type] ?? "No setup type at price"}</div>
+                <span className="text-[9.5px] uppercase tracking-[0.12em] text-slate-500">15m setup · {g.strategy.direction.toLowerCase()}</span>
+                <div className={st.type === "none" ? "text-slate-400" : "font-semibold text-emerald-200"}>{SETUP_LABEL[st.type] ?? "No setup"}</div>
                 {st.evidence?.length ? <div className="text-[10.5px] text-slate-400">{st.evidence.join(" · ")}</div> : null}
               </div>
             );
@@ -192,17 +196,17 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
             {sets.length > 1 ? sets.map((s) => (
               <button key={s.tf} type="button" onClick={() => setPick(s.tf)}
                 className={`rounded-md border px-2 py-0.5 text-[10px] ${set && s.tf === set.tf ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-100" : "border-white/10 text-slate-400 hover:text-slate-200"}`}>{s.label}</button>
-            )) : <span className="text-[10px] text-slate-400">{set?.label ?? "no HUD snapshot for this chart yet"}</span>}
-            {levels && <span className={`ml-auto text-[9.5px] uppercase tracking-[0.12em] ${verified ? "text-emerald-300" : "text-slate-500"}`}>{verified ? "verified bars" : "not yet calibrated"}</span>}
+            )) : <span className="text-[10px] text-slate-400">{set?.label ?? "no snapshot"}</span>}
+            {levels && <span className={`ml-auto text-[9.5px] uppercase tracking-[0.12em] ${verified ? "text-emerald-300" : "text-slate-500"}`}>{verified ? "verified bars" : "uncalibrated"}</span>}
           </div>
           <div className="mb-0.5 flex justify-between px-1 text-[9px] uppercase tracking-[0.12em] text-slate-600">
-            <span>Camarilla · pivots</span><span>{hasK ? "Zones · every chart" : "Zones · none yet"}</span>
+            <span>Camarilla · pivots</span><span>{hasK ? "Zones" : "No zones"}</span>
           </div>
           <KeyLevelMap k={hasK ? k : null} cam={set?.levels ?? null} close={levels?.close ?? null} daily={levels?.cpr?.daily} weekly={levels?.cpr?.weekly} />
           {set && (
             <p className="mt-1 text-[11px] text-slate-400">
-              Close <span className="mono text-slate-200">{isNum(levels?.close) ? levels.close.toFixed(2) : "—"}</span> is {BAND_TEXT[set.band] ?? "off the ladder"} of the {String(set.label).toLowerCase()} Camarilla
-              {levels?.cpr?.daily?.position ? `, ${levels.cpr.daily.position === "above_tc" ? "above" : levels.cpr.daily.position === "below_bc" ? "below" : "inside"} the daily pivot range` : ""}.
+              Close <span className="mono text-slate-200">{isNum(levels?.close) ? levels.close.toFixed(2) : "—"}</span> · {BAND_TEXT[set.band] ?? "off the ladder"} ({String(set.label).toLowerCase()})
+              {levels?.cpr?.daily?.position ? ` · ${levels.cpr.daily.position === "above_tc" ? "above" : levels.cpr.daily.position === "below_bc" ? "below" : "inside"} daily pivot` : ""}
             </p>
           )}
           {cands.length > 0 && (
@@ -222,10 +226,6 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
             </div>
           )}
           {hasK && <p className="mt-2 text-[10.5px] leading-snug text-slate-500">{k.summary}</p>}
-          <p className="mt-1 text-[9.5px] text-slate-600">
-            Left: the Camarilla set{levels?.computed_at ? ` of the ${chartName(tab)} snapshot ${utc(levels.computed_at)}` : ""} with the daily (cyan) and weekly (violet) pivot ranges, formulas of closed bars.
-            {hasK ? ` Right: the Key Level Agent's zones from every chart, ${k.raw_count} levels grouped within ${k.tolerance} of each other; a candidate has three or more independent families and at least medium strength, at most two per side. Hover a zone for its levels and their reader.` : ""}
-          </p>
         </>
       )}
     </Panel>

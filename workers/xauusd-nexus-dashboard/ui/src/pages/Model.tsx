@@ -1,5 +1,5 @@
 import { ArrowRight, BookOpen, Brain, Database, GitBranch, Layers, Lightbulb, ShieldCheck, Trees } from "lucide-react";
-import { Badge, Empty, Kpi, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Hint, Kpi, Panel, Skeleton } from "../components/ui";
 import { C, DivergingBar } from "../components/charts";
 import { get } from "../lib/api";
 import { ago, utc } from "../lib/format";
@@ -25,10 +25,10 @@ function Pipeline({ dataset, baseline, gbm, live }: { dataset: any; baseline: an
   const promoted = baseline?.promotion?.status === "promoted";
   const liveNotes = (live?.items ?? []).filter((i: any) => i.status === "live").length;
   const steps = [
-    { icon: <Database className="h-4 w-4" />, title: "1 · Record", text: "Every 15m decision is saved with ~100 numbers it knew at that close, then labeled by what price did next (in R).", state: `${labeled} labeled`, tone: labeled ? "green" : "slate" },
-    { icon: <Brain className="h-4 w-4" />, title: "2 · Learn", text: "A baseline (hourly) and a decision model (daily, LightGBM) learn which situations reached the target before the stop.", state: `${baseline?.model_id ? "baseline ok" : "baseline —"} · ${gbm?.model_id ? "gbm ok" : "gbm —"}`, tone: baseline?.model_id || gbm?.model_id ? "green" : "slate" },
-    { icon: <ShieldCheck className="h-4 w-4" />, title: "3 · Prove", text: "Each prediction is made before the decision and scored after (prospective). Only a model that beats the base rate on 300+ unseen decisions per side passes.", state: promoted ? `passed (${baseline.promotion.set})` : "not yet", tone: promoted ? "green" : "amber" },
-    { icon: <Lightbulb className="h-4 w-4" />, title: "4 · Use", text: "A model that passed advises the AI council (never trades by itself); a knowledge note that proved better goes live for the agents it was tested on, and retires if it gets worse.", state: `${promoted ? "advising" : "shadow only"} · ${liveNotes} live note${liveNotes === 1 ? "" : "s"}`, tone: promoted || liveNotes ? "cyan" : "slate" }
+    { icon: <Database className="h-4 w-4" />, title: "Record", text: "Each 15m decision is saved with its features and labeled in R.", state: `${labeled} labeled`, tone: labeled ? "green" : "slate" },
+    { icon: <Brain className="h-4 w-4" />, title: "Learn", text: "Hourly baseline and daily LightGBM learn which setups hit target.", state: `${baseline?.model_id ? "baseline ok" : "baseline —"} · ${gbm?.model_id ? "gbm ok" : "gbm —"}`, tone: baseline?.model_id || gbm?.model_id ? "green" : "slate" },
+    { icon: <ShieldCheck className="h-4 w-4" />, title: "Validate", text: "Scored on unseen live decisions; must beat the base rate.", state: promoted ? `passed (${baseline.promotion.set})` : "not yet", tone: promoted ? "green" : "amber" },
+    { icon: <Lightbulb className="h-4 w-4" />, title: "Apply", text: "Passing models advise the council; proven notes go live.", state: `${promoted ? "advising" : "shadow only"} · ${liveNotes} live note${liveNotes === 1 ? "" : "s"}`, tone: promoted || liveNotes ? "cyan" : "slate" }
   ] as const;
   return (
     <div className="grid gap-2 md:grid-cols-4">
@@ -46,7 +46,7 @@ function Pipeline({ dataset, baseline, gbm, live }: { dataset: any; baseline: an
 
 /** Rows of the dataset by label status, and what price did after each decision (both sides, tight labels). */
 function Dataset({ d }: { d: any }) {
-  if (!d) return <Empty>The dataset is not available.</Empty>;
+  if (!d) return <Empty>No data yet.</Empty>;
   const by = Object.fromEntries((d.by_status ?? []).map((s: any) => [s.label_status, s]));
   const total = (d.by_status ?? []).reduce((s: number, x: any) => s + (x.n ?? 0), 0);
   const first = (d.by_status ?? []).map((s: any) => s.first).filter(Boolean).sort()[0];
@@ -60,10 +60,10 @@ function Dataset({ d }: { d: any }) {
   return (
     <>
       <div className="grid gap-2 sm:grid-cols-4">
-        <Kpi label="Decisions recorded" value={String(total)} sub={first ? `since ${utc(first)}` : undefined} color={C.cyan} />
-        <Kpi label="Labeled (tight)" value={String(by.labeled?.n ?? 0)} sub={`${by.pending?.n ?? 0} waiting for the next ${d.rules ? d.rules.horizon_ms / 3_600_000 : 4} h`} color={C.bull} />
-        <Kpi label="Labeled (wide)" value={String(wide.labeled ?? 0)} sub={`${wide.pending ?? 0} waiting for the next ${d.wide_rules ? d.wide_rules.horizon_ms / 3_600_000 : 12} h`} color={C.violet} />
-        <Kpi label="Features per decision" value={String(d.latest_feature_count ?? "—")} sub={`${d.shadow_predictions ?? 0} rows carry model predictions`} color={C.wait} />
+        <Kpi label="Decisions" value={String(total)} sub={first ? `since ${utc(first)}` : undefined} color={C.cyan} />
+        <Kpi label="Labeled (tight)" value={String(by.labeled?.n ?? 0)} sub={`${by.pending?.n ?? 0} pending (${d.rules ? d.rules.horizon_ms / 3_600_000 : 4}h)`} color={C.bull} />
+        <Kpi label="Labeled (wide)" value={String(wide.labeled ?? 0)} sub={`${wide.pending ?? 0} pending (${d.wide_rules ? d.wide_rules.horizon_ms / 3_600_000 : 12}h)`} color={C.violet} />
+        <Kpi label="Features" value={String(d.latest_feature_count ?? "—")} sub={`${d.shadow_predictions ?? 0} with predictions`} color={C.wait} />
       </div>
       <div className="mt-3 grid gap-3 md:grid-cols-2">
         {["long", "short"].map((side) => {
@@ -71,7 +71,7 @@ function Dataset({ d }: { d: any }) {
           return (
             <div key={side} className="glass-inner p-3">
               <div className="mb-1.5 flex items-center justify-between text-[11px]">
-                <span className="font-semibold text-slate-200">A {side} from every decision's close</span>
+                <span className="font-semibold capitalize text-slate-200">{side} outcomes</span>
                 <span className="text-slate-500">{o.n} labeled</span>
               </div>
               <div className="flex h-3 w-full overflow-hidden rounded-full" style={{ background: C.track }}>
@@ -84,9 +84,6 @@ function Dataset({ d }: { d: any }) {
           );
         })}
       </div>
-      <p className="mt-2 text-[10.5px] text-slate-500">
-        Labels: <b>tight</b> = target {d.rules?.target_atr ?? 1.5} ATR before stop {d.rules?.stop_atr ?? 1} ATR within {d.rules ? d.rules.horizon_ms / 3_600_000 : 4} h; <b>wide</b> = {d.wide_rules?.target_atr ?? 4.5} ATR before {d.wide_rules?.stop_atr ?? 3} ATR within {d.wide_rules ? d.wide_rules.horizon_ms / 3_600_000 : 12} h. They measure the market after each decision, whatever the decision was, so a model can also learn when to wait.
-      </p>
     </>
   );
 }
@@ -100,11 +97,11 @@ function ModelTable({ checks, prospective, top, gate, importance }: { checks: an
         <thead>
           <tr>
             <th>Model</th>
-            <th title="Trained on the oldest 70 % of rows, judged on the newest 30 %. Skill > 0 = better than always guessing the base rate.">Walk-forward skill</th>
+            <th title="Trained on the oldest 70 % of rows, judged on the newest 30 %. Skill > 0 = better than always guessing the base rate.">Walk-forward</th>
             <th title="Area under the ROC curve: 0.5 = no ranking ability, 1 = perfect.">AUC</th>
             <th title="Mean R of the rows the model would pick (p ≥ 0.5) against the mean R of all rows.">Picked vs all</th>
-            <th title="Predictions made before each decision, scored once its outcome is known: the honest record.">Prospective (live)</th>
-            <th>Leans on</th>
+            <th title="Predicted before each decision, scored once the outcome is known.">Live</th>
+            <th>Top features</th>
           </tr>
         </thead>
         <tbody>
@@ -137,7 +134,7 @@ function ModelTable({ checks, prospective, top, gate, importance }: { checks: an
                       </div>
                       <div className="mt-0.5 text-[10px] text-slate-500">{p.n} / {minN} decisions</div>
                     </div>
-                  ) : <span className="text-[11px] text-slate-500">waiting for outcomes</span>}
+                  ) : <span className="text-[11px] text-slate-500">pending</span>}
                 </td>
                 <td className="text-[10.5px] text-slate-400">{feats.length ? feats.map((f: any) => <span key={f.feature} className="mr-1.5 inline-block mono" title={`${importance} ${f[importance]}`}>{f.feature}</span>) : "—"}</td>
               </tr>
@@ -157,9 +154,8 @@ function Gate({ b }: { b: any }) {
     <div className={`glass-inner mb-3 flex flex-wrap items-start gap-3 p-3 ${on ? "border-emerald-400/30" : ""}`}>
       <Badge tone={on ? "green" : "amber"}>{on ? `CONNECTED · ${pr.set}` : "NOT CONNECTED"}</Badge>
       <div className="min-w-0 flex-1 text-[11px] text-slate-300">
-        <div>{on ? `Advising the Decision Engine council since ${utc(pr.since)}: the council sees its long and short probabilities next to the witnesses. The guardrails still decide what can trade.` : "Shadow only: its predictions are recorded and scored, but the council does not see them yet."}</div>
-        {pr?.reason && <div className="mt-1 text-[10.5px] text-slate-500">Why: {pr.reason}</div>}
-        {g && <div className="mt-1 text-[10.5px] text-slate-500">Gate (connects and disconnects by itself): both sides of one label set, ≥ {g.min_n} decisions it had not seen, better than the base rate with p &lt; {g.alpha}, AUC ≥ {g.min_auc}.</div>}
+        <div className="flex items-center gap-1.5">{on ? `Advising the council since ${utc(pr.since)}` : "Shadow only"}{g && <Hint text={`Gate: both sides, ≥ ${g.min_n} unseen decisions, p < ${g.alpha}, AUC ≥ ${g.min_auc}.`} />}</div>
+        {pr?.reason && <div className="mt-1 text-[10.5px] text-slate-500">{pr.reason}</div>}
       </div>
     </div>
   );
@@ -169,10 +165,7 @@ function LearnedLive({ l }: { l: any }) {
   const items = l?.items ?? [];
   return (
     <>
-      <p className="mb-2 text-[11px] text-slate-400">
-        A knowledge note from Aether is first tested in shadow (one extra AI call with the note, against the real answer, on the same bar). When it reads <b>better than active</b> it goes live by itself for the agents and chart it was tested on{l?.rules ? `, and retires by itself if it stops being in Aether's pack or is worse live (p < ${l.rules.alpha} over ${l.rules.min_decided} decided calls)` : ""}. Mode: <Badge tone={l?.mode === "on" ? "green" : "slate"}>{l?.mode ?? "—"}</Badge>
-      </p>
-      {!items.length ? <Empty>No note has gone live yet. Notes in shadow testing are on the Shadow versions page.</Empty> : (
+      {!items.length ? <Empty>No notes live yet.</Empty> : (
         <div className="table-wrap">
           <table className="tbl">
             <thead><tr><th>Note</th><th>For</th><th>Status</th><th>Since</th><th>Text</th></tr></thead>
@@ -204,38 +197,40 @@ export default function Model() {
   const g = (gbm.data as any)?.gbm ?? null;
   const l = (tuning.data as any)?.learned_live ?? null;
   const loading = dataset.loading && !dataset.data;
+  const hrs = (r: any, dflt: number) => (r ? r.horizon_ms / 3_600_000 : dflt);
+  const labelHint = d ? `Tight: ${d.rules?.target_atr ?? 1.5} ATR target / ${d.rules?.stop_atr ?? 1} ATR stop, ${hrs(d.rules, 4)}h. Wide: ${d.wide_rules?.target_atr ?? 4.5} / ${d.wide_rules?.stop_atr ?? 3} ATR, ${hrs(d.wide_rules, 12)}h.` : undefined;
   return (
     <div className="flex flex-col gap-4">
-      <Panel title="How the platform learns" icon={<GitBranch className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone="purple">automatic · no price · advice only</Badge>}>
+      <Panel title="Learning pipeline" icon={<GitBranch className="h-3.5 w-3.5 text-cyan-300" />}>
         {loading ? <Skeleton rows={3} /> : <Pipeline dataset={d} baseline={b} gbm={g} live={l} />}
       </Panel>
 
-      <Panel title="1 · The dataset" icon={<Database className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone="slate">every 5 min</Badge>}>
+      <Panel title="Dataset" icon={<Database className="h-3.5 w-3.5 text-cyan-300" />} hint={labelHint}>
         {loading ? <Skeleton rows={4} /> : <Dataset d={d} />}
       </Panel>
 
-      <Panel title="2 · Baseline model (logistic regression)" icon={<Layers className="h-3.5 w-3.5 text-cyan-300" />}
+      <Panel title="Baseline model" icon={<Layers className="h-3.5 w-3.5 text-cyan-300" />} hint="Logistic regression, retrained hourly. The bar other models must beat."
         right={b ? <Badge tone="slate">{b.model_id} · {b.rows} rows · trained {ago(b.trained_at)}</Badge> : null}>
-        {baseline.loading && !baseline.data ? <Skeleton rows={4} /> : !b ? <Empty>No baseline yet (it needs 150 decisive rows per side).</Empty> : (
+        {baseline.loading && !baseline.data ? <Skeleton rows={4} /> : !b ? <Empty>No baseline yet.</Empty> : (
           <>
             <Gate b={b} />
             <ModelTable checks={b.checks} prospective={b.prospective} top={b.top_features} gate={b.gate} importance="weight" />
-            <p className="mt-2 text-[10.5px] text-slate-500">Retrained every hour from every labeled row; small enough to run inside the Worker. It is the bar every other model must beat.</p>
           </>
         )}
       </Panel>
 
-      <Panel title="2b · Decision model (LightGBM)" icon={<Trees className="h-3.5 w-3.5 text-violet-300" />}
+      <Panel title="Decision model" icon={<Trees className="h-3.5 w-3.5 text-violet-300" />} hint="LightGBM, trained daily at 04:17 UTC. Shadow only until it passes the gate."
         right={g ? <div className="flex gap-1.5"><Badge tone="slate">{g.model_id} · {g.rows} rows · {g.features} features · trained {ago(g.trained_at)}</Badge><Badge tone="amber">SHADOW</Badge></div> : null}>
-        {gbm.loading && !gbm.data ? <Skeleton rows={4} /> : !g ? <Empty>No decision model yet: it is trained daily at 04:17 UTC by GitHub Actions once there are enough labeled rows.</Empty> : (
+        {gbm.loading && !gbm.data ? <Skeleton rows={4} /> : !g ? <Empty>No model yet.</Empty> : (
           <>
             <ModelTable checks={g.checks} prospective={g.prospective} top={g.top_features} importance="gain" />
-            <p className="mt-2 text-[10.5px] text-slate-500">Gradient-boosted trees, trained daily outside Cloudflare (free) and evaluated by the Worker itself. Shadow only: it is recorded next to every decision and judged on outcomes it had not seen; it needs about 1000–2000 labeled rows to be worth much. Later it runs in the EA (ONNX), still as advice until it passes the same gate.</p>
           </>
         )}
       </Panel>
 
-      <Panel title="3 · Knowledge notes that went live by themselves" icon={<BookOpen className="h-3.5 w-3.5 text-cyan-300" />}>
+      <Panel title="Live knowledge notes" icon={<BookOpen className="h-3.5 w-3.5 text-cyan-300" />}
+        hint={`Shadow-tested notes go live when better than active${l?.rules ? `; retired if worse live (p < ${l.rules.alpha}, ${l.rules.min_decided} calls)` : ""}.`}
+        right={l ? <Badge tone={l.mode === "on" ? "green" : "slate"}>mode {l.mode ?? "—"}</Badge> : null}>
         {tuning.loading && !tuning.data ? <Skeleton rows={3} /> : <LearnedLive l={l} />}
       </Panel>
     </div>

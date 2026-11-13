@@ -8,7 +8,7 @@ const IMPACT_TONE: Record<string, string> = { High: "text-rose-300", Medium: "te
 const day = (t: string) => new Date(t).toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", timeZone: "UTC" });
 const hm = (t: string) => t.slice(11, 16);
 const arrow = (x?: number | null) => (x == null ? <span className="text-slate-500">tone</span> : x > 0 ? <span className="text-emerald-300">gold ▲</span> : x < 0 ? <span className="text-rose-300">gold ▼</span> : <span className="text-slate-500">flat</span>);
-const STATUS: Record<string, string> = { upcoming: "upcoming", imminent: "inside its pre-release window", released: "released", past: "past" };
+const STATUS: Record<string, string> = { upcoming: "upcoming", imminent: "pre-release", released: "released", past: "past" };
 
 /** Backlog 11.1: the week's economic calendar (ForexFactory export) and the event-risk gate. */
 export default function Calendar() {
@@ -19,20 +19,17 @@ export default function Calendar() {
   const gate = v?.risk?.gate;
   const active = new Set((v?.risk?.active ?? []).map((e: any) => e.title + e.time));
   const now = Date.now();
+  const hint = gate ? `${gate.impacts.join("/")}-impact ${gate.currencies.join("/")} events: Decision Engine caution from ${gate.before_minutes / 60}h before to ${gate.after_minutes}m after. Times in UTC.` : "ForexFactory export, refreshed hourly. Times in UTC.";
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
-      <Panel title="Economic calendar" icon={<CalendarDays className="h-3.5 w-3.5 text-cyan-300" />} right={v?.risk?.active?.length ? <Badge tone="amber">event risk now</Badge> : <Badge tone="cyan">no event risk now</Badge>}>
-        <p className="text-[12px] leading-relaxed text-slate-400">
-          The week's events from the ForexFactory export, refreshed hourly (last {v?.fetched_at ? `${v.fetched_at.slice(5, 16).replace("T", " ")} UTC` : "not yet"}).
-          {gate ? ` A ${gate.impacts.join("/")}-impact ${gate.currencies.join("/")} event is a caution for the Decision Engine from ${gate.before_minutes / 60} hours before to ${gate.after_minutes} minutes after it (it never turns a decision into WAIT by itself); Omega opens no new trade inside its own news window (the Omega page shows it).` : ""} Times in UTC.
-        </p>
-        <label className="mt-2 inline-flex cursor-pointer items-center gap-2 text-[12px] text-slate-300"><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Show every currency and impact</label>
+      <Panel title="Economic calendar" icon={<CalendarDays className="h-3.5 w-3.5 text-cyan-300" />} hint={hint}
+        right={<span className="flex items-center gap-2"><span className="mono text-[10.5px] text-slate-500">updated {v?.fetched_at ? `${v.fetched_at.slice(5, 16).replace("T", " ")} UTC` : "—"}</span>{v?.risk?.active?.length ? <Badge tone="amber">event risk</Badge> : <Badge tone="cyan">no event risk</Badge>}</span>}>
+        <label className="inline-flex cursor-pointer items-center gap-2 text-[12px] text-slate-300"><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> All currencies and impacts</label>
       </Panel>
       {v?.outlook ? (
-        <Panel title="Calendar Agent" right={v.outlook.released?.length ? <Badge tone={v.outlook.surprise_lean > 0 ? "green" : v.outlook.surprise_lean < 0 ? "red" : "slate"}>{v.outlook.surprise_lean > 0 ? "released surprise: gold up" : v.outlook.surprise_lean < 0 ? "released surprise: gold down" : "released in line"}</Badge> : <Badge tone={v.outlook.consensus_lean > 0 ? "green" : v.outlook.consensus_lean < 0 ? "red" : "slate"}>{v.outlook.consensus_lean > 0 ? "consensus leans gold up" : v.outlook.consensus_lean < 0 ? "consensus leans gold down" : "no consensus lean"}</Badge>}>
+        <Panel title="Calendar Agent" hint="Fixed rules per event kind; after release, the surprise vs forecast sets the gold effect. Horizon learned per kind. Context only." right={v.outlook.released?.length ? <Badge tone={v.outlook.surprise_lean > 0 ? "green" : v.outlook.surprise_lean < 0 ? "red" : "slate"}>{v.outlook.surprise_lean > 0 ? "surprise: gold up" : v.outlook.surprise_lean < 0 ? "surprise: gold down" : "in line"}</Badge> : <Badge tone={v.outlook.consensus_lean > 0 ? "green" : v.outlook.consensus_lean < 0 ? "red" : "slate"}>{v.outlook.consensus_lean > 0 ? "consensus: gold up" : v.outlook.consensus_lean < 0 ? "consensus: gold down" : "no consensus lean"}</Badge>}>
           <p className="text-[12px] leading-relaxed text-slate-300">{v.outlook.summary}</p>
-          <p className="mt-1 text-[11px] text-slate-500">Projection by fixed rules per event kind: stronger US data or a hawkish Fed lift the dollar and yields, which weighs on gold; weaker data or a dovish Fed do the opposite. After the release, the actual comes from TradingView's economic calendar: the surprise against the forecast (in the series' own standard deviations) and the rule give the effect on gold. The horizon is learned per event kind from gold's moves after the past releases (1 to 24 hours, in 1H ATR); until 5 are measured it is 2 hours before to 4 hours after. Context only; it never places a trade.</p>
-          {v.releases?.history ? <p className="mt-1 text-[11px] text-slate-500">History: {v.releases.history.with_actual} releases with an actual{v.releases.history.since ? ` since ${String(v.releases.history.since).slice(0, 10)}` : ""}.</p> : null}
+          {v.releases?.history ? <p className="mt-1 text-[11px] text-slate-500">History: {v.releases.history.with_actual} releases{v.releases.history.since ? ` since ${String(v.releases.history.since).slice(0, 10)}` : ""}</p> : null}
           {v.releases?.horizons && Object.keys(v.releases.horizons).length ? (
             <div className="table-wrap mt-2">
               <table className="tbl">
@@ -63,12 +60,12 @@ export default function Calendar() {
           ) : null}
         </Panel>
       ) : null}
-      {loading && !data ? <Panel><Skeleton rows={6} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-rose-300">Calendar unavailable: {error}</p></Panel>
-        : !events.length ? <Panel><Empty>{v?.fetched_at ? "No matching event this week." : "The calendar has not been fetched yet."}</Empty></Panel> : (
+      {loading && !data ? <Panel><Skeleton rows={6} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-rose-300">Unavailable: {error}</p></Panel>
+        : !events.length ? <Panel><Empty>{v?.fetched_at ? "No matching events this week." : "Not fetched yet."}</Empty></Panel> : (
         <Panel title={all ? "All events" : "High-impact USD events"}>
           <div className="table-wrap">
             <table className="tbl">
-              <thead><tr><th>Day</th><th>Time</th><th>Currency</th><th>Impact</th><th>Event</th><th>Actual</th><th>Forecast</th><th>Previous</th><th title="Projected move of gold if the actual is above / below the forecast">Above / below forecast</th></tr></thead>
+              <thead><tr><th>Day</th><th>Time</th><th>Currency</th><th>Impact</th><th>Event</th><th>Actual</th><th>Forecast</th><th>Previous</th><th title="Projected move of gold if the actual is above / below the forecast">Gold if above / below</th></tr></thead>
               <tbody>
                 {events.map((e) => {
                   const past = Date.parse(e.time) < now - 30 * 60_000;

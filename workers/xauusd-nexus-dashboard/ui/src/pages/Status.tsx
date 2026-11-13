@@ -16,7 +16,7 @@ function Overview() {
   const { items, loading, error } = useSystemHealth();
   const bad = items.filter((i) => i.tone === "red").length, warn = items.filter((i) => i.tone === "amber").length;
   return (
-    <Panel title="Workers and lanes" icon={<Activity className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone={bad ? "red" : warn ? "amber" : "green"}>{bad ? `${bad} down` : warn ? `${warn} need attention` : "all nominal"}</Badge>}>
+    <Panel title="Workers and lanes" icon={<Activity className="h-3.5 w-3.5 text-cyan-300" />} hint={marketClosed() ? "Market closed (Fri 17:30 – Sun 18:00 New York): grey lanes are idle." : undefined} right={<Badge tone={bad ? "red" : warn ? "amber" : "green"}>{bad ? `${bad} down` : warn ? `${warn} need attention` : "all nominal"}</Badge>}>
       {loading ? <Skeleton rows={3} /> : error && !items.length ? <p className="text-[12px] text-rose-300">Status unavailable: {error}</p> : (
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {items.map((i) => (
@@ -28,7 +28,6 @@ function Overview() {
           ))}
         </div>
       )}
-      {marketClosed() ? <p className="mt-2 text-[11px] text-slate-500">The market is closed (Friday 17:30 to Sunday 18:00 New York): grey lanes are expected to be idle.</p> : null}
     </Panel>
   );
 }
@@ -77,8 +76,8 @@ function Parity() {
   const rows: any[] = (p.registry ?? []).filter((r: any) => older || r.current);
   return (
     <>
-      <Panel title="Parity registry" icon={<ShieldCheck className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone="cyan">{(p.registry ?? []).filter((r: any) => r.current && r.status === "approved").length} approved</Badge>}>
-        <p className="mb-2 text-[11.5px] text-slate-400">Each local engine of the pull adapter (MizanLib, Prophet R38 + R37, GMI v12.70 and the HUD comparators) is compared with the TradingView alert of the same candle. An identity is approved after {p.policy?.promote_after ?? 24} matching candles in a row; any indicator mismatch revokes it; an incomplete comparison neither advances nor resets the streak.{cal?.due ? " One approved engine is due for calibration." : ""}</p>
+      <Panel title="Parity registry" icon={<ShieldCheck className="h-3.5 w-3.5 text-cyan-300" />} hint={`Local engines vs the TradingView alert per candle. Approved after ${p.policy?.promote_after ?? 24} matches in a row; a mismatch revokes.`}
+        right={<span className="flex gap-1">{cal?.due ? <Badge tone="amber">calibration due</Badge> : null}<Badge tone="cyan">{(p.registry ?? []).filter((r: any) => r.current && r.status === "approved").length} approved</Badge></span>}>
         <label className="mb-2 inline-flex cursor-pointer items-center gap-2 text-[11.5px] text-slate-300"><input type="checkbox" checked={older} onChange={(e) => setOlder(e.target.checked)} /> Show older identities</label>
         <div className="table-wrap">
           <table className="tbl">

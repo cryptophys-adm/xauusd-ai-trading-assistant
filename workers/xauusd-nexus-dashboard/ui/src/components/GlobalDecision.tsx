@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Check, Minus, ShieldAlert, Target, X } from "lucide-react";
-import { Badge, Panel, Skeleton } from "./ui";
+import { Badge, Hint, Panel, Skeleton } from "./ui";
 import { Stance, stanceColor } from "./Stance";
 import { DivergingBar, leanColor } from "./charts";
 import { useMarket, leanLabel } from "../lib/market";
@@ -32,7 +32,7 @@ function PlanLadder({ plan, long, minRrr }: { plan: any; long: boolean; minRrr: 
     { k: "TP1", price: plan.tp1, note: plan.tp1_note, rr: plan.rrr?.tp1, tone: "text-emerald-300/80" },
     { k: "Entry", price: plan.entry, note: plan.entry_note, rr: null, tone: "text-cyan-200" },
     { k: "Stop", price: plan.stop, note: plan.stop_note, rr: null, tone: "text-rose-300" },
-    { k: "SL+", price: plan.progressive_stop, note: "progressive stop (breakeven)", rr: null, tone: "text-amber-300" }
+    { k: "SL+", price: plan.progressive_stop, note: "breakeven stop", rr: null, tone: "text-amber-300" }
   ];
   const ordered = long ? rows : [...rows].reverse();
   return (
@@ -46,8 +46,8 @@ function PlanLadder({ plan, long, minRrr }: { plan: any; long: boolean; minRrr: 
         </div>
       ))}
       <div className="flex items-center justify-between px-3 py-1.5 text-[10.5px] text-slate-500">
-        <span>risk {plan.risk?.toFixed?.(2)} · {minRrr == null ? "reward-to-risk rule not recorded" : minRrr > 0 ? `reward-to-risk needed ${minRrr}R` : "target at the nearest key level (no reward minimum)"}</span>
-        {!plan.at_level && <span className="text-violet-300">planned pullback entry</span>}
+        <span>risk {plan.risk?.toFixed?.(2)}{minRrr == null ? "" : minRrr > 0 ? ` · min ${minRrr}R` : " · target at nearest level"}</span>
+        {!plan.at_level && <span className="text-violet-300">pullback entry</span>}
       </div>
     </div>
   );
@@ -89,7 +89,7 @@ function ModelAdvice({ m }: { m: any }) {
     return (
       <div className="glass-inner mt-3 flex items-center gap-2 px-3 py-1.5 text-[10.5px] text-slate-400">
         <span className="w-16 shrink-0 text-[9.5px] uppercase tracking-[0.12em] text-slate-500">Model</span>
-        <span className="min-w-0 flex-1">not connected yet: the self-trained models run in shadow until they pass their gate · <a href="/#/model" className="text-cyan-300 hover:underline">Model &amp; Learning</a></span>
+        <span className="min-w-0 flex-1">Not connected (shadow) · <a href="/#/model" className="text-cyan-300 hover:underline">Model &amp; Learning</a></span>
       </div>
     );
   }
@@ -101,7 +101,8 @@ function ModelAdvice({ m }: { m: any }) {
     <div className="glass-inner mt-3 px-3 py-2 text-[10.5px]" aria-label="The model's advice to the council">
       <div className="mb-1 flex flex-wrap items-center gap-2">
         <span className="text-[9.5px] uppercase tracking-[0.12em] text-slate-500">Model advice</span>
-        <Badge tone="green">connected · {m.label_set}</Badge>
+        <Hint text={`${m.question ? `Chance ${m.question}. ` : ""}Advisory only; guardrails decide.`} />
+        <Badge tone="green">{m.label_set}</Badge>
         <span className="text-slate-500">{m.model_id}{m.connected_since ? ` · since ${utc(m.connected_since)}` : ""}</span>
       </div>
       {sides.map((x) => {
@@ -110,11 +111,10 @@ function ModelAdvice({ m }: { m: any }) {
           <div key={x.k} className="flex items-center gap-2 py-0.5">
             <span className="w-10 shrink-0 font-semibold text-slate-300">{x.k}</span>
             <span className="mono w-12 shrink-0" style={{ color: d == null ? undefined : d > 0 ? "#34d399" : "#fb7185" }}>{pctOf(x.p)}</span>
-            <span className="min-w-0 flex-1 text-slate-500">vs base {pctOf(x.base)}{d != null ? ` (${d > 0 ? "+" : ""}${Math.round(d * 100)} pts)` : ""}{x.rec?.decisions != null ? ` · record ${x.rec.decisions} decisions, skill ${x.rec.skill ?? "—"}, AUC ${x.rec.auc ?? "—"}` : ""}</span>
+            <span className="min-w-0 flex-1 text-slate-500">vs base {pctOf(x.base)}{d != null ? ` (${d > 0 ? "+" : ""}${Math.round(d * 100)} pts)` : ""}{x.rec?.decisions != null ? ` · n ${x.rec.decisions} · skill ${x.rec.skill ?? "—"} · AUC ${x.rec.auc ?? "—"}` : ""}</span>
           </div>
         );
       })}
-      <p className="mt-1 text-[9.5px] text-slate-600">{m.question ? `Chance ${m.question}. ` : ""}Advice only: the guardrails decide what can trade.</p>
     </div>
   );
 }
@@ -130,7 +130,7 @@ function MarketContext({ c, calendar }: { c: any; calendar?: any }) {
   // learned pre-release window; "after" it leans with the surprise for the learned reaction window.
   const pre = nxt?.pre_release;
   const phase = calendar?.available && calendar?.phase ? ` · witness ${calendar.phase}${calendar.lean != null ? ` ${calendar.lean > 0 ? "+" : ""}${Math.round(calendar.lean * 100)}` : ""}` : "";
-  const preText = pre && nxt ? ` · pre-release window ${pre.horizon_hours ?? nxt.horizon_hours_before}h: drifted the consensus way ${Math.round((pre.hit_rate ?? 0) * 100)}% of ${pre.samples} releases` : "";
+  const preText = pre && nxt ? ` · pre ${pre.horizon_hours ?? nxt.horizon_hours_before}h: consensus drift ${Math.round((pre.hit_rate ?? 0) * 100)}% (n ${pre.samples})` : "";
   const rows = [
     cal && (rel || nxt) && { k: "Calendar", v: rel ? `${rel.title}: actual ${rel.release.actual} vs ${rel.release.forecast ?? "—"} (${rel.release.surprise_z > 0 ? "+" : ""}${rel.release.surprise_z}σ) → gold ${rel.release.gold_direction > 0 ? "up" : rel.release.gold_direction < 0 ? "down" : "neutral"} · horizon ${rel.horizon_hours_after}h${rel.horizon_learned ? " (learned)" : ""}${phase}` : `next: ${nxt.title} ${String(nxt.time).slice(11, 16)} UTC${nxt.status ? ` (${nxt.status})` : ""}${preText}${phase}` },
     s && { k: "Sentiment", v: `${String(s.bias ?? "neutral").toLowerCase()}${s.weighted_lean != null ? ` ${s.weighted_lean > 0 ? "+" : ""}${Math.round(s.weighted_lean * 100)}` : ""} · headlines ▲${s.headlines?.bullish ?? 0} ▼${s.headlines?.bearish ?? 0} ·${s.headlines?.neutral ?? 0}${s.news_tldr ? ` · news ${String(s.news_tldr.stance).toLowerCase()}` : ""}` },
@@ -276,8 +276,9 @@ export default function GlobalDecision() {
   const lead = e ? (e.stance === "SELL" ? "short" : e.stance === "BUY" ? "long" : (e.quorum?.short_share ?? 0) > (e.quorum?.long_share ?? 0) ? "short" : "long") : null;
   return (
     <Panel title={e ? "Decision Engine" : "Global decision"} icon={<Target className="h-3.5 w-3.5 text-cyan-300" />}
+      hint={e ? "Decided at each 15m close within guardrails. Hover a row for details." : "Advisory only, from closed bars. Hover a row for details."}
       right={e ? <div className="flex items-center gap-1.5"><span title="The trading mode this decision was made in"><Badge tone="slate">{e.trading_mode ?? "mode unknown"}</Badge></span><Badge tone={e.source === "council" ? "cyan" : "amber"}>{e.source === "council" ? "AI council" : "fallback"}</Badge></div> : st && <Badge tone={st.tone}>{st.label}</Badge>}>
-      {loading && !g && !e ? <Skeleton rows={5} /> : !g && !e ? <p className="text-[12px] text-slate-500">The decision is not available yet.</p> : (
+      {loading && !g && !e ? <Skeleton rows={5} /> : !g && !e ? <p className="text-[12px] text-slate-500">No decision yet.</p> : (
         <>
           <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
             <div className="flex flex-col">
@@ -354,7 +355,7 @@ export default function GlobalDecision() {
           {e && shown.map((x: any) => <SetupLifecycle key={x.id} setup={x} levels={e.key_levels} />)}
           {e && (
             <div className="glass-inner mt-3 flex flex-wrap items-center gap-2 px-3 py-2 text-[11px] text-slate-300">
-              <span className="eyebrow text-[9px]">Mode for the next decision</span>
+              <span className="eyebrow text-[9px]">Next mode</span>
               {mode == null ? <span className="text-slate-500">loading…</span> : (
                 <select className="rounded border border-white/10 bg-slate-900 px-2 py-1 text-[11px] text-slate-200 disabled:opacity-50" value={mode} disabled={modePinned} onChange={(ev) => { void changeMode(ev.target.value); }} title={modePinned ? "Pinned by the server (TRADING_MODE)" : "Changes the thresholds of the next 15m decision; the owner hears of it on Telegram"}>
                   <option value="scalp">scalp</option>
@@ -362,8 +363,8 @@ export default function GlobalDecision() {
                   <option value="swing">swing</option>
                 </select>
               )}
-              {modePinned && <span className="text-slate-500">pinned by the server</span>}
-              {e.trading_mode && mode && e.trading_mode !== mode && <span className="text-amber-200">this decision: {e.trading_mode}</span>}
+              {modePinned && <span className="text-slate-500">pinned</span>}
+              {e.trading_mode && mode && e.trading_mode !== mode && <span className="text-amber-200">current: {e.trading_mode}</span>}
               {modeError && <span className="text-rose-300">not changed: {modeError}</span>}
             </div>
           )}
@@ -376,17 +377,12 @@ export default function GlobalDecision() {
           )}
           {e?.overruled && (
             <p className="mt-2 rounded-md border border-amber-400/25 bg-amber-400/5 px-2.5 py-1.5 text-[11px] text-amber-200">
-              Guardrail: the council's {e.overruled.wanted} was held back — {(e.overruled.failed ?? []).map((f: any) => f.detail).join("; ")}.
+              Guardrail held back {e.overruled.wanted}: {(e.overruled.failed ?? []).map((f: any) => f.detail).join("; ")}
             </p>
           )}
           {e && (
             <div className="mt-3 space-y-1.5" aria-label="Guardrails">
               <Guardrails side={lead === "short" ? "SELL" : "BUY"} g={lead === "short" ? e.guardrails?.short : e.guardrails?.long} rules={e.rules} />
-              <ul className="mt-1 space-y-0.5 text-[10px] text-slate-500">
-                {(lead === "short" ? e.guardrails?.short?.checks : e.guardrails?.long?.checks ?? []).map((c: any) => (
-                  <li key={c.id}><span className="mono text-slate-400">{c.id}</span>: {c.detail}</li>
-                ))}
-              </ul>
             </div>
           )}
 
@@ -407,13 +403,12 @@ export default function GlobalDecision() {
                 )}
               </div>
             ))}
-            <p className="pt-0.5 text-[9.5px] text-slate-600">{e ? "Witnesses: each room, the news, the macro room and the strategy engine, with its weight in the quorum. Hover a row for its own decision and summary." : "Lean: the confidence-weighted mean of the agents' biases in that room, −100 bearish to +100 bullish. Hover a row for its note."}</p>
           </div>
 
           {e && <ModelAdvice m={e.context?.model ?? null} />}
           {e && <MarketContext c={e.context?.market} calendar={(e.witnesses ?? []).find((w: any) => w.key === "CALENDAR")} />}
 
-          {e?.trade ? (planIsNew ? <PlanLadder plan={tradePlan(e.trade, e.key_levels)} long={e.trade.side === "BUY"} minRrr={e.rules?.min_rrr ?? null} /> : <p className="mt-3 text-[10.5px] text-slate-500">This {e.trade.side} confirms the live setup above; its levels stay as they were locked.</p>) : !e && s?.plan && <PlanLadder plan={s.plan} long={s.direction === "LONG"} minRrr={s.min_rrr ?? 1.5} />}
+          {e?.trade ? (planIsNew ? <PlanLadder plan={tradePlan(e.trade, e.key_levels)} long={e.trade.side === "BUY"} minRrr={e.rules?.min_rrr ?? null} /> : <p className="mt-3 text-[10.5px] text-slate-500">{e.trade.side} confirms the live setup; levels unchanged.</p>) : !e && s?.plan && <PlanLadder plan={s.plan} long={s.direction === "LONG"} minRrr={s.min_rrr ?? 1.5} />}
 
           {e ? !!e.cautions?.length && (
             <ul className="mt-3 space-y-1 text-[11px]">
@@ -426,11 +421,10 @@ export default function GlobalDecision() {
             </ul>
           )}
           <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-            {e?.strategy && st && <><span className="eyebrow text-[9px]">Strategy (witness)</span><Badge tone={st.tone}>{st.label}</Badge></>}
-            {g?.h1_decision && <><span className="eyebrow text-[9px]">{e ? "1H room (witness)" : "H1 chain (reference)"}</span><Stance value={g.h1_decision.decision} /><span className="mono">{pct(g.h1_decision.confidence)}</span>{g.h1_decision.candle_key && <span>· {candleWhen(g.h1_decision.candle_key)}</span>}</>}
+            {e?.strategy && st && <><span className="eyebrow text-[9px]">Strategy</span><Badge tone={st.tone}>{st.label}</Badge></>}
+            {g?.h1_decision && <><span className="eyebrow text-[9px]">{e ? "1H room" : "H1 chain"}</span><Stance value={g.h1_decision.decision} /><span className="mono">{pct(g.h1_decision.confidence)}</span>{g.h1_decision.candle_key && <span>· {candleWhen(g.h1_decision.candle_key)}</span>}</>}
             {cf && <span>· R38 H1 {cf.h1_prophet_r38?.buy_confirmed ? "buy" : cf.h1_prophet_r38?.sell_confirmed ? "sell" : "none"} · 5m {cf.m5_prophet_r38?.buy_confirmed ? "buy" : cf.m5_prophet_r38?.sell_confirmed ? "sell" : "none"}{cf.m5_prophet_r38 && !cf.m5_prophet_r38.verified ? " (unverified)" : ""}</span>}
           </div>
-          <p className="mt-2 text-[9px] uppercase tracking-widest text-slate-600">{e ? "One decision for the EA, Telegram and the ledger · the AI decides inside guardrails · no position size" : "Advisory only · computed from closed bars and every agent's bias · no orders, no position size"}</p>
         </>
       )}
     </Panel>

@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Activity, BookOpenCheck, Brain, Cpu, Database, ScrollText, ShieldAlert, Sparkles, Scale, Sliders, ShieldCheck, Zap } from "lucide-react";
-import { Badge, Empty, Kpi, Panel, Skeleton } from "../components/ui";
+import { Activity, BookOpenCheck, Brain, Cpu, Database, ScrollText, ShieldAlert, Sparkles, Scale, Sliders } from "lucide-react";
+import { Badge, Empty, Hint, Kpi, Panel, Skeleton } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 import { ago } from "../lib/format";
@@ -12,7 +12,7 @@ import { ago } from "../lib/format";
  */
 
 const TIMEFRAMES = ["15", "60", "240", "1D"] as const;
-const TF_LABEL: Record<string, string> = { "15": "15m", "60": "1H", "240": "4H", "1D": "D1", engine: "Decision Engine witnesses" };
+const TF_LABEL: Record<string, string> = { "15": "15m", "60": "1H", "240": "4H", "1D": "D1", engine: "Engine" };
 const pct = (x?: number | null) => (x == null ? "n/a" : `${Math.round(x * 1000) / 10}%`);
 const num = (x?: number | null, d = 2) => (x == null ? "n/a" : x.toFixed(d));
 const short = (s?: string | null, n = 12) => (s ? s.slice(0, n) : "n/a");
@@ -34,7 +34,7 @@ function Weighting({ reports }: { reports: any[] }) {
   const agents = [...(r?.agents || [])].sort((a: any, b: any) => (b.weight ?? 0) - (a.weight ?? 0));
   const weightMax = Math.max(1, ...agents.map((a: any) => a.weight ?? 0));
   return (
-    <Panel title="Room quorum weighting" icon={<Scale className="h-3.5 w-3.5" />} right={<Badge tone="purple">auto-tuned per timeframe · audited</Badge>}>
+    <Panel title="Room weighting" icon={<Scale className="h-3.5 w-3.5" />}>
       <div className="mb-3 flex flex-wrap gap-2" role="tablist">
         {TIMEFRAMES.map((k) => (
           <button key={k} role="tab" aria-selected={tf === k} onClick={() => setTf(k)}
@@ -43,7 +43,7 @@ function Weighting({ reports }: { reports: any[] }) {
           </button>
         ))}
       </div>
-      {!r ? <Empty>No weighting report for {TF_LABEL[tf]} yet. xauusd sends one when its replay changes.</Empty> : (
+      {!r ? <Empty>No report for {TF_LABEL[tf]} yet.</Empty> : (
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="space-y-3">
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
@@ -54,7 +54,7 @@ function Weighting({ reports }: { reports: any[] }) {
               <dt className="text-slate-500">Report</dt><dd className="mono">{r.received_at ? ago(r.received_at) : "n/a"}</dd>
             </dl>
             <div>
-              <div className="label">Regimes of the replayed rooms</div>
+              <div className="label">Regimes</div>
               {regimes.length ? regimes.map(([name, n]) => (
                 <div key={name} className="grid grid-cols-[130px_1fr_44px] items-center gap-2 py-0.5 text-[11px]">
                   <span className="mono text-slate-400">{name}</span><Bar value={n} max={regimeMax} tone="bg-violet-400/70" /><span className="mono text-right text-slate-300">{n}</span>
@@ -62,7 +62,7 @@ function Weighting({ reports }: { reports: any[] }) {
               )) : <Empty>No regime yet.</Empty>}
             </div>
             <div>
-              <div className="label">Agent weights (own record on this timeframe)</div>
+              <div className="label">Agent weights</div>
               {agents.length ? agents.map((a: any) => (
                 <div key={a.agent} className="grid grid-cols-[130px_1fr_44px_60px] items-center gap-2 py-0.5 text-[11px]">
                   <span className="mono truncate text-slate-400" title={a.agent}>{a.agent}</span>
@@ -70,7 +70,7 @@ function Weighting({ reports }: { reports: any[] }) {
                   <span className="mono text-right text-slate-200">{num(a.weight)}</span>
                   <span className="mono text-right text-slate-500">{pct(a.accuracy)}</span>
                 </div>
-              )) : <Empty>No agent has a scored call yet.</Empty>}
+              )) : <Empty>No scored calls yet.</Empty>}
             </div>
           </div>
           <div className="space-y-3">
@@ -87,14 +87,14 @@ function Weighting({ reports }: { reports: any[] }) {
                       <td className="mono">{c.holdout ? `${pct(c.holdout.accuracy)} vs ${pct(c.holdout.control_accuracy)}${c.holdout.complete ? "" : " · open"}` : "n/a"}</td>
                     </tr>
                   ))}
-                  {!(r.candidates || []).length && <tr><td colSpan={5} className="text-slate-500">No candidate replayed yet.</td></tr>}
+                  {!(r.candidates || []).length && <tr><td colSpan={5} className="text-slate-500">No candidates yet.</td></tr>}
                 </tbody>
               </table>
             </div>
             <div className="glass-inner p-3 text-[12px]">
-              <div className="label">Reverse shadow (rollback check)</div>
-              {r.reverse ? <p className="text-slate-300">Previous <span className="mono">{r.reverse.previous_id}</span> against the active point on {r.reverse.rooms} rooms since {r.reverse.since ? ago(r.reverse.since) : "n/a"}: {pct(r.reverse.previous_accuracy)} vs {pct(r.reverse.active_accuracy)}, p {r.reverse.p_value ?? "n/a"}. A rollback needs 100 rooms and p &lt; 0.05.</p>
-                : <p className="text-slate-500">No activation yet, so nothing to roll back.</p>}
+              <div className="label flex items-center gap-1.5">Rollback check <Hint text="Rollback needs 100 rooms and p < 0.05." /></div>
+              {r.reverse ? <p className="text-slate-300">Previous <span className="mono">{r.reverse.previous_id}</span> vs active: {pct(r.reverse.previous_accuracy)} vs {pct(r.reverse.active_accuracy)}, p {r.reverse.p_value ?? "n/a"} · {r.reverse.rooms} rooms since {r.reverse.since ? ago(r.reverse.since) : "n/a"}</p>
+                : <p className="text-slate-500">No activation yet.</p>}
             </div>
             <div>
               <div className="label">History</div>
@@ -104,7 +104,7 @@ function Weighting({ reports }: { reports: any[] }) {
                   <span className="mono text-slate-300">{h.id ?? ""}</span><span className="text-slate-500">{h.at ? ago(h.at) : ""}</span>
                   {h.reason && <span className="text-slate-500">· {String(h.reason).slice(0, 120)}</span>}
                 </div>
-              )) : <Empty>No activation or rollback yet.</Empty>}
+              )) : <Empty>No history yet.</Empty>}
             </div>
           </div>
         </div>
@@ -115,8 +115,8 @@ function Weighting({ reports }: { reports: any[] }) {
 
 // The B-11 starting set is read from the AI Worker (GET /api/weighting/engine default_weights; owner 2026-11-13:
 // the page no longer keeps its own copy).
-const WITNESS_LABEL: Record<string, string> = { D1: "Daily room", H4: "4H room", H1: "1H room", M15: "15m room", NEWS: "News Daily", MACRO: "Macro room", STRATEGY: "Strategy", KEY_LEVELS: "Key levels", REGIME: "Regime", TREND_TF: "Trend TF", MACRO_DRIVERS: "Macro drivers", SESSION: "Session", CALENDAR: "Calendar (release horizon)" };
-const SOURCE_TEXT: Record<string, string> = { auto_tuned: "auto-tuned set", default: "B-11 default", base: "base set (weighting off)" };
+const WITNESS_LABEL: Record<string, string> = { D1: "Daily room", H4: "4H room", H1: "1H room", M15: "15m room", NEWS: "News", MACRO: "Macro room", STRATEGY: "Strategy", KEY_LEVELS: "Key levels", REGIME: "Regime", TREND_TF: "Trend TF", MACRO_DRIVERS: "Macro drivers", SESSION: "Session", CALENDAR: "Calendar" };
+const SOURCE_TEXT: Record<string, string> = { auto_tuned: "Auto-tuned", default: "Default", base: "Base (weighting off)" };
 
 /**
  * The Decision Engine's witness weights (owner 2026-11-11: "harusnya bobot itu dinamis sesuai dengan auto
@@ -130,20 +130,20 @@ function WitnessWeights({ reports, reference }: { reports: any[]; reference: Rec
   const max = Math.max(0.28, ...keys.map((k) => active[k] ?? 0));
   const best = [...(r?.candidates || [])].sort((a: any, b: any) => ((b.discovery?.bars ?? 0) + (b.holdout?.bars ?? 0)) - ((a.discovery?.bars ?? 0) + (a.holdout?.bars ?? 0)))[0];
   return (
-    <Panel title="Decision Engine witness weights" icon={<Scale className="h-3.5 w-3.5" />} right={<Badge tone="purple">auto-tuned · audited</Badge>}>
-      {!r ? <Empty>No witness-weighting report yet. xauusd sends one each hour, in the first sweep after the 1H close.</Empty> : (
+    <Panel title="Witness weights" icon={<Scale className="h-3.5 w-3.5" />} hint="Decision Engine witness weights, reported hourly after the 1H close.">
+      {!r ? <Empty>No report yet.</Empty> : (
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="space-y-3">
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
-              <dt className="text-slate-500">In force</dt><dd className="mono text-slate-200">{SOURCE_TEXT[r.active?.source] ?? r.active?.source ?? "n/a"} <span className="text-slate-500">{r.active?.id ?? ""}</span></dd>
+              <dt className="text-slate-500">Active</dt><dd className="mono text-slate-200">{SOURCE_TEXT[r.active?.source] ?? r.active?.source ?? "n/a"} <span className="text-slate-500">{r.active?.id ?? ""}</span></dd>
               <dt className="text-slate-500">Change</dt><dd className="text-slate-300">{r.active?.change ?? "n/a"}</dd>
-              <dt className="text-slate-500">Activated</dt><dd className="mono">{r.active?.activated_at ? ago(r.active.activated_at) : "never (B-11)"}</dd>
-              <dt className="text-slate-500">Decisions replayed</dt><dd className="mono">{r.rooms} {r.window_days ? `(${r.window_days} days)` : ""} · scored {r.control?.scored_rooms ?? "n/a"} · right {pct(r.control?.accuracy)}</dd>
-              <dt className="text-slate-500">Replay fidelity</dt><dd className="mono">{r.replay_fidelity?.checks ? `${pct(r.replay_fidelity.share)} of ${r.replay_fidelity.checks} quorum checks match the record` : "n/a"}</dd>
+              <dt className="text-slate-500">Activated</dt><dd className="mono">{r.active?.activated_at ? ago(r.active.activated_at) : "never (default)"}</dd>
+              <dt className="text-slate-500">Replayed</dt><dd className="mono">{r.rooms} {r.window_days ? `(${r.window_days} days)` : ""} · scored {r.control?.scored_rooms ?? "n/a"} · accuracy {pct(r.control?.accuracy)}</dd>
+              <dt className="text-slate-500">Fidelity</dt><dd className="mono">{r.replay_fidelity?.checks ? `${pct(r.replay_fidelity.share)} of ${r.replay_fidelity.checks} checks match` : "n/a"}</dd>
               <dt className="text-slate-500">Report</dt><dd className="mono">{r.received_at ? ago(r.received_at) : "n/a"}</dd>
             </dl>
             <div>
-              <div className="label">Weights in force (bar) against B-11 (marker)</div>
+              <div className="label flex items-center gap-1.5">Weights vs default <Hint text="Bar: active weight. Marker: default weight." /></div>
               {keys.map((k) => {
                 const w = active[k];
                 const d = w == null || B11[k] == null ? null : w - B11[k];
@@ -152,7 +152,7 @@ function WitnessWeights({ reports, reference }: { reports: any[]; reference: Rec
                     <span className="truncate text-slate-400">{WITNESS_LABEL[k]}</span>
                     <div className="relative h-1.5 w-full rounded-full bg-white/5">
                       <div className="h-1.5 rounded-full bg-cyan-400/70" style={{ width: `${w == null ? 0 : Math.max(2, Math.round((w / max) * 100))}%` }} />
-                      <div className="absolute -top-0.5 h-2.5 w-px bg-amber-300/80" style={{ left: `${Math.round((B11[k] / max) * 100)}%` }} title={`B-11 ${pct(B11[k])}`} />
+                      <div className="absolute -top-0.5 h-2.5 w-px bg-amber-300/80" style={{ left: `${Math.round((B11[k] / max) * 100)}%` }} title={`Default ${pct(B11[k])}`} />
                     </div>
                     <span className="mono text-right text-slate-200">{pct(w)}</span>
                     <span className={`mono text-right ${d == null || Math.abs(d) < 0.0005 ? "text-slate-500" : d > 0 ? "text-emerald-300" : "text-rose-300"}`}>{d == null ? "n/a" : Math.abs(d) < 0.0005 ? "=" : `${d > 0 ? "+" : ""}${Math.round(d * 1000) / 10}pp`}</span>
@@ -162,8 +162,8 @@ function WitnessWeights({ reports, reference }: { reports: any[]; reference: Rec
             </div>
             {best && (
               <div className="glass-inner p-3 text-[12px]">
-                <div className="label">Closest to a verdict</div>
-                <p className="text-slate-300">{best.change ?? best.changed}: discovery {best.discovery?.bars ?? 0} of 200 decisions, holdout {best.holdout?.bars ?? 0} of {best.holdout?.required_bars ?? 100}.</p>
+                <div className="label">Leading candidate</div>
+                <p className="text-slate-300">{best.change ?? best.changed}: discovery {best.discovery?.bars ?? 0}/200, holdout {best.holdout?.bars ?? 0}/{best.holdout?.required_bars ?? 100}</p>
                 <div className="mt-1"><Bar value={Math.min(200, best.discovery?.bars ?? 0)} max={200} /></div>
               </div>
             )}
@@ -182,14 +182,14 @@ function WitnessWeights({ reports, reference }: { reports: any[]; reference: Rec
                       <td className="mono">{c.holdout ? `${pct(c.holdout.accuracy)} vs ${pct(c.holdout.control_accuracy)}${c.holdout.complete ? "" : " · open"}` : "n/a"}</td>
                     </tr>
                   ))}
-                  {!(r.candidates || []).length && <tr><td colSpan={5} className="text-slate-500">No candidate replayed yet.</td></tr>}
+                  {!(r.candidates || []).length && <tr><td colSpan={5} className="text-slate-500">No candidates yet.</td></tr>}
                 </tbody>
               </table>
             </div>
             <div className="glass-inner p-3 text-[12px]">
-              <div className="label">Reverse shadow (rollback check)</div>
-              {r.reverse ? <p className="text-slate-300">Previous <span className="mono">{r.reverse.previous_id}</span> against the weights in force on {r.reverse.rooms} decisions since {r.reverse.since ? ago(r.reverse.since) : "n/a"}: {pct(r.reverse.previous_accuracy)} vs {pct(r.reverse.active_accuracy)}, p {r.reverse.p_value ?? "n/a"}. A rollback needs 100 decisions and p &lt; 0.05.</p>
-                : <p className="text-slate-500">No activation yet, so nothing to roll back.</p>}
+              <div className="label flex items-center gap-1.5">Rollback check <Hint text="Rollback needs 100 decisions and p < 0.05." /></div>
+              {r.reverse ? <p className="text-slate-300">Previous <span className="mono">{r.reverse.previous_id}</span> vs active: {pct(r.reverse.previous_accuracy)} vs {pct(r.reverse.active_accuracy)}, p {r.reverse.p_value ?? "n/a"} · {r.reverse.rooms} decisions since {r.reverse.since ? ago(r.reverse.since) : "n/a"}</p>
+                : <p className="text-slate-500">No activation yet.</p>}
             </div>
             <div>
               <div className="label">History</div>
@@ -199,7 +199,7 @@ function WitnessWeights({ reports, reference }: { reports: any[]; reference: Rec
                   <span className="mono text-slate-300">{h.id ?? ""}</span><span className="text-slate-500">{h.at ? ago(h.at) : ""}</span>
                   {h.reason && <span className="text-slate-500">· {String(h.reason).slice(0, 120)}</span>}
                 </div>
-              )) : <Empty>No activation or rollback yet.</Empty>}
+              )) : <Empty>No history yet.</Empty>}
             </div>
           </div>
         </div>
@@ -211,9 +211,8 @@ function WitnessWeights({ reports, reference }: { reports: any[]; reference: Rec
 function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { quorum_min: number | null; mode: string | null } | null }) {
   if (!analytics) {
     return (
-      <Panel title="Nexus Analytics · Intelligent Quorum Weighting Engine" icon={<Sliders className="h-3.5 w-3.5" />}
-        right={<Badge tone="amber">Awaiting Telemetry</Badge>}>
-        <Empty>Loading real-time Nexus Analytics & Quorum Weighting bridge telemetry...</Empty>
+      <Panel title="Execution analytics" icon={<Sliders className="h-3.5 w-3.5" />}>
+        <Empty>No data yet.</Empty>
       </Panel>
     );
   }
@@ -230,72 +229,70 @@ function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { q
 
   return (
     <Panel
-      title="Nexus Analytics · Intelligent Quorum Weighting Engine"
+      title="Execution analytics"
       icon={<Sliders className="h-3.5 w-3.5" />}
+      hint="Recommends a quorum floor from execution friction and volatility. Recorded with each quorum, not applied."
       right={
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge tone={fidelity == null ? "slate" : fidelity >= 80 ? "green" : "amber"}>
             Fidelity {fidelity != null ? `${fidelity}%` : "no sample"}
           </Badge>
           <Badge tone="slate">
-            Guardrail quorum {guard?.quorum_min != null ? `> ${pct(guard.quorum_min)} (${guard.mode})` : "—"}
+            Quorum {guard?.quorum_min != null ? `> ${pct(guard.quorum_min)} (${guard.mode})` : "—"}
           </Badge>
         </div>
       }
     >
-      <p className="mb-3 text-[12px] leading-relaxed text-slate-400">
-        All 4 pillars of Nexus Analytics (Execution Disparity, Scorecards/Reputation, Shadow Proofs, and Market Volatility Regime) are synthesized into Intelligent Aether to dynamically adapt the quorum consensus threshold (<span className="mono text-cyan-300">share_needed_above</span>) and discount or disqualify compromised agents. Strictly compliant with Aether leak checks (zero absolute prices, orders, or sizes).
-      </p>
 
       {/* 4 Pillars Summary Grid */}
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div className="glass-inner p-3">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
-            <span>Execution Fidelity</span>
+            <span>Fidelity</span>
             <Badge tone={frictionSurcharge > 0 ? "amber" : "green"}>
-              {frictionSurcharge > 0 ? `+${pct(frictionSurcharge)} friction` : "Optimal"}
+              {frictionSurcharge > 0 ? `+${pct(frictionSurcharge)} friction` : "OK"}
             </Badge>
           </div>
           <div className="mono mt-1 text-[20px] font-bold text-slate-200">{fidelity != null ? `${fidelity}%` : "—"}</div>
           <div className="mono mt-1 text-[11px] text-slate-500">
-            Slippage: {num(disparity?.avg_slippage_points, 1)} pts (max {num(disparity?.max_slippage_points, 1)}) · Spread: {disparity?.live_spread_points != null ? `${disparity.live_spread_points} pts` : "—"} · Latency: {disparity?.avg_latency_ms != null ? `${disparity.avg_latency_ms} ms` : "—"}
+            Slip {num(disparity?.avg_slippage_points, 1)} pts (max {num(disparity?.max_slippage_points, 1)}) · Spread {disparity?.live_spread_points != null ? `${disparity.live_spread_points} pts` : "—"} · Latency {disparity?.avg_latency_ms != null ? `${disparity.avg_latency_ms} ms` : "—"}
           </div>
         </div>
 
         <div className="glass-inner p-3">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
-            <span>Agent Reputation</span>
+            <span>Agent accuracy</span>
             <Badge tone={disqualified.length > 0 ? "red" : "green"}>
-              {disqualified.length > 0 ? `${disqualified.length} Disqualified` : "Active"}
+              {disqualified.length > 0 ? `${disqualified.length} disqualified` : "OK"}
             </Badge>
           </div>
           <div className="mono mt-1 text-[20px] font-bold text-slate-200">{pct(scorecards?.avg_accuracy)}</div>
           <div className="mono mt-1 text-[11px] text-slate-500">
-            Calibration Brier: {num(scorecards?.avg_brier, 3)} · {scorecards?.agent_count ?? 0} scored agents · Violations: {scorecards?.compliance_violation_rate ?? 0}/100
+            Brier {num(scorecards?.avg_brier, 3)} · {scorecards?.agent_count ?? 0} agents · {scorecards?.compliance_violation_rate ?? 0}/100 breaks
           </div>
         </div>
 
         <div className="glass-inner p-3">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
-            <span>Recommended quorum floor (not applied)</span>
+            <span>Recommended floor</span>
             <Badge tone={effectiveQuorum != null && baseQuorum != null && effectiveQuorum > baseQuorum ? "amber" : "cyan"}>
-              +{pct(frictionSurcharge + volSurcharge)} Surcharge
+              +{pct(frictionSurcharge + volSurcharge)}
             </Badge>
           </div>
           <div className="mono mt-1 text-[20px] font-bold text-cyan-300">{pct(effectiveQuorum)}</div>
           <div className="mono mt-1 text-[11px] text-slate-500">
-            Base: {pct(baseQuorum)} · Friction: +{pct(frictionSurcharge)} · Volatility: +{pct(volSurcharge)}
+            Base {pct(baseQuorum)} · Friction +{pct(frictionSurcharge)} · Vol +{pct(volSurcharge)}
           </div>
         </div>
 
         <div className="glass-inner p-3">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
-            <span>Shadow & Regime Guard</span>
+            <span>Shadow & regime</span>
             <Badge tone="purple">{regime?.regime ?? "normal"}</Badge>
           </div>
-          <div className="mono mt-1 text-[20px] font-bold text-violet-300">{shadow?.promotion_ready ?? 0} Promotable</div>
+          <div className="mono mt-1 text-[20px] font-bold text-violet-300">{shadow?.promotion_ready ?? 0} ready</div>
           <div className="mono mt-1 text-[11px] text-slate-500">
-            {shadow?.candidate_arms ?? 0} candidate arms · A/A baseline noise: {pct(shadow?.aa_noise_baseline_rate)}
+            {shadow?.candidate_arms ?? 0} candidates · A/A noise {pct(shadow?.aa_noise_baseline_rate)}
           </div>
         </div>
       </div>
@@ -303,57 +300,51 @@ function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { q
       {/* Two Column Details: Quorum Adaptation Equation + Agent Penalties */}
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="glass-inner p-3 text-[12px]">
-          <div className="label mb-1">Quorum Consensus Dynamic Formula</div>
-          <p className="text-slate-300 mb-2">
-            The guardrail in force is the trading mode's quorum: more than <span className="mono text-cyan-300 font-semibold">{guard?.quorum_min != null ? pct(guard.quorum_min) : "—"}</span> of the witnesses' weight{guard?.mode ? ` (${guard.mode})` : ""}. The analytics below only <b>recommend</b> a floor from execution friction and volatility; it is recorded with each quorum but does not gate a decision:
-          </p>
+          <div className="label mb-1">Quorum floor</div>
           <div className="space-y-1.5 mono text-[11px]">
             <div className="flex justify-between py-1 border-b border-white/5">
-              <span className="text-slate-400">Base Quorum Consensus Floor</span>
+              <span className="text-slate-400">Base floor</span>
               <span className="text-slate-200">{pct(baseQuorum)}</span>
             </div>
             <div className="flex justify-between py-1 border-b border-white/5">
-              <span className="text-slate-400">+ Broker Execution Friction Surcharge</span>
+              <span className="text-slate-400">+ Execution friction</span>
               <span className={frictionSurcharge > 0 ? "text-amber-300 font-semibold" : "text-slate-400"}>+{pct(frictionSurcharge)}</span>
             </div>
             <div className="flex justify-between py-1 border-b border-white/5">
-              <span className="text-slate-400">+ Market Regime Volatility Surcharge</span>
+              <span className="text-slate-400">+ Volatility</span>
               <span className={volSurcharge > 0 ? "text-amber-300 font-semibold" : "text-slate-400"}>+{pct(volSurcharge)}</span>
             </div>
             <div className="flex justify-between py-1 font-bold text-cyan-300">
-              <span>= Recommended floor (not applied)</span>
+              <span>= Recommended (not applied)</span>
               <span>{pct(effectiveQuorum)}</span>
             </div>
           </div>
         </div>
 
         <div className="glass-inner p-3 text-[12px]">
-          <div className="label mb-1">Agent Voting Discounts & Disqualifications</div>
-          <p className="text-slate-300 mb-2">
-            Agents in stuck states or with recurring compliance rule breaks suffer automatic voting discounts or outright disqualification in council quorums:
-          </p>
+          <div className="label mb-1">Vote discounts</div>
           {discounts.length > 0 || disqualified.length > 0 ? (
             <div className="space-y-1 mono text-[11px]">
               {disqualified.map((a: string) => (
                 <div key={a} className="flex items-center justify-between py-1 px-2 rounded bg-rose-500/10 border border-rose-500/20 text-rose-300">
                   <span className="font-semibold">{a}</span>
-                  <Badge tone="red">DISQUALIFIED (Stuck State · 0% Weight)</Badge>
+                  <Badge tone="red">DISQUALIFIED</Badge>
                 </div>
               ))}
               {discounts.filter(([a]) => !disqualified.includes(a)).map(([agent, mult]: [string, any]) => (
                 <div key={agent} className="flex items-center justify-between py-1 px-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-200">
                   <span>{agent}</span>
-                  <Badge tone="amber">Weight Multiplier: {mult}x (Rule Breaker)</Badge>
+                  <Badge tone="amber">{mult}x weight</Badge>
                 </div>
               ))}
             </div>
           ) : (
             <div className="rounded border border-emerald-500/20 bg-emerald-500/10 p-2 text-emerald-300">
-              ✓ All agents in full compliance. Zero stuck states detected. Full voting weights active.
+              All agents at full weight.
             </div>
           )}
           <div className="mt-3 text-[11px] text-slate-500">
-            SL+ locked status: <span className="mono text-slate-300">{disparity?.sl_plus_protection_active ? "Protected" : "Standard"}</span> · Telemetry updated {ago(analytics.measured_at)}.
+            SL+ lock: <span className="mono text-slate-300">{disparity?.sl_plus_protection_active ? "Protected" : "Standard"}</span> · Updated {ago(analytics.measured_at)}
           </div>
         </div>
       </div>
@@ -362,10 +353,10 @@ function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { q
 }
 
 const CHECK_LABEL: Record<string, string> = {
-  reachable: "Aether reachable from the AI Worker", kb_match: "KB v4 hash: xauusd = Aether canon", local_push: "AI Worker pushes decision cards",
-  ingest: "Aether receives decision cards", canon_index: "Canon indexed in Vectorize", embed_backlog: "Card embedding backlog", ai_budget: "Aether AI budget"
+  reachable: "Aether reachable", kb_match: "KB hash match", local_push: "Card push",
+  ingest: "Card ingest", canon_index: "Canon index", embed_backlog: "Embedding backlog", ai_budget: "AI budget"
 };
-const checkLabel = (k: string) => CHECK_LABEL[k] ?? CHECK_LABEL[k.replace(/^aether_/, "")] ?? (k.replace(/^aether_/, "").startsWith("weighting_") ? `Weighting report ${TF_LABEL[k.replace(/^(aether_)?weighting_/, "")] ?? k}` : k);
+const checkLabel = (k: string) => CHECK_LABEL[k] ?? CHECK_LABEL[k.replace(/^aether_/, "")] ?? (k.replace(/^aether_/, "").startsWith("weighting_") ? `Weighting ${TF_LABEL[k.replace(/^(aether_)?weighting_/, "")] ?? k}` : k);
 const checkTone = (s?: string): "green" | "amber" | "slate" => (s === "ok" ? "green" : s === "warn" ? "amber" : "slate");
 
 /** End-to-end sync (hardening 2026-11-09): Aether's own checks plus the AI Worker's (KB match, push, reachability). */
@@ -376,7 +367,7 @@ function Sync({ aether, worker }: { aether: any; worker: any }) {
   ];
   const warn = rows.some(([, c]) => c?.status === "warn");
   return (
-    <Panel title="End-to-end sync · xauusd → Aether → Nexus" icon={<Activity className="h-3.5 w-3.5" />}
+    <Panel title="Sync status" icon={<Activity className="h-3.5 w-3.5" />} hint={`Checked every 15 minutes; a warning raises a Priority Queue alert. "idle" means the market was closed.`}
       right={<Badge tone={warn ? "amber" : "green"}>{warn ? "attention" : "in sync"}{aether?.market_open === false ? " · market closed" : ""}</Badge>}>
       {!rows.length ? <Empty>No sync status yet.</Empty> : (
         <div className="table-wrap">
@@ -403,7 +394,6 @@ function Sync({ aether, worker }: { aether: any; worker: any }) {
           </table>
         </div>
       )}
-      <p className="mt-2 text-[11px] text-slate-500">Checked every 15 minutes by the AI Worker's health alerts; a warning opens an alert in the Priority Queue. "idle": the market was closed during the check's window.</p>
     </Panel>
   );
 }
@@ -411,7 +401,7 @@ function Sync({ aether, worker }: { aether: any; worker: any }) {
 function Guardian({ g }: { g: any }) {
   const rows = g?.findings || [];
   return (
-    <Panel title="Guardian · agent compliance (24 h)" icon={<ShieldAlert className="h-3.5 w-3.5" />} right={<Badge tone="slate">{g?.cards ?? 0} room conclusions · warn at {g?.threshold_per_100 ?? 20}/100</Badge>}>
+    <Panel title="Agent compliance, 24h" icon={<ShieldAlert className="h-3.5 w-3.5" />} right={<Badge tone="slate">{g?.cards ?? 0} cards · warn ≥ {g?.threshold_per_100 ?? 20}/100</Badge>}>
       {rows.length ? (
         <div className="table-wrap">
           <table className="tbl">
@@ -426,7 +416,7 @@ function Guardian({ g }: { g: any }) {
             </tbody>
           </table>
         </div>
-      ) : <Empty>No rule break in the last 24 hours.</Empty>}
+      ) : <Empty>No rule breaks in 24h.</Empty>}
     </Panel>
   );
 }
@@ -434,9 +424,8 @@ function Guardian({ g }: { g: any }) {
 function Knowledge({ k }: { k: any }) {
   const counts = Object.entries(k?.counts || {});
   return (
-    <Panel title="Knowledge proposals (curator · calibrator)" icon={<Sparkles className="h-3.5 w-3.5" />}
+    <Panel title="Knowledge proposals" icon={<Sparkles className="h-3.5 w-3.5" />} hint="Reviewed in the Console. Approved items are used for shadow testing only."
       right={<div className="flex flex-wrap gap-1.5">{counts.map(([s, n]) => <Badge key={s} tone={statusTone(s)}>{s} {String(n)}</Badge>)}</div>}>
-      <p className="mb-2 text-[12px] text-slate-400">Learned, never canon. A person approves or rejects each proposal in the Console's Knowledge page; an approved item is used for shadow testing only.</p>
       {(k?.items || []).length ? (
         <div className="space-y-2">
           {k.items.map((it: any) => (
@@ -450,7 +439,7 @@ function Knowledge({ k }: { k: any }) {
             </div>
           ))}
         </div>
-      ) : <Empty>No proposal yet.</Empty>}
+      ) : <Empty>No proposals yet.</Empty>}
     </Panel>
   );
 }
@@ -464,13 +453,13 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
 
   return (
     <Panel
-      title="Canon · Knowledge Council & Doctrine"
+      title="Canon & doctrine"
       icon={<ScrollText className="h-3.5 w-3.5" />}
       right={
         <div className="flex items-center gap-1.5">
           {council?.mode && (
             <Badge tone={council.mode === "propose" ? "green" : "amber"}>
-              Council: {council.mode}
+              council {council.mode}
             </Badge>
           )}
           {council?.schedule_utc && (
@@ -480,46 +469,42 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
         </div>
       }
     >
-      <p className="mb-3 text-[12px] text-slate-400">
-        Autonomous Doctrine Protocol: Knowledge Council evaluates measured system facts against doctrine daily, proposing drifts to Cerebrum Consensus for execution. Effective doctrine is synced hourly to Aether and consumed dynamically by Trading Agents.
-      </p>
 
       {/* Council & Seats Status Card */}
       <div className="mb-4 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
         <div className="glass-inner p-2.5 text-[12px]">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Knowledge Council</span>
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Council</span>
           <div className="mt-1 flex items-center justify-between">
             <span className="mono text-cyan-300">{council?.agent ?? "knowledge-council"}</span>
-            <Badge tone="green">daily 03:52 UTC</Badge>
           </div>
           <p className="mt-1 text-[11px] text-slate-400">
-            {session ? `Last session: ${ago(session.held_at)} · ${session.review?.length ?? 0} reviewed · ${session.proposals?.length ?? 0} proposed` : "Next scheduled session: 03:52 UTC"}
+            {session ? `Last session ${ago(session.held_at)} · ${session.review?.length ?? 0} reviewed · ${session.proposals?.length ?? 0} proposed` : "No session yet."}
           </p>
         </div>
 
         <div className="glass-inner p-2.5 text-[12px]">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Nexus Seat (Decisions)</span>
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Nexus seat</span>
           <div className="mt-1 flex items-center justify-between">
-            <span className="text-slate-300">Measured facts</span>
+            <span className="text-slate-300">Decisions</span>
             <Badge tone={facts?.seats?.nexus ? "green" : "slate"}>
-              {facts?.seats?.nexus ? `${facts.seats.nexus.facts} facts` : "reporting"}
+              {facts?.seats?.nexus ? `${facts.seats.nexus.facts} facts` : "no data"}
             </Badge>
           </div>
           <p className="mt-1 text-[11px] text-slate-400">
-            {facts?.measured_at ? `Freshness: ${ago(facts.measured_at)} · version: ${short(facts.seats?.nexus?.version_id, 8)}` : "Hourly sweep reporting active"}
+            {facts?.measured_at ? `Updated ${ago(facts.measured_at)} · ${short(facts.seats?.nexus?.version_id, 8)}` : "No data yet."}
           </p>
         </div>
 
         <div className="glass-inner p-2.5 text-[12px]">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Omega Seat (Execution)</span>
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Omega seat</span>
           <div className="mt-1 flex items-center justify-between">
-            <span className="text-slate-300">Broker & gates</span>
+            <span className="text-slate-300">Execution</span>
             <Badge tone={facts?.seats?.omega ? "green" : "slate"}>
-              {facts?.seats?.omega ? `${facts.seats.omega.facts} facts` : "reporting"}
+              {facts?.seats?.omega ? `${facts.seats.omega.facts} facts` : "no data"}
             </Badge>
           </div>
           <p className="mt-1 text-[11px] text-slate-400">
-            {facts?.measured_at ? `Freshness: ${ago(facts.measured_at)} · version: ${short(facts.seats?.omega?.version_id, 8)}` : "Hourly sweep reporting active"}
+            {facts?.measured_at ? `Updated ${ago(facts.measured_at)} · ${short(facts.seats?.omega?.version_id, 8)}` : "No data yet."}
           </p>
         </div>
       </div>
@@ -528,10 +513,10 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
       <div className="mb-4">
         <div className="mb-1.5 flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-            Cerebrum Executed Amendments ({applied.length})
+            Amendments ({applied.length})
           </span>
           {applied.length === 0 && (
-            <span className="text-[11px] text-slate-500">Doctrine in force matches Canon baseline</span>
+            <span className="text-[11px] text-slate-500">Matches canon</span>
           )}
         </div>
         {applied.length > 0 ? (
@@ -552,7 +537,7 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
           </div>
         ) : (
           <div className="glass-inner p-2.5 text-[11px] text-slate-400">
-            No amendments executed yet. The 20 baseline rules of Canon v2 are active with zero drift rejections.
+            No amendments yet.
           </div>
         )}
       </div>
@@ -560,9 +545,8 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
       {/* Active Doctrine Rules List */}
       <div className="mb-1.5 flex items-center justify-between">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-          Doctrine Rules in Force ({rules.length})
+          Rules in force ({rules.length})
         </span>
-        <span className="text-[11px] text-slate-500">Live feed for Decision Council & Agents</span>
       </div>
       <ol className="max-h-[480px] space-y-1.5 overflow-y-auto text-[12px] pr-1">
         {rules.map((r: any) => (
@@ -575,7 +559,7 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
                 </Badge>
                 {r.amended && (
                   <Badge tone="green">
-                    Amended by Cerebrum: {r.amended.amendment_id}
+                    Amended: {r.amended.amendment_id}
                   </Badge>
                 )}
               </div>
@@ -600,8 +584,8 @@ export default function Aether() {
   const o = data as any;
   if (!o) return (
     <div className="space-y-4">
-      <Panel title="Aether · Knowledge Guardian" icon={<Brain className="h-3.5 w-3.5" />}>
-        {loading && !error ? <Skeleton rows={4} /> : <Empty>Aether is unavailable ({error ?? "no answer"}).</Empty>}
+      <Panel title="Aether" icon={<Brain className="h-3.5 w-3.5" />}>
+        {loading && !error ? <Skeleton rows={4} /> : <Empty>Aether unavailable ({error ?? "no answer"}).</Empty>}
       </Panel>
     </div>
   );
@@ -610,14 +594,15 @@ export default function Aether() {
   const ai = o.ai || {};
   return (
     <div className="space-y-4">
-      <Panel title="Aether · Knowledge Guardian" icon={<Brain className="h-3.5 w-3.5" />} right={<Badge tone="purple">advisory only · read-only view</Badge>}>
-        <p className="text-[12px] leading-relaxed text-slate-400">Aether keeps the canon, stores every room's decision card, audits agent compliance, proposes learned knowledge for shadow testing and audits the automatic room and witness weighting. It never changes a decision and never holds a price. Updated {ago(o.generated_at)}.</p>
+      <Panel title="Aether" icon={<Brain className="h-3.5 w-3.5" />} hint="Knowledge guardian: keeps the canon, stores decision cards, audits compliance and weighting. Never changes a decision."
+        right={<Badge tone="slate">updated {ago(o.generated_at)}</Badge>}>
+        {null}
       </Panel>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi label="Decision cards" value={String(totalCards)} sub={charts.map(([k, v]) => `${TF_LABEL[k] ?? k} ${v.cards}`).join(" · ") || "none yet"} color="#39d0d8" icon={<Database className="h-3 w-3" />} />
-        <Kpi label="Ingested 24 h" value={String(o.ingest?.last_24h?.accepted ?? 0)} sub={`${o.ingest?.last_24h?.rejected ?? 0} refused · ${o.ingest?.last_24h?.calls ?? 0} calls`} color="#3fb950" icon={<BookOpenCheck className="h-3 w-3" />} />
-        <Kpi label="AI budget today" value={`${ai.used_today ?? 0}/${ai.daily_limit ?? 0}`} sub="embeddings only" color={ai.used_today >= ai.daily_limit ? "#f85149" : "#d29922"} icon={<Cpu className="h-3 w-3" />} />
-        <Kpi label="Vector indexes" value={o.indexes?.canon?.indexed ? "in sync" : "pending"} sub={`${o.indexes?.canon?.vectors ?? 0} canon vectors · ${o.indexes?.market?.pending_cards ?? 0} cards to embed`} color={o.indexes?.canon?.indexed ? "#3fb950" : "#d29922"} icon={<Brain className="h-3 w-3" />} />
+        <Kpi label="Ingested 24h" value={String(o.ingest?.last_24h?.accepted ?? 0)} sub={`${o.ingest?.last_24h?.rejected ?? 0} refused · ${o.ingest?.last_24h?.calls ?? 0} calls`} color="#3fb950" icon={<BookOpenCheck className="h-3 w-3" />} />
+        <Kpi label="AI budget" value={`${ai.used_today ?? 0}/${ai.daily_limit ?? 0}`} sub="today" color={ai.used_today >= ai.daily_limit ? "#f85149" : "#d29922"} icon={<Cpu className="h-3 w-3" />} />
+        <Kpi label="Vector index" value={o.indexes?.canon?.indexed ? "in sync" : "pending"} sub={`${o.indexes?.canon?.vectors ?? 0} canon vectors · ${o.indexes?.market?.pending_cards ?? 0} cards to embed`} color={o.indexes?.canon?.indexed ? "#3fb950" : "#d29922"} icon={<Brain className="h-3 w-3" />} />
       </div>
       <NexusAnalyticsBridge analytics={analytics} guard={guard} />
       <Sync aether={o.sync} worker={(status as any)?.aether?.sync} />

@@ -4,7 +4,7 @@ import { Layers, Swords } from "lucide-react";
 import { Post, calibrationText } from "./Post";
 import CrowdLine from "./CrowdLine";
 import { Stance, stanceColor } from "./Stance";
-import { Badge, Skeleton } from "./ui";
+import { Badge, Hint, Skeleton } from "./ui";
 import { useWarRoom } from "../lib/warroom";
 import { useMarket } from "../lib/market";
 import { TABS, useTab, tabLabel, type Tab } from "../lib/tab";
@@ -28,7 +28,7 @@ function ConclusionHero({ c, title, waiting, badges, constraint, confirmation }:
   return (
     <section className="glass-inner border-cyan-400/20 p-4" aria-label={`${title} conclusion`}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="eyebrow flex items-center gap-2"><Swords className="h-3.5 w-3.5 text-cyan-300" />{title} conclusion</h3>
+        <h3 className="eyebrow flex items-center gap-2"><Swords className="h-3.5 w-3.5 text-cyan-300" />{title} conclusion<Hint text="Advisory only. Price levels come from the validated H1 chain." /></h3>
         <div className="flex flex-wrap gap-2">{badges}</div>
       </div>
       {!ok ? <p className="text-[12.5px] text-slate-400">{waiting}</p> : (
@@ -43,15 +43,15 @@ function ConclusionHero({ c, title, waiting, badges, constraint, confirmation }:
               <div className="flex flex-col items-start gap-1">
                 <span className="eyebrow text-[9px]" title="Where the weight of the room's evidence leans">Bias</span>
                 <div className={`mono whitespace-nowrap text-[18px] font-bold leading-none ${stanceColor(c.bias ?? c.majority_bias)}`}>{c.bias ?? c.majority_bias}</div>
-                {c.majority && <div className="text-[11px] text-slate-500">bus majority {c.majority}{c.majority_bias ? ` · leaning ${String(c.majority_bias).toLowerCase()}` : ""}</div>}
+                {c.majority && <div className="text-[11px] text-slate-500">majority {c.majority}{c.majority_bias ? ` · ${String(c.majority_bias).toLowerCase()}` : ""}</div>}
               </div>
             )}
-            {!(c.bias ?? c.majority_bias) && c.majority && <div className="text-[11px] text-slate-500">bus majority {c.majority}</div>}
+            {!(c.bias ?? c.majority_bias) && c.majority && <div className="text-[11px] text-slate-500">majority {c.majority}</div>}
           </div>
           <div className="min-w-0 flex-1">
             <p className="glass-inner px-3.5 py-2.5 text-[12px] leading-relaxed text-slate-200">{c.summary}</p>
             {!!c.reasons?.length && <ul className="mt-2.5 list-disc space-y-1 pl-5 text-[11.5px] leading-relaxed text-slate-300">{c.reasons.map((r: string, i: number) => <li key={i}>{r}</li>)}</ul>}
-            {!!c.dissent?.length && <p className="mt-2 text-[11px] text-slate-500">Still disagree: {c.dissent.map((d: any) => d.name ?? d).join(", ")}</p>}
+            {!!c.dissent?.length && <p className="mt-2 text-[11px] text-slate-500">Dissent: {c.dissent.map((d: any) => d.name ?? d).join(", ")}</p>}
           </div>
         </div>
       )}
@@ -61,7 +61,6 @@ function ConclusionHero({ c, title, waiting, badges, constraint, confirmation }:
           {confirmation && <div className="glass-inner px-3 py-2">{confirmation}</div>}
         </div>
       )}
-      <p className="mt-3 text-[10px] uppercase tracking-widest text-slate-600">Advisory only. Price levels come only from the validated H1 chain. No orders are placed.</p>
     </section>
   );
 }
@@ -76,7 +75,7 @@ function Discussion({ room }: { room: any }) {
   const opens = room.openings ?? [], debate = room.debate ?? [];
   return (
     <div className="space-y-3">
-      {!!opens.length && <div className="eyebrow pt-1 text-[10px]">Communication bus · {opens.length} agents</div>}
+      {!!opens.length && <div className="eyebrow pt-1 text-[10px]">Communication bus · {opens.length}</div>}
       <div className="space-y-1.5">{opens.map((m: any) => <Post key={m.id} m={m} text={m.claim} calibration={calibrationText(m.calibration ?? cal[m.id])} reputation={room.reputation?.[m.id]} />)}</div>
       {!!debate.length && <div className="eyebrow pt-1 text-[10px]">Consensus Discussion</div>}
       <div className="space-y-1.5">{debate.map((m: any) => <Post key={m.id} m={m} text={m.argument} reputation={room.reputation?.[m.id]} />)}</div>
@@ -84,7 +83,7 @@ function Discussion({ room }: { room: any }) {
   );
 }
 
-const phaseText = (room: any) => (room.phase === "closed" ? "discussion closed" : room.phase === "debate" ? "Consensus Discussion open" : "openings on the bus");
+const phaseText = (room: any) => (room.phase === "closed" ? "closed" : room.phase === "debate" ? "discussion" : "openings");
 
 /**
  * The 1H tab ends with the H1 decision (owner decision 2026-11-07): the Reasoner decides last,
@@ -104,7 +103,7 @@ function ReasonerDecision({ r }: { r: any }) {
         {r.consensus?.status === "empty" && <Badge tone="amber">no agent spoke</Badge>}
       </div>
       <p className="text-[12px] leading-relaxed text-slate-300">
-        {pending ? `The Reasoner decides after this room concludes, or ${r.fallback_minutes ?? 45} minutes after the close at the latest.` : r.reasoning}
+        {pending ? `Pending: after the room concludes, at most ${r.fallback_minutes ?? 45} min after the close.` : r.reasoning}
       </p>
     </section>
   );
@@ -125,14 +124,14 @@ function RoomTab({ room, tab }: { room: any; tab: Tab }) {
     <><span className="eyebrow text-[9px]">H1 constraint</span><Stance value={h1.decision} /><span className="mono">{pct(h1.confidence)}</span>{h1.candle_key && <span>· {candleWhen(h1.candle_key)}</span>}</>
   ) : null;
   const confirmation = tab === "M15" ? (
-    <><span className="eyebrow mr-2 text-[9px]">Entry confirmation</span>H1 Prophet R38: {side(cf.h1_prophet_r38)} · 5m: {side(cf.m5_prophet_r38)}{cf.m5_prophet_r38 && !cf.m5_prophet_r38.verified ? " (unverified, does not count)" : ""}</>
+    <><span className="eyebrow mr-2 text-[9px]">Entry confirmation</span>H1 Prophet R38: {side(cf.h1_prophet_r38)} · 5m: {side(cf.m5_prophet_r38)}{cf.m5_prophet_r38 && !cf.m5_prophet_r38.verified ? " (unverified)" : ""}</>
   ) : cf.chart_prophet_r38 ? (
     <><span className="eyebrow mr-2 text-[9px]">Entry confirmation</span>{label} Prophet R38: {side(cf.chart_prophet_r38)}{cf.chart_prophet_r38.approved_by_parity === false ? " (not parity approved)" : ""}</>
   ) : null;
   return (
     <div className="space-y-3">
       <ConclusionHero c={room.conclusion} title={`${label} War Room`} badges={badges} constraint={constraint} confirmation={confirmation}
-        waiting={room.phase === "closed" ? "The moderator could not conclude this round." : `The ${label} War Room is in session (${phaseText(room)}); the conclusion follows the Consensus Discussion.`} />
+        waiting={room.phase === "closed" ? "No conclusion this round." : `In session · ${phaseText(room)}`} />
       {room.crowd && <CrowdLine crowd={room.crowd} conclusionBias={room.conclusion?.status === "ok" ? room.conclusion.bias : null} />}
       <Discussion room={room} />
     </div>
@@ -150,15 +149,15 @@ function NewsTab({ d }: { d: any }) {
   const ctx = d.context ?? {};
   return (
     <div className="space-y-3">
-      <ConclusionHero c={d.tldr} title="News" waiting="The News Analyst has not written the TLDR yet."
-        badges={<><Badge tone="slate">last 24 hours</Badge><Badge tone="slate">updated {ago(d.run_at)}</Badge><Badge tone="cyan">{d.items?.length ?? 0} headlines</Badge></>}
+      <ConclusionHero c={d.tldr} title="News" waiting="No TLDR yet."
+        badges={<><Badge tone="slate">updated {ago(d.run_at)}</Badge><Badge tone="cyan">{d.items?.length ?? 0} headlines</Badge></>}
         constraint={<><span className="eyebrow text-[9px]">Bias</span><Stance value="BULLISH" />{c.bullish ?? 0}<Stance value="BEARISH" />{c.bearish ?? 0}<Stance value="NEUTRAL" />{c.neutral ?? 0}</>}
         confirmation={<div className="flex flex-wrap items-center gap-2"><span className="eyebrow text-[9px]">24h</span><Move x={ctx.gold} name="Gold" /><Move x={ctx.dollar} name="DXY" /><Move x={ctx.oil} name="Oil" /><Move x={ctx.usdt} name="USDT.D" /></div>} />
       <div className="eyebrow pt-1 text-[10px]">Headlines</div>
       <div className="space-y-1.5">
         {(d.items ?? []).map((i: any, k: number) => (
           <div key={k} className="glass-inner px-3 py-2.5">
-            <div className="mb-1 flex items-center gap-2 text-[10px] text-slate-500">{i.bias ? <Stance value={i.bias} /> : <span>not tagged</span>}<span>{ago(i.published_at)}</span></div>
+            <div className="mb-1 flex items-center gap-2 text-[10px] text-slate-500">{i.bias ? <Stance value={i.bias} /> : <span>untagged</span>}<span>{ago(i.published_at)}</span></div>
             {i.url ? <a href={i.url} target="_blank" rel="noopener noreferrer" className="text-[12px] leading-snug text-slate-200 hover:text-cyan-200">{i.title}</a> : <span className="text-[12px] leading-snug text-slate-200">{i.title}</span>}
             {i.why && <p className="mt-1 text-[11px] text-slate-500">{i.why}</p>}
           </div>
@@ -173,9 +172,9 @@ function TabBody({ tab }: { tab: Tab }) {
   const { threads, news, loading, error } = useMarket();
   if (tab === "M15") return room ? <RoomTab room={room} tab="M15" /> : <p className="text-[12px] text-slate-500">No War Room yet.</p>;
   if (loading) return <Skeleton rows={6} />;
-  if (tab === "NEWS") return news ? <NewsTab d={news} /> : error ? <p className="text-[12px] text-rose-300">Unavailable: {error}</p> : <p className="text-[12px] text-slate-500">No daily news analysis yet: it runs with the hourly news cron.</p>;
+  if (tab === "NEWS") return news ? <NewsTab d={news} /> : error ? <p className="text-[12px] text-rose-300">Unavailable: {error}</p> : <p className="text-[12px] text-slate-500">No news analysis yet.</p>;
   const t = threads[tab];
-  return t ? <RoomTab room={t} tab={tab} /> : <p className="text-[12px] text-slate-500">No {tabLabel(tab)} War Room yet: the room meets at the next closed {tab === "H1" ? "1-hour" : tab === "H4" ? "4-hour" : "daily"} candle.</p>;
+  return t ? <RoomTab room={t} tab={tab} /> : <p className="text-[12px] text-slate-500">No {tabLabel(tab)} War Room yet.</p>;
 }
 
 /**

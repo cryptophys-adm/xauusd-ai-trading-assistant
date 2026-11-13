@@ -81,14 +81,14 @@ test("the UI keeps the Console's obsidian palette and calls only same-origin rea
   // Owner decision 2026-11-06: the Global Conclusion and the strategy engine are one card, the
   // Global decision, which leads the panel: decision, bias, per-timeframe lean, plan, RRR.
   const decision = ui("src/components/GlobalDecision.tsx");
-  for (const word of ["Global decision", "Decision", "Bias", "Direction", "Lean:", "TP1", "TP2", "Stop", "Entry", "R</span>", "H1 chain (reference)"]) assert.ok(decision.includes(word), word);
+  for (const word of ["Global decision", "Decision", "Bias", "Direction", "TP1", "TP2", "Stop", "Entry", "R</span>", "H1 chain"]) assert.ok(decision.includes(word), word);
   assert.ok(assistant.indexOf("<GlobalDecision") >= 0 && assistant.indexOf("<GlobalDecision") < assistant.indexOf("<SentimentCard"), "the global decision leads the right panel");
   assert.doesNotMatch(assistant, /GlobalConclusion|StrategyPanel/, "the two former cards are merged");
   // Key Level Agent (owner decision 2026-11-06): the candidate zones of every chart's key levels.
   // Backlog item 18 (owner approval 2026-11-09): one Key levels panel with the active tab's
   // Camarilla set and the agent's zones on one price axis, replacing the Levels card.
   const keyLevels = ui("src/components/KeyLevels.tsx");
-  for (const word of ["Key levels", "Key Level Agent", "candidate zones", "key_levels", "sources", "camarilla", "Camarilla · pivots", "Zones · every chart", "KeyLevelMap"]) assert.ok(keyLevels.includes(word), word);
+  for (const word of ["Key levels", "Key Level Agent", "key_levels", "sources", "camarilla", "Camarilla · pivots", "Zones", "KeyLevelMap"]) assert.ok(keyLevels.includes(word), word);
   assert.match(keyLevels, /gradientUnits="userSpaceOnUse"/, "the price line paints on a zero-height line");
   assert.match(keyLevels, /useId\(\)\.replace\(\/:\/g, ""\)/, "no colon in a url(#…) reference");
   // Owner 2026-11-11: the listed zones run by price from the highest down, with the price row between.
@@ -156,7 +156,6 @@ test("Omega: /omega and /omega/ render inside the Nexus SPA with the left panel;
     "MetaTrader 5 Web Terminal",
     "Market Watch",
     "Navigator",
-    "MT5 Toolbox",
     "Algo Trading",
     "Setup & Configuration Center",
     "FxPro",
@@ -170,8 +169,8 @@ test("Omega: /omega and /omega/ render inside the Nexus SPA with the left panel;
     "e-enabled",
     "e-quick-toggle",
     "configLocked",
-    "Connected (Locked)",
-    "Active MT5 Session",
+    "Locked:",
+    "Session:",
   ]) {
     assert.ok(omegaUi.includes(term), term);
   }

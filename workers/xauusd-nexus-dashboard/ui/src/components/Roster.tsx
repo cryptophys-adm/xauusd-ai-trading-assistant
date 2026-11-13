@@ -39,12 +39,12 @@ export default function Roster() {
   const list = room?.roster ?? [];
   return (
     <div className="glass p-4">
-      <div className="eyebrow mb-3 flex items-center gap-2"><Bot className="h-3 w-3 text-cyan-300" />{tab === "NEWS" ? "News desk" : `${tabLabel(tab)} War Room agents`}</div>
+      <div className="eyebrow mb-3 flex items-center gap-2"><Bot className="h-3 w-3 text-cyan-300" />{tab === "NEWS" ? "News desk" : `${tabLabel(tab)} agents`}</div>
       {busy ? <Skeleton rows={5} /> : tab === "NEWS" ? (
         news?.tldr?.status === "ok"
-          ? <Agent name="News Analyst" stance={news.tldr.stance} cal={`last 24 hours · confidence ${pct(news.tldr.confidence)}`} />
-          : <p className="text-[12px] text-slate-500">The News Analyst has not concluded yet.</p>
-      ) : !list.length ? <p className="text-[12px] text-slate-500">No {tabLabel(tab)} War Room session yet.</p> : (
+          ? <Agent name="News Analyst" stance={news.tldr.stance} cal={`24h · confidence ${pct(news.tldr.confidence)}`} />
+          : <p className="text-[12px] text-slate-500">No conclusion yet.</p>
+      ) : !list.length ? <p className="text-[12px] text-slate-500">No session yet.</p> : (
         <div className="max-h-[60vh] space-y-1.5 overflow-y-auto pr-1">
           {list.map((a: any) => <Agent key={a.id} name={a.name} stance={said[a.id]?.stance} bias={said[a.id]?.bias} ok={said[a.id]?.status === "ok"} cal={calibrationText(a.calibration)} />)}
         </div>
