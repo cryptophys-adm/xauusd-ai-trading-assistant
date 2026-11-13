@@ -1,14 +1,9 @@
 import { useId, useMemo, useState } from "react";
 import {
   Activity,
-  AlertTriangle,
-  ArrowDownRight,
-  ArrowUpRight,
   BarChart3,
   BrainCircuit,
   Calendar,
-  CheckCircle2,
-  Clock,
   Compass,
   Cpu,
   Crosshair,
@@ -64,7 +59,7 @@ function InteractiveEquityCurve({
   const gradId = `equity-grad-${useId().replace(/:/g, "")}`;
 
   if (points.length < 2) {
-    return <Empty>The equity curve starts after two closed trades.</Empty>;
+    return <Empty>Needs two closed trades.</Empty>;
   }
 
   const w = 780;
@@ -154,7 +149,7 @@ function InteractiveEquityCurve({
           fill="#64748b"
           className="mono"
         >
-          0.00 {currency} ZERO-LEVEL
+          0 {currency}
         </text>
 
         {/* High water mark peak line */}
@@ -235,7 +230,7 @@ function InteractiveEquityCurve({
               </p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">High Water Mark</span>
+              <span className="text-[10px] uppercase text-slate-500">Peak</span>
               <p className="mono font-bold text-amber-300">
                 {active.peak.toFixed(2)}{currency}
               </p>
@@ -287,7 +282,7 @@ function UnderwaterDrawdownChart({
       <div className="mb-1 flex items-center justify-between text-[11px]">
         <span className="flex items-center gap-1.5 text-slate-400 font-medium">
           <TrendingDown className="h-3.5 w-3.5 text-rose-400" />
-          Underwater Drawdown Curve (Peak-to-Trough)
+          Drawdown
         </span>
         <span className="mono text-[10px] text-rose-400">
           Max DD: {maxDd.toFixed(2)}{currency}
@@ -348,12 +343,12 @@ function ModePolicyTable({ byMode }: { byMode: any }) {
           <tr>
             <th>Mode</th>
             <th>Signals</th>
-            <th>Plan · TP1</th>
-            <th>Plan · TP2</th>
-            <th>Omega policy</th>
+            <th>TP1</th>
+            <th>TP2</th>
+            <th>Omega</th>
             <th>Omega max DD</th>
-            <th>Same signals: Omega vs TP1</th>
-            <th>Omega skipped</th>
+            <th>Omega vs TP1</th>
+            <th>Skipped</th>
           </tr>
         </thead>
         <tbody>
@@ -373,7 +368,7 @@ function ModePolicyTable({ byMode }: { byMode: any }) {
                   {pr?.trades ? (
                     <>
                       {r(pr.omega_r)} vs {r(pr.plan_r)}
-                      <span className="text-slate-500"> · Omega better {pr.omega_better} · TP1 better {pr.plan_better} of {pr.trades}</span>
+                      <span className="text-slate-500"> · better: Omega {pr.omega_better}, TP1 {pr.plan_better} / {pr.trades}</span>
                     </>
                   ) : (
                     <span className="text-slate-500">—</span>
@@ -426,7 +421,7 @@ function OutcomeDistributionHistogram({ items, policy }: { items: any[]; policy:
   const maxCount = Math.max(...buckets.map((b) => b.count), 1);
 
   if (!closed.length) {
-    return <Empty>No closed trades in this range to compute distribution.</Empty>;
+    return <Empty>No closed trades.</Empty>;
   }
 
   return (
@@ -466,7 +461,7 @@ function ExcursionMatrix({ items }: { items: any[] }) {
   );
 
   if (!closedWithExcursion.length) {
-    return <Empty>No excursion data recorded yet for these signals.</Empty>;
+    return <Empty>No excursion data yet.</Empty>;
   }
 
   const avgMfe =
@@ -480,25 +475,22 @@ function ExcursionMatrix({ items }: { items: any[] }) {
     <div className="space-y-3 pt-1">
       <div className="grid grid-cols-3 gap-2">
         <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2.5">
-          <span className="text-[10px] uppercase tracking-wider text-slate-500">Average MFE</span>
+          <span className="text-[10px] uppercase tracking-wider text-slate-500">Avg MFE</span>
           <p className="mono text-[16px] font-bold text-emerald-400">+{avgMfe.toFixed(2)}R</p>
-          <span className="text-[10px] text-slate-500">Max favorable excursion</span>
         </div>
         <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2.5">
-          <span className="text-[10px] uppercase tracking-wider text-slate-500">Average MAE</span>
+          <span className="text-[10px] uppercase tracking-wider text-slate-500">Avg MAE</span>
           <p className="mono text-[16px] font-bold text-rose-400">−{Math.abs(avgMae).toFixed(2)}R</p>
-          <span className="text-[10px] text-slate-500">Max adverse excursion</span>
         </div>
         <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2.5">
-          <span className="text-[10px] uppercase tracking-wider text-slate-500">Entry Efficiency</span>
+          <span className="text-[10px] uppercase tracking-wider text-slate-500">Efficiency</span>
           <p className="mono text-[16px] font-bold text-cyan-400">{Math.round(edgeEfficiency)}%</p>
-          <span className="text-[10px] text-slate-500">MFE capture ratio</span>
         </div>
       </div>
       <div className="space-y-1">
         <div className="flex justify-between text-[10px] text-slate-400">
-          <span>Adverse Drawdown Bias</span>
-          <span className="font-semibold text-cyan-300">Favorable Run Bias</span>
+          <span>MAE</span>
+          <span className="font-semibold text-cyan-300">MFE</span>
         </div>
         <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
           <div
@@ -526,7 +518,7 @@ function SlPlusPricePoint({ item }: { item: any }) {
           LOCKED @ {px(slPlusPrice)}
         </span>
         <span className="text-[10px] text-slate-400">
-          {item.sl_plus_at ? when(item.sl_plus_at) : "Breakeven Protected"}
+          {item.sl_plus_at ? when(item.sl_plus_at) : "Break-even"}
         </span>
       </div>
     );
@@ -535,10 +527,10 @@ function SlPlusPricePoint({ item }: { item: any }) {
   return (
     <div className="flex flex-col">
       <span className="mono text-slate-300">
-        SL+ Level: {px(slPlusPrice)}
+        SL+ {px(slPlusPrice)}
       </span>
       <span className="text-[10px] text-slate-500">
-        Triggers @ {px(triggerLevel)}
+        Trigger {px(triggerLevel)}
       </span>
     </div>
   );
@@ -569,13 +561,13 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       setExitNotice({
         tone: "text-emerald-300",
-        text: `Exit requested for position #${ticket}. The MT5 terminal will close it within 2 seconds.`,
+        text: `Close sent for #${ticket}.`,
       });
       setExitModalPosition(null);
     } catch (err: any) {
       setExitNotice({
         tone: "text-rose-300",
-        text: `Failed to exit #${ticket}: ${err?.message || "error"}`,
+        text: `Close failed for #${ticket}: ${err?.message || "error"}`,
       });
     } finally {
       setClosingTicket(null);
@@ -584,8 +576,8 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
 
   if (!omega) {
     return (
-      <Panel title="Omega Broker Execution · Live Terminal" icon={<Cpu className="h-4 w-4 text-cyan-400" />}>
-        <Empty>No live Omega broker telemetries available. Host bridge daemon may be idle.</Empty>
+      <Panel title="Omega Execution" icon={<Cpu className="h-4 w-4 text-cyan-400" />}>
+        <Empty>No terminal data.</Empty>
       </Panel>
     );
   }
@@ -619,23 +611,23 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
       {/* Execution KPI header: advisory only, never money (owner 2026-11-12: Financial Management is its own module) */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <Kpi
-          label="Average Slippage"
+          label="Avg Slippage"
           value={dynamicAvgSlippage != null ? `${dynamicAvgSlippage} pts` : "—"}
           sub={`Max: ${tca.max_slippage_points ?? "—"} pts · ${completedIntents.length} fills`}
           color={C.cyan}
           icon={<Sliders className="h-3.5 w-3.5 text-cyan-400" />}
         />
         <Kpi
-          label="Execution Latency"
+          label="Latency"
           value={dynamicAvgLatency != null ? `${dynamicAvgLatency} ms` : "n/a"}
           sub={`Route: ${route.active_route || "—"}`}
           color={C.violet}
           icon={<Zap className="h-3.5 w-3.5 text-violet-400" />}
         />
         <Kpi
-          label="Execution Quality"
+          label="Fill Quality"
           value={tca.quality || (dynamicAvgSlippage != null ? (dynamicAvgSlippage <= 5 ? "PRIME" : "ACCEPTABLE") : "—")}
-          sub={`${tca.samples_count ?? 0} measured fills`}
+          sub={`${tca.samples_count ?? 0} fills`}
           color={tca.quality === "PRIME" ? C.bull : C.wait}
           icon={<ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />}
         />
@@ -650,15 +642,15 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
         >
           <div className="grid grid-cols-2 gap-3 pt-1 text-[11px]">
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Active Route</span>
+              <span className="text-[10px] uppercase text-slate-500">Route</span>
               <p className="mono font-semibold text-slate-200">{route.active_route || "—"}</p>
             </div>
             <div>
               <span className="text-[10px] uppercase text-slate-500">Failover</span>
-              <p className="mono font-semibold text-slate-200">{route.failover === "none" ? "none (single route)" : (route.failover || "—")}</p>
+              <p className="mono font-semibold text-slate-200">{route.failover || "—"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Bridge Sync</span>
+              <span className="text-[10px] uppercase text-slate-500">Last Sync</span>
               <p className="mono font-semibold text-emerald-400">{route.bridge_sync_age_ms != null ? `${Math.round(route.bridge_sync_age_ms / 1000)}s ago` : "—"}</p>
             </div>
             <div>
@@ -669,25 +661,25 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
         </Panel>
 
         <Panel
-          title="Dynamic Volatility & Sizing Telemetry"
+          title="Volatility & Sizing"
           icon={<BarChart3 className="h-3.5 w-3.5 text-amber-400" />}
           right={<Badge tone="cyan">{vol.regime || "NORMAL"} REGIME</Badge>}
         >
           <div className="grid grid-cols-2 gap-3 pt-1 text-[11px]">
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Current ATR M15</span>
+              <span className="text-[10px] uppercase text-slate-500">ATR M15</span>
               <p className="mono font-semibold text-slate-200">{vol.atr_value != null ? String(vol.atr_value) : "—"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Spread Points</span>
+              <span className="text-[10px] uppercase text-slate-500">Spread</span>
               <p className="mono font-semibold text-slate-200">{br.spread_points != null ? `${br.spread_points} pts` : "n/a"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Position sizing</span>
-              <p className="mono font-semibold text-emerald-400">{omega?.engine?.risk_pct != null ? `${omega.engine.risk_pct}% of equity at the stop` : "—"}</p>
+              <span className="text-[10px] uppercase text-slate-500">Risk / Trade</span>
+              <p className="mono font-semibold text-emerald-400">{omega?.engine?.risk_pct != null ? `${omega.engine.risk_pct}% equity` : "—"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Adaptive Volatility</span>
+              <span className="text-[10px] uppercase text-slate-500">Adaptive Vol</span>
               <p className="mono font-semibold text-cyan-400">{vol.adaptive_enabled ? "ACTIVE" : "FIXED"}</p>
             </div>
           </div>
@@ -696,12 +688,12 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
 
       {/* Open Positions in Broker MT5 */}
       <Panel
-        title={`Live MT5 positions${br.server ? ` on ${br.server}` : ""} (${positions.length})`}
+        title={`Open Positions${br.server ? ` · ${br.server}` : ""} (${positions.length})`}
         icon={<Activity className="h-3.5 w-3.5 text-emerald-400" />}
         right={
           <div className="flex items-center gap-2">
             <Dot tone={positions.length > 0 ? "green" : "slate"} pulse={positions.length > 0} />
-            <span className="text-[11px] text-slate-400">{positions.length > 0 ? "In Market" : "Terminal Idle"}</span>
+            <span className="text-[11px] text-slate-400">{positions.length > 0 ? "In market" : "Idle"}</span>
           </div>
         }
       >
@@ -711,7 +703,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
           </div>
         ) : null}
         {!positions.length ? (
-          <Empty>No open position on the MT5 terminal.</Empty>
+          <Empty>No open positions.</Empty>
         ) : (
           <div className="table-wrap">
             <table className="tbl">
@@ -722,10 +714,10 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                   <th>Symbol</th>
                   <th>Side</th>
                   <th>Volume</th>
-                  <th>Open Price</th>
-                  <th>Current Bid/Ask</th>
-                  <th>Stop Loss</th>
-                  <th>Take Profit</th>
+                  <th>Open</th>
+                  <th>Price</th>
+                  <th>SL</th>
+                  <th>TP</th>
                   <th className="text-right">Action</th>
                 </tr>
               </thead>
@@ -740,11 +732,11 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                       <td>
                         {isManual ? (
                           <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
-                            📱 MANUAL
+                            MANUAL
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
-                            🤖 OMEGA AI
+                            OMEGA
                           </span>
                         )}
                       </td>
@@ -776,15 +768,15 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                             })
                           }
                           className="inline-flex items-center gap-1 rounded bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 hover:border-rose-400 active:scale-95 transition disabled:opacity-50"
-                          title="Exit position immediately in MetaTrader 5 (interrupts TP/SL)"
+                          title="Close at market"
                         >
                           {closingTicket === p.ticket ? (
                             <span className="inline-flex items-center gap-1">
                               <span className="inline-block h-2 w-2 rounded-full bg-rose-400 animate-ping" />
-                              EXITING…
+                              CLOSING…
                             </span>
                           ) : (
-                            "EXIT ✕"
+                            "CLOSE"
                           )}
                         </button>
                       </td>
@@ -799,23 +791,22 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
 
       {/* Recent Completed Intents */}
       <Panel
-        title={`Recent Execution Intents (${intents.slice(0, 10).length})`}
+        title={`Recent Intents (${intents.slice(0, 10).length})`}
         icon={<Zap className="h-3.5 w-3.5 text-cyan-400" />}
-        right={<Badge tone="slate">Bridge Pipeline</Badge>}
       >
         {!intents.length ? (
-          <Empty>No execution intents recorded in this cycle.</Empty>
+          <Empty>No intents yet.</Empty>
         ) : (
           <div className="table-wrap">
             <table className="tbl">
               <thead>
                 <tr>
                   <th>Time (UTC)</th>
-                  <th>Intent ID</th>
+                  <th>Intent</th>
                   <th>Side</th>
                   <th>Volume</th>
-                  <th>Target Price</th>
-                  <th>Fill Price</th>
+                  <th>Price</th>
+                  <th>Fill</th>
                   <th>Slippage</th>
                   <th>Latency</th>
                   <th>Ticket</th>
@@ -963,29 +954,29 @@ function DisparityKnowledgePanel({
       {/* Dynamic Fidelity & Disparity Overview KPI */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
         <Kpi
-          label="Signals matched to fills"
+          label="Matched"
           value={`${executedRecords.length} / ${items.length}`}
-          sub={`${days}-day window`}
+          sub={`last ${days}D`}
           color={C.cyan}
           icon={<BrainCircuit className="h-3.5 w-3.5 text-emerald-400" />}
         />
         <Kpi
-          label="Price Disparity (Slippage)"
-          value={dynamicAvgSlippage != null ? `±${dynamicAvgSlippage} pts` : "no sample"}
-          sub={dynamicMaxSlippage != null ? `Peak: ${dynamicMaxSlippage} pts · ${slippagesList.length} samples` : "no fill measured yet"}
+          label="Avg Slippage"
+          value={dynamicAvgSlippage != null ? `±${dynamicAvgSlippage} pts` : "—"}
+          sub={dynamicMaxSlippage != null ? `Max ${dynamicMaxSlippage} pts · ${slippagesList.length} fills` : "No fills yet"}
           color={dynamicAvgSlippage == null || dynamicAvgSlippage <= 5 ? C.cyan : C.bear}
           icon={<Split className="h-3.5 w-3.5 text-cyan-400" />}
         />
         <Kpi
-          label="Bridge Transmission Lag"
-          value={dynamicAvgLatency != null ? `${dynamicAvgLatency} ms` : "no sample"}
-          sub={latenciesList.length ? `${latenciesList.length} intents timed to their fill` : "no fill timed yet"}
+          label="Latency"
+          value={dynamicAvgLatency != null ? `${dynamicAvgLatency} ms` : "—"}
+          sub={latenciesList.length ? `${latenciesList.length} fills` : "No fills yet"}
           color={C.violet}
           icon={<Zap className="h-3.5 w-3.5 text-violet-400" />}
         />
         <Kpi
-          label="Broker Spread Quoted"
-          value={dynamicLiveSpread != null ? `${dynamicLiveSpread} pts` : "not reported"}
+          label="Spread"
+          value={dynamicLiveSpread != null ? `${dynamicLiveSpread} pts` : "—"}
           sub={`Bid: ${px(br.bid)} · Ask: ${px(br.ask)}`}
           color={dynamicLiveSpread == null || dynamicLiveSpread <= 30 ? C.bull : C.wait}
           icon={<Activity className="h-3.5 w-3.5 text-amber-400" />}
@@ -994,35 +985,31 @@ function DisparityKnowledgePanel({
 
       {/* Dynamic Disparity Comparison Matrix */}
       <Panel
-        title="Comprehensive Disparity Matrix: AI Theory vs Broker Reality"
+        title="Signal vs Fill"
         icon={<Gauge className="h-3.5 w-3.5 text-cyan-400" />}
-        right={<Badge tone="slate">from Omega's fills</Badge>}
+        hint="Plan entry, timing and SL+ against Omega's fills on the MT5 terminal."
       >
-        <p className="mb-3 text-[12px] leading-relaxed text-slate-400">
-          The gap between the plan (entry, R on closed bars) and Omega's fills on the MT5 terminal: fill price, time from intent to fill, and the stop the terminal holds.
-        </p>
-
         <div className="table-wrap">
           <table className="tbl">
             <thead>
               <tr>
-                <th>Performance Dimension</th>
-                <th>AI Signal (Theoretical)</th>
-                <th>Omega MT5 (Real Broker)</th>
-                <th>Observed Disparity</th>
-                <th>Dynamic Assessment</th>
+                <th>Metric</th>
+                <th>Signal</th>
+                <th>Omega fill</th>
+                <th>Gap</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
               {/* Row 1: Entry Fill */}
               <tr>
-                <td className="font-semibold text-slate-200">Entry Fill Pricing</td>
-                <td className="mono text-cyan-300">the plan's entry</td>
+                <td className="font-semibold text-slate-200">Entry</td>
+                <td className="mono text-cyan-300">Plan entry</td>
                 <td className="mono text-slate-200">
-                  {executedRecords[0]?.fillPrice ? `${px(executedRecords[0].fillPrice)} (latest)` : "no fill"}
+                  {executedRecords[0]?.fillPrice ? `${px(executedRecords[0].fillPrice)} (latest)` : "No fill"}
                 </td>
                 <td className="mono" style={{ color: dynamicAvgSlippage == null ? undefined : dynamicAvgSlippage <= 3 ? C.bull : dynamicAvgSlippage <= 10 ? C.wait : C.bear }}>
-                  {dynamicAvgSlippage != null ? `Avg ${dynamicAvgSlippage} pts (${favorableCount} favorable / ${adverseCount} adverse)` : "no sample"}
+                  {dynamicAvgSlippage != null ? `Avg ${dynamicAvgSlippage} pts · ${favorableCount} fav / ${adverseCount} adv` : "—"}
                 </td>
                 <td>
                   {dynamicAvgSlippage == null ? <Badge tone="slate">NO SAMPLE</Badge> : (
@@ -1035,11 +1022,11 @@ function DisparityKnowledgePanel({
 
               {/* Row 2: Latency */}
               <tr>
-                <td className="font-semibold text-slate-200">Execution Latency</td>
-                <td className="mono text-cyan-300">at the decision</td>
-                <td className="mono text-slate-200">intent to fill on the terminal</td>
+                <td className="font-semibold text-slate-200">Latency</td>
+                <td className="mono text-cyan-300">Decision time</td>
+                <td className="mono text-slate-200">Intent to fill</td>
                 <td className="mono text-violet-300">
-                  {dynamicAvgLatency != null ? `${dynamicAvgLatency} ms average` : "no sample"}
+                  {dynamicAvgLatency != null ? `Avg ${dynamicAvgLatency} ms` : "—"}
                 </td>
                 <td>
                   {dynamicAvgLatency == null ? <Badge tone="slate">NO SAMPLE</Badge> : <Badge tone={dynamicAvgLatency <= 1500 ? "green" : "amber"}>{dynamicAvgLatency <= 1500 ? "≤ 1.5 s" : "> 1.5 s"}</Badge>}
@@ -1048,10 +1035,10 @@ function DisparityKnowledgePanel({
 
               {/* Row 3: Progressive Stop (SL+) */}
               <tr>
-                <td className="font-semibold text-slate-200">Progressive Stop (SL+)</td>
-                <td className="mono text-cyan-300">the plan's progressive stop</td>
+                <td className="font-semibold text-slate-200">SL+</td>
+                <td className="mono text-cyan-300">Plan SL+</td>
                 <td className="mono text-slate-200">
-                  {positions[0]?.sl ? `Terminal SL: ${px(positions[0].sl)}` : "no open position"}
+                  {positions[0]?.sl ? `SL ${px(positions[0].sl)}` : "No position"}
                 </td>
                 <td className="mono text-slate-300">
                   {executedRecords.filter((m) => m.sl_plus_triggered).length} of {executedRecords.length} triggered
@@ -1070,32 +1057,29 @@ function DisparityKnowledgePanel({
 
       {/* What Aether receives: the hourly execution report (src/signal-ledger.mjs executionReport, pushExecutionReport),
           per trading mode in R. Nothing on this page is sent (owner 2026-11-13: no invented payload). */}
-      <p className="text-[11px] text-slate-500">
-        Aether receives the hourly execution report (<span className="mono">cryptophys.execution-report.v1</span>): per trading mode, the plan's targets against the Omega policy on the same closed signals, in R. Its push status is on the Decision audit page.
-      </p>
 
       {/* Dynamic Disparity Drilldown Table */}
       <Panel
-        title={`Signal vs Fill Disparity Records (${dynamicMatches.length} signals)`}
+        title={`Fills by Signal (${dynamicMatches.length})`}
         icon={<Layers className="h-3.5 w-3.5 text-cyan-400" />}
-        right={<Badge tone="cyan">{days}D Telemetry Window</Badge>}
+        right={<Badge tone="cyan">{days}D</Badge>}
       >
         {!dynamicMatches.length ? (
-          <Empty>No signal records in the selected window.</Empty>
+          <Empty>No signals in this window.</Empty>
         ) : (
           <div className="table-wrap">
             <table className="tbl">
               <thead>
                 <tr>
-                  <th>Timestamp (UTC)</th>
+                  <th>Time (UTC)</th>
                   <th>Side</th>
-                  <th>AI Target Entry</th>
-                  <th>MT5 Fill Price</th>
-                  <th>Observed Slippage</th>
-                  <th>Bridge Latency</th>
-                  <th>SL+ Level</th>
+                  <th>Entry</th>
+                  <th>Fill</th>
+                  <th>Slippage</th>
+                  <th>Latency</th>
+                  <th>SL+</th>
                   <th>Ticket</th>
-                  <th>Match Status</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -1117,11 +1101,11 @@ function DisparityKnowledgePanel({
                     <td className="mono text-amber-300">{m.ticket ? `#${m.ticket}` : "—"}</td>
                     <td>
                       {m.isLivePosition ? (
-                        <Badge tone="green"><Dot tone="green" pulse /> LIVE ON MT5</Badge>
+                        <Badge tone="green"><Dot tone="green" pulse /> LIVE</Badge>
                       ) : m.hasExecutionRecord ? (
                         <Badge tone="cyan">FILLED</Badge>
                       ) : (
-                        <Badge tone="slate">THEORETICAL</Badge>
+                        <Badge tone="slate">NO FILL</Badge>
                       )}
                     </td>
                   </tr>
@@ -1172,51 +1156,46 @@ export default function Performance() {
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       {/* Top Header Panel */}
       <Panel
-        title="Performance · Signal Ledger & Disparity Knowledge"
+        title="Performance"
         icon={<LineChart className="h-4 w-4 text-cyan-300" />}
+        hint={`Decision Engine signals tracked on closed bars (${l?.rules?.bars ?? "1m, else 15m"}): fill within ${l?.rules?.fill_window_hours ?? 8}h, then target, stop (−1R) or exit after ${l?.rules?.hold_max_hours ?? 72}h. Results in R.`}
         right={
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => void refresh()}
               className="flex items-center gap-1 rounded border border-white/10 px-2 py-1 text-[10px] text-slate-400 hover:text-white"
-              title="Refresh ledger & telemetries"
+              title="Refresh"
             >
-              <RefreshCw className="h-3 w-3" /> Sync
+              <RefreshCw className="h-3 w-3" /> Refresh
             </button>
-            <Badge tone="green">R multiples · never money</Badge>
           </div>
         }
       >
-        <p className="text-[12px] leading-relaxed text-slate-400">
-          Every BUY or SELL from the Decision Engine (15m Multi-Agent Consensus) is followed on closed bars ({l?.rules?.bars ?? "1m where available, else 15m"}): entry fills within {l?.rules?.fill_window_hours ?? 8} hours, then reaches its target, stop (−1R), or exits at close after {l?.rules?.hold_max_hours ?? 72} hours. Disparities between pure theoretical math and live MT5 broker execution are dynamically synthesized for Aether knowledge ingestion.
-        </p>
-
         {/* View Mode & Time Window Tabs */}
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/5 pt-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           {/* Distinct Panels: Signal, Omega, Disparity */}
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] font-medium text-slate-400">Module:</span>
             <button
               type="button"
               className={toggle(viewMode === "signal_ledger")}
               onClick={() => setViewMode("signal_ledger")}
             >
-              Signal Ledger (Teoritis)
+              Signal Ledger
             </button>
             <button
               type="button"
               className={toggle(viewMode === "omega_broker")}
               onClick={() => setViewMode("omega_broker")}
             >
-              Omega Execution (Real Trading)
+              Omega Execution
             </button>
             <button
               type="button"
               className={toggle(viewMode === "disparity_knowledge")}
               onClick={() => setViewMode("disparity_knowledge")}
             >
-              Disparity & Knowledge Engine (Signal vs Omega)
+              Signal vs Fill
             </button>
           </div>
 
@@ -1240,7 +1219,7 @@ export default function Performance() {
         {/* Target Policy Selector (for Signal Ledger) */}
         {viewMode === "signal_ledger" && (
           <div className="mt-2.5 flex flex-wrap items-center gap-2">
-            <span className="text-[11px] text-slate-400 font-medium">Policy Target:</span>
+            <span className="text-[11px] text-slate-400 font-medium">Exit policy:</span>
             <button
               type="button"
               className={toggle(policy === "tp1")}
@@ -1259,12 +1238,10 @@ export default function Performance() {
               type="button"
               className={toggle(policy === "omega")}
               onClick={() => setPolicy("omega")}
-              title="What the Omega engine would have done: market entry, the day's gates, SL+ and trailing TP at key levels by the quorum power"
+              title="Omega rules: market entry, daily gates, SL+ and trailing TP"
             >
               Omega policy
             </button>
-            <span className="mx-1 h-4 w-px bg-white/10" />
-            <Badge tone="cyan">Engine: Decision Engine (Active)</Badge>
           </div>
         )}
       </Panel>
@@ -1276,7 +1253,7 @@ export default function Performance() {
         </Panel>
       ) : error && !data ? (
         <Panel>
-          <p className="text-[12px] text-rose-300">Telemetry unavailable: {error}</p>
+          <p className="text-[12px] text-rose-300">Failed to load: {error}</p>
         </Panel>
       ) : (
         <>
@@ -1302,7 +1279,7 @@ export default function Performance() {
                 <Kpi
                   label="Expectancy"
                   value={r(perf?.expectancy_r)}
-                  sub="average R per closed trade"
+                  sub="per trade"
                   color={
                     (perf?.expectancy_r ?? 0) > 0
                       ? C.bull
@@ -1313,7 +1290,7 @@ export default function Performance() {
                   icon={<TrendingUp className="h-3.5 w-3.5 text-emerald-400" />}
                 />
                 <Kpi
-                  label="Cumulative Total"
+                  label="Net R"
                   value={r(perf?.total_r)}
                   sub={`avg win ${r(perf?.avg_win_r)} · avg loss ${r(perf?.avg_loss_r, false)}`}
                   color={(perf?.total_r ?? 0) >= 0 ? C.bull : C.bear}
@@ -1322,7 +1299,6 @@ export default function Performance() {
                 <Kpi
                   label="Profit Factor"
                   value={perf?.profit_factor == null ? "n/a" : String(perf.profit_factor)}
-                  sub="gross profit ÷ gross loss"
                   color={C.violet}
                   icon={<BarChart3 className="h-3.5 w-3.5 text-violet-400" />}
                 />
@@ -1337,48 +1313,45 @@ export default function Performance() {
 
               {/* The plan's targets and the Omega policy per trading mode */}
               <Panel
-                title="Policy per Trading Mode · Plan targets vs Omega"
+                title="By Trading Mode"
                 icon={<Layers className="h-3.5 w-3.5 text-cyan-400" />}
-                right={<Badge tone="purple">to Aether as knowledge</Badge>}
+                hint={`Omega: ${l?.rules?.omega?.entry ?? "market entry on the bar after the decision"}; ${l?.rules?.omega?.management ?? "key-level management"}; gates: ${l?.rules?.omega?.gates ?? "the day's loss limit"}. Approximations: ${l?.rules?.omega?.approximations ?? "feed bars"}.`}
               >
                 <ModePolicyTable byMode={l?.by_mode} />
-                <p className="mt-2 text-[11px] text-slate-500">
-                  Omega: {l?.rules?.omega?.entry ?? "market entry on the bar after the decision"}; {l?.rules?.omega?.management ?? "key-level management"}; gates: {l?.rules?.omega?.gates ?? "the day's loss limit"}. Approximations: {l?.rules?.omega?.approximations ?? "feed bars"}. R per trade, sized by the day's budget.
-                </p>
               </Panel>
 
               {/* Interactive Equity Curve & Underwater Chart */}
               <Panel
-                title={`Cumulative Equity Curve · Decision Engine (${days}D Window)`}
+                title="Equity Curve"
                 icon={<TrendingUp className="h-3.5 w-3.5 text-emerald-400" />}
                 right={
                   <div className="flex items-center gap-3 text-[11px] text-slate-400">
                     <span className="flex items-center gap-1">
-                      <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" /> Curve (R)
+                      <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" /> Equity (R)
                     </span>
                     <span className="flex items-center gap-1">
-                      <span className="inline-block h-2 w-2 rounded-full bg-amber-400 opacity-60" /> Peak ATH
+                      <span className="inline-block h-2 w-2 rounded-full bg-amber-400 opacity-60" /> Peak
                     </span>
-                    <Badge tone="cyan">{policy.toUpperCase()} Policy</Badge>
+                    <Badge tone="cyan">{policy.toUpperCase()}</Badge>
                   </div>
                 }
               >
                 <InteractiveEquityCurve points={perf?.equity ?? []} currency="R" />
                 <UnderwaterDrawdownChart points={perf?.equity ?? []} currency="R" />
                 <p className="mt-2 text-[11px] text-slate-500">
-                  Cancelled / Unfilled:{" "}
+                  Unfilled:{" "}
                   {Object.entries(block.cancelled ?? {})
                     .map(([k, v]) => `${k.replace(/_/g, " ")} (${v})`)
-                    .join(" · ") || "None"}
+                    .join(" · ") || "none"}
                   {" · "}
-                  Ambiguous same-bar touches: {block.ambiguous} · SL+ Triggered: {block.sl_plus ?? 0}
+                  Ambiguous: {block.ambiguous} · SL+: {block.sl_plus ?? 0}
                 </p>
               </Panel>
 
               {/* Statistical Distribution & Excursion Analysis */}
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <Panel
-                  title="Outcome Distribution Histogram (R Buckets)"
+                  title="R Distribution"
                   icon={<BarChart3 className="h-3.5 w-3.5 text-cyan-400" />}
                   right={<Badge tone="purple">{perf?.trades ?? 0} Trades</Badge>}
                 >
@@ -1386,9 +1359,8 @@ export default function Performance() {
                 </Panel>
 
                 <Panel
-                  title="MFE / MAE Excursion & Efficiency Matrix"
+                  title="MFE / MAE"
                   icon={<Crosshair className="h-3.5 w-3.5 text-emerald-400" />}
-                  right={<Badge tone="green">Entry Edge</Badge>}
                 >
                   <ExcursionMatrix items={items} />
                 </Panel>
@@ -1396,19 +1368,16 @@ export default function Performance() {
 
               {/* The decisions the no-stacking rule held back (owner 2026-11-13: "pastikan semua ada visualisasi") */}
               <Panel
-                title={`Held back by the ledger · no stacking (${l?.held?.count ?? 0} in ${days} days)`}
+                title={`Held Back (${l?.held?.count ?? 0})`}
                 icon={<Layers className="h-3.5 w-3.5 text-amber-300" />}
-                right={<Badge tone="amber">not traded, not counted</Badge>}
+                hint="No stacking: a same-side signal waits while an earlier one is unfilled or unprotected. Not counted in results."
               >
-                <p className="mb-2 text-[11px] text-slate-500">
-                  A BUY or SELL is not added while an earlier one of the same side still waits for its fill, or is open without protection (no TP1 yet and no SL+). Omega applies the same rule. These decisions are not in the results above.
-                </p>
                 {!(l?.held?.items ?? []).length ? (
-                  <Empty>No decision was held back in the last {days} days.</Empty>
+                  <Empty>None held back.</Empty>
                 ) : (
                   <div className="table-wrap max-h-[240px] overflow-y-auto">
                     <table className="tbl">
-                      <thead><tr><th>Decision (UTC)</th><th>Side</th><th>Held back because</th><th>By</th></tr></thead>
+                      <thead><tr><th>Time (UTC)</th><th>Side</th><th>Reason</th><th>Blocked by</th></tr></thead>
                       <tbody>
                         {(l.held.items as any[]).map((h) => (
                           <tr key={h.decision_key}>
@@ -1426,28 +1395,26 @@ export default function Performance() {
 
               {/* Signal Ledger Detail Table with Real SL+ Price Points */}
               <Panel
-                title={`Signal Ledger Records (${items.length} records · ${days} Days)`}
+                title={`Signals (${items.length})`}
                 icon={<Layers className="h-3.5 w-3.5 text-cyan-400" />}
-                right={<Badge tone="green">Advisory R Multiples</Badge>}
               >
                 {!items.length ? (
-                  <Empty>No directional signals recorded in the last {days} days.</Empty>
+                  <Empty>No signals in this window.</Empty>
                 ) : (
                   <div className="table-wrap">
                     <table className="tbl">
                       <thead>
                         <tr>
                           <th>Opened (UTC)</th>
-                          <th>Engine</th>
                           <th>Side</th>
-                          <th>Entry Target</th>
-                          <th>Stop Loss</th>
-                          <th>Progressive SL+ (Real Price)</th>
+                          <th>Entry</th>
+                          <th>SL</th>
+                          <th>SL+</th>
                           <th>TP1</th>
                           <th>TP2</th>
                           <th>Mode</th>
                           <th>Status</th>
-                          <th>R Result</th>
+                          <th>R</th>
                           <th>Omega</th>
                           <th>MFE / MAE</th>
                         </tr>
@@ -1459,7 +1426,6 @@ export default function Performance() {
                           return (
                             <tr key={x.id}>
                               <td className="mono">{when(x.opened_at)}</td>
-                              <td className="text-slate-400">Decision Engine</td>
                               <td
                                 className="mono font-bold"
                                 style={{ color: x.side === "BUY" ? C.bull : C.bear }}

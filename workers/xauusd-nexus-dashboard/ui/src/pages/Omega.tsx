@@ -7,7 +7,6 @@ import {
   Cpu,
   KeyRound,
   Layers,
-  Lock,
   Power,
   Radio,
   ShieldCheck,
@@ -16,7 +15,7 @@ import {
   Zap,
 } from "lucide-react";
 import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
-import { Badge, Dot, Empty, Kpi, Panel, Skeleton } from "../components/ui";
+import { Badge, Dot, Empty, Hint, Kpi, Panel, Skeleton } from "../components/ui";
 import { ExitConfirmModal, type ExitTargetPosition } from "../components/ExitConfirmModal";
 import OmegaWhy from "../components/OmegaWhy";
 import { get } from "../lib/api";
@@ -133,15 +132,15 @@ const BROKER_PRESETS: BrokerPreset[] = [
   {
     key: "custom",
     name: "Custom Server",
-    company: "Manual Server / Host:Port Input",
+    company: "Manual entry",
     goldSymbol: "Auto (XAUUSD / GOLD)",
     servers: [],
   },
 ];
 
 const GOLD_PAIR_OPTIONS = [
-  { value: "AUTO_GOLD", label: "Auto-Fetch Gold / XAUUSD (Default)" },
-  { value: "XAUUSD", label: "XAUUSD (Standard Spot Gold)" },
+  { value: "AUTO_GOLD", label: "Auto (default)" },
+  { value: "XAUUSD", label: "XAUUSD" },
   { value: "XAUUSD.m", label: "XAUUSD.m (Monex / MIFX)" },
   { value: "XAUUSDm", label: "XAUUSDm (Exness / Valetax)" },
   { value: "GOLD", label: "GOLD (FxPro / Dupoin)" },
@@ -207,10 +206,10 @@ const agoMs = (ms?: number | null) => {
 };
 
 const CONNECTION_TEXT: Record<string, string> = {
-  none: "No broker connection stored.",
-  stored: "Stored; the bridge applies it at its next sync.",
-  needs_reentry: "The bridge's key changed: enter the credentials again.",
-  cleared: "Disconnected; the bridge clears the terminal login.",
+  none: "Not connected.",
+  stored: "Stored; applied at next bridge sync.",
+  needs_reentry: "Bridge key changed; re-enter credentials.",
+  cleared: "Disconnected.",
 };
 
 const INTENT_TONE: Record<string, "green" | "red" | "amber" | "cyan" | "slate"> = {
@@ -446,9 +445,9 @@ function Mt5ChartCanvas({
     // No setup on chart unless decision is explicitly clear (Owner directive 2026-11-11)
     const hasClearDecision = showPlan && signal && (signal.side === "BUY" || signal.side === "SELL") && !signal.paused && !signal.kill;
     if (hasClearDecision) {
-      addLine(signal.entry, `15m ${signal.side} ENTRY (Key Level)`, "#22d3ee", LineStyle.Dashed, 1);
-      addLine(signal.stop, "15m SL", "#fb7185", LineStyle.Dashed, 1);
-      addLine(signal.tp1, "15m TP1 (Quick Win)", "#34d399", LineStyle.Dashed, 1);
+      addLine(signal.entry, `PLAN ${signal.side}`, "#22d3ee", LineStyle.Dashed, 1);
+      addLine(signal.stop, "PLAN SL", "#fb7185", LineStyle.Dashed, 1);
+      addLine(signal.tp1, "PLAN TP1", "#34d399", LineStyle.Dashed, 1);
     }
     if (showPositions && Array.isArray(positions)) {
       for (const p of positions) {
@@ -473,10 +472,7 @@ function Mt5ChartCanvas({
             {symbol}, {tf}
           </span>
           <span className="text-slate-400">·</span>
-          <span className="text-slate-300">{server || "MetaTrader 5 Terminal"}</span>
-          <span className="rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300">
-            EA: OmegaExecutor (magic 920200)
-          </span>
+          <span className="text-slate-300">{server || "MT5"}</span>
         </div>
         {last ? (
           <div className="mono flex flex-wrap items-center gap-2.5 text-[10.5px] text-slate-400">
@@ -487,7 +483,7 @@ function Mt5ChartCanvas({
             {last.volume != null ? <span>V {Math.round(last.volume)}</span> : null}
           </div>
         ) : (
-          <div className="mono text-[10.5px] text-slate-500">Loading XAUUSD candles…</div>
+          <div className="mono text-[10.5px] text-slate-500">Loading…</div>
         )}
       </div>
 
@@ -643,7 +639,7 @@ export default function Omega() {
     setControlMsg({ tone: "text-slate-300", text: "Sending…" });
     try {
       await omegaJson("/omega/api/control", "POST", { mode, reason, confirm });
-      setControlMsg({ tone: "text-emerald-300", text: `Control set to ${mode}. The EA applies it at its next poll.` });
+      setControlMsg({ tone: "text-emerald-300", text: `Control set to ${mode}; applied at next EA poll.` });
       setControlReason("");
     } catch (e: any) {
       setControlMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
@@ -663,7 +659,7 @@ export default function Omega() {
     if (isLocked) {
       setBrokerMsg({
         tone: "text-amber-200",
-        text: "An MT5 account is currently connected. Please click Disconnect before switching broker or server.",
+        text: "Disconnect the current account first.",
       });
       return;
     }
@@ -681,7 +677,7 @@ export default function Omega() {
       const out = await omegaJson("/omega/api/connection", "POST", { server, envelope });
       setBrokerMsg({
         tone: "text-emerald-300",
-        text: `Stored v${out.version} for ${out.server}. The bridge logs the terminal in at its next sync.`,
+        text: `Saved v${out.version} for ${out.server}; applied at next bridge sync.`,
       });
     } catch (e: any) {
       setBrokerMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
@@ -697,7 +693,7 @@ export default function Omega() {
     setBrokerMsg({ tone: "text-slate-300", text: "Disconnecting…" });
     try {
       await omegaJson(`/omega/api/connection?disconnect=1&reason=${encodeURIComponent(reason)}`, "GET");
-      setBrokerMsg({ tone: "text-emerald-300", text: "Disconnected. Broker and server configuration is now unlocked." });
+      setBrokerMsg({ tone: "text-emerald-300", text: "Disconnected." });
     } catch (e: any) {
       setBrokerMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
     }
@@ -738,14 +734,14 @@ export default function Omega() {
       await omegaJson("/omega/api/position/close", "POST", { ticket, reason: "manual_user_exit" });
       setControlMsg({
         tone: "text-emerald-300",
-        text: `Exit requested for position #${ticket}. The MT5 terminal will close it within 2 seconds.`,
+        text: `Close sent for #${ticket}.`,
       });
       setExitModalPosition(null);
       await load();
     } catch (err: any) {
       setControlMsg({
         tone: "text-rose-300",
-        text: `Failed to exit #${ticket}: ${err?.message || "error"}`,
+        text: `Close failed for #${ticket}: ${err?.message || "error"}`,
       });
     } finally {
       setClosingTicket(null);
@@ -755,7 +751,7 @@ export default function Omega() {
   if (loading && !data) {
     return (
       <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
-        <Panel title="Omega · Execution Engine & MT5 Web Terminal" icon={<Zap className="h-3.5 w-3.5 text-cyan-300" />}>
+        <Panel title="Omega" icon={<Zap className="h-3.5 w-3.5 text-cyan-300" />}>
           <Skeleton rows={5} />
         </Panel>
       </div>
@@ -793,9 +789,9 @@ export default function Omega() {
   const algoActive = Boolean(e.env_enabled && e.enabled && c.mode !== "paused" && c.mode !== "killed");
 
   const effectiveLabel = !e.env_enabled
-    ? "off (server switch OMEGA_ENGINE_ENABLED)"
+    ? "off (server switch)"
     : !e.enabled
-      ? "off (enable it below)"
+      ? "off"
       : "on";
   const effectiveTone: "red" | "amber" | "green" = !e.env_enabled ? "red" : !e.enabled ? "amber" : "green";
 
@@ -808,7 +804,7 @@ export default function Omega() {
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       {/* Top Status Banner */}
       <Panel
-        title="Omega · XAUUSD Execution Engine & MT5 Web Terminal"
+        title="Omega"
         icon={<Zap className="h-3.5 w-3.5 text-cyan-300" />}
         right={
           <div className="flex flex-wrap items-center gap-1.5">
@@ -822,7 +818,7 @@ export default function Omega() {
             </Badge>
             <Badge tone={streamLive ? "green" : "cyan"}>
               <Dot tone={streamLive ? "green" : "cyan"} pulse={streamLive} />
-              {streamLive ? "SSE Live Stream" : "Live Sync"}
+              {streamLive ? "Streaming" : "Polling"}
             </Badge>
             <Badge tone={algoActive ? "green" : "amber"}>
               Algo Trading: {algoActive ? "ON" : "STANDBY"}
@@ -845,13 +841,11 @@ export default function Omega() {
         }
       >
         {error ? (
-          <p className="text-[12px] text-rose-300">Omega error: {error}</p>
+          <p className="text-[12px] text-rose-300">Error: {error}</p>
         ) : (
-          <div className="flex flex-wrap items-center justify-between gap-2 text-[12px] leading-relaxed text-slate-400">
-            <p>
-              Live Web Edition of the Windows MetaTrader 5 Terminal streaming in real time (<span className="mono text-emerald-300">OnTick + SSE</span>) from the host MT5 terminal (<span className="mono text-slate-200">{serverName}</span> · <span className="mono text-cyan-300">{symbolName}</span>) and the 15m Decision Engine SSOT. Credentials are RSA-OAEP + AES-256-GCM encrypted in-browser.
-            </p>
-            <span className="mono text-[11px] text-slate-300">Updated {updatedAt}</span>
+          <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
+            <span className="mono text-slate-300">{serverName} · {symbolName}</span>
+            <span className="mono">Updated {updatedAt}</span>
           </div>
         )}
       </Panel>
@@ -873,7 +867,7 @@ export default function Omega() {
             }`}
           >
             <Terminal className="h-3.5 w-3.5 text-cyan-300" />
-            MT5 Web Terminal &amp; Live Monitor
+            Terminal
           </button>
           <button
             type="button"
@@ -886,7 +880,7 @@ export default function Omega() {
             }`}
           >
             <Sliders className="h-3.5 w-3.5 text-emerald-300" />
-            Setup &amp; Configuration Center (Broker · Server · Gold Pairing · Engine)
+            Setup
           </button>
         </div>
 
@@ -894,7 +888,7 @@ export default function Omega() {
           {configLocked ? (
             <span className="mono flex items-center gap-1.5 rounded-md border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1 text-emerald-200">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Active MT5 Session: <strong className="text-emerald-100">{serverName}</strong> (Locked)</span>
+              <span>Session: <strong className="text-emerald-100">{serverName}</strong> · locked</span>
             </span>
           ) : (
             <span className="mono rounded-md border border-white/10 bg-black/40 px-2.5 py-1 text-slate-300">
@@ -902,7 +896,7 @@ export default function Omega() {
             </span>
           )}
           <span className="mono rounded-md border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-amber-200">
-            Default Pair: <strong>Auto Gold / XAUUSD</strong> → {symbolName}
+            Symbol: <strong>{symbolName}</strong>
           </span>
           <span className={`mono flex items-center gap-1.5 rounded-md border px-2.5 py-1 ${
             algoActive
@@ -929,7 +923,7 @@ export default function Omega() {
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[12.5px] font-bold tracking-wide text-slate-100">
-                MetaTrader 5 Web Terminal
+                MT5 Terminal
               </span>
               <span className="mono rounded bg-white/5 px-2 py-0.5 text-[11px] text-cyan-300 border border-white/10">
                 {serverName} · {br.trade_mode ? br.trade_mode.toUpperCase() : "ACCOUNT UNKNOWN"} · {symbolName},{mt5Tf}
@@ -943,15 +937,6 @@ export default function Omega() {
               <span className="mono">
                 {br.terminal_connected ? "Connected" : "Offline"} · Sync {agoMs(br.synced_age_ms)}
               </span>
-            </div>
-            <div className="hidden sm:flex items-center gap-1 rounded border border-white/10 bg-black/40 px-2 py-0.5 text-slate-400">
-              <span>Window</span>
-              <span>·</span>
-              <span>Market Watch (Ctrl+M)</span>
-              <span>·</span>
-              <span>Navigator (Ctrl+N)</span>
-              <span>·</span>
-              <span>Toolbox (Ctrl+T)</span>
             </div>
           </div>
         </div>
@@ -973,7 +958,7 @@ export default function Omega() {
                   ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
                   : "border-rose-400/35 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20"
               }`}
-              title="Click to toggle Algo Trading (Broker Engine) ON / OFF"
+              title="Toggle algo trading"
             >
               <span className={`h-2 w-2 rounded-full ${eEnabled ? "bg-emerald-400 animate-pulse" : "bg-rose-400"}`} />
               Algo Trading: {eEnabled ? "ON" : "OFF"}
@@ -992,10 +977,10 @@ export default function Omega() {
               }`}
               title={
                 !br.terminal_connected
-                  ? "MT5 Terminal is DISCONNECTED on VPS! Cerebrum Watchdog supervising recovery."
+                  ? "Terminal disconnected; watchdog is recovering"
                   : !br.trade_allowed
-                  ? "MT5 Terminal Algo Trading is DISABLED! Cerebrum Watchdog auto-healing active."
-                  : "MT5 Terminal on VPS is LIVE and automated trade execution is ALLOWED. Supervised by Cerebrum."
+                  ? "Algo trading disabled on the terminal; watchdog is correcting"
+                  : "Terminal live; algo trading allowed"
               }
             >
               <span
@@ -1008,10 +993,10 @@ export default function Omega() {
                 }`}
               />
               {!br.terminal_connected
-                ? "MT5 VPS: Offline"
+                ? "Terminal: Offline"
                 : !br.trade_allowed
-                ? "MT5 VPS: Algo Blocked"
-                : "MT5 VPS: Live (Algo On)"}
+                ? "Terminal: Algo blocked"
+                : "Terminal: Live"}
             </button>
 
             <div className="h-4 w-px bg-white/10" />
@@ -1047,7 +1032,7 @@ export default function Omega() {
                     : "border-white/10 bg-black/30 text-slate-400"
                 }`}
               >
-                Bid/Ask Lines
+                Bid/Ask
               </button>
               <button
                 type="button"
@@ -1058,7 +1043,7 @@ export default function Omega() {
                     : "border-white/10 bg-black/30 text-slate-400"
                 }`}
               >
-                15m Signal Plan
+                Plan
               </button>
               <button
                 type="button"
@@ -1069,13 +1054,13 @@ export default function Omega() {
                     : "border-white/10 bg-black/30 text-slate-400"
                 }`}
               >
-                MT5 Positions ({positionsList.length})
+                Positions ({positionsList.length})
               </button>
               <button
                 type="button"
                 onClick={() => setShowKeyLevels((v) => !v)}
                 // The legend lives here, not over the chart's volume (owner 2026-11-12: "hilangkan label yang menutupi volume").
-                title="KL = War Room key-level zone (Key Level Agent), the six nearest to price; green support, red resistance, cyan at price; on feed prices (OANDA); broker prices may differ by a few cents"
+                title="Six nearest key-level zones: green support, red resistance, cyan at price; on feed prices (OANDA); broker prices may differ"
                 className={`rounded border px-2 py-0.5 text-[11px] transition ${
                   showKeyLevels
                     ? "border-violet-400/35 bg-violet-500/10 text-violet-200"
@@ -1092,10 +1077,10 @@ export default function Omega() {
                     ? "border-cyan-400/50 bg-cyan-500/20 text-cyan-200"
                     : "border-white/10 bg-black/30 text-slate-300 hover:border-cyan-400/30 hover:text-cyan-200"
                 }`}
-                title="View Autonomous Cerebrum Pipeline & State Machine"
+                title="Watchdog"
               >
                 <Cpu className="h-3 w-3 text-cyan-400" />
-                Pipeline State
+                Watchdog
               </button>
               <button
                 type="button"
@@ -1105,10 +1090,10 @@ export default function Omega() {
                     ? "border-emerald-400/50 bg-emerald-500/20 text-emerald-200"
                     : "border-white/10 bg-black/30 text-slate-300 hover:border-emerald-400/30 hover:text-emerald-200"
                 }`}
-                title="View Execution Quality, Transaction Cost Analysis (TCA) and Smart Order Router (SOR)"
+                title="Execution quality"
               >
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                TCA & SOR: {b?.tca?.quality || "PRIME"}
+                Execution: {b?.tca?.quality || "—"}
               </button>
             </div>
           </div>
@@ -1132,19 +1117,14 @@ export default function Omega() {
 
         {/* Autonomous Cerebrum Watchdog Self-Healing Banner */}
         {conn.status === "stored" && (!br.terminal_connected || !br.trade_allowed) ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/30 bg-gradient-to-r from-amber-950/70 via-cyan-950/40 to-black/70 px-4 py-2 text-[12px] text-amber-200">
-            <div className="flex items-center gap-2.5">
-              <Cpu className="h-4 w-4 shrink-0 text-cyan-400 animate-spin" />
-              <div>
-                <span className="font-bold text-white">
-                  Cerebrum Self-Healing Active:{" "}
-                </span>
-                <span className="text-slate-300">
-                  {!br.terminal_connected
-                    ? "Terminal session disconnected. Cerebrum Watchdog is autonomously recovering the connection."
-                    : "Algo trading permission restricted. Cerebrum Watchdog is auto-correcting terminal INI parameters."}
-                </span>
-              </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[12px] text-amber-200">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+              <span>
+                {!br.terminal_connected
+                  ? "Terminal disconnected. Watchdog is reconnecting."
+                  : "Algo trading disabled on the terminal. Watchdog is correcting it."}
+              </span>
             </div>
             <button
               type="button"
@@ -1152,7 +1132,7 @@ export default function Omega() {
               className="flex items-center gap-1.5 rounded-md border border-cyan-400/40 bg-cyan-500/20 px-2.5 py-1 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/30 transition"
             >
               <Activity className="h-3 w-3" />
-              View State Machine
+              Details
             </button>
           </div>
         ) : null}
@@ -1205,11 +1185,11 @@ export default function Omega() {
                   </tr>
                   {s.market_price ? (
                     <tr>
-                      <td className="py-1 text-slate-400">XAUUSD (Feed)</td>
+                      <td className="py-1 text-slate-400">XAUUSD feed</td>
                       <td className="py-1 text-right text-slate-300" colSpan={2}>
                         {num(s.market_price, 2)}
                       </td>
-                      <td className="py-1 text-right text-slate-500">SSOT</td>
+                      <td className="py-1 text-right text-slate-500">—</td>
                     </tr>
                   ) : null}
                 </tbody>
@@ -1219,7 +1199,7 @@ export default function Omega() {
             {/* Symbol Contract Specification */}
             <div className="border-b border-white/10 px-3 py-2">
               <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                Symbol Specification ({symbolName})
+                Specification
               </div>
               <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]">
                 <dt className="text-slate-500">Digits / Point</dt>
@@ -1249,7 +1229,6 @@ export default function Omega() {
                 <Layers className="h-3.5 w-3.5 text-cyan-300" />
                 Navigator
               </span>
-              <span className="mono text-[10px] text-slate-400">Ctrl+N</span>
             </div>
             <div className="flex-1 space-y-2 px-3 py-2.5 text-[11.5px]">
               <div>
@@ -1276,21 +1255,21 @@ export default function Omega() {
                   <div className="flex items-center justify-between rounded bg-white/[0.02] px-2 py-1 border border-white/5">
                     <span className="mono text-slate-300">CryptophysXAUUSD</span>
                     <span className="mono text-[10px] text-slate-400">
-                      {ea.connected ? (hb?.version ? `v${hb.version}` : "version not reported") : "direct EA"}
+                      {ea.connected ? (hb?.version ? `v${hb.version}` : "—") : "direct EA"}
                     </span>
                   </div>
                 </div>
               </div>
               <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">15m Decision Engine</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Decision Engine</div>
                 <div className="mt-1 flex items-center justify-between rounded bg-white/[0.03] px-2 py-1 border border-white/5">
-                  <span className="text-slate-300">Active Stance</span>
+                  <span className="text-slate-300">Signal</span>
                   <span
                     className={`mono font-bold ${
                       s.side === "BUY" ? "text-emerald-300" : s.side === "SELL" ? "text-rose-300" : "text-slate-400"
                     }`}
                   >
-                    {!s.side || s.side === "NONE" ? "WAIT / NO TRADE" : `${s.side} (${num(s.entry, 2)})`}
+                    {!s.side || s.side === "NONE" ? "WAIT" : `${s.side} (${num(s.entry, 2)})`}
                   </span>
                 </div>
               </div>
@@ -1329,10 +1308,10 @@ export default function Omega() {
                 [
                   ["trade", `Trade (${positionsList.length}${ordersList.length ? ` + ${ordersList.length} ord` : ""})`],
                   ["history", `History (${dealsList.length})`],
-                  ["intents", `Order Intents (${(b?.intents || []).length})`],
-                  ["state_machine", "Autonomous State Machine"],
-                  ["tca_sor", "Execution & TCA / SOR"],
-                  ["events", `Events & Journal (${(b?.events || []).length + (data?.control_events || []).length})`],
+                  ["intents", `Intents (${(b?.intents || []).length})`],
+                  ["state_machine", "Watchdog"],
+                  ["tca_sor", "Execution"],
+                  ["events", `Journal (${(b?.events || []).length + (data?.control_events || []).length})`],
                 ] as [ToolboxTab, string][]
               ).map(([key, label]) => (
                 <button
@@ -1349,9 +1328,6 @@ export default function Omega() {
                 </button>
               ))}
             </div>
-            <span className="mono text-[10.5px] text-slate-400">
-              MT5 Toolbox · {serverName} · {symbolName}
-            </span>
           </div>
 
           {/* Tab 1: TRADE (Open Positions + Classic MT5 Account Summary Row) */}
@@ -1367,12 +1343,12 @@ export default function Omega() {
                       <th>Time (UTC)</th>
                       <th>Type</th>
                       <th>Volume</th>
-                      <th>Open Price</th>
-                      <th>S / L</th>
-                      <th>T / P</th>
-                      <th>Current Price</th>
+                      <th>Price</th>
+                      <th>S/L</th>
+                      <th>T/P</th>
+                      <th>Current</th>
                       <th>Profit ({cur})</th>
-                      <th>Intent / Signal</th>
+                      <th>Intent</th>
                       <th className="text-right">Action</th>
                     </tr>
                   </thead>
@@ -1380,7 +1356,7 @@ export default function Omega() {
                     {positionsList.length === 0 ? (
                       <tr>
                         <td colSpan={13} className="py-4 text-center text-[12px] text-slate-500">
-                          No open positions in MetaTrader 5 ({serverName}). Waiting for the next actionable 15m Decision Engine signal.
+                          No open positions.
                         </td>
                       </tr>
                     ) : (
@@ -1396,11 +1372,11 @@ export default function Omega() {
                             <td>
                               {isManual ? (
                                 <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
-                                  📱 MANUAL / MOBILE
+                                  MANUAL
                                 </span>
                               ) : isOmega ? (
                                 <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
-                                  🤖 OMEGA AI
+                                  OMEGA
                                 </span>
                               ) : (
                                 <span className="inline-flex items-center gap-1 rounded bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-400/30">
@@ -1416,7 +1392,7 @@ export default function Omega() {
                             <td className="mono text-emerald-300">{p.tp ? num(p.tp, digits) : "—"}</td>
                             <td className="mono text-slate-200">{num(curPrice, digits)}</td>
                             <td className={`mono font-bold ${toneCls(p.profit)}`}>{money(p.profit, cur)}</td>
-                            <td className="mono text-[11px] text-slate-400">{p.signal_id || p.intent_id || (isManual ? "Manual Discretionary" : "—")}</td>
+                            <td className="mono text-[11px] text-slate-400">{p.signal_id || p.intent_id || (isManual ? "Manual" : "—")}</td>
                             <td className="text-right">
                               <button
                                 type="button"
@@ -1435,15 +1411,15 @@ export default function Omega() {
                                   })
                                 }
                                 className="inline-flex items-center gap-1 rounded bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 hover:border-rose-400 active:scale-95 transition disabled:opacity-50"
-                                title="Exit position immediately in MetaTrader 5 (interrupts TP/SL)"
+                                title="Close at market"
                               >
                                 {closingTicket === p.ticket ? (
                                   <span className="inline-flex items-center gap-1">
                                     <span className="inline-block h-2 w-2 rounded-full bg-rose-400 animate-ping" />
-                                    EXITING…
+                                    CLOSING…
                                   </span>
                                 ) : (
-                                  "EXIT ✕"
+                                  "CLOSE"
                                 )}
                               </button>
                             </td>
@@ -1465,14 +1441,14 @@ export default function Omega() {
                       <thead>
                         <tr>
                           <th>Symbol</th>
-                          <th>Order Ticket</th>
+                          <th>Ticket</th>
                           <th>Source</th>
                           <th>Placed (UTC)</th>
                           <th>Type</th>
                           <th>Volume</th>
-                          <th>Order Price</th>
-                          <th>S / L</th>
-                          <th>T / P</th>
+                          <th>Price</th>
+                          <th>S/L</th>
+                          <th>T/P</th>
                           <th>Comment</th>
                         </tr>
                       </thead>
@@ -1486,11 +1462,11 @@ export default function Omega() {
                               <td>
                                 {isManualOrd ? (
                                   <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
-                                    📱 MANUAL / MOBILE
+                                    MANUAL
                                   </span>
                                 ) : (
                                   <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
-                                    🤖 OMEGA AI
+                                    OMEGA
                                   </span>
                                 )}
                               </td>
@@ -1526,11 +1502,11 @@ export default function Omega() {
                     <span className={`font-bold ${toneCls(floatingPnl)}`}>{money(floatingPnl, cur)}</span>
                   </span>
                   <span>
-                    <strong className="text-slate-400">Day Realized P/L:</strong>{" "}
+                    <strong className="text-slate-400">Day P/L:</strong>{" "}
                     <span className={`font-bold ${toneCls(br.day_realized_pl)}`}>{money(br.day_realized_pl, cur)}</span>
                   </span>
                   <span>
-                    <strong className="text-slate-400">Day Start Balance:</strong>{" "}
+                    <strong className="text-slate-400">Day Start:</strong>{" "}
                     <span className="text-slate-300">{balFmt(br.day_start_balance, cur)}</span>
                   </span>
                 </div>
@@ -1547,23 +1523,23 @@ export default function Omega() {
             <div className="table-wrap max-h-[260px] overflow-y-auto">
               {!dealsList.length ? (
                 <div className="p-4">
-                  <Empty>No closed deal reported yet.</Empty>
+                  <Empty>No closed deals.</Empty>
                 </div>
               ) : (
                 <table className="tbl">
                   <thead>
                     <tr>
                       <th>Closed (UTC)</th>
-                      <th>Deal Ticket</th>
+                      <th>Deal</th>
                       <th>Source</th>
                       <th>Side</th>
                       <th>Volume</th>
-                      <th>Entry Price</th>
-                      <th>Exit Price</th>
+                      <th>Entry</th>
+                      <th>Exit</th>
                       <th>Net P/L</th>
                       <th>Reason</th>
-                      <th>Account Mode</th>
-                      <th>Signal / Comment</th>
+                      <th>Mode</th>
+                      <th>Signal</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1578,11 +1554,11 @@ export default function Omega() {
                           <td>
                             {isManual ? (
                               <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
-                                📱 MANUAL / MOBILE
+                                MANUAL
                               </span>
                             ) : isOmega ? (
                               <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
-                                🤖 OMEGA AI
+                                OMEGA
                               </span>
                             ) : (
                               <span className="inline-flex items-center gap-1 rounded bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-400/30">
@@ -1601,7 +1577,7 @@ export default function Omega() {
                             </span>
                           </td>
                           <td className="mono text-slate-400">{d.mode || "live"}</td>
-                          <td className="mono text-[11px] text-slate-400">{d.signal_id || (isManual ? "Manual Discretionary" : "—")}</td>
+                          <td className="mono text-[11px] text-slate-400">{d.signal_id || (isManual ? "Manual" : "—")}</td>
                         </tr>
                       );
                     })}
@@ -1616,14 +1592,14 @@ export default function Omega() {
             <div className="table-wrap max-h-[260px] overflow-y-auto">
               {!(b?.intents || []).length ? (
                 <div className="p-4">
-                  <Empty>No order intent emitted yet. Intents appear here when the 15m Decision Engine triggers an entry or exit.</Empty>
+                  <Empty>No intents yet.</Empty>
                 </div>
               ) : (
                 <table className="tbl">
                   <thead>
                     <tr>
                       <th>Created (UTC)</th>
-                      <th>Intent ID</th>
+                      <th>Intent</th>
                       <th>Kind</th>
                       <th>Side</th>
                       <th>Volume</th>
@@ -1631,7 +1607,7 @@ export default function Omega() {
                       <th>SL</th>
                       <th>TP</th>
                       <th>Status</th>
-                      <th>MT5 Execution Result</th>
+                      <th>Result</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1665,31 +1641,18 @@ export default function Omega() {
           {toolboxTab === "state_machine" ? (
             <div className="space-y-4 p-4 text-[12px]">
               {/* Header Banner: Autonomous System Architecture */}
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cyan-500/30 bg-gradient-to-r from-cyan-950/40 via-[#0a1220] to-[#0c1628] p-3.5">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-400/40 bg-cyan-500/10 text-cyan-300">
-                    <Cpu className="h-5 w-5 animate-pulse" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-extrabold uppercase tracking-wider text-white">
-                        Cerebrum Autonomous Self-Healing Pipeline
-                      </span>
-                      <span className="mono rounded border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
-                        {watchdog?.active ? "AUTONOMOUS · ACTIVE" : "SUPERVISED"}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 text-[11px] text-slate-400">
-                      On every bridge sync Cerebrum checks the MT5 terminal and, when it is stuck, sends the bridge a recovery directive (then waits the cooldown before another). The last recovery is shown below.
-                    </p>
-                  </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-200">Terminal watchdog</span>
+                  <Hint text="On each bridge sync the watchdog checks the terminal and sends a recovery directive when it is stuck, then waits the cooldown." />
+                  <Badge tone={watchdog?.active ? "green" : "slate"}>{watchdog?.active ? "ACTIVE" : "IDLE"}</Badge>
                 </div>
 
                 <div className="flex items-center gap-2 text-[11px]">
                   <span className="text-slate-400">Policy:</span>
                   <span className="mono font-semibold text-cyan-200">{watchdog?.policy || "self_healing_v1"}</span>
                   <span className="text-slate-600">|</span>
-                  <span className="text-slate-400">Anti-Flap Cooldown:</span>
+                  <span className="text-slate-400">Cooldown:</span>
                   <span className="mono font-semibold text-slate-200">{watchdog?.anti_flapping_cooldown_sec || 180}s</span>
                 </div>
               </div>
@@ -1701,26 +1664,18 @@ export default function Omega() {
                   <div>
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400">
-                        1. Cloud Brain
+                        Watchdog
                       </span>
-                      <Badge tone="green">SUPERVISED</Badge>
                     </div>
                     <div className="mt-2 text-[13px] font-extrabold text-white">
-                      Cerebrum Watchdog
+                      Cerebrum
                     </div>
                     <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
                       <div className="flex justify-between">
                         <span className="text-slate-500">Agent</span>
                         <span className="mono font-semibold text-cyan-200">{watchdog?.agent || "agent:cerebrum"}</span>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Supervision</span>
-                        <span className="text-emerald-300">Autonomous</span>
-                      </div>
                     </div>
-                  </div>
-                  <div className="mt-2.5 border-t border-white/5 pt-2 text-[10px] text-slate-400">
-                    Self-healing directives dispatched on sync
                   </div>
                 </div>
 
@@ -1729,18 +1684,18 @@ export default function Omega() {
                   <div>
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                        2. Host Bridge
+                        Bridge
                       </span>
                       <Badge tone={br.seen ? "green" : "red"}>
                         {br.seen ? "SYNCED" : "OFFLINE"}
                       </Badge>
                     </div>
                     <div className="mt-2 text-[13px] font-extrabold text-slate-100">
-                      Omega Bridge Daemon
+                      Omega bridge
                     </div>
                     <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Sync Age</span>
+                        <span className="text-slate-500">Last sync</span>
                         <span className="mono text-emerald-300">{br.seen ? agoMs(br.synced_age_ms) : "—"}</span>
                       </div>
                       <div className="flex justify-between">
@@ -1749,9 +1704,6 @@ export default function Omega() {
                       </div>
                     </div>
                   </div>
-                  <div className="mt-2.5 border-t border-white/5 pt-2 text-[10px] text-slate-400">
-                    RSA-3072 + AES-GCM encrypted
-                  </div>
                 </div>
 
                 {/* Node 3: MT5 Terminal Service */}
@@ -1759,14 +1711,14 @@ export default function Omega() {
                   <div>
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                        3. MT5 Terminal
+                        Terminal
                       </span>
                       <Badge tone={br.state_age_ms != null && br.state_age_ms < 60000 ? "green" : "red"}>
                         {br.state_age_ms != null && br.state_age_ms < 60000 ? "STREAMING" : "STALE"}
                       </Badge>
                     </div>
                     <div className="mt-2 text-[13px] font-extrabold text-slate-100">
-                      Wine MT5 Service
+                      MT5
                     </div>
                     <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
                       <div className="flex justify-between">
@@ -1779,9 +1731,6 @@ export default function Omega() {
                       </div>
                     </div>
                   </div>
-                  <div className="mt-2.5 border-t border-white/5 pt-2 text-[10px] text-slate-400">
-                    EA: OmegaExecutor (MQL5)
-                  </div>
                 </div>
 
                 {/* Node 4: Broker Gateway & Market */}
@@ -1789,7 +1738,7 @@ export default function Omega() {
                   <div>
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                        4. Broker Gateway
+                        Broker
                       </span>
                       <Badge tone={br.terminal_connected && br.trade_allowed ? "green" : "red"}>
                         {br.terminal_connected ? (br.trade_allowed ? "READY" : "ALGO BLOCKED") : "DISCONNECTED"}
@@ -1828,14 +1777,14 @@ export default function Omega() {
                   <div>
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                        5. Decision Engine
+                        Engine
                       </span>
                       <Badge tone={c.mode === "killed" ? "red" : eEnabled ? "green" : "amber"}>
                         {c.mode === "killed" ? "KILLED" : eEnabled ? "ARMED" : "IDLE"}
                       </Badge>
                     </div>
                     <div className="mt-2 text-[13px] font-extrabold text-slate-100">
-                      15m Engine
+                      Decision Engine
                     </div>
                     <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
                       <div className="flex justify-between">
@@ -1843,8 +1792,8 @@ export default function Omega() {
                         <span className="mono uppercase text-slate-200">{c.mode || "active"}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Live Trade</span>
-                        <span className="mono text-slate-300">{e.live_armed ? "Armed" : "Demo safe"}</span>
+                        <span className="text-slate-500">Live</span>
+                        <span className="mono text-slate-300">{e.live_armed ? "Armed" : "Not armed"}</span>
                       </div>
                     </div>
                   </div>
@@ -1859,37 +1808,34 @@ export default function Omega() {
                 <div className="flex items-center justify-between border-b border-white/10 pb-2">
                   <h4 className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-cyan-300">
                     <ShieldCheck className="h-4 w-4 text-emerald-400" />
-                    Autonomous Recovery Audit Trail
+                    Last recovery
                   </h4>
-                  <span className="mono text-[10px] text-slate-400">
-                    Self-Healing Guardian Log
-                  </span>
                 </div>
 
                 {watchdog?.last_recovery ? (
                   <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <div className="rounded border border-white/5 bg-black/30 p-2.5">
-                      <div className="text-[10px] uppercase text-slate-500">Last Directive</div>
+                      <div className="text-[10px] uppercase text-slate-500">Directive</div>
                       <div className="mono mt-1 text-[12px] font-bold text-amber-300">
                         {watchdog.last_recovery.directive}
                       </div>
                     </div>
                     <div className="rounded border border-white/5 bg-black/30 p-2.5">
-                      <div className="text-[10px] uppercase text-slate-500">Trigger Reason</div>
+                      <div className="text-[10px] uppercase text-slate-500">Reason</div>
                       <div className="mono mt-1 text-[12px] font-bold text-slate-200">
                         {watchdog.last_recovery.reason}
                       </div>
                     </div>
                     <div className="rounded border border-white/5 bg-black/30 p-2.5">
-                      <div className="text-[10px] uppercase text-slate-500">Timestamp</div>
+                      <div className="text-[10px] uppercase text-slate-500">Time</div>
                       <div className="mono mt-1 text-[12px] text-cyan-200">
                         {timeUtc(watchdog.last_recovery.ms)} ({agoMs(Date.now() - watchdog.last_recovery.ms)})
                       </div>
                     </div>
                     <div className="rounded border border-white/5 bg-black/30 p-2.5">
-                      <div className="text-[10px] uppercase text-slate-500">Guardian Status</div>
+                      <div className="text-[10px] uppercase text-slate-500">Status</div>
                       <div className="mono mt-1 text-[12px] font-semibold text-emerald-300">
-                        {Date.now() - watchdog.last_recovery.ms > (watchdog.anti_flapping_cooldown_sec ?? 180) * 1000 ? "Executed, cooldown over" : "Executed, cooling down"}
+                        {Date.now() - watchdog.last_recovery.ms > (watchdog.anti_flapping_cooldown_sec ?? 180) * 1000 ? "Done" : "Cooling down"}
                       </div>
                     </div>
                   </div>
@@ -1897,7 +1843,7 @@ export default function Omega() {
                   <div className="mt-3 flex items-center gap-2 rounded border border-emerald-500/20 bg-emerald-950/15 p-3 text-[11.5px] text-emerald-200">
                     <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-400" />
                     <span>
-                      No recovery directive recorded.{br.state_age_ms != null && br.state_age_ms < 60000 ? " The terminal is streaming." : " The terminal is not streaming: see the MT5 Terminal node above."}
+                      No recoveries.{br.state_age_ms != null && br.state_age_ms < 60000 ? " Terminal streaming." : " Terminal not streaming."}
                     </span>
                   </div>
                 )}
@@ -1908,16 +1854,15 @@ export default function Omega() {
                 <div className="flex items-center justify-between">
                   <div>
                     <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300">
-                      Raw MT5 State Inspector (omega/state.json)
+                      Raw state
                     </span>
-                    <span className="ml-2 text-[10px] text-slate-500">Direct telemetry stream</span>
                   </div>
                   <button
                     type="button"
                     onClick={() => setShowRawState((v) => !v)}
                     className="rounded border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-slate-300 hover:bg-white/10 transition"
                   >
-                    {showRawState ? "Hide JSON" : "Inspect Raw State"}
+                    {showRawState ? "Hide" : "Show"}
                   </button>
                 </div>
                 {showRawState ? (
@@ -1966,24 +1911,11 @@ export default function Omega() {
           {toolboxTab === "tca_sor" ? (
             <div className="space-y-4 p-4 text-[12px]">
               {/* Header Banner: Institutional Execution & TCA Quality */}
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-500/30 bg-gradient-to-r from-emerald-950/40 via-[#0a1818] to-[#0c1c20] p-3.5">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-emerald-400/40 bg-emerald-500/10 text-emerald-300">
-                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-100">Execution quality (TCA) and the order route</span>
-                      <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300 border border-emerald-400/30">
-                        {b?.tca?.samples_count ? `GRADE: ${b.tca.quality}` : "NO FILLS SAMPLED YET"}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400">
-                      Measured on Omega's own fills: latency from intent to execution and slippage against the requested price. One route: the stored connection on the bridge's terminal.
-                    </p>
-                  </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-200">Execution quality</span>
+                  <Hint text="Measured on Omega's fills: intent-to-fill latency and slippage against the requested price." />
+                  <Badge tone={b?.tca?.samples_count ? "green" : "slate"}>{b?.tca?.samples_count ? b.tca.quality : "NO FILLS"}</Badge>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="mono rounded border border-white/10 bg-black/40 px-2.5 py-1 text-[11px] text-slate-300">
@@ -1997,26 +1929,26 @@ export default function Omega() {
                 {/* 1. Transaction Cost Analysis (TCA) */}
                 <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">TCA & Slippage</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Slippage</span>
                     <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[9.5px] font-bold text-emerald-300">
                       {b?.tca?.samples_count ? b.tca.quality : "—"}
                     </span>
                   </div>
                   <div className="space-y-1.5 text-[11.5px]">
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Execution Latency</span>
-                      <span className="mono font-semibold text-slate-200">{b?.tca?.avg_latency_ms != null ? `${b.tca.avg_latency_ms} ms` : "no sample"}</span>
+                      <span className="text-slate-500">Latency</span>
+                      <span className="mono font-semibold text-slate-200">{b?.tca?.avg_latency_ms != null ? `${b.tca.avg_latency_ms} ms` : "—"}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Avg Fill Slippage</span>
-                      <span className="mono font-semibold text-emerald-300">{b?.tca?.avg_slippage_points != null ? `${b.tca.avg_slippage_points} pts` : "no sample"}</span>
+                      <span className="text-slate-500">Avg slippage</span>
+                      <span className="mono font-semibold text-emerald-300">{b?.tca?.avg_slippage_points != null ? `${b.tca.avg_slippage_points} pts` : "—"}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Max Slippage Recorded</span>
-                      <span className="mono text-slate-300">{b?.tca?.max_slippage_points != null ? `${b.tca.max_slippage_points} pts` : "no sample"}</span>
+                      <span className="text-slate-500">Max slippage</span>
+                      <span className="mono text-slate-300">{b?.tca?.max_slippage_points != null ? `${b.tca.max_slippage_points} pts` : "—"}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Orders Sampled</span>
+                      <span className="text-slate-500">Samples</span>
                       <span className="mono text-slate-400">{b?.tca?.samples_count || 0} fills</span>
                     </div>
                   </div>
@@ -2037,10 +1969,10 @@ export default function Omega() {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">Failover</span>
-                      <span className="mono text-slate-300">{b?.route?.failover === "none" ? "none (one route)" : b?.route?.failover ?? "—"}</span>
+                      <span className="mono text-slate-300">{b?.route?.failover ?? "—"}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Bridge last sync</span>
+                      <span className="text-slate-500">Last sync</span>
                       <span className="mono text-slate-400">{b?.route?.bridge_sync_age_ms != null ? `${Math.round(b.route.bridge_sync_age_ms / 1000)} s ago` : "never"}</span>
                     </div>
                   </div>
@@ -2049,7 +1981,10 @@ export default function Omega() {
                 {/* 3. Adaptive Volatility & Dynamic ATR */}
                 <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Volatility &amp; stop management</span>
+                    <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                      Volatility &amp; stops
+                      {b?.management ? <Hint text={`${b.management.key_levels}. ${b.management.fallback}; ${b.management.scale_out}.`} /> : null}
+                    </span>
                     <span className={`rounded px-1.5 py-0.5 text-[9.5px] font-bold ${
                       b?.volatility?.regime === "HIGH" ? "bg-amber-500/20 text-amber-300" : "bg-emerald-500/20 text-emerald-300"
                     }`}>
@@ -2065,35 +2000,29 @@ export default function Omega() {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">Break-even</span>
-                      <span className="mono text-slate-300">{b?.management?.break_even_r != null ? `at ${b.management.break_even_r}R` : "off (key-level SL+ instead)"}</span>
+                      <span className="mono text-slate-300">{b?.management?.break_even_r != null ? `at ${b.management.break_even_r}R` : "off (key-level SL+)"}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">Noise filter</span>
-                      <span className={`mono ${b?.management?.adaptive_stop ? "text-emerald-300" : "text-slate-500"}`}>{b?.management?.adaptive_stop ? "on (0.75 × ATR floor)" : "off"}</span>
+                      <span className={`mono ${b?.management?.adaptive_stop ? "text-emerald-300" : "text-slate-500"}`}>{b?.management?.adaptive_stop ? "on (0.75 ATR)" : "off"}</span>
                     </div>
-                    {b?.management && (
-                      <div className="pt-1 text-[10.5px] leading-snug text-slate-400">
-                        <div>{b.management.key_levels}.</div>
-                        <div className="mt-0.5 text-slate-500">{b.management.fallback}; {b.management.scale_out}.</div>
-                      </div>
-                    )}
                   </div>
                 </div>
 
                 {/* 4. Live Macro Risk & Economic Calendar Webhook */}
                 <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Macro Event Risk</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Event risk</span>
                     <span className={`rounded px-1.5 py-0.5 text-[9.5px] font-bold ${
                       b?.macro_risk?.blackout ? "bg-rose-500/20 text-rose-300 animate-pulse" : "bg-emerald-500/20 text-emerald-300"
                     }`}>
-                      {b?.macro_risk?.blackout ? "HARD BLACKOUT" : "CLEAR TO TRADE"}
+                      {b?.macro_risk?.blackout ? "BLACKOUT" : "CLEAR"}
                     </span>
                   </div>
                   <div className="space-y-1.5 text-[11.5px]">
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Gate Window</span>
-                      <span className="mono text-slate-300">{b?.macro_risk?.window_minutes ? `-${b.macro_risk.window_minutes.before}m to +${b.macro_risk.window_minutes.after}m, USD high impact` : "—"}</span>
+                      <span className="text-slate-500">Window</span>
+                      <span className="mono text-slate-300">{b?.macro_risk?.window_minutes ? `−${b.macro_risk.window_minutes.before}m / +${b.macro_risk.window_minutes.after}m (USD high)` : "—"}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">Upcoming (24h)</span>
@@ -2103,7 +2032,7 @@ export default function Omega() {
                       {b?.macro_risk?.next_event ? (
                         <span>Next: <strong className="text-slate-200">{b.macro_risk.next_event.title}</strong> ({b.macro_risk.next_event.impact})</span>
                       ) : (
-                        <span>No immediate high-impact USD hazard.</span>
+                        <span>No high-impact USD event.</span>
                       )}
                     </div>
                   </div>
@@ -2124,9 +2053,9 @@ export default function Omega() {
                   <thead>
                     <tr>
                       <th>Time (UTC)</th>
-                      <th>Source / Actor</th>
+                      <th>Actor</th>
                       <th>Action</th>
-                      <th>Message / Detail</th>
+                      <th>Detail</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2160,7 +2089,7 @@ export default function Omega() {
           SIGNAL, CONTROL & EXPERT ADVISOR DECK
          ===================================================================== */}
       <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Signal (Decision Engine 15m)" icon={<Radio className="h-3.5 w-3.5 text-cyan-300" />}>
+        <Panel title="Signal" icon={<Radio className="h-3.5 w-3.5 text-cyan-300" />}>
           <div
             className={`mono mb-2 text-2xl font-extrabold ${
               s.side === "BUY" ? "text-emerald-300" : s.side === "SELL" ? "text-rose-300" : "text-slate-500"
@@ -2182,7 +2111,7 @@ export default function Omega() {
           </dl>
           {/* Why Omega is or is not entering now (owner 2026-11-13: "pastikan semua ada visualisasi") */}
           <div className="mt-3 border-t border-white/5 pt-3">
-            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Omega right now</div>
+            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Entry status</div>
             <OmegaWhy codes={b?.planner?.codes} sinceMs={b?.planner?.since_ms} />
           </div>
         </Panel>
@@ -2201,7 +2130,7 @@ export default function Omega() {
             <dt className="text-slate-500">Reason</dt><dd className="text-slate-300">{c.reason || "—"}</dd>
           </dl>
           {s.kill_source === "env" ? (
-            <p className="mb-2 text-[11px] text-amber-200">The server kill switch (EA_SIGNALS_ENABLED) is on: it overrides this control.</p>
+            <p className="mb-2 text-[11px] text-amber-200">Server kill switch is on; it overrides this control.</p>
           ) : null}
           <div className="space-y-2 border-t border-white/10 pt-3">
             <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="reason">
@@ -2291,19 +2220,19 @@ export default function Omega() {
         <Panel title="Expert Advisor" icon={<Activity className="h-3.5 w-3.5 text-cyan-300" />}>
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
             <dt className="text-slate-500">Heartbeat</dt><dd className={`mono ${ea.connected ? "text-emerald-300" : "text-slate-400"}`}>{agoMs(ea.heartbeat_age_ms)}</dd>
-            <dt className="text-slate-500">Bridge Executor</dt><dd className={`mono ${br.terminal_connected ? "text-emerald-300" : "text-rose-300"}`}>{br.terminal_connected ? `OmegaExecutor (${symbolName})` : "disconnected"}</dd>
+            <dt className="text-slate-500">Executor</dt><dd className={`mono ${br.terminal_connected ? "text-emerald-300" : "text-rose-300"}`}>{br.terminal_connected ? `OmegaExecutor (${symbolName})` : "disconnected"}</dd>
             <dt className="text-slate-500">Trading allowed</dt>
             <dd className={`mono font-bold ${br.trade_allowed ? "text-emerald-300" : "text-rose-400"}`}>
-              {br.trade_allowed ? "yes (algo trading active)" : "NO (algo trading disabled)"}
+              {br.trade_allowed ? "yes" : "NO"}
             </dd>
-            <dt className="text-slate-500">EA control seen</dt><dd className="mono text-slate-300">{hb?.control || c.mode || "active"}</dd>
+            <dt className="text-slate-500">EA control</dt><dd className="mono text-slate-300">{hb?.control || c.mode || "active"}</dd>
             <dt className="text-slate-500">Positions</dt><dd className="mono text-slate-200">{hb?.positions ?? positionsList.length}</dd>
             <dt className="text-slate-500">Floating P&amp;L</dt><dd className={`mono ${toneCls(floatingPnl)}`}>{money(floatingPnl, cur)}</dd>
             <dt className="text-slate-500">Today P&amp;L</dt><dd className={`mono ${toneCls(hb?.today_pnl ?? br.day_realized_pl)}`}>{money(hb?.today_pnl ?? br.day_realized_pl, cur)}</dd>
             <dt className="text-slate-500">Daily loss</dt><dd className="mono text-slate-300">{hb?.daily_loss_pct != null ? `${num(hb.daily_loss_pct)}%` : "—"}</dd>
             <dt className="text-slate-500">Spread</dt><dd className="mono text-slate-300">{(br.spread_points ?? hb?.spread_points) != null ? `${br.spread_points ?? hb?.spread_points} pts` : "—"}</dd>
             <dt className="text-slate-500">Last signal</dt><dd className="mono truncate text-slate-400">{hb?.last_signal_id || s.signal_id || "—"}</dd>
-            <dt className="text-slate-500">Note</dt><dd className="text-slate-400">{hb?.note || (br.terminal_connected ? "Synced via Omega Bridge" : "—")}</dd>
+            <dt className="text-slate-500">Note</dt><dd className="text-slate-400">{hb?.note || (br.terminal_connected ? "via bridge" : "—")}</dd>
           </dl>
         </Panel>
       </div>
@@ -2346,13 +2275,9 @@ export default function Omega() {
                 <Sliders className="h-3.5 w-3.5" />
               </span>
               <h2 className="text-[13.5px] font-bold tracking-wide text-slate-100">
-                Setup &amp; Configuration Center — Multi-Broker MT5 &amp; Execution Engine
+                Setup
               </h2>
-              <Badge tone="green">Default Pair: Gold / XAUUSD</Badge>
             </div>
-            <p className="mt-1 text-[11.5px] text-slate-400">
-              Select an official MT5 broker (<span className="text-slate-200">Monex, FxPro, Dupoin, Valetax, Exness, or Custom</span>), choose a server, enter account credentials, configure default Gold pairing (<span className="mono text-cyan-300">XAUUSD</span>), and enable the <span className="mono text-emerald-300">Engine enabled</span> toggle.
-            </p>
           </div>
         </div>
 
@@ -2360,13 +2285,13 @@ export default function Omega() {
         <div>
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <span className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-cyan-300">
-              1. Select Official MT5 Broker (Monex · FxPro · Dupoin · Valetax · Exness · Custom)
+              Broker
             </span>
             <span className="mono text-[11px] text-slate-400">
               {configLocked ? (
-                <span className="text-emerald-300">🔒 Locked to active session: <strong className="text-slate-100">{serverName}</strong></span>
+                <span className="text-emerald-300">Locked: <strong className="text-slate-100">{serverName}</strong></span>
               ) : (
-                <>Active Server: <strong className="text-slate-200">{bServer || serverName}</strong></>
+                <>Server: <strong className="text-slate-200">{bServer || serverName}</strong></>
               )}
             </span>
           </div>
@@ -2393,13 +2318,13 @@ export default function Omega() {
                         ? "border-white/5 bg-black/20 text-slate-500 opacity-40 cursor-not-allowed"
                         : "border-white/10 bg-black/35 text-slate-300 hover:border-white/25 hover:bg-white/5"
                   }`}
-                  title={configLocked && !active ? "An MT5 account is currently connected. Disconnect first to switch brokers." : undefined}
+                  title={configLocked && !active ? "Disconnect first to switch brokers." : undefined}
                 >
                   <div className="flex w-full items-center justify-between gap-1">
                     <span className="text-[12px] font-bold text-slate-100">{preset.name}</span>
                     {active ? (
                       <span className="flex items-center gap-1 rounded bg-cyan-500/20 px-1.5 py-0.5 text-[9px] font-bold text-cyan-300 border border-cyan-400/30">
-                        {configLocked ? "🔒 ACTIVE" : "SELECTED"}
+                        {configLocked ? "ACTIVE" : "SELECTED"}
                       </span>
                     ) : configLocked ? (
                       <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-500">
@@ -2425,12 +2350,13 @@ export default function Omega() {
           <Panel
             title="Broker connection"
             icon={<KeyRound className="h-3.5 w-3.5 text-cyan-300" />}
+            hint="Credentials are encrypted in this browser with the bridge's key; the server cannot read them."
             right={<Badge tone={conn.status === "stored" ? "green" : conn.status === "needs_reentry" ? "amber" : "slate"}>{conn.status || "none"}</Badge>}
           >
             <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
               <dt className="text-slate-500">Status</dt><dd className="text-slate-200">{CONNECTION_TEXT[conn.status] || conn.status || "—"}</dd>
               <dt className="text-slate-500">Server</dt><dd className="mono text-slate-200">{conn.server || "—"}</dd>
-              <dt className="text-slate-500">Default Pair</dt><dd className="mono text-amber-200">Auto-Fetch Gold ({symbolName})</dd>
+              <dt className="text-slate-500">Symbol</dt><dd className="mono text-amber-200">{symbolName}</dd>
               <dt className="text-slate-500">Version</dt><dd className="mono text-slate-300">{conn.version ? `v${conn.version}` : "—"}</dd>
               <dt className="text-slate-500">By</dt><dd className="mono text-slate-300">{conn.updated_by || "—"}</dd>
               <dt className="text-slate-500">At</dt><dd className="mono text-slate-300">{timeUtc(conn.updated_ms)}</dd>
@@ -2441,11 +2367,9 @@ export default function Omega() {
                 <div className="rounded-lg border border-emerald-400/40 bg-emerald-500/10 p-2.5 text-[11.5px] text-emerald-200">
                   <div className="flex items-center gap-2 font-semibold">
                     <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>Active MT5 Account Session: {serverName} ({br.trade_mode ? br.trade_mode.toUpperCase() : "ACCOUNT UNKNOWN"})</span>
+                    <span>Connected: {serverName} ({br.trade_mode ? br.trade_mode.toUpperCase() : "UNKNOWN"})</span>
                   </div>
-                  <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
-                    Other broker presets, servers, and credentials are currently <strong>OFF / Locked</strong> to protect the active trading session. Click <strong>Disconnect</strong> below to switch accounts or change broker.
-                  </p>
+                  <p className="mt-1 text-[11px] text-slate-300">Disconnect to change broker or account.</p>
                 </div>
               ) : null}
 
@@ -2456,7 +2380,7 @@ export default function Omega() {
                 return (
                   <div>
                     <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300" htmlFor="b-server-select">
-                      Select Server ({preset.name}) {configLocked ? "(Locked)" : ""}
+                      Server preset {configLocked ? "(locked)" : ""}
                     </label>
                     <select
                       id="b-server-select"
@@ -2479,13 +2403,13 @@ export default function Omega() {
 
               <div>
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-server">
-                  Server Name {configLocked ? "(Locked)" : "(Select above or enter manually)"}
+                  Server {configLocked ? "(locked)" : ""}
                 </label>
                 <input
                   id="b-server"
                   disabled={configLocked}
                   maxLength={64}
-                  placeholder="e.g. Monex-Demo, FxPro-MT5, DupoinFuturesID-Real, ValetaxIntl-Live2, Exness-MT5Trial"
+                  placeholder="e.g. Monex-Demo"
                   spellCheck={false}
                   value={bServer}
                   onChange={(ev) => {
@@ -2500,9 +2424,12 @@ export default function Omega() {
 
               {/* Default Gold / XAUUSD Pairing Selector */}
               <div>
-                <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300" htmlFor="b-gold-pair">
-                  Default Pairing Fetch (Gold / XAUUSD) {configLocked ? "(Locked)" : ""}
-                </label>
+                <div className="flex items-center gap-1.5">
+                  <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300" htmlFor="b-gold-pair">
+                    Symbol {configLocked ? "(locked)" : ""}
+                  </label>
+                  <Hint text="Auto: the EA picks the broker's gold symbol from Market Watch." />
+                </div>
                 <select
                   id="b-gold-pair"
                   disabled={configLocked}
@@ -2518,14 +2445,11 @@ export default function Omega() {
                     </option>
                   ))}
                 </select>
-                <p className="mt-1 text-[10.5px] text-slate-400">
-                  EA automatically discovers &amp; subscribes to the broker&apos;s active Gold symbol in Market Watch (<span className="mono text-cyan-300">{symbolName}</span>).
-                </p>
               </div>
 
               <div>
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-login">
-                  User / Login MT5 {configLocked ? "(Locked)" : ""}
+                  Login {configLocked ? "(locked)" : ""}
                 </label>
                 <input
                   id="b-login"
@@ -2534,7 +2458,7 @@ export default function Omega() {
                   inputMode="numeric"
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder={configLocked ? `Locked: Active on ${serverName}` : "MT5 account login number"}
+                  placeholder={configLocked ? "Locked" : "Account number"}
                   value={bLogin}
                   onChange={(ev) => setBLogin(ev.target.value)}
                   className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none ${
@@ -2546,7 +2470,7 @@ export default function Omega() {
               <div>
                 <div className="flex items-center justify-between">
                   <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-password">
-                    Password MT5 {configLocked ? "(Locked)" : ""}
+                    Password {configLocked ? "(locked)" : ""}
                   </label>
                   {!configLocked ? (
                     <button
@@ -2564,7 +2488,7 @@ export default function Omega() {
                   type={showPass ? "text" : "password"}
                   maxLength={64}
                   autoComplete="new-password"
-                  placeholder={configLocked ? "•••••••• (Securely stored & encrypted)" : "Trading or investor password"}
+                  placeholder={configLocked ? "••••••••" : "Trading or investor password"}
                   value={bPassword}
                   onChange={(ev) => setBPassword(ev.target.value)}
                   className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none ${
@@ -2579,12 +2503,12 @@ export default function Omega() {
                   id="b-connect"
                   disabled={!canControl || !br.kid || configLocked}
                   className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40"
-                  title={configLocked ? "Account already connected. Disconnect first to switch." : undefined}
+                  title={configLocked ? "Disconnect first to switch." : undefined}
                 >
                   {configLocked
-                    ? "Connected (Locked)"
+                    ? "Connected"
                     : conn.status === "stored" && !br.terminal_connected
-                    ? "Reconnect / Update"
+                    ? "Reconnect"
                     : "Connect"}
                 </button>
                 <button
@@ -2602,22 +2526,14 @@ export default function Omega() {
                 <div className="rounded border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11.5px] text-amber-200">
                   <div className="flex items-center gap-1.5 font-semibold text-amber-300">
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                    MT5 Terminal Not Connected
+                    Terminal not connected
                   </div>
                   <p className="mt-1 text-slate-300">
-                    Credentials stored for <strong className="text-white">{serverName}</strong>, but broker authorization has not succeeded
-                    {br.terminal_error ? `: "${br.terminal_error}"` : " (possible incorrect user login, invalid password, or expired demo)."}.
-                  </p>
-                  <p className="mt-1 text-[11px] text-slate-400">
-                    Please verify the server, login, and password above, then click <strong>Reconnect / Update</strong>.
+                    Login failed on <strong className="text-white">{serverName}</strong>{br.terminal_error ? `: "${br.terminal_error}"` : ""}. Check server, login and password, then Reconnect.
                   </p>
                 </div>
               ) : null}
 
-              <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                <Lock className="h-3 w-3 shrink-0 text-cyan-300" />
-                Encrypted in this browser to the bridge&apos;s key: the server cannot read the login or the password.
-              </p>
               {brokerMsg ? <p className={`text-[11.5px] ${brokerMsg.tone}`}>{brokerMsg.text}</p> : null}
             </form>
           </Panel>
@@ -2629,7 +2545,7 @@ export default function Omega() {
           >
             <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
               <dt className="text-slate-500">Effective</dt><dd className="mono text-slate-200">{effectiveLabel}</dd>
-              <dt className="text-slate-500">Live (real account)</dt><dd className={`mono ${e.live_armed ? "text-amber-200" : "text-slate-300"}`}>{e.live_armed ? "armed" : "not armed"}</dd>
+              <dt className="text-slate-500">Live</dt><dd className={`mono ${e.live_armed ? "text-amber-200" : "text-slate-300"}`}>{e.live_armed ? "armed" : "not armed"}</dd>
               <dt className="text-slate-500">Risk</dt><dd className="mono text-slate-200">{e.risk_pct != null ? `${e.risk_pct}% of equity` : "—"}</dd>
               <dt className="text-slate-500">Max positions</dt><dd className="mono text-slate-200">{e.max_positions ?? "—"}</dd>
               <dt className="text-slate-500">Max daily loss</dt><dd className="mono text-slate-200">{e.max_daily_loss_pct != null ? `${e.max_daily_loss_pct}%` : "—"}</dd>
@@ -2665,12 +2581,7 @@ export default function Omega() {
                     }}
                     className="h-4 w-4 accent-emerald-400"
                   />
-                  <div>
-                    <div>Engine enabled</div>
-                    <div className="text-[10px] font-normal text-slate-400">
-                      Toggle automatic execution for the Broker Engine
-                    </div>
-                  </div>
+                  <span>Engine enabled</span>
                 </label>
                 <button
                   type="button"
@@ -2687,20 +2598,20 @@ export default function Omega() {
                       : "border-slate-500/40 bg-white/5 text-slate-300"
                   }`}
                 >
-                  {eEnabled ? "ACTIVE (ON)" : "STANDBY (OFF)"}
+                  {eEnabled ? "ON" : "OFF"}
                 </button>
               </div>
 
               <div className="grid grid-cols-[1fr_110px] items-center gap-x-3 gap-y-1.5 text-[11px]">
-                <label htmlFor="e-risk" className="text-slate-400">Risk per trade, % of equity</label>
+                <label htmlFor="e-risk" className="text-slate-400">Risk / trade (%)</label>
                 <input id="e-risk" type="number" min="0.01" max="2" step="0.01" value={eRisk} onChange={(ev) => { setEngineDirty(true); setERisk(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
                 <label htmlFor="e-maxpos" className="text-slate-400">Max positions</label>
                 <input id="e-maxpos" type="number" min="1" max="5" step="1" value={eMaxPos} onChange={(ev) => { setEngineDirty(true); setEMaxPos(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
-                <label htmlFor="e-loss" className="text-slate-400">Max daily loss, %</label>
+                <label htmlFor="e-loss" className="text-slate-400">Max daily loss (%)</label>
                 <input id="e-loss" type="number" min="0.1" max="20" step="0.1" value={eLoss} onChange={(ev) => { setEngineDirty(true); setELoss(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
-                <label htmlFor="e-spread" className="text-slate-400">Max spread, points</label>
+                <label htmlFor="e-spread" className="text-slate-400">Max spread (pts)</label>
                 <input id="e-spread" type="number" min="1" max="1000" step="1" value={eSpread} onChange={(ev) => { setEngineDirty(true); setESpread(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
-                <label htmlFor="e-age" className="text-slate-400">Max signal age, minutes</label>
+                <label htmlFor="e-age" className="text-slate-400">Max signal age (min)</label>
                 <input id="e-age" type="number" min="1" max="60" step="1" value={eAge} onChange={(ev) => { setEngineDirty(true); setEAge(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
               </div>
               <div className="flex flex-wrap gap-2 pt-1">
@@ -2783,7 +2694,7 @@ export default function Omega() {
               <dd className={`mono ${br.seen ? "text-emerald-300" : "text-rose-300"}`}>
                 {br.seen ? `seen ${agoMs(br.synced_age_ms)}` : br.synced_age_ms != null ? `last seen ${agoMs(br.synced_age_ms)}` : "never seen"}
               </dd>
-              <dt className="text-slate-500">Key id (kid)</dt><dd className="mono text-slate-300">{br.kid || "—"}</dd>
+              <dt className="text-slate-500">Key ID</dt><dd className="mono text-slate-300">{br.kid || "—"}</dd>
               <dt className="text-slate-500">Terminal</dt>
               <dd className={`mono ${br.terminal_connected ? "text-emerald-300" : "text-rose-300"}`}>
                 {br.terminal_connected ? `connected to ${br.server || "?"}` : "not connected"}
