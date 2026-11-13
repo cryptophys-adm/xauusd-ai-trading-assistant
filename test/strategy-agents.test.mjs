@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  STRATEGY_AGENTS, AGENT_IDS, DEFAULT_AGENT, PROJECTION_NOTE, priceActionReading, AGENT_BREAKER, AGENT_BREAKER_KEY, suspendedAgents, syncAgentBreaker, agentStatuses, agentContext, agentPlans, agentCatalog, finishPlan, slimPlan, strategyAgentsMode
+  STRATEGY_AGENTS, AGENT_IDS, DEFAULT_AGENT, PROJECTION_NOTE, PATTERN_FAMILIES, PATTERN_BREAKER, suspendedPatterns, priceActionReading, AGENT_BREAKER, AGENT_BREAKER_KEY, suspendedAgents, syncAgentBreaker, agentStatuses, agentContext, agentPlans, agentCatalog, finishPlan, slimPlan, strategyAgentsMode
 } from "../src/strategy-agents.mjs";
 import { tradeLevels, planForDirection } from "../src/strategy-engine.mjs";
+import { PATTERN_CATALOG } from "../src/chart-patterns.mjs";
 import { assess, buildDecisionRecord, decisionKeyFor, decisionMessage, decide, councilEvidence, councilMessages, validateCouncil, liveAgentPlans, agentPlanPasses, strategyPlansOf, tradeFor, TP1_PROJECTION, COUNCIL_JSON_SCHEMA } from "../src/decision-engine.mjs";
 import { decisionPlans, setupsFrom, agentRecords, CONTROL_ARM } from "../src/plan-learning.mjs";
 
@@ -14,13 +15,23 @@ const bars = (rows) => rows.map(([low, high, close], i) => ({ open_time: new Dat
 const flat = (n, low, high, close) => Array.from({ length: n }, () => [low, high, close]);
 
 test("the registry: one interface, the default agent always live, the others in shadow until the switches move them", () => {
-  assert.deepEqual(AGENT_IDS, ["zone_pullback", "sweep_reversal", "breakout_retest", "range_fade", "pattern_breakout"]);
+  const FAMILIES = ["peaks", "lines", "curve", "bars", "pole", "gaps", "legs", "event"];
+  assert.deepEqual(AGENT_IDS, ["zone_pullback", "sweep_reversal", "breakout_retest", "range_fade", ...FAMILIES.map((f) => `pattern_${f}`)]);
   for (const a of STRATEGY_AGENTS) assert.ok(a.id && a.label && a.fits.length > 40 && typeof a.plan === "function" && a.version >= 1, a.id);
-  assert.deepEqual(agentStatuses({}), { zone_pullback: "live", sweep_reversal: "shadow", breakout_retest: "shadow", range_fade: "shadow", pattern_breakout: "shadow" });
-  assert.deepEqual(agentStatuses({ STRATEGY_AGENTS_LIVE: " Sweep_Reversal, nope ,range_fade", STRATEGY_AGENTS_OFF: "range_fade,zone_pullback" }), { zone_pullback: "live", sweep_reversal: "live", breakout_retest: "shadow", range_fade: "off", pattern_breakout: "shadow" }, "off wins; the default agent cannot be switched off");
-  assert.deepEqual(agentStatuses({ STRATEGY_AGENTS_MODE: "off", STRATEGY_AGENTS_LIVE: "sweep_reversal" }), { zone_pullback: "live", sweep_reversal: "off", breakout_retest: "off", range_fade: "off", pattern_breakout: "off" });
+  const others = (status) => Object.fromEntries(AGENT_IDS.slice(1).map((id) => [id, status]));
+  assert.deepEqual(agentStatuses({}), { zone_pullback: "live", ...others("shadow") });
+  assert.deepEqual(agentStatuses({ STRATEGY_AGENTS_LIVE: " Sweep_Reversal, nope ,range_fade,pattern_pole", STRATEGY_AGENTS_OFF: "range_fade,zone_pullback" }), { zone_pullback: "live", ...others("shadow"), sweep_reversal: "live", range_fade: "off", pattern_pole: "live" }, "off wins; the default agent cannot be switched off");
+  assert.deepEqual(agentStatuses({ STRATEGY_AGENTS_MODE: "off", STRATEGY_AGENTS_LIVE: "sweep_reversal" }), { zone_pullback: "live", ...others("off") });
   assert.equal(strategyAgentsMode({}), "on");
-  assert.deepEqual(agentCatalog(agentStatuses({})).map((a) => [a.id, a.status]), [["zone_pullback", "live"], ["sweep_reversal", "shadow"], ["breakout_retest", "shadow"], ["range_fade", "shadow"], ["pattern_breakout", "shadow"]]);
+  assert.deepEqual(agentCatalog(agentStatuses({})).map((a) => a.status), ["live", ...AGENT_IDS.slice(1).map(() => "shadow")]);
+  // The pattern families cover the Projection Agent's catalogue: 53 chart patterns and the 5 release patterns that apply to gold.
+  const families = agentCatalog().filter((a) => a.family);
+  assert.deepEqual(families.map((a) => [a.family, a.patterns.length]), [["peaks", 16], ["lines", 15], ["curve", 10], ["bars", 4], ["pole", 3], ["gaps", 3], ["legs", 2], ["event", 5]]);
+  const covered = families.flatMap((a) => a.patterns.map((x) => x.id));
+  assert.equal(covered.length, 58);
+  assert.equal(new Set(covered).size, 58, "each pattern belongs to one family");
+  assert.deepEqual(covered.slice().sort(), PATTERN_CATALOG.filter((x) => x.applies).map((x) => x.id).sort());
+  assert.deepEqual(Object.keys(PATTERN_FAMILIES), FAMILIES);
   assert.equal(PROJECTION_NOTE, TP1_PROJECTION, "the reward guardrail reads the same note");
   assert.equal(tradeLevels({ dir: 1, price: 100, levels: [], atrH1: 10 }).tp1_note, PROJECTION_NOTE);
 });
@@ -224,14 +235,15 @@ test("end to end: a sweep on the 15m bars reaches the record in shadow, and the 
 });
 
 test("the breaker: a live agent with a negative record over enough setups goes back to shadow and returns by itself; the owner hears once", async () => {
-  const LIVE = { STRATEGY_AGENTS_LIVE: "sweep_reversal,breakout_retest,range_fade,pattern_breakout" };
+  const LIVE = { STRATEGY_AGENTS_LIVE: AGENT_IDS.slice(1).join(",") };
   const rec = (agent, setups, mean_r) => ({ agent, setups, mean_r, fill_rate: 1, target_rate: 0.4, contexts: [] });
-  assert.deepEqual(agentStatuses(LIVE), { zone_pullback: "live", sweep_reversal: "live", breakout_retest: "live", range_fade: "live", pattern_breakout: "live" });
+  const all = (status) => Object.fromEntries(AGENT_IDS.map((id) => [id, status]));
+  assert.deepEqual(agentStatuses(LIVE), all("live"));
   const records = [rec("zone_pullback", 200, -0.3), rec("sweep_reversal", 30, -0.01), rec("breakout_retest", 29, -0.9), rec("range_fade", 80, 0)];
   assert.deepEqual(suspendedAgents(records), [{ id: "sweep_reversal", setups: 30, mean_r: -0.01 }], "the default agent is never suspended; 29 setups are too few; zero is not negative");
-  assert.deepEqual(agentStatuses(LIVE, { records }), { zone_pullback: "live", sweep_reversal: "shadow", breakout_retest: "live", range_fade: "live", pattern_breakout: "live" });
-  assert.deepEqual(agentStatuses({}, { records }), { zone_pullback: "live", sweep_reversal: "shadow", breakout_retest: "shadow", range_fade: "shadow", pattern_breakout: "shadow" });
-  assert.deepEqual(agentCatalog(agentStatuses(LIVE, { records }), { suspended: ["sweep_reversal"] }).map((a) => [a.id, a.status, a.suspended === true]), [["zone_pullback", "live", false], ["sweep_reversal", "shadow", true], ["breakout_retest", "live", false], ["range_fade", "live", false], ["pattern_breakout", "live", false]]);
+  assert.deepEqual(agentStatuses(LIVE, { records }), { ...all("live"), sweep_reversal: "shadow" });
+  assert.deepEqual(agentStatuses({}, { records }), { ...all("shadow"), zone_pullback: "live" });
+  assert.deepEqual(agentCatalog(agentStatuses(LIVE, { records }), { suspended: ["sweep_reversal"] }).filter((a) => a.suspended).map((a) => [a.id, a.status]), [["sweep_reversal", "shadow"]]);
   assert.deepEqual(suspendedAgents(null), []);
   assert.equal(AGENT_BREAKER.min_setups, 30);
   // Telegram: once per change, and nothing for an agent the switches never set live.
@@ -282,44 +294,106 @@ test("the council reads each strategy's record, overall and in the present marke
   assert.equal("strategies" in councilEvidence(args(held)).long, false);
 });
 
-test("pattern breakout: the Projection Agent's broken-out pattern, entered at the broken line toward its measured target; its record on gold decides", () => {
+test("a pattern family trades the Projection Agent's broken-out patterns by its own rule; the pattern's record on gold decides", () => {
+  // Peaks: enter on the return to the confirmation line, the stop half the pattern's height back inside.
   const dt = { tf: "15", chart: "15m", id: "double_top_eve_adam", name: "double top (Eve & Adam)", status: "confirmed", direction: -1, upper: 110, lower: 104, height: 6, target: 98, bars_ago: 2 };
   const ctx = (extra = {}) => ({ price: 103.6, atr: 4, levels: [], scalp: false, patterns: [dt], calibration: null, ...extra });
-  const plan = agent("pattern_breakout").plan(-1, ctx());
-  assert.deepEqual(slimPlan(plan), { entry: 103.6, stop: 107.4, tp1: 98, tp2: 95, at_level: true, rrr: { tp1: 1.47, tp2: 2.26 }, setup: "the Projection Agent's 15m double top (Eve & Adam), broken downward (no record on gold yet)" });
-  assert.deepEqual([plan.entry_note, plan.stop_note, plan.tp1_note], ["price is at the broken lower line of the 15m double top (Eve & Adam)", "half the pattern's height behind the broken line", "15m double top (Eve & Adam): measured target"]);
+  const peaks = agent("pattern_peaks");
+  const plan = peaks.plan(-1, ctx());
+  assert.deepEqual(slimPlan(plan), { entry: 103.6, stop: 107.4, tp1: 98, tp2: 95, at_level: true, rrr: { tp1: 1.47, tp2: 2.26 }, setup: "the Projection Agent's 15m double top (Eve & Adam), broken downward (no record on gold yet)", pattern: "double_top_eve_adam" });
+  assert.deepEqual([plan.agent, plan.pattern, plan.chart, plan.entry_note, plan.stop_note, plan.tp1_note], ["pattern_peaks", "double_top_eve_adam", "15m", "price is at the broken lower line of the 15m double top (Eve & Adam)", "half the pattern's height behind the broken line", "15m double top (Eve & Adam): measured target"]);
   assert.notEqual(plan.tp1_note, PROJECTION_NOTE);
-  assert.equal(agent("pattern_breakout").plan(1, ctx()), null, "the pattern broke downward");
+  assert.equal(peaks.plan(1, ctx()), null, "the pattern broke downward");
+  assert.equal(agent("pattern_lines").plan(-1, ctx()), null, "a double top is not a line pattern: each family trades its own");
   // Price ran on: a limit waits at the broken line.
-  const away = agent("pattern_breakout").plan(-1, ctx({ price: 101.5 }));
+  const away = peaks.plan(-1, ctx({ price: 101.5 }));
   assert.deepEqual([away.entry, away.at_level, away.stop], [104, false, 107.4]);
-  // Back inside the pattern, or the target too close: no plan.
-  assert.equal(agent("pattern_breakout").plan(-1, ctx({ price: 105 })), null);
-  assert.equal(agent("pattern_breakout").plan(-1, ctx({ patterns: [{ ...dt, target: 102.5 }] })), null);
-  assert.equal(agent("pattern_breakout").plan(-1, ctx({ patterns: [{ ...dt, status: "forming", direction: 0 }] })), null);
-  assert.equal(agent("pattern_breakout").plan(-1, ctx({ patterns: [{ ...dt, tf: "D", chart: "D1" }] })), null, "the 15m and 1H charts only");
-  // The record on gold: below the rate of all patterns the pattern is left out; above, it is named.
+  // Back inside the pattern, the target too close, not broken out, or another chart: no plan.
+  assert.equal(peaks.plan(-1, ctx({ price: 105 })), null);
+  assert.equal(peaks.plan(-1, ctx({ patterns: [{ ...dt, target: 102.5 }] })), null);
+  assert.equal(peaks.plan(-1, ctx({ patterns: [{ ...dt, status: "forming", direction: 0 }] })), null);
+  assert.equal(peaks.plan(-1, ctx({ patterns: [{ ...dt, tf: "D", chart: "daily" }] })), null, "the 15m and 1H charts only");
+  // The Projection Agent's record on gold: below the rate of all patterns the pattern is left out; above, it is named.
   const cal = (factor, active = true) => ({ base_rate: 0.5, patterns: { double_top_eve_adam: { n: 40, rate: 0.5 * factor, factor, active } } });
-  assert.equal(agent("pattern_breakout").plan(-1, ctx({ calibration: cal(0.7) })), null);
-  assert.match(agent("pattern_breakout").plan(-1, ctx({ calibration: cal(1.3) })).setup, /\(on gold it reached its target 65% of 40 times\)$/);
-  assert.match(agent("pattern_breakout").plan(-1, ctx({ calibration: cal(0.7, false) })).setup, /35% of 40 times, too few to weigh\)$/, "not measured enough: still traded, said so");
-  // Two patterns: the better measured record first.
-  const wedge = { tf: "60", chart: "1H", id: "falling_wedge", name: "falling wedge", status: "busted", direction: -1, upper: 112, lower: 103.9, height: 8, target: 96, bars_ago: 1 };
-  const both = { base_rate: 0.5, patterns: { double_top_eve_adam: { n: 30, rate: 0.5, factor: 1, active: true }, falling_wedge: { n: 30, rate: 0.7, factor: 1.4, active: true } } };
-  const best = agent("pattern_breakout").plan(-1, ctx({ patterns: [dt, wedge], calibration: both }));
-  assert.match(best.setup, /^the Projection Agent's 1H busted falling wedge, broken downward/);
-  // A wide pattern's stop is capped at 1.25 ATR behind the line.
-  const wide = agent("pattern_breakout").plan(-1, ctx({ patterns: [{ ...dt, height: 20, target: 84 }] }));
-  assert.equal(wide.stop, 109.4);
+  assert.equal(peaks.plan(-1, ctx({ calibration: cal(0.7) })), null);
+  assert.match(peaks.plan(-1, ctx({ calibration: cal(1.3) })).setup, /\(on gold it reached its target 65% of 40 times\)$/);
+  assert.match(peaks.plan(-1, ctx({ calibration: cal(0.7, false) })).setup, /35% of 40 times, too few to weigh\)$/, "not measured enough: still traded, said so");
+  // Two patterns of the family: the better measured record first. A pattern the breaker holds back is skipped.
+  const tt = { tf: "60", chart: "1H", id: "triple_top", name: "triple top", status: "confirmed", direction: -1, upper: 112, lower: 103.9, height: 8, target: 96, bars_ago: 1 };
+  const both = { base_rate: 0.5, patterns: { double_top_eve_adam: { n: 30, rate: 0.5, factor: 1, active: true }, triple_top: { n: 30, rate: 0.7, factor: 1.4, active: true } } };
+  assert.equal(peaks.plan(-1, ctx({ patterns: [dt, tt], calibration: both })).pattern, "triple_top");
+  assert.equal(peaks.plan(-1, ctx({ patterns: [dt, tt], calibration: both, suspendedPatterns: ["triple_top"] })).pattern, "double_top_eve_adam");
+  assert.equal(peaks.plan(-1, ctx({ suspendedPatterns: ["double_top_eve_adam"] })), null);
+  // A large pattern's stop is capped at 1.25 ATR behind the line.
+  const wide = peaks.plan(-1, ctx({ patterns: [{ ...dt, height: 20, target: 84 }] }));
+  assert.deepEqual([wide.stop, wide.stop_note], [109.4, "1.25 times the 1H average range behind the broken line (the pattern is larger)"]);
+
+  // Lines: the stop beyond the pattern's other line, where the pattern is busted (at most 1 ATR).
+  const tri = { tf: "15", chart: "15m", id: "triangle_symmetrical", name: "symmetrical triangle", status: "confirmed", direction: 1, upper: 100, lower: 98, height: 5, target: 105, bars_ago: 1 };
+  const lines = agent("pattern_lines").plan(1, ctx({ price: 100.3, patterns: [tri] }));
+  assert.deepEqual([lines.entry, lines.stop, lines.stop_note, lines.tp1, lines.pattern], [100.3, 97.6, "beyond the pattern's other line", 105, "triangle_symmetrical"]);
+  const rect = agent("pattern_lines").plan(1, ctx({ price: 100.3, patterns: [{ ...tri, id: "rectangle_bottom", name: "rectangle bottom", lower: 93, height: 7, target: 107 }] }));
+  assert.equal(rect.stop, 95.6, "the other line is 7 away: capped at 1 ATR behind the broken line");
+
+  // Curve: the stop a third of the height behind the rim, the first target half the measured move.
+  const cup = { tf: "60", chart: "1H", id: "cup_with_handle", name: "cup with handle", status: "confirmed", direction: 1, upper: 100, lower: 91, height: 9, target: 109, bars_ago: 3 };
+  const curve = agent("pattern_curve").plan(1, ctx({ price: 100.2, patterns: [cup] }));
+  assert.deepEqual([curve.stop, curve.stop_note, curve.tp1, curve.tp1_note, curve.tp2, curve.tp2_note], [96.63, "a third of the pattern's height behind the broken line", 104.5, "1H cup with handle: half the measured move", 109, "1H cup with handle: measured target"]);
+
+  // Pole: a flag seldom returns, so the entry is at price within the wider band.
+  const flag = { tf: "15", chart: "15m", id: "flag", name: "flag", status: "confirmed", direction: 1, upper: 100, lower: 98.5, height: 1.5, target: 106, bars_ago: 0 };
+  const pole = agent("pattern_pole").plan(1, ctx({ price: 101.2, patterns: [flag] }));
+  assert.deepEqual([pole.entry, pole.at_level, pole.stop], [101.2, true, 98.1], "1.2 from the line is inside 0.35 ATR");
+  assert.deepEqual([peaks.plan(-1, ctx({ price: 102.8 })).at_level], [false], "a reversal waits for the return: 1.2 from its line is a limit");
+
+  // The other families: bars, gaps, legs and the release patterns.
+  const make = (id, name, extra = {}) => ({ tf: "15", chart: "15m", id, name, status: "confirmed", direction: -1, upper: 104, lower: 100, height: 4, target: 95, bars_ago: 1, ...extra });
+  for (const [fam, p] of [["bars", make("pipe_top", "pipe top")], ["gaps", make("island_reversal", "island reversal")], ["legs", make("measured_move_down", "measured move down")], ["event", make("dead_cat_bounce", "dead-cat bounce")]]) {
+    const out = agent(`pattern_${fam}`).plan(-1, ctx({ price: 99.8, patterns: [p] }));
+    assert.deepEqual([out.agent, out.pattern, out.entry, out.tp1], [`pattern_${fam}`, p.id, 99.8, 95], fam);
+    assert.ok(out.stop > 100 && out.stop <= 100 + 1.25 * 4 + 0.4, fam);
+  }
+  assert.equal(agent("pattern_event").plan(-1, ctx({ price: 99.8, patterns: [make("fda_drug_approval", "FDA drug approval")] })), null, "not a pattern of gold");
+  // A busted pattern is traded the way it broke.
+  const busted = peaks.plan(1, ctx({ price: 110.3, patterns: [{ ...dt, status: "busted", direction: 1, target: 116 }] }));
+  assert.match(busted.setup, /^the Projection Agent's 15m busted double top \(Eve & Adam\), broken upward/);
+
   // The Projection Agent's reading for the council: no price, broken-out patterns first.
-  const forming = { tf: "240", chart: "4H", id: "symmetrical_triangle", name: "symmetrical triangle", status: "forming", direction: 0, upper: 120, lower: 100, height: 20, target: null, bars_ago: 0 };
-  assert.deepEqual(priceActionReading([forming, wedge, dt, { tf: "D", name: "x" }], both), [
+  const forming = { tf: "240", chart: "4H", id: "triangle_symmetrical", name: "symmetrical triangle", status: "forming", direction: 0, upper: 120, lower: 100, height: 20, target: null, bars_ago: 0 };
+  assert.deepEqual(priceActionReading([forming, tt, dt, { tf: "D", name: "x" }], both), [
     { chart: "15m", pattern: "double top (Eve & Adam)", status: "confirmed", direction: "broke out downward", record_on_gold: { breakouts: 30, reached_target_pct: 50, measured_enough: true } },
-    { chart: "1H", pattern: "falling wedge", status: "busted", direction: "broke out downward", record_on_gold: { breakouts: 30, reached_target_pct: 70, measured_enough: true } },
+    { chart: "1H", pattern: "triple top", status: "confirmed", direction: "broke out downward", record_on_gold: { breakouts: 30, reached_target_pct: 70, measured_enough: true } },
     { chart: "4H", pattern: "symmetrical triangle", status: "forming", direction: "not broken out yet" }
   ]);
-  assert.doesNotMatch(JSON.stringify(priceActionReading([dt, wedge, forming], both)), /1\d\d(\.\d+)?[,}]/, "no price");
+  assert.doesNotMatch(JSON.stringify(priceActionReading([dt, tt, forming], both)), /1\d\d(\.\d+)?[,}]/, "no price");
   assert.deepEqual(priceActionReading(null), []);
+});
+
+test("the breaker per pattern: a pattern whose own trades lost is held back, its family trades on", async () => {
+  const rec = { agent: "pattern_peaks", setups: 60, mean_r: 0.2, fill_rate: 1, target_rate: 0.5, contexts: [], patterns: [{ pattern: "triple_top", setups: 15, mean_r: -0.3 }, { pattern: "double_top_eve_adam", setups: 14, mean_r: -0.9 }, { pattern: "head_and_shoulders_top", setups: 31, mean_r: 0.4 }] };
+  assert.deepEqual(suspendedPatterns([rec]), [{ id: "triple_top", agent: "pattern_peaks", setups: 15, mean_r: -0.3 }], "14 setups are too few");
+  assert.equal(PATTERN_BREAKER.min_setups, 15);
+  assert.deepEqual(suspendedPatterns(null), []);
+  assert.deepEqual(suspendedAgents([rec]), [], "the family itself is not negative");
+  // The per-pattern record comes from the plan learner's setups.
+  const done = (pattern, r, s = "target") => ({ agent: "pattern_peaks", pattern, context: "scalp|low-ranging", results: { [CONTROL_ARM]: { s, r, f: 1 } } });
+  assert.deepEqual(agentRecords([done("triple_top", 1.2), done("triple_top", -1, "stop"), done("double_top_eve_adam", 0.5)])[0].patterns, [
+    { pattern: "double_top_eve_adam", setups: 1, mean_r: 0.5, fill_rate: 1, target_rate: 1 },
+    { pattern: "triple_top", setups: 2, mean_r: 0.1, fill_rate: 1, target_rate: 0.5 }
+  ]);
+  assert.equal("patterns" in agentRecords([{ agent: "zone_pullback", context: "c", results: { [CONTROL_ARM]: { s: "target", r: 1, f: 1 } } }])[0], false);
+  // Telegram names the pattern once; a suspended family says it once for all its patterns.
+  const m = new Map(), sent = [];
+  const env = { STRATEGY_AGENTS_LIVE: "pattern_peaks", SIGNAL_CACHE: { get: async (k) => m.get(k) ?? null, put: async (k, v) => { m.set(k, v); } } };
+  const send = async (t) => { sent.push(t); };
+  const first = await syncAgentBreaker(env, [rec], { send });
+  assert.deepEqual([first.status, first.suspended], ["changed", ["pattern:triple_top"]]);
+  assert.match(sent[0], /The triple top pattern is held back: -0\.3R per setup over 15 setups of its own\. The rest of its family trades on\./);
+  assert.equal((await syncAgentBreaker(env, [rec], { send })).status, "unchanged");
+  const whole = await syncAgentBreaker(env, [{ ...rec, mean_r: -0.1 }], { send });
+  assert.deepEqual(whole.suspended, ["pattern_peaks"]);
+  assert.match(sent[1], /Reversal tops and bottoms is suspended/);
+  assert.match(sent[1], /The triple top pattern is traded again/);
 });
 
 test("the Projection Agent's reading reaches the council with the strategies, and its pattern the trade", () => {
@@ -332,16 +406,24 @@ test("the Projection Agent's reading reaches the council with the strategies, an
     strategy: { decision: "WAIT", state: "SETUP_READY", direction: "LONG", confidence: 0.6, alignment: 0.5, headline: "The long setup is ready.", price: 4000, atr_h1: 10, key_levels: { zones, patterns: [pattern] }, plan: { at_level: true } },
     global: { timeframes: [r("D1", 0.5), r("H4", 0.4), r("H1", 0.3), r("M15", 0.35, "BUY"), r("NEWS", 0.2), r("MACRO", 0.1)] }, correlations: null, regime: "normal-trending"
   };
-  const env = { STRATEGY_AGENTS_LIVE: "pattern_breakout" };
+  const env = { STRATEGY_AGENTS_LIVE: "pattern_peaks" };
   const a = assess(loaded, { now: NOW, env });
-  assert.deepEqual(Object.keys(a.guards.long.plans), ["zone_pullback", "pattern_breakout"]);
+  assert.deepEqual(Object.keys(a.guards.long.plans), ["zone_pullback", "pattern_peaks"]);
   const ev = councilEvidence({ barClose: CLOSE, cards: a.cards, quorum: a.quorum, guards: a.guards, context: {} });
   assert.deepEqual(ev.price_action, [{ chart: "15m", pattern: "double bottom (Adam & Adam)", status: "confirmed", direction: "broke out upward", record_on_gold: { breakouts: 25, reached_target_pct: 60, measured_enough: true } }]);
-  assert.deepEqual(ev.long.strategies.map((s) => s.id), ["zone_pullback", "pattern_breakout"]);
+  assert.deepEqual(ev.long.strategies.map((s) => [s.id, s.name, "this_pattern_record" in s]), [["zone_pullback", "Zone pullback", false], ["pattern_peaks", "Reversal tops and bottoms", true]]);
+  // The pattern's own trades here, once it has any, stand beside its family's record.
+  const withRecord = councilEvidence({ barClose: CLOSE, cards: a.cards, quorum: a.quorum, guards: a.guards, context: {}, agentRecords: [{ agent: "pattern_peaks", setups: 20, mean_r: 0.3, fill_rate: 1, target_rate: 0.5, contexts: [], patterns: [{ pattern: "double_bottom_adam_adam", setups: 6, mean_r: 0.7 }] }] });
+  assert.deepEqual(withRecord.long.strategies[1].this_pattern_record, { setups: 6, mean_r_per_setup: 0.7 });
+  assert.equal(ev.long.strategies[1].this_pattern_record, null);
   assert.ok(councilMessages(ev)[0].content.includes("price_action, when present, is the Projection Agent's reading"));
-  const council = { answer: { stance: "BUY", bias: "BULLISH", confidence: 0.7, entry_type: "limit", target: "tp1", strategy: "pattern_breakout", summary: "Decision BUY, bias bullish: the double bottom broke out.", reasons: ["The pattern is confirmed."], risks: [], weighed: [] } };
+  const council = { answer: { stance: "BUY", bias: "BULLISH", confidence: 0.7, entry_type: "limit", target: "tp1", strategy: "pattern_peaks", summary: "Decision BUY, bias bullish: the double bottom broke out.", reasons: ["The pattern is confirmed."], risks: [], weighed: [] } };
   const rec = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded, assessment: a, council, now: NOW, env });
-  assert.deepEqual([rec.trade.strategy, rec.trade.entry, rec.trade.stop, rec.trade.tp1, rec.trade.target, rec.trade.tp], ["pattern_breakout", 4000, 3993.75, 4009, "tp2", 4013.75], "the measured target pays 1.44R, below this mode's 1.5R, so the trade takes the second target");
+  assert.deepEqual([rec.trade.strategy, rec.trade.pattern, rec.trade.entry, rec.trade.stop, rec.trade.tp1, rec.trade.target, rec.trade.tp], ["pattern_peaks", "double_bottom_adam_adam", 4000, 3993.75, 4009, "tp2", 4013.75], "the measured target pays 1.44R, below this mode's 1.5R, so the trade takes the second target");
+  assert.equal(rec.strategy_plans.long.pattern_peaks.pattern, "double_bottom_adam_adam");
+  // The breaker's held pattern reaches the family through assess: no plan from it.
+  const held = assess(loaded, { now: NOW, env, agentRecords: [{ agent: "pattern_peaks", setups: 20, mean_r: 0.1, patterns: [{ pattern: "double_bottom_adam_adam", setups: 15, mean_r: -0.4 }] }] });
+  assert.deepEqual(Object.keys(held.guards.long.plans), ["zone_pullback"]);
   assert.match(rec.trade.setup, /^the Projection Agent's 15m double bottom \(Adam & Adam\), broken upward \(on gold it reached its target 60% of 25 times\)$/);
   // Without a choice among strategies the evidence carries no price_action, as before.
   const off = assess(loaded, { now: NOW, env: {} });

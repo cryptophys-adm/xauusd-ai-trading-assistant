@@ -1,4 +1,4 @@
-import { Crosshair, Grid3x3, ListChecks, Puzzle, Scale } from "lucide-react";
+import { Crosshair, Grid3x3, ListChecks, Puzzle, Scale, Shapes } from "lucide-react";
 import { Badge, Empty, Hint, Panel, Skeleton } from "../components/ui";
 import { C } from "../components/charts";
 import { get } from "../lib/api";
@@ -37,7 +37,7 @@ function Registry({ agents, chosen }: { agents: any[]; chosen: string | null }) 
                 {a.suspended ? <Badge tone="amber">suspended</Badge> : <Badge tone={tone(a.status)}>{a.status}</Badge>}
               </div>
             </div>
-            <div className="mt-1 text-[11px] text-slate-400">{String(a.fits ?? "").split(":")[0]}</div>
+            <div className="mt-1 text-[11px] text-slate-400">{a.family ? `${a.patterns?.length ?? 0} patterns of the Projection Agent` : String(a.fits ?? "").split(":")[0]}</div>
             {rec ? (
               <div className="mt-3 grid grid-cols-4 gap-2 text-center">
                 {[["Setups", String(rec.setups), C.muted], ["Mean", R(rec.mean_r), rColor(rec.mean_r)], ["Filled", pc(rec.fill_rate), C.muted], ["Target", pc(rec.target_rate), C.muted]].map(([k, v, color]) => (
@@ -51,6 +51,32 @@ function Registry({ agents, chosen }: { agents: any[]; chosen: string | null }) 
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** Each pattern's own trades, per family; a pattern held back by the breaker is marked. */
+function PatternRecords({ agents, held }: { agents: any[]; held: string[] }) {
+  const rows = agents.filter((a) => a.family).flatMap((a) => (a.record?.patterns ?? []).map((p: any) => ({ family: a.label, name: (a.patterns ?? []).find((x: any) => x.id === p.pattern)?.name ?? p.pattern, ...p })))
+    .sort((x: any, y: any) => y.setups - x.setups);
+  if (!rows.length) return <Empty>No pattern has a resolved setup yet.</Empty>;
+  return (
+    <div className="table-wrap">
+      <table className="tbl">
+        <thead><tr><th>Pattern</th><th>Family</th><th>Setups</th><th>Mean</th><th>Filled</th><th>Target</th></tr></thead>
+        <tbody>
+          {rows.map((p: any) => (
+            <tr key={p.pattern}>
+              <td className="whitespace-nowrap"><span className="text-slate-200">{p.name}</span>{held.includes(p.pattern) ? <span className="ml-2"><Badge tone="amber">held back</Badge></span> : null}</td>
+              <td className="text-slate-400">{p.family}</td>
+              <td className="mono">{p.setups}</td>
+              <td className="mono" style={{ color: rColor(p.mean_r) }}>{R(p.mean_r)}</td>
+              <td className="mono">{pc(p.fill_rate)}</td>
+              <td className="mono">{pc(p.target_rate)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -163,6 +189,11 @@ export default function Strategy() {
       <Panel title="Latest decision" icon={<Crosshair className="h-3.5 w-3.5 text-cyan-300" />} hint="What each agent would trade at the latest 15m decision. Prices are on the feed's scale (OANDA)."
         right={latest ? <span className="flex items-center gap-2"><span className="mono text-[10.5px] text-slate-500">{String(latest.bar_close ?? "").slice(11, 16)} UTC</span><Badge tone={latest.stance === "BUY" ? "green" : latest.stance === "SELL" ? "red" : "amber"}>{latest.stance}</Badge></span> : null}>
         {loading ? <Skeleton rows={3} /> : !latest ? <Empty>No decision yet.</Empty> : !latest.plans ? <Empty>This decision was made before the agents.</Empty> : <LatestPlans latest={latest} agents={agents} />}
+      </Panel>
+
+      <Panel title="Pattern record" icon={<Shapes className="h-3.5 w-3.5 text-cyan-300" />} hint="Each chart pattern's own trades, replayed on the bars that followed. A pattern with a negative record over 15 setups is held back while the rest of its family trades on."
+        right={s ? <Badge tone="slate">{agents.filter((a) => a.family).reduce((n, a) => n + (a.patterns?.length ?? 0), 0)} patterns in {agents.filter((a) => a.family).length} families</Badge> : null}>
+        {loading ? <Skeleton rows={3} /> : <PatternRecords agents={agents} held={(s?.suspended_patterns ?? []).map((x: any) => x.id)} />}
       </Panel>
 
       <Panel title="Record by market condition" icon={<ListChecks className="h-3.5 w-3.5 text-cyan-300" />} hint="Mean R per setup of each agent's own plan, replayed on the bars that followed; the small number is the setups.">

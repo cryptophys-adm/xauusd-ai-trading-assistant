@@ -53,7 +53,7 @@
     // dengan key level bukan decision"): the council may choose these agents' plans beside the default
     // zone_pullback (src/strategy-agents.mjs). A live agent whose measured record is negative over 30
     // setups goes back to shadow by itself. Empty: only the default agent is live.
-    "STRATEGY_AGENTS_LIVE": "sweep_reversal,breakout_retest,range_fade,pattern_breakout",
+    "STRATEGY_AGENTS_LIVE": "sweep_reversal,breakout_retest,range_fade,pattern_peaks,pattern_lines,pattern_curve,pattern_bars,pattern_pole,pattern_gaps,pattern_legs,pattern_event",
     // Model migration (owner decision 2026-11-07): glm-5.3-flash and nemotron-3-120b-a12b stop
     // answering on 2026-11-20. The news chain and the H1 Reasoner run on gpt-oss-120b.
     "AI_MODEL_ANALYST": "@cf/openai/gpt-oss-120b",
