@@ -3,3 +3,4 @@ export function runModelDataset(env: unknown, options?: { now?: number }): Promi
 export function readModelDatasetSummary(env: unknown): Promise<Record<string, any> | null>;
 export function readModelDataset(env: unknown, options?: { since?: string; limit?: number }): Promise<Record<string, any> | null>;
 export function loadLabeledRows(env: unknown, options?: { limit?: number }): Promise<unknown[]>;
+export function modelAdvice(env: unknown, options?: Record<string, unknown>): Promise<Record<string, any> | null>;

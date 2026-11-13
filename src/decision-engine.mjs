@@ -51,7 +51,9 @@ import { fetchEffectiveDoctrine, formatDoctrineDirectives } from "./doctrine-con
 import { activeWitnessTuning } from "./witness-tuning.mjs";
 import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 import { marketStructure } from "./market-structure.mjs";
-import { learnedBlock } from "./learned-knowledge.mjs";
+import { learnedBlock, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
+import { effectiveLearnedPack } from "./learned-live.mjs";
+import { modelAdvice } from "./model-dataset.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
@@ -650,6 +652,7 @@ export function councilMessages(evidence, { learned = null } = {}) {
     "Prioritize target 'tp1' (structural quick win at the nearest strong key level / liquidity pool) to avoid prolonged floating duration risk. Use 'limit' entry at the key level pullback rather than chasing market momentum. A target needs at least 1.5R.",
     `confidence is 0 to 1; below ${MIN_CONFIDENCE} a BUY or SELL becomes WAIT. bias is where the weight of the evidence leans (BULLISH, BEARISH or NEUTRAL), even when the stance is WAIT.`,
     "Never invent a price: the levels come only from the plans in the evidence. Never mention position size. Write summary, reasons and risks in plain sentences a trader would write: no field names, no words joined by underscores or dots, no key=value. The summary starts with the stance and the bias, for example \"Decision WAIT, bias bullish: ...\". Give one to four reasons and up to three risks. In weighed, list the witness keys you relied on most.",
+    ...(evidence?.context?.model ? ["context.model is the platform's own model, trained on this system's past decisions and connected only after it beat the base rate on decisions it had not seen: long_target_first and short_target_first are its chances for each side against their base rates. Weigh it like a witness; it never overrides the guardrails or the levels."] : []),
     "Return only the JSON object."
   ].join(" ") + doctrineSnippet;
   return [
@@ -893,6 +896,9 @@ export function keyLevelsAround(strategy, n = KEY_LEVELS_KEPT) {
 }
 
 /** Pure: the whole decision record from the loaded inputs, their assessment and the council's result (or null). */
+/** The model advice the council was given (kept on the decision record), or null. */
+const modelAdviceOf = (council) => (council?.model_advice && typeof council.model_advice === "object" ? council.model_advice : null);
+
 export function buildDecisionRecord({ key, barClose, loaded, assessment = null, council = null, previous = null, now = Date.now(), decidedAt = new Date(now).toISOString(), env = null, analytics = null }) {
   const { inputs = {}, strategy = null } = loaded || {};
   const { mode: MODE, quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR } = modeThresholds(env?.TRADING_MODE);
@@ -928,7 +934,7 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     quorum, witnesses: cards,
     guardrails: { long: { allowed: guards.long.allowed, checks: guards.long.checks, entry_trigger: guards.long.entry_trigger ?? null }, short: { allowed: guards.short.allowed, checks: guards.short.checks, entry_trigger: guards.short.entry_trigger ?? null } },
     cautions, vetoes: { long: guards.long.vetoes, short: guards.short.vetoes }, supports: { long: guards.long.supports ?? [], short: guards.short.supports ?? [] },
-    context: councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, market, now }),
+    context: { ...councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, market, now }), ...(modelAdviceOf(council) ? { model: modelAdviceOf(council) } : {}) },
     strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline, price: strategy.price, atr_h1: strategy.atr_h1 } : null,
     // The Key Level Agent's candidate zones around price, on the feed's scale (owner 2026-11-12): Omega's
     // stop and target follow them while a position is open (src/omega-engine.mjs).
@@ -968,7 +974,7 @@ export async function askCouncil(env, evidence, { clock = () => Date.now(), dead
   const runState = {};
   // The council's learned notes (chart 15, the bar's session); none unless LEARNED_KNOWLEDGE_ENABLED.
   const closeMs = Date.parse(evidence?.bar_close ?? "");
-  const learned = Number.isFinite(closeMs) ? learnedBlock(env, { agent: COUNCIL_AGENT, chart: "15", session: sessionOf(closeMs) }) : null;
+  const learned = Number.isFinite(closeMs) && learnedKnowledgeEnabled(env) ? learnedBlock(env, { agent: COUNCIL_AGENT, chart: "15", session: sessionOf(closeMs), pack: await effectiveLearnedPack(env) }) : null;
   const base = councilMessages(evidence, { learned });
   let messages = base;
   let errors = [];
@@ -1031,7 +1037,18 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
         context.doctrine = formatDoctrineDirectives(doctrinePayload.rules, { role: "council" });
       }
     } catch { /* keep context */ }
+    // The platform's own model, once its prospective record connected it by itself (src/model-baseline.mjs
+    // promotionGate, owner 2026-11-13: "buat agar autonomous"): its probabilities as advice; null otherwise.
+    const inputs = data.inputs || {};
+    const advice = await modelAdvice(env, {
+      barClose: closeIso, witnesses: assessment.cards, quorum: assessment.quorum,
+      guardrails: { long: { allowed: assessment.guards.long.allowed, checks: assessment.guards.long.checks, entry_trigger: assessment.guards.long.entry_trigger ?? null }, short: { allowed: assessment.guards.short.allowed, checks: assessment.guards.short.checks, entry_trigger: assessment.guards.short.entry_trigger ?? null } },
+      structure: marketStructure({ h4Bars: inputs.h4Bars ?? [], h1Bars: inputs.h1Bars ?? [], m15Bars: inputs.m15Bars ?? [] }),
+      context, feed: inputs.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview", tradingMode: modeThresholds(env?.TRADING_MODE).mode
+    });
+    if (advice) context.model = advice;
     const council = await askCouncil(env, councilEvidence({ barClose: closeIso, cards: assessment.cards, quorum: assessment.quorum, guards: assessment.guards, context }), { clock });
+    if (advice) council.model_advice = advice;
     const record = buildDecisionRecord({ key, barClose: closeIso, loaded: data, assessment, council, previous, now, decidedAt: new Date(clock()).toISOString(), env });
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(key, closeIso, record.decided_at, record.stance, record.confidence ?? null, record.source, JSON.stringify(record)).run();

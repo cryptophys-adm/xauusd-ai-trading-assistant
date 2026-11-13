@@ -25,6 +25,7 @@ import { matchRebuts } from "./rebut-names.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, quorumRule } from "./reputation.mjs";
 import { agentReputation, sessionOf } from "./outcome-scoring.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
+import { effectiveLearnedPack } from "./learned-live.mjs";
 import { roomWeighting } from "./weighting.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import { projectionReading } from "./projection-agent.mjs";
@@ -597,10 +598,12 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   // Aether A9 in the 15m room too (owner 2026-11-13: "strengthen autonomous learning & knowledge looping"):
   // the bundled learned notes per agent, chart 15 and the bar's session; none unless LEARNED_KNOWLEDGE_ENABLED.
   const learnedCtx = { chart: "15", session: sessionOf(Date.parse(barTime)) };
-  const learnedFor = (agent) => learnedBlock(env, { agent, ...learnedCtx });
+  // The bundled pack plus the notes promoted autonomously (src/learned-live.mjs); read only when the notes are on.
+  const learnedPack = learnedKnowledgeEnabled(env) ? await effectiveLearnedPack(env) : undefined;
+  const learnedFor = (agent) => learnedBlock(env, { agent, ...learnedCtx, pack: learnedPack });
   if (!existing.has("brief")) {
     await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { roster, calibration, confirmations, independent: true, m15_close: evidence.m15.candles.at(-1) ?? null, news: evidence.news,
-      ...(learnedKnowledgeEnabled(env) ? { learned_pack: learnedPackInfo(env, { roster, ...learnedCtx }) } : {}) } });
+      ...(learnedKnowledgeEnabled(env) ? { learned_pack: learnedPackInfo(env, { roster, ...learnedCtx, pack: learnedPack }) } : {}) } });
   }
 
   // One budget for the bar, shared by every parallel step (and its correction call).

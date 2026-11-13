@@ -105,8 +105,13 @@ test("B3. shadow predictions, the prospective record and the report for Aether c
 test("B4. the hourly run retrains when stale, keeps the model in KV, and the report reaches Aether", async () => {
   const env = { SIGNAL_CACHE: kv() };
   const rows = syntheticRows();
-  const r1 = await runModelBaseline(env, { now: T0, loadRows: async () => rows });
+  const r1 = await runModelBaseline(env, { now: T0, loadRows: async () => rows, loadLiveNotes: async () => [{ item_id: "k-a", version: 1, status: "live", agents: ["risk"], chart: "60", promoted_at: "2026-11-01T00:00:00Z", text: "not sent" }] });
   assert.equal(r1.status, "ok");
+  // For Cerebrum: the gate state and the live notes travel with the report (ids and agents, not the text).
+  assert.equal(r1.report.promotion.status, "not_promoted");
+  assert.equal(r1.report.gate.min_n, 300);
+  assert.deepEqual(r1.report.live_notes.map((n) => [n.item_id, n.status, n.agents[0]]), [["k-a", "live", "risk"]]);
+  assert.ok(!("text" in r1.report.live_notes[0]));
   assert.ok(r1.report && r1.skills.tight_long > 0);
   assert.ok(env.SIGNAL_CACHE.m.has(MODEL_BASELINE_KEY));
   assert.equal((await runModelBaseline(env, { now: T0 + 10 * 60_000, loadRows: async () => rows })).status, "fresh");
@@ -148,4 +153,49 @@ test("B5. the dataset stores the baseline's shadow predictions (point in time) a
   assert.equal(loaded.length, 2);
   assert.ok(loaded[1].labels.wide && loaded[1].labels.tight.long.outcome);
   assert.equal(WIDE_RULES.stop_atr, 3);
+});
+
+test("B6. the model never reads the decision's own outputs (stance, bias, confidence, plan)", () => {
+  const rows = syntheticRows().map((r) => ({ ...r, features: { ...r.features, stance: r.labels.tight.long.outcome === "target" ? 1 : -1, confidence: 0.7, plan_rrr: 2, bias: -1 } }));
+  const m = fitLogistic(decisiveRows(rows, "tight", "long"));
+  assert.ok(!m.keys.some((k) => /^(stance|bias|confidence|plan_)/.test(k)), m.keys.join(","));
+});
+
+test("B7. the gate connects a model only on a significant prospective record of both sides, and disconnects it", async () => {
+  const { promotionGate, gateMessage, GATE } = await import("../src/model-baseline.mjs");
+  const good = { n: 320, skill: 0.08, p_value: 0.004, auc: 0.62 };
+  assert.equal(promotionGate({}).status, "not_promoted");
+  assert.match(promotionGate({ tight_long: { ...good, n: 120 }, tight_short: good }).reason, /long: 120 of 300 decisions/);
+  assert.match(promotionGate({ tight_long: { ...good, p_value: 0.2 }, tight_short: good }).reason, /not better than the base rate/);
+  assert.match(promotionGate({ tight_long: { ...good, auc: 0.51 }, tight_short: good }).reason, /AUC 0.51/);
+  const on = promotionGate({ tight_long: good, tight_short: good, wide_long: { ...good, skill: 0.12 }, wide_short: { ...good, skill: 0.1 } });
+  assert.deepEqual([on.status, on.set], ["promoted", "wide"], "the set with the better weaker side");
+  assert.equal(GATE.min_n, 300);
+  assert.match(gateMessage(null, on), /connected \(autonomous\)/);
+  assert.equal(gateMessage(on, on), null);
+  assert.match(gateMessage(on, { status: "not_promoted", reason: "tight: long: AUC 0.5" }), /disconnected \(autonomous\)/);
+  // The hourly run stores the gate and says when it changed; the switch keeps it disconnected.
+  const env = { SIGNAL_CACHE: kv() };
+  const r = await runModelBaseline(env, { now: T0, loadRows: async () => syntheticRows() });
+  assert.equal(r.promotion, "not_promoted", "no prospective record yet");
+  assert.equal(r.gate_message, null);
+});
+
+test("B8. once connected, the council gets the model's probabilities (no price); before, nothing changes", async () => {
+  const { modelAdvice } = await import("../src/model-dataset.mjs");
+  const { councilMessages } = await import("../src/decision-engine.mjs");
+  const env = { SIGNAL_CACHE: kv() };
+  const b = trainBaseline(syntheticRows(), { now: T0 });
+  const M = 15 * 60_000;
+  const bars = Array.from({ length: 120 }, (_, i) => ({ open_time: new Date(T0 + i * M).toISOString(), close_time: new Date(T0 + (i + 1) * M).toISOString(), open: 4000, high: 4006, low: 3994, close: 4001 }));
+  const args = { barClose: bars[100].close_time, witnesses: [{ key: "H1", available: true, lean: 0.8 }], quorum: { score: 0.5 }, guardrails: {}, context: {}, series: { m15: bars } };
+  env.SIGNAL_CACHE.m.set(MODEL_BASELINE_KEY, JSON.stringify({ ...b, promotion: { status: "not_promoted" } }));
+  assert.equal(await modelAdvice(env, args), null, "not connected: no advice");
+  assert.ok(!councilMessages({ context: {} })[0].content.includes("context.model"));
+  env.SIGNAL_CACHE.m.set(MODEL_BASELINE_KEY, JSON.stringify({ ...b, promotion: { status: "promoted", set: "tight", since: "2026-11-20T00:00:00Z" } }));
+  const advice = await modelAdvice(env, args);
+  assert.ok(advice.long_target_first > advice.short_target_first, "the H1 lean up favours the long side");
+  assert.equal(advice.label_set, "tight");
+  assert.ok(!/"(entry|stop|tp1|tp2|price)"/.test(JSON.stringify(advice)));
+  assert.ok(councilMessages({ context: { model: advice } })[0].content.includes("context.model is the platform's own model"));
 });
