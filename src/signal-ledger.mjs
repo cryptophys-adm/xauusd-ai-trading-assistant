@@ -381,7 +381,17 @@ export const LEDGER_SCHEMA_SQL = [
     updated_at TEXT NOT NULL
   )`,
   "CREATE INDEX IF NOT EXISTS idx_signal_ledger_opened ON signal_ledger(opened_at)",
-  "CREATE INDEX IF NOT EXISTS idx_signal_ledger_status ON signal_ledger(status)"
+  "CREATE INDEX IF NOT EXISTS idx_signal_ledger_status ON signal_ledger(status)",
+  // The decisions the no-stacking rule held back (owner 2026-11-13: "pastikan semua ada visualisasi"):
+  // until then they left no trace, so nobody could see why a BUY or SELL never reached the ledger.
+  `CREATE TABLE IF NOT EXISTS signal_ledger_held (
+    decision_key TEXT PRIMARY KEY,
+    side TEXT NOT NULL,
+    held_at TEXT NOT NULL,
+    blocking_id TEXT,
+    reason TEXT
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_signal_ledger_held_at ON signal_ledger_held(held_at)"
 ];
 /** The Omega policy's columns (src/signal-ledger.mjs simulateOmega), added in place. */
 const OMEGA_COLUMNS = ["trading_mode TEXT", "entry_action TEXT", "omega_status TEXT", "omega_gate TEXT", "omega_filled_at TEXT", "omega_closed_at TEXT", "omega_exit TEXT", "r_omega REAL", "omega_size REAL", "omega_json TEXT"];
@@ -469,8 +479,12 @@ export async function ingestDecision(env, d, { now = Date.now() } = {}) {
   // No stacking, as Omega (owner 2026-11-13, "setuju"): a row on the same side holds new signals back only
   // while it waits for its fill or is open and unprotected. A row past TP1 (still followed to TP2) or with
   // its stop at break-even (SL+) no longer does: on 2026-11-12 one such row held back every SELL for 10 hours.
-  const live = await env.DB.prepare("SELECT COUNT(*) AS n FROM signal_ledger WHERE source = 'decision' AND side = ? AND (status = 'pending' OR (status = 'open' AND tp1_closed_at IS NULL AND COALESCE(sl_plus_triggered, 0) = 0))").bind(s.side).first();
-  if (Number(live?.n) > 0) return 0;
+  const live = await env.DB.prepare("SELECT id, status FROM signal_ledger WHERE source = 'decision' AND side = ? AND (status = 'pending' OR (status = 'open' AND tp1_closed_at IS NULL AND COALESCE(sl_plus_triggered, 0) = 0)) ORDER BY opened_at DESC LIMIT 1").bind(s.side).first();
+  if (live?.id) {
+    const reason = live.status === "pending" ? "an earlier signal of the same side still waits for its fill" : "an earlier signal of the same side is open and not yet protected (no TP1, no SL+)";
+    await env.DB.prepare("INSERT OR IGNORE INTO signal_ledger_held (decision_key, side, held_at, blocking_id, reason) VALUES (?, ?, ?, ?, ?)").bind(String(d.decision_key), s.side, d.decided_at ?? iso(now), String(live.id), reason).run();
+    return 0;
+  }
   const res = await env.DB.prepare(insertSql).bind(`decision:${d.decision_key}`, "decision", d.decision_key, d.decided_at ?? iso(now), s.side, s.entry, s.stop, s.tp1, s.tp2, finite(t.progressive_stop) ? t.progressive_stop : null, finite(d.confidence) ? r3(d.confidence) : null, String(d.summary ?? "").slice(0, 300), iso(now)).run();
   const added = Number(res?.meta?.changes) || 0;
   // The Omega policy follows the decision's trading mode and entry type.
@@ -567,8 +581,11 @@ export async function runSignalLedger(env, { now = Date.now(), readStrategy = nu
 /** GET /api/ledger: the ledger of the last `days` days. */
 export async function readLedger(env, { days = 30, now = Date.now() } = {}) {
   await ensureLedgerSchema(env.DB);
-  const rows = (await env.DB.prepare("SELECT * FROM signal_ledger WHERE opened_at >= ? ORDER BY opened_at").bind(iso(now - days * 86_400_000)).all()).results || [];
-  return ledgerView(rows.map((r) => ({ ...r, ambiguous: Boolean(r.ambiguous) })), { days });
+  const since = iso(now - days * 86_400_000);
+  const rows = (await env.DB.prepare("SELECT * FROM signal_ledger WHERE opened_at >= ? ORDER BY opened_at").bind(since).all()).results || [];
+  const held = (await env.DB.prepare("SELECT decision_key, side, held_at, blocking_id, reason FROM signal_ledger_held WHERE held_at >= ? ORDER BY held_at DESC LIMIT 50").bind(since).all()).results || [];
+  const heldCount = await env.DB.prepare("SELECT COUNT(*) AS n FROM signal_ledger_held WHERE held_at >= ?").bind(since).first();
+  return { ...ledgerView(rows.map((r) => ({ ...r, ambiguous: Boolean(r.ambiguous) })), { days }), held: { count: Number(heldCount?.n) || 0, items: held } };
 }
 
 // ---------------------------------------------------------------------------

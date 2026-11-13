@@ -79,6 +79,8 @@ test("a new bridge key voids the stored connection (needs re-entry) and it is ne
   assert.equal(r.connection, null);
   const ov = await brokerOverview(e, { now: NOW });
   assert.equal(ov.connection.status, "needs_reentry");
+  // Why Omega is or is not entering now (owner 2026-11-13: visualisation): the planner's latest notes as codes.
+  assert.ok(Array.isArray(ov.planner?.codes) && ov.planner.codes.length > 0 && Number.isFinite(ov.planner.since_ms), JSON.stringify(ov.planner));
   assert.equal(e.DB.raw.prepare("SELECT envelope FROM omega_connection").get().envelope, null, "the old envelope is dropped");
 });
 

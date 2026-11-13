@@ -471,6 +471,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
   const intents = (await db.prepare("SELECT payload, status, result, created_ms, updated_ms FROM omega_intents ORDER BY created_ms DESC, id DESC LIMIT 50").all()).results ?? [];
   const events = (await db.prepare("SELECT ms, actor, action, detail FROM omega_events ORDER BY id DESC LIMIT 20").all()).results ?? [];
   const lastRec = await db.prepare("SELECT ms, detail FROM omega_events WHERE actor = 'agent:cerebrum' AND action = 'autonomous_recovery' ORDER BY id DESC LIMIT 1").first();
+  // The planner's current notes (written only when they change): why Omega is or is not entering now.
+  const lastPlan = await db.prepare("SELECT ms, detail FROM omega_events WHERE action = 'plan' ORDER BY id DESC LIMIT 1").first();
 
   // TCA: Transaction Cost Analysis aggregation over completed intents
   let tcaLatencySum = 0, tcaLatencyCount = 0;
@@ -582,7 +584,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     macro_risk: macroRisk,
     volatility,
     intents: intents.map((r) => ({ ...parse(r.payload, {}), status: r.status, result: parse(r.result), created_ms: r.created_ms, updated_ms: r.updated_ms })),
-    events: events.map((r) => ({ ms: r.ms, actor: r.actor, action: r.action, detail: parse(r.detail) }))
+    events: events.map((r) => ({ ms: r.ms, actor: r.actor, action: r.action, detail: parse(r.detail) })),
+    planner: lastPlan ? { since_ms: lastPlan.ms, codes: String(parse(lastPlan.detail, {})?.notes ?? "").split(",").filter(Boolean) } : null
   };
 }
 
