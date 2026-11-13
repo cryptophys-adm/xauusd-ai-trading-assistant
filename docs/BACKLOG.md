@@ -6,7 +6,7 @@ leaves this file when it is done (and enters the CHANGELOG) or when the owner dr
 only backlog: the older lists (`docs/BRIEF_HUD_AGENTS.md` §6, `docs/RFC_INDICATOR_AGENT_PLATFORM.md`
 §9 and §10) were merged here on 2026-11-07 (owner request). Item numbers are stable: a number that
 is gone was done or dropped (CHANGELOG 2026-11-09 for items 0 to 4, 8, 9, 11, 13, 16, 17 and 18;
-2026-11-12 for item 19 and the closed parts of items 5, 6, 12 and 15). Reviewed against production D1
+2026-11-12 for item 19 and the closed parts of items 5, 6, 12 and 15; 2026-11-13 for item 22). Reviewed against production D1
 on 2026-11-12 (owner: "check backlog").
 
 ## Verified after the reopen (2026-11-09, items 0 to 4 closed)
@@ -54,8 +54,6 @@ setup READY state that never reached the decision (#192).
     - **The room quorum weighting** (2026-11-09, SSOT "Room quorum weighting"): tuned automatically per timeframe, no approval. A point needs 300 concluded and scored rooms of its timeframe before it can be activated: about 4 days on 15m, two weeks on 1H, about 2 months on 4H and more than a year on D1. Watch the Telegram messages, the Nexus Aether page (`nexus.cryptophys.work/aether`, weighting per timeframe) and `GET /api/weighting?timeframe=60`: the 15m room reaches 300 rooms first (137 at 11:11 UTC on 2026-11-09), the 1H room from about 2026-11-23.
 14. **Rotate the TradingView webhook secret before publishing** (owner decision 2026-11-09: deferred to the final step before publish). The current secret was visible in a status-line screenshot during the 401 diagnosis. Steps: PowerShell `New-Guid` one-liner, GitHub secret `TV_WEBHOOK_SECRET`, run `set-webhook-secret.yml` as a new run (never "Re-run"), the indicators' "CTA Webhook Secret" input, then delete and recreate every alert (an alert keeps the inputs it was created with). Keep "Indicator arguments" off in the chart's status line.
 
-22. **Restore the Prophet R38 1H TradingView alert (owner, found 2026-11-13).** The `prophet_r38` and `prophet_r38_hud` alerts on the 1H chart have sent nothing since 2026-11-10 07:00 UTC, while GMI and R37 on 1H keep arriving and no webhook was rejected; the alert stopped on TradingView's side. The 1H decision does not depend on it (the local engine decides), but the `prophet` parity record has stood still since then. Check the alert in TradingView (stopped, expired or deleted) and recreate it with the same message as the other Prophet R38 alerts. Since 2026-11-13 a silent alert raises the health alert `webhook_silent` (Nexus Priority Queue, Telegram).
-
 ## Waits for the Financial Management module
 
 20. **Money figures on the Omega page** (owner 2026-11-12: "ya tunda sampai modul Financial Management, masukan backlog"). The Nexus Performance page shows no money since #267 (owner: "hapus broker capital, sesuai aturan never money; catatan kita akan membuat modul sendiri terkait Financial Management").
@@ -81,4 +79,4 @@ setup READY state that never reached the decision (#192).
 
 ## Calibration in progress
 
-15. **4H and D1 parity** (alerts installed by the owner on 2026-11-09). The 1H, 15m and 5m identities are approved (`prophet` 41, `prophet_m15` 360, `prophet_m5` 866 consecutive matches on 2026-11-12). Still calibrating (2026-11-13): `prophet_h4` and `gmi_h4` at 20 of 24 (about one more trading day), `prophet_d1` 3 and `gmi_d1` 2 of 24 (weeks). `gmi_m5` was revoked again on 2026-11-13 (5 of 24 toward re-approval at 09:26 UTC); `prophet_m5` re-approved. Until then the 4H and D1 Desks speak at confidence 0.4 or lower.
+15. **4H and D1 parity** (alerts installed by the owner on 2026-11-09). The 1H, 15m and 5m identities are approved (`prophet` 41, `prophet_m15` 360, `prophet_m5` 866 consecutive matches on 2026-11-12). Still calibrating (2026-11-13): `prophet_h4` and `gmi_h4` at 20 of 24 (about one more trading day), `prophet_d1` 3 and `gmi_d1` 2 of 24 (weeks). `gmi_m5` was revoked again on 2026-11-13 (5 of 24 toward re-approval at 09:26 UTC); `prophet_m5` re-approved. `gmi_m5` matches about 98 to 99 % of 5m bars (2 to 3 mismatches a day, 22 on 2026-11-12 in one run of six bars from 10:05 UTC), and almost every mismatch is in the higher-timeframe gate (`gate`, `conflict`, sometimes `gmi_dir`) while the 15m and 1H GMI match every bar: likely the 5m alert reading a forming higher-timeframe bar. To study if it keeps revoking; it does not touch the decision (the 5m trigger is Prophet R38, approved). Until then the 4H and D1 Desks speak at confidence 0.4 or lower.
