@@ -1,6 +1,6 @@
 # RFC: a custom model from the platform's own knowledge (EA and XAUUSD Trading Assistant)
 
-Status: accepted by the owner on 2026-11-13 ("setuju"); step 1 is built. Canonical state: `docs/SSOT.md`
+Status: accepted by the owner on 2026-11-13 ("setuju"); steps 1 and 2 are built (step 2 and the wide labels after "strengthen autonomous learning & knowledge looping"). Canonical state: `docs/SSOT.md`
 ("Custom model dataset"); open steps: `docs/BACKLOG.md` item 21.
 
 ## 0. Goal
@@ -61,7 +61,7 @@ A model only advises until it has earned more:
 ## 6. Steps
 
 1. Dataset builder — built (this RFC's PR).
-2. Baseline logistic regression in the Worker, recorded in shadow.
+2. Baseline logistic regression in the Worker, retrained every hour, judged walk-forward and prospectively, recorded in shadow, reported to Aether — built.
 3. Training workflow (GitHub Actions, LightGBM to ONNX), stored in Cloudflare, judged in shadow.
 4. The EA reads the ONNX model (advice only until promoted).
 5. LoRA for the language model on Kaggle, once the scored rooms suffice.

@@ -129,9 +129,9 @@ test("D4. the ledger step backfills the stored decisions, labels them after the 
   }
   const now = T0 + 140 * M;
   const r1 = await runModelDataset(env, { now, series: { bars, m15: bars } });
-  assert.deepEqual(r1, { status: "ok", added: 3, labeled: 2, unavailable: 0 }, "the last decision's 4 hours have not passed");
+  assert.deepEqual(r1, { status: "ok", added: 3, labeled: 2, wide: 2, unavailable: 0 }, "the last decision's 4 hours have not passed");
   const again = await runModelDataset(env, { now, series: { bars, m15: bars } });
-  assert.deepEqual(again, { status: "ok", added: 0, labeled: 0, unavailable: 0 }, "idempotent");
+  assert.deepEqual(again, { status: "ok", added: 0, labeled: 0, wide: 0, unavailable: 0 }, "idempotent");
   const row = env.DB.raw.prepare("SELECT * FROM model_dataset ORDER BY bar_close LIMIT 1").get();
   assert.equal(row.version, MODEL_DATASET_VERSION);
   assert.equal(row.label_status, "labeled");
@@ -150,6 +150,6 @@ test("D4. the ledger step backfills the stored decisions, labels them after the 
   assert.ok(summary.latest_feature_count > 30);
   // A decision whose 15m bar was never cached: unavailable once its horizon passed.
   env.DB.raw.prepare("INSERT INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, ?, ?, ?)").run("OANDA:XAUUSD:15:1", "2026-11-01T00:00:00.000Z", "2026-11-01T00:00:00.000Z", "WAIT", 0, "council", JSON.stringify({ ...DECISION, bar_close: "2026-11-01T00:00:00.000Z" }));
-  assert.equal((await runModelDataset(env, { now, series: { bars, m15: bars } })).unavailable, 1);
+  assert.equal((await runModelDataset(env, { now, series: { bars, m15: bars } })).unavailable, 2, "both label sets give up on it");
   assert.deepEqual(await runModelDataset({ DB: env.DB, MODEL_DATASET_MODE: "off" }, { now }), { status: "disabled" });
 });

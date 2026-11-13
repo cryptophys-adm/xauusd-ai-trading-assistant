@@ -193,10 +193,11 @@ import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } fr
 import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
 import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema, readExecutionReport, LEDGER_CRON, activeSetups } from "./signal-ledger.mjs";
 import { runPatternCalibration, readPatternCalibration } from "./pattern-calibration.mjs";
-import { runModelDataset, readModelDataset, readModelDatasetSummary } from "./model-dataset.mjs";
+import { runModelDataset, readModelDataset, readModelDatasetSummary, loadLabeledRows } from "./model-dataset.mjs";
+import { runModelBaseline, readBaseline, baselineStatus } from "./model-baseline.mjs";
 import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, TRADING_MODE_KEY } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
-import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport, pushExecutionReport } from "./aether-push.mjs";
+import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport, pushExecutionReport, pushModelReport } from "./aether-push.mjs";
 import { applyWitnessTuning, readWitnessTuning, witnessTuningMessage, witnessTuningReport } from "./witness-tuning.mjs";
 import { runTuneStep, readTuneRuns } from "./tune-runs.mjs";
 import { pushDoctrineFacts } from "./doctrine-facts.mjs";
@@ -2493,6 +2494,10 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // The custom model's dataset: rows by label status, outcomes per side (src/model-dataset.mjs).
     return dashboardJson({ status: "ok", dataset: await readModelDatasetSummary(env) });
   }
+  if (url.pathname === "/api/model/baseline") {
+    // The self-trained baseline: walk-forward checks, the prospective record, the features it leans on.
+    return dashboardJson({ status: "ok", baseline: baselineStatus(await readBaseline(env)) });
+  }
   if (url.pathname === "/api/model/dataset") {
     // The labeled rows for training, paged by bar close (behind Cloudflare Access like every /api route).
     try {
@@ -2705,7 +2710,15 @@ async function runLedgerStep(env: Env): Promise<void> {
   } catch (e) { console.error("signal_ledger_failed", e instanceof Error ? e.message : String(e)); }
   // The custom model's dataset (owner 2026-11-13, docs/RFC_CUSTOM_MODEL.md): features and labels per decision.
   const dataset = await runModelDataset(env);
-  if (dataset.status === "failed" || Number(dataset.added) || Number(dataset.labeled) || Number(dataset.unavailable)) console.log("model_dataset", JSON.stringify(dataset));
+  if (dataset.status === "failed" || Number(dataset.added) || Number(dataset.labeled) || Number(dataset.wide) || Number(dataset.unavailable)) console.log("model_dataset", JSON.stringify(dataset));
+  // The baseline model learns by itself every hour from the labeled rows (src/model-baseline.mjs, shadow
+  // only), and its report goes to Aether as knowledge (owner 2026-11-13: "strengthen autonomous learning").
+  const baseline = await runModelBaseline(env, { loadRows: () => loadLabeledRows(env, { limit: 2000 }) });
+  if (baseline.status !== "fresh" && baseline.status !== "disabled") {
+    const { report, ...summary } = baseline as Record<string, unknown>;
+    const pushed = report ? await pushModelReport(env, report).catch((e) => ({ status: "failed", error: String(e) })) : null;
+    console.log("model_baseline", JSON.stringify({ ...summary, aether: pushed?.status ?? null }));
+  }
 }
 
 export default {
