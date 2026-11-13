@@ -69,8 +69,13 @@ export function matchRelease(e, releases = []) {
   // prefers the same "core" word and the same period (month, quarter or year).
   const words = (x) => { const s = String(x || "").toLowerCase(); return { core: /\bcore\b/.test(s), period: /y\/y|yoy|year/.test(s) ? "y" : /q\/q|qoq|quarter|annuali[sz]ed/.test(s) ? "q" : /m\/m|mom|month/.test(s) ? "m" : null }; };
   const want = words(e.title);
-  const score = (r) => { const w = words(r.title); return (w.core === want.core ? 2 : 0) + (want.period && w.period === want.period ? 1 : 0) + (r.actual != null ? 0.5 : 0); };
-  return near.slice().sort((a, b) => score(b) - score(a))[0];
+  // The core and the headline print are different numbers: never one for the other (production
+  // 2026-11-13: TradingView listed only "PPI MoM", and "Core PPI m/m" took its actual and surprise, so the
+  // same surprise was read twice).
+  const same = near.filter((r) => words(r.title).core === want.core);
+  if (!same.length) return null;
+  const score = (r) => (want.period && words(r.title).period === want.period ? 1 : 0) + (r.actual != null ? 0.5 : 0);
+  return same.slice().sort((a, b) => score(b) - score(a))[0];
 }
 
 const fmtNum = (v, unit) => (v == null ? "n/a" : `${Math.round(v * 1000) / 1000}${unit === "%" ? "%" : ""}`);

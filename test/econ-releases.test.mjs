@@ -149,6 +149,9 @@ test("production 2026-11-10: TradingView's titles: Non Farm Payrolls is a jobs r
   assert.equal(matchRelease({ title: "Core CPI m/m", time: CPI }, releases).title, "Core Inflation Rate MoM");
   assert.equal(matchRelease({ title: "CPI m/m", time: CPI }, releases).title, "Inflation Rate MoM");
   assert.equal(matchRelease({ title: "CPI y/y", time: CPI }, releases).title, "Inflation Rate YoY");
+  // Production 2026-11-13: only the headline was listed; the core event gets no release, not the headline's.
+  assert.equal(matchRelease({ title: "Core PPI m/m", time: CPI }, [{ title: "PPI MoM", time: CPI, kind: "inflation", actual: 0.3, forecast: 0.4 }]), null);
+  assert.equal(matchRelease({ title: "PPI m/m", time: CPI }, [{ title: "PPI MoM", time: CPI, kind: "inflation", actual: 0.3, forecast: 0.4 }]).title, "PPI MoM");
   // A stored "other" row is re-classified at the next sweep.
   resetEconSchemaCacheForTests();
   const env = { DB: fakeD1(), SIGNAL_CACHE: kv() };
