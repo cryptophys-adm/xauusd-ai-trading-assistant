@@ -248,12 +248,26 @@ export default function GlobalDecision() {
   const m5Text = !e ? null : !m5 ? "no fresh 5m bar" : m5.buy_confirmed || m5.sell_confirmed ? `${m5.buy_confirmed ? "buy" : "sell"} confirmed${m5.verified ? "" : " (unverified)"}` : "no confirmation";
   const rows = e ? [...witnessRows, { key: "M5", label: "5m", role: "trigger", lean: null, pass: m5 && (m5.buy_confirmed || m5.sell_confirmed) ? m5.verified : null, note: `the Prophet R38 confirmation of the latest closed 5m bar${m5?.candle_time ? ` (${utc(m5.candle_time)})` : ""}`, stale: false, weight: null, trigger: m5Text }] : strategyRows;
   const decision = e?.stance ?? s?.decision ?? g?.action ?? "WAIT";
-  const [mode, setMode] = useState<string>(e?.trading_mode ?? "intraday");
-  useEffect(() => { fetch("/api/trading-mode", { credentials: "include" }).then((r) => r.json()).then((d) => { if (d?.mode) setMode(d.mode); else console.warn("trading-mode no data", d); }).catch((e) => console.warn("trading-mode fetch failed", e)); }, []);
+  // The active mode (the next decision uses it) is read from the AI Worker; this decision's own mode is
+  // e.trading_mode. A change is a same-origin POST through the Omega Worker, as a signed-in person (owner
+  // 2026-11-13: a GET never changes state).
+  const [mode, setMode] = useState<string | null>(null);
+  const [modePinned, setModePinned] = useState(false);
+  const [modeError, setModeError] = useState<string | null>(null);
+  useEffect(() => { fetch("/api/trading-mode", { credentials: "include" }).then((r) => r.json()).then((d) => { if (d?.mode) { setMode(d.mode); setModePinned(d.pinned === true); } else console.warn("trading-mode no data", d); }).catch((e) => console.warn("trading-mode fetch failed", e)); }, []);
+  const changeMode = async (next: string) => {
+    setModeError(null);
+    try {
+      const r = await fetch("/omega/api/trading-mode", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify({ mode: next }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d?.ok === false) throw new Error(d?.error === "pinned_by_server" ? "the server pins the mode" : d?.error || `HTTP ${r.status}`);
+      setMode(d.mode ?? next);
+    } catch (err) { setModeError(err instanceof Error ? err.message : String(err)); }
+  };
   const lead = e ? (e.stance === "SELL" ? "short" : e.stance === "BUY" ? "long" : (e.quorum?.short_share ?? 0) > (e.quorum?.long_share ?? 0) ? "short" : "long") : null;
   return (
     <Panel title={e ? "Decision Engine" : "Global decision"} icon={<Target className="h-3.5 w-3.5 text-cyan-300" />}
-      right={e ? <div className="flex items-center gap-1.5"><Badge tone="slate">{mode}</Badge><Badge tone={e.source === "council" ? "cyan" : "amber"}>{e.source === "council" ? "AI council" : "fallback"}</Badge></div> : st && <Badge tone={st.tone}>{st.label}</Badge>}>
+      right={e ? <div className="flex items-center gap-1.5"><span title="The trading mode this decision was made in"><Badge tone="slate">{e.trading_mode ?? "mode unknown"}</Badge></span><Badge tone={e.source === "council" ? "cyan" : "amber"}>{e.source === "council" ? "AI council" : "fallback"}</Badge></div> : st && <Badge tone={st.tone}>{st.label}</Badge>}>
       {loading && !g && !e ? <Skeleton rows={5} /> : !g && !e ? <p className="text-[12px] text-slate-500">The decision is not available yet.</p> : (
         <>
           <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
@@ -331,12 +345,17 @@ export default function GlobalDecision() {
           {e && shown.map((x: any) => <SetupLifecycle key={x.id} setup={x} levels={e.key_levels} />)}
           {e && (
             <div className="glass-inner mt-3 flex flex-wrap items-center gap-2 px-3 py-2 text-[11px] text-slate-300">
-              <span className="eyebrow text-[9px]">Mode</span>
-              <select className="rounded border border-white/10 bg-slate-900 px-2 py-1 text-[11px] text-slate-200" value={mode} onChange={async (ev) => { await fetch("/api/trading-mode?mode=" + encodeURIComponent(ev.target.value)); window.location.reload(); }} title="Active selector (stored in KV)">
-                <option value="scalp">scalp</option>
-                <option value="intraday">intraday</option>
-                <option value="swing">swing</option>
-              </select>
+              <span className="eyebrow text-[9px]">Mode for the next decision</span>
+              {mode == null ? <span className="text-slate-500">loading…</span> : (
+                <select className="rounded border border-white/10 bg-slate-900 px-2 py-1 text-[11px] text-slate-200 disabled:opacity-50" value={mode} disabled={modePinned} onChange={(ev) => { void changeMode(ev.target.value); }} title={modePinned ? "Pinned by the server (TRADING_MODE)" : "Changes the thresholds of the next 15m decision; the owner hears of it on Telegram"}>
+                  <option value="scalp">scalp</option>
+                  <option value="intraday">intraday</option>
+                  <option value="swing">swing</option>
+                </select>
+              )}
+              {modePinned && <span className="text-slate-500">pinned by the server</span>}
+              {e.trading_mode && mode && e.trading_mode !== mode && <span className="text-amber-200">this decision: {e.trading_mode}</span>}
+              {modeError && <span className="text-rose-300">not changed: {modeError}</span>}
             </div>
           )}
           <p className="glass-inner mt-3 px-3 py-2.5 text-[11.5px] leading-relaxed text-slate-200">{e?.summary ?? s?.headline ?? g.summary}</p>

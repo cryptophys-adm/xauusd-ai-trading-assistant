@@ -423,3 +423,17 @@ test("ledger cron (owner 2026-11-12, every 5 minutes): follows a decision on the
   // Omega sells at the open of the minute after the decision and takes its target the same minute as the plan.
   assert.deepEqual([row.omega_status, row.omega_filled_at, row.omega_exit], ["closed", new Date(close + 60_000).toISOString(), "target"]);
 });
+
+test("/api/trading-mode is read only (owner 2026-11-13): a GET with ?mode= changes nothing and points to the Omega POST", async () => {
+  const { env } = await workerEnv();
+  const get = async (path) => {
+    const r = await worker.fetch(new Request("https://worker.test" + path), env, execution().ctx);
+    return { status: r.status, body: await r.json() };
+  };
+  const before = await get("/api/trading-mode");
+  assert.equal(before.status, 200);
+  const write = await get("/api/trading-mode?mode=swing");
+  assert.equal(write.status, 405);
+  assert.equal(write.body.error, "read_only");
+  assert.equal((await get("/api/trading-mode")).body.mode, before.body.mode, "the mode did not change");
+});

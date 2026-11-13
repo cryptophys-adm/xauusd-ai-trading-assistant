@@ -99,6 +99,23 @@ export async function tradingMode(env) {
   } catch { /* ignore */ }
   return "intraday";
 }
+/**
+ * A person sets the trading mode (owner 2026-11-13: "ya, kerjakan semua"): only through the Omega Worker's
+ * POST /api/trading-mode (a signed-in person, same origin), never a GET. A server TRADING_MODE pins the mode,
+ * and then the stored one has no effect, so the change is refused rather than silently ignored.
+ */
+export const TRADING_MODES_LIST = Object.freeze(["scalp", "intraday", "swing"]);
+export async function setTradingMode(env, { mode, actor = "" } = {}) {
+  const asked = String(mode ?? "").trim().toLowerCase();
+  if (!TRADING_MODES_LIST.includes(asked)) return { ok: false, error: "mode must be scalp, intraday or swing" };
+  if (!String(actor).trim()) return { ok: false, error: "a person makes this change" };
+  const envMode = String(env?.TRADING_MODE ?? "").trim().toLowerCase();
+  if (TRADING_MODES_LIST.includes(envMode)) return { ok: false, error: "pinned_by_server", mode: envMode };
+  const previous = await tradingMode(env);
+  if (previous === asked) return { ok: true, mode: asked, previous, changed: false };
+  await env.SIGNAL_CACHE.put(TRADING_MODE_KEY, asked);
+  return { ok: true, mode: asked, previous, changed: true };
+}
 export const DECISION_TELEGRAM_KEY = "telegram:decision-engine:last:v1";
 
 /** The trading modes' thresholds (owner 2026-11-10). Unknown modes read as intraday. Doctrine: engine_thresholds. */

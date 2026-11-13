@@ -777,8 +777,8 @@ export default function Omega() {
   const watchdog = b?.autonomous_watchdog || null;
   const cur = br.currency || hb?.currency || "USD";
   const digits = typeof br.digits === "number" && br.digits >= 0 ? br.digits : 2;
-  const symbolName = br.symbol || "XAUUSD.m";
-  const serverName = br.server || conn.server || "Broker Server";
+  const symbolName = br.symbol || "symbol not reported";
+  const serverName = br.server || conn.server || "no server";
   const positionsList: any[] = hb?.positions_detail?.length ? hb.positions_detail : br?.positions || [];
   const ordersList: any[] = br?.orders || [];
   const dealsList: any[] = (Array.isArray(data?.deals) && data.deals.length > 0)
@@ -932,7 +932,7 @@ export default function Omega() {
                 MetaTrader 5 Web Terminal
               </span>
               <span className="mono rounded bg-white/5 px-2 py-0.5 text-[11px] text-cyan-300 border border-white/10">
-                {serverName} · {br.trade_mode ? br.trade_mode.toUpperCase() : "DEMO"} · {symbolName},{mt5Tf}
+                {serverName} · {br.trade_mode ? br.trade_mode.toUpperCase() : "ACCOUNT UNKNOWN"} · {symbolName},{mt5Tf}
               </span>
             </div>
           </div>
@@ -1257,7 +1257,7 @@ export default function Omega() {
                 <div className="mt-1 flex items-center justify-between rounded bg-white/[0.03] px-2 py-1 border border-white/5">
                   <span className="mono text-slate-200 truncate">{serverName}</span>
                   <Badge tone={br.terminal_connected ? "green" : "red"}>
-                    {br.trade_mode || "demo"}
+                    {br.trade_mode || "unknown"}
                   </Badge>
                 </div>
               </div>
@@ -1276,7 +1276,7 @@ export default function Omega() {
                   <div className="flex items-center justify-between rounded bg-white/[0.02] px-2 py-1 border border-white/5">
                     <span className="mono text-slate-300">CryptophysXAUUSD</span>
                     <span className="mono text-[10px] text-slate-400">
-                      {ea.connected ? `v${hb?.version || "1.11"}` : "direct EA"}
+                      {ea.connected ? (hb?.version ? `v${hb.version}` : "version not reported") : "direct EA"}
                     </span>
                   </div>
                 </div>
@@ -1535,8 +1535,8 @@ export default function Omega() {
                   </span>
                 </div>
                 <div className="text-slate-400">
-                  Risk/Trade: <span className="text-slate-200">{e.risk_pct ?? 0.5}%</span> · Max Pos:{" "}
-                  <span className="text-slate-200">{e.max_positions ?? 1}</span>
+                  Risk/Trade: <span className="text-slate-200">{e.risk_pct != null ? `${e.risk_pct}%` : "—"}</span> · Max Pos:{" "}
+                  <span className="text-slate-200">{e.max_positions ?? "—"}</span>
                 </div>
               </div>
             </div>
@@ -1680,7 +1680,7 @@ export default function Omega() {
                       </span>
                     </div>
                     <p className="mt-0.5 text-[11px] text-slate-400">
-                      Zero human intervention required. Cerebrum continuously monitors MT5 terminal heartbeat, recovers blocking dialogs, corrects INI permissions, and heals connectivity autonomously.
+                      On every bridge sync Cerebrum checks the MT5 terminal and, when it is stuck, sends the bridge a recovery directive (then waits the cooldown before another). The last recovery is shown below.
                     </p>
                   </div>
                 </div>
@@ -1774,8 +1774,8 @@ export default function Omega() {
                         <span className="mono text-emerald-300">{agoMs(br.state_age_ms)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Display</span>
-                        <span className="mono text-slate-300">DISPLAY=:99</span>
+                        <span className="text-slate-500">Terminal</span>
+                        <span className={`mono ${br.terminal_connected ? "text-emerald-300" : "text-rose-300"}`}>{br.terminal_connected ? "connected" : "not connected"}</span>
                       </div>
                     </div>
                   </div>
@@ -1801,7 +1801,7 @@ export default function Omega() {
                     <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
                       <div className="flex justify-between">
                         <span className="text-slate-500">Mode</span>
-                        <span className="mono uppercase text-slate-200">{br.trade_mode || "demo"}</span>
+                        <span className="mono uppercase text-slate-200">{br.trade_mode || "unknown"}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">Permission</span>
@@ -1889,7 +1889,7 @@ export default function Omega() {
                     <div className="rounded border border-white/5 bg-black/30 p-2.5">
                       <div className="text-[10px] uppercase text-slate-500">Guardian Status</div>
                       <div className="mono mt-1 text-[12px] font-semibold text-emerald-300">
-                        Executed & Cooled Down
+                        {Date.now() - watchdog.last_recovery.ms > (watchdog.anti_flapping_cooldown_sec ?? 180) * 1000 ? "Executed, cooldown over" : "Executed, cooling down"}
                       </div>
                     </div>
                   </div>
@@ -1897,7 +1897,7 @@ export default function Omega() {
                   <div className="mt-3 flex items-center gap-2 rounded border border-emerald-500/20 bg-emerald-950/15 p-3 text-[11.5px] text-emerald-200">
                     <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-400" />
                     <span>
-                      All pipeline nodes running nominal. No recovery interventions required in the current session.
+                      No recovery directive recorded.{br.state_age_ms != null && br.state_age_ms < 60000 ? " The terminal is streaming." : " The terminal is not streaming: see the MT5 Terminal node above."}
                     </span>
                   </div>
                 )}
@@ -1975,19 +1975,19 @@ export default function Omega() {
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-100">Tier-1 Quant Execution & TCA Quality Engine</span>
+                      <span className="font-bold text-slate-100">Execution quality (TCA) and the order route</span>
                       <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300 border border-emerald-400/30">
-                        GRADE: {b?.tca?.quality || "PRIME"}
+                        {b?.tca?.samples_count ? `GRADE: ${b.tca.quality}` : "NO FILLS SAMPLED YET"}
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-400">
-                      Sub-millisecond VPS tick execution, automated slippage attribution, smart order routing failover, and adaptive volatility sizing.
+                      Measured on Omega's own fills: latency from intent to execution and slippage against the requested price. One route: the stored connection on the bridge's terminal.
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="mono rounded border border-white/10 bg-black/40 px-2.5 py-1 text-[11px] text-slate-300">
-                    Router: <span className="text-cyan-300 font-semibold">{b?.sor?.active_route || serverName}</span>
+                    Route: <span className="text-cyan-300 font-semibold">{b?.route?.active_route ?? "no connection"}</span>
                   </span>
                 </div>
               </div>
@@ -1999,21 +1999,21 @@ export default function Omega() {
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">TCA & Slippage</span>
                     <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[9.5px] font-bold text-emerald-300">
-                      {b?.tca?.quality || "PRIME"}
+                      {b?.tca?.samples_count ? b.tca.quality : "—"}
                     </span>
                   </div>
                   <div className="space-y-1.5 text-[11.5px]">
                     <div className="flex justify-between">
                       <span className="text-slate-500">Execution Latency</span>
-                      <span className="mono font-semibold text-slate-200">{b?.tca?.avg_latency_ms != null ? `${b.tca.avg_latency_ms} ms` : "< 150 ms (VPS Native)"}</span>
+                      <span className="mono font-semibold text-slate-200">{b?.tca?.avg_latency_ms != null ? `${b.tca.avg_latency_ms} ms` : "no sample"}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">Avg Fill Slippage</span>
-                      <span className="mono font-semibold text-emerald-300">{b?.tca?.avg_slippage_points != null ? `${b.tca.avg_slippage_points} pts` : "0.0 pts"}</span>
+                      <span className="mono font-semibold text-emerald-300">{b?.tca?.avg_slippage_points != null ? `${b.tca.avg_slippage_points} pts` : "no sample"}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">Max Slippage Recorded</span>
-                      <span className="mono text-slate-300">{b?.tca?.max_slippage_points != null ? `${b.tca.max_slippage_points} pts` : "0 pts"}</span>
+                      <span className="mono text-slate-300">{b?.tca?.max_slippage_points != null ? `${b.tca.max_slippage_points} pts` : "no sample"}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">Orders Sampled</span>
@@ -2025,27 +2025,23 @@ export default function Omega() {
                 {/* 2. Smart Order Router (SOR) & Failover */}
                 <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Smart Order Router (SOR)</span>
-                    <span className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-[9.5px] font-bold text-cyan-300">
-                      {b?.sor?.status || "OPTIMAL"}
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Order route</span>
+                    <span className={`rounded px-1.5 py-0.5 text-[9.5px] font-bold ${b?.route?.status === "trading" ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/20 text-amber-300"}`}>
+                      {String(b?.route?.status ?? "unknown").replace(/_/g, " ").toUpperCase()}
                     </span>
                   </div>
                   <div className="space-y-1.5 text-[11.5px]">
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Routing Mode</span>
-                      <span className="mono font-semibold text-slate-200">{b?.sor?.mode || "auto_failover"}</span>
+                      <span className="text-slate-500">Active route</span>
+                      <span className="mono font-semibold text-slate-200">{b?.route?.active_route ?? "none"}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Primary Route</span>
-                      <span className="mono text-slate-300">{b?.sor?.primary_broker || "Monex-Demo"}</span>
+                      <span className="text-slate-500">Failover</span>
+                      <span className="mono text-slate-300">{b?.route?.failover === "none" ? "none (one route)" : b?.route?.failover ?? "—"}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Standby Route</span>
-                      <span className="mono text-slate-400">{b?.sor?.standby_broker || "HotStandby-Backup"}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Failover Ready</span>
-                      <span className="mono text-emerald-300">YES (Hot Standby)</span>
+                      <span className="text-slate-500">Bridge last sync</span>
+                      <span className="mono text-slate-400">{b?.route?.bridge_sync_age_ms != null ? `${Math.round(b.route.bridge_sync_age_ms / 1000)} s ago` : "never"}</span>
                     </div>
                   </div>
                 </div>
@@ -2053,7 +2049,7 @@ export default function Omega() {
                 {/* 3. Adaptive Volatility & Dynamic ATR */}
                 <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Adaptive Volatility</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Volatility &amp; stop management</span>
                     <span className={`rounded px-1.5 py-0.5 text-[9.5px] font-bold ${
                       b?.volatility?.regime === "HIGH" ? "bg-amber-500/20 text-amber-300" : "bg-emerald-500/20 text-emerald-300"
                     }`}>
@@ -2062,23 +2058,25 @@ export default function Omega() {
                   </div>
                   <div className="space-y-1.5 text-[11.5px]">
                     <div className="flex justify-between">
-                      <span className="text-slate-500">M15 ATR (Feed)</span>
+                      <span className="text-slate-500">ATR (broker)</span>
                       <span className="mono font-semibold text-slate-200">
-                        {b?.volatility?.atr_points || b?.bridge?.atr_points ? `${b.volatility?.atr_points || b.bridge.atr_points} pts ($${((b.volatility?.atr_points || b.bridge.atr_points) * 0.01).toFixed(2)})` : "385 pts ($3.85)"}
+                        {b?.volatility?.atr_points != null ? `${b.volatility.atr_points} pts${b.volatility.atr_value != null ? ` (${b.volatility.atr_value})` : ""}` : "not reported"}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Auto BE Trigger</span>
-                      <span className="mono text-slate-300">1.0x ATR (Dynamic)</span>
+                      <span className="text-slate-500">Break-even</span>
+                      <span className="mono text-slate-300">{b?.management?.break_even_r != null ? `at ${b.management.break_even_r}R` : "off (key-level SL+ instead)"}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Trailing Distance</span>
-                      <span className="mono text-slate-300">1.5x ATR (Dynamic)</span>
+                      <span className="text-slate-500">Noise filter</span>
+                      <span className={`mono ${b?.management?.adaptive_stop ? "text-emerald-300" : "text-slate-500"}`}>{b?.management?.adaptive_stop ? "on (0.75 × ATR floor)" : "off"}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Noise Filter</span>
-                      <span className="mono text-emerald-300">Active (0.75x ATR floor)</span>
-                    </div>
+                    {b?.management && (
+                      <div className="pt-1 text-[10.5px] leading-snug text-slate-400">
+                        <div>{b.management.key_levels}.</div>
+                        <div className="mt-0.5 text-slate-500">{b.management.fallback}; {b.management.scale_out}.</div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -2095,11 +2093,11 @@ export default function Omega() {
                   <div className="space-y-1.5 text-[11.5px]">
                     <div className="flex justify-between">
                       <span className="text-slate-500">Gate Window</span>
-                      <span className="mono text-slate-300">-120m to +30m USD High</span>
+                      <span className="mono text-slate-300">{b?.macro_risk?.window_minutes ? `-${b.macro_risk.window_minutes.before}m to +${b.macro_risk.window_minutes.after}m, USD high impact` : "—"}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">Upcoming (24h)</span>
-                      <span className="mono font-semibold text-cyan-300">{b?.macro_risk?.upcoming_count ?? 0} events</span>
+                      <span className="mono font-semibold text-cyan-300">{b?.macro_risk?.upcoming_24h ?? "—"} events</span>
                     </div>
                     <div className="truncate text-slate-400 text-[10.5px] pt-1">
                       {b?.macro_risk?.next_event ? (
@@ -2443,7 +2441,7 @@ export default function Omega() {
                 <div className="rounded-lg border border-emerald-400/40 bg-emerald-500/10 p-2.5 text-[11.5px] text-emerald-200">
                   <div className="flex items-center gap-2 font-semibold">
                     <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>Active MT5 Account Session: {serverName} ({br.trade_mode ? br.trade_mode.toUpperCase() : "DEMO"})</span>
+                    <span>Active MT5 Account Session: {serverName} ({br.trade_mode ? br.trade_mode.toUpperCase() : "ACCOUNT UNKNOWN"})</span>
                   </div>
                   <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
                     Other broker presets, servers, and credentials are currently <strong>OFF / Locked</strong> to protect the active trading session. Click <strong>Disconnect</strong> below to switch accounts or change broker.

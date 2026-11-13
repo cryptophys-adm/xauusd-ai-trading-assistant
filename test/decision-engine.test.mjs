@@ -434,3 +434,15 @@ test("the MT5 fallback (owner 2026-11-11: trade as usual): the same guardrails, 
   assert.equal(r.cautions.filter((c) => c === MT5_FALLBACK_CAUTION).length, 1);
   assert.doesNotMatch(MT5_FALLBACK_CAUTION, /\d{3,}|\d\.\d/, "no price in the caution");
 });
+
+test("setTradingMode: a person sets the stored mode; a server-pinned mode refuses rather than silently ignoring (owner 2026-11-13)", async () => {
+  const { setTradingMode, tradingMode } = await import("../src/decision-engine.mjs");
+  const m = new Map();
+  const env = { SIGNAL_CACHE: { get: async (k) => m.get(k) ?? null, put: async (k, v) => { m.set(k, v); } } };
+  assert.deepEqual(await setTradingMode(env, { mode: "Swing", actor: "owner@example.com" }), { ok: true, mode: "swing", previous: "intraday", changed: true });
+  assert.equal(await tradingMode(env), "swing");
+  assert.equal((await setTradingMode(env, { mode: "swing", actor: "o" })).changed, false);
+  assert.equal((await setTradingMode(env, { mode: "turbo", actor: "o" })).ok, false);
+  assert.equal((await setTradingMode(env, { mode: "scalp" })).ok, false, "a person makes this change");
+  assert.deepEqual(await setTradingMode({ ...env, TRADING_MODE: "intraday" }, { mode: "scalp", actor: "o" }), { ok: false, error: "pinned_by_server", mode: "intraday" });
+});

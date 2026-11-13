@@ -240,3 +240,21 @@ test("the MT5 fallback switch (War Room, 2026-11-11): read when signed in; chang
   assert.equal((await handle(req("/api/feed-fallback"), env, opts)).status, 403, "no JWT, nothing");
   assert.equal(calls.length, 1);
 });
+
+test("the trading mode changes only by a person's same-origin POST (owner 2026-11-13), never a service token or a GET", async () => {
+  resetKeyCacheForTests();
+  const calls = [];
+  const O = { ...omega(), setTradingMode: async (input) => { calls.push(input); return { ok: true, mode: input.mode, previous: "intraday", changed: true }; } };
+  const env = { ...ENV_BASE, OMEGA: O };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const person = await jwt({ email: "Owner@Example.com" });
+  const post = (body, extra = {}) => handle(req("/api/trading-mode", { token: person, method: "POST", body, ...extra }), env, opts);
+  const ok = await post({ mode: "Scalp" });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(calls.at(-1), { mode: "scalp", actor: "owner@example.com" });
+  assert.equal((await post({ mode: "turbo" })).status, 400);
+  assert.equal((await post({ mode: "swing" }, { origin: "https://evil.example" })).status, 403, "cross-origin refused");
+  assert.equal((await handle(req("/api/trading-mode", { token: await jwt({ common_name: "ci.access" }), method: "POST", body: { mode: "swing" } }), env, opts)).status, 403, "a service token never changes it");
+  assert.equal((await handle(req("/api/trading-mode?mode=swing", { token: person }), env, opts)).status, 405, "a GET changes nothing");
+  assert.equal(calls.length, 1);
+});

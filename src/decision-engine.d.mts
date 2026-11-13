@@ -16,6 +16,8 @@ export const COUNCIL_JSON_SCHEMA: Readonly<Record<string, unknown>>;
 export const DECISION_SCHEMA_SQL: string[];
 export function decisionEngineEnabled(env: unknown): boolean;
 export function tradingMode(env: unknown): Promise<string>;
+export function setTradingMode(env: unknown, input?: { mode?: unknown; actor?: string }): Promise<Record<string, unknown> & { ok: boolean }>;
+export const TRADING_MODES_LIST: readonly string[];
 export function decisionKeyFor(closeIso: string | null | undefined): string | null;
 export function keyCloseMs(key: string | null | undefined): number;
 export function witnessCards(input: { global?: any; strategy?: any }): Record<string, any>[];
