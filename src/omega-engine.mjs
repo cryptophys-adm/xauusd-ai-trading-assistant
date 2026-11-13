@@ -483,6 +483,12 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   if (signal.action === "ENTER_LIMIT") {
     const priceAway = buy ? sym.ask > signal.entry + 0.35 * stopDist : sym.bid < signal.entry - 0.35 * stopDist;
     if (priceAway) { note("waiting_for_pullback"); return { intents, notes }; }
+    // Owner 2026-11-13 ("setuju"): price past the entry toward the plan's stop by more than 0.35 x the plan's
+    // stop distance is not entered. The stop keeps its distance from the fill, so such an entry put the stop
+    // well beyond the key level the plan stood on (a SELL at 3903.98 against a 3888.48 entry, its stop 14
+    // past the plan's). It waits: price may come back inside the band before the signal expires.
+    const pastEntry = buy ? sym.ask < signal.entry - 0.35 * planStopDist : sym.bid > signal.entry + 0.35 * planStopDist;
+    if (pastEntry) { note("price_past_entry"); return { intents, notes }; }
   }
   const breached = buy ? sym.bid <= signal.stop : sym.ask >= signal.stop;
   if (breached) { note("stop_breached"); return { intents, notes }; }

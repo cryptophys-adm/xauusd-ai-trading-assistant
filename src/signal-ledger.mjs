@@ -184,7 +184,11 @@ export function omegaEntry(signal, bars, { now = Date.now(), maxAgeMs = OMEGA_DE
   if (toMs(bars[k].open_time) >= until) return { status: "skipped", gate: "expired" };
   const dir = signal.side === "BUY" ? 1 : -1, stopDist = Math.abs(signal.entry - signal.stop);
   const limitPlan = String(signal.entry_action || "").toUpperCase() === "ENTER_LIMIT";
+  // A limit plan fills only within 0.35 x the stop distance of its entry, on either side: beyond it toward
+  // the target it waits for a pullback, beyond it toward the stop it waits for price to come back (owner
+  // 2026-11-13, "setuju": no entry next to the plan's stop with a stop moved past the key level).
   const limit = signal.entry + dir * OMEGA_SIM.limit_pullback * stopDist;
+  const chase = signal.entry - dir * OMEGA_SIM.limit_pullback * stopDist;
   for (let j = k; j < bars.length && toMs(bars[j].open_time) < until; j++) {
     const b = bars[j];
     if (toMs(b.close_time) > now) return { status: "pending" };
@@ -192,6 +196,9 @@ export function omegaEntry(signal, bars, { now = Date.now(), maxAgeMs = OMEGA_DE
     if (limitPlan && dir * (b.open - limit) > 0) {
       if (!(dir > 0 ? b.low <= limit : b.high >= limit)) continue;
       fill = limit;
+    } else if (limitPlan && dir * (chase - b.open) > 0) {
+      if (!(dir > 0 ? b.high >= chase : b.low <= chase)) continue;
+      fill = chase;
     }
     if (!finite(fill) || dir * (fill - signal.stop) <= 0) return { status: "skipped", gate: "stop_breached", bar: j };
     return { status: "filled", bar: j, fill, filled_at: b.open_time };
@@ -459,7 +466,10 @@ export async function ingestDecision(env, d, { now = Date.now() } = {}) {
   const other = t.target === "tp1" ? t.tp2 : null;
   const s = { side: d.stance, entry: t.entry, stop: t.stop, tp1: t.tp, tp2: finite(other) && dir * (other - t.tp) > 0 ? other : null };
   if (!validSignal(s)) return 0;
-  const live = await env.DB.prepare("SELECT COUNT(*) AS n FROM signal_ledger WHERE source = 'decision' AND side = ? AND status IN ('pending', 'open')").bind(s.side).first();
+  // No stacking, as Omega (owner 2026-11-13, "setuju"): a row on the same side holds new signals back only
+  // while it waits for its fill or is open and unprotected. A row past TP1 (still followed to TP2) or with
+  // its stop at break-even (SL+) no longer does: on 2026-11-12 one such row held back every SELL for 10 hours.
+  const live = await env.DB.prepare("SELECT COUNT(*) AS n FROM signal_ledger WHERE source = 'decision' AND side = ? AND (status = 'pending' OR (status = 'open' AND tp1_closed_at IS NULL AND COALESCE(sl_plus_triggered, 0) = 0))").bind(s.side).first();
   if (Number(live?.n) > 0) return 0;
   const res = await env.DB.prepare(insertSql).bind(`decision:${d.decision_key}`, "decision", d.decision_key, d.decided_at ?? iso(now), s.side, s.entry, s.stop, s.tp1, s.tp2, finite(t.progressive_stop) ? t.progressive_stop : null, finite(d.confidence) ? r3(d.confidence) : null, String(d.summary ?? "").slice(0, 300), iso(now)).run();
   const added = Number(res?.meta?.changes) || 0;

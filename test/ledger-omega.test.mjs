@@ -176,3 +176,26 @@ test("O7. 1m bars (owner 2026-11-12, \"ya kerjakan keduanya\"): stitched after t
   const opp = simulateOmega(decided, bars1, { decisions: [{ ...dec(OPEN, "SELL", -0.4), at_ms: OPEN + M + 150_000 }, { ...dec(OPEN + M, "BUY", 0.6), at_ms: OPEN + 2 * M + 180_000 }], now: late });
   assert.deepEqual([opp.exit, opp.closed_at], ["opposite", new Date(OPEN + 2 * M + 180_000).toISOString()]);
 });
+
+test("O8. the ledger fills a limit only inside the band, and a row past TP1 or at break-even no longer holds new signals (owner 2026-11-13)", async () => {
+  // SELL limit 4000, stop 4010: the band is 3996.5 to 4003.5. A bar opening at 4006 does not fill at 4006;
+  // it fills at 4003.5 once its low reaches the band.
+  const limit = { ...SELL, entry_action: "ENTER_LIMIT" };
+  assert.equal(omegaEntry(limit, bars([[4006, 4008, 4004, 4005]]), { now: late }).gate, "waiting_for_pullback", "never inside the band");
+  const back = omegaEntry(limit, bars([[4006, 4008, 4002, 4003]]), { now: late });
+  assert.deepEqual([back.status, back.fill], ["filled", 4003.5]);
+  // No stacking as Omega: an open row blocks only while unprotected.
+  resetLedgerSchemaCacheForTests();
+  const env = { DB: d1() };
+  await ensureLedgerSchema(env.DB);
+  const decision = (n) => ({ decision_key: key(OPEN + n * M), decided_at: new Date(OPEN + (n + 1) * M + 60_000).toISOString(), stance: "SELL", confidence: 0.8, trading_mode: "scalp", summary: "x",
+    trade: { side: "SELL", action: "ENTER_LIMIT", entry: 4000, stop: 4010, tp: 3985, tp1: 3985, tp2: 3970, target: "tp1" } });
+  assert.equal(await ingestDecision(env, decision(0)), 1);
+  assert.equal(await ingestDecision(env, decision(1)), 0, "the first one waits for its fill");
+  env.DB.raw.prepare("UPDATE signal_ledger SET status = 'open' WHERE id = ?").run(`decision:${key(OPEN)}`);
+  assert.equal(await ingestDecision(env, decision(2)), 0, "open and unprotected: held back");
+  env.DB.raw.prepare("UPDATE signal_ledger SET tp1_closed_at = ? WHERE id = ?").run(new Date(OPEN + 5 * M).toISOString(), `decision:${key(OPEN)}`);
+  assert.equal(await ingestDecision(env, decision(3)), 1, "past TP1 (still followed to TP2): no longer holds new signals");
+  env.DB.raw.prepare("UPDATE signal_ledger SET status = 'open', sl_plus_triggered = 1 WHERE id = ?").run(`decision:${key(OPEN + 3 * M)}`);
+  assert.equal(await ingestDecision(env, decision(4)), 1, "stop at break-even: protected");
+});
