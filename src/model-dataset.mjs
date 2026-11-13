@@ -15,6 +15,7 @@
 import { ledgerSeries, atrAt, toMs, sessionAt } from "./signal-ledger.mjs";
 import { WITNESS_PRIORS } from "./witness-weighting.mjs";
 import { readBaseline, shadowPredictions, predict } from "./model-baseline.mjs";
+import { readGbm, gbmPredictions } from "./model-gbm.mjs";
 
 export const MODEL_DATASET_VERSION = "cryptophys.model-dataset.v1";
 export const LABEL_RULES = Object.freeze({ stop_atr: 1, target_atr: 1.5, horizon_ms: 4 * 3600_000, atr_period: 14 });
@@ -220,6 +221,7 @@ export async function runModelDataset(env, { now = Date.now(), series = null } =
     const { bars, m15 } = series ?? (await ledgerSeries(env));
     const created = new Date(now).toISOString();
     const baseline = await readBaseline(env);
+    const gbm = await readGbm(env, { now });
     // 1. New decisions (backfills the stored history on the first runs).
     const fresh = (await env.DB.prepare("SELECT d.decision_key, d.bar_close, d.stance, d.decision_json FROM engine_decisions d WHERE NOT EXISTS (SELECT 1 FROM model_dataset m WHERE m.decision_key = d.decision_key) ORDER BY d.bar_close LIMIT ?").bind(BATCH).all()).results || [];
     let added = 0;
@@ -231,7 +233,10 @@ export async function runModelDataset(env, { now = Date.now(), series = null } =
       const atr = k >= 1 ? atrAt(m15, k, LABEL_RULES.atr_period) : null;
       const features = datasetFeatures({ ...decision, bar_close: decision.bar_close ?? r.bar_close }, { atr, bars: k >= 0 ? barFeatures(m15, k, atr) : {} });
       // The baseline's predictions only for a decision made after the model was trained (point in time).
-      const shadow = baseline && Date.parse(baseline.trained_at) <= toMs(r.bar_close) ? shadowPredictions(baseline, features) : null;
+      const base = baseline && Date.parse(baseline.trained_at) <= toMs(r.bar_close) ? shadowPredictions(baseline, features) : null;
+      // The daily decision model (src/model-gbm.mjs) beside it, under the same point-in-time rule.
+      const fromGbm = gbm && Date.parse(gbm.trained_at) <= toMs(r.bar_close) ? gbmPredictions(gbm, features) : null;
+      const shadow = base || fromGbm ? { ...(base || {}), ...(fromGbm ? { gbm: fromGbm } : {}) } : null;
       const res = await env.DB.prepare("INSERT OR IGNORE INTO model_dataset (decision_key, bar_close, version, stance, features_json, ref_close, atr, shadow_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(r.decision_key, r.bar_close, MODEL_DATASET_VERSION, r.stance, JSON.stringify(features), k >= 0 ? m15[k].close : null, num(atr) ? r4(atr) : null, shadow ? JSON.stringify(shadow) : null, created).run();
       added += Number(res?.meta?.changes) || 0;

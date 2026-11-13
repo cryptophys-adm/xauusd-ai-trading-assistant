@@ -1,0 +1,4 @@
+# The decision model's trainer (scripts/train_gbm.py), pinned (Python 3.12).
+lightgbm==4.5.0
+numpy==1.26.4
+scipy==1.14.1
