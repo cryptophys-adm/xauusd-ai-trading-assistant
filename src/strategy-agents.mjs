@@ -9,7 +9,8 @@
 //   fits   one sentence for the council: the price action this strategy is made for.
 //   plan   pure and deterministic: the agent's plan for a direction (1 long, -1 short) from the context
 //          { price, atr (1H), levels (the Key Level Agent's zones), bars (closed 15m, oldest first),
-//          regime (the 1H regime label), scalp, strategy }, in the shape of tradeLevels' plan, or null
+//          regime (the 1H regime label), scalp, strategy, patterns and calibration (the Projection
+//          Agent's chart patterns and each pattern's measured record on gold) }, in the shape of tradeLevels' plan, or null
 //          when its setup is not on the chart. An agent never reads a room, a witness or the quorum: the
 //          council decides the side, the agent only says where its strategy would enter, stop and target.
 //
@@ -32,7 +33,8 @@ export const AGENT_RULES = Object.freeze({
   min_risk_atr: 0.25, max_risk_atr: 2.5, pad_atr: 0.1, target_gap_atr: 0.5,
   sweep: Object.freeze({ bars: 3, lookback: 12, through_atr: 0.05 }),
   breakout: Object.freeze({ bars: 6, base_bars: 3, beyond_atr: 0.1, retest_atr: 0.15 }),
-  range: Object.freeze({ bars: 32, min_bars: 24, min_atr: 1, max_atr: 4, zone: 0.35, at: 0.2, entry: 0.15, stop_atr: 0.25, far: 0.1 })
+  range: Object.freeze({ bars: 32, min_bars: 24, min_atr: 1, max_atr: 4, zone: 0.35, at: 0.2, entry: 0.15, stop_atr: 0.25, far: 0.1 }),
+  pattern: Object.freeze({ charts: Object.freeze(["15", "60"]), retest_atr: 0.15, stop_height: 0.5, stop_max_atr: 1.25, min_factor: 1, council_max: 6 })
 });
 
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
@@ -163,8 +165,45 @@ const rangeFade = Object.freeze({
   }
 });
 
+/** A pattern's measured record on gold (src/pattern-calibration.mjs), or null: { n, rate, factor, active }. */
+const recordOf = (calibration, id) => { const r = calibration?.patterns?.[id]; return r && isNum(r.rate) ? r : null; };
+
+const patternBreakout = Object.freeze({
+  id: "pattern_breakout", version: 1, label: "Pattern breakout",
+  fits: "A chart pattern the Projection Agent sees broken out on the 15m or 1H chart, its measured target not reached yet: enter on the return to the broken line, the stop half the pattern's height behind that line, the first target the pattern's measured target. A busted pattern is traded the way it broke. A pattern whose measured record on gold is below the rate of all patterns is left out.",
+  plan(dir, ctx) {
+    const R = AGENT_RULES.pattern;
+    if (!isNum(ctx.price)) return null;
+    const gap = (ctx.scalp ? SCALP_TARGET.targetGapAtr : AGENT_RULES.target_gap_atr) * ctx.atr;
+    const line = (p) => (dir > 0 ? p.upper : p.lower);
+    const fit = (ctx.patterns || []).filter((p) => R.charts.includes(String(p?.tf)) && p.status !== "forming" && p.direction === dir && [line(p), p.target, p.height].every(isNum) && p.height > 0)
+      // Price has not fallen back into the pattern, and the measured target is still ahead of the entry.
+      .filter((p) => dir * (ctx.price - line(p)) >= -R.retest_atr * ctx.atr)
+      .map((p) => ({ p, rec: recordOf(ctx.calibration, p.id) }))
+      // The Projection Agent's own record decides: a measured pattern below the rate of all patterns is left out.
+      .filter(({ rec }) => !(rec?.active && isNum(rec.factor) && rec.factor < R.min_factor))
+      // The best measured record first, then the lower chart, then the freshest.
+      .sort((a, b) => (b.rec?.active ? b.rec.factor : 1) - (a.rec?.active ? a.rec.factor : 1) || Number(a.p.tf) - Number(b.p.tf) || (a.p.bars_ago ?? 0) - (b.p.bars_ago ?? 0));
+    for (const { p, rec } of fit) {
+      const broken = line(p), retesting = Math.abs(ctx.price - broken) <= R.retest_atr * ctx.atr;
+      const entry = retesting ? ctx.price : broken;
+      if (dir * (p.target - entry) < gap) continue;
+      const chart = p.chart ?? (p.tf === "15" ? "15m" : "1H"), word = p.status === "busted" ? "busted " : "";
+      const plan = finishPlan(this.id, dir, {
+        entry, atLevel: retesting, stop: broken - dir * (Math.min(R.stop_height * p.height, R.stop_max_atr * ctx.atr) + AGENT_RULES.pad_atr * ctx.atr),
+        entryNote: retesting ? `price is at the broken ${dir > 0 ? "upper" : "lower"} line of the ${chart} ${word}${p.name}` : `a return to the broken ${dir > 0 ? "upper" : "lower"} line of the ${chart} ${word}${p.name}`,
+        stopNote: `half the pattern's height behind the broken line`,
+        setup: `the Projection Agent's ${chart} ${word}${p.name}, broken ${dir > 0 ? "upward" : "downward"}${rec ? ` (on gold it reached its target ${Math.round(rec.rate * 100)}% of ${rec.n} times${rec.active ? "" : ", too few to weigh"})` : " (no record on gold yet)"}`,
+        targets: { tp1: p.target, tp1_note: `${chart} ${word}${p.name}: measured target`, tp2: p.target + dir * 0.5 * p.height, tp2_note: "half the pattern's height beyond the measured target" }
+      }, ctx);
+      if (plan) return plan;
+    }
+    return null;
+  }
+});
+
 /** The registry: adding or removing a strategy is one entry here. */
-export const STRATEGY_AGENTS = Object.freeze([zonePullback, sweepReversal, breakoutRetest, rangeFade]);
+export const STRATEGY_AGENTS = Object.freeze([zonePullback, sweepReversal, breakoutRetest, rangeFade, patternBreakout]);
 export const AGENT_IDS = Object.freeze(STRATEGY_AGENTS.map((a) => a.id));
 
 export function strategyAgentsMode(env) {
@@ -220,9 +259,13 @@ export async function syncAgentBreaker(env, records, { send = null, now = Date.n
 }
 
 /** Pure: the agents' context of a direction from the strategy engine's output and the decision's inputs. */
-export function agentContext({ strategy = null, bars = [], regime = null, scalp = false, basePlan = undefined } = {}) {
+export function agentContext({ strategy = null, bars = [], regime = null, scalp = false, basePlan = undefined, calibration = null } = {}) {
   return {
     strategy, scalp: scalp === true, regime: typeof regime === "string" ? regime : null, basePlan,
+    // The Projection Agent's reading (owner 2026-11-13: "libatkan Projection Agent karena dia yang punya
+    // knowledge terkait price action"): the chart patterns it detected on each chart and each pattern's
+    // measured record on gold.
+    patterns: Array.isArray(strategy?.key_levels?.patterns) ? strategy.key_levels.patterns : [], calibration: calibration ?? null,
     price: isNum(strategy?.price) ? strategy.price : null, atr: isNum(strategy?.atr_h1) ? strategy.atr_h1 : null,
     levels: zoneLevels(strategy?.key_levels?.zones, { qualified: scalp === true && SCALP_TARGET.qualified }),
     bars: (bars || []).filter((b) => [b?.high, b?.low, b?.close].every(isNum))
@@ -252,6 +295,21 @@ export function agentPlans(dir, ctx, statuses) {
 /** Pure: the registry as the council and the pages read it (`suspended`: held back by the breaker). */
 export function agentCatalog(statuses, { suspended = [] } = {}) {
   return STRATEGY_AGENTS.map((a) => ({ id: a.id, label: a.label, version: a.version, status: statuses?.[a.id] ?? (a.id === DEFAULT_AGENT ? "live" : "shadow"), ...(suspended.includes(a.id) ? { suspended: true } : {}), fits: a.fits }));
+}
+
+const BREAK_WORD = { 1: "broke out upward", "-1": "broke out downward", 0: "not broken out yet" };
+/**
+ * Pure: the Projection Agent's reading of the price action for the council's choice of strategy: the chart
+ * patterns of the 15m, 1H and 4H charts (broken-out ones first), each with its status, the way it broke and
+ * its measured record on gold. No price: the levels are in the plans.
+ */
+export function priceActionReading(patterns, calibration = null) {
+  const list = (Array.isArray(patterns) ? patterns : []).filter((p) => ["15", "60", "240"].includes(String(p?.tf)) && typeof p.name === "string")
+    .sort((a, b) => (b.status !== "forming") - (a.status !== "forming") || Number(a.tf) - Number(b.tf) || (a.bars_ago ?? 0) - (b.bars_ago ?? 0)).slice(0, AGENT_RULES.pattern.council_max);
+  return list.map((p) => {
+    const rec = recordOf(calibration, p.id);
+    return { chart: p.chart ?? p.tf, pattern: p.name, status: p.status, direction: BREAK_WORD[p.direction] ?? BREAK_WORD[0], ...(rec ? { record_on_gold: { breakouts: rec.n, reached_target_pct: Math.round(rec.rate * 100), measured_enough: rec.active === true } } : {}) };
+  });
 }
 
 /** Pure: an agent's plan as the decision record keeps it (levels and why; the notes stay in the trade). */

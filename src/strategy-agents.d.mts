@@ -15,4 +15,5 @@ export function syncAgentBreaker(env: unknown, records: unknown, options?: { sen
 export function agentContext(input?: Record<string, any>): Record<string, any>;
 export function agentPlans(dir: number, ctx: Record<string, any>, statuses?: Record<string, string>): Record<string, { status: string; plan: Record<string, any> }>;
 export function agentCatalog(statuses?: Record<string, string>, options?: { suspended?: string[] }): Array<{ id: string; label: string; version: number; status: string; suspended?: boolean; fits: string }>;
+export function priceActionReading(patterns: unknown, calibration?: unknown): Array<Record<string, any>>;
 export function slimPlan(p: Record<string, any>): Record<string, any>;
