@@ -429,6 +429,8 @@ export async function readWitnessTuning(env, { days = WITNESS_REPLAY_DAYS, now =
   const value = {
     window_days: days, scoring: SCORING_VERSION, mode: active.frozen ? "default" : active.source === "base" ? "off" : "auto",
     active: { id: active.id, weights: active.weights, source: active.source, activated_at: active.activated_at, change: weightsChange(active.weights) },
+    // The B-11 starting set every tuned set is drawn against (owner 2026-11-13: the page no longer copies it).
+    default_weights: { ...EXTENDED_WITNESS_WEIGHTS },
     ...comparison,
     history: (state.history || []).slice(-10)
   };

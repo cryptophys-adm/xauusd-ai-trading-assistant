@@ -26,7 +26,7 @@ function Pass({ v }: { v: boolean | null | undefined }) {
 }
 
 /** The trade plan as a price ladder: targets above, entry, stop below (mirrored for a short). */
-function PlanLadder({ plan, long, minRrr }: { plan: any; long: boolean; minRrr: number }) {
+function PlanLadder({ plan, long, minRrr }: { plan: any; long: boolean; minRrr: number | null }) {
   const rows = [
     { k: "TP2", price: plan.tp2, note: plan.tp2_note, rr: plan.rrr?.tp2, tone: "text-emerald-300" },
     { k: "TP1", price: plan.tp1, note: plan.tp1_note, rr: plan.rrr?.tp1, tone: "text-emerald-300/80" },
@@ -42,28 +42,35 @@ function PlanLadder({ plan, long, minRrr }: { plan: any; long: boolean; minRrr: 
           <span className={`w-11 text-[10px] font-semibold uppercase tracking-[0.14em] ${r.tone}`}>{r.k}</span>
           <span className="mono w-16 text-[12.5px] font-semibold text-slate-100">{r.price?.toFixed?.(2) ?? "—"}</span>
           <span className="min-w-0 flex-1 truncate text-[10.5px] text-slate-500" title={r.note}>{r.note}</span>
-          {r.rr != null && <span className={`mono text-[11px] ${r.rr >= minRrr ? "text-emerald-300" : "text-amber-300"}`}>{r.rr}R</span>}
+          {r.rr != null && <span className={`mono text-[11px] ${minRrr == null || r.rr >= minRrr ? "text-emerald-300" : "text-amber-300"}`}>{r.rr}R</span>}
         </div>
       ))}
       <div className="flex items-center justify-between px-3 py-1.5 text-[10.5px] text-slate-500">
-        <span>risk {plan.risk?.toFixed?.(2)} · reward-to-risk needed {minRrr}R</span>
+        <span>risk {plan.risk?.toFixed?.(2)} · {minRrr == null ? "reward-to-risk rule not recorded" : minRrr > 0 ? `reward-to-risk needed ${minRrr}R` : "target at the nearest key level (no reward minimum)"}</span>
         {!plan.at_level && <span className="text-violet-300">planned pullback entry</span>}
       </div>
     </div>
   );
 }
 
-const CHECK_TEXT: Record<string, string> = { market_open: "market open", fresh: "rooms current", quorum: "quorum", confirmation: "confirmation", no_veto: "no veto", levels: "key-level plan", reward: "reward ≥ 1.5R", confidence: "confidence" };
+const CHECK_TEXT: Record<string, string> = { market_open: "market open", fresh: "rooms current", quorum: "quorum", confirmation: "confirmation", no_veto: "no veto", levels: "key-level plan", reward: "reward", confidence: "confidence" };
+/** The check's label with the decision's own thresholds (owner 2026-11-13: per trading mode, never a fixed 1.5R). */
+function checkLabel(id: string, rules: any): string {
+  if (id === "reward") return rules?.min_rrr == null ? "reward" : Number(rules.min_rrr) > 0 ? `reward ≥ ${rules.min_rrr}R` : "target at a key level";
+  if (id === "quorum" && rules?.quorum_min != null) return `quorum > ${Math.round(Number(rules.quorum_min) * 100)}%`;
+  if (id === "confidence" && rules?.min_confidence != null) return `confidence ≥ ${Math.round(Number(rules.min_confidence) * 100)}%`;
+  return CHECK_TEXT[id] ?? id;
+}
 
 /** The Decision Engine's guardrails for one side: one chip per check. */
-function Guardrails({ side, g }: { side: string; g: any }) {
+function Guardrails({ side, g, rules }: { side: string; g: any; rules?: any }) {
   if (!g) return null;
   return (
     <div className="flex flex-wrap items-center gap-1.5 text-[10.5px]">
       <span className={`mono w-10 shrink-0 font-bold ${side === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{side}</span>
       {(g.checks ?? []).map((c: any) => (
         <span key={c.id} title={c.detail} className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 ${c.pass ? "border-emerald-400/20 text-emerald-200/90" : "border-rose-400/25 text-rose-200/90"}`}>
-          {c.pass ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}{CHECK_TEXT[c.id] ?? c.id}
+          {c.pass ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}{checkLabel(c.id, rules)}
         </span>
       ))}
     </div>
@@ -151,13 +158,14 @@ function MarketContext({ c, calendar }: { c: any; calendar?: any }) {
  * leans. "no data" is a witness with nothing to read.
  */
 type WitnessStatus = "counts" | "neutral" | "stale" | "context" | "no_data";
-const LEAN_BAND = 0.15;
-function witnessStatus(w: any): WitnessStatus {
+/** The quorum's lean band: the decision's own `rules.quorum_lean_band` (since 2026-11-13), else the engine's 0.15. */
+const DEFAULT_LEAN_BAND = 0.15;
+function witnessStatus(w: any, band = DEFAULT_LEAN_BAND): WitnessStatus {
   if (w?.stale) return "stale";
   // The session never leans; the calendar leans only inside a release's horizon (owner 2026-11-12).
   if (w?.key === "SESSION" || (w?.key === "CALENDAR" && !w?.available)) return "context";
   if (!w?.available || w?.lean == null) return "no_data";
-  return Math.abs(w.lean) < LEAN_BAND ? "neutral" : "counts";
+  return Math.abs(w.lean) < band ? "neutral" : "counts";
 }
 const STATUS_TAG: Record<WitnessStatus, { text: string; cls: string } | null> = {
   counts: null,
@@ -238,9 +246,10 @@ export default function GlobalDecision() {
     ...(news ? [{ key: "NEWS", label: "News", role: "24h", lean: news.lean, pass: null, note: news.summary ?? "no TLDR yet", stale: news.stale, weight: null }] : []),
     ...(macro?.available ? [{ key: "MACRO", label: "Macro", role: "context", lean: macro.lean, pass: null, note: macro.summary ?? "", stale: macro.stale, weight: null }] : [])
   ];
+  const leanBand = typeof e?.rules?.quorum_lean_band === "number" ? e.rules.quorum_lean_band : DEFAULT_LEAN_BAND;
   const witnessRows = (e?.witnesses ?? []).map((w: any) => {
-    const status = witnessStatus(w);
-    const pass = status !== "counts" ? null : e.stance === "BUY" ? w.lean >= LEAN_BAND : e.stance === "SELL" ? w.lean <= -LEAN_BAND : null;
+    const status = witnessStatus(w, leanBand);
+    const pass = status !== "counts" ? null : e.stance === "BUY" ? w.lean >= leanBand : e.stance === "SELL" ? w.lean <= -leanBand : null;
     return { trigger: null as string | null, key: w.key, label: w.key === "STRATEGY" ? "Strat" : w.label, role: w.decision ? `${w.role ?? ""}`.slice(0, 18) : w.role, lean: w.lean, pass, status, note: [STATUS_NOTE[status], w.decision ? `decision ${w.decision}` : null, w.summary].filter(Boolean).join(" · "), stale: status === "stale" || status === "no_data", weight: w.weight };
   });
   // The 5m row is the entry trigger (a Prophet R38 confirmation), not a lean: it shows its state.
@@ -327,7 +336,7 @@ export default function GlobalDecision() {
           {e ? (
             <div className="mono mt-2 text-[11px] text-slate-400">
               confidence {pct(e.confidence)} · 15m close {utc(e.bar_close)} · decided in {e.latency_seconds}s{e.strategy?.price != null ? ` · price ${e.strategy.price.toFixed(2)}` : ""}
-              {left != null && <span className={left > 0 ? "text-cyan-300" : "text-slate-500"} title={e.trade ? "The signal is valid until the next 15m close, when the next decision replaces it" : "The next decision comes after the next 15m close"}> · {e.trade ? "valid" : "next decision"} {left > 0 ? `${mmss(left)}` : "due"}</span>}
+              {left != null && <span className={left > 0 ? "text-cyan-300" : "text-slate-500"} title={e.trade ? "The next decision replaces this one after the next 15m close. Omega enters only within its signal-age limit after the decision (see the Omega page)." : "The next decision comes after the next 15m close"}> · next decision {left > 0 ? `${mmss(left)}` : "due"}</span>}
             </div>
           ) : s && (
             <div className="mono mt-2 text-[11px] text-slate-400">
@@ -372,7 +381,7 @@ export default function GlobalDecision() {
           )}
           {e && (
             <div className="mt-3 space-y-1.5" aria-label="Guardrails">
-              <Guardrails side={lead === "short" ? "SELL" : "BUY"} g={lead === "short" ? e.guardrails?.short : e.guardrails?.long} />
+              <Guardrails side={lead === "short" ? "SELL" : "BUY"} g={lead === "short" ? e.guardrails?.short : e.guardrails?.long} rules={e.rules} />
               <ul className="mt-1 space-y-0.5 text-[10px] text-slate-500">
                 {(lead === "short" ? e.guardrails?.short?.checks : e.guardrails?.long?.checks ?? []).map((c: any) => (
                   <li key={c.id}><span className="mono text-slate-400">{c.id}</span>: {c.detail}</li>
@@ -404,7 +413,7 @@ export default function GlobalDecision() {
           {e && <ModelAdvice m={e.context?.model ?? null} />}
           {e && <MarketContext c={e.context?.market} calendar={(e.witnesses ?? []).find((w: any) => w.key === "CALENDAR")} />}
 
-          {e?.trade ? (planIsNew ? <PlanLadder plan={tradePlan(e.trade, e.key_levels)} long={e.trade.side === "BUY"} minRrr={e.rules?.min_rrr ?? 1.5} /> : <p className="mt-3 text-[10.5px] text-slate-500">This {e.trade.side} confirms the live setup above; its levels stay as they were locked.</p>) : !e && s?.plan && <PlanLadder plan={s.plan} long={s.direction === "LONG"} minRrr={s.min_rrr ?? 1.5} />}
+          {e?.trade ? (planIsNew ? <PlanLadder plan={tradePlan(e.trade, e.key_levels)} long={e.trade.side === "BUY"} minRrr={e.rules?.min_rrr ?? null} /> : <p className="mt-3 text-[10.5px] text-slate-500">This {e.trade.side} confirms the live setup above; its levels stay as they were locked.</p>) : !e && s?.plan && <PlanLadder plan={s.plan} long={s.direction === "LONG"} minRrr={s.min_rrr ?? 1.5} />}
 
           {e ? !!e.cautions?.length && (
             <ul className="mt-3 space-y-1 text-[11px]">

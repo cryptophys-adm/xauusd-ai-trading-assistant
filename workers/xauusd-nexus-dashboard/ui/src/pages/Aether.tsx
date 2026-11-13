@@ -113,9 +113,8 @@ function Weighting({ reports }: { reports: any[] }) {
   );
 }
 
-/** The B-11 starting set (src/decision-engine.mjs EXTENDED_WITNESS_WEIGHTS), the reference each tuned set is drawn against. */
-// src/decision-engine.mjs EXTENDED_WITNESS_WEIGHTS (CALENDAR 0.08 since 2026-11-12, inside a release's horizon only).
-const B11: Record<string, number> = { D1: 0.1469, H4: 0.1469, H1: 0.1469, M15: 0.1103, NEWS: 0.0735, MACRO: 0.0367, STRATEGY: 0.0735, KEY_LEVELS: 0.0459, REGIME: 0.0459, TREND_TF: 0.0459, MACRO_DRIVERS: 0.0276, SESSION: 0.02, CALENDAR: 0.08 };
+// The B-11 starting set is read from the AI Worker (GET /api/weighting/engine default_weights; owner 2026-11-13:
+// the page no longer keeps its own copy).
 const WITNESS_LABEL: Record<string, string> = { D1: "Daily room", H4: "4H room", H1: "1H room", M15: "15m room", NEWS: "News Daily", MACRO: "Macro room", STRATEGY: "Strategy", KEY_LEVELS: "Key levels", REGIME: "Regime", TREND_TF: "Trend TF", MACRO_DRIVERS: "Macro drivers", SESSION: "Session", CALENDAR: "Calendar (release horizon)" };
 const SOURCE_TEXT: Record<string, string> = { auto_tuned: "auto-tuned set", default: "B-11 default", base: "base set (weighting off)" };
 
@@ -123,10 +122,11 @@ const SOURCE_TEXT: Record<string, string> = { auto_tuned: "auto-tuned set", defa
  * The Decision Engine's witness weights (owner 2026-11-11: "harusnya bobot itu dinamis sesuai dengan auto
  * tune yang ada di aether"): xauusd's report of timeframe "engine", as Aether stored it for the audit.
  */
-function WitnessWeights({ reports }: { reports: any[] }) {
+function WitnessWeights({ reports, reference }: { reports: any[]; reference: Record<string, number> | null }) {
   const r = (reports || []).find((x) => x.timeframe === "engine");
   const active: Record<string, number> = r?.active?.params || {};
-  const keys = Object.keys(B11);
+  const B11: Record<string, number> = reference ?? {};
+  const keys = [...new Set([...Object.keys(B11), ...Object.keys(active)])];
   const max = Math.max(0.28, ...keys.map((k) => active[k] ?? 0));
   const best = [...(r?.candidates || [])].sort((a: any, b: any) => ((b.discovery?.bars ?? 0) + (b.holdout?.bars ?? 0)) - ((a.discovery?.bars ?? 0) + (a.holdout?.bars ?? 0)))[0];
   return (
@@ -146,7 +146,7 @@ function WitnessWeights({ reports }: { reports: any[] }) {
               <div className="label">Weights in force (bar) against B-11 (marker)</div>
               {keys.map((k) => {
                 const w = active[k];
-                const d = w == null ? null : w - B11[k];
+                const d = w == null || B11[k] == null ? null : w - B11[k];
                 return (
                   <div key={k} className="grid grid-cols-[110px_1fr_52px_60px] items-center gap-2 py-0.5 text-[11px]">
                     <span className="truncate text-slate-400">{WITNESS_LABEL[k]}</span>
@@ -208,7 +208,7 @@ function WitnessWeights({ reports }: { reports: any[] }) {
   );
 }
 
-function NexusAnalyticsBridge({ analytics }: { analytics: any }) {
+function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { quorum_min: number | null; mode: string | null } | null }) {
   if (!analytics) {
     return (
       <Panel title="Nexus Analytics · Intelligent Quorum Weighting Engine" icon={<Sliders className="h-3.5 w-3.5" />}
@@ -219,11 +219,12 @@ function NexusAnalyticsBridge({ analytics }: { analytics: any }) {
   }
 
   const { disparity, scorecards, shadow, regime, quorum_weighting_input: qwi } = analytics;
-  const fidelity = disparity?.execution_fidelity_score != null ? Math.round(disparity.execution_fidelity_score * 100) : 92;
+  // Measured or nothing (owner 2026-11-13): no fallback numbers.
+  const fidelity: number | null = disparity?.execution_fidelity_score != null ? Math.round(disparity.execution_fidelity_score * 100) : null;
   const frictionSurcharge = qwi?.friction_surcharge ?? disparity?.friction_surcharge ?? 0;
   const volSurcharge = qwi?.volatility_surcharge ?? regime?.volatility_surcharge ?? 0;
-  const baseQuorum = qwi?.base_quorum_share ?? 0.50;
-  const effectiveQuorum = qwi?.recommended_quorum_min ?? (baseQuorum + frictionSurcharge + volSurcharge);
+  const baseQuorum: number | null = qwi?.base_quorum_share ?? null;
+  const effectiveQuorum: number | null = qwi?.recommended_quorum_min ?? (baseQuorum != null ? baseQuorum + frictionSurcharge + volSurcharge : null);
   const discounts = Object.entries(qwi?.agent_weight_discounts || scorecards?.agent_weight_discounts || {});
   const disqualified = (qwi?.disqualified_agents || scorecards?.disqualified_agents || []) as string[];
 
@@ -233,12 +234,11 @@ function NexusAnalyticsBridge({ analytics }: { analytics: any }) {
       icon={<Sliders className="h-3.5 w-3.5" />}
       right={
         <div className="flex flex-wrap items-center gap-1.5">
-          <Badge tone="purple">RFC_AETHER §6.1 Compliant</Badge>
-          <Badge tone={fidelity >= 80 ? "green" : "amber"}>
-            Fidelity {fidelity}%
+          <Badge tone={fidelity == null ? "slate" : fidelity >= 80 ? "green" : "amber"}>
+            Fidelity {fidelity != null ? `${fidelity}%` : "no sample"}
           </Badge>
-          <Badge tone={effectiveQuorum > 0.5 ? "amber" : "cyan"}>
-            Consensus Floor {pct(effectiveQuorum)}
+          <Badge tone="slate">
+            Guardrail quorum {guard?.quorum_min != null ? `> ${pct(guard.quorum_min)} (${guard.mode})` : "—"}
           </Badge>
         </div>
       }
@@ -256,9 +256,9 @@ function NexusAnalyticsBridge({ analytics }: { analytics: any }) {
               {frictionSurcharge > 0 ? `+${pct(frictionSurcharge)} friction` : "Optimal"}
             </Badge>
           </div>
-          <div className="mono mt-1 text-[20px] font-bold text-slate-200">{fidelity}%</div>
+          <div className="mono mt-1 text-[20px] font-bold text-slate-200">{fidelity != null ? `${fidelity}%` : "—"}</div>
           <div className="mono mt-1 text-[11px] text-slate-500">
-            Slippage: {num(disparity?.avg_slippage_points, 1)} pts (max {num(disparity?.max_slippage_points, 1)}) · Spread: {disparity?.live_spread_points ?? 16} pts · Latency: {disparity?.avg_latency_ms ?? 240}ms
+            Slippage: {num(disparity?.avg_slippage_points, 1)} pts (max {num(disparity?.max_slippage_points, 1)}) · Spread: {disparity?.live_spread_points != null ? `${disparity.live_spread_points} pts` : "—"} · Latency: {disparity?.avg_latency_ms != null ? `${disparity.avg_latency_ms} ms` : "—"}
           </div>
         </div>
 
@@ -277,8 +277,8 @@ function NexusAnalyticsBridge({ analytics }: { analytics: any }) {
 
         <div className="glass-inner p-3">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
-            <span>Dynamic Quorum Floor</span>
-            <Badge tone={effectiveQuorum > baseQuorum ? "amber" : "cyan"}>
+            <span>Recommended quorum floor (not applied)</span>
+            <Badge tone={effectiveQuorum != null && baseQuorum != null && effectiveQuorum > baseQuorum ? "amber" : "cyan"}>
               +{pct(frictionSurcharge + volSurcharge)} Surcharge
             </Badge>
           </div>
@@ -305,7 +305,7 @@ function NexusAnalyticsBridge({ analytics }: { analytics: any }) {
         <div className="glass-inner p-3 text-[12px]">
           <div className="label mb-1">Quorum Consensus Dynamic Formula</div>
           <p className="text-slate-300 mb-2">
-            The decision council requires a directional witness supermajority exceeding <span className="mono text-cyan-300 font-semibold">{pct(effectiveQuorum)}</span> before permitting directional entries. When broker slippage expands or volatility spikes, the floor ratchets up to protect capital:
+            The guardrail in force is the trading mode's quorum: more than <span className="mono text-cyan-300 font-semibold">{guard?.quorum_min != null ? pct(guard.quorum_min) : "—"}</span> of the witnesses' weight{guard?.mode ? ` (${guard.mode})` : ""}. The analytics below only <b>recommend</b> a floor from execution friction and volatility; it is recorded with each quorum but does not gate a decision:
           </p>
           <div className="space-y-1.5 mono text-[11px]">
             <div className="flex justify-between py-1 border-b border-white/5">
@@ -321,7 +321,7 @@ function NexusAnalyticsBridge({ analytics }: { analytics: any }) {
               <span className={volSurcharge > 0 ? "text-amber-300 font-semibold" : "text-slate-400"}>+{pct(volSurcharge)}</span>
             </div>
             <div className="flex justify-between py-1 font-bold text-cyan-300">
-              <span>= Effective Quorum Consensus Floor (share_needed_above)</span>
+              <span>= Recommended floor (not applied)</span>
               <span>{pct(effectiveQuorum)}</span>
             </div>
           </div>
@@ -593,6 +593,10 @@ export default function Aether() {
   const { data, error, loading } = usePoll(() => get("/api/aether/overview"), 120_000);
   const { data: status } = usePoll(() => get("/api/aether/status"), 120_000);
   const { data: analytics } = usePoll(() => get("/api/aether/nexus-analytics"), 60_000);
+  const { data: tuning } = usePoll(() => get("/api/weighting/engine"), 300_000);
+  const { data: latest } = usePoll(() => get("/api/engine/decisions?limit=1"), 120_000);
+  const d0 = (latest as any)?.decisions?.[0] ?? null;
+  const guard = d0 ? { quorum_min: d0.rules?.quorum_min ?? null, mode: d0.trading_mode ?? null } : null;
   const o = data as any;
   if (!o) return (
     <div className="space-y-4">
@@ -615,9 +619,9 @@ export default function Aether() {
         <Kpi label="AI budget today" value={`${ai.used_today ?? 0}/${ai.daily_limit ?? 0}`} sub="embeddings only" color={ai.used_today >= ai.daily_limit ? "#f85149" : "#d29922"} icon={<Cpu className="h-3 w-3" />} />
         <Kpi label="Vector indexes" value={o.indexes?.canon?.indexed ? "in sync" : "pending"} sub={`${o.indexes?.canon?.vectors ?? 0} canon vectors · ${o.indexes?.market?.pending_cards ?? 0} cards to embed`} color={o.indexes?.canon?.indexed ? "#3fb950" : "#d29922"} icon={<Brain className="h-3 w-3" />} />
       </div>
-      <NexusAnalyticsBridge analytics={analytics} />
+      <NexusAnalyticsBridge analytics={analytics} guard={guard} />
       <Sync aether={o.sync} worker={(status as any)?.aether?.sync} />
-      <WitnessWeights reports={o.weighting || []} />
+      <WitnessWeights reports={o.weighting || []} reference={(tuning as any)?.default_weights ?? null} />
       <Weighting reports={o.weighting || []} />
       <div className="grid gap-4 xl:grid-cols-2">
         <Guardian g={o.guardian} />

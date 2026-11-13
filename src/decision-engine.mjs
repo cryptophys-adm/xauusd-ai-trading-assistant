@@ -919,7 +919,7 @@ const modelAdviceOf = (council) => (council?.model_advice && typeof council.mode
 
 export function buildDecisionRecord({ key, barClose, loaded, assessment = null, council = null, previous = null, now = Date.now(), decidedAt = new Date(now).toISOString(), env = null, analytics = null }) {
   const { inputs = {}, strategy = null } = loaded || {};
-  const { mode: MODE, quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR } = modeThresholds(env?.TRADING_MODE);
+  const { mode: MODE, quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, lean: MODE_LEAN } = modeThresholds(env?.TRADING_MODE);
   const { cards, quorum, guards, market } = assessment ?? assess(loaded, { now, env, analytics });
   const answer = council?.answer ?? null;
   const d = decide({ answer, guards, strategy, quorum });
@@ -965,7 +965,7 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     structure: marketStructure({ h4Bars: inputs.h4Bars ?? [], h1Bars: inputs.h1Bars ?? [], m15Bars: inputs.m15Bars ?? [] }),
     // The price feed the decision stood on: TradingView, or the broker's bars (MT5 fallback).
     feed: inputs?.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview",
-    trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE },
+    trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE, lean: MODE_LEAN, quorum_lean_band: LEAN },
     advisory: "The server places no order and gives no position size; the EA sizes each trade from the owner's risk input.",
     // The deployed Worker version that decided (2026-11-11: a deploy outside GitHub Actions put back an older build unseen).
     worker_version: typeof env?.CF_VERSION_METADATA?.id === "string" ? env.CF_VERSION_METADATA.id : null
