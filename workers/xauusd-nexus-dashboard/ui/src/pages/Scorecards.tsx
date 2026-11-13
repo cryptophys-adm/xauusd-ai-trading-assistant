@@ -100,11 +100,12 @@ function LeaderboardGraph({ rows, title }: { rows: any[]; title: string }) {
       </div>
       <div className="space-y-2.5">
         {topRows.map((r) => {
-          const acc = r.accuracy ?? 0.5;
-          const pct = Math.max(0, Math.min(100, Math.round(acc * 100)));
-          const weight = r.weight ?? 1;
-          const barColor = acc >= 0.55 ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.3)]" : acc < 0.45 ? "bg-rose-400" : "bg-slate-400";
-          const weightTone = weight > 1.1 ? "green" : weight < 0.9 ? "red" : "slate";
+          // Not yet scored: no bar and "—" (never a neutral 50 % that was not measured).
+          const acc: number | null = typeof r.accuracy === "number" ? r.accuracy : null;
+          const pct = acc == null ? 0 : Math.max(0, Math.min(100, Math.round(acc * 100)));
+          const weight: number | null = typeof r.weight === "number" ? r.weight : null;
+          const barColor = acc == null ? "bg-slate-600" : acc >= 0.55 ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.3)]" : acc < 0.45 ? "bg-rose-400" : "bg-slate-400";
+          const weightTone = weight == null ? "slate" : weight > 1.1 ? "green" : weight < 0.9 ? "red" : "slate";
           return (
             <div key={r.id} className="grid grid-cols-[130px_1fr_70px_70px] items-center gap-3 text-[11px]">
               <div className="truncate font-mono font-medium text-slate-300" title={r.name}>{r.name}</div>
@@ -115,7 +116,7 @@ function LeaderboardGraph({ rows, title }: { rows: any[]; title: string }) {
               </div>
               <div className="text-right mono font-bold text-slate-200">{p(r.accuracy)}</div>
               <div className="text-right">
-                <Badge tone={weightTone}>x{weight}</Badge>
+                <Badge tone={weightTone}>{weight != null ? `x${weight}` : "—"}</Badge>
               </div>
             </div>
           );
@@ -144,8 +145,8 @@ function AgentTable({ rows }: { rows: any[] }) {
         </thead>
         <tbody>
           {rows.map((r) => {
-            const weight = r.weight ?? 1;
-            const weightTone = weight > 1.1 ? "green" : weight < 0.9 ? "red" : "slate";
+            const weight: number | null = typeof r.weight === "number" ? r.weight : null;
+            const weightTone = weight == null ? "slate" : weight > 1.1 ? "green" : weight < 0.9 ? "red" : "slate";
             const brier = r.brier != null ? Number(r.brier) : null;
             const brierTone = brier == null ? "text-slate-500" : brier < 0.2 ? "text-emerald-300" : brier > 0.28 ? "text-rose-300" : "text-amber-200";
             return (
@@ -158,7 +159,7 @@ function AgentTable({ rows }: { rows: any[] }) {
                 <td><RateBar value={r.wait_accuracy} toneClass="bg-violet-400" /></td>
                 <td className={`mono font-bold ${brierTone}`}>{r.brier ?? "n/a"}</td>
                 <td>
-                  <Badge tone={weightTone}>x{r.weight}</Badge>
+                  <Badge tone={weightTone}>{weight != null ? `x${weight}` : "—"}</Badge>
                 </td>
               </tr>
             );
@@ -202,17 +203,9 @@ export default function Scorecards() {
       >
         <p className="text-[12px] leading-relaxed text-slate-400">
           Deterministic reputation weighting system for all War Room agents. Every stance is scored mathematically against the next {d?.scoring?.horizon ?? 4} closed candles: BUY/SELL is considered a <span className="text-emerald-300 font-semibold">Hit</span> when price moves {d?.scoring?.thresholdAtr ?? 0.5} x ATR its way first, while WAIT is accurate when no {d?.scoring?.waitTargetAtr ?? 1} x ATR directional move occurs.
-          This accuracy is transformed into a <strong>Crowd Weight Multiplier</strong> (x0.25 to x2.00) used by the Decision Engine in quorum consensus voting.
+          This accuracy becomes the agent's <strong>reputation weight</strong> (2 × its shrunk accuracy, within {d?.reputation?.weight_range ? `x${d.reputation.weight_range[0]} to x${d.reputation.weight_range[1]}` : "its range"}), which weighs the agent in its room's crowd line and weighted lean; the Decision Engine reads each room as one witness.
         </p>
 
-        {/* Consumer Badges */}
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3 text-[11px]">
-          <span className="text-slate-400">Primary Consumers:</span>
-          <Badge tone="cyan">War Room Decision Weighting</Badge>
-          <Badge tone="purple">Aether Epigenetic Learning</Badge>
-          <Badge tone="green">Indicator Registry Fault Detection</Badge>
-          <Badge tone="slate">Autonomous Risk Governance</Badge>
-        </div>
       </Panel>
 
       {/* KPI Overview Cards */}

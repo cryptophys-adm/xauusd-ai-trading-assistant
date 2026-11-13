@@ -27,14 +27,17 @@ const sessionWord = (m: any) => (m?.kind === "event" ? "30 minutes after a high-
 /**
  * Macro War Room (owner decision 2026-11-08): the Calendar Agent, the News Analyst and the dollar,
  * yields, silver, oil and correlation analysts discuss what moves gold; the moderator concludes the macro
- * bias for the next 4 to 24 hours. Context only: it never changes the strategy engine's decision.
+ * bias for the next 4 to 24 hours. Its conclusion is the MACRO witness of the Decision Engine, weighted in the quorum.
  */
 function MacroRoom() {
   const { data, loading } = usePoll(() => get("/api/macro"), 120_000);
   const m = (data as any)?.macro;
+  // MACRO is a weighted witness of the Decision Engine (owner 2026-11-13: not "context only"): its weight in force.
+  const { data: latest } = usePoll(() => get("/api/engine/decisions?limit=1"), 300_000);
+  const macroWeight: number | null = (latest as any)?.decisions?.[0]?.weights?.MACRO ?? null;
   const c = m?.conclusion?.status === "ok" ? m.conclusion : null;
   return (
-    <Panel title="Macro War Room" icon={<Globe2 className="h-3.5 w-3.5 text-cyan-300" />} right={<span className="flex gap-1">{m?.stale ? <Badge tone="amber">stale</Badge> : null}<Badge tone="cyan">context only · never decides</Badge></span>}>
+    <Panel title="Macro War Room" icon={<Globe2 className="h-3.5 w-3.5 text-cyan-300" />} right={<span className="flex gap-1">{m?.stale ? <Badge tone="amber">stale</Badge> : null}<Badge tone="cyan">{macroWeight != null ? `a Decision Engine witness · weight ${Math.round(macroWeight * 1000) / 10}%` : "a Decision Engine witness"}</Badge></span>}>
       <p className="mb-3 text-[12px] leading-relaxed text-slate-400">The Calendar Agent, the News Analyst and the dollar, yields, silver, oil and correlation analysts discuss what moves gold. Oil is the geopolitical and inflation channel. The room meets 20 minutes after every 1-hour close and 30 minutes after a high-impact US event; the moderator concludes the macro bias for the next 4 to 24 hours. Every room's News Analyst reads it, and the Global decision shows it as the MACRO row.</p>
       {loading && !data ? <Skeleton rows={4} /> : !m ? (
         <div className="space-y-3">
@@ -113,7 +116,7 @@ export default function Correlations() {
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <MacroRoom />
-      <Panel title="Correlations" icon={<GitCompareArrows className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone="cyan">context only · never decides</Badge>}>
+      <Panel title="Correlations" icon={<GitCompareArrows className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone="cyan">context · not a signal</Badge>}>
         <p className="text-[12px] leading-relaxed text-slate-400">Gold beside the US Dollar Index, the US 10-year yield, silver and WTI crude oil on closed 4h bars (oil sampled from its 1h bars at gold's 4h closes). The correlation is of 4h returns with gold's over {v?.windows?.short ?? 30} bars (about a week) and {v?.windows?.long ?? 120} bars (about a month). It describes the recent past; it is not a signal.</p>
       </Panel>
       {loading && !data ? <Panel><Skeleton rows={4} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-rose-300">Correlations unavailable: {error}</p></Panel> : !v ? <Panel><Empty>No data yet.</Empty></Panel> : (

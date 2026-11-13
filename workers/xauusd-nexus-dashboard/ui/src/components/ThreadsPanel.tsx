@@ -100,7 +100,7 @@ function ReasonerDecision({ r }: { r: any }) {
         <span className="eyebrow text-[10px]">H1 decision · Reasoner</span>
         {!pending && r.decision && <Stance value={r.decision} />}
         {!pending && r.confidence != null && <span className="mono text-[11px] text-slate-400">{pct(r.confidence)}</span>}
-        {r.consensus?.status === "partial" && <Badge tone="amber">no conclusion within 45 min</Badge>}
+        {r.consensus?.status === "partial" && <Badge tone="amber">no conclusion within {r.fallback_minutes ?? "the fallback"} min</Badge>}
         {r.consensus?.status === "empty" && <Badge tone="amber">no agent spoke</Badge>}
       </div>
       <p className="text-[12px] leading-relaxed text-slate-300">

@@ -224,7 +224,7 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
           {hasK && <p className="mt-2 text-[10.5px] leading-snug text-slate-500">{k.summary}</p>}
           <p className="mt-1 text-[9.5px] text-slate-600">
             Left: the Camarilla set{levels?.computed_at ? ` of the ${chartName(tab)} snapshot ${utc(levels.computed_at)}` : ""} with the daily (cyan) and weekly (violet) pivot ranges, formulas of closed bars.
-            {hasK ? ` Right: the Key Level Agent's zones from every chart, ${k.raw_count} levels grouped within ${k.tolerance} (0.3 × the 1H ATR); a candidate has three or more independent families and at least medium strength, at most two per side. Hover a zone for its levels and their reader.` : ""}
+            {hasK ? ` Right: the Key Level Agent's zones from every chart, ${k.raw_count} levels grouped within ${k.tolerance} of each other; a candidate has three or more independent families and at least medium strength, at most two per side. Hover a zone for its levels and their reader.` : ""}
           </p>
         </>
       )}

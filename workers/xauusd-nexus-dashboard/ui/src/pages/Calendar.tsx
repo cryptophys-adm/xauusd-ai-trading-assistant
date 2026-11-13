@@ -8,7 +8,7 @@ const IMPACT_TONE: Record<string, string> = { High: "text-rose-300", Medium: "te
 const day = (t: string) => new Date(t).toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", timeZone: "UTC" });
 const hm = (t: string) => t.slice(11, 16);
 const arrow = (x?: number | null) => (x == null ? <span className="text-slate-500">tone</span> : x > 0 ? <span className="text-emerald-300">gold ▲</span> : x < 0 ? <span className="text-rose-300">gold ▼</span> : <span className="text-slate-500">flat</span>);
-const STATUS: Record<string, string> = { upcoming: "upcoming", imminent: "within 2 h", released: "released", past: "past" };
+const STATUS: Record<string, string> = { upcoming: "upcoming", imminent: "inside its pre-release window", released: "released", past: "past" };
 
 /** Backlog 11.1: the week's economic calendar (ForexFactory export) and the event-risk gate. */
 export default function Calendar() {
@@ -24,7 +24,7 @@ export default function Calendar() {
       <Panel title="Economic calendar" icon={<CalendarDays className="h-3.5 w-3.5 text-cyan-300" />} right={v?.risk?.active?.length ? <Badge tone="amber">event risk now</Badge> : <Badge tone="cyan">no event risk now</Badge>}>
         <p className="text-[12px] leading-relaxed text-slate-400">
           The week's events from the ForexFactory export, refreshed hourly (last {v?.fetched_at ? `${v.fetched_at.slice(5, 16).replace("T", " ")} UTC` : "not yet"}).
-          {gate ? ` A ${gate.impacts.join("/")}-impact ${gate.currencies.join("/")} event is a caution for the strategy engine from ${gate.before_minutes / 60} hours before to ${gate.after_minutes} minutes after it; it never forces a wait.` : ""} Times in UTC.
+          {gate ? ` A ${gate.impacts.join("/")}-impact ${gate.currencies.join("/")} event is a caution for the Decision Engine from ${gate.before_minutes / 60} hours before to ${gate.after_minutes} minutes after it (it never turns a decision into WAIT by itself); Omega opens no new trade inside its own news window (the Omega page shows it).` : ""} Times in UTC.
         </p>
         <label className="mt-2 inline-flex cursor-pointer items-center gap-2 text-[12px] text-slate-300"><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Show every currency and impact</label>
       </Panel>

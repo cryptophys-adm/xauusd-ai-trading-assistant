@@ -33,7 +33,7 @@ export function healthItems(status: any, lane: any, now = Date.now()): HealthIte
     items.push({
       key: "lane", label: "Local lane", worker: WORKERS.pull.name,
       tone: ai.local_lane?.fresh ? "green" : reEarning ? "amber" : closed ? "slate" : "red",
-      detail: ai.local_lane?.fresh ? "approved local 1H records for the latest bars" : reEarning ? `${h1.map((x) => engineTitle(x.engine)).filter((v, i, a) => a.indexOf(v) === i).join(" and ")} re-earning parity: ${progress}/24` : closed ? "market closed: no new 1H bar" : "no approved local 1H record for the last two bars"
+      detail: ai.local_lane?.fresh ? "approved local 1H records for the latest bars" : reEarning ? `${h1.map((x) => engineTitle(x.engine)).filter((v, i, a) => a.indexOf(v) === i).join(" and ")} re-earning parity: ${progress}${h1[0]?.promote_after ? `/${h1[0].promote_after}` : " matches"}` : closed ? "market closed: no new 1H bar" : "no approved local 1H record for the last two bars"
     });
     // TradingView alerts (owner report 2026-11-09): every alert since the week open answered 401 and
     // nothing here said so. Red while alerts are rejected; the reason, never the secret.
@@ -58,8 +58,9 @@ export function healthItems(status: any, lane: any, now = Date.now()): HealthIte
       key: "pull", label: "Pull adapter", worker: WORKERS.pull.name, tone: okStatus ? "green" : r.status === "partial" ? "amber" : closed && r.status === "daily_budget_exhausted" ? "slate" : r.status ? "red" : "amber",
       detail: `${r.status ?? "no refresh yet"} · ${mins(age(r.checked_at))}`
     });
-    const used = Number(lane.budget?.used) || 0, daily = Number(lane.budget?.daily) || 800;
-    items.push({ key: "budget", label: "TradingView MCP budget", worker: WORKERS.news.name, tone: used >= daily ? "red" : used >= 0.9 * daily ? "amber" : "green", detail: `${used} of ${daily} calls today (UTC)` });
+    const used = Number(lane.budget?.used) || 0, daily = Number(lane.budget?.daily);
+    const known = Number.isFinite(daily) && daily > 0;
+    items.push({ key: "budget", label: "TradingView MCP budget", worker: WORKERS.news.name, tone: !known ? "slate" : used >= daily ? "red" : used >= 0.9 * daily ? "amber" : "green", detail: known ? `${used} of ${daily} calls today (UTC)` : `${used} calls today (UTC), limit not reported` });
     const m1 = (lane.series ?? []).find((s: any) => s.series === "OANDA:XAUUSD|1m");
     const a = age(m1?.latest_close_time);
     items.push({ key: "bars", label: "OANDA:XAUUSD bars", worker: WORKERS.pull.name, tone: closed ? "slate" : a != null && a <= 15 * 60_000 ? "green" : a != null && a <= 60 * 60_000 ? "amber" : "red", detail: closed ? "market closed" : `last 1m close ${mins(a)}` });
