@@ -65,8 +65,14 @@ whose record is negative over 15 resolved setups is held back while the rest of 
 Projection Agent's own record still decides which pattern is traded: one measured below the rate of all
 patterns is left out, the best measured comes first.
 
+A break is upward or downward alike: every agent plans both sides. A pattern that has not broken yet is
+traded by `pattern_inside` when it has two boundary lines at least 0.8 ATR apart (a rectangle, a broadening
+formation, a wide triangle, wedge or diamond): from one line toward the other, a long from the lower line
+or a short from the upper one, the stop 0.25 ATR beyond the line, the targets the middle and the far line.
+Its record is kept apart from the same pattern's breaks.
+
 When the council has strategies to choose from, the evidence also carries the Projection Agent's reading
-(`price_action`: each pattern on the 15m, 1H and 4H charts, whether and which way it broke, its record on
+(`price_action`: each pattern on the 15m, 1H and 4H charts, whether it broke upward or downward, its record on
 gold; no price), so the choice of strategy leans on the price action it sees.
 
 ## 3. Status: plug in, test, trade
@@ -102,6 +108,8 @@ the Signal Ledger's bars: setups, mean R per setup, fill rate, target and stop r
 3. Built: each agent's record in the council's evidence, overall and in the present market condition.
 4. Built: Nexus Strategy agents page (the registry, the records, the agent each decision took).
 5. Built: the Projection Agent in the layer (eight pattern families over its 58 patterns, a record and a breaker per pattern, `price_action`).
-   Open: a rule per pattern where a pattern's record shows the family's rule does not fit it; the 4H chart.
+   Built: `pattern_inside` for line patterns before they break.
+   Open: a rule per pattern where a pattern's record shows the family's rule does not fit it; entering before a
+   break on a partial rise or decline; the 4H chart.
 6. More agents (each a registry entry): a momentum continuation on the 5m structure, a session-open
    range break, a news-release fade.
