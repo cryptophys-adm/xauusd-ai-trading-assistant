@@ -347,3 +347,20 @@ test("manual/mobile positions are protected: not auto-closed on opposite signal 
   const rKill = plan({ signal: { ...SIGNAL, kill: true }, executor: ex({ positions: [manualPos, omegaPos] }) });
   assert.equal(rKill.intents[0].kind, "close_all");
 });
+
+test("a limit plan is not entered once price is past its entry toward the stop by more than 0.35 x the plan's stop (owner 2026-11-13)", () => {
+  // SELL limit at 4100, stop 4120 (20): the band toward the stop ends at 4107. The 2026-11-13 trade sold at
+  // 3903.98 against a 3888.48 entry and moved its stop 14 past the plan's.
+  const sell = { ...SIGNAL, side: "SELL", action: "ENTER_LIMIT", entry: 4100, stop: 4120, tp1: 4090 };
+  const at = (bid) => plan({ signal: sell, executor: ex({ symbol: { ...EXECUTOR.symbol, bid, ask: bid + 0.2 } }) });
+  assert.ok(codes(at(4108)).includes("price_past_entry"));
+  assert.equal(at(4108).intents.length, 0);
+  const inside = at(4106);
+  assert.equal(inside.intents.length, 1, "inside the band it enters");
+  assert.equal(inside.intents[0].sl, 4126, "keeping the plan's distance from the fill");
+  assert.ok(codes(at(4092)).includes("waiting_for_pullback"), "past the band toward the target it still waits for a pullback");
+  // A BUY limit mirrors it; a market plan is not affected.
+  const buy = { ...SIGNAL, action: "ENTER_LIMIT", entry: 4100, stop: 4080, tp1: 4110 };
+  assert.ok(codes(plan({ signal: buy, executor: ex({ symbol: { ...EXECUTOR.symbol, bid: 4092.3, ask: 4092.5 } }) })).includes("price_past_entry"));
+  assert.ok(!codes(plan({ signal: { ...sell, action: "ENTER_MARKET" }, executor: ex({ symbol: { ...EXECUTOR.symbol, bid: 4108, ask: 4108.2 } }) })).includes("price_past_entry"));
+});
