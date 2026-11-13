@@ -159,7 +159,7 @@ test("the run: setups from the engine's decisions, the replay of the ended ones,
   const run = await runPlanLearning(env, { now: T0 + 3 * HOUR, bars: series });
   assert.deepEqual([run.status, run.added, run.resolved, run.setups, run.verdict, run.global_pick], ["ok", 0, 1, 1, "collecting", CONTROL_ARM]);
   const stored = env.DB.raw.prepare("SELECT * FROM plan_setups").get();
-  assert.deepEqual([stored.status, stored.decisions, stored.context, stored.resolved_at, stored.entry], ["resolved", 2, "scalp|low-ranging", iso(T0 + 8 * M1), 100]);
+  assert.deepEqual([stored.status, stored.decisions, stored.context, stored.resolved_at, stored.entry, stored.agent], ["resolved", 2, "scalp|low-ranging", iso(T0 + 8 * M1), 100, "zone_pullback"]);
   assert.equal(JSON.parse(stored.results_json)[CONTROL_ARM].r, 1.5);
   const state = await readPlanLearning(env);
   assert.equal(state.mode, "shadow");

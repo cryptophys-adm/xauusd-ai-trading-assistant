@@ -4,6 +4,7 @@ export const ENTRY_SHIFTS: ReadonlyArray<number>;
 export const STOP_SCALES: ReadonlyArray<number>;
 export const PLAN_RULES: Readonly<Record<string, number>>;
 export const CONTROL_ARM: string;
+export const DEFAULT_PLAN_AGENT: string;
 export const PLAN_ARMS: ReadonlyArray<Readonly<{ id: string; entry_shift: number; stop_scale: number }>>;
 export const PLAN_LEARNING_SCHEMA_SQL: string[];
 export function armId(e: number, k: number): string;

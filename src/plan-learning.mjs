@@ -49,6 +49,8 @@ export const PLAN_RULES = Object.freeze({
   backfill_days: 30,         // and at the first run, when no setup is stored yet
   learn_days: 90             // resolved setups the learner reads
 });
+/** The strategy agent whose plan a setup is: today the strategy engine's own key-level plan. */
+export const DEFAULT_PLAN_AGENT = "zone_pullback";
 export const armId = (e, k) => `e${e}@s${k}`;
 export const CONTROL_ARM = armId(0, 1);
 export const PLAN_ARMS = Object.freeze(ENTRY_SHIFTS.flatMap((e) => STOP_SCALES.map((k) => Object.freeze({ id: armId(e, k), entry_shift: e, stop_scale: k }))));
@@ -90,7 +92,7 @@ export function setupsFrom(decisions) {
     const c = cur[d.side], tol = PLAN_RULES.same_setup_atr * d.atr_h1;
     if (c && d.close_ms - c.last_seen_ms <= PLAN_RULES.setup_gap_ms && Math.abs(d.stop - c.stop) <= tol && Math.abs(d.tp1 - c.tp1) <= tol) { c.last_seen_ms = d.close_ms; c.decisions += 1; continue; }
     const s = {
-      setup_key: `${d.key}:${d.side}`, decision_key: d.key, opened_ms: d.close_ms, decided_ms: finite(toMs(d.decided_at)) ? Math.max(toMs(d.decided_at), d.close_ms) : d.close_ms, last_seen_ms: d.close_ms, decisions: 1,
+      setup_key: `${d.key}:${d.side}`, decision_key: d.key, agent: DEFAULT_PLAN_AGENT, opened_ms: d.close_ms, decided_ms: finite(toMs(d.decided_at)) ? Math.max(toMs(d.decided_at), d.close_ms) : d.close_ms, last_seen_ms: d.close_ms, decisions: 1,
       side: d.side, entry: d.entry, stop: d.stop, tp1: d.tp1, atr_h1: d.atr_h1,
       mode: TRADING_MODES.includes(d.mode) ? d.mode : null, action: d.action === "ENTER_MARKET" ? "ENTER_MARKET" : "ENTER_LIMIT", at_level: d.at_level === true || d.at_level === 1,
       regime: typeof d.regime === "string" && d.regime ? d.regime : null
@@ -225,6 +227,7 @@ export const PLAN_LEARNING_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS plan_setups (
     setup_key TEXT PRIMARY KEY,
     decision_key TEXT NOT NULL,
+    agent TEXT NOT NULL DEFAULT 'zone_pullback',
     opened_at TEXT NOT NULL, decided_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, decisions INTEGER NOT NULL DEFAULT 1,
     side TEXT NOT NULL, entry REAL NOT NULL, stop REAL NOT NULL, tp1 REAL NOT NULL, atr_h1 REAL NOT NULL,
     mode TEXT, action TEXT, at_level INTEGER NOT NULL DEFAULT 0, regime TEXT, context TEXT NOT NULL,
@@ -261,7 +264,7 @@ async function runAll(db, statements) {
 const fromRow = (r) => {
   let results = null;
   try { results = r.results_json ? JSON.parse(r.results_json) : null; } catch { results = null; }
-  const s = { setup_key: r.setup_key, decision_key: r.decision_key, opened_ms: toMs(r.opened_at), decided_ms: toMs(r.decided_at), last_seen_ms: toMs(r.last_seen_at), decisions: Number(r.decisions) || 1, side: r.side, entry: r.entry, stop: r.stop, tp1: r.tp1, atr_h1: r.atr_h1, mode: r.mode ?? null, action: r.action ?? null, at_level: r.at_level === 1, regime: r.regime ?? null, context: r.context, status: r.status, resolved_ms: r.resolved_at ? toMs(r.resolved_at) : null, results };
+  const s = { setup_key: r.setup_key, decision_key: r.decision_key, agent: r.agent ?? DEFAULT_PLAN_AGENT, opened_ms: toMs(r.opened_at), decided_ms: toMs(r.decided_at), last_seen_ms: toMs(r.last_seen_at), decisions: Number(r.decisions) || 1, side: r.side, entry: r.entry, stop: r.stop, tp1: r.tp1, atr_h1: r.atr_h1, mode: r.mode ?? null, action: r.action ?? null, at_level: r.at_level === 1, regime: r.regime ?? null, context: r.context, status: r.status, resolved_ms: r.resolved_at ? toMs(r.resolved_at) : null, results };
   return s;
 };
 
@@ -286,8 +289,8 @@ export async function runPlanLearning(env, { now = Date.now(), bars = null } = {
       if (!k) {
         // A plan already running when the window starts is the tail of an older setup, not a new one.
         if (!empty && s.opened_ms - since < HOUR) continue;
-        writes.push(db.prepare("INSERT OR IGNORE INTO plan_setups (setup_key, decision_key, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)")
-          .bind(s.setup_key, s.decision_key, iso(s.opened_ms), iso(s.decided_ms), iso(s.last_seen_ms), s.decisions, s.side, s.entry, s.stop, s.tp1, s.atr_h1, s.mode, s.action, s.at_level ? 1 : 0, s.regime, s.context, PLAN_LEARNING_VERSION, stamp));
+        writes.push(db.prepare("INSERT OR IGNORE INTO plan_setups (setup_key, decision_key, agent, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)")
+          .bind(s.setup_key, s.decision_key, s.agent, iso(s.opened_ms), iso(s.decided_ms), iso(s.last_seen_ms), s.decisions, s.side, s.entry, s.stop, s.tp1, s.atr_h1, s.mode, s.action, s.at_level ? 1 : 0, s.regime, s.context, PLAN_LEARNING_VERSION, stamp));
         added += 1;
       } else if (k.status === "open" && toMs(k.last_seen_at) < s.last_seen_ms) {
         writes.push(db.prepare("UPDATE plan_setups SET last_seen_at = ?, decisions = ?, updated_at = ? WHERE setup_key = ? AND status = 'open'").bind(iso(s.last_seen_ms), s.decisions, stamp, s.setup_key));
