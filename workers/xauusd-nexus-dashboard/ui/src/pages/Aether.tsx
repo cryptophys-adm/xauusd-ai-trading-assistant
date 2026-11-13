@@ -115,7 +115,7 @@ function Weighting({ reports }: { reports: any[] }) {
 
 // The B-11 starting set is read from the AI Worker (GET /api/weighting/engine default_weights; owner 2026-11-13:
 // the page no longer keeps its own copy).
-const WITNESS_LABEL: Record<string, string> = { D1: "Daily room", H4: "4H room", H1: "1H room", M15: "15m room", NEWS: "News", MACRO: "Macro room", STRATEGY: "Strategy", KEY_LEVELS: "Key levels", REGIME: "Regime", TREND_TF: "Trend TF", MACRO_DRIVERS: "Macro drivers", SESSION: "Session", CALENDAR: "Calendar" };
+const WITNESS_LABEL: Record<string, string> = { D1: "Daily room", H4: "4H room", H1: "1H room", M15: "15m room", NEWS: "News", MACRO: "Macro room", STRATEGY: "Strategy", KEY_LEVELS: "Key levels", REGIME: "Regime", TREND_TF: "Trend TF", MACRO_DRIVERS: "Macro drivers", SESSION: "Session", CALENDAR: "Calendar", STRATEGY_AGENTS: "Strategy agents" };
 const SOURCE_TEXT: Record<string, string> = { auto_tuned: "Auto-tuned", default: "Default", base: "Base (weighting off)" };
 
 /**

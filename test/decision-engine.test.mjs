@@ -48,14 +48,15 @@ const loadedOf = (over = {}) => ({ inputs: { calendar: { events: [] } }, strateg
 
 test("witnesses: every room, the news, the macro room and the strategy, weighted; stale ones drop out", () => {
   const cards = witnessCards({ global: globalOf(), strategy: STRATEGY });
-  assert.deepEqual(cards.map((c) => c.key), ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY"]);
+  assert.deepEqual(cards.map((c) => c.key), ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY", "STRATEGY_AGENTS"]);
+  assert.equal(cards.at(-1).available, false, "the strategy agents' witness does not count while no agent speaks");
   assert.equal(Object.values(WITNESS_WEIGHTS).reduce((a, b) => a + b, 0).toFixed(6), "1.000000");
-  assert.equal(cards.at(-1).lean, 0.6, "the strategy leans its direction by its confidence");
+  assert.equal(cards.find((c) => c.key === "STRATEGY").lean, 0.6, "the strategy leans its direction by its confidence");
   const q = quorumOf(cards, { now: NOW });
   assert.equal(q.long_share, 1, "all directional witnesses lean bullish (G-06: neutral excluded from denominator)");
   assert.equal(q.short_share, 0);
   const stale = quorumOf(witnessCards({ global: globalOf({ D1: { stale: true }, H4: { available: false, lean: null } }), strategy: STRATEGY }), { now: NOW });
-  assert.equal(stale.weight, 0.6, "a stale or missing witness drops out and the rest renormalise");
+  assert.equal(stale.weight, 0.5, "a stale or missing witness drops out and the rest renormalise (D1, 4H and the silent strategy agents are out)");
   assert.equal(quorumOf([]).score, null);
 });
 
@@ -128,7 +129,7 @@ test("the evidence carries both sides' plans; the prompt names the guardrails; t
   const ev = councilEvidence({ barClose: CLOSE, cards: a.cards, quorum: a.quorum, guards: a.guards, context: {} });
   assert.equal(ev.long.allowed, true);
   assert.equal(ev.long.plan.entry, 4000);
-  assert.equal(ev.witnesses.length, 7);
+  assert.equal(ev.witnesses.length, 8);
   const text = councilMessages(ev).map((m) => m.content).join("\n");
   assert.match(text, /only when long\.allowed is true/);
   assert.equal(ev.quorum.bullish_share, 1);

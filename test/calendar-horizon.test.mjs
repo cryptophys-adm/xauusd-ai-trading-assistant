@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { consensusOf, preDriftOf, preDriftStats, refreshEconReleases, calendarIntel, resetEconSchemaCacheForTests, MIN_HORIZON_SAMPLES } from "../src/econ-releases.mjs";
 import { projectEvent, calendarOutlook, consensusStrength } from "../src/calendar-agent.mjs";
 import { calendarWitness, witnessCards, quorumOf, calendarContextOf, EXTENDED_WITNESS_WEIGHTS } from "../src/decision-engine.mjs";
-import { withCalendarWeight, witnessWeightsProblems, WITNESS_KEYS } from "../src/witness-tuning.mjs";
+import { withCalendarWeight, withStrategyAgentsWeight, withCurrentWitnesses, witnessWeightsProblems, WITNESS_KEYS } from "../src/witness-tuning.mjs";
 
 const H = 3_600_000;
 const CPI = "2026-11-10T13:30:00.000Z";
@@ -125,17 +125,26 @@ test("the weights: CALENDAR 0.08, the others' B-11 shares kept outside a horizon
   assert.ok(Math.abs(sum(EXTENDED_WITNESS_WEIGHTS) - 1) < 1e-9);
   assert.equal(EXTENDED_WITNESS_WEIGHTS.CALENDAR, 0.08);
   assert.deepEqual(witnessWeightsProblems(EXTENDED_WITNESS_WEIGHTS), []);
-  // Without CALENDAR the shares are the B-11 ones (D1 0.16 of the rest, to rounding).
-  const rest = sum(EXTENDED_WITNESS_WEIGHTS) - EXTENDED_WITNESS_WEIGHTS.CALENDAR - EXTENDED_WITNESS_WEIGHTS.SESSION;
+  // Without CALENDAR (and without the strategy agents' witness of 2026-11-13, which drops out while no
+  // agent sees a setup) the shares are the B-11 ones (D1 0.16 of the rest, to rounding).
+  const rest = sum(EXTENDED_WITNESS_WEIGHTS) - EXTENDED_WITNESS_WEIGHTS.CALENDAR - EXTENDED_WITNESS_WEIGHTS.SESSION - EXTENDED_WITNESS_WEIGHTS.STRATEGY_AGENTS;
   assert.ok(Math.abs(EXTENDED_WITNESS_WEIGHTS.D1 / rest - 0.16 / 0.98) < 0.001);
   const old = { D1: 0.2, H4: 0.16, H1: 0.12, M15: 0.12, NEWS: 0.08, MACRO: 0.04, STRATEGY: 0.08, KEY_LEVELS: 0.05, REGIME: 0.05, TREND_TF: 0.05, MACRO_DRIVERS: 0.03, SESSION: 0.02 };
-  const migrated = withCalendarWeight(old);
+  const step = withCalendarWeight(old);
+  assert.deepEqual([step.CALENDAR, step.SESSION, Object.keys(step).length], [0.08, 0.02, 13], "the calendar's step: its 0.08, the session kept");
+  assert.ok(Math.abs(sum(step) - 1) <= 0.001);
+  // A stored set gets every witness added since (CALENDAR 2026-11-12, then STRATEGY_AGENTS 2026-11-13).
+  const migrated = withCurrentWitnesses(old);
   assert.deepEqual(witnessWeightsProblems(migrated), [], JSON.stringify(migrated));
-  assert.deepEqual([migrated.CALENDAR, migrated.SESSION, WITNESS_KEYS.length], [0.08, 0.02, 13]);
+  assert.deepEqual([migrated.STRATEGY_AGENTS, migrated.SESSION, WITNESS_KEYS.length], [EXTENDED_WITNESS_WEIGHTS.STRATEGY_AGENTS, 0.02, 14]);
   assert.ok(migrated.D1 > migrated.H4, "the tuned order is kept");
   assert.equal(withCalendarWeight(EXTENDED_WITNESS_WEIGHTS), EXTENDED_WITNESS_WEIGHTS, "a set with it is left alone");
+  assert.equal(withCurrentWitnesses(EXTENDED_WITNESS_WEIGHTS), EXTENDED_WITNESS_WEIGHTS, "today's set is left alone");
   const oldB11 = { D1: 0.16, H4: 0.16, H1: 0.16, M15: 0.12, NEWS: 0.08, MACRO: 0.04, STRATEGY: 0.08, KEY_LEVELS: 0.05, REGIME: 0.05, TREND_TF: 0.05, MACRO_DRIVERS: 0.03, SESSION: 0.02 };
-  assert.deepEqual(withCalendarWeight(oldB11), { ...EXTENDED_WITNESS_WEIGHTS }, "a stored copy of the old B-11 set is the new B-11 set");
+  const b11WithCalendar = { D1: 0.1469, H4: 0.1469, H1: 0.1469, M15: 0.1103, NEWS: 0.0735, MACRO: 0.0367, STRATEGY: 0.0735, KEY_LEVELS: 0.0459, REGIME: 0.0459, TREND_TF: 0.0459, MACRO_DRIVERS: 0.0276, SESSION: 0.02, CALENDAR: 0.08 };
+  assert.deepEqual(withCalendarWeight(oldB11), b11WithCalendar, "a stored copy of the first B-11 set is the B-11 set with the calendar");
+  assert.deepEqual(withStrategyAgentsWeight(b11WithCalendar), { ...EXTENDED_WITNESS_WEIGHTS }, "a stored copy of that set is today's B-11 set");
+  assert.deepEqual(withCurrentWitnesses(oldB11), { ...EXTENDED_WITNESS_WEIGHTS }, "a stored copy of an old B-11 set is today's, never a rescaled one");
 });
 
 test("the sweep measures the drift before every release whose hour has begun, history included, once", async () => {
