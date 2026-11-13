@@ -193,6 +193,7 @@ import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } fr
 import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
 import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema, readExecutionReport, LEDGER_CRON, activeSetups } from "./signal-ledger.mjs";
 import { runPatternCalibration, readPatternCalibration } from "./pattern-calibration.mjs";
+import { runModelDataset, readModelDataset, readModelDatasetSummary } from "./model-dataset.mjs";
 import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, TRADING_MODE_KEY } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport, pushExecutionReport } from "./aether-push.mjs";
@@ -2488,6 +2489,19 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // The chart patterns' measured record on gold and the weight factors in force (src/pattern-calibration.mjs).
     return dashboardJson({ status: "ok", calibration: await readPatternCalibration(env) });
   }
+  if (url.pathname === "/api/model/dataset/summary") {
+    // The custom model's dataset: rows by label status, outcomes per side (src/model-dataset.mjs).
+    return dashboardJson({ status: "ok", dataset: await readModelDatasetSummary(env) });
+  }
+  if (url.pathname === "/api/model/dataset") {
+    // The labeled rows for training, paged by bar close (behind Cloudflare Access like every /api route).
+    try {
+      return dashboardJson({ status: "ok", dataset: await readModelDataset(env, { since: url.searchParams.get("since") || "", limit: Number(url.searchParams.get("limit") || "1000") }) });
+    } catch (error) {
+      console.error("model_dataset_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "model_dataset_unavailable" }, 500);
+    }
+  }
   if (url.pathname === "/api/conclusion/global") {
     try {
       // The Decision Engine's decision travels with the witnesses (the rooms, news, macro, strategy).
@@ -2689,6 +2703,9 @@ async function runLedgerStep(env: Env): Promise<void> {
     const execution = await pushExecutionReport(env, await readExecutionReport(env));
     if (execution.status !== "disabled" && execution.status !== "unchanged") console.log("execution_report", JSON.stringify(execution));
   } catch (e) { console.error("signal_ledger_failed", e instanceof Error ? e.message : String(e)); }
+  // The custom model's dataset (owner 2026-11-13, docs/RFC_CUSTOM_MODEL.md): features and labels per decision.
+  const dataset = await runModelDataset(env);
+  if (dataset.status === "failed" || Number(dataset.added) || Number(dataset.labeled) || Number(dataset.unavailable)) console.log("model_dataset", JSON.stringify(dataset));
 }
 
 export default {
