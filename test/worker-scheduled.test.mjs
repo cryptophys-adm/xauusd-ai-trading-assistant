@@ -13,6 +13,19 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
+// The crons act on "the last closed candle" and the worker analyses nothing while the market is closed, so
+// on the wall clock these tests failed every weekend (found 2026-11-13, a Friday after the 22:00 UTC
+// close). The file's clock starts on a Wednesday in the London session and runs on from there; each test
+// file has its own process, so no other test sees it.
+{
+  const RealDate = Date;
+  const shift = RealDate.UTC(2026, 10, 11, 10, 7, 0) - RealDate.now();
+  globalThis.Date = class extends RealDate {
+    constructor(...args) { if (args.length === 0) super(RealDate.now() + shift); else super(...args); }
+    static now() { return RealDate.now() + shift; }
+  };
+}
+
 const root = fileURLToPath(new URL("..", import.meta.url));
 const SECRET = "test-only-secret";
 const SYMBOL = "OANDA:XAUUSD";

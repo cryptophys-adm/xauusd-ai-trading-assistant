@@ -151,6 +151,34 @@ export function zoneLevels(zones, { qualified = false } = {}) {
   return (zones || []).filter((z) => isNum(z.low) && isNum(z.high)).map((z) => ({ low: z.low, high: z.high, price: z.price, major: z.candidate === true || (qualified && z.qualified === true), label: zoneText(z) }));
 }
 
+/**
+ * Squeezed between key zones (owner 2026-11-13: "jika masuk zone kejepit abstain, sehingga akan no trade",
+ * then "no trade"): no entry while the nearest key zone below price and the nearest one above it are less
+ * than CORRIDOR_ATR times the 1H average range apart, because neither side has room to move. Key zones
+ * here are the Key Level Agent's candidates (at most two a side, the strongest; the qualified zones are
+ * too dense to measure room with: production 2026-11-13, price sat at one on both sides in 22 of 22
+ * decisions). A candidate price is at (within a third of the agent's tolerance, as the agent reads "at
+ * price") is the place of the trade, not a wall. Without a candidate on one side there is room.
+ */
+export const SQUEEZE_RULE = Object.freeze({ corridor_atr: 1 });
+/**
+ * Pure: the corridor price stands in: { squeezed, corridor, corridor_atr, needed, below, above } (the facing
+ * edges of the two zones; below and above are { low, high } or null), or null without a price or a 1H range.
+ */
+export function squeezeOf(strategy, { corridorAtr = SQUEEZE_RULE.corridor_atr } = {}) {
+  const price = strategy?.price, atr = strategy?.atr_h1;
+  if (!isNum(price) || !isNum(atr) || atr <= 0) return null;
+  const reach = Math.max(1, 0.3 * atr) / 3;
+  const major = (strategy.key_levels?.zones || []).filter((z) => z?.candidate === true && isNum(z.low) && isNum(z.high) && z.low <= z.high);
+  const b = major.filter((z) => z.high < price - reach).sort((x, y) => y.high - x.high)[0] ?? null;
+  const a = major.filter((z) => z.low > price + reach).sort((x, y) => x.low - y.low)[0] ?? null;
+  const slim = (z) => (z ? { low: r2(z.low), high: r2(z.high) } : null);
+  const needed = r2(corridorAtr * atr);
+  if (!a || !b) return { squeezed: false, corridor: null, corridor_atr: null, needed, below: slim(b), above: slim(a) };
+  const corridor = a.low - b.high;
+  return { squeezed: corridor < corridorAtr * atr, corridor: r2(corridor), corridor_atr: r2(corridor / atr), needed, below: slim(b), above: slim(a) };
+}
+
 /** The scalp target's search (owner 2026-11-12, production 13:00 UTC): the nearest key level 0.25 ATR or more ahead, qualified zones included. */
 export const SCALP_TARGET = Object.freeze({ targetGapAtr: 0.25, qualified: true });
 

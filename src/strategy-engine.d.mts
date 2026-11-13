@@ -17,3 +17,5 @@ export function ownTimeframePlan(inputs: { snapshot?: unknown; bars?: unknown[] 
 export function loadOwnTimeframePlanInputs(env: unknown): Promise<{ snapshot: unknown; bars: unknown[] }>;
 export function riskChecks(dir: number, input: Record<string, any>): { vetoes: string[]; cautions: string[]; supports: string[] };
 export function triggerOf(dir: number, input: Record<string, any>): { fired: boolean; source: string | null; note: string };
+export const SQUEEZE_RULE: Readonly<{ corridor_atr: number }>;
+export function squeezeOf(strategy: any, options?: { corridorAtr?: number }): { squeezed: boolean; corridor: number | null; corridor_atr: number | null; needed: number; below: { low: number; high: number } | null; above: { low: number; high: number } | null } | null;

@@ -53,6 +53,7 @@ export function marketOpenAt(ms: number): boolean;
 export function runPendingDecision(env: any, options?: RunOptions): Promise<Record<string, any>>;
 export const EXTENDED_WITNESS_WEIGHTS: Readonly<Record<string, number>>;
 export function decisionWeightedEnabled(env: unknown): boolean;
+export function squeezeGuardEnabled(env: unknown): boolean;
 export const SESSIONS: readonly { name: string; from: number; to: number }[];
 export function sessionAt(now: number): Record<string, any>;
 export function regimeOf(snapshot: unknown, label?: string | null): Record<string, any>;
