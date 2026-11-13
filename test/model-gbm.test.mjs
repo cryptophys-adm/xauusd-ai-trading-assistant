@@ -3,8 +3,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { walkTree, predictGbm, gbmProblems, gbmPredictions, gbmStatus, readGbm, resetGbmCacheForTests, MODEL_GBM_KEY, MODEL_GBM_VERSION } from "../src/model-gbm.mjs";
-import { prospectiveRecord } from "../src/model-baseline.mjs";
+import { walkTree, predictGbm, gbmProblems, gbmPredictions, gbmStatus, gbmReport, readGbm, resetGbmCacheForTests, MODEL_GBM_KEY, MODEL_GBM_VERSION } from "../src/model-gbm.mjs";
+import { prospectiveRecord, modelReport } from "../src/model-baseline.mjs";
 
 // One stump per missing type: [feature, threshold, default_left, missing (0 None, 1 Zero, 2 NaN), left, right].
 const NONE = [0, 0.5, 0, 0, -1, 1], ZERO = [0, 0.5, 1, 1, -2, 2], NAN = [0, 0.5, 0, 2, -3, 3];
@@ -65,4 +65,25 @@ test("G3. the training workflow keeps the dataset and the model out of the publi
   const py = readFileSync(new URL("../scripts/train_gbm.py", import.meta.url), "utf8");
   assert.match(py, /DECISION_OUTPUTS = re\.compile\(r"\^\(stance\|bias\|confidence\|plan_\)"\)/, "the trainer uses the baseline's pre-decision rule");
   assert.match(py, /do not reproduce LightGBM's predictions/, "the export is checked before it is written");
+});
+
+test("G4. the model report for Aether carries the gbm's checks, prospective record and top features, never its trees", () => {
+  const gbm = {
+    version: MODEL_GBM_VERSION, model_id: "gbm@2026-11-13T04:22Z", trained_at: "2026-11-13T04:22:00Z", rows: 317, features: ["w_h1_lean", "w_d1_lean"], status: "ok",
+    models: { tight_long: { base_rate: 0.3, n: 293, trees: [NONE, NAN], top_features: [{ feature: "w_h1_lean", gain: 12.5 }, { feature: "Bad Name", gain: 1 }] } },
+    checks: { tight_long: { status: "ok", train: 205, n: 88, hit_rate: 0.33, brier: 0.2, brier_base: 0.21, skill: 0.0591, auc: 0.6824, picked: 18, picked_mean_r: 0.3889, all_mean_r: -0.2614 }, wide_long: { status: "not_enough_rows", rows: 40, needed: 150 } }
+  };
+  const block = gbmReport(gbm, { tight_long: { n: 4, skill: 0.1 } });
+  assert.equal(block.model_id, "gbm@2026-11-13T04:22Z");
+  assert.equal(block.features, 2, "a count, not the list");
+  assert.equal(block.connected, false, "shadow only");
+  assert.deepEqual(Object.keys(block.walk_forward), ["tight_long"], "a model without rows is left out");
+  assert.deepEqual(block.walk_forward.tight_long.top_features, [{ feature: "w_h1_lean", gain: 12.5 }]);
+  assert.equal(block.prospective.tight_long.n, 4);
+  assert.ok(!JSON.stringify(block).includes("trees") && !JSON.stringify(block).includes("base_rate"), "no tree, no leaf");
+  assert.equal(gbmReport(null), null);
+  // It rides in the baseline's report; without a gbm the report is as before.
+  const baseline = { status: "ok", model_id: "baseline@2026-11-13T05:00Z", rows: 317, checks: {}, models: {}, promotion: null };
+  assert.equal(modelReport(baseline, {}, { gbm: block }).gbm.model_id, "gbm@2026-11-13T04:22Z");
+  assert.ok(!("gbm" in modelReport(baseline, {})));
 });
