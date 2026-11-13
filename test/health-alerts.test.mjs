@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { runHealthAlerts, readHealthAlerts, detectHealthIssues, resetHealthSchemaCacheForTests, HEALTH_AGENT_ID, HEALTH_REPORTS_PER_HOUR, marketDataIssue, marketDataFallbackIssue } from "../src/health-alerts.mjs";
+import { runHealthAlerts, readHealthAlerts, detectHealthIssues, resetHealthSchemaCacheForTests, HEALTH_AGENT_ID, HEALTH_REPORTS_PER_HOUR, marketDataIssue, marketDataFallbackIssue, silentWebhookSources } from "../src/health-alerts.mjs";
 
 const NOW = Date.parse("2026-11-06T09:30:00.000Z");
 const H = 3600_000;
@@ -183,4 +183,31 @@ test("the MT5 fallback is an alert while the 1m series holds the broker's bars, 
   const healed = env({ SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|1m": m1(false) }), DB: on.DB });
   assert.equal(await marketDataFallbackIssue(healed), null);
   assert.ok((await runHealthAlerts(healed, { now: at + 60_000 })).resolved_alerts.some((a) => a.kind === "market_data_fallback"));
+});
+
+test("a TradingView alert that went silent while the others on its chart arrive is an alert (production 2026-11-13: Prophet R38 1H since 11-10)", async () => {
+  const now = Date.parse("2026-11-13T09:56:00Z");
+  const seen = [
+    { source: "gmi_v12_70", tf: "60", last: "2026-11-13 09:00:15" },
+    { source: "prophet_r37_ssot", tf: "60", last: "2026-11-13 09:00:15" },
+    { source: "prophet_r38", tf: "60", last: "2026-11-10 07:00:01" },
+    { source: "prophet_r38_hud", tf: "60", last: "2026-11-10 07:00:01" },
+    { source: "gmi_v12_70", tf: "5", last: "2026-11-13 09:55:08" },
+    { source: "prophet_r38", tf: "5", last: "2026-11-13 09:55:09" }
+  ];
+  const silent = silentWebhookSources(seen, now);
+  assert.deepEqual(silent.map((s) => [s.source, s.tf]), [["prophet_r38", "60"], ["prophet_r38_hud", "60"]]);
+  // Nothing while every alert on the chart is quiet (market closed, or an outage the other checks report).
+  assert.deepEqual(silentWebhookSources(seen, Date.parse("2026-11-14T12:00:00Z")), []);
+  // One bar late is not silent.
+  assert.deepEqual(silentWebhookSources([{ source: "a", tf: "60", last: "2026-11-13 09:00:00" }, { source: "b", tf: "60", last: "2026-11-13 08:00:00" }], now), []);
+  // Through the detector, from D1 webhook_sources.
+  const db = d1();
+  db.raw.exec("CREATE TABLE webhook_sources (id INTEGER PRIMARY KEY AUTOINCREMENT, candle_key TEXT, source TEXT, payload TEXT, received_at TEXT)");
+  const raw = db.raw;
+  for (const r of [["OANDA:XAUUSD:60:1794556800000", "gmi_v12_70", "2026-11-13 09:00:15"], ["OANDA:XAUUSD:60:1794276000000", "prophet_r38", "2026-11-10 07:00:01"]]) raw.prepare("INSERT INTO webhook_sources (candle_key, source, payload, received_at) VALUES (?, ?, '{}', ?)").run(...r);
+  const issues = await detectHealthIssues({ DB: db }, now);
+  const w = issues.find((i) => i.kind === "webhook_silent");
+  assert.equal(w?.key, "webhook_silent:prophet_r38:60");
+  assert.match(w.subject, /Prophet R38 1H has sent nothing since 2026-11-10 07:00 UTC/);
 });
