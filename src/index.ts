@@ -194,7 +194,8 @@ import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mj
 import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema, readExecutionReport, LEDGER_CRON, activeSetups } from "./signal-ledger.mjs";
 import { runPatternCalibration, readPatternCalibration } from "./pattern-calibration.mjs";
 import { runModelDataset, readModelDataset, readModelDatasetSummary, loadLabeledRows } from "./model-dataset.mjs";
-import { runModelBaseline, readBaseline, baselineStatus } from "./model-baseline.mjs";
+import { runModelBaseline, readBaseline, baselineStatus, prospectiveRecord } from "./model-baseline.mjs";
+import { readGbm, gbmStatus } from "./model-gbm.mjs";
 import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, TRADING_MODE_KEY } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport, pushExecutionReport, pushModelReport } from "./aether-push.mjs";
@@ -2504,6 +2505,18 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/model/baseline") {
     // The self-trained baseline: walk-forward checks, the prospective record, the features it leans on.
     return dashboardJson({ status: "ok", baseline: baselineStatus(await readBaseline(env)) });
+  }
+  if (url.pathname === "/api/model/gbm") {
+    // The daily decision model (src/model-gbm.mjs): the trainer's walk-forward checks, its top features and
+    // its prospective record from the shadow predictions (never the trees).
+    try {
+      const rows = (await loadLabeledRows(env, { limit: 2000 })) as Array<Record<string, any>>;
+      const prospective = prospectiveRecord(rows.map((r) => ({ ...r, shadow: r.shadow?.gbm ?? null })));
+      return dashboardJson({ status: "ok", gbm: gbmStatus(await readGbm(env), prospective) });
+    } catch (error) {
+      console.error("model_gbm_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "model_gbm_unavailable" }, 500);
+    }
   }
   if (url.pathname === "/api/model/dataset") {
     // The labeled rows for training, paged by bar close (behind Cloudflare Access like every /api route).

@@ -199,3 +199,22 @@ test("B8. once connected, the council gets the model's probabilities (no price);
   assert.ok(!/"(entry|stop|tp1|tp2|price)"/.test(JSON.stringify(advice)));
   assert.ok(councilMessages({ context: { model: advice } })[0].content.includes("context.model is the platform's own model"));
 });
+
+test("B9. the dataset stores the decision model's shadow predictions beside the baseline's (point in time)", async () => {
+  const { MODEL_GBM_KEY, MODEL_GBM_VERSION, resetGbmCacheForTests } = await import("../src/model-gbm.mjs");
+  resetModelDatasetSchemaForTests(); resetGbmCacheForTests();
+  const M = 15 * 60_000;
+  const bars = Array.from({ length: 60 }, (_, i) => ({ open_time: new Date(T0 + i * M).toISOString(), close_time: new Date(T0 + (i + 1) * M).toISOString(), open: 4000, high: 4005, low: 3995, close: 4001 }));
+  const env = { DB: d1(), SIGNAL_CACHE: kv() };
+  env.SIGNAL_CACHE.m.set(MODEL_GBM_KEY, JSON.stringify({ version: MODEL_GBM_VERSION, model_id: "gbm@x", trained_at: new Date(T0 + 30 * M).toISOString(), features: ["w_h1_lean"], models: { tight_long: { base_rate: 0.4, trees: [[0, 0, 0, 0, -1, 1]] } } }));
+  for (const k of [20, 40]) {
+    const close = new Date(T0 + k * M).toISOString();
+    env.DB.raw.prepare("INSERT INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, 'WAIT', 0, 'council', ?)").run(`OANDA:XAUUSD:15:${T0 + (k - 1) * M}`, close, close, JSON.stringify({ bar_close: close, witnesses: [{ key: "H1", available: true, lean: 0.6 }] }));
+  }
+  await runModelDataset(env, { now: T0 + 60 * M, series: { bars, m15: bars } });
+  const rows = env.DB.raw.prepare("SELECT shadow_json FROM model_dataset ORDER BY bar_close").all();
+  assert.equal(rows[0].shadow_json, null, "before the model was trained: nothing");
+  const s = JSON.parse(rows[1].shadow_json);
+  assert.equal(s.gbm.model_id, "gbm@x");
+  assert.ok(s.gbm.tight.long > 0.5);
+});
