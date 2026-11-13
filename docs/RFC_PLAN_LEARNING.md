@@ -33,7 +33,8 @@ free model: every arm is a plan a person can read, and the sample is small.
   price path many times.
 - **Replay**: each arm of each ended setup on the Signal Ledger's bars (1m where the 1m series reaches,
   15m before) with the ledger's own simulation, so the learner and the Performance page read price the
-  same way. An entry may fill only while the engine repeated the plan (at most 8 hours). A result is in
+  same way. A plan at its level is entered at market on the first bar (within 0.35 of its stop distance),
+  as Omega enters it. An entry may fill only while the engine repeated the plan (at most 8 hours). A result is in
   R of the arm's own risk, because the lot follows the stop distance; an entry that never fills is 0R,
   so a deeper entry pays for the trades it misses.
 - **Context**: the trading mode and the 1H regime of the decision (volatility and character, for
@@ -49,10 +50,12 @@ at least 20 setups; else it keeps the plan. With little data the learner therefo
 ## 4. The referee
 
 Walk-forward only: for each setup the learner sees the setups that had resolved before it opened,
-picks, and its pick is compared with the plan on that setup. A one-sided sign test on the older part
-(p < 0.05, mean difference above zero), the newest quarter (at least 20) held out and required to agree.
-The verdict is `collecting` below 100 resolved setups or 30 decisive ones, then `better_than_plan` or
-`not_better`. At about 15 setups a trading day the first verdict needs about two weeks.
+picks, and its pick is compared with the plan on that setup. The engine writes a new plan at almost every 15m
+close (production: 189 setups in four days), so setups overlap and share one price move; the test
+therefore counts only independent setups, those that opened after the one counted before them had ended.
+A one-sided sign test on their older part (p < 0.05, mean difference above zero), their newest quarter
+(at least 15) held out and required to agree. The verdict is `collecting` below 60 independent setups or
+20 decisive ones, then `better_than_plan` or `not_better`.
 
 ## 5. Risks and their guards
 

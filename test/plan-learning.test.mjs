@@ -89,6 +89,16 @@ test("the replay: each arm on the same bars; a deeper entry that never fills is 
   assert.equal(replaySetup(s, bars(T0 + M1, [[99.5, 100.2], [99, 101]]), { now: T0 + 10 * M1 }).status, "open");
   assert.equal(replaySetup(s, [], { now: T0 + HOUR }).status, "open");
   assert.equal(replaySetup(s, bars(T0 + 5 * HOUR, [[99, 101]]), { now: T0 + 3 * 24 * HOUR }).status, "unavailable");
+  // A plan at its level is entered at market on the first bar, as Omega enters it: here 0.8 above the
+  // plan's entry, with the plan's stop and target distances from the fill. Outside the band it is a limit.
+  const bar = (i, open, low, high) => ({ open_time: iso(T0 + (i + 1) * M1), close_time: iso(T0 + (i + 2) * M1), open, low, high, close: high });
+  const ran = [bar(0, 100.8, 100.7, 101.5), bar(1, 101.5, 101.4, 108), bar(2, 108, 107.9, 116)];
+  const mkt = replaySetup(s, ran, { now });
+  assert.deepEqual(mkt.results[CONTROL_ARM], { s: "target", r: 1.5, f: 1 }, "filled at 100.80: the target is 115.80");
+  assert.deepEqual(mkt.results[armId(0.1, 1)], { s: "target_before_entry", r: 0, f: 0 }, "the deeper limit at 99 never filled");
+  assert.deepEqual(replaySetup({ ...s, at_level: false }, ran, { now }).results[CONTROL_ARM], { s: "target_before_entry", r: 0, f: 0 }, "a pullback plan waits at its entry");
+  const far = [bar(0, 104, 103.9, 104.5), bar(1, 104.5, 104.4, 116)];
+  assert.deepEqual(replaySetup(s, far, { now }).results[CONTROL_ARM], { s: "target_before_entry", r: 0, f: 0 }, "4 points away is outside 0.35 of the 10-point stop distance");
   // A 1m bar that closed before the decision was made is not used.
   const early = replaySetup({ ...s, decided_ms: T0 + 3 * M1 }, bars(T0, [[80, 100.2], [80, 99], [80, 99], [99.5, 100.2], [100.1, 116]]), { now });
   assert.equal(early.results[CONTROL_ARM].s, "target");
@@ -134,7 +144,15 @@ test("the referee: walk-forward only, the newest part held out; a steady gain is
   assert.equal(wf.holdout.setups, 40);
   assert.ok(wf.discovery.picked < 120 && wf.discovery.picked > 80, "the first setups keep the plan: nothing was known yet");
   assert.ok(wf.discovery.p_value < 0.05 && wf.holdout.mean_diff > 0);
-  assert.equal(walkForward(good.slice(0, 60)).verdict, "collecting");
+  assert.equal(wf.independent, 160, "each resolved before the next opened");
+  assert.deepEqual(wf.needs, { independent: 60, decisive: 20 });
+  assert.equal(walkForward(good.slice(0, 40)).verdict, "collecting");
+  // Overlapping setups share one price move: only those that opened after the counted one before them
+  // had ended go into the test (here every third), and 54 independent setups are not yet enough.
+  const overlapping = good.map((s) => ({ ...s, resolved_ms: s.opened_ms + 150 * M1 }));
+  const ov = walkForward(overlapping);
+  assert.deepEqual([ov.setups, ov.independent, ov.verdict, ov.holdout], [160, 54, "collecting", null]);
+  assert.equal(ov.all.setups, 160, "every setup is still reported");
   // A gain that existed only in the past: the learner picks the arm, the newer setups punish it.
   const faded = Array.from({ length: 160 }, (_, i) => fake(i, { gain: { [tight]: i < 60 ? 0.6 : -0.3 } }));
   assert.equal(walkForward(faded).verdict, "not_better");
@@ -166,6 +184,11 @@ test("the run: setups from the engine's decisions, the replay of the ended ones,
   assert.deepEqual(state.setups, { resolved: 1, open: 0, unavailable: 0, since: iso(T0) });
   assert.equal(state.learned.arms.length, 20);
   assert.equal(state.grid.control, CONTROL_ARM);
+  // A setup replayed by an older version of the rules is replayed again.
+  env.DB.raw.prepare("UPDATE plan_setups SET version = 'cryptophys.plan-learning.v1', results_json = '{}'").run();
+  const again = await runPlanLearning(env, { now: T0 + 3 * HOUR + 5 * M1, bars: series });
+  assert.deepEqual([again.status, again.resolved], ["ok", 1]);
+  assert.equal(JSON.parse(env.DB.raw.prepare("SELECT results_json FROM plan_setups").get().results_json)[CONTROL_ARM].r, 1.5);
   assert.equal((await runPlanLearning(env, { now: T0 + 4 * HOUR, bars: series })).status, "unchanged");
   // Later runs read two days of decisions: a plan already running where that window starts is the tail of
   // an older setup and opens none; a plan that starts inside the window does.
