@@ -17,11 +17,10 @@ function SentimentCard() {
   const c = news?.counts ?? {};
   const score = g?.score ?? null;
   return (
-    <Panel title="Market sentiment" icon={<Gauge className="h-3.5 w-3.5 text-cyan-300" />}>
+    <Panel title="Market sentiment" icon={<Gauge className="h-3.5 w-3.5 text-cyan-300" />} hint="Room weights: D1 30 · 4H 25 · 1H 20 · 15m 15 · News 10">
       {loading && !g ? <Skeleton rows={3} /> : (
         <>
           <SentimentGauge value={score} label={leanLabel(score)} />
-          <p className="-mt-1 text-center text-[10px] text-slate-500">Rooms weighted D1 30 · 4H 25 · 1H 20 · 15m 15 · News 10</p>
           <div className="glass-inner mt-3 flex items-center gap-3 px-3 py-2.5">
             <Donut size={78} center={String((c.bullish ?? 0) + (c.bearish ?? 0) + (c.neutral ?? 0))} sub="headlines"
               parts={[{ label: "bullish", value: c.bullish ?? 0, color: C.bull }, { label: "bearish", value: c.bearish ?? 0, color: C.bear }, { label: "neutral", value: c.neutral ?? 0, color: C.muted }]} />
@@ -48,7 +47,7 @@ function useLadder() {
   };
   const m15 = { key: "M15", label: "15m", role: "Structure", lean: roomLean(room?.openings), action: room?.conclusion?.status === "ok" ? room.conclusion.stance : null, note: interpretation(room?.conclusion), mix: stanceMix(room?.openings) };
   const confirm = m5?.buy_confirmed ? "buy confirmed" : m5?.sell_confirmed ? "sell confirmed" : "no confirmation";
-  const m5row = { key: "M5", label: "5m", role: "Confirmation", lean: m5Lean(m5), action: m5?.buy_confirmed ? "BUY" : m5?.sell_confirmed ? "SELL" : null, note: m5 ? `Bias ${String(m5.bias ?? "neutral").toLowerCase()}, ${confirm} on the last closed 5m candle.` : null, mix: {} as Record<string, number> };
+  const m5row = { key: "M5", label: "5m", role: "Confirmation", lean: m5Lean(m5), action: m5?.buy_confirmed ? "BUY" : m5?.sell_confirmed ? "SELL" : null, note: m5 ? `Bias ${String(m5.bias ?? "neutral").toLowerCase()} · ${confirm}` : null, mix: {} as Record<string, number> };
   return [tf("D1", "D1", "Macro trend"), tf("H4", "4H", "Intraday trend"), tf("H1", "1H", "Swing trend"), m15, m5row];
 }
 
@@ -56,7 +55,7 @@ function TrendLadder({ ladder }: { ladder: ReturnType<typeof useLadder> }) {
   const { loading } = useMarket();
   const { tab } = useTab();
   return (
-    <Panel title="Trend by timeframe" icon={<Compass className="h-3.5 w-3.5 text-violet-300" />}>
+    <Panel title="Trend by timeframe" icon={<Compass className="h-3.5 w-3.5 text-violet-300" />} hint="Bar: agents' weighted lean per room. Chip: the room's decision.">
       {loading ? <Skeleton rows={5} /> : (
         <div className="space-y-2">
           {ladder.map((r) => (
@@ -69,7 +68,6 @@ function TrendLadder({ ladder }: { ladder: ReturnType<typeof useLadder> }) {
               {r.note && <p className="mt-1.5 line-clamp-2 text-[11px] leading-snug text-slate-400" title={r.note}>{r.note}</p>}
             </div>
           ))}
-          <p className="text-[10px] text-slate-600">Bar: the agents' confidence-weighted lean in each room (left bearish, right bullish). Chip: the room's decision (the bar is its bias).</p>
         </div>
       )}
     </Panel>
@@ -89,22 +87,21 @@ const chartName = (tab: string) => (tab === "NEWS" ? "1H" : tabLabel(tab as any)
 function regimeText(axes: any[]) {
   const v = Object.fromEntries(axes.map((a) => [a.key, a.value]));
   if (v.trend == null) return null;
-  const trend = v.trend > 0.6 ? "trending" : v.trend < 0.45 ? "mean-reverting" : "weakly trending";
-  const flow = v.efficiency == null ? "" : v.efficiency > 0.5 ? ", with efficient, directional movement" : ", with noisy movement";
-  return `The market is ${trend}${flow}.`;
+  const trend = v.trend > 0.6 ? "Trending" : v.trend < 0.45 ? "Mean-reverting" : "Weakly trending";
+  const flow = v.efficiency == null ? "" : v.efficiency > 0.5 ? " · efficient" : " · noisy";
+  return `${trend}${flow}`;
 }
 
 function RegimeCard({ levels, loading, tab }: { levels: any; loading: boolean; tab: string }) {
   const axes = levels?.regime?.axes ?? [];
   const text = regimeText(axes);
   return (
-    <Panel title={`Regime · ${chartName(tab)}`} icon={<Radar className="h-3.5 w-3.5 text-cyan-300" />}
-      right={levels?.regime?.chaos ? <Badge tone="red">chaos</Badge> : levels ? <Badge tone="slate">not yet calibrated</Badge> : null}>
-      {loading ? <Skeleton rows={4} /> : !axes.length || axes.every((a: any) => a.value == null) ? <p className="text-[12px] text-slate-500">No regime sensors for this chart yet.</p> : (
+    <Panel title={`Regime · ${chartName(tab)}`} icon={<Radar className="h-3.5 w-3.5 text-cyan-300" />} hint="Hurst, efficiency, z-score, volume, cycles and entropy, each scaled 0–100."
+      right={levels?.regime?.chaos ? <Badge tone="red">chaos</Badge> : levels ? <Badge tone="slate">uncalibrated</Badge> : null}>
+      {loading ? <Skeleton rows={4} /> : !axes.length || axes.every((a: any) => a.value == null) ? <p className="text-[12px] text-slate-500">No regime data yet.</p> : (
         <>
           <div className="flex justify-center"><RegimeRadar axes={axes} color={levels.regime.chaos ? C.bear : C.cyan} /></div>
-          {text && <p className="text-[11px] text-slate-400">{text}{levels.regime.z != null ? ` Price sits ${Math.abs(levels.regime.z).toFixed(2)} standard deviations ${levels.regime.z >= 0 ? "above" : "below"} its mean.` : ""}</p>}
-          <p className="mt-1 text-[10px] text-slate-600">Engine sensors (Hurst, efficiency, z-score, volume, cycles, entropy), each scaled 0–100.</p>
+          {text && <p className="text-[11px] text-slate-400">{text}{levels.regime.z != null ? ` · z ${levels.regime.z >= 0 ? "+" : "−"}${Math.abs(levels.regime.z).toFixed(2)}` : ""}</p>}
         </>
       )}
     </Panel>
@@ -115,7 +112,7 @@ function ConsensusCard({ ladder }: { ladder: ReturnType<typeof useLadder> }) {
   const rows = ladder.filter((r) => Object.keys(r.mix).length);
   return (
     <Panel title="Agent consensus" icon={<Users className="h-3.5 w-3.5 text-emerald-300" />}>
-      {!rows.length ? <p className="text-[12px] text-slate-500">No room has opened yet.</p> : (
+      {!rows.length ? <p className="text-[12px] text-slate-500">No room open yet.</p> : (
         <div className="space-y-2">
           {rows.map((r) => {
             const total = Object.values(r.mix).reduce((s, n) => s + n, 0);
@@ -143,10 +140,10 @@ function MacroDrivers() {
   const rows = [["gold", "Gold"], ["dollar", "DXY"], ["oil", "WTI oil"], ["usdt", "USDT.D"]].map(([k, name]) => ({ name, v: ctx[k]?.change_24h_percent as number | undefined }));
   const max = Math.max(1, ...rows.map((r) => Math.abs(r.v ?? 0)));
   const g = ctx.gold?.change_24h_percent, d = ctx.dollar?.change_24h_percent;
-  const link = g == null || d == null ? null : Math.sign(g) === -Math.sign(d) ? "Gold and the dollar move opposite ways: the usual inverse link holds." : "Gold and the dollar move the same way: the inverse link is off today.";
+  const link = g == null || d == null ? null : Math.sign(g) === -Math.sign(d) ? "Gold/DXY inverse link holds" : "Gold/DXY inverse link off";
   return (
     <Panel title="Macro drivers · 24h" icon={<Globe2 className="h-3.5 w-3.5 text-amber-300" />}>
-      {rows.every((r) => r.v == null) ? <p className="text-[12px] text-slate-500">No market context yet.</p> : (
+      {rows.every((r) => r.v == null) ? <p className="text-[12px] text-slate-500">No data yet.</p> : (
         <div className="space-y-2">
           {rows.map((r) => (
             <div key={r.name} className="flex items-center gap-2.5">
@@ -199,7 +196,7 @@ function SessionClock() {
   const day = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", weekday: "long", day: "numeric", month: "short", year: "numeric" }).format(now);
   const time = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(now);
   return (
-    <Panel title="Session clock" icon={<Clock3 className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone={open ? "green" : "red"}>{open ? "market open" : "market closed"}</Badge>}>
+    <Panel title="Session clock" icon={<Clock3 className="h-3.5 w-3.5 text-cyan-300" />} hint="Session hours in New York time." right={<Badge tone={open ? "green" : "red"}>{open ? "market open" : "market closed"}</Badge>}>
       <div className="mb-2 flex items-baseline justify-between text-[11px]">
         <span className="text-slate-200">{day}</span>
         <span className="mono text-slate-400">{time} UTC</span>
@@ -218,7 +215,7 @@ function SessionClock() {
               <span className="mono text-[10px] text-slate-500">{String(s.from % 24).padStart(2, "0")}–{String(s.to % 24).padStart(2, "0")}</span>
             </div>
           ))}
-          <p className="pt-1 text-[10px] text-slate-500">{!open ? "Weekend: the market is closed." : active.length > 1 ? `${active.map((s) => s.name).join(" and ")} overlap: the most liquid hours.` : active.length ? `${active[0].name} session.` : "Between sessions: thin liquidity."} New York time.</p>
+          <p className="pt-1 text-[10px] text-slate-500">{!open ? "Weekend" : active.length > 1 ? `${active.map((s) => s.name).join(" + ")} overlap` : active.length ? `${active[0].name} session` : "Between sessions"}</p>
           <p className="text-[10px] text-slate-500">{open ? "Closes" : "Opens"} {new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(change)} UTC · in {inHours(change.getTime() - now.getTime())}</p>
         </div>
       </div>

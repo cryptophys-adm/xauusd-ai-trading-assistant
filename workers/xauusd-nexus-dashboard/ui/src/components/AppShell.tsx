@@ -1,6 +1,6 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { motion } from "framer-motion";
-import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, ShieldCheck, Sparkles, Swords, Trophy, X, Zap } from "lucide-react";
+import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, ShieldCheck, Swords, Trophy, X, Zap } from "lucide-react";
 import { Dot } from "./ui";
 import { useWarRoom } from "../lib/warroom";
 import { marketClosed } from "../lib/health";
@@ -127,16 +127,12 @@ export default function AppShell({ current, children }: { current: string; child
       <div className="flex">
         <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col justify-between overflow-y-auto border-r border-white/10 bg-obsidian-bar px-2 py-4 md:flex" aria-label="Nexus">
           {sideNav(false)}
-          <div className="mt-6 flex items-center gap-2 px-3 text-[10px] uppercase tracking-[0.2em] text-slate-500">
-            <Sparkles className="h-3.5 w-3.5 shrink-0 text-cyan-300" />Observe → discuss → conclude → attest
-          </div>
         </aside>
         <main className="min-w-0 flex-1">{children}</main>
       </div>
 
       <footer className="sticky bottom-0 z-20 border-t border-white/10 bg-obsidian-foot/95 backdrop-blur">
         <div className="mx-auto flex max-w-[1680px] items-center gap-4 overflow-x-auto px-3 py-3 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-500 sm:px-6">
-          {["War Room 15m", "Threads D1 · 4H · 1H", "News Daily", "Local engines", "Parity", "Workers AI", "D1"].map((s) => <span key={s} className="whitespace-nowrap">{s}</span>)}
           <a href="https://nexus.cryptophys.work/console/" target="_blank" rel="noopener noreferrer" className="ml-auto inline-flex items-center gap-1 whitespace-nowrap text-cyan-300/80 hover:text-cyan-200">Console <ExternalLink className="h-3 w-3" /></a>
         </div>
       </footer>

@@ -13,7 +13,7 @@ export function calibrationText(c: unknown): string | null {
   if (x.total_lines != null) {
     // Three tiers: verified by parity, computed from verified bars, not yet calibrated.
     const parts = [x.verified_lines ? `${x.verified_lines} verified` : null, x.derived_lines ? `${x.derived_lines} from verified bars` : null].filter(Boolean);
-    return parts.length ? `${parts.join(" · ")} of ${x.total_lines}` : "not yet calibrated";
+    return parts.length ? `${parts.join(" · ")} of ${x.total_lines}` : "uncalibrated";
   }
   return x.label ?? null;
 }
@@ -39,7 +39,7 @@ export function TrackRecord({ r }: { r?: Reputation | null }) {
     : "No scored calls yet: weight ×1 in the crowd line.";
   return (
     <span className="inline-flex items-center gap-1.5" title={title}>
-      <span className={`mono text-[10px] ${tone}`}>{decisive ? `record ${pct(r.accuracy)} · n ${decisive} · ×${r.weight}` : "no record yet"}</span>
+      <span className={`mono text-[10px] ${tone}`}>{decisive ? `record ${pct(r.accuracy)} · n ${decisive} · ×${r.weight}` : "no record"}</span>
       {!!r.caution?.length && <span className="chip border-amber-400/30 bg-amber-400/10 px-1.5 py-0 text-[9px] tracking-[0.14em] text-amber-200" title={r.caution.join("\n")}>CAUTION</span>}
     </span>
   );
@@ -50,7 +50,7 @@ export function Post({ m, text, calibration, reputation }: { m: RoomMessage; tex
   if (m.status !== "ok") {
     return (
       <div className="glass-inner px-3 py-2 text-[12px] text-slate-500">
-        <span className="font-semibold text-slate-400">{m.name ?? m.id}</span> could not speak this round.
+        <span className="font-semibold text-slate-400">{m.name ?? m.id}</span> · no response
       </div>
     );
   }
@@ -92,7 +92,7 @@ export function Tldr({ c, waiting }: { c?: Conclusion | null; waiting: string })
       {!!c.reasons?.length && (
         <ul className="mt-2 list-disc space-y-1 pl-4 text-[12px] text-slate-400">{c.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
       )}
-      {!!c.dissent?.length && <p className="mt-2 text-[11px] text-slate-500">Still disagree: {c.dissent.map((d) => d.name).join(", ")}</p>}
+      {!!c.dissent?.length && <p className="mt-2 text-[11px] text-slate-500">Dissent: {c.dissent.map((d) => d.name).join(", ")}</p>}
     </div>
   );
 }

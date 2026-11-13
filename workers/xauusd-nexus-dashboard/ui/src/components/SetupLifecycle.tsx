@@ -1,5 +1,5 @@
 import { Check, Circle, Lock, X } from "lucide-react";
-import { Badge } from "./ui";
+import { Badge, Hint } from "./ui";
 
 /**
  * The live setup (owner 2026-11-12: "ya kerjakan semua nomor jika memang lebih baik"): a Decision Engine
@@ -55,8 +55,9 @@ export default function SetupLifecycle({ setup: s, levels }: { setup: any; level
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
         <Lock className="h-3.5 w-3.5 text-amber-300" aria-label="levels locked" />
         <span className={`mono font-bold ${long ? "text-emerald-300" : "text-rose-300"}`}>{s.side}</span>
-        <span className="text-slate-400">setup from {hm(s.opened_at)} UTC{s.mode ? ` · ${s.mode}` : ""}</span>
+        <span className="text-slate-400">opened {hm(s.opened_at)} UTC{s.mode ? ` · ${s.mode}` : ""}</span>
         <Badge tone={phase.tone}>{phase.text}</Badge>
+        <Hint text="Levels locked at the decision; times from the ledger's 1m bars." />
         {(s.decisions_since?.same || s.decisions_since?.opposite) ? (
           <span className="text-[10px] text-slate-500" title="Decisions since this setup opened: same side confirm it, the opposite side calls against it (its levels stay locked)">
             {s.decisions_since.same ? `confirmed ×${s.decisions_since.same}` : ""}{s.decisions_since.same && s.decisions_since.opposite ? " · " : ""}{s.decisions_since.opposite ? <span className="text-amber-300">opposite ×{s.decisions_since.opposite}</span> : ""}
@@ -80,7 +81,6 @@ export default function SetupLifecycle({ setup: s, levels }: { setup: any; level
       <div className="mt-2 flex flex-wrap gap-x-3 text-[10px] text-slate-500">
         {(s.r?.tp1 != null || s.r?.open != null) && <span>plan {s.r?.tp1 != null ? `TP1 ${r(s.r.tp1)}` : `open ${r(s.r.open)}`}{s.r?.tp2 != null ? ` · TP2 ${r(s.r.tp2)}` : ""}</span>}
         {o && <span>Omega {o.status === "closed" ? `${r(o.r)} (${OMEGA_EXIT[o.exit] ?? o.exit})` : o.status === "skipped" ? `skipped: ${String(o.gate ?? "").replace(/_/g, " ")}` : o.status}</span>}
-        <span className="text-slate-600">levels locked at the decision · times from the ledger's 1m bars</span>
       </div>
     </div>
   );
