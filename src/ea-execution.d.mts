@@ -9,3 +9,6 @@ export function dealStats(deals: Record<string, any>[]): Record<string, any>;
 export function setControl(env: unknown, input?: { mode?: string; reason?: string; actor?: string }, options?: { now?: number }): Promise<{ ok: boolean; error?: string; control?: Record<string, any>; previous_mode?: string }>;
 export function controlEvents(env: unknown, options?: { limit?: number }): Promise<Record<string, any>[]>;
 export function omegaOverview(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function dedupeDeals(env: unknown, options?: { batch?: number }): Promise<{ status: string; deleted?: number; left?: number; error?: string }>;
+export const DEAL_TICKET_INDEX: string;
+export const FIRST_OF_DEAL: string;

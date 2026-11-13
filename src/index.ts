@@ -232,7 +232,7 @@ import { readParityView } from "./parity-view.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
 import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weighting.mjs";
 import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
-import { listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
+import { dedupeDeals, listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
 import { omegaHealth } from "./omega-health.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
@@ -2730,6 +2730,10 @@ async function runLedgerStep(env: Env): Promise<void> {
     const execution = await pushExecutionReport(env, await readExecutionReport(env));
     if (execution.status !== "disabled" && execution.status !== "unchanged") console.log("execution_report", JSON.stringify(execution));
   } catch (e) { console.error("signal_ledger_failed", e instanceof Error ? e.message : String(e)); }
+  // The duplicate deal rows of before 2026-11-13 are removed in batches, then a unique index holds one row
+  // per deal ticket (owner 2026-11-13: "setuju, bersihkan duplikat deal lewat PR").
+  const deals = await dedupeDeals(env);
+  if (deals.status !== "clean") console.log("ea_deals_dedupe", JSON.stringify(deals));
   // The custom model's dataset (owner 2026-11-13, docs/RFC_CUSTOM_MODEL.md): features and labels per decision.
   const dataset = await runModelDataset(env);
   if (dataset.status === "failed" || Number(dataset.added) || Number(dataset.labeled) || Number(dataset.wide) || Number(dataset.unavailable)) console.log("model_dataset", JSON.stringify(dataset));

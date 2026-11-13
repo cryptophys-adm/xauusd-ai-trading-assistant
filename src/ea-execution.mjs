@@ -110,9 +110,31 @@ export async function storeDeal(env, body, { now = Date.now() } = {}) {
     `INSERT INTO ea_deals (deal_ticket, position_ticket, mode, side, volume, entry_price, exit_price, stop_loss, take_profit, profit, commission, swap, reason, signal_id, opened_ms, closed_ms, currency, received_at, source)
      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
      WHERE NOT EXISTS (SELECT 1 FROM ea_deals WHERE deal_ticket = ?)
-     ON CONFLICT (deal_ticket, closed_ms) DO NOTHING`
+     ON CONFLICT DO NOTHING`
   ).bind(d.deal_ticket, d.position_ticket, d.mode, d.side, d.volume, d.entry_price, d.exit_price, d.stop_loss, d.take_profit, d.profit, d.commission, d.swap, d.reason, d.signal_id, d.opened_ms, d.closed_ms, d.currency, new Date(now).toISOString(), DEAL_SOURCES.includes(body?.source) ? body.source : null, d.deal_ticket).run();
   return { ok: true, stored: Number(r?.meta?.changes ?? 0) > 0 };
+}
+
+/**
+ * The clean-up of the duplicate deal rows stored before 2026-11-13 (owner 2026-11-13: "setuju, bersihkan
+ * duplikat deal lewat PR"). Run from the 5-minute ledger step: each run deletes at most `batch` rows that are
+ * not the first stored row of their deal ticket; once none is left it adds a unique index on the deal ticket,
+ * after which a run only reads sqlite_master. Never throws.
+ */
+export const DEAL_TICKET_INDEX = "ea_deals_ticket";
+export async function dedupeDeals(env, { batch = 20_000 } = {}) {
+  try {
+    await ensureSchema(env.DB);
+    const done = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?").bind(DEAL_TICKET_INDEX).first();
+    if (done) return { status: "clean" };
+    const n = Math.max(1, Math.min(50_000, Math.round(Number(batch) || 20_000)));
+    const del = await env.DB.prepare(`DELETE FROM ea_deals WHERE id IN (SELECT id FROM ea_deals WHERE NOT (${FIRST_OF_DEAL}) LIMIT ?)`).bind(n).run();
+    const deleted = Number(del?.meta?.changes ?? 0);
+    const left = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ea_deals WHERE NOT (${FIRST_OF_DEAL})`).first();
+    if (Number(left?.n) > 0) return { status: "cleaning", deleted, left: Number(left.n) };
+    await env.DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS ${DEAL_TICKET_INDEX} ON ea_deals (deal_ticket)`).run();
+    return { status: "cleaned", deleted };
+  } catch (e) { return { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; }
 }
 
 /** SQL: only the first stored row of each deal ticket (older duplicates are skipped wherever deals are read). */
