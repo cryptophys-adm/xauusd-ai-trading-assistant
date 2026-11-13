@@ -60,6 +60,29 @@ async function seriesCandles(env, key) {
   try { const r = JSON.parse((await env.SIGNAL_CACHE?.get?.("market-data:v2:series:" + key)) || "null"); return Array.isArray(r?.candles) ? r.candles : []; } catch { return []; }
 }
 
+/**
+ * A TradingView alert that went silent while the others on its chart keep arriving (production
+ * 2026-11-13: the Prophet R38 1H alert stopped on 2026-11-10 07:00 UTC while GMI and R37 on 1H kept
+ * sending, and no alert said so; the 1H parity record stood still for three days). Pure: per chart, a
+ * source seen in the last 7 days whose newest alert is more than 3 bars older than the newest of any
+ * source on that chart, while that chart's alerts still arrive (the newest within 2 bars and 10 minutes).
+ */
+const WEBHOOK_TF_MS = Object.freeze({ "5": 5 * 60_000, "15": 15 * 60_000, "60": HOUR, "240": 4 * HOUR });
+const SOURCE_NAMES = Object.freeze({ prophet_r38: "Prophet R38", prophet_r38_hud: "Prophet R38 HUD", prophet_r37_ssot: "Prophet R37", gmi_v12_70: "GMI v12.70", gmi_v12_70_hud: "GMI v12.70 HUD" });
+const TF_NAMES = Object.freeze({ "5": "5m", "15": "15m", "60": "1H", "240": "4H" });
+const utcMs = (s) => Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(String(s)) ? String(s) : String(s).replace(" ", "T") + "Z");
+export function silentWebhookSources(lastSeen, now = Date.now()) {
+  const out = [];
+  for (const [tf, barMs] of Object.entries(WEBHOOK_TF_MS)) {
+    const list = lastSeen.filter((r) => String(r.tf) === tf).map((r) => ({ source: r.source, ms: utcMs(r.last) })).filter((r) => Number.isFinite(r.ms));
+    if (list.length < 2) continue;
+    const newest = Math.max(...list.map((r) => r.ms));
+    if (now - newest > 2 * barMs + 10 * 60_000) continue;
+    for (const r of list) if (newest - r.ms > 3 * barMs) out.push({ source: r.source, tf, last_ms: r.ms, others_ms: newest });
+  }
+  return out;
+}
+
 /** XAUUSD trades from Sunday 22:00 to Friday 22:00 UTC, with a daily break around 21:00-23:00 UTC. */
 function feedExpected(ms) {
   const d = new Date(ms), day = d.getUTCDay(), h = d.getUTCHours();
@@ -190,6 +213,12 @@ export async function detectHealthIssues(env, now = Date.now()) {
       subject: `TradingView webhook rejected (401): ${rej.count} alert${rej.count === 1 ? "" : "s"} since ${hhmm(Date.parse(rej.first_at))} (${rej.sources.join(", ") || "unknown source"}): ${REJECTION_TEXT[top[0]] || top[0]}${lengths}`,
       detail: rej
     });
+  }
+
+  // 11. A TradingView alert that went silent while the others on its chart keep arriving.
+  const seen = await rows(db, "SELECT source, CASE WHEN candle_key LIKE '%:5:%' THEN '5' WHEN candle_key LIKE '%:15:%' THEN '15' WHEN candle_key LIKE '%:60:%' THEN '60' WHEN candle_key LIKE '%:240:%' THEN '240' ELSE NULL END AS tf, MAX(received_at) AS last FROM webhook_sources WHERE received_at >= ? GROUP BY source, tf", iso(now - 7 * 24 * HOUR).replace("T", " ").slice(0, 19));
+  for (const s of silentWebhookSources(seen.filter((r) => r.tf), now)) {
+    out.push({ key: `webhook_silent:${s.source}:${s.tf}`, kind: "webhook_silent", subject: `TradingView alert silent: ${SOURCE_NAMES[s.source] ?? s.source} ${TF_NAMES[s.tf]} has sent nothing since ${whenUtc(s.last_ms, now)} while the other ${TF_NAMES[s.tf]} alerts arrive; check or recreate it in TradingView (its parity record stands still)`, detail: { source: s.source, timeframe: s.tf, last: iso(s.last_ms), others_last: iso(s.others_ms) } });
   }
 
   // 10. The market data stopped while XAUUSD trades (production 2026-11-11 13:05 UTC: the TradingView quota ran
