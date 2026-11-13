@@ -30,7 +30,7 @@ One way of trading price action behind one interface (`src/strategy-agents.mjs`)
 
 Adding or removing a strategy is one entry in the registry (`STRATEGY_AGENTS`).
 
-## 2. The first four agents
+## 2. The agents
 
 | Agent | Made for | Entry | Stop | Targets |
 | --- | --- | --- | --- | --- |
@@ -38,8 +38,17 @@ Adding or removing a strategy is one entry in the registry (`STRATEGY_AGENTS`).
 | `sweep_reversal` | a stop hunt: a new 3-hour extreme through a key zone within three 15m bars, closed back inside | the close | 0.1 ATR beyond the sweep's extreme | the next key levels |
 | `breakout_retest` | a trend continuing: a 15m close beyond a zone that had held price for three bars, not closed back through | the broken edge (price when it retests now) | behind the zone or the breakout bar, the tighter | the next key levels |
 | `range_fade` | a ranging 1H regime, price in the outer 35 % of its 8-hour range | the range's edge | 0.25 ATR beyond the edge | the middle, then the far side of the range |
+| `pattern_breakout` | a chart pattern the Projection Agent sees broken out (or busted) on the 15m or 1H chart, its target not reached | the broken line (price when it is there now) | half the pattern's height behind the line, at most 1.25 ATR | the pattern's measured target, then half its height beyond |
 
 A stop is never closer than 0.25 ATR; a plan with more than 2.5 ATR of risk is no plan.
+
+**The Projection Agent** (owner 2026-11-13: "libatkan Projection Agent karena dia yang punya knowledge
+terkait price action") holds the platform's price-action knowledge: 53 chart patterns and their measured
+record on gold. It is in the strategy layer twice. `pattern_breakout` trades its patterns directly, and
+its own record decides which: a pattern measured below the rate of all patterns is left out, the best
+measured one comes first. And when the council has strategies to choose from, the evidence carries the
+Projection Agent's reading (`price_action`: each pattern, whether and which way it broke, its record on
+gold; no price), so the choice of strategy leans on the price action it sees.
 
 ## 3. Status: plug in, test, trade
 
@@ -73,5 +82,6 @@ the Signal Ledger's bars: setups, mean R per setup, fill rate, target and stop r
 2. Built: every agent live (owner 2026-11-13), with the breaker.
 3. Built: each agent's record in the council's evidence, overall and in the present market condition.
 4. Built: Nexus Strategy agents page (the registry, the records, the agent each decision took).
-5. More agents (each a registry entry): a momentum continuation on the 5m structure, a session-open
+5. Built: the Projection Agent in the layer (`pattern_breakout`, `price_action`).
+6. More agents (each a registry entry): a momentum continuation on the 5m structure, a session-open
    range break, a news-release fade.

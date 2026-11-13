@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  STRATEGY_AGENTS, AGENT_IDS, DEFAULT_AGENT, PROJECTION_NOTE, AGENT_BREAKER, AGENT_BREAKER_KEY, suspendedAgents, syncAgentBreaker, agentStatuses, agentContext, agentPlans, agentCatalog, finishPlan, slimPlan, strategyAgentsMode
+  STRATEGY_AGENTS, AGENT_IDS, DEFAULT_AGENT, PROJECTION_NOTE, priceActionReading, AGENT_BREAKER, AGENT_BREAKER_KEY, suspendedAgents, syncAgentBreaker, agentStatuses, agentContext, agentPlans, agentCatalog, finishPlan, slimPlan, strategyAgentsMode
 } from "../src/strategy-agents.mjs";
 import { tradeLevels, planForDirection } from "../src/strategy-engine.mjs";
 import { assess, buildDecisionRecord, decisionKeyFor, decisionMessage, decide, councilEvidence, councilMessages, validateCouncil, liveAgentPlans, agentPlanPasses, strategyPlansOf, tradeFor, TP1_PROJECTION, COUNCIL_JSON_SCHEMA } from "../src/decision-engine.mjs";
@@ -14,13 +14,13 @@ const bars = (rows) => rows.map(([low, high, close], i) => ({ open_time: new Dat
 const flat = (n, low, high, close) => Array.from({ length: n }, () => [low, high, close]);
 
 test("the registry: one interface, the default agent always live, the others in shadow until the switches move them", () => {
-  assert.deepEqual(AGENT_IDS, ["zone_pullback", "sweep_reversal", "breakout_retest", "range_fade"]);
+  assert.deepEqual(AGENT_IDS, ["zone_pullback", "sweep_reversal", "breakout_retest", "range_fade", "pattern_breakout"]);
   for (const a of STRATEGY_AGENTS) assert.ok(a.id && a.label && a.fits.length > 40 && typeof a.plan === "function" && a.version >= 1, a.id);
-  assert.deepEqual(agentStatuses({}), { zone_pullback: "live", sweep_reversal: "shadow", breakout_retest: "shadow", range_fade: "shadow" });
-  assert.deepEqual(agentStatuses({ STRATEGY_AGENTS_LIVE: " Sweep_Reversal, nope ,range_fade", STRATEGY_AGENTS_OFF: "range_fade,zone_pullback" }), { zone_pullback: "live", sweep_reversal: "live", breakout_retest: "shadow", range_fade: "off" }, "off wins; the default agent cannot be switched off");
-  assert.deepEqual(agentStatuses({ STRATEGY_AGENTS_MODE: "off", STRATEGY_AGENTS_LIVE: "sweep_reversal" }), { zone_pullback: "live", sweep_reversal: "off", breakout_retest: "off", range_fade: "off" });
+  assert.deepEqual(agentStatuses({}), { zone_pullback: "live", sweep_reversal: "shadow", breakout_retest: "shadow", range_fade: "shadow", pattern_breakout: "shadow" });
+  assert.deepEqual(agentStatuses({ STRATEGY_AGENTS_LIVE: " Sweep_Reversal, nope ,range_fade", STRATEGY_AGENTS_OFF: "range_fade,zone_pullback" }), { zone_pullback: "live", sweep_reversal: "live", breakout_retest: "shadow", range_fade: "off", pattern_breakout: "shadow" }, "off wins; the default agent cannot be switched off");
+  assert.deepEqual(agentStatuses({ STRATEGY_AGENTS_MODE: "off", STRATEGY_AGENTS_LIVE: "sweep_reversal" }), { zone_pullback: "live", sweep_reversal: "off", breakout_retest: "off", range_fade: "off", pattern_breakout: "off" });
   assert.equal(strategyAgentsMode({}), "on");
-  assert.deepEqual(agentCatalog(agentStatuses({})).map((a) => [a.id, a.status]), [["zone_pullback", "live"], ["sweep_reversal", "shadow"], ["breakout_retest", "shadow"], ["range_fade", "shadow"]]);
+  assert.deepEqual(agentCatalog(agentStatuses({})).map((a) => [a.id, a.status]), [["zone_pullback", "live"], ["sweep_reversal", "shadow"], ["breakout_retest", "shadow"], ["range_fade", "shadow"], ["pattern_breakout", "shadow"]]);
   assert.equal(PROJECTION_NOTE, TP1_PROJECTION, "the reward guardrail reads the same note");
   assert.equal(tradeLevels({ dir: 1, price: 100, levels: [], atrH1: 10 }).tp1_note, PROJECTION_NOTE);
 });
@@ -224,14 +224,14 @@ test("end to end: a sweep on the 15m bars reaches the record in shadow, and the 
 });
 
 test("the breaker: a live agent with a negative record over enough setups goes back to shadow and returns by itself; the owner hears once", async () => {
-  const LIVE = { STRATEGY_AGENTS_LIVE: "sweep_reversal,breakout_retest,range_fade" };
+  const LIVE = { STRATEGY_AGENTS_LIVE: "sweep_reversal,breakout_retest,range_fade,pattern_breakout" };
   const rec = (agent, setups, mean_r) => ({ agent, setups, mean_r, fill_rate: 1, target_rate: 0.4, contexts: [] });
-  assert.deepEqual(agentStatuses(LIVE), { zone_pullback: "live", sweep_reversal: "live", breakout_retest: "live", range_fade: "live" });
+  assert.deepEqual(agentStatuses(LIVE), { zone_pullback: "live", sweep_reversal: "live", breakout_retest: "live", range_fade: "live", pattern_breakout: "live" });
   const records = [rec("zone_pullback", 200, -0.3), rec("sweep_reversal", 30, -0.01), rec("breakout_retest", 29, -0.9), rec("range_fade", 80, 0)];
   assert.deepEqual(suspendedAgents(records), [{ id: "sweep_reversal", setups: 30, mean_r: -0.01 }], "the default agent is never suspended; 29 setups are too few; zero is not negative");
-  assert.deepEqual(agentStatuses(LIVE, { records }), { zone_pullback: "live", sweep_reversal: "shadow", breakout_retest: "live", range_fade: "live" });
-  assert.deepEqual(agentStatuses({}, { records }), { zone_pullback: "live", sweep_reversal: "shadow", breakout_retest: "shadow", range_fade: "shadow" });
-  assert.deepEqual(agentCatalog(agentStatuses(LIVE, { records }), { suspended: ["sweep_reversal"] }).map((a) => [a.id, a.status, a.suspended === true]), [["zone_pullback", "live", false], ["sweep_reversal", "shadow", true], ["breakout_retest", "live", false], ["range_fade", "live", false]]);
+  assert.deepEqual(agentStatuses(LIVE, { records }), { zone_pullback: "live", sweep_reversal: "shadow", breakout_retest: "live", range_fade: "live", pattern_breakout: "live" });
+  assert.deepEqual(agentStatuses({}, { records }), { zone_pullback: "live", sweep_reversal: "shadow", breakout_retest: "shadow", range_fade: "shadow", pattern_breakout: "shadow" });
+  assert.deepEqual(agentCatalog(agentStatuses(LIVE, { records }), { suspended: ["sweep_reversal"] }).map((a) => [a.id, a.status, a.suspended === true]), [["zone_pullback", "live", false], ["sweep_reversal", "shadow", true], ["breakout_retest", "live", false], ["range_fade", "live", false], ["pattern_breakout", "live", false]]);
   assert.deepEqual(suspendedAgents(null), []);
   assert.equal(AGENT_BREAKER.min_setups, 30);
   // Telegram: once per change, and nothing for an agent the switches never set live.
@@ -280,4 +280,70 @@ test("the council reads each strategy's record, overall and in the present marke
   const held = assess(loaded, { now: NOW, env, agentRecords: [{ agent: "sweep_reversal", setups: 40, mean_r: -0.2 }] }).guards.long;
   assert.equal(held.plans.sweep_reversal.status, "shadow");
   assert.equal("strategies" in councilEvidence(args(held)).long, false);
+});
+
+test("pattern breakout: the Projection Agent's broken-out pattern, entered at the broken line toward its measured target; its record on gold decides", () => {
+  const dt = { tf: "15", chart: "15m", id: "double_top_eve_adam", name: "double top (Eve & Adam)", status: "confirmed", direction: -1, upper: 110, lower: 104, height: 6, target: 98, bars_ago: 2 };
+  const ctx = (extra = {}) => ({ price: 103.6, atr: 4, levels: [], scalp: false, patterns: [dt], calibration: null, ...extra });
+  const plan = agent("pattern_breakout").plan(-1, ctx());
+  assert.deepEqual(slimPlan(plan), { entry: 103.6, stop: 107.4, tp1: 98, tp2: 95, at_level: true, rrr: { tp1: 1.47, tp2: 2.26 }, setup: "the Projection Agent's 15m double top (Eve & Adam), broken downward (no record on gold yet)" });
+  assert.deepEqual([plan.entry_note, plan.stop_note, plan.tp1_note], ["price is at the broken lower line of the 15m double top (Eve & Adam)", "half the pattern's height behind the broken line", "15m double top (Eve & Adam): measured target"]);
+  assert.notEqual(plan.tp1_note, PROJECTION_NOTE);
+  assert.equal(agent("pattern_breakout").plan(1, ctx()), null, "the pattern broke downward");
+  // Price ran on: a limit waits at the broken line.
+  const away = agent("pattern_breakout").plan(-1, ctx({ price: 101.5 }));
+  assert.deepEqual([away.entry, away.at_level, away.stop], [104, false, 107.4]);
+  // Back inside the pattern, or the target too close: no plan.
+  assert.equal(agent("pattern_breakout").plan(-1, ctx({ price: 105 })), null);
+  assert.equal(agent("pattern_breakout").plan(-1, ctx({ patterns: [{ ...dt, target: 102.5 }] })), null);
+  assert.equal(agent("pattern_breakout").plan(-1, ctx({ patterns: [{ ...dt, status: "forming", direction: 0 }] })), null);
+  assert.equal(agent("pattern_breakout").plan(-1, ctx({ patterns: [{ ...dt, tf: "D", chart: "D1" }] })), null, "the 15m and 1H charts only");
+  // The record on gold: below the rate of all patterns the pattern is left out; above, it is named.
+  const cal = (factor, active = true) => ({ base_rate: 0.5, patterns: { double_top_eve_adam: { n: 40, rate: 0.5 * factor, factor, active } } });
+  assert.equal(agent("pattern_breakout").plan(-1, ctx({ calibration: cal(0.7) })), null);
+  assert.match(agent("pattern_breakout").plan(-1, ctx({ calibration: cal(1.3) })).setup, /\(on gold it reached its target 65% of 40 times\)$/);
+  assert.match(agent("pattern_breakout").plan(-1, ctx({ calibration: cal(0.7, false) })).setup, /35% of 40 times, too few to weigh\)$/, "not measured enough: still traded, said so");
+  // Two patterns: the better measured record first.
+  const wedge = { tf: "60", chart: "1H", id: "falling_wedge", name: "falling wedge", status: "busted", direction: -1, upper: 112, lower: 103.9, height: 8, target: 96, bars_ago: 1 };
+  const both = { base_rate: 0.5, patterns: { double_top_eve_adam: { n: 30, rate: 0.5, factor: 1, active: true }, falling_wedge: { n: 30, rate: 0.7, factor: 1.4, active: true } } };
+  const best = agent("pattern_breakout").plan(-1, ctx({ patterns: [dt, wedge], calibration: both }));
+  assert.match(best.setup, /^the Projection Agent's 1H busted falling wedge, broken downward/);
+  // A wide pattern's stop is capped at 1.25 ATR behind the line.
+  const wide = agent("pattern_breakout").plan(-1, ctx({ patterns: [{ ...dt, height: 20, target: 84 }] }));
+  assert.equal(wide.stop, 109.4);
+  // The Projection Agent's reading for the council: no price, broken-out patterns first.
+  const forming = { tf: "240", chart: "4H", id: "symmetrical_triangle", name: "symmetrical triangle", status: "forming", direction: 0, upper: 120, lower: 100, height: 20, target: null, bars_ago: 0 };
+  assert.deepEqual(priceActionReading([forming, wedge, dt, { tf: "D", name: "x" }], both), [
+    { chart: "15m", pattern: "double top (Eve & Adam)", status: "confirmed", direction: "broke out downward", record_on_gold: { breakouts: 30, reached_target_pct: 50, measured_enough: true } },
+    { chart: "1H", pattern: "falling wedge", status: "busted", direction: "broke out downward", record_on_gold: { breakouts: 30, reached_target_pct: 70, measured_enough: true } },
+    { chart: "4H", pattern: "symmetrical triangle", status: "forming", direction: "not broken out yet" }
+  ]);
+  assert.doesNotMatch(JSON.stringify(priceActionReading([dt, wedge, forming], both)), /1\d\d(\.\d+)?[,}]/, "no price");
+  assert.deepEqual(priceActionReading(null), []);
+});
+
+test("the Projection Agent's reading reaches the council with the strategies, and its pattern the trade", () => {
+  const CLOSE = "2026-11-10T10:00:00.000Z", NOW = Date.parse(CLOSE) + 60_000;
+  const r = (key, lean, action = "WAIT") => ({ key, label: key, role: key, available: true, lean, action, confidence: 0.6, summary: `${key} reads the chart.`, at: CLOSE, stale: false });
+  const zones = [{ low: 3995, high: 3998, price: 3996.5, candidate: true }, { low: 3980, high: 3980, price: 3980, candidate: true }, { low: 4030, high: 4032, price: 4031, candidate: true }, { low: 4050, high: 4050, price: 4050, candidate: true }];
+  const pattern = { tf: "15", chart: "15m", id: "double_bottom_adam_adam", name: "double bottom (Adam & Adam)", status: "confirmed", direction: 1, upper: 3999.5, lower: 3990, height: 9.5, target: 4009, bars_ago: 1 };
+  const loaded = {
+    inputs: { calendar: { events: [] }, m15Bars: bars(flat(12, 3999, 4003, 4001)), patternCalibration: { base_rate: 0.5, patterns: { double_bottom_adam_adam: { n: 25, rate: 0.6, factor: 1.2, active: true } } } },
+    strategy: { decision: "WAIT", state: "SETUP_READY", direction: "LONG", confidence: 0.6, alignment: 0.5, headline: "The long setup is ready.", price: 4000, atr_h1: 10, key_levels: { zones, patterns: [pattern] }, plan: { at_level: true } },
+    global: { timeframes: [r("D1", 0.5), r("H4", 0.4), r("H1", 0.3), r("M15", 0.35, "BUY"), r("NEWS", 0.2), r("MACRO", 0.1)] }, correlations: null, regime: "normal-trending"
+  };
+  const env = { STRATEGY_AGENTS_LIVE: "pattern_breakout" };
+  const a = assess(loaded, { now: NOW, env });
+  assert.deepEqual(Object.keys(a.guards.long.plans), ["zone_pullback", "pattern_breakout"]);
+  const ev = councilEvidence({ barClose: CLOSE, cards: a.cards, quorum: a.quorum, guards: a.guards, context: {} });
+  assert.deepEqual(ev.price_action, [{ chart: "15m", pattern: "double bottom (Adam & Adam)", status: "confirmed", direction: "broke out upward", record_on_gold: { breakouts: 25, reached_target_pct: 60, measured_enough: true } }]);
+  assert.deepEqual(ev.long.strategies.map((s) => s.id), ["zone_pullback", "pattern_breakout"]);
+  assert.ok(councilMessages(ev)[0].content.includes("price_action, when present, is the Projection Agent's reading"));
+  const council = { answer: { stance: "BUY", bias: "BULLISH", confidence: 0.7, entry_type: "limit", target: "tp1", strategy: "pattern_breakout", summary: "Decision BUY, bias bullish: the double bottom broke out.", reasons: ["The pattern is confirmed."], risks: [], weighed: [] } };
+  const rec = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded, assessment: a, council, now: NOW, env });
+  assert.deepEqual([rec.trade.strategy, rec.trade.entry, rec.trade.stop, rec.trade.tp1, rec.trade.target, rec.trade.tp], ["pattern_breakout", 4000, 3993.75, 4009, "tp2", 4013.75], "the measured target pays 1.44R, below this mode's 1.5R, so the trade takes the second target");
+  assert.match(rec.trade.setup, /^the Projection Agent's 15m double bottom \(Adam & Adam\), broken upward \(on gold it reached its target 60% of 25 times\)$/);
+  // Without a choice among strategies the evidence carries no price_action, as before.
+  const off = assess(loaded, { now: NOW, env: {} });
+  assert.equal("price_action" in councilEvidence({ barClose: CLOSE, cards: off.cards, quorum: off.quorum, guards: off.guards, context: {} }), false);
 });
