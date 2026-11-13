@@ -243,6 +243,7 @@ import { storeBrokerTrigger } from "./broker-trigger.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
+import { runLearnedPromotion, readLearnedLive } from "./learned-live.mjs";
 import {
   H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, H1_ROOM_RETRY_S, H1_ROOM_LOCK_PREFIX, H1_ROOM_LOCK_TTL_S, buildH1RoomTask, h1RoomGate, AWAITING_CONSENSUS, H1_REASONER_GIVE_UP_MS, H1_PENDING_LOOKBACK_MS,
   h1BarTimes, finalizeDue, consensusInput, reasonerLines, quorumOf, applyQuorum, emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
@@ -2655,7 +2656,9 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       try { strategy = await readStrategyReplay(env); } catch (error) { console.error("strategy_replay_failed", error instanceof Error ? error.message : String(error)); }
       let knowledge: unknown = null;
       try { knowledge = await readShadowKnowledge(env); } catch (error) { console.error("shadow_knowledge_read_failed", error instanceof Error ? error.message : String(error)); }
-      return dashboardJson({ status: "ok", ...tuningView(shadow, { crowd, strategy, knowledge }), strategy_inputs: strategyInputs });
+      let learnedLive: unknown = null;
+      try { learnedLive = await readLearnedLive(env); } catch { learnedLive = null; }
+      return dashboardJson({ status: "ok", ...tuningView(shadow, { crowd, strategy, knowledge }), strategy_inputs: strategyInputs, learned_live: learnedLive });
     } catch (error) {
       console.error("tuning_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
@@ -2994,6 +2997,14 @@ export default {
             const pulled = await pullLearnedPack(env);
             if (pulled.status !== "disabled" && (pulled.status !== "ok" || pulled.changed)) console.log("aether_pack", JSON.stringify(pulled));
           } catch (e) { console.error("aether_pack_failed", e instanceof Error ? e.message : String(e)); }
+          // Autonomous promotion of learned notes (owner 2026-11-13: "buat agar autonomous"): a note the shadow
+          // arm found better goes live for the tested agents on the 1H chart; one that turns worse, or that a
+          // person rejected, retires. Every change goes to the owner on Telegram (src/learned-live.mjs).
+          try {
+            const promoted = await runLearnedPromotion(env, { knowledge: await readShadowKnowledge(env) });
+            if (promoted.status !== "no_pack" && (promoted.status !== "ok" || Number(promoted.promoted) || Number(promoted.retired))) console.log("learned_promotion", JSON.stringify({ ...promoted, message: undefined }));
+            if (promoted.message) await sendTelegram(env, String(promoted.message)).catch((e) => console.error("learned_promotion_telegram_failed", e instanceof Error ? e.message : String(e)));
+          } catch (e) { console.error("learned_promotion_failed", e instanceof Error ? e.message : String(e)); }
           try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env, { candidates: await shadowCandidates(env) }))); }
           catch (e) { console.error("shadow_versions_failed", e instanceof Error ? e.message : String(e)); }
           // Auto-tuning per timeframe (owner decisions 2026-11-09: no operator; each timeframe independent):

@@ -15,9 +15,11 @@
 //
 // Off unless SHADOW_KNOWLEDGE_ENABLED = "true". At most SHADOW_KNOWLEDGE_MAX_CALLS_PER_HOUR calls an
 // hour (default 8). The calls run after the room and the H1 decision, never before them.
-// Promotion is never automatic: a better note goes into the bundled pack only by an owner PR (A9).
+// Promotion (owner 2026-11-13: "buat agar autonomous"): a note this arm finds better goes live by itself for the
+// tested agents on the 1H chart (src/learned-live.mjs), and retires by itself; the bundled pack still changes by PR.
 
 import { storedPack } from "./aether-pack.mjs";
+import { promotedKeys } from "./learned-live.mjs";
 import { callBusModel } from "./multi-agent-bus.mjs";
 import { SCORING_VERSION, scoreStance } from "./outcome-scoring.mjs";
 import { pairedTally, holmAdjust, holmMonth, SHADOW_MIN_SAMPLE, SHADOW_SIGNIFICANCE, HOLDOUT_BARS } from "./shadow-versions.mjs";
@@ -103,7 +105,9 @@ export async function shadowItems(env) {
   try { stored = await storedPack(env); } catch { stored = null; }
   const items = Array.isArray(stored?.pack?.items) ? stored.pack.items : [];
   const seen = stored?.firstSeen || {};
-  return items.filter((it) => TEXT_KINDS.has(it?.kind))
+  // Promoted (live or retired) versions are no longer tested (src/learned-live.mjs, owner 2026-11-13).
+  const done = await promotedKeys(env);
+  return items.filter((it) => TEXT_KINDS.has(it?.kind) && !done.has(`${it.item_id}@${it.version}`))
     .sort((a, b) => String(seen[`${a.item_id}@${a.version}`] ?? "").localeCompare(String(seen[`${b.item_id}@${b.version}`] ?? "")) || String(a.item_id).localeCompare(String(b.item_id)));
 }
 

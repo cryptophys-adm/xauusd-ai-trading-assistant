@@ -51,7 +51,8 @@ import { fetchEffectiveDoctrine, formatDoctrineDirectives } from "./doctrine-con
 import { activeWitnessTuning } from "./witness-tuning.mjs";
 import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 import { marketStructure } from "./market-structure.mjs";
-import { learnedBlock } from "./learned-knowledge.mjs";
+import { learnedBlock, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
+import { effectiveLearnedPack } from "./learned-live.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
@@ -968,7 +969,7 @@ export async function askCouncil(env, evidence, { clock = () => Date.now(), dead
   const runState = {};
   // The council's learned notes (chart 15, the bar's session); none unless LEARNED_KNOWLEDGE_ENABLED.
   const closeMs = Date.parse(evidence?.bar_close ?? "");
-  const learned = Number.isFinite(closeMs) ? learnedBlock(env, { agent: COUNCIL_AGENT, chart: "15", session: sessionOf(closeMs) }) : null;
+  const learned = Number.isFinite(closeMs) && learnedKnowledgeEnabled(env) ? learnedBlock(env, { agent: COUNCIL_AGENT, chart: "15", session: sessionOf(closeMs), pack: await effectiveLearnedPack(env) }) : null;
   const base = councilMessages(evidence, { learned });
   let messages = base;
   let errors = [];

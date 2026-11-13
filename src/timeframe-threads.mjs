@@ -51,6 +51,7 @@ import { agentReputation, listStuckStates } from "./outcome-scoring.mjs";
 import { roomWeighting } from "./weighting.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
+import { effectiveLearnedPack } from "./learned-live.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
 import { eventRisk, gatedEvents } from "./econ-calendar.mjs";
 import { projectEvent } from "./calendar-agent.mjs";
@@ -419,13 +420,15 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   const base = (step, agent, parent_id = null) => ({ thread_id: threadId, run_id: runId, step, agent, parent_id, bar_time: ev.bar_close });
   // Aether A9: the bundled learned notes (deterministic per agent, chart and session); none unless enabled.
   const learnedCtx = { chart: { H1: "60", H4: "240", D1: "1D" }[chart], session: sessionOf(Date.parse(ev.bar_close)) };
-  const learnedFor = (agent) => learnedBlock(env, { agent, ...learnedCtx });
+  // The bundled pack plus the notes promoted autonomously (src/learned-live.mjs); read only when the notes are on.
+  const learnedPack = learnedKnowledgeEnabled(env) ? await effectiveLearnedPack(env) : undefined;
+  const learnedFor = (agent) => learnedBlock(env, { agent, ...learnedCtx, pack: learnedPack });
   if (!existing.has("brief")) {
     await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: {
       chart, candle_key: candleKey, roster, calibration, confirmations: ev.confirmations, bar: ev.technical.candles.at(-1) ?? null,
       hud_snapshot: Boolean(ev.hud),
       // Which learned pack and notes the room saw (RFC §10); recorded only when the notes are on.
-      ...(learnedKnowledgeEnabled(env) ? { learned_pack: learnedPackInfo(env, { roster, ...learnedCtx }) } : {}),
+      ...(learnedKnowledgeEnabled(env) ? { learned_pack: learnedPackInfo(env, { roster, ...learnedCtx, pack: learnedPack }) } : {}),
       independent: true, news: ev.news ? { consensus: ev.news.consensus } : null
     } });
   }
