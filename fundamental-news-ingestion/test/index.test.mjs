@@ -895,3 +895,21 @@ test("provider calls are counted per caller and hour; the quota's end names who 
   assert.equal(status.calls_today.quota_exceeded_by, "pull_adapter");
   assert.doesNotMatch(JSON.stringify(health.provider_calls) + JSON.stringify(status), /valid-token|refresh-token|ingest-secret/);
 });
+
+test("GET /health reads KV in parallel, so a slow cold KV stays inside the Drift Detector's 5-second probe (2026-11-13)", async () => {
+  const kv = new MemoryKV();
+  let inFlight = 0, peak = 0, reads = 0;
+  const get = kv.get.bind(kv);
+  kv.get = async (key) => {
+    reads += 1; inFlight += 1; peak = Math.max(peak, inFlight);
+    await new Promise((r) => setTimeout(r, 40));
+    inFlight -= 1;
+    return get(key);
+  };
+  const started = Date.now();
+  const response = await worker.fetch(new Request("https://news.example.com/health"), createEnv({ OAUTH_STORE: kv }), createCtx());
+  assert.equal(response.status, 200);
+  assert.ok(reads >= 10, `every read still happens (${reads})`);
+  assert.ok(peak >= 10, `reads overlap (peak ${peak})`);
+  assert.ok(Date.now() - started < reads * 40 / 2, "well under the sequential time");
+});

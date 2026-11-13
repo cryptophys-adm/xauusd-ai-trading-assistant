@@ -1862,6 +1862,9 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
       if (result?.status === "waiting_for_quorum") throw Object.assign(new Error("war room waiting for quorum"), { name: "WarRoomQuorumPending", retryDelaySeconds: 60 });
       // Decision Engine (owner decisions 2026-11-09): the single decision, as soon as the 15m room has concluded.
       if (result?.status === "complete" || result?.status === "already_complete") await decideBar(env, String(task.bar_time));
+      // Aether A7 on the 15m chart (owner 2026-11-13): the room's shadow calls, after the decision.
+      const shadow = await runShadowJob(result);
+      if (shadow) console.log("shadow_knowledge", JSON.stringify({ chart: "15", bar_time: task.bar_time, ...shadow }));
       return;
     }
     if (task.kind === "hud_agents") {
@@ -1915,6 +1918,9 @@ async function decideBar(env: Env, barClose: string | null, now = Date.now()): P
   try {
     const result = barClose ? await runDecisionEngine(env, { barClose, now, ...deps }) : await runPendingDecision(env, { now, ...deps });
     if (result.status !== "disabled" && result.status !== "already_decided" && result.status !== "too_soon" && result.status !== "market_closed") console.log("decision_engine", JSON.stringify(result));
+    // Aether A7 for the council (owner 2026-11-13): its shadow call with a note under test, after the decision.
+    const shadow = await runShadowJob(result);
+    if (shadow && shadow.status !== "nothing_to_do") console.log("shadow_knowledge", JSON.stringify({ chart: "council", ...shadow }));
   } catch (error) {
     console.error("decision_engine_failed", error instanceof Error ? error.message : String(error));
   }

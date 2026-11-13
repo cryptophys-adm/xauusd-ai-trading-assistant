@@ -54,6 +54,7 @@ import { marketStructure } from "./market-structure.mjs";
 import { learnedBlock, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { effectiveLearnedPack } from "./learned-live.mjs";
 import { modelAdvice } from "./model-dataset.mjs";
+import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
@@ -1047,7 +1048,8 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
       context, feed: inputs.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview", tradingMode: modeThresholds(env?.TRADING_MODE).mode
     });
     if (advice) context.model = advice;
-    const council = await askCouncil(env, councilEvidence({ barClose: closeIso, cards: assessment.cards, quorum: assessment.quorum, guards: assessment.guards, context }), { clock });
+    const evidence = councilEvidence({ barClose: closeIso, cards: assessment.cards, quorum: assessment.quorum, guards: assessment.guards, context });
+    const council = await askCouncil(env, evidence, { clock });
     if (advice) council.model_advice = advice;
     const record = buildDecisionRecord({ key, barClose: closeIso, loaded: data, assessment, council, previous, now, decidedAt: new Date(clock()).toISOString(), env });
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -1057,7 +1059,27 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     let telegram = null, ledger = null;
     try { telegram = await notifyDecision(env, record, send, { now: clock() }); } catch (e) { telegram = { sent: false, reason: `failed: ${clip(e?.message ?? e, 120)}` }; }
     if (record.trade && typeof recordSignal === "function") { try { ledger = await recordSignal(record); } catch { ledger = 0; } }
-    return { status: "decided", decision_key: key, stance: record.stance, source: record.source, confidence: record.confidence, latency_seconds: record.latency_seconds, overruled: Boolean(record.overruled), telegram, ledger };
+    const out = { status: "decided", decision_key: key, stance: record.stance, source: record.source, confidence: record.confidence, latency_seconds: record.latency_seconds, overruled: Boolean(record.overruled), telegram, ledger };
+    // Aether A7 for the council (owner 2026-11-13, "1-3"): a learned note addressed to the council is tested
+    // by one extra council call with the note, put through the same guardrails, against the stance that was
+    // decided. Handed back as a job the caller runs after the decision; it never changes the decision.
+    if (shadowKnowledgeEnabled(env)) {
+      Object.defineProperty(out, "shadow_job", {
+        enumerable: false,
+        value: async () => {
+          const plan = planShadowCalls({ items: await shadowItems(env), roster: [COUNCIL_AGENT], openings: [{ agent: COUNCIL_AGENT, status: "ok", stance: record.stance }], chart: "M15" });
+          if (!plan.length) return { status: "nothing_to_do" };
+          const base = learnedKnowledgeEnabled(env) ? learnedBlock(env, { agent: COUNCIL_AGENT, chart: "15", session: sessionOf(keyCloseMs(key)), pack: await effectiveLearnedPack(env) }) : null;
+          return runShadowCalls(env, {
+            calls: plan, candleKey: key, statementClose: closeIso, clock, schema: COUNCIL_JSON_SCHEMA, schemaName: "decision_council", maxTokens: COUNCIL_MAX_TOKENS, role: "moderator", deadlineMs: COUNCIL_DEADLINE_MS,
+            messagesFor: (_agent, note) => councilMessages(evidence, { learned: [base, note].filter(Boolean).join("\n\n") || null }),
+            validate: (o) => validateCouncil(o),
+            toStance: (o) => decide({ answer: o, guards: assessment.guards, strategy: data.strategy ?? null, quorum: assessment.quorum }).stance
+          });
+        }
+      });
+    }
+    return out;
   } catch (e) {
     return { status: "failed", decision_key: key, error: clip(e?.message ?? e, 200) };
   }

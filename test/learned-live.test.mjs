@@ -75,7 +75,7 @@ test("P3. the hourly run promotes, the prompts read it, the shadow arm stops tes
   assert.equal((await shadowItems(env)).length, 1, "tested while not promoted");
   const r = await runLearnedPromotion(env, { knowledge: { candidates: [BETTER] }, now: NOW });
   assert.equal(r.promoted, 1);
-  assert.match(r.message, /\+ live: k-role-chronos-matrix-calibration-talk v1 for chronos_matrix on the 1H room/);
+  assert.match(r.message, /\+ live: k-role-chronos-matrix-calibration-talk v1 for chronos_matrix on the 1H chart/);
   assert.equal((await runLearnedPromotion(env, { knowledge: { candidates: [BETTER] }, now: NOW + 3_600_000 })).promoted, 0, "idempotent");
   const eff = await effectiveLearnedPack(env, { now: NOW + 10 * 60_000 });
   assert.equal(eff.live_items, 1);
@@ -104,4 +104,33 @@ test("P4. switching it off retires every live note at once", async () => {
   assert.equal(off.status, "disabled");
   assert.equal(off.retired, 1);
   assert.deepEqual(await liveItems({ ...env, LEARNED_AUTO_PROMOTION: "off" }), []);
+});
+
+test("P5. a note tested on the 15m War Room or the council goes live on the 15m chart; the council is watched on its own decisions", async () => {
+  const better15 = { ...BETTER, subject: "shadow-agent:risk@k-w1v1@15", agent: "risk", chart: "15", item_id: "k-w1" };
+  const w1 = { ...ITEM, item_id: "k-w1", audience: { agents: ["risk"], charts: ["15"] } };
+  const p = planPromotions({ candidates: [better15], packItems: [w1], now: NOW });
+  assert.deepEqual(p.promote[0].item.audience, { agents: ["risk"], charts: ["15"] });
+  assert.equal(p.promote[0].verdict[0].chart, "15");
+  assert.deepEqual(liveItemProblems(p.promote[0].item), []);
+  assert.ok(liveItemProblems({ ...p.promote[0].item, audience: { agents: ["risk"], charts: ["240"] } }).includes("audience_charts_invalid"));
+  assert.match(promotionMessage({ promoted: p.promote }), /on the 15m chart/);
+  // The council: retired when its decisions since the promotion are significantly worse than in the test.
+  resetLearnedLiveForTests(); resetAetherPackSchemaCacheForTests();
+  const db = d1();
+  const { DECISION_SCHEMA_SQL } = await import("../src/decision-engine.mjs");
+  for (const sql of DECISION_SCHEMA_SQL) db.raw.exec(sql);
+  const kItem = { ...ITEM, item_id: "k-c1", audience: { agents: ["council"], charts: ["15"] } };
+  const env = { DB: db, SIGNAL_CACHE: { async get() { return null; } }, AETHER: { learnedPack: async () => pack([kItem]) } };
+  await pullLearnedPack(env, { now: NOW });
+  const verdict = { ...BETTER, subject: "shadow-agent:council@k-c1v1@15", agent: "council", chart: "15", item_id: "k-c1" };
+  assert.equal((await runLearnedPromotion(env, { knowledge: { candidates: [verdict] }, now: NOW })).promoted, 1);
+  // 48 SELL decisions after it; 15m bars that rise, so every SELL misses.
+  const M = 15 * 60_000;
+  const bars = Array.from({ length: 80 }, (_, i) => { const o = 4000 + i * 3; return { open_time: new Date(NOW + i * M).toISOString(), close_time: new Date(NOW + (i + 1) * M).toISOString(), open: o, high: o + 4, low: o - 1, close: o + 3 }; });
+  for (let i = 15; i < 63; i++) db.raw.prepare("INSERT INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, 'SELL', 0.8, 'council', '{}')").run(`OANDA:XAUUSD:15:${NOW + (i - 1) * M}`, new Date(NOW + i * M).toISOString(), new Date(NOW + i * M).toISOString());
+  env.SIGNAL_CACHE = { async get(k) { return k.endsWith("|15m") ? JSON.stringify({ candles: bars }) : null; } };
+  const r = await runLearnedPromotion(env, { knowledge: { candidates: [verdict] }, now: NOW + 80 * M });
+  assert.equal(r.retired, 1, "the council's own decisions turned worse: retired");
+  assert.match(r.message, /worse live/);
 });

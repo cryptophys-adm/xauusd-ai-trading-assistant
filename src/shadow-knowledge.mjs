@@ -1,7 +1,8 @@
 // Aether phase A7, the shadow knowledge arm (RFC_AETHER_KNOWLEDGE_GUARDIAN §9.4, K6, O8, O13).
 //
-// For each approved text item of the learned pack (caution, role_reminder; at most MAX_ITEMS at once)
-// whose audience includes an agent of the 1H room, that agent makes ONE extra opening call on the
+// For each text item of the learned pack (caution, role_reminder; at most MAX_ITEMS at once) whose
+// audience includes an agent of the 1H room, of the 15m War Room, or the Decision Engine council (since
+// 2026-11-13, owner: "1-3"; 15m subjects end in "@15"), that agent makes ONE extra opening call on the
 // same bar, with the same data and prompt plus the note. The answer is stored in D1
 // shadow_agent_outputs (migration 0016) with that agent's real opening stance on the same bar (the
 // control), as "shadow-agent:<agent>@<item>v<version>". Both stances are scored with the outcome
@@ -26,7 +27,8 @@ import { pairedTally, holmAdjust, holmMonth, SHADOW_MIN_SAMPLE, SHADOW_SIGNIFICA
 
 export const SHADOW_KNOWLEDGE_VERSION = "cryptophys.shadow-knowledge.v1";
 export const MAX_ITEMS = 2;
-export const DEFAULT_MAX_CALLS_PER_HOUR = 8;
+/** Shared by the 1H room, the 15m War Room and the council (16 since the arm runs on all three, 2026-11-13). */
+export const DEFAULT_MAX_CALLS_PER_HOUR = 16;
 const TEXT_KINDS = new Set(["caution", "role_reminder"]);
 const NOTE_MAX = 400;
 
@@ -68,7 +70,15 @@ async function ensureSchema(db) {
   schemaReady = true;
 }
 
-export const subjectOf = (agent, item) => (item ? `shadow-agent:${agent}@${item.item_id}v${item.version}` : `shadow-agent:${agent}@aa`);
+/**
+ * The charts the arm runs on (owner 2026-11-13: the 15m War Room and the Decision Engine council too). The
+ * 1H subjects keep their original form; a 15m subject ends in "@15".
+ */
+export const SHADOW_CHARTS = Object.freeze({ H1: "60", M15: "15" });
+const chartSuffix = (chart) => (chart && chart !== "60" ? `@${chart}` : "");
+export const subjectOf = (agent, item, chart = "60") => (item ? `shadow-agent:${agent}@${item.item_id}v${item.version}` : `shadow-agent:${agent}@aa`) + chartSuffix(chart);
+/** Pure: the chart of a shadow subject ("60" or "15"). */
+export const chartOfSubject = (subject) => (/@15$/.test(String(subject ?? "")) ? "15" : "60");
 const ascii = (s) => String(s ?? "").replace(/[^\x20-\x7E]/g, " ").replace(/\s+/g, " ").trim().slice(0, NOTE_MAX);
 
 /** The note line added to the agent's prompt (plain words; the item text is reviewed and has no levels). */
@@ -82,18 +92,20 @@ export function noteLine(item) {
  * (the control must exist). The A/A arm runs with the first item, once per bar.
  */
 export function planShadowCalls({ items = [], roster = [], openings = [], chart = "H1" } = {}) {
-  if (chart !== "H1") return [];
+  const code = SHADOW_CHARTS[chart];
+  if (!code) return [];
   const answered = new Map((openings || []).filter((m) => m?.status === "ok").map((m) => [String(m.agent ?? m.id), m.stance]));
   const text = (items || []).filter((it) => TEXT_KINDS.has(it?.kind) && typeof it.text === "string" && it.text.trim())
-    .filter((it) => !Array.isArray(it.audience?.charts) || !it.audience.charts.length || it.audience.charts.includes("60"))
+    .filter((it) => !Array.isArray(it.audience?.charts) || !it.audience.charts.length || it.audience.charts.includes(code))
+    .filter((it) => (it.audience?.agents || []).some((a) => roster.includes(a)))
     .slice(0, MAX_ITEMS);
   const calls = [];
   text.forEach((item, i) => {
     for (const agent of item.audience?.agents || []) {
       if (agent === "moderator" || !roster.includes(agent) || !answered.has(agent)) continue;
       const control_stance = answered.get(agent);
-      calls.push({ subject: subjectOf(agent, item), agent, item, arm: "note", control_stance });
-      if (i === 0 && !calls.some((c) => c.arm === "aa" && c.agent === agent)) calls.push({ subject: subjectOf(agent, null), agent, item: null, arm: "aa", control_stance });
+      calls.push({ subject: subjectOf(agent, item, code), agent, item, arm: "note", control_stance });
+      if (i === 0 && !calls.some((c) => c.arm === "aa" && c.agent === agent)) calls.push({ subject: subjectOf(agent, null, code), agent, item: null, arm: "aa", control_stance });
     }
   });
   return calls;
@@ -116,7 +128,7 @@ export async function shadowItems(env) {
  * prompt (the room's own builder), `validate(obj, agent)` the room's opening validator. Idempotent per
  * (subject, bar); bounded by the hourly cap. Never throws for a model problem.
  */
-export async function runShadowCalls(env, { calls, candleKey, statementClose, messagesFor, validate, schema, schemaName = "tf_room_opening", maxTokens = 400, clock = () => Date.now(), deadlineMs = 60_000 } = {}) {
+export async function runShadowCalls(env, { calls, candleKey, statementClose, messagesFor, validate, schema, schemaName = "tf_room_opening", maxTokens = 400, clock = () => Date.now(), deadlineMs = 60_000, role = "agent", toStance = (o) => o.stance } = {}) {
   if (!shadowKnowledgeEnabled(env) || !env?.DB || !calls?.length) return { status: shadowKnowledgeEnabled(env) ? "nothing_to_do" : "disabled" };
   await ensureSchema(env.DB);
   const sinceHour = new Date(clock() - 3_600_000).toISOString();
@@ -131,10 +143,10 @@ export async function runShadowCalls(env, { calls, candleKey, statementClose, me
     out.called += 1;
     let row = { stance: null, bias: null, confidence: null, status: "agent_failed", model: null };
     try {
-      const call = await callBusModel(env, { messages: messagesFor(c.agent, c.item ? noteLine(c.item) : null), schemaName, schema, maxTokens, effort: "low", deadline, clock, runState: { primaryError: null }, role: "agent" });
+      const call = await callBusModel(env, { messages: messagesFor(c.agent, c.item ? noteLine(c.item) : null), schemaName, schema, maxTokens, effort: "low", deadline, clock, runState: { primaryError: null }, role });
       if (call.status === "answered" && !call.truncated) {
         const v = validate(call.obj, c.agent);
-        row = v.valid ? { stance: call.obj.stance, bias: call.obj.bias ?? null, confidence: call.obj.confidence ?? null, status: "ok", model: call.model } : { ...row, status: "invalid_output", model: call.model };
+        row = v.valid ? { stance: toStance(call.obj), bias: call.obj.bias ?? null, confidence: call.obj.confidence ?? null, status: "ok", model: call.model } : { ...row, status: "invalid_output", model: call.model };
       } else row = { ...row, status: call.status === "answered" ? "invalid_output" : call.status, model: call.model ?? null };
     } catch { /* stored as agent_failed */ }
     await env.DB.prepare("INSERT INTO shadow_agent_outputs (subject, candle_key, agent, item_id, item_version, arm, statement_close, stance, bias, confidence, control_stance, status, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(subject, candle_key) DO NOTHING")
@@ -150,16 +162,20 @@ export async function scoreShadowKnowledge(env, { now = Date.now() } = {}) {
   await ensureSchema(env.DB);
   const pending = (await env.DB.prepare("SELECT subject, candle_key, statement_close, stance, control_stance FROM shadow_agent_outputs WHERE status = 'ok' AND scored_at IS NULL ORDER BY statement_close LIMIT 200").all()).results || [];
   if (!pending.length) return { status: "ok", scored: 0 };
-  let bars = [];
-  try {
-    const record = JSON.parse((await env.SIGNAL_CACHE?.get?.("market-data:v2:series:OANDA:XAUUSD|1h")) || "null");
-    bars = (Array.isArray(record?.candles) ? record.candles : []).filter((c) => [c.open, c.high, c.low, c.close].every(Number.isFinite) && c.close_time && Date.parse(c.close_time) <= now).sort((a, b) => Date.parse(a.close_time) - Date.parse(b.close_time));
-  } catch { bars = []; }
+  // Each row on its own chart's bars: the 1H rooms on the 1H series, the 15m War Room and the council on 15m.
+  const seriesOf = async (interval) => {
+    try {
+      const record = JSON.parse((await env.SIGNAL_CACHE?.get?.(`market-data:v2:series:OANDA:XAUUSD|${interval}`)) || "null");
+      return (Array.isArray(record?.candles) ? record.candles : []).filter((c) => [c.open, c.high, c.low, c.close].every(Number.isFinite) && c.close_time && Date.parse(c.close_time) <= now).sort((a, b) => Date.parse(a.close_time) - Date.parse(b.close_time));
+    } catch { return []; }
+  };
+  const series = { "60": await seriesOf("1h"), "15": pending.some((r) => chartOfSubject(r.subject) === "15") ? await seriesOf("15m") : [] };
   const at = new Date(now).toISOString();
   const final = (r) => (["pending", "no_data", "not_scored"].includes(r) ? null : r);
   let scored = 0;
   for (const r of pending) {
     const closeMs = Date.parse(r.statement_close);
+    const bars = series[chartOfSubject(r.subject)];
     const mine = final(scoreStance({ stance: r.stance, bars, closeMs }).result);
     const ctrl = r.control_stance ? final(scoreStance({ stance: r.control_stance, bars, closeMs }).result) : null;
     if (!mine || (r.control_stance && !ctrl)) continue;
@@ -189,7 +205,7 @@ export function compareShadowKnowledge(outputs = [], { now = Date.now() } = {}) 
     const cut = Math.max(0, pairs.length - HOLDOUT_BARS);
     const all = pairedTally(pairs), discovery = pairedTally(pairs.slice(0, cut)), holdout = pairedTally(pairs.slice(cut));
     return {
-      subject, agent: rows[0]?.agent ?? null, item_id: rows[0]?.item_id ?? null, item_version: rows[0]?.item_version ?? null,
+      subject, agent: rows[0]?.agent ?? null, chart: chartOfSubject(subject), item_id: rows[0]?.item_id ?? null, item_version: rows[0]?.item_version ?? null,
       calls: rows.length, answered: rows.filter((o) => o.status === "ok").length,
       same_bars: pairs.length, changed_stance: pairs.filter(([a, b]) => a.stance !== b.stance).length,
       paired: { candidate_better: all.candidate_better, control_better: all.control_better, p_value: all.p_value, significance: SHADOW_SIGNIFICANCE },
