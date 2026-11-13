@@ -54,7 +54,12 @@ test("a deal is stored once; the list is newest first; the statistics use the ne
   const e = env();
   assert.deepEqual(await storeDeal(e, DEAL), { ok: true, stored: true });
   assert.deepEqual(await storeDeal(e, DEAL), { ok: true, stored: false }, "a repeated report changes nothing");
+  // The bridge re-reports a closed deal on every sync and its times can move by a second (2026-11-13:
+  // 116,821 rows for 36 deals): the same deal ticket is still stored once.
+  assert.deepEqual(await storeDeal(e, { ...DEAL, opened_ms: (DEAL.opened_ms ?? 0) + 1000, closed_ms: DEAL.closed_ms + 1000 }), { ok: true, stored: false });
   await storeDeal(e, { ...DEAL, deal_ticket: 7002, side: "SELL", profit: -60, commission: -0.7, reason: "sl", closed_ms: DEAL.closed_ms + 3_600_000 });
+  // A duplicate stored before the fix is read once.
+  e.DB.raw.prepare("INSERT INTO ea_deals (deal_ticket, mode, side, volume, profit, reason, closed_ms, received_at) VALUES (7001, 'demo', 'BUY', 0.01, 999, 'tp', ?, 'x')").run(DEAL.closed_ms + 2000);
   const deals = await listDeals(e);
   assert.deepEqual(deals.map((d) => d.deal_ticket), [7002, 7001]);
   const s = dealStats(deals);
@@ -139,4 +144,24 @@ test("the MQL5 EA honours pause, and reports only fields the server keeps", asyn
   const posKeys = keysOf("string PositionsJson");
   const kept = heartbeatFrom({ positions_detail: [Object.fromEntries(posKeys.map((k) => [k, k === "side" ? "BUY" : k === "signal_id" ? "s" : 1]))] }).positions_detail[0];
   for (const k of posKeys) assert.ok(k in kept, `the server keeps the position field "${k}"`);
+});
+
+test("the duplicate deal rows stored before the fix are removed in batches, then one row per deal ticket is enforced", async () => {
+  const { dedupeDeals, DEAL_TICKET_INDEX } = await import("../src/ea-execution.mjs");
+  const e = env();
+  await storeDeal(e, DEAL);
+  await storeDeal(e, { ...DEAL, deal_ticket: 7002, closed_ms: DEAL.closed_ms + 60_000 });
+  // Duplicates as the bridge left them: the same ticket with times a second apart.
+  for (let i = 1; i <= 5; i++) e.DB.raw.prepare("INSERT INTO ea_deals (deal_ticket, mode, side, volume, profit, reason, closed_ms, received_at) VALUES (7001, 'demo', 'BUY', 0.01, 1, 'tp', ?, 'x')").run(DEAL.closed_ms + i * 1000);
+  for (let i = 1; i <= 2; i++) e.DB.raw.prepare("INSERT INTO ea_deals (deal_ticket, mode, side, volume, profit, reason, closed_ms, received_at) VALUES (7002, 'demo', 'BUY', 0.01, 1, 'tp', ?, 'x')").run(DEAL.closed_ms + 60_000 + i * 1000);
+  const first = e.DB.raw.prepare("SELECT MIN(id) AS id FROM ea_deals WHERE deal_ticket = 7001").get().id;
+  assert.deepEqual(await dedupeDeals(e, { batch: 4 }), { status: "cleaning", deleted: 4, left: 3 });
+  assert.deepEqual(await dedupeDeals(e, { batch: 4 }), { status: "cleaned", deleted: 3 });
+  const rows = e.DB.raw.prepare("SELECT id, deal_ticket FROM ea_deals ORDER BY deal_ticket").all();
+  assert.deepEqual(rows.map((r) => r.deal_ticket), [7001, 7002], "one row per ticket");
+  assert.equal(rows[0].id, first, "the first stored row is the one kept");
+  assert.ok(e.DB.raw.prepare("SELECT name FROM sqlite_master WHERE name = ?").get(DEAL_TICKET_INDEX), "the unique index exists");
+  assert.deepEqual(await dedupeDeals(e), { status: "clean" }, "then a run only checks");
+  assert.throws(() => e.DB.raw.prepare("INSERT INTO ea_deals (deal_ticket, mode, side, volume, profit, reason, closed_ms, received_at) VALUES (7001, 'demo', 'BUY', 0.01, 1, 'tp', 1, 'x')").run(), /UNIQUE/);
+  assert.deepEqual(await storeDeal(e, { ...DEAL, closed_ms: DEAL.closed_ms + 9000 }), { ok: true, stored: false }, "a re-report still stores nothing");
 });

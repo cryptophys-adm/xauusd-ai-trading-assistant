@@ -14,7 +14,7 @@ export async function organismStatus(env, { now = Date.now() } = {}) {
   // Counted here, not through listDeals (which answers [] on any error): a failed read is null, not 0.
   let recentDeals = null;
   try {
-    const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM ea_deals WHERE closed_ms >= ?").bind(now - 7 * 86_400_000).first();
+    const row = await env.DB.prepare("SELECT COUNT(DISTINCT deal_ticket) AS n FROM ea_deals WHERE closed_ms >= ?").bind(now - 7 * 86_400_000).first();
     recentDeals = Number.isFinite(Number(row?.n)) ? Number(row.n) : null;
   } catch { recentDeals = null; }
   const health = await omegaHealth(env, { now });
