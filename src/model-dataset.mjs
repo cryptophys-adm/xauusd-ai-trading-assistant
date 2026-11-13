@@ -14,7 +14,7 @@
 // Never feeds a room, a decision or Omega: it only records. Switch: MODEL_DATASET_MODE = "on" (default) | "off".
 import { ledgerSeries, atrAt, toMs, sessionAt } from "./signal-ledger.mjs";
 import { WITNESS_PRIORS } from "./witness-weighting.mjs";
-import { readBaseline, shadowPredictions } from "./model-baseline.mjs";
+import { readBaseline, shadowPredictions, predict } from "./model-baseline.mjs";
 
 export const MODEL_DATASET_VERSION = "cryptophys.model-dataset.v1";
 export const LABEL_RULES = Object.freeze({ stop_atr: 1, target_atr: 1.5, horizon_ms: 4 * 3600_000, atr_period: 14 });
@@ -332,4 +332,34 @@ export async function loadLabeledRows(env, { limit = 4000 } = {}) {
       labels: { tight: { long: { outcome: r.long_outcome, r: r.long_r }, short: { outcome: r.short_outcome, r: r.short_r } }, ...(wide ? { wide } : {}) }
     };
   });
+}
+
+/**
+ * The promoted model's advice for the council (owner 2026-11-13: "buat agar autonomous"), or null while
+ * the gate (src/model-baseline.mjs promotionGate) has not connected it. Computed from what is known before
+ * the council answers, the same features the model learned from: the witnesses, the quorum, both
+ * guardrails, the structure, the context and the 15m bars up to the close. Never throws.
+ */
+export async function modelAdvice(env, { barClose, witnesses, quorum, guardrails, structure = null, context = null, feed = null, tradingMode = null, series = null } = {}) {
+  try {
+    const baseline = await readBaseline(env);
+    const gate = baseline?.promotion;
+    if (gate?.status !== "promoted") return null;
+    const long = baseline.models?.[`${gate.set}_long`], short = baseline.models?.[`${gate.set}_short`];
+    if (!long || !short) return null;
+    const m15 = (series ?? (await ledgerSeries(env))).m15 || [];
+    const k = barIndex(m15, toMs(barClose));
+    const atr = k >= 1 ? atrAt(m15, k, LABEL_RULES.atr_period) : null;
+    const features = datasetFeatures({ bar_close: barClose, witnesses, quorum, guardrails, structure, context, feed, trading_mode: tradingMode }, { atr, bars: k >= 0 ? barFeatures(m15, k, atr) : {} });
+    const rules = gate.set === "wide" ? WIDE_RULES : LABEL_RULES;
+    const rec = (side) => baseline.prospective?.[`${gate.set}_${side}`] ?? {};
+    return {
+      model_id: baseline.model_id, label_set: gate.set,
+      question: `the chance that price reaches ${rules.target_atr} ATR in the side's favour before ${rules.stop_atr} ATR against it, within ${rules.horizon_ms / 3_600_000} hours`,
+      long_target_first: predict(long, features), long_base_rate: long.base_rate,
+      short_target_first: predict(short, features), short_base_rate: short.base_rate,
+      record: { long: { decisions: rec("long").n ?? null, skill: rec("long").skill ?? null, auc: rec("long").auc ?? null }, short: { decisions: rec("short").n ?? null, skill: rec("short").skill ?? null, auc: rec("short").auc ?? null } },
+      connected_since: gate.since ?? null
+    };
+  } catch { return null; }
 }

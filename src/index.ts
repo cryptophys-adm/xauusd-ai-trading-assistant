@@ -2720,7 +2720,9 @@ async function runLedgerStep(env: Env): Promise<void> {
   if (baseline.status !== "fresh" && baseline.status !== "disabled") {
     const { report, ...summary } = baseline as Record<string, unknown>;
     const pushed = report ? await pushModelReport(env, report).catch((e) => ({ status: "failed", error: String(e) })) : null;
-    console.log("model_baseline", JSON.stringify({ ...summary, aether: pushed?.status ?? null }));
+    console.log("model_baseline", JSON.stringify({ ...summary, gate_message: undefined, aether: pushed?.status ?? null }));
+    // The gate connects or disconnects the model by itself; the owner hears of each change.
+    if (summary.gate_message) await sendTelegram(env, String(summary.gate_message)).catch((e) => console.error("model_gate_telegram_failed", e instanceof Error ? e.message : String(e)));
   }
 }
 

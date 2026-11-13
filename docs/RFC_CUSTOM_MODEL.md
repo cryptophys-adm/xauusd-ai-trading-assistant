@@ -47,7 +47,7 @@ A model only advises until it has earned more:
 
 1. **Shadow**: the model's probability is recorded next to each decision, never acted on.
 2. **Verdict**: walk-forward only (trained on older rows, judged on newer ones), against the active Decision Engine and the baseline, on the same decisions: expectancy in R and hit rate, Holm-adjusted, with a held-out newest part (the shadow arena's rules, `src/shadow-versions.mjs`), at least 300 decisions.
-3. **Owner**: a model that reads `better_than_active` is proposed; the owner approves its use (a witness in the quorum first, then possibly a guardrail), as with K9.
+3. **Connection, autonomous** (owner 2026-11-13: "buat agar autonomous"): the baseline connects itself to the council as advice (`context.model`) once its prospective record passes the gate (both sides, 300 decisions, paired Brier gain p < 0.05, AUC ≥ 0.55), and disconnects itself when it no longer does; the owner hears of each change. A weight in the quorum or a guardrail remains a later, owner-approved step.
 4. **Retraining** on a schedule, each version judged again; a model that stops being better is retired automatically.
 
 ## 5. Risks and their guards

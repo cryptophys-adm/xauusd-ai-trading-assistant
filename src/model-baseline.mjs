@@ -25,15 +25,34 @@ const num = (x) => typeof x === "number" && Number.isFinite(x);
 const r4 = (x) => Math.round(x * 10_000) / 10_000;
 const sigmoid = (z) => (z >= 0 ? 1 / (1 + Math.exp(-z)) : Math.exp(z) / (1 + Math.exp(z)));
 const mean = (xs) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null);
+/** P(Z > z) for a standard normal (Abramowitz-Stegun 26.2.17, error below 1e-7). */
+function upperTail(z) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(z));
+  const poly = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  const tail = Math.exp(-z * z / 2) / Math.sqrt(2 * Math.PI) * poly;
+  return z >= 0 ? tail : 1 - tail;
+}
+
+/** Switch of the autonomous connection to the council: MODEL_AUTO_CONNECT = "on" (default) | "off". */
+export function modelGateMode(env) {
+  return String(env?.MODEL_AUTO_CONNECT ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
+}
 
 export function modelBaselineMode(env) {
   return String(env?.MODEL_BASELINE_MODE ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
 }
 
-/** Pure: the features a model uses: present in at least `presence` of the rows and not constant. */
+/**
+ * Features a model never uses: the decision's own outputs (its stance, bias, confidence and the plan it
+ * chose). The model must read only what was known before the council answered, so the council can be
+ * given its advice (promotionGate, modelAdvice) on the same footing as it was trained.
+ */
+export const DECISION_OUTPUTS = /^(stance|bias|confidence|plan_)/;
+
+/** Pure: the features a model uses: known before the decision, present in at least `presence` of the rows, not constant. */
 export function selectFeatures(rows, { presence = BASELINE.feature_presence } = {}) {
   const count = new Map();
-  for (const r of rows) for (const [k, v] of Object.entries(r.features || {})) if (num(v)) count.set(k, (count.get(k) || 0) + 1);
+  for (const r of rows) for (const [k, v] of Object.entries(r.features || {})) if (num(v) && !DECISION_OUTPUTS.test(k)) count.set(k, (count.get(k) || 0) + 1);
   const keys = [...count.entries()].filter(([, n]) => n >= presence * rows.length).map(([k]) => k).sort();
   const scale = {};
   for (const k of keys) {
@@ -157,14 +176,59 @@ export function prospectiveRecord(rows) {
     if (!scored.length) continue;
     const y = (x) => (x.l.outcome === "target" ? 1 : 0), rOf = (x) => (num(x.l.r) ? x.l.r : y(x) ? 1.5 : -1);
     const brier = mean(scored.map((x) => (x.p - y(x)) ** 2)), brierBase = mean(scored.map((x) => (x.base - y(x)) ** 2));
+    // Paired gain per decision (the base rate's squared error minus the model's): a one-sided z test.
+    const gains = scored.map((x) => (x.base - y(x)) ** 2 - (x.p - y(x)) ** 2);
+    const g = mean(gains), sd = Math.sqrt(mean(gains.map((d) => (d - g) ** 2)) * (gains.length / Math.max(1, gains.length - 1)));
+    const z = sd > 0 ? g / (sd / Math.sqrt(gains.length)) : 0;
     const picked = scored.filter((x) => x.p >= 0.5);
     out[`${set}_${side}`] = {
-      n: scored.length, brier: r4(brier), brier_base: r4(brierBase), skill: brierBase > 0 ? r4(1 - brier / brierBase) : null,
+      n: scored.length, brier: r4(brier), brier_base: r4(brierBase), skill: brierBase > 0 ? r4(1 - brier / brierBase) : null, p_value: r4(upperTail(z)),
       auc: auc(scored.map((x) => x.p), scored.map(y)), picked: picked.length,
       picked_mean_r: picked.length ? r4(mean(picked.map(rOf))) : null, all_mean_r: r4(mean(scored.map(rOf)))
     };
   }
   return out;
+}
+
+/**
+ * The gate that connects the model to the decision by itself (owner 2026-11-13: "Apakah menyambungkan ini
+ * masih manual? Jika iya, buat agar autonomous"). A label set's model is promoted when, on its
+ * prospective record (decisions it had not seen), BOTH sides hold at least 300 decisive decisions, beat
+ * the base rate significantly (paired Brier gain, one-sided p < 0.05), and rank outcomes better than
+ * chance (AUC at least 0.55). It is demoted as soon as that no longer holds. Promoted, its probabilities
+ * go to the Decision Engine council as advice (context.model); the guardrails stay the gate.
+ */
+export const GATE = Object.freeze({ min_n: 300, alpha: 0.05, min_auc: 0.55 });
+
+/** Pure: the promotion state from a baseline's prospective record. */
+export function promotionGate(prospective, { gate = GATE } = {}) {
+  const passing = [];
+  const reasons = [];
+  for (const set of LABEL_SETS) {
+    const l = prospective?.[`${set}_long`], s = prospective?.[`${set}_short`];
+    const fail = [];
+    for (const [side, r] of [["long", l], ["short", s]]) {
+      if (!r) { fail.push(`${side}: no prospective record`); continue; }
+      if (r.n < gate.min_n) fail.push(`${side}: ${r.n} of ${gate.min_n} decisions`);
+      else {
+        if (!(r.skill > 0) || !(r.p_value < gate.alpha)) fail.push(`${side}: not better than the base rate (skill ${r.skill}, p ${r.p_value})`);
+        if (!(r.auc >= gate.min_auc)) fail.push(`${side}: AUC ${r.auc}`);
+      }
+    }
+    if (!fail.length) passing.push({ set, skill: Math.min(l.skill, s.skill) });
+    else reasons.push(`${set}: ${fail.join("; ")}`);
+  }
+  if (!passing.length) return { status: "not_promoted", set: null, reason: reasons.join(" | ") };
+  const best = passing.sort((a, b) => b.skill - a.skill)[0];
+  return { status: "promoted", set: best.set, reason: `${best.set}: both sides beat the base rate on ${gate.min_n}+ decisions it had not seen` };
+}
+
+/** Pure: the owner's Telegram line when the gate changed (null otherwise). */
+export function gateMessage(previous, next) {
+  const was = previous?.status === "promoted" ? previous.set : null, now = next?.status === "promoted" ? next.set : null;
+  if (was === now) return null;
+  if (now) return `🤖 Baseline model connected (autonomous): its ${now} probabilities now go to the Decision Engine council as advice. ${next.reason}. The guardrails still decide what can trade.`;
+  return `🤖 Baseline model disconnected (autonomous): the council no longer receives its advice. ${next?.reason ?? ""}`.trim();
 }
 
 /** Pure: the report for Aether (cryptophys.model-report.v1): measures and feature names only, never a price. */
@@ -189,7 +253,7 @@ export async function readBaseline(env) {
 export function baselineStatus(baseline) {
   if (!baseline) return null;
   const top = Object.fromEntries(Object.entries(baseline.models || {}).map(([id, m]) => [id, m.top_features]));
-  return { version: baseline.version, model_id: baseline.model_id, trained_at: baseline.trained_at, rows: baseline.rows, status: baseline.status, checks: baseline.checks, prospective: baseline.prospective || {}, top_features: top };
+  return { version: baseline.version, model_id: baseline.model_id, trained_at: baseline.trained_at, rows: baseline.rows, status: baseline.status, checks: baseline.checks, prospective: baseline.prospective || {}, promotion: baseline.promotion ?? null, gate: { ...GATE }, top_features: top };
 }
 
 /**
@@ -206,8 +270,11 @@ export async function runModelBaseline(env, { now = Date.now(), loadRows } = {})
     const rows = await loadRows();
     const baseline = trainBaseline(rows, { now });
     baseline.prospective = prospectiveRecord(rows);
+    const gate = modelGateMode(env) === "off" ? { status: "not_promoted", set: null, reason: "MODEL_AUTO_CONNECT is off" } : promotionGate(baseline.prospective);
+    // A promoted set needs its model; without one (too few rows now) it is not connected.
+    baseline.promotion = gate.status === "promoted" && !baseline.models[`${gate.set}_long`] ? { status: "not_promoted", set: null, reason: `${gate.set}: no trained model` } : { ...gate, since: gate.status === "promoted" && current?.promotion?.set === gate.set ? current.promotion.since : gate.status === "promoted" ? baseline.trained_at : null };
     await env.SIGNAL_CACHE.put(MODEL_BASELINE_KEY, JSON.stringify(baseline), { expirationTtl: 7 * 86_400 });
     const skills = Object.fromEntries(Object.entries(baseline.checks).map(([id, c]) => [id, c.status === "ok" ? c.skill : c.status]));
-    return { status: baseline.status, model_id: baseline.model_id, rows: rows.length, skills, report: modelReport(baseline, baseline.prospective, { now }) };
+    return { status: baseline.status, model_id: baseline.model_id, rows: rows.length, skills, promotion: baseline.promotion.status, gate_message: gateMessage(current?.promotion, baseline.promotion), report: modelReport(baseline, baseline.prospective, { now }) };
   } catch (e) { return { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; }
 }
