@@ -12,7 +12,7 @@
 // or expired when the bridge did not report it within INTENT_TTL_MS.
 
 import { ingestCorpus, ingestCorpusMacro, ingestMt5Calendar } from "./corpus-oracle.mjs";
-import { eaSignal, readControl } from "./ea-signal.mjs";
+import { eaSignal, readControl, blackoutWindow } from "./ea-signal.mjs";
 import { storeDeal, dealStats, FIRST_OF_DEAL } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
@@ -518,12 +518,15 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
   };
 
   // Macro Risk & Real-Time Economic Calendar
-  let macroRisk = { blackout: false, reason: null, upcoming_count: 0, next_event: null };
+  // The news gate's window is the EA signal's own (BLACKOUT_*), returned so the page never hardcodes it.
+  const gate = blackoutWindow(env);
+  const windowMinutes = { before: Math.round(gate.beforeMs / 60_000), after: Math.round(gate.afterMs / 60_000) };
+  let macroRisk = { blackout: false, reason: null, upcoming_count: 0, upcoming_24h: 0, next_event: null, window_minutes: windowMinutes };
   try {
     const evts = await gatedEvents(env, { now });
     const active = (evts || []).filter((e) => {
       const t = Date.parse(e?.time ?? "");
-      return Number.isFinite(t) && now >= t - 2 * 3600000 && now <= t + 30 * 60000;
+      return Number.isFinite(t) && now >= t - gate.beforeMs && now <= t + gate.afterMs;
     });
     const nextList = (evts || []).filter((e) => {
       const t = Date.parse(e?.time ?? "");
@@ -534,11 +537,25 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       blackout: active.length > 0,
       reason: active.length > 0 ? active.map((e) => e.title).join("; ").slice(0, 160) : null,
       upcoming_count: nextList.length,
-      next_event: nextList[0] ? { title: nextList[0].title, time: nextList[0].time, currency: nextList[0].currency, impact: nextList[0].impact } : null
+      upcoming_24h: nextList.filter((e) => Date.parse(e.time) - now <= 24 * 3600000).length,
+      next_event: nextList[0] ? { title: nextList[0].title, time: nextList[0].time, currency: nextList[0].currency, impact: nextList[0].impact } : null,
+      window_minutes: windowMinutes
     };
   } catch {
-    macroRisk = { blackout: false, reason: null, upcoming_count: 0, next_event: null };
+    macroRisk = { blackout: false, reason: null, upcoming_count: 0, upcoming_24h: 0, next_event: null, window_minutes: windowMinutes };
   }
+
+  // How Omega manages an open position (src/omega-engine.mjs manageIntents and keyLevelPlan), from the
+  // settings in force, so the page describes the real rules (owner 2026-11-13: nothing hardcoded).
+  const S = settings.settings ?? {};
+  const management = {
+    key_levels: "SL+ behind the key levels price has passed; trailing TP to the next key level with a strong power; close a winner when the power turns strongly against it",
+    break_even_r: Number(S.trailing_stop_r) > 0 ? Number(S.trailing_stop_r) : null,
+    fallback: "without key levels: the stop trails the broker's 5m swing",
+    scale_out: "a position of 0.02 lots or more banks half at 1.5R or its target, once",
+    adaptive_stop: S.adaptive_volatility !== false ? "a stop closer than 0.75 x ATR widens to it; the target keeps the plan's reward-to-risk (scalp: the target stays at the key level)" : null,
+    no_stacking: "a second position on a side opens only once the first is protected"
+  };
 
   // Volatility Telemetry
   const atrVal = st?.symbol?.atr_value ?? null;
@@ -581,6 +598,7 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     },
     tca,
     route,
+    management,
     macro_risk: macroRisk,
     volatility,
     intents: intents.map((r) => ({ ...parse(r.payload, {}), status: r.status, result: parse(r.result), created_ms: r.created_ms, updated_ms: r.updated_ms })),

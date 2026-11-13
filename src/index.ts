@@ -196,7 +196,7 @@ import { runPatternCalibration, readPatternCalibration } from "./pattern-calibra
 import { runModelDataset, readModelDataset, readModelDatasetSummary, loadLabeledRows } from "./model-dataset.mjs";
 import { runModelBaseline, readBaseline, baselineStatus, prospectiveRecord } from "./model-baseline.mjs";
 import { readGbm, gbmStatus } from "./model-gbm.mjs";
-import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, TRADING_MODE_KEY } from "./decision-engine.mjs";
+import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, setTradingMode } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport, pushExecutionReport, pushModelReport } from "./aether-push.mjs";
 import { applyWitnessTuning, readWitnessTuning, witnessTuningMessage, witnessTuningReport } from "./witness-tuning.mjs";
@@ -2099,6 +2099,15 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown; corpusMacro?: unknown; calendar?: unknown }): Promise<JsonObject> {
     return bridgeSync(this.env, input ?? {}) as Promise<JsonObject>;
   }
+  /** A person sets the trading mode (owner 2026-11-13); the owner hears of each change on Telegram. */
+  async setTradingMode(input: { mode?: string; actor?: string }): Promise<JsonObject> {
+    const result = await setTradingMode(this.env, { mode: input?.mode, actor: String(input?.actor ?? "") }) as JsonObject;
+    if (result.ok === true && result.changed === true) {
+      const text = `XAUUSD SYSTEM · Trading mode ${String(result.previous)} → ${String(result.mode)}, set from Nexus. The Decision Engine uses the ${String(result.mode)} thresholds from the next 15m close; Omega manages each trade by the mode of its own decision.`;
+      try { await sendTelegram(this.env, text); } catch (e) { console.error("trading_mode_telegram_failed", e instanceof Error ? e.message : String(e)); }
+    }
+    return result;
+  }
   /** The MT5 fallback switch and its state (owner 2026-11-11), for the War Room through Omega. */
   async feedFallback(): Promise<JsonObject> {
     return readFeedFallback(this.env) as Promise<JsonObject>;
@@ -2464,16 +2473,10 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     }
   }
   if (url.pathname === "/api/trading-mode") {
-    const asked = String(url.searchParams.get("mode") ?? "").trim().toLowerCase();
-    if (asked) {
-      if (!["scalp", "intraday", "swing"].includes(asked)) return dashboardJson({ status: "error", error: "invalid mode" }, 400);
-      try {
-        await env.SIGNAL_CACHE?.put?.(TRADING_MODE_KEY, asked);
-        env.TRADING_MODE = asked;
-        return dashboardJson({ status: "ok", mode: asked });
-      } catch (error) { console.error("trading_mode_set_failed", error); return dashboardJson({ status: "error" }, 500); }
-    }
-    try { return dashboardJson({ status: "ok", mode: await tradingMode(env) }); }
+    // Read only (owner 2026-11-13): a GET never changes the mode. A person changes it through the Omega
+    // Worker's POST /api/trading-mode (Access identity, same origin), which calls OmegaGateway.setTradingMode.
+    if (url.searchParams.has("mode")) return dashboardJson({ status: "error", error: "read_only", hint: "POST /omega/api/trading-mode as a signed-in person" }, 405);
+    try { return dashboardJson({ status: "ok", mode: await tradingMode(env), pinned: ["scalp", "intraday", "swing"].includes(String(env.TRADING_MODE ?? "").trim().toLowerCase()) }); }
     catch (error) { console.error("trading_mode_failed", error); return dashboardJson({ status: "error" }, 500); }
   }
   if (url.pathname === "/api/deals") {

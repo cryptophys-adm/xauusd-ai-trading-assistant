@@ -286,6 +286,15 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (!reason) return json({ error: "a reason is required" }, 400);
       return rpc(() => env.OMEGA.setFeedFallback({ mode, reason, actor: identity.subject }), "feed_fallback_failed");
     }
+    if (route === "POST /api/trading-mode") {
+      // Owner 2026-11-13: the trading mode changes only here (a person, same origin), never by a GET.
+      const r = await personJson(request, url, identity, 1024);
+      if (r.response) return r.response;
+      const mode = typeof r.body.mode === "string" ? r.body.mode.trim().toLowerCase() : "";
+      if (!["scalp", "intraday", "swing"].includes(mode)) return json({ error: "mode must be scalp, intraday or swing" }, 400);
+      if (typeof env.OMEGA.setTradingMode !== "function") return json({ error: "trading_mode_unavailable" }, 503);
+      return rpc(() => env.OMEGA.setTradingMode({ mode, actor: identity.subject }), "trading_mode_failed");
+    }
     if (route === "POST /api/position/close") {
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;
@@ -293,7 +302,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (!Number.isFinite(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
       return rpc(() => env.OMEGA.closePosition({ ticket, reason: r.body?.reason, actor: identity.subject }), "close_position_failed");
     }
-    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback"].includes(path)) return json({ error: "method_not_allowed" }, 405);
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 

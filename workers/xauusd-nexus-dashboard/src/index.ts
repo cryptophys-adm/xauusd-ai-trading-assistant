@@ -11,7 +11,8 @@
  *   GET /api/*           everything else is proxied to the AI Worker's read-only dashboard API, over the
  *                        AI_WORKER Service Binding (never the public internet, so the AI Worker's /api
  *                        can sit behind Cloudflare Access without breaking Nexus)
- * Nexus never changes state: advisory only, no orders.
+ * /api/* never changes state (GET and HEAD only). The changes a person makes (Omega's controls, the trading
+ * mode) go to /omega/api/*, where the Omega Worker checks the Access identity and the same origin.
  */
 
 /** Host of the proxied requests; the AI_WORKER binding delivers them without leaving Cloudflare. */

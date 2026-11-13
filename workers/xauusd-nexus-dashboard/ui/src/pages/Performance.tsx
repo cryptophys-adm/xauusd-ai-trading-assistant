@@ -19,7 +19,6 @@ import {
   Scale,
   ShieldCheck,
   Sliders,
-  Sparkles,
   Split,
   TrendingDown,
   TrendingUp,
@@ -684,8 +683,8 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
               <p className="mono font-semibold text-slate-200">{br.spread_points != null ? `${br.spread_points} pts` : "n/a"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Dynamic Risk Model</span>
-              <p className="mono font-semibold text-emerald-400">ATR Multiplier Sizing</p>
+              <span className="text-[10px] uppercase text-slate-500">Position sizing</span>
+              <p className="mono font-semibold text-emerald-400">{omega?.engine?.risk_pct != null ? `${omega.engine.risk_pct}% of equity at the stop` : "—"}</p>
             </div>
             <div>
               <span className="text-[10px] uppercase text-slate-500">Adaptive Volatility</span>
@@ -697,7 +696,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
 
       {/* Open Positions in Broker MT5 */}
       <Panel
-        title={`Live MT5 Positions on Monex (${positions.length})`}
+        title={`Live MT5 positions${br.server ? ` on ${br.server}` : ""} (${positions.length})`}
         icon={<Activity className="h-3.5 w-3.5 text-emerald-400" />}
         right={
           <div className="flex items-center gap-2">
@@ -712,7 +711,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
           </div>
         ) : null}
         {!positions.length ? (
-          <Empty>No open floating positions in the live Monex MT5 terminal.</Empty>
+          <Empty>No open position on the MT5 terminal.</Empty>
         ) : (
           <div className="table-wrap">
             <table className="tbl">
@@ -939,112 +938,56 @@ function DisparityKnowledgePanel({
   const slippagesList = executedRecords.map((m) => m.slippagePoints).filter((v): v is number => typeof v === "number");
   const latenciesList = executedRecords.map((m) => m.latencyMs).filter((v): v is number => typeof v === "number" && v > 0);
 
-  const dynamicAvgSlippage = slippagesList.length
+  // Measured values only (owner 2026-11-13: nothing invented): null when there is no sample.
+  const dynamicAvgSlippage: number | null = slippagesList.length
     ? Number((slippagesList.reduce((a, b) => a + Math.abs(b), 0) / slippagesList.length).toFixed(1))
-    : (tca.avg_slippage_points ?? 0.0);
+    : (tca.avg_slippage_points ?? null);
 
-  const dynamicMaxSlippage = slippagesList.length
+  const dynamicMaxSlippage: number | null = slippagesList.length
     ? Number(Math.max(...slippagesList.map((s) => Math.abs(s))).toFixed(1))
-    : (tca.max_slippage_points ?? 0.0);
+    : (tca.max_slippage_points ?? null);
 
-  const dynamicAvgLatency = latenciesList.length
+  const dynamicAvgLatency: number | null = latenciesList.length
     ? Math.round(latenciesList.reduce((a, b) => a + b, 0) / latenciesList.length)
-    : (tca.avg_latency_ms ?? 0);
+    : (tca.avg_latency_ms ?? null);
 
-  const dynamicLiveSpread = Number(br.spread_points ?? 0);
-
-  // Dynamic Alpha Fidelity Calculation:
-  // Derived strictly from measured fill slippage friction, latency overhead, and broker spread
-  const slippagePenalty = Math.min(10, dynamicAvgSlippage * 0.8);
-  const latencyPenalty = dynamicAvgLatency > 0 ? Math.min(5, (dynamicAvgLatency / 1000) * 1.5) : 0;
-  const spreadPenalty = dynamicLiveSpread > 0 ? Math.min(5, (dynamicLiveSpread / 30) * 1.2) : 0;
-  const dynamicFidelityScore = Number(Math.max(75.0, Math.min(99.5, 98.8 - slippagePenalty - latencyPenalty - spreadPenalty)).toFixed(1));
-  const dynamicFrictionDrag = Number((100 - dynamicFidelityScore).toFixed(1));
+  const dynamicLiveSpread: number | null = br.spread_points != null ? Number(br.spread_points) : null;
 
   // Dynamic Count of favorable vs adverse fills
   const favorableCount = slippagesList.filter((s) => s > 0).length;
   const adverseCount = slippagesList.filter((s) => s < 0).length;
   const neutralCount = slippagesList.filter((s) => s === 0).length;
 
-  // Fully Dynamic Aether Knowledge Observations based purely on evaluated values
-  const dynamicObservations: string[] = [
-    executedRecords.length > 0
-      ? `Reconciliation matched ${executedRecords.length} live execution orders against AI signals with an average slippage of ${dynamicAvgSlippage} points (max: ${dynamicMaxSlippage} pts).`
-      : `Evaluating baseline telemetry: 0 active executions matched in this window.`,
-    dynamicAvgLatency > 0
-      ? `Host execution bridge measured round-trip dispatch latency averaging ${dynamicAvgLatency} ms from Worker intent to MT5 fill.`
-      : `Bridge latency awaiting round-trip execution benchmark sample.`,
-    positions.length > 0
-      ? `MT5 terminal currently holds ${positions.length} open position(s).`
-      : `No open position on the MT5 terminal.`,
-    dynamicLiveSpread > 0
-      ? `Active broker spread on ${br.symbol || "XAUUSD.m"} is dynamically quoted at ${dynamicLiveSpread} points (Bid: ${px(br.bid)} / Ask: ${px(br.ask)}).`
-      : `Broker quote spread is currently being refreshed by bridge daemon.`,
-  ];
-
-  // Dynamic Actionable Governance Directive
-  const dynamicGovernanceDirective = dynamicAvgSlippage <= 5 && (dynamicAvgLatency === 0 || dynamicAvgLatency <= 1500)
-    ? "EXECUTION_HEALTHY_MAINTAIN_AUTO_FAILOVER"
-    : dynamicAvgSlippage > 10
-    ? "SLIPPAGE_ELEVATED_TIGHTEN_ENTRY_BUFFERS"
-    : "MONITOR_BRIDGE_TRANSMISSION_TELEMETRY";
-
-  // Dynamic Machine-Readable Aether Payload
-  const dynamicAetherPayload = {
-    card_type: "execution_disparity_synthesis",
-    schema_version: "2.2.0",
-    generated_at: new Date().toISOString(),
-    lookback_window_days: days,
-    telemetry: {
-      signals_analyzed: items.length,
-      executed_orders_matched: executedRecords.length,
-      fidelity_score: Number((dynamicFidelityScore / 100).toFixed(3)),
-      friction_drag_pct: dynamicFrictionDrag,
-      avg_slippage_points: dynamicAvgSlippage,
-      max_slippage_points: dynamicMaxSlippage,
-      avg_latency_ms: dynamicAvgLatency,
-      live_spread_points: dynamicLiveSpread,
-      live_positions_count: positions.length,
-      slippage_profile: {
-        favorable_fills: favorableCount,
-        neutral_fills: neutralCount,
-        adverse_fills: adverseCount,
-      },
-    },
-    observations: dynamicObservations,
-    governance_directive: dynamicGovernanceDirective,
-  };
-
   return (
     <div className="space-y-4">
       {/* Dynamic Fidelity & Disparity Overview KPI */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
         <Kpi
-          label="Alpha Fidelity Score"
-          value={`${dynamicFidelityScore}%`}
-          sub={`Friction drag: ${dynamicFrictionDrag}%`}
-          color={dynamicFidelityScore >= 90 ? C.bull : C.wait}
+          label="Signals matched to fills"
+          value={`${executedRecords.length} / ${items.length}`}
+          sub={`${days}-day window`}
+          color={C.cyan}
           icon={<BrainCircuit className="h-3.5 w-3.5 text-emerald-400" />}
         />
         <Kpi
           label="Price Disparity (Slippage)"
-          value={dynamicAvgSlippage > 0 ? `±${dynamicAvgSlippage} pts` : "0.0 pts"}
-          sub={`Peak: ${dynamicMaxSlippage} pts · ${slippagesList.length} samples`}
-          color={dynamicAvgSlippage <= 5 ? C.cyan : C.bear}
+          value={dynamicAvgSlippage != null ? `±${dynamicAvgSlippage} pts` : "no sample"}
+          sub={dynamicMaxSlippage != null ? `Peak: ${dynamicMaxSlippage} pts · ${slippagesList.length} samples` : "no fill measured yet"}
+          color={dynamicAvgSlippage == null || dynamicAvgSlippage <= 5 ? C.cyan : C.bear}
           icon={<Split className="h-3.5 w-3.5 text-cyan-400" />}
         />
         <Kpi
           label="Bridge Transmission Lag"
-          value={dynamicAvgLatency > 0 ? `${dynamicAvgLatency} ms` : "n/a"}
-          sub={latenciesList.length ? `${latenciesList.length} round-trip benchmarks` : "Bridge connected"}
+          value={dynamicAvgLatency != null ? `${dynamicAvgLatency} ms` : "no sample"}
+          sub={latenciesList.length ? `${latenciesList.length} intents timed to their fill` : "no fill timed yet"}
           color={C.violet}
           icon={<Zap className="h-3.5 w-3.5 text-violet-400" />}
         />
         <Kpi
           label="Broker Spread Quoted"
-          value={dynamicLiveSpread > 0 ? `${dynamicLiveSpread} pts` : "n/a"}
+          value={dynamicLiveSpread != null ? `${dynamicLiveSpread} pts` : "not reported"}
           sub={`Bid: ${px(br.bid)} · Ask: ${px(br.ask)}`}
-          color={dynamicLiveSpread <= 30 ? C.bull : C.wait}
+          color={dynamicLiveSpread == null || dynamicLiveSpread <= 30 ? C.bull : C.wait}
           icon={<Activity className="h-3.5 w-3.5 text-amber-400" />}
         />
       </div>
@@ -1053,10 +996,10 @@ function DisparityKnowledgePanel({
       <Panel
         title="Comprehensive Disparity Matrix: AI Theory vs Broker Reality"
         icon={<Gauge className="h-3.5 w-3.5 text-cyan-400" />}
-        right={<Badge tone="green">Dynamically Computed</Badge>}
+        right={<Badge tone="slate">from Omega's fills</Badge>}
       >
         <p className="mb-3 text-[12px] leading-relaxed text-slate-400">
-          Quantifies the exact mathematical gap between pure advisory expectations ($R$-multiples calculated on closed bars) and live MetaTrader 5 broker reality (realized fill prices, execution latency, dynamic spread, and active Stop Loss modifications).
+          The gap between the plan (entry, R on closed bars) and Omega's fills on the MT5 terminal: fill price, time from intent to fill, and the stop the terminal holds.
         </p>
 
         <div className="table-wrap">
@@ -1074,48 +1017,48 @@ function DisparityKnowledgePanel({
               {/* Row 1: Entry Fill */}
               <tr>
                 <td className="font-semibold text-slate-200">Entry Fill Pricing</td>
-                <td className="mono text-cyan-300">Exact Bar Close ($0 Slippage)</td>
+                <td className="mono text-cyan-300">the plan's entry</td>
                 <td className="mono text-slate-200">
-                  {executedRecords[0]?.fillPrice ? px(executedRecords[0].fillPrice) : "Real Market Execution"}
+                  {executedRecords[0]?.fillPrice ? `${px(executedRecords[0].fillPrice)} (latest)` : "no fill"}
                 </td>
-                <td className="mono" style={{ color: dynamicAvgSlippage <= 3 ? C.bull : dynamicAvgSlippage <= 10 ? C.wait : C.bear }}>
-                  Avg {dynamicAvgSlippage} pts ({favorableCount} favorable / {adverseCount} adverse)
+                <td className="mono" style={{ color: dynamicAvgSlippage == null ? undefined : dynamicAvgSlippage <= 3 ? C.bull : dynamicAvgSlippage <= 10 ? C.wait : C.bear }}>
+                  {dynamicAvgSlippage != null ? `Avg ${dynamicAvgSlippage} pts (${favorableCount} favorable / ${adverseCount} adverse)` : "no sample"}
                 </td>
                 <td>
-                  <Badge tone={dynamicAvgSlippage <= 5 ? "green" : dynamicAvgSlippage <= 15 ? "amber" : "red"}>
-                    {dynamicAvgSlippage <= 5 ? "PRIME · Within 5 pts bound" : "ACCEPTABLE SLIPPAGE"}
-                  </Badge>
+                  {dynamicAvgSlippage == null ? <Badge tone="slate">NO SAMPLE</Badge> : (
+                    <Badge tone={dynamicAvgSlippage <= 5 ? "green" : dynamicAvgSlippage <= 15 ? "amber" : "red"}>
+                      {dynamicAvgSlippage <= 5 ? "≤ 5 pts" : dynamicAvgSlippage <= 15 ? "5–15 pts" : "> 15 pts"}
+                    </Badge>
+                  )}
                 </td>
               </tr>
 
               {/* Row 2: Latency */}
               <tr>
                 <td className="font-semibold text-slate-200">Execution Latency</td>
-                <td className="mono text-cyan-300">Instantaneous (0 ms)</td>
-                <td className="mono text-slate-200">Host Wine Bridge Round-Trip</td>
+                <td className="mono text-cyan-300">at the decision</td>
+                <td className="mono text-slate-200">intent to fill on the terminal</td>
                 <td className="mono text-violet-300">
-                  {dynamicAvgLatency > 0 ? `${dynamicAvgLatency} ms measured lag` : "Sub-second bridge"}
+                  {dynamicAvgLatency != null ? `${dynamicAvgLatency} ms average` : "no sample"}
                 </td>
                 <td>
-                  <Badge tone={dynamicAvgLatency > 0 && dynamicAvgLatency <= 1000 ? "green" : "cyan"}>
-                    {dynamicAvgLatency > 0 && dynamicAvgLatency <= 800 ? "SUB-SECOND HIGH VELOCITY" : "OPTIMAL DISPATCH"}
-                  </Badge>
+                  {dynamicAvgLatency == null ? <Badge tone="slate">NO SAMPLE</Badge> : <Badge tone={dynamicAvgLatency <= 1500 ? "green" : "amber"}>{dynamicAvgLatency <= 1500 ? "≤ 1.5 s" : "> 1.5 s"}</Badge>}
                 </td>
               </tr>
 
               {/* Row 3: Progressive Stop (SL+) */}
               <tr>
                 <td className="font-semibold text-slate-200">Progressive Stop (SL+)</td>
-                <td className="mono text-cyan-300">Mathematical Halfway Point</td>
+                <td className="mono text-cyan-300">the plan's progressive stop</td>
                 <td className="mono text-slate-200">
-                  {positions[0]?.sl ? `Terminal SL: ${px(positions[0].sl)}` : "Dynamic EA Order Mod"}
+                  {positions[0]?.sl ? `Terminal SL: ${px(positions[0].sl)}` : "no open position"}
                 </td>
                 <td className="mono text-slate-300">
                   {executedRecords.filter((m) => m.sl_plus_triggered).length} of {executedRecords.length} triggered
                 </td>
                 <td>
                   <Badge tone={executedRecords.some((m) => m.sl_plus_triggered) ? "green" : "slate"}>
-                    {executedRecords.some((m) => m.sl_plus_triggered) ? "PROTECTED CAPITAL" : "MONITORING EXCURSION"}
+                    {executedRecords.some((m) => m.sl_plus_triggered) ? "SL+ REACHED" : "NOT YET"}
                   </Badge>
                 </td>
               </tr>
@@ -1125,47 +1068,11 @@ function DisparityKnowledgePanel({
         </div>
       </Panel>
 
-      {/* Aether Knowledge Ingress Synthesis Panel */}
-      <Panel
-        title="Aether Knowledge Synthesis · Machine-Readable Ingress Card"
-        icon={<Sparkles className="h-3.5 w-3.5 text-amber-400" />}
-        right={
-          <div className="flex items-center gap-2">
-            <Badge tone="purple">RFC Aether Knowledge Guardian</Badge>
-            <Badge tone="green">Dynamically Curated</Badge>
-          </div>
-        }
-      >
-        <p className="mb-2 text-[12px] text-slate-400">
-          Compiled dynamically from live runtime telemetries and streamed to Aether for autonomous strategy calibration, rule verification, and risk bounds tuning.
-        </p>
-
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {/* Key Dynamic Insights */}
-          <div className="space-y-2.5 rounded-lg border border-white/5 bg-white/[0.02] p-3 text-[11px]">
-            <span className="font-semibold text-cyan-300">Dynamically Evaluated Telemetry Insights:</span>
-            <ul className="list-disc space-y-1.5 pl-4 text-slate-300">
-              {dynamicObservations.map((obs, idx) => (
-                <li key={idx} className="leading-relaxed">{obs}</li>
-              ))}
-            </ul>
-            <div className="mt-3 border-t border-white/5 pt-2 text-slate-400">
-              <span className="font-semibold text-emerald-400">Autonomous Directive:</span> {dynamicGovernanceDirective.replace(/_/g, " ")}
-            </div>
-          </div>
-
-          {/* Machine-Readable JSON Telemetry for Aether */}
-          <div className="overflow-hidden rounded-lg border border-white/10 bg-[#080d15] p-3">
-            <div className="mb-1.5 flex items-center justify-between text-[10px] text-slate-500">
-              <span className="mono font-semibold text-slate-400">AETHER_INGRESS_PAYLOAD.json</span>
-              <span className="mono text-emerald-400">LIVE DYNAMIC COMPILATION</span>
-            </div>
-            <pre className="mono max-h-[190px] overflow-auto text-[10px] leading-relaxed text-cyan-300/90">
-              {JSON.stringify(dynamicAetherPayload, null, 2)}
-            </pre>
-          </div>
-        </div>
-      </Panel>
+      {/* What Aether receives: the hourly execution report (src/signal-ledger.mjs executionReport, pushExecutionReport),
+          per trading mode in R. Nothing on this page is sent (owner 2026-11-13: no invented payload). */}
+      <p className="text-[11px] text-slate-500">
+        Aether receives the hourly execution report (<span className="mono">cryptophys.execution-report.v1</span>): per trading mode, the plan's targets against the Omega policy on the same closed signals, in R. Its push status is on the Decision audit page.
+      </p>
 
       {/* Dynamic Disparity Drilldown Table */}
       <Panel
