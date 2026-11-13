@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  STRATEGY_AGENTS, AGENT_IDS, DEFAULT_AGENT, PROJECTION_NOTE, PATTERN_FAMILIES, PATTERN_BREAKER, suspendedPatterns, priceActionReading, AGENT_BREAKER, AGENT_BREAKER_KEY, suspendedAgents, syncAgentBreaker, agentStatuses, agentContext, agentPlans, agentCatalog, finishPlan, slimPlan, strategyAgentsMode
+  STRATEGY_AGENTS, AGENT_IDS, DEFAULT_AGENT, PROJECTION_NOTE, CONSENSUS_RULES, agentVoice, agentsConsensus, PATTERN_FAMILIES, PATTERN_BREAKER, suspendedPatterns, priceActionReading, AGENT_BREAKER, AGENT_BREAKER_KEY, suspendedAgents, syncAgentBreaker, agentStatuses, agentContext, agentPlans, agentCatalog, finishPlan, slimPlan, strategyAgentsMode
 } from "../src/strategy-agents.mjs";
 import { tradeLevels, planForDirection } from "../src/strategy-engine.mjs";
 import { PATTERN_CATALOG } from "../src/chart-patterns.mjs";
-import { assess, buildDecisionRecord, decisionKeyFor, decisionMessage, decide, councilEvidence, councilMessages, validateCouncil, liveAgentPlans, agentPlanPasses, strategyPlansOf, tradeFor, TP1_PROJECTION, COUNCIL_JSON_SCHEMA } from "../src/decision-engine.mjs";
+import { assess, quorumOf, witnessCards, WITNESS_WEIGHTS, EXTENDED_WITNESS_WEIGHTS, buildDecisionRecord, decisionKeyFor, decisionMessage, decide, councilEvidence, councilMessages, validateCouncil, liveAgentPlans, agentPlanPasses, strategyPlansOf, tradeFor, TP1_PROJECTION, COUNCIL_JSON_SCHEMA } from "../src/decision-engine.mjs";
 import { decisionPlans, setupsFrom, agentRecords, CONTROL_ARM } from "../src/plan-learning.mjs";
 
 const agent = (id) => STRATEGY_AGENTS.find((a) => a.id === id);
@@ -170,7 +170,7 @@ test("the evidence lists strategies only when the council has a choice; the reco
   const args = (g) => ({ barClose: "2026-11-10T10:00:00.000Z", cards: [], quorum: { long_share: 0.7, short_share: 0.1, neutral_share: 0.2, score: 0.5, bias: "BULLISH" }, guards: { long: g, short: blocked }, context: {} });
   const none = councilEvidence(args(guard("shadow")));
   assert.equal("strategies" in none.long, false);
-  assert.ok(!councilMessages(none)[0].content.includes("strategy agents"), "the prompt is as before");
+  assert.ok(!councilMessages(none)[0].content.includes("A side may list strategies"), "the prompt explains the choice only when there is one");
   const some = councilEvidence(args(guard("live")));
   assert.deepEqual(some.long.strategies.map((s) => [s.id, s.name, s.setup, s.plan.stop]), [["zone_pullback", "Zone pullback", null, 89], ["sweep_reversal", "Sweep reversal", "a sweep reclaimed", 97.2]]);
   assert.ok(some.long.strategies[1].made_for.startsWith("A stop hunt"));
@@ -465,4 +465,71 @@ test("inside the pattern: a forming line pattern is traded from one line toward 
   assert.equal(inside.plan(1, ctx({ suspendedPatterns: ["pattern_lines:rectangle_top"] })).pattern, "rectangle_top");
   // A forming pattern is not the family's trade, and a broken one is not this agent's.
   assert.equal(agent("pattern_lines").plan(1, ctx()), null);
+});
+
+test("the agents' consensus: live agents that see a passing setup speak for their side; the default only at its zone; a record moves a voice", () => {
+  const plan = (extra = {}) => ({ entry: 4000, stop: 3990, tp1: 4030, tp2: 4050, at_level: false, rrr: { tp1: 3, tp2: 5 }, setup: "a sweep of the 3995.00–3998.00 key zone", ...extra });
+  const live = (extra) => ({ status: "live", plan: plan(extra) });
+  const statuses = { zone_pullback: "live", sweep_reversal: "live", breakout_retest: "live", range_fade: "shadow", pattern_peaks: "live" };
+  // Nobody speaks: the default waits for its pullback on both sides, a shadow agent is only measured.
+  const silent = agentsConsensus({ long: { zone_pullback: live(), range_fade: { status: "shadow", plan: plan() } }, short: { zone_pullback: live() } }, { statuses });
+  assert.deepEqual([silent.lean, silent.speaking, silent.live, silent.long, silent.short], [null, 0, 4, [], []]);
+  assert.match(silent.summary, /^None of the 4 live strategy agents sees its setup/);
+  // One agent alone does not speak with full force: 1 / (1 + one silent voice).
+  const one = agentsConsensus({ long: { zone_pullback: live(), sweep_reversal: live() }, short: { zone_pullback: live() } }, { statuses });
+  assert.deepEqual([one.lean, one.speaking, one.long.map((x) => [x.id, x.name, x.voice])], [0.5, 1, [["sweep_reversal", "Sweep reversal", 1]]]);
+  // The default agent speaks where price already holds at its zone; two for the buy side, one against.
+  const three = agentsConsensus({ long: { zone_pullback: live({ at_level: true }), sweep_reversal: live() }, short: { zone_pullback: live(), pattern_peaks: live({ pattern: "double_top_adam_adam" }) } }, { statuses });
+  assert.deepEqual([three.lean, three.speaking, three.long.map((x) => x.id), three.short.map((x) => x.id)], [0.25, 3, ["zone_pullback", "sweep_reversal"], ["pattern_peaks"]]);
+  assert.equal(typeof three.short[0].pattern, "string", "a pattern family names its pattern");
+  assert.match(three.summary, /^3 of the 4 live strategy agents see their setup now\. Buy side: Zone pullback, Sweep reversal\. Sell side: .+ \(.+\)\.$/);
+  assert.doesNotMatch(JSON.stringify(three), /\d{3,}/, "no price in the witness");
+  // A plan the reward guardrail refuses does not speak.
+  assert.equal(agentsConsensus({ long: { sweep_reversal: live() }, short: {} }, { statuses, passes: () => false }).lean, null);
+  // The record: counted from 15 resolved setups, between half a voice and one and a half.
+  assert.deepEqual([agentVoice(null), agentVoice({ setups: 14, mean_r: -0.9 }), agentVoice({ setups: 15, mean_r: -0.9 }), agentVoice({ setups: 40, mean_r: 0.2 }), agentVoice({ setups: 40, mean_r: 2 })], [1, 1, 0.5, 1.2, 1.5]);
+  assert.deepEqual([CONSENSUS_RULES.silent, CONSENSUS_RULES.record_min_setups], [1, 15]);
+  const records = [{ agent: "sweep_reversal", setups: 40, mean_r: 0.5 }, { agent: "pattern_peaks", setups: 20, mean_r: -0.5 }];
+  const weighed = agentsConsensus({ long: { sweep_reversal: live() }, short: { pattern_peaks: live({ pattern: "double_top_adam_adam" }) } }, { statuses, records });
+  assert.deepEqual([weighed.long[0].voice, weighed.short[0].voice, weighed.lean], [1.5, 0.5, 0.33], "(1.5 - 0.5) / (2 + 1)");
+});
+
+test("the strategy agents are a witness of the quorum, weighted like a timeframe room; silent, they drop out", () => {
+  // The weights: the agents' consensus equals the D1, 4H and 1H rooms in both sets, and each set sums to 1.
+  for (const W of [WITNESS_WEIGHTS, EXTENDED_WITNESS_WEIGHTS]) {
+    assert.deepEqual([W.STRATEGY_AGENTS, W.STRATEGY_AGENTS, W.STRATEGY_AGENTS], [W.D1, W.H4, W.H1]);
+    assert.ok(Math.abs(Object.values(W).reduce((a, b) => a + b, 0) - 1) < 1e-9);
+  }
+  assert.deepEqual([EXTENDED_WITNESS_WEIGHTS.STRATEGY_AGENTS, EXTENDED_WITNESS_WEIGHTS.CALENDAR, EXTENDED_WITNESS_WEIGHTS.SESSION], [0.1263, 0.08, 0.02]);
+  const CLOSE = "2026-11-10T10:00:00.000Z", NOW = Date.parse(CLOSE) + 60_000;
+  const r = (key, lean) => ({ key, label: key, role: key, available: true, lean, action: "WAIT", confidence: 0.6, summary: `${key} reads the chart.`, at: CLOSE, stale: false });
+  const zones = [{ low: 3995, high: 3998, price: 3996.5, candidate: true }, { low: 3980, high: 3980, price: 3980, candidate: true }, { low: 4030, high: 4032, price: 4031, candidate: true }, { low: 4050, high: 4050, price: 4050, candidate: true }];
+  const loadedOf = (leans) => ({
+    inputs: { calendar: { events: [] }, m15Bars: bars([...flat(10, 3999, 4003, 4001), [3993.5, 4001, 3996], [3995.5, 4000.5, 4000]]) },
+    strategy: { decision: "WAIT", state: "SETUP_READY", direction: "LONG", confidence: 0.6, alignment: 0.5, headline: "The long setup is ready.", price: 4000, atr_h1: 10, key_levels: { zones }, plan: { at_level: true } },
+    global: { timeframes: ["D1", "H4", "H1", "M15", "NEWS", "MACRO"].map((k, i) => r(k, leans[i])) }, correlations: null, regime: "normal-trending"
+  });
+  // A sweep of the support zone was reclaimed: the live sweep agent and the default (price holds at its zone) speak for the buy side.
+  const a = assess(loadedOf([0.5, 0.4, 0.3, 0.35, 0.2, 0.1]), { now: NOW, env: { STRATEGY_AGENTS_LIVE: "sweep_reversal" } });
+  const card = a.cards.find((c) => c.key === "STRATEGY_AGENTS");
+  assert.deepEqual([card.available, card.lean, card.side, card.weight, card.voices.long.map((x) => x.id), card.voices.short], [true, 0.67, "BULLISH", WITNESS_WEIGHTS.STRATEGY_AGENTS, ["zone_pullback", "sweep_reversal"], []]);
+  assert.match(card.summary, /^2 of the 2 live strategy agents see their setup now\. Buy side: Zone pullback, Sweep reversal\. Sell side: none\.$/);
+  assert.doesNotMatch(card.summary, /\d{3,}/, "the witness never states a price");
+  assert.deepEqual(Object.keys(a.guards.long.plans), ["zone_pullback", "sweep_reversal"], "the plans the witness read are the plans the council chooses from");
+  // The quorum counts it like a room: against bearish rooms the agents' weight is the buy side's share.
+  const split = assess(loadedOf([-0.5, -0.4, -0.3, -0.35, -0.2, -0.2]), { now: NOW, env: { STRATEGY_AGENTS_LIVE: "sweep_reversal" } });
+  const without = quorumOf(split.cards.filter((c) => c.key !== "STRATEGY_AGENTS"), { now: NOW });
+  assert.ok(split.quorum.long_share > without.long_share && split.quorum.short_share < without.short_share, JSON.stringify([split.quorum, without]));
+  assert.equal(split.quorum.witnesses, without.witnesses + 1);
+  // In shadow the sweep agent is measured, not heard; a card without a consensus does not count.
+  const shadow = assess(loadedOf([0.5, 0.4, 0.3, 0.35, 0.2, 0.1]), { now: NOW, env: {} }).cards.find((c) => c.key === "STRATEGY_AGENTS");
+  assert.deepEqual([shadow.lean, shadow.voices.long.map((x) => x.id)], [0.5, ["zone_pullback"]]);
+  const none = witnessCards({ global: { timeframes: [] }, strategy: null }).find((c) => c.key === "STRATEGY_AGENTS");
+  assert.deepEqual([none.available, none.lean, "voices" in none], [false, null, false]);
+  // The council may name it among the witnesses it relied on, and its prompt says what it is.
+  const answer = { stance: "WAIT", bias: "NEUTRAL", confidence: 0.5, entry_type: "limit", target: "tp1", summary: "Decision WAIT, bias neutral: the rooms and the agents disagree.", reasons: ["The rooms lean bearish while the agents see a buy setup."], risks: [], weighed: ["strategy_agents", "D1", "nope"] };
+  assert.deepEqual([validateCouncil(answer).valid, answer.weighed], [true, ["STRATEGY_AGENTS", "D1"]]);
+  const ev = councilEvidence({ barClose: CLOSE, cards: a.cards, quorum: a.quorum, guards: a.guards, context: {} });
+  assert.deepEqual(ev.witnesses.find((w) => w.key === "STRATEGY_AGENTS").counts, true);
+  assert.match(councilMessages(ev)[0].content, /The strategy agents are one more witness, weighted like a timeframe room/);
 });

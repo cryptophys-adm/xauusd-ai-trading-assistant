@@ -189,12 +189,12 @@ function tradePlan(t: any, levels?: any[]) {
 }
 
 /**
- * The witnesses' lean split into the technical side (the rooms, the strategy engine, key levels, regime,
+ * The witnesses' lean split into the technical side (the rooms, the strategy engine, the strategy agents, key levels, regime,
  * trend) and the fundamental side (news, the macro room, the dollar and yields, the calendar), each the
  * weighted mean lean of its witnesses that count, with its share of the weight (owner 2026-11-12). The
  * session is context and weighs nothing.
  */
-const TECH = new Set(["D1", "H4", "H1", "M15", "STRATEGY", "KEY_LEVELS", "REGIME", "TREND_TF"]);
+const TECH = new Set(["D1", "H4", "H1", "M15", "STRATEGY", "STRATEGY_AGENTS", "KEY_LEVELS", "REGIME", "TREND_TF"]);
 const FUND = new Set(["NEWS", "MACRO", "MACRO_DRIVERS", "CALENDAR"]);
 function biasSplit(witnesses: any[] = []) {
   const counted = witnesses.filter((w) => { const st = witnessStatus(w); return (st === "counts" || st === "neutral") && w.weight > 0; });
@@ -250,7 +250,7 @@ export default function GlobalDecision() {
   const witnessRows = (e?.witnesses ?? []).map((w: any) => {
     const status = witnessStatus(w, leanBand);
     const pass = status !== "counts" ? null : e.stance === "BUY" ? w.lean >= leanBand : e.stance === "SELL" ? w.lean <= -leanBand : null;
-    return { trigger: null as string | null, key: w.key, label: w.key === "STRATEGY" ? "Strat" : w.label, role: w.decision ? `${w.role ?? ""}`.slice(0, 18) : w.role, lean: w.lean, pass, status, note: [STATUS_NOTE[status], w.decision ? `decision ${w.decision}` : null, w.summary].filter(Boolean).join(" · "), stale: status === "stale" || status === "no_data", weight: w.weight };
+    return { trigger: null as string | null, key: w.key, label: w.key === "STRATEGY" ? "Strat" : w.key === "STRATEGY_AGENTS" ? "Agents" : w.label, role: w.decision ? `${w.role ?? ""}`.slice(0, 18) : w.role, lean: w.lean, pass, status, note: [STATUS_NOTE[status], w.decision ? `decision ${w.decision}` : null, w.summary].filter(Boolean).join(" · "), stale: status === "stale" || status === "no_data", weight: w.weight };
   });
   // The 5m row is the entry trigger (a Prophet R38 confirmation), not a lean: it shows its state.
   const m5 = e?.context?.m5_trigger;

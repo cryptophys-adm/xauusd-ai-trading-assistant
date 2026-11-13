@@ -56,18 +56,24 @@ import { effectiveLearnedPack } from "./learned-live.mjs";
 import { modelAdvice } from "./model-dataset.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
-import { agentStatuses, agentContext, agentPlans, agentCatalog, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT } from "./strategy-agents.mjs";
+import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT } from "./strategy-agents.mjs";
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
 const M15_MS = 900_000;
+// STRATEGY_AGENTS (owner 2026-11-13: "libatkan agen strategi dalam decision council. Atur ulang
+// pembobotannya. agen strategi ini sejajar dengan TF karena merupakan konsensus dari beberapa agen"):
+// the live strategy agents' consensus (src/strategy-agents.mjs agentsConsensus) is a witness with the
+// weight of the D1, 4H and 1H rooms. The other witnesses gave it its weight in proportion; the session's
+// 0.02 and the calendar's 0.08 (owner 2026-11-12) were kept. When no agent sees its setup the witness
+// drops out and the others' shares are the ones from before it.
 /** Witness weights (sum 1). A missing or stale witness drops out and the rest renormalise. */
-export const WITNESS_WEIGHTS = Object.freeze({ D1: 0.2, H4: 0.2, H1: 0.2, M15: 0.15, NEWS: 0.1, MACRO: 0.05, STRATEGY: 0.1 });
+export const WITNESS_WEIGHTS = Object.freeze({ D1: 0.1667, H4: 0.1667, H1: 0.1667, M15: 0.125, NEWS: 0.0833, MACRO: 0.0416, STRATEGY: 0.0833, STRATEGY_AGENTS: 0.1667 });
 // CALENDAR (owner 2026-11-12: "horizon news release mempengaruhi bobot", 0.08): the economic calendar
 // counts only inside a release's horizon. The other witnesses gave it 0.08 in proportion (the session's
 // 0.02 floor kept), so outside a horizon, when CALENDAR drops out, their shares are the B-11 ones.
-export const EXTENDED_WITNESS_WEIGHTS = Object.freeze({ D1: 0.1469, H4: 0.1469, H1: 0.1469, M15: 0.1103, NEWS: 0.0735, MACRO: 0.0367, STRATEGY: 0.0735, KEY_LEVELS: 0.0459, REGIME: 0.0459, TREND_TF: 0.0459, MACRO_DRIVERS: 0.0276, SESSION: 0.02, CALENDAR: 0.08 });
+export const EXTENDED_WITNESS_WEIGHTS = Object.freeze({ D1: 0.1263, H4: 0.1263, H1: 0.1263, M15: 0.0947, NEWS: 0.0632, MACRO: 0.0315, STRATEGY: 0.0632, KEY_LEVELS: 0.0395, REGIME: 0.0395, TREND_TF: 0.0395, MACRO_DRIVERS: 0.0237, SESSION: 0.02, CALENDAR: 0.08, STRATEGY_AGENTS: 0.1263 });
 /**
  * The witness weights in force: the auto-tuned set the run loaded (env.DYNAMIC_WITNESS_WEIGHTS, from
  * src/witness-tuning.mjs) when present, else the B-11 set while GLOBAL_DECISION_WEIGHTED is on, else the base set.
@@ -189,6 +195,15 @@ export function witnessCards({ global = null, strategy = null, context = {}, env
     available: Boolean(strategy), stale: false, lean: sLean, side: sideOf(sLean),
     decision: strategy?.decision ?? null, state: strategy?.state ?? null, confidence: isNum(strategy?.confidence) ? strategy.confidence : null,
     summary: clip(strategy?.headline, 400) || null, at: null
+  });
+  // The strategy agents' consensus (owner 2026-11-13): which side the live agents see their setups on. It
+  // counts only while an agent speaks; `voices` names who speaks for each side.
+  const sa = context?.strategy_agents ?? null;
+  const saLean = isNum(sa?.lean) ? r2(clamp(sa.lean, -1, 1)) : null;
+  cards.push({
+    key: "STRATEGY_AGENTS", label: "Strategy agents", role: "the agents' setups on the chart", weight: W.STRATEGY_AGENTS ?? (decisionWeightedEnabled(env) ? EXTENDED_WITNESS_WEIGHTS : WITNESS_WEIGHTS).STRATEGY_AGENTS,
+    available: saLean != null, stale: false, lean: saLean, side: sideOf(saLean), decision: null, confidence: null, summary: clip(sa?.summary, 400) || null, at: null,
+    ...(sa ? { voices: { long: sa.long ?? [], short: sa.short ?? [], live: sa.live ?? null } } : {})
   });
   if (decisionWeightedEnabled(env)) {
     // Owner 2026-11-10 ("buat witness baru benar-benar independen"): each extended witness reads its own
@@ -638,7 +653,7 @@ export const COUNCIL_JSON_SCHEMA = Object.freeze({
   required: ["stance", "bias", "confidence", "entry_type", "target", "summary", "reasons", "risks", "weighed"]
 });
 
-const WITNESS_KEYS = ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY"];
+const WITNESS_KEYS = ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY", "STRATEGY_AGENTS"];
 
 /** Pure: a side's live agents with a plan the guardrails accept, the default first: [[id, { status, plan }]]. */
 export function liveAgentPlans(g) {
@@ -703,7 +718,7 @@ export function councilMessages(evidence, { learned = null } = {}) {
   const doctrineSnippet = (evidence?.context?.doctrine ? `\n\n${evidence.context.doctrine}` : "") + (learned ? `\n\n${learned}` : "");
   const system = [
     "You are the AI Decision Council of the XAUUSD system: the ONE decision for the trader, made at the close of each 15-minute bar.",
-    "Witnesses each speak from their own data: the D1, 4H, 1H and 15m War Rooms (their agents' bias as a lean from -1 bearish to +1 bullish, and the room's own decision), News Daily, the Macro War Room and the strategy engine (the multi-timeframe confluence, the key-level plan and the entry trigger). You are the only one who reads across them.",
+    "Witnesses each speak from their own data: the D1, 4H, 1H and 15m War Rooms (their agents' bias as a lean from -1 bearish to +1 bullish, and the room's own decision), News Daily, the Macro War Room and the strategy engine (the multi-timeframe confluence, the key-level plan and the entry trigger). The strategy agents are one more witness, weighted like a timeframe room: the consensus of the agents that see their own setup on the chart now (its summary names who speaks for the buy side and who for the sell side; it does not count while no agent sees a setup). You are the only one who reads across them.",
     "Decide the stance: BUY, SELL or WAIT. A BUY is possible only when long.allowed is true, a SELL only when short.allowed is true; otherwise the guardrails turn it into WAIT, so choose WAIT yourself and say which check is missing. WAIT is always allowed.",
     `The quorum guardrail is already evaluated in long.checks and short.checks: it compares quorum.bullish_share or quorum.bearish_share (the share of the witnesses' weight leaning that way) with quorum.share_needed_above. quorum.weighted_lean is the strength of the lean from -1 to +1, not the quorum; never compare it with ${QUORUM_MIN}.`,
     "context.market.calendar is the Calendar Agent: each release still inside its horizon with its actual against the forecast, the surprise in standard deviations, the rule's effect on gold (gold_direction +1 up, -1 down) and, when enough past releases are measured, the learned horizon and how often gold followed the rule. A large surprise inside its horizon outweighs a weak technical lean; a release gold has not followed reliably weighs less. Before a release (owner 2026-11-12), pre_release says how often gold drifted the consensus way in the hours before past releases of the kind and the consensus lean's strength from it (contrarian: gold drifted against it significantly, so the lean is the other way); horizon_hours_before is the learned window. The CALENDAR witness weighs the calendar only inside a release's horizon (the consensus before, the surprise after) and is out of the quorum otherwise.",
@@ -934,7 +949,22 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // The extended witnesses read their own data (owner 2026-11-10), and the session describes SESSION
   // (context: a session has no direction).
   const session = sessionAt(now);
-  const context = { regime, correlations, session, calendar: loaded?.calendar ?? null, independent: independentWitnesses(loaded, { now }) };
+  // The strategy agents (owner 2026-11-13, src/strategy-agents.mjs): each agent's own plan per side. The
+  // guardrail's plan is the default agent's; a live agent's plan may be chosen by the council, a shadow
+  // agent's is only recorded and measured. The plans read the chart and the key levels, never the quorum,
+  // so they are made first: their consensus is a witness of the quorum (owner 2026-11-13).
+  const statuses = agentStatuses(env, { records: agentRecords });
+  const thresholds = modeThresholds(env?.TRADING_MODE);
+  const scalp = thresholds.target === "nearest";
+  // The patterns the breaker holds back: their own trades here lost (a pattern family skips them).
+  const heldPatterns = suspendedPatterns(agentRecords).map((x) => `${x.agent}:${x.id}`);
+  const plansOf = (dir) => {
+    try { return agentPlans(dir, agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: planForDirection(strategy, dir, { scalp }), calibration: inputs.patternCalibration ?? null, suspendedPatterns: heldPatterns }), statuses); } catch { return {}; }
+  };
+  const plans = { long: plansOf(1), short: plansOf(-1) };
+  let consensus = null;
+  try { consensus = agentsConsensus(plans, { records: agentRecords, statuses, passes: (plan) => agentPlanPasses(plan, { target_rule: scalp ? "nearest" : "rrr", min_rrr: thresholds.min_rrr }) }); } catch { consensus = null; }
+  const context = { regime, correlations, session, calendar: loaded?.calendar ?? null, independent: independentWitnesses(loaded, { now }), strategy_agents: consensus };
   // The witness weights (owner 2026-11-11: "harusnya bobot itu dinamis sesuai dengan auto tune yang ada di
   // aether"): the set the auto-tuning activated (src/witness-tuning.mjs: replay, discovery and holdout,
   // reverse shadow), loaded by runDecisionEngine; else B-11 (source "default") or the base set ("base").
@@ -949,16 +979,7 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // MT5 fallback (owner 2026-11-11: trade as usual): the decision stands on the broker's bars while
   // TradingView is down; news and the macro series are stale, which the council should weigh.
   if (inputs?.m5Feed === "mt5_fallback") for (const g of [guards.long, guards.short]) g.cautions = [...g.cautions, MT5_FALLBACK_CAUTION];
-  // The strategy agents (owner 2026-11-13, src/strategy-agents.mjs): each agent's own plan per side. The
-  // guardrail's plan is the default agent's; a live agent's plan may be chosen by the council, a shadow
-  // agent's is only recorded and measured.
-  const statuses = agentStatuses(env, { records: agentRecords });
-  const scalp = modeThresholds(env?.TRADING_MODE).target === "nearest";
-  // The patterns the breaker holds back: their own trades here lost (a pattern family skips them).
-  const heldPatterns = suspendedPatterns(agentRecords).map((x) => `${x.agent}:${x.id}`);
-  for (const [dir, g] of [[1, guards.long], [-1, guards.short]]) {
-    try { g.plans = agentPlans(dir, agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: g.plan, calibration: inputs.patternCalibration ?? null, suspendedPatterns: heldPatterns }), statuses); } catch { g.plans = {}; }
-  }
+  guards.long.plans = plans.long; guards.short.plans = plans.short;
   // The Projection Agent's reading of the price action, for the council's choice of strategy.
   let priceAction = [];
   try { priceAction = priceActionReading(strategy?.key_levels?.patterns, inputs.patternCalibration ?? null); } catch { priceAction = []; }

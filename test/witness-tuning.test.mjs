@@ -47,13 +47,13 @@ const decision = (i, over = {}) => ({
 // The truth of the synthetic market: every BUY misses, every WAIT is right.
 const outcome = (_key, _close, stance) => (stance === "WAIT" ? "hit" : "miss");
 
-test("W1. the B-11 set is the prior; every tuned set keeps 13 witnesses inside 0.02-0.28 and sums to 1", () => {
+test("W1. the B-11 set is the prior; every tuned set keeps 14 witnesses inside 0.02-0.28 and sums to 1", () => {
   assert.deepEqual({ ...WITNESS_PRIORS }, { ...EXTENDED_WITNESS_WEIGHTS });
   assert.deepEqual(witnessWeightsProblems(EXTENDED_WITNESS_WEIGHTS), []);
-  assert.equal(WITNESS_KEYS.length, 13);
+  assert.equal(WITNESS_KEYS.length, 14);
   assert.ok(!TUNED_WITNESSES.includes("SESSION"), "the session is context only, its weight is not tuned");
   const arms = neighbourWeights(EXTENDED_WITNESS_WEIGHTS);
-  // An arm up and down per tuned witness (13 with CALENDAR since 2026-11-12), less those a bound refuses.
+  // An arm up and down per tuned witness (13: CALENDAR since 2026-11-12, STRATEGY_AGENTS since 2026-11-13), less those a bound refuses.
   assert.ok(arms.length >= 2 * TUNED_WITNESSES.length - 4 && arms.length <= 2 * TUNED_WITNESSES.length, `${arms.length} arms`);
   for (const a of arms) {
     assert.deepEqual(witnessWeightsProblems(a.weights), [], a.change);
@@ -63,8 +63,8 @@ test("W1. the B-11 set is the prior; every tuned set keeps 13 witnesses inside 0
     assert.doesNotMatch(a.change, /_/);
   }
   const up = shiftWeights(EXTENDED_WITNESS_WEIGHTS, "NEWS", 1.5);
-  assert.equal(up.NEWS, 0.1102);
-  assert.ok(up.D1 < 0.1469 && up.D1 > 0.14, "the others are rescaled");
+  assert.equal(up.NEWS, 0.0948);
+  assert.ok(up.D1 < 0.1263 && up.D1 > 0.12, "the others are rescaled");
   assert.equal(shiftWeights(EXTENDED_WITNESS_WEIGHTS, "SESSION", 1.5), null);
   assert.equal(shiftWeights({ ...EXTENDED_WITNESS_WEIGHTS, D1: 0.24, H4: 0.08 }, "D1", 1.5), null, "0.36 is out of bounds");
   assert.match(witnessWeightsProblems({ ...EXTENDED_WITNESS_WEIGHTS, D1: 0.3, H4: 0.02 }).join(), /out_of_bounds:D1/);
@@ -73,7 +73,7 @@ test("W1. the B-11 set is the prior; every tuned set keeps 13 witnesses inside 0
   assert.equal(witnessWeightsId(EXTENDED_WITNESS_WEIGHTS), witnessWeightsId({ ...EXTENDED_WITNESS_WEIGHTS }));
   assert.notEqual(witnessWeightsId(up), witnessWeightsId(EXTENDED_WITNESS_WEIGHTS));
   assert.equal(weightsChange(EXTENDED_WITNESS_WEIGHTS), "none: the B-11 weights");
-  assert.match(weightsChange(up), /^News Daily up from 7.4% to 11%/);
+  assert.match(weightsChange(up), /^News Daily up from 6\.3% to 9\.5%/);
 });
 
 test("W2. the replay recomputes the quorum check under other weights; every other check keeps its record", () => {
@@ -169,12 +169,12 @@ test("W6. the engine weighs its witnesses with the tuned set and records where i
   const loaded = { inputs: { calendar: { events: [] } }, strategy: null, global: { timeframes: [] } };
   const a = assess(loaded, { now: T0, env: ON, witnessWeights: tuned });
   assert.equal(a.witness_weights_source, "auto_tuned");
-  assert.equal(a.cards.find((c) => c.key === "NEWS").weight, 0.1102, "1.5 x 0.0735");
-  assert.equal(a.witness_weights.NEWS, 0.1102);
+  assert.equal(a.cards.find((c) => c.key === "NEWS").weight, 0.0948, "1.5 x 0.0632");
+  assert.equal(a.witness_weights.NEWS, 0.0948);
   const b = assess(loaded, { now: T0, env: ON });
   assert.equal(b.witness_weights_source, "default");
   assert.deepEqual(b.witness_weights, { ...EXTENDED_WITNESS_WEIGHTS });
-  assert.equal(b.cards.find((c) => c.key === "NEWS").weight, 0.0735, "no hand-made regime multipliers");
+  assert.equal(b.cards.find((c) => c.key === "NEWS").weight, 0.0632, "no hand-made regime multipliers");
   assert.equal(assess(loaded, { now: T0, env: {} }).witness_weights_source, "base");
   const facts = await nexusFacts({ ...ON });
   assert.deepEqual(facts["decision.witness_weights"], { ...EXTENDED_WITNESS_WEIGHTS });

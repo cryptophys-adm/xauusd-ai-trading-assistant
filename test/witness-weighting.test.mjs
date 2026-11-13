@@ -11,22 +11,24 @@ import {
   WITNESS_WEIGHTS_KV_KEY
 } from "../src/witness-weighting.mjs";
 
-test("WITNESS_PRIORS has all 13 keys and sums strictly to 1.0", () => {
-  assert.equal(WITNESS_KEYS.length, 13);
+test("WITNESS_PRIORS has all 14 keys and sums strictly to 1.0", () => {
+  assert.equal(WITNESS_KEYS.length, 14);
   const sum = Object.values(WITNESS_PRIORS).reduce((a, b) => a + b, 0);
   assert.ok(Math.abs(sum - 1.0) < 0.0001, `sum must be 1.0, got ${sum}`);
-  assert.equal(WITNESS_PRIORS.D1, 0.1469);
-  assert.equal(WITNESS_PRIORS.H4, 0.1469);
-  assert.equal(WITNESS_PRIORS.H1, 0.1469);
-  assert.equal(WITNESS_PRIORS.M15, 0.1103);
-  assert.equal(WITNESS_PRIORS.NEWS, 0.0735);
-  assert.equal(WITNESS_PRIORS.MACRO, 0.0367);
-  assert.equal(WITNESS_PRIORS.STRATEGY, 0.0735);
-  assert.equal(WITNESS_PRIORS.KEY_LEVELS, 0.0459);
-  assert.equal(WITNESS_PRIORS.REGIME, 0.0459);
-  assert.equal(WITNESS_PRIORS.TREND_TF, 0.0459);
-  assert.equal(WITNESS_PRIORS.MACRO_DRIVERS, 0.0276);
+  assert.equal(WITNESS_PRIORS.D1, 0.1263);
+  assert.equal(WITNESS_PRIORS.H4, 0.1263);
+  assert.equal(WITNESS_PRIORS.H1, 0.1263);
+  assert.equal(WITNESS_PRIORS.M15, 0.0947);
+  assert.equal(WITNESS_PRIORS.NEWS, 0.0632);
+  assert.equal(WITNESS_PRIORS.MACRO, 0.0315);
+  assert.equal(WITNESS_PRIORS.STRATEGY, 0.0632);
+  assert.equal(WITNESS_PRIORS.KEY_LEVELS, 0.0395);
+  assert.equal(WITNESS_PRIORS.REGIME, 0.0395);
+  assert.equal(WITNESS_PRIORS.TREND_TF, 0.0395);
+  assert.equal(WITNESS_PRIORS.MACRO_DRIVERS, 0.0237);
   assert.equal(WITNESS_PRIORS.SESSION, 0.02);
+  assert.equal(WITNESS_PRIORS.CALENDAR, 0.08);
+  assert.equal(WITNESS_PRIORS.STRATEGY_AGENTS, WITNESS_PRIORS.H1, "the strategy agents' consensus is on par with a timeframe room");
 });
 
 test("validateWitnessWeights enforces bounds and renormalises cleanly", () => {
@@ -123,17 +125,17 @@ test("resolveActiveWitnessWeights retrieves from dynamic env, KV, or fallback", 
 
   // 2. Direct env injection
   const dynamicEnv = {
-    DYNAMIC_WITNESS_WEIGHTS: { ...WITNESS_PRIORS, D1: 0.20, H4: 0.0938 }
+    DYNAMIC_WITNESS_WEIGHTS: { ...WITNESS_PRIORS, D1: 0.20, H4: 0.0526 }
   };
   const res2 = await resolveActiveWitnessWeights(dynamicEnv);
   assert.equal(res2.D1, 0.20);
-  assert.equal(res2.H4, 0.0938);
+  assert.equal(res2.H4, 0.0526);
 
   // 3. KV retrieval
   const mockKv = {
-    get: async (k) => (k === WITNESS_WEIGHTS_KV_KEY ? { ...WITNESS_PRIORS, D1: 0.18, H4: 0.1138 } : null)
+    get: async (k) => (k === WITNESS_WEIGHTS_KV_KEY ? { ...WITNESS_PRIORS, D1: 0.18, H4: 0.0726 } : null)
   };
   const res3 = await resolveActiveWitnessWeights({ SIGNAL_CACHE: mockKv });
   assert.equal(res3.D1, 0.18);
-  assert.equal(res3.H4, 0.1138);
+  assert.equal(res3.H4, 0.0726);
 });

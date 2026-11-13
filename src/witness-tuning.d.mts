@@ -28,3 +28,6 @@ export function decisionFromRow(row: any): Record<string, any> | null;
 export function loadDecisions(db: unknown, sinceIso: string): Promise<Record<string, any>[]>;
 export function readWitnessTuning(env: unknown, options?: { days?: number; now?: number; useCache?: boolean }): Promise<Record<string, any>>;
 export function witnessTuningReport(replay: any, options?: { now?: number }): Record<string, any>;
+export function withCalendarWeight<T>(w: T): T;
+export function withStrategyAgentsWeight<T>(w: T): T;
+export function withCurrentWitnesses<T>(w: T): T;

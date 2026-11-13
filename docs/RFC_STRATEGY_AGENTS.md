@@ -100,6 +100,21 @@ The plan learner follows each agent's own setups (one per agent and side while t
 the Signal Ledger's bars: setups, mean R per setup, fill rate, target and stop rates, per context
 (trading mode and 1H regime). `GET /api/strategy-agents` shows the registry with each agent's record.
 
+## 4a. A witness of the quorum (owner 2026-11-13)
+
+"libatkan agen strategi dalam decision council. Atur ulang pembobotannya. agen strategi ini sejajar dengan
+TF karena merupakan konsensus dari beberapa agen." The live agents' consensus is one witness of the
+Decision Engine's quorum (`STRATEGY_AGENTS`), with the weight of the D1, 4H and 1H rooms.
+
+- Who speaks: a live agent that sees its own setup on a side and whose plan passes the reward guardrail.
+  The default agent plans both sides at every bar, so it speaks only where price already holds at its zone.
+- How loud: 1, moved between 0.5 and 1.5 by the agent's own record (1 + mean R per setup) once it has 15
+  resolved setups.
+- The lean: (buy voices − sell voices) / (all voices + 1). One agent alone leans 0.5, two 0.67, three 0.75;
+  agents on both sides cancel. No voice: the witness does not count.
+- The weights: the other witnesses gave the new one its weight in proportion; the session's 0.02 and the
+  calendar's 0.08 were kept (SSOT "Decision Engine").
+
 ## 5. Steps
 
 1. Built: the registry, four agents, the record in shadow, the measurement, the council's choice among
@@ -107,6 +122,7 @@ the Signal Ledger's bars: setups, mean R per setup, fill rate, target and stop r
 2. Built: every agent live (owner 2026-11-13), with the breaker.
 3. Built: each agent's record in the council's evidence, overall and in the present market condition.
 4. Built: Nexus Strategy agents page (the registry, the records, the agent each decision took).
+   Built: the agents' consensus as a witness of the quorum, weighted like a timeframe room (section 4a).
 5. Built: the Projection Agent in the layer (eight pattern families over its 58 patterns, a record and a breaker per pattern, `price_action`).
    Built: `pattern_inside` for line patterns before they break.
    Open: a rule per pattern where a pattern's record shows the family's rule does not fit it; entering before a

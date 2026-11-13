@@ -405,6 +405,50 @@ export function agentCatalog(statuses, { suspended = [] } = {}) {
   }));
 }
 
+/**
+ * The agents' consensus (owner 2026-11-13: "libatkan agen strategi dalam decision council ... sejajar
+ * dengan TF karena merupakan konsensus dari beberapa agen"): the live agents as ONE witness of the
+ * Decision Engine's quorum, weighted like a timeframe room. An agent speaks for a side when it sees its
+ * own setup there and its plan passes the reward guardrail (the plans the council may choose from). The
+ * default agent plans both sides at every bar, so it speaks only where price already holds at its zone.
+ * A voice counts 1, moved between VOICE_MIN and VOICE_MAX by the agent's own measured record here (the
+ * plan learner's mean R per setup) once it has RECORD_MIN_SETUPS resolved setups. The lean is
+ * (buy voices - sell voices) / (all voices + SILENT): one silent voice keeps a lone agent from speaking
+ * with full force. When no agent speaks the witness does not count. No price in it.
+ */
+export const CONSENSUS_RULES = Object.freeze({ silent: 1, record_min_setups: 15, voice_min: 0.5, voice_max: 1.5 });
+
+/** Pure: how much an agent's voice counts from its own record ({ setups, mean_r }); 1 while it is not measured enough. */
+export function agentVoice(record) {
+  if (!record || !isNum(record.mean_r) || !isNum(record.setups) || record.setups < CONSENSUS_RULES.record_min_setups) return 1;
+  return r2(Math.min(CONSENSUS_RULES.voice_max, Math.max(CONSENSUS_RULES.voice_min, 1 + record.mean_r)));
+}
+
+/**
+ * Pure: the consensus of both sides' agent plans ({ long: { id: { status, plan } }, short }). `passes(plan)`
+ * is the reward guardrail on a plan, `records` the plan learner's agent records, `statuses` each agent's
+ * status. Returns { lean (null when nobody speaks), live, speaking, long: [{ id, name, voice, pattern? }],
+ * short: [...], summary }.
+ */
+export function agentsConsensus({ long = {}, short = {} } = {}, { records = null, passes = () => true, statuses = null } = {}) {
+  const recordOfAgent = (id) => (Array.isArray(records) ? records : []).find((r) => r?.agent === id) ?? null;
+  const speakers = (plans) => Object.entries(plans || {})
+    .filter(([id, a]) => a?.status === "live" && a.plan && (id === DEFAULT_AGENT ? a.plan.at_level === true : true) && passes(a.plan))
+    .map(([id, a]) => {
+      const pattern = a.plan.pattern ? (patternInfo(a.plan.pattern)?.name ?? null) : null;
+      return { id, name: STRATEGY_AGENTS.find((x) => x.id === id)?.label ?? id, voice: agentVoice(recordOfAgent(id)), ...(pattern ? { pattern } : {}) };
+    });
+  const buy = speakers(long), sell = speakers(short);
+  const sum = (list) => list.reduce((s, x) => s + x.voice, 0);
+  const L = sum(buy), S = sum(sell);
+  const live = statuses ? Object.values(statuses).filter((v) => v === "live").length : new Set([...Object.entries(long || {}), ...Object.entries(short || {})].filter(([, a]) => a?.status === "live").map(([id]) => id)).size;
+  const speaking = new Set([...buy, ...sell].map((x) => x.id)).size;
+  const names = (list) => (list.length ? list.map((x) => (x.pattern ? `${x.name} (${x.pattern})` : x.name)).join(", ") : "none");
+  if (!(L + S > 0)) return { lean: null, live, speaking: 0, long: [], short: [], summary: `None of the ${live} live strategy agents sees its setup on the chart now.` };
+  const lean = r2((L - S) / (L + S + CONSENSUS_RULES.silent));
+  return { lean, live, speaking, long: buy, short: sell, summary: `${speaking} of the ${live} live strategy agents ${speaking === 1 ? "sees its" : "see their"} setup now. Buy side: ${names(buy)}. Sell side: ${names(sell)}.` };
+}
+
 const BREAK_WORD = { 1: "broke upward", "-1": "broke downward", 0: "not broken yet" };
 /**
  * Pure: the Projection Agent's reading of the price action for the council's choice of strategy: the chart

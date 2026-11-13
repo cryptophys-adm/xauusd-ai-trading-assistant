@@ -45,7 +45,7 @@ export const WITNESS_MAX = 0.28;
 export const WITNESS_REPLAY_DAYS = 21;
 const DAY_MS = 86_400_000;
 const SERIES_KEY = "market-data:v2:series:OANDA:XAUUSD|15m";
-const LABEL = Object.freeze({ D1: "daily room", H4: "4-hour room", H1: "1-hour room", M15: "15-minute room", NEWS: "News Daily", MACRO: "Macro room", STRATEGY: "strategy engine", KEY_LEVELS: "key levels", REGIME: "regime", TREND_TF: "trend timeframes", MACRO_DRIVERS: "macro drivers", SESSION: "session", CALENDAR: "economic calendar" });
+const LABEL = Object.freeze({ D1: "daily room", H4: "4-hour room", H1: "1-hour room", M15: "15-minute room", NEWS: "News Daily", MACRO: "Macro room", STRATEGY: "strategy engine", KEY_LEVELS: "key levels", REGIME: "regime", TREND_TF: "trend timeframes", MACRO_DRIVERS: "macro drivers", SESSION: "session", CALENDAR: "economic calendar", STRATEGY_AGENTS: "strategy agents" });
 const SCORED = new Set(["hit", "miss", "neutral", "missed_opportunity"]);
 /** Recorded checks that no longer gate a decision. */
 export const NON_GATING = Object.freeze(new Set(["confirmation"]));
@@ -243,27 +243,35 @@ const parse = (s) => { try { return JSON.parse(s); } catch { return null; } };
 export const tuningFrozen = (env) => String(env?.WITNESS_TUNING_MODE ?? "").trim().toLowerCase() === "default";
 
 /**
- * Pure: a set stored before the CALENDAR witness (owner 2026-11-12) with it added at its prior: the tuned
- * witnesses give it its weight in proportion, the fixed ones (the session) keep theirs. Any other set is
- * returned as it is.
+ * Pure: a set stored before a witness existed, with that witness added at its prior: the tuned witnesses
+ * the set holds give it its weight in proportion, the fixed ones (the session) keep theirs. A stored copy
+ * of the default set from before the witness (`before`) becomes `next` (today's default, or the default
+ * of the step after), never a rescaled one. A set that already holds the witness is returned as it is.
  */
-/** The B-11 set before the CALENDAR witness: a stored copy of it is the new B-11 set, not a rescaled one. */
-const B11_BEFORE_CALENDAR = Object.freeze({ D1: 0.16, H4: 0.16, H1: 0.16, M15: 0.12, NEWS: 0.08, MACRO: 0.04, STRATEGY: 0.08, KEY_LEVELS: 0.05, REGIME: 0.05, TREND_TF: 0.05, MACRO_DRIVERS: 0.03, SESSION: 0.02 });
-export function withCalendarWeight(w) {
-  if (!w || typeof w !== "object" || "CALENDAR" in w) return w;
-  if (Object.keys(B11_BEFORE_CALENDAR).every((k) => Math.abs((Number(w[k]) || 0) - B11_BEFORE_CALENDAR[k]) < 1e-9) && Object.keys(w).length === Object.keys(B11_BEFORE_CALENDAR).length) return { ...WITNESS_PRIORS };
-  const cal = WITNESS_PRIORS.CALENDAR;
-  const tuned = TUNED_WITNESSES.filter((k) => k !== "CALENDAR");
-  const fixed = WITNESS_KEYS.filter((k) => !TUNED_WITNESSES.includes(k)).reduce((s, k) => s + (Number(w[k]) || 0), 0);
+function addWitness(w, key, prior, before, next) {
+  if (!w || typeof w !== "object" || Array.isArray(w) || key in w) return w;
+  const held = Object.keys(w);
+  if (held.length === Object.keys(before).length && Object.keys(before).every((k) => Math.abs((Number(w[k]) || 0) - before[k]) < 1e-9)) return { ...next };
+  const tuned = held.filter((k) => TUNED_WITNESSES.includes(k));
+  const fixed = held.filter((k) => !TUNED_WITNESSES.includes(k)).reduce((s, k) => s + (Number(w[k]) || 0), 0);
   const rest = tuned.reduce((s, k) => s + (Number(w[k]) || 0), 0);
   if (!(rest > 0)) return w;
-  const f = (1 - fixed - cal) / rest;
-  const out = { ...w, CALENDAR: cal };
-  for (const k of tuned) out[k] = Math.round((Number(w[k]) || 0) * f * 10_000) / 10_000;
-  const drift = Math.round((1 - WITNESS_KEYS.reduce((s, k) => s + out[k], 0)) * 10_000) / 10_000;
-  if (drift) { const top = tuned.reduce((a, b) => (out[a] >= out[b] ? a : b)); out[top] = Math.round((out[top] + drift) * 10_000) / 10_000; }
+  const f = (1 - fixed - prior) / rest;
+  const out = { ...w, [key]: prior };
+  for (const k of tuned) out[k] = r4((Number(w[k]) || 0) * f);
+  const drift = r4(1 - Object.keys(out).reduce((s, k) => s + out[k], 0));
+  if (drift) { const top = tuned.reduce((a, b) => (out[a] >= out[b] ? a : b)); out[top] = r4(out[top] + drift); }
   return out;
 }
+/** The B-11 set before the CALENDAR witness (owner 2026-11-12) and the one before STRATEGY_AGENTS (owner 2026-11-13). */
+const B11_BEFORE_CALENDAR = Object.freeze({ D1: 0.16, H4: 0.16, H1: 0.16, M15: 0.12, NEWS: 0.08, MACRO: 0.04, STRATEGY: 0.08, KEY_LEVELS: 0.05, REGIME: 0.05, TREND_TF: 0.05, MACRO_DRIVERS: 0.03, SESSION: 0.02 });
+const B11_BEFORE_AGENTS = Object.freeze({ D1: 0.1469, H4: 0.1469, H1: 0.1469, M15: 0.1103, NEWS: 0.0735, MACRO: 0.0367, STRATEGY: 0.0735, KEY_LEVELS: 0.0459, REGIME: 0.0459, TREND_TF: 0.0459, MACRO_DRIVERS: 0.0276, SESSION: 0.02, CALENDAR: 0.08 });
+/** Pure: a set stored before the CALENDAR witness, with it (0.08, its prior then). */
+export function withCalendarWeight(w) { return addWitness(w, "CALENDAR", B11_BEFORE_AGENTS.CALENDAR, B11_BEFORE_CALENDAR, B11_BEFORE_AGENTS); }
+/** Pure: a set stored before the strategy agents' witness, with it at its prior. */
+export function withStrategyAgentsWeight(w) { return addWitness(w, "STRATEGY_AGENTS", WITNESS_PRIORS.STRATEGY_AGENTS, B11_BEFORE_AGENTS, WITNESS_PRIORS); }
+/** Pure: a stored set with every witness added since it was stored. */
+export const withCurrentWitnesses = (w) => withStrategyAgentsWeight(withCalendarWeight(w));
 
 /** The stored state, or the B-11 default. Never throws. */
 export async function witnessTuningState(env, { now = Date.now(), useCache = true } = {}) {
@@ -274,9 +282,9 @@ export async function witnessTuningState(env, { now = Date.now(), useCache = tru
   try {
     await ensureSchema(env.DB);
     const row = await env.DB.prepare("SELECT active_json, previous_json, source_json, activated_at, history_json FROM witness_weighting_state WHERE id = 'engine'").first();
-    const weights = row ? withCalendarWeight(parse(row.active_json)) : null;
+    const weights = row ? withCurrentWitnesses(parse(row.active_json)) : null;
     if (weights && !witnessWeightsProblems(weights).length) {
-      const previous = row.previous_json ? withCalendarWeight(parse(row.previous_json)) : null;
+      const previous = row.previous_json ? withCurrentWitnesses(parse(row.previous_json)) : null;
       value = { weights, id: witnessWeightsId(weights), previous: previous && !witnessWeightsProblems(previous).length ? previous : null, source: parse(row.source_json), activated_at: row.activated_at, history: parse(row.history_json) || [], stored: true };
     }
   } catch { value = fallback; }
@@ -321,8 +329,9 @@ export function witnessRollbackDecision(state, replay) {
 export function witnessAutoDecision(state, replay, { now = Date.now() } = {}) {
   const last = (state?.history || []).filter((h) => h.kind === "activated" || h.kind === "rolled_back").at(-1);
   if (last && now - Date.parse(last.at) < ACTIVATION_COOLDOWN_DAYS * DAY_MS) return { action: "none", reason: `the last change was less than ${ACTIVATION_COOLDOWN_DAYS} days ago` };
-  // Ids from before the CALENDAR witness (12 witnesses) never match a 13-witness candidate; production had no
-  // stored state or history when it came (D1 witness_weighting_state empty, 2026-11-12).
+  // Ids from before a witness was added (CALENDAR 2026-11-12, STRATEGY_AGENTS 2026-11-13) never match a
+  // candidate of today; production had no stored state or history when either came (D1
+  // witness_weighting_state empty on both days).
   const rejected = new Set((state?.history || []).filter((h) => h.kind === "rolled_back").map((h) => h.from));
   const gain = (c) => (c.discovery?.accuracy ?? 0) - (c.discovery?.control_accuracy ?? 0);
   const better = (replay?.candidates || [])
