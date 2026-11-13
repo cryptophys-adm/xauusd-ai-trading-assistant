@@ -16,7 +16,9 @@
 // Status per agent: "live" (the council may choose it), "shadow" (its plan is recorded with every decision
 // and measured by the plan learner, never traded) or "off" (not computed). zone_pullback, the plan of
 // before, is always live and is the plan whenever the council names no other. The others start in shadow;
-// STRATEGY_AGENTS_LIVE and STRATEGY_AGENTS_OFF (comma-separated ids) move them. STRATEGY_AGENTS_MODE =
+// STRATEGY_AGENTS_LIVE and STRATEGY_AGENTS_OFF (comma-separated ids) move them (production: all three live
+// since 2026-11-13, owner: "live sekarang langsung implementasi"), and a breaker turns a live agent with a
+// negative measured record back to shadow by itself. STRATEGY_AGENTS_MODE =
 // "on" (default) | "off" (only zone_pullback; nothing else is computed or recorded).
 
 import { planForDirection, zoneLevels, SCALP_TARGET } from "./strategy-engine.mjs";
@@ -170,10 +172,51 @@ export function strategyAgentsMode(env) {
 }
 const idList = (v) => String(v ?? "").split(",").map((s) => s.trim().toLowerCase()).filter((s) => AGENT_IDS.includes(s));
 
-/** Pure: each agent's status. The default agent is always live; "off" wins over "live". */
-export function agentStatuses(env) {
+/**
+ * The breaker (owner 2026-11-13: live at once, "live sekarang langsung implementasi"): a live agent whose
+ * own measured record (the plan learner's, src/plan-learning.mjs agentRecords) is negative over at least
+ * MIN_SETUPS resolved setups is suspended: it goes back to shadow, where it is still recorded and
+ * measured, and it is live again as soon as its record is no longer negative. The default agent is never
+ * suspended: it is the plan when no other is chosen.
+ */
+export const AGENT_BREAKER = Object.freeze({ min_setups: 30 });
+export const AGENT_BREAKER_KEY = "strategy-agents:suspended:v1";
+
+/** Pure: the agents the breaker holds back: [{ id, setups, mean_r }] from the agents' records. */
+export function suspendedAgents(records) {
+  return (Array.isArray(records) ? records : []).filter((r) => AGENT_IDS.includes(r?.agent) && r.agent !== DEFAULT_AGENT && isNum(r.mean_r) && isNum(r.setups) && r.setups >= AGENT_BREAKER.min_setups && r.mean_r < 0)
+    .map((r) => ({ id: r.agent, setups: r.setups, mean_r: r.mean_r }));
+}
+
+/** Pure: each agent's status. The default agent is always live; "off" wins over "live"; the breaker turns a live agent with a negative record to shadow. */
+export function agentStatuses(env, { records = null } = {}) {
   const on = strategyAgentsMode(env) === "on", live = idList(env?.STRATEGY_AGENTS_LIVE), off = idList(env?.STRATEGY_AGENTS_OFF);
-  return Object.fromEntries(AGENT_IDS.map((id) => [id, id === DEFAULT_AGENT ? "live" : !on || off.includes(id) ? "off" : live.includes(id) ? "live" : "shadow"]));
+  const held = suspendedAgents(records).map((x) => x.id);
+  return Object.fromEntries(AGENT_IDS.map((id) => [id, id === DEFAULT_AGENT ? "live" : !on || off.includes(id) ? "off" : live.includes(id) && !held.includes(id) ? "live" : "shadow"]));
+}
+
+/**
+ * Tells the owner once when the breaker suspends an agent that the switches set live, or lets it back
+ * (KV keeps the last told set). Never throws.
+ */
+export async function syncAgentBreaker(env, records, { send = null, now = Date.now() } = {}) {
+  try {
+    const wanted = idList(env?.STRATEGY_AGENTS_LIVE).filter((id) => !idList(env?.STRATEGY_AGENTS_OFF).includes(id));
+    const held = strategyAgentsMode(env) === "on" ? suspendedAgents(records).filter((x) => wanted.includes(x.id)) : [];
+    const before = JSON.parse((await env?.SIGNAL_CACHE?.get?.(AGENT_BREAKER_KEY)) || "null")?.ids ?? [];
+    const ids = held.map((x) => x.id).sort();
+    if (JSON.stringify(ids) === JSON.stringify([...before].sort())) return { status: "unchanged", suspended: ids };
+    await env?.SIGNAL_CACHE?.put?.(AGENT_BREAKER_KEY, JSON.stringify({ ids, at: new Date(now).toISOString() }));
+    const label = (id) => STRATEGY_AGENTS.find((a) => a.id === id)?.label ?? id;
+    const lines = [
+      ...held.filter((x) => !before.includes(x.id)).map((x) => `${label(x.id)} is suspended: ${x.mean_r}R per setup over ${x.setups} setups. It stays measured in shadow and returns by itself when its record is no longer negative.`),
+      ...before.filter((id) => !ids.includes(id)).map((id) => `${label(id)} is live again: its record is no longer negative.`)
+    ];
+    if (lines.length && typeof send === "function") await send(["XAUUSD STRATEGY AGENTS", ...lines].join("\n"));
+    return { status: "changed", suspended: ids, told: lines.length };
+  } catch (e) {
+    return { status: "failed", error: String(e?.message ?? e).slice(0, 160) };
+  }
 }
 
 /** Pure: the agents' context of a direction from the strategy engine's output and the decision's inputs. */
@@ -206,9 +249,9 @@ export function agentPlans(dir, ctx, statuses) {
   return out;
 }
 
-/** Pure: the registry as the council and the pages read it. */
-export function agentCatalog(statuses) {
-  return STRATEGY_AGENTS.map((a) => ({ id: a.id, label: a.label, version: a.version, status: statuses?.[a.id] ?? (a.id === DEFAULT_AGENT ? "live" : "shadow"), fits: a.fits }));
+/** Pure: the registry as the council and the pages read it (`suspended`: held back by the breaker). */
+export function agentCatalog(statuses, { suspended = [] } = {}) {
+  return STRATEGY_AGENTS.map((a) => ({ id: a.id, label: a.label, version: a.version, status: statuses?.[a.id] ?? (a.id === DEFAULT_AGENT ? "live" : "shadow"), ...(suspended.includes(a.id) ? { suspended: true } : {}), fits: a.fits }));
 }
 
 /** Pure: an agent's plan as the decision record keeps it (levels and why; the notes stay in the trade). */

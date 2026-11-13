@@ -194,7 +194,7 @@ import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mj
 import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema, readExecutionReport, LEDGER_CRON, activeSetups } from "./signal-ledger.mjs";
 import { runPatternCalibration, readPatternCalibration } from "./pattern-calibration.mjs";
 import { runPlanLearning, readPlanLearning, planAdviceFor, planLearningMode } from "./plan-learning.mjs";
-import { agentStatuses, agentCatalog, strategyAgentsMode, DEFAULT_AGENT } from "./strategy-agents.mjs";
+import { agentStatuses, agentCatalog, strategyAgentsMode, suspendedAgents, syncAgentBreaker, DEFAULT_AGENT } from "./strategy-agents.mjs";
 import { runModelDataset, readModelDataset, readModelDatasetSummary, loadLabeledRows } from "./model-dataset.mjs";
 import { runModelBaseline, readBaseline, baselineStatus, prospectiveRecord } from "./model-baseline.mjs";
 import { readGbm, gbmStatus } from "./model-gbm.mjs";
@@ -2513,7 +2513,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       const records = ((state as Record<string, any> | null)?.agents ?? []) as Array<Record<string, any>>;
       return dashboardJson({
         status: "ok", mode: strategyAgentsMode(env), default_agent: DEFAULT_AGENT,
-        agents: agentCatalog(agentStatuses(env)).map((a) => ({ ...a, record: records.find((r) => r.agent === a.id) ?? null })),
+        agents: agentCatalog(agentStatuses(env, { records }), { suspended: suspendedAgents(records).map((x) => x.id) }).map((a) => ({ ...a, record: records.find((r) => r.agent === a.id) ?? null })),
         latest: d ? { decision_key: d.decision_key, bar_close: d.bar_close, stance: d.stance, chosen: d.trade ? (d.trade.strategy ?? DEFAULT_AGENT) : null, plans: d.strategy_plans ?? null } : null
       });
     } catch (error) {
@@ -2775,6 +2775,12 @@ async function runLedgerStep(env: Env): Promise<void> {
   // entries and stops on the bars that followed. Shadow only; it reads decisions and never writes one.
   const plans = await runPlanLearning(env);
   if (plans.status !== "unchanged" && plans.status !== "disabled") console.log("plan_learning", JSON.stringify(plans));
+  // The strategy agents' breaker (src/strategy-agents.mjs): the owner hears once when a live agent's
+  // measured record turns negative (it goes back to shadow) and when it is live again.
+  if (plans.status === "ok") {
+    const breaker = await syncAgentBreaker(env, ((await readPlanLearning(env)) as Record<string, any> | null)?.agents ?? [], { send: (text: string) => sendTelegram(env, text) });
+    if (breaker.status !== "unchanged") console.log("strategy_agents_breaker", JSON.stringify(breaker));
+  }
   // The custom model's dataset (owner 2026-11-13, docs/RFC_CUSTOM_MODEL.md): features and labels per decision.
   const dataset = await runModelDataset(env);
   if (dataset.status === "failed" || Number(dataset.added) || Number(dataset.labeled) || Number(dataset.wide) || Number(dataset.unavailable)) console.log("model_dataset", JSON.stringify(dataset));

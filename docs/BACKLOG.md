@@ -83,9 +83,10 @@ setup READY state that never reached the decision (#192).
 
 ## Strategy agents
 
-24. **Pluggable strategy agents, chosen by the council** (owner 2026-11-13: "kita perlu agent yang bisa dibongkar pasang menyesuaikan strategy yang tepat yang dipilih oleh council"; `docs/RFC_STRATEGY_AGENTS.md`). Step 1 is built (SSOT "Strategy agents"): the registry, four agents, the record and the measurement in shadow, the council's choice among live agents.
-    - **Owner:** how an agent becomes live, because a live agent changes what Omega trades. Either the owner's switch per agent (`STRATEGY_AGENTS_LIVE`, then a control on the page), or by itself once its measured record qualifies and off again when it no longer does (as the learned notes and the baseline model), or live at once on the demo account.
-    - **Next:** each agent's record in the council's evidence; more agents (a momentum continuation on the 5m structure, a session-open range break, a news-release fade).
+24. **Pluggable strategy agents, chosen by the council** (owner 2026-11-13: "kita perlu agent yang bisa dibongkar pasang menyesuaikan strategy yang tepat yang dipilih oleh council"; `docs/RFC_STRATEGY_AGENTS.md`). Built (SSOT "Strategy agents"): the registry, four agents, the record and the measurement, the council's choice among live agents, the Nexus page.
+    - **Live since 2026-11-13** (owner: "live sekarang langsung implementasi karena strategi lebih related dengan key level bukan decision"): all four agents, with the breaker (a negative record over 30 setups suspends an agent until it recovers) and each agent's record in the council's evidence.
+    - **Watch:** which agent the council chooses and what it earns (Nexus Strategy agents, Telegram "Strategy:" line); part of the review of item 6 (about 2026-11-19). Omega's `adaptive_volatility` may widen an agent's tight stop to 0.75 × the broker's 15m ATR: the owner's Omega setting.
+    - **Next:** more agents (a momentum continuation on the 5m structure, a session-open range break, a news-release fade).
     - **Waits for data:** the agents' records start with the first decisions after the deploy; the stored history holds no agent plans.
 
 ## Calibration in progress

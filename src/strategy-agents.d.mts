@@ -7,8 +7,12 @@ export const STRATEGY_AGENTS: ReadonlyArray<Readonly<{ id: string; version: numb
 export const AGENT_IDS: ReadonlyArray<string>;
 export function finishPlan(agent: string, dir: number, parts: Record<string, any>, ctx: Record<string, any>): Record<string, any> | null;
 export function strategyAgentsMode(env: unknown): "on" | "off";
-export function agentStatuses(env: unknown): Record<string, string>;
+export const AGENT_BREAKER: Readonly<{ min_setups: number }>;
+export const AGENT_BREAKER_KEY: string;
+export function suspendedAgents(records: unknown): Array<{ id: string; setups: number; mean_r: number }>;
+export function agentStatuses(env: unknown, options?: { records?: unknown }): Record<string, string>;
+export function syncAgentBreaker(env: unknown, records: unknown, options?: { send?: ((text: string) => Promise<unknown>) | null; now?: number }): Promise<Record<string, any>>;
 export function agentContext(input?: Record<string, any>): Record<string, any>;
 export function agentPlans(dir: number, ctx: Record<string, any>, statuses?: Record<string, string>): Record<string, { status: string; plan: Record<string, any> }>;
-export function agentCatalog(statuses?: Record<string, string>): Array<{ id: string; label: string; version: number; status: string; fits: string }>;
+export function agentCatalog(statuses?: Record<string, string>, options?: { suspended?: string[] }): Array<{ id: string; label: string; version: number; status: string; suspended?: boolean; fits: string }>;
 export function slimPlan(p: Record<string, any>): Record<string, any>;
