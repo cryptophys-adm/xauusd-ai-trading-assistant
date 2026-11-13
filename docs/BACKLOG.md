@@ -6,7 +6,7 @@ leaves this file when it is done (and enters the CHANGELOG) or when the owner dr
 only backlog: the older lists (`docs/BRIEF_HUD_AGENTS.md` §6, `docs/RFC_INDICATOR_AGENT_PLATFORM.md`
 §9 and §10) were merged here on 2026-11-07 (owner request). Item numbers are stable: a number that
 is gone was done or dropped (CHANGELOG 2026-11-09 for items 0 to 4, 8, 9, 11, 13, 16, 17 and 18;
-2026-11-12 for item 19 and the closed parts of items 5, 6, 12 and 15; 2026-11-13 for item 22). Reviewed against production D1
+2026-11-12 for item 19 and the closed parts of items 5, 6, 12 and 15; 2026-11-13 for items 5 and 22). Reviewed against production D1
 on 2026-11-12 (owner: "check backlog").
 
 ## Verified after the reopen (2026-11-09, items 0 to 4 closed)
@@ -18,9 +18,6 @@ gpt-oss-120b, about 1 % invalid openings on gemma, no 3021 rate limits), and the
 filling for the 15m and 1H rooms. What the reopen also showed was fixed the same morning: the
 three post-reopen fail-closed bars (#184, #189), the GMI duplicate alerts (#191) and the Prophet
 setup READY state that never reached the decision (#192).
-
-5. **The features of 2026-11-08 on live data: the part that waits for an event.** The calendar fetch, the 4h context series and the Telegram ledger alerts (#158) are verified: by 2026-11-12 the ledger had sent 16 entry, 16 exit, 5 closed and 1 cancelled event, each once. Still open:
-   - **Event gate (#157) and the CALENDAR witness:** the next High-impact USD release (Core PPI and PPI, 2026-11-13 13:30 UTC) must add the caution from 2 hours before to 30 minutes after it, appear as `event_risk` for the rooms' Risk Desk, and move the CALENDAR witness ("before" from 05:30 UTC, "after" with the surprise). Checks scheduled at 06:05 and 14:20 UTC.
 
 ## After the first days of the new chain
 
