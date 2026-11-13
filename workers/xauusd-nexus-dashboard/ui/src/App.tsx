@@ -11,6 +11,7 @@ import Audit from "./pages/Audit";
 import Status from "./pages/Status";
 import Aether from "./pages/Aether";
 import Omega from "./pages/Omega";
+import Model from "./pages/Model";
 
 const first = (s: string) => s.split("/").filter(Boolean)[0] ?? "";
 // A hash route (#/shadow) wins; without a hash, the path names the page (nexus.cryptophys.work/omega/ or /aether).
@@ -27,7 +28,7 @@ export default function App() {
       window.removeEventListener("popstate", on);
     };
   }, []);
-  const PAGES: Record<string, () => JSX.Element> = { shadow: Shadow, scorecards: Scorecards, performance: Performance, correlations: Correlations, calendar: Calendar, alerts: Alerts, audit: Audit, status: Status, aether: Aether, omega: Omega };
+  const PAGES: Record<string, () => JSX.Element> = { shadow: Shadow, scorecards: Scorecards, performance: Performance, correlations: Correlations, calendar: Calendar, alerts: Alerts, audit: Audit, status: Status, aether: Aether, omega: Omega, model: Model };
   const current = route in PAGES ? route : "";
   const Page = PAGES[current] ?? WarRoom;
   return <AppShell current={current}><Page /></AppShell>;

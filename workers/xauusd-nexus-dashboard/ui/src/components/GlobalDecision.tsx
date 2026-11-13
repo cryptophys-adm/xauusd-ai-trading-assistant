@@ -70,15 +70,62 @@ function Guardrails({ side, g }: { side: string; g: any }) {
   );
 }
 
+/**
+ * What the self-trained model told the council on this decision (owner 2026-11-13: "pastikan semua ada
+ * visualisasi"): its long and short chance of reaching the target first against the base rates, and its
+ * record. Without advice the model is still in shadow; the line says so and links to Model & Learning.
+ */
+function ModelAdvice({ m }: { m: any }) {
+  const pctOf = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? `${Math.round(x * 100)}%` : "—");
+  const edge = (p: unknown, base: unknown) => (typeof p === "number" && typeof base === "number" ? p - base : null);
+  if (!m) {
+    return (
+      <div className="glass-inner mt-3 flex items-center gap-2 px-3 py-1.5 text-[10.5px] text-slate-400">
+        <span className="w-16 shrink-0 text-[9.5px] uppercase tracking-[0.12em] text-slate-500">Model</span>
+        <span className="min-w-0 flex-1">not connected yet: the self-trained models run in shadow until they pass their gate · <a href="/#/model" className="text-cyan-300 hover:underline">Model &amp; Learning</a></span>
+      </div>
+    );
+  }
+  const sides = [
+    { k: "Long", p: m.long_target_first, base: m.long_base_rate, rec: m.record?.long },
+    { k: "Short", p: m.short_target_first, base: m.short_base_rate, rec: m.record?.short }
+  ];
+  return (
+    <div className="glass-inner mt-3 px-3 py-2 text-[10.5px]" aria-label="The model's advice to the council">
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <span className="text-[9.5px] uppercase tracking-[0.12em] text-slate-500">Model advice</span>
+        <Badge tone="green">connected · {m.label_set}</Badge>
+        <span className="text-slate-500">{m.model_id}{m.connected_since ? ` · since ${utc(m.connected_since)}` : ""}</span>
+      </div>
+      {sides.map((x) => {
+        const d = edge(x.p, x.base);
+        return (
+          <div key={x.k} className="flex items-center gap-2 py-0.5">
+            <span className="w-10 shrink-0 font-semibold text-slate-300">{x.k}</span>
+            <span className="mono w-12 shrink-0" style={{ color: d == null ? undefined : d > 0 ? "#34d399" : "#fb7185" }}>{pctOf(x.p)}</span>
+            <span className="min-w-0 flex-1 text-slate-500">vs base {pctOf(x.base)}{d != null ? ` (${d > 0 ? "+" : ""}${Math.round(d * 100)} pts)` : ""}{x.rec?.decisions != null ? ` · record ${x.rec.decisions} decisions, skill ${x.rec.skill ?? "—"}, AUC ${x.rec.auc ?? "—"}` : ""}</span>
+          </div>
+        );
+      })}
+      <p className="mt-1 text-[9.5px] text-slate-600">{m.question ? `Chance ${m.question}. ` : ""}Advice only: the guardrails decide what can trade.</p>
+    </div>
+  );
+}
+
 /** The right panel's cards as the council read them: sentiment, regime, macro drivers, session. */
-function MarketContext({ c }: { c: any }) {
+function MarketContext({ c, calendar }: { c: any; calendar?: any }) {
   if (!c) return null;
   const sig = (v: number | null | undefined) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v}%`);
   const s = c.sentiment, r = c.regime, m = c.macro_drivers, se = c.session, cal = c.calendar;
   const rel = cal?.released?.find((x: any) => x.release);
   const nxt = cal?.next?.[0];
+  // The CALENDAR witness's phase (owner 2026-11-13): "before" a release it leans the consensus way for the
+  // learned pre-release window; "after" it leans with the surprise for the learned reaction window.
+  const pre = nxt?.pre_release;
+  const phase = calendar?.available && calendar?.phase ? ` · witness ${calendar.phase}${calendar.lean != null ? ` ${calendar.lean > 0 ? "+" : ""}${Math.round(calendar.lean * 100)}` : ""}` : "";
+  const preText = pre && nxt ? ` · pre-release window ${pre.horizon_hours ?? nxt.horizon_hours_before}h: drifted the consensus way ${Math.round((pre.hit_rate ?? 0) * 100)}% of ${pre.samples} releases` : "";
   const rows = [
-    cal && (rel || nxt) && { k: "Calendar", v: rel ? `${rel.title}: actual ${rel.release.actual} vs ${rel.release.forecast ?? "—"} (${rel.release.surprise_z > 0 ? "+" : ""}${rel.release.surprise_z}σ) → gold ${rel.release.gold_direction > 0 ? "up" : rel.release.gold_direction < 0 ? "down" : "neutral"} · horizon ${rel.horizon_hours_after}h${rel.horizon_learned ? " (learned)" : ""}` : `next: ${nxt.title} ${String(nxt.time).slice(11, 16)} UTC` },
+    cal && (rel || nxt) && { k: "Calendar", v: rel ? `${rel.title}: actual ${rel.release.actual} vs ${rel.release.forecast ?? "—"} (${rel.release.surprise_z > 0 ? "+" : ""}${rel.release.surprise_z}σ) → gold ${rel.release.gold_direction > 0 ? "up" : rel.release.gold_direction < 0 ? "down" : "neutral"} · horizon ${rel.horizon_hours_after}h${rel.horizon_learned ? " (learned)" : ""}${phase}` : `next: ${nxt.title} ${String(nxt.time).slice(11, 16)} UTC${nxt.status ? ` (${nxt.status})` : ""}${preText}${phase}` },
     s && { k: "Sentiment", v: `${String(s.bias ?? "neutral").toLowerCase()}${s.weighted_lean != null ? ` ${s.weighted_lean > 0 ? "+" : ""}${Math.round(s.weighted_lean * 100)}` : ""} · headlines ▲${s.headlines?.bullish ?? 0} ▼${s.headlines?.bearish ?? 0} ·${s.headlines?.neutral ?? 0}${s.news_tldr ? ` · news ${String(s.news_tldr.stance).toLowerCase()}` : ""}` },
     r && { k: "Regime", v: `1H ${r.h1?.label ?? r.h1?.character ?? "—"}${r.h1?.chaos ? " (chaos)" : ""}${r.h1?.stretch_z != null ? ` · z ${r.h1.stretch_z}` : ""} · 15m ${r.m15?.character ?? "—"}${r.m15?.chaos ? " (chaos)" : ""}` },
     m && { k: "Macro 24h", v: `gold ${sig(m.change_24h_percent?.gold)} · DXY ${sig(m.change_24h_percent?.dollar)} · oil ${sig(m.change_24h_percent?.oil)}${m.gold_dollar_link ? ` · link ${m.gold_dollar_link}` : ""}` },
@@ -335,7 +382,8 @@ export default function GlobalDecision() {
             <p className="pt-0.5 text-[9.5px] text-slate-600">{e ? "Witnesses: each room, the news, the macro room and the strategy engine, with its weight in the quorum. Hover a row for its own decision and summary." : "Lean: the confidence-weighted mean of the agents' biases in that room, −100 bearish to +100 bullish. Hover a row for its note."}</p>
           </div>
 
-          {e && <MarketContext c={e.context?.market} />}
+          {e && <ModelAdvice m={e.context?.model ?? null} />}
+          {e && <MarketContext c={e.context?.market} calendar={(e.witnesses ?? []).find((w: any) => w.key === "CALENDAR")} />}
 
           {e?.trade ? (planIsNew ? <PlanLadder plan={tradePlan(e.trade, e.key_levels)} long={e.trade.side === "BUY"} minRrr={e.rules?.min_rrr ?? 1.5} /> : <p className="mt-3 text-[10.5px] text-slate-500">This {e.trade.side} confirms the live setup above; its levels stay as they were locked.</p>) : !e && s?.plan && <PlanLadder plan={s.plan} long={s.direction === "LONG"} minRrr={s.min_rrr ?? 1.5} />}
 

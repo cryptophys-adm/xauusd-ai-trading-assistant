@@ -46,6 +46,14 @@ function HeadToHeadGraph({ candidateBetter, controlBetter, candidateName, contro
   );
 }
 
+/** Which shadow arm a knowledge subject belongs to: the 1H rooms, the 15m War Room or the Decision Engine council. */
+const isCouncil = (k: any) => k?.agent === "council";
+const armOrder = (k: any) => (isCouncil(k) ? 2 : k?.chart === "15" ? 1 : 0);
+function armBadge(k: any) {
+  if (isCouncil(k)) return <Badge tone="cyan">Council · 15m</Badge>;
+  return k?.chart === "15" ? <Badge tone="purple">War Room · 15m</Badge> : <Badge tone="slate">Room · 1H</Badge>;
+}
+
 /** Aether A8: every TUNING_GRID point, running (discovery with Holm, holdout), stopped or untested. */
 function TuningGrid() {
   const { data } = usePoll(() => get("/api/tuning"), 300_000);
@@ -56,7 +64,7 @@ function TuningGrid() {
     <Panel
       title="Dynamic Parameter Tuning Grid (Statistical Validation)"
       icon={<Zap className="h-3.5 w-3.5 text-cyan-400" />}
-      right={<Badge tone="purple">Shadow Validation · Owner PR to Promote</Badge>}
+      right={<Badge tone="purple">Shadow Validation · Parameters: owner PR · Notes: live by themselves</Badge>}
     >
       <p className="mb-3 text-[12px] text-slate-400">
         Rigorous statistical parameter grid testing: Discovery &ge; {t.statistics.min_discovery_bars} bars, one-sided sign test, Holm-Bonferroni family-wise error correction per month ({t.holm_month}), followed by out-of-sample holdout validation on the newest {t.statistics.holdout_bars} closed candles.
@@ -116,6 +124,7 @@ function TuningGrid() {
                 <table className="tbl">
                   <thead>
                     <tr>
+                      <th>Arm</th>
                       <th>Note Subject</th>
                       <th>Calls (Ans/Tot)</th>
                       <th>Stance Delta</th>
@@ -126,9 +135,10 @@ function TuningGrid() {
                     </tr>
                   </thead>
                   <tbody>
-                    {c.candidates.map((k: any) => (
+                    {[...c.candidates].sort((a: any, b: any) => armOrder(a) - armOrder(b)).map((k: any) => (
                       <tr key={k.subject}>
-                        <td className="mono font-semibold text-slate-200">{k.subject}</td>
+                        <td>{armBadge(k)}</td>
+                        <td className="mono font-semibold text-slate-200" title={k.subject}>{k.agent ?? k.subject}{k.item_id ? <span className="block text-[10px] font-normal text-slate-500">{k.item_id} v{k.item_version}</span> : null}</td>
                         <td className="mono">{k.answered}/{k.calls}</td>
                         <td className="mono text-amber-200">{k.changed_stance} of {k.same_bars} bars</td>
                         <td className="mono text-[11px]">
@@ -225,7 +235,7 @@ export default function Shadow() {
       >
         <p className="text-[12px] leading-relaxed text-slate-400">
           Parallel out-of-band testing arena where candidate indicator algorithms and knowledge hypotheses run alongside the active engine (<span className="text-slate-200 font-semibold">Active Control</span>) on identical closed H1 bars.
-          The platform enforces non-parametric statistical tests (Holm-Bonferroni Sign Test) and out-of-sample holdout validation. Production promotion requires a reviewed Pull Request or autonomous Epigenetic Promotion via Aether.
+          The platform enforces non-parametric statistical tests (Holm-Bonferroni Sign Test) and out-of-sample holdout validation. Parameter candidates are promoted by a reviewed Pull Request; a knowledge note that reads better than active goes live by itself for the agents and chart it was tested on (see Model &amp; Learning) and retires by itself if it gets worse.
         </p>
 
         {/* Consumer Badges */}
