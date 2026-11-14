@@ -139,3 +139,19 @@ test("an open market reads each series once a quiet minute (the bundle reuses th
   assert.equal(seriesReads.length, SERIES.length, `series reads: ${seriesReads.length}`);
   assert.ok(perSeries.every((n) => n === 1));
 });
+
+test("a published bar's marker is read from KV once per binding, not every minute (resource audit 2026-11-14)", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: WEDNESDAY });
+  const kv = new CountingKV();
+  const ai = { async submit() { return { status: 202 }; }, async submitContext() { return { status: 202 }; }, async submitHud() { return { status: 202 }; } };
+  const env = { MARKET_DATA_CACHE: kv, TV_GATEWAY: fakeGateway(), TV_DAILY_CALL_BUDGET: "800", AI_WORKER: ai, M5_PARITY_PUBLISH: "true", M15_PARITY_PUBLISH: "true", HTF_PARITY_PUBLISH: "true", HUD_SNAPSHOT_PUBLISH: "true" };
+  await runCron(env);
+  await runCron(env);
+  t.mock.timers.setTime(WEDNESDAY + 60_000);
+  kv.reset();
+  await runCron(env);
+  const markers = kv.gets.filter((k) => /:(hud|local)-published:/.test(k));
+  // Only the H1 revision check reads its markers' content (the last closed H1 bars); no presence check reads KV.
+  assert.ok(markers.every((k) => k.includes(":60:")), markers.join(", "));
+  assert.ok(!kv.gets.includes("market-data:v2:derived-check"), "the day's derived check is known done");
+});

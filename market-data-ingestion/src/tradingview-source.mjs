@@ -479,12 +479,16 @@ const VERIFY_COUNT = { 300: 48, 900: 32, 3600: 24 };
  * Once per UTC day (from 01:00), pulls a few native bars of every derived series and
  * compares them with the derived bars on the same open times. Never writes a series.
  */
+// The day whose check is known done, per KV binding (resource audit 2026-11-14: the record was read every
+// minute to learn it was done hours ago).
+const CHECKED_DAY = new WeakMap();
 export async function verifyDerivedSeries(env, { now = Date.now() } = {}) {
   const kv = env.MARKET_DATA_CACHE;
   if (!kv) return { status: "cache_not_configured" };
   const today = new Date(now).toISOString().slice(0, 10);
+  if (new Date(now).getUTCHours() < 1 || (typeof kv === "object" && CHECKED_DAY.get(kv) === today)) return { status: "not_due" };
   const previous = await readJson(kv, DERIVED_CHECK_KEY);
-  if (previous?.date === today || new Date(now).getUTCHours() < 1) return { status: "not_due" };
+  if (previous?.date === today) { if (typeof kv === "object") CHECKED_DAY.set(kv, today); return { status: "not_due" }; }
   const specs = SERIES.filter((s) => s.derived_from);
   const budget = await reserveBudget(kv, env, specs.length, now);
   if (budget.allowed < specs.length) return { status: "daily_budget_exhausted", budget };
@@ -505,6 +509,7 @@ export async function verifyDerivedSeries(env, { now = Date.now() } = {}) {
   }
   const summary = { date: today, checked_at: new Date(now).toISOString(), status: series.every((x) => !x.error && x.mismatched === 0) ? "match" : "mismatch_or_error", series };
   await kv.put(DERIVED_CHECK_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 14 });
+  if (typeof kv === "object") CHECKED_DAY.set(kv, today);
   return summary;
 }
 
