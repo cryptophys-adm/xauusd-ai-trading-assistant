@@ -8,11 +8,12 @@
 // agent's grounding rate. The answer is stored in D1 metric_shadow_outputs beside the agent's live stance on
 // the same bar and scored on the same 15m outcome; nothing reads it but the comparison and Nexus. Promotion of
 // the format, room by room, needs the hit rate and the validity to be no worse (a later step, the owner's).
-// `METRIC_SHADOW` "off" stops it; at most METRIC_SHADOW_MAX_CALLS_PER_HOUR calls an hour (default 48).
+// `METRIC_SHADOW` "off" or the shadow kill switch (src/shadow-switch.mjs) stops it; at most METRIC_SHADOW_MAX_CALLS_PER_HOUR calls an hour (default 48).
 import { callBusModel } from "./multi-agent-bus.mjs";
 import { ROOM_STANCES } from "./agent-threads.mjs";
 import { SCORING_VERSION, scoreStance } from "./outcome-scoring.mjs";
 import { chatMessages } from "./model-text.mjs";
+import { shadowAllowed } from "./shadow-switch.mjs";
 
 export const METRIC_SHADOW_VERSION = "cryptophys.metric-shadow.v1";
 export const IMPLICATIONS = Object.freeze(["bullish", "bearish", "neutral"]);
@@ -140,6 +141,8 @@ export function metricMessages(roleLine, data, menu) {
 export async function runMetricShadow(env, { room = "M15", barTime, agents = [], dataFor, roleFor, clock = () => Date.now(), deadlineMs = 90_000 } = {}) {
   if (!metricShadowEnabled(env) || !env?.DB || !agents.length) return { status: metricShadowEnabled(env) ? "nothing_to_do" : "disabled" };
   try {
+    // The shadow kill switch (src/shadow-switch.mjs): off, no model is called.
+    if (!(await shadowAllowed(env))) return { status: "shadow_off" };
     await ensureSchema(env.DB);
     const used = Number((await env.DB.prepare("SELECT COUNT(*) AS n FROM metric_shadow_outputs WHERE created_at >= ?").bind(new Date(clock() - 3_600_000).toISOString()).first())?.n ?? 0);
     let budget = maxCallsPerHour(env) - used;
@@ -153,7 +156,7 @@ export async function runMetricShadow(env, { room = "M15", barTime, agents = [],
       const menu = metricMenu(data);
       let row = { stance: null, confidence: null, metrics: null, cited: 0, grounded: 0, status: "agent_failed", model: null, usage: null, latency: null };
       try {
-        const call = await callBusModel(env, { messages: metricMessages(roleFor(agent), data, menu), schemaName: "metric_opening", schema: METRIC_OPENING_SCHEMA, maxTokens: 500, effort: "low", deadline, clock, runState: { primaryError: null }, role: "agent" });
+        const call = await callBusModel(env, { messages: metricMessages(roleFor(agent), data, menu), schemaName: "metric_opening", schema: METRIC_OPENING_SCHEMA, maxTokens: 500, effort: "low", deadline, clock, runState: { primaryError: null }, role: "agent", meterSource: "shadow:metric_opening" });
         row = { ...row, model: call.model ?? null, usage: call.usage_tokens ?? null, latency: call.latency_ms ?? null, status: call.status === "answered" ? "invalid_output" : call.status };
         if (call.status === "answered" && !call.truncated) {
           const check = checkMetricAnswer(call.obj, menu);

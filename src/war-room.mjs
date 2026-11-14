@@ -25,6 +25,7 @@ import { matchRebuts } from "./rebut-names.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, quorumRule } from "./reputation.mjs";
 import { publishSnapshot } from "./push-hub.mjs";
 import { readAllocationState, rosterSplit } from "./agent-allocation.mjs";
+import { gateShadowTurns } from "./shadow-switch.mjs";
 import { metricShadowEnabled, runMetricShadow } from "./metric-shadow.mjs";
 import { agentReputation, sessionOf } from "./outcome-scoring.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
@@ -601,7 +602,8 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   const fullRoster = [...(desk15.available ? ["m15"] : []), "news", "technical", "risk", ...(projection?.available ? ["projection"] : []), ...hudAgentsIn("M15").filter(id => hud?.readings?.[id]?.available)];
   // Neuron allocation by reputation (src/agent-allocation.mjs): an agent in shadow in this room leaves the bus,
   // quorum and discussion, and answers in shadow on every fourth bar so its record keeps moving.
-  const allocation = rosterSplit(fullRoster, (await readAllocationState(env)).rooms?.M15, { room: "M15", barTime });
+  // Off by the shadow kill switch (src/shadow-switch.mjs): no shadow turn; the benched agents stay benched.
+  const allocation = await gateShadowTurns(env, rosterSplit(fullRoster, (await readAllocationState(env)).rooms?.M15, { room: "M15", barTime }));
   const roster = allocation.live;
   const refs = busRefs(roster);
   // Evidence status, shown once per agent (owner decision A): no agent repeats it in its text.

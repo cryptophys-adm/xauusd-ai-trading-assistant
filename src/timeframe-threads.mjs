@@ -49,6 +49,7 @@ import { H1_ROOM_LOCK_PREFIX } from "./h1-consensus.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, stuckCautions, ROOM_TIMEFRAME, quorumAllows, quorumRule } from "./reputation.mjs";
 import { agentReputation, listStuckStates } from "./outcome-scoring.mjs";
 import { readAllocationState, rosterSplit } from "./agent-allocation.mjs";
+import { gateShadowTurns } from "./shadow-switch.mjs";
 import { roomWeighting } from "./weighting.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
@@ -408,7 +409,8 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   ];
   // Neuron allocation by reputation (src/agent-allocation.mjs): an agent in shadow in this room answers beside
   // the bus on every fourth bar, never in it.
-  const allocation = rosterSplit(fullRoster, (await readAllocationState(env)).rooms?.[chart], { room: chart, barTime: ev.bar_close });
+  // Off by the shadow kill switch (src/shadow-switch.mjs): no shadow turn; the benched agents stay benched.
+  const allocation = await gateShadowTurns(env, rosterSplit(fullRoster, (await readAllocationState(env)).rooms?.[chart], { room: chart, barTime: ev.bar_close }));
   const roster = allocation.live;
   const calibration = Object.fromEntries(fullRoster.map((id) => {
     const lines = ev.hud?.readings?.[id]?.lines;

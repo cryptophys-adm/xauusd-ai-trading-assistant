@@ -272,6 +272,9 @@ export function stepRole(step) {
 
 async function runStep(env, db, base, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk, role = stepRole(base?.step), inferMetrics = null }) {
   const ts = new Date(clock()).toISOString();
+  // A benched agent's shadow answer (step "shadow:<agent>") is metered as a shadow call (src/shadow-switch.mjs).
+  const meterSource = String(base?.step ?? "").startsWith("shadow:") ? `shadow:${schemaName}` : null;
+  const source = meterSource || schemaName;
   // Room memo (src/room-memo.mjs): the same request as a stored answer has that answer. Reused with
   // ROOM_MEMO_ENABLED (after it passes this room's validation again), otherwise only counted.
   const memo = memoEligible(base) ? { kind: memoKind(base.thread_id), step: base.step, hash: await inputHash([roleModels(env, role).primary, schemaName, messages]) } : null;
@@ -280,16 +283,16 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
     const obj = parseJson(memoRow.answer_json, null);
     const again = obj && typeof obj === "object" ? validate(obj) : { valid: false };
     if (again.valid) {
-      await recordAiUsage(db, { source: schemaName, model: memoRow.model, outcome: "reused", now: clock() });
+      await recordAiUsage(db, { source, model: memoRow.model, outcome: "reused", now: clock() });
       const { body, refs } = toBody(obj);
       return writeMessage(db, { ...base, ts, model: memoRow.model, fallback_used: false, usage_tokens: 0, latency_ms: 0, status: "ok", stance: obj.stance, confidence: obj.confidence, body: { ...body, reused: true, reused_from: memoRow.message_id ?? null, input_hash: memo.hash }, refs });
     }
   }
-  if (memoRow) await recordAiUsage(db, { source: schemaName, model: memoRow.model, outcome: "memo_hit", now: clock() });
-  const stored = await runStepCall(env, db, base, { ts, messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk, role, inferMetrics, memoHash: memo?.hash ?? null });
+  if (memoRow) await recordAiUsage(db, { source, model: memoRow.model, outcome: "memo_hit", now: clock() });
+  const stored = await runStepCall(env, db, base, { ts, messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk, role, inferMetrics, meterSource, memoHash: memo?.hash ?? null });
   const msg = stored.message;
   if (memo && msg?.status === "ok" && stored.memoAnswer) {
-    if (memoRow && memoRow.stance === msg.stance && (memoRow.bias ?? null) === (stored.memoAnswer.bias ?? null)) await recordAiUsage(db, { source: schemaName, model: memoRow.model, outcome: "memo_same", now: clock() });
+    if (memoRow && memoRow.stance === msg.stance && (memoRow.bias ?? null) === (stored.memoAnswer.bias ?? null)) await recordAiUsage(db, { source, model: memoRow.model, outcome: "memo_same", now: clock() });
     await memoStore(db, { ...memo, messageId: msg.id, model: msg.model, answer: stored.memoAnswer, now: clock() });
   }
   return msg;
@@ -298,12 +301,12 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
 const cloneObj = (o) => (o && typeof o === "object" ? JSON.parse(JSON.stringify(o)) : null);
 
 /** The model call of one step and its corrections; returns the stored message and, when it may be memoised, the raw answer. */
-async function runStepCall(env, db, base, { ts, messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk, role, inferMetrics, memoHash }) {
+async function runStepCall(env, db, base, { ts, messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk, role, inferMetrics, memoHash, meterSource = null }) {
   const done = (message, memoAnswer = null) => message.then((m) => ({ message: m, memoAnswer }));
   if (!(await budgetOk())) {
     return done(writeMessage(db, { ...base, ts, status: "budget_exhausted", body: { insight: "budget exhausted" } }));
   }
-  const call = await callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, role });
+  const call = await callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, role, meterSource });
   // The answer as the model gave it, before validation normalises it in place (for the memo).
   const rawOf = new Map([[call, cloneObj(call.obj)]]);
   const meta = { model: call.model, fallback_used: call.fallback_used, usage_tokens: call.usage_tokens, latency_ms: call.latency_ms ?? null };
@@ -323,7 +326,7 @@ async function runStepCall(env, db, base, { ts, messages, schemaName, schema, ma
   if (correction && clock() < deadline && (await budgetOk())) {
     const retry = await callBusModel(env, {
       messages: [...messages, { role: "assistant", content: String(call.text ?? "") }, { role: "user", content: correction }],
-      schemaName, schema, maxTokens, effort, deadline, clock, runState, role
+      schemaName, schema, maxTokens, effort, deadline, clock, runState, role, meterSource
     });
     corrections = 1 + (retry.fallback_used ? 1 : 0);
     meta.usage_tokens = sumOrNull(meta.usage_tokens, retry.usage_tokens);
@@ -342,7 +345,7 @@ async function runStepCall(env, db, base, { ts, messages, schemaName, schema, ma
   if (validation.valid && !corrections && ROOM_THREAD.test(String(base?.thread_id ?? "")) && calibrationTalk(roomText(finalCall.obj)) && clock() < deadline && (await budgetOk())) {
     const retry = await callBusModel(env, {
       messages: [...messages, { role: "assistant", content: String(call.text ?? "") }, { role: "user", content: CALIBRATION_CORRECTION }],
-      schemaName, schema, maxTokens, effort, deadline, clock, runState, role
+      schemaName, schema, maxTokens, effort, deadline, clock, runState, role, meterSource
     });
     corrections = 1 + (retry.fallback_used ? 1 : 0);
     meta.usage_tokens = sumOrNull(meta.usage_tokens, retry.usage_tokens);
@@ -358,7 +361,7 @@ async function runStepCall(env, db, base, { ts, messages, schemaName, schema, ma
   // rejected is asked once more from the role's fallback model, within the deadline and budget.
   const roleFallback = roleModels(env, role).fallback;
   if (!validation.valid && role === "moderator" && !finalCall.fallback_used && roleFallback && roleFallback !== call.model && clock() < deadline && (await budgetOk())) {
-    const alt = await callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, role, skipPrimary: `invalid_output (${(validation.errors || []).slice(0, 4).join(", ") || "unparseable"})` });
+    const alt = await callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, role, meterSource, skipPrimary: `invalid_output (${(validation.errors || []).slice(0, 4).join(", ") || "unparseable"})` });
     if (alt.calls) corrections += 1;
     meta.usage_tokens = sumOrNull(meta.usage_tokens, alt.usage_tokens);
     if (alt.status === "answered" && !alt.truncated) {

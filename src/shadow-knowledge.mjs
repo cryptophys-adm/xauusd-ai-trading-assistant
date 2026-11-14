@@ -22,6 +22,7 @@
 import { storedPack } from "./aether-pack.mjs";
 import { promotedKeys } from "./learned-live.mjs";
 import { callBusModel } from "./multi-agent-bus.mjs";
+import { shadowAllowed } from "./shadow-switch.mjs";
 import { SCORING_VERSION, scoreStance } from "./outcome-scoring.mjs";
 import { pairedTally, holmAdjust, holmMonth, SHADOW_MIN_SAMPLE, SHADOW_SIGNIFICANCE, HOLDOUT_BARS } from "./shadow-versions.mjs";
 
@@ -130,6 +131,8 @@ export async function shadowItems(env) {
  */
 export async function runShadowCalls(env, { calls, candleKey, statementClose, messagesFor, validate, schema, schemaName = "tf_room_opening", maxTokens = 400, clock = () => Date.now(), deadlineMs = 60_000, role = "agent", toStance = (o) => o.stance } = {}) {
   if (!shadowKnowledgeEnabled(env) || !env?.DB || !calls?.length) return { status: shadowKnowledgeEnabled(env) ? "nothing_to_do" : "disabled" };
+  // The shadow kill switch (src/shadow-switch.mjs): off, no model is called.
+  if (!(await shadowAllowed(env))) return { status: "shadow_off" };
   await ensureSchema(env.DB);
   const sinceHour = new Date(clock() - 3_600_000).toISOString();
   const used = Number((await env.DB.prepare("SELECT COUNT(*) AS n FROM shadow_agent_outputs WHERE created_at >= ?").bind(sinceHour).first())?.n ?? 0);
@@ -143,7 +146,7 @@ export async function runShadowCalls(env, { calls, candleKey, statementClose, me
     out.called += 1;
     let row = { stance: null, bias: null, confidence: null, status: "agent_failed", model: null };
     try {
-      const call = await callBusModel(env, { messages: messagesFor(c.agent, c.item ? noteLine(c.item) : null), schemaName, schema, maxTokens, effort: "low", deadline, clock, runState: { primaryError: null }, role });
+      const call = await callBusModel(env, { messages: messagesFor(c.agent, c.item ? noteLine(c.item) : null), schemaName, schema, maxTokens, effort: "low", deadline, clock, runState: { primaryError: null }, role, meterSource: `shadow:${schemaName}` });
       if (call.status === "answered" && !call.truncated) {
         const v = validate(call.obj, c.agent);
         row = v.valid ? { stance: toStance(call.obj), bias: call.obj.bias ?? null, confidence: call.obj.confidence ?? null, status: "ok", model: call.model } : { ...row, status: "invalid_output", model: call.model };

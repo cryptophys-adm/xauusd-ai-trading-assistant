@@ -4,6 +4,7 @@ import { Badge, Empty, Kpi, Panel, Skeleton } from "../components/ui";
 import { C } from "../components/charts";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
+import ShadowSwitchCard from "../components/ShadowSwitchCard";
 
 // Neuron allocation (owner 2026-11-14: "perlu visualisasi yang jelas di dashboard"): what each agent costs in
 // Workers AI neurons and what it delivers (its 30-day hit rate), from GET /api/neuron-allocation.
@@ -101,6 +102,8 @@ export default function Neurons() {
         <Kpi label="Live / shadow" value={`${agents.filter((a) => a.status === "live").length} / ${agents.filter((a) => a.status !== "live").length}`} sub={`${agents.reduce((n, a) => n + (a.shadow_rooms?.length ?? 0), 0)} agent-room pairs in shadow`} color="text-emerald-300" />
         <Kpi label="Largest share" value={agents[0] ? pc(agents[0].share) : "n/a"} sub={agents[0]?.agent ?? ""} color="text-amber-300" />
       </div>
+
+      <div className="max-w-xl"><ShadowSwitchCard /></div>
 
       <Panel title="Agents" hint="Neurons from each agent's room messages, priced with its model's input/output mix of the day. Hit rate: directional calls of the last 30 days (± the number scored). Grounding: share of cited metrics found in the agent's input, measured once agents answer in metrics.">
         {!agents.length ? <Empty>No AI call recorded in the window.</Empty> : (
