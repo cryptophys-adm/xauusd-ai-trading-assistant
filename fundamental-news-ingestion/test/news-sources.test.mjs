@@ -1,7 +1,7 @@
 // News without TradingView, in shadow (owner 2026-11-14; docs/RFC_CONTENT_AGENT.md P0).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseFeed, parseGdelt, symbolsOf, similarity, compareWithTradingView, runNewsShadow, readNewsShadow, NEWS_SOURCES } from "../src/news-sources.mjs";
+import { parseFeed, parseGdelt, symbolsOf, similarity, compareWithTradingView, runNewsShadow, readNewsShadow, inBackoff, NEWS_SOURCES, BACKOFF_AFTER_FAILURES } from "../src/news-sources.mjs";
 
 class MemoryKV { constructor() { this.map = new Map(); } async get(k) { return this.map.has(k) ? this.map.get(k) : null; } async put(k, v) { this.map.set(k, v); } }
 const NOW = Date.parse("2026-11-16T14:05:00Z");
@@ -66,7 +66,7 @@ test("an hourly shadow run: relevant, de-duplicated headlines; failing sources r
   const tvArticles = [{ title: "Gold climbs as the dollar and yields slip lower", published_at: new Date(NOW - 5 * 60_000).toISOString() }];
   const r = await runNewsShadow({ OAUTH_STORE: kv }, { tvArticles, now: NOW, fetcher, sources });
   assert.equal(r.status, "ok");
-  assert.deepEqual(r.sources.down, { ok: false, status: 403, ms: r.sources.down.ms, items: 0, relevant: 0, last_hour: 0 });
+  assert.deepEqual(r.sources.down, { ok: false, status: 403, consecutive_failures: 1, ms: r.sources.down.ms, items: 0, relevant: 0, last_hour: 0 });
   assert.deepEqual([r.sources.a.items, r.sources.a.relevant, r.sources.a.last_hour], [3, 2, 1], "EUR/JPY is not relevant; the oil story is older than an hour");
   // The same RSS from two sources and GDELT's near-identical story count once.
   const last = JSON.parse(await kv.get("news:shadow:last"));
@@ -80,4 +80,36 @@ test("an hourly shadow run: relevant, de-duplicated headlines; failing sources r
   assert.deepEqual([broken.status, broken.sources.a.ok, broken.sources.a.error], ["ok", false, "boom"]);
   assert.deepEqual(await runNewsShadow({ NEWS_SHADOW_MODE: "off" }, { now: NOW, fetcher, sources }), { status: "off" });
   assert.ok(NEWS_SOURCES.length >= 5 && NEWS_SOURCES.every((s) => /^https:\/\//.test(s.url)));
+});
+
+test("GDELT: its own time limit, a 429 named as rate limited, and a backoff after failing runs in a row", async () => {
+  const gdelt = NEWS_SOURCES.find((x) => x.id === "gdelt");
+  assert.equal(gdelt.timeoutMs, 20_000, "production 2026-11-14: 17 of 17 runs past the 6-second limit");
+  assert.equal(gdelt.backoff, true);
+  assert.ok(NEWS_SOURCES.filter((x) => x.id !== "gdelt").every((x) => !x.backoff && x.timeoutMs == null), "the feeds keep the 6-second limit");
+  const at = (h) => Date.UTC(2026, 10, 16, h, 5);
+  assert.equal(inBackoff(gdelt, BACKOFF_AFTER_FAILURES - 1, at(1)), false);
+  assert.equal(inBackoff(gdelt, BACKOFF_AFTER_FAILURES, at(1)), true);
+  assert.equal(inBackoff(gdelt, BACKOFF_AFTER_FAILURES, at(6)), false, "every 6th hour it is asked again");
+  assert.equal(inBackoff({ id: "rss" }, 10, at(1)), false, "a source without backoff is always asked");
+
+  const kv = new MemoryKV();
+  const sources = [{ id: "g", kind: "gdelt", backoff: true, url: "https://g.example/doc" }];
+  let asked = 0;
+  const limited = async () => { asked += 1; return new Response("Please limit requests", { status: 429 }); };
+  let r;
+  for (let i = 0; i < BACKOFF_AFTER_FAILURES; i++) r = await runNewsShadow({ OAUTH_STORE: kv }, { now: at(1 + i % 4), fetcher: limited, sources });
+  assert.deepEqual([r.sources.g.status, r.sources.g.error, r.sources.g.consecutive_failures], [429, "rate_limited", BACKOFF_AFTER_FAILURES]);
+  assert.equal(asked, BACKOFF_AFTER_FAILURES);
+  // Backing off: not asked, the count of failures kept, the day counts it as skipped, not failed.
+  r = await runNewsShadow({ OAUTH_STORE: kv }, { now: at(4), fetcher: limited, sources });
+  assert.equal(asked, BACKOFF_AFTER_FAILURES);
+  assert.deepEqual([r.sources.g.skipped, r.sources.g.consecutive_failures], ["backoff", BACKOFF_AFTER_FAILURES]);
+  const day = JSON.parse(await kv.get("news:shadow:day:2026-11-16"));
+  assert.deepEqual([day.sources.g.failed_runs, day.sources.g.skipped_runs], [BACKOFF_AFTER_FAILURES, 1]);
+  // On the 6th hour it is asked again; an answer ends the backoff.
+  r = await runNewsShadow({ OAUTH_STORE: kv }, { now: at(6), fetcher: async () => new Response(JSON.stringify({ articles: [] })), sources });
+  assert.deepEqual([r.sources.g.ok, r.sources.g.consecutive_failures], [true, undefined]);
+  r = await runNewsShadow({ OAUTH_STORE: kv }, { now: at(7), fetcher: limited, sources });
+  assert.equal(r.sources.g.consecutive_failures, 1, "counted from zero again");
 });

@@ -138,14 +138,14 @@ function NewsShadow() {
       </p>
       <div className="table-wrap">
         <table className="tbl">
-          <thead><tr><th>Source</th><th>Status</th><th>Items</th><th>About gold, oil or the dollar</th><th>Last hour</th><th>Today ok / failed</th></tr></thead>
+          <thead><tr><th>Source</th><th>Status</th><th>Items</th><th>About gold, oil or the dollar</th><th>Last hour</th><th>Today ok / failed / skipped</th></tr></thead>
           <tbody>
             {sources.map(([id, s]) => (
               <tr key={id}>
                 <td className="mono">{id}</td>
-                <td className={s.ok ? "text-emerald-300" : "text-rose-300"}>{s.ok ? "ok" : s.error ?? (s.status ? `HTTP ${s.status}` : "failed")}</td>
+                <td className={s.ok ? "text-emerald-300" : s.skipped ? "text-amber-300" : "text-rose-300"} title={s.consecutive_failures ? `${s.consecutive_failures} runs failed in a row` : undefined}>{s.ok ? "ok" : s.skipped === "backoff" ? "backing off (asked every 6th hour)" : s.error === "rate_limited" ? "rate limited (HTTP 429)" : s.error ?? (s.status ? `HTTP ${s.status}` : "failed")}</td>
                 <td className="mono">{s.items}</td><td className="mono">{s.relevant}</td><td className="mono">{s.last_hour}</td>
-                <td className="mono">{today?.sources?.[id] ? `${today.sources[id].ok_runs} / ${today.sources[id].failed_runs}` : "—"}</td>
+                <td className="mono">{today?.sources?.[id] ? `${today.sources[id].ok_runs} / ${today.sources[id].failed_runs} / ${today.sources[id].skipped_runs ?? 0}` : "—"}</td>
               </tr>
             ))}
           </tbody>
