@@ -57,7 +57,8 @@ const WORKERS = [
   { config: "fundamental-news-ingestion/wrangler.jsonc", src: "fundamental-news-ingestion/src" },
   { config: "market-data-ingestion/wrangler.jsonc", src: "market-data-ingestion/src" },
   { config: "workers/xauusd-nexus-dashboard/wrangler.jsonc", src: "workers/xauusd-nexus-dashboard/src" },
-  { config: "workers/xauusd-omega/wrangler.jsonc", src: "workers/xauusd-omega/src" }
+  { config: "workers/xauusd-omega/wrangler.jsonc", src: "workers/xauusd-omega/src" },
+  { config: "workers/xauusd-content/wrangler.jsonc", src: "workers/xauusd-content/src" }
 ];
 const used = (code, name) => new RegExp(`\\benv\\??\\.${name}\\b|\\b${name}\\s*[:?]|["']${name}["']`).test(code);
 

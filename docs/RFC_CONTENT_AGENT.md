@@ -50,7 +50,11 @@ that reaches forex and gold is to be confirmed with a lawyer before the first po
    education from the Projection Agent's catalogue (53 chart and 10 event patterns). Chart images are
    TradingView charts with attribution, captured by Cloudflare Browser Rendering; bars the system pulled are
    never rendered for the public.
-4. **Publishing:** Instagram Graph API (a professional account; about 100 API posts per rolling 24 hours) and
+   Prepared 2026-11-14 (owner: "persiapan engine post ke Instagram/threads"): the `xauusd-content` Worker,
+   fixed Indonesian templates (no model writes public text), the daily recap Tuesday to Saturday at 22:17 UTC.
+4. **Publishing:** Threads (text posts) and Instagram (image posts; the card image is not built yet). Built
+   with publishing off (`CONTENT_PUBLISH`); every draft waits in the `ContentDesk` queue for the owner's click.
+   Meta's limits are read from its own limit endpoints at run time. Earlier plan: Instagram Graph API (a professional account; about 100 API posts per rolling 24 hours) and
    X (pay per post since February 2026). At first every post waits for the owner's click in an approval queue;
    publishing alone comes later, once the guardian's record is clean, as Aether promotes anything else.
 

@@ -1,0 +1,39 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "xauusd-content",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-10-31",
+  // The content engine (content roadmap P2, docs/RFC_CONTENT_AGENT.md; owner 2026-11-14: "persiapan engine post
+  // ke Instagram/threads"). Its own Worker so the social accounts' tokens never sit beside the trading paths.
+  // No public URL: Nexus reaches it over a Service Binding (ContentApi), the platform over ContentHealth.
+  "workers_dev": false,
+  "preview_urls": false,
+  // The only data it reads: the AI Worker's public projection (recaps after the delay, no level or account data).
+  "services": [
+    { "binding": "PROJECTION", "service": "xauusd-ai-trading-assistant", "entrypoint": "PublicProjection" }
+  ],
+  // The approval queue and the refreshed tokens: one Durable Object with SQLite storage.
+  "durable_objects": {
+    "bindings": [
+      { "name": "CONTENT_DESK", "class_name": "ContentDesk" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ContentDesk"] }
+  ],
+  // The daily recap draft, Tuesday to Saturday at 22:17 UTC (05:17 WIB): the trading day that ended 24 hours
+  // earlier, the first window the public projection's 24-hour delay has released in full.
+  "triggers": {
+    "crons": ["17 22 * * 2-6"]
+  },
+  "vars": {
+    // Nothing is published while this is "off": an approved draft waits. Turning it on is an owner PR, after
+    // the lawyer's check of POJK 6/2026 (docs/RFC_CONTENT_AGENT.md §1) and the account tokens are in place.
+    "CONTENT_PUBLISH": "off",
+    "CONTENT_CHANNELS": "threads,instagram",
+    "PUBLIC_DELAY_HOURS": "24"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

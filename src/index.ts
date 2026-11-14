@@ -2116,6 +2116,17 @@ export class OrganismDna extends WorkerEntrypoint<Env> {
   }
 }
 
+/**
+ * The content Worker's only read (content roadmap P2, docs/RFC_CONTENT_AGENT.md): the public projection's
+ * recaps of decisions older than the delay, with no level, plan or account data (src/public-projection.mjs).
+ * Read-only; it exposes nothing else of this Worker.
+ */
+export class PublicProjection extends WorkerEntrypoint<Env> {
+  async recaps(input?: { days?: number }): Promise<JsonObject> {
+    return readPublicProjection(this.env, { days: Number(input?.days) || 2 }) as Promise<JsonObject>;
+  }
+}
+
 export class OmegaHealth extends WorkerEntrypoint<Env> {
   async health(): Promise<JsonObject> {
     return omegaHealth(this.env) as Promise<JsonObject>;
