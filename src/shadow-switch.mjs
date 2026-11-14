@@ -2,7 +2,9 @@
 // membengkak"). One switch for every shadow path that calls a model:
 //   - the metric-format arm (src/metric-shadow.mjs),
 //   - the learned notes under test (src/shadow-knowledge.mjs: the 15m War Room, the 1H room, the council),
-//   - a benched agent's answer beside its room on every fourth bar (src/agent-allocation.mjs).
+//   - a benched agent's answer beside its room on every fourth bar (src/agent-allocation.mjs),
+//   - the model arena's challenger on the council and the 15m conclusion (src/model-arena.mjs), which also
+//     stops for the day at its own cap and once all shadow spend reaches 80% of this budget.
 // Off, none of them calls a model; the live rooms and the decision are untouched. A benched agent then stays
 // benched and its record stops moving until the switch is on again.
 //
@@ -56,11 +58,11 @@ export async function shadowSpendToday(db, { now = Date.now() } = {}) {
   const day = new Date(now).toISOString().slice(0, 10);
   try {
     await ensureAiUsageSchema(db);
-    const rows = (await db.prepare("SELECT source, model, SUM(calls) AS calls, SUM(prompt_tokens) AS p, SUM(completion_tokens) AS c FROM ai_usage_daily WHERE day = ? AND source >= 'shadow:' AND source < 'shadow;' GROUP BY source, model").bind(day).all()).results || [];
+    const rows = (await db.prepare("SELECT source, model, SUM(calls) AS calls, SUM(prompt_tokens) AS p, SUM(completion_tokens) AS c, SUM(cached_tokens) AS k FROM ai_usage_daily WHERE day = ? AND source >= 'shadow:' AND source < 'shadow;' GROUP BY source, model").bind(day).all()).results || [];
     const bySource = {};
     let neurons = 0, calls = 0, unpriced = 0;
     for (const r of rows) {
-      const n = neuronsOf(r.model, Number(r.p) || 0, Number(r.c) || 0);
+      const n = neuronsOf(r.model, Number(r.p) || 0, Number(r.c) || 0, Number(r.k) || 0);
       const s = bySource[r.source] || { calls: 0, neurons: 0 };
       s.calls += Number(r.calls) || 0;
       calls += Number(r.calls) || 0;
