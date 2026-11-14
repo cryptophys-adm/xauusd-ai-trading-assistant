@@ -13,6 +13,7 @@
 // nothing in a room or a decision.
 
 import { SCORING, scoreStance } from "./outcome-scoring.mjs";
+import { goldClosedAt } from "./parity-sweep.mjs";
 
 export const STRATEGY_INPUTS_VERSION = "cryptophys.strategy-inputs.v1";
 export const STRATEGY_INPUTS_DAYS = 60;
@@ -102,6 +103,9 @@ export async function captureStrategyInputs(env, { now = Date.now(), load, build
   const hourClose = Math.floor(now / 3_600_000) * 3_600_000;
   const expectedKey = `OANDA:XAUUSD:60:${hourClose - 3_600_000}`;
   if (now - hourClose < CAPTURE_AFTER_CLOSE_MS) return { status: "waiting", candle_key: expectedKey };
+  // No gold bar opened in that hour (the weekend closure): nothing to capture, so nothing is loaded
+  // (resource audit P0, 2026-11-14: the inputs were loaded at every sweep only to read "stale").
+  if (goldClosedAt(hourClose - 3_600_000)) return { status: "market_closed", candle_key: expectedKey };
   if (await env.DB.prepare("SELECT 1 AS x FROM strategy_inputs WHERE candle_key = ?").bind(expectedKey).first()) return { status: "already_captured", candle_key: expectedKey };
   const inputs = await load(env, { now });
   const lastH1 = closed(inputs?.h1Bars, now).at(-1);

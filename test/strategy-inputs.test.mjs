@@ -135,3 +135,17 @@ test("each stance's outcome is scored once its 4-hour horizon closed; old captur
   assert.equal(status.scored, 1);
   assert.equal(status.retention_days, 60);
 });
+
+test("a weekend hour is never loaded: no gold bar opened in it (resource audit 2026-11-14)", async () => {
+  resetStrategyInputsSchemaCacheForTests();
+  const env = { DB: d1() };
+  let loads = 0;
+  const load = async () => { loads += 1; return input({ h1Bars: [], m15Bars: [] }); };
+  const saturday = Date.parse("2026-11-14T12:45:00Z");
+  const r = await captureStrategyInputs(env, { now: saturday, load, build: buildStrategy });
+  assert.equal(r.status, "market_closed");
+  assert.equal(loads, 0);
+  // Sunday's first hour after the reopen (23:00 UTC in winter) is captured as usual: it is loaded.
+  await captureStrategyInputs(env, { now: Date.parse("2026-11-16T00:45:00Z"), load, build: buildStrategy });
+  assert.equal(loads, 1);
+});
