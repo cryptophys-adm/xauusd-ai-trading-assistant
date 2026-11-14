@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { pullLearnedPack, packCandidates, packProblems, shadowCandidates, packStatus, resetAetherPackSchemaCacheForTests, TUNING_GRID, MAX_CANDIDATES_PER_FAMILY } from "../src/aether-pack.mjs";
-import { CANDIDATES } from "../src/shadow-versions.mjs";
+import { CANDIDATES, latchCandidate } from "../src/shadow-versions.mjs";
 
 function d1() {
   const db = new DatabaseSync(":memory:");
@@ -47,9 +47,15 @@ test("only approved parameter items inside the reviewed TUNING_GRID become shado
     param("gmi_v12_70", 16), param("gmi_v12_70", 24, "k-param-gmi-24"), param("prophet_r37", 16), param("prophet_r37", 12, "k-param-prophet-12"),
     param("prophet_r37", 20, "k-param-prophet-20"), param("prophet_r38", 16), caution
   ]), { now: NOW });
-  assert.deepEqual(candidates.map((c) => c.id), ["gmi_v12_70@latch16", "prophet_r37@latch16"]);
+  // GMI's latch8 and latch12 stopped on 2026-11-14, so GMI runs no candidate: 16 and 24 both start.
+  assert.deepEqual(candidates.map((c) => c.id), ["gmi_v12_70@latch16", "gmi_v12_70@latch24", "prophet_r37@latch16"]);
   const reasons = Object.fromEntries(ignored.map((i) => [i.item, i.reason]));
-  assert.match(reasons["k-param-gmi-24@1"], /already runs 3 candidates/, "gmi already runs latch8 and latch12");
+  // At most 3 per family: with two GMI candidates running, only one more starts.
+  const two = [8, 12].map((v) => latchCandidate("gmi_v12_70", v, "stateMaxAge", { by: "2026-11-14", rule: "test" }));
+  const capped = packCandidates(pack([param("gmi_v12_70", 16), param("gmi_v12_70", 24, "k-param-gmi-24")]), { now: NOW, existing: two, retired: [] });
+  assert.deepEqual(capped.candidates.map((c) => c.id), ["gmi_v12_70@latch16"]);
+  assert.match(capped.ignored[0].reason, /already runs 3 candidates/);
+  assert.match(packCandidates(pack([param("gmi_v12_70", 8, "k-param-gmi-8")]), { now: NOW }).ignored[0].reason, /already runs or was stopped/, "a stopped GMI point is not restarted");
   assert.match(reasons["k-param-prophet-12@1"], /already runs or was stopped/, "a retired point is not restarted");
   assert.match(reasons["k-param-prophet-20@1"], /not in the reviewed grid/);
   assert.match(reasons["k-param-prophet_r38-16@1"], /not in TUNING_GRID/);
@@ -60,7 +66,7 @@ test("only approved parameter items inside the reviewed TUNING_GRID become shado
   assert.equal(c.origin.item_id, "k-param-gmi_v12_70-16");
   assert.equal(c.review.by, "2026-12-09", "30 days after it was first seen");
   assert.ok(MAX_CANDIDATES_PER_FAMILY === 3);
-  assert.equal(CANDIDATES.length, 3, "the hand-written candidates are unchanged");
+  assert.equal(CANDIDATES.length, 1, "the hand-written candidates are unchanged (prophet_r37@latch8; the GMI ones stopped 2026-11-14)");
   const weighting = { ...param("gmi_v12_70", 16, "k-weighting-quorum-share-0-6"), params: { family: "weighting", grid: "WEIGHTING_GRID.quorum_share", values: { quorum_share: 0.6 }, hypothesis: "h", metric: "m" } };
   const w = packCandidates(pack([weighting]), { now: NOW });
   assert.deepEqual([w.candidates.length, w.ignored.length], [0, 0], "a weighting item is activated by src/weighting.mjs, never run as a shadow version");

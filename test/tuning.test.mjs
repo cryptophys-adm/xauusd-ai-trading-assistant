@@ -147,5 +147,7 @@ test("the tuning view lists every grid point as running, stopped or untested, wi
   assert.match(t.statistics.multiple_testing, /Holm/);
   assert.match(t.use, /never a live prompt/);
   const gmi = t.families.find(f => f.family === "gmi_v12_70");
-  assert.ok(gmi.points.every(p => p.status === "untested"), "no GMI candidate was passed in this view");
+  // GMI's latch8 and latch12 stopped at their review (owner 2026-11-14): the next point is 16.
+  assert.deepEqual(gmi.points.map(p => [p.value, p.status]), [[8, "stopped"], [12, "stopped"], [16, "untested"], [24, "untested"]]);
+  assert.equal(gmi.next_untested, 16);
 });

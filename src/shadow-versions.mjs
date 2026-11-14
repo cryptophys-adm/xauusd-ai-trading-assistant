@@ -145,13 +145,11 @@ export const latchCandidate = latch;
 /** Decisive pairs (bars where exactly one of candidate and control is right) a review needs. */
 export const REVIEW_MIN_DECISIVE_PAIRS = 30;
 // P5 review (owner decision 2026-11-07): keep prophet_r37@latch8 until 30 decisive pairs or
-// 2026-12-07, then stop it unless it is significantly better; keep the GMI candidates until their
-// 200-bar sample, reviewed around 2026-11-14. prophet_r37@latch12 and prophet_r38@latch8 stopped.
+// 2026-12-07, then stop it unless it is significantly better. prophet_r37@latch12 and
+// prophet_r38@latch8 stopped then; the GMI candidates stopped at their review (owner 2026-11-14).
+// The controls keep running: they are the baseline of any candidate Aether's calibrator proposes.
 export const CANDIDATES = Object.freeze([
-  latch("prophet_r37", 8, "stateMaxAge", { by: "2026-12-07", rule: `stop unless significantly better once it has ${REVIEW_MIN_DECISIVE_PAIRS} decisive pairs or on this date` }),
-  // The latch's effect on the chain: GMI's "Prophet risk hold" (subtype 1) and mtf_state.
-  latch("gmi_v12_70", 8, "stateMaxAge", { by: "2026-11-14", rule: "review once the 200-bar minimum sample is reached" }),
-  latch("gmi_v12_70", 12, "stateMaxAge", { by: "2026-11-14", rule: "review once the 200-bar minimum sample is reached" })
+  latch("prophet_r37", 8, "stateMaxAge", { by: "2026-12-07", rule: `stop unless significantly better once it has ${REVIEW_MIN_DECISIVE_PAIRS} decisive pairs or on this date` })
 ]);
 
 /**
@@ -170,6 +168,21 @@ export const RETIRED_CANDIDATES = Object.freeze([
     change: "the ±3 structure latch expires after 8 closed H1 bars instead of 50",
     reason: "R38 takes a side only on a confirmed signal (WAIT on 489 of 492 bars), so the latch never changed its stance: nothing to test",
     result: Object.freeze({ same_bars: 492, differing_stances: 0, candidate_better: 0, control_better: 0, p_value: null, accuracy: 0.457, control_accuracy: 0.457 })
+  }),
+  // GMI review (owner 2026-11-14, "setuju"): the latch changed GMI's "Prophet risk hold" fields on 16 and
+  // 8 of 124 bars, but never its stance (GMI was WAIT on 114 of the 116 scored bars), so a candidate could
+  // never be shown better; the 300 shared bars a verdict needs were about three weeks away.
+  Object.freeze({
+    id: "gmi_v12_70@latch8", family: "gmi_v12_70", retired_on: "2026-11-14",
+    change: "the Prophet structure GMI reads expires its ±3 latch after 8 closed H1 bars instead of 50",
+    reason: "the latch changed the Prophet risk hold on 16 of 124 bars but never GMI's stance: nothing to test",
+    result: Object.freeze({ same_bars: 116, differing_stances: 0, candidate_better: 0, control_better: 0, p_value: null, accuracy: 0.44, control_accuracy: 0.44 })
+  }),
+  Object.freeze({
+    id: "gmi_v12_70@latch12", family: "gmi_v12_70", retired_on: "2026-11-14",
+    change: "the Prophet structure GMI reads expires its ±3 latch after 12 closed H1 bars instead of 50",
+    reason: "the latch changed the Prophet risk hold on 8 of 124 bars but never GMI's stance: nothing to test",
+    result: Object.freeze({ same_bars: 116, differing_stances: 0, candidate_better: 0, control_better: 0, p_value: null, accuracy: 0.44, control_accuracy: 0.44 })
   })
 ]);
 
