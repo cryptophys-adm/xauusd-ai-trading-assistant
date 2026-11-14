@@ -20,7 +20,8 @@ const upgrade = (topics) => new Request(`https://nexus.example/api/stream?topics
 const hub = (ctx) => new PushHubCore(ctx, { WebSocketPair: FakePair, upgraded: (client) => ({ status: 101, client }) });
 
 test("topics: only known ones, once", () => {
-  assert.deepEqual(Object.keys(PUSH_TOPICS), ["war-room"]);
+  assert.deepEqual(Object.keys(PUSH_TOPICS), ["war-room", "threads", "decision"]);
+  assert.deepEqual(topicsOf("https://x/api/stream?topics=threads,decision,omega-overview"), ["threads", "decision"], "account data is never a Nexus stream topic");
   assert.deepEqual(topicsOf("https://x/api/stream?topics=war-room,nope,war-room"), ["war-room"]);
   assert.deepEqual(topicsOf("https://x/api/stream"), []);
 });
@@ -38,7 +39,21 @@ test("a page gets the latest snapshot when it connects, then each new one", asyn
   assert.deepEqual(await h.publish("war-room", { status: "ok", room: { bar_time: "2026-11-13T20:00:00.000Z", phase: "debate" } }), { status: "ok", sent: 1 });
   assert.equal(server.sent.at(-1).data.room.phase, "debate");
   assert.equal(server.sent.at(-1).type, "snapshot");
-  assert.deepEqual(h.connections(), { "war-room": 1 });
+  assert.deepEqual(h.connections(), { "war-room": 1, threads: 0, decision: 0 });
+});
+
+test("ADR-0015 rest: one socket carries the rooms and the decision, each to its own subscribers", async () => {
+  const ctx = fakeCtx();
+  const h = hub(ctx);
+  await h.publish("decision", { status: "ok", engine: { stance: "WAIT" } });
+  await h.connect(upgrade("threads,decision"));
+  await h.connect(upgrade("war-room"));
+  const [market, room] = ctx.sockets;
+  assert.deepEqual(market.sent.map((m) => m.topic), ["decision"], "the stored decision on connect; no threads stored yet");
+  assert.deepEqual(await h.publish("threads", { D1: { status: "ok", thread: { chart: "D1" } }, H4: { status: "not_found" }, H1: { status: "ok", thread: { chart: "H1" } } }), { status: "ok", sent: 1 });
+  assert.equal(market.sent.at(-1).data.H1.thread.chart, "H1");
+  assert.equal(room.sent.length, 0, "a War Room page gets no market topic");
+  assert.deepEqual(h.connections(), { "war-room": 1, threads: 1, decision: 1 });
 });
 
 test("no upgrade, no known topic and an unknown topic's publish are refused", async () => {

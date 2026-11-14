@@ -217,6 +217,7 @@ import { readNeuronAllocation } from "./neuron-allocation.mjs";
 import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
 import { readShadowMode, setShadowMode, shadowModeMessage, checkShadowBudget } from "./shadow-switch.mjs";
+import { publishSnapshot } from "./push-hub.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -1031,6 +1032,8 @@ async function processH1RoomTask(env: Env, task: { candle_key: string }): Promis
   if (result.status === "complete" || result.status === "already_complete") {
     const finalized = await finalizeH1Decision(env, key);
     console.log("h1_consensus_decision", JSON.stringify({ candle_key: key, via: "h1_room", ...finalized }));
+    // ADR-0015: the concluded 1H room and the decision it feeds, to the open pages.
+    if (result.status === "complete") await publishMarket(env, { threads: true, decision: true });
   }
   // Aether A7: the shadow calls of approved notes, after the decision (a no-op when disabled).
   const shadow = await runShadowJob(result);
@@ -1917,6 +1920,41 @@ async function consumeQueue(batch: MessageBatch<QueueTask>, env: Env): Promise<v
  * meets. Deterministic, no model call. A TRIGGERED setup goes to the Signal Ledger at once (the ledger
  * keeps one per hour and none while one of the same side is open) and its alert to Telegram.
  */
+/** GET /api/conclusion/global's body: the Decision Engine's decision travels with the witnesses (rooms, news, macro, strategy). */
+async function globalConclusionBody(env: Env): Promise<JsonObject> {
+  const on = decisionEngineEnabled(env);
+  // The live setups with their locked levels and lifecycle (src/signal-ledger.mjs activeSetups).
+  const [global, engine, setups] = await Promise.all([readGlobalConclusion(env), on ? readLatestDecision(env) : Promise.resolve(null), on ? activeSetups(env) : Promise.resolve([])]);
+  return { status: "ok", global, engine, setups } as JsonObject;
+}
+
+/** GET /api/threads/timeframe?chart=…'s body for one of the 1H, 4H and D1 tabs of the Nexus right panel. */
+async function timeframeThreadBody(env: Env, chart: string): Promise<JsonObject> {
+  const thread = await readTimeframeThread(env.DB, chart, { env });
+  if (!thread) return { status: "not_found", enabled: tfThreadsEnabled(env), chart } as JsonObject;
+  // The 1H tab ends with the Reasoner's H1 decision of that bar (owner decision 2026-11-07).
+  if (chart === "H1" && thread.candle_key) thread.reasoner_decision = await reasonerDecisionOf(env, String(thread.candle_key));
+  return { status: "ok", enabled: tfThreadsEnabled(env), thread } as JsonObject;
+}
+
+/**
+ * ADR-0015 phase 1, the rest (owner 2026-11-14: "lanjut"): the open Nexus pages get the 1H/4H/D1 rooms and the
+ * global decision from the push hub as they change, instead of reading them every minute. Each snapshot is the
+ * body of the read it replaces. Never throws (a page polls as before when it fails).
+ */
+async function publishMarket(env: Env, { threads = false, decision = false }: { threads?: boolean; decision?: boolean }): Promise<void> {
+  try {
+    if (threads) {
+      const charts = ["D1", "H4", "H1"];
+      const bodies = await Promise.all(charts.map((c) => timeframeThreadBody(env, c)));
+      await publishSnapshot(env, "threads", Object.fromEntries(charts.map((c, i) => [c, bodies[i]])));
+    }
+    if (decision) await publishSnapshot(env, "decision", await globalConclusionBody(env));
+  } catch (e) {
+    console.warn("push_publish_failed", e instanceof Error ? e.message : String(e));
+  }
+}
+
 /**
  * The Decision Engine for one 15m bar (src/decision-engine.mjs): the AI council within guardrails,
  * stored once per bar; its message to Telegram and a BUY or SELL to the Signal Ledger. Never throws.
@@ -1928,7 +1966,10 @@ async function decideBar(env: Env, barClose: string | null, now = Date.now()): P
   };
   try {
     const result = barClose ? await runDecisionEngine(env, { barClose, now, ...deps }) : await runPendingDecision(env, { now, ...deps });
-    if (result.status !== "disabled" && result.status !== "already_decided" && result.status !== "too_soon" && result.status !== "market_closed") console.log("decision_engine", JSON.stringify(result));
+    const decided = result.status !== "disabled" && result.status !== "already_decided" && result.status !== "too_soon" && result.status !== "market_closed";
+    if (decided) console.log("decision_engine", JSON.stringify(result));
+    // ADR-0015: the new decision to the open pages at once.
+    if (decided) await publishMarket(env, { decision: true });
     // Aether A7 for the council (owner 2026-11-13): its shadow call with a note under test, after the decision.
     const shadow = await runShadowJob(result);
     if (shadow && shadow.status !== "nothing_to_do") console.log("shadow_knowledge", JSON.stringify({ chart: "council", ...shadow }));
@@ -2588,11 +2629,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   }
   if (url.pathname === "/api/conclusion/global") {
     try {
-      // The Decision Engine's decision travels with the witnesses (the rooms, news, macro, strategy).
-      const on = decisionEngineEnabled(env);
-      const [global, engine, setups] = await Promise.all([readGlobalConclusion(env), on ? readLatestDecision(env) : Promise.resolve(null), on ? activeSetups(env) : Promise.resolve([])]);
-      // The live setups with their locked levels and lifecycle (src/signal-ledger.mjs activeSetups).
-      return dashboardJson({ status: "ok", global, engine, setups });
+      return dashboardJson(await globalConclusionBody(env));
     } catch (error) {
       console.error("global_conclusion_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
@@ -2655,11 +2692,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     const chart = ({ "1H": "H1", "4H": "H4", D: "D1", "1D": "D1" } as Record<string, string>)[asked] ?? asked;
     if (!["H1", "H4", "D1"].includes(chart)) return dashboardJson({ status: "error", error: "chart must be H1, H4 or D1" }, 400);
     try {
-      const thread = await readTimeframeThread(env.DB, chart, { env });
-      if (!thread) return dashboardJson({ status: "not_found", enabled: tfThreadsEnabled(env), chart }, 404);
-      // The 1H tab ends with the Reasoner's H1 decision of that bar (owner decision 2026-11-07).
-      if (chart === "H1" && thread.candle_key) thread.reasoner_decision = await reasonerDecisionOf(env, String(thread.candle_key));
-      return dashboardJson({ status: "ok", enabled: tfThreadsEnabled(env), thread });
+      const body = await timeframeThreadBody(env, chart);
+      return dashboardJson(body, body.status === "ok" ? 200 : 404);
     } catch (error) {
       console.error("tf_thread_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
@@ -3114,6 +3148,8 @@ export default {
       // The H1 decision follows its room (owner decision 2026-11-07): the Reasoner runs as soon as
       // the 1H room concludes, and the sweep finalizes any bar still waiting 45 minutes after its close.
       const onRoom = async ({ chart, key, result }: { chart: string; key: string; result: Record<string, unknown> }) => {
+        // ADR-0015: a room that just concluded goes to the open pages.
+        if (result?.status === "complete") await publishMarket(env, { threads: true, decision: true });
         if (chart !== "H1" || (result?.status !== "complete" && result?.status !== "already_complete")) return;
         const finalized = await finalizeH1Decision(env, key);
         if (finalized.status !== "not_pending") console.log("h1_consensus_decision", JSON.stringify({ candle_key: key, ...finalized }));

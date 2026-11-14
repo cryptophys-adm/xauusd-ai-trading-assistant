@@ -11,7 +11,13 @@
 
 export const PUSH_HUB_NAME = "nexus";
 /** The topics a page may subscribe to, and the read whose body each topic carries. */
-export const PUSH_TOPICS = Object.freeze({ "war-room": "/api/war-room/latest" });
+export const PUSH_TOPICS = Object.freeze({
+  "war-room": "/api/war-room/latest",
+  // ADR-0015 phase 1, the rest (owner 2026-11-14: "lanjut"): the 1H/4H/D1 rooms ({ D1, H4, H1 }: each the body
+  // of /api/threads/timeframe?chart=…) and the global decision, as they conclude.
+  threads: "/api/threads/timeframe",
+  decision: "/api/conclusion/global"
+});
 const MAX_SNAPSHOT_BYTES = 512 * 1024;
 const storageKey = (topic) => `topic:${topic}`;
 

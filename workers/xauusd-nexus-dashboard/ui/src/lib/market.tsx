@@ -1,6 +1,11 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { get } from "./api";
 import { usePoll } from "./usePoll";
+import { usePushMany } from "./push";
+
+/** While the push hub delivers the rooms and the decision, their read is a fallback every 5 minutes (ADR-0015). */
+const POLL_LIVE_MS = 300_000;
+const POLL_MS = 60_000;
 
 /** Timeframe Thread keys of /api/threads/timeframe. */
 export const TF_CHARTS = ["D1", "H4", "H1"] as const;
@@ -24,21 +29,41 @@ type Ctx = {
 const MarketContext = createContext<Ctx>({ threads: {}, news: null, m5: null, global: null, strategy: null, engine: null, setups: [], loading: true, error: null });
 
 /**
- * The 1H, 4H and D1 Threads, News Daily, the 5m context and the Global Conclusion, refreshed every 60 s and shared by
+ * The 1H, 4H and D1 Threads, News Daily, the 5m context and the Global Conclusion (the rooms and the conclusion pushed
+ * as they change, ADR-0015), shared by
  * the center tabs and the right-hand assistant panel, so each is fetched once per refresh.
  */
 export function MarketProvider({ children }: { children: ReactNode }) {
-  const poll = usePoll(async () => {
-    const [d1, h4, h1, news, m5, glob] = await Promise.all([
+  // ADR-0015 phase 1: the rooms and the global decision come from the push hub as they conclude; their read
+  // stays every 60 s until the hub has delivered both, then runs every 5 minutes as a fallback.
+  const push = usePushMany(["threads", "decision"]);
+  const slow = usePoll(async () => {
+    const [d1, h4, h1, glob] = await Promise.all([
       ...TF_CHARTS.map((c) => get(`/api/threads/timeframe?chart=${c}`).catch(() => null)),
-      get("/api/news/daily").catch(() => null),
-      get("/api/m5-context").catch(() => null),
       get("/api/conclusion/global").catch(() => null),
     ]);
-    return { threads: { D1: d1?.thread ?? null, H4: h4?.thread ?? null, H1: h1?.thread ?? null }, news: news?.daily ?? null, m5: m5?.context ?? null, global: glob?.global ?? null, strategy: glob?.global?.strategy ?? null, engine: glob?.engine ?? null, setups: Array.isArray(glob?.setups) ? glob.setups : [] };
-  }, 60_000);
-  const v = poll.data as any;
-  const value: Ctx = { threads: v?.threads ?? {}, news: v?.news ?? null, m5: v?.m5 ?? null, global: v?.global ?? null, strategy: v?.strategy ?? null, engine: v?.engine ?? null, setups: v?.setups ?? [], loading: poll.loading && !v, error: poll.error };
+    return { threads: { D1: d1, H4: h4, H1: h1 }, decision: glob };
+  }, push.live ? POLL_LIVE_MS : POLL_MS, [push.live]);
+  // News Daily and the 5m context are not pushed yet: every 60 s, as before.
+  const fast = usePoll(async () => {
+    const [news, m5] = await Promise.all([get("/api/news/daily").catch(() => null), get("/api/m5-context").catch(() => null)]);
+    return { news: news?.daily ?? null, m5: m5?.context ?? null };
+  }, POLL_MS);
+  // The newest arrival of each, read or pushed, is shown.
+  const [threadsBody, setThreadsBody] = useState<any>(null);
+  const [decisionBody, setDecisionBody] = useState<any>(null);
+  useEffect(() => { const d = slow.data as any; if (d) { setThreadsBody(d.threads); setDecisionBody(d.decision); } }, [slow.data]);
+  useEffect(() => { if (push.data.threads) setThreadsBody(push.data.threads); }, [push.data.threads]);
+  useEffect(() => { if (push.data.decision) setDecisionBody(push.data.decision); }, [push.data.decision]);
+  const f = fast.data as any;
+  const glob = decisionBody;
+  const value: Ctx = {
+    threads: { D1: threadsBody?.D1?.thread ?? null, H4: threadsBody?.H4?.thread ?? null, H1: threadsBody?.H1?.thread ?? null },
+    news: f?.news ?? null, m5: f?.m5 ?? null,
+    global: glob?.global ?? null, strategy: glob?.global?.strategy ?? null, engine: glob?.engine ?? null, setups: Array.isArray(glob?.setups) ? glob.setups : [],
+    loading: (slow.loading && !threadsBody && !decisionBody) || (fast.loading && !f),
+    error: slow.error ?? fast.error,
+  };
   return <MarketContext.Provider value={value}>{children}</MarketContext.Provider>;
 }
 
