@@ -217,7 +217,7 @@ import { readNeuronAllocation } from "./neuron-allocation.mjs";
 import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
 import { readShadowMode, setShadowMode, shadowModeMessage, checkShadowBudget } from "./shadow-switch.mjs";
-import { publishSnapshot } from "./push-hub.mjs";
+import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -2111,10 +2111,10 @@ export class OmegaHealth extends WorkerEntrypoint<Env> {
   }
 }
 
-export class OmegaGateway extends WorkerEntrypoint<Env> {
-  async overview(): Promise<JsonObject> {
-    const ea = (await omegaOverview(this.env)) as Record<string, any>;
-    const broker = (await brokerOverview(this.env)) as Record<string, any>;
+/** The Omega overview (EA and broker, their deals merged): GET /omega/api/overview's body without the viewer. */
+async function omegaOverviewBody(env: Env): Promise<JsonObject> {
+    const ea = (await omegaOverview(env)) as Record<string, any>;
+    const broker = (await brokerOverview(env)) as Record<string, any>;
     const eaDeals = Array.isArray(ea?.deals) ? ea.deals : [];
     const bridgeDeals = Array.isArray(broker?.bridge?.deals) ? broker.bridge.deals : [];
     const dealsMap = new Map();
@@ -2128,6 +2128,25 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
       (a: any, b: any) => (Number(b.closed_ms) || 0) - (Number(a.closed_ms) || 0)
     );
     return { ...ea, deals: combinedDeals, broker } as JsonObject;
+}
+
+/**
+ * ADR-0015 phase 1, the rest (owner 2026-11-14: "lanjut"): after a bridge sync, the Omega overview goes to the
+ * open Omega pages through the push hub, computed once for all of them and only while one listens (it reads
+ * the deals, the signal and the broker state). Replaces the page's 0.5-second overview stream. Never throws.
+ */
+async function publishOmegaOverview(env: Env): Promise<void> {
+  try {
+    if (!(await hubSubscribers(env, "omega-overview"))) return;
+    await publishSnapshot(env, "omega-overview", await omegaOverviewBody(env));
+  } catch (e) {
+    console.warn("omega_push_failed", e instanceof Error ? e.message : String(e));
+  }
+}
+
+export class OmegaGateway extends WorkerEntrypoint<Env> {
+  async overview(): Promise<JsonObject> {
+    return omegaOverviewBody(this.env);
   }
   async deals(options: { limit?: number } = {}): Promise<JsonObject> {
     return { deals: await listDeals(this.env, { limit: options?.limit ?? 200 }) } as JsonObject;
@@ -2148,7 +2167,10 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     return bridgeKey(this.env) as Promise<JsonObject | null>;
   }
   async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown; corpusMacro?: unknown; calendar?: unknown }): Promise<JsonObject> {
-    return bridgeSync(this.env, input ?? {}) as Promise<JsonObject>;
+    const result = await bridgeSync(this.env, input ?? {}) as JsonObject;
+    // The bridge gets its answer at once; the open Omega pages get the new state after it.
+    if (result?.ok !== false) this.ctx.waitUntil(publishOmegaOverview(this.env));
+    return result;
   }
   /** A person sets the trading mode (owner 2026-11-13); the owner hears of each change on Telegram. */
   async setTradingMode(input: { mode?: string; actor?: string }): Promise<JsonObject> {

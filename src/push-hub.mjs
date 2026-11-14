@@ -16,3 +16,10 @@ export async function publishSnapshot(env, topic, data) {
   if (!hub) return { status: "disabled" };
   try { return await hub.publish(topic, data); } catch (e) { return { status: "failed", error: String(e?.message ?? e).slice(0, 160) }; }
 }
+
+/** How many pages listen to a topic (0 without the binding or on failure): a costly snapshot is made only then. */
+export async function hubSubscribers(env, topic) {
+  const hub = pushHubOf(env);
+  if (!hub || typeof hub.subscribers !== "function") return 0;
+  try { return Number(await hub.subscribers(topic)) || 0; } catch { return 0; }
+}

@@ -16,15 +16,31 @@ export const PUSH_TOPICS = Object.freeze({
   // ADR-0015 phase 1, the rest (owner 2026-11-14: "lanjut"): the 1H/4H/D1 rooms ({ D1, H4, H1 }: each the body
   // of /api/threads/timeframe?chart=…) and the global decision, as they conclude.
   threads: "/api/threads/timeframe",
-  decision: "/api/conclusion/global"
+  decision: "/api/conclusion/global",
+  // The Omega overview (account data): subscribed only through Omega's own route (/omega/api/push), which
+  // checks the person's Access identity like /omega/api/overview; never through Nexus' /api/stream.
+  "omega-overview": "/omega/api/overview"
 });
+/** The topics Nexus' own /api/stream may subscribe to (behind the edge Access sign-in only). */
+export const NEXUS_STREAM_TOPICS = Object.freeze(["war-room", "threads", "decision"]);
+/** A topic whose stored snapshot is sent on connect only while fresh (ms); others always. */
+export const FRESH_ON_CONNECT_MS = Object.freeze({ "omega-overview": 60_000 });
 const MAX_SNAPSHOT_BYTES = 512 * 1024;
 const storageKey = (topic) => `topic:${topic}`;
 
-/** Pure: the subscribed topics of a stream request (`?topics=war-room`), the known ones only. */
-export function topicsOf(url) {
+/** Pure: the subscribed topics of a stream request (`?topics=war-room`), the known ones only (or `allowed`). */
+export function topicsOf(url, allowed = Object.keys(PUSH_TOPICS)) {
   const raw = String(new URL(url).searchParams.get("topics") || "");
-  return [...new Set(raw.split(",").map((t) => t.trim()).filter((t) => Object.hasOwn(PUSH_TOPICS, t)))];
+  return [...new Set(raw.split(",").map((t) => t.trim()).filter((t) => Object.hasOwn(PUSH_TOPICS, t) && allowed.includes(t)))];
+}
+
+/** Pure: a Nexus /api/stream request with its topics limited to NEXUS_STREAM_TOPICS (null when none is left). */
+export function nexusStreamRequest(request) {
+  const topics = topicsOf(request.url, NEXUS_STREAM_TOPICS);
+  if (!topics.length) return null;
+  const url = new URL(request.url);
+  url.searchParams.set("topics", topics.join(","));
+  return new Request(url.toString(), request);
 }
 
 /** Pure: the message a page receives for a topic. */
@@ -37,8 +53,9 @@ export function pushMessage(topic, entry) {
  * `ctx` (acceptWebSocket, getWebSockets, storage) and a fake WebSocketPair.
  */
 export class PushHubCore {
-  constructor(ctx, { WebSocketPair: Pair = globalThis.WebSocketPair, upgraded = (client) => new Response(null, { status: 101, webSocket: client }) } = {}) {
+  constructor(ctx, { WebSocketPair: Pair = globalThis.WebSocketPair, upgraded = (client) => new Response(null, { status: 101, webSocket: client }), now = () => Date.now() } = {}) {
     this.ctx = ctx;
+    this.now = now;
     this.Pair = Pair;
     this.upgraded = upgraded;
   }
@@ -53,6 +70,9 @@ export class PushHubCore {
     this.ctx.acceptWebSocket(server, topics);
     for (const topic of topics) {
       const entry = await this.ctx.storage.get(storageKey(topic));
+      // A topic with a freshness bound (the Omega overview) is not replayed once stale: the page reads it.
+      const maxAge = FRESH_ON_CONNECT_MS[topic];
+      if (entry && maxAge && !(Date.parse(entry.at) >= this.now() - maxAge)) continue;
       if (entry) { try { server.send(pushMessage(topic, entry)); } catch { /* the page polls */ } }
     }
     return this.upgraded(client);
@@ -70,6 +90,11 @@ export class PushHubCore {
       try { ws.send(text); sent += 1; } catch { /* a closing socket */ }
     }
     return { status: "ok", sent };
+  }
+
+  /** How many pages listen to one topic (a cell computes a costly snapshot only when someone listens). */
+  subscribers(topic) {
+    return Object.hasOwn(PUSH_TOPICS, topic) ? this.ctx.getWebSockets(topic).length : 0;
   }
 
   /** How many pages are connected, per topic. */

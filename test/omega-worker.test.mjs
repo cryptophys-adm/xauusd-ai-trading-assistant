@@ -31,10 +31,10 @@ function omega() {
     setControl: async (input) => { calls.push(input); return { ok: true, control: { mode: input.mode } }; }
   };
 }
-const req = (path, { token, method = "GET", body, origin = "https://omega.cryptophys.work", type = "application/json" } = {}) =>
+const req = (path, { token, method = "GET", body, origin = "https://omega.cryptophys.work", type = "application/json", headers = {} } = {}) =>
   new Request(`https://omega.cryptophys.work${path}`, {
     method, body: body == null ? undefined : JSON.stringify(body),
-    headers: { ...(token ? { "cf-access-jwt-assertion": token } : {}), ...(origin ? { origin } : {}), ...(body != null ? { "content-type": type } : {}) }
+    headers: { ...(token ? { "cf-access-jwt-assertion": token } : {}), ...(origin ? { origin } : {}), ...(body != null ? { "content-type": type } : {}), ...headers }
   });
 
 test("the Access JWT: signature, audience, issuer and expiry; a person or a service token", async () => {
@@ -259,6 +259,22 @@ test("the shadow kill switch (owner 2026-11-14): read when signed in; changed by
   assert.equal((await handle(req("/api/shadow-mode", { token: await jwt({ common_name: "ci.access" }), method: "POST", body: { mode: "on", reason: "x" } }), env, opts)).status, 403, "a service token never changes it");
   assert.equal((await handle(req("/api/shadow-mode", { token: person, method: "DELETE" }), env, opts)).status, 405);
   assert.equal(calls.length, 1);
+});
+
+test("ADR-0015: the overview push goes through Omega's identity check to the hub, for this one topic", async () => {
+  resetKeyCacheForTests();
+  const forwarded = [];
+  const PUSH_HUB = { getByName: (name) => ({ fetch: async (req) => { forwarded.push({ name, url: req.url, upgrade: req.headers.get("upgrade") }); return new Response("switching", { status: 200 }); } }) };
+  const env = { ...ENV_BASE, OMEGA: omega(), PUSH_HUB };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const person = await jwt({ email: "Owner@Example.com" });
+  const ws = (token, extra = {}) => handle(req("/api/push?topics=war-room", { token, headers: { upgrade: "websocket" }, ...extra }), env, opts);
+  assert.equal((await ws(person)).status, 200);
+  assert.deepEqual([forwarded[0].name, new URL(forwarded[0].url).pathname, new URL(forwarded[0].url).searchParams.get("topics"), forwarded[0].upgrade], ["nexus", "/api/stream", "omega-overview", "websocket"]);
+  assert.equal((await handle(req("/api/push"), env, opts)).status, 403, "no JWT, nothing");
+  assert.equal((await handle(req("/api/push", { token: person }), env, opts)).status, 426, "a WebSocket only");
+  assert.equal((await handle(req("/api/push", { token: person, headers: { upgrade: "websocket" } }), { ...env, PUSH_HUB: undefined }, opts)).status, 503);
+  assert.equal(forwarded.length, 1);
 });
 
 test("the trading mode changes only by a person's same-origin POST (owner 2026-11-13), never a service token or a GET", async () => {

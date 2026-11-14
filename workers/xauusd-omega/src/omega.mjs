@@ -178,6 +178,17 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       try { return json({ ...(await env.OMEGA.overview()), viewer: { subject: identity.subject, type: identity.type, can_control: canControl } }); }
       catch (error) { console.error("omega_overview_failed", String(error?.message ?? error)); return json({ error: "overview_unavailable" }, 502); }
     }
+    // ADR-0015 phase 1 (owner 2026-11-14: "lanjut"): the overview pushed after each bridge sync, through the
+    // Nexus push hub (cross-script binding PUSH_HUB), to identities this Worker verified above, like
+    // GET /api/overview. The hub sends only this topic here; Nexus' own /api/stream never carries it.
+    if (route === "GET /api/push") {
+      if (!env.PUSH_HUB || typeof env.PUSH_HUB.getByName !== "function") return json({ error: "push_hub_not_configured" }, 503);
+      if (String(request.headers.get("upgrade") || "").toLowerCase() !== "websocket") return json({ error: "expected_websocket" }, 426);
+      const target = new URL(request.url);
+      target.pathname = "/api/stream";
+      target.search = "?topics=omega-overview";
+      return env.PUSH_HUB.getByName("nexus").fetch(new Request(target.toString(), request));
+    }
     if (route === "GET /api/stream") {
       const intervalMs = Math.max(250, Math.min(2000, Number(url.searchParams.get("interval_ms") || "500") || 500));
       const maxTicks = Math.max(1, Math.min(40, Number(url.searchParams.get("max_ticks") || "30") || 30));
@@ -317,7 +328,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (!Number.isFinite(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
       return rpc(() => env.OMEGA.closePosition({ ticket, reason: r.body?.reason, actor: identity.subject }), "close_position_failed");
     }
-    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode", "/api/shadow-mode"].includes(path)) return json({ error: "method_not_allowed" }, 405);
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode", "/api/shadow-mode", "/api/push"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 
