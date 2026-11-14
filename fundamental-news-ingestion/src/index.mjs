@@ -1,4 +1,5 @@
 import { countingFetch, readUsage, recordUsage, usageTally, chartReserve, readToday, PROVIDER_DAILY_LIMIT } from "./provider-usage.mjs";
+import { runNewsShadow, readNewsShadow } from "./news-sources.mjs";
 import { runOhlcvRequests, runEconomicCalendar } from "./tv-gateway.mjs";
 
 const JSON_HEADERS = {
@@ -1083,8 +1084,8 @@ async function buildHealth(env) {
   const symbols = parseCsv(env.TV_MCP_SYMBOLS, DEFAULT_SYMBOLS);
   // Every KV read at once: the Drift Detector gives /health 5 seconds, and sequential reads on a cold
   // isolate took longer once (2026-11-13 02:00 UTC).
-  const [token, providerCooldown, lastScheduledPull, providerCalls] = await Promise.all([
-    getStoredToken(env), readQuotaCooldown(env), readLastScheduledPull(env), readUsage(env)
+  const [token, providerCooldown, lastScheduledPull, providerCalls, newsShadow] = await Promise.all([
+    getStoredToken(env), readQuotaCooldown(env), readLastScheduledPull(env), readUsage(env), readNewsShadow(env)
   ]);
   const tokenExpiresAt = Number.parseInt(String(token?.expires_at || ""), 10);
   const hasUsableAccessToken = Boolean(asString(token?.access_token)) && (!Number.isFinite(tokenExpiresAt) || tokenExpiresAt > nowSeconds());
@@ -1118,6 +1119,8 @@ async function buildHealth(env) {
     // The account's daily limit and the chart's reserve right now (src/provider-usage.mjs chartReserve):
     // whether a news pull would be held back for the gold chart (owner 2026-11-14, shown in Nexus Status).
     provider_daily_limit: parsePositiveInt(env.TV_PROVIDER_DAILY_LIMIT, PROVIDER_DAILY_LIMIT),
+    // News without TradingView, in shadow (src/news-sources.mjs): the last run per source and today's totals.
+    news_shadow: newsShadow,
     chart_reserve: providerCalls?.today ? { ...chartReserve(providerCalls.today, { wanted: symbols.length, limit: parsePositiveInt(env.TV_PROVIDER_DAILY_LIMIT, PROVIDER_DAILY_LIMIT) }), enabled: asString(env.TV_NEWS_RESERVE).trim().toLowerCase() !== "off" } : null
   };
 }
@@ -1403,6 +1406,8 @@ export default {
       if (env.OAUTH_STORE) {
         await env.OAUTH_STORE.put(LAST_SCHEDULED_PULL_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
       }
+      // News without TradingView, in shadow (src/news-sources.mjs): compared with this pull's headlines.
+      ctx.waitUntil(runNewsShadow(env, { tvArticles: articles }).then((r) => console.log("news_shadow", JSON.stringify({ status: r.status, shadow_recent: r.shadow_recent, tv_recent: r.tv_recent, overlap: r.overlap, lead_minutes: r.lead_minutes }))).catch(() => {}));
       const message = JSON.stringify(summary);
       if (status === "ok") console.log("scheduled_news_ingest_success", message);
       else if (status === "empty") console.warn("scheduled_news_ingest_empty", message);

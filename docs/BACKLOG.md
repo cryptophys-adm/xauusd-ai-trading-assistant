@@ -96,7 +96,7 @@ setup READY state that never reached the decision (#192).
     - **Decided (owner 2026-11-14: "tidak setuju, tetap ikut konsensus sebagai penyeimbang"):** the default agent (Zone pullback) stays in the strategy agents' consensus as a balancer, although it reads "price at a key zone" on both sides at nearly every bar. Its voices on both sides cancel in the lean and keep a lone agent from speaking with full force; the proposal to leave it out is closed.
 
 26. **The content agent: public posts, later streams** (owner 2026-11-14: an autonomous digital content creator on Instagram and X, chart livestreams on YouTube and TikTok; `docs/RFC_CONTENT_AGENT.md`). Proposed, nothing built.
-    - **P0 (data):** news from publisher RSS feeds and GDELT, in shadow first; the MT5 fallback switch on "auto" (the owner's switch).
+    - **P0 (data):** news from publisher RSS feeds and GDELT, in shadow first (built 2026-11-14: `news_shadow` in the news worker's /health, Nexus Status; after about a week, the owner decides whether the rooms read it instead of TradingView's); the MT5 fallback switch on "auto" (the owner's switch).
     - **P1:** the public projection (past decisions, no account data, after a delay) and the content guardian in Aether; a lawyer's check of POJK 6/2026 for forex and gold content.
     - **P2:** posts to X and Instagram (morning brief, recaps, pattern education) through an approval queue.
     - **Parked (owner 2026-11-14):** the automated livestream; the owner streams manually from a desktop for now (TradingView charts with attribution, never Nexus). When taken up: never on the execution VPS.
