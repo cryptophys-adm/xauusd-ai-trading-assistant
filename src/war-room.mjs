@@ -26,7 +26,7 @@ import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, 
 import { publishSnapshot } from "./push-hub.mjs";
 import { readAllocationState, rosterSplit } from "./agent-allocation.mjs";
 import { gateShadowTurns } from "./shadow-switch.mjs";
-import { metricShadowEnabled, runMetricShadow } from "./metric-shadow.mjs";
+import { metricShadowEnabled, runMetricShadow, runMetricRebuttals } from "./metric-shadow.mjs";
 import { agentReputation, sessionOf } from "./outcome-scoring.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
@@ -727,13 +727,14 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   }
   // Metric interpretations, not prose, in shadow (src/metric-shadow.mjs; owner 2026-11-14): each agent that
   // opened answers again from the same data as metric readings, compared with its live stance on this bar.
+  // A2: then, on every fourth bar, the agents that rebutted live answer those metric openings in metric form.
   if (metricShadowEnabled(env)) {
-    jobs.push(["metrics", () => runMetricShadow(env, {
-      room: "M15", barTime, clock,
-      agents: answered.map((m) => ({ agent: m.agent, stance: m.stance })),
-      dataFor: (agent) => agentData(agent, evidence, hud, confirmations, desk15, projection),
-      roleFor: (agent) => openingRole(agent)
-    })]);
+    const dataFor = (agent) => agentData(agent, evidence, hud, confirmations, desk15, projection);
+    jobs.push(["metrics", async () => {
+      const openings = await runMetricShadow(env, { room: "M15", barTime, clock, agents: answered.map((m) => ({ agent: m.agent, stance: m.stance })), dataFor, roleFor: openingRole });
+      const rebuttals = await runMetricRebuttals(env, { room: "M15", barTime, clock, rebutters: debate.map((m) => ({ agent: m.agent, stance: m.stance })), dataFor, roleFor: openingRole });
+      return { openings, rebuttals };
+    }]);
   }
   if (jobs.length) {
     Object.defineProperty(result, "shadow_job", {

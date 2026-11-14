@@ -207,6 +207,9 @@
           "task": "metric_opening"
         },
         {
+          "task": "metric_rebuttal"
+        },
+        {
           "task": "macro_room_opening"
         },
         {

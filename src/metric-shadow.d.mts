@@ -12,3 +12,14 @@ export function runMetricShadow(env: unknown, options: Record<string, unknown>):
 export function scoreMetricShadow(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
 export function compareMetricShadow(rows: unknown[]): Record<string, any>[];
 export function readMetricShadow(env: unknown, options?: { days?: number; now?: number; room?: string }): Promise<Record<string, any>>;
+export const RELATIONS: readonly string[];
+export const DEFAULT_REBUTTAL_EVERY: number;
+export const DEFAULT_REBUTTAL_MAX_CALLS_PER_HOUR: number;
+export const METRIC_REBUTTAL_SCHEMA: Readonly<Record<string, unknown>>;
+export function rebuttalEvery(env: unknown): number;
+export function rebuttalCallsPerHour(env: unknown): number;
+export function isRebuttalBar(barTime: string, every?: number): boolean;
+export function metricBus(openings: any[], self: string): { bus: any[]; refs: Map<string, string> };
+export function checkMetricRebuttal(o: unknown, options?: { bus?: any[]; menu?: { id: string }[] }): { valid: boolean; cited: number; grounded: number; rebuts: any[] };
+export function metricRebuttalMessages(roleLine: string, input: { menu: unknown; opening: unknown; bus: unknown }): { role: string; content: string }[];
+export function runMetricRebuttals(env: unknown, options: Record<string, unknown>): Promise<Record<string, any>>;

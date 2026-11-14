@@ -8,6 +8,10 @@
 // agent's grounding rate. The answer is stored in D1 metric_shadow_outputs beside the agent's live stance on
 // the same bar and scored on the same 15m outcome; nothing reads it but the comparison and Nexus. Promotion of
 // the format, room by room, needs the hit rate and the validity to be no worse (a later step, the owner's).
+// A2 (owner 2026-11-14: "lanjut kerjakan A2"): the rebuttals too. On every fourth 15m bar (the hour's bars), each
+// agent that rebutted live answers the room's metric openings in metric form: which metric of which opening (#n)
+// it disputes, with which metric of its own, and how (contradicts, outweighs, confirms). Stored in
+// metric_shadow_rebuttals beside its live rebuttal stance and scored the same way.
 // `METRIC_SHADOW` "off" or the shadow kill switch (src/shadow-switch.mjs) stops it; at most METRIC_SHADOW_MAX_CALLS_PER_HOUR calls an hour (default 48).
 import { callBusModel } from "./multi-agent-bus.mjs";
 import { ROOM_STANCES } from "./agent-threads.mjs";
@@ -46,8 +50,37 @@ export const METRIC_SHADOW_SCHEMA_SQL = [
     created_at TEXT NOT NULL, result TEXT, control_result TEXT, scoring_version TEXT, scored_at TEXT,
     PRIMARY KEY (room, bar_time, agent)
   )`,
-  "CREATE INDEX IF NOT EXISTS idx_metric_shadow_created ON metric_shadow_outputs(created_at)"
+  "CREATE INDEX IF NOT EXISTS idx_metric_shadow_created ON metric_shadow_outputs(created_at)",
+  `CREATE TABLE IF NOT EXISTS metric_shadow_rebuttals (
+    room TEXT NOT NULL, bar_time TEXT NOT NULL, agent TEXT NOT NULL,
+    stance TEXT, confidence REAL, control_stance TEXT, rebuts_json TEXT,
+    cited INTEGER, grounded INTEGER, status TEXT NOT NULL, model TEXT, usage_tokens INTEGER, latency_ms INTEGER,
+    created_at TEXT NOT NULL, result TEXT, control_result TEXT, scoring_version TEXT, scored_at TEXT,
+    PRIMARY KEY (room, bar_time, agent)
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_metric_rebuttals_created ON metric_shadow_rebuttals(created_at)"
 ];
+export const RELATIONS = Object.freeze(["contradicts", "outweighs", "confirms"]);
+export const DEFAULT_REBUTTAL_EVERY = 4;
+export const DEFAULT_REBUTTAL_MAX_CALLS_PER_HOUR = 12;
+const MAX_REBUTS = 4;
+export const METRIC_REBUTTAL_SCHEMA = Object.freeze({
+  type: "object", additionalProperties: false,
+  properties: {
+    stance: { type: "string", enum: [...ROOM_STANCES] },
+    confidence: { type: "number" },
+    rebuts: { type: "array", items: { type: "object", additionalProperties: false, properties: { ref: { type: "string" }, their_metric: { type: "string" }, my_metric: { type: "string" }, relation: { type: "string", enum: [...RELATIONS] } }, required: ["ref", "their_metric", "my_metric", "relation"] } }
+  },
+  required: ["stance", "confidence", "rebuts"]
+});
+export function rebuttalEvery(env) {
+  const n = Math.round(Number(env?.METRIC_REBUTTAL_EVERY ?? DEFAULT_REBUTTAL_EVERY));
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 96) : DEFAULT_REBUTTAL_EVERY;
+}
+export function rebuttalCallsPerHour(env) {
+  const n = Number(env?.METRIC_REBUTTAL_MAX_CALLS_PER_HOUR ?? DEFAULT_REBUTTAL_MAX_CALLS_PER_HOUR);
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, 48) : DEFAULT_REBUTTAL_MAX_CALLS_PER_HOUR;
+}
 let schemaReady = false;
 export function resetMetricShadowSchemaCacheForTests() { schemaReady = false; }
 async function ensureSchema(db) {
@@ -173,12 +206,111 @@ export async function runMetricShadow(env, { room = "M15", barTime, agents = [],
   }
 }
 
+/** Pure: whether a 15m bar is a rebuttal bar (every `every`-th bar, counted from the epoch: the hour's first bar at 4). */
+export function isRebuttalBar(barTime, every = DEFAULT_REBUTTAL_EVERY) {
+  const index = Math.floor(Date.parse(barTime) / 900_000);
+  return Number.isFinite(index) && index % every === 0;
+}
+
+/**
+ * Pure: the anonymous metric bus of a bar: every valid metric opening but the rebutter's own, as "#n" (in agent
+ * order, so the same bar gives the same numbers), with its metric table. `refs` maps "#n" back to the agent.
+ */
+export function metricBus(openings, self) {
+  const others = (openings || []).filter((o) => o.agent !== self && o.status === "ok").sort((a, b) => a.agent.localeCompare(b.agent));
+  const bus = [], refs = new Map();
+  others.forEach((o, i) => {
+    const ref = `#${i + 1}`;
+    refs.set(ref, o.agent);
+    bus.push({ ref, stance: o.stance, confidence: o.confidence, metrics: (o.metrics || []).map((m) => ({ id: m.id, value: m.value ?? null, reading: m.reading, implication: m.implication, weight: m.weight })) });
+  });
+  return { bus, refs };
+}
+
+/** Pure: a metric rebuttal checked: valid in form; each rebut grounded when its #n is on the bus, their metric is in that opening and mine is on my menu. */
+export function checkMetricRebuttal(o, { bus = [], menu = [] } = {}) {
+  const own = new Set((menu || []).map((m) => m.id));
+  const tables = new Map((bus || []).map((b) => [b.ref, new Set((b.metrics || []).map((m) => m.id))]));
+  const rebuts = Array.isArray(o?.rebuts) ? o.rebuts.slice(0, MAX_REBUTS) : null;
+  const valid = ROOM_STANCES.includes(o?.stance) && typeof o?.confidence === "number" && o.confidence >= 0 && o.confidence <= 1 && Array.isArray(rebuts)
+    && rebuts.every((r) => r && typeof r.ref === "string" && typeof r.their_metric === "string" && typeof r.my_metric === "string" && RELATIONS.includes(r.relation));
+  const items = (rebuts || []).filter((r) => r && typeof r === "object").map((r) => ({ ref: String(r.ref ?? "").trim(), their_metric: String(r.their_metric ?? ""), my_metric: String(r.my_metric ?? ""), relation: r.relation }));
+  const grounded = items.filter((r) => tables.get(r.ref)?.has(r.their_metric) && own.has(r.my_metric)).length;
+  return { valid, cited: items.length, grounded, rebuts: items };
+}
+
+/** The shadow rebuttal prompt: the agent's role line, the rules and the form first; its menu, its metric opening and the bus last. */
+export function metricRebuttalMessages(roleLine, { menu, opening, bus }) {
+  return chatMessages([
+    [
+      roleLine,
+      "This is the Consensus Discussion of this bar, in metric form. The METRIC BUS holds the other agents' metric openings, anonymously (#n).",
+      "Rebut with metrics only, never sentences: for each opening you dispute, name its reference (#n), the metric of that opening you dispute (its id, as on the bus), the metric of your own that answers it (an id from YOUR METRIC MENU), and the relation: contradicts (your metric points the other way), outweighs (yours matters more here) or confirms (theirs convinced you).",
+      `Give 0 to ${MAX_REBUTS} rebuts, then your stance after the discussion (you may change it if the bus convinced you) and your confidence (0 to 1). Never give a price level.`,
+      'Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"rebuts":[{"ref":"#n","their_metric":"<id on the bus>","my_metric":"<id on your menu>","relation":"contradicts|outweighs|confirms"}]}'
+    ].join("\n"),
+    `YOUR METRIC MENU:\n${JSON.stringify(menu)}`,
+    `YOUR METRIC OPENING:\n${JSON.stringify(opening)}`,
+    `METRIC BUS:\n${JSON.stringify(bus)}`
+  ]);
+}
+
+/**
+ * The room's shadow rebuttals, after its metric openings (runMetricShadow) on the same bar. `rebutters` are
+ * { agent, stance } of the live rebuttals; each needs its own valid metric opening of the bar. Only on a
+ * rebuttal bar (METRIC_REBUTTAL_EVERY, default every fourth); idempotent; bounded per hour. Never throws.
+ */
+export async function runMetricRebuttals(env, { room = "M15", barTime, rebutters = [], dataFor, roleFor, clock = () => Date.now(), deadlineMs = 90_000 } = {}) {
+  if (!metricShadowEnabled(env)) return { status: "disabled" };
+  if (!env?.DB || !rebutters.length) return { status: "nothing_to_do" };
+  if (!isRebuttalBar(barTime, rebuttalEvery(env))) return { status: "not_a_rebuttal_bar" };
+  try {
+    if (!(await shadowAllowed(env))) return { status: "shadow_off" };
+    await ensureSchema(env.DB);
+    const rows = (await env.DB.prepare("SELECT agent, stance, confidence, metrics_json, status FROM metric_shadow_outputs WHERE room = ? AND bar_time = ?").bind(room, barTime).all()).results || [];
+    const openings = rows.map((r) => { let m = null; try { m = JSON.parse(r.metrics_json || "null"); } catch { m = null; } return { agent: r.agent, stance: r.stance, confidence: r.confidence, status: r.status, metrics: m?.metrics ?? [] }; });
+    const used = Number((await env.DB.prepare("SELECT COUNT(*) AS n FROM metric_shadow_rebuttals WHERE created_at >= ?").bind(new Date(clock() - 3_600_000).toISOString()).first())?.n ?? 0);
+    let budget = rebuttalCallsPerHour(env) - used;
+    const deadline = clock() + deadlineMs;
+    const out = { status: "ok", called: 0, stored: 0, skipped: 0, no_opening: 0 };
+    await Promise.all(rebutters.map(async ({ agent, stance: control }) => {
+      const mine = openings.find((o) => o.agent === agent && o.status === "ok");
+      if (!mine) { out.no_opening += 1; return; }
+      if (await env.DB.prepare("SELECT 1 AS x FROM metric_shadow_rebuttals WHERE room = ? AND bar_time = ? AND agent = ?").bind(room, barTime, agent).first()) { out.skipped += 1; return; }
+      if (budget <= 0) { out.status = "budget_exhausted"; return; }
+      budget -= 1; out.called += 1;
+      const menu = metricMenu(dataFor(agent));
+      const { bus, refs } = metricBus(openings, agent);
+      let row = { stance: null, confidence: null, rebuts: null, cited: 0, grounded: 0, status: "agent_failed", model: null, usage: null, latency: null };
+      try {
+        const opening = { stance: mine.stance, confidence: mine.confidence, metrics: mine.metrics };
+        const call = await callBusModel(env, { messages: metricRebuttalMessages(roleFor(agent), { menu, opening, bus }), schemaName: "metric_rebuttal", schema: METRIC_REBUTTAL_SCHEMA, maxTokens: 400, effort: "low", deadline, clock, runState: { primaryError: null }, role: "agent", meterSource: "shadow:metric_rebuttal" });
+        row = { ...row, model: call.model ?? null, usage: call.usage_tokens ?? null, latency: call.latency_ms ?? null, status: call.status === "answered" ? "invalid_output" : call.status };
+        if (call.status === "answered" && !call.truncated) {
+          const check = checkMetricRebuttal(call.obj, { bus, menu });
+          // Stored with the rebutted agent beside each #n, so the comparison can say who was disputed.
+          const rebuts = check.rebuts.map((r) => ({ ...r, agent: refs.get(r.ref) ?? null }));
+          row = { ...row, stance: call.obj.stance ?? null, confidence: typeof call.obj.confidence === "number" ? call.obj.confidence : null, rebuts, cited: check.cited, grounded: check.grounded, status: check.valid ? "ok" : "invalid_output" };
+        }
+      } catch { /* stored as agent_failed */ }
+      await env.DB.prepare("INSERT INTO metric_shadow_rebuttals (room, bar_time, agent, stance, confidence, control_stance, rebuts_json, cited, grounded, status, model, usage_tokens, latency_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(room, bar_time, agent) DO NOTHING")
+        .bind(room, barTime, agent, row.stance, row.confidence, control ?? null, row.rebuts ? JSON.stringify(row.rebuts).slice(0, 4000) : null, row.cited, row.grounded, row.status, row.model, row.usage, row.latency, new Date(clock()).toISOString()).run();
+      out.stored += 1;
+    }));
+    return out;
+  } catch (e) {
+    return { status: "failed", error: String(e?.message ?? e).slice(0, 200) };
+  }
+}
+
 /** Sweep step: scores the stored shadow stances and their live controls once the 15m horizon has closed. */
 export async function scoreMetricShadow(env, { now = Date.now() } = {}) {
   if (!env?.DB) return { status: "unavailable" };
   await ensureSchema(env.DB);
-  const pending = (await env.DB.prepare("SELECT room, bar_time, agent, stance, control_stance FROM metric_shadow_outputs WHERE status = 'ok' AND scored_at IS NULL ORDER BY bar_time LIMIT 400").all()).results || [];
-  if (!pending.length) return { status: "ok", scored: 0 };
+  const tables = ["metric_shadow_outputs", "metric_shadow_rebuttals"];
+  const pendingOf = {};
+  for (const t of tables) pendingOf[t] = (await env.DB.prepare(`SELECT room, bar_time, agent, stance, control_stance FROM ${t} WHERE status = 'ok' AND scored_at IS NULL ORDER BY bar_time LIMIT 400`).all()).results || [];
+  if (!tables.some((t) => pendingOf[t].length)) return { status: "ok", scored: 0 };
   let bars = [];
   try {
     const record = JSON.parse((await env.SIGNAL_CACHE?.get?.("market-data:v2:series:OANDA:XAUUSD|15m")) || "null");
@@ -186,16 +318,18 @@ export async function scoreMetricShadow(env, { now = Date.now() } = {}) {
   } catch { bars = []; }
   const final = (r) => (["pending", "no_data", "not_scored"].includes(r) ? null : r);
   const at = new Date(now).toISOString();
-  let scored = 0;
-  for (const r of pending) {
-    const closeMs = Date.parse(r.bar_time);
-    const mine = final(scoreStance({ stance: r.stance, bars, closeMs }).result);
-    const ctrl = r.control_stance ? final(scoreStance({ stance: r.control_stance, bars, closeMs }).result) : null;
-    if (!mine || (r.control_stance && !ctrl)) continue;
-    await env.DB.prepare("UPDATE metric_shadow_outputs SET result = ?, control_result = ?, scoring_version = ?, scored_at = ? WHERE room = ? AND bar_time = ? AND agent = ?").bind(mine, ctrl, SCORING_VERSION, at, r.room, r.bar_time, r.agent).run();
-    scored += 1;
+  let scored = 0, rebuttals = 0;
+  for (const t of tables) {
+    for (const r of pendingOf[t]) {
+      const closeMs = Date.parse(r.bar_time);
+      const mine = final(scoreStance({ stance: r.stance, bars, closeMs }).result);
+      const ctrl = r.control_stance ? final(scoreStance({ stance: r.control_stance, bars, closeMs }).result) : null;
+      if (!mine || (r.control_stance && !ctrl)) continue;
+      await env.DB.prepare(`UPDATE ${t} SET result = ?, control_result = ?, scoring_version = ?, scored_at = ? WHERE room = ? AND bar_time = ? AND agent = ?`).bind(mine, ctrl, SCORING_VERSION, at, r.room, r.bar_time, r.agent).run();
+      if (t === "metric_shadow_outputs") scored += 1; else rebuttals += 1;
+    }
   }
-  return { status: "ok", scored };
+  return { status: "ok", scored, rebuttals_scored: rebuttals };
 }
 
 /** Pure: the comparison per agent (rows of metric_shadow_outputs). */
@@ -231,6 +365,13 @@ export function compareMetricShadow(rows = []) {
 export async function readMetricShadow(env, { days = 7, now = Date.now(), room = "M15" } = {}) {
   await ensureSchema(env.DB);
   const since = new Date(now - days * 86_400_000).toISOString();
-  const rows = (await env.DB.prepare("SELECT agent, stance, control_stance, cited, grounded, status, usage_tokens, latency_ms, result, control_result FROM metric_shadow_outputs WHERE room = ? AND bar_time >= ?").bind(room, since).all()).results || [];
-  return { version: METRIC_SHADOW_VERSION, enabled: metricShadowEnabled(env), room, days, max_calls_per_hour: maxCallsPerHour(env), agents: compareMetricShadow(rows) };
+  const cols = "agent, stance, control_stance, cited, grounded, status, usage_tokens, latency_ms, result, control_result";
+  const rows = (await env.DB.prepare(`SELECT ${cols} FROM metric_shadow_outputs WHERE room = ? AND bar_time >= ?`).bind(room, since).all()).results || [];
+  const rebuttals = (await env.DB.prepare(`SELECT ${cols} FROM metric_shadow_rebuttals WHERE room = ? AND bar_time >= ?`).bind(room, since).all()).results || [];
+  return {
+    version: METRIC_SHADOW_VERSION, enabled: metricShadowEnabled(env), room, days, max_calls_per_hour: maxCallsPerHour(env),
+    agents: compareMetricShadow(rows),
+    // A2: the rebuttals in metric form against the agent's live rebuttal on the same bar.
+    rebuttals: compareMetricShadow(rebuttals), rebuttal_every: rebuttalEvery(env), rebuttal_max_calls_per_hour: rebuttalCallsPerHour(env)
+  };
 }
