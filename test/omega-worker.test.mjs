@@ -308,3 +308,32 @@ test("the trading mode changes only by a person's same-origin POST (owner 2026-1
   assert.equal((await handle(req("/api/trading-mode?mode=swing", { token: person }), env, opts)).status, 405, "a GET changes nothing");
   assert.equal(calls.length, 1);
 });
+
+test("the content queue (owner 2026-11-14): read when signed in; a draft approved or rejected by a person, same origin", async () => {
+  resetKeyCacheForTests();
+  const calls = [];
+  const CONTENT = {
+    drafts: async (o) => ({ drafts: [{ id: "daily:2026-11-16:threads", status: "pending" }], counts: { pending: 1 }, asked: o }),
+    status: async () => ({ publish: "off", channels: ["threads", "instagram"] }),
+    preview: async (id) => ({ ok: true, id, dry_run: true }),
+    decide: async (input) => { calls.push(input); return { ok: true, id: input.id, status: input.decision === "approve" ? "approved" : "rejected" }; }
+  };
+  const env = { ...ENV_BASE, OMEGA: omega(), CONTENT };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const person = await jwt({ email: "Owner@Example.com" });
+  const read = await (await handle(req("/api/content?status=pending", { token: person }), env, opts)).json();
+  assert.deepEqual([read.drafts.length, read.status.publish, read.can_control, read.asked.status], [1, "off", true, "pending"]);
+  assert.equal((await (await handle(req("/api/content/preview?id=daily:2026-11-16:threads", { token: person }), env, opts)).json()).dry_run, true);
+  const post = (body, extra = {}) => handle(req("/api/content/decide", { token: person, method: "POST", body, ...extra }), env, opts);
+  assert.equal((await post({ id: "daily:2026-11-16:threads", decision: "approve" })).status, 200);
+  assert.deepEqual(calls.at(-1), { id: "daily:2026-11-16:threads", decision: "approve", reason: "", actor: "owner@example.com" });
+  assert.equal((await post({ id: "daily:2026-11-16:threads", decision: "reject" })).status, 400, "a rejection needs a reason");
+  assert.equal((await post({ id: "x", decision: "publish" })).status, 400, "approve or reject only");
+  assert.equal((await post({ decision: "approve" })).status, 400, "an id is required");
+  assert.equal((await post({ id: "x", decision: "approve" }, { origin: "https://evil.example" })).status, 403, "cross-origin refused");
+  assert.equal((await handle(req("/api/content/decide", { token: await jwt({ common_name: "ci.access" }), method: "POST", body: { id: "x", decision: "approve" } }), env, opts)).status, 403, "a service token never approves");
+  assert.equal((await handle(req("/api/content", { token: person, method: "DELETE" }), env, opts)).status, 405);
+  assert.equal((await handle(req("/api/content"), env, opts)).status, 403, "no JWT, nothing");
+  assert.equal((await handle(req("/api/content", { token: person }), { ...env, CONTENT: undefined }, opts)).status, 503);
+  assert.equal(calls.length, 1);
+});
