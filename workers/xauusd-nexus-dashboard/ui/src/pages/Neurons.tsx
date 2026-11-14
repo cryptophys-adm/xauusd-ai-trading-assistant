@@ -179,6 +179,36 @@ export default function Neurons() {
         )}
       </Panel>
 
+      <Panel title="Model arena (shadow, heavy steps)" hint={`On every ${v?.model_arena?.every_nth_bar ?? 8}th 15m bar, the council and the 15m War Room conclusion are asked again, with the same messages, of a challenger model (${v?.model_arena?.challenger ?? "n/a"}), once, at low reasoning effort. The council's answer goes through the same guardrails as the live one. Validity: a valid answer at the first try (the live step may correct, retry or fall back; answered counts those too). Agreement: same stance as the live step on that bar. Hit rate: both stances scored on the same 15m outcome (a WAIT that let a 2:1 trade go by counts as a miss). Neurons per call: the challenger's from its own tokens, the live model's from the meter. The arena stops for the day at its own cap or once all shadow calls reach ${Math.round((v?.model_arena?.shadow_share ?? 0.8) * 100)}% of the shadow budget. Nothing here reaches a room or a decision.`}>
+        {!(v?.model_arena?.roles ?? []).some((r: any) => r.calls) ? <Empty>No arena call yet: it runs on every {v?.model_arena?.every_nth_bar ?? 8}th 15m bar after the market opens.</Empty> : (
+          <div className="table-wrap">
+            <table className="tbl">
+              <thead><tr><th>Step</th><th>Calls</th><th>Validity (challenger · live)</th><th>Agreement</th><th>Hit rate (challenger)</th><th>Hit rate (live)</th><th>Latency (challenger · live)</th><th>Tokens / call</th><th>Neurons / call (challenger · live)</th><th>Verdict</th></tr></thead>
+              <tbody>
+                {v.model_arena.roles.map((m: any) => (
+                  <tr key={m.role}>
+                    <td className="mono">{m.role === "decision_council" ? "Council" : "15m War Room conclusion"}</td><td className="mono">{m.calls}</td>
+                    <td className="mono">{pc(m.validity)} · {pc(m.live_validity)} <span className="text-slate-500">(answered {pc(m.live_answered)})</span></td>
+                    <td className="mono">{pc(m.stance_agreement)}</td>
+                    <td className="mono">{m.hit_rate == null ? "n/a" : <>{pc(m.hit_rate)} <span className="text-slate-500">± {m.decided}</span></>}</td>
+                    <td className="mono">{m.live_hit_rate == null ? "n/a" : <>{pc(m.live_hit_rate)} <span className="text-slate-500">± {m.live_decided}</span></>}</td>
+                    <td className="mono">{m.latency_ms == null ? "n/a" : `${(m.latency_ms / 1000).toFixed(1)} s`} · {m.live_latency_ms == null ? "n/a" : `${(m.live_latency_ms / 1000).toFixed(1)} s`}</td>
+                    <td className="mono">{m.tokens_per_call == null ? "n/a" : k(m.tokens_per_call)} · {m.live_tokens_per_call == null ? "n/a" : k(m.live_tokens_per_call)}</td>
+                    <td className="mono">{m.neurons_per_call == null ? "n/a" : k(m.neurons_per_call)} · {m.live_neurons_per_call == null ? "n/a" : k(m.live_neurons_per_call)}</td>
+                    <td className="mono">{m.verdict === "collecting" ? <span className="text-slate-500">collecting ({m.scored_pairs}/{v.model_arena.min_pairs})</span> : m.verdict}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {v?.model_arena?.spent_today ? (
+          <div className="mt-2 text-[11px] text-slate-400">
+            Today: <span className="mono text-slate-200">{k(v.model_arena.spent_today.arena_neurons)}</span> arena neurons of its cap <span className="mono">{k(v.model_arena.neurons_per_day_cap)}</span> · all shadow calls <span className="mono">{k(v.model_arena.spent_today.shadow_neurons)}</span> of <span className="mono">{k(v.model_arena.spent_today.shadow_budget)}</span>
+          </div>
+        ) : null}
+      </Panel>
+
       <Panel title="Memo: prompt key (live) and evidence key (shadow)" hint="The live memo reuses an answer only when an agent's whole prompt is the same as before. The evidence key (shadow, never reused) matches when the agent's evidence reads the same: its metric menu (statements with price levels masked, fields, candles as distances and ratios) and its notes. On each fresh call the prompt key missed, it counts whether the evidence key had an answer and whether the model then gave the same stance and bias. Extra neurons/day: what it would save on top of the live memo, counting only those same answers.">
         <div className="table-wrap">
           <table className="tbl">
