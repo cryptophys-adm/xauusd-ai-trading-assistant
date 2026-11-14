@@ -103,7 +103,7 @@ export async function runComplianceChecks(env, { now = Date.now(), limit = 400 }
   const cursor = Number((await db.prepare("SELECT last_message_id AS id FROM compliance_cursor WHERE id = 1").first())?.id) || 0;
   let rows = [];
   try {
-    rows = (await db.prepare("SELECT id, thread_id, step, agent, bar_time, stance, body_json FROM agent_thread_messages WHERE id > ? AND status = 'ok' AND (thread_id LIKE 'warroom:%' OR thread_id LIKE 'tf:%') ORDER BY id LIMIT ?").bind(cursor, limit).all()).results || [];
+    rows = (await db.prepare("SELECT id, thread_id, step, agent, bar_time, stance, body_json FROM agent_thread_messages WHERE id > ? AND status = 'ok' AND ((thread_id >= 'warroom:' AND thread_id < 'warroom;') OR (thread_id >= 'tf:' AND thread_id < 'tf;')) ORDER BY id LIMIT ?").bind(cursor, limit).all()).results || [];
   } catch { return { status: "no_rooms" }; }
   let checked = 0, violations = 0, last = cursor;
   const at = new Date(now).toISOString();
@@ -129,7 +129,7 @@ export async function readCompliance(env, { days = 7, now = Date.now() } = {}) {
   const db = env.DB;
   await ensureComplianceSchema(db);
   const since = new Date(now - days * 86_400_000).toISOString();
-  const msgs = (await db.prepare("SELECT thread_id, agent, COUNT(*) AS n FROM agent_thread_messages WHERE status = 'ok' AND bar_time >= ? AND (thread_id LIKE 'warroom:%' OR thread_id LIKE 'tf:%') AND (step LIKE 'open:%' OR step LIKE 'debate:%' OR step = 'conclusion') GROUP BY thread_id, agent").bind(since).all()).results || [];
+  const msgs = (await db.prepare("SELECT thread_id, agent, COUNT(*) AS n FROM agent_thread_messages WHERE status = 'ok' AND bar_time >= ? AND ((thread_id >= 'warroom:' AND thread_id < 'warroom;') OR (thread_id >= 'tf:' AND thread_id < 'tf;')) AND (step LIKE 'open:%' OR step LIKE 'debate:%' OR step = 'conclusion') GROUP BY thread_id, agent").bind(since).all()).results || [];
   const hits = (await db.prepare("SELECT chart, agent, check_id, COUNT(*) AS n, MAX(detail) AS example FROM compliance_checks WHERE bar_time >= ? GROUP BY chart, agent, check_id").bind(since).all()).results || [];
   const key = (chart, agent) => `${chart}|${agent}`;
   const rows = new Map();

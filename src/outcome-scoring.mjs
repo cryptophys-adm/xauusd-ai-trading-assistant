@@ -60,6 +60,8 @@ export const OUTCOME_SCHEMA_SQL = [
 )`,
   "CREATE INDEX IF NOT EXISTS idx_outcome_scores_close ON outcome_scores(statement_close)",
   "CREATE INDEX IF NOT EXISTS idx_outcome_scores_subject ON outcome_scores(subject, statement_close)",
+  // Resource audit P0 (2026-11-14): the decision cards read a bar's outcomes by timeframe and candle.
+  "CREATE INDEX IF NOT EXISTS idx_outcome_scores_tf_candle ON outcome_scores(timeframe, candle_key)",
   `CREATE TABLE IF NOT EXISTS outcome_runs (
   timeframe TEXT NOT NULL,
   candle_key TEXT NOT NULL,
@@ -273,7 +275,7 @@ export async function h1Statements(env, candleKey) {
 export async function roomStatements(env, sinceIso) {
   const byBar = new Map();
   try {
-    const rows = (await env.DB.prepare("SELECT bar_time, step, stance, confidence FROM agent_thread_messages WHERE thread_id LIKE 'live15m:%' AND status = 'ok' AND bar_time >= ?").bind(sinceIso).all()).results || [];
+    const rows = (await env.DB.prepare("SELECT bar_time, step, stance, confidence FROM agent_thread_messages WHERE thread_id >= 'live15m:' AND thread_id < 'live15m;' AND status = 'ok' AND bar_time >= ?").bind(sinceIso).all()).results || [];
     for (const row of rows) {
       const list = byBar.get(row.bar_time) || [];
       list.push({ subject: "room:" + row.step, source: "room", stance: row.stance, confidence: row.confidence ?? null });
@@ -303,7 +305,7 @@ export async function agentStatements(env, timeframe, sinceIso) {
   };
   try {
     if (timeframe === "15") {
-      const rows = (await env.DB.prepare("SELECT run_id, bar_time, step, agent, stance, confidence FROM agent_thread_messages WHERE thread_id LIKE 'warroom:%' AND status = 'ok' AND bar_time >= ? AND (step LIKE 'open:%' OR step LIKE 'debate:%' OR step = 'conclusion') ORDER BY run_id, CASE WHEN step LIKE 'open:%' THEN 0 ELSE 1 END").bind(sinceIso).all()).results || [];
+      const rows = (await env.DB.prepare("SELECT run_id, bar_time, step, agent, stance, confidence FROM agent_thread_messages WHERE thread_id >= 'warroom:' AND thread_id < 'warroom;' AND status = 'ok' AND bar_time >= ? AND (step LIKE 'open:%' OR step LIKE 'debate:%' OR step = 'conclusion') ORDER BY run_id, CASE WHEN step LIKE 'open:%' THEN 0 ELSE 1 END").bind(sinceIso).all()).results || [];
       for (const r of rows) add(r.bar_time, r);
     } else if (TF_THREAD[timeframe]) {
       const rows = (await env.DB.prepare("SELECT m.run_id, m.step, m.agent, m.stance, m.confidence, json_extract(b.body_json, '$.candle_key') AS candle_key FROM agent_thread_messages m JOIN agent_thread_messages b ON b.thread_id = m.thread_id AND b.run_id = m.run_id AND b.step = 'brief' WHERE m.thread_id = ? AND m.status = 'ok' AND m.ts >= ? AND (m.step LIKE 'open:%' OR m.step LIKE 'debate:%' OR m.step = 'conclusion') ORDER BY m.run_id, CASE WHEN m.step LIKE 'open:%' THEN 0 ELSE 1 END").bind(TF_THREAD[timeframe], sinceIso).all()).results || [];

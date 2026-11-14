@@ -732,7 +732,9 @@ export async function readWarRoom(db, { barTime = null } = {}) {
   await ensureThreadSchema(db);
   const run = barTime
     ? new Date(Date.parse(barTime)).toISOString()
-    : (await db.prepare("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id LIKE 'warroom:%'").first())?.r;
+    // The latest run sits in the latest day's thread (warroom:<run's date>): one index step, not a scan of
+    // every room message (resource audit 2026-11-14: 20,906 rows read).
+    : (await db.prepare("SELECT run_id AS r FROM agent_thread_messages WHERE thread_id >= 'warroom:' AND thread_id < 'warroom;' ORDER BY thread_id DESC, run_id DESC LIMIT 1").first())?.r;
   if (!run) return null;
   const rows = ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(`warroom:${run.slice(0, 10)}`, run).all()).results || []).map(rowToThreadMessage);
   if (!rows.length) return null;

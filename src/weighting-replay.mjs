@@ -170,7 +170,7 @@ const TF_THREAD = Object.freeze({ "60": "tf:H1", "240": "tf:H4", "1D": "tf:D1" }
 /** The concluded rooms of a timeframe since `sinceIso`. */
 export async function loadRooms(db, timeframe, sinceIso) {
   if (timeframe === "15") {
-    const rows = (await db.prepare(`SELECT m.run_id, m.step, m.agent, m.stance, json_extract(m.body_json, '$.bias') AS bias, m.bar_time AS bar_time FROM agent_thread_messages m WHERE m.thread_id LIKE 'warroom:%' AND m.status = 'ok' AND m.ts >= ? AND ${STEPS} ${ORDER}`).bind(sinceIso).all()).results || [];
+    const rows = (await db.prepare(`SELECT m.run_id, m.step, m.agent, m.stance, json_extract(m.body_json, '$.bias') AS bias, m.bar_time AS bar_time FROM agent_thread_messages m WHERE m.thread_id >= 'warroom:' AND m.thread_id < 'warroom;' AND m.status = 'ok' AND m.ts >= ? AND ${STEPS} ${ORDER}`).bind(sinceIso).all()).results || [];
     // The 15m room's bar time is its close; its outcome key is the bar's open (src/outcome-scoring.mjs).
     return roomsFromRows(rows.map((r) => ({ ...r, key: Number.isFinite(Date.parse(r.bar_time)) ? `${SYMBOL}:15:${Date.parse(r.bar_time) - TF_MS["15"]}` : null })), (key) => Number(key.split(":").pop()) + TF_MS["15"]);
   }

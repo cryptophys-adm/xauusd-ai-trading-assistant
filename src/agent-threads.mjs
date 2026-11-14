@@ -61,7 +61,9 @@ export const THREAD_SCHEMA_SQL = [
   usage_tokens INTEGER,
   UNIQUE(thread_id, run_id, step)
 )`,
-  "CREATE INDEX IF NOT EXISTS idx_agent_thread_messages_thread ON agent_thread_messages(thread_id, id)"
+  "CREATE INDEX IF NOT EXISTS idx_agent_thread_messages_thread ON agent_thread_messages(thread_id, id)",
+  // Resource audit P0 (2026-11-14): the AI calls of the last hour and the health alerts read by time.
+  "CREATE INDEX IF NOT EXISTS idx_agent_thread_messages_ts ON agent_thread_messages(ts)"
 ];
 
 const ROOM_AGENT_SCHEMA = Object.freeze({

@@ -80,7 +80,7 @@ export async function loadDecisionCards(env, { chart = "60", limit = 6 } = {}) {
   const n = Math.max(1, Math.min(24, limit));
   const threads = [];
   if (chart === "15") {
-    const runs = (await db.prepare("SELECT DISTINCT run_id FROM agent_thread_messages WHERE thread_id LIKE 'warroom:%' AND step = 'conclusion' ORDER BY run_id DESC LIMIT ?").bind(n).all()).results || [];
+    const runs = (await db.prepare("SELECT run_id FROM agent_thread_messages WHERE thread_id >= 'warroom:' AND thread_id < 'warroom;' AND step = 'conclusion' ORDER BY thread_id DESC, run_id DESC LIMIT ?").bind(n).all()).results || [];
     for (const r of runs) { const t = await readWarRoom(db, { barTime: r.run_id }); if (t) threads.push({ t, key: t.bar_time, threadId: `warroom:${String(t.bar_time).slice(0, 10)}`, barTime: t.bar_time }); }
   } else {
     const tf = TF_CHART[chart];

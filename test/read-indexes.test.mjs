@@ -8,6 +8,10 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OMEGA_SCHEMA_SQL } from "../src/omega-broker.mjs";
+import { OUTCOME_SCHEMA_SQL } from "../src/outcome-scoring.mjs";
+import { THREAD_SCHEMA_SQL } from "../src/agent-threads.mjs";
+import { SCHEMA_SQL as PARITY_SCHEMA_SQL } from "../src/parity-registry.mjs";
+import { webhookLaneStatus } from "../src/webhook-rejections.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
@@ -37,4 +41,51 @@ test("every hot query searches its index", async () => {
     const detail = plan(db, sql, params);
     assert.match(detail, new RegExp(`USING (COVERING )?INDEX ${index}`), `${label}: ${detail}`);
   }
+});
+
+// The latest room and News Daily runs (src/war-room.mjs, src/news-daily.mjs, src/health-alerts.mjs,
+// src/decision-cards.mjs): a thread's id carries its run's date, so the latest run is the first entry of
+// the (thread_id, run_id, step) index read backwards over the thread range, no sort, no full scan
+// (production 2026-11-14: 20,906 rows read before, 1 after).
+const LATEST = [
+  "SELECT run_id AS r FROM agent_thread_messages WHERE thread_id >= 'warroom:' AND thread_id < 'warroom;' ORDER BY thread_id DESC, run_id DESC LIMIT 1",
+  "SELECT run_id AS r FROM agent_thread_messages WHERE thread_id >= 'newsdaily:' AND thread_id < 'newsdaily;' AND step = 'brief' ORDER BY thread_id DESC, run_id DESC LIMIT 1",
+  "SELECT run_id FROM agent_thread_messages WHERE thread_id >= 'warroom:' AND thread_id < 'warroom;' AND step = 'conclusion' ORDER BY thread_id DESC, run_id DESC LIMIT 12"
+];
+
+test("the latest-run lookups walk an index backwards with no sort", async () => {
+  const db = await database();
+  for (const sql of LATEST) {
+    const detail = plan(db, sql, []);
+    assert.match(detail, /SEARCH agent_thread_messages USING (COVERING )?INDEX sqlite_autoindex_agent_thread_messages_1 \(thread_id>\? AND thread_id<\?\)/, detail);
+    assert.doesNotMatch(detail, /TEMP B-TREE/, detail);
+  }
+});
+
+test("the latest-run lookups find the run MAX(run_id) found, across days and threads", async () => {
+  const db = await database();
+  const put = db.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, ts, body_json, status) VALUES (?, ?, ?, 'a', ?, '{}', 'ok')");
+  for (const run of ["2026-11-12T23:45:00.000Z", "2026-11-13T20:00:00.000Z", "2026-11-13T09:15:00.000Z"]) {
+    for (const step of ["brief", "open:a", "conclusion"]) put.run(`warroom:${run.slice(0, 10)}`, run, step, run);
+    put.run(`newsdaily:${run.slice(0, 10)}`, run, "brief", run);
+  }
+  put.run("tf:H1", "2026-11-14T01:00:00.000Z", "brief", "2026-11-14T01:00:00.000Z");
+  put.run("warroom:2026-11-13", "2026-11-13T21:00:00.000Z", "open:a", "2026-11-13T21:00:00.000Z"); // a run still without its conclusion
+  const one = (sql) => db.prepare(sql).get();
+  assert.equal(one(LATEST[0]).r, one("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id LIKE 'warroom:%'").r);
+  assert.equal(one(LATEST[1]).r, one("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id LIKE 'newsdaily:%' AND step = 'brief'").r);
+  assert.deepEqual(db.prepare(LATEST[2]).all().map((r) => r.run_id), db.prepare("SELECT DISTINCT run_id FROM agent_thread_messages WHERE thread_id LIKE 'warroom:%' AND step = 'conclusion' ORDER BY run_id DESC LIMIT 12").all().map((r) => r.run_id));
+});
+
+// Production applies no migrations (deploy-worker.yml has no D1 token): its tables come from schema.sql and
+// each module's run-time schema, so every read index must be made there too (found 2026-11-14: the indexes
+// of migration 0020 were absent in production after its deploy).
+test("the run-time schemas make every read index, without the migrations", async () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(await readFile(join(root, "schema.sql"), "utf8"));
+  for (const sql of [...OUTCOME_SCHEMA_SQL, ...THREAD_SCHEMA_SQL, ...PARITY_SCHEMA_SQL, ...OMEGA_SCHEMA_SQL]) db.exec(sql);
+  const d1 = { prepare: (sql) => ({ bind: () => ({ first: async () => db.prepare(sql).get() ?? null }), run: async () => db.prepare(sql).run(), first: async () => db.prepare(sql).get() ?? null }) };
+  await webhookLaneStatus(d1);
+  const names = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all().map((r) => r.name));
+  for (const [, , , index] of QUERIES) assert.ok(names.has(index), `${index} is made at run time`);
 });

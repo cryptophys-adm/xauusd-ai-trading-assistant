@@ -243,7 +243,10 @@ export const SCHEMA_SQL = [
     detail TEXT,
     compared_at TEXT NOT NULL,
     PRIMARY KEY (engine, source_hash, implementation_hash, candle_key)
-  )`
+  )`,
+  // Resource audit P0 (2026-11-14): the latest comparisons (status, parity view) and a candle's (HUD store).
+  "CREATE INDEX IF NOT EXISTS idx_parity_comparisons_at ON engine_parity_comparisons(compared_at)",
+  "CREATE INDEX IF NOT EXISTS idx_parity_comparisons_candle ON engine_parity_comparisons(candle_key)"
 ];
 
 let schemaReady = false;

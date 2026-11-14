@@ -6,6 +6,8 @@
 --   engine_parity_comparisons WHERE candle_key = ?                  3,600 (HUD store)
 --   webhook_sources ORDER BY received_at DESC LIMIT 1               9,930 (webhook lane status)
 -- omega_intents is created at run time (src/omega-broker.mjs), so its (status, created_ms) index is there.
+-- Production applies no migrations (deploy-worker.yml: no D1 token); every index here is also made by the
+-- run-time schema of its module (outcome-scoring, agent-threads, parity-registry, webhook-rejections).
 -- Indexes only: no query, result or behaviour changes.
 CREATE INDEX IF NOT EXISTS idx_outcome_scores_tf_candle ON outcome_scores(timeframe, candle_key);
 CREATE INDEX IF NOT EXISTS idx_agent_thread_messages_ts ON agent_thread_messages(ts);

@@ -242,7 +242,7 @@ export async function runNewsDaily(env, { now = Date.now(), clock = () => Date.n
 /** The latest daily news analysis for the News tab: items with their bias, and the TLDR. */
 export async function readNewsDaily(db) {
   await ensureThreadSchema(db);
-  const row = await db.prepare("SELECT thread_id, run_id FROM agent_thread_messages WHERE thread_id LIKE 'newsdaily:%' AND step = 'brief' ORDER BY run_id DESC LIMIT 1").first();
+  const row = await db.prepare("SELECT thread_id, run_id FROM agent_thread_messages WHERE thread_id >= 'newsdaily:' AND thread_id < 'newsdaily;' AND step = 'brief' ORDER BY thread_id DESC, run_id DESC LIMIT 1").first();
   if (!row) return null;
   const rows = ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(row.thread_id, row.run_id).all()).results || []).map(rowToThreadMessage);
   const brief = rows.find((m) => m.step === "brief");
