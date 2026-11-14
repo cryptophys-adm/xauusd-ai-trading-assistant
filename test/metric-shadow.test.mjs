@@ -83,7 +83,7 @@ test("the comparison per agent", () => {
 });
 
 // A2 (owner 2026-11-14: "lanjut kerjakan A2"): the rebuttals in metric form.
-import { metricBus, checkMetricRebuttal, isRebuttalBar, runMetricRebuttals, metricRebuttalMessages } from "../src/metric-shadow.mjs";
+import { metricBus, checkMetricRebuttal, isRebuttalBar, runMetricRebuttals, metricRebuttalMessages, readMetricShadowBar } from "../src/metric-shadow.mjs";
 
 test("A2: the metric bus is anonymous (#n in agent order, never the rebutter itself) and a rebut is grounded on both sides", () => {
   const openings = [
@@ -149,4 +149,10 @@ test("A2: only on every fourth bar, after the agent's own metric opening; stored
   const view = await readMetricShadow(env, { now: close + 86_400_000 });
   const risk = view.rebuttals.find((a) => a.agent === "risk");
   assert.deepEqual([risk.validity, risk.grounding_rate, risk.stance_agreement, risk.hit_rate], [1, 1, 0, 1]);
+  // A3: the bar's answers per agent, for Nexus' metric chips; null before the tables exist.
+  const chips = await readMetricShadowBar(DB, { barTime });
+  assert.deepEqual(Object.keys(chips.openings).sort(), ["risk", "technical"]);
+  assert.equal(chips.openings.risk.metrics[0].id, "candles_15m.change_4");
+  assert.deepEqual(chips.rebuttals.risk.rebuts[0], { agent: "technical", their_metric: "candles_15m.change_1", my_metric: "candles_15m.change_4", relation: "contradicts" });
+  assert.equal(await readMetricShadowBar(d1(), { barTime }), null);
 });

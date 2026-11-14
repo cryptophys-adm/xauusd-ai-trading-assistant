@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import clsx from "clsx";
 import { Layers, Swords } from "lucide-react";
 import { Post, calibrationText } from "./Post";
+import { MetricChips, RebuttalChips } from "./MetricChips";
 import CrowdLine from "./CrowdLine";
 import { Stance, stanceColor } from "./Stance";
 import { Badge, Hint, Skeleton } from "./ui";
@@ -73,12 +74,29 @@ function Discussion({ room }: { room: any }) {
   const cal: Record<string, unknown> = {};
   for (const a of room.roster ?? []) cal[a.id] = a.calibration;
   const opens = room.openings ?? [], debate = room.debate ?? [];
+  // A3: the 15m room's shadow answers in metric form, as chips under each post (owner 2026-11-14).
+  const ms = room.metric_shadow;
+  const hasChips = Boolean(ms && (Object.keys(ms.openings ?? {}).length || Object.keys(ms.rebuttals ?? {}).length));
+  const [chips, setChips] = useState(() => localStorage.getItem("nexus.metricChips") !== "off");
+  const toggle = () => { const next = !chips; setChips(next); localStorage.setItem("nexus.metricChips", next ? "on" : "off"); };
+  const names: Record<string, string> = Object.fromEntries((room.roster ?? []).map((a: any) => [a.id, a.name]));
   return (
     <div className="space-y-3">
-      {!!opens.length && <div className="eyebrow pt-1 text-[10px]">Communication bus · {opens.length}</div>}
-      <div className="space-y-1.5">{opens.map((m: any) => <Post key={m.id} m={m} text={m.claim} calibration={calibrationText(m.calibration ?? cal[m.id])} reputation={room.reputation?.[m.id]} />)}</div>
+      {!!opens.length && (
+        <div className="flex items-center gap-2 pt-1">
+          <span className="eyebrow text-[10px]">Communication bus · {opens.length}</span>
+          {hasChips && (
+            <button onClick={toggle} className="ml-auto text-[10px] text-violet-300/80 hover:text-violet-200" title="The same agents' shadow answers in metric form: never in the room or a decision">
+              {chips ? "hide" : "show"} metric chips (shadow)
+            </button>
+          )}
+        </div>
+      )}
+      <div className="space-y-1.5">{opens.map((m: any) => <Post key={m.id} m={m} text={m.claim} calibration={calibrationText(m.calibration ?? cal[m.id])} reputation={room.reputation?.[m.id]}
+        extra={chips ? <MetricChips m={ms?.openings?.[m.id]} live={m.stance} /> : null} />)}</div>
       {!!debate.length && <div className="eyebrow pt-1 text-[10px]">Consensus Discussion</div>}
-      <div className="space-y-1.5">{debate.map((m: any) => <Post key={m.id} m={m} text={m.argument} reputation={room.reputation?.[m.id]} />)}</div>
+      <div className="space-y-1.5">{debate.map((m: any) => <Post key={m.id} m={m} text={m.argument} reputation={room.reputation?.[m.id]}
+        extra={chips ? <RebuttalChips r={ms?.rebuttals?.[m.id]} live={m.stance} names={names} /> : null} />)}</div>
     </div>
   );
 }

@@ -70,6 +70,8 @@ test("the War Room publishes the room exactly as Nexus reads it; without the bin
   assert.deepEqual(await publishWarRoom(env), { status: "ok", sent: 1 });
   assert.equal(published[0].name, "nexus");
   assert.equal(published[0].topic, "war-room");
-  assert.deepEqual(published[0].data, { status: "ok", enabled: true, room: await readWarRoom(DB) });
+  // Nexus reads /api/war-room/latest with the metric chips (A3), so the snapshot carries them too.
+  assert.deepEqual(published[0].data, { status: "ok", enabled: true, room: await readWarRoom(DB, { metrics: true }) });
+  assert.ok("metric_shadow" in published[0].data.room);
   assert.deepEqual(await publishWarRoom({ DB }), { status: "disabled" });
 });

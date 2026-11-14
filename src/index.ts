@@ -2291,7 +2291,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/war-room/latest") {
     try {
       const bar = url.searchParams.get("bar");
-      const room = await readWarRoom(env.DB, { barTime: bar && Number.isFinite(Date.parse(bar)) ? bar : null });
+      const room = await readWarRoom(env.DB, { barTime: bar && Number.isFinite(Date.parse(bar)) ? bar : null, metrics: true });
       if (!room) return dashboardJson({ status: "not_found", enabled: warRoomEnabled(env) }, 404);
       return dashboardJson({ status: "ok", enabled: warRoomEnabled(env), room });
     } catch (error) {

@@ -361,6 +361,36 @@ export function compareMetricShadow(rows = []) {
   })).sort((x, y) => x.agent.localeCompare(y.agent));
 }
 
+/**
+ * A3 (owner 2026-11-14: "lanjut"): one bar's shadow answers in metric form, per agent, for the War Room's metric
+ * chips in Nexus. Valid answers only (an invalid one is counted, never shown). Null when the tables are not there
+ * yet. Never throws. Two reads on the primary key's (room, bar_time) prefix.
+ */
+export async function readMetricShadowBar(db, { room = "M15", barTime } = {}) {
+  if (!db?.prepare || !barTime) return null;
+  const parse = (t) => { try { return JSON.parse(t || "null"); } catch { return null; } };
+  try {
+    const [o, r] = await Promise.all([
+      db.prepare("SELECT agent, stance, confidence, metrics_json, cited, grounded, status FROM metric_shadow_outputs WHERE room = ? AND bar_time = ?").bind(room, barTime).all(),
+      db.prepare("SELECT agent, stance, confidence, rebuts_json, cited, grounded, status FROM metric_shadow_rebuttals WHERE room = ? AND bar_time = ?").bind(room, barTime).all()
+    ]);
+    const openings = {}, rebuttals = {};
+    let invalid = 0;
+    for (const x of o.results || []) {
+      if (x.status !== "ok") { invalid += 1; continue; }
+      const body = parse(x.metrics_json) || {};
+      openings[x.agent] = { stance: x.stance, confidence: x.confidence, cited: x.cited, grounded: x.grounded, metrics: (body.metrics || []).map((m) => ({ id: m.id, value: noLevels(m.value ?? null), reading: typeof m.reading === "string" ? noLevels(m.reading) : null, implication: m.implication, weight: m.weight })), invalidation: body.invalidation?.metric_id ?? null };
+    }
+    for (const x of r.results || []) {
+      if (x.status !== "ok") { invalid += 1; continue; }
+      rebuttals[x.agent] = { stance: x.stance, confidence: x.confidence, cited: x.cited, grounded: x.grounded, rebuts: (parse(x.rebuts_json) || []).map((b) => ({ agent: b.agent ?? null, their_metric: b.their_metric, my_metric: b.my_metric, relation: b.relation })) };
+    }
+    return { openings, rebuttals, invalid };
+  } catch {
+    return null;
+  }
+}
+
 /** The comparison of the last `days` days (GET /api/metric-shadow, the Neuron allocation page's grounding). */
 export async function readMetricShadow(env, { days = 7, now = Date.now(), room = "M15" } = {}) {
   await ensureSchema(env.DB);

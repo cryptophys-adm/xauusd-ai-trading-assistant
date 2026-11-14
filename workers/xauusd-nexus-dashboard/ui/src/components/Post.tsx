@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Stance } from "./Stance";
 import { ago, pct } from "../lib/format";
 
@@ -46,7 +47,7 @@ export function TrackRecord({ r }: { r?: Reputation | null }) {
 }
 
 /** One message of a room: an opening on the bus or an answer in the Consensus Discussion. */
-export function Post({ m, text, calibration, reputation }: { m: RoomMessage; text?: string | null; calibration?: string | null; reputation?: Reputation | null }) {
+export function Post({ m, text, calibration, reputation, extra }: { m: RoomMessage; text?: string | null; calibration?: string | null; reputation?: Reputation | null; extra?: ReactNode }) {
   if (m.status !== "ok") {
     return (
       <div className="glass-inner px-3 py-2 text-[12px] text-slate-500">
@@ -68,6 +69,7 @@ export function Post({ m, text, calibration, reputation }: { m: RoomMessage; tex
         {m.ts && <span className="ml-auto text-[10px] text-slate-600">{ago(m.ts)}</span>}
       </div>
       <p className="text-[12.5px] leading-relaxed text-slate-300">{text}</p>
+      {extra}
     </div>
   );
 }
