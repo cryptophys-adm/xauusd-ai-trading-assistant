@@ -91,7 +91,7 @@ test("the guardian fails each rule on its own", () => {
   assert.deepEqual(only(`${base} Profit pasti tiap minggu.`), ["promised_return"]);
   assert.deepEqual(only(`${base} Returns of 10% per month.`), ["promised_return"]);
   assert.deepEqual(only(`${base} Sell now!`), ["instruction"]);
-  assert.deepEqual(only(`${base} Pasang SL di bawah support.`), ["instruction"]);
+  assert.deepEqual(only(`${base} Pasang SL di bawah support.`), ["instruction", "signal_words"]);
   assert.deepEqual(only(`${base} Support near 3,864 held.`), ["price_level"]);
   assert.deepEqual(only(`${base} Support near 3864 held.`, { allowLevels: true }), [], "levels as commentary only when the owner allows them");
   assert.deepEqual(only(`${base} Saldo naik.`), ["account_data"]);
@@ -102,5 +102,10 @@ test("the guardian fails each rule on its own", () => {
   assert.deepEqual(only(base, { decisionTimes: ["not a date"] }), ["too_recent"], "an unknown time is never treated as old");
   assert.deepEqual(only(`${base} At 14:30 on 2026-11-13 the dollar rose.`), [], "dates and times are not levels");
   assert.deepEqual(only(""), ["capacity"]);
-  assert.equal(CONTENT_CHECKS.length, 10);
+  assert.deepEqual(only(`${base} Entry di area support, SL di bawahnya.`), ["signal_words"]);
+  assert.deepEqual(only(`${base} XAUUSD H4 BUY.`), ["signal_words"]);
+  assert.deepEqual(only(`${base} Take profit pertama.`), ["signal_words"]);
+  assert.deepEqual(only(`${base} Zona permintaan (area beli) dan zona penawaran (area jual).`), [], "a buy or sell zone is information");
+  assert.deepEqual(only(`${base} Sistem condong beli.`), []);
+  assert.equal(CONTENT_CHECKS.length, 11);
 });

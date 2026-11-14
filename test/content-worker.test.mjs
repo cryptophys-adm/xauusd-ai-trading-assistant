@@ -116,3 +116,77 @@ test("the quota is read from Meta, never assumed; a token is refreshed through i
   assert.equal(await publishingQuota({ channel: "threads", account: null, fetcher }), null);
   assert.deepEqual(await refreshToken({ channel: "instagram", token: "old", fetcher }), { access_token: "new", expires_in: 5_184_000 });
 });
+
+// Real-time analysis (owner 2026-11-14: "fokus pada hasil analytics dan key level ... kecuali info buy/sell zone";
+// "Real-time, hanya analisa").
+import { publicAnalysis, analysisLeaks, titleOf } from "../src/public-analysis.mjs";
+import { analysisDrafts, keyLevelsText, patternText, postablePatterns, MAX_PATTERN_DRAFTS_PER_DAY } from "../workers/xauusd-content/src/analysis-drafts.mjs";
+import { draftIdsWithPrefix, kindCountsSince } from "../workers/xauusd-content/src/desk.mjs";
+
+const KEY_LEVELS = {
+  price: 3887.6, atr_h1: 8.2,
+  candidates: [
+    { role: "resistance", low: 3918.33, high: 3923.09, price: 3920, strength: "strong", sources: 5, label: "4H flag line", candidate: true },
+    { role: "resistance", low: 3898.09, high: 3901.12, price: 3900, strength: "moderate", sources: 3, label: "1H swing high", candidate: true },
+    { role: "support", low: 3864.14, high: 3867.8, price: 3866, strength: "strong", sources: 4, label: "4H Camarilla L4", candidate: true },
+    { role: "support", low: 3846.49, high: 3850, price: 3848, strength: "weak", sources: 3, label: "daily low", candidate: true }
+  ],
+  patterns: [
+    { tf: "240", chart: "H4", id: "three_falling_peaks", status: "forming", direction: 0, upper: 3927.2, lower: 3856.7, target: null },
+    { tf: "240", chart: "H4", id: "broadening_wedge_descending", status: "confirmed", direction: 1, upper: 3886.1, lower: 3719.57, target: 4020.5 },
+    { tf: "60", chart: "H1", id: "flag", status: "forming", direction: 0, upper: 3890, lower: 3880 },
+    { tf: "15", chart: "15m", id: "wedge_falling", status: "confirmed", direction: 1, upper: 3866, lower: 3864, target: 3906 }
+  ],
+  trade: { entry: 3887 }, strategy_plans: { short: { entry: 1 } }
+};
+const STRUCTURE = { h4: { label: "LH/LL", trend: "down" }, h1: { label: "LH/LL", trend: "down" }, m15: { label: "HH/HL", trend: "up" } };
+const AT = Date.parse("2026-11-16T06:09:00Z");
+
+test("the public analysis: zones as demand and supply, H1-D1 patterns with their lines, the structure; never a decision or plan", () => {
+  const a = publicAnalysis(KEY_LEVELS, { structure: STRUCTURE, now: AT });
+  assert.deepEqual(a.zones.map((z) => [z.role, z.low]), [["supply", 3918.33], ["supply", 3898.09], ["demand", 3864.14], ["demand", 3846.49]]);
+  assert.deepEqual(a.patterns.map((p) => [p.chart, p.name, p.status, p.direction, p.projection]), [
+    ["H4", "Three Falling Peaks", "forming", "undetermined", null],
+    ["H4", "Descending Broadening Wedge", "confirmed", "up", 4020.5],
+    ["H1", "Flag", "forming", "undetermined", null]
+  ], "15m patterns are not posted");
+  assert.equal(a.patterns[0].chapter, 45);
+  assert.deepEqual(a.structure, { H4: { trend: "down", label: "LH/LL" }, H1: { trend: "down", label: "LH/LL" }, "15m": { trend: "up", label: "HH/HL" } });
+  assert.deepEqual(analysisLeaks(a), []);
+  assert.ok(!JSON.stringify(a).includes("entry"));
+  assert.equal(titleOf("double bottom (Adam & Adam)"), "Double Bottom (Adam & Adam)");
+});
+
+test("the key-level map and the pattern posts pass the guardian with levels allowed, and carry no signal word", () => {
+  const a = publicAnalysis(KEY_LEVELS, { structure: STRUCTURE, now: AT });
+  const map = keyLevelsText(a, { channel: "threads" });
+  assert.match(map, /^Edukasi · Peta level kunci XAUUSD · Senin, 16 November 2026 06:09 UTC/);
+  assert.match(map, /Zona penawaran \(area jual\):\n• 3918\.33–3923\.09 \(kuat, 5 sumber\)\n• 3898\.09–3901\.12 \(sedang, 3 sumber\)/);
+  assert.match(map, /Zona permintaan \(area beli\):\n• 3864\.14–3867\.80 \(kuat, 4 sumber\)/);
+  assert.match(map, /Struktur: H4 turun \(LH\/LL\) · H1 turun \(LH\/LL\) · 15m naik \(HH\/HL\)/);
+  assert.ok(map.length <= 500, `${map.length}`);
+  const [forming, confirmed] = postablePatterns(a);
+  const f = patternText(forming, a), c = patternText(confirmed, a);
+  assert.match(f, /Pola terbentuk · XAUUSD H4\nThree Falling Peaks · katalog Bulkowski bab 45/);
+  assert.match(f, /terkonfirmasi naik bila candle H4 ditutup di atas 3927\.20, atau turun bila ditutup di bawah 3856\.70/);
+  assert.match(c, /Breakout pola · XAUUSD H4\nDescending Broadening Wedge .* arah naik/);
+  assert.match(c, /Pola batal bila candle H4 ditutup kembali di bawah 3719\.57/);
+  assert.match(c, /Proyeksi ukuran pola: 4020\.50 \(analisa, bukan sasaran transaksi\)/);
+  const drafts = analysisDrafts(a, { now: AT, levelsRun: true, channels: ["threads"] });
+  assert.deepEqual(drafts.map((d) => [d.kind, d.status, d.guardian.pass]), [["key_levels", "pending", true], ["pattern", "pending", true], ["pattern", "pending", true]], "H1 forming is not posted");
+  for (const d of drafts) assert.ok(!/\b(entry|SL|TP\d?|BUY|SELL|stop loss|take profit)\b/.test(d.text), d.text);
+});
+
+test("pattern posts: once per pattern and status, at most four a day per channel; the desk answers both", () => {
+  const a = publicAnalysis({ ...KEY_LEVELS, patterns: Array.from({ length: 6 }, (_, i) => ({ tf: "240", id: "flag", status: "confirmed", direction: 1, upper: 3900 + i * 10, lower: 3880 + i * 10, target: 3950 })) }, { now: AT });
+  const first = analysisDrafts(a, { now: AT, channels: ["threads"] });
+  assert.equal(first.length, MAX_PATTERN_DRAFTS_PER_DAY);
+  const known = new Set(first.map((d) => d.id));
+  assert.equal(analysisDrafts(a, { now: AT, channels: ["threads"], known, postedToday: { threads: 4 } }).length, 0);
+  assert.equal(analysisDrafts(a, { now: AT, channels: ["threads"], known, postedToday: { threads: 2 } }).length, 2, "the two not yet drafted");
+  const sql = sqlite();
+  addDrafts(sql, first, { now: AT });
+  assert.equal(draftIdsWithPrefix(sql, "pattern:").length, 4);
+  assert.deepEqual(kindCountsSince(sql, "pattern", "2026-11-16"), { threads: 4 });
+  assert.deepEqual(kindCountsSince(sql, "pattern", "2026-11-17"), {});
+});

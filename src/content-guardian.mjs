@@ -10,6 +10,9 @@
 //   disclaimer      it says it is not advice or an invitation ("bukan ajakan", "not financial advice", ...);
 //   promised_return no promised or guaranteed return, no "risk-free", no "x% per month";
 //   instruction     no live instruction (buy or sell now, entry at, set the stop or target, ...);
+//   signal_words    no trading-signal vocabulary at all (owner 2026-11-14: "Tidak boleh ada advices buy/sell,
+//                   kecuali info buy/sell zone"): entry, SL, TP, stop loss, take profit, cut loss, and BUY, SELL,
+//                   LONG or SHORT written as a signal; a demand or supply zone ("area beli", "area jual") is information;
 //   price_level     no price level (a gold price), unless the owner allows levels as commentary later;
 //   account_data    no account, balance, equity, margin, lot or position;
 //   internal        never Nexus or Omega (the private dashboards);
@@ -20,7 +23,7 @@ import { PRICE_LIKE } from "./public-projection.mjs";
 
 export const CONTENT_GUARDIAN_VERSION = "cryptophys.content-guardian.v1";
 const MONTHS = "jan|januari|january|feb|februari|february|mar|maret|march|apr|april|mei|may|jun|juni|june|jul|juli|july|agu|agustus|aug|august|sep|sept|september|okt|oktober|oct|october|nov|november|des|desember|dec|december";
-export const CONTENT_CHECKS = Object.freeze(["capacity", "disclaimer", "promised_return", "instruction", "price_level", "account_data", "internal", "secret", "attribution", "too_recent"]);
+export const CONTENT_CHECKS = Object.freeze(["capacity", "disclaimer", "promised_return", "instruction", "signal_words", "price_level", "account_data", "internal", "secret", "attribution", "too_recent"]);
 
 const RULES = Object.freeze({
   capacity: /\b(edukasi|education(al)?)\b/i,
@@ -49,6 +52,8 @@ export function checkContentDraft({ text = "", chart = false, decisionTimes = []
   const found = (k) => t.match(RULES[k])?.[0];
   if (found("promised_return")) fail("promised_return", found("promised_return"));
   if (found("instruction")) fail("instruction", found("instruction"));
+  const signal = t.match(/\b(entry|entries|sl|tp\d?|stop[- ]?loss|take[- ]?profit|cut[- ]?loss)\b/i)?.[0] ?? t.match(/\b(BUY|SELL|LONG|SHORT)\b/)?.[0];
+  if (signal) fail("signal_words", signal);
   // Dates are not levels: an ISO date, a time, and a year after a month name are left out of the price check.
   const undated = t.replace(/\b\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?\b/g, " ").replace(/\b\d{1,2}[:.]\d{2}\b/g, " ")
     .replace(new RegExp(`\\b(${MONTHS})\\.?\\s+(\\d{1,2},?\\s+)?(19|20)\\d{2}\\b`, "gi"), " ");

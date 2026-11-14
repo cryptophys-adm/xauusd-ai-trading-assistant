@@ -218,6 +218,7 @@ import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
 import { scoreModelArena, pruneModelArena, readModelArena } from "./model-arena.mjs";
 import { readPublicProjection } from "./public-projection.mjs";
+import { publicAnalysis } from "./public-analysis.mjs";
 import { readShadowMode, setShadowMode, shadowModeMessage, checkShadowBudget } from "./shadow-switch.mjs";
 import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
 import { reserveTvCalls, releaseTvCalls } from "./tv-budget.mjs";
@@ -2124,6 +2125,14 @@ export class OrganismDna extends WorkerEntrypoint<Env> {
 export class PublicProjection extends WorkerEntrypoint<Env> {
   async recaps(input?: { days?: number }): Promise<JsonObject> {
     return readPublicProjection(this.env, { days: Number(input?.days) || 2 }) as Promise<JsonObject>;
+  }
+  /**
+   * The real-time public analysis (owner 2026-11-14: "Real-time, hanya analisa"): the Key Level Agent's zones,
+   * the H1/H4/D1 chart patterns and the structure, with no decision, plan or account data (src/public-analysis.mjs).
+   */
+  async analysis(): Promise<JsonObject> {
+    const [strategy, latest] = await Promise.all([readStrategy(this.env).catch(() => null), readLatestDecision(this.env).catch(() => null)]);
+    return publicAnalysis((strategy as any)?.key_levels ?? null, { structure: (latest as any)?.structure ?? null }) as unknown as JsonObject;
   }
 }
 

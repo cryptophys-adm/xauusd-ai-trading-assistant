@@ -21,6 +21,26 @@ public", and that decides the stack:
 | The system's own analysis (stance, bias, reasoning, patterns, levels as commentary) | Yes | Yes, through the public projection below |
 | Account, balance, positions, lot size, Omega state, any secret | Yes | Never |
 
+## 0.1 Content policy (owner, 2026-11-14)
+
+The owner's decisions on what the public accounts show (Threads account **xauusd-ai-cta**; example given: a
+pattern post with a chart, its lines and a level ladder, "nanti dibuat versi cryptophys"):
+
+- **Focus on analytics and key levels** ("fokus pada hasil analytics dan key level"). Price levels are allowed
+  as analysis: the Key Level Agent's zones, a pattern's lines, what undoes it, its measured projection.
+- **No buy or sell advice, except buy and sell zones as information** ("Tidak boleh ada advices buy/sell,
+  kecuali info buy/sell zone"): demand zones ("area beli") and supply zones ("area jual") may be shown; an
+  entry, a stop, a take profit, BUY/SELL/LONG/SHORT as a signal, a lot or a rating never (the guardian's
+  `signal_words` and `instruction` rules).
+- **Real time for the analysis, 24 hours for the decisions** ("Real-time, hanya analisa"): zones, patterns and
+  structure are posted when they form (`src/public-analysis.mjs`, `PublicProjection.analysis`); the system's
+  own decisions (BUY, SELL, WAIT) appear only in the delayed recap (`src/public-projection.mjs`).
+- **The chart image is a TradingView chart screenshot** with TradingView's attribution always visible, and a
+  Cryptophys panel beside it with the levels (the free widget cannot draw our lines on the chart). Not a chart
+  drawn from Yahoo data (owner, after the risks: Yahoo's terms forbid republishing its prices, its usual
+  endpoints are unofficial, and its gold series is COMEX futures, a few dollars off the spot XAUUSD the system
+  reads) and not from the account's TradingView bars or the broker's MT5 bars (licensed for internal use).
+
 ## 1. Regulation
 
 POJK 6/2026 (OJK, 2026) asks everyone who publishes financial-sector information to declare their capacity:
