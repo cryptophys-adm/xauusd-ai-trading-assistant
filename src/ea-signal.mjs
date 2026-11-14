@@ -168,9 +168,10 @@ export function blackoutWindow(env) {
   return { beforeMs, afterMs };
 }
 
-export async function eaSignal(env, { now = Date.now() } = {}) {
+export async function eaSignal(env, { now = Date.now(), control: controlIn = null } = {}) {
   const envKill = String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
-  const control = await readControl(env);
+  // The bridge sync passes the control it read in the same moment, so the kill switch is read once a sync.
+  const control = controlIn && CONTROL_MODES.includes(controlIn.mode) ? controlIn : await readControl(env);
   const kill = envKill || control.mode === "killed";
   const killSource = envKill ? "env" : control.mode === "killed" ? "omega" : "";
   const paused = control.mode === "paused";
