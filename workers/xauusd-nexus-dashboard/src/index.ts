@@ -18,7 +18,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 // @ts-ignore: plain ES module, typed by its JSDoc
-import { PushHubCore, PUSH_HUB_NAME } from "./push-hub.mjs";
+import { PushHubCore, PUSH_HUB_NAME, nexusStreamRequest } from "./push-hub.mjs";
 
 /**
  * The push hub (ADR-0015 "Organs as cells", phase 1; owner 2026-11-14: "C. mulai kerjakan"; src/push-hub.mjs):
@@ -36,6 +36,7 @@ export class PushHub extends DurableObject {
   async fetch(request: Request): Promise<Response> { return this.core.connect(request); }
   async publish(topic: string, data: unknown): Promise<{ status: string; sent: number }> { return this.core.publish(topic, data); }
   async connections(): Promise<Record<string, number>> { return this.core.connections(); }
+  async subscribers(topic: string): Promise<number> { return this.core.subscribers(topic); }
   async webSocketMessage(): Promise<void> { /* pages only listen */ }
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> { try { ws.close(code, reason); } catch { /* closed */ } }
 }
@@ -72,7 +73,10 @@ export default {
     // page subscribes to, as they change. Without the binding the page keeps polling.
     if (request.method === "GET" && url.pathname === "/api/stream") {
       if (!env.PUSH_HUB) return json({ status: "unavailable", error: "push_hub_not_configured" }, 503);
-      return env.PUSH_HUB.getByName(PUSH_HUB_NAME).fetch(request);
+      // Only Nexus' own topics here: the Omega overview is subscribed through Omega's route, which checks the person.
+      const limited = nexusStreamRequest(request);
+      if (!limited) return json({ status: "error", error: "no_known_topic" }, 400);
+      return env.PUSH_HUB.getByName(PUSH_HUB_NAME).fetch(limited);
     }
 
     if (request.method === "GET" && url.pathname === "/api/ohlcv") {

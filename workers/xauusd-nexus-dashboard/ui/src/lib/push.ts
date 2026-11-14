@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 
 /**
- * The push hub's snapshots of some topics (ADR-0015 phase 1, GET /api/stream on this origin), over one socket:
+ * The push hub's snapshots of some topics (ADR-0015 phase 1, GET /api/stream on this origin, or Omega's
+ * /omega/api/push for the Omega overview), over one socket:
  * the latest snapshot of each topic the hub holds as soon as the socket opens, then each new one as its cell
  * publishes it. The socket reconnects with a growing pause (up to a minute) and sends "ping" every 30 seconds,
  * which the hub answers without waking. `live` is true once every topic has delivered a snapshot on the open
  * socket: the page may then poll rarely.
  */
-export function usePushMany(topics: string[]) {
+export function usePushMany(topics: string[], path = "/api/stream") {
   const key = topics.join(",");
   const [data, setData] = useState<Record<string, any>>({});
   const [live, setLive] = useState(false);
@@ -23,7 +24,7 @@ export function usePushMany(topics: string[]) {
     let seen = new Set<string>();
     const open = () => {
       if (stop.current || typeof WebSocket === "undefined" || !wanted.length) return;
-      const url = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/stream?topics=${encodeURIComponent(key)}`;
+      const url = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${path}?topics=${encodeURIComponent(key)}`;
       try { ws = new WebSocket(url); } catch { schedule(); return; }
       ws.onopen = () => {
         retry = 1000;
@@ -51,7 +52,7 @@ export function usePushMany(topics: string[]) {
     };
     open();
     return () => { stop.current = true; window.clearInterval(ping); window.clearTimeout(timer); try { ws?.close(); } catch { /* closed */ } };
-  }, [key]);
+  }, [key, path]);
 
   return { data, live };
 }

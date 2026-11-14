@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { usePushMany } from "../lib/push";
 import {
   Activity,
   AlertTriangle,
@@ -561,7 +562,8 @@ export default function Omega() {
   }, [engineDirty]);
 
   const applyOverview = (ov: any) => {
-    setData(ov);
+    // A pushed overview carries no viewer (one snapshot for every page): the last read's viewer stays.
+    setData((prev: any) => (ov?.viewer ? ov : { ...ov, viewer: prev?.viewer }));
     setError(null);
     setLoading(false);
     setUpdatedAt(new Date().toISOString().slice(11, 19) + " UTC");
@@ -600,34 +602,18 @@ export default function Omega() {
     }
   };
 
+  // ADR-0015 phase 1 (owner 2026-11-14: "lanjut"): the overview is pushed after each bridge sync through
+  // Omega's own route (it checks the Access identity), once for every open page; it replaces the 0.5-second
+  // overview stream. The read stays every 8 s until the first push, then every 60 s as a fallback.
+  const push = usePushMany(["omega-overview"], "/omega/api/push");
+  const pushed = push.data["omega-overview"];
+  useEffect(() => { if (pushed) applyOverview(pushed); }, [pushed]);
+  useEffect(() => { setStreamLive(push.live); }, [push.live]);
+  useEffect(() => { load(); }, []);
   useEffect(() => {
-    load();
-    let es: EventSource | null = null;
-    if (typeof EventSource !== "undefined") {
-      try {
-        es = new EventSource("/omega/api/stream");
-        es.addEventListener("overview", (ev: MessageEvent) => {
-          try {
-            const parsed = JSON.parse(ev.data);
-            setStreamLive(true);
-            applyOverview(parsed);
-          } catch {
-            // ignore malformed frame
-          }
-        });
-        es.onerror = () => {
-          setStreamLive(false);
-        };
-      } catch {
-        es = null;
-      }
-    }
-    const t = window.setInterval(load, 8_000);
-    return () => {
-      if (es) es.close();
-      window.clearInterval(t);
-    };
-  }, []);
+    const t = window.setInterval(load, push.live ? 60_000 : 8_000);
+    return () => window.clearInterval(t);
+  }, [push.live]);
 
   const sendControl = async (mode: string, confirm?: string) => {
     const reason = controlReason.trim();
