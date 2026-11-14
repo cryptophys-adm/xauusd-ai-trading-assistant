@@ -135,6 +135,34 @@ export function marketClosed(symbol, nowSec) {
   return (p.weekday === "Fri" && minutes >= 17 * 60 + 30) || p.weekday === "Sat" || (p.weekday === "Sun" && minutes < 18 * 60);
 }
 
+const NY_DATE = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" });
+const DAYS_SINCE_FRIDAY = Object.freeze({ Fri: 0, Sat: 1, Sun: 2 });
+/**
+ * The weekend closure gold is in at `nowSec`, named by its Friday's New York date ("2026-11-13"), or
+ * null while gold trades. The cron's closed-market idle mark (index.mjs) holds for one closure only.
+ */
+export function closureId(nowSec) {
+  if (marketClosed(CANONICAL_SYMBOL, nowSec)) {
+    const weekday = NY_WEEK.formatToParts(new Date(nowSec * 1000)).find((x) => x.type === "weekday")?.value;
+    const back = DAYS_SINCE_FRIDAY[weekday];
+    if (Number.isFinite(back)) return NY_DATE.format(new Date((nowSec - back * 86400) * 1000));
+  }
+  return null;
+}
+
+/**
+ * Pure: the work a closed market still leaves for the cron in these records: a series without bars
+ * (bootstrap) and a series holding the MT5 fallback's broker bars (heal, src/mt5-fallback.mjs).
+ */
+export function pendingWork(records) {
+  const bootstrap = [], heal = [];
+  SERIES.forEach((spec, i) => {
+    if (!records?.[i]?.candles?.length) bootstrap.push(spec.key);
+    if (Number.isFinite(Number(records?.[i]?.fallback?.since_sec))) heal.push(spec.key);
+  });
+  return { bootstrap, heal };
+}
+
 /** The wait between pulls of a series whose last pull after a gap brought no new bar: a quarter of its bar, 1 hour at most. */
 export function gapBackoffSeconds(spec) {
   return Math.min(Math.max(spec.seconds / 4, 300), 3600);
@@ -250,8 +278,19 @@ async function callGateway(env, requests) {
 /**
  * One quota-aware refresh cycle. Only series with a newly closed bar are
  * requested, chart first, bounded per run and per UTC day.
+ *
+ * `keep` (an array) receives the series records as this run left them, in SERIES order, so the cron
+ * builds its bundle from them instead of reading every series from KV a second time (2026-11-14,
+ * resource audit: 15 KV reads a minute). The summary itself never carries them: it is stored in KV.
  */
-export async function refreshSeries(env, { now = Date.now(), force = false } = {}) {
+export async function refreshSeries(env, { now = Date.now(), force = false, keep = null } = {}) {
+  const { summary, records } = await refreshCycle(env, { now, force });
+  if (Array.isArray(keep)) keep.splice(0, keep.length, ...records);
+  return { ...summary, due: pendingWork(records) };
+}
+
+async function refreshCycle(env, { now, force }) {
+  const out = (summary, records) => ({ summary, records });
   const kv = env.MARKET_DATA_CACHE;
   if (!kv) throw Object.assign(new Error("MARKET_DATA_CACHE binding is missing"), { code: "cache_not_configured" });
   const nowSec = Math.floor(now / 1000);
@@ -278,19 +317,19 @@ export async function refreshSeries(env, { now = Date.now(), force = false } = {
   });
   if (planned.length === 0) {
     const derived = await deriveSeries(kv, cached, now, new Set());
-    return { status: "up_to_date", requested: 0, updated: [], derived };
+    return out({ status: "up_to_date", requested: 0, updated: [], derived }, cached);
   }
 
   // The gateway's quota cooldown holds: nothing is reserved or asked; the derived series still extend.
   const cooldownUntil = await knownCooldownUntil(kv, now);
   if (cooldownUntil) {
     const derived = await deriveSeries(kv, cached, now, new Set());
-    return { status: "mcp_quota_cooldown_active", quota_cooldown_until: new Date(cooldownUntil).toISOString(), requested: 0, deferred: planned.length, updated: [], failed: [], derived };
+    return out({ status: "mcp_quota_cooldown_active", quota_cooldown_until: new Date(cooldownUntil).toISOString(), requested: 0, deferred: planned.length, updated: [], failed: [], derived }, cached);
   }
 
   const budget = await reserveBudget(kv, env, Math.min(perRun, planned.length), now);
   const batch = planned.slice(0, budget.allowed);
-  if (batch.length === 0) return { status: "daily_budget_exhausted", requested: 0, updated: [], budget };
+  if (batch.length === 0) return out({ status: "daily_budget_exhausted", requested: 0, updated: [], budget }, cached);
 
   let results, gatewayError = null;
   try {
@@ -339,14 +378,14 @@ export async function refreshSeries(env, { now = Date.now(), force = false } = {
   // series pulled natively in this run is not derived again in the same run.
   const fresh = await Promise.all(SERIES.map((spec) => readSeries(kv, spec)));
   const derived = await deriveSeries(kv, fresh, now, new Set(updated.map((u) => u.series)));
-  return {
+  return out({
     status: gatewayError ? asString(gatewayError.code) || "gateway_error" : failed.length ? "partial" : "ok",
     quota_cooldown_until: gatewayError?.quota_cooldown_until || null,
     requested: batch.length, deferred: planned.length - batch.length, updated, failed, derived, budget
-  };
+  }, fresh);
 }
 
-/** Extends every derived series from its cached source. Never calls the gateway. */
+/** Extends every derived series from its cached source; `records` takes the new records. Never calls the gateway. */
 async function deriveSeries(kv, records, now, skip) {
   const nowSec = Math.floor(now / 1000);
   const out = [];
@@ -366,14 +405,16 @@ async function deriveSeries(kv, records, now, skip) {
     const incoming = aggregateCandles(source, { seconds: spec.seconds, sourceSeconds: sourceSpec.seconds, nowSec, fetchedAtSec, after });
     if (!incoming.length) continue;
     const candles = mergeCandles(own, incoming, spec.retain);
-    await writeSeries(kv, spec, {
+    const record = {
       series: spec.key, symbol: spec.symbol, interval: spec.interval, timeframe: spec.timeframe,
       fetched_at: new Date(now).toISOString(), derived_from: spec.derived_from, candle_count: candles.length,
       volume_available: candles.length > 0 && candles.every((c) => c.volume !== null),
       // A series still fed by broker minutes keeps its fallback mark until the source heals.
       ...(records[index]?.fallback && !healing ? { fallback: records[index].fallback } : {}),
       candles
-    });
+    };
+    await writeSeries(kv, spec, record);
+    records[index] = record;
     out.push({ series: spec.key, derived: incoming.length, stored: candles.length, ...(healing ? { healed: true } : {}) });
   }
   return out;
@@ -391,10 +432,13 @@ function frame(record, spec) {
   };
 }
 
-/** Assembles the engine input bundle from the per-series caches. */
-export async function buildBundle(env, now = Date.now()) {
+/**
+ * Assembles the engine input bundle from the per-series caches, or from `known` (the records a
+ * refresh just left, in SERIES order) without reading KV again.
+ */
+export async function buildBundle(env, now = Date.now(), known = null) {
   const kv = env.MARKET_DATA_CACHE;
-  const records = await Promise.all(SERIES.map((spec) => readSeries(kv, spec)));
+  const records = Array.isArray(known) && known.length === SERIES.length ? known : await Promise.all(SERIES.map((spec) => readSeries(kv, spec)));
   const timeframes = {}, external = {};
   SERIES.forEach((spec, i) => {
     // Context series (the Nexus correlations panel) never enter the engine input bundle.
