@@ -118,3 +118,14 @@ export function storeToken(sql, channel, { access_token, expires_in = null }, { 
   sql.exec("INSERT INTO tokens (channel, access_token, refreshed_at, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT(channel) DO UPDATE SET access_token = excluded.access_token, refreshed_at = excluded.refreshed_at, expires_at = excluded.expires_at",
     channel, access_token, iso(now), expires_in ? iso(now + expires_in * 1000) : null);
 }
+
+/** The ids of drafts whose id starts with `prefix` (dedupe), and how many drafts of a kind each channel got since `sinceIso`. */
+export function draftIdsWithPrefix(sql, prefix) {
+  ensureDesk(sql);
+  const p = String(prefix ?? "");
+  return rows(sql, "SELECT id FROM drafts WHERE id >= ? AND id < ?", p, p + "\uffff").map((r) => r.id);
+}
+export function kindCountsSince(sql, kind, sinceIso) {
+  ensureDesk(sql);
+  return Object.fromEntries(rows(sql, "SELECT channel, COUNT(*) AS n FROM drafts WHERE kind = ? AND created_at >= ? GROUP BY channel", kind, sinceIso).map((r) => [r.channel, Number(r.n)]));
+}

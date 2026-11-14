@@ -19,6 +19,13 @@
       "binding": "OMEGA",
       "service": "xauusd-ai-trading-assistant",
       "entrypoint": "OmegaGateway"
+    },
+    // The content queue (xauusd-content's ContentApi, owner 2026-11-14): the drafts, a person's approval or
+    // rejection, a dry run. Publishing stays off in the content Worker until the owner turns it on.
+    {
+      "binding": "CONTENT",
+      "service": "xauusd-content",
+      "entrypoint": "ContentApi"
     }
   ],
   // ADR-0015 phase 1: the Nexus Worker's push hub, bound across scripts (no migration here), for the overview

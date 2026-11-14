@@ -11,7 +11,8 @@
 // in the desk's storage. No token ever leaves this Worker or appears in an answer.
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { dailyDrafts, CHANNELS } from "./drafts.mjs";
-import { addDrafts, listDrafts, getDraft, draftEvents, decideDraft, recordPublish, deskCounts, storedToken, storeToken } from "./desk.mjs";
+import { addDrafts, listDrafts, getDraft, draftEvents, decideDraft, recordPublish, deskCounts, storedToken, storeToken, draftIdsWithPrefix, kindCountsSince } from "./desk.mjs";
+import { analysisDrafts } from "./analysis-drafts.mjs";
 import { publishThreads, publishInstagram, publishingQuota, refreshToken, REFRESH_AFTER_DAYS } from "./publishers.mjs";
 
 const publishOn = (env) => String(env?.CONTENT_PUBLISH ?? "off").trim().toLowerCase() === "on";
@@ -30,6 +31,8 @@ export class ContentDesk extends DurableObject {
   async counts() { return deskCounts(this.sql); }
   async token(channel) { return storedToken(this.sql, channel); }
   async saveToken(channel, token, now) { storeToken(this.sql, channel, token, { now }); return true; }
+  async idsWithPrefix(prefix) { return draftIdsWithPrefix(this.sql, prefix); }
+  async kindCounts(kind, sinceIso) { return kindCountsSince(this.sql, kind, sinceIso); }
 }
 const desk = (env) => env.CONTENT_DESK.get(env.CONTENT_DESK.idFromName("desk"));
 
@@ -64,6 +67,19 @@ export async function draftDay(env, { now = Date.now() } = {}) {
   const { summary, drafts } = dailyDrafts(projection?.recaps ?? [], { now, channels: channelsOf(env), delayHours: delayOf(env) });
   const added = drafts.length ? await desk(env).add(drafts, now) : [];
   return { bars: summary.bars, drafts: drafts.map((d) => ({ id: d.id, status: d.status, guardian_pass: d.guardian.pass })), added };
+}
+
+/** The real-time analysis drafts (key-level map at 06 UTC, pattern posts every hour), queued once. */
+export const RECAP_CRON = "17 22 * * 2-6";
+export const ANALYSIS_CRON = "9 * * * 1-5";
+export async function draftAnalysis(env, { now = Date.now() } = {}) {
+  const analysis = await env.PROJECTION.analysis();
+  const d = desk(env);
+  const known = new Set(await d.idsWithPrefix("pattern:"));
+  const postedToday = await d.kindCounts("pattern", new Date(now).toISOString().slice(0, 10));
+  const drafts = analysisDrafts(analysis, { now, channels: channelsOf(env), levelsRun: new Date(now).getUTCHours() === 6, postedToday, known });
+  const added = drafts.length ? await d.add(drafts, now) : [];
+  return { zones: analysis?.zones?.length ?? 0, patterns: analysis?.patterns?.length ?? 0, drafts: drafts.map((x) => ({ id: x.id, status: x.status })), added };
 }
 
 /** Refreshes a channel's long-lived token when it is older than REFRESH_AFTER_DAYS (only while publishing is on). */
@@ -106,10 +122,10 @@ export class ContentApi extends WorkerEntrypoint {
       const a = await accountOf(this.env, c);
       accounts[c] = { configured: Boolean(a), refreshed_at: a?.refreshed_at ?? null, quota: a && publishOn(this.env) ? await publishingQuota({ channel: c, account: a }) : null };
     }
-    return { publish: publishOn(this.env) ? "on" : "off", channels: channelsOf(this.env), delay_hours: delayOf(this.env), accounts, counts: await desk(this.env).counts() };
+    return { publish: publishOn(this.env) ? "on" : "off", channels: channelsOf(this.env), threads_handle: this.env?.THREADS_HANDLE ?? null, delay_hours: delayOf(this.env), accounts, counts: await desk(this.env).counts() };
   }
-  /** Drafts the recap now (the same as the scheduled run). */
-  async draftNow() { return draftDay(this.env); }
+  /** Drafts now (the same as the scheduled runs): the recap and the analysis. */
+  async draftNow() { return { recap: await draftDay(this.env), analysis: await draftAnalysis(this.env) }; }
 }
 
 /** The platform's health read (ADR-0013 external organ; bound by the platform as EXT_XAUUSD_CONTENT). */
@@ -126,7 +142,13 @@ export default {
     return new Response("Not found", { status: 404 });
   },
   async scheduled(event, env, ctx) {
-    const drafted = await draftDay(env).catch((e) => ({ status: "error", message: String(e?.message ?? e).slice(0, 200) }));
+    const fail = (e) => ({ status: "error", message: String(e?.message ?? e).slice(0, 200) });
+    if (event?.cron === ANALYSIS_CRON) {
+      const drafted = await draftAnalysis(env, { now: event.scheduledTime || Date.now() }).catch(fail);
+      if (drafted?.added?.length || drafted?.status === "error") console.log("content_analysis_drafts", JSON.stringify(drafted));
+      return;
+    }
+    const drafted = await draftDay(env).catch(fail);
     console.log("content_drafts", JSON.stringify(drafted));
     const tokens = await refreshTokens(env).catch((e) => ({ status: "error", message: String(e?.message ?? e).slice(0, 200) }));
     if (tokens?.status !== "publishing_off") console.log("content_tokens", JSON.stringify(tokens));
