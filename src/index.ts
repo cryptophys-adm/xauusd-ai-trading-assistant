@@ -216,6 +216,7 @@ import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
 import { readNeuronAllocation } from "./neuron-allocation.mjs";
 import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
+import { scoreModelArena, pruneModelArena, readModelArena } from "./model-arena.mjs";
 import { readShadowMode, setShadowMode, shadowModeMessage, checkShadowBudget } from "./shadow-switch.mjs";
 import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
 import { reserveTvCalls, releaseTvCalls } from "./tv-budget.mjs";
@@ -1971,9 +1972,10 @@ async function decideBar(env: Env, barClose: string | null, now = Date.now()): P
     if (decided) console.log("decision_engine", JSON.stringify(result));
     // ADR-0015: the new decision to the open pages at once.
     if (decided) await publishMarket(env, { decision: true });
-    // Aether A7 for the council (owner 2026-11-13): its shadow call with a note under test, after the decision.
+    // The council's shadow jobs, after the decision: Aether A7's notes under test (owner 2026-11-13) and the
+    // model arena (AI Neuron B, owner 2026-11-14), one result per job.
     const shadow = await runShadowJob(result);
-    if (shadow && shadow.status !== "nothing_to_do") console.log("shadow_knowledge", JSON.stringify({ chart: "council", ...shadow }));
+    if (shadow && Object.values(shadow).some((r: any) => r?.status !== "nothing_to_do" && r?.status !== "not_an_arena_bar")) console.log("council_shadow", JSON.stringify({ chart: "council", ...shadow }));
   } catch (error) {
     console.error("decision_engine_failed", error instanceof Error ? error.message : String(error));
   }
@@ -2688,6 +2690,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/model-arena") {
+    // AI Neuron B: the challenger model against the live moderator model on the heavy steps, in shadow (src/model-arena.mjs); read-only.
+    try {
+      return dashboardJson({ status: "ok", ...(await readModelArena(env, { days: Math.min(90, Math.max(1, Number(url.searchParams.get("days") || "14") || 14)) })) });
+    } catch (error) {
+      console.error("model_arena_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "model_arena_unavailable" }, 500);
+    }
+  }
   if (url.pathname === "/api/metric-shadow") {
     // Metric interpretations, not prose: the shadow arm's comparison per agent (src/metric-shadow.mjs); read-only.
     try {
@@ -3318,7 +3329,10 @@ export default {
           // Aether A7: score the shadow note answers and their controls; drop those older than 60 days.
           const shadowScored = await scoreShadowKnowledge(env);
           if (Number(shadowScored.scored)) console.log("shadow_knowledge_scored", JSON.stringify(shadowScored));
-          if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) await pruneShadowKnowledge(env);
+          // AI Neuron B: the model arena's pairs, scored on the same 15m outcome; rows older than 90 days dropped.
+          const arenaScored = await scoreModelArena(env);
+          if (Number(arenaScored.scored)) console.log("model_arena_scored", JSON.stringify(arenaScored));
+          if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) { await pruneShadowKnowledge(env); await pruneModelArena(env); }
           if (captured.status === "captured" || Number(scoredInputs.scored) || Number(replayed.hours) || Number(replayed.failed)) console.log("strategy_inputs", JSON.stringify({ captured, scored: scoredInputs, replayed }));
         } catch (e) { console.error("strategy_inputs_failed", e instanceof Error ? e.message : String(e)); }
         // Agent compliance (RFC_AETHER_KNOWLEDGE_GUARDIAN A1): deterministic rule checks of the room

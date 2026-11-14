@@ -55,6 +55,7 @@ import { learnedBlock, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { effectiveLearnedPack } from "./learned-live.mjs";
 import { modelAdvice } from "./model-dataset.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
+import { arenaEnabled, isArenaBar, arenaEvery, runArenaCall } from "./model-arena.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
 import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT } from "./strategy-agents.mjs";
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
@@ -1106,6 +1107,8 @@ export async function askCouncil(env, evidence, { clock = () => Date.now(), dead
   const closeMs = Date.parse(evidence?.bar_close ?? "");
   const learned = Number.isFinite(closeMs) && learnedKnowledgeEnabled(env) ? learnedBlock(env, { agent: COUNCIL_AGENT, chart: "15", session: sessionOf(closeMs), pack: await effectiveLearnedPack(env) }) : null;
   const base = councilMessages(evidence, { learned });
+  // The first request's messages, for the model arena (src/model-arena.mjs): not enumerable, never stored.
+  const withMessages = (r) => Object.defineProperty(r, "messages", { value: base, enumerable: false });
   let messages = base;
   let errors = [];
   let maxTokens = COUNCIL_MAX_TOKENS;
@@ -1114,11 +1117,11 @@ export async function askCouncil(env, evidence, { clock = () => Date.now(), dead
   let last = null;
   for (let attempt = 0; attempt < 4; attempt++) {
     const r = await callBusModel(env, { messages, schemaName: "decision_council", schema: COUNCIL_JSON_SCHEMA, maxTokens, effort: "low", deadline, clock, runState, role: "moderator", skipPrimary });
-    if (r.status !== "answered") return { answer: null, reason: r.status === "budget_exhausted" ? "out of time" : `model failed: ${clip(r.error, 120)}`, errors, model: r.model ?? null };
+    if (r.status !== "answered") return withMessages({ answer: null, reason: r.status === "budget_exhausted" ? "out of time" : `model failed: ${clip(r.error, 120)}`, errors, model: r.model ?? null });
     last = r;
     const obj = r.obj && typeof r.obj === "object" ? { ...r.obj } : null;
     const v = r.truncated ? { valid: false, errors: ["answer_cut_off"] } : validateCouncil(obj);
-    if (v.valid) return { answer: obj, model: r.model, fallback_used: r.fallback_used === true, errors, ...(attempt ? { retries: attempt } : {}) };
+    if (v.valid) return withMessages({ answer: obj, model: r.model, fallback_used: r.fallback_used === true, errors, ...(attempt ? { retries: attempt } : {}) });
     errors = v.errors;
     const timeLeft = deadline - clock() > COUNCIL_RETRY_MIN_MS;
     if (r.truncated && !briefed && timeLeft) {
@@ -1138,7 +1141,7 @@ export async function askCouncil(env, evidence, { clock = () => Date.now(), dead
     }
     break;
   }
-  return { answer: null, reason: last?.truncated ? "answer cut off" : `invalid answer (${errors.join(", ")})`, errors, model: last?.model ?? null };
+  return withMessages({ answer: null, reason: last?.truncated ? "answer cut off" : `invalid answer (${errors.join(", ")})`, errors, model: last?.model ?? null });
 }
 
 /**
@@ -1181,7 +1184,9 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     });
     if (advice) context.model = advice;
     const evidence = councilEvidence({ barClose: closeIso, cards: assessment.cards, quorum: assessment.quorum, guards: assessment.guards, context, agentRecords, condition: contextOf({ mode: modeThresholds(env?.TRADING_MODE).mode, regime: data.regime }) });
+    const councilStarted = clock();
     const council = await askCouncil(env, evidence, { clock });
+    const councilMs = clock() - councilStarted;
     if (advice) council.model_advice = advice;
     const record = buildDecisionRecord({ key, barClose: closeIso, loaded: data, assessment, council, previous, now, decidedAt: new Date(clock()).toISOString(), env });
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -1192,13 +1197,13 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     try { telegram = await notifyDecision(env, record, send, { now: clock() }); } catch (e) { telegram = { sent: false, reason: `failed: ${clip(e?.message ?? e, 120)}` }; }
     if (record.trade && typeof recordSignal === "function") { try { ledger = await recordSignal(record); } catch { ledger = 0; } }
     const out = { status: "decided", decision_key: key, stance: record.stance, source: record.source, confidence: record.confidence, latency_seconds: record.latency_seconds, overruled: Boolean(record.overruled), telegram, ledger };
+    // Shadow jobs, handed back for the caller to run after the decision; they never change it. Not enumerable.
+    const jobs = [];
     // Aether A7 for the council (owner 2026-11-13, "1-3"): a learned note addressed to the council is tested
     // by one extra council call with the note, put through the same guardrails, against the stance that was
-    // decided. Handed back as a job the caller runs after the decision; it never changes the decision.
+    // decided.
     if (shadowKnowledgeEnabled(env)) {
-      Object.defineProperty(out, "shadow_job", {
-        enumerable: false,
-        value: async () => {
+      jobs.push(["knowledge", async () => {
           const plan = planShadowCalls({ items: await shadowItems(env), roster: [COUNCIL_AGENT], openings: [{ agent: COUNCIL_AGENT, status: "ok", stance: record.stance }], chart: "M15" });
           if (!plan.length) return { status: "nothing_to_do" };
           const base = learnedKnowledgeEnabled(env) ? learnedBlock(env, { agent: COUNCIL_AGENT, chart: "15", session: sessionOf(keyCloseMs(key)), pack: await effectiveLearnedPack(env) }) : null;
@@ -1208,6 +1213,26 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
             validate: (o) => validateCouncil(o),
             toStance: (o) => decide({ answer: o, guards: assessment.guards, strategy: data.strategy ?? null, quorum: assessment.quorum }).stance
           });
+      }]);
+    }
+    // AI Neuron B (owner 2026-11-14, src/model-arena.mjs): on a sample of bars the council's messages go to the
+    // challenger model once, and its answer through the same guardrails, beside the stance that was decided.
+    if (arenaEnabled(env) && isArenaBar(closeIso, arenaEvery(env))) {
+      jobs.push(["arena", () => runArenaCall(env, {
+        role: "decision_council", candleKey: key, statementClose: closeIso, clock, schema: COUNCIL_JSON_SCHEMA, schemaName: "decision_council", maxTokens: COUNCIL_MAX_TOKENS,
+        messages: council.messages ?? councilMessages(evidence),
+        validate: (o) => validateCouncil(o),
+        toStance: (o) => decide({ answer: o, guards: assessment.guards, strategy: data.strategy ?? null, quorum: assessment.quorum }).stance,
+        live: { model: council.model ?? null, status: !council.answer ? "failed" : council.retries || council.fallback_used ? "ok_after_retry" : "ok", stance: record.stance, latency_ms: councilMs }
+      })]);
+    }
+    if (jobs.length) {
+      Object.defineProperty(out, "shadow_job", {
+        enumerable: false,
+        value: async () => {
+          const res = {};
+          for (const [name, job] of jobs) { try { res[name] = await job(); } catch (e) { res[name] = { status: "error", message: clip(e?.message ?? e, 200) }; } }
+          return res;
         }
       });
     }

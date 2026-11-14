@@ -13,6 +13,7 @@ import { scorecards } from "./outcome-scoring.mjs";
 import { ensureThreadSchema } from "./agent-threads.mjs";
 import { readAllocationState, readAllocationEvents, ALLOCATION_RULES } from "./agent-allocation.mjs";
 import { readMetricShadow } from "./metric-shadow.mjs";
+import { readModelArena } from "./model-arena.mjs";
 
 export const NEURON_ALLOCATION_VERSION = "cryptophys.neuron-allocation.v1";
 const ROOM_SQL = `CASE
@@ -172,7 +173,7 @@ export async function readNeuronAllocation(env, { days = 7, now = Date.now() } =
   const rows = ((await db.prepare(`SELECT substr(ts, 1, 10) AS day, ${ROOM_SQL} AS room, agent, model, COUNT(*) AS calls, SUM(usage_tokens) AS tokens FROM agent_thread_messages WHERE ts >= ? AND usage_tokens > 0 GROUP BY day, room, agent, model`).bind(since).all()).results) || [];
   const usage = await readAiUsage(db, { days: n, now });
   const cards = await scorecards(db, { days: 30, now, snapshot: true });
-  const [state, changes, metric] = await Promise.all([readAllocationState(env), readAllocationEvents(db, { limit: 50 }), readMetricShadow(env, { days: n, now }).catch(() => null)]);
+  const [state, changes, metric, arena] = await Promise.all([readAllocationState(env), readAllocationEvents(db, { limit: 50 }), readMetricShadow(env, { days: n, now }).catch(() => null), readModelArena(env, { days: 30, now }).catch(() => null)]);
   const grounding = Object.fromEntries((metric?.agents ?? []).filter((a) => a.grounding_rate != null).map((a) => [a.agent, a.grounding_rate]));
-  return { status: "ok", generated_at: new Date(now).toISOString(), window_days: n, record_days: 30, ...buildAllocation({ rows, rates: blendedRates(usage.rows), cards, days: n, state, changes, grounding }), metric_shadow: metric, memo: memoComparison(usage.rows, { days: n }), prompt_cache: promptCache(usage.totals) };
+  return { status: "ok", generated_at: new Date(now).toISOString(), window_days: n, record_days: 30, ...buildAllocation({ rows, rates: blendedRates(usage.rows), cards, days: n, state, changes, grounding }), metric_shadow: metric, memo: memoComparison(usage.rows, { days: n }), prompt_cache: promptCache(usage.totals), model_arena: arena };
 }

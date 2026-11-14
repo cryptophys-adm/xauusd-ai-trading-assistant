@@ -34,7 +34,9 @@ export const NEURON_RATES = Object.freeze({
   "@cf/openai/gpt-oss-120b": { input: 31818, output: 68182 },
   "@cf/openai/gpt-oss-20b": { input: 18182, output: 27273 },
   "@cf/zai-org/glm-4.7-flash": { input: 5500, output: 36400 },
-  "@cf/baai/bge-small-en-v1.5": { input: 1841, output: 0 }
+  "@cf/baai/bge-small-en-v1.5": { input: 1841, output: 0 },
+  // The model arena's challenger (src/model-arena.mjs, shadow only); its cached input tokens have their own rate.
+  "@cf/deepseek-ai/deepseek-v4.1-flash-1017": { input: 27273, output: 109091, cached: 545 }
 });
 /** Neurons included per day; above it each 1,000 neurons cost USD 0.011 (Workers Paid). */
 export const FREE_NEURONS_PER_DAY = 10_000;
@@ -95,11 +97,15 @@ export async function recordAiUsage(db, { source, model, outcome = "ok", prompt 
   }
 }
 
-/** Estimated neurons of a row, or null when the model has no published rate here. */
-export function neuronsOf(model, prompt, completion) {
+/**
+ * Estimated neurons of a row, or null when the model has no published rate here. `cached` input tokens (part
+ * of `prompt`) are priced at the model's cached rate when it publishes one, else as input.
+ */
+export function neuronsOf(model, prompt, completion, cached = 0) {
   const r = NEURON_RATES[model];
   if (!r) return null;
-  return Math.round((int(prompt) * r.input + int(completion) * r.output) / 1_000_000);
+  const c = r.cached != null ? Math.min(int(cached), int(prompt)) : 0;
+  return Math.round(((int(prompt) - c) * r.input + c * (r.cached ?? r.input) + int(completion) * r.output) / 1_000_000);
 }
 
 /**
@@ -111,7 +117,7 @@ export async function readAiUsage(db, { days = 2, now = Date.now() } = {}) {
   const n = Math.min(Math.max(Math.round(Number(days) || 1), 1), 31);
   const since = new Date(now - (n - 1) * 86_400_000).toISOString().slice(0, 10);
   const rows = ((await db.prepare("SELECT * FROM ai_usage_daily WHERE day >= ? ORDER BY day DESC, source, model").bind(since).all()).results || [])
-    .map((r) => ({ ...r, neurons: neuronsOf(r.model, r.prompt_tokens, r.completion_tokens) }));
+    .map((r) => ({ ...r, neurons: neuronsOf(r.model, r.prompt_tokens, r.completion_tokens, r.cached_tokens) }));
   const byDay = new Map();
   for (const r of rows) {
     const d = byDay.get(r.day) || { day: r.day, calls: 0, failed: 0, timeouts: 0, prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, neurons: 0, unpriced_tokens: 0, memo_hits: 0, memo_same: 0, reused: 0 };

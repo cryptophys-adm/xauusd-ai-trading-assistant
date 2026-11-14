@@ -90,10 +90,13 @@ export function modelFamily(model) {
   if (m.includes("gpt-oss")) return "gpt-oss";
   if (m.includes("gemma-4")) return "gemma-4";
   if (m.includes("glm-4")) return "glm-4";
+  if (m.includes("deepseek-v4")) return "deepseek-v4";
   return "chat";
 }
 
 const GPT_OSS_EFFORT = { low: "low", medium: "medium", high: "high", max: "high" };
+// DeepSeek V4.1 Flash reasons at "high" unless told otherwise (none | low | high | max).
+const DEEPSEEK_EFFORT = { none: "none", low: "low", medium: "low", high: "high", max: "max" };
 
 /**
  * The request forms for one call, the most capable first. A form the model rejects (an input
@@ -105,6 +108,8 @@ const GPT_OSS_EFFORT = { low: "low", medium: "medium", high: "high", max: "high"
  *   gemma-4   thinking off (chat_template_kwargs.enable_thinking false) with a JSON schema, then
  *             without it.
  *   glm-4     the plain chat form; a reasoning model without reasoning_effort, so twice the budget.
+ *   deepseek-v4  (the model arena's challenger, shadow only) Chat Completions with reasoning_effort
+ *             (none | low | high | max) and a JSON schema, then without the schema, then the plain form.
  * The glm-5 and nemotron forms were removed with those models (retired 2026-11-20, RETIRED_MODELS).
  */
 export function modelRequests(model, { messages, maxTokens, effort = "low", schemaName = null, schema = null, temperature = 0.1 }) {
@@ -120,6 +125,10 @@ export function modelRequests(model, { messages, maxTokens, effort = "low", sche
       return schema ? [{ ...chat, ...rf }, chat] : [chat];
     }
     case "glm-4": return [{ messages, max_tokens: maxTokens * 2, temperature }];
+    case "deepseek-v4": {
+      const chat = { messages, max_tokens: maxTokens, temperature, reasoning_effort: DEEPSEEK_EFFORT[effort] || "low" };
+      return [...(schema ? [{ ...chat, ...rf }] : []), chat, { messages, max_tokens: maxTokens, temperature }];
+    }
     default: {
       const chat = { messages, max_tokens: maxTokens, temperature };
       return schema ? [{ ...chat, ...rf }, chat] : [chat];

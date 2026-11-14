@@ -27,6 +27,7 @@ import { publishSnapshot } from "./push-hub.mjs";
 import { readAllocationState, rosterSplit } from "./agent-allocation.mjs";
 import { gateShadowTurns } from "./shadow-switch.mjs";
 import { metricShadowEnabled, runMetricShadow, runMetricRebuttals, readMetricShadowBar, metricMenu } from "./metric-shadow.mjs";
+import { arenaEnabled, isArenaBar, arenaEvery, runArenaCall } from "./model-arena.mjs";
 import { agentReputation, sessionOf } from "./outcome-scoring.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
@@ -708,12 +709,13 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   try { w15 = await roomWeighting(env, db, "15", { closeMs: Date.parse(barTime), base: w15.reputation }); } catch { /* P7 reputation */ }
   const crowd = buildCrowdLine(finalEntries(answered, debate), w15.reputation, { quorumShare: w15.quorumShare, weighting: w15.weighting, regime: w15.regime });
   const conclude = phase(WAR_ROOM_CONCLUSION_MS);
-  await conclude(base("conclusion", "moderator"), {
+  const concludeOpts = {
     messages: conclusionMessages(anonBus, debate.map(m => ({ ref: refs.toRef.get(m.agent) ?? null, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: (m.rebuts || []).map((r) => refs.toRef.get(r) ?? r), metrics: m.metrics ?? [], argument: m.argument })), crowd, learnedFor("moderator")),
     schemaName: "war_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low",
     validate: (o) => validateConclusion(o, null, busAgents, null, { supportStances: new Set([...answered.map(m => m.stance), ...debate.map(m => m.stance)]), supportBiases: new Set([...answered.map(biasOf), ...debate.map(biasOf)]), roomBias, crowd, forbiddenNames: deskNames(), refs }),
     toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map(r => clip(r, 200)), dissent: [...new Set(o.dissent)], metrics: o.metrics, majority, majority_bias: roomBias, crowd }, refs: [] })
-  });
+  };
+  const concluded = await conclude(base("conclusion", "moderator"), concludeOpts);
   await publishWarRoom(env);
   const result = { status: "complete", calls, openings: answered.length, rebuttals: debate.length };
   // Shadow jobs, handed back to the caller to run after the decision, so they never delay it. Not enumerable.
@@ -742,6 +744,15 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
       if (Number(openings?.stored) || Number(rebuttals?.stored)) await publishWarRoom(env);
       return { openings, rebuttals };
     }]);
+  }
+  // AI Neuron B (owner 2026-11-14, src/model-arena.mjs): on a sample of bars the conclusion's messages go to the
+  // challenger model once, checked by the room's own validation, beside the live conclusion.
+  if (arenaEnabled(env) && isArenaBar(barTime, arenaEvery(env))) {
+    jobs.push(["arena", () => runArenaCall(env, {
+      role: "war_room_conclusion", candleKey: m15KeyForClose(barTime), statementClose: barTime, clock,
+      messages: concludeOpts.messages, schemaName: "war_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: concludeOpts.maxTokens, validate: concludeOpts.validate,
+      live: { model: concluded?.model ?? null, status: concluded?.status !== "ok" ? (concluded?.status ?? "missing") : concluded.corrections || concluded.fallback_used ? "ok_after_retry" : "ok", stance: concluded?.status === "ok" ? concluded.stance : null, latency_ms: concluded?.latency_ms ?? null }
+    })]);
   }
   if (jobs.length) {
     Object.defineProperty(result, "shadow_job", {
