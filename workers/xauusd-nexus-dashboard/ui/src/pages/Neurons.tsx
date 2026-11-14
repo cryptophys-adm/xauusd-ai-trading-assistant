@@ -136,6 +136,26 @@ export default function Neurons() {
         </Panel>
       </div>
 
+      <Panel title="Metrics instead of prose (shadow, 15m room)" hint="Each agent that opened in the 15m room answers again from the same data as metric readings (metric, value, reading, implication, weight) instead of a claim. Validity: answers in the form. Grounding: cited metrics found in the agent's own data. Agreement: same stance as its live opening. Hit rate: the metric answer's stance scored on the same bar, beside the live opening's. Nothing here reaches a room or a decision; the format is used live only where it is no worse.">
+        {!(v?.metric_shadow?.agents ?? []).length ? <Empty>No metric answer yet: the arm runs from the first 15m room after the market opens.</Empty> : (
+          <div className="table-wrap">
+            <table className="tbl">
+              <thead><tr><th>Agent</th><th>Answers</th><th>Validity</th><th>Grounding</th><th>Agreement</th><th>Hit rate (metrics)</th><th>Hit rate (live)</th><th>Tokens / call</th><th>Latency</th></tr></thead>
+              <tbody>
+                {v.metric_shadow.agents.map((m: any) => (
+                  <tr key={m.agent}>
+                    <td className="mono">{m.agent}</td><td className="mono">{m.calls}</td><td className="mono">{pc(m.validity)}</td><td className="mono">{pc(m.grounding_rate)}</td><td className="mono">{pc(m.stance_agreement)}</td>
+                    <td className="mono">{m.hit_rate == null ? "n/a" : <>{pc(m.hit_rate)} <span className="text-slate-500">± {m.decided}</span></>}</td>
+                    <td className="mono">{m.control_hit_rate == null ? "n/a" : <>{pc(m.control_hit_rate)} <span className="text-slate-500">± {m.control_decided}</span></>}</td>
+                    <td className="mono">{k(m.tokens_per_call)}</td><td className="mono">{m.latency_ms == null ? "n/a" : `${(m.latency_ms / 1000).toFixed(1)} s`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+
       <Panel title="Allocation changes" hint={`Per room, on the directional calls of the last 30 days: below ${Math.round((v?.rules?.demote_below ?? 0.45) * 100)}% over at least ${v?.rules?.min_scored ?? 60} decided calls the agent goes to shadow (it leaves the room's quorum and answers every ${v?.rules?.shadow_every ?? 4}th bar in shadow); back at ${Math.round((v?.rules?.promote_at ?? 0.5) * 100)}% it is live again. The moderator is exempt; a room keeps at least ${v?.rules?.min_live ?? 4} live agents with a record.`}>
         {!(v?.changes ?? []).length ? <Empty>No allocation change yet: every agent runs live as before.</Empty> : (
           <ul className="space-y-1 text-[12px]">

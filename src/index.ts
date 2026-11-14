@@ -215,6 +215,7 @@ import { loadDecisionCards } from "./decision-cards.mjs";
 import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
 import { readNeuronAllocation } from "./neuron-allocation.mjs";
 import { syncAgentAllocation } from "./agent-allocation.mjs";
+import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -1870,9 +1871,10 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
       if (result?.status === "waiting_for_quorum") throw Object.assign(new Error("war room waiting for quorum"), { name: "WarRoomQuorumPending", retryDelaySeconds: 60 });
       // Decision Engine (owner decisions 2026-11-09): the single decision, as soon as the 15m room has concluded.
       if (result?.status === "complete" || result?.status === "already_complete") await decideBar(env, String(task.bar_time));
-      // Aether A7 on the 15m chart (owner 2026-11-13): the room's shadow calls, after the decision.
+      // The room's shadow calls, after the decision: Aether A7's notes under test (owner 2026-11-13) and the
+      // metric-format arm (owner 2026-11-14), one result per job.
       const shadow = await runShadowJob(result);
-      if (shadow) console.log("shadow_knowledge", JSON.stringify({ chart: "15", bar_time: task.bar_time, ...shadow }));
+      if (shadow) console.log("war_room_shadow", JSON.stringify({ chart: "15", bar_time: task.bar_time, ...shadow }));
       return;
     }
     if (task.kind === "hud_agents") {
@@ -2597,6 +2599,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/metric-shadow") {
+    // Metric interpretations, not prose: the shadow arm's comparison per agent (src/metric-shadow.mjs); read-only.
+    try {
+      return dashboardJson({ status: "ok", ...(await readMetricShadow(env, { days: Math.min(30, Math.max(1, Number(url.searchParams.get("days") || "7") || 7)) })) });
+    } catch (error) {
+      console.error("metric_shadow_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "metric_shadow_unavailable" }, 500);
+    }
+  }
   if (url.pathname === "/api/neuron-allocation") {
     // What each agent costs in neurons and delivers in hit rate (src/neuron-allocation.mjs); read-only.
     try {
@@ -3209,6 +3220,9 @@ export default {
           // The released values, surprises and gold's reactions (src/econ-releases.mjs, owner 2026-11-10).
           const releases = await refreshEconReleases(env, { gatedEvents: await gatedEvents(env), readMt5: readMt5Calendar });
           if (releases.live || releases.backfill || releases.reactions || releases.status !== "ok") console.log("econ_releases", JSON.stringify(releases));
+          // The metric-format shadow arm (src/metric-shadow.mjs): its stances and their live controls, scored.
+          const metricScored = await scoreMetricShadow(env);
+          if (Number(metricScored.scored)) console.log("metric_shadow_scored", JSON.stringify(metricScored));
           // Aether A7: score the shadow note answers and their controls; drop those older than 60 days.
           const shadowScored = await scoreShadowKnowledge(env);
           if (Number(shadowScored.scored)) console.log("shadow_knowledge_scored", JSON.stringify(shadowScored));
