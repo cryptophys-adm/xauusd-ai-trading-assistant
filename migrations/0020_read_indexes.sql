@@ -1,0 +1,14 @@
+-- Resource audit P0 (owner 2026-11-14: "lebih hemat read/write D1 dan KV"): indexes for the WHERE and
+-- ORDER BY clauses that scanned whole tables. Rows read per call in production on 2026-11-14, before:
+--   outcome_scores WHERE timeframe = ? AND candle_key = ?          17,389 (decision cards, 40x an hour)
+--   agent_thread_messages WHERE ts >= ?                            20,906 (AI calls in the last hour, health)
+--   engine_parity_comparisons ORDER BY compared_at DESC LIMIT 5     7,200 (status, parity view)
+--   engine_parity_comparisons WHERE candle_key = ?                  3,600 (HUD store)
+--   webhook_sources ORDER BY received_at DESC LIMIT 1               9,930 (webhook lane status)
+-- omega_intents is created at run time (src/omega-broker.mjs), so its (status, created_ms) index is there.
+-- Indexes only: no query, result or behaviour changes.
+CREATE INDEX IF NOT EXISTS idx_outcome_scores_tf_candle ON outcome_scores(timeframe, candle_key);
+CREATE INDEX IF NOT EXISTS idx_agent_thread_messages_ts ON agent_thread_messages(ts);
+CREATE INDEX IF NOT EXISTS idx_parity_comparisons_at ON engine_parity_comparisons(compared_at);
+CREATE INDEX IF NOT EXISTS idx_parity_comparisons_candle ON engine_parity_comparisons(candle_key);
+CREATE INDEX IF NOT EXISTS idx_webhook_sources_received ON webhook_sources(received_at);
