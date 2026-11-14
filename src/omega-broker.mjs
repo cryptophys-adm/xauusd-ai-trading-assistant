@@ -25,12 +25,47 @@ export const OMEGA_SCHEMA_SQL = [
   "CREATE INDEX IF NOT EXISTS omega_intents_created ON omega_intents (created_ms)",
   // Resource audit P0 (2026-11-14): the bridge sync reads the pending and sent intents every 5 seconds.
   "CREATE INDEX IF NOT EXISTS omega_intents_status ON omega_intents (status, created_ms)",
-  `CREATE TABLE IF NOT EXISTS omega_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ms INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT)`
+  `CREATE TABLE IF NOT EXISTS omega_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ms INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT)`,
+  // Resource audit (owner 2026-11-14, "B. penuh"): the sync's last plan note and the last recovery are read by
+  // action, newest first; without it each read walked back over every newer event.
+  "CREATE INDEX IF NOT EXISTS omega_events_action ON omega_events (action, id)"
 ];
 export const INTENT_TTL_MS = 2 * 60_000;
 export const STATE_MAX_BYTES = 64 * 1024;
 export const ENVELOPE_MAX_BYTES = 8 * 1024;
 const BRIDGE_SEEN_MS = 2 * 60_000;
+/**
+ * The bridge row is written when something that matters changed (key, version, connection, trading
+ * permission, error, executor, account mode or currency, the open positions' and orders' tickets and stops,
+ * the deals)
+ * and otherwise at most every BRIDGE_WRITE_EVERY_MS (resource audit, owner 2026-11-14: "B. penuh tanpa fase
+ * shadow"). Every sync wrote it, about 17,000 writes a day, because the quote and the equity change at
+ * every tick. The planner never reads it: it plans on the state of the sync itself. The readers (Omega's
+ * page, the health check, the watchdog) see the last quote and the sync time at most this much later; the
+ * watchdog's thresholds (2 minutes for the bridge, 1 minute for the terminal state) stay well above it.
+ */
+export const BRIDGE_WRITE_EVERY_MS = 30_000;
+/** Pure: the part of the executor state whose change is written at once (prices, equity and times excluded). */
+export function bridgeStateKey(executor) {
+  if (!executor) return "null";
+  const positions = Array.isArray(executor.positions)
+    ? executor.positions.map((p) => [p?.ticket ?? null, p?.side ?? null, p?.volume ?? null, p?.sl ?? null, p?.tp ?? null]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    : null;
+  const orders = Array.isArray(executor.orders)
+    ? executor.orders.map((o) => [o?.ticket ?? null, o?.type ?? null, o?.volume_current ?? null, o?.price_open ?? null, o?.sl ?? null, o?.tp ?? null]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    : null;
+  const deals = Array.isArray(executor.deals) ? executor.deals.map((d) => d?.deal_ticket ?? null).sort() : null;
+  return JSON.stringify([executor.connected, executor.trade_allowed, executor.server, executor.terminal_error, executor.executor, executor.account?.trade_mode, executor.account?.currency, executor.symbol?.name, positions, orders, deals]);
+}
+// The deal tickets stored (or found stored with their source) per database binding: the bridge reports each
+// closed deal on every sync (2026-11-13: 36 deals), and each report cost an insert attempt and an update.
+const STORED_DEALS = new WeakMap();
+function storedDeals(db) {
+  let set = STORED_DEALS.get(db);
+  if (!set) { set = new Set(); STORED_DEALS.set(db, set); }
+  if (set.size > 2000) set.clear();
+  return set;
+}
 const SERVER_RE = /^[A-Za-z0-9._ -]{1,64}$/;
 const KID_RE = /^[0-9a-f]{16}$/;
 const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
@@ -294,17 +329,27 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   const stateText = JSON.stringify(executor);
   if (stateText.length > STATE_MAX_BYTES) return { ok: false, error: "state_too_large" };
 
-  const prev = await db.prepare("SELECT kid FROM omega_bridge WHERE id = 1").first();
-  await db.prepare("UPDATE omega_bridge SET kid = ?, public_key = ?, bridge_version = ?, state = ?, synced_ms = ? WHERE id = 1")
-    .bind(kid, publicKey, String(bridgeVersion ?? "").slice(0, 32), stateText, now).run();
+  const prev = await db.prepare("SELECT kid, public_key, bridge_version, state, synced_ms FROM omega_bridge WHERE id = 1").first();
+  const version = String(bridgeVersion ?? "").slice(0, 32);
+  const changed = !prev || prev.kid !== kid || prev.public_key !== publicKey || (prev.bridge_version ?? "") !== version
+    || bridgeStateKey(parse(prev.state)) !== bridgeStateKey(executor);
+  const due = !(Number(prev?.synced_ms) > 0) || now - Number(prev.synced_ms) >= BRIDGE_WRITE_EVERY_MS || now < Number(prev.synced_ms);
+  if (changed || due) {
+    await db.prepare("UPDATE omega_bridge SET kid = ?, public_key = ?, bridge_version = ?, state = ?, synced_ms = ? WHERE id = 1")
+      .bind(kid, publicKey, version, stateText, now).run();
+  }
   if (prev?.kid && prev.kid !== kid) await event(db, now, "bridge", "bridge_key_changed", { from: prev.kid, to: kid });
 
   // Persist closed deals reported by MT5 terminal
   if (Array.isArray(executor?.deals) && executor.deals.length > 0) {
+    const known = storedDeals(db);
     for (const d of executor.deals) {
       if (!d?.deal_ticket || !d?.closed_ms) continue;
+      // Stored before, with its source when it has one: nothing to write.
+      const seenKey = `${d.deal_ticket}|${d.source ?? ""}`;
+      if (known.has(seenKey)) continue;
       try {
-        await storeDeal(env, {
+        const stored = await storeDeal(env, {
           deal_ticket: d.deal_ticket,
           position_ticket: d.position_ticket,
           mode: executor?.account?.trade_mode || "unknown",
@@ -322,6 +367,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           currency: executor?.account?.currency || "USD",
           source: d.source
         }, { now });
+        if (stored?.ok) known.add(seenKey);
       } catch {
         // Ignored; deals persistence should not disrupt sync cycle
       }
@@ -379,8 +425,9 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // Plan.
   const { settings, version: settingsVersion } = await readSettings(env);
   let signal = signalIn ?? null;
-  if (!signal) { try { signal = await eaSignal(env, { now }); } catch { signal = null; } }
+  // The kill switch is read once a sync and is never cached: a KILL takes effect at the next sync.
   const control = await readControl(env);
+  if (!signal) { try { signal = await eaSignal(env, { now, control }); } catch { signal = null; } }
   const recent = await db.prepare("SELECT id FROM omega_intents WHERE created_ms > ?").bind(now - 2 * 86_400_000).all();
   const plan = planIntents({ signal, control, settings, executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id) });
   for (const planned of plan.intents) {
