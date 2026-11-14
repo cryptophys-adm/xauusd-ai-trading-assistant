@@ -9,6 +9,9 @@ export const NEWS_SHADOW_VERSION = "cryptophys.news-shadow.v1";
 export const NEWS_SHADOW_LAST_KEY = "news:shadow:last";
 const DAY_PREFIX = "news:shadow:day:";
 const FETCH_TIMEOUT_MS = 6000;
+/** A source with `backoff` that failed this many runs in a row is asked only every BACKOFF_EVERY_HOURS-th hour. */
+export const BACKOFF_AFTER_FAILURES = 3;
+export const BACKOFF_EVERY_HOURS = 6;
 const HOUR_MS = 3_600_000;
 const MAX_KEPT = 30;
 const GDELT_QUERY = '(gold OR bullion OR XAUUSD OR "Federal Reserve" OR "Treasury yields" OR "dollar index" OR "crude oil")';
@@ -21,7 +24,9 @@ export const NEWS_SOURCES = Object.freeze([
   Object.freeze({ id: "investing_forex", kind: "rss", url: "https://www.investing.com/rss/news_1.rss" }),
   Object.freeze({ id: "fed_press", kind: "rss", url: "https://www.federalreserve.gov/feeds/press_all.xml", topic: "fed" }),
   Object.freeze({ id: "fed_speeches", kind: "rss", url: "https://www.federalreserve.gov/feeds/speeches.xml", topic: "fed" }),
-  Object.freeze({ id: "gdelt", kind: "gdelt", url: `https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(GDELT_QUERY + " sourcelang:english")}&mode=ArtList&format=json&timespan=1h&maxrecords=75&sort=DateDesc` })
+  // GDELT's DOC API answers slowly (production 2026-11-14: 17 of 17 runs past the 6-second limit; from outside,
+  // a 429 "rate limited" after about 10 seconds). It gets its own limit and backs off when it keeps failing.
+  Object.freeze({ id: "gdelt", kind: "gdelt", timeoutMs: 20_000, backoff: true, url: `https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(GDELT_QUERY + " sourcelang:english")}&mode=ArtList&format=json&timespan=1h&maxrecords=75&sort=DateDesc` })
 ]);
 
 const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
@@ -113,11 +118,16 @@ export function compareWithTradingView(items, tv, { now = Date.now(), threshold 
   };
 }
 
+/** Pure: whether a backing-off source sits this run out (it failed `failures` runs in a row). */
+export function inBackoff(source, failures, now = Date.now()) {
+  return Boolean(source?.backoff) && failures >= BACKOFF_AFTER_FAILURES && new Date(now).getUTCHours() % BACKOFF_EVERY_HOURS !== 0;
+}
+
 async function fetchSource(source, fetcher) {
   const started = Date.now();
   try {
-    const res = await fetcher(source.url, { headers: { "user-agent": "Mozilla/5.0 (compatible; cryptophys-news/1.0)", accept: "application/rss+xml, application/xml, application/json, text/xml, */*" }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!res.ok) return { id: source.id, ok: false, status: res.status, ms: Date.now() - started, items: [] };
+    const res = await fetcher(source.url, { headers: { "user-agent": "Mozilla/5.0 (compatible; cryptophys-news/1.0)", accept: "application/rss+xml, application/xml, application/json, text/xml, */*" }, signal: AbortSignal.timeout(source.timeoutMs ?? FETCH_TIMEOUT_MS) });
+    if (!res.ok) return { id: source.id, ok: false, status: res.status, ...(res.status === 429 ? { error: "rate_limited" } : {}), ms: Date.now() - started, items: [] };
     const body = await res.text();
     let items;
     if (source.kind === "gdelt") { let json = null; try { json = JSON.parse(body); } catch { json = null; } items = parseGdelt(json); }
@@ -135,7 +145,15 @@ async function fetchSource(source, fetcher) {
  */
 export async function runNewsShadow(env, { tvArticles = [], now = Date.now(), fetcher = (...a) => fetch(...a), sources = NEWS_SOURCES } = {}) {
   if (String(env?.NEWS_SHADOW_MODE ?? "on").trim().toLowerCase() === "off") return { status: "off" };
-  const results = await Promise.all(sources.map((s) => fetchSource(s, fetcher)));
+  const kv = env?.OAUTH_STORE;
+  // Failures in a row per source, from the last run; a backing-off source that keeps failing is not asked every hour.
+  let previous = {};
+  try { previous = (kv ? JSON.parse((await kv.get(NEWS_SHADOW_LAST_KEY)) || "null")?.sources : null) || {}; } catch { previous = {}; }
+  const failuresOf = (id) => Number(previous[id]?.consecutive_failures) || 0;
+  const results = await Promise.all(sources.map((s) => inBackoff(s, failuresOf(s.id), now)
+    ? Promise.resolve({ id: s.id, ok: false, status: null, skipped: "backoff", ms: 0, items: [] })
+    : fetchSource(s, fetcher)));
+  for (const r of results) r.consecutive_failures = r.ok ? 0 : r.skipped ? failuresOf(r.id) : failuresOf(r.id) + 1;
   const seen = new Set();
   const items = [];
   for (const r of results) {
@@ -153,10 +171,9 @@ export async function runNewsShadow(env, { tvArticles = [], now = Date.now(), fe
   const lastHour = (list) => list.filter((i) => now - Date.parse(i.published_at ?? "") <= HOUR_MS).length;
   const summary = {
     version: NEWS_SHADOW_VERSION, at: new Date(now).toISOString(),
-    sources: Object.fromEntries(results.map((r) => [r.id, { ok: r.ok, status: r.status, ...(r.error ? { error: r.error } : {}), ms: r.ms, items: r.items.length, relevant: r.items.filter((i) => i.symbols.length).length, last_hour: lastHour(r.items.filter((i) => i.symbols.length)) }])),
+    sources: Object.fromEntries(results.map((r) => [r.id, { ok: r.ok, status: r.status, ...(r.error ? { error: r.error } : {}), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.consecutive_failures ? { consecutive_failures: r.consecutive_failures } : {}), ms: r.ms, items: r.items.length, relevant: r.items.filter((i) => i.symbols.length).length, last_hour: lastHour(r.items.filter((i) => i.symbols.length)) }])),
     ...comparison
   };
-  const kv = env?.OAUTH_STORE;
   if (kv) {
     try {
       await kv.put(NEWS_SHADOW_LAST_KEY, JSON.stringify({ ...summary, headlines: items.slice(0, MAX_KEPT).map(({ title, url, published_at, source, symbols }) => ({ title, url, published_at, source, symbols })) }), { expirationTtl: 7 * 86_400 });
@@ -166,7 +183,7 @@ export async function runNewsShadow(env, { tvArticles = [], now = Date.now(), fe
       for (const k of ["shadow_recent", "tv_recent", "overlap", "shadow_only", "tv_only"]) day[k] += summary[k];
       for (const [id, s] of Object.entries(summary.sources)) {
         const d = day.sources[id] || { ok_runs: 0, failed_runs: 0, last_hour: 0 };
-        if (s.ok) d.ok_runs += 1; else d.failed_runs += 1;
+        if (s.ok) d.ok_runs += 1; else if (s.skipped) d.skipped_runs = (d.skipped_runs || 0) + 1; else d.failed_runs += 1;
         d.last_hour += s.last_hour;
         day.sources[id] = d;
       }
