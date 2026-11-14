@@ -197,6 +197,10 @@ export default function Neurons() {
             </tbody>
           </table>
         </div>
+        <div className="mt-2 text-[11px] text-slate-400" title="Workers AI reuses the prompt prefix it already computed for the same agent's step (session affinity, since 2026-11-14) and bills those input tokens at a lower rate. Counted from the day it was metered.">
+          Prompt cache (Workers AI): <span className="mono text-slate-200">{v?.prompt_cache?.share == null ? "not measured yet" : `${pc(v.prompt_cache.share)} of input tokens`}</span>
+          {v?.prompt_cache?.cached_tokens ? <span className="text-slate-500"> · {k(v.prompt_cache.cached_tokens)} cached of {k(v.prompt_cache.prompt_tokens)}</span> : null}
+        </div>
       </Panel>
 
       <Panel title="Allocation changes" hint={`Per room, on the directional calls of the last 30 days: below ${Math.round((v?.rules?.demote_below ?? 0.45) * 100)}% over at least ${v?.rules?.min_scored ?? 60} decided calls the agent goes to shadow (it leaves the room's quorum and answers every ${v?.rules?.shadow_every ?? 4}th bar in shadow); back at ${Math.round((v?.rules?.promote_at ?? 0.5) * 100)}% it is live again. The moderator is exempt; a room keeps at least ${v?.rules?.min_live ?? 4} live agents with a record.`}>

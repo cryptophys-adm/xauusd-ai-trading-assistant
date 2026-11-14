@@ -156,6 +156,13 @@ export function memoComparison(usageRows = [], { days = 7 } = {}) {
   });
 }
 
+/** Pure (A5): the share of input tokens Workers AI served from its prefix cache over the window, from the meter's day totals. */
+export function promptCache(totals = []) {
+  const prompt = totals.reduce((n, d) => n + (Number(d.prompt_tokens) || 0), 0);
+  const cached = totals.reduce((n, d) => n + (Number(d.cached_tokens) || 0), 0);
+  return { prompt_tokens: prompt, cached_tokens: cached, share: prompt > 0 ? round(cached / prompt) : null };
+}
+
 /** GET /api/neuron-allocation: the last `days` days (1 to 14). */
 export async function readNeuronAllocation(env, { days = 7, now = Date.now() } = {}) {
   const db = env.DB;
@@ -167,5 +174,5 @@ export async function readNeuronAllocation(env, { days = 7, now = Date.now() } =
   const cards = await scorecards(db, { days: 30, now, snapshot: true });
   const [state, changes, metric] = await Promise.all([readAllocationState(env), readAllocationEvents(db, { limit: 50 }), readMetricShadow(env, { days: n, now }).catch(() => null)]);
   const grounding = Object.fromEntries((metric?.agents ?? []).filter((a) => a.grounding_rate != null).map((a) => [a.agent, a.grounding_rate]));
-  return { status: "ok", generated_at: new Date(now).toISOString(), window_days: n, record_days: 30, ...buildAllocation({ rows, rates: blendedRates(usage.rows), cards, days: n, state, changes, grounding }), metric_shadow: metric, memo: memoComparison(usage.rows, { days: n }) };
+  return { status: "ok", generated_at: new Date(now).toISOString(), window_days: n, record_days: 30, ...buildAllocation({ rows, rates: blendedRates(usage.rows), cards, days: n, state, changes, grounding }), metric_shadow: metric, memo: memoComparison(usage.rows, { days: n }), prompt_cache: promptCache(usage.totals) };
 }

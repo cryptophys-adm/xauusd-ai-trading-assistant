@@ -44,6 +44,8 @@ let schemaReady = false;
 export async function ensureAiUsageSchema(db) {
   if (schemaReady) return;
   for (const sql of AI_USAGE_SCHEMA_SQL) await db.prepare(sql).run();
+  // A5 (2026-11-14): cached input tokens, added to a table made before them (production applies no migration).
+  try { await db.prepare("ALTER TABLE ai_usage_daily ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0").run(); } catch { /* already there */ }
   schemaReady = true;
 }
 export function resetAiUsageSchemaCacheForTests() { schemaReady = false; }
@@ -53,11 +55,13 @@ const int = (x) => (Number.isFinite(Number(x)) && Number(x) > 0 ? Math.round(Num
 /** Input and output tokens of a model result (Chat Completions or Responses usage); zeros when absent. */
 export function usageSplit(result) {
   const u = result?.usage;
-  if (!u || typeof u !== "object") return { prompt: 0, completion: 0 };
+  if (!u || typeof u !== "object") return { prompt: 0, completion: 0, cached: 0 };
   const prompt = int(u.prompt_tokens ?? u.input_tokens);
   let completion = int(u.completion_tokens ?? u.output_tokens);
   if (!completion && int(u.total_tokens) > prompt) completion = int(u.total_tokens) - prompt;
-  return { prompt, completion };
+  // A5: the input tokens Workers AI served from its prefix cache (part of `prompt`, billed at a lower rate).
+  const cached = Math.min(prompt, int(u.prompt_tokens_details?.cached_tokens ?? u.input_tokens_details?.cached_tokens));
+  return { prompt, completion, cached };
 }
 
 const label = (s) => String(s || "unlabelled").replace(/[^a-zA-Z0-9_:.-]/g, "_").slice(0, 64);
@@ -67,13 +71,13 @@ const label = (s) => String(s || "unlabelled").replace(/[^a-zA-Z0-9_:.-]/g, "_")
  * (shadow: the same input was answered before), "memo_same" (and the new answer kept the same stance
  * and bias), "reused" (the stored answer was used, no model call). Never throws.
  */
-export async function recordAiUsage(db, { source, model, outcome = "ok", prompt = 0, completion = 0, now = Date.now() } = {}) {
+export async function recordAiUsage(db, { source, model, outcome = "ok", prompt = 0, completion = 0, cached = 0, now = Date.now() } = {}) {
   if (!db?.prepare) return false;
   try {
     await ensureAiUsageSchema(db);
     const day = new Date(now).toISOString().slice(0, 10);
-    const add = { calls: 0, failed: 0, timeouts: 0, prompt_tokens: 0, completion_tokens: 0, memo_hits: 0, memo_same: 0, reused: 0 };
-    if (outcome === "ok") { add.calls = 1; add.prompt_tokens = int(prompt); add.completion_tokens = int(completion); }
+    const add = { calls: 0, failed: 0, timeouts: 0, prompt_tokens: 0, completion_tokens: 0, memo_hits: 0, memo_same: 0, reused: 0, cached_tokens: 0 };
+    if (outcome === "ok") { add.calls = 1; add.prompt_tokens = int(prompt); add.completion_tokens = int(completion); add.cached_tokens = Math.min(int(cached), int(prompt)); }
     else if (outcome === "failed") add.failed = 1;
     else if (outcome === "timeout") add.timeouts = 1;
     else if (outcome === "memo_hit") add.memo_hits = 1;
@@ -110,11 +114,11 @@ export async function readAiUsage(db, { days = 2, now = Date.now() } = {}) {
     .map((r) => ({ ...r, neurons: neuronsOf(r.model, r.prompt_tokens, r.completion_tokens) }));
   const byDay = new Map();
   for (const r of rows) {
-    const d = byDay.get(r.day) || { day: r.day, calls: 0, failed: 0, timeouts: 0, prompt_tokens: 0, completion_tokens: 0, neurons: 0, unpriced_tokens: 0, memo_hits: 0, memo_same: 0, reused: 0 };
+    const d = byDay.get(r.day) || { day: r.day, calls: 0, failed: 0, timeouts: 0, prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, neurons: 0, unpriced_tokens: 0, memo_hits: 0, memo_same: 0, reused: 0 };
     // The evidence-key counters (A4, shadow, source "evidence_memo:<schema>") are another key's: kept on their own
     // rows, never added to the live memo's daily totals.
     const shadowKey = String(r.source).startsWith("evidence_memo:");
-    for (const k of ["calls", "failed", "timeouts", "prompt_tokens", "completion_tokens", "memo_hits", "memo_same", "reused"]) if (!(shadowKey && (k === "memo_hits" || k === "memo_same"))) d[k] += Number(r[k]) || 0;
+    for (const k of ["calls", "failed", "timeouts", "prompt_tokens", "completion_tokens", "cached_tokens", "memo_hits", "memo_same", "reused"]) if (!(shadowKey && (k === "memo_hits" || k === "memo_same"))) d[k] += Number(r[k]) || 0;
     if (r.neurons == null) d.unpriced_tokens += (Number(r.prompt_tokens) || 0) + (Number(r.completion_tokens) || 0);
     else d.neurons += r.neurons;
     byDay.set(r.day, d);

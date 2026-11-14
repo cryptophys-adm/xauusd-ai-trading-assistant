@@ -64,10 +64,13 @@ test("R1. the tf room schemas carry the metrics list the validators require (str
 });
 
 test("R2. the meter: input and output tokens from every response form, and neurons from the published rates", async () => {
-  assert.deepEqual(usageSplit({ usage: { prompt_tokens: 10, completion_tokens: 4 } }), { prompt: 10, completion: 4 });
-  assert.deepEqual(usageSplit({ usage: { input_tokens: 7, output_tokens: 3 } }), { prompt: 7, completion: 3 }, "Responses form");
-  assert.deepEqual(usageSplit({ usage: { prompt_tokens: 10, total_tokens: 15 } }), { prompt: 10, completion: 5 });
-  assert.deepEqual(usageSplit({}), { prompt: 0, completion: 0 });
+  assert.deepEqual(usageSplit({ usage: { prompt_tokens: 10, completion_tokens: 4 } }), { prompt: 10, completion: 4, cached: 0 });
+  assert.deepEqual(usageSplit({ usage: { input_tokens: 7, output_tokens: 3 } }), { prompt: 7, completion: 3, cached: 0 }, "Responses form");
+  assert.deepEqual(usageSplit({ usage: { prompt_tokens: 10, total_tokens: 15 } }), { prompt: 10, completion: 5, cached: 0 });
+  assert.deepEqual(usageSplit({}), { prompt: 0, completion: 0, cached: 0 });
+  // A5: the prefix-cached part of the input (Workers AI usage.prompt_tokens_details.cached_tokens), never above the input.
+  assert.deepEqual(usageSplit({ usage: { prompt_tokens: 1000, completion_tokens: 50, prompt_tokens_details: { cached_tokens: 768 } } }), { prompt: 1000, completion: 50, cached: 768 });
+  assert.equal(usageSplit({ usage: { prompt_tokens: 10, prompt_tokens_details: { cached_tokens: 99 } } }).cached, 10);
   assert.equal(neuronsOf(GEMMA, 1_000_000, 0), 9091);
   assert.equal(neuronsOf("@cf/openai/gpt-oss-120b", 0, 1_000_000), 68182);
   assert.equal(neuronsOf("@cf/unknown/model", 1000, 1000), null, "no guessed rate");
@@ -239,4 +242,31 @@ test("A4: through a room step: a prompt that changed with the same evidence stil
   await step(off.env, "2026-11-11T02:45:00.000Z", { data: "a", evidence });
   await step(off.env, "2026-11-11T03:00:00.000Z", { data: "b", evidence });
   assert.equal((await off.db.prepare("SELECT COUNT(*) AS n FROM ai_usage_daily WHERE source LIKE 'evidence_memo:%'").first()).n, 0);
+});
+
+test("A5: each room step asks Workers AI for one session per agent and step, and the cached input tokens are metered", async () => {
+  const { affinityId } = await import("../src/multi-agent-bus.mjs");
+  assert.equal(affinityId({}, "warroom:open:technical"), "xauusd:warroom:open:technical");
+  assert.equal(affinityId({}, "tf:H1:debate:Risk Mgr"), "xauusd:tf:h1:debate:risk_mgr");
+  assert.equal(affinityId({ AI_SESSION_AFFINITY: "off" }, "warroom:open:technical"), null);
+  const seen = [];
+  const ai = { calls: [], run: async (model, request, options) => {
+    seen.push(options?.extraHeaders?.["x-session-affinity"] ?? null);
+    return { choices: [{ message: { content: JSON.stringify({ agent: "fabio_amt", stance: "WAIT", bias: "NEUTRAL", confidence: 0.4, claim: "Value sits inside the balance area, so the auction has no edge yet.", metrics: ["the value area"] }) }, finish_reason: "stop" }], usage: { prompt_tokens: 1000, completion_tokens: 100, prompt_tokens_details: { cached_tokens: 640 } } };
+  } };
+  const { env, db } = await setup({}, ai);
+  await step(env, "2026-11-11T02:45:00.000Z");
+  assert.deepEqual(seen, ["xauusd:warroom:open:fabio_amt"]);
+  const u = await usage(db);
+  assert.deepEqual([u.prompt_tokens, u.cached_tokens], [1000, 640]);
+  // Switched off by variable: no header.
+  const off = await setup({ AI_SESSION_AFFINITY: "off" }, ai);
+  await step(off.env, "2026-11-11T02:45:00.000Z");
+  assert.equal(seen.at(-1), null);
+});
+
+test("A5: the prompt-cache share over the window", async () => {
+  const { promptCache } = await import("../src/neuron-allocation.mjs");
+  assert.deepEqual(promptCache([{ prompt_tokens: 1000, cached_tokens: 250 }, { prompt_tokens: 1000, cached_tokens: 750 }]), { prompt_tokens: 2000, cached_tokens: 1000, share: 0.5 });
+  assert.equal(promptCache([]).share, null);
 });
