@@ -23,6 +23,8 @@ export const OMEGA_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS omega_bridge (id INTEGER PRIMARY KEY CHECK (id = 1), kid TEXT, public_key TEXT, bridge_version TEXT, state TEXT, synced_ms INTEGER)`,
   `CREATE TABLE IF NOT EXISTS omega_intents (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, result TEXT, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL)`,
   "CREATE INDEX IF NOT EXISTS omega_intents_created ON omega_intents (created_ms)",
+  // Resource audit P0 (2026-11-14): the bridge sync reads the pending and sent intents every 5 seconds.
+  "CREATE INDEX IF NOT EXISTS omega_intents_status ON omega_intents (status, created_ms)",
   `CREATE TABLE IF NOT EXISTS omega_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ms INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT)`
 ];
 export const INTENT_TTL_MS = 2 * 60_000;
