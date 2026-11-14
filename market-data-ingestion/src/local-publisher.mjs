@@ -13,6 +13,31 @@ import { buildGmiHudRecord } from "../../local-engines/producer/src/gmi-hud-prod
 import { attachProphetSetup } from "../../local-engines/producer/src/prophet-setup.mjs";
 
 const PUBLISHED_PREFIX = "market-data:v2:local-published:";
+
+// Resource audit (owner 2026-11-14, "A. ya"): every minute each publisher read its bar's "already published"
+// marker (about ten KV reads a quiet minute, each billed, mostly for a bar published minutes before). A
+// marker this isolate wrote or found is remembered per KV binding, so it is read from KV once. Only presence
+// is remembered (never a marker's content), and a marker is never forgotten while it exists, so a bar is
+// still published at most once; an unknown marker is read from KV as before.
+const SEEN = new WeakMap();
+const SEEN_MAX = 512;
+function seenSet(kv) {
+  let set = SEEN.get(kv);
+  if (!set) { set = new Set(); SEEN.set(kv, set); }
+  return set;
+}
+function remember(kv, key) {
+  if (!kv || typeof kv !== "object") return;
+  const set = seenSet(kv);
+  if (set.size >= SEEN_MAX) set.clear();
+  set.add(key);
+}
+async function isPublished(kv, key) {
+  if (kv && typeof kv === "object" && seenSet(kv).has(key)) return true;
+  const value = await kv.get(key);
+  if (value) remember(kv, key);
+  return Boolean(value);
+}
 export const LAST_PUBLISH_KEY = "market-data:v2:local-last-publish";
 export const LAST_M5_PUBLISH_KEY = "market-data:v2:local-last-publish-m5";
 // 5m records are published only for the bar that just closed (the cron runs every 5 minutes).
@@ -66,7 +91,7 @@ export async function publishLocalComputation(env, { now = Date.now(), force = f
     return { status: asString(error?.code) || "local_computation_failed", message: asString(error?.message).slice(0, 200) };
   }
   const markerKey = PUBLISHED_PREFIX + built.candle_key;
-  if (!force && (await kv.get(markerKey))) return { status: "already_published", candle_key: built.candle_key };
+  if (!force && (await isPublished(kv, markerKey))) return { status: "already_published", candle_key: built.candle_key };
   // The Prophet setup state (the HUD's READY line) rides on the prophet record as values.setup
   // (owner report 2026-11-09). Computed outside the hashed engine files; never blocks the publish.
   const prophetSetup = attachProphetSetup(built, resolvedBundle, { mintick: Number(env.CHART_MINTICK) || 0.001 });
@@ -94,7 +119,7 @@ export async function publishLocalComputation(env, { now = Date.now(), force = f
     // The bar the records were built on, so a later revision of it can be detected.
     bar: barSnapshot(lastH1)
   };
-  if (ok) await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
+  if (ok) { await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 }); remember(kv, markerKey); }
   await kv.put(LAST_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
   return summary;
 }
@@ -179,7 +204,7 @@ export async function publishM5LocalComputation(env, { now = Date.now(), force =
     return { status: asString(error?.code) || "local_computation_failed", message: asString(error?.message).slice(0, 200) };
   }
   const markerKey = PUBLISHED_PREFIX + built.candle_key;
-  if (!force && (await kv.get(markerKey))) return { status: "already_published", candle_key: built.candle_key };
+  if (!force && (await isPublished(kv, markerKey))) return { status: "already_published", candle_key: built.candle_key };
 
   const results = [];
   for (const record of built.records) {
@@ -200,7 +225,7 @@ export async function publishM5LocalComputation(env, { now = Date.now(), force =
     not_produced: built.records.some((r) => r.engine === "gmi") ? [] : ["gmi"],
     gmi_error: built.gmi_error || null
   };
-  if (ok) await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 });
+  if (ok) { await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 }); remember(kv, markerKey); }
   await kv.put(LAST_M5_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
   // B2: the 5m execution context of the same bar, reshaped from its parity record (never
   // stored here; the cron forwards it to the AI Worker's submitContext).
@@ -231,7 +256,7 @@ export async function publishM15LocalComputation(env, { now = Date.now(), force 
     return { status: asString(error?.code) || "local_computation_failed", message: asString(error?.message).slice(0, 200) };
   }
   const markerKey = PUBLISHED_PREFIX + built.candle_key;
-  if (!force && (await kv.get(markerKey))) return { status: "already_published", candle_key: built.candle_key };
+  if (!force && (await isPublished(kv, markerKey))) return { status: "already_published", candle_key: built.candle_key };
   // The Prophet setup state on the 15m chart (backlog item 16, 2026-11-09), for the 15m Thread.
   const prophetSetup = attachProphetSetup(built, resolvedBundle, { chart: "M15", mintick: Number(env.CHART_MINTICK) || 0.001 });
   const results = [];
@@ -254,7 +279,7 @@ export async function publishM15LocalComputation(env, { now = Date.now(), force 
     gmi_error: built.gmi_error || null,
     prophet_setup: prophetSetup
   };
-  if (ok) await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 });
+  if (ok) { await kv.put(markerKey, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 }); remember(kv, markerKey); }
   await kv.put(LAST_M15_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
   // The records go back to the caller (not to KV) for the broker shadow lane (src/broker-shadow.mjs).
   return { ...summary, records: built.records };
@@ -288,7 +313,7 @@ export async function publishHtfLocalComputation(env, { now = Date.now(), force 
       continue;
     }
     const markerKey = PUBLISHED_PREFIX + built.candle_key;
-    if (!force && (await kv.get(markerKey))) { charts[chart] = { status: "already_published", candle_key: built.candle_key }; continue; }
+    if (!force && (await isPublished(kv, markerKey))) { charts[chart] = { status: "already_published", candle_key: built.candle_key }; continue; }
     // The Prophet setup state on the H4 / D1 chart (backlog item 16, 2026-11-09), for its Thread.
     const prophetSetup = attachProphetSetup(built, resolvedBundle, { chart, mintick: Number(env.CHART_MINTICK) || 0.001 });
     const results = [];
@@ -303,7 +328,7 @@ export async function publishHtfLocalComputation(env, { now = Date.now(), force 
       engines: results, not_produced: built.records.some((r) => r.engine === "gmi") ? [] : ["gmi"], gmi_error: built.gmi_error || null,
       prophet_setup: prophetSetup
     };
-    if (ok) await kv.put(markerKey, JSON.stringify(charts[chart]), { expirationTtl: 60 * 60 * 24 * 3 });
+    if (ok) { await kv.put(markerKey, JSON.stringify(charts[chart]), { expirationTtl: 60 * 60 * 24 * 3 }); remember(kv, markerKey); }
   }
   const summary = { status: "ok", checked_at: new Date(now).toISOString(), charts };
   if (Object.values(charts).some((c) => ["published", "partial_failure"].includes(c.status))) await kv.put(LAST_HTF_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
@@ -345,7 +370,7 @@ export async function publishHudSnapshots(env, { now = Date.now(), bundle = null
     if (late && !(now - closeMs <= catchUpMs)) { results[chart] = { status: "no_fresh_close" }; continue; }
     // A late bar is only sent when it was never sent: check the marker before building.
     const lateKey = late ? [CHART_TICKERID, HUD_PERIOD[chart], String(Date.parse(last.open_time))].join(":") : null;
-    if (lateKey && await kv.get("market-data:v2:hud-published:" + lateKey)) { results[chart] = { status: "already_published", candle_key: lateKey }; continue; }
+    if (lateKey && await isPublished(kv, "market-data:v2:hud-published:" + lateKey)) { results[chart] = { status: "already_published", candle_key: lateKey }; continue; }
     let snapshot;
     try {
       snapshot = buildHudSnapshot(late ? bundleUntil(resolvedBundle, closeMs) : resolvedBundle, { chart, now, mintick: Number(env.CHART_MINTICK) || 0.001 });
@@ -354,11 +379,11 @@ export async function publishHudSnapshots(env, { now = Date.now(), bundle = null
       continue;
     }
     const markerKey = "market-data:v2:hud-published:" + snapshot.candle_key;
-    if (await kv.get(markerKey)) { results[chart] = { status: "already_published", candle_key: snapshot.candle_key }; continue; }
+    if (await isPublished(kv, markerKey)) { results[chart] = { status: "already_published", candle_key: snapshot.candle_key }; continue; }
     try {
       const { status, body } = await env.AI_WORKER.submitHud(snapshot);
       const ok = status < 300;
-      if (ok) await kv.put(markerKey, "1", { expirationTtl: HUD_MARKER_TTL_S });
+      if (ok) { await kv.put(markerKey, "1", { expirationTtl: HUD_MARKER_TTL_S }); remember(kv, markerKey); }
       results[chart] = { status: ok ? "published" : "rejected", ...(late ? { catch_up: true } : {}), candle_key: snapshot.candle_key, chart_plane: snapshot.chart_plane?.version ?? null, http_status: status, error: ok ? null : asString(body?.error) || "ai_worker_rejected" };
     } catch (error) {
       results[chart] = { status: "post_failed", candle_key: snapshot.candle_key, error: asString(error?.name) || "post_failed" };
