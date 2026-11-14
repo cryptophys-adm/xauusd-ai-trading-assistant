@@ -16,7 +16,7 @@ import { verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-
 import { HUD_NAMES, calibrationCounts, hudAgentsIn } from "./hud-reading.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
-import { memoEligible, memoKind, inputHash, memoLookup, memoStore, roomMemoEnabled } from "./room-memo.mjs";
+import { memoEligible, memoKind, inputHash, memoLookup, memoStore, roomMemoEnabled, evidenceShadow, evidenceMemoEnabled } from "./room-memo.mjs";
 import { recordAiUsage } from "./ai-usage.mjs";
 import {
   callBusModel, roleModels, buildBusEvidence, validateAgentOutput, validateModeratorOutput,
@@ -270,7 +270,7 @@ export function stepRole(step) {
   return step === "conclusion" || step === "moderator" || step === "tldr" ? "moderator" : "agent";
 }
 
-async function runStep(env, db, base, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk, role = stepRole(base?.step), inferMetrics = null }) {
+async function runStep(env, db, base, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState, validate, toBody, budgetOk, role = stepRole(base?.step), inferMetrics = null, evidence = null }) {
   const ts = new Date(clock()).toISOString();
   // A benched agent's shadow answer (step "shadow:<agent>") is metered as a shadow call (src/shadow-switch.mjs).
   const meterSource = String(base?.step ?? "").startsWith("shadow:") ? `shadow:${schemaName}` : null;
@@ -294,6 +294,11 @@ async function runStep(env, db, base, { messages, schemaName, schema, maxTokens,
   if (memo && msg?.status === "ok" && stored.memoAnswer) {
     if (memoRow && memoRow.stance === msg.stance && (memoRow.bias ?? null) === (stored.memoAnswer.bias ?? null)) await recordAiUsage(db, { source, model: memoRow.model, outcome: "memo_same", now: clock() });
     await memoStore(db, { ...memo, messageId: msg.id, model: msg.model, answer: stored.memoAnswer, now: clock() });
+    // A4, in shadow (src/room-memo.mjs evidenceShadow): would the evidence key have had this answer?
+    if (evidence != null && evidenceMemoEnabled(env)) {
+      const hash = await inputHash([roleModels(env, role).primary, schemaName, evidence]);
+      await evidenceShadow(db, { kind: memo.kind, step: memo.step, hash, schemaName, answer: { stance: msg.stance, bias: stored.memoAnswer.bias ?? null }, model: msg.model, promptHit: Boolean(memoRow), now: clock(), record: (r) => recordAiUsage(db, r) });
+    }
   }
   return msg;
 }

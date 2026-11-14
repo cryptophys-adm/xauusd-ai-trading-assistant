@@ -26,7 +26,7 @@ import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, 
 import { publishSnapshot } from "./push-hub.mjs";
 import { readAllocationState, rosterSplit } from "./agent-allocation.mjs";
 import { gateShadowTurns } from "./shadow-switch.mjs";
-import { metricShadowEnabled, runMetricShadow, runMetricRebuttals, readMetricShadowBar } from "./metric-shadow.mjs";
+import { metricShadowEnabled, runMetricShadow, runMetricRebuttals, readMetricShadowBar, metricMenu } from "./metric-shadow.mjs";
 import { agentReputation, sessionOf } from "./outcome-scoring.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
@@ -653,12 +653,17 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   // Phase 1: the communication bus. Open pages see the room start (ADR-0015 phase 1).
   await publishWarRoom(env);
   const open = phase(WAR_ROOM_OPENING_MS);
-  const openingOpts = (agent) => ({
-    messages: openingMessages(agent, agentData(agent, evidence, hud, confirmations, desk15, projection), learnedFor(agent)), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
+  const openingOpts = (agent) => {
+    const data = agentData(agent, evidence, hud, confirmations, desk15, projection);
+    return {
+    messages: openingMessages(agent, data, learnedFor(agent)), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
+    // A4, in shadow (src/room-memo.mjs): the memo key the agent's evidence would give: its metric menu and notes.
+    evidence: { menu: metricMenu(data), learned: learnedFor(agent) ?? null },
     // An unapproved 15m chain speaks like any uncalibrated agent: at 0.4 or lower.
     maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateOpening(o, agent, { verifiedLines: agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]), forbiddenNames: forbiddenNamesFor(agent, fullRoster) }),
     toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), bias: o.bias, metrics: o.metrics, name: agentName(agent) }, refs: [] })
-  });
+    };
+  };
   // The agents in shadow answer beside the bus, never in it (scored as their own calls).
   const shadowOpenings = Promise.all(allocation.shadow.map(agent => existing.get("shadow:" + agent)?.status === "ok" ? null : open(base("shadow:" + agent, agent), openingOpts(agent)).catch(() => null)));
   const openings = await Promise.all(roster.map(agent => {

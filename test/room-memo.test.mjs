@@ -46,9 +46,9 @@ async function setup(overrides = {}, ai = fakeAI()) {
 }
 
 const messages = (data = "value area: inside") => [{ role: "system", content: "You are Fabio AMT in the XAUUSD Live War Room." }, { role: "user", content: "YOUR DATA:\n" + data }];
-function step(env, runId, { data, validate = (o) => ({ valid: typeof o?.claim === "string" && Array.isArray(o?.metrics), errors: [] }), threadId = "warroom:2026-11-11" } = {}) {
+function step(env, runId, { data, evidence = undefined, validate = (o) => ({ valid: typeof o?.claim === "string" && Array.isArray(o?.metrics), errors: [] }), threadId = "warroom:2026-11-11" } = {}) {
   return threadInternals.runStep(env, env.DB, { thread_id: threadId, run_id: runId, step: "open:fabio_amt", agent: "fabio_amt", parent_id: null, bar_time: runId }, {
-    messages: messages(data), schemaName: "war_room_opening", schema: null, maxTokens: 512, effort: "low",
+    messages: messages(data), schemaName: "war_room_opening", schema: null, maxTokens: 512, effort: "low", ...(evidence !== undefined ? { evidence } : {}),
     deadline: Date.now() + 60_000, clock: () => Date.now(), runState: {}, budgetOk: async () => true, validate,
     toBody: (o) => ({ body: { claim: o.claim, bias: o.bias, metrics: o.metrics, name: "Fabio AMT" }, refs: [] })
   });
@@ -187,4 +187,56 @@ test("R9. dismantled HUD agents (owner 2026-11-11: \"dismantle sekarang\") speak
     assert.ok(HUD_IDS.includes(id), `${id} stays a section of the HUD snapshot`);
     assert.equal(MANIFESTS.find((m) => m.id === id).dismantled.on, "2026-11-11");
   }
+});
+
+// A4 (owner 2026-11-14: "lanjut"): the memo by evidence, in shadow.
+test("A4: the evidence key counts, on a fresh call the prompt key missed, whether it had an answer and whether the model gave the same", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { evidenceShadow, resetEvidenceMemoSchemaCacheForTests, inputHash } = await import("../src/room-memo.mjs");
+  const { memoComparison } = await import("../src/neuron-allocation.mjs");
+  resetEvidenceMemoSchemaCacheForTests();
+  const raw = new DatabaseSync(":memory:");
+  const stmt = (sql, params = []) => ({ bind: (...a) => stmt(sql, a), async run() { raw.prepare(sql).run(...params); return {}; }, async first() { return raw.prepare(sql).get(...params) ?? null; }, async all() { return { results: raw.prepare(sql).all(...params) }; } });
+  const db = { prepare: (sql) => stmt(sql) };
+  const recorded = [];
+  const record = async (r) => { recorded.push(r.outcome); };
+  const now = Date.parse("2026-11-16T10:00:00Z");
+  // The same evidence on two bars (the closes moved, the menu did not): one hash.
+  const menu = [{ id: "L1", value: "trend up since [level]" }, { id: "candles_15m.range_ratio", value: 1.2 }];
+  const h = await inputHash(["gemma", "war_room_opening", { menu, learned: null }]);
+  const base = { kind: "warroom", step: "open:supertrend", hash: h, schemaName: "war_room_opening", model: "gemma", record };
+  assert.equal(await evidenceShadow(db, { ...base, answer: { stance: "BUY", bias: "BULLISH" }, now }), "miss");
+  assert.equal(await evidenceShadow(db, { ...base, answer: { stance: "BUY", bias: "BULLISH" }, now: now + 900_000 }), "same");
+  assert.equal(await evidenceShadow(db, { ...base, answer: { stance: "WAIT", bias: "BULLISH" }, now: now + 1_800_000 }), "hit");
+  // A prompt-key hit is the live memo's: not counted again here.
+  assert.equal(await evidenceShadow(db, { ...base, answer: { stance: "WAIT", bias: "BULLISH" }, promptHit: true, now: now + 2_700_000 }), "prompt_hit");
+  assert.deepEqual(recorded, ["memo_hit", "memo_same", "memo_hit"]);
+  // Past the TTL: a miss again.
+  assert.equal(await evidenceShadow(db, { ...base, answer: { stance: "WAIT", bias: "BULLISH" }, now: now + 3 * 86_400_000 }), "miss");
+  // The readout: live calls and reuse beside the evidence key's hits and agreement.
+  const [war] = memoComparison([
+    { source: "war_room_opening", calls: 1000, reused: 400, neurons: 14000 },
+    { source: "evidence_memo:war_room_opening", memo_hits: 300, memo_same: 270 }
+  ], { days: 1 });
+  assert.deepEqual([war.prompt_reuse_rate, war.evidence_hit_rate, war.evidence_same_rate, war.extra_neurons_per_day], [0.286, 0.3, 0.9, 3780]);
+});
+
+test("A4: through a room step: a prompt that changed with the same evidence still calls the model (the live memo is untouched) and counts an evidence hit", async () => {
+  const { resetEvidenceMemoSchemaCacheForTests } = await import("../src/room-memo.mjs");
+  resetEvidenceMemoSchemaCacheForTests();
+  const { env, db, ai } = await setup({ ROOM_MEMO_ENABLED: "true" });
+  const evidence = { menu: [{ id: "value_area", value: "inside" }], learned: null };
+  await step(env, "2026-11-11T02:45:00.000Z", { data: "close 4012.10, value area: inside", evidence });
+  const second = await step(env, "2026-11-11T03:00:00.000Z", { data: "close 4012.35, value area: inside", evidence });
+  assert.equal(ai.calls.length, 2, "the prompt changed: the live memo calls the model");
+  assert.equal(second.reused, undefined);
+  const rows = (await db.prepare("SELECT source, memo_hits, memo_same FROM ai_usage_daily WHERE source LIKE 'evidence_memo:%'").all()).results;
+  assert.deepEqual(rows.map((r) => [r.source, r.memo_hits, r.memo_same]), [["evidence_memo:war_room_opening", 1, 1]]);
+  const u = await usage(db);
+  assert.equal(u.memo_hits, 0, "the live memo's totals do not carry the evidence key's counts");
+  // EVIDENCE_MEMO_SHADOW off: nothing is counted.
+  const off = await setup({ EVIDENCE_MEMO_SHADOW: "off" });
+  await step(off.env, "2026-11-11T02:45:00.000Z", { data: "a", evidence });
+  await step(off.env, "2026-11-11T03:00:00.000Z", { data: "b", evidence });
+  assert.equal((await off.db.prepare("SELECT COUNT(*) AS n FROM ai_usage_daily WHERE source LIKE 'evidence_memo:%'").first()).n, 0);
 });
