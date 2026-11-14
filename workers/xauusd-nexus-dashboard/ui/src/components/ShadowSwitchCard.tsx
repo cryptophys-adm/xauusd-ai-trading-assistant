@@ -69,7 +69,9 @@ export default function ShadowSwitchCard() {
   };
   const spend = state?.spend_today;
   const share = Math.min(1, spend?.share_of_budget ?? 0);
-  const tone = !state?.allowed ? "red" : share >= 0.8 ? "amber" : "green";
+  // Only what the server reports: an answer without the switch's state shows "unknown", never OFF.
+  const known = typeof state?.allowed === "boolean";
+  const tone = !known ? "slate" : !state?.allowed ? "red" : share >= 0.8 ? "amber" : "green";
 
   return (
     <div className="glass p-4">
@@ -77,13 +79,13 @@ export default function ShadowSwitchCard() {
       {state ? (
         <div className="space-y-2 text-[11.5px]">
           <div className="flex items-center gap-2">
-            <Dot tone={tone} pulse={!state.allowed} />
+            <Dot tone={tone} pulse={known && !state.allowed} />
             <span className="text-slate-100">
-              {state.allowed ? "Shadow calls running" : state.held_off_by_variable ? "Shadow held off by the SHADOW_MODE variable" : state.mode_source === "breaker" ? "Shadow OFF: stopped by the cost breaker" : "Shadow OFF"}
+              {!known ? "State unknown" : state.allowed ? "Shadow calls running" : state.held_off_by_variable ? "Shadow held off by the SHADOW_MODE variable" : state.mode_source === "breaker" ? "Shadow OFF: stopped by the cost breaker" : "Shadow OFF"}
             </span>
           </div>
           <div className="text-slate-400">
-            Switch: <b className={on ? "text-emerald-300" : "text-rose-300"}>{on ? "ON" : "OFF"}</b>
+            Switch: <b className={!state.mode ? "text-slate-400" : on ? "text-emerald-300" : "text-rose-300"}>{!state.mode ? "—" : on ? "ON" : "OFF"}</b>
             {state.mode_source !== "default" ? <span> · {state.mode_source === "breaker" ? "cost breaker" : "owner"}, {when(state.set_at)}{state.reason ? ` — ${state.reason}` : ""}</span> : <span> · default</span>}
           </div>
           <div>

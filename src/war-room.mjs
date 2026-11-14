@@ -26,7 +26,7 @@ import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, 
 import { publishSnapshot } from "./push-hub.mjs";
 import { readAllocationState, rosterSplit } from "./agent-allocation.mjs";
 import { gateShadowTurns } from "./shadow-switch.mjs";
-import { metricShadowEnabled, runMetricShadow, runMetricRebuttals } from "./metric-shadow.mjs";
+import { metricShadowEnabled, runMetricShadow, runMetricRebuttals, readMetricShadowBar } from "./metric-shadow.mjs";
 import { agentReputation, sessionOf } from "./outcome-scoring.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
@@ -556,7 +556,7 @@ function m15Confirmations(desk15) {
  */
 export async function publishWarRoom(env) {
   try {
-    const room = await readWarRoom(env.DB);
+    const room = await readWarRoom(env.DB, { metrics: true });
     if (!room) return { status: "no_room" };
     return await publishSnapshot(env, "war-room", { status: "ok", enabled: warRoomEnabled(env), room });
   } catch (e) {
@@ -733,6 +733,8 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     jobs.push(["metrics", async () => {
       const openings = await runMetricShadow(env, { room: "M15", barTime, clock, agents: answered.map((m) => ({ agent: m.agent, stance: m.stance })), dataFor, roleFor: openingRole });
       const rebuttals = await runMetricRebuttals(env, { room: "M15", barTime, clock, rebutters: debate.map((m) => ({ agent: m.agent, stance: m.stance })), dataFor, roleFor: openingRole });
+      // A3: the open pages get the bar's metric chips at once (ADR-0015 push), not at their next poll.
+      if (Number(openings?.stored) || Number(rebuttals?.stored)) await publishWarRoom(env);
       return { openings, rebuttals };
     }]);
   }
@@ -783,7 +785,11 @@ export async function runMissedWarRoom(env, { now = Date.now(), clock = () => Da
 }
 
 /** The latest War Room run (or the one at barTime): brief, bus, debate and conclusion. */
-export async function readWarRoom(db, { barTime = null } = {}) {
+/**
+ * `metrics` (A3): also the bar's shadow answers in metric form per agent (src/metric-shadow.mjs), for Nexus' metric
+ * chips; off for the other readers (decision cards, strategy), which never see shadow answers.
+ */
+export async function readWarRoom(db, { barTime = null, metrics = false } = {}) {
   await ensureThreadSchema(db);
   const run = barTime
     ? new Date(Date.parse(barTime)).toISOString()
@@ -823,7 +829,8 @@ export async function readWarRoom(db, { barTime = null } = {}) {
     conclusion,
     // Neuron allocation: the agents in shadow in this room, and their shadow answers on this bar.
     benched: brief?.benched ?? [],
-    shadow_openings: rows.filter(m => m.step.startsWith("shadow:")).map(pick)
+    shadow_openings: rows.filter(m => m.step.startsWith("shadow:")).map(pick),
+    ...(metrics ? { metric_shadow: await readMetricShadowBar(db, { room: "M15", barTime: run }) } : {})
   };
 }
 

@@ -23,3 +23,4 @@ export function metricBus(openings: any[], self: string): { bus: any[]; refs: Ma
 export function checkMetricRebuttal(o: unknown, options?: { bus?: any[]; menu?: { id: string }[] }): { valid: boolean; cited: number; grounded: number; rebuts: any[] };
 export function metricRebuttalMessages(roleLine: string, input: { menu: unknown; opening: unknown; bus: unknown }): { role: string; content: string }[];
 export function runMetricRebuttals(env: unknown, options: Record<string, unknown>): Promise<Record<string, any>>;
+export function readMetricShadowBar(db: unknown, options?: { room?: string; barTime?: string | null }): Promise<{ openings: Record<string, any>; rebuttals: Record<string, any>; invalid: number } | null>;
