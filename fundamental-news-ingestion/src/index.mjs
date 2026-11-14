@@ -1080,6 +1080,26 @@ export async function gatewayStatus(env) {
   };
 }
 
+/**
+ * /health is read every 30 seconds by Nexus (through /api/status) and by the Drift Detector: each call read
+ * 19 KV keys (resource audit 2026-11-14). The body is kept per isolate for HEALTH_CACHE_MS
+ * (TV_HEALTH_CACHE_SECONDS, "0" for none), so an isolate reads KV for it at most once a minute.
+ */
+const HEALTH_CACHE = new WeakMap();
+function healthCacheMs(env) {
+  const raw = asString(env?.TV_HEALTH_CACHE_SECONDS).trim();
+  const s = raw === "" ? 60 : Number(raw);
+  return Number.isFinite(s) && s > 0 ? s * 1000 : 0;
+}
+export async function cachedHealth(env, now = Date.now()) {
+  const ttl = healthCacheMs(env);
+  const hit = env && typeof env === "object" ? HEALTH_CACHE.get(env) : null;
+  if (ttl && hit && now - hit.at < ttl) return hit.body;
+  const body = await buildHealth(env);
+  if (ttl && env && typeof env === "object") HEALTH_CACHE.set(env, { at: now, body });
+  return body;
+}
+
 async function buildHealth(env) {
   const symbols = parseCsv(env.TV_MCP_SYMBOLS, DEFAULT_SYMBOLS);
   // Every KV read at once: the Drift Detector gives /health 5 seconds, and sequential reads on a cold
@@ -1345,7 +1365,7 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return json(await buildHealth(env));
+      return json(await cachedHealth(env));
     }
 
     if (request.method === "GET" && url.pathname === "/oauth/start") {
