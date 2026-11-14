@@ -11,4 +11,14 @@ CREATE INDEX IF NOT EXISTS idx_outcome_scores_tf_candle ON outcome_scores(timefr
 CREATE INDEX IF NOT EXISTS idx_agent_thread_messages_ts ON agent_thread_messages(ts);
 CREATE INDEX IF NOT EXISTS idx_parity_comparisons_at ON engine_parity_comparisons(compared_at);
 CREATE INDEX IF NOT EXISTS idx_parity_comparisons_candle ON engine_parity_comparisons(candle_key);
+-- webhook_sources comes from schema.sql, which a database built from the migrations alone (the unit tests)
+-- does not have: the same definition here is a no-op wherever the table exists (every deployed database).
+CREATE TABLE IF NOT EXISTS webhook_sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  candle_key TEXT NOT NULL,
+  source TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  received_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(candle_key, source)
+);
 CREATE INDEX IF NOT EXISTS idx_webhook_sources_received ON webhook_sources(received_at);
