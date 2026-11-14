@@ -218,6 +218,7 @@ import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
 import { readShadowMode, setShadowMode, shadowModeMessage, checkShadowBudget } from "./shadow-switch.mjs";
 import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
+import { reserveTvCalls, releaseTvCalls } from "./tv-budget.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -2043,6 +2044,13 @@ async function ingestM5Context(env: Env, payload: unknown, waitUntil?: (p: Promi
 export class LocalComputationIngress extends WorkerEntrypoint<Env> {
   async submit(record: unknown): Promise<{ status: number; body: JsonObject }> {
     return ingestLocalCalculation(this.env, record);
+  }
+  /** The pull adapter's daily TradingView call budget, reserved atomically in D1 (src/tv-budget.mjs). */
+  async reserveTvCalls(input: { day: string; wanted: number; daily: number }): Promise<JsonObject> {
+    return reserveTvCalls(this.env.DB, { day: String(input?.day ?? ""), wanted: Number(input?.wanted), daily: Number(input?.daily) }) as Promise<JsonObject>;
+  }
+  async releaseTvCalls(input: { day: string; count: number }): Promise<JsonObject> {
+    return releaseTvCalls(this.env.DB, { day: String(input?.day ?? ""), count: Number(input?.count) }) as Promise<JsonObject>;
   }
   async submitContext(record: unknown): Promise<{ status: number; body: JsonObject }> {
     return ingestM5Context(this.env, record, (p) => this.ctx.waitUntil(p));

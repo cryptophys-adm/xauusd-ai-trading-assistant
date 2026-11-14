@@ -231,19 +231,42 @@ export function dailyBudget(env, now = Date.now()) {
   return m && m[1] === new Date(now).toISOString().slice(0, 10) ? Number(m[2]) : base;
 }
 
+/**
+ * Reserves calls of the day's budget. The count lives in the AI Worker's D1 (src/tv-budget.mjs), reached over
+ * the LocalComputationIngress binding: one statement grants and adds, so two runs close together cannot both
+ * pass the cap (a KV read-modify-write could, ADR-0015 phase 4 narrow, 2026-11-14). The KV key keeps a copy for
+ * the diagnostics page. When the binding cannot answer, the KV count is used as before.
+ */
 async function reserveBudget(kv, env, wanted, now) {
   const daily = dailyBudget(env, now);
-  const key = BUDGET_KEY_PREFIX + new Date(now).toISOString().slice(0, 10);
+  const day = new Date(now).toISOString().slice(0, 10);
+  const key = BUDGET_KEY_PREFIX + day;
+  if (typeof env?.AI_WORKER?.reserveTvCalls === "function") {
+    try {
+      const r = await env.AI_WORKER.reserveTvCalls({ day, wanted, daily });
+      if (Number.isFinite(Number(r?.allowed)) && Number.isFinite(Number(r?.used))) {
+        await kv.put(key, String(Number(r.used)), { expirationTtl: 60 * 60 * 48 });
+        return { allowed: Number(r.allowed), used: Number(r.used), daily, counter: "d1" };
+      }
+    } catch { /* the KV count below */ }
+  }
   const used = Number.parseInt((await kv.get(key)) || "0", 10) || 0;
   const allowed = Math.max(0, Math.min(wanted, daily - used));
   if (allowed > 0) await kv.put(key, String(used + allowed), { expirationTtl: 60 * 60 * 48 });
-  return { allowed, used: used + allowed, daily };
+  return { allowed, used: used + allowed, daily, counter: "kv" };
 }
 
 /** Gives back calls reserved for a run the gateway refused before calling TradingView. */
-async function releaseBudget(kv, count, now) {
+async function releaseBudget(kv, count, now, env = null) {
   if (!(count > 0)) return;
-  const key = BUDGET_KEY_PREFIX + new Date(now).toISOString().slice(0, 10);
+  const day = new Date(now).toISOString().slice(0, 10);
+  const key = BUDGET_KEY_PREFIX + day;
+  if (typeof env?.AI_WORKER?.releaseTvCalls === "function") {
+    try {
+      const r = await env.AI_WORKER.releaseTvCalls({ day, count });
+      if (Number.isFinite(Number(r?.used))) { await kv.put(key, String(Number(r.used)), { expirationTtl: 60 * 60 * 48 }); return; }
+    } catch { /* the KV count below */ }
+  }
   const used = Number.parseInt((await kv.get(key)) || "0", 10) || 0;
   await kv.put(key, String(Math.max(0, used - count)), { expirationTtl: 60 * 60 * 48 });
 }
@@ -346,7 +369,7 @@ async function refreshCycle(env, { now, force }) {
       await kv.put(GATEWAY_COOLDOWN_KEY, JSON.stringify({ until: new Date(until).toISOString(), code, seen_at: new Date(now).toISOString() }), { expirationTtl: Math.max(60, Math.ceil((until - now) / 1000)) });
     }
     if (NO_PROVIDER_CALL.has(code) && results.length === 0) {
-      await releaseBudget(kv, batch.length, now);
+      await releaseBudget(kv, batch.length, now, env);
       budget.used = Math.max(0, budget.used - batch.length);
       budget.released = batch.length;
     }
