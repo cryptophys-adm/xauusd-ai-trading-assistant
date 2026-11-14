@@ -128,12 +128,16 @@ test("the daily check compares every derived series with a few native bars, once
   assert.equal(gw.calls.length, 1);
 });
 
-test("steady-state daily MCP demand fits the 800 budget with margin", () => {
+test("steady-state daily MCP demand of the chart fits the budget (the account's provider quota, 500)", () => {
+  // Each pulled series at its cadence (a cadence above the bar, as USOIL 5m pulled once per 15 minutes),
+  // over a full 24-hour day, plus the daily check of the derived series. Measured 2026-11-13: 379 calls.
   const cronSeconds = 300;
-  const perDay = SERIES.filter((s) => !s.derived_from).reduce((sum, s) => sum + 86400 / Math.max(cronSeconds, s.seconds), 0) + SERIES.filter((s) => s.derived_from).length;
+  const perDay = SERIES.filter((s) => !s.derived_from).reduce((sum, s) => sum + 86400 / Math.max(cronSeconds, s.cadence ?? s.seconds), 0) + SERIES.filter((s) => s.derived_from).length;
   const budget = Number(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").match(/"TV_DAILY_CALL_BUDGET":\s*"(\d+)"/)[1]);
-  assert.equal(budget, 800);
-  assert.ok(perDay <= 0.8 * budget, `demand ${Math.round(perDay)} a day`);
+  assert.equal(budget, 500, "the account's provider quota (test/tv-quota-alignment.test.mjs)");
+  // The chart alone stays under the quota; what is left goes to the news pulls, which yield to the chart near
+  // the limit (the news Worker's chart reserve).
+  assert.ok(perDay <= 0.9 * budget, `demand ${Math.round(perDay)} a day`);
   assert.ok(SERIES.some((s) => s.key === "TVC:USOIL|5m" && !s.derived_from), "USOIL stays a 5m pull (Macro & Aether WTI)");
 });
 
