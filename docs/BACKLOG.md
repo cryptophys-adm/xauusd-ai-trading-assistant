@@ -95,6 +95,12 @@ setup READY state that never reached the decision (#192).
     - **Then:** whether the bars it holds back would have lost (the plan learner's replay of the default plan on squeezed and free bars), and whether one range is the right width in the scalp mode, whose target is the nearest key level a quarter of a range ahead.
     - **Decided (owner 2026-11-14: "tidak setuju, tetap ikut konsensus sebagai penyeimbang"):** the default agent (Zone pullback) stays in the strategy agents' consensus as a balancer, although it reads "price at a key zone" on both sides at nearly every bar. Its voices on both sides cancel in the lean and keep a lone agent from speaking with full force; the proposal to leave it out is closed.
 
+26. **The content agent: public posts, later streams** (owner 2026-11-14: an autonomous digital content creator on Instagram and X, chart livestreams on YouTube and TikTok; `docs/RFC_CONTENT_AGENT.md`). Proposed, nothing built.
+    - **P0 (data):** news from publisher RSS feeds and GDELT, in shadow first; the MT5 fallback switch on "auto" (the owner's switch).
+    - **P1:** the public projection (past decisions, no account data, after a delay) and the content guardian in Aether; a lawyer's check of POJK 6/2026 for forex and gold content.
+    - **P2:** posts to X and Instagram (morning brief, recaps, pattern education) through an approval queue.
+    - **Parked (owner 2026-11-14):** the automated livestream; the owner streams manually from a desktop for now (TradingView charts with attribution, never Nexus). When taken up: never on the execution VPS.
+
 ## Calibration in progress
 
 15. **4H and D1 parity** (alerts installed by the owner on 2026-11-09). The 1H, 15m and 5m identities are approved (`prophet` 41, `prophet_m15` 360, `prophet_m5` 866 consecutive matches on 2026-11-12). Still calibrating (2026-11-13): `prophet_h4` and `gmi_h4` at 20 of 24 (about one more trading day), `prophet_d1` 3 and `gmi_d1` 2 of 24 (weeks). `gmi_m5` was revoked again on 2026-11-13 (5 of 24 toward re-approval at 09:26 UTC); `prophet_m5` re-approved. `gmi_m5` matches about 98 to 99 % of 5m bars (2 to 3 mismatches a day, 22 on 2026-11-12 in one run of six bars from 10:05 UTC), and almost every mismatch is in the higher-timeframe gate (`gate`, `conflict`, sometimes `gmi_dir`) while the 15m and 1H GMI match every bar: likely the 5m alert reading a forming higher-timeframe bar. To study if it keeps revoking; it does not touch the decision (the 5m trigger is Prophet R38, approved). Until then the 4H and D1 Desks speak at confidence 0.4 or lower.
