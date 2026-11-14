@@ -78,7 +78,7 @@ async function readDay(kv, day) {
     if (!rec || !(Number(rec.calls) > 0)) continue;
     out.total += Number(rec.calls) || 0;
     out.failed += Number(rec.failed) || 0;
-    out.by_caller[caller] = { calls: Number(rec.calls) || 0, failed: Number(rec.failed) || 0, first_call_at: rec.first_call_at ?? null, last_call_at: rec.last_call_at ?? null };
+    out.by_caller[caller] = { calls: Number(rec.calls) || 0, failed: Number(rec.failed) || 0, first_call_at: rec.first_call_at ?? null, last_call_at: rec.last_call_at ?? null, by_hour: Array.isArray(rec.by_hour) ? rec.by_hour.slice(0, 24).map((n) => Number(n) || 0) : [] };
     if (Array.isArray(rec.by_hour)) rec.by_hour.forEach((n, h) => { if (h < 24) out.by_hour[h] += Number(n) || 0; });
     if (rec.quota_exceeded_at && (!out.quota_exceeded_at || rec.quota_exceeded_at < out.quota_exceeded_at)) {
       out.quota_exceeded_at = rec.quota_exceeded_at;
@@ -98,4 +98,34 @@ export async function readUsage(env, now = Date.now()) {
   } catch {
     return null;
   }
+}
+
+/**
+ * The chart's reserve (owner 2026-11-14: "kerjakan juga", the TradingView quota). The account's provider
+ * quota ran out at about 20:00 UTC on 2026-11-12 and 2026-11-13, at the 501st call of the day, and the
+ * gold chart stopped for the last two hours of New York. The chart (the pull adapter) comes first: a news
+ * pull is refused while today's calls, the pull's own calls and what the chart still needs before UTC
+ * midnight would pass the limit. The chart's need is its median calls per completed hour today times the
+ * hours left; before an hour is complete there is no estimate and news is not held back.
+ * Pure: { blocked, total, limit, chart_per_hour, chart_hours_left, chart_need, wanted }.
+ */
+export const PROVIDER_DAILY_LIMIT = 500;
+export function chartReserve(day, { now = Date.now(), wanted = 0, limit = PROVIDER_DAILY_LIMIT } = {}) {
+  const d = new Date(now);
+  const hour = d.getUTCHours();
+  const completed = (day?.by_caller?.pull_adapter?.by_hour || []).slice(0, hour).map((n) => Number(n) || 0);
+  const sorted = completed.filter((n) => n > 0).sort((a, b) => a - b);
+  const perHour = sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : 0;
+  const midnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+  const hoursLeft = Math.max(0, (midnight - now) / 3_600_000);
+  const need = Math.ceil(perHour * hoursLeft);
+  const total = Number(day?.total) || 0;
+  return { blocked: total + wanted + need > limit, total, limit, chart_per_hour: perHour, chart_hours_left: Math.round(hoursLeft * 100) / 100, chart_need: need, wanted };
+}
+
+/** Today's calls (UTC) for the reserve, or null. Never throws. */
+export async function readToday(env, now = Date.now()) {
+  const kv = env?.OAUTH_STORE;
+  if (!kv) return null;
+  try { return await readDay(kv, dayOf(now)); } catch { return null; }
 }

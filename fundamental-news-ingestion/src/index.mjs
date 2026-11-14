@@ -1,4 +1,4 @@
-import { countingFetch, readUsage, recordUsage, usageTally } from "./provider-usage.mjs";
+import { countingFetch, readUsage, recordUsage, usageTally, chartReserve, readToday, PROVIDER_DAILY_LIMIT } from "./provider-usage.mjs";
 import { runOhlcvRequests, runEconomicCalendar } from "./tv-gateway.mjs";
 
 const JSON_HEADERS = {
@@ -123,6 +123,24 @@ async function writeKVJson(env, key, value, expirationTtl) {
 async function deleteKVKey(env, key) {
   if (!env.OAUTH_STORE) return;
   await env.OAUTH_STORE.delete(key);
+}
+
+/** The last news pull, shared across data centres (KV), for SHARED_PULL_SECONDS. */
+const SHARED_PULL_PREFIX = "tv_mcp:news:last:";
+const SHARED_PULL_SECONDS = 900;
+async function readSharedPull(env, key, maxAgeSeconds) {
+  if (!env.OAUTH_STORE) return null;
+  try {
+    const value = JSON.parse((await env.OAUTH_STORE.get(key)) || "null");
+    const at = Date.parse(asString(value?.fetched_at));
+    return value && Number.isFinite(at) && Date.now() - at <= maxAgeSeconds * 1000 ? value : null;
+  } catch {
+    return null;
+  }
+}
+async function writeSharedPull(env, key, value, maxAgeSeconds) {
+  if (!env.OAUTH_STORE) return;
+  try { await env.OAUTH_STORE.put(key, JSON.stringify(value), { expirationTtl: Math.max(60, maxAgeSeconds) }); } catch { /* the edge cache still holds it */ }
 }
 
 async function readQuotaCooldown(env) {
@@ -1120,8 +1138,16 @@ async function handlePull(request, env, ctx, options = {}) {
     method: "GET"
   });
   const cache = caches.default;
+  // The shared copy of the last pull (owner 2026-11-14, the TradingView quota): the edge cache is per data
+  // centre, so the AI Worker's pull a minute after the scheduled one missed it and called the provider
+  // again every hour (60 calls on 2026-11-13, the same headlines). KV is read in every data centre.
+  const sharedKey = `${SHARED_PULL_PREFIX}${symbols.join(",")}`;
   if (!options.forceRefresh) {
-    const cached = await cache.match(cacheKey);
+    let cached = await cache.match(cacheKey);
+    if (!cached) {
+      const shared = await readSharedPull(env, sharedKey, parsePositiveInt(env.TV_MCP_SHARED_CACHE_SECONDS, SHARED_PULL_SECONDS));
+      if (shared) cached = new Response(JSON.stringify(shared));
+    }
     if (cached) {
       const payload = await cached.json();
       const recentCachedArticles = filterRecentArticles(asArray(payload.articles) || []);
@@ -1149,6 +1175,18 @@ async function handlePull(request, env, ctx, options = {}) {
       failure_code: "provider_quota_exceeded",
       retry_at: cooldown.until
     });
+  }
+
+  // The chart comes first (src/provider-usage.mjs chartReserve): a news pull that would leave the gold
+  // chart without calls before UTC midnight waits. TV_NEWS_RESERVE "off" leaves the check out.
+  if (asString(env.TV_NEWS_RESERVE).trim().toLowerCase() !== "off") {
+    const reserve = chartReserve(await readToday(env), { wanted: symbols.length, limit: parsePositiveInt(env.TV_PROVIDER_DAILY_LIMIT, PROVIDER_DAILY_LIMIT) });
+    if (reserve.blocked) {
+      return unavailableResponse(503, "TradingView calls are reserved for the gold chart today", {
+        failure_code: "reserved_for_chart",
+        reserve
+      });
+    }
   }
 
   let metadata;
@@ -1202,6 +1240,8 @@ async function handlePull(request, env, ctx, options = {}) {
       }
     });
     ctx.waitUntil(cache.put(cacheKey, cacheResponse));
+    // The shared copy: every article of the pull (a consumer filters its seen ones when it reads it).
+    ctx.waitUntil(writeSharedPull(env, sharedKey, { ...result, articles: recentArticles, count: recentArticles.length }, parsePositiveInt(env.TV_MCP_SHARED_CACHE_SECONDS, SHARED_PULL_SECONDS)));
 
     return json({ ...result, cache: "miss" });
   } catch (error) {

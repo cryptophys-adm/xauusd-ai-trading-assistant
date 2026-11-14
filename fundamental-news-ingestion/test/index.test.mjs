@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 const moduleUrl = new URL("../src/index.mjs", import.meta.url);
-const { default: worker, internals } = await import(moduleUrl.href);
+const { default: worker, internals, runNewsPull } = await import(moduleUrl.href);
 
 class MemoryKV {
   constructor() {
@@ -912,4 +912,101 @@ test("GET /health reads KV in parallel, so a slow cold KV stays inside the Drift
   assert.ok(reads >= 10, `every read still happens (${reads})`);
   assert.ok(peak >= 10, `reads overlap (peak ${peak})`);
   assert.ok(Date.now() - started < reads * 40 / 2, "well under the sequential time");
+});
+
+// The TradingView quota (owner 2026-11-14): the provider quota ran out at the 501st call of the day at
+// about 20:00 UTC on 2026-11-12 and 2026-11-13, and the AI Worker's hourly news pull missed the scheduled
+// pull's edge cache (another data centre) and called the provider again for the same headlines.
+function upstreamWithNews(counter) {
+  return async (url, init = {}) => {
+    if (String(url).includes(".well-known/oauth-authorization-server")) {
+      return jsonResponse({ authorization_endpoint: "https://mcp.example.com/oauth/authorize", token_endpoint: "https://mcp.example.com/oauth/token", token_endpoint_auth_methods_supported: ["none"] });
+    }
+    if (String(url).includes("/mcp")) {
+      counter.mcp += 1;
+      return jsonResponse({ result: { data: { headlines: [{ id: "g1", title: "Gold holds", url: "https://news/g1", published_at: new Date().toISOString(), symbols: ["OANDA:XAUUSD"] }] } } });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+}
+function waitingCtx() {
+  const pending = [];
+  return { ctx: { waitUntil(p) { pending.push(p); } }, settle: () => Promise.all(pending) };
+}
+async function signedIn(env) {
+  await env.OAUTH_STORE.put("tv_mcp:oauth_token", JSON.stringify({ access_token: "token", refresh_token: "refresh", expires_at: Math.floor(Date.now() / 1000) + 3600 }));
+}
+
+test("the AI Worker's pull reads the scheduled pull's shared copy in another data centre: no second provider call", async () => {
+  const env = createEnv();
+  await signedIn(env);
+  const counter = { mcp: 0 };
+  globalThis.fetch = upstreamWithNews(counter);
+  const first = waitingCtx();
+  await worker.scheduled({ scheduledTime: Date.now(), cron: "4 * * * *" }, env, first.ctx);
+  await first.settle();
+  assert.equal(counter.mcp, 3, "the scheduled pull asks once per symbol");
+  // Another data centre: an empty edge cache.
+  installCache();
+  const body = await runNewsPull(env, createCtx());
+  assert.equal(counter.mcp, 3, "no second provider call within the shared copy's lifetime");
+  assert.equal(body.cache, "hit");
+  assert.deepEqual(body.articles.map((a) => a.title), ["Gold holds"], "the consumer still gets the headlines it has not seen");
+  const again = await runNewsPull(env, createCtx());
+  assert.deepEqual([again.count, counter.mcp], [0, 3], "seen headlines are not served twice, and still no provider call");
+  // forceRefresh still asks the provider.
+  installCache();
+  await runNewsPull(env, createCtx(), { forceRefresh: true });
+  assert.equal(counter.mcp, 6);
+});
+
+test("a stale shared copy is not used", async () => {
+  const env = createEnv({ TV_MCP_SHARED_CACHE_SECONDS: "600" });
+  await signedIn(env);
+  await env.OAUTH_STORE.put("tv_mcp:news:last:OANDA:XAUUSD,TVC:USOIL,TVC:DXY", JSON.stringify({ fetched_at: new Date(Date.now() - 700_000).toISOString(), articles: [{ id: "old", title: "Old", url: "https://news/old", published_at: new Date().toISOString() }] }));
+  const counter = { mcp: 0 };
+  globalThis.fetch = upstreamWithNews(counter);
+  const body = await runNewsPull(env, createCtx());
+  assert.deepEqual([body.cache, counter.mcp], ["miss", 3]);
+});
+
+test("the chart's reserve: a news pull waits when it would leave the gold chart without calls before midnight", async () => {
+  const { chartReserve, PROVIDER_DAILY_LIMIT } = await import("../src/provider-usage.mjs");
+  assert.equal(PROVIDER_DAILY_LIMIT, 500);
+  const hours = (n, perHour) => Array.from({ length: 24 }, (_, h) => (h < n ? perHour : 0));
+  const day = (pullHours, total) => ({ total, by_caller: { pull_adapter: { calls: pullHours.reduce((a, b) => a + b, 0), by_hour: pullHours } } });
+  const at = (hh, mm = 0) => Date.UTC(2026, 10, 16, hh, mm);
+  // 2026-11-13: about 19 chart calls an hour and 6 news calls; at 17:30 the day stood near 420.
+  const busy = chartReserve(day(hours(17, 19), 420), { now: at(17, 30), wanted: 3 });
+  assert.deepEqual([busy.chart_per_hour, busy.chart_need, busy.blocked], [19, 124, true], "420 + 3 + 19 x 6.5 h passes 500: news waits");
+  // After the fix (one news pull an hour, the 1H bars built from the minutes): 18 + 3 an hour, about 490 a day.
+  const fixed = chartReserve(day(hours(20, 18), 420), { now: at(20, 5), wanted: 3 });
+  assert.equal(fixed.blocked, false, "420 + 3 + 18 x 3.92 h = 494: news still runs");
+  assert.equal(chartReserve(day(hours(0, 0), 30), { now: at(0, 30), wanted: 3 }).blocked, false, "before an hour is complete there is no estimate");
+  assert.equal(chartReserve(day(hours(20, 1), 60), { now: at(20, 0), wanted: 3 }).blocked, false, "a weekend day: the chart barely calls");
+  assert.equal(chartReserve(day([40, 18, 18, 19, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 120), { now: at(4, 10), wanted: 3 }).chart_per_hour, 18, "the median, so a bootstrap hour does not count");
+  assert.equal(chartReserve(null, { now: at(12), wanted: 3 }).blocked, false);
+});
+
+test("POST /pull refuses a news pull reserved for the chart before any provider call", async () => {
+  const env = createEnv();
+  await signedIn(env);
+  const now = new Date();
+  const day = now.toISOString().slice(0, 10);
+  const hour = now.getUTCHours();
+  if (hour < 1) return; // the reserve needs one completed hour
+  // The chart has spent 60 calls in every completed hour: whatever the hour, the day cannot fit a news pull.
+  const byHour = Array.from({ length: 24 }, (_, h) => (h < hour ? 60 : 0));
+  await env.OAUTH_STORE.put(`tv_mcp:calls:${day}:pull_adapter`, JSON.stringify({ date: day, caller: "pull_adapter", calls: 60 * hour, failed: 0, by_hour: byHour }));
+  const counter = { mcp: 0 };
+  globalThis.fetch = upstreamWithNews(counter);
+  const response = await worker.fetch(new Request("https://news.example.com/pull", { method: "POST", headers: { authorization: "Bearer ingest-secret" } }), env, createCtx());
+  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(body.failure_code, "reserved_for_chart");
+  assert.equal(counter.mcp, 0, "no provider call");
+  // The switch leaves the check out.
+  const off = await worker.fetch(new Request("https://news.example.com/pull", { method: "POST", headers: { authorization: "Bearer ingest-secret" } }), { ...env, TV_NEWS_RESERVE: "off" }, createCtx());
+  assert.equal(off.status, 200);
+  assert.equal(counter.mcp, 3);
 });

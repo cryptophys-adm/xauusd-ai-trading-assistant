@@ -24,6 +24,8 @@
   // Verify the next scheduled pull after deploying safe upstream diagnostics.
   // Verify the latest sanitized upstream error diagnostics in production health output.
   "triggers": {
-    "crons": ["5 * * * *"]
+    // :04 (owner 2026-11-14, the TradingView quota): two minutes before the AI Worker's hourly news
+    // analysis (:06), so its pull reads this pull's shared copy instead of calling the provider again.
+    "crons": ["4 * * * *"]
   }
 }

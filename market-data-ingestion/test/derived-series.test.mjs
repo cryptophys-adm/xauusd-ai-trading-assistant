@@ -122,7 +122,7 @@ test("the daily check compares every derived series with a few native bars, once
   const env = { MARKET_DATA_CACHE: kv, TV_GATEWAY: gw, TV_DAILY_CALL_BUDGET: "800" };
   const r = await verifyDerivedSeries(env, { now: nowSec * 1000 });
   assert.equal(r.status, "match", JSON.stringify(r));
-  assert.equal(r.series.length, 4);
+  assert.equal(r.series.length, 5, "XAUUSD 5m, 15m and 1h (since 2026-11-14), USOIL 15m and 1h");
   assert.ok(r.series.every((x) => x.compared > 0 && x.mismatched === 0));
   assert.equal((await verifyDerivedSeries(env, { now: nowSec * 1000 + 60_000 })).status, "not_due", "once a day");
   assert.equal(gw.calls.length, 1);
@@ -143,4 +143,14 @@ test("a one-day budget override applies to its UTC date only", async () => {
   assert.equal(SERIES_INTERNALS.dailyBudget(env, Date.parse("2026-11-08T22:05:00Z")), 1000);
   assert.equal(SERIES_INTERNALS.dailyBudget(env, Date.parse("2026-11-09T00:00:00Z")), 800, "lapses at the next UTC midnight");
   assert.equal(SERIES_INTERNALS.dailyBudget({ TV_DAILY_CALL_BUDGET: "800", TV_DAILY_CALL_BUDGET_OVERRIDE: "junk" }, Date.parse("2026-11-08T22:05:00Z")), 800);
+});
+
+test("the XAUUSD 1H bar is built from the hour's 1m bars on the UTC hour (since 2026-11-14, the TradingView quota)", () => {
+  const h1 = SERIES.find((s) => s.key === "OANDA:XAUUSD|1h");
+  assert.equal(h1.derived_from, "OANDA:XAUUSD|1m");
+  const start = Date.UTC(2026, 10, 16, 14, 0) / 1000;
+  const minutes = Array.from({ length: 60 }, (_, i) => ({ time: start + i * 60, open: 100 + i, high: 101 + i + (i === 30 ? 9 : 0), low: 99 + i - (i === 10 ? 7 : 0), close: 100.5 + i, volume: 2 }));
+  const out = aggregateCandles(minutes, { seconds: 3600, sourceSeconds: 60, nowSec: start + 3600 + 5, fetchedAtSec: start + 3600 + 5 });
+  assert.deepEqual(out.map((c) => [c.open_time, c.close_time, c.open, c.high, c.low, c.close, c.volume]), [["2026-11-16T14:00:00.000Z", "2026-11-16T15:00:00.000Z", 100, 160, 99, 159.5, 120]]);
+  assert.deepEqual(aggregateCandles(minutes.slice(0, 59), { seconds: 3600, sourceSeconds: 60, nowSec: start + 3600 - 30 }), [], "not before the hour is complete");
 });
