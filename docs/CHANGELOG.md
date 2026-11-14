@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-14
+- docs(strategy-agents): the default agent stays in the strategy agents' consensus as a balancer (owner 2026-11-14: "tidak setuju, tetap ikut konsensus sebagai penyeimbang"); the proposal to leave it out is closed (BACKLOG item 25, `docs/RFC_STRATEGY_AGENTS.md` §4a). No code change.
 - feat(shadow): the GMI latch candidates stop (owner 2026-11-14, "setuju", at the scheduled P5 review). `gmi_v12_70@latch8` and `@latch12` move to `RETIRED_CANDIDATES` with the review's numbers: 116 shared scored bars of the 300 a verdict needs, 0 differing stances, 0 decisive pairs, both 0.44 right. GMI was WAIT on 114 of the bars and the latch changed only its "Prophet risk hold" fields (16 and 8 of 124 bars), so a candidate could never be shown better. The GMI control keeps running, as the baseline of the next grid point if Aether's calibrator proposes one (its rule needs 3 stuck episodes over 10 hourly cards; GMI had 6 cards). `prophet_r37@latch8` keeps running to 2026-12-07 (3 decisive pairs of 30). This changes no decision: shadow candidates never trade.
 
 ## 2026-11-13

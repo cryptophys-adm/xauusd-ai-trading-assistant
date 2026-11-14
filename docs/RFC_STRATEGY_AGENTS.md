@@ -108,6 +108,8 @@ Decision Engine's quorum (`STRATEGY_AGENTS`), with the weight of the D1, 4H and 
 
 - Who speaks: a live agent that sees its own setup on a side and whose plan passes the reward guardrail.
   The default agent plans both sides at every bar, so it speaks only where price already holds at its zone.
+- The default agent stays in as a balancer (owner 2026-11-14: "tetap ikut konsensus sebagai penyeimbang"): where
+  it speaks on both sides its voices cancel in the lean and widen the denominator, which tempers the others.
 - How loud: 1, moved between 0.5 and 1.5 by the agent's own record (1 + mean R per setup) once it has 15
   resolved setups.
 - The lean: (buy voices − sell voices) / (all voices + 1). One agent alone leans 0.5, two 0.67, three 0.75;
