@@ -1144,9 +1144,10 @@ async function handlePull(request, env, ctx, options = {}) {
   const sharedKey = `${SHARED_PULL_PREFIX}${symbols.join(",")}`;
   if (!options.forceRefresh) {
     let cached = await cache.match(cacheKey);
+    let fromShared = false;
     if (!cached) {
       const shared = await readSharedPull(env, sharedKey, parsePositiveInt(env.TV_MCP_SHARED_CACHE_SECONDS, SHARED_PULL_SECONDS));
-      if (shared) cached = new Response(JSON.stringify(shared));
+      if (shared) { cached = new Response(JSON.stringify(shared)); fromShared = true; }
     }
     if (cached) {
       const payload = await cached.json();
@@ -1161,6 +1162,11 @@ async function handlePull(request, env, ctx, options = {}) {
         // The cache is fresh but all items have already been emitted. Return an
         // empty cache hit instead of making another provider request.
         return json({ ...payload, articles: [], count: 0, available: true, cache: "hit", duplicate_count: recentCachedArticles.length });
+      }
+      // The shared copy is the provider's answer of minutes ago: when it held no headline of the last hour,
+      // asking again now finds none either (production 2026-11-14 04:04/04:06 UTC, a Saturday).
+      if (fromShared) {
+        return json({ ...payload, articles: [], count: 0, available: true, cache: "hit", shared: true });
       }
       // A cache containing only stale/undated headlines is not valid for the
       // one-hour news window. Continue to upstream unless the quota cooldown blocks it.
