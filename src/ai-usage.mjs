@@ -111,7 +111,10 @@ export async function readAiUsage(db, { days = 2, now = Date.now() } = {}) {
   const byDay = new Map();
   for (const r of rows) {
     const d = byDay.get(r.day) || { day: r.day, calls: 0, failed: 0, timeouts: 0, prompt_tokens: 0, completion_tokens: 0, neurons: 0, unpriced_tokens: 0, memo_hits: 0, memo_same: 0, reused: 0 };
-    for (const k of ["calls", "failed", "timeouts", "prompt_tokens", "completion_tokens", "memo_hits", "memo_same", "reused"]) d[k] += Number(r[k]) || 0;
+    // The evidence-key counters (A4, shadow, source "evidence_memo:<schema>") are another key's: kept on their own
+    // rows, never added to the live memo's daily totals.
+    const shadowKey = String(r.source).startsWith("evidence_memo:");
+    for (const k of ["calls", "failed", "timeouts", "prompt_tokens", "completion_tokens", "memo_hits", "memo_same", "reused"]) if (!(shadowKey && (k === "memo_hits" || k === "memo_same"))) d[k] += Number(r[k]) || 0;
     if (r.neurons == null) d.unpriced_tokens += (Number(r.prompt_tokens) || 0) + (Number(r.completion_tokens) || 0);
     else d.neurons += r.neurons;
     byDay.set(r.day, d);

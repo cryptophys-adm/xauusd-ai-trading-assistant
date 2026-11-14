@@ -50,6 +50,7 @@ import { buildCrowdLine, finalEntries, crowdRule, roomReputation, stuckCautions,
 import { agentReputation, listStuckStates } from "./outcome-scoring.mjs";
 import { readAllocationState, rosterSplit } from "./agent-allocation.mjs";
 import { gateShadowTurns } from "./shadow-switch.mjs";
+import { metricMenu } from "./metric-shadow.mjs";
 import { roomWeighting } from "./weighting.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
@@ -454,14 +455,19 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
 
   // Phase 1: the communication bus.
   const open = phase(WAR_ROOM_OPENING_MS);
-  const openingOpts = (agent) => ({
-    messages: openingMessages(agent, agentData(agent, ev, spec), spec, roster, null, learnedFor(agent)), schemaName: "tf_room_opening", schema: OPENING_SCHEMA,
+  const openingOpts = (agent) => {
+    const data = agentData(agent, ev, spec);
+    return {
+    messages: openingMessages(agent, data, spec, roster, null, learnedFor(agent)), schemaName: "tf_room_opening", schema: OPENING_SCHEMA,
+    // A4, in shadow (src/room-memo.mjs): the memo key the agent's evidence would give: its metric menu and notes.
+    evidence: { menu: metricMenu(data), learned: learnedFor(agent) ?? null },
     maxTokens: BUS_MAX_TOKENS.agent, effort: "low",
     // No parity cap on the confidence (owner decision 2026-11-09: "confidences sesuai kapasitasnya");
     // each agent's weight in the quorum comes from its track record (P7), which Aether tunes.
     validate: (o) => validateOpening(normalizeTfNames(o, [agent]), agent, { forbiddenNames: forbiddenNamesFor(agent, fullRoster, tfAgentName) }),
     toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), bias: o.bias, metrics: o.metrics, name: tfAgentName(agent) }, refs: [] })
-  });
+    };
+  };
   const shadowOpenings = Promise.all(allocation.shadow.map((agent) => existing.get("shadow:" + agent)?.status === "ok" ? null : open(base("shadow:" + agent, agent), openingOpts(agent)).catch(() => null)));
   const openings = await Promise.all(roster.map((agent) => {
     const prior = existing.get("open:" + agent);

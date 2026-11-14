@@ -135,6 +135,27 @@ export function buildAllocation({ rows = [], rates = new Map(), cards = [], days
   };
 }
 
+/**
+ * Pure (A4): the room memo by prompt (live) beside the memo by evidence (shadow), per opening schema, from the
+ * meter rows of the window. `extra_neurons_per_day`: what the evidence key would save on top of the prompt key,
+ * counting only its hits where the model then gave the same stance and bias.
+ */
+export function memoComparison(usageRows = [], { days = 7 } = {}) {
+  const sum = (rows, k) => rows.reduce((n, r) => n + (Number(r[k]) || 0), 0);
+  const rate = (x, n) => (n > 0 ? round(x / n) : null);
+  return ["war_room_opening", "tf_room_opening"].map((schema) => {
+    const live = usageRows.filter((r) => r.source === schema);
+    const ev = usageRows.filter((r) => r.source === `evidence_memo:${schema}`);
+    const calls = sum(live, "calls"), reused = sum(live, "reused"), neurons = sum(live, "neurons");
+    const hits = sum(ev, "memo_hits"), same = sum(ev, "memo_same");
+    return {
+      schema, calls, prompt_reused: reused, prompt_reuse_rate: rate(reused, calls + reused),
+      evidence_hits: hits, evidence_hit_rate: rate(hits, calls), evidence_same_rate: rate(same, hits),
+      extra_neurons_per_day: calls > 0 ? Math.round((same * neurons) / calls / Math.max(1, days)) : null
+    };
+  });
+}
+
 /** GET /api/neuron-allocation: the last `days` days (1 to 14). */
 export async function readNeuronAllocation(env, { days = 7, now = Date.now() } = {}) {
   const db = env.DB;
@@ -146,5 +167,5 @@ export async function readNeuronAllocation(env, { days = 7, now = Date.now() } =
   const cards = await scorecards(db, { days: 30, now, snapshot: true });
   const [state, changes, metric] = await Promise.all([readAllocationState(env), readAllocationEvents(db, { limit: 50 }), readMetricShadow(env, { days: n, now }).catch(() => null)]);
   const grounding = Object.fromEntries((metric?.agents ?? []).filter((a) => a.grounding_rate != null).map((a) => [a.agent, a.grounding_rate]));
-  return { status: "ok", generated_at: new Date(now).toISOString(), window_days: n, record_days: 30, ...buildAllocation({ rows, rates: blendedRates(usage.rows), cards, days: n, state, changes, grounding }), metric_shadow: metric };
+  return { status: "ok", generated_at: new Date(now).toISOString(), window_days: n, record_days: 30, ...buildAllocation({ rows, rates: blendedRates(usage.rows), cards, days: n, state, changes, grounding }), metric_shadow: metric, memo: memoComparison(usage.rows, { days: n }) };
 }

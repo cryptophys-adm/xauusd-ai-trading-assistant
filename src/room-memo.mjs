@@ -88,3 +88,64 @@ export async function memoStore(db, { kind, step, hash, messageId = null, model 
     return false;
   }
 }
+
+// ---------------------------------------------------------------- the evidence key, in shadow (AI Neuron A4)
+// Owner 2026-11-14 ("lanjut", A4): the memo above matches a request only when the whole prompt is the same, so a
+// bar whose closes moved by a few cents misses although the agent's evidence reads the same. The evidence key is
+// the agent's own metric menu (src/metric-shadow.mjs metricMenu: its HUD statements with price levels masked,
+// its fields, its candles as distances and ratios) plus its learned notes, hashed with the model and schema.
+// It runs in shadow: it never reuses an answer. On each fresh model call that the prompt key missed, it records
+// whether the evidence key had an answer within the TTL (memo_hits) and whether the model then gave the same
+// stance and bias (memo_same), in ai_usage_daily under the source "evidence_memo:<schema name>". A higher hit
+// rate with the same answers is the case for keying the live memo on the evidence (a later step, the owner's).
+export const EVIDENCE_MEMO_SCHEMA_SQL = [
+  `CREATE TABLE IF NOT EXISTS room_memo_evidence (
+  kind TEXT NOT NULL,
+  step TEXT NOT NULL,
+  evidence_hash TEXT NOT NULL,
+  model TEXT,
+  stance TEXT,
+  bias TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (kind, step, evidence_hash)
+)`,
+  "CREATE INDEX IF NOT EXISTS idx_room_memo_evidence_created ON room_memo_evidence(created_at)"
+];
+export const EVIDENCE_METER_PREFIX = "evidence_memo:";
+let evidenceReady = false;
+export function resetEvidenceMemoSchemaCacheForTests() { evidenceReady = false; }
+
+export function evidenceMemoEnabled(env) {
+  return String(env?.EVIDENCE_MEMO_SHADOW ?? "on").trim().toLowerCase() !== "off";
+}
+
+/**
+ * Shadow step after a fresh model call: compares the answer with the evidence key's stored answer, then stores
+ * this one. `promptHit`: the prompt key had an answer (those are counted by the memo itself). Never throws.
+ */
+export async function evidenceShadow(db, { kind, step, hash, schemaName, answer, model, promptHit = false, record, now = Date.now(), ttlMs = ROOM_MEMO_TTL_MS }) {
+  if (!db?.prepare || !hash || !answer) return null;
+  try {
+    if (!evidenceReady) { for (const sql of EVIDENCE_MEMO_SCHEMA_SQL) await db.prepare(sql).run(); evidenceReady = true; }
+    const row = await db.prepare("SELECT model, stance, bias, created_at FROM room_memo_evidence WHERE kind = ? AND step = ? AND evidence_hash = ?").bind(kind, step, hash).first();
+    const fresh = row && Date.parse(row.created_at) >= now - ttlMs;
+    let out = "miss";
+    if (fresh && !promptHit) {
+      const source = `${EVIDENCE_METER_PREFIX}${schemaName}`;
+      await record?.({ source, model: row.model, outcome: "memo_hit", now });
+      out = "hit";
+      if (row.stance === (answer.stance ?? null) && (row.bias ?? null) === (answer.bias ?? null)) {
+        await record?.({ source, model: row.model, outcome: "memo_same", now });
+        out = "same";
+      }
+    } else if (fresh) out = "prompt_hit";
+    const at = new Date(now).toISOString();
+    await db.prepare("INSERT INTO room_memo_evidence (kind, step, evidence_hash, model, stance, bias, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(kind, step, evidence_hash) DO UPDATE SET model = excluded.model, stance = excluded.stance, bias = excluded.bias, created_at = excluded.created_at")
+      .bind(kind, step, hash, model ?? null, answer.stance ?? null, answer.bias ?? null, at).run();
+    // Old rows go now and then, through the created_at index.
+    if (hash.endsWith("00")) await db.prepare("DELETE FROM room_memo_evidence WHERE created_at < ?").bind(new Date(now - 2 * ROOM_MEMO_TTL_MS).toISOString()).run();
+    return out;
+  } catch {
+    return null;
+  }
+}

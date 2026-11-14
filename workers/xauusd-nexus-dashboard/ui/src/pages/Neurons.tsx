@@ -179,6 +179,26 @@ export default function Neurons() {
         )}
       </Panel>
 
+      <Panel title="Memo: prompt key (live) and evidence key (shadow)" hint="The live memo reuses an answer only when an agent's whole prompt is the same as before. The evidence key (shadow, never reused) matches when the agent's evidence reads the same: its metric menu (statements with price levels masked, fields, candles as distances and ratios) and its notes. On each fresh call the prompt key missed, it counts whether the evidence key had an answer and whether the model then gave the same stance and bias. Extra neurons/day: what it would save on top of the live memo, counting only those same answers.">
+        <div className="table-wrap">
+          <table className="tbl">
+            <thead><tr><th>Openings</th><th>Model calls</th><th>Live reuse</th><th>Evidence hits</th><th>Same answer</th><th>Extra neurons / day</th></tr></thead>
+            <tbody>
+              {((v?.memo ?? []) as any[]).map((m) => (
+                <tr key={m.schema}>
+                  <td className="mono">{m.schema === "war_room_opening" ? "15m War Room" : "1H / 4H / D1 rooms"}</td>
+                  <td className="mono">{k(m.calls)}</td>
+                  <td className="mono">{pc(m.prompt_reuse_rate)} <span className="text-slate-500">({k(m.prompt_reused)})</span></td>
+                  <td className="mono">{m.evidence_hits ? <>{pc(m.evidence_hit_rate)} <span className="text-slate-500">({k(m.evidence_hits)})</span></> : <span className="text-slate-500">not yet</span>}</td>
+                  <td className="mono">{m.evidence_same_rate == null ? <span className="text-slate-500">n/a</span> : pc(m.evidence_same_rate)}</td>
+                  <td className="mono">{m.extra_neurons_per_day == null || !m.evidence_hits ? <span className="text-slate-500">n/a</span> : k(m.extra_neurons_per_day)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+
       <Panel title="Allocation changes" hint={`Per room, on the directional calls of the last 30 days: below ${Math.round((v?.rules?.demote_below ?? 0.45) * 100)}% over at least ${v?.rules?.min_scored ?? 60} decided calls the agent goes to shadow (it leaves the room's quorum and answers every ${v?.rules?.shadow_every ?? 4}th bar in shadow); back at ${Math.round((v?.rules?.promote_at ?? 0.5) * 100)}% it is live again. The moderator is exempt; a room keeps at least ${v?.rules?.min_live ?? 4} live agents with a record.`}>
         {!(v?.changes ?? []).length ? <Empty>No allocation change yet: every agent runs live as before.</Empty> : (
           <ul className="space-y-1 text-[12px]">
