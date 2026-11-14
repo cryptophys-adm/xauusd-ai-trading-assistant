@@ -1010,3 +1010,34 @@ test("POST /pull refuses a news pull reserved for the chart before any provider 
   assert.equal(off.status, 200);
   assert.equal(counter.mcp, 3);
 });
+
+test("a fresh shared copy with no headline of the last hour is still a hit: no second provider call (2026-11-14 04:06 UTC)", async () => {
+  const env = createEnv();
+  await signedIn(env);
+  const counter = { mcp: 0 };
+  globalThis.fetch = async (url) => {
+    if (String(url).includes(".well-known/oauth-authorization-server")) {
+      return jsonResponse({ authorization_endpoint: "https://mcp.example.com/oauth/authorize", token_endpoint: "https://mcp.example.com/oauth/token", token_endpoint_auth_methods_supported: ["none"] });
+    }
+    if (String(url).includes("/mcp")) {
+      counter.mcp += 1;
+      // A quiet Saturday: only a headline from yesterday.
+      return jsonResponse({ result: { data: { headlines: [{ id: "old", title: "Old", url: "https://news/old", published_at: new Date(Date.now() - 86_400_000).toISOString(), symbols: ["OANDA:XAUUSD"] }] } } });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+  const first = waitingCtx();
+  await worker.scheduled({ scheduledTime: Date.now(), cron: "4 * * * *" }, env, first.ctx);
+  await first.settle();
+  assert.equal(counter.mcp, 3);
+  installCache();
+  const body = await runNewsPull(env, createCtx());
+  assert.deepEqual([body.cache, body.count, body.available, counter.mcp], ["hit", 0, true, 3], "the AI Worker does not ask again for the same empty hour");
+  // The edge cache keeps its rule: a cached payload with only old headlines goes upstream.
+  const env2 = createEnv();
+  await signedIn(env2);
+  const cacheKey = new Request(new URL("/_internal/tv-mcp-cache?symbols=OANDA%3AXAUUSD%2CTVC%3AUSOIL%2CTVC%3ADXY", "https://news.cryptophys.work"), { method: "GET" });
+  await caches.default.put(cacheKey, new Response(JSON.stringify({ fetched_at: new Date().toISOString(), articles: [{ id: "old", title: "Old", url: "https://news/old", published_at: new Date(Date.now() - 86_400_000).toISOString() }] })));
+  await runNewsPull(env2, createCtx());
+  assert.equal(counter.mcp, 6);
+});
