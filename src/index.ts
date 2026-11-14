@@ -214,6 +214,7 @@ import { pullOmegaPolicy } from "./omega-policy.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
 import { readNeuronAllocation } from "./neuron-allocation.mjs";
+import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -3138,6 +3139,12 @@ export default {
           } catch (e) { console.error("learned_promotion_failed", e instanceof Error ? e.message : String(e)); }
           try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env, { candidates: await shadowCandidates(env) }))); }
           catch (e) { console.error("shadow_versions_failed", e instanceof Error ? e.message : String(e)); }
+          // Neuron allocation by reputation (owner 2026-11-14, src/agent-allocation.mjs): a room agent below 45% over
+          // 60 decided calls goes to shadow in that room, and back at 50%; the owner hears of each move.
+          try {
+            const allocation = await syncAgentAllocation(env, { cards: await scorecards(env.DB, { days: 30, snapshot: true }) as any[], send: (text: string) => sendTelegram(env, text) });
+            if (allocation.status !== "unchanged" && allocation.status !== "disabled") console.log("agent_allocation", JSON.stringify(allocation));
+          } catch (e) { console.error("agent_allocation_failed", e instanceof Error ? e.message : String(e)); }
           // Auto-tuning per timeframe (owner decisions 2026-11-09: no operator; each timeframe independent):
           // replay each room's quorum under the grid points next to its active weighting, activate the best
           // point the replay rates better on discovery and holdout, roll back one the reverse shadow finds

@@ -48,6 +48,7 @@ import { readPatternCalibration } from "./pattern-calibration.mjs";
 import { H1_ROOM_LOCK_PREFIX } from "./h1-consensus.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, stuckCautions, ROOM_TIMEFRAME, quorumAllows, quorumRule } from "./reputation.mjs";
 import { agentReputation, listStuckStates } from "./outcome-scoring.mjs";
+import { readAllocationState, rosterSplit } from "./agent-allocation.mjs";
 import { roomWeighting } from "./weighting.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
@@ -401,11 +402,15 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
 
   // The room's own timeframe desk first: the 1H, 4H or D1 Desk with the local records of the bar.
   const ownDesk = ev.desk?.available ? { H1: "h1", H4: "h4", D1: "d1" }[chart] : null;
-  const roster = [
+  const fullRoster = [
     ...(ownDesk ? [ownDesk] : []), ...(ev.news ? ["news"] : []), "technical", "risk", ...(ev.projection?.available ? ["projection"] : []),
     ...hudAgentsIn(chart).filter((id) => ev.hud?.readings?.[id]?.available)
   ];
-  const calibration = Object.fromEntries(roster.map((id) => {
+  // Neuron allocation by reputation (src/agent-allocation.mjs): an agent in shadow in this room answers beside
+  // the bus on every fourth bar, never in it.
+  const allocation = rosterSplit(fullRoster, (await readAllocationState(env)).rooms?.[chart], { room: chart, barTime: ev.bar_close });
+  const roster = allocation.live;
+  const calibration = Object.fromEntries(fullRoster.map((id) => {
     const lines = ev.hud?.readings?.[id]?.lines;
     if (Array.isArray(lines)) return [id, calibrationCounts(lines)];
     if (id === "h1" || id === "h4" || id === "d1") return [id, { label: chartDeskLabel(spec.tab, ev.desk) }];
@@ -425,7 +430,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   const learnedFor = (agent) => learnedBlock(env, { agent, ...learnedCtx, pack: learnedPack });
   if (!existing.has("brief")) {
     await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: {
-      chart, candle_key: candleKey, roster, calibration, confirmations: ev.confirmations, bar: ev.technical.candles.at(-1) ?? null,
+      chart, candle_key: candleKey, roster, ...(allocation.benched.length ? { benched: allocation.benched, shadow: allocation.shadow } : {}), calibration, confirmations: ev.confirmations, bar: ev.technical.candles.at(-1) ?? null,
       hud_snapshot: Boolean(ev.hud),
       // Which learned pack and notes the room saw (RFC §10); recorded only when the notes are on.
       ...(learnedKnowledgeEnabled(env) ? { learned_pack: learnedPackInfo(env, { roster, ...learnedCtx, pack: learnedPack }) } : {}),
@@ -447,18 +452,21 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
 
   // Phase 1: the communication bus.
   const open = phase(WAR_ROOM_OPENING_MS);
+  const openingOpts = (agent) => ({
+    messages: openingMessages(agent, agentData(agent, ev, spec), spec, roster, null, learnedFor(agent)), schemaName: "tf_room_opening", schema: OPENING_SCHEMA,
+    maxTokens: BUS_MAX_TOKENS.agent, effort: "low",
+    // No parity cap on the confidence (owner decision 2026-11-09: "confidences sesuai kapasitasnya");
+    // each agent's weight in the quorum comes from its track record (P7), which Aether tunes.
+    validate: (o) => validateOpening(normalizeTfNames(o, [agent]), agent, { forbiddenNames: forbiddenNamesFor(agent, fullRoster, tfAgentName) }),
+    toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), bias: o.bias, metrics: o.metrics, name: tfAgentName(agent) }, refs: [] })
+  });
+  const shadowOpenings = Promise.all(allocation.shadow.map((agent) => existing.get("shadow:" + agent)?.status === "ok" ? null : open(base("shadow:" + agent, agent), openingOpts(agent)).catch(() => null)));
   const openings = await Promise.all(roster.map((agent) => {
     const prior = existing.get("open:" + agent);
     if (prior?.status === "ok") return prior;
-    return open(base("open:" + agent, agent), {
-      messages: openingMessages(agent, agentData(agent, ev, spec), spec, roster, null, learnedFor(agent)), schemaName: "tf_room_opening", schema: OPENING_SCHEMA,
-      maxTokens: BUS_MAX_TOKENS.agent, effort: "low",
-      // No parity cap on the confidence (owner decision 2026-11-09: "confidences sesuai kapasitasnya");
-      // each agent's weight in the quorum comes from its track record (P7), which Aether tunes.
-      validate: (o) => validateOpening(normalizeTfNames(o, [agent]), agent, { forbiddenNames: forbiddenNamesFor(agent, roster, tfAgentName) }),
-      toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), bias: o.bias, metrics: o.metrics, name: tfAgentName(agent) }, refs: [] })
-    });
+    return open(base("open:" + agent, agent), openingOpts(agent));
   }));
+  await shadowOpenings;
   const answered = openings.filter((m) => m?.status === "ok");
   if (!answered.length) return { status: "no_openings", calls };
   const young = clock() - Date.parse(ev.bar_close) < TF_QUORUM_WAIT_MS;

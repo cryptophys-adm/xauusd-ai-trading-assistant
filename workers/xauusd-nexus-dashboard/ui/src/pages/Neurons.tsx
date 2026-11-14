@@ -98,7 +98,7 @@ export default function Neurons() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Kpi label="Neurons / day" value={k(v?.neurons_per_day)} sub={`${v?.window_days ?? 7}-day average`} color="text-cyan-300" icon={<Cpu className="h-4 w-4" />} />
         <Kpi label="Agents" value={String(agents.length)} sub={`${scored.length} with a 30-day record`} color="text-slate-100" />
-        <Kpi label="Live / shadow" value={`${agents.filter((a) => a.status === "live").length} / ${agents.filter((a) => a.status !== "live").length}`} sub="allocation not active yet" color="text-emerald-300" />
+        <Kpi label="Live / shadow" value={`${agents.filter((a) => a.status === "live").length} / ${agents.filter((a) => a.status !== "live").length}`} sub={`${agents.reduce((n, a) => n + (a.shadow_rooms?.length ?? 0), 0)} agent-room pairs in shadow`} color="text-emerald-300" />
         <Kpi label="Largest share" value={agents[0] ? pc(agents[0].share) : "n/a"} sub={agents[0]?.agent ?? ""} color="text-amber-300" />
       </div>
 
@@ -111,7 +111,7 @@ export default function Neurons() {
                 {agents.map((a) => (
                   <tr key={a.agent}>
                     <td className="mono">{a.agent}</td>
-                    <td><Badge tone={a.status === "live" ? "green" : "purple"}>{a.status}</Badge></td>
+                    <td>{a.shadow_rooms?.length && a.status === "live" ? <Badge tone="amber">{`shadow in ${a.shadow_rooms.join(", ")}`}</Badge> : <Badge tone={a.status === "live" ? "green" : "purple"}>{a.status}</Badge>}</td>
                     <td className="text-[11px] text-slate-400">{a.rooms.join(", ")}</td>
                     <td className="mono">{a.hit_rate == null ? <span className="text-slate-500">n/a</span> : <>{pc(a.hit_rate)} <span className="text-slate-500">± {a.scored}</span></>}</td>
                     <td className="mono text-slate-500">{a.grounding_rate == null ? "not yet" : pc(a.grounding_rate)}</td>
@@ -136,10 +136,10 @@ export default function Neurons() {
         </Panel>
       </div>
 
-      <Panel title="Allocation changes" hint="Promotions to live and moves to shadow, with their reason. Allocation by reputation starts in its own step.">
+      <Panel title="Allocation changes" hint={`Per room, on the directional calls of the last 30 days: below ${Math.round((v?.rules?.demote_below ?? 0.45) * 100)}% over at least ${v?.rules?.min_scored ?? 60} decided calls the agent goes to shadow (it leaves the room's quorum and answers every ${v?.rules?.shadow_every ?? 4}th bar in shadow); back at ${Math.round((v?.rules?.promote_at ?? 0.5) * 100)}% it is live again. The moderator is exempt; a room keeps at least ${v?.rules?.min_live ?? 4} live agents with a record.`}>
         {!(v?.changes ?? []).length ? <Empty>No allocation change yet: every agent runs live as before.</Empty> : (
           <ul className="space-y-1 text-[12px]">
-            {v.changes.map((c: any, i: number) => <li key={i}><span className="mono text-slate-500">{c.at}</span> · <span className="mono">{c.agent}</span> · <Badge tone={c.to === "live" ? "green" : "purple"}>{c.to}</Badge> {c.reason}</li>)}
+            {v.changes.map((c: any, i: number) => <li key={i}><span className="mono text-slate-500">{String(c.at).slice(0, 16).replace("T", " ")} UTC</span> · <span className="mono">{c.agent}</span> in {c.room} · <Badge tone={c.to === "live" ? "green" : "purple"}>{c.to}</Badge> {c.reason}</li>)}
           </ul>
         )}
       </Panel>

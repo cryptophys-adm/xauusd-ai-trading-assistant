@@ -2,8 +2,8 @@
 // dashboard", then "Ya" to the order: this first, then structured metrics, then the model arena). What each
 // agent costs in Workers AI neurons and what it delivers: its 30-day hit rate (the scorecards snapshot,
 // src/outcome-scoring.mjs) against its neurons per day, per room. GET /api/neuron-allocation and the Nexus page
-// "Neuron allocation". Nothing here changes an agent: allocation by reputation comes in its own step, logged in
-// `changes`.
+// "Neuron allocation". The allocation itself (an agent to shadow and back) is src/agent-allocation.mjs; its state
+// and its logged changes are shown here.
 //
 // Tokens per agent come from the room messages (agent_thread_messages.usage_tokens, input and output together);
 // they are turned into neurons with the model's own input/output mix of that day (ai_usage_daily), so an
@@ -11,6 +11,7 @@
 import { neuronsOf, readAiUsage } from "./ai-usage.mjs";
 import { scorecards } from "./outcome-scoring.mjs";
 import { ensureThreadSchema } from "./agent-threads.mjs";
+import { readAllocationState, readAllocationEvents, ALLOCATION_RULES } from "./agent-allocation.mjs";
 
 export const NEURON_ALLOCATION_VERSION = "cryptophys.neuron-allocation.v1";
 const ROOM_SQL = `CASE
@@ -54,7 +55,7 @@ function floorRate(model) {
  * Pure: the allocation view from the room rows { day, room, agent, model, calls, tokens }, the meter's
  * blended rates and the 30-day scorecards.
  */
-export function buildAllocation({ rows = [], rates = new Map(), cards = [], days = 7 } = {}) {
+export function buildAllocation({ rows = [], rates = new Map(), cards = [], days = 7, state = { rooms: {} }, changes = [] } = {}) {
   const agents = new Map();
   const byDayRoom = new Map();
   let total = 0;
@@ -95,9 +96,12 @@ export function buildAllocation({ rows = [], rates = new Map(), cards = [], days
     const rec = record.get(a.agent);
     const decided = rec ? rec.hit + rec.miss : 0;
     const timeframes = [...a.rooms].map((room) => ROOM_TIMEFRAME[room]).filter(Boolean);
+    // Shadow in a room where it is benched; "shadow" overall only when benched in every room it sat in.
+    const benchedIn = [...a.rooms].filter((room) => state.rooms?.[room]?.[a.agent]?.status === "shadow");
     return {
       agent: a.agent,
-      status: "live",
+      status: benchedIn.length && benchedIn.length === a.rooms.size ? "shadow" : "live",
+      shadow_rooms: benchedIn.sort(),
       rooms: [...a.rooms].sort(),
       models: [...a.models].sort(),
       calls: a.calls,
@@ -125,7 +129,8 @@ export function buildAllocation({ rows = [], rates = new Map(), cards = [], days
     neurons_per_day: Math.round(total / span),
     agents: list,
     rooms_by_day: [...byDayRoom.values()].map((d) => ({ day: d.day, room: d.room, neurons: Math.round(d.neurons), by_agent: Object.fromEntries(Object.entries(d.by_agent).map(([k, v]) => [k, Math.round(v)])) })).sort((a, b) => a.day.localeCompare(b.day) || a.room.localeCompare(b.room)),
-    changes: []
+    rules: ALLOCATION_RULES,
+    changes
   };
 }
 
@@ -138,5 +143,6 @@ export async function readNeuronAllocation(env, { days = 7, now = Date.now() } =
   const rows = ((await db.prepare(`SELECT substr(ts, 1, 10) AS day, ${ROOM_SQL} AS room, agent, model, COUNT(*) AS calls, SUM(usage_tokens) AS tokens FROM agent_thread_messages WHERE ts >= ? AND usage_tokens > 0 GROUP BY day, room, agent, model`).bind(since).all()).results) || [];
   const usage = await readAiUsage(db, { days: n, now });
   const cards = await scorecards(db, { days: 30, now, snapshot: true });
-  return { status: "ok", generated_at: new Date(now).toISOString(), window_days: n, record_days: 30, ...buildAllocation({ rows, rates: blendedRates(usage.rows), cards, days: n }) };
+  const [state, changes] = await Promise.all([readAllocationState(env), readAllocationEvents(db, { limit: 50 })]);
+  return { status: "ok", generated_at: new Date(now).toISOString(), window_days: n, record_days: 30, ...buildAllocation({ rows, rates: blendedRates(usage.rows), cards, days: n, state, changes }) };
 }
