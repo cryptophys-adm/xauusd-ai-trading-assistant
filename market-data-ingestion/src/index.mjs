@@ -4,7 +4,7 @@ import { runBrokerShadow } from "./broker-shadow.mjs";
 import { runBrokerTrigger } from "./broker-trigger.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
 import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHtfLocalComputation, publishHudSnapshots, republishRevisedH1, LAST_PUBLISH_KEY, LAST_HUD_PUBLISH_KEY } from "./local-publisher.mjs";
-import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, marketClosed, verifyDerivedSeries, settleSeconds, SETTLE_SECONDS } from "./tradingview-source.mjs";
+import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, marketClosed, closureId, verifyDerivedSeries, settleSeconds, SETTLE_SECONDS } from "./tradingview-source.mjs";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -48,7 +48,9 @@ export async function writeRefreshStatus(kv, summary, now = Date.now()) {
   if (!kv) return false;
   let previous = null;
   try { previous = JSON.parse((await kv.get(STATUS_KEY)) || "null"); } catch { previous = null; }
-  const quiet = summary.status === "up_to_date" && !(summary.requested > 0) && !(summary.updated?.length) && !(summary.derived?.length);
+  // A new closed-market idle mark is always written: the cron reads it to stand still (closedMarketIdle).
+  const quiet = summary.status === "up_to_date" && !(summary.requested > 0) && !(summary.updated?.length) && !(summary.derived?.length)
+    && (summary.closed_idle ?? null) === (previous?.closed_idle ?? null);
   const fresh = previous?.status === summary.status && Date.parse(previous?.checked_at || "") > now - STATUS_REWRITE_MS;
   if (quiet && fresh) return false;
   await kv.put(STATUS_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
@@ -58,9 +60,34 @@ export async function writeRefreshStatus(kv, summary, now = Date.now()) {
 async function pull(env, options = {}) {
   const result = await refreshSeries(env, options);
   const now = Date.now();
-  const summary = { ...result, checked_at: new Date(now).toISOString() };
+  // Gold is closed and this run left nothing to bootstrap or heal: mark the closure idle, so the next
+  // minutes of the same closure read only this summary (closedMarketIdle).
+  const closure = closureId(Math.floor(now / 1000));
+  const idle = closure && result.status === "up_to_date" && !result.due?.bootstrap?.length && !result.due?.heal?.length;
+  const summary = { ...result, ...(idle ? { closed_idle: closure } : {}), checked_at: new Date(now).toISOString() };
   await writeRefreshStatus(env.MARKET_DATA_CACHE, summary, now);
   return summary;
+}
+
+/**
+ * Closed-market idle (2026-11-14, resource audit; owner: "lebih hemat read/write D1 dan KV"). From Friday
+ * 17:30 to Sunday 18:00 New York no gold bar closes, yet every minute's run read all 15 series twice, the
+ * fallback switch and each publisher's dedupe key: about 40 KV reads a minute. Once one full run of a
+ * closure left nothing to bootstrap or heal, pull() marks the closure in the refresh summary; while the
+ * mark matches the current closure, a run reads only that summary and stops (one KV read), rewriting it
+ * every STATUS_REWRITE_MS as a heartbeat. The reopen (closureId null) runs the full cycle again, the first
+ * post-open pull included. A closure without the mark (a fallback to heal, an empty series) runs in full.
+ */
+export async function closedMarketIdle(kv, now = Date.now()) {
+  const closure = closureId(Math.floor(now / 1000));
+  if (!closure || !kv) return false;
+  let status = null;
+  try { status = JSON.parse((await kv.get(STATUS_KEY)) || "null"); } catch { status = null; }
+  if (status?.closed_idle !== closure) return false;
+  if (!(Date.parse(status.checked_at || "") > now - STATUS_REWRITE_MS)) {
+    await kv.put(STATUS_KEY, JSON.stringify({ ...status, status: "up_to_date", requested: 0, updated: [], derived: [], market_closed: true, checked_at: new Date(now).toISOString() }), { expirationTtl: 60 * 60 * 24 * 7 });
+  }
+  return true;
 }
 
 async function readLatest(env) {
@@ -123,7 +150,7 @@ const worker = {
         series: SERIES.map(({ symbol, interval, timeframe, retain, role, derived_from }) => ({ symbol, interval, timeframe, retain, role, derived_from: derived_from || null })),
         // The HUD publisher per chart: status and candle only (D1 catch-up, 2026-11-06).
         last_hud_publish: lastHud ? { published_at: lastHud.published_at ?? null, charts: Object.fromEntries(Object.entries(lastHud.charts || {}).map(([c, r]) => [c, { status: r?.status ?? null, candle_key: r?.candle_key ?? null, ...(r?.catch_up ? { catch_up: true } : {}), ...(r?.chart_plane ? { chart_plane: r.chart_plane } : {}) }])) } : null,
-        last_refresh: lastRefresh ? { status: lastRefresh.status, checked_at: lastRefresh.checked_at, requested: lastRefresh.requested, failed: lastRefresh.failed, quota_cooldown_until: lastRefresh.quota_cooldown_until } : null
+        last_refresh: lastRefresh ? { status: lastRefresh.status, checked_at: lastRefresh.checked_at, requested: lastRefresh.requested, failed: lastRefresh.failed, quota_cooldown_until: lastRefresh.quota_cooldown_until, closed_idle: lastRefresh.closed_idle ?? null } : null
       });
     }
     if (request.method === "POST" && url.pathname === "/pull") return handlePull(request, env);
@@ -257,9 +284,13 @@ const worker = {
 
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil((async () => {
+      // Gold closed and this closure already idle: one KV read, nothing else (closedMarketIdle).
+      try { if (await closedMarketIdle(env.MARKET_DATA_CACHE)) return; } catch { /* run the full cycle */ }
       let pullStatus = null;
+      // The records the refresh left, so the bundle below reads no series again (2026-11-14).
+      const records = [];
       try {
-        const pulled = await pull(env);
+        const pulled = await pull(env, { keep: records });
         pullStatus = pulled?.status ?? null;
         // Daily derived-vs-native check (a few calls, once per UTC day); skipped while the
         // gateway reports a quota cooldown.
@@ -281,13 +312,16 @@ const worker = {
       // stand in for the chart source, before the bundle is built for the engines and the 5m context.
       try {
         const fallback = await applyMt5Fallback(env, pullStatus);
+        // The fallback rewrote series: the bundle is read from KV again.
+        if (fallback.status === "active") records.length = 0;
         if (!["off", "inactive", "market_closed"].includes(fallback.status)) console.log(JSON.stringify({ worker: WORKER_NAME, event: "mt5_fallback", ...fallback }));
       } catch (error) {
+        records.length = 0;
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "mt5_fallback_failed", code: asString(error?.code) || "fallback_failed" }));
       }
       // Build the bundle once for both publish and informational 5m context.
       let latestBundle = null;
-      try { latestBundle = await buildBundle(env); } catch { latestBundle = null; }
+      try { latestBundle = await buildBundle(env, Date.now(), records); } catch { latestBundle = null; }
       // 5m execution for Omega (docs/RFC_OMEGA_5M_EXECUTION.md): the broker 5m bar's trigger and structure.
       try {
         const trigger = await runBrokerTrigger(env, { bundle: latestBundle });
