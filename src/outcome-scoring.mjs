@@ -309,15 +309,17 @@ export async function agentStatements(env, timeframe, sinceIso) {
     const agent = row.step === "conclusion" ? "moderator" : String(row.agent);
     const prior = list.get(agent);
     // The Consensus Discussion answer is the final stance; a later session (#hud) wins.
-    if (!prior || row.step.startsWith("debate:") || row.step === "conclusion" || String(row.run_id) > String(prior.run_id)) list.set(agent, { subject: "agent:" + agent, source: "room", stance: row.stance, confidence: row.confidence ?? null, run_id: row.run_id, step: row.step });
+    // An agent in shadow (neuron allocation) answers beside the bus: its call is scored as its own, so its record keeps moving.
+    const source = row.step.startsWith("shadow:") ? "room_shadow" : "room";
+    if (!prior || row.step.startsWith("debate:") || row.step === "conclusion" || String(row.run_id) > String(prior.run_id)) list.set(agent, { subject: "agent:" + agent, source, stance: row.stance, confidence: row.confidence ?? null, run_id: row.run_id, step: row.step });
     byKey.set(key, list);
   };
   try {
     if (timeframe === "15") {
-      const rows = (await env.DB.prepare("SELECT run_id, bar_time, step, agent, stance, confidence FROM agent_thread_messages WHERE thread_id >= 'warroom:' AND thread_id < 'warroom;' AND status = 'ok' AND bar_time >= ? AND (step LIKE 'open:%' OR step LIKE 'debate:%' OR step = 'conclusion') ORDER BY run_id, CASE WHEN step LIKE 'open:%' THEN 0 ELSE 1 END").bind(sinceIso).all()).results || [];
+      const rows = (await env.DB.prepare("SELECT run_id, bar_time, step, agent, stance, confidence FROM agent_thread_messages WHERE thread_id >= 'warroom:' AND thread_id < 'warroom;' AND status = 'ok' AND bar_time >= ? AND (step LIKE 'open:%' OR step LIKE 'debate:%' OR step = 'conclusion' OR step LIKE 'shadow:%') ORDER BY run_id, CASE WHEN step LIKE 'open:%' OR step LIKE 'shadow:%' THEN 0 ELSE 1 END").bind(sinceIso).all()).results || [];
       for (const r of rows) add(r.bar_time, r);
     } else if (TF_THREAD[timeframe]) {
-      const rows = (await env.DB.prepare("SELECT m.run_id, m.step, m.agent, m.stance, m.confidence, json_extract(b.body_json, '$.candle_key') AS candle_key FROM agent_thread_messages m JOIN agent_thread_messages b ON b.thread_id = m.thread_id AND b.run_id = m.run_id AND b.step = 'brief' WHERE m.thread_id = ? AND m.status = 'ok' AND m.ts >= ? AND (m.step LIKE 'open:%' OR m.step LIKE 'debate:%' OR m.step = 'conclusion') ORDER BY m.run_id, CASE WHEN m.step LIKE 'open:%' THEN 0 ELSE 1 END").bind(TF_THREAD[timeframe], sinceIso).all()).results || [];
+      const rows = (await env.DB.prepare("SELECT m.run_id, m.step, m.agent, m.stance, m.confidence, json_extract(b.body_json, '$.candle_key') AS candle_key FROM agent_thread_messages m JOIN agent_thread_messages b ON b.thread_id = m.thread_id AND b.run_id = m.run_id AND b.step = 'brief' WHERE m.thread_id = ? AND m.status = 'ok' AND m.ts >= ? AND (m.step LIKE 'open:%' OR m.step LIKE 'debate:%' OR m.step = 'conclusion' OR m.step LIKE 'shadow:%') ORDER BY m.run_id, CASE WHEN m.step LIKE 'open:%' OR m.step LIKE 'shadow:%' THEN 0 ELSE 1 END").bind(TF_THREAD[timeframe], sinceIso).all()).results || [];
       for (const r of rows) add(r.candle_key, r);
     }
   } catch { /* thread tables absent */ }

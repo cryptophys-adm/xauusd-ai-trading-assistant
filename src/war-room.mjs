@@ -24,6 +24,7 @@ import { macroDeskEvidence } from "./macro-room.mjs";
 import { matchRebuts } from "./rebut-names.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, quorumRule } from "./reputation.mjs";
 import { publishSnapshot } from "./push-hub.mjs";
+import { readAllocationState, rosterSplit } from "./agent-allocation.mjs";
 import { agentReputation, sessionOf } from "./outcome-scoring.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
@@ -591,10 +592,14 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   let desk15 = { available: false, reading: [], approved_by_parity: false };
   try { desk15 = await chartDeskReading(env, m15KeyForClose(barTime)); } catch { /* no desk this bar */ }
   const confirmations = m15Confirmations(desk15);
-  const roster = [...(desk15.available ? ["m15"] : []), "news", "technical", "risk", ...(projection?.available ? ["projection"] : []), ...hudAgentsIn("M15").filter(id => hud?.readings?.[id]?.available)];
+  const fullRoster = [...(desk15.available ? ["m15"] : []), "news", "technical", "risk", ...(projection?.available ? ["projection"] : []), ...hudAgentsIn("M15").filter(id => hud?.readings?.[id]?.available)];
+  // Neuron allocation by reputation (src/agent-allocation.mjs): an agent in shadow in this room leaves the bus,
+  // quorum and discussion, and answers in shadow on every fourth bar so its record keeps moving.
+  const allocation = rosterSplit(fullRoster, (await readAllocationState(env)).rooms?.M15, { room: "M15", barTime });
+  const roster = allocation.live;
   const refs = busRefs(roster);
   // Evidence status, shown once per agent (owner decision A): no agent repeats it in its text.
-  const calibration = Object.fromEntries(roster.map(id => {
+  const calibration = Object.fromEntries(fullRoster.map(id => {
     const lines = hud?.readings?.[id]?.lines;
     if (Array.isArray(lines)) return [id, calibrationCounts(lines)];
     if (id === "m15") return [id, { label: chartDeskLabel("15m", desk15) }];
@@ -620,7 +625,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   const learnedPack = learnedKnowledgeEnabled(env) ? await effectiveLearnedPack(env) : undefined;
   const learnedFor = (agent) => learnedBlock(env, { agent, ...learnedCtx, pack: learnedPack });
   if (!existing.has("brief")) {
-    await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { roster, calibration, confirmations, independent: true, m15_close: evidence.m15.candles.at(-1) ?? null, news: evidence.news,
+    await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { roster, ...(allocation.benched.length ? { benched: allocation.benched, shadow: allocation.shadow } : {}), calibration, confirmations, independent: true, m15_close: evidence.m15.candles.at(-1) ?? null, news: evidence.news,
       ...(learnedKnowledgeEnabled(env) ? { learned_pack: learnedPackInfo(env, { roster, ...learnedCtx, pack: learnedPack }) } : {}) } });
   }
 
@@ -640,16 +645,20 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   // Phase 1: the communication bus. Open pages see the room start (ADR-0015 phase 1).
   await publishWarRoom(env);
   const open = phase(WAR_ROOM_OPENING_MS);
+  const openingOpts = (agent) => ({
+    messages: openingMessages(agent, agentData(agent, evidence, hud, confirmations, desk15, projection), learnedFor(agent)), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
+    // An unapproved 15m chain speaks like any uncalibrated agent: at 0.4 or lower.
+    maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateOpening(o, agent, { verifiedLines: agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]), forbiddenNames: forbiddenNamesFor(agent, fullRoster) }),
+    toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), bias: o.bias, metrics: o.metrics, name: agentName(agent) }, refs: [] })
+  });
+  // The agents in shadow answer beside the bus, never in it (scored as their own calls).
+  const shadowOpenings = Promise.all(allocation.shadow.map(agent => existing.get("shadow:" + agent)?.status === "ok" ? null : open(base("shadow:" + agent, agent), openingOpts(agent)).catch(() => null)));
   const openings = await Promise.all(roster.map(agent => {
     const prior = existing.get("open:" + agent);
     if (prior?.status === "ok") return prior;
-    return open(base("open:" + agent, agent), {
-      messages: openingMessages(agent, agentData(agent, evidence, hud, confirmations, desk15, projection), learnedFor(agent)), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
-      // An unapproved 15m chain speaks like any uncalibrated agent: at 0.4 or lower.
-      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateOpening(o, agent, { verifiedLines: agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]), forbiddenNames: forbiddenNamesFor(agent, roster) }),
-      toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), bias: o.bias, metrics: o.metrics, name: agentName(agent) }, refs: [] })
-    });
+    return open(base("open:" + agent, agent), openingOpts(agent));
   }));
+  await shadowOpenings;
   const answered = openings.filter(m => m?.status === "ok");
   await publishWarRoom(env);
   if (answered.length && answered.length * 2 < roster.length && clock() - Date.parse(barTime) < WAR_ROOM_QUORUM_WAIT_MS) {
@@ -784,7 +793,10 @@ export async function readWarRoom(db, { barTime = null } = {}) {
     m15_close: brief?.m15_close ?? null,
     openings,
     debate,
-    conclusion
+    conclusion,
+    // Neuron allocation: the agents in shadow in this room, and their shadow answers on this bar.
+    benched: brief?.benched ?? [],
+    shadow_openings: rows.filter(m => m.step.startsWith("shadow:")).map(pick)
   };
 }
 
