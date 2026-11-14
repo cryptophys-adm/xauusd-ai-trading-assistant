@@ -46,6 +46,17 @@
     "binding": "ASSETS",
     "run_worker_first": true
   },
+  // The push hub (ADR-0015 "Organs as cells", phase 1, owner 2026-11-14: "C. mulai kerjakan"): one Durable
+  // Object holding the open pages' WebSockets (hibernating) and each topic's latest snapshot. The AI Worker
+  // binds this class across scripts to publish.
+  "durable_objects": {
+    "bindings": [
+      { "name": "PUSH_HUB", "class_name": "PushHub" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1-push-hub", "new_sqlite_classes": ["PushHub"] }
+  ],
   "observability": {
     "enabled": true
   }

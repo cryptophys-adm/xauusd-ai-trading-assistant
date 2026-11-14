@@ -3,6 +3,7 @@
  *
  * Serves the Nexus UI, a React SPA in the Cerebrum Console obsidian design (ui/, built into
  * ui/dist and served as Workers Static Assets), plus read-only data routes:
+ *   GET /api/stream      the push hub's WebSocket (ADR-0015 phase 1): topic snapshots as they change
  *   GET /api/ohlcv       closed TradingView bars via the MarketDataReader RPC (no secret, no MCP call)
  *   GET /api/local-lane  read-only diagnostics of the pull adapter
  *   GET /api/aether/overview  Aether's read-only overview, via its AetherReader RPC (the Aether page)
@@ -14,6 +15,30 @@
  * /api/* never changes state (GET and HEAD only). The changes a person makes (Omega's controls, the trading
  * mode) go to /omega/api/*, where the Omega Worker checks the Access identity and the same origin.
  */
+
+import { DurableObject } from "cloudflare:workers";
+// @ts-ignore: plain ES module, typed by its JSDoc
+import { PushHubCore, PUSH_HUB_NAME } from "./push-hub.mjs";
+
+/**
+ * The push hub (ADR-0015 "Organs as cells", phase 1; owner 2026-11-14: "C. mulai kerjakan"; src/push-hub.mjs):
+ * the open Nexus pages' WebSockets, hibernating between messages, and the latest snapshot of each topic. The
+ * AI Worker publishes into it (cross-script binding); the pages connect at GET /api/stream?topics=war-room.
+ */
+export class PushHub extends DurableObject {
+  core: any;
+  constructor(ctx: any, env: unknown) {
+    super(ctx, env as never);
+    this.core = new PushHubCore(ctx);
+    // The page's keep-alive is answered without waking the hub.
+    ctx.setWebSocketAutoResponse(new (globalThis as any).WebSocketRequestResponsePair("ping", "pong"));
+  }
+  async fetch(request: Request): Promise<Response> { return this.core.connect(request); }
+  async publish(topic: string, data: unknown): Promise<{ status: string; sent: number }> { return this.core.publish(topic, data); }
+  async connections(): Promise<Record<string, number>> { return this.core.connections(); }
+  async webSocketMessage(): Promise<void> { /* pages only listen */ }
+  async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> { try { ws.close(code, reason); } catch { /* closed */ } }
+}
 
 /** Host of the proxied requests; the AI_WORKER binding delivers them without leaving Cloudflare. */
 const AI_WORKER_BASE = "https://ai.cryptophys.work";
@@ -36,11 +61,19 @@ interface Env {
   AI_WORKER?: { fetch(request: Request): Promise<Response> };
   OMEGA_PAGE?: { fetch(request: Request): Promise<Response> };
   ASSETS?: { fetch(request: Request): Promise<Response> };
+  PUSH_HUB?: { getByName(name: string): { fetch(request: Request): Promise<Response> } };
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    // The push hub's WebSocket (behind the same Access sign-in as every page): the snapshots of the topics the
+    // page subscribes to, as they change. Without the binding the page keeps polling.
+    if (request.method === "GET" && url.pathname === "/api/stream") {
+      if (!env.PUSH_HUB) return json({ status: "unavailable", error: "push_hub_not_configured" }, 503);
+      return env.PUSH_HUB.getByName(PUSH_HUB_NAME).fetch(request);
+    }
 
     if (request.method === "GET" && url.pathname === "/api/ohlcv") {
       if (typeof env.MARKET_DATA?.candles !== "function") return json({ error: "market_data_binding_missing" }, 503);

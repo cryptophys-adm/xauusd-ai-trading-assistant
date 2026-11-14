@@ -11,7 +11,7 @@ import { build } from "esbuild";
 // bundles the Worker as wrangler does and calls its fetch handler with a fake ASSETS binding.
 const root = new URL("..", import.meta.url).pathname;
 async function loadWorker() {
-  const out = await build({ entryPoints: [join(root, "workers/xauusd-nexus-dashboard/src/index.ts")], bundle: true, format: "esm", platform: "neutral", write: false, logLevel: "silent" });
+  const out = await build({ entryPoints: [join(root, "workers/xauusd-nexus-dashboard/src/index.ts")], bundle: true, format: "esm", platform: "neutral", write: false, logLevel: "silent", alias: { "cloudflare:workers": join(root, "test/support/cloudflare-workers-stub.mjs") } });
   const dir = mkdtempSync(join(tmpdir(), "nexus-"));
   const file = join(dir, "worker.mjs");
   writeFileSync(file, out.outputFiles[0].text);
