@@ -594,7 +594,7 @@ export default function Aether() {
   const { data: analytics } = usePoll(() => get("/api/aether/nexus-analytics"), 60_000);
   const o = data as any;
   if (!o) return (
-    <div className="space-y-4">
+    <div className="mx-auto max-w-[1680px] space-y-4 px-3 py-3 sm:px-6 sm:py-5">
       <Panel title="Aether · Knowledge Guardian" icon={<Brain className="h-3.5 w-3.5" />}>
         {loading && !error ? <Skeleton rows={4} /> : <Empty>Aether is unavailable ({error ?? "no answer"}).</Empty>}
       </Panel>
@@ -604,7 +604,7 @@ export default function Aether() {
   const totalCards = charts.reduce((s, [, v]) => s + (v?.cards ?? 0), 0);
   const ai = o.ai || {};
   return (
-    <div className="space-y-4">
+    <div className="mx-auto max-w-[1680px] space-y-4 px-3 py-3 sm:px-6 sm:py-5">
       <Panel title="Aether · Knowledge Guardian" icon={<Brain className="h-3.5 w-3.5" />} right={<Badge tone="purple">advisory only · read-only view</Badge>}>
         <p className="text-[12px] leading-relaxed text-slate-400">Aether keeps the canon, stores every room's decision card, audits agent compliance, proposes learned knowledge for shadow testing and audits the automatic room and witness weighting. It never changes a decision and never holds a price. Updated {ago(o.generated_at)}.</p>
       </Panel>

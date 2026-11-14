@@ -2,6 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
 /* Core palette from the original Nexus globals.css (GitHub Dark x Grafana on obsidian). */
 :root {
   --bg: #05070c; --bg-elevated: #0d1117; --surface: #161b22; --surface-hi: #21262d;

@@ -26,7 +26,7 @@ export default function WarRoom() {
     <MarketProvider>
       <TabProvider>
       <div className="mx-auto flex max-w-[1680px] gap-5 px-3 py-3 sm:px-6 sm:py-5">
-        <aside className="hidden w-[260px] shrink-0 flex-col gap-4 xl:flex">
+        <aside className="sticky top-4 hidden max-h-[calc(100vh-2rem)] w-[260px] shrink-0 flex-col gap-4 overflow-y-auto pr-1 xl:flex">
           <OrganismCard />
           <FeedFallbackCard />
           <PriorityQueue />
@@ -34,12 +34,13 @@ export default function WarRoom() {
           <Roster />
         </aside>
         <main className="flex min-w-0 flex-1 flex-col gap-4">
-          <div className="flex flex-col gap-4 xl:hidden"><OrganismCard /><FeedFallbackCard /><PriorityQueue /><SystemIssues /></div>
+          <div className="flex flex-col gap-4 xl:hidden"><SystemIssues /></div>
           <PriceChart />
           <div className="lg:hidden">
             <GlobalDecision />
           </div>
-          <ThreadsPanel className="h-[78vh] min-h-[480px]" />
+          <div className="flex flex-col gap-4 xl:hidden"><OrganismCard /><FeedFallbackCard /><PriorityQueue /></div>
+          <ThreadsPanel className="h-[78vh] min-h-[420px] max-lg:h-[500px]" />
           <AssistantPanel className="lg:hidden" hideGlobalDecision />
           <div className="xl:hidden"><Roster /></div>
         </main>

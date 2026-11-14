@@ -1,4 +1,4 @@
-import { ShieldAlert } from "lucide-react";
+import { ArrowUpRight, ShieldAlert } from "lucide-react";
 import { Dot, Skeleton } from "./ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
@@ -15,7 +15,12 @@ export default function PriorityQueue() {
   const resolved: any[] = (data as any)?.resolved_24h ?? [];
   return (
     <div className="glass p-4">
-      <div className="eyebrow mb-3 flex items-center gap-2"><ShieldAlert className="h-3 w-3 text-amber-300" />Priority Queue</div>
+      <div className="eyebrow mb-3 flex items-center justify-between">
+        <span className="flex items-center gap-2"><ShieldAlert className="h-3 w-3 text-amber-300" />Priority Queue</span>
+        <a href="/#/alerts" className="flex items-center gap-1 font-mono text-[9px] font-normal normal-case text-cyan-400 transition hover:text-cyan-300" title="Open Alerts center">
+          Alerts <ArrowUpRight className="h-2.5 w-2.5" />
+        </a>
+      </div>
       {loading && !data ? <Skeleton rows={2} /> : error && !data ? <p className="text-[12px] text-rose-300">Health checks unavailable.</p> : (
         <div className="space-y-2 text-[12.5px]">
           {open.length === 0 ? (
