@@ -122,6 +122,7 @@ Owner decision, 2026-11-05: the architecture does not depend on webhooks. Approv
      4. Remove the alerts again.
    - Any change to a hashed engine file creates a new identity. That identity needs a calibration run of 24/24 before it is trusted.
    - The per-event reconcile and the cron (`10-59/15 * * * *`) are idempotent, so a candle is counted at most once.
+   - **Closed-market idle (2026-11-14, resource audit; `src/market-idle.mjs`):** from two hours after the Friday close (17:00 New York) to the Sunday reopen (18:00 New York), the parity sweep runs only the macro rooms and, on the first sweep of each hour, a heartbeat (the economic calendar refresh and the health alerts); the war rooms and their fallback, the H1 finalize, the reconcile and backfill, outcome scoring, the hourly tuning and shadow block, pattern calibration, strategy captures, compliance, the Aether and platform pushes and the Omega policy wait for the reopen, and the ledger step (`2-59/5`) does nothing. The first two hours after the close run in full, so the last bars finish; the first sweep after the reopen is the first of its hour, so everything runs there. The hourly news cron is unchanged (weekend headlines are still analysed). `CLOSED_MARKET_IDLE` "off" runs every cron in full.
 3. **Fundamental news**: TradingView MCP news. The AI Worker analyses it at cron `:06`.
 
 Coverage per Pine parameter is in `docs/LOCAL_COMPUTATION_OWNERSHIP.md`.
