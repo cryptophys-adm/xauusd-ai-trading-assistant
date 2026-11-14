@@ -19,3 +19,4 @@ export const OMEGA_POLICY_KEY: string;
 export const OMEGA_POLICY_APPLIED_KEY: string;
 export const OMEGA_POLICY_ROLLBACK_TRADES: number;
 export function closePosition(env: unknown, input?: { ticket?: unknown; reason?: string; actor?: string }, options?: { now?: number }): Promise<Record<string, any>>;
+export function liveBridgeFields(state: unknown, options?: { now?: number }): Record<string, any> | null;

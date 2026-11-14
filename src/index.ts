@@ -246,7 +246,7 @@ import { dedupeDeals, listDeals, omegaOverview, setControl, storeDeal } from "./
 import { omegaHealth } from "./omega-health.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
-import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition } from "./omega-broker.mjs";
+import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields } from "./omega-broker.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
 import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mjs";
@@ -2135,10 +2135,15 @@ async function omegaOverviewBody(env: Env): Promise<JsonObject> {
  * open Omega pages through the push hub, computed once for all of them and only while one listens (it reads
  * the deals, the signal and the broker state). Replaces the page's 0.5-second overview stream. Never throws.
  */
-async function publishOmegaOverview(env: Env): Promise<void> {
+async function publishOmegaOverview(env: Env, state: unknown = null): Promise<void> {
   try {
     if (!(await hubSubscribers(env, "omega-overview"))) return;
-    await publishSnapshot(env, "omega-overview", await omegaOverviewBody(env));
+    const body = await omegaOverviewBody(env) as Record<string, any>;
+    // This sync's own quote, account and positions (the D1 row can be up to 30 s old): the page's chart and
+    // prices move at the bridge's 5-second sync, with nothing written (owner 2026-11-14: realtime, no added cost).
+    const live = state ? liveBridgeFields(state) : null;
+    if (live && body?.broker?.bridge) body.broker = { ...body.broker, bridge: { ...body.broker.bridge, ...live } };
+    await publishSnapshot(env, "omega-overview", body);
   } catch (e) {
     console.warn("omega_push_failed", e instanceof Error ? e.message : String(e));
   }
@@ -2169,7 +2174,7 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown; corpusMacro?: unknown; calendar?: unknown }): Promise<JsonObject> {
     const result = await bridgeSync(this.env, input ?? {}) as JsonObject;
     // The bridge gets its answer at once; the open Omega pages get the new state after it.
-    if (result?.ok !== false) this.ctx.waitUntil(publishOmegaOverview(this.env));
+    if (result?.ok !== false) this.ctx.waitUntil(publishOmegaOverview(this.env, input?.state ?? null));
     return result;
   }
   /** A person sets the trading mode (owner 2026-11-13); the owner hears of each change on Telegram. */
