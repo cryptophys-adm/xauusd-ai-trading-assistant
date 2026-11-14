@@ -127,7 +127,16 @@ export async function rejectionSummary(db, sinceMs) {
  * The TradingView alert lane for Nexus System status: the last accepted alert (D1
  * webhook_sources) and the rejections of the last hour. Never throws.
  */
+// Resource audit P0 (2026-11-14): the last webhook is read by time. webhook_sources comes from schema.sql
+// (no run-time schema), so its index is made here once per isolate; a database without it skips it.
+let receivedIndexReady = false;
+async function ensureReceivedIndex(db) {
+  if (receivedIndexReady) return;
+  try { await db.prepare("CREATE INDEX IF NOT EXISTS idx_webhook_sources_received ON webhook_sources(received_at)").run(); receivedIndexReady = true; } catch { /* no webhook_sources table */ }
+}
+
 export async function webhookLaneStatus(db, now = Date.now()) {
+  await ensureReceivedIndex(db);
   let last = null;
   try {
     last = await db.prepare("SELECT source, candle_key, received_at FROM webhook_sources ORDER BY received_at DESC LIMIT 1").first();

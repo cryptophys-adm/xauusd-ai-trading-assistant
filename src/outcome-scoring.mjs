@@ -60,6 +60,8 @@ export const OUTCOME_SCHEMA_SQL = [
 )`,
   "CREATE INDEX IF NOT EXISTS idx_outcome_scores_close ON outcome_scores(statement_close)",
   "CREATE INDEX IF NOT EXISTS idx_outcome_scores_subject ON outcome_scores(subject, statement_close)",
+  // Resource audit P0 (2026-11-14): the decision cards read a bar's outcomes by timeframe and candle.
+  "CREATE INDEX IF NOT EXISTS idx_outcome_scores_tf_candle ON outcome_scores(timeframe, candle_key)",
   `CREATE TABLE IF NOT EXISTS outcome_runs (
   timeframe TEXT NOT NULL,
   candle_key TEXT NOT NULL,

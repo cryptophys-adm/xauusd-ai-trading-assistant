@@ -8,6 +8,10 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OMEGA_SCHEMA_SQL } from "../src/omega-broker.mjs";
+import { OUTCOME_SCHEMA_SQL } from "../src/outcome-scoring.mjs";
+import { THREAD_SCHEMA_SQL } from "../src/agent-threads.mjs";
+import { SCHEMA_SQL as PARITY_SCHEMA_SQL } from "../src/parity-registry.mjs";
+import { webhookLaneStatus } from "../src/webhook-rejections.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
@@ -71,4 +75,17 @@ test("the latest-run lookups find the run MAX(run_id) found, across days and thr
   assert.equal(one(LATEST[0]).r, one("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id LIKE 'warroom:%'").r);
   assert.equal(one(LATEST[1]).r, one("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id LIKE 'newsdaily:%' AND step = 'brief'").r);
   assert.deepEqual(db.prepare(LATEST[2]).all().map((r) => r.run_id), db.prepare("SELECT DISTINCT run_id FROM agent_thread_messages WHERE thread_id LIKE 'warroom:%' AND step = 'conclusion' ORDER BY run_id DESC LIMIT 12").all().map((r) => r.run_id));
+});
+
+// Production applies no migrations (deploy-worker.yml has no D1 token): its tables come from schema.sql and
+// each module's run-time schema, so every read index must be made there too (found 2026-11-14: the indexes
+// of migration 0020 were absent in production after its deploy).
+test("the run-time schemas make every read index, without the migrations", async () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(await readFile(join(root, "schema.sql"), "utf8"));
+  for (const sql of [...OUTCOME_SCHEMA_SQL, ...THREAD_SCHEMA_SQL, ...PARITY_SCHEMA_SQL, ...OMEGA_SCHEMA_SQL]) db.exec(sql);
+  const d1 = { prepare: (sql) => ({ bind: () => ({ first: async () => db.prepare(sql).get() ?? null }), run: async () => db.prepare(sql).run(), first: async () => db.prepare(sql).get() ?? null }) };
+  await webhookLaneStatus(d1);
+  const names = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all().map((r) => r.name));
+  for (const [, , , index] of QUERIES) assert.ok(names.has(index), `${index} is made at run time`);
 });
