@@ -93,3 +93,27 @@ test("a KILL set between two syncs is read by the next sync", async () => {
   await sync(T0 + 5_000);
   assert.equal(env.SIGNAL_CACHE.gets.filter((k) => k === EA_CONTROL_KEY).length, 1);
 });
+
+test("realtime without writes: each sync's quote, account and positions go to the pushed overview, not to D1", async () => {
+  const { liveBridgeFields } = await import("../src/omega-broker.mjs");
+  const now = Date.parse("2026-11-16T10:00:05Z");
+  const state = { connected: true, received_ms: now - 400, symbol: { name: "XAUUSD", bid: 4012.35, ask: 4012.55, spread_points: 20, atr_points: 210 }, account: { balance: 1000, equity: 1003.2, day_realized_pl: 1.5 }, positions: [{ ticket: 7, side: "BUY", volume: 0.01, profit: 3.2 }] };
+  const live = liveBridgeFields(state, { now });
+  assert.deepEqual([live.bid, live.ask, live.equity, live.positions.length, live.synced_age_ms, live.state_age_ms, live.live], [4012.35, 4012.55, 1003.2, 1, 0, 400, true]);
+  assert.equal(liveBridgeFields({ connected: false }, { now }), null, "no quote, nothing to overlay");
+  // The quote alone still writes nothing (the 30-second rule stands).
+  assert.equal(bridgeStateKey(executorFrom(state)), bridgeStateKey(executorFrom({ ...state, symbol: { ...state.symbol, bid: 4013.1 }, account: { ...state.account, equity: 1004 } })));
+});
+
+test("the subscriber count is asked of the hub at most every 30 seconds per isolate", async () => {
+  const { hubSubscribers, resetSubscribersCacheForTests, SUBSCRIBERS_TTL_MS } = await import("../src/push-hub.mjs");
+  resetSubscribersCacheForTests();
+  let asks = 0;
+  const env = { PUSH_HUB: { getByName: () => ({ subscribers: async () => { asks += 1; return 2; } }) } };
+  const t = Date.parse("2026-11-16T10:00:00Z");
+  for (let i = 0; i < 6; i++) assert.equal(await hubSubscribers(env, "omega-overview", { now: t + i * 5_000 }), 2);
+  assert.equal(asks, 1, "six syncs in 30 s, one billed ask");
+  await hubSubscribers(env, "omega-overview", { now: t + SUBSCRIBERS_TTL_MS });
+  assert.equal(asks, 2);
+  assert.equal(await hubSubscribers({}, "omega-overview"), 0, "no binding: nobody listens");
+});

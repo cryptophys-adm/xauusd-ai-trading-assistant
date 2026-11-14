@@ -17,9 +17,22 @@ export async function publishSnapshot(env, topic, data) {
   try { return await hub.publish(topic, data); } catch (e) { return { status: "failed", error: String(e?.message ?? e).slice(0, 160) }; }
 }
 
-/** How many pages listen to a topic (0 without the binding or on failure): a costly snapshot is made only then. */
-export async function hubSubscribers(env, topic) {
+/**
+ * How many pages listen to a topic (0 without the binding or on failure): a costly snapshot is made only then.
+ * Remembered per isolate for SUBSCRIBERS_TTL_MS: each ask is a billed Durable Object request, and the bridge
+ * syncs every 5 seconds (17,280 asks a day uncached; about 2,900 cached). A page that just opened waits at most
+ * that long for its first push, reading the overview itself meanwhile.
+ */
+export const SUBSCRIBERS_TTL_MS = 30_000;
+const SUBSCRIBERS = new Map();
+export function resetSubscribersCacheForTests() { SUBSCRIBERS.clear(); }
+export async function hubSubscribers(env, topic, { now = Date.now() } = {}) {
   const hub = pushHubOf(env);
   if (!hub || typeof hub.subscribers !== "function") return 0;
-  try { return Number(await hub.subscribers(topic)) || 0; } catch { return 0; }
+  const cached = SUBSCRIBERS.get(topic);
+  if (cached && now - cached.at < SUBSCRIBERS_TTL_MS) return cached.n;
+  let n = 0;
+  try { n = Number(await hub.subscribers(topic)) || 0; } catch { n = 0; }
+  SUBSCRIBERS.set(topic, { n, at: now });
+  return n;
 }

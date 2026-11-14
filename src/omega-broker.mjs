@@ -657,6 +657,26 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
 }
 
 
+/**
+ * Pure: the live numbers of one bridge sync (quote, account, open positions and orders), in the shape of
+ * brokerOverview's `bridge`. Since the bridge row is written only on a change that matters or every 30 seconds
+ * (BRIDGE_WRITE_EVERY_MS), the overview read from D1 can hold a quote up to 30 seconds old; the overview pushed
+ * to the open Omega pages after each sync carries these instead (owner 2026-11-14: realtime chart, no added
+ * cost). Nothing is written. Null for a state without a quote.
+ */
+export function liveBridgeFields(state, { now = Date.now() } = {}) {
+  const st = executorFrom(state);
+  if (!st || typeof st?.symbol?.bid !== "number") return null;
+  return {
+    bid: st.symbol.bid ?? null, ask: st.symbol.ask ?? null, spread_points: st.symbol.spread_points ?? null,
+    balance: st.account?.balance ?? null, equity: st.account?.equity ?? null, day_realized_pl: st.account?.day_realized_pl ?? null,
+    positions: Array.isArray(st.positions) ? st.positions : [], orders: Array.isArray(st.orders) ? st.orders : [],
+    atr_value: st.symbol.atr_value ?? null, atr_points: st.symbol.atr_points ?? null,
+    synced_age_ms: 0, state_age_ms: Number.isFinite(st.received_ms) ? Math.max(0, now - st.received_ms) : 0,
+    live: true
+  };
+}
+
 // ---------------------------------------------------------------- Aether-governed policy (proposal #227)
 
 export const OMEGA_POLICY_BOUNDS = Object.freeze({
