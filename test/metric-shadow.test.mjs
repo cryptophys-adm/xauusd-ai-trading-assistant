@@ -81,3 +81,72 @@ test("the comparison per agent", () => {
   const [r] = compareMetricShadow(rows);
   assert.deepEqual([r.calls, r.validity, r.grounding_rate, r.stance_agreement, r.tokens_per_call], [2, 0.5, 1, 1, 850]);
 });
+
+// A2 (owner 2026-11-14: "lanjut kerjakan A2"): the rebuttals in metric form.
+import { metricBus, checkMetricRebuttal, isRebuttalBar, runMetricRebuttals, metricRebuttalMessages } from "../src/metric-shadow.mjs";
+
+test("A2: the metric bus is anonymous (#n in agent order, never the rebutter itself) and a rebut is grounded on both sides", () => {
+  const openings = [
+    { agent: "risk", status: "ok", stance: "WAIT", confidence: 0.5, metrics: [{ id: "candles_15m.range_ratio", value: 1.8, reading: "wide_bar", implication: "neutral", weight: 1 }] },
+    { agent: "news", status: "ok", stance: "BUY", confidence: 0.6, metrics: [{ id: "headline_bias", value: "bullish", reading: "bullish_news", implication: "bullish", weight: 1 }] },
+    { agent: "technical", status: "invalid_output", stance: null, metrics: [] }
+  ];
+  const { bus, refs } = metricBus(openings, "risk");
+  assert.deepEqual(bus.map((b) => b.ref), ["#1"]);
+  assert.equal(refs.get("#1"), "news");
+  assert.ok(bus.every((b) => !("agent" in b)), "no agent id on the bus");
+  const menu = metricMenu({ candles_15m: candles });
+  const ok = checkMetricRebuttal({ stance: "WAIT", confidence: 0.6, rebuts: [
+    { ref: "#1", their_metric: "headline_bias", my_metric: "candles_15m.range_ratio", relation: "outweighs" },
+    { ref: "#9", their_metric: "x", my_metric: "candles_15m.change_4", relation: "contradicts" }
+  ] }, { bus, menu });
+  assert.deepEqual([ok.valid, ok.cited, ok.grounded], [true, 2, 1]);
+  assert.equal(checkMetricRebuttal({ stance: "WAIT", confidence: 0.6, rebuts: [{ ref: "#1", their_metric: "headline_bias", my_metric: "candles_15m.range_ratio", relation: "because the news" }] }, { bus, menu }).valid, false);
+  assert.equal(checkMetricRebuttal({ stance: "WAIT", confidence: 0.6, rebuts: [] }, { bus, menu }).valid, true, "a rebutter may dispute nothing");
+  const text = metricRebuttalMessages("You are the Risk Manager.", { menu, opening: openings[0], bus }).map((m) => m.content).join("\n");
+  assert.ok(text.indexOf("Required JSON") < text.indexOf("METRIC BUS:\n"), "rules first, the bar's evidence last");
+});
+
+test("A2: only on every fourth bar, after the agent's own metric opening; stored beside its live rebuttal and scored", async () => {
+  assert.equal(isRebuttalBar("2026-11-16T10:00:00.000Z"), true);
+  assert.equal(isRebuttalBar("2026-11-16T10:15:00.000Z"), false);
+  resetMetricShadowSchemaCacheForTests();
+  const DB = d1();
+  const barTime = "2026-11-16T10:00:00.000Z";
+  const close = Date.parse(barTime);
+  const openingAnswer = (stance, id) => ({ stance, confidence: 0.6, metrics: [{ id, value: 1, reading: "label", implication: stance === "BUY" ? "bullish" : "bearish", weight: 1 }] });
+  const rebuttal = { stance: "SELL", confidence: 0.6, rebuts: [{ ref: "#1", their_metric: "candles_15m.change_1", my_metric: "candles_15m.change_4", relation: "contradicts" }] };
+  let seen = [];
+  const AI = { async run(model, input) {
+    const text = JSON.stringify(input);
+    seen.push(text.includes("METRIC BUS") ? "rebuttal" : "opening");
+    if (text.includes("METRIC BUS")) return { response: JSON.stringify(rebuttal), usage: { prompt_tokens: 1500, completion_tokens: 80 } };
+    return { response: JSON.stringify(text.includes("Risk Manager") ? openingAnswer("SELL", "candles_15m.change_4") : openingAnswer("BUY", "candles_15m.change_1")), usage: { prompt_tokens: 900, completion_tokens: 60 } };
+  } };
+  const bars = Array.from({ length: 27 }, (_, n) => {
+    const k = n - 20, o = k <= 0 ? 4000 : 4000 - 3 * (k - 1);
+    const bar = k <= 0 ? { open: o, high: o + 2, low: o - 2, close: o } : { open: o, high: o, low: o - 6, close: o - 5 };
+    return { open_time: new Date(close + (k - 1) * 900_000).toISOString(), close_time: new Date(close + k * 900_000).toISOString(), ...bar };
+  });
+  const kv = new Map([["market-data:v2:series:OANDA:XAUUSD|15m", JSON.stringify({ candles: bars })]]);
+  const env = { DB, AI, SIGNAL_CACHE: { get: async (k) => kv.get(k) ?? null } };
+  const common = { room: "M15", barTime, dataFor: () => ({ candles_15m: candles }), roleFor: (a) => (a === "risk" ? "You are the Risk Manager." : "You are the Technical Analyst."), clock: () => close + 60_000 };
+  // No metric opening yet: no call.
+  assert.deepEqual((await runMetricRebuttals(env, { ...common, rebutters: [{ agent: "risk", stance: "WAIT" }] })).no_opening, 1);
+  await runMetricShadow(env, { ...common, agents: [{ agent: "risk", stance: "WAIT" }, { agent: "technical", stance: "BUY" }] });
+  seen = [];
+  const r = await runMetricRebuttals(env, { ...common, rebutters: [{ agent: "risk", stance: "WAIT" }] });
+  assert.deepEqual([r.status, r.called, r.stored], ["ok", 1, 1]);
+  assert.deepEqual(seen, ["rebuttal"]);
+  assert.equal((await runMetricRebuttals(env, { ...common, rebutters: [{ agent: "risk", stance: "WAIT" }] })).skipped, 1);
+  const row = DB.raw.prepare("SELECT * FROM metric_shadow_rebuttals").get();
+  assert.deepEqual([row.agent, row.stance, row.control_stance, row.status, row.cited, row.grounded], ["risk", "SELL", "WAIT", "ok", 1, 1]);
+  assert.equal(JSON.parse(row.rebuts_json)[0].agent, "technical", "the disputed agent is kept beside its #n");
+  // Not a rebuttal bar: nothing.
+  assert.equal((await runMetricRebuttals(env, { ...common, barTime: "2026-11-16T10:15:00.000Z", rebutters: [{ agent: "risk", stance: "WAIT" }] })).status, "not_a_rebuttal_bar");
+  const scored = await scoreMetricShadow(env, { now: close + 7 * 900_000 });
+  assert.equal(scored.rebuttals_scored, 1);
+  const view = await readMetricShadow(env, { now: close + 86_400_000 });
+  const risk = view.rebuttals.find((a) => a.agent === "risk");
+  assert.deepEqual([risk.validity, risk.grounding_rate, risk.stance_agreement, risk.hit_rate], [1, 1, 0, 1]);
+});

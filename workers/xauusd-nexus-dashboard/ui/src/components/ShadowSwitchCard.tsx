@@ -38,7 +38,8 @@ async function call(path: string, method = "GET", body?: unknown): Promise<Shado
 const when = (iso?: string | null) => (iso ? `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC` : "—");
 const k = (n?: number) => (typeof n === "number" ? n.toLocaleString("en-US") : "—");
 const SOURCE_NAMES: Record<string, string> = {
-  "shadow:metric_opening": "Metric format",
+  "shadow:metric_opening": "Metric format (openings)",
+  "shadow:metric_rebuttal": "Metric format (rebuttals)",
   "shadow:war_room_opening": "15m room (notes / benched)",
   "shadow:tf_room_opening": "1H-D1 rooms (notes / benched)",
   "shadow:decision_council": "Council (notes)",
