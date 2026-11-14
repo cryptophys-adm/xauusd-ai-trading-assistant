@@ -210,6 +210,7 @@ import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
 import { pullOmegaPolicy } from "./omega-policy.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
+import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -2756,6 +2757,28 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
  * then each new ledger event to Telegram once, then the execution report to Aether when it changed.
  * Never feeds a room or a decision. Never throws.
  */
+/**
+ * Health alerts (gap 2, owner decision 2026-11-06): detect operational problems, keep them as open alerts
+ * for the Nexus Priority Queue and report state changes to the platform kernel (warning / info, never
+ * critical). Non-fatal by design. Also the closed market's hourly heartbeat (src/market-idle.mjs).
+ */
+async function runHealthStep(env: Env): Promise<void> {
+  try {
+    const health = await runHealthAlerts(env);
+    if (health.opened || health.resolved || (Array.isArray(health.published) && health.published.length)) console.log("health_alerts", JSON.stringify(health));
+    // The market data stopping (or coming back) goes to the owner's Telegram once (2026-11-11: the feed
+    // stood still for hours behind a TradingView quota and only the stale decisions showed it).
+    for (const [list, state] of [[health.opened_alerts, "open"], [health.resolved_alerts, "resolved"]] as const) {
+      for (const a of (Array.isArray(list) ? list : []) as Array<{ kind?: string; subject?: string }>) {
+        if (a.kind !== "market_data_stale" && a.kind !== "market_data_fallback") continue;
+        const back = a.kind === "market_data_fallback" ? "XAUUSD SYSTEM · TradingView is back; the broker's bars were replaced and the MT5 fallback ended." : "XAUUSD SYSTEM · Market data is flowing again; rooms, news and parity resume.";
+        try { await sendTelegram(env, state === "open" ? `XAUUSD SYSTEM · ${a.subject}` : back); }
+        catch (e) { console.error("market_data_telegram_failed", e instanceof Error ? e.message : String(e)); }
+      }
+    }
+  } catch (e) { console.error("health_alerts_failed", e instanceof Error ? e.message : String(e)); }
+}
+
 async function runLedgerStep(env: Env): Promise<void> {
   try {
     // While the Decision Engine is on, only its decisions are new signals (src/decision-engine.mjs).
@@ -3017,8 +3040,30 @@ export default {
     return consumeQueue(batch, env);
   },
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    // Closed-market idle (src/market-idle.mjs, 2026-11-14): from two hours after the Friday close to the
+    // Sunday reopen nothing the ledger step or the sweep reads can change.
+    const idle = marketIdleAt(env, event.scheduledTime || Date.now());
     if (event.cron === LEDGER_CRON) {
+      if (idle) return;
       ctx.waitUntil(runLedgerStep(env));
+      return;
+    }
+    if (event.cron === PARITY_SWEEP_CRON && idle) {
+      // Kept: the macro rooms (a High-impact event can still be due) and, on the first sweep of each hour,
+      // the heartbeat: the economic calendar (the next week's events) and the health alerts.
+      ctx.waitUntil(runPendingMacroRooms(env).then(m => {
+        if (m.status !== "disabled" && m.status !== "idle") console.log("macro_room", JSON.stringify(m));
+      }).catch(e => console.error("macro_room_failed", e instanceof Error ? e.message : String(e))));
+      if (idleHeartbeatDue(event.scheduledTime)) {
+        ctx.waitUntil((async () => {
+          try {
+            const calendar = await refreshCalendar(env);
+            if (calendar.status !== "fresh") console.log("econ_calendar", JSON.stringify(calendar));
+          } catch (e) { console.error("econ_calendar_failed", e instanceof Error ? e.message : String(e)); }
+          await runHealthStep(env);
+          console.log("sweep_idle", JSON.stringify({ at: new Date(event.scheduledTime || Date.now()).toISOString(), heartbeat: true }));
+        })());
+      }
       return;
     }
     if (event.cron === PARITY_SWEEP_CRON) {
@@ -3176,23 +3221,7 @@ export default {
             if (doc.source === "aether") console.log("doctrine_synced", JSON.stringify({ version: doc.version, rules: doc.rules.length, applied: doc.applied.length }));
           } catch (e) { console.error("doctrine_sync_failed", e instanceof Error ? e.message : String(e)); }
         }
-        // Health alerts (gap 2, owner decision 2026-11-06): detect operational problems, keep
-        // them as open alerts for the Nexus Priority Queue and report state changes to the
-        // platform kernel (warning / info, never critical). Non-fatal by design.
-        try {
-          const health = await runHealthAlerts(env);
-          if (health.opened || health.resolved || (Array.isArray(health.published) && health.published.length)) console.log("health_alerts", JSON.stringify(health));
-          // The market data stopping (or coming back) goes to the owner's Telegram once (2026-11-11: the feed
-          // stood still for hours behind a TradingView quota and only the stale decisions showed it).
-          for (const [list, state] of [[health.opened_alerts, "open"], [health.resolved_alerts, "resolved"]] as const) {
-            for (const a of (Array.isArray(list) ? list : []) as Array<{ kind?: string; subject?: string }>) {
-              if (a.kind !== "market_data_stale" && a.kind !== "market_data_fallback") continue;
-              const back = a.kind === "market_data_fallback" ? "XAUUSD SYSTEM · TradingView is back; the broker's bars were replaced and the MT5 fallback ended." : "XAUUSD SYSTEM · Market data is flowing again; rooms, news and parity resume.";
-              try { await sendTelegram(env, state === "open" ? `XAUUSD SYSTEM · ${a.subject}` : back); }
-              catch (e) { console.error("market_data_telegram_failed", e instanceof Error ? e.message : String(e)); }
-            }
-          }
-        } catch (e) { console.error("health_alerts_failed", e instanceof Error ? e.message : String(e)); }
+        await runHealthStep(env);
         // B-12 (issue #227): Aether's policy pack, pulled hourly; applied within hard bounds only behind the owner's
         // switch, audited, reported to Telegram and rolled back after 50 losing Omega trades.
         try {
