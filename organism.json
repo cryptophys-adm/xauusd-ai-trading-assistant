@@ -204,6 +204,9 @@
           "task": "macro_room_conclusion"
         },
         {
+          "task": "metric_opening"
+        },
+        {
           "task": "macro_room_opening"
         },
         {

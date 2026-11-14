@@ -1,0 +1,14 @@
+export const METRIC_SHADOW_VERSION: string;
+export const IMPLICATIONS: readonly string[];
+export const METRIC_OPENING_SCHEMA: Readonly<Record<string, unknown>>;
+export function metricShadowEnabled(env: unknown): boolean;
+export function maxCallsPerHour(env: unknown): number;
+export function noLevels(v: unknown): unknown;
+export function candleSummary(prefix: string, candles: unknown[]): { id: string; value: unknown }[];
+export function metricMenu(data: unknown): { id: string; value: unknown }[];
+export function checkMetricAnswer(o: unknown, menu: { id: string }[]): { valid: boolean; cited: number; grounded: number; metrics: any[] };
+export function metricMessages(roleLine: string, data: unknown, menu: unknown[]): { role: string; content: string }[];
+export function runMetricShadow(env: unknown, options: Record<string, unknown>): Promise<Record<string, any>>;
+export function scoreMetricShadow(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function compareMetricShadow(rows: unknown[]): Record<string, any>[];
+export function readMetricShadow(env: unknown, options?: { days?: number; now?: number; room?: string }): Promise<Record<string, any>>;

@@ -12,6 +12,7 @@ import { neuronsOf, readAiUsage } from "./ai-usage.mjs";
 import { scorecards } from "./outcome-scoring.mjs";
 import { ensureThreadSchema } from "./agent-threads.mjs";
 import { readAllocationState, readAllocationEvents, ALLOCATION_RULES } from "./agent-allocation.mjs";
+import { readMetricShadow } from "./metric-shadow.mjs";
 
 export const NEURON_ALLOCATION_VERSION = "cryptophys.neuron-allocation.v1";
 const ROOM_SQL = `CASE
@@ -55,7 +56,7 @@ function floorRate(model) {
  * Pure: the allocation view from the room rows { day, room, agent, model, calls, tokens }, the meter's
  * blended rates and the 30-day scorecards.
  */
-export function buildAllocation({ rows = [], rates = new Map(), cards = [], days = 7, state = { rooms: {} }, changes = [] } = {}) {
+export function buildAllocation({ rows = [], rates = new Map(), cards = [], days = 7, state = { rooms: {} }, changes = [], grounding = {} } = {}) {
   const agents = new Map();
   const byDayRoom = new Map();
   let total = 0;
@@ -117,8 +118,8 @@ export function buildAllocation({ rows = [], rates = new Map(), cards = [], days
       by_timeframe: rec ? Object.fromEntries(Object.entries(rec.by_timeframe).filter(([tf]) => timeframes.includes(tf))) : {},
       // Neurons per correct directional call: the window's daily neurons over 30 days against the 30-day hits.
       neurons_per_hit: rec?.hit ? Math.round(a.neurons / span * 30 / rec.hit) : null,
-      // The share of the metrics an agent cites that exist in its input: measured from the structured outputs.
-      grounding_rate: null,
+      // The share of the metrics an agent cites that are on its own data's menu (the metric shadow arm, 15m room).
+      grounding_rate: grounding[a.agent] ?? null,
       trend: dayList.map((d) => Math.round(a.by_day.get(d) || 0))
     };
   }).sort((x, y) => y.neurons - x.neurons);
@@ -143,6 +144,7 @@ export async function readNeuronAllocation(env, { days = 7, now = Date.now() } =
   const rows = ((await db.prepare(`SELECT substr(ts, 1, 10) AS day, ${ROOM_SQL} AS room, agent, model, COUNT(*) AS calls, SUM(usage_tokens) AS tokens FROM agent_thread_messages WHERE ts >= ? AND usage_tokens > 0 GROUP BY day, room, agent, model`).bind(since).all()).results) || [];
   const usage = await readAiUsage(db, { days: n, now });
   const cards = await scorecards(db, { days: 30, now, snapshot: true });
-  const [state, changes] = await Promise.all([readAllocationState(env), readAllocationEvents(db, { limit: 50 })]);
-  return { status: "ok", generated_at: new Date(now).toISOString(), window_days: n, record_days: 30, ...buildAllocation({ rows, rates: blendedRates(usage.rows), cards, days: n, state, changes }) };
+  const [state, changes, metric] = await Promise.all([readAllocationState(env), readAllocationEvents(db, { limit: 50 }), readMetricShadow(env, { days: n, now }).catch(() => null)]);
+  const grounding = Object.fromEntries((metric?.agents ?? []).filter((a) => a.grounding_rate != null).map((a) => [a.agent, a.grounding_rate]));
+  return { status: "ok", generated_at: new Date(now).toISOString(), window_days: n, record_days: 30, ...buildAllocation({ rows, rates: blendedRates(usage.rows), cards, days: n, state, changes, grounding }), metric_shadow: metric };
 }

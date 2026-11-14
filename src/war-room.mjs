@@ -25,6 +25,7 @@ import { matchRebuts } from "./rebut-names.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, quorumRule } from "./reputation.mjs";
 import { publishSnapshot } from "./push-hub.mjs";
 import { readAllocationState, rosterSplit } from "./agent-allocation.mjs";
+import { metricShadowEnabled, runMetricShadow } from "./metric-shadow.mjs";
 import { agentReputation, sessionOf } from "./outcome-scoring.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
@@ -442,12 +443,17 @@ const ROOM_RULES = [
   "Never give entry, stop loss, take profit or position size: price levels are not part of a room."
 ].join("\n");
 
-function openingMessages(agent, data, learned = null, note = null) {
+/** The agent's role line in the 15m room (its opening's first line; the metric shadow arm reuses it). */
+export function openingRole(agent) {
   const desk = DESK_AGENTS[agent];
-  const riskRule = agent === "risk" ? ["Judge the risk of every possible entry from your data: the 15m volatility, the 15m Prophet R38 confirmation and what would invalidate the move, and say plainly whether you would take it."] : [];
-  const who = desk
+  return desk
     ? `You are the ${desk.name} in the XAUUSD Live War Room, which meets at every 15m candle close. Your only role: ${desk.role}.`
     : `You are ${HUD_NAMES[agent]}, one agent per Pine HUD, in the XAUUSD Live War Room, which meets at every 15m candle close. You speak only about the ${HUD_NAMES[agent]} HUD on the 15m candle that just closed. Lean on the statements marked verified by parity or computed from verified bars. The readers already see your calibration status once, next to your name: never mention calibration, verification or comparators in your claim. When every statement is not yet calibrated, keep your confidence at or below ${UNCALIBRATED_CONFIDENCE_CAP}.`;
+}
+
+function openingMessages(agent, data, learned = null, note = null) {
+  const riskRule = agent === "risk" ? ["Judge the risk of every possible entry from your data: the 15m volatility, the 15m Prophet R38 confirmation and what would invalidate the move, and say plainly whether you would take it."] : [];
+  const who = openingRole(agent);
   return chatMessages([
     who,
     ROOM_RULES_INDEPENDENT,
@@ -703,19 +709,37 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   });
   await publishWarRoom(env);
   const result = { status: "complete", calls, openings: answered.length, rebuttals: debate.length };
-  // Aether A7 on the 15m chart (owner 2026-11-13, "1-3"): the shadow calls of the learned notes under test,
-  // handed back as a job the caller runs after the decision, so they never delay it. Not enumerable.
+  // Shadow jobs, handed back to the caller to run after the decision, so they never delay it. Not enumerable.
+  const jobs = [];
+  // Aether A7 on the 15m chart (owner 2026-11-13, "1-3"): the shadow calls of the learned notes under test.
   if (shadowKnowledgeEnabled(env)) {
+    jobs.push(["knowledge", async () => {
+      const plan = planShadowCalls({ items: await shadowItems(env), roster, openings: answered, chart: "M15" });
+      return runShadowCalls(env, {
+        calls: plan, candleKey: m15KeyForClose(barTime), statementClose: barTime, clock, schema: OPENING_SCHEMA, schemaName: "war_room_opening", maxTokens: BUS_MAX_TOKENS.agent,
+        // Like for like: the live opening's prompt (its learned notes included) plus the note under test.
+        messagesFor: (agent, note) => openingMessages(agent, agentData(agent, evidence, hud, confirmations, desk15, projection), learnedFor(agent), note),
+        validate: (o, agent) => validateOpening(o, agent, { verifiedLines: agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]), forbiddenNames: forbiddenNamesFor(agent, roster) })
+      });
+    }]);
+  }
+  // Metric interpretations, not prose, in shadow (src/metric-shadow.mjs; owner 2026-11-14): each agent that
+  // opened answers again from the same data as metric readings, compared with its live stance on this bar.
+  if (metricShadowEnabled(env)) {
+    jobs.push(["metrics", () => runMetricShadow(env, {
+      room: "M15", barTime, clock,
+      agents: answered.map((m) => ({ agent: m.agent, stance: m.stance })),
+      dataFor: (agent) => agentData(agent, evidence, hud, confirmations, desk15, projection),
+      roleFor: (agent) => openingRole(agent)
+    })]);
+  }
+  if (jobs.length) {
     Object.defineProperty(result, "shadow_job", {
       enumerable: false,
       value: async () => {
-        const plan = planShadowCalls({ items: await shadowItems(env), roster, openings: answered, chart: "M15" });
-        return runShadowCalls(env, {
-          calls: plan, candleKey: m15KeyForClose(barTime), statementClose: barTime, clock, schema: OPENING_SCHEMA, schemaName: "war_room_opening", maxTokens: BUS_MAX_TOKENS.agent,
-          // Like for like: the live opening's prompt (its learned notes included) plus the note under test.
-          messagesFor: (agent, note) => openingMessages(agent, agentData(agent, evidence, hud, confirmations, desk15, projection), learnedFor(agent), note),
-          validate: (o, agent) => validateOpening(o, agent, { verifiedLines: agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]), forbiddenNames: forbiddenNamesFor(agent, roster) })
-        });
+        const out = {};
+        for (const [name, job] of jobs) { try { out[name] = await job(); } catch (e) { out[name] = { status: "error", message: String(e?.message ?? e).slice(0, 200) }; } }
+        return out;
       }
     });
   }
