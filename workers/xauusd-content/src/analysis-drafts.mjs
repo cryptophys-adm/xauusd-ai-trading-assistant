@@ -26,6 +26,8 @@ function finish(lines, channel) {
   // Too long: drop body lines from the end (never the title or the disclaimer).
   let body = [...lines];
   while (body.length > 1 && [...body, ...tail].join("\n").length > max) body.pop();
+  // No blank line left over where a dropped line was.
+  while (body.length > 1 && body.at(-1) === "") body.pop();
   const text = [...body, ...tail].join("\n");
   return text.length <= max ? text : null;
 }

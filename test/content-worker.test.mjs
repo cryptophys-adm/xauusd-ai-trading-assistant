@@ -165,6 +165,7 @@ test("the key-level map and the pattern posts pass the guardian with levels allo
   assert.match(map, /Zona permintaan \(area beli\):\n• 3864\.14–3867\.80 \(kuat, 4 sumber\)/);
   assert.match(map, /Struktur: H4 turun \(LH\/LL\) · H1 turun \(LH\/LL\) · 15m naik \(HH\/HL\)/);
   assert.ok(map.length <= 500, `${map.length}`);
+  assert.ok(!/\n\n\n/.test(map), "no double blank line where an optional line was dropped");
   const [forming, confirmed] = postablePatterns(a);
   const f = patternText(forming, a), c = patternText(confirmed, a);
   assert.match(f, /Pola terbentuk · XAUUSD H4\nThree Falling Peaks · katalog Bulkowski bab 45/);
