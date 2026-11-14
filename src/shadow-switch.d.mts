@@ -1,0 +1,13 @@
+export const SHADOW_SWITCH_KEY: string;
+export const SHADOW_MODES: readonly string[];
+export const SHADOW_METER_PREFIX: string;
+export const DEFAULT_SHADOW_NEURONS_PER_DAY: number;
+export const BREAKER_ACTOR: string;
+export function shadowBudget(env: unknown): number;
+export function shadowAllowed(env: unknown): Promise<boolean>;
+export function shadowSpendToday(db: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function readShadowMode(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function setShadowMode(env: unknown, input?: { mode?: string; reason?: string; actor?: string }, options?: { now?: number }): Promise<Record<string, any>>;
+export function shadowModeMessage(result: Record<string, any>, options?: { reason?: string; spend?: number | null; budget?: number | null }): string;
+export function checkShadowBudget(env: unknown, options?: { now?: number; send?: ((text: string) => Promise<unknown>) | null }): Promise<Record<string, any>>;
+export function gateShadowTurns<T extends { shadow?: string[] }>(env: unknown, allocation: T): Promise<T & { shadow_off?: boolean }>;

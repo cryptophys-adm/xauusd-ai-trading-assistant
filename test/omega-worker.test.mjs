@@ -241,6 +241,26 @@ test("the MT5 fallback switch (War Room, 2026-11-11): read when signed in; chang
   assert.equal(calls.length, 1);
 });
 
+test("the shadow kill switch (owner 2026-11-14): read when signed in; changed by a person, same origin, a reason", async () => {
+  resetKeyCacheForTests();
+  const calls = [];
+  const O = { ...omega(), shadowMode: async () => ({ mode: "on", allowed: true }), setShadowMode: async (input) => { calls.push(input); return { ok: true, mode: input.mode, changed: true }; } };
+  const env = { ...ENV_BASE, OMEGA: O };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const person = await jwt({ email: "Owner@Example.com" });
+  const read = await handle(req("/api/shadow-mode", { token: person }), env, opts);
+  assert.deepEqual(await read.json(), { mode: "on", allowed: true, can_control: true });
+  const post = (body, extra = {}) => handle(req("/api/shadow-mode", { token: person, method: "POST", body, ...extra }), env, opts);
+  assert.equal((await post({ mode: "off", reason: "cost" })).status, 200);
+  assert.deepEqual(calls.at(-1), { mode: "off", reason: "cost", actor: "owner@example.com" });
+  assert.equal((await post({ mode: "off" })).status, 400, "a reason is required");
+  assert.equal((await post({ mode: "auto", reason: "x" })).status, 400, "on or off only");
+  assert.equal((await post({ mode: "on", reason: "x" }, { origin: "https://evil.example" })).status, 403, "cross-origin refused");
+  assert.equal((await handle(req("/api/shadow-mode", { token: await jwt({ common_name: "ci.access" }), method: "POST", body: { mode: "on", reason: "x" } }), env, opts)).status, 403, "a service token never changes it");
+  assert.equal((await handle(req("/api/shadow-mode", { token: person, method: "DELETE" }), env, opts)).status, 405);
+  assert.equal(calls.length, 1);
+});
+
 test("the trading mode changes only by a person's same-origin POST (owner 2026-11-13), never a service token or a GET", async () => {
   resetKeyCacheForTests();
   const calls = [];

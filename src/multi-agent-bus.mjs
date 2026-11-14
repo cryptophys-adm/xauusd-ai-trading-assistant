@@ -331,9 +331,10 @@ function withTimeout(promise, ms) {
 export const FALLBACK_TOKEN_FACTOR = 2;
 
 /** One call in the request forms of its model family (model-text.mjs modelRequests). The fallback gets twice the budget. */
-function callModel(env, model, messages, schemaName, schema, maxTokens, effort, primary) {
+function callModel(env, model, messages, schemaName, schema, maxTokens, effort, primary, meterSource = null) {
   // The usage meter (src/ai-usage.mjs) labels each call with its schema name: war_room_opening, tf_room_rebuttal, ...
-  const meter = env?.DB?.prepare ? { db: env.DB, source: schemaName || "bus" } : null;
+  // A shadow call is labelled "shadow:<schema name>" (src/shadow-switch.mjs counts them against the day's budget).
+  const meter = env?.DB?.prepare ? { db: env.DB, source: meterSource || schemaName || "bus" } : null;
   return runModel(env.AI, model, { messages, schemaName, schema, effort, maxTokens: primary ? maxTokens : maxTokens * FALLBACK_TOKEN_FACTOR, meter }).then((r) => r.result);
 }
 
@@ -370,7 +371,7 @@ export const FALLBACK_RETRY_MIN_MS = 30_000;
 export const FALLBACK_RESERVE_MS = 20_000;
 export const FALLBACK_BRIEF_NOTE = "Your previous answer ran out of tokens before the JSON. Reply with the JSON object only. Keep any reasoning very short.";
 
-export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState = {}, role = "agent", skipPrimary = null }) {
+export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState = {}, role = "agent", skipPrimary = null, meterSource = null }) {
   const { primary, fallback } = roleModels(env, role);
   const primaryTimeoutMs = Number(env?.BUS_PRIMARY_TIMEOUT_MS) > 0 ? Number(env.BUS_PRIMARY_TIMEOUT_MS) : PRIMARY_CALL_TIMEOUT_MS;
   const attempts = [];
@@ -401,7 +402,7 @@ export async function callBusModel(env, { messages, schemaName, schema, maxToken
     const t0 = clock();
     try {
       const timeout = isPrimary ? Math.min(remaining - reserve, primaryTimeoutMs) : remaining;
-      const result = await withTimeout(callModel(env, model, messages, schemaName, schema, maxTokens, effort, isPrimary), timeout);
+      const result = await withTimeout(callModel(env, model, messages, schemaName, schema, maxTokens, effort, isPrimary, meterSource), timeout);
       usage += usageTokens(result) || 0;
       let parsed = parseModelObject(result);
       if (!isPrimary && parsed.truncated === true && deadline - clock() > FALLBACK_RETRY_MIN_MS) {
@@ -410,7 +411,7 @@ export async function callBusModel(env, { messages, schemaName, schema, maxToken
         const brief = [...messages.slice(0, -1), { ...messages.at(-1), content: `${messages.at(-1)?.content ?? ""}\n\n${FALLBACK_BRIEF_NOTE}` }];
         extraCalls += 1;
         try {
-          const retry = await withTimeout(callModel(env, model, brief, schemaName, schema, maxTokens * 2, effort, false), Math.max(1, deadline - clock()));
+          const retry = await withTimeout(callModel(env, model, brief, schemaName, schema, maxTokens * 2, effort, false, meterSource), Math.max(1, deadline - clock()));
           usage += usageTokens(retry) || 0;
           parsed = parseModelObject(retry);
         } catch (retryError) {
@@ -422,7 +423,7 @@ export async function callBusModel(env, { messages, schemaName, schema, maxToken
       lastError = error;
       const message = error?.name === "TimeoutError" ? "timeout" : clip(error?.message || String(error) || "model_error", 300);
       // An abandoned call is still billed when it finishes; the meter counts the abandonment.
-      if (error?.name === "TimeoutError") await recordAiUsage(env?.DB, { source: schemaName || "bus", model, outcome: "timeout", now: clock() });
+      if (error?.name === "TimeoutError") await recordAiUsage(env?.DB, { source: meterSource || schemaName || "bus", model, outcome: "timeout", now: clock() });
       if (!rateRetried && isRateLimited(error) && deadline - clock() > waitMs + 5_000) {
         rateRetried = true;
         console.warn("bus_model_rate_limited", JSON.stringify({ model, retry_in_ms: waitMs }));

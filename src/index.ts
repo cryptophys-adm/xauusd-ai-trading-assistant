@@ -216,6 +216,7 @@ import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
 import { readNeuronAllocation } from "./neuron-allocation.mjs";
 import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
+import { readShadowMode, setShadowMode, shadowModeMessage, checkShadowBudget } from "./shadow-switch.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -2131,6 +2132,18 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     }
     return result;
   }
+  /** The shadow kill switch and today's shadow spend (owner 2026-11-14), for Nexus through Omega. */
+  async shadowMode(): Promise<JsonObject> {
+    return readShadowMode(this.env) as Promise<JsonObject>;
+  }
+  /** A person switches every shadow model call on or off, with a reason; audited and sent to Telegram. */
+  async setShadowMode(input: { mode?: string; reason?: string; actor?: string }): Promise<JsonObject> {
+    const result = await setShadowMode(this.env, input ?? {}) as JsonObject;
+    if (result.ok === true && result.changed === true) {
+      try { await sendTelegram(this.env, shadowModeMessage(result, { reason: String(input?.reason ?? "") })); } catch (e) { console.error("shadow_mode_telegram_failed", e instanceof Error ? e.message : String(e)); }
+    }
+    return result;
+  }
   async closePosition(input: { ticket: number; reason?: string; actor?: string }): Promise<JsonObject> {
     return closePosition(this.env, input ?? {}) as Promise<JsonObject>;
   }
@@ -3156,6 +3169,10 @@ export default {
             const allocation = await syncAgentAllocation(env, { cards: await scorecards(env.DB, { days: 30, snapshot: true }) as any[], send: (text: string) => sendTelegram(env, text) });
             if (allocation.status !== "unchanged" && allocation.status !== "disabled") console.log("agent_allocation", JSON.stringify(allocation));
           } catch (e) { console.error("agent_allocation_failed", e instanceof Error ? e.message : String(e)); }
+          // The shadow kill switch's cost breaker (owner 2026-11-14, src/shadow-switch.mjs): past the day's shadow
+          // neuron budget, shadow turns off and the owner is told.
+          const breaker = await checkShadowBudget(env, { send: (text: string) => sendTelegram(env, text) });
+          if (breaker.status !== "within_budget" && breaker.status !== "off") console.log("shadow_breaker", JSON.stringify(breaker));
           // Auto-tuning per timeframe (owner decisions 2026-11-09: no operator; each timeframe independent):
           // replay each room's quorum under the grid points next to its active weighting, activate the best
           // point the replay rates better on discovery and holdout, roll back one the reverse shadow finds

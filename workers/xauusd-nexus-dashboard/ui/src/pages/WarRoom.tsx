@@ -7,6 +7,7 @@ import AssistantPanel from "../components/AssistantPanel";
 import GlobalDecision from "../components/GlobalDecision";
 import OrganismCard from "../components/OrganismCard";
 import FeedFallbackCard from "../components/FeedFallbackCard";
+import ShadowSwitchCard from "../components/ShadowSwitchCard";
 import { MarketProvider } from "../lib/market";
 import { TabProvider } from "../lib/tab";
 
@@ -29,12 +30,13 @@ export default function WarRoom() {
         <aside className="hidden w-[260px] shrink-0 flex-col gap-4 xl:flex">
           <OrganismCard />
           <FeedFallbackCard />
+          <ShadowSwitchCard />
           <PriorityQueue />
           <SystemIssues />
           <Roster />
         </aside>
         <main className="flex min-w-0 flex-1 flex-col gap-4">
-          <div className="flex flex-col gap-4 xl:hidden"><OrganismCard /><FeedFallbackCard /><PriorityQueue /><SystemIssues /></div>
+          <div className="flex flex-col gap-4 xl:hidden"><OrganismCard /><FeedFallbackCard /><ShadowSwitchCard /><PriorityQueue /><SystemIssues /></div>
           <PriceChart />
           <div className="lg:hidden">
             <GlobalDecision />
