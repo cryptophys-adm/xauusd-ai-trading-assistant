@@ -93,7 +93,7 @@ setup READY state that never reached the decision (#192).
 25. **No trade while price is squeezed between key zones** (owner 2026-11-13: "jika masuk zone kejepit abstain, sehingga akan no trade", then "no trade"). Built (SSOT "Decision Engine", the `room` guardrail): WAIT while the nearest Key Level Agent candidates below and above price are less than one 1H average range apart; `SQUEEZE_GUARD` "off" leaves the check out.
     - **Measure first thing after the market opens:** the share of decisions the rule holds back, from `squeeze` on every decision record. It was built without that number: the stored history does not say which zones were candidates. From the plans' first targets on 2026-11-13 the corridor was 1.3 to 2.9 ranges (intraday and swing), which is an upper bound.
     - **Then:** whether the bars it holds back would have lost (the plan learner's replay of the default plan on squeezed and free bars), and whether one range is the right width in the scalp mode, whose target is the nearest key level a quarter of a range ahead.
-    - **Open, the owner's decision:** the default agent (Zone pullback) reads "price at a key zone" on both sides at every bar, so its voice in the strategy agents' consensus is no direction; the proposal is to leave it out of the consensus.
+    - **Decided (owner 2026-11-14: "tidak setuju, tetap ikut konsensus sebagai penyeimbang"):** the default agent (Zone pullback) stays in the strategy agents' consensus as a balancer, although it reads "price at a key zone" on both sides at nearly every bar. Its voices on both sides cancel in the lean and keep a lone agent from speaking with full force; the proposal to leave it out is closed.
 
 ## Calibration in progress
 
