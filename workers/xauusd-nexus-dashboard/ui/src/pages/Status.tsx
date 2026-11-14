@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Activity, Database, Gauge, ShieldCheck } from "lucide-react";
+import { Activity, Database, Gauge, Newspaper, ShieldCheck } from "lucide-react";
 import PriorityQueue from "../components/PriorityQueue";
 import { Badge, Dot, Empty, Panel, Skeleton } from "../components/ui";
 import { get } from "../lib/api";
@@ -117,6 +117,44 @@ function TvQuota() {
   );
 }
 
+/**
+ * News without TradingView, in shadow (owner 2026-11-14; docs/RFC_CONTENT_AGENT.md P0): every hour the
+ * publishers' RSS feeds and GDELT beside TradingView's news. Nothing reads them yet; this shows whether they
+ * work, how much they bring and how they compare. Measured values only (news worker /health via /api/status).
+ */
+function NewsShadow() {
+  const { status } = useSystemHealth();
+  const shadow = status?.ingestion_worker?.news_shadow ?? null;
+  const last = shadow?.last ?? null, today = shadow?.today ?? null;
+  if (!last) return null;
+  const sources = Object.entries(last.sources ?? {}) as [string, any][];
+  const ok = sources.filter(([, s]) => s.ok).length;
+  return (
+    <Panel title="News sources (shadow)" icon={<Newspaper className="h-3.5 w-3.5 text-cyan-300" />} hint="Publisher RSS feeds and GDELT, read every hour beside TradingView's news and compared with it. Nothing reads them yet." right={<Badge tone={ok === sources.length ? "green" : ok ? "amber" : "red"}>{ok} / {sources.length} working</Badge>}>
+      <p className="mb-2 text-[11.5px] text-slate-400">
+        Last hour ({when(last.at)}): <b className="text-slate-200">{last.shadow_recent}</b> headlines here, <b className="text-slate-200">{last.tv_recent}</b> on TradingView, <b className="text-slate-200">{last.overlap}</b> the same story
+        {last.lead_minutes != null ? <> · {last.lead_minutes >= 0 ? `${last.lead_minutes} min earlier here` : `${-last.lead_minutes} min later here`}</> : null}
+        {today ? <> · today {today.runs} runs: {today.shadow_recent} here, {today.tv_recent} on TradingView, {today.overlap} shared</> : null}
+      </p>
+      <div className="table-wrap">
+        <table className="tbl">
+          <thead><tr><th>Source</th><th>Status</th><th>Items</th><th>About gold, oil or the dollar</th><th>Last hour</th><th>Today ok / failed</th></tr></thead>
+          <tbody>
+            {sources.map(([id, s]) => (
+              <tr key={id}>
+                <td className="mono">{id}</td>
+                <td className={s.ok ? "text-emerald-300" : "text-rose-300"}>{s.ok ? "ok" : s.error ?? (s.status ? `HTTP ${s.status}` : "failed")}</td>
+                <td className="mono">{s.items}</td><td className="mono">{s.relevant}</td><td className="mono">{s.last_hour}</td>
+                <td className="mono">{today?.sources?.[id] ? `${today.sources[id].ok_runs} / ${today.sources[id].failed_runs}` : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+  );
+}
+
 function Parity() {
   const { data, loading, error } = usePoll(() => get("/api/parity"), 60_000);
   const { status } = useSystemHealth();
@@ -184,6 +222,7 @@ export default function Status() {
       <PriorityQueue />
       <PullAdapter />
       <TvQuota />
+      <NewsShadow />
       <Parity />
     </div>
   );
