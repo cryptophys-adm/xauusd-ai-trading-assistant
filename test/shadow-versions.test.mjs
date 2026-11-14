@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import {
   CONTROLS, CANDIDATES, RETIRED_CANDIDATES, ENGINE_FAMILIES, SHADOW_WARMUP_BARS, GMI_LOOKBACK_BARS, computeVersion, runShadowVersions, readShadowVersions, stuckEpisodes, signTestP,
   resetShadowSchemaCacheForTests, resetShadowReadCacheForTests
-} from "../src/shadow-versions.mjs";
+, latchCandidate } from "../src/shadow-versions.mjs";
 import { resetOutcomeSchemaCacheForTests, SCORING_VERSION } from "../src/outcome-scoring.mjs";
 import { replayProphetR37ClosedBars } from "../src/prophet-r37-oscillator.mjs";
 import { regateGmi } from "../src/gmi-regate.mjs";
@@ -42,14 +42,13 @@ function reset() { resetShadowSchemaCacheForTests(); resetOutcomeSchemaCacheForT
 test("controls are the active engines with their default parameters; P5 candidates expire the latch sooner", () => {
   assert.deepEqual(CONTROLS.map(c => c.id), ["prophet_r37@active", "prophet_r38@active", "gmi_v12_70@active"]);
   assert.ok(CONTROLS.every(c => c.params === null && c.role === "control"));
-  // P5 review (owner decision 2026-11-07): prophet_r37@latch12 and prophet_r38@latch8 are stopped.
-  assert.deepEqual(CANDIDATES.map(c => [c.id, c.params]), [
-    ["prophet_r37@latch8", { stateMaxAge: 8 }],
-    ["gmi_v12_70@latch8", { stateMaxAge: 8 }], ["gmi_v12_70@latch12", { stateMaxAge: 12 }]
-  ]);
+  // P5 review (owner decision 2026-11-07): prophet_r37@latch12 and prophet_r38@latch8 are stopped;
+  // the GMI candidates at their review (owner 2026-11-14).
+  assert.deepEqual(CANDIDATES.map(c => [c.id, c.params]), [["prophet_r37@latch8", { stateMaxAge: 8 }]]);
   assert.ok(CANDIDATES.every(c => /^\d{4}-\d{2}-\d{2}$/.test(c.review.by) && c.review.rule), "every running candidate has a review date and rule");
-  assert.deepEqual(RETIRED_CANDIDATES.map(r => r.id), ["prophet_r37@latch12", "prophet_r38@latch8"]);
-  assert.ok(RETIRED_CANDIDATES.every(r => !CANDIDATES.some(c => c.id === r.id) && r.reason && r.retired_on === "2026-11-07"));
+  assert.deepEqual(RETIRED_CANDIDATES.map(r => [r.id, r.retired_on]), [["prophet_r37@latch12", "2026-11-07"], ["prophet_r38@latch8", "2026-11-07"], ["gmi_v12_70@latch8", "2026-11-14"], ["gmi_v12_70@latch12", "2026-11-14"]]);
+  assert.ok(RETIRED_CANDIDATES.every(r => !CANDIDATES.some(c => c.id === r.id) && r.reason && r.result && r.family === r.id.split("@")[0]));
+  assert.ok(RETIRED_CANDIDATES.filter(r => r.family === "gmi_v12_70").every(r => r.result.differing_stances === 0 && r.result.p_value === null), "the GMI latch never changed a stance");
   assert.ok(CANDIDATES.every(c => c.role === "candidate" && c.reference === "none" && c.timeframe === "60"));
   assert.deepEqual(Object.keys(ENGINE_FAMILIES), ["prophet_r37", "prophet_r38", "gmi_v12_70"]);
 });
@@ -169,7 +168,8 @@ test("GMI versions are re-gated from the approved local GMI records; bars withou
     kvMap.set("localcalc:OANDA:XAUUSD:60:" + Date.parse(bar.open_time) + ":gmi", JSON.stringify({ values: { candle: { c: bar.close }, diagnostics, comparable: { gmi_v12_70: comparable } } }));
   });
   const env = { DB: d1(), SIGNAL_CACHE: series(BARS), WEBHOOK_BUFFER: { async get(k) { return kvMap.get(k) ?? null; } } };
-  const gmiLatch = CANDIDATES.find(c => c.id === "gmi_v12_70@latch8");
+  // The GMI candidates are stopped (2026-11-14); the re-gate is still how any GMI candidate runs.
+  const gmiLatch = latchCandidate("gmi_v12_70", 8, "stateMaxAge", { by: "2026-11-14", rule: "test" });
   const r = await runShadowVersions(env, { now: NOW, candidates: [gmiLatch] });
   assert.equal(r.versions["gmi_v12_70@active"].stored, 10, "only the bars with a local GMI record");
   assert.equal(r.versions[gmiLatch.id].stored, 10);
