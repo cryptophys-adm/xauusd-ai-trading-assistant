@@ -1,6 +1,7 @@
 # RFC: the content agent (public posts and streams from the system's analysis)
 
-Status: proposed 2026-11-14; nothing built. Owner, 2026-11-14: the next roadmap is an autonomous digital
+Status: proposed 2026-11-14. P0 (news in shadow) and P1 (the public projection and the content guardian) built
+2026-11-14; nothing publishes yet. Owner, 2026-11-14: the next roadmap is an autonomous digital
 content creator on Instagram and X, and chart livestreams on YouTube and TikTok; "roadmap streaming kita
 simpan dulu sementara pakai opsi manual stream dari desktop saja". Open steps: `docs/BACKLOG.md` item 26.
 
@@ -37,7 +38,12 @@ that reaches forex and gold is to be confirmed with a lawyer before the first po
 
 1. **Public projection** (AI Worker): a read-only view of past decisions without account data, prices only as
    commentary levels, older than the delay. The content agent reads nothing else.
-2. **Content guardian** (Aether, like the decision-card guard): every draft is checked for promised returns,
+   Built: `GET /api/public-projection` (`src/public-projection.mjs`). A recap holds the bar's time and session,
+   the stance and bias, the quorum's shares, pattern names and status, the reasons and risks with every
+   sentence that names a price or order wording removed, the names of the guardrail checks that held a side
+   back, and the 15m outcome. No price level at all for now (stricter than "levels as commentary": the owner
+   decides that later). Delay `PUBLIC_DELAY_HOURS`, default 24. A recap that would still leak is dropped.
+2. **Content guardian** (built in `src/content-guardian.mjs`, beside the decision-card guard; Aether can run the same rules): every draft is checked for promised returns,
    instruction wording, missing capacity or disclaimer, missing TradingView attribution, account data and
    secrets. A failed check never publishes.
 3. **Content agent** (a separate Worker): morning market brief, session recaps, post-trade recaps, and pattern

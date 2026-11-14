@@ -1,0 +1,11 @@
+export const PUBLIC_PROJECTION_VERSION: string;
+export const DEFAULT_PUBLIC_DELAY_HOURS: number;
+export const PUBLIC_FORBIDDEN_KEYS: readonly string[];
+export const PRICE_LIKE: RegExp;
+export const ORDER_WORDING: RegExp;
+export function publicDelayHours(env: unknown): number;
+export function publicSentences(text: unknown, options?: { max?: number; len?: number }): string[];
+export function sessionOfClose(iso: string): string;
+export function publicRecap(row: Record<string, any>, options?: { outcome?: string | null }): Record<string, any>;
+export function recapLeaks(value: unknown, path?: string): string[];
+export function readPublicProjection(env: unknown, options?: { days?: number; limit?: number; now?: number }): Promise<Record<string, any>>;
