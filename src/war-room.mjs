@@ -23,6 +23,7 @@ import { newsDeskEvidence } from "./news-daily.mjs";
 import { macroDeskEvidence } from "./macro-room.mjs";
 import { matchRebuts } from "./rebut-names.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, quorumRule } from "./reputation.mjs";
+import { publishSnapshot } from "./push-hub.mjs";
 import { agentReputation, sessionOf } from "./outcome-scoring.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
@@ -541,6 +542,20 @@ function m15Confirmations(desk15) {
  * Runs the War Room for one 15m close. Idempotent per bar: stored ok steps are reused, failed
  * steps are retried, and a stored ok conclusion ends the run.
  */
+/**
+ * The room as Nexus reads it (`GET /api/war-room/latest`), to the push hub (ADR-0015 phase 1): at each step of
+ * a run (brief, openings, discussion, conclusion), so an open page follows it without polling. Never throws.
+ */
+export async function publishWarRoom(env) {
+  try {
+    const room = await readWarRoom(env.DB);
+    if (!room) return { status: "no_room" };
+    return await publishSnapshot(env, "war-room", { status: "ok", enabled: warRoomEnabled(env), room });
+  } catch (e) {
+    return { status: "failed", error: String(e?.message ?? e).slice(0, 160) };
+  }
+}
+
 export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}) {
   if (!warRoomEnabled(env)) return { status: "disabled", calls: 0 };
   const db = env.DB;
@@ -622,7 +637,8 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     return (stepBase, opts) => { calls += 1; return runStep(roomEnv, db, stepBase, { inferMetrics: (b) => inferredMetrics(b?.agent), ...opts, deadline, clock, runState, budgetOk }); };
   };
 
-  // Phase 1: the communication bus.
+  // Phase 1: the communication bus. Open pages see the room start (ADR-0015 phase 1).
+  await publishWarRoom(env);
   const open = phase(WAR_ROOM_OPENING_MS);
   const openings = await Promise.all(roster.map(agent => {
     const prior = existing.get("open:" + agent);
@@ -635,6 +651,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     });
   }));
   const answered = openings.filter(m => m?.status === "ok");
+  await publishWarRoom(env);
   if (answered.length && answered.length * 2 < roster.length && clock() - Date.parse(barTime) < WAR_ROOM_QUORUM_WAIT_MS) {
     return { status: "waiting_for_quorum", calls, openings: answered.length, roster: roster.length };
   }
@@ -661,6 +678,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     });
   }))).filter(m => m?.status === "ok");
 
+  await publishWarRoom(env);
   // Phase 3: the conclusion for the main panel, with the crowd line (P7, RFC §7) and its quorum.
   if (!answered.length) return { status: "no_openings", calls };
   // The 15m timeframe's own active weighting, in the regime of this bar (owner decisions 2026-11-09).
@@ -674,6 +692,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     validate: (o) => validateConclusion(o, null, busAgents, null, { supportStances: new Set([...answered.map(m => m.stance), ...debate.map(m => m.stance)]), supportBiases: new Set([...answered.map(biasOf), ...debate.map(biasOf)]), roomBias, crowd, forbiddenNames: deskNames(), refs }),
     toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map(r => clip(r, 200)), dissent: [...new Set(o.dissent)], metrics: o.metrics, majority, majority_bias: roomBias, crowd }, refs: [] })
   });
+  await publishWarRoom(env);
   const result = { status: "complete", calls, openings: answered.length, rebuttals: debate.length };
   // Aether A7 on the 15m chart (owner 2026-11-13, "1-3"): the shadow calls of the learned notes under test,
   // handed back as a job the caller runs after the decision, so they never delay it. Not enumerable.
