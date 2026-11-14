@@ -225,8 +225,9 @@ export async function writeSeries(kv, spec, record) {
  * pulls before #165 spent the day's 800 calls, and the market reopens at 22:00 UTC).
  */
 export function dailyBudget(env, now = Date.now()) {
-  const parsed = Number.parseInt(asString(env?.TV_DAILY_CALL_BUDGET) || "800", 10);
-  const base = Number.isFinite(parsed) ? parsed : 800;
+  // The default is the account's provider quota (owner 2026-11-14: the same number; was 800).
+  const parsed = Number.parseInt(asString(env?.TV_DAILY_CALL_BUDGET) || "500", 10);
+  const base = Number.isFinite(parsed) ? parsed : 500;
   const m = asString(env?.TV_DAILY_CALL_BUDGET_OVERRIDE).match(/^(\d{4}-\d{2}-\d{2}):(\d+)$/);
   return m && m[1] === new Date(now).toISOString().slice(0, 10) ? Number(m[2]) : base;
 }
