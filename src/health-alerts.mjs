@@ -180,7 +180,7 @@ export async function detectHealthIssues(env, now = Date.now()) {
 
   // 6. News Daily stale while hourly news analyses keep arriving.
   if (String(env.NEWS_DAILY_ENABLED || "").toLowerCase() === "true") {
-    const [lastDaily] = await rows(db, "SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id LIKE 'newsdaily:%' AND step = 'brief'");
+    const [lastDaily] = await rows(db, "SELECT run_id AS r FROM agent_thread_messages WHERE thread_id >= 'newsdaily:' AND thread_id < 'newsdaily;' AND step = 'brief' ORDER BY thread_id DESC, run_id DESC LIMIT 1");
     const [lastNews] = await rows(db, "SELECT MAX(analyzed_at) AS a FROM news_analyses");
     const dailyMs = Date.parse(lastDaily?.r ?? ""), newsMs = Date.parse(lastNews?.a ?? "");
     if (Number.isFinite(newsMs) && now - newsMs < 3 * HOUR && (!Number.isFinite(dailyMs) || now - dailyMs > 3 * HOUR)) {
@@ -192,7 +192,7 @@ export async function detectHealthIssues(env, now = Date.now()) {
   if (String(env.WAR_ROOM_ENABLED || "").toLowerCase() === "true") {
     const m5Bars = await seriesCandles(env, "OANDA:XAUUSD|5m");
     const m5 = m5Bars.at(-1);
-    const [room] = await rows(db, "SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id LIKE 'warroom:%'");
+    const [room] = await rows(db, "SELECT run_id AS r FROM agent_thread_messages WHERE thread_id >= 'warroom:' AND thread_id < 'warroom;' ORDER BY thread_id DESC, run_id DESC LIMIT 1");
     const roomMs = Date.parse(room?.r ?? "");
     // After a market gap the room cannot have met before the first bars of the new session: the
     // 45 minutes count from the session's first 5m bar (production 2026-11-08 23:12, twelve minutes
