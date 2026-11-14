@@ -213,6 +213,7 @@ import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs
 import { pullOmegaPolicy } from "./omega-policy.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
+import { readNeuronAllocation } from "./neuron-allocation.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
@@ -2593,6 +2594,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     } catch (error) {
       console.error("hud_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/neuron-allocation") {
+    // What each agent costs in neurons and delivers in hit rate (src/neuron-allocation.mjs); read-only.
+    try {
+      return dashboardJson(await readNeuronAllocation(env, { days: Number(url.searchParams.get("days") || "7") }));
+    } catch (error) {
+      console.error("neuron_allocation_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "neuron_allocation_unavailable" }, 500);
     }
   }
   if (url.pathname === "/api/scorecards") {
