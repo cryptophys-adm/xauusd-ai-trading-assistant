@@ -82,7 +82,16 @@ export const OUTCOME_SCHEMA_SQL = [
   updated_at TEXT NOT NULL,
   PRIMARY KEY (field, first_candle_key)
 )`,
-  "CREATE INDEX IF NOT EXISTS idx_stuck_states_status ON stuck_states(status, updated_at)"
+  "CREATE INDEX IF NOT EXISTS idx_stuck_states_status ON stuck_states(status, updated_at)",
+  // Resource audit P0 (2026-11-14): the scorecards computed once and stored, so the readers (the War Room
+  // every 10 seconds in Nexus, each decision card, the rooms) read one row, not 30 days of scores.
+  `CREATE TABLE IF NOT EXISTS scorecard_snapshots (
+  days INTEGER NOT NULL,
+  scoring_version TEXT NOT NULL,
+  computed_at TEXT NOT NULL,
+  body TEXT NOT NULL,
+  PRIMARY KEY (days, scoring_version)
+)`
 ];
 
 let schemaReady = false;
@@ -399,12 +408,15 @@ export async function scoreRecentStatements(env, { now = Date.now() } = {}) {
       summary.agent_scores = (summary.agent_scores || 0) + written;
     }
   }
+  if (summary.scores || summary.agent_scores) {
+    try { summary.scorecards_refreshed = await refreshScorecardSnapshots(env.DB, { now }); } catch { /* the readers compute again */ }
+  }
   return summary;
 }
 
 /** Reputation of the agents of one timeframe's room (src/reputation.mjs), from the 30-day scorecards. */
 export async function agentReputation(db, timeframe, { days = REPUTATION_DAYS, now = Date.now() } = {}) {
-  try { return reputationFromScorecards(await scorecards(db, { days, now }), timeframe); } catch { return {}; }
+  try { return reputationFromScorecards(await scorecards(db, { days, now, snapshot: true }), timeframe); } catch { return {}; }
 }
 
 const STUCK_FIELDS = Object.freeze({
@@ -455,9 +467,47 @@ export async function detectRecentStuckStates(env, { now = Date.now(), lookback 
   return { status: "ok", stuck: found.length };
 }
 
-/** Rolling scorecards per subject over the last `days`. */
-export async function scorecards(db, { days = 30, now = Date.now() } = {}) {
+/** The stored scorecards are used while younger than this (the scoring runs every 15-minute sweep). */
+export const SCORECARD_SNAPSHOT_MAX_AGE_MS = 20 * 60_000;
+/** The windows that are stored (the readers' 7, 14 and 30 days); any other window is computed each time. */
+const SNAPSHOT_DAYS = new Set([7, 14, 30]);
+
+/**
+ * Rolling scorecards per subject over the last `days`. With `snapshot`, a stored copy younger than
+ * SCORECARD_SNAPSHOT_MAX_AGE_MS is returned (one row read instead of every score of the window); otherwise
+ * they are computed and stored. The scoring refreshes the copy when it writes scores
+ * (refreshScorecardSnapshots), so a copy is never older than the last scores but by a running sweep.
+ */
+export async function scorecards(db, { days = 30, now = Date.now(), snapshot = false } = {}) {
   await ensureOutcomeSchema(db);
+  const stored = SNAPSHOT_DAYS.has(days);
+  if (snapshot && stored) {
+    try {
+      const row = await db.prepare("SELECT computed_at, body FROM scorecard_snapshots WHERE days = ? AND scoring_version = ?").bind(days, SCORING_VERSION).first();
+      const at = Date.parse(row?.computed_at ?? "");
+      if (Number.isFinite(at) && at <= now && now - at < SCORECARD_SNAPSHOT_MAX_AGE_MS) return JSON.parse(row.body);
+    } catch { /* compute below */ }
+  }
+  const cards = await computeScorecards(db, { days, now });
+  if (stored) {
+    try {
+      await db.prepare("INSERT INTO scorecard_snapshots (days, scoring_version, computed_at, body) VALUES (?, ?, ?, ?) ON CONFLICT(days, scoring_version) DO UPDATE SET computed_at = excluded.computed_at, body = excluded.body")
+        .bind(days, SCORING_VERSION, new Date(now).toISOString(), JSON.stringify(cards)).run();
+    } catch { /* the readers compute again */ }
+  }
+  return cards;
+}
+
+/** After new scores: the stored windows are computed again, so the next readers see them. */
+export async function refreshScorecardSnapshots(db, { now = Date.now() } = {}) {
+  await ensureOutcomeSchema(db);
+  const rows = (await db.prepare("SELECT days FROM scorecard_snapshots WHERE scoring_version = ?").bind(SCORING_VERSION).all()).results || [];
+  const windows = new Set([REPUTATION_DAYS, ...rows.map((r) => Number(r.days)).filter((d) => SNAPSHOT_DAYS.has(d))]);
+  for (const days of windows) await scorecards(db, { days, now });
+  return [...windows];
+}
+
+async function computeScorecards(db, { days, now }) {
   const since = new Date(now - days * 86_400_000).toISOString();
   const rows = (await db.prepare("SELECT subject, source, timeframe, stance, result, brier, session FROM outcome_scores WHERE statement_close >= ? AND scoring_version = ?").bind(since, SCORING_VERSION).all()).results || [];
   const cards = new Map();

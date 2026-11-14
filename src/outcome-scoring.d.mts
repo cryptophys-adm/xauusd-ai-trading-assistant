@@ -4,5 +4,7 @@ export const MAX_BAR_GAP_MS: number;
 export function crossesGap(bars: unknown[], i: number, horizon?: number): boolean;
 export function scoreRecentStatements(env: unknown, options?: { now?: number }): Promise<Record<string, unknown>>;
 export function detectRecentStuckStates(env: unknown, options?: { now?: number; lookback?: number }): Promise<Record<string, unknown>>;
-export function scorecards(db: unknown, options?: { days?: number; now?: number }): Promise<Record<string, any>[]>;
+export function scorecards(db: unknown, options?: { days?: number; now?: number; snapshot?: boolean }): Promise<Record<string, any>[]>;
+export const SCORECARD_SNAPSHOT_MAX_AGE_MS: number;
+export function refreshScorecardSnapshots(db: unknown, options?: { now?: number }): Promise<number[]>;
 export function listStuckStates(db: unknown, options?: { limit?: number }): Promise<Record<string, any>[]>;

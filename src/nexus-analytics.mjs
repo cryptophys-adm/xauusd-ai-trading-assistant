@@ -203,7 +203,7 @@ export async function collectNexusAnalytics(env, { now = Date.now(), days = 30 }
       intents = iRows?.results || [];
     } catch {}
 
-    try { cards = await scorecards(env.DB, { days, now }); } catch {}
+    try { cards = await scorecards(env.DB, { days, now, snapshot: true }); } catch {}
     try { stuck = await listStuckStates(env.DB, { limit: 20 }); } catch {}
     try { compliance = await readCompliance(env, { days: 7, now }); } catch {}
     try { shadow = await readShadowVersions(env, { days, candidates: await shadowCandidates(env) }); } catch {}
