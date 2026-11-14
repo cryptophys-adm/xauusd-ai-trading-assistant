@@ -246,7 +246,7 @@ import { dedupeDeals, listDeals, omegaOverview, setControl, storeDeal } from "./
 import { omegaHealth } from "./omega-health.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
-import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields } from "./omega-broker.mjs";
+import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus } from "./omega-broker.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
 import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mjs";
@@ -2152,6 +2152,10 @@ async function publishOmegaOverview(env: Env, state: unknown = null): Promise<vo
 export class OmegaGateway extends WorkerEntrypoint<Env> {
   async overview(): Promise<JsonObject> {
     return omegaOverviewBody(this.env);
+  }
+  /** The Omega badge's light status (UI audit DEF-10): one bridge row and the settings. */
+  async status(): Promise<JsonObject> {
+    return brokerStatus(this.env) as Promise<JsonObject>;
   }
   async deals(options: { limit?: number } = {}): Promise<JsonObject> {
     return { deals: await listDeals(this.env, { limit: options?.limit ?? 200 }) } as JsonObject;

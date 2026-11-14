@@ -277,6 +277,20 @@ test("ADR-0015: the overview push goes through Omega's identity check to the hub
   assert.equal(forwarded.length, 1);
 });
 
+test("UI audit DEF-10: the Nexus badge reads Omega's light status, after the identity check", async () => {
+  resetKeyCacheForTests();
+  let calls = 0;
+  const O = { ...omega(), status: async () => { calls += 1; return { connected: true, armed: false, server: "Monex-Demo", positions: 1 }; } };
+  const env = { ...ENV_BASE, OMEGA: O };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const person = await jwt({ email: "Owner@Example.com" });
+  const r = await handle(req("/api/status", { token: person }), env, opts);
+  assert.deepEqual(await r.json(), { connected: true, armed: false, server: "Monex-Demo", positions: 1 });
+  assert.equal((await handle(req("/api/status"), env, opts)).status, 403, "no JWT, nothing");
+  assert.equal((await handle(req("/api/status", { token: person, method: "POST", body: {} }), env, opts)).status, 405);
+  assert.equal(calls, 1);
+});
+
 test("the trading mode changes only by a person's same-origin POST (owner 2026-11-13), never a service token or a GET", async () => {
   resetKeyCacheForTests();
   const calls = [];

@@ -61,6 +61,7 @@ export default function PriceChart() {
   const [bars, setBars] = useState<Bar[]>([]);
   const [plane, setPlane] = useState<any>(null);
   const [showZones, setShowZones] = useState<boolean>(() => { try { return localStorage.getItem("nexus.chartZones") !== "off"; } catch { return true; } });
+  const [showPlan, setShowPlan] = useState<boolean>(() => { try { return localStorage.getItem("nexus.chartPlan") !== "off"; } catch { return true; } });
   const [layers, setLayers] = useState<Layers>(readLayers);
   const { global: g } = useMarket();
   const [head, setHead] = useState<{ last?: number; change?: number; pct?: number; basis?: string; closed?: string; error?: string }>({});
@@ -97,26 +98,32 @@ export default function PriceChart() {
   const applyPreset = (name: "clean" | "structure" | "full") => {
     if (name === "clean") {
       setShowZones(false);
+      setShowPlan(true);
       const next: Layers = { bands: false, volume: false, vwap: false, liquidity: false, session: false, fib: "off" };
       setLayers(next);
       try {
         localStorage.setItem("nexus.chartZones", "off");
+        localStorage.setItem("nexus.chartPlan", "on");
         localStorage.setItem("nexus.chartLayers", JSON.stringify(next));
       } catch { /* ignore */ }
     } else if (name === "structure") {
       setShowZones(true);
+      setShowPlan(true);
       const next: Layers = { bands: true, volume: true, vwap: false, liquidity: false, session: false, fib: "auto" };
       setLayers(next);
       try {
         localStorage.setItem("nexus.chartZones", "on");
+        localStorage.setItem("nexus.chartPlan", "on");
         localStorage.setItem("nexus.chartLayers", JSON.stringify(next));
       } catch { /* ignore */ }
     } else if (name === "full") {
       setShowZones(true);
+      setShowPlan(true);
       const next: Layers = { bands: true, volume: true, vwap: true, liquidity: true, session: true, fib: "on" };
       setLayers(next);
       try {
         localStorage.setItem("nexus.chartZones", "on");
+        localStorage.setItem("nexus.chartPlan", "on");
         localStorage.setItem("nexus.chartLayers", JSON.stringify(next));
       } catch { /* ignore */ }
     }
@@ -135,7 +142,14 @@ export default function PriceChart() {
       layout: { background: { color: "transparent" }, textColor: "#8b949e", fontFamily: "ui-monospace, JetBrains Mono, monospace" },
       grid: { vertLines: { color: "rgba(255,255,255,0.04)" }, horzLines: { color: "rgba(255,255,255,0.04)" } },
       rightPriceScale: { borderColor: "rgba(255,255,255,0.08)" },
-      timeScale: { borderColor: "rgba(255,255,255,0.08)", timeVisible: true, secondsVisible: false },
+      timeScale: {
+        borderColor: "rgba(255,255,255,0.08)",
+        timeVisible: true,
+        secondsVisible: false,
+        barSpacing: 8,
+        minBarSpacing: 3,
+        rightOffset: 5,
+      },
       crosshair: { mode: 0 },
     });
     candles.current = c.addCandlestickSeries({
@@ -170,17 +184,20 @@ export default function PriceChart() {
     planLines.current = [];
     // No setup on chart unless decision is explicitly clear (Owner directive 2026-11-11)
     const hasClearDecision = strategy?.decision === "BUY" || strategy?.decision === "SELL" || g?.engine?.stance === "BUY" || g?.engine?.stance === "SELL";
-    const p = showZones && hasClearDecision ? strategy?.plan : null;
+    const p = showPlan && hasClearDecision ? strategy?.plan : null;
     if (p) {
       const line = (price: number | null | undefined, title: string, color: string, style: LineStyle) => {
         if (typeof price === "number") planLines.current.push(series.createPriceLine({ price, title, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true }));
       };
       line(p.entry, p.at_level ? "Entry" : "Entry (pullback)", "#22d3ee", LineStyle.Solid);
       line(p.stop, "Stop", "#fb7185", LineStyle.Dashed);
+      if (p.progressive_stop != null) {
+        line(p.progressive_stop, "SL+", "#38bdf8", LineStyle.Dashed);
+      }
       line(p.tp1, `TP1 ${p.rrr?.tp1 ?? ""}R`, "#34d399", LineStyle.Dashed);
       line(p.tp2, `TP2 ${p.rrr?.tp2 ?? ""}R`, "#34d399", LineStyle.Dotted);
     }
-  }, [strategy, showZones]);
+  }, [strategy, showZones, showPlan]);
 
   useEffect(() => {
     let fit = true;
@@ -191,7 +208,13 @@ export default function PriceChart() {
         candles.current?.setData(cs.map((x) => ({ time: x.time as UTCTimestamp, open: x.open, high: x.high, low: x.low, close: x.close })));
         volume.current?.setData(cs.filter((x) => x.volume != null).map((x) => ({ time: x.time as UTCTimestamp, value: x.volume as number, color: x.close >= x.open ? "rgba(63,185,80,0.35)" : "rgba(248,81,73,0.35)" })));
         setBars(cs);
-        if (fit) chart.current?.timeScale().fitContent();
+        if (fit && cs.length > 0) {
+          const visibleCount = Math.min(cs.length, 75);
+          chart.current?.timeScale().setVisibleLogicalRange({
+            from: cs.length - visibleCount,
+            to: cs.length + 5,
+          });
+        }
         fit = false;
         const last = cs.at(-1), prev = cs.at(-2);
         setHead({ last: last?.close, change: last && prev ? last.close - prev.close : undefined, pct: last && prev ? ((last.close - prev.close) / prev.close) * 100 : undefined, basis: `${d.timeframe} · ${d.basis}`, closed: d.latest_close_time });
@@ -282,8 +305,15 @@ export default function PriceChart() {
   }, [plane, planeTf, layers.volume, layers.liquidity, layers.session, fibShown]);
 
   const up = (head.change ?? 0) >= 0;
-  const chip = (on: boolean) => clsx("rounded-md border px-2 py-1 text-[11px] font-semibold transition", on ? "border-violet-400/40 bg-violet-400/10 text-violet-100" : "border-white/10 text-slate-500 hover:text-white");
+  const chip = (on: boolean) => clsx("rounded-md border px-2 py-1 text-[11px] font-semibold transition shrink-0", on ? "border-violet-400/40 bg-violet-400/10 text-violet-100" : "border-white/10 text-slate-500 hover:text-white");
   const fibNext: Record<Layers["fib"], Layers["fib"]> = { auto: "on", on: "off", off: "auto" };
+  const activePreset = (!showZones && !layers.bands && !layers.volume && !layers.vwap && !layers.liquidity && !layers.session && layers.fib === "off")
+    ? "clean"
+    : (showZones && layers.bands && layers.volume && !layers.vwap && !layers.liquidity && !layers.session && layers.fib === "auto")
+    ? "structure"
+    : (showZones && layers.bands && layers.volume && layers.vwap && layers.liquidity && layers.session && layers.fib === "on")
+    ? "full"
+    : null;
   return (
     <Panel
       title={<span className="flex items-baseline gap-3 normal-case tracking-normal"><span className="text-[13px] font-semibold text-slate-100">XAUUSD · OANDA</span>
@@ -295,9 +325,9 @@ export default function PriceChart() {
           <button type="button" onClick={toggleSync}
             title={syncWithRoom ? "Chart timeframe is synced with War Room tab. Click to unlink." : "Chart timeframe is unlinked. Click to sync with War Room tab."}
             className={clsx("flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold transition",
-              syncWithRoom ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-200" : "border-white/10 text-slate-500 hover:border-white/20 hover:text-slate-300")}>
+              syncWithRoom ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-200" : "border-amber-400/40 bg-amber-400/10 text-amber-300 hover:border-amber-400/60 hover:text-amber-200")}>
             {syncWithRoom ? <Link2 className="h-3 w-3" /> : <Unlink2 className="h-3 w-3" />}
-            <span className="hidden sm:inline">{syncWithRoom ? "Synced" : "Unlinked"}</span>
+            <span className="text-[10px] sm:text-[11px]">{syncWithRoom ? "Synced" : "Unlinked"}</span>
           </button>
           <div className="flex gap-1">
             {TFS.map(([key, label]) => (
@@ -308,12 +338,12 @@ export default function PriceChart() {
           </div>
         </div>
       }>
-      <div className="mb-2 flex flex-wrap items-center gap-1" aria-label="Chart layers">
-        <div className="mr-1 flex items-center gap-1 border-r border-white/10 pr-2">
+      <div className="mb-2 flex items-center gap-1 overflow-x-auto no-scrollbar pb-1 text-nowrap" aria-label="Chart layers">
+        <div className="mr-1 flex shrink-0 items-center gap-1 border-r border-white/10 pr-2">
           <span className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Preset</span>
-          <button type="button" onClick={() => applyPreset("clean")} title="Candlesticks only: clear all indicator overlays" className="rounded px-1.5 py-0.5 text-[10px] font-medium text-slate-400 hover:bg-white/5 hover:text-white transition">Clean</button>
-          <button type="button" onClick={() => applyPreset("structure")} title="Standard confluence: Zones, Bands, Volume" className="rounded px-1.5 py-0.5 text-[10px] font-medium text-slate-400 hover:bg-white/5 hover:text-white transition">Structure</button>
-          <button type="button" onClick={() => applyPreset("full")} title="Full confluence: Zones, Bands, Volume, Fib, VWAP, Liquidity, Session" className="rounded px-1.5 py-0.5 text-[10px] font-medium text-slate-400 hover:bg-white/5 hover:text-white transition">Full</button>
+          <button type="button" onClick={() => applyPreset("clean")} title="Candlesticks only: clear all indicator overlays" className={clsx("rounded px-1.5 py-0.5 text-[10px] font-medium transition", activePreset === "clean" ? "border border-cyan-400/40 bg-cyan-400/20 text-cyan-200" : "text-slate-400 hover:bg-white/5 hover:text-white")}>Clean</button>
+          <button type="button" onClick={() => applyPreset("structure")} title="Standard confluence: Zones, Bands, Volume" className={clsx("rounded px-1.5 py-0.5 text-[10px] font-medium transition", activePreset === "structure" ? "border border-cyan-400/40 bg-cyan-400/20 text-cyan-200" : "text-slate-400 hover:bg-white/5 hover:text-white")}>Structure</button>
+          <button type="button" onClick={() => applyPreset("full")} title="Full confluence: Zones, Bands, Volume, Fib, VWAP, Liquidity, Session" className={clsx("rounded px-1.5 py-0.5 text-[10px] font-medium transition", activePreset === "full" ? "border border-cyan-400/40 bg-cyan-400/20 text-cyan-200" : "text-slate-400 hover:bg-white/5 hover:text-white")}>Full</button>
         </div>
         <button type="button" aria-pressed={showZones} title="Key Level Agent zones and the strategy plan" className={chip(showZones)}
           onClick={() => setShowZones((v) => { try { localStorage.setItem("nexus.chartZones", v ? "off" : "on"); } catch { /* per-viewer convenience only */ } return !v; })}>Zones</button>

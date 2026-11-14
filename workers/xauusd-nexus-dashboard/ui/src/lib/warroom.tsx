@@ -18,7 +18,7 @@ const POLL_MS = 10_000;
  */
 export function WarRoomProvider({ children }: { children: ReactNode }) {
   const push = usePush<any>("war-room");
-  const war = usePoll(() => get("/api/war-room/latest"), push.live ? POLL_LIVE_MS : POLL_MS, [push.live]);
+  const war = usePoll(() => get("/api/war-room/latest"), push.live ? POLL_LIVE_MS : POLL_MS);
   const dec = usePoll(() => get("/api/decisions?limit=1"), 60_000);
   const [latest, setLatest] = useState<any>(null);
   useEffect(() => { if (war.data) setLatest(war.data); }, [war.data]);

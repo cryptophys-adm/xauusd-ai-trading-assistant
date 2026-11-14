@@ -174,6 +174,11 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
     }
 
     if (route === "GET /api/whoami") return json({ subject: identity.subject, type: identity.type, can_control: canControl });
+    // The Nexus badge (UI audit DEF-10): connected, armed, server and open positions, from one bridge row.
+    if (route === "GET /api/status") {
+      if (typeof env.OMEGA.status !== "function") return json({ error: "status_unavailable" }, 503);
+      return rpc(() => env.OMEGA.status(), "status_failed");
+    }
     if (route === "GET /api/overview") {
       try { return json({ ...(await env.OMEGA.overview()), viewer: { subject: identity.subject, type: identity.type, can_control: canControl } }); }
       catch (error) { console.error("omega_overview_failed", String(error?.message ?? error)); return json({ error: "overview_unavailable" }, 502); }
@@ -328,7 +333,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (!Number.isFinite(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
       return rpc(() => env.OMEGA.closePosition({ ticket, reason: r.body?.reason, actor: identity.subject }), "close_position_failed");
     }
-    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode", "/api/shadow-mode", "/api/push"].includes(path)) return json({ error: "method_not_allowed" }, 405);
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode", "/api/shadow-mode", "/api/push", "/api/status"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 

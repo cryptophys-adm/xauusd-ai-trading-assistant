@@ -117,3 +117,17 @@ test("the subscriber count is asked of the hub at most every 30 seconds per isol
   assert.equal(asks, 2);
   assert.equal(await hubSubscribers({}, "omega-overview"), 0, "no binding: nobody listens");
 });
+
+test("UI audit DEF-10: the badge's light status reads one bridge row and the settings, never the deals or intents", async () => {
+  const { brokerStatus } = await import("../src/omega-broker.mjs");
+  resetOmegaBrokerSchemaForTests();
+  const env = { DB: counted(), SIGNAL_CACHE: kv(), OMEGA_ENGINE_ENABLED: "true" };
+  await writeSettings(env, { body: { enabled: true }, actor: "owner@example.com" }, { now: T0 });
+  await bridgeSync(env, { state: state({ positions: [{ ticket: 1, side: "BUY", volume: 0.01 }] }), results: [], publicKey: SPKI, kid: KID, bridgeVersion: "1.0.0" }, { now: T0 });
+  env.DB.log.length = 0;
+  const s = await brokerStatus(env, { now: T0 + 10_000 });
+  assert.equal(s.armed, true);
+  assert.equal(s.positions, 1);
+  assert.ok(!env.DB.log.some((q) => /ea_deals|omega_intents|omega_events/.test(q)), env.DB.log.join("\n"));
+  assert.equal((await brokerStatus(env, { now: T0 + 120_000 })).connected, false, "a state older than a minute is not connected");
+});

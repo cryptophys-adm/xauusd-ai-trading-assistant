@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, Puzzle, ShieldCheck, Swords, Trophy, X, Zap, Cpu } from "lucide-react";
 import { Dot } from "./ui";
 import { useWarRoom } from "../lib/warroom";
+import { useOmegaStatus } from "../lib/omega";
 import { marketClosed } from "../lib/health";
 
 // Same header, glass panels and footer as the Cerebrum Console (cryptophys-cloud-platform
@@ -24,7 +25,7 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     { label: "Macro War Room", href: "/#/correlations", key: "correlations", icon: GitCompareArrows }
   ] },
   { title: "Intelligence", items: [
-    { label: "Aether", href: "/aether", key: "aether", icon: Brain },
+    { label: "Aether", href: "/#/aether", key: "aether", icon: Brain },
     // How the platform learns from its own decisions (owner 2026-11-13: "pastikan semua ada visualisasi").
     { label: "Model & Learning", href: "/#/model", key: "model", icon: GraduationCap },
     { label: "Strategy agents", href: "/#/strategy", key: "strategy", icon: Puzzle },
@@ -48,6 +49,9 @@ export default function AppShell({ current, children }: { current: string; child
   const roomMs = Date.parse(String(room?.bar_close ?? room?.bar_time ?? ""));
   const closed = marketClosed();
   const live = !error && !!room && Number.isFinite(roomMs) && Date.now() - roomMs < 45 * 60_000;
+  // DEF-10 (UI audit 2026-11-14): the Omega badge from a light status read (one bridge row), every 60 s while
+  // the page is visible; never the full overview (ADR-0015 resource audit).
+  const omegaStatus = useOmegaStatus();
 
   const navigate = (e: MouseEvent<HTMLAnchorElement>, href: string) => {
     setOpen(false);
@@ -101,10 +105,10 @@ export default function AppShell({ current, children }: { current: string; child
           </a>
           <div className="ml-auto hidden items-center gap-2 sm:flex">
             <a href="/#/omega" onClick={(e) => navigate(e, "/#/omega")}
-              className={`chip transition ${current === "omega" ? "border-cyan-400/40 bg-cyan-400/20 text-cyan-200" : "border-cyan-400/20 bg-cyan-400/10 text-cyan-300 hover:border-cyan-400/40 hover:text-white"}`}
-              title="MetaTrader 5 live execution bridge and terminal">
-              <Zap className="h-3 w-3 text-cyan-300" />
-              <span>{current === "omega" ? "MT5 Live" : "MT5 Execution"}</span>
+              className={`chip transition ${current === "omega" ? "border-cyan-400/40 bg-cyan-400/20 text-cyan-200" : omegaStatus?.connected ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300 hover:border-emerald-400/50 hover:text-white" : "border-cyan-400/20 bg-cyan-400/10 text-cyan-300 hover:border-cyan-400/40 hover:text-white"}`}
+              title={omegaStatus?.connected ? `MetaTrader 5 live: ${omegaStatus.server || "Bridge connected"} (${omegaStatus.armed ? "Armed" : "Disarmed"}, ${omegaStatus.positions} pos)` : "MetaTrader 5 live execution bridge and terminal (Standby)"}>
+              <Zap className={`h-3 w-3 ${omegaStatus?.connected ? "text-emerald-300" : "text-cyan-300"}`} />
+              <span>{current === "omega" ? "MT5 Live" : omegaStatus?.connected ? `Omega: ${omegaStatus.server || "Live"}${omegaStatus.positions > 0 ? ` (${omegaStatus.positions})` : ""}` : "Omega: Standby"}</span>
             </a>
             <span className="chip border-emerald-400/20 bg-emerald-400/10 text-emerald-300"><ShieldCheck className="h-3 w-3" />{current === "omega" ? "Execution · Access protected" : "Advisory only"}</span>
             <span className={`chip ${live ? "border-amber-400/20 bg-amber-400/10 text-amber-200" : "border-rose-400/20 bg-rose-400/10 text-rose-300"}`}>
