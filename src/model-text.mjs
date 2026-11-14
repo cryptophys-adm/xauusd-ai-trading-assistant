@@ -145,8 +145,10 @@ export async function runModel(ai, model, opts) {
   let lastError = null;
   for (let i = 0; i < variants.length; i++) {
     try {
-      const result = await ai.run(model, variants[i]);
-      if (meter) { const u = usageSplit(result); await recordAiUsage(meter.db, { source: meter.source, model, outcome: "ok", prompt: u.prompt, completion: u.completion }); }
+      // A5 (owner 2026-11-14): opts.affinity routes the calls of one agent's step to the same model instance
+      // (`x-session-affinity`), so Workers AI can reuse the prompt prefix it already computed.
+      const result = opts?.affinity ? await ai.run(model, variants[i], { extraHeaders: { "x-session-affinity": opts.affinity } }) : await ai.run(model, variants[i]);
+      if (meter) { const u = usageSplit(result); await recordAiUsage(meter.db, { source: meter.source, model, outcome: "ok", prompt: u.prompt, completion: u.completion, cached: u.cached }); }
       return { result, variant: i };
     } catch (error) {
       lastError = error;
