@@ -43,7 +43,7 @@ export function MarketProvider({ children }: { children: ReactNode }) {
       get("/api/conclusion/global").catch(() => null),
     ]);
     return { threads: { D1: d1, H4: h4, H1: h1 }, decision: glob };
-  }, push.live ? POLL_LIVE_MS : POLL_MS, [push.live]);
+  }, push.live ? POLL_LIVE_MS : POLL_MS);
   // News Daily and the 5m context are not pushed yet: every 60 s, as before.
   const fast = usePoll(async () => {
     const [news, m5] = await Promise.all([get("/api/news/daily").catch(() => null), get("/api/m5-context").catch(() => null)]);

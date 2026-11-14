@@ -509,6 +509,27 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
 
 // ---------------------------------------------------------------- overview (for the page)
 
+/**
+ * The light status of the Omega badge on every Nexus page (UI audit DEF-10, 2026-11-14): whether the terminal is
+ * connected, whether the engine is armed, the server and how many positions are open. One bridge row and the
+ * settings, never the full overview (deals, intents, events): the badge reads it every 60 seconds.
+ */
+export async function brokerStatus(env, { now = Date.now() } = {}) {
+  await ensureSchema(env.DB);
+  const settings = await readSettings(env);
+  const connection = await connectionStatus(env);
+  const b = await env.DB.prepare("SELECT state, synced_ms FROM omega_bridge WHERE id = 1").first();
+  const st = parse(b?.state);
+  const fresh = Number.isFinite(st?.received_ms) && now - Number(st.received_ms) < 60_000;
+  return {
+    connected: Boolean(st?.connected === true && connection.status === "stored" && fresh),
+    armed: settings.settings?.enabled === true,
+    server: connection.status === "stored" ? (st?.server ?? connection.server ?? null) : null,
+    positions: Array.isArray(st?.positions) ? st.positions.length : 0,
+    synced_age_ms: b?.synced_ms ? now - Number(b.synced_ms) : null
+  };
+}
+
 export async function brokerOverview(env, { now = Date.now() } = {}) {
   await ensureSchema(env.DB);
   const db = env.DB;

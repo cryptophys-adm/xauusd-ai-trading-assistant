@@ -53,21 +53,31 @@ function useLadder() {
 
 function TrendLadder({ ladder }: { ladder: ReturnType<typeof useLadder> }) {
   const { loading } = useMarket();
-  const { tab } = useTab();
+  const { tab, setTab } = useTab();
   return (
     <Panel title="Trend by timeframe" icon={<Compass className="h-3.5 w-3.5 text-violet-300" />} hint="Bar: agents' weighted lean per room. Chip: the room's decision.">
       {loading ? <Skeleton rows={5} /> : (
         <div className="space-y-2">
-          {ladder.map((r) => (
-            <div key={r.key} className={`glass-inner px-3 py-2 ${r.key === tab ? "border-cyan-400/40" : ""}`}>
-              <div className="mb-1.5 flex items-center justify-between gap-2">
-                <div className="flex items-baseline gap-2"><span className="mono text-[12px] font-bold text-slate-100">{r.label}</span><span className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{r.role}</span></div>
-                <div className="flex items-center gap-1.5"><span className="text-[10px]" style={{ color: leanColor(r.lean) }}>{leanLabel(r.lean)}</span>{r.action && <Stance value={r.action} />}</div>
+          {ladder.map((r) => {
+            const isTab = r.key === "D1" || r.key === "H4" || r.key === "H1" || r.key === "M15";
+            return (
+              <div
+                key={r.key}
+                role={isTab ? "button" : undefined}
+                tabIndex={isTab ? 0 : undefined}
+                onClick={isTab ? () => setTab(r.key as any) : undefined}
+                onKeyDown={isTab ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setTab(r.key as any); } } : undefined}
+                title={isTab ? `Click to view ${r.label} War Room` : undefined}
+                className={`glass-inner px-3 py-2 transition ${r.key === tab ? "border-cyan-400/40 bg-cyan-400/5" : isTab ? "hover:border-white/20 hover:bg-white/[0.03] cursor-pointer" : ""}`}>
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <div className="flex items-baseline gap-2"><span className="mono text-[12px] font-bold text-slate-100">{r.label}</span><span className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{r.role}</span></div>
+                  <div className="flex items-center gap-1.5"><span className="text-[10px]" style={{ color: leanColor(r.lean) }}>{leanLabel(r.lean)}</span>{r.action && <Stance value={r.action} />}</div>
+                </div>
+                <DivergingBar value={r.lean} />
+                {r.note && <p className="mt-1.5 line-clamp-2 text-[11px] leading-snug text-slate-400" title={r.note}>{r.note}</p>}
               </div>
-              <DivergingBar value={r.lean} />
-              {r.note && <p className="mt-1.5 line-clamp-2 text-[11px] leading-snug text-slate-400" title={r.note}>{r.note}</p>}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </Panel>
@@ -137,7 +147,12 @@ function ConsensusCard({ ladder }: { ladder: ReturnType<typeof useLadder> }) {
 function MacroDrivers() {
   const { news } = useMarket();
   const ctx = news?.context ?? {};
-  const rows = [["gold", "Gold"], ["dollar", "DXY"], ["oil", "WTI oil"], ["usdt", "USDT.D"]].map(([k, name]) => ({ name, v: ctx[k]?.change_24h_percent as number | undefined }));
+  const rows = [
+    { key: "gold", name: "Gold", polarity: 1, v: ctx.gold?.change_24h_percent as number | undefined },
+    { key: "dollar", name: "DXY", polarity: -1, v: ctx.dollar?.change_24h_percent as number | undefined },
+    { key: "oil", name: "WTI oil", polarity: 1, v: ctx.oil?.change_24h_percent as number | undefined },
+    { key: "usdt", name: "USDT.D", polarity: -1, v: ctx.usdt?.change_24h_percent as number | undefined },
+  ];
   const max = Math.max(1, ...rows.map((r) => Math.abs(r.v ?? 0)));
   const g = ctx.gold?.change_24h_percent, d = ctx.dollar?.change_24h_percent;
   const link = g == null || d == null ? null : Math.sign(g) === -Math.sign(d) ? "Gold/DXY inverse link holds" : "Gold/DXY inverse link off";
@@ -148,8 +163,8 @@ function MacroDrivers() {
           {rows.map((r) => (
             <div key={r.name} className="flex items-center gap-2.5">
               <span className="w-14 text-[11px] text-slate-300">{r.name}</span>
-              <div className="flex-1"><DivergingBar value={r.v ?? null} max={max} /></div>
-              <span className="mono w-14 text-right text-[11px]" style={{ color: leanColor(r.v == null ? null : r.v / max) }}>{r.v == null ? "—" : `${r.v > 0 ? "+" : ""}${r.v.toFixed(2)}%`}</span>
+              <div className="flex-1"><DivergingBar value={r.v == null ? null : r.v * r.polarity} max={max} /></div>
+              <span className="mono w-14 text-right text-[11px]" style={{ color: leanColor(r.v == null ? null : (r.v * r.polarity) / max) }}>{r.v == null ? "—" : `${r.v > 0 ? "+" : ""}${r.v.toFixed(2)}%`}</span>
             </div>
           ))}
           {link && <p className="pt-1 text-[10px] text-slate-500">{link}</p>}
@@ -259,9 +274,26 @@ function SectionToggle({
 export default function AssistantPanel({ className, hideGlobalDecision }: { className?: string; hideGlobalDecision?: boolean }) {
   const ladder = useLadder();
   const { tab, levels, loading } = useLevels();
-  const [openSections, setOpenSections] = useState({ decision: true, structure: true, macro: true });
+  const [openSections, setOpenSections] = useState<{ decision: boolean; structure: boolean; macro: boolean }>(() => {
+    try {
+      const stored = localStorage.getItem("nexus.assistantSections");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (typeof parsed?.decision === "boolean" && typeof parsed?.structure === "boolean" && typeof parsed?.macro === "boolean") {
+          return parsed;
+        }
+      }
+    } catch { /* ignore */ }
+    return { decision: true, structure: false, macro: false };
+  });
 
-  const toggle = (key: keyof typeof openSections) => setOpenSections((s) => ({ ...s, [key]: !s[key] }));
+  const toggle = (key: keyof typeof openSections) => setOpenSections((s) => {
+    const next = { ...s, [key]: !s[key] };
+    try {
+      localStorage.setItem("nexus.assistantSections", JSON.stringify(next));
+    } catch { /* ignore */ }
+    return next;
+  });
 
   return (
     <div className={className}>
