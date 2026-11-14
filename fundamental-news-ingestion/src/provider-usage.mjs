@@ -11,6 +11,14 @@
 // no request body is stored.
 
 export const USAGE_KEY_PREFIX = "tv_mcp:calls:";
+/**
+ * One record per UTC day holding every caller's record (resource audit 2026-11-14): /health read the seven
+ * caller keys of today and of yesterday on every call (14 KV reads; Nexus polls it every 30 seconds). Each
+ * recordUsage also writes its caller's record into the day's summary, which /health reads instead (2 reads).
+ * Two callers writing at once can drop one's update from the summary until its next record; the per-caller
+ * keys stay the exact counts and the chart's reserve (readToday) still reads them.
+ */
+export const USAGE_DAY_PREFIX = "tv_mcp:calls-day:";
 export const USAGE_CALLERS = Object.freeze(["pull_adapter", "gold_history", "calendar", "news_cron", "news_ai_worker", "news_http", "other"]);
 const USAGE_TTL_SECONDS = 8 * 24 * 60 * 60;
 const DAY_MS = 86_400_000;
@@ -59,20 +67,40 @@ export async function recordUsage(env, tally, now = Date.now()) {
     rec.last_call_at = at;
     if (tally.quota_exceeded && !rec.quota_exceeded_at) rec.quota_exceeded_at = at;
     await kv.put(key, JSON.stringify(rec), { expirationTtl: USAGE_TTL_SECONDS });
+    try {
+      let summary = null;
+      try { summary = JSON.parse((await kv.get(USAGE_DAY_PREFIX + day)) || "null"); } catch { summary = null; }
+      if (!summary || summary.date !== day || typeof summary.callers !== "object") summary = { date: day, callers: {} };
+      summary.callers[rec.caller] = rec;
+      await kv.put(USAGE_DAY_PREFIX + day, JSON.stringify(summary), { expirationTtl: USAGE_TTL_SECONDS });
+    } catch { /* the caller key above holds the count */ }
     return true;
   } catch {
     return false;
   }
 }
 
-/** One day's calls, all callers: { date, total, failed, by_caller, by_hour, quota_exceeded_at, quota_exceeded_by }. */
-async function readDay(kv, day) {
-  const out = { date: day, total: 0, failed: 0, by_caller: {}, by_hour: Array(24).fill(0), quota_exceeded_at: null, quota_exceeded_by: null };
-  // Every caller's record in parallel (2026-11-13: twelve sequential KV reads, with the rest of /health,
-  // took a cold isolate past the Drift Detector's 5-second probe at 02:00 UTC).
-  const records = await Promise.all(USAGE_CALLERS.map(async (caller) => {
+/** Every caller's record of a day from its own key (exact counts; 7 KV reads). */
+async function callerRecords(kv, day) {
+  // In parallel (2026-11-13: twelve sequential KV reads, with the rest of /health, took a cold isolate past
+  // the Drift Detector's 5-second probe at 02:00 UTC).
+  return Promise.all(USAGE_CALLERS.map(async (caller) => {
     try { return JSON.parse((await kv.get(keyOf(day, caller))) || "null"); } catch { return null; }
   }));
+}
+
+/** Every caller's record of a day from the day's summary (1 KV read), or from the caller keys while there is none. */
+async function summaryRecords(kv, day) {
+  let summary = null;
+  try { summary = JSON.parse((await kv.get(USAGE_DAY_PREFIX + day)) || "null"); } catch { summary = null; }
+  if (summary?.date === day && summary.callers && typeof summary.callers === "object") return USAGE_CALLERS.map((c) => summary.callers[c] ?? null);
+  return callerRecords(kv, day);
+}
+
+/** One day's calls, all callers: { date, total, failed, by_caller, by_hour, quota_exceeded_at, quota_exceeded_by }. */
+async function readDay(kv, day, { summary = false } = {}) {
+  const out = { date: day, total: 0, failed: 0, by_caller: {}, by_hour: Array(24).fill(0), quota_exceeded_at: null, quota_exceeded_by: null };
+  const records = summary ? await summaryRecords(kv, day) : await callerRecords(kv, day);
   for (const [i, caller] of USAGE_CALLERS.entries()) {
     const rec = records[i];
     if (!rec || !(Number(rec.calls) > 0)) continue;
@@ -93,7 +121,7 @@ export async function readUsage(env, now = Date.now()) {
   const kv = env?.OAUTH_STORE;
   if (!kv) return null;
   try {
-    const [today, yesterday] = await Promise.all([readDay(kv, dayOf(now)), readDay(kv, dayOf(now - DAY_MS))]);
+    const [today, yesterday] = await Promise.all([readDay(kv, dayOf(now), { summary: true }), readDay(kv, dayOf(now - DAY_MS), { summary: true })]);
     return { today, yesterday };
   } catch {
     return null;

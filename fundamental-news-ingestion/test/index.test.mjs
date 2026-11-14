@@ -1041,3 +1041,42 @@ test("a fresh shared copy with no headline of the last hour is still a hit: no s
   await runNewsPull(env2, createCtx());
   assert.equal(counter.mcp, 6);
 });
+
+test("GET /health reads KV at most once a minute per isolate, and the provider calls from one day summary (resource audit 2026-11-14)", async () => {
+  const { recordUsage, usageTally, readUsage, USAGE_DAY_PREFIX } = await import("../src/provider-usage.mjs");
+  const kv = new MemoryKV();
+  const gets = [];
+  const original = kv.get.bind(kv);
+  kv.get = async (key, ...rest) => { gets.push(key); return original(key, ...rest); };
+  const env = { OAUTH_STORE: kv, TV_MCP_SYMBOLS: "OANDA:XAUUSD" };
+  const now = Date.now();
+  for (const caller of ["pull_adapter", "news_cron", "pull_adapter"]) {
+    const t = usageTally(caller); t.calls = 2;
+    await recordUsage(env, t, now);
+  }
+  const day = new Date(now).toISOString().slice(0, 10);
+  assert.deepEqual(Object.keys(JSON.parse(kv.map.get(USAGE_DAY_PREFIX + day)).callers).sort(), ["news_cron", "pull_adapter"]);
+  gets.length = 0;
+  const usage = await readUsage(env, now);
+  assert.equal(usage.today.total, 6);
+  assert.deepEqual(Object.fromEntries(Object.entries(usage.today.by_caller).map(([k, v]) => [k, v.calls])), { pull_adapter: 4, news_cron: 2 });
+  // Today's summary and yesterday's (absent: its seven caller keys are read instead).
+  assert.equal(gets.filter((k) => k.startsWith(USAGE_DAY_PREFIX)).length, 2);
+  // Steady state: yesterday has its summary too.
+  const y = usageTally("news_cron"); y.calls = 1;
+  await recordUsage(env, y, now - 86_400_000);
+  gets.length = 0;
+  const first = await (await worker.fetch(new Request("https://news.example.com/health"), env, createCtx())).json();
+  const reads = gets.length;
+  assert.ok(reads > 0 && reads <= 8, `first /health: ${reads} KV reads (19 before: 14 for the provider calls)`);
+  gets.length = 0;
+  const second = await (await worker.fetch(new Request("https://news.example.com/health"), env, createCtx())).json();
+  assert.equal(gets.length, 0, "a second /health within a minute reads no KV");
+  assert.deepEqual(second, first);
+  // TV_HEALTH_CACHE_SECONDS "0" reads KV on every call.
+  const fresh = { ...env, TV_HEALTH_CACHE_SECONDS: "0" };
+  await worker.fetch(new Request("https://news.example.com/health"), fresh, createCtx());
+  gets.length = 0;
+  await worker.fetch(new Request("https://news.example.com/health"), fresh, createCtx());
+  assert.ok(gets.length > 0);
+});
