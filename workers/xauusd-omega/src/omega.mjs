@@ -317,6 +317,30 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (typeof env.OMEGA.setShadowMode !== "function") return json({ error: "shadow_mode_unavailable" }, 503);
       return rpc(() => env.OMEGA.setShadowMode({ mode, reason, actor: identity.subject }), "shadow_mode_failed");
     }
+    // The content queue (owner 2026-11-14: "persiapan engine post ke Instagram/threads"; the xauusd-content
+    // Worker's ContentApi): read by anyone signed in; a draft is approved or rejected by a person, same origin,
+    // and a rejection needs a reason. Publishing stays off until the owner turns it on in the content Worker.
+    if (route === "GET /api/content") {
+      if (!env.CONTENT) return json({ error: "content_unavailable" }, 503);
+      const status = url.searchParams.get("status") || null;
+      return rpc(async () => ({ ...(await env.CONTENT.drafts({ status, limit: 50 })), status: await env.CONTENT.status(), can_control: canControl }), "content_failed");
+    }
+    if (route === "GET /api/content/preview") {
+      if (!env.CONTENT) return json({ error: "content_unavailable" }, 503);
+      return rpc(() => env.CONTENT.preview(String(url.searchParams.get("id") || "").slice(0, 120)), "content_failed");
+    }
+    if (route === "POST /api/content/decide") {
+      const r = await personJson(request, url, identity, 2048);
+      if (r.response) return r.response;
+      const id = typeof r.body.id === "string" ? r.body.id.slice(0, 120) : "";
+      const decision = typeof r.body.decision === "string" ? r.body.decision : "";
+      const reason = typeof r.body.reason === "string" ? r.body.reason.trim().slice(0, 300) : "";
+      if (!id) return json({ error: "id is required" }, 400);
+      if (decision !== "approve" && decision !== "reject") return json({ error: "decision must be approve or reject" }, 400);
+      if (decision === "reject" && !reason) return json({ error: "a reason is required to reject" }, 400);
+      if (!env.CONTENT) return json({ error: "content_unavailable" }, 503);
+      return rpc(() => env.CONTENT.decide({ id, decision, reason, actor: identity.subject }), "content_failed");
+    }
     if (route === "POST /api/trading-mode") {
       // Owner 2026-11-13: the trading mode changes only here (a person, same origin), never by a GET.
       const r = await personJson(request, url, identity, 1024);
@@ -333,7 +357,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (!Number.isFinite(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
       return rpc(() => env.OMEGA.closePosition({ ticket, reason: r.body?.reason, actor: identity.subject }), "close_position_failed");
     }
-    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode", "/api/shadow-mode", "/api/push", "/api/status"].includes(path)) return json({ error: "method_not_allowed" }, 405);
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode", "/api/shadow-mode", "/api/push", "/api/status", "/api/content", "/api/content/preview", "/api/content/decide"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 
