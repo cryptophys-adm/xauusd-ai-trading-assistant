@@ -2596,7 +2596,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/scorecards") {
     try {
       const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") || "30") || 30));
-      const subjects = await scorecards(env.DB, { days }) as JsonObject[];
+      const subjects = await scorecards(env.DB, { days, snapshot: true }) as JsonObject[];
       // P7 (RFC §7): the room agents' track records, by chart, best weight first.
       const agents = (tf: string, nameOf: (id: string) => string) => subjects
         .filter(c => c.timeframe === tf && String(c.subject).startsWith("agent:"))

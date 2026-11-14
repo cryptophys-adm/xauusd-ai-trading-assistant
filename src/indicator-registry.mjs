@@ -64,7 +64,7 @@ export async function indicatorAgents(env, { now = Date.now() } = {}) {
   let registryRows = [];
   try { registryRows = (await db.prepare("SELECT engine, status, consecutive_matches, updated_at FROM engine_parity_registry").all())?.results || []; } catch { registryRows = []; }
   let cards = [];
-  try { cards = await scorecards(db, { days: REPUTATION_DAYS, now }); } catch { cards = []; }
+  try { cards = await scorecards(db, { days: REPUTATION_DAYS, now, snapshot: true }); } catch { cards = []; }
   let stuck = [];
   try { stuck = await listStuckStates(db, { limit: 50 }); } catch { stuck = []; }
   const agents = MANIFESTS.map((x) => registryEntry(x, { registryRows, cards, stuck }));
