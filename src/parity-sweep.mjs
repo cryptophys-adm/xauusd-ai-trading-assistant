@@ -17,6 +17,7 @@ import {
   identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema,
   recordComparison, isTrusted, policyFromEnv, reclassifyInputOnlyMismatches
 } from "./parity-registry.mjs";
+import { readIntrabars, recheckMismatchIntrabars } from "./parity-intrabars.mjs";
 
 export const OBSERVED_PREFIX = "localcalc-observed:";
 const TRUSTED_PREFIX = "localcalc:";
@@ -95,6 +96,12 @@ export async function reconcileLocalComputation(env, candleKey) {
       if (payload) webhooks[source] = payload;
     }
     const comparison = compareWithWebhooks(record, webhooks, policy);
+    // A GMI mismatch keeps the intrabars its footprint read, as cached now (src/parity-intrabars.mjs);
+    // a later sweep reads them again and records whether any changed.
+    if (comparison.status === "mismatch" && String(engine).startsWith("gmi")) {
+      const intrabars = await readIntrabars(env, candleKey);
+      if (intrabars) comparison.intrabars = intrabars;
+    }
     const outcome = await recordComparison(env.DB, id, candleKey, comparison, policy);
     comparisons[engine] = { result: outcome.result ?? comparison.status, counted: outcome.counted, mismatches: comparison.mismatches ?? [], missing: comparison.missing ?? [], ...(outcome.escalated ? { escalated: outcome.escalated } : {}) };
   }
@@ -218,7 +225,9 @@ export async function reconcileRecentCandles(env, { now = Date.now(), lookback =
       results[candleKey] = { error: error instanceof Error ? error.name : "UnknownError" };
     }
   }
-  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, m15_candle_keys: m15CandleKeys, htf_candle_keys: htfCandleKeys, results };
+  // The intrabars of recent GMI mismatches, read again once (diagnostics only; never changes a result).
+  const intrabarRecheck = await recheckMismatchIntrabars(env, { now });
+  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, m15_candle_keys: m15CandleKeys, htf_candle_keys: htfCandleKeys, results, intrabar_recheck: intrabarRecheck };
 }
 
 /** Minutes after an H1 close after which a candle without approved local records is recorded as a fail-closed WAIT. */

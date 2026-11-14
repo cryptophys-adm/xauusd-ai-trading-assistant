@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Activity, Database, ShieldCheck } from "lucide-react";
+import { Activity, Database, Gauge, ShieldCheck } from "lucide-react";
 import PriorityQueue from "../components/PriorityQueue";
 import { Badge, Dot, Empty, Panel, Skeleton } from "../components/ui";
 import { get } from "../lib/api";
@@ -56,6 +56,59 @@ function PullAdapter() {
                 <td className="mono">{when(s.latest_close_time)} <span className="text-slate-500">{ago(s.latest_close_time)}</span></td>
                 <td className="mono">{s.candle_count}</td>
               </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+  );
+}
+
+const CALLER: Record<string, string> = { pull_adapter: "Pull adapter (chart)", news_cron: "News, scheduled", news_ai_worker: "News, AI Worker", news_http: "News, HTTP", calendar: "Calendar", gold_history: "Gold history", other: "Other" };
+
+/**
+ * The TradingView quota (owner 2026-11-14): the account refuses the 501st call of the UTC day; on
+ * 2026-11-12 and 11-13 it ran out at about 20:00 UTC and the gold chart stood still. Measured counts from
+ * the gateway (news worker /health via /api/status), per caller and UTC hour, and whether a news pull
+ * is held back for the chart right now.
+ */
+function TvQuota() {
+  const { status } = useSystemHealth();
+  const ing = status?.ingestion_worker ?? null;
+  const today = ing?.provider_calls?.today ?? null, yesterday = ing?.provider_calls?.yesterday ?? null;
+  if (!ing || !today) return null;
+  const limit = Number(ing.provider_daily_limit) > 0 ? Number(ing.provider_daily_limit) : null;
+  const used = Number(today.total) || 0;
+  const reserve = ing.chart_reserve ?? null;
+  const share = limit ? used / limit : null;
+  const tone = ing.provider_cooldown_until ? "red" : share != null && share >= 0.9 ? "amber" : "cyan";
+  const hours: number[] = Array.isArray(today.by_hour) ? today.by_hour.map((n: any) => Number(n) || 0) : [];
+  const peak = Math.max(1, ...hours);
+  const nowHour = new Date().getUTCHours();
+  const callers = [...new Set([...Object.keys(today.by_caller ?? {}), ...Object.keys(yesterday?.by_caller ?? {})])];
+  const calls = (day: any, k: string) => (day?.by_caller?.[k] ? Number(day.by_caller[k].calls ?? day.by_caller[k]) || 0 : null);
+  return (
+    <Panel title="TradingView quota" icon={<Gauge className="h-3.5 w-3.5 text-cyan-300" />} hint="Calls this system made to TradingView today (UTC), from the gateway's own count. Calls from outside this system on the same account are not counted." right={<Badge tone={tone}>{limit ? `${used} / ${limit}` : `${used} calls`}</Badge>}>
+      <div className="mb-2 h-1.5 overflow-hidden rounded bg-white/5"><div className={`h-full ${tone === "red" ? "bg-rose-400/70" : tone === "amber" ? "bg-amber-400/70" : "bg-cyan-400/60"}`} style={{ width: share != null ? `${Math.min(100, share * 100)}%` : "0%" }} /></div>
+      <p className="mb-2 text-[11.5px] text-slate-400">
+        {ing.provider_cooldown_until ? <><b className="text-rose-300">Paused until {when(ing.provider_cooldown_until)}</b> ({ing.provider_cooldown_reason ?? "provider"}) · </> : null}
+        {today.quota_exceeded_at ? <>quota ran out {when(today.quota_exceeded_at)} · </> : null}
+        {reserve ? <>chart needs about <b className="text-slate-200">{reserve.chart_need}</b> more today ({reserve.chart_per_hour} an hour){reserve.enabled === false ? " · news reserve off" : reserve.blocked ? <> · <b className="text-amber-200">news held back for the chart</b></> : " · news runs"}</> : "—"}
+        {yesterday?.total ? <> · yesterday <b className="text-slate-200">{yesterday.total}</b>{yesterday.quota_exceeded_at ? `, ran out ${when(yesterday.quota_exceeded_at)}` : ""}</> : null}
+      </p>
+      <div className="mb-3 flex h-10 items-end gap-[2px]" aria-label="Calls per UTC hour today">
+        {Array.from({ length: 24 }, (_, h) => (
+          <div key={h} className="flex-1" title={`${String(h).padStart(2, "0")}:00 UTC · ${hours[h] ?? 0} calls`}>
+            <div className={`w-full rounded-sm ${h === nowHour ? "bg-cyan-300/80" : h < nowHour ? "bg-cyan-400/40" : "bg-white/5"}`} style={{ height: `${Math.max(2, ((hours[h] ?? 0) / peak) * 40)}px` }} />
+          </div>
+        ))}
+      </div>
+      <div className="table-wrap">
+        <table className="tbl">
+          <thead><tr><th>Caller</th><th>Today</th><th>Yesterday</th></tr></thead>
+          <tbody>
+            {callers.map((k) => (
+              <tr key={k}><td>{CALLER[k] ?? k}</td><td className="mono">{calls(today, k) ?? "—"}</td><td className="mono">{calls(yesterday, k) ?? "—"}</td></tr>
             ))}
           </tbody>
         </table>
@@ -130,6 +183,7 @@ export default function Status() {
       <Overview />
       <PriorityQueue />
       <PullAdapter />
+      <TvQuota />
       <Parity />
     </div>
   );

@@ -147,6 +147,26 @@ function localDiagnostics(record) {
   return Object.keys(out).length ? { local_diagnostics: out } : {};
 }
 
+/**
+ * Every compared field on both sides, not only those that differ (owner 2026-11-14: "kerjakan 1 dan 2"):
+ * TradingView's verdict and gmi_dir together tell which way its verdict branch went before a conflict
+ * reset it, and prophet_dir whether the Prophet side agreed. TradingView's shared_core_status is kept
+ * too. Signals only: the input bar (prices) is not repeated here.
+ */
+function comparedValues(record, webhookPayloads, fieldMap) {
+  const comparable = isRecord(record?.values?.comparable) ? record.values.comparable : {};
+  const out = {};
+  for (const [source, fields] of Object.entries(fieldMap)) {
+    const local = isRecord(comparable[source]) ? comparable[source] : {};
+    const webhook = isRecord(webhookPayloads?.[source]) ? webhookPayloads[source] : {};
+    out[source] = {
+      local: Object.fromEntries(fields.filter((f) => f in local).map((f) => [f, local[f]])),
+      webhook: Object.fromEntries([...fields, "shared_core_status"].filter((f) => f in webhook).map((f) => [f, webhook[f]]))
+    };
+  }
+  return out;
+}
+
 export function compareWithWebhooks(record, webhookPayloads, policy = DEFAULT_POLICY) {
   const engine = record?.engine;
   const fieldMap = PARITY_FIELDS[engine];
@@ -183,7 +203,7 @@ export function compareWithWebhooks(record, webhookPayloads, policy = DEFAULT_PO
   // (production 2026-11-06). That says nothing against the implementation, so it is recorded
   // apart and does not revoke; repeated input mismatches still do (see recordComparison).
   if (mismatches.length && mismatches.every((m) => String(m.field).startsWith("input:"))) return { status: "input_mismatch", compared, mismatches, missing: uniqueMissing };
-  if (mismatches.length) return { status: "mismatch", compared, mismatches, missing: uniqueMissing, ...localDiagnostics(record) };
+  if (mismatches.length) return { status: "mismatch", compared, mismatches, missing: uniqueMissing, values: comparedValues(record, webhookPayloads, fieldMap), ...localDiagnostics(record) };
   if (uniqueMissing.length) return { status: "incomplete", compared, mismatches: [], missing: uniqueMissing };
   return { status: "match", compared, mismatches: [], missing: [] };
 }
@@ -266,7 +286,7 @@ export async function recordComparison(db, id, candleKey, comparison, policy = D
     ).bind(id.engine, id.sourceHash, id.implementationHash, candleKey, INPUT_MISMATCH_REVOKE_AFTER - 1).all())?.results || [];
     if (previous.length === INPUT_MISMATCH_REVOKE_AFTER - 1 && previous.every((r) => r.result === "input_mismatch")) { status = "mismatch"; escalated = true; }
   }
-  const detail = JSON.stringify({ compared: comparison.compared, mismatches: comparison.mismatches.slice(0, 20), missing: comparison.missing.slice(0, 40), ...(escalated ? { reason: "repeated_input_mismatch" } : {}), ...(comparison.local_diagnostics ? { local_diagnostics: comparison.local_diagnostics } : {}) });
+  const detail = JSON.stringify({ compared: comparison.compared, mismatches: comparison.mismatches.slice(0, 20), missing: comparison.missing.slice(0, 40), ...(escalated ? { reason: "repeated_input_mismatch" } : {}), ...(comparison.local_diagnostics ? { local_diagnostics: comparison.local_diagnostics } : {}), ...(comparison.values ? { values: comparison.values } : {}), ...(comparison.intrabars ? { intrabars: comparison.intrabars } : {}) });
   const inserted = await db.prepare(
     `INSERT INTO engine_parity_comparisons (engine, source_hash, implementation_hash, candle_key, result, detail, compared_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)

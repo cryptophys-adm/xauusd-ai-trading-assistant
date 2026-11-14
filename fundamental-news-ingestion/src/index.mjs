@@ -1097,7 +1097,7 @@ async function buildHealth(env) {
     // (one OAuth grant, one account-wide quota cooldown) for news and OHLCV.
     role: "tradingview-mcp-gateway",
     services: {
-      news: { transport: "http+cron", endpoints: ["POST /pull"], cron: "5 * * * *" },
+      news: { transport: "http+cron", endpoints: ["POST /pull"], cron: "4 * * * *" },
       ohlcv: { transport: "rpc", entrypoint: "TvGateway", consumers: ["xauusd-tradingview-pull-adapter"] }
     },
     provider: PROVIDER,
@@ -1114,7 +1114,11 @@ async function buildHealth(env) {
     last_scheduled_ingest: lastScheduledPull,
     // TradingView MCP calls this gateway made, per caller and UTC hour, today and yesterday
     // (2026-11-11: the account's quota ran out at 13:05 UTC and nothing said who had spent it).
-    provider_calls: providerCalls
+    provider_calls: providerCalls,
+    // The account's daily limit and the chart's reserve right now (src/provider-usage.mjs chartReserve):
+    // whether a news pull would be held back for the gold chart (owner 2026-11-14, shown in Nexus Status).
+    provider_daily_limit: parsePositiveInt(env.TV_PROVIDER_DAILY_LIMIT, PROVIDER_DAILY_LIMIT),
+    chart_reserve: providerCalls?.today ? { ...chartReserve(providerCalls.today, { wanted: symbols.length, limit: parsePositiveInt(env.TV_PROVIDER_DAILY_LIMIT, PROVIDER_DAILY_LIMIT) }), enabled: asString(env.TV_NEWS_RESERVE).trim().toLowerCase() !== "off" } : null
   };
 }
 
