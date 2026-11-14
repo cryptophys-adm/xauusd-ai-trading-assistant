@@ -217,6 +217,7 @@ import { readNeuronAllocation } from "./neuron-allocation.mjs";
 import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
 import { scoreModelArena, pruneModelArena, readModelArena } from "./model-arena.mjs";
+import { readPublicProjection } from "./public-projection.mjs";
 import { readShadowMode, setShadowMode, shadowModeMessage, checkShadowBudget } from "./shadow-switch.mjs";
 import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
 import { reserveTvCalls, releaseTvCalls } from "./tv-budget.mjs";
@@ -2688,6 +2689,16 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     } catch (error) {
       console.error("hud_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/public-projection") {
+    // Content roadmap P1: recaps of past decisions for a future content agent, after the public delay, with no
+    // level, plan or account data (src/public-projection.mjs); read-only, behind Access like the rest of /api.
+    try {
+      return dashboardJson({ status: "ok", ...(await readPublicProjection(env, { days: Number(url.searchParams.get("days") || "7") || 7 })) });
+    } catch (error) {
+      console.error("public_projection_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "public_projection_unavailable" }, 500);
     }
   }
   if (url.pathname === "/api/model-arena") {
