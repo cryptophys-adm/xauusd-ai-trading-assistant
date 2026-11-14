@@ -37,7 +37,11 @@ export const SERIES = Object.freeze([
   { key: "OANDA:XAUUSD|1m", symbol: CANONICAL_SYMBOL, interval: "1m", timeframe: "M1", seconds: 60, retain: 3000, role: "chart_source", cadence: 300 },
   { key: "OANDA:XAUUSD|5m", symbol: CANONICAL_SYMBOL, interval: "5m", timeframe: "M5", seconds: 300, retain: 5000, role: "chart", derived_from: "OANDA:XAUUSD|1m" },
   { key: "OANDA:XAUUSD|15m", symbol: CANONICAL_SYMBOL, interval: "15m", timeframe: "M15", seconds: 900, retain: 2000, role: "htf", derived_from: "OANDA:XAUUSD|1m" },
-  { key: "OANDA:XAUUSD|1h", symbol: CANONICAL_SYMBOL, interval: "1h", timeframe: "H1", seconds: 3600, retain: 1000, role: "htf" },
+  // The 1H bars are built from the 1m pull like the 5m and 15m ones (owner 2026-11-14, the TradingView
+  // quota: 24 calls a weekday; the account's quota ran out at about 20:00 UTC on 2026-11-12 and 11-13).
+  // Hourly buckets sit on the UTC hour, as TradingView's do; the 4H, daily and weekly bars, which open at
+  // the session's start, stay native.
+  { key: "OANDA:XAUUSD|1h", symbol: CANONICAL_SYMBOL, interval: "1h", timeframe: "H1", seconds: 3600, retain: 1000, role: "htf", derived_from: "OANDA:XAUUSD|1m" },
   { key: "OANDA:XAUUSD|4h", symbol: CANONICAL_SYMBOL, interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "htf" },
   { key: "OANDA:XAUUSD|1D", symbol: CANONICAL_SYMBOL, interval: "1D", timeframe: "D1", seconds: 86400, retain: 500, role: "htf" },
   { key: "OANDA:XAUUSD|1W", symbol: CANONICAL_SYMBOL, interval: "1W", timeframe: "W1", seconds: 604800, retain: 260, role: "htf" },

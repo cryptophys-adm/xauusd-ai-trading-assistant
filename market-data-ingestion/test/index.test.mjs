@@ -74,20 +74,24 @@ test("D1 bars use TradingView session open time and close only after a full sess
 
 test("native H1 and longer bars settle 60 s after their close before they count as closed; M1 does not wait", () => {
   // Production 2026-11-06: an H1 bar pulled seconds after its close carried a provisional close
-  // and volume, and the local record built on it failed parity against the final bar.
+  // and volume, and the local record built on it failed parity against the final bar. Since 2026-11-14
+  // the XAUUSD 1H bars are built from the 1m pull (the TradingView quota), so the native 4H bar shows the rule.
+  const h4 = SERIES.find((s) => s.interval === "4h" && s.symbol === "OANDA:XAUUSD");
   const h1 = SERIES.find((s) => s.interval === "1h" && s.symbol === "OANDA:XAUUSD");
   const m1 = SERIES.find((s) => s.interval === "1m" && s.symbol === "OANDA:XAUUSD");
-  assert.equal(internals.settleSeconds(h1), 60, "90 s until 2026-11-09; 60 s since (the H1 decision within 1 to 2 minutes)");
+  assert.equal(internals.settleSeconds(h4), 60, "90 s until 2026-11-09; 60 s since (the H1 decision within 1 to 2 minutes)");
   assert.equal(internals.settleSeconds(m1), 0);
+  assert.equal(h1.derived_from, "OANDA:XAUUSD|1m");
+  assert.equal(internals.settleSeconds(h1), 0, "a derived series inherits its source's timing");
   assert.equal(internals.settleSeconds(SERIES.find((s) => s.symbol === "TVC:USOIL" && s.interval === "1h")), 0, "a derived series inherits its source's timing");
-  const open = 1_800_000_000 - 3600;
+  const open = 1_800_000_000 - 14400;
   const bars = { t: [open], o: [1], h: [2], l: [0], c: [1], v: [5] };
-  assert.equal(internals.closedCandlesFromColumns(bars, h1, open + 3600 + 30).length, 0, "30 s after the close: not final yet");
-  assert.equal(internals.closedCandlesFromColumns(bars, h1, open + 3600 + 59).length, 0, "59 s after the close: not final yet");
-  assert.equal(internals.closedCandlesFromColumns(bars, h1, open + 3600 + 60).length, 1);
-  const last = { time: open - 3600 };
-  assert.equal(internals.planRequest(h1, { candles: [last] }, open + 3600 + 30), null, "no pull before the bar settles");
-  assert.ok(internals.planRequest(h1, { candles: [last] }, open + 3600 + 60), "the per-minute cron pulls it one minute after the close");
+  assert.equal(internals.closedCandlesFromColumns(bars, h4, open + 14400 + 30).length, 0, "30 s after the close: not final yet");
+  assert.equal(internals.closedCandlesFromColumns(bars, h4, open + 14400 + 59).length, 0, "59 s after the close: not final yet");
+  assert.equal(internals.closedCandlesFromColumns(bars, h4, open + 14400 + 60).length, 1);
+  const last = { time: open - 14400 };
+  assert.equal(internals.planRequest(h4, { candles: [last] }, open + 14400 + 30), null, "no pull before the bar settles");
+  assert.ok(internals.planRequest(h4, { candles: [last] }, open + 14400 + 60), "the per-minute cron pulls it one minute after the close");
   const m1Open = 1_800_000_000 - 60;
   assert.equal(internals.closedCandlesFromColumns({ t: [m1Open], o: [1], h: [2], l: [0], c: [1], v: [5] }, m1, m1Open + 60).length, 1);
 });
