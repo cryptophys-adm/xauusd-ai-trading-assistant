@@ -21,6 +21,8 @@ import { validateBundle } from "../lib/validation.ts";
 
 export interface Env {
   NEXUS_DASHBOARD_URL?: string;
+  /** The push hub (ADR-0015 phase 1): the Nexus Worker's PushHub Durable Object, bound across scripts. */
+  PUSH_HUB?: DurableObjectNamespace;
   /** "off" turns the Decision Engine off: the EA, Telegram and the ledger follow the H1 decision again. */
   DECISION_ENGINE?: string;
   /** Runtime trading mode override (scalp|intraday|swing); KV-backed selector takes precedence. */

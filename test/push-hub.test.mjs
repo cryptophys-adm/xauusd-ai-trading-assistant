@@ -49,3 +49,27 @@ test("no upgrade, no known topic and an unknown topic's publish are refused", as
   assert.deepEqual(await h.publish("nope", {}), { status: "unknown_topic", sent: 0 });
   assert.equal(ctx.sockets.length, 0);
 });
+
+test("the War Room publishes the room exactly as Nexus reads it; without the binding nothing is published", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { publishWarRoom, readWarRoom } = await import("../src/war-room.mjs");
+  const { THREAD_SCHEMA_SQL } = await import("../src/agent-threads.mjs");
+  const raw = new DatabaseSync(":memory:");
+  for (const sql of THREAD_SCHEMA_SQL) raw.exec(sql);
+  const stmt = (sql, params = []) => ({
+    bind: (...a) => stmt(sql, a),
+    async run() { raw.prepare(sql).run(...params); return { success: true }; },
+    async first() { return raw.prepare(sql).get(...params) ?? null; },
+    async all() { return { results: raw.prepare(sql).all(...params) }; }
+  });
+  const DB = { prepare: (sql) => stmt(sql) };
+  const run = "2026-11-13T20:00:00.000Z";
+  raw.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, ts, body_json, status) VALUES (?, ?, 'brief', 'system', ?, ?, 'info')").run("warroom:2026-11-13", run, run, JSON.stringify({ roster: ["m15"] }));
+  const published = [];
+  const env = { DB, WAR_ROOM_ENABLED: "true", PUSH_HUB: { getByName: (name) => ({ publish: async (topic, data) => { published.push({ name, topic, data }); return { status: "ok", sent: 1 }; } }) } };
+  assert.deepEqual(await publishWarRoom(env), { status: "ok", sent: 1 });
+  assert.equal(published[0].name, "nexus");
+  assert.equal(published[0].topic, "war-room");
+  assert.deepEqual(published[0].data, { status: "ok", enabled: true, room: await readWarRoom(DB) });
+  assert.deepEqual(await publishWarRoom({ DB }), { status: "disabled" });
+});
