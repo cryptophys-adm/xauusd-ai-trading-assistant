@@ -53,7 +53,7 @@ function PlanLadder({ plan, long, minRrr }: { plan: any; long: boolean; minRrr: 
   );
 }
 
-const CHECK_TEXT: Record<string, string> = { market_open: "market open", fresh: "rooms current", quorum: "quorum", confirmation: "confirmation", no_veto: "no veto", levels: "key-level plan", reward: "reward", confidence: "confidence" };
+const CHECK_TEXT: Record<string, string> = { market_open: "market open", fresh: "rooms current", quorum: "quorum", confirmation: "confirmation", no_veto: "no veto", levels: "key-level plan", reward: "reward", room: "room between zones", confidence: "confidence" };
 /** The check's label with the decision's own thresholds (owner 2026-11-13: per trading mode, never a fixed 1.5R). */
 function checkLabel(id: string, rules: any): string {
   if (id === "reward") return rules?.min_rrr == null ? "reward" : Number(rules.min_rrr) > 0 ? `reward ≥ ${rules.min_rrr}R` : "target at a key level";

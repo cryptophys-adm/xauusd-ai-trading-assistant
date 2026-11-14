@@ -14,7 +14,7 @@ test("the facts report: both seats, the Decision Engine's thresholds per trading
   assert.equal(n["decision.trading_mode"], "intraday");
   assert.deepEqual([n["decision.quorum_min"], n["decision.lean"], n["decision.min_rrr"], n["decision.min_confidence"]], [0.5, 0.15, 1.5, 0.4]);
   assert.ok(Math.abs(Object.values(n["decision.witness_weights"]).reduce((s, w) => s + w, 0) - 1) < 1e-9);
-  assert.deepEqual(n["decision.guardrails"], ["market_open", "fresh", "quorum", "no_veto", "levels", "reward", "confidence"]);
+  assert.deepEqual(n["decision.guardrails"], ["market_open", "fresh", "quorum", "no_veto", "levels", "reward", "room", "confidence"]);
   // Owner 2026-11-11: the confirmation candle is the trigger of a market order, not a gate of the decision.
   assert.equal(n["decision.confirmation_required"], false);
   // 2026-11-12: the broker's 5m confirmation times market orders while OMEGA_EXEC_5M is on (the default).

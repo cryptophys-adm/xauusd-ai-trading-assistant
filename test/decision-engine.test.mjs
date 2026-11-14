@@ -64,7 +64,7 @@ test("guardrails: the long passes; the short fails quorum; stale rooms and vetoe
   const { guards } = assess(loadedOf(), { now: NOW });
   assert.equal(guards.long.allowed, true, JSON.stringify(guards.long.checks));
   // Owner 2026-11-11: the confirmation candle is the entry trigger, not a gate of the decision.
-  assert.deepEqual(guards.long.checks.map((c) => c.id), ["market_open", "fresh", "quorum", "no_veto", "levels", "reward"]);
+  assert.deepEqual(guards.long.checks.map((c) => c.id), ["market_open", "fresh", "quorum", "no_veto", "levels", "reward", "room"]);
   assert.equal(guards.long.plan.entry, 4000);
   assert.equal(guards.short.allowed, false);
   assert.deepEqual(guards.short.checks.filter((c) => !c.pass).map((c) => c.id), ["quorum"]);

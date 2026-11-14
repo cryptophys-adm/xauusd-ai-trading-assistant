@@ -35,7 +35,7 @@
 // switch: DECISION_ENGINE = "off" restores the H1 decision for the EA, Telegram and the ledger.
 // The server never sizes a position; prices come only from the key-level plan.
 
-import { loadStrategyInputs, buildStrategy, planForDirection, riskChecks, triggerOf, STRATEGY_PARAMS, atr } from "./strategy-engine.mjs";
+import { loadStrategyInputs, buildStrategy, planForDirection, riskChecks, triggerOf, squeezeOf, SQUEEZE_RULE, STRATEGY_PARAMS, atr } from "./strategy-engine.mjs";
 import { buildGlobalConclusion } from "./global-conclusion.mjs";
 import { readMacroRoom } from "./macro-room.mjs";
 import { readCorrelations } from "./correlations.mjs";
@@ -84,6 +84,8 @@ export function activeWitnessWeights(env) {
   }
   return decisionWeightedEnabled(env) ? EXTENDED_WITNESS_WEIGHTS : WITNESS_WEIGHTS;
 }
+/** The squeeze guardrail (owner 2026-11-13): on unless SQUEEZE_GUARD is "off". */
+export function squeezeGuardEnabled(env) { return String(env?.SQUEEZE_GUARD ?? "on").trim().toLowerCase() !== "off"; }
 export function decisionWeightedEnabled(env) { return String(env?.GLOBAL_DECISION_WEIGHTED ?? "false").trim().toLowerCase() === "true"; }
 export const QUORUM_MIN = 0.5;
 export const LEAN = 0.15;
@@ -602,6 +604,17 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
     const best = plan ? Math.max(plan.rrr?.tp1 ?? 0, plan.rrr?.tp2 ?? 0) : 0;
     add("reward", Boolean(plan) && best >= MIN_RRR, plan ? `${best}R to the best target (at least ${MIN_RRR}R needed)` : "no plan");
   }
+  // Squeezed between key zones (owner 2026-11-13: "no trade"): the same check on both sides, because it
+  // is about the place, not the direction. SQUEEZE_GUARD "off" leaves the check out.
+  if (squeezeGuardEnabled(env)) {
+    let sq = null;
+    try { sq = squeezeOf(strategy); } catch { sq = null; }
+    const zone = (z) => (z.low === z.high ? z.low.toFixed(2) : `${z.low.toFixed(2)}–${z.high.toFixed(2)}`);
+    add("room", !sq?.squeezed, !sq ? "no price or 1H range to measure the room with"
+      : sq.corridor == null ? `no key zone ${sq.below ? "above" : sq.above ? "below" : "above or below"} price within reach: there is room to move`
+      : sq.squeezed ? `price is squeezed: the key zones below (${zone(sq.below)}) and above (${zone(sq.above)}) are ${sq.corridor.toFixed(2)} apart, less than ${SQUEEZE_RULE.corridor_atr === 1 ? "one 1H average range" : `${SQUEEZE_RULE.corridor_atr} times the 1H average range`} (${sq.needed.toFixed(2)})`
+      : `the key zones below and above price are ${sq.corridor.toFixed(2)} apart (${sq.corridor_atr} times the 1H average range; at least ${SQUEEZE_RULE.corridor_atr} needed)`);
+  }
   const cautions = [...risk.cautions, ...contextCautions(dir, inputs.market ?? null)];
   return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions, supports: risk.supports ?? [], min_rrr: MIN_RRR, target_rule: nearest ? "nearest" : "rrr", entry_trigger: entryTrigger };
 }
@@ -1050,6 +1063,9 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     // The Key Level Agent's candidate zones around price, on the feed's scale (owner 2026-11-12): Omega's
     // stop and target follow them while a position is open (src/omega-engine.mjs).
     key_levels: keyLevelsAround(strategy),
+    // The corridor price stood in (src/strategy-engine.mjs squeezeOf): the nearest key zones below and
+    // above and how far apart they are, kept on every decision so the "room" guardrail can be measured.
+    squeeze: squeezeOf(strategy),
     // Every strategy agent's own plan per side (src/strategy-agents.mjs), live or shadow: what each would
     // have traded here, kept so the plan learner can measure each agent on the bars that follow.
     strategy_plans: strategyPlansOf(assessment?.guards ?? guards),
