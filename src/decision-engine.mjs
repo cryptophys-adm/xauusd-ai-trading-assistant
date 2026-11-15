@@ -35,6 +35,7 @@
 // switch: DECISION_ENGINE = "off" restores the H1 decision for the EA, Telegram and the ledger.
 // The server never sizes a position; prices come only from the key-level plan.
 
+import { goldClosedAt, nextGoldChange } from "./market-hours.mjs";
 import { loadStrategyInputs, buildStrategy, planForDirection, riskChecks, triggerOf, squeezeOf, SQUEEZE_RULE, STRATEGY_PARAMS, atr } from "./strategy-engine.mjs";
 import { buildGlobalConclusion } from "./global-conclusion.mjs";
 import { readMacroRoom } from "./macro-room.mjs";
@@ -322,9 +323,8 @@ export function sessionAt(now) {
   const d = new Date(now), h = nyHour(now);
   const open = marketOpenAt(now);
   const active = open ? SESSIONS.filter((x) => (h >= x.from && h < x.to) || (h + 24 >= x.from && h + 24 < x.to)).map((x) => x.name) : [];
-  // The next weekly close (Friday 22:00 UTC) while open, or the reopen (Sunday 22:00 UTC) while closed.
-  const next = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 22));
-  while (next.getUTCDay() !== (open ? 5 : 0) || next.getTime() <= now) next.setUTCDate(next.getUTCDate() + 1);
+  // The next weekly close (Friday 17:00 New York) while open, or the reopen (Sunday 18:00 New York) while closed.
+  const next = new Date(nextGoldChange(now).at);
   return {
     day: DAYS[d.getUTCDay()], date: d.toISOString().slice(0, 10), time_utc: d.toISOString().slice(11, 16), new_york_hour: Math.floor(h),
     market_open: open, active, overlap: active.length > 1,
@@ -1242,10 +1242,9 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
   }
 }
 
-/** XAUUSD trades from Sunday 22:00 to Friday 22:00 UTC. */
+/** XAUUSD trades from Sunday 18:00 to Friday 17:00 New York time (23:00/22:00 UTC in US standard time, 22:00/21:00 in daylight time). */
 export function marketOpenAt(ms) {
-  const d = new Date(ms), day = d.getUTCDay(), h = d.getUTCHours();
-  return !(day === 6 || (day === 5 && h >= 22) || (day === 0 && h < 22));
+  return !goldClosedAt(ms);
 }
 
 /** Sweep fallback: decides the last closed 15m bar when no 15m room triggered the engine. */
