@@ -2,6 +2,7 @@ import { execFile as nodeExecFile } from "node:child_process";
 import nodeFs from "node:fs";
 import path from "node:path";
 import { openEnvelope } from "./envelope.mjs";
+import { goldClosedAt } from "./market-hours.mjs";
 import {
   DEFAULT_OMEGA_FILES_DIR,
   consumeResults,
@@ -650,9 +651,8 @@ export function createDaemon(options = {}) {
         const isDegraded = state.connected === false || state.trade_allowed === false;
         const isStale = Number.isFinite(state.received_ms) && (now() - Number(state.received_ms) > 60_000);
         if (isDegraded || isStale) {
-          const d = new Date(now());
-          const day = d.getUTCDay(), hour = d.getUTCHours();
-          const isWeekend = (day === 5 && hour >= 22) || day === 6 || (day === 0 && hour < 22);
+          // Gold's weekly close in New York time (market-hours.mjs, 2026-11-15).
+          const isWeekend = goldClosedAt(now());
           if (!isWeekend || state.trade_allowed === false) {
             const applied = readAppliedState(config.stateDir, fs);
             if (applied?.server) {
