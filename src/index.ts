@@ -20,6 +20,8 @@ export interface Env {
   NEXUS_DASHBOARD_URL?: string;
   /** The push hub (ADR-0015 phase 1): the Nexus Worker's PushHub Durable Object, bound across scripts. */
   PUSH_HUB?: DurableObjectNamespace;
+  /** Private R2 bucket xauusd-room-transcripts (owner 2026-11-15): room transcripts and D1 archives. */
+  ROOM_TRANSCRIPTS?: R2Bucket;
   /** "off" turns the Decision Engine off: the EA, Telegram and the ledger follow the H1 decision again. */
   DECISION_ENGINE?: string;
   /** Runtime trading mode override (scalp|intraday|swing); KV-backed selector takes precedence. */
@@ -213,6 +215,7 @@ import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
 import { readNeuronAllocation } from "./neuron-allocation.mjs";
 import { agentInventory, aiLogic } from "./agent-inventory.mjs";
 import { deriveRoomRuns, compareRoomRuns, roomRunsStatus } from "./room-runs.mjs";
+import { archiveBusMessages } from "./bus-archive.mjs";
 import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
 import { scoreModelArena, pruneModelArena, readModelArena } from "./model-arena.mjs";
@@ -3053,5 +3056,10 @@ export default {
       const compared = await compareRoomRuns(env);
       console.log("room_runs", JSON.stringify({ derived, compared }));
     }).catch((e) => console.error("room_runs_failed", e instanceof Error ? e.message : String(e))));
+    // The retired H1 bus's table (owner 2026-11-15, "setujui semua"): archived to R2, dropped only after the
+    // archive reads back equal (src/bus-archive.mjs). Once it is gone, one sqlite_master read per hour.
+    ctx.waitUntil(archiveBusMessages(env).then((r) => {
+      if (r.status !== "absent") console.log("bus_archive", JSON.stringify(r));
+    }).catch((e) => console.error("bus_archive_failed", e instanceof Error ? e.message : String(e))));
   }
 };
