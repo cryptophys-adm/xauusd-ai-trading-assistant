@@ -302,7 +302,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - After each news analysis, a `news_thread` queue task makes the analysis a post.
   - `news` and `technical` reply, each then replies to the other's reply (`parent_id`), and a `moderator` posts the consensus.
   - At most 5 calls, using the bus model with the bus fallback.
-- **Live 15m room** (behind `LIVE_ROOM_ENABLED`, owner decision 2026-11-04):
+- **Live 15m room** (behind `LIVE_ROOM_ENABLED`, owner decision 2026-11-04). **Retired in code on 2026-11-15:** the War Room (`WAR_ROOM_ENABLED`) has met at every 15m close since 2026-11-05; the legacy room's runner and its engines are gone, `LIVE_ROOM_ENABLED` still gates enqueueing the 15m task. History of the legacy room:
   - Every 5m context submission (RPC `submitContext`, or the authenticated `POST /evidence/m5-context`) refreshes the 5m execution context in KV.
   - Only a submission whose closed 5m bar also closes a 15m candle (:00, :15, :30, :45 UTC) enqueues a `live_room` task. The task carries the context itself.
   - At every 15m close, `technical` and `risk` (a reply to technical) post, then a `moderator`, using stances BUY/SELL/HOLD/WAIT/CLOSE. There is no "nothing changed" skip.

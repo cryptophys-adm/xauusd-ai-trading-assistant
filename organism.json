@@ -192,9 +192,6 @@
           "task": "hud_moderator"
         },
         {
-          "task": "live_hud_agent"
-        },
-        {
           "task": "macro_room_conclusion"
         },
         {
@@ -217,12 +214,6 @@
         },
         {
           "task": "plain_decision"
-        },
-        {
-          "task": "room_agent"
-        },
-        {
-          "task": "room_moderator"
         },
         {
           "task": "tf_room_conclusion"

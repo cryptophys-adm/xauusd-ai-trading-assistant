@@ -2,10 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import {
-  runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, buildMessageTree, validateRoomModerator,
+  runNewsThread, listThreads, readThread, readLive, buildMessageTree, validateRoomModerator,
   buildNewsThreadTask, buildLiveRoomTask, liveRoomEnabled, resetThreadSchemaCacheForTests, ROOM_STANCES,
   isFifteenMinuteClose, buildFifteenMinuteCandles
-  , runHudAgents, readH1Thread as readH1ThreadForHud, hudEvidenceLines, validateHudAgent, buildHudAgentsTask
+  , runHudAgents, readH1Thread as readH1ThreadForHud, hudEvidenceLines, validateHudAgent, buildHudAgentsTask,
+  threadInternals, liveEvidence, ensureThreadSchema
 } from "../src/agent-threads.mjs";
 import { BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL, MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_FALLBACK_MODEL } from "../src/model-call.mjs";
 // Per-role models (owner decision 2026-11-07): agents on the room agent model, the moderator on its own.
@@ -154,19 +155,22 @@ test("news thread: unknown analysis does nothing", async () => {
   assert.equal(e.AI.calls.length, 0);
 });
 
-test("live room: technical, risk (reply to technical), moderator; each on its role's primary model", async () => {
+// The legacy live room is retired (owner 2026-11-15): the shared step machinery (runStep: corrections, the
+// moderator's fallback, budgets, retries) and the War Room's evidence (liveEvidence) are tested directly.
+const STEP_SCHEMA = Object.freeze({ type: "object", additionalProperties: false, properties: { stance: { type: "string", enum: [...ROOM_STANCES] }, confidence: { type: "number" }, summary: { type: "string" } }, required: ["stance", "confidence", "summary"] });
+async function moderatorStep(e, { thread = "live15m:2026-11-04", step = "moderator", budget = true } = {}) {
+  await ensureThreadSchema(e.DB);
+  return threadInternals.runStep(e, e.DB, { thread_id: thread, run_id: BAR, step, agent: "moderator", parent_id: null, bar_time: BAR }, {
+    messages: [{ role: "system", content: "You are the moderator of a live XAUUSD trading room." }, { role: "user", content: "Give one consensus line." }],
+    schemaName: "test_moderator", schema: STEP_SCHEMA, maxTokens: 100, effort: "low", deadline: Date.now() + 120_000, clock: () => Date.now(), runState: {},
+    validate: (o) => validateRoomModerator(o, "WAIT"), toBody: (o) => ({ body: { summary: o.summary }, refs: [] }), budgetOk: async () => budget
+  });
+}
+
+test("liveEvidence: the closed 15m candles, the 5m read and the H1 decision of the bar (the War Room's evidence)", async () => {
   const e = env();
-  const result = await runLiveRoomBar(e, { bar_time: BAR });
-  assert.equal(result.status, "complete");
-  assert.equal(e.AI.calls.length, 3);
-  assert.deepEqual(modelsOf(e.AI.calls), [BUS_DEFAULT_MODEL, BUS_DEFAULT_MODEL, MODERATOR_DEFAULT_MODEL].sort());
-  const items = await readLive(e.DB, {});
-  assert.deepEqual(items.map(m => m.step), ["technical", "risk", "moderator"]);
-  assert.equal(items[1].parent_id, items[0].id);
-  assert.ok(items.every(m => m.bar_time === BAR && m.status === "ok"));
-  assert.equal(items[2].h1_decision, "WAIT");
-  assert.ok(ROOM_STANCES.includes(items[0].stance));
-  const evidence = JSON.parse(e.AI.calls[0].request.messages[1].content.split("EVIDENCE:\n")[1].split("\n")[0]);
+  await ensureThreadSchema(e.DB);
+  const { evidence, confirmations } = await liveEvidence(e, { bar_time: BAR }, BAR);
   assert.equal(evidence.m5.label, "UNVERIFIED 5m");
   assert.equal(evidence.m5.recent_bars.length, 12);
   assert.equal(evidence.h1.decision, "WAIT");
@@ -174,36 +178,8 @@ test("live room: technical, risk (reply to technical), moderator; each on its ro
   assert.equal(evidence.m15.candles.length, 4, "12 closed 5m bars make 4 closed 15m candles");
   assert.deepEqual(evidence.m15.candles.at(-1), { close_time: BAR, o: 4009, h: 4013, l: 4008, c: 4012, v: 30 });
   assert.equal(evidence.m5.role, "execution timing from the local lane");
-  assert.match(evidence.h1.tradingview, /TradingView indicators/, "the room sees the H1 TradingView reading");
-  const prompts = e.AI.calls.map(c => c.request.messages.map(m => m.content).join("\n")).join("\n");
-  assert.doesNotMatch(prompts, /tradingview_reading/, "no snake_case key the model could echo into its text");
-});
-
-test("live room: a failing model falls back to its role's fallback; both failing records agent_failed", async () => {
-  // The glm-4.7 fallback was paid and slow, so the room ran primary only; the per-role fallbacks
-  // (owner decision 2026-11-07) are free-plan models.
-  const e = env({ AI: fakeAI(() => new Error("primary down")) });
-  await runLiveRoomBar(e, { bar_time: BAR });
-  assert.ok(e.AI.calls.some(c => c.model === BUS_DEFAULT_FALLBACK_MODEL), "the agents try their fallback");
-  assert.ok(e.AI.calls.some(c => c.model === MODERATOR_DEFAULT_FALLBACK_MODEL || c.model === MODERATOR_DEFAULT_MODEL));
-  const items = await readLive(e.DB, {});
-  assert.ok(items.every(m => m.status === "agent_failed"));
-});
-
-test("live room meets only at 15m candle closes, every 15m close even when nothing changed", async () => {
-  const e = env();
-  assert.equal((await runLiveRoomBar(e, { bar_time: BAR })).status, "complete");
-  for (const mid of ["2026-11-04T15:20:00.000Z", "2026-11-04T15:25:00.000Z"]) {
-    await e.SIGNAL_CACHE.put("context:m5:latest", m5({ candle_time: mid }));
-    assert.equal((await runLiveRoomBar(e, { bar_time: mid })).status, "not_15m_close");
-  }
-  assert.equal(e.AI.calls.length, 3, "5m bars inside a 15m candle make no calls");
-  const next = "2026-11-04T15:30:00.000Z";
-  await e.SIGNAL_CACHE.put("context:m5:latest", m5({ candle_time: next }));
-  assert.equal((await runLiveRoomBar(e, { bar_time: next })).status, "complete", "the next 15m close runs even with an unchanged picture");
-  assert.equal(e.AI.calls.length, 6);
-  const live = await readLive(e.DB, {});
-  assert.ok(live.every(m => m.thread_id.startsWith("live15m:")));
+  assert.match(evidence.h1.tradingview, /TradingView indicators/);
+  assert.equal(confirmations.m5_prophet_r38.verified, false);
 });
 
 test("15m close detection and 15m candles from 5m bars", () => {
@@ -222,30 +198,28 @@ test("15m close detection and 15m candles from 5m bars", () => {
   assert.deepEqual(candles, [{ close_time: "2026-11-04T15:30:00.000Z", o: 10, h: 15, l: 8, c: 9, v: null }]);
 });
 
-test("live room uses the context carried by the task (no KV dependency)", async () => {
+test("liveEvidence uses the context carried by the task (no KV dependency)", async () => {
   const e = env({ SIGNAL_CACHE: fakeKV({}) });
   const task = buildLiveRoomTask({ barTime: BAR, context: JSON.parse(m5()) });
-  assert.equal((await runLiveRoomBar(e, task)).status, "complete");
-  assert.equal(e.AI.calls.length, 3);
+  await ensureThreadSchema(e.DB);
+  const live = await liveEvidence(e, task, BAR);
+  assert.equal(live.evidence.m5.bar_time, BAR);
+  assert.equal(e.AI.calls.length, 0);
 });
 
-test("live room retries while the 5m context is not visible yet", async () => {
+test("liveEvidence retries while the 5m context is not visible yet", async () => {
   const e = env({ SIGNAL_CACHE: fakeKV({}) });
-  await assert.rejects(() => runLiveRoomBar(e, { bar_time: BAR }), /not visible yet/);
+  await assert.rejects(() => liveEvidence(e, { bar_time: BAR }, BAR), /not visible yet/);
   const e2 = env({ SIGNAL_CACHE: fakeKV({ "context:m5:latest": m5({ candle_time: "2026-11-04T15:00:00.000Z" }) }) });
-  await assert.rejects(() => runLiveRoomBar(e2, { bar_time: BAR }), /not visible yet/);
-  assert.equal(e.AI.calls.length + e2.AI.calls.length, 0);
+  await assert.rejects(() => liveEvidence(e2, { bar_time: BAR }, BAR), /not visible yet/);
 });
 
-test("live room ignores a stale bar and respects its hourly budget (fail closed)", async () => {
+test("liveEvidence ignores a stale bar; a step without budget is stored as budget_exhausted and makes no call (fail closed)", async () => {
   const e = env();
-  assert.equal((await runLiveRoomBar(e, { bar_time: "2026-11-04T14:00:00.000Z" })).status, "stale_bar");
-  resetThreadSchemaCacheForTests(); // a second, fresh D1 in the same isolate
-  const e2 = env({ LIVE_ROOM_MAX_CALLS_PER_HOUR: "0" });
-  await runLiveRoomBar(e2, { bar_time: BAR });
-  assert.equal(e2.AI.calls.length, 0);
-  assert.ok((await readLive(e2.DB, {})).every(m => m.status === "budget_exhausted"));
-  assert.equal((await runLiveRoomBar(env({ LIVE_ROOM_ENABLED: "false" }), { bar_time: BAR })).status, "disabled");
+  assert.equal((await liveEvidence(e, { bar_time: "2026-11-04T14:00:00.000Z" }, "2026-11-04T14:00:00.000Z")).status, "stale_bar");
+  const msg = await moderatorStep(e, { budget: false });
+  assert.equal(msg.status, "budget_exhausted");
+  assert.equal(e.AI.calls.length, 0);
 });
 
 test("room moderator must name the H1 decision when it disagrees", () => {
@@ -255,22 +229,22 @@ test("room moderator must name the H1 decision when it disagrees", () => {
   assert.ok(validateRoomModerator({ stance: "LONG", confidence: 2, summary: "x" }, "WAIT").errors.includes("stance_invalid"));
 });
 
-test("an invalid room moderator answer is stored as invalid_output", async () => {
-  const e = env({ AI: fakeAI(({ sys }) => (/moderator of a live/i.test(sys) ? { stance: "BUY", confidence: 0.7, summary: "Go long." } : undefined)) });
-  await runLiveRoomBar(e, { bar_time: BAR });
-  const items = await readLive(e.DB, {});
-  assert.equal(items[2].status, "invalid_output");
-  assert.ok(items[2].errors.includes("h1_reference_missing"));
+test("an invalid moderator answer is stored as invalid_output", async () => {
+  const e = env({ AI: fakeAI(() => ({ stance: "BUY", confidence: 0.7, summary: "Go long." })) });
+  const msg = await moderatorStep(e);
+  assert.equal(msg.status, "invalid_output");
+  assert.ok(msg.errors.includes("h1_reference_missing"));
 });
 
 test("readLive pages forward with since", async () => {
   const e = env();
-  await runLiveRoomBar(e, { bar_time: BAR });
+  await moderatorStep(e, { step: "technical" });
+  await moderatorStep(e, { step: "moderator" });
   const all = await readLive(e.DB, {});
+  assert.equal(all.length, 2);
   const newer = await readLive(e.DB, { since: all[0].id });
-  assert.deepEqual(newer.map(m => m.step), ["risk", "moderator"]);
+  assert.deepEqual(newer.map((m) => m.id), [all[1].id]);
 });
-
 test("buildMessageTree nests replies under their parent", () => {
   const tree = buildMessageTree([{ id: 1, parent_id: null }, { id: 2, parent_id: 1 }, { id: 3, parent_id: 2 }, { id: 4, parent_id: 99 }]);
   assert.deepEqual(tree.map(m => m.id), [1, 4]);
@@ -310,35 +284,31 @@ test("H1 threads (Threads 1H) show the decision and the HUD agents; the retired 
 test("an answer that only fails the natural-language rule gets one correction, counted in the budget", async () => {
   const codeLike = { stance: "WAIT", confidence: 0.6, summary: "H1 decision: WAIT because h1.decision says so." };
   const fixed = { stance: "WAIT", confidence: 0.6, summary: "H1 decision: WAIT. The hourly picture says stand aside." };
-  const e = env({ AI: fakeAI(({ sys, request }) => /moderator of a live/i.test(sys) ? (request.messages.length > 2 ? fixed : codeLike) : undefined) });
-  const result = await runLiveRoomBar(e, { bar_time: BAR });
-  assert.equal(result.status, "complete");
-  assert.equal(e.AI.calls.length, 4, "technical, risk, moderator, one correction");
-  const correction = e.AI.calls[3].request.messages;
+  const e = env({ AI: fakeAI(({ request }) => (request.messages.length > 2 ? fixed : codeLike)) });
+  const mod = await moderatorStep(e);
+  assert.equal(e.AI.calls.length, 2, "the answer and one correction");
+  const correction = e.AI.calls[1].request.messages;
   assert.equal(correction.at(-2).role, "assistant");
   assert.match(correction.at(-1).content, /reads like code/);
-  const mod = (await readLive(e.DB, {})).find(m => m.step === "moderator");
   assert.equal(mod.status, "ok");
   assert.equal(mod.summary, fixed.summary);
   assert.equal(mod.corrections, 1);
   const n = e.DB.raw.prepare("SELECT SUM(1 + COALESCE(fallback_used, 0) + COALESCE(json_extract(body_json, '$.corrections'), 0)) AS n FROM agent_thread_messages").get().n;
-  assert.equal(n, 4, "the hourly budget counts the correction call");
+  assert.equal(n, 2, "the hourly budget counts the correction call");
 });
 
 test("a correction that still reads like code stays invalid_output; schema errors get no correction", async () => {
   const codeLike = { stance: "WAIT", confidence: 0.6, summary: "H1 decision: WAIT per h1.decision." };
-  const e = env({ AI: fakeAI(({ sys }) => /moderator of a live/i.test(sys) ? codeLike : undefined) });
-  await runLiveRoomBar(e, { bar_time: BAR });
-  const mod = (await readLive(e.DB, {})).find(m => m.step === "moderator");
+  const e = env({ AI: fakeAI(() => codeLike) });
+  const mod = await moderatorStep(e);
   assert.equal(mod.status, "invalid_output");
   assert.equal(mod.corrections, 2, "one correction, then one answer from the moderator's fallback model");
-  assert.equal(e.AI.calls.length, 5, "exactly one correction attempt and one fallback attempt");
-  assert.deepEqual(e.AI.calls.slice(2).map(c => c.model), [MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_FALLBACK_MODEL]);
+  assert.deepEqual(e.AI.calls.map(c => c.model), [MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_FALLBACK_MODEL]);
 
   resetThreadSchemaCacheForTests();
-  const e2 = env({ AI: fakeAI(({ sys }) => /moderator of a live/i.test(sys) ? { stance: "LONG", confidence: 0.6, summary: "Plain words." } : undefined) });
-  await runLiveRoomBar(e2, { bar_time: BAR });
-  assert.equal(e2.AI.calls.length, 4, "a schema error gets no correction, only the moderator's fallback model once");
+  const e2 = env({ AI: fakeAI(() => ({ stance: "LONG", confidence: 0.6, summary: "Plain words." })) });
+  await moderatorStep(e2);
+  assert.deepEqual(e2.AI.calls.map(c => c.model), [MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_FALLBACK_MODEL], "a schema error gets no correction, only the moderator's fallback model once");
 });
 
 // C0 step 4: the 5m read is VERIFIED only while prophet_m5 and gmi_m5 are parity-approved.
@@ -362,11 +332,11 @@ async function seedVerifiedM5(e, { approve = true } = {}) {
   return key;
 }
 
-test("live room labels the 5m read VERIFIED 5m only while the 5m implementations are parity-approved", async () => {
+test("liveEvidence labels the 5m read VERIFIED 5m only while the 5m implementations are parity-approved", async () => {
   const e = env();
   await seedVerifiedM5(e);
-  await runLiveRoomBar(e, { bar_time: BAR });
-  const evidence = JSON.parse(e.AI.calls[0].request.messages[1].content.split("EVIDENCE:\n")[1].split("\n")[0]);
+  await ensureThreadSchema(e.DB);
+  const { evidence } = await liveEvidence(e, { bar_time: BAR }, BAR);
   assert.equal(evidence.m5.label, "VERIFIED 5m");
   assert.equal(evidence.m5.trust_status, "approved_by_parity");
   assert.equal(evidence.m5.bias, "bearish", "the verified read replaces the unverified BULLISH context");
@@ -375,11 +345,11 @@ test("live room labels the 5m read VERIFIED 5m only while the 5m implementations
   assert.equal(evidence.m5.recent_bars.length, 12);
 });
 
-test("live room keeps UNVERIFIED 5m while the 5m identities are only candidates", async () => {
+test("liveEvidence keeps UNVERIFIED 5m while the 5m identities are only candidates", async () => {
   const e = env();
   await seedVerifiedM5(e, { approve: false });
-  await runLiveRoomBar(e, { bar_time: BAR });
-  const evidence = JSON.parse(e.AI.calls[0].request.messages[1].content.split("EVIDENCE:\n")[1].split("\n")[0]);
+  await ensureThreadSchema(e.DB);
+  const { evidence } = await liveEvidence(e, { bar_time: BAR }, BAR);
   assert.equal(evidence.m5.label, "UNVERIFIED 5m");
   assert.equal(evidence.m5.bias, "BULLISH");
 });
@@ -451,11 +421,10 @@ test("schemas without refs never ask for refs; schemas with refs still do", asyn
     assert.match(prompt, /no refs field: never write refs, evidence paths/);
   }
   resetThreadSchemaCacheForTests();
-  const room = env();
-  await runLiveRoomBar(room, buildLiveRoomTask({ barTime: BAR }));
-  const [technical, , moderator] = room.AI.calls.map(c => c.request.messages.map(m => m.content).join("\n"));
-  assert.match(technical, /Back every claim with refs/, "the room agents keep their refs field and rule");
-  assert.match(moderator, /no refs field/);
+  const thread = env();
+  await runNewsThread(thread, { analysis_key: NEWS_KEY });
+  const [agent] = thread.AI.calls.map(c => c.request.messages.map(m => m.content).join("\n"));
+  assert.match(agent, /Back every claim with refs/, "the news thread's agents keep their refs field and rule");
 });
 
 test("a retried step replaces its stored failure, keeps its id, and never overwrites an ok message", async () => {
@@ -538,68 +507,6 @@ test("HUD agent validation and evidence lines", () => {
   assert.ok(validateHudAgent({ agent: "prophet", stance: "HOLD", confidence: 0.5, insight: "Plain words." }, "prophet").errors.includes("stance_invalid"));
   assert.ok(validateHudAgent({ agent: "prophet", stance: "WAIT", confidence: 0.5, insight: "see d_enc" }, "prophet").errors.some(e => e.startsWith("not_natural_language")));
   assert.equal(buildHudAgentsTask({ candleKey: HUD_KEY }).event_id, `hud_agents:${HUD_KEY}`);
-});
-
-test("live room: with HUD agents on, the 15m HUD agents speak from their 15m reading before the moderator", async () => {
-  const openMs = Date.parse(BAR) - 15 * 60_000;
-  const key15 = "OANDA:XAUUSD:15:" + openMs;
-  const snapshot = {
-    schema_version: "cryptophys.hud-snapshot.v1", timeframe: "15", candle_key: key15, computed_at: BAR, not_computed: ["grid_bot_protocol"],
-    huds: {
-      trade_management: { fields: { prophet_dir: 1, gmi_dir: 1, conflict: false, gate: 2, cycle_intensity: 3 }, parity: {} },
-      kinetic_engine: { fields: { theta: 12.5, omega: 0.4, alpha: 0.1, entropy: 0.5, is_chaos: false }, parity: {} },
-      prophet: { fields: { d_enc: 1 }, parity: {} }
-    }
-  };
-  const ai = fakeAI(({ sys, user }) => {
-    if (/one agent per Pine HUD, in a live XAUUSD trading room/.test(sys)) {
-      const agent = (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1];
-      return { agent, stance: "HOLD", confidence: 0.5, insight: "My 15m reading is not yet calibrated and leans toward holding." };
-    }
-    return undefined;
-  });
-  const e = env({ AI: ai, HUD_AGENTS_ENABLED: "true", LIVE_ROOM_MAX_CALLS_PER_HOUR: "48" });
-  e.SIGNAL_CACHE.map.set(`hud:15:${key15}`, JSON.stringify(snapshot));
-  const result = await runLiveRoomBar(e, { bar_time: BAR });
-  assert.equal(result.status, "complete");
-  const items = await readLive(e.DB, {});
-  assert.deepEqual(items.map(m => m.step), ["technical", "risk", "hud:trade_management", "hud:kinetic_engine", "moderator"], "only live-room HUDs with a reading speak; prophet is not a live-room HUD");
-  const tm = items.find(m => m.step === "hud:trade_management");
-  assert.equal(tm.hud, "Trade Management");
-  assert.equal(tm.status, "ok");
-  assert.equal(tm.verified_lines, 0, "the 15m HUD has no calibrated comparator");
-  const modPrompt = ai.calls.at(-1).request.messages.map(m => m.content).join("\n");
-  assert.match(modPrompt, /Trade Management/);
-  assert.match(modPrompt, /Kinetic Engine/);
-});
-
-test("live room: HUD agents off means no HUD posts", async () => {
-  const e = env();
-  await runLiveRoomBar(e, { bar_time: BAR });
-  const items = await readLive(e.DB, {});
-  assert.ok(!items.some(m => String(m.step).startsWith("hud:")));
-});
-
-test("live room: a 15m HUD snapshot carried in the task is used without any KV read", async () => {
-  const key15 = "OANDA:XAUUSD:15:" + (Date.parse(BAR) - 15 * 60_000);
-  const snapshot = { schema_version: "cryptophys.hud-snapshot.v1", timeframe: "15", candle_key: key15, computed_at: BAR, huds: { fabio_amt: { fields: { close: 4005, poc: 4001, vah: 4010, val: 3995, footprint_status: "BUY CONTROL" }, parity: {} } } };
-  const ai = fakeAI(({ sys, user }) => {
-    if (/one agent per Pine HUD, in a live XAUUSD trading room/.test(sys)) {
-      const agent = (user.match(/Required JSON: \{"agent":"(\w+)"/) || [])[1];
-      return { agent, stance: "WAIT", confidence: 0.4, insight: "Price sits inside the value area, which is not yet calibrated on this chart." };
-    }
-    return undefined;
-  });
-  const e = env({ AI: ai, HUD_AGENTS_ENABLED: "true" });
-  await runLiveRoomBar(e, { bar_time: BAR, hud: snapshot });
-  const steps = (await readLive(e.DB, {})).map(m => m.step);
-  assert.deepEqual(steps, ["technical", "risk", "hud:fabio_amt", "moderator"]);
-  // A snapshot for another bar is ignored.
-  const other = { ...snapshot, candle_key: "OANDA:XAUUSD:15:1" };
-  resetThreadSchemaCacheForTests();
-  const e2 = env({ AI: ai, HUD_AGENTS_ENABLED: "true" });
-  await runLiveRoomBar(e2, { bar_time: BAR, hud: other });
-  assert.ok(!(await readLive(e2.DB, {})).some(m => String(m.step).startsWith("hud:")));
 });
 
 test("clip ends at the last full sentence that fits, else at a word with an ellipsis; short text is untouched", async () => {
