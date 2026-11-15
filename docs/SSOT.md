@@ -1007,6 +1007,26 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 5. A topology change requires editing this file, `AGENTS.md` and `test/ssot-topology.test.mjs` in the same PR, and the owner's explicit approval.
 6. **Ops dispatch (owner request 2026-11-09, backlog item 17).** The automation operator's GitHub access cannot call `workflow_dispatch` or re-run a job. `.github/workflows/ops-dispatch.yml` runs on a push to the operator branch `claude/vibrant-mccarthy-dq5xs7` whose head commit adds exactly one `ops/requests/<UTC timestamp>-<name>.json` (`{"workflow": "deploy-worker.yml"}`), and dispatches that workflow on `main`, with no inputs, then follows it to completion. Allow-list: `deploy-worker.yml`, `deploy-nexus-dashboard.yml`, `deploy-market-data-ingestion.yml`, `deploy-fundamental-news-ingestion.yml` and the read-only `inspect-ai-worker.yml`; never `set-webhook-secret.yml`. Rule 1 holds: a deploy is still the deploy workflow on `main`, the same run the owner starts with "Run workflow". A branch reset onto `main` never replays a request (`test/ops-dispatch.test.mjs`).
 
+8. **One deploy path per production Worker (cut-over option (D), owner 2026-11-15).** Production reaches Cloudflare only through the tagged deploy workflow of its Worker, on `main`:
+
+   | Worker config | Workflow |
+   |---|---|
+   | `wrangler.jsonc` | `deploy-worker.yml` |
+   | `workers/xauusd-nexus-dashboard/wrangler.jsonc` | `deploy-nexus-dashboard.yml` |
+   | `workers/xauusd-omega/wrangler.jsonc` | `deploy-omega.yml` |
+   | `fundamental-news-ingestion/wrangler.jsonc` | `deploy-fundamental-news-ingestion.yml` |
+   | `market-data-ingestion/wrangler.jsonc` | `deploy-market-data-ingestion.yml` |
+
+   - Each deploy passes `--tag <sha12>`, `--message "commit <sha>"`, `DEPLOY_COMMIT` and `DEPLOYED_AT`.
+   - The only untagged deploy is the isolated, ephemeral preview Worker of `deploy-preview-worker.yml`: it has its own `--name` and uses `wrangler.preview.jsonc`.
+   - There is no `wrangler versions deploy`, no `wrangler rollback` in a workflow, and no deploy script in a `package.json`.
+   - `test/deploy-paths.test.mjs` enforces all of the above.
+
+   **Workers Builds (Cloudflare Git integration) is owner-managed in the Cloudflare dashboard.** No repository file can check it.
+   - It is connected for `xauusd-ai-trading-assistant` and `xauusd-fundamental-news-ingestion`.
+   - Production deploy command: `npx wrangler versions upload`. A production build uploads a version and never promotes it. The owner set this on 2026-11-15 for both Workers.
+   - Preview builds stay on; the News root directory is `/fundamental-news-ingestion`.
+   - Any change to these settings is the owner's, and must keep production builds versions-only.
 ## 6. Owner-only actions
 - TradingView OAuth re-authorization at `https://news.cryptophys.work/oauth/start`.
 - Rotation of `WEBHOOK_SECRET` (in the AI Worker and the Pine "CTA Webhook Secret" input).
