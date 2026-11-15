@@ -20,6 +20,7 @@
 // always. A WAIT now misses an opportunity only when a 2:1 trade would have won: price
 // reaches 1 x ATR (waitTargetAtr) on one side before touching 0.5 x ATR (thresholdAtr) on
 // the other. BUY and SELL scoring is unchanged (1:1 at 0.5 x ATR).
+import { warRoomThreadFilter, barTimeFloor } from "./thread-windows.mjs";
 import { reputationFromScorecards, REPUTATION_DAYS } from "./reputation.mjs";
 
 export const SCORING_VERSION = "cryptophys.outcome-scoring.v3";
@@ -301,7 +302,7 @@ export async function roomStatements(env, sinceIso) {
  *   15: the Live War Room 15m (threads warroom:<day>), keyed by the 15m bar close;
  *   60: the 1H War Room (thread tf:H1), keyed by the H1 candle key (a re-convened session wins).
  */
-export async function agentStatements(env, timeframe, sinceIso) {
+export async function agentStatements(env, timeframe, sinceIso, { now = Date.now() } = {}) {
   const byKey = new Map();
   const add = (key, row) => {
     if (!key || !row.stance) return;
@@ -316,10 +317,12 @@ export async function agentStatements(env, timeframe, sinceIso) {
   };
   try {
     if (timeframe === "15") {
-      const rows = (await env.DB.prepare("SELECT run_id, bar_time, step, agent, stance, confidence FROM agent_thread_messages WHERE thread_id >= 'warroom:' AND thread_id < 'warroom;' AND status = 'ok' AND bar_time >= ? AND (step LIKE 'open:%' OR step LIKE 'debate:%' OR step = 'conclusion' OR step LIKE 'shadow:%') ORDER BY run_id, CASE WHEN step LIKE 'open:%' OR step LIKE 'shadow:%' THEN 0 ELSE 1 END").bind(sinceIso).all()).results || [];
+      // Only the daily threads of the window (owner 2026-11-15, RFC_ROOM_CELLS §6): a thread's day is its bars' day.
+      const where = warRoomThreadFilter(sinceIso, now);
+      const rows = (await env.DB.prepare(`SELECT run_id, bar_time, step, agent, stance, confidence FROM agent_thread_messages WHERE ${where.sql} AND status = 'ok' AND bar_time >= ? AND (step LIKE 'open:%' OR step LIKE 'debate:%' OR step = 'conclusion' OR step LIKE 'shadow:%') ORDER BY run_id, CASE WHEN step LIKE 'open:%' OR step LIKE 'shadow:%' THEN 0 ELSE 1 END`).bind(...where.binds, sinceIso).all()).results || [];
       for (const r of rows) add(r.bar_time, r);
     } else if (TF_THREAD[timeframe]) {
-      const rows = (await env.DB.prepare("SELECT m.run_id, m.step, m.agent, m.stance, m.confidence, json_extract(b.body_json, '$.candle_key') AS candle_key FROM agent_thread_messages m JOIN agent_thread_messages b ON b.thread_id = m.thread_id AND b.run_id = m.run_id AND b.step = 'brief' WHERE m.thread_id = ? AND m.status = 'ok' AND m.ts >= ? AND (m.step LIKE 'open:%' OR m.step LIKE 'debate:%' OR m.step = 'conclusion' OR m.step LIKE 'shadow:%') ORDER BY m.run_id, CASE WHEN m.step LIKE 'open:%' OR m.step LIKE 'shadow:%' THEN 0 ELSE 1 END").bind(TF_THREAD[timeframe], sinceIso).all()).results || [];
+      const rows = (await env.DB.prepare("SELECT m.run_id, m.step, m.agent, m.stance, m.confidence, json_extract(b.body_json, '$.candle_key') AS candle_key FROM agent_thread_messages m JOIN agent_thread_messages b ON b.thread_id = m.thread_id AND b.run_id = m.run_id AND b.step = 'brief' WHERE m.thread_id = ? AND m.bar_time >= ? AND m.status = 'ok' AND m.ts >= ? AND (m.step LIKE 'open:%' OR m.step LIKE 'debate:%' OR m.step = 'conclusion' OR m.step LIKE 'shadow:%') ORDER BY m.run_id, CASE WHEN m.step LIKE 'open:%' OR m.step LIKE 'shadow:%' THEN 0 ELSE 1 END").bind(TF_THREAD[timeframe], barTimeFloor(sinceIso), sinceIso).all()).results || [];
       for (const r of rows) add(r.candle_key, r);
     }
   } catch { /* thread tables absent */ }
@@ -411,7 +414,7 @@ export async function scoreRecentStatements(env, { now = Date.now() } = {}) {
     // P7: the room agents of the same bars, once per bar (their own run marker).
     const agentRun = timeframe + AGENT_RUN_SUFFIX;
     const agentsDone = new Set(((await env.DB.prepare("SELECT candle_key FROM outcome_runs WHERE timeframe = ? AND scored_at >= ? AND scoring_version = ?").bind(agentRun, new Date(now - 3 * 86_400_000).toISOString(), SCORING_VERSION).all()).results || []).map((r) => r.candle_key));
-    const byKey = await agentStatements(env, timeframe, TF_THREAD[timeframe] ? new Date(Date.parse(ready[0].open_time) - spec.ms).toISOString() : ready[0].close_time);
+    const byKey = await agentStatements(env, timeframe, TF_THREAD[timeframe] ? new Date(Date.parse(ready[0].open_time) - spec.ms).toISOString() : ready[0].close_time, { now });
     for (const bar of ready) {
       const candleKey = keyOf(bar);
       if (agentsDone.has(candleKey)) continue;

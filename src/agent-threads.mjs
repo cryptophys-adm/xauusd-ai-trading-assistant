@@ -63,8 +63,12 @@ export const THREAD_SCHEMA_SQL = [
 )`,
   "CREATE INDEX IF NOT EXISTS idx_agent_thread_messages_thread ON agent_thread_messages(thread_id, id)",
   // Resource audit P0 (2026-11-14): the AI calls of the last hour and the health alerts read by time.
-  "CREATE INDEX IF NOT EXISTS idx_agent_thread_messages_ts ON agent_thread_messages(ts)"
+  "CREATE INDEX IF NOT EXISTS idx_agent_thread_messages_ts ON agent_thread_messages(ts)",
+  // Owner 2026-11-15 (RFC_ROOM_CELLS §6, interim option): a room's messages by bar, so scoring and the weighting
+  // replay read only their window (migration 0021; also made here, production applies no migration).
+  "CREATE INDEX IF NOT EXISTS idx_agent_thread_messages_thread_bar ON agent_thread_messages(thread_id, bar_time)"
 ];
+
 
 const ROOM_AGENT_SCHEMA = Object.freeze({
   type: "object",

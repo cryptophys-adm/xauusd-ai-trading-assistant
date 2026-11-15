@@ -207,13 +207,13 @@ test("P7: the agents of the Live War Room 15m and the 1H War Room are scored by 
   msg.run("warroom:" + close15.slice(0, 10), close15, "open:technical", "technical", close15, close15, "BUY", 0.6, "{}");
   msg.run("warroom:" + close15.slice(0, 10), close15, "debate:technical", "technical", close15, close15, "WAIT", 0.6, "{}");
   msg.run("warroom:" + close15.slice(0, 10), close15, "conclusion", "moderator", close15, close15, "WAIT", 0.7, "{}");
-  const run = h1[14].open_time, ts = h1[15].close_time;
-  msg.run("tf:H1", run, "brief", "system", null, ts, null, null, JSON.stringify({ candle_key: key }));
-  msg.run("tf:H1", run, "open:risk", "risk", null, ts, "WAIT", 0.5, "{}");
-  msg.run("tf:H1", run, "open:kinetic_engine", "kinetic_engine", null, ts, "SELL", 0.5, "{}");
+  const run = h1[14].open_time, ts = h1[15].close_time, bar = h1[14].close_time; // a tf room row carries its bar close (timeframe-threads.mjs base())
+  msg.run("tf:H1", run, "brief", "system", bar, ts, null, null, JSON.stringify({ candle_key: key }));
+  msg.run("tf:H1", run, "open:risk", "risk", bar, ts, "WAIT", 0.5, "{}");
+  msg.run("tf:H1", run, "open:kinetic_engine", "kinetic_engine", bar, ts, "SELL", 0.5, "{}");
   // A re-convened session (#hud) of the same bar wins over the first.
-  msg.run("tf:H1", run + "#hud", "brief", "system", null, ts, null, null, JSON.stringify({ candle_key: key }));
-  msg.run("tf:H1", run + "#hud", "open:kinetic_engine", "kinetic_engine", null, ts, "BUY", 0.5, "{}");
+  msg.run("tf:H1", run + "#hud", "brief", "system", bar, ts, null, null, JSON.stringify({ candle_key: key }));
+  msg.run("tf:H1", run + "#hud", "open:kinetic_engine", "kinetic_engine", bar, ts, "BUY", 0.5, "{}");
 
   const out = await scoreRecentStatements(env, { now: Math.max(now, m15Now) });
   assert.equal(out.agent_scores, 4, JSON.stringify(out));
@@ -275,7 +275,7 @@ test("4H and daily rooms are scored too (owner decisions 2026-11-09: every timef
   const db = d1();
   const key = "OANDA:XAUUSD:240:" + T0;
   const run = new Date(T0).toISOString();
-  const put = (step, agent, stance, body) => db.raw.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, ts, stance, confidence, body_json, status) VALUES ('tf:H4', ?, ?, ?, ?, ?, 0.5, ?, ?)").run(run, step, agent, new Date(T0 + 4 * H).toISOString(), stance, JSON.stringify(body), step === "brief" ? "info" : "ok");
+  const put = (step, agent, stance, body) => db.raw.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, bar_time, ts, stance, confidence, body_json, status) VALUES ('tf:H4', ?, ?, ?, ?, ?, ?, 0.5, ?, ?)").run(run, step, agent, new Date(T0 + 4 * H).toISOString(), new Date(T0 + 4 * H).toISOString(), stance, JSON.stringify(body), step === "brief" ? "info" : "ok");
   put("brief", "system", null, { candle_key: key });
   put("open:h4", "h4", "BUY", { claim: "c" });
   put("conclusion", "moderator", "WAIT", { summary: "s" });

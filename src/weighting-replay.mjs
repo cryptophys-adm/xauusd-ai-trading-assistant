@@ -15,6 +15,7 @@
 // arm (§9.3): paired one-sided sign test, Holm across the family's live tests of the month, the
 // discovery minimum and the newest HOLDOUT_BARS as a holdout; after an activation, the reverse shadow.
 
+import { warRoomThreadFilter, barTimeFloor } from "./thread-windows.mjs";
 import { SCORING, SCORING_VERSION, scoreStance, ensureOutcomeSchema } from "./outcome-scoring.mjs";
 import { pairedTally, holmAdjust, holmMonth, SHADOW_MIN_SAMPLE, SHADOW_SIGNIFICANCE, HOLDOUT_BARS } from "./shadow-versions.mjs";
 import { WEIGHTING_DEFAULT, WEIGHTING_GRID, WEIGHTING_VERSION, weightingId, weightingChange, neighbourPoints, weightFromSums, loadAgentRows, agentWeight, weightingState, quorumFor, TF_MS } from "./weighting.mjs";
@@ -168,13 +169,16 @@ const STEPS = "(m.step LIKE 'open:%' OR m.step LIKE 'debate:%' OR m.step = 'conc
 const TF_THREAD = Object.freeze({ "60": "tf:H1", "240": "tf:H4", "1D": "tf:D1" });
 
 /** The concluded rooms of a timeframe since `sinceIso`. */
-export async function loadRooms(db, timeframe, sinceIso) {
+export async function loadRooms(db, timeframe, sinceIso, { now = Date.now() } = {}) {
   if (timeframe === "15") {
-    const rows = (await db.prepare(`SELECT m.run_id, m.step, m.agent, m.stance, json_extract(m.body_json, '$.bias') AS bias, m.bar_time AS bar_time FROM agent_thread_messages m WHERE m.thread_id >= 'warroom:' AND m.thread_id < 'warroom;' AND m.status = 'ok' AND m.ts >= ? AND ${STEPS} ${ORDER}`).bind(sinceIso).all()).results || [];
+    // Owner 2026-11-15 (RFC_ROOM_CELLS §6): the window's daily threads only, by bar time (a message is written
+    // after its bar closes, so a bar a day before the window start bounds every message since it).
+    const where = warRoomThreadFilter(barTimeFloor(sinceIso), now, "m");
+    const rows = (await db.prepare(`SELECT m.run_id, m.step, m.agent, m.stance, json_extract(m.body_json, '$.bias') AS bias, m.bar_time AS bar_time FROM agent_thread_messages m WHERE ${where.sql} AND m.bar_time >= ? AND m.status = 'ok' AND m.ts >= ? AND ${STEPS} ${ORDER}`).bind(...where.binds, barTimeFloor(sinceIso), sinceIso).all()).results || [];
     // The 15m room's bar time is its close; its outcome key is the bar's open (src/outcome-scoring.mjs).
     return roomsFromRows(rows.map((r) => ({ ...r, key: Number.isFinite(Date.parse(r.bar_time)) ? `${SYMBOL}:15:${Date.parse(r.bar_time) - TF_MS["15"]}` : null })), (key) => Number(key.split(":").pop()) + TF_MS["15"]);
   }
-  const rows = (await db.prepare(`SELECT m.run_id, m.step, m.agent, m.stance, json_extract(m.body_json, '$.bias') AS bias, json_extract(b.body_json, '$.candle_key') AS key FROM agent_thread_messages m JOIN agent_thread_messages b ON b.thread_id = m.thread_id AND b.run_id = m.run_id AND b.step = 'brief' WHERE m.thread_id = ? AND m.status = 'ok' AND m.ts >= ? AND ${STEPS} ${ORDER}`).bind(TF_THREAD[timeframe], sinceIso).all()).results || [];
+  const rows = (await db.prepare(`SELECT m.run_id, m.step, m.agent, m.stance, json_extract(m.body_json, '$.bias') AS bias, json_extract(b.body_json, '$.candle_key') AS key FROM agent_thread_messages m JOIN agent_thread_messages b ON b.thread_id = m.thread_id AND b.run_id = m.run_id AND b.step = 'brief' WHERE m.thread_id = ? AND m.bar_time >= ? AND m.status = 'ok' AND m.ts >= ? AND ${STEPS} ${ORDER}`).bind(TF_THREAD[timeframe], barTimeFloor(sinceIso), sinceIso).all()).results || [];
   return roomsFromRows(rows, (key) => Number(String(key).split(":").pop()) + TF_MS[timeframe]);
 }
 
@@ -204,7 +208,7 @@ export async function readWeightingReplay(env, { timeframe = "60", days = REPLAY
   const byAgent = await loadAgentRows(env.DB, { days: days + maxDays, now, timeframe, regimes });
   const rows = [...byAgent].flatMap(([agent, list]) => list.map((r) => ({ agent, ...r }))).sort((a, b) => a.close_ms - b.close_ms);
   let rooms = [];
-  try { rooms = await loadRooms(env.DB, timeframe, new Date(windowStart - tfMs).toISOString()); } catch { rooms = []; }
+  try { rooms = await loadRooms(env.DB, timeframe, new Date(windowStart - tfMs).toISOString(), { now }); } catch { rooms = []; }
   rooms = rooms.filter((r) => r.close_ms >= windowStart).map((r) => ({ ...r, regime: regimes.get(r.close_ms) ?? null }));
   const outcomes = new Map();
   const scored = (await env.DB.prepare("SELECT candle_key, stance, result FROM outcome_scores WHERE timeframe = ? AND scoring_version = ? AND statement_close >= ?").bind(timeframe, SCORING_VERSION, new Date(windowStart).toISOString()).all()).results || [];
