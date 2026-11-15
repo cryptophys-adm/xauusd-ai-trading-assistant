@@ -31,7 +31,8 @@
         "required_status_checks": [
           { "context": "evidence-unit-tests", "integration_id": 15368 },
           { "context": "preview-e2e", "integration_id": 15368 },
-          { "context": "protection-guard", "integration_id": 15368 }
+          { "context": "protection-guard", "integration_id": 15368 },
+          { "context": "typecheck", "integration_id": 15368 }
         ]
       }
     }

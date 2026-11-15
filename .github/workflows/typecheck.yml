@@ -1,0 +1,32 @@
+name: Type-check
+
+# Cut-over option (D), owner 2026-11-15: xauusd keeps its own CI and adopts the platform's gates. One required
+# check, typecheck, covers every TypeScript source in the repository: the AI Worker (tsconfig.json, src/**/*.ts
+# with the .d.mts types of the .mjs modules) and the Nexus UI (workers/xauusd-nexus-dashboard/ui, React .tsx).
+# It runs on every pull request (no path filter), because a required check that never reports would block the PR.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: AI Worker (tsc --noEmit)
+        run: |
+          npm install --no-audit --no-fund
+          npm run typecheck
+      - name: Nexus UI (tsc --noEmit)
+        working-directory: workers/xauusd-nexus-dashboard/ui
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
