@@ -15,7 +15,6 @@ import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import { verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
 import { HUD_NAMES, calibrationCounts, hudAgentsIn } from "./hud-reading.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
-import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { memoEligible, memoKind, inputHash, memoLookup, memoStore, roomMemoEnabled, evidenceShadow, evidenceMemoEnabled } from "./room-memo.mjs";
 import { recordAiUsage } from "./ai-usage.mjs";
 import {
@@ -25,7 +24,6 @@ import {
 
 export const ROOM_STANCES = Object.freeze(["BUY", "SELL", "HOLD", "WAIT", "CLOSE"]);
 export const THREAD_WALL_BUDGET_MS = 300_000;
-export const LIVE_ROOM_WALL_BUDGET_MS = 150_000;
 const INSIGHT_MAX = 600;
 const SUMMARY_MAX = 1000;
 const RAW_MAX = 2048;
@@ -70,20 +68,7 @@ export const THREAD_SCHEMA_SQL = [
 ];
 
 
-const ROOM_AGENT_SCHEMA = Object.freeze({
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    agent: { type: "string", enum: ["technical", "risk"] },
-    stance: { type: "string", enum: [...ROOM_STANCES] },
-    confidence: { type: "number" },
-    insight: { type: "string" },
-    refs: { type: "array", items: { type: "string" } },
-    responds_to: { type: ["string", "null"] }
-  },
-  required: ["agent", "stance", "confidence", "insight", "refs", "responds_to"]
-});
-
+// The HUD agents' moderator answers in this shape (the legacy live room's moderator used it too).
 const ROOM_MODERATOR_SCHEMA = Object.freeze({
   type: "object",
   additionalProperties: false,
@@ -566,18 +551,6 @@ export async function runNewsThread(env, task, { clock = () => Date.now() } = {}
 
 // ---------------------------------------------------------------- live room
 
-function validateRoomAgent(obj, agent) {
-  const errors = [];
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { valid: false, errors: ["not_an_object"] };
-  if (obj.agent !== agent) errors.push("agent_mismatch");
-  if (!ROOM_STANCES.includes(obj.stance)) errors.push("stance_invalid");
-  if (!inUnit(obj.confidence)) errors.push("confidence_out_of_range");
-  if (typeof obj.insight !== "string" || !obj.insight.trim()) errors.push("insight_missing");
-  if (!Array.isArray(obj.refs) || !obj.refs.length || obj.refs.some(r => typeof r !== "string" || !r.trim())) errors.push("refs_missing");
-  errors.push(...naturalLanguageErrors(obj.insight));
-  return { valid: errors.length === 0, errors };
-}
-
 /** The moderator must name the authoritative H1 decision whenever its stance differs from it. */
 export function validateRoomModerator(obj, h1Decision) {
   const errors = [];
@@ -592,40 +565,11 @@ export function validateRoomModerator(obj, h1Decision) {
   return { valid: errors.length === 0, errors };
 }
 
-function roomAgentMessages(agent, evidence, technicalMsg) {
-  const role = agent === "technical"
-    ? "You are the technical agent in a live XAUUSD trading room that meets at every 15m candle close. " +
-      "First judge the closed 15m candles: that is the setup. Then use the 5m execution data from the local lane (the 5m read, labelled VERIFIED 5m or UNVERIFIED 5m, and the last 5m bars) for execution timing: is there an entry trigger now, or should an open position be held or closed? " +
-      "The H1 TradingView reading (Prophet and GMI v12.70) is the higher-timeframe backdrop: say whether the 15m setup agrees with it. Call things by plain names such as \"the 15m candle\" or \"the H1 TradingView reading\", never by a field name."
-    : "You are the risk agent in a live XAUUSD trading room that meets at every 15m candle close. Challenge the technical agent: where do the 15m setup or the 5m execution read conflict with the authoritative H1 decision or the news consensus? Prefer HOLD/WAIT when they do.";
-  return chatMessages([
-    role,
-    RULES,
-    "Room stances: BUY, SELL, HOLD (keep any existing position), WAIT (stay flat), CLOSE (exit an existing position). They are discussion positions only.",
-    `Required JSON: {"agent":"${agent}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"insight":"<= 400 chars","refs":["..."],"responds_to":${agent === "risk" ? "\"technical\"" : "null"}}`,
-    "EVIDENCE:",
-    JSON.stringify(evidence),
-    ...(technicalMsg ? ["TECHNICAL AGENT:", JSON.stringify({ stance: technicalMsg.stance, confidence: technicalMsg.confidence, insight: technicalMsg.insight })] : [])
-  ]);
-}
-
-function roomModeratorMessages(evidence, transcript) {
-  return chatMessages([
-    "You are the moderator of a live XAUUSD trading room that meets at every 15m candle close.",
-    RULES_NO_REFS,
-    `Give one short consensus line. If your stance differs from the H1 decision (${evidence.h1.decision}), the summary must say "H1 decision: ${evidence.h1.decision}".`,
-    `Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"summary":"<= 300 chars"}`,
-    "EVIDENCE: " + JSON.stringify({ h1: evidence.h1, news: evidence.news, m15: evidence.m15.candles.at(-1) ?? null, m5: { bias: evidence.m5.bias, label: evidence.m5.label } }),
-    "ROOM:",
-    JSON.stringify(transcript.map(m => ({ agent: m.agent, status: m.status, stance: m.stance, confidence: m.confidence, insight: m.insight })))
-  ]);
-}
-
 /**
  * The live room's evidence for the 15m close barTime: the closed 15m candles, the 5m execution
  * read (VERIFIED 5m only while parity-approved), the latest H1 decision and the news consensus.
  * Returns { evidence } or { status } when the bar is stale; throws RetryableError while the 5m
- * context of this bar is not visible yet. Shared by the live room and the War Room.
+ * context of this bar is not visible yet. Used by the War Room (the legacy live room was retired 2026-11-15).
  */
 /**
  * The 5m context of the bar that closed at barTime, rebuilt from the cached closed 5m series (the
@@ -726,74 +670,6 @@ export async function liveEvidence(env, task, barTime) {
     m5_prophet_r38: { buy_confirmed: m5Raw.buy_confirmed === true, sell_confirmed: m5Raw.sell_confirmed === true, verified: m5Verified.verified === true }
   };
   return { evidence, synthesis: synth, confirmations };
-}
-
-export async function runLiveRoomBar(env, task, { clock = () => Date.now() } = {}) {
-  if (!liveRoomEnabled(env)) return { status: "disabled", calls: 0 };
-  const db = env.DB;
-  await ensureThreadSchema(db);
-  const barTime = new Date(Date.parse(task.bar_time)).toISOString();
-  // The room meets only at a 15m candle close; the other 5m bars feed execution context only.
-  if (!isFifteenMinuteClose(barTime)) return { status: "not_15m_close", calls: 0 };
-  const live = await liveEvidence(env, task, barTime);
-  if (live.status) return { status: live.status, calls: 0 };
-  const { evidence } = live;
-  const h1 = evidence.h1;
-  const day = barTime.slice(0, 10);
-  const threadId = `live15m:${day}`;
-  await upsertThread(db, { id: threadId, kind: "live15m", refKey: day, title: `Live room 15m · ${day}`, post: null, now: clock() });
-  const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, barTime).all()).results || []).map(r => [r.step, rowToThreadMessage(r)]));
-  if (existing.has("moderator")) return { status: "already_complete", calls: 0 };
-
-  // Each role falls back to its own model (owner decision 2026-11-07, model migration).
-  const roomEnv = env;
-  const deadline = clock() + LIVE_ROOM_WALL_BUDGET_MS;
-  const maxPerHour = Number(env.LIVE_ROOM_MAX_CALLS_PER_HOUR ?? 36);
-  const runState = { primaryError: null };
-  let calls = 0;
-  const budgetOk = async () => {
-    if (clock() >= deadline) return false;
-    try { return (await callsInLastHour(db, clock(), "live%")) < (Number.isFinite(maxPerHour) ? maxPerHour : 0); } catch { return false; }
-  };
-  const step = async (base, opts) => { calls += 1; return runStep(roomEnv, db, { ...base, bar_time: barTime }, { ...opts, deadline, clock, runState, budgetOk }); };
-  const toBody = (obj) => ({ body: { insight: clip(obj.insight, INSIGHT_MAX), responds_to: obj.responds_to ?? null }, refs: obj.refs.slice(0, 12).map(r => clip(r, 200)) });
-
-  const technical = existing.get("technical") || await step({ thread_id: threadId, run_id: barTime, step: "technical", agent: "technical", parent_id: null }, {
-    messages: roomAgentMessages("technical", evidence, null), schemaName: "room_agent", schema: ROOM_AGENT_SCHEMA,
-    maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateRoomAgent(o, "technical"), toBody
-  });
-  const risk = existing.get("risk") || await step({ thread_id: threadId, run_id: barTime, step: "risk", agent: "risk", parent_id: technical?.id ?? null }, {
-    messages: roomAgentMessages("risk", evidence, technical?.status === "ok" ? technical : null), schemaName: "room_agent", schema: ROOM_AGENT_SCHEMA,
-    maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateRoomAgent(o, "risk"), toBody
-  });
-  // Phase C6: the four HUD agents of the live room speak from their 15m HUD reading.
-  const hudPosts = [];
-  if (hudAgentsEnabled(env)) {
-    let hud = null;
-    try {
-      const key15 = m15KeyForClose(barTime);
-      const carried = task.hud && typeof task.hud === "object" && task.hud.candle_key === key15 ? task.hud : null;
-      const snapshot = carried || await loadHudSnapshot(env, { timeframe: "15", candleKey: key15 });
-      hud = snapshot ? await hudReadings(env, snapshot) : null;
-    } catch { hud = null; }
-    for (const id of HUD_LIVE_ROOM_AGENTS) {
-      const reading = hud?.readings?.[id];
-      if (!reading?.available) continue;
-      const stepName = `hud:${id}`;
-      const msg = existing.get(stepName) || await step({ thread_id: threadId, run_id: barTime, step: stepName, agent: id, parent_id: null }, {
-        messages: liveHudMessages(id, HUD_NAMES[id], reading, evidence.h1), schemaName: "live_hud_agent", schema: LIVE_HUD_AGENT_SCHEMA,
-        maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateHudAgent(o, id, ROOM_STANCES),
-        toBody: (o) => ({ body: { insight: clip(o.insight, INSIGHT_MAX), hud: HUD_NAMES[id], ...calibrationCounts(reading.lines) }, refs: [] })
-      });
-      hudPosts.push({ ...msg, agent: HUD_NAMES[id] });
-    }
-  }
-  await step({ thread_id: threadId, run_id: barTime, step: "moderator", agent: "moderator", parent_id: null }, {
-    messages: roomModeratorMessages(evidence, [technical, risk, ...hudPosts].filter(Boolean)), schemaName: "room_moderator", schema: ROOM_MODERATOR_SCHEMA,
-    maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateRoomModerator(o, h1.decision),
-    toBody: (obj) => ({ body: { summary: clip(obj.summary, 400), h1_decision: h1.decision }, refs: [] })
-  });
-  return { status: "complete", calls };
 }
 
 // ---------------------------------------------------------------- read models
@@ -913,22 +789,6 @@ const HUD_AGENT_SCHEMA = Object.freeze({
 });
 
 /** Live 15m room HUD agents (RFC §6.2, owner decision: Aegis included). */
-export const HUD_LIVE_ROOM_AGENTS = Object.freeze(["trade_management", "kinetic_engine", "fabio_amt", "aegis_footprint"]);
-
-const LIVE_HUD_AGENT_SCHEMA = Object.freeze({ ...HUD_AGENT_SCHEMA, properties: { ...HUD_AGENT_SCHEMA.properties, stance: { type: "string", enum: [...ROOM_STANCES] } } });
-
-function liveHudMessages(agentId, name, reading, h1) {
-  return chatMessages([
-    `You are ${name}, one agent per Pine HUD, in a live XAUUSD trading room that meets at every 15m candle close. You speak only about the ${name} HUD on the 15m candle that just closed.`,
-    RULES_NO_REFS,
-    HUD_TIERS_RULE,
-    `The authoritative H1 decision is ${h1.decision}. Room stances: BUY, SELL, HOLD (keep an existing position), WAIT (stay flat), CLOSE (exit an existing position). Never give entry, stop loss, take profit or position size.`,
-    `Required JSON: {"agent":"${agentId}","stance":"BUY|SELL|HOLD|WAIT|CLOSE","confidence":0..1,"insight":"<= 400 chars"}`,
-    "EVIDENCE:",
-    JSON.stringify({ hud: name, timeframe: "15 minutes", reading: hudEvidenceLines(reading), h1: { decision: h1.decision, confidence: h1.confidence } })
-  ]);
-}
-
 export function buildHudAgentsTask({ candleKey, enqueuedAt = new Date().toISOString() } = {}) {
   if (typeof candleKey !== "string" || !candleKey.trim()) throw new TypeError("HUD agents task requires candleKey");
   return { kind: "hud_agents", event_id: `hud_agents:${candleKey}`, candle_key: candleKey, enqueued_at: enqueuedAt };

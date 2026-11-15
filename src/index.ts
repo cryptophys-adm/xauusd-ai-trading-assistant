@@ -226,7 +226,7 @@ import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
 import { reserveTvCalls, releaseTvCalls } from "./tv-budget.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
-import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, newsThreadsEnabled, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents, m15KeyForClose } from "./agent-threads.mjs";
+import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, newsThreadsEnabled, buildLiveRoomTask, runNewsThread, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents, m15KeyForClose } from "./agent-threads.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { warRoomEnabled, runWarRoomBar, runMissedWarRoom, readWarRoom, readTldr, agentName } from "./war-room.mjs";
 import { reputationOf, familyOf, REPUTATION_VERSION, REPUTATION_PRIOR, WEIGHT_RANGE } from "./reputation.mjs";
@@ -1868,9 +1868,10 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
       return;
     }
     if (task.kind === "live_room") {
-      // The Live War Room 15m replaces the legacy live room when WAR_ROOM_ENABLED is on.
-      const result = warRoomEnabled(env) ? await runWarRoomBar(env, task) : await runLiveRoomBar(env, task);
-      console.log(warRoomEnabled(env) ? "war_room" : "live_room", JSON.stringify({ bar_time: task.bar_time, ...result }));
+      // The Live War Room 15m meets at each 15m close; the legacy live room is retired (owner 2026-11-15).
+      if (!warRoomEnabled(env)) { console.log("live_room_skipped", JSON.stringify({ bar_time: task.bar_time, reason: "war room off" })); return; }
+      const result = await runWarRoomBar(env, task);
+      console.log("war_room", JSON.stringify({ bar_time: task.bar_time, ...result }));
       // Quorum (production 2026-11-06): redeliver after a model minute; the ok openings are kept.
       if (result?.status === "waiting_for_quorum") throw Object.assign(new Error("war room waiting for quorum"), { name: "WarRoomQuorumPending", retryDelaySeconds: 60 });
       // Decision Engine (owner decisions 2026-11-09): the single decision, as soon as the 15m room has concluded.
