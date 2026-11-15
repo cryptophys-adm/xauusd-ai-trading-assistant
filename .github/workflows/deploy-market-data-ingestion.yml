@@ -49,7 +49,7 @@ jobs:
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then echo "::error::CLOUDFLARE_API_TOKEN is not configured."; exit 1; fi
 
       - name: Validate Worker bundle
-        run: npx --yes wrangler@4.45.0 deploy --dry-run --config market-data-ingestion/wrangler.jsonc
+        run: npx --yes wrangler@4.156.2 deploy --dry-run --config market-data-ingestion/wrangler.jsonc
 
       - name: Deploy Worker
         id: deploy
@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           # Version provenance (owner 2026-11-15, P5): tag = the commit's first 12 characters; /health reports it.
-          npx --yes wrangler@4.45.0 deploy --config market-data-ingestion/wrangler.jsonc --tag "${GITHUB_SHA:0:12}" --message "commit ${GITHUB_SHA}" --var "DEPLOY_COMMIT:${GITHUB_SHA}" --var "DEPLOYED_AT:$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee deploy.log
+          npx --yes wrangler@4.156.2 deploy --config market-data-ingestion/wrangler.jsonc --tag "${GITHUB_SHA:0:12}" --message "commit ${GITHUB_SHA}" --var "DEPLOY_COMMIT:${GITHUB_SHA}" --var "DEPLOYED_AT:$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee deploy.log
           url=$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -n1 || true)
           if [ -z "$url" ]; then echo "::error::Could not determine workers.dev URL from deploy output."; exit 1; fi
           echo "url=$url" >> "$GITHUB_OUTPUT"
@@ -72,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${MARKET_DATA_INGEST_SECRET:-}" ]; then
-            printf '%s' "$MARKET_DATA_INGEST_SECRET" | npx --yes wrangler@4.45.0 secret put MARKET_DATA_INGEST_SECRET --config market-data-ingestion/wrangler.jsonc >/dev/null
+            printf '%s' "$MARKET_DATA_INGEST_SECRET" | npx --yes wrangler@4.156.2 secret put MARKET_DATA_INGEST_SECRET --config market-data-ingestion/wrangler.jsonc >/dev/null
             echo "Manual endpoint secret updated."
           else
             echo "MARKET_DATA_INGEST_SECRET not set: manual HTTP endpoints stay disabled (cron ingestion and publishing are unaffected)."

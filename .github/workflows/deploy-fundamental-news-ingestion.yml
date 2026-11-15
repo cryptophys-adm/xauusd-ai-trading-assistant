@@ -32,7 +32,7 @@ jobs:
         run: node --test fundamental-news-ingestion/test/*.test.mjs
 
       - name: Validate Worker bundle
-        run: npx --yes wrangler@4.45.0 deploy --dry-run --config fundamental-news-ingestion/wrangler.jsonc
+        run: npx --yes wrangler@4.156.2 deploy --dry-run --config fundamental-news-ingestion/wrangler.jsonc
 
       - name: Deploy Worker to Cloudflare
         env:
@@ -43,7 +43,7 @@ jobs:
             exit 1
           fi
           # Version provenance (owner 2026-11-15, P5): tag = the commit's first 12 characters; /health reports it.
-          npx --yes wrangler@4.45.0 deploy --config fundamental-news-ingestion/wrangler.jsonc --tag "${GITHUB_SHA:0:12}" --message "commit ${GITHUB_SHA}" --var "DEPLOY_COMMIT:${GITHUB_SHA}" --var "DEPLOYED_AT:$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          npx --yes wrangler@4.156.2 deploy --config fundamental-news-ingestion/wrangler.jsonc --tag "${GITHUB_SHA:0:12}" --message "commit ${GITHUB_SHA}" --var "DEPLOY_COMMIT:${GITHUB_SHA}" --var "DEPLOYED_AT:$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       - name: Smoke test production health
         run: |

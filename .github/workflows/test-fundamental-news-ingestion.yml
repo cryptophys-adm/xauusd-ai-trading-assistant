@@ -26,4 +26,4 @@ jobs:
         run: node --test fundamental-news-ingestion/test/*.test.mjs
 
       - name: Validate Worker bundle
-        run: npx --yes wrangler@4.45.0 deploy --dry-run --config fundamental-news-ingestion/wrangler.jsonc
+        run: npx --yes wrangler@4.156.2 deploy --dry-run --config fundamental-news-ingestion/wrangler.jsonc

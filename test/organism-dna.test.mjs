@@ -87,6 +87,14 @@ test("D5. P5 version provenance: the AI Worker's organ carries its deploy, the o
       assert.match(l, /--tag "\$\{GITHUB_SHA:0:12\}"/, `${wf}: ${l.trim()}`);
       assert.match(l, /--var "DEPLOY_COMMIT:\$\{GITHUB_SHA\}"/, wf);
       assert.match(l, /--var "DEPLOYED_AT:/, wf);
+      // wrangler@4.45.0 rejected --tag/--message (2026-11-15: four deploys failed). A pin must be at
+      // least the version verified to accept them.
+      const pin = l.match(/wrangler@(\d+)\.(\d+)\.(\d+)/);
+      if (pin) {
+        const [maj, min, pat] = pin.slice(1).map(Number);
+        const ok = maj > 4 || (maj === 4 && (min > 156 || (min === 156 && pat >= 2)));
+        assert.ok(ok, `${wf}: wrangler@${pin.slice(1).join(".")} does not accept --tag/--message`);
+      }
     }
   }
 });
