@@ -30,3 +30,32 @@ test("the public analysis carries each zone's metric names and nothing a trade n
   assert.deepEqual(analysisLeaks(a), []);
   assert.doesNotMatch(JSON.stringify(a.zones.map((z) => z.metrics)), /\b\d{3,5}\b|entry|stop|target|take profit/i);
 });
+
+test("a pattern carries its two lines as drawn: start and last bar times, each line's price at both ends", async () => {
+  const { detectPatterns } = await import("../src/chart-patterns.mjs");
+  // A symmetrical triangle: falling highs, rising lows, on H4 bars with close times.
+  const bars = [];
+  const t0 = Date.parse("2026-11-01T04:00:00Z");
+  for (let i = 0; i < 80; i += 1) {
+    const amp = 40 * (1 - i / 100), wave = Math.sin(i / 3);
+    const mid = 3900 + amp * wave;
+    bars.push({ high: mid + 3, low: mid - 3, close: mid, open: mid, close_time: new Date(t0 + i * 4 * 3_600_000).toISOString() });
+  }
+  const found = detectPatterns(bars, { recent: 80 });
+  const withLines = found.filter((p) => p.line_from);
+  assert.ok(withLines.length, `a pattern with lines: ${found.map((p) => p.id).join(", ")}`);
+  for (const p of withLines) {
+    assert.ok(Date.parse(p.line_from) < Date.parse(p.line_to));
+    assert.equal(p.line_to, bars.at(-1).close_time.replace(".000Z", ".000Z"));
+    assert.ok(Number.isFinite(p.upper_from) && Number.isFinite(p.lower_from));
+  }
+  const a = publicAnalysis({ price: 3900, candidates: [], patterns: withLines.map((p) => ({ tf: "240", ...p, status: "forming" })) }, { now: Date.parse("2026-11-14T10:00:00Z") });
+  const pub = a.patterns[0];
+  assert.deepEqual(Object.keys(pub.lines), ["from", "to", "upper", "lower"]);
+  assert.equal(pub.lines.upper[1], pub.upper, "the upper line ends at the pattern's upper level");
+  assert.equal(pub.lines.lower[1], pub.lower);
+  assert.deepEqual(analysisLeaks(a), []);
+  // Without bar times (older data), no lines: the card draws the levels flat.
+  const flat = publicAnalysis({ price: 3900, candidates: [], patterns: [{ tf: "240", id: "triangle_symmetrical", status: "forming", upper: 3920, lower: 3880 }] });
+  assert.equal(flat.patterns[0].lines, undefined);
+});
