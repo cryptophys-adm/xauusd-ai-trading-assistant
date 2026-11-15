@@ -1,0 +1,47 @@
+name: Dependency audit
+
+# Cut-over option (D), owner 2026-11-15: xauusd adopts the platform's gates, item 2. `npm audit --audit-level=high`
+# for every npm package with dependencies: the repository root (no lockfile is committed, so the lockfile is
+# resolved fresh, as `npm install` does in CI and deploys) and the Nexus UI (its committed package-lock.json).
+# bridge/omega-bridge has no dependencies. ADVISORY for now: findings are reported as warnings and in the job
+# summary, and the job passes. It becomes a required check only after the findings are reported to the owner.
+
+on:
+  pull_request:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: dependency-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: npm audit (high and critical)
+        shell: bash
+        run: |
+          set -uo pipefail
+          report() {
+            local dir="$1" label="$2"
+            local out counts high critical
+            out="$(cd "$dir" && npm audit --json 2>/dev/null)"
+            counts="$(jq -c '.metadata.vulnerabilities // {}' <<<"$out")"
+            high="$(jq -r '.metadata.vulnerabilities.high // 0' <<<"$out")"
+            critical="$(jq -r '.metadata.vulnerabilities.critical // 0' <<<"$out")"
+            echo "| $label | $counts |" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$high" != "0" ] || [ "$critical" != "0" ]; then
+              echo "::warning::$label: $high high and $critical critical npm advisories (advisory gate, not blocking yet)."
+              jq -r '.vulnerabilities | to_entries[] | select(.value.severity=="high" or .value.severity=="critical") | "- \(.key): \(.value.severity)"' <<<"$out" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          }
+          { echo "### npm audit (advisory)"; echo ""; echo "| package | vulnerabilities |"; echo "|---|---|"; } >> "$GITHUB_STEP_SUMMARY"
+          npm install --package-lock-only --no-audit --no-fund >/dev/null
+          report . "repository root"
+          report workers/xauusd-nexus-dashboard/ui "Nexus UI"
