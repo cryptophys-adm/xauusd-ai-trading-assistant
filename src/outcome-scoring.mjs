@@ -326,6 +326,25 @@ export async function agentStatements(env, timeframe, sinceIso) {
   return new Map([...byKey].map(([k, m]) => [k, [...m.values()].map(({ run_id: _r, step: _s, ...st }) => st)]));
 }
 
+/**
+ * The Decision Engine's own stances (owner 2026-11-15, for the kernel's Signal Analyst: the engine becomes a scored
+ * subject beside chain:h1), as "engine:15", by the 15m bar's close time in ms. Its WAIT is scored like any WAIT.
+ */
+export const ENGINE_SUBJECT = "engine:15";
+export async function engineStatements(env, sinceIso) {
+  const byClose = new Map();
+  try {
+    const rows = (await env.DB.prepare("SELECT bar_close, stance, confidence FROM engine_decisions WHERE bar_close >= ? ORDER BY bar_close").bind(sinceIso).all()).results || [];
+    for (const r of rows) {
+      const ms = Date.parse(r.bar_close);
+      if (Number.isFinite(ms) && r.stance) byClose.set(ms, [{ subject: ENGINE_SUBJECT, source: "engine", stance: r.stance, confidence: r.confidence ?? null }]);
+    }
+  } catch { /* the engine table is absent until the engine first decides */ }
+  return byClose;
+}
+/** The outcome_runs timeframe that marks a 15m bar whose engine decision was scored. */
+export const ENGINE_RUN = "15:engine";
+
 /** The thread of each timeframe room scored by its brief's candle key (the 15m room is keyed by bar time). */
 const TF_THREAD = Object.freeze({ "60": "tf:H1", "240": "tf:H4", "1D": "tf:D1" });
 
@@ -410,7 +429,31 @@ export async function scoreRecentStatements(env, { now = Date.now() } = {}) {
       summary.agent_scores = (summary.agent_scores || 0) + written;
     }
   }
-  if (summary.scores || summary.agent_scores) {
+  // The Decision Engine's stance of each 15m bar (its own run marker, so bars scored before it existed get theirs).
+  try {
+    const bars = await loadBars(env, "15");
+    const spec = SCORED_TIMEFRAMES["15"];
+    if (bars.length >= SCORING.atrPeriod + SCORING.horizon + 1) {
+      const ready = bars.slice(SCORING.atrPeriod, bars.length - SCORING.horizon).slice(-spec.lookback);
+      const done = new Set(((await env.DB.prepare("SELECT candle_key FROM outcome_runs WHERE timeframe = ? AND scored_at >= ? AND scoring_version = ?").bind(ENGINE_RUN, new Date(now - 3 * 86_400_000).toISOString(), SCORING_VERSION).all()).results || []).map((r) => r.candle_key));
+      const byClose = ready.length ? await engineStatements(env, new Date(Date.parse(ready[0].close_time) - 60_000).toISOString()) : new Map();
+      for (const bar of ready) {
+        const candleKey = `${SYMBOL}:15:${Date.parse(bar.open_time)}`;
+        const statements = byClose.get(Date.parse(bar.close_time)) || [];
+        if (done.has(candleKey) || !statements.length || crossesGap(bars, bars.indexOf(bar), SCORING.horizon)) continue;
+        let written = 0;
+        for (const st of statements) {
+          const score = scoreStance({ stance: st.stance, confidence: st.confidence, bars, closeMs: Date.parse(bar.close_time) });
+          if (["pending", "no_data", "not_scored"].includes(score.result)) continue;
+          await insertScore(env.DB, { ...score, subject: st.subject, source: st.source, timeframe: "15", candle_key: candleKey, statement_close: bar.close_time, confidence: finite(st.confidence) ? st.confidence : null, scored_at: scoredAt });
+          written += 1;
+        }
+        await env.DB.prepare("INSERT INTO outcome_runs (timeframe, candle_key, statements, scored_at, scoring_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT(timeframe, candle_key) DO UPDATE SET statements = excluded.statements, scored_at = excluded.scored_at, scoring_version = excluded.scoring_version").bind(ENGINE_RUN, candleKey, written, scoredAt, SCORING_VERSION).run();
+        summary.engine_scores = (summary.engine_scores || 0) + written;
+      }
+    }
+  } catch (e) { summary.engine_error = String(e?.message ?? e).slice(0, 120); }
+  if (summary.scores || summary.agent_scores || summary.engine_scores) {
     try { summary.scorecards_refreshed = await refreshScorecardSnapshots(env.DB, { now }); } catch { /* the readers compute again */ }
   }
   return summary;
@@ -536,4 +579,23 @@ async function computeScorecards(db, { days, now }) {
 export async function listStuckStates(db, { limit = 50 } = {}) {
   await ensureOutcomeSchema(db);
   return ((await db.prepare("SELECT field, value, first_candle_key, last_candle_key, candles, price_range, atr, status, detected_at, updated_at FROM stuck_states ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, updated_at DESC LIMIT ?").bind(limit).all()).results || []);
+}
+
+/**
+ * The scored record of one subject over the last 7 and 30 days, for the kernel's Signal Analyst (owner 2026-11-15,
+ * platform session: hit_rate_7d / hit_rate_30d), from the stored scorecards (#332), so the endpoints stay cheap.
+ * hit_rate = hit / (hit + miss) of the directional stances (null without any); wait_accuracy = WAITs that were right.
+ * No price, entry or ATR.
+ */
+export async function outcomeSummary(db, { subject, timeframe, now = Date.now() } = {}) {
+  const windows = {};
+  for (const days of [7, 30]) {
+    const cards = await scorecards(db, { days, now, snapshot: true });
+    const c = (cards || []).find((x) => x.subject === subject && String(x.timeframe) === String(timeframe));
+    windows[`${days}d`] = {
+      n_directional: c?.directional?.n ?? 0, hit: c?.directional?.hit ?? 0, miss: c?.directional?.miss ?? 0,
+      hit_rate: c?.directional?.hit_rate ?? null, wait_n: c?.wait?.n ?? 0, wait_accuracy: c?.wait?.accuracy ?? null
+    };
+  }
+  return { scoring_version: SCORING_VERSION, subject, timeframe: String(timeframe), windows, as_of: new Date(now).toISOString() };
 }
