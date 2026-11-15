@@ -12,6 +12,7 @@
 // or expired when the bridge did not report it within INTENT_TTL_MS.
 
 import { ingestCorpus, ingestCorpusMacro, ingestMt5Calendar } from "./corpus-oracle.mjs";
+import { goldClosedAt } from "./market-hours.mjs";
 import { eaSignal, readControl, blackoutWindow } from "./ea-signal.mjs";
 import { storeDeal, dealStats, FIRST_OF_DEAL } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
@@ -451,9 +452,9 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     );
     const algoDisabled = executor?.trade_allowed === false || recentFailedAlgo;
 
-    const d = new Date(now);
-    const day = d.getUTCDay(), hour = d.getUTCHours();
-    const isWeekend = (day === 5 && hour >= 22) || day === 6 || (day === 0 && hour < 22);
+    // Gold's weekly close in New York time (2026-11-15: a fixed Friday/Sunday 22:00 UTC was an hour off
+    // half the year); a stale terminal while gold is closed is expected, not a reason to restart it.
+    const isWeekend = goldClosedAt(now);
     const terminalDisconnected = executor?.connected === false;
     const isStale = Number.isFinite(executor?.received_ms) && (now - Number(executor.received_ms) > 60_000);
 
