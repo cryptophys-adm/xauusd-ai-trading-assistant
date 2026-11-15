@@ -230,7 +230,7 @@ import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { warRoomEnabled, runWarRoomBar, runMissedWarRoom, readWarRoom, readTldr, agentName } from "./war-room.mjs";
 import { reputationOf, familyOf, REPUTATION_VERSION, REPUTATION_PRIOR, WEIGHT_RANGE } from "./reputation.mjs";
 import { indicatorAgents } from "./indicator-registry.mjs";
-import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, SCORING, SCORING_VERSION } from "./outcome-scoring.mjs";
+import { scoreRecentStatements, detectRecentStuckStates, scorecards, listStuckStates, outcomeSummary, ENGINE_SUBJECT, SCORING, SCORING_VERSION } from "./outcome-scoring.mjs";
 import { publishPlatformReports, platformStatus } from "./platform-reports.mjs";
 import { runShadowVersions, readShadowVersions } from "./shadow-versions.mjs";
 import { tuningView } from "./tuning.mjs";
@@ -2361,7 +2361,9 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/decisions") {
     const rows = await env.DB.prepare("SELECT candle_key, created_at, decision, confidence, entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning FROM trade_decisions ORDER BY created_at DESC LIMIT ?").bind(limitParam()).all<JsonObject>();
     const items = (rows.results || []).map(r => ({ candle_key: r.candle_key, timestamp: r.created_at, decision: r.decision, confidence: r.confidence, entry_price: r.entry_price, stop_loss: r.stop_loss, take_profit: r.take_profit, risk_reward: r.risk_reward, position_size_pct: r.position_size_pct, reasoning: asText(r.reasoning).slice(0, 300) }));
-    return dashboardJson({ status: "ok", count: items.length, items });
+    // The H1 chain's scored record (the kernel's Signal Analyst reads it here; owner 2026-11-15).
+    const outcome_summary = await outcomeSummary(env.DB, { subject: "chain:h1", timeframe: "60" }).catch(() => null);
+    return dashboardJson({ status: "ok", count: items.length, items, outcome_summary });
   }
   if (url.pathname.startsWith("/api/decision/")) {
     const key = decodeURIComponent(url.pathname.slice("/api/decision/".length));
@@ -2591,7 +2593,9 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   }
   if (url.pathname === "/api/engine/decisions") {
     try {
-      return dashboardJson({ status: "ok", enabled: decisionEngineEnabled(env), decisions: await readDecisions(env, { limit: Number(url.searchParams.get("limit") || "24") || 24 }) });
+      // The Decision Engine's scored record (the kernel's Signal Analyst reads it here; owner 2026-11-15).
+      const outcome_summary = await outcomeSummary(env.DB, { subject: ENGINE_SUBJECT, timeframe: "15" }).catch(() => null);
+      return dashboardJson({ status: "ok", enabled: decisionEngineEnabled(env), decisions: await readDecisions(env, { limit: Number(url.searchParams.get("limit") || "24") || 24 }), outcome_summary });
     } catch (error) {
       console.error("engine_decisions_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);

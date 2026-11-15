@@ -286,3 +286,32 @@ test("4H and daily rooms are scored too (owner decisions 2026-11-09: every timef
   assert.equal(crossesGap(weekend, 0, 2), false, "Friday to Monday on the daily chart");
   assert.ok(DAILY_MAX_GAP_MS > 2 * 86_400_000);
 });
+
+test("the Decision Engine's stances are scored as engine:15, once per bar, and summed for the kernel (7 and 30 days, no price)", async () => {
+  resetOutcomeSchemaCacheForTests();
+  const { outcomeSummary, ENGINE_SUBJECT, ENGINE_RUN } = await import("../src/outcome-scoring.mjs");
+  const { DECISION_SCHEMA_SQL } = await import("../src/decision-engine.mjs");
+  // 15m: 15 flat bars, then the decided bar (index 14) and 4 bars rising 6 each (threshold 5).
+  const m15 = barsFrom([...base, [100, 104, 99, 103], [103, 108, 102, 107], [107, 109, 106, 108], [108, 110, 107, 109]], { start: T0, ms: 900_000 });
+  const now = Date.parse(m15.at(-1).close_time) + 60_000;
+  const env = { DB: d1(), SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|15m": JSON.stringify({ candles: m15 }) }), WEBHOOK_BUFFER: kv() };
+  const db = env.DB.raw;
+  for (const sql of DECISION_SCHEMA_SQL) db.exec(sql);
+  const insert = (i, stance) => db.prepare("INSERT INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, 0.6, 'council', '{}')").run("k" + i, m15[i].close_time, m15[i].close_time, stance);
+  insert(14, "BUY");
+  insert(13, "WAIT");
+  const r = await scoreRecentStatements(env, { now });
+  assert.equal(r.engine_scores, 1, "only bar 14 has a closed 4-bar horizon and a full ATR history");
+  const rows = db.prepare("SELECT subject, timeframe, result, stance FROM outcome_scores WHERE subject = ?").all(ENGINE_SUBJECT);
+  assert.deepEqual(rows.map((x) => [x.timeframe, x.stance, x.result]), [["15", "BUY", "hit"]]);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM outcome_runs WHERE timeframe = ?").get(ENGINE_RUN).n, 1);
+  assert.equal((await scoreRecentStatements(env, { now })).engine_scores ?? 0, 0, "once per bar");
+
+  const s = await outcomeSummary(env.DB, { subject: ENGINE_SUBJECT, timeframe: "15", now });
+  assert.deepEqual(s.windows["7d"], { n_directional: 1, hit: 1, miss: 0, hit_rate: 1, wait_n: 0, wait_accuracy: null });
+  assert.deepEqual(Object.keys(s.windows), ["7d", "30d"]);
+  assert.deepEqual([s.scoring_version, s.subject, s.timeframe], [SCORING_VERSION, "engine:15", "15"]);
+  assert.doesNotMatch(JSON.stringify(s), /entry|atr|price|threshold/i, "no price, entry or ATR");
+  const none = await outcomeSummary(env.DB, { subject: "chain:h1", timeframe: "60", now });
+  assert.deepEqual(none.windows["30d"], { n_directional: 0, hit: 0, miss: 0, hit_rate: null, wait_n: 0, wait_accuracy: null }, "no data: zero counts, null rates");
+});

@@ -661,7 +661,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - It is deterministic and reads prices only: the pull adapter's closed TradingView bars, from the same KV namespace (`SIGNAL_CACHE` = `MARKET_DATA_CACHE`). It never changes a decision, prompt or evidence.
 - **What is scored, per closed candle, once its horizon has closed:**
   - **H1:** the chain decision (`chain:h1`), the bus round-2 agents and the moderator (`bus:*`), the HUD agents (`hud:*`), and the parity-approved indicator directions (`indicator:prophet_r38`, `indicator:prophet_r37`, `indicator:gmi_v12_70`).
-  - **15m:** the live-room posts (`room:*`).
+  - **15m:** the live-room posts (`room:*`), and the Decision Engine's own decision of each bar (`engine:15`, owner 2026-11-15; its own run marker `15:engine`). `GET /api/engine/decisions` (`engine:15`) and `GET /api/decisions` (`chain:h1`) carry `outcome_summary`: the 7- and 30-day directional hit rate (hit / (hit + miss), null without data) and WAIT accuracy from the stored scorecards; no price, entry or ATR. The kernel's Signal Analyst reads it.
 - **How:**
   - The entry is the statement candle's close, and the threshold is `0.5 × ATR(14)`, a simple average of the true range. The horizon is the next 4 closed candles.
   - BUY or SELL is a hit when the favourable excursion reaches the threshold first, a miss when the adverse excursion does (both in the same bar counts as a miss), and neutral otherwise.
