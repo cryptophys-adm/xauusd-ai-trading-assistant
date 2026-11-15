@@ -106,9 +106,10 @@ test("worker source keeps asynchronous queueing, provenance, and AI tracing hook
   const accepted = source.indexOf('analysis_status: "queued"', queueSend);
   assert.ok(d1Write >= 0 && kvWrite > d1Write && queueSend > kvWrite && accepted > queueSend,
     "D1 and KV writes must precede durable queue send and HTTP 202 acceptance");
-  assert.match(source, /verifyHandoffRequest\(env\.CONFLUENCE_HANDOFF_SECRET/);
-  assert.match(source, /validateBundle\(bundle\)/);
-  assert.match(source, /fail_closed:/);
+  // The /v1/analyze bundle path is retired (owner 2026-11-15): a stale "analysis" task is acknowledged, never run.
+  assert.doesNotMatch(source, /pathname === "\/v1\/analyze"/);
+  assert.doesNotMatch(source, /runAnalysisFromBundle/);
+  assert.match(source, /analysis_bundle_retired/);
   assert.doesNotMatch(source, /span\.setAttribute\(\s*["'][^"']*(?:prompt|secret|token)[^"']*["']/i,
     "prompt and credential values must never be attached to spans");
   assert.match(wrangler, /xauusd-webhook-events/);

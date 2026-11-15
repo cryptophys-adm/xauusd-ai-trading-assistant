@@ -182,12 +182,6 @@
           "task": "decision_council"
         },
         {
-          "task": "h1_analyst"
-        },
-        {
-          "task": "h1_counselor"
-        },
-        {
           "task": "h1_reasoner"
         },
         {
@@ -210,6 +204,9 @@
         },
         {
           "task": "news_counselor"
+        },
+        {
+          "task": "news_reasoner"
         },
         {
           "task": "news_daily_tags"
