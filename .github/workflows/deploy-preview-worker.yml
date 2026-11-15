@@ -452,9 +452,9 @@ jobs:
           // its Consensus Discussion. The fixture above is an M5 candle with no War Room, so it has no
           // consensus and no quorum: a WAIT without any model.
           assert.equal(finalDecision.synthesis?.decision?.decision, "WAIT", "no War Room, no quorum: the decision stays WAIT");
+          // Owner 2026-11-15: the bus's code, queue handler and GET /api/bus are removed.
           const oldBus = await pollFetch(base + "/api/bus?candle_key=" + encodeURIComponent(candleKey));
-          const oldBusItems = oldBus.ok ? ((await oldBus.json()).items || []) : [];
-          assert.equal(oldBusItems.length, 0, "the old H1 multi-agent bus never runs for a candle");
+          assert.notEqual(oldBus.status, 200, "GET /api/bus is gone with the retired H1 multi-agent bus");
 
           // Agent text must read as natural language (no field names, evidence paths or key=value).
           const codeLike = (text) => /\b[a-z][a-z0-9]*_[a-z0-9_]+\b|\b[a-z][a-z0-9_]+\.[a-z][a-z0-9_]+\b|\b\w+\s*=\s*\w+/.test(String(text ?? ""));

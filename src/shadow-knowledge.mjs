@@ -21,7 +21,7 @@
 
 import { storedPack } from "./aether-pack.mjs";
 import { promotedKeys } from "./learned-live.mjs";
-import { callBusModel } from "./multi-agent-bus.mjs";
+import { callBusModel } from "./model-call.mjs";
 import { shadowAllowed } from "./shadow-switch.mjs";
 import { SCORING_VERSION, scoreStance } from "./outcome-scoring.mjs";
 import { pairedTally, holmAdjust, holmMonth, SHADOW_MIN_SAMPLE, SHADOW_SIGNIFICANCE, HOLDOUT_BARS } from "./shadow-versions.mjs";

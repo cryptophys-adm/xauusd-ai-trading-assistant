@@ -6,7 +6,7 @@ import { shadowAllowed, setShadowMode, readShadowMode, shadowSpendToday, checkSh
 import { recordAiUsage, resetAiUsageSchemaCacheForTests } from "../src/ai-usage.mjs";
 import { runMetricShadow, resetMetricShadowSchemaCacheForTests } from "../src/metric-shadow.mjs";
 import { runShadowCalls } from "../src/shadow-knowledge.mjs";
-import { callBusModel } from "../src/multi-agent-bus.mjs";
+import { callBusModel } from "../src/model-call.mjs";
 
 const NOW = Date.parse("2026-11-16T10:20:00Z");
 function world() {

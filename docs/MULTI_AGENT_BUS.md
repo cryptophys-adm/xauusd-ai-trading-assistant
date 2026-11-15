@@ -1,6 +1,6 @@
 # RFC — Multi-Agent Communication Bus (XAUUSD)
 
-Status: **Approved by owner 2026-11-04. Phase 2 implemented; enabled in production in Phase 4 (2026-11-04)** (`src/multi-agent-bus.mjs`; see `docs/SSOT.md` §3).
+Status: **Retired.** Approved 2026-11-04 and enabled in Phase 4; retired for H1 on 2026-11-07 (the 1H War Room replaced it); its code removed on 2026-11-15 (owner: "setuju semuanya"). The shared model call it introduced lives on in `src/model-call.mjs` (`docs/SSOT.md`). Kept as history.
 Canonical references: `docs/SSOT.md`, `AGENTS.md`, `docs/CHANGELOG.md`.
 Phase 3 UI (news threads + live 5m room): `docs/RFC_NEXUS_AGENT_SOCIAL.md`.
 

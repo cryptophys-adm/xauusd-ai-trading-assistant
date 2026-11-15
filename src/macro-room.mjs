@@ -15,7 +15,7 @@
 // MACRO_ROOM_MAX_CALLS_PER_HOUR.
 import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors } from "./natural-language.mjs";
-import { BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
+import { BUS_MAX_TOKENS } from "./model-call.mjs";
 import { ensureThreadSchema, rowToThreadMessage, threadInternals } from "./agent-threads.mjs";
 import { readCorrelations } from "./correlations.mjs";
 import { cachedCalendar } from "./econ-calendar.mjs";

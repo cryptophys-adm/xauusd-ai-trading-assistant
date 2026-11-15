@@ -44,7 +44,7 @@ import { eventRisk, cachedCalendar } from "./econ-calendar.mjs";
 import { calendarOutlook, surpriseStrength, surprisePull } from "./calendar-agent.mjs";
 import { calendarIntel } from "./econ-releases.mjs";
 import { hudLevels } from "./hud-levels.mjs";
-import { callBusModel, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
+import { callBusModel, BUS_MAX_TOKENS } from "./model-call.mjs";
 import { naturalLanguageErrors, onlyNaturalLanguageErrors, NATURAL_LANGUAGE_CORRECTION } from "./natural-language.mjs";
 import { shouldNotifyH1 } from "./h1-telegram.mjs";
 import { fetchEffectiveDoctrine, formatDoctrineDirectives } from "./doctrine-consumer.mjs";

@@ -174,12 +174,6 @@
       ],
       "engines": [
         {
-          "task": "bus_agent"
-        },
-        {
-          "task": "bus_moderator"
-        },
-        {
           "task": "decision_council"
         },
         {

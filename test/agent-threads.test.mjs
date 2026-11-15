@@ -7,7 +7,7 @@ import {
   isFifteenMinuteClose, buildFifteenMinuteCandles
   , runHudAgents, readH1Thread as readH1ThreadForHud, hudEvidenceLines, validateHudAgent, buildHudAgentsTask
 } from "../src/agent-threads.mjs";
-import { BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL, MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_FALLBACK_MODEL } from "../src/multi-agent-bus.mjs";
+import { BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL, MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_FALLBACK_MODEL } from "../src/model-call.mjs";
 // Per-role models (owner decision 2026-11-07): agents on the room agent model, the moderator on its own.
 const modelsOf = (calls) => calls.map(c => c.model).sort();
 
@@ -84,7 +84,7 @@ function fakeAI(override) {
 function env(overrides = {}) {
   const d1 = fakeD1();
   seed(d1);
-  return { DB: d1, AI: fakeAI(), SIGNAL_CACHE: fakeKV({ "context:m5:latest": m5() }), MULTI_AGENT_BUS_ENABLED: "true", LIVE_ROOM_ENABLED: "true", MULTI_AGENT_MAX_CALLS_PER_HOUR: "20", LIVE_ROOM_MAX_CALLS_PER_HOUR: "36", ...overrides };
+  return { DB: d1, AI: fakeAI(), SIGNAL_CACHE: fakeKV({ "context:m5:latest": m5() }), NEWS_THREADS_ENABLED: "true", LIVE_ROOM_ENABLED: "true", MULTI_AGENT_MAX_CALLS_PER_HOUR: "20", LIVE_ROOM_MAX_CALLS_PER_HOUR: "36", ...overrides };
 }
 
 test.beforeEach(() => resetThreadSchemaCacheForTests());
@@ -97,9 +97,17 @@ test("task builders are deterministic", () => {
 });
 
 test("news thread: flag off means no calls", async () => {
-  const e = env({ MULTI_AGENT_BUS_ENABLED: "false" });
+  const e = env({ NEWS_THREADS_ENABLED: "false" });
   assert.equal((await runNewsThread(e, { analysis_key: NEWS_KEY })).status, "disabled");
   assert.equal(e.AI.calls.length, 0);
+});
+
+test("news thread flag: NEWS_THREADS_ENABLED wins; the bus's old name counts for one deploy when it is unset", async () => {
+  const { newsThreadsEnabled } = await import("../src/agent-threads.mjs");
+  assert.equal(newsThreadsEnabled({ NEWS_THREADS_ENABLED: "true" }), true);
+  assert.equal(newsThreadsEnabled({ NEWS_THREADS_ENABLED: "false", MULTI_AGENT_BUS_ENABLED: "true" }), false);
+  assert.equal(newsThreadsEnabled({ MULTI_AGENT_BUS_ENABLED: "true" }), true, "the rename never stops the threads");
+  assert.equal(newsThreadsEnabled({}), false);
 });
 
 test("news thread: post + 5 nested replies, round 2 answers the other agent", async () => {
@@ -271,29 +279,32 @@ test("buildMessageTree nests replies under their parent", () => {
 
 import { listH1Threads, readH1Thread } from "../src/agent-threads.mjs";
 
-test("H1 threads are built from the bus: post = decision, round 2 nested under the other agent", async () => {
+test("H1 threads (Threads 1H) show the decision and the HUD agents; the retired bus's rows are not read (owner 2026-11-15)", async () => {
   const d1 = fakeD1();
   seed(d1);
-  d1.raw.exec(`CREATE TABLE bus_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, candle_key TEXT NOT NULL, round INTEGER NOT NULL, agent TEXT NOT NULL, ts TEXT NOT NULL, insight TEXT NOT NULL, confidence REAL, refs_json TEXT, model TEXT, status TEXT, latency_ms INTEGER, fallback_used INTEGER DEFAULT 0, usage_tokens INTEGER, UNIQUE(candle_key, run_id, round, agent))`);
+  const { ensureThreadSchema } = await import("../src/agent-threads.mjs");
+  await ensureThreadSchema(d1);
   const key = "OANDA:XAUUSD:60:1793800800000";
-  const ins = d1.raw.prepare("INSERT INTO bus_messages (run_id, candle_key, round, agent, ts, insight, confidence, model, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-  for (const [round, agent, text] of [[1, "technical", "Engines lean bullish."], [1, "news", "No clear driver."], [2, "technical", "I agree with News."], [2, "news", "I dispute the bullish read."], [3, "moderator", null]]) {
-    const body = agent === "moderator" ? { stance: "WAIT", agreed: false, summary: "Wait for news.", dissent: ["Technical leaned bullish."] } : { stance: "WAIT", insight: text, responds_to: round === 2 ? (agent === "technical" ? "news" : "technical") : null };
-    ins.run("run1", key, round, agent, "2026-11-04T15:00:30Z", JSON.stringify(body), 0.5, "@cf/zai-org/glm-5.3-flash", "ok");
-  }
+  // A stored bus row (the table is kept until its archive): never read again.
+  d1.raw.exec("CREATE TABLE bus_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, candle_key TEXT, round INTEGER, agent TEXT, ts TEXT, insight TEXT, confidence REAL, model TEXT, status TEXT)");
+  d1.raw.prepare("INSERT INTO bus_messages (run_id, candle_key, round, agent, ts, insight, confidence, model, status) VALUES ('run1', ?, 3, 'moderator', '2026-11-04T15:00:30Z', '{\"stance\":\"BUY\"}', 0.5, 'm', 'ok')").run("OANDA:XAUUSD:60:1");
+  d1.raw.prepare("INSERT INTO agent_threads (id, kind, ref_key, title, post_json, created_at, updated_at) VALUES (?, 'hud1h', ?, 'HUD agents', '{}', '2026-11-04T15:00:10Z', '2026-11-04T15:00:10Z')").run("hud1h:" + key, key);
+  const msg = d1.raw.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, ts, stance, confidence, body_json, status) VALUES (?, ?, ?, ?, '2026-11-04T15:00:20Z', ?, 0.5, ?, 'ok')");
+  msg.run("hud1h:" + key, key, "hud:prophet", "prophet", "WAIT", JSON.stringify({ insight: "No confirmed setup." }));
+  msg.run("hud1h:" + key, key, "moderator", "moderator", "WAIT", JSON.stringify({ summary: "Stand aside." }));
   const list = await listH1Threads(d1, {});
   assert.equal(list.length, 1);
   assert.equal(list[0].id, `h1:${key}`);
   assert.equal(list[0].consensus, "WAIT");
+  assert.equal(list[0].reply_count, 2);
   assert.match(list[0].title, /^H1 candle 2026-11-04 14:00 UTC · decision WAIT$/);
+  assert.match(list[0].post.tradingview.summary, /TradingView indicators/);
   const t = await readH1Thread(d1, key);
-  assert.deepEqual(t.messages.map(m => m.step), ["r1:technical", "r1:news", "moderator"]);
-  assert.equal(t.messages[0].replies[0].step, "r2:news", "news' round-2 reply sits under technical's round-1 message");
-  assert.equal(t.messages[1].replies[0].step, "r2:technical");
+  assert.deepEqual(t.messages, [], "no bus replies");
+  assert.deepEqual(t.hud_agents.map((m) => m.step), ["hud:prophet", "moderator"]);
   assert.match(t.post.reasoning, /^No trade for this candle/);
   assert.deepEqual(t.post.tradingview.lines.map(l => l.source), ["Prophet", "GMI v12.70"]);
-  assert.match(list[0].post.tradingview.summary, /TradingView indicators/);
-  assert.equal(await readH1Thread(d1, "OANDA:XAUUSD:60:1"), null);
+  assert.equal(await readH1Thread(d1, "OANDA:XAUUSD:60:1"), null, "a candle with only a bus row has no thread");
 });
 
 test("an answer that only fails the natural-language rule gets one correction, counted in the budget", async () => {

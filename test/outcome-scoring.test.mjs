@@ -115,7 +115,7 @@ function kv(entries = {}) {
   return { map, async get(k) { return map.has(k) ? map.get(k) : null; }, async put(k, v) { map.set(k, String(v)); } };
 }
 
-test("scoreRecentStatements scores chain, bus, HUD, indicator and room stances once their horizon closes", async () => {
+test("scoreRecentStatements scores chain, HUD, indicator and room stances once their horizon closes; the retired bus is not scored", async () => {
   resetOutcomeSchemaCacheForTests();
   // H1: 15 base bars, the scored candle (index 14 closes the base), then 4 bars rising 6 each.
   const h1 = barsFrom([...base, [100, 104, 99, 103], [103, 108, 102, 107], [107, 109, 106, 108], [108, 110, 107, 109]]);
@@ -145,7 +145,6 @@ test("scoreRecentStatements scores chain, bus, HUD, indicator and room stances o
   const rows = Object.fromEntries(db.prepare("SELECT subject, timeframe, result, stance FROM outcome_scores").all().map(r => [r.subject + "@" + r.timeframe, r.result]));
   assert.deepEqual(rows, {
     "chain:h1@60": "missed_opportunity",        // WAIT while price rose 10 (threshold 5)
-    "bus:technical@60": "hit",                   // round 2 only: the round-1 news post is not scored
     "hud:prophet@60": "miss",
     "indicator:prophet_r38@60": "hit",
     "indicator:prophet_r37@60": "miss",
@@ -161,13 +160,14 @@ test("scoreRecentStatements scores chain, bus, HUD, indicator and room stances o
   assert.ok(rescored.scores > 0);
   assert.equal(db.prepare("SELECT result FROM outcome_scores WHERE subject = 'chain:h1'").get().result, "missed_opportunity");
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM outcome_scores WHERE scoring_version <> '" + SCORING_VERSION + "'").get().n, 0);
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM outcome_scores").get().n, 7);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM outcome_scores").get().n, 6, "the six subjects above; the stored bus rows make none");
 
   const cards = await scorecards(env.DB, { days: 30, now: Math.max(now, m15Now) });
   const chain = cards.find(c => c.subject === "chain:h1");
   assert.deepEqual([chain.wait.n, chain.wait.missed_opportunity, chain.wait.accuracy], [1, 1, 0]);
-  const tech = cards.find(c => c.subject === "bus:technical");
-  assert.deepEqual([tech.directional.hit_rate, tech.brier], [1, 0.16]);
+  // A directional subject with a confidence (the retired bus's technical agent was the example before 2026-11-15).
+  const hud = cards.find(c => c.subject === "hud:prophet");
+  assert.deepEqual([hud.directional.hit_rate, hud.brier], [0, 0.25], "a SELL at 0.5 that missed");
 });
 
 test("detectRecentStuckStates opens an episode on approved records and clears it when the state changes", async () => {

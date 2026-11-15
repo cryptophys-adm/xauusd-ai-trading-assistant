@@ -256,18 +256,12 @@ export function indicatorStances(prophet, gmi) {
   return out.filter((s) => s.stance).map((s) => ({ ...s, source: "indicator", confidence: null }));
 }
 
-/** Every stance stated about one closed H1 candle: chain, bus, HUD agents, indicators. */
+/** Every stance stated about one closed H1 candle: chain, HUD agents, indicators (the H1 bus is retired, 2026-11-15). */
 export async function h1Statements(env, candleKey) {
   const db = env.DB;
   const out = [];
   const decision = await db.prepare("SELECT decision, confidence FROM trade_decisions WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(candleKey).first();
   if (decision) out.push({ subject: "chain:h1", source: "chain", stance: decision.decision, confidence: decision.confidence ?? null });
-  try {
-    const bus = (await db.prepare("SELECT agent, round, insight, confidence, ts FROM bus_messages WHERE candle_key = ? AND status = 'ok' AND (round = 2 OR agent = 'moderator') ORDER BY ts").bind(candleKey).all()).results || [];
-    const latest = new Map();
-    for (const row of bus) latest.set(row.agent, row);
-    for (const [agent, row] of latest) out.push({ subject: "bus:" + agent, source: "bus", stance: parse(row.insight, {})?.stance, confidence: row.confidence ?? null });
-  } catch { /* bus tables absent */ }
   try {
     const hud = (await db.prepare("SELECT step, stance, confidence FROM agent_thread_messages WHERE thread_id = ? AND status = 'ok'").bind("hud1h:" + candleKey).all()).results || [];
     for (const row of hud) out.push({ subject: row.step === "moderator" ? "hud:moderator" : row.step, source: "hud", stance: row.stance, confidence: row.confidence ?? null });

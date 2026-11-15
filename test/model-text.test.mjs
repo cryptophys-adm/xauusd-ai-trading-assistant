@@ -46,7 +46,7 @@ test("extractModelText reads chat.completion content and never returns the raw o
 // on 2026-11-20; each model family takes its own request form.
 import { readFileSync } from "node:fs";
 import { MODELS, RETIRED_MODELS, modelFamily, modelRequests, isRequestShapeError, runModel, responsesIncomplete, extractModelText } from "../src/model-text.mjs";
-import { roleModels, parseModelObject, MODERATOR_DEFAULT_MODEL, BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL } from "../src/multi-agent-bus.mjs";
+import { roleModels, parseModelObject, MODERATOR_DEFAULT_MODEL, BUS_DEFAULT_MODEL, BUS_DEFAULT_FALLBACK_MODEL } from "../src/model-call.mjs";
 import { stepRole } from "../src/agent-threads.mjs";
 
 const msgs = [{ role: "system", content: "s" }, { role: "user", content: "u" }];

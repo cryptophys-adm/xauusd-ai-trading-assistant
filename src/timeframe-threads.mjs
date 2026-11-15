@@ -32,7 +32,7 @@ import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors } from "./natural-language.mjs";
 import { HUD_NAMES, calibrationCounts, calibrationNote, hudAgentsIn } from "./hud-reading.mjs";
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
-import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
+import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./model-call.mjs";
 import { ensureThreadSchema, rowToThreadMessage, ROOM_STANCES, hudEvidenceLines, threadInternals } from "./agent-threads.mjs";
 import {
   validateOpening, validateRebuttal, majorityStance, selectRebutters, BIAS_RULE, SUPPORT_RULE, stanceSupported,

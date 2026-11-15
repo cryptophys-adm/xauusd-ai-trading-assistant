@@ -495,11 +495,11 @@ test("selection and validators", () => {
   assert.equal(validateRebuttal({ ...noTarget, rebuts: ["ghost"] }, "news", bus, { ownStance: "SELL" }).valid, false, "an unknown agent is still invalid");
 });
 
-test("TLDR for the right panel: H1 decision with the bus consensus, and the latest news thread", async () => {
+test("TLDR for the right panel: the H1 decision (no bus consensus since its retirement) and the latest news thread", async () => {
   const e = env(fakeAI());
   e.DB.raw.prepare("INSERT INTO bus_messages (run_id, candle_key, round, agent, ts, insight, confidence, status) VALUES ('r', ?, 3, 'moderator', '1', ?, 0.5, 'ok')").run(H1_KEY, JSON.stringify({ stance: "WAIT", summary: "Both agents wait." }));
   const t = await readTldr(e.DB);
-  assert.deepEqual([t.h1.decision, t.h1.consensus.summary], ["WAIT", "Both agents wait."]);
+  assert.deepEqual([t.h1.decision, t.h1.consensus], ["WAIT", null], "a stored bus row is no longer read");
   assert.match(t.h1.tldr, /GMI blocks/);
   assert.equal(t.news, null);
 });

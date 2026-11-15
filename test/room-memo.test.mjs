@@ -7,7 +7,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { threadInternals, ensureThreadSchema } from "../src/agent-threads.mjs";
 import { usageSplit, readAiUsage, neuronsOf, recordAiUsage, resetAiUsageSchemaCacheForTests } from "../src/ai-usage.mjs";
 import { memoKind, inputHash, resetRoomMemoSchemaCacheForTests } from "../src/room-memo.mjs";
-import { callBusModel } from "../src/multi-agent-bus.mjs";
+import { callBusModel } from "../src/model-call.mjs";
 import { TF_ROOM_SCHEMAS } from "../src/timeframe-threads.mjs";
 
 function d1() {
@@ -245,7 +245,7 @@ test("A4: through a room step: a prompt that changed with the same evidence stil
 });
 
 test("A5: each room step asks Workers AI for one session per agent and step, and the cached input tokens are metered", async () => {
-  const { affinityId } = await import("../src/multi-agent-bus.mjs");
+  const { affinityId } = await import("../src/model-call.mjs");
   assert.equal(affinityId({}, "warroom:open:technical"), "xauusd:warroom:open:technical");
   assert.equal(affinityId({}, "tf:H1:debate:Risk Mgr"), "xauusd:tf:h1:debate:risk_mgr");
   assert.equal(affinityId({ AI_SESSION_AFFINITY: "off" }, "warroom:open:technical"), null);
