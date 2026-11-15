@@ -21,6 +21,8 @@ public", and that decides the stack:
 | The system's own analysis (stance, bias, reasoning, patterns, levels as commentary) | Yes | Yes, through the public projection below |
 | Account, balance, positions, lot size, Omega state, any secret | Yes | Never |
 
+**Moved (owner 2026-11-15):** the content engine and its studio now live in the repository `cryptophys-adm/cryptophys-cta` (`cta.cryptophys.work`), which carries this policy in its `AGENTS.md`. This RFC stays as the record of the decisions; the public projection and analysis it reads stay here (`src/public-projection.mjs`, `src/public-analysis.mjs`).
+
 ## 0.1 Content policy (owner, 2026-11-14)
 
 The owner's decisions on what the public accounts show (Threads account **xauusd-ai-cta**; example given: a

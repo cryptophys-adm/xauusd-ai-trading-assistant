@@ -315,21 +315,6 @@
       },
       "agents": [],
       "engines": []
-    },
-    {
-      "$schema_version": 1,
-      "service": "xauusd-content",
-      "display_name": "XAUUSD Content Engine",
-      "kind": "service",
-      "deploy_unit": null,
-      "access": false,
-      "rollback": false,
-      "drift": {
-        "via": "rpc",
-        "binding": "EXT_XAUUSD_CONTENT"
-      },
-      "agents": [],
-      "engines": []
     }
   ]
 }

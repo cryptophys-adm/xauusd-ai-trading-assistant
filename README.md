@@ -9,13 +9,12 @@ Advisory-only XAUUSD decision support on Cloudflare Workers. There is no broker 
 > Any other document that disagrees with these two is historical. Several older docs carry a "HISTORICAL / SUPERSEDED" banner.
 
 ## At a glance
-- **Workers:** exactly six, all deployed only by merging into `main`.
+- **Workers:** exactly five, all deployed only by merging into `main`.
   - `xauusd-ai-trading-assistant`
   - `xauusd-fundamental-news-ingestion`
   - `xauusd-tradingview-pull-adapter`
   - `xauusd-nexus-dashboard`
   - `xauusd-omega` (Omega Execution Engine at `omega.cryptophys.work` and `nexus.cryptophys.work/omega`: monitors the MT5 EA and pauses or kills it; the broker engine trades through the owner's MT5 host bridge when the owner enables it)
-  - `xauusd-content` (the content engine: daily recap drafts for Threads and Instagram from the public projection, an approval queue, publishing off until the owner turns it on)
 - **AI input lanes:** three, each on every closed 1H OANDA:XAUUSD bar.
   - TradingView webhooks (`prophet_r38`, `prophet_r37_ssot`, `gmi_v12_70`), which act as the comparator.
   - Local computation (MizanLib, Prophet, GMI), the primary lane. It is trusted only through the autonomous parity registry.
