@@ -1027,6 +1027,20 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
    - Production deploy command: `npx wrangler versions upload`. A production build uploads a version and never promotes it. The owner set this on 2026-11-15 for both Workers.
    - Preview builds stay on; the News root directory is `/fundamental-news-ingestion`.
    - Any change to these settings is the owner's, and must keep production builds versions-only.
+9. **Platform cut-over: option (D), hybrid (owner decision 2026-11-15).** xauusd is not deployed by the Cryptophys platform.
+   - **Deploys:** xauusd keeps its own CI and its own deploy workflows (rules 1 and 8). The platform never runs a deploy for these five Workers. The ADR-0013 external ceiling is unchanged.
+   - **Gates:** xauusd adopts the platform's gates:
+     - version provenance: tags, `/health` commit and DNA `deployed_commit`;
+     - main protection with `protection-guard` (rule 7);
+     - the required `typecheck`;
+     - an advisory npm `dependency-audit` on every PR and daily;
+     - one tagged deploy path per Worker, with Workers Builds production set to versions-only (rule 8).
+   - **What the platform does:**
+     - reads the DNA (`organism.json` and the OrganismDna RPC), `/health` and the versions API;
+     - keeps its engine census, including `register_engine` and `retire_engine`;
+     - may report drift.
+   - **What the platform does not do:** it changes no xauusd code, configuration or deploy.
+   - **Changing the cut-over:** a different option needs the owner's decision and a PR that edits this rule.
 ## 6. Owner-only actions
 - TradingView OAuth re-authorization at `https://news.cryptophys.work/oauth/start`.
 - Rotation of `WEBHOOK_SECRET` (in the AI Worker and the Pine "CTA Webhook Secret" input).
