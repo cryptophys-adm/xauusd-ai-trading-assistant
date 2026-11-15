@@ -134,8 +134,8 @@ test("scoreRecentStatements scores chain, HUD, indicator and room stances once t
   };
   const db = env.DB.raw;
   db.prepare("INSERT INTO trade_decisions (candle_key, decision, confidence) VALUES (?, 'WAIT', 0.3)").run(key);
-  db.prepare("INSERT INTO bus_messages (run_id, candle_key, round, agent, ts, insight, confidence, status) VALUES ('r', ?, 2, 'technical', '1', ?, 0.6, 'ok')").run(key, JSON.stringify({ stance: "BUY" }));
-  db.prepare("INSERT INTO bus_messages (run_id, candle_key, round, agent, ts, insight, confidence, status) VALUES ('r', ?, 1, 'news', '0', ?, 0.6, 'ok')").run(key, JSON.stringify({ stance: "SELL" }));
+  // The retired H1 bus's table is dropped (migration 0023); scoring needs no bus_messages.
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'bus_messages'").get().n, 0);
   db.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, ts, stance, confidence, body_json, status) VALUES (?, ?, 'hud:prophet', 'prophet', '1', 'SELL', 0.5, '{}', 'ok')").run("hud1h:" + key, key);
   db.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, bar_time, ts, stance, confidence, body_json, status) VALUES ('live15m:x', 'b', 'technical', 'technical', ?, '1', 'WAIT', 0.7, '{}', 'ok')").run(m15[14].close_time);
   db.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, bar_time, ts, stance, confidence, body_json, status) VALUES ('live15m:x', 'b', 'risk', 'risk', ?, '1', 'HOLD', 0.7, '{}', 'ok')").run(m15[14].close_time);

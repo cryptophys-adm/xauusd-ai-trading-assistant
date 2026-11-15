@@ -259,7 +259,7 @@ test("H1 threads (Threads 1H) show the decision and the HUD agents; the retired 
   const { ensureThreadSchema } = await import("../src/agent-threads.mjs");
   await ensureThreadSchema(d1);
   const key = "OANDA:XAUUSD:60:1793800800000";
-  // A stored bus row (the table is kept until its archive): never read again.
+  // A stored bus row (a database that still holds the table, before migration 0023): never read.
   d1.raw.exec("CREATE TABLE bus_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, candle_key TEXT, round INTEGER, agent TEXT, ts TEXT, insight TEXT, confidence REAL, model TEXT, status TEXT)");
   d1.raw.prepare("INSERT INTO bus_messages (run_id, candle_key, round, agent, ts, insight, confidence, model, status) VALUES ('run1', ?, 3, 'moderator', '2026-11-04T15:00:30Z', '{\"stance\":\"BUY\"}', 0.5, 'm', 'ok')").run("OANDA:XAUUSD:60:1");
   d1.raw.prepare("INSERT INTO agent_threads (id, kind, ref_key, title, post_json, created_at, updated_at) VALUES (?, 'hud1h', ?, 'HUD agents', '{}', '2026-11-04T15:00:10Z', '2026-11-04T15:00:10Z')").run("hud1h:" + key, key);
