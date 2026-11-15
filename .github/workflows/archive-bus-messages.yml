@@ -1,0 +1,101 @@
+name: Archive and drop bus_messages
+
+# Owner 2026-11-15 ("setujui semua"): the retired H1 bus's D1 table bus_messages (335 rows,
+# 2026-11-04 to 2026-11-07, read and written by no code since 2026-11-15) is archived to the private
+# R2 bucket xauusd-room-transcripts as NDJSON, one row per line, and then dropped.
+#
+# Order and guards (set -euo pipefail, every step must pass before the next):
+#   1. export every row; the line count must equal COUNT(*) and be > 0;
+#   2. upload to archive/d1/bus_messages.ndjson;
+#   3. download it again; its sha256 and line count must equal the export's;
+#   4. only then DROP the index and the table, and check the table is gone.
+# Idempotent: when the table is already gone the run only shows the archive and exits.
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/archive-bus-messages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: archive-bus-messages
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    env:
+      BUCKET: xauusd-room-transcripts
+      KEY: archive/d1/bus_messages.ndjson
+      DB_NAME: xauusd-signals
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Archive to R2, verify, then drop
+        shell: bash
+        run: |
+          set -euo pipefail
+          W="npx --yes wrangler@4.156.2"
+          d1() {
+            CLOUDFLARE_API_TOKEN="${CLOUDFLARE_D1_API_TOKEN:-$CLOUDFLARE_API_TOKEN}" \
+              $W d1 execute "$DB_NAME" --remote --config wrangler.jsonc --json --yes --command "$1"
+          }
+          table_count() { d1 "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'bus_messages'" | jq -r '.[0].results[0].n'; }
+
+          if [ "$(table_count)" = "0" ]; then
+            echo "::notice::bus_messages is already dropped; the archive stays at $BUCKET/$KEY."
+            $W r2 object get "$BUCKET/$KEY" --remote --file archived.ndjson
+            echo "archive lines: $(wc -l < archived.ndjson), sha256: $(sha256sum archived.ndjson | cut -d' ' -f1)"
+            exit 0
+          fi
+
+          # 1. Export.
+          d1 "SELECT * FROM bus_messages ORDER BY id" > rows.json
+          jq -c '.[0].results[]' rows.json > bus_messages.ndjson
+          lines=$(wc -l < bus_messages.ndjson)
+          count=$(d1 "SELECT COUNT(*) AS n FROM bus_messages" | jq -r '.[0].results[0].n')
+          first=$(jq -r '.[0].results | map(.ts) | min' rows.json)
+          last=$(jq -r '.[0].results | map(.ts) | max' rows.json)
+          if [ "$lines" -le 0 ] || [ "$lines" != "$count" ]; then
+            echo "::error::export has $lines lines, the table has $count rows; nothing uploaded, nothing dropped."
+            exit 1
+          fi
+          sha=$(sha256sum bus_messages.ndjson | cut -d' ' -f1)
+          bytes=$(wc -c < bus_messages.ndjson)
+
+          # 2. Upload.
+          $W r2 object put "$BUCKET/$KEY" --remote --file bus_messages.ndjson --content-type application/x-ndjson
+
+          # 3. Read it back.
+          $W r2 object get "$BUCKET/$KEY" --remote --file back.ndjson
+          back_sha=$(sha256sum back.ndjson | cut -d' ' -f1)
+          back_lines=$(wc -l < back.ndjson)
+          if [ "$back_sha" != "$sha" ] || [ "$back_lines" != "$lines" ]; then
+            echo "::error::the archive read back differs (sha $back_sha vs $sha, lines $back_lines vs $lines); the table is NOT dropped."
+            exit 1
+          fi
+
+          # 4. Drop, then check.
+          d1 "DROP INDEX IF EXISTS idx_bus_candle; DROP TABLE IF EXISTS bus_messages"
+          if [ "$(table_count)" != "0" ]; then
+            echo "::error::bus_messages still exists after the drop."
+            exit 1
+          fi
+
+          echo "::notice::archived $lines rows ($bytes bytes, sha256 $sha) to $BUCKET/$KEY, then dropped bus_messages."
+          {
+            echo "### bus_messages archived and dropped"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| object | \`$BUCKET/$KEY\` |"
+            echo "| rows | $lines |"
+            echo "| bytes | $bytes |"
+            echo "| sha256 | \`$sha\` |"
+            echo "| first ts | $first |"
+            echo "| last ts | $last |"
+          } >> "$GITHUB_STEP_SUMMARY"
