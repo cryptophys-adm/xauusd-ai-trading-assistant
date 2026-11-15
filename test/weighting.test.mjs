@@ -190,9 +190,10 @@ test("the crowd line carries its quorum share and weighting; quorumAllows and qu
 
 test("loadH1Rooms: the final bias per agent (debate over opening), the latest session, the moderator's bias", async () => {
   const db = d1();
-  db.db.exec(`CREATE TABLE agent_thread_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT, run_id TEXT, step TEXT, agent TEXT, ts TEXT, stance TEXT, body_json TEXT, status TEXT)`);
+  db.db.exec(`CREATE TABLE agent_thread_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT, run_id TEXT, step TEXT, agent TEXT, ts TEXT, stance TEXT, body_json TEXT, status TEXT, bar_time TEXT)`);
   const key = "OANDA:XAUUSD:60:" + T0;
-  const put = (run, step, agent, stance, body) => db.db.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, ts, stance, body_json, status) VALUES ('tf:H1', ?, ?, ?, ?, ?, ?, 'ok')").run(run, step, agent, new Date(T0 + H).toISOString(), stance, JSON.stringify(body));
+  // A tf room row carries its bar close (timeframe-threads.mjs base()), which the bounded read searches by.
+  const put = (run, step, agent, stance, body) => db.db.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, ts, stance, body_json, status, bar_time) VALUES ('tf:H1', ?, ?, ?, ?, ?, ?, 'ok', ?)").run(run, step, agent, new Date(T0 + H).toISOString(), stance, JSON.stringify(body), new Date(T0 + H).toISOString());
   for (const run of ["2026-10-01T00:00:00.000Z", "2026-10-01T00:00:00.000Z#hud"]) {
     put(run, "brief", "moderator", null, { candle_key: key });
     put(run, "open:a", "a", "WAIT", { bias: "NEUTRAL" });
@@ -208,7 +209,6 @@ test("loadH1Rooms: the final bias per agent (debate over opening), the latest se
   // The 15m room: thread warroom:<day>, keyed by its bar time (close); the outcome key is the bar's open.
   const close = T0 + 2 * H;
   const put15 = (step, agent, stance, body) => db.db.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, ts, stance, body_json, status, bar_time) VALUES ('warroom:2026-10-01', ?, ?, ?, ?, ?, ?, 'ok', ?)").run(new Date(close).toISOString(), step, agent, new Date(close).toISOString(), stance, JSON.stringify(body), new Date(close).toISOString());
-  db.db.exec("ALTER TABLE agent_thread_messages ADD COLUMN bar_time TEXT");
   put15("open:x", "x", "SELL", { bias: "BEARISH" });
   put15("conclusion", "moderator", "WAIT", { bias: "BEARISH" });
   const r15 = await loadRooms(db, "15", "2026-09-01T00:00:00Z");
