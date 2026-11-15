@@ -9,10 +9,16 @@
 // to Nexus's Aether page. Read-only: nothing here changes a decision, a card or Aether.
 
 import { KNOWLEDGE_BASE_V4 } from "./knowledge-base.generated.mjs";
+import { goldClosedAt } from "./market-hours.mjs";
 
 export const AETHER_SYNC_VERSION = "cryptophys.xauusd-aether-sync.v1";
 export const LOCAL_KB_SHA = KNOWLEDGE_BASE_V4.provenance.content_sha256;
 const HOUR = 3_600_000;
+
+/** No card is due while gold is closed or in the first 2 hours after the reopen (the push runs on closed bars). */
+export function pushIdleAt(now) {
+  return goldClosedAt(now) || goldClosedAt(now - 2 * HOUR);
+}
 
 /** The AETHER_READER binding when it is usable (production only; absent in preview and tests). */
 function readerOf(env) {
@@ -33,7 +39,7 @@ export function combineSync({ aether, error = null, lastPushAt = null, now = Dat
   const pushAge = Date.parse(lastPushAt ?? "");
   checks.local_push = Number.isFinite(pushAge) && now - pushAge <= 2 * HOUR
     ? { status: "ok", last_at: lastPushAt }
-    : { status: aether?.market_open === false ? "idle" : "warn", last_at: lastPushAt ?? null };
+    : { status: aether?.market_open === false || pushIdleAt(now) ? "idle" : "warn", last_at: lastPushAt ?? null };
   const overall = Object.values(checks).some((c) => c.status === "warn") ? "warn" : "ok";
   return { version: AETHER_SYNC_VERSION, overall, checked_at: new Date(now).toISOString(), checks };
 }

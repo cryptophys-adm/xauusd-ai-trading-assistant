@@ -14,6 +14,7 @@
 // model, the moderator on the moderator model, each with its own fallback (2026-11-07).
 // Behind WAR_ROOM_ENABLED; when on, it replaces the legacy live room and the per-H1 HUD
 // agents (owner decision: their budget moves here).
+import { goldClosedAt } from "./market-hours.mjs";
 import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors } from "./natural-language.mjs";
 import { HUD_NAMES, calibrationCounts, calibrationNote, calibratedLines, hudAgentsIn } from "./hud-reading.mjs";
@@ -767,10 +768,9 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   return result;
 }
 
-/** XAUUSD trades from Sunday 22:00 to Friday 22:00 UTC. */
+/** XAUUSD trades from Sunday 18:00 to Friday 17:00 New York time (market-hours.mjs). */
 function marketOpenAt(ms) {
-  const d = new Date(ms), day = d.getUTCDay(), h = d.getUTCHours();
-  return !(day === 6 || (day === 5 && h >= 22) || (day === 0 && h < 22));
+  return !goldClosedAt(ms);
 }
 
 /** The sweep runs a missed room this long after its bar closed (the queue's room normally starts within 2 minutes). */

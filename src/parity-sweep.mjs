@@ -237,13 +237,9 @@ export const BACKFILL_MAX_ATTEMPTS = 4;
 /** After an H1 close, a degraded run is retried this long when its evidence changed. */
 export const DEGRADED_RETRY_MS = 45 * 60 * 1000;
 
-const NY_WEEK = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-/** Gold does not trade from Friday 17:00 to Sunday 18:00 New York time: true for an hour opening in that window. */
-export function goldClosedAt(ms) {
-  const p = Object.fromEntries(NY_WEEK.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
-  const minutes = Number(p.hour) * 60 + Number(p.minute);
-  return (p.weekday === "Fri" && minutes >= 17 * 60) || p.weekday === "Sat" || (p.weekday === "Sun" && minutes < 18 * 60);
-}
+// Gold's trading week lives in market-hours.mjs (re-exported here for the existing importers).
+export { goldClosedAt } from "./market-hours.mjs";
+import { goldClosedAt } from "./market-hours.mjs";
 
 export async function backfillRecentAnalyses(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, loadPayloads = null, runAnalysis = null, setStatus = null } = {}) {
   const required = String(env?.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(v=>v.trim()).filter(Boolean);

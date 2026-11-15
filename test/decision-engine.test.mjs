@@ -270,9 +270,10 @@ test("the market context: the session with day, date and market state; regime; m
   const mon = sessionAt(Date.parse("2026-11-09T13:20:00Z"));
   assert.deepEqual([mon.day, mon.date, mon.market_open, mon.liquidity], ["Monday", "2026-11-09", true, "high"]);
   assert.deepEqual(mon.active, ["London", "New York"]);
-  assert.deepEqual([mon.next_change.to, mon.next_change.at], ["closed", "2026-11-13T22:00:00.000Z"], "the weekly close, Friday 22:00 UTC");
+  assert.deepEqual([mon.next_change.to, mon.next_change.at], ["closed", "2026-11-13T22:00:00.000Z"], "the weekly close, Friday 17:00 New York (22:00 UTC in November)");
   const sat = sessionAt(Date.parse("2026-11-07T10:00:00Z"));
-  assert.deepEqual([sat.day, sat.market_open, sat.liquidity, sat.next_change.at], ["Saturday", false, "closed", "2026-11-08T22:00:00.000Z"]);
+  // The reopen is Sunday 18:00 New York: 23:00 UTC in US standard time (from 2026-11-01), not a fixed 22:00 UTC.
+  assert.deepEqual([sat.day, sat.market_open, sat.liquidity, sat.next_change.at], ["Saturday", false, "closed", "2026-11-08T23:00:00.000Z"]);
   assert.equal(sessionAt(Date.parse("2026-11-09T22:30:00Z")).liquidity, "thin", "after New York, before Tokyo");
   const reg = regimeOf({ huds: { prophet: { fields: { hurst: 0.7, efficiency_ratio: 0.6, kww_zscore: 2.8 } }, kinetic_engine: { fields: { is_chaos: false, entropy: 0.4 } } } }, "high-trending");
   assert.deepEqual([reg.label, reg.character, reg.chaos, reg.stretch_z], ["high-trending", "trending", false, 2.8]);
