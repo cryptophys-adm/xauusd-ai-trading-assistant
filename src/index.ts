@@ -226,8 +226,7 @@ import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
 import { reserveTvCalls, releaseTvCalls } from "./tv-budget.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
-import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, newsThreadsEnabled, buildLiveRoomTask, runNewsThread, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents, m15KeyForClose } from "./agent-threads.mjs";
-import { hudAgentsEnabled } from "./hud-agents.mjs";
+import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, newsThreadsEnabled, buildLiveRoomTask, runNewsThread, listThreads, readThread, readLive, listH1Threads, readH1Thread, m15KeyForClose } from "./agent-threads.mjs";
 import { warRoomEnabled, runWarRoomBar, runMissedWarRoom, readWarRoom, readTldr, agentName } from "./war-room.mjs";
 import { reputationOf, familyOf, REPUTATION_VERSION, REPUTATION_PRIOR, WEIGHT_RANGE } from "./reputation.mjs";
 import { indicatorAgents } from "./indicator-registry.mjs";
@@ -729,16 +728,6 @@ async function enqueueNewsThread(env: Env, analysisKey: string): Promise<void> {
   }
 }
 
-/** Phase C5: HUD agents post in Threads 1H after each H1 synthesis (behind HUD_AGENTS_ENABLED). */
-async function enqueueHudAgents(env: Env, candleKey: string): Promise<void> {
-  // The War Room replaces the per-H1 HUD agents (owner decision 2026-11-05): their budget moves there.
-  if (!hudAgentsEnabled(env) || warRoomEnabled(env) || candleKey.split(":")[2] !== "60") return;
-  try {
-    await sendQueueTask(env.XAUUSD_EVENTS, buildHudAgentsTask({ candleKey }) as unknown as QueueTask);
-  } catch (error) {
-    console.error("hud_agents_enqueue_failed", JSON.stringify({ candle_key: candleKey, error: error instanceof Error ? error.message : String(error) }));
-  }
-}
 
 
 /**
@@ -974,7 +963,6 @@ async function runAnalysis(
     };
     await env.WEBHOOK_BUFFER.put("analysis:" + safeKeyPart(candleKey), JSON.stringify({ ...details, created_at: timestamp, sources: Object.keys(payloads), decision: synthesis }), { expirationTtl: 60 * 60 * 24 * 14 });
     await setAnalysisRunStatus(env, candleKey, "degraded", details, "required_evidence_unavailable");
-    await enqueueHudAgents(env, candleKey);
     return { status: "degraded", missing_evidence: fusion.missing_evidence };
   }
 
@@ -1192,7 +1180,6 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
     decision: synthesis.decision,
     evidence_fusion: fusionDetails(fusion)
   }, null);
-  await enqueueHudAgents(env, candleKey);
   return { status: "complete", decision: action, consensus: consensus.status, guard_overridden: overridden };
 }
 
@@ -1883,13 +1870,8 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
       return;
     }
     if (task.kind === "hud_agents") {
-      const result = await runHudAgents(env, task, {
-        loadReadings: async (e, key) => {
-          const snapshot = await loadHudSnapshot(e, { timeframe: "60", candleKey: key });
-          return snapshot ? hudReadings(e, snapshot) : null;
-        }
-      });
-      console.log("hud_agents", JSON.stringify({ candle_key: task.candle_key, ...result }));
+      // The per-H1 HUD agents are retired (owner 2026-11-15; none ran since the War Room, 2026-11-05): acknowledged.
+      console.log("hud_agents_retired", JSON.stringify({ candle_key: task.candle_key }));
       return;
     }
     if (task.kind === "h1_room") return processH1RoomTask(env, task);
@@ -2030,7 +2012,7 @@ async function ingestM5Context(env: Env, payload: unknown, waitUntil?: (p: Promi
     // Phase C6: the 15m HUD snapshot is read here, where it was just written, and carried
     // in the task (the consumer may run where the KV write has not propagated yet).
     let hud: unknown = null;
-    if (hudAgentsEnabled(env) || warRoomEnabled(env)) {
+    if (warRoomEnabled(env)) {
       try { hud = await loadHudSnapshot(env, { timeframe: "15", candleKey: m15KeyForClose(String(p.candle_time)) }); } catch { hud = null; }
     }
     try {
