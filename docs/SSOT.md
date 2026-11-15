@@ -992,7 +992,17 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 1. Production changes reach production **only** by merging a PR into `main`. The workflows in §1 then deploy it.
 2. **Never** run `wrangler deploy`, `wrangler delete` or `wrangler secret put` against production by hand or from a VPS. **Never** create a new Worker outside this repository. A manual deploy on 2026-11-03 replaced the pull adapter with a stub and stopped the local lane for about 6 hours.
 3. Work from the latest `main`. Branches cut from an old base must not be merged or deployed.
-4. A PR is mergeable only when CI is green (`test`, `preview-e2e`, Workers Builds) and the change is described against this SSOT.
+4. A PR is mergeable only when CI is green (the required checks below, and every other check on the PR) and the change is described against this SSOT.
+7. **Main ruleset (owner 2026-11-15, "kerjakan hardening branch protection xauusd").** `main` is protected by the repository ruleset declared in `ops/branch-ruleset.json`:
+   - no deletion, no force push, linear history (squash or rebase merges);
+   - a pull request is required, with 0 approvals: the gate is the checks, not a human review;
+   - required checks, which must pass on a branch that is up to date with `main`:
+     - `evidence-unit-tests` (`test-evidence-fusion.yml`: every unit test, including the DNA/organism tests, the type-check and the bundle dry-run);
+     - `preview-e2e` (`deploy-preview-worker.yml`; skipped, and so passing, when a PR touches no preview path);
+     - `protection-guard` (`branch-protection-guard.yml`);
+   - no bypass actor. "Workers Builds: …" checks are dashboard-managed and never required. The repository has no linter, so no lint check exists.
+
+   `protection-guard` (on every PR, on `main` and daily) fails when the rules GitHub applies to `main` differ from `ops/branch-ruleset.json`, or when a required check is no longer exactly one job of a workflow that runs on every pull request (a renamed job or a path filter). To change a required check: edit `ops/branch-ruleset.json` and the workflow in one PR. Then the owner applies the same change in Settings → Rules → Rulesets, because this repository's automation cannot write rulesets.
 5. A topology change requires editing this file, `AGENTS.md` and `test/ssot-topology.test.mjs` in the same PR, and the owner's explicit approval.
 6. **Ops dispatch (owner request 2026-11-09, backlog item 17).** The automation operator's GitHub access cannot call `workflow_dispatch` or re-run a job. `.github/workflows/ops-dispatch.yml` runs on a push to the operator branch `claude/vibrant-mccarthy-dq5xs7` whose head commit adds exactly one `ops/requests/<UTC timestamp>-<name>.json` (`{"workflow": "deploy-worker.yml"}`), and dispatches that workflow on `main`, with no inputs, then follows it to completion. Allow-list: `deploy-worker.yml`, `deploy-nexus-dashboard.yml`, `deploy-market-data-ingestion.yml`, `deploy-fundamental-news-ingestion.yml` and the read-only `inspect-ai-worker.yml`; never `set-webhook-secret.yml`. Rule 1 holds: a deploy is still the deploy workflow on `main`, the same run the owner starts with "Run workflow". A branch reset onto `main` never replays a request (`test/ops-dispatch.test.mjs`).
 

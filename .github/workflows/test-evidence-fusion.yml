@@ -1,16 +1,9 @@
 name: Test Evidence Fusion
 
+# Runs on every pull request (no path filter): its job is a required check of the main ruleset
+# (ops/branch-ruleset.json), and a required check that never reports would block the PR.
 on:
   pull_request:
-    paths:
-      - "src/**"
-      - "test/**"
-      - "schema.sql"
-      - "migrations/**"
-      - "package.json"
-      - "tsconfig.json"
-      - "wrangler.jsonc"
-      - ".github/workflows/test-evidence-fusion.yml"
   workflow_dispatch:
 
 permissions:
@@ -18,6 +11,7 @@ permissions:
 
 jobs:
   test:
+    name: evidence-unit-tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

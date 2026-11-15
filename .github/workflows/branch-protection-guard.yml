@@ -1,0 +1,32 @@
+name: Branch protection guard
+
+# Owner 2026-11-15 ("kerjakan hardening branch protection xauusd"). Read-only: fails when the rules GitHub applies
+# to main differ from ops/branch-ruleset.json (protection removed, a required check dropped) or when a required
+# check is no longer a job that reports on every pull request (renamed job, path filter). Its job is itself a
+# required check, and it runs daily so a change made in Settings is caught without a PR.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: protection-guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Compare main's rules with ops/branch-ruleset.json
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/branch-protection.mjs
