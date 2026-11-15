@@ -513,7 +513,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.conversation.id": traceConversationId,
       "gen_ai.request.model": String(env.AI_MODEL_ANALYST as keyof AiModels)
     });
-    return aiRunAs("h1_analyst", env, env.AI_MODEL_ANALYST, {
+    return aiRunAs("news_analyst", env, env.AI_MODEL_ANALYST, {
     messages: chatMessages([
       "You are the Fundamental News Analyst for XAUUSD decision support.",
       "Analyze only the supplied news articles. Do not infer current price action, technical indicators, or unpublished facts.",
@@ -535,7 +535,7 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
       "gen_ai.conversation.id": traceConversationId,
       "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR as keyof AiModels)
     });
-    return aiRunAs("h1_counselor", env, env.AI_MODEL_COUNSELOR, {
+    return aiRunAs("news_counselor", env, env.AI_MODEL_COUNSELOR, {
     messages: chatMessages([
       "You are the Fundamental News Counselor.",
       "Use only the news evidence and analyst output. Provide balanced conditional scenarios, not trade execution instructions.",
