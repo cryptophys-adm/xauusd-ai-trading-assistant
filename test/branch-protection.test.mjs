@@ -12,7 +12,7 @@ test("the declared ruleset protects main: no deletion, no force push, linear his
   assert.equal(RULESET.rules.find((r) => r.type === "pull_request").parameters.required_approving_review_count, 0);
   const sc = RULESET.rules.find((r) => r.type === "required_status_checks").parameters;
   assert.equal(sc.strict_required_status_checks_policy, true);
-  assert.deepEqual(requiredContexts(), ["evidence-unit-tests", "preview-e2e", "protection-guard"]);
+  assert.deepEqual(requiredContexts(), ["evidence-unit-tests", "preview-e2e", "protection-guard", "typecheck"]);
   assert.ok(!requiredContexts().some((c) => c.startsWith("Workers Builds")), "Workers Builds checks are dashboard-managed and never required");
 });
 
@@ -38,6 +38,6 @@ test("the live comparison fails when protection is removed or a check is dropped
   assert.deepEqual(checkLive(live), []);
   assert.ok(checkLive([]).length >= 5, "no rules at all");
   const dropped = live.map((r) => r.type === "required_status_checks" ? { ...r, parameters: { ...r.parameters, required_status_checks: [{ context: "evidence-unit-tests" }] } } : r);
-  assert.deepEqual(checkLive(dropped), ["required check preview-e2e is not required on main", "required check protection-guard is not required on main"]);
+  assert.deepEqual(checkLive(dropped), requiredContexts().slice(1).map((c) => `required check ${c} is not required on main`));
   assert.match(checkLive(live.filter((r) => r.type !== "non_fast_forward"))[0], /non_fast_forward/);
 });

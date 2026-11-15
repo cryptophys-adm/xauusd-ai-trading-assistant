@@ -1000,6 +1000,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
      - `evidence-unit-tests` (`test-evidence-fusion.yml`: every unit test, including the DNA/organism tests, the type-check and the bundle dry-run);
      - `preview-e2e` (`deploy-preview-worker.yml`; skipped, and so passing, when a PR touches no preview path);
      - `protection-guard` (`branch-protection-guard.yml`);
+     - `typecheck` (`typecheck.yml`: `tsc --noEmit` for the AI Worker and for the Nexus UI; cut-over option (D), 2026-11-15);
    - no bypass actor. "Workers Builds: …" checks are dashboard-managed and never required. The repository has no linter, so no lint check exists.
 
    `protection-guard` (on every PR, on `main` and daily) fails when the rules GitHub applies to `main` differ from `ops/branch-ruleset.json`, or when a required check is no longer exactly one job of a workflow that runs on every pull request (a renamed job or a path filter). To change a required check: edit `ops/branch-ruleset.json` and the workflow in one PR. Then the owner applies the same change in Settings → Rules → Rulesets, because this repository's automation cannot write rulesets.
