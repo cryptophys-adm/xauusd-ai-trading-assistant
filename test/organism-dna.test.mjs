@@ -1,4 +1,4 @@
-// Owner 2026-11-12: "DNA untuk XAUUSD dan Omega dengan auto-register". organism.json declares the six Workers,
+// Owner 2026-11-12: "DNA untuk XAUUSD dan Omega dengan auto-register". organism.json declares the five Workers,
 // the agents that report to the platform kernel and every AI task; this test keeps it equal to the code, so a
 // new agent or AI task cannot ship without reaching the platform's census.
 import test from "node:test";
@@ -22,7 +22,7 @@ function sourceFiles(dir) {
 
 test("D1. one organ per Worker of this repository, named as its wrangler config names it", () => {
   assert.equal(dna.schema, ORGANISM_SCHEMA);
-  const workers = ["wrangler.jsonc", "fundamental-news-ingestion/wrangler.jsonc", "market-data-ingestion/wrangler.jsonc", "workers/xauusd-nexus-dashboard/wrangler.jsonc", "workers/xauusd-omega/wrangler.jsonc", "workers/xauusd-content/wrangler.jsonc"]
+  const workers = ["wrangler.jsonc", "fundamental-news-ingestion/wrangler.jsonc", "market-data-ingestion/wrangler.jsonc", "workers/xauusd-nexus-dashboard/wrangler.jsonc", "workers/xauusd-omega/wrangler.jsonc"]
     .map((p) => /"name":\s*"([^"]+)"/.exec(read(p))[1]).sort();
   assert.deepEqual(dna.organs.map((o) => o.service).sort(), workers);
   for (const o of dna.organs) {

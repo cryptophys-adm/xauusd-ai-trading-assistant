@@ -3,7 +3,7 @@
 Read `docs/SSOT.md` first. It is the only canonical description of this system. Any other document that disagrees with it is historical.
 
 ## Hard rules
-1. **Deploy only by merging a PR into `main`.** The GitHub Actions workflows deploy the six Workers.
+1. **Deploy only by merging a PR into `main`.** The GitHub Actions workflows deploy the five Workers.
 2. **Never run `wrangler deploy`, `wrangler delete` or `wrangler secret put` against production by hand or from a VPS.**
 3. **Never create, deploy or redeploy a Worker that is not one of these five:**
    - `xauusd-ai-trading-assistant`
@@ -11,7 +11,6 @@ Read `docs/SSOT.md` first. It is the only canonical description of this system. 
    - `xauusd-tradingview-pull-adapter`
    - `xauusd-nexus-dashboard`
    - `xauusd-omega` (Omega Execution Engine, owner decisions 2026-11-09)
-   - `xauusd-content` (the content engine for Threads and Instagram, owner 2026-11-14; no public URL; publishes nothing while `CONTENT_PUBLISH` is "off")
 4. **Never recreate the removed Workers:** `xauusd-mizan-engine`, `xauusd-prophet-engine`, `xauusd-gmi-engine`, `xauusd-market-data-normalizer`, `xauusd-pull-orchestrator` and `xauusd-confluence-controller`. The "8 + 1 Workers" plan in older documents is cancelled.
 5. **Start from the latest `main`.** Do not revive, merge or deploy branches cut from an old base.
 6. **Do not edit `pinescript/ssot/*`.** Local engine trust comes only from the autonomous parity registry. Never mark an engine verified or `production_ready` by hand.

@@ -1,6 +1,6 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { motion } from "framer-motion";
-import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, Puzzle, ShieldCheck, Swords, Trophy, X, Zap, Cpu, Megaphone } from "lucide-react";
+import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, Puzzle, ShieldCheck, Swords, Trophy, X, Zap, Cpu } from "lucide-react";
 import { Dot } from "./ui";
 import { useWarRoom } from "../lib/warroom";
 import { useOmegaStatus } from "../lib/omega";
@@ -15,8 +15,6 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   { title: "Live", items: [{ label: "War Room", href: "/#/", key: "", icon: Swords }, { label: "System status", href: "/#/status", key: "status", icon: Activity }] },
   // Omega (owner decisions 2026-11-09): rendered in the main pane beside the left sidebar (#/omega and /omega/) behind the same Cloudflare Access sign-in; /omega/api/* forwards to xauusd-omega.
   { title: "Execution", items: [{ label: "Omega", href: "/#/omega", key: "omega", icon: Zap }] },
-  // The content queue (owner 2026-11-14): drafts for Threads and Instagram waiting for approval; private like every page.
-  { title: "Content", items: [{ label: "Content queue", href: "/#/content", key: "content", icon: Megaphone }] },
   { title: "Analytics", items: [
     { label: "Performance", href: "/#/performance", key: "performance", icon: LineChart },
     { label: "Scorecards", href: "/#/scorecards", key: "scorecards", icon: Trophy },
