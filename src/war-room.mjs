@@ -18,7 +18,7 @@ import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors } from "./natural-language.mjs";
 import { HUD_NAMES, calibrationCounts, calibrationNote, calibratedLines, hudAgentsIn } from "./hud-reading.mjs";
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
-import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
+import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./model-call.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
 import { macroDeskEvidence } from "./macro-room.mjs";
 import { matchRebuts } from "./rebut-names.mjs";
@@ -857,12 +857,8 @@ export async function readTldr(db) {
   let h1 = null;
   if (synth) {
     const d = parseJson(synth.ai_analysis, {})?.decision || {};
-    let consensus = null;
-    try {
-      const mod = await db.prepare("SELECT insight, confidence FROM bus_messages WHERE candle_key = ? AND agent = 'moderator' AND status = 'ok' ORDER BY ts DESC LIMIT 1").bind(synth.candle_key).first();
-      const body = parseJson(mod?.insight, null);
-      if (body) consensus = { stance: body.stance ?? null, confidence: mod.confidence ?? null, summary: clip(body.summary, 300) };
-    } catch { consensus = null; }
+    // The H1 bus moderator's consensus is gone with the bus (owner 2026-11-15); the field stays, null.
+    const consensus = null;
     h1 = { candle_key: synth.candle_key, decision: String(d.decision || "WAIT").toUpperCase(), confidence: d.confidence ?? null, tldr: clip(d.reasoning, 280), consensus };
   }
   const t = await db.prepare("SELECT t.id, t.ref_key, t.title, t.created_at, t.post_json, m.stance, m.confidence, m.body_json FROM agent_threads t LEFT JOIN agent_thread_messages m ON m.thread_id = t.id AND m.step = 'moderator' AND m.status = 'ok' WHERE t.kind = 'news' ORDER BY t.created_at DESC LIMIT 1").first();

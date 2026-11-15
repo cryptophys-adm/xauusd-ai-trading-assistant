@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { naturalLanguageErrors, describeDegradedEvidence } from "../src/natural-language.mjs";
-import { validateAgentOutput, validateModeratorOutput } from "../src/multi-agent-bus.mjs";
+import { validateAgentOutput, validateModeratorOutput } from "../src/model-call.mjs";
 import { validateRoomModerator } from "../src/agent-threads.mjs";
 
 test("plain sentences pass the natural-language check", () => {

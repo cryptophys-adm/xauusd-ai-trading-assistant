@@ -271,9 +271,10 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   `MarketDataReader.diagnostics()`) exposes the pull adapter's last refresh, latest closed bar
   per series, last publish and quota budget.
 
-### Multi-agent bus (Phase 2, shadow only, `MULTI_AGENT_BUS_ENABLED`)
-- Code: `src/multi-agent-bus.mjs`. **Enabled in production since Phase 4 (owner approval 2026-11-04)**: `MULTI_AGENT_BUS_ENABLED` and `LIVE_ROOM_ENABLED` are `"true"` in both `wrangler.jsonc` and `wrangler.preview.jsonc`. Turning a flag back to `"false"` stops new runs at once; stored messages stay readable.
-- **Retired for H1 (owner decision 2026-11-07):** the AI Worker no longer enqueues it; the 1H War Room is the H1 communication bus. The module, its queue handler and the stored messages stay readable, and the news thread still uses its model settings.
+### The shared model call (`src/model-call.mjs`; the H1 multi-agent bus is retired)
+- **The H1 multi-agent bus is retired (owner 2026-11-07 for H1; its code removed 2026-11-15, "setuju semuanya").** Gone: its runner, the `multi_agent_bus` queue handler (a stale task is acknowledged and logged), `GET /api/bus`, its reads in outcome scoring (`bus:*` subjects), in `/api/tldr` (`h1.consensus` is null) and in Threads 1H (`h1:<candle>` now carries the H1 decision and the HUD agents only), and the engines `bus_agent` / `bus_moderator` in `organism.json`. D1 `bus_messages` (335 rows, last 2026-11-07) is no longer read or written; archiving and dropping it waits for the owner's confirmation.
+- **What stayed, moved to `src/model-call.mjs`:** `callBusModel`, the model call every room, thread, council and shadow arm uses (role models, the fallback, timeout, rate-limit and cut-off rules below, the usage meter), and the news thread's schemas, validators and technical evidence (`buildBusEvidence`). The names keep their `BUS_` prefix.
+- **The flag:** `MULTI_AGENT_BUS_ENABLED` became `NEWS_THREADS_ENABLED` (`"true"` in `wrangler.jsonc` and `wrangler.preview.jsonc`). For one deploy `newsThreadsEnabled` still reads the old name when the new one is unset; a later PR removes that fallback.
 - Until 2026-11-07, after the H1 synthesis was persisted (degraded or complete), the AI Worker enqueued a `multi_agent_bus` task on the existing queue. The task reads that synthesis, runs agents `technical` and `news` for 2 rounds, then a `moderator` consensus. That is at most 5 model calls, with a 300 s wall budget and the `MULTI_AGENT_MAX_CALLS_PER_HOUR` cap; the cap fails closed.
 - **Models per role (owner decision 2026-11-07, model migration).**
   - **Why:** the Workers AI changelog of 2026-11-05 retires `@cf/zai-org/glm-5.3-flash` and `@cf/nvidia/nemotron-3-120b-a12b` on 2026-11-20 (HTTP 410, error 5028; first announced for 2026-11-15). glm-5.3-flash was also a paid model limited to 20 requests a minute per account, the main source of the rooms' 3021 errors.
@@ -293,11 +294,11 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
     - A primary **timeout** is transient: the step falls back, and the next step tries the primary again. The second timeout in a run (`PRIMARY_TIMEOUTS_TO_PIN`) sends the rest of the run to the fallback, because each timeout costs up to 60 s of the wall budget. Any other primary error does so at once, as before.
     - A fallback answer cut off by its token limit (`finish_reason` length: the reasoning model spent the budget on hidden reasoning) is asked once more, with twice the budget and a note to answer with the JSON only. This happens only when at least 30 s remain before the deadline. The hourly budgets do not count this one retry.
     - The same `callBusModel` serves the H1 bus, the news threads, the War Rooms, the timeframe rooms and News Daily. Beam (`reflection-ai/beam-1.0-501b-a23b`) was evaluated and rejected: it needs AI Gateway Unified Billing credits.
-- The bus **never** writes into the chain's evidence, prompts or decision. Its output lives only in D1 `bus_messages` (migration `0003_bus_messages.sql`; the schema is also ensured at runtime for the preview D1), and it is read through `GET /api/bus?candle_key=` (messages, consensus, `agreement_with_chain`).
+- The bus never wrote into the chain's evidence, prompts or decision. Its output was D1 `bus_messages` (migration `0003_bus_messages.sql`, never edited), read through `GET /api/bus` until 2026-11-15.
 
 ### Agent threads and live 15m room (Phase 3, `docs/RFC_NEXUS_AGENT_SOCIAL.md`)
 - Code: `src/agent-threads.mjs`. Tables `agent_threads` and `agent_thread_messages` (migration `0004_agent_threads.sql`; new tables only, `0003` is never altered; the schema is also ensured at runtime for the preview D1).
-- **News threads** (behind `MULTI_AGENT_BUS_ENABLED`):
+- **News threads** (behind `NEWS_THREADS_ENABLED`; `MULTI_AGENT_BUS_ENABLED` for one deploy when unset):
   - After each news analysis, a `news_thread` queue task makes the analysis a post.
   - `news` and `technical` reply, each then replies to the other's reply (`parent_id`), and a `moderator` posts the consensus.
   - At most 5 calls, using the bus model with the bus fallback.

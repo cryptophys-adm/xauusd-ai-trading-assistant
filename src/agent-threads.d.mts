@@ -7,6 +7,7 @@ export interface NewsThreadTask { kind: "news_thread"; event_id: string; analysi
 export interface LiveRoomTask { kind: "live_room"; event_id: string; bar_time: string; candle_key: string; context: Record<string, unknown> | null; enqueued_at: string }
 
 export function liveRoomEnabled(env: unknown): boolean;
+export function newsThreadsEnabled(env: unknown): boolean;
 export function buildNewsThreadTask(input: { analysisKey: string; enqueuedAt?: string }): NewsThreadTask;
 export function buildLiveRoomTask(input: { barTime: string; context?: Record<string, unknown> | null; hud?: Record<string, unknown> | null; enqueuedAt?: string }): LiveRoomTask;
 export function m15KeyForClose(closeIso: string): string;

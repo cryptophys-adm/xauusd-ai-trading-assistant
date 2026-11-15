@@ -81,6 +81,8 @@ export interface Env {
   INDICATOR_SOURCE?: string;
   CALIBRATION_INTERVAL_DAYS?: string;
   ANALYSIS_TIMEFRAMES?: string;
+  /** The news threads (owner 2026-11-15; MULTI_AGENT_BUS_ENABLED is read for one deploy when this is unset). */
+  NEWS_THREADS_ENABLED?: string;
   MULTI_AGENT_BUS_ENABLED?: string;
   MULTI_AGENT_MAX_CALLS_PER_HOUR?: string;
   MULTI_AGENT_MODEL?: string;
@@ -224,8 +226,7 @@ import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
 import { reserveTvCalls, releaseTvCalls } from "./tv-budget.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
-import { busEnabled, runMultiAgentBus, readBus } from "./multi-agent-bus.mjs";
-import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents, m15KeyForClose } from "./agent-threads.mjs";
+import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, newsThreadsEnabled, buildLiveRoomTask, runNewsThread, runLiveRoomBar, listThreads, readThread, readLive, listH1Threads, readH1Thread, buildHudAgentsTask, runHudAgents, m15KeyForClose } from "./agent-threads.mjs";
 import { hudAgentsEnabled } from "./hud-agents.mjs";
 import { warRoomEnabled, runWarRoomBar, runMissedWarRoom, readWarRoom, readTldr, agentName } from "./war-room.mjs";
 import { reputationOf, familyOf, REPUTATION_VERSION, REPUTATION_PRIOR, WEIGHT_RANGE } from "./reputation.mjs";
@@ -718,14 +719,9 @@ async function setAnalysisRunStatus(env: Env, candleKey: string, status: string,
   }
 }
 
-/**
- * Shadow multi-agent bus (docs/MULTI_AGENT_BUS.md): enqueued only after the H1
- * synthesis is persisted and only when MULTI_AGENT_BUS_ENABLED is "true". It
- * never feeds back into the chain's evidence, prompts or decision.
- */
-/** Phase 3 news thread for a completed news analysis (shadow, behind MULTI_AGENT_BUS_ENABLED). */
+/** Phase 3 news thread for a completed news analysis (shadow, behind NEWS_THREADS_ENABLED). */
 async function enqueueNewsThread(env: Env, analysisKey: string): Promise<void> {
-  if (!busEnabled(env)) return;
+  if (!newsThreadsEnabled(env)) return;
   try {
     await sendQueueTask(env.XAUUSD_EVENTS, buildNewsThreadTask({ analysisKey }) as unknown as QueueTask);
   } catch (error) {
@@ -1897,8 +1893,8 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
     }
     if (task.kind === "h1_room") return processH1RoomTask(env, task);
     if (task.kind === "multi_agent_bus") {
-      const result = await runMultiAgentBus(env, task);
-      console.log("multi_agent_bus", JSON.stringify({ candle_key: task.candle_key, ...result }));
+      // The H1 bus is retired (owner 2026-11-15; no producer since 2026-11-07): a stale task is acknowledged.
+      console.log("multi_agent_bus_retired", JSON.stringify({ candle_key: task.candle_key }));
       return;
     }
     throw new Error("Unsupported queue task kind");
@@ -2440,15 +2436,6 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     } catch (error) {
       console.error("live_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error", error: "live_unavailable" }, 500);
-    }
-  }
-  if (url.pathname === "/api/bus") {
-    try {
-      const bus = await readBus(env.DB, url.searchParams.get("candle_key"));
-      return dashboardJson({ status: "ok", enabled: busEnabled(env), ...bus });
-    } catch (error) {
-      console.error("bus_read_failed", error instanceof Error ? error.message : String(error));
-      return dashboardJson({ status: "error", error: "bus_unavailable" }, 500);
     }
   }
   // Exact routes before the /api/hud/:candle_key prefix (the #110 lesson): levels and regime of

@@ -20,8 +20,8 @@ import { memoEligible, memoKind, inputHash, memoLookup, memoStore, roomMemoEnabl
 import { recordAiUsage } from "./ai-usage.mjs";
 import {
   callBusModel, roleModels, buildBusEvidence, validateAgentOutput, validateModeratorOutput,
-  AGENT_JSON_SCHEMA, MODERATOR_JSON_SCHEMA, BUS_DEFAULT_MODEL, BUS_MAX_TOKENS, busEnabled
-} from "./multi-agent-bus.mjs";
+  AGENT_JSON_SCHEMA, MODERATOR_JSON_SCHEMA, BUS_DEFAULT_MODEL, BUS_MAX_TOKENS
+} from "./model-call.mjs";
 
 export const ROOM_STANCES = Object.freeze(["BUY", "SELL", "HOLD", "WAIT", "CLOSE"]);
 export const THREAD_WALL_BUDGET_MS = 300_000;
@@ -499,8 +499,18 @@ function newsModeratorMessages(post, technical, transcript) {
   ]);
 }
 
+/**
+ * The news threads' switch (owner 2026-11-15: the H1 bus is retired; its flag gated the news threads too).
+ * NEWS_THREADS_ENABLED wins; for one deploy MULTI_AGENT_BUS_ENABLED still counts when it is unset, so the
+ * threads never stop during the rename. A later PR removes that fallback.
+ */
+export function newsThreadsEnabled(env) {
+  const v = env?.NEWS_THREADS_ENABLED ?? env?.MULTI_AGENT_BUS_ENABLED ?? "false";
+  return String(v).trim().toLowerCase() === "true";
+}
+
 export async function runNewsThread(env, task, { clock = () => Date.now() } = {}) {
-  if (!busEnabled(env)) return { status: "disabled", calls: 0 };
+  if (!newsThreadsEnabled(env)) return { status: "disabled", calls: 0 };
   const db = env.DB;
   await ensureThreadSchema(db);
   const analysisKey = String(task.analysis_key);
@@ -827,29 +837,8 @@ export async function readLive(db, { since = 0, limit = 50 } = {}) {
 }
 
 // ---------------------------------------------------------------- H1 threads
-// The H1 multi-agent bus (bus_messages) presented as one thread per H1 candle:
-// post = the H1 decision, replies = technical/news (round 2 nested under the
-// other agent's round-1 message), then the moderator.
-
-const H1_AGENTS = ["technical", "news"];
-
-function busRowToMessage(row) {
-  const body = parseJson(row.insight, null);
-  const structured = body && typeof body === "object" && !Array.isArray(body) ? body : { insight: String(row.insight ?? "") };
-  const round = Number(row.round);
-  return {
-    id: row.id,
-    run_id: row.run_id,
-    step: row.agent === "moderator" ? "moderator" : `r${round}:${row.agent}`,
-    agent: row.agent,
-    round,
-    ts: row.ts,
-    status: row.status,
-    confidence: row.confidence ?? null,
-    stance: structured.stance ?? null,
-    ...structured
-  };
-}
+// Threads 1H (`h1:<candle>`): the H1 decision as the post and the HUD agents' messages (Phase C5). The
+// retired H1 multi-agent bus (owner 2026-11-15) no longer adds replies; its stored rows are not read.
 
 function h1Title(candleKey, decision) {
   const ms = Number(String(candleKey).split(":").pop());
@@ -875,46 +864,28 @@ function h1Post(candleKey, synth) {
   };
 }
 
+/** The H1 candles whose HUD agents posted, newest first. */
 export async function listH1Threads(db, { limit = 20 } = {}) {
   const n = Math.min(Math.max(Number(limit) || 20, 1), 50);
   let rows = [];
   try {
-    rows = (await db.prepare("SELECT candle_key, MAX(id) AS last_id, MIN(ts) AS first_ts FROM bus_messages GROUP BY candle_key ORDER BY last_id DESC LIMIT ?").bind(n).all()).results || [];
+    rows = (await db.prepare("SELECT t.ref_key AS candle_key, t.created_at, (SELECT COUNT(*) FROM agent_thread_messages m WHERE m.thread_id = t.id) AS n, (SELECT m.stance FROM agent_thread_messages m WHERE m.thread_id = t.id AND m.step = 'moderator' AND m.status = 'ok' ORDER BY m.id DESC LIMIT 1) AS consensus FROM agent_threads t WHERE t.kind = 'hud1h' ORDER BY t.created_at DESC LIMIT ?").bind(n).all()).results || [];
   } catch { return []; }
   const out = [];
   for (const r of rows) {
     const synth = await db.prepare("SELECT ai_analysis, prophet_metrics, gmi_metrics FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(r.candle_key).first();
-    const run = await db.prepare("SELECT run_id FROM bus_messages WHERE id = ?").bind(r.last_id).first();
-    const msgs = (await db.prepare("SELECT * FROM bus_messages WHERE candle_key = ? AND run_id = ? ORDER BY id").bind(r.candle_key, run?.run_id).all()).results || [];
-    const mod = msgs.map(busRowToMessage).find(m => m.agent === "moderator" && m.status === "ok");
     const post = h1Post(r.candle_key, synth);
-    out.push({ id: `h1:${r.candle_key}`, kind: "h1", ref_key: r.candle_key, title: h1Title(r.candle_key, post.decision), created_at: r.first_ts, reply_count: msgs.length, consensus: mod?.stance ?? null, post });
+    out.push({ id: `h1:${r.candle_key}`, kind: "h1", ref_key: r.candle_key, title: h1Title(r.candle_key, post.decision), created_at: r.created_at, reply_count: Number(r.n) || 0, consensus: r.consensus ?? null, post });
   }
   return out;
 }
 
 export async function readH1Thread(db, candleKey) {
-  let rows = [];
-  try {
-    rows = (await db.prepare("SELECT * FROM bus_messages WHERE candle_key = ? ORDER BY id").bind(candleKey).all()).results || [];
-  } catch { rows = []; }
-  // HUD agents post in the same Threads 1H view, even when the bus did not run.
   const hudAgents = await readHudThread(db, candleKey);
-  if (!rows.length && !hudAgents.length) return null;
-  const latestRun = rows.at(-1)?.run_id;
-  const msgs = rows.filter(r => r.run_id === latestRun).map(busRowToMessage);
-  const byStep = new Map(msgs.map(m => [m.step, m]));
-  for (const m of msgs) {
-    if (m.round === 2 && H1_AGENTS.includes(m.agent)) {
-      const other = byStep.get(`r1:${m.agent === "technical" ? "news" : "technical"}`);
-      m.parent_id = other ? other.id : null;
-    } else {
-      m.parent_id = null;
-    }
-  }
+  if (!hudAgents.length) return null;
   const synth = await db.prepare("SELECT ai_analysis, prophet_metrics, gmi_metrics FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(candleKey).first();
   const post = h1Post(candleKey, synth);
-  return { id: `h1:${candleKey}`, kind: "h1", ref_key: candleKey, title: h1Title(candleKey, post.decision), created_at: msgs[0]?.ts ?? hudAgents[0]?.ts ?? null, post, messages: buildMessageTree(msgs), hud_agents: hudAgents };
+  return { id: `h1:${candleKey}`, kind: "h1", ref_key: candleKey, title: h1Title(candleKey, post.decision), created_at: hudAgents[0]?.ts ?? null, post, messages: [], hud_agents: hudAgents };
 }
 
 

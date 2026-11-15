@@ -14,7 +14,7 @@
 import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors } from "./natural-language.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
-import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./multi-agent-bus.mjs";
+import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./model-call.mjs";
 import { ensureThreadSchema, rowToThreadMessage, threadInternals } from "./agent-threads.mjs";
 import { cachedCalendar } from "./econ-calendar.mjs";
 import { calendarOutlook } from "./calendar-agent.mjs";

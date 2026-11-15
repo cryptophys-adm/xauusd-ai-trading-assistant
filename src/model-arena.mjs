@@ -20,7 +20,7 @@
 //   - one call per step, with no correction or retry, at reasoning effort "low";
 //   - the shadow kill switch (src/shadow-switch.mjs) and MODEL_ARENA "off" turn it off.
 import { runModel } from "./model-text.mjs";
-import { parseModelObject, affinityId } from "./multi-agent-bus.mjs";
+import { parseModelObject, affinityId } from "./model-call.mjs";
 import { usageSplit, neuronsOf, NEURON_RATES } from "./ai-usage.mjs";
 import { shadowAllowed, shadowSpendToday, shadowBudget, SHADOW_METER_PREFIX } from "./shadow-switch.mjs";
 import { SCORING_VERSION, scoreStance } from "./outcome-scoring.mjs";

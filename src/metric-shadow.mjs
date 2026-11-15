@@ -13,7 +13,7 @@
 // it disputes, with which metric of its own, and how (contradicts, outweighs, confirms). Stored in
 // metric_shadow_rebuttals beside its live rebuttal stance and scored the same way.
 // `METRIC_SHADOW` "off" or the shadow kill switch (src/shadow-switch.mjs) stops it; at most METRIC_SHADOW_MAX_CALLS_PER_HOUR calls an hour (default 48).
-import { callBusModel } from "./multi-agent-bus.mjs";
+import { callBusModel } from "./model-call.mjs";
 import { ROOM_STANCES } from "./agent-threads.mjs";
 import { SCORING_VERSION, scoreStance } from "./outcome-scoring.mjs";
 import { chatMessages } from "./model-text.mjs";

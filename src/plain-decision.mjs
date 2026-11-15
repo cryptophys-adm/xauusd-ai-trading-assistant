@@ -2,7 +2,7 @@
 // reads is natural language). The decision, its direction, prices and conditions are
 // never changed here: only the reasoning, confirmation and invalidation sentences.
 import { chatMessages } from "./model-text.mjs";
-import { callBusModel } from "./multi-agent-bus.mjs";
+import { callBusModel } from "./model-call.mjs";
 import { naturalLanguageErrors } from "./natural-language.mjs";
 
 export const DECISION_TEXT_FIELDS = Object.freeze(["reasoning", "confirmation", "invalidation"]);
