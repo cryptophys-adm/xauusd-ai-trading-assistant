@@ -1,4 +1,6 @@
 # The decision model's trainer (scripts/train_gbm.py), pinned (Python 3.12).
-lightgbm==4.5.0
+# lightgbm 4.6.0: CVE-2024-43598 (GHSA-2586-f3p4-hq84, remote code execution, high) is fixed from 4.6.0; the
+# exported trees and the walk-forward checks are byte-identical to 4.5.0 on a synthetic dataset (2026-11-15).
+lightgbm==4.6.0
 numpy==1.26.4
 scipy==1.14.1
