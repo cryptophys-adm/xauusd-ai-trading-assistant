@@ -48,4 +48,4 @@ jobs:
         run: node --test market-data-ingestion/test/*.test.mjs local-engines/prophet-r38/test/*.test.mjs local-engines/producer/test/*.test.mjs local-engines/gmi/test/*.test.mjs
 
       - name: Validate Cloudflare Worker bundle
-        run: npx --yes wrangler@4.45.0 deploy --dry-run --config market-data-ingestion/wrangler.jsonc
+        run: npx --yes wrangler@4.156.2 deploy --dry-run --config market-data-ingestion/wrangler.jsonc

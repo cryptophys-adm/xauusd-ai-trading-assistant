@@ -1,0 +1,38 @@
+name: Provision R2 bucket for room transcripts
+
+# Owner 2026-11-15 ("setuju semuanya", item d; docs/RFC_ROOM_CELLS.md §4): one private R2 bucket for the
+# rooms' transcripts. Idempotent: an existing bucket is left as it is. No public access, no lifecycle rule
+# (the RFC needs none yet). The AI Worker binds it only after this has run (a binding to a missing bucket
+# would fail the deploy).
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/provision-r2.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provision-r2
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    env:
+      BUCKET: xauusd-room-transcripts
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - name: Create the bucket when it does not exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          if npx --yes wrangler@4.156.2 r2 bucket info "$BUCKET" >/dev/null 2>&1; then
+            echo "::notice::R2 bucket $BUCKET already exists; nothing to do."
+          else
+            npx --yes wrangler@4.156.2 r2 bucket create "$BUCKET"
+            echo "::notice::R2 bucket $BUCKET created."
+          fi
+          npx --yes wrangler@4.156.2 r2 bucket info "$BUCKET"

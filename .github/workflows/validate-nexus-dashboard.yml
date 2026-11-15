@@ -31,4 +31,4 @@ jobs:
           npm run build
 
       - name: Validate Worker bundle with assets
-        run: npx --yes wrangler@4.45.0 deploy --dry-run --config workers/xauusd-nexus-dashboard/wrangler.jsonc
+        run: npx --yes wrangler@4.156.2 deploy --dry-run --config workers/xauusd-nexus-dashboard/wrangler.jsonc
