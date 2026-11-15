@@ -220,6 +220,7 @@ import { loadDecisionCards } from "./decision-cards.mjs";
 import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
 import { readNeuronAllocation } from "./neuron-allocation.mjs";
 import { agentInventory, aiLogic } from "./agent-inventory.mjs";
+import { deriveRoomRuns, compareRoomRuns, roomRunsStatus } from "./room-runs.mjs";
 import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
 import { scoreModelArena, pruneModelArena, readModelArena } from "./model-arena.mjs";
@@ -2726,6 +2727,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error", error: "inventory_unavailable" }, 500);
     }
   }
+  if (url.pathname === "/api/room-runs/status") {
+    // ADR-0015 phase 2a in shadow (src/room-runs.mjs): the run documents per room and the last comparisons.
+    try {
+      return dashboardJson(await roomRunsStatus(env, { limit: Number(url.searchParams.get("limit") || "24") }));
+    } catch (error) {
+      console.error("room_runs_status_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "room_runs_unavailable" }, 500);
+    }
+  }
   if (url.pathname === "/api/neuron-allocation") {
     // What each agent costs in neurons and delivers in hit rate (src/neuron-allocation.mjs); read-only.
     try {
@@ -3426,5 +3436,12 @@ export default {
         if (daily.status !== "disabled") console.log("news_daily", JSON.stringify(daily));
       } catch (e) { console.error("news_daily_failed", e instanceof Error ? e.message : String(e)); }
     }));
+    // ADR-0015 phase 2a, in shadow (owner 2026-11-15; docs/RFC_ROOM_CELLS.md): the hour's concluded room runs as
+    // run documents, then the comparison with what outcome scoring reads today. Nothing reads them yet.
+    ctx.waitUntil(deriveRoomRuns(env).then(async (derived) => {
+      if (derived.status === "disabled") return;
+      const compared = await compareRoomRuns(env);
+      console.log("room_runs", JSON.stringify({ derived, compared }));
+    }).catch((e) => console.error("room_runs_failed", e instanceof Error ? e.message : String(e))));
   }
 };

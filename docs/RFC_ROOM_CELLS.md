@@ -1,6 +1,6 @@
 # RFC: Room cells and run documents (ADR-0015 phase 2, xauusd)
 
-**Status: blueprint only. Nothing here is built.**
+**Status: P2a building, in shadow (owner approved the direction 2026-11-15). P2b and P2c not started.**
 - The owner approves it before any implementation (relayed by the orchestrator, 2026-11-15).
 - ADR-0015 phase 2 was deferred on 2026-11-14 ("setuju tunda"). This document is the plan to un-defer it.
 

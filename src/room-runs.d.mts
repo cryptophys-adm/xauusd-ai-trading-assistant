@@ -1,0 +1,13 @@
+export const RUN_DOC_VERSION: string;
+export const RUN_ROOMS: Readonly<Record<string, { timeframe: string; ms: number }>>;
+export const MAX_RUNS_PER_PASS: number;
+export const DERIVE_WINDOW_MS: number;
+export const ROOM_RUNS_SCHEMA_SQL: string[];
+export function roomRunsEnabled(env: unknown): boolean;
+export function ensureRoomRunsSchema(db: unknown): Promise<void>;
+export function resetRoomRunsSchemaCacheForTests(): void;
+export function buildRunDoc(rows: Array<Record<string, any>>, ids: { threadId: string; runId: string }): Record<string, any> | null;
+export function statementsFromDocs(docs: Array<Record<string, any>>): Map<string, Array<Record<string, any>>>;
+export function deriveRoomRuns(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function compareRoomRuns(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function roomRunsStatus(env: unknown, options?: { limit?: number }): Promise<Record<string, any>>;
