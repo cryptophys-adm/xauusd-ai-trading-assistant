@@ -66,3 +66,27 @@ test("D4. the OrganismDna entrypoint exposes dna() only and returns a copy", () 
   a.organs[0].agents.push({ id: "x" });
   assert.notEqual(organismDna().organs[0].agents.at(-1)?.id, "x");
 });
+
+test("D5. P5 version provenance: the AI Worker's organ carries its deploy, the others stay untracked, placeholders never", () => {
+  const sha = "a".repeat(40);
+  const dna = organismDna({ service: "xauusd-ai-trading-assistant", commit: sha, at: "2026-11-15T15:00:00Z" });
+  const own = dna.organs.find((o) => o.service === "xauusd-ai-trading-assistant");
+  assert.deepEqual([own.deployed_commit, own.deployed_at], [sha, "2026-11-15T15:00:00.000Z"]);
+  for (const o of dna.organs.filter((x) => x !== own)) assert.equal(o.deployed_commit, undefined, `${o.service}: untracked here`);
+  for (const bad of [{ commit: "abc", at: "2026-11-15T15:00:00Z" }, { commit: sha, at: "" }, null]) {
+    const d = organismDna(bad && { service: "xauusd-ai-trading-assistant", ...bad });
+    assert.ok(d.organs.every((o) => o.deployed_commit === undefined && o.deployed_at === undefined), JSON.stringify(bad));
+  }
+  assert.equal(organismDna().organs.some((o) => "deployed_commit" in o), false, "the stored organism.json carries no deploy");
+  // Every production deploy tags its version with the commit's first 12 characters and injects both values.
+  for (const wf of ["deploy-worker", "deploy-nexus-dashboard", "deploy-omega", "deploy-fundamental-news-ingestion", "deploy-market-data-ingestion"]) {
+    const text = read(`.github/workflows/${wf}.yml`);
+    const deploys = text.split("\n").filter((l) => /wrangler(@[\d.]+)? deploy --config/.test(l));
+    assert.ok(deploys.length, wf);
+    for (const l of deploys) {
+      assert.match(l, /--tag "\$\{GITHUB_SHA:0:12\}"/, `${wf}: ${l.trim()}`);
+      assert.match(l, /--var "DEPLOY_COMMIT:\$\{GITHUB_SHA\}"/, wf);
+      assert.match(l, /--var "DEPLOYED_AT:/, wf);
+    }
+  }
+});

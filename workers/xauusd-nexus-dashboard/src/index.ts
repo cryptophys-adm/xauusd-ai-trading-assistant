@@ -57,6 +57,9 @@ interface AetherReader {
   overview(): Promise<unknown>;
 }
 interface Env {
+  /** The deployed commit (40 hex) and time, injected by deploy-nexus-dashboard.yml (P5). */
+  DEPLOY_COMMIT?: string;
+  DEPLOYED_AT?: string;
   MARKET_DATA?: MarketDataReader;
   AETHER?: AetherReader;
   AI_WORKER?: { fetch(request: Request): Promise<Response> };
@@ -117,6 +120,11 @@ export default {
       // while /omega/api/* and /omega/health forward unchanged to xauusd-omega.
       const isPage = (url.pathname === "/omega" || url.pathname === "/omega/") && (request.method === "GET" || request.method === "HEAD") && Boolean(env.ASSETS);
       if (!isPage) return env.OMEGA_PAGE.fetch(request);
+    }
+
+    if (request.method === "GET" && url.pathname === "/health") {
+      // Version provenance (owner 2026-11-15, P5): injected by the deploy workflow, never read from git here.
+      return json({ status: "ok", service: "xauusd-nexus-dashboard", commit: String(env.DEPLOY_COMMIT ?? "").slice(0, 12) || null, deployed_at: env.DEPLOYED_AT ?? null });
     }
 
     if (url.pathname.startsWith("/api/")) {

@@ -57,7 +57,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
-          npx --yes wrangler@4.45.0 deploy --config market-data-ingestion/wrangler.jsonc | tee deploy.log
+          # Version provenance (owner 2026-11-15, P5): tag = the commit's first 12 characters; /health reports it.
+          npx --yes wrangler@4.45.0 deploy --config market-data-ingestion/wrangler.jsonc --tag "${GITHUB_SHA:0:12}" --message "commit ${GITHUB_SHA}" --var "DEPLOY_COMMIT:${GITHUB_SHA}" --var "DEPLOYED_AT:$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee deploy.log
           url=$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -n1 || true)
           if [ -z "$url" ]; then echo "::error::Could not determine workers.dev URL from deploy output."; exit 1; fi
           echo "url=$url" >> "$GITHUB_OUTPUT"

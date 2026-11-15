@@ -140,6 +140,9 @@ const worker = {
       return json({
         status: "ok",
         worker: WORKER_NAME,
+        // Version provenance (owner 2026-11-15, P5): injected by the deploy workflow.
+        commit: String(env.DEPLOY_COMMIT ?? "").slice(0, 12) || null,
+        deployed_at: env.DEPLOYED_AT ?? null,
         provider: PROVIDER,
         gateway_configured: typeof env.TV_GATEWAY?.ohlcv === "function",
         gateway_binding: Boolean(env.TV_GATEWAY),

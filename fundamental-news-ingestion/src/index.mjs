@@ -1365,7 +1365,8 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return json(await cachedHealth(env));
+      // Version provenance (owner 2026-11-15, P5): injected by the deploy workflow.
+      return json({ ...(await cachedHealth(env)), commit: String(env.DEPLOY_COMMIT ?? "").slice(0, 12) || null, deployed_at: env.DEPLOYED_AT ?? null });
     }
 
     if (request.method === "GET" && url.pathname === "/oauth/start") {

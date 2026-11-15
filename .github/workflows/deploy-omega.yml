@@ -68,9 +68,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${ACCESS_AUD:-}" ]; then
-            npx --yes wrangler@4.45.0 deploy --config workers/xauusd-omega/wrangler.jsonc --var "ACCESS_AUD:${ACCESS_AUD}"
+            npx --yes wrangler@4.45.0 deploy --config workers/xauusd-omega/wrangler.jsonc --var "ACCESS_AUD:${ACCESS_AUD}" --tag "${GITHUB_SHA:0:12}" --message "commit ${GITHUB_SHA}" --var "DEPLOY_COMMIT:${GITHUB_SHA}" --var "DEPLOYED_AT:$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           else
-            npx --yes wrangler@4.45.0 deploy --config workers/xauusd-omega/wrangler.jsonc
+            npx --yes wrangler@4.45.0 deploy --config workers/xauusd-omega/wrangler.jsonc --tag "${GITHUB_SHA:0:12}" --message "commit ${GITHUB_SHA}" --var "DEPLOY_COMMIT:${GITHUB_SHA}" --var "DEPLOYED_AT:$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           fi
 
       - name: Smoke test
