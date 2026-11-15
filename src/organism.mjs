@@ -10,8 +10,18 @@ import ORGANISM from "../organism.json" with { type: "json" };
 export const ORGANISM_SCHEMA = "xauusd-organism.v1";
 
 /** The DNA, as served to the platform: a copy, so no caller can change this module's object. */
-export function organismDna() {
+const SHA = /^[0-9a-f]{40}$/;
+/**
+ * The DNA; `deployed` (P5, the platform's field contract) names the organ this Worker is and its deploy, so that
+ * organ carries deployed_commit (40-char sha) and deployed_at. Without a valid sha both are omitted ("untracked").
+ */
+export function organismDna(deployed = null) {
   // agents_inventory (owner 2026-11-15, the platform's field contract): a top-level link the census does not
   // register; the room seats it lists are not kernel agents.
-  return { schema: ORGANISM.schema, organs: JSON.parse(JSON.stringify(ORGANISM.organs)), ...(ORGANISM.agents_inventory ? { agents_inventory: { ...ORGANISM.agents_inventory } } : {}) };
+  const organs = JSON.parse(JSON.stringify(ORGANISM.organs));
+  const commit = String(deployed?.commit ?? "").toLowerCase();
+  const at = Date.parse(deployed?.at ?? "");
+  const own = organs.find((o) => o.service === deployed?.service);
+  if (own && SHA.test(commit) && Number.isFinite(at)) Object.assign(own, { deployed_commit: commit, deployed_at: new Date(at).toISOString() });
+  return { schema: ORGANISM.schema, organs, ...(ORGANISM.agents_inventory ? { agents_inventory: { ...ORGANISM.agents_inventory } } : {}) };
 }

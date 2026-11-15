@@ -143,7 +143,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
   if (url.pathname === PATH_PREFIX) return Response.redirect(`${url.origin}${PATH_PREFIX}/${url.search}`, 301);
   // Under the prefix the page and API keep their own paths; every link in the page is relative.
   const path = url.pathname.startsWith(`${PATH_PREFIX}/`) ? url.pathname.slice(PATH_PREFIX.length) : url.pathname;
-  if (path === "/health") return json({ status: "ok", service: "xauusd-omega" });
+  if (path === "/health") return json({ status: "ok", service: "xauusd-omega", commit: String(env?.DEPLOY_COMMIT ?? "").slice(0, 12) || null, deployed_at: env?.DEPLOYED_AT ?? null });
 
   const token = request.headers.get("cf-access-jwt-assertion");
   if (!token) return json({ error: "access_denied", hint: "Omega is reached through Cloudflare Access" }, 403);

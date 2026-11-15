@@ -83,6 +83,9 @@ export interface Env {
   ANALYSIS_TIMEFRAMES?: string;
   /** The news threads (owner 2026-11-15; MULTI_AGENT_BUS_ENABLED is read for one deploy when this is unset). */
   NEWS_THREADS_ENABLED?: string;
+  /** The deployed commit (40 hex) and time, injected by deploy-worker.yml (P5). */
+  DEPLOY_COMMIT?: string;
+  DEPLOYED_AT?: string;
   MULTI_AGENT_BUS_ENABLED?: string;
   MULTI_AGENT_MAX_CALLS_PER_HOUR?: string;
   MULTI_AGENT_MODEL?: string;
@@ -2093,7 +2096,7 @@ export class OwnerNotifier extends WorkerEntrypoint<Env> {
  */
 export class OrganismDna extends WorkerEntrypoint<Env> {
   async dna(): Promise<JsonObject> {
-    return organismDna() as unknown as JsonObject;
+    return organismDna({ service: "xauusd-ai-trading-assistant", commit: this.env.DEPLOY_COMMIT, at: this.env.DEPLOYED_AT }) as unknown as JsonObject;
   }
 }
 
@@ -3004,6 +3007,9 @@ export default {
       return json({
         status: "ok",
         service: "xauusd-ai-trading-assistant",
+        // Version provenance (owner 2026-11-15, P5): injected by the deploy workflow, never read from git here.
+        commit: String(env.DEPLOY_COMMIT ?? "").slice(0, 12) || null,
+        deployed_at: env.DEPLOYED_AT ?? null,
         knowledge_base: { version: 4, source: "bundled, generated from pinescript/ssot", content_sha256: KNOWLEDGE_SHA },
         bindings: {
           d1: Boolean(env.DB),
