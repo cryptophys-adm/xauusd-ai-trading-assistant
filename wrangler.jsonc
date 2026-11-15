@@ -30,6 +30,12 @@
       { "name": "PUSH_HUB", "class_name": "PushHub", "script_name": "xauusd-nexus-dashboard" }
     ]
   },
+  "r2_buckets": [
+    {
+      "binding": "ROOM_TRANSCRIPTS",
+      "bucket_name": "xauusd-room-transcripts"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
