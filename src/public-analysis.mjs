@@ -17,6 +17,27 @@ export const ANALYSIS_CHARTS = Object.freeze({ "60": "H1", "240": "H4", D: "D1",
 const r2 = (x) => (Number.isFinite(Number(x)) ? Math.round(Number(x) * 100) / 100 : null);
 const ROLE = Object.freeze({ support: "demand", resistance: "supply", "at price": "at_price" });
 
+/**
+ * The names of the metrics a zone stacks (owner 2026-11-15: "tidak perlu dicantumkan sumber playbook, cukup nama
+ * metrics sumbernya"): the zone's heaviest key levels by name, e.g. "4H Camarilla H4", "daily pivot", "1H swing high".
+ * Never a price (a round number is "round number"), never trade words (a pattern's "measured target" is its
+ * "measured projection"; any other name with one is left out); at most `max`, unique.
+ */
+export function zoneMetrics(zone, { max = 3 } = {}) {
+  const names = [];
+  for (const m of Array.isArray(zone?.members) ? zone.members : []) {
+    let n = String(m?.label ?? "").trim();
+    if (!n) continue;
+    n = n.replace(/^round\s+\d+(\.\d+)?$/i, "round number")
+      .replace(/\bmeasured target\b/gi, "measured projection")
+      .replace(/\$?\b\d{3,5}(\.\d+)?\b/g, "").replace(/\s{2,}/g, " ").trim().slice(0, 60);
+    if (/\b(entry|stop|take[- ]?profit|target|sl|tp\d?)\b/i.test(n)) continue; // a trade word: the name is left out
+    if (n && !names.includes(n)) names.push(n);
+    if (names.length >= max) break;
+  }
+  return names;
+}
+
 /** "three falling peaks" → "Three Falling Peaks". */
 export function titleOf(name) {
   return String(name ?? "").split(/\s+/).filter(Boolean).map((w) => (/^[a-z]/.test(w) ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
@@ -27,7 +48,7 @@ export function publicAnalysis(keyLevels, { structure = null, now = Date.now() }
   const kl = keyLevels && typeof keyLevels === "object" ? keyLevels : {};
   const zones = (Array.isArray(kl.candidates) ? kl.candidates : [])
     .filter((z) => Number.isFinite(Number(z?.low)) && Number.isFinite(Number(z?.high)) && ROLE[z.role])
-    .map((z) => ({ role: ROLE[z.role], low: r2(z.low), high: r2(z.high), strength: typeof z.strength === "string" ? z.strength : null, sources: Number(z.sources) || null }))
+    .map((z) => ({ role: ROLE[z.role], low: r2(z.low), high: r2(z.high), strength: typeof z.strength === "string" ? z.strength : null, sources: Number(z.sources) || null, metrics: zoneMetrics(z) }))
     .sort((a, b) => b.high - a.high);
   const patterns = (Array.isArray(kl.patterns) ? kl.patterns : [])
     .filter((p) => ANALYSIS_CHARTS[String(p?.tf)] && ["forming", "confirmed"].includes(p?.status) && typeof p.id === "string")

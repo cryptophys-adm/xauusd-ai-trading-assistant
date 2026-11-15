@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-15
+- feat(public-analysis): each zone carries the names of its metrics (`zoneMetrics`: the zone's heaviest key levels by name, at most three; a round number is "round number", a pattern's "measured target" is "measured projection", any other name with a trade word is left out; no price). Owner 2026-11-15: "tidak perlu dicantumkan sumber playbook, cukup nama metrics sumbernya"; cryptophys-cta shows these instead of a source count and drops the catalogue reference.
 - fix(security): the decision-model trainer pins `lightgbm==4.6.0` (Dependabot, high: CVE-2024-43598 / GHSA-2586-f3p4-hq84, remote code execution, fixed from 4.6.0). Used only by `train-model.yml` on the runner, never by a Worker. On a synthetic 700-row dataset 4.5.0 and 4.6.0 give byte-identical trees and walk-forward checks, and the trainer's own check (the compact trees reproduce LightGBM's predictions) passes.
 
 ## 2026-11-14
