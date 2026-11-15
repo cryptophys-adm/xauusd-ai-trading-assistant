@@ -201,6 +201,12 @@
           "task": "macro_room_rebuttal"
         },
         {
+          "task": "news_analyst"
+        },
+        {
+          "task": "news_counselor"
+        },
+        {
           "task": "news_daily_tags"
         },
         {
