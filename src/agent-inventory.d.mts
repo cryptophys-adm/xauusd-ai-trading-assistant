@@ -1,0 +1,10 @@
+export const INVENTORY_SCHEMA: string;
+export const AI_LOGIC_SCHEMA: string;
+export const INVENTORY_HREF: string;
+export const DORMANT_AFTER_DAYS: number;
+export const ROOMS: Readonly<Record<string, { name: string; flag: string; thread: string; trigger: string; reads: string[]; writes: string[]; seats: () => string[] }>>;
+export const ENGINE_LOGIC: Readonly<Record<string, Record<string, any>>>;
+export function meterLabels(engine: string): string[];
+export function agentRoster(env?: unknown): Array<Record<string, any>>;
+export function agentInventory(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function aiLogic(env: unknown, options?: { now?: number; days?: number }): Promise<Record<string, any>>;

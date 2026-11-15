@@ -11,5 +11,7 @@ export const ORGANISM_SCHEMA = "xauusd-organism.v1";
 
 /** The DNA, as served to the platform: a copy, so no caller can change this module's object. */
 export function organismDna() {
-  return { schema: ORGANISM.schema, organs: JSON.parse(JSON.stringify(ORGANISM.organs)) };
+  // agents_inventory (owner 2026-11-15, the platform's field contract): a top-level link the census does not
+  // register; the room seats it lists are not kernel agents.
+  return { schema: ORGANISM.schema, organs: JSON.parse(JSON.stringify(ORGANISM.organs)), ...(ORGANISM.agents_inventory ? { agents_inventory: { ...ORGANISM.agents_inventory } } : {}) };
 }
