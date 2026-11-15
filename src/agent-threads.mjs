@@ -13,8 +13,7 @@ import { chatMessages } from "./model-text.mjs";
 import { naturalLanguageErrors, NATURAL_LANGUAGE_RULE, NATURAL_LANGUAGE_CORRECTION, describeDegradedEvidence, calibrationTalk, CALIBRATION_CORRECTION } from "./natural-language.mjs";
 import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import { verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
-import { HUD_NAMES, calibrationCounts, hudAgentsIn } from "./hud-reading.mjs";
-import { hudAgentsEnabled } from "./hud-agents.mjs";
+import { HUD_NAMES } from "./hud-reading.mjs";
 import { memoEligible, memoKind, inputHash, memoLookup, memoStore, roomMemoEnabled, evidenceShadow, evidenceMemoEnabled } from "./room-memo.mjs";
 import { recordAiUsage } from "./ai-usage.mjs";
 import {
@@ -67,18 +66,6 @@ export const THREAD_SCHEMA_SQL = [
   "CREATE INDEX IF NOT EXISTS idx_agent_thread_messages_thread_bar ON agent_thread_messages(thread_id, bar_time)"
 ];
 
-
-// The HUD agents' moderator answers in this shape (the legacy live room's moderator used it too).
-const ROOM_MODERATOR_SCHEMA = Object.freeze({
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    stance: { type: "string", enum: [...ROOM_STANCES] },
-    confidence: { type: "number" },
-    summary: { type: "string" }
-  },
-  required: ["stance", "confidence", "summary"]
-});
 
 export function liveRoomEnabled(env) {
   return String(env?.LIVE_ROOM_ENABLED ?? "false").trim().toLowerCase() === "true";
@@ -765,135 +752,14 @@ export async function readH1Thread(db, candleKey) {
 }
 
 
-// ---------------------------------------------------------------- HUD agents (Phase C5)
+// ---------------------------------------------------------------- HUD readings (Phase C5)
 //
-// One agent per Pine HUD section, named after the HUD (owner decision). After each H1
-// synthesis, every HUD with a computed reading posts once in Threads 1H, then a moderator
-// summarises. Each agent sees only its own HUD reading (with "verified by parity" or "not
-// yet calibrated" per statement) and the authoritative H1 decision. Advisory only: no
-// entry, stop, target or size; never changes the H1 decision. Behind HUD_AGENTS_ENABLED.
-
-export const HUD_WALL_BUDGET_MS = 240_000;
-export const HUD_STANCES = Object.freeze(["BUY", "SELL", "WAIT"]);
-
-const HUD_AGENT_SCHEMA = Object.freeze({
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    agent: { type: "string" },
-    stance: { type: "string", enum: [...HUD_STANCES] },
-    confidence: { type: "number" },
-    insight: { type: "string" }
-  },
-  required: ["agent", "stance", "confidence", "insight"]
-});
-
-/** Live 15m room HUD agents (RFC §6.2, owner decision: Aegis included). */
-export function buildHudAgentsTask({ candleKey, enqueuedAt = new Date().toISOString() } = {}) {
-  if (typeof candleKey !== "string" || !candleKey.trim()) throw new TypeError("HUD agents task requires candleKey");
-  return { kind: "hud_agents", event_id: `hud_agents:${candleKey}`, candle_key: candleKey, enqueued_at: enqueuedAt };
-}
-
-export function validateHudAgent(obj, agentId, stances = HUD_STANCES) {
-  const errors = [];
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { valid: false, errors: ["not_an_object"] };
-  if (obj.agent !== agentId) errors.push("agent_mismatch");
-  if (!stances.includes(obj.stance)) errors.push("stance_invalid");
-  if (!inUnit(obj.confidence)) errors.push("confidence_out_of_range");
-  if (typeof obj.insight !== "string" || !obj.insight.trim()) errors.push("insight_missing");
-  errors.push(...naturalLanguageErrors(obj.insight));
-  return { valid: errors.length === 0, errors };
-}
+// The per-H1 HUD agents (hud_agent, hud_moderator) are retired (owner 2026-11-15): since 2026-11-05 each HUD
+// speaks as a seat of the War Room and of the 1H/4H/D1 rooms. Their stored Threads 1H messages stay readable.
 
 /** Reading lines as the agent sees them: each statement carries its calibration tier. */
 export function hudEvidenceLines(reading) {
   return (reading?.lines || []).map((l) => `${l.verified ? "Verified by parity" : l.derived ? "Computed from verified bars" : "Not yet calibrated"}: ${l.text}`);
-}
-
-/** How a HUD agent weighs the three calibration tiers of its reading. */
-export const HUD_TIERS_RULE = "Read only your HUD reading below. Each statement is marked verified by parity (it equals the parity-approved local computation), computed from verified bars (a pure formula of closed bars, such as Camarilla levels, pivot ranges or sessions, on a bar that matched TradingView), or not yet calibrated (an engine internal no TradingView comparator has checked). Lean on the verified and bar-computed statements, and say plainly when your view rests on statements that are not yet calibrated.";
-
-function hudAgentMessages(agentId, name, reading, h1) {
-  return chatMessages([
-    `You are ${name}, one agent per Pine HUD in an XAUUSD trading forum. You speak only about the ${name} HUD, for the H1 candle that just closed.`,
-    RULES_NO_REFS,
-    HUD_TIERS_RULE,
-    `The authoritative H1 decision is ${h1.decision}. Say whether your HUD agrees with it. Never give entry, stop loss, take profit or position size.`,
-    `Required JSON: {"agent":"${agentId}","stance":"BUY|SELL|WAIT","confidence":0..1,"insight":"<= 400 chars"}`,
-    "EVIDENCE:",
-    JSON.stringify({ hud: name, timeframe: "1 hour", reading: hudEvidenceLines(reading), h1: { decision: h1.decision, confidence: h1.confidence } })
-  ]);
-}
-
-function hudModeratorMessages(h1, transcript) {
-  return chatMessages([
-    "You are the moderator of the HUD agents in an XAUUSD trading forum: one agent per Pine HUD has posted about the H1 candle that just closed.",
-    RULES_NO_REFS,
-    `Give one short consensus line across the HUDs, naming which HUDs agree and which disagree. If your stance differs from the H1 decision (${h1.decision}), the summary must say "H1 decision: ${h1.decision}".`,
-    `Required JSON: {"stance":"BUY|SELL|WAIT","confidence":0..1,"summary":"<= 300 chars"}`,
-    "HUD AGENTS:",
-    JSON.stringify(transcript.map((m) => ({ hud: m.name, status: m.status, stance: m.stance, confidence: m.confidence, insight: m.insight })))
-  ]);
-}
-
-/**
- * Runs the HUD agents for one closed H1 candle. Idempotent per (candle, HUD): stored valid
- * messages are reused on redelivery and never re-spend the budget.
- */
-export async function runHudAgents(env, task, { clock = () => Date.now(), loadReadings } = {}) {
-  if (!hudAgentsEnabled(env)) return { status: "disabled", calls: 0 };
-  const db = env.DB;
-  const candleKey = task?.candle_key;
-  await ensureThreadSchema(db);
-  const hud = typeof loadReadings === "function" ? await loadReadings(env, candleKey) : null;
-  if (!hud || !hud.readings) throw Object.assign(new Error("HUD snapshot not visible yet"), { name: "RetryableError" });
-  const synth = await db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ? ORDER BY id DESC LIMIT 1").bind(candleKey).first();
-  if (!synth) throw Object.assign(new Error("H1 synthesis not visible yet"), { name: "RetryableError" });
-  const decision = parseJson(synth.ai_analysis, {})?.decision || {};
-  const h1 = { decision: String(decision.decision || "WAIT").toUpperCase(), confidence: decision.confidence ?? null };
-
-  const threadId = `hud1h:${candleKey}`;
-  await upsertThread(db, { id: threadId, kind: "hud1h", refKey: candleKey, title: `HUD agents · ${candleKey}`, post: { candle_key: candleKey, h1_decision: h1.decision, not_computed: hud.not_computed }, now: clock() });
-  const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, candleKey).all()).results || []).map((r) => [r.step, rowToThreadMessage(r)]));
-  if (existing.get("moderator")?.status === "ok") return { status: "already_complete", calls: 0 };
-
-  const hudEnv = env;
-  const deadline = clock() + HUD_WALL_BUDGET_MS;
-  const maxPerHour = Number(env.HUD_AGENTS_MAX_CALLS_PER_HOUR ?? 30);
-  const runState = { primaryError: null };
-  let calls = 0;
-  const budgetOk = async () => {
-    if (clock() >= deadline) return false;
-    try { return (await callsInLastHour(db, clock(), "hud%")) < (Number.isFinite(maxPerHour) ? maxPerHour : 0); } catch { return false; }
-  };
-  const transcript = [];
-  for (const id of hudAgentsIn("H1")) {
-    const reading = hud.readings[id];
-    if (!reading?.available) continue;
-    const step = `hud:${id}`;
-    let msg = existing.get(step);
-    if (msg?.status !== "ok") {
-      calls += 1;
-      msg = await runStep(hudEnv, db, { thread_id: threadId, run_id: candleKey, step, agent: id, parent_id: null }, {
-        messages: hudAgentMessages(id, HUD_NAMES[id], reading, h1), schemaName: "hud_agent", schema: HUD_AGENT_SCHEMA,
-        maxTokens: BUS_MAX_TOKENS.agent, effort: "low", deadline, clock, runState, budgetOk,
-        validate: (o) => validateHudAgent(o, id),
-        toBody: (o) => ({ body: { insight: clip(o.insight, INSIGHT_MAX), hud: HUD_NAMES[id], ...calibrationCounts(reading.lines) }, refs: [] })
-      });
-    }
-    transcript.push({ ...msg, name: HUD_NAMES[id] });
-  }
-  const answered = transcript.filter((m) => m.status === "ok");
-  if (answered.length) {
-    calls += 1;
-    await runStep(hudEnv, db, { thread_id: threadId, run_id: candleKey, step: "moderator", agent: "moderator", parent_id: null }, {
-      messages: hudModeratorMessages(h1, answered), schemaName: "hud_moderator", schema: ROOM_MODERATOR_SCHEMA,
-      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", deadline, clock, runState, budgetOk,
-      validate: (o) => { const v = validateRoomModerator(o, h1.decision); if (o && !HUD_STANCES.includes(o.stance)) v.errors.push("stance_invalid"); return { valid: v.errors.length === 0, errors: v.errors }; },
-      toBody: (o) => ({ body: { summary: clip(o.summary, 400), h1_decision: h1.decision }, refs: [] })
-    });
-  }
-  return { status: "complete", calls, agents: transcript.length, answered: answered.length };
 }
 
 /** HUD agent messages of one H1 candle for Threads 1H (display names only, never model names). */

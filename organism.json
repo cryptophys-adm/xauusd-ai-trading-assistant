@@ -186,12 +186,6 @@
           "task": "h1_reasoner"
         },
         {
-          "task": "hud_agent"
-        },
-        {
-          "task": "hud_moderator"
-        },
-        {
           "task": "macro_room_conclusion"
         },
         {

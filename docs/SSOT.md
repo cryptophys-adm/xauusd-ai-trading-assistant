@@ -564,7 +564,8 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
 - Neither feature writes into the H1 chain's evidence, prompts or decision. Stances are discussion only: no orders.
 - `POST /preview/news-analysis-fixture` exists only when `PREVIEW_FIXTURES_ENABLED` is `"true"` (set only in `wrangler.preview.jsonc`), so preview-e2e can prove a news thread.
 
-### HUD agents (Phase C, `HUD_AGENTS_ENABLED`, on in production since 2026-11-05)
+### HUD agents (Phase C; the per-H1 runner retired 2026-11-15)
+- **Retired in code on 2026-11-15** (owner: "setuju semuanya"): the per-H1 HUD agents (`runHudAgents`, `hud_agent` / `hud_moderator`, `HUD_AGENTS_ENABLED`) had not run since 2026-11-05, when the War Room took their place; each HUD now speaks as a seat of the War Room and the 1H/4H/D1 rooms. Their stored Threads 1H messages stay readable. History below.
 - Owner request, 2026-11-04: every HUD in the installed Pine indicators becomes its own agent.
   - Each agent is named after its HUD.
   - Each agent analyses only the data its HUD produces.

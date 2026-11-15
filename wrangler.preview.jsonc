@@ -57,9 +57,6 @@
     "MODERATOR_MODEL": "@cf/openai/gpt-oss-120b",
     "MODERATOR_FALLBACK_MODEL": "@cf/google/gemma-4-26b-a4b-it",
     "LIVE_ROOM_ENABLED": "true",
-    "HUD_AGENTS_ENABLED": "true",
-    // Phase C5: own hourly cap for the HUD agents (13 agents + moderator per H1 run).
-    "HUD_AGENTS_MAX_CALLS_PER_HOUR": "60",
     "LIVE_ROOM_MAX_CALLS_PER_HOUR": "150",
     // Live War Room 15m (owner decision 2026-11-05): every agent opens on the bus, debates for at
     // most 3 minutes, and the moderator concludes for the main panel. It replaces the legacy live
