@@ -1,6 +1,11 @@
 {
   "$comment": "The XAUUSD organs' DNA for the Cryptophys platform census (owner 2026-11-12, ADR-0013 external organs). Served read-only by the AI Worker's OrganismDna RPC entrypoint (src/organism.mjs). test/organism-dna.test.mjs keeps it equal to the code: the agents that report to the kernel and every AI task the Workers run.",
   "schema": "xauusd-organism.v1",
+  "agents_inventory": {
+    "href": "/api/agents/inventory",
+    "schema": "xauusd-agents-inventory.v1",
+    "count": 28
+  },
   "organs": [
     {
       "$schema_version": 1,

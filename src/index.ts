@@ -216,6 +216,7 @@ import { pullOmegaPolicy } from "./omega-policy.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
 import { readNeuronAllocation } from "./neuron-allocation.mjs";
+import { agentInventory, aiLogic } from "./agent-inventory.mjs";
 import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
 import { scoreModelArena, pruneModelArena, readModelArena } from "./model-arena.mjs";
@@ -2711,6 +2712,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     } catch (error) {
       console.error("metric_shadow_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error", error: "metric_shadow_unavailable" }, 500);
+    }
+  }
+  if (url.pathname === "/api/agents/inventory" || url.pathname === "/api/ai/logic") {
+    // Generated from the code rosters, the role models and the DNA, plus D1 use (src/agent-inventory.mjs); read-only.
+    try {
+      return dashboardJson(url.pathname === "/api/ai/logic" ? await aiLogic(env, { days: Number(url.searchParams.get("days") || "14") || 14 }) : await agentInventory(env));
+    } catch (error) {
+      console.error("agent_inventory_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "inventory_unavailable" }, 500);
     }
   }
   if (url.pathname === "/api/neuron-allocation") {

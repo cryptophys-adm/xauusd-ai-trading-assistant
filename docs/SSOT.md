@@ -271,6 +271,11 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   `MarketDataReader.diagnostics()`) exposes the pull adapter's last refresh, latest closed bar
   per series, last publish and quota budget.
 
+### Agent inventory and AI logic (`src/agent-inventory.mjs`, read-only)
+- `GET /api/agents/inventory` (`xauusd-agents-inventory.v1`): every room seat from the code rosters, with rooms, models, triggers, switches, tables, kernel id, last message and 7-day count. Dormant after 7 days without a message; `flag_off` when none of its rooms' switches is on.
+- `GET /api/ai/logic` (`xauusd-ai-logic.v1`): every AI task of `organism.json` with its logic and its use (`ai_usage_daily`, default 14 days) under all its meter labels (`<task>`, `shadow:<task>`, `shadow:arena:<task>`); verdict `active`, `dormant_flagged` or `declared_only`.
+- `organism.json` links the inventory with the top-level `agents_inventory` (`href`, `schema`, `count`); the platform's census ignores it today and reads it later as an annotation.
+
 ### The shared model call (`src/model-call.mjs`; the H1 multi-agent bus is retired)
 - **The H1 multi-agent bus is retired (owner 2026-11-07 for H1; its code removed 2026-11-15, "setuju semuanya").** Gone: its runner, the `multi_agent_bus` queue handler (a stale task is acknowledged and logged), `GET /api/bus`, its reads in outcome scoring (`bus:*` subjects), in `/api/tldr` (`h1.consensus` is null) and in Threads 1H (`h1:<candle>` now carries the H1 decision and the HUD agents only), and the engines `bus_agent` / `bus_moderator` in `organism.json`. D1 `bus_messages` (335 rows, last 2026-11-07) is no longer read or written; archiving and dropping it waits for the owner's confirmation.
 - **What stayed, moved to `src/model-call.mjs`:** `callBusModel`, the model call every room, thread, council and shadow arm uses (role models, the fallback, timeout, rate-limit and cut-off rules below, the usage meter), and the news thread's schemas, validators and technical evidence (`buildBusEvidence`). The names keep their `BUS_` prefix.
