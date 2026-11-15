@@ -59,7 +59,11 @@ export function publicAnalysis(keyLevels, { structure = null, now = Date.now() }
         chart: ANALYSIS_CHARTS[String(p.tf)], pattern: p.id, name: titleOf(info?.name ?? p.id.replace(/_/g, " ")), chapter: info?.n ?? null,
         status: p.status, direction: dir, upper: r2(p.upper), lower: r2(p.lower),
         // The book's measure rule applied to this pattern: an analysis of where the move could reach, never a trade target.
-        projection: p.status === "confirmed" ? r2(p.target) : null
+        projection: p.status === "confirmed" ? r2(p.target) : null,
+        // The pattern's two lines as drawn (owner 2026-11-15: "gambar juga garis pattern di chart"): from the start
+        // bar's close time to the last bar's, each line's price at both ends (fitted lines slope; others are flat).
+        ...(typeof p.line_from === "string" && typeof p.line_to === "string" && r2(p.upper_from) != null && r2(p.lower_from) != null
+          ? { lines: { from: p.line_from, to: p.line_to, upper: [r2(p.upper_from), r2(p.upper)], lower: [r2(p.lower_from), r2(p.lower)] } } : {})
       };
     })
     .filter((p) => p.upper != null && p.lower != null);

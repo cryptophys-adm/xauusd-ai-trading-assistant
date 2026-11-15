@@ -234,7 +234,9 @@ function linePatterns(b, piv, A) {
     const hi = Math.max(...b.slice(x0, x1 + 1).map((x) => x.h)), lo = Math.min(...b.slice(x0, x1 + 1).map((x) => x.l));
     // The measure rule: the height from the breakout. A wedge aims at where it began.
     const targetUp = id === "wedge_falling" ? hi : upper + H, targetDown = id === "wedge_rising" ? lo : lower - H;
-    return [P(id, x0, x1, { upper, lower, height: H, target_up: targetUp, target_down: targetDown })];
+    // The lines' values where the pattern starts, so a chart can draw them as fitted (owner 2026-11-15: "gambar juga
+    // garis pattern di chart"); the other patterns' lines are flat.
+    return [P(id, x0, x1, { upper, lower, upper_start: top.at(x0), lower_start: bot.at(x0), height: H, target_up: targetUp, target_down: targetDown })];
   }
   return [];
 }
@@ -625,7 +627,10 @@ export function detectPatterns(bars, { events = [], max = MAX_PATTERNS_PER_CHART
       id: p.id, name: info.name, chapter: info.n, status: !direction ? "forming" : busted ? "busted" : "confirmed", direction,
       upper: r2(p.upper), lower: r2(p.lower), height: r2(p.height), target: num(target) ? r2(target) : null,
       target_up: num(p.target_up) && p.target_up > 0 ? r2(p.target_up) : null, target_down: num(p.target_down) && p.target_down > 0 ? r2(p.target_down) : null,
-      start_bar: p.start, end_bar: p.end, bars_ago: n - 1 - p.end, ...(p.event ? { event: p.event } : {})
+      start_bar: p.start, end_bar: p.end, bars_ago: n - 1 - p.end, ...(p.event ? { event: p.event } : {}),
+      // Where to draw the lines: from the start bar's close time to the last bar's (ISO), their prices at each end.
+      ...(num(b[p.start]?.t) && num(b[n - 1]?.t) ? { line_from: new Date(b[p.start].t).toISOString(), line_to: new Date(b[n - 1].t).toISOString(),
+        upper_from: num(p.upper_start) ? r2(p.upper_start) : r2(p.upper), lower_from: num(p.lower_start) ? r2(p.lower_start) : r2(p.lower) } : {})
     });
   }
   return out.sort((x, y) => (y.status !== "forming") - (x.status !== "forming") || x.bars_ago - y.bars_ago || rankOf(x.id) - rankOf(y.id)).slice(0, max);
