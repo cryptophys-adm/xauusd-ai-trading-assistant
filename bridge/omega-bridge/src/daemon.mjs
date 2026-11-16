@@ -14,10 +14,21 @@ import {
   readCorpusMacro,
   readCalendar,
 } from "./files.mjs";
-import { applyCredentials, clearCredentials, ensureLiveTradingSettings } from "./ini.mjs";
+import { applyCredentials, clearCredentials, ensureLiveTradingSettings, setStartupSymbol } from "./ini.mjs";
+import {
+  SYMBOL_TRIAL_MS,
+  candidateSymbols,
+  clearTrial,
+  forgetSymbol,
+  learnedSymbol,
+  readTrial,
+  rememberSymbol,
+  serverKey,
+  writeTrial,
+} from "./symbols.mjs";
 import { DEFAULT_STATE_DIR, loadOrCreateKeyPair } from "./keys.mjs";
 
-export const BRIDGE_VERSION = "1.1.0";
+export const BRIDGE_VERSION = "1.2.0";
 export const DEFAULT_OMEGA_URL = "https://nexus.cryptophys.work/omega";
 export const DEFAULT_TERMINAL_INI = "/opt/mt5-ingestion-gateway/config/terminal_gateway.ini";
 export const DEFAULT_TERMINAL_SERVICE = "mt5-terminal.service";
@@ -355,6 +366,113 @@ export function createDaemon(options = {}) {
   }
 
   const keys = loadOrCreateKeyPair(config.stateDir, { fs });
+  const terminalDir = options.terminalDir
+    ? String(options.terminalDir)
+    : path.resolve(config.omegaFilesDir, "../../..");
+  const symbolTrialMs = Number.isFinite(options.symbolTrialMs) ? options.symbolTrialMs : SYMBOL_TRIAL_MS;
+  let missingStateSinceMs = null; // the applied server has had no EA state.json since then
+
+  function removeStateJson() {
+    const statePath = path.join(config.omegaFilesDir, "state.json");
+    if (fs.existsSync(statePath)) { try { fs.unlinkSync(statePath); } catch { /* ignore */ } }
+  }
+
+  function startupSymbolInIni() {
+    try {
+      const text = fs.existsSync(config.terminalIni) ? fs.readFileSync(config.terminalIni, "utf8") : "";
+      let inStartUp = false;
+      for (const raw of text.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (line.startsWith("[")) { inStartUp = line.toLowerCase() === "[startup]"; continue; }
+        const m = inStartUp ? /^symbol\s*=\s*(.*)$/i.exec(line) : null;
+        if (m) return m[1].trim() || null;
+      }
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  /** First chart symbol to try for a server: the proven one, then OMEGA_SYMBOL, then the common gold names. */
+  function chartSymbolFor(server) {
+    return candidateSymbols({
+      learned: learnedSymbol(config.stateDir, server, { fs }),
+      configured: config.symbol,
+    })[0] || config.symbol;
+  }
+
+  /**
+   * Gold chart symbol trial (symbols.mjs). Returns true while a trial is running, so the stale-state
+   * watchdog and remote restarts wait for it.
+   */
+  async function runSymbolTrial(state) {
+    if (!config.takeStartup) return false;
+    const applied = readAppliedState(config.stateDir, fs);
+    let trial = readTrial(config.stateDir, { fs });
+    if (!applied.server) {
+      if (trial) clearTrial(config.stateDir, { fs });
+      missingStateSinceMs = null;
+      return false;
+    }
+    const eaUp = Boolean(state) && serverKey(state.server) === serverKey(applied.server);
+
+    if (!trial) {
+      if (eaUp) { missingStateSinceMs = null; return false; }
+      // No EA for the applied server and no trial (e.g. a chart symbol set before this bridge version):
+      // start a trial from the symbol the ini holds now.
+      if (missingStateSinceMs === null) missingStateSinceMs = now();
+      if (now() - missingStateSinceMs < symbolTrialMs) return false;
+      const current = startupSymbolInIni();
+      if (!current) return false;
+      trial = { server: applied.server, symbol: current, tried: [], started_ms: missingStateSinceMs };
+      writeTrial(config.stateDir, trial, { fs });
+      log({ level: "warn", event: "symbol_trial_started", server: applied.server, symbol: current, reason: "no_ea_state" });
+    }
+
+    if (serverKey(trial.server) !== serverKey(applied.server)) {
+      clearTrial(config.stateDir, { fs });
+      return false;
+    }
+    if (eaUp) {
+      rememberSymbol(config.stateDir, trial.server, trial.symbol, { fs });
+      clearTrial(config.stateDir, { fs });
+      missingStateSinceMs = null;
+      log({ level: "info", event: "symbol_confirmed", server: trial.server, symbol: trial.symbol, trade_symbol: state?.symbol?.name ?? null });
+      return false;
+    }
+    if (now() - trial.started_ms < symbolTrialMs) return true;
+
+    const lastErr = readTerminalLastError(terminalDir, { fs });
+    if (lastErr && /authoriz|invalid account|account disabled|no connection/i.test(lastErr)) {
+      // A login problem, not a symbol problem: stop trying symbols; the owner enters the connection again.
+      clearTrial(config.stateDir, { fs });
+      missingStateSinceMs = null;
+      log({ level: "error", event: "symbol_trial_stopped", server: trial.server, symbol: trial.symbol, terminal_error: lastErr });
+      return false;
+    }
+
+    const tried = [...trial.tried, trial.symbol];
+    if (learnedSymbol(config.stateDir, trial.server, { fs }) === trial.symbol) forgetSymbol(config.stateDir, trial.server, { fs });
+    const next = candidateSymbols({
+      configured: config.symbol,
+      exclude: tried,
+    })[0];
+    if (!next) {
+      clearTrial(config.stateDir, { fs });
+      missingStateSinceMs = null;
+      log({ level: "error", event: "symbol_trial_exhausted", server: trial.server, tried });
+      return false;
+    }
+    try {
+      const existingIni = fs.existsSync(config.terminalIni) ? fs.readFileSync(config.terminalIni, "utf8") : "";
+      writeTerminalIniPreservingOwner(config.terminalIni, setStartupSymbol(existingIni, next), fs);
+      removeStateJson();
+      await invokeExec(execFn, "systemctl", ["restart", config.terminalService]);
+      writeTrial(config.stateDir, { server: trial.server, symbol: next, tried, started_ms: now() }, { fs });
+      log({ level: "warn", event: "symbol_trial_next", server: trial.server, failed: trial.symbol, symbol: next, service: config.terminalService });
+    } catch (err) {
+      log({ level: "error", event: "symbol_trial_failed", server: trial.server, symbol: next, error: err instanceof Error ? err.message : "symbol_trial_failed" });
+    }
+    return true;
+  }
 
   let consecutiveFailures = 0;
   let corpusCursorMs = null; // Corpus Oracle: the newest broker minute the server kept
@@ -581,8 +699,8 @@ export function createDaemon(options = {}) {
         try {
           const existingIni = fs.existsSync(config.terminalIni) ? fs.readFileSync(config.terminalIni, "utf8") : "";
           writeTerminalIniPreservingOwner(config.terminalIni, clearCredentials(existingIni), fs);
-          const statePath = path.join(config.omegaFilesDir, "state.json");
-          if (fs.existsSync(statePath)) { try { fs.unlinkSync(statePath); } catch { /* ignore */ } }
+          removeStateJson();
+          clearTrial(config.stateDir, { fs });
           await invokeExec(execFn, "systemctl", ["restart", config.terminalService]);
           writeAppliedState(config.stateDir, { version: conn.version, server: null, applied_ms: now() }, fs);
           appliedConnection = true;
@@ -599,16 +717,23 @@ export function createDaemon(options = {}) {
           const existingIni = fs.existsSync(config.terminalIni)
             ? fs.readFileSync(config.terminalIni, "utf8")
             : "";
+          const chartSymbol = config.takeStartup ? chartSymbolFor(creds.server) : config.symbol;
           const updatedIni = applyCredentials(existingIni, {
             server: creds.server,
             login: creds.login,
             password: creds.password,
             takeStartup: config.takeStartup,
-            symbol: config.symbol,
+            symbol: chartSymbol,
           });
 
           writeTerminalIniPreservingOwner(config.terminalIni, updatedIni, fs);
+          // The previous server's state.json must not confirm the new chart symbol.
+          removeStateJson();
           await invokeExec(execFn, "systemctl", ["restart", config.terminalService]);
+          if (config.takeStartup) {
+            writeTrial(config.stateDir, { server: creds.server, symbol: chartSymbol, tried: [], started_ms: now() }, { fs });
+          }
+          missingStateSinceMs = null;
 
           writeAppliedState(
             config.stateDir,
@@ -627,6 +752,7 @@ export function createDaemon(options = {}) {
             event: "connection_applied",
             version: conn.version,
             server: creds.server,
+            symbol: chartSymbol,
             service: config.terminalService,
           });
         } catch (err) {
@@ -644,7 +770,9 @@ export function createDaemon(options = {}) {
       }
     }
 
-    if (appliedConnection !== true) {
+    const symbolTrialBusy = appliedConnection === true ? true : await runSymbolTrial(state);
+
+    if (appliedConnection !== true && !symbolTrialBusy) {
       if (payload?.recovery && typeof payload.recovery === "object") {
         await handleAutonomousRecovery(payload.recovery);
       } else if (state) {

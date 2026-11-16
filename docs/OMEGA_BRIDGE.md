@@ -97,10 +97,30 @@ MT5's `[StartUp]` section in `/opt/mt5-ingestion-gateway/config/terminal_gateway
   ```ini
   [StartUp]
   Expert=OmegaExecutor
-  Symbol=XAUUSD
+  Symbol=<gold symbol of the selected server>
   Period=M1
+
+  [Charts]
+  ProfileLast=Omega
   ```
   and removes `ExpertParameters`. On this host, that **replaces** the `[StartUp]` entry for the `m1_ohlcv_ingest` EA.
+
+  **The chart symbol follows the selected server (2026-11-16).** A `[StartUp] Symbol` the server does not have
+  leaves the chart empty and OmegaExecutor never runs `OnInit` (no `state.json`): FxPro-MT5 Demo names gold
+  `GOLD`, Monex-Demo `XAUUSD.m`. The bridge tries, in order, the symbol already proven on that server
+  (`$OMEGA_STATE_DIR/symbols.json`), `OMEGA_SYMBOL`, then `XAUUSD`, `GOLD`, `XAUUSD.m`, `XAUUSDm` and the
+  other names the EA searches. A choice is proven when the EA writes `state.json` for that server
+  (`symbol_confirmed`); after 120 s without it the bridge sets the next name and restarts the terminal
+  (`symbol_trial_next`), and logs `symbol_trial_exhausted` when none works. A login failure in the terminal
+  log stops the trial (`symbol_trial_stopped`) instead of cycling symbols. The trial in progress is
+  `$OMEGA_STATE_DIR/symbol-trial.json`; the stale-state watchdog waits for it. If the applied server has no
+  EA state for 120 s and no trial runs, the bridge starts one from the ini's current symbol.
+
+  **Own chart profile.** MT5 saves every open chart into the current profile and adds the `[StartUp]` chart
+  again at each start: the shared `Default` profile had grown to ~70 charts, most on a symbol the next
+  server lacked. The bridge therefore selects the profile `Omega`, and the drop-in
+  `bridge/omega-bridge/mt5-terminal-omega-profile.conf` (installed as
+  `/etc/systemd/system/mt5-terminal.service.d/omega-profile.conf`) empties it before every terminal start.
 - **`OMEGA_TAKE_STARTUP=false`:** `omega-bridge` leaves `[StartUp]` untouched so `m1_ohlcv_ingest` remains the startup EA. In that mode, you must attach `OmegaExecutor` manually to an `XAUUSD` chart inside the MT5 chart profile (`Profile=1`) so both EAs run side by side in the same terminal.
 
 ---

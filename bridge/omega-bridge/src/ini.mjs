@@ -1,3 +1,5 @@
+export const OMEGA_CHART_PROFILE = "Omega";
+
 function assertNoNewlines(value, name) {
   if (typeof value !== "string") {
     throw new Error(`Invalid INI value for ${name}: expected string`);
@@ -163,6 +165,10 @@ export function applyCredentials(
       ],
       ["ExpertParameters"],
     );
+    // A chart profile of the bridge's own: the terminal saves every chart it opened, so the shared
+    // "Default" profile grew to ~70 charts (most on a symbol the next server lacked) and the EA's chart
+    // never got its data. mt5-terminal-omega-profile.conf empties this profile before each start.
+    mutateSection(blocks, "Charts", [["ProfileLast", OMEGA_CHART_PROFILE]]);
   }
 
   return serializeIniBlocks(blocks, eol, hasTrailingNewline);
@@ -226,5 +232,31 @@ export function ensureLiveTradingSettings(iniText) {
     ["Profile", "0"],
   ]);
 
+  return serializeIniBlocks(blocks, eol, hasTrailingNewline);
+}
+
+/**
+ * Pure function to set only `[StartUp] Symbol` (the chart the EA is attached to), keeping everything else.
+ * Used while the bridge looks for the gold symbol name of the selected broker server.
+ *
+ * @param {string} iniText
+ * @param {string} symbol
+ * @returns {string}
+ */
+export function setStartupSymbol(iniText, symbol) {
+  if (typeof iniText !== "string") {
+    throw new Error("iniText must be a string");
+  }
+  assertNoNewlines(symbol, "symbol");
+  const eol = iniText.includes("\r\n") ? "\r\n" : "\n";
+  const hasTrailingNewline = iniText.endsWith("\r\n") || iniText.endsWith("\n");
+
+  const rawLines = iniText.length === 0 ? [] : iniText.split(/\r?\n/);
+  if (hasTrailingNewline && rawLines.length > 0 && rawLines[rawLines.length - 1] === "") {
+    rawLines.pop();
+  }
+
+  const blocks = parseIniBlocks(rawLines);
+  mutateSection(blocks, "StartUp", [["Symbol", symbol]]);
   return serializeIniBlocks(blocks, eol, hasTrailingNewline);
 }

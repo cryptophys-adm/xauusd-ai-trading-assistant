@@ -482,7 +482,7 @@ test("daemon: applies new connection once, restarts terminal once, skips same ve
       cmd: "systemctl",
       args: ["restart", "mt5-terminal.service"],
     });
-    assert.equal(syncBodies[0].bridge_version, "1.1.0");
+    assert.equal(syncBodies[0].bridge_version, "1.2.0");
     assert.equal(syncBodies[0].kid, daemon.keys.kid);
     assert.equal(syncBodies[0].public_key, daemon.keys.publicKeyBase64);
     assert.equal(syncBodies[0].results.length, 1);
