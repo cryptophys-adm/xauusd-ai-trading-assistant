@@ -84,6 +84,12 @@ Omega applies these rules to the system's positions only, in this order. Each pr
 - The existing exits stay: kill, `opposite`, `opposite_5m`, `power_reversal` (−0.5 in profit, now inside the lean flip's reach), `mean_reversal`.
 - Nothing here sizes a position, arms live trading, or touches an account outside the system's own positions.
 
+### 3b. The Signal Ledger (owner 2026-11-16: "lanjutkan Signal Ledger untuk lean_flip dan confidence_drop")
+
+- The ledger's Omega policy (`simulateOmega`, version `cryptophys.ledger-omega.v3`) runs Omega's own `strategyExits` at every bar, for decisions made with the rules (`strategy_execution`).
+- It uses the agent of the trade's decision (`trade.agent`), so `lean_flip`, `confidence_drop` and the extend gate are measured as Omega applies them.
+- Decisions made before the rules are replayed as before.
+
 ### 4. The rollback
 
 - `STRATEGY_EXECUTION` (`"on"` / `"off"`, default on) switches all of this.

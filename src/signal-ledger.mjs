@@ -24,7 +24,8 @@
 //   - R = (exit - entry) x side / |entry - stop|. MFE and MAE are kept in R.
 // The ledger never feeds a room, a prompt or a decision.
 
-import { keyLevelPlan, isProtected, OMEGA_DEFAULTS } from "./omega-engine.mjs";
+import { keyLevelPlan, isProtected, strategyExits, OMEGA_DEFAULTS } from "./omega-engine.mjs";
+import { flatConfidences } from "./agent-confidence.mjs";
 
 export const LEDGER_VERSION = "cryptophys.signal-ledger.v1";
 /** The ledger's own schedule (owner 2026-11-12): every 5 minutes, 2 minutes past each 5m close. */
@@ -131,13 +132,16 @@ export function simulateSignal(signal, bars, { now = Date.now(), fillWindowMs = 
 //   manage    at every bar close (every minute on 1m bars), the latest decision already made then:
 //             its quorum power and key levels drive
 //             keyLevelPlan (SL+ behind passed levels, trailing TP, the close on a reversed power); an
-//             opposite decision closes the trade; HOLD_MAX_MS ends it at the bar's close.
+//             opposite decision closes the trade; HOLD_MAX_MS ends it at the bar's close. A decision made
+//             with the strategy execution rules (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md) also runs
+//             Omega's strategyExits: the lean flip (lean_flip), a winner's agent confidence drop
+//             (confidence_drop), and the trailing TP only while that confidence is stable or rising.
 // Every trade carries its trading mode (scalp, intraday, swing: the mode decides the target and Omega's
 // rules follow it), so the policy is measured per mode. Approximations, said in the view's rules: the
 // feed's bars (no broker basis, no spread but a fixed one), no 5m stop or adaptive stop, the 5m ATR
 // as the 15m ATR(14) / sqrt 3 and the 5m swing as the last 15 minutes, no scale-out (Omega trades 0.01
 // lot), no wait for the 5m entry trigger.
-export const OMEGA_POLICY_VERSION = "cryptophys.ledger-omega.v2";
+export const OMEGA_POLICY_VERSION = "cryptophys.ledger-omega.v3";
 export const OMEGA_SIM = Object.freeze({ spread: 0.2, atr_period: 14, limit_pullback: 0.35, broker_day_utc: 22 });
 export const TRADING_MODES = Object.freeze(["scalp", "intraday", "swing"]);
 const M15 = 15 * 60_000;
@@ -252,11 +256,23 @@ export function simulateOmega(signal, bars, { decisions = [], gate = null, now =
     const dec = d >= 0 ? decisions[d] : null;
     if (!dec) continue;
     if (dec.close_ms > ownClose && (dec.stance === "BUY" || dec.stance === "SELL") && dec.stance !== signal.side) return out("opposite", b.close, b, k);
+    const sym = { digits: 2, point: 0.01, spread_points: Math.round(OMEGA_SIM.spread / 0.01), stops_level_points: 0, bid: b.close, ask: b.close + OMEGA_SIM.spread };
+    const power = finite(dec.power) ? Math.max(-1, Math.min(1, dec.power)) : 0;
+    // Execution per the strategy agents, exactly as Omega runs it (strategyExits): the trade's agent is its own
+    // decision's (trade.agent); without one, the default agent's.
+    let extend = true;
+    if (dec.strategy_execution === true) {
+      const position = { ticket: 1, side: signal.side, open_price: fill, sl, tp, source: "omega", intent_id: "open:ledger" };
+      const flat = { strategy_execution: true, power, power_ms: dec.close_ms, agent_conf: flatConfidences(dec.agent_confidence), agent_conf_prev: flatConfidences(dec.agent_confidence_prev) };
+      const ex = strategyExits({ positions: [position], signal: flat, sym, agents: signal.agent ? { "open:ledger": signal.agent } : {}, now: closeMs });
+      const exit = ex.intents[0];
+      if (exit) return out(exit.reason, buy ? sym.bid : sym.ask, b, k);
+      extend = ex.extendOf(position);
+    }
     if (!dec.levels?.length) continue;
     const swing = swingAt(k, closeMs);
-    const sym = { digits: 2, point: 0.01, spread_points: Math.round(OMEGA_SIM.spread / 0.01), stops_level_points: 0, bid: b.close, ask: b.close + OMEGA_SIM.spread };
-    const sig = { power: finite(dec.power) ? Math.max(-1, Math.min(1, dec.power)) : 0, power_ms: finite(dec.power) ? dec.close_ms : 0, m5_atr: atr5At(closeMs), m5_swing_low: swing.lo, m5_swing_high: swing.hi };
-    const plan = keyLevelPlan({ position: { side: signal.side, open_price: fill, sl, tp }, sym, signal: sig, levels: dec.levels, now: closeMs });
+    const sig = { power, power_ms: finite(dec.power) ? dec.close_ms : 0, m5_atr: atr5At(closeMs), m5_swing_low: swing.lo, m5_swing_high: swing.hi };
+    const plan = keyLevelPlan({ position: { side: signal.side, open_price: fill, sl, tp }, sym, signal: sig, levels: dec.levels, now: closeMs, extend });
     band = plan.band;
     if (plan.close) return out("power_reversal", buy ? sym.bid : sym.ask, b, k);
     if (plan.sl != null) { sl = plan.sl; slMoves += 1; if (!protectedAt && isProtected({ side: signal.side, open_price: fill, sl })) protectedAt = b.close_time; }
@@ -353,7 +369,7 @@ export function ledgerView(items, { days }) {
     rules: {
       fill_window_hours: FILL_WINDOW_MS / 3600_000, hold_max_hours: HOLD_MAX_MS / 3600_000, same_bar: "stop first (conservative)", unit: "R, never money",
       bars: "1m where the 1m series reaches (about two days), else 15m, else 1H; followed every 5 minutes",
-      omega: { version: OMEGA_POLICY_VERSION, entry: "market the minute after the decision (a limit plan waits up to the signal's age for price within 0.35 x the stop distance)", management: "every minute: key levels by quorum power (SL+, trailing TP, close on a reversed power), the opposite decision once made, 72 h", gates: "daily loss limit and risk budget in R, max positions, no stacking", approximations: "feed bars, fixed spread, no 5m or adaptive stop, no 5m entry trigger, no scale-out" }
+      omega: { version: OMEGA_POLICY_VERSION, entry: "market the minute after the decision (a limit plan waits up to the signal's age for price within 0.35 x the stop distance)", management: "every minute: key levels by quorum power (SL+, trailing TP, close on a reversed power), the opposite decision once made, 72 h; with the strategy execution rules, the lean flip, a winner's agent confidence drop, and the trailing TP only while that confidence holds", gates: "daily loss limit and risk budget in R, max positions, no stacking", approximations: "feed bars, fixed spread, no 5m or adaptive stop, no 5m entry trigger, no scale-out" }
     },
     all: block(by(null)), by_source: Object.fromEntries(SOURCES.map((s) => [s, block(by(s))])),
     by_mode: Object.fromEntries(TRADING_MODES.map((m) => [m, block(decisions.filter((x) => x.trading_mode === m))])),
@@ -496,9 +512,10 @@ export async function ingestDecision(env, d, { now = Date.now() } = {}) {
 export async function loadDecisionStream(env, sinceIso) {
   let rows = [];
   try {
-    rows = (await env.DB.prepare("SELECT decision_key, stance, decided_at, json_extract(decision_json, '$.quorum.score') AS power, json_extract(decision_json, '$.key_levels') AS levels, json_extract(decision_json, '$.trading_mode') AS mode, json_extract(decision_json, '$.trade.action') AS action FROM engine_decisions WHERE bar_close >= ? ORDER BY bar_close").bind(sinceIso).all()).results || [];
+    rows = (await env.DB.prepare("SELECT decision_key, stance, decided_at, json_extract(decision_json, '$.quorum.score') AS power, json_extract(decision_json, '$.key_levels') AS levels, json_extract(decision_json, '$.trading_mode') AS mode, json_extract(decision_json, '$.trade.action') AS action, json_extract(decision_json, '$.trade.agent') AS agent, json_extract(decision_json, '$.strategy_execution') AS sx, json_extract(decision_json, '$.agent_confidence') AS conf, json_extract(decision_json, '$.agent_confidence_prev') AS conf_prev FROM engine_decisions WHERE bar_close >= ? ORDER BY bar_close").bind(sinceIso).all()).results || [];
   } catch { return []; }
-  return rows.map((r) => ({ key: r.decision_key, close_ms: decisionCloseMs(r.decision_key), at_ms: finite(toMs(r.decided_at)) ? toMs(r.decided_at) : null, stance: r.stance, power: r.power == null || !Number.isFinite(Number(r.power)) ? null : Number(r.power), levels: decisionLevels(r.levels), mode: TRADING_MODES.includes(r.mode) ? r.mode : null, action: r.action ?? null }))
+  return rows.map((r) => ({ key: r.decision_key, close_ms: decisionCloseMs(r.decision_key), at_ms: finite(toMs(r.decided_at)) ? toMs(r.decided_at) : null, stance: r.stance, power: r.power == null || !Number.isFinite(Number(r.power)) ? null : Number(r.power), levels: decisionLevels(r.levels), mode: TRADING_MODES.includes(r.mode) ? r.mode : null, action: r.action ?? null,
+    agent: typeof r.agent === "string" && r.agent ? r.agent : null, strategy_execution: r.sx === 1 || r.sx === true, agent_confidence: parseJson(r.conf), agent_confidence_prev: parseJson(r.conf_prev) }))
     .filter((d) => finite(d.close_ms)).sort((a, b) => a.close_ms - b.close_ms);
 }
 
@@ -529,7 +546,7 @@ export async function evaluateOmega(env, rows, bars, { now = Date.now(), m15 = n
   let changed = 0;
   for (const s of rows.slice().sort((a, b) => toMs(a.opened_at) - toMs(b.opened_at))) {
     const own = byKey.get(s.candle_key);
-    const sig = { ...s, trading_mode: s.trading_mode || own?.mode || null, entry_action: s.entry_action || own?.action || null };
+    const sig = { ...s, trading_mode: s.trading_mode || own?.mode || null, entry_action: s.entry_action || own?.action || null, agent: own?.agent ?? null };
     const stored = parseJson(s.omega_json);
     let gate = stored?.gate ?? null;
     if (!gate) {
