@@ -183,6 +183,9 @@ test("parity sweep cron: approves the candle's local records and the backfill ru
   assert.ok(output.lines.log.some(l => l.startsWith("Scheduled parity sweep completed")), "the sweep reports its result");
   assert.ok(output.lines.log.some(l => l.startsWith("outcome_scoring {\"status\":\"ok\"")), "the sweep runs outcome scoring (P1)");
   assert.ok(!output.lines.error.some(l => l.startsWith("outcome_scoring_failed")), output.lines.error.join("\n"));
+  // Call for Councils P1: the hourly suggestion flags ran (CFC_MODE defaults to "suggest") and did not fail.
+  assert.ok(!output.lines.error.some(l => l.startsWith("cfc_triggers_failed")) && !output.lines.log.some(l => l.startsWith("cfc_triggers {\"status\":\"failed\"")), output.lines.log.filter(l => l.startsWith("cfc")).join("\n"));
+  assert.ok(env.DB.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cfc_suggestions'").get(), "the hourly sweep ran the suggestion flags");
   const registry = Object.fromEntries(env.DB.db.prepare("SELECT engine, status FROM engine_parity_registry").all().map(r => [r.engine, r.status]));
   assert.equal(registry.prophet, "approved");
   assert.equal(registry.gmi, "approved");

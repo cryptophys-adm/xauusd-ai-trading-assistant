@@ -303,10 +303,13 @@ export function tradeOf(r) {
   };
 }
 
-/** The resolved Decision Engine trades of the last `days` (at most `limit`, newest first). */
-export async function readDecisionTrades(db, { now = Date.now(), days = PACK_LIMITS.window_days, limit = PACK_LIMITS.trades_read } = {}) {
-  await ensureLedgerSchema(db);
-  await ensureDecisionSchema(db);
+/**
+ * The resolved Decision Engine trades of the last `days` (at most `limit`, newest first). `ensure` runs the ledger's
+ * and the engine's run-time schemas first, as their own read routes do; the hourly flags pass false and read what
+ * the ledger step (every 5 minutes) has made.
+ */
+export async function readDecisionTrades(db, { now = Date.now(), days = PACK_LIMITS.window_days, limit = PACK_LIMITS.trades_read, ensure = true } = {}) {
+  if (ensure) { await ensureLedgerSchema(db); await ensureDecisionSchema(db); }
   const rows = (await db.prepare(TRADES_SQL).bind(iso(now - days * DAY), limit).all()).results || [];
   return rows.map(tradeOf);
 }

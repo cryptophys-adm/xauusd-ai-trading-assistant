@@ -22,6 +22,8 @@ export interface Env {
   PUSH_HUB?: DurableObjectNamespace;
   /** Private R2 bucket xauusd-room-transcripts (owner 2026-11-15): room transcripts and D1 archives. */
   ROOM_TRANSCRIPTS?: R2Bucket;
+  /** Call for Councils (docs/RFC_CALL_FOR_COUNCILS.md): "off" | "suggest" (default: the hourly suggestion flags) | "on" (P2 sessions; in P1 as "suggest"). */
+  CFC_MODE?: string;
   /** "off" turns the Decision Engine off: the EA, Telegram and the ledger follow the H1 decision again. */
   DECISION_ENGINE?: string;
   /** Runtime trading mode override (scalp|intraday|swing); KV-backed selector takes precedence. */
@@ -215,6 +217,8 @@ import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
 import { readNeuronAllocation } from "./neuron-allocation.mjs";
 import { agentInventory, aiLogic } from "./agent-inventory.mjs";
 import { deriveRoomRuns, compareRoomRuns, roomRunsStatus } from "./room-runs.mjs";
+import { buildEvidencePack, parseTopicKey, topicCatalog } from "./cfc-pack.mjs";
+import { runCfcTriggers, readSuggestions } from "./cfc-triggers.mjs";
 import { archiveBusMessages } from "./bus-archive.mjs";
 import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
@@ -2256,6 +2260,31 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/council/suggestions") {
+    // Call for Councils P1 (docs/RFC_CALL_FOR_COUNCILS.md §1.2, §12): the topics the deterministic flags suggest,
+    // the mode (CFC_MODE) and the catalogue of topic keys the page's picker offers. Read-only; no session in P1.
+    try {
+      return dashboardJson({ status: "ok", ...(await readSuggestions(env, { limit: Number(url.searchParams.get("limit") || "50") || 50 })), catalog: topicCatalog() });
+    } catch (error) {
+      console.error("council_suggestions_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
+  if (url.pathname === "/api/council/evidence") {
+    // Call for Councils P1: the evidence pack of one topic (src/cfc-pack.mjs), built now from the stored tables, with
+    // no price in it. The topic key is checked against the topic grammar first; anything else is a 400.
+    const topic = url.searchParams.get("topic");
+    const parsed = parseTopicKey(topic);
+    if (!parsed.ok) return dashboardJson({ status: "error", error: "invalid_topic", detail: parsed.error }, 400);
+    try {
+      const pack = await buildEvidencePack(env, parsed.key);
+      if (pack.error) return dashboardJson({ status: "error", error: "invalid_topic", detail: pack.error }, 400);
+      return dashboardJson({ status: "ok", pack });
+    } catch (error) {
+      console.error("council_evidence_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error" }, 500);
+    }
+  }
   if (url.pathname === "/api/model/dataset/summary") {
     // The custom model's dataset: rows by label status, outcomes per side (src/model-dataset.mjs).
     return dashboardJson({ status: "ok", dataset: await readModelDatasetSummary(env) });
@@ -2873,6 +2902,14 @@ export default {
       ctx.waitUntil(runPendingMacroRooms(env).then(m => {
         if (m.status !== "disabled" && m.status !== "idle") console.log("macro_room", JSON.stringify(m));
       }).catch(e => console.error("macro_room_failed", e instanceof Error ? e.message : String(e))));
+      // Call for Councils P1 (docs/RFC_CALL_FOR_COUNCILS.md §1.2): the deterministic suggestion flags, once an hour
+      // (the first sweep after the hour), behind CFC_MODE. Suggestions only: no model call, no session, nothing a
+      // decision, a room or Omega reads. Skipped while the market is closed (the idle branch above returns first).
+      if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) {
+        ctx.waitUntil(runCfcTriggers(env, { now: event.scheduledTime || Date.now() }).then(r => {
+          if (r.status === "failed" || (r.status === "ok" && (r.created?.length || r.unavailable?.length))) console.log("cfc_triggers", JSON.stringify(r));
+        }).catch(e => console.error("cfc_triggers_failed", e instanceof Error ? e.message : String(e))));
+      }
       ctx.waitUntil(reconcileRecentCandles(env).then(async result => {
         try { await backfillRecentAnalyses(env, { loadPayloads: loadWebhookPayloadsFromD1, runAnalysis, setStatus: setAnalysisRunStatus }); } catch (e) { console.error("backfill_failed", e instanceof Error ? e.message : String(e)); }
         // RFC_INDICATOR_AGENT_PLATFORM P1: score statements whose horizon has closed, and
