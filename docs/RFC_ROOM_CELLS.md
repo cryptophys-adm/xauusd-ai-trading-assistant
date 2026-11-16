@@ -249,6 +249,12 @@ Document v2 (2026-11-16, owner: "lanjutkan semua pembaca ke room_runs"), for rea
   - The calls and tokens per day, room, agent and model of the War Room and the 1H/4H/D1 rooms come from the documents' steps, grouped in D1 (`json_each`).
   - The other rooms (Macro, News Daily, news threads) have no documents. Their messages are read only for the threads active in the window (`agent_threads.updated_at`, then the `thread_id` index), not by a scan of the whole table.
   - The runs concluded since the last pass are derived on read, so only the run in progress is missing; it is counted once it concludes. In production, 724 of 725 runs since 2026-11-05 have a conclusion.
+- Reader 5 (decision cards, `ROOM_RUNS_READ_CARDS`):
+  - `cardRuns` takes the cards' runs from the documents: the 15m room's latest concluded runs, and for 1H/4H/D1 one run per candle (its latest session, a reconvened run included).
+  - Each card's rows are rebuilt from its document (`docRows`) and passed to `readWarRoom` / `readTimeframeThread` (option `rows`), so the card logic and shapes stay as they are.
+  - The 1H/4H/D1 room's newest run comes first while it has no document (in progress); its rows come from the messages.
+  - The other callers of the two readers (the War Room and timeframe endpoints, the push hub, the strategy engine) still read the messages: they show the run in progress.
+- A document follows a retried conclusion: the derive pass also picks a documented run whose conclusion was rewritten after the document (`ts > derived_at`), as a retried failed conclusion is.
 
 **P2c: the cell.**
 - `RoomCell` runs the rooms. D1 receives the run document only. The transcript goes to R2.

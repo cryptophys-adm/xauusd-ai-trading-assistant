@@ -606,18 +606,20 @@ export async function runPendingTimeframeThreads(env, { now = Date.now(), clock 
 
 /**
  * The latest 1H, 4H or D1 room for its Nexus tab: roster, bus, Consensus Discussion (the
- * `debate` field) and TLDR. With `candleKey`, the room of that bar (its latest session).
+ * `debate` field) and TLDR. With `candleKey`, the room of that bar (its latest session). With `runId`, that run;
+ * with `rows`, the run's message rows already read (the decision cards rebuild them from the run document).
  */
-export async function readTimeframeThread(db, chart, { candleKey = null, env = null } = {}) {
+export async function readTimeframeThread(db, chart, { candleKey = null, env = null, runId = null, rows: docRows = null } = {}) {
   const spec = TF_THREAD_CHARTS[chart];
   if (!spec) return null;
   await ensureThreadSchema(db);
   const threadId = `tf:${chart}`;
-  const run = candleKey
+  const run = runId ?? (candleKey
     ? (await db.prepare("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id = ? AND step = 'brief' AND json_extract(body_json, '$.candle_key') = ?").bind(threadId, candleKey).first())?.r
-    : (await db.prepare("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id = ?").bind(threadId).first())?.r;
+    : (await db.prepare("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id = ?").bind(threadId).first())?.r);
   if (!run) return null;
-  const rows = ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(threadId, run).all()).results || []).map(rowToThreadMessage);
+  // ADR-0015 P2b reader 5: the decision cards pass the run (runId) and its rows rebuilt from its document.
+  const rows = (docRows?.length ? docRows : ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(threadId, run).all()).results || [])).map(rowToThreadMessage);
   const brief = rows.find((m) => m.step === "brief");
   const order = new Map((brief?.roster || []).map((id, i) => [id, i]));
   const byRoster = (a, b) => (order.get(a.id) ?? 99) - (order.get(b.id) ?? 99);
