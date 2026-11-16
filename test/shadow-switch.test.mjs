@@ -58,6 +58,9 @@ test("shadow calls are metered apart as shadow:<schema>, and the breaker turns s
   await callBusModel({ ...env, AI }, { messages: [{ role: "user", content: "x" }], schemaName: "metric_opening", schema: { type: "object" }, maxTokens: 100, effort: "low", deadline: Date.now() + 30_000, clock: Date.now, meterSource: "shadow:metric_opening" });
   const sources = (await env.DB.prepare("SELECT source FROM ai_usage_daily").all()).results.map((r) => r.source);
   assert.deepEqual(sources, ["shadow:metric_opening"]);
+  // That call is metered on the real clock's day; on 2026-11-16 (NOW's day) it fell into the sums below and the
+  // test failed by its 12 neurons. The budget sums below count only the rows this test records on NOW.
+  await env.DB.prepare("DELETE FROM ai_usage_daily").run();
   // A live row does not count against the shadow budget.
   const day = NOW;
   await recordAiUsage(env.DB, { source: "war_room_opening", model: "@cf/google/gemma-4-26b-a4b-it", prompt: 5_000_000, completion: 0, now: day });
