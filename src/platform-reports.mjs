@@ -24,6 +24,7 @@
 //   - `critical` is never used here; it opens a GitHub issue on the platform.
 
 import { readWarRoom } from "./war-room.mjs";
+import { latestRunFromDoc } from "./room-runs.mjs";
 import { HUD_NAMES } from "./hud-reading.mjs";
 
 export const PLATFORM_HOST_WORKER = "xauusd-ai-trading-assistant";
@@ -262,11 +263,21 @@ export function hudChangeMatters(previous, next) {
 // ------------------------------------------------------------------ sweep
 
 
-export async function readTimeframeOpenings(db) {
+/**
+ * The openings of the newest 1H, 4H and D1 runs. With `env` (ADR-0015 P2b reader 6), a concluded, documented run is
+ * read from its run document; a run in progress, from the messages.
+ */
+export async function readTimeframeOpenings(db, { env = null } = {}) {
   const out = { "60": null, "240": null, "1D": null };
   const threads = { "60": "tf:H1", "240": "tf:H4", "1D": "tf:D1" };
   for (const [tf, threadId] of Object.entries(threads)) {
     try {
+      const doc = env ? await latestRunFromDoc(env, threadId) : null;
+      if (doc) {
+        const opens = doc.rows.filter((r) => String(r.step).startsWith("open:")).map((r) => { let b = {}; try { b = JSON.parse(r.body_json || "{}") || {}; } catch { b = {}; } return { id: r.agent, status: r.status, stance: r.stance, bias: b.bias ?? null, confidence: r.confidence, claim: b.claim ?? null }; });
+        out[tf] = { bar_key: doc.run_id, openings: opens };
+        continue;
+      }
       const maxRow = await db.prepare("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id = ?").bind(threadId).first();
       const runId = maxRow?.r;
       if (runId == null) { out[tf] = null; continue; }
@@ -290,7 +301,13 @@ async function send(env, db, agentId, key, stance, report, nowIso, summary) {
  * Publishes every pending event once. Called from the parity sweep cron (every 15
  * minutes). Returns a summary; never throws for a platform-side problem.
  */
-export async function publishPlatformReports(env, { now = Date.now(), readRoom = readWarRoom, readTimeframes = readTimeframeOpenings } = {}) {
+/** The newest War Room run; a concluded, documented one from its run document (ADR-0015 P2b reader 6). */
+export async function readLatestWarRoom(env) {
+  const doc = await latestRunFromDoc(env, "warroom");
+  return readWarRoom(env.DB, doc ? { barTime: doc.run_id, rows: doc.rows } : {});
+}
+
+export async function publishPlatformReports(env, { now = Date.now(), readRoom = () => readLatestWarRoom(env), readTimeframes = (db) => readTimeframeOpenings(db, { env }) } = {}) {
   if (!platformEnabled(env)) return { status: "disabled" };
   if (!env?.DB) return { status: "unavailable" };
   await ensureSchema(env.DB);

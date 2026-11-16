@@ -254,6 +254,15 @@ Document v2 (2026-11-16, owner: "lanjutkan semua pembaca ke room_runs"), for rea
   - Each card's rows are rebuilt from its document (`docRows`) and passed to `readWarRoom` / `readTimeframeThread` (option `rows`), so the card logic and shapes stay as they are.
   - The 1H/4H/D1 room's newest run comes first while it has no document (in progress); its rows come from the messages.
   - The other callers of the two readers (the War Room and timeframe endpoints, the push hub, the strategy engine) still read the messages: they show the run in progress.
+- Reader 6 (kernel reports, `ROOM_RUNS_READ_KERNEL`):
+  - The reports to the platform read each room's newest run: the War Room conclusion and the agents' openings on 15m, 1H, 4H and D1.
+  - `latestRunFromDoc` gives that run's rows from its document when the run has concluded and is documented. While it is in progress, its openings come from the messages, as before, so a report is never delayed.
+- With reader 6, every reader of a concluded run reads the documents. What still reads `agent_thread_messages`:
+  - the runs in progress (the endpoints, the push hub, the strategy engine, the newest run's selection);
+  - the rooms without documents (Macro, News Daily, news threads);
+  - the hourly comparison, by design;
+  - the derive pass itself.
+  P2c moves the writer; then these read the cell.
 - A document follows a retried conclusion: the derive pass also picks a documented run whose conclusion was rewritten after the document (`ts > derived_at`), as a retried failed conclusion is.
 
 **P2c: the cell.**
