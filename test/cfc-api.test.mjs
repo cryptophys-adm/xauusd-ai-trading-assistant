@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import { NOW, seedEnv, seedTrades } from "./support/cfc-fixtures.mjs";
+import { NOW, seedEnv, seedTrades, MODELS } from "./support/cfc-fixtures.mjs";
 import { priceKeysIn, REF_RE } from "../src/cfc-pack.mjs";
 import { resetCfcSchemaCacheForTests, runCfcTriggers } from "../src/cfc-triggers.mjs";
 
@@ -59,7 +59,7 @@ test("GET /api/council/suggestions: the stored suggestions, the mode and a catal
   assert.equal(r.body.mode, "suggest");
   assert.ok(r.body.suggestions.some((s) => s.topic_key === "strategy:zone_pullback:exits"), JSON.stringify(r.body.suggestions.map((s) => s.topic_key)));
   assert.ok(r.body.catalog.strategy.keys.includes("strategy:pattern_inside:exits"));
-  assert.ok(!JSON.stringify(r.body).includes("@cf/"), "no model identifier");
+  for (const m of MODELS) assert.ok(!JSON.stringify(r.body).includes(m), "no model identifier");
   const off = await get({ ...env, CFC_MODE: "off" }, "/api/council/suggestions");
   assert.equal(off.body.mode, "off");
   const post = await worker.fetch(new Request("https://worker.test/api/council/suggestions", { method: "POST", body: "{}" }), env, ctx);

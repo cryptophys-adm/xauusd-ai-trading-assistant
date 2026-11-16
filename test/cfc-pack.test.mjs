@@ -10,7 +10,7 @@ import {
 import { AGENT_IDS, STRATEGY_AGENTS } from "../src/strategy-agents.mjs";
 import { PLAN_LEARNING_KEY } from "../src/plan-learning.mjs";
 import { SCORING_VERSION } from "../src/outcome-scoring.mjs";
-import { NOW, M15, database, seedEnv, seedTrades } from "./support/cfc-fixtures.mjs";
+import { NOW, M15, database, seedEnv, seedTrades, MODEL, MODELS } from "./support/cfc-fixtures.mjs";
 
 test("the topic grammar accepts every agent, every pattern it trades, every type; it refuses anything else", () => {
   for (const a of STRATEGY_AGENTS) {
@@ -84,7 +84,7 @@ const assertPack = (pack, topic, type) => {
   assert.ok(pack.sections.prior?.unavailable, "prior says why it is empty");
   const text = JSON.stringify(pack);
   for (const p of ["4001.25", "3995.5", "4012.75", "4010.37", "3990.11", "4020.33"]) assert.ok(!text.includes(p), `${topic}: price ${p} leaked`);
-  assert.ok(!/@cf\//.test(text), `${topic}: no model identifier`);
+  for (const m of MODELS) assert.ok(!text.includes(m), `${topic}: no model identifier`);
 };
 
 test("strategy pack: zone_pullback and ENTER_LIMIT apart, SL+ in both definitions, no price, refs, a deterministic sha", async () => {
@@ -149,7 +149,7 @@ test("every other type builds a pack from the tables that exist, says unavailabl
   db.prepare("INSERT INTO omega_events (ms, actor, action, detail) VALUES (?, 'agent:cerebrum', 'autonomous_recovery', ?)").run(NOW - 3600_000, JSON.stringify({ price: 4001.25 }));
   db.prepare("INSERT INTO omega_intents (id, kind, payload, status, result, created_ms, updated_ms) VALUES ('i1', 'open', ?, 'failed', ?, ?, ?)").run(JSON.stringify({ entry: 4001.25 }), JSON.stringify({ ok: false, error: "invalid stops at 3995.5" }), NOW - 3600_000, NOW);
   db.prepare("INSERT INTO stuck_states (field, value, first_candle_key, last_candle_key, candles, price_range, atr, status, detected_at, updated_at) VALUES ('prophet_r38.d_enc', '-1', 'a', 'b', 30, 13, 6.5, 'open', ?, ?)").run(new Date(NOW).toISOString(), new Date(NOW).toISOString());
-  db.prepare("INSERT INTO ai_usage_daily (day, source, model, calls, prompt_tokens, completion_tokens) VALUES ('2026-11-15', 'warroom_agent', '@cf/openai/gpt-oss-120b', 10, 60000, 6000)").run();
+  db.prepare("INSERT INTO ai_usage_daily (day, source, model, calls, prompt_tokens, completion_tokens) VALUES ('2026-11-15', 'warroom_agent', ?, 10, 60000, 6000)").run(MODEL);
   const keys = ["seat:risk@15", "seat:moderator", "engine:15", "engine:model", "risk:london", "risk:intraday", "news:release_horizon", "news:drift", "execution:recoveries", "execution:rejected_intents", "data:prophet_r38", "data:parity", "cost:warroom_agent", "cost:shadow", "knowledge:note-1", "free:sl-plus-review"];
   const packs = {};
   for (const key of keys) {
@@ -172,7 +172,8 @@ test("every other type builds a pack from the tables that exist, says unavailabl
   assert.deepEqual(packs["execution:rejected_intents"].sections.intents.failed_errors, [{ error: "invalid stops at #", n: 1 }], "numbers are taken out of the terminal's text");
   assert.equal(packs["data:prophet_r38"].sections.stuck_states.rows[0].range_atr, 2, "the stuck range in ATR, not in price");
   assert.equal(packs["cost:warroom_agent"].sections.usage.this_source.length, 1);
-  assert.ok(!JSON.stringify(packs["cost:warroom_agent"]).includes("gpt-oss"), "the model is used for the rate only");
+  assert.ok(packs["cost:warroom_agent"].sections.usage.this_source[0].neurons > 0, "priced by the model's rate");
+  assert.ok(!JSON.stringify(packs["cost:warroom_agent"]).includes(MODEL), "the model is used for the rate only");
   assert.ok(packs["knowledge:note-1"].sections.item.unavailable);
   assert.ok(packs["free:sl-plus-review"].sections.sections.unavailable);
 });

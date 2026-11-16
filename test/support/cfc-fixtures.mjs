@@ -9,6 +9,11 @@ import { PLAN_LEARNING_SCHEMA_SQL, resetPlanLearningSchemaCacheForTests } from "
 import { OUTCOME_SCHEMA_SQL } from "../../src/outcome-scoring.mjs";
 import { OMEGA_SCHEMA_SQL } from "../../src/omega-broker.mjs";
 import { ECON_SCHEMA_SQL } from "../../src/econ-releases.mjs";
+import { NEURON_RATES } from "../../src/ai-usage.mjs";
+
+/** The models the usage meter prices (read from the code, so no test names one); a pack or a signal never holds one. */
+export const MODELS = Object.freeze(Object.keys(NEURON_RATES));
+export const MODEL = MODELS[0];
 
 export const NOW = Date.UTC(2026, 10, 16, 12, 10, 0);
 export const M15 = 15 * 60_000;

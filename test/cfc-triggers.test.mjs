@@ -11,7 +11,7 @@ import {
 import { parseTopicKey, priceKeysIn, patternsOf } from "../src/cfc-pack.mjs";
 import { AGENT_IDS, agentStatuses } from "../src/strategy-agents.mjs";
 import { SCORING_VERSION } from "../src/outcome-scoring.mjs";
-import { NOW, database, seedEnv, seedTrades } from "./support/cfc-fixtures.mjs";
+import { NOW, database, seedEnv, seedTrades, MODEL } from "./support/cfc-fixtures.mjs";
 
 const trade = (agent, exit, { pattern = null, i = 0, session = "london", mode = "intraday", regime = "normal-trending", omega = exit } = {}) => ({
   id: `decision:${agent}:${pattern}:${i}`, key: `k${i}`, opened_at: new Date(NOW - i * 3_600_000).toISOString(), agent, pattern, session, mode, regime,
@@ -101,13 +101,13 @@ test("risk, engine, model, seat, knowledge, news, execution, data and cost flags
   assert.deepEqual(keys(dataFlags({ stuck: [{ field: "gmi_v12_70.verdict", status: "open", candles: 24 }, { field: "prophet_r38.d_enc", status: "open", candles: 23 }], alerts: [{ kind: "parity_revoked", status: "open" }, { kind: "market_data_stale", status: "resolved" }] })), ["data:gmi_v12_70", "data:parity"]);
   const day = (d) => new Date(NOW - d * 86_400_000).toISOString().slice(0, 10);
   const usage = [
-    ...[1, 2, 3].map((d) => ({ day: day(d), source: "warroom_agent", model: "@cf/openai/gpt-oss-120b", calls: 100, prompt_tokens: 600_000, completion_tokens: 60_000 })),
-    ...[8, 9].map((d) => ({ day: day(d), source: "warroom_agent", model: "@cf/openai/gpt-oss-120b", calls: 50, prompt_tokens: 600_000, completion_tokens: 60_000 }))
+    ...[1, 2, 3].map((d) => ({ day: day(d), source: "warroom_agent", model: MODEL, calls: 100, prompt_tokens: 600_000, completion_tokens: 60_000 })),
+    ...[8, 9].map((d) => ({ day: day(d), source: "warroom_agent", model: MODEL, calls: 50, prompt_tokens: 600_000, completion_tokens: 60_000 }))
   ];
   const cost = costFlags({ usage, switches: [{ at: new Date(NOW - 86_400_000).toISOString(), mode: "off", actor: "cost-breaker" }, { at: new Date(NOW).toISOString(), mode: "off", actor: "owner:x" }], now: NOW });
   assert.deepEqual(keys(cost), ["cost:warroom_agent", "cost:shadow"]);
   assert.equal(cost[0].signal.growth, 0.5);
-  assert.ok(!JSON.stringify(cost).includes("gpt-oss"), "no model identifier in a signal");
+  assert.ok(!JSON.stringify(cost).includes(MODEL), "no model identifier in a signal");
 });
 
 test("the flags come in a fixed order and every key is valid", () => {
