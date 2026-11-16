@@ -1,6 +1,6 @@
 # RFC: Call for Councils (Nexus side, xauusd)
 
-Status: draft for owner review (2026-11-16). No code until approved. Aligned with the shared contract `council.v1` (platform `docs/design/HAIC-H0-H1.md` §4, relayed 2026-11-16) and the owner's HAIC decisions of 2026-11-16 ("ya semua, sesuai rekomendasimu"): picks in Cerebrum only (Q6), a shadow window of at least 14 days and 30 outcomes (Q8), councils started by the owner only (Q9), transcripts 90 days hot then R2 only (Q4), live updates aligned with the platform's ConsoleHub where it makes sense (Q7).
+Status: final design (owner's answers 2026-11-16: "1–4 setuju, 5 pakai 16 panggilan, 6 klik di Cerebrum, 7–9 setuju"; and "jangan ditampilkan di omega, buat menu navigator sendiri Call for Councils"). No code until the owner starts phase P1; one platform item open (section 9: the return path of the pick). Aligned with the shared contract `council.v1` (platform `docs/design/HAIC-H0-H1.md` §4, relayed 2026-11-16) and the owner's HAIC decisions of 2026-11-16 ("ya semua, sesuai rekomendasimu"): picks in Cerebrum only (Q6), a shadow window of at least 14 days and 30 outcomes (Q8), councils started by the owner only (Q9), transcripts 90 days hot then R2 only (Q4), live updates aligned with the platform's ConsoleHub where it makes sense (Q7).
 
 **Owner's request (2026-11-16, translated):** the owner can call all the relevant agents into a scrum/retrospective session. The topic is either something the agents found themselves or a topic the owner sets (example: "the Key Level entry strategy often gets hit by SL or SL+"). Each agent gives its opinion and talks with the owner about what to improve. Together they decide which strategy to try and implement. The same feature will exist in Cerebrum for platform topics.
 
@@ -58,7 +58,7 @@ Agents and outcome scoring may only **suggest** a council (owner decision Q9): a
 | macro / news topics | the `MACRO_AGENTS` seats |
 | `seat:*`, `knowledge:*` | the seat concerned, Risk Manager |
 
-- **The strategy agents are deterministic code** (`STRATEGY_AGENTS`), not model seats; their plans and records are evidence (section 3), never a voice. A "Strategy Analyst" seat that reads `GET /api/strategy-agents` would be a new seat (a new AI task in `organism.json`, kept equal to the code by `test/organism-dna.test.mjs`). Open question 3.
+- **The strategy agents are deterministic code** (`STRATEGY_AGENTS`), not model seats; their plans and records are evidence (section 3), never a voice. A "Strategy Analyst" seat that reads `GET /api/strategy-agents` would be a new seat (a new AI task in `organism.json`, kept equal to the code by `test/organism-dna.test.mjs`). Decision 4: no new seat for now.
 - Seats keep their names and role text and speak **only from the pack**, not from their live data. A seat's reputation (`src/reputation.mjs`) is shown beside it as context; there is no quorum and no weighting: the owner decides.
 - **The owner joins live** over the push hub (ADR-0015 phase 1): the Durable Object `PushHub` of the Nexus Worker (`workers/xauusd-nexus-dashboard/src/push-hub.mjs`, `GET /api/stream`), which the AI Worker publishes into (`src/push-hub.mjs` `publishSnapshot`, binding `PUSH_HUB`). New: a topic `council` in `PUSH_TOPICS` and `NEXUS_STREAM_TOPICS`, carrying the open session's snapshot after each step. The hub is listen-only (`webSocketMessage` does nothing), so the owner's messages go through `POST /omega/api/council` (1.1). Without the socket the page polls `GET /api/council/:id` (new, read-only) through `usePoll`.
 
@@ -173,7 +173,7 @@ The room runs do not write their transcripts yet (`transcript_key` is null); the
 - **The proposal's life** (shadow start, verdict, owner click, withdrawal) updates `proposal_status` and adds a step to the transcript.
 - **Owner corrections become labelled knowledge (ADR-0017 H3).** Platform `architecture/adr/0017-human-ai-collaboration.md`, decision 4 ("Teaching: owner corrections become knowledge (Nexus)"): every agent post, metric reading, decision and card can be corrected or rated ("reading wrong", "invalidation too tight", "good call"); corrections become labelled knowledge for Aether with high weight (decision 3, owner 2026-11-14) and feed the agents' reputation; they are deduplicated by content hash and never refused. Phase H3: corrections and ratings in Nexus become knowledge. In a council:
   - A correction or rating may target any council turn, claim or option. It is stored as `{ label: "owner_correction" | "owner_rating", session_id, step, claim_ref, seat, text, rating, evidence_refs, content_hash }`; the same content hash is stored once; nothing is refused (the guardian checks only that it carries no secret).
-  - It goes to Aether as labelled knowledge with high weight (decision 3). Aether keeps it "learned", never canon (RFC_AETHER_KNOWLEDGE_GUARDIAN §0.4, §3 constraint 5); its high weight puts it first in the knowledge arm's queue (`src/shadow-knowledge.mjs`), which still measures it in shadow before it reaches a live prompt. Open question 6: should an owner correction skip the shadow test?
+  - It goes to Aether as labelled knowledge with high weight (decision 3). Aether keeps it "learned", never canon (RFC_AETHER_KNOWLEDGE_GUARDIAN §0.4, §3 constraint 5); its high weight puts it first in the knowledge arm's queue (`src/shadow-knowledge.mjs`), which still measures it in shadow before it reaches a live prompt. Decision 9: it does not skip the shadow test; the owner can promote it by hand.
   - It feeds the seat's reputation (decision 4): new, a bounded owner-rating term in `src/reputation.mjs` (proposed: at most ±0.05 of the crowd weight per week, so one rating never floors or maxes a seat). The council itself still applies no weight (section 2).
 - **Audit events** (`[CONTRACT-6]`, both sides): `council.proposed`, `started`, `convened`, `position_posted`, `rebuttal_posted`, `claim_unverified`, `owner_joined`, `owner_message`, `synthesis_published`, `option_chosen`, `proposal_drafted`, `dismissed`, `expired`, `aborted`. Payloads hold ids, hashes, refs and token counts only; the text is in the R2 transcript. They are kept in the session's steps; only `council_decision.v1` (section 5) travels to the kernel, within its 4 reports an hour.
 
@@ -181,14 +181,14 @@ The room runs do not write their transcripts yet (`transcript_key` is null); the
 
 **Limits (`[CONTRACT]`: "Nexus sets its own limits, no higher" than Cerebrum's):** at most 2 sessions open and 4 started per UTC day; per session at most **16 model calls**, 60 messages, 20 owner messages and USD 0.10. Over budget, the session goes to synthesis early (one call is always reserved for it).
 
-**A session in 16 calls** (option (a), open question 7): 6 positions, at most 4 rebuttals, at most 4 answers to the owner, 1 synthesis, 1 retry. Owner messages beyond the answers left are recorded and shown, and the moderator reads them at synthesis; no seat answers them.
+**A session in 16 calls** (decision 5): at most 6 positions, at most 4 rebuttals, at most 4 answers to the owner, 1 synthesis, 1 retry. Owner messages beyond the answers left are recorded and shown, and the moderator reads them at synthesis; no seat answers them.
 
 **Estimate (not measured):** with the rates in `NEURON_RATES` (`src/ai-usage.mjs`), a participant call of about 6,000 input and 600 output tokens is about 70 neurons, a moderator call of about 15,000 and 2,000 about 600; a full session is about 15 × 70 + 600 ≈ 1,650 neurons, about USD 0.02, well under the USD 0.10 cap. To be confirmed on the first sessions from `ai_usage_daily`.
 
 **Budget and kill switch, reusing the shadow mechanisms (`src/shadow-switch.mjs`):**
 - every call metered as `cfc:<schema>` in `ai_usage_daily` (`callBusModel` `meterSource`), declared in `organism.json` and shown by `GET /api/ai/logic` and the Neuron allocation page;
 - a daily cap `CFC_NEURONS_PER_DAY_MAX` (proposed 8,000) and the contract's 4 sessions started a day; a breaker like `checkShadowBudget` stops new steps when the cap is reached, the session goes to `awaiting_owner` with what it has, and the owner hears it on Telegram;
-- `CFC_MODE = "off"` (a Worker variable) holds every session off, and `kernel_controls.agents_enabled = 0` aborts any session; an owner switch on the Call for Councils page, audited like `shadow_switch_events`, is optional (open question 5);
+- `CFC_MODE = "off"` (a Worker variable) holds every session off, and `kernel_controls.agents_enabled = 0` aborts any session; an owner switch on the Call for Councils page, audited like `shadow_switch_events`, is on the Call for Councils page (decision 7);
 - council calls are not shadow calls and do not count against `SHADOW_NEURONS_PER_DAY_MAX`; the shadow arms a proposal starts (the knowledge arm) stay under the shadow budget and kill switch; strategy variants and replay arms are deterministic and cost no model call.
 - **Rate limits:** the rooms share the account's Workers AI limits (SSOT: the 3021 errors, the health alert on 10+ calls lost an hour). A council step does not start within the first 3 minutes after a 15m close, and yields while a room run is open.
 
@@ -247,15 +247,21 @@ The platform session's contract (`docs/design/HAIC-H0-H1.md` §4, branch `claude
 - The strategy agents' status, breakers and records; the plan learner; the shadow arms' rules and their kill switch.
 - Aether's learned pack, its promotion rules for non-council items, and the doctrine path to Cerebrum.
 
-## 14. Open questions for the owner
+## 14. Owner decisions
 
-Decided on 2026-11-16 (HAIC): picks in Cerebrum only, the 14-day / 30-outcome shadow window, councils started by the owner only, transcripts 90 days hot then R2, ConsoleHub alignment. Earlier questions they answer: free-text agent topics (no: suggestions only), the "click" (Cerebrum), openings before the owner joins (no: the owner starts).
+HAIC (2026-11-16, platform session): picks and the promote click in Cerebrum only; the shadow window of at least 14 days and 30 outcomes; councils started by the owner only (agents suggest); transcripts 90 days hot, then R2; ConsoleHub for Cerebrum, Nexus keeps its push hub.
 
-Still open:
-1. "Key Level entry": the default agent `zone_pullback` (the plan at the Key Level Agent's zones), the limit entry at the key level (`ENTER_LIMIT`), or both? **Recommendation:** both, reported separately; they fail for different reasons (zone choice against fill and timing).
-2. Does "SL+" mean the ledger's breakeven stop, Omega's stop locked behind passed key levels, or any exit at a moved stop? **Recommendation:** both definitions side by side, Omega's as the headline; Omega's is what the live EA does.
-3. A new "Strategy Analyst" seat that reads the strategy agents' registry and records, or the Risk Manager and Projection Agent? **Recommendation:** no new seat for now; it would be a new AI task and DNA change, and the two seats read the same pack.
-4. The suggestion trigger: N = 20 resolved trades and a stop share of 0.65 or more. **Recommendation:** accept, re-check after the first five sessions; it is conservative and costs nothing until the owner starts a session.
-5. An owner on/off switch for councils on the Call for Councils page, or the Worker variable and the kernel's agents switch only? **Recommendation:** an audited owner switch on the Call for Councils page; it stops spending without a deploy.
-6. Owner corrections (ADR-0017 decision 3, high weight): skip the knowledge arm's shadow test, or go first in its queue (this draft)? **Recommendation:** first in the queue, shadow-tested; decision 3's priority without one note changing live prompts untested; the owner can still promote it by hand at once.
-7. **The call cap** (contract: Nexus no higher than Cerebrum's 16 calls and USD 0.10 a session). (a) Convene at most 6 participants plus the moderator, one rebuttal round, at most 4 answers to the owner: a session in 16 calls, about USD 0.02 (this draft). (b) A higher Nexus cap, e.g. 32 calls (8 participants, 8 rebuttals, 12 answers), about USD 0.04 a session, which the contract would need the owner to allow. **Recommendation:** (a); six participants cover every topic kind of section 2, and the owner's messages beyond the answers still reach the synthesis.
+This RFC (2026-11-16, relayed by the orchestrator: "1–4 setuju, 5 pakai 16 panggilan, 6 klik di Cerebrum, 7–9 setuju"; and directly in this session: "jangan ditampilkan di omega, buat menu navigator sendiri Call for Councils"):
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | "Key Level entry" | both `zone_pullback` and the limit entry at the key level (`ENTER_LIMIT`), reported separately in the pack |
+| 2 | "SL+" | both definitions side by side; Omega's stop locked behind passed key levels is the headline, the ledger's breakeven stop beside it |
+| 3 | Topics | deterministic suggestions only in P1–P2; free text later |
+| 4 | A "Strategy Analyst" seat | not now; the Risk Manager and the Projection Agent read the pack |
+| 5 | Calls per session | **16** (`council.v1`, Cerebrum's cap, at most USD 0.10): at most 6 participants plus the moderator, one rebuttal round (section 8); the suggestion trigger N = 20 trades and a 0.65 stop share; caps re-checked after the first five sessions; a higher cap needs their data and the owner's OK |
+| 6 | The pick and the promote click | in Cerebrum; Nexus shows the status and links to the Cerebrum item; a PR merge is not the click |
+| 7 | The owner's on/off switch | yes, audited like the shadow switch, on the **Call for Councils** page (the owner's later instruction moved everything of councils off the Omega page) |
+| 8 | Openings before the owner joins | no |
+| 9 | Owner corrections | first in the knowledge arm's queue, shadow-tested; the owner can promote one by hand |
+| — | Where councils live in Nexus | their own navigator item, **Call for Councils**; nothing on the Omega page |
