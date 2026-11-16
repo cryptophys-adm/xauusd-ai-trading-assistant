@@ -221,26 +221,27 @@ export function roomRunsReaderEnabled(env, reader) {
 }
 
 /**
- * P2b readers 2-6: the message rows of a room's runs from their v2 documents (docRows), for runs whose bar closed at or
- * after `floorIso`, ordered by run then id, exactly as agent_thread_messages stores them. First derives the runs
- * concluded since the last pass. Returns null (the caller reads the messages) until the one-time backfill of the
- * current document version is done, when a document has no steps, or when the documents cannot be read.
+ * P2b readers 2-6: the message rows of a room's runs from their v2 documents, for runs whose bar closed at or after
+ * `floorIso`, ordered by run then id, exactly as agent_thread_messages stores them. The steps are expanded in D1
+ * (json_each), and only `fields` (default every column) are returned, so a reader never parses whole documents.
+ * `status` keeps only steps of that status. First derives the runs concluded since the last pass. Returns null (the
+ * caller reads the messages) until the one-time backfill of the current document version is done, or when the
+ * documents cannot be read.
  */
-export async function runRowsFromDocs(env, room, floorIso, { now = Date.now() } = {}) {
+export async function runRowsFromDocs(env, room, floorIso, { now = Date.now(), fields = STEP_COLUMNS, status = null } = {}) {
   const db = env?.DB;
   if (!db || !RUN_ROOMS[room]) return null;
+  const cols = fields.filter((f) => STEP_COLUMNS.includes(f));
   try {
     await deriveRoomRuns(env, { now });
     const done = await db.prepare("SELECT value FROM room_runs_meta WHERE key = ?").bind("backfill:" + RUN_DOC_VERSION).first();
     if (!done) return null;
-    const docs = (await db.prepare("SELECT run_id, body_json FROM room_runs WHERE room = ? AND bar_close >= ? ORDER BY run_id").bind(room, floorIso).all()).results || [];
-    const out = [];
-    for (const d of docs) {
-      const rows = docRows(d);
-      if (!rows) return null;
-      out.push(...rows);
-    }
-    return out;
+    const pending = await db.prepare("SELECT COUNT(*) AS n FROM room_runs WHERE room = ? AND bar_close >= ? AND doc_version != ?").bind(room, floorIso, RUN_DOC_VERSION).first();
+    if (Number(pending?.n) > 0) return null;
+    const select = cols.map((c) => `json_extract(s.value, '$.${c}') AS ${c}`).join(", ");
+    const rows = (await db.prepare(`SELECT r.run_id AS run_id, json_extract(r.body_json, '$.thread_id') AS thread_id, ${select} FROM room_runs r, json_each(r.body_json, '$.steps') s WHERE r.room = ? AND r.bar_close >= ?${status ? " AND json_extract(s.value, '$.status') = ?" : ""} ORDER BY r.run_id, json_extract(s.value, '$.id')`)
+      .bind(...[room, floorIso, ...(status ? [status] : [])]).all()).results || [];
+    return rows;
   } catch {
     return null;
   }

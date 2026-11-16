@@ -181,7 +181,7 @@ const bodyBias = (json) => { try { return JSON.parse(json || "{}")?.bias ?? null
 async function rowsFromDocs(env, timeframe, sinceIso, { now }) {
   const room = timeframe === "15" ? "warroom" : TF_THREAD[timeframe];
   const floor = barTimeFloor(sinceIso);
-  const rows = await runRowsFromDocs(env, room, floor, { now });
+  const rows = await runRowsFromDocs(env, room, floor, { now, fields: ["id", "step", "agent", "bar_time", "ts", "stance", "body_json", "status"] });
   if (!rows) return null;
   const keyOf = new Map();
   if (timeframe !== "15") for (const r of rows) if (r.step === "brief") { try { keyOf.set(r.run_id, JSON.parse(r.body_json || "{}")?.candle_key ?? null); } catch { keyOf.set(r.run_id, null); } }
