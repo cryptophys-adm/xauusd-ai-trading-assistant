@@ -221,6 +221,26 @@ export function roomRunsReaderEnabled(env, reader) {
 }
 
 /**
+ * P2b readers 2-6: whether the documents can stand in for the messages now. Derives the runs concluded since the last
+ * pass, then requires the one-time backfill of the current version to be done and no document of an older version.
+ */
+export async function docsReady(env, { now = Date.now() } = {}) {
+  const db = env?.DB;
+  if (!db) return false;
+  try {
+    await deriveRoomRuns(env, { now });
+    const done = await db.prepare("SELECT value FROM room_runs_meta WHERE key = ?").bind("backfill:" + RUN_DOC_VERSION).first();
+    if (!done) return false;
+    const old = await db.prepare("SELECT COUNT(*) AS n FROM room_runs WHERE doc_version != ?").bind(RUN_DOC_VERSION).first();
+    return !(Number(old?.n) > 0);
+  } catch {
+    return false;
+  }
+}
+/** The rooms that have run documents, as a SQL list for `room IN (...)`. */
+export const DOC_ROOMS_SQL = "('warroom', 'tf:H1', 'tf:H4', 'tf:D1')";
+
+/**
  * P2b readers 2-6: the message rows of a room's runs from their v2 documents, for runs whose bar closed at or after
  * `floorIso`, ordered by run then id, exactly as agent_thread_messages stores them. The steps are expanded in D1
  * (json_each), and only `fields` (default every column) are returned, so a reader never parses whole documents.

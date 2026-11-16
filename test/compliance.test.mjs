@@ -89,3 +89,38 @@ test("decision cards carry no level, price, plan or size; agent text keeps no pr
   assert.equal(sanitizeText("Held 4,070 and 4078.5"), "Held [level] and [level]");
   assert.equal(sessionOf("2026-11-09T03:00:00Z"), "asia");
 });
+
+// ADR-0015 P2b reader 3 (owner 2026-11-16): the compliance sweep and its counts read the run documents.
+test("compliance from the run documents finds the same rule breaks and counts, each message once", async () => {
+  const { resetRoomRunsSchemaCacheForTests, deriveRoomRuns } = await import("../src/room-runs.mjs");
+  for (const viaDocs of [false, true]) {
+    resetComplianceSchemaCacheForTests(); resetRoomRunsSchemaCacheForTests();
+    const db = d1();
+    const add = (thread, run, step, agent, stance, body, bar) => db.raw.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, bar_time, ts, stance, confidence, body_json, status) VALUES (?, ?, ?, ?, ?, ?, ?, 0.5, ?, 'ok')").run(thread, run, step, agent, bar, bar, stance, JSON.stringify(body));
+    const bar = "2026-11-09T10:00:00.000Z";
+    add("tf:H1", bar, "brief", "system", null, { candle_key: "OANDA:XAUUSD:60:1" }, bar);
+    add("tf:H1", bar, "open:h1", "h1", "WAIT", { bias: "NEUTRAL", claim: "Flat: nothing is confirmed." }, bar);
+    add("tf:H1", bar, "open:risk", "risk", "WAIT", { bias: "NEUTRAL", claim: "The parity-verified volatility is high." }, bar);
+    add("tf:H1", bar, "conclusion", "moderator", "BUY", { bias: "BEARISH", summary: "Decision BUY, bias bearish." }, bar);
+    const env = viaDocs ? { DB: db, ROOM_RUNS_SHADOW: "on", ROOM_RUNS_READ_COMPLIANCE: "on" } : { DB: db };
+    const now = Date.parse("2026-11-09T12:00:00Z");
+    if (viaDocs) { await deriveRoomRuns(env, { now, backfill: true }); await deriveRoomRuns(env, { now, backfill: true }); }
+    const first = await runComplianceChecks(env, { now });
+    assert.deepEqual([first.checked, first.violations], [3, 2], `first pass, docs=${viaDocs}`);
+    if (viaDocs) assert.equal(first.source, "room_runs");
+    const again = await runComplianceChecks(env, { now });
+    assert.deepEqual([again.checked, again.violations], [0, 0], "each message once");
+    const view = await readCompliance(env, { days: 7, now });
+    assert.deepEqual([view.total.messages, view.total.violations], [3, 2], `counts, docs=${viaDocs}`);
+    if (!viaDocs) continue;
+    // A run documented after the watermark is checked on the next pass (the watermark is derived_at, not a message id).
+    const bar2 = "2026-11-09T11:00:00.000Z";
+    add("tf:H1", bar2, "brief", "system", null, { candle_key: "OANDA:XAUUSD:60:2" }, bar2);
+    add("tf:H1", bar2, "open:h1", "h1", "BUY", { bias: "BEARISH", claim: "Place a buy limit with a 0.5 lot size." }, bar2);
+    add("tf:H1", bar2, "conclusion", "moderator", "WAIT", { bias: "NEUTRAL", summary: "Wait." }, bar2);
+    const later = now + 60_000;
+    const third = await runComplianceChecks(env, { now: later });
+    assert.deepEqual([third.checked, third.violations], [2, 2], "the new run's opening breaks two rules");
+    assert.deepEqual((await runComplianceChecks(env, { now: later })).checked, 0);
+  }
+});

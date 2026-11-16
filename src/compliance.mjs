@@ -14,6 +14,7 @@
 
 import { naturalLanguageErrors, CALIBRATION_TALK } from "./natural-language.mjs";
 import { MANIFESTS } from "./indicator-manifests.mjs";
+import { roomRunsReaderEnabled, docsReady, DOC_ROOMS_SQL } from "./room-runs.mjs";
 
 export const COMPLIANCE_VERSION = "cryptophys.compliance.v1";
 export const CHECKS = Object.freeze(["order_wording", "stance_bias_conflict", "calibration_talk", "natural_language", "data_scope"]);
@@ -96,10 +97,51 @@ export function chartOfThread(threadId) {
  * Sweep step: checks the room messages stored since the last checked message id (openings,
  * Consensus Discussion answers, conclusions), at most `limit` per run. Idempotent.
  */
+/** Runs whose documents are checked per pass, at most (a backlog drains over several sweeps). */
+export const DOC_RUNS_PER_PASS = 40;
+const DOC_WATERMARK_KEY = "compliance:derived_at";
+/** On the switch to the documents, the documents derived this far back are (re)checked: rechecks are idempotent. */
+const DOC_SWITCH_LOOKBACK_MS = 2 * 3_600_000;
+const isCheckedStep = (step) => step.startsWith("open:") || step.startsWith("debate:") || step === "conclusion";
+
+/**
+ * ADR-0015 P2b reader 3 (owner 2026-11-16): the sweep checks the documents derived since its watermark (derived_at,
+ * kept in room_runs_meta), because a run is documented only once it concludes: a message-id cursor over the documents
+ * would skip a run that concluded after a later one. Each step is checked once per (message id, check), as before
+ * (INSERT OR IGNORE), so a document upgraded or derived again is rechecked without a duplicate.
+ */
+async function runComplianceFromDocs(env, { now, at }) {
+  const db = env.DB;
+  const mark = (await db.prepare("SELECT value FROM room_runs_meta WHERE key = ?").bind(DOC_WATERMARK_KEY).first())?.value ?? new Date(now - DOC_SWITCH_LOOKBACK_MS).toISOString();
+  const runs = (await db.prepare(`SELECT room, run_id, derived_at FROM room_runs WHERE room IN ${DOC_ROOMS_SQL} AND derived_at > ? ORDER BY derived_at, room, run_id LIMIT ?`).bind(mark, DOC_RUNS_PER_PASS).all()).results || [];
+  let checked = 0, violations = 0, last = mark;
+  for (const run of runs) {
+    const steps = (await db.prepare("SELECT json_extract(r.body_json, '$.thread_id') AS thread_id, json_extract(s.value, '$.id') AS id, json_extract(s.value, '$.step') AS step, json_extract(s.value, '$.agent') AS agent, json_extract(s.value, '$.bar_time') AS bar_time, json_extract(s.value, '$.stance') AS stance, json_extract(s.value, '$.body_json') AS body_json FROM room_runs r, json_each(r.body_json, '$.steps') s WHERE r.room = ? AND r.run_id = ? AND json_extract(s.value, '$.status') = 'ok' ORDER BY json_extract(s.value, '$.id')").bind(run.room, run.run_id).all()).results || [];
+    for (const r of steps) {
+      const chart = chartOfThread(r.thread_id);
+      if (!chart || !isCheckedStep(String(r.step))) continue;
+      let body = null;
+      try { body = JSON.parse(r.body_json || "null"); } catch { body = null; }
+      checked += 1;
+      for (const v of checkMessage({ agent: r.agent, stance: r.stance, body })) {
+        const res = await db.prepare("INSERT OR IGNORE INTO compliance_checks (message_id, check_id, thread_id, chart, bar_time, agent, step, detail, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .bind(r.id, v.check, r.thread_id, chart, r.bar_time ?? null, r.agent, r.step, String(v.detail).slice(0, 200), at).run();
+        violations += Number(res?.meta?.changes) || 0;
+      }
+    }
+    last = run.derived_at;
+  }
+  if (runs.length) await db.prepare("INSERT INTO room_runs_meta (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at").bind(DOC_WATERMARK_KEY, last, at).run();
+  return { status: "ok", source: "room_runs", checked, violations, runs: runs.length, watermark: last };
+}
+
 export async function runComplianceChecks(env, { now = Date.now(), limit = 400 } = {}) {
   const db = env?.DB;
   if (!db) return { status: "unavailable" };
   await ensureComplianceSchema(db);
+  if (roomRunsReaderEnabled(env, "compliance") && await docsReady(env, { now })) {
+    try { return await runComplianceFromDocs(env, { now, at: new Date(now).toISOString() }); } catch { /* the messages below */ }
+  }
   const cursor = Number((await db.prepare("SELECT last_message_id AS id FROM compliance_cursor WHERE id = 1").first())?.id) || 0;
   let rows = [];
   try {
@@ -129,7 +171,14 @@ export async function readCompliance(env, { days = 7, now = Date.now() } = {}) {
   const db = env.DB;
   await ensureComplianceSchema(db);
   const since = new Date(now - days * 86_400_000).toISOString();
-  const msgs = (await db.prepare("SELECT thread_id, agent, COUNT(*) AS n FROM agent_thread_messages WHERE status = 'ok' AND bar_time >= ? AND ((thread_id >= 'warroom:' AND thread_id < 'warroom;') OR (thread_id >= 'tf:' AND thread_id < 'tf;')) AND (step LIKE 'open:%' OR step LIKE 'debate:%' OR step = 'conclusion') GROUP BY thread_id, agent").bind(since).all()).results || [];
+  // ADR-0015 P2b reader 3: the message counts from the run documents (expanded in D1), else from the messages.
+  let msgs = null;
+  if (roomRunsReaderEnabled(env, "compliance") && await docsReady(env, { now })) {
+    try {
+      msgs = (await db.prepare(`SELECT json_extract(r.body_json, '$.thread_id') AS thread_id, json_extract(s.value, '$.agent') AS agent, COUNT(*) AS n FROM room_runs r, json_each(r.body_json, '$.steps') s WHERE r.room IN ${DOC_ROOMS_SQL} AND r.bar_close >= ? AND json_extract(s.value, '$.status') = 'ok' AND json_extract(s.value, '$.bar_time') >= ? AND (json_extract(s.value, '$.step') LIKE 'open:%' OR json_extract(s.value, '$.step') LIKE 'debate:%' OR json_extract(s.value, '$.step') = 'conclusion') GROUP BY 1, 2`).bind(new Date(Date.parse(since) - 86_400_000).toISOString(), since).all()).results || [];
+    } catch { msgs = null; }
+  }
+  if (!msgs) msgs = (await db.prepare("SELECT thread_id, agent, COUNT(*) AS n FROM agent_thread_messages WHERE status = 'ok' AND bar_time >= ? AND ((thread_id >= 'warroom:' AND thread_id < 'warroom;') OR (thread_id >= 'tf:' AND thread_id < 'tf;')) AND (step LIKE 'open:%' OR step LIKE 'debate:%' OR step = 'conclusion') GROUP BY thread_id, agent").bind(since).all()).results || [];
   const hits = (await db.prepare("SELECT chart, agent, check_id, COUNT(*) AS n, MAX(detail) AS example FROM compliance_checks WHERE bar_time >= ? GROUP BY chart, agent, check_id").bind(since).all()).results || [];
   const key = (chart, agent) => `${chart}|${agent}`;
   const rows = new Map();

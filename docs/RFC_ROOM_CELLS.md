@@ -239,6 +239,12 @@ Document v2 (2026-11-16, owner: "lanjutkan semua pembaca ke room_runs"), for rea
 - The hourly pass upgrades v1 documents in place. It backfills the last 58 days once (at most 200 runs per pass); a marker in `room_runs_meta` then keeps later passes to the 48 h window.
 - Readers 2-6 use `runRowsFromDocs(env, room, floor)`, which returns the rows only once the backfill marker of the current version is set; before that they read the messages. Each reader has its own flag, `ROOM_RUNS_READ_<READER>`, where `off` is the rollback.
 - Reader 2 (replay, `ROOM_RUNS_READ_REPLAY`) applies the same filters and order as its SQL (status ok, `ts` since, open/debate/conclusion, by run then step kind then id). For H1/H4/D1 it takes the candle key from the run's brief.
+- Reader 3 (compliance, `ROOM_RUNS_READ_COMPLIANCE`):
+  - The sweep checks the documents derived since a watermark (`derived_at`, `room_runs_meta` key `compliance:derived_at`), at most 40 runs per pass.
+  - A message-id cursor would skip a run that concludes after a later one, because a run is documented only when it concludes.
+  - Every step is still keyed by its message id, so a recheck is a no-op.
+  - On the switch, the documents of the last 2 h are rechecked.
+  - The per-100 counts come from the documents' steps, counted in D1 (`json_each`). A run still in progress is counted once it concludes.
 
 **P2c: the cell.**
 - `RoomCell` runs the rooms. D1 receives the run document only. The transcript goes to R2.
