@@ -1,0 +1,11 @@
+export declare const EA_HEARTBEAT_TOPIC: "ea_heartbeat";
+export declare const EA_HEARTBEAT_AGENT: string;
+export declare const RELAY_CURSOR_KEY: string;
+export declare const RELAY_MIN_GAP_MS: number;
+export declare const RELAY_RETRY_MS: number;
+export declare const RELAY_MAX_AGE_MS: number;
+export declare const RELAY_MAX_ITEMS: number;
+export declare const RELAY_TEXT_MAX: number;
+export declare function recoveryLine(row: { id?: number; ms: number; detail: unknown }): string;
+export declare function relayReport(rows: Array<{ id: number; ms: number; detail: unknown }>): Record<string, unknown>;
+export declare function relayEaHeartbeat(env: unknown, opts?: { now?: number; publish?: (...a: any[]) => Promise<any> }): Promise<{ status: string; [k: string]: unknown }>;
