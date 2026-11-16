@@ -11,6 +11,8 @@ const CODES: Record<string, { kind: Kind; text: string }> = {
   executor_stale: { kind: "block", text: "The MT5 terminal has not reported recently, so Omega does not act blind." },
   ea_local_management: { kind: "info", text: "The EA manages its positions locally." },
   mean_reversal_exit: { kind: "adjust", text: "A position is being closed because the decision's power reversed." },
+  lean_flip: { kind: "adjust", text: "The Decision Engine's lean turned against the system's positions on that side: they are all being closed." },
+  confidence_drop: { kind: "adjust", text: "A winning position is being closed: its strategy agent's confidence dropped at this 15m evaluation." },
   no_side: { kind: "block", text: "The Decision Engine says WAIT: there is no BUY or SELL to follow." },
   bad_signal: { kind: "block", text: "The signal is incomplete." },
   expired: { kind: "block", text: "The signal expired before it could be entered." },

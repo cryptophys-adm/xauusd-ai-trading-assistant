@@ -86,6 +86,20 @@ const event = (db, ms, actor, action, detail) =>
   db.prepare("INSERT INTO omega_events (ms, actor, action, detail) VALUES (?, ?, ?, ?)").bind(ms, String(actor || "system"), action, detail == null ? null : JSON.stringify(detail)).run();
 export const engineEnvEnabled = (env) => env?.OMEGA_ENGINE_ENABLED === "true";
 
+/** The strategy agent each open position's open intent recorded ({ intent id: agent }); {} when none can be read. */
+export async function positionAgents(db, executor) {
+  const ids = [...new Set((Array.isArray(executor?.positions) ? executor.positions : []).map((p) => p?.intent_id).filter((x) => typeof x === "string" && x.startsWith("open:")))].slice(0, 50);
+  if (!ids.length) return {};
+  try {
+    const rows = (await db.prepare(`SELECT id, payload FROM omega_intents WHERE kind = 'open' AND id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all()).results ?? [];
+    const out = {};
+    for (const r of rows) { const a = parse(r.payload)?.strategy; if (typeof a === "string" && a) out[r.id] = a; }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export async function sendOmegaTelegram(env, message) {
   if (!env?.TELEGRAM_BOT_TOKEN || !env?.TELEGRAM_CHAT_ID) return;
   try {
@@ -430,7 +444,9 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   const control = await readControl(env);
   if (!signal) { try { signal = await eaSignal(env, { now, control }); } catch { signal = null; } }
   const recent = await db.prepare("SELECT id FROM omega_intents WHERE created_ms > ?").bind(now - 2 * 86_400_000).all();
-  const plan = planIntents({ signal, control, settings, executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id) });
+  // Each open position's strategy agent, from its open intent (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md).
+  const agents = await positionAgents(db, executor);
+  const plan = planIntents({ signal, control, settings, executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id), agents });
   for (const planned of plan.intents) {
     const it = await withAttempt(db, planned);
     if (!it) continue;

@@ -319,7 +319,7 @@ function UnderwaterDrawdownChart({
 
 type Policy = "tp1" | "tp2" | "omega";
 const MODES = ["scalp", "intraday", "swing"] as const;
-const OMEGA_EXIT: Record<string, string> = { target: "target", trailed_target: "trailed TP", stop: "stop", sl_plus: "SL+", power_reversal: "power reversed", opposite: "opposite", time: "time" };
+const OMEGA_EXIT: Record<string, string> = { target: "target", trailed_target: "trailed TP", stop: "stop", sl_plus: "SL+", power_reversal: "power reversed", lean_flip: "lean flipped", confidence_drop: "confidence dropped", opposite: "opposite", time: "time" };
 
 /**
  * The plan's targets and the Omega policy per trading mode (owner 2026-11-12: "kebijakan Omega di

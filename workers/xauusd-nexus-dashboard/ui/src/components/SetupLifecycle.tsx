@@ -22,7 +22,7 @@ const PHASE: Record<string, { text: string; tone: "green" | "amber" | "red" | "c
   time: { text: "time exit", tone: "slate" }
 };
 const CANCEL: Record<string, string> = { unfilled: "not filled in time", invalidated: "stop touched before entry", target_before_entry: "target reached before entry" };
-const OMEGA_EXIT: Record<string, string> = { target: "target", trailed_target: "trailed TP", stop: "stop", sl_plus: "SL+", power_reversal: "power reversed", opposite: "opposite", time: "time" };
+const OMEGA_EXIT: Record<string, string> = { target: "target", trailed_target: "trailed TP", stop: "stop", sl_plus: "SL+", power_reversal: "power reversed", lean_flip: "lean flipped", confidence_drop: "confidence dropped", opposite: "opposite", time: "time" };
 
 /** The key-level zone holding a price (the entry zone), or null. */
 export function zoneAt(levels: any[] | undefined, price?: number | null) {

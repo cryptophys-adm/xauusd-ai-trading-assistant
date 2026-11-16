@@ -17,6 +17,8 @@
 //             the stops).
 // Intent ids are deterministic and at most 31 characters (they become the MT5 order comment).
 
+import { confidenceTrend, parseConfidences } from "./agent-confidence.mjs";
+
 export const OMEGA_DEFAULTS = Object.freeze({
   enabled: false,
   live_armed: false,
@@ -195,7 +197,7 @@ export function powerBand(p) {
  *                the old target, less the buffer; with a weaker power the target stays and is taken.
  * The stop only moves in the position's favour and keeps the broker's stop distance from price.
  */
-export function keyLevelPlan({ position: p, sym, signal, levels, now = Date.now() }) {
+export function keyLevelPlan({ position: p, sym, signal, levels, now = Date.now(), extend = true }) {
   const buy = p.side === "BUY", dir = buy ? 1 : -1;
   const open = Number(p.open_price ?? p.entry), curSl = Number(p.sl), curTp = Number(p.tp);
   const digits = Number.isInteger(sym.digits) ? sym.digits : 2;
@@ -228,7 +230,8 @@ export function keyLevelPlan({ position: p, sym, signal, levels, now = Date.now(
   }
   // Trailing TP: near the target with a strong power, the next key level beyond it.
   let tp = null;
-  if (finite(curTp) && curTp > 0 && band === "strong") {
+  // Owner 2026-11-16 (docs/RFC_STRATEGY_EXECUTION.md): the target is extended only while the agent's confidence holds.
+  if (extend && finite(curTp) && curTp > 0 && band === "strong") {
     const near = Math.max(atr5 ? 0.5 * atr5 : 0, 3 * spreadPx, 0.2 * Math.abs(curTp - open));
     if (dir * (curTp - price) <= near) {
       const next = levels.filter((z) => (buy ? z.low > curTp + buffer : z.high < curTp - buffer)).sort((a, b) => (buy ? a.low - b.low : b.high - a.high))[0];
@@ -252,7 +255,7 @@ export function keyLevelPlan({ position: p, sym, signal, levels, now = Date.now(
  *               positions on the signal's side;
  *   scale-out   a position of 0.02 lots or more at 1.5R or its target banks half, once per position.
  */
-export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [], now = Date.now() } = {}) {
+export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [], now = Date.now(), extendOf = () => true } = {}) {
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
   const out = [];
   if (!finite(sym.bid) || !finite(sym.ask)) return out;
@@ -284,7 +287,7 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
     let movedSl = false;
     // Key-level management: SL+, trailing TP, and the close when the power turned against a winner.
     if (levels) {
-      const k = keyLevelPlan({ position: p, sym, signal, levels, now });
+      const k = keyLevelPlan({ position: p, sym, signal, levels, now, extend: extendOf(p) });
       if (k.close) {
         out.push({ id: `cl:${p.ticket}:pw:${Math.floor(signal.power_ms / 60_000)}`, kind: "close", ticket: p.ticket, reason: "power_reversal" });
         continue;
@@ -312,7 +315,7 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
       }
     }
 
-    if (!levels && targetExtTp != null && p.side === side && Number.isFinite(curTp) && (buy ? targetExtTp > curTp + 0.1 : targetExtTp < curTp - 0.1)) {
+    if (!levels && targetExtTp != null && extendOf(p) && p.side === side && Number.isFinite(curTp) && (buy ? targetExtTp > curTp + 0.1 : targetExtTp < curTp - 0.1)) {
       out.push({ id: `mt:${p.ticket}:${Math.round(targetExtTp * 100)}`, kind: "modify_tp", ticket: p.ticket, tp: roundTo(targetExtTp, digits), reason: "extended_tp" });
     }
 
@@ -357,7 +360,45 @@ export function openRiskAtStops(positions = [], sym = {}) {
   return total;
 }
 
-export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [] } = {}) {
+/**
+ * Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md), on the system's positions
+ * only, while the signal says the rules run (`strategy_execution`) and its decision is fresh (POWER_FRESH_MS):
+ *   lean flip        the Decision Engine's quorum lean (`power`) beyond LEAN_BAND against a position closes it, in
+ *                    profit or not: every system position on the flipped side ("auto close all"); neutral never;
+ *   confidence drop  a position in profit whose agent's confidence on its side dropped at this 15m evaluation
+ *                    (agent_conf against agent_conf_prev) is closed;
+ *   extend           the trailing and extended TP move only while that confidence is stable or rising.
+ * A position's agent is the one its open intent recorded (`agents`: intent id → agent); without one, the
+ * default agent's. One close per ticket and decision bar (the intent id carries the bar).
+ */
+export const LEAN_BAND = 0.15;
+export const DEFAULT_POSITION_AGENT = "zone_pullback";
+export function strategyExits({ positions = [], signal = null, sym = {}, agents = {}, now = Date.now(), skipTickets = [] } = {}) {
+  const intents = [];
+  const extendOf = () => true;
+  if (signal?.strategy_execution !== true) return { intents, extendOf };
+  const fresh = finite(signal.power_ms) && signal.power_ms > 0 && now - signal.power_ms <= POWER_FRESH_MS;
+  if (!fresh) return { intents, extendOf: () => false };
+  const bar = Math.floor(signal.power_ms / 60_000);
+  const conf = parseConfidences(signal.agent_conf), prev = parseConfidences(signal.agent_conf_prev);
+  const agentOf = (p) => (typeof agents?.[p.intent_id] === "string" && agents[p.intent_id]) || DEFAULT_POSITION_AGENT;
+  const trendOf = (p) => { const a = agentOf(p), k = p.side === "BUY" ? "long" : "short"; return confidenceTrend(conf[a]?.[k], prev[a]?.[k]); };
+  const skip = new Set(skipTickets.filter((t) => t != null));
+  for (const p of positions) {
+    if (p?.ticket == null || skip.has(p.ticket) || (p.side !== "BUY" && p.side !== "SELL") || !isOmegaOwned(p)) continue;
+    const dir = p.side === "BUY" ? 1 : -1;
+    if (finite(signal.power) && dir * signal.power <= -LEAN_BAND) {
+      intents.push({ id: `cl:${p.ticket}:lf:${bar}`, kind: "close", ticket: p.ticket, reason: "lean_flip", agent: agentOf(p) });
+      continue;
+    }
+    const open = Number(p.open_price ?? p.entry);
+    const move = Number.isFinite(open) && finite(sym.bid) && finite(sym.ask) ? (dir > 0 ? sym.bid - open : open - sym.ask) : 0;
+    if (move > 0 && trendOf(p) === "drop") intents.push({ id: `cl:${p.ticket}:cd:${bar}`, kind: "close", ticket: p.ticket, reason: "confidence_drop", agent: agentOf(p) });
+  }
+  return { intents, extendOf: (p) => ["stable", "rising"].includes(trendOf(p)) };
+}
+
+export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {} } = {}) {
   const intents = [], notes = [];
   const note = (code) => notes.push({ code });
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
@@ -399,11 +440,15 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     }
   }
   const account = executor.account ?? {}, sym = executor.symbol ?? {};
+  // The strategy agents' exits and the confidence gate on extending (owner 2026-11-16).
+  const exits = strategyExits({ positions, signal, sym, agents, now, skipTickets: intents.map((it) => it.ticket) });
+  if (exits.intents.length) note(exits.intents.some((it) => it.reason === "lean_flip") ? "lean_flip" : "confidence_drop");
+  intents.push(...exits.intents);
 
   // Position management runs on every sync, whatever the entry gates say (audit 2026-11-11, owner:
   // "perbaiki"): a blackout, the rollover quarantine, a pause, a wide spread or a full book only stop
   // NEW entries; the positions already open keep their break-even, extended target and scale-out.
-  intents.push(...manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket), now }));
+  intents.push(...manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket), now, extendOf: exits.extendOf }));
 
   if (!side) { note("no_side"); return { intents, notes }; }
 
@@ -511,6 +556,8 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   if (volume > budgetVolume) { volume = budgetVolume; note("lot_capped_daily_budget"); }
 
   const openIntent = { id, kind: "open", side, volume, entry: price, sl, tp, signal_issued_ms: issued, reason: "signal", stop_source: tight ? "stop_5m" : "plan", trigger_source: typeof signal.trigger_source === "string" ? signal.trigger_source : null };
+  // The strategy agent whose plan this is (owner 2026-11-16): its confidence governs the position's exit.
+  if (typeof signal.trade_agent === "string" && signal.trade_agent) openIntent.strategy = signal.trade_agent;
   if (volRegime !== "NORMAL") openIntent.vol_regime = volRegime;
   intents.push(openIntent);
   return { intents, notes };
