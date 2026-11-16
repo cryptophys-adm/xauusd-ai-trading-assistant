@@ -174,10 +174,10 @@ The room runs do not write their transcripts yet (`transcript_key` is null); the
 - **Every owner action** (open, message, correction, revision, pick, close) is a step with the verified Access identity and time, in the transcript and in `body_json`; the pick and the resulting proposal also go to the owner's Telegram (the existing bot, as `src/ledger-alerts.mjs` sends).
 - **Compliance:** `src/compliance.mjs` reads council steps like room steps (new reader), for the existing rules (no calibration talk, no order wording).
 - **The proposal's life** (shadow start, verdict, owner click, withdrawal) updates `proposal_status` and adds a step to the transcript.
-- **Owner corrections become labelled knowledge (ADR-0017 H3).** ADR-0017 and its item H3 could not be found in this repository or in the local platform checkout on 2026-11-16; the text below is this side's reading of the request and must be checked against H3 once cited (`[CONTRACT-6]`).
-  - A correction is stored as `{ label: "owner_correction", session_id, claim_ref, seat, text, evidence_refs }`.
-  - It reaches prompts only as an Aether text item on the existing learned path: labelled "learned", never canon (RFC_AETHER_KNOWLEDGE_GUARDIAN §0.4 and §3, constraint 5), shadow-tested by the knowledge arm, promoted by the owner.
-  - Per seat, corrections are counted on the Nexus page beside its reputation; they change no weight.
+- **Owner corrections become labelled knowledge (ADR-0017 H3).** Platform `architecture/adr/0017-human-ai-collaboration.md`, decision 4 ("Teaching: owner corrections become knowledge (Nexus)"): every agent post, metric reading, decision and card can be corrected or rated ("reading wrong", "invalidation too tight", "good call"); corrections become labelled knowledge for Aether with high weight (decision 3, owner 2026-11-14) and feed the agents' reputation; they are deduplicated by content hash and never refused. Phase H3: corrections and ratings in Nexus become knowledge. In a council:
+  - A correction or rating may target any council turn, claim or option. It is stored as `{ label: "owner_correction" | "owner_rating", session_id, step, claim_ref, seat, text, rating, evidence_refs, content_hash }`; the same content hash is stored once; nothing is refused (the guardian checks only that it carries no secret).
+  - It goes to Aether as labelled knowledge with high weight (decision 3). Aether keeps it "learned", never canon (RFC_AETHER_KNOWLEDGE_GUARDIAN §0.4, §3 constraint 5); its high weight puts it first in the knowledge arm's queue (`src/shadow-knowledge.mjs`), which still measures it in shadow before it reaches a live prompt. Open question 9: should an owner correction skip the shadow test?
+  - It feeds the seat's reputation (decision 4): new, a bounded owner-rating term in `src/reputation.mjs` (proposed: at most ±0.05 of the crowd weight per week, so one rating never floors or maxes a seat). The council itself still applies no weight (section 2).
 - Audit events for the platform: `[CONTRACT-6]`.
 
 ## 8. Cost
@@ -255,3 +255,4 @@ The platform session drafts a shared contract. Until it lands, every item below 
 6. Is the merge of the promotion PR the "click", or do you want an approve button on the Omega page (new, audited)?
 7. An owner on/off switch for councils on the Omega page, or the Worker variable only?
 8. Should a proposed topic ever run its openings before you join, so the session is ready when you open it (costs calls without you)?
+9. ADR-0017 decision 3 gives owner corrections high weight: should a correction made in a council skip the knowledge arm's shadow test and reach live prompts directly, or go first in its queue (this draft)?
