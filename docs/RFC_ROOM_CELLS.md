@@ -226,6 +226,18 @@ Reader 1 (scoring), as built:
 - `ROOM_RUNS_READ` `off` is the rollback.
 - The hourly comparison keeps reading the messages (`source: "messages"`), so it goes on checking the documents.
 
+Document v2 (2026-11-16, owner: "lanjutkan semua pembaca ke room_runs"), for readers 2-6:
+- The other readers need more than the final positions:
+  - message texts (`claim`, `argument`);
+  - the opening and the debate answer separately;
+  - message ids (the compliance cursor);
+  - per-call tokens and models (neuron allocation);
+  - the whole brief and conclusion;
+  - up to a year of history (replay).
+- So `cryptophys.room-run.v2` also stores every step of its run as stored: every column, in id order, in `body.steps`, plus `body.thread_id`.
+- `docRows(doc)` rebuilds the exact message rows, so each reader keeps its own logic.
+- The hourly pass upgrades v1 documents in place. It backfills the last 58 days once (at most 200 runs per pass); a marker in `room_runs_meta` then keeps later passes to the 48 h window.
+
 **P2c: the cell.**
 - `RoomCell` runs the rooms. D1 receives the run document only. The transcript goes to R2.
 - `agent_thread_messages` stays written in parallel (dual write) during the shadow window.

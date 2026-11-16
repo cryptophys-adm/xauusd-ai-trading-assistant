@@ -3051,7 +3051,7 @@ export default {
     }));
     // ADR-0015 phase 2a, in shadow (owner 2026-11-15; docs/RFC_ROOM_CELLS.md): the hour's concluded room runs as
     // run documents, then the comparison with what outcome scoring reads today. Nothing reads them yet.
-    ctx.waitUntil(deriveRoomRuns(env).then(async (derived) => {
+    ctx.waitUntil(deriveRoomRuns(env, { backfill: true }).then(async (derived) => {
       if (derived.status === "disabled") return;
       const compared = await compareRoomRuns(env);
       console.log("room_runs", JSON.stringify({ derived, compared }));

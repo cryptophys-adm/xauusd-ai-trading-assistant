@@ -8,6 +8,6 @@ export function ensureRoomRunsSchema(db: unknown): Promise<void>;
 export function resetRoomRunsSchemaCacheForTests(): void;
 export function buildRunDoc(rows: Array<Record<string, any>>, ids: { threadId: string; runId: string }): Record<string, any> | null;
 export function statementsFromDocs(docs: Array<Record<string, any>>): Map<string, Array<Record<string, any>>>;
-export function deriveRoomRuns(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function deriveRoomRuns(env: unknown, options?: { now?: number; backfill?: boolean }): Promise<Record<string, any>>;
 export function compareRoomRuns(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
 export function roomRunsStatus(env: unknown, options?: { limit?: number }): Promise<Record<string, any>>;
