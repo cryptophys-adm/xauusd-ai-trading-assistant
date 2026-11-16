@@ -280,7 +280,7 @@ The platform session's contract (`docs/design/HAIC-H0-H1.md` §4, branch `claude
 ## 12. Phased rollout
 
 - **P0: design approval** (this document): done, the owner's decisions in section 14.
-- **P1: evidence only, no model call.** `src/cfc-triggers.mjs` and the pack builder; `GET /api/council/evidence?topic=` (new, read-only); suggested-topic cards on the Call for Councils page. Exit: packs for three real topics checked by the owner.
+- **P1: evidence only, no model call.** `src/cfc-triggers.mjs` and the pack builder; `GET /api/council/evidence?topic=` (new, read-only); suggested-topic cards on the Call for Councils page. Exit: packs for three real topics checked by the owner. Status: built 2026-11-16 (`src/cfc-pack.mjs`, `src/cfc-triggers.mjs`, `GET /api/council/suggestions`, D1 `cfc_suggestions` in migration `0024`, `CFC_MODE` `suggest` by default; see `docs/SSOT.md`); the owner's check of three packs is open.
 - **P2: sessions in shadow.** `CouncilCell`, `council_sessions`, R2 transcripts, the push topic, the Omega route, the validators, the budget. Options are published to the kernel; a pick in Cerebrum is stored as a would-be proposal; nothing is started. Exit: 5 sessions with no budget breach, all claims resolvable, the owner judges the syntheses useful.
 - **P3: handoff to shadow arms.** `plan_arm`, `threshold_arm`, `agent_hold` first (existing paths); then `strategy_variant` (PR per variant) and `management_arm`; `knowledge_note` once Aether has its ingress. Live only by the owner's click.
 - **P4: shared contract.** Replace the placeholders with `[CONTRACT-1..6]`; align names, schemas and audit events.
