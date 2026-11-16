@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-16
+- chore(ci): `dependency-audit` is a required check on `main` (BACKLOG B-14). The owner added it to the live "main protection" ruleset, and `protection-guard` failed every PR until `ops/branch-ruleset.json` declared it ("main requires dependency-audit, which ops/branch-ruleset.json does not declare"); the declaration, its test, the workflow note, SSOT and BACKLOG now follow.
 - feat(omega): EA health to the Cryptophys-Cerebrum chat through the platform kernel (owner 2026-11-16: "info terkait HeartBeat EA di Telegram jangan masuk ke Cryptophys-Nexus, tapi ke Cryptophys-Cerebrum"; "pakai cara 2 lewat kernel"; "pindahkan yang nomor 1 saja"). The "Cerebrum Self-Healing Action" message no longer goes to the Nexus chat. `src/ea-heartbeat-relay.mjs` publishes the recoveries recorded in `omega_events` as one `xauusd_digest` report from `xauusd-risk-manager` with `body.telegram_topic = "ea_heartbeat"`, at most one per 30 minutes; the kernel forwards it to "Cerebrum alerts" (platform CR claude/ea-heartbeat-relay). Every other Telegram message stays in Nexus. See `docs/SSOT.md` §1.
 
 ## 2026-11-15
