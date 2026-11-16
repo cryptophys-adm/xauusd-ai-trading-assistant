@@ -148,6 +148,10 @@
     // live prompt. LEARNED_KNOWLEDGE_ENABLED reads the bundled pack (knowledge/learned/pack.json) into
     // the rooms: the pack changes only by an owner PR, after the shadow arm found an item better, and is
     // empty today, so it changes no prompt until then. "false" turns either off at once.
+    // Call for Councils P1 (owner 2026-11-16: "tahap P1 mulai"; docs/RFC_CALL_FOR_COUNCILS.md §12): "suggest" runs the
+    // hourly deterministic suggestion flags (no model call; the cards on the Call for Councils page); "off" runs
+    // nothing; "on" is kept for the sessions of phase P2 and in P1 behaves as "suggest". No mode starts a session.
+    "CFC_MODE": "suggest",
     "SHADOW_KNOWLEDGE_ENABLED": "true",
     "LEARNED_KNOWLEDGE_ENABLED": "true"
   },
