@@ -570,12 +570,32 @@ test("after a gap, a pull that brought no new bar backs off instead of repeating
   const fetched = new Date((now - 600) * 1000).toISOString();
   assert.equal(planRequest(d1, { candles: [last], fetched_at: fetched }, now), null, "10 minutes after an empty pull: wait");
   assert.equal(gapBackoffSeconds(d1), 3600);
-  assert.ok(planRequest(d1, { candles: [last], fetched_at: fetched }, now + 3000 + 1), "an hour after the empty pull: again");
+  // Since 2026-11-16 (task #89) it waits for the grid's next close, not an hour: the week's first D1 bar closes
+  // Monday 22:00 UTC (+ the settle), so an hour later is still too early.
+  assert.equal(planRequest(d1, { candles: [last], fetched_at: fetched }, now + 3000 + 1), null, "an hour after the empty pull: the bar cannot have closed yet");
+  assert.ok(planRequest(d1, { candles: [last], fetched_at: fetched }, Date.parse("2026-11-09T22:01:00Z") / 1000), "at the grid's next close: again");
   // A normal hour is not held back: the H1 bar that just closed is pulled on schedule.
   const h1Last = { ...last, time: Date.parse("2026-11-09T00:00:00Z") / 1000 };
   const h1Now = Date.parse("2026-11-09T02:02:00Z") / 1000;
   assert.ok(planRequest(h1, { candles: [h1Last], fetched_at: new Date((h1Now - 60) * 1000).toISOString() }, h1Now));
   assert.equal(gapBackoffSeconds(h1), 900);
+});
+
+test("after a gap the pull waits for the grid's next close; a grid close that passed while open falls back to the hourly backoff (task #89, 2026-11-16)", async () => {
+  const { planRequest, gapRetrySec } = await import("../src/tradingview-source.mjs");
+  const sec = (s) => Date.parse(s) / 1000;
+  const spec = (key) => SERIES.find((s) => s.key === key);
+  const bar = (iso) => ({ time: sec(iso), open: 1, high: 1, low: 1, close: 1, volume: 1 });
+  const d1 = spec("OANDA:XAUUSD|1D"), h4 = spec("OANDA:XAUUSD|4h");
+  // Monday 2026-11-16: Friday's D1 bar opened Thursday 22:00; the first pull after the reopen came at Sunday 23:05.
+  assert.equal(new Date(gapRetrySec(d1, sec("2026-11-12T22:00:00Z"), sec("2026-11-15T23:05:00Z")) * 1000).toISOString(), "2026-11-16T22:01:00.000Z");
+  // The 4h bar of Friday 18:00: the week's first bar closes Monday 02:00 (+ the settle).
+  assert.equal(new Date(gapRetrySec(h4, sec("2026-11-13T18:00:00Z"), sec("2026-11-15T23:05:00Z")) * 1000).toISOString(), "2026-11-16T02:01:00.000Z");
+  const cached = { candles: [bar("2026-11-13T18:00:00Z")], fetched_at: "2026-11-15T23:05:00.000Z" };
+  assert.equal(planRequest(h4, cached, sec("2026-11-16T01:30:00Z")), null);
+  assert.ok(planRequest(h4, cached, sec("2026-11-16T02:01:00Z")));
+  // A pull right after the 02:00 close, the market open, that still found nothing (a session moved by DST): hourly again.
+  assert.equal(new Date(gapRetrySec(h4, sec("2026-11-13T18:00:00Z"), sec("2026-11-16T02:05:00Z")) * 1000).toISOString(), "2026-11-16T03:05:00.000Z");
 });
 
 test("an idle up_to_date minute writes no refresh summary; a change or a 30-minute-old summary does (KV writes, 2026-11-11)", async () => {
