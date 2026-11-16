@@ -1,6 +1,6 @@
 # RFC: Room cells and run documents (ADR-0015 phase 2, xauusd)
 
-**Status: P2a live in shadow (2026-11-15). P2b reader 1 (outcome scoring) live 2026-11-16, owner: "tidak perlu menunggu, langsung pindah ke room_runs" (the first non-empty comparison, 01:06 UTC, was 4/4 and 1/1 equal). Readers 2-6 and P2c not started.**
+**Status: P2a live in shadow (2026-11-15). P2b done 2026-11-16: every reader of a concluded run reads the run documents (the v2 backfill marker was set at 07:06 UTC). P2c is parked (BACKLOG B-16): with the reads down about 98%, it would only cut about 3,000-3,800 message writes a day, while it moves the rooms into a Durable Object on the live decision path.**
 - The owner approves it before any implementation (relayed by the orchestrator, 2026-11-15).
 - ADR-0015 phase 2 was deferred on 2026-11-14 ("setuju tunda"). This document is the plan to un-defer it.
 
