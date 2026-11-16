@@ -245,6 +245,10 @@ Document v2 (2026-11-16, owner: "lanjutkan semua pembaca ke room_runs"), for rea
   - Every step is still keyed by its message id, so a recheck is a no-op.
   - On the switch, the documents of the last 2 h are rechecked.
   - The per-100 counts come from the documents' steps, counted in D1 (`json_each`). A run still in progress is counted once it concludes.
+- Reader 4 (neuron allocation, `ROOM_RUNS_READ_ALLOCATION`):
+  - The calls and tokens per day, room, agent and model of the War Room and the 1H/4H/D1 rooms come from the documents' steps, grouped in D1 (`json_each`).
+  - The other rooms (Macro, News Daily, news threads) have no documents. Their messages are read only for the threads active in the window (`agent_threads.updated_at`, then the `thread_id` index), not by a scan of the whole table.
+  - The runs concluded since the last pass are derived on read, so only the run in progress is missing; it is counted once it concludes. In production, 724 of 725 runs since 2026-11-05 have a conclusion.
 
 **P2c: the cell.**
 - `RoomCell` runs the rooms. D1 receives the run document only. The transcript goes to R2.
