@@ -1039,7 +1039,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
      - version provenance: tags, `/health` commit and DNA `deployed_commit`;
      - main protection with `protection-guard` (rule 7);
      - the required `typecheck`;
-     - an advisory npm `dependency-audit` on every PR and daily;
+     - an npm `dependency-audit` on every PR and daily: since 2026-11-16 a high or critical advisory, or an audit that gave no report, fails the job, but it is not a required check (the report of 2026-11-16 found 0 advisories; making it required is BACKLOG B-14);
      - one tagged deploy path per Worker, with Workers Builds production set to versions-only (rule 8).
    - **What the platform does:**
      - reads the DNA (`organism.json` and the OrganismDna RPC), `/health` and the versions API;

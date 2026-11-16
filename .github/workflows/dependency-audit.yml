@@ -3,8 +3,10 @@ name: Dependency audit
 # Cut-over option (D), owner 2026-11-15: xauusd adopts the platform's gates, item 2. `npm audit --audit-level=high`
 # for every npm package with dependencies: the repository root (no lockfile is committed, so the lockfile is
 # resolved fresh, as `npm install` does in CI and deploys) and the Nexus UI (its committed package-lock.json).
-# bridge/omega-bridge has no dependencies. ADVISORY for now: findings are reported as warnings and in the job
-# summary, and the job passes. It becomes a required check only after the findings are reported to the owner.
+# bridge/omega-bridge has no dependencies. A high or critical advisory, or an audit that gave no report, fails the job
+# (red on the pull request and in the daily run); moderate and low stay in the summary. It is NOT a required check yet:
+# the report of 2026-11-16 found 0 advisories in both packages, and making it required is BACKLOG item B-14 (owner
+# 2026-11-16: "simpan dulu sebagai backlog"; one PR adding it to ops/branch-ruleset.json, then one owner click).
 
 on:
   pull_request:
@@ -28,20 +30,30 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          failed=0
           report() {
             local dir="$1" label="$2"
             local out counts high critical
             out="$(cd "$dir" && npm audit --json 2>/dev/null)"
+            # An audit that could not run (no registry answer) is a failure, never an empty pass.
+            if ! jq -e '.metadata.vulnerabilities' >/dev/null 2>&1 <<<"$out"; then
+              echo "::error::$label: npm audit gave no report."
+              echo "| $label | no report |" >> "$GITHUB_STEP_SUMMARY"
+              failed=1
+              return
+            fi
             counts="$(jq -c '.metadata.vulnerabilities // {}' <<<"$out")"
             high="$(jq -r '.metadata.vulnerabilities.high // 0' <<<"$out")"
             critical="$(jq -r '.metadata.vulnerabilities.critical // 0' <<<"$out")"
             echo "| $label | $counts |" >> "$GITHUB_STEP_SUMMARY"
             if [ "$high" != "0" ] || [ "$critical" != "0" ]; then
-              echo "::warning::$label: $high high and $critical critical npm advisories (advisory gate, not blocking yet)."
+              echo "::error::$label: $high high and $critical critical npm advisories."
               jq -r '.vulnerabilities | to_entries[] | select(.value.severity=="high" or .value.severity=="critical") | "- \(.key): \(.value.severity)"' <<<"$out" >> "$GITHUB_STEP_SUMMARY"
+              failed=1
             fi
           }
-          { echo "### npm audit (advisory)"; echo ""; echo "| package | vulnerabilities |"; echo "|---|---|"; } >> "$GITHUB_STEP_SUMMARY"
-          npm install --package-lock-only --no-audit --no-fund >/dev/null
+          { echo "### npm audit (high and critical fail)"; echo ""; echo "| package | vulnerabilities |"; echo "|---|---|"; } >> "$GITHUB_STEP_SUMMARY"
+          npm install --package-lock-only --no-audit --no-fund >/dev/null || { echo "::error::the repository root's lockfile could not be resolved."; exit 1; }
           report . "repository root"
           report workers/xauusd-nexus-dashboard/ui "Nexus UI"
+          exit "$failed"
