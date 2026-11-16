@@ -182,6 +182,22 @@ export function healPlan(spec, cached, nowSec) {
   return { symbol: spec.symbol, interval: spec.interval, count, bootstrap: false, heal: true };
 }
 
+/**
+ * After a gap, when the next pull may go out again, given that the last pull (at `fetchedSec`) brought no new bar
+ * (TradingView quota, owner 2026-11-16, task #89). The bars stay on their grid across a weekend (the cached bar's
+ * open plus whole bars), so the next bar can only close at the grid's next close: the pull waits for it. Production
+ * Monday 2026-11-16: the D1 bar was pulled every hour from the reopen, because its first bar of the week closes only
+ * at 22:00 UTC (about 22 calls a Monday), and each 4h series every hour until 02:00. When the last pull came within
+ * gapBackoffSeconds after a grid close that fell while the market was open and still found nothing (a session moved
+ * by a DST change, a holiday), the grid is not trusted and the pull backs off by gapBackoffSeconds as before.
+ */
+export function gapRetrySec(spec, lastTime, fetchedSec) {
+  const settle = settleSeconds(spec);
+  const prevClose = lastTime + Math.floor((fetchedSec - settle - lastTime) / spec.seconds) * spec.seconds + settle;
+  const missed = fetchedSec - prevClose < gapBackoffSeconds(spec) && !marketClosed(spec.symbol, prevClose - settle - 1);
+  return missed ? fetchedSec + gapBackoffSeconds(spec) : prevClose + spec.seconds;
+}
+
 export function planRequest(spec, cached, nowSec) {
   const last = cached?.candles?.at(-1);
   if (!last) return { symbol: spec.symbol, interval: spec.interval, count: Math.min(spec.retain, MAX_GATEWAY_COUNT), bootstrap: true };
@@ -196,7 +212,7 @@ export function planRequest(spec, cached, nowSec) {
   // run after the reopen, each pull returning no new bar (the D1 alone about 250 pulls of the 800).
   // So once a pull after a gap brought nothing new, wait gapBackoffSeconds before the next one.
   const fetchedSec = Math.floor(Date.parse(cached?.fetched_at || "") / 1000);
-  if (nowSec - last.time > 3 * spec.seconds && Number.isFinite(fetchedSec) && fetchedSec >= nextCloseSec && nowSec - fetchedSec < gapBackoffSeconds(spec)) return null;
+  if (nowSec - last.time > 3 * spec.seconds && Number.isFinite(fetchedSec) && fetchedSec >= nextCloseSec && nowSec < gapRetrySec(spec, last.time, fetchedSec)) return null;
   // A cadence series is pulled only once a new cadence boundary (the 15m close) has passed since
   // its last cached bar; the pull then brings every bar up to that boundary.
   if (spec.cadence && last.time + spec.seconds >= Math.floor(nowSec / spec.cadence) * spec.cadence) return null;
