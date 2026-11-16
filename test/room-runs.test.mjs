@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
-import { buildRunDoc, statementsFromDocs, deriveRoomRuns, compareRoomRuns, roomRunsStatus, resetRoomRunsSchemaCacheForTests, roomRunsEnabled, roomRunsReadEnabled } from "../src/room-runs.mjs";
+import { buildRunDoc, statementsFromDocs, deriveRoomRuns, compareRoomRuns, roomRunsStatus, resetRoomRunsSchemaCacheForTests, roomRunsEnabled, roomRunsReadEnabled, docRows, RUN_DOC_VERSION } from "../src/room-runs.mjs";
 import { agentStatements } from "../src/outcome-scoring.mjs";
 
 function d1() {
@@ -134,4 +134,34 @@ test("ROOM_RUNS_READ off is the rollback; bars before the derive window still co
   const fromMessages = await agentStatements({ DB: db }, "15", "2026-11-12T00:00:00.000Z", { now: later });
   assert.deepEqual(norm(wide), norm(fromMessages));
   assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM room_runs").get().n, 0, "outside the window nothing is derived");
+});
+
+// Document v2 (owner 2026-11-16, "lanjutkan semua pembaca ke room_runs"): every step as stored, for the other readers.
+test("a v2 document rebuilds its run's message rows exactly, every column, in id order", async () => {
+  resetRoomRunsSchemaCacheForTests();
+  const db = d1(); seed(db);
+  const env = { DB: db, ROOM_RUNS_SHADOW: "on" };
+  await deriveRoomRuns(env, { now: NOW });
+  for (const doc of db.raw.prepare("SELECT * FROM room_runs").all()) {
+    assert.equal(doc.doc_version, RUN_DOC_VERSION);
+    const thread = JSON.parse(doc.body_json).thread_id;
+    const original = db.raw.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").all(thread, doc.run_id).map((r) => ({ ...r }));
+    assert.deepEqual(docRows(doc), original, `${doc.room} ${doc.run_id}`);
+  }
+  assert.equal(docRows({ run_id: "x", body_json: JSON.stringify({ agents: [] }) }), null, "a v1 document has no steps");
+});
+
+test("v1 documents are upgraded in place, and the hourly backfill reaches older runs once, then stops", async () => {
+  resetRoomRunsSchemaCacheForTests();
+  const db = d1(); seed(db);
+  const env = { DB: db, ROOM_RUNS_SHADOW: "on" };
+  await deriveRoomRuns(env, { now: NOW });
+  db.raw.prepare("UPDATE room_runs SET doc_version = 'cryptophys.room-run.v1', body_json = json_remove(body_json, '$.steps')").run();
+  const later = NOW + 10 * 86_400_000; // the seeded runs are now older than the 48 h window
+  assert.deepEqual(await deriveRoomRuns(env, { now: later }), { status: "ok", derived: 0, skipped: 0 }, "the short window does not reach them");
+  assert.deepEqual(await deriveRoomRuns(env, { now: later, backfill: true }), { status: "ok", derived: 4, skipped: 0, backfill: "running" });
+  assert.ok(db.raw.prepare("SELECT doc_version FROM room_runs").all().every((r) => r.doc_version === RUN_DOC_VERSION));
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM room_runs").get().n, 4, "upgraded in place, no duplicates");
+  assert.deepEqual(await deriveRoomRuns(env, { now: later, backfill: true }), { status: "ok", derived: 0, skipped: 0, backfill: "done" });
+  assert.deepEqual(await deriveRoomRuns(env, { now: later, backfill: true }), { status: "ok", derived: 0, skipped: 0 }, "after the marker, the short window only");
 });

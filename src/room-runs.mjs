@@ -9,7 +9,9 @@
 import { agentStatements } from "./outcome-scoring.mjs";
 import { warRoomThreadIds } from "./thread-windows.mjs";
 
-export const RUN_DOC_VERSION = "cryptophys.room-run.v1";
+// v2 (owner 2026-11-16, "lanjutkan semua pembaca ke room_runs"): the document also carries every step of its run as
+// stored (all columns, ordered by id), so each reader can rebuild the exact message rows (docRows) it reads today.
+export const RUN_DOC_VERSION = "cryptophys.room-run.v2";
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 /** The rooms derived in this phase: the thread(s), its timeframe, and the bar length. */
@@ -23,6 +25,8 @@ export const RUN_ROOMS = Object.freeze({
 export const MAX_RUNS_PER_PASS = 200;
 /** How far back a pass looks for concluded runs. */
 export const DERIVE_WINDOW_MS = 2 * DAY_MS;
+/** The one-time backfill (and v1 → v2 upgrade) looks this far back, hourly, until a pass finds nothing left. */
+export const BACKFILL_WINDOW_MS = 58 * DAY_MS; // within warRoomThreadIds' 62 daily threads
 
 export function roomRunsEnabled(env) {
   return String(env?.ROOM_RUNS_SHADOW ?? "off").trim().toLowerCase() === "on";
@@ -76,7 +80,8 @@ export const ROOM_RUNS_SCHEMA_SQL = [
   mismatched INTEGER NOT NULL,
   sample_json TEXT
 )`,
-  "CREATE INDEX IF NOT EXISTS idx_room_runs_compare_at ON room_runs_compare(timeframe, checked_at)"
+  "CREATE INDEX IF NOT EXISTS idx_room_runs_compare_at ON room_runs_compare(timeframe, checked_at)",
+  "CREATE TABLE IF NOT EXISTS room_runs_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)"
 ];
 let schemaReady = false;
 export async function ensureRoomRunsSchema(db) {
@@ -133,9 +138,28 @@ export function buildRunDoc(rows, { threadId, runId }) {
     body: {
       conclusion: conclusion.status === "ok" ? { stance: conclusion.stance ?? null, confidence: conclusion.confidence ?? null, summary: cbody.summary ?? null, reasons: cbody.reasons ?? [], dissent: cbody.dissent ?? [], metrics: cbody.metrics ?? null } : null,
       agents: list,
-      brief: { candle_key: briefBody.candle_key ?? candleKey, roster: Array.isArray(briefBody.roster) ? briefBody.roster : null }
+      brief: { candle_key: briefBody.candle_key ?? candleKey, roster: Array.isArray(briefBody.roster) ? briefBody.roster : null },
+      thread_id: threadId,
+      steps: [...rows].sort((a, b) => Number(a.id) - Number(b.id)).map((r) => {
+        const step = {};
+        for (const c of STEP_COLUMNS) step[c] = r[c] ?? null;
+        return step;
+      })
     }
   };
+}
+
+/** The stored columns of a message kept in a v2 document's steps (thread_id and run_id come from the document). */
+export const STEP_COLUMNS = Object.freeze(["id", "step", "parent_id", "agent", "bar_time", "ts", "stance", "confidence", "body_json", "refs_json", "model", "status", "latency_ms", "fallback_used", "usage_tokens"]);
+
+/**
+ * Pure: a v2 document's message rows, exactly as agent_thread_messages stores them (every column, ordered by id), so
+ * a reader that moves to room_runs runs its own logic unchanged. A v1 document (no steps) gives null.
+ */
+export function docRows(doc) {
+  const body = doc?.body ?? parse(doc?.body_json, null);
+  if (!body || !Array.isArray(body.steps) || !body.thread_id) return null;
+  return body.steps.map((st) => ({ thread_id: body.thread_id, run_id: doc.run_id, ...st }));
 }
 
 /**
@@ -189,36 +213,44 @@ export async function docStatements(env, timeframe, sinceIso, { now = Date.now()
 }
 
 /** The concluded runs of the window not yet derived, per thread, at most MAX_RUNS_PER_PASS. */
-async function pendingRuns(db, { now }) {
-  const since = new Date(now - DERIVE_WINDOW_MS).toISOString();
+async function pendingRuns(db, { now, windowMs = DERIVE_WINDOW_MS }) {
+  const since = new Date(now - windowMs).toISOString();
   const threads = [...(warRoomThreadIds(since, now) ?? []), "tf:H1", "tf:H4", "tf:D1"];
   const out = [];
   for (const threadId of threads) {
     if (out.length >= MAX_RUNS_PER_PASS) break;
     const room = roomOf(threadId);
-    const rows = (await db.prepare("SELECT m.run_id FROM agent_thread_messages m LEFT JOIN room_runs r ON r.room = ? AND r.run_id = m.run_id WHERE m.thread_id = ? AND m.bar_time >= ? AND m.step = 'conclusion' AND r.run_id IS NULL ORDER BY m.run_id LIMIT ?")
-      .bind(room, threadId, since, MAX_RUNS_PER_PASS - out.length).all()).results || [];
+    const rows = (await db.prepare("SELECT m.run_id FROM agent_thread_messages m LEFT JOIN room_runs r ON r.room = ? AND r.run_id = m.run_id WHERE m.thread_id = ? AND m.bar_time >= ? AND m.step = 'conclusion' AND (r.run_id IS NULL OR r.doc_version != ?) ORDER BY m.run_id LIMIT ?")
+      .bind(room, threadId, since, RUN_DOC_VERSION, MAX_RUNS_PER_PASS - out.length).all()).results || [];
     for (const r of rows) out.push({ threadId, runId: r.run_id });
   }
   return out;
 }
 
 /** The hourly pass: derive the window's new run documents. Never throws; returns counts. */
-export async function deriveRoomRuns(env, { now = Date.now() } = {}) {
+export async function deriveRoomRuns(env, { now = Date.now(), backfill = false } = {}) {
   if (!roomRunsEnabled(env)) return { status: "disabled" };
   const db = env?.DB;
   if (!db) return { status: "unavailable" };
   await ensureRoomRunsSchema(db);
+  // The hourly pass also backfills (and upgrades older document versions) over BACKFILL_WINDOW_MS until a pass
+  // finds nothing left; then a marker keeps every later pass to the short window.
+  const BACKFILL_KEY = "backfill:" + RUN_DOC_VERSION;
+  const backfilling = backfill && !(await db.prepare("SELECT value FROM room_runs_meta WHERE key = ?").bind(BACKFILL_KEY).first());
+  const pending = await pendingRuns(db, { now, windowMs: backfilling ? BACKFILL_WINDOW_MS : DERIVE_WINDOW_MS });
   let derived = 0, skipped = 0;
-  for (const { threadId, runId } of await pendingRuns(db, { now })) {
+  for (const { threadId, runId } of pending) {
     const rows = (await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(threadId, runId).all()).results || [];
     const doc = buildRunDoc(rows, { threadId, runId });
     if (!doc) { skipped += 1; continue; }
-    await db.prepare("INSERT INTO room_runs (room, run_id, timeframe, candle_key, bar_close, status, stance, bias, confidence, agents_heard, agents_failed, shadow_seats, model_calls, fallbacks, tokens, opened_at, concluded_at, transcript_key, doc_version, body_json, derived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(room, run_id) DO NOTHING")
+    await db.prepare("INSERT INTO room_runs (room, run_id, timeframe, candle_key, bar_close, status, stance, bias, confidence, agents_heard, agents_failed, shadow_seats, model_calls, fallbacks, tokens, opened_at, concluded_at, transcript_key, doc_version, body_json, derived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(room, run_id) DO UPDATE SET timeframe = excluded.timeframe, candle_key = excluded.candle_key, bar_close = excluded.bar_close, status = excluded.status, stance = excluded.stance, bias = excluded.bias, confidence = excluded.confidence, agents_heard = excluded.agents_heard, agents_failed = excluded.agents_failed, shadow_seats = excluded.shadow_seats, model_calls = excluded.model_calls, fallbacks = excluded.fallbacks, tokens = excluded.tokens, opened_at = excluded.opened_at, concluded_at = excluded.concluded_at, transcript_key = excluded.transcript_key, doc_version = excluded.doc_version, body_json = excluded.body_json, derived_at = excluded.derived_at")
       .bind(doc.room, doc.run_id, doc.timeframe, doc.candle_key, doc.bar_close, doc.status, doc.stance, doc.bias, doc.confidence, doc.agents_heard, doc.agents_failed, doc.shadow_seats, doc.model_calls, doc.fallbacks, doc.tokens, doc.opened_at, doc.concluded_at, doc.transcript_key, doc.doc_version, JSON.stringify(doc.body), new Date(now).toISOString()).run();
     derived += 1;
   }
-  return { status: "ok", derived, skipped };
+  if (backfilling && pending.length === 0) {
+    await db.prepare("INSERT INTO room_runs_meta (key, value, updated_at) VALUES (?, 'done', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at").bind(BACKFILL_KEY, new Date(now).toISOString()).run();
+  }
+  return { status: "ok", derived, skipped, ...(backfilling ? { backfill: pending.length ? "running" : "done" } : {}) };
 }
 
 const canon = (list) => JSON.stringify([...list].sort((a, b) => a.subject.localeCompare(b.subject)).map((s) => [s.subject, s.source, s.stance, s.confidence]));
