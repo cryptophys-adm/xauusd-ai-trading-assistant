@@ -6,6 +6,7 @@
 
 import { readTimeframeThread } from "./timeframe-threads.mjs";
 import { readWarRoom } from "./war-room.mjs";
+import { cardRuns, ROOM_OF_TIMEFRAME } from "./room-runs.mjs";
 import { finalEntries } from "./reputation.mjs";
 import { SCORING_VERSION } from "./outcome-scoring.mjs";
 import { KNOWLEDGE_BASE_V4 } from "./knowledge-base.generated.mjs";
@@ -79,7 +80,16 @@ export async function loadDecisionCards(env, { chart = "60", limit = 6 } = {}) {
   if (!(chart in TF_CHART)) return [];
   const n = Math.max(1, Math.min(24, limit));
   const threads = [];
-  if (chart === "15") {
+  // ADR-0015 P2b reader 5 (owner 2026-11-16): the runs and their rows from the run documents (room_runs), the room's
+  // run in progress from the messages; the messages alone until the documents are ready or with
+  // ROOM_RUNS_READ_CARDS off.
+  const docs = await cardRuns(env, ROOM_OF_TIMEFRAME[chart], n);
+  if (docs && chart === "15") {
+    for (const r of docs) { const t = await readWarRoom(db, { barTime: r.run_id, rows: r.rows }); if (t) threads.push({ t, key: t.bar_time, threadId: `warroom:${String(t.bar_time).slice(0, 10)}`, barTime: t.bar_time }); }
+  } else if (docs) {
+    const tf = TF_CHART[chart];
+    for (const r of docs) { const t = await readTimeframeThread(db, tf, { runId: r.run_id, rows: r.rows }); if (t) threads.push({ t, key: t.candle_key, threadId: `tf:${tf}`, barTime: t.bar_close }); }
+  } else if (chart === "15") {
     const runs = (await db.prepare("SELECT run_id FROM agent_thread_messages WHERE thread_id >= 'warroom:' AND thread_id < 'warroom;' AND step = 'conclusion' ORDER BY thread_id DESC, run_id DESC LIMIT ?").bind(n).all()).results || [];
     for (const r of runs) { const t = await readWarRoom(db, { barTime: r.run_id }); if (t) threads.push({ t, key: t.bar_time, threadId: `warroom:${String(t.bar_time).slice(0, 10)}`, barTime: t.bar_time }); }
   } else {

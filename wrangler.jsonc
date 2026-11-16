@@ -131,6 +131,7 @@
     "ROOM_RUNS_READ_REPLAY": "on",
     "ROOM_RUNS_READ_COMPLIANCE": "on",
     "ROOM_RUNS_READ_ALLOCATION": "on",
+    "ROOM_RUNS_READ_CARDS": "on",
     "NEWS_DAILY_MAX_CALLS_PER_HOUR": "6",
     // Room memo (owner 2026-11-11, "kurangi neuron/hari tanpa mengurangi kapabilitas"): a room step whose
     // whole request equals one answered before reuses that answer (src/room-memo.mjs). "false" = shadow:

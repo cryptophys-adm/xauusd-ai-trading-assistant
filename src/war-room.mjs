@@ -803,9 +803,10 @@ export async function runMissedWarRoom(env, { now = Date.now(), clock = () => Da
 /** The latest War Room run (or the one at barTime): brief, bus, debate and conclusion. */
 /**
  * `metrics` (A3): also the bar's shadow answers in metric form per agent (src/metric-shadow.mjs), for Nexus' metric
- * chips; off for the other readers (decision cards, strategy), which never see shadow answers.
+ * chips; off for the other readers (decision cards, strategy), which never see shadow answers. `rows`: the run's
+ * message rows, already read (the decision cards rebuild them from the run document); otherwise they are read here.
  */
-export async function readWarRoom(db, { barTime = null, metrics = false } = {}) {
+export async function readWarRoom(db, { barTime = null, metrics = false, rows: docRows = null } = {}) {
   await ensureThreadSchema(db);
   const run = barTime
     ? new Date(Date.parse(barTime)).toISOString()
@@ -813,7 +814,8 @@ export async function readWarRoom(db, { barTime = null, metrics = false } = {}) 
     // every room message (resource audit 2026-11-14: 20,906 rows read).
     : (await db.prepare("SELECT run_id AS r FROM agent_thread_messages WHERE thread_id >= 'warroom:' AND thread_id < 'warroom;' ORDER BY thread_id DESC, run_id DESC LIMIT 1").first())?.r;
   if (!run) return null;
-  const rows = ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(`warroom:${run.slice(0, 10)}`, run).all()).results || []).map(rowToThreadMessage);
+  // ADR-0015 P2b reader 5: the decision cards pass the run's rows rebuilt from its document (room_runs docRows).
+  const rows = (docRows?.length ? docRows : ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(`warroom:${run.slice(0, 10)}`, run).all()).results || [])).map(rowToThreadMessage);
   if (!rows.length) return null;
   const brief = rows.find(m => m.step === "brief") || null;
   const pick = (m) => ({ id: m.agent, name: agentName(m.agent), status: m.status, model: m.model, fallback_used: m.fallback_used, errors: m.errors, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, ts: m.ts, claim: m.claim, argument: m.argument, rebuts: m.rebuts, rebuts_names: (m.rebuts || []).map(agentName), conceded: m.conceded === true, metrics: m.metrics ?? [] });

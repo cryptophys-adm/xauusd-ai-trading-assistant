@@ -267,7 +267,47 @@ export async function runRowsFromDocs(env, room, floorIso, { now = Date.now(), f
   }
 }
 
-/** The concluded runs of the window not yet derived, per thread, at most MAX_RUNS_PER_PASS. */
+/**
+ * P2b reader 5 (decision cards, owner 2026-11-16): the latest `limit` runs of a room, newest first, as
+ * { run_id, candle_key, rows }, with each run's message rows rebuilt from its document (docRows). For the 1H/4H/D1
+ * rooms, one run per candle (its latest session), as the cards key on the candle; the room's newest run comes first,
+ * from the messages, while it has no document yet (in progress). The War Room's cards are concluded runs only, so
+ * they come from the documents alone. Null until the documents are ready, or when they cannot be read (the caller
+ * reads the messages).
+ */
+export async function cardRuns(env, room, limit, { now = Date.now() } = {}) {
+  const db = env?.DB;
+  if (!db || !RUN_ROOMS[room] || !roomRunsReaderEnabled(env, "cards") || !(await docsReady(env, { now }))) return null;
+  try {
+    const out = [];
+    if (room !== "warroom") {
+      const latest = (await db.prepare("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id = ?").bind(room).first())?.r;
+      const documented = latest ? await db.prepare("SELECT 1 AS d FROM room_runs WHERE room = ? AND run_id = ?").bind(room, latest).first() : null;
+      if (latest && !documented) {
+        const brief = await db.prepare("SELECT json_extract(body_json, '$.candle_key') AS k FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? AND step = 'brief'").bind(room, latest).first();
+        if (brief?.k) out.push({ run_id: latest, candle_key: brief.k, rows: null });
+      }
+    }
+    const docs = room === "warroom"
+      ? (await db.prepare("SELECT run_id, candle_key, body_json FROM room_runs WHERE room = ? ORDER BY run_id DESC LIMIT ?").bind(room, limit).all()).results || []
+      : (await db.prepare("SELECT r.run_id, r.candle_key, r.body_json FROM room_runs r JOIN (SELECT candle_key, MAX(run_id) AS run_id FROM room_runs WHERE room = ? AND candle_key IS NOT NULL GROUP BY candle_key ORDER BY run_id DESC LIMIT ?) k ON k.run_id = r.run_id WHERE r.room = ? ORDER BY r.run_id DESC").bind(room, limit + 1, room).all()).results || [];
+    for (const d of docs) {
+      if (out.length >= limit) break;
+      if (room !== "warroom" && out.some((o) => o.candle_key === d.candle_key)) continue;
+      const rows = docRows(d);
+      if (!rows?.length) return null;
+      out.push({ run_id: d.run_id, candle_key: d.candle_key, rows });
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The concluded runs of the window not yet derived (or of an older document version, or whose conclusion was rewritten
+ * after the document, as a retried failed conclusion is), per thread, at most MAX_RUNS_PER_PASS.
+ */
 async function pendingRuns(db, { now, windowMs = DERIVE_WINDOW_MS }) {
   const since = new Date(now - windowMs).toISOString();
   const threads = [...(warRoomThreadIds(since, now) ?? []), "tf:H1", "tf:H4", "tf:D1"];
@@ -275,7 +315,7 @@ async function pendingRuns(db, { now, windowMs = DERIVE_WINDOW_MS }) {
   for (const threadId of threads) {
     if (out.length >= MAX_RUNS_PER_PASS) break;
     const room = roomOf(threadId);
-    const rows = (await db.prepare("SELECT m.run_id FROM agent_thread_messages m LEFT JOIN room_runs r ON r.room = ? AND r.run_id = m.run_id WHERE m.thread_id = ? AND m.bar_time >= ? AND m.step = 'conclusion' AND (r.run_id IS NULL OR r.doc_version != ?) ORDER BY m.run_id LIMIT ?")
+    const rows = (await db.prepare("SELECT m.run_id FROM agent_thread_messages m LEFT JOIN room_runs r ON r.room = ? AND r.run_id = m.run_id WHERE m.thread_id = ? AND m.bar_time >= ? AND m.step = 'conclusion' AND (r.run_id IS NULL OR r.doc_version != ? OR m.ts > r.derived_at) ORDER BY m.run_id LIMIT ?")
       .bind(room, threadId, since, RUN_DOC_VERSION, MAX_RUNS_PER_PASS - out.length).all()).results || [];
     for (const r of rows) out.push({ threadId, runId: r.run_id });
   }
