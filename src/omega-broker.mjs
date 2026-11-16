@@ -501,7 +501,8 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           action_id: actionId,
           status: "dispatched",
         });
-        await sendOmegaTelegram(env, `🤖 <b>Cerebrum Self-Healing Action</b>\nDirective: <code>${candidateDirective}</code>\nReason: <code>${candidateReason}</code>\nStatus: <b>Dispatched to VPS Host Bridge</b>`);
+        // Owner 2026-11-16: EA health goes to the Cryptophys-Cerebrum chat, not Nexus. The event above is relayed
+        // through the platform kernel (src/ea-heartbeat-relay.mjs, topic "ea_heartbeat"); nothing is sent here.
       }
     }
   }

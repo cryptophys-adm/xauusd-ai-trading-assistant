@@ -248,6 +248,7 @@ import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weight
 import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
 import { dedupeDeals, listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
 import { omegaHealth } from "./omega-health.mjs";
+import { relayEaHeartbeat } from "./ea-heartbeat-relay.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus } from "./omega-broker.mjs";
@@ -2528,6 +2529,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
  * critical). Non-fatal by design. Also the closed market's hourly heartbeat (src/market-idle.mjs).
  */
 async function runHealthStep(env: Env): Promise<void> {
+  await runEaHeartbeatRelay(env);
   try {
     const health = await runHealthAlerts(env);
     if (health.opened || health.resolved || (Array.isArray(health.published) && health.published.length)) console.log("health_alerts", JSON.stringify(health));
@@ -2544,7 +2546,14 @@ async function runHealthStep(env: Env): Promise<void> {
   } catch (e) { console.error("health_alerts_failed", e instanceof Error ? e.message : String(e)); }
 }
 
+/** EA health (the self-healing recoveries) to the Cerebrum chat through the kernel; at most one report per 30 min. */
+async function runEaHeartbeatRelay(env: Env): Promise<void> {
+  const relay = await relayEaHeartbeat(env);
+  if (relay.status !== "disabled" && relay.status !== "waiting" && relay.status !== "idle") console.log("ea_heartbeat_relay", JSON.stringify(relay));
+}
+
 async function runLedgerStep(env: Env): Promise<void> {
+  await runEaHeartbeatRelay(env);
   try {
     // While the Decision Engine is on, only its decisions are new signals (src/decision-engine.mjs).
     const engineOn = decisionEngineEnabled(env);
