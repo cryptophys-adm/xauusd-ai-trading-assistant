@@ -29,7 +29,6 @@
         "strict_required_status_checks_policy": true,
         "do_not_enforce_on_create": false,
         "required_status_checks": [
-          { "context": "dependency-audit", "integration_id": 15368 },
           { "context": "evidence-unit-tests", "integration_id": 15368 },
           { "context": "preview-e2e", "integration_id": 15368 },
           { "context": "protection-guard", "integration_id": 15368 },

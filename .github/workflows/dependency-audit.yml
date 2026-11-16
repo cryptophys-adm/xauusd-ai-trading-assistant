@@ -3,9 +3,10 @@ name: Dependency audit
 # Cut-over option (D), owner 2026-11-15: xauusd adopts the platform's gates, item 2. `npm audit --audit-level=high`
 # for every npm package with dependencies: the repository root (no lockfile is committed, so the lockfile is
 # resolved fresh, as `npm install` does in CI and deploys) and the Nexus UI (its committed package-lock.json).
-# bridge/omega-bridge has no dependencies. REQUIRED since 2026-11-16 (owner: "jadikan dependency-audit cek wajib", after
-# the report: 0 findings in both packages): a high or critical advisory fails the job, and with it the pull request; the
-# daily run reports a new upstream advisory before the next pull request meets it. Moderate and low stay in the summary.
+# bridge/omega-bridge has no dependencies. A high or critical advisory, or an audit that gave no report, fails the job
+# (red on the pull request and in the daily run); moderate and low stay in the summary. It is NOT a required check yet:
+# the report of 2026-11-16 found 0 advisories in both packages, and making it required is BACKLOG item B-14 (owner
+# 2026-11-16: "simpan dulu sebagai backlog"; one PR adding it to ops/branch-ruleset.json, then one owner click).
 
 on:
   pull_request:
