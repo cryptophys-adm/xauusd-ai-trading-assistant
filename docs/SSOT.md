@@ -927,11 +927,11 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Drift check.** The control is checked against the live decision stored at capture. A mismatch is reported as `drift`.
   - **Where to see it.** `/api/tuning` shows `replays.strategy`. A better threshold is a proposal for an owner PR to `src/strategy-engine.mjs`.
 - **Shadow knowledge arm (Aether A7, `src/shadow-knowledge.mjs`).** It is off unless `SHADOW_KNOWLEDGE_ENABLED = "true"`; production sets it on since 2026-11-12 (owner: "mode production harus active semua").
-  - **Which items.** At most 2 approved text items of the learned pack (caution or role reminder) are tested at once.
+  - **Which items.** At most 6 text items of the learned pack (caution or role reminder; approved, or undecided under `KNOWLEDGE_AUTO_SHADOW`) are tested at once, oldest first seen first (2 until 2026-11-16; owner: "opsi A", because six curator items had queued behind the two oldest for weeks).
   - **Which agents.** An agent qualifies when it is in the item's audience, sat in the room and answered there: the 1H room, and since 2026-11-13 (owner: "1-3") the 15m War Room (subjects end in `@15`) and the Decision Engine council (consumer `council`: one extra council call with the note, put through the same guardrails, against the stance decided on that bar).
   - **The call.** That agent makes one extra opening call on the same bar, with the same data and prompt plus the note line.
   - **A/A noise check (O13).** While the first item runs, the same prompt is also asked once more without the note.
-  - **Timing and budget.** The calls run after the room and its decision (the H1 decision, or the Decision Engine's for the 15m War Room and the council), never before them. They share `SHADOW_KNOWLEDGE_MAX_CALLS_PER_HOUR` (default 16 since 2026-11-13, at most 24).
+  - **Timing and budget.** The calls run after the room and its decision (the H1 decision, or the Decision Engine's for the 15m War Room and the council), never before them. They share `SHADOW_KNOWLEDGE_MAX_CALLS_PER_HOUR` (default 32 since 2026-11-16, 16 before; at most 48). The shadow kill switch and the daily neuron breaker bound it as before.
   - **Storage.** Answers go in D1 `shadow_agent_outputs` (migration `0016`), with the agent's real opening stance as the control. Both are scored there on their chart's bars (1H, or 15m for the War Room and the council), never in `outcome_scores`, so no scorecard or reputation sees them. Rows are kept 60 days.
   - **Isolation.** The answers are never shown in a room, on the bus, in the crowd line, to the moderator or the Reasoner, or in a decision.
   - **Where to see it.** `/api/tuning` shows `replays.knowledge`, with the verdicts and the noise rate.

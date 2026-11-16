@@ -1,6 +1,7 @@
 export const SHADOW_KNOWLEDGE_VERSION: string;
 export const MAX_ITEMS: number;
 export const DEFAULT_MAX_CALLS_PER_HOUR: number;
+export const MAX_CALLS_PER_HOUR_CAP: number;
 export const SHADOW_KNOWLEDGE_SCHEMA_SQL: string[];
 export function shadowKnowledgeEnabled(env: unknown): boolean;
 export function maxCallsPerHour(env: unknown): number;

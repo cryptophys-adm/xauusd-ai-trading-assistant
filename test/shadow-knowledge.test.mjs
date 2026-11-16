@@ -15,24 +15,29 @@ const openings = [
 ];
 const roster = ["h1", "technical", "risk", "r37_funnel", "gmi"];
 
-test("off by default; on only with SHADOW_KNOWLEDGE_ENABLED=true; the hourly cap defaults to 16 (shared by the 1H room, the 15m War Room and the council since 2026-11-13)", () => {
+test("off by default; on only with SHADOW_KNOWLEDGE_ENABLED=true; the hourly cap defaults to 32 (shared by the 1H room, the 15m War Room and the council; 32 since 2026-11-16)", () => {
   assert.equal(shadowKnowledgeEnabled({}), false);
   assert.equal(shadowKnowledgeEnabled({ SHADOW_KNOWLEDGE_ENABLED: "false" }), false);
   assert.equal(shadowKnowledgeEnabled({ SHADOW_KNOWLEDGE_ENABLED: "true" }), true);
-  assert.equal(maxCallsPerHour({}), 16);
-  assert.equal(maxCallsPerHour({ SHADOW_KNOWLEDGE_MAX_CALLS_PER_HOUR: "100" }), 24, "capped");
+  assert.equal(maxCallsPerHour({}), 32);
+  assert.equal(maxCallsPerHour({ SHADOW_KNOWLEDGE_MAX_CALLS_PER_HOUR: "100" }), 48, "capped");
+  assert.equal(maxCallsPerHour({ SHADOW_KNOWLEDGE_MAX_CALLS_PER_HOUR: "8" }), 8);
 });
 
-test("the plan: H1 only, text items only, at most 2 items, agents that spoke in the room, an A/A call with the first item", () => {
+test("the plan: H1 only, text items only, at most 6 items, agents that spoke in the room, an A/A call with the first item", () => {
   const items = [item("c1", ["r37_funnel", "moderator", "risk", "absent"]), item("p1", ["gmi"], "param_candidate"), item("c2", ["gmi"], "role_reminder"), item("c3", ["gmi"]), item("c4", ["r37_funnel"], "caution", { audience: { agents: ["r37_funnel"], charts: ["15"] } })];
   assert.deepEqual(planShadowCalls({ items, roster, openings, chart: "H4" }), [], "only the 1H room is scored per agent");
   const plan = planShadowCalls({ items, roster, openings });
   assert.deepEqual(plan.map((c) => [c.subject, c.arm, c.control_stance]), [
     ["shadow-agent:r37_funnel@c1v1", "note", "BUY"],
     ["shadow-agent:r37_funnel@aa", "aa", "BUY"],
-    ["shadow-agent:gmi@c2v1", "note", "WAIT"]
-  ], "the moderator, an agent whose opening failed and an absent agent get no call; c3 waits (2 items at once); c4 is for the 15m chart");
-  assert.equal(MAX_ITEMS, 2);
+    ["shadow-agent:gmi@c2v1", "note", "WAIT"],
+    ["shadow-agent:gmi@c3v1", "note", "WAIT"]
+  ], "the moderator, an agent whose opening failed and an absent agent get no call; c4 is for the 15m chart");
+  assert.equal(MAX_ITEMS, 6);
+  // Owner 2026-11-16 ("opsi A"): six items at once; the seventh waits.
+  const many = Array.from({ length: 8 }, (_, i) => item(`m${i}`, ["gmi"]));
+  assert.deepEqual(planShadowCalls({ items: many, roster, openings }).filter((c) => c.arm === "note").map((c) => c.item.item_id), ["m0", "m1", "m2", "m3", "m4", "m5"]);
   assert.match(noteLine(item("c1", [])), /^LEARNED NOTE \(reviewed by a person; apply it only if it fits your data\): Note c1/);
   assert.equal(subjectOf("gmi", null), "shadow-agent:gmi@aa");
 });
