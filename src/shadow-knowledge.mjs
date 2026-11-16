@@ -27,16 +27,19 @@ import { SCORING_VERSION, scoreStance } from "./outcome-scoring.mjs";
 import { pairedTally, holmAdjust, holmMonth, SHADOW_MIN_SAMPLE, SHADOW_SIGNIFICANCE, HOLDOUT_BARS } from "./shadow-versions.mjs";
 
 export const SHADOW_KNOWLEDGE_VERSION = "cryptophys.shadow-knowledge.v1";
-export const MAX_ITEMS = 2;
-/** Shared by the 1H room, the 15m War Room and the council (16 since the arm runs on all three, 2026-11-13). */
-export const DEFAULT_MAX_CALLS_PER_HOUR = 16;
+// Owner 2026-11-16 ("opsi A"): 6 items at once (was 2), so the curator's daily items do not queue for weeks behind
+// the two oldest; the hourly cap is doubled to match. The kill switch and the daily neuron breaker still bound it.
+export const MAX_ITEMS = 6;
+/** Shared by the 1H room, the 15m War Room and the council (16 since 2026-11-13; 32 since 2026-11-16, owner "opsi A"). */
+export const DEFAULT_MAX_CALLS_PER_HOUR = 32;
+export const MAX_CALLS_PER_HOUR_CAP = 48;
 const TEXT_KINDS = new Set(["caution", "role_reminder"]);
 const NOTE_MAX = 400;
 
 export function shadowKnowledgeEnabled(env) { return String(env?.SHADOW_KNOWLEDGE_ENABLED ?? "").trim().toLowerCase() === "true"; }
 export function maxCallsPerHour(env) {
   const n = Number(env?.SHADOW_KNOWLEDGE_MAX_CALLS_PER_HOUR ?? DEFAULT_MAX_CALLS_PER_HOUR);
-  return Number.isFinite(n) && n >= 0 ? Math.min(n, 24) : DEFAULT_MAX_CALLS_PER_HOUR;
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, MAX_CALLS_PER_HOUR_CAP) : DEFAULT_MAX_CALLS_PER_HOUR;
 }
 
 export const SHADOW_KNOWLEDGE_SCHEMA_SQL = [

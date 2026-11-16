@@ -144,7 +144,7 @@
     "DECISION_TELEGRAM_HEARTBEAT_MINUTES": "60",
     // Aether's learned knowledge (owner 2026-11-12: "mode production harus active semua"). The shadow arm
     // tests the items a person approved in Aether (an extra opening call per agent in its audience, after
-    // the 1H room and decision, at most SHADOW_KNOWLEDGE_MAX_CALLS_PER_HOUR, default 8); it never feeds a
+    // the 1H room and decision, at most SHADOW_KNOWLEDGE_MAX_CALLS_PER_HOUR, default 32); it never feeds a
     // live prompt. LEARNED_KNOWLEDGE_ENABLED reads the bundled pack (knowledge/learned/pack.json) into
     // the rooms: the pack changes only by an owner PR, after the shadow arm found an item better, and is
     // empty today, so it changes no prompt until then. "false" turns either off at once.
