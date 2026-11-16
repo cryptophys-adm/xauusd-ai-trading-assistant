@@ -1,6 +1,6 @@
 # RFC: Room cells and run documents (ADR-0015 phase 2, xauusd)
 
-**Status: P2a building, in shadow (owner approved the direction 2026-11-15). P2b and P2c not started.**
+**Status: P2a live in shadow (2026-11-15). P2b reader 1 (outcome scoring) live 2026-11-16, owner: "tidak perlu menunggu, langsung pindah ke room_runs" (the first non-empty comparison, 01:06 UTC, was 4/4 and 1/1 equal). Readers 2-6 and P2c not started.**
 - The owner approves it before any implementation (relayed by the orchestrator, 2026-11-15).
 - ADR-0015 phase 2 was deferred on 2026-11-14 ("setuju tunda"). This document is the plan to un-defer it.
 
@@ -218,6 +218,13 @@ The full transcript keeps all of it, in R2 (§4).
 6. kernel reports.
 
 Each move is behind a flag that falls back to the old query.
+
+Reader 1 (scoring), as built:
+- `agentStatements` reads `room_runs` when `ROOM_RUNS_SHADOW` and `ROOM_RUNS_READ` are both `on`.
+- It first derives the runs concluded since the last hourly pass, so scoring never waits for that pass.
+- Bars that closed before the 48 h derive window still come from the messages (the 4H and D1 lookbacks reach past it).
+- `ROOM_RUNS_READ` `off` is the rollback.
+- The hourly comparison keeps reading the messages (`source: "messages"`), so it goes on checking the documents.
 
 **P2c: the cell.**
 - `RoomCell` runs the rooms. D1 receives the run document only. The transcript goes to R2.

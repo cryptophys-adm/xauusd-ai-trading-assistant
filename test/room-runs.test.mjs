@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
-import { buildRunDoc, statementsFromDocs, deriveRoomRuns, compareRoomRuns, roomRunsStatus, resetRoomRunsSchemaCacheForTests, roomRunsEnabled } from "../src/room-runs.mjs";
+import { buildRunDoc, statementsFromDocs, deriveRoomRuns, compareRoomRuns, roomRunsStatus, resetRoomRunsSchemaCacheForTests, roomRunsEnabled, roomRunsReadEnabled } from "../src/room-runs.mjs";
 import { agentStatements } from "../src/outcome-scoring.mjs";
 
 function d1() {
@@ -89,4 +89,49 @@ test("a document missing for a scored bar is reported, and the switch is off unl
   assert.deepEqual([compared["15"].equal, compared["15"].missing], [1, 1]);
   assert.equal(roomRunsEnabled({}), false);
   assert.deepEqual(await deriveRoomRuns({ DB: db }), { status: "disabled" });
+});
+
+// ADR-0015 P2b, reader 1 (owner 2026-11-16): outcome scoring reads its room statements from the run documents.
+const norm = (m) => Object.fromEntries([...m].map(([k, v]) => [k, [...v].sort((a, b) => a.subject.localeCompare(b.subject))]));
+
+test("scoring reads the run documents: the same statements, derived on demand, without reading the messages", async () => {
+  resetRoomRunsSchemaCacheForTests();
+  const db = d1(); seed(db);
+  const SINCE = "2026-11-12T00:00:00.000Z";
+  const env = { DB: db, ROOM_RUNS_SHADOW: "on", ROOM_RUNS_READ: "on" };
+  assert.equal(roomRunsReadEnabled(env), true);
+  assert.equal(roomRunsReadEnabled({ ROOM_RUNS_READ: "on" }), false, "no documents are derived without ROOM_RUNS_SHADOW");
+  const before = db.raw.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'room_runs'").get().n;
+  for (const tf of ["15", "60"]) {
+    const fromMessages = await agentStatements({ DB: db }, tf, SINCE, { now: NOW });
+    const fromDocs = await agentStatements(env, tf, SINCE, { now: NOW });
+    assert.deepEqual(norm(fromDocs), norm(fromMessages), tf);
+  }
+  assert.equal(before, 0, "nothing was derived before the first read");
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM room_runs").get().n, 4, "the read derived the pending runs itself");
+  // Proof that the documents are what is read: change a document, and scoring sees the change.
+  const doc = db.raw.prepare("SELECT run_id, body_json FROM room_runs WHERE room = 'warroom' AND run_id = '2026-11-13T20:00:00.000Z'").get();
+  const body = JSON.parse(doc.body_json); body.conclusion.stance = "SELL";
+  db.raw.prepare("UPDATE room_runs SET body_json = ? WHERE room = 'warroom' AND run_id = ?").run(JSON.stringify(body), doc.run_id);
+  const read = await agentStatements(env, "15", SINCE, { now: NOW });
+  assert.equal(read.get("2026-11-13T20:00:00.000Z").find((s) => s.subject === "agent:moderator").stance, "SELL");
+  // The hourly comparison keeps reading the messages, so it flags that edited document.
+  const compared = await compareRoomRuns(env, { now: NOW });
+  assert.deepEqual([compared["15"].equal, compared["15"].mismatched], [1, 1]);
+});
+
+test("ROOM_RUNS_READ off is the rollback; bars before the derive window still come from the messages", async () => {
+  resetRoomRunsSchemaCacheForTests();
+  const db = d1(); seed(db);
+  const off = { DB: db, ROOM_RUNS_SHADOW: "on", ROOM_RUNS_READ: "off" };
+  await agentStatements(off, "15", "2026-11-12T00:00:00.000Z", { now: NOW });
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'room_runs'").get().n, 0, "off: the documents are not touched");
+  // Five days later the seeded bars are outside the 48 h derive window: a wide window (the D1 lookback) still
+  // gets them, from the messages, while newer bars come from the documents.
+  const later = NOW + 5 * 86_400_000;
+  const env = { DB: db, ROOM_RUNS_SHADOW: "on", ROOM_RUNS_READ: "on" };
+  const wide = await agentStatements(env, "15", "2026-11-12T00:00:00.000Z", { now: later });
+  const fromMessages = await agentStatements({ DB: db }, "15", "2026-11-12T00:00:00.000Z", { now: later });
+  assert.deepEqual(norm(wide), norm(fromMessages));
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM room_runs").get().n, 0, "outside the window nothing is derived");
 });

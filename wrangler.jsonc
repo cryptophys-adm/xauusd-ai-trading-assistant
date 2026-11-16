@@ -127,6 +127,7 @@
     "NEWS_DAILY_ENABLED": "true",
     // ADR-0015 phase 2a (owner 2026-11-15): derive room run documents hourly and compare them, in shadow.
     "ROOM_RUNS_SHADOW": "on",
+    "ROOM_RUNS_READ": "on",
     "NEWS_DAILY_MAX_CALLS_PER_HOUR": "6",
     // Room memo (owner 2026-11-11, "kurangi neuron/hari tanpa mengurangi kapabilitas"): a room step whose
     // whole request equals one answered before reuses that answer (src/room-memo.mjs). "false" = shadow:

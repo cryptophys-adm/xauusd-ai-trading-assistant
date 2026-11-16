@@ -22,6 +22,7 @@
 // the other. BUY and SELL scoring is unchanged (1:1 at 0.5 x ATR).
 import { warRoomThreadFilter, barTimeFloor } from "./thread-windows.mjs";
 import { reputationFromScorecards, REPUTATION_DAYS } from "./reputation.mjs";
+import { docStatements, roomRunsReadEnabled } from "./room-runs.mjs";
 
 export const SCORING_VERSION = "cryptophys.outcome-scoring.v3";
 export const SCORING = Object.freeze({ horizon: 4, atrPeriod: 14, thresholdAtr: 0.5, waitTargetAtr: 1, stuckCandles: 8, stuckRangeAtr: 3 });
@@ -296,7 +297,18 @@ export async function roomStatements(env, sinceIso) {
  *   15: the Live War Room 15m (threads warroom:<day>), keyed by the 15m bar close;
  *   60: the 1H War Room (thread tf:H1), keyed by the H1 candle key (a re-convened session wins).
  */
-export async function agentStatements(env, timeframe, sinceIso, { now = Date.now() } = {}) {
+export async function agentStatements(env, timeframe, sinceIso, { now = Date.now(), source = "auto" } = {}) {
+  // ADR-0015 P2b, reader 1 (owner 2026-11-16): the run documents, unless ROOM_RUNS_READ is off or the caller asks
+  // for the messages (the hourly comparison does, so it keeps checking the documents against them).
+  if (source !== "messages" && roomRunsReadEnabled(env)) {
+    const fromDocs = await docStatements(env, timeframe, sinceIso, { now, older: () => messageStatements(env, timeframe, sinceIso, { now }) });
+    if (fromDocs) return fromDocs;
+  }
+  return messageStatements(env, timeframe, sinceIso, { now });
+}
+
+/** The statements read from agent_thread_messages (the path before P2b, and the comparison's reference). */
+async function messageStatements(env, timeframe, sinceIso, { now = Date.now() } = {}) {
   const byKey = new Map();
   const add = (key, row) => {
     if (!key || !row.stance) return;

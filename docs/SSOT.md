@@ -832,6 +832,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - The subject is `agent:<id>`. The stance scored is the agent's final one: its Consensus Discussion answer, else its opening. The moderator's conclusion is scored as `agent:moderator`. A re-convened session (`#hud`) wins.
   - Each bar is scored once, with its own run marker (`outcome_runs` timeframe `<tf>:agents`), so bars already scored for the chain still get their agents.
   - Scoring starts with the bars after this deploy. The retired per-H1 HUD agents and the legacy 15m room keep their old subjects.
+  - **Source (ADR-0015 P2b reader 1, owner 2026-11-16):** the room statements come from the run documents in `room_runs` (`ROOM_RUNS_SHADOW` and `ROOM_RUNS_READ` both `on`; `docs/RFC_ROOM_CELLS.md`). Scoring first derives the runs concluded since the last hourly pass. Bars older than the 48 h derive window still come from `agent_thread_messages`. `ROOM_RUNS_READ` `off` returns scoring to the messages. The hourly comparison (`room_runs_compare`) keeps reading the messages, so a document that drifts from its run shows up there.
 - **Reputation** (`src/reputation.mjs`):
   - It is computed per agent and chart over 30 days.
   - Decisive calls are BUY/SELL hits and misses, plus WAIT hits and missed moves.
