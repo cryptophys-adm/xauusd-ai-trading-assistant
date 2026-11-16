@@ -29,7 +29,7 @@ Proposed internal prefix: `cfc` (Call for Councils): thread/room id `cfc:<sessio
 - The owner chooses the seats (prefilled per topic kind, section 2) and may attach an evidence scope (date range, strategy agent, pattern, trading mode).
 
 ### 1.2 Topics suggested by the system
-Agents and outcome scoring may only **suggest** a council (owner decision Q9): a suggestion is an inbox item (a `council.proposed` event, `trigger.kind` `finding`, `kpi_regression` or `agent`, `[CONTRACT-2]`), a card on the Call for Councils page and one Telegram line. It costs no model call; nothing runs until the owner starts it, or dismisses it (`proposed → dismissed`). Checked hourly in the sweep, deterministic (new: `src/cfc-triggers.mjs`):
+Agents and outcome scoring may only **suggest** a council (owner decision Q9): a suggestion is an inbox item (a `council.proposed` event, `trigger.kind` `finding`, `kpi_regression` or `agent`, `[CONTRACT-2]`), a card on the Call for Councils page and the owner's Cerebrum inbox (no Telegram from this Worker, section 9). It costs no model call; nothing runs until the owner starts it, or dismisses it (`proposed → dismissed`). Checked hourly in the sweep, deterministic (new: `src/cfc-triggers.mjs`):
 
 | Source (exists today) | Signal | Topic key |
 |---|---|---|
@@ -187,7 +187,7 @@ The room runs do not write their transcripts yet (`transcript_key` is null); the
 
 **Budget and kill switch, reusing the shadow mechanisms (`src/shadow-switch.mjs`):**
 - every call metered as `cfc:<schema>` in `ai_usage_daily` (`callBusModel` `meterSource`), declared in `organism.json` and shown by `GET /api/ai/logic` and the Neuron allocation page;
-- a daily cap `CFC_NEURONS_PER_DAY_MAX` (proposed 8,000) and the contract's 4 sessions started a day; a breaker like `checkShadowBudget` stops new steps when the cap is reached, the session goes to `awaiting_owner` with what it has, and the owner hears it on Telegram;
+- a daily cap `CFC_NEURONS_PER_DAY_MAX` (proposed 8,000) and the contract's 4 sessions started a day; a breaker like `checkShadowBudget` stops new steps when the cap is reached, the session goes to `awaiting_owner` with what it has, and the owner sees it in the session and the Cerebrum inbox;
 - `CFC_MODE = "off"` (a Worker variable) holds every session off, and `kernel_controls.agents_enabled = 0` aborts any session; an owner switch on the Call for Councils page, audited like `shadow_switch_events`, is on the Call for Councils page (decision 7);
 - council calls are not shadow calls and do not count against `SHADOW_NEURONS_PER_DAY_MAX`; the shadow arms a proposal starts (the knowledge arm) stay under the shadow budget and kill switch; strategy variants and replay arms are deterministic and cost no model call.
 - **Rate limits:** the rooms share the account's Workers AI limits (SSOT: the 3021 errors, the health alert on 10+ calls lost an hour). A council step does not start within the first 3 minutes after a 15m close, and yields while a room run is open.
