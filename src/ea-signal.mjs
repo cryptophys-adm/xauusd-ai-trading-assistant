@@ -29,6 +29,7 @@ import { readCorpusBars } from "./corpus-oracle.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
 import { decisionEngineEnabled, readLatestDecision, keyCloseMs } from "./decision-engine.mjs";
 import { liveM5Inputs } from "./strategy-engine.mjs";
+import { flatConfidences } from "./agent-confidence.mjs";
 
 export const EA_SIGNAL_VERSION = "cryptophys.ea-signal.v1";
 const H1_MS = 3_600_000;
@@ -151,7 +152,14 @@ export function managementFields(decision, { basis = null } = {}) {
     power_ms: Number.isFinite(close) && Number.isFinite(score) ? close : 0,
     key_levels: levels.map((z) => `${z.low}:${z.high}`).join(","),
     feed_basis: Number.isFinite(basis) ? basis : 0,
-    feed_basis_known: Number.isFinite(basis)
+    feed_basis_known: Number.isFinite(basis),
+    // Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): whether the rules run,
+    // the trade's agent, and every live agent's confidence on both sides at this close and at the close before
+    // ("id:long:short" joined by ","). Omega closes a winner on a drop and extends only on a stable or rising one.
+    strategy_execution: decision?.strategy_execution === true,
+    trade_agent: typeof decision?.trade?.agent === "string" ? decision.trade.agent : "",
+    agent_conf: flatConfidences(decision?.agent_confidence),
+    agent_conf_prev: flatConfidences(decision?.agent_confidence_prev)
   };
 }
 

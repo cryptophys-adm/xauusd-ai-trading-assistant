@@ -102,7 +102,7 @@ test("P7. the Decision Engine in scalp: the nearest key level is the target what
 
 test("P8. the signal carries the power, the key levels and the broker's basis for Omega", () => {
   const decision = { decision_key: "OANDA:XAUUSD:15:1794476700000", stance: "WAIT", trading_mode: "scalp", quorum: { score: -0.73 }, key_levels: [{ low: 3937.06, high: 3941.27 }, { low: 3949.57, high: 3953.93 }] };
-  assert.deepEqual(managementFields(decision, { basis: 1.4 }), { trading_mode: "scalp", power: -0.73, power_ms: 1794477600000, key_levels: "3937.06:3941.27,3949.57:3953.93", feed_basis: 1.4, feed_basis_known: true });
+  assert.deepEqual(managementFields(decision, { basis: 1.4 }), { trading_mode: "scalp", power: -0.73, power_ms: 1794477600000, key_levels: "3937.06:3941.27,3949.57:3953.93", feed_basis: 1.4, feed_basis_known: true, strategy_execution: false, trade_agent: "", agent_conf: "", agent_conf_prev: "" });
   assert.equal(managementFields(decision).feed_basis_known, false);
   // The basis: the broker's M1 close at each feed 5m close, the median of at least 3 matches.
   const feed = [0, 1, 2, 3].map((i) => ({ close_time: new Date(POWER_MS + i * 300_000).toISOString(), close: 3930 + i }));

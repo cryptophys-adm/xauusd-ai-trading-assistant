@@ -24,6 +24,8 @@
 
 import { planForDirection, zoneLevels, SCALP_TARGET } from "./strategy-engine.mjs";
 import { patternInfo, PATTERN_CATALOG } from "./chart-patterns.mjs";
+import { CONFIDENCE_STABLE_BAND } from "./agent-confidence.mjs";
+export { confidenceTrend, flatConfidences, parseConfidences } from "./agent-confidence.mjs";
 
 export const STRATEGY_AGENTS_VERSION = "cryptophys.strategy-agents.v1";
 export const DEFAULT_AGENT = "zone_pullback";
@@ -430,10 +432,15 @@ export function agentVoice(record) {
  * status. Returns { lean (null when nobody speaks), live, speaking, long: [{ id, name, voice, pattern? }],
  * short: [...], summary }.
  */
+/** Pure: whether an agent speaks for a side: live, its own setup there, its plan passing `passes`, the default agent only at its level. */
+export function agentSpeaks(id, a, passes = () => true) {
+  return a?.status === "live" && Boolean(a.plan) && (id === DEFAULT_AGENT ? a.plan.at_level === true : true) && passes(a.plan);
+}
+
 export function agentsConsensus({ long = {}, short = {} } = {}, { records = null, passes = () => true, statuses = null } = {}) {
   const recordOfAgent = (id) => (Array.isArray(records) ? records : []).find((r) => r?.agent === id) ?? null;
   const speakers = (plans) => Object.entries(plans || {})
-    .filter(([id, a]) => a?.status === "live" && a.plan && (id === DEFAULT_AGENT ? a.plan.at_level === true : true) && passes(a.plan))
+    .filter(([id, a]) => agentSpeaks(id, a, passes))
     .map(([id, a]) => {
       const pattern = a.plan.pattern ? (patternInfo(a.plan.pattern)?.name ?? null) : null;
       return { id, name: STRATEGY_AGENTS.find((x) => x.id === id)?.label ?? id, voice: agentVoice(recordOfAgent(id)), ...(pattern ? { pattern } : {}) };
@@ -466,3 +473,41 @@ export function priceActionReading(patterns, calibration = null) {
 
 /** Pure: an agent's plan as the decision record keeps it (levels and why; the notes stay in the trade). */
 export const slimPlan = (p) => ({ entry: p.entry, stop: p.stop, tp1: p.tp1, tp2: p.tp2, at_level: p.at_level === true, rrr: p.rrr ?? null, setup: p.setup ?? null, ...(p.pattern ? { pattern: p.pattern } : {}) });
+
+/**
+ * Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): a BUY or SELL trades only
+ * a plan of an agent that speaks on its side, and the agents' own confidence, evaluated at every 15m decision,
+ * closes a winner when it drops and lets a position be extended only while it is stable or rising.
+ * STRATEGY_EXECUTION "off" is the rollback (the default plan, no confidence exits).
+ */
+export function strategyExecutionEnabled(env) {
+  return String(env?.STRATEGY_EXECUTION ?? "on").trim().toLowerCase() !== "off";
+}
+export const CONFIDENCE_RULES = Object.freeze({ direction: 0.4, setup: 0.35, quality: 0.25, stable_band: CONFIDENCE_STABLE_BAND });
+
+/**
+ * Pure: one agent's confidence on one side (dir +1 long, -1 short), 0 to 1:
+ *   0.40 x direction (the Decision Engine's quorum score signed for the side, 0 against, 0.5 neutral, 1 with it)
+ * + 0.35 x setup     (1 when it speaks on the side, 0.5 when it speaks on neither, 0 when on the other)
+ * + 0.25 x quality   (its measured voice between VOICE_MIN and VOICE_MAX; 0.5 until it is measured).
+ */
+export function agentConfidence(dir, { speaksHere = false, speaksThere = false, score = null, voice = 1 } = {}) {
+  const direction = isNum(score) ? (1 + Math.max(-1, Math.min(1, dir * score))) / 2 : 0.5;
+  const setup = speaksHere ? 1 : speaksThere ? 0 : 0.5;
+  const quality = Math.max(0, Math.min(1, ((isNum(voice) ? voice : 1) - CONSENSUS_RULES.voice_min) / (CONSENSUS_RULES.voice_max - CONSENSUS_RULES.voice_min)));
+  return r2(CONFIDENCE_RULES.direction * direction + CONFIDENCE_RULES.setup * setup + CONFIDENCE_RULES.quality * quality);
+}
+
+/** Pure: every live agent's confidence on both sides ({ id: { long, short } }) from both sides' plans and the quorum score. */
+export function agentConfidences({ long = {}, short = {} } = {}, { score = null, records = null, passes = () => true, statuses = null } = {}) {
+  const ids = AGENT_IDS.filter((id) => (statuses?.[id] ?? (id === DEFAULT_AGENT ? "live" : "shadow")) === "live");
+  const recordOfAgent = (id) => (Array.isArray(records) ? records : []).find((r) => r?.agent === id) ?? null;
+  const out = {};
+  for (const id of ids) {
+    const L = agentSpeaks(id, long?.[id], passes), S = agentSpeaks(id, short?.[id], passes);
+    const voice = agentVoice(recordOfAgent(id));
+    out[id] = { long: agentConfidence(1, { speaksHere: L, speaksThere: S, score, voice }), short: agentConfidence(-1, { speaksHere: S, speaksThere: L, score, voice }) };
+  }
+  return out;
+}
+

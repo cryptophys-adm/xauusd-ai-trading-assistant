@@ -58,7 +58,7 @@ import { modelAdvice } from "./model-dataset.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { arenaEnabled, isArenaBar, arenaEvery, runArenaCall } from "./model-arena.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
-import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT } from "./strategy-agents.mjs";
+import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT, strategyExecutionEnabled, agentConfidences } from "./strategy-agents.mjs";
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
@@ -803,8 +803,27 @@ export function decide({ answer = null, guards, strategy = null, quorum }) {
       const agent = chosen && chosen !== DEFAULT_AGENT ? liveAgentPlans(g).find(([id]) => id === chosen)?.[1] ?? null : null;
       // Scalp: always the nearest key level (the plan's first target), whatever the council chose.
       const opts = { entryType, target: g.target_rule === "nearest" ? "tp1" : target, minRrr };
-      trade = (agent ? tradeFor(stance, agent.plan, opts) : null) ?? tradeFor(stance, g.plan, opts);
-      if (!trade) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "reward", detail: `no target pays ${minRrr}R` }] };
+      if (guards.strategy_execution === true) {
+        // Owner 2026-11-16 (docs/RFC_STRATEGY_EXECUTION.md): only a plan of an agent that speaks on this side
+        // (the consensus' speakers: live, its own setup, its plan passing the reward guardrail, the default agent
+        // only at its level), the council's choice first, else the strongest voice; never against the agents' lean.
+        const word = dir > 0 ? "buy" : "sell";
+        const speakers = [...((dir > 0 ? guards.consensus?.long : guards.consensus?.short) || [])].sort((a, b) => (b.voice - a.voice) || (a.id === DEFAULT_AGENT ? -1 : b.id === DEFAULT_AGENT ? 1 : 0));
+        const lean = guards.consensus?.lean;
+        if (isNum(lean) && dir * lean <= -LEAN) overruled = { by: "strategy_agents", wanted: stance, failed: [{ check: "strategy_agents", detail: `the strategy agents lean against the decision (${lean > 0 ? "+" : ""}${Math.round(lean * 100)})` }] };
+        else {
+          const pickOf = speakers.find((x) => x.id === chosen) ?? speakers.find((x) => g.plans?.[x.id]?.plan);
+          if (!pickOf) overruled = { by: "strategy_agents", wanted: stance, failed: [{ check: "strategy_agents", detail: `no live strategy agent sees its setup on the ${word} side` }] };
+          else {
+            const t = tradeFor(stance, g.plans[pickOf.id].plan, opts);
+            trade = t ? { ...t, agent: pickOf.id } : null;
+            if (!trade) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "reward", detail: `no target pays ${minRrr}R` }] };
+          }
+        }
+      } else {
+        trade = (agent ? tradeFor(stance, agent.plan, opts) : null) ?? tradeFor(stance, g.plan, opts);
+        if (!trade) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "reward", detail: `no target pays ${minRrr}R` }] };
+      }
     }
     if (overruled) stance = "WAIT";
   }
@@ -977,7 +996,8 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   };
   const plans = { long: plansOf(1), short: plansOf(-1) };
   let consensus = null;
-  try { consensus = agentsConsensus(plans, { records: agentRecords, statuses, passes: (plan) => agentPlanPasses(plan, { target_rule: scalp ? "nearest" : "rrr", min_rrr: thresholds.min_rrr }) }); } catch { consensus = null; }
+  const passes = (plan) => agentPlanPasses(plan, { target_rule: scalp ? "nearest" : "rrr", min_rrr: thresholds.min_rrr });
+  try { consensus = agentsConsensus(plans, { records: agentRecords, statuses, passes }); } catch { consensus = null; }
   const context = { regime, correlations, session, calendar: loaded?.calendar ?? null, independent: independentWitnesses(loaded, { now }), strategy_agents: consensus };
   // The witness weights (owner 2026-11-11: "harusnya bobot itu dinamis sesuai dengan auto tune yang ada di
   // aether"): the set the auto-tuning activated (src/witness-tuning.mjs: replay, discovery and holdout,
@@ -994,6 +1014,11 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // TradingView is down; news and the macro series are stale, which the council should weigh.
   if (inputs?.m5Feed === "mt5_fallback") for (const g of [guards.long, guards.short]) g.cautions = [...g.cautions, MT5_FALLBACK_CAUTION];
   guards.long.plans = plans.long; guards.short.plans = plans.short;
+  // Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): the trade only from an
+  // agent that speaks on the decision's side, and each live agent's confidence on both sides at this 15m close.
+  guards.strategy_execution = strategyExecutionEnabled(env);
+  guards.consensus = consensus;
+  try { guards.agent_confidence = agentConfidences(plans, { score: quorum.score, records: agentRecords, passes, statuses }); } catch { guards.agent_confidence = null; }
   // The Projection Agent's reading of the price action, for the council's choice of strategy.
   let priceAction = [];
   try { priceAction = priceActionReading(strategy?.key_levels?.patterns, inputs.patternCalibration ?? null); } catch { priceAction = []; }
@@ -1056,6 +1081,11 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     fallback_reason: answer ? null : (d.overruled ? `the strategy's ${d.overruled.wanted} was held back (${d.overruled.failed.map((f) => f.check).join(", ")})` : (council?.reason ?? null)),
     summary: text.summary, reasons: text.reasons, risks: text.risks, weighed: answer?.weighed ?? [],
     overruled: d.overruled, trade: d.trade,
+    // Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): each live agent's
+    // confidence on both sides at this close, and at the close one bar before (null when that decision is missing).
+    strategy_execution: guards.strategy_execution === true,
+    agent_confidence: guards.agent_confidence ?? null,
+    agent_confidence_prev: previous && previous.decision_key !== key && Date.parse(barClose) - Date.parse(previous.bar_close) === 15 * 60_000 ? previous.agent_confidence ?? null : null,
     quorum, witnesses: cards,
     guardrails: { long: { allowed: guards.long.allowed, checks: guards.long.checks, entry_trigger: guards.long.entry_trigger ?? null }, short: { allowed: guards.short.allowed, checks: guards.short.checks, entry_trigger: guards.short.entry_trigger ?? null } },
     cautions, vetoes: { long: guards.long.vetoes, short: guards.short.vetoes }, supports: { long: guards.long.supports ?? [], short: guards.short.supports ?? [] },
