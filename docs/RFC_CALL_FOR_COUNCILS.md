@@ -21,7 +21,24 @@ Proposed internal prefix: `cfc` (Call for Councils): thread/room id `cfc:<sessio
 - A council is not a room of the decision path: its output is not a witness (`WITNESS_WEIGHTS`, `EXTENDED_WITNESS_WEIGHTS` unchanged), not evidence for any room, prompt, guardrail, the Decision Engine, `GET /api/ea/signal` or Omega.
 - A council can only produce a **proposal**. A proposal can only start a measurement in shadow. Only the owner turns a measured result live (section 5).
 
-## 1. Triggers
+## 1. Topics and triggers
+
+### 1.0 Topic types (owner 2026-11-16: "jangan persempit call for action hanya ke salah satu agent strategy")
+A council is not tied to one strategy agent. The Key Level entry and its SL / SL+ exits is only the owner's first example. Every topic has a **type**, and the type chooses the evidence pack (section 3), the default seats (section 2) and the suggestion flags (1.2):
+
+| Type | Topic key | Scope examples |
+|---|---|---|
+| `strategy` | `strategy:<agent>[:<pattern>][@<context>]` | **any** strategy agent of `STRATEGY_AGENTS` and any of its patterns: entries, stops, exits, contexts |
+| `seat` | `seat:<id>[@<chart>]` | any room or desk agent of the 28 seats: its readings, its reputation, its compliance findings |
+| `engine` | `engine:<chart>` | the Decision Engine's behaviour: hit rate, no-trade reasons, quorum, witness weights' effect, guardrail holds |
+| `risk` | `risk:<session \| regime \| mode>` | risk by session, regime or trading mode: stop share, R distribution, drawdown runs in R |
+| `news` | `news:<kind>` | news and calendar handling: losses inside release horizons, the news drift alerts, the CALENDAR witness |
+| `execution` | `execution:<kind>` | Omega and the EA: fills against signals, rejected intents, self-healing actions, SL+ and trailing in practice |
+| `data` | `data:<feed>` | data quality: stuck states, parity, feed freshness, the TradingView budget |
+| `cost` | `cost:<source>` | Workers AI usage per source, shadow budget breaker trips |
+| `knowledge` | `knowledge:<item>` | a learned note's verdict, owner corrections |
+| `free` | `free:<slug>` | any topic the owner writes; the owner picks the pack sections and the seats |
+
 
 ### 1.1 The owner opens a council
 - From the new **Call for Councils** page (`#/councils`, new; its own item in the Nexus left navigator, not under Omega) with a free topic, or from a suggested topic in the inbox (1.2). **Only the owner starts a council** (owner decision Q9).
@@ -37,11 +54,18 @@ Agents and outcome scoring may only **suggest** a council (owner decision Q9): a
 | Pattern breaker, `suspendedPatterns` (`PATTERN_BREAKER`) | a pattern held back for an agent (negative over 15 setups) | `strategy:<agent>:<pattern>` |
 | Signal Ledger, D1 `signal_ledger` (`source = 'decision'`) joined to `engine_decisions.decision_json` `$.trade.agent` | over the last N resolved trades of one agent, the share ending at the stop (`exit_reason = 'stop'`, `sl_plus_triggered = 0`) or at the protected stop (`sl_plus_triggered = 1`; Omega simulation `omega_exit = 'sl_plus'`) passes a threshold (proposed: N = 20, share ≥ 0.65; owner's choice) | `strategy:<agent>:exits` |
 | Plan learner, `src/plan-learning.mjs` (KV `plan-learning:state:v1`) | an agent's mean R per setup below 0 in one context (`<mode>\|<regime>`) over 20 setups, before the breaker's 30 | `strategy:<agent>@<context>` |
-| Outcome scoring, `src/outcome-scoring.mjs` (`scorecard_snapshots`; `outcome_summary` of `engine:15`) | the Decision Engine's 7-day directional hit rate below its 30-day rate by a margin (proposed 10 points, 30 decisive calls) | `kpi:engine:15` |
+| Outcome scoring, `src/outcome-scoring.mjs` (`scorecard_snapshots`; `outcome_summary` of `engine:15`) | the Decision Engine's 7-day directional hit rate below its 30-day rate by a margin (proposed 10 points, 30 decisive calls) | `engine:15` |
 | Reputation, `src/reputation.mjs` | a room seat's crowd weight falls to the floor (0.25) on a chart | `seat:<id>@<chart>` |
 | Learned notes, `src/learned-live.mjs` | a live note retired as worse than its control | `knowledge:<item>` |
-| Model baseline gate, `promotionGate` in `src/model-baseline.mjs` | a disconnection | `kpi:model` |
+| Model baseline gate, `promotionGate` in `src/model-baseline.mjs` | a disconnection | `engine:model` |
+| Signal Ledger by session, regime and mode | a session, regime or mode whose stop share over the last 20 resolved trades is 0.65 or more (the same rule as the strategy flag) | `risk:<session \| regime \| mode>` |
+| D1 `econ_releases` joined to the ledger; the news drift health alert | three or more losing trades within a release horizon in 7 days, or a news drift alert | `news:release_horizon`, `news:drift` |
+| D1 `omega_events` (`autonomous_recovery`, rejected intents), `ea_deals` against `signal_ledger` | recoveries or rejected intents above a daily threshold; fills missing for executed signals | `execution:<kind>` |
+| D1 `stuck_states` (open), parity and feed freshness (`/health`) | a stuck state open over 24 candles; a parity revoked; a feed stale | `data:<feed>` |
+| D1 `ai_usage_daily`, `shadow_switch_events` | a source's neurons up 50 % week on week; a shadow breaker trip | `cost:<source>` |
 
+- **Every strategy agent, every pattern.** The strategy flags run for each agent in `STRATEGY_AGENTS` (live and shadow) and each pattern it trades, not only `zone_pullback` or `ENTER_LIMIT`; a new agent is covered by its registry entry.
+- Thresholds of the non-strategy flags are proposals, re-checked with the strategy trigger after the first five sessions (decision 5).
 - **Agents' own topics.** Room seats cannot raise a topic by free text in this design (a seat that names its own topic would also choose its own evidence). Agent-raised topics are the deterministic flags above plus, later, open `stuck_states` and repeated `compliance_checks` findings; they are suggestions only (owner decision Q9).
 - **Rate limits:** one open suggestion per topic key; a fingerprint dedup with a 7-day cooldown (the contract's rule); at most 3 new suggestions a day.
 
@@ -54,9 +78,14 @@ Agents and outcome scoring may only **suggest** a council (owner decision Q9): a
 | Topic kind | Seats |
 |---|---|
 | `strategy:*` (e.g. the Key Level entry) | Risk Manager (`risk`), Technical Analyst (`technical`), Projection Agent (`projection`, owns the pattern knowledge), 15m Desk (`m15`, the Prophet trigger timing), Trade Management (`trade_management`, exits), The Interstellar Eyes (`interstellar_eyes`, Camarilla levels) and Chronos Matrix (`chronos_matrix`, sessions and pivots) when the strategy plans at key levels; News Analyst (`news`) and Calendar Agent (`calendar`) only when the pack shows losing trades inside a release horizon |
-| `kpi:engine:15` | 15m Desk, 1H Desk (`h1`), Risk Manager, Technical Analyst, News Analyst, Projection Agent |
-| macro / news topics | the `MACRO_AGENTS` seats |
-| `seat:*`, `knowledge:*` | the seat concerned, Risk Manager |
+| `engine:*` | 15m Desk, 1H Desk (`h1`), Risk Manager, Technical Analyst, News Analyst, Projection Agent |
+| `risk:*` | Risk Manager, 15m Desk, Chronos Matrix (sessions), Technical Analyst, Trade Management, Projection Agent |
+| `news:*` | News Analyst, Calendar Agent, Dollar, Rates, Risk Manager, 15m Desk |
+| `execution:*` | Trade Management, Risk Manager, 15m Desk, Technical Analyst (the EA and Omega are code: their records are evidence) |
+| `data:*` | the seats that read the feed in question (e.g. the HUD seat of a stuck indicator), Technical Analyst, Risk Manager |
+| `cost:*` | the seats of the source in question, Risk Manager |
+| `seat:*`, `knowledge:*` | the seat concerned, Risk Manager, and up to four seats of its room |
+| `free:*` | chosen by the owner (at most 6) |
 
 - **The strategy agents are deterministic code** (`STRATEGY_AGENTS`), not model seats; their plans and records are evidence (section 3), never a voice. A "Strategy Analyst" seat that reads `GET /api/strategy-agents` would be a new seat (a new AI task in `organism.json`, kept equal to the code by `test/organism-dna.test.mjs`). Decision 4: no new seat for now.
 - Seats keep their names and role text and speak **only from the pack**, not from their live data. A seat's reputation (`src/reputation.mjs`) is shown beside it as context; there is no quorum and no weighting: the owner decides.
@@ -66,7 +95,9 @@ Agents and outcome scoring may only **suggest** a council (owner decision Q9): a
 
 Built deterministically by the AI Worker when the session opens, before any model call; frozen for the session; hashed (sha256); stored in R2 beside the transcript (section 6). A seat's claim may cite only this pack.
 
-**Sections for a strategy topic (e.g. the Key Level entry: both `zone_pullback` and `ENTER_LIMIT`, reported separately, decision 1):**
+**The pack is assembled per topic type** from section builders; the strategy pack below is the fullest. For the owner's first example (the Key Level entry), `zone_pullback` and `ENTER_LIMIT` are reported separately (decision 1).
+
+**Sections for a `strategy` topic (any agent, pattern or context):**
 
 | Section | Source (tables and fields) | Content |
 |---|---|---|
@@ -82,7 +113,20 @@ Built deterministically by the AI Worker when the session opens, before any mode
 | `calendar` | D1 `econ_releases` | releases within each losing trade's window |
 | `prior` | earlier council documents on the same topic key | what was tried, and its verdict |
 
-Other topic kinds take `outcome_scores` and `scorecard_snapshots` (KPI), `room_runs` v2 documents (seat statements), `compliance_checks`, `stuck_states`, `learned_live` and `shadow_agent_outputs` (knowledge).
+**Sections for the other types** (each built only from tables that exist today; prices dropped as for every pack):
+
+| Type | Sections (sources) |
+|---|---|
+| `seat` | its statements and claims (`room_runs` v2 documents), its outcome record and crowd weight (`outcome_scores`, `scorecard_snapshots`, `src/reputation.mjs`), its `compliance_checks`, owner corrections on it |
+| `engine` | `engine_decisions` (actions, no-trade reasons, quorum, witnesses), `outcome_scores` and `scorecard_snapshots`, guardrail holds, witness-weight history (`src/witness-tuning.mjs`) |
+| `risk` | `signal_ledger` and `engine_decisions` grouped by session, regime and mode: exits, R, excursions, runs of losses in R |
+| `news` | `econ_releases` with surprises, the ledger's trades inside release horizons, the news drift alerts, the CALENDAR witness's record |
+| `execution` | `omega_events`, `ea_deals` against `signal_ledger` (signal → fill, reasons; never money or volume), Omega's SL+ and trailing records |
+| `data` | `stuck_states`, parity and feed freshness records, the TradingView budget counters |
+| `cost` | `ai_usage_daily` per source and model, `shadow_switch_events` |
+| `knowledge` | `learned_live`, `shadow_agent_outputs`, the item's text and verdicts |
+| `free` | the sections the owner picks from the builders above |
+| every type | `prior`: earlier council documents on the same topic key |
 
 **Evidence refs** (`[CONTRACT-4]`): `ev:xauusd/<source>/<id>[@<as_of>][#<field>]`, e.g. `ev:xauusd/outcome_summary/engine:15/30d@2026-11-16T12:00Z#hit_rate` or `ev:xauusd/council_pack/<pack_sha8>:exits:by_regime:trend#stop_share`. The AI Worker serves the resolver for `xauusd` refs (new, internal: `{ value, as_of }`); **it never resolves a price field** (`entry`, `stop`, `tp1`, `tp2`, levels): claims speak in R, shares, counts, ATR multiples and times. A ref that does not resolve, or whose value differs, marks the claim `verified: false` and writes `council.claim_unverified`; such a claim adds no confidence.
 
@@ -128,6 +172,8 @@ The moderator never decides; the owner's pick, made in Cerebrum, is the only dec
 - `threshold_arm`, `knowledge_note`: the existing rules of their path (sign test, Holm, 200-bar discovery, 100-bar holdout).
 
 **Going live needs the owner's click** (`owner_click_to_promote`, in Cerebrum like the pick). The change itself lands as today: a flag or a promotion PR (`STRATEGY_AGENTS_LIVE`, `src/strategy-engine.mjs`, or the bundled learned pack, K9). A council-origin note must not go live through `LEARNED_AUTO_PROMOTION` (`src/learned-live.mjs`): new rule, the autonomous promotion skips items whose provenance is a council. No approve or pick button in Nexus.
+
+**Downstream (noted, not designed here).** The owner announced a later feature, "Strategy Recommendation" on the Strategy Agents page: one recommendation per strategy with an **Armed** button; an armed strategy is what the Signal Engine and Omega use for entry and close, still within the Decision Engine. It is the intended downstream of a council's `shadow_arm` → promote for strategy topics. Its safety model (where the Armed click lives, prerequisites, how many may be armed, disarm) is with the owner; nothing in this RFC builds toward it.
 
 **Invariants:**
 - **A council never widens trading autonomy.** The validator refuses any option that touches the guardrails (`MODE_THRESHOLDS`, `QUORUM_SHARE`, the squeeze rule, the confidence floor), the witness weights, the trading mode, `TRADING_MODE`, the kill switches (`EA_SIGNALS_ENABLED`, `DECISION_ENGINE`, `OMEGA_ENGINE_ENABLED`, `SHADOW_MODE`), the Omega gates and policy (`omega_settings`, `OMEGA_POLICY_BOUNDS` in `src/omega-broker.mjs`, risk, max positions), the typed `LIVE` arm, position size, or that sets an agent live. Such a change stays an owner PR with an SSOT change, outside this feature.
