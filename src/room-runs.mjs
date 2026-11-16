@@ -212,6 +212,40 @@ export async function docStatements(env, timeframe, sinceIso, { now = Date.now()
   }
 }
 
+/**
+ * P2b readers 2-6 (owner 2026-11-16): whether a reader reads the documents. Each reader has its own flag
+ * ROOM_RUNS_READ_<READER> ("on" / "off", the rollback), and needs the documents to be derived (ROOM_RUNS_SHADOW).
+ */
+export function roomRunsReaderEnabled(env, reader) {
+  return roomRunsEnabled(env) && String(env?.["ROOM_RUNS_READ_" + String(reader).toUpperCase()] ?? "off").trim().toLowerCase() === "on";
+}
+
+/**
+ * P2b readers 2-6: the message rows of a room's runs from their v2 documents (docRows), for runs whose bar closed at or
+ * after `floorIso`, ordered by run then id, exactly as agent_thread_messages stores them. First derives the runs
+ * concluded since the last pass. Returns null (the caller reads the messages) until the one-time backfill of the
+ * current document version is done, when a document has no steps, or when the documents cannot be read.
+ */
+export async function runRowsFromDocs(env, room, floorIso, { now = Date.now() } = {}) {
+  const db = env?.DB;
+  if (!db || !RUN_ROOMS[room]) return null;
+  try {
+    await deriveRoomRuns(env, { now });
+    const done = await db.prepare("SELECT value FROM room_runs_meta WHERE key = ?").bind("backfill:" + RUN_DOC_VERSION).first();
+    if (!done) return null;
+    const docs = (await db.prepare("SELECT run_id, body_json FROM room_runs WHERE room = ? AND bar_close >= ? ORDER BY run_id").bind(room, floorIso).all()).results || [];
+    const out = [];
+    for (const d of docs) {
+      const rows = docRows(d);
+      if (!rows) return null;
+      out.push(...rows);
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 /** The concluded runs of the window not yet derived, per thread, at most MAX_RUNS_PER_PASS. */
 async function pendingRuns(db, { now, windowMs = DERIVE_WINDOW_MS }) {
   const since = new Date(now - windowMs).toISOString();
