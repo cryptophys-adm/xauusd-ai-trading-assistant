@@ -305,6 +305,28 @@ export async function cardRuns(env, room, limit, { now = Date.now() } = {}) {
 }
 
 /**
+ * P2b reader 6 (kernel reports, owner 2026-11-16): the room's newest run as { run_id, rows }, its rows rebuilt from
+ * its document, when that run has concluded and is documented. Null while the newest run is in progress, until the
+ * documents are ready, with ROOM_RUNS_READ_KERNEL off, or when the documents cannot be read: the caller then reads
+ * the messages, as before.
+ */
+export async function latestRunFromDoc(env, room, { now = Date.now() } = {}) {
+  const db = env?.DB;
+  if (!db || !RUN_ROOMS[room] || !roomRunsReaderEnabled(env, "kernel") || !(await docsReady(env, { now }))) return null;
+  try {
+    const latest = room === "warroom"
+      ? (await db.prepare("SELECT run_id AS r FROM agent_thread_messages WHERE thread_id >= 'warroom:' AND thread_id < 'warroom;' ORDER BY thread_id DESC, run_id DESC LIMIT 1").first())?.r
+      : (await db.prepare("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id = ?").bind(room).first())?.r;
+    if (!latest) return null;
+    const doc = await db.prepare("SELECT run_id, body_json FROM room_runs WHERE room = ? AND run_id = ? AND doc_version = ?").bind(room, latest, RUN_DOC_VERSION).first();
+    const rows = doc ? docRows(doc) : null;
+    return rows?.length ? { run_id: latest, rows } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The concluded runs of the window not yet derived (or of an older document version, or whose conclusion was rewritten
  * after the document, as a retried failed conclusion is), per thread, at most MAX_RUNS_PER_PASS.
  */

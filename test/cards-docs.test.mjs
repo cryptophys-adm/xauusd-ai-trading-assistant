@@ -84,3 +84,24 @@ test("a failed conclusion retried after its document is derived again: the docum
   assert.ok(again.derived >= 1);
   assert.equal((await deriveRoomRuns(env, { now: Date.parse("2026-11-16T01:40:00Z") })).derived, 0, "then nothing left to derive");
 });
+
+test("reader 6: the kernel reports read a concluded newest run from its document, a run in progress from the messages", async () => {
+  const { readTimeframeOpenings, readLatestWarRoom } = await import("../src/platform-reports.mjs");
+  const { readWarRoom } = await import("../src/war-room.mjs");
+  const db = await seeded();
+  const now = Date.parse("2026-11-16T02:10:00Z");
+  const on = { DB: db, ROOM_RUNS_SHADOW: "on", ROOM_RUNS_READ_KERNEL: "on" };
+  await deriveRoomRuns(on, { now, backfill: true }); await deriveRoomRuns(on, { now, backfill: true });
+  const { latestRunFromDoc } = await import("../src/room-runs.mjs");
+  assert.equal(await latestRunFromDoc(on, "tf:H1", { now }), null, "the 1H room's newest run is in progress");
+  assert.equal((await latestRunFromDoc(on, "warroom", { now })).run_id, "2026-11-15T23:45:00.000Z");
+  assert.equal(await latestRunFromDoc({ DB: db, ROOM_RUNS_SHADOW: "on" }, "warroom", { now }), null, "flag off");
+  const byId = (r) => Object.fromEntries(Object.entries(r).map(([tf, v]) => [tf, v && { ...v, openings: [...v.openings].sort((a, b) => a.id.localeCompare(b.id)) }]));
+  assert.deepEqual(byId(await readTimeframeOpenings(db, { env: on })), byId(await readTimeframeOpenings(db)));
+  assert.deepEqual(await readLatestWarRoom(on), await readWarRoom(db));
+  // Once the 1H run concludes, its document is read, and the openings are unchanged.
+  db.raw.prepare("INSERT INTO agent_thread_messages (thread_id, run_id, step, agent, bar_time, ts, stance, confidence, body_json, model, status, usage_tokens) VALUES ('tf:H1', '2026-11-16T02:00:00.000Z', 'conclusion', 'moderator', '2026-11-16T02:00:00.000Z', '2026-11-16T02:12:00.000Z', 'BUY', 0.6, '{\"summary\":\"Long.\"}', 'm', 'ok', 400)").run();
+  const later = Date.parse("2026-11-16T02:20:00Z");
+  assert.equal((await latestRunFromDoc(on, "tf:H1", { now: later })).run_id, "2026-11-16T02:00:00.000Z");
+  assert.deepEqual(byId(await readTimeframeOpenings(db, { env: on })), byId(await readTimeframeOpenings(db)));
+});
