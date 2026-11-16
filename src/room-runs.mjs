@@ -330,22 +330,22 @@ export async function latestRunFromDoc(env, room, { now = Date.now() } = {}) {
  * The concluded runs of the window not yet derived (or of an older document version, or whose conclusion was rewritten
  * after the document, as a retried failed conclusion is), per thread, at most MAX_RUNS_PER_PASS.
  */
-async function pendingRuns(db, { now, windowMs = DERIVE_WINDOW_MS }) {
+async function pendingRuns(db, { now, windowMs = DERIVE_WINDOW_MS, limit = MAX_RUNS_PER_PASS }) {
   const since = new Date(now - windowMs).toISOString();
   const threads = [...(warRoomThreadIds(since, now) ?? []), "tf:H1", "tf:H4", "tf:D1"];
   const out = [];
   for (const threadId of threads) {
-    if (out.length >= MAX_RUNS_PER_PASS) break;
+    if (out.length >= limit) break;
     const room = roomOf(threadId);
     const rows = (await db.prepare("SELECT m.run_id FROM agent_thread_messages m LEFT JOIN room_runs r ON r.room = ? AND r.run_id = m.run_id WHERE m.thread_id = ? AND m.bar_time >= ? AND m.step = 'conclusion' AND (r.run_id IS NULL OR r.doc_version != ? OR m.ts > r.derived_at) ORDER BY m.run_id LIMIT ?")
-      .bind(room, threadId, since, RUN_DOC_VERSION, MAX_RUNS_PER_PASS - out.length).all()).results || [];
+      .bind(room, threadId, since, RUN_DOC_VERSION, limit - out.length).all()).results || [];
     for (const r of rows) out.push({ threadId, runId: r.run_id });
   }
   return out;
 }
 
 /** The hourly pass: derive the window's new run documents. Never throws; returns counts. */
-export async function deriveRoomRuns(env, { now = Date.now(), backfill = false } = {}) {
+export async function deriveRoomRuns(env, { now = Date.now(), backfill = false, limit = MAX_RUNS_PER_PASS } = {}) {
   if (!roomRunsEnabled(env)) return { status: "disabled" };
   const db = env?.DB;
   if (!db) return { status: "unavailable" };
@@ -354,7 +354,7 @@ export async function deriveRoomRuns(env, { now = Date.now(), backfill = false }
   // finds nothing left; then a marker keeps every later pass to the short window.
   const BACKFILL_KEY = "backfill:" + RUN_DOC_VERSION;
   const backfilling = backfill && !(await db.prepare("SELECT value FROM room_runs_meta WHERE key = ?").bind(BACKFILL_KEY).first());
-  const pending = await pendingRuns(db, { now, windowMs: backfilling ? BACKFILL_WINDOW_MS : DERIVE_WINDOW_MS });
+  const pending = await pendingRuns(db, { now, windowMs: backfilling ? BACKFILL_WINDOW_MS : DERIVE_WINDOW_MS, limit });
   let derived = 0, skipped = 0;
   for (const { threadId, runId } of pending) {
     const rows = (await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(threadId, runId).all()).results || [];
@@ -364,10 +364,14 @@ export async function deriveRoomRuns(env, { now = Date.now(), backfill = false }
       .bind(doc.room, doc.run_id, doc.timeframe, doc.candle_key, doc.bar_close, doc.status, doc.stance, doc.bias, doc.confidence, doc.agents_heard, doc.agents_failed, doc.shadow_seats, doc.model_calls, doc.fallbacks, doc.tokens, doc.opened_at, doc.concluded_at, doc.transcript_key, doc.doc_version, JSON.stringify(doc.body), new Date(now).toISOString()).run();
     derived += 1;
   }
-  if (backfilling && pending.length === 0) {
-    await db.prepare("INSERT INTO room_runs_meta (key, value, updated_at) VALUES (?, 'done', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at").bind(BACKFILL_KEY, new Date(now).toISOString()).run();
+  // The backfill is done once a pass derives every run it found (fewer than its limit), not only when a pass finds
+  // none: production 2026-11-16, every hourly pass found the War Room or 1H run concluded minutes before it, so a
+  // pass that found nothing never came and the marker was never set (the 05:06 pass derived the last 107 old runs).
+  const drained = pending.length < limit;
+  if (backfilling && drained) {
+    await db.prepare("INSERT INTO room_runs_meta (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at").bind(BACKFILL_KEY, skipped ? `done (${skipped} skipped)` : "done", new Date(now).toISOString()).run();
   }
-  return { status: "ok", derived, skipped, ...(backfilling ? { backfill: pending.length ? "running" : "done" } : {}) };
+  return { status: "ok", derived, skipped, ...(backfilling ? { backfill: drained ? "done" : "running" } : {}) };
 }
 
 const canon = (list) => JSON.stringify([...list].sort((a, b) => a.subject.localeCompare(b.subject)).map((s) => [s.subject, s.source, s.stance, s.confidence]));

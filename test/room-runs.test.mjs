@@ -160,10 +160,12 @@ test("v1 documents are upgraded in place, and the hourly backfill reaches older 
   db.raw.prepare("UPDATE room_runs SET doc_version = 'cryptophys.room-run.v1', body_json = json_remove(body_json, '$.steps')").run();
   const later = NOW + 10 * 86_400_000; // the seeded runs are now older than the 48 h window
   assert.deepEqual(await deriveRoomRuns(env, { now: later }), { status: "ok", derived: 0, skipped: 0 }, "the short window does not reach them");
-  assert.deepEqual(await deriveRoomRuns(env, { now: later, backfill: true }), { status: "ok", derived: 4, skipped: 0, backfill: "running" });
+  // A pass that reaches its limit leaves the backfill running; the pass that derives everything it found finishes it.
+  assert.deepEqual(await deriveRoomRuns(env, { now: later, backfill: true, limit: 3 }), { status: "ok", derived: 3, skipped: 0, backfill: "running" });
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM room_runs_meta").get().n, 0, "no marker while runs may remain");
+  assert.deepEqual(await deriveRoomRuns(env, { now: later, backfill: true, limit: 3 }), { status: "ok", derived: 1, skipped: 0, backfill: "done" }, "drained: done, even though the pass found a run");
   assert.ok(db.raw.prepare("SELECT doc_version FROM room_runs").all().every((r) => r.doc_version === RUN_DOC_VERSION));
   assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM room_runs").get().n, 4, "upgraded in place, no duplicates");
-  assert.deepEqual(await deriveRoomRuns(env, { now: later, backfill: true }), { status: "ok", derived: 0, skipped: 0, backfill: "done" });
   assert.deepEqual(await deriveRoomRuns(env, { now: later, backfill: true }), { status: "ok", derived: 0, skipped: 0 }, "after the marker, the short window only");
 });
 
