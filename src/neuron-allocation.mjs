@@ -14,6 +14,7 @@ import { ensureThreadSchema } from "./agent-threads.mjs";
 import { readAllocationState, readAllocationEvents, ALLOCATION_RULES } from "./agent-allocation.mjs";
 import { readMetricShadow } from "./metric-shadow.mjs";
 import { readModelArena } from "./model-arena.mjs";
+import { roomRunsReaderEnabled, docsReady, DOC_ROOMS_SQL } from "./room-runs.mjs";
 
 export const NEURON_ALLOCATION_VERSION = "cryptophys.neuron-allocation.v1";
 const ROOM_SQL = `CASE
@@ -164,13 +165,53 @@ export function promptCache(totals = []) {
   return { prompt_tokens: prompt, cached_tokens: cached, share: prompt > 0 ? round(cached / prompt) : null };
 }
 
+/** The run documents' room of each document room (the same names as ROOM_SQL). */
+const DOC_ROOM_NAME_SQL = "CASE r.room WHEN 'warroom' THEN 'M15' WHEN 'tf:H1' THEN 'H1' WHEN 'tf:H4' THEN 'H4' WHEN 'tf:D1' THEN 'D1' ELSE 'Other' END";
+const IN_CHUNK = 90;
+
+/**
+ * ADR-0015 P2b reader 4 (owner 2026-11-16): the model calls and tokens per day, room, agent and model, in the shape of
+ * the query on agent_thread_messages. The War Room and the 1H/4H/D1 rooms come from their run documents (steps
+ * expanded and grouped in D1); the other rooms (Macro, News Daily, news threads) have no documents, so their messages
+ * are read, only for the threads active in the window (agent_threads, then the thread_id index) instead of a scan of
+ * the whole table. Null when the documents are not ready (the caller keeps the old query). A run still in progress is
+ * counted once it concludes.
+ */
+export async function callRowsFromDocs(env, since, { now }) {
+  if (!roomRunsReaderEnabled(env, "allocation") || !(await docsReady(env, { now }))) return null;
+  const db = env.DB;
+  try {
+    const docs = (await db.prepare(`SELECT substr(json_extract(s.value, '$.ts'), 1, 10) AS day, ${DOC_ROOM_NAME_SQL} AS room, json_extract(s.value, '$.agent') AS agent, json_extract(s.value, '$.model') AS model, COUNT(*) AS calls, SUM(json_extract(s.value, '$.usage_tokens')) AS tokens FROM room_runs r, json_each(r.body_json, '$.steps') s WHERE r.room IN ${DOC_ROOMS_SQL} AND r.bar_close >= ? AND json_extract(s.value, '$.ts') >= ? AND json_extract(s.value, '$.usage_tokens') > 0 GROUP BY 1, 2, 3, 4`).bind(new Date(Date.parse(since) - 86_400_000).toISOString(), since).all()).results || [];
+    const threadSince = new Date(Date.parse(since) - 86_400_000).toISOString();
+    const threads = ((await db.prepare("SELECT id FROM agent_threads WHERE updated_at >= ? AND NOT ((id >= 'warroom:' AND id < 'warroom;') OR id IN ('tf:H1', 'tf:H4', 'tf:D1'))").bind(threadSince).all()).results || []).map((t) => t.id);
+    const others = [];
+    for (let i = 0; i < threads.length; i += IN_CHUNK) {
+      const chunk = threads.slice(i, i + IN_CHUNK);
+      const part = (await db.prepare(`SELECT substr(ts, 1, 10) AS day, ${ROOM_SQL} AS room, agent, model, COUNT(*) AS calls, SUM(usage_tokens) AS tokens FROM agent_thread_messages WHERE thread_id IN (${chunk.map(() => "?").join(", ")}) AND ts >= ? AND usage_tokens > 0 GROUP BY day, room, agent, model`).bind(...chunk, since).all()).results || [];
+      others.push(...part);
+    }
+    // Re-group: rooms are distinct between the two sources, but a chunk boundary can split one (day, room, agent, model).
+    const merged = new Map();
+    for (const r of [...docs, ...others]) {
+      const k = [r.day, r.room, r.agent, r.model].join("\u0000");
+      const m = merged.get(k) || { day: r.day, room: r.room, agent: r.agent, model: r.model, calls: 0, tokens: 0 };
+      m.calls += Number(r.calls) || 0;
+      m.tokens += Number(r.tokens) || 0;
+      merged.set(k, m);
+    }
+    return [...merged.values()];
+  } catch {
+    return null;
+  }
+}
+
 /** GET /api/neuron-allocation: the last `days` days (1 to 14). */
 export async function readNeuronAllocation(env, { days = 7, now = Date.now() } = {}) {
   const db = env.DB;
   await ensureThreadSchema(db);
   const n = Math.min(14, Math.max(1, Math.round(Number(days) || 7)));
   const since = new Date(now - (n - 1) * 86_400_000).toISOString().slice(0, 10);
-  const rows = ((await db.prepare(`SELECT substr(ts, 1, 10) AS day, ${ROOM_SQL} AS room, agent, model, COUNT(*) AS calls, SUM(usage_tokens) AS tokens FROM agent_thread_messages WHERE ts >= ? AND usage_tokens > 0 GROUP BY day, room, agent, model`).bind(since).all()).results) || [];
+  const rows = (await callRowsFromDocs(env, since, { now })) ?? (((await db.prepare(`SELECT substr(ts, 1, 10) AS day, ${ROOM_SQL} AS room, agent, model, COUNT(*) AS calls, SUM(usage_tokens) AS tokens FROM agent_thread_messages WHERE ts >= ? AND usage_tokens > 0 GROUP BY day, room, agent, model`).bind(since).all()).results) || []);
   const usage = await readAiUsage(db, { days: n, now });
   const cards = await scorecards(db, { days: 30, now, snapshot: true });
   const [state, changes, metric, arena] = await Promise.all([readAllocationState(env), readAllocationEvents(db, { limit: 50 }), readMetricShadow(env, { days: n, now }).catch(() => null), readModelArena(env, { days: 30, now }).catch(() => null)]);
