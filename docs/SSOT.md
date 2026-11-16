@@ -1007,6 +1007,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
      - `preview-e2e` (`deploy-preview-worker.yml`; skipped, and so passing, when a PR touches no preview path);
      - `protection-guard` (`branch-protection-guard.yml`);
      - `typecheck` (`typecheck.yml`: `tsc --noEmit` for the AI Worker and for the Nexus UI; cut-over option (D), 2026-11-15);
+     - `dependency-audit` (`dependency-audit.yml`: `npm audit` for the repository root and the Nexus UI; a high or critical advisory, or an audit that gave no report, fails it; owner 2026-11-16, "jadikan dependency-audit cek wajib", after the report of 0 findings);
    - no bypass actor. "Workers Builds: …" checks are dashboard-managed and never required. The repository has no linter, so no lint check exists.
 
    `protection-guard` (on every PR, on `main` and daily) fails when the rules GitHub applies to `main` differ from `ops/branch-ruleset.json`, or when a required check is no longer exactly one job of a workflow that runs on every pull request (a renamed job or a path filter). To change a required check: edit `ops/branch-ruleset.json` and the workflow in one PR. Then the owner applies the same change in Settings → Rules → Rulesets, because this repository's automation cannot write rulesets.
@@ -1039,7 +1040,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
      - version provenance: tags, `/health` commit and DNA `deployed_commit`;
      - main protection with `protection-guard` (rule 7);
      - the required `typecheck`;
-     - an advisory npm `dependency-audit` on every PR and daily;
+     - the required npm `dependency-audit` on every PR and daily (advisory until 2026-11-16);
      - one tagged deploy path per Worker, with Workers Builds production set to versions-only (rule 8).
    - **What the platform does:**
      - reads the DNA (`organism.json` and the OrganismDna RPC), `/health` and the versions API;
