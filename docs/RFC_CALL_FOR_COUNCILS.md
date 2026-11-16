@@ -66,7 +66,7 @@ Agents and outcome scoring may only **suggest** a council (owner decision Q9): a
 
 Built deterministically by the AI Worker when the session opens, before any model call; frozen for the session; hashed (sha256); stored in R2 beside the transcript (section 6). A seat's claim may cite only this pack.
 
-**Sections for a strategy topic (e.g. the Key Level entry, see open question 1 for which agent that is):**
+**Sections for a strategy topic (e.g. the Key Level entry: both `zone_pullback` and `ENTER_LIMIT`, reported separately, decision 1):**
 
 | Section | Source (tables and fields) | Content |
 |---|---|---|
@@ -233,7 +233,7 @@ The platform session's contract (`docs/design/HAIC-H0-H1.md` §4, branch `claude
 
 ## 12. Phased rollout
 
-- **P0: design approval** (this document). Owner answers the open questions.
+- **P0: design approval** (this document): done, the owner's decisions in section 14.
 - **P1: evidence only, no model call.** `src/cfc-triggers.mjs` and the pack builder; `GET /api/council/evidence?topic=` (new, read-only); suggested-topic cards on the Call for Councils page. Exit: packs for three real topics checked by the owner.
 - **P2: sessions in shadow.** `CouncilCell`, `council_sessions`, R2 transcripts, the push topic, the Omega route, the validators, the budget. Options are published to the kernel; a pick in Cerebrum is stored as a would-be proposal; nothing is started. Exit: 5 sessions with no budget breach, all claims resolvable, the owner judges the syntheses useful.
 - **P3: handoff to shadow arms.** `plan_arm`, `threshold_arm`, `agent_hold` first (existing paths); then `strategy_variant` (PR per variant) and `management_arm`; `knowledge_note` once Aether has its ingress. Live only by the owner's click.
