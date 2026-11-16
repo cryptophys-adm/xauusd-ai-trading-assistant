@@ -237,6 +237,8 @@ Document v2 (2026-11-16, owner: "lanjutkan semua pembaca ke room_runs"), for rea
 - So `cryptophys.room-run.v2` also stores every step of its run as stored: every column, in id order, in `body.steps`, plus `body.thread_id`.
 - `docRows(doc)` rebuilds the exact message rows, so each reader keeps its own logic.
 - The hourly pass upgrades v1 documents in place. It backfills the last 58 days once (at most 200 runs per pass); a marker in `room_runs_meta` then keeps later passes to the 48 h window.
+- Readers 2-6 use `runRowsFromDocs(env, room, floor)`, which returns the rows only once the backfill marker of the current version is set; before that they read the messages. Each reader has its own flag, `ROOM_RUNS_READ_<READER>`, where `off` is the rollback.
+- Reader 2 (replay, `ROOM_RUNS_READ_REPLAY`) applies the same filters and order as its SQL (status ok, `ts` since, open/debate/conclusion, by run then step kind then id). For H1/H4/D1 it takes the candle key from the run's brief.
 
 **P2c: the cell.**
 - `RoomCell` runs the rooms. D1 receives the run document only. The transcript goes to R2.

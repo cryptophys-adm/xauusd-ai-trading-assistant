@@ -22,6 +22,7 @@ import { WEIGHTING_DEFAULT, WEIGHTING_GRID, WEIGHTING_VERSION, weightingId, weig
 import { familyOf } from "./reputation.mjs";
 import { regimeMap, REGIME_SERIES } from "./market-regime.mjs";
 import { collectNexusAnalytics } from "./nexus-analytics.mjs";
+import { roomRunsReaderEnabled, runRowsFromDocs } from "./room-runs.mjs";
 
 export const WEIGHTING_REPLAY_VERSION = "cryptophys.weighting-replay.v2";
 const DAY_MS = 86_400_000;
@@ -168,8 +169,36 @@ const ORDER = "ORDER BY m.run_id, CASE WHEN m.step LIKE 'open:%' THEN 0 WHEN m.s
 const STEPS = "(m.step LIKE 'open:%' OR m.step LIKE 'debate:%' OR m.step = 'conclusion')";
 const TF_THREAD = Object.freeze({ "60": "tf:H1", "240": "tf:H4", "1D": "tf:D1" });
 
-/** The concluded rooms of a timeframe since `sinceIso`. */
-export async function loadRooms(db, timeframe, sinceIso, { now = Date.now() } = {}) {
+const STEP_RANK = (step) => (step.startsWith("open:") ? 0 : step.startsWith("debate:") ? 1 : 2);
+const isReplayStep = (step) => step.startsWith("open:") || step.startsWith("debate:") || step === "conclusion";
+const bodyBias = (json) => { try { return JSON.parse(json || "{}")?.bias ?? null; } catch { return null; } };
+
+/**
+ * ADR-0015 P2b reader 2 (owner 2026-11-16): the replay's rows from the run documents, with the same filters and order
+ * as the SQL below (status ok, ts since, the open/debate/conclusion steps, by run then step kind then id). Null when
+ * the documents are not ready: the messages are read.
+ */
+async function rowsFromDocs(env, timeframe, sinceIso, { now }) {
+  const room = timeframe === "15" ? "warroom" : TF_THREAD[timeframe];
+  const floor = barTimeFloor(sinceIso);
+  const rows = await runRowsFromDocs(env, room, floor, { now, fields: ["id", "step", "agent", "bar_time", "ts", "stance", "body_json", "status"] });
+  if (!rows) return null;
+  const keyOf = new Map();
+  if (timeframe !== "15") for (const r of rows) if (r.step === "brief") { try { keyOf.set(r.run_id, JSON.parse(r.body_json || "{}")?.candle_key ?? null); } catch { keyOf.set(r.run_id, null); } }
+  const out = rows
+    .filter((r) => r.status === "ok" && String(r.bar_time ?? "") >= floor && String(r.ts ?? "") >= sinceIso && isReplayStep(r.step) && (timeframe === "15" || keyOf.has(r.run_id)))
+    .map((r, i) => ({ i, run_id: r.run_id, step: r.step, agent: r.agent, stance: r.stance, bias: bodyBias(r.body_json), bar_time: r.bar_time, key: timeframe === "15" ? undefined : keyOf.get(r.run_id) }));
+  out.sort((a, b) => (a.run_id < b.run_id ? -1 : a.run_id > b.run_id ? 1 : STEP_RANK(a.step) - STEP_RANK(b.step) || a.i - b.i));
+  return out.map(({ i: _i, ...r }) => r);
+}
+
+/** The concluded rooms of a timeframe since `sinceIso`. `env` (with ROOM_RUNS_READ_REPLAY on) reads the run documents. */
+export async function loadRooms(db, timeframe, sinceIso, { now = Date.now(), env = null } = {}) {
+  const fromDocs = env && roomRunsReaderEnabled(env, "replay") ? await rowsFromDocs(env, timeframe, sinceIso, { now }) : null;
+  if (fromDocs && timeframe === "15") {
+    return roomsFromRows(fromDocs.map((r) => ({ ...r, key: Number.isFinite(Date.parse(r.bar_time)) ? `${SYMBOL}:15:${Date.parse(r.bar_time) - TF_MS["15"]}` : null })), (key) => Number(key.split(":").pop()) + TF_MS["15"]);
+  }
+  if (fromDocs) return roomsFromRows(fromDocs, (key) => Number(String(key).split(":").pop()) + TF_MS[timeframe]);
   if (timeframe === "15") {
     // Owner 2026-11-15 (RFC_ROOM_CELLS §6): the window's daily threads only, by bar time (a message is written
     // after its bar closes, so a bar a day before the window start bounds every message since it).
@@ -208,7 +237,7 @@ export async function readWeightingReplay(env, { timeframe = "60", days = REPLAY
   const byAgent = await loadAgentRows(env.DB, { days: days + maxDays, now, timeframe, regimes });
   const rows = [...byAgent].flatMap(([agent, list]) => list.map((r) => ({ agent, ...r }))).sort((a, b) => a.close_ms - b.close_ms);
   let rooms = [];
-  try { rooms = await loadRooms(env.DB, timeframe, new Date(windowStart - tfMs).toISOString(), { now }); } catch { rooms = []; }
+  try { rooms = await loadRooms(env.DB, timeframe, new Date(windowStart - tfMs).toISOString(), { now, env }); } catch { rooms = []; }
   rooms = rooms.filter((r) => r.close_ms >= windowStart).map((r) => ({ ...r, regime: regimes.get(r.close_ms) ?? null }));
   const outcomes = new Map();
   const scored = (await env.DB.prepare("SELECT candle_key, stance, result FROM outcome_scores WHERE timeframe = ? AND scoring_version = ? AND statement_close >= ?").bind(timeframe, SCORING_VERSION, new Date(windowStart).toISOString()).all()).results || [];

@@ -4,8 +4,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
-import { buildRunDoc, statementsFromDocs, deriveRoomRuns, compareRoomRuns, roomRunsStatus, resetRoomRunsSchemaCacheForTests, roomRunsEnabled, roomRunsReadEnabled, docRows, RUN_DOC_VERSION } from "../src/room-runs.mjs";
+import { buildRunDoc, statementsFromDocs, deriveRoomRuns, compareRoomRuns, roomRunsStatus, resetRoomRunsSchemaCacheForTests, roomRunsEnabled, roomRunsReadEnabled, docRows, RUN_DOC_VERSION, roomRunsReaderEnabled } from "../src/room-runs.mjs";
 import { agentStatements } from "../src/outcome-scoring.mjs";
+import { loadRooms } from "../src/weighting-replay.mjs";
 
 function d1() {
   const db = new DatabaseSync(":memory:");
@@ -164,4 +165,31 @@ test("v1 documents are upgraded in place, and the hourly backfill reaches older 
   assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM room_runs").get().n, 4, "upgraded in place, no duplicates");
   assert.deepEqual(await deriveRoomRuns(env, { now: later, backfill: true }), { status: "ok", derived: 0, skipped: 0, backfill: "done" });
   assert.deepEqual(await deriveRoomRuns(env, { now: later, backfill: true }), { status: "ok", derived: 0, skipped: 0 }, "after the marker, the short window only");
+});
+
+// ADR-0015 P2b reader 2 (owner 2026-11-16): the weighting replay reads its rooms from the run documents.
+test("the replay's rooms from the documents equal those from the messages, and only after the backfill", async () => {
+  resetRoomRunsSchemaCacheForTests();
+  const db = d1(); seed(db);
+  const SINCE = "2026-11-12T00:00:00.000Z";
+  const env = { DB: db, ROOM_RUNS_SHADOW: "on", ROOM_RUNS_READ_REPLAY: "on" };
+  // Before the backfill marker the documents are not trusted: the replay reads the messages (and derives on demand).
+  const early = await loadRooms(db, "15", SINCE, { now: NOW, env });
+  assert.deepEqual(early, await loadRooms(db, "15", SINCE, { now: NOW }));
+  await deriveRoomRuns(env, { now: NOW, backfill: true });
+  await deriveRoomRuns(env, { now: NOW, backfill: true }); // nothing left: the marker is set
+  for (const tf of ["15", "60"]) {
+    const fromMessages = await loadRooms(db, tf, SINCE, { now: NOW });
+    const fromDocs = await loadRooms(db, tf, SINCE, { now: NOW, env });
+    assert.ok(fromMessages.length > 0, tf);
+    assert.deepEqual(fromDocs, fromMessages, tf);
+  }
+  // Proof that the documents are what is read: edit one, and the replay sees it.
+  const doc = db.raw.prepare("SELECT run_id, body_json FROM room_runs WHERE room = 'warroom' AND run_id = '2026-11-13T20:00:00.000Z'").get();
+  const body = JSON.parse(doc.body_json);
+  body.steps.find((st) => st.step === "conclusion").stance = "SELL";
+  db.raw.prepare("UPDATE room_runs SET body_json = ? WHERE room = 'warroom' AND run_id = ?").run(JSON.stringify(body), doc.run_id);
+  const read = await loadRooms(db, "15", SINCE, { now: NOW, env });
+  assert.equal(read.find((r) => r.close_ms === Date.parse("2026-11-13T20:00:00.000Z")).stance, "SELL");
+  assert.equal(roomRunsReaderEnabled({ ROOM_RUNS_READ_REPLAY: "on" }, "replay"), false, "needs ROOM_RUNS_SHADOW");
 });
