@@ -1,6 +1,6 @@
 # RFC: Call for Councils (Nexus side, xauusd)
 
-Status: final design (owner's answers 2026-11-16: "1–4 setuju, 5 pakai 16 panggilan, 6 klik di Cerebrum, 7–9 setuju"; and "jangan ditampilkan di omega, buat menu navigator sendiri Call for Councils"). No code until the owner starts phase P1; one platform item open (section 9: the return path of the pick). Aligned with the shared contract `council.v1` (platform `docs/design/HAIC-H0-H1.md` §4, relayed 2026-11-16) and the owner's HAIC decisions of 2026-11-16 ("ya semua, sesuai rekomendasimu"): picks in Cerebrum only (Q6), a shadow window of at least 14 days and 30 outcomes (Q8), councils started by the owner only (Q9), transcripts 90 days hot then R2 only (Q4), live updates aligned with the platform's ConsoleHub where it makes sense (Q7).
+Status: final design (owner's answers 2026-11-16: "1–4 setuju, 5 pakai 16 panggilan, 6 klik di Cerebrum, 7–9 setuju"; and "jangan ditampilkan di omega, buat menu navigator sendiri Call for Councils"). No code until the owner starts phase P1; two platform items to confirm (section 9: the return path of the pick and the Telegram source). Aligned with the shared contract `council.v1` (platform `docs/design/HAIC-H0-H1.md` §4, relayed 2026-11-16) and the owner's HAIC decisions of 2026-11-16 ("ya semua, sesuai rekomendasimu"): picks in Cerebrum only (Q6), a shadow window of at least 14 days and 30 outcomes (Q8), councils started by the owner only (Q9), transcripts 90 days hot then R2 only (Q4), live updates aligned with the platform's ConsoleHub where it makes sense (Q7).
 
 **Owner's request (2026-11-16, translated):** the owner can call all the relevant agents into a scrum/retrospective session. The topic is either something the agents found themselves or a topic the owner sets (example: "the Key Level entry strategy often gets hit by SL or SL+"). Each agent gives its opinion and talks with the owner about what to improve. Together they decide which strategy to try and implement. The same feature will exist in Cerebrum for platform topics.
 
@@ -206,9 +206,9 @@ The platform session's contract (`docs/design/HAIC-H0-H1.md` §4, branch `claude
 | `[CONTRACT-6]` audit events | the fourteen `council.*` events; ids, hashes, refs, token counts only | section 7 |
 
 **Still needed from the platform:**
-- **The return path of the pick.** The contract carries the options to Cerebrum; how `council.decision.v1` comes back to this Worker to start the shadow arm is not specified (a kernel call into the AI Worker would be a new binding, an SSOT §2 change; a poll of the kernel by this Worker would be a new read).
+- **The return path of the pick** (proposed by the orchestrator, awaiting the platform's answer): this Worker pulls the decisions over the existing `AGENTS` binding (`AgentRpc`, xauusd → kernel) with a new read-only capability (e.g. `council.decisions.read`, scoped to `side: nexus`, cursored), on the hourly sweep; no new binding, the call direction stays external → platform. It acknowledges a decision by publishing `council.proposal_drafted`.
 - **Live view (owner decision Q7):** the platform's ConsoleHub (server → client) for Cerebrum; Nexus keeps its own push hub. Whether Cerebrum shows a Nexus session live is the platform's choice; this side publishes nothing but the decision report.
-- **Telegram:** whether council notices come from this Worker's bot or from Cerebrum.
+- **Telegram** (proposed, awaiting the platform): council notices come from Cerebrum's `owner_attention` only; this Worker's bot sends none, so nothing arrives twice.
 
 ## 10. Non-goals
 
