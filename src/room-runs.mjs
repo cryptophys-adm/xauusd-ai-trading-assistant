@@ -1,9 +1,10 @@
 // Room run documents, ADR-0015 phase 2a, in shadow (owner 2026-11-15: "setuju semuanya", item c;
 // docs/RFC_ROOM_CELLS.md §4-§5). Once an hour the concluded runs of the 15m War Room and the 1H/4H/D1 rooms are
 // derived from their stored messages into one D1 row each (room_runs: queryable columns plus a JSON body with
-// every agent's final position and the conclusion). Nothing reads them yet: an hourly comparison checks that the
-// statements outcome scoring would read from them equal the ones it reads from agent_thread_messages today
-// (room_runs_compare, GET /api/room-runs/status). No reader moves and no room changes until that holds.
+// every agent's final position and the conclusion). An hourly comparison checks that the statements outcome scoring
+// builds from them equal the ones it reads from agent_thread_messages (room_runs_compare, GET /api/room-runs/status).
+// P2b reader 1 (owner 2026-11-16): outcome scoring reads its room statements from these documents (docStatements,
+// ROOM_RUNS_READ); the other readers still read the messages, and no room changes.
 // The full transcript (R2, transcript_key) is added once the bucket is bound; until then transcript_key is null.
 import { agentStatements } from "./outcome-scoring.mjs";
 import { warRoomThreadIds } from "./thread-windows.mjs";
@@ -26,6 +27,17 @@ export const DERIVE_WINDOW_MS = 2 * DAY_MS;
 export function roomRunsEnabled(env) {
   return String(env?.ROOM_RUNS_SHADOW ?? "off").trim().toLowerCase() === "on";
 }
+
+/**
+ * ADR-0015 P2b, reader 1 (owner 2026-11-16: "tidak perlu menunggu, langsung pindah ke room_runs"): outcome scoring
+ * reads its room statements from the run documents. Needs the documents to be derived (ROOM_RUNS_SHADOW on);
+ * ROOM_RUNS_READ "off" returns scoring to agent_thread_messages (the rollback flag).
+ */
+export function roomRunsReadEnabled(env) {
+  return roomRunsEnabled(env) && String(env?.ROOM_RUNS_READ ?? "off").trim().toLowerCase() === "on";
+}
+/** The room whose run documents hold a scored timeframe's statements. */
+export const ROOM_OF_TIMEFRAME = Object.freeze({ "15": "warroom", "60": "tf:H1", "240": "tf:H4", "1D": "tf:D1" });
 
 export const ROOM_RUNS_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS room_runs (
@@ -148,6 +160,34 @@ export function statementsFromDocs(docs) {
   return new Map([...byKey].map(([k, m]) => [k, [...m.values()]]));
 }
 
+/**
+ * P2b reader: the statements of a timeframe's room from its run documents, in agentStatements' shape. First derives
+ * the runs concluded since the last hourly pass, so scoring never waits for it. Bars that closed before the derive
+ * window (the documents start there) come from `older` (the messages path), only when the window asks for them.
+ * Returns null when the documents cannot be read (table absent): the caller keeps the messages path.
+ */
+export async function docStatements(env, timeframe, sinceIso, { now = Date.now(), older = null } = {}) {
+  const room = ROOM_OF_TIMEFRAME[timeframe];
+  const db = env?.DB;
+  if (!room || !db) return null;
+  try {
+    await deriveRoomRuns(env, { now });
+    const spec = RUN_ROOMS[room];
+    const floor = new Date(Date.parse(sinceIso) - (room === "warroom" ? 0 : spec.ms + DAY_MS)).toISOString();
+    const rows = (await db.prepare("SELECT run_id, timeframe, candle_key, bar_close, status, body_json FROM room_runs WHERE room = ? AND bar_close >= ?").bind(room, floor).all()).results || [];
+    const map = statementsFromDocs(rows.map((r) => ({ ...r, body: parse(r.body_json, {}) })));
+    const coverage = now - DERIVE_WINDOW_MS;
+    if (typeof older === "function" && Date.parse(sinceIso) < coverage) {
+      for (const [key, list] of await older()) {
+        if (!map.has(key) && closeOfKey(key, room === "warroom" ? 0 : spec.ms) < coverage) map.set(key, list);
+      }
+    }
+    return map;
+  } catch {
+    return null;
+  }
+}
+
 /** The concluded runs of the window not yet derived, per thread, at most MAX_RUNS_PER_PASS. */
 async function pendingRuns(db, { now }) {
   const since = new Date(now - DERIVE_WINDOW_MS).toISOString();
@@ -199,7 +239,7 @@ export async function compareRoomRuns(env, { now = Date.now() } = {}) {
   const out = {};
   for (const [room, tf] of [["warroom", "15"], ["tf:H1", "60"]]) {
     const ms = RUN_ROOMS[room].ms;
-    const fromMessages = await agentStatements(env, tf, tf === "15" ? since : new Date(Date.parse(since) - ms).toISOString(), { now });
+    const fromMessages = await agentStatements(env, tf, tf === "15" ? since : new Date(Date.parse(since) - ms).toISOString(), { now, source: "messages" });
     const rows = (await db.prepare("SELECT run_id, timeframe, candle_key, bar_close, status, body_json FROM room_runs WHERE room = ? AND bar_close >= ?").bind(room, since).all()).results || [];
     const fromDocs = statementsFromDocs(rows.map((r) => ({ ...r, body: parse(r.body_json, {}) })));
     const inWindow = (k) => { const c = closeOfKey(k, tf === "15" ? 0 : ms); return c >= lo && c <= hi; };
