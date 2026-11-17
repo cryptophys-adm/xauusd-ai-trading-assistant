@@ -61,6 +61,7 @@ import { sessionOf } from "./outcome-scoring.mjs";
 import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT, strategyExecutionEnabled, agentConfidences } from "./strategy-agents.mjs";
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
 import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
+import { publishToPlatform } from "./platform-reports.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
@@ -1012,9 +1013,38 @@ export function heartbeatMessage(d, since) {
     `XAUUSD DECISION ENGINE · still ${d.stance}`,
     `No change ${since ? `since the 15m bar of ${at(since)}` : "to report"}. ${[`Bar closed ${at(d.bar_close)}`, `bias ${String(d.bias).toLowerCase()}`, confidenceText(d), d.source === "council" ? "AI council" : "fallback"].filter(Boolean).join(" · ")}.`,
     clip(d.summary, 300),
-    "Heartbeat: the engine decides every 15m bar and writes here when the stance changes, or once an hour without a change.",
+    "Heartbeat: the engine decides every 15m bar. A stance change is posted in the Cryptophys-Nexus chat; without a change, this heartbeat comes once an hour.",
     "Advisory only: the server places no order and gives no position size."
   ].join("\n");
+}
+
+// The hourly heartbeat goes to the Cryptophys-Cerebrum chat through the platform kernel (owner 2026-11-17: only the
+// "still <stance>" heartbeat moves to Cerebrum, trading information stays in Nexus; no silent fallback to Nexus, a
+// failure is logged). Contract: platform docs/XAUUSD-INTEGRATION.md §6 (kind xauusd_digest, body.telegram_topic
+// "ea_heartbeat", plain-text body.text). Published as xauusd-reasoner, the decision agent: it sends about one H1
+// report an hour, so the heartbeat (at most one an hour) stays within the kernel's 4 reports an hour per agent and
+// leaves xauusd-risk-manager's budget to the health alerts and the EA relay.
+export const DECISION_HEARTBEAT_TOPIC = "ea_heartbeat";
+export const DECISION_HEARTBEAT_AGENT = "xauusd-reasoner";
+
+/** Pure: the kernel report for one heartbeat. */
+export function heartbeatReport(d, since) {
+  return {
+    kind: "xauusd_digest",
+    severity: "info",
+    subject: clip(`Decision Engine heartbeat: still ${d.stance}`, 200),
+    ai_status: "deterministic",
+    body: {
+      telegram_topic: DECISION_HEARTBEAT_TOPIC,
+      text: heartbeatMessage(d, since).slice(0, 1800),
+      observation: "Decision Engine hourly heartbeat: the stance holds (no trading action)",
+      stance: d.stance ?? null,
+      since: since ?? null,
+      bar_close: d.bar_close ?? null,
+      decision_key: d.decision_key ?? null,
+      source: "xauusd-ai-trading-assistant"
+    }
+  };
 }
 
 /**
@@ -1023,7 +1053,7 @@ export function heartbeatMessage(d, since) {
  * = "all" sends every BUY or SELL bar. With no message for DECISION_TELEGRAM_HEARTBEAT_MINUTES (owner
  * 2026-11-11: "telegram bot lebih dari 1 jam tidak mengirim pesan"), one heartbeat says the stance holds.
  */
-export async function notifyDecision(env, d, send, { now = Date.now() } = {}) {
+export async function notifyDecision(env, d, send, { now = Date.now(), publish = publishToPlatform } = {}) {
   if (typeof send !== "function") return { sent: false, reason: "no_sender" };
   const kv = env?.SIGNAL_CACHE;
   let prev = null;
@@ -1037,11 +1067,18 @@ export async function notifyDecision(env, d, send, { now = Date.now() } = {}) {
   const lastSent = Date.parse(prev?.sent_at ?? "") || (prev ? now : NaN);
   const minutes = heartbeatMinutes(env);
   const heartbeat = !notify && minutes > 0 && Number.isFinite(lastSent) && now - lastSent >= minutes * 60_000;
+  let relay = null;
   if (notify) await send(decisionMessage(d));
-  else if (heartbeat) await send(heartbeatMessage(d, since));
+  else if (heartbeat) {
+    // To Cerebrum only. On a failure the hour still restarts (a retry every bar would spend the agent's budget).
+    try { relay = await publish(env, DECISION_HEARTBEAT_AGENT, heartbeatReport(d, since)); } catch (e) { relay = { outcome: "failed", reason: clip(String(e?.message ?? e), 200) }; }
+    if (relay?.outcome !== "success") console.error(JSON.stringify({ event: "decision_heartbeat_relay_failed", agent_id: DECISION_HEARTBEAT_AGENT, outcome: relay?.outcome ?? null, reason: relay?.reason ?? null, decision_key: d.decision_key }));
+  }
   const sentAt = notify || heartbeat ? new Date(now).toISOString() : (Number.isFinite(lastSent) ? new Date(lastSent).toISOString() : null);
   try { await kv?.put?.(DECISION_TELEGRAM_KEY, JSON.stringify({ stance: d.stance, decision_key: d.decision_key, at: new Date(now).toISOString(), since, sent_at: sentAt }), { expirationTtl: 14 * 86_400 }); } catch { /* best effort */ }
-  return { sent: notify || heartbeat, reason: notify ? "changed" : heartbeat ? "heartbeat" : "unchanged" };
+  const out = { sent: notify || (heartbeat && relay?.outcome === "success"), reason: notify ? "changed" : heartbeat ? "heartbeat" : "unchanged" };
+  if (heartbeat) out.heartbeat = { channel: "cerebrum", outcome: relay?.outcome ?? null, reason: relay?.reason ?? null, report_id: relay?.report_id ?? null };
+  return out;
 }
 
 /** Pure: the witnesses, the quorum and both sides' guardrails (with their plans) from the loaded inputs. */
