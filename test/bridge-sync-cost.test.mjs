@@ -37,7 +37,7 @@ const T0 = Date.parse("2026-11-11T10:00:00Z");
 const state = (over = {}) => ({
   connected: true, trade_allowed: true, server: "Monex-Demo", received_ms: T0,
   account: { trade_mode: "demo", currency: "USD", balance: 10_000, equity: 10_000 },
-  symbol: { name: "XAUUSD", digits: 2, point: 0.01, bid: 4101, ask: 4101.2, spread_points: 20 },
+  symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, bid: 4101, ask: 4101.2, spread_points: 20 },
   positions: [],
   deals: [{ deal_ticket: 9001, position_ticket: 8001, side: "BUY", volume: 0.01, entry_price: 4090, exit_price: 4100, profit: 10, opened_ms: T0 - 3_600_000, closed_ms: T0 - 600_000, source: "omega" }],
   ...over
@@ -53,7 +53,7 @@ test("prices and equity alone write the bridge row every 30 seconds; a change th
   await sync(T0);
   env.DB.log.length = 0; env.SIGNAL_CACHE.gets.length = 0;
   // Five syncs 5 seconds apart, the quote and equity moving each time.
-  for (let i = 1; i <= 5; i++) await sync(T0 + i * 5_000, { symbol: { name: "XAUUSD", bid: 4101 + i, ask: 4101.2 + i }, account: { trade_mode: "demo", currency: "USD", equity: 10_000 + i } });
+  for (let i = 1; i <= 5; i++) await sync(T0 + i * 5_000, { symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, bid: 4101 + i, ask: 4101.2 + i }, account: { trade_mode: "demo", currency: "USD", equity: 10_000 + i } });
   assert.equal(bridgeWrites(env.DB.log), 0, "no write within 30 seconds for prices alone");
   assert.equal(dealStatements(env.DB.log), 0, "a stored deal is not written again");
   assert.equal(env.SIGNAL_CACHE.gets.filter((k) => k === EA_CONTROL_KEY).length, 5, "the kill switch is read once a sync");
@@ -77,7 +77,7 @@ test("prices and equity alone write the bridge row every 30 seconds; a change th
 
 test("bridgeStateKey ignores the quote, equity and times, and sees connection, positions, orders and deals", () => {
   const a = executorFrom(state());
-  assert.equal(bridgeStateKey(a), bridgeStateKey(executorFrom(state({ received_ms: T0 + 5000, symbol: { name: "XAUUSD", bid: 4200, ask: 4200.3 }, account: { trade_mode: "demo", currency: "USD", equity: 9000 } }))));
+  assert.equal(bridgeStateKey(a), bridgeStateKey(executorFrom(state({ received_ms: T0 + 5000, symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, bid: 4200, ask: 4200.3 }, account: { trade_mode: "demo", currency: "USD", equity: 9000 } }))));
   assert.notEqual(bridgeStateKey(a), bridgeStateKey(executorFrom(state({ trade_allowed: false }))));
   assert.notEqual(bridgeStateKey(a), bridgeStateKey(executorFrom(state({ orders: [{ ticket: 5, type: "buy_limit", volume_current: 0.01, price_open: 4090 }] }))));
   assert.notEqual(bridgeStateKey(a), bridgeStateKey(executorFrom(state({ deals: [] }))));

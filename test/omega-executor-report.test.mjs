@@ -12,7 +12,7 @@ const ea = readFileSync(new URL("../ea/mt5/OmegaExecutor.mq5", import.meta.url),
 const versionAtLeastForTest = (v, min) => { const a = v.split(".").map(Number), b = min.split(".").map(Number); for (let i = 0; i < 2; i++) { if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0); } return true; };
 
 test("E0. since 1.13 the EA writes no macro bars by default (owner 2026-11-12: the broker supplies XAUUSD only); the calendar stays", () => {
-  assert.match(ea, /#property version\s+"1\.13"/);
+  assert.match(ea, /#property version\s+"1\.1[3-9]"/);
   assert.match(ea, /input bool\s+CorpusMacroEnabled = false;/);
   assert.match(ea, /input bool\s+CalendarEnabled\s+= true;/);
   assert.match(ea, /if\(!CorpusMacroEnabled\) return;/);
@@ -52,7 +52,7 @@ test("E4. the plan notes an EA that still trails by itself, and still plans", ()
   const executor = (report) => ({
     connected: true, received_ms: NOW - 1000, executor: report,
     account: { trade_mode: "demo", equity: 10_000, balance: 10_000, day_start_balance: 10_000 },
-    symbol: { name: "XAUUSD", digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 }, positions: []
+    symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 }, positions: []
   });
   const signal = { side: "BUY", action: "ENTER_MARKET", entry: 4100, stop: 4095, tp1: 4110, issued_ms: NOW - 60_000, expires_ms: NOW + 600_000, blackout: false, kill: false, paused: false };
   const plan = (report) => planIntents({ signal, control: { mode: "active" }, settings: { ...OMEGA_DEFAULTS, enabled: true }, executor: executor(report), now: NOW, engineEnabled: true });

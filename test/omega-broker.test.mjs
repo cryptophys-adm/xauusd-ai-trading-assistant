@@ -35,7 +35,7 @@ const SIGNAL = { side: "BUY", entry: 4100, stop: 4095, tp1: 4110, issued_ms: ISS
 const STATE = {
   connected: true, server: "Monex-Demo", received_ms: NOW - 1000,
   account: { trade_mode: "demo", currency: "USD", balance: 10_000, equity: 10_000, day_start_balance: 10_000, day_realized_pl: 0, login: 5550123 },
-  symbol: { name: "XAUUSD", digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 },
+  symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 },
   positions: []
 };
 const sync = (e, over = {}, opts = {}) => bridgeSync(e, { state: STATE, results: [], publicKey: SPKI, kid: KID, bridgeVersion: "1.0.0", ...over }, { now: NOW, signal: SIGNAL, ...opts });

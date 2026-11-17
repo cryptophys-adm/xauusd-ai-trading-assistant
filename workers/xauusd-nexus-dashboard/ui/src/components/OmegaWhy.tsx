@@ -14,6 +14,7 @@ const CODES: Record<string, { kind: Kind; text: string }> = {
   lean_flip: { kind: "adjust", text: "The Decision Engine's lean turned against the system's positions on that side: they are all being closed." },
   confidence_drop: { kind: "adjust", text: "A winning position is being closed: its strategy agent's confidence dropped at this 15m evaluation." },
   no_side: { kind: "block", text: "The Decision Engine says WAIT: there is no BUY or SELL to follow." },
+  symbol_unverified: { kind: "block", text: "The terminal's trade symbol is not verified USD gold (exact name, profit currency USD, contract size 1-100 oz): no new entries. See Symbol on the bridge card." },
   bad_signal: { kind: "block", text: "The signal is incomplete." },
   expired: { kind: "block", text: "The signal expired before it could be entered." },
   signal_too_old: { kind: "block", text: "The signal is too old to enter safely." },

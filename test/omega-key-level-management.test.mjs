@@ -11,7 +11,7 @@ import { managementFields, feedBasis } from "../src/ea-signal.mjs";
 
 const NOW = Date.parse("2026-11-12T10:20:00Z");
 const POWER_MS = Date.parse("2026-11-12T10:15:00Z");
-const SYM = { name: "XAUUSD.m", digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 3920, ask: 3920.2, spread_points: 20 };
+const SYM = { name: "XAUUSD.m", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 3920, ask: 3920.2, spread_points: 20 };
 // Feed-scale levels; the broker quotes 2.00 above the feed.
 const SIGNAL = { side: "NONE", key_levels: "3903:3905,3913:3915,3923:3925,3933:3935", feed_basis: 2, feed_basis_known: true, power: 0.3, power_ms: POWER_MS, m5_source: "broker", m5_ready: false, m5_close_ms: POWER_MS, m5_atr: 3, m5_swing_low: 3918, m5_swing_high: 3921 };
 const LONG = { ticket: 7, side: "BUY", volume: 0.02, open_price: 3900, sl: 3890, tp: 3925, source: "omega", magic: 920200 };

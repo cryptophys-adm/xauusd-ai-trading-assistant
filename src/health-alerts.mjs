@@ -17,6 +17,7 @@ import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { engineLabel } from "./engine-names.mjs";
 import { rejectionSummary, REJECTION_TEXT } from "./webhook-rejections.mjs";
 import { aetherSyncStatus, syncAlerts } from "./aether-sync.mjs";
+import { goldSymbolCheck, goldSymbolText } from "./gold-symbol.mjs";
 
 export const HEALTH_AGENT_ID = "xauusd-risk-manager";
 export const HEALTH_REPORTS_PER_HOUR = 3;
@@ -133,6 +134,45 @@ export async function marketDataFallbackIssue(env) {
   };
 }
 
+/**
+ * The Omega terminal trades a symbol that is not verified USD gold (src/gold-symbol.mjs): the EA refused every
+ * symbol on the server, or reports one off the list, not priced in USD or with an odd contract size (or an EA
+ * older than 1.14 that reports neither). Omega opens nothing until it holds; the alert names the symbol and why.
+ * Only while the terminal state is fresh (5 minutes) and the owner's connection is stored.
+ */
+export async function omegaSymbolIssue(env, now = Date.now()) {
+  let row = null, conn = null;
+  try { row = await env.DB.prepare("SELECT state FROM omega_bridge WHERE id = 1").first(); } catch { return null; }
+  try { conn = await env.DB.prepare("SELECT status FROM omega_connection WHERE id = 1").first(); } catch { conn = null; }
+  if (conn?.status !== "stored") return null;
+  let st = null;
+  try { st = JSON.parse(row?.state || "null"); } catch { st = null; }
+  const fresh = Boolean(st) && Number(st.received_ms) > 0 && now - Number(st.received_ms) <= 5 * 60_000;
+  const check = fresh ? goldSymbolCheck(st.symbol, st.symbol_error) : null;
+  if (check?.ok) return null;
+  if (!fresh) {
+    // No EA state: the bridge may have tried every chart symbol (exhausted) or stopped on a login failure.
+    let ev = null;
+    try { ev = await env.DB.prepare("SELECT ms, detail FROM omega_events WHERE action = 'bridge_symbol' ORDER BY id DESC LIMIT 1").first(); } catch { ev = null; }
+    let d = null;
+    try { d = JSON.parse(ev?.detail || "null"); } catch { d = null; }
+    const syncedAfter = Number(st?.received_ms) > Number(ev?.ms);
+    if (!d || !["exhausted", "stopped"].includes(d.status) || syncedAfter) return null;
+    return {
+      key: `omega_symbol:bridge_${d.status}`, kind: "omega_symbol",
+      subject: d.status === "exhausted"
+        ? `Omega: no gold chart symbol works on ${d.server ?? "the server"} (tried ${(d.tried || []).join(", ") || "every listed name"}); the EA does not run and nothing trades. Apply the connection again once the server's USD gold name is known.`
+        : `Omega: the terminal could not log in to ${d.server ?? "the server"}; the gold symbol search stopped. Enter the connection again on the Omega page.`,
+      detail: { server: d.server ?? null, status: d.status, tried: d.tried ?? [], error: d.error ?? null }
+    };
+  }
+  return {
+    key: `omega_symbol:${check.problem}`, kind: "omega_symbol",
+    subject: `Omega trade symbol on ${typeof st.server === "string" ? st.server : "the terminal"}: ${goldSymbolText(check, st.symbol)}`,
+    detail: { server: st.server ?? null, symbol: st.symbol?.name ?? null, chart: st.symbol?.chart ?? null, problem: check.problem, currency_profit: st.symbol?.currency_profit ?? null, contract_size: st.symbol?.contract_size ?? null, resolution: st.bridge_symbol?.status ?? null }
+  };
+}
+
 /** The problems that hold now: [{ key, kind, subject, detail, one_shot? }]. Never throws. */
 export async function detectHealthIssues(env, now = Date.now()) {
   const db = env.DB;
@@ -229,6 +269,12 @@ export async function detectHealthIssues(env, now = Date.now()) {
     if (issue) out.push(issue);
     const fallback = await marketDataFallbackIssue(env);
     if (fallback) out.push(fallback);
+  } catch { /* never fatal */ }
+
+  // 11. The terminal's trade symbol is not verified USD gold (owner 2026-11-17, PR #405): no new entries, said.
+  try {
+    const issue = await omegaSymbolIssue(env, now);
+    if (issue) out.push(issue);
   } catch { /* never fatal */ }
 
   // 9. End-to-end sync with Aether (hardening 2026-11-09): each warning check of AetherReader.sync()
