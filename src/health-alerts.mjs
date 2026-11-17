@@ -18,6 +18,7 @@ import { engineLabel } from "./engine-names.mjs";
 import { rejectionSummary, REJECTION_TEXT } from "./webhook-rejections.mjs";
 import { aetherSyncStatus, syncAlerts } from "./aether-sync.mjs";
 import { goldSymbolCheck, goldSymbolText } from "./gold-symbol.mjs";
+import { readFallbackCause, fallbackSourceLabel } from "./feed.mjs";
 
 export const HEALTH_AGENT_ID = "xauusd-risk-manager";
 export const HEALTH_REPORTS_PER_HOUR = 3;
@@ -120,17 +121,23 @@ export async function marketDataIssue(env, now = Date.now()) {
 
 /**
  * The MT5 fallback is on (docs/RFC_MT5_FALLBACK.md): the pull adapter feeds the XAUUSD 1m series from the
- * broker's bars and marks it `fallback`. Says so while it lasts (decisions trade on the broker's price).
+ * broker's bars and marks it `fallback`. Says so while it lasts (decisions trade on the broker's price), with
+ * the real cause (owner 2026-11-17: the TradingView quota, not an outage, on 2026-11-16 23:45), the broker
+ * source and when TradingView is expected back (src/feed.mjs fallbackCause).
  */
-export async function marketDataFallbackIssue(env) {
+export async function marketDataFallbackIssue(env, now = Date.now()) {
   let rec = null;
   try { rec = JSON.parse((await env.SIGNAL_CACHE?.get?.("market-data:v2:series:OANDA:XAUUSD|1m")) || "null"); } catch { rec = null; }
   const since = Number(rec?.fallback?.since_sec);
   if (!Number.isFinite(since)) return null;
+  const source = typeof rec.fallback.source === "string" ? rec.fallback.source : null;
+  const cause = await readFallbackCause(env, { now });
+  const label = fallbackSourceLabel(source);
+  const back = cause.back_at ? `; TradingView expected back at ${hhmm(Date.parse(cause.back_at))}` : "";
   return {
     key: "market_data_fallback", kind: "market_data_fallback",
-    subject: `Market data from the broker's MT5 bars since ${iso(since * 1000).slice(0, 16).replace("T", " ")} UTC (TradingView is down). Rooms and decisions run on the broker's price (silver, oil and the dollar index too when the broker sends them); news, the 10-year yield and USDT dominance wait.`,
-    detail: { since: iso(since * 1000), source: typeof rec.fallback.source === "string" ? rec.fallback.source : null }
+    subject: `Market data from the broker's MT5 bars${label ? ` (${label})` : ""} since ${iso(since * 1000).slice(0, 16).replace("T", " ")} UTC: ${cause.text}${back}. Rooms and decisions run on the broker's price (silver, oil and the dollar index too when the broker sends them); news, the 10-year yield and USDT dominance wait.`,
+    detail: { since: iso(since * 1000), source, cause: cause.code, back_at: cause.back_at }
   };
 }
 
@@ -267,7 +274,7 @@ export async function detectHealthIssues(env, now = Date.now()) {
   try {
     const issue = await marketDataIssue(env, now);
     if (issue) out.push(issue);
-    const fallback = await marketDataFallbackIssue(env);
+    const fallback = await marketDataFallbackIssue(env, now);
     if (fallback) out.push(fallback);
   } catch { /* never fatal */ }
 

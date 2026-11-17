@@ -176,13 +176,37 @@ test("the MT5 fallback is an alert while the 1m series holds the broker's bars, 
   const on = env({ SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|1m": m1(true) }) });
   const issue = await marketDataFallbackIssue(on);
   assert.equal(issue.kind, "market_data_fallback");
-  assert.match(issue.subject, /^Market data from the broker's MT5 bars since 2026-11-11 13:01 UTC/);
+  assert.match(issue.subject, /^Market data from the broker's MT5 bars \(monex-demo XAUUSD\.M\) since 2026-11-11 13:01 UTC: /);
   assert.doesNotMatch(issue.subject, /\d{4}\.\d/, "no price");
   const r = await runHealthAlerts(on, { now: at });
   assert.ok(r.opened_alerts.some((a) => a.kind === "market_data_fallback"));
   const healed = env({ SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|1m": m1(false) }), DB: on.DB });
   assert.equal(await marketDataFallbackIssue(healed), null);
   assert.ok((await runHealthAlerts(healed, { now: at + 60_000 })).resolved_alerts.some((a) => a.kind === "market_data_fallback"));
+});
+
+test("the fallback alert says the real cause, the broker source and when TradingView is back (owner 2026-11-17: the quota, not an outage)", async () => {
+  const now = Date.parse("2026-11-16T23:56:54Z");
+  const since = Date.parse("2026-11-16T23:45:00Z") / 1000;
+  const m1 = JSON.stringify({ candles: [], fallback: { since_sec: since, source: "mt5:fxpro-mt5 demo:GOLD" } });
+  const gw = (over) => ({ gatewayStatus: async () => ({ oauth_authorized: true, cooldown_until: null, cooldown_reason: null, ...over }) });
+  const at = (over, pull) => env({ SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|1m": m1, ...(pull ? { "market-data:v2:last-refresh": JSON.stringify(pull) } : {}) }), NEWS_INGESTION: gw(over) });
+  const quota = await marketDataFallbackIssue(at({ cooldown_until: "2026-11-17T00:00:00.000Z", cooldown_reason: "provider_quota_exceeded" }, { status: "mcp_quota_cooldown_active" }), now);
+  assert.equal(quota.subject.split(". Rooms")[0], "Market data from the broker's MT5 bars (fxpro-mt5 demo GOLD) since 2026-11-16 23:45 UTC: the TradingView quota is used up; TradingView expected back at 00:00 UTC");
+  assert.doesNotMatch(quota.subject, /TradingView is down/);
+  assert.deepEqual([quota.detail.cause, quota.detail.back_at], ["quota", "2026-11-17T00:00:00.000Z"]);
+  const budget = await marketDataFallbackIssue(at({}, { status: "daily_budget_exhausted" }), now);
+  assert.match(budget.subject, /the chart's daily TradingView budget is used up; TradingView expected back at 00:00 UTC/);
+  const oauth = await marketDataFallbackIssue(at({ oauth_authorized: false }, { status: "gateway_request_failed" }), now);
+  assert.match(oauth.subject, /not authorized \(OAuth\)/);
+  // "down" only for a real outage or error.
+  const outage = await marketDataFallbackIssue(at({}, { status: "gateway_unavailable" }), now);
+  assert.match(outage.subject, /: TradingView is down or not answering\. Rooms/);
+  assert.equal(outage.detail.back_at, null);
+  const rate = await marketDataFallbackIssue(at({ cooldown_until: "2026-11-16T23:59:00.000Z", cooldown_reason: "provider_rate_limited" }), now);
+  assert.match(rate.subject, /TradingView rate-limited the gateway; TradingView expected back at 23:59 UTC/);
+  const answering = await marketDataFallbackIssue(at({}, { status: "ok" }), now);
+  assert.match(answering.subject, /TradingView answers again; its bars are replacing the broker's/);
 });
 
 test("a TradingView alert that went silent while the others on its chart arrive is an alert (production 2026-11-13: Prophet R38 1H since 11-10)", async () => {

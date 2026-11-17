@@ -5,3 +5,6 @@ export const FEED_FALLBACK_KEY: string;
 export const FEED_FALLBACK_MODES: readonly string[];
 export function readFeedFallback(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
 export function setFeedFallback(env: unknown, input?: { mode?: string; reason?: string; actor?: string }, options?: { now?: number }): Promise<Record<string, any>>;
+export function fallbackCause(input?: { gw?: Record<string, any> | null; pull?: Record<string, any> | null; now?: number }): { code: string; text: string; back_at: string | null };
+export function readFallbackCause(env: unknown, options?: { now?: number }): Promise<{ code: string; text: string; back_at: string | null }>;
+export function fallbackSourceLabel(source: unknown): string | null;

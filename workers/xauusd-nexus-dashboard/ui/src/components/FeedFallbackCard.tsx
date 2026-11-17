@@ -17,6 +17,7 @@ type FeedFallback = {
   reason?: string | null;
   active?: boolean;
   active_since?: string | null;
+  cause?: { code: string; text: string; back_at: string | null } | null;
   corpus?: { source: string; last_bar_close: string; age_s: number } | null;
   can_control?: boolean;
   events?: Array<{ at: string; mode: string; previous_mode: string | null; reason: string; actor: string }>;
@@ -69,6 +70,11 @@ export default function FeedFallbackCard() {
             <Dot tone={state.active ? "amber" : "green"} pulse={Boolean(state.active)} />
             <span className="text-slate-100">{state.active ? `Broker MT5 bars since ${hhmm(state.active_since)}` : "TradingView (OANDA)"}</span>
           </div>
+          {state.active && state.cause ? (
+            <div className="text-amber-200/90" aria-label="Why the fallback runs">
+              Why: {state.cause.text}{state.cause.back_at ? ` · TradingView expected back ${hhmm(state.cause.back_at)}` : ""}
+            </div>
+          ) : null}
           <div className="text-slate-400">
             Fallback switch: <b className={on ? "text-emerald-300" : "text-slate-200"}>{on ? "ON" : "OFF"}</b>
             {state.mode_source === "owner" ? <span> · set {hhmm(state.set_at)}{state.reason ? ` — ${state.reason}` : ""}</span> : <span> · default</span>}
