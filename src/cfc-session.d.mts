@@ -1,0 +1,18 @@
+export const SESSION_LIMITS: Readonly<Record<string, number>>;
+export const STANCES: readonly string[];
+export const SEATS_BY_TYPE: Readonly<Record<string, string[]>>;
+export const SEAT_SCHEMA: Record<string, any>;
+export const SYNTHESIS_SCHEMA: Record<string, any>;
+export function ensureSessionSchema(db: unknown): Promise<void>;
+export function resetSessionSchemaForTests(): void;
+export function sessionsEnabled(env: unknown): Promise<boolean>;
+export function setSessionsSwitch(env: unknown, input: { on: boolean; actor?: string; now?: number }): Promise<Record<string, any>>;
+export function slugOf(text: string): string;
+export function seatMessages(input: Record<string, any>): { role: string; content: string }[];
+export function cleanSeat(o: unknown, packRefs: string[]): Record<string, any> | null;
+export function cleanOptions(o: unknown): { summary: string; options: Record<string, any>[] };
+export function startSession(env: unknown, input: Record<string, any>): Promise<Record<string, any>>;
+export function ownerMessage(env: unknown, input: Record<string, any>): Promise<Record<string, any>>;
+export function runSessionStep(env: unknown, task: { session_id: string; step: string }, opts: Record<string, any>): Promise<Record<string, any>>;
+export function listSessions(env: unknown, opts?: { limit?: number }): Promise<Record<string, any>>;
+export function readSession(env: unknown, id: string): Promise<Record<string, any> | null>;

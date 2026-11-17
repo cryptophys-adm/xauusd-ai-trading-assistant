@@ -84,7 +84,8 @@ test("the Call for Councils page has its own navigator item and nothing of it is
   assert.match(ui("App.tsx"), /councils: Councils/);
   const page = ui("pages/Councils.tsx");
   for (const route of ["/api/council/suggestions", "/api/council/evidence?topic=", "/api/strategy-agents"]) assert.ok(page.includes(route), route);
-  assert.match(page, /later phase/, "the page says sessions start later");
-  assert.doesNotMatch(page, /method: "POST"|\/omega\/api/, "read-only");
+  // P2 (owner 2026-11-17, "Setuju + topik bebas"): the page opens sessions; its only write is the owner-only council route.
+  assert.ok(page.includes("/api/council/sessions") && page.includes("/api/council/session?id="), "the sessions are read from the AI Worker");
+  assert.deepEqual([...new Set([...page.matchAll(/\/omega\/api\/[a-z/-]+/g)].map((m) => m[0]))], ["/omega/api/council"], "the one write: the owner's council route");
   assert.doesNotMatch(ui("pages/Omega.tsx"), /council\/|Call for Councils|cfc/i, "nothing of councils on the Omega page");
 });
