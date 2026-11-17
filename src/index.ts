@@ -271,6 +271,7 @@ import {
 } from "./h1-consensus.mjs";
 import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
 import { runNewsShadowCompare, readNewsShadowCompare } from "./news-shadow-compare.mjs";
+import { runPositionManager, runPositionReport, readPositionManager } from "./position-manager.mjs";
 import { runHealthAlerts, readHealthAlerts } from "./health-alerts.mjs";
 import { classifyRejection, recordRejection, webhookLaneStatus } from "./webhook-rejections.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
@@ -2020,6 +2021,10 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/omega/position-manager") {
+    // The Position Manager's recent actions, its mode and today's council spend against the cap: read-only.
+    return dashboardJson({ status: "ok", ...(await readPositionManager(env, { limit: Number(url.searchParams.get("limit") || 50) })) });
+  }
   if (url.pathname === "/api/news/shadow-compare") {
     // The news shadow's daily readings beside TradingView's (measurement phase B, 2026-11-17): read-only.
     return dashboardJson({ status: "ok", ...(await readNewsShadowCompare(env, { days: Number(url.searchParams.get("days") || 14) })) });
@@ -2589,6 +2594,14 @@ async function runEaHeartbeatRelay(env: Env): Promise<void> {
 
 async function runLedgerStep(env: Env): Promise<void> {
   await runEaHeartbeatRelay(env);
+  // The 5-minute Position Manager (owner 2026-11-17, src/position-manager.mjs): each open Omega position once a 5m
+  // bar; risk-reducing only; POSITION_MANAGER_MODE "off" stops it. Then its daily report after 21:00 UTC.
+  try {
+    const pm = await runPositionManager(env, { send: (text: string) => sendTelegram(env, text) });
+    if (pm.status === "ran" || pm.status === "failed") console.log("position_manager", JSON.stringify(pm));
+    const pr = await runPositionReport(env, { send: (text: string) => sendTelegram(env, text) });
+    if (pr.status === "reported" || pr.status === "failed") console.log("position_report", JSON.stringify(pr));
+  } catch (e) { console.error("position_manager_failed", e instanceof Error ? e.message : String(e)); }
   try {
     // While the Decision Engine is on, only its decisions are new signals (src/decision-engine.mjs).
     const engineOn = decisionEngineEnabled(env);

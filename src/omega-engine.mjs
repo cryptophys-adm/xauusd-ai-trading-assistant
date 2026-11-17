@@ -372,6 +372,43 @@ export function openRiskAtStops(positions = [], sym = {}) {
  * A position's agent is the one its open intent recorded (`agents`: intent id → agent); without one, the
  * default agent's. One close per ticket and decision bar (the intent id carries the bar).
  */
+/**
+ * Pure: the Position Manager's actions (src/position-manager.mjs, owner 2026-11-17) as intents, checked again
+ * against the live price: a close; a stop only in the position's favour with the broker's stop distance; a target
+ * only out to TP2 (the side's way). Risk-reducing only: never an open, an add or a wider stop. One intent per ticket
+ * and 5-minute bar (the id carries the action's bar). `actions` are { id, ticket, action, rule, sl, tp }.
+ */
+export function positionManagerIntents({ positions = [], sym = {}, actions = [], skipTickets = [] } = {}) {
+  const out = [], used = [];
+  if (!finite(sym.bid) || !finite(sym.ask)) return { intents: out, used };
+  const skip = new Set(skipTickets.filter((t) => t != null));
+  const point = positive(sym.point) ? sym.point : 0.01;
+  const digits = Number.isInteger(sym.digits) ? sym.digits : 2;
+  const floorPx = (finite(sym.stops_level_points) ? sym.stops_level_points : 0) * point + (finite(sym.spread_points) ? sym.spread_points : 0) * point;
+  for (const a of actions) {
+    const p = positions.find((x) => x?.ticket === a.ticket);
+    if (!p || skip.has(p.ticket) || !isOmegaOwned(p) || (p.side !== "BUY" && p.side !== "SELL")) continue;
+    const buy = p.side === "BUY", curSl = Number(p.sl), curTp = Number(p.tp);
+    const bar = String(a.id).split(":").pop();
+    if (a.action === "close") {
+      out.push({ id: `pm:${p.ticket}:c:${bar}`, kind: "close", ticket: p.ticket, reason: `pm_${a.rule}` });
+    } else if (a.action === "sl" && finite(a.sl)) {
+      const sl = roundTo(a.sl, digits);
+      const tighter = !Number.isFinite(curSl) || curSl <= 0 || (buy ? sl > curSl + point / 2 : sl < curSl - point / 2);
+      const room = buy ? sl < sym.bid - floorPx : sl > sym.ask + floorPx;
+      if (!tighter || !room) continue;
+      out.push({ id: `pm:${p.ticket}:s:${bar}`, kind: "modify_sl", ticket: p.ticket, sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `pm_${a.rule}` });
+    } else if (a.action === "tp" && finite(a.tp)) {
+      const tp = roundTo(a.tp, digits);
+      const outward = Number.isFinite(curTp) && curTp > 0 && (buy ? tp > curTp + point / 2 && tp > sym.ask + floorPx : tp < curTp - point / 2 && tp < sym.bid - floorPx);
+      if (!outward) continue;
+      out.push({ id: `pm:${p.ticket}:t:${bar}`, kind: "modify_tp", ticket: p.ticket, tp, reason: `pm_${a.rule}` });
+    } else continue;
+    used.push(a.id);
+  }
+  return { intents: out, used };
+}
+
 export const LEAN_BAND = 0.15;
 export const DEFAULT_POSITION_AGENT = "zone_pullback";
 export function strategyExits({ positions = [], signal = null, sym = {}, agents = {}, now = Date.now(), skipTickets = [] } = {}) {
@@ -399,7 +436,7 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
   return { intents, extendOf: (p) => ["stable", "rising"].includes(trendOf(p)) };
 }
 
-export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {} } = {}) {
+export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [] } = {}) {
   const intents = [], notes = [];
   const note = (code) => notes.push({ code });
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
@@ -445,6 +482,10 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const exits = strategyExits({ positions, signal, sym, agents, now, skipTickets: intents.map((it) => it.ticket) });
   if (exits.intents.length) note(exits.intents.some((it) => it.reason === "lean_flip") ? "lean_flip" : "confidence_drop");
   intents.push(...exits.intents);
+  // The Position Manager's actions (owner 2026-11-17): after the strategy exits, before the routine management.
+  const pm = positionManagerIntents({ positions, sym, actions: pmActions, skipTickets: intents.filter((it) => it.kind === "close").map((it) => it.ticket) });
+  if (pm.intents.length) note("position_manager");
+  intents.push(...pm.intents);
 
   // Position management runs on every sync, whatever the entry gates say (audit 2026-11-11, owner:
   // "perbaiki"): a blackout, the rollover quarantine, a pause, a wide spread or a full book only stop

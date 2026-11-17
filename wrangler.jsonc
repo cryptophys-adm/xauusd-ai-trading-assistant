@@ -59,6 +59,10 @@
     }
   ],
   "vars": {
+    // The 5-minute Position Manager (owner 2026-11-17: live directly, risk-reducing only, src/position-manager.mjs):
+    // "off" stops it. Its council is metered as position_council with its own daily cap in USD.
+    "POSITION_MANAGER_MODE": "live",
+    "POSITION_COUNCIL_DAILY_USD": "5",
     // Decision Engine (owner 2026-11-10: "nyalakan GLOBAL_DECISION_WEIGHTED"): the B-11 extended witnesses
     // (key levels, regime, cross-timeframe trend, macro drivers; session as context) count in the quorum
     // with the B-11 weights. "false" restores the seven base witnesses.
