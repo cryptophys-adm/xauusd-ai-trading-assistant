@@ -257,6 +257,7 @@ import { relayEaHeartbeat } from "./ea-heartbeat-relay.mjs";
 import { relayStrategyArm } from "./strategy-arm-relay.mjs";
 import { computeRecommendations, readRecommendations } from "./strategy-recommendation.mjs";
 import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
+import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings } from "./omega-broker.mjs";
@@ -1815,10 +1816,27 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   async strategyArm(input?: { viewer?: string; viewer_sub?: string | null }): Promise<JsonObject> {
     const check = ownerCheck(this.env, input?.viewer_sub ?? null);
     if (check === "unset" && input?.viewer_sub) await noteOwnerSub(this.env, { sub: input.viewer_sub, actor: input?.viewer });
-    return { ...(await readStrategyArm(this.env)), allowed: await liveAgentIds(this.env), blocked: await armBlocked(this.env), owner_check: check, can_arm: check !== "not_owner" } as JsonObject;
+    return { ...(await readStrategyArm(this.env)), allowed: await liveAgentIds(this.env), blocked: await armBlocked(this.env), owner_check: check, can_arm: check !== "not_owner", council: await readCouncilState(this.env) } as JsonObject;
+  }
+  /** The owner's "Council auto-arm" toggle (owner 2026-11-17; refused while the code ceiling is off). */
+  async setCouncilAuto(input: { on?: boolean; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    if (ownerCheck(this.env, input?.actor_sub ?? null) === "not_owner") return { ok: false, error: "owner_only" } as JsonObject;
+    return setCouncilAuto(this.env, { on: input?.on === true, actor: String(input?.actor ?? "owner") }) as Promise<JsonObject>;
+  }
+  /** The owner's manual arm or disarm pins a strategy against the council until the owner unpins it. */
+  async unpinStrategy(input: { strategy_id?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    if (ownerCheck(this.env, input?.actor_sub ?? null) === "not_owner") return { ok: false, error: "owner_only" } as JsonObject;
+    if (typeof input?.strategy_id !== "string" || !/^[a-z0-9_]{2,40}$/.test(input.strategy_id)) return { ok: false, error: "unknown strategy" } as JsonObject;
+    return unpinStrategy(this.env, { strategy_id: input.strategy_id }) as Promise<JsonObject>;
   }
   /** The owner's one click: arm or disarm one strategy (ADR-0020; at most 3; never moves the quorum). */
   async setStrategyArm(input: { strategy_id?: string; action?: string; request_id?: string; expected_version?: number; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    const r = await this.armByOwner(input);
+    // The owner's click pins the strategy against the council until the owner unpins it (owner 2026-11-17).
+    if ((r as Record<string, unknown>)?.ok === true && typeof input?.strategy_id === "string") { try { await pinStrategy(this.env, { strategy_id: input.strategy_id, actor: String(input?.actor ?? "owner"), action: String(input?.action ?? "") }); } catch { /* the arm stands */ } }
+    return r;
+  }
+  private async armByOwner(input: { strategy_id?: string; action?: string; request_id?: string; expected_version?: number; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
     return setStrategyArm(this.env, {
       strategy_id: input?.strategy_id, action: input?.action, request_id: input?.request_id ?? null, expected_version: input?.expected_version ?? null,
       actor: String(input?.actor ?? "owner"), actor_sub: input?.actor_sub ?? null, reason: "owner", allowed: await liveAgentIds(this.env), blocked: input?.action === "arm" ? await armBlocked(this.env) : null,
@@ -2265,7 +2283,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // made for, its measured record from the plan learner, and for the latest decision each agent's plan
     // and the one the trade took.
     try {
-      const [state, latest, reco] = await Promise.all([readPlanLearning(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null), readRecommendations(env)]);
+      const [state, latest, reco, council] = await Promise.all([readPlanLearning(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null), readRecommendations(env), readCouncilVerdicts(env)]);
+      const verdicts = (((council as Record<string, any> | null)?.verdicts ?? {}) as Record<string, any>);
       const d = latest as Record<string, any> | null;
       const records = ((state as Record<string, any> | null)?.agents ?? []) as Array<Record<string, any>>;
       const cards = (((reco as Record<string, any> | null)?.cards ?? []) as Array<Record<string, any>>);
@@ -2273,7 +2292,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
         status: "ok", mode: strategyAgentsMode(env), default_agent: DEFAULT_AGENT,
         // The recommendation cards (RFC §3), from KV: computed on the ledger step, never on this poll.
         recommendations: reco ? { computed_at: (reco as Record<string, any>).computed_at ?? null, context: (reco as Record<string, any>).context ?? null } : null,
-        agents: agentCatalog(agentStatuses(env, { records }), { suspended: suspendedAgents(records).map((x) => x.id) }).map((a) => { const c = cards.find((x) => x.id === a.id) ?? null; return { ...a, record: records.find((r) => r.agent === a.id) ?? null, card: c, recommendation: c?.recommendation ?? null, arm: c?.arm ?? null }; }),
+        agents: agentCatalog(agentStatuses(env, { records }), { suspended: suspendedAgents(records).map((x) => x.id) }).map((a) => { const c = cards.find((x) => x.id === a.id) ?? null; return { ...a, record: records.find((r) => r.agent === a.id) ?? null, card: c, recommendation: c?.recommendation ?? null, arm: c?.arm ?? null, verdicts: verdicts[a.id] ?? null }; }),
+        council: council ? { day: (council as Record<string, any>).day ?? null, acting: (council as Record<string, any>).acting ?? false } : null,
         // The patterns the breaker holds back (their own trades here lost; the rest of the family trades on).
         suspended_patterns: suspendedPatterns(records),
         latest: d ? { decision_key: d.decision_key, bar_close: d.bar_close, stance: d.stance, chosen: d.trade ? (d.trade.strategy ?? DEFAULT_AGENT) : null, plans: d.strategy_plans ?? null } : null
@@ -2684,6 +2704,11 @@ async function runLedgerStep(env: Env): Promise<void> {
   // The strategy recommendation cards (RFC §3): read-only, deterministic, at most every 15 minutes into KV.
   const reco = await computeRecommendations(env);
   if (reco.status === "failed") console.error("strategy_recommendations_failed", JSON.stringify(reco));
+  // The strategy council's verdicts and, when the owner's toggle and the code ceiling allow, its arm/disarm (once a UTC day).
+  try {
+    const council = await runStrategyCouncil(env, { send: (text: string) => sendTelegram(env, text), cards: (((await readRecommendations(env)) as Record<string, any> | null)?.cards ?? []), allowed: await liveAgentIds(env), blocked: await armBlocked(env) });
+    if (council.status === "computed" || council.status === "failed") console.log("strategy_council", JSON.stringify(council));
+  } catch (e) { console.error("strategy_council_failed", e instanceof Error ? e.message : String(e)); }
   // The grid's automatic entry/stop per strategy x regime (src/grid-adapt.mjs, owner 2026-11-17): once a UTC day.
   const grid = await runGridAdapt(env, { send: (text: string) => sendTelegram(env, text) });
   if (grid.status === "computed" || grid.status === "failed") console.log("grid_adapt", JSON.stringify(grid));

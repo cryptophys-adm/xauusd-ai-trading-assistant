@@ -66,6 +66,7 @@
     // the one best strategy by confidence x confluence). "off" restores today's choice; "shadow" records only.
     "STRATEGY_ARM_MODE": "live",
     "GRID_ADAPT_MODE": "live",
+    "STRATEGY_COUNCIL_ARM": "off",
     "OWNER_ACCESS_SUB": "6d015218-6ea2-5fc3-b4aa-cc98c5ced21a",
     "POSITION_COUNCIL_DAILY_USD": "5",
     // Decision Engine (owner 2026-11-10: "nyalakan GLOBAL_DECISION_WEIGHTED"): the B-11 extended witnesses

@@ -11,7 +11,7 @@
 
 export const ARM_MAX = 3;
 export const STRATEGY_ARMS_KEY = "strategy-arms:v1";
-export const ARM_REASONS = Object.freeze(["owner", "kill_switch", "daily_loss_limit", "breaker", "unavailable"]);
+export const ARM_REASONS = Object.freeze(["owner", "kill_switch", "daily_loss_limit", "breaker", "unavailable", "council"]);
 
 export function strategyArmMode(env) {
   const v = String(env?.STRATEGY_ARM_MODE ?? "off").trim().toLowerCase();

@@ -12,6 +12,7 @@
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { HEALTH_AGENT_ID } from "./health-alerts.mjs";
 import { strategyArmMode, ensureStrategyArmSchema, ARM_MAX } from "./strategy-arm.mjs";
+import { readCouncilState } from "./strategy-council.mjs";
 
 export const STRATEGY_ARM_SCHEMA = "strategy_arm.v1";
 export const STRATEGY_ARM_AGENT = HEALTH_AGENT_ID;
@@ -115,7 +116,11 @@ export async function relayStrategyArm(env, { now = Date.now(), publish = publis
     }
     const arms = (await db.prepare("SELECT strategy_id FROM strategy_arms WHERE armed = 1 ORDER BY armed_at, strategy_id").all()).results ?? [];
     const armedIds = arms.map((r) => r.strategy_id);
-    const r = await publish(env, STRATEGY_ARM_AGENT, armReport(items, { mode: armedIds.length ? "armed" : "auto", armedIds }));
+    let councilAuto = false;
+    try { councilAuto = (await readCouncilState(env)).acting === true; } catch { councilAuto = false; }
+    const report = armReport(items, { mode: armedIds.length ? "armed" : "auto", armedIds });
+    report.body.council_auto = councilAuto;
+    const r = await publish(env, STRATEGY_ARM_AGENT, report);
     if (r.outcome === "success") {
       await writeCursor(env, { ...next, sent_ms: now, report_id: r.report_id ?? null });
       return { status: "sent", count: items.length, report_id: r.report_id ?? null };

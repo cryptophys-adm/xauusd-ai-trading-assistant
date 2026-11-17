@@ -346,6 +346,23 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       return rpc(() => env.OMEGA.setStrategyArm({ strategy_id: id, action, request_id: typeof r.body.request_id === "string" ? r.body.request_id.slice(0, 64) : null,
         expected_version: Number.isFinite(Number(r.body.expected_version)) ? Number(r.body.expected_version) : null, actor: identity.subject, actor_sub: identity.sub ?? null }), "strategy_arm_failed");
     }
+    // The owner's "Council auto-arm" toggle and unpin (owner 2026-11-17): owner only, like the arm itself.
+    if (route === "POST /api/strategy-council" || route === "POST /api/strategy-arm/unpin") {
+      const r = await personJson(request, url, identity, 1024);
+      if (r.response) return r.response;
+      if (request.headers.get("sec-fetch-site") && request.headers.get("sec-fetch-site") !== "same-origin") return json({ error: "same_origin_only" }, 403);
+      const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
+      if (!ownerSub || identity.sub !== ownerSub) return json({ error: "owner_only" }, 403);
+      if (route === "POST /api/strategy-council") {
+        if (typeof r.body.auto !== "boolean") return json({ error: "auto (true or false) is required" }, 400);
+        if (typeof env.OMEGA.setCouncilAuto !== "function") return json({ error: "strategy_council_unavailable" }, 503);
+        return rpc(() => env.OMEGA.setCouncilAuto({ on: r.body.auto, actor: identity.subject, actor_sub: identity.sub ?? null }), "strategy_council_failed");
+      }
+      const id = typeof r.body.strategy_id === "string" ? r.body.strategy_id.trim() : "";
+      if (!id) return json({ error: "strategy_id is required" }, 400);
+      if (typeof env.OMEGA.unpinStrategy !== "function") return json({ error: "strategy_council_unavailable" }, 503);
+      return rpc(() => env.OMEGA.unpinStrategy({ strategy_id: id, actor_sub: identity.sub ?? null }), "strategy_unpin_failed");
+    }
     if (route === "POST /api/position/close") {
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;
@@ -353,7 +370,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (!Number.isFinite(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
       return rpc(() => env.OMEGA.closePosition({ ticket, reason: r.body?.reason, actor: identity.subject }), "close_position_failed");
     }
-    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode", "/api/strategy-arm", "/api/shadow-mode", "/api/push", "/api/status"].includes(path)) return json({ error: "method_not_allowed" }, 405);
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode", "/api/strategy-arm", "/api/strategy-council", "/api/strategy-arm/unpin", "/api/shadow-mode", "/api/push", "/api/status"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 
