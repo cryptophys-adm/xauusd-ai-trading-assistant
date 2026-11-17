@@ -57,6 +57,25 @@ function ArmButton({ id, arm, onDone }: { id: string; arm: ArmState; onDone: () 
   );
 }
 
+const RECO_TEXT: Record<string, string> = {
+  breaker_suspended: "the breaker holds it back", record_negative: "its record is below 0 R", context_negative: "its record in the present condition is below 0 R",
+  omega_stop_share: "too many of its Omega trades end at the stop or the locked stop", recommend_bar: "30+ setups at +0.10 R or better", collecting: "collecting setups (under 15)", below_recommend_bar: "not yet 30 setups at +0.10 R"
+};
+/** The recommendation (RFC §3, deterministic, read-only): the verdict, why, and Omega's exits and real trades. */
+function RecoLine({ card }: { card: any }) {
+  const r = card?.recommendation;
+  if (!r) return null;
+  const verdict: [string, "green" | "red" | "slate"] = r.verdict === "recommended" ? ["Recommended", "green"] : r.verdict === "not_recommended" ? ["Not recommended", "red"] : ["Neutral", "slate"];
+  const ex = card.exits ?? {}, run = card.executed ?? {};
+  const rules = (r.rules ?? []).map((x: any) => `${x.holds ? "✓" : "✗"} ${x.rule}: ${x.value ?? "n/a"} (${x.threshold}) ${x.ref}`).join("\n");
+  return (
+    <div className="mt-2 space-y-1 text-[10.5px] text-slate-400" title={rules}>
+      <div className="flex items-center gap-1.5"><Badge tone={verdict[1]}>{verdict[0]}</Badge><span className="truncate">{RECO_TEXT[r.reason] ?? r.reason}</span></div>
+      <div className="mono">Omega exits: stop {pc(ex.stop_share)} · locked {pc(ex.sl_plus_share)} (n {ex.n ?? 0}) · trades {run.opened ?? 0} opened, {run.closed ?? 0} closed{run.win_share != null ? `, ${pc(run.win_share)} won` : ""}</div>
+    </div>
+  );
+}
+
 /** The registry: one card per agent with its status, what it is made for and its measured record. */
 function Registry({ agents, chosen, arm, reload }: { agents: any[]; chosen: string | null; arm: ArmState; reload: () => void }) {
   return (
@@ -85,6 +104,7 @@ function Registry({ agents, chosen, arm, reload }: { agents: any[]; chosen: stri
                 ))}
               </div>
             ) : <div className="mt-3 text-[11px] text-slate-500">No resolved setup yet.</div>}
+            <RecoLine card={a.card} />
             <ArmButton id={a.id} arm={arm} onDone={reload} />
           </div>
         );

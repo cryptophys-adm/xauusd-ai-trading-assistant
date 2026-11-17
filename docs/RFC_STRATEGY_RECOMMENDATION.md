@@ -51,7 +51,16 @@ Status: P2 built and live (2026-11-17, see below); design decided (owner's answe
   table) moves only on success; a rate limit or a transport failure is retried after 15 minutes; another kernel
   denial is final and logged (`strategy_arm_relay_denied`). Doctrine facts: `omega.strategy_arm_required` and
   `omega.max_armed_strategies` (the Omega seat's prefix, not `execution.*`).
-- Not built yet: the recommendation cards (§3).
+- Recommendation cards (§3): built, `src/strategy-recommendation.mjs`. On the 5-minute ledger step (after the plan
+  learner and the breaker), at most every 15 minutes, into KV `strategy-recommendations:v1`; `GET /api/strategy-agents`
+  adds each agent's `card`, `recommendation` and `arm` from KV (no D1 query on the page's poll). A card: `record` and
+  the present context's record (the newest `plan_setups.context`), `r_dist` (control arm `e0@s1`, buckets ≤ −1, (−1, 0),
+  [0, 1), [1, 2), ≥ 2), `exits` (the last 20 closed ledger trades per agent joined to `$.trade.agent`: Omega's stop
+  and locked-stop shares, the ledger's breakeven share), `executed` (Omega open intents done; `ea_deals` with
+  `source = 'omega'` by `strategy`, counted once per deal ticket, win share), `breaker`, `arm`, and `recommendationOf`
+  with every rule, its value and its `ev:xauusd/...` ref. No price, money or volume field. Not built: `verdicts`
+  (walk-forward and council proposals, "shown when present").
+- Everything in this RFC's build list is now built except the `verdicts` field.
 - ADR-0020 says a trading action needs the owner's click per action or as a standing arm of one strategy. AUTO trades
   with nothing armed; this record reads Omega's typed `live_armed` (a real account) plus this owner decision as the
   standing authorization for AUTO. If the platform reads ADR-0020 otherwise, it needs an amendment there.
