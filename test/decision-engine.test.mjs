@@ -448,3 +448,18 @@ test("setTradingMode: a person sets the stored mode; a server-pinned mode refuse
   assert.equal((await setTradingMode(env, { mode: "scalp" })).ok, false, "a person makes this change");
   assert.deepEqual(await setTradingMode({ ...env, TRADING_MODE: "intraday" }, { mode: "scalp", actor: "o" }), { ok: false, error: "pinned_by_server", mode: "intraday" });
 });
+
+test("council confidence (owner 2026-11-17, fixes b and c): defined as its own judgement; a WAIT shows no percentage on Telegram", async () => {
+  const { confidenceText, COUNCIL_CONFIDENCE_PROMPT } = await import("../src/decision-engine.mjs");
+  const sys = councilMessages({ context: {} })[0].content;
+  assert.match(sys, /confidence is your own judgement/);
+  assert.match(sys, /It is not an input: no confidence value is given to you and none is missing/);
+  assert.match(sys, /Never answer 0 because something is missing/);
+  assert.equal(confidenceText({ stance: "WAIT", confidence: 0, source: "council" }), null);
+  assert.equal(confidenceText({ stance: "SELL", confidence: 0.78, source: "council" }), "council confidence 78%");
+  const msg = decisionMessage({ stance: "WAIT", bias: "BEARISH", confidence: 0, source: "council", bar_close: "2026-11-17T07:00:00.000Z", summary: "Decision WAIT, bias bearish: waiting for the trigger." });
+  assert.doesNotMatch(msg, /confidence 0%/);
+  assert.match(msg, /15m bar closed 07:00 UTC · bias bearish · AI council/);
+  assert.match(decisionMessage({ stance: "SELL", bias: "BEARISH", confidence: 0.78, source: "council", bar_close: "2026-11-17T06:30:00.000Z", summary: "s" }), /council confidence 78%/);
+  assert.equal(COUNCIL_CONFIDENCE_PROMPT, "v2", "recorded on each decision for the 7-day comparison");
+});

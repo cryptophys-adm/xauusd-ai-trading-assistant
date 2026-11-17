@@ -94,6 +94,8 @@ export const LEAN = 0.15;
 export const QUORUM_DECAY_PER_HOUR = 0.9;
 export const MIN_RRR = STRATEGY_PARAMS.min_rrr;
 export const MIN_CONFIDENCE = STRATEGY_PARAMS.min_confidence;
+/** The council's confidence wording: "v2" defines it as its own judgement of the stance (owner 2026-11-17, fix b). */
+export const COUNCIL_CONFIDENCE_PROMPT = "v2";
 export const COUNCIL_DEADLINE_MS = 90_000;
 /** The sweep decides a bar whose 15m room did not trigger the engine this long after its close. */
 export const SWEEP_AFTER_MS = 4 * 60_000;
@@ -740,7 +742,8 @@ export function councilMessages(evidence, { learned = null } = {}) {
     "Weigh the witnesses by their weight and by how well their reasoning holds up; the higher timeframes carry the trend, the 15m and 1H rooms carry the setup, the strategy engine carries location and trigger. Cautions (an event, conflicts, chaotic regime) lower your confidence.",
     "The confirmation candle (a verified 5m or a 15m Prophet confirmation, in long.entry_trigger and short.entry_trigger) is the entry trigger, not a condition of your stance: decide the side from the witnesses inside the guardrails. A market entry waits for that candle before it is executed; a limit entry at the key level waits only for price, so prefer 'limit' while entry_trigger has not fired.",
     "Prioritize target 'tp1' (structural quick win at the nearest strong key level / liquidity pool) to avoid prolonged floating duration risk. Use 'limit' entry at the key level pullback rather than chasing market momentum. A target needs at least 1.5R.",
-    `confidence is 0 to 1; below ${MIN_CONFIDENCE} a BUY or SELL becomes WAIT. bias is where the weight of the evidence leans (BULLISH, BEARISH or NEUTRAL), even when the stance is WAIT.`,
+    // Owner 2026-11-17 (fix b): the council's confidence was 0 on most WAIT bars, once explained as "the confidence metric is missing".
+    `confidence is your own judgement, 0 to 1, of how sure you are that the stance you return is the right one now (for WAIT: that waiting is right). It is not an input: no confidence value is given to you and none is missing, and no guardrail checks a confidence before you answer. Never answer 0 because something is missing; say what is missing in reasons instead. Below ${MIN_CONFIDENCE} a BUY or SELL becomes WAIT. bias is where the weight of the evidence leans (BULLISH, BEARISH or NEUTRAL), even when the stance is WAIT.`,
     "Never invent a price: the levels come only from the plans in the evidence. Never mention position size. Write summary, reasons and risks in plain sentences a trader would write: no field names, no words joined by underscores or dots, no key=value. The summary starts with the stance and the bias, for example \"Decision WAIT, bias bullish: ...\". Give one to four reasons and up to three risks. In weighed, list the witness keys you relied on most.",
     ...(evidence?.long?.strategies || evidence?.short?.strategies ? ["A side may list strategies: the strategy agents that see their own setup on the chart now, each with what it is made for (made_for), the setup it sees and its own plan. price_action, when present, is the Projection Agent's reading of the charts: the chart patterns it sees on the 15m, 1H and 4H charts, whether each has broken and which way (upward or downward), and how often that pattern reached its target on gold. Choose the strategy whose made_for matches that price action and what the witnesses describe (the regime, the structure, how price came to the level) and return its id in strategy; the trade then takes that agent's entry, stop and targets. Each strategy's record is what it earned on this system's own past setups, in R per setup, overall and in the present market condition: weigh it with the number of setups behind it, and treat a strategy without a record as untested. Without a clear match keep the first one. The side and the guardrails are decided as before; a strategy only changes where the trade enters, stops and targets."] : []),
     ...(evidence?.context?.model ? ["context.model is the platform's own model, trained on this system's past decisions and connected only after it beat the base rate on decisions it had not seen: long_target_first and short_target_first are its chances for each side against their base rates. Weigh it like a witness; it never overrides the guardrails or the levels."] : []),
@@ -914,13 +917,22 @@ export async function readDecisions(env, { limit = 24 } = {}) {
   return rows.map((r) => { try { return JSON.parse(r.decision_json); } catch { return null; } }).filter(Boolean);
 }
 
+/**
+ * The confidence on a Telegram line (owner 2026-11-17, fix c): a BUY or SELL shows the council's confidence, named as
+ * such; a WAIT shows none (a WAIT's number read as "0% confidence" in the market).
+ */
+export function confidenceText(d) {
+  if (d?.stance === "WAIT") return null;
+  return `${d?.source === "council" ? "council confidence" : "confidence"} ${Math.round((d?.confidence || 0) * 100)}%`;
+}
+
 /** Pure: the Telegram text of a decision (prices only from the key-level plan; never a size). */
 export function decisionMessage(d) {
   const t = d.trade;
   const px = (v) => (isNum(v) ? v.toFixed(2) : "n/a");
   return [
     `XAUUSD DECISION ENGINE · ${d.stance}`,
-    `15m bar closed ${String(d.bar_close).slice(11, 16)} UTC · bias ${String(d.bias).toLowerCase()} · confidence ${Math.round((d.confidence || 0) * 100)}% · ${d.source === "council" ? "AI council" : "fallback"}`,
+    [`15m bar closed ${String(d.bar_close).slice(11, 16)} UTC`, `bias ${String(d.bias).toLowerCase()}`, confidenceText(d), d.source === "council" ? "AI council" : "fallback"].filter(Boolean).join(" · "),
     ...(t ? [`${t.action === "ENTER_MARKET" ? "Market" : "Limit"} ${t.side} at ${px(t.entry)}, stop ${px(t.stop)}, target ${t.target.toUpperCase()} ${px(t.tp)} (${t.rrr}R)`] : []),
     // The strategy agent the council chose, when it is not the default agent's plan.
     ...(t?.strategy ? [`Strategy: ${agentCatalog().find((a) => a.id === t.strategy)?.label ?? t.strategy}${t.setup ? ` (${t.setup})` : ""}`] : []),
@@ -942,7 +954,7 @@ export function heartbeatMessage(d, since) {
   const at = (iso) => String(iso ?? "").slice(11, 16) + " UTC";
   return [
     `XAUUSD DECISION ENGINE · still ${d.stance}`,
-    `No change ${since ? `since the 15m bar of ${at(since)}` : "to report"}. Bar closed ${at(d.bar_close)} · bias ${String(d.bias).toLowerCase()} · confidence ${Math.round((d.confidence || 0) * 100)}% · ${d.source === "council" ? "AI council" : "fallback"}.`,
+    `No change ${since ? `since the 15m bar of ${at(since)}` : "to report"}. ${[`Bar closed ${at(d.bar_close)}`, `bias ${String(d.bias).toLowerCase()}`, confidenceText(d), d.source === "council" ? "AI council" : "fallback"].filter(Boolean).join(" · ")}.`,
     clip(d.summary, 300),
     "Heartbeat: the engine decides every 15m bar and writes here when the stance changes, or once an hour without a change.",
     "Advisory only: the server places no order and gives no position size."
@@ -1076,6 +1088,8 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     version: DECISION_ENGINE_VERSION, decision_key: key, symbol: SYMBOL, timeframe: "15",
     bar_close: barClose, decided_at: decidedAt, latency_seconds: Math.max(0, Math.round((Date.parse(decidedAt) - Date.parse(barClose)) / 1000)),
     stance: d.stance, bias: d.bias, confidence: d.confidence, source: d.source,
+    // Which wording of the council's confidence produced this decision (the 7-day before/after comparison).
+    confidence_prompt: COUNCIL_CONFIDENCE_PROMPT,
     model: council?.model ?? null, fallback_model_used: council?.fallback_used === true,
     council_note: answer ? null : (council?.reason ?? null), council_errors: council?.errors ?? [],
     fallback_reason: answer ? null : (d.overruled ? `the strategy's ${d.overruled.wanted} was held back (${d.overruled.failed.map((f) => f.check).join(", ")})` : (council?.reason ?? null)),
