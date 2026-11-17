@@ -70,3 +70,5 @@ export function macroInputFresh(iso: unknown, now?: number): boolean;
 export function macroDriversLean(input?: { newsContext?: any; correlations?: any; now?: number }): { lean: number | null; stale: boolean; as_of?: string | null; summary: string } | null;
 export function independentWitnesses(loaded?: any, options?: { now?: number }): Record<string, { lean: number | null; stale?: boolean; summary: string } | null>;
 export function calendarContextOf(outlook: any): Record<string, any> | null;
+export function pickStrategy(input: Record<string, any>): { mode: "auto" | "armed"; agent: string | null; trade: Record<string, any> | null; score: number | null; candidates: Array<Record<string, any>>; reason: string | null };
+export function selectionLine(selection: Record<string, any>): string;

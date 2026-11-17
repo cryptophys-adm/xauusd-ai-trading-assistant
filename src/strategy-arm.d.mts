@@ -1,0 +1,12 @@
+export const ARM_MAX: number;
+export const STRATEGY_ARMS_KEY: string;
+export const ARM_REASONS: readonly string[];
+export function strategyArmMode(env: unknown): "live" | "shadow" | "off";
+export function ensureStrategyArmSchema(db: unknown): Promise<void>;
+export function resetStrategyArmSchemaCacheForTests(): void;
+export function readArmsFromDb(db: unknown): Promise<{ version: number; armed_count: number; ids: string[]; armed: Array<Record<string, unknown>> }>;
+export function readArmState(env: unknown): Promise<{ known: boolean; mode: string; version: number | null; ids: string[] }>;
+export function setStrategyArm(env: unknown, input?: Record<string, any>): Promise<Record<string, any>>;
+export function disarmAll(env: unknown, input?: Record<string, any>): Promise<Record<string, any>>;
+export function readStrategyArm(env: unknown): Promise<Record<string, any>>;
+export function dailyLossHit(executor: unknown, maxDailyLossPct: number): boolean;

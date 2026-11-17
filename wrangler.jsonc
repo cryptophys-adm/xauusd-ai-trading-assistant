@@ -62,6 +62,9 @@
     // The 5-minute Position Manager (owner 2026-11-17: live directly, risk-reducing only, src/position-manager.mjs):
     // "off" stops it. Its council is metered as position_council with its own daily cap in USD.
     "POSITION_MANAGER_MODE": "live",
+    // The strategy arm (owner 2026-11-17, ADR-0020, live directly): 1 to 3 armed strategies only, or AUTO (none armed:
+    // the one best strategy by confidence x confluence). "off" restores today's choice; "shadow" records only.
+    "STRATEGY_ARM_MODE": "live",
     "POSITION_COUNCIL_DAILY_USD": "5",
     // Decision Engine (owner 2026-11-10: "nyalakan GLOBAL_DECISION_WEIGHTED"): the B-11 extended witnesses
     // (key levels, regime, cross-timeframe trend, macro drivers; session as context) count in the quorum

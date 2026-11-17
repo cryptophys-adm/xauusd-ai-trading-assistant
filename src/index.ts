@@ -250,13 +250,13 @@ import { runPendingMacroRooms, readMacroRoom } from "./macro-room.mjs";
 import { readParityView } from "./parity-view.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
 import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weighting.mjs";
-import { eaSignal, eaStatus, storeHeartbeat } from "./ea-signal.mjs";
+import { eaSignal, eaStatus, storeHeartbeat, readControl } from "./ea-signal.mjs";
 import { dedupeDeals, listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
 import { omegaHealth } from "./omega-health.mjs";
 import { relayEaHeartbeat } from "./ea-heartbeat-relay.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
-import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus } from "./omega-broker.mjs";
+import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings } from "./omega-broker.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
 import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mjs";
@@ -272,6 +272,7 @@ import {
 import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
 import { runNewsShadowCompare, readNewsShadowCompare } from "./news-shadow-compare.mjs";
 import { runPositionManager, runPositionReport, readPositionManager } from "./position-manager.mjs";
+import { setStrategyArm, disarmAll, readStrategyArm, dailyLossHit, strategyArmMode } from "./strategy-arm.mjs";
 import { runHealthAlerts, readHealthAlerts } from "./health-alerts.mjs";
 import { classifyRejection, recordRejection, webhookLaneStatus } from "./webhook-rejections.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
@@ -1800,7 +1801,24 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     return { deals: await listDeals(this.env, { limit: options?.limit ?? 200 }) } as JsonObject;
   }
   async setControl(input: { mode?: string; reason?: string; actor?: string }): Promise<JsonObject> {
-    return setControl(this.env, input ?? {}) as Promise<JsonObject>;
+    const result = await setControl(this.env, input ?? {}) as JsonObject;
+    // The strategy arm (owner 2026-11-17, ADR-0020): the kill switch disarms every armed strategy in the same call.
+    if (input?.mode === "killed" && result?.ok !== false) {
+      try { await disarmAll(this.env, { reason: "kill_switch", send: (t: string) => sendTelegram(this.env, t) }); } catch (e) { console.error("strategy_disarm_failed", e instanceof Error ? e.message : String(e)); }
+    }
+    return result;
+  }
+  /** The strategy arm's state for the Strategy Agents page (owner 2026-11-17). */
+  async strategyArm(): Promise<JsonObject> {
+    return { ...(await readStrategyArm(this.env)), allowed: await liveAgentIds(this.env), blocked: await armBlocked(this.env) } as JsonObject;
+  }
+  /** The owner's one click: arm or disarm one strategy (ADR-0020; at most 3; never moves the quorum). */
+  async setStrategyArm(input: { strategy_id?: string; action?: string; request_id?: string; expected_version?: number; actor?: string }): Promise<JsonObject> {
+    return setStrategyArm(this.env, {
+      strategy_id: input?.strategy_id, action: input?.action, request_id: input?.request_id ?? null, expected_version: input?.expected_version ?? null,
+      actor: String(input?.actor ?? "owner"), reason: "owner", allowed: await liveAgentIds(this.env), blocked: input?.action === "arm" ? await armBlocked(this.env) : null,
+      send: (t: string) => sendTelegram(this.env, t)
+    }) as Promise<JsonObject>;
   }
   async setSettings(input: { body?: unknown; actor: string }): Promise<JsonObject> {
     return writeSettings(this.env, { body: input?.body, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
@@ -2590,6 +2608,25 @@ async function runHealthStep(env: Env): Promise<void> {
 async function runEaHeartbeatRelay(env: Env): Promise<void> {
   const relay = await relayEaHeartbeat(env);
   if (relay.status !== "disabled" && relay.status !== "waiting" && relay.status !== "idle") console.log("ea_heartbeat_relay", JSON.stringify(relay));
+}
+
+/** The strategies that can be armed: the live ones (a shadow or off agent cannot speak, so it could never trade). */
+async function liveAgentIds(env: Env): Promise<string[]> {
+  let records: unknown = null;
+  try { records = (await readPlanLearning(env))?.agents ?? null; } catch { records = null; }
+  const statuses = agentStatuses(env, { records }) as Record<string, string>;
+  return Object.entries(statuses).filter(([, s]) => s === "live").map(([id]) => id);
+}
+/** Why an arm is refused now (the kill switch or the daily loss floor), or null. */
+async function armBlocked(env: Env): Promise<string | null> {
+  try {
+    const control = await readControl(env);
+    if (control?.mode === "killed" || String((env as unknown as Record<string, unknown>).EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false") return "the kill switch is on";
+    const row = await env.DB.prepare("SELECT state FROM omega_bridge WHERE id = 1").first<{ state: string | null }>();
+    const settings = await readSettings(env) as { settings?: { max_daily_loss_pct?: number } };
+    if (dailyLossHit(row?.state ? JSON.parse(row.state) : null, Number(settings?.settings?.max_daily_loss_pct))) return "the daily loss limit is hit";
+  } catch { return null; }
+  return null;
 }
 
 async function runLedgerStep(env: Env): Promise<void> {

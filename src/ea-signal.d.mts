@@ -14,3 +14,4 @@ export const HEARTBEAT_FIELD_NAMES: readonly string[];
 export function eaSignalFromDecision(input: Record<string, any>): Record<string, any>;
 export function entryTriggerFor(decision: any, options?: { live?: any; broker?: any }): { required: boolean; fired: boolean; source: string | null; note: string | null; at_ms?: number | null };
 export function blackoutWindow(env: unknown): { beforeMs: number; afterMs: number };
+export function applyArmGate(signal: Record<string, any>, arms: { known?: boolean; ids?: string[] } | null): Record<string, any>;

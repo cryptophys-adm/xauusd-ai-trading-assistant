@@ -326,6 +326,23 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (typeof env.OMEGA.setTradingMode !== "function") return json({ error: "trading_mode_unavailable" }, 503);
       return rpc(() => env.OMEGA.setTradingMode({ mode, actor: identity.subject }), "trading_mode_failed");
     }
+    // The strategy arm (owner 2026-11-17, ADR-0020; HAIC Q6: arm and disarm in Nexus only): the state for the Strategy
+    // Agents page, and the owner's one click (a person, same origin, JSON). The AI Worker checks the rest server-side.
+    if (route === "GET /api/strategy-arm") {
+      if (typeof env.OMEGA.strategyArm !== "function") return json({ error: "strategy_arm_unavailable" }, 503);
+      return rpc(() => env.OMEGA.strategyArm(), "strategy_arm_failed");
+    }
+    if (route === "POST /api/strategy-arm") {
+      const r = await personJson(request, url, identity, 1024);
+      if (r.response) return r.response;
+      if (request.headers.get("sec-fetch-site") && request.headers.get("sec-fetch-site") !== "same-origin") return json({ error: "same_origin_only" }, 403);
+      const id = typeof r.body.strategy_id === "string" ? r.body.strategy_id.trim() : "";
+      const action = r.body.action === "arm" || r.body.action === "disarm" ? r.body.action : "";
+      if (!id || !action) return json({ error: "strategy_id and action (arm or disarm) are required" }, 400);
+      if (typeof env.OMEGA.setStrategyArm !== "function") return json({ error: "strategy_arm_unavailable" }, 503);
+      return rpc(() => env.OMEGA.setStrategyArm({ strategy_id: id, action, request_id: typeof r.body.request_id === "string" ? r.body.request_id.slice(0, 64) : null,
+        expected_version: Number.isFinite(Number(r.body.expected_version)) ? Number(r.body.expected_version) : null, actor: identity.subject }), "strategy_arm_failed");
+    }
     if (route === "POST /api/position/close") {
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;
@@ -333,7 +350,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (!Number.isFinite(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
       return rpc(() => env.OMEGA.closePosition({ ticket, reason: r.body?.reason, actor: identity.subject }), "close_position_failed");
     }
-    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode", "/api/shadow-mode", "/api/push", "/api/status"].includes(path)) return json({ error: "method_not_allowed" }, 405);
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode", "/api/strategy-arm", "/api/shadow-mode", "/api/push", "/api/status"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 

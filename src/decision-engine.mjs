@@ -60,6 +60,7 @@ import { arenaEnabled, isArenaBar, arenaEvery, runArenaCall } from "./model-aren
 import { sessionOf } from "./outcome-scoring.mjs";
 import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT, strategyExecutionEnabled, agentConfidences } from "./strategy-agents.mjs";
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
+import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
@@ -782,7 +783,7 @@ export function validateCouncil(o) {
 export function decide({ answer = null, guards, strategy = null, quorum }) {
   const pick = (dir) => (dir > 0 ? guards.long : guards.short);
   let source = answer ? "council" : "fallback";
-  let stance, confidence, entryType, target, overruled = null, chosen = null;
+  let stance, confidence, entryType, target, overruled = null, chosen = null, selection = null;
   if (answer) {
     stance = answer.stance; confidence = r2(Math.max(0, Math.min(0.95, answer.confidence)));
     entryType = answer.entry_type; target = answer.target; chosen = answer.strategy ?? null;
@@ -814,7 +815,20 @@ export function decide({ answer = null, guards, strategy = null, quorum }) {
         const speakers = [...((dir > 0 ? guards.consensus?.long : guards.consensus?.short) || [])].sort((a, b) => (b.voice - a.voice) || (a.id === DEFAULT_AGENT ? -1 : b.id === DEFAULT_AGENT ? 1 : 0));
         const lean = guards.consensus?.lean;
         if (isNum(lean) && dir * lean <= -LEAN) overruled = { by: "strategy_agents", wanted: stance, failed: [{ check: "strategy_agents", detail: `the strategy agents lean against the decision (${lean > 0 ? "+" : ""}${Math.round(lean * 100)})` }] };
-        else {
+        else if (guards.arms?.mode === "live") {
+          // The strategy arm (owner 2026-11-17, docs/RFC_STRATEGY_RECOMMENDATION.md): 1 to 3 armed, only they; none
+          // armed, AUTO: every speaker. Either way ONE strategy, the best by measured confidence x confluence.
+          const opposite = (dir > 0 ? guards.consensus?.short : guards.consensus?.long) || [];
+          const armed = Array.isArray(guards.arms.ids) ? guards.arms.ids : [];
+          if (guards.arms.known === false) overruled = { by: "strategy_arm", wanted: stance, failed: [{ check: "strategy_arm", detail: "the arm state could not be read" }] };
+          else if (armed.length && opposite.some((x) => armed.includes(x.id))) overruled = { by: "strategy_arm", wanted: stance, failed: [{ check: "strategy_arm", detail: `an armed strategy sees its setup on the other side (${opposite.filter((x) => armed.includes(x.id)).map((x) => x.id).join(", ")})` }] };
+          else {
+            const pick = pickStrategy({ side: dir > 0 ? "long" : "short", speakers, plans: g.plans, agentConfidence: guards.agent_confidence, quorum, strategy, armed, stance, opts });
+            selection = pick;
+            if (!pick.agent) overruled = { by: "strategy_arm", wanted: stance, failed: [{ check: "strategy_arm", detail: pick.reason }] };
+            else trade = { ...pick.trade, agent: pick.agent };
+          }
+        } else {
           const pickOf = speakers.find((x) => x.id === chosen) ?? speakers.find((x) => g.plans?.[x.id]?.plan);
           if (!pickOf) overruled = { by: "strategy_agents", wanted: stance, failed: [{ check: "strategy_agents", detail: `no live strategy agent sees its setup on the ${word} side` }] };
           else {
@@ -831,7 +845,40 @@ export function decide({ answer = null, guards, strategy = null, quorum }) {
     if (overruled) stance = "WAIT";
   }
   const bias = answer?.bias ?? quorum.bias;
-  return { stance, bias, confidence, source, trade, overruled };
+  return { stance, bias, confidence, source, trade, overruled, selection };
+}
+
+/**
+ * Pure: the ONE strategy for an entry (owner 2026-11-17: "wajib memilih strategy terbaik dengan tingkat confidence dan
+ * confluence tertinggi"; the score confidence x confluence, confirmed in the session). Measured inputs only, never the
+ * council's own number:
+ *   confidence  the agent's confidence on the side (src/strategy-agents.mjs agentConfidence: the quorum's direction,
+ *               its own setup, its measured record), at least MIN_CONFIDENCE;
+ *   confluence  the mean of three measured agreements with its plan, 0 to 1: its entry at a key level now (1 or 0),
+ *               the quorum's share of the witnesses' weight on the side, and the strategy engine's multi-timeframe
+ *               alignment on the side (0 when the engine leans the other way);
+ *   score       confidence x confluence; a tie goes to the better reward-to-risk of the trade, then the default agent.
+ * `armed` (1 to 3 ids) limits the candidates; empty is AUTO (every speaker). A candidate whose plan does not pay the
+ * mode's R is skipped. Returns { mode, agent, trade, score, candidates, reason }; the losers stay in `candidates`.
+ */
+export function pickStrategy({ side, speakers = [], plans = {}, agentConfidence = null, quorum = null, strategy = null, armed = [], stance, opts = {} }) {
+  const mode = armed.length ? "armed" : "auto";
+  const share = isNum(side === "long" ? quorum?.long_share : quorum?.short_share) ? (side === "long" ? quorum.long_share : quorum.short_share) : 0;
+  const engineDir = String(strategy?.direction ?? "").toUpperCase();
+  const alignment = isNum(strategy?.alignment) && engineDir === (side === "long" ? "LONG" : "SHORT") ? Math.max(0, Math.min(1, strategy.alignment)) : 0;
+  const pool = speakers.filter((x) => (mode === "auto" || armed.includes(x.id)) && plans?.[x.id]?.plan);
+  const candidates = pool.map((x) => {
+    const plan = plans[x.id].plan;
+    const confidence = isNum(agentConfidence?.[x.id]?.[side]) ? agentConfidence[x.id][side] : null;
+    const confluence = r2(((plan.at_level ? 1 : 0) + share + alignment) / 3);
+    const trade = confidence != null && confidence >= MIN_CONFIDENCE ? tradeFor(stance, plan, opts) : null;
+    return { id: x.id, confidence, confluence, score: confidence == null ? null : r2(confidence * confluence), rrr: trade?.rrr ?? null, eligible: Boolean(trade), trade };
+  }).sort((a, b) => (b.eligible - a.eligible) || ((b.score ?? -1) - (a.score ?? -1)) || ((b.rrr ?? 0) - (a.rrr ?? 0)) || (a.id === DEFAULT_AGENT ? -1 : b.id === DEFAULT_AGENT ? 1 : 0));
+  const best = candidates.find((c) => c.eligible) ?? null;
+  const word = side === "long" ? "buy" : "sell";
+  const reason = best ? null : !pool.length ? (mode === "armed" ? `no armed strategy sees its setup on the ${word} side` : `no live strategy agent sees its setup on the ${word} side`)
+    : `no ${mode === "armed" ? "armed " : ""}strategy on the ${word} side reaches confidence ${Math.round(MIN_CONFIDENCE * 100)}% with a plan that pays`;
+  return { mode, agent: best?.id ?? null, trade: best?.trade ?? null, score: best?.score ?? null, candidates: candidates.map(({ trade, ...c }) => c), reason };
 }
 
 /** Pure: the fallback's text when the council did not answer. */
@@ -926,6 +973,13 @@ export function confidenceText(d) {
   return `${d?.source === "council" ? "council confidence" : "confidence"} ${Math.round((d?.confidence || 0) * 100)}%`;
 }
 
+/** Pure: the strategy arm's pick in one line: "Strategy X (ARMED|AUTO), score 0.62, picked over Y 0.55, Z 0.41". */
+export function selectionLine(sel) {
+  const label = (id) => agentCatalog().find((a) => a.id === id)?.label ?? id;
+  const others = (sel.candidates || []).filter((c) => c.id !== sel.agent).slice(0, 3).map((c) => `${label(c.id)} ${c.score ?? "n/a"}${c.eligible ? "" : " (not eligible)"}`);
+  return `Strategy: ${label(sel.agent)} (${sel.mode === "armed" ? "ARMED" : "AUTO"}), score ${sel.score} = confidence × confluence${others.length ? `, picked over ${others.join(", ")}` : ""}`;
+}
+
 /** Pure: the Telegram text of a decision (prices only from the key-level plan; never a size). */
 export function decisionMessage(d) {
   const t = d.trade;
@@ -934,6 +988,8 @@ export function decisionMessage(d) {
     `XAUUSD DECISION ENGINE · ${d.stance}`,
     [`15m bar closed ${String(d.bar_close).slice(11, 16)} UTC`, `bias ${String(d.bias).toLowerCase()}`, confidenceText(d), d.source === "council" ? "AI council" : "fallback"].filter(Boolean).join(" · "),
     ...(t ? [`${t.action === "ENTER_MARKET" ? "Market" : "Limit"} ${t.side} at ${px(t.entry)}, stop ${px(t.stop)}, target ${t.target.toUpperCase()} ${px(t.tp)} (${t.rrr}R)`] : []),
+    // The strategy arm's pick (owner 2026-11-17): which strategy, by what score, over which candidates.
+    ...(d.selection?.agent ? [selectionLine(d.selection)] : []),
     // The strategy agent the council chose, when it is not the default agent's plan.
     ...(t?.strategy ? [`Strategy: ${agentCatalog().find((a) => a.id === t.strategy)?.label ?? t.strategy}${t.setup ? ` (${t.setup})` : ""}`] : []),
     clip(d.summary, 700),
@@ -1088,6 +1144,8 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     version: DECISION_ENGINE_VERSION, decision_key: key, symbol: SYMBOL, timeframe: "15",
     bar_close: barClose, decided_at: decidedAt, latency_seconds: Math.max(0, Math.round((Date.parse(decidedAt) - Date.parse(barClose)) / 1000)),
     stance: d.stance, bias: d.bias, confidence: d.confidence, source: d.source,
+    // The strategy arm's choice (owner 2026-11-17): AUTO or ARMED, the strategy picked and the candidates it beat.
+    selection: d.selection ?? null, armed: guards.arms ? { mode: guards.arms.mode, version: guards.arms.version ?? null, ids: guards.arms.ids ?? [] } : null,
     // Which wording of the council's confidence produced this decision (the 7-day before/after comparison).
     confidence_prompt: COUNCIL_CONFIDENCE_PROMPT,
     model: council?.model ?? null, fallback_model_used: council?.fallback_used === true,
@@ -1210,6 +1268,8 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     let agentRecords = null;
     try { agentRecords = (await readPlanLearning(env))?.agents ?? null; } catch { agentRecords = null; }
     const assessment = assess(data, { now, env, analytics: data.analytics, witnessWeights, agentRecords });
+    // The strategy arm (owner 2026-11-17): the armed set read once per decision; AUTO when none is armed.
+    if (strategyArmMode(env) === "live") assessment.guards.arms = await readArmState(env);
     const context = councilContext({ inputs: data.inputs, correlations: data.correlations, regime: data.regime, previous, market: assessment.market, now });
     try {
       const doctrinePayload = await fetchEffectiveDoctrine(env, { now });

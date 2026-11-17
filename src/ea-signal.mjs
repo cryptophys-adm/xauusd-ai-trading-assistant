@@ -24,6 +24,7 @@
 // it carries no account number. The control (active, paused, killed) is set by Omega
 // (omega.cryptophys.work, src/ea-execution.mjs) and kept in KV under EA_CONTROL_KEY.
 
+import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
 import { readBrokerTrigger, brokerTriggerFields } from "./broker-trigger.mjs";
 import { readCorpusBars } from "./corpus-oracle.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
@@ -95,6 +96,20 @@ export function entryTriggerFor(decision, { live = null, broker = null } = {}) {
  * SELL with a valid trade; issued at its 15m close, expiring at the next 15m close (the next decision).
  * A market entry is sent only once its entry trigger fired; until then the signal says what it awaits.
  */
+/**
+ * Pure: the strategy arm at signal time (owner 2026-11-17). Adds `arm_mode` ("armed" or "auto") and `armed` (ids joined
+ * by ","); with 1 to 3 armed, an entry whose strategy is not armed has no side (awaiting_reason "strategy_disarmed");
+ * an unreadable arm state has none either ("strategy_arm_unknown"), never AUTO by accident.
+ */
+export function applyArmGate(sig, arms) {
+  const ids = Array.isArray(arms?.ids) ? arms.ids : [];
+  const out = { ...sig, arm_mode: ids.length ? "armed" : "auto", armed: ids.join(",") };
+  if (out.side !== "BUY" && out.side !== "SELL") return out;
+  const reason = arms?.known === false ? "strategy_arm_unknown" : ids.length && !ids.includes(out.trade_agent) ? "strategy_disarmed" : null;
+  if (!reason) return out;
+  return { ...out, awaiting_signal_id: out.signal_id, awaiting_side: out.side, awaiting_reason: reason, signal_id: "", side: "NONE", action: "", entry: 0, stop: 0, tp1: 0 };
+}
+
 export function eaSignalFromDecision({ decision = null, kill = false, killSource = "", paused = false, blackout = false, blackoutReason = null, marketPrice = null, marketMs = null, now = Date.now(), liveM5 = null, broker = null } = {}) {
   const base = eaSignalFrom({ kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now });
   const t = decision?.trade;
@@ -225,7 +240,10 @@ export async function eaSignal(env, { now = Date.now(), control: controlIn = nul
       } catch { basis = null; }
       basisMemo = { at: now, basis };
     }
-    return { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now, liveM5, broker }), ...brokerTriggerFields(broker), ...managementFields(decision, { basis }), source: "decision_engine" };
+    const out = { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now, liveM5, broker }), ...brokerTriggerFields(broker), ...managementFields(decision, { basis }), source: "decision_engine" };
+    // The strategy arm (owner 2026-11-17): read again at signal time, so a disarm stops entries before the next decision.
+    if (strategyArmMode(env) === "live") return applyArmGate(out, await readArmState(env));
+    return out;
   }
   return { ...eaSignalFrom({ candleKey, analysis, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now }), ...brokerTriggerFields(broker), source: "h1_decision" };
 }
