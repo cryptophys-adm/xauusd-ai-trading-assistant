@@ -7,11 +7,12 @@ import { DatabaseSync } from "node:sqlite";
 import { setStrategyArm, disarmAll, readArmState, readArmsFromDb, dailyLossHit, resetStrategyArmSchemaCacheForTests, ARM_MAX, STRATEGY_ARMS_KEY, ownerCheck, noteOwnerSub } from "../src/strategy-arm.mjs";
 import { pickStrategy, decide, selectionLine, MIN_CONFIDENCE } from "../src/decision-engine.mjs";
 import { applyArmGate } from "../src/ea-signal.mjs";
+import { storeDeal, resetEaExecutionSchemaForTests } from "../src/ea-execution.mjs";
 import { strategyExits } from "../src/omega-engine.mjs";
 
 function env(over = {}) {
   const db = new DatabaseSync(":memory:");
-  const wrap = (sql) => { let a = []; const s = { bind: (...x) => { a = x; return s; }, run: async () => db.prepare(sql).run(...a), first: async () => db.prepare(sql).get(...a) ?? null, all: async () => ({ results: db.prepare(sql).all(...a) }) }; return s; };
+  const wrap = (sql) => { let a = []; const s = { bind: (...x) => { a = x; return s; }, run: async () => { const r = db.prepare(sql).run(...a); return { ...r, meta: { changes: Number(r.changes) } }; }, first: async () => db.prepare(sql).get(...a) ?? null, all: async () => ({ results: db.prepare(sql).all(...a) }) }; return s; };
   const kv = new Map();
   return { DB: { prepare: wrap, batch: async (stmts) => { db.exec("BEGIN"); try { for (const s of stmts) await s.run(); db.exec("COMMIT"); } catch (e) { db.exec("ROLLBACK"); throw e; } } }, SIGNAL_CACHE: { get: async (k) => kv.get(k) ?? null, put: async (k, v) => kv.set(k, v) }, STRATEGY_ARM_MODE: "live", kv, raw: db, ...over };
 }
@@ -135,4 +136,26 @@ test("SA6. owner only (RFC §11.3): OWNER_ACCESS_SUB set → only that Access su
   const rows = b.raw.prepare("SELECT actor, action, detail FROM omega_events").all();
   assert.deepEqual(rows.map((r) => [r.actor, r.action, JSON.parse(r.detail).sub]), [["owner@example.com", "owner_sub_seen", OWNER]]);
   assert.equal((await setStrategyArm(b, { strategy_id: "zone_pullback", action: "arm", allowed, actor_sub: OWNER })).ok, true);
+});
+
+test("SA7. migration 0025 builds the same strategy_arm tables as the run-time schema; ea_deals.strategy comes from the open intent's ticket", async () => {
+  resetStrategyArmSchemaCacheForTests();
+  const cols = (db, t) => db.prepare(`PRAGMA table_info(${t})`).all().map((c) => `${c.name}:${c.type}:${c.notnull}:${c.pk}`);
+  const viaMigration = new DatabaseSync(":memory:");
+  viaMigration.exec(readFileSync(new URL("../migrations/0025_strategy_arm.sql", import.meta.url), "utf8"));
+  viaMigration.exec(readFileSync(new URL("../migrations/0025_strategy_arm.sql", import.meta.url), "utf8"));
+  const e = env();
+  await readArmsFromDb(e.DB);
+  for (const t of ["strategy_arm_state", "strategy_arms", "strategy_arm_events"]) assert.deepEqual(cols(viaMigration, t), cols(e.raw, t), t);
+  assert.equal(viaMigration.prepare("SELECT COUNT(*) AS n FROM strategy_arm_state").get().n, 1, "one singleton, idempotent");
+  // Attribution: the deal's position ticket → the Omega open intent → its strategy.
+  resetEaExecutionSchemaForTests();
+  e.raw.exec("CREATE TABLE omega_intents (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, result TEXT, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL)");
+  const t0 = Date.parse("2026-11-17T08:00:00Z");
+  e.raw.prepare("INSERT INTO omega_intents VALUES (?, 'open', ?, 'done', ?, ?, ?)").run("open:1:S", JSON.stringify({ strategy: "sweep_reversal" }), JSON.stringify({ ok: true, ticket: 388427574 }), t0, t0);
+  const deal = (ticket, position) => ({ deal_ticket: ticket, position_ticket: position, side: "SELL", volume: 0.1, profit: 12.5, mode: "demo", opened_ms: t0 + 60_000, closed_ms: t0 + 3_600_000, source: "omega" });
+  assert.equal((await storeDeal(e, deal(358414239, 388427574), { now: t0 + 3_600_000 })).strategy, "sweep_reversal");
+  assert.equal((await storeDeal(e, deal(358414240, 999), { now: t0 + 3_600_000 })).strategy, undefined, "no intent: no strategy");
+  assert.equal((await storeDeal(e, deal(358414239, 388427574), { now: t0 + 3_600_005 })).stored, false, "a repeat looks nothing up");
+  assert.deepEqual(e.raw.prepare("SELECT deal_ticket, strategy FROM ea_deals ORDER BY deal_ticket").all().map((r) => [r.deal_ticket, r.strategy]), [[358414239, "sweep_reversal"], [358414240, null]]);
 });

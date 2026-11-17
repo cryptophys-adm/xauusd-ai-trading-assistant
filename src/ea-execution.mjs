@@ -56,6 +56,8 @@ async function ensureSchema(db) {
   for (const sql of EA_EXECUTION_SCHEMA_SQL) await db.prepare(sql).run();
   // B-12 (2026-11-11): who opened the position (omega, manual, external, ea), for Omega's policy rollback.
   try { await db.prepare("ALTER TABLE ea_deals ADD COLUMN source TEXT").run(); } catch { /* already there */ }
+  // Strategy arm (RFC §5, owner 2026-11-17): the strategy whose open intent opened the position.
+  try { await db.prepare("ALTER TABLE ea_deals ADD COLUMN strategy TEXT").run(); } catch { /* already there */ }
   schemaReady = true;
 }
 
@@ -95,6 +97,16 @@ export function dealFrom(body, { now = Date.now() } = {}) {
   };
 }
 
+/** The strategy of the Omega open intent that opened this position ticket (within `since`), or null. Never throws. */
+export async function dealStrategy(db, positionTicket, { since = 0 } = {}) {
+  try {
+    const row = await db.prepare("SELECT json_extract(payload, '$.strategy') AS strategy FROM omega_intents WHERE kind = 'open' AND created_ms >= ? AND json_extract(result, '$.ticket') = ? ORDER BY created_ms DESC LIMIT 1")
+      .bind(Math.max(0, Math.floor(since)), positionTicket).first();
+    const s = row?.strategy;
+    return typeof s === "string" && /^[a-z0-9_]{2,40}$/.test(s) ? s : null;
+  } catch { return null; }
+}
+
 /**
  * Stores a closed deal once (a repeated report of the same deal changes nothing). Once per deal ticket:
  * the Omega bridge reports each closed deal on every sync, and its times can move by a second from one
@@ -118,7 +130,14 @@ export async function storeDeal(env, body, { now = Date.now() } = {}) {
   // Omega policy's rollback check counts source 'omega' only.
   const source = DEAL_SOURCES.includes(body?.source) ? body.source : null;
   if (!stored && source) await env.DB.prepare("UPDATE ea_deals SET source = ? WHERE deal_ticket = ? AND source IS NULL").bind(source, d.deal_ticket).run();
-  return { ok: true, stored };
+  // The strategy (RFC §5 attribution): from the Omega open intent whose result ticket is this deal's position, looked
+  // up once, when the deal is first stored. The exit deal's comment is not reliable, so the ticket is the key.
+  let strategy = null;
+  if (stored && d.position_ticket) {
+    strategy = await dealStrategy(env.DB, d.position_ticket, { since: (d.opened_ms ?? d.closed_ms) - 2 * DAY_MS });
+    if (strategy) await env.DB.prepare("UPDATE ea_deals SET strategy = ? WHERE deal_ticket = ? AND strategy IS NULL").bind(strategy, d.deal_ticket).run();
+  }
+  return strategy ? { ok: true, stored, strategy } : { ok: true, stored };
 }
 
 /**
