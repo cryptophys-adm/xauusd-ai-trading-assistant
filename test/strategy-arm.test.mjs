@@ -42,7 +42,9 @@ test("SA1. arm up to 3, one click each, idempotent, conflict-safe; only live str
 test("SA2. auto-disarm (kill switch, daily loss) writes one event per strategy; the events are append-only", async () => {
   resetStrategyArmSchemaCacheForTests();
   const e = env(), sent = [];
-  for (const id of ["zone_pullback", "range_fade"]) await setStrategyArm(e, { strategy_id: id, action: "arm", allowed });
+  // Distinct arm times: with the same millisecond the order falls back to strategy_id (CI flake 2026-11-17).
+  let t = Date.parse("2026-11-17T09:00:00Z");
+  for (const id of ["zone_pullback", "range_fade"]) await setStrategyArm(e, { strategy_id: id, action: "arm", allowed, now: t += 1000 });
   const r = await disarmAll(e, { reason: "daily_loss_limit", send: async (t) => sent.push(t) });
   assert.deepEqual([r.status, r.ids], ["disarmed", ["zone_pullback", "range_fade"]]);
   assert.deepEqual((await readArmsFromDb(e.DB)).ids, []);
