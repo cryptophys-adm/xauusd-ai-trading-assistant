@@ -1,5 +1,5 @@
 import { countingFetch, readUsage, recordUsage, usageTally, chartReserve, readToday, PROVIDER_DAILY_LIMIT, admitCalls, budgetConfig, budgetHeadroom } from "./provider-usage.mjs";
-import { runNewsShadow, readNewsShadow } from "./news-sources.mjs";
+import { runNewsShadow, readNewsShadow, readShadowDays, shadowReport } from "./news-sources.mjs";
 import { runOhlcvRequests, runEconomicCalendar } from "./tv-gateway.mjs";
 
 const JSON_HEADERS = {
@@ -1392,6 +1392,11 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    // The news shadow's comparison report (measurement phase A, 2026-11-17): read-only, public headlines only.
+    if (request.method === "GET" && url.pathname === "/shadow/report") {
+      const days = await readShadowDays(env, url.searchParams.get("days") || 7);
+      return new Response(JSON.stringify(shadowReport(days), null, 0), { status: 200, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+    }
     if (request.method === "GET" && url.pathname === "/health") {
       // Version provenance (owner 2026-11-15, P5): injected by the deploy workflow.
       return json({ ...(await cachedHealth(env)), commit: String(env.DEPLOY_COMMIT ?? "").slice(0, 12) || null, deployed_at: env.DEPLOYED_AT ?? null });
@@ -1456,7 +1461,7 @@ export default {
         await env.OAUTH_STORE.put(LAST_SCHEDULED_PULL_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
       }
       // News without TradingView, in shadow (src/news-sources.mjs): compared with this pull's headlines.
-      ctx.waitUntil(runNewsShadow(env, { tvArticles: articles }).then((r) => console.log("news_shadow", JSON.stringify({ status: r.status, shadow_recent: r.shadow_recent, tv_recent: r.tv_recent, overlap: r.overlap, lead_minutes: r.lead_minutes }))).catch(() => {}));
+      ctx.waitUntil(runNewsShadow(env, { tvArticles: articles, tvStatus: status === "error" ? (asString(payload.failure_code) || asString(payload.reason) || "error") : status }).then((r) => console.log("news_shadow", JSON.stringify({ status: r.status, shadow_recent: r.shadow_recent, tv_recent: r.tv_recent, overlap: r.overlap, lead_minutes: r.lead_minutes }))).catch(() => {}));
       const message = JSON.stringify(summary);
       if (status === "ok") console.log("scheduled_news_ingest_success", message);
       else if (status === "empty") console.warn("scheduled_news_ingest_empty", message);
