@@ -1,6 +1,6 @@
 # RFC: council proposals, from the owner's pick to a change, without Claude
 
-- **Status:** phase 1 and phase 2 built; the return path prepared (off).
+- **Status:** phase 1 and phase 2 built; the return path on since 2026-11-17 (platform V3 live).
 - **Date:** 2026-11-17.
 - **Builds on:** docs/RFC_CALL_FOR_COUNCILS.md; the platform's docs/design/HAIC-H0-H1.md (decision → proposal hand-off) and ADR-0014 (evolution loop).
 
@@ -84,7 +84,7 @@ The body never carries a price. The send is bound by the kernel's limit of 4 rep
   - A retired value is never tried again.
 - **Reporting.** Every step sends a Telegram line and a `typed_proposal.v1` state update to the platform. It runs once a UTC day from the ledger cron, after grid-adapt.
 
-## The return path (prepared, off)
+## The return path (on since 2026-11-17)
 
 The platform reports what it does with a handed-off proposal through `council.decisions.read` (platform V3, relayed 2026-11-17), a tier-0 observe capability of `xauusd-moderator`:
 

@@ -15,6 +15,8 @@ const dna = organismDna();
 const ai = dna.organs.find((o) => o.service === PLATFORM_HOST_WORKER);
 // The platform's external-organ ceiling (cryptophys-cloud-platform control-plane-shared/src/organism.ts).
 const CEILING = new Set(["signals.observe", "reports.publish", "memory.recall", "memory.remember"]);
+// XAUUSD_CEILING (platform V3, live 2026-11-17): the moderator alone may also read its handed-off proposals' state.
+const AGENT_EXTRA = Object.freeze({ "xauusd-moderator": ["council.decisions.read"] });
 
 function sourceFiles(dir) {
   return readdirSync(new URL(dir, root), { recursive: true }).map(String).filter((f) => /\.(mjs|ts)$/.test(f) && !f.endsWith(".d.mts")).map((f) => join(dir, f));
@@ -40,7 +42,7 @@ test("D2. the agents are exactly those that report to the platform kernel, withi
   for (const a of ai.agents) {
     assert.equal(a.voter, false, `${a.id}: no council seat for an external organ`);
     assert.ok(a.tier_max <= 1, a.id);
-    assert.ok(a.capabilities.every((c) => CEILING.has(c)), `${a.id}: ${a.capabilities}`);
+    assert.ok(a.capabilities.every((c) => CEILING.has(c) || (AGENT_EXTRA[a.id] ?? []).includes(c)), `${a.id}: ${a.capabilities}`);
   }
   for (const o of dna.organs.filter((x) => x !== ai)) assert.deepEqual(o.agents, [], o.service);
   assert.ok(read("src/platform-reports.mjs").includes('"xauusd-reasoner"') && read("src/platform-reports.mjs").includes('"xauusd-moderator"'));
