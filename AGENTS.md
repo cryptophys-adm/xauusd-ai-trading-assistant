@@ -25,6 +25,7 @@ Read `docs/SSOT.md` first. It is the only canonical description of this system. 
    - the engine is off unless both `OMEGA_ENGINE_ENABLED = "true"` (AI Worker) and the Omega page toggle are on; a real account also needs the typed `LIVE` arm; a kill (`EA_SIGNALS_ENABLED = "false"` or Omega `killed`) closes the engine's positions;
    - never run the EA and the Omega executor on the same account (double execution).
    Kernel reports and decision cards still never carry a price.
+9. **Everything built or emitted is English (owner 2026-11-17: "all in english, hanya percakapan owner dengan sesi claude yang bahasa indonesia").** The Nexus and Omega UI, Telegram texts (Nexus and the relays to Cerebrum), agent, room and council outputs (Call for Councils cards, the moderator, verdicts), reports and docs. Only the owner's chats with Claude sessions are Indonesian. Text the owner types (a free council topic such as "Evaluasi Strategy") may be any language; the agents answer in English. Comments may quote the owner's own words as provenance; detection rules may match both languages because they read text and never show it.
 
 ## Before opening a PR
 - `npm test` (it includes `test/ssot-topology.test.mjs`) and `npx tsc --noEmit -p .`.
