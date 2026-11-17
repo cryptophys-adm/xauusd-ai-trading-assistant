@@ -36,7 +36,10 @@
     // (2026-11-05), above the quota, so it never held: on 2026-11-12/13 the provider refused at the 501st call
     // of the day while this budget still read room. The quota is the account's, shared with the news pulls,
     // which yield to the chart near the limit (the chart reserve).
-    "TV_DAILY_CALL_BUDGET": "500",
+    // 2026-11-17 (owner: "setuju perbaikan alert dan kuota"): the account cap, the quota less the gateway's
+    // safety margin (fundamental-news-ingestion ACCOUNT_SAFETY_MARGIN 20); the gateway admits every caller
+    // against one count, chart first, so this budget and the gateway's cap are one number.
+    "TV_DAILY_CALL_BUDGET": "480",
     "CHART_MINTICK": "0.001",
     // C0 verified 5m lane: publish 5m local records for parity (timeframe-scoped ids).
     "M5_PARITY_PUBLISH": "true",

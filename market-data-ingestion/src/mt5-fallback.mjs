@@ -27,7 +27,7 @@ import { aggregateCandles } from "./derived-series.mjs";
 
 export const FALLBACK_STALE_S = 10 * 60;
 /** Pull statuses that mean the gateway is down. */
-export const FALLBACK_TRIGGERS = Object.freeze(new Set(["mcp_quota_cooldown_active", "mcp_quota_exceeded", "gateway_unavailable", "daily_budget_exhausted"]));
+export const FALLBACK_TRIGGERS = Object.freeze(new Set(["mcp_quota_cooldown_active", "mcp_quota_exceeded", "gateway_unavailable", "daily_budget_exhausted", "account_budget_exhausted"]));
 const SYMBOL = "OANDA:XAUUSD";
 const SOURCE_KEY = `${SYMBOL}|1m`;
 /** The series rebuilt from the broker's M1 during a fallback: 5m and 15m (derived as always), 1H, 4H and D1. */

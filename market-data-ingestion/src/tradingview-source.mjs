@@ -19,7 +19,7 @@ const BUDGET_KEY_PREFIX = "market-data:v2:mcp-calls:";
 // the pulls had the cooldown ended before midnight. While it holds, no call is planned against the budget.
 const GATEWAY_COOLDOWN_KEY = "market-data:v2:gateway-cooldown";
 /** Gateway answers that never reached TradingView: their reservation goes back to the budget. */
-const NO_PROVIDER_CALL = new Set(["mcp_quota_cooldown_active", "gateway_not_configured"]);
+const NO_PROVIDER_CALL = new Set(["mcp_quota_cooldown_active", "gateway_not_configured", "account_budget_exhausted"]);
 /** KV key of the last refresh summary, written by every pull cycle. */
 export const LAST_REFRESH_KEY = "market-data:v2:last-refresh";
 const MAX_GATEWAY_COUNT = 8000;
@@ -241,9 +241,10 @@ export async function writeSeries(kv, spec, record) {
  * pulls before #165 spent the day's 800 calls, and the market reopens at 22:00 UTC).
  */
 export function dailyBudget(env, now = Date.now()) {
-  // The default is the account's provider quota (owner 2026-11-14: the same number; was 800).
-  const parsed = Number.parseInt(asString(env?.TV_DAILY_CALL_BUDGET) || "500", 10);
-  const base = Number.isFinite(parsed) ? parsed : 500;
+  // The default is the account cap: the provider quota less the gateway's safety margin (owner 2026-11-14: the
+  // same number; was 800; 2026-11-17: 480, the gateway admits every caller against one cap, chart first).
+  const parsed = Number.parseInt(asString(env?.TV_DAILY_CALL_BUDGET) || "480", 10);
+  const base = Number.isFinite(parsed) ? parsed : 480;
   const m = asString(env?.TV_DAILY_CALL_BUDGET_OVERRIDE).match(/^(\d{4}-\d{2}-\d{2}):(\d+)$/);
   return m && m[1] === new Date(now).toISOString().slice(0, 10) ? Number(m[2]) : base;
 }

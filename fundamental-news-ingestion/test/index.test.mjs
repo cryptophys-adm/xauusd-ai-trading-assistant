@@ -982,7 +982,7 @@ test("the chart's reserve: a news pull waits when it would leave the gold chart 
   // After the fix (one news pull an hour, the 1H bars built from the minutes): 18 + 3 an hour, about 490 a day.
   const fixed = chartReserve(day(hours(20, 18), 420), { now: at(20, 5), wanted: 3 });
   assert.equal(fixed.blocked, false, "420 + 3 + 18 x 3.92 h = 494: news still runs");
-  assert.equal(chartReserve(day(hours(0, 0), 30), { now: at(0, 30), wanted: 3 }).blocked, false, "before an hour is complete there is no estimate");
+  assert.equal(chartReserve(day(hours(0, 0), 30), { now: at(0, 30), wanted: 3 }).blocked, false, "before an hour is complete the weekday floor (18 an hour) stands in, and 30 + 3 + 18 x 23.5 h still fits");
   assert.equal(chartReserve(day(hours(20, 1), 60), { now: at(20, 0), wanted: 3 }).blocked, false, "a weekend day: the chart barely calls");
   assert.equal(chartReserve(day([40, 18, 18, 19, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 120), { now: at(4, 10), wanted: 3 }).chart_per_hour, 18, "the median, so a bootstrap hour does not count");
   assert.equal(chartReserve(null, { now: at(12), wanted: 3 }).blocked, false);

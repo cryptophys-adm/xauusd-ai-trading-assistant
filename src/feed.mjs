@@ -110,6 +110,7 @@ export function fallbackCause({ gw = null, pull = null, now = Date.now() } = {})
     if (reason && reason !== "provider_quota_exceeded") return { code: "paused", text: `the TradingView gateway is paused (${String(reason).replace(/_/g, " ")})`, back_at: iso(until) };
     return { code: "quota", text: "the TradingView quota is used up", back_at: iso(until) };
   }
+  if (pull?.status === "account_budget_exhausted") return { code: "chart_budget", text: "the day's TradingView budget is used up (the account cap, the chart first)", back_at: iso(nextUtcMidnight(now)) };
   if (pull?.status === "daily_budget_exhausted") return { code: "chart_budget", text: "the chart's daily TradingView budget is used up", back_at: iso(nextUtcMidnight(now)) };
   if (pull?.status === "mcp_quota_exceeded" || pull?.status === "mcp_quota_cooldown_active") return { code: "quota", text: "the TradingView quota is used up", back_at: iso(nextUtcMidnight(now)) };
   if (gw && gw.oauth_authorized === false) return { code: "oauth", text: "the TradingView gateway is not authorized (OAuth); the owner signs in again", back_at: null };

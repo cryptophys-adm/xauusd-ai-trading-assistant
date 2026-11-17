@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { PROVIDER_DAILY_LIMIT } from "../fundamental-news-ingestion/src/provider-usage.mjs";
+import { PROVIDER_DAILY_LIMIT, ACCOUNT_SAFETY_MARGIN } from "../fundamental-news-ingestion/src/provider-usage.mjs";
 import { SERIES_INTERNALS } from "../market-data-ingestion/src/tradingview-source.mjs";
 
 const varOf = (path, name) => {
@@ -11,8 +11,8 @@ const varOf = (path, name) => {
   return m ? m[1] : null;
 };
 
-test("the pull adapter's budget, its default and the news Worker's provider quota are one number", () => {
-  const quota = Number(varOf("../fundamental-news-ingestion/wrangler.jsonc", "TV_PROVIDER_DAILY_LIMIT") ?? PROVIDER_DAILY_LIMIT);
+test("the pull adapter's budget, its default and the gateway's account cap (quota less the margin) are one number", () => {
+  const quota = Number(varOf("../fundamental-news-ingestion/wrangler.jsonc", "TV_PROVIDER_DAILY_LIMIT") ?? PROVIDER_DAILY_LIMIT) - Number(varOf("../fundamental-news-ingestion/wrangler.jsonc", "TV_ACCOUNT_SAFETY_MARGIN") ?? ACCOUNT_SAFETY_MARGIN);
   assert.equal(Number(varOf("../market-data-ingestion/wrangler.jsonc", "TV_DAILY_CALL_BUDGET")), quota);
   assert.equal(SERIES_INTERNALS.dailyBudget({}, Date.parse("2026-11-16T10:00:00Z")), quota, "the code default too");
   assert.equal(varOf("../market-data-ingestion/wrangler.jsonc", "TV_DAILY_CALL_BUDGET_OVERRIDE"), null, "no stale one-day override");
