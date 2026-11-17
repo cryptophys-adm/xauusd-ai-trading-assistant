@@ -227,7 +227,7 @@ const KIND: Record<string, { text: string; tone: "green" | "red" | "amber" | "sl
 };
 const PROPOSAL_STATE: Record<string, string> = {
   queued_shadow: "waiting for its shadow test", handoff_pending: "being sent to the platform", handed_off: "with the platform's evolution loop", closed: "recorded, nothing changes",
-  shadow: "in its shadow test", live: "live", rolled_back: "rolled back", rejected: "did not prove better"
+  shadow: "in its shadow test", live: "live", rolled_back: "rolled back by itself", rejected: "not applied", superseded: "replaced by a newer proposal on the same knob"
 };
 const ROUND: Record<string, string> = { position: "Opening opinions", rebuttal: "Responses to each other", answer: "Answers to the owner" };
 const STATE_TEXT: Record<string, string> = { positions: "the agents are giving their opinions…", rebuttals: "the agents are responding to each other…", synthesis: "the moderator is writing the options…", awaiting_owner: "waiting for your pick (in Cerebrum)", aborted: "stopped", decided: "decided", expired: "expired", closed: "closed" };
@@ -319,9 +319,11 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
 function Proposals({ tick }: { tick: number }) {
   const poll = usePoll(() => get("/api/council/proposals"), 30_000, [tick]);
   const rows = ((poll.data as any)?.proposals ?? []) as any[];
-  if (!rows.length) return null;
+  const live = Object.entries(((poll.data as any)?.live_knobs ?? {}) as Record<string, number>);
+  if (!rows.length && !live.length) return null;
   return (
     <div><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">Accepted proposals</div>
+      {live.length ? <div className="mb-2 text-[11.5px] text-emerald-200">Live knob values (tested in shadow first; each rolls back by itself if it does worse): {live.map(([k, v]) => `${k} = ${v}`).join(" · ")}</div> : null}
       <div className="grid gap-2 md:grid-cols-2">{rows.map((p) => (
         <div key={p.id} className="glass-inner p-3 text-[12px]">
           <div className="flex items-start justify-between gap-2"><div className="font-semibold text-slate-100">{p.title ?? p.option_id}</div>{KIND[p.kind] ? <Badge tone={KIND[p.kind].tone}>{KIND[p.kind].text}</Badge> : null}</div>

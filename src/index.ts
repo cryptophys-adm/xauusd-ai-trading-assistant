@@ -259,6 +259,8 @@ import { computeRecommendations, readRecommendations } from "./strategy-recommen
 import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
 import { startSession, ownerMessage, closeSession, reopenSession, acceptOption, retryProposalHandoffs, listProposals, runSessionStep, listSessions, readSession, setSessionsSwitch } from "./cfc-session.mjs";
+import { runKnobProposals } from "./council-knob-tuning.mjs";
+import { readKnobOverrides } from "./council-knobs.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings } from "./omega-broker.mjs";
@@ -2355,7 +2357,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   }
   if (url.pathname === "/api/council/proposals") {
     // The options the owner accepted and where each stands (shadow test, handed to the platform, live). Read-only.
-    try { return dashboardJson({ status: "ok", ...(await listProposals(env)) }); }
+    try { return dashboardJson({ status: "ok", ...(await listProposals(env)), live_knobs: await readKnobOverrides(env) }); }
     catch (error) { console.error("council_proposals_read_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
   }
   if (url.pathname === "/api/council/session") {
@@ -2749,6 +2751,10 @@ async function runLedgerStep(env: Env): Promise<void> {
   // The grid's automatic entry/stop per strategy x regime (src/grid-adapt.mjs, owner 2026-11-17): once a UTC day.
   const grid = await runGridAdapt(env, { send: (text: string) => sendTelegram(env, text) });
   if (grid.status === "computed" || grid.status === "failed") console.log("grid_adapt", JSON.stringify(grid));
+  // Council proposals, phase 2 (docs/RFC_COUNCIL_PROPOSALS.md, owner 2026-11-17: "Live otomatis + rollback otomatis"):
+  // an accepted knob change is tested in shadow, goes live when it proves better, and rolls back by itself. Daily.
+  const knobs = await runKnobProposals(env, { send: (text: string) => sendTelegram(env, text) });
+  if (knobs.status === "failed" || (knobs.status === "ok" && knobs.actions?.length)) console.log("council_knobs", JSON.stringify(knobs));
   // The custom model's dataset (owner 2026-11-13, docs/RFC_CUSTOM_MODEL.md): features and labels per decision.
   const dataset = await runModelDataset(env);
   if (dataset.status === "failed" || Number(dataset.added) || Number(dataset.labeled) || Number(dataset.wide) || Number(dataset.unavailable)) console.log("model_dataset", JSON.stringify(dataset));

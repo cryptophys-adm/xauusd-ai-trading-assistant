@@ -142,11 +142,23 @@ export const MODE_THRESHOLDS = Object.freeze({
   intraday: Object.freeze({ quorum_min: 0.5, min_rrr: 1.5, lean: 0.15 }),
   swing: Object.freeze({ quorum_min: 0.6, min_rrr: 2.0, lean: 0.2 })
 });
-/** Pure: the mode and its thresholds. */
-export function modeThresholds(mode) {
+/**
+ * Pure: the mode and its thresholds. `knobs` are the council's live knob values (src/council-knob-tuning.mjs, already
+ * clamped to their bounds): decision.quorum_min.<mode> and decision.min_rrr.<mode> replace the mode's value.
+ */
+export function modeThresholds(mode, knobs = null) {
   const m = String(mode ?? "intraday").trim().toLowerCase();
   const key = Object.hasOwn(MODE_THRESHOLDS, m) ? m : "intraday";
-  return { mode: key, ...MODE_THRESHOLDS[key] };
+  const out = { mode: key, ...MODE_THRESHOLDS[key] };
+  const q = knobs?.[`decision.quorum_min.${key}`], r = knobs?.[`decision.min_rrr.${key}`];
+  if (typeof q === "number" && Number.isFinite(q)) out.quorum_min = q;
+  if (typeof r === "number" && Number.isFinite(r) && key !== "scalp") out.min_rrr = r;
+  return out;
+}
+/** The council's confidence floor: the live knob decision.min_confidence when set, else MIN_CONFIDENCE. */
+export function minConfidenceOf(env) {
+  const v = env?.COUNCIL_KNOBS?.["decision.min_confidence"];
+  return typeof v === "number" && Number.isFinite(v) ? v : MIN_CONFIDENCE;
 }
 
 const STANCES = ["BUY", "SELL", "WAIT"];
@@ -569,7 +581,7 @@ export function independentWitnesses(loaded = {}, { now = Date.now() } = {}) {
  */
 export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro = null, now = Date.now(), env = null }) {
   // Adaptive thresholds per trading mode (Cloudflare Workers: env is threaded in; no process.env).
-  const { mode: MODE, quorum_min: QUORUM_MIN, min_rrr: MIN_RRR, lean: LEAN } = modeThresholds(env?.TRADING_MODE);
+  const { mode: MODE, quorum_min: QUORUM_MIN, min_rrr: MIN_RRR, lean: LEAN } = modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS);
 
   const side = stanceOf(dir);
   const card = (k) => (cards || []).find((c) => c.key === k);
@@ -598,7 +610,7 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
   let risk = { vetoes: [], cautions: [], supports: [] };
   try { risk = riskChecks(dir, { h1Snapshot: inputs.h1Snapshot ?? null, m15Snapshot: inputs.m15Snapshot ?? null, news: inputs.news ?? null, macro: macro ?? inputs.macro ?? null, calendar: inputs.calendar ?? null, mode: env?.TRADING_MODE ?? null, env, now }); } catch { /* none */ }
   add("no_veto", !risk.vetoes.length, risk.vetoes.length ? risk.vetoes.join("; ") : "no veto");
-  const nearest = modeThresholds(env?.TRADING_MODE).target === "nearest";
+  const nearest = modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS).target === "nearest";
   const plan = planForDirection(strategy, dir, { scalp: nearest });
   add("levels", Boolean(plan), plan ? `entry ${plan.entry_note}, stop ${plan.stop_note}` : "no key-level plan (price, 1H range or zones missing)");
   if (nearest) {
@@ -781,7 +793,7 @@ export function validateCouncil(o) {
  * Pure: the final decision from the council's answer (or null) and the guardrails. The council's
  * BUY or SELL stands only inside the guardrails; without a valid answer the fallback decides.
  */
-export function decide({ answer = null, guards, strategy = null, quorum }) {
+export function decide({ answer = null, guards, strategy = null, quorum, minConfidence = MIN_CONFIDENCE }) {
   const pick = (dir) => (dir > 0 ? guards.long : guards.short);
   let source = answer ? "council" : "fallback";
   let stance, confidence, entryType, target, overruled = null, chosen = null, selection = null;
@@ -800,7 +812,7 @@ export function decide({ answer = null, guards, strategy = null, quorum }) {
   if (dir) {
     const g = pick(dir);
     if (!g.allowed) overruled = { by: "guardrail", wanted: stance, failed: g.checks.filter((c) => !c.pass).map((c) => ({ check: c.id, detail: c.detail })) };
-    else if (confidence < MIN_CONFIDENCE) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "confidence", detail: `confidence ${Math.round(confidence * 100)}% is below ${Math.round(MIN_CONFIDENCE * 100)}%` }] };
+    else if (confidence < minConfidence) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "confidence", detail: `confidence ${Math.round(confidence * 100)}% is below ${Math.round(minConfidence * 100)}%` }] };
     else {
       const minRrr = isNum(g.min_rrr) ? g.min_rrr : MIN_RRR;
       // The council's strategy agent, when it is live and its plan passes the reward guardrail; else the
@@ -1092,7 +1104,7 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // agent's is only recorded and measured. The plans read the chart and the key levels, never the quorum,
   // so they are made first: their consensus is a witness of the quorum (owner 2026-11-13).
   const statuses = agentStatuses(env, { records: agentRecords });
-  const thresholds = modeThresholds(env?.TRADING_MODE);
+  const thresholds = modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS);
   const scalp = thresholds.target === "nearest";
   // The patterns the breaker holds back: their own trades here lost (a pattern family skips them).
   const heldPatterns = suspendedPatterns(agentRecords).map((x) => `${x.agent}:${x.id}`);
@@ -1156,10 +1168,10 @@ const modelAdviceOf = (council) => (council?.model_advice && typeof council.mode
 
 export function buildDecisionRecord({ key, barClose, loaded, assessment = null, council = null, previous = null, now = Date.now(), decidedAt = new Date(now).toISOString(), env = null, analytics = null }) {
   const { inputs = {}, strategy = null } = loaded || {};
-  const { mode: MODE, quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, lean: MODE_LEAN } = modeThresholds(env?.TRADING_MODE);
+  const { mode: MODE, quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, lean: MODE_LEAN } = modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS);
   const { cards, quorum, guards, market } = assessment ?? assess(loaded, { now, env, analytics });
   const answer = council?.answer ?? null;
-  const d = decide({ answer, guards, strategy, quorum });
+  const d = decide({ answer, guards, strategy, quorum, minConfidence: minConfidenceOf(env) });
   let text;
   if (answer) {
     if (d.overruled) {
@@ -1217,7 +1229,7 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     structure: marketStructure({ h4Bars: inputs.h4Bars ?? [], h1Bars: inputs.h1Bars ?? [], m15Bars: inputs.m15Bars ?? [] }),
     // The price feed the decision stood on: TradingView, or the broker's bars (MT5 fallback).
     feed: inputs?.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview",
-    trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: MIN_CONFIDENCE, lean: MODE_LEAN, quorum_lean_band: LEAN },
+    trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: minConfidenceOf(env), lean: MODE_LEAN, quorum_lean_band: LEAN },
     advisory: "The server places no order and gives no position size; the EA sizes each trade from the owner's risk input.",
     // The deployed Worker version that decided (2026-11-11: a deploy outside GitHub Actions put back an older build unseen).
     worker_version: typeof env?.CF_VERSION_METADATA?.id === "string" ? env.CF_VERSION_METADATA.id : null
@@ -1298,6 +1310,9 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     if (await env.DB.prepare("SELECT 1 AS x FROM engine_decisions WHERE decision_key = ?").bind(key).first()) return { status: "already_decided", decision_key: key };
     const previous = await readLatestDecision(env);
     try { env.TRADING_MODE = await tradingMode(env); } catch { /* keep env */ }
+    // The council's live knob values (owner 2026-11-17, docs/RFC_COUNCIL_PROPOSALS.md): loaded lazily, so this module
+    // and the knob registry (which reads this module's constants) do not import each other. Unreadable: none.
+    try { env.COUNCIL_KNOBS = await (await import("./council-knobs.mjs")).readKnobOverrides(env, { now }); } catch { env.COUNCIL_KNOBS = {}; }
     const data = loaded ?? await loadDecisionInputs(env, { now });
     let witnessWeights = null;
     try { witnessWeights = await activeWitnessTuning(env, { now }); } catch { witnessWeights = null; }
@@ -1321,10 +1336,10 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
       barClose: closeIso, witnesses: assessment.cards, quorum: assessment.quorum,
       guardrails: { long: { allowed: assessment.guards.long.allowed, checks: assessment.guards.long.checks, entry_trigger: assessment.guards.long.entry_trigger ?? null }, short: { allowed: assessment.guards.short.allowed, checks: assessment.guards.short.checks, entry_trigger: assessment.guards.short.entry_trigger ?? null } },
       structure: marketStructure({ h4Bars: inputs.h4Bars ?? [], h1Bars: inputs.h1Bars ?? [], m15Bars: inputs.m15Bars ?? [] }),
-      context, feed: inputs.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview", tradingMode: modeThresholds(env?.TRADING_MODE).mode
+      context, feed: inputs.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview", tradingMode: modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS).mode
     });
     if (advice) context.model = advice;
-    const evidence = councilEvidence({ barClose: closeIso, cards: assessment.cards, quorum: assessment.quorum, guards: assessment.guards, context, agentRecords, condition: contextOf({ mode: modeThresholds(env?.TRADING_MODE).mode, regime: data.regime }) });
+    const evidence = councilEvidence({ barClose: closeIso, cards: assessment.cards, quorum: assessment.quorum, guards: assessment.guards, context, agentRecords, condition: contextOf({ mode: modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS).mode, regime: data.regime }) });
     const councilStarted = clock();
     const council = await askCouncil(env, evidence, { clock });
     const councilMs = clock() - councilStarted;

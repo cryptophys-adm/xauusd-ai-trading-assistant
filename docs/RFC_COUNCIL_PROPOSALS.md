@@ -1,6 +1,6 @@
 # RFC: council proposals, from the owner's pick to a change, without Claude
 
-- **Status:** phase 1 built, phase 2 next.
+- **Status:** phase 1 and phase 2 built.
 - **Date:** 2026-11-17.
 - **Builds on:** docs/RFC_CALL_FOR_COUNCILS.md; the platform's docs/design/HAIC-H0-H1.md (decision → proposal hand-off) and ADR-0014 (evolution loop).
 
@@ -31,14 +31,12 @@ Each knob's current value is read from the code that uses it.
 
 | Knob | Today | Bounds | Step |
 |---|---|---|---|
-| `decision.min_confidence` | 0.4 | 0.3 to 0.6 | 0.05 |
+| `decision.min_confidence` (the council's floor) | 0.4 | 0.3 to 0.6 | 0.05 |
 | `decision.min_rrr.intraday` | 1.5 R | 1 to 2.5 | 0.1 |
 | `decision.min_rrr.swing` | 2 R | 1.5 to 3 | 0.1 |
 | `decision.quorum_min.scalp` | 0.45 | 0.4 to 0.65 | 0.05 |
 | `decision.quorum_min.intraday` | 0.5 | 0.4 to 0.7 | 0.05 |
 | `decision.quorum_min.swing` | 0.6 | 0.45 to 0.75 | 0.05 |
-| `strategy.near_atr` | 0.35 ATR | 0.2 to 0.6 | 0.05 |
-| `agents.max_risk_atr` | 2.5 ATR | 1.5 to 3.5 | 0.25 |
 
 The registry is the only way a council can change a number. Adding a knob is a reviewed change to this file.
 
@@ -55,19 +53,36 @@ Each hand-off is a `reports.publish` call: kind `xauusd_digest`, `body.schema: "
 
 The body never carries a price. The send is bound by the kernel's limit of 4 reports per hour per agent.
 
-## Phase 2 (next): the shadow test, live and rollback
+## Phase 2 (built): the shadow test, live and rollback (src/council-knob-tuning.mjs)
 
-The plan reuses the machinery that already runs: the paired comparison and gates of grid auto-adapt, and the Holm-adjusted tests, holdout and reverse-shadow rollback of witness tuning.
-
-- **Runtime override.** A `queued_shadow` proposal's value is read at decision time from one KV document. The registry's bounds are clamped again there.
-- **Shadow test.** The test replays the recorded decisions and their outcomes in R. For each decision it checks whether it would have passed or failed under the candidate value, against the control (today's value).
-- **Gates before going live:**
-  - a minimum sample;
-  - a positive mean difference;
-  - the newest quarter of the data no worse;
-  - a bootstrap lower bound above 0.
-- **Live and rollback.** If the gates pass, the value goes live. It rolls back by itself if the live result is worse than the control over a set window. A rolled-back value is not tried again.
-- **Reporting.** Each step is a Telegram line and a `typed_proposal.v1` state update to the platform.
+- **The knobs.** The registry now lists only the 6 Decision Engine knobs the replay can test. `near_atr`, `max_risk_atr` and the other strategy engine and agent numbers need code before they can be tuned, so a council proposes them as a repository task.
+- **Runtime override.**
+  - The live values are stored in KV `council-knobs:v1`.
+  - `runDecisionEngine` reads them at each decision through `readKnobOverrides`, clamped to the registry's bounds and cached for 60 s.
+  - `modeThresholds(mode, knobs)` takes them for `quorum_min` and `min_rrr`; `minConfidenceOf(env)` gives the council's confidence floor.
+  - The decision's `rules` record the values in force.
+  - The moderator's knob menu and Accept compare against the value in force.
+- **Replay.**
+  - Every decision of the last 60 days is replayed with the candidate value.
+  - Each changed decision is measured in plan-R, using the zone_pullback plan as is (`e0@s1`, 0 when not filled).
+  - A stricter value is exact: a trade it would have refused drops out.
+  - A looser `min_confidence` is exact as well: a council side that was overruled only by its confidence comes back.
+  - A looser `quorum_min` or `min_rrr` is an estimate. It counts the bias's side only where that knob's check was the only one that failed.
+- **Gate** (grid-adapt's):
+  - at least 30 changed decisions;
+  - a mean gain above 0.05R;
+  - the newest quarter (at least 10) not losing;
+  - a seeded bootstrap 2.5% bound above 0.
+- **Decision after the test.**
+  - A value that passes goes live.
+  - A value that fails with enough data, or after 30 days, is rejected.
+  - Otherwise it stays in shadow and is tested again the next day.
+  - An older proposal on the same knob is superseded.
+- **Rollback.**
+  - Each day, the decisions made since a value went live are replayed with the old value.
+  - On 20 or more changed decisions, if the old value would have gained, the live value is removed and recorded as retired.
+  - A retired value is never tried again.
+- **Reporting.** Every step sends a Telegram line and a `typed_proposal.v1` state update to the platform. It runs once a UTC day from the ledger cron, after grid-adapt.
 
 ## Also in phase 1
 
