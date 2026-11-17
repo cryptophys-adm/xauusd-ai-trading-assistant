@@ -12,7 +12,7 @@ export function walkForward(rs: number[]): Record<string, any>;
 export function allowedProposals(input: { armed: boolean; walk: Record<string, any>; liveBad: boolean }): string[];
 export function councilMessages(id: string, input: Record<string, any>): { role: string; content: string }[];
 export function readCouncilState(env: unknown): Promise<Record<string, any>>;
-export function setCouncilAuto(env: unknown, input: { on: boolean; actor?: string; now?: number }): Promise<Record<string, any>>;
+export function setCouncilAuto(env: unknown, input: { on: boolean; actor?: string; actor_sub?: string | null; now?: number }): Promise<Record<string, any>>;
 export function pinStrategy(env: unknown, input: { strategy_id: string; actor?: string; action?: string; now?: number }): Promise<void>;
 export function unpinStrategy(env: unknown, input: { strategy_id: string }): Promise<Record<string, any>>;
 export function runStrategyCouncil(env: unknown, opts?: Record<string, any>): Promise<{ status: string; [k: string]: unknown }>;

@@ -1838,7 +1838,7 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   /** The owner's "Council auto-arm" toggle (owner 2026-11-17; refused while the code ceiling is off). */
   async setCouncilAuto(input: { on?: boolean; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
     if (ownerCheck(this.env, input?.actor_sub ?? null) === "not_owner") return { ok: false, error: "owner_only" } as JsonObject;
-    return setCouncilAuto(this.env, { on: input?.on === true, actor: String(input?.actor ?? "owner") }) as Promise<JsonObject>;
+    return setCouncilAuto(this.env, { on: input?.on === true, actor: String(input?.actor ?? "owner"), actor_sub: input?.actor_sub ?? null }) as Promise<JsonObject>;
   }
   /** The owner's manual arm or disarm pins a strategy against the council until the owner unpins it. */
   async unpinStrategy(input: { strategy_id?: string; actor_sub?: string | null }): Promise<JsonObject> {

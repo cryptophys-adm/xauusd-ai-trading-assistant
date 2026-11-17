@@ -66,7 +66,10 @@
     // the one best strategy by confidence x confluence). "off" restores today's choice; "shadow" records only.
     "STRATEGY_ARM_MODE": "live",
     "GRID_ADAPT_MODE": "live",
-    "STRATEGY_COUNCIL_ARM": "off",
+    // The council auto-arm ceiling (platform ADR-0020 Amendment 2, merged 2026-11-17, platform main 6df9a34): "allowed"
+    // lets the owner's Nexus toggle act; the toggle itself stays off until the owner turns it on. "off" keeps the
+    // council to proposals.
+    "STRATEGY_COUNCIL_ARM": "allowed",
     "OWNER_ACCESS_SUB": "6d015218-6ea2-5fc3-b4aa-cc98c5ced21a",
     "POSITION_COUNCIL_DAILY_USD": "5",
     // Decision Engine (owner 2026-11-10: "nyalakan GLOBAL_DECISION_WEIGHTED"): the B-11 extended witnesses

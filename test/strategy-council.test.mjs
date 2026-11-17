@@ -39,7 +39,7 @@ test("SC2. ceiling off: verdicts and proposals only, the owner's toggle cannot b
   const e = env(), t0 = Date.parse("2026-11-17T12:00:00Z");
   seed(e, "sweep_reversal", good, t0); seed(e, "range_fade", bad, t0);
   assert.equal(councilArmCeiling(e), "off");
-  assert.match((await setCouncilAuto(e, { on: true, actor: "owner" })).error, /not allowed yet/);
+  assert.match((await setCouncilAuto(e, { on: true, actor: "owner" })).error, /not allowed/);
   const calls = [];
   const call = async (_env, o) => { calls.push(JSON.parse(o.messages[1].content)); return { status: "answered", obj: { proposal: "arm", reason: "strong walk-forward" } }; };
   const r = await runStrategyCouncil(e, { now: t0, call, allowed });
@@ -59,8 +59,10 @@ test("SC3. ceiling allowed + toggle on: the council arms and disarms within its 
   resetCouncilSchemaForTests(); resetStrategyArmSchemaCacheForTests(); resetAiUsageSchemaCacheForTests();
   const e = env({ STRATEGY_COUNCIL_ARM: "allowed" }), t0 = Date.parse("2026-11-17T12:00:00Z"), sent = [];
   seed(e, "sweep_reversal", good, t0); seed(e, "breakout_retest", good, t0); seed(e, "range_fade", bad, t0);
-  assert.equal((await setCouncilAuto(e, { on: true, actor: "owner@example.com" })).ok, true);
+  assert.equal((await setCouncilAuto(e, { on: true, actor: "owner@example.com", actor_sub: "sub-1", now: t0 - 7_200_000 })).ok, true);
   assert.equal((await readCouncilState(e)).acting, true);
+  const audit = (await e.DB.prepare("SELECT auto, actor, actor_sub FROM strategy_council_toggle_events ORDER BY id").all()).results;
+  assert.deepEqual(audit.map((x) => ({ ...x })), [{ auto: 1, actor: "owner@example.com", actor_sub: "sub-1" }], "every click of the toggle is audited");
   // The owner armed range_fade by hand today → pinned; breakout_retest pinned (disarmed by hand) yesterday.
   await setStrategyArm(e, { strategy_id: "range_fade", action: "arm", allowed, actor: "owner@example.com", now: t0 - 3_600_000 });
   await pinStrategy(e, { strategy_id: "range_fade", actor: "owner@example.com", action: "arm" });

@@ -66,8 +66,8 @@ Status: P2 built and live (2026-11-17, see below); design decided (owner's answe
   setups, mean >= +0.10R, bootstrap 2.5% bound > 0, the latest 30% (>= 10) >= 0; fail: >= 15 setups with mean < 0, or
   the latest 30% < 0) and a council proposal (arm / keep / disarm; one model call only where the facts allow a change,
   the answer clamped to those options; meter `strategy_council`, `STRATEGY_COUNCIL_DAILY_USD` 1). Shown on the cards
-  (`verdicts`). The council acts only while the code ceiling `STRATEGY_COUNCIL_ARM` is "allowed" (a PR after platform
-  ADR-0020 Amendment 2; "off" now) AND the owner's Nexus toggle (D1 `strategy_council_state`, owner-only route
+  (`verdicts`). The council acts only while the code ceiling `STRATEGY_COUNCIL_ARM` is "allowed" (set after platform
+  ADR-0020 Amendment 2 merged, 2026-11-17, platform main 6df9a34) AND the owner's Nexus toggle (D1 `strategy_council_state`, owner-only route
   `POST /omega/api/strategy-council`) is on. Guards: max 3 armed, one change per strategy per UTC day, no arm on a day
   the system auto-disarmed or while an arm is blocked, never a pinned strategy (the owner's manual arm or disarm pins
   it in `strategy_arm_pins` until the owner unpins it, `POST /omega/api/strategy-arm/unpin`), nothing on a council
