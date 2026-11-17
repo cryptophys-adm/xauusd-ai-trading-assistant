@@ -39,7 +39,9 @@ const SCHEMA_SQL = [
   "INSERT OR IGNORE INTO strategy_council_state (id, auto, updated_by, updated_ms) VALUES (1, 0, NULL, 0)",
   "CREATE TABLE IF NOT EXISTS strategy_arm_pins (strategy_id TEXT PRIMARY KEY, pinned INTEGER NOT NULL, pinned_by TEXT, pinned_ms INTEGER NOT NULL, action TEXT)",
   `CREATE TABLE IF NOT EXISTS strategy_council_runs (day TEXT NOT NULL, strategy_id TEXT NOT NULL, proposal TEXT NOT NULL, reason TEXT,
-    walk_forward TEXT, applied TEXT, at_ms INTEGER NOT NULL, PRIMARY KEY (day, strategy_id))`
+    walk_forward TEXT, applied TEXT, at_ms INTEGER NOT NULL, PRIMARY KEY (day, strategy_id))`,
+  // Every click of the owner's toggle (platform ADR-0020 Amendment 2: the same audit as an arm or disarm).
+  "CREATE TABLE IF NOT EXISTS strategy_council_toggle_events (id INTEGER PRIMARY KEY AUTOINCREMENT, auto INTEGER NOT NULL, actor TEXT, actor_sub TEXT, ms INTEGER NOT NULL)"
 ];
 let schemaReady = null;
 export async function ensureCouncilSchema(db) {
@@ -111,10 +113,11 @@ export async function readCouncilState(env) {
 }
 
 /** The owner's toggle (owner checked by the caller). Turning it on while the ceiling is off is refused. */
-export async function setCouncilAuto(env, { on, actor, now = Date.now() }) {
+export async function setCouncilAuto(env, { on, actor, actor_sub = null, now = Date.now() }) {
   await ensureCouncilSchema(env.DB);
-  if (on && councilArmCeiling(env) !== "allowed") return { ok: false, error: "council auto-arm is not allowed yet (platform ADR-0020 Amendment 2 pending)" };
+  if (on && councilArmCeiling(env) !== "allowed") return { ok: false, error: "council auto-arm is not allowed (STRATEGY_COUNCIL_ARM is off)" };
   await env.DB.prepare("UPDATE strategy_council_state SET auto = ?, updated_by = ?, updated_ms = ? WHERE id = 1").bind(on ? 1 : 0, String(actor ?? "owner"), now).run();
+  await env.DB.prepare("INSERT INTO strategy_council_toggle_events (auto, actor, actor_sub, ms) VALUES (?, ?, ?, ?)").bind(on ? 1 : 0, String(actor ?? "owner"), actor_sub ? String(actor_sub) : null, now).run();
   return { ok: true, state: await readCouncilState(env) };
 }
 
