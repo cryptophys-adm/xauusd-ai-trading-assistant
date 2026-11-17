@@ -5,6 +5,7 @@
 // with the doctrine of its canon once a day and proposes each lasting difference to the Cerebrum
 // consensus, which executes it. Every value here is read from the running code, its variables and the
 // stored Omega settings: never typed in. No price, level, size or account appears.
+import { strategyArmMode, ARM_MAX } from "./strategy-arm.mjs";
 import { exec5mMode } from "./broker-trigger.mjs";
 import { activeWitnessWeights, decisionEngineEnabled, guardrailsFor, MIN_CONFIDENCE, modeThresholds, tradingMode } from "./decision-engine.mjs";
 import { QUORUM_SHARE } from "./reputation.mjs";
@@ -75,7 +76,10 @@ export async function omegaFacts(env) {
     "omega.max_spread_points": Number(settings.max_spread_points),
     "omega.max_signal_age_min": Math.round(Number(settings.max_signal_age_ms) / 60_000 * 100) / 100,
     "omega.rollover_quarantine_utc": ROLLOVER_QUARANTINE_UTC,
-    "omega.live_arm_required": true
+    "omega.live_arm_required": true,
+    // The strategy arm (RFC §10, owner 2026-11-17): live → an entry needs an armed strategy or the AUTO pick.
+    "omega.strategy_arm_required": strategyArmMode(env) === "live",
+    "omega.max_armed_strategies": ARM_MAX
   };
 }
 

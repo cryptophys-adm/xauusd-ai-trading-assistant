@@ -159,3 +159,52 @@ test("SA7. migration 0025 builds the same strategy_arm tables as the run-time sc
   assert.equal((await storeDeal(e, deal(358414239, 388427574), { now: t0 + 3_600_005 })).stored, false, "a repeat looks nothing up");
   assert.deepEqual(e.raw.prepare("SELECT deal_ticket, strategy FROM ea_deals ORDER BY deal_ticket").all().map((r) => [r.deal_ticket, r.strategy]), [[358414239, "sweep_reversal"], [358414240, null]]);
 });
+
+test("SA8. strategy_arm.v1 to the platform (RFC §10 + ADR-0020 Amendment 1): events and picks in one report, mode and the pick's confidence x confluence; cursor on success only; rate limit retried, policy denial final", async () => {
+  resetStrategyArmSchemaCacheForTests();
+  const { relayStrategyArm, ARM_RELAY_MIN_GAP_MS, ARM_RELAY_RETRY_MS, STRATEGY_ARM_AGENT } = await import("../src/strategy-arm-relay.mjs");
+  const e = env({ AGENTS: { syscall: async () => ({}) } });
+  e.raw.exec("CREATE TABLE engine_decisions (decision_key TEXT PRIMARY KEY, bar_close TEXT, decided_at TEXT, stance TEXT, confidence REAL, source TEXT, decision_json TEXT)");
+  const t0 = Date.parse("2026-11-17T09:00:00Z");
+  await setStrategyArm(e, { strategy_id: "sweep_reversal", action: "arm", allowed, actor: "owner@example.com", now: t0 });
+  const sent = [];
+  let answer = { outcome: "success", report_id: "rep_1" };
+  const publish = async (_env, agent, report) => { sent.push({ agent, report }); return answer; };
+  // First run: the arm event so far; picks only from now on.
+  const r1 = await relayStrategyArm(e, { now: t0 + 60_000, publish });
+  assert.deepEqual([r1.status, r1.count], ["sent", 1]);
+  const b1 = sent[0].report.body;
+  assert.equal(sent[0].agent, STRATEGY_ARM_AGENT);
+  assert.deepEqual([sent[0].report.kind, sent[0].report.severity, b1.schema, b1.mode, b1.armed], ["xauusd_digest", "info", "strategy_arm.v1", "armed", ["sweep_reversal"]]);
+  assert.deepEqual(b1.items[0], { event: "armed", strategy_id: "sweep_reversal", reason: "owner", armed_count: 1, at: new Date(t0).toISOString(), audit_ref: 1 });
+  // A pick (AUTO) and an auto-disarm arrive; the gap holds them; then one report with both, a warning.
+  const sel = { mode: "auto", agent: "zone_pullback", score: 0.41, candidates: [{ id: "zone_pullback", confidence: 0.62, confluence: 0.667, score: 0.41, eligible: true }, { id: "range_fade", confidence: 0.5, confluence: 0.5, score: 0.25, eligible: true }] };
+  e.raw.prepare("INSERT INTO engine_decisions VALUES (?, ?, ?, 'BUY', 0.6, 'council', ?)").run("k1", "2026-11-17T09:15:00Z", new Date(t0 + 16 * 60_000).toISOString(), JSON.stringify({ selection: sel }));
+  e.raw.prepare("INSERT INTO engine_decisions VALUES (?, ?, ?, 'WAIT', 0.3, 'council', ?)").run("k2", "2026-11-17T09:30:00Z", new Date(t0 + 31 * 60_000).toISOString(), JSON.stringify({ selection: null }));
+  await disarmAll(e, { reason: "kill_switch", now: t0 + 20 * 60_000 });
+  assert.equal((await relayStrategyArm(e, { now: t0 + 10 * 60_000, publish })).status, "waiting", "30 minutes between reports");
+  answer = { outcome: "denied", reason: "rate_limit" };
+  const r2 = await relayStrategyArm(e, { now: t0 + 60_000 + ARM_RELAY_MIN_GAP_MS, publish });
+  assert.deepEqual([r2.status, r2.retry], ["denied", true]);
+  assert.equal((await relayStrategyArm(e, { now: t0 + 60_000 + ARM_RELAY_MIN_GAP_MS + 60_000, publish })).status, "waiting", "retry after 15 minutes");
+  answer = { outcome: "success", report_id: "rep_2" };
+  const r3 = await relayStrategyArm(e, { now: t0 + 60_000 + ARM_RELAY_MIN_GAP_MS + ARM_RELAY_RETRY_MS, publish });
+  assert.deepEqual([r3.status, r3.count], ["sent", 2], "the retry sends the same items: the cursor did not move on the denial");
+  const b3 = sent.at(-1).report.body;
+  assert.equal(sent.at(-1).report.severity, "warning", "an auto-disarm");
+  assert.deepEqual(b3.items.map((x) => x.event), ["picked", "disarmed"], "oldest first");
+  assert.deepEqual(b3.items[0], { event: "picked", mode: "auto", strategy_id: "zone_pullback", confidence: 0.62, confluence: 0.67, score: 0.41, decision_key: "k1", at: new Date(t0 + 16 * 60_000).toISOString() });
+  assert.deepEqual([b3.mode, b3.armed_count], ["auto", 0]);
+  // Nothing new → idle; a policy denial is final (the cursor moves, logged).
+  assert.equal((await relayStrategyArm(e, { now: t0 + 4 * 3_600_000, publish })).status, "idle");
+  await setStrategyArm(e, { strategy_id: "range_fade", action: "arm", allowed, now: t0 + 5 * 3_600_000 });
+  answer = { outcome: "denied", reason: "kernel_rules" };
+  const errs = [], orig = console.error; console.error = (m) => errs.push(String(m));
+  try { assert.deepEqual((await relayStrategyArm(e, { now: t0 + 5 * 3_600_000 + 60_000, publish })).retry, false); } finally { console.error = orig; }
+  assert.match(errs[0], /strategy_arm_relay_denied/);
+  answer = { outcome: "success" };
+  assert.equal((await relayStrategyArm(e, { now: t0 + 6 * 3_600_000, publish })).status, "idle", "a denied event is not sent again");
+  // Off or no kernel binding: nothing.
+  assert.equal((await relayStrategyArm({ ...e, STRATEGY_ARM_MODE: "off" }, { publish })).status, "disabled");
+  assert.equal((await relayStrategyArm({ ...e, AGENTS: undefined }, { publish })).status, "disabled");
+});

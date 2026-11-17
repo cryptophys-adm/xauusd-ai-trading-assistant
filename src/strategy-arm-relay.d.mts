@@ -1,0 +1,10 @@
+export const STRATEGY_ARM_SCHEMA: string;
+export const STRATEGY_ARM_AGENT: string;
+export const ARM_RELAY_CURSOR_KEY: string;
+export const ARM_RELAY_MIN_GAP_MS: number;
+export const ARM_RELAY_RETRY_MS: number;
+export const ARM_RELAY_MAX_ITEMS: number;
+export function eventItem(row: Record<string, unknown>): Record<string, unknown>;
+export function pickItem(row: Record<string, unknown>): Record<string, unknown> | null;
+export function armReport(items: Record<string, unknown>[], opts?: { mode?: string; armedIds?: string[] }): Record<string, any>;
+export function relayStrategyArm(env: unknown, opts?: { now?: number; publish?: (...a: any[]) => Promise<any> }): Promise<{ status: string; [k: string]: unknown }>;

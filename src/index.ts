@@ -254,6 +254,7 @@ import { eaSignal, eaStatus, storeHeartbeat, readControl } from "./ea-signal.mjs
 import { dedupeDeals, listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
 import { omegaHealth } from "./omega-health.mjs";
 import { relayEaHeartbeat } from "./ea-heartbeat-relay.mjs";
+import { relayStrategyArm } from "./strategy-arm-relay.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings } from "./omega-broker.mjs";
@@ -2612,6 +2613,12 @@ async function runEaHeartbeatRelay(env: Env): Promise<void> {
   if (relay.status !== "disabled" && relay.status !== "waiting" && relay.status !== "idle") console.log("ea_heartbeat_relay", JSON.stringify(relay));
 }
 
+/** The strategy arm's platform record (RFC §10): arm/disarm events and picks as strategy_arm.v1, at most one per 30 min. */
+async function runStrategyArmRelay(env: Env): Promise<void> {
+  const relay = await relayStrategyArm(env);
+  if (relay.status !== "disabled" && relay.status !== "waiting" && relay.status !== "idle") console.log("strategy_arm_relay", JSON.stringify(relay));
+}
+
 /** The strategies that can be armed: the live ones (a shadow or off agent cannot speak, so it could never trade). */
 async function liveAgentIds(env: Env): Promise<string[]> {
   let records: unknown = null;
@@ -2633,6 +2640,7 @@ async function armBlocked(env: Env): Promise<string | null> {
 
 async function runLedgerStep(env: Env): Promise<void> {
   await runEaHeartbeatRelay(env);
+  await runStrategyArmRelay(env);
   // The 5-minute Position Manager (owner 2026-11-17, src/position-manager.mjs): each open Omega position once a 5m
   // bar; risk-reducing only; POSITION_MANAGER_MODE "off" stops it. Then its daily report after 21:00 UTC.
   try {
