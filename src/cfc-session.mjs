@@ -18,6 +18,10 @@ import { cfcMode } from "./cfc-triggers.mjs";
 import { agentRoster } from "./agent-inventory.mjs";
 import { publishToPlatform } from "./platform-reports.mjs";
 
+/** States that end a session; "closed" is the owner's Close or Re-open (owner 2026-11-17). */
+export const TERMINAL_STATES = Object.freeze(["aborted", "expired", "decided", "closed"]);
+/** A pack older than this is stale: the page offers to re-open the topic with fresh evidence. */
+export const PACK_STALE_MS = 24 * 3_600_000;
 export const SESSION_LIMITS = Object.freeze({ calls: 16, positions: 6, rebuttals: 4, answers: 4, owner_messages: 20, open: 2, started_per_day: 4, neurons_per_day: 8000, pack_chars: 7000 });
 export const STANCES = Object.freeze(["support", "oppose", "amend", "abstain"]);
 const DAY = 86_400_000;
@@ -145,8 +149,9 @@ export async function startSession(env, { topic_key = null, text = null, seats =
   const dayStart = Date.parse(new Date(now).toISOString().slice(0, 10) + "T00:00:00Z");
   const open = await db.prepare("SELECT COUNT(*) AS n FROM council_sessions WHERE state IN ('positions', 'rebuttals', 'synthesis')").first();
   if (Number(open?.n) >= SESSION_LIMITS.open) return { ok: false, error: `at most ${SESSION_LIMITS.open} sessions open` };
-  // A session that ran on an empty pack (before the fix of 2026-11-17) does not count against the day.
-  const today = await db.prepare("SELECT COUNT(*) AS n FROM council_sessions WHERE created_ms >= ? AND COALESCE(json_array_length(json_extract(pack_json, '$.refs')), 0) > 0").bind(dayStart).first();
+  // A session that ran on an empty pack (before the fix of 2026-11-17), or that the owner closed (owner 2026-11-17:
+  // "Tidak dihitung"; the daily neuron cap still bounds the cost), does not count against the day.
+  const today = await db.prepare("SELECT COUNT(*) AS n FROM council_sessions WHERE created_ms >= ? AND state != 'closed' AND COALESCE(json_array_length(json_extract(pack_json, '$.refs')), 0) > 0").bind(dayStart).first();
   if (Number(today?.n) >= SESSION_LIMITS.started_per_day) return { ok: false, error: `at most ${SESSION_LIMITS.started_per_day} sessions a day` };
   const freeText = typeof text === "string" && text.trim() ? clip(text, 300) : null;
   const key = freeText ? `free:${slugOf(freeText)}` : topic_key;
@@ -173,15 +178,43 @@ export async function ownerMessage(env, { session_id, text, to = [], actor = "ow
   await ensureSessionSchema(db);
   const s = await db.prepare("SELECT * FROM council_sessions WHERE id = ?").bind(session_id).first();
   if (!s) return { ok: false, error: "unknown session" };
-  if (["aborted", "expired", "decided"].includes(s.state)) return { ok: false, error: `the session is ${s.state}` };
+  if (TERMINAL_STATES.includes(s.state)) return { ok: false, error: `the session is ${s.state}` };
+  // A session on an empty pack cannot answer anything (2026-11-17): say so, and offer a re-open on fresh evidence.
+  const packRefs = parse(s.pack_json, {})?.refs;
+  if (!Array.isArray(packRefs) || !packRefs.length) return { ok: false, reopen: true, error: "this session has no evidence, so no agent can answer: re-open the topic with fresh evidence" };
   const n = await db.prepare("SELECT COUNT(*) AS n FROM council_messages WHERE session_id = ? AND round = 'owner'").bind(session_id).first();
   if (Number(n?.n) >= SESSION_LIMITS.owner_messages) return { ok: false, error: "the session's owner messages are used up" };
   const seats = parse(s.participants, []);
   const addressed = (Array.isArray(to) ? to : []).filter((x) => seats.includes(x)).slice(0, 2);
+  if (!addressed.length) return { ok: false, error: "pick 1 or 2 agents to answer" };
   await db.prepare("INSERT INTO council_messages (session_id, round, seat, stance, opinion, proposal, reply_to, refs, ms) VALUES (?, 'owner', 'owner', NULL, ?, NULL, ?, NULL, ?)")
     .bind(session_id, clip(text, 1000), JSON.stringify(addressed), now).run();
-  if (addressed.length) await enqueue({ kind: "council_step", session_id, step: "answer" });
-  return { ok: true, answered_by: addressed };
+  await enqueue({ kind: "council_step", session_id, step: "answer" });
+  return { ok: true, answered_by: addressed, stale: now - Number(s.created_ms) > PACK_STALE_MS };
+}
+
+/** The owner's Close: the session ends (state "closed"); it frees an open slot and does not count toward the day. */
+export async function closeSession(env, { session_id, actor = "owner", reason = "owner_closed", now = Date.now() }) {
+  const db = env.DB;
+  await ensureSessionSchema(db);
+  const s = await db.prepare("SELECT id, state FROM council_sessions WHERE id = ?").bind(session_id).first();
+  if (!s) return { ok: false, error: "unknown session" };
+  if (TERMINAL_STATES.includes(s.state)) return { ok: false, error: `the session is already ${s.state}` };
+  await db.prepare("UPDATE council_sessions SET state = 'closed', reason = ?, updated_ms = ? WHERE id = ?").bind(clip(`${reason} by ${actor}`, 200), now, session_id).run();
+  return { ok: true, session_id, state: "closed" };
+}
+
+/** The owner's Re-open: the same topic and seats on fresh evidence; the old session is closed once the new one starts. */
+export async function reopenSession(env, { session_id, actor = "owner", now = Date.now(), enqueue }) {
+  const db = env.DB;
+  await ensureSessionSchema(db);
+  const s = await db.prepare("SELECT id, topic_key, topic_text, type, state, participants FROM council_sessions WHERE id = ?").bind(session_id).first();
+  if (!s) return { ok: false, error: "unknown session" };
+  const free = String(s.topic_key ?? "").startsWith("free:") && s.topic_text;
+  const r = await startSession(env, { topic_key: free ? null : s.topic_key, text: free ? s.topic_text : null, seats: parse(s.participants, []), actor, now, enqueue });
+  if (!r?.ok) return r;
+  if (!TERMINAL_STATES.includes(s.state)) await db.prepare("UPDATE council_sessions SET state = 'closed', reason = ?, updated_ms = ? WHERE id = ?").bind(clip(`reopened as ${r.session_id} by ${actor}`, 200), now, session_id).run();
+  return { ...r, reopened_from: session_id };
 }
 
 /** One step of a session (the queue consumer). */
@@ -191,7 +224,7 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
   const s = await db.prepare("SELECT * FROM council_sessions WHERE id = ?").bind(session_id).first();
   if (!s) return { status: "unknown" };
   const abort = async (reason) => { await db.prepare("UPDATE council_sessions SET state = 'aborted', reason = ?, updated_ms = ? WHERE id = ?").bind(clip(reason, 200), now, session_id).run(); return { status: "aborted", reason }; };
-  if (["aborted", "expired", "decided"].includes(s.state)) return { status: s.state };
+  if (TERMINAL_STATES.includes(s.state)) return { status: s.state };
   if (!(await sessionsEnabled(env))) return abort("council sessions were switched off");
   if ((await cfcNeuronsToday(db, now)) >= neuronCap(env)) return abort("the daily council budget is used up");
   const pack = parse(s.pack_json, {});
@@ -201,14 +234,18 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
   let calls = Number(s.calls) || 0;
   const rows = (await db.prepare("SELECT round, seat, stance, opinion, proposal, reply_to, ms FROM council_messages WHERE session_id = ? ORDER BY id").bind(session_id).all()).results ?? [];
   const spoken = rows.filter((r) => r.round !== "owner");
+  const failed = {};
   const ask = async (seat, round, extra = {}) => {
     // One call stays reserved for the synthesis until it is written.
-    if (calls >= SESSION_LIMITS.calls - (s.state === "awaiting_owner" ? 0 : 1)) return null;
+    if (calls >= SESSION_LIMITS.calls - (s.state === "awaiting_owner" ? 0 : 1)) { failed[seat] = "the session's 16 calls are used up"; return null; }
     calls += 1;
     try {
-      const r = await call(env, { messages: seatMessages({ seat, session: s, pack: packText, earlier: spoken, round, ...extra }), schemaName: "cfc_seat", schema: SEAT_SCHEMA, maxTokens: 700, effort: "low", deadline: Date.now() + 60_000, clock: () => Date.now(), runState: {}, role: "agent", meterSource: `cfc:${round}` });
-      return r?.status === "answered" ? cleanSeat(r.obj, packRefs) : null;
-    } catch { return null; }
+      // An answer to the owner gets a larger budget: on 2026-11-17 one was cut off at 700 tokens and lost.
+      const r = await call(env, { messages: seatMessages({ seat, session: s, pack: packText, earlier: spoken, round, ...extra }), schemaName: "cfc_seat", schema: SEAT_SCHEMA, maxTokens: round === "answer" ? 1400 : 700, effort: "low", deadline: Date.now() + 60_000, clock: () => Date.now(), runState: {}, role: "agent", meterSource: `cfc:${round}` });
+      const m = r?.status === "answered" ? cleanSeat(r.obj, packRefs) : null;
+      if (!m) failed[seat] = r?.status === "answered" ? "its reply was not a valid opinion" : "its reply was cut off or the model call failed";
+      return m;
+    } catch { failed[seat] = "the model call failed"; return null; }
   };
   const save = async (seat, round, m) => db.prepare("INSERT INTO council_messages (session_id, round, seat, stance, opinion, proposal, reply_to, refs, ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
     .bind(session_id, round, seat, m.stance, m.opinion, m.proposal, JSON.stringify(m.reply_to ?? []), JSON.stringify(m.refs ?? []), now).run();
@@ -260,7 +297,14 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
     const to = parse(lastOwner?.reply_to, []);
     const room = Math.max(0, SESSION_LIMITS.answers - answered);
     const out = await Promise.all(to.slice(0, room).map(async (seat) => [seat, await ask(seat, "answer", { ownerText: lastOwner?.opinion })]));
-    for (const [seat, m] of out) if (m) await save(seat, "answer", m);
+    for (const [seat, m] of out) {
+      if (m) await save(seat, "answer", m);
+      // A seat that could not answer leaves a visible notice, never silence (2026-11-17).
+      else await db.prepare("INSERT INTO council_messages (session_id, round, seat, stance, opinion, proposal, reply_to, refs, ms) VALUES (?, 'notice', ?, NULL, ?, NULL, '[]', '[]', ?)")
+        .bind(session_id, seat, clip(`${roster()[seat]?.name ?? seat} could not answer: ${failed[seat] ?? "no reply"}. Nothing was stored; ask again or re-open the topic.`, 300), now).run();
+    }
+    if (to.length > room) await db.prepare("INSERT INTO council_messages (session_id, round, seat, stance, opinion, proposal, reply_to, refs, ms) VALUES (?, 'notice', 'system', NULL, ?, NULL, '[]', '[]', ?)")
+      .bind(session_id, `The session's ${SESSION_LIMITS.answers} answers are used up; re-open the topic to ask more.`, now).run();
     await db.prepare("UPDATE council_sessions SET calls = ?, updated_ms = ? WHERE id = ?").bind(calls, now, session_id).run();
     return { status: "answered", answers: out.filter(([, m]) => m).length };
   }
@@ -270,15 +314,17 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
 /** The sessions for the page (newest first) and one session with its messages. */
 export async function listSessions(env, { limit = 20 } = {}) {
   await ensureSessionSchema(env.DB);
-  const rows = (await env.DB.prepare("SELECT id, topic_key, topic_text, type, question, state, participants, calls, reason, created_ms, updated_ms FROM council_sessions ORDER BY created_ms DESC LIMIT ?").bind(Math.min(50, Math.max(1, limit))).all()).results ?? [];
-  return { enabled: await sessionsEnabled(env), mode: cfcMode(env), limits: SESSION_LIMITS, sessions: rows.map((r) => ({ ...r, participants: parse(r.participants, []), created_at: new Date(Number(r.created_ms)).toISOString() })) };
+  const rows = (await env.DB.prepare("SELECT id, topic_key, topic_text, type, question, state, participants, calls, reason, created_ms, updated_ms, COALESCE(json_array_length(json_extract(pack_json, '$.refs')), 0) AS pack_refs FROM council_sessions ORDER BY created_ms DESC LIMIT ?").bind(Math.min(50, Math.max(1, limit))).all()).results ?? [];
+  const now = Date.now();
+  return { enabled: await sessionsEnabled(env), mode: cfcMode(env), limits: SESSION_LIMITS, sessions: rows.map((r) => ({ ...r, participants: parse(r.participants, []), created_at: new Date(Number(r.created_ms)).toISOString(), pack_stale: Number(r.pack_refs) === 0 || now - Number(r.created_ms) > PACK_STALE_MS })) };
 }
 export async function readSession(env, id) {
   await ensureSessionSchema(env.DB);
-  const s = await env.DB.prepare("SELECT id, topic_key, topic_text, type, question, state, participants, calls, options, reason, pack_hash, created_by, created_ms, updated_ms FROM council_sessions WHERE id = ?").bind(id).first();
+  const s = await env.DB.prepare("SELECT id, topic_key, topic_text, type, question, state, participants, calls, options, reason, pack_hash, created_by, created_ms, updated_ms, COALESCE(json_array_length(json_extract(pack_json, '$.refs')), 0) AS pack_refs FROM council_sessions WHERE id = ?").bind(id).first();
   if (!s) return null;
   const names = roster();
   const msgs = (await env.DB.prepare("SELECT id, round, seat, stance, opinion, proposal, reply_to, refs, ms FROM council_messages WHERE session_id = ? ORDER BY id").bind(id).all()).results ?? [];
-  return { ...s, participants: parse(s.participants, []).map((x) => ({ id: x, ...(names[x] ?? { name: x, role: "" }) })), options: parse(s.options, null),
+  return { ...s, pack_stale: Number(s.pack_refs) === 0 || Date.now() - Number(s.created_ms) > PACK_STALE_MS, terminal: TERMINAL_STATES.includes(s.state),
+    participants: parse(s.participants, []).map((x) => ({ id: x, ...(names[x] ?? { name: x, role: "" }) })), options: parse(s.options, null),
     messages: msgs.map((m) => ({ ...m, name: m.seat === "owner" ? "Owner" : names[m.seat]?.name ?? m.seat, reply_to: parse(m.reply_to, []), refs: parse(m.refs, []), at: new Date(Number(m.ms)).toISOString() })) };
 }

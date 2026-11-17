@@ -258,7 +258,7 @@ import { relayStrategyArm } from "./strategy-arm-relay.mjs";
 import { computeRecommendations, readRecommendations } from "./strategy-recommendation.mjs";
 import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
-import { startSession, ownerMessage, runSessionStep, listSessions, readSession, setSessionsSwitch } from "./cfc-session.mjs";
+import { startSession, ownerMessage, closeSession, reopenSession, runSessionStep, listSessions, readSession, setSessionsSwitch } from "./cfc-session.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings } from "./omega-broker.mjs";
@@ -1833,7 +1833,9 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     if (input?.action === "switch") return setSessionsSwitch(this.env, { on: input?.on === true, actor }) as Promise<JsonObject>;
     if (input?.action === "start") return startSession(this.env, { topic_key: input?.topic_key ?? null, text: input?.text ?? null, seats: input?.seats ?? null, actor, enqueue }) as Promise<JsonObject>;
     if (input?.action === "message") return ownerMessage(this.env, { session_id: String(input?.session_id ?? ""), text: String(input?.text ?? ""), to: input?.to ?? [], actor, enqueue }) as Promise<JsonObject>;
-    return { ok: false, error: "action must be start, message or switch" } as JsonObject;
+    if (input?.action === "close") return closeSession(this.env, { session_id: String(input?.session_id ?? ""), actor }) as Promise<JsonObject>;
+    if (input?.action === "reopen") return reopenSession(this.env, { session_id: String(input?.session_id ?? ""), actor, enqueue }) as Promise<JsonObject>;
+    return { ok: false, error: "action must be start, message, close, reopen or switch" } as JsonObject;
   }
   /** The owner's "Council auto-arm" toggle (owner 2026-11-17; refused while the code ceiling is off). */
   async setCouncilAuto(input: { on?: boolean; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {

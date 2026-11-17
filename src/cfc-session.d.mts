@@ -13,6 +13,10 @@ export function cleanSeat(o: unknown, packRefs: string[]): Record<string, any> |
 export function cleanOptions(o: unknown): { summary: string; options: Record<string, any>[] };
 export function startSession(env: unknown, input: Record<string, any>): Promise<Record<string, any>>;
 export function ownerMessage(env: unknown, input: Record<string, any>): Promise<Record<string, any>>;
+export function closeSession(env: unknown, input: Record<string, any>): Promise<Record<string, any>>;
+export function reopenSession(env: unknown, input: Record<string, any>): Promise<Record<string, any>>;
+export const TERMINAL_STATES: readonly string[];
+export const PACK_STALE_MS: number;
 export function runSessionStep(env: unknown, task: { session_id: string; step: string }, opts: Record<string, any>): Promise<Record<string, any>>;
 export function listSessions(env: unknown, opts?: { limit?: number }): Promise<Record<string, any>>;
 export function readSession(env: unknown, id: string): Promise<Record<string, any> | null>;

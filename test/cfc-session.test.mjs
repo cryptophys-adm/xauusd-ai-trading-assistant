@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { seedEnv, seedTrades } from "./support/cfc-fixtures.mjs";
-import { startSession, ownerMessage, runSessionStep, readSession, listSessions, setSessionsSwitch, sessionsEnabled, cleanSeat, cleanOptions, slugOf, resetSessionSchemaForTests, SESSION_LIMITS } from "../src/cfc-session.mjs";
+import { startSession, ownerMessage, closeSession, reopenSession, runSessionStep, readSession, listSessions, setSessionsSwitch, sessionsEnabled, cleanSeat, cleanOptions, slugOf, resetSessionSchemaForTests, SESSION_LIMITS } from "../src/cfc-session.mjs";
 import { resetAiUsageSchemaCacheForTests } from "../src/ai-usage.mjs";
 
 async function setup(over = {}) {
@@ -119,4 +119,57 @@ test("CS6. a topic whose pack holds no evidence is refused before any call; it d
   assert.ok(pack.refs.length > 0);
   assert.ok(pack.sections.scope.reads.includes("strategy:sweep_reversal"), "a strategy topic reads every strategy agent");
   assert.ok(pack.sections.strategy_council, "and the strategy council's verdicts");
+});
+
+test("CS7. the owner's Close and Re-open; an answer that fails leaves a visible notice; a message needs a seat; closed sessions do not count toward the day", async () => {
+  const env = await setup();
+  await setSessionsSwitch(env, { on: true });
+  const { session_id } = await startSession(env, { text: "Evaluasi Strategy", enqueue });
+  const step = (name, call) => runSessionStep(env, { session_id, step: name }, { call, publish: async () => ({ outcome: "success" }), enqueue });
+  await step("positions", model().call); await step("rebuttals", model().call); await step("synthesis", model().call);
+  // A message must address a seat.
+  assert.match((await ownerMessage(env, { session_id, text: "which strategy earns the most?", to: [], enqueue })).error, /pick 1 or 2 agents/);
+  // The addressed seat's reply is cut off (2026-11-17): a notice, never silence.
+  assert.equal((await ownerMessage(env, { session_id, text: "which strategy earns the most?", to: ["projection"], enqueue })).ok, true);
+  await step("answer", async () => ({ status: "failed" }));
+  const s = await readSession(env, session_id);
+  const notice = s.messages.find((x) => x.round === "notice");
+  assert.ok(notice && notice.seat === "projection", "a visible notice for the seat that could not answer");
+  assert.match(notice.opinion, /could not answer: its reply was cut off or the model call failed/);
+  assert.equal(s.terminal, false); assert.equal(s.pack_stale, false);
+  // Re-open: a new session on the same topic and seats, the old one closed.
+  queue.length = 0;
+  const re = await reopenSession(env, { session_id, actor: "owner@example.com", enqueue });
+  assert.equal(re.ok, true, JSON.stringify(re));
+  assert.equal(re.reopened_from, session_id);
+  const old = await readSession(env, session_id), fresh = await readSession(env, re.session_id);
+  assert.equal(old.state, "closed"); assert.match(old.reason, /^reopened as /);
+  assert.deepEqual([fresh.topic_key, fresh.topic_text, fresh.participants.length], [old.topic_key, old.topic_text, old.participants.length]);
+  assert.deepEqual(queue, [{ kind: "council_step", session_id: re.session_id, step: "positions" }]);
+  // A closed session takes no message and no step.
+  assert.match((await ownerMessage(env, { session_id, text: "x", to: ["risk"], enqueue })).error, /closed/);
+  assert.equal((await step("answer", model().call)).status, "closed");
+  // Close; closing twice is refused.
+  assert.equal((await closeSession(env, { session_id: re.session_id, actor: "owner@example.com" })).ok, true);
+  assert.match((await closeSession(env, { session_id: re.session_id })).error, /already closed/);
+  // Closed sessions do not count toward the 4 a day: 4 more start.
+  for (let i = 0; i < 4; i++) {
+    const r = await startSession(env, { topic_key: "strategy:zone_pullback", enqueue });
+    assert.equal(r.ok, true, `start ${i}: ${JSON.stringify(r)}`);
+    await closeSession(env, { session_id: r.session_id });
+  }
+  const list = await listSessions(env);
+  assert.ok(list.sessions.every((x) => typeof x.pack_refs === "number" && typeof x.pack_stale === "boolean"));
+});
+
+test("CS8. a message to a session that ran on no evidence is refused with the offer to re-open", async () => {
+  const env = await setup();
+  await setSessionsSwitch(env, { on: true });
+  const { session_id } = await startSession(env, { text: "Evaluasi Strategy", enqueue });
+  await env.DB.prepare("UPDATE council_sessions SET pack_json = ? WHERE id = ?").bind(JSON.stringify({ refs: [], sections: {} }), session_id).run();
+  const r = await ownerMessage(env, { session_id, text: "strategy apa yang paling menguntungkan ?", to: ["projection"], enqueue });
+  assert.equal(r.ok, false); assert.equal(r.reopen, true); assert.match(r.error, /no evidence/);
+  const s = await readSession(env, session_id);
+  assert.equal(s.pack_stale, true); assert.equal(s.pack_refs, 0);
+  assert.equal(s.messages.filter((x) => x.round === "owner").length, 0, "nothing stored, no call queued");
 });
