@@ -189,12 +189,12 @@ test("CS10. typed options: a knob change only within the registry's bounds, anyt
   const opts = cleanOptions({ summary: "s", options: [
     { option_id: "rrr", kind: "policy_parameter", title: "Ask more reward intraday", hypothesis: "h", change: "c", risk: "r", knob: "decision.min_rrr.intraday", value: 1.83 },
     { option_id: "atr", kind: "policy_parameter", title: "ATR filter", hypothesis: "h", change: "add a 15m ATR filter", risk: "r", knob: "atr.filter", value: 2 },
-    { option_id: "far", kind: "policy_parameter", title: "Too far", hypothesis: "h", change: "c", risk: "r", knob: "strategy.near_atr", value: 0.9 },
+    { option_id: "far", kind: "policy_parameter", title: "Too far", hypothesis: "h", change: "c", risk: "r", knob: "decision.quorum_min.scalp", value: 0.9 },
     { option_id: "code", kind: "repository_task", title: "New agent", hypothesis: "h", change: "c", risk: "r", spec: "build a momentum agent" }] }).options;
   assert.deepEqual(opts.map((o) => [o.option_id, o.kind]), [["rrr", "policy_parameter"], ["atr", "repository_task"], ["far", "repository_task"], ["code", "repository_task"], ["no_change", "no_change"]]);
   assert.deepEqual([opts[0].knob, opts[0].from, opts[0].value], ["decision.min_rrr.intraday", 1.5, 1.8], "rounded to the knob's step");
   assert.match(opts[1].spec, /not a valid knob change: unknown knob/);
-  assert.match(opts[2].spec, /must stay within 0.2 to 0.6/);
+  assert.match(opts[2].spec, /must stay within 0.4 to 0.65/);
 
   const env = await setup();
   await setSessionsSwitch(env, { on: true });

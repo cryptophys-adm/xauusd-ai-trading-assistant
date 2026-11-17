@@ -17,7 +17,7 @@ import { buildEvidencePack, parseTopicKey } from "./cfc-pack.mjs";
 import { cfcMode } from "./cfc-triggers.mjs";
 import { agentRoster } from "./agent-inventory.mjs";
 import { publishToPlatform } from "./platform-reports.mjs";
-import { knobMenu, checkKnobValue } from "./council-knobs.mjs";
+import { knobMenu, checkKnobValue, readKnobOverrides } from "./council-knobs.mjs";
 
 /** States that end a session; "closed" is the owner's Close or Re-open (owner 2026-11-17). */
 export const TERMINAL_STATES = Object.freeze(["aborted", "expired", "decided", "closed"]);
@@ -161,14 +161,14 @@ export function cleanSeat(o, packRefs) {
   return { stance: o.stance, opinion: clip(o.opinion, 700), proposal: clip(o.proposal, 240) || null, refs, reply_to: (Array.isArray(o.reply_to) ? o.reply_to : []).map((x) => clip(x, 40)).slice(0, 4) };
 }
 /** Pure: the options with "no_change" always among them. */
-export function cleanOptions(o) {
+export function cleanOptions(o, live = null) {
   const opts = (Array.isArray(o?.options) ? o.options : []).filter((x) => x && x.option_id && x.title).slice(0, 5)
     .map((x, i) => {
       const base = { option_id: clip(x.option_id, 40), rank: i + 1, title: clip(x.title, 120), hypothesis: clip(x.hypothesis, 300), change: clip(x.change, 300), risk: clip(x.risk, 200), dissent: clip(x.dissent, 200) || null };
       if (base.option_id === "no_change" || x.kind === "no_change") return { ...base, kind: "no_change" };
       // A knob change only for a listed knob and a value inside its bounds; anything else is code for the platform to build.
       if (x.kind === "policy_parameter") {
-        const k = checkKnobValue(x.knob, x.value);
+        const k = checkKnobValue(x.knob, x.value, live);
         if (k.ok) return { ...base, kind: "policy_parameter", knob: k.knob.id, from: k.from, value: k.value, unit: k.knob.unit };
         return { ...base, kind: "repository_task", spec: clip(`${x.spec ?? base.change} (not a valid knob change: ${k.error})`, 800) };
       }
@@ -314,7 +314,7 @@ export async function acceptOption(env, { session_id, option_id, actor = "owner"
   // Re-check a knob change at acceptance: the engine may have moved since the synthesis.
   let knob = null, from = null, value = null, note = null;
   if (kind === "policy_parameter") {
-    const k = checkKnobValue(opt.knob, opt.value);
+    const k = checkKnobValue(opt.knob, opt.value, await readKnobOverrides(env, { now }));
     if (!k.ok) return { ok: false, error: `this knob change is no longer valid: ${k.error}` };
     knob = k.knob.id; from = k.from; value = k.value; note = "waits for its shadow test against today's setting (phase 2)";
   }
@@ -412,6 +412,8 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
     if (calls >= SESSION_LIMITS.calls) return abort("the session's calls are used up before the synthesis");
     calls += 1;
     let syn = null;
+    let live = {};
+    try { live = await readKnobOverrides(env, { now }); } catch { live = {}; }
     try {
       const msgs = [
         { role: "system", content: ["You are the moderator of an XAUUSD trading system's council. You never vote. Read what each member said and write a short summary of the views, then 2 to 5 ranked options the owner can pick from; one option_id must be \"no_change\" with kind no_change.",
@@ -419,10 +421,10 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
           "kind policy_parameter: the change is one of the listed knobs set to a new value inside its bounds (give knob and value); it is tested in shadow against today's setting and goes live only if it proves better. Prefer this kind whenever a listed knob can express the idea.",
           "kind repository_task: the change needs new code (a new filter, rule or agent); give spec: what to build, where it applies, and how to measure that it helped. The system builds it itself.",
           "Never quote a price. The owner accepts one option; nothing changes trading until then."].join(" ") },
-        { role: "user", content: JSON.stringify({ knobs: knobMenu(), question: s.question, topic: s.topic_key, said: spoken.map((m) => ({ seat: m.seat, round: m.round, stance: m.stance, opinion: m.opinion, proposal: m.proposal })), owner: rows.filter((r) => r.round === "owner").map((r) => r.opinion) }) }
+        { role: "user", content: JSON.stringify({ knobs: knobMenu(live), question: s.question, topic: s.topic_key, said: spoken.map((m) => ({ seat: m.seat, round: m.round, stance: m.stance, opinion: m.opinion, proposal: m.proposal })), owner: rows.filter((r) => r.round === "owner").map((r) => r.opinion) }) }
       ];
       const r = await call(env, { messages: msgs, schemaName: "cfc_synthesis", schema: SYNTHESIS_SCHEMA, maxTokens: 1500, effort: "medium", deadline: Date.now() + 90_000, clock: () => Date.now(), runState: {}, role: "moderator", meterSource: "cfc:synthesis" });
-      syn = r?.status === "answered" ? cleanOptions(r.obj) : null;
+      syn = r?.status === "answered" ? cleanOptions(r.obj, live) : null;
     } catch { syn = null; }
     if (!syn) { await db.prepare("UPDATE council_sessions SET calls = ? WHERE id = ?").bind(calls, session_id).run(); return abort("the moderator gave no valid synthesis"); }
     await db.prepare("UPDATE council_sessions SET state = 'awaiting_owner', options = ?, calls = ?, updated_ms = ? WHERE id = ?").bind(JSON.stringify(syn), calls, now, session_id).run();

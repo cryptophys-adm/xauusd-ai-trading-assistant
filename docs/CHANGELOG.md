@@ -5,6 +5,13 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-17
+- feat(councils): council proposals, phase 2 (docs/RFC_COUNCIL_PROPOSALS.md; owner: "Live otomatis + rollback otomatis").
+  - **Shadow test.** An accepted knob change is replayed over 60 days of decisions in plan-R and checked against grid-adapt's gate.
+  - **Live and rollback.** A value that passes goes live by itself (KV `council-knobs:v1`, read by the Decision Engine at each decision, clamped to the bounds). It rolls back by itself when the decisions since then show the old value would have done better, and is never tried again.
+  - **Reporting.** Each step sends a Telegram line and a platform state update.
+  - **Registry.** It lists only the 6 testable Decision Engine knobs; `near_atr` and `max_risk_atr` become repository tasks.
+  - **Value in force.** The moderator and Accept compare against the value in force.
+  - **Page.** The Councils page shows the live knob values.
 - feat(councils): council proposals, phase 1 (docs/RFC_COUNCIL_PROPOSALS.md; the owner confirmed in the session: "Nexus dulu, Cerebrum nanti", "Live otomatis + rollback otomatis", and code changes "dikerjakan oleh cryptophys bukan dari external").
   - **Typed options.** The moderator writes each option as a `policy_parameter` (a listed knob of `src/council-knobs.mjs` with a value inside its bounds), a `repository_task` (new code, with a spec) or `no_change`. An invalid knob change becomes a `repository_task`.
   - **Accept.** The owner-only Accept in Nexus decides the session, stores the proposal (D1 `council_proposals`) and sends a `typed_proposal.v1` report to the platform (`xauusd-moderator`). A failed send is retried hourly.
