@@ -222,6 +222,13 @@ const ownerPost = async (body: unknown) => {
 const STANCE: Record<string, { text: string; tone: "green" | "red" | "amber" | "slate" }> = {
   support: { text: "agree", tone: "green" }, oppose: { text: "disagree", tone: "red" }, amend: { text: "agree, with a change", tone: "amber" }, abstain: { text: "abstain", tone: "slate" }
 };
+const KIND: Record<string, { text: string; tone: "green" | "red" | "amber" | "slate" }> = {
+  policy_parameter: { text: "knob change · shadow test first", tone: "green" }, repository_task: { text: "new code · built by Cryptophys", tone: "amber" }, no_change: { text: "no change", tone: "slate" }
+};
+const PROPOSAL_STATE: Record<string, string> = {
+  queued_shadow: "waiting for its shadow test", handoff_pending: "being sent to the platform", handed_off: "with the platform's evolution loop", closed: "recorded, nothing changes",
+  shadow: "in its shadow test", live: "live", rolled_back: "rolled back", rejected: "did not prove better"
+};
 const ROUND: Record<string, string> = { position: "Opening opinions", rebuttal: "Responses to each other", answer: "Answers to the owner" };
 const STATE_TEXT: Record<string, string> = { positions: "the agents are giving their opinions…", rebuttals: "the agents are responding to each other…", synthesis: "the moderator is writing the options…", awaiting_owner: "waiting for your pick (in Cerebrum)", aborted: "stopped", decided: "decided", expired: "expired", closed: "closed" };
 const TERMINAL = ["aborted", "expired", "decided", "closed"];
@@ -260,6 +267,7 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
   const rounds = ["position", "rebuttal", "answer"].map((r) => [r, s.messages.filter((m: any) => m.round === r || (r === "answer" && (m.round === "owner" || m.round === "notice")))] as const).filter(([, ms]) => ms.length);
   const terminal = s.terminal ?? TERMINAL.includes(s.state);
   const send = async () => { setBusy(true); setErr(null); try { const r = await ownerPost({ action: "message", session_id: id, text, to }); setText(""); setTo([]); if (r?.stale) setErr("Sent. This session's evidence is older than 24 hours: re-open the topic for answers on fresh evidence."); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
+  const accept = async (option_id: string) => { if (!window.confirm("Accept this option? The session ends and the proposal goes ahead (a knob change is tested in shadow first).")) return; setBusy(true); setErr(null); try { await ownerPost({ action: "accept", session_id: id, option_id }); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
   const control = async (action: "close" | "reopen") => { setBusy(true); setErr(null); try { const r = await ownerPost({ action, session_id: id }); if (action === "reopen" && r?.session_id) onOpen(r.session_id); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
   return (
     <div className="flex flex-col gap-3">
@@ -281,12 +289,18 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
         <div key={r}><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">{ROUND[r]}</div>
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{ms.map((m: any) => <OpinionCard key={m.id} m={m} />)}</div></div>
       ))}
-      {s.options && (!terminal || showOld) ? (
+      {s.options && (!terminal || showOld || s.state === "decided") ? (
         <div><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">The moderator's options (pick in Cerebrum)</div>
           {s.options.summary ? <p className="mb-2 text-[12px] text-slate-300">{s.options.summary}</p> : null}
           <div className="grid gap-2 md:grid-cols-2">{(s.options.options ?? []).map((o: any) => (
-            <div key={o.option_id} className="glass-inner p-3 text-[12px]"><div className="font-semibold text-slate-100">{o.rank}. {o.title}</div><div className="mt-1 text-slate-300">{o.hypothesis}</div>
-              <div className="mt-1 text-[11px] text-slate-400">Change: {o.change} · Risk: {o.risk}{o.dissent ? ` · Dissent: ${o.dissent}` : ""}</div></div>))}</div></div>
+            <div key={o.option_id} className="glass-inner flex flex-col gap-1 p-3 text-[12px]">
+              <div className="flex items-start justify-between gap-2"><div className="font-semibold text-slate-100">{o.rank}. {o.title}</div>{o.kind && KIND[o.kind] ? <Badge tone={KIND[o.kind].tone}>{KIND[o.kind].text}</Badge> : null}</div>
+              <div className="text-slate-300">{o.hypothesis}</div>
+              {o.kind === "policy_parameter" ? <div className="mono text-[11px] text-emerald-200">{o.knob}: {o.from} → {o.value} {o.unit ?? ""}</div> : null}
+              {o.kind === "repository_task" && o.spec ? <div className="text-[11px] text-amber-100/90">To build: {o.spec}</div> : null}
+              <div className="text-[11px] text-slate-400">Change: {o.change} · Risk: {o.risk}{o.dissent ? ` · Dissent: ${o.dissent}` : ""}</div>
+              {s.state === "awaiting_owner" ? <div><button type="button" disabled={busy} onClick={() => accept(o.option_id)} className="mt-1 rounded-md bg-emerald-500/20 px-2.5 py-0.5 text-[11.5px] font-semibold text-emerald-200 ring-1 ring-emerald-400/40 disabled:opacity-40">Accept</button></div> : null}
+            </div>))}</div></div>
       ) : null}
       {!terminal ? (
         <div className="flex flex-col gap-2">
@@ -298,6 +312,22 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** The options the owner accepted and where each stands. */
+function Proposals({ tick }: { tick: number }) {
+  const poll = usePoll(() => get("/api/council/proposals"), 30_000, [tick]);
+  const rows = ((poll.data as any)?.proposals ?? []) as any[];
+  if (!rows.length) return null;
+  return (
+    <div><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">Accepted proposals</div>
+      <div className="grid gap-2 md:grid-cols-2">{rows.map((p) => (
+        <div key={p.id} className="glass-inner p-3 text-[12px]">
+          <div className="flex items-start justify-between gap-2"><div className="font-semibold text-slate-100">{p.title ?? p.option_id}</div>{KIND[p.kind] ? <Badge tone={KIND[p.kind].tone}>{KIND[p.kind].text}</Badge> : null}</div>
+          {p.kind === "policy_parameter" ? <div className="mono mt-1 text-[11px] text-emerald-200">{p.knob}: {p.from_value} → {p.value}</div> : null}
+          <div className="mt-1 text-[11px] text-slate-400">{PROPOSAL_STATE[p.state] ?? p.state} · accepted {String(p.accepted_at).slice(0, 16).replace("T", " ")} UTC{p.note ? ` · ${p.note}` : ""}</div>
+        </div>))}</div></div>
   );
 }
 
@@ -337,6 +367,7 @@ function Sessions({ topic }: { topic: string | null }) {
           {open ? <button type="button" onClick={() => setOpen(null)} className="rounded px-2 py-0.5 text-[11px] text-slate-500 ring-1 ring-slate-700/50 hover:text-slate-300">Hide</button> : null}</div>
       ) : <Empty>No session yet.</Empty>}
       {open ? <SessionView id={open} enabled={Boolean(d?.enabled)} onOpen={(x) => { setOpen(x); setTick((t) => t + 1); }} /> : null}
+      <Proposals tick={tick} />
     </div>
   );
 }

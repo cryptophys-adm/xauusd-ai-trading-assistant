@@ -258,7 +258,7 @@ import { relayStrategyArm } from "./strategy-arm-relay.mjs";
 import { computeRecommendations, readRecommendations } from "./strategy-recommendation.mjs";
 import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
-import { startSession, ownerMessage, closeSession, reopenSession, runSessionStep, listSessions, readSession, setSessionsSwitch } from "./cfc-session.mjs";
+import { startSession, ownerMessage, closeSession, reopenSession, acceptOption, retryProposalHandoffs, listProposals, runSessionStep, listSessions, readSession, setSessionsSwitch } from "./cfc-session.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings } from "./omega-broker.mjs";
@@ -1826,7 +1826,7 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     return { ...(await readStrategyArm(this.env)), allowed: await liveAgentIds(this.env), blocked: await armBlocked(this.env), owner_check: check, can_arm: check !== "not_owner", council: await readCouncilState(this.env) } as JsonObject;
   }
   /** Call for Councils P2 (owner 2026-11-17): start a session, write to its seats, or switch sessions on or off. Owner only. */
-  async council(input: { action?: string; topic_key?: string; text?: string; seats?: string[]; session_id?: string; to?: string[]; on?: boolean; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+  async council(input: { action?: string; topic_key?: string; text?: string; seats?: string[]; session_id?: string; option_id?: string; to?: string[]; on?: boolean; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
     if (ownerCheck(this.env, input?.actor_sub ?? null) === "not_owner") return { ok: false, error: "owner_only" } as JsonObject;
     const actor = String(input?.actor ?? "owner");
     const enqueue = (t: unknown) => sendQueueTask(this.env.XAUUSD_EVENTS, t as QueueTask);
@@ -1835,7 +1835,8 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     if (input?.action === "message") return ownerMessage(this.env, { session_id: String(input?.session_id ?? ""), text: String(input?.text ?? ""), to: input?.to ?? [], actor, enqueue }) as Promise<JsonObject>;
     if (input?.action === "close") return closeSession(this.env, { session_id: String(input?.session_id ?? ""), actor }) as Promise<JsonObject>;
     if (input?.action === "reopen") return reopenSession(this.env, { session_id: String(input?.session_id ?? ""), actor, enqueue }) as Promise<JsonObject>;
-    return { ok: false, error: "action must be start, message, close, reopen or switch" } as JsonObject;
+    if (input?.action === "accept") return acceptOption(this.env, { session_id: String(input?.session_id ?? ""), option_id: String(input?.option_id ?? ""), actor }) as Promise<JsonObject>;
+    return { ok: false, error: "action must be start, message, close, reopen, accept or switch" } as JsonObject;
   }
   /** The owner's "Council auto-arm" toggle (owner 2026-11-17; refused while the code ceiling is off). */
   async setCouncilAuto(input: { on?: boolean; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
@@ -2351,6 +2352,11 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // Call for Councils P2: the sessions (newest first), whether they run, and the limits. Read-only.
     try { return dashboardJson({ status: "ok", ...(await listSessions(env)) }); }
     catch (error) { console.error("council_sessions_read_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
+  }
+  if (url.pathname === "/api/council/proposals") {
+    // The options the owner accepted and where each stands (shadow test, handed to the platform, live). Read-only.
+    try { return dashboardJson({ status: "ok", ...(await listProposals(env)) }); }
+    catch (error) { console.error("council_proposals_read_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
   }
   if (url.pathname === "/api/council/session") {
     // One session: each seat's opinion by round, the moderator's options, the owner's messages. Read-only.
@@ -3043,6 +3049,9 @@ export default {
         ctx.waitUntil(runCfcTriggers(env, { now: event.scheduledTime || Date.now() }).then(r => {
           if (r.status === "failed" || (r.status === "ok" && (r.created?.length || r.unavailable?.length))) console.log("cfc_triggers", JSON.stringify(r));
         }).catch(e => console.error("cfc_triggers_failed", e instanceof Error ? e.message : String(e))));
+        // Accepted council proposals the platform has not received yet: re-sent once an hour.
+        ctx.waitUntil(retryProposalHandoffs(env).then(r => { if (r.pending) console.log("council_proposal_handoffs", JSON.stringify(r)); })
+          .catch(e => console.error("council_proposal_handoffs_failed", e instanceof Error ? e.message : String(e))));
       }
       ctx.waitUntil(reconcileRecentCandles(env).then(async result => {
         try { await backfillRecentAnalyses(env, { loadPayloads: loadWebhookPayloadsFromD1, runAnalysis, setStatus: setAnalysisRunStatus }); } catch (e) { console.error("backfill_failed", e instanceof Error ? e.message : String(e)); }
