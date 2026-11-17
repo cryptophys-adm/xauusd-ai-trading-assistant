@@ -39,7 +39,8 @@
             "signals.observe",
             "reports.publish",
             "memory.recall",
-            "memory.remember"
+            "memory.remember",
+            "council.decisions.read"
           ],
           "tier_max": 1,
           "voter": false

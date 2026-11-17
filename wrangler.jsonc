@@ -70,9 +70,9 @@
     // lets the owner's Nexus toggle act; the toggle itself stays off until the owner turns it on. "off" keeps the
     // council to proposals.
     "STRATEGY_COUNCIL_ARM": "allowed",
-    // The platform's return path for council proposals (council.decisions.read). Stays "off" until the platform
-    // says V3 is live on the Forge and the AI Kernel and organism.json grants the capability (docs/RFC_COUNCIL_PROPOSALS.md).
-    "COUNCIL_DECISIONS_POLL": "off",
+    // The platform's return path for council proposals (council.decisions.read): on since 2026-11-17, once the
+    // platform's V3 was live on the Forge and the AI Kernel (83a352e) and organism.json granted the capability.
+    "COUNCIL_DECISIONS_POLL": "on",
     "OWNER_ACCESS_SUB": "6d015218-6ea2-5fc3-b4aa-cc98c5ced21a",
     "POSITION_COUNCIL_DAILY_USD": "5",
     // Decision Engine (owner 2026-11-10: "nyalakan GLOBAL_DECISION_WEIGHTED"): the B-11 extended witnesses

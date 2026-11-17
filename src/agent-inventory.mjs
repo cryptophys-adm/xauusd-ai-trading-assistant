@@ -91,7 +91,7 @@ export function agentRoster(env = {}) {
       worker: WORKER,
       reads: [...new Set(a.rooms.flatMap((r) => ROOMS[r].reads))],
       writes: [...new Set(a.rooms.flatMap((r) => ROOMS[r].writes))],
-      kernel_id: kernel, capabilities: kernel ? [...KERNEL_CAPABILITIES] : []
+      kernel_id: kernel, capabilities: kernel ? [...KERNEL_CAPABILITIES, ...(kernel === "xauusd-moderator" ? ["council.decisions.read"] : [])] : []
     };
   });
 }
