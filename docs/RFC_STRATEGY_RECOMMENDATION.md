@@ -24,10 +24,19 @@ Status: P2 built and live (2026-11-17, see below); design decided (owner's answe
   (`OmegaGateway.setControl`, `EA_SIGNALS_ENABLED` "false") and the daily loss floor (`dailyLossHit` in `bridgeSync`),
   `GET`/`POST /omega/api/strategy-arm` (a person, same origin; `Sec-Fetch-Site` checked when present) and the Telegram
   lines. The 5m Position Manager keeps managing open positions whatever the arm state.
-- Not built yet: the recommendation cards (§3), the platform `strategy_arm.v1` reports (§10), the owner-only
-  `OWNER_ACCESS_SUB` check (the Access application admits only the owner today; the route takes any signed-in person,
-  as the trading mode does), the `strategy_has_position` and `opposing_position` gates (§5; `max_positions` and
-  `same_side_unprotected` still hold), the `ea_deals.strategy` column and the migration file (the tables are made at run
+- Owner-only check (§11.3, owner 2026-11-17 "Ya, semua, live"): built. `verifyAccessJwt` returns the Access `sub`;
+  the Omega route refuses (`403 owner_only`) any sub other than `OWNER_ACCESS_SUB`, and `setStrategyArm` checks
+  `actor_sub` again in the AI Worker; the page hides the button when `can_arm` is false. Bootstrap: the owner's sub is
+  not known before the code exists, so while the var is unset the check reads `unset` (the route stays as it was:
+  Access admits only the owner) and each visitor's sub is recorded once in `omega_events` (`owner_sub_seen`); a
+  follow-up PR sets `OWNER_ACCESS_SUB` in both Workers' `wrangler.jsonc` from that record. The system's auto-disarm
+  never needs a sub.
+- §5 gates: built. `planIntents` (`src/omega-engine.mjs`), while the signal carries `arm_mode` (the arm is live),
+  refuses an entry with `strategy_has_position` (an Omega position whose strategy, from its open intent, is the
+  signal's `trade_agent`; an unattributed one counts as `zone_pullback`) and `opposing_position` (an Omega position on
+  the other side, open or being closed this sync; manual positions do not count). They come after `max_positions`
+  and `same_side_unprotected`, which still hold.
+- Not built yet: the recommendation cards (§3), the platform `strategy_arm.v1` reports (§10), the `ea_deals.strategy` column and the migration file (the tables are made at run
   time).
 - ADR-0020 says a trading action needs the owner's click per action or as a standing arm of one strategy. AUTO trades
   with nothing armed; this record reads Omega's typed `live_armed` (a real account) plus this owner decision as the

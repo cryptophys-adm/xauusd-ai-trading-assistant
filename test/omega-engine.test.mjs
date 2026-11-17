@@ -364,3 +364,22 @@ test("a limit plan is not entered once price is past its entry toward the stop b
   assert.ok(codes(plan({ signal: buy, executor: ex({ symbol: { ...EXECUTOR.symbol, bid: 4092.3, ask: 4092.5 } }) })).includes("price_past_entry"));
   assert.ok(!codes(plan({ signal: { ...sell, action: "ENTER_MARKET" }, executor: ex({ symbol: { ...EXECUTOR.symbol, bid: 4108, ask: 4108.2 } }) })).includes("price_past_entry"));
 });
+
+test("strategy arm §5 gates (owner 2026-11-17): one position per strategy and no entry against an Omega position, only while the arm is live", () => {
+  const S3 = { ...ON, max_positions: 3 };
+  const prot = (over) => ({ ticket: 1, side: "BUY", open_price: 4090, sl: 4091, volume: 0.1, intent_id: "open:1:B", source: "omega", ...over });
+  const sig = (over = {}) => ({ ...SIGNAL, trade_agent: "sweep_reversal", arm_mode: "armed", armed: "sweep_reversal,zone_pullback", ...over });
+  // The strategy already holds a position (by its open intent's strategy) → refused; another strategy's position does not block.
+  const agents = { "open:1:B": "sweep_reversal" };
+  assert.deepEqual(codes(plan({ settings: S3, signal: sig(), executor: ex({ positions: [prot()] }), agents })), ["strategy_has_position"]);
+  assert.equal(plan({ settings: S3, signal: sig(), executor: ex({ positions: [prot()] }), agents: { "open:1:B": "zone_pullback" } }).intents.at(-1).kind, "open");
+  // An unattributed Omega position counts as the default agent's (zone_pullback).
+  assert.deepEqual(codes(plan({ settings: S3, signal: sig({ trade_agent: "zone_pullback" }), executor: ex({ positions: [prot({ intent_id: "x" })] }) })), ["strategy_has_position"]);
+  // An Omega position on the other side → no entry (AUTO too); a manual one does not count.
+  const sell = prot({ ticket: 2, side: "SELL", open_price: 4110, sl: 4109, intent_id: "open:2:S" });
+  assert.ok(codes(plan({ settings: S3, signal: sig({ arm_mode: "auto", armed: "" }), executor: ex({ positions: [sell] }) })).includes("opposing_position"));
+  assert.ok(!codes(plan({ settings: S3, signal: sig({ arm_mode: "auto", armed: "" }), executor: ex({ positions: [{ ...sell, source: "manual", intent_id: null, magic: 0 }] }) })).includes("opposing_position"));
+  // Without the arm (no arm_mode on the signal) neither gate applies.
+  const off = codes(plan({ settings: S3, signal: { ...SIGNAL, trade_agent: "sweep_reversal" }, executor: ex({ positions: [prot()] }), agents }));
+  assert.ok(!off.includes("strategy_has_position") && !off.includes("opposing_position"));
+});

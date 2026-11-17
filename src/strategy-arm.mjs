@@ -68,10 +68,12 @@ async function writeArmCache(env, s, now = Date.now()) {
  * arm count allows it, and the row and the event apply only with that version. Idempotent by request_id. Returns
  * { ok, changed, state } or { ok: false, error, state }.
  */
-export async function setStrategyArm(env, { strategy_id: id, action, request_id = null, expected_version = null, actor = "owner", reason = "owner", allowed = [], blocked = null, now = Date.now(), send = null } = {}) {
+export async function setStrategyArm(env, { strategy_id: id, action, request_id = null, expected_version = null, actor = "owner", actor_sub = undefined, reason = "owner", allowed = [], blocked = null, now = Date.now(), send = null } = {}) {
   const db = env?.DB;
   if (!db) return { ok: false, error: "unavailable" };
   if (strategyArmMode(env) === "off") return { ok: false, error: "arm_mode_off" };
+  // A person's click carries actor_sub (the Omega route); the system's auto-disarm (disarmAll) does not use this path.
+  if (actor_sub !== undefined && ownerCheck(env, actor_sub) === "not_owner") return { ok: false, error: "owner_only" };
   if (action !== "arm" && action !== "disarm") return { ok: false, error: "action must be arm or disarm" };
   if (typeof id !== "string" || !/^[a-z0-9_]{2,40}$/.test(id)) return { ok: false, error: "unknown strategy" };
   await ensureStrategyArmSchema(db);
@@ -127,6 +129,33 @@ export async function disarmAll(env, { reason, now = Date.now(), send = null } =
     }
   }
   return { status: "conflict" };
+}
+
+// The owner check (RFC §11.3, owner 2026-11-17 "Ya, semua, live"): only the owner's Cloudflare Access user id (the
+// JWT `sub`, opaque, no email in config) may arm or disarm. OWNER_ACCESS_SUB holds it; the Omega Worker checks it on
+// the route and this Worker checks it again on the RPC. Until the var is set (bootstrap: the id is not known before
+// the owner's first visit) the check is "unset": the route stays as it was (Cloudflare Access admits only the owner)
+// and each signed-in visitor's sub is recorded once in omega_events (action "owner_sub_seen") so it can be set.
+export const OWNER_SUB_SEEN_KEY = "strategy-arm:owner-sub-seen:";
+const SUB_RE = /^[A-Za-z0-9-]{8,64}$/;
+
+/** Pure: "owner" | "not_owner" | "unset" for this Access sub. */
+export function ownerCheck(env, sub) {
+  const want = String(env?.OWNER_ACCESS_SUB ?? "").trim();
+  if (!want) return "unset";
+  return typeof sub === "string" && sub && sub === want ? "owner" : "not_owner";
+}
+
+/** Records a visitor's Access sub once (bootstrap only, while OWNER_ACCESS_SUB is unset). Never throws. */
+export async function noteOwnerSub(env, { sub, actor, now = Date.now() } = {}) {
+  if (ownerCheck(env, sub) !== "unset" || typeof sub !== "string" || !SUB_RE.test(sub)) return false;
+  try {
+    const key = OWNER_SUB_SEEN_KEY + sub;
+    if (await env.SIGNAL_CACHE?.get?.(key)) return false;
+    await env.DB.prepare("INSERT INTO omega_events (ms, actor, action, detail) VALUES (?, ?, 'owner_sub_seen', ?)").bind(now, String(actor || "unknown").slice(0, 200), JSON.stringify({ sub })).run();
+    await env.SIGNAL_CACHE?.put?.(key, "1", { expirationTtl: 7 * 86_400 });
+    return true;
+  } catch { return false; }
 }
 
 /** The state for the page: mode, armed set, count, the last 20 events. */

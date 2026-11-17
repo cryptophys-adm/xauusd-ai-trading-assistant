@@ -25,14 +25,15 @@ const armText = (id?: string) => { const m = /^e([\d.]+)@s([\d.]+)$/.exec(String
  * The strategy arm (owner 2026-11-17, ADR-0020): one click arms or disarms a live strategy, at most 3. While none is
  * armed the mode is AUTO: each entry is the one best strategy by confidence × confluence. The server checks the rest.
  */
-type ArmState = { mode?: string; selection?: string; max?: number; state?: { version: number; ids: string[]; armed_count: number }; allowed?: string[]; blocked?: string | null; error?: string } | null;
+type ArmState = { mode?: string; selection?: string; max?: number; state?: { version: number; ids: string[]; armed_count: number }; allowed?: string[]; blocked?: string | null; error?: string; can_arm?: boolean } | null;
 function ArmButton({ id, arm, onDone }: { id: string; arm: ArmState; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const armed = arm?.state?.ids?.includes(id) ?? false;
   const full = (arm?.state?.armed_count ?? 0) >= (arm?.max ?? 3);
   const canArm = !armed && (arm?.allowed ?? []).includes(id) && !full && !arm?.blocked && arm?.mode !== "off";
-  if (!arm || arm.error || arm.mode === "off") return null;
+  // Owner only (RFC §11.3): another signed-in person sees the state, never the button.
+  if (!arm || arm.error || arm.mode === "off" || arm.can_arm === false) return null;
   const click = async () => {
     setBusy(true); setErr(null);
     try {

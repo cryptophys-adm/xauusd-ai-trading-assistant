@@ -81,7 +81,7 @@ export async function verifyAccessJwt(token, env, { now = Math.floor(Date.now() 
   if (claims.iss !== `https://${domain}`) return { ok: false, reason: "wrong_issuer" };
   if (typeof claims.exp !== "number" || claims.exp + CLOCK_SKEW_SECONDS < now) return { ok: false, reason: "expired" };
   if (typeof claims.nbf === "number" && claims.nbf - CLOCK_SKEW_SECONDS > now) return { ok: false, reason: "not_yet_valid" };
-  if (typeof claims.email === "string" && claims.email) return { ok: true, identity: { subject: claims.email.toLowerCase(), type: "user" } };
+  if (typeof claims.email === "string" && claims.email) return { ok: true, identity: { subject: claims.email.toLowerCase(), type: "user", sub: typeof claims.sub === "string" && claims.sub ? claims.sub : null } };
   if (typeof claims.common_name === "string" && claims.common_name) return { ok: true, identity: { subject: claims.common_name, type: "service_token" } };
   return { ok: false, reason: "no_identity" };
 }
@@ -330,7 +330,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
     // Agents page, and the owner's one click (a person, same origin, JSON). The AI Worker checks the rest server-side.
     if (route === "GET /api/strategy-arm") {
       if (typeof env.OMEGA.strategyArm !== "function") return json({ error: "strategy_arm_unavailable" }, 503);
-      return rpc(() => env.OMEGA.strategyArm(), "strategy_arm_failed");
+      return rpc(() => env.OMEGA.strategyArm({ viewer: identity.subject, viewer_sub: identity.sub ?? null }), "strategy_arm_failed");
     }
     if (route === "POST /api/strategy-arm") {
       const r = await personJson(request, url, identity, 1024);
@@ -339,9 +339,12 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       const id = typeof r.body.strategy_id === "string" ? r.body.strategy_id.trim() : "";
       const action = r.body.action === "arm" || r.body.action === "disarm" ? r.body.action : "";
       if (!id || !action) return json({ error: "strategy_id and action (arm or disarm) are required" }, 400);
+      // Owner only (RFC §11.3): the Access user id must equal OWNER_ACCESS_SUB once it is set; the AI Worker checks again.
+      const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
+      if (ownerSub && identity.sub !== ownerSub) return json({ error: "owner_only" }, 403);
       if (typeof env.OMEGA.setStrategyArm !== "function") return json({ error: "strategy_arm_unavailable" }, 503);
       return rpc(() => env.OMEGA.setStrategyArm({ strategy_id: id, action, request_id: typeof r.body.request_id === "string" ? r.body.request_id.slice(0, 64) : null,
-        expected_version: Number.isFinite(Number(r.body.expected_version)) ? Number(r.body.expected_version) : null, actor: identity.subject }), "strategy_arm_failed");
+        expected_version: Number.isFinite(Number(r.body.expected_version)) ? Number(r.body.expected_version) : null, actor: identity.subject, actor_sub: identity.sub ?? null }), "strategy_arm_failed");
     }
     if (route === "POST /api/position/close") {
       const r = await personJson(request, url, identity, 2048);

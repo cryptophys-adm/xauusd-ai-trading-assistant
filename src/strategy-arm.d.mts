@@ -10,3 +10,6 @@ export function setStrategyArm(env: unknown, input?: Record<string, any>): Promi
 export function disarmAll(env: unknown, input?: Record<string, any>): Promise<Record<string, any>>;
 export function readStrategyArm(env: unknown): Promise<Record<string, any>>;
 export function dailyLossHit(executor: unknown, maxDailyLossPct: number): boolean;
+export const OWNER_SUB_SEEN_KEY: string;
+export function ownerCheck(env: unknown, sub: string | null | undefined): "owner" | "not_owner" | "unset";
+export function noteOwnerSub(env: unknown, input?: { sub?: string | null; actor?: string; now?: number }): Promise<boolean>;

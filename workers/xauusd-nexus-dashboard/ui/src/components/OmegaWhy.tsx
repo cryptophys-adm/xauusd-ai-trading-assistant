@@ -26,6 +26,8 @@ const CODES: Record<string, { kind: Kind; text: string }> = {
   spread: { kind: "block", text: "The spread is wider than allowed." },
   rollover_quarantine: { kind: "block", text: "Daily rollover window: spreads are unreliable, entries wait." },
   same_side_unprotected: { kind: "block", text: "No stacking: a position on the same side is not yet protected (its stop is not at break-even or better)." },
+  strategy_has_position: { kind: "block", text: "Strategy arm: this strategy already has an open position (one position per strategy)." },
+  opposing_position: { kind: "block", text: "Strategy arm: an Omega position on the other side is still open or being closed; the entry waits for it to go." },
   bad_input: { kind: "block", text: "Account or symbol data from the terminal is incomplete." },
   daily_loss_limit: { kind: "block", text: "The daily loss limit is reached: no new entries today." },
   daily_risk_budget: { kind: "block", text: "Today's risk budget is used up by the open positions' stops." },
