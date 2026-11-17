@@ -2,6 +2,7 @@
 // index.mjs under Node without the `cloudflare:workers` runtime module.
 import { WorkerEntrypoint } from "cloudflare:workers";
 import worker, { runTvOhlcv, runTvEconomicCalendar, runNewsPull, gatewayStatus } from "./index.mjs";
+import { shadowItemsSince } from "./news-sources.mjs";
 
 /**
  * RPC-only OHLCV gateway for internal Workers (Service Binding with
@@ -38,6 +39,10 @@ export class NewsIngestionService extends WorkerEntrypoint {
   /** The gateway's quota cooldown, OAuth state and last news pull (read-only), for the AI Worker's health check. */
   async gatewayStatus() {
     return gatewayStatus(this.env);
+  }
+  /** Measurement phase B (2026-11-17): the shadow's and TradingView's headlines of the last hours (read-only). */
+  async shadowItems(options = {}) {
+    return shadowItemsSince(this.env, options?.hours ?? 24);
   }
   async goldHistory(count = 6000) {
     return runTvOhlcv(this.env, [{ symbol: "OANDA:XAUUSD", interval: "1h", count: Math.max(100, Math.min(8000, Number(count) || 6000)) }], "gold_history");

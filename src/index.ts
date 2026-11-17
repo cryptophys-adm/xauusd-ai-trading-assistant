@@ -44,6 +44,7 @@ export interface Env {
     // Economic releases (owner 2026-11-10): TradingView's calendar with actuals, and gold's 1H history.
     economicCalendar?(request: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>;
     goldHistory?(count?: number): Promise<{ status: number; body: Record<string, unknown> }>;
+    shadowItems?(options?: { hours?: number }): Promise<{ shadow: unknown[]; tv: unknown[] }>;
     // The gateway's quota cooldown and OAuth state (read-only), for the market-data health alert.
     gatewayStatus?(): Promise<Record<string, unknown>>;
   };
@@ -269,6 +270,7 @@ import {
   h1BarTimes, finalizeDue, consensusInput, reasonerLines, quorumOf, applyQuorum, emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
 } from "./h1-consensus.mjs";
 import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
+import { runNewsShadowCompare, readNewsShadowCompare } from "./news-shadow-compare.mjs";
 import { runHealthAlerts, readHealthAlerts } from "./health-alerts.mjs";
 import { classifyRejection, recordRejection, webhookLaneStatus } from "./webhook-rejections.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
@@ -2018,6 +2020,10 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error" }, 500);
     }
   }
+  if (url.pathname === "/api/news/shadow-compare") {
+    // The news shadow's daily readings beside TradingView's (measurement phase B, 2026-11-17): read-only.
+    return dashboardJson({ status: "ok", ...(await readNewsShadowCompare(env, { days: Number(url.searchParams.get("days") || 14) })) });
+  }
   if (url.pathname === "/api/news/daily") {
     // The News tab: the last 24 hours of news, each headline with its gold bias, and the TLDR.
     try {
@@ -3044,6 +3050,12 @@ export default {
             const facts = await pushDoctrineFacts(env);
             if (facts.status !== "ok" && facts.status !== "disabled") console.log("doctrine_facts", JSON.stringify(facts));
           } catch (e) { console.error("doctrine_facts_failed", e instanceof Error ? e.message : String(e)); }
+          // The news shadow's daily comparison (measurement phase B, owner 2026-11-17 "A dan B"): once a day after
+          // 21:00 UTC, two shadow-metered analyst readings; it feeds nothing.
+          try {
+            const cmp = await runNewsShadowCompare(env);
+            if (!["waiting", "done", "off"].includes(String(cmp.status))) console.log("news_shadow_compare", JSON.stringify(cmp));
+          } catch (e) { console.error("news_shadow_compare_failed", e instanceof Error ? e.message : String(e)); }
           // Sync live effective doctrine from Aether into KV cache for agent consumption
           try {
             const doc = await fetchEffectiveDoctrine(env, { force: true });
