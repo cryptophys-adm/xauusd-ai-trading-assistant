@@ -1206,7 +1206,25 @@ export default function Omega() {
                 <dd className="mono text-right text-slate-300">
                   {br.stops_level_points != null ? `${br.stops_level_points} pts` : "—"}
                 </dd>
+                <dt className="text-slate-500">Profit ccy / Contract</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.symbol_check?.currency_profit ?? "—"} / {br.symbol_check?.contract_size != null ? `${br.symbol_check.contract_size} oz` : "—"}
+                </dd>
+                <dt className="text-slate-500">Chart symbol</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.symbol_check?.chart_symbol ?? "—"}
+                  {br.symbol_check?.resolution?.status ? ` (${br.symbol_check.resolution.status})` : ""}
+                </dd>
               </dl>
+              {/* USD gold only (PR #405): a refused symbol opens nothing and is never silent. */}
+              {br.symbol_check ? (
+                <p
+                  className={`mt-1.5 text-[11px] ${br.symbol_check.ok ? "text-emerald-300" : "text-rose-300"}`}
+                  aria-label="Trade symbol check"
+                >
+                  {br.symbol_check.ok ? `Symbol verified: ${br.symbol_check.text}` : br.symbol_check.text}
+                </p>
+              ) : null}
             </div>
 
             {/* MT5 Navigator Tree (Ctrl+N) */}

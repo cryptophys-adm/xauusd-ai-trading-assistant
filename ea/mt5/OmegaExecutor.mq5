@@ -30,11 +30,11 @@
 //| How it is attached:                                              |
 //|   - Automatically via the [StartUp] section of                   |
 //|     terminal_gateway.ini managed by omega-bridge                 |
-//|     (Expert=OmegaExecutor, Symbol=XAUUSD, Period=M1), or         |
+//|     (Expert=OmegaExecutor, Symbol=<the server's gold>, Period=M1)|
 //|     manually on a chart profile when OMEGA_TAKE_STARTUP=false.   |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.13"
+#property version   "1.14"
 
 #include <Trade/Trade.mqh>
 
@@ -74,7 +74,7 @@ input bool   DynamicAtrStopEnabled  = true;  // Adaptive ATR-based SL+ and Trail
 input double AtrMultiplierTrigger   = 1.0;   // Break-even trigger multiplier of ATR (1.0 = 1x ATR)
 input double AtrMultiplierTrailing  = 1.5;   // Trailing distance multiplier of ATR (1.5 = 1.5x ATR)
 
-const string OMEGA_EXECUTOR_VERSION = "1.13"; // keep equal to #property version
+const string OMEGA_EXECUTOR_VERSION = "1.14"; // keep equal to #property version
 const string OMEGA_FOLDER    = "omega";
 const string STATE_TMP_PATH  = "omega/state.tmp";
 const string STATE_JSON_PATH = "omega/state.json";
@@ -102,76 +102,84 @@ datetime g_lastCalendarAt = 0;
 int      g_atrHandle = INVALID_HANDLE;
 
 //+------------------------------------------------------------------+
-//| Automatic Gold / XAUUSD symbol discovery across brokers          |
+//| USD gold symbol: exact names, checked contract, fail closed      |
 //+------------------------------------------------------------------+
-bool IsGoldSymbolName(const string name)
+// Owner 2026-11-17 (PR #405, "setuju"): the EA trades XAU priced in USD only. Until 1.13 any name starting
+// with GOLD or XAUUSD passed (GOLDEURO is gold priced in euro) and, with no such symbol priced, the EA fell
+// back to a symbol without a price or to the chart symbol. Since 1.14 a symbol counts only when:
+//   1. its name is one of GOLD_USD_SYMBOLS exactly (the same list as src/gold-symbol.mjs and the bridge);
+//   2. it exists, its profit currency is USD and its contract size is 1 to 100 troy ounces a lot;
+//   3. it is not disabled for trading and it has a price.
+// When none does, the EA trades nothing and opens nothing: state.json carries "symbol_error" with the reason,
+// the symbol block is empty, the corpus is not written, and every open intent is refused (closes and stop
+// changes on existing tickets still run).
+string GOLD_USD_SYMBOLS[] = {
+   "XAUUSD", "GOLD", "XAUUSD.m", "XAUUSDm",
+   "XAUUSD.s", "XAUUSD.v", "XAUUSD.pro", "XAUUSD.r",
+   "XAUUSD.ecn", "XAUUSDc", "XAUUSDz", "GOLD.m", "GOLDm"
+};
+const double GOLD_CONTRACT_SIZE_MIN = 1.0;
+const double GOLD_CONTRACT_SIZE_MAX = 100.0;
+string g_symbolError = "";
+
+bool IsAllowedGoldName(const string name)
   {
-   string up = name;
-   StringToUpper(up);
-   return (StringFind(up, "XAUUSD") == 0 || StringFind(up, "GOLD") == 0);
+   for(int i = 0; i < ArraySize(GOLD_USD_SYMBOLS); i++)
+      if(GOLD_USD_SYMBOLS[i] == name) return true;   // exact, case-sensitive: no prefix or substring match
+   return false;
   }
 
+// "" when `sym` is USD gold this EA may trade, else the reason it is refused.
+string GoldSymbolProblem(const string sym)
+  {
+   if(sym == "" || !IsAllowedGoldName(sym)) return "name_not_allowed";
+   if(!SymbolInfoInteger(sym, SYMBOL_EXIST)) return "not_on_server";
+   if(!SymbolInfoInteger(sym, SYMBOL_SELECT)) SymbolSelect(sym, true); // a price needs Market Watch
+   if(SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT) != "USD") return "profit_currency_not_usd";
+   double size = SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE);
+   if(size < GOLD_CONTRACT_SIZE_MIN || size > GOLD_CONTRACT_SIZE_MAX) return "contract_size_out_of_range";
+   if(SymbolInfoInteger(sym, SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_DISABLED) return "trade_disabled";
+   if(SymbolInfoDouble(sym, SYMBOL_BID) <= 0.0) return "no_price";
+   return "";
+  }
+
+// The USD gold symbol to trade, or "" (then g_symbolError says why). Never falls back to another symbol.
 string ResolveGoldSymbol()
   {
-   if(g_tradeSymbol != "" && SymbolInfoInteger(g_tradeSymbol, SYMBOL_EXIST))
-     {
-      SymbolSelect(g_tradeSymbol, true);
-      if(SymbolInfoDouble(g_tradeSymbol, SYMBOL_BID) > 0.0)
-         return g_tradeSymbol;
-     }
+   if(g_tradeSymbol != "" && GoldSymbolProblem(g_tradeSymbol) == "")
+      return g_tradeSymbol;
 
-   if(IsGoldSymbolName(_Symbol) && SymbolInfoInteger(_Symbol, SYMBOL_EXIST))
+   string lastProblem = "no_usd_gold_symbol";
+   // The chart symbol first (the bridge sets it per server), then the list in its order.
+   if(IsAllowedGoldName(_Symbol))
      {
-      SymbolSelect(_Symbol, true);
-      if(SymbolInfoDouble(_Symbol, SYMBOL_BID) > 0.0)
+      string p = GoldSymbolProblem(_Symbol);
+      if(p == "")
         {
          g_tradeSymbol = _Symbol;
+         g_symbolError = "";
          return g_tradeSymbol;
         }
+      lastProblem = _Symbol + ":" + p;
      }
-
-   string candidates[] = {
-      "XAUUSD", "XAUUSD.m", "XAUUSDm", "GOLD",
-      "XAUUSD.s", "XAUUSD.v", "XAUUSD.pro", "XAUUSD.r",
-      "XAUUSD.ecn", "XAUUSDc", "XAUUSDz", "GOLD.m", "GOLDm"
-   };
-   string firstExisting = "";
-   for(int i = 0; i < ArraySize(candidates); i++)
+   for(int i = 0; i < ArraySize(GOLD_USD_SYMBOLS); i++)
      {
-      string c = candidates[i];
-      if(SymbolInfoInteger(c, SYMBOL_EXIST))
+      string c = GOLD_USD_SYMBOLS[i];
+      if(c == _Symbol || !SymbolInfoInteger(c, SYMBOL_EXIST)) continue;
+      string p = GoldSymbolProblem(c);
+      if(p == "")
         {
-         SymbolSelect(c, true);
-         if(firstExisting == "") firstExisting = c;
-         if(SymbolInfoDouble(c, SYMBOL_BID) > 0.0)
-           {
-            g_tradeSymbol = c;
-            return g_tradeSymbol;
-           }
-        }
-     }
-
-   int total = SymbolsTotal(false);
-   for(int i = 0; i < total; i++)
-     {
-      string s = SymbolName(i, false);
-      if(!IsGoldSymbolName(s)) continue;
-      SymbolSelect(s, true);
-      if(firstExisting == "") firstExisting = s;
-      if(SymbolInfoDouble(s, SYMBOL_BID) > 0.0)
-        {
-         g_tradeSymbol = s;
+         g_tradeSymbol = c;
+         g_symbolError = "";
          return g_tradeSymbol;
         }
+      lastProblem = c + ":" + p;
      }
-
-   if(firstExisting != "")
-     {
-      g_tradeSymbol = firstExisting;
-      return g_tradeSymbol;
-     }
-   g_tradeSymbol = _Symbol;
-   return g_tradeSymbol;
+   if(g_tradeSymbol != "")
+      PrintFormat("OmegaExecutor: %s no longer passes the USD gold check (%s); trading stops", g_tradeSymbol, lastProblem);
+   g_tradeSymbol = "";
+   g_symbolError = "no_usd_gold_symbol (" + lastProblem + ")";
+   return "";
   }
 
 //+------------------------------------------------------------------+
@@ -563,6 +571,11 @@ void WriteStateJson()
    double atrValue = GetCurrentAtr(sym);
    int atrPoints = (point > 0.0 && atrValue > 0.0) ? (int)MathRound(atrValue / point) : 0;
 
+   // Since 1.14 (PR #405): the contract the server checks before any entry, and the EA's own refusal.
+   string profitCcy = sym != "" ? SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT) : "";
+   string baseCcy = sym != "" ? SymbolInfoString(sym, SYMBOL_CURRENCY_BASE) : "";
+   double contractSize = sym != "" ? SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE) : 0.0;
+
    string positionsJson = BuildPositionsJson();
    string ordersJson = BuildOrdersJson();
    string dealsJson = BuildDealsJson();
@@ -571,7 +584,8 @@ void WriteStateJson()
    string json = StringFormat(
       "{\"connected\":%s,\"server\":\"%s\","
       "\"account\":{\"trade_mode\":\"%s\",\"currency\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"day_start_balance\":%.2f,\"day_realized_pl\":%.2f},"
-      "\"symbol\":{\"name\":\"%s\",\"digits\":%d,\"point\":%s,\"tick_size\":%s,\"tick_value\":%s,\"volume_min\":%.4f,\"volume_max\":%.4f,\"volume_step\":%.4f,\"stops_level_points\":%d,\"bid\":%s,\"ask\":%s,\"spread_points\":%d,\"atr_value\":%.2f,\"atr_points\":%d},",
+      "\"symbol\":{\"name\":\"%s\",\"digits\":%d,\"point\":%s,\"tick_size\":%s,\"tick_value\":%s,\"volume_min\":%.4f,\"volume_max\":%.4f,\"volume_step\":%.4f,\"stops_level_points\":%d,\"bid\":%s,\"ask\":%s,\"spread_points\":%d,\"atr_value\":%.2f,\"atr_points\":%d,"
+      "\"chart\":\"%s\",\"currency_profit\":\"%s\",\"currency_base\":\"%s\",\"contract_size\":%.4f},",
       connected ? "true" : "false",
       server,
       tradeMode,
@@ -593,8 +607,14 @@ void WriteStateJson()
       DoubleToString(ask, digits),
       spreadPoints,
       atrValue,
-      atrPoints
+      atrPoints,
+      EscapeJson(_Symbol),
+      EscapeJson(profitCcy),
+      EscapeJson(baseCcy),
+      contractSize
    );
+   // No allowed USD gold symbol on this server: said, never hidden behind another symbol.
+   json += g_symbolError != "" ? StringFormat("\"symbol_error\":\"%s\",", EscapeJson(g_symbolError)) : "\"symbol_error\":null,";
    json += "\"positions\":" + positionsJson + ",";
    json += "\"orders\":" + ordersJson + ",";
    json += "\"deals\":" + dealsJson + ",";
@@ -636,6 +656,7 @@ void WriteCorpusJson()
   {
    if(!CorpusOracleEnabled) return;
    string sym = ResolveGoldSymbol();
+   if(sym == "") return; // no USD gold symbol: no broker bars for the local lane either
    datetime lastClosed = iTime(sym, PERIOD_M1, 1);
    if(lastClosed == 0 || lastClosed == g_lastCorpusBar) return;
    int n = (int)MathMax(10, MathMin(240, CorpusBars));
@@ -705,6 +726,7 @@ void WriteCorpusMacroJson()
   {
    if(!CorpusMacroEnabled) return;
    string gold = ResolveGoldSymbol();
+   if(gold == "") return;
    datetime lastClosed = iTime(gold, PERIOD_M1, 1);
    if(lastClosed == 0 || lastClosed == g_lastMacroBar) return;
    int n = (int)MathMax(10, MathMin(240, CorpusMacroBars));
@@ -805,6 +827,7 @@ void WriteCalendarJson()
 bool IsValidVolume(const double volume)
   {
    string sym = ResolveGoldSymbol();
+   if(sym == "") return false;
    double vmin = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
    double vmax = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
    double step = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
@@ -840,6 +863,12 @@ void ExecuteOpenIntent(const string id, const string side, const double volume, 
    if(side != "BUY" && side != "SELL")
      {
       AppendResult(id, false, 0, "invalid_side", nowMs);
+      return;
+     }
+   // Fail closed (PR #405): no allowed USD gold symbol, no order, whatever the intent says.
+   if(ResolveGoldSymbol() == "")
+     {
+      AppendResult(id, false, 0, "symbol_error", nowMs);
       return;
      }
    if(!IsValidVolume(volume))
@@ -1116,14 +1145,19 @@ int OnInit()
    FolderCreate(OMEGA_FOLDER, 0);
    LoadProcessedIds();
    string sym = ResolveGoldSymbol();
-   g_atrHandle = iATR(sym, PERIOD_M15, 14);
+   // Without a USD gold symbol the EA still starts: it reports symbol_error in state.json and trades nothing.
+   if(sym != "") g_atrHandle = iATR(sym, PERIOD_M15, 14);
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(SlippagePoints);
-   trade.SetTypeFillingBySymbol(sym);
+   if(sym != "") trade.SetTypeFillingBySymbol(sym);
    EventSetTimer(1);
    WriteStateJson();
    g_lastStateAt = TimeGMT();
-   PrintFormat("OmegaExecutor initialized on %s (chart=%s, magic=%I64d, dynamic_atr=%s)", sym, _Symbol, MagicNumber, DynamicAtrStopEnabled ? "true" : "false");
+   if(sym == "")
+      PrintFormat("OmegaExecutor %s: NO USD GOLD SYMBOL on %s (chart=%s): %s. Nothing will be traded.", OMEGA_EXECUTOR_VERSION, AccountInfoString(ACCOUNT_SERVER), _Symbol, g_symbolError);
+   else
+      PrintFormat("OmegaExecutor %s initialized on %s (chart=%s, profit=%s, contract=%.2f, magic=%I64d, dynamic_atr=%s)", OMEGA_EXECUTOR_VERSION, sym, _Symbol,
+                  SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT), SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE), MagicNumber, DynamicAtrStopEnabled ? "true" : "false");
    return INIT_SUCCEEDED;
   }
 

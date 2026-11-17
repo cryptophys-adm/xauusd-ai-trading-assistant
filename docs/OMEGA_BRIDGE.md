@@ -97,10 +97,58 @@ MT5's `[StartUp]` section in `/opt/mt5-ingestion-gateway/config/terminal_gateway
   ```ini
   [StartUp]
   Expert=OmegaExecutor
-  Symbol=XAUUSD
+  Symbol=<gold symbol of the selected server>
   Period=M1
+
+  [Charts]
+  ProfileLast=Omega
   ```
   and removes `ExpertParameters`. On this host, that **replaces** the `[StartUp]` entry for the `m1_ohlcv_ingest` EA.
+
+  **The chart symbol follows the selected server (2026-11-16).** A `[StartUp] Symbol` the server does not have
+  leaves the chart empty and OmegaExecutor never runs `OnInit` (no `state.json`): FxPro-MT5 Demo names gold
+  `GOLD`, Monex-Demo `XAUUSD.m`. The bridge tries, in order, the symbol already proven on that server
+  (`$OMEGA_STATE_DIR/symbols.json`), `OMEGA_SYMBOL`, then `XAUUSD`, `GOLD`, `XAUUSD.m`, `XAUUSDm` and the
+  other names on the USD gold list. After 120 s without an EA for the server the bridge sets the next name and
+  restarts the terminal (`symbol_trial_next`). The trial in progress is `$OMEGA_STATE_DIR/symbol-trial.json`;
+  the stale-state watchdog waits for it. If the applied server has no EA state for 120 s, no trial runs and no
+  symbol is proven, the bridge starts one from the ini's current symbol.
+
+  **USD gold only (owner 2026-11-17, PR #405; OmegaExecutor 1.14, omega-bridge 1.3.0).** One list of exact
+  names (`src/gold-symbol.mjs`, the EA's `GOLD_USD_SYMBOLS`, the bridge's `GOLD_SYMBOL_CANDIDATES`; a test keeps
+  them equal) and the contract checked at every layer:
+  - **EA:** a symbol is traded only when its name is on the list exactly (no prefix match: `GOLDEURO`, `GOLDgr`
+    and `XAUUSD_mini` never pass), its profit currency is `USD`, its contract size is 1 to 100 oz, it is not
+    disabled and it has a price. Otherwise the EA trades nothing: `state.json` carries `symbol_error`
+    (`no_usd_gold_symbol (<last name>:<reason>)`), every open intent gets the result `symbol_error`, the corpus
+    is not written. There is no fallback to a symbol without a price or to the chart symbol. Closes and stop
+    changes on existing tickets still run. `state.json` reports `symbol.chart`, `currency_profit`,
+    `currency_base` and `contract_size`.
+  - **Bridge:** a chart symbol is remembered for the server (`symbol_confirmed`) only when the EA trades a
+    symbol that passes the same check. An EA that runs but refuses (`symbol_refused`, logged once) is not
+    restarted: another chart name cannot help, the EA checks every listed name itself. When every name failed
+    the search ends `exhausted` (`symbol_trial_exhausted`); a login failure in the terminal log ends it
+    `stopped` (`symbol_trial_stopped`). Both are sticky: no more restarts for a symbol until the owner applies
+    the connection again. A proven symbol is never forgotten because the terminal is quiet; a server with one
+    starts on it with no trial. To clear it on purpose, delete the server's entry in
+    `$OMEGA_STATE_DIR/symbols.json` (or the file) and apply the connection again. Every sync carries
+    `bridge_symbol` (`status` confirmed | trial | exhausted | stopped | none, `chart_symbol`, `learned`, `tried`,
+    `error`).
+  - **Server:** `planIntents` opens nothing while the symbol is not verified (note `symbol_unverified`; an EA
+    older than 1.14 reports no contract and is never verified). Open positions keep their management. The
+    Omega page shows the check on the bridge card (`bridge.symbol_check`), `/api/health` reports
+    `bridge.symbol`, a change of symbol is the event `symbol_changed`, a refusal `symbol_refused`, an exhausted
+    or stopped search `bridge_symbol`, and the health alert `omega_symbol` says which symbol and why.
+
+  **Own chart profile.** MT5 saves every open chart into the current profile and adds the `[StartUp]` chart
+  again at each start: the shared `Default` profile had grown to ~70 charts, most on a symbol the next
+  server lacked. The bridge therefore selects the profile `Omega`, and the drop-in
+  `bridge/omega-bridge/mt5-terminal-omega-profile.conf` (installed as
+  `/etc/systemd/system/mt5-terminal.service.d/omega-profile.conf`) empties it before every terminal start.
+  It runs only when systemd starts or restarts the terminal, never while it runs, so it cannot remove the EA's
+  chart mid-session. The EA runs on its compiled input defaults (`ExpertParameters` is removed), so nothing it
+  needs lives in the profile; an input changed by hand on the chart is lost at the next restart. The drop-in
+  needs `WINEPREFIX` in `mt5-terminal.service` and fails the start with a clear message when it is empty.
 - **`OMEGA_TAKE_STARTUP=false`:** `omega-bridge` leaves `[StartUp]` untouched so `m1_ohlcv_ingest` remains the startup EA. In that mode, you must attach `OmegaExecutor` manually to an `XAUUSD` chart inside the MT5 chart profile (`Profile=1`) so both EAs run side by side in the same terminal.
 
 ---

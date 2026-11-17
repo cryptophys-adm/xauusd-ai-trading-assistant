@@ -18,6 +18,7 @@
 // Intent ids are deterministic and at most 31 characters (they become the MT5 order comment).
 
 import { confidenceTrend, parseConfidences } from "./agent-confidence.mjs";
+import { goldSymbolCheck } from "./gold-symbol.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
   enabled: false,
@@ -457,6 +458,9 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const decided = finite(signal.decided_ms) ? signal.decided_ms : issued;
   const closing = intents.filter((it) => it.kind === "close").length;
   const gates = [
+    // USD gold only (owner 2026-11-17, PR #405): a symbol off the list, not priced in USD, with an odd contract
+    // size or refused by the EA itself opens nothing. Open positions keep their management above.
+    [!goldSymbolCheck(sym, executor.symbol_error).ok, "symbol_unverified"],
     [!finite(issued) || !finite(signal.expires_ms), "bad_signal"],
     [now >= signal.expires_ms, "expired"],
     [now - decided > S.max_signal_age_ms, "signal_too_old"],

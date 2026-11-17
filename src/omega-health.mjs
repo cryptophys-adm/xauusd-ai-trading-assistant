@@ -8,6 +8,7 @@
 // A value nobody measured is null. No account figures (balance, equity, server), no controls: the RPC entrypoint
 // OmegaHealth exposes health() and nothing else.
 import { EA_HEARTBEAT_KEY, readControl } from "./ea-signal.mjs";
+import { goldSymbolCheck } from "./gold-symbol.mjs";
 
 export const OMEGA_HEALTH_SCHEMA = "omega-health.v1";
 /** Same thresholds as Omega's own page (ea-execution.mjs, omega-broker.mjs). */
@@ -83,6 +84,11 @@ async function bridgeBlock(env, now, row) {
     // The terminal state counts only while it is fresh and the owner's credentials are stored (as Omega shows it).
     terminal_connected: st && fresh && stored ? st.connected === true : null,
     trade_allowed: st && fresh && stored ? bool(st.trade_allowed) : null,
+    // The traded symbol, checked (PR #405): USD gold or no new entries.
+    symbol: st ? (() => {
+      const check = goldSymbolCheck(st.symbol, st.symbol_error);
+      return { name: str(st.symbol?.name, 32), chart: str(st.symbol?.chart, 32), currency_profit: str(st.symbol?.currency_profit, 8), contract_size: num(st.symbol?.contract_size), ok: check.ok, problem: check.problem, resolution: str(st.bridge_symbol?.status, 16) };
+    })() : null,
     terminal_state_age_ms: stateAge
   };
 }

@@ -9,7 +9,7 @@ import { planIntents, openRiskAtStops, isProtected, OMEGA_DEFAULTS } from "../sr
 
 const ISSUED = Date.parse("2026-11-12T00:15:00Z");
 const NOW = ISSUED + 4 * 60_000;
-const SYM = { name: "XAUUSD.m", digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 3980.0, ask: 3980.2, spread_points: 20 };
+const SYM = { name: "XAUUSD.m", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 3980.0, ask: 3980.2, spread_points: 20 };
 const SELL = { side: "SELL", action: "ENTER_MARKET", entry: 3980.02, stop: 3993.51, tp1: 3949.49, issued_ms: ISSUED, expires_ms: ISSUED + 900_000, blackout: false, kill: false, paused: false };
 const SETTINGS = { ...OMEGA_DEFAULTS, enabled: true, risk_pct: 2, max_positions: 2, max_daily_loss_pct: 2, adaptive_volatility: false };
 const executor = (account, positions = [], sym = SYM) => ({ connected: true, received_ms: NOW - 1000, account: { trade_mode: "demo", currency: "USD", day_start_balance: 1039.42, ...account }, symbol: sym, positions });

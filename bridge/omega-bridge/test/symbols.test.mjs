@@ -1,0 +1,270 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import {
+  GOLD_SYMBOL_CANDIDATES,
+  candidateSymbols,
+  forgetSymbol,
+  learnedSymbol,
+  stateSymbolProblem,
+  rememberSymbol,
+  readTrial,
+  writeTrial,
+} from "../src/symbols.mjs";
+import { applyCredentials, setStartupSymbol } from "../src/ini.mjs";
+import { createDaemon } from "../src/daemon.mjs";
+
+function tmp() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "omega-symbols-test-"));
+}
+
+test("symbols: candidate order and per-server memory", () => {
+  const dir = tmp();
+  try {
+    // Proven symbol first, then OMEGA_SYMBOL, then the common names without repeats.
+    assert.deepEqual(candidateSymbols({ learned: "GOLD", configured: "XAUUSD.m" }).slice(0, 4), ["GOLD", "XAUUSD.m", "XAUUSD", "XAUUSDm"]);
+    assert.deepEqual(candidateSymbols({ configured: "XAUUSD.m", exclude: ["XAUUSD.m", "XAUUSD"] }).slice(0, 2), ["GOLD", "XAUUSDm"]);
+    assert.ok(!candidateSymbols({ configured: "bad\nname" }).includes("bad\nname"));
+
+    const stateDir = path.join(dir, "state");
+    assert.equal(learnedSymbol(stateDir, "Monex-Demo"), null);
+    rememberSymbol(stateDir, "Monex-Demo", "XAUUSD.m");
+    rememberSymbol(stateDir, "FxPro-MT5 Demo", "GOLD");
+    assert.equal(learnedSymbol(stateDir, "monex-demo"), "XAUUSD.m");
+    assert.equal(learnedSymbol(stateDir, " FxPro-MT5 Demo "), "GOLD");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ini: setStartupSymbol changes only [StartUp] Symbol", () => {
+  const ini = "[Common]\r\nLogin=1\r\n[StartUp]\r\nExpert=OmegaExecutor\r\nSymbol=XAUUSD.m\r\nPeriod=M1\r\n";
+  assert.equal(setStartupSymbol(ini, "XAUUSD"), ini.replace("Symbol=XAUUSD.m", "Symbol=XAUUSD"));
+  assert.throws(() => setStartupSymbol(ini, "X\nY"));
+  const applied = applyCredentials("[StartUp]\nSymbol=XAUUSD.m\n", { server: "FxPro-MT5 Demo", login: "1", password: "p", takeStartup: true, symbol: "GOLD" });
+  assert.match(applied, /^Symbol=GOLD$/m);
+  assert.match(applied, /\[Charts\]\nProfileLast=Omega/);
+});
+
+function makeDaemon(dir, { nowRef, execCalls, logs, syncBodies = [] }) {
+  const stateDir = path.join(dir, "state");
+  const terminalDir = path.join(dir, "terminal");
+  const mt5FilesDir = path.join(terminalDir, "MQL5", "Files", "omega");
+  const terminalIni = path.join(dir, "terminal_gateway.ini");
+  fs.mkdirSync(mt5FilesDir, { recursive: true });
+  return {
+    stateDir,
+    terminalDir,
+    mt5FilesDir,
+    terminalIni,
+    daemon: createDaemon({
+      omegaUrl: "https://example.invalid/omega",
+      stateDir,
+      mt5FilesDir,
+      terminalDir,
+      terminalIni,
+      terminalService: "mt5-terminal.service",
+      takeStartup: true,
+      symbol: "XAUUSD.m",
+      symbolTrialMs: 1000,
+      now: () => nowRef.ms,
+      logs,
+      stdout: { write() {} },
+      exec: async (cmd, args) => { execCalls.push([cmd, ...args].join(" ")); },
+      fetch: async (_url, init) => { try { syncBodies.push(JSON.parse(init?.body ?? "null")); } catch { /* not JSON */ } return { status: 200, json: async () => ({ intents: [] }) }; },
+    }),
+  };
+}
+
+// A state.json of an EA 1.14 trading verified USD gold on `server`.
+const usdGold = (server, name) => ({ connected: true, server, symbol: { name, currency_profit: "USD", contract_size: 100 }, symbol_error: null });
+
+function setup(h, { server = "FxPro-MT5 Demo", symbol = "XAUUSD.m", trial = true, nowMs }) {
+  fs.mkdirSync(h.stateDir, { recursive: true });
+  fs.writeFileSync(path.join(h.stateDir, "applied.json"), JSON.stringify({ version: 57, server, applied_ms: nowMs }));
+  fs.writeFileSync(h.terminalIni, `[Common]\nServer=${server}\n[StartUp]\nExpert=OmegaExecutor\nSymbol=${symbol}\nPeriod=M1\n`);
+  if (trial) writeTrial(h.stateDir, { server, symbol, tried: [], started_ms: nowMs, status: "trial" });
+}
+
+test("symbols: stateSymbolProblem accepts USD gold only (exact name, USD profit, 1-100 oz, no symbol_error)", () => {
+  assert.equal(stateSymbolProblem(usdGold("S", "GOLD")), null);
+  assert.equal(stateSymbolProblem(usdGold("S", "XAUUSD.m")), null);
+  assert.equal(stateSymbolProblem({ ...usdGold("S", "GOLDEURO") }), "name_not_allowed");
+  assert.equal(stateSymbolProblem({ ...usdGold("S", "gold") }), "name_not_allowed", "case-sensitive, exact");
+  assert.equal(stateSymbolProblem({ ...usdGold("S", "XAUUSD_mini") }), "name_not_allowed", "no prefix match");
+  assert.equal(stateSymbolProblem({ server: "S", symbol: { name: "GOLD", currency_profit: "EUR", contract_size: 100 } }), "profit_currency_not_usd");
+  assert.equal(stateSymbolProblem({ server: "S", symbol: { name: "GOLD", currency_profit: "USD", contract_size: 1000 } }), "contract_size_out_of_range");
+  assert.equal(stateSymbolProblem({ server: "S", symbol: { name: "GOLD", currency_profit: "USD", contract_size: 0.5 } }), "contract_size_out_of_range");
+  assert.equal(stateSymbolProblem({ server: "S", symbol: { name: "GOLD" } }), "currency_not_reported", "an EA older than 1.14 never passes");
+  assert.equal(stateSymbolProblem({ server: "S", symbol: { name: "", currency_profit: "", contract_size: 0 }, symbol_error: "no_usd_gold_symbol (GOLDEURO:name_not_allowed)" }), "symbol_error:no_usd_gold_symbol (GOLDEURO:name_not_allowed)");
+  assert.ok(!GOLD_SYMBOL_CANDIDATES.some((n) => /EUR|AUD|GBP|JPY|CHF/i.test(n)));
+});
+
+test("daemon: a chart symbol the server lacks is replaced by the next candidate and the one that works is remembered", async () => {
+  const dir = tmp();
+  try {
+    const nowRef = { ms: 1794870000000 };
+    const execCalls = [];
+    const logs = [];
+    const h = makeDaemon(dir, { nowRef, execCalls, logs });
+    setup(h, { nowMs: nowRef.ms });
+
+    // Within the trial window: wait, no restart.
+    await h.daemon.tick();
+    assert.equal(execCalls.length, 0);
+
+    // No EA after the window: next candidate, terminal restarted once (FxPro has neither XAUUSD.m nor XAUUSD).
+    nowRef.ms += 1500;
+    await h.daemon.tick();
+    assert.deepEqual(execCalls, ["systemctl restart mt5-terminal.service"]);
+    assert.match(fs.readFileSync(h.terminalIni, "utf8"), /^Symbol=XAUUSD$/m);
+    assert.deepEqual(readTrial(h.stateDir).tried, ["XAUUSD.m"]);
+    nowRef.ms += 1500;
+    await h.daemon.tick();
+    assert.equal(execCalls.length, 2);
+    assert.match(fs.readFileSync(h.terminalIni, "utf8"), /^Symbol=GOLD$/m);
+
+    // A state.json of another server never confirms.
+    fs.writeFileSync(path.join(h.mt5FilesDir, "state.json"), JSON.stringify(usdGold("Monex-Demo", "XAUUSD.m")));
+    nowRef.ms += 100;
+    await h.daemon.tick();
+    assert.equal(readTrial(h.stateDir).symbol, "GOLD");
+
+    // The EA comes up for this server on verified USD gold: the symbol is remembered and the trial ends.
+    fs.writeFileSync(path.join(h.mt5FilesDir, "state.json"), JSON.stringify(usdGold("FxPro-MT5 Demo", "GOLD")));
+    nowRef.ms += 100;
+    await h.daemon.tick();
+    assert.equal(readTrial(h.stateDir), null);
+    assert.equal(learnedSymbol(h.stateDir, "FxPro-MT5 Demo"), "GOLD");
+    assert.ok(logs.some((l) => l.includes('"symbol_confirmed"')));
+    assert.equal(execCalls.length, 2);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("daemon: a GOLDEURO-only server is refused: never remembered, no restart loop, the refusal is reported", async () => {
+  const dir = tmp();
+  try {
+    const nowRef = { ms: 1794870000000 };
+    const execCalls = [];
+    const logs = [];
+    const syncBodies = [];
+    const h = makeDaemon(dir, { nowRef, execCalls, logs, syncBodies });
+    setup(h, { server: "Euro-Demo", symbol: "XAUUSD", nowMs: nowRef.ms });
+    // OmegaExecutor 1.14 runs on the chart but finds no allowed USD gold symbol: it trades nothing and says why.
+    fs.writeFileSync(path.join(h.mt5FilesDir, "state.json"), JSON.stringify({ connected: true, server: "Euro-Demo", symbol: { name: "", currency_profit: "", contract_size: 0 }, symbol_error: "no_usd_gold_symbol (XAUUSD:profit_currency_not_usd)" }));
+    for (let i = 0; i < 5; i++) { nowRef.ms += 1500; await h.daemon.tick(); }
+    assert.equal(learnedSymbol(h.stateDir, "Euro-Demo"), null, "never remembered");
+    assert.equal(execCalls.length, 0, "no restart: another chart name cannot help, the EA checks every listed name");
+    assert.equal(logs.filter((l) => l.includes('"symbol_refused"')).length, 1, "logged once");
+    const last = syncBodies.at(-1);
+    assert.equal(last.bridge_symbol.status, "none");
+    assert.match(last.bridge_symbol.error, /symbol_error:no_usd_gold_symbol/);
+
+    // An EA that reports GOLDEURO as its trade symbol (an old build) is refused the same way.
+    fs.writeFileSync(path.join(h.mt5FilesDir, "state.json"), JSON.stringify({ connected: true, server: "Euro-Demo", symbol: { name: "GOLDEURO", currency_profit: "EUR", contract_size: 100 } }));
+    nowRef.ms += 1500;
+    await h.daemon.tick();
+    assert.equal(learnedSymbol(h.stateDir, "Euro-Demo"), null);
+    assert.equal(execCalls.length, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("daemon: when every name fails the search ends exhausted and stays there (no endless restarts)", async () => {
+  const dir = tmp();
+  try {
+    const nowRef = { ms: 1794870000000 };
+    const execCalls = [];
+    const logs = [];
+    const syncBodies = [];
+    const h = makeDaemon(dir, { nowRef, execCalls, logs, syncBodies });
+    setup(h, { server: "NoGold-Demo", symbol: "XAUUSD.m", nowMs: nowRef.ms });
+    for (let i = 0; i < 40; i++) { nowRef.ms += 1500; await h.daemon.tick(); }
+    const n = GOLD_SYMBOL_CANDIDATES.length;
+    assert.equal(execCalls.length, n - 1, "each listed name tried once");
+    assert.equal(readTrial(h.stateDir).status, "exhausted");
+    assert.equal(logs.filter((l) => l.includes('"symbol_trial_exhausted"')).length, 1);
+    // Much later: still no restart, still exhausted, reported to Omega.
+    for (let i = 0; i < 20; i++) { nowRef.ms += 60_000; await h.daemon.tick(); }
+    assert.equal(execCalls.length, n - 1);
+    assert.equal(readTrial(h.stateDir).status, "exhausted");
+    assert.equal(syncBodies.at(-1).bridge_symbol.status, "exhausted");
+    assert.equal(syncBodies.at(-1).bridge_symbol.tried.length, n);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("daemon: a proven symbol is never forgotten or cycled away while the terminal is quiet", async () => {
+  const dir = tmp();
+  try {
+    const nowRef = { ms: 1794870000000 };
+    const execCalls = [];
+    const logs = [];
+    const h = makeDaemon(dir, { nowRef, execCalls, logs });
+    setup(h, { symbol: "GOLD", trial: false, nowMs: nowRef.ms });
+    rememberSymbol(h.stateDir, "FxPro-MT5 Demo", "GOLD");
+    // No EA state for a long time (maintenance, a slow start): no trial, no restart for a symbol, no forgetting.
+    for (let i = 0; i < 10; i++) { nowRef.ms += 1500; await h.daemon.tick(); }
+    assert.equal(learnedSymbol(h.stateDir, "FxPro-MT5 Demo"), "GOLD");
+    assert.equal(readTrial(h.stateDir), null);
+    assert.ok(!logs.some((l) => l.includes('"symbol_trial_')));
+    assert.match(fs.readFileSync(h.terminalIni, "utf8"), /^Symbol=GOLD$/m);
+    // An explicit reset clears it.
+    forgetSymbol(h.stateDir, "FxPro-MT5 Demo");
+    assert.equal(learnedSymbol(h.stateDir, "FxPro-MT5 Demo"), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("daemon: a login failure stops the symbol trial, and it stays stopped instead of cycling symbols", async () => {
+  const dir = tmp();
+  try {
+    const nowRef = { ms: 1794870000000 };
+    const execCalls = [];
+    const logs = [];
+    const h = makeDaemon(dir, { nowRef, execCalls, logs });
+    setup(h, { symbol: "XAUUSD", nowMs: nowRef.ms });
+    const logsDir = path.join(h.terminalDir, "logs");
+    fs.mkdirSync(logsDir, { recursive: true });
+    fs.writeFileSync(path.join(logsDir, "20261116.log"), Buffer.from("AB\t0\t23:15:05.933\tNetwork\t'1': authorization on FxPro-MT5 Demo failed (Invalid account)\r\n", "utf16le"));
+
+    nowRef.ms += 1500;
+    await h.daemon.tick();
+    assert.equal(execCalls.length, 0);
+    assert.equal(readTrial(h.stateDir).status, "stopped");
+    assert.ok(logs.some((l) => l.includes('"symbol_trial_stopped"')));
+    for (let i = 0; i < 10; i++) { nowRef.ms += 1500; await h.daemon.tick(); }
+    assert.equal(execCalls.length, 0, "no new trial and no restart while stopped");
+    assert.equal(logs.filter((l) => l.includes('"symbol_trial_stopped"')).length, 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("daemon: no EA state for the applied server and no trial starts a trial from the ini symbol", async () => {
+  const dir = tmp();
+  try {
+    const nowRef = { ms: 1794870000000 };
+    const execCalls = [];
+    const logs = [];
+    const h = makeDaemon(dir, { nowRef, execCalls, logs });
+    setup(h, { symbol: "XAUUSD.m", trial: false, nowMs: nowRef.ms });
+
+    await h.daemon.tick(); // first sighting of the missing state
+    nowRef.ms += 1500;
+    await h.daemon.tick(); // trial starts from XAUUSD.m, already past its window: moves on
+    assert.ok(logs.some((l) => l.includes('"symbol_trial_started"')));
+    assert.deepEqual(execCalls, ["systemctl restart mt5-terminal.service"]);
+    assert.match(fs.readFileSync(h.terminalIni, "utf8"), /^Symbol=XAUUSD$/m);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

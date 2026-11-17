@@ -1811,7 +1811,7 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   async bridgeKey(): Promise<JsonObject | null> {
     return bridgeKey(this.env) as Promise<JsonObject | null>;
   }
-  async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown; corpusMacro?: unknown; calendar?: unknown }): Promise<JsonObject> {
+  async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown; corpusMacro?: unknown; calendar?: unknown; bridgeSymbol?: unknown }): Promise<JsonObject> {
     const result = await bridgeSync(this.env, input ?? {}) as JsonObject;
     // The bridge gets its answer at once; the open Omega pages get the new state after it.
     if (result?.ok !== false) this.ctx.waitUntil(publishOmegaOverview(this.env, input?.state ?? null));

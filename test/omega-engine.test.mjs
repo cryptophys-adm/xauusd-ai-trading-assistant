@@ -8,7 +8,7 @@ const SIGNAL = { side: "BUY", action: "ENTER_MARKET", entry: 4100, stop: 4095, t
 const EXECUTOR = {
   connected: true, received_ms: NOW - 2_000,
   account: { trade_mode: "demo", currency: "USD", balance: 10_000, equity: 10_000, day_start_balance: 10_000, day_realized_pl: 0 },
-  symbol: { name: "XAUUSD", digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 },
+  symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 },
   positions: []
 };
 const ON = { ...OMEGA_DEFAULTS, enabled: true };

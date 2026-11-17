@@ -100,7 +100,7 @@ test("the bridge sync takes the corpus and answers the cursor; without it, the s
   resetOmegaBrokerSchemaForTests(); resetCorpusSchemaCacheForTests();
   const m = new Map();
   const env = { DB: d1(), SIGNAL_CACHE: { get: async (k) => m.get(k) ?? null, put: async (k, v) => { m.set(k, v); } }, OMEGA_ENGINE_ENABLED: "false", CORPUS_ORACLE_MODE: "shadow" };
-  const STATE = { connected: true, server: "Monex-Live", received_ms: NOW - 1000, account: { trade_mode: "demo", currency: "USD", balance: 1, equity: 1, day_start_balance: 1, day_realized_pl: 0 }, symbol: { name: "XAUUSD", digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 }, positions: [] };
+  const STATE = { connected: true, server: "Monex-Live", received_ms: NOW - 1000, account: { trade_mode: "demo", currency: "USD", balance: 1, equity: 1, day_start_balance: 1, day_realized_pl: 0 }, symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 }, positions: [] };
   const args = { state: STATE, results: [], publicKey: "A".repeat(64), kid: "0123456789abcdef", bridgeVersion: "1.0.0" };
   const plain = await bridgeSync(env, args, { now: NOW, signal: null });
   assert.equal(plain.ok, true);

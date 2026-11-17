@@ -46,7 +46,7 @@ const NOW = CLOSE + 2 * M5 + 80_000;
 const EXECUTOR = {
   connected: true, received_ms: NOW - 2000,
   account: { trade_mode: "demo", currency: "USD", balance: 10_000, equity: 10_000, day_start_balance: 10_000, day_realized_pl: 0 },
-  symbol: { name: "XAUUSD", digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4007, ask: 4007.2, spread_points: 20, atr_value: 6 },
+  symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4007, ask: 4007.2, spread_points: 20, atr_value: 6 },
   positions: []
 };
 const SIGNAL = { side: "BUY", action: "ENTER_MARKET", entry: 4005, stop: 3995, tp1: 4025, issued_ms: ISSUED, expires_ms: ISSUED + 15 * 60_000, decided_ms: CLOSE + 2 * M5, blackout: false, kill: false, paused: false, trigger_source: "broker_5m" };

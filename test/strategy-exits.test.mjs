@@ -8,7 +8,7 @@ import { planIntents, strategyExits, manageIntents, OMEGA_DEFAULTS, POWER_FRESH_
 const NOW = Date.parse("2026-11-16T10:20:00Z");
 const POWER_MS = Date.parse("2026-11-16T10:15:00Z");
 const BAR = Math.floor(POWER_MS / 60_000);
-const SYM = { name: "XAUUSD.m", digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 3920, ask: 3920.2, spread_points: 20 };
+const SYM = { name: "XAUUSD.m", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 3920, ask: 3920.2, spread_points: 20 };
 const SIGNAL = { side: "NONE", strategy_execution: true, power: 0.3, power_ms: POWER_MS, agent_conf: "sweep_reversal:0.7:0.3,zone_pullback:0.6:0.4", agent_conf_prev: "sweep_reversal:0.7:0.3,zone_pullback:0.6:0.4" };
 const WIN_LONG = { ticket: 7, side: "BUY", volume: 0.01, open_price: 3900, sl: 3890, tp: 3925, source: "omega", magic: 920200, intent_id: "open:1:BUY" };
 const LOSE_LONG = { ...WIN_LONG, ticket: 8, open_price: 3930, sl: 3910, tp: 3960, intent_id: "open:2:BUY" };
