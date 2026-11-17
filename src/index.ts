@@ -1835,7 +1835,7 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     const result = await setFeedFallback(this.env, input ?? {}) as JsonObject;
     if (result.ok === true && result.changed === true) {
       const on = result.mode === "auto";
-      const text = `XAUUSD SYSTEM · MT5 fallback switched ${on ? "ON" : "OFF"} by the owner (${String(input?.reason ?? "").slice(0, 160)}). ${on ? "While TradingView is down, prices come from the broker's MT5 bars and decisions trade on them." : "While TradingView is down, prices stop and decisions hold WAIT."}`;
+      const text = `XAUUSD SYSTEM · MT5 fallback switched ${on ? "ON" : "OFF"} by the owner (${String(input?.reason ?? "").slice(0, 160)}). ${on ? "Whenever TradingView sends no bars (its quota used up, a pause or an outage), prices come from the broker's MT5 bars and decisions trade on them." : "Whenever TradingView sends no bars (its quota used up, a pause or an outage), prices stop and decisions hold WAIT."}`;
       try { await sendTelegram(this.env, text); } catch (e) { console.error("feed_fallback_telegram_failed", e instanceof Error ? e.message : String(e)); }
     }
     return result;

@@ -62,6 +62,8 @@ export async function readFeedFallback(env, { now = Date.now() } = {}) {
     mode: sw?.mode ?? "auto", mode_source: sw ? "owner" : "default",
     set_at: sw?.at ?? null, set_by: sw?.actor ?? null, reason: sw?.reason ?? null,
     active: since !== null, active_since: since !== null ? new Date(since).toISOString() : null,
+    // Why the fallback runs and when TradingView is expected back (2026-11-17), only while it runs.
+    cause: since !== null ? await readFallbackCause(env, { now }) : null,
     corpus, events
   };
 }
@@ -83,4 +85,49 @@ export async function setFeedFallback(env, { mode, reason = "", actor = "" } = {
     console.error("feed_fallback_audit_failed", error instanceof Error ? error.message : String(error));
   }
   return { ok: true, mode, previous_mode: previous, changed: previous !== mode, at: record.at };
+}
+
+// ---------------------------------------------------------------- why the fallback runs (2026-11-17)
+// Owner 2026-11-17 ("setuju perbaikan alert dan kuota", relayed): the fallback alert said "TradingView is down"
+// when the account's TradingView quota had run out (2026-11-16 23:45 UTC, back at 00:00). The cause comes from
+// the gateway (its quota cooldown and reason, OAuth) and the pull adapter's last refresh; "down" is kept for a
+// real outage or error. Each cause says when TradingView is expected back when that is known.
+const LAST_REFRESH_KEY = "market-data:v2:last-refresh";
+const nextUtcMidnight = (ms) => { const d = new Date(ms); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1); };
+const OUTAGE_STATUSES = new Set(["gateway_unavailable", "gateway_request_failed", "gateway_error", "gateway_not_configured", "partial", "mcp_timeout", "mcp_error"]);
+
+/**
+ * Pure: { code, text, back_at } for the gateway's status `gw` (NEWS_INGESTION.gatewayStatus) and the pull
+ * adapter's last refresh `pull` ({ status, quota_cooldown_until }). code is quota | rate_limited | paused |
+ * chart_budget | oauth | outage | answering | unknown; back_at an ISO time or null.
+ */
+export function fallbackCause({ gw = null, pull = null, now = Date.now() } = {}) {
+  const until = Date.parse(gw?.cooldown_until ?? pull?.quota_cooldown_until ?? "");
+  const iso = (ms) => new Date(ms).toISOString();
+  if (Number.isFinite(until) && until > now) {
+    const reason = gw?.cooldown_reason ?? null;
+    if (reason === "provider_rate_limited") return { code: "rate_limited", text: "TradingView rate-limited the gateway", back_at: iso(until) };
+    if (reason && reason !== "provider_quota_exceeded") return { code: "paused", text: `the TradingView gateway is paused (${String(reason).replace(/_/g, " ")})`, back_at: iso(until) };
+    return { code: "quota", text: "the TradingView quota is used up", back_at: iso(until) };
+  }
+  if (pull?.status === "daily_budget_exhausted") return { code: "chart_budget", text: "the chart's daily TradingView budget is used up", back_at: iso(nextUtcMidnight(now)) };
+  if (pull?.status === "mcp_quota_exceeded" || pull?.status === "mcp_quota_cooldown_active") return { code: "quota", text: "the TradingView quota is used up", back_at: iso(nextUtcMidnight(now)) };
+  if (gw && gw.oauth_authorized === false) return { code: "oauth", text: "the TradingView gateway is not authorized (OAuth); the owner signs in again", back_at: null };
+  if (pull && OUTAGE_STATUSES.has(pull.status)) return { code: "outage", text: "TradingView is down or not answering", back_at: null };
+  if (pull?.status === "ok" || pull?.status === "up_to_date") return { code: "answering", text: "TradingView answers again; its bars are replacing the broker's", back_at: null };
+  return { code: "unknown", text: "TradingView sends no new bars", back_at: null };
+}
+
+/** The fallback's cause from the gateway and the pull adapter's last refresh. Never throws. */
+export async function readFallbackCause(env, { now = Date.now() } = {}) {
+  let gw = null, pull = null;
+  try { gw = typeof env?.NEWS_INGESTION?.gatewayStatus === "function" ? await env.NEWS_INGESTION.gatewayStatus() : null; } catch { gw = null; }
+  try { pull = JSON.parse((await env?.SIGNAL_CACHE?.get?.(LAST_REFRESH_KEY)) || "null"); } catch { pull = null; }
+  return fallbackCause({ gw, pull, now });
+}
+
+/** Pure: "fxpro-mt5 demo GOLD" from a corpus source "mt5:fxpro-mt5 demo:GOLD"; null when unknown. */
+export function fallbackSourceLabel(source) {
+  const m = /^mt5:(.+):([^:]+)$/.exec(String(source ?? ""));
+  return m ? `${m[1]} ${m[2]}` : null;
 }
