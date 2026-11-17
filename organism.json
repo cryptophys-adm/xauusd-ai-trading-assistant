@@ -197,6 +197,9 @@
           "task": "position_council"
         },
         {
+          "task": "strategy_council"
+        },
+        {
           "task": "metric_rebuttal"
         },
         {

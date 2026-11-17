@@ -331,3 +331,19 @@ test("the strategy arm route is owner only once OWNER_ACCESS_SUB is set (RFC §1
   assert.equal((await handle(req("/api/strategy-arm", { token: owner }), locked, opts)).status, 200);
   assert.deepEqual(views.at(-1), { viewer: "owner@example.com", viewer_sub: "owner-sub-0001" });
 });
+
+test("the council toggle and unpin are owner only (owner 2026-11-17); refused without OWNER_ACCESS_SUB", async () => {
+  resetKeyCacheForTests();
+  const calls = [];
+  const O = { ...omega(), setCouncilAuto: async (i) => { calls.push(["auto", i]); return { ok: true }; }, unpinStrategy: async (i) => { calls.push(["unpin", i]); return { ok: true }; } };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const owner = await jwt({ email: "Owner@Example.com", sub: "owner-sub-0001" }), other = await jwt({ email: "g@example.com", sub: "guest-sub-0002" });
+  const env = { ...ENV_BASE, OMEGA: O, OWNER_ACCESS_SUB: "owner-sub-0001" };
+  const post = (path, token, body, e = env) => handle(req(path, { token, method: "POST", body }), e, opts);
+  assert.equal((await post("/api/strategy-council", other, { auto: true })).status, 403);
+  assert.equal((await post("/api/strategy-council", owner, { auto: "yes" })).status, 400);
+  assert.equal((await post("/api/strategy-council", owner, { auto: true })).status, 200);
+  assert.equal((await post("/api/strategy-arm/unpin", owner, { strategy_id: "range_fade" })).status, 200);
+  assert.equal((await post("/api/strategy-arm/unpin", owner, { strategy_id: "range_fade" }, { ...ENV_BASE, OMEGA: O })).status, 403, "no owner configured: nobody");
+  assert.deepEqual(calls.map(([k, i]) => [k, i.on ?? i.strategy_id, i.actor_sub]), [["auto", true, "owner-sub-0001"], ["unpin", "range_fade", "owner-sub-0001"]]);
+});

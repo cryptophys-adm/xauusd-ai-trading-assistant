@@ -25,7 +25,7 @@ const armText = (id?: string) => { const m = /^e([\d.]+)@s([\d.]+)$/.exec(String
  * The strategy arm (owner 2026-11-17, ADR-0020): one click arms or disarms a live strategy, at most 3. While none is
  * armed the mode is AUTO: each entry is the one best strategy by confidence × confluence. The server checks the rest.
  */
-type ArmState = { mode?: string; selection?: string; max?: number; state?: { version: number; ids: string[]; armed_count: number }; allowed?: string[]; blocked?: string | null; error?: string; can_arm?: boolean } | null;
+type ArmState = { mode?: string; selection?: string; max?: number; state?: { version: number; ids: string[]; armed_count: number }; allowed?: string[]; blocked?: string | null; error?: string; can_arm?: boolean; council?: { ceiling?: string; auto?: boolean; acting?: boolean; pins?: { id: string; by: string; at: string; action: string }[] } } | null;
 function ArmButton({ id, arm, onDone }: { id: string; arm: ArmState; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -76,6 +76,52 @@ function RecoLine({ card }: { card: any }) {
   );
 }
 
+const ownerPost = async (path: string, body: unknown) => {
+  const r = await fetch(path, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d?.ok === false) throw new Error(d?.error || `HTTP ${r.status}`);
+  return d;
+};
+/** The strategy council's daily verdict (walk-forward and proposal), deterministic gate, read-only. */
+function VerdictLine({ v }: { v: any }) {
+  if (!v) return null;
+  const wf = v.walk_forward ?? {};
+  const tone: "green" | "red" | "slate" = wf.status === "pass" ? "green" : wf.status === "fail" ? "red" : "slate";
+  return (
+    <div className="mt-1 text-[10.5px] text-slate-400" title={`walk-forward: ${wf.n} setups, mean ${wf.mean_r}R, bootstrap low ${wf.low}, latest ${wf.holdout_n}: ${wf.holdout_mean_r}R${v.live_mean_r != null ? ` · live last 10: ${v.live_mean_r}R` : ""}`}>
+      <Badge tone={tone}>walk-forward {wf.status}</Badge> <span>Council: <span className="text-slate-200">{v.proposal}</span>{v.reason ? ` · ${v.reason}` : ""}{v.applied ? ` · ${v.applied}` : ""}</span>
+    </div>
+  );
+}
+/** A strategy the owner armed or disarmed by hand is pinned against the council until the owner unpins it. */
+function PinLine({ id, arm, onDone }: { id: string; arm: ArmState; onDone: () => void }) {
+  const pin = arm?.council?.pins?.find((p) => p.id === id);
+  if (!pin || arm?.can_arm === false) return null;
+  return (
+    <div className="mt-1 flex items-center gap-2 text-[10.5px] text-slate-400">
+      <span>Pinned by your {pin.action || "click"}: the council leaves it.</span>
+      <button type="button" className="rounded px-1.5 py-0.5 ring-1 ring-slate-500/40 hover:bg-slate-700/50" onClick={async () => { try { await ownerPost("/omega/api/strategy-arm/unpin", { strategy_id: id }); } finally { onDone(); } }}>Unpin</button>
+    </div>
+  );
+}
+/** The owner's "Council auto-arm" toggle; off until the platform allows it (ADR-0020 Amendment 2). */
+function CouncilToggle({ arm, onDone }: { arm: ArmState; onDone: () => void }) {
+  const [err, setErr] = useState<string | null>(null);
+  const c = arm?.council;
+  if (!c || arm?.can_arm === false) return null;
+  const allowed = c.ceiling === "allowed";
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+      <span>Council auto-arm:</span>
+      <button type="button" disabled={!allowed && !c.auto} title={allowed ? "When on, the strategy council arms and disarms by itself within its guards; your manual clicks pin a strategy" : "Waiting for the platform's approval (ADR-0020 Amendment 2)"}
+        onClick={async () => { setErr(null); try { await ownerPost("/omega/api/strategy-council", { auto: !c.auto }); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { onDone(); } }}
+        className={`rounded-md px-2 py-0.5 font-semibold ring-1 ${c.auto ? "bg-emerald-500/20 text-emerald-200 ring-emerald-400/40" : "bg-slate-700/60 text-slate-200 ring-slate-500/40"} disabled:opacity-40`}>{c.auto ? "On" : "Off"}</button>
+      <span>{c.acting ? "the council arms and disarms within its guards" : allowed ? "proposals only" : "proposals only · waiting for the platform's approval"}</span>
+      {err ? <span className="text-rose-300">{err}</span> : null}
+    </div>
+  );
+}
+
 /** The registry: one card per agent with its status, what it is made for and its measured record. */
 function Registry({ agents, chosen, arm, reload }: { agents: any[]; chosen: string | null; arm: ArmState; reload: () => void }) {
   return (
@@ -105,7 +151,9 @@ function Registry({ agents, chosen, arm, reload }: { agents: any[]; chosen: stri
               </div>
             ) : <div className="mt-3 text-[11px] text-slate-500">No resolved setup yet.</div>}
             <RecoLine card={a.card} />
+            <VerdictLine v={a.verdicts} />
             <ArmButton id={a.id} arm={arm} onDone={reload} />
+            <PinLine id={a.id} arm={arm} onDone={reload} />
           </div>
         );
       })}
@@ -261,6 +309,7 @@ export default function Strategy() {
       <Panel title="Strategy agents" icon={<Puzzle className="h-3.5 w-3.5 text-cyan-300" />}
         hint="Each agent is one way of trading price action. The council picks the side; a live agent may be chosen for the plan, a shadow agent is recorded and measured only. A live agent with a negative record over 30 setups is suspended until its record recovers."
         right={s ? <span className="flex items-center gap-1.5">{arm && !arm.error && arm.mode !== "off" ? <span title={armIds.length ? `Only the armed strategies open positions: ${armIds.join(", ")}` : "No strategy armed: each entry is the one best strategy by confidence × confluence"}><Badge tone={armIds.length ? "green" : "cyan"}>{armIds.length ? `ARMED ${armIds.length}/${arm.max ?? 3}` : "AUTO · best of all"}</Badge></span> : null}<Badge tone="slate">{agents.filter((a) => a.status === "live").length} live · {agents.filter((a) => a.status === "shadow" && !a.suspended).length} shadow{agents.some((a) => a.suspended) ? ` · ${agents.filter((a) => a.suspended).length} suspended` : ""}</Badge></span> : null}>
+        <CouncilToggle arm={arm} onDone={() => setArmTick((t) => t + 1)} />
         {loading ? <Skeleton rows={4} /> : agentsPoll.error && !s ? <Empty>Unavailable ({agentsPoll.error}).</Empty> : <Registry agents={agents} chosen={latest?.stance && latest.stance !== "WAIT" ? latest.chosen : null} arm={arm} reload={() => setArmTick((t) => t + 1)} />}
       </Panel>
 
