@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { seedEnv, seedTrades } from "./support/cfc-fixtures.mjs";
-import { startSession, ownerMessage, closeSession, reopenSession, runSessionStep, readSession, listSessions, setSessionsSwitch, sessionsEnabled, cleanSeat, cleanOptions, slugOf, resetSessionSchemaForTests, SESSION_LIMITS } from "../src/cfc-session.mjs";
+import { startSession, ownerMessage, closeSession, reopenSession, acceptOption, retryProposalHandoffs, listProposals, proposalReport, packForPrompt, runSessionStep, readSession, listSessions, setSessionsSwitch, sessionsEnabled, cleanSeat, cleanOptions, slugOf, resetSessionSchemaForTests, SESSION_LIMITS } from "../src/cfc-session.mjs";
 import { resetAiUsageSchemaCacheForTests } from "../src/ai-usage.mjs";
 
 async function setup(over = {}) {
@@ -172,4 +172,56 @@ test("CS8. a message to a session that ran on no evidence is refused with the of
   const s = await readSession(env, session_id);
   assert.equal(s.pack_stale, true); assert.equal(s.pack_refs, 0);
   assert.equal(s.messages.filter((x) => x.round === "owner").length, 0, "nothing stored, no call queued");
+});
+
+test("CS9. the pack as the seats read it: a fair share per section and citable refs from every source; a ref without its @as_of still counts", () => {
+  const pack = { sections: { a: { big: "x".repeat(20000) }, b: { small: 1 }, c: { small: 2 } },
+    refs: ["ev:xauusd/engine_decisions/1#stance", "ev:xauusd/engine_decisions/2#stance", "ev:xauusd/plan_setups/9#results_json", "ev:xauusd/signal_ledger/d:1@2026-11-17T15:08:07Z"] };
+  const { text, citable } = packForPrompt(pack, { chars: 3000 });
+  assert.ok(text.includes('"b": {"small":1}') && text.includes('"c": {"small":2}'), "a big section no longer crowds out the others");
+  assert.ok(text.length < 3500);
+  assert.deepEqual(citable.slice(0, 3), ["ev:xauusd/engine_decisions/1#stance", "ev:xauusd/plan_setups/9#results_json", "ev:xauusd/signal_ledger/d:1@2026-11-17T15:08:07Z"], "one from each source first");
+  const m = cleanSeat({ stance: "amend", opinion: "I think so", refs: ["ev:xauusd/signal_ledger/d:1", "ev:xauusd/made/up", "ev:xauusd/engine_decisions/2#stance"] }, pack.refs);
+  assert.deepEqual(m.refs, ["ev:xauusd/signal_ledger/d:1@2026-11-17T15:08:07Z", "ev:xauusd/engine_decisions/2#stance"]);
+});
+
+test("CS10. typed options: a knob change only within the registry's bounds, anything else is code for the platform; Accept stores the proposal, decides the session and hands it to the platform (retried)", async () => {
+  const opts = cleanOptions({ summary: "s", options: [
+    { option_id: "rrr", kind: "policy_parameter", title: "Ask more reward intraday", hypothesis: "h", change: "c", risk: "r", knob: "decision.min_rrr.intraday", value: 1.83 },
+    { option_id: "atr", kind: "policy_parameter", title: "ATR filter", hypothesis: "h", change: "add a 15m ATR filter", risk: "r", knob: "atr.filter", value: 2 },
+    { option_id: "far", kind: "policy_parameter", title: "Too far", hypothesis: "h", change: "c", risk: "r", knob: "strategy.near_atr", value: 0.9 },
+    { option_id: "code", kind: "repository_task", title: "New agent", hypothesis: "h", change: "c", risk: "r", spec: "build a momentum agent" }] }).options;
+  assert.deepEqual(opts.map((o) => [o.option_id, o.kind]), [["rrr", "policy_parameter"], ["atr", "repository_task"], ["far", "repository_task"], ["code", "repository_task"], ["no_change", "no_change"]]);
+  assert.deepEqual([opts[0].knob, opts[0].from, opts[0].value], ["decision.min_rrr.intraday", 1.5, 1.8], "rounded to the knob's step");
+  assert.match(opts[1].spec, /not a valid knob change: unknown knob/);
+  assert.match(opts[2].spec, /must stay within 0.2 to 0.6/);
+
+  const env = await setup();
+  await setSessionsSwitch(env, { on: true });
+  const { session_id } = await startSession(env, { topic_key: "strategy:zone_pullback:exits", enqueue });
+  await env.DB.prepare("UPDATE council_sessions SET state = 'awaiting_owner', options = ? WHERE id = ?").bind(JSON.stringify({ summary: "s", options: opts }), session_id).run();
+  const sent = [];
+  const fail = async () => ({ outcome: "denied", reason: "rate limited" });
+  const ok = async (_e, agent, report) => { sent.push({ agent, report }); return { outcome: "success", report_id: "rpt_1" }; };
+  assert.match((await acceptOption(env, { session_id, option_id: "nope", publish: ok })).error, /unknown option/);
+  // A code option: the platform refuses for now (rate limit) → pending, then the hourly retry delivers it.
+  const a = await acceptOption(env, { session_id, option_id: "code", actor: "owner@example.com", publish: fail, now: 1_000 });
+  assert.deepEqual([a.ok, a.kind, a.state, a.delivered], [true, "repository_task", "handoff_pending", false]);
+  assert.equal((await readSession(env, session_id)).state, "decided");
+  assert.match((await acceptOption(env, { session_id, option_id: "rrr", publish: ok })).error, /waiting for your pick/, "one pick per session");
+  const r = await retryProposalHandoffs(env, { publish: ok });
+  assert.deepEqual([r.pending, r.sent], [1, 1]);
+  const body = sent[0].report.body;
+  assert.equal(sent[0].agent, "xauusd-moderator");
+  assert.deepEqual([body.schema, body.kind, body.executor, body.spec, body.origin.council, body.chosen_by], ["typed_proposal.v1", "repository_task", "cryptophys", "build a momentum agent", session_id, "owner:owner@example.com"]);
+  assert.ok(!/\d{4}\.\d/.test(JSON.stringify(body)), "no price in the hand-off");
+  const list = (await listProposals(env)).proposals;
+  assert.deepEqual([list[0].state, list[0].report_id], ["handed_off", "rpt_1"]);
+  // A knob option on another session: queued for its shadow test, and the platform is told.
+  const b = await startSession(env, { topic_key: "strategy:zone_pullback", enqueue });
+  await env.DB.prepare("UPDATE council_sessions SET state = 'awaiting_owner', options = ? WHERE id = ?").bind(JSON.stringify({ summary: "s", options: opts }), b.session_id).run();
+  const k = await acceptOption(env, { session_id: b.session_id, option_id: "rrr", publish: ok });
+  assert.deepEqual([k.kind, k.state], ["policy_parameter", "queued_shadow"]);
+  assert.deepEqual([sent.at(-1).report.body.knob, sent.at(-1).report.body.from, sent.at(-1).report.body.value], ["decision.min_rrr.intraday", 1.5, 1.8]);
+  assert.equal(proposalReport({ id: "x", session_id: "s", option_id: "no_change", kind: "no_change", option_json: "{}", accepted_ms: 0 }).body.executor, "xauusd");
 });

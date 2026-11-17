@@ -353,12 +353,12 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (request.headers.get("sec-fetch-site") && request.headers.get("sec-fetch-site") !== "same-origin") return json({ error: "same_origin_only" }, 403);
       const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
       if (!ownerSub || identity.sub !== ownerSub) return json({ error: "owner_only" }, 403);
-      const b = r.body, action = ["start", "message", "close", "reopen", "switch"].includes(b.action) ? b.action : "";
-      if (!action) return json({ error: "action must be start, message, close, reopen or switch" }, 400);
+      const b = r.body, action = ["start", "message", "close", "reopen", "accept", "switch"].includes(b.action) ? b.action : "";
+      if (!action) return json({ error: "action must be start, message, close, reopen, accept or switch" }, 400);
       if (typeof env.OMEGA.council !== "function") return json({ error: "council_unavailable" }, 503);
       const strs = (v, n) => (Array.isArray(v) ? v.filter((x) => typeof x === "string").map((x) => x.slice(0, 40)).slice(0, n) : []);
       return rpc(() => env.OMEGA.council({ action, topic_key: typeof b.topic_key === "string" ? b.topic_key.slice(0, 120) : null, text: typeof b.text === "string" ? b.text.slice(0, 1000) : null,
-        seats: strs(b.seats, 6), session_id: typeof b.session_id === "string" ? b.session_id.slice(0, 60) : null, to: strs(b.to, 2), on: b.on === true, actor: identity.subject, actor_sub: identity.sub ?? null }), "council_failed");
+        seats: strs(b.seats, 6), session_id: typeof b.session_id === "string" ? b.session_id.slice(0, 60) : null, option_id: typeof b.option_id === "string" ? b.option_id.slice(0, 40) : null, to: strs(b.to, 2), on: b.on === true, actor: identity.subject, actor_sub: identity.sub ?? null }), "council_failed");
     }
     // The owner's "Council auto-arm" toggle and unpin (owner 2026-11-17): owner only, like the arm itself.
     if (route === "POST /api/strategy-council" || route === "POST /api/strategy-arm/unpin") {

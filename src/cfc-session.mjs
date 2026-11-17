@@ -17,6 +17,7 @@ import { buildEvidencePack, parseTopicKey } from "./cfc-pack.mjs";
 import { cfcMode } from "./cfc-triggers.mjs";
 import { agentRoster } from "./agent-inventory.mjs";
 import { publishToPlatform } from "./platform-reports.mjs";
+import { knobMenu, checkKnobValue } from "./council-knobs.mjs";
 
 /** States that end a session; "closed" is the owner's Close or Re-open (owner 2026-11-17). */
 export const TERMINAL_STATES = Object.freeze(["aborted", "expired", "decided", "closed"]);
@@ -50,7 +51,13 @@ const SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS council_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, round TEXT NOT NULL, seat TEXT NOT NULL,
     stance TEXT, opinion TEXT NOT NULL, proposal TEXT, reply_to TEXT, refs TEXT, ms INTEGER NOT NULL)`,
   "CREATE INDEX IF NOT EXISTS council_messages_session ON council_messages (session_id, id)",
-  "CREATE TABLE IF NOT EXISTS council_switch_events (id INTEGER PRIMARY KEY AUTOINCREMENT, on_value INTEGER NOT NULL, actor TEXT, ms INTEGER NOT NULL)"
+  "CREATE TABLE IF NOT EXISTS council_switch_events (id INTEGER PRIMARY KEY AUTOINCREMENT, on_value INTEGER NOT NULL, actor TEXT, ms INTEGER NOT NULL)",
+  // An accepted option (owner 2026-11-17): the proposal and where it stands. Kinds: policy_parameter (shadow test, then
+  // live with a rollback; phase 2), repository_task (handed to the platform for its evolution loop), no_change.
+  `CREATE TABLE IF NOT EXISTS council_proposals (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, option_id TEXT NOT NULL, kind TEXT NOT NULL,
+    title TEXT, knob TEXT, from_value REAL, value REAL, spec TEXT, option_json TEXT NOT NULL, state TEXT NOT NULL, note TEXT,
+    report_id TEXT, accepted_by TEXT, accepted_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL)`,
+  "CREATE INDEX IF NOT EXISTS council_proposals_state ON council_proposals (state, updated_ms)"
 ];
 let schemaReady = null;
 export async function ensureSessionSchema(db) {
@@ -82,19 +89,42 @@ export function slugOf(text) {
 }
 
 /** Pure: a seat's messages for its opening or rebuttal or answer. */
-export function seatMessages({ seat, session, pack, earlier = [], ownerText = null, round }) {
+/**
+ * Pure: the pack as the seats read it (2026-11-17: a free pack is ~90 KB and was cut to its first 7,000 characters, so
+ * every seat read the same engine section). Each top-level section gets a fair share of the budget, and a short list of
+ * refs the seats may cite, taken in turn from each source, so a citation is possible at all.
+ */
+export function packForPrompt(pack, { chars = SESSION_LIMITS.pack_chars, cite = 30 } = {}) {
+  const sections = pack?.sections && typeof pack.sections === "object" ? pack.sections : {};
+  const keys = Object.keys(sections);
+  const share = Math.max(300, Math.floor(chars / Math.max(1, keys.length)));
+  const parts = keys.map((k) => { const t = JSON.stringify(sections[k]) ?? "null"; return `"${k}": ${t.length > share ? t.slice(0, share) + "…" : t}`; });
+  const bySource = new Map();
+  for (const r of Array.isArray(pack?.refs) ? pack.refs : []) {
+    const src = /^ev:xauusd\/([^/]+)\//.exec(String(r))?.[1] ?? "other";
+    if (!bySource.has(src)) bySource.set(src, []);
+    bySource.get(src).push(String(r));
+  }
+  const citable = [];
+  for (let i = 0; citable.length < cite && [...bySource.values()].some((l) => l.length > i); i++) for (const l of bySource.values()) if (l[i] && citable.length < cite) citable.push(l[i]);
+  return { text: `{${parts.join(", ")}}`, citable };
+}
+const refKey = (r) => String(r ?? "").trim().replace(/@[^#]*/, "");
+
+export function seatMessages({ seat, session, pack, earlier = [], ownerText = null, round, citable = [] }) {
   const who = roster()[seat] ?? { name: seat, role: seat };
   const sys = [
     `You are ${who.name}, a member of an XAUUSD trading system's council (your role: ${who.role}).`,
     "This is a retrospective meeting. Speak in the first person, in plain words, as yourself: what YOU think about the question and why, in 2 to 5 sentences (\"I think ..., because ...\").",
-    "Base it on the evidence pack only; cite at most 3 of its refs (strings starting ev:xauusd/) in refs, never in the opinion text. Never quote a price.",
+    "Base it on the evidence pack only; in refs cite 1 to 3 of the citable_refs that support what you say, copied exactly (never in the opinion text). Never quote a price.",
     "Give a stance: support, oppose, amend (support with a change) or abstain; and in proposal one concrete thing you would try (or empty).",
     round === "rebuttal" ? "Answer the others by name where you disagree or agree (reply_to: their seat ids); you may change your stance." : "",
     round === "answer" ? "The owner wrote to you. Answer the owner directly, in the same plain first-person voice." : ""
   ].filter(Boolean).join(" ");
   const user = {
     question: session.question, topic: session.topic_key, owner_topic_text: session.topic_text ?? null,
-    evidence_pack: String(pack ?? "").slice(0, SESSION_LIMITS.pack_chars),
+    evidence_pack: String(pack ?? "").slice(0, SESSION_LIMITS.pack_chars + 2000),
+    citable_refs: citable,
     others_so_far: earlier.map((m) => ({ seat: m.seat, stance: m.stance, opinion: m.opinion, proposal: m.proposal })),
     ...(ownerText ? { owner_message: ownerText } : {})
   };
@@ -107,26 +137,44 @@ export const SEAT_SCHEMA = Object.freeze({
     refs: { type: "array", maxItems: 3, items: { type: "string", maxLength: 200 } }, reply_to: { type: "array", maxItems: 4, items: { type: "string", maxLength: 40 } }
   }
 });
+/** An option's kind (owner 2026-11-17): a bounded knob change, a code change for the platform's evolution loop, or none. */
+export const OPTION_KINDS = Object.freeze(["policy_parameter", "repository_task", "no_change"]);
 export const SYNTHESIS_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false, required: ["summary", "options"],
   properties: {
     summary: { type: "string", maxLength: 800 },
-    options: { type: "array", minItems: 2, maxItems: 5, items: { type: "object", additionalProperties: false, required: ["option_id", "title", "hypothesis", "change", "risk"],
-      properties: { option_id: { type: "string", maxLength: 40 }, title: { type: "string", maxLength: 120 }, hypothesis: { type: "string", maxLength: 300 }, change: { type: "string", maxLength: 300 }, risk: { type: "string", maxLength: 200 }, dissent: { type: "string", maxLength: 200 } } } }
+    options: { type: "array", minItems: 2, maxItems: 5, items: { type: "object", additionalProperties: false, required: ["option_id", "kind", "title", "hypothesis", "change", "risk"],
+      properties: {
+        option_id: { type: "string", maxLength: 40 }, kind: { type: "string", enum: OPTION_KINDS }, title: { type: "string", maxLength: 120 }, hypothesis: { type: "string", maxLength: 300 },
+        change: { type: "string", maxLength: 300 }, risk: { type: "string", maxLength: 200 }, dissent: { type: "string", maxLength: 200 },
+        knob: { type: "string", maxLength: 60 }, value: { type: "number" }, spec: { type: "string", maxLength: 800 }
+      } } }
   }
 });
 
 /** Pure: a seat's answer cleaned (refs only from the pack). */
 export function cleanSeat(o, packRefs) {
   if (!o || !STANCES.includes(o.stance) || typeof o.opinion !== "string" || !o.opinion.trim()) return null;
-  const allowed = new Set(packRefs);
-  return { stance: o.stance, opinion: clip(o.opinion, 700), proposal: clip(o.proposal, 240) || null, refs: (Array.isArray(o.refs) ? o.refs : []).filter((r) => allowed.has(r)).slice(0, 3), reply_to: (Array.isArray(o.reply_to) ? o.reply_to : []).map((x) => clip(x, 40)).slice(0, 4) };
+  // A ref counts when the pack holds it, with or without its @as_of part (the seats often drop it).
+  const allowed = new Map((Array.isArray(packRefs) ? packRefs : []).map((r) => [refKey(r), r]));
+  const refs = [...new Set((Array.isArray(o.refs) ? o.refs : []).map((r) => allowed.get(refKey(r))).filter(Boolean))].slice(0, 3);
+  return { stance: o.stance, opinion: clip(o.opinion, 700), proposal: clip(o.proposal, 240) || null, refs, reply_to: (Array.isArray(o.reply_to) ? o.reply_to : []).map((x) => clip(x, 40)).slice(0, 4) };
 }
 /** Pure: the options with "no_change" always among them. */
 export function cleanOptions(o) {
   const opts = (Array.isArray(o?.options) ? o.options : []).filter((x) => x && x.option_id && x.title).slice(0, 5)
-    .map((x, i) => ({ option_id: clip(x.option_id, 40), rank: i + 1, title: clip(x.title, 120), hypothesis: clip(x.hypothesis, 300), change: clip(x.change, 300), risk: clip(x.risk, 200), dissent: clip(x.dissent, 200) || null }));
-  if (!opts.some((x) => x.option_id === "no_change")) opts.push({ option_id: "no_change", rank: opts.length + 1, title: "No change (the control)", hypothesis: "What runs today stays.", change: "none", risk: "none", dissent: null });
+    .map((x, i) => {
+      const base = { option_id: clip(x.option_id, 40), rank: i + 1, title: clip(x.title, 120), hypothesis: clip(x.hypothesis, 300), change: clip(x.change, 300), risk: clip(x.risk, 200), dissent: clip(x.dissent, 200) || null };
+      if (base.option_id === "no_change" || x.kind === "no_change") return { ...base, kind: "no_change" };
+      // A knob change only for a listed knob and a value inside its bounds; anything else is code for the platform to build.
+      if (x.kind === "policy_parameter") {
+        const k = checkKnobValue(x.knob, x.value);
+        if (k.ok) return { ...base, kind: "policy_parameter", knob: k.knob.id, from: k.from, value: k.value, unit: k.knob.unit };
+        return { ...base, kind: "repository_task", spec: clip(`${x.spec ?? base.change} (not a valid knob change: ${k.error})`, 800) };
+      }
+      return { ...base, kind: "repository_task", spec: clip(x.spec ?? base.change, 800) };
+    });
+  if (!opts.some((x) => x.option_id === "no_change")) opts.push({ option_id: "no_change", rank: opts.length + 1, kind: "no_change", title: "No change (the control)", hypothesis: "What runs today stays.", change: "none", risk: "none", dissent: null });
   return { summary: clip(o?.summary, 800), options: opts };
 }
 
@@ -217,6 +265,96 @@ export async function reopenSession(env, { session_id, actor = "owner", now = Da
   return { ...r, reopened_from: session_id };
 }
 
+export const PROPOSAL_AGENT = "xauusd-moderator";
+export const PROPOSAL_REPO = "cryptophys-adm/xauusd-ai-trading-assistant";
+
+/** Pure: the typed_proposal.v1 report for an accepted option (docs/design/HAIC-H0-H1.md on the platform). */
+export function proposalReport(p, { session, refs = [] } = {}) {
+  const o = parse(p.option_json, {});
+  const head = p.kind === "repository_task" ? "Council task for the evolution loop" : p.kind === "policy_parameter" ? "Council knob change (shadow test first)" : "Council decision: no change";
+  return {
+    kind: "xauusd_digest", severity: "info", ai_status: "model",
+    subject: clip(`${head}: ${p.title ?? p.option_id}`, 200),
+    body: {
+      schema: "typed_proposal.v1", proposal_id: p.id, kind: p.kind, state: p.state, executor: p.kind === "repository_task" ? "cryptophys" : "xauusd",
+      origin: { council: p.session_id, option_id: p.option_id, side: "nexus", repo: PROPOSAL_REPO, topic: session?.topic_key ?? null, question: session?.question ?? null },
+      chosen_by: `owner:${p.accepted_by ?? "owner"}`, chosen_at: new Date(Number(p.accepted_ms)).toISOString(),
+      title: o.title ?? null, hypothesis: o.hypothesis ?? null, change: o.change ?? null, risk: o.risk ?? null, dissent: o.dissent ?? null,
+      ...(p.kind === "policy_parameter" ? { knob: p.knob, from: p.from_value, value: p.value } : {}),
+      ...(p.kind === "repository_task" ? { spec: p.spec ?? o.change ?? null } : {}),
+      evidence_refs: refs.slice(0, 12), source: "xauusd-ai-trading-assistant"
+    }
+  };
+}
+
+async function handOff(env, p, publish) {
+  const db = env.DB;
+  const session = await db.prepare("SELECT topic_key, question FROM council_sessions WHERE id = ?").bind(p.session_id).first();
+  const rows = (await db.prepare("SELECT refs FROM council_messages WHERE session_id = ? AND round != 'owner'").bind(p.session_id).all()).results ?? [];
+  const refs = [...new Set(rows.flatMap((r) => parse(r.refs, [])))];
+  let r;
+  try { r = await publish(env, PROPOSAL_AGENT, proposalReport(p, { session, refs })); } catch (e) { r = { outcome: "failed", reason: String(e?.message ?? e) }; }
+  return r;
+}
+
+/**
+ * The owner accepts one option of a session waiting for them. The session is decided; the proposal is stored and sent to
+ * the platform (typed_proposal.v1): a repository_task is handed to the evolution loop there (Cryptophys builds it, not
+ * an external party); a policy_parameter waits for its shadow test; no_change is recorded. A send that fails is retried.
+ */
+export async function acceptOption(env, { session_id, option_id, actor = "owner", now = Date.now(), publish = publishToPlatform }) {
+  const db = env.DB;
+  await ensureSessionSchema(db);
+  const s = await db.prepare("SELECT id, state, options FROM council_sessions WHERE id = ?").bind(session_id).first();
+  if (!s) return { ok: false, error: "unknown session" };
+  if (s.state !== "awaiting_owner") return { ok: false, error: `only a session waiting for your pick can be accepted (this one is ${s.state})` };
+  const opt = (parse(s.options, {})?.options ?? []).find((x) => x.option_id === option_id);
+  if (!opt) return { ok: false, error: "unknown option" };
+  const kind = OPTION_KINDS.includes(opt.kind) ? opt.kind : (opt.option_id === "no_change" ? "no_change" : "repository_task");
+  // Re-check a knob change at acceptance: the engine may have moved since the synthesis.
+  let knob = null, from = null, value = null, note = null;
+  if (kind === "policy_parameter") {
+    const k = checkKnobValue(opt.knob, opt.value);
+    if (!k.ok) return { ok: false, error: `this knob change is no longer valid: ${k.error}` };
+    knob = k.knob.id; from = k.from; value = k.value; note = "waits for its shadow test against today's setting (phase 2)";
+  }
+  const id = `cp_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const state = kind === "no_change" ? "closed" : kind === "policy_parameter" ? "queued_shadow" : "handoff_pending";
+  const p = { id, session_id, option_id, kind, title: clip(opt.title, 120), knob, from_value: from, value, spec: kind === "repository_task" ? clip(opt.spec ?? opt.change, 800) : null,
+    option_json: JSON.stringify(opt), state, note, accepted_by: clip(actor, 120), accepted_ms: now };
+  await db.prepare("INSERT INTO council_proposals (id, session_id, option_id, kind, title, knob, from_value, value, spec, option_json, state, note, report_id, accepted_by, accepted_ms, updated_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)")
+    .bind(p.id, p.session_id, p.option_id, p.kind, p.title, p.knob, p.from_value, p.value, p.spec, p.option_json, p.state, p.note, p.accepted_by, now, now).run();
+  await db.prepare("UPDATE council_sessions SET state = 'decided', reason = ?, updated_ms = ? WHERE id = ?").bind(clip(`accepted ${option_id} by ${actor}`, 200), now, session_id).run();
+  const sent = await handOff(env, p, publish);
+  const delivered = sent?.outcome === "success";
+  const next = kind === "repository_task" ? (delivered ? "handed_off" : "handoff_pending") : state;
+  await db.prepare("UPDATE council_proposals SET state = ?, report_id = ?, note = COALESCE(?, note), updated_ms = ? WHERE id = ?")
+    .bind(next, delivered ? String(sent.report_id ?? "") || null : null, delivered ? null : clip(`platform send: ${sent?.reason ?? sent?.outcome ?? "failed"}; retried hourly`, 200), now, id).run();
+  return { ok: true, proposal_id: id, kind, state: next, delivered };
+}
+
+/** Hourly: re-send repository_task proposals the platform has not received yet (a rate limit or a transport failure). */
+export async function retryProposalHandoffs(env, { now = Date.now(), publish = publishToPlatform, limit = 3 } = {}) {
+  const db = env?.DB;
+  if (!db) return { status: "unavailable" };
+  await ensureSessionSchema(db);
+  const rows = (await db.prepare("SELECT * FROM council_proposals WHERE state = 'handoff_pending' ORDER BY accepted_ms LIMIT ?").bind(limit).all()).results ?? [];
+  let sent = 0;
+  for (const p of rows) {
+    const r = await handOff(env, p, publish);
+    if (r?.outcome === "success") { sent += 1; await db.prepare("UPDATE council_proposals SET state = 'handed_off', report_id = ?, note = NULL, updated_ms = ? WHERE id = ?").bind(String(r.report_id ?? "") || null, now, p.id).run(); }
+    else await db.prepare("UPDATE council_proposals SET note = ?, updated_ms = ? WHERE id = ?").bind(clip(`platform send: ${r?.reason ?? r?.outcome ?? "failed"}; retried hourly`, 200), now, p.id).run();
+  }
+  return { status: "ok", pending: rows.length, sent };
+}
+
+/** The accepted proposals for the page (newest first). */
+export async function listProposals(env, { limit = 20 } = {}) {
+  await ensureSessionSchema(env.DB);
+  const rows = (await env.DB.prepare("SELECT id, session_id, option_id, kind, title, knob, from_value, value, spec, state, note, report_id, accepted_by, accepted_ms, updated_ms FROM council_proposals ORDER BY accepted_ms DESC LIMIT ?").bind(Math.min(50, Math.max(1, limit))).all()).results ?? [];
+  return { proposals: rows.map((r) => ({ ...r, accepted_at: new Date(Number(r.accepted_ms)).toISOString() })) };
+}
+
 /** One step of a session (the queue consumer). */
 export async function runSessionStep(env, { session_id, step }, { now = Date.now(), call = callBusModel, publish = publishToPlatform, enqueue }) {
   const db = env.DB;
@@ -228,7 +366,7 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
   if (!(await sessionsEnabled(env))) return abort("council sessions were switched off");
   if ((await cfcNeuronsToday(db, now)) >= neuronCap(env)) return abort("the daily council budget is used up");
   const pack = parse(s.pack_json, {});
-  const packText = JSON.stringify(pack?.sections ?? pack);
+  const { text: packText, citable } = packForPrompt(pack);
   const packRefs = Array.isArray(pack?.refs) ? pack.refs : [];
   const seats = parse(s.participants, []);
   let calls = Number(s.calls) || 0;
@@ -241,7 +379,7 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
     calls += 1;
     try {
       // An answer to the owner gets a larger budget: on 2026-11-17 one was cut off at 700 tokens and lost.
-      const r = await call(env, { messages: seatMessages({ seat, session: s, pack: packText, earlier: spoken, round, ...extra }), schemaName: "cfc_seat", schema: SEAT_SCHEMA, maxTokens: round === "answer" ? 1400 : 700, effort: "low", deadline: Date.now() + 60_000, clock: () => Date.now(), runState: {}, role: "agent", meterSource: `cfc:${round}` });
+      const r = await call(env, { messages: seatMessages({ seat, session: s, pack: packText, earlier: spoken, round, citable, ...extra }), schemaName: "cfc_seat", schema: SEAT_SCHEMA, maxTokens: round === "answer" ? 1400 : 700, effort: "low", deadline: Date.now() + 60_000, clock: () => Date.now(), runState: {}, role: "agent", meterSource: `cfc:${round}` });
       const m = r?.status === "answered" ? cleanSeat(r.obj, packRefs) : null;
       if (!m) failed[seat] = r?.status === "answered" ? "its reply was not a valid opinion" : "its reply was cut off or the model call failed";
       return m;
@@ -276,8 +414,12 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
     let syn = null;
     try {
       const msgs = [
-        { role: "system", content: "You are the moderator of an XAUUSD trading system's council. You never vote. Read what each member said and write a short summary of the views, then 2 to 5 ranked options the owner can pick from; one option_id must be \"no_change\". Each option: a title, the hypothesis, the concrete change, its risk, and who dissents. Never quote a price. The owner picks; nothing changes trading until then." },
-        { role: "user", content: JSON.stringify({ question: s.question, topic: s.topic_key, said: spoken.map((m) => ({ seat: m.seat, round: m.round, stance: m.stance, opinion: m.opinion, proposal: m.proposal })), owner: rows.filter((r) => r.round === "owner").map((r) => r.opinion) }) }
+        { role: "system", content: ["You are the moderator of an XAUUSD trading system's council. You never vote. Read what each member said and write a short summary of the views, then 2 to 5 ranked options the owner can pick from; one option_id must be \"no_change\" with kind no_change.",
+          "Each option: a title, the hypothesis, the concrete change, its risk, who dissents, and a kind.",
+          "kind policy_parameter: the change is one of the listed knobs set to a new value inside its bounds (give knob and value); it is tested in shadow against today's setting and goes live only if it proves better. Prefer this kind whenever a listed knob can express the idea.",
+          "kind repository_task: the change needs new code (a new filter, rule or agent); give spec: what to build, where it applies, and how to measure that it helped. The system builds it itself.",
+          "Never quote a price. The owner accepts one option; nothing changes trading until then."].join(" ") },
+        { role: "user", content: JSON.stringify({ knobs: knobMenu(), question: s.question, topic: s.topic_key, said: spoken.map((m) => ({ seat: m.seat, round: m.round, stance: m.stance, opinion: m.opinion, proposal: m.proposal })), owner: rows.filter((r) => r.round === "owner").map((r) => r.opinion) }) }
       ];
       const r = await call(env, { messages: msgs, schemaName: "cfc_synthesis", schema: SYNTHESIS_SCHEMA, maxTokens: 1500, effort: "medium", deadline: Date.now() + 90_000, clock: () => Date.now(), runState: {}, role: "moderator", meterSource: "cfc:synthesis" });
       syn = r?.status === "answered" ? cleanOptions(r.obj) : null;
