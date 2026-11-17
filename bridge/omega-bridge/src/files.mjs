@@ -389,6 +389,9 @@ export function readTerminalLastError(terminalDir, { fs = nodeFs } = {}) {
     const lines = str.split(/\r?\n/).filter(Boolean);
     for (let i = lines.length - 1; i >= Math.max(0, lines.length - 50); i--) {
       const line = lines[i];
+      // A login that succeeded after the failure makes the failure stale (2026-11-17: an "Invalid account" from a
+      // mistyped connection stopped the symbol trial of the corrected one, which had already logged in).
+      if (/\tNetwork\t[^\t]*: (authorized on |terminal synchronized with )/.test(line)) return null;
       if (line.includes("failed") || line.includes("timeout") || line.includes("authorization")) {
         const parts = line.split("\t");
         const msg = parts.length >= 5 ? parts.slice(4).join(" ") : line;
