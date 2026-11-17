@@ -256,6 +256,7 @@ import { omegaHealth } from "./omega-health.mjs";
 import { relayEaHeartbeat } from "./ea-heartbeat-relay.mjs";
 import { relayStrategyArm } from "./strategy-arm-relay.mjs";
 import { computeRecommendations, readRecommendations } from "./strategy-recommendation.mjs";
+import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings } from "./omega-broker.mjs";
@@ -2290,7 +2291,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       const [state, latest] = await Promise.all([readPlanLearning(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null)]);
       const d = latest as Record<string, any> | null;
       const trade = d?.trade ? { decision_key: d.decision_key, bar_close: d.bar_close, side: d.trade.side, entry: d.trade.entry, stop: d.trade.stop, tp: d.trade.tp, rrr: d.trade.rrr ?? null } : null;
-      return dashboardJson({ status: "ok", mode: planLearningMode(env), learning: state, latest: trade ? { plan: trade, advice: planAdviceFor(d, state) } : null });
+      const grid = await readGridChoices(env);
+      return dashboardJson({ status: "ok", mode: planLearningMode(env), learning: state, latest: trade ? { plan: trade, advice: planAdviceFor(d, state) } : null, grid_adapt: grid ? { mode: gridAdaptMode(env), day: grid.day ?? null, gate: grid.gate ?? null, slices: grid.slices ?? {}, held: grid.held ?? {} } : { mode: gridAdaptMode(env), slices: {} } });
     } catch (error) {
       console.error("plan_learning_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
@@ -2682,6 +2684,9 @@ async function runLedgerStep(env: Env): Promise<void> {
   // The strategy recommendation cards (RFC §3): read-only, deterministic, at most every 15 minutes into KV.
   const reco = await computeRecommendations(env);
   if (reco.status === "failed") console.error("strategy_recommendations_failed", JSON.stringify(reco));
+  // The grid's automatic entry/stop per strategy x regime (src/grid-adapt.mjs, owner 2026-11-17): once a UTC day.
+  const grid = await runGridAdapt(env, { send: (text: string) => sendTelegram(env, text) });
+  if (grid.status === "computed" || grid.status === "failed") console.log("grid_adapt", JSON.stringify(grid));
   // The custom model's dataset (owner 2026-11-13, docs/RFC_CUSTOM_MODEL.md): features and labels per decision.
   const dataset = await runModelDataset(env);
   if (dataset.status === "failed" || Number(dataset.added) || Number(dataset.labeled) || Number(dataset.wide) || Number(dataset.unavailable)) console.log("model_dataset", JSON.stringify(dataset));

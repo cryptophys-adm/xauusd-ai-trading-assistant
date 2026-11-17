@@ -224,6 +224,21 @@ function Grid({ learning }: { learning: any }) {
   );
 }
 
+/** The cells Omega uses now, per strategy and regime (src/grid-adapt.mjs); the plan everywhere else. */
+function GridAdapt({ g }: { g: any }) {
+  if (!g) return null;
+  const slices = Object.entries(g.slices ?? {}) as [string, any][];
+  const held = Object.keys(g.held ?? {});
+  return (
+    <div className="mt-2 text-[11px] text-slate-400">
+      <span className="mr-2">Automatic adaptation: <span className="mono text-slate-200">{g.mode}</span>{g.day ? ` · evaluated ${g.day}` : ""}.</span>
+      {slices.length ? slices.map(([k, v]) => <span key={k} className="mr-2"><Badge tone="cyan">{k.replace("|", " · ")}: {v.cell}</Badge> <span className="mono">+{v.evidence?.gain}R</span></span>)
+        : <span>Every strategy and regime uses the plan: no cell passes the evidence gate.</span>}
+      {held.length ? <span className="ml-2">Held after a revert: {held.join(", ")}.</span> : null}
+    </div>
+  );
+}
+
 const VERDICT: Record<string, { text: string; tone: "green" | "amber" | "slate" }> = {
   better_than_plan: { text: "better than the plan", tone: "green" }, not_better: { text: "not better", tone: "amber" }, collecting: { text: "collecting", tone: "slate" }
 };
@@ -264,9 +279,10 @@ export default function Strategy() {
       </Panel>
 
       <Panel title="Entry and stop grid" icon={<Grid3x3 className="h-3.5 w-3.5 text-cyan-300" />}
-        hint="The default agent's plans replayed with a deeper entry and a tighter or wider stop. Each cell: mean R per setup, then the difference against the plan and how often it filled. An unfilled entry counts as 0R."
+        hint="The default agent's plans replayed with a deeper entry and a tighter or wider stop. Each cell: mean R per setup in R of the cell's own stop (a tighter stop makes 1R smaller), then the difference against the plan and how often it filled. An unfilled entry counts as 0R. Omega adopts a cell automatically only per strategy and regime, judged in R of the plan's stop on the same setups (40+ fills, bootstrap, holdout, neighbours)."
         right={learning ? <Badge tone="slate">{learning.setups?.resolved ?? 0} setups · updated {ago(learning.generated_at)}</Badge> : null}>
         {learnPoll.loading && !pl ? <Skeleton rows={4} /> : !learning ? <Empty>No data yet.</Empty> : <Grid learning={learning} />}
+        <GridAdapt g={pl?.grid_adapt} />
       </Panel>
 
       <Panel title="Learner against the plan" icon={<Scale className="h-3.5 w-3.5 text-cyan-300" />}

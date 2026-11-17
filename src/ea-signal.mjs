@@ -24,6 +24,7 @@
 // it carries no account number. The control (active, paused, killed) is set by Omega
 // (omega.cryptophys.work, src/ea-execution.mjs) and kept in KV under EA_CONTROL_KEY.
 
+import { gridAdaptMode, applyGridChoice, readGridChoices } from "./grid-adapt.mjs";
 import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
 import { readBrokerTrigger, brokerTriggerFields } from "./broker-trigger.mjs";
 import { readCorpusBars } from "./corpus-oracle.mjs";
@@ -241,9 +242,11 @@ export async function eaSignal(env, { now = Date.now(), control: controlIn = nul
       basisMemo = { at: now, basis };
     }
     const out = { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now, liveM5, broker }), ...brokerTriggerFields(broker), ...managementFields(decision, { basis }), source: "decision_engine" };
+    // The grid's adapted entry and stop per strategy x regime (src/grid-adapt.mjs, owner 2026-11-17): plan by default.
+    const adapted = gridAdaptMode(env) === "live" ? applyGridChoice(out, { decision, choices: await readGridChoices(env) }) : out;
     // The strategy arm (owner 2026-11-17): read again at signal time, so a disarm stops entries before the next decision.
-    if (strategyArmMode(env) === "live") return applyArmGate(out, await readArmState(env));
-    return out;
+    if (strategyArmMode(env) === "live") return applyArmGate(adapted, await readArmState(env));
+    return adapted;
   }
   return { ...eaSignalFrom({ candleKey, analysis, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now }), ...brokerTriggerFields(broker), source: "h1_decision" };
 }

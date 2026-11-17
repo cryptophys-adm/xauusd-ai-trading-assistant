@@ -613,6 +613,12 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const openIntent = { id, kind: "open", side, volume, entry: price, sl, tp, signal_issued_ms: issued, reason: "signal", stop_source: tight ? "stop_5m" : "plan", trigger_source: typeof signal.trigger_source === "string" ? signal.trigger_source : null };
   // The strategy agent whose plan this is (owner 2026-11-16): its confidence governs the position's exit.
   if (typeof signal.trade_agent === "string" && signal.trade_agent) openIntent.strategy = signal.trade_agent;
+  // The grid's adapted entry and stop (src/grid-adapt.mjs, owner 2026-11-17): recorded on the intent; a 5m stop keeps its own source.
+  if (typeof signal.grid_cell === "string" && signal.grid_cell) {
+    openIntent.grid_cell = signal.grid_cell;
+    if (typeof signal.grid_slice === "string") openIntent.grid_slice = signal.grid_slice;
+    if (!tight) openIntent.stop_source = `grid:${signal.grid_cell}`;
+  }
   if (volRegime !== "NORMAL") openIntent.vol_regime = volRegime;
   intents.push(openIntent);
   return { intents, notes };
