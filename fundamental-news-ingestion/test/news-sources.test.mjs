@@ -1,7 +1,7 @@
 // News without TradingView, in shadow (owner 2026-11-14; docs/RFC_CONTENT_AGENT.md P0).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseFeed, parseGdelt, symbolsOf, similarity, compareWithTradingView, runNewsShadow, readNewsShadow, inBackoff, NEWS_SOURCES, BACKOFF_AFTER_FAILURES } from "../src/news-sources.mjs";
+import { parseFeed, parseGdelt, symbolsOf, similarity, compareWithTradingView, runNewsShadow, readNewsShadow, inBackoff, NEWS_SOURCES, BACKOFF_AFTER_FAILURES, ITEMS_PREFIX, readShadowDays, shadowReport } from "../src/news-sources.mjs";
 
 class MemoryKV { constructor() { this.map = new Map(); } async get(k) { return this.map.has(k) ? this.map.get(k) : null; } async put(k, v) { this.map.set(k, v); } }
 const NOW = Date.parse("2026-11-16T14:05:00Z");
@@ -112,4 +112,36 @@ test("GDELT: its own time limit, a 429 named as rate limited, and a backoff afte
   assert.deepEqual([r.sources.g.ok, r.sources.g.consecutive_failures], [true, undefined]);
   r = await runNewsShadow({ OAUTH_STORE: kv }, { now: at(7), fetcher: limited, sources });
   assert.equal(r.sources.g.consecutive_failures, 1, "counted from zero again");
+});
+
+
+test("measurement phase A (2026-11-17): each headline kept once a day with its first-seen time; the report matches, times and flags", async () => {
+  const kv = new MemoryKV();
+  const sources = [{ id: "a", kind: "rss", url: "https://a.example/rss" }, { id: "gdelt", kind: "gdelt", url: "https://gdelt.example/doc" }];
+  const limited = async (url) => (url.startsWith("https://gdelt") ? new Response("slow down", { status: 429 }) : new Response(RSS));
+  const tvArticles = [
+    { title: "Gold climbs as the dollar and yields slip", url: "https://tv.example/1", published_at: new Date(NOW - 2 * 60_000).toISOString() },
+    { title: "US CPI rises more than expected in October", url: "https://tv.example/2", published_at: new Date(NOW - 3 * 60_000).toISOString() }
+  ];
+  await runNewsShadow({ OAUTH_STORE: kv }, { tvArticles, tvStatus: "ok", now: NOW, fetcher: limited, sources });
+  // The next hour: the same headlines are not stored twice, and TradingView's pull was refused for the chart.
+  await runNewsShadow({ OAUTH_STORE: kv }, { tvArticles: [], tvStatus: "reserved_for_chart", now: NOW + 3_600_000, fetcher: limited, sources });
+  const day = JSON.parse(await kv.get(ITEMS_PREFIX + "2026-11-16"));
+  assert.equal(Object.keys(day.shadow).length, 2, "gold and oil from source a, once");
+  assert.equal(Object.keys(day.tv).length, 2);
+  assert.deepEqual(Object.values(day.shadow).map((x) => x.f), [new Date(NOW).toISOString(), new Date(NOW).toISOString()], "first-seen kept from the first hour");
+  assert.deepEqual([day.hours["14"].tv_status, day.hours["15"].tv_status], ["ok", "reserved_for_chart"]);
+
+  const report = shadowReport(await readShadowDays({ OAUTH_STORE: kv }, 2, NOW + 3_600_000), { now: NOW + 3_600_000 });
+  assert.deepEqual(report.coverage, { shadow_items: 2, tv_items: 2, overlap: 1, shadow_only: 1, tv_only: 1, tv_hours_pulled: 1, hours: 2 });
+  assert.equal(report.latency_minutes.shadow.a.n, 2);
+  assert.equal(report.latency_minutes.shadow.a.median, 10, "first seen 10 minutes after the gold story's publication (the oil one is 90)");
+  assert.equal(report.latency_minutes.lead_shadow_over_tv.median, 0, "both first seen in the same hourly run");
+  assert.deepEqual(report.high_impact.tv_only.map((x) => x.title), ["US CPI rises more than expected in October"], "a high-impact story only TradingView carried is named");
+  assert.equal(report.reliability.gdelt.rate_limited, 2);
+  assert.equal(report.reliability.gdelt.unreliable, true, "GDELT is flagged");
+  assert.equal(report.reliability.a.unreliable, false);
+  assert.equal(report.quality.relevance_by_source.a, 0.667, "2 of 3 headlines relevant, both runs");
+  assert.deepEqual(report.quality.script_mix.shadow, { latin: 2 });
+  assert.deepEqual(report.days.map((d) => d.date), ["2026-11-15", "2026-11-16"], "oldest first");
 });
