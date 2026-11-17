@@ -1,7 +1,7 @@
 // News without TradingView, in shadow (owner 2026-11-14; docs/RFC_CONTENT_AGENT.md P0).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseFeed, parseGdelt, symbolsOf, similarity, compareWithTradingView, runNewsShadow, readNewsShadow, inBackoff, NEWS_SOURCES, BACKOFF_AFTER_FAILURES, ITEMS_PREFIX, readShadowDays, shadowReport } from "../src/news-sources.mjs";
+import { parseFeed, parseGdelt, symbolsOf, similarity, compareWithTradingView, runNewsShadow, readNewsShadow, inBackoff, NEWS_SOURCES, BACKOFF_AFTER_FAILURES, ITEMS_PREFIX, readShadowDays, shadowReport, shadowItemsSince } from "../src/news-sources.mjs";
 
 class MemoryKV { constructor() { this.map = new Map(); } async get(k) { return this.map.has(k) ? this.map.get(k) : null; } async put(k, v) { this.map.set(k, v); } }
 const NOW = Date.parse("2026-11-16T14:05:00Z");
@@ -144,4 +144,9 @@ test("measurement phase A (2026-11-17): each headline kept once a day with its f
   assert.equal(report.quality.relevance_by_source.a, 0.667, "2 of 3 headlines relevant, both runs");
   assert.deepEqual(report.quality.script_mix.shadow, { latin: 2 });
   assert.deepEqual(report.days.map((d) => d.date), ["2026-11-15", "2026-11-16"], "oldest first");
+  // Phase B reads the last hours of both sides through the Worker's RPC.
+  const recent = await shadowItemsSince({ OAUTH_STORE: kv }, 24, NOW + 3_600_000);
+  assert.deepEqual([recent.shadow.length, recent.tv.length], [2, 2]);
+  assert.ok(recent.shadow.every((x) => x.title && x.source));
+  assert.deepEqual((await shadowItemsSince({ OAUTH_STORE: kv }, 1, NOW + 3 * 3_600_000)).shadow, [], "first seen more than an hour ago");
 });

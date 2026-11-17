@@ -295,6 +295,28 @@ export function shadowReport(days, { threshold = 0.8, now = Date.now() } = {}) {
   };
 }
 
+/**
+ * The headlines first seen in the last `hours` (1 to 48) on each side, for the AI Worker's daily comparison
+ * (measurement phase B): { shadow: [{ title, source, published_at }], tv: [{ title, published_at }] }, newest first.
+ * Never throws.
+ */
+export async function shadowItemsSince(env, hours = 24, now = Date.now()) {
+  const kv = env?.OAUTH_STORE;
+  if (!kv) return { shadow: [], tv: [] };
+  const h = Math.max(1, Math.min(48, Number(hours) || 24));
+  const since = now - h * HOUR_MS;
+  const dates = [...new Set([0, 1, 2].map((d) => new Date(now - d * 86_400_000).toISOString().slice(0, 10)))];
+  const shadow = [], tv = [];
+  for (const date of dates) {
+    let rec = null;
+    try { rec = JSON.parse((await kv.get(ITEMS_PREFIX + date)) || "null"); } catch { rec = null; }
+    for (const x of Object.values(rec?.shadow ?? {})) if (Date.parse(x.f) >= since) shadow.push({ title: x.t, source: x.s, published_at: x.p, seen: x.f });
+    for (const x of Object.values(rec?.tv ?? {})) if (Date.parse(x.f) >= since) tv.push({ title: x.t, published_at: x.p, seen: x.f });
+  }
+  const newest = (a, b) => Date.parse(b.published_at ?? b.seen) - Date.parse(a.published_at ?? a.seen);
+  return { shadow: shadow.sort(newest).slice(0, 200), tv: tv.sort(newest).slice(0, 200) };
+}
+
 /** The last `n` UTC days (1 to 14) of shadow items and totals, oldest first. Never throws. */
 export async function readShadowDays(env, n = 7, now = Date.now()) {
   const kv = env?.OAUTH_STORE;
