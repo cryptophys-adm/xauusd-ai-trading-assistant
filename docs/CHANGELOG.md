@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-17
+- docs(backlog): B-11 (issue #226) marked done; it was built and is live (`GLOBAL_DECISION_WEIGHTED`, the extended witnesses, the witness-weight auto-tune with rollback).
 - fix(nexus): themed confirmations instead of the browser's own pop-ups (owner 2026-11-17: "windows pop up agar menyesuaikan tema utama"). A reusable `ConfirmDialog` / `useConfirm` (`components/ConfirmDialog.tsx`), in the style of the Omega close-position modal, with Esc to cancel. On the Councils page: Accept (it says what happens for a knob change, a code task or no change), Close and turning sessions off. No native `confirm`/`alert`/`prompt` is left in the UI.
 - fix(councils): a code task's `typed_proposal.v1` report carries `state: "handed_off"`, the state it has once the platform holds it (the first one said `handoff_pending`).
 - feat(councils): council proposals, phase 2 (docs/RFC_COUNCIL_PROPOSALS.md; owner: "Live otomatis + rollback otomatis").
