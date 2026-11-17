@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   parseTopicKey, topicCatalog, buildEvidencePack, canonicalJson, finalizePack, priceKeysIn, stripPrices, evRef, REF_RE, PRICE_FIELDS,
-  TOPIC_TYPES, SEAT_IDS, patternsOf, tally, exitsOf, tradeOf, lossRuns, omegaExit, ledgerExit, TRADES_SQL, quantiles
+  TOPIC_TYPES, SEAT_IDS, patternsOf, tally, exitsOf, tradeOf, lossRuns, omegaExit, ledgerExit, TRADES_SQL, quantiles, freeTopicKeys
 } from "../src/cfc-pack.mjs";
 import { AGENT_IDS, STRATEGY_AGENTS } from "../src/strategy-agents.mjs";
 import { PLAN_LEARNING_KEY } from "../src/plan-learning.mjs";
@@ -175,7 +175,17 @@ test("every other type builds a pack from the tables that exist, says unavailabl
   assert.ok(packs["cost:warroom_agent"].sections.usage.this_source[0].neurons > 0, "priced by the model's rate");
   assert.ok(!JSON.stringify(packs["cost:warroom_agent"]).includes(MODEL), "the model is used for the rate only");
   assert.ok(packs["knowledge:note-1"].sections.item.unavailable);
-  assert.ok(packs["free:sl-plus-review"].sections.sections.unavailable);
+  const free = packs["free:sl-plus-review"];
+  assert.ok(free.sections.scope.reads.includes("execution:sl_plus"), "a free topic about SL+ reads the SL+ pack");
+  assert.ok(free.sections.scope.reads.includes("engine:15"), "every free topic reads the default evidence");
+  assert.ok(free.refs.length > 0, "a free topic never runs on an empty pack");
+  assert.ok(!/\bP1\b/.test(JSON.stringify(free)), "no stale P1 wording");
+});
+
+test("a free topic about strategy reads every strategy agent", () => {
+  const keys = freeTopicKeys("evaluasi-strategy");
+  for (const k of ["engine:15", "strategy:zone_pullback:exits", "execution:fills", "strategy:sweep_reversal", "strategy:breakout_retest", "strategy:range_fade"]) assert.ok(keys.includes(k), k);
+  assert.ok(freeTopicKeys("news risk sl reject strategy").length <= 8, "capped");
 });
 
 test("an invalid topic is refused before any read", async () => {

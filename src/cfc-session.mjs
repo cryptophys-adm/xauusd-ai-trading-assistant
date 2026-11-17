@@ -145,7 +145,8 @@ export async function startSession(env, { topic_key = null, text = null, seats =
   const dayStart = Date.parse(new Date(now).toISOString().slice(0, 10) + "T00:00:00Z");
   const open = await db.prepare("SELECT COUNT(*) AS n FROM council_sessions WHERE state IN ('positions', 'rebuttals', 'synthesis')").first();
   if (Number(open?.n) >= SESSION_LIMITS.open) return { ok: false, error: `at most ${SESSION_LIMITS.open} sessions open` };
-  const today = await db.prepare("SELECT COUNT(*) AS n FROM council_sessions WHERE created_ms >= ?").bind(dayStart).first();
+  // A session that ran on an empty pack (before the fix of 2026-11-17) does not count against the day.
+  const today = await db.prepare("SELECT COUNT(*) AS n FROM council_sessions WHERE created_ms >= ? AND COALESCE(json_array_length(json_extract(pack_json, '$.refs')), 0) > 0").bind(dayStart).first();
   if (Number(today?.n) >= SESSION_LIMITS.started_per_day) return { ok: false, error: `at most ${SESSION_LIMITS.started_per_day} sessions a day` };
   const freeText = typeof text === "string" && text.trim() ? clip(text, 300) : null;
   const key = freeText ? `free:${slugOf(freeText)}` : topic_key;
@@ -153,6 +154,8 @@ export async function startSession(env, { topic_key = null, text = null, seats =
   if (!t.ok) return { ok: false, error: t.error };
   const pack = await buildEvidencePack(env, t.key, { now });
   if (pack?.error) return { ok: false, error: pack.error };
+  // No evidence, no session (2026-11-17: a free topic ran on an empty pack and every seat abstained).
+  if (!Array.isArray(pack.refs) || !pack.refs.length) return { ok: false, error: "no evidence for this topic: pick a suggested topic or name a strategy, the exits, the news or the risk in your words" };
   const names = roster();
   const chosen = (Array.isArray(seats) && seats.length ? seats : SEATS_BY_TYPE[t.type] ?? SEATS_BY_TYPE.free).filter((s) => names[s]).slice(0, SESSION_LIMITS.positions);
   if (chosen.length < 3) return { ok: false, error: "a session needs at least 3 seats" };
