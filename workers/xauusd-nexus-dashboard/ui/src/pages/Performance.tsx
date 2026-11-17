@@ -432,9 +432,9 @@ function OutcomeDistributionHistogram({ items, policy }: { items: any[]; policy:
         return (
           <div key={b.label} className="flex items-center gap-2 text-[11px]">
             <span className="mono w-28 shrink-0 text-slate-400">{b.label}</span>
-            <div className="relative h-4 flex-1 overflow-hidden rounded bg-white/[0.04]">
+            <div className="relative h-4 flex-1 overflow-hidden rounded-sm bg-white/4">
               <div
-                className="h-full rounded transition-all duration-500"
+                className="h-full rounded-sm transition-all duration-500"
                 style={{
                   width: `${barWidth}%`,
                   background: b.tone,
@@ -474,15 +474,15 @@ function ExcursionMatrix({ items }: { items: any[] }) {
   return (
     <div className="space-y-3 pt-1">
       <div className="grid grid-cols-3 gap-2">
-        <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2.5">
+        <div className="rounded-lg border border-white/5 bg-white/2 p-2.5">
           <span className="text-[10px] uppercase tracking-wider text-slate-500">Avg MFE</span>
           <p className="mono text-[16px] font-bold text-emerald-400">+{avgMfe.toFixed(2)}R</p>
         </div>
-        <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2.5">
+        <div className="rounded-lg border border-white/5 bg-white/2 p-2.5">
           <span className="text-[10px] uppercase tracking-wider text-slate-500">Avg MAE</span>
           <p className="mono text-[16px] font-bold text-rose-400">−{Math.abs(avgMae).toFixed(2)}R</p>
         </div>
-        <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2.5">
+        <div className="rounded-lg border border-white/5 bg-white/2 p-2.5">
           <span className="text-[10px] uppercase tracking-wider text-slate-500">Efficiency</span>
           <p className="mono text-[16px] font-bold text-cyan-400">{Math.round(edgeEfficiency)}%</p>
         </div>
@@ -492,9 +492,9 @@ function ExcursionMatrix({ items }: { items: any[] }) {
           <span>MAE</span>
           <span className="font-semibold text-cyan-300">MFE</span>
         </div>
-        <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+        <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-white/6">
           <div
-            className="h-full rounded-full bg-gradient-to-r from-rose-500 via-amber-400 to-emerald-400 transition-all duration-500"
+            className="h-full rounded-full bg-linear-to-r from-rose-500 via-amber-400 to-emerald-400 transition-all duration-500"
             style={{ width: `${edgeEfficiency}%` }}
           />
         </div>
@@ -731,11 +731,11 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                       <td className="mono font-bold text-cyan-300">#{p.ticket}</td>
                       <td>
                         {isManual ? (
-                          <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
+                          <span className="inline-flex items-center gap-1 rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
                             MANUAL
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
+                          <span className="inline-flex items-center gap-1 rounded-sm bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
                             OMEGA
                           </span>
                         )}
@@ -767,7 +767,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                               tp: p.tp,
                             })
                           }
-                          className="inline-flex items-center gap-1 rounded bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 hover:border-rose-400 active:scale-95 transition disabled:opacity-50"
+                          className="inline-flex items-center gap-1 rounded-sm bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 hover:border-rose-400 active:scale-95 transition disabled:opacity-50"
                           title="Close at market"
                         >
                           {closingTicket === p.ticket ? (
@@ -1148,8 +1148,8 @@ export default function Performance() {
   const toggle = (on: boolean) =>
     `rounded-md border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
       on
-        ? "border-cyan-400/40 bg-cyan-400/10 text-white shadow-sm"
-        : "border-white/10 text-slate-400 hover:text-white hover:bg-white/[0.04]"
+        ? "border-cyan-400/40 bg-cyan-400/10 text-white shadow-xs"
+        : "border-white/10 text-slate-400 hover:text-white hover:bg-white/4"
     }`;
 
   return (
@@ -1164,7 +1164,7 @@ export default function Performance() {
             <button
               type="button"
               onClick={() => void refresh()}
-              className="flex items-center gap-1 rounded border border-white/10 px-2 py-1 text-[10px] text-slate-400 hover:text-white"
+              className="flex items-center gap-1 rounded-sm border border-white/10 px-2 py-1 text-[10px] text-slate-400 hover:text-white"
               title="Refresh"
             >
               <RefreshCw className="h-3 w-3" /> Refresh

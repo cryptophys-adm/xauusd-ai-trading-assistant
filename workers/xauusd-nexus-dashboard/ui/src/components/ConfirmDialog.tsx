@@ -30,7 +30,7 @@ function ConfirmDialog({ options, onDone }: { options: ConfirmOptions; onDone: (
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md" onClick={() => onDone(false)}>
       <div role="dialog" aria-modal="true" aria-labelledby="confirm-title" onClick={(e) => e.stopPropagation()}
-        className={`relative w-full max-w-md rounded-2xl border ${t.border} bg-gradient-to-b from-[#0e1628] via-[#09101d] to-[#060a12] p-5 ring-1 ring-white/10 ${t.glow}`}>
+        className={`relative w-full max-w-md rounded-2xl border ${t.border} bg-linear-to-b from-[#0e1628] via-[#09101d] to-[#060a12] p-5 ring-1 ring-white/10 ${t.glow}`}>
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${t.icon}`}><Icon className="h-5 w-5" /></div>

@@ -100,7 +100,7 @@ function PinLine({ id, arm, onDone }: { id: string; arm: ArmState; onDone: () =>
   return (
     <div className="mt-1 flex items-center gap-2 text-[10.5px] text-slate-400">
       <span>Pinned by your {pin.action || "click"}: the council leaves it.</span>
-      <button type="button" className="rounded px-1.5 py-0.5 ring-1 ring-slate-500/40 hover:bg-slate-700/50" onClick={async () => { try { await ownerPost("/omega/api/strategy-arm/unpin", { strategy_id: id }); } finally { onDone(); } }}>Unpin</button>
+      <button type="button" className="rounded-sm px-1.5 py-0.5 ring-1 ring-slate-500/40 hover:bg-slate-700/50" onClick={async () => { try { await ownerPost("/omega/api/strategy-arm/unpin", { strategy_id: id }); } finally { onDone(); } }}>Unpin</button>
     </div>
   );
 }
@@ -259,7 +259,7 @@ function Grid({ learning }: { learning: any }) {
               {scales.map((k) => {
                 const a = arm(e, k), control = e === 0 && k === 1;
                 return (
-                  <td key={k} style={{ background: bg(a?.mean_diff) }} className={control ? "outline outline-1 -outline-offset-1 outline-cyan-400/50" : ""} title={a?.n ? `${a.n} setups · filled ${pc(a.fill_rate)} · reached target ${pc(a.target_rate)}` : "too few setups fit this arm"}>
+                  <td key={k} style={{ background: bg(a?.mean_diff) }} className={control ? "outline-solid outline-1 -outline-offset-1 outline-cyan-400/50" : ""} title={a?.n ? `${a.n} setups · filled ${pc(a.fill_rate)} · reached target ${pc(a.target_rate)}` : "too few setups fit this arm"}>
                     {a?.n ? <><div className="mono text-[12.5px] font-semibold text-slate-100">{R(a.mean_r)}</div><div className="mono text-[10px] text-slate-400">{control ? "the plan" : `${R(a.mean_diff)} · ${pc(a.fill_rate)}`}</div></> : <span className="text-slate-600">—</span>}
                   </td>
                 );

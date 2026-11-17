@@ -32,7 +32,7 @@ export function ExitConfirmModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-150">
       <div
-        className="relative w-full max-w-md rounded-2xl border border-rose-500/40 bg-gradient-to-b from-[#0e1628] via-[#09101d] to-[#060a12] p-5 shadow-[0_0_60px_rgba(244,63,94,0.25)] ring-1 ring-white/10"
+        className="relative w-full max-w-md rounded-2xl border border-rose-500/40 bg-linear-to-b from-[#0e1628] via-[#09101d] to-[#060a12] p-5 shadow-[0_0_60px_rgba(244,63,94,0.25)] ring-1 ring-white/10"
         role="dialog"
         aria-modal="true"
         aria-labelledby="exit-modal-title"
@@ -126,7 +126,7 @@ export function ExitConfirmModal({
             type="button"
             onClick={() => onConfirm(position.ticket)}
             disabled={isSubmitting}
-            className="inline-flex items-center gap-2 rounded-lg border border-rose-500/60 bg-gradient-to-r from-rose-600 to-rose-700 px-4 py-2 text-[12px] font-bold text-white shadow-[0_0_20px_rgba(244,63,94,0.35)] hover:from-rose-500 hover:to-rose-600 active:scale-95 transition disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg border border-rose-500/60 bg-linear-to-r from-rose-600 to-rose-700 px-4 py-2 text-[12px] font-bold text-white shadow-[0_0_20px_rgba(244,63,94,0.35)] hover:from-rose-500 hover:to-rose-600 active:scale-95 transition disabled:opacity-50"
           >
             {isSubmitting ? (
               <>

@@ -98,7 +98,7 @@ function Value({ v, depth = 0 }: { v: unknown; depth?: number }): JSX.Element {
           {scalars.map(([k, x]) => (
             <div key={k} className="min-w-0">
               <div className="text-[9.5px] uppercase tracking-wider text-slate-500">{human(k)}</div>
-              <div className={`${num(x) ? "mono text-[13px] font-semibold" : "text-[11.5px]"} break-words text-slate-200`}>{fmtValue(k, x)}</div>
+              <div className={`${num(x) ? "mono text-[13px] font-semibold" : "text-[11.5px]"} wrap-break-word text-slate-200`}>{fmtValue(k, x)}</div>
             </div>
           ))}
         </div>
@@ -117,7 +117,7 @@ function Value({ v, depth = 0 }: { v: unknown; depth?: number }): JSX.Element {
 
 function SuggestionCard({ s, onPick, picked }: { s: any; onPick: (k: string) => void; picked: boolean }) {
   return (
-    <div className={`glass-inner flex flex-col gap-1.5 p-3 ${picked ? "outline outline-1 outline-cyan-400/50" : ""}`}>
+    <div className={`glass-inner flex flex-col gap-1.5 p-3 ${picked ? "outline-solid outline-1 outline-cyan-400/50" : ""}`}>
       <div className="flex items-center justify-between gap-2">
         <Badge tone={TYPE_TONE[s.type] ?? "slate"}>{s.type}</Badge>
         <span className="flex items-center gap-1">{s.active ? <Badge tone="amber">still firing</Badge> : <Badge tone="slate">quiet</Badge>}<Badge tone="slate">{s.status}</Badge></span>
@@ -132,7 +132,7 @@ function SuggestionCard({ s, onPick, picked }: { s: any; onPick: (k: string) => 
   );
 }
 
-const inputCls = "rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none";
+const inputCls = "rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-hidden";
 
 /** The topic picker: a type, then a key from the catalogue (a strategy agent from the registry, its pattern or exits, a market condition). */
 function Picker({ catalog, agents, onPick }: { catalog: any; agents: any[]; onPick: (k: string) => void }) {
@@ -230,6 +230,13 @@ const PROPOSAL_STATE: Record<string, string> = {
   queued_shadow: "waiting for its shadow test", handoff_pending: "being sent to the platform", handed_off: "with the platform's evolution loop", closed: "recorded, nothing changes",
   shadow: "in its shadow test", live: "live", rolled_back: "rolled back by itself", rejected: "not applied", superseded: "replaced by a newer proposal on the same knob"
 };
+// The platform's state of a handed-off proposal (council.decisions.read, platform V3).
+const PLATFORM_STATE: Record<string, { text: string; tone: "green" | "red" | "amber" | "slate" }> = {
+  received: { text: "received", tone: "slate" }, queued: { text: "queued", tone: "slate" }, waiting_external: { text: "waiting: repo not built by the platform yet", tone: "amber" },
+  in_progress: { text: "being built", tone: "amber" }, proposed: { text: "change proposed", tone: "amber" }, merged: { text: "merged", tone: "green" },
+  deployed: { text: "deployed", tone: "green" }, deployed_unmeasured: { text: "deployed, not measured yet", tone: "green" }, closed: { text: "closed", tone: "slate" },
+  rejected: { text: "rejected", tone: "red" }, refused: { text: "refused", tone: "red" }, unfit: { text: "unfit", tone: "red" }, reverted: { text: "reverted", tone: "red" }
+};
 const ROUND: Record<string, string> = { position: "Opening opinions", rebuttal: "Responses to each other", answer: "Answers to the owner" };
 const STATE_TEXT: Record<string, string> = { positions: "the agents are giving their opinions…", rebuttals: "the agents are responding to each other…", synthesis: "the moderator is writing the options…", awaiting_owner: "waiting for your pick (in Cerebrum)", aborted: "stopped", decided: "decided", expired: "expired", closed: "closed" };
 const TERMINAL = ["aborted", "expired", "decided", "closed"];
@@ -316,7 +323,7 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap gap-1.5 text-[11px]">{s.participants.map((p: any) => (
             <button key={p.id} type="button" onClick={() => setTo((x) => x.includes(p.id) ? x.filter((y) => y !== p.id) : x.length < 2 ? [...x, p.id] : x)}
-              className={`rounded px-2 py-0.5 ring-1 ${to.includes(p.id) ? "bg-cyan-500/20 text-cyan-200 ring-cyan-400/40" : "text-slate-300 ring-slate-600/50"}`}>{p.name}</button>))}</div>
+              className={`rounded-sm px-2 py-0.5 ring-1 ${to.includes(p.id) ? "bg-cyan-500/20 text-cyan-200 ring-cyan-400/40" : "text-slate-300 ring-slate-600/50"}`}>{p.name}</button>))}</div>
           <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} maxLength={1000} placeholder="Write to the agents (pick 1 or 2 above to answer)" className="rounded-md bg-slate-900/60 p-2 text-[12px] text-slate-200 ring-1 ring-slate-700" />
           <div className="flex items-center gap-2"><button type="button" disabled={busy || !text.trim() || !to.length} onClick={send} className="rounded-md bg-cyan-500/20 px-3 py-1 text-[12px] font-semibold text-cyan-200 ring-1 ring-cyan-400/40 disabled:opacity-40">Send</button>{!to.length ? <span className="text-[11px] text-slate-500">pick an agent to answer</span> : null}</div>
         </div>
@@ -339,7 +346,16 @@ function Proposals({ tick }: { tick: number }) {
           <div className="flex items-start justify-between gap-2"><div className="font-semibold text-slate-100">{p.title ?? p.option_id}</div>{KIND[p.kind] ? <Badge tone={KIND[p.kind].tone}>{KIND[p.kind].text}</Badge> : null}</div>
           {p.kind === "policy_parameter" ? <div className="mono mt-1 text-[11px] text-emerald-200">{p.knob}: {p.from_value} → {p.value}</div> : null}
           <div className="mt-1 text-[11px] text-slate-400">{PROPOSAL_STATE[p.state] ?? p.state} · accepted {String(p.accepted_at).slice(0, 16).replace("T", " ")} UTC{p.note ? ` · ${p.note}` : ""}</div>
-        </div>))}</div></div>
+          {p.platform ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
+              <span>Platform:</span><Badge tone={PLATFORM_STATE[p.platform.state]?.tone ?? "slate"}>{PLATFORM_STATE[p.platform.state]?.text ?? p.platform.state}</Badge>
+              <span>{String(p.platform.at).slice(0, 16).replace("T", " ")} UTC</span>
+              {p.platform.reason ? <span className="w-full text-slate-500">{p.platform.reason}</span> : null}
+              {p.platform.refs?.merge_sha ? <span className="mono text-slate-500">merge {String(p.platform.refs.merge_sha).slice(0, 7)}</span> : null}
+            </div>
+          ) : null}
+        </div>))}</div>
+      {(poll.data as any)?.platform_poll && !(poll.data as any).platform_poll.on ? <div className="mt-1.5 text-[10.5px] text-slate-500">The platform's progress on handed-off proposals shows here once its return path is live.</div> : null}</div>
   );
 }
 
@@ -377,8 +393,8 @@ function Sessions({ topic }: { topic: string | null }) {
       {err ? <div className="text-[11px] text-rose-300">{err}</div> : null}
       {d?.sessions?.length ? (
         <div className="flex flex-wrap gap-1.5">{d.sessions.map((x: any) => (
-          <button key={x.id} type="button" onClick={() => setOpen(x.id)} className={`rounded px-2 py-0.5 text-[11px] ring-1 ${open === x.id ? "bg-cyan-500/20 text-cyan-200 ring-cyan-400/40" : "text-slate-300 ring-slate-600/50"}`}>{x.topic_text ?? x.topic_key} · {x.state}</button>))}
-          {open ? <button type="button" onClick={() => setOpen(null)} className="rounded px-2 py-0.5 text-[11px] text-slate-500 ring-1 ring-slate-700/50 hover:text-slate-300">Hide</button> : null}</div>
+          <button key={x.id} type="button" onClick={() => setOpen(x.id)} className={`rounded-sm px-2 py-0.5 text-[11px] ring-1 ${open === x.id ? "bg-cyan-500/20 text-cyan-200 ring-cyan-400/40" : "text-slate-300 ring-slate-600/50"}`}>{x.topic_text ?? x.topic_key} · {x.state}</button>))}
+          {open ? <button type="button" onClick={() => setOpen(null)} className="rounded-sm px-2 py-0.5 text-[11px] text-slate-500 ring-1 ring-slate-700/50 hover:text-slate-300">Hide</button> : null}</div>
       ) : <Empty>No session yet.</Empty>}
       {open ? <SessionView id={open} enabled={Boolean(d?.enabled)} onOpen={(x) => { setOpen(x); setTick((t) => t + 1); }} /> : null}
       <Proposals tick={tick} />

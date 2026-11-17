@@ -108,7 +108,7 @@ export default function Audit() {
       <Panel title="Decision audit" icon={<BookOpenCheck className="h-3.5 w-3.5 text-cyan-300" />} hint="Each room conclusion with agent stances, rule breaks and scored outcomes.">
         <div className="flex flex-wrap gap-2">
           {CHARTS.map(([k, label]) => (
-            <button key={k} onClick={() => setChart(k)} className={`rounded border px-2 py-1 text-[12px] ${chart === k ? "border-cyan-400/50 bg-cyan-500/10 text-cyan-200" : "border-white/10 text-slate-400 hover:text-slate-200"}`}>{label}</button>
+            <button key={k} onClick={() => setChart(k)} className={`rounded-sm border px-2 py-1 text-[12px] ${chart === k ? "border-cyan-400/50 bg-cyan-500/10 text-cyan-200" : "border-white/10 text-slate-400 hover:text-slate-200"}`}>{label}</button>
           ))}
         </div>
       </Panel>

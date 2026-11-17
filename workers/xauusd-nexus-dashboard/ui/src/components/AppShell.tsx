@@ -75,7 +75,7 @@ export default function AppShell({ current, children }: { current: string; child
               const cls = `flex items-center gap-2.5 rounded-md border font-semibold transition ${mobile ? "px-4 py-3 text-[13px]" : "px-3 py-2 text-[12px]"}`;
               if (item.soon) return (
                 <span key={item.key} className={`${cls} cursor-default border-transparent text-slate-600`} aria-disabled="true">
-                  <item.icon className="h-4 w-4 text-slate-700" />{item.label}<span className="ml-auto rounded border border-white/10 px-1.5 text-[9px] uppercase tracking-[0.15em] text-slate-500">soon</span>
+                  <item.icon className="h-4 w-4 text-slate-700" />{item.label}<span className="ml-auto rounded-sm border border-white/10 px-1.5 text-[9px] uppercase tracking-[0.15em] text-slate-500">soon</span>
                 </span>
               );
               return (
@@ -93,7 +93,7 @@ export default function AppShell({ current, children }: { current: string; child
 
   return (
     <div className="min-h-screen text-slate-100">
-      <header className="border-b border-white/10 bg-obsidian-panel/90 backdrop-blur">
+      <header className="border-b border-white/10 bg-obsidian-panel/90 backdrop-blur-sm">
         <div className="mx-auto flex max-w-[1680px] items-center gap-3 px-3 py-3 sm:px-6 sm:py-4">
           <a href="/#/" onClick={(e) => navigate(e, "/#/")} className="flex items-center gap-3" aria-label="Nexus War Room">
             <motion.div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-cyan-400/40 bg-cyan-400/10 sm:h-11 sm:w-11"
@@ -117,9 +117,9 @@ export default function AppShell({ current, children }: { current: string; child
             <span className={`chip ${live ? "border-amber-400/20 bg-amber-400/10 text-amber-200" : "border-rose-400/20 bg-rose-400/10 text-rose-300"}`}>
               <Dot tone={live ? "green" : closed ? "slate" : "red"} pulse={live} />{live ? "Room live" : closed ? "Market closed" : !room ? "Room offline" : "Room behind"}
             </span>
-            <span className="chip border-white/10 bg-white/[0.04] text-slate-300"><Clock /></span>
+            <span className="chip border-white/10 bg-white/4 text-slate-300"><Clock /></span>
           </div>
-          <button type="button" className="ml-auto rounded-md border border-white/10 bg-white/[0.04] p-2 text-slate-400 hover:text-white md:hidden"
+          <button type="button" className="ml-auto rounded-md border border-white/10 bg-white/4 p-2 text-slate-400 hover:text-white md:hidden"
             onClick={() => setOpen((o) => !o)} aria-label="Toggle navigation" aria-expanded={open}>
             {open ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
           </button>
@@ -140,7 +140,7 @@ export default function AppShell({ current, children }: { current: string; child
         <main className="min-w-0 flex-1">{children}</main>
       </div>
 
-      <footer className="sticky bottom-0 z-20 border-t border-white/10 bg-obsidian-foot/95 backdrop-blur">
+      <footer className="sticky bottom-0 z-20 border-t border-white/10 bg-obsidian-foot/95 backdrop-blur-sm">
         <div className="mx-auto flex max-w-[1680px] items-center gap-4 overflow-x-auto px-3 py-3 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-500 sm:px-6">
           <a href="https://nexus.cryptophys.work/console/" target="_blank" rel="noopener noreferrer" className="ml-auto inline-flex items-center gap-1 whitespace-nowrap text-cyan-300/80 hover:text-cyan-200">Console <ExternalLink className="h-3 w-3" /></a>
         </div>

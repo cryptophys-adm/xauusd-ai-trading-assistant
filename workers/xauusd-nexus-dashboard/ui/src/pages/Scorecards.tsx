@@ -108,10 +108,10 @@ function LeaderboardGraph({ rows, title }: { rows: any[]; title: string }) {
           return (
             <div key={r.id} className="grid grid-cols-[130px_1fr_70px_70px] items-center gap-3 text-[11px]">
               <div className="truncate font-mono font-medium text-slate-300" title={r.name}>{r.name}</div>
-              <div className="relative flex h-4 w-full items-center rounded-md bg-white/[0.04] px-1">
+              <div className="relative flex h-4 w-full items-center rounded-md bg-white/4 px-1">
                 {/* 50% Baseline Marker */}
                 <div className="absolute left-1/2 top-0 bottom-0 w-px bg-cyan-400/40 z-10" title="50% baseline" />
-                <div className={`h-2.5 rounded transition-all duration-500 ${barColor}`} style={{ width: `${pct}%` }} />
+                <div className={`h-2.5 rounded-sm transition-all duration-500 ${barColor}`} style={{ width: `${pct}%` }} />
               </div>
               <div className="text-right mono font-bold text-slate-200">{p(r.accuracy)}</div>
               <div className="text-right">

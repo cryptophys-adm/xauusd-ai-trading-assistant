@@ -467,7 +467,7 @@ function Mt5ChartCanvas({
     // Fills the whole chart column (owner 2026-11-12: "tidak ada space kosong dibawah sumbu waktu"); at least 430 px.
     <div className="relative h-full min-h-[430px] w-full flex-1 bg-[#060a12]">
       {/* MT5 Top-Left Chart Watermark & OHLC Bar */}
-      <div className="pointer-events-none absolute left-2.5 top-2 z-10 flex flex-col gap-0.5 rounded bg-black/55 px-2.5 py-1.5 backdrop-blur-sm border border-white/5">
+      <div className="pointer-events-none absolute left-2.5 top-2 z-10 flex flex-col gap-0.5 rounded-sm bg-black/55 px-2.5 py-1.5 backdrop-blur-xs border border-white/5">
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
           <span className="mono font-bold text-cyan-300">
             {symbol}, {tf}
@@ -489,13 +489,13 @@ function Mt5ChartCanvas({
       </div>
 
       {/* Live Broker Bid/Ask Overlay Pill */}
-      <div className="pointer-events-none absolute right-16 top-2 z-10 flex items-center gap-1.5 rounded bg-black/65 px-2.5 py-1 text-[11px] backdrop-blur-sm border border-white/10">
+      <div className="pointer-events-none absolute right-16 top-2 z-10 flex items-center gap-1.5 rounded-sm bg-black/65 px-2.5 py-1 text-[11px] backdrop-blur-xs border border-white/10">
         <span className="text-slate-400">Bid</span>
         <span className="mono font-bold text-emerald-300">{num(bid, digits)}</span>
         <span className="text-slate-600">/</span>
         <span className="text-slate-400">Ask</span>
         <span className="mono font-bold text-rose-300">{num(ask, digits)}</span>
-        {spreadPoints != null ? <span className="mono ml-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-amber-200">{spreadPoints} pts</span> : null}
+        {spreadPoints != null ? <span className="mono ml-1 rounded-sm bg-white/5 px-1.5 py-0.5 text-[10px] text-amber-200">{spreadPoints} pts</span> : null}
       </div>
 
       <div ref={hostRef} className="h-full w-full" />
@@ -902,16 +902,16 @@ export default function Omega() {
            ===================================================================== */}
         <div className="overflow-hidden rounded-xl border border-cyan-500/25 bg-[#070b13] shadow-[0_20px_60px_rgba(0,0,0,0.65)]">
         {/* Windows MT5 Application Title Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-gradient-to-r from-[#0d1526] via-[#0a101d] to-[#0d1526] px-3.5 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-linear-to-r from-[#0d1526] via-[#0a101d] to-[#0d1526] px-3.5 py-2">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-6 w-6 items-center justify-center rounded bg-cyan-500/15 border border-cyan-400/30 text-cyan-300">
+            <div className="flex h-6 w-6 items-center justify-center rounded-sm bg-cyan-500/15 border border-cyan-400/30 text-cyan-300">
               <Terminal className="h-3.5 w-3.5" />
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[12.5px] font-bold tracking-wide text-slate-100">
                 MT5 Terminal
               </span>
-              <span className="mono rounded bg-white/5 px-2 py-0.5 text-[11px] text-cyan-300 border border-white/10">
+              <span className="mono rounded-sm bg-white/5 px-2 py-0.5 text-[11px] text-cyan-300 border border-white/10">
                 {serverName} · {br.trade_mode ? br.trade_mode.toUpperCase() : "ACCOUNT UNKNOWN"} · {symbolName},{mt5Tf}
               </span>
             </div>
@@ -1141,11 +1141,11 @@ export default function Omega() {
 
             {/* MT5 One-Click Trading Style Dual Bid / Ask Box */}
             <div className="grid grid-cols-2 gap-2 p-2.5 border-b border-white/10 bg-black/25">
-              <div className="rounded-lg border border-rose-500/30 bg-gradient-to-b from-rose-500/15 to-rose-950/20 px-2.5 py-2 text-center">
+              <div className="rounded-lg border border-rose-500/30 bg-linear-to-b from-rose-500/15 to-rose-950/20 px-2.5 py-2 text-center">
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-rose-300">BID (SELL)</div>
                 <div className="mono mt-0.5 text-lg font-extrabold text-rose-200">{num(br.bid, digits)}</div>
               </div>
-              <div className="rounded-lg border border-emerald-500/30 bg-gradient-to-b from-emerald-500/15 to-emerald-950/20 px-2.5 py-2 text-center">
+              <div className="rounded-lg border border-emerald-500/30 bg-linear-to-b from-emerald-500/15 to-emerald-950/20 px-2.5 py-2 text-center">
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">ASK (BUY)</div>
                 <div className="mono mt-0.5 text-lg font-extrabold text-emerald-200">{num(br.ask, digits)}</div>
               </div>
@@ -1237,7 +1237,7 @@ export default function Omega() {
             <div className="flex-1 space-y-2 px-3 py-2.5 text-[11.5px]">
               <div>
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Accounts</div>
-                <div className="mt-1 flex items-center justify-between rounded bg-white/[0.03] px-2 py-1 border border-white/5">
+                <div className="mt-1 flex items-center justify-between rounded-sm bg-white/3 px-2 py-1 border border-white/5">
                   <span className="mono text-slate-200 truncate">{serverName}</span>
                   <Badge tone={br.terminal_connected ? "green" : "red"}>
                     {br.trade_mode || "unknown"}
@@ -1247,7 +1247,7 @@ export default function Omega() {
               <div>
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Expert Advisors</div>
                 <div className="mt-1 space-y-1">
-                  <div className="flex items-center justify-between rounded bg-cyan-500/[0.07] px-2 py-1 border border-cyan-400/20">
+                  <div className="flex items-center justify-between rounded-sm bg-cyan-500/[0.07] px-2 py-1 border border-cyan-400/20">
                     <span className="mono flex items-center gap-1.5 text-cyan-200">
                       <Bot className="h-3 w-3 text-cyan-300" />
                       OmegaExecutor
@@ -1256,7 +1256,7 @@ export default function Omega() {
                       {br.terminal_connected ? `${symbolName}, M1` : "standby"}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between rounded bg-white/[0.02] px-2 py-1 border border-white/5">
+                  <div className="flex items-center justify-between rounded-sm bg-white/2 px-2 py-1 border border-white/5">
                     <span className="mono text-slate-300">CryptophysXAUUSD</span>
                     <span className="mono text-[10px] text-slate-400">
                       {ea.connected ? (hb?.version ? `v${hb.version}` : "—") : "direct EA"}
@@ -1266,7 +1266,7 @@ export default function Omega() {
               </div>
               <div>
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Decision Engine</div>
-                <div className="mt-1 flex items-center justify-between rounded bg-white/[0.03] px-2 py-1 border border-white/5">
+                <div className="mt-1 flex items-center justify-between rounded-sm bg-white/3 px-2 py-1 border border-white/5">
                   <span className="text-slate-300">Signal</span>
                   <span
                     className={`mono font-bold ${
@@ -1375,15 +1375,15 @@ export default function Omega() {
                             <td className="mono">#{String(p.ticket)}</td>
                             <td>
                               {isManual ? (
-                                <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
+                                <span className="inline-flex items-center gap-1 rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
                                   MANUAL
                                 </span>
                               ) : isOmega ? (
-                                <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
+                                <span className="inline-flex items-center gap-1 rounded-sm bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
                                   OMEGA
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center gap-1 rounded bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-400/30">
+                                <span className="inline-flex items-center gap-1 rounded-sm bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-400/30">
                                   EXTERNAL
                                 </span>
                               )}
@@ -1414,7 +1414,7 @@ export default function Omega() {
                                     currency: cur,
                                   })
                                 }
-                                className="inline-flex items-center gap-1 rounded bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 hover:border-rose-400 active:scale-95 transition disabled:opacity-50"
+                                className="inline-flex items-center gap-1 rounded-sm bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 hover:border-rose-400 active:scale-95 transition disabled:opacity-50"
                                 title="Close at market"
                               >
                                 {closingTicket === p.ticket ? (
@@ -1465,11 +1465,11 @@ export default function Omega() {
                               <td className="mono">#{String(o.ticket)}</td>
                               <td>
                                 {isManualOrd ? (
-                                  <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
+                                  <span className="inline-flex items-center gap-1 rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
                                     MANUAL
                                   </span>
                                 ) : (
-                                  <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
+                                  <span className="inline-flex items-center gap-1 rounded-sm bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
                                     OMEGA
                                   </span>
                                 )}
@@ -1557,15 +1557,15 @@ export default function Omega() {
                           <td className="mono font-semibold">#{d.deal_ticket ?? "—"}</td>
                           <td>
                             {isManual ? (
-                              <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
+                              <span className="inline-flex items-center gap-1 rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
                                 MANUAL
                               </span>
                             ) : isOmega ? (
-                              <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
+                              <span className="inline-flex items-center gap-1 rounded-sm bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
                                 OMEGA
                               </span>
                             ) : (
-                              <span className="inline-flex items-center gap-1 rounded bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-400/30">
+                              <span className="inline-flex items-center gap-1 rounded-sm bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-400/30">
                                 EXTERNAL
                               </span>
                             )}
@@ -1576,7 +1576,7 @@ export default function Omega() {
                           <td className="mono">{num(d.exit_price, digits)}</td>
                           <td className={`mono font-bold ${toneCls(net)}`}>{money(net, d.currency || cur)}</td>
                           <td className="mono">
-                            <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10.5px]">
+                            <span className="rounded-sm bg-white/5 px-1.5 py-0.5 text-[10.5px]">
                               {d.reason || "closed"}
                             </span>
                           </td>
@@ -1818,25 +1818,25 @@ export default function Omega() {
 
                 {watchdog?.last_recovery ? (
                   <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded border border-white/5 bg-black/30 p-2.5">
+                    <div className="rounded-sm border border-white/5 bg-black/30 p-2.5">
                       <div className="text-[10px] uppercase text-slate-500">Directive</div>
                       <div className="mono mt-1 text-[12px] font-bold text-amber-300">
                         {watchdog.last_recovery.directive}
                       </div>
                     </div>
-                    <div className="rounded border border-white/5 bg-black/30 p-2.5">
+                    <div className="rounded-sm border border-white/5 bg-black/30 p-2.5">
                       <div className="text-[10px] uppercase text-slate-500">Reason</div>
                       <div className="mono mt-1 text-[12px] font-bold text-slate-200">
                         {watchdog.last_recovery.reason}
                       </div>
                     </div>
-                    <div className="rounded border border-white/5 bg-black/30 p-2.5">
+                    <div className="rounded-sm border border-white/5 bg-black/30 p-2.5">
                       <div className="text-[10px] uppercase text-slate-500">Time</div>
                       <div className="mono mt-1 text-[12px] text-cyan-200">
                         {timeUtc(watchdog.last_recovery.ms)} ({agoMs(Date.now() - watchdog.last_recovery.ms)})
                       </div>
                     </div>
-                    <div className="rounded border border-white/5 bg-black/30 p-2.5">
+                    <div className="rounded-sm border border-white/5 bg-black/30 p-2.5">
                       <div className="text-[10px] uppercase text-slate-500">Status</div>
                       <div className="mono mt-1 text-[12px] font-semibold text-emerald-300">
                         {Date.now() - watchdog.last_recovery.ms > (watchdog.anti_flapping_cooldown_sec ?? 180) * 1000 ? "Done" : "Cooling down"}
@@ -1844,7 +1844,7 @@ export default function Omega() {
                     </div>
                   </div>
                 ) : (
-                  <div className="mt-3 flex items-center gap-2 rounded border border-emerald-500/20 bg-emerald-950/15 p-3 text-[11.5px] text-emerald-200">
+                  <div className="mt-3 flex items-center gap-2 rounded-sm border border-emerald-500/20 bg-emerald-950/15 p-3 text-[11.5px] text-emerald-200">
                     <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-400" />
                     <span>
                       No recoveries.{br.state_age_ms != null && br.state_age_ms < 60000 ? " Terminal streaming." : " Terminal not streaming."}
@@ -1864,13 +1864,13 @@ export default function Omega() {
                   <button
                     type="button"
                     onClick={() => setShowRawState((v) => !v)}
-                    className="rounded border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-slate-300 hover:bg-white/10 transition"
+                    className="rounded-sm border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-slate-300 hover:bg-white/10 transition"
                   >
                     {showRawState ? "Hide" : "Show"}
                   </button>
                 </div>
                 {showRawState ? (
-                  <pre className="mt-2.5 max-h-56 overflow-y-auto rounded bg-black/60 p-3 mono text-[11px] text-emerald-300/90 border border-white/10">
+                  <pre className="mt-2.5 max-h-56 overflow-y-auto rounded-sm bg-black/60 p-3 mono text-[11px] text-emerald-300/90 border border-white/10">
                     {JSON.stringify(
                       {
                         terminal_connected: br.terminal_connected,
@@ -1922,7 +1922,7 @@ export default function Omega() {
                   <Badge tone={b?.tca?.samples_count ? "green" : "slate"}>{b?.tca?.samples_count ? b.tca.quality : "NO FILLS"}</Badge>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="mono rounded border border-white/10 bg-black/40 px-2.5 py-1 text-[11px] text-slate-300">
+                  <span className="mono rounded-sm border border-white/10 bg-black/40 px-2.5 py-1 text-[11px] text-slate-300">
                     Route: <span className="text-cyan-300 font-semibold">{b?.route?.active_route ?? "no connection"}</span>
                   </span>
                 </div>
@@ -1934,7 +1934,7 @@ export default function Omega() {
                 <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Slippage</span>
-                    <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[9.5px] font-bold text-emerald-300">
+                    <span className="rounded-sm bg-emerald-500/20 px-1.5 py-0.5 text-[9.5px] font-bold text-emerald-300">
                       {b?.tca?.samples_count ? b.tca.quality : "—"}
                     </span>
                   </div>
@@ -1962,7 +1962,7 @@ export default function Omega() {
                 <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Order route</span>
-                    <span className={`rounded px-1.5 py-0.5 text-[9.5px] font-bold ${b?.route?.status === "trading" ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/20 text-amber-300"}`}>
+                    <span className={`rounded-sm px-1.5 py-0.5 text-[9.5px] font-bold ${b?.route?.status === "trading" ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/20 text-amber-300"}`}>
                       {String(b?.route?.status ?? "unknown").replace(/_/g, " ").toUpperCase()}
                     </span>
                   </div>
@@ -2142,7 +2142,7 @@ export default function Omega() {
             </label>
             <input
               id="reason"
-              className="w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
+              className="w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-hidden"
               maxLength={200}
               placeholder="Required to pause or kill"
               value={controlReason}
@@ -2327,11 +2327,11 @@ export default function Omega() {
                   <div className="flex w-full items-center justify-between gap-1">
                     <span className="text-[12px] font-bold text-slate-100">{preset.name}</span>
                     {active ? (
-                      <span className="flex items-center gap-1 rounded bg-cyan-500/20 px-1.5 py-0.5 text-[9px] font-bold text-cyan-300 border border-cyan-400/30">
+                      <span className="flex items-center gap-1 rounded-sm bg-cyan-500/20 px-1.5 py-0.5 text-[9px] font-bold text-cyan-300 border border-cyan-400/30">
                         {configLocked ? "ACTIVE" : "SELECTED"}
                       </span>
                     ) : configLocked ? (
-                      <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-500">
+                      <span className="rounded-sm bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-500">
                         OFF
                       </span>
                     ) : null}
@@ -2391,7 +2391,7 @@ export default function Omega() {
                       disabled={configLocked}
                       value={preset.servers.includes(bServer) ? bServer : preset.servers[0]}
                       onChange={(ev) => setBServer(ev.target.value)}
-                      className={`mt-1 w-full rounded-md border border-cyan-400/35 bg-[#091322] px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400 focus:outline-none ${
+                      className={`mt-1 w-full rounded-md border border-cyan-400/35 bg-[#091322] px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400 focus:outline-hidden ${
                         configLocked ? "cursor-not-allowed opacity-50 bg-black/40" : ""
                       }`}
                     >
@@ -2420,7 +2420,7 @@ export default function Omega() {
                     setBServer(ev.target.value);
                     setSelectedBroker(detectBrokerFromServer(ev.target.value));
                   }}
-                  className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none ${
+                  className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-hidden ${
                     configLocked ? "cursor-not-allowed opacity-50 bg-black/40" : ""
                   }`}
                 />
@@ -2439,7 +2439,7 @@ export default function Omega() {
                   disabled={configLocked}
                   value={goldPair}
                   onChange={(ev) => setGoldPair(ev.target.value)}
-                  className={`mt-1 w-full rounded-md border border-amber-400/30 bg-[#0b1320] px-2.5 py-1.5 text-[12px] text-amber-100 focus:border-amber-400 focus:outline-none ${
+                  className={`mt-1 w-full rounded-md border border-amber-400/30 bg-[#0b1320] px-2.5 py-1.5 text-[12px] text-amber-100 focus:border-amber-400 focus:outline-hidden ${
                     configLocked ? "cursor-not-allowed opacity-50 bg-black/40" : ""
                   }`}
                 >
@@ -2465,7 +2465,7 @@ export default function Omega() {
                   placeholder={configLocked ? "Locked" : "Account number"}
                   value={bLogin}
                   onChange={(ev) => setBLogin(ev.target.value)}
-                  className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none ${
+                  className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-hidden ${
                     configLocked ? "cursor-not-allowed opacity-50 bg-black/40" : ""
                   }`}
                 />
@@ -2495,7 +2495,7 @@ export default function Omega() {
                   placeholder={configLocked ? "••••••••" : "Trading or investor password"}
                   value={bPassword}
                   onChange={(ev) => setBPassword(ev.target.value)}
-                  className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-none ${
+                  className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-hidden ${
                     configLocked ? "cursor-not-allowed opacity-50 bg-black/40" : ""
                   }`}
                 />
@@ -2527,7 +2527,7 @@ export default function Omega() {
               </div>
 
               {conn.status === "stored" && !br.terminal_connected ? (
-                <div className="rounded border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11.5px] text-amber-200">
+                <div className="rounded-sm border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11.5px] text-amber-200">
                   <div className="flex items-center gap-1.5 font-semibold text-amber-300">
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                     Terminal not connected
@@ -2608,15 +2608,15 @@ export default function Omega() {
 
               <div className="grid grid-cols-[1fr_110px] items-center gap-x-3 gap-y-1.5 text-[11px]">
                 <label htmlFor="e-risk" className="text-slate-400">Risk / trade (%)</label>
-                <input id="e-risk" type="number" min="0.01" max="2" step="0.01" value={eRisk} onChange={(ev) => { setEngineDirty(true); setERisk(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                <input id="e-risk" type="number" min="0.01" max="2" step="0.01" value={eRisk} onChange={(ev) => { setEngineDirty(true); setERisk(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
                 <label htmlFor="e-maxpos" className="text-slate-400">Max positions</label>
-                <input id="e-maxpos" type="number" min="1" max="5" step="1" value={eMaxPos} onChange={(ev) => { setEngineDirty(true); setEMaxPos(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                <input id="e-maxpos" type="number" min="1" max="5" step="1" value={eMaxPos} onChange={(ev) => { setEngineDirty(true); setEMaxPos(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
                 <label htmlFor="e-loss" className="text-slate-400">Max daily loss (%)</label>
-                <input id="e-loss" type="number" min="0.1" max="20" step="0.1" value={eLoss} onChange={(ev) => { setEngineDirty(true); setELoss(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                <input id="e-loss" type="number" min="0.1" max="20" step="0.1" value={eLoss} onChange={(ev) => { setEngineDirty(true); setELoss(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
                 <label htmlFor="e-spread" className="text-slate-400">Max spread (pts)</label>
-                <input id="e-spread" type="number" min="1" max="1000" step="1" value={eSpread} onChange={(ev) => { setEngineDirty(true); setESpread(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                <input id="e-spread" type="number" min="1" max="1000" step="1" value={eSpread} onChange={(ev) => { setEngineDirty(true); setESpread(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
                 <label htmlFor="e-age" className="text-slate-400">Max signal age (min)</label>
-                <input id="e-age" type="number" min="1" max="60" step="1" value={eAge} onChange={(ev) => { setEngineDirty(true); setEAge(ev.target.value); }} className="rounded border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                <input id="e-age" type="number" min="1" max="60" step="1" value={eAge} onChange={(ev) => { setEngineDirty(true); setEAge(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
               </div>
               <div className="flex flex-wrap gap-2 pt-1">
                 <button type="submit" id="e-save" disabled={!canControl} className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40">

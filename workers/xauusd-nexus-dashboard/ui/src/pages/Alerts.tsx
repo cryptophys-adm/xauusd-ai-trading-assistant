@@ -24,7 +24,7 @@ export default function Alerts() {
               : !v.pending.length ? <Empty>Nothing pending.</Empty> : (
               <ul className="flex flex-col gap-2">
                 {v.pending.map((p: any) => (
-                  <li key={p.signal_id + p.event} className="rounded border border-white/10 bg-white/[0.02] p-2">
+                  <li key={p.signal_id + p.event} className="rounded-sm border border-white/10 bg-white/2 p-2">
                     <div className="mb-1 text-[11px] text-slate-500">{EVENT_WORD[p.event] ?? p.event} · <span className="mono">{p.signal_id}</span></div>
                     <pre className="whitespace-pre-wrap text-[12px] text-slate-200">{p.text}</pre>
                   </li>

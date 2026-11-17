@@ -35,7 +35,7 @@ function Step({ label, at, state, note }: { label: string; at?: string | null; s
   return (
     <div className="flex min-w-0 flex-1 flex-col items-center gap-0.5 text-center" role="listitem">
       {icon}
-      <span className={`text-[9.5px] uppercase tracking-[0.1em] ${state === "done" ? "text-emerald-200" : state === "fail" ? "text-rose-200" : state === "next" ? "text-cyan-200" : "text-slate-500"}`}>{label}</span>
+      <span className={`text-[9.5px] uppercase tracking-widest ${state === "done" ? "text-emerald-200" : state === "fail" ? "text-rose-200" : state === "next" ? "text-cyan-200" : "text-slate-500"}`}>{label}</span>
       <span className="mono text-[10px] text-slate-400">{at ? hm(at) : note ?? "—"}</span>
     </div>
   );

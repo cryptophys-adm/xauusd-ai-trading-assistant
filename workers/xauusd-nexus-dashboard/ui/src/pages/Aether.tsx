@@ -322,20 +322,20 @@ function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { q
           {discounts.length > 0 || disqualified.length > 0 ? (
             <div className="space-y-1 mono text-[11px]">
               {disqualified.map((a: string) => (
-                <div key={a} className="flex items-center justify-between py-1 px-2 rounded bg-rose-500/10 border border-rose-500/20 text-rose-300">
+                <div key={a} className="flex items-center justify-between py-1 px-2 rounded-sm bg-rose-500/10 border border-rose-500/20 text-rose-300">
                   <span className="font-semibold">{a}</span>
                   <Badge tone="red">DISQUALIFIED</Badge>
                 </div>
               ))}
               {discounts.filter(([a]) => !disqualified.includes(a)).map(([agent, mult]: [string, any]) => (
-                <div key={agent} className="flex items-center justify-between py-1 px-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-200">
+                <div key={agent} className="flex items-center justify-between py-1 px-2 rounded-sm bg-amber-500/10 border border-amber-500/20 text-amber-200">
                   <span>{agent}</span>
                   <Badge tone="amber">{mult}x weight</Badge>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="rounded border border-emerald-500/20 bg-emerald-500/10 p-2 text-emerald-300">
+            <div className="rounded-sm border border-emerald-500/20 bg-emerald-500/10 p-2 text-emerald-300">
               All agents at full weight.
             </div>
           )}

@@ -170,7 +170,7 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
                 const n = k.readers?.[id]?.levels;
                 return (
                   <div key={id} className="glass-inner px-1.5 py-1 text-center" title={k.readers?.[id]?.role ?? READER_NAME[id]}>
-                    <div className="text-[9.5px] uppercase tracking-[0.1em]" style={{ color }}>{name}</div>
+                    <div className="text-[9.5px] uppercase tracking-widest" style={{ color }}>{name}</div>
                     <div className="mono text-[12px] text-slate-100">{typeof n === "number" ? n : "—"}</div>
                   </div>
                 );

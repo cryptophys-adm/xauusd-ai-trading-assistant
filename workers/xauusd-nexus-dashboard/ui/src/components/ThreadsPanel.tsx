@@ -204,12 +204,12 @@ export default function ThreadsPanel({ className }: { className?: string }) {
   const { tab, setTab } = useTab();
   return (
     <section className={clsx("glass flex min-h-0 flex-col overflow-hidden", className)} aria-label="War Rooms">
-      <div className="flex items-center border-b border-white/10 bg-white/[0.02]" role="tablist" aria-label="War Room timeframe">
+      <div className="flex items-center border-b border-white/10 bg-white/2" role="tablist" aria-label="War Room timeframe">
         <span className="hidden px-3 text-cyan-300 sm:inline-flex" aria-hidden="true"><Layers className="h-3.5 w-3.5" /></span>
         {TABS.map(([key, label]) => (
           <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)}
             className={clsx("flex-1 border-b-2 px-2 py-3 text-[11px] font-semibold uppercase tracking-[0.18em] transition",
-              tab === key ? "border-cyan-400 bg-cyan-400/[0.06] text-white" : "border-transparent text-slate-500 hover:bg-white/[0.03] hover:text-slate-200")}>{label}</button>
+              tab === key ? "border-cyan-400 bg-cyan-400/6 text-white" : "border-transparent text-slate-500 hover:bg-white/3 hover:text-slate-200")}>{label}</button>
         ))}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3"><TabBody key={tab} tab={tab} /></div>

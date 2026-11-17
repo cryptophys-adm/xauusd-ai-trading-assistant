@@ -84,21 +84,21 @@ export default function FeedFallbackCard() {
             editing ? (
               <div className="mt-2 space-y-1.5">
                 <input
-                  className="w-full rounded border border-white/10 bg-black/30 px-2 py-1 text-[11.5px] text-slate-100 outline-none focus:border-cyan-400/50"
+                  className="w-full rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-[11.5px] text-slate-100 outline-hidden focus:border-cyan-400/50"
                   placeholder={`Reason to switch ${next === "auto" ? "ON" : "OFF"}`}
                   value={reason}
                   maxLength={200}
                   onChange={(e) => setReason(e.target.value)}
                 />
                 <div className="flex gap-2">
-                  <button className="rounded bg-cyan-500/20 px-2 py-1 text-[11px] text-cyan-200 disabled:opacity-40" disabled={busy || !reason.trim()} onClick={submit}>
+                  <button className="rounded-sm bg-cyan-500/20 px-2 py-1 text-[11px] text-cyan-200 disabled:opacity-40" disabled={busy || !reason.trim()} onClick={submit}>
                     {busy ? "Saving…" : `Switch ${next === "auto" ? "ON" : "OFF"}`}
                   </button>
-                  <button className="rounded px-2 py-1 text-[11px] text-slate-400" onClick={() => { setEditing(false); setReason(""); }}>Cancel</button>
+                  <button className="rounded-sm px-2 py-1 text-[11px] text-slate-400" onClick={() => { setEditing(false); setReason(""); }}>Cancel</button>
                 </div>
               </div>
             ) : (
-              <button className="mt-1 rounded border border-white/10 px-2 py-1 text-[11px] text-slate-200 hover:border-cyan-400/40" onClick={() => setEditing(true)}>
+              <button className="mt-1 rounded-sm border border-white/10 px-2 py-1 text-[11px] text-slate-200 hover:border-cyan-400/40" onClick={() => setEditing(true)}>
                 {on ? "Switch fallback OFF…" : "Switch fallback ON…"}
               </button>
             )

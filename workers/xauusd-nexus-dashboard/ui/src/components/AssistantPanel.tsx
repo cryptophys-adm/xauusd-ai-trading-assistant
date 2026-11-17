@@ -68,7 +68,7 @@ function TrendLadder({ ladder }: { ladder: ReturnType<typeof useLadder> }) {
                 onClick={isTab ? () => setTab(r.key as any) : undefined}
                 onKeyDown={isTab ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setTab(r.key as any); } } : undefined}
                 title={isTab ? `Click to view ${r.label} War Room` : undefined}
-                className={`glass-inner px-3 py-2 transition ${r.key === tab ? "border-cyan-400/40 bg-cyan-400/5" : isTab ? "hover:border-white/20 hover:bg-white/[0.03] cursor-pointer" : ""}`}>
+                className={`glass-inner px-3 py-2 transition ${r.key === tab ? "border-cyan-400/40 bg-cyan-400/5" : isTab ? "hover:border-white/20 hover:bg-white/3 cursor-pointer" : ""}`}>
                 <div className="mb-1.5 flex items-center justify-between gap-2">
                   <div className="flex items-baseline gap-2"><span className="mono text-[12px] font-bold text-slate-100">{r.label}</span><span className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{r.role}</span></div>
                   <div className="flex items-center gap-1.5"><span className="text-[10px]" style={{ color: leanColor(r.lean) }}>{leanLabel(r.lean)}</span>{r.action && <Stance value={r.action} />}</div>
@@ -136,7 +136,7 @@ function ConsensusCard({ ladder }: { ladder: ReturnType<typeof useLadder> }) {
             );
           })}
           <div className="flex flex-wrap gap-x-3 gap-y-1 pt-1 text-[10px] text-slate-500">
-            {["BUY", "WAIT", "HOLD", "CLOSE", "SELL"].map((k) => <span key={k}><i className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: ({ BUY: C.bull, SELL: C.bear, CLOSE: C.cyan } as Record<string, string>)[k] ?? C.wait }} />{k}</span>)}
+            {["BUY", "WAIT", "HOLD", "CLOSE", "SELL"].map((k) => <span key={k}><i className="mr-1 inline-block h-2 w-2 rounded-xs" style={{ background: ({ BUY: C.bull, SELL: C.bear, CLOSE: C.cyan } as Record<string, string>)[k] ?? C.wait }} />{k}</span>)}
           </div>
         </div>
       )}
@@ -253,13 +253,13 @@ function SectionToggle({
     <button
       type="button"
       onClick={onToggle}
-      className="flex w-full items-center justify-between rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2 text-left transition hover:border-white/10 hover:bg-white/[0.04]"
+      className="flex w-full items-center justify-between rounded-lg border border-white/5 bg-white/2 px-3 py-2 text-left transition hover:border-white/10 hover:bg-white/4"
       aria-expanded={open}>
       <span className="flex items-center gap-2">
         {open ? <ChevronDown className="h-3.5 w-3.5 text-cyan-400" /> : <ChevronRight className="h-3.5 w-3.5 text-slate-500" />}
         <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">{title}</span>
       </span>
-      <span className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[9px] font-mono text-slate-400">{count}</span>
+      <span className="rounded-sm border border-white/10 bg-white/5 px-1.5 py-0.5 text-[9px] font-mono text-slate-400">{count}</span>
     </button>
   );
 }
