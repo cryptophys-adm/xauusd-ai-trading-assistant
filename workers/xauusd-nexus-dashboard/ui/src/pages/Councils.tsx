@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { FileSearch, Lightbulb, ScrollText, Users } from "lucide-react";
 import { Badge, Empty, Hint, Panel, Skeleton } from "../components/ui";
 import { get } from "../lib/api";
+import { useConfirm } from "../components/ConfirmDialog";
 import { ago, utc } from "../lib/format";
 import { usePoll } from "../lib/usePoll";
 
@@ -262,15 +263,24 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
   const s = (poll.data as any)?.session;
   const [text, setText] = useState(""); const [to, setTo] = useState<string[]>([]); const [err, setErr] = useState<string | null>(null); const [busy, setBusy] = useState(false);
   const [showOld, setShowOld] = useState(false);
+  const [confirm, dialog] = useConfirm();
   if (poll.loading && !s) return <Skeleton rows={4} />;
   if (!s) return <Empty>Session not found.</Empty>;
   const rounds = ["position", "rebuttal", "answer"].map((r) => [r, s.messages.filter((m: any) => m.round === r || (r === "answer" && (m.round === "owner" || m.round === "notice")))] as const).filter(([, ms]) => ms.length);
   const terminal = s.terminal ?? TERMINAL.includes(s.state);
   const send = async () => { setBusy(true); setErr(null); try { const r = await ownerPost({ action: "message", session_id: id, text, to }); setText(""); setTo([]); if (r?.stale) setErr("Sent. This session's evidence is older than 24 hours: re-open the topic for answers on fresh evidence."); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
-  const accept = async (option_id: string) => { if (!window.confirm("Accept this option? The session ends and the proposal goes ahead (a knob change is tested in shadow first).")) return; setBusy(true); setErr(null); try { await ownerPost({ action: "accept", session_id: id, option_id }); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
-  const control = async (action: "close" | "reopen") => { setBusy(true); setErr(null); try { const r = await ownerPost({ action, session_id: id }); if (action === "reopen" && r?.session_id) onOpen(r.session_id); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
+  const accept = async (o: any) => {
+    const what = o.kind === "policy_parameter" ? <>The knob <span className="mono text-emerald-200">{o.knob}</span> moves from {o.from} to {o.value} only after a shadow test on the recorded decisions shows it does better; it then goes live by itself and rolls back by itself if it does worse.</>
+      : o.kind === "repository_task" ? <>This needs new code. It is handed to the platform's evolution loop, so Cryptophys builds it, not an outside party. Nothing in trading changes until it is built and tested.</>
+      : <>Nothing changes. The decision is recorded.</>;
+    if (!(await confirm({ title: `Accept "${o.title}"?`, body: <><p>{what}</p><p className="mt-2 text-slate-400">The session ends with this pick.</p></>, confirmLabel: "Accept", tone: "emerald" }))) return;
+    setBusy(true); setErr(null); try { await ownerPost({ action: "accept", session_id: id, option_id: o.option_id }); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
+  const control = async (action: "close" | "reopen") => {
+    if (action === "close" && !(await confirm({ title: "Close this session?", body: "It ends here: no more answers and no pick. It frees a slot and does not count toward the 4 sessions a day.", confirmLabel: "Close session", tone: "amber" }))) return;
+    setBusy(true); setErr(null); try { const r = await ownerPost({ action, session_id: id }); if (action === "reopen" && r?.session_id) onOpen(r.session_id); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
   return (
     <div className="flex flex-col gap-3">
+      {dialog}
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
         {s.pack_stale ? <span className="text-amber-300">{Number(s.pack_refs) === 0 ? "This session ran on no evidence." : "This session's evidence is older than 24 hours."}</span> : null}
         <button type="button" disabled={busy || !enabled} onClick={() => control("reopen")} title={enabled ? "Open a new session on the same topic and agents, with fresh evidence; this one is closed" : "Turn sessions on first"}
@@ -299,7 +309,7 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
               {o.kind === "policy_parameter" ? <div className="mono text-[11px] text-emerald-200">{o.knob}: {o.from} → {o.value} {o.unit ?? ""}</div> : null}
               {o.kind === "repository_task" && o.spec ? <div className="text-[11px] text-amber-100/90">To build: {o.spec}</div> : null}
               <div className="text-[11px] text-slate-400">Change: {o.change} · Risk: {o.risk}{o.dissent ? ` · Dissent: ${o.dissent}` : ""}</div>
-              {s.state === "awaiting_owner" ? <div><button type="button" disabled={busy} onClick={() => accept(o.option_id)} className="mt-1 rounded-md bg-emerald-500/20 px-2.5 py-0.5 text-[11.5px] font-semibold text-emerald-200 ring-1 ring-emerald-400/40 disabled:opacity-40">Accept</button></div> : null}
+              {s.state === "awaiting_owner" ? <div><button type="button" disabled={busy} onClick={() => accept(o)} className="mt-1 rounded-md bg-emerald-500/20 px-2.5 py-0.5 text-[11.5px] font-semibold text-emerald-200 ring-1 ring-emerald-400/40 disabled:opacity-40">Accept</button></div> : null}
             </div>))}</div></div>
       ) : null}
       {!terminal ? (
@@ -339,16 +349,18 @@ function Sessions({ topic }: { topic: string | null }) {
   const poll = usePoll(() => get("/api/council/sessions"), 30_000, [tick]);
   const d = poll.data as any;
   const [open, setOpen] = useState<string | null>(null);
+  const [confirm, dialog] = useConfirm();
   const [text, setText] = useState(""); const [err, setErr] = useState<string | null>(null); const [busy, setBusy] = useState(false);
   // Open the newest live session by default; a page of closed sessions starts clean.
   useEffect(() => { if (!open) { const live = d?.sessions?.find((x: any) => !TERMINAL.includes(x.state)); if (live) setOpen(live.id); } }, [d, open]);
   const act = async (body: unknown) => { setBusy(true); setErr(null); try { const r = await ownerPost(body); if (r?.session_id) setOpen(r.session_id); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
   return (
     <div className="flex flex-col gap-3">
+      {dialog}
       <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-slate-400">
         <span>Sessions:</span>
         <span className={`rounded-md px-2 py-0.5 font-semibold ring-1 ${d?.enabled ? "bg-emerald-500/20 text-emerald-200 ring-emerald-400/40" : "bg-slate-700/60 text-slate-200 ring-slate-500/40"}`}>{d?.enabled ? "On" : "Off"}</span>
-        <button type="button" disabled={busy || d?.mode !== "on"} onClick={() => { if (d?.enabled && !window.confirm("Turn council sessions off? Running sessions stop at their next step.")) return; act({ action: "switch", on: !d?.enabled }); }}
+        <button type="button" disabled={busy || d?.mode !== "on"} onClick={async () => { if (d?.enabled && !(await confirm({ title: "Turn council sessions off?", body: "Running sessions stop at their next step. You can turn them on again at any time.", confirmLabel: "Turn off", tone: "rose" }))) return; act({ action: "switch", on: !d?.enabled }); }}
           className="rounded-md px-2 py-0.5 text-slate-300 ring-1 ring-slate-600/50 hover:text-slate-100 disabled:opacity-40">{d?.enabled ? "Turn off" : "Turn on"}</button>
         <span>at most 6 agents and 16 calls a session, 4 sessions a day (closed sessions do not count)</span>
       </div>

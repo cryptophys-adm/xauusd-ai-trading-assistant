@@ -325,7 +325,8 @@ export async function acceptOption(env, { session_id, option_id, actor = "owner"
   await db.prepare("INSERT INTO council_proposals (id, session_id, option_id, kind, title, knob, from_value, value, spec, option_json, state, note, report_id, accepted_by, accepted_ms, updated_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)")
     .bind(p.id, p.session_id, p.option_id, p.kind, p.title, p.knob, p.from_value, p.value, p.spec, p.option_json, p.state, p.note, p.accepted_by, now, now).run();
   await db.prepare("UPDATE council_sessions SET state = 'decided', reason = ?, updated_ms = ? WHERE id = ?").bind(clip(`accepted ${option_id} by ${actor}`, 200), now, session_id).run();
-  const sent = await handOff(env, p, publish);
+  // The report carries the state the proposal has once the platform holds it (a code task: handed_off).
+  const sent = await handOff(env, { ...p, state: kind === "repository_task" ? "handed_off" : state }, publish);
   const delivered = sent?.outcome === "success";
   const next = kind === "repository_task" ? (delivered ? "handed_off" : "handoff_pending") : state;
   await db.prepare("UPDATE council_proposals SET state = ?, report_id = ?, note = COALESCE(?, note), updated_ms = ? WHERE id = ?")
@@ -341,7 +342,7 @@ export async function retryProposalHandoffs(env, { now = Date.now(), publish = p
   const rows = (await db.prepare("SELECT * FROM council_proposals WHERE state = 'handoff_pending' ORDER BY accepted_ms LIMIT ?").bind(limit).all()).results ?? [];
   let sent = 0;
   for (const p of rows) {
-    const r = await handOff(env, p, publish);
+    const r = await handOff(env, { ...p, state: "handed_off" }, publish);
     if (r?.outcome === "success") { sent += 1; await db.prepare("UPDATE council_proposals SET state = 'handed_off', report_id = ?, note = NULL, updated_ms = ? WHERE id = ?").bind(String(r.report_id ?? "") || null, now, p.id).run(); }
     else await db.prepare("UPDATE council_proposals SET note = ?, updated_ms = ? WHERE id = ?").bind(clip(`platform send: ${r?.reason ?? r?.outcome ?? "failed"}; retried hourly`, 200), now, p.id).run();
   }

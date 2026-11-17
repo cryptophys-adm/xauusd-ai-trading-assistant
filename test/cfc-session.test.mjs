@@ -214,6 +214,7 @@ test("CS10. typed options: a knob change only within the registry's bounds, anyt
   const body = sent[0].report.body;
   assert.equal(sent[0].agent, "xauusd-moderator");
   assert.deepEqual([body.schema, body.kind, body.executor, body.spec, body.origin.council, body.chosen_by], ["typed_proposal.v1", "repository_task", "cryptophys", "build a momentum agent", session_id, "owner:owner@example.com"]);
+  assert.equal(body.state, "handed_off", "the report carries the state the platform holds it in");
   assert.ok(!/\d{4}\.\d/.test(JSON.stringify(body)), "no price in the hand-off");
   const list = (await listProposals(env)).proposals;
   assert.deepEqual([list[0].state, list[0].report_id], ["handed_off", "rpt_1"]);
