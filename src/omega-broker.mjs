@@ -17,6 +17,7 @@ import { eaSignal, readControl, blackoutWindow } from "./ea-signal.mjs";
 import { storeDeal, dealStats, FIRST_OF_DEAL } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
+import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
 import { goldSymbolCheck, goldSymbolText } from "./gold-symbol.mjs";
 
 export const OMEGA_SCHEMA_SQL = [
@@ -496,7 +497,15 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   const recent = await db.prepare("SELECT id FROM omega_intents WHERE created_ms > ?").bind(now - 2 * 86_400_000).all();
   // Each open position's strategy agent, from its open intent (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md).
   const agents = await positionAgents(db, executor);
-  const plan = planIntents({ signal, control, settings, executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id), agents });
+  // The Position Manager's fresh actions (src/position-manager.mjs, owner 2026-11-17), checked again in the plan.
+  const pmActions = await pendingPositionActions(db, { now });
+  const plan = planIntents({ signal, control, settings, executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id), agents, pmActions });
+  if (pmActions.length) {
+    // An action that became an intent is applied; one the live price no longer allows is skipped (never retried).
+    const planned = new Set(plan.intents.filter((it) => String(it.id).startsWith("pm:")).map((it) => { const [, t, , b] = String(it.id).split(":"); return `pm:${t}:${b}`; }));
+    await markPositionActions(db, pmActions.filter((a) => planned.has(a.id)).map((a) => a.id), "applied");
+    await markPositionActions(db, pmActions.filter((a) => !planned.has(a.id)).map((a) => a.id), "skipped");
+  }
   for (const planned of plan.intents) {
     const it = await withAttempt(db, planned);
     if (!it) continue;

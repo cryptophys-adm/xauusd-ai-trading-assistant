@@ -194,6 +194,9 @@
           "task": "news_reading"
         },
         {
+          "task": "position_council"
+        },
+        {
           "task": "metric_rebuttal"
         },
         {
