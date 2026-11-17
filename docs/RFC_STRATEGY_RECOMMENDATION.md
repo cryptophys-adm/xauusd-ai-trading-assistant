@@ -41,7 +41,17 @@ Status: P2 built and live (2026-11-17, see below); design decided (owner's answe
   first stored, from the Omega open intent whose `result.ticket` is the deal's `position_ticket`
   (`src/ea-execution.mjs` `dealStrategy`). `migrations/0025_strategy_arm.sql` records the three `strategy_arm_*`
   tables, statement for statement the run-time schema (a test holds them equal).
-- Not built yet: the recommendation cards (§3) and the platform `strategy_arm.v1` reports (§10).
+- Platform record (§10): built, `src/strategy-arm-relay.mjs` on the 5-minute ledger step. One `xauusd_digest` report
+  from `xauusd-risk-manager`, `body.schema` `strategy_arm.v1`, at most one per 30 minutes (the agent's 4 an hour are
+  shared with the health alerts and the EA relay, so a burst travels together, RFC "batched beyond the budget"). The
+  body is `{ schema, mode, armed, armed_count, max, items }`, `items` oldest first: arm events `{ event: "armed" |
+  "disarmed", strategy_id, reason, armed_count, at, audit_ref }` and, per platform ADR-0020 Amendment 1 (relayed
+  2026-11-17), each pick `{ event: "picked", mode: "auto" | "armed", strategy_id, confidence, confluence, score,
+  decision_key, at }`. Severity `warning` when an item is an auto-disarm. The cursor (KV `strategy-arm:relay`, not a D1
+  table) moves only on success; a rate limit or a transport failure is retried after 15 minutes; another kernel
+  denial is final and logged (`strategy_arm_relay_denied`). Doctrine facts: `omega.strategy_arm_required` and
+  `omega.max_armed_strategies` (the Omega seat's prefix, not `execution.*`).
+- Not built yet: the recommendation cards (§3).
 - ADR-0020 says a trading action needs the owner's click per action or as a standing arm of one strategy. AUTO trades
   with nothing armed; this record reads Omega's typed `live_armed` (a real account) plus this owner decision as the
   standing authorization for AUTO. If the platform reads ADR-0020 otherwise, it needs an amendment there.
