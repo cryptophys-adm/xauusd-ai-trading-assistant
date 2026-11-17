@@ -40,7 +40,8 @@ const req = (path, { token, method = "GET", body, origin = "https://omega.crypto
 test("the Access JWT: signature, audience, issuer and expiry; a person or a service token", async () => {
   resetKeyCacheForTests();
   const opts = { fetchImpl: certsFetch, now: NOW };
-  assert.deepEqual(await verifyAccessJwt(await jwt({ email: "Owner@Example.com" }), ENV_BASE, opts), { ok: true, identity: { subject: "owner@example.com", type: "user" } });
+  assert.deepEqual(await verifyAccessJwt(await jwt({ email: "Owner@Example.com" }), ENV_BASE, opts), { ok: true, identity: { subject: "owner@example.com", type: "user", sub: null } });
+  assert.equal((await verifyAccessJwt(await jwt({ email: "o@e.com", sub: "7c1d2e3f-aaaa" }), ENV_BASE, opts)).identity.sub, "7c1d2e3f-aaaa", "the Access user id (RFC §11.3)");
   assert.deepEqual((await verifyAccessJwt(await jwt({ common_name: "abc.access" }), ENV_BASE, opts)).identity, { subject: "abc.access", type: "service_token" });
   assert.equal((await verifyAccessJwt(await jwt({ email: "x@y.z" }, { key: other.privateKey }), ENV_BASE, opts)).reason, "invalid_signature");
   assert.equal((await verifyAccessJwt(await jwt({ email: "x@y.z", aud: ["b".repeat(64)] }), ENV_BASE, opts)).reason, "wrong_audience");
@@ -309,3 +310,24 @@ test("the trading mode changes only by a person's same-origin POST (owner 2026-1
   assert.equal(calls.length, 1);
 });
 
+
+test("the strategy arm route is owner only once OWNER_ACCESS_SUB is set (RFC §11.3); the sub goes to the RPC", async () => {
+  resetKeyCacheForTests();
+  const calls = [], views = [];
+  const O = { ...omega(), strategyArm: async (input) => { views.push(input); return { ok: true }; }, setStrategyArm: async (input) => { calls.push(input); return { ok: true }; } };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const owner = await jwt({ email: "Owner@Example.com", sub: "owner-sub-0001" });
+  const other = await jwt({ email: "guest@example.com", sub: "guest-sub-0002" });
+  const body = { strategy_id: "zone_pullback", action: "arm", request_id: "r1", expected_version: 3 };
+  const post = (env, token) => handle(req("/api/strategy-arm", { token, method: "POST", body }), env, opts);
+  const locked = { ...ENV_BASE, OMEGA: O, OWNER_ACCESS_SUB: "owner-sub-0001" };
+  assert.equal((await post(locked, other)).status, 403, "another signed-in person is refused");
+  assert.equal(calls.length, 0);
+  assert.equal((await post(locked, owner)).status, 200);
+  assert.deepEqual([calls.at(-1).actor, calls.at(-1).actor_sub], ["owner@example.com", "owner-sub-0001"]);
+  // Unset (bootstrap): as before, and the sub still reaches the RPC (the AI Worker records it once).
+  assert.equal((await post({ ...ENV_BASE, OMEGA: O }, other)).status, 200);
+  assert.equal(calls.at(-1).actor_sub, "guest-sub-0002");
+  assert.equal((await handle(req("/api/strategy-arm", { token: owner }), locked, opts)).status, 200);
+  assert.deepEqual(views.at(-1), { viewer: "owner@example.com", viewer_sub: "owner-sub-0001" });
+});

@@ -272,7 +272,7 @@ import {
 import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
 import { runNewsShadowCompare, readNewsShadowCompare } from "./news-shadow-compare.mjs";
 import { runPositionManager, runPositionReport, readPositionManager } from "./position-manager.mjs";
-import { setStrategyArm, disarmAll, readStrategyArm, dailyLossHit, strategyArmMode } from "./strategy-arm.mjs";
+import { setStrategyArm, disarmAll, readStrategyArm, dailyLossHit, strategyArmMode, ownerCheck, noteOwnerSub } from "./strategy-arm.mjs";
 import { runHealthAlerts, readHealthAlerts } from "./health-alerts.mjs";
 import { classifyRejection, recordRejection, webhookLaneStatus } from "./webhook-rejections.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
@@ -1809,14 +1809,16 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     return result;
   }
   /** The strategy arm's state for the Strategy Agents page (owner 2026-11-17). */
-  async strategyArm(): Promise<JsonObject> {
-    return { ...(await readStrategyArm(this.env)), allowed: await liveAgentIds(this.env), blocked: await armBlocked(this.env) } as JsonObject;
+  async strategyArm(input?: { viewer?: string; viewer_sub?: string | null }): Promise<JsonObject> {
+    const check = ownerCheck(this.env, input?.viewer_sub ?? null);
+    if (check === "unset" && input?.viewer_sub) await noteOwnerSub(this.env, { sub: input.viewer_sub, actor: input?.viewer });
+    return { ...(await readStrategyArm(this.env)), allowed: await liveAgentIds(this.env), blocked: await armBlocked(this.env), owner_check: check, can_arm: check !== "not_owner" } as JsonObject;
   }
   /** The owner's one click: arm or disarm one strategy (ADR-0020; at most 3; never moves the quorum). */
-  async setStrategyArm(input: { strategy_id?: string; action?: string; request_id?: string; expected_version?: number; actor?: string }): Promise<JsonObject> {
+  async setStrategyArm(input: { strategy_id?: string; action?: string; request_id?: string; expected_version?: number; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
     return setStrategyArm(this.env, {
       strategy_id: input?.strategy_id, action: input?.action, request_id: input?.request_id ?? null, expected_version: input?.expected_version ?? null,
-      actor: String(input?.actor ?? "owner"), reason: "owner", allowed: await liveAgentIds(this.env), blocked: input?.action === "arm" ? await armBlocked(this.env) : null,
+      actor: String(input?.actor ?? "owner"), actor_sub: input?.actor_sub ?? null, reason: "owner", allowed: await liveAgentIds(this.env), blocked: input?.action === "arm" ? await armBlocked(this.env) : null,
       send: (t: string) => sendTelegram(this.env, t)
     }) as Promise<JsonObject>;
   }

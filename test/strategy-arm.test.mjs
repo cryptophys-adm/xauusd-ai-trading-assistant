@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { setStrategyArm, disarmAll, readArmState, readArmsFromDb, dailyLossHit, resetStrategyArmSchemaCacheForTests, ARM_MAX, STRATEGY_ARMS_KEY } from "../src/strategy-arm.mjs";
+import { setStrategyArm, disarmAll, readArmState, readArmsFromDb, dailyLossHit, resetStrategyArmSchemaCacheForTests, ARM_MAX, STRATEGY_ARMS_KEY, ownerCheck, noteOwnerSub } from "../src/strategy-arm.mjs";
 import { pickStrategy, decide, selectionLine, MIN_CONFIDENCE } from "../src/decision-engine.mjs";
 import { applyArmGate } from "../src/ea-signal.mjs";
 import { strategyExits } from "../src/omega-engine.mjs";
@@ -111,4 +111,28 @@ test("SA5. at signal time: a strategy disarmed since the decision has no side; t
   const sym = { bid: 3870, ask: 3870.2 };
   assert.equal(strategyExits({ positions, signal: signal(""), sym, agents: { "open:1:S": "zone_pullback" }, now }).intents.length, 1, "AUTO: its own confidence drop closes it");
   assert.equal(strategyExits({ positions, signal: signal("sweep_reversal"), sym, agents: { "open:1:S": "zone_pullback" }, now }).intents.length, 0, "not armed: it does not close by its own rule");
+});
+
+test("SA6. owner only (RFC §11.3): OWNER_ACCESS_SUB set → only that Access sub arms or disarms; unset → bootstrap records each sub once", async () => {
+  resetStrategyArmSchemaCacheForTests();
+  const OWNER = "7c1d2e3f-aaaa-bbbb-cccc-0123456789ab";
+  assert.equal(ownerCheck({}, OWNER), "unset");
+  assert.equal(ownerCheck({ OWNER_ACCESS_SUB: OWNER }, OWNER), "owner");
+  assert.equal(ownerCheck({ OWNER_ACCESS_SUB: OWNER }, "someone-else-1234"), "not_owner");
+  assert.equal(ownerCheck({ OWNER_ACCESS_SUB: OWNER }, null), "not_owner", "no sub (an old route) is refused once the var is set");
+  const e = env({ OWNER_ACCESS_SUB: OWNER });
+  assert.equal((await setStrategyArm(e, { strategy_id: "zone_pullback", action: "arm", allowed, actor_sub: "someone-else-1234" })).error, "owner_only");
+  assert.equal((await setStrategyArm(e, { strategy_id: "zone_pullback", action: "arm", allowed, actor_sub: null })).error, "owner_only");
+  assert.equal((await setStrategyArm(e, { strategy_id: "zone_pullback", action: "arm", allowed, actor_sub: OWNER })).ok, true);
+  assert.equal((await disarmAll(e, { reason: "kill_switch" })).status, "disarmed", "the system's auto-disarm needs no owner sub");
+  // Bootstrap: unset var → the arm works as before, and the visitor's sub is noted once.
+  const b = env();
+  b.raw.exec("CREATE TABLE omega_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ms INTEGER, actor TEXT, action TEXT, detail TEXT)");
+  assert.equal(await noteOwnerSub(b, { sub: OWNER, actor: "owner@example.com" }), true);
+  assert.equal(await noteOwnerSub(b, { sub: OWNER, actor: "owner@example.com" }), false, "once per sub");
+  assert.equal(await noteOwnerSub(b, { sub: "bad sub!", actor: "x" }), false);
+  assert.equal(await noteOwnerSub({ ...b, OWNER_ACCESS_SUB: OWNER }, { sub: "another-sub-5678", actor: "x" }), false, "nothing is recorded once the var is set");
+  const rows = b.raw.prepare("SELECT actor, action, detail FROM omega_events").all();
+  assert.deepEqual(rows.map((r) => [r.actor, r.action, JSON.parse(r.detail).sub]), [["owner@example.com", "owner_sub_seen", OWNER]]);
+  assert.equal((await setStrategyArm(b, { strategy_id: "zone_pullback", action: "arm", allowed, actor_sub: OWNER })).ok, true);
 });
