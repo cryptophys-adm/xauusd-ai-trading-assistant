@@ -1,0 +1,11 @@
+export const GRID_ADAPT_KEY: string;
+export const GATE: Readonly<Record<string, number>>;
+export function gridAdaptMode(env: unknown): "live" | "off";
+export function cellLevels(plan: Record<string, any>, e: number, k: number): { entry: number; stop: number; risk: number; risk0: number } | null;
+export function planR(setup: Record<string, any>, e: number, k: number): { r: number; f: number } | null;
+export function bootstrapLow(values: number[], opts?: { B?: number; seed?: number }): number | null;
+export function sliceEvidence(setups: Record<string, any>[]): Record<string, any>;
+export function chooseCell(cells: Record<string, any>, current?: string | null): string | null;
+export function applyGridChoice(sig: Record<string, any>, opts?: { decision?: any; choices?: any }): Record<string, any>;
+export function readGridChoices(env: unknown): Promise<Record<string, any> | null>;
+export function runGridAdapt(env: unknown, opts?: { now?: number; send?: ((t: string) => Promise<unknown>) | null; force?: boolean }): Promise<{ status: string; [k: string]: unknown }>;
