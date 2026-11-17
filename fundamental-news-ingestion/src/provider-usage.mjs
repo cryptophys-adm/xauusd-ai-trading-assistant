@@ -138,17 +138,97 @@ export async function readUsage(env, now = Date.now()) {
  * Pure: { blocked, total, limit, chart_per_hour, chart_hours_left, chart_need, wanted }.
  */
 export const PROVIDER_DAILY_LIMIT = 500;
-export function chartReserve(day, { now = Date.now(), wanted = 0, limit = PROVIDER_DAILY_LIMIT } = {}) {
+/**
+ * The chart's calls an hour assumed before today has a completed hour with chart calls, on a weekday
+ * (2026-11-17: ~20 an hour on 2026-11-16 and in the first hour of 11-17). Without it the reserve read
+ * "no estimate" at 00:xx UTC and let news spend the day's first calls unchecked.
+ */
+export const CHART_PER_HOUR_FLOOR = 18;
+export function chartReserve(day, { now = Date.now(), wanted = 0, limit = PROVIDER_DAILY_LIMIT, extra = 0 } = {}) {
   const d = new Date(now);
   const hour = d.getUTCHours();
   const completed = (day?.by_caller?.pull_adapter?.by_hour || []).slice(0, hour).map((n) => Number(n) || 0);
   const sorted = completed.filter((n) => n > 0).sort((a, b) => a - b);
-  const perHour = sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : 0;
+  const weekday = d.getUTCDay() >= 1 && d.getUTCDay() <= 5;
+  const perHour = sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : (weekday ? CHART_PER_HOUR_FLOOR : 0);
   const midnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
   const hoursLeft = Math.max(0, (midnight - now) / 3_600_000);
   const need = Math.ceil(perHour * hoursLeft);
   const total = Number(day?.total) || 0;
-  return { blocked: total + wanted + need > limit, total, limit, chart_per_hour: perHour, chart_hours_left: Math.round(hoursLeft * 100) / 100, chart_need: need, wanted };
+  const reserved = Math.max(0, Math.floor(Number(extra) || 0));
+  return { blocked: total + wanted + need + reserved > limit, total, limit, chart_per_hour: perHour, chart_hours_left: Math.round(hoursLeft * 100) / 100, chart_need: need, reserved, wanted };
+}
+
+// ---------------------------------------------------------------- one budget for the account (2026-11-17)
+// Owner 2026-11-17 ("setuju perbaikan alert dan kuota", relayed; task #89): the account's 500 calls a day are
+// shared by the chart (the pull adapter, gold's 1H history), the economic calendar and the news pulls, and on
+// 2026-11-16 the chart alone had made 443 by 23:45 UTC when the provider refused the 501st call of the day.
+// Every provider call of this system passes this gateway, so it admits each job against one count (today's
+// calls of every caller) before it calls:
+//   - the account cap is the provider limit less ACCOUNT_SAFETY_MARGIN (calls this system cannot see, such as
+//     another agent on the same TradingView account, and the counts' small floor error);
+//   - the chart comes first: it is admitted while today's calls plus its own stay within the cap;
+//   - the calendar next: within CALENDAR_DAILY_CAP a day and only while the chart's need to midnight still fits;
+//   - news last: within NEWS_DAILY_CAP and only while the chart's need and the calendar's remaining calls fit.
+// A refused chart job answers like a provider quota (until the next UTC midnight), so the pull adapter stops
+// asking and the MT5 fallback takes over as it does for the provider's own refusal; news and the calendar wait.
+export const ACCOUNT_SAFETY_MARGIN = 20;
+export const NEWS_DAILY_CAP = 60;
+export const CALENDAR_DAILY_CAP = 30;
+const CLASS_OF = Object.freeze({ pull_adapter: "chart", gold_history: "chart", calendar: "calendar", news_cron: "news", news_ai_worker: "news", news_http: "news", other: "news" });
+export const callerClass = (caller) => CLASS_OF[callerOf(caller)] ?? "news";
+const callsOf = (day, callers) => callers.reduce((n, c) => n + (Number(day?.by_caller?.[c]?.calls) || 0), 0);
+
+/** The caps in force: env overrides (TV_PROVIDER_DAILY_LIMIT, TV_ACCOUNT_SAFETY_MARGIN, TV_NEWS_DAILY_CAP, TV_CALENDAR_DAILY_CAP). */
+export function budgetConfig(env = {}) {
+  const int = (v, d, min = 0) => { const n = Number.parseInt(String(v ?? ""), 10); return Number.isFinite(n) && n >= min ? n : d; };
+  const limit = int(env.TV_PROVIDER_DAILY_LIMIT, PROVIDER_DAILY_LIMIT, 1);
+  const margin = Math.min(int(env.TV_ACCOUNT_SAFETY_MARGIN, ACCOUNT_SAFETY_MARGIN), limit - 1);
+  return { limit, margin, cap: limit - margin, news_cap: int(env.TV_NEWS_DAILY_CAP, NEWS_DAILY_CAP), calendar_cap: int(env.TV_CALENDAR_DAILY_CAP, CALENDAR_DAILY_CAP) };
+}
+
+/**
+ * Pure: whether a job of `wanted` provider calls from `caller` may run now, against today's calls of every
+ * caller (`day`, readToday). Returns { allowed, class, reason, cap, total, wanted, retry_at, reserve }; reason
+ * is null, account_cap, calendar_daily_cap, news_daily_cap or reserved_for_chart.
+ */
+export function admitCalls(day, { caller, wanted = 1, now = Date.now(), config = budgetConfig() } = {}) {
+  const cls = callerClass(caller);
+  const total = Number(day?.total) || 0;
+  const w = Math.max(1, Math.floor(Number(wanted) || 1));
+  const d = new Date(now);
+  const retryAt = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1)).toISOString();
+  const out = (allowed, reason, reserve = null) => ({ allowed, class: cls, reason, cap: config.cap, total, wanted: w, retry_at: allowed ? null : retryAt, reserve });
+  if (total + w > config.cap) return out(false, "account_cap");
+  if (cls === "chart") return out(true, null);
+  const calendarUsed = callsOf(day, ["calendar"]);
+  if (cls === "calendar") {
+    if (calendarUsed + w > config.calendar_cap) return out(false, "calendar_daily_cap");
+    const reserve = chartReserve(day, { now, wanted: w, limit: config.cap });
+    return reserve.blocked ? out(false, "reserved_for_chart", reserve) : out(true, null, reserve);
+  }
+  if (callsOf(day, ["news_cron", "news_ai_worker", "news_http", "other"]) + w > config.news_cap) return out(false, "news_daily_cap");
+  const reserve = chartReserve(day, { now, wanted: w, limit: config.cap, extra: Math.max(0, config.calendar_cap - calendarUsed) });
+  return reserve.blocked ? out(false, "reserved_for_chart", reserve) : out(true, null, reserve);
+}
+
+/**
+ * Pure: the day's expected headroom under the cap for the Nexus status and the owner's report: the chart's
+ * projected calls to midnight (its median hour), the calendar's remaining cap and what is left for news.
+ */
+export function budgetHeadroom(day, { now = Date.now(), config = budgetConfig() } = {}) {
+  const total = Number(day?.total) || 0;
+  const reserve = chartReserve(day, { now, limit: config.cap });
+  const calendarLeft = Math.max(0, config.calendar_cap - callsOf(day, ["calendar"]));
+  const newsUsed = callsOf(day, ["news_cron", "news_ai_worker", "news_http", "other"]);
+  const projected = total + reserve.chart_need + calendarLeft;
+  return {
+    limit: config.limit, margin: config.margin, cap: config.cap, total,
+    chart_today: callsOf(day, ["pull_adapter", "gold_history"]), chart_per_hour: reserve.chart_per_hour, chart_need: reserve.chart_need,
+    calendar_left: calendarLeft, news_used: newsUsed, news_cap: config.news_cap,
+    news_room: Math.max(0, Math.min(config.news_cap - newsUsed, config.cap - projected)),
+    headroom: config.cap - projected
+  };
 }
 
 /** Today's calls (UTC) for the reserve, or null. Never throws. */

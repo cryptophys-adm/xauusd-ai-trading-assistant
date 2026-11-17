@@ -68,3 +68,21 @@ test("a gateway that answers spends its calls as before", async () => {
   assert.equal(await kv.get(SERIES_INTERNALS.GATEWAY_COOLDOWN_KEY), null);
   assert.ok(SERIES.length > 0);
 });
+
+test("the gateway's account cap (2026-11-17): nothing spent, the cooldown kept until midnight, the MT5 fallback triggered", async () => {
+  const { FALLBACK_TRIGGERS } = await import("../src/mt5-fallback.mjs");
+  const kv = new MemoryKV();
+  let asked = 0;
+  const env = {
+    MARKET_DATA_CACHE: kv,
+    TV_GATEWAY: { async ohlcv() { asked += 1; return { status: 429, body: { error: "account_budget_exhausted", quota_cooldown_until: UNTIL, results: [] } }; } }
+  };
+  const first = await refreshSeries(env, { now: NOW });
+  assert.equal(first.status, "account_budget_exhausted");
+  assert.equal(first.budget.released, first.requested, "the gateway called nobody: the reservation goes back");
+  assert.equal(await budgetOf(kv), 0);
+  assert.equal(JSON.parse(await kv.get(SERIES_INTERNALS.GATEWAY_COOLDOWN_KEY)).until, UNTIL);
+  assert.ok(FALLBACK_TRIGGERS.has("account_budget_exhausted"), "the broker's bars take over as for the provider's quota");
+  for (let i = 1; i <= 3; i++) assert.equal((await refreshSeries(env, { now: NOW + i * 60_000 })).status, "mcp_quota_cooldown_active");
+  assert.equal(asked, 1, "no call until midnight");
+});

@@ -1,4 +1,4 @@
-import { countingFetch, readUsage, recordUsage, usageTally, chartReserve, readToday, PROVIDER_DAILY_LIMIT } from "./provider-usage.mjs";
+import { countingFetch, readUsage, recordUsage, usageTally, chartReserve, readToday, PROVIDER_DAILY_LIMIT, admitCalls, budgetConfig, budgetHeadroom } from "./provider-usage.mjs";
 import { runNewsShadow, readNewsShadow } from "./news-sources.mjs";
 import { runOhlcvRequests, runEconomicCalendar } from "./tv-gateway.mjs";
 
@@ -1076,7 +1076,9 @@ export async function gatewayStatus(env) {
     cooldown_reason: cooldown?.reason || null,
     last_news_pull: last ? { status: last.status ?? null, checked_at: last.checked_at ?? null, failure_reason: last.failure_reason ?? null } : null,
     // The provider calls this gateway made today, per caller (src/provider-usage.mjs): counts only.
-    calls_today: summarizeUsage(usage?.today)
+    calls_today: summarizeUsage(usage?.today),
+    // The account budget's expected headroom today (src/provider-usage.mjs budgetHeadroom, 2026-11-17).
+    budget: usage?.today ? budgetHeadroom(usage.today, { config: budgetConfig(env) }) : null
   };
 }
 
@@ -1141,7 +1143,9 @@ async function buildHealth(env) {
     provider_daily_limit: parsePositiveInt(env.TV_PROVIDER_DAILY_LIMIT, PROVIDER_DAILY_LIMIT),
     // News without TradingView, in shadow (src/news-sources.mjs): the last run per source and today's totals.
     news_shadow: newsShadow,
-    chart_reserve: providerCalls?.today ? { ...chartReserve(providerCalls.today, { wanted: symbols.length, limit: parsePositiveInt(env.TV_PROVIDER_DAILY_LIMIT, PROVIDER_DAILY_LIMIT) }), enabled: asString(env.TV_NEWS_RESERVE).trim().toLowerCase() !== "off" } : null
+    chart_reserve: providerCalls?.today ? { ...chartReserve(providerCalls.today, { wanted: symbols.length, limit: budgetConfig(env).cap }), enabled: asString(env.TV_NEWS_RESERVE).trim().toLowerCase() !== "off" } : null,
+    // The account budget (2026-11-17): one cap for every caller, chart first, then the calendar, news last.
+    account_budget: providerCalls?.today ? { ...budgetHeadroom(providerCalls.today, { config: budgetConfig(env) }), enabled: asString(env.TV_ACCOUNT_BUDGET).trim().toLowerCase() !== "off" } : null
   };
 }
 
@@ -1212,12 +1216,15 @@ async function handlePull(request, env, ctx, options = {}) {
 
   // The chart comes first (src/provider-usage.mjs chartReserve): a news pull that would leave the gold
   // chart without calls before UTC midnight waits. TV_NEWS_RESERVE "off" leaves the check out.
+  // Since 2026-11-17 the account budget (admitCalls): news last, within its daily cap, and only while the
+  // chart's need to midnight and the calendar's remaining calls still fit under the account cap.
   if (asString(env.TV_NEWS_RESERVE).trim().toLowerCase() !== "off") {
-    const reserve = chartReserve(await readToday(env), { wanted: symbols.length, limit: parsePositiveInt(env.TV_PROVIDER_DAILY_LIMIT, PROVIDER_DAILY_LIMIT) });
-    if (reserve.blocked) {
-      return unavailableResponse(503, "TradingView calls are reserved for the gold chart today", {
-        failure_code: "reserved_for_chart",
-        reserve
+    const verdict = admitCalls(await readToday(env), { caller: asString(options.caller) || "news_http", wanted: symbols.length, config: budgetConfig(env) });
+    if (!verdict.allowed) {
+      return unavailableResponse(503, verdict.reason === "news_daily_cap" ? "Today's TradingView calls for news are used up" : "TradingView calls are reserved for the gold chart today", {
+        failure_code: verdict.reason === "news_daily_cap" ? "news_daily_cap" : "reserved_for_chart",
+        reserve: verdict.reserve ?? verdict,
+        retry_at: verdict.retry_at
       });
     }
   }
@@ -1310,8 +1317,29 @@ export async function runNewsPull(env, ctx, { forceRefresh = false } = {}) {
   return { ...body, rpc_http_status: response.status };
 }
 
+/**
+ * The account budget (src/provider-usage.mjs admitCalls, 2026-11-17): a job is admitted against today's calls
+ * of every caller before it calls the provider. A refused chart job answers like the provider's quota (until
+ * the next UTC midnight) so the pull adapter stops asking and the MT5 fallback takes over; others wait.
+ * TV_ACCOUNT_BUDGET "off" leaves the check out. Never throws: no count, no refusal.
+ */
+async function admission(env, caller, wanted) {
+  if (asString(env.TV_ACCOUNT_BUDGET).trim().toLowerCase() === "off") return null;
+  try {
+    const verdict = admitCalls(await readToday(env), { caller, wanted, config: budgetConfig(env) });
+    return verdict.allowed ? null : verdict;
+  } catch { return null; }
+}
+
 /** Runs one gateway job with its provider calls counted for `caller` (src/provider-usage.mjs). */
-async function counted(env, caller, run) {
+async function counted(env, caller, run, wanted = 1) {
+  const refused = await admission(env, caller, wanted);
+  if (refused) {
+    console.log("tv_budget_refused", JSON.stringify({ caller, reason: refused.reason, total: refused.total, cap: refused.cap, wanted: refused.wanted }));
+    return refused.class === "chart"
+      ? { status: 429, body: { error: "account_budget_exhausted", quota_cooldown_until: refused.retry_at, budget: refused, results: [] } }
+      : { status: 503, body: { error: refused.reason, retry_at: refused.retry_at, budget: refused } };
+  }
   const tally = usageTally(caller);
   try {
     const result = await run(gatewayDeps(tally));
@@ -1341,7 +1369,7 @@ function gatewayDeps(tally = null) {
 }
 
 export function runTvOhlcv(env, requests, caller = "pull_adapter") {
-  return counted(env, caller, (deps) => runOhlcvRequests(env, requests, deps));
+  return counted(env, caller, (deps) => runOhlcvRequests(env, requests, deps), Array.isArray(requests) ? requests.length : 1);
 }
 
 export const internals = {
