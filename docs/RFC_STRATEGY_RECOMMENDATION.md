@@ -1,6 +1,6 @@
 # RFC: Strategy Recommendation / Armed (XAUUSD)
 
-Status: draft for owner review (2026-11-16). No code until approved.
+Status: design decided (owner's answers 2026-11-16, "1–10 setuju", section 18). No code until the owner starts a phase, and P2 and P3 do not go live before platform ADR-0020 is merged (it awaits the owner's `merge_owner_change` click).
 
 **Owner's request (2026-11-16):** on the Strategy Agents page, one recommendation per strategy with an **Armed**
 button; an armed strategy is what the Signal Engine and Omega use for entry and close, still within the Decision
@@ -339,12 +339,13 @@ the event reason given and actor `system`:
     floor only after a side and the gates, so it is not seen without a signal.
   - The cost on the hot path is a D1 write only while something is armed and the floor is hit.
 
-**Proposals** (not in ADR-0020's list; each needs the `strategy_arm.v1` reason list extended first):
+**Also decided (owner, 2026-11-16, Q3 and Q8; the `strategy_arm.v1` reasons gain `breaker`, `unavailable` and `executor_lost`):**
 - `breaker`: the breaker suspends the agent (`suspendedAgents`). It is inert anyway as shadow; disarming stops it
   returning by itself when its record recovers.
 - `unavailable`: the agent turns `off` (`STRATEGY_AGENTS_OFF`, `STRATEGY_AGENTS_MODE = "off"`).
-- `executor_lost`: the executor is stale for more than 30 minutes while gold is open (`goldClosedAt`). Entries already
-  stop after 60 s (`executor_stale`), so this is optional (Q3).
+- `executor_lost`: **not a disarm** (Q3). The executor stale for more than 30 minutes while gold is open
+  (`goldClosedAt`) blocks new entries (as `executor_stale` already does after 60 s) and is reported with reason
+  `executor_lost` once; the arms stay.
 - **Not a disarm:**
   - `paused` (it already stops entries);
   - the engine toggle off or `live_armed` off, which `writeSettings` already disarms for a real account (Q3).
@@ -360,7 +361,7 @@ While a kill is active, or today's floor is hit, the Arm button is disabled. Re-
     `publishToPlatform` (`src/platform-reports.mjs`): `reports.publish`, kind `xauusd_digest`, `body.schema`
     `strategy_arm.v1`.
   - **The body** is `{ event: "armed" | "disarmed", strategy_id, reason: "owner" | "kill_switch" |
-    "daily_loss_limit", armed_count, at, audit_ref }`. `audit_ref` is the `strategy_arm_events.id` of the row.
+    "daily_loss_limit" | "breaker" | "unavailable" | "executor_lost", armed_count, at, audit_ref }`. `audit_ref` is the `strategy_arm_events.id` of the row.
   - **Severity:** `info` for an owner click, `warning` for an auto-disarm.
   - **Best effort.** The publish runs after the D1 commit, in `ctx.waitUntil`. A denied or failed publish never
     blocks or delays an arm or a disarm. The xauusd audit table is the authority.
@@ -371,8 +372,8 @@ While a kill is active, or today's floor is hit, the Arm button is disabled. Re-
     - the cursor `strategy_arm_report_cursor.last_event_id` advances only on `success`;
     - a denial or failure is retried at the next hourly sweep;
     - a kernel denial is final (rule `kernel_rules`), so a denied event is marked and not retried in a loop.
-  - **The reporting agent id** is Q7. `xauusd-risk-manager` shares its budget with health alerts (up to 3 an hour)
-    and the EA heartbeat relay, while `xauusd-reasoner` publishes about once an hour.
+  - **The reporting agent id** is `xauusd-risk-manager` (Q7). It shares the kernel's 4 reports an hour with the
+    health alerts and the EA heartbeat relay, hence the budget rules above.
   - No new capability, and arming never widens xauusd's external ceiling.
   - **Visibility:** until the platform's HAIC H0 ships, these reports show only in the platform audit chain and
     `agent_reports`, not on the Owner page.
@@ -491,19 +492,20 @@ Arming stays the owner's click in Nexus.
 - **P3:** live behind `STRATEGY_ARM_MODE = "live"` (owner PR to `wrangler.jsonc`). The rollback is `"off"` (today's
   behaviour).
 
-## 18. Open questions for the owner
+## 18. Owner decisions (2026-11-16, "1–10 setuju")
 
-1. Is `OWNER_ACCESS_SUB`, the Access user id in a var, the right owner check, or should it be an Access group claim
-   managed by the platform?
-2. On disarm, do open positions stay managed to their close by the strategy's rules (default), or are they closed?
-3. Should auto-disarm also fire on `executor_lost` (30 min), on the breaker, or on the engine toggle going off?
-4. After an `opposite` close, may another armed strategy open on the same signal once flat, or only at the next
-   decision?
-5. Does `DECISION_ENGINE = "off"` (the H1 decision) trade nothing under the arm layer, or trade as `zone_pullback`
-   when that is armed?
-6. Does a promoted rule change (a new `version`) keep the arm (default) or disarm?
-7. Which platform agent id publishes `strategy_arm.v1`: `xauusd-reasoner` (proposed) or `xauusd-risk-manager`?
-8. Should `strategy_arm.v1` admit the proposed reasons `breaker`, `unavailable` and `executor_lost` (a platform
-   contract change), or are those triggers left out?
-9. Should a Telegram line go to the Nexus chat beside the kernel report?
-10. Are the recommendation thresholds right (15 and 30 setups, +0.10R, a 0.65 / 0.50 stop share)?
+| # | Question | Decision |
+|---|---|---|
+| 1 | The owner check | `OWNER_ACCESS_SUB` (the Access user id in a var) now; a platform-managed Access group once roles exist |
+| 2 | Open positions on disarm | stay managed to their close by the owning strategy's exit rules; the owner can close one by hand |
+| 3 | More auto-disarm triggers | yes on the breaker and when the engine toggle goes off; a lost executor (30 min) blocks new entries but does not disarm |
+| 4 | After an `opposite` close | another armed strategy may enter only at the next decision, not on the same signal |
+| 5 | `DECISION_ENGINE = "off"` | nothing trades: the veto needs the engine |
+| 6 | A promoted rule change | the strategy stays armed; the card shows the new version and the change is audited |
+| 7 | The reporting agent | `xauusd-risk-manager` |
+| 8 | `strategy_arm.v1` reasons | `owner`, `kill_switch`, `daily_loss_limit`, plus `breaker`, `unavailable` and `executor_lost` (the last only reported, never a disarm, per 3) |
+| 9 | Telegram | yes: one line in the Nexus chat, as for a trading-mode change |
+| 10 | Recommendation thresholds | the defaults (15 and 30 setups, +0.10R, a 0.65 / 0.50 stop share); re-checked after one month |
+
+**Gate:** ADR-0020 ("Standing trading authorization (arm)", platform Forge `claude/strategy-arm-adr` bab0b26) awaits the
+owner's `merge_owner_change` click. P2 (arm state in shadow) and P3 (live) do not go live before it is merged.
