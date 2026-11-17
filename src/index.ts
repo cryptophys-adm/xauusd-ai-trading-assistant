@@ -255,6 +255,7 @@ import { dedupeDeals, listDeals, omegaOverview, setControl, storeDeal } from "./
 import { omegaHealth } from "./omega-health.mjs";
 import { relayEaHeartbeat } from "./ea-heartbeat-relay.mjs";
 import { relayStrategyArm } from "./strategy-arm-relay.mjs";
+import { computeRecommendations, readRecommendations } from "./strategy-recommendation.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings } from "./omega-broker.mjs";
@@ -2263,12 +2264,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // made for, its measured record from the plan learner, and for the latest decision each agent's plan
     // and the one the trade took.
     try {
-      const [state, latest] = await Promise.all([readPlanLearning(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null)]);
+      const [state, latest, reco] = await Promise.all([readPlanLearning(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null), readRecommendations(env)]);
       const d = latest as Record<string, any> | null;
       const records = ((state as Record<string, any> | null)?.agents ?? []) as Array<Record<string, any>>;
+      const cards = (((reco as Record<string, any> | null)?.cards ?? []) as Array<Record<string, any>>);
       return dashboardJson({
         status: "ok", mode: strategyAgentsMode(env), default_agent: DEFAULT_AGENT,
-        agents: agentCatalog(agentStatuses(env, { records }), { suspended: suspendedAgents(records).map((x) => x.id) }).map((a) => ({ ...a, record: records.find((r) => r.agent === a.id) ?? null })),
+        // The recommendation cards (RFC §3), from KV: computed on the ledger step, never on this poll.
+        recommendations: reco ? { computed_at: (reco as Record<string, any>).computed_at ?? null, context: (reco as Record<string, any>).context ?? null } : null,
+        agents: agentCatalog(agentStatuses(env, { records }), { suspended: suspendedAgents(records).map((x) => x.id) }).map((a) => { const c = cards.find((x) => x.id === a.id) ?? null; return { ...a, record: records.find((r) => r.agent === a.id) ?? null, card: c, recommendation: c?.recommendation ?? null, arm: c?.arm ?? null }; }),
         // The patterns the breaker holds back (their own trades here lost; the rest of the family trades on).
         suspended_patterns: suspendedPatterns(records),
         latest: d ? { decision_key: d.decision_key, bar_close: d.bar_close, stance: d.stance, chosen: d.trade ? (d.trade.strategy ?? DEFAULT_AGENT) : null, plans: d.strategy_plans ?? null } : null
@@ -2675,6 +2679,9 @@ async function runLedgerStep(env: Env): Promise<void> {
     const breaker = await syncAgentBreaker(env, ((await readPlanLearning(env)) as Record<string, any> | null)?.agents ?? [], { send: (text: string) => sendTelegram(env, text) });
     if (breaker.status !== "unchanged") console.log("strategy_agents_breaker", JSON.stringify(breaker));
   }
+  // The strategy recommendation cards (RFC §3): read-only, deterministic, at most every 15 minutes into KV.
+  const reco = await computeRecommendations(env);
+  if (reco.status === "failed") console.error("strategy_recommendations_failed", JSON.stringify(reco));
   // The custom model's dataset (owner 2026-11-13, docs/RFC_CUSTOM_MODEL.md): features and labels per decision.
   const dataset = await runModelDataset(env);
   if (dataset.status === "failed" || Number(dataset.added) || Number(dataset.labeled) || Number(dataset.wide) || Number(dataset.unavailable)) console.log("model_dataset", JSON.stringify(dataset));
