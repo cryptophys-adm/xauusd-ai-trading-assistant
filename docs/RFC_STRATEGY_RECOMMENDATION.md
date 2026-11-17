@@ -1,6 +1,6 @@
 # RFC: Strategy Recommendation / Armed (XAUUSD)
 
-Status: design decided (owner's answers 2026-11-16, "1–10 setuju", section 18). No code until the owner starts a phase, and P2 and P3 do not go live before platform ADR-0020 is merged (it awaits the owner's `merge_owner_change` click).
+Status: design decided (owner's answers 2026-11-16, "1–10 setuju", section 18). Platform ADR-0020 is merged and in effect (the owner's `merge_owner_change` click `cns_7ed29426`, 2026-11-17 01:08 UTC; platform main `e051489`). No code until the owner starts a phase; P2 and P3 stay behind `STRATEGY_ARM_MODE` and the owner's start.
 
 **Owner's request (2026-11-16):** on the Strategy Agents page, one recommendation per strategy with an **Armed**
 button; an armed strategy is what the Signal Engine and Omega use for entry and close, still within the Decision
@@ -22,10 +22,12 @@ dipilih maka no position, ya..". This design follows them:
    quorum witnesses and risk limits still apply, and the Decision Engine may refuse.
 
 **Constitution.** Today's constitution line "a trading action needs the owner's click" is amended by platform
-**ADR-0020 "Standing trading authorization (arm)"**, the governing decision for this feature. It is drafted on the
-platform's Forge branch `claude/strategy-arm-adr` (`bab0b26`), awaits the owner's click, and merges via
-`merge_owner_change`. It amends the core line of `vision.json` to: *a trading action needs the owner's click, per
-action or as a standing arm of one strategy*. The guards it writes in are:
+**ADR-0020 "Standing trading authorization (arm)"**, the governing decision for this feature. It was drafted on the
+platform's Forge branch `claude/strategy-arm-adr` (`bab0b26`) and **merged by the owner's click on 2026-11-17 at 01:08
+UTC** (`merge_owner_change` `cns_7ed29426`, platform main `e051489`, relayed by the orchestrator). The constitution's
+core line now reads: *"Never move funds; a trading action needs the owner's click, given per action or as a standing
+arm of one strategy (at most 3 armed, auto-disarmed on the kill switch or the daily loss limit, Decision Engine veto
+kept)."* The guards it writes in are:
 - "never move funds", unchanged;
 - the Decision Engine keeps its veto;
 - at most 3 armed;
@@ -33,8 +35,11 @@ action or as a standing arm of one strategy*. The guards it writes in are:
 - no strategy armed means no new positions.
 
 The HAIC Q6 exception (arm and disarm in Nexus only, not in Cerebrum) is recorded in platform HAIC §7.2. Arming is
-therefore the owner's standing click for that strategy's entries and closes. Nothing here is built before ADR-0020
-is merged. The text of ADR-0020 and HAIC §7.2 lives in the platform repository and was not read for this draft.
+therefore the owner's standing click for that strategy's entries and closes. ADR-0020 is merged, so the P0 precondition
+holds; each phase still starts only on the owner's word. The full text of ADR-0020 and HAIC §7.2 lives in the platform
+repository; the core line above is as relayed. Every arm and disarm keeps ADR-0020's guards: the owner's identity only,
+CSRF (same origin, JSON), an audit row, no fund movement, the Decision Engine veto, at most 3 armed, the auto-disarms,
+a disarm that always works, and no widening of the external ceiling.
 
 **Canonical references:** `docs/SSOT.md` ("Strategy agents", "Decision Engine", "MT5 Expert Advisor", "Omega broker
 engine"), `docs/RFC_STRATEGY_AGENTS.md`, `docs/RFC_STRATEGY_EXECUTION.md`, `docs/RFC_PLAN_LEARNING.md`,
@@ -507,5 +512,7 @@ Arming stays the owner's click in Nexus.
 | 9 | Telegram | yes: one line in the Nexus chat, as for a trading-mode change |
 | 10 | Recommendation thresholds | the defaults (15 and 30 setups, +0.10R, a 0.65 / 0.50 stop share); re-checked after one month |
 
-**Gate:** ADR-0020 ("Standing trading authorization (arm)", platform Forge `claude/strategy-arm-adr` bab0b26) awaits the
-owner's `merge_owner_change` click. P2 (arm state in shadow) and P3 (live) do not go live before it is merged.
+**Gate:** ADR-0020 ("Standing trading authorization (arm)") is **merged** (owner's `merge_owner_change` `cns_7ed29426`,
+2026-11-17 01:08 UTC, platform main `e051489`). P2 (arm state in shadow, `STRATEGY_ARM_MODE = "shadow"`) and P3 (live)
+still start only when the owner says so, one phase at a time; the platform record stays `strategy_arm.v1` (kind
+`xauusd_digest`).
