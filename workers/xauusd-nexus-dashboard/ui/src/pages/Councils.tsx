@@ -223,12 +223,16 @@ const STANCE: Record<string, { text: string; tone: "green" | "red" | "amber" | "
   support: { text: "agree", tone: "green" }, oppose: { text: "disagree", tone: "red" }, amend: { text: "agree, with a change", tone: "amber" }, abstain: { text: "abstain", tone: "slate" }
 };
 const ROUND: Record<string, string> = { position: "Opening opinions", rebuttal: "Responses to each other", answer: "Answers to the owner" };
-const STATE_TEXT: Record<string, string> = { positions: "the agents are giving their opinions…", rebuttals: "the agents are responding to each other…", synthesis: "the moderator is writing the options…", awaiting_owner: "waiting for your pick (in Cerebrum)", aborted: "stopped", decided: "decided", expired: "expired" };
+const STATE_TEXT: Record<string, string> = { positions: "the agents are giving their opinions…", rebuttals: "the agents are responding to each other…", synthesis: "the moderator is writing the options…", awaiting_owner: "waiting for your pick (in Cerebrum)", aborted: "stopped", decided: "decided", expired: "expired", closed: "closed" };
+const TERMINAL = ["aborted", "expired", "decided", "closed"];
 
 /** One agent's opinion: who, the stance, what it thinks in its own words, what it would try; evidence behind a link. */
 function OpinionCard({ m }: { m: any }) {
   const [ev, setEv] = useState(false);
   const st = STANCE[m.stance] ?? { text: m.stance ?? "", tone: "slate" as const };
+  if (m.round === "notice") return (
+    <div className="rounded-lg border border-amber-400/25 bg-amber-400/5 p-3 text-[12px] text-amber-100"><div className="mb-1 text-[10.5px] uppercase tracking-wider text-amber-300">Could not answer</div>{m.opinion}</div>
+  );
   if (m.round === "owner") return (
     <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/5 p-3 text-[12px] text-slate-200"><div className="mb-1 text-[10.5px] uppercase tracking-wider text-cyan-300">You{m.reply_to?.length ? ` → ${m.reply_to.join(", ")}` : ""}</div>{m.opinion}</div>
   );
@@ -245,17 +249,27 @@ function OpinionCard({ m }: { m: any }) {
 }
 
 /** One session: the rounds as opinion cards, the moderator's options, and the owner's box. */
-function SessionView({ id }: { id: string }) {
+function SessionView({ id, onOpen }: { id: string; onOpen: (id: string) => void }) {
   const [tick, setTick] = useState(0);
   const poll = usePoll(() => get(`/api/council/session?id=${encodeURIComponent(id)}`), 10_000, [id, tick]);
   const s = (poll.data as any)?.session;
   const [text, setText] = useState(""); const [to, setTo] = useState<string[]>([]); const [err, setErr] = useState<string | null>(null); const [busy, setBusy] = useState(false);
   if (poll.loading && !s) return <Skeleton rows={4} />;
   if (!s) return <Empty>Session not found.</Empty>;
-  const rounds = ["position", "rebuttal", "answer"].map((r) => [r, s.messages.filter((m: any) => m.round === r || (r === "answer" && m.round === "owner"))] as const).filter(([, ms]) => ms.length);
-  const send = async () => { setBusy(true); setErr(null); try { await ownerPost({ action: "message", session_id: id, text, to }); setText(""); setTo([]); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
+  const rounds = ["position", "rebuttal", "answer"].map((r) => [r, s.messages.filter((m: any) => m.round === r || (r === "answer" && (m.round === "owner" || m.round === "notice")))] as const).filter(([, ms]) => ms.length);
+  const terminal = s.terminal ?? TERMINAL.includes(s.state);
+  const send = async () => { setBusy(true); setErr(null); try { const r = await ownerPost({ action: "message", session_id: id, text, to }); setText(""); setTo([]); if (r?.stale) setErr("Sent. This session's evidence is older than 24 hours: re-open the topic for answers on fresh evidence."); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
+  const control = async (action: "close" | "reopen") => { setBusy(true); setErr(null); try { const r = await ownerPost({ action, session_id: id }); if (action === "reopen" && r?.session_id) onOpen(r.session_id); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
   return (
     <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2 text-[11px]">
+        {s.pack_stale ? <span className="text-amber-300">{Number(s.pack_refs) === 0 ? "This session ran on no evidence." : "This session's evidence is older than 24 hours."}</span> : null}
+        <button type="button" disabled={busy} onClick={() => control("reopen")} title="Open a new session on the same topic and agents, with fresh evidence; this one is closed"
+          className="rounded-md bg-cyan-500/20 px-2.5 py-0.5 font-semibold text-cyan-200 ring-1 ring-cyan-400/40 disabled:opacity-40">Re-open with fresh evidence</button>
+        {!terminal ? <button type="button" disabled={busy} onClick={() => control("close")} title="End this session; it frees a slot and does not count toward the day"
+          className="rounded-md bg-slate-700/60 px-2.5 py-0.5 font-semibold text-slate-200 ring-1 ring-slate-500/40 disabled:opacity-40">Close</button> : null}
+        {err ? <span className="text-rose-300">{err}</span> : null}
+      </div>
       <div className="text-[13px] text-slate-200"><span className="font-semibold">{s.question}</span> <span className="text-[11px] text-slate-500">· {s.topic_key} · {s.calls}/16 calls · {STATE_TEXT[s.state] ?? s.state}{s.reason ? ` (${s.reason})` : ""}</span></div>
       {rounds.map(([r, ms]) => (
         <div key={r}><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">{ROUND[r]}</div>
@@ -268,13 +282,13 @@ function SessionView({ id }: { id: string }) {
             <div key={o.option_id} className="glass-inner p-3 text-[12px]"><div className="font-semibold text-slate-100">{o.rank}. {o.title}</div><div className="mt-1 text-slate-300">{o.hypothesis}</div>
               <div className="mt-1 text-[11px] text-slate-400">Change: {o.change} · Risk: {o.risk}{o.dissent ? ` · Dissent: ${o.dissent}` : ""}</div></div>))}</div></div>
       ) : null}
-      {!["aborted", "expired", "decided"].includes(s.state) ? (
+      {!terminal ? (
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap gap-1.5 text-[11px]">{s.participants.map((p: any) => (
             <button key={p.id} type="button" onClick={() => setTo((x) => x.includes(p.id) ? x.filter((y) => y !== p.id) : x.length < 2 ? [...x, p.id] : x)}
               className={`rounded px-2 py-0.5 ring-1 ${to.includes(p.id) ? "bg-cyan-500/20 text-cyan-200 ring-cyan-400/40" : "text-slate-300 ring-slate-600/50"}`}>{p.name}</button>))}</div>
-          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} maxLength={1000} placeholder="Write to the agents (pick up to 2 to answer)" className="rounded-md bg-slate-900/60 p-2 text-[12px] text-slate-200 ring-1 ring-slate-700" />
-          <div className="flex items-center gap-2"><button type="button" disabled={busy || !text.trim()} onClick={send} className="rounded-md bg-cyan-500/20 px-3 py-1 text-[12px] font-semibold text-cyan-200 ring-1 ring-cyan-400/40 disabled:opacity-40">Send</button>{err ? <span className="text-[11px] text-rose-300">{err}</span> : null}</div>
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} maxLength={1000} placeholder="Write to the agents (pick 1 or 2 above to answer)" className="rounded-md bg-slate-900/60 p-2 text-[12px] text-slate-200 ring-1 ring-slate-700" />
+          <div className="flex items-center gap-2"><button type="button" disabled={busy || !text.trim() || !to.length} onClick={send} className="rounded-md bg-cyan-500/20 px-3 py-1 text-[12px] font-semibold text-cyan-200 ring-1 ring-cyan-400/40 disabled:opacity-40">Send</button>{!to.length ? <span className="text-[11px] text-slate-500">pick an agent to answer</span> : null}</div>
         </div>
       ) : null}
     </div>
@@ -295,7 +309,7 @@ function Sessions({ topic }: { topic: string | null }) {
       <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-slate-400">
         <span>Sessions:</span>
         <button type="button" disabled={busy || d?.mode !== "on"} onClick={() => act({ action: "switch", on: !d?.enabled })} className={`rounded-md px-2 py-0.5 font-semibold ring-1 ${d?.enabled ? "bg-emerald-500/20 text-emerald-200 ring-emerald-400/40" : "bg-slate-700/60 text-slate-200 ring-slate-500/40"} disabled:opacity-40`}>{d?.enabled ? "On" : "Off"}</button>
-        <span>at most 6 agents and 16 calls a session, 4 sessions a day</span>
+        <span>at most 6 agents and 16 calls a session, 4 sessions a day (closed sessions do not count)</span>
       </div>
       {d?.enabled ? (
         <div className="flex flex-col gap-2">
@@ -312,7 +326,7 @@ function Sessions({ topic }: { topic: string | null }) {
         <div className="flex flex-wrap gap-1.5">{d.sessions.map((x: any) => (
           <button key={x.id} type="button" onClick={() => setOpen(x.id)} className={`rounded px-2 py-0.5 text-[11px] ring-1 ${open === x.id ? "bg-cyan-500/20 text-cyan-200 ring-cyan-400/40" : "text-slate-300 ring-slate-600/50"}`}>{x.topic_text ?? x.topic_key} · {x.state}</button>))}</div>
       ) : <Empty>No session yet.</Empty>}
-      {open ? <SessionView id={open} /> : null}
+      {open ? <SessionView id={open} onOpen={(x) => { setOpen(x); setTick((t) => t + 1); }} /> : null}
     </div>
   );
 }
