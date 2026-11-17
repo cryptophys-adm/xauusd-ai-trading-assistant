@@ -763,7 +763,7 @@ async function knowledgePack(env, t, { now, refs }) {
     const right = (x) => x === "hit";
     return { outputs: rows.length, scored: scored.length, note_right: scored.filter((r) => right(r.result)).length, control_right: scored.filter((r) => right(r.control_result)).length, agents: [...new Set(rows.map((r) => r.agent))].sort(), note: "the shadow knowledge arm's answers with the note against the same agent's live answer (src/shadow-knowledge.mjs)" };
   });
-  return { scope: { item: t.item }, item, shadow, owner_corrections: unavailable("owner corrections start with the sessions (RFC §7, phase P2)"), prior: PRIOR };
+  return { scope: { item: t.item }, item, shadow, owner_corrections: unavailable("owner corrections are kept in the council sessions and are not read into this pack yet"), prior: PRIOR };
 }
 
 /**
