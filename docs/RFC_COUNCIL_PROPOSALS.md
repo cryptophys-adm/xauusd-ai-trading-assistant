@@ -1,6 +1,6 @@
 # RFC: council proposals, from the owner's pick to a change, without Claude
 
-- **Status:** phase 1 and phase 2 built.
+- **Status:** phase 1 and phase 2 built; the return path prepared (off).
 - **Date:** 2026-11-17.
 - **Builds on:** docs/RFC_CALL_FOR_COUNCILS.md; the platform's docs/design/HAIC-H0-H1.md (decision → proposal hand-off) and ADR-0014 (evolution loop).
 
@@ -83,6 +83,18 @@ The body never carries a price. The send is bound by the kernel's limit of 4 rep
   - On 20 or more changed decisions, if the old value would have gained, the live value is removed and recorded as retired.
   - A retired value is never tried again.
 - **Reporting.** Every step sends a Telegram line and a `typed_proposal.v1` state update to the platform. It runs once a UTC day from the ledger cron, after grid-adapt.
+
+## The return path (prepared, off)
+
+The platform reports what it does with a handed-off proposal through `council.decisions.read` (platform V3, relayed 2026-11-17), a tier-0 observe capability of `xauusd-moderator`:
+
+- **Call:** `AGENTS.observe("xauusd-moderator", "council.decisions.read", { cursor })`.
+- **Answer:** `{ available, origin, updates: [{ schema: "typed_proposal.v1", proposal_id, state, reason, refs{intent_id, evolution_id, cr_id, merge_sha, deploy_ref}, at }], next_cursor }`. At most 20 a call, oldest first, this origin only, never a price.
+- **States:** received, queued, waiting_external, rejected, in_progress, proposed, merged, deployed, deployed_unmeasured, closed, refused, unfit, reverted.
+
+`src/council-decisions.mjs` reads it once an hour, from the stored cursor, and stores each update about one of this repo's proposals (`council_proposal_updates`). Nexus shows the latest state beside the proposal. It changes nothing xauusd does: a knob proposal still runs its own shadow test, live and rollback.
+
+**Turning it on:** only after the platform says V3 is live on both the Forge and the AI Kernel. One PR then adds `council.decisions.read` to xauusd-moderator's capabilities in `organism.json` (the census raises `agent_capabilities_changed`; the routine consensus action grants it) and sets `COUNCIL_DECISIONS_POLL` to "on". Adding the capability earlier makes the running DNA schema refuse the whole organ.
 
 ## Also in phase 1
 

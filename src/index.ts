@@ -53,6 +53,7 @@ export interface Env {
   AGENTS?: {
     whoami(agentId: string): Promise<Record<string, unknown>>;
     syscall(agentId: string, capability: string, input?: Record<string, unknown>): Promise<Record<string, unknown>>;
+    observe?(agentId: string, capability: string, input?: Record<string, unknown>): Promise<Record<string, unknown>>;
   };
   // Aether, the Knowledge Guardian (RFC_AETHER_KNOWLEDGE_GUARDIAN A5): cryptophys-aether
   // KnowledgeIngress. Production only; no secret. Receives decision cards (no levels).
@@ -259,6 +260,7 @@ import { computeRecommendations, readRecommendations } from "./strategy-recommen
 import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
 import { startSession, ownerMessage, closeSession, reopenSession, acceptOption, retryProposalHandoffs, listProposals, runSessionStep, listSessions, readSession, setSessionsSwitch } from "./cfc-session.mjs";
+import { pollCouncilDecisions, platformStates, decisionsPollStatus } from "./council-decisions.mjs";
 import { runKnobProposals } from "./council-knob-tuning.mjs";
 import { readKnobOverrides } from "./council-knobs.mjs";
 import { organismStatus } from "./organism-status.mjs";
@@ -2357,7 +2359,11 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   }
   if (url.pathname === "/api/council/proposals") {
     // The options the owner accepted and where each stands (shadow test, handed to the platform, live). Read-only.
-    try { return dashboardJson({ status: "ok", ...(await listProposals(env)), live_knobs: await readKnobOverrides(env) }); }
+    try {
+      const listed = await listProposals(env);
+      const platform = await platformStates(env, listed.proposals.map((p: { id: string }) => p.id));
+      return dashboardJson({ status: "ok", proposals: listed.proposals.map((p: { id: string }) => ({ ...p, platform: platform[p.id] ?? null })), live_knobs: await readKnobOverrides(env), platform_poll: await decisionsPollStatus(env) });
+    }
     catch (error) { console.error("council_proposals_read_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
   }
   if (url.pathname === "/api/council/session") {
@@ -3058,6 +3064,9 @@ export default {
         // Accepted council proposals the platform has not received yet: re-sent once an hour.
         ctx.waitUntil(retryProposalHandoffs(env).then(r => { if (r.pending) console.log("council_proposal_handoffs", JSON.stringify(r)); })
           .catch(e => console.error("council_proposal_handoffs_failed", e instanceof Error ? e.message : String(e))));
+        // The platform's state of each handed-off proposal (council.decisions.read), behind COUNCIL_DECISIONS_POLL.
+        ctx.waitUntil(pollCouncilDecisions(env, { now: event.scheduledTime || Date.now() }).then(r => { if (r.status !== "off" && (r.status !== "ok" || r.stored)) console.log("council_decisions_poll", JSON.stringify(r)); })
+          .catch(e => console.error("council_decisions_poll_failed", e instanceof Error ? e.message : String(e))));
       }
       ctx.waitUntil(reconcileRecentCandles(env).then(async result => {
         try { await backfillRecentAnalyses(env, { loadPayloads: loadWebhookPayloadsFromD1, runAnalysis, setStatus: setAnalysisRunStatus }); } catch (e) { console.error("backfill_failed", e instanceof Error ? e.message : String(e)); }

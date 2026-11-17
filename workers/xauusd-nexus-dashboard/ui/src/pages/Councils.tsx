@@ -230,6 +230,13 @@ const PROPOSAL_STATE: Record<string, string> = {
   queued_shadow: "waiting for its shadow test", handoff_pending: "being sent to the platform", handed_off: "with the platform's evolution loop", closed: "recorded, nothing changes",
   shadow: "in its shadow test", live: "live", rolled_back: "rolled back by itself", rejected: "not applied", superseded: "replaced by a newer proposal on the same knob"
 };
+// The platform's state of a handed-off proposal (council.decisions.read, platform V3).
+const PLATFORM_STATE: Record<string, { text: string; tone: "green" | "red" | "amber" | "slate" }> = {
+  received: { text: "received", tone: "slate" }, queued: { text: "queued", tone: "slate" }, waiting_external: { text: "waiting: repo not built by the platform yet", tone: "amber" },
+  in_progress: { text: "being built", tone: "amber" }, proposed: { text: "change proposed", tone: "amber" }, merged: { text: "merged", tone: "green" },
+  deployed: { text: "deployed", tone: "green" }, deployed_unmeasured: { text: "deployed, not measured yet", tone: "green" }, closed: { text: "closed", tone: "slate" },
+  rejected: { text: "rejected", tone: "red" }, refused: { text: "refused", tone: "red" }, unfit: { text: "unfit", tone: "red" }, reverted: { text: "reverted", tone: "red" }
+};
 const ROUND: Record<string, string> = { position: "Opening opinions", rebuttal: "Responses to each other", answer: "Answers to the owner" };
 const STATE_TEXT: Record<string, string> = { positions: "the agents are giving their opinions…", rebuttals: "the agents are responding to each other…", synthesis: "the moderator is writing the options…", awaiting_owner: "waiting for your pick (in Cerebrum)", aborted: "stopped", decided: "decided", expired: "expired", closed: "closed" };
 const TERMINAL = ["aborted", "expired", "decided", "closed"];
@@ -339,7 +346,16 @@ function Proposals({ tick }: { tick: number }) {
           <div className="flex items-start justify-between gap-2"><div className="font-semibold text-slate-100">{p.title ?? p.option_id}</div>{KIND[p.kind] ? <Badge tone={KIND[p.kind].tone}>{KIND[p.kind].text}</Badge> : null}</div>
           {p.kind === "policy_parameter" ? <div className="mono mt-1 text-[11px] text-emerald-200">{p.knob}: {p.from_value} → {p.value}</div> : null}
           <div className="mt-1 text-[11px] text-slate-400">{PROPOSAL_STATE[p.state] ?? p.state} · accepted {String(p.accepted_at).slice(0, 16).replace("T", " ")} UTC{p.note ? ` · ${p.note}` : ""}</div>
-        </div>))}</div></div>
+          {p.platform ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
+              <span>Platform:</span><Badge tone={PLATFORM_STATE[p.platform.state]?.tone ?? "slate"}>{PLATFORM_STATE[p.platform.state]?.text ?? p.platform.state}</Badge>
+              <span>{String(p.platform.at).slice(0, 16).replace("T", " ")} UTC</span>
+              {p.platform.reason ? <span className="w-full text-slate-500">{p.platform.reason}</span> : null}
+              {p.platform.refs?.merge_sha ? <span className="mono text-slate-500">merge {String(p.platform.refs.merge_sha).slice(0, 7)}</span> : null}
+            </div>
+          ) : null}
+        </div>))}</div>
+      {(poll.data as any)?.platform_poll && !(poll.data as any).platform_poll.on ? <div className="mt-1.5 text-[10.5px] text-slate-500">The platform's progress on handed-off proposals shows here once its return path is live.</div> : null}</div>
   );
 }
 
