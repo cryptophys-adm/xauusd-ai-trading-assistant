@@ -5,6 +5,8 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-17
+- fix(nexus): themed confirmations instead of the browser's own pop-ups (owner 2026-11-17: "windows pop up agar menyesuaikan tema utama"). A reusable `ConfirmDialog` / `useConfirm` (`components/ConfirmDialog.tsx`), in the style of the Omega close-position modal, with Esc to cancel. On the Councils page: Accept (it says what happens for a knob change, a code task or no change), Close and turning sessions off. No native `confirm`/`alert`/`prompt` is left in the UI.
+- fix(councils): a code task's `typed_proposal.v1` report carries `state: "handed_off"`, the state it has once the platform holds it (the first one said `handoff_pending`).
 - feat(councils): council proposals, phase 2 (docs/RFC_COUNCIL_PROPOSALS.md; owner: "Live otomatis + rollback otomatis").
   - **Shadow test.** An accepted knob change is replayed over 60 days of decisions in plan-R and checked against grid-adapt's gate.
   - **Live and rollback.** A value that passes goes live by itself (KV `council-knobs:v1`, read by the Decision Engine at each decision, clamped to the bounds). It rolls back by itself when the decisions since then show the old value would have done better, and is never tried again.
