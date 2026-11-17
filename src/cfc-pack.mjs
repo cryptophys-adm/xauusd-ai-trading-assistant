@@ -474,7 +474,7 @@ async function releasesFor(db, trades) {
   return ((await db.prepare(RELEASES_SQL).bind(iso(Math.min(...times) - EVENT_GATE.after_ms), iso(Math.max(...times) + EVENT_GATE.before_ms), PACK_LIMITS.releases).all()).results) || [];
 }
 
-const PRIOR = unavailable("no council document exists yet: sessions start in phase P2 (docs/RFC_CALL_FOR_COUNCILS.md §12)");
+const PRIOR = unavailable("no earlier council decision on this topic is stored");
 
 async function safe(what, fn) { try { return await fn(); } catch (e) { return failed(what, e); } }
 
@@ -486,7 +486,9 @@ async function strategyPack(env, t, { now, asOf, refs }) {
   const agent = agentCatalog(statuses).find((a) => a.id === t.agent);
   const all = await readDecisionTrades(db, { now });
   const trades = tradesOfTopic(all, t);
-  refs.push(...tradeRefs(trades, asOf), evRef("plan_learning", "state", { asOf: state?.generated_at ?? null, field: `agents.${t.agent}` }));
+  refs.push(...tradeRefs(trades, asOf));
+  // The learner's state is cited only when it is stored: a ref to nothing is not evidence.
+  if (state && records.some((r) => r?.agent === t.agent || r?.id === t.agent)) refs.push(evRef("plan_learning", "state", { asOf: state.generated_at ?? null, field: `agents.${t.agent}` }));
   const setupRows = await safe("plan_setups", async () => { await ensurePlanLearningSchema(db); return ((await db.prepare(SETUPS_SQL).bind(iso(now - PACK_LIMITS.window_days * DAY), t.agent, PACK_LIMITS.setups).all()).results) || []; });
   const learned = Array.isArray(setupRows) ? setupSections(setupRows, t) : { setups: setupRows, invalidation: setupRows };
   if (Array.isArray(setupRows)) refs.push(...setupRows.slice(0, 20).map((r) => evRef("plan_setups", r.setup_key, { field: "results_json" })));
@@ -550,8 +552,8 @@ async function seatPack(env, t, { now, asOf, refs }) {
   return {
     scope: { seat: t.seat, name: roster?.name ?? t.seat, rooms: roster?.rooms ?? [], chart: t.chart },
     reputation, statements, compliance,
-    room_runs: unavailable("a seat's own text sits inside whole run documents (room_runs); reading one seat would read every document, so P1 cites its scored statements instead"),
-    owner_corrections: unavailable("owner corrections start with the sessions (RFC §7, phase P2)"),
+    room_runs: unavailable("a seat's own text sits inside whole run documents (room_runs); reading one seat would read every document, so this pack cites its scored statements instead"),
+    owner_corrections: unavailable("owner corrections are kept in the council sessions and are not read into a seat pack yet"),
     prior: PRIOR
   };
 }
@@ -761,11 +763,47 @@ async function knowledgePack(env, t, { now, refs }) {
     const right = (x) => x === "hit";
     return { outputs: rows.length, scored: scored.length, note_right: scored.filter((r) => right(r.result)).length, control_right: scored.filter((r) => right(r.control_result)).length, agents: [...new Set(rows.map((r) => r.agent))].sort(), note: "the shadow knowledge arm's answers with the note against the same agent's live answer (src/shadow-knowledge.mjs)" };
   });
-  return { scope: { item: t.item }, item, shadow, owner_corrections: unavailable("owner corrections start with the sessions (RFC §7, phase P2)"), prior: PRIOR };
+  return { scope: { item: t.item }, item, shadow, owner_corrections: unavailable("owner corrections are kept in the council sessions and are not read into this pack yet"), prior: PRIOR };
 }
 
-function freePack(t) {
-  return { scope: { slug: t.slug }, sections: unavailable("the owner picks a free topic's sections when sessions start (phase P2); deterministic suggestions only in P1 (RFC decision 3)"), prior: PRIOR };
+/**
+ * The topic keys a free topic reads (owner 2026-11-17: a free topic must never run on an empty pack): always the
+ * Decision Engine, the default strategy's exits and Omega's fills; then by the words of its slug, the strategies, the
+ * SL+ in practice, the releases, the trading mode's risk and the rejected intents.
+ */
+export function freeTopicKeys(slug) {
+  const w = String(slug ?? "");
+  const keys = ["engine:15", "strategy:zone_pullback:exits", "execution:fills"];
+  if (/strateg|arm|agent|setup|entry|grid/.test(w)) keys.push(...AGENT_IDS.filter((a) => a !== "zone_pullback").slice(0, 3).map((a) => `strategy:${a}`));
+  if (/sl|stop|exit|tp|trail|lock|key-?level/.test(w)) keys.push("execution:sl_plus");
+  if (/news|berita|calendar|kalender|release|rilis/.test(w)) keys.push("news:release_horizon");
+  if (/risk|risiko|loss|rugi|drawdown|session|sesi/.test(w)) keys.push("risk:scalp");
+  if (/reject|tolak|intent|order|eksekusi|execution/.test(w)) keys.push("execution:rejected_intents");
+  return [...new Set(keys)].slice(0, 8);
+}
+
+async function freePack(env, t, ctx) {
+  const out = { scope: { slug: t.slug, reads: freeTopicKeys(t.slug) } };
+  for (const key of out.scope.reads) {
+    const sub = parseTopicKey(key);
+    if (!sub.ok) continue;
+    let sections;
+    try {
+      sections = sub.type === "strategy" ? await strategyPack(env, sub, ctx) : sub.type === "engine" ? await enginePack(env, sub, ctx) : sub.type === "execution" ? await executionPack(env, sub, ctx) : sub.type === "news" ? await newsPack(env, sub, ctx) : sub.type === "risk" ? await riskPack(env, sub, ctx) : null;
+    } catch (e) { sections = { error: failed(key, e) }; }
+    for (const [name, sec] of Object.entries(sections ?? {})) if (name !== "prior") out[`${key}.${name}`] = sec;
+  }
+  // The strategy council's latest verdicts (walk-forward and proposal per strategy) and the arm state.
+  out.strategy_council = await safe("strategy council", async () => {
+    const rows = (await env.DB.prepare("SELECT day, strategy_id, proposal, reason, walk_forward FROM strategy_council_runs WHERE day = (SELECT MAX(day) FROM strategy_council_runs) ORDER BY strategy_id").all()).results ?? [];
+    if (!rows.length) return unavailable("no strategy council verdict yet");
+    return { rows: rows.map((r) => { const wf = (() => { try { return JSON.parse(r.walk_forward); } catch { return {}; } })(); return { strategy: r.strategy_id, walk_forward: wf.status ?? null, setups: wf.n ?? null, mean_r: wf.mean_r ?? null, proposal: r.proposal, reason: clip(r.reason, 160), ref: `strategy_council/${r.day}:${r.strategy_id}` }; }) };
+  });
+  out.strategy_arm = await safe("strategy arm", async () => {
+    const rows = (await env.DB.prepare("SELECT strategy_id FROM strategy_arms WHERE armed = 1 ORDER BY strategy_id").all()).results ?? [];
+    return { mode: rows.length ? "armed" : "auto", armed: rows.map((r) => r.strategy_id) };
+  });
+  return { ...out, prior: PRIOR };
 }
 
 /**
@@ -789,7 +827,7 @@ export async function buildEvidencePack(env, topicKey, { now = Date.now() } = {}
     case "data": sections = await dataPack(env, t, ctx); break;
     case "cost": sections = await costPack(env, t, ctx); break;
     case "knowledge": sections = await knowledgePack(env, t, ctx); break;
-    default: sections = freePack(t);
+    default: sections = await freePack(env, t, ctx);
   }
   // Every row ref of the sections' tables is a ref of the pack too.
   for (const s of Object.values(sections)) for (const row of s?.rows ?? []) if (typeof row?.ref === "string") { const [source, ...id] = row.ref.split("/"); refs.push(evRef(source, id.join("/"), { asOf })); }

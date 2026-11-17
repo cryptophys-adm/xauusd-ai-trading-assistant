@@ -100,3 +100,23 @@ test("CS3. fewer than 3 valid opinions abort; the switch off aborts; limits on o
   assert.deepEqual(cleanSeat({ stance: "amend", opinion: " I think so ", proposal: "", refs: ["ev:a", "ev:b"] }, ["ev:b"]).refs, ["ev:b"]);
   assert.equal(cleanOptions({ summary: "s", options: [] }).options[0].option_id, "no_change");
 });
+
+test("CS6. a topic whose pack holds no evidence is refused before any call; it does not count toward the day's sessions", async () => {
+  resetSessionSchemaForTests(); resetAiUsageSchemaCacheForTests();
+  const env = Object.assign(await seedEnv(), { CFC_MODE: "on" });
+  await setSessionsSwitch(env, { on: true, actor: "owner@example.com" });
+  queue.length = 0;
+  const r = await startSession(env, { text: "Evaluasi Strategy", enqueue });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /no evidence for this topic/);
+  assert.deepEqual(queue, [], "no step is queued, so no seat is called");
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM council_sessions").first()).n, 0, "no session is stored");
+  // With evidence, the same free topic opens and reads the default packs.
+  await seedTrades(env, { agent: "zone_pullback", n: 6, exits: [["stop", "sl_plus"], ["target", "target"]], start: Date.now() - 3 * 86_400_000 });
+  const ok = await startSession(env, { text: "Evaluasi Strategy", enqueue });
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  const pack = JSON.parse((await env.DB.prepare("SELECT pack_json FROM council_sessions WHERE id = ?").bind(ok.session_id).first()).pack_json);
+  assert.ok(pack.refs.length > 0);
+  assert.ok(pack.sections.scope.reads.includes("strategy:sweep_reversal"), "a strategy topic reads every strategy agent");
+  assert.ok(pack.sections.strategy_council, "and the strategy council's verdicts");
+});
