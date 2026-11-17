@@ -39,7 +39,7 @@ function PullAdapter() {
   const daily = Number.isFinite(dailyRaw) && dailyRaw > 0 ? dailyRaw : null;
   return (
     <Panel title={`Pull adapter · ${WORKERS.pull.name}`} icon={<Database className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone={daily != null && used >= 0.9 * daily ? "amber" : "cyan"}>{daily != null ? `${used}/${daily} calls today` : `${used} calls today`}</Badge>}>
-      <div className="mb-2 h-1.5 overflow-hidden rounded bg-white/5"><div className="h-full bg-cyan-400/60" style={{ width: daily != null ? `${Math.min(100, (used / daily) * 100)}%` : "0%" }} /></div>
+      <div className="mb-2 h-1.5 overflow-hidden rounded-sm bg-white/5"><div className="h-full bg-cyan-400/60" style={{ width: daily != null ? `${Math.min(100, (used / daily) * 100)}%` : "0%" }} /></div>
       <p className="mb-2 text-[11.5px] text-slate-400">
         Last refresh: <b className="text-slate-200">{lane.last_refresh?.status ?? "none"}</b> {ago(lane.last_refresh?.checked_at)}
         {lane.last_publish?.status ? <> · last H1 publish: <b className="text-slate-200">{lane.last_publish.status}</b> {ago(lane.last_publish.published_at)}</> : null}
@@ -89,7 +89,7 @@ function TvQuota() {
   const calls = (day: any, k: string) => (day?.by_caller?.[k] ? Number(day.by_caller[k].calls ?? day.by_caller[k]) || 0 : null);
   return (
     <Panel title="TradingView quota" icon={<Gauge className="h-3.5 w-3.5 text-cyan-300" />} hint="Calls this system made to TradingView today (UTC), from the gateway's own count. Calls from outside this system on the same account are not counted." right={<Badge tone={tone}>{limit ? `${used} / ${limit}` : `${used} calls`}</Badge>}>
-      <div className="mb-2 h-1.5 overflow-hidden rounded bg-white/5"><div className={`h-full ${tone === "red" ? "bg-rose-400/70" : tone === "amber" ? "bg-amber-400/70" : "bg-cyan-400/60"}`} style={{ width: share != null ? `${Math.min(100, share * 100)}%` : "0%" }} /></div>
+      <div className="mb-2 h-1.5 overflow-hidden rounded-sm bg-white/5"><div className={`h-full ${tone === "red" ? "bg-rose-400/70" : tone === "amber" ? "bg-amber-400/70" : "bg-cyan-400/60"}`} style={{ width: share != null ? `${Math.min(100, share * 100)}%` : "0%" }} /></div>
       <p className="mb-2 text-[11.5px] text-slate-400">
         {ing.provider_cooldown_until ? <><b className="text-rose-300">Paused until {when(ing.provider_cooldown_until)}</b> ({ing.provider_cooldown_reason ?? "provider"}) · </> : null}
         {today.quota_exceeded_at ? <>quota ran out {when(today.quota_exceeded_at)} · </> : null}
@@ -99,7 +99,7 @@ function TvQuota() {
       <div className="mb-3 flex h-10 items-end gap-[2px]" aria-label="Calls per UTC hour today">
         {Array.from({ length: 24 }, (_, h) => (
           <div key={h} className="flex-1" title={`${String(h).padStart(2, "0")}:00 UTC · ${hours[h] ?? 0} calls`}>
-            <div className={`w-full rounded-sm ${h === nowHour ? "bg-cyan-300/80" : h < nowHour ? "bg-cyan-400/40" : "bg-white/5"}`} style={{ height: `${Math.max(2, ((hours[h] ?? 0) / peak) * 40)}px` }} />
+            <div className={`w-full rounded-xs ${h === nowHour ? "bg-cyan-300/80" : h < nowHour ? "bg-cyan-400/40" : "bg-white/5"}`} style={{ height: `${Math.max(2, ((hours[h] ?? 0) / peak) * 40)}px` }} />
           </div>
         ))}
       </div>

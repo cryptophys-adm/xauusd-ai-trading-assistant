@@ -79,7 +79,7 @@ function RoomBars({ rows, room }: { rows: any[]; room: string }) {
         })}
       </div>
       <div className="mt-2 flex flex-wrap gap-3 text-[10.5px] text-slate-400">
-        {keys.map((key, i) => <span key={key} className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm" style={{ background: PALETTE[i % PALETTE.length] }} />{key}</span>)}
+        {keys.map((key, i) => <span key={key} className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-xs" style={{ background: PALETTE[i % PALETTE.length] }} />{key}</span>)}
       </div>
     </div>
   );
@@ -134,7 +134,7 @@ export default function Neurons() {
         <Panel title="Accuracy against cost" hint="One dot per agent: up is more accurate, left is cheaper. The dot's size grows with the number of scored calls; the dashed lines are the medians.">
           <Quadrant agents={agents} />
         </Panel>
-        <Panel title="Neurons per room per day" right={<span className="flex flex-wrap gap-1">{rooms.map((r) => <button key={r} onClick={() => setRoom(r)} className={`rounded px-2 py-0.5 text-[11px] ${r === room ? "bg-cyan-500/20 text-cyan-200" : "text-slate-400 hover:text-slate-200"}`}>{r}</button>)}</span>}>
+        <Panel title="Neurons per room per day" right={<span className="flex flex-wrap gap-1">{rooms.map((r) => <button key={r} onClick={() => setRoom(r)} className={`rounded-sm px-2 py-0.5 text-[11px] ${r === room ? "bg-cyan-500/20 text-cyan-200" : "text-slate-400 hover:text-slate-200"}`}>{r}</button>)}</span>}>
           <RoomBars rows={v?.rooms_by_day ?? []} room={rooms.includes(room) ? room : rooms[0] ?? "M15"} />
         </Panel>
       </div>

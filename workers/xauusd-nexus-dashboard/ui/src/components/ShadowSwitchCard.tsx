@@ -93,7 +93,7 @@ export default function ShadowSwitchCard() {
               <span>Today's shadow neurons</span>
               <span className="mono text-slate-200">{k(spend?.neurons)} / {k(state.budget_neurons_per_day)}</span>
             </div>
-            <div className="h-1.5 w-full overflow-hidden rounded bg-white/5">
+            <div className="h-1.5 w-full overflow-hidden rounded-sm bg-white/5">
               <div className={`h-full ${share >= 1 ? "bg-rose-400" : share >= 0.8 ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${Math.round(share * 100)}%` }} />
             </div>
             <div className="mt-1 text-[10.5px] text-slate-500">
@@ -112,21 +112,21 @@ export default function ShadowSwitchCard() {
             editing ? (
               <div className="space-y-1.5">
                 <input
-                  className="w-full rounded border border-white/10 bg-black/30 px-2 py-1 text-[11.5px] text-slate-100 outline-none focus:border-cyan-400/50"
+                  className="w-full rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-[11.5px] text-slate-100 outline-hidden focus:border-cyan-400/50"
                   placeholder={`Reason to switch shadow ${next.toUpperCase()}`}
                   value={reason}
                   maxLength={200}
                   onChange={(e) => setReason(e.target.value)}
                 />
                 <div className="flex gap-2">
-                  <button className={`rounded px-2 py-1 text-[11px] disabled:opacity-40 ${next === "off" ? "bg-rose-500/20 text-rose-200" : "bg-emerald-500/20 text-emerald-200"}`} disabled={busy || !reason.trim()} onClick={submit}>
+                  <button className={`rounded-sm px-2 py-1 text-[11px] disabled:opacity-40 ${next === "off" ? "bg-rose-500/20 text-rose-200" : "bg-emerald-500/20 text-emerald-200"}`} disabled={busy || !reason.trim()} onClick={submit}>
                     {busy ? "Saving…" : `Switch shadow ${next.toUpperCase()}`}
                   </button>
-                  <button className="rounded px-2 py-1 text-[11px] text-slate-400" onClick={() => { setEditing(false); setReason(""); }}>Cancel</button>
+                  <button className="rounded-sm px-2 py-1 text-[11px] text-slate-400" onClick={() => { setEditing(false); setReason(""); }}>Cancel</button>
                 </div>
               </div>
             ) : (
-              <button className="rounded border border-white/10 px-2 py-1 text-[11px] text-slate-200 hover:border-rose-400/40" onClick={() => setEditing(true)}>
+              <button className="rounded-sm border border-white/10 px-2 py-1 text-[11px] text-slate-200 hover:border-rose-400/40" onClick={() => setEditing(true)}>
                 {on ? "Switch shadow OFF…" : "Switch shadow ON…"}
               </button>
             )

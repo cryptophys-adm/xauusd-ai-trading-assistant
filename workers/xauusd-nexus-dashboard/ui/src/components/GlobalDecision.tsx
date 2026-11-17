@@ -357,7 +357,7 @@ export default function GlobalDecision() {
             <div className="glass-inner mt-3 flex flex-wrap items-center gap-2 px-3 py-2 text-[11px] text-slate-300">
               <span className="eyebrow text-[9px]">Next mode</span>
               {mode == null ? <span className="text-slate-500">loading…</span> : (
-                <select className="rounded border border-white/10 bg-slate-900 px-2 py-1 text-[11px] text-slate-200 disabled:opacity-50" value={mode} disabled={modePinned} onChange={(ev) => { void changeMode(ev.target.value); }} title={modePinned ? "Pinned by the server (TRADING_MODE)" : "Changes the thresholds of the next 15m decision; the owner hears of it on Telegram"}>
+                <select className="rounded-sm border border-white/10 bg-slate-900 px-2 py-1 text-[11px] text-slate-200 disabled:opacity-50" value={mode} disabled={modePinned} onChange={(ev) => { void changeMode(ev.target.value); }} title={modePinned ? "Pinned by the server (TRADING_MODE)" : "Changes the thresholds of the next 15m decision; the owner hears of it on Telegram"}>
                   <option value="scalp">scalp</option>
                   <option value="intraday">intraday</option>
                   <option value="swing">swing</option>
@@ -392,7 +392,7 @@ export default function GlobalDecision() {
                 <Pass v={r.pass} />
                 <span className="mono w-9 shrink-0 font-bold text-slate-100">{r.label}</span>
                 <span className="w-20 shrink-0 truncate text-[9.5px] uppercase tracking-[0.12em] text-slate-500">{r.weight != null ? `${Math.round(r.weight * 100)}% · ${r.role ?? ""}` : r.role}</span>
-                {r.status && STATUS_TAG[r.status as WitnessStatus] ? <span className={`shrink-0 text-[9px] uppercase tracking-[0.1em] ${STATUS_TAG[r.status as WitnessStatus]!.cls}`}>{STATUS_TAG[r.status as WitnessStatus]!.text}</span> : null}
+                {r.status && STATUS_TAG[r.status as WitnessStatus] ? <span className={`shrink-0 text-[9px] uppercase tracking-widest ${STATUS_TAG[r.status as WitnessStatus]!.cls}`}>{STATUS_TAG[r.status as WitnessStatus]!.text}</span> : null}
                 {r.trigger != null ? (
                   <span className="min-w-0 flex-1 truncate text-right text-[10px] text-slate-300">{r.trigger}</span>
                 ) : (

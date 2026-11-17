@@ -36,7 +36,7 @@ function HeadToHeadGraph({ candidateBetter, controlBetter, candidateName, contro
         <span className="text-emerald-300 font-semibold">{candidateName}: {candidateBetter} wins ({candPct}%)</span>
         <span className="text-rose-300 font-semibold">{controlName}: {controlBetter} wins ({ctrlPct}%)</span>
       </div>
-      <div className="relative flex h-3 w-full overflow-hidden rounded-full bg-white/[0.06]">
+      <div className="relative flex h-3 w-full overflow-hidden rounded-full bg-white/6">
         <div className="h-full bg-emerald-400 transition-all duration-500" style={{ width: `${candPct}%` }} title={`${candidateName}: ${candPct}%`} />
         <div className="h-full bg-rose-400 transition-all duration-500" style={{ width: `${ctrlPct}%` }} title={`${controlName}: ${ctrlPct}%`} />
         {/* 50% Marker */}
@@ -87,7 +87,7 @@ function TuningGrid() {
                 <td className="text-[11px]">
                   <div className="flex flex-wrap gap-2">
                     {f.points.map((pt: any) => (
-                      <span key={pt.value} className={`rounded px-2 py-0.5 border border-white/5 bg-white/[0.03] ${pointTone(pt)}`} title={pt.reason ?? pt.verdict ?? ""}>
+                      <span key={pt.value} className={`rounded-sm px-2 py-0.5 border border-white/5 bg-white/3 ${pointTone(pt)}`} title={pt.reason ?? pt.verdict ?? ""}>
                         <span className="mono font-bold">{pt.value}</span> : {pt.status === "running" ? `${pt.verdict}${pt.discovery?.p_holm != null ? ` (Holm p ${pt.discovery.p_holm})` : ""}` : pt.status}
                       </span>
                     ))}
@@ -103,7 +103,7 @@ function TuningGrid() {
       {t.replays?.knowledge && (() => {
         const c = t.replays.knowledge;
         return (
-          <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.02] p-3">
+          <div className="mt-4 rounded-xl border border-white/5 bg-white/2 p-3">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-[12px] font-semibold text-violet-300 flex items-center gap-1.5">
                 <ShieldCheck className="h-3.5 w-3.5 text-violet-400" />
@@ -159,7 +159,7 @@ function TuningGrid() {
       {t.replays?.strategy && (() => {
         const c = t.replays.strategy;
         return (
-          <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.02] p-3">
+          <div className="mt-4 rounded-xl border border-white/5 bg-white/2 p-3">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-[12px] font-semibold text-cyan-300 flex items-center gap-1.5">
                 <Activity className="h-3.5 w-3.5 text-cyan-400" />
@@ -324,7 +324,7 @@ export default function Shadow() {
                   </thead>
                   <tbody>
                     {/* Control Row */}
-                    <tr className="bg-white/[0.02]">
+                    <tr className="bg-white/2">
                       <td>
                         <div className="font-semibold text-slate-200 flex items-center gap-1.5">
                           <span>{c.id}</span>

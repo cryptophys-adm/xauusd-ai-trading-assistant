@@ -8,7 +8,7 @@ const TONE: Record<string, string> = {
   WAIT: "border-amber-400/30 bg-amber-400/10 text-amber-200",
   HOLD: "border-amber-400/30 bg-amber-400/10 text-amber-200",
   CLOSE: "border-cyan-400/30 bg-cyan-400/10 text-cyan-200",
-  NEUTRAL: "border-white/10 bg-white/[0.04] text-slate-300",
+  NEUTRAL: "border-white/10 bg-white/4 text-slate-300",
 };
 
 /** A room stance or a news bias as a small chip. */

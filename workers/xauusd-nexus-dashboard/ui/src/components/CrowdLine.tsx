@@ -15,7 +15,7 @@ function Bar({ label, shares }: { label: string; shares: Record<string, number> 
       <div className="flex items-center justify-between sm:w-[76px] sm:shrink-0">
         <span className="whitespace-nowrap text-[10px] uppercase tracking-[0.12em] text-slate-500">{label}</span>
       </div>
-      <div className="flex h-2.5 flex-1 overflow-hidden rounded-sm bg-white/5" role="img" aria-label={`${label}: ${ORDER.map((k) => `${k.toLowerCase()} ${Math.round(((shares[k] ?? 0) / total) * 100)}%`).join(", ")}`}>
+      <div className="flex h-2.5 flex-1 overflow-hidden rounded-xs bg-white/5" role="img" aria-label={`${label}: ${ORDER.map((k) => `${k.toLowerCase()} ${Math.round(((shares[k] ?? 0) / total) * 100)}%`).join(", ")}`}>
         {ORDER.map((k) => <div key={k} style={{ width: `${((shares[k] ?? 0) / total) * 100}%`, background: COLOR[k] }} title={`${k.toLowerCase()} ${Math.round(((shares[k] ?? 0) / total) * 100)}%`} />)}
       </div>
       <div className="flex shrink-0 items-center gap-1.5 mono text-[10px]" aria-label={`${label} percentages`}>
