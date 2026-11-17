@@ -500,6 +500,9 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const sameSide = positions.filter((p) => p.side === side);
   const decided = finite(signal.decided_ms) ? signal.decided_ms : issued;
   const closing = intents.filter((it) => it.kind === "close").length;
+  const armLive = signal.arm_mode === "armed" || signal.arm_mode === "auto";
+  const tradeAgent = typeof signal.trade_agent === "string" && signal.trade_agent ? signal.trade_agent : null;
+  const posAgent = (p) => (typeof agents?.[p.intent_id] === "string" && agents[p.intent_id]) || DEFAULT_POSITION_AGENT;
   const gates = [
     // USD gold only (owner 2026-11-17, PR #405): a symbol off the list, not priced in USD, with an odd contract
     // size or refused by the EA itself opens nothing. Open positions keep their management above.
@@ -516,7 +519,12 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     [isRolloverQuarantine(now), "rollover_quarantine"],
     // No stacking (owner 2026-11-12, "larangan tumpuk posisi"): a second position on a side opens only
     // once every position already on that side is protected (its stop at or beyond its open price).
-    [sameSide.some((p) => !isProtected(p)), "same_side_unprotected"]
+    [sameSide.some((p) => !isProtected(p)), "same_side_unprotected"],
+    // The strategy arm's position rules (RFC §5, owner 2026-11-17 "Ya, semua, live"), while the arm is live (the signal
+    // then carries arm_mode): one position per strategy, and never an entry against an Omega position on the other
+    // side, open or being closed this sync (the next sync opens once it is gone).
+    [armLive && tradeAgent != null && positions.some((p) => isOmegaOwned(p) && posAgent(p) === tradeAgent), "strategy_has_position"],
+    [armLive && positions.some((p) => isOmegaOwned(p) && (p.side === "BUY" || p.side === "SELL") && p.side !== side), "opposing_position"]
   ];
   for (const [blocked, code] of gates) if (blocked) { note(code); return { intents, notes }; }
 
