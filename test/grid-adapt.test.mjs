@@ -89,3 +89,22 @@ test("GA4. once a UTC day into KV; an adopted slice whose live grid trades lose 
   assert.equal((await runGridAdapt({ ...env, GRID_ADAPT_MODE: "off" }, { now: t0 })).status, "disabled");
   assert.equal(GATE.min_fills, 40);
 });
+
+test("GA5. pre-entry only (platform ADR-0020 Amendment 1, 2026-11-17): the grid never changes an open position's stop or target", () => {
+  const ISSUED = Date.parse("2026-11-09T11:00:00Z"), NOW = ISSUED + 60_000;
+  const open = { ticket: 77, side: "BUY", volume: 0.1, open_price: 4095, sl: 4090, tp: 4120, intent_id: "open:1:B", source: "omega", profit: 5 };
+  const EX = { connected: true, received_ms: NOW - 1000, account: { trade_mode: "demo", currency: "USD", balance: 10000, equity: 10005, day_start_balance: 10000, day_realized_pl: 0 },
+    symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 }, positions: [open] };
+  const plain = { side: "BUY", action: "ENTER_MARKET", entry: 4100, stop: 4095, tp1: 4110, issued_ms: ISSUED, expires_ms: ISSUED + 3_600_000, blackout: false, kill: false, paused: false };
+  // The widest grid stop (x1.25) on the same signal while a position is open.
+  const decision = { context: { regime_1h: "high-trending" }, strategy: { atr_h1: 10 } };
+  const grid = applyGridChoice({ ...plain, trade_agent: "zone_pullback" }, { decision, choices: { slices: { "zone_pullback|high-trending": { cell: "e0@s1.25" } } } });
+  assert.equal(grid.stop, 4093.75, "the signal's stop is wider (x1.25 of 5)");
+  const S = { ...OMEGA_DEFAULTS, enabled: true, max_positions: 3 };
+  const run = (signal) => planIntents({ signal, control: { mode: "active" }, settings: S, executor: EX, now: NOW, engineEnabled: true }).intents;
+  const mgmt = (xs) => xs.filter((x) => x.ticket === open.ticket).map((x) => JSON.stringify(x)).sort();
+  assert.deepEqual(mgmt(run(grid)), mgmt(run({ ...plain, trade_agent: "zone_pullback" })), "the open ticket's intents are the same with or without the grid");
+  for (const x of run(grid).filter((i) => i.ticket === open.ticket && (i.kind === "modify_sl" || i.kind === "modify_tp"))) {
+    assert.ok(x.kind !== "modify_sl" || x.sl >= open.sl, "an open stop is never widened");
+  }
+});
