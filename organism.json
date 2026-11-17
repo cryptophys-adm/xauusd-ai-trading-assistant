@@ -191,6 +191,9 @@
           "task": "metric_opening"
         },
         {
+          "task": "news_reading"
+        },
+        {
           "task": "metric_rebuttal"
         },
         {
