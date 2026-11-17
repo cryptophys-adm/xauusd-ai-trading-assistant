@@ -258,6 +258,7 @@ import { relayStrategyArm } from "./strategy-arm-relay.mjs";
 import { computeRecommendations, readRecommendations } from "./strategy-recommendation.mjs";
 import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
+import { startSession, ownerMessage, runSessionStep, listSessions, readSession, setSessionsSwitch } from "./cfc-session.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
 import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings } from "./omega-broker.mjs";
@@ -1509,6 +1510,12 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
       return;
     }
     if (task.kind === "h1_room") return processH1RoomTask(env, task);
+    if (task.kind === "council_step") {
+      // Call for Councils P2 (owner 2026-11-17): one step of a session; a failed step aborts it (never retried in a loop).
+      const r = await runSessionStep(env, { session_id: task.session_id, step: task.step }, { enqueue: (t: unknown) => sendQueueTask(env.XAUUSD_EVENTS, t as QueueTask) });
+      console.log("council_step", JSON.stringify({ session_id: task.session_id, step: task.step, ...r }));
+      return;
+    }
     if (task.kind === "multi_agent_bus") {
       // The H1 bus is retired (owner 2026-11-15; no producer since 2026-11-07): a stale task is acknowledged.
       console.log("multi_agent_bus_retired", JSON.stringify({ candle_key: task.candle_key }));
@@ -1817,6 +1824,16 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     const check = ownerCheck(this.env, input?.viewer_sub ?? null);
     if (check === "unset" && input?.viewer_sub) await noteOwnerSub(this.env, { sub: input.viewer_sub, actor: input?.viewer });
     return { ...(await readStrategyArm(this.env)), allowed: await liveAgentIds(this.env), blocked: await armBlocked(this.env), owner_check: check, can_arm: check !== "not_owner", council: await readCouncilState(this.env) } as JsonObject;
+  }
+  /** Call for Councils P2 (owner 2026-11-17): start a session, write to its seats, or switch sessions on or off. Owner only. */
+  async council(input: { action?: string; topic_key?: string; text?: string; seats?: string[]; session_id?: string; to?: string[]; on?: boolean; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    if (ownerCheck(this.env, input?.actor_sub ?? null) === "not_owner") return { ok: false, error: "owner_only" } as JsonObject;
+    const actor = String(input?.actor ?? "owner");
+    const enqueue = (t: unknown) => sendQueueTask(this.env.XAUUSD_EVENTS, t as QueueTask);
+    if (input?.action === "switch") return setSessionsSwitch(this.env, { on: input?.on === true, actor }) as Promise<JsonObject>;
+    if (input?.action === "start") return startSession(this.env, { topic_key: input?.topic_key ?? null, text: input?.text ?? null, seats: input?.seats ?? null, actor, enqueue }) as Promise<JsonObject>;
+    if (input?.action === "message") return ownerMessage(this.env, { session_id: String(input?.session_id ?? ""), text: String(input?.text ?? ""), to: input?.to ?? [], actor, enqueue }) as Promise<JsonObject>;
+    return { ok: false, error: "action must be start, message or switch" } as JsonObject;
   }
   /** The owner's "Council auto-arm" toggle (owner 2026-11-17; refused while the code ceiling is off). */
   async setCouncilAuto(input: { on?: boolean; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
@@ -2327,6 +2344,18 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       console.error("council_suggestions_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
     }
+  }
+  if (url.pathname === "/api/council/sessions") {
+    // Call for Councils P2: the sessions (newest first), whether they run, and the limits. Read-only.
+    try { return dashboardJson({ status: "ok", ...(await listSessions(env)) }); }
+    catch (error) { console.error("council_sessions_read_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
+  }
+  if (url.pathname === "/api/council/session") {
+    // One session: each seat's opinion by round, the moderator's options, the owner's messages. Read-only.
+    const id = String(url.searchParams.get("id") ?? "");
+    if (!/^cfc_[a-z0-9_]{4,40}$/.test(id)) return dashboardJson({ status: "error", error: "invalid_id" }, 400);
+    try { const s = await readSession(env, id); return s ? dashboardJson({ status: "ok", session: s }) : dashboardJson({ status: "error", error: "not_found" }, 404); }
+    catch (error) { console.error("council_session_read_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
   }
   if (url.pathname === "/api/council/evidence") {
     // Call for Councils P1: the evidence pack of one topic (src/cfc-pack.mjs), built now from the stored tables, with

@@ -365,5 +365,5 @@ export async function readSuggestions(env, { now = Date.now(), limit = 50 } = {}
     // Still firing: seen by one of the last two hourly runs.
     active: toMs(r.last_seen_at) >= now - 2 * 3_600_000, fingerprint: r.fingerprint, signal: parse(r.signal_json, null)
   })).sort((a, b) => (a.status === b.status ? 0 : a.status === "open" ? -1 : 1));
-  return { mode: cfcMode(env), rules: CFC_RULES, sessions: "phase P2: no session starts in P1", suggestions: items };
+  return { mode: cfcMode(env), rules: CFC_RULES, sessions: "phase P2: the owner opens a session on the Councils page (GET /api/council/sessions)", suggestions: items };
 }

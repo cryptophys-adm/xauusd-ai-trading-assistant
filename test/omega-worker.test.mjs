@@ -347,3 +347,19 @@ test("the council toggle and unpin are owner only (owner 2026-11-17); refused wi
   assert.equal((await post("/api/strategy-arm/unpin", owner, { strategy_id: "range_fade" }, { ...ENV_BASE, OMEGA: O })).status, 403, "no owner configured: nobody");
   assert.deepEqual(calls.map(([k, i]) => [k, i.on ?? i.strategy_id, i.actor_sub]), [["auto", true, "owner-sub-0001"], ["unpin", "range_fade", "owner-sub-0001"]]);
 });
+
+test("POST /api/council (Call for Councils P2) is owner only; actions start, message, switch", async () => {
+  resetKeyCacheForTests();
+  const calls = [];
+  const O = { ...omega(), council: async (i) => { calls.push(i); return { ok: true }; } };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const owner = await jwt({ email: "Owner@Example.com", sub: "owner-sub-0001" }), other = await jwt({ email: "g@example.com", sub: "guest-sub-0002" });
+  const env = { ...ENV_BASE, OMEGA: O, OWNER_ACCESS_SUB: "owner-sub-0001" };
+  const post = (token, body) => handle(req("/api/council", { token, method: "POST", body }), env, opts);
+  assert.equal((await post(other, { action: "switch", on: true })).status, 403);
+  assert.equal((await post(owner, { action: "nuke" })).status, 400);
+  assert.equal((await post(owner, { action: "start", text: "Key Level entry SL / SL+" })).status, 200);
+  assert.equal((await post(owner, { action: "message", session_id: "cfc_x_1", text: "why?", to: ["risk", "technical", "m15"] })).status, 200);
+  assert.deepEqual([calls[0].action, calls[0].text, calls[0].actor_sub], ["start", "Key Level entry SL / SL+", "owner-sub-0001"]);
+  assert.deepEqual(calls[1].to, ["risk", "technical"], "at most 2 seats per message");
+});

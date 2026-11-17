@@ -51,6 +51,13 @@ export type QueueTask =
       enqueued_at: string;
     }
   | {
+      kind: "council_step";
+      event_id?: string;
+      candle_key?: string;
+      session_id: string;
+      step: "positions" | "rebuttals" | "synthesis" | "answer";
+    }
+  | {
       kind: "h1_room";
       event_id: string;
       candle_key: string;

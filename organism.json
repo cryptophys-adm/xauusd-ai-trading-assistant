@@ -200,6 +200,12 @@
           "task": "strategy_council"
         },
         {
+          "task": "cfc_seat"
+        },
+        {
+          "task": "cfc_synthesis"
+        },
+        {
           "task": "metric_rebuttal"
         },
         {

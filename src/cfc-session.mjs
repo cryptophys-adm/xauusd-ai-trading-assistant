@@ -1,0 +1,281 @@
+// Call for Councils, phase P2: live sessions (docs/RFC_CALL_FOR_COUNCILS.md §4; owner 2026-11-17, relayed: "lanjutkan
+// call for councils ... adalah pendapat masing-masing agent bukan detail evidences"; confirmed in the session:
+// "Setuju + topik bebas"). A session reads like a retrospective: each seat speaks its own opinion in its own voice
+// (stance, 2-5 sentences, what it would try), the evidence stays behind its refs; then rebuttals by name, the
+// moderator's 2-5 options (always "no_change"), and the owner's messages, each answered by the seats addressed. The
+// owner opens a session on a suggested topic or on free text. The pick is made in Cerebrum (HAIC Q6): the options go to
+// the platform as a council_decision.v1 report. A session never changes trading: its options are proposals.
+//
+// Runs as queue steps (kind "council_step", one step per message: positions, rebuttals, synthesis, answer), so a step
+// may take the model's minutes. Limits (RFC §8): at most 16 model calls per session (6 positions, 4 rebuttals,
+// 4 answers, 1 synthesis, 1 retry), 20 owner messages, 2 sessions open and 4 started per UTC day; CFC_MODE "on" runs
+// sessions ("suggest" shows suggestions only; "off" nothing); a daily neuron cap CFC_NEURONS_PER_DAY_MAX (8,000)
+// over every "cfc:*" meter. Never throws from a step; a failed step aborts the session with its reason.
+import { callBusModel } from "./model-call.mjs";
+import { ensureAiUsageSchema, neuronsOf } from "./ai-usage.mjs";
+import { buildEvidencePack, parseTopicKey } from "./cfc-pack.mjs";
+import { cfcMode } from "./cfc-triggers.mjs";
+import { agentRoster } from "./agent-inventory.mjs";
+import { publishToPlatform } from "./platform-reports.mjs";
+
+export const SESSION_LIMITS = Object.freeze({ calls: 16, positions: 6, rebuttals: 4, answers: 4, owner_messages: 20, open: 2, started_per_day: 4, neurons_per_day: 8000, pack_chars: 7000 });
+export const STANCES = Object.freeze(["support", "oppose", "amend", "abstain"]);
+const DAY = 86_400_000;
+const parse = (s, fb = null) => { try { return s == null ? fb : JSON.parse(s); } catch { return fb; } };
+const clip = (s, n) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+
+/** Seats per topic type (RFC §2), the first six that exist in the roster. */
+export const SEATS_BY_TYPE = Object.freeze({
+  strategy: ["risk", "technical", "projection", "m15", "trade_management", "interstellar_eyes"],
+  engine: ["m15", "h1", "risk", "technical", "news", "projection"],
+  risk: ["risk", "m15", "chronos_matrix", "technical", "trade_management", "projection"],
+  news: ["news", "calendar", "dollar", "rates", "risk", "m15"],
+  execution: ["trade_management", "risk", "m15", "technical"],
+  data: ["technical", "risk"],
+  cost: ["risk"],
+  seat: ["risk", "technical", "m15"],
+  knowledge: ["risk", "technical", "m15"],
+  free: ["risk", "technical", "projection", "m15", "trade_management", "news"]
+});
+
+const SCHEMA_SQL = [
+  `CREATE TABLE IF NOT EXISTS council_sessions (id TEXT PRIMARY KEY, topic_key TEXT NOT NULL, topic_text TEXT, type TEXT NOT NULL, question TEXT NOT NULL,
+    state TEXT NOT NULL, participants TEXT NOT NULL, pack_hash TEXT, pack_json TEXT, calls INTEGER NOT NULL DEFAULT 0, options TEXT, reason TEXT,
+    created_by TEXT, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL)`,
+  "CREATE INDEX IF NOT EXISTS council_sessions_created ON council_sessions (created_ms)",
+  `CREATE TABLE IF NOT EXISTS council_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, round TEXT NOT NULL, seat TEXT NOT NULL,
+    stance TEXT, opinion TEXT NOT NULL, proposal TEXT, reply_to TEXT, refs TEXT, ms INTEGER NOT NULL)`,
+  "CREATE INDEX IF NOT EXISTS council_messages_session ON council_messages (session_id, id)",
+  "CREATE TABLE IF NOT EXISTS council_switch_events (id INTEGER PRIMARY KEY AUTOINCREMENT, on_value INTEGER NOT NULL, actor TEXT, ms INTEGER NOT NULL)"
+];
+let schemaReady = null;
+export async function ensureSessionSchema(db) {
+  if (schemaReady === db) return;
+  for (const q of SCHEMA_SQL) await db.prepare(q).run();
+  schemaReady = db;
+}
+export function resetSessionSchemaForTests() { schemaReady = null; }
+
+/** Sessions run only with CFC_MODE "on" and the owner's switch on (the latest switch event; off by default). */
+export async function sessionsEnabled(env) {
+  if (cfcMode(env) !== "on") return false;
+  try {
+    await ensureSessionSchema(env.DB);
+    const row = await env.DB.prepare("SELECT on_value FROM council_switch_events ORDER BY id DESC LIMIT 1").first();
+    return Number(row?.on_value) === 1;
+  } catch { return false; }
+}
+export async function setSessionsSwitch(env, { on, actor, now = Date.now() }) {
+  await ensureSessionSchema(env.DB);
+  await env.DB.prepare("INSERT INTO council_switch_events (on_value, actor, ms) VALUES (?, ?, ?)").bind(on ? 1 : 0, String(actor ?? "owner").slice(0, 200), now).run();
+  return { ok: true, on: Boolean(on), mode: cfcMode(env) };
+}
+
+const roster = () => Object.fromEntries(agentRoster({}).map((a) => [a.id, { name: a.name, role: a.role }]));
+/** Pure: a free-text topic's key slug. */
+export function slugOf(text) {
+  return clip(text, 200).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "topic";
+}
+
+/** Pure: a seat's messages for its opening or rebuttal or answer. */
+export function seatMessages({ seat, session, pack, earlier = [], ownerText = null, round }) {
+  const who = roster()[seat] ?? { name: seat, role: seat };
+  const sys = [
+    `You are ${who.name}, a member of an XAUUSD trading system's council (your role: ${who.role}).`,
+    "This is a retrospective meeting. Speak in the first person, in plain words, as yourself: what YOU think about the question and why, in 2 to 5 sentences (\"I think ..., because ...\").",
+    "Base it on the evidence pack only; cite at most 3 of its refs (strings starting ev:xauusd/) in refs, never in the opinion text. Never quote a price.",
+    "Give a stance: support, oppose, amend (support with a change) or abstain; and in proposal one concrete thing you would try (or empty).",
+    round === "rebuttal" ? "Answer the others by name where you disagree or agree (reply_to: their seat ids); you may change your stance." : "",
+    round === "answer" ? "The owner wrote to you. Answer the owner directly, in the same plain first-person voice." : ""
+  ].filter(Boolean).join(" ");
+  const user = {
+    question: session.question, topic: session.topic_key, owner_topic_text: session.topic_text ?? null,
+    evidence_pack: String(pack ?? "").slice(0, SESSION_LIMITS.pack_chars),
+    others_so_far: earlier.map((m) => ({ seat: m.seat, stance: m.stance, opinion: m.opinion, proposal: m.proposal })),
+    ...(ownerText ? { owner_message: ownerText } : {})
+  };
+  return [{ role: "system", content: sys }, { role: "user", content: JSON.stringify(user) }];
+}
+export const SEAT_SCHEMA = Object.freeze({
+  type: "object", additionalProperties: false, required: ["stance", "opinion", "proposal", "refs"],
+  properties: {
+    stance: { type: "string", enum: STANCES }, opinion: { type: "string", maxLength: 700 }, proposal: { type: "string", maxLength: 240 },
+    refs: { type: "array", maxItems: 3, items: { type: "string", maxLength: 200 } }, reply_to: { type: "array", maxItems: 4, items: { type: "string", maxLength: 40 } }
+  }
+});
+export const SYNTHESIS_SCHEMA = Object.freeze({
+  type: "object", additionalProperties: false, required: ["summary", "options"],
+  properties: {
+    summary: { type: "string", maxLength: 800 },
+    options: { type: "array", minItems: 2, maxItems: 5, items: { type: "object", additionalProperties: false, required: ["option_id", "title", "hypothesis", "change", "risk"],
+      properties: { option_id: { type: "string", maxLength: 40 }, title: { type: "string", maxLength: 120 }, hypothesis: { type: "string", maxLength: 300 }, change: { type: "string", maxLength: 300 }, risk: { type: "string", maxLength: 200 }, dissent: { type: "string", maxLength: 200 } } } }
+  }
+});
+
+/** Pure: a seat's answer cleaned (refs only from the pack). */
+export function cleanSeat(o, packRefs) {
+  if (!o || !STANCES.includes(o.stance) || typeof o.opinion !== "string" || !o.opinion.trim()) return null;
+  const allowed = new Set(packRefs);
+  return { stance: o.stance, opinion: clip(o.opinion, 700), proposal: clip(o.proposal, 240) || null, refs: (Array.isArray(o.refs) ? o.refs : []).filter((r) => allowed.has(r)).slice(0, 3), reply_to: (Array.isArray(o.reply_to) ? o.reply_to : []).map((x) => clip(x, 40)).slice(0, 4) };
+}
+/** Pure: the options with "no_change" always among them. */
+export function cleanOptions(o) {
+  const opts = (Array.isArray(o?.options) ? o.options : []).filter((x) => x && x.option_id && x.title).slice(0, 5)
+    .map((x, i) => ({ option_id: clip(x.option_id, 40), rank: i + 1, title: clip(x.title, 120), hypothesis: clip(x.hypothesis, 300), change: clip(x.change, 300), risk: clip(x.risk, 200), dissent: clip(x.dissent, 200) || null }));
+  if (!opts.some((x) => x.option_id === "no_change")) opts.push({ option_id: "no_change", rank: opts.length + 1, title: "No change (the control)", hypothesis: "What runs today stays.", change: "none", risk: "none", dissent: null });
+  return { summary: clip(o?.summary, 800), options: opts };
+}
+
+async function cfcNeuronsToday(db, now) {
+  await ensureAiUsageSchema(db);
+  const day = new Date(now).toISOString().slice(0, 10);
+  const rows = (await db.prepare("SELECT model, SUM(prompt_tokens) AS p, SUM(completion_tokens) AS c, SUM(cached_tokens) AS k FROM ai_usage_daily WHERE day = ? AND source LIKE 'cfc:%' GROUP BY model").bind(day).all()).results || [];
+  let n = 0;
+  for (const r of rows) n += neuronsOf(r.model, Number(r.p) || 0, Number(r.c) || 0, Number(r.k) || 0) ?? 0;
+  return n;
+}
+const neuronCap = (env) => { const v = Number(env?.CFC_NEURONS_PER_DAY_MAX ?? SESSION_LIMITS.neurons_per_day); return Number.isFinite(v) && v >= 0 ? v : SESSION_LIMITS.neurons_per_day; };
+
+/** Opens a session (the owner's click): a suggested topic key or free text. Returns { ok, session_id } or an error. */
+export async function startSession(env, { topic_key = null, text = null, seats = null, actor = "owner", now = Date.now(), enqueue }) {
+  const db = env?.DB;
+  if (!db) return { ok: false, error: "unavailable" };
+  if (!(await sessionsEnabled(env))) return { ok: false, error: "council sessions are off (CFC_MODE and the switch on the Councils page)" };
+  await ensureSessionSchema(db);
+  const dayStart = Date.parse(new Date(now).toISOString().slice(0, 10) + "T00:00:00Z");
+  const open = await db.prepare("SELECT COUNT(*) AS n FROM council_sessions WHERE state IN ('positions', 'rebuttals', 'synthesis')").first();
+  if (Number(open?.n) >= SESSION_LIMITS.open) return { ok: false, error: `at most ${SESSION_LIMITS.open} sessions open` };
+  const today = await db.prepare("SELECT COUNT(*) AS n FROM council_sessions WHERE created_ms >= ?").bind(dayStart).first();
+  if (Number(today?.n) >= SESSION_LIMITS.started_per_day) return { ok: false, error: `at most ${SESSION_LIMITS.started_per_day} sessions a day` };
+  const freeText = typeof text === "string" && text.trim() ? clip(text, 300) : null;
+  const key = freeText ? `free:${slugOf(freeText)}` : topic_key;
+  const t = parseTopicKey(key);
+  if (!t.ok) return { ok: false, error: t.error };
+  const pack = await buildEvidencePack(env, t.key, { now });
+  if (pack?.error) return { ok: false, error: pack.error };
+  const names = roster();
+  const chosen = (Array.isArray(seats) && seats.length ? seats : SEATS_BY_TYPE[t.type] ?? SEATS_BY_TYPE.free).filter((s) => names[s]).slice(0, SESSION_LIMITS.positions);
+  if (chosen.length < 3) return { ok: false, error: "a session needs at least 3 seats" };
+  const id = `cfc_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const question = freeText ?? `What should change about ${t.key}, if anything?`;
+  await db.prepare("INSERT INTO council_sessions (id, topic_key, topic_text, type, question, state, participants, pack_hash, pack_json, calls, created_by, created_ms, updated_ms) VALUES (?, ?, ?, ?, ?, 'positions', ?, ?, ?, 0, ?, ?, ?)")
+    .bind(id, t.key, freeText, t.type, question, JSON.stringify(chosen), pack.sha256 ?? null, JSON.stringify(pack), String(actor).slice(0, 200), now, now).run();
+  await enqueue({ kind: "council_step", session_id: id, step: "positions" });
+  return { ok: true, session_id: id, participants: chosen };
+}
+
+/** The owner writes to one seat or several (at most 2 answered per message, 4 per session). */
+export async function ownerMessage(env, { session_id, text, to = [], actor = "owner", now = Date.now(), enqueue }) {
+  const db = env.DB;
+  await ensureSessionSchema(db);
+  const s = await db.prepare("SELECT * FROM council_sessions WHERE id = ?").bind(session_id).first();
+  if (!s) return { ok: false, error: "unknown session" };
+  if (["aborted", "expired", "decided"].includes(s.state)) return { ok: false, error: `the session is ${s.state}` };
+  const n = await db.prepare("SELECT COUNT(*) AS n FROM council_messages WHERE session_id = ? AND round = 'owner'").bind(session_id).first();
+  if (Number(n?.n) >= SESSION_LIMITS.owner_messages) return { ok: false, error: "the session's owner messages are used up" };
+  const seats = parse(s.participants, []);
+  const addressed = (Array.isArray(to) ? to : []).filter((x) => seats.includes(x)).slice(0, 2);
+  await db.prepare("INSERT INTO council_messages (session_id, round, seat, stance, opinion, proposal, reply_to, refs, ms) VALUES (?, 'owner', 'owner', NULL, ?, NULL, ?, NULL, ?)")
+    .bind(session_id, clip(text, 1000), JSON.stringify(addressed), now).run();
+  if (addressed.length) await enqueue({ kind: "council_step", session_id, step: "answer" });
+  return { ok: true, answered_by: addressed };
+}
+
+/** One step of a session (the queue consumer). */
+export async function runSessionStep(env, { session_id, step }, { now = Date.now(), call = callBusModel, publish = publishToPlatform, enqueue }) {
+  const db = env.DB;
+  await ensureSessionSchema(db);
+  const s = await db.prepare("SELECT * FROM council_sessions WHERE id = ?").bind(session_id).first();
+  if (!s) return { status: "unknown" };
+  const abort = async (reason) => { await db.prepare("UPDATE council_sessions SET state = 'aborted', reason = ?, updated_ms = ? WHERE id = ?").bind(clip(reason, 200), now, session_id).run(); return { status: "aborted", reason }; };
+  if (["aborted", "expired", "decided"].includes(s.state)) return { status: s.state };
+  if (!(await sessionsEnabled(env))) return abort("council sessions were switched off");
+  if ((await cfcNeuronsToday(db, now)) >= neuronCap(env)) return abort("the daily council budget is used up");
+  const pack = parse(s.pack_json, {});
+  const packText = JSON.stringify(pack?.sections ?? pack);
+  const packRefs = Array.isArray(pack?.refs) ? pack.refs : [];
+  const seats = parse(s.participants, []);
+  let calls = Number(s.calls) || 0;
+  const rows = (await db.prepare("SELECT round, seat, stance, opinion, proposal, reply_to, ms FROM council_messages WHERE session_id = ? ORDER BY id").bind(session_id).all()).results ?? [];
+  const spoken = rows.filter((r) => r.round !== "owner");
+  const ask = async (seat, round, extra = {}) => {
+    // One call stays reserved for the synthesis until it is written.
+    if (calls >= SESSION_LIMITS.calls - (s.state === "awaiting_owner" ? 0 : 1)) return null;
+    calls += 1;
+    try {
+      const r = await call(env, { messages: seatMessages({ seat, session: s, pack: packText, earlier: spoken, round, ...extra }), schemaName: "cfc_seat", schema: SEAT_SCHEMA, maxTokens: 700, effort: "low", deadline: Date.now() + 60_000, clock: () => Date.now(), runState: {}, role: "agent", meterSource: `cfc:${round}` });
+      return r?.status === "answered" ? cleanSeat(r.obj, packRefs) : null;
+    } catch { return null; }
+  };
+  const save = async (seat, round, m) => db.prepare("INSERT INTO council_messages (session_id, round, seat, stance, opinion, proposal, reply_to, refs, ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(session_id, round, seat, m.stance, m.opinion, m.proposal, JSON.stringify(m.reply_to ?? []), JSON.stringify(m.refs ?? []), now).run();
+  const advance = async (state, next) => { await db.prepare("UPDATE council_sessions SET state = ?, calls = ?, updated_ms = ? WHERE id = ?").bind(state, calls, now, session_id).run(); if (next) await enqueue({ kind: "council_step", session_id, step: next }); };
+
+  if (step === "positions") {
+    const out = await Promise.all(seats.map(async (seat) => [seat, await ask(seat, "position")]));
+    const ok = out.filter(([, m]) => m);
+    for (const [seat, m] of ok) await save(seat, "position", m);
+    if (ok.length < 3) { await db.prepare("UPDATE council_sessions SET calls = ? WHERE id = ?").bind(calls, session_id).run(); return abort(`only ${ok.length} seats gave a valid opinion`); }
+    await advance("rebuttals", "rebuttals");
+    return { status: "positions", spoke: ok.length };
+  }
+  if (step === "rebuttals") {
+    const pos = spoken.filter((r) => r.round === "position");
+    const count = {}; for (const p of pos) count[p.stance] = (count[p.stance] ?? 0) + 1;
+    const majority = Object.entries(count).sort((a, b) => b[1] - a[1])[0]?.[0];
+    const dissent = pos.filter((p) => p.stance !== majority).map((p) => p.seat);
+    const speakers = [...new Set([...dissent, pos.find((p) => p.stance === majority)?.seat, seats.includes("risk") ? "risk" : null].filter(Boolean))].slice(0, SESSION_LIMITS.rebuttals);
+    const out = await Promise.all(speakers.map(async (seat) => [seat, await ask(seat, "rebuttal")]));
+    for (const [seat, m] of out) if (m) await save(seat, "rebuttal", m);
+    await advance("synthesis", "synthesis");
+    return { status: "rebuttals", spoke: out.filter(([, m]) => m).length };
+  }
+  if (step === "synthesis") {
+    if (calls >= SESSION_LIMITS.calls) return abort("the session's calls are used up before the synthesis");
+    calls += 1;
+    let syn = null;
+    try {
+      const msgs = [
+        { role: "system", content: "You are the moderator of an XAUUSD trading system's council. You never vote. Read what each member said and write a short summary of the views, then 2 to 5 ranked options the owner can pick from; one option_id must be \"no_change\". Each option: a title, the hypothesis, the concrete change, its risk, and who dissents. Never quote a price. The owner picks; nothing changes trading until then." },
+        { role: "user", content: JSON.stringify({ question: s.question, topic: s.topic_key, said: spoken.map((m) => ({ seat: m.seat, round: m.round, stance: m.stance, opinion: m.opinion, proposal: m.proposal })), owner: rows.filter((r) => r.round === "owner").map((r) => r.opinion) }) }
+      ];
+      const r = await call(env, { messages: msgs, schemaName: "cfc_synthesis", schema: SYNTHESIS_SCHEMA, maxTokens: 1500, effort: "medium", deadline: Date.now() + 90_000, clock: () => Date.now(), runState: {}, role: "moderator", meterSource: "cfc:synthesis" });
+      syn = r?.status === "answered" ? cleanOptions(r.obj) : null;
+    } catch { syn = null; }
+    if (!syn) { await db.prepare("UPDATE council_sessions SET calls = ? WHERE id = ?").bind(calls, session_id).run(); return abort("the moderator gave no valid synthesis"); }
+    await db.prepare("UPDATE council_sessions SET state = 'awaiting_owner', options = ?, calls = ?, updated_ms = ? WHERE id = ?").bind(JSON.stringify(syn), calls, now, session_id).run();
+    // The pick is made in Cerebrum (HAIC Q6): the options go to the platform's inbox. Best effort.
+    try {
+      await publish(env, "xauusd-moderator", { kind: "xauusd_digest", severity: "info", subject: clip(`Council: ${s.topic_text ?? s.topic_key}`, 200), ai_status: "model",
+        body: { schema: "council_decision.v1", session_id, topic: s.topic_key, question: s.question, summary: syn.summary, options: syn.options, participants: seats, source: "xauusd-ai-trading-assistant" } });
+    } catch { /* the session stands; the owner sees it in Nexus */ }
+    return { status: "awaiting_owner", options: syn.options.length };
+  }
+  if (step === "answer") {
+    const answered = spoken.filter((r) => r.round === "answer").length;
+    const lastOwner = [...rows].reverse().find((r) => r.round === "owner");
+    const to = parse(lastOwner?.reply_to, []);
+    const room = Math.max(0, SESSION_LIMITS.answers - answered);
+    const out = await Promise.all(to.slice(0, room).map(async (seat) => [seat, await ask(seat, "answer", { ownerText: lastOwner?.opinion })]));
+    for (const [seat, m] of out) if (m) await save(seat, "answer", m);
+    await db.prepare("UPDATE council_sessions SET calls = ?, updated_ms = ? WHERE id = ?").bind(calls, now, session_id).run();
+    return { status: "answered", answers: out.filter(([, m]) => m).length };
+  }
+  return { status: "unknown_step" };
+}
+
+/** The sessions for the page (newest first) and one session with its messages. */
+export async function listSessions(env, { limit = 20 } = {}) {
+  await ensureSessionSchema(env.DB);
+  const rows = (await env.DB.prepare("SELECT id, topic_key, topic_text, type, question, state, participants, calls, reason, created_ms, updated_ms FROM council_sessions ORDER BY created_ms DESC LIMIT ?").bind(Math.min(50, Math.max(1, limit))).all()).results ?? [];
+  return { enabled: await sessionsEnabled(env), mode: cfcMode(env), limits: SESSION_LIMITS, sessions: rows.map((r) => ({ ...r, participants: parse(r.participants, []), created_at: new Date(Number(r.created_ms)).toISOString() })) };
+}
+export async function readSession(env, id) {
+  await ensureSessionSchema(env.DB);
+  const s = await env.DB.prepare("SELECT id, topic_key, topic_text, type, question, state, participants, calls, options, reason, pack_hash, created_by, created_ms, updated_ms FROM council_sessions WHERE id = ?").bind(id).first();
+  if (!s) return null;
+  const names = roster();
+  const msgs = (await env.DB.prepare("SELECT id, round, seat, stance, opinion, proposal, reply_to, refs, ms FROM council_messages WHERE session_id = ? ORDER BY id").bind(id).all()).results ?? [];
+  return { ...s, participants: parse(s.participants, []).map((x) => ({ id: x, ...(names[x] ?? { name: x, role: "" }) })), options: parse(s.options, null),
+    messages: msgs.map((m) => ({ ...m, name: m.seat === "owner" ? "Owner" : names[m.seat]?.name ?? m.seat, reply_to: parse(m.reply_to, []), refs: parse(m.refs, []), at: new Date(Number(m.ms)).toISOString() })) };
+}
