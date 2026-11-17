@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Crosshair, Grid3x3, ListChecks, Puzzle, Scale, Shapes } from "lucide-react";
 import { Badge, Empty, Hint, Panel, Skeleton } from "../components/ui";
 import { C } from "../components/charts";
@@ -20,8 +21,43 @@ const rColor = (x: number | null | undefined) => (!num(x) || Math.abs(x) < 0.005
 const contextText = (c?: string) => String(c ?? "").replace("|", " · ").replace("none · ", "");
 const armText = (id?: string) => { const m = /^e([\d.]+)@s([\d.]+)$/.exec(String(id ?? "")); return !m ? "—" : m[1] === "0" && m[2] === "1" ? "the plan as it is" : `entry ${m[1]} ATR deeper · stop ×${m[2]}`; };
 
+/**
+ * The strategy arm (owner 2026-11-17, ADR-0020): one click arms or disarms a live strategy, at most 3. While none is
+ * armed the mode is AUTO: each entry is the one best strategy by confidence × confluence. The server checks the rest.
+ */
+type ArmState = { mode?: string; selection?: string; max?: number; state?: { version: number; ids: string[]; armed_count: number }; allowed?: string[]; blocked?: string | null; error?: string } | null;
+function ArmButton({ id, arm, onDone }: { id: string; arm: ArmState; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const armed = arm?.state?.ids?.includes(id) ?? false;
+  const full = (arm?.state?.armed_count ?? 0) >= (arm?.max ?? 3);
+  const canArm = !armed && (arm?.allowed ?? []).includes(id) && !full && !arm?.blocked && arm?.mode !== "off";
+  if (!arm || arm.error || arm.mode === "off") return null;
+  const click = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch("/omega/api/strategy-arm", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ strategy_id: id, action: armed ? "disarm" : "arm", request_id: crypto.randomUUID(), expected_version: arm.state?.version ?? null }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d?.ok === false) throw new Error(d?.error === "conflict" ? "changed meanwhile, reloaded" : d?.error || `HTTP ${r.status}`);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); onDone(); }
+  };
+  const title = armed ? "Disarm: this strategy stops opening positions (its open ones keep being managed)"
+    : !(arm.allowed ?? []).includes(id) ? "Only a live strategy can be armed" : full ? `At most ${arm.max ?? 3} armed: disarm one first` : arm.blocked ? `Cannot arm while ${arm.blocked}` : "Arm: only the armed strategies open positions";
+  return (
+    <div className="mt-2 flex items-center gap-2">
+      <button type="button" disabled={busy || (!armed && !canArm)} title={title} onClick={click}
+        className={`rounded-md px-2.5 py-1 text-[11px] font-semibold ${armed ? "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/40" : "bg-slate-700/60 text-slate-200 ring-1 ring-slate-500/40"} disabled:opacity-40`}>
+        {busy ? "…" : armed ? "Armed · Disarm" : "Arm"}
+      </button>
+      {err ? <span className="text-[10.5px] text-rose-300">{err}</span> : null}
+    </div>
+  );
+}
+
 /** The registry: one card per agent with its status, what it is made for and its measured record. */
-function Registry({ agents, chosen }: { agents: any[]; chosen: string | null }) {
+function Registry({ agents, chosen, arm, reload }: { agents: any[]; chosen: string | null; arm: ArmState; reload: () => void }) {
   return (
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
       {agents.map((a) => {
@@ -48,6 +84,7 @@ function Registry({ agents, chosen }: { agents: any[]; chosen: string | null }) 
                 ))}
               </div>
             ) : <div className="mt-3 text-[11px] text-slate-500">No resolved setup yet.</div>}
+            <ArmButton id={a.id} arm={arm} onDone={reload} />
           </div>
         );
       })}
@@ -172,6 +209,11 @@ const VERDICT: Record<string, { text: string; tone: "green" | "amber" | "slate" 
 
 export default function Strategy() {
   const agentsPoll = usePoll(() => get("/api/strategy-agents"), 120_000);
+  // The arm state from Omega (a person's page; the AI Worker checks the click server-side).
+  const [armTick, setArmTick] = useState(0);
+  const armPoll = usePoll(() => fetch(`/omega/api/strategy-arm?t=${armTick}`, { credentials: "same-origin", headers: { accept: "application/json" } }).then((r) => r.json()), 60_000, [armTick]);
+  const arm = (armPoll.data ?? null) as ArmState;
+  const armIds = arm?.state?.ids ?? [];
   const learnPoll = usePoll(() => get("/api/plan-learning"), 300_000);
   const s = agentsPoll.data as any, pl = learnPoll.data as any;
   const agents: any[] = s?.agents ?? [];
@@ -182,8 +224,8 @@ export default function Strategy() {
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <Panel title="Strategy agents" icon={<Puzzle className="h-3.5 w-3.5 text-cyan-300" />}
         hint="Each agent is one way of trading price action. The council picks the side; a live agent may be chosen for the plan, a shadow agent is recorded and measured only. A live agent with a negative record over 30 setups is suspended until its record recovers."
-        right={s ? <Badge tone="slate">{agents.filter((a) => a.status === "live").length} live · {agents.filter((a) => a.status === "shadow" && !a.suspended).length} shadow{agents.some((a) => a.suspended) ? ` · ${agents.filter((a) => a.suspended).length} suspended` : ""}</Badge> : null}>
-        {loading ? <Skeleton rows={4} /> : agentsPoll.error && !s ? <Empty>Unavailable ({agentsPoll.error}).</Empty> : <Registry agents={agents} chosen={latest?.stance && latest.stance !== "WAIT" ? latest.chosen : null} />}
+        right={s ? <span className="flex items-center gap-1.5">{arm && !arm.error && arm.mode !== "off" ? <span title={armIds.length ? `Only the armed strategies open positions: ${armIds.join(", ")}` : "No strategy armed: each entry is the one best strategy by confidence × confluence"}><Badge tone={armIds.length ? "green" : "cyan"}>{armIds.length ? `ARMED ${armIds.length}/${arm.max ?? 3}` : "AUTO · best of all"}</Badge></span> : null}<Badge tone="slate">{agents.filter((a) => a.status === "live").length} live · {agents.filter((a) => a.status === "shadow" && !a.suspended).length} shadow{agents.some((a) => a.suspended) ? ` · ${agents.filter((a) => a.suspended).length} suspended` : ""}</Badge></span> : null}>
+        {loading ? <Skeleton rows={4} /> : agentsPoll.error && !s ? <Empty>Unavailable ({agentsPoll.error}).</Empty> : <Registry agents={agents} chosen={latest?.stance && latest.stance !== "WAIT" ? latest.chosen : null} arm={arm} reload={() => setArmTick((t) => t + 1)} />}
       </Panel>
 
       <Panel title="Latest decision" icon={<Crosshair className="h-3.5 w-3.5 text-cyan-300" />} hint="What each agent would trade at the latest 15m decision. Prices are on the feed's scale (OANDA)."

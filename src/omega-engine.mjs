@@ -431,7 +431,9 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
     }
     const open = Number(p.open_price ?? p.entry);
     const move = Number.isFinite(open) && finite(sym.bid) && finite(sym.ask) ? (dir > 0 ? sym.bid - open : open - sym.ask) : 0;
-    if (move > 0 && trendOf(p) === "drop") intents.push({ id: `cl:${p.ticket}:cd:${bar}`, kind: "close", ticket: p.ticket, reason: "confidence_drop", agent: agentOf(p) });
+    // The strategy arm (owner 2026-11-17): with 1 to 3 armed, only an armed strategy closes its own positions this way.
+    const armedOk = !signal.armed || String(signal.armed).split(",").includes(agentOf(p));
+    if (move > 0 && armedOk && trendOf(p) === "drop") intents.push({ id: `cl:${p.ticket}:cd:${bar}`, kind: "close", ticket: p.ticket, reason: "confidence_drop", agent: agentOf(p) });
   }
   return { intents, extendOf: (p) => ["stable", "rising"].includes(trendOf(p)) };
 }

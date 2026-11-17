@@ -1,6 +1,37 @@
 # RFC: Strategy Recommendation / Armed (XAUUSD)
 
-Status: design decided (owner's answers 2026-11-16, "1–10 setuju", section 18). Platform ADR-0020 is merged and in effect (the owner's `merge_owner_change` click `cns_7ed29426`, 2026-11-17 01:08 UTC; platform main `e051489`). No code until the owner starts a phase; P2 and P3 stay behind `STRATEGY_ARM_MODE` and the owner's start.
+Status: P2 built and live (2026-11-17, see below); design decided (owner's answers 2026-11-16, "1–10 setuju", section 18). Platform ADR-0020 is merged and in effect (the owner's `merge_owner_change` click `cns_7ed29426`, 2026-11-17 01:08 UTC; platform main `e051489`). No code until the owner starts a phase; P2 and P3 stay behind `STRATEGY_ARM_MODE` and the owner's start.
+
+**Built and live (owner 2026-11-17, relayed and confirmed in the session: "Ya, benar semua"; P2 started, live directly,
+`STRATEGY_ARM_MODE` "live").** Two corrections to this design, by the owner:
+- **Nothing armed is AUTO, not "no position"** (verbatim: "jika tidak ada strategy yang di-Armed maka kembali ke asal
+  pakai semua strategy dan wajib memilih strategy terbaik dengan tingkat confidence dan confluence tertinggi"). With 1
+  to 3 armed, only they may open and close their own positions; with none armed every live strategy may, but each entry
+  is ONE strategy, the best.
+- **The best is chosen by a score**, the owner's choice in the session: `score = confidence × confluence`, measured
+  inputs only (`pickStrategy`, `src/decision-engine.mjs`). `confidence` is the agent's own confidence on the side
+  (`agentConfidence`, at least `MIN_CONFIDENCE`); `confluence` is the mean of three measured agreements with its plan:
+  its entry at a key level now (1 or 0), the quorum's share on the side, and the strategy engine's multi-timeframe
+  alignment on the side. A tie goes to the better R of the trade, then the default agent. The losing candidates and
+  their scores are kept in the decision record (`selection`) and named on the Telegram decision line. The same rule
+  picks among 2 or 3 armed strategies. The council's own strategy choice no longer decides the agent while the arm
+  layer is live.
+- Built now: `src/strategy-arm.mjs` (D1 `strategy_arm_state`, `strategy_arms`, append-only `strategy_arm_events`; KV
+  `strategy-arms:v1`; at most 3, atomic, idempotent by `request_id`, `expected_version`), the arm step in `decide`
+  (`armed_conflict`, `none` → AUTO, an unreadable arm state holds the entry), the signal-time gate (`applyArmGate`:
+  `strategy_disarmed`, `strategy_arm_unknown`; `arm_mode`, `armed`), Omega's confidence-drop close only for an armed
+  strategy while any is armed (the Decision Engine's overrides unchanged), the auto-disarm on the kill switch
+  (`OmegaGateway.setControl`, `EA_SIGNALS_ENABLED` "false") and the daily loss floor (`dailyLossHit` in `bridgeSync`),
+  `GET`/`POST /omega/api/strategy-arm` (a person, same origin; `Sec-Fetch-Site` checked when present) and the Telegram
+  lines. The 5m Position Manager keeps managing open positions whatever the arm state.
+- Not built yet: the recommendation cards (§3), the platform `strategy_arm.v1` reports (§10), the owner-only
+  `OWNER_ACCESS_SUB` check (the Access application admits only the owner today; the route takes any signed-in person,
+  as the trading mode does), the `strategy_has_position` and `opposing_position` gates (§5; `max_positions` and
+  `same_side_unprotected` still hold), the `ea_deals.strategy` column and the migration file (the tables are made at run
+  time).
+- ADR-0020 says a trading action needs the owner's click per action or as a standing arm of one strategy. AUTO trades
+  with nothing armed; this record reads Omega's typed `live_armed` (a real account) plus this owner decision as the
+  standing authorization for AUTO. If the platform reads ADR-0020 otherwise, it needs an amendment there.
 
 **Owner's request (2026-11-16):** on the Strategy Agents page, one recommendation per strategy with an **Armed**
 button; an armed strategy is what the Signal Engine and Omega use for entry and close, still within the Decision

@@ -18,6 +18,7 @@ import { storeDeal, dealStats, FIRST_OF_DEAL } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
+import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
 import { goldSymbolCheck, goldSymbolText } from "./gold-symbol.mjs";
 
 export const OMEGA_SCHEMA_SQL = [
@@ -497,6 +498,15 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   const recent = await db.prepare("SELECT id FROM omega_intents WHERE created_ms > ?").bind(now - 2 * 86_400_000).all();
   // Each open position's strategy agent, from its open intent (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md).
   const agents = await positionAgents(db, executor);
+  // The strategy arm's auto-disarm (owner 2026-11-17, ADR-0020): the daily loss floor, or the kill from the environment
+  // (EA_SIGNALS_ENABLED "false"; Omega's own kill disarms in OmegaGateway.setControl). A D1 write only while something
+  // is armed and a trigger holds; the KV read is the hot path.
+  if (strategyArmMode(env) === "live") {
+    const trigger = dailyLossHit(executor, settings?.max_daily_loss_pct) ? "daily_loss_limit" : signal?.kill_source === "env" ? "kill_switch" : null;
+    if (trigger && (await readArmState(env)).ids.length) {
+      try { await disarmAll(env, { reason: trigger, now, send: (t) => sendOmegaTelegram(env, t) }); } catch { /* retried at the next sync */ }
+    }
+  }
   // The Position Manager's fresh actions (src/position-manager.mjs, owner 2026-11-17), checked again in the plan.
   const pmActions = await pendingPositionActions(db, { now });
   const plan = planIntents({ signal, control, settings, executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id), agents, pmActions });
