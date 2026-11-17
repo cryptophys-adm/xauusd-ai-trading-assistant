@@ -372,30 +372,61 @@ test("the extended witnesses are independent: price vs zones, 1H trend quality, 
   assert.deepEqual(a, b, "no extended witness reads the strategy's direction");
 });
 
+test("Heartbeat to Cerebrum (owner 2026-11-17): a kernel failure is logged, never sent to Nexus, and the hour restarts", async () => {
+  const env = { SIGNAL_CACHE: kv() };
+  const nexus = [];
+  const send = async (t) => { nexus.push(t); };
+  const t0 = Date.parse("2026-11-11T01:32:00Z");
+  const d = (key, stance, minutes) => ({ decision_key: key, stance, bias: "NEUTRAL", confidence: 0.38, source: "council", bar_close: new Date(t0 + minutes * 60_000).toISOString(), summary: `Decision ${stance}.`, trade: null, overruled: null });
+  const errors = [];
+  const orig = console.error;
+  console.error = (m) => { errors.push(String(m)); };
+  try {
+    for (const [outcome, publish] of [["denied", async () => ({ outcome: "denied", reason: "rate_limit" })], ["failed", async () => { throw new Error("boom"); }], ["disabled", async () => ({ outcome: "disabled" })]]) {
+      nexus.length = 0; errors.length = 0;
+      await env.SIGNAL_CACHE.put("telegram:decision-engine:last:v1", "null");
+      await notifyDecision(env, d(outcome + "a", "BUY", 0), send, { publish, now: t0 });
+      assert.equal(nexus.length, 1, "the stance change goes to Nexus");
+      const hb = await notifyDecision(env, d(outcome + "b", "BUY", 61), send, { publish, now: t0 + 61 * 60_000 });
+      assert.deepEqual([hb.sent, hb.reason, hb.heartbeat.channel, hb.heartbeat.outcome], [false, "heartbeat", "cerebrum", outcome]);
+      assert.equal(nexus.length, 1, `${outcome}: no fallback to Nexus`);
+      assert.equal(errors.length, 1); assert.match(errors[0], /decision_heartbeat_relay_failed/);
+      assert.equal((await notifyDecision(env, d(outcome + "c", "BUY", 76), send, { publish, now: t0 + 76 * 60_000 })).reason, "unchanged", `${outcome}: no retry every bar`);
+    }
+  } finally { console.error = orig; }
+});
+
 test("Telegram heartbeat (owner 2026-11-11): one message after an hour without a change, then hourly; \"0\" turns it off", async () => {
   const env = { SIGNAL_CACHE: kv() };
-  const sent = [];
-  const send = async (t) => { sent.push(t); };
+  const sent = [], nexus = [];
+  // owner 2026-11-17: the heartbeat goes to Cerebrum (kernel report), never to the Nexus sender.
+  const send = async (t) => { nexus.push(t); sent.push(t); };
+  const reports = [];
+  const publish = async (_env, agentId, report) => { reports.push({ agentId, report }); sent.push(report.body.text); return { outcome: "success", report_id: "r" + reports.length }; };
   const t0 = Date.parse("2026-11-11T01:32:00Z");
   const d = (key, stance, minutes) => ({ decision_key: key, stance, bias: "NEUTRAL", confidence: 0.38, source: "council", bar_close: new Date(t0 - 2 * 60_000 + minutes * 60_000).toISOString(), summary: `Decision ${stance}.`, trade: null, overruled: null });
-  assert.equal((await notifyDecision(env, d("a", "SELL", 0), send, { now: t0 })).reason, "changed");
-  assert.equal((await notifyDecision(env, d("b", "WAIT", 15), send, { now: t0 + 15 * 60_000 })).reason, "changed", "SELL -> WAIT");
-  assert.equal((await notifyDecision(env, d("c", "WAIT", 30), send, { now: t0 + 30 * 60_000 })).reason, "unchanged");
-  assert.equal((await notifyDecision(env, d("d", "WAIT", 60), send, { now: t0 + 60 * 60_000 })).reason, "unchanged", "45 minutes since the last message");
-  const hb = await notifyDecision(env, d("e", "WAIT", 75), send, { now: t0 + 75 * 60_000 });
+  assert.equal((await notifyDecision(env, d("a", "SELL", 0), send, { publish, now: t0 })).reason, "changed");
+  assert.equal((await notifyDecision(env, d("b", "WAIT", 15), send, { publish, now: t0 + 15 * 60_000 })).reason, "changed", "SELL -> WAIT");
+  assert.equal((await notifyDecision(env, d("c", "WAIT", 30), send, { publish, now: t0 + 30 * 60_000 })).reason, "unchanged");
+  assert.equal((await notifyDecision(env, d("d", "WAIT", 60), send, { publish, now: t0 + 60 * 60_000 })).reason, "unchanged", "45 minutes since the last message");
+  const hb = await notifyDecision(env, d("e", "WAIT", 75), send, { publish, now: t0 + 75 * 60_000 });
   assert.deepEqual([hb.sent, hb.reason], [true, "heartbeat"]);
   assert.match(sent.at(-1), /still WAIT/);
   assert.match(sent.at(-1), /No change since the 15m bar of 01:45 UTC/, "since the bar the stance changed");
-  assert.equal((await notifyDecision(env, d("f", "WAIT", 90), send, { now: t0 + 90 * 60_000 })).reason, "unchanged", "the hour restarts at the heartbeat");
-  assert.equal((await notifyDecision(env, d("g", "WAIT", 135), send, { now: t0 + 135 * 60_000 })).reason, "heartbeat");
+  assert.equal((await notifyDecision(env, d("f", "WAIT", 90), send, { publish, now: t0 + 90 * 60_000 })).reason, "unchanged", "the hour restarts at the heartbeat");
+  assert.equal((await notifyDecision(env, d("g", "WAIT", 135), send, { publish, now: t0 + 135 * 60_000 })).reason, "heartbeat");
   assert.equal(sent.length, 4);
+  assert.equal(nexus.length, 2, "only the two stance changes went to Nexus");
+  assert.deepEqual(reports.map((r) => [r.agentId, r.report.kind, r.report.severity, r.report.body.telegram_topic]), [["xauusd-reasoner", "xauusd_digest", "info", "ea_heartbeat"], ["xauusd-reasoner", "xauusd_digest", "info", "ea_heartbeat"]]);
+  assert.doesNotMatch(reports[0].report.body.text, /<[a-z]/i, "plain text for the kernel relay");
+  assert.equal(hb.heartbeat.channel, "cerebrum");
   // Off, and a state written before the heartbeat existed (no sent_at) never sends a burst at deploy.
   const off = { SIGNAL_CACHE: kv(), DECISION_TELEGRAM_HEARTBEAT_MINUTES: "0" };
   await off.SIGNAL_CACHE.put("telegram:decision-engine:last:v1", JSON.stringify({ stance: "WAIT", decision_key: "x", at: "2026-11-10T00:00:00.000Z" }));
-  assert.equal((await notifyDecision(off, d("h", "WAIT", 0), send, { now: t0 })).reason, "unchanged");
+  assert.equal((await notifyDecision(off, d("h", "WAIT", 0), send, { publish, now: t0 })).reason, "unchanged");
   const legacy = { SIGNAL_CACHE: kv() };
   await legacy.SIGNAL_CACHE.put("telegram:decision-engine:last:v1", JSON.stringify({ stance: "WAIT", decision_key: "x", at: "2026-11-10T00:00:00.000Z" }));
-  assert.equal((await notifyDecision(legacy, d("i", "WAIT", 0), send, { now: t0 })).reason, "unchanged", "legacy state: the hour starts now");
+  assert.equal((await notifyDecision(legacy, d("i", "WAIT", 0), send, { publish, now: t0 })).reason, "unchanged", "legacy state: the hour starts now");
   assert.equal(heartbeatMinutes({}), 60);
   assert.equal(heartbeatMinutes({ DECISION_TELEGRAM_HEARTBEAT_MINUTES: "bad" }), 60);
 });
