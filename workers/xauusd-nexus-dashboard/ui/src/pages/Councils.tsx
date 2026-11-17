@@ -249,11 +249,12 @@ function OpinionCard({ m }: { m: any }) {
 }
 
 /** One session: the rounds as opinion cards, the moderator's options, and the owner's box. */
-function SessionView({ id, onOpen }: { id: string; onOpen: (id: string) => void }) {
+function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string) => void; enabled: boolean }) {
   const [tick, setTick] = useState(0);
   const poll = usePoll(() => get(`/api/council/session?id=${encodeURIComponent(id)}`), 10_000, [id, tick]);
   const s = (poll.data as any)?.session;
   const [text, setText] = useState(""); const [to, setTo] = useState<string[]>([]); const [err, setErr] = useState<string | null>(null); const [busy, setBusy] = useState(false);
+  const [showOld, setShowOld] = useState(false);
   if (poll.loading && !s) return <Skeleton rows={4} />;
   if (!s) return <Empty>Session not found.</Empty>;
   const rounds = ["position", "rebuttal", "answer"].map((r) => [r, s.messages.filter((m: any) => m.round === r || (r === "answer" && (m.round === "owner" || m.round === "notice")))] as const).filter(([, ms]) => ms.length);
@@ -264,18 +265,23 @@ function SessionView({ id, onOpen }: { id: string; onOpen: (id: string) => void 
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
         {s.pack_stale ? <span className="text-amber-300">{Number(s.pack_refs) === 0 ? "This session ran on no evidence." : "This session's evidence is older than 24 hours."}</span> : null}
-        <button type="button" disabled={busy} onClick={() => control("reopen")} title="Open a new session on the same topic and agents, with fresh evidence; this one is closed"
+        <button type="button" disabled={busy || !enabled} onClick={() => control("reopen")} title={enabled ? "Open a new session on the same topic and agents, with fresh evidence; this one is closed" : "Turn sessions on first"}
           className="rounded-md bg-cyan-500/20 px-2.5 py-0.5 font-semibold text-cyan-200 ring-1 ring-cyan-400/40 disabled:opacity-40">Re-open with fresh evidence</button>
+        {!enabled ? <span className="text-slate-400">Sessions are off: turn them on above to re-open.</span> : null}
         {!terminal ? <button type="button" disabled={busy} onClick={() => control("close")} title="End this session; it frees a slot and does not count toward the day"
           className="rounded-md bg-slate-700/60 px-2.5 py-0.5 font-semibold text-slate-200 ring-1 ring-slate-500/40 disabled:opacity-40">Close</button> : null}
         {err ? <span className="text-rose-300">{err}</span> : null}
       </div>
       <div className="text-[13px] text-slate-200"><span className="font-semibold">{s.question}</span> <span className="text-[11px] text-slate-500">· {s.topic_key} · {s.calls}/16 calls · {STATE_TEXT[s.state] ?? s.state}{s.reason ? ` (${s.reason})` : ""}</span></div>
-      {rounds.map(([r, ms]) => (
+      {terminal && rounds.length ? (
+        <div className="text-[11.5px] text-slate-400">This session is {s.state}; its messages are hidden.{" "}
+          <button type="button" className="text-cyan-300 underline-offset-2 hover:underline" onClick={() => setShowOld((x) => !x)}>{showOld ? "Hide them" : "Show them"}</button></div>
+      ) : null}
+      {(!terminal || showOld) && rounds.map(([r, ms]) => (
         <div key={r}><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">{ROUND[r]}</div>
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{ms.map((m: any) => <OpinionCard key={m.id} m={m} />)}</div></div>
       ))}
-      {s.options ? (
+      {s.options && (!terminal || showOld) ? (
         <div><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">The moderator's options (pick in Cerebrum)</div>
           {s.options.summary ? <p className="mb-2 text-[12px] text-slate-300">{s.options.summary}</p> : null}
           <div className="grid gap-2 md:grid-cols-2">{(s.options.options ?? []).map((o: any) => (
@@ -302,13 +308,16 @@ function Sessions({ topic }: { topic: string | null }) {
   const d = poll.data as any;
   const [open, setOpen] = useState<string | null>(null);
   const [text, setText] = useState(""); const [err, setErr] = useState<string | null>(null); const [busy, setBusy] = useState(false);
-  useEffect(() => { if (!open && d?.sessions?.length) setOpen(d.sessions[0].id); }, [d, open]);
+  // Open the newest live session by default; a page of closed sessions starts clean.
+  useEffect(() => { if (!open) { const live = d?.sessions?.find((x: any) => !TERMINAL.includes(x.state)); if (live) setOpen(live.id); } }, [d, open]);
   const act = async (body: unknown) => { setBusy(true); setErr(null); try { const r = await ownerPost(body); if (r?.session_id) setOpen(r.session_id); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-slate-400">
         <span>Sessions:</span>
-        <button type="button" disabled={busy || d?.mode !== "on"} onClick={() => act({ action: "switch", on: !d?.enabled })} className={`rounded-md px-2 py-0.5 font-semibold ring-1 ${d?.enabled ? "bg-emerald-500/20 text-emerald-200 ring-emerald-400/40" : "bg-slate-700/60 text-slate-200 ring-slate-500/40"} disabled:opacity-40`}>{d?.enabled ? "On" : "Off"}</button>
+        <span className={`rounded-md px-2 py-0.5 font-semibold ring-1 ${d?.enabled ? "bg-emerald-500/20 text-emerald-200 ring-emerald-400/40" : "bg-slate-700/60 text-slate-200 ring-slate-500/40"}`}>{d?.enabled ? "On" : "Off"}</span>
+        <button type="button" disabled={busy || d?.mode !== "on"} onClick={() => { if (d?.enabled && !window.confirm("Turn council sessions off? Running sessions stop at their next step.")) return; act({ action: "switch", on: !d?.enabled }); }}
+          className="rounded-md px-2 py-0.5 text-slate-300 ring-1 ring-slate-600/50 hover:text-slate-100 disabled:opacity-40">{d?.enabled ? "Turn off" : "Turn on"}</button>
         <span>at most 6 agents and 16 calls a session, 4 sessions a day (closed sessions do not count)</span>
       </div>
       {d?.enabled ? (
@@ -324,9 +333,10 @@ function Sessions({ topic }: { topic: string | null }) {
       {err ? <div className="text-[11px] text-rose-300">{err}</div> : null}
       {d?.sessions?.length ? (
         <div className="flex flex-wrap gap-1.5">{d.sessions.map((x: any) => (
-          <button key={x.id} type="button" onClick={() => setOpen(x.id)} className={`rounded px-2 py-0.5 text-[11px] ring-1 ${open === x.id ? "bg-cyan-500/20 text-cyan-200 ring-cyan-400/40" : "text-slate-300 ring-slate-600/50"}`}>{x.topic_text ?? x.topic_key} · {x.state}</button>))}</div>
+          <button key={x.id} type="button" onClick={() => setOpen(x.id)} className={`rounded px-2 py-0.5 text-[11px] ring-1 ${open === x.id ? "bg-cyan-500/20 text-cyan-200 ring-cyan-400/40" : "text-slate-300 ring-slate-600/50"}`}>{x.topic_text ?? x.topic_key} · {x.state}</button>))}
+          {open ? <button type="button" onClick={() => setOpen(null)} className="rounded px-2 py-0.5 text-[11px] text-slate-500 ring-1 ring-slate-700/50 hover:text-slate-300">Hide</button> : null}</div>
       ) : <Empty>No session yet.</Empty>}
-      {open ? <SessionView id={open} onOpen={(x) => { setOpen(x); setTick((t) => t + 1); }} /> : null}
+      {open ? <SessionView id={open} enabled={Boolean(d?.enabled)} onOpen={(x) => { setOpen(x); setTick((t) => t + 1); }} /> : null}
     </div>
   );
 }
