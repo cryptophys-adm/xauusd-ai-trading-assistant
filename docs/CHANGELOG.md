@@ -5,6 +5,8 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- fix(omega): the Position Manager's outward TP2 now follows ADR-0020 Amendment 4 under the TP ladder too. It waits until the stop locks a profit at or beyond TP1. On 2026-11-18 at ~09:45 it moved ticket 389881390's target outward before that.
+- fix(omega): a stop or target change the terminal applied without its result line is recorded done from the position (`reconcileModifies`). Seen 2026-11-18: the TP of 389881390 moved while its intent expired.
 - feat(omega): the profile council's downgrade veto is on, and the TP ladder follows Amendment 4. Both follow platform ADR-0020 Amendments 4 and 5 (merged 2026-11-18 08:38 UTC).
   - **Downgrade veto.** `OMEGA_PROFILE_COUNCIL_DOWNGRADE` is `"on"`. The bridge sync convenes the council at once. The pending cap is now 2 minutes (it was 10), and the seat deadline is 25 s. A late review, a failure or an invalid verdict applies the downgrade. A veto's digest item carries its trigger, the profile it held back and `veto_until`.
   - **TP ladder.** The take-profit moves outward (trailing TP by key level, extended target) only while the stop locks a profit at or beyond TP1.

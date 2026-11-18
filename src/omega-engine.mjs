@@ -625,6 +625,16 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   intents.push(...exits.intents);
   // The Position Manager's actions (owner 2026-11-17): after the strategy exits, before the routine management.
   const pm = positionManagerIntents({ positions, sym, actions: pmActions, skipTickets: intents.filter((it) => it.kind === "close").map((it) => it.ticket) });
+  // ADR-0020 Amendment 4: under the TP ladder the Position Manager's outward take-profit (TP2) waits, like every
+  // outward move, until the stop locks a profit at or beyond TP1.
+  if (S.tp_ladder) {
+    const levels = brokerKeyLevels(signal);
+    pm.intents = pm.intents.filter((it) => {
+      if (it.kind !== "modify_tp") return true;
+      const p = positions.find((x) => x.ticket === it.ticket);
+      return p ? ladderTp1Locked({ position: p, levels, sym, signal }) : false;
+    });
+  }
   if (pm.intents.length) note("position_manager");
   intents.push(...pm.intents);
 
