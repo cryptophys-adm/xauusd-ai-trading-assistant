@@ -5,6 +5,9 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- feat(omega): the profile council's downgrade veto is on, and the TP ladder follows Amendment 4. Both follow platform ADR-0020 Amendments 4 and 5 (merged 2026-11-18 08:38 UTC).
+  - **Downgrade veto.** `OMEGA_PROFILE_COUNCIL_DOWNGRADE` is `"on"`. The bridge sync convenes the council at once. The pending cap is now 2 minutes (it was 10), and the seat deadline is 25 s. A late review, a failure or an invalid verdict applies the downgrade. A veto's digest item carries its trigger, the profile it held back and `veto_until`.
+  - **TP ladder.** The take-profit moves outward (trailing TP by key level, extended target) only while the stop locks a profit at or beyond TP1.
 - fix(omega): the onboarding day's daily loss counts from the balance at onboarding (owner 2026-11-18, confirmed: "Setuju").
   - The real account connected at 08:29 started at $54.50 after −$3,316.19 of manual losses that day, so the broker's day start blocked every entry with `daily_loss_limit`.
   - On the day Omega first sees an account, every daily-loss check (arm auto-disarm, profile agent, planner) now uses the onboarding balance. Later losses still count.

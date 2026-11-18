@@ -103,8 +103,8 @@
     // Account Profiles phase 1 (docs/RFC_ACCOUNT_PROFILES.md §2): "on" opens nothing while OmegaExecutor is older than
     // 1.15 (planIntents note ea_outdated). On since 2026-11-18: 1.15 runs on the VPS (seen 04:17 UTC, spec validated 04:18).
     "OMEGA_EA_VERSION_GATE": "on",
-    // The profile council's downgrade review (src/profile-council.mjs): off until platform ADR-0020 allows a veto.
-    "OMEGA_PROFILE_COUNCIL_DOWNGRADE": "off",
+    // The profile council's downgrade review (src/profile-council.mjs): on since platform ADR-0020 Amendment 5 (2026-11-18).
+    "OMEGA_PROFILE_COUNCIL_DOWNGRADE": "on",
     // Corpus Oracle phase 1 (owner 2026-11-11): "shadow" keeps the broker M1 corpus of Omega's active
     // broker, pair and user; "off" ignores it. It feeds no decision in phase 1.
     // Owner 2026-11-11 ("Nyalakan, host sudah #243"): collect the broker corpus for the MT5 fallback (docs/RFC_MT5_FALLBACK.md).

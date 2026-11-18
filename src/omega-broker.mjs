@@ -586,6 +586,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   }
   // The Position Manager's fresh actions (src/position-manager.mjs, owner 2026-11-17), checked again in the plan.
   const pmActions = await pendingPositionActions(db, { now });
+  let reviewStarted = false;
   if (executor?.connected === true) {
     // The profile agent's immediate steps (phase 3, src/profile-agent.mjs): the kill switch or the daily loss -> Safe,
     // a drawdown step, an extreme-volatility step. No deal is read here; the loss streak and the upgrades run in the
@@ -600,6 +601,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
         log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
       if (step.status === "changed") account = { ...account, profile: step.change.to };
       if (step.review_pending === true) account = { ...account, review_pending: true };
+      if (step.review_started === true) reviewStarted = true;
     }
   }
   const eaGate = eaVersionGateOn(env);
@@ -687,7 +689,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     try { const r = await ingestMt5Calendar(env, calendar, { executor, now }); calendarSeen = r.events != null && Number.isFinite(Number(calendar.written_ms)) ? Number(calendar.written_ms) : null; } catch { calendarSeen = null; }
   }
 
-  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, ...(recovery ? { recovery } : {}) };
+  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
 }
 
 // ---------------------------------------------------------------- overview (for the page)

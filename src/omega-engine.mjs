@@ -284,6 +284,20 @@ export function ladderRungs({ position: p, levels = null, buffer = 0 }) {
   return [...rungs, tp];
 }
 
+/** Pure: whether the stop (the current one, or one planned in this sync) locks a profit at or beyond the ladder's TP1. */
+export function ladderTp1Locked({ position: p, levels = null, sym = {}, signal = null, plannedSl = null }) {
+  const buy = p.side === "BUY";
+  const digits = Number.isInteger(sym.digits) ? sym.digits : 2;
+  const point = positive(sym.point) ? sym.point : Math.pow(10, -digits);
+  const spreadPx = (finite(sym.spread_points) ? sym.spread_points : 0) * point;
+  const buffer = Math.max(2 * spreadPx, positive(signal?.m5_atr) ? 0.1 * signal.m5_atr : 0, point);
+  const rungs = ladderRungs({ position: p, levels, buffer });
+  if (rungs.length < 2) return false;
+  const tp1 = rungs[0];
+  const sls = [Number(p.sl), Number(plannedSl)].filter((x) => finite(x) && x > 0);
+  return sls.some((sl) => (buy ? sl >= tp1 - 1e-9 : sl <= tp1 + 1e-9));
+}
+
 /** Pure: the share of the volume a partial takes, by the power behind the position, within the owner's bounds. */
 export function partialShare(band, S) {
   const lo = Math.max(0, Math.min(S.partial_min_pct, S.partial_max_pct)) / 100, hi = Math.max(S.partial_min_pct, S.partial_max_pct) / 100;
@@ -430,6 +444,11 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
         }
       }
       if (lad.partial) out.push({ id: `pl:${p.ticket}:${lad.partial.rung}`, kind: "partial_close", ticket: p.ticket, volume: lad.partial.volume, reason: `ladder_tp${lad.partial.rung}_${Math.round(lad.partial.share * 100)}pct` });
+      // ADR-0020 Amendment 4 (platform, merged 2026-11-18): the take-profit moves outward, as often as the key levels
+      // allow, only while the stop already locks a profit at or beyond TP1. Before that, an outward move is dropped.
+      if (!ladderTp1Locked({ position: p, levels, sym, signal, plannedSl: lad.sl })) {
+        for (let i = out.length - 1; i >= 0; i -= 1) if (out[i].kind === "modify_tp" && out[i].ticket === p.ticket) out.splice(i, 1);
+      }
       continue;
     }
     const atTarget = Number.isFinite(curTp) && (buy ? sym.bid >= curTp : sym.ask <= curTp);

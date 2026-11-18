@@ -181,3 +181,25 @@ test("PC8 the Telegram line names the verdict and every seat, never an account n
   assert.match(line, /trade management: no answer/);
   assert.doesNotMatch(line, /login|\b\d{6,}\b/);
 });
+
+test("PC9 Amendment 5: the review starts at once (review_started), the cap is about 2 minutes, a veto's digest names its trigger and its end", async () => {
+  const { PENDING_DOWNGRADE_MAX_MS: cap } = await import("../src/profile-council.mjs");
+  const { profileReport } = await import("../src/profile-agent.mjs");
+  assert.equal(cap, 2 * 60_000);
+  const { env, db, executor, get } = await seeded("aggressive");
+  const low = { ...executor, account: { ...executor.account, equity: 790 } };
+  const s1 = await runProfileAgent(db, await get(), { executor: low, now: NOW, downgradeCouncil: true });
+  assert.equal(s1.review_started, true);
+  const s2 = await runProfileAgent(db, await get(), { executor: low, now: NOW + 5000, downgradeCouncil: true });
+  assert.equal(s2.review_started, undefined, "convened once, not on every sync");
+  const review = (r, change, { deals }) => reviewProfileChange(env, r, change, { executor: low, deals, now: NOW + 30_000, call: callWith({ risk: "reject", strategy: "reject", trade_management: "reject" }) });
+  await runProfileAgent(db, await get(), { executor: low, now: NOW + 30_000, withEvidence: true, downgradeCouncil: true, review });
+  const rows = db.raw.prepare("SELECT * FROM omega_profile_changes").all();
+  const d = profileReport(rows);
+  assert.equal(d.severity, "warning");
+  assert.deepEqual([d.body.items[0].reason, d.body.items[0].trigger, d.body.items[0].would_be], ["council_veto", "drawdown", "conservative"]);
+  assert.equal(d.body.items[0].veto_until, new Date(NOW + 30_000 + 24 * 3_600_000).toISOString());
+  // An invalid verdict counts as no answer: the downgrade applies.
+  const { moderate } = await import("../src/profile-council.mjs");
+  assert.equal(moderate("downgrade", { risk: null, strategy: { verdict: "reject" }, trade_management: { verdict: "reject" } }).verdict, "approve");
+});

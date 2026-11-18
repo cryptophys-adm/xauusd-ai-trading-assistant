@@ -217,13 +217,13 @@ council's approval; for downgrades, "Council boleh menolak".
   - No pack, the daily cap, a failed council or a second review the same UTC day all mean no upgrade.
   - The bridge sync never raises a profile.
   - Approval mode is unchanged: the owner's Accept is the decision.
-- **Downgrades (off).** `OMEGA_PROFILE_COUNCIL_DOWNGRADE` is `"off"`. Platform ADR-0020 Amendment 3 says a downgrade is
+- **Downgrades (on since 2026-11-18, platform ADR-0020 Amendment 5).** `OMEGA_PROFILE_COUNCIL_DOWNGRADE` is `"on"`. The bridge sync convenes the council at once (`profile_review_started`, after the answer). The cap is 2 minutes: a review that has not finished by then applies the downgrade. An invalid verdict counts as no answer, so the downgrade applies. A veto's `risk_profile.v1` item carries its trigger, the profile it held back and `veto_until`. The ceiling the owner lowers never reaches the council. Before Amendment 5 the switch was `"off"`. Platform ADR-0020 Amendment 3 says a downgrade is
   never blocked, so the switch stays off until a platform amendment allows a veto. With `"on"`:
   - A soft trigger (drawdown, loss streak, extreme volatility) writes `pending_downgrade`. New entries wait
     (`profile_review_pending`), and the cron's council reviews it.
   - A veto keeps the profile for up to 24 h (`council_veto`). It lapses sooner if the drawdown reaches 25%, the run
     reaches 6 losses in a row, or a different trigger fires.
-  - A failed council, three reviews in a day, or a review not done within 10 minutes applies the downgrade.
+  - A failed council, three reviews in a day, or a review not done within 2 minutes applies the downgrade.
   - The kill switch and the daily loss limit never reach the council. They clear any pending downgrade or veto.
 - **Record.**
   - One row per review in D1 `omega_profile_councils`; its `id` is the council session id.

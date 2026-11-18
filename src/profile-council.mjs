@@ -12,8 +12,10 @@
 //     answered, the risk seat rejects and at least two reject. Anything else, a failure included, applies it.
 // The kill switch and the daily loss limit never reach the council.
 //
-// The downgrade review is off until platform ADR-0020 allows a veto (Amendment 3 says a downgrade is never blocked):
-// OMEGA_PROFILE_COUNCIL_DOWNGRADE "on" turns it on; anything else keeps every downgrade immediate.
+// The downgrade review runs with OMEGA_PROFILE_COUNCIL_DOWNGRADE "on" (platform ADR-0020 Amendment 5, merged 2026-11-18,
+// allows the veto within these rules); anything else keeps every downgrade immediate. Never vetoable: the kill switch,
+// the daily loss limit, a disarm, and the owner lowering the ceiling (those never reach the council). An invalid
+// verdict, a failure or a timeout applies the downgrade.
 //
 // Each review is one row in D1 omega_profile_councils (its id is the council session id), metered as
 // "profile_council" with its own daily cap (PROFILE_COUNCIL_DAILY_USD).
@@ -29,8 +31,9 @@ export const DOWNGRADE_REVIEWS_PER_DAY = 3;
 export const VETO_HOLD_MS = 24 * 3_600_000;
 export const VETO_WORSE_DRAWDOWN_PCT = 25;
 export const VETO_WORSE_LOSSES = 6;
-export const PENDING_DOWNGRADE_MAX_MS = 10 * 60_000;
-export const SEAT_DEADLINE_MS = 60_000;
+// ADR-0020 Amendment 5 (platform, merged 2026-11-18 08:38 UTC): a review takes about 2 minutes at most.
+export const PENDING_DOWNGRADE_MAX_MS = 2 * 60_000;
+export const SEAT_DEADLINE_MS = 25_000;
 const LADDER = ["safe", "conservative", "aggressive", "custom"];
 const rank = (p) => LADDER.indexOf(p);
 const label = (p) => PROFILES[p]?.label ?? p;

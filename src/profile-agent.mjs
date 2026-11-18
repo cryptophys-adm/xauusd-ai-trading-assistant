@@ -181,7 +181,7 @@ async function downgradeReview(db, row, change, { state, ddReset, deals, executo
   try { r = await review(row, change, { deals, executor }); } catch { r = null; }
   if (r?.verdict === "reject") {
     await writeState(db, row.account_ref, { ...state, pending_downgrade: null, council_veto: JSON.stringify({ reason: change.reason, until_ms: now + VETO_HOLD_MS, review_id: r.id ?? null, at_ms: now }) });
-    const evidence = { trigger: change.reason, would_be: change.to, trigger_evidence: change.evidence ?? null, council: councilEvidence(r) };
+    const evidence = { trigger: change.reason, would_be: change.to, trigger_evidence: change.evidence ?? null, council: councilEvidence(r), veto_until: new Date(now + VETO_HOLD_MS).toISOString() };
     try {
       await db.prepare("INSERT INTO omega_profile_changes (account_ref, from_profile, to_profile, actor, reason, evidence, severity, at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(row.account_ref, row.profile, row.profile, "council", "council_veto", JSON.stringify(evidence), "warning", now).run();
@@ -324,7 +324,8 @@ export async function runProfileAgent(db, rowIn, { executor, killed = false, dai
       if (!review) {
         await writeState(db, row.account_ref, { ...kept, pending_downgrade: JSON.stringify({ to: change.to, reason: change.reason, evidence: change.evidence ?? null, at_ms: now }), council_veto: null });
         try { if (log) await log("profile_review_pending", { account_ref: row.account_ref, from: row.profile, to: change.to, reason: change.reason }); } catch { /* audit best effort */ }
-        return { status: "review_pending", review_pending: true };
+        // review_started: the caller convenes the council at once (it has about 2 minutes, Amendment 5).
+        return { status: "review_pending", review_pending: true, review_started: true };
       }
       return downgradeReview(db, row, change, { state: kept, ddReset, deals, executor, now, log, notify, review });
     }
@@ -478,7 +479,9 @@ export function profileReport(rows) {
     account_ref: String(r.account_ref), from: String(r.from_profile), to: String(r.to_profile), actor: String(r.actor), reason: String(r.reason),
     evidence_ref: `omega_profile_changes:${Number(r.id)}`, at: new Date(Number(r.at_ms)).toISOString(),
     // The profile council's session id and verdict, when it reviewed this change (src/profile-council.mjs).
-    ...(parse(r.evidence)?.council?.verdict ? { council: { id: parse(r.evidence).council.id ?? null, verdict: String(parse(r.evidence).council.verdict) } } : {})
+    ...(parse(r.evidence)?.council?.verdict ? { council: { id: parse(r.evidence).council.id ?? null, verdict: String(parse(r.evidence).council.verdict) } } : {}),
+    // A veto (ADR-0020 Amendment 5): the trigger it held back and when the hold ends.
+    ...(r.reason === "council_veto" ? { trigger: parse(r.evidence)?.trigger ?? null, would_be: parse(r.evidence)?.would_be ?? null, veto_until: parse(r.evidence)?.veto_until ?? null } : {})
   }));
   const forced = rows.some((r) => r.severity === "warning" || FORCED.has(r.reason));
   const last = items.at(-1);
