@@ -21,6 +21,7 @@ import { pendingPositionActions, markPositionActions } from "./position-actions.
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
 import { goldSymbolCheck, goldSymbolText } from "./gold-symbol.mjs";
 import { runProfileAgent, ownerSetProfile } from "./profile-agent.mjs";
+import { brokerLabelFor } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
 export const OMEGA_SCHEMA_SQL = [
@@ -474,19 +475,21 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     await db.prepare("UPDATE omega_intents SET status = ?, result = ?, updated_ms = ? WHERE id = ? AND status IN ('pending', 'sent', 'expired')")
       .bind(result.ok ? "done" : "failed", JSON.stringify(result), now, r.id).run();
     if (existing && (existing.status === "pending" || existing.status === "sent")) {
+      // The broker label of this terminal, e.g. "FxPro (DEMO) · GOLD"; "broker unknown" until its spec is validated.
+      const label = await brokerLabelFor(db, executor);
       if (result.ok) {
         if (p?.kind === "open") {
           const tcaText = (result.slippage_pts != null || latencyMs != null)
             ? `\nLatency: <code>${latencyMs != null ? `${latencyMs}ms` : "—"}</code> | Slippage: <code>${result.slippage_pts != null ? `${result.slippage_pts} pts` : "0 pts"}</code>`
             : "";
-          await sendOmegaTelegram(env, `🟢 <b>Omega Order Executed (Monex)</b>\nTicket: <code>#${result.ticket || "—"}</code>\nSide: <b>${p.side}</b> | Volume: <code>${p.volume}</code>\nEntry: <code>${p.entry || "—"}</code> | Fill: <code>${result.fill_price || p.entry || "—"}</code>\nSL: <code>${p.sl}</code> | TP: <code>${p.tp}</code>${tcaText}`);
+          await sendOmegaTelegram(env, `🟢 <b>Omega Order Executed · ${label}</b>\nTicket: <code>#${result.ticket || "—"}</code>\nSide: <b>${p.side}</b> | Volume: <code>${p.volume}</code>\nEntry: <code>${p.entry || "—"}</code> | Fill: <code>${result.fill_price || p.entry || "—"}</code>\nSL: <code>${p.sl}</code> | TP: <code>${p.tp}</code>${tcaText}`);
         } else if (p?.kind === "close" || p?.kind === "partial_close") {
-          await sendOmegaTelegram(env, `💰 <b>Omega Position ${p.kind === "partial_close" ? "Scaled Out (50%)" : "Closed"}</b>\nTicket: <code>#${result.ticket || p.ticket || "—"}</code>\nReason: <code>${p.reason || "executed"}</code>`);
+          await sendOmegaTelegram(env, `💰 <b>Omega Position ${p.kind === "partial_close" ? "Scaled Out (50%)" : "Closed"} · ${label}</b>\nTicket: <code>#${result.ticket || p.ticket || "—"}</code>\nReason: <code>${p.reason || "executed"}</code>`);
         } else if (p?.kind === "modify_tp") {
-          await sendOmegaTelegram(env, `🎯 <b>Extended TP Expanded (Runner)</b>\nTicket: <code>#${p.ticket}</code>\nNew TP: <code>${p.tp}</code>`);
+          await sendOmegaTelegram(env, `🎯 <b>Extended TP Expanded (Runner) · ${label}</b>\nTicket: <code>#${p.ticket}</code>\nNew TP: <code>${p.tp}</code>`);
         }
       } else if (result.error) {
-        await sendOmegaTelegram(env, `⚠️ <b>Omega Intent Rejected</b>\nTicket: <code>#${result.ticket || p?.ticket || "—"}</code>\nKind: <code>${p?.kind || "—"}</code>\nError: <code>${result.error}</code>`);
+        await sendOmegaTelegram(env, `⚠️ <b>Omega Intent Rejected · ${label}</b>\nTicket: <code>#${result.ticket || p?.ticket || "—"}</code>\nKind: <code>${p?.kind || "—"}</code>\nError: <code>${result.error}</code>`);
       }
     }
   }
