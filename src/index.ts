@@ -257,6 +257,7 @@ import { dedupeDeals, listDeals, omegaOverview, setControl, storeDeal } from "./
 import { omegaHealth } from "./omega-health.mjs";
 import { relayEaHeartbeat } from "./ea-heartbeat-relay.mjs";
 import { relayStrategyArm } from "./strategy-arm-relay.mjs";
+import { relayProfileChanges } from "./profile-agent.mjs";
 import { computeRecommendations, readRecommendations } from "./strategy-recommendation.mjs";
 import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
@@ -266,7 +267,7 @@ import { runKnobProposals } from "./council-knob-tuning.mjs";
 import { readKnobOverrides } from "./council-knobs.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
-import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings } from "./omega-broker.mjs";
+import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile } from "./omega-broker.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
 import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mjs";
@@ -1868,6 +1869,11 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
       send: (t: string) => sendTelegram(this.env, t)
     }) as Promise<JsonObject>;
   }
+  /** The owner's account profile controls (docs/RFC_ACCOUNT_PROFILES.md §10): ceiling, profile, agent mode, accept, decline. */
+  async setAccountProfile(input: { account_ref?: string; action?: string; value?: string | null; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    if (ownerCheck(this.env, input?.actor_sub ?? null) !== "owner") return { ok: false, error: "owner_only" } as JsonObject;
+    return setAccountProfile(this.env, { account_ref: String(input?.account_ref ?? ""), action: String(input?.action ?? ""), value: input?.value ?? null, actor: String(input?.actor ?? "owner") }) as Promise<JsonObject>;
+  }
   async setSettings(input: { body?: unknown; actor: string }): Promise<JsonObject> {
     return writeSettings(this.env, { body: input?.body, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
   }
@@ -2713,6 +2719,16 @@ async function armBlocked(env: Env): Promise<string | null> {
 async function runLedgerStep(env: Env): Promise<void> {
   await runEaHeartbeatRelay(env);
   await runStrategyArmRelay(env);
+  // The profile agent's evidence steps (docs/RFC_ACCOUNT_PROFILES.md phase 3): the loss streak and the upgrades,
+  // then its risk_profile.v1 record to the platform (at most one report per 30 minutes).
+  try {
+    const step = await profileAgentTick(env) as { status?: string };
+    if (step?.status === "changed" || step?.status === "proposed" || step?.status === "failed") console.log("profile_agent", JSON.stringify(step));
+  } catch (e) { console.error("profile_agent_failed", e instanceof Error ? e.message : String(e)); }
+  try {
+    const relay = await relayProfileChanges(env) as { status?: string };
+    if (relay?.status !== "disabled" && relay?.status !== "waiting" && relay?.status !== "idle") console.log("risk_profile_relay", JSON.stringify(relay));
+  } catch (e) { console.error("risk_profile_relay_failed", e instanceof Error ? e.message : String(e)); }
   // The 5-minute Position Manager (owner 2026-11-17, src/position-manager.mjs): each open Omega position once a 5m
   // bar; risk-reducing only; POSITION_MANAGER_MODE "off" stops it. Then its daily report after 21:00 UTC.
   try {
