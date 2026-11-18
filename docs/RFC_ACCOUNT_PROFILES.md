@@ -271,6 +271,19 @@ mendeteksi akun ini sebelumnya pernah login di omega atau tidak". Confirmed in t
     "On Omega since <date> · last seen <ago>". It also shows the peak, the reference, the losses in a row and the number
     of profile changes. `last_seen_ms` is written at most every 10 minutes.
 
+- **The onboarding day's daily loss** (owner 2026-11-18, confirmed: "Setuju").
+  - On the UTC day Omega first sees an account, the daily-loss reference is its balance at onboarding (`onboard_balance`, or the first seeded peak for a row from before the column), not the broker's day start (`dailyLossExecutor`). It applies to the arm's auto-disarm, the profile agent and the planner.
+  - Losses before Omega never trip the limit; losses after onboarding do. Deposits and withdrawals move the reference.
+  - A block set on that day before this rule (no `upgrade_block_reason`) is lifted once (event `upgrade_block_cleared`). A block with its reason recorded stands to the next UTC day.
+- **The owner's override** (owner 2026-11-18, confirmed: "Ya, boleh override"). On a day the kill switch or the daily loss limit fired, the owner may still raise the profile.
+  - The page warns first: "Daily loss limit hit today (−X%). Raise profile anyway?".
+  - The change is recorded as `owner_override_daily_lock` (audit, Telegram, `risk_profile.v1`).
+  - The agent's own upgrades stay blocked to the next UTC day.
+- **Approval-mode proposals** are in Omega → Setup → Risk profile ("Agent proposes … · council … · until …", Accept / Decline).
+  - Each proposal carries the council's advice and expires after 24 h; an expired proposal cannot be accepted.
+  - Its Telegram line links to https://nexus.cryptophys.work/omega#setup/profile.
+  - A badge on Setup and on its Risk profile tab shows a pending proposal or a downgrade waiting for the council.
+
 ## Phases
 
 | Phase | What | Gate to go live |

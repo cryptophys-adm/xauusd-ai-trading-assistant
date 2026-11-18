@@ -543,8 +543,10 @@ export default function Omega() {
   const [updatedAt, setUpdatedAt] = useState<string>("—");
 
   // MT5 Web Terminal & Separated Setup Mode UI state
-  const [viewMode, setViewMode] = useState<"terminal" | "setup">("terminal");
-  const [setupTab, setSetupTab] = useState<"engine" | "profile" | "connection">("engine");
+  // A deep link (the profile agent's Telegram line): #setup/profile opens Setup → Risk profile.
+  const hashTab = typeof window !== "undefined" ? (window.location.hash.match(/^#setup(?:\/(engine|profile|connection))?$/) ?? null) : null;
+  const [viewMode, setViewMode] = useState<"terminal" | "setup">(hashTab ? "setup" : "terminal");
+  const [setupTab, setSetupTab] = useState<"engine" | "profile" | "connection">((hashTab?.[1] as "engine" | "profile" | "connection" | undefined) ?? "engine");
   // On a phone the Market Watch column folds above the chart (owner 2026-11-18: MT5 layout, no horizontal scroll).
   const [dockOpen, setDockOpen] = useState(false);
   const [mt5Tf, setMt5Tf] = useState<Mt5Tf>("M15");
@@ -796,6 +798,9 @@ export default function Omega() {
   // The connected account's row (the one on the bridge's server, else the newest seen); never a login, only its opaque reference.
   const accounts: any[] = Array.isArray(b?.accounts) ? b.accounts : [];
   const account = accounts.find((a) => a?.server && a.server === br.server) ?? accounts[0] ?? null;
+  // A proposal waiting for the owner, or a downgrade waiting for the council: a badge on Setup and on its Risk profile tab.
+  const profileAttention = account?.pending_upgrade?.to && !(account.pending_upgrade.expires_ms && account.pending_upgrade.expires_ms <= Date.now())
+    ? `The profile agent proposes ${account.pending_upgrade.to}` : account?.pending_downgrade?.to ? "A downgrade is waiting for the profile council" : "";
   const watchdog = b?.autonomous_watchdog || null;
   const cur = br.currency || hb?.currency || "USD";
   const digits = typeof br.digits === "number" && br.digits >= 0 ? br.digits : 2;
@@ -919,6 +924,7 @@ export default function Omega() {
           >
             <Sliders className="h-3.5 w-3.5 text-emerald-300" />
             Setup
+            {profileAttention ? <span id="setup-attention" className="rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-black" title={profileAttention}>1</span> : null}
           </button>
         </div>
 
@@ -2362,6 +2368,7 @@ export default function Omega() {
             <button key={key} type="button" role="tab" aria-selected={setupTab === key} id={`setup-tab-${key}`} onClick={() => setSetupTab(key)}
               className={`rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition ${setupTab === key ? "border-emerald-400/50 bg-emerald-500/20 text-emerald-100" : "border-white/10 bg-black/30 text-slate-400 hover:text-slate-200"}`}>
               {label}
+              {key === "profile" && profileAttention ? <span className="ml-1 rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-black">1</span> : null}
             </button>
           ))}
         </div>

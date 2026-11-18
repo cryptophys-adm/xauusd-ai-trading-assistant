@@ -5,6 +5,12 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- fix(omega): the onboarding day's daily loss counts from the balance at onboarding (owner 2026-11-18, confirmed: "Setuju").
+  - The real account connected at 08:29 started at $54.50 after −$3,316.19 of manual losses that day, so the broker's day start blocked every entry with `daily_loss_limit`.
+  - On the day Omega first sees an account, every daily-loss check (arm auto-disarm, profile agent, planner) now uses the onboarding balance. Later losses still count.
+  - The block that pre-onboarding losses set today is lifted once.
+- feat(omega): the owner's override of the daily lock (confirmed: "Ya, boleh override"): a warning confirm, recorded as `owner_override_daily_lock`.
+- feat(omega): approval proposals carry the council's advice and a 24 h expiry. The Telegram line links to `#setup/profile`, which opens Setup → Risk profile, and a badge on Setup shows pending items.
 - feat(omega): account baselines and the owner's reset (owner 2026-11-18, relayed and confirmed: "setuju semua").
   - **Baselines.** A login is its own account with its own baseline. The row an older EA left under the server's name is no longer adopted.
   - **Omega deals only.** The loss streak, the upgrade evidence and the council's record count Omega's deals only.

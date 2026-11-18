@@ -59,7 +59,9 @@ export const AGENT_COLUMNS = [
   ["baseline_ms", "INTEGER"],          // the owner's last baseline reset (the loss streak and the evidence count from it)
   ["last_balance", "REAL"],            // the balance at the last check (a change no new deal explains is a balance operation)
   ["last_deal_id", "INTEGER"],         // the last ea_deals row that check accounted for
-  ["last_seen_ms", "INTEGER"]          // the last bridge sync of this account (written at most every LAST_SEEN_EVERY_MS)
+  ["last_seen_ms", "INTEGER"],         // the last bridge sync of this account (written at most every LAST_SEEN_EVERY_MS)
+  ["onboard_balance", "REAL"],         // the balance when Omega first saw the account (the onboarding day's daily-loss reference)
+  ["upgrade_block_reason", "TEXT"]     // why upgrade_block_until_ms is set: kill_switch or daily_loss_limit
 ];
 export const LAST_SEEN_EVERY_MS = 10 * 60_000;
 let schemaReady = false;
@@ -204,7 +206,8 @@ const rowOut = (r) => r ? ({
   balance_peak: r.balance_peak ?? null, last_upgrade_ms: r.last_upgrade_ms ?? null, upgrade_block_until_ms: r.upgrade_block_until_ms ?? null,
   pending_upgrade: parse(r.pending_upgrade),
   pending_downgrade: parse(r.pending_downgrade), council_veto: parse(r.council_veto),
-  dd_ref: r.dd_ref ?? null, baseline_ms: r.baseline_ms ?? null, last_seen_ms: r.last_seen_ms ?? null, vol_latched: Number(r.vol_latched) === 1
+  dd_ref: r.dd_ref ?? null, baseline_ms: r.baseline_ms ?? null, last_seen_ms: r.last_seen_ms ?? null, vol_latched: Number(r.vol_latched) === 1,
+  onboard_balance: r.onboard_balance ?? null, upgrade_block_reason: r.upgrade_block_reason ?? null
 }) : null;
 
 /** The Custom snapshot of the account's settings (risk per trade, positions, daily loss) as they trade today. */
@@ -248,9 +251,10 @@ export async function syncAccount(db, executor, { settings = null, now = Date.no
     // A first spec is no change: it validates at once when it is usable (the live account keeps trading as it does
     // today). Only a later change waits SPEC_SETTLE_MS.
     const status = problem ? "invalid" : "validated";
-    await db.prepare(`INSERT INTO omega_accounts (account_ref, server, legacy, spec_hash, spec, spec_status, spec_problem, spec_since_ms, spec_validated_ms, profile, ceiling, agent_mode, custom, profile_by, profile_ms, created_ms, last_seen_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'system', ?, ?, ?)`)
-      .bind(ref, spec.server, legacy ? 1 : 0, hash, JSON.stringify(spec), status, problem, now, problem ? null : now, profile, profile, agentMode, custom, now, now, now).run();
+    const onboard = Number(executor?.account?.balance);
+    await db.prepare(`INSERT INTO omega_accounts (account_ref, server, legacy, spec_hash, spec, spec_status, spec_problem, spec_since_ms, spec_validated_ms, profile, ceiling, agent_mode, custom, profile_by, profile_ms, created_ms, last_seen_ms, onboard_balance)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'system', ?, ?, ?, ?)`)
+      .bind(ref, spec.server, legacy ? 1 : 0, hash, JSON.stringify(spec), status, problem, now, problem ? null : now, profile, profile, agentMode, custom, now, now, now, Number.isFinite(onboard) && onboard > 0 ? onboard : null).run();
     await say("account_seen", { account_ref: ref, profile, ceiling: profile, agent_mode: agentMode, spec_hash: hash, spec_problem: problem },
       `Omega: account ${ref} seen, profile ${PROFILES[profile].label}${problem ? `; its broker spec is not usable (${problem}), no new entries` : "; broker spec validated"}.`);
     return { account_ref: ref, spec_status: status, spec_problem: problem, profile, ceiling: profile, agent_mode: agentMode, row: await db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(ref).first() };
@@ -285,6 +289,31 @@ export async function syncAccount(db, executor, { settings = null, now = Date.no
     try { await db.prepare("UPDATE omega_accounts SET last_seen_ms = ? WHERE account_ref = ?").bind(now, ref).run(); row = { ...row, last_seen_ms: now }; } catch { /* the line reads the older time */ }
   }
   return { account_ref: ref, spec_status: status, spec_problem: status === "validated" ? null : problem, profile: row.profile, ceiling: row.ceiling, agent_mode: row.agent_mode, row };
+}
+
+const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+/**
+ * Pure: the daily-loss reference of an account on the day Omega first saw it (owner 2026-11-18, confirmed: "Setuju"):
+ * the balance at onboarding, not the broker's day start, so the losses before Omega never trip the daily limit; the
+ * losses after onboarding still count. On any later day, null (the broker's day start applies). An account Omega saw
+ * before this column existed reads its first seeded balance peak on that day.
+ */
+export function onboardingDayRef(row, now) {
+  if (!row || !(Number(row.created_ms) > 0) || utcDay(Number(row.created_ms)) !== utcDay(now)) return null;
+  const ref = Number(row.onboard_balance ?? row.balance_peak);
+  return Number.isFinite(ref) && ref > 0 ? ref : null;
+}
+
+/** Pure: the executor the daily-loss checks read: on the onboarding day its day start is the onboarding reference. */
+export function dailyLossExecutor(executor, row, now) {
+  const ref = onboardingDayRef(row, now);
+  const acct = executor?.account;
+  if (ref == null || !acct) return executor;
+  const start = Number(acct.day_start_balance);
+  if (Number.isFinite(start) && start > 0 && start <= ref) return executor;
+  const bal = Number(acct.balance);
+  return { ...executor, account: { ...acct, broker_day_start_balance: Number.isFinite(start) ? start : null, day_start_balance: ref, day_realized_pl: Number.isFinite(bal) ? Math.round((bal - ref) * 100) / 100 : acct.day_realized_pl, day_reference: "onboarding" } };
 }
 
 /**

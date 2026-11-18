@@ -14,7 +14,9 @@ type Account = {
   profile: string;
   ceiling: string;
   agent_mode: string;
-  pending_upgrade?: { to?: string } | null;
+  pending_upgrade?: { to?: string; reason?: string; evidence?: { trades?: number; mean_net?: number; equity?: number; balance_peak?: number } | null; council?: { verdict?: string; reason?: string } | null; at_ms?: number; expires_ms?: number } | null;
+  upgrade_block_reason?: string | null;
+  day_pl_pct?: number | null;
   upgrade_block_until_ms?: number | null;
   pending_downgrade?: { to?: string; reason?: string; at_ms?: number } | null;
   council_veto?: { reason?: string; until_ms?: number } | null;
@@ -128,8 +130,9 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
   };
   const h = account.history ?? null;
   const select = "rounded-sm border border-white/10 bg-[#0b1220] px-1.5 py-1 text-[12px] text-slate-200";
-  const pending = account.pending_upgrade?.to ? account.pending_upgrade : null;
+  const pending = account.pending_upgrade?.to && !(account.pending_upgrade.expires_ms && account.pending_upgrade.expires_ms <= Date.now()) ? account.pending_upgrade : null;
   const blocked = account.upgrade_block_until_ms && account.upgrade_block_until_ms > Date.now() ? account.upgrade_block_until_ms : null;
+  const lockWarning = Boolean(blocked && rank(draft.profile) > rank(saved.profile));
   return (
     <div className="space-y-2 text-[12px]" aria-label="Account profile controls">
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5">
@@ -149,7 +152,7 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
       </div>
       {confirming ? (
         <div className="flex flex-wrap items-center gap-2 rounded-sm border border-amber-400/30 bg-amber-400/5 px-2 py-1.5" role="alertdialog" aria-label="Confirm the profile change">
-          <span className="text-amber-100">{summary}. Confirm?</span>
+          <span className="text-amber-100">{lockWarning ? `Daily loss limit hit today${typeof account.day_pl_pct === "number" ? ` (${account.day_pl_pct}%)` : ""}. Raise profile anyway? ` : ""}{summary}. Confirm?</span>
           <button id="omega-profile-confirm" className="btn border-amber-400/40 bg-amber-400/10 text-amber-100" disabled={busy} onClick={apply}>Confirm</button>
           <button className="btn" disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
         </div>
@@ -157,12 +160,16 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
         <div className="flex flex-wrap items-center gap-2">
           <button id="omega-profile-update" className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40" disabled={busy || !summary} onClick={() => setConfirming(true)}>Update</button>
           {dirty && summary ? <button className="btn" disabled={busy} onClick={() => { setDraft(saved); setDirty(false); }}>Reset</button> : null}
-          {blocked ? <span className="text-[11px] text-amber-200" title="After the kill switch or the daily loss limit">No auto upgrade before {new Date(blocked).toISOString().slice(11, 16)} UTC</span> : null}
+          {blocked ? <span className="text-[11px] text-amber-200" title="The agent's own upgrades wait; you may still change the profile (with a warning).">{account.upgrade_block_reason === "kill_switch" ? "Kill switch today" : "Daily loss limit hit today"}: no auto upgrade before {new Date(blocked).toISOString().slice(11, 16)} UTC</span> : null}
         </div>
       )}
       {pending ? (
         <div className="flex flex-wrap items-center gap-2 rounded-sm border border-cyan-400/20 bg-cyan-400/5 px-2 py-1.5 text-slate-300">
-          <span>Agent proposes {LABEL[account.profile] ?? account.profile} → {LABEL[pending.to ?? ""] ?? pending.to}</span>
+          <span id="omega-pending-proposal">Agent proposes {LABEL[account.profile] ?? account.profile} → {LABEL[pending.to ?? ""] ?? pending.to}
+            {pending.evidence ? <span className="text-slate-500"> · {pending.evidence.trades ?? "?"} trades, mean {pending.evidence.mean_net ?? "?"}</span> : null}
+            {pending.council?.verdict ? <span className={VERDICT_TONE[pending.council.verdict] ?? "text-slate-300"} title={pending.council.reason ?? ""}> · council {pending.council.verdict}</span> : null}
+            {pending.expires_ms ? <span className="text-slate-500"> · until {new Date(pending.expires_ms).toISOString().slice(5, 16).replace("T", " ")} UTC</span> : null}
+          </span>
           <button className="btn border-emerald-400/30 text-emerald-300" disabled={busy} onClick={() => proposal("accept")}>Accept</button>
           <button className="btn" disabled={busy} onClick={() => proposal("decline")}>Decline</button>
         </div>

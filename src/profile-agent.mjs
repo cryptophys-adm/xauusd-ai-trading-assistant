@@ -42,6 +42,8 @@ export const EXTREME_ATR_POINTS = 1000;   // 2x the planner's HIGH regime (500 p
 export const NORMAL_ATR_POINTS = 500;     // the HIGH regime's floor: below it the volatility trigger is armed again
 export const UPGRADE_MIN_TRADES = 20;
 export const UPGRADE_GAP_MS = 7 * 86_400_000;
+export const PROPOSAL_TTL_MS = 24 * 3_600_000;  // an approval-mode proposal the owner has not answered expires after a day
+export const NEXUS_RISK_PROFILE_URL = "https://nexus.cryptophys.work/omega#setup/profile";
 export const RISK_PROFILE_SCHEMA = "risk_profile.v1";
 export const PROFILE_RELAY_CURSOR_KEY = "risk-profile:relay";
 export const PROFILE_RELAY_MIN_GAP_MS = 30 * 60_000;
@@ -92,7 +94,7 @@ export function decideProfile(row, ctx) {
   if (ctx.killed || ctx.daily_loss) {
     const reason = ctx.killed ? "kill_switch" : "daily_loss_limit";
     const until = nextUtcDay(now);
-    if (!(num(row?.upgrade_block_until_ms) >= until)) state.upgrade_block_until_ms = until;
+    if (!(num(row?.upgrade_block_until_ms) >= until)) { state.upgrade_block_until_ms = until; state.upgrade_block_reason = reason; }
     if (profile !== "safe") return down("safe", reason, { equity, balance }, { forced: true });
     return { change: null, propose: null, state };
   }
@@ -136,14 +138,14 @@ export function decideProfile(row, ctx) {
   const evidence = { trades: nets.length, mean_net: Math.round(mean * 100) / 100, equity, balance_peak: peakNow };
   if (row?.agent_mode === "autonomous") return { change: { to: up, reason: "evidence", actor: "agent", forced: false, evidence }, propose: null, state };
   const pending = parse(row?.pending_upgrade);
-  if (pending?.to === up) return { change: null, propose: null, state };
-  return { change: null, propose: { to: up, reason: "evidence", evidence, at_ms: now }, state };
+  if (pending?.to === up && !(Number(pending.expires_ms) > 0 && now >= Number(pending.expires_ms))) return { change: null, propose: null, state };
+  return { change: null, propose: { to: up, reason: "evidence", evidence, at_ms: now, expires_ms: now + PROPOSAL_TTL_MS }, state };
 }
 
 /** Pure: the Telegram line for a switch (the opaque reference, never the account number). */
 export function profileLine(accountRef, from, to, { actor, reason, forced }) {
   const why = { kill_switch: "the kill switch", daily_loss_limit: "the daily loss limit", drawdown: `a ${DRAWDOWN_STEP_PCT}% drawdown`, loss_streak: `${LOSS_STREAK} losses in a row`,
-    extreme_volatility: "extreme volatility", evidence: "evidence (equity above its peak, a positive record)", owner: "the owner", ceiling_lowered: "the owner's lower ceiling", proposal_accepted: "the owner accepting the agent's proposal" }[reason] ?? reason;
+    extreme_volatility: "extreme volatility", evidence: "evidence (equity above its peak, a positive record)", owner: "the owner", owner_override_daily_lock: "the owner, overriding today's daily loss block", owner_reset: "the owner's baseline reset", ceiling_lowered: "the owner's lower ceiling", proposal_accepted: "the owner accepting the agent's proposal" }[reason] ?? reason;
   return `XAUUSD SYSTEM · Omega account ${accountRef}: profile ${label(from)} → ${label(to)} (${actor}, ${why})${forced ? "; no autonomous upgrade before the next UTC day" : ""}. New entries only; open positions keep their size and stop.`;
 }
 
@@ -233,6 +235,7 @@ async function accountForBalanceOps(db, row, executor, { now, log }) {
   if (op !== 0) {
     if (finite(num(row.dd_ref))) set.dd_ref = Math.round((num(row.dd_ref) + op) * 100) / 100;
     if (finite(num(row.balance_peak))) set.balance_peak = Math.round((num(row.balance_peak) + op) * 100) / 100;
+    if (finite(num(row.onboard_balance))) set.onboard_balance = Math.round((num(row.onboard_balance) + op) * 100) / 100;
   }
   // Only from the state this check read (the bridge sync and the cron never both apply one operation).
   const cols = Object.keys(set);
@@ -262,7 +265,7 @@ export async function dealsSince(db, sinceMs) {
  * no read), the 5-minute ledger cron with it. D1 writes only on a change. Never throws; a failure raises nothing.
  * Returns { status, change?, propose? }.
  */
-export async function runProfileAgent(db, rowIn, { executor, killed = false, dailyLoss = false, withEvidence = false, now = Date.now(), log = null, notify = null, review = null, downgradeCouncil = false } = {}) {
+export async function runProfileAgent(db, rowIn, { executor, killed = false, dailyLoss = false, withEvidence = false, now = Date.now(), log = null, notify = null, review = null, downgradeCouncil = false, onboardingDay = false } = {}) {
   let row = rowIn;
   try {
     if (!row?.account_ref) return { status: "no_account" };
@@ -276,6 +279,12 @@ export async function runProfileAgent(db, rowIn, { executor, killed = false, dai
       orders: Array.isArray(executor?.orders) ? executor.orders.length : 0,
       atr_points: executor?.symbol?.atr_points, killed, daily_loss: dailyLoss, deals, now
     });
+    // A block set on the onboarding day before the daily loss counted from onboarding (2026-11-18: the real account's
+    // manual losses before Omega tripped it) is lifted once; a block with its reason recorded stands to the next day.
+    if (onboardingDay && !killed && !dailyLoss && !decision.change?.forced && num(row.upgrade_block_until_ms) > now && row.upgrade_block_reason == null) {
+      decision.state.upgrade_block_until_ms = null;
+      try { if (log) await log("upgrade_block_cleared", { account_ref: row.account_ref, reason: "the daily loss counts from onboarding: the block came from losses before Omega" }); } catch { /* audit best effort */ }
+    }
     const change = decision.change;
     const pending = parse(row.pending_downgrade);
     const clearCouncil = { pending_downgrade: null, council_veto: null };
@@ -342,10 +351,16 @@ export async function runProfileAgent(db, rowIn, { executor, killed = false, dai
       return { status: "changed", change: record };
     }
     if (decision.propose) {
-      await writeState(db, row.account_ref, { ...decision.state, pending_upgrade: JSON.stringify(decision.propose) });
-      try { if (log) await log("profile_proposed", { account_ref: row.account_ref, from: row.profile, ...decision.propose }); } catch { /* audit best effort */ }
-      try { if (notify) await notify(`XAUUSD SYSTEM · Omega account ${row.account_ref}: the profile agent proposes ${label(row.profile)} → ${label(decision.propose.to)} on evidence. Accept or decline on the Omega page.`); } catch { /* best effort */ }
-      return { status: "proposed", propose: decision.propose };
+      // Approval mode: the council's verdict goes with the proposal (advice for the owner, who decides).
+      let propose = decision.propose;
+      if (review) {
+        try { const r = await review(row, { to: propose.to, reason: propose.reason, evidence: propose.evidence }, { deals, executor }); const c = councilEvidence(r); if (c) propose = { ...propose, council: c }; } catch { /* the proposal stands without it */ }
+      }
+      await writeState(db, row.account_ref, { ...decision.state, pending_upgrade: JSON.stringify(propose) });
+      try { if (log) await log("profile_proposed", { account_ref: row.account_ref, from: row.profile, ...propose }); } catch { /* audit best effort */ }
+      const advice = propose.council ? ` Council: ${propose.council.verdict} (${propose.council.reason}).` : "";
+      try { if (notify) await notify(`XAUUSD SYSTEM · Omega account ${row.account_ref}: the profile agent proposes ${label(row.profile)} → ${label(propose.to)} on evidence (${propose.evidence?.trades ?? "?"} trades, mean ${propose.evidence?.mean_net ?? "?"}).${advice} Accept or decline by ${new Date(propose.expires_ms).toISOString().slice(0, 16).replace("T", " ")} UTC: ${NEXUS_RISK_PROFILE_URL}`); } catch { /* best effort */ }
+      return { status: "proposed", propose };
     }
     await writeState(db, row.account_ref, decision.state);
     return { status: "unchanged" };
@@ -385,12 +400,17 @@ export async function ownerSetProfile(db, { account_ref, action, value = null, a
     if (!LADDER.includes(value)) return { ok: false, error: "profile must be safe, conservative, aggressive or custom" };
     if (rank(value) > rank(row.ceiling)) return { ok: false, error: `above the ceiling (${label(row.ceiling)}): raise the ceiling first` };
     if (value === row.profile) return { ok: true, profile: value, change: null };
-    const change = await applySwitch(db, row, { to: value, reason: "owner", actor }, { now, log, notify });
+    // The owner may raise the profile on a day the kill switch or the daily loss limit fired (owner 2026-11-18, confirmed:
+    // "Ya, boleh override"): the page asks first; the change is recorded as owner_override_daily_lock. The agent's own
+    // upgrades stay blocked to the next UTC day.
+    const locked = rank(value) > rank(row.profile) && num(row.upgrade_block_until_ms) > now;
+    const change = await applySwitch(db, row, { to: value, reason: locked ? "owner_override_daily_lock" : "owner", actor, evidence: locked ? { upgrade_block_until_ms: num(row.upgrade_block_until_ms), block_reason: row.upgrade_block_reason ?? null } : null }, { now, log, notify });
     return { ok: true, profile: value, change };
   }
   if (action === "accept" || action === "decline") {
     const pending = parse(row.pending_upgrade);
     if (!pending?.to) return { ok: false, error: "no proposal" };
+    if (action === "accept" && Number(pending.expires_ms) > 0 && now >= Number(pending.expires_ms)) return { ok: false, error: "the proposal expired" };
     if (action === "decline") {
       await writeState(db, row.account_ref, { pending_upgrade: null });
       await audit("profile_proposal_declined", { to: pending.to });

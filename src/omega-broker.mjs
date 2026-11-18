@@ -22,7 +22,7 @@ import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strate
 import { goldSymbolCheck, goldSymbolText } from "./gold-symbol.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
 import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./profile-council.mjs";
-import { brokerLabelFor } from "./account-spec.mjs";
+import { brokerLabelFor, dailyLossExecutor, onboardingDayRef } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
 export const OMEGA_SCHEMA_SQL = [
@@ -567,14 +567,6 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // The strategy arm's auto-disarm (owner 2026-11-17, ADR-0020): the daily loss floor, or the kill from the environment
   // (EA_SIGNALS_ENABLED "false"; Omega's own kill disarms in OmegaGateway.setControl). A D1 write only while something
   // is armed and a trigger holds; the KV read is the hot path.
-  if (strategyArmMode(env) === "live") {
-    const trigger = dailyLossHit(executor, settings?.max_daily_loss_pct) ? "daily_loss_limit" : signal?.kill_source === "env" ? "kill_switch" : null;
-    if (trigger && (await readArmState(env)).ids.length) {
-      try { await disarmAll(env, { reason: trigger, now, send: (t) => sendOmegaTelegram(env, t) }); } catch { /* retried at the next sync */ }
-    }
-  }
-  // The Position Manager's fresh actions (src/position-manager.mjs, owner 2026-11-17), checked again in the plan.
-  const pmActions = await pendingPositionActions(db, { now });
   // The account's broker spec and profile (docs/RFC_ACCOUNT_PROFILES.md, phase 1): a new or changed spec opens nothing
   // until it validates. A failure here fails closed for new entries only (management and closes still run).
   let account = null;
@@ -582,6 +574,19 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     try {
       account = await syncAccount(db, executor, { settings, now, log: (action, detail) => event(db, now, "engine", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
     } catch { account = { account_ref: null, spec_status: "unknown", spec_problem: "account_sync_failed" }; }
+  }
+  // On the day Omega first saw the account its daily loss counts from onboarding (owner 2026-11-18): every daily-loss
+  // check below (the arm's auto-disarm, the profile agent, the planner) reads this executor.
+  const dayExec = account?.row ? dailyLossExecutor(executor, account.row, now) : executor;
+  if (strategyArmMode(env) === "live") {
+    const trigger = dailyLossHit(dayExec, settings?.max_daily_loss_pct) ? "daily_loss_limit" : signal?.kill_source === "env" ? "kill_switch" : null;
+    if (trigger && (await readArmState(env)).ids.length) {
+      try { await disarmAll(env, { reason: trigger, now, send: (t) => sendOmegaTelegram(env, t) }); } catch { /* retried at the next sync */ }
+    }
+  }
+  // The Position Manager's fresh actions (src/position-manager.mjs, owner 2026-11-17), checked again in the plan.
+  const pmActions = await pendingPositionActions(db, { now });
+  if (executor?.connected === true) {
     // The profile agent's immediate steps (phase 3, src/profile-agent.mjs): the kill switch or the daily loss -> Safe,
     // a drawdown step, an extreme-volatility step. No deal is read here; the loss streak and the upgrades run in the
     // 5-minute ledger cron. A switch applies to this very plan (new entries only).
@@ -591,14 +596,14 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       const dailyPct = effectiveLimits(account.row.profile, settings ?? {}).max_daily_loss_pct ?? settings?.max_daily_loss_pct;
       // The profile council (src/profile-council.mjs) does not run here: an upgrade waits for the cron, and a soft
       // downgrade under OMEGA_PROFILE_COUNCIL_DOWNGRADE "on" waits for its review with new entries held.
-      const step = await runProfileAgent(db, account.row, { executor, killed, dailyLoss: dailyLossHit(executor, dailyPct), now, downgradeCouncil: downgradeCouncilOn(env),
+      const step = await runProfileAgent(db, account.row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), onboardingDay: dayExec !== executor || onboardingDayRef(account.row, now) != null, now, downgradeCouncil: downgradeCouncilOn(env),
         log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
       if (step.status === "changed") account = { ...account, profile: step.change.to };
       if (step.review_pending === true) account = { ...account, review_pending: true };
     }
   }
   const eaGate = eaVersionGateOn(env);
-  const plan = planIntents({ signal, control, settings, executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id), agents, pmActions, account, eaGate });
+  const plan = planIntents({ signal, control, settings, executor: dayExec, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id), agents, pmActions, account, eaGate });
   if (pmActions.length) {
     // An action that became an intent is applied; one the live price no longer allows is skipped (never retried).
     const planned = new Set(plan.intents.filter((it) => String(it.id).startsWith("pm:")).map((it) => { const [, t, , b] = String(it.id).split(":"); return `pm:${t}:${b}`; }));
@@ -711,7 +716,8 @@ export async function profileAgentTick(env, { now = Date.now(), call = undefined
   const { settings } = await readSettings(env);
   const killed = control?.mode === "killed" || String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
   const dailyPct = effectiveLimits(row?.profile, settings ?? {}).max_daily_loss_pct ?? settings?.max_daily_loss_pct;
-  return runProfileAgent(db, row, { executor, killed, dailyLoss: dailyLossHit(executor, dailyPct), withEvidence: true, now,
+  const dayExec = dailyLossExecutor(executor, row, now);
+  return runProfileAgent(db, row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), onboardingDay: onboardingDayRef(row, now) != null, withEvidence: true, now,
     downgradeCouncil: downgradeCouncilOn(env), review: (r, change, { deals }) => reviewProfileChange(env, r, change, { executor, deals, now, call }),
     log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
 }
@@ -916,7 +922,10 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       // The profile council: a soft downgrade waiting for review, a veto in force, the last reviews.
       pending_downgrade: a.pending_downgrade ?? null, council_veto: a.council_veto ?? null, council_reviews: councilReviews[a.account_ref] ?? [],
       // The owner's reset (owner 2026-11-18): whether Omega saw this account before, its baseline, its streak.
-      history: histories[a.account_ref] ?? null, connected: Boolean(st?.connected === true && a.server && a.server === st?.server)
+      history: histories[a.account_ref] ?? null, connected: Boolean(st?.connected === true && a.server && a.server === st?.server),
+      upgrade_block_reason: a.upgrade_block_reason ?? null,
+      // The day's P&L in % against the daily-loss reference (the onboarding balance on the day Omega first saw it).
+      day_pl_pct: (() => { if (!(st?.connected === true && a.server === st?.server)) return null; const x = dailyLossExecutor(st, a, now)?.account; const ref = Number(x?.day_start_balance), eq = Number(x?.equity); return ref > 0 && Number.isFinite(eq) ? Math.round(((eq - ref) / ref) * 1000) / 10 : null; })()
     })),
     autonomous_watchdog: {
       active: true,
