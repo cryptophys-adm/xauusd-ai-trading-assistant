@@ -531,7 +531,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
             : "";
           await sendOmegaTelegram(env, `🟢 <b>Omega Order Executed · ${label}</b>\nTicket: <code>#${result.ticket || "—"}</code>\nSide: <b>${p.side}</b> | Volume: <code>${p.volume}</code>\nEntry: <code>${p.entry || "—"}</code> | Fill: <code>${result.fill_price || p.entry || "—"}</code>\nSL: <code>${p.sl}</code> | TP: <code>${p.tp}</code>${tcaText}`);
         } else if (p?.kind === "close" || p?.kind === "partial_close") {
-          await sendOmegaTelegram(env, `💰 <b>Omega Position ${p.kind === "partial_close" ? "Scaled Out (50%)" : "Closed"} · ${label}</b>\nTicket: <code>#${result.ticket || p.ticket || "—"}</code>\nReason: <code>${p.reason || "executed"}</code>`);
+          await sendOmegaTelegram(env, `💰 <b>Omega Position ${p.kind === "partial_close" ? `Scaled Out (${p.volume ?? "part"} lot)` : "Closed"} · ${label}</b>\nTicket: <code>#${result.ticket || p.ticket || "—"}</code>\nReason: <code>${p.reason || "executed"}</code>`);
         } else if (p?.kind === "modify_tp") {
           await sendOmegaTelegram(env, `🎯 <b>Extended TP Expanded (Runner) · ${label}</b>\nTicket: <code>#${p.ticket}</code>\nNew TP: <code>${p.tp}</code>`);
         }

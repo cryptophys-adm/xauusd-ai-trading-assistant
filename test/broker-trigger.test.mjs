@@ -50,7 +50,8 @@ const EXECUTOR = {
   positions: []
 };
 const SIGNAL = { side: "BUY", action: "ENTER_MARKET", entry: 4005, stop: 3995, tp1: 4025, issued_ms: ISSUED, expires_ms: ISSUED + 15 * 60_000, decided_ms: CLOSE + 2 * M5, blackout: false, kill: false, paused: false, trigger_source: "broker_5m" };
-const ON = { ...OMEGA_DEFAULTS, enabled: true };
+// The legacy management (one scale-out, no TP ladder); the ladder has its own tests (test/omega-tp-ladder.test.mjs).
+const ON = { ...OMEGA_DEFAULTS, enabled: true, tp_ladder: false };
 const plan = (signal, settings = ON) => planIntents({ signal, control: { mode: "active" }, settings, executor: EXECUTOR, now: NOW, engineEnabled: true });
 
 test("the 5m stop: the broker's 5m swing beyond a buffer, never wider than the plan's, the target kept, the lot capped at 1.5x", () => {
