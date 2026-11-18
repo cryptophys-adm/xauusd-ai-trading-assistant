@@ -1491,7 +1491,16 @@ export default function Omega() {
                             </td>
                             <td className="mono">{timeUtc(p.opened_ms)}</td>
                             <td className={`mono font-bold ${isBuy ? "text-emerald-300" : "text-rose-300"}`}>{p.side}</td>
-                            <td className="mono">{num(p.volume, 2)}</td>
+                            <td className="mono">
+                              {num(p.volume, 2)}
+                              {/* The exposure in USD (owner 2026-11-18): a lot alone is ambiguous across brokers and cent accounts. */}
+                              {p.exposure?.usd_per_dollar != null ? (
+                                <div className="text-[10px] font-normal text-slate-400" title="What a $1 move in gold does to this position, and its loss at the stop">
+                                  ≈ ${num(p.exposure.usd_per_dollar, 2)}/$1
+                                  {p.exposure.risk_at_sl_usd != null ? ` · SL −$${num(p.exposure.risk_at_sl_usd, 2)}${p.exposure.risk_at_sl_pct != null ? ` (${p.exposure.risk_at_sl_pct}%)` : ""}` : ""}
+                                </div>
+                              ) : null}
+                            </td>
                             <td className="mono">{num(p.entry ?? p.open_price, digits)}</td>
                             <td className="mono text-rose-300">{p.sl ? num(p.sl, digits) : "—"}</td>
                             <td className="mono text-emerald-300">{p.tp ? num(p.tp, digits) : "—"}</td>

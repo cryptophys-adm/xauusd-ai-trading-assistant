@@ -19,7 +19,7 @@ import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
-import { goldCheckOf, goldSymbolText, isCentCurrency, ownerTradeSymbol, TRADE_SYMBOL_RE } from "./gold-symbol.mjs";
+import { goldCheckOf, goldSymbolText, isCentCurrency, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, positionExposure, exposureText } from "./gold-symbol.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
 import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./profile-council.mjs";
 import { runModeSelector, modeStatus, capOf } from "./mode-selector.mjs";
@@ -714,7 +714,10 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           const tcaText = (result.slippage_pts != null || latencyMs != null)
             ? `\nLatency: <code>${latencyMs != null ? `${latencyMs}ms` : "—"}</code> | Slippage: <code>${result.slippage_pts != null ? `${result.slippage_pts} pts` : "0 pts"}</code>`
             : "";
-          await sendOmegaTelegram(env, `🟢 <b>Omega Order Executed · ${label}</b>\nTicket: <code>#${result.ticket || "—"}</code>\nSide: <b>${p.side}</b> | Volume: <code>${p.volume}</code>\nEntry: <code>${p.entry || "—"}</code> | Fill: <code>${result.fill_price || p.entry || "—"}</code>\nSL: <code>${p.sl}</code> | TP: <code>${p.tp}</code>${tcaText}`);
+          // The exposure in USD (owner 2026-11-18): the lot alone is ambiguous across brokers and cent accounts.
+          const xp = positionExposure({ side: p.side, volume: p.volume, open_price: result.fill_price || p.entry, sl: p.sl }, executor?.symbol, executor?.account?.equity);
+          const xpText = xp ? `\nExposure: <code>${exposureText(xp)}</code>` : "";
+          await sendOmegaTelegram(env, `🟢 <b>Omega Order Executed · ${label}</b>\nTicket: <code>#${result.ticket || "—"}</code>\nSide: <b>${p.side}</b> | Volume: <code>${p.volume}</code> lot ${executor?.symbol?.name ?? ""}\nEntry: <code>${p.entry || "—"}</code> | Fill: <code>${result.fill_price || p.entry || "—"}</code>\nSL: <code>${p.sl}</code> | TP: <code>${p.tp}</code>${xpText}${tcaText}`);
         } else if (p?.kind === "close" || p?.kind === "partial_close") {
           await sendOmegaTelegram(env, `💰 <b>Omega Position ${p.kind === "partial_close" ? `Scaled Out (${p.volume ?? "part"} lot)` : "Closed"} · ${label}</b>\nTicket: <code>#${result.ticket || p.ticket || "—"}</code>\nReason: <code>${p.reason || "executed"}</code>`);
         } else if (p?.kind === "modify_tp") {
@@ -1127,7 +1130,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
           symbol_error: st.symbol_error ?? null, resolution: st.bridge_symbol ?? null
         };
       })() : null,
-      positions: Array.isArray(st?.positions) ? st.positions : [],
+      // Each position's exposure in USD (owner 2026-11-18, "baris eksposur"): per $1 move, and the risk at its stop.
+      positions: Array.isArray(st?.positions) ? st.positions.map((p) => ({ ...p, exposure: positionExposure(p, st.symbol, st.account?.equity) })) : [],
       orders: Array.isArray(st?.orders) ? st.orders : [],
       deals: Array.isArray(st?.deals) ? st.deals : [],
       state_age_ms: Number.isFinite(st?.received_ms) ? now - st.received_ms : null
@@ -1183,7 +1187,7 @@ export function liveBridgeFields(state, { now = Date.now() } = {}) {
   return {
     bid: st.symbol.bid ?? null, ask: st.symbol.ask ?? null, spread_points: st.symbol.spread_points ?? null,
     balance: st.account?.balance ?? null, equity: st.account?.equity ?? null, day_realized_pl: st.account?.day_realized_pl ?? null,
-    positions: Array.isArray(st.positions) ? st.positions : [], orders: Array.isArray(st.orders) ? st.orders : [],
+    positions: Array.isArray(st.positions) ? st.positions.map((p) => ({ ...p, exposure: positionExposure(p, st.symbol, st.account?.equity) })) : [], orders: Array.isArray(st.orders) ? st.orders : [],
     atr_value: st.symbol.atr_value ?? null, atr_points: st.symbol.atr_points ?? null,
     synced_age_ms: 0, state_age_ms: Number.isFinite(st.received_ms) ? Math.max(0, now - st.received_ms) : 0,
     live: true
@@ -1221,7 +1225,7 @@ async function omegaTradeStats(env, { sinceMs = null, beforeMs = null, limit = O
     if (sinceMs != null) { where.push("closed_ms > ?"); args.push(sinceMs); }
     if (beforeMs != null) { where.push("closed_ms <= ?"); args.push(beforeMs); }
     const order = sinceMs != null ? "ASC" : "DESC";
-    const rows = (await env.DB.prepare(`SELECT profit, commission, swap FROM ea_deals WHERE ${where.join(" AND ")} ORDER BY closed_ms ${order} LIMIT ?`).bind(...args, limit).all())?.results || [];
+    const rows = (await env.DB.prepare(`SELECT ${DEAL_MONEY_COLUMNS_SQL} FROM ea_deals WHERE ${where.join(" AND ")} ORDER BY closed_ms ${order} LIMIT ?`).bind(...args, limit).all())?.results || [];
     return dealStats(rows);
   } catch { return dealStats([]); }
 }
