@@ -30,6 +30,7 @@ export interface Env {
   TRADING_MODE?: string;
   DECISION_TELEGRAM_MODE?: string;
   OMEGA_ENGINE_ENABLED?: string;
+  OMEGA_EA_VERSION_GATE?: string;
   DB: D1Database;
   SIGNAL_CACHE: KVNamespace;
   WEBHOOK_BUFFER: KVNamespace;

@@ -1,6 +1,6 @@
 # RFC: Account Profiles & Dynamic Mode (Omega)
 
-- **Status:** decided by the owner (2026-11-18); building in four phases.
+- **Status:** decided by the owner (2026-11-18); building in four phases. Phase 1 built (EA 1.15, `src/account-spec.mjs`).
 - **Builds on:** ADR-0020 (no new trading authority, Decision Engine veto, never move funds), docs/RFC_STRATEGY_RECOMMENDATION.md, src/grid-adapt.mjs (evidence gate), src/omega-engine.mjs (sizing), ea/mt5/OmegaExecutor.mq5 (1.14).
 
 ## Goal (owner)
@@ -96,6 +96,39 @@ The fixed ±30-pip thresholds in `src/position-manager.mjs` (`THRESHOLD_PIPS`) b
 - **Ready for multi-user.** Profiles live per account (keyed by the MT5 server and login hash, never the raw login in logs).
 - **Permissions.** Changing a profile or the agent mode is owner-only (`OWNER_ACCESS_SUB`); today `POST /api/settings` takes any signed-in person.
 - **ADR-0020 scope.** Everything stays inside ADR-0020: no new trading authority, the Decision Engine veto stands, funds never move. The orchestrator asks the platform to confirm no amendment is needed.
+
+## 10. Platform gates for the profile agent (ADR-0020 Amendment 3, platform 2026-11-18)
+
+The owner agreed to Amendment 3 ("setuju amandemen 3"). Until it is merged on the platform, the agent's upgrades are
+owner clicks only; downgrades may run. The gates, for phase 3:
+- **Ceiling.** Set by the owner only (`OWNER_ACCESS_SUB`, same origin, audited). The agent upgrades an account only
+  while the owner's ceiling is above its current profile. Lowering the ceiling applies at once.
+- **No upgrade with exposure.** Never while the account has an open position or a pending order.
+- **One step, on evidence.** Upgrades go one profile at a time, on passing evidence. Missing evidence or a failing
+  agent raises nothing.
+- **Kill switch and daily loss.** Either returns the account to Safe, with no autonomous upgrade before the next UTC day.
+- **Downgrades** are never blocked or delayed.
+- **Audit.** Every switch is an Omega event, one Telegram line and an `xauusd_digest` with schema `risk_profile.v1`:
+  the opaque account reference (never the broker account number), from, to, actor, reason, evidence reference,
+  at. Severity info, warning for a forced downgrade, never critical.
+- **Position manager** stays risk-only (Amendment 1): never widen a stop, never add, never move the target more
+  than once.
+
+## Phase 1 as built (2026-11-18)
+
+- **EA 1.15** reports the spec of §1 and an opaque `login_hash`, and runs the checks of §2 (see docs/OMEGA_BRIDGE.md).
+- **Spec hash.** An account's first usable spec validates at once (the live account keeps trading as today). A
+  changed spec blocks new entries (`spec_unvalidated`) until it is usable and has held 60 s (`SPEC_SETTLE_MS`).
+  Quotes, equity, free margin, margin per lot, tick value and the stops and freeze levels are not hashed: they move
+  on their own and are checked at each entry by the server and the EA.
+- **Account reference.** `acct_` + 16 hex of a hash of the EA's login hash; before 1.15 a hash of the server, kept
+  for that server's first 1.15 sync. It is opaque in logs, events and Telegram, but not a secret: a login is a small
+  number, so whoever knows the server could guess it.
+- **Profiles stored.** D1 `omega_accounts`: the first account seen is Custom (`risk_pct` 2, `max_positions` 5,
+  `max_daily_loss_pct` 10 at the time), ceiling Custom, autonomous; any later account Safe, ceiling Safe, approval.
+  No lot size changes in phase 1.
+- **EA version gate.** `OMEGA_EA_VERSION_GATE` "on" blocks new entries for an EA before 1.15 (`ea_outdated`). It
+  ships "off" and is switched on in a follow-up PR once the owner has compiled and attached 1.15 on the VPS.
 
 ## Phases
 

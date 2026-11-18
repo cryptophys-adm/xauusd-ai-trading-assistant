@@ -15,6 +15,8 @@ const CODES: Record<string, { kind: Kind; text: string }> = {
   confidence_drop: { kind: "adjust", text: "A winning position is being closed: its strategy agent's confidence dropped at this 15m evaluation." },
   no_side: { kind: "block", text: "The Decision Engine says WAIT: there is no BUY or SELL to follow." },
   symbol_unverified: { kind: "block", text: "The terminal's trade symbol is not verified USD gold (exact name, profit currency USD, contract size 1-100 oz): no new entries. See Symbol on the bridge card." },
+  spec_unvalidated: { kind: "block", text: "The account's broker spec (contract, lot limits, leverage, margin mode) is new or changed: no new entries until it validates and holds for a minute. Open positions are still managed. See Account on the bridge card." },
+  ea_outdated: { kind: "block", text: "OmegaExecutor is older than the minimum version for entries (1.15: it checks margin, stops and freeze level before sending): no new entries until it is updated on the VPS." },
   bad_signal: { kind: "block", text: "The signal is incomplete." },
   expired: { kind: "block", text: "The signal expired before it could be entered." },
   signal_too_old: { kind: "block", text: "The signal is too old to enter safely." },

@@ -24,6 +24,10 @@ export function planIntents(input?: {
   now?: number;
   engineEnabled?: boolean;
   recentIntentIds?: string[];
+  agents?: Record<string, string>;
+  pmActions?: Record<string, any>[];
+  account?: { spec_status: string; spec_problem?: string | null } | null;
+  eaGate?: boolean;
 }): { intents: Record<string, any>[]; notes: { code: string }[] };
 export const ROLLOVER_QUARANTINE_UTC: string;
 export function manageIntents(input?: { positions?: any[]; sym?: any; settings?: any; signal?: any; side?: string | null; recentIntentIds?: string[]; skipTickets?: unknown[] }): Array<Record<string, any>>;

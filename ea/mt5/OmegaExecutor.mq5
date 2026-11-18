@@ -9,7 +9,8 @@
 //|   - Writes omega/state.json (via omega/state.tmp + FileMove)     |
 //|     with terminal connection, account mode/balances, symbol      |
 //|     specification, and open positions of this MagicNumber;       |
-//|     never includes the account login/number.                     |
+//|     never includes the account login/number (1.15: an opaque     |
+//|     SHA-256 of server and login, account.login_hash, only).      |
 //|   - Reads omega/intents.txt and executes each unseen intent id   |
 //|     once (tracked in omega/processed.txt across restarts),       |
 //|     appending results to omega/results.txt. An id is recorded    |
@@ -21,6 +22,13 @@
 //|     to enter/exit and sizes every trade from the state reported  |
 //|     by this executor. This EA performs no strategy or risk       |
 //|     sizing of its own, only validating broker volume limits.     |
+//|   - Since 1.15 (docs/RFC_ACCOUNT_PROFILES.md §2) it is the last  |
+//|     gate: before each open it checks the symbol's trade mode,    |
+//|     the stops level, the margin (OrderCalcMargin) and the broker |
+//|     (OrderCheck), and before each stop or target change the      |
+//|     freeze level. On a failure it refuses with a reason          |
+//|     ("refused: margin", ...); it never resizes, never moves a    |
+//|     stop.                                                        |
 //|                                                                  |
 //| WARNING — Do NOT run alongside CryptophysXAUUSD.mq5:             |
 //|   - Never attach OmegaExecutor.mq5 on the same trading account   |
@@ -34,7 +42,7 @@
 //|     manually on a chart profile when OMEGA_TAKE_STARTUP=false.   |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.14"
+#property version   "1.15"
 
 #include <Trade/Trade.mqh>
 
@@ -74,7 +82,7 @@ input bool   DynamicAtrStopEnabled  = true;  // Adaptive ATR-based SL+ and Trail
 input double AtrMultiplierTrigger   = 1.0;   // Break-even trigger multiplier of ATR (1.0 = 1x ATR)
 input double AtrMultiplierTrailing  = 1.5;   // Trailing distance multiplier of ATR (1.5 = 1.5x ATR)
 
-const string OMEGA_EXECUTOR_VERSION = "1.14"; // keep equal to #property version
+const string OMEGA_EXECUTOR_VERSION = "1.15"; // keep equal to #property version
 const string OMEGA_FOLDER    = "omega";
 const string STATE_TMP_PATH  = "omega/state.tmp";
 const string STATE_JSON_PATH = "omega/state.json";
@@ -220,6 +228,140 @@ string AccountTradeModeString()
    if(mode == ACCOUNT_TRADE_MODE_REAL)    return "real";
    if(mode == ACCOUNT_TRADE_MODE_CONTEST) return "contest";
    return "demo";
+  }
+
+//+------------------------------------------------------------------+
+//| Since 1.15: the account and symbol spec, and the last gate       |
+//+------------------------------------------------------------------+
+// docs/RFC_ACCOUNT_PROFILES.md §1-2 (owner 2026-11-18). The server stores this spec with a hash and opens nothing
+// while a changed spec has not validated; this EA refuses any order the broker would refuse, and says why.
+string AccountMarginModeString()
+  {
+   long mode = AccountInfoInteger(ACCOUNT_MARGIN_MODE);
+   if(mode == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING) return "hedging";
+   if(mode == ACCOUNT_MARGIN_MODE_RETAIL_NETTING) return "netting";
+   if(mode == ACCOUNT_MARGIN_MODE_EXCHANGE)       return "exchange";
+   return "unknown";
+  }
+
+string SymbolTradeModeString(const string sym)
+  {
+   if(sym == "") return "unknown";
+   long mode = SymbolInfoInteger(sym, SYMBOL_TRADE_MODE);
+   if(mode == SYMBOL_TRADE_MODE_FULL)      return "full";
+   if(mode == SYMBOL_TRADE_MODE_LONGONLY)  return "long_only";
+   if(mode == SYMBOL_TRADE_MODE_SHORTONLY) return "short_only";
+   if(mode == SYMBOL_TRADE_MODE_CLOSEONLY) return "close_only";
+   if(mode == SYMBOL_TRADE_MODE_DISABLED)  return "disabled";
+   return "unknown";
+  }
+
+// An opaque account reference: SHA-256 of "omega|<server>|<login>" in hex. The login itself never leaves the terminal.
+string AccountLoginHash()
+  {
+   string text = "omega|" + AccountInfoString(ACCOUNT_SERVER) + "|" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
+   uchar data[], key[], digest[];
+   StringToCharArray(text, data, 0, StringLen(text), CP_UTF8);
+   ArrayResize(key, 0);
+   if(CryptEncode(CRYPT_HASH_SHA256, data, key, digest) <= 0) return "";
+   string hex = "";
+   for(int i = 0; i < ArraySize(digest); i++) hex += StringFormat("%02x", digest[i]);
+   return hex;
+  }
+
+// The margin one lot needs at the current price (the buy side; 0 when the terminal cannot say).
+double MarginPerLot(const string sym)
+  {
+   if(sym == "") return 0.0;
+   double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
+   double margin = 0.0;
+   if(ask <= 0.0 || !OrderCalcMargin(ORDER_TYPE_BUY, sym, 1.0, ask, margin)) return 0.0;
+   return margin;
+  }
+
+// The filling mode CTrade.SetTypeFillingBySymbol picks: fill-or-kill, else immediate-or-cancel, else return.
+ENUM_ORDER_TYPE_FILLING FillingFor(const string sym)
+  {
+   uint filling = (uint)SymbolInfoInteger(sym, SYMBOL_FILLING_MODE);
+   if((filling & SYMBOL_FILLING_FOK) == SYMBOL_FILLING_FOK) return ORDER_FILLING_FOK;
+   if((filling & SYMBOL_FILLING_IOC) == SYMBOL_FILLING_IOC) return ORDER_FILLING_IOC;
+   return ORDER_FILLING_RETURN;
+  }
+
+// Before an open: "" when the order may go, else the reason ("refused: <what>"). Nothing is resized or moved.
+string OpenRefusal(const string sym, const string side, const double volume, const double sl, const double tp)
+  {
+   bool buy = (side == "BUY");
+   string mode = SymbolTradeModeString(sym);
+   if(mode == "disabled" || mode == "close_only" || mode == "unknown") return "refused: trade_mode_" + mode;
+   if(buy && mode == "short_only") return "refused: trade_mode_short_only";
+   if(!buy && mode == "long_only") return "refused: trade_mode_long_only";
+
+   double price = buy ? SymbolInfoDouble(sym, SYMBOL_ASK) : SymbolInfoDouble(sym, SYMBOL_BID);
+   if(price <= 0.0) return "refused: no_price";
+   double point = SymbolInfoDouble(sym, SYMBOL_POINT);
+   long stopsLevel = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = (double)stopsLevel * point;
+   // A stop on the wrong side, or inside the stops level, is refused: the server sends both, the EA never moves them.
+   if(sl > 0.0)
+     {
+      double d = buy ? price - sl : sl - price;
+      if(d <= 0.0) return "refused: sl_wrong_side";
+      if(minDist > 0.0 && d < minDist) return "refused: stops_level";
+     }
+   if(tp > 0.0)
+     {
+      double d = buy ? tp - price : price - tp;
+      if(d <= 0.0) return "refused: tp_wrong_side";
+      if(minDist > 0.0 && d < minDist) return "refused: stops_level";
+     }
+
+   // The margin is computed first (a terminal that cannot price it opens nothing); whether the account can carry it
+   // is OrderCheck's answer below, which also counts a hedged opposite position (a plain margin > free margin compare
+   // would not).
+   double margin = 0.0;
+   if(!OrderCalcMargin(buy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, sym, volume, price, margin) || margin <= 0.0) return "refused: margin_unknown";
+
+   MqlTradeRequest req;
+   MqlTradeCheckResult check;
+   ZeroMemory(req);
+   ZeroMemory(check);
+   req.action = TRADE_ACTION_DEAL;
+   req.symbol = sym;
+   req.volume = volume;
+   req.type = buy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   req.price = price;
+   req.sl = sl;
+   req.tp = tp;
+   req.deviation = (ulong)SlippagePoints;
+   req.magic = (ulong)MagicNumber;
+   req.type_filling = FillingFor(sym);
+   if(!OrderCheck(req, check))
+     {
+      if(check.retcode == TRADE_RETCODE_NO_MONEY) return "refused: margin";
+      if(check.retcode == TRADE_RETCODE_INVALID_STOPS) return "refused: stops_level";
+      if(check.retcode == TRADE_RETCODE_INVALID_VOLUME) return "refused: volume";
+      if(check.retcode == TRADE_RETCODE_MARKET_CLOSED) return "refused: market_closed";
+      if(check.retcode == TRADE_RETCODE_TRADE_DISABLED) return "refused: trade_disabled";
+      return StringFormat("refused: order_check_%u", check.retcode);
+     }
+   return "";
+  }
+
+// Before a stop or target change on an open position: "" when it may go, else the reason. A level inside the freeze
+// level (the old one or the new one) cannot be changed at the broker; the EA says so instead of sending it.
+string ModifyRefusal(const string sym, const bool buy, const double oldLevel, const double newLevel)
+  {
+   double point = SymbolInfoDouble(sym, SYMBOL_POINT);
+   long freeze = SymbolInfoInteger(sym, SYMBOL_TRADE_FREEZE_LEVEL);
+   if(freeze <= 0 || point <= 0.0) return "";
+   // A buy closes at the bid, a sell at the ask: its stop and target are measured from there.
+   double px = buy ? SymbolInfoDouble(sym, SYMBOL_BID) : SymbolInfoDouble(sym, SYMBOL_ASK);
+   if(px <= 0.0) return "";
+   double f = (double)freeze * point;
+   if(oldLevel > 0.0 && MathAbs(px - oldLevel) <= f) return "refused: freeze_level";
+   if(newLevel > 0.0 && MathAbs(px - newLevel) <= f) return "refused: freeze_level";
+   return "";
   }
 
 bool IsProcessed(const string id)
@@ -573,6 +715,11 @@ void WriteStateJson()
 
    // Since 1.14 (PR #405): the contract the server checks before any entry, and the EA's own refusal.
    string profitCcy = sym != "" ? SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT) : "";
+   // Since 1.15 (docs/RFC_ACCOUNT_PROFILES.md §1): the spec the server hashes, and what the EA's last gate checks.
+   long leverage = AccountInfoInteger(ACCOUNT_LEVERAGE);
+   double marginFree = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   int freezeLevelPoints = sym != "" ? (int)SymbolInfoInteger(sym, SYMBOL_TRADE_FREEZE_LEVEL) : 0;
+   double marginPerLot = MarginPerLot(sym);
    string baseCcy = sym != "" ? SymbolInfoString(sym, SYMBOL_CURRENCY_BASE) : "";
    double contractSize = sym != "" ? SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE) : 0.0;
 
@@ -583,9 +730,11 @@ void WriteStateJson()
 
    string json = StringFormat(
       "{\"connected\":%s,\"server\":\"%s\","
-      "\"account\":{\"trade_mode\":\"%s\",\"currency\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"day_start_balance\":%.2f,\"day_realized_pl\":%.2f},"
+      "\"account\":{\"trade_mode\":\"%s\",\"currency\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"day_start_balance\":%.2f,\"day_realized_pl\":%.2f,"
+      "\"leverage\":%I64d,\"margin_mode\":\"%s\",\"margin_free\":%.2f,\"login_hash\":\"%s\"},"
       "\"symbol\":{\"name\":\"%s\",\"digits\":%d,\"point\":%s,\"tick_size\":%s,\"tick_value\":%s,\"volume_min\":%.4f,\"volume_max\":%.4f,\"volume_step\":%.4f,\"stops_level_points\":%d,\"bid\":%s,\"ask\":%s,\"spread_points\":%d,\"atr_value\":%.2f,\"atr_points\":%d,"
-      "\"chart\":\"%s\",\"currency_profit\":\"%s\",\"currency_base\":\"%s\",\"contract_size\":%.4f},",
+      "\"chart\":\"%s\",\"currency_profit\":\"%s\",\"currency_base\":\"%s\",\"contract_size\":%.4f,"
+      "\"freeze_level_points\":%d,\"trade_mode\":\"%s\",\"margin_per_lot\":%.2f},",
       connected ? "true" : "false",
       server,
       tradeMode,
@@ -594,6 +743,10 @@ void WriteStateJson()
       equity,
       dayStartBalance,
       dayRealizedPl,
+      leverage,
+      AccountMarginModeString(),
+      marginFree,
+      AccountLoginHash(),
       EscapeJson(sym),
       digits,
       DoubleToString(point, digits),
@@ -611,7 +764,10 @@ void WriteStateJson()
       EscapeJson(_Symbol),
       EscapeJson(profitCcy),
       EscapeJson(baseCcy),
-      contractSize
+      contractSize,
+      freezeLevelPoints,
+      SymbolTradeModeString(sym),
+      marginPerLot
    );
    // No allowed USD gold symbol on this server: said, never hidden behind another symbol.
    json += g_symbolError != "" ? StringFormat("\"symbol_error\":\"%s\",", EscapeJson(g_symbolError)) : "\"symbol_error\":null,";
@@ -886,6 +1042,14 @@ void ExecuteOpenIntent(const string id, const string side, const double volume, 
    trade.SetDeviationInPoints(SlippagePoints);
    trade.SetTypeFillingBySymbol(sym);
 
+   // The last gate (1.15): what the broker would refuse is refused here, with the reason; never resized, never moved.
+   string refusal = OpenRefusal(sym, side, volume, normSl, normTp);
+   if(refusal != "")
+     {
+      AppendResult(id, false, 0, refusal, nowMs);
+      return;
+     }
+
    double preAsk = SymbolInfoDouble(sym, SYMBOL_ASK);
    double preBid = SymbolInfoDouble(sym, SYMBOL_BID);
    double point = SymbolInfoDouble(sym, SYMBOL_POINT);
@@ -997,6 +1161,12 @@ void ExecuteModifySlIntent(const string id, const ulong ticket, const double new
       AppendResult(id, true, ticket, "already_at_sl", nowMs);
       return;
      }
+   string slRefusal = ModifyRefusal(PositionGetString(POSITION_SYMBOL), PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY, currentSl, newSl);
+   if(slRefusal != "")
+     {
+      AppendResult(id, false, ticket, slRefusal, nowMs);
+      return;
+     }
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(SlippagePoints);
    bool ok = trade.PositionModify(ticket, newSl, tp);
@@ -1025,6 +1195,12 @@ void ExecuteModifyTpIntent(const string id, const ulong ticket, const double new
    if(newTp == currentTp)
      {
       AppendResult(id, true, ticket, "already_at_tp", nowMs);
+      return;
+     }
+   string tpRefusal = ModifyRefusal(PositionGetString(POSITION_SYMBOL), PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY, currentTp, newTp);
+   if(tpRefusal != "")
+     {
+      AppendResult(id, false, ticket, tpRefusal, nowMs);
       return;
      }
    trade.SetExpertMagicNumber(MagicNumber);

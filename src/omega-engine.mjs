@@ -19,6 +19,7 @@
 
 import { confidenceTrend, parseConfidences } from "./agent-confidence.mjs";
 import { goldSymbolCheck } from "./gold-symbol.mjs";
+import { versionAtLeast, EXECUTOR_ENTRY_MIN_VERSION } from "./account-spec.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
   enabled: false,
@@ -438,7 +439,7 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
   return { intents, extendOf: (p) => ["stable", "rising"].includes(trendOf(p)) };
 }
 
-export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [] } = {}) {
+export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false } = {}) {
   const intents = [], notes = [];
   const note = (code) => notes.push({ code });
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
@@ -507,6 +508,11 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     // USD gold only (owner 2026-11-17, PR #405): a symbol off the list, not priced in USD, with an odd contract
     // size or refused by the EA itself opens nothing. Open positions keep their management above.
     [!goldSymbolCheck(sym, executor.symbol_error).ok, "symbol_unverified"],
+    // Account Profiles phase 1 (docs/RFC_ACCOUNT_PROFILES.md §1-2, owner 2026-11-18): a new or changed broker spec opens
+    // nothing until it validates (src/account-spec.mjs); with OMEGA_EA_VERSION_GATE "on", an EA older than 1.15 (no
+    // margin, stops or freeze check of its own) opens nothing either. Open positions keep their management above.
+    [accountSpec != null && accountSpec.spec_status !== "validated", "spec_unvalidated"],
+    [eaGate === true && !versionAtLeast(executor.executor?.version ?? null, EXECUTOR_ENTRY_MIN_VERSION), "ea_outdated"],
     [!finite(issued) || !finite(signal.expires_ms), "bad_signal"],
     [now >= signal.expires_ms, "expired"],
     [now - decided > S.max_signal_age_ms, "signal_too_old"],
