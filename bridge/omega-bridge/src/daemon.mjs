@@ -25,10 +25,12 @@ import {
   serverKey,
   stateSymbolProblem,
   writeTrial,
+  readOwnerSymbol,
+  writeOwnerSymbol,
 } from "./symbols.mjs";
 import { DEFAULT_STATE_DIR, loadOrCreateKeyPair } from "./keys.mjs";
 
-export const BRIDGE_VERSION = "1.3.0";
+export const BRIDGE_VERSION = "1.4.0";
 export const DEFAULT_OMEGA_URL = "https://nexus.cryptophys.work/omega";
 export const DEFAULT_TERMINAL_INI = "/opt/mt5-ingestion-gateway/config/terminal_gateway.ini";
 export const DEFAULT_TERMINAL_SERVICE = "mt5-terminal.service";
@@ -392,9 +394,13 @@ export function createDaemon(options = {}) {
     return null;
   }
 
-  /** First chart symbol to try for a server: the proven one, then OMEGA_SYMBOL, then the common gold names. */
-  function chartSymbolFor(server) {
+  /**
+   * First chart symbol to try for a server: the owner's (set with the connection), the proven one, then OMEGA_SYMBOL,
+   * then the common gold names.
+   */
+  function chartSymbolFor(server, owner = null) {
     return candidateSymbols({
+      owner,
       learned: learnedSymbol(config.stateDir, server, { fs }),
       configured: config.symbol,
     })[0] || config.symbol;
@@ -433,7 +439,7 @@ export function createDaemon(options = {}) {
 
     if (eaUp) {
       missingStateSinceMs = null;
-      const problem = stateSymbolProblem(state);
+      const problem = stateSymbolProblem(state, { ownerSymbol: readOwnerSymbol(config.stateDir, applied.server, { fs }) });
       if (problem === null) {
         const chart = (trial?.status === "trial" ? trial.symbol : null) ?? startupSymbolInIni();
         if (chart && learned !== chart) {
@@ -480,7 +486,7 @@ export function createDaemon(options = {}) {
     }
 
     const tried = [...trial.tried, trial.symbol];
-    const next = candidateSymbols({ configured: config.symbol, exclude: tried })[0];
+    const next = candidateSymbols({ owner: readOwnerSymbol(config.stateDir, trial.server, { fs }), configured: config.symbol, exclude: tried })[0];
     if (!next) {
       writeTrial(config.stateDir, { ...trial, tried, status: "exhausted" }, { fs });
       missingStateSinceMs = null;
@@ -501,10 +507,16 @@ export function createDaemon(options = {}) {
   }
 
   /** The chart-symbol resolution for the applied server, sent with every sync (Omega page, health alert). */
-  function symbolReport() {
-    if (!config.takeStartup) return null;
+  function symbolReport(state = null) {
+    // The terminal's last error while no EA state exists (the EA failed to start, a login failed), so the Omega page
+    // says why nothing trades. readTerminalLastError redacts the login (the server redacts again).
+    let terminalError = null;
+    if (!state) {
+      try { terminalError = readTerminalLastError(terminalDir, { fs }); } catch { terminalError = null; }
+    }
+    if (!config.takeStartup) return terminalError ? { status: "none", server: null, chart_symbol: null, learned: null, tried: [], error: null, since_ms: null, terminal_error: terminalError } : null;
     const applied = readAppliedState(config.stateDir, fs);
-    if (!applied.server) return { status: "none", server: null, chart_symbol: null, learned: null, tried: [], error: null, since_ms: null };
+    if (!applied.server) return { status: "none", server: null, chart_symbol: null, learned: null, tried: [], error: null, since_ms: null, terminal_error: terminalError };
     const trial = readTrial(config.stateDir, { fs });
     const own = trial && serverKey(trial.server) === serverKey(applied.server) ? trial : null;
     const learned = learnedSymbol(config.stateDir, applied.server, { fs });
@@ -516,6 +528,8 @@ export function createDaemon(options = {}) {
       tried: own?.tried ?? [],
       error: own?.error ? own.error.slice(0, 120) : lastRefusal,
       since_ms: own?.started_ms ?? null,
+      owner_symbol: readOwnerSymbol(config.stateDir, applied.server, { fs }),
+      terminal_error: terminalError,
     };
   }
 
@@ -644,7 +658,7 @@ export function createDaemon(options = {}) {
       corpus,
       corpusMacro,
       calendar,
-      bridgeSymbol: symbolReport(),
+      bridgeSymbol: symbolReport(state),
     });
 
     const syncUrl = `${config.omegaUrl}/api/bridge/sync`;
@@ -747,6 +761,7 @@ export function createDaemon(options = {}) {
           writeTerminalIniPreservingOwner(config.terminalIni, clearCredentials(existingIni), fs);
           removeStateJson();
           clearTrial(config.stateDir, { fs });
+          writeOwnerSymbol(config.stateDir, config.omegaFilesDir, null, null, { fs });
           await invokeExec(execFn, "systemctl", ["restart", config.terminalService]);
           writeAppliedState(config.stateDir, { version: conn.version, server: null, applied_ms: now() }, fs);
           appliedConnection = true;
@@ -763,7 +778,10 @@ export function createDaemon(options = {}) {
           const existingIni = fs.existsSync(config.terminalIni)
             ? fs.readFileSync(config.terminalIni, "utf8")
             : "";
-          const chartSymbol = config.takeStartup ? chartSymbolFor(creds.server) : config.symbol;
+          // The owner's gold symbol for this account (cent accounts, e.g. "GoldOne"), sent beside the envelope.
+          const ownerSymbol = typeof conn.trade_symbol === "string" && /^[A-Za-z0-9._#+-]{1,32}$/.test(conn.trade_symbol) ? conn.trade_symbol : null;
+          writeOwnerSymbol(config.stateDir, config.omegaFilesDir, creds.server, ownerSymbol, { fs });
+          const chartSymbol = config.takeStartup ? chartSymbolFor(creds.server, ownerSymbol) : (ownerSymbol ?? config.symbol);
           const updatedIni = applyCredentials(existingIni, {
             server: creds.server,
             login: creds.login,
@@ -803,6 +821,7 @@ export function createDaemon(options = {}) {
             version: conn.version,
             server: creds.server,
             symbol: chartSymbol,
+            owner_symbol: ownerSymbol,
             service: config.terminalService,
           });
         } catch (err) {

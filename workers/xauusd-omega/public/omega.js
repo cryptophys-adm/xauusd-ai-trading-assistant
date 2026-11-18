@@ -194,13 +194,16 @@ async function connectBroker() {
   const login = document.getElementById("b-login").value.trim();
   const password = document.getElementById("b-password").value;
   if (!server || !login || !password) { say("broker-msg", "warn", "Fill in the server, login and password."); return; }
+  // The account's gold symbol when it is off the list (cent accounts, e.g. GoldOne); empty: the listed names.
+  const tradeSymbol = (document.getElementById("b-symbol")?.value || "").trim() || null;
+  if (tradeSymbol && !/^[A-Za-z0-9._#+-]{1,32}$/.test(tradeSymbol)) { say("broker-msg", "warn", "Type the gold symbol exactly as Market Watch shows it."); return; }
   say("broker-msg", "", "Encrypting…");
   try {
     const kr = await fetch("./api/bridge/key", { headers: { accept: "application/json" }, credentials: "same-origin" });
     const key = await kr.json().catch(() => ({}));
     if (!kr.ok) throw new Error(key.error || `HTTP ${kr.status}`);
     const envelope = await buildEnvelope(key.public_key, key.kid, { server, login, password });
-    const out = await send("./api/connection", "POST", { server, envelope });
+    const out = await send("./api/connection", "POST", { server, envelope, trade_symbol: tradeSymbol });
     say("broker-msg", "ok", `Stored v${out.version} for ${out.server}. The bridge logs the terminal in at its next sync.`);
   } catch (e) {
     say("broker-msg", "bad", `Refused: ${e.message}`);

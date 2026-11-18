@@ -86,11 +86,20 @@ Content-Type: application/json
 
 - `null`: nothing to change;
 - `{ "version": 4, "server": "Monex-Demo", "envelope": { … } }`: log the terminal in with these
-  credentials when `version` is newer than the version the bridge last applied;
+  credentials when `version` is newer than the version the bridge last applied. Since 2026-11-18 (cent
+  accounts, bridge 1.4.0) it may carry `"trade_symbol": "GoldOne"`: the account's gold symbol the owner set
+  with the connection when it is not on the USD gold list. Not a secret, so it travels beside the envelope. The
+  bridge opens that chart first, remembers it for the server and writes it to `MQL5/Files/omega/trade_symbol.txt`,
+  which OmegaExecutor 1.17+ may trade under its contract checks (profit currency USD, or USC on a USC account;
+  1-100 oz a lot). Absent: the list only; the file is removed;
 - `{ "version": 5, "cleared": true }`: the owner disconnected; clear the terminal login when `version` is
   newer than the last applied.
 
 `notes` are the planner's reasons for not trading (for logs only).
+
+`bridge_symbol` in the request (bridge 1.4.0+) also carries `owner_symbol` and, while no `state.json` exists,
+`terminal_error`: the terminal journal's last error (e.g. the EA failed to start on a chart symbol the account
+lacks), with any run of 5+ digits outside a price replaced by `[account]`, so no account number leaves the host.
 
 `corpus_cursor_ms` is the newest broker minute the AI Worker kept from Omega's active broker, pair and
 user (`null` while `CORPUS_ORACLE_MODE` is `off` or the corpus was refused); the bridge then sends only

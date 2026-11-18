@@ -393,7 +393,9 @@ export function readTerminalLastError(terminalDir, { fs = nodeFs } = {}) {
         const parts = line.split("\t");
         const msg = parts.length >= 5 ? parts.slice(4).join(" ") : line;
         if (msg.includes("failed") || msg.includes("timeout") || msg.includes("error")) {
-          return msg.trim().slice(0, 160);
+          // MT5 writes the login in its authorization lines ("'5012345': authorization on ... failed"): never
+          // reported or logged; a run of 5+ digits that is not part of a price becomes "[account]".
+          return msg.trim().replace(/(^|[^\d.])\d{5,}(?![\d.])/g, "$1[account]").slice(0, 160);
         }
       }
     }
