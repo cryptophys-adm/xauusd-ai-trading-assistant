@@ -106,6 +106,52 @@ export async function positionAgents(db, executor) {
   }
 }
 
+/**
+ * An open the terminal filled but whose result line never reached the Worker (2026-11-18: ticket 389746494 was
+ * open with its intent id while the intent had no result and expired). The open position that carries the intent id
+ * is the terminal's own word that it ran, so the intent is recorded as done from the position, once, with an event
+ * and the executed line on Telegram. A result that arrives later does not overwrite it (status 'done' is final).
+ */
+export async function reconcileFilledOpens(env, db, executor, now) {
+  const byId = new Map();
+  for (const p of Array.isArray(executor?.positions) ? executor.positions : []) {
+    if (typeof p?.intent_id === "string" && p.intent_id.startsWith("open:") && Number(p?.ticket) > 0 && !byId.has(p.intent_id)) byId.set(p.intent_id, p);
+  }
+  if (!byId.size) return 0;
+  const ids = [...byId.keys()].slice(0, 50);
+  let rows = [];
+  try {
+    rows = (await db.prepare(`SELECT id, payload, created_ms FROM omega_intents WHERE kind = 'open' AND result IS NULL AND status IN ('pending', 'sent', 'expired') AND id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all()).results ?? [];
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const row of rows) {
+    const pos = byId.get(row.id);
+    const p = parse(row.payload, {});
+    const openedMs = Number(pos.opened_ms);
+    const fill = Number(pos.open_price);
+    const result = {
+      ok: true,
+      ticket: Number(pos.ticket),
+      error: null,
+      executed_ms: Number.isFinite(openedMs) && openedMs > 0 ? openedMs : null,
+      fill_price: Number.isFinite(fill) && fill > 0 ? fill : null,
+      slippage_pts: null,
+      latency_ms: Number.isFinite(openedMs) && openedMs > 0 && Number.isFinite(row.created_ms) ? Math.max(0, openedMs - Number(row.created_ms)) : null,
+      reconciled: true,
+    };
+    const res = await db.prepare("UPDATE omega_intents SET status = 'done', result = ?, updated_ms = ? WHERE id = ? AND result IS NULL")
+      .bind(JSON.stringify(result), now, row.id).run();
+    if (!(Number(res?.meta?.changes ?? 1) > 0)) continue;
+    count += 1;
+    await event(db, now, "bridge", "intent_reconciled", { id: row.id, ticket: result.ticket });
+    const label = await brokerLabelFor(db, executor);
+    await sendOmegaTelegram(env, `🟢 <b>Omega Order Executed · ${label}</b>\nTicket: <code>#${result.ticket}</code>\nSide: <b>${p.side ?? pos.side ?? "—"}</b> | Volume: <code>${p.volume ?? pos.volume ?? "—"}</code>\nEntry: <code>${p.entry || "—"}</code> | Fill: <code>${result.fill_price ?? "—"}</code>\nSL: <code>${pos.sl ?? p.sl ?? "—"}</code> | TP: <code>${pos.tp ?? p.tp ?? "—"}</code>\nRecorded from the open position: the EA's result line did not arrive.`);
+  }
+  return count;
+}
+
 export async function sendOmegaTelegram(env, message) {
   if (!env?.TELEGRAM_BOT_TOKEN || !env?.TELEGRAM_CHAT_ID) return;
   try {
@@ -493,6 +539,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       }
     }
   }
+  await reconcileFilledOpens(env, db, executor, now);
   await db.prepare("UPDATE omega_intents SET status = 'expired', updated_ms = ? WHERE status IN ('pending', 'sent') AND created_ms < ?").bind(now, now - INTENT_TTL_MS).run();
 
   // The connection the bridge must apply.
