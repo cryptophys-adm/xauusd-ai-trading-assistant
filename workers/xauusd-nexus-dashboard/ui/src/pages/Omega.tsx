@@ -503,6 +503,9 @@ function Mt5ChartCanvas({
   );
 }
 
+// A reported leverage this high is a broker's "unlimited" (FxPro demo: 1:2,000,000,000), not a real ratio.
+const LEVERAGE_UNLIMITED_FROM = 100_000;
+
 export default function Omega() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -1232,7 +1235,11 @@ export default function Omega() {
               <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]" aria-label="Account spec">
                 <dt className="text-slate-500">Leverage / Margin</dt>
                 <dd className="mono text-right text-slate-300">
-                  {br.leverage != null ? `1:${Number(br.leverage).toLocaleString("en-US")}` : "—"} / {br.margin_mode ?? "—"}
+                  {br.leverage == null
+                    ? "—"
+                    : Number(br.leverage) >= LEVERAGE_UNLIMITED_FROM
+                      ? <span title={`The broker reports 1:${Number(br.leverage).toLocaleString("en-US")}: unlimited or unknown leverage. Sizing never uses leverage; the margin is the broker's OrderCheck answer.`}>unlimited</span>
+                      : `1:${Number(br.leverage).toLocaleString("en-US")}`} / {br.margin_mode ?? "—"}
                 </dd>
                 <dt className="text-slate-500">Margin / lot</dt>
                 <dd className="mono text-right text-slate-300">{br.margin_per_lot != null ? num(br.margin_per_lot, 2) : "—"}</dd>
