@@ -28,6 +28,7 @@
 // Shadow only: nothing here reaches a room, a decision, the EA signal or Omega. Applying a learned plan is
 // a later, owner-approved step. Switch: PLAN_LEARNING_MODE = "shadow" (default) | "off".
 
+import { RANGE_GATED_AGENTS, CELL_GATE, cellRecords, htfAt, htfContext, loadHtfBars } from "./htf-cells.mjs";
 import { simulateSignal, ledgerSeries, toMs, decisionCloseMs, validSignal, FILL_WINDOW_MS, TRADING_MODES } from "./signal-ledger.mjs";
 import { signTestP, SHADOW_SIGNIFICANCE } from "./shadow-versions.mjs";
 
@@ -264,6 +265,8 @@ export async function ensurePlanLearningSchema(db) {
   for (const sql of PLAN_LEARNING_SCHEMA_SQL) await db.prepare(sql).run();
   // The pattern of a pattern family's setup (2026-11-13; the table of before has no such column).
   try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN pattern TEXT").run(); } catch { /* exists */ }
+  // Range mode step 1 (owner 2026-11-18): a range strategy's setup's side to the H4/D1 trend (src/htf-cells.mjs).
+  try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN htf TEXT").run(); } catch { /* exists */ }
   schemaReady = true;
 }
 
@@ -325,7 +328,7 @@ async function runAll(db, statements) {
 const fromRow = (r) => {
   let results = null;
   try { results = r.results_json ? JSON.parse(r.results_json) : null; } catch { results = null; }
-  const s = { setup_key: r.setup_key, decision_key: r.decision_key, agent: r.agent ?? DEFAULT_PLAN_AGENT, pattern: r.pattern ?? null, opened_ms: toMs(r.opened_at), decided_ms: toMs(r.decided_at), last_seen_ms: toMs(r.last_seen_at), decisions: Number(r.decisions) || 1, side: r.side, entry: r.entry, stop: r.stop, tp1: r.tp1, atr_h1: r.atr_h1, mode: r.mode ?? null, action: r.action ?? null, at_level: r.at_level === 1, regime: r.regime ?? null, context: r.context, status: r.status, resolved_ms: r.resolved_at ? toMs(r.resolved_at) : null, results };
+  const s = { setup_key: r.setup_key, decision_key: r.decision_key, agent: r.agent ?? DEFAULT_PLAN_AGENT, pattern: r.pattern ?? null, opened_ms: toMs(r.opened_at), decided_ms: toMs(r.decided_at), last_seen_ms: toMs(r.last_seen_at), decisions: Number(r.decisions) || 1, side: r.side, entry: r.entry, stop: r.stop, tp1: r.tp1, atr_h1: r.atr_h1, mode: r.mode ?? null, action: r.action ?? null, at_level: r.at_level === 1, regime: r.regime ?? null, context: r.context, htf: r.htf ?? null, status: r.status, resolved_ms: r.resolved_at ? toMs(r.resolved_at) : null, results };
   return s;
 };
 
@@ -375,8 +378,17 @@ export async function runPlanLearning(env, { now = Date.now(), bars = null } = {
       }
       await runAll(db, updates);
     }
+    // The range strategies' setups get their side's context to the H4/D1 trend at their decision (once; "unknown" when
+    // the cached bars do not reach back that far), for the evidence gate per cell (src/htf-cells.mjs).
+    let tagged = 0;
+    const untagged = (await db.prepare(`SELECT setup_key, side, decided_at FROM plan_setups WHERE htf IS NULL AND agent IN (${RANGE_GATED_AGENTS.map(() => "?").join(", ")}) LIMIT 500`).bind(...RANGE_GATED_AGENTS).all()).results || [];
+    if (untagged.length) {
+      const htfBars = await loadHtfBars(env);
+      await runAll(db, untagged.map((r) => db.prepare("UPDATE plan_setups SET htf = ? WHERE setup_key = ? AND htf IS NULL").bind(htfContext(r.side, htfAt(htfBars, toMs(r.decided_at)).trend), r.setup_key)));
+      tagged = untagged.length;
+    }
     const previous = await readPlanLearning(env);
-    if (!added && !extended && !resolved && !unavailable && previous?.version === PLAN_LEARNING_VERSION) return { status: "unchanged", setups: previous.setups?.resolved ?? 0 };
+    if (!added && !extended && !resolved && !unavailable && !tagged && previous?.version === PLAN_LEARNING_VERSION && Array.isArray(previous?.cells)) return { status: "unchanged", setups: previous.setups?.resolved ?? 0 };
     const state = await buildState(db, { now });
     await env.SIGNAL_CACHE?.put?.(PLAN_LEARNING_KEY, JSON.stringify(state));
     return { status: "ok", added, extended, resolved, unavailable, setups: state.setups.resolved, verdict: state.walk_forward.verdict, global_pick: state.learned.global.pick };
@@ -396,7 +408,10 @@ async function buildState(db, { now }) {
     // The grid is learned on the default agent's plans; every agent's own record stands beside it.
     learned: learn(rows.filter((s) => s.agent === DEFAULT_PLAN_AGENT)),
     walk_forward: walkForward(rows.filter((s) => s.agent === DEFAULT_PLAN_AGENT)),
-    agents: agentRecords(rows)
+    agents: agentRecords(rows),
+    // The range strategies' records per cell (agent x side x H4/D1 context) and the gate's bar (src/htf-cells.mjs).
+    cells: cellRecords(rows, { arm: CONTROL_ARM }),
+    cell_gate: CELL_GATE
   };
 }
 

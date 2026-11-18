@@ -24,6 +24,8 @@
 // it carries no account number. The control (active, paused, killed) is set by Omega
 // (omega.cryptophys.work, src/ea-execution.mjs) and kept in KV under EA_CONTROL_KEY.
 
+import { applyCellGate, htfAt, loadHtfBars } from "./htf-cells.mjs";
+import { readPlanLearning } from "./plan-learning.mjs";
 import { gridAdaptMode, applyGridChoice, readGridChoices } from "./grid-adapt.mjs";
 import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
 import { readBrokerTrigger, brokerTriggerFields } from "./broker-trigger.mjs";
@@ -180,6 +182,19 @@ export function managementFields(decision, { basis = null } = {}) {
 }
 
 const BASIS_TTL_MS = 5 * 60_000;
+// The H4/D1 trend and the cells' records, kept 5 minutes per isolate (the trend moves per 4h bar, the cells per hour).
+let cellMemo = { at: 0, inputs: null };
+export function resetCellGateMemoForTests() { cellMemo = { at: 0, inputs: null }; }
+async function cellGateInputs(env, { now }) {
+  if (cellMemo.inputs && now - cellMemo.at < BASIS_TTL_MS) return cellMemo.inputs;
+  let inputs = { htf: null, cells: [] };
+  try {
+    const [bars, state] = await Promise.all([loadHtfBars(env), readPlanLearning(env)]);
+    inputs = { htf: htfAt(bars, now), cells: Array.isArray(state?.cells) ? state.cells : [] };
+  } catch { inputs = { htf: null, cells: [] }; }
+  cellMemo = { at: now, inputs };
+  return inputs;
+}
 let basisMemo = { at: 0, basis: null };
 export function resetFeedBasisMemoForTests() { basisMemo = { at: 0, basis: null }; }
 
@@ -244,9 +259,12 @@ export async function eaSignal(env, { now = Date.now(), control: controlIn = nul
     const out = { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now, liveM5, broker }), ...brokerTriggerFields(broker), ...managementFields(decision, { basis }), source: "decision_engine" };
     // The grid's adapted entry and stop per strategy x regime (src/grid-adapt.mjs, owner 2026-11-17): plan by default.
     const adapted = gridAdaptMode(env) === "live" ? applyGridChoice(out, { decision, choices: await readGridChoices(env) }) : out;
+    // Range mode step 1 (owner 2026-11-18, src/htf-cells.mjs): a range strategy trades only with the H4/D1 trend and only in a
+    // cell whose evidence passes. RANGE_CELL_GATE "off" stops the gate (emergency only).
+    const gated = String(env?.RANGE_CELL_GATE ?? "on").trim().toLowerCase() === "off" ? adapted : applyCellGate(adapted, await cellGateInputs(env, { now }));
     // The strategy arm (owner 2026-11-17): read again at signal time, so a disarm stops entries before the next decision.
-    if (strategyArmMode(env) === "live") return applyArmGate(adapted, await readArmState(env));
-    return adapted;
+    if (strategyArmMode(env) === "live") return applyArmGate(gated, await readArmState(env));
+    return gated;
   }
   return { ...eaSignalFrom({ candleKey, analysis, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now }), ...brokerTriggerFields(broker), source: "h1_decision" };
 }
