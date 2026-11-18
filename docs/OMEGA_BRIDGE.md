@@ -140,6 +140,31 @@ MT5's `[StartUp]` section in `/opt/mt5-ingestion-gateway/config/terminal_gateway
     `bridge.symbol`, a change of symbol is the event `symbol_changed`, a refusal `symbol_refused`, an exhausted
     or stopped search `bridge_symbol`, and the health alert `omega_symbol` says which symbol and why.
 
+  **The broker spec and the EA as the last gate (owner 2026-11-18, docs/RFC_ACCOUNT_PROFILES.md phase 1;
+  OmegaExecutor 1.15).**
+  - **EA report:** `state.json` adds `account.leverage`, `account.margin_mode` (hedging | netting | exchange),
+    `account.margin_free`, `account.login_hash` (SHA-256 hex of `omega|<server>|<login>`; the login itself never
+    leaves the terminal), `symbol.freeze_level_points`, `symbol.trade_mode` (full | long_only | short_only |
+    close_only | disabled) and `symbol.margin_per_lot` (`OrderCalcMargin` for one lot at the ask).
+  - **EA checks before an open:** the symbol's trade mode allows the side; the stop and the target are on the
+    right side and outside the stops level; `OrderCalcMargin` prices the margin; `OrderCheck` accepts the request
+    (it also answers whether the free margin carries it, a hedged opposite position included). A failure is the
+    result `refused: <what>` (`refused: margin`, `refused: stops_level`, `refused: trade_mode_close_only`,
+    `refused: order_check_<retcode>` ...). Nothing is resized and no stop is moved.
+  - **EA checks before a stop or target change:** a level (the old or the new one) within the freeze level of the
+    closing price is refused with `refused: freeze_level` instead of being sent.
+  - **Server:** `src/account-spec.mjs` keeps one row per account in D1 `omega_accounts`, keyed by an opaque
+    reference (`acct_` + 16 hex of a hash of the EA's login hash; before 1.15 a hash of the server, adopted by the
+    first 1.15 sync on that server). The stable part of the spec (server, account currency, leverage, margin mode,
+    symbol name, profit and base currency, contract size, digits, point, tick size, lot min/max/step, trade mode)
+    is hashed. An account's first usable spec validates at once. A changed hash opens nothing (note
+    `spec_unvalidated`) until the spec is usable and has held 60 s; open positions keep their management. Events
+    `account_seen`, `spec_changed`, `spec_invalid`, `spec_validated`, `account_ref_upgraded`; one Telegram line
+    for a new account, a changed spec and its first validation. The login hash is used in the sync only: it is
+    not stored with the bridge state and not served.
+  - **EA version gate:** `OMEGA_EA_VERSION_GATE` "on" opens nothing while the EA is older than 1.15 (note
+    `ea_outdated`). It ships "off" and is switched on once 1.15 runs on the VPS.
+
   **Own chart profile.** MT5 saves every open chart into the current profile and adds the `[StartUp]` chart
   again at each start: the shared `Default` profile had grown to ~70 charts, most on a symbol the next
   server lacked. The bridge therefore selects the profile `Omega`, and the drop-in

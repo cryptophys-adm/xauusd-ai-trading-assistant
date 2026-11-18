@@ -20,6 +20,7 @@ import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
 import { goldSymbolCheck, goldSymbolText } from "./gold-symbol.mjs";
+import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES } from "./account-spec.mjs";
 
 export const OMEGA_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS omega_settings (id INTEGER PRIMARY KEY CHECK (id = 1), settings TEXT NOT NULL, version INTEGER NOT NULL, updated_by TEXT, updated_ms INTEGER)`,
@@ -75,7 +76,7 @@ const KID_RE = /^[0-9a-f]{16}$/;
 const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 let schemaReady = false;
-export function resetOmegaBrokerSchemaForTests() { schemaReady = false; }
+export function resetOmegaBrokerSchemaForTests() { schemaReady = false; resetAccountSpecSchemaForTests(); }
 async function ensureSchema(db) {
   if (schemaReady) return;
   for (const sql of OMEGA_SCHEMA_SQL) await db.prepare(sql).run();
@@ -254,7 +255,14 @@ export function executorFrom(state) {
     terminal_error: typeof state.terminal_error === "string" ? state.terminal_error.slice(0, 200) : null,
     // OmegaExecutor 1.12+: its version and whether it still moves stops by itself (null when not reported).
     executor: executorInfoFrom(state.executor),
-    account: { trade_mode: ["demo", "real", "contest"].includes(a.trade_mode) ? a.trade_mode : null, currency: typeof a.currency === "string" ? a.currency.slice(0, 8) : null, balance: n(a.balance), equity: n(a.equity), day_start_balance: n(a.day_start_balance), day_realized_pl: n(a.day_realized_pl) },
+    account: {
+      trade_mode: ["demo", "real", "contest"].includes(a.trade_mode) ? a.trade_mode : null, currency: typeof a.currency === "string" ? a.currency.slice(0, 8) : null, balance: n(a.balance), equity: n(a.equity), day_start_balance: n(a.day_start_balance), day_realized_pl: n(a.day_realized_pl),
+      // OmegaExecutor 1.15+ (docs/RFC_ACCOUNT_PROFILES.md §1): the account spec, and an opaque hash in place of the login.
+      leverage: n(a.leverage),
+      margin_mode: ["hedging", "netting", "exchange", "unknown"].includes(a.margin_mode) ? a.margin_mode : null,
+      margin_free: n(a.margin_free),
+      login_hash: typeof a.login_hash === "string" && /^[0-9a-f]{64}$/.test(a.login_hash) ? a.login_hash : null
+    },
     symbol: {
       name: typeof s.name === "string" ? s.name.slice(0, 32) : null,
       digits: Number.isInteger(s.digits) ? s.digits : null,
@@ -274,7 +282,11 @@ export function executorFrom(state) {
       chart: typeof s.chart === "string" ? s.chart.slice(0, 32) : null,
       currency_profit: typeof s.currency_profit === "string" ? s.currency_profit.slice(0, 8) : null,
       currency_base: typeof s.currency_base === "string" ? s.currency_base.slice(0, 8) : null,
-      contract_size: n(s.contract_size)
+      contract_size: n(s.contract_size),
+      // OmegaExecutor 1.15+: the freeze level, the symbol's trade mode and the margin one lot needs (OrderCalcMargin).
+      freeze_level_points: n(s.freeze_level_points),
+      trade_mode: ["full", "long_only", "short_only", "close_only", "disabled", "unknown"].includes(s.trade_mode) ? s.trade_mode : null,
+      margin_per_lot: n(s.margin_per_lot)
     },
     // The EA's own refusal when no allowed USD gold symbol trades on the server (1.14+), else null.
     symbol_error: typeof state.symbol_error === "string" && state.symbol_error ? state.symbol_error.slice(0, 96) : null,
@@ -372,7 +384,9 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // omega-bridge 1.3.0+ reports its chart-symbol resolution beside the state (also while no EA runs).
   const resolution = bridgeSymbolFrom(bridgeSymbol);
   if (executor && resolution) executor.bridge_symbol = resolution;
-  const stateText = JSON.stringify(executor);
+  // The account's opaque login hash (OmegaExecutor 1.15) is used for its reference in this sync only, never stored
+  // with the state that the pages, the health check and the watchdog read.
+  const stateText = JSON.stringify(executor, (k, v) => (k === "login_hash" ? undefined : v));
   if (stateText.length > STATE_MAX_BYTES) return { ok: false, error: "state_too_large" };
 
   const prev = await db.prepare("SELECT kid, public_key, bridge_version, state, synced_ms FROM omega_bridge WHERE id = 1").first();
@@ -509,7 +523,16 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   }
   // The Position Manager's fresh actions (src/position-manager.mjs, owner 2026-11-17), checked again in the plan.
   const pmActions = await pendingPositionActions(db, { now });
-  const plan = planIntents({ signal, control, settings, executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id), agents, pmActions });
+  // The account's broker spec and profile (docs/RFC_ACCOUNT_PROFILES.md, phase 1): a new or changed spec opens nothing
+  // until it validates. A failure here fails closed for new entries only (management and closes still run).
+  let account = null;
+  if (executor?.connected === true) {
+    try {
+      account = await syncAccount(db, executor, { settings, now, log: (action, detail) => event(db, now, "engine", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
+    } catch { account = { account_ref: null, spec_status: "unknown", spec_problem: "account_sync_failed" }; }
+  }
+  const eaGate = eaVersionGateOn(env);
+  const plan = planIntents({ signal, control, settings, executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id), agents, pmActions, account, eaGate });
   if (pmActions.length) {
     // An action that became an intent is applied; one the live price no longer allows is skipped (never retried).
     const planned = new Set(plan.intents.filter((it) => String(it.id).startsWith("pm:")).map((it) => { const [, t, , b] = String(it.id).split(":"); return `pm:${t}:${b}`; }));
@@ -630,6 +653,9 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
   const lastRec = await db.prepare("SELECT ms, detail FROM omega_events WHERE actor = 'agent:cerebrum' AND action = 'autonomous_recovery' ORDER BY id DESC LIMIT 1").first();
   // The planner's current notes (written only when they change): why Omega is or is not entering now.
   const lastPlan = await db.prepare("SELECT ms, detail FROM omega_events WHERE action = 'plan' ORDER BY id DESC LIMIT 1").first();
+  // Account Profiles phase 1: the accounts seen, their broker spec status and profile (never a login).
+  let accounts = [];
+  try { accounts = await readAccounts(db); } catch { accounts = []; }
 
   // TCA: Transaction Cost Analysis aggregation over completed intents
   let tcaLatencySum = 0, tcaLatencyCount = 0;
@@ -735,6 +761,10 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       terminal_error: st?.connected !== true ? (st?.terminal_error ?? null) : null,
       // The EA's self-report (1.12+): its version, its local break-even and trailing, and what Omega makes of it.
       executor: executorStatus(st?.executor),
+      // The entry gate on the EA version (OMEGA_EA_VERSION_GATE, off until OmegaExecutor 1.15 runs on the VPS).
+      ea_version_gate: { on: eaVersionGateOn(env), min_version: EXECUTOR_ENTRY_MIN_VERSION, met: specVersionAtLeast(st?.executor?.version ?? null, EXECUTOR_ENTRY_MIN_VERSION) },
+      leverage: st?.account?.leverage ?? null, margin_mode: st?.account?.margin_mode ?? null, margin_free: st?.account?.margin_free ?? null,
+      freeze_level_points: st?.symbol?.freeze_level_points ?? null, symbol_trade_mode: st?.symbol?.trade_mode ?? null, margin_per_lot: st?.symbol?.margin_per_lot ?? null,
       server: connection.status === "stored" ? (st?.server ?? null) : null, trade_mode: st?.account?.trade_mode ?? null, currency: st?.account?.currency ?? null,
       balance: st?.account?.balance ?? null, equity: st?.account?.equity ?? null, day_start_balance: st?.account?.day_start_balance ?? null, day_realized_pl: st?.account?.day_realized_pl ?? null,
       symbol: st?.symbol?.name ?? null, bid: st?.symbol?.bid ?? null, ask: st?.symbol?.ask ?? null, spread_points: st?.symbol?.spread_points ?? null,
@@ -756,6 +786,14 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       deals: Array.isArray(st?.deals) ? st.deals : [],
       state_age_ms: Number.isFinite(st?.received_ms) ? now - st.received_ms : null
     },
+    // Account Profiles (docs/RFC_ACCOUNT_PROFILES.md): each account's opaque reference, broker spec status and profile.
+    accounts: accounts.map((a) => ({
+      account_ref: a.account_ref, server: a.server, legacy_ref: a.legacy,
+      spec_status: a.spec_status, spec_problem: a.spec_problem, spec_hash: a.spec_hash, spec_since_ms: a.spec_since_ms, spec_validated_ms: a.spec_validated_ms,
+      spec_text: specStatusText(a),
+      profile: a.profile, profile_label: PROFILES[a.profile]?.label ?? a.profile, ceiling: a.ceiling, agent_mode: a.agent_mode, custom: a.custom,
+      profile_by: a.profile_by, profile_ms: a.profile_ms
+    })),
     autonomous_watchdog: {
       active: true,
       agent: "agent:cerebrum",

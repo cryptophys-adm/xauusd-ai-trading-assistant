@@ -27,7 +27,7 @@ test("G1. one list of exact USD gold names in the EA, the bridge and the server;
 });
 
 test("G2. the EA matches names exactly, checks the contract and never falls back", () => {
-  assert.match(ea, /#property version\s+"1\.14"/);
+  assert.match(ea, /#property version\s+"1\.1[4-9]"/);
   assert.ok(!/StringFind\(up, "GOLD"\)|StringFind\(up, "XAUUSD"\) == 0/.test(ea), "no prefix match");
   assert.ok(!/IsGoldSymbolName/.test(ea), "the prefix matcher is gone");
   assert.ok(!/firstExisting/.test(ea), "no fallback to a symbol without a price");
@@ -40,7 +40,7 @@ test("G2. the EA matches names exactly, checks the contract and never falls back
   assert.match(ea, /if\(ResolveGoldSymbol\(\) == ""\)\s*\{\s*AppendResult\(id, false, 0, "symbol_error", nowMs\);/);
   assert.match(ea, /if\(sym == ""\) return; \/\/ no USD gold symbol/);
   // Never silent: state.json carries the contract and the refusal.
-  assert.match(ea, /\\"currency_profit\\":\\"%s\\",\\"currency_base\\":\\"%s\\",\\"contract_size\\":%\.4f\}/);
+  assert.match(ea, /\\"currency_profit\\":\\"%s\\",\\"currency_base\\":\\"%s\\",\\"contract_size\\":%\.4f[,}]/);
   assert.match(ea, /\\"symbol_error\\":\\"%s\\",/);
 });
 

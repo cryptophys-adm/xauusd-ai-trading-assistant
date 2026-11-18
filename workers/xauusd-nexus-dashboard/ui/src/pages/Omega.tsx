@@ -756,6 +756,9 @@ export default function Omega() {
   const e = b?.engine || {};
   const conn = b?.connection || {};
   const br = b?.bridge || {};
+  // The connected account's row (the one on the bridge's server, else the newest seen); never a login, only its opaque reference.
+  const accounts: any[] = Array.isArray(b?.accounts) ? b.accounts : [];
+  const account = accounts.find((a) => a?.server && a.server === br.server) ?? accounts[0] ?? null;
   const watchdog = b?.autonomous_watchdog || null;
   const cur = br.currency || hb?.currency || "USD";
   const digits = typeof br.digits === "number" && br.digits >= 0 ? br.digits : 2;
@@ -1223,6 +1226,40 @@ export default function Omega() {
                   aria-label="Trade symbol check"
                 >
                   {br.symbol_check.ok ? `Symbol verified: ${br.symbol_check.text}` : br.symbol_check.text}
+                </p>
+              ) : null}
+              {/* Account Profiles phase 1 (docs/RFC_ACCOUNT_PROFILES.md): the broker spec gate and the stored profile. */}
+              <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]" aria-label="Account spec">
+                <dt className="text-slate-500">Leverage / Margin</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.leverage != null ? `1:${br.leverage}` : "—"} / {br.margin_mode ?? "—"}
+                </dd>
+                <dt className="text-slate-500">Margin / lot</dt>
+                <dd className="mono text-right text-slate-300">{br.margin_per_lot != null ? num(br.margin_per_lot, 2) : "—"}</dd>
+                <dt className="text-slate-500">Freeze / Trade mode</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.freeze_level_points != null ? `${br.freeze_level_points} pts` : "—"} / {br.symbol_trade_mode ?? "—"}
+                </dd>
+                <dt className="text-slate-500">Profile / Ceiling</dt>
+                <dd className="mono text-right text-slate-300">
+                  {account ? `${account.profile_label} / ${account.ceiling}` : "—"}
+                </dd>
+              </dl>
+              {account ? (
+                <p
+                  className={`mt-1.5 text-[11px] ${account.spec_status === "validated" ? "text-emerald-300" : "text-amber-300"}`}
+                  aria-label="Broker spec check"
+                >
+                  {account.spec_text}
+                </p>
+              ) : null}
+              {br.ea_version_gate ? (
+                <p className="mt-1 text-[11px] text-slate-400" aria-label="EA version gate">
+                  {br.ea_version_gate.on
+                    ? br.ea_version_gate.met
+                      ? `EA version gate on: OmegaExecutor ${br.ea_version_gate.min_version}+ running.`
+                      : `EA version gate on: OmegaExecutor ${br.ea_version_gate.min_version} needed, no new entries until it runs.`
+                    : `EA version gate off until OmegaExecutor ${br.ea_version_gate.min_version} runs on the VPS${br.ea_version_gate.met ? " (it runs now)" : ""}.`}
                 </p>
               ) : null}
             </div>
