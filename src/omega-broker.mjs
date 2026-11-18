@@ -134,21 +134,25 @@ export function lastClosedCandle(bars, tfMin, now) {
   const tf = tfMin * 60_000;
   const end = Math.floor(now / tf) * tf, start = end - tf;
   const inside = (Array.isArray(bars) ? bars : []).filter((b) => Number.isFinite(b?.t) && b.t >= start && b.t < end).sort((a, b) => a.t - b.t);
-  if (inside.length < Math.ceil(tfMin * 0.8) || inside.at(-1).t < end - 2 * 60_000) return null;
+  if (inside.length < Math.ceil(tfMin * 0.8) || inside.at(-1).t !== end - 60_000) return null;
   const o = Number(inside[0].o), c = Number(inside.at(-1).c);
   return Number.isFinite(o) && Number.isFinite(c) ? { o, c, close_ms: end } : null;
 }
 
 // The ladder's closed candles (M5, M15, H1) from the broker's M1 corpus, built at most once a minute per isolate.
-let candleCache = { minute: null, candles: null };
-export function resetCandleCacheForTests() { candleCache = { minute: null, candles: null }; }
-export async function ladderCandles(env, now, { read = readCorpusBars } = {}) {
-  const minute = Math.floor(now / 60_000);
-  if (candleCache.minute === minute && candleCache.candles) return candleCache.candles;
-  let bars = [];
-  try { bars = (await read(env, { sinceMs: now - 125 * 60_000, limit: 200 }))?.bars ?? []; } catch { bars = []; }
+// Only the connected terminal's own server and symbol (a switch never confirms on another broker's prices).
+let candleCache = { key: null, candles: null };
+export function resetCandleCacheForTests() { candleCache = { key: null, candles: null }; }
+export async function ladderCandles(env, now, { read = readCorpusBars, server = null, symbol = null } = {}) {
+  const ident = `${String(server ?? "").trim().toLowerCase()}|${String(symbol ?? "").trim().toLowerCase()}`;
+  const key = `${Math.floor(now / 60_000)}|${ident}`;
+  if (candleCache.key === key && candleCache.candles) return candleCache.candles;
+  let res = null;
+  try { res = await read(env, { sinceMs: now - 125 * 60_000, limit: 200 }); } catch { res = null; }
+  const same = res && `${String(res.server ?? "").trim().toLowerCase()}|${String(res.symbol ?? "").trim().toLowerCase()}` === ident && ident !== "|";
+  const bars = same ? res.bars ?? [] : [];
   const candles = { M5: lastClosedCandle(bars, 5, now), M15: lastClosedCandle(bars, 15, now), H1: lastClosedCandle(bars, 60, now) };
-  candleCache = { minute, candles };
+  candleCache = { key, candles };
   return candles;
 }
 
@@ -703,7 +707,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // The ladder per mode (owner 2026-11-18): each position's mode and R at entry, and the closed candles it confirms on.
   const hasPositions = Array.isArray(executor?.positions) && executor.positions.length > 0;
   const meta = hasPositions ? await positionMeta(db, executor) : {};
-  const candles = hasPositions ? await ladderCandles(env, now) : {};
+  const candles = hasPositions ? await ladderCandles(env, now, { server: executor?.server, symbol: executor?.symbol?.name }) : {};
   const plan = planIntents({ signal, control, settings, executor: dayExec, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id), agents, pmActions, account, eaGate, reentry, positionMeta: meta, candles });
   if (pmActions.length) {
     // An action that became an intent is applied; one the live price no longer allows is skipped (never retried).

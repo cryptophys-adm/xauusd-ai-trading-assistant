@@ -8,7 +8,7 @@ import { ladderRungs, ladderPlan, partialShare, manageIntents, settingsFrom, OME
 const NOW = Date.parse("2026-11-18T10:00:00Z");
 const SYM = { name: "GOLD", digits: 2, point: 0.01, spread_points: 15, stops_level_points: 0, volume_min: 0.01, volume_step: 0.01, bid: 4010, ask: 4010.15, tick_size: 0.01, tick_value: 1 };
 const S = { ...OMEGA_DEFAULTS, enabled: true };
-const LONG = { ticket: 101, side: "BUY", volume: 0.08, open_price: 4000, sl: 3990, tp: 4030, source: "omega", magic: 920200, intent_id: "open:1:B" };
+const LONG = { ticket: 101, side: "BUY", volume: 0.08, open_price: 4000, sl: 3990, tp: 4030, source: "omega", magic: 920200, intent_id: "open:1:B", opened_ms: NOW - 3_600_000 };
 const SHORT = { ticket: 202, side: "SELL", volume: 0.08, open_price: 4000, sl: 4010, tp: 3970, source: "omega", magic: 920200, intent_id: "open:2:S" };
 const at = (bid) => ({ ...SYM, bid, ask: bid + 0.15 });
 const power = (p) => ({ power: p, power_ms: NOW - 60_000 });
@@ -43,16 +43,28 @@ test("TL2b per mode and on closed candles: intraday 0.5R, swing 0.3R; the trigge
   assert.equal(ladderStep({ mode: "swing" }, S).step, null, "no R: no step");
   const meta = { mode: "intraday", r_dist: 10 };
   // Live price 4016 but the closed M15 candle closed at 4006 (green): past the entry by 0.6R -> break-even only.
-  const on = ladderPlan({ position: LONG, sym: at(4016), settings: S, now: NOW, meta, candles: { M15: { o: 4001, c: 4006 } } });
+  const on = ladderPlan({ position: LONG, sym: at(4016), settings: S, now: NOW, meta, candles: { M15: { o: 4001, c: 4006, close_ms: NOW - 60_000 } } });
   assert.deepEqual([on.sl, on.sl_rung], [4000.3, 0]);
-  assert.equal(ladderPlan({ position: LONG, sym: at(4016), settings: S, now: NOW, meta, candles: { M15: { o: 4008, c: 4006 } } }).sl, null, "a red candle against a long confirms nothing");
+  assert.equal(ladderPlan({ position: LONG, sym: at(4016), settings: S, now: NOW, meta, candles: { M15: { o: 4008, c: 4006, close_ms: NOW - 60_000 } } }).sl, null, "a red candle against a long confirms nothing");
   assert.equal(ladderPlan({ position: LONG, sym: at(4016), settings: S, now: NOW, meta, candles: {} }).sl, null, "no candle: no new lock");
-  assert.equal(ladderPlan({ position: LONG, sym: at(4016), settings: S, now: NOW, meta: { mode: "scalp" }, candles: { M5: { o: 4010, c: 4013.5 } } }).sl, 4010, "scalp on M5: 30 pips past TP1");
+  assert.equal(ladderPlan({ position: LONG, sym: at(4016), settings: S, now: NOW, meta: { mode: "scalp" }, candles: { M5: { o: 4010, c: 4013.5, close_ms: NOW - 60_000 } } }).sl, 4010, "scalp on M5: 30 pips past TP1");
   const { lastClosedCandle } = await import("../src/omega-broker.mjs");
   const t0 = Date.parse("2026-11-18T10:00:00Z");
   const bars = Array.from({ length: 15 }, (_, i) => ({ t: t0 + i * 60_000, o: 4000 + i, h: 4001 + i, l: 3999 + i, c: 4000.5 + i }));
   assert.deepEqual(lastClosedCandle(bars, 15, t0 + 16 * 60_000), { o: 4000, c: 4014.5, close_ms: t0 + 15 * 60_000 });
   assert.equal(lastClosedCandle(bars.slice(0, 10), 15, t0 + 16 * 60_000), null, "incomplete");
+  assert.equal(lastClosedCandle(bars.slice(0, 14), 15, t0 + 16 * 60_000), null, "14 of 15 minutes, the final one missing");
+  // A candle that closed before the entry confirms nothing.
+  assert.equal(ladderPlan({ position: { ...LONG, opened_ms: NOW }, sym: at(4016), settings: S, now: NOW, meta, candles: { M15: { o: 4001, c: 4006, close_ms: NOW - 60_000 } } }).sl, null);
+  // Another broker's corpus is never used; the cache keys on the server and symbol.
+  const { ladderCandles, resetCandleCacheForTests } = await import("../src/omega-broker.mjs");
+  resetCandleCacheForTests();
+  const read = async () => ({ server: "OtherBroker-Live", symbol: "XAUUSD", bars });
+  const c = await ladderCandles({}, t0 + 16 * 60_000, { read, server: "FxPro-MT5 Demo", symbol: "GOLD" });
+  assert.deepEqual([c.M5, c.M15, c.H1], [null, null, null]);
+  resetCandleCacheForTests();
+  const c2 = await ladderCandles({}, t0 + 16 * 60_000, { read: async () => ({ server: "FxPro-MT5 Demo", symbol: "GOLD", bars }), server: "FxPro-MT5 Demo", symbol: "GOLD" });
+  assert.ok(c2.M15, "same broker and symbol: its own candle");
 });
 
 test("TL3 the partials: 25% with a strong power, 50% when it fades, in between otherwise; the broker's step and minimum; one per rung, at most three", () => {

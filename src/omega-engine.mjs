@@ -362,8 +362,11 @@ export function ladderPlan({ position: p, sym, signal = null, levels = null, set
   // trade's direction (no reversal candle); no such candle, no new lock. Without `candles`, the live price (tests).
   const { step: lockPx, mode } = ladderStep(meta, S);
   const candle = candles === undefined ? null : candles?.[LADDER_CONFIRM_TF[mode]] ?? null;
+  // A candle that closed before the position opened confirms nothing about it (it needs a close after the entry).
+  const openedMs = Number(p.opened_ms);
+  const afterEntry = candle && finite(candle.close_ms) && finite(openedMs) && candle.close_ms > openedMs;
   const trigger = candles === undefined ? price
-    : candle && finite(candle.c) && finite(candle.o) && (buy ? candle.c >= candle.o : candle.c <= candle.o) ? candle.c : null;
+    : afterEntry && finite(candle.c) && finite(candle.o) && (buy ? candle.c >= candle.o : candle.c <= candle.o) ? candle.c : null;
   const L = [open, ...rungs];
   const past = lockPx != null && finite(trigger) ? L.filter((x) => dir * (trigger - x) >= lockPx).length : 0;
   let sl = null, slRung = null;
