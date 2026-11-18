@@ -5,6 +5,22 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- feat(omega): the profile council (owner 2026-11-18, relayed: "libatkan council untuk naik profil"; confirmed in the session).
+  - **Upgrades (live).** An autonomous profile upgrade now needs the council's approval after the measured gates pass.
+    - Three seats (risk, strategy, trade management) review an evidence pack with no price.
+    - A fixed moderator rule applies the upgrade only when the risk seat and at least two of three approve.
+    - A failed council, the daily cap (`profile_council`, `PROFILE_COUNCIL_DAILY_USD`) or a second review the same day means no upgrade.
+  - **Downgrades (off).** The owner's "Council boleh menolak" is built behind `OMEGA_PROFILE_COUNCIL_DOWNGRADE` (`"off"`) until a platform ADR-0020 amendment allows a veto.
+    - A soft trigger holds new entries (`profile_review_pending`) until the council decides.
+    - A veto keeps the profile for up to 24 h, or until the trigger worsens.
+    - A failure or a late review applies the downgrade.
+    - The kill switch and the daily loss limit never wait.
+  - **Record.**
+    - Each review is a row in `omega_profile_councils`, whose id is the session id.
+    - Each review sends a Telegram line naming the verdict and each seat.
+    - The change's evidence and the `risk_profile.v1` item carry the council's id and verdict.
+    - Omega → Setup → Risk profile lists the last three reviews.
+  - See `docs/RFC_ACCOUNT_PROFILES.md` "Profile council".
 - fix(omega): an open the terminal filled is recorded done even when its result line never reaches the Worker. Seen 2026-11-18 07:47 UTC: ticket 389746494 opened with intent `open:1794987900000:S`, its result never arrived, the intent expired at the TTL and no "Order Executed" line went to Telegram. `reconcileFilledOpens` (`src/omega-broker.mjs`) now records such an intent as done from the open position that carries its intent id (ticket, fill, `reconciled: true`), once, with an `intent_reconciled` event and the executed line ("Recorded from the open position"). A later result does not change a done intent.
 - fix(nexus): the Omega page goes back to the MT5-terminal layout (owner 2026-11-18 on #444: "saya lebih suka tampilan sebelumnya dengan market watch di sebelah kiri chart. yang saya minta hanya risk profile yang jangan ditempatkan di bawah market watch"; then "header lama, spec tetap di bawah market watch"). Restored: the old header, the MT5 title bar, the toolbar, Market Watch with the symbol spec and the Navigator in a left column beside the chart, the toolbox below. Kept: the risk profile in Setup → Risk profile (not under Market Watch), Setup's sub-tabs, the dynamic broker label and DEMO/LIVE, the settings-save fix. Literal duplicates removed: "Algo Trading" shows once (the toolbar toggle), the server name no longer repeats in the header and the title bar. Added (owner): the header's profile badge carries the applied risk ("Aggressive · 5%", the other limits in its tooltip), and each position shows its risk to the SL ("SL −15.00 USD · 1.5%"), or "locked +X" once the stop is at or beyond the entry. On a phone the Market Watch column folds above the chart (toggle), no horizontal scroll.
 - fix(omega): broker labels follow the connected broker (owner 2026-11-18, relayed: "label notif alert juga cek ulang harus dinamis sesuai dengan brokernya"). The Telegram line "Omega Order Executed (Monex)" was hard-coded while the account was FxPro. Every Omega line (executed, closed or scaled out, TP extended, rejected) now ends with `brokerLabel` (`src/account-spec.mjs`), e.g. "FxPro (DEMO) · GOLD": the first word of the server the terminal reports, the account mode and the broker's symbol; "broker unknown" while the spec is not validated. The Omega page preselects no broker (it follows the connected server) and its placeholders name none. Guard test `test/broker-labels.test.mjs`: no broker name in the server's code or the Omega page outside comments and the setup presets.

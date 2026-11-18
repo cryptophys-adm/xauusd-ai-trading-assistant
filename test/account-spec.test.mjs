@@ -165,6 +165,8 @@ test("AS8 planIntents: spec_unvalidated and ea_outdated stop new entries only; m
     const p = planIntents({ ...base, executor: executor(), account: { spec_status: status } });
     assert.deepEqual([kinds(p), p.notes.at(-1).code], [[], "spec_unvalidated"], status);
   }
+  const review = planIntents({ ...base, executor: executor(), account: { spec_status: "validated", review_pending: true } });
+  assert.deepEqual([kinds(review), review.notes.at(-1).code], [[], "profile_review_pending"], "a downgrade waiting for the council opens nothing");
   const short = { ticket: 7, side: "SELL", volume: 0.1, open_price: 4110, sl: 4120, tp: 4090, magic: 920200, intent_id: "open:x:SELL", source: "omega" };
   const closing = planIntents({ ...base, executor: executor({ over: { positions: [short] } }), account: { spec_status: "pending" } });
   assert.deepEqual(kinds(closing), ["close"], "the opposite position is still closed");

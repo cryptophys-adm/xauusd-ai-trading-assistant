@@ -21,6 +21,7 @@ import { pendingPositionActions, markPositionActions } from "./position-actions.
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
 import { goldSymbolCheck, goldSymbolText } from "./gold-symbol.mjs";
 import { runProfileAgent, ownerSetProfile } from "./profile-agent.mjs";
+import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./profile-council.mjs";
 import { brokerLabelFor } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
@@ -588,9 +589,12 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       const killed = signal?.kill === true || control?.mode === "killed";
       // The daily loss is the profile's own limit (phase 2: the smaller of the profile's and the setting's).
       const dailyPct = effectiveLimits(account.row.profile, settings ?? {}).max_daily_loss_pct ?? settings?.max_daily_loss_pct;
-      const step = await runProfileAgent(db, account.row, { executor, killed, dailyLoss: dailyLossHit(executor, dailyPct), now,
+      // The profile council (src/profile-council.mjs) does not run here: an upgrade waits for the cron, and a soft
+      // downgrade under OMEGA_PROFILE_COUNCIL_DOWNGRADE "on" waits for its review with new entries held.
+      const step = await runProfileAgent(db, account.row, { executor, killed, dailyLoss: dailyLossHit(executor, dailyPct), now, downgradeCouncil: downgradeCouncilOn(env),
         log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
       if (step.status === "changed") account = { ...account, profile: step.change.to };
+      if (step.review_pending === true) account = { ...account, review_pending: true };
     }
   }
   const eaGate = eaVersionGateOn(env);
@@ -693,7 +697,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
  * the last bridge state of the connected account. Nothing runs on a stale terminal (no state in 2 minutes): an
  * upgrade needs a live view of the open positions and orders.
  */
-export async function profileAgentTick(env, { now = Date.now() } = {}) {
+export async function profileAgentTick(env, { now = Date.now(), call = undefined } = {}) {
   await ensureSchema(env.DB);
   const db = env.DB;
   const b = await db.prepare("SELECT state FROM omega_bridge WHERE id = 1").first();
@@ -708,6 +712,7 @@ export async function profileAgentTick(env, { now = Date.now() } = {}) {
   const killed = control?.mode === "killed" || String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
   const dailyPct = effectiveLimits(row?.profile, settings ?? {}).max_daily_loss_pct ?? settings?.max_daily_loss_pct;
   return runProfileAgent(db, row, { executor, killed, dailyLoss: dailyLossHit(executor, dailyPct), withEvidence: true, now,
+    downgradeCouncil: downgradeCouncilOn(env), review: (r, change, { deals }) => reviewProfileChange(env, r, change, { executor, deals, now, call }),
     log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
 }
 
@@ -750,6 +755,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
   // Account Profiles phase 1: the accounts seen, their broker spec status and profile (never a login).
   let accounts = [];
   try { accounts = await readAccounts(db); } catch { accounts = []; }
+  const councilReviews = {};
+  for (const a of accounts.slice(0, 5)) councilReviews[a.account_ref] = await lastCouncilReviews(db, a.account_ref);
 
   // TCA: Transaction Cost Analysis aggregation over completed intents
   let tcaLatencySum = 0, tcaLatencyCount = 0;
@@ -888,7 +895,9 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       profile: a.profile, profile_label: PROFILES[a.profile]?.label ?? a.profile, ceiling: a.ceiling, agent_mode: a.agent_mode, custom: a.custom,
       profile_by: a.profile_by, profile_ms: a.profile_ms,
       // The profile agent (phase 3): its proposal in approval mode, the block after a kill or the daily loss, the last upgrade.
-      pending_upgrade: a.pending_upgrade, upgrade_block_until_ms: a.upgrade_block_until_ms, last_upgrade_ms: a.last_upgrade_ms
+      pending_upgrade: a.pending_upgrade, upgrade_block_until_ms: a.upgrade_block_until_ms, last_upgrade_ms: a.last_upgrade_ms,
+      // The profile council: a soft downgrade waiting for review, a veto in force, the last reviews.
+      pending_downgrade: a.pending_downgrade ?? null, council_veto: a.council_veto ?? null, council_reviews: councilReviews[a.account_ref] ?? []
     })),
     autonomous_watchdog: {
       active: true,

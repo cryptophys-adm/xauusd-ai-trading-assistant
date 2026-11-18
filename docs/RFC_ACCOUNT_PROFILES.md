@@ -194,6 +194,47 @@ owner clicks only; downgrades may run. The gates, for phase 3:
 - **Limitation.** `ea_deals` carries no account reference, so the streak and the evidence read the deals closed since
   the switch. That is correct for the one account Omega runs today.
 
+## Profile council (2026-11-18)
+
+Owner 2026-11-18, relayed: "libatkan council untuk naik profil". Confirmed in the session: upgrades need the
+council's approval; for downgrades, "Council boleh menolak".
+
+- **Module.** `src/profile-council.mjs`.
+- **Seats.** Three seats review one change: risk, strategy and trade management.
+  - Each seat answers approve or reject with one reason.
+  - The evidence pack holds measured facts only, never a price:
+    - equity, balance and its peak, and the drawdown;
+    - the record since the last switch and per profile (90 days);
+    - the volatility regime;
+    - the last 20 position-management intents;
+    - the strategy council's verdicts.
+- **Moderator.** A fixed rule, not a model.
+  - Upgrade: applies only when the risk seat approves and at least two of three approve. A seat that fails counts as
+    reject.
+  - Downgrade: vetoed only when all three seats answered, the risk seat rejects and at least two reject.
+- **Upgrades (live).** An autonomous upgrade that passed every measured gate (§6, §10) is reviewed in the 5-minute
+  ledger cron. It applies only on approve.
+  - No pack, the daily cap, a failed council or a second review the same UTC day all mean no upgrade.
+  - The bridge sync never raises a profile.
+  - Approval mode is unchanged: the owner's Accept is the decision.
+- **Downgrades (off).** `OMEGA_PROFILE_COUNCIL_DOWNGRADE` is `"off"`. Platform ADR-0020 Amendment 3 says a downgrade is
+  never blocked, so the switch stays off until a platform amendment allows a veto. With `"on"`:
+  - A soft trigger (drawdown, loss streak, extreme volatility) writes `pending_downgrade`. New entries wait
+    (`profile_review_pending`), and the cron's council reviews it.
+  - A veto keeps the profile for up to 24 h (`council_veto`). It lapses sooner if the drawdown reaches 25%, the run
+    reaches 6 losses in a row, or a different trigger fires.
+  - A failed council, three reviews in a day, or a review not done within 10 minutes applies the downgrade.
+  - The kill switch and the daily loss limit never reach the council. They clear any pending downgrade or veto.
+- **Record.**
+  - One row per review in D1 `omega_profile_councils`; its `id` is the council session id.
+  - The council's id, verdict and seats go in `omega_profile_changes.evidence`.
+  - The `risk_profile.v1` items carry `council: { id, verdict }`.
+  - A veto is an audit row with reason `council_veto` at severity warning.
+  - One Telegram line names the verdict and each seat.
+  - Omega → Setup → Risk profile shows the last three reviews.
+- **Budget.** Metered as `profile_council` with its own daily cap (`PROFILE_COUNCIL_DAILY_USD`, default 0.25). Agent
+  inventory entry `profile_council`.
+
 ## Phases
 
 | Phase | What | Gate to go live |

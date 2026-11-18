@@ -16,7 +16,15 @@ type Account = {
   agent_mode: string;
   pending_upgrade?: { to?: string } | null;
   upgrade_block_until_ms?: number | null;
+  pending_downgrade?: { to?: string; reason?: string; at_ms?: number } | null;
+  council_veto?: { reason?: string; until_ms?: number } | null;
+  council_reviews?: CouncilReview[];
 };
+type Seat = { verdict?: string; reason?: string } | null;
+type CouncilReview = { id: string; kind: string; from: string; to: string; trigger: string; verdict: string; reason?: string; seats?: Record<string, Seat> | null; at_ms: number };
+const SEAT_LABEL: Record<string, string> = { risk: "Risk", strategy: "Strategy", trade_management: "Trade mgmt" };
+const VERDICT_TONE: Record<string, string> = { approve: "text-emerald-300", reject: "text-rose-300", failed: "text-amber-200", skipped: "text-slate-500" };
+const hhmm = (ms: number) => new Date(ms).toISOString().slice(5, 16).replace("T", " ");
 type Draft = { profile: string; ceiling: string; agent_mode: string };
 
 async function post(body: Record<string, unknown>) {
@@ -136,6 +144,27 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
           <span>Agent proposes {LABEL[account.profile] ?? account.profile} → {LABEL[pending.to ?? ""] ?? pending.to}</span>
           <button className="btn border-emerald-400/30 text-emerald-300" disabled={busy} onClick={() => proposal("accept")}>Accept</button>
           <button className="btn" disabled={busy} onClick={() => proposal("decline")}>Decline</button>
+        </div>
+      ) : null}
+      {account.pending_downgrade?.to ? (
+        <div className="rounded-sm border border-amber-400/30 bg-amber-400/5 px-2 py-1 text-amber-100">Council reviewing {LABEL[account.profile] ?? account.profile} → {LABEL[account.pending_downgrade.to] ?? account.pending_downgrade.to} ({account.pending_downgrade.reason}) · entries held</div>
+      ) : null}
+      {account.council_veto?.until_ms && account.council_veto.until_ms > Date.now() ? (
+        <div className="text-[11px] text-amber-200">Council veto ({account.council_veto.reason}) until {new Date(account.council_veto.until_ms).toISOString().slice(11, 16)} UTC</div>
+      ) : null}
+      {account.council_reviews?.length ? (
+        <div className="space-y-0.5" aria-label="Profile council reviews">
+          <div className="text-slate-500">Council</div>
+          {account.council_reviews.map((r) => (
+            <div key={r.id} className="flex flex-wrap items-center gap-x-2 text-[11.5px]" title={r.reason ?? ""}>
+              <span className="tabular-nums text-slate-500">{hhmm(r.at_ms)}</span>
+              <span className="text-slate-300">{LABEL[r.from] ?? r.from} → {LABEL[r.to] ?? r.to}</span>
+              <span className={VERDICT_TONE[r.verdict] ?? "text-slate-300"}>{r.kind === "downgrade" && r.verdict === "reject" ? "veto" : r.verdict}</span>
+              {Object.entries(r.seats ?? {}).map(([k, v]) => (
+                <span key={k} className={v?.verdict === "approve" ? "text-emerald-300/80" : v?.verdict === "reject" ? "text-rose-300/80" : "text-slate-500"} title={v?.reason ?? "no answer"}>{SEAT_LABEL[k] ?? k} {v?.verdict === "approve" ? "✓" : v?.verdict === "reject" ? "✗" : "–"}</span>
+              ))}
+            </div>
+          ))}
         </div>
       ) : null}
       {msg ? <p className={`text-[11.5px] ${msg.tone}`}>{msg.text}</p> : null}

@@ -523,6 +523,9 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     // nothing until it validates (src/account-spec.mjs); with OMEGA_EA_VERSION_GATE "on", an EA older than 1.15 (no
     // margin, stops or freeze check of its own) opens nothing either. Open positions keep their management above.
     [accountSpec != null && accountSpec.spec_status !== "validated", "spec_unvalidated"],
+    // The profile council (src/profile-council.mjs, OMEGA_PROFILE_COUNCIL_DOWNGRADE "on"): a soft downgrade waiting
+    // for its review opens nothing until the council decides (at most PENDING_DOWNGRADE_MAX_MS).
+    [accountSpec?.review_pending === true, "profile_review_pending"],
     [eaGate === true && !versionAtLeast(executor.executor?.version ?? null, EXECUTOR_ENTRY_MIN_VERSION), "ea_outdated"],
     [!finite(issued) || !finite(signal.expires_ms), "bad_signal"],
     [now >= signal.expires_ms, "expired"],
