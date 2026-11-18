@@ -5,6 +5,10 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- fix(omega): size on the real dollar risk on cent accounts (incident 2026-11-18 13:21 UTC).
+  - **What happened.** On the FxPro GoldOne account (currency "USX", 5450 = $54.50) Omega opened SELL 3 lots (1 oz each) at 3771.45, stop 3786.42: about $44.9 at the stop, ~82% of the account, while the engine counted ~0.8%. "USX" was not known as cents, and the broker reported the tick value in USD while balance and profit were in cents.
+  - **USX** is US cents, like USC.
+  - **Tick value.** For a USD-profit symbol on a USD or cent account, Omega now sizes on contract size × tick size dollars and keeps the broker's figure as `tick_value_reported`. When the broker's figure is neither that nor 100 times it, nothing opens (`tick_value_mismatch`).
 - feat(omega): cent accounts and the owner's gold symbol (owner 2026-11-18, confirmed: "Setuju"). OmegaExecutor 1.17, omega-bridge 1.4.0.
   - **Why.** A cent account's gold is "GoldOne", on no list: the bridge opened a GOLD chart the account lacks, the EA failed to start ("symbol synchronization timeout") and the balance read 0.
   - **Owner symbol.** Setup → Connection & EA's "Symbol" selector is now sent with the connection (`trade_symbol`; "Other" for a typed name). The server, the bridge and the EA accept that one exact name under the same contract checks; the bridge opens its chart first and writes `omega/trade_symbol.txt` for the EA.

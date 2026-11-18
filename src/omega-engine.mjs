@@ -730,6 +730,9 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     // An owner-set gold symbol off the list (cent accounts, e.g. "GoldOne") must price as gold: its bid within 2% of
     // the signal's reference entry, else nothing opens.
     [mappedPriceProblem(sym, signal.entry) !== null, "symbol_price_mismatch"],
+    // The broker's tick value disagrees with the contract (neither contract × tick size dollars nor that in cents):
+    // the loss at the stop cannot be trusted, so nothing opens (src/omega-broker.mjs usdTickValue, 2026-11-18).
+    [typeof sym.tick_value_problem === "string" && sym.tick_value_problem !== "", "tick_value_mismatch"],
     // Account Profiles phase 1 (docs/RFC_ACCOUNT_PROFILES.md §1-2, owner 2026-11-18): a new or changed broker spec opens
     // nothing until it validates (src/account-spec.mjs); with OMEGA_EA_VERSION_GATE "on", an EA older than 1.15 (no
     // margin, stops or freeze check of its own) opens nothing either. Open positions keep their management above.

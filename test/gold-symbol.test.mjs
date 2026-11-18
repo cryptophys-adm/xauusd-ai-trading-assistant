@@ -158,8 +158,8 @@ test("G8. a USC account's amounts become USD once, where the bridge state enters
   // The loss a stop risks, as a share of equity, is the same before and after.
   const pct = (eq, tv) => ((10 / 0.01) * tv * 0.01) / eq;
   assert.equal(Math.round(pct(5300, 100) * 1e9), Math.round(pct(ex.account.equity, ex.symbol.tick_value) * 1e9));
-  const usd = executorFrom({ ...raw, account: { ...raw.account, currency: "USD" } });
-  assert.deepEqual([usd.account.cent, usd.account.balance, usd.symbol.tick_value], [false, 5450, 100], "a USD account is untouched");
+  const usd = executorFrom({ ...raw, account: { ...raw.account, currency: "USD" }, symbol: { ...raw.symbol, tick_value: 1 } });
+  assert.deepEqual([usd.account.cent, usd.account.balance, usd.symbol.tick_value, usd.symbol.tick_value_problem], [false, 5450, 1, null], "a USD account keeps its amounts");
   assert.equal(centToUsd(null), null);
 });
 
@@ -181,4 +181,37 @@ test("G10. the engine opens on the owner's GoldOne only when it prices as gold; 
   assert.ok(off.notes.some((n) => n.code === "symbol_price_mismatch"), JSON.stringify(off.notes));
   const noOwner = plan({ ...cent(goldOne), owner_symbol: null });
   assert.ok(noOwner.notes.some((n) => n.code === "symbol_unverified"));
+});
+
+test("G11. incident 2026-11-18: FxPro GoldOne on a USX (cent) account is sized on the real dollar risk", () => {
+  // The account as the bridge reported it at 13:21 UTC: 5450 USX ($54.50), GoldOne 1 oz a lot, min lot 1, tick 0.01
+  // worth 0.01 (in USD, while balance and profit are in cents). Omega opened SELL 3 at 3771.45, stop 3786.42.
+  const raw = { connected: true, server: "FxPro-MT5", executor: { version: "1.17" },
+    account: { trade_mode: "real", currency: "USX", balance: 5450, equity: 5450, day_start_balance: 5450, margin_free: 5450, leverage: 10000 },
+    symbol: { name: "GoldOne", currency_profit: "USD", currency_base: "USD", contract_size: 1, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 0.01,
+      volume_min: 1, volume_max: 1000, volume_step: 1, stops_level_points: 0, bid: 3771.45, ask: 3771.48, spread_points: 3, margin_per_lot: 37.74 },
+    positions: [{ ticket: 361755789, side: "SELL", volume: 3, open_price: 3771.45, sl: 3786.42, profit: -840 }], deals: [] };
+  const ex = executorFrom(raw);
+  assert.equal(ex.account.cent, true, "USX is US cents");
+  assert.deepEqual([ex.account.balance, ex.positions[0].profit, ex.symbol.margin_per_lot], [54.5, -8.4, 0.3774]);
+  assert.deepEqual([ex.symbol.tick_value, ex.symbol.tick_value_reported, ex.symbol.tick_value_problem], [0.01, 0.01, null], "1 oz x 0.01 = $0.01 a tick");
+  // The loss at the stop of the 3 lots, in USD: 1497 ticks x $0.01 x 3 = $44.91 (82% of $54.50), not 0.8%.
+  const loss = ((3786.42 - 3771.45) / ex.symbol.tick_size) * ex.symbol.tick_value * 3;
+  assert.equal(Math.round(loss * 100) / 100, 44.91);
+  // The engine on that state: the minimum lot (1 oz) risks $14.97 of $54.50 at that stop, far over any cap: no open.
+  const sig = { side: "SELL", action: "ENTER", entry: 3771.48, stop: 3786.42, tp1: 3762.83, issued_ms: NOW - 5_000, decided_ms: NOW - 5_000, expires_ms: NOW + 600_000 };
+  const p = planIntents({ signal: sig, settings: { ...OMEGA_DEFAULTS, enabled: true, live_armed: true }, executor: { ...ex, positions: [], received_ms: NOW - 1000, owner_symbol: "GoldOne" }, now: NOW, engineEnabled: true });
+  assert.ok(!p.intents.some((it) => it.kind === "open"), `no open: ${JSON.stringify(p.notes)}`);
+  assert.ok(p.notes.some((n) => n.code === "volume_below_min"), JSON.stringify(p.notes));
+});
+
+test("G12. a tick value that is neither contract x tick size nor that in cents opens nothing", () => {
+  const sym = { ...SYM, tick_value: 7 };
+  const ex = executorFrom({ connected: true, account: { currency: "USD", balance: 10_000, equity: 10_000, day_start_balance: 10_000 }, symbol: sym });
+  assert.equal(ex.symbol.tick_value_problem, "tick_value_mismatch");
+  const p = plan({ ...ex, received_ms: NOW - 1000, account: { ...ex.account, trade_mode: "demo" } });
+  assert.ok(!p.intents.some((it) => it.kind === "open"));
+  assert.ok(p.notes.some((n) => n.code === "tick_value_mismatch"), JSON.stringify(p.notes));
+  // A EUR account keeps the broker's figure (its own currency).
+  assert.equal(executorFrom({ account: { currency: "EUR" }, symbol: sym }).symbol.tick_value, 7);
 });

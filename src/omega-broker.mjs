@@ -520,20 +520,48 @@ export function executorFrom(state) {
  * ("USC") and carries cent: true, so the pages label it CENT. Ratios (risk %, daily loss %) are unchanged by this.
  */
 export const CENT_SCALE = 0.01;
+const near = (a, b) => Math.abs(a - b) <= Math.max(1e-12, Math.abs(b) * 0.01);
 export function centToUsd(ex) {
-  if (!ex || !isCentCurrency(ex.account?.currency)) {
-    if (ex?.account) ex.account.cent = false;
-    return ex;
-  }
+  if (!ex) return ex;
+  const cent = isCentCurrency(ex.account?.currency);
+  if (ex.account) ex.account.cent = cent;
   const c = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v * CENT_SCALE * 1e6) / 1e6 : v);
-  const a = ex.account;
-  for (const k of ["balance", "equity", "day_start_balance", "day_realized_pl", "margin_free"]) a[k] = c(a[k]);
-  a.cent = true;
-  ex.symbol.tick_value = c(ex.symbol.tick_value);
-  ex.symbol.margin_per_lot = c(ex.symbol.margin_per_lot);
-  for (const p of ex.positions) p.profit = c(p.profit);
-  for (const d of ex.deals) { d.profit = c(d.profit); d.commission = c(d.commission); d.swap = c(d.swap); }
+  if (cent) {
+    const a = ex.account;
+    for (const k of ["balance", "equity", "day_start_balance", "day_realized_pl", "margin_free"]) a[k] = c(a[k]);
+    ex.symbol.margin_per_lot = c(ex.symbol.margin_per_lot);
+    for (const p of ex.positions) p.profit = c(p.profit);
+    for (const d of ex.deals) { d.profit = c(d.profit); d.commission = c(d.commission); d.swap = c(d.swap); }
+  }
+  usdTickValue(ex, cent, c);
   return ex;
+}
+
+/**
+ * The tick value Omega sizes on (incident 2026-11-18: a 3-lot GoldOne SELL on a $54.50 cent account risked about 82%
+ * of it at the stop). The broker reported 0.01 a tick for a 1 oz contract, which is the value in USD, while the
+ * balance and profit were in cents: divided by 100 like the other amounts, or taken as cents, the loss at the stop
+ * was understated 100 times. For a symbol whose profit currency is USD on a USD or cent account, one tick of one lot
+ * is worth exactly contract_size × tick_size dollars, so Omega uses that. The broker's figure is kept as
+ * `tick_value_reported`; when it is neither that value nor 100 times it (cents), `tick_value_problem` is set and the
+ * engine opens nothing (gate `tick_value_mismatch`). Other accounts keep the broker's figure (in their own currency).
+ */
+function usdTickValue(ex, cent, c) {
+  const s = ex.symbol, raw = s.tick_value;
+  const usdAccount = cent || String(ex.account?.currency ?? "").trim().toUpperCase() === "USD";
+  const fin = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
+  s.tick_value_problem = null;
+  if (usdAccount && s.currency_profit === "USD" && fin(s.contract_size) && fin(s.tick_size)) {
+    const expected = Math.round(s.contract_size * s.tick_size * 1e9) / 1e9;
+    if (fin(raw)) {
+      s.tick_value_reported = raw;
+      const ok = near(raw, expected) || (cent && near(raw, expected / CENT_SCALE));
+      if (!ok) s.tick_value_problem = "tick_value_mismatch";
+    }
+    s.tick_value = expected;
+    return;
+  }
+  if (cent) s.tick_value = c(raw);
 }
 
 export const CLOSE_MAX_ATTEMPTS = 10;

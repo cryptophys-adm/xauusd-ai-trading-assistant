@@ -198,7 +198,7 @@ test("AS10 bridgeSync: the live account is stored, a spec change holds the next 
   const sync = (st, now) => bridgeSync(env, { state: { ...st, received_ms: now - 1000 }, results: [], publicKey: "QUJD", kid: "0123456789abcdef", bridgeVersion: "1.3.0" }, { now, signal: { ...signal, issued_ms: now - 60_000 } });
   const first = await sync(state(), NOW);
   assert.equal(first.intents.filter((i) => i.kind === "open").length, 1, "a first usable spec trades as today");
-  const held = await sync(state({ contract_size: 10 }), NOW + 120_000);
+  const held = await sync(state({ contract_size: 10, tick_value: 0.1 }), NOW + 120_000);
   assert.equal(held.intents.filter((i) => i.kind === "open").length, 1, "only the first open is outstanding: the changed spec opened nothing new");
   const stored = env.DB.raw.prepare("SELECT state FROM omega_bridge WHERE id = 1").get().state;
   assert.ok(!stored.includes("login_hash") && !stored.includes(LOGIN_HASH) && !stored.includes("5550123"), "neither the login nor its hash is stored with the state");

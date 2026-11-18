@@ -34,8 +34,12 @@ export const TRADE_SYMBOL_RE = /^[A-Za-z0-9._#+-]{1,32}$/;
 
 const ALLOWED = new Set(GOLD_USD_SYMBOLS);
 
-/** Pure: whether an account currency is US cents (USC; some servers report "USc"). */
-export const isCentCurrency = (c) => typeof c === "string" && c.trim().toUpperCase() === "USC";
+/**
+ * Pure: whether an account currency is US cents: "USC" (some servers write "USc") or "USX" (FxPro's GoldOne cent
+ * account, 2026-11-18: a balance of 5450 USX was $54.50).
+ */
+export const CENT_CURRENCIES = Object.freeze(["USC", "USX"]);
+export const isCentCurrency = (c) => typeof c === "string" && CENT_CURRENCIES.includes(c.trim().toUpperCase());
 
 /** Pure: the owner-set trade symbol, or null when none or malformed. */
 export function ownerTradeSymbol(v) {
