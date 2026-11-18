@@ -53,7 +53,7 @@ test("P4. a reversed power closes a winner; a stale power never does", () => {
 });
 
 test("P5. manageIntents: key-level intents replace the 5m trail and the extended target; without key levels they remain", () => {
-  const settings = { ...OMEGA_DEFAULTS, enabled: true };
+  const settings = { ...OMEGA_DEFAULTS, enabled: true, tp_ladder: false };
   const withLevels = manageIntents({ positions: [LONG], sym: SYM, settings, signal: { ...SIGNAL, tp2: 3990 }, side: "BUY", now: NOW });
   assert.deepEqual(withLevels.map((i) => [i.id, i.kind, i.sl ?? i.tp ?? null, i.reason]), [["ms:7:k:391460", "modify_sl", 3914.6, "sl_key_level_normal"], ["ps:7:2", "partial_close", null, "tp1_scale_out"]], "no trail_5m, no extended_tp; the 2R scale-out as before");
   const reversed = manageIntents({ positions: [LONG], sym: SYM, settings, signal: { ...SIGNAL, power: -0.7 }, now: NOW });

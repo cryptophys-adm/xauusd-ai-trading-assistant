@@ -11,7 +11,8 @@ const EXECUTOR = {
   symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 },
   positions: []
 };
-const ON = { ...OMEGA_DEFAULTS, enabled: true };
+// The legacy management (one scale-out, no TP ladder); the ladder has its own tests (test/omega-tp-ladder.test.mjs).
+const ON = { ...OMEGA_DEFAULTS, enabled: true, tp_ladder: false };
 const plan = (over = {}) => planIntents({ signal: SIGNAL, control: { mode: "active" }, settings: ON, executor: EXECUTOR, now: NOW, engineEnabled: true, ...over });
 const codes = (r) => r.notes.map((n) => n.code);
 const ex = (over) => ({ ...EXECUTOR, ...over });
@@ -211,7 +212,7 @@ test("rollover quarantine gate blocks open intents between 21:55 and 22:15 UTC",
   assert.ok(notes.some((n) => n.code === "rollover_quarantine"));
 });
 
-test("partial scale out closes 50% volume at TP1 when volume >= 0.02", () => {
+test("partial scale out (TP ladder off) closes 50% volume at TP1 when volume >= 0.02", () => {
   const signal = {
     side: "BUY",
     action: "ENTER_BUY",
@@ -226,7 +227,7 @@ test("partial scale out closes 50% volume at TP1 when volume >= 0.02", () => {
   };
   const { intents } = planIntents({
     signal,
-    settings: { enabled: true, live_armed: true, max_positions: 2 },
+    settings: { enabled: true, live_armed: true, max_positions: 2, tp_ladder: false },
     executor,
     now: NOW,
     engineEnabled: true

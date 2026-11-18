@@ -36,7 +36,13 @@ export const OMEGA_DEFAULTS = Object.freeze({
   // structure may raise the lot at most to this many times the lot at the plan's stop.
   tight_stop_max_lot_factor: 1.5,
   adaptive_volatility: true,
-  sor_mode: "auto_failover"
+  sor_mode: "auto_failover",
+  // The TP ladder (owner 2026-11-18, relayed and confirmed: "a, langsung live", every mode): see ladderPlan.
+  tp_ladder: true,
+  partial_min_pct: 25,
+  partial_max_pct: 50,
+  ladder_lock_pips: 30,
+  ladder_max_partials: 3
 });
 // 10 since 2026-11-18 (owner: "Naikkan ke 10%, dikunci profil", docs/RFC_ACCOUNT_PROFILES.md §4): the setting may go
 // to the RFC's 10% maximum; what an entry risks is the smaller of the setting and the account profile's target (Safe 1%,
@@ -91,8 +97,17 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS) {
     ?? num("max_spread_points", 1, 1000)
     ?? num("max_signal_age_ms", 60_000, 60 * 60_000, { integer: true })
     ?? num("trailing_stop_r", 0, 5)
-    ?? num("tight_stop_max_lot_factor", 1, 2);
+    ?? num("tight_stop_max_lot_factor", 1, 2)
+    ?? num("partial_min_pct", 10, 50)
+    ?? num("partial_max_pct", 25, 75)
+    ?? num("ladder_lock_pips", 5, 100)
+    ?? num("ladder_max_partials", 0, 5, { integer: true });
   if (err) return { error: err };
+  if (out.partial_min_pct > out.partial_max_pct) return { error: "partial_min_pct must not be above partial_max_pct" };
+  if (body.tp_ladder !== undefined) {
+    if (typeof body.tp_ladder !== "boolean") return { error: "tp_ladder must be true or false" };
+    out.tp_ladder = body.tp_ladder;
+  }
   if (body.max_signal_age_min !== undefined) {
     const m = body.max_signal_age_min;
     if (!finite(m) || m < 1 || m > 60) return { error: "max_signal_age_min must be a number from 1 to 60" };
@@ -248,6 +263,83 @@ export function keyLevelPlan({ position: p, sym, signal, levels, now = Date.now(
   return { sl, tp, band };
 }
 
+// The TP ladder (owner 2026-11-18, relayed by the orchestrator and confirmed in the session: "a, langsung live,
+// termasuk agent juga bisa dinamis mengatur TP sebagian secara progresive"; every mode, Scalp included).
+export const GOLD_PIP = 0.1;
+
+/**
+ * Pure: a position's ladder TP1..TPn in its profit direction, nearest first. The rungs are the key levels wholly
+ * between the entry and the take-profit (their near edge), then the take-profit itself; without such a level, a third
+ * and two thirds of the way to the take-profit, then the take-profit. [] without a take-profit beyond the entry.
+ */
+export function ladderRungs({ position: p, levels = null, buffer = 0 }) {
+  const buy = p.side === "BUY", dir = buy ? 1 : -1;
+  const open = Number(p.open_price ?? p.entry), tp = Number(p.tp);
+  if (!finite(open) || !positive(tp) || dir * (tp - open) <= buffer) return [];
+  const inside = (levels ?? [])
+    .map((z) => (buy ? z.low : z.high))
+    .filter((x) => dir * (x - open) > buffer && dir * (tp - x) > buffer)
+    .sort((a, b) => dir * (a - b));
+  const rungs = inside.length ? inside : [open + (tp - open) / 3, open + (2 * (tp - open)) / 3];
+  return [...rungs, tp];
+}
+
+/** Pure: the share of the volume a partial takes, by the power behind the position, within the owner's bounds. */
+export function partialShare(band, S) {
+  const lo = Math.max(0, Math.min(S.partial_min_pct, S.partial_max_pct)) / 100, hi = Math.max(S.partial_min_pct, S.partial_max_pct) / 100;
+  if (band === "strong") return lo;          // room to run: bank the least
+  if (band === "weak" || band === "reversed") return hi; // fading: bank the most
+  return (lo + hi) / 2;
+}
+
+/**
+ * Pure: one position's ladder step: { sl, sl_rung, partial: { volume, rung, share } | null }.
+ *   SL lock   once price is `ladder_lock_pips` past TPx, the stop locks at TPx-1 (TP0 = the entry plus the lock
+ *             buffer): only ever tighter than the current stop, with the broker's stop distance from price.
+ *   partial   at each rung reached, one partial close of the current volume (partialShare: the power band picks
+ *             25% to 50%, the owner's bounds), at most `ladder_max_partials` a position, one per sync. The volume
+ *             keeps the broker's step and minimum and leaves at least the minimum open; otherwise no partial.
+ * Exposure only goes down: no add, no wider stop, no take-profit moved outward.
+ */
+export function ladderPlan({ position: p, sym, signal = null, levels = null, settings = OMEGA_DEFAULTS, partialsDone = 0, now = Date.now() }) {
+  const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
+  const buy = p.side === "BUY", dir = buy ? 1 : -1;
+  const open = Number(p.open_price ?? p.entry), curSl = Number(p.sl), vol = Number(p.volume);
+  const digits = Number.isInteger(sym.digits) ? sym.digits : 2;
+  const point = positive(sym.point) ? sym.point : Math.pow(10, -digits);
+  const spreadPx = (finite(sym.spread_points) ? sym.spread_points : 0) * point;
+  const buffer = Math.max(2 * spreadPx, positive(signal?.m5_atr) ? 0.1 * signal.m5_atr : 0, point);
+  const floorPx = (finite(sym.stops_level_points) ? sym.stops_level_points : 0) * point + spreadPx;
+  const price = buy ? sym.bid : sym.ask;
+  const none = { sl: null, sl_rung: null, partial: null };
+  if (!finite(price) || !finite(open)) return none;
+  const rungs = ladderRungs({ position: p, levels, buffer });
+  if (!rungs.length) return none;
+  const reached = rungs.filter((x) => dir * (price - x) >= 0).length;
+  // SL lock: the highest rung price is lock_pips past.
+  const lockPx = S.ladder_lock_pips * GOLD_PIP;
+  const past = rungs.filter((x) => dir * (price - x) >= lockPx).length;
+  let sl = null, slRung = null;
+  if (past >= 1) {
+    const target = roundTo(past === 1 ? open + dir * buffer : rungs[past - 2], digits);
+    const better = !finite(curSl) || curSl <= 0 ? true : buy ? target > curSl + point : target < curSl - point;
+    const room = buy ? target < sym.bid - floorPx : target > sym.ask + floorPx;
+    if (target > 0 && better && room) { sl = target; slRung = past - 1; }
+  }
+  // Partial: one per rung reached, at most ladder_max_partials.
+  let partial = null;
+  if (reached > partialsDone && partialsDone < S.ladder_max_partials && finite(vol) && vol > 0) {
+    const fresh = finite(signal?.power_ms) && signal.power_ms > 0 && now - signal.power_ms <= POWER_FRESH_MS;
+    const band = fresh ? powerBand(dir * signal.power) : "normal";
+    const share = partialShare(band, S);
+    const step = positive(sym.volume_step) ? sym.volume_step : 0.01;
+    const min = positive(sym.volume_min) ? sym.volume_min : 0.01;
+    const volume = floorToStep(vol * share, step);
+    if (volume >= min && roundTo(vol - volume, 8) >= min) partial = { volume, rung: partialsDone + 1, share, band };
+  }
+  return { sl, sl_rung: slRung, partial };
+}
+
 /**
  * Pure: the management of the positions already open (audit 2026-11-11), on every sync whatever the
  * entry gates say. `skipTickets` are positions being closed in the same plan.
@@ -324,6 +416,22 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
       out.push({ id: `mt:${p.ticket}:${Math.round(targetExtTp * 100)}`, kind: "modify_tp", ticket: p.ticket, tp: roundTo(targetExtTp, digits), reason: "extended_tp" });
     }
 
+    // The TP ladder: the SL lock and the progressive partials (ladderPlan). It replaces the single scale-out below.
+    if (S.tp_ladder) {
+      const partialsDone = [...recent].filter((rid) => String(rid).startsWith(`pl:${p.ticket}:`)).length;
+      const lad = ladderPlan({ position: p, sym, signal, levels, settings: S, partialsDone, now });
+      if (lad.sl != null) {
+        // One stop per position per plan: the ladder's lock wins only when it is tighter than a stop already planned.
+        const i = out.findIndex((x) => x.kind === "modify_sl" && x.ticket === p.ticket);
+        const planned = i >= 0 ? out[i].sl : null;
+        if (planned == null || (buy ? lad.sl > planned : lad.sl < planned)) {
+          if (i >= 0) out.splice(i, 1);
+          out.push({ id: `ms:${p.ticket}:lad:${Math.round(lad.sl * 100)}`.slice(0, INTENT_ID_MAX), kind: "modify_sl", ticket: p.ticket, sl: lad.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `ladder_lock_tp${lad.sl_rung}` });
+        }
+      }
+      if (lad.partial) out.push({ id: `pl:${p.ticket}:${lad.partial.rung}`, kind: "partial_close", ticket: p.ticket, volume: lad.partial.volume, reason: `ladder_tp${lad.partial.rung}_${Math.round(lad.partial.share * 100)}pct` });
+      continue;
+    }
     const atTarget = Number.isFinite(curTp) && (buy ? sym.bid >= curTp : sym.ask <= curTp);
     if (Number.isFinite(vol) && vol >= 0.02 && move > 0 && !scaledBefore(p.ticket) && (r >= 1.5 || atTarget)) {
       const step = positive(sym.volume_step) ? sym.volume_step : 0.01;

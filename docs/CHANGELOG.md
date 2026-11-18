@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- feat(omega): the TP ladder (owner 2026-11-18, relayed and confirmed: "a, langsung live", every mode, Scalp included). Omega's own positions get TP1..TPn: the key levels between the entry and the take-profit, else thirds, then the take-profit. Once price is 30 pips past TPx, the stop locks at TPx-1 (TP0 = the entry). At each rung, a progressive partial close takes 25% to 50% of the volume: 25% with a strong power behind the position, 50% when it fades. Partials keep the broker's volume step and minimum, so a 0.01 position gets the lock only, and there are at most three. Exposure only goes down: the ladder never adds, never widens a stop and never moves the take-profit outward (Amendment 4). It replaces the single 50% scale-out (`tp_ladder` on by default; knobs `partial_min_pct`, `partial_max_pct`, `ladder_lock_pips`, `ladder_max_partials`). OmegaExecutor already runs `partial_close`, so no new EA is needed. The "Scaled Out" Telegram line now names the lot instead of "50%".
 - feat(omega): the profile council (owner 2026-11-18, relayed: "libatkan council untuk naik profil"; confirmed in the session).
   - **Upgrades (live).** An autonomous profile upgrade now needs the council's approval after the measured gates pass.
     - Three seats (risk, strategy, trade management) review an evidence pack with no price.

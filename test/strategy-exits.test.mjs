@@ -46,7 +46,7 @@ test("the target is extended only while the confidence is stable or rising; the 
   const run = (conf, prev) => {
     const signal = { ...SIGNAL, ...levels, power: 0.6, agent_conf: conf, agent_conf_prev: prev };
     const ex = strategyExits({ positions: [WIN_LONG], signal, sym, agents, now: NOW });
-    return manageIntents({ positions: [WIN_LONG], sym, settings: { ...OMEGA_DEFAULTS, enabled: true }, signal, side: "NONE", now: NOW, extendOf: ex.extendOf }).map((i) => i.reason);
+    return manageIntents({ positions: [WIN_LONG], sym, settings: { ...OMEGA_DEFAULTS, enabled: true, tp_ladder: false }, signal, side: "NONE", now: NOW, extendOf: ex.extendOf }).map((i) => i.reason);
   };
   assert.ok(run("sweep_reversal:0.7:0.3", "sweep_reversal:0.7:0.3").includes("trail_tp_key_level"), "stable: extended");
   assert.ok(run("sweep_reversal:0.8:0.3", "sweep_reversal:0.7:0.3").includes("trail_tp_key_level"), "rising: extended");
@@ -57,7 +57,7 @@ test("the target is extended only while the confidence is stable or rising; the 
   const ext = (prev) => {
     const signal = { ...SIGNAL, side: "BUY", tp2: 3990, agent_conf: "sweep_reversal:0.7:0.3", agent_conf_prev: prev };
     const ex = strategyExits({ positions: [WIN_LONG], signal, sym: SYM, agents, now: NOW });
-    return manageIntents({ positions: [WIN_LONG], sym: SYM, settings: { ...OMEGA_DEFAULTS, enabled: true }, signal, side: "BUY", now: NOW, extendOf: ex.extendOf }).map((i) => i.reason);
+    return manageIntents({ positions: [WIN_LONG], sym: SYM, settings: { ...OMEGA_DEFAULTS, enabled: true, tp_ladder: false }, signal, side: "BUY", now: NOW, extendOf: ex.extendOf }).map((i) => i.reason);
   };
   assert.ok(ext("sweep_reversal:0.7:0.3").includes("extended_tp"));
   assert.ok(!ext("sweep_reversal:0.9:0.3").includes("extended_tp"), "a drop: no extension");
