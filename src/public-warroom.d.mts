@@ -1,0 +1,8 @@
+export const PUBLIC_WARROOM_VERSION: string;
+export const WARROOM_SOURCES: Readonly<Record<string, { room: string | null; label: string }>>;
+export const SIGNAL_WORDING: RegExp;
+export function publicPhrase(s: unknown): boolean;
+export function readingSentences(text: unknown, options?: { max?: number; len?: number }): string[];
+export function publicRoomReading(row: Record<string, any> | null, source: string): Record<string, any> | null;
+export function publicNewsReading(daily: Record<string, any> | null): Record<string, any> | null;
+export function readPublicWarRoom(env: unknown, input?: { source?: string }, deps?: { readNewsDaily?: ((db: unknown) => Promise<any>) | null }): Promise<Record<string, any>>;

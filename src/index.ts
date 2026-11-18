@@ -230,6 +230,7 @@ import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
 import { scoreModelArena, pruneModelArena, readModelArena } from "./model-arena.mjs";
 import { readPublicProjection } from "./public-projection.mjs";
 import { publicAnalysis } from "./public-analysis.mjs";
+import { readPublicWarRoom } from "./public-warroom.mjs";
 import { readShadowMode, setShadowMode, shadowModeMessage, checkShadowBudget } from "./shadow-switch.mjs";
 import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
 import { reserveTvCalls, releaseTvCalls } from "./tv-budget.mjs";
@@ -1762,6 +1763,14 @@ export class PublicProjection extends WorkerEntrypoint<Env> {
   async analysis(): Promise<JsonObject> {
     const [strategy, latest] = await Promise.all([readStrategy(this.env).catch(() => null), readLatestDecision(this.env).catch(() => null)]);
     return publicAnalysis((strategy as any)?.key_levels ?? null, { structure: (latest as any)?.structure ?? null }) as unknown as JsonObject;
+  }
+  /**
+   * The latest War Room reading of one source (owner 2026-11-18, confirmed: "Real-time analysis"): "15m", "1h", "4h",
+   * "1d" (a room's bias, reasons and metrics) or "news" (the 24-hour digest). Never the decision, its confidence or a
+   * price (src/public-warroom.mjs).
+   */
+  async warroom(input?: { source?: string }): Promise<JsonObject> {
+    return readPublicWarRoom(this.env, { source: String(input?.source ?? "") }) as Promise<JsonObject>;
   }
 }
 
