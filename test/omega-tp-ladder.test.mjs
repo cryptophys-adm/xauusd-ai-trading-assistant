@@ -75,3 +75,17 @@ test("TL5 the owner's knobs: bounds, min not above max, the switch is a boolean"
   assert.equal(settingsFrom({ tp_ladder: false }).settings.tp_ladder, false);
   assert.deepEqual([OMEGA_DEFAULTS.tp_ladder, OMEGA_DEFAULTS.partial_min_pct, OMEGA_DEFAULTS.partial_max_pct, OMEGA_DEFAULTS.ladder_lock_pips, OMEGA_DEFAULTS.ladder_max_partials], [true, 25, 50, 30, 3]);
 });
+
+test("TL6 Amendment 4: the take-profit moves outward only while the stop locks a profit at or beyond TP1", async () => {
+  const { ladderTp1Locked } = await import("../src/omega-engine.mjs");
+  assert.equal(ladderTp1Locked({ position: LONG, sym: SYM }), false, "stop below the entry");
+  assert.equal(ladderTp1Locked({ position: { ...LONG, sl: 4010 }, sym: SYM }), true, "stop at TP1 (4010)");
+  assert.equal(ladderTp1Locked({ position: LONG, sym: SYM, plannedSl: 4010 }), true, "a lock planned in this sync counts");
+  assert.equal(ladderTp1Locked({ position: { ...SHORT, sl: 3990 }, sym: SYM }), true);
+  // An extended target on the signal: dropped before the lock, kept after it.
+  const signal = { tp2: 4060, side: "BUY" };
+  const early = manageIntents({ positions: [LONG], sym: at(4005), settings: S, signal, side: "BUY", now: NOW });
+  assert.ok(!early.some((i) => i.kind === "modify_tp"), "no outward move before TP1 is locked");
+  const late = manageIntents({ positions: [{ ...LONG, sl: 4010.5 }], sym: at(4025), settings: S, signal, side: "BUY", now: NOW });
+  assert.ok(late.some((i) => i.kind === "modify_tp" && i.tp === 4060), "outward once the stop locks TP1");
+});

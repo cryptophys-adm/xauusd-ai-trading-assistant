@@ -180,7 +180,7 @@ test("extended TP expands runner take profit on strong momentum", () => {
   };
   const { intents } = planIntents({
     signal,
-    settings: { enabled: true, live_armed: true, max_positions: 2 },
+    settings: { enabled: true, live_armed: true, max_positions: 2, tp_ladder: false },
     executor,
     now: NOW,
     engineEnabled: true

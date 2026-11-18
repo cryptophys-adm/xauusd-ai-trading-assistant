@@ -1892,6 +1892,12 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     const result = await bridgeSync(this.env, input ?? {}) as JsonObject;
     // The bridge gets its answer at once; the open Omega pages get the new state after it.
     if (result?.ok !== false) this.ctx.waitUntil(publishOmegaOverview(this.env, input?.state ?? null));
+    // A soft downgrade waiting for the profile council (ADR-0020 Amendment 5, about 2 minutes): convened now, after the
+    // answer. If it does not finish, the next syncs apply the downgrade once PENDING_DOWNGRADE_MAX_MS has passed.
+    if (result?.profile_review_started === true) {
+      delete (result as Record<string, unknown>).profile_review_started;
+      this.ctx.waitUntil(profileAgentTick(this.env).then(() => undefined, (e) => console.error("profile_review_failed", e instanceof Error ? e.message : String(e))));
+    }
     return result;
   }
   /** A person sets the trading mode (owner 2026-11-13); the owner hears of each change on Telegram. */
