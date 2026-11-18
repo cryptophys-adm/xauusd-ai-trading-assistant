@@ -798,6 +798,9 @@ export default function Omega() {
   // The connected account's row (the one on the bridge's server, else the newest seen); never a login, only its opaque reference.
   const accounts: any[] = Array.isArray(b?.accounts) ? b.accounts : [];
   const account = accounts.find((a) => a?.server && a.server === br.server) ?? accounts[0] ?? null;
+  // Phase 4: the trading mode for new orders, Auto (council) or pinned by the owner.
+  const tm = b?.trading_mode ?? null;
+  const tradingModeLabel = tm?.mode ? `${String(tm.mode).charAt(0).toUpperCase()}${String(tm.mode).slice(1)} (${tm.auto ? "auto" : "pinned"})` : "";
   // A proposal waiting for the owner, or a downgrade waiting for the council: a badge on Setup and on its Risk profile tab.
   const profileAttention = account?.pending_upgrade?.to && !(account.pending_upgrade.expires_ms && account.pending_upgrade.expires_ms <= Date.now())
     ? `The profile agent proposes ${account.pending_upgrade.to}` : account?.pending_downgrade?.to ? "A downgrade is waiting for the profile council" : "";
@@ -866,7 +869,7 @@ export default function Omega() {
             {account ? (
               <Badge tone="cyan">
                 <span title={`Applied now: risk ${appliedRisk ?? "—"}% per trade, ${appliedPositions ?? "—"} positions, daily loss ${appliedDaily ?? "—"}%${account.profile !== "custom" && PROFILE_CAPS[account.profile] ? `, total open risk ${PROFILE_TOTAL_OPEN[account.profile]}%` : ""}. Each is the smaller of the setting and the profile's cap.`}>
-                  {account.profile_label} · {appliedRisk ?? "—"}%
+                  {account.profile_label} · {appliedRisk ?? "—"}%{tradingModeLabel ? ` · ${tradingModeLabel}` : ""}
                 </span>
               </Badge>
             ) : null}

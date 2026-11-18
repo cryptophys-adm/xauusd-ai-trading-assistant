@@ -5,6 +5,12 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- feat(omega): phase 4, the trading-mode selector (owner 2026-11-18, confirmed: "Setuju"). See `docs/RFC_ACCOUNT_PROFILES.md` "Phase 4".
+  - **Daily run.** On Auto, once a UTC day: the replay evidence per mode and regime, feasibility at the minimum lot against the profile cap, and fail-safe moves without the council (revert on failed evidence, drop an infeasible mode, back to the baseline after the kill switch or the daily loss).
+  - **Council.** A better mode switches only after two passing runs and the mode council's approval: the risk seat and three of four.
+  - **Owner.** Owner-only pin, Auto and veto, from the Decision card.
+  - **Display.** The Omega header shows the mode.
+  - **Record.** `omega_mode_changes`, Telegram and `mode.v1`.
 - fix(omega): the Position Manager's outward TP2 now follows ADR-0020 Amendment 4 under the TP ladder too. It waits until the stop locks a profit at or beyond TP1. On 2026-11-18 at ~09:45 it moved ticket 389881390's target outward before that.
 - fix(omega): a stop or target change the terminal applied without its result line is recorded done from the position (`reconcileModifies`). Seen 2026-11-18: the TP of 389881390 moved while its intent expired.
 - feat(omega): the profile council's downgrade veto is on, and the TP ladder follows Amendment 4. Both follow platform ADR-0020 Amendments 4 and 5 (merged 2026-11-18 08:38 UTC).

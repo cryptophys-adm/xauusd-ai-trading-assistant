@@ -284,6 +284,46 @@ mendeteksi akun ini sebelumnya pernah login di omega atau tidak". Confirmed in t
   - Its Telegram line links to https://nexus.cryptophys.work/omega#setup/profile.
   - A badge on Setup and on its Risk profile tab shows a pending proposal or a downgrade waiting for the council.
 
+## Phase 4: the trading-mode selector (2026-11-18)
+
+Owner 2026-11-18, relayed and confirmed in the session ("Setuju"): "libatkan council untuk ganti mode, dan owner punya
+hak veto untuk mengubah mode kapan pun". Platform: no ADR-0020 amendment, since Amendment 3 lists the evidence-gated mode
+selector. That holds as long as:
+- a switch touches new orders only;
+- sizing stays SL-based within the profile cap;
+- the owner's actions are the owner's;
+- the kill switch and the daily loss limit keep their effect.
+
+- **Module.** `src/mode-selector.mjs`. It runs once a UTC day in the 5-minute ledger cron, with the mode on Auto
+  (the default; the owner's last mode is the baseline). It writes the trading mode (KV `trading:mode`) that the Decision
+  Engine reads at its next 15m close.
+- **Evidence.** Each mode's resolved setups in `plan_setups` (control-arm R, the last 90 days), in the current 1H regime
+  (30 or more setups), else across regimes. The walk-forward is the strategy council's: pass, fail or collecting.
+- **Feasibility.** The mode's median stop at the broker's minimum lot must risk no more than the profile's hard cap
+  (Custom: the risk setting).
+- **Fail-safe moves, no council.**
+  - Back to the baseline when the current mode's evidence fails.
+  - To the feasible mode with the smallest stop when the current one no longer fits.
+  - Back to the baseline on a day the kill switch or the daily loss limit fired.
+- **A better mode.** A walk-forward pass, feasible, with a mean R at least 0.1R above the current mode's, and the same
+  candidate two daily runs in a row. Then the mode council reviews it:
+  - Seats: strategy, technical, risk, trade management. Meter `mode_council`, cap `MODE_COUNCIL_DAILY_USD` 0.25.
+  - The switch applies only when the risk seat and at least three of four approve.
+  - A failure, an invalid verdict or the cap keeps the mode.
+- **The owner** (POST `/omega/api/trading-mode`, owner only, checked again in the AI Worker):
+  - a mode pins it (it becomes the baseline; the selector stops);
+  - "auto" hands it back to the selector and council;
+  - "veto" reverts the last automatic switch (within 24 h) and pins it.
+  - The Decision card's "Next mode" row shows Auto (council) or pinned, with Auto and Veto buttons. The Omega header
+    reads e.g. "Aggressive · 5% · Intraday (auto)".
+- **Record.** Each change or refused proposal produces:
+  - a row in `omega_mode_changes`;
+  - an Omega event (actor `agent:mode`);
+  - one Telegram line naming each seat;
+  - a `mode.v1` digest item (from, to, actor, reason, evidence ref, at; no price, no lot), at most one report per 30 min.
+- **Not yet.** The ladder's lock distance in R per mode (it is 30 pips for every mode) is the next step. It needs the
+  initial stop from the open intent.
+
 ## Phases
 
 | Phase | What | Gate to go live |
