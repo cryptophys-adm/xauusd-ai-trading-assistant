@@ -156,9 +156,9 @@ test("the bridge sync: only the service token named by OMEGA_BRIDGE_CLIENT_ID; n
 test("settings and connection changes: a person, same origin, JSON; the actor is the Access email", async () => {
   resetKeyCacheForTests();
   const O = broker();
-  const env = { ...ENV_BASE, OMEGA: O };
+  const env = { ...ENV_BASE, OMEGA: O, OWNER_ACCESS_SUB: "owner-sub-0001" };
   const opts = { fetchImpl: certsFetch, now: NOW };
-  const person = await jwt({ email: "Owner@Example.com" });
+  const person = await jwt({ email: "Owner@Example.com", sub: "owner-sub-0001" });
   const svc = await jwt({ common_name: "ci.access" });
   const call = (path, method, body, extra = {}) => handle(req(path, { token: person, method, body, ...extra }), env, opts);
 
@@ -177,6 +177,10 @@ test("settings and connection changes: a person, same origin, JSON; the actor is
     assert.equal((await call(path, method, body, { type: "text/plain" })).status, 415, `${method} ${path}: not JSON`);
   }
   assert.equal((await call("/api/settings", "POST", [1, 2])).status, 400, "an array is not a body");
+  // Risk settings are owner only (2026-11-18): another signed-in person, or no owner configured, is refused.
+  const guest = await jwt({ email: "g@example.com", sub: "guest-sub-0002" });
+  assert.equal((await handle(req("/api/settings", { token: guest, method: "POST", body: { risk_pct: 5 } }), env, opts)).status, 403, "settings: not the owner");
+  assert.equal((await handle(req("/api/settings", { token: person, method: "POST", body: { risk_pct: 5 } }), { ...ENV_BASE, OMEGA: O }, opts)).status, 403, "settings: no owner configured");
   assert.equal(O.calls.length, n, "nothing refused reached the gateway");
   assert.equal((await call("/api/settings", "GET")).status, 405);
   const key = await handle(req("/api/bridge/key", { token: svc }), env, opts);
@@ -188,9 +192,9 @@ test("under nexus.cryptophys.work/omega: /omega redirects to /omega/, assets and
   resetKeyCacheForTests();
   const O = broker();
   const seen = [];
-  const env = { ...ENV_BASE, OMEGA: O, ASSETS: { fetch: async (r) => { seen.push(new URL(r.url).pathname); return new Response("ok"); } } };
+  const env = { ...ENV_BASE, OMEGA: O, OWNER_ACCESS_SUB: "owner-sub-0001", ASSETS: { fetch: async (r) => { seen.push(new URL(r.url).pathname); return new Response("ok"); } } };
   const opts = { fetchImpl: certsFetch, now: NOW };
-  const token = await jwt({ email: "owner@example.com" });
+  const token = await jwt({ email: "owner@example.com", sub: "owner-sub-0001" });
   const at = (path, init = {}) => new Request(`https://nexus.cryptophys.work${path}`, { ...init, headers: { "cf-access-jwt-assertion": token, ...(init.headers || {}) } });
   const redirect = await handle(at("/omega?x=1"), env, opts);
   assert.deepEqual([redirect.status, redirect.headers.get("location")], [301, "https://nexus.cryptophys.work/omega/?x=1"]);

@@ -270,8 +270,13 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       return rpc(() => env.OMEGA.setControl({ mode: req.mode, reason: req.reason, actor: identity.subject }), "control_failed");
     }
     if (route === "POST /api/settings") {
+      // Risk, positions, daily loss and arming: owner only, like the arm (2026-11-18, docs/RFC_ACCOUNT_PROFILES.md §9:
+      // it was open to any signed-in person). Same origin; the D1 omega_events row keeps the audit.
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;
+      if (request.headers.get("sec-fetch-site") && request.headers.get("sec-fetch-site") !== "same-origin") return json({ error: "same_origin_only" }, 403);
+      const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
+      if (!ownerSub || identity.sub !== ownerSub) return json({ error: "owner_only" }, 403);
       return rpc(() => env.OMEGA.setSettings({ body: r.body, actor: identity.subject }), "settings_failed");
     }
     if (route === "POST /api/connection") {
