@@ -130,7 +130,7 @@ test("settings: merged onto the stored ones; enabled false disarms live; LIVE ne
   assert.equal(settingsFrom({ live_armed: true, confirm: "LIVE" }, stored).settings.live_armed, true);
   assert.match(settingsFrom({ live_armed: true, confirm: "LIVE" }, OMEGA_DEFAULTS).error, /enable/);
   assert.equal(settingsFrom({ enabled: false }, { ...stored, live_armed: true }).settings.live_armed, false);
-  assert.match(settingsFrom({ risk_pct: 2.5 }).error, /risk_pct/);
+  assert.match(settingsFrom({ risk_pct: 10.5 }).error, /risk_pct/, "the maximum is 10% since 2026-11-18");
   assert.match(settingsFrom({ max_positions: 1.5 }).error, /integer/);
   assert.equal(settingsFrom({ max_signal_age_min: 10 }).settings.max_signal_age_ms, 600_000);
   assert.match(settingsFrom({ enabled: "yes" }).error, /enabled/);

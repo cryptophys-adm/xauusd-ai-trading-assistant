@@ -115,7 +115,7 @@ test("settings merge onto the stored ones and are audited; enabled false disarms
   await writeSettings(e, { body: { enabled: false }, actor: "o" }, { now: NOW });
   s = (await readSettings(e)).settings;
   assert.deepEqual([s.enabled, s.risk_pct, s.live_armed], [false, 1, false]);
-  assert.equal((await writeSettings(e, { body: { risk_pct: 9 }, actor: "o" })).ok, false);
+  assert.equal((await writeSettings(e, { body: { risk_pct: 11 }, actor: "o" })).ok, false, "above the 10% maximum (owner 2026-11-18; the profile caps what applies)");
   assert.equal(e.DB.raw.prepare("SELECT COUNT(*) AS c FROM omega_events WHERE action = 'settings'").get().c, 3);
 });
 

@@ -147,6 +147,10 @@ owner clicks only; downgrades may run. The gates, for phase 3:
 - **Leverage is never an input.** Sizing uses the stop distance and the loss tick value only; the margin is the
   broker's `OrderCalcMargin` and `OrderCheck` answer in the EA. A reported leverage of 1:100,000 or more (the FxPro
   demo reports 1:2,000,000,000, margin USD 0.38 a lot) is shown as "unlimited" on the Omega page.
+- **Risk setting up to 10% (owner 2026-11-18, "Naikkan ke 10%, dikunci profil").** `RISK_PCT_MAX` was 2, which held
+  every profile at 2% per trade. It is 10 now. What applies is still the smaller of the setting and the profile's
+  target (Safe 1%, Conservative 2%, Aggressive 5%), and Custom uses the setting itself. The Omega settings card shows
+  what the profile applies now.
 - **Where the reasons show.** The Omega page's entry status, with the numbers (`planner.details`, stored with the plan
   event when the codes change). The Signal Ledger replays in R, without lots, so the minimum-lot rule has no row there.
 

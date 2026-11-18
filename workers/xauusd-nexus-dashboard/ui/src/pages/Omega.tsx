@@ -504,6 +504,18 @@ function Mt5ChartCanvas({
   );
 }
 
+// The profiles' caps (src/account-spec.mjs PROFILES): risk per trade (target), max positions, daily loss.
+const PROFILE_CAPS: Record<string, { risk: number; positions: number; daily: number }> = {
+  safe: { risk: 1, positions: 1, daily: 3 },
+  conservative: { risk: 2, positions: 2, daily: 6 },
+  aggressive: { risk: 5, positions: 3, daily: 10 },
+};
+const appliedLimit = (setting: unknown, cap: number | undefined) => {
+  const v = Number(setting);
+  if (!Number.isFinite(v)) return cap ?? "—";
+  return cap == null ? v : Math.min(v, cap);
+};
+
 // A reported leverage this high is a broker's "unlimited" (FxPro demo: 1:2,000,000,000), not a real ratio.
 const LEVERAGE_UNLIMITED_FROM = 100_000;
 
@@ -2610,6 +2622,9 @@ export default function Omega() {
                 saveEngine();
               }}
               autoComplete="off"
+              // The server checks every value and says why it refuses (2026-11-18: the browser's own range check
+              // silently cancelled a save above an input's max, so the fields looked locked).
+              noValidate
               className="space-y-2.5 border-t border-white/10 pt-3"
             >
               {/* Prominent Broker Engine Activation Toggle Card */}
@@ -2654,7 +2669,7 @@ export default function Omega() {
 
               <div className="grid grid-cols-[1fr_110px] items-center gap-x-3 gap-y-1.5 text-[11px]">
                 <label htmlFor="e-risk" className="text-slate-400">Risk / trade (%)</label>
-                <input id="e-risk" type="number" min="0.01" max="2" step="0.01" value={eRisk} onChange={(ev) => { setEngineDirty(true); setERisk(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                <input id="e-risk" type="number" min="0.01" max="10" step="0.01" value={eRisk} onChange={(ev) => { setEngineDirty(true); setERisk(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
                 <label htmlFor="e-maxpos" className="text-slate-400">Max positions</label>
                 <input id="e-maxpos" type="number" min="1" max="5" step="1" value={eMaxPos} onChange={(ev) => { setEngineDirty(true); setEMaxPos(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
                 <label htmlFor="e-loss" className="text-slate-400">Max daily loss (%)</label>
@@ -2664,6 +2679,20 @@ export default function Omega() {
                 <label htmlFor="e-age" className="text-slate-400">Max signal age (min)</label>
                 <input id="e-age" type="number" min="1" max="60" step="1" value={eAge} onChange={(ev) => { setEngineDirty(true); setEAge(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
               </div>
+              {/* What the account's profile applies now (phase 2): the smaller of each setting and the profile's cap. */}
+              {account ? (
+                <div className="rounded-sm border border-cyan-400/15 bg-cyan-400/5 px-2 py-1.5 text-[11px] text-slate-300" aria-label="Limits applied by the profile">
+                  {account.profile === "custom" ? (
+                    <span>Profile Custom: these settings apply as saved.</span>
+                  ) : (
+                    <span>
+                      Profile {account.profile_label}: applied now risk {appliedLimit(e.risk_pct, PROFILE_CAPS[account.profile]?.risk)}% / trade, {appliedLimit(e.max_positions, PROFILE_CAPS[account.profile]?.positions)} positions,
+                      daily loss {appliedLimit(e.max_daily_loss_pct, PROFILE_CAPS[account.profile]?.daily)}%. Each is the smaller of the setting and the profile's cap; change the profile on the bridge card.
+                    </span>
+                  )}
+                  <span className="block text-slate-500">Ranges: risk 0.01-10%, positions 1-5, daily loss 0.1-20%, spread 1-1000 pts, signal age 1-60 min.</span>
+                </div>
+              ) : null}
               <div className="flex flex-wrap gap-2 pt-1">
                 <button type="submit" id="e-save" disabled={!canControl} className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40">
                   Save

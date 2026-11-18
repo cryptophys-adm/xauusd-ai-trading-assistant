@@ -38,7 +38,10 @@ export const OMEGA_DEFAULTS = Object.freeze({
   adaptive_volatility: true,
   sor_mode: "auto_failover"
 });
-export const RISK_PCT_MAX = 2;
+// 10 since 2026-11-18 (owner: "Naikkan ke 10%, dikunci profil", docs/RFC_ACCOUNT_PROFILES.md §4): the setting may go
+// to the RFC's 10% maximum; what an entry risks is the smaller of the setting and the account profile's target (Safe 1%,
+// Conservative 2%, Aggressive 5%), and Custom uses the setting itself. It was 2, which held every profile at 2%.
+export const RISK_PCT_MAX = 10;
 export const EXECUTOR_MAX_AGE_MS = 60_000;
 export const INTENT_ID_MAX = 31;
 
