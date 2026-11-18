@@ -24,7 +24,7 @@
 // it carries no account number. The control (active, paused, killed) is set by Omega
 // (omega.cryptophys.work, src/ea-execution.mjs) and kept in KV under EA_CONTROL_KEY.
 
-import { applyCellGate, htfAt, loadHtfBars } from "./htf-cells.mjs";
+import { applyCellGate, htfAt, loadHtfBars, structureAt, probationFrom, PROBATION_KEY } from "./htf-cells.mjs";
 import { readPlanLearning } from "./plan-learning.mjs";
 import { gridAdaptMode, applyGridChoice, readGridChoices } from "./grid-adapt.mjs";
 import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
@@ -186,11 +186,17 @@ const BASIS_TTL_MS = 5 * 60_000;
 let cellMemo = { at: 0, inputs: null };
 export function resetCellGateMemoForTests() { cellMemo = { at: 0, inputs: null }; }
 async function cellGateInputs(env, { now }) {
+  // The owner's probation switch is read at every signal (an "off" holds the next sync); the rest is kept 5 minutes.
+  let probation = null;
+  try { probation = probationFrom((await env?.SIGNAL_CACHE?.get?.(PROBATION_KEY)) ?? null); } catch { probation = probationFrom(null); }
+  return { ...(await cellGateBase(env, { now })), probation };
+}
+async function cellGateBase(env, { now }) {
   if (cellMemo.inputs && now - cellMemo.at < BASIS_TTL_MS) return cellMemo.inputs;
   let inputs = { htf: null, cells: [] };
   try {
     const [bars, state] = await Promise.all([loadHtfBars(env), readPlanLearning(env)]);
-    inputs = { htf: htfAt(bars, now), cells: Array.isArray(state?.cells) ? state.cells : [] };
+    inputs = { htf: htfAt(bars, now), cells: Array.isArray(state?.cells) ? state.cells : [], structure: structureAt(bars, now) };
   } catch { inputs = { htf: null, cells: [] }; }
   cellMemo = { at: now, inputs };
   return inputs;

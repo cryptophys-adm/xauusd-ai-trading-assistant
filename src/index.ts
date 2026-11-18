@@ -269,7 +269,7 @@ import { runKnobProposals } from "./council-knob-tuning.mjs";
 import { readKnobOverrides } from "./council-knobs.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
-import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile, modeSelectorTick } from "./omega-broker.mjs";
+import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile, modeSelectorTick, probationTick, setProbation } from "./omega-broker.mjs";
 import { ownerModeAction, relayModeChanges, modeStatus } from "./mode-selector.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
@@ -1873,6 +1873,11 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     }) as Promise<JsonObject>;
   }
   /** The owner's account profile controls (docs/RFC_ACCOUNT_PROFILES.md §10): ceiling, profile, agent mode, accept, decline. */
+  /** The owner's reversal-probation switch (the omega Worker has checked OWNER_ACCESS_SUB and same origin). */
+  async setProbation(input: { enabled?: unknown; actor?: string }): Promise<JsonObject> {
+    return setProbation(this.env, { enabled: input?.enabled, actor: String(input?.actor ?? "owner") }) as Promise<JsonObject>;
+  }
+
   async setAccountProfile(input: { account_ref?: string; action?: string; value?: string | null; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
     if (ownerCheck(this.env, input?.actor_sub ?? null) !== "owner") return { ok: false, error: "owner_only" } as JsonObject;
     return setAccountProfile(this.env, { account_ref: String(input?.account_ref ?? ""), action: String(input?.action ?? ""), value: input?.value ?? null, actor: String(input?.actor ?? "owner") }) as Promise<JsonObject>;
@@ -2743,6 +2748,11 @@ async function runLedgerStep(env: Env): Promise<void> {
     const step = await profileAgentTick(env) as { status?: string };
     if (step?.status === "changed" || step?.status === "proposed" || step?.status === "failed") console.log("profile_agent", JSON.stringify(step));
   } catch (e) { console.error("profile_agent_failed", e instanceof Error ? e.message : String(e)); }
+  // Reversal probation's revert check (src/htf-cells.mjs): a cell whose last probation trades average under 0R stops.
+  try {
+    const p = await probationTick(env) as { status?: string };
+    if (p?.status === "changed" || p?.status === "failed") console.log("probation", JSON.stringify(p));
+  } catch (e) { console.error("probation_failed", e instanceof Error ? e.message : String(e)); }
   try {
     const relay = await relayProfileChanges(env) as { status?: string };
     if (relay?.status !== "disabled" && relay?.status !== "waiting" && relay?.status !== "idle") console.log("risk_profile_relay", JSON.stringify(relay));

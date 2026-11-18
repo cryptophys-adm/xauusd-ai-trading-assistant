@@ -16,6 +16,60 @@ export const CELL_GATE = Object.freeze({ min_setups: 30, min_mean_r: 0.10 });
 export const HTF_RULES = Object.freeze({ ema_period: 50, slope_bars: 5, min_bars: 56 });
 export const HTF_CONTEXTS = Object.freeze(["with", "against", "neutral", "unknown"]);
 
+// Counter-trend reversal probation (owner 2026-11-18, confirmed: "Setuju"; live: "Ya, lanjut di live"). A reversal against
+// the H4/D1 trend may trade before its cell passes, but only:
+//   - for the reversal strategy (sweep_reversal: its plan already needs a sweep of a key zone reclaimed at the 15m close,
+//     and puts the stop beyond the sweep's extreme);
+//   - with a change of structure (CHoCH/BOS) on a closed H1 or H4 candle: its close beyond the latest swing point against
+//     the trade (structureShift);
+//   - at half the risk and half the hard cap, one probation position at a time, never against an open position;
+//   - until it graduates (its cell passes: full risk) or reverts (its last PROBATION.revert_last_n probation trades
+//     average under 0R: no more probation for the cell until it passes); the owner can switch it off.
+export const PROBATION = Object.freeze({ agents: ["sweep_reversal"], risk_scale: 0.5, revert_last_n: 5, swing_bars: 2, lookback: 30 });
+export const PROBATION_KEY = "omega:probation:v1";
+
+/**
+ * Pure: a change of structure on closed bars at `closeMs`: the last closed bar's close beyond the latest swing point
+ * against the trade (for a BUY above the latest swing high, a high with PROBATION.swing_bars lower highs each side).
+ * Returns { ok, level } (ok false with level null when no swing point is found).
+ */
+export function structureShift(bars, side, closeMs, rules = PROBATION) {
+  const closed = (Array.isArray(bars) ? bars : []).filter((b) => isNum(b?.close) && isNum(b?.high) && isNum(b?.low) && isNum(closeMsOf(b)) && closeMsOf(b) <= closeMs)
+    .sort((a, b) => closeMsOf(a) - closeMsOf(b)).slice(-rules.lookback);
+  const k = rules.swing_bars, last = closed.at(-1);
+  if (!last || closed.length < 2 * k + 2) return { ok: false, level: null };
+  const buy = side === "BUY";
+  for (let i = closed.length - 1 - k; i >= k; i -= 1) {
+    const v = buy ? closed[i].high : closed[i].low;
+    const around = [...closed.slice(i - k, i), ...closed.slice(i + 1, i + 1 + k)];
+    const pivot = around.every((b) => (buy ? b.high < v : b.low > v));
+    if (!pivot) continue;
+    return { ok: buy ? last.close > v : last.close < v, level: v };
+  }
+  return { ok: false, level: null };
+}
+
+/** Pure: the H1 and H4 structure for both sides at `closeMs`. */
+export function structureAt({ h1 = [], h4 = [] } = {}, closeMs) {
+  const at = (side) => ({ h1: structureShift(h1, side, closeMs).ok, h4: structureShift(h4, side, closeMs).ok });
+  return { BUY: at("BUY"), SELL: at("SELL") };
+}
+
+/** Pure: the probation control from KV: { enabled, reverted: { [cellKey]: { at_ms, mean_r, trades } } } (enabled by default). */
+export function probationFrom(raw) {
+  let v = raw;
+  if (typeof raw === "string") { try { v = JSON.parse(raw); } catch { v = null; } }
+  return { enabled: v?.enabled !== false, reverted: v?.reverted && typeof v.reverted === "object" ? v.reverted : {} };
+}
+
+/** Pure: the mean R of the last `n` closed probation trades of a cell (newest last: [{ r }]), or null with fewer. */
+export function probationVerdict(trades, n = PROBATION.revert_last_n) {
+  const rs = (trades || []).map((t) => t?.r).filter(isNum);
+  if (rs.length < n) return { revert: false, mean_r: null, trades: rs.length };
+  const last = rs.slice(-n), mean = r3(last.reduce((a, b) => a + b, 0) / n);
+  return { revert: mean < 0, mean_r: mean, trades: rs.length };
+}
+
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
 const closeMsOf = (b) => (isNum(b?.close_ms) ? b.close_ms : Date.parse(b?.close_time ?? ""));
 const r3 = (x) => Math.round(x * 1000) / 1000;
@@ -59,7 +113,7 @@ export function htfAt({ h4 = [], d1 = [] } = {}, closeMs) {
   return { h4: a, d1: b, trend: htfTrend(a, b) };
 }
 
-/** The H4 and D1 bars of the market-data cache (empty on any failure). */
+/** The H1, H4 and D1 bars of the market-data cache (empty on any failure). */
 export async function loadHtfBars(env) {
   const read = async (tf) => {
     try {
@@ -67,8 +121,8 @@ export async function loadHtfBars(env) {
       return Array.isArray(rec?.candles) ? rec.candles : [];
     } catch { return []; }
   };
-  const [h4, d1] = await Promise.all([read("4h"), read("1D")]);
-  return { h4, d1 };
+  const [h1, h4, d1] = await Promise.all([read("1h"), read("4h"), read("1D")]);
+  return { h1, h4, d1 };
 }
 
 export const cellKey = (agent, side, context) => `${agent}|${side}|${context}`;
@@ -104,13 +158,23 @@ export function cellStatus(setups, meanR, gate = CELL_GATE) {
  * `htf_context` and `cell_gate`, and when the trade may not go live it has no side (awaiting_reason htf_against,
  * htf_unknown, cell_collecting or cell_below_bar), as the strategy arm does. Any other signal is unchanged.
  */
-export function applyCellGate(sig, { htf = null, cells = [], gated = RANGE_GATED_AGENTS } = {}) {
+export function applyCellGate(sig, { htf = null, cells = [], gated = RANGE_GATED_AGENTS, structure = null, probation = null } = {}) {
   if (!sig || (sig.side !== "BUY" && sig.side !== "SELL") || !gated.includes(sig.trade_agent)) return sig;
   const context = htfContext(sig.side, htf?.trend ?? null);
   const cell = (Array.isArray(cells) ? cells : []).find((c) => c.agent === sig.trade_agent && c.side === sig.side && c.context === context) ?? null;
   const gate = { agent: sig.trade_agent, side: sig.side, context, setups: cell?.setups ?? 0, mean_r: cell?.mean_r ?? null, status: cell?.status ?? "collecting" };
   const out = { ...sig, htf_trend: htf?.trend ?? "unknown", htf_h4: htf?.h4 ?? "unknown", htf_d1: htf?.d1 ?? "unknown", htf_context: context, cell_gate: `${gate.status}:${gate.setups}:${gate.mean_r ?? "na"}` };
-  const reason = context === "unknown" ? "htf_unknown" : context === "against" ? "htf_against" : gate.status === "pass" ? null : gate.status === "collecting" ? "cell_collecting" : "cell_below_bar";
+  let reason = context === "unknown" ? "htf_unknown" : context === "against" ? "htf_against" : gate.status === "pass" ? null : gate.status === "collecting" ? "cell_collecting" : "cell_below_bar";
+  if (context === "against" && PROBATION.agents.includes(sig.trade_agent)) {
+    // The reversal strategy against the trend: full risk once its cell passes, else the probation's checks.
+    const p = probationFrom(probation);
+    const shift = structure?.[sig.side] ?? null;
+    if (gate.status === "pass") { reason = null; out.probation_state = "graduated"; }
+    else if (!p.enabled) reason = "htf_against";
+    else if (p.reverted[cellKey(sig.trade_agent, sig.side, context)]) reason = "probation_reverted";
+    else if (!(shift?.h1 === true || shift?.h4 === true)) reason = "probation_unconfirmed";
+    else { reason = null; Object.assign(out, { probation: true, probation_state: "probation", risk_scale: PROBATION.risk_scale, structure_tf: shift.h1 === true ? "H1" : "H4" }); }
+  }
   if (!reason) return out;
   return { ...out, awaiting_signal_id: out.signal_id, awaiting_side: out.side, awaiting_reason: reason, signal_id: "", side: "NONE", action: "", entry: 0, stop: 0, tp1: 0 };
 }
@@ -123,5 +187,7 @@ export function cellGateText(sig) {
   if (sig?.awaiting_reason === "htf_unknown") return `${who}: the H4/D1 trend is unknown (too few bars), so no range trade`;
   if (sig?.awaiting_reason === "cell_collecting") return `${who} (${sig.htf_context}): collecting evidence, ${setups}/${CELL_GATE.min_setups} setups`;
   if (sig?.awaiting_reason === "cell_below_bar") return `${who} (${sig.htf_context}): ${mean}R per setup over ${setups} setups, under the +${CELL_GATE.min_mean_r}R bar`;
+  if (sig?.awaiting_reason === "probation_unconfirmed") return `${who} against the H4/D1 trend (${sig.htf_trend}): probation waits for a change of structure on a closed H1 or H4 candle`;
+  if (sig?.awaiting_reason === "probation_reverted") return `${who} against the H4/D1 trend: probation reverted for this cell (its last ${PROBATION.revert_last_n} probation trades averaged under 0R) until its record passes`;
   return status ? `${who} (${sig?.htf_context}): cell ${status}` : "";
 }

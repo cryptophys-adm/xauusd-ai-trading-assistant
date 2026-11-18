@@ -641,7 +641,7 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
   return { intents, extendOf: (p) => ["stable", "rising"].includes(trendOf(p)) };
 }
 
-const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar"]);
+const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar", "probation_unconfirmed", "probation_reverted"]);
 
 export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined } = {}) {
   const intents = [], notes = [];
@@ -649,12 +649,18 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
   // Account Profiles phase 2 (docs/RFC_ACCOUNT_PROFILES.md §3-4): new entries are sized within the account's profile.
   // Each limit is the smaller of the profile's cap and the setting; Custom keeps the settings as they are.
-  const limits = typeof accountSpec?.profile === "string" ? effectiveLimits(accountSpec.profile, S) : null;
-  if (limits && limits.profile !== "custom") {
-    if (finite(limits.risk_pct)) S.risk_pct = limits.risk_pct;
-    if (Number.isInteger(limits.max_positions)) S.max_positions = limits.max_positions;
-    if (finite(limits.max_daily_loss_pct)) S.max_daily_loss_pct = limits.max_daily_loss_pct;
+  const profileLimits = typeof accountSpec?.profile === "string" ? effectiveLimits(accountSpec.profile, S) : null;
+  if (profileLimits && profileLimits.profile !== "custom") {
+    if (finite(profileLimits.risk_pct)) S.risk_pct = profileLimits.risk_pct;
+    if (Number.isInteger(profileLimits.max_positions)) S.max_positions = profileLimits.max_positions;
+    if (finite(profileLimits.max_daily_loss_pct)) S.max_daily_loss_pct = profileLimits.max_daily_loss_pct;
   }
+  // Reversal probation (src/htf-cells.mjs, owner 2026-11-18): half the risk and half the hard cap per trade. Every other
+  // check (the minimum lot against the cap, the open risk, the daily budget, the tick value) stays as it is.
+  const probation = signal?.probation === true;
+  const scale = probation && finite(signal?.risk_scale) && signal.risk_scale > 0 && signal.risk_scale < 1 ? signal.risk_scale : probation ? 0.5 : 1;
+  if (probation) S.risk_pct = roundTo(S.risk_pct * scale, 4);
+  const limits = probation && profileLimits ? { ...profileLimits, hard_cap_pct: finite(profileLimits.hard_cap_pct) ? roundTo(profileLimits.hard_cap_pct * scale, 4) : profileLimits.hard_cap_pct } : profileLimits;
   const positions = Array.isArray(executor?.positions) ? executor.positions : [];
   const recent = new Set(recentIntentIds);
 
@@ -738,6 +744,10 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     // An owner-set gold symbol off the list (cent accounts, e.g. "GoldOne") must price as gold: its bid within 2% of
     // the signal's reference entry, else nothing opens.
     [mappedPriceProblem(sym, signal.entry) !== null, "symbol_price_mismatch"],
+    // One probation position at a time (src/htf-cells.mjs): a second waits until the first is closed.
+    [probation && positions.some((p) => positionMeta?.[p.intent_id]?.probation === true), "probation_busy"],
+    // A probation trade never hedges: no entry while any position (Omega's or not) is open on the other side.
+    [probation && positions.some((p) => (p.side === "BUY" || p.side === "SELL") && p.side !== side), "probation_hedge"],
     // The broker's tick value disagrees with the contract (neither contract × tick size dollars nor that in cents):
     // the loss at the stop cannot be trusted, so nothing opens (src/omega-broker.mjs usdTickValue, 2026-11-18).
     [typeof sym.tick_value_problem === "string" && sym.tick_value_problem !== "", "tick_value_mismatch"],
@@ -898,6 +908,12 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // The mode it opened in and its stop distance (the ladder's step per mode; a later mode switch never changes them).
   if (["scalp", "intraday", "swing"].includes(signal.trading_mode)) openIntent.mode = signal.trading_mode;
   if (finite(price) && finite(sl)) openIntent.r_dist = roundTo(Math.abs(price - sl), sym.digits);
+  // Reversal probation: tagged, with the money it risks at the stop (its trades' R for the revert check).
+  if (probation) {
+    openIntent.probation = true;
+    openIntent.cell = `${signal.trade_agent}|${signal.side}|${signal.htf_context ?? "against"}`;
+    openIntent.risk_usd = roundTo(lossPerLot * volume, 2);
+  }
   intents.push(openIntent);
   return { intents, notes };
 }

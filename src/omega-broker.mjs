@@ -19,7 +19,8 @@ import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
-import { goldCheckOf, goldSymbolText, isCentCurrency, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, positionExposure, exposureText } from "./gold-symbol.mjs";
+import { goldCheckOf, goldSymbolText, isCentCurrency, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText } from "./gold-symbol.mjs";
+import { PROBATION, PROBATION_KEY, probationFrom, probationVerdict } from "./htf-cells.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
 import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./profile-council.mjs";
 import { runModeSelector, modeStatus, capOf } from "./mode-selector.mjs";
@@ -122,7 +123,7 @@ export async function positionMeta(db, executor) {
     for (const r of rows) {
       const p = parse(r.payload, {});
       const rDist = Number.isFinite(Number(p.r_dist)) ? Number(p.r_dist) : (Number.isFinite(Number(p.entry)) && Number.isFinite(Number(p.sl)) ? Math.abs(Number(p.entry) - Number(p.sl)) : null);
-      out[r.id] = { mode: typeof p.mode === "string" ? p.mode : null, r_dist: rDist };
+      out[r.id] = { mode: typeof p.mode === "string" ? p.mode : null, r_dist: rDist, ...(p.probation === true ? { probation: true } : {}) };
     }
     return out;
   } catch { return {}; }
@@ -717,7 +718,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           // The exposure in USD (owner 2026-11-18): the lot alone is ambiguous across brokers and cent accounts.
           const xp = positionExposure({ side: p.side, volume: p.volume, open_price: result.fill_price || p.entry, sl: p.sl }, executor?.symbol, executor?.account?.equity);
           const xpText = xp ? `\nExposure: <code>${exposureText(xp)}</code>` : "";
-          await sendOmegaTelegram(env, `🟢 <b>Omega Order Executed · ${label}</b>\nTicket: <code>#${result.ticket || "—"}</code>\nSide: <b>${p.side}</b> | Volume: <code>${p.volume}</code> lot ${executor?.symbol?.name ?? ""}\nEntry: <code>${p.entry || "—"}</code> | Fill: <code>${result.fill_price || p.entry || "—"}</code>\nSL: <code>${p.sl}</code> | TP: <code>${p.tp}</code>${xpText}${tcaText}`);
+          await sendOmegaTelegram(env, `🟢 <b>Omega Order Executed · ${label}</b>${p.probation === true ? " · <b>PROBATION ½ risk</b> (counter-trend reversal)" : ""}\nTicket: <code>#${result.ticket || "—"}</code>\nSide: <b>${p.side}</b> | Volume: <code>${p.volume}</code> lot ${executor?.symbol?.name ?? ""}\nEntry: <code>${p.entry || "—"}</code> | Fill: <code>${result.fill_price || p.entry || "—"}</code>\nSL: <code>${p.sl}</code> | TP: <code>${p.tp}</code>${xpText}${tcaText}`);
         } else if (p?.kind === "close" || p?.kind === "partial_close") {
           await sendOmegaTelegram(env, `💰 <b>Omega Position ${p.kind === "partial_close" ? `Scaled Out (${p.volume ?? "part"} lot)` : "Closed"} · ${label}</b>\nTicket: <code>#${result.ticket || p.ticket || "—"}</code>\nReason: <code>${p.reason || "executed"}</code>`);
         } else if (p?.kind === "modify_tp") {
@@ -917,6 +918,63 @@ export async function profileAgentTick(env, { now = Date.now(), call = undefined
 }
 
 /**
+ * Reversal probation's revert check (src/htf-cells.mjs, owner 2026-11-18), in the 5-minute ledger step: each probation
+ * open that has closed (its deals by position ticket, in USD) gives one R (its net over the money it risked at the stop);
+ * a cell whose last PROBATION.revert_last_n probation trades average under 0R is reverted (KV PROBATION_KEY), with an
+ * event and a Telegram line. A reverted cell trades against the trend again only once its record passes (graduated) or
+ * the owner switches probation off and on. Never throws.
+ */
+export async function probationTick(env, { now = Date.now() } = {}) {
+  try {
+    await ensureSchema(env.DB);
+    const db = env.DB;
+    const rows = (await db.prepare("SELECT id, payload, result, created_ms FROM omega_intents WHERE kind = 'open' AND status = 'done' AND json_extract(payload, '$.probation') = 1 ORDER BY created_ms LIMIT 200").all()).results ?? [];
+    if (!rows.length) return { status: "idle" };
+    // A position still open (a partial close already made a deal) is counted once it has gone.
+    const st = parse((await db.prepare("SELECT state FROM omega_bridge WHERE id = 1").first())?.state);
+    const open = new Set((Array.isArray(st?.positions) ? st.positions : []).map((p) => Number(p?.ticket)));
+    const byCell = {};
+    for (const r of rows) {
+      const p = parse(r.payload, {}), res = parse(r.result, {});
+      const ticket = Number(res?.ticket), risk = Number(p.risk_usd);
+      if (!(ticket > 0) || !(risk > 0) || typeof p.cell !== "string") continue;
+      let net = null;
+      try { net = (await db.prepare(`SELECT COUNT(*) AS n, SUM(${DEAL_NET_SQL}) AS net FROM ea_deals WHERE position_ticket = ?`).bind(ticket).first()); } catch { net = null; }
+      if (!(Number(net?.n) > 0) || open.has(ticket)) continue;
+      (byCell[p.cell] ??= []).push({ r: Math.round((Number(net.net) / risk) * 1000) / 1000, ticket });
+    }
+    const control = probationFrom((await env.SIGNAL_CACHE?.get?.(PROBATION_KEY)) ?? null);
+    const reverted = { ...control.reverted };
+    const changed = [];
+    for (const [cell, trades] of Object.entries(byCell)) {
+      const v = probationVerdict(trades);
+      if (v.revert && !reverted[cell]) { reverted[cell] = { at_ms: now, mean_r: v.mean_r, trades: v.trades }; changed.push({ cell, ...v }); }
+    }
+    if (!changed.length) return { status: "unchanged", cells: Object.keys(byCell).length };
+    await env.SIGNAL_CACHE?.put?.(PROBATION_KEY, JSON.stringify({ enabled: control.enabled, reverted }));
+    for (const c of changed) {
+      await event(db, now, "agent:probation", "probation_reverted", c);
+      await sendOmegaTelegram(env, `XAUUSD SYSTEM · Reversal probation reverted for ${c.cell.replace(/\|/g, " ")}: its last ${PROBATION.revert_last_n} probation trades averaged ${c.mean_r}R. No more counter-trend trades for it until its record passes (or the owner switches probation off and on).`);
+    }
+    return { status: "changed", reverted: changed.map((c) => c.cell) };
+  } catch (e) {
+    return { status: "failed", error: String(e?.message ?? e).slice(0, 200) };
+  }
+}
+
+/** The owner's probation switch (owner only; on clears every reverted cell). */
+export async function setProbation(env, { enabled, actor = "owner" } = {}, { now = Date.now() } = {}) {
+  await ensureSchema(env.DB);
+  if (typeof enabled !== "boolean") return { ok: false, error: "enabled must be true or false" };
+  const control = probationFrom((await env.SIGNAL_CACHE?.get?.(PROBATION_KEY)) ?? null);
+  const next = { enabled, reverted: enabled ? {} : control.reverted };
+  await env.SIGNAL_CACHE?.put?.(PROBATION_KEY, JSON.stringify(next));
+  await event(env.DB, now, actor, "probation_set", { enabled, cleared: enabled ? Object.keys(control.reverted) : [] });
+  try { await sendOmegaTelegram(env, `XAUUSD SYSTEM · Reversal probation ${enabled ? "ON (half risk, one at a time; reverted cells cleared)" : "OFF: no counter-trend trades until a cell's record passes"} (owner).`); } catch { /* best effort */ }
+  return { ok: true, probation: next };
+}
+
+/**
  * The trading-mode selector's daily step (phase 4, src/mode-selector.mjs), with the connected account's feasibility
  * inputs, the latest 1H regime and whether the kill switch or the daily loss limit fired today.
  */
@@ -1100,6 +1158,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
 
   return {
     engine: { env_enabled: engineEnvEnabled(env), ...settings.settings, settings_version: settings.version, updated_by: settings.updated_by, updated_ms: settings.updated_ms },
+    // Reversal probation (src/htf-cells.mjs): the owner's switch and the reverted cells.
+    probation: { ...probationFrom((await env.SIGNAL_CACHE?.get?.(PROBATION_KEY)) ?? null), risk_scale: PROBATION.risk_scale, revert_last_n: PROBATION.revert_last_n, agents: PROBATION.agents },
     connection: { version: connection.version, status: connection.status, server: connection.server, trade_symbol: connection.trade_symbol, updated_by: connection.updated_by, updated_ms: connection.updated_ms },
     bridge: {
       seen: syncedAge != null && syncedAge < BRIDGE_SEEN_MS, synced_age_ms: syncedAge, kid: b?.kid ?? null, bridge_version: b?.bridge_version ?? null,
