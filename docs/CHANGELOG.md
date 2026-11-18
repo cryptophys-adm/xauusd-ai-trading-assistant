@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- docs(rfc): `docs/RFC_ACCOUNT_PROFILES.md`, Account Profiles & Dynamic Mode for Omega. Owner decisions (2026-11-18): live with gates and automatic rollback, no shadow phase; the live account starts as Custom (its current D1 settings: risk 2%, 5 positions, daily loss 10%); the profile agent runs autonomously with the proposed guardrails and a ceiling of Custom. Four phases: EA spec and checks (EA 1.15); sizing within profile caps; the profile agent; the dynamic mode selector and an R-based position manager.
 - fix(news-shadow): the daily news comparison runs while the day's shadow spend leaves a 600-neuron reserve under the shadow budget (its two readings take about 160), instead of only under 80% like the model arena. On 2026-11-17 the shadow arms had used 24,200 of 25,000 neurons by 21:00 UTC, so the first comparison was skipped every hour (`shadow_budget_headroom`) and `news_shadow_compare` stayed empty. It still never pushes the day over the budget, and the shadow switch and breaker still hold it.
 
 ## 2026-11-17
