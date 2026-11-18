@@ -184,6 +184,8 @@ test("the run: setups from the engine's decisions, the replay of the ended ones,
   assert.deepEqual(state.setups, { resolved: 1, open: 0, unavailable: 0, since: iso(T0) });
   assert.equal(state.learned.arms.length, 20);
   assert.equal(state.grid.control, CONTROL_ARM);
+  // Range mode step 1: the cells of the range strategies (none here: the default agent only) and the gate's bar.
+  assert.deepEqual([state.cells, state.cell_gate], [[], { min_setups: 30, min_mean_r: 0.1 }]);
   // A setup replayed by an older version of the rules is replayed again.
   env.DB.raw.prepare("UPDATE plan_setups SET version = 'cryptophys.plan-learning.v1', results_json = '{}'").run();
   const again = await runPlanLearning(env, { now: T0 + 3 * HOUR + 5 * M1, bars: series });

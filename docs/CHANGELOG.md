@@ -5,6 +5,11 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- feat(omega): Range mode step 1, the H4/D1 trend filter and the evidence gate per cell (owner 2026-11-18, confirmed: "Setuju"; live on the owner's account: "Ya, lanjut di live"). `src/htf-cells.mjs`.
+  - **HTF trend.** H4 and D1 each "up", "down" or "flat" from the EMA(50) and its slope over 5 closed bars, combined ("mixed" when they disagree). A side is "with", "against" or "neutral" to it.
+  - **Range strategies only** (`range_fade`, `sweep_reversal`): against a clear trend no trade (`htf_against`); an unknown trend no trade (`htf_unknown`); otherwise only in a cell (agent × side × HTF context) whose replayed record has 30+ setups at +0.10R or better (`cell_collecting`, `cell_below_bar`). Applied at signal time like the strategy arm: a held trade has no side, so it opens nothing and nothing it does bypasses a sizing or risk check.
+  - **Evidence.** The plan learner tags each range-strategy setup with its side's HTF context (`plan_setups.htf`, from the cached 4h and 1D bars) and keeps the cells in its state (`cells`, `cell_gate`).
+  - **Page.** The Omega page says why a range trade is held, with the cell's count and mean R. `RANGE_CELL_GATE` "off" stops the gate (emergency only).
 - feat(omega): the owner's reset over today's daily loss stop (owner 2026-11-18, confirmed: "Reset + buka kunci hari ini", after the cent-account sizing bug).
   - **Action.** `reset_override` (owner only, same origin, the page asks first): the baseline reset, and on a day the daily loss limit fired, today's stop lifted. Never over the kill switch, and refused while it is on.
   - **Still protected.** For the rest of that UTC day the daily loss counts from the equity at the reset (`day_ref_override`, `overrideDayRef` in `dailyLossExecutor`), so a new loss of the day's limit stops it again; the next UTC day ignores it.

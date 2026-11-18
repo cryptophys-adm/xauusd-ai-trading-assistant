@@ -17,6 +17,7 @@
 //             the stops).
 // Intent ids are deterministic and at most 31 characters (they become the MT5 order comment).
 
+import { cellGateText } from "./htf-cells.mjs";
 import { confidenceTrend, parseConfidences } from "./agent-confidence.mjs";
 import { goldCheckOf, mappedPriceProblem } from "./gold-symbol.mjs";
 import { versionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, effectiveLimits, PROFILES } from "./account-spec.mjs";
@@ -640,6 +641,8 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
   return { intents, extendOf: (p) => ["stable", "rising"].includes(trendOf(p)) };
 }
 
+const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar"]);
+
 export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined } = {}) {
   const intents = [], notes = [];
   const note = (code, detail) => notes.push(detail ? { code, detail } : { code });
@@ -714,7 +717,12 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // NEW entries; the positions already open keep their break-even, extended target and scale-out.
   intents.push(...manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket), now, extendOf: exits.extendOf, positionMeta, candles }));
 
-  if (!side) { note("no_side"); return { intents, notes }; }
+  if (!side) {
+    // A range strategy held by the H4/D1 filter or its cell's evidence (src/htf-cells.mjs) says so on the page.
+    if (CELL_GATE_REASONS.includes(signal?.awaiting_reason)) note(signal.awaiting_reason, cellGateText(signal));
+    else note("no_side");
+    return { intents, notes };
+  }
 
   const issued = signal.issued_ms, id = openId(issued, side);
   const sameSide = positions.filter((p) => p.side === side);
