@@ -22,6 +22,8 @@ import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strate
 import { goldSymbolCheck, goldSymbolText } from "./gold-symbol.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
 import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./profile-council.mjs";
+import { runModeSelector, modeStatus, capOf } from "./mode-selector.mjs";
+import { readLatestDecision } from "./decision-engine.mjs";
 import { brokerLabelFor, dailyLossExecutor, onboardingDayRef } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
@@ -752,6 +754,32 @@ export async function profileAgentTick(env, { now = Date.now(), call = undefined
     log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
 }
 
+/**
+ * The trading-mode selector's daily step (phase 4, src/mode-selector.mjs), with the connected account's feasibility
+ * inputs, the latest 1H regime and whether the kill switch or the daily loss limit fired today.
+ */
+export async function modeSelectorTick(env, { now = Date.now(), call = undefined } = {}) {
+  await ensureSchema(env.DB);
+  const db = env.DB;
+  const b = await db.prepare("SELECT state FROM omega_bridge WHERE id = 1").first();
+  const st = parse(b?.state);
+  let account = null, forcedDay = false;
+  if (st?.connected === true && Number(st?.received_ms) > 0 && now - Number(st.received_ms) <= BRIDGE_SEEN_MS) {
+    const acct = (await readAccounts(db)).find((a) => a.server && a.server === st.server);
+    const { settings } = await readSettings(env);
+    if (acct) {
+      account = { equity: Number(st.account?.equity), volume_min: Number(st.symbol?.volume_min) || 0.01, contract_size: Number(st.symbol?.contract_size) || 100, cap_pct: capOf(acct.profile, settings) };
+      forcedDay = Number(acct.upgrade_block_until_ms) > now;
+    }
+  }
+  const control = await readControl(env);
+  if (control?.mode === "killed") forcedDay = true;
+  let regime = null;
+  try { regime = (await readLatestDecision(env))?.context?.regime_1h ?? null; } catch { regime = null; }
+  return runModeSelector(env, { now, account, regime, forcedDay, ...(call ? { call } : {}),
+    log: (action, detail) => event(db, now, "agent:mode", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
+}
+
 /** The owner's profile controls (the caller checked OWNER_ACCESS_SUB): ceiling, profile, agent mode, accept, decline. */
 export async function setAccountProfile(env, { account_ref, action, value, actor = "owner" } = {}, { now = Date.now() } = {}) {
   await ensureSchema(env.DB);
@@ -957,6 +985,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       // The day's P&L in % against the daily-loss reference (the onboarding balance on the day Omega first saw it).
       day_pl_pct: (() => { if (!(st?.connected === true && a.server === st?.server)) return null; const x = dailyLossExecutor(st, a, now)?.account; const ref = Number(x?.day_start_balance), eq = Number(x?.equity); return ref > 0 && Number.isFinite(eq) ? Math.round(((eq - ref) / ref) * 1000) / 10 : null; })()
     })),
+    // The trading mode and its selector (phase 4): Auto (council) or pinned by the owner, the last switch, the history.
+    trading_mode: await modeStatus(env),
     autonomous_watchdog: {
       active: true,
       agent: "agent:cerebrum",

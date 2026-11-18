@@ -204,6 +204,9 @@
           "task": "profile_council"
         },
         {
+          "task": "mode_council"
+        },
+        {
           "task": "cfc_seat"
         },
         {

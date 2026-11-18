@@ -340,10 +340,12 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       // Owner 2026-11-13: the trading mode changes only here (a person, same origin), never by a GET.
       const r = await personJson(request, url, identity, 1024);
       if (r.response) return r.response;
+      // Phase 4 (owner 2026-11-18): a mode pins it; action "auto" or "veto". The AI Worker checks the owner again.
       const mode = typeof r.body.mode === "string" ? r.body.mode.trim().toLowerCase() : "";
-      if (!["scalp", "intraday", "swing"].includes(mode)) return json({ error: "mode must be scalp, intraday or swing" }, 400);
+      const action = r.body.action === "auto" || r.body.action === "veto" ? r.body.action : null;
+      if (!action && !["scalp", "intraday", "swing"].includes(mode)) return json({ error: "mode must be scalp, intraday or swing, or action auto or veto" }, 400);
       if (typeof env.OMEGA.setTradingMode !== "function") return json({ error: "trading_mode_unavailable" }, 503);
-      return rpc(() => env.OMEGA.setTradingMode({ mode, actor: identity.subject }), "trading_mode_failed");
+      return rpc(() => env.OMEGA.setTradingMode({ mode: action ? null : mode, action, actor: identity.subject, actor_sub: identity.sub ?? null }), "trading_mode_failed");
     }
     // The strategy arm (owner 2026-11-17, ADR-0020; HAIC Q6: arm and disarm in Nexus only): the state for the Strategy
     // Agents page, and the owner's one click (a person, same origin, JSON). The AI Worker checks the rest server-side.

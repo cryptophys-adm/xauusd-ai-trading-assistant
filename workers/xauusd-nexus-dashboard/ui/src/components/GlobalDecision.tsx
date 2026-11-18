@@ -263,16 +263,23 @@ export default function GlobalDecision() {
   const [mode, setMode] = useState<string | null>(null);
   const [modePinned, setModePinned] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
-  useEffect(() => { fetch("/api/trading-mode", { credentials: "include" }).then((r) => r.json()).then((d) => { if (d?.mode) { setMode(d.mode); setModePinned(d.pinned === true); } else console.warn("trading-mode no data", d); }).catch((e) => console.warn("trading-mode fetch failed", e)); }, []);
-  const changeMode = async (next: string) => {
+  // Phase 4 (owner 2026-11-18): Auto hands the mode to the selector and its council; a chosen mode pins it; Veto
+  // reverts the last automatic switch. Owner only, checked again server-side.
+  const [modeSel, setModeSel] = useState<{ auto?: boolean; owner_pinned?: boolean; last_switch?: { from?: string; to?: string; actor?: string; at_ms?: number } | null } | null>(null);
+  const loadMode = () => fetch("/api/trading-mode", { credentials: "include" }).then((r) => r.json()).then((d) => { if (d?.mode) { setMode(d.mode); setModePinned(d.pinned === true); setModeSel({ auto: d.auto === true, owner_pinned: d.owner_pinned === true, last_switch: d.last_switch ?? null }); } else console.warn("trading-mode no data", d); }).catch((e) => console.warn("trading-mode fetch failed", e));
+  useEffect(() => { void loadMode(); }, []);
+  const postMode = async (body: Record<string, unknown>) => {
     setModeError(null);
     try {
-      const r = await fetch("/omega/api/trading-mode", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify({ mode: next }) });
+      const r = await fetch("/omega/api/trading-mode", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body) });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok || d?.ok === false) throw new Error(d?.error === "pinned_by_server" ? "the server pins the mode" : d?.error || `HTTP ${r.status}`);
-      setMode(d.mode ?? next);
+      if (!r.ok || d?.ok === false) throw new Error(d?.error === "pinned_by_server" ? "the server pins the mode" : d?.error === "owner_only" ? "owner only" : d?.error || `HTTP ${r.status}`);
+      if (d.mode) setMode(d.mode);
+      await loadMode();
     } catch (err) { setModeError(err instanceof Error ? err.message : String(err)); }
   };
+  const changeMode = (next: string) => postMode({ mode: next });
+  const lastAuto = modeSel?.last_switch && modeSel.last_switch.actor !== "owner" && modeSel.last_switch.to === mode && (Date.now() - Number(modeSel.last_switch.at_ms ?? 0)) < 86_400_000 ? modeSel.last_switch : null;
   const lead = e ? (e.stance === "SELL" ? "short" : e.stance === "BUY" ? "long" : (e.quorum?.short_share ?? 0) > (e.quorum?.long_share ?? 0) ? "short" : "long") : null;
   return (
     <Panel title={e ? "Decision Engine" : "Global decision"} icon={<Target className="h-3.5 w-3.5 text-cyan-300" />}
@@ -357,13 +364,16 @@ export default function GlobalDecision() {
             <div className="glass-inner mt-3 flex flex-wrap items-center gap-2 px-3 py-2 text-[11px] text-slate-300">
               <span className="eyebrow text-[9px]">Next mode</span>
               {mode == null ? <span className="text-slate-500">loading…</span> : (
-                <select className="rounded-sm border border-white/10 bg-slate-900 px-2 py-1 text-[11px] text-slate-200 disabled:opacity-50" value={mode} disabled={modePinned} onChange={(ev) => { void changeMode(ev.target.value); }} title={modePinned ? "Pinned by the server (TRADING_MODE)" : "Changes the thresholds of the next 15m decision; the owner hears of it on Telegram"}>
+                <select className="rounded-sm border border-white/10 bg-slate-900 px-2 py-1 text-[11px] text-slate-200 disabled:opacity-50" value={mode} disabled={modePinned} onChange={(ev) => { void changeMode(ev.target.value); }} title={modePinned ? "Pinned by the server (TRADING_MODE)" : "Owner only: choosing a mode pins it (the selector stops) for the next 15m decision; Telegram says so"}>
                   <option value="scalp">scalp</option>
                   <option value="intraday">intraday</option>
                   <option value="swing">swing</option>
                 </select>
               )}
-              {modePinned && <span className="text-slate-500">pinned</span>}
+              {modePinned && <span className="text-slate-500">pinned by the server</span>}
+              {!modePinned && modeSel ? <span id="mode-selector-state" className={modeSel.auto ? "text-cyan-300" : "text-slate-400"}>{modeSel.auto ? "Auto (council)" : "pinned by the owner"}</span> : null}
+              {!modePinned && modeSel && !modeSel.auto ? <button id="mode-auto" className="btn" onClick={() => { if (window.confirm("Hand the trading mode to the selector and its council (Auto)?")) void postMode({ action: "auto" }); }}>Auto</button> : null}
+              {lastAuto ? <button id="mode-veto" className="btn border-amber-400/40 text-amber-200" title={`${lastAuto.actor}: ${lastAuto.from} → ${lastAuto.to}`} onClick={() => { if (window.confirm(`Veto the switch ${lastAuto.from} → ${lastAuto.to} and pin ${lastAuto.from}?`)) void postMode({ action: "veto" }); }}>Veto {lastAuto.from} → {lastAuto.to}</button> : null}
               {e.trading_mode && mode && e.trading_mode !== mode && <span className="text-amber-200">current: {e.trading_mode}</span>}
               {modeError && <span className="text-rose-300">not changed: {modeError}</span>}
             </div>

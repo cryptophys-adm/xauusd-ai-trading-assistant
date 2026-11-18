@@ -306,7 +306,8 @@ test("the trading mode changes only by a person's same-origin POST (owner 2026-1
   const post = (body, extra = {}) => handle(req("/api/trading-mode", { token: person, method: "POST", body, ...extra }), env, opts);
   const ok = await post({ mode: "Scalp" });
   assert.equal(ok.status, 200);
-  assert.deepEqual(calls.at(-1), { mode: "scalp", actor: "owner@example.com" });
+  assert.deepEqual({ mode: calls.at(-1).mode, action: calls.at(-1).action, actor: calls.at(-1).actor }, { mode: "scalp", action: null, actor: "owner@example.com" });
+  assert.ok("actor_sub" in calls.at(-1), "the AI Worker checks the owner again");
   assert.equal((await post({ mode: "turbo" })).status, 400);
   assert.equal((await post({ mode: "swing" }, { origin: "https://evil.example" })).status, 403, "cross-origin refused");
   assert.equal((await handle(req("/api/trading-mode", { token: await jwt({ common_name: "ci.access" }), method: "POST", body: { mode: "swing" } }), env, opts)).status, 403, "a service token never changes it");

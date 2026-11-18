@@ -1,0 +1,16 @@
+export const MODE_CONTROL_KEY: string;
+export const MODE_COUNCIL_METER: string;
+export const MODE_SEATS: readonly string[];
+export const MODE_SCHEMA: string;
+export function readModeControl(env: unknown): Promise<Record<string, any>>;
+export function modeEvidence(setups: Record<string, any>[], options?: { regime?: string | null }): Record<string, any>;
+export function modeFeasible(ev: Record<string, any> | null, input: Record<string, any>): boolean;
+export function decideMode(input: Record<string, any>): Record<string, any>;
+export function moderateMode(seats: Record<string, any>): Record<string, any>;
+export function reviewModeSwitch(env: unknown, pack: Record<string, any>, options?: Record<string, any>): Promise<Record<string, any>>;
+export function runModeSelector(env: unknown, options?: Record<string, any>): Promise<Record<string, any>>;
+export function ownerModeAction(env: unknown, input?: { mode?: string | null; action?: string | null; actor?: string; now?: number; log?: unknown; notify?: (text: string) => unknown }): Promise<Record<string, any>>;
+export function modeStatus(env: unknown): Promise<Record<string, any>>;
+export function modeReport(rows: Record<string, any>[]): Record<string, any>;
+export function relayModeChanges(env: unknown, options?: { now?: number; publish?: unknown }): Promise<Record<string, any>>;
+export function capOf(profile: string, settings: Record<string, any> | null): number | null;

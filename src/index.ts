@@ -269,7 +269,8 @@ import { runKnobProposals } from "./council-knob-tuning.mjs";
 import { readKnobOverrides } from "./council-knobs.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
-import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile } from "./omega-broker.mjs";
+import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile, modeSelectorTick } from "./omega-broker.mjs";
+import { ownerModeAction, relayModeChanges, modeStatus } from "./mode-selector.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
 import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mjs";
@@ -1901,13 +1902,17 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     return result;
   }
   /** A person sets the trading mode (owner 2026-11-13); the owner hears of each change on Telegram. */
-  async setTradingMode(input: { mode?: string; actor?: string }): Promise<JsonObject> {
-    const result = await setTradingMode(this.env, { mode: input?.mode, actor: String(input?.actor ?? "") }) as JsonObject;
-    if (result.ok === true && result.changed === true) {
-      const text = `XAUUSD SYSTEM · Trading mode ${String(result.previous)} → ${String(result.mode)}, set from Nexus. The Decision Engine uses the ${String(result.mode)} thresholds from the next 15m close; Omega manages each trade by the mode of its own decision.`;
-      try { await sendTelegram(this.env, text); } catch (e) { console.error("trading_mode_telegram_failed", e instanceof Error ? e.message : String(e)); }
-    }
-    return result;
+  /**
+   * The owner's trading-mode actions (phase 4, src/mode-selector.mjs; owner 2026-11-18: "owner punya hak veto untuk
+   * mengubah mode kapan pun"): a mode pins it, "auto" hands it to the selector and council, "veto" reverts the last
+   * automatic switch. Owner only (OWNER_ACCESS_SUB), audited, one Telegram line.
+   */
+  async setTradingMode(input: { mode?: string; action?: string; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    if (ownerCheck(this.env, input?.actor_sub ?? null) !== "owner") return { ok: false, error: "owner_only" } as JsonObject;
+    if (!String(input?.actor ?? "").trim()) return { ok: false, error: "a person makes this change" } as JsonObject;
+    const now = Date.now();
+    return ownerModeAction(this.env, { mode: input?.mode ?? null, action: input?.action ?? null, actor: String(input?.actor ?? "owner").slice(0, 120), now,
+      notify: async (text: string) => { try { await sendTelegram(this.env, text); } catch (e) { console.error("trading_mode_telegram_failed", e instanceof Error ? e.message : String(e)); } } }) as Promise<JsonObject>;
   }
   /** The MT5 fallback switch and its state (owner 2026-11-11), for the War Room through Omega. */
   async feedFallback(): Promise<JsonObject> {
@@ -2292,7 +2297,12 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // Read only (owner 2026-11-13): a GET never changes the mode. A person changes it through the Omega
     // Worker's POST /api/trading-mode (Access identity, same origin), which calls OmegaGateway.setTradingMode.
     if (url.searchParams.has("mode")) return dashboardJson({ status: "error", error: "read_only", hint: "POST /omega/api/trading-mode as a signed-in person" }, 405);
-    try { return dashboardJson({ status: "ok", mode: await tradingMode(env), pinned: ["scalp", "intraday", "swing"].includes(String(env.TRADING_MODE ?? "").trim().toLowerCase()) }); }
+    try {
+      const sel = await modeStatus(env) as Record<string, unknown>;
+      return dashboardJson({ status: "ok", mode: await tradingMode(env), pinned: ["scalp", "intraday", "swing"].includes(String(env.TRADING_MODE ?? "").trim().toLowerCase()),
+        // Phase 4: Auto (selector + council) or pinned by the owner; the last switch (an automatic one can be vetoed).
+        auto: sel.auto === true, owner_pinned: sel.pinned === true, baseline: sel.baseline ?? null, last_switch: sel.last_switch ?? null });
+    }
     catch (error) { console.error("trading_mode_failed", error); return dashboardJson({ status: "error" }, 500); }
   }
   if (url.pathname === "/api/deals") {
@@ -2737,6 +2747,15 @@ async function runLedgerStep(env: Env): Promise<void> {
     const relay = await relayProfileChanges(env) as { status?: string };
     if (relay?.status !== "disabled" && relay?.status !== "waiting" && relay?.status !== "idle") console.log("risk_profile_relay", JSON.stringify(relay));
   } catch (e) { console.error("risk_profile_relay_failed", e instanceof Error ? e.message : String(e)); }
+  // The trading-mode selector (phase 4, src/mode-selector.mjs): once a UTC day; then its mode.v1 record.
+  try {
+    const mode = await modeSelectorTick(env) as { status?: string };
+    if (mode?.status === "changed" || mode?.status === "failed") console.log("mode_selector", JSON.stringify(mode));
+  } catch (e) { console.error("mode_selector_failed", e instanceof Error ? e.message : String(e)); }
+  try {
+    const relay = await relayModeChanges(env) as { status?: string };
+    if (relay?.status === "sent" || relay?.status === "failed") console.log("mode_relay", JSON.stringify(relay));
+  } catch (e) { console.error("mode_relay_failed", e instanceof Error ? e.message : String(e)); }
   // The 5-minute Position Manager (owner 2026-11-17, src/position-manager.mjs): each open Omega position once a 5m
   // bar; risk-reducing only; POSITION_MANAGER_MODE "off" stops it. Then its daily report after 21:00 UTC.
   try {
