@@ -44,9 +44,8 @@ export const OMEGA_DEFAULTS = Object.freeze({
   partial_max_pct: 50,
   ladder_lock_pips: 30,
   ladder_max_partials: 3,
-  // The same-side re-entry guard (owner 2026-11-18, confirmed: "Setuju"): see reentryGate.
+  // The same-side re-entry guard (owner 2026-11-18, confirmed again: "Setuju keduanya"): see reentryGate. Closed M5 bars.
   reentry_cooldown_bars: 1,
-  reentry_pullback_atr: 0.5,
   // The ladder's step per mode (owner 2026-11-18, confirmed: "Setuju"): scalp ladder_lock_pips, intraday and swing in R.
   ladder_r_intraday: 0.5,
   ladder_r_swing: 0.3
@@ -109,8 +108,7 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS) {
     ?? num("partial_max_pct", 25, 75)
     ?? num("ladder_lock_pips", 5, 100)
     ?? num("ladder_max_partials", 0, 5, { integer: true })
-    ?? num("reentry_cooldown_bars", 0, 8, { integer: true })
-    ?? num("reentry_pullback_atr", 0, 3)
+    ?? num("reentry_cooldown_bars", 0, 12, { integer: true })
     ?? num("ladder_r_intraday", 0.1, 2)
     ?? num("ladder_r_swing", 0.1, 2);
   if (err) return { error: err };
@@ -507,33 +505,22 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
 // The same-side re-entry guard (owner 2026-11-18, relayed and confirmed: "Setuju"). On 2026-11-18 the Position Manager
 // closed a SELL on weakening and the next 15m SELL opened again seconds later, four times.
 export const REENTRY_EXIT_REASONS = Object.freeze(["pm_take_profit_weakening", "pm_cut_loss"]);
-const M15_MS = 15 * 60_000;
+const M5_MS = 5 * 60_000;
 
 /**
  * Pure: whether a new entry on `side` waits after the Position Manager closed one on that side for weakening or a cut
- * loss (`reentry`: { side, exit_price, exit_ms, entry_conf } of the latest such exit, or null). Exits by TP, the ladder
- * or the stop are never one. Returns null (free) or { code, detail }:
- *   reentry_cooldown        the signal's bar must open `reentry_cooldown_bars` 15m bars after the exit;
- *   reentry_needs_pullback  then the price must have pulled back `reentry_pullback_atr` x ATR(M15) from the exit
- *                           (a SELL at or above exit + that, a BUY at or below exit - that), or the strategy agent's
- *                           confidence on its side be back at its level when the closed position opened.
+ * loss (`reentry`: { side, exit_ms } of the latest such exit, or null). Exits by TP, the ladder or the stop are never
+ * one. Owner 2026-11-18 (relayed and confirmed: "Setuju keduanya"): only a cooldown of `reentry_cooldown_bars` closed M5
+ * candles after the exit (1: until the M5 candle the exit fell in has closed); after it the signal is treated as any
+ * other. The 0.5×ATR pullback and the confidence bypass of #455 are gone: anchored on a stale exit price they held SELLs
+ * for hours through a whole downtrend (13:32 to 15:47 that day). Returns null (free) or { code, detail }.
  */
-export function reentryGate({ side, reentry, signal, sym, settings = OMEGA_DEFAULTS }) {
+export function reentryGate({ side, reentry, settings = OMEGA_DEFAULTS, now = Date.now() }) {
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
-  if (!reentry || reentry.side !== side || !finite(reentry.exit_ms)) return null;
-  const barOpen = finite(signal?.issued_ms) ? signal.issued_ms - M15_MS : null;
-  if (S.reentry_cooldown_bars > 0 && !(finite(barOpen) && barOpen >= reentry.exit_ms + (S.reentry_cooldown_bars - 1) * M15_MS)) {
-    return { code: "reentry_cooldown", detail: `${S.reentry_cooldown_bars} closed 15m bar after the ${side} exit at ${reentry.exit_price ?? "—"}` };
-  }
-  const atr = positive(sym?.atr_value) ? sym.atr_value : null;
-  const price = side === "SELL" ? sym?.bid : sym?.ask;
-  const need = finite(reentry.exit_price) && atr != null ? roundTo(reentry.exit_price + (side === "SELL" ? 1 : -1) * S.reentry_pullback_atr * atr, Number.isInteger(sym?.digits) ? sym.digits : 2) : null;
-  const pulled = need != null && finite(price) && (side === "SELL" ? price >= need : price <= need);
-  const agent = typeof signal?.trade_agent === "string" ? signal.trade_agent : null;
-  const now = agent ? parseConfidences(signal?.agent_conf)[agent]?.[side === "BUY" ? "long" : "short"] : null;
-  const recovered = finite(now) && finite(reentry.entry_conf) && now >= reentry.entry_conf;
-  if (pulled || recovered || S.reentry_pullback_atr === 0) return null;
-  return { code: "reentry_needs_pullback", detail: `need ${side === "SELL" ? "≥" : "≤"} ${need ?? "—"} (${S.reentry_pullback_atr}×ATR from the exit ${reentry.exit_price ?? "—"}), now ${finite(price) ? price : "—"}${finite(reentry.entry_conf) ? `; or confidence ≥ ${reentry.entry_conf} (now ${finite(now) ? now : "—"})` : ""}` };
+  if (!reentry || reentry.side !== side || !finite(reentry.exit_ms) || !(S.reentry_cooldown_bars > 0)) return null;
+  const free = Math.floor(reentry.exit_ms / M5_MS) * M5_MS + S.reentry_cooldown_bars * M5_MS;
+  if (now >= free) return null;
+  return { code: "reentry_cooldown", detail: `${S.reentry_cooldown_bars} closed M5 candle${S.reentry_cooldown_bars > 1 ? "s" : ""} after the ${side} exit${finite(reentry.exit_price) ? ` at ${reentry.exit_price}` : ""}: free at ${new Date(free).toISOString().slice(11, 16)} UTC` };
 }
 
 /** A position whose stop sits at or beyond its open price (break-even or locked profit) risks nothing more. */
@@ -780,7 +767,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     [armLive && positions.some((p) => isOmegaOwned(p) && (p.side === "BUY" || p.side === "SELL") && p.side !== side), "opposing_position"]
   ];
   for (const [blocked, code] of gates) if (blocked) { note(code); return { intents, notes }; }
-  const re = reentryGate({ side, reentry, signal, sym, settings: S });
+  const re = reentryGate({ side, reentry, settings: S, now });
   if (re) { note(re.code, re.detail); return { intents, notes }; }
 
   const needed = [account.equity, account.day_start_balance, signal.entry, signal.stop, signal.tp1, sym.bid, sym.ask, sym.point, sym.tick_size, sym.tick_value, sym.volume_step, sym.volume_min, sym.volume_max];

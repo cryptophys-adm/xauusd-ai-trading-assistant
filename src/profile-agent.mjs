@@ -30,7 +30,7 @@
 // Limitation: deals in D1 ea_deals carry no account reference. The loss streak and the upgrade evidence read the
 // deals closed since the switch; that is correct for one connected account, which is what Omega runs today.
 
-import { PROFILES, ensureAccountSchema } from "./account-spec.mjs";
+import { PROFILES, ensureAccountSchema, withDayOp } from "./account-spec.mjs";
 import { DEAL_NET_SQL, DEAL_MONEY_COLUMNS_SQL } from "./gold-symbol.mjs";
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { HEALTH_AGENT_ID } from "./health-alerts.mjs";
@@ -218,7 +218,9 @@ export function balanceOperation({ lastBalance, balance, dealsNet }) {
  */
 async function accountForBalanceOps(db, row, executor, { now, log }) {
   const balance = num(executor?.account?.balance);
-  if (!finite(balance)) return row;
+  // A zero balance is a terminal still loading an account (2026-11-18 16:41: -98.03 then +52.64 while the owner switched
+  // accounts), not a withdrawal of everything: it is skipped, and the next real reading is compared with the last one.
+  if (!finite(balance) || !(balance > 0)) return row;
   let maxId = null;
   try { maxId = Number((await db.prepare("SELECT MAX(id) AS m FROM ea_deals").first())?.m) || 0; } catch { return row; }
   const lastBalance = num(row.last_balance), lastId = num(row.last_deal_id);
@@ -237,6 +239,8 @@ async function accountForBalanceOps(db, row, executor, { now, log }) {
     if (finite(num(row.dd_ref))) set.dd_ref = Math.round((num(row.dd_ref) + op) * 100) / 100;
     if (finite(num(row.balance_peak))) set.balance_peak = Math.round((num(row.balance_peak) + op) * 100) / 100;
     if (finite(num(row.onboard_balance))) set.onboard_balance = Math.round((num(row.onboard_balance) + op) * 100) / 100;
+    // Today's operations, so the daily loss counts from the day start moved by them (account-spec dailyLossExecutor).
+    set.day_ops = withDayOp(row, { amount: op, at_ms: now });
   }
   // Only from the state this check read (the bridge sync and the cron never both apply one operation).
   const cols = Object.keys(set);

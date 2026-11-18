@@ -186,3 +186,46 @@ test("AB8 the owner's override (owner 2026-11-18): reset and lift today's daily 
   assert.equal(dailyLossExecutor(ex, row, NOW + 60_000).account.day_reference, "owner_override");
   assert.equal(dailyLossExecutor(ex, row, NOW + DAY).account.day_start_balance, 54.5, "the next UTC day ignores it");
 });
+
+test("AB9 deposits and withdrawals never count as the day's loss (owner 2026-11-18: \"Setuju keduanya\"); a zero-balance reading is no withdrawal", async () => {
+  const { dailyLossExecutor, dayOpsSince, withDayOp } = await import("../src/account-spec.mjs");
+  const { dailyLossHit } = await import("../src/strategy-arm.mjs");
+  const now = Date.parse("2026-11-20T12:00:00Z");
+  // The broker's day start 1000; the owner withdrew 300 at 10:00: equity 690 is a 1.4% day, not 31%.
+  let row = { created_ms: Date.parse("2026-11-01T00:00:00Z") };
+  row = { ...row, day_ops: withDayOp(row, { amount: -300, at_ms: Date.parse("2026-11-20T10:00:00Z") }) };
+  const ex = { account: { equity: 690, balance: 690, day_start_balance: 1000, day_realized_pl: -310 } };
+  assert.equal(dailyLossHit(ex, 20), true, "without the rule the withdrawal trips a 20% stop");
+  const day = dailyLossExecutor(ex, row, now);
+  assert.deepEqual([day.account.day_start_balance, day.account.day_realized_pl, day.account.day_reference, day.account.day_balance_ops, day.account.broker_day_start_balance], [700, -10, "broker", -300, 1000]);
+  assert.equal(dailyLossHit(day, 20), false);
+  // A deposit never hides a loss: +500 then equity 1200 is a 300 loss on a 1500 start (20%).
+  const dep = { ...row, day_ops: withDayOp({}, { amount: 500, at_ms: Date.parse("2026-11-20T09:00:00Z") }) };
+  assert.equal(dailyLossHit(dailyLossExecutor({ account: { equity: 1200, balance: 1200, day_start_balance: 1000 } }, dep, now), 20), true);
+  // Yesterday's operations are not today's; none today leaves the executor as it is.
+  assert.equal(dailyLossExecutor(ex, row, Date.parse("2026-11-21T01:00:00Z")), ex);
+  assert.equal(dayOpsSince(row, now, Date.parse("2026-11-20T11:00:00Z")), 0, "only after the reference");
+  // The owner's reset at 11:00 (ref 700): an op after it moves it, one before it is already in it.
+  const over = { ...row, day_ref_override: JSON.stringify({ day: "2026-11-20", ref: 700, at_ms: Date.parse("2026-11-20T11:00:00Z") }) };
+  assert.equal(dailyLossExecutor(ex, over, now).account.day_start_balance, 700);
+  const over2 = { ...over, day_ops: withDayOp(over, { amount: -100, at_ms: Date.parse("2026-11-20T11:30:00Z") }) };
+  assert.equal(dailyLossExecutor(ex, over2, now).account.day_start_balance, 600);
+  // The onboarding reference already moves with the operation (accountForBalanceOps): no second count.
+  const onb = { created_ms: Date.parse("2026-11-20T08:00:00Z"), onboard_balance: 700, day_ops: withDayOp({}, { amount: -300, at_ms: Date.parse("2026-11-20T10:00:00Z") }) };
+  assert.equal(dailyLossExecutor({ account: { equity: 690, balance: 690, day_start_balance: 3000 } }, onb, now).account.day_start_balance, 700);
+  // The list is per UTC day.
+  assert.deepEqual(JSON.parse(withDayOp(row, { amount: 5, at_ms: Date.parse("2026-11-21T00:01:00Z") })).ops.length, 1);
+
+  // The check: a 0 balance while the terminal loads an account is skipped; the next real reading compares with the last.
+  const { db, get } = await seeded();
+  const events = [];
+  const log = async (a, d) => events.push([a, d]);
+  await runProfileAgent(db, await get(), { executor: exec(1000, 1000), now: NOW, log });
+  await runProfileAgent(db, await get(), { executor: exec(0, 0), now: NOW + 60_000, log });
+  await runProfileAgent(db, await get(), { executor: exec(1000, 1000), now: NOW + 120_000, log });
+  assert.equal(events.filter((e) => e[0] === "balance_operation").length, 0, "no -1000 then +1000");
+  await runProfileAgent(db, await get(), { executor: exec(800, 800), now: NOW + 180_000, log });
+  assert.equal(events.filter((e) => e[0] === "balance_operation").length, 1);
+  const ops = JSON.parse((await get()).day_ops);
+  assert.deepEqual(ops.ops.map((o) => o.amount), [-200]);
+});
