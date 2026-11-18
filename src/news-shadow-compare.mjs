@@ -15,6 +15,10 @@ import { shadowAllowed, shadowSpendToday, shadowBudget, SHADOW_METER_PREFIX } fr
 export const NEWS_COMPARE_METER = `${SHADOW_METER_PREFIX}news_compare`;
 /** The UTC hour after which the day's comparison runs (New York has closed). */
 export const NEWS_COMPARE_HOUR = 21;
+// The two readings take about 160 neurons; it runs while the day's shadow spend leaves this much under the shadow
+// budget. Before 2026-11-18 it waited for 20% headroom like the model arena, and on 2026-11-17 the day's shadow arms
+// had used 24,200 of 25,000 neurons by 21:00 UTC, so the first comparison never ran.
+export const NEWS_COMPARE_RESERVE = 600;
 const MAX_HEADLINES = 40;
 const BIAS = ["BULLISH", "BEARISH", "NEUTRAL"];
 const IMPACT = ["LOW", "MEDIUM", "HIGH"];
@@ -70,7 +74,7 @@ export async function runNewsShadowCompare(env, { now = Date.now(), call = callB
     if (await db.prepare("SELECT day FROM news_shadow_compare WHERE day = ?").bind(day).first()) return { status: "done", day };
     if (!(await shadowAllowed(env))) return { status: "shadow_off" };
     const spend = await shadowSpendToday(db, { now });
-    if (spend.neurons >= 0.8 * shadowBudget(env)) return { status: "shadow_budget_headroom", neurons: spend.neurons };
+    if (spend.neurons + NEWS_COMPARE_RESERVE > shadowBudget(env)) return { status: "shadow_budget_headroom", neurons: spend.neurons };
     const items = await env.NEWS_INGESTION.shadowItems({ hours: 24 });
     const tvSet = Array.isArray(items?.tv) ? items.tv : [], shadowSet = Array.isArray(items?.shadow) ? items.shadow : [];
     const read = async (set) => {

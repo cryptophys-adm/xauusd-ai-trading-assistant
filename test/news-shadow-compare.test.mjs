@@ -3,8 +3,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runNewsShadowCompare, readNewsShadowCompare, readingMessages, cleanReading, agreement, NEWS_COMPARE_METER } from "../src/news-shadow-compare.mjs";
+import { neuronsOf } from "../src/ai-usage.mjs";
 
-function memDb() {
+function memDb(spendRows = []) {
   const tables = { news_shadow_compare: new Map(), ai_usage_daily: [] };
   const stmt = (sql) => {
     let args = [];
@@ -20,6 +21,7 @@ function memDb() {
       first: async () => (/SELECT day FROM news_shadow_compare/.test(sql) ? tables.news_shadow_compare.get(args[0]) ?? null : null),
       all: async () => {
         if (/FROM news_shadow_compare ORDER BY day DESC/.test(sql)) return { results: [...tables.news_shadow_compare.values()].sort((a, b) => b.day.localeCompare(a.day)).slice(0, args[0]) };
+        if (/FROM ai_usage_daily/.test(sql)) return { results: spendRows };
         return { results: [] };
       }
     };
@@ -68,4 +70,16 @@ test("NB3. gated: the variable, the shadow switch, and a side without headlines"
   const r = await runNewsShadowCompare(noTv, { now: NIGHT, call });
   assert.equal(r.status, "no_tv_headlines", "TradingView's pull was held back all day: said, not guessed");
   assert.equal(answer.calls.length, 1, "only the side with headlines is read");
+});
+
+test("NB-budget. it runs while the shadow spend leaves its small reserve, not only under 80% (2026-11-17: 24,200 of 25,000 used by 21:00)", async () => {
+  const model = "@cf/google/gemma-4-26b-a4b-it";
+  // Prompt tokens that cost about `n` neurons with this model.
+  const per = neuronsOf(model, 1_000_000, 0, 0) / 1_000_000;
+  const spend = (n) => [{ source: "shadow:metric_opening", model, calls: 1, p: Math.round(n / per), c: 0, k: 0 }];
+  const call = answer({ gold_bias: "BEARISH", dollar_bias: "BULLISH", impact: "HIGH", catalysts: [] });
+  answer.calls = [];
+  assert.equal((await runNewsShadowCompare(env({ DB: memDb(spend(24_200)) }), { now: NIGHT, call })).status, "compared", "the day's real spend no longer blocks it");
+  const full = await runNewsShadowCompare(env({ DB: memDb(spend(24_600)) }), { now: NIGHT, call });
+  assert.equal(full.status, "shadow_budget_headroom", "it never pushes the day over the shadow budget");
 });
