@@ -64,7 +64,10 @@ export const AGENT_COLUMNS = [
   ["upgrade_block_reason", "TEXT"],    // why upgrade_block_until_ms is set: kill_switch or daily_loss_limit
   // The owner's reset over today's daily loss stop (owner 2026-11-18, "Reset + buka kunci hari ini"): { day, ref,
   // at_ms, actor }. For that UTC day the daily loss counts from `ref` (the equity at the reset); the next day ignores it.
-  ["day_ref_override", "TEXT"]
+  ["day_ref_override", "TEXT"],
+  // Today's deposits and withdrawals (owner 2026-11-18, confirmed: "Setuju keduanya"): { day, ops: [{ at_ms, amount }] },
+  // so a withdrawal never reads as a daily loss (dailyLossExecutor) and a deposit never hides one.
+  ["day_ops", "TEXT"]
 ];
 export const LAST_SEEN_EVERY_MS = 10 * 60_000;
 let schemaReady = false;
@@ -210,7 +213,9 @@ const rowOut = (r) => r ? ({
   pending_upgrade: parse(r.pending_upgrade),
   pending_downgrade: parse(r.pending_downgrade), council_veto: parse(r.council_veto),
   dd_ref: r.dd_ref ?? null, baseline_ms: r.baseline_ms ?? null, last_seen_ms: r.last_seen_ms ?? null, vol_latched: Number(r.vol_latched) === 1,
-  onboard_balance: r.onboard_balance ?? null, upgrade_block_reason: r.upgrade_block_reason ?? null
+  onboard_balance: r.onboard_balance ?? null, upgrade_block_reason: r.upgrade_block_reason ?? null,
+  // Read by dailyLossExecutor (the overview's day result): the owner's reset over today's stop and today's balance ops.
+  day_ref_override: r.day_ref_override ?? null, day_ops: r.day_ops ?? null
 }) : null;
 
 /** The Custom snapshot of the account's settings (risk per trade, positions, daily loss) as they trade today. */
@@ -320,21 +325,47 @@ export function overrideDayRef(row, now) {
 /**
  * Pure: the executor the daily-loss checks read. On the day of the owner's reset over the daily stop its day start is
  * the equity at that reset (a new loss of the day's limit from there stops it again); on the onboarding day it is the
- * onboarding reference.
+ * onboarding reference; otherwise the broker's day start. Today's deposits and withdrawals after the reference move it
+ * by their amount (owner 2026-11-18, confirmed: "Setuju keduanya"), so a withdrawal never reads as a loss and a deposit
+ * never hides one.
  */
 export function dailyLossExecutor(executor, row, now) {
   const acct = executor?.account;
+  if (!acct) return executor;
+  const start = Number(acct.day_start_balance), bal = Number(acct.balance);
+  const at = (ref, reference, sinceMs) => {
+    // Deposits and withdrawals since the reference move it by their amount: they are never the day's profit or loss.
+    // The onboarding reference already moves with them (profile-agent accountForBalanceOps): sinceMs null, no second count.
+    const ops = sinceMs == null ? 0 : dayOpsSince(row, now, sinceMs);
+    const adjusted = Math.round((ref + ops) * 100) / 100;
+    if (!(adjusted > 0)) return executor;
+    if (reference === "broker" && ops === 0) return executor;
+    return { ...executor, account: { ...acct, broker_day_start_balance: Number.isFinite(start) ? start : null, day_start_balance: adjusted, day_realized_pl: Number.isFinite(bal) ? Math.round((bal - adjusted) * 100) / 100 : acct.day_realized_pl, day_reference: reference, ...(ops !== 0 ? { day_balance_ops: ops } : {}) } };
+  };
   const over = overrideDayRef(row, now);
-  if (over != null && acct) {
-    const bal = Number(acct.balance), start = Number(acct.day_start_balance);
-    return { ...executor, account: { ...acct, broker_day_start_balance: Number.isFinite(start) ? start : null, day_start_balance: over, day_realized_pl: Number.isFinite(bal) ? Math.round((bal - over) * 100) / 100 : acct.day_realized_pl, day_reference: "owner_override" } };
-  }
+  if (over != null) return at(over, "owner_override", overrideAtMs(row));
   const ref = onboardingDayRef(row, now);
-  if (ref == null || !acct) return executor;
-  const start = Number(acct.day_start_balance);
-  if (Number.isFinite(start) && start > 0 && start <= ref) return executor;
-  const bal = Number(acct.balance);
-  return { ...executor, account: { ...acct, broker_day_start_balance: Number.isFinite(start) ? start : null, day_start_balance: ref, day_realized_pl: Number.isFinite(bal) ? Math.round((bal - ref) * 100) / 100 : acct.day_realized_pl, day_reference: "onboarding" } };
+  if (ref != null && !(Number.isFinite(start) && start > 0 && start <= ref)) return at(ref, "onboarding", null);
+  return Number.isFinite(start) && start > 0 ? at(start, "broker", Date.parse(`${utcDay(now)}T00:00:00Z`)) : executor;
+}
+
+const overrideAtMs = (row) => { try { return Number(JSON.parse(row?.day_ref_override ?? "null")?.at_ms) || 0; } catch { return 0; } };
+
+/** Pure: the sum of today's deposits (+) and withdrawals (−) recorded after `sinceMs` (D1 day_ops), or 0. */
+export function dayOpsSince(row, now, sinceMs = 0) {
+  let d = null;
+  try { d = typeof row?.day_ops === "string" ? JSON.parse(row.day_ops) : row?.day_ops ?? null; } catch { d = null; }
+  if (!d || d.day !== utcDay(now) || !Array.isArray(d.ops)) return 0;
+  return Math.round(d.ops.filter((o) => Number(o?.at_ms) > sinceMs && Number.isFinite(Number(o?.amount))).reduce((a, o) => a + Number(o.amount), 0) * 100) / 100;
+}
+
+/** Pure: the day_ops value with one more operation (a new UTC day starts a new list). */
+export function withDayOp(row, { amount, at_ms }) {
+  let d = null;
+  try { d = typeof row?.day_ops === "string" ? JSON.parse(row.day_ops) : null; } catch { d = null; }
+  const day = utcDay(at_ms);
+  const ops = d?.day === day && Array.isArray(d.ops) ? d.ops.slice(-49) : [];
+  return JSON.stringify({ day, ops: [...ops, { at_ms, amount }] });
 }
 
 /**

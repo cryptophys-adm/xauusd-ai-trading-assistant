@@ -254,6 +254,12 @@ mendeteksi akun ini sebelumnya pernah login di omega atau tidak". Confirmed in t
   - The write is conditional on the state the check read, so the bridge sync and the cron never apply one operation
     twice.
   - Manual losses after onboarding are real equity and still count in the drawdown.
+  - The daily loss (owner 2026-11-18, confirmed: "Setuju keduanya"): each operation is kept for its UTC day
+    (`omega_accounts.day_ops`), and `dailyLossExecutor` moves the day's reference by the operations after it (the
+    broker's day start: today's; the owner's reset: those after the reset; the onboarding balance already moves with
+    them). It applies to the planner's floor and risk budget, the arm's auto-disarm, the profile agent and the overview.
+  - A zero balance is never an operation: it is a terminal still loading an account (2026-11-18 16:41, an account
+    switch read −98.03 then +52.64). The check skips it and compares the next real reading with the last one.
 - **The owner's reset** (Setup → Risk profile → Reset baseline, owner only, a confirm that names the account).
   - It applies to the connected account only.
     - The drawdown reference becomes its equity and the peak its balance.

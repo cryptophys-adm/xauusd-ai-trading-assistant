@@ -5,6 +5,10 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- fix(omega): same-side re-entry waits one closed M5 candle only; deposits and withdrawals never count as the day's loss (owner 2026-11-18, relayed and confirmed: "Setuju keduanya").
+  - **Re-entry.** After a `pm_take_profit_weakening` or `pm_cut_loss` exit, a same-side entry waits only until the next M5 candle closes after the exit (`reentry_cooldown_bars`, 1, whole candles 0 to 12; note `reentry_cooldown` names the time it frees). The 0.5×ATR(M15) pullback (`reentry_pullback_atr`) and the confidence bypass are gone, and so is the note `reentry_needs_pullback`.
+  - **Daily loss.** Each deposit or withdrawal is kept for its UTC day (D1 `omega_accounts.day_ops`); `dailyLossExecutor` moves the day's reference by those after it (the broker's day start, or the owner's reset; the onboarding balance already moves with them). A withdrawal no longer trips the daily floor or shrinks the risk budget, and a deposit no longer hides a loss.
+  - **Zero balance.** A 0 balance reading (a terminal loading an account) is no longer a withdrawal: the 2026-11-18 16:41–16:44 `balance_operation` events (−98.03, +52.64, −52.64) were such readings during an account switch.
 - feat(omega): Range, the 4th trading mode (owner 2026-11-18, confirmed: "Setuju"; live: "Ya, lanjut di live").
   - **What it does.** In range mode only the range strategies (`range_fade`, `sweep_reversal`) trade, still through the H4/D1 filter and the cell gate of #464, and only while the decision's 1H regime ranges (`applyRangeMode`: `range_mode_agent`, `range_breakout`). It uses the intraday thresholds and ladders as intraday (+0.5R on M15).
   - **Entry.** On Auto, the daily selector proposes range only while the 1H regime ranges and a range strategy's cell with the trend or neutral passes (`rangeEvidence`), two runs in a row, then the mode council approves (risk seat + 3 of 4). The owner may pin range from the Decision card.
