@@ -1,3 +1,4 @@
+import OmegaProfile from "../components/OmegaProfile";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { usePushMany } from "../lib/push";
 import {
@@ -1260,6 +1261,7 @@ export default function Omega() {
                   {account.spec_text}
                 </p>
               ) : null}
+              {account?.account_ref ? <OmegaProfile account={account} onChanged={load} /> : null}
               {br.ea_version_gate ? (
                 <p className="mt-1 text-[11px] text-slate-400" aria-label="EA version gate">
                   {br.ea_version_gate.on

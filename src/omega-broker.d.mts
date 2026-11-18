@@ -21,3 +21,5 @@ export const OMEGA_POLICY_ROLLBACK_TRADES: number;
 export function closePosition(env: unknown, input?: { ticket?: unknown; reason?: string; actor?: string }, options?: { now?: number }): Promise<Record<string, any>>;
 export function liveBridgeFields(state: unknown, options?: { now?: number }): Record<string, any> | null;
 export function brokerStatus(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function profileAgentTick(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function setAccountProfile(env: unknown, input?: { account_ref?: string; action?: string; value?: string | null; actor?: string }, options?: { now?: number }): Promise<Record<string, any>>;

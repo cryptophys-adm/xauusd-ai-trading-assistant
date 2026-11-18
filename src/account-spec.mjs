@@ -40,13 +40,28 @@ const SCHEMA_SQL = [
     profile TEXT NOT NULL, ceiling TEXT NOT NULL, agent_mode TEXT NOT NULL, custom TEXT, profile_by TEXT, profile_ms INTEGER, created_ms INTEGER NOT NULL)`
 ];
 // Once per isolate, like omega-broker's schema (resetOmegaBrokerSchemaForTests resets this one too).
+// Phase 3 (src/profile-agent.mjs): the profile agent's state on the same row. Added to an existing table one column
+// at a time; "duplicate column" on a second run is expected and ignored.
+export const AGENT_COLUMNS = [
+  ["balance_peak", "REAL"],            // the highest balance since the row exists (the "prior peak" of an upgrade)
+  ["dd_ref", "REAL"],                  // the drawdown trigger's reference, reset to equity by each drawdown step
+  ["last_upgrade_ms", "INTEGER"],      // the last upgrade (at most one per 7 days)
+  ["upgrade_block_until_ms", "INTEGER"], // no autonomous upgrade before (the next UTC day after a kill or the daily loss)
+  ["vol_latched", "INTEGER"],          // an extreme-volatility step taken; re-armed once volatility is normal again
+  ["pending_upgrade", "TEXT"]          // approval mode: the upgrade the agent proposes, for the owner's click
+];
 let schemaReady = false;
 export function resetAccountSpecSchemaForTests() { schemaReady = false; }
-async function ensureSchema(db) {
+export async function ensureAccountSchema(db) {
   if (schemaReady) return;
   for (const sql of SCHEMA_SQL) await db.prepare(sql).run();
+  for (const [name, type] of AGENT_COLUMNS) {
+    try { await db.prepare(`ALTER TABLE omega_accounts ADD COLUMN ${name} ${type}`).run(); }
+    catch (e) { if (!/duplicate column/i.test(String(e?.message ?? e))) throw e; }
+  }
   schemaReady = true;
 }
+const ensureSchema = ensureAccountSchema;
 
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const parse = (text, fallback = null) => { try { return text == null ? fallback : JSON.parse(text); } catch { return fallback; } };
@@ -171,7 +186,9 @@ const rowOut = (r) => r ? ({
   spec_hash: r.spec_hash ?? null, spec: parse(r.spec), spec_status: r.spec_status, spec_problem: r.spec_problem ?? null,
   spec_since_ms: r.spec_since_ms ?? null, spec_validated_ms: r.spec_validated_ms ?? null,
   profile: r.profile, ceiling: r.ceiling, agent_mode: r.agent_mode, custom: parse(r.custom),
-  profile_by: r.profile_by ?? null, profile_ms: r.profile_ms ?? null, created_ms: r.created_ms
+  profile_by: r.profile_by ?? null, profile_ms: r.profile_ms ?? null, created_ms: r.created_ms,
+  balance_peak: r.balance_peak ?? null, last_upgrade_ms: r.last_upgrade_ms ?? null, upgrade_block_until_ms: r.upgrade_block_until_ms ?? null,
+  pending_upgrade: parse(r.pending_upgrade)
 }) : null;
 
 /** The Custom snapshot of the account's settings (risk per trade, positions, daily loss) as they trade today. */
@@ -225,7 +242,7 @@ export async function syncAccount(db, executor, { settings = null, now = Date.no
       .bind(ref, spec.server, legacy ? 1 : 0, hash, JSON.stringify(spec), status, problem, now, problem ? null : now, profile, profile, agentMode, custom, now, now).run();
     await say("account_seen", { account_ref: ref, profile, ceiling: profile, agent_mode: agentMode, spec_hash: hash, spec_problem: problem },
       `Omega: account ${ref} seen, profile ${PROFILES[profile].label}${problem ? `; its broker spec is not usable (${problem}), no new entries` : "; broker spec validated"}.`);
-    return { account_ref: ref, spec_status: status, spec_problem: problem, profile, ceiling: profile, agent_mode: agentMode };
+    return { account_ref: ref, spec_status: status, spec_problem: problem, profile, ceiling: profile, agent_mode: agentMode, row: await db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(ref).first() };
   }
 
   let status = row.spec_status, since = Number(row.spec_since_ms) || now;
@@ -252,7 +269,7 @@ export async function syncAccount(db, executor, { settings = null, now = Date.no
     const firstTime = row.spec_validated_ms == null;
     await say("spec_validated", { account_ref: ref, spec_hash: hash }, firstTime ? `Omega: the broker spec of ${ref} is validated. New entries may open again.` : null);
   }
-  return { account_ref: ref, spec_status: status, spec_problem: status === "validated" ? null : problem, profile: row.profile, ceiling: row.ceiling, agent_mode: row.agent_mode };
+  return { account_ref: ref, spec_status: status, spec_problem: status === "validated" ? null : problem, profile: row.profile, ceiling: row.ceiling, agent_mode: row.agent_mode, row };
 }
 
 /** The account rows for the Omega page (newest first, at most 20). */

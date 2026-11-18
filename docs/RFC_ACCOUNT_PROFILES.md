@@ -1,6 +1,6 @@
 # RFC: Account Profiles & Dynamic Mode (Omega)
 
-- **Status:** decided by the owner (2026-11-18); building in four phases. Phases 1 and 2 built (EA 1.15, `src/account-spec.mjs`, sizing in `planIntents`). ADR-0020 Amendment 3 merged on the platform (main 1ade63d, 2026-11-18 03:53 UTC).
+- **Status:** decided by the owner (2026-11-18); building in four phases. Phases 1 to 3 built (EA 1.15, `src/account-spec.mjs`, sizing in `planIntents`, the profile agent in `src/profile-agent.mjs`). ADR-0020 Amendment 3 merged on the platform (main 1ade63d, 2026-11-18 03:53 UTC).
 - **Builds on:** ADR-0020 (no new trading authority, Decision Engine veto, never move funds), docs/RFC_STRATEGY_RECOMMENDATION.md, src/grid-adapt.mjs (evidence gate), src/omega-engine.mjs (sizing), ea/mt5/OmegaExecutor.mq5 (1.14).
 
 ## Goal (owner)
@@ -147,6 +147,46 @@ owner clicks only; downgrades may run. The gates, for phase 3:
   demo reports 1:2,000,000,000, margin USD 0.38 a lot) is shown as "unlimited" on the Omega page.
 - **Where the reasons show.** The Omega page's entry status, with the numbers (`planner.details`, stored with the plan
   event when the codes change). The Signal Ledger replays in R, without lots, so the minimum-lot rule has no row there.
+
+## Phase 3 as built (2026-11-18)
+
+- **Ladder.** safe < conservative < aggressive < custom. A lower profile only tightens the account's own settings
+  (phase 2), so Custom is the top for the live account.
+- **Downgrades, never blocked or delayed, in every agent mode; new entries only.**
+  - Forced (warning): the kill switch or the daily loss limit (the profile's own) sends the account to Safe. No
+    autonomous upgrade is allowed before the next UTC day.
+  - Agent, one step each, with hysteresis:
+    - a 20% drawdown from the reference (the reference then resets to the equity);
+    - 4 losing closed deals in a row since the last switch;
+    - M15 ATR of 1000 points or more (latched until it is below 500).
+- **Upgrades: one step, on evidence, autonomous mode only.** Approval mode stores a proposal for the owner's Accept or
+  Decline. Every gate must hold:
+  - below the owner's ceiling;
+  - no open position and no pending order;
+  - at most one upgrade per 7 days;
+  - not before the post-kill block ends;
+  - equity at or above the prior balance peak;
+  - at least 20 closed deals since the switch with a positive mean net result.
+
+  The check runs in the 5-minute ledger cron on a fresh terminal state. Missing evidence or a failure raises nothing.
+- **Owner only** (`POST /omega/api/account-profile`, `OWNER_ACCESS_SUB`, same origin, checked again by the gateway):
+  - the ceiling (a ceiling below the profile lowers it at once);
+  - the profile, up to the ceiling (the owner's way back after a forced Safe);
+  - the agent mode;
+  - accept or decline a proposal.
+- **Record.** Each switch is recorded in:
+  - D1 `omega_profile_changes`;
+  - the Omega event `profile_changed`;
+  - one Telegram line;
+  - a `risk_profile.v1` digest from xauusd-risk-manager, at most one report per 30 minutes. Its items are the opaque
+    account reference, from, to, actor, reason, evidence ref (`omega_profile_changes:<id>`) and at. Severity is
+    warning for a forced downgrade, info otherwise, never critical.
+- **What this means for the live account (Custom, ceiling Custom).**
+  - The agent can only step it down, and back up to Custom on evidence.
+  - After a kill or the daily loss it is Safe. Climbing back to Custom takes three upgrades a week apart, each on
+    evidence, unless the owner sets the profile directly.
+- **Limitation.** `ea_deals` carries no account reference, so the streak and the evidence read the deals closed since
+  the switch. That is correct for the one account Omega runs today.
 
 ## Phases
 

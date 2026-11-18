@@ -20,7 +20,8 @@ import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
 import { goldSymbolCheck, goldSymbolText } from "./gold-symbol.mjs";
-import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES } from "./account-spec.mjs";
+import { runProfileAgent, ownerSetProfile } from "./profile-agent.mjs";
+import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
 export const OMEGA_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS omega_settings (id INTEGER PRIMARY KEY CHECK (id = 1), settings TEXT NOT NULL, version INTEGER NOT NULL, updated_by TEXT, updated_ms INTEGER)`,
@@ -530,6 +531,17 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     try {
       account = await syncAccount(db, executor, { settings, now, log: (action, detail) => event(db, now, "engine", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
     } catch { account = { account_ref: null, spec_status: "unknown", spec_problem: "account_sync_failed" }; }
+    // The profile agent's immediate steps (phase 3, src/profile-agent.mjs): the kill switch or the daily loss -> Safe,
+    // a drawdown step, an extreme-volatility step. No deal is read here; the loss streak and the upgrades run in the
+    // 5-minute ledger cron. A switch applies to this very plan (new entries only).
+    if (account?.row) {
+      const killed = signal?.kill === true || control?.mode === "killed";
+      // The daily loss is the profile's own limit (phase 2: the smaller of the profile's and the setting's).
+      const dailyPct = effectiveLimits(account.row.profile, settings ?? {}).max_daily_loss_pct ?? settings?.max_daily_loss_pct;
+      const step = await runProfileAgent(db, account.row, { executor, killed, dailyLoss: dailyLossHit(executor, dailyPct), now,
+        log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
+      if (step.status === "changed") account = { ...account, profile: step.change.to };
+    }
   }
   const eaGate = eaVersionGateOn(env);
   const plan = planIntents({ signal, control, settings, executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id), agents, pmActions, account, eaGate });
@@ -626,6 +638,36 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
  * connected, whether the engine is armed, the server and how many positions are open. One bridge row and the
  * settings, never the full overview (deals, intents, events): the badge reads it every 60 seconds.
  */
+/**
+ * The profile agent's evidence steps (phase 3), from the 5-minute ledger cron: the loss streak and the upgrades, on
+ * the last bridge state of the connected account. Nothing runs on a stale terminal (no state in 2 minutes): an
+ * upgrade needs a live view of the open positions and orders.
+ */
+export async function profileAgentTick(env, { now = Date.now() } = {}) {
+  await ensureSchema(env.DB);
+  const db = env.DB;
+  const b = await db.prepare("SELECT state FROM omega_bridge WHERE id = 1").first();
+  const executor = parse(b?.state);
+  if (!executor || executor.connected !== true || !(Number(executor.received_ms) > 0) || now - Number(executor.received_ms) > BRIDGE_SEEN_MS) return { status: "stale" };
+  const accounts = await readAccounts(db);
+  const acct = accounts.find((a) => a.server && a.server === executor.server);
+  if (!acct) return { status: "no_account" };
+  const row = await db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(acct.account_ref).first();
+  const control = await readControl(env);
+  const { settings } = await readSettings(env);
+  const killed = control?.mode === "killed" || String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
+  const dailyPct = effectiveLimits(row?.profile, settings ?? {}).max_daily_loss_pct ?? settings?.max_daily_loss_pct;
+  return runProfileAgent(db, row, { executor, killed, dailyLoss: dailyLossHit(executor, dailyPct), withEvidence: true, now,
+    log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
+}
+
+/** The owner's profile controls (the caller checked OWNER_ACCESS_SUB): ceiling, profile, agent mode, accept, decline. */
+export async function setAccountProfile(env, { account_ref, action, value, actor = "owner" } = {}, { now = Date.now() } = {}) {
+  await ensureSchema(env.DB);
+  return ownerSetProfile(env.DB, { account_ref, action, value, actor: String(actor || "owner").slice(0, 120), now,
+    log: (what, detail) => event(env.DB, now, actor || "owner", what, detail), notify: (t) => sendOmegaTelegram(env, t) });
+}
+
 export async function brokerStatus(env, { now = Date.now() } = {}) {
   await ensureSchema(env.DB);
   const settings = await readSettings(env);
@@ -794,7 +836,9 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       spec_status: a.spec_status, spec_problem: a.spec_problem, spec_hash: a.spec_hash, spec_since_ms: a.spec_since_ms, spec_validated_ms: a.spec_validated_ms,
       spec_text: specStatusText(a),
       profile: a.profile, profile_label: PROFILES[a.profile]?.label ?? a.profile, ceiling: a.ceiling, agent_mode: a.agent_mode, custom: a.custom,
-      profile_by: a.profile_by, profile_ms: a.profile_ms
+      profile_by: a.profile_by, profile_ms: a.profile_ms,
+      // The profile agent (phase 3): its proposal in approval mode, the block after a kill or the daily loss, the last upgrade.
+      pending_upgrade: a.pending_upgrade, upgrade_block_until_ms: a.upgrade_block_until_ms, last_upgrade_ms: a.last_upgrade_ms
     })),
     autonomous_watchdog: {
       active: true,
