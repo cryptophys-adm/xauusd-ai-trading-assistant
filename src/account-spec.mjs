@@ -29,8 +29,8 @@ export const EXECUTOR_ENTRY_MIN_VERSION = "1.16";
 /** The profiles (RFC §4). Custom takes the account's own settings. Phase 1 stores; phase 2 sizes within them. */
 export const PROFILES = Object.freeze({
   safe: Object.freeze({ label: "Safe", target_risk_pct: 1, hard_cap_pct: 2, open_risk_pct: 2, daily_loss_pct: 3, max_positions: 1, modes: ["swing", "intraday"] }),
-  conservative: Object.freeze({ label: "Conservative", target_risk_pct: 2, hard_cap_pct: 5, open_risk_pct: 5, daily_loss_pct: 6, max_positions: 2, modes: ["intraday", "swing"] }),
-  aggressive: Object.freeze({ label: "Aggressive", target_risk_pct: 5, hard_cap_pct: 10, open_risk_pct: 10, daily_loss_pct: 10, max_positions: 3, modes: ["scalp", "intraday", "swing"] }),
+  conservative: Object.freeze({ label: "Conservative", target_risk_pct: 2, hard_cap_pct: 5, open_risk_pct: 5, daily_loss_pct: 6, max_positions: 2, modes: ["intraday", "swing", "range"] }),
+  aggressive: Object.freeze({ label: "Aggressive", target_risk_pct: 5, hard_cap_pct: 10, open_risk_pct: 10, daily_loss_pct: 10, max_positions: 3, modes: ["scalp", "intraday", "swing", "range"] }),
   custom: Object.freeze({ label: "Custom", target_risk_pct: null, hard_cap_pct: null, open_risk_pct: null, daily_loss_pct: null, max_positions: null, modes: null })
 });
 export const PROFILE_IDS = Object.freeze(Object.keys(PROFILES));

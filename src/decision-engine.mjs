@@ -108,10 +108,10 @@ export const TRADING_MODE_KEY = "trading:mode";
 /** Runtime trading mode: env first, then KV (UI selector), default intraday. */
 export async function tradingMode(env) {
   const envMode = String(env?.TRADING_MODE ?? "").trim().toLowerCase();
-  if (["scalp", "intraday", "swing"].includes(envMode)) return envMode;
+  if (TRADING_MODES_LIST.includes(envMode)) return envMode;
   try {
     const v = String(await env?.SIGNAL_CACHE?.get?.(TRADING_MODE_KEY) ?? "").trim().toLowerCase();
-    if (["scalp", "intraday", "swing"].includes(v)) return v;
+    if (TRADING_MODES_LIST.includes(v)) return v;
   } catch { /* ignore */ }
   return "intraday";
 }
@@ -120,10 +120,12 @@ export async function tradingMode(env) {
  * POST /api/trading-mode (a signed-in person, same origin), never a GET. A server TRADING_MODE pins the mode,
  * and then the stored one has no effect, so the change is refused rather than silently ignored.
  */
-export const TRADING_MODES_LIST = Object.freeze(["scalp", "intraday", "swing"]);
+// "range" (owner 2026-11-18, confirmed: "Setuju"): the 4th mode, for a ranging 1H regime: only the range strategies trade
+// (src/htf-cells.mjs applyRangeMode), with the intraday thresholds; it leaves by itself on a breakout.
+export const TRADING_MODES_LIST = Object.freeze(["scalp", "intraday", "swing", "range"]);
 export async function setTradingMode(env, { mode, actor = "" } = {}) {
   const asked = String(mode ?? "").trim().toLowerCase();
-  if (!TRADING_MODES_LIST.includes(asked)) return { ok: false, error: "mode must be scalp, intraday or swing" };
+  if (!TRADING_MODES_LIST.includes(asked)) return { ok: false, error: "mode must be scalp, intraday, swing or range" };
   if (!String(actor).trim()) return { ok: false, error: "a person makes this change" };
   const envMode = String(env?.TRADING_MODE ?? "").trim().toLowerCase();
   if (TRADING_MODES_LIST.includes(envMode)) return { ok: false, error: "pinned_by_server", mode: envMode };
@@ -140,7 +142,9 @@ export const MODE_THRESHOLDS = Object.freeze({
   // terdekat", "Tanpa batas RRR"): the target is the nearest key level ahead, with no reward minimum.
   scalp: Object.freeze({ quorum_min: 0.45, min_rrr: 0, lean: 0.1, target: "nearest" }),
   intraday: Object.freeze({ quorum_min: 0.5, min_rrr: 1.5, lean: 0.15 }),
-  swing: Object.freeze({ quorum_min: 0.6, min_rrr: 2.0, lean: 0.2 })
+  swing: Object.freeze({ quorum_min: 0.6, min_rrr: 2.0, lean: 0.2 }),
+  // Range (owner 2026-11-18): the intraday thresholds; what differs is who may trade (the range strategies only).
+  range: Object.freeze({ quorum_min: 0.5, min_rrr: 1.5, lean: 0.15 })
 });
 /**
  * Pure: the mode and its thresholds. `knobs` are the council's live knob values (src/council-knob-tuning.mjs, already

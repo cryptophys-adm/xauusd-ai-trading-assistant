@@ -32,10 +32,10 @@ const setups = (mode, n, r, stop = 10, regime = "trend") => Array.from({ length:
 function env() {
   resetModeSchemaForTests(); resetAiUsageSchemaCacheForTests();
   const db = d1();
-  db.raw.exec("CREATE TABLE plan_setups (setup_key TEXT PRIMARY KEY, mode TEXT, regime TEXT, entry REAL, stop REAL, status TEXT, opened_at TEXT, results_json TEXT)");
+  db.raw.exec("CREATE TABLE plan_setups (setup_key TEXT PRIMARY KEY, mode TEXT, regime TEXT, entry REAL, stop REAL, status TEXT, opened_at TEXT, results_json TEXT, agent TEXT)");
   return { DB: db, SIGNAL_CACHE: kv() };
 }
-const seed = (e, rows) => { let i = 0; for (const s of rows) e.DB.raw.prepare("INSERT INTO plan_setups VALUES (?, ?, ?, ?, ?, 'resolved', ?, ?)").run(`k${i++}`, s.mode, s.regime, s.entry, s.stop, new Date(NOW - 10 * DAY + i * 60_000).toISOString(), JSON.stringify({ "e0@s1": { r: s.r } })); };
+const seed = (e, rows) => { let i = 0; for (const s of rows) e.DB.raw.prepare("INSERT INTO plan_setups (setup_key, mode, regime, entry, stop, status, opened_at, results_json) VALUES (?, ?, ?, ?, ?, 'resolved', ?, ?)").run(`k${i++}`, s.mode, s.regime, s.entry, s.stop, new Date(NOW - 10 * DAY + i * 60_000).toISOString(), JSON.stringify({ "e0@s1": { r: s.r } })); };
 const call = (bySeat) => async (_e, req) => {
   const seat = ["strategy", "technical", "risk", "trade_management"].find((s) => req.messages[0].content.includes(`as the ${s.replace("_", " ")} seat`));
   return bySeat[seat] ? { status: "answered", obj: { verdict: bySeat[seat], reason: `${seat} ${bySeat[seat]}` } } : { status: "failed" };
@@ -122,4 +122,48 @@ test("MS5 feasibility on a small account drops the mode without the council; kil
   await e2.SIGNAL_CACHE.put(MODE_CONTROL_KEY, JSON.stringify({ auto: true, pinned: false, baseline: "intraday" }));
   const k = await runModeSelector(e2, { now: NOW, forcedDay: true, call: async () => { asked += 1; return { status: "failed" }; } });
   assert.deepEqual([k.applied.to, k.applied.reason, asked], ["intraday", "kill_or_daily_loss", 0]);
+});
+
+import { rangeExitTick } from "../src/mode-selector.mjs";
+import { PLAN_LEARNING_KEY } from "../src/plan-learning.mjs";
+
+test("MS6 range, the 4th mode: proposed only while ranging with a passing cell; a breakout returns to the mode it came from", async () => {
+  const ev = { scalp: { status: "collecting" }, intraday: { status: "pass", mean_r: 0.05, median_stop: 10 }, swing: { status: "collecting" }, range: { status: "pass", mean_r: 0.3, median_stop: 5 } };
+  const all = { scalp: true, intraday: true, swing: true, range: true };
+  // Trending: range is not a candidate.
+  assert.equal(decideMode({ mode: "intraday", baseline: "intraday", evidence: ev, feasible: all, regime: "normal-trending" }).action, "none");
+  const first = decideMode({ mode: "intraday", baseline: "intraday", evidence: ev, feasible: all, regime: "normal-ranging" });
+  assert.deepEqual(first.streak, { candidate: "range", passes: 1 });
+  assert.equal(decideMode({ mode: "intraday", baseline: "intraday", evidence: ev, feasible: all, regime: "normal-ranging", streak: first.streak }).to, "range");
+  // In range and the regime trends: back at once, no council.
+  assert.deepEqual(decideMode({ mode: "range", baseline: "intraday", evidence: ev, feasible: all, regime: "high-trending", rangeReturn: "swing" }), { action: "revert", to: "swing", reason: "range_breakout", streak: null });
+});
+
+test("MS7 the council approves range from the cells; the owner's pin of range; the 5-minute breakout exit records and tells", async () => {
+  const e = env();
+  await e.SIGNAL_CACHE.put(TRADING_MODE_KEY, "intraday");
+  seed(e, setups("intraday", 40, 0.05, 8));
+  await e.SIGNAL_CACHE.put(PLAN_LEARNING_KEY, JSON.stringify({ cells: [{ agent: "range_fade", side: "SELL", context: "with", setups: 35, mean_r: 0.3, status: "pass" }] }));
+  const yes = call({ risk: "approve", strategy: "approve", technical: "approve", trade_management: "approve" });
+  await runModeSelector(e, { now: NOW, regime: "normal-ranging", call: yes });
+  const r = await runModeSelector(e, { now: NOW + DAY, regime: "normal-ranging", call: yes });
+  assert.deepEqual([r.status, r.applied?.to], ["changed", "range"]);
+  assert.equal(r.evidence.evidence.range.status, "pass");
+  assert.equal((await readModeControl(e)).range_return, "intraday");
+  // Still ranging: nothing. Trending: back to intraday, recorded, told.
+  assert.equal((await rangeExitTick(e, { now: NOW + DAY + 1, regime: "low-ranging" })).status, "ranging");
+  const lines = [];
+  const x = await rangeExitTick(e, { now: NOW + DAY + 2, regime: "normal-trending", notify: async (t) => lines.push(t) });
+  assert.deepEqual([x.status, x.to], ["changed", "intraday"]);
+  assert.equal(await e.SIGNAL_CACHE.get(TRADING_MODE_KEY), "intraday");
+  assert.match(lines[0], /Range → Intraday/);
+  assert.equal((await rangeExitTick(e, { now: NOW + DAY + 3, regime: "normal-trending" })).status, "idle");
+  // The owner pins range from swing: a breakout returns to swing, and the pin then holds swing.
+  await e.SIGNAL_CACHE.put(TRADING_MODE_KEY, "swing");
+  const pin = await ownerModeAction(e, { mode: "range", actor: "owner@example.com", now: NOW + 2 * DAY });
+  assert.deepEqual([pin.ok, pin.mode], [true, "range"]);
+  const back = await rangeExitTick(e, { now: NOW + 2 * DAY + 1, regime: "high-trending" });
+  assert.equal(back.to, "swing");
+  const c = await readModeControl(e);
+  assert.deepEqual([c.mode, c.baseline, c.pinned], ["swing", "swing", true]);
 });

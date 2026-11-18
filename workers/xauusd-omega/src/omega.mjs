@@ -354,7 +354,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       // Phase 4 (owner 2026-11-18): a mode pins it; action "auto" or "veto". The AI Worker checks the owner again.
       const mode = typeof r.body.mode === "string" ? r.body.mode.trim().toLowerCase() : "";
       const action = r.body.action === "auto" || r.body.action === "veto" ? r.body.action : null;
-      if (!action && !["scalp", "intraday", "swing"].includes(mode)) return json({ error: "mode must be scalp, intraday or swing, or action auto or veto" }, 400);
+      if (!action && !["scalp", "intraday", "swing", "range"].includes(mode)) return json({ error: "mode must be scalp, intraday, swing or range, or action auto or veto" }, 400);
       if (typeof env.OMEGA.setTradingMode !== "function") return json({ error: "trading_mode_unavailable" }, 503);
       return rpc(() => env.OMEGA.setTradingMode({ mode: action ? null : mode, action, actor: identity.subject, actor_sub: identity.sub ?? null }), "trading_mode_failed");
     }

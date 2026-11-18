@@ -5,6 +5,11 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- feat(omega): Range, the 4th trading mode (owner 2026-11-18, confirmed: "Setuju"; live: "Ya, lanjut di live").
+  - **What it does.** In range mode only the range strategies (`range_fade`, `sweep_reversal`) trade, still through the H4/D1 filter and the cell gate of #464, and only while the decision's 1H regime ranges (`applyRangeMode`: `range_mode_agent`, `range_breakout`). It uses the intraday thresholds and ladders as intraday (+0.5R on M15).
+  - **Entry.** On Auto, the daily selector proposes range only while the 1H regime ranges and a range strategy's cell with the trend or neutral passes (`rangeEvidence`), two runs in a row, then the mode council approves (risk seat + 3 of 4). The owner may pin range from the Decision card.
+  - **Exit.** Every 5 minutes (`rangeExitTick`): in range with the 1H regime no longer ranging, the mode returns to the one it came from (an owner's pin of range included; the pin then holds that mode), recorded in `omega_mode_changes`, an event and a Telegram line. No council: a fail-safe move.
+  - **Lists.** "range" joins the trading modes (the ledger, the plan learner's contexts, the Performance page, the Conservative and Aggressive profiles' modes).
 - feat(omega): counter-trend reversal probation (owner 2026-11-18, confirmed: "Setuju"; live: "Ya, lanjut di live"). `src/htf-cells.mjs`.
   - **Who.** The reversal strategy (`sweep_reversal`) against the H4/D1 trend, before its cell passes. Its plan already needs a sweep of a key zone reclaimed at the 15m close and puts the stop beyond the sweep's extreme; probation adds a change of structure on a closed H1 or H4 candle (the last close beyond the latest swing point against the trade; `probation_unconfirmed` until then). A range fade against the trend still never trades.
   - **How much.** Half the risk and half the profile's hard cap per trade (so a minimum lot that passes the full cap may not pass the half), one probation position at a time (`probation_busy`), never against a position on the other side (`probation_hedge`). Every other check is unchanged.

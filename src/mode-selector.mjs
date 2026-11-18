@@ -22,9 +22,10 @@
 // its geometry; the trading mode is read by the Decision Engine at its next 15m close.
 import { callBusModel } from "./model-call.mjs";
 import { ensureAiUsageSchema, neuronsOf, USD_PER_1K_NEURONS } from "./ai-usage.mjs";
-import { CONTROL_ARM } from "./plan-learning.mjs";
+import { CONTROL_ARM, readPlanLearning } from "./plan-learning.mjs";
 import { walkForward } from "./strategy-council.mjs";
-import { TRADING_MODE_KEY, TRADING_MODES_LIST, tradingMode } from "./decision-engine.mjs";
+import { TRADING_MODE_KEY, TRADING_MODES_LIST, tradingMode, readLatestDecision } from "./decision-engine.mjs";
+import { RANGE_GATED_AGENTS, isRanging, rangeEvidence } from "./htf-cells.mjs";
 import { PROFILES } from "./account-spec.mjs";
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { HEALTH_AGENT_ID } from "./health-alerts.mjs";
@@ -44,7 +45,10 @@ const DAY = 86_400_000;
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const parse = (s) => { try { return s == null ? null : typeof s === "string" ? JSON.parse(s) : s; } catch { return null; } };
 const r3 = (x) => (finite(x) ? Math.round(x * 1000) / 1000 : null);
-const LABEL = { scalp: "Scalp", intraday: "Intraday", swing: "Swing" };
+const LABEL = { scalp: "Scalp", intraday: "Intraday", swing: "Swing", range: "Range" };
+// The mode range returns to on a breakout when nothing else is known.
+export const RANGE_RETURN_DEFAULT = "intraday";
+const returnOf = (c) => (TRADING_MODES_LIST.includes(c?.range_return) && c.range_return !== "range" ? c.range_return : c?.baseline && c.baseline !== "range" ? c.baseline : RANGE_RETURN_DEFAULT);
 
 const SQL = `CREATE TABLE IF NOT EXISTS omega_mode_changes (id INTEGER PRIMARY KEY AUTOINCREMENT, from_mode TEXT NOT NULL, to_mode TEXT NOT NULL,
   actor TEXT NOT NULL, reason TEXT NOT NULL, evidence TEXT, at_ms INTEGER NOT NULL)`;
@@ -57,7 +61,7 @@ export async function readModeControl(env) {
   let c = null;
   try { c = parse(await env?.SIGNAL_CACHE?.get?.(MODE_CONTROL_KEY)); } catch { c = null; }
   const mode = await tradingMode(env);
-  return { auto: c?.auto !== false, pinned: c?.pinned === true, baseline: TRADING_MODES_LIST.includes(c?.baseline) ? c.baseline : mode, last_switch: c?.last_switch ?? null, streak: c?.streak ?? null, last_run_day: c?.last_run_day ?? null, mode };
+  return { auto: c?.auto !== false, pinned: c?.pinned === true, baseline: TRADING_MODES_LIST.includes(c?.baseline) ? c.baseline : mode, last_switch: c?.last_switch ?? null, streak: c?.streak ?? null, last_run_day: c?.last_run_day ?? null, range_return: TRADING_MODES_LIST.includes(c?.range_return) ? c.range_return : null, mode };
 }
 async function writeModeControl(env, c) {
   const { mode: _m, ...rest } = c;
@@ -88,16 +92,18 @@ export function modeFeasible(ev, { equity, volumeMin = 0.01, contractSize = 100,
  * Pure: the selector's step. Returns { action: "none" | "revert" | "drop" | "propose", to, reason, evidence, streak }.
  * `forcedDay`: the kill switch or the daily loss limit fired today.
  */
-export function decideMode({ mode, baseline, evidence, feasible, forcedDay = false, streak = null }) {
+export function decideMode({ mode, baseline, evidence, feasible, forcedDay = false, streak = null, regime = null, rangeReturn = RANGE_RETURN_DEFAULT }) {
   const cur = evidence[mode];
-  if (forcedDay) return mode !== baseline ? { action: "revert", to: baseline, reason: "kill_or_daily_loss", streak: null } : { action: "none", reason: "kill_or_daily_loss", streak: null };
+  // Range (owner 2026-11-18): only while the 1H regime ranges; a breakout leaves it at once, without the council.
+  if (mode === "range" && !isRanging(regime)) return { action: "revert", to: rangeReturn, reason: "range_breakout", streak: null };
+  if (forcedDay) return mode !== baseline ? { action: "revert", to: baseline === "range" && !isRanging(regime) ? rangeReturn : baseline, reason: "kill_or_daily_loss", streak: null } : { action: "none", reason: "kill_or_daily_loss", streak: null };
   if (!feasible[mode]) {
     const ok = TRADING_MODES_LIST.filter((m) => m !== mode && feasible[m]).sort((a, b) => (evidence[a]?.median_stop ?? Infinity) - (evidence[b]?.median_stop ?? Infinity));
     if (ok.length) return { action: "drop", to: ok[0], reason: "mode_not_feasible", streak: null };
   }
   if (mode !== baseline && cur?.status === "fail") return { action: "revert", to: baseline, reason: "evidence_failed", streak: null };
   const curMean = cur?.status === "pass" ? cur.mean_r : -Infinity;
-  const better = TRADING_MODES_LIST.filter((m) => m !== mode && feasible[m] && evidence[m]?.status === "pass" && evidence[m].mean_r >= curMean + MODE_MARGIN_R)
+  const better = TRADING_MODES_LIST.filter((m) => m !== mode && (m !== "range" || isRanging(regime)) && feasible[m] && evidence[m]?.status === "pass" && evidence[m].mean_r >= curMean + MODE_MARGIN_R)
     .sort((a, b) => evidence[b].mean_r - evidence[a].mean_r);
   if (!better.length) return { action: "none", reason: cur?.status === "pass" ? "current_mode_best" : `evidence_${cur?.status ?? "none"}`, streak: null };
   const cand = better[0];
@@ -178,8 +184,8 @@ async function record(env, { from, to, actor, reason, evidence = null }, { now, 
 /** The resolved setups the selector reads (the control arm's R), the last MODE_LEARN_DAYS. */
 async function loadSetups(db, now) {
   try {
-    const rows = (await db.prepare("SELECT mode, regime, entry, stop, results_json FROM plan_setups WHERE status = 'resolved' AND opened_at >= ? ORDER BY opened_at").bind(new Date(now - MODE_LEARN_DAYS * DAY).toISOString()).all()).results ?? [];
-    return rows.map((r) => ({ mode: r.mode, regime: r.regime, entry: Number(r.entry), stop: Number(r.stop), r: Number(parse(r.results_json)?.[CONTROL_ARM]?.r) })).filter((s) => finite(s.r));
+    const rows = (await db.prepare("SELECT mode, regime, agent, entry, stop, results_json FROM plan_setups WHERE status = 'resolved' AND opened_at >= ? ORDER BY opened_at").bind(new Date(now - MODE_LEARN_DAYS * DAY).toISOString()).all()).results ?? [];
+    return rows.map((r) => ({ mode: r.mode, regime: r.regime, agent: r.agent ?? null, entry: Number(r.entry), stop: Number(r.stop), r: Number(parse(r.results_json)?.[CONTROL_ARM]?.r) })).filter((s) => finite(s.r));
   } catch { return []; }
 }
 
@@ -200,8 +206,11 @@ export async function runModeSelector(env, { now = Date.now(), account = null, r
     if (!control.auto || control.pinned) { await writeModeControl(env, { ...control, last_run_day: day }); return { status: "pinned" }; }
     const setups = await loadSetups(db, now);
     const evidence = modeEvidence(setups, { regime });
+    // Range's evidence is its strategies' passing cells (src/htf-cells.mjs), not setups decided in range mode.
+    const rangeStops = setups.filter((s) => RANGE_GATED_AGENTS.includes(s.agent)).map((s) => Math.abs(s.entry - s.stop)).filter((x) => finite(x) && x > 0).sort((a, b) => a - b);
+    evidence.range = rangeEvidence((await readPlanLearning(env))?.cells ?? [], { medianStop: rangeStops.length ? rangeStops[Math.floor(rangeStops.length / 2)] : null });
     const feasible = Object.fromEntries(TRADING_MODES_LIST.map((m) => [m, account ? modeFeasible(evidence[m], { equity: account.equity, volumeMin: account.volume_min, contractSize: account.contract_size, capPct: account.cap_pct }) : true]));
-    const d = decideMode({ mode: control.mode, baseline: control.baseline, evidence, feasible, forcedDay, streak: control.streak });
+    const d = decideMode({ mode: control.mode, baseline: control.baseline, evidence, feasible, forcedDay, streak: control.streak, regime, rangeReturn: returnOf(control) });
     const summary = { regime, evidence: Object.fromEntries(Object.entries(evidence).map(([m, e]) => [m, { status: e.status, n: e.n, mean_r: e.mean_r, holdout_mean_r: e.holdout_mean_r, scope: e.scope, median_stop: r3(e.median_stop), feasible: feasible[m] }])) };
     let applied = null;
     if (d.action === "revert" || d.action === "drop") {
@@ -220,7 +229,9 @@ export async function runModeSelector(env, { now = Date.now(), account = null, r
         await record(env, { from: control.mode, to: control.mode, actor: "council", reason: "council_rejected", evidence: { ...summary, proposed: d.to, council } }, { now, log, notify });
       }
     }
-    await writeModeControl(env, { ...control, last_run_day: day, streak: applied ? null : d.streak, last_switch: applied ?? control.last_switch });
+    // Entering range remembers where to return on a breakout.
+    const rangeReturn = applied?.to === "range" ? (control.mode !== "range" ? control.mode : returnOf(control)) : control.range_return;
+    await writeModeControl(env, { ...control, last_run_day: day, streak: applied ? null : d.streak, last_switch: applied ?? control.last_switch, range_return: rangeReturn ?? null });
     return { status: applied ? "changed" : "unchanged", decision: d, applied, evidence: summary };
   } catch (e) {
     return { status: "failed", reason: String(e?.message ?? e).slice(0, 200) };
@@ -251,12 +262,38 @@ export async function ownerModeAction(env, { mode = null, action = null, actor =
     return { ok: true, mode: last.from, previous: control.mode, changed: true, pinned: true };
   }
   const asked = String(mode ?? "").trim().toLowerCase();
-  if (!TRADING_MODES_LIST.includes(asked)) return { ok: false, error: "mode must be scalp, intraday or swing, or action auto or veto" };
+  if (!TRADING_MODES_LIST.includes(asked)) return { ok: false, error: "mode must be scalp, intraday, swing or range, or action auto or veto" };
   const changed = asked !== control.mode;
   if (changed) await env.SIGNAL_CACHE.put(TRADING_MODE_KEY, asked);
   const id = await record(env, { from: control.mode, to: asked, actor, reason: "owner_pin" }, { now, log, notify: changed ? notify : null });
-  await writeModeControl(env, { ...control, auto: false, pinned: true, baseline: asked, streak: null, last_switch: changed ? { from: control.mode, to: asked, actor: "owner", reason: "owner_pin", at_ms: now, id } : control.last_switch });
+  const rangeReturn = asked === "range" ? (control.mode !== "range" ? control.mode : returnOf(control)) : control.range_return;
+  await writeModeControl(env, { ...control, auto: false, pinned: true, baseline: asked, streak: null, range_return: rangeReturn ?? null, last_switch: changed ? { from: control.mode, to: asked, actor: "owner", reason: "owner_pin", at_ms: now, id } : control.last_switch });
   return { ok: true, mode: asked, previous: control.mode, changed, pinned: true };
+}
+
+/**
+ * Range's breakout exit (owner 2026-11-18: "keluar otomatis saat breakout"), every 5 minutes in the ledger step: in
+ * range mode with the latest decision's 1H regime no longer ranging, the mode returns to the one it came from (an
+ * owner's pin of range included: the pin then holds that mode). No council: a fail-safe move, recorded and told.
+ */
+export async function rangeExitTick(env, { now = Date.now(), regime = undefined, log = null, notify = null } = {}) {
+  if (!env?.DB || !env?.SIGNAL_CACHE) return { status: "unavailable" };
+  try {
+    const envMode = String(env?.TRADING_MODE ?? "").trim().toLowerCase();
+    if (TRADING_MODES_LIST.includes(envMode)) return { status: "pinned_by_server" };
+    const control = await readModeControl(env);
+    if (control.mode !== "range") return { status: "idle" };
+    if (regime === undefined) { try { regime = (await readLatestDecision(env))?.context?.regime_1h ?? null; } catch { regime = null; } }
+    if (isRanging(regime)) return { status: "ranging" };
+    await ensureModeSchema(env.DB);
+    const to = returnOf(control);
+    await env.SIGNAL_CACHE.put(TRADING_MODE_KEY, to);
+    const id = await record(env, { from: "range", to, actor: "selector", reason: "range_breakout", evidence: { regime } }, { now, log, notify });
+    await writeModeControl(env, { ...control, baseline: control.baseline === "range" ? to : control.baseline, streak: null, last_switch: { from: "range", to, actor: "selector", reason: "range_breakout", at_ms: now, id } });
+    return { status: "changed", to, regime };
+  } catch (e) {
+    return { status: "failed", reason: String(e?.message ?? e).slice(0, 200) };
+  }
 }
 
 /** The mode for the pages: { mode, auto, pinned, baseline, last_switch, history (last 5) }. */
