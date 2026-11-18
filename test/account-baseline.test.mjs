@@ -6,7 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { runProfileAgent, ownerSetProfile, accountHistory, balanceOperation, dealsSince, resetProfileAgentSchemaForTests } from "../src/profile-agent.mjs";
-import { resetAccountSpecSchemaForTests, syncAccount } from "../src/account-spec.mjs";
+import { resetAccountSpecSchemaForTests, syncAccount, dailyLossExecutor } from "../src/account-spec.mjs";
 
 function d1() {
   const db = new DatabaseSync(":memory:");
@@ -158,4 +158,31 @@ test("AB7 approval mode: the proposal carries the council's advice and an expiry
   assert.deepEqual([p.to, p.council.verdict, p.expires_ms], ["conservative", "approve", NOW + DAY]);
   assert.match(lines[0], /Council: approve .* https:\/\/nexus\.cryptophys\.work\/omega#setup\/profile/);
   assert.match((await ownerSetProfile(db, { account_ref: ref, action: "accept", now: NOW + DAY + 1 })).error, /expired/);
+});
+
+test("AB8 the owner's override (owner 2026-11-18): reset and lift today's daily loss stop; never over the kill switch; audited", async () => {
+  const { db, ref, get } = await seeded();
+  await db.prepare("UPDATE omega_accounts SET profile = 'safe', balance_peak = 1295.96, dd_ref = 1295.96, upgrade_block_until_ms = ?, upgrade_block_reason = 'daily_loss_limit' WHERE account_ref = ?").bind(NOW + 3_600_000, ref).run();
+  const lines = [], events = [];
+  const base = { account_ref: ref, actor: "owner@example.com", now: NOW, executor: exec(41.96, 41.96), connectedRef: ref, log: async (a, d) => events.push([a, d]), notify: async (t) => lines.push(t) };
+  assert.match((await ownerSetProfile(db, { ...base, action: "reset" })).error, /or reset with the owner's override/);
+  assert.match((await ownerSetProfile(db, { ...base, action: "reset_override", killed: true })).error, /kill switch is on/);
+  await db.prepare("UPDATE omega_accounts SET upgrade_block_reason = 'kill_switch' WHERE account_ref = ?").bind(ref).run();
+  assert.match((await ownerSetProfile(db, { ...base, action: "reset_override" })).error, /kill switch fired today: no override/);
+  await db.prepare("UPDATE omega_accounts SET upgrade_block_reason = 'daily_loss_limit' WHERE account_ref = ?").bind(ref).run();
+  const r = await ownerSetProfile(db, { ...base, action: "reset_override" });
+  assert.equal(r.ok, true);
+  const row = await get();
+  assert.deepEqual([row.dd_ref, row.balance_peak, row.upgrade_block_until_ms, row.upgrade_block_reason, row.profile], [41.96, 41.96, null, null, "safe"]);
+  assert.deepEqual(JSON.parse(row.day_ref_override), { day: "2026-11-18", ref: 41.96, at_ms: NOW, actor: "owner@example.com" });
+  const audit = db.raw.prepare("SELECT * FROM omega_profile_changes WHERE reason = 'owner_reset_override_daily_lock'").get();
+  assert.equal(audit.severity, "warning");
+  assert.equal(JSON.parse(audit.evidence).previous.upgrade_block_reason, "daily_loss_limit");
+  assert.equal(events[0][0], "profile_baseline_reset_override");
+  assert.match(lines[0], /daily loss stop LIFTED by the owner's override: the day's loss now counts from 41\.96/);
+  // The daily loss counts from the equity at the override, today only (the broker's day start was $54.50).
+  const ex = { ...exec(41.96, 41.96), account: { ...exec(41.96, 41.96).account, day_start_balance: 54.5 } };
+  assert.equal(dailyLossExecutor(ex, row, NOW + 60_000).account.day_start_balance, 41.96);
+  assert.equal(dailyLossExecutor(ex, row, NOW + 60_000).account.day_reference, "owner_override");
+  assert.equal(dailyLossExecutor(ex, row, NOW + DAY).account.day_start_balance, 54.5, "the next UTC day ignores it");
 });

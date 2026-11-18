@@ -61,7 +61,10 @@ export const AGENT_COLUMNS = [
   ["last_deal_id", "INTEGER"],         // the last ea_deals row that check accounted for
   ["last_seen_ms", "INTEGER"],         // the last bridge sync of this account (written at most every LAST_SEEN_EVERY_MS)
   ["onboard_balance", "REAL"],         // the balance when Omega first saw the account (the onboarding day's daily-loss reference)
-  ["upgrade_block_reason", "TEXT"]     // why upgrade_block_until_ms is set: kill_switch or daily_loss_limit
+  ["upgrade_block_reason", "TEXT"],    // why upgrade_block_until_ms is set: kill_switch or daily_loss_limit
+  // The owner's reset over today's daily loss stop (owner 2026-11-18, "Reset + buka kunci hari ini"): { day, ref,
+  // at_ms, actor }. For that UTC day the daily loss counts from `ref` (the equity at the reset); the next day ignores it.
+  ["day_ref_override", "TEXT"]
 ];
 export const LAST_SEEN_EVERY_MS = 10 * 60_000;
 let schemaReady = false;
@@ -305,10 +308,28 @@ export function onboardingDayRef(row, now) {
   return Number.isFinite(ref) && ref > 0 ? ref : null;
 }
 
-/** Pure: the executor the daily-loss checks read: on the onboarding day its day start is the onboarding reference. */
+/** Pure: the owner's reset over today's daily stop, for this UTC day: its reference (the equity then), or null. */
+export function overrideDayRef(row, now) {
+  let o = null;
+  try { o = typeof row?.day_ref_override === "string" ? JSON.parse(row.day_ref_override) : null; } catch { o = null; }
+  if (!o || o.day !== utcDay(now)) return null;
+  const ref = Number(o.ref);
+  return Number.isFinite(ref) && ref > 0 ? ref : null;
+}
+
+/**
+ * Pure: the executor the daily-loss checks read. On the day of the owner's reset over the daily stop its day start is
+ * the equity at that reset (a new loss of the day's limit from there stops it again); on the onboarding day it is the
+ * onboarding reference.
+ */
 export function dailyLossExecutor(executor, row, now) {
-  const ref = onboardingDayRef(row, now);
   const acct = executor?.account;
+  const over = overrideDayRef(row, now);
+  if (over != null && acct) {
+    const bal = Number(acct.balance), start = Number(acct.day_start_balance);
+    return { ...executor, account: { ...acct, broker_day_start_balance: Number.isFinite(start) ? start : null, day_start_balance: over, day_realized_pl: Number.isFinite(bal) ? Math.round((bal - over) * 100) / 100 : acct.day_realized_pl, day_reference: "owner_override" } };
+  }
+  const ref = onboardingDayRef(row, now);
   if (ref == null || !acct) return executor;
   const start = Number(acct.day_start_balance);
   if (Number.isFinite(start) && start > 0 && start <= ref) return executor;

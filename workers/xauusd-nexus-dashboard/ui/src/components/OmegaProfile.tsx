@@ -114,12 +114,13 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
     await onChanged();
   };
 
-  const [resetting, setResetting] = useState(false);
+  const [resetting, setResetting] = useState<false | "reset" | "reset_override">(false);
   const reset = async () => {
+    const action = resetting === "reset_override" ? "reset_override" : "reset";
     setBusy(true);
     try {
-      await post({ account_ref: account.account_ref, action: "reset" });
-      setMsg({ tone: "text-emerald-300", text: "Baseline reset." });
+      await post({ account_ref: account.account_ref, action });
+      setMsg({ tone: "text-emerald-300", text: action === "reset_override" ? "Baseline reset and today's daily loss stop lifted (audited)." : "Baseline reset." });
     } catch (e: any) {
       setMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
     } finally {
@@ -211,12 +212,19 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
           </div>
           {resetting ? (
             <div className="flex flex-wrap items-center gap-2 rounded-sm border border-amber-400/30 bg-amber-400/5 px-2 py-1.5" role="alertdialog" aria-label="Confirm the baseline reset">
-              <span className="text-amber-100">Reset {account.account_ref}: peak {usd(h.balance_peak)} and DD ref {usd(h.dd_ref)} start again from the account now, losses in a row {h.losses_in_a_row ?? "—"} → 0. Profile and ceiling unchanged. Confirm?</span>
-              <button id="omega-reset-confirm" className="btn border-amber-400/40 bg-amber-400/10 text-amber-100" disabled={busy} onClick={reset}>Reset {account.account_ref}</button>
+              <span className="text-amber-100">Reset {account.account_ref}: peak {usd(h.balance_peak)} and DD ref {usd(h.dd_ref)} start again from the account now, losses in a row {h.losses_in_a_row ?? "—"} → 0. Profile and ceiling unchanged.
+                {resetting === "reset_override" ? " ALSO lifts today's daily loss stop: Omega may open new positions today; the day's loss counts again from the equity now. Recorded as an override." : ""} Confirm?</span>
+              <button id="omega-reset-confirm" className="btn border-amber-400/40 bg-amber-400/10 text-amber-100" disabled={busy} onClick={reset}>{resetting === "reset_override" ? "Reset + lift today's stop" : `Reset ${account.account_ref}`}</button>
               <button className="btn" disabled={busy} onClick={() => setResetting(false)}>Cancel</button>
             </div>
           ) : (
-            <button id="omega-reset" className="btn disabled:opacity-40" disabled={busy || !account.connected} title={account.connected ? "Owner only. Refused while the kill switch is on or after the day's stop." : "Only the connected account can be reset"} onClick={() => setResetting(true)}>Reset baseline</button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button id="omega-reset" className="btn disabled:opacity-40" disabled={busy || !account.connected || Boolean(blocked)} title={account.connected ? (blocked ? "The day's stop fired: no plain reset before 00:00 UTC" : "Owner only. Refused while the kill switch is on or after the day's stop.") : "Only the connected account can be reset"} onClick={() => setResetting("reset")}>Reset baseline</button>
+              {/* The owner's override (owner 2026-11-18): after a daily loss stop (never the kill switch), reset and lift today's stop. */}
+              {blocked && account.upgrade_block_reason !== "kill_switch" ? (
+                <button id="omega-reset-override" className="btn border-amber-400/40 bg-amber-400/10 text-amber-100 disabled:opacity-40" disabled={busy || !account.connected} title="Owner only. Resets the baseline and lifts today's daily loss stop; audited, sent to Telegram. Never over the kill switch." onClick={() => setResetting("reset_override")}>Reset + lift today's stop</button>
+              ) : null}
+            </div>
           )}
         </div>
       ) : null}
