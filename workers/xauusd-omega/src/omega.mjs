@@ -293,6 +293,17 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (typeof env.OMEGA.setAccountProfile !== "function") return json({ error: "account_profile_unavailable" }, 503);
       return rpc(() => env.OMEGA.setAccountProfile({ account_ref: ref, action, value: typeof r.body.value === "string" ? r.body.value.slice(0, 20) : null, actor: identity.subject, actor_sub: identity.sub ?? null }), "account_profile_failed");
     }
+    // Reversal probation (owner 2026-11-18): the owner's switch alone. Same origin; the AI Worker audits it.
+    if (route === "POST /api/probation") {
+      const r = await personJson(request, url, identity, 256);
+      if (r.response) return r.response;
+      if (request.headers.get("sec-fetch-site") && request.headers.get("sec-fetch-site") !== "same-origin") return json({ error: "same_origin_only" }, 403);
+      const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
+      if (!ownerSub || identity.sub !== ownerSub) return json({ error: "owner_only" }, 403);
+      if (typeof r.body.enabled !== "boolean") return json({ error: "enabled must be true or false" }, 400);
+      if (typeof env.OMEGA.setProbation !== "function") return json({ error: "probation_unavailable" }, 503);
+      return rpc(() => env.OMEGA.setProbation({ enabled: r.body.enabled, actor: identity.subject }), "probation_failed");
+    }
     if (route === "POST /api/connection") {
       const r = await personJson(request, url, identity, 16384);
       if (r.response) return r.response;
@@ -405,7 +416,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (!Number.isFinite(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
       return rpc(() => env.OMEGA.closePosition({ ticket, reason: r.body?.reason, actor: identity.subject }), "close_position_failed");
     }
-    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode", "/api/strategy-arm", "/api/strategy-council", "/api/strategy-arm/unpin", "/api/council", "/api/shadow-mode", "/api/push", "/api/status", "/api/account-profile"].includes(path)) return json({ error: "method_not_allowed" }, 405);
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode", "/api/strategy-arm", "/api/strategy-council", "/api/strategy-arm/unpin", "/api/council", "/api/shadow-mode", "/api/push", "/api/status", "/api/account-profile", "/api/probation"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 

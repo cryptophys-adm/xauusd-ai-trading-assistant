@@ -2692,6 +2692,30 @@ export default function Omega() {
               <dt className="text-slate-500">Max spread</dt><dd className="mono text-slate-200">{e.max_spread_points != null ? `${e.max_spread_points} pts` : "—"}</dd>
               <dt className="text-slate-500">Max signal age</dt><dd className="mono text-slate-200">{e.max_signal_age_ms ? `${Math.round(e.max_signal_age_ms / 60000)} min` : "—"}</dd>
               <dt className="text-slate-500">Changed by</dt><dd className="mono text-slate-300">{e.updated_by || "—"}</dd>
+              {/* Reversal probation (owner 2026-11-18): counter-trend sweep reversals at half risk, one at a time. */}
+              <dt className="text-slate-500" title="Counter-trend sweep reversals before their record passes: half risk and half the hard cap, one at a time, never hedged, only after a change of structure on a closed H1 or H4 candle. A cell whose last 5 probation trades average under 0R stops.">Reversal probation</dt>
+              <dd className="mono text-slate-200">
+                {b?.probation?.enabled === false ? "off" : "on (½ risk)"}
+                {b?.probation?.reverted && Object.keys(b.probation.reverted).length ? <span className="text-amber-200"> · reverted: {Object.keys(b.probation.reverted).join(", ")}</span> : null}
+                {canControl ? (
+                  <button
+                    type="button"
+                    className="btn ml-2 px-2 py-0.5 text-[11px]"
+                    onClick={async () => {
+                      const enabled = b?.probation?.enabled === false;
+                      try {
+                        await omegaJson("/omega/api/probation", "POST", { enabled });
+                        setEngineMsg({ tone: "text-emerald-300", text: enabled ? "Reversal probation on." : "Reversal probation off." });
+                      } catch (err: any) {
+                        setEngineMsg({ tone: "text-rose-300", text: `Refused: ${err?.message || "failed"}` });
+                      }
+                      await load();
+                    }}
+                  >
+                    {b?.probation?.enabled === false ? "Turn on" : "Turn off"}
+                  </button>
+                ) : null}
+              </dd>
             </dl>
             <form
               id="engine-form"

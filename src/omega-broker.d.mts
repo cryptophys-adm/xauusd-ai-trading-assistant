@@ -24,3 +24,5 @@ export function brokerStatus(env: unknown, options?: { now?: number }): Promise<
 export function profileAgentTick(env: unknown, options?: { now?: number; call?: unknown }): Promise<Record<string, any>>;
 export function modeSelectorTick(env: unknown, options?: { now?: number; call?: unknown }): Promise<Record<string, any>>;
 export function setAccountProfile(env: unknown, input?: { account_ref?: string; action?: string; value?: string | null; actor?: string }, options?: { now?: number }): Promise<Record<string, any>>;
+export function probationTick(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function setProbation(env: unknown, input?: { enabled?: unknown; actor?: string }, options?: { now?: number }): Promise<Record<string, any>>;
