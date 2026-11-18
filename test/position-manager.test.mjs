@@ -118,3 +118,38 @@ test("PM6. the daily report: a close against holding to the original stop and ta
   assert.equal(THRESHOLD_PIPS, 30);
   assert.match(actionMessage({ ticket: 1, side: "BUY", pips: -31, action: "close", why: "cut", council: null }), /-31 pips · closed/);
 });
+
+test("PM-R the profit and loss band in R of the stop at entry, per mode (owner 2026-11-18: \"Per mode\")", async () => {
+  const { pmBand, PM_R_BAND } = await import("../src/position-manager.mjs");
+  assert.deepEqual({ ...PM_R_BAND }, { scalp: 0.3, intraday: 0.5, range: 0.5, swing: 0.7 });
+  // A 140-pip stop (14.00): scalp 42 pips, intraday and range 70, swing 98.
+  assert.deepEqual(pmBand({ r_dist: 14, mode: "scalp" }), { pips: 42, r: 0.3, mode: "scalp", r_dist_pips: 140 });
+  assert.equal(pmBand({ r_dist: 14, mode: "range" }).pips, 70);
+  assert.equal(pmBand({ r_dist: 14, mode: "swing" }).pips, 98);
+  // No mode on the intent: the decision's, else intraday. No r_dist: |entry - sl|. Neither: 30 pips.
+  assert.equal(pmBand({ r_dist: 14 }, "swing").mode, "swing");
+  assert.equal(pmBand({ r_dist: 14 }).mode, "intraday");
+  assert.equal(pmBand({ entry: 3880, sl: 3890, mode: "intraday" }).pips, 50);
+  assert.deepEqual(pmBand({ tp: 3870 }), { pips: 30, r: null, mode: "intraday", r_dist_pips: null });
+
+  // A SELL from 3880 with a 10.00 stop on intraday: the band is 50 pips. +35 is inside it (no council needed, no action).
+  const ri = { tp: 3870, strategy: "zone_pullback", mode: "intraday", r_dist: 10 };
+  const fR = (bid, dec = decision()) => positionFacts({ position: pos(), sym: sym(bid), openIntent: ri, levels: [], decision: dec });
+  const inside = positionAction(fR(3876.3), { momentum: "weakening", thesis: "weakening" });
+  assert.deepEqual([inside.action, inside.rule], ["hold", "inside_band"]);
+  assert.match(inside.why, /±50 pip band \(±0\.5R intraday\)/);
+  // +55 pips (0.55R) and weakening: closed, and the line says the R.
+  const take = positionAction(fR(3874.3), { momentum: "weakening", thesis: "weakening" });
+  assert.deepEqual([take.action, take.rule], ["close", "take_profit_weakening"]);
+  assert.match(take.why, /\+55 pips \(\+0\.55R, band 0\.5R intraday\)/);
+  // -30 pips is no longer a cut on intraday with a 100-pip stop; -52 with the decision turned is.
+  assert.equal(positionAction(fR(3882.8, decision({ stance: "WAIT" })), { momentum: "weakening", thesis: "broken" }).action, "hold");
+  const cut = positionAction(fR(3885, decision({ stance: "WAIT" })), { momentum: "weakening", thesis: "intact" });
+  assert.deepEqual([cut.action, cut.rule], ["close", "cut_loss"]);
+  // Scalp with the same stop: 30 pips, as before.
+  const fs = positionFacts({ position: pos(), sym: sym(3876.3), openIntent: { ...ri, mode: "scalp" }, levels: [], decision: decision() });
+  assert.equal(fs.band_pips, 30);
+  assert.equal(positionAction(fs, { momentum: "weakening", thesis: "weakening" }).action, "close");
+  // lock_tp1 stays at 30 pips beyond TP1 whatever the band.
+  assert.equal(positionAction(positionFacts({ position: pos(), sym: sym(3866.8), openIntent: ri, levels: [], decision: decision() }), null).rule, "lock_tp1");
+});
