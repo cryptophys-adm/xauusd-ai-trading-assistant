@@ -1260,29 +1260,26 @@ export default function Omega() {
                 <dd className="mono text-right text-slate-300">
                   {br.freeze_level_points != null ? `${br.freeze_level_points} pts` : "—"} / {br.symbol_trade_mode ?? "—"}
                 </dd>
-                <dt className="text-slate-500">Profile / Ceiling</dt>
-                <dd className="mono text-right text-slate-300">
-                  {account ? `${account.profile_label} / ${account.ceiling}` : "—"}
+                <dt className="text-slate-500">Profile</dt>
+                <dd className="mono text-right text-slate-300" title="Set in Setup → Risk profile">
+                  {account ? `${account.profile_label} (ceiling ${account.ceiling})` : "—"}
                 </dd>
               </dl>
-              {account ? (
-                <p
-                  className={`mt-1.5 text-[11px] ${account.spec_status === "validated" ? "text-emerald-300" : "text-amber-300"}`}
-                  aria-label="Broker spec check"
-                >
-                  {account.spec_text}
-                </p>
-              ) : null}
-              {account?.account_ref ? <OmegaProfile account={account} onChanged={load} /> : null}
-              {br.ea_version_gate ? (
-                <p className="mt-1 text-[11px] text-slate-400" aria-label="EA version gate">
-                  {br.ea_version_gate.on
-                    ? br.ea_version_gate.met
-                      ? `EA version gate on: OmegaExecutor ${br.ea_version_gate.min_version}+ running.`
-                      : `EA version gate on: OmegaExecutor ${br.ea_version_gate.min_version} needed, no new entries until it runs.`
-                    : `EA version gate off until OmegaExecutor ${br.ea_version_gate.min_version} runs on the VPS${br.ea_version_gate.met ? " (it runs now)" : ""}.`}
-                </p>
-              ) : null}
+              {/* Spec and EA gate as two badges; the detail is in the tooltip (owner 2026-11-18: no prose here). */}
+              <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px]">
+                {account ? (
+                  <span aria-label="Broker spec check" title={account.spec_text}
+                    className={`rounded-sm border px-1.5 py-0.5 ${account.spec_status === "validated" ? "border-emerald-400/30 text-emerald-300" : "border-amber-400/30 text-amber-300"}`}>
+                    spec {account.spec_status === "validated" ? "✓" : account.spec_status}
+                  </span>
+                ) : null}
+                {br.ea_version_gate ? (
+                  <span aria-label="EA version gate" title={`EA version gate ${br.ea_version_gate.on ? "on" : "off"}: new entries need OmegaExecutor ${br.ea_version_gate.min_version} or later.`}
+                    className={`rounded-sm border px-1.5 py-0.5 ${br.ea_version_gate.met ? "border-emerald-400/30 text-emerald-300" : "border-rose-400/30 text-rose-300"}`}>
+                    EA {br.executor?.version ?? "?"} {br.ea_version_gate.met ? "✓" : `< ${br.ea_version_gate.min_version}`}
+                  </span>
+                ) : null}
+              </div>
             </div>
 
             {/* MT5 Navigator Tree (Ctrl+N) */}
@@ -2408,7 +2405,7 @@ export default function Omega() {
         </div>
 
         {/* Step 2, 3, 4: 3-Column Configuration Panels */}
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2">
           <Panel
             title="Broker connection"
             icon={<KeyRound className="h-3.5 w-3.5 text-cyan-300" />}
@@ -2679,19 +2676,14 @@ export default function Omega() {
                 <label htmlFor="e-age" className="text-slate-400">Max signal age (min)</label>
                 <input id="e-age" type="number" min="1" max="60" step="1" value={eAge} onChange={(ev) => { setEngineDirty(true); setEAge(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
               </div>
-              {/* What the account's profile applies now (phase 2): the smaller of each setting and the profile's cap. */}
+              {/* What the profile applies now (phase 2): the smaller of each setting and the profile's cap. */}
               {account ? (
-                <div className="rounded-sm border border-cyan-400/15 bg-cyan-400/5 px-2 py-1.5 text-[11px] text-slate-300" aria-label="Limits applied by the profile">
-                  {account.profile === "custom" ? (
-                    <span>Profile Custom: these settings apply as saved.</span>
-                  ) : (
-                    <span>
-                      Profile {account.profile_label}: applied now risk {appliedLimit(e.risk_pct, PROFILE_CAPS[account.profile]?.risk)}% / trade, {appliedLimit(e.max_positions, PROFILE_CAPS[account.profile]?.positions)} positions,
-                      daily loss {appliedLimit(e.max_daily_loss_pct, PROFILE_CAPS[account.profile]?.daily)}%. Each is the smaller of the setting and the profile's cap; change the profile on the bridge card.
-                    </span>
-                  )}
-                  <span className="block text-slate-500">Ranges: risk 0.01-10%, positions 1-5, daily loss 0.1-20%, spread 1-1000 pts, signal age 1-60 min.</span>
-                </div>
+                <p className="text-[11px] text-cyan-200" aria-label="Limits applied by the profile"
+                  title="Each applied limit is the smaller of the setting and the profile's cap. Ranges: risk 0.01-10%, positions 1-5, daily loss 0.1-20%, spread 1-1000 pts, signal age 1-60 min.">
+                  Applied ({account.profile_label}): {account.profile === "custom"
+                    ? `${e.risk_pct ?? "—"}% · ${e.max_positions ?? "—"} pos · ${e.max_daily_loss_pct ?? "—"}% day`
+                    : `${appliedLimit(e.risk_pct, PROFILE_CAPS[account.profile]?.risk)}% · ${appliedLimit(e.max_positions, PROFILE_CAPS[account.profile]?.positions)} pos · ${appliedLimit(e.max_daily_loss_pct, PROFILE_CAPS[account.profile]?.daily)}% day`}
+                </p>
               ) : null}
               <div className="flex flex-wrap gap-2 pt-1">
                 <button type="submit" id="e-save" disabled={!canControl} className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40">
@@ -2761,6 +2753,15 @@ export default function Omega() {
               ) : null}
               {engineMsg ? <p className={`text-[11.5px] ${engineMsg.tone}`}>{engineMsg.text}</p> : null}
             </form>
+          </Panel>
+
+          <Panel
+            title="Risk profile"
+            icon={<Sliders className="h-3.5 w-3.5 text-cyan-300" />}
+            hint="Downgrades run at once: the kill switch or the daily loss to Safe, a 20% drawdown, 4 losses in a row, extreme volatility. Upgrades: one step on evidence, never above the ceiling or with a position or order open, at most one per 7 days."
+            right={account ? <Badge tone="cyan">{account.profile_label}</Badge> : null}
+          >
+            {account?.account_ref ? <OmegaProfile account={account} onChanged={load} /> : <p className="text-[11px] text-slate-500">No account seen yet.</p>}
           </Panel>
 
           <Panel

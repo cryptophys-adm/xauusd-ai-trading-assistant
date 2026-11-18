@@ -1,20 +1,23 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-// Account profile controls (docs/RFC_ACCOUNT_PROFILES.md §10, ADR-0020 Amendment 3): the owner sets the ceiling, the
-// profile and the agent mode, and accepts or declines the agent's upgrade proposal. The server refuses anyone else
-// (owner_only); a ceiling below the current profile lowers the profile at once.
+// Account profile controls (docs/RFC_ACCOUNT_PROFILES.md §10, ADR-0020 Amendment 3), on the Setup view's "Risk profile"
+// panel (owner 2026-11-18: not on the monitoring view; no prose; an explicit Update with a confirm). Changing a select
+// only edits a draft; Update names the change and applies it after the owner confirms. The server refuses anyone but
+// the owner (owner_only) and audits each change; a ceiling below the profile lowers the profile at once.
 const LADDER = ["safe", "conservative", "aggressive", "custom"] as const;
 const LABEL: Record<string, string> = { safe: "Safe", conservative: "Conservative", aggressive: "Aggressive", custom: "Custom" };
+const MODE_LABEL: Record<string, string> = { autonomous: "Autonomous", approval: "Approval" };
+const rank = (p: string) => LADDER.indexOf(p as (typeof LADDER)[number]);
 
 type Account = {
   account_ref: string;
   profile: string;
   ceiling: string;
   agent_mode: string;
-  pending_upgrade?: { to?: string; evidence?: Record<string, unknown> } | null;
+  pending_upgrade?: { to?: string } | null;
   upgrade_block_until_ms?: number | null;
-  last_upgrade_ms?: number | null;
 };
+type Draft = { profile: string; ceiling: string; agent_mode: string };
 
 async function post(body: Record<string, unknown>) {
   const res = await fetch("/omega/api/account-profile", {
@@ -28,14 +31,65 @@ async function post(body: Record<string, unknown>) {
   return data;
 }
 
+/** Pure: the requests that turn `from` into `to`, in an order the server accepts (a profile never above its ceiling). */
+export function profileSteps(from: Draft, to: Draft): { action: string; value: string }[] {
+  const steps: { action: string; value: string }[] = [];
+  const ceilingUp = rank(to.ceiling) > rank(from.ceiling);
+  if (ceilingUp && to.ceiling !== from.ceiling) steps.push({ action: "ceiling", value: to.ceiling });
+  if (to.profile !== from.profile) steps.push({ action: "profile", value: to.profile });
+  if (!ceilingUp && to.ceiling !== from.ceiling) steps.push({ action: "ceiling", value: to.ceiling });
+  if (to.agent_mode !== from.agent_mode) steps.push({ action: "agent_mode", value: to.agent_mode });
+  return steps;
+}
+
+/** Pure: the confirm line, e.g. "Profile Custom → Aggressive, Ceiling Custom → Aggressive". */
+export function changeSummary(from: Draft, to: Draft): string {
+  const parts: string[] = [];
+  if (to.profile !== from.profile) parts.push(`Profile ${LABEL[from.profile] ?? from.profile} → ${LABEL[to.profile] ?? to.profile}`);
+  if (to.ceiling !== from.ceiling) parts.push(`Ceiling ${LABEL[from.ceiling] ?? from.ceiling} → ${LABEL[to.ceiling] ?? to.ceiling}`);
+  if (to.agent_mode !== from.agent_mode) parts.push(`Agent ${MODE_LABEL[from.agent_mode] ?? from.agent_mode} → ${MODE_LABEL[to.agent_mode] ?? to.agent_mode}`);
+  return parts.join(", ");
+}
+
 export default function OmegaProfile({ account, onChanged }: { account: Account; onChanged: () => void | Promise<void> }) {
-  const [msg, setMsg] = useState<{ tone: string; text: string } | null>(null);
+  const saved: Draft = useMemo(() => ({ profile: account.profile, ceiling: account.ceiling, agent_mode: account.agent_mode }), [account.profile, account.ceiling, account.agent_mode]);
+  const [draft, setDraft] = useState<Draft>(saved);
+  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
-  const act = async (action: string, value: string | null = null) => {
+  const [msg, setMsg] = useState<{ tone: string; text: string } | null>(null);
+  // A pushed overview with new saved values resets an untouched draft; an edit in progress is kept.
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => { if (!dirty) setDraft(saved); }, [saved, dirty]);
+
+  const summary = changeSummary(saved, draft);
+  const edit = (k: keyof Draft, v: string) => {
+    const next = { ...draft, [k]: v };
+    // A profile above the ceiling is not offered; lowering the ceiling brings the draft profile down with it.
+    if (k === "ceiling" && rank(next.profile) > rank(v)) next.profile = v;
+    setDraft(next);
+    setDirty(true);
+    setConfirming(false);
+    setMsg(null);
+  };
+  const apply = async () => {
     setBusy(true);
     try {
-      await post({ account_ref: account.account_ref, action, value });
-      setMsg({ tone: "text-emerald-300", text: "Saved." });
+      for (const s of profileSteps(saved, draft)) await post({ account_ref: account.account_ref, ...s });
+      setMsg({ tone: "text-emerald-300", text: `Updated: ${summary}.` });
+      setDirty(false);
+    } catch (e: any) {
+      setMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+    await onChanged();
+  };
+  const proposal = async (action: "accept" | "decline") => {
+    setBusy(true);
+    try {
+      await post({ account_ref: account.account_ref, action });
+      setMsg({ tone: "text-emerald-300", text: action === "accept" ? "Proposal accepted." : "Proposal declined." });
     } catch (e: any) {
       setMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
     } finally {
@@ -43,42 +97,48 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
     }
     await onChanged();
   };
-  const ceilingRank = LADDER.indexOf(account.ceiling as (typeof LADDER)[number]);
+
+  const select = "rounded-sm border border-white/10 bg-[#0b1220] px-1.5 py-1 text-[12px] text-slate-200";
   const pending = account.pending_upgrade?.to ? account.pending_upgrade : null;
   const blocked = account.upgrade_block_until_ms && account.upgrade_block_until_ms > Date.now() ? account.upgrade_block_until_ms : null;
-  const select = "rounded-sm border border-white/10 bg-[#0b1220] px-1.5 py-0.5 text-[11px] text-slate-200";
   return (
-    <div className="mt-2 space-y-1.5 text-[11px]" aria-label="Account profile controls">
-      <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1">
+    <div className="space-y-2 text-[12px]" aria-label="Account profile controls">
+      <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5">
         <label className="text-slate-500" htmlFor="omega-profile">Profile</label>
-        <select id="omega-profile" className={select} value={account.profile} disabled={busy} onChange={(e) => act("profile", e.target.value)}>
-          {LADDER.map((p, i) => <option key={p} value={p} disabled={i > ceilingRank}>{LABEL[p]}{i > ceilingRank ? " (above ceiling)" : ""}</option>)}
+        <select id="omega-profile" className={select} value={draft.profile} disabled={busy} onChange={(e) => edit("profile", e.target.value)}>
+          {LADDER.map((p) => <option key={p} value={p} disabled={rank(p) > rank(draft.ceiling)}>{LABEL[p]}</option>)}
         </select>
-        <label className="text-slate-500" htmlFor="omega-ceiling">Ceiling</label>
-        <select id="omega-ceiling" className={select} value={account.ceiling} disabled={busy} onChange={(e) => act("ceiling", e.target.value)}>
+        <label className="text-slate-500" htmlFor="omega-ceiling" title="The highest profile the agent may move the account to. Only you set it.">Ceiling</label>
+        <select id="omega-ceiling" className={select} value={draft.ceiling} disabled={busy} onChange={(e) => edit("ceiling", e.target.value)}>
           {LADDER.map((p) => <option key={p} value={p}>{LABEL[p]}</option>)}
         </select>
-        <label className="text-slate-500" htmlFor="omega-agent-mode">Agent</label>
-        <select id="omega-agent-mode" className={select} value={account.agent_mode} disabled={busy} onChange={(e) => act("agent_mode", e.target.value)}>
-          <option value="autonomous">Autonomous (within the ceiling)</option>
-          <option value="approval">Approval (upgrades need your click)</option>
+        <label className="text-slate-500" htmlFor="omega-agent-mode" title="Autonomous: the agent steps the profile within the ceiling. Approval: its upgrades wait for your click. Downgrades always run.">Agent</label>
+        <select id="omega-agent-mode" className={select} value={draft.agent_mode} disabled={busy} onChange={(e) => edit("agent_mode", e.target.value)}>
+          <option value="autonomous">Autonomous</option>
+          <option value="approval">Approval</option>
         </select>
       </div>
+      {confirming ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-sm border border-amber-400/30 bg-amber-400/5 px-2 py-1.5" role="alertdialog" aria-label="Confirm the profile change">
+          <span className="text-amber-100">{summary}. Confirm?</span>
+          <button id="omega-profile-confirm" className="btn border-amber-400/40 bg-amber-400/10 text-amber-100" disabled={busy} onClick={apply}>Confirm</button>
+          <button className="btn" disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <button id="omega-profile-update" className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40" disabled={busy || !summary} onClick={() => setConfirming(true)}>Update</button>
+          {dirty && summary ? <button className="btn" disabled={busy} onClick={() => { setDraft(saved); setDirty(false); }}>Reset</button> : null}
+          {blocked ? <span className="text-[11px] text-amber-200" title="After the kill switch or the daily loss limit">No auto upgrade before {new Date(blocked).toISOString().slice(11, 16)} UTC</span> : null}
+        </div>
+      )}
       {pending ? (
-        <div className="rounded-sm border border-cyan-400/20 bg-cyan-400/5 px-2 py-1.5 text-slate-300">
-          The agent proposes {LABEL[account.profile] ?? account.profile} → {LABEL[pending.to ?? ""] ?? pending.to} on evidence.
-          <span className="ml-2 inline-flex gap-1.5">
-            <button className="rounded-sm border border-emerald-400/30 px-1.5 text-emerald-300" disabled={busy} onClick={() => act("accept")}>Accept</button>
-            <button className="rounded-sm border border-white/15 px-1.5 text-slate-300" disabled={busy} onClick={() => act("decline")}>Decline</button>
-          </span>
+        <div className="flex flex-wrap items-center gap-2 rounded-sm border border-cyan-400/20 bg-cyan-400/5 px-2 py-1.5 text-slate-300">
+          <span>Agent proposes {LABEL[account.profile] ?? account.profile} → {LABEL[pending.to ?? ""] ?? pending.to}</span>
+          <button className="btn border-emerald-400/30 text-emerald-300" disabled={busy} onClick={() => proposal("accept")}>Accept</button>
+          <button className="btn" disabled={busy} onClick={() => proposal("decline")}>Decline</button>
         </div>
       ) : null}
-      <p className="text-slate-500">
-        Downgrades run at once (kill switch or daily loss to Safe, a 20% drawdown, 4 losses in a row, extreme volatility). Upgrades:
-        one step, on evidence, never above the ceiling or with a position or order open, at most one per 7 days.
-        {blocked ? ` No autonomous upgrade before ${new Date(blocked).toISOString().slice(0, 16).replace("T", " ")} UTC.` : ""}
-      </p>
-      {msg ? <p className={msg.tone}>{msg.text}</p> : null}
+      {msg ? <p className={`text-[11.5px] ${msg.tone}`}>{msg.text}</p> : null}
     </div>
   );
 }
