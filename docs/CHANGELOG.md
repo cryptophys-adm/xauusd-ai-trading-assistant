@@ -5,6 +5,14 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- feat(omega): account baselines and the owner's reset (owner 2026-11-18, relayed and confirmed: "setuju semua").
+  - **Baselines.** A login is its own account with its own baseline. The row an older EA left under the server's name is no longer adopted.
+  - **Omega deals only.** The loss streak, the upgrade evidence and the council's record count Omega's deals only.
+  - **Deposits and withdrawals** move the drawdown reference and the peak (event `balance_operation`) instead of reading as P&L.
+  - **Reset baseline** (Setup → Risk profile, owner only, named confirm) restarts the connected account's peak, drawdown reference and loss streak. The profile and ceiling are kept.
+    - It is refused while the kill switch is on or after the day's stop.
+    - It is recorded as an audit row (`owner_reset`), an event, a Telegram line and a `risk_profile.v1` item.
+  - **Seen before.** The panel shows whether Omega saw the account before, and when it first and last saw it.
 - feat(omega): the TP ladder (owner 2026-11-18, relayed and confirmed: "a, langsung live", every mode, Scalp included). Omega's own positions get TP1..TPn: the key levels between the entry and the take-profit, else thirds, then the take-profit. Once price is 30 pips past TPx, the stop locks at TPx-1 (TP0 = the entry). At each rung, a progressive partial close takes 25% to 50% of the volume: 25% with a strong power behind the position, 50% when it fades. Partials keep the broker's volume step and minimum, so a 0.01 position gets the lock only, and there are at most three. Exposure only goes down: the ladder never adds, never widens a stop and never moves the take-profit outward (Amendment 4). It replaces the single 50% scale-out (`tp_ladder` on by default; knobs `partial_min_pct`, `partial_max_pct`, `ladder_lock_pips`, `ladder_max_partials`). OmegaExecutor already runs `partial_close`, so no new EA is needed. The "Scaled Out" Telegram line now names the lot instead of "50%".
 - feat(omega): the profile council (owner 2026-11-18, relayed: "libatkan council untuk naik profil"; confirmed in the session).
   - **Upgrades (live).** An autonomous profile upgrade now needs the council's approval after the measured gates pass.

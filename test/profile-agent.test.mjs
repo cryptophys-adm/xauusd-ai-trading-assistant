@@ -132,8 +132,8 @@ test("PA8 runProfileAgent: a forced switch writes the row, one audit row, one ev
 
 test("PA9 runProfileAgent with evidence: the cron's upgrade needs the council and sets last_upgrade_ms; an agent failure raises nothing", async () => {
   const { db, executor, get } = await seeded("conservative", "custom");
-  await db.raw.exec("CREATE TABLE IF NOT EXISTS ea_deals (id INTEGER PRIMARY KEY AUTOINCREMENT, profit REAL, commission REAL, swap REAL, closed_ms INTEGER)");
-  for (let i = 0; i < 20; i++) db.raw.prepare("INSERT INTO ea_deals (profit, commission, swap, closed_ms) VALUES (6, -0.5, 0, ?)").run(NOW - 10 * DAY + i);
+  await db.raw.exec("CREATE TABLE IF NOT EXISTS ea_deals (id INTEGER PRIMARY KEY AUTOINCREMENT, profit REAL, commission REAL, swap REAL, closed_ms INTEGER, source TEXT)");
+  for (let i = 0; i < 20; i++) db.raw.prepare("INSERT INTO ea_deals (profit, commission, swap, closed_ms, source) VALUES (6, -0.5, 0, ?, 'omega')").run(NOW - 10 * DAY + i);
   const up = { ...executor, account: { ...executor.account, equity: 1010, balance: 1010 } };
   // No council (the bridge sync): an upgrade is never raised without one.
   assert.equal((await runProfileAgent(db, await get(), { executor: up, withEvidence: true, now: NOW })).status, "unchanged");

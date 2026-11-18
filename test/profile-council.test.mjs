@@ -39,13 +39,13 @@ async function seeded(profile = "conservative", ceiling = "custom") {
     symbol: { name: "GOLD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, trade_mode: "full", margin_per_lot: 0.38, atr_points: 200, bid: 4100, ask: 4100.2 }, positions: [], orders: [] };
   const a = await syncAccount(db, executor, { settings: { risk_pct: 2, max_positions: 5, max_daily_loss_pct: 10 }, now: NOW - 30 * DAY });
   await db.prepare("UPDATE omega_accounts SET profile = ?, ceiling = ?, balance_peak = 1000, dd_ref = 1000 WHERE account_ref = ?").bind(profile, ceiling, a.account_ref).run();
-  await db.raw.exec("CREATE TABLE IF NOT EXISTS ea_deals (id INTEGER PRIMARY KEY AUTOINCREMENT, profit REAL, commission REAL, swap REAL, closed_ms INTEGER)");
+  await db.raw.exec("CREATE TABLE IF NOT EXISTS ea_deals (id INTEGER PRIMARY KEY AUTOINCREMENT, profit REAL, commission REAL, swap REAL, closed_ms INTEGER, source TEXT)");
   await db.raw.exec("CREATE TABLE IF NOT EXISTS omega_intents (id TEXT PRIMARY KEY, kind TEXT, payload TEXT, status TEXT, result TEXT, created_ms INTEGER, updated_ms INTEGER)");
   const get = () => db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(a.account_ref).first();
   return { db, env: { DB: db, SIGNAL_CACHE: kv() }, executor, ref: a.account_ref, get };
 }
-const winsFor = (db, n = 20) => { for (let i = 0; i < n; i++) db.raw.prepare("INSERT INTO ea_deals (profit, commission, swap, closed_ms) VALUES (6, -0.5, 0, ?)").run(NOW - 10 * DAY + i); };
-const lossesFor = (db, n) => { for (let i = 0; i < n; i++) db.raw.prepare("INSERT INTO ea_deals (profit, commission, swap, closed_ms) VALUES (-5, -0.5, 0, ?)").run(NOW - DAY + i); };
+const winsFor = (db, n = 20) => { for (let i = 0; i < n; i++) db.raw.prepare("INSERT INTO ea_deals (profit, commission, swap, closed_ms, source) VALUES (6, -0.5, 0, ?, 'omega')").run(NOW - 10 * DAY + i); };
+const lossesFor = (db, n) => { for (let i = 0; i < n; i++) db.raw.prepare("INSERT INTO ea_deals (profit, commission, swap, closed_ms, source) VALUES (-5, -0.5, 0, ?, 'omega')").run(NOW - DAY + i); };
 // A fake model: each seat's answer by seat name (read from the system prompt).
 const callWith = (bySeat, calls = []) => async (_env, req) => {
   calls.push(req);

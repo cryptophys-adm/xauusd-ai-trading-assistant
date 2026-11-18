@@ -141,18 +141,20 @@ test("AS6 an unusable spec blocks; a same-spec flap is an event only and validat
   assert.deepEqual([bad.spec_status, bad.spec_problem], ["invalid", "trade_mode_disabled"], "a first unusable spec never validates");
 });
 
-test("AS7 the first 1.15 sync adopts the 1.14 row of the same server (profile kept); its new fields are a change that settles", async () => {
+test("AS7 a login is its own account: the row an older EA left under the server's name is never adopted (owner 2026-11-18)", async () => {
   resetAccountSpecSchemaForTests();
   const db = d1(), events = [];
   const opts = (now) => ({ settings: { ...OMEGA_DEFAULTS, risk_pct: 2, max_positions: 5, max_daily_loss_pct: 10 }, now, log: async (a) => events.push(a) });
   const old = await syncAccount(db, executor({ version: "1.14" }), opts(NOW));
   const up = await syncAccount(db, executor(), opts(NOW + 5_000));
   assert.notEqual(up.account_ref, old.account_ref);
-  assert.deepEqual([up.profile, up.ceiling, up.agent_mode, up.spec_status], ["custom", "custom", "autonomous", "pending"]);
-  assert.deepEqual(events, ["account_seen", "account_ref_upgraded", "spec_changed"]);
-  const rows = await readAccounts(db);
-  assert.equal(rows.length, 1, "one account, not two");
-  assert.equal(rows[0].legacy, false);
+  assert.deepEqual([up.profile, up.ceiling, up.agent_mode, up.spec_status], ["safe", "safe", "approval", "validated"], "a new account with its own baseline");
+  assert.deepEqual(events, ["account_seen", "account_seen"]);
+  assert.equal((await readAccounts(db)).length, 2, "the old row stays as history");
+  // The same login again: its own row and history, no new row.
+  const again = await syncAccount(db, executor(), opts(NOW + 60_000));
+  assert.equal(again.account_ref, up.account_ref);
+  assert.equal((await readAccounts(db)).length, 2);
 });
 
 test("AS8 planIntents: spec_unvalidated and ea_outdated stop new entries only; management and closes still run; no account, no gate", () => {

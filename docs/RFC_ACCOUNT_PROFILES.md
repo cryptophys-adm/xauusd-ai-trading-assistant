@@ -235,6 +235,42 @@ council's approval; for downgrades, "Council boleh menolak".
 - **Budget.** Metered as `profile_council` with its own daily cap (`PROFILE_COUNCIL_DAILY_USD`, default 0.25). Agent
   inventory entry `profile_council`.
 
+## Account baseline and the owner's reset (2026-11-18)
+
+Owner 2026-11-18, relayed: "beri tombol reset profile supaya jika ada akun yang berbeda hari ini bisa direset tapi
+mendeteksi akun ini sebelumnya pernah login di omega atau tidak". Confirmed in the session: "setuju semua".
+
+- **New account = new baseline.** An account is its login hash (OmegaExecutor 1.15+; opaque, never the number).
+  - Its first sync seeds the balance peak and the drawdown reference. Losses before Omega never count.
+  - The row an older EA left under the server's name is history; it is never adopted, since the server alone cannot
+    tell which login it was. The one-time 1.14 → 1.15 adoption of the live account on 2026-11-18 is done.
+- **Same account = same history.** A login Omega saw before keeps its row: peak, reference, profile, ceiling, changes.
+- **Omega's deals only.** The loss streak, the upgrade evidence and the council's per-profile record read `ea_deals`
+  rows with source `omega`, never manual deals.
+- **Deposits and withdrawals.**
+  - Each check compares the balance with the net of the `ea_deals` rows stored since the last check. A difference
+    beyond USD 1 or 0.2% is a balance operation.
+  - The drawdown reference and the peak move by it (event `balance_operation`).
+  - The write is conditional on the state the check read, so the bridge sync and the cron never apply one operation
+    twice.
+  - Manual losses after onboarding are real equity and still count in the drawdown.
+- **The owner's reset** (Setup → Risk profile → Reset baseline, owner only, a confirm that names the account).
+  - It applies to the connected account only.
+    - The drawdown reference becomes its equity and the peak its balance.
+    - The loss streak and the evidence count from the reset (`baseline_ms`).
+    - The volatility latch, a pending downgrade and a council veto are cleared.
+    - The profile and the ceiling stay.
+  - It is refused while the kill switch is on, and on a day the kill switch or the daily loss limit fired (until the
+    next UTC day).
+  - The reset is recorded as:
+    - one audit row, reason `owner_reset`, with the previous values in its evidence;
+    - the event `profile_baseline_reset`;
+    - one Telegram line;
+    - the `risk_profile.v1` item.
+  - The panel shows whether Omega saw the account before: "First time on Omega" (first seen within 15 minutes) or
+    "On Omega since <date> · last seen <ago>". It also shows the peak, the reference, the losses in a row and the number
+    of profile changes. `last_seen_ms` is written at most every 10 minutes.
+
 ## Phases
 
 | Phase | What | Gate to go live |

@@ -53,8 +53,15 @@ export const AGENT_COLUMNS = [
   ["pending_upgrade", "TEXT"],         // approval mode: the upgrade the agent proposes, for the owner's click
   // The profile council (src/profile-council.mjs), downgrade review on (OMEGA_PROFILE_COUNCIL_DOWNGRADE "on") only:
   ["pending_downgrade", "TEXT"],       // a soft downgrade waiting for its review (new entries wait with it)
-  ["council_veto", "TEXT"]             // the council's veto of a soft downgrade: { reason, until_ms, review_id }
+  ["council_veto", "TEXT"],            // the council's veto of a soft downgrade: { reason, until_ms, review_id }
+  // The account's baseline (owner 2026-11-18, relayed and confirmed: "setuju semua"): the owner's reset, the last balance
+  // and deal the deposit/withdrawal check accounted for, and when the account was last seen on Omega.
+  ["baseline_ms", "INTEGER"],          // the owner's last baseline reset (the loss streak and the evidence count from it)
+  ["last_balance", "REAL"],            // the balance at the last check (a change no new deal explains is a balance operation)
+  ["last_deal_id", "INTEGER"],         // the last ea_deals row that check accounted for
+  ["last_seen_ms", "INTEGER"]          // the last bridge sync of this account (written at most every LAST_SEEN_EVERY_MS)
 ];
+export const LAST_SEEN_EVERY_MS = 10 * 60_000;
 let schemaReady = false;
 export function resetAccountSpecSchemaForTests() { schemaReady = false; }
 export async function ensureAccountSchema(db) {
@@ -196,7 +203,8 @@ const rowOut = (r) => r ? ({
   profile_by: r.profile_by ?? null, profile_ms: r.profile_ms ?? null, created_ms: r.created_ms,
   balance_peak: r.balance_peak ?? null, last_upgrade_ms: r.last_upgrade_ms ?? null, upgrade_block_until_ms: r.upgrade_block_until_ms ?? null,
   pending_upgrade: parse(r.pending_upgrade),
-  pending_downgrade: parse(r.pending_downgrade), council_veto: parse(r.council_veto)
+  pending_downgrade: parse(r.pending_downgrade), council_veto: parse(r.council_veto),
+  dd_ref: r.dd_ref ?? null, baseline_ms: r.baseline_ms ?? null, last_seen_ms: r.last_seen_ms ?? null, vol_latched: Number(r.vol_latched) === 1
 }) : null;
 
 /** The Custom snapshot of the account's settings (risk per trade, positions, daily loss) as they trade today. */
@@ -221,15 +229,10 @@ export async function syncAccount(db, executor, { settings = null, now = Date.no
   };
 
   let row = await db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(ref).first();
-  // The first OmegaExecutor 1.15 sync on a server adopts the row its older EA had (the same account, now with a login hash).
-  if (!row && !legacy) {
-    const old = await db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ? AND legacy = 1").bind(legacy_ref).first();
-    if (old) {
-      await db.prepare("UPDATE omega_accounts SET account_ref = ?, legacy = 0 WHERE account_ref = ?").bind(ref, legacy_ref).run();
-      row = { ...old, account_ref: ref, legacy: 0 };
-      await say("account_ref_upgraded", { from: legacy_ref, to: ref }, null);
-    }
-  }
+  // A login (OmegaExecutor 1.15+) is its own account with its own baseline (owner 2026-11-18: a different account never
+  // takes another's history). The row an older EA left under the server's name is kept as history, never adopted: the
+  // server alone cannot tell which login it was (the one-time 1.14 -> 1.15 adoption of the live account, 2026-11-18, is done).
+  void legacy_ref;
 
   const spec = specFrom(executor);
   const hash = await specHash(spec);
@@ -245,9 +248,9 @@ export async function syncAccount(db, executor, { settings = null, now = Date.no
     // A first spec is no change: it validates at once when it is usable (the live account keeps trading as it does
     // today). Only a later change waits SPEC_SETTLE_MS.
     const status = problem ? "invalid" : "validated";
-    await db.prepare(`INSERT INTO omega_accounts (account_ref, server, legacy, spec_hash, spec, spec_status, spec_problem, spec_since_ms, spec_validated_ms, profile, ceiling, agent_mode, custom, profile_by, profile_ms, created_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'system', ?, ?)`)
-      .bind(ref, spec.server, legacy ? 1 : 0, hash, JSON.stringify(spec), status, problem, now, problem ? null : now, profile, profile, agentMode, custom, now, now).run();
+    await db.prepare(`INSERT INTO omega_accounts (account_ref, server, legacy, spec_hash, spec, spec_status, spec_problem, spec_since_ms, spec_validated_ms, profile, ceiling, agent_mode, custom, profile_by, profile_ms, created_ms, last_seen_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'system', ?, ?, ?)`)
+      .bind(ref, spec.server, legacy ? 1 : 0, hash, JSON.stringify(spec), status, problem, now, problem ? null : now, profile, profile, agentMode, custom, now, now, now).run();
     await say("account_seen", { account_ref: ref, profile, ceiling: profile, agent_mode: agentMode, spec_hash: hash, spec_problem: problem },
       `Omega: account ${ref} seen, profile ${PROFILES[profile].label}${problem ? `; its broker spec is not usable (${problem}), no new entries` : "; broker spec validated"}.`);
     return { account_ref: ref, spec_status: status, spec_problem: problem, profile, ceiling: profile, agent_mode: agentMode, row: await db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(ref).first() };
@@ -276,6 +279,10 @@ export async function syncAccount(db, executor, { settings = null, now = Date.no
     await db.prepare("UPDATE omega_accounts SET spec_status = 'validated', spec_problem = NULL, spec_validated_ms = COALESCE(spec_validated_ms, ?) WHERE account_ref = ?").bind(now, ref).run();
     const firstTime = row.spec_validated_ms == null;
     await say("spec_validated", { account_ref: ref, spec_hash: hash }, firstTime ? `Omega: the broker spec of ${ref} is validated. New entries may open again.` : null);
+  }
+  // When the account was last seen on Omega (the owner's "seen before" line), one write per LAST_SEEN_EVERY_MS.
+  if (!(Number(row.last_seen_ms) > 0) || now - Number(row.last_seen_ms) >= LAST_SEEN_EVERY_MS || now < Number(row.last_seen_ms)) {
+    try { await db.prepare("UPDATE omega_accounts SET last_seen_ms = ? WHERE account_ref = ?").bind(now, ref).run(); row = { ...row, last_seen_ms: now }; } catch { /* the line reads the older time */ }
   }
   return { account_ref: ref, spec_status: status, spec_problem: status === "validated" ? null : problem, profile: row.profile, ceiling: row.ceiling, agent_mode: row.agent_mode, row };
 }
