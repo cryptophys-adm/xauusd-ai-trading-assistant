@@ -329,3 +329,18 @@ test("AS18 unlimited leverage (FxPro demo 1:2,000,000,000): a margin rounded to 
   assert.match(refusal, /if\(!OrderCalcMargin\([^)]*\)\) return StringFormat\("refused: margin_unknown_%d", GetLastError\(\)\);/);
   assert.ok(refusal.indexOf("OrderCalcMargin(") < refusal.indexOf("OrderCheck("), "OrderCheck still decides after it");
 });
+
+test("AS19 the risk setting goes to 10% (owner 2026-11-18) and each profile still caps it; the Nexus copy of the caps matches", async () => {
+  const { RISK_PCT_MAX, settingsFrom } = await import("../src/omega-engine.mjs");
+  assert.equal(RISK_PCT_MAX, 10);
+  assert.equal(settingsFrom({ risk_pct: 10 }).settings.risk_pct, 10);
+  assert.match(settingsFrom({ risk_pct: 10.5 }).error, /risk_pct must be a number from 0\.01 to 10/);
+  assert.deepEqual([effectiveLimits("safe", { risk_pct: 10 }).risk_pct, effectiveLimits("conservative", { risk_pct: 10 }).risk_pct, effectiveLimits("aggressive", { risk_pct: 10 }).risk_pct, effectiveLimits("custom", { risk_pct: 10 }).risk_pct], [1, 2, 5, 10]);
+  const ui = readFileSync(new URL("../workers/xauusd-nexus-dashboard/ui/src/pages/Omega.tsx", import.meta.url), "utf8");
+  for (const id of ["safe", "conservative", "aggressive"]) {
+    const P = PROFILES[id];
+    assert.ok(ui.includes(`${id}: { risk: ${P.target_risk_pct}, positions: ${P.max_positions}, daily: ${P.daily_loss_pct} }`), `${id} caps in Omega.tsx`);
+  }
+  assert.match(ui, /noValidate/, "the server's reason shows instead of a silent browser block");
+  assert.match(ui, /id="e-risk" type="number" min="0\.01" max="10"/);
+});
