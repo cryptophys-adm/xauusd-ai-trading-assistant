@@ -100,3 +100,27 @@ test("TL7 Amendment 4: the Position Manager's outward TP2 waits for the TP1 lock
   const locked = planIntents({ ...base, executor: exec({ ...LONG, sl: 4010.2 }) });
   assert.ok(locked.intents.some((i) => i.kind === "modify_tp" && i.tp === 4045), "stop at TP1: the move runs");
 });
+
+test("RE1 the same-side re-entry guard: a closed 15m bar after a weakening exit, then a 0.5×ATR pullback or the agent's confidence back", async () => {
+  const { reentryGate, planIntents } = await import("../src/omega-engine.mjs");
+  const exitMs = Date.parse("2026-11-18T10:02:37Z");
+  const reentry = { side: "SELL", exit_price: 3774.92, exit_ms: exitMs, entry_conf: 0.7 };
+  const sym = { bid: 3775.5, ask: 3775.65, digits: 2, atr_value: 4 };
+  // The 10:15 signal (bar 10:00-10:15) opened before the exit: cooldown.
+  assert.equal(reentryGate({ side: "SELL", reentry, signal: { issued_ms: Date.parse("2026-11-18T10:15:00Z") }, sym }).code, "reentry_cooldown");
+  // The 10:30 signal's bar opened after it: now the pullback (need ≥ 3776.92) or the confidence.
+  const later = { issued_ms: Date.parse("2026-11-18T10:30:00Z"), trade_agent: "zone_pullback", agent_conf: "zone_pullback:0.1:0.5" };
+  const g = reentryGate({ side: "SELL", reentry, signal: later, sym });
+  assert.equal(g.code, "reentry_needs_pullback");
+  assert.match(g.detail, /need ≥ 3776\.92/);
+  assert.equal(reentryGate({ side: "SELL", reentry, signal: later, sym: { ...sym, bid: 3777 } }), null, "pulled back");
+  assert.equal(reentryGate({ side: "SELL", reentry, signal: { ...later, agent_conf: "zone_pullback:0.1:0.75" }, sym }), null, "confidence recovered");
+  assert.equal(reentryGate({ side: "BUY", reentry, signal: later, sym }), null, "the other side is free");
+  assert.equal(reentryGate({ side: "SELL", reentry: null, signal: later, sym }), null);
+  // In the planner: the note and no open.
+  const exec = { connected: true, trade_allowed: true, received_ms: Date.parse("2026-11-18T10:30:05Z"), account: { trade_mode: "demo", currency: "USD", balance: 1000, equity: 1000, day_start_balance: 1000 }, symbol: { name: "GOLD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_step: 0.01, volume_max: 50, stops_level_points: 0, bid: 3775.5, ask: 3775.65, spread_points: 15, atr_value: 4 }, positions: [] };
+  const signal = { side: "SELL", action: "ENTER_MARKET", entry: 3775.5, stop: 3785, tp1: 3760, issued_ms: Date.parse("2026-11-18T10:30:00Z"), expires_ms: Date.parse("2026-11-18T10:40:00Z"), blackout: false, kill: false, paused: false };
+  const p = planIntents({ signal, control: { mode: "active" }, settings: { ...S, max_positions: 3 }, executor: exec, now: Date.parse("2026-11-18T10:30:06Z"), engineEnabled: true, reentry });
+  assert.equal(p.notes.at(-1).code, "reentry_needs_pullback");
+  assert.ok(!p.intents.some((i) => i.kind === "open"));
+});

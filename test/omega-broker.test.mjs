@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, generateKeyPairSync, privateDecrypt, createDecipheriv, constants } from "node:crypto";
-import { bridgeSync, brokerOverview, setConnection, clearConnection, writeSettings, readSettings, bridgeKey, executorFrom, resetOmegaBrokerSchemaForTests, INTENT_TTL_MS, closePosition } from "../src/omega-broker.mjs";
+import { bridgeSync, brokerOverview, setConnection, clearConnection, writeSettings, readSettings, bridgeKey, executorFrom, resetOmegaBrokerSchemaForTests, INTENT_TTL_MS, closePosition, lastWeakeningExit } from "../src/omega-broker.mjs";
 import { buildEnvelope, keyId } from "../workers/xauusd-omega/public/omega-crypto.js";
 
 function d1() {
@@ -418,3 +418,16 @@ test("history & closed deals: executorFrom parses deals, bridgeSync persists the
 });
 
 
+
+test("the latest weakening exit for the re-entry guard: side and exit from the deal, the entry confidence from the open intent", async () => {
+  const e = env();
+  await enable(e);
+  const db = e.DB.raw;
+  db.prepare("INSERT INTO omega_intents (id, kind, payload, status, result, created_ms, updated_ms) VALUES (?, 'open', ?, 'done', ?, ?, ?)").run("open:1:S", JSON.stringify({ id: "open:1:S", kind: "open", side: "SELL", agent_conf: 0.7 }), JSON.stringify({ ok: true, ticket: 55 }), NOW - 3_600_000, NOW - 3_600_000);
+  db.prepare("INSERT INTO omega_intents (id, kind, payload, status, created_ms, updated_ms) VALUES (?, 'close', ?, 'done', ?, ?)").run("pm:55:c:1", JSON.stringify({ id: "pm:55:c:1", kind: "close", ticket: 55, reason: "pm_take_profit_weakening" }), NOW - 60_000, NOW - 59_000);
+  await e.DB.prepare("INSERT INTO ea_deals (deal_ticket, position_ticket, mode, side, volume, entry_price, exit_price, profit, opened_ms, closed_ms, source) VALUES (1, 55, 'demo', 'SELL', 0.01, 3781, 3774.92, 6, ?, ?, 'omega')").bind(NOW - 3_600_000, NOW - 59_500).run().catch(async () => {});
+  const r = await lastWeakeningExit(e.DB, NOW);
+  assert.equal(r?.side, "SELL");
+  assert.equal(r?.entry_conf, 0.7);
+  assert.equal(await lastWeakeningExit(e.DB, NOW + 7 * 3_600_000), null, "older than 6 hours");
+});

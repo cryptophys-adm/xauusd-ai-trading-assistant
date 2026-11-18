@@ -183,6 +183,27 @@ export async function reconcileFilledOpens(env, db, executor, now) {
   return count;
 }
 
+/**
+ * The latest Position Manager exit for weakening or a cut loss in the last 6 hours, for the re-entry guard
+ * (src/omega-engine.mjs reentryGate): { side, exit_price, exit_ms, entry_conf, ticket }, or null. The side and the exit
+ * come from the closing deal, the entry confidence from the position's open intent (recorded since 2026-11-18).
+ */
+export async function lastWeakeningExit(db, now) {
+  try {
+    const row = await db.prepare("SELECT payload, updated_ms FROM omega_intents WHERE kind = 'close' AND status = 'done' AND json_extract(payload, '$.reason') IN ('pm_take_profit_weakening', 'pm_cut_loss') AND created_ms > ? ORDER BY created_ms DESC LIMIT 1").bind(now - 6 * 3_600_000).first();
+    if (!row) return null;
+    const ticket = Number(parse(row.payload, {}).ticket);
+    if (!(ticket > 0)) return null;
+    let deal = null;
+    try { deal = await db.prepare("SELECT side, exit_price, closed_ms FROM ea_deals WHERE position_ticket = ? ORDER BY closed_ms DESC LIMIT 1").bind(ticket).first(); } catch { deal = null; }
+    const open = await db.prepare("SELECT payload FROM omega_intents WHERE kind = 'open' AND json_extract(result, '$.ticket') = ? LIMIT 1").bind(ticket).first();
+    const p = parse(open?.payload, {});
+    const side = deal?.side ?? p.side ?? null;
+    if (side !== "BUY" && side !== "SELL") return null;
+    return { side, ticket, exit_price: Number.isFinite(Number(deal?.exit_price)) ? Number(deal.exit_price) : null, exit_ms: Number(deal?.closed_ms) || Number(row.updated_ms) || null, entry_conf: Number.isFinite(Number(p.agent_conf)) ? Number(p.agent_conf) : null };
+  } catch { return null; }
+}
+
 export async function sendOmegaTelegram(env, message) {
   if (!env?.TELEGRAM_BOT_TOKEN || !env?.TELEGRAM_CHAT_ID) return;
   try {
@@ -635,7 +656,8 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     }
   }
   const eaGate = eaVersionGateOn(env);
-  const plan = planIntents({ signal, control, settings, executor: dayExec, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id), agents, pmActions, account, eaGate });
+  const reentry = await lastWeakeningExit(db, now);
+  const plan = planIntents({ signal, control, settings, executor: dayExec, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id), agents, pmActions, account, eaGate, reentry });
   if (pmActions.length) {
     // An action that became an intent is applied; one the live price no longer allows is skipped (never retried).
     const planned = new Set(plan.intents.filter((it) => String(it.id).startsWith("pm:")).map((it) => { const [, t, , b] = String(it.id).split(":"); return `pm:${t}:${b}`; }));
