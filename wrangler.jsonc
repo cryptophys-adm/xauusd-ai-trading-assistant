@@ -101,8 +101,8 @@
     // "Engine enabled" toggle on the Omega page (and "Arm live" for real accounts).
     "OMEGA_ENGINE_ENABLED": "true",
     // Account Profiles phase 1 (docs/RFC_ACCOUNT_PROFILES.md §2): "on" opens nothing while OmegaExecutor is older than
-    // 1.15 (planIntents note ea_outdated). Off until the owner has compiled and attached 1.15 on the VPS.
-    "OMEGA_EA_VERSION_GATE": "off",
+    // 1.15 (planIntents note ea_outdated). On since 2026-11-18: 1.15 runs on the VPS (seen 04:17 UTC, spec validated 04:18).
+    "OMEGA_EA_VERSION_GATE": "on",
     // Corpus Oracle phase 1 (owner 2026-11-11): "shadow" keeps the broker M1 corpus of Omega's active
     // broker, pair and user; "off" ignores it. It feeds no decision in phase 1.
     // Owner 2026-11-11 ("Nyalakan, host sudah #243"): collect the broker corpus for the MT5 fallback (docs/RFC_MT5_FALLBACK.md).

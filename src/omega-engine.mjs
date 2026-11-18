@@ -19,7 +19,7 @@
 
 import { confidenceTrend, parseConfidences } from "./agent-confidence.mjs";
 import { goldSymbolCheck } from "./gold-symbol.mjs";
-import { versionAtLeast, EXECUTOR_ENTRY_MIN_VERSION } from "./account-spec.mjs";
+import { versionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, effectiveLimits, PROFILES } from "./account-spec.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
   enabled: false,
@@ -441,8 +441,16 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
 
 export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false } = {}) {
   const intents = [], notes = [];
-  const note = (code) => notes.push({ code });
+  const note = (code, detail) => notes.push(detail ? { code, detail } : { code });
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
+  // Account Profiles phase 2 (docs/RFC_ACCOUNT_PROFILES.md §3-4): new entries are sized within the account's profile.
+  // Each limit is the smaller of the profile's cap and the setting; Custom keeps the settings as they are.
+  const limits = typeof accountSpec?.profile === "string" ? effectiveLimits(accountSpec.profile, S) : null;
+  if (limits && limits.profile !== "custom") {
+    if (finite(limits.risk_pct)) S.risk_pct = limits.risk_pct;
+    if (Number.isInteger(limits.max_positions)) S.max_positions = limits.max_positions;
+    if (finite(limits.max_daily_loss_pct)) S.max_daily_loss_pct = limits.max_daily_loss_pct;
+  }
   const positions = Array.isArray(executor?.positions) ? executor.positions : [];
   const recent = new Set(recentIntentIds);
 
@@ -611,7 +619,33 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     if (volume > cap) { volume = cap; note("lot_capped_5m"); }
   }
   if (volume > sym.volume_max) volume = floorToStep(sym.volume_max, sym.volume_step);
-  if (!positive(volume) || volume < sym.volume_min) { note("volume_below_min"); return { intents, notes }; }
+  const pctOf = (money) => roundTo((money / account.equity) * 100, 2);
+  const label = limits ? (PROFILES[limits.profile]?.label ?? limits.profile) : null;
+  if (!positive(volume) || volume < sym.volume_min) {
+    // The minimum lot (RFC §3): allowed only when its real risk stays within the profile's hard cap per trade. Custom
+    // has no hard cap of its own, so it skips as before. Either way the reason says the numbers.
+    const minRisk = pctOf(lossPerLot * sym.volume_min);
+    const stopPts = sym.point > 0 ? Math.round(Math.abs(price - sl) / sym.point) : null;
+    if (limits && finite(limits.hard_cap_pct) && minRisk <= limits.hard_cap_pct) {
+      volume = sym.volume_min;
+      note("min_lot_within_cap", `stop ${stopPts} pts: the minimum lot ${sym.volume_min} risks ${minRisk}% of ${roundTo(account.equity, 2)}, within the ${label} cap of ${limits.hard_cap_pct}%`);
+    } else {
+      const cap = limits && finite(limits.hard_cap_pct) ? `the ${label} cap of ${limits.hard_cap_pct}%` : `the risk per trade of ${S.risk_pct}%`;
+      note("volume_below_min", `stop ${stopPts} pts: the minimum lot ${sym.volume_min} risks ${minRisk}% of ${roundTo(account.equity, 2)}, over ${cap}`);
+      return { intents, notes };
+    }
+  }
+  // The profile's total open risk (RFC §4): what the open positions lose at their stops plus this entry's risk.
+  if (limits && finite(limits.open_risk_pct)) {
+    const openRisk = openRiskAtStops(positions.filter((p) => !intents.some((it) => it.kind === "close" && it.ticket === p.ticket)), sym);
+    const room = (account.equity * limits.open_risk_pct) / 100 - openRisk;
+    const roomVolume = room > 0 ? floorToStep(room / lossPerLot, sym.volume_step) : 0;
+    if (!(roomVolume >= sym.volume_min)) {
+      note("open_risk_cap", `open positions risk ${pctOf(openRisk)}% at their stops; the ${label} total open risk is ${limits.open_risk_pct}%`);
+      return { intents, notes };
+    }
+    if (volume > roomVolume) { volume = roomVolume; note("lot_capped_open_risk"); }
+  }
   const budgetVolume = floorToStep(budget / lossPerLot, sym.volume_step);
   if (budgetVolume < sym.volume_min) { note("daily_risk_budget"); return { intents, notes }; }
   if (volume > budgetVolume) { volume = budgetVolume; note("lot_capped_daily_budget"); }

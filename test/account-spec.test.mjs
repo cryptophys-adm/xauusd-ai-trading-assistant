@@ -174,13 +174,13 @@ test("AS8 planIntents: spec_unvalidated and ea_outdated stop new entries only; m
   assert.deepEqual(kinds(planIntents({ ...base, executor: executor({ version: "1.14" }), eaGate: false })), ["open"], "the gate is off by default");
 });
 
-test("AS9 the EA version gate is off unless OMEGA_EA_VERSION_GATE is \"on\"; wrangler ships it off", () => {
+test("AS9 the EA version gate is off unless OMEGA_EA_VERSION_GATE is \"on\"; wrangler has it on since 1.15 runs on the VPS", () => {
   assert.equal(eaVersionGateOn({}), false);
   assert.equal(eaVersionGateOn({ OMEGA_EA_VERSION_GATE: "off" }), false);
   assert.equal(eaVersionGateOn({ OMEGA_EA_VERSION_GATE: "on" }), true);
   assert.equal(EXECUTOR_ENTRY_MIN_VERSION, "1.15");
   const wrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
-  assert.match(wrangler, /"OMEGA_EA_VERSION_GATE": "off"/);
+  assert.match(wrangler, /"OMEGA_EA_VERSION_GATE": "on"/);
   assert.deepEqual([versionAtLeast("1.15", "1.15"), versionAtLeast("1.9", "1.15"), versionAtLeast("2.0", "1.15"), versionAtLeast(null, "1.15")], [true, false, true, false]);
 });
 
@@ -244,4 +244,77 @@ test("AS12 OmegaExecutor 1.15 reports the spec and is the last gate: it refuses 
   assert.match(ea.slice(ea.indexOf("string ModifyRefusal(")), /SYMBOL_TRADE_FREEZE_LEVEL[\s\S]*"refused: freeze_level"/);
   // The gold allowlist stays.
   assert.match(ea, /string GOLD_USD_SYMBOLS\[\] = \{/);
+});
+
+// ------------------------------------------------------------------ phase 2: sizing within the profile's caps
+
+import { effectiveLimits } from "../src/account-spec.mjs";
+import { openRiskAtStops } from "../src/omega-engine.mjs";
+
+const SIGNAL2 = { side: "BUY", action: "ENTER_MARKET", entry: 4100, stop: 4095, tp1: 4110, issued_ms: NOW - 60_000, expires_ms: NOW + 600_000, blackout: false, kill: false, paused: false };
+const plan2 = ({ profile, equity = 10_000, settings = {}, positions = [], stop = 4095, adaptive = false } = {}) => planIntents({
+  signal: { ...SIGNAL2, stop },
+  control: { mode: "active" },
+  settings: { ...OMEGA_DEFAULTS, enabled: true, adaptive_volatility: adaptive, max_daily_loss_pct: 10, ...settings },
+  executor: executor({ acct: { equity, balance: equity, day_start_balance: equity }, over: { positions } }),
+  now: NOW, engineEnabled: true,
+  account: profile === undefined ? null : { spec_status: "validated", profile }
+});
+const openOf = (p) => p.intents.find((i) => i.kind === "open") ?? null;
+
+test("AS13 effectiveLimits: the smaller of the profile's cap and the setting; Custom is the settings unchanged", () => {
+  const live = { risk_pct: 2, max_positions: 5, max_daily_loss_pct: 10 };
+  assert.deepEqual(effectiveLimits("custom", live), { profile: "custom", risk_pct: 2, max_positions: 5, max_daily_loss_pct: 10, hard_cap_pct: null, open_risk_pct: null });
+  assert.deepEqual(effectiveLimits("safe", live), { profile: "safe", risk_pct: 1, max_positions: 1, max_daily_loss_pct: 3, hard_cap_pct: 2, open_risk_pct: 2 });
+  assert.deepEqual(effectiveLimits("conservative", { risk_pct: 0.5, max_positions: 1, max_daily_loss_pct: 2 }), { profile: "conservative", risk_pct: 0.5, max_positions: 1, max_daily_loss_pct: 2, hard_cap_pct: 5, open_risk_pct: 5 }, "a tighter setting wins");
+  assert.equal(effectiveLimits("aggressive", { risk_pct: 2 }).risk_pct, 2, "the setting (max 2) stays below Aggressive's 5");
+  assert.equal(effectiveLimits("nonsense", live).profile, "safe", "an unknown profile is Safe");
+});
+
+test("AS14 the live account's sizing is unchanged under Custom: the same lot as with no profile at all", () => {
+  for (const equity of [10_000, 2_500, 400]) {
+    const none = openOf(plan2({ equity, settings: { risk_pct: 2, max_positions: 5, max_daily_loss_pct: 10 } }));
+    const custom = openOf(plan2({ equity, profile: "custom", settings: { risk_pct: 2, max_positions: 5, max_daily_loss_pct: 10 } }));
+    assert.deepEqual(custom, none, `equity ${equity}`);
+  }
+});
+
+test("AS15 Safe sizes at 1% and one position; Conservative caps the risk per trade at the setting", () => {
+  // 500 pts stop, tick 0.01 = 1 USD a lot: 500 USD a lot. 1% of 10,000 = 100 USD -> 0.2 lot.
+  assert.equal(openOf(plan2({ profile: "safe", settings: { risk_pct: 2 } })).volume, 0.2);
+  assert.equal(openOf(plan2({ profile: "custom", settings: { risk_pct: 2 } })).volume, 0.4);
+  const busy = plan2({ profile: "safe", settings: { risk_pct: 2, max_positions: 5 }, positions: [{ ticket: 9, side: "BUY", volume: 0.1, open_price: 4090, sl: 4091, tp: 4120, magic: 920200, intent_id: "open:x:BUY", source: "omega" }] });
+  assert.equal(busy.notes.at(-1).code, "max_positions", "Safe allows one position");
+});
+
+test("AS16 the minimum lot: used within the profile's hard cap, skipped over it with the numbers; Custom skips as before", () => {
+  // USD 100 account, 500 pts stop: the minimum lot 0.01 loses 5 USD = 5%.
+  const safe = plan2({ profile: "safe", equity: 100 });
+  assert.equal(openOf(safe), null);
+  assert.equal(safe.notes.at(-1).code, "volume_below_min");
+  assert.match(safe.notes.at(-1).detail, /stop 500 pts: the minimum lot 0\.01 risks 5% of 100, over the Safe cap of 2%/);
+  const conservative = plan2({ profile: "conservative", equity: 100 });
+  assert.equal(openOf(conservative).volume, 0.01, "5% is within Conservative's 5% cap");
+  assert.ok(conservative.notes.some((n) => n.code === "min_lot_within_cap" && /within the Conservative cap of 5%/.test(n.detail)));
+  const custom = plan2({ profile: "custom", equity: 100, settings: { risk_pct: 2 } });
+  assert.equal(openOf(custom), null);
+  assert.match(custom.notes.at(-1).detail, /over the risk per trade of 2%/);
+});
+
+test("AS17 the profile's total open risk caps or stops a new entry; the lot is never raised by it", () => {
+  // A manual SELL (not Omega's, so never closed by the plan) with its stop above the price: its risk counts.
+  const sell = (volume) => ({ ticket: 9, side: "SELL", volume, open_price: 4090, sl: 4110, tp: 4060, magic: 0, intent_id: null, source: "manual" });
+  const S = { risk_pct: 2, max_positions: 5 };
+  const riskPct = (v) => (openRiskAtStops([sell(v)], executor().symbol) / 10_000) * 100;
+  // Conservative: 2% a trade = 0.4 lot at 500 USD a lot; the total open risk cap is 5% = 500 USD.
+  const full = plan2({ profile: "conservative", settings: S, positions: [sell(0.6)] });
+  assert.ok(riskPct(0.6) > 5, "the open SELL alone uses the cap");
+  assert.deepEqual([openOf(full), full.notes.at(-1).code], [null, "open_risk_cap"]);
+  assert.match(full.notes.at(-1).detail, /the Conservative total open risk is 5%/);
+  const part = plan2({ profile: "conservative", settings: S, positions: [sell(0.4)] });
+  const room = 500 - openRiskAtStops([sell(0.4)], executor().symbol);
+  assert.equal(openOf(part).volume, Math.floor(room / 500 * 100) / 100);
+  assert.ok(openOf(part).volume < 0.4 && part.notes.some((n) => n.code === "lot_capped_open_risk"));
+  const free = plan2({ profile: "conservative", settings: S });
+  assert.equal(openOf(free).volume, 0.4, "nothing open: the risk per trade decides");
 });

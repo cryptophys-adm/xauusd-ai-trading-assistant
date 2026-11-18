@@ -1232,7 +1232,7 @@ export default function Omega() {
               <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]" aria-label="Account spec">
                 <dt className="text-slate-500">Leverage / Margin</dt>
                 <dd className="mono text-right text-slate-300">
-                  {br.leverage != null ? `1:${br.leverage}` : "—"} / {br.margin_mode ?? "—"}
+                  {br.leverage != null ? `1:${Number(br.leverage).toLocaleString("en-US")}` : "—"} / {br.margin_mode ?? "—"}
                 </dd>
                 <dt className="text-slate-500">Margin / lot</dt>
                 <dd className="mono text-right text-slate-300">{br.margin_per_lot != null ? num(br.margin_per_lot, 2) : "—"}</dd>
@@ -2153,7 +2153,7 @@ export default function Omega() {
           {/* Why Omega is or is not entering now (owner 2026-11-13: "pastikan semua ada visualisasi") */}
           <div className="mt-3 border-t border-white/5 pt-3">
             <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Entry status</div>
-            <OmegaWhy codes={b?.planner?.codes} sinceMs={b?.planner?.since_ms} />
+            <OmegaWhy codes={b?.planner?.codes} sinceMs={b?.planner?.since_ms} details={b?.planner?.details} />
           </div>
         </Panel>
 

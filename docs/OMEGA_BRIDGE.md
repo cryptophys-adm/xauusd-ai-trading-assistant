@@ -163,7 +163,7 @@ MT5's `[StartUp]` section in `/opt/mt5-ingestion-gateway/config/terminal_gateway
     for a new account, a changed spec and its first validation. The login hash is used in the sync only: it is
     not stored with the bridge state and not served.
   - **EA version gate:** `OMEGA_EA_VERSION_GATE` "on" opens nothing while the EA is older than 1.15 (note
-    `ea_outdated`). It ships "off" and is switched on once 1.15 runs on the VPS.
+    `ea_outdated`). On since 2026-11-18, once 1.15 ran on the VPS.
 
   **Own chart profile.** MT5 saves every open chart into the current profile and adds the `[StartUp]` chart
   again at each start: the shared `Default` profile had grown to ~70 charts, most on a symbol the next

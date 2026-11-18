@@ -1,6 +1,6 @@
 # RFC: Account Profiles & Dynamic Mode (Omega)
 
-- **Status:** decided by the owner (2026-11-18); building in four phases. Phase 1 built (EA 1.15, `src/account-spec.mjs`).
+- **Status:** decided by the owner (2026-11-18); building in four phases. Phases 1 and 2 built (EA 1.15, `src/account-spec.mjs`, sizing in `planIntents`). ADR-0020 Amendment 3 merged on the platform (main 1ade63d, 2026-11-18 03:53 UTC).
 - **Builds on:** ADR-0020 (no new trading authority, Decision Engine veto, never move funds), docs/RFC_STRATEGY_RECOMMENDATION.md, src/grid-adapt.mjs (evidence gate), src/omega-engine.mjs (sizing), ea/mt5/OmegaExecutor.mq5 (1.14).
 
 ## Goal (owner)
@@ -128,7 +128,22 @@ owner clicks only; downgrades may run. The gates, for phase 3:
   `max_daily_loss_pct` 10 at the time), ceiling Custom, autonomous; any later account Safe, ceiling Safe, approval.
   No lot size changes in phase 1.
 - **EA version gate.** `OMEGA_EA_VERSION_GATE` "on" blocks new entries for an EA before 1.15 (`ea_outdated`). It
-  ships "off" and is switched on in a follow-up PR once the owner has compiled and attached 1.15 on the VPS.
+  shipped "off" and is on since 1.15 runs on the VPS: seen 2026-11-18 04:17:31 UTC (the 1.14 row adopted, the spec
+  changed with the new fields), validated 04:18:32 UTC.
+
+## Phase 2 as built (2026-11-18)
+
+- **Limits.** `effectiveLimits(profile, settings)`: each limit (risk per trade, positions, daily loss) is the smaller of
+  the profile's cap and the engine setting, so the Aether policy only tightens inside the profile. Custom is the
+  settings unchanged: the live account sizes exactly as before (test AS14).
+- **Minimum lot.** Below `volume_min` the minimum lot is used only when its real risk is within the profile's hard cap
+  per trade (`min_lot_within_cap`); otherwise the setup is skipped (`volume_below_min`) with the numbers, e.g. "stop
+  500 pts: the minimum lot 0.01 risks 5% of 100, over the Safe cap of 2%". Custom has no hard cap and skips as before.
+  The day's risk budget still applies after it.
+- **Total open risk.** What the open positions lose at their stops plus the new entry stays within the profile's total
+  open risk: the lot is capped (`lot_capped_open_risk`) or the entry skipped (`open_risk_cap`). It never raises a lot.
+- **Where the reasons show.** The Omega page's entry status, with the numbers (`planner.details`, stored with the plan
+  event when the codes change). The Signal Ledger replays in R, without lots, so the minimum-lot rule has no row there.
 
 ## Phases
 
