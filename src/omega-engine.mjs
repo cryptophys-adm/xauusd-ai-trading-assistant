@@ -45,7 +45,10 @@ export const OMEGA_DEFAULTS = Object.freeze({
   ladder_max_partials: 3,
   // The same-side re-entry guard (owner 2026-11-18, confirmed: "Setuju"): see reentryGate.
   reentry_cooldown_bars: 1,
-  reentry_pullback_atr: 0.5
+  reentry_pullback_atr: 0.5,
+  // The ladder's step per mode (owner 2026-11-18, confirmed: "Setuju"): scalp ladder_lock_pips, intraday and swing in R.
+  ladder_r_intraday: 0.5,
+  ladder_r_swing: 0.3
 });
 // 10 since 2026-11-18 (owner: "Naikkan ke 10%, dikunci profil", docs/RFC_ACCOUNT_PROFILES.md §4): the setting may go
 // to the RFC's 10% maximum; what an entry risks is the smaller of the setting and the account profile's target (Safe 1%,
@@ -106,7 +109,9 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS) {
     ?? num("ladder_lock_pips", 5, 100)
     ?? num("ladder_max_partials", 0, 5, { integer: true })
     ?? num("reentry_cooldown_bars", 0, 8, { integer: true })
-    ?? num("reentry_pullback_atr", 0, 3);
+    ?? num("reentry_pullback_atr", 0, 3)
+    ?? num("ladder_r_intraday", 0.1, 2)
+    ?? num("ladder_r_swing", 0.1, 2);
   if (err) return { error: err };
   if (out.partial_min_pct > out.partial_max_pct) return { error: "partial_min_pct must not be above partial_max_pct" };
   if (body.tp_ladder !== undefined) {
@@ -320,7 +325,23 @@ export function partialShare(band, S) {
  *             keeps the broker's step and minimum and leaves at least the minimum open; otherwise no partial.
  * Exposure only goes down: no add, no wider stop, no take-profit moved outward.
  */
-export function ladderPlan({ position: p, sym, signal = null, levels = null, settings = OMEGA_DEFAULTS, partialsDone = 0, now = Date.now() }) {
+/** The closed candle each mode's ladder confirms on (owner 2026-11-18): scalp M5, intraday M15, swing H1. */
+export const LADDER_CONFIRM_TF = Object.freeze({ scalp: "M5", intraday: "M15", swing: "H1" });
+
+/**
+ * Pure: the ladder's step for a position by the mode it opened in (`meta`: { mode, r_dist } from its open intent):
+ * scalp (or unknown) ladder_lock_pips x 0.1; intraday ladder_r_intraday x R; swing ladder_r_swing x R, R being the
+ * stop distance at entry. null when an R step has no R (then the ladder locks nothing new).
+ */
+export function ladderStep(meta, S) {
+  const mode = meta?.mode === "intraday" || meta?.mode === "swing" ? meta.mode : "scalp";
+  if (mode === "scalp") return { mode, step: S.ladder_lock_pips * GOLD_PIP, unit: "pips" };
+  const r = Number(meta?.r_dist);
+  if (!(r > 0)) return { mode, step: null, unit: "R" };
+  return { mode, step: r * (mode === "intraday" ? S.ladder_r_intraday : S.ladder_r_swing), unit: "R" };
+}
+
+export function ladderPlan({ position: p, sym, signal = null, levels = null, settings = OMEGA_DEFAULTS, partialsDone = 0, now = Date.now(), meta = null, candles = undefined }) {
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
   const buy = p.side === "BUY", dir = buy ? 1 : -1;
   const open = Number(p.open_price ?? p.entry), curSl = Number(p.sl), vol = Number(p.volume);
@@ -335,12 +356,19 @@ export function ladderPlan({ position: p, sym, signal = null, levels = null, set
   const rungs = ladderRungs({ position: p, levels, buffer });
   if (!rungs.length) return none;
   const reached = rungs.filter((x) => dir * (price - x) >= 0).length;
-  // SL lock: the highest rung price is lock_pips past.
-  const lockPx = S.ladder_lock_pips * GOLD_PIP;
-  const past = rungs.filter((x) => dir * (price - x) >= lockPx).length;
+  // SL lock (owner 2026-11-18, confirmed): one step past the entry, the stop goes to break-even (plus the buffer); one
+  // step past TPx, to TPx. The step is the mode's (ladderStep). With `candles` (the planner always passes them) the
+  // trigger is the mode's last CLOSED candle (LADDER_CONFIRM_TF): its close beyond the level and the candle itself in the
+  // trade's direction (no reversal candle); no such candle, no new lock. Without `candles`, the live price (tests).
+  const { step: lockPx, mode } = ladderStep(meta, S);
+  const candle = candles === undefined ? null : candles?.[LADDER_CONFIRM_TF[mode]] ?? null;
+  const trigger = candles === undefined ? price
+    : candle && finite(candle.c) && finite(candle.o) && (buy ? candle.c >= candle.o : candle.c <= candle.o) ? candle.c : null;
+  const L = [open, ...rungs];
+  const past = lockPx != null && finite(trigger) ? L.filter((x) => dir * (trigger - x) >= lockPx).length : 0;
   let sl = null, slRung = null;
   if (past >= 1) {
-    const target = roundTo(past === 1 ? open + dir * buffer : rungs[past - 2], digits);
+    const target = roundTo(past === 1 ? open + dir * buffer : L[past - 1], digits);
     const better = !finite(curSl) || curSl <= 0 ? true : buy ? target > curSl + point : target < curSl - point;
     const room = buy ? target < sym.bid - floorPx : target > sym.ask + floorPx;
     if (target > 0 && better && room) { sl = target; slRung = past - 1; }
@@ -371,7 +399,7 @@ export function ladderPlan({ position: p, sym, signal = null, levels = null, set
  *               positions on the signal's side;
  *   scale-out   a position of 0.02 lots or more at 1.5R or its target banks half, once per position.
  */
-export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [], now = Date.now(), extendOf = () => true } = {}) {
+export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [], now = Date.now(), extendOf = () => true, positionMeta = {}, candles = undefined } = {}) {
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
   const out = [];
   if (!finite(sym.bid) || !finite(sym.ask)) return out;
@@ -438,7 +466,7 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
     // The TP ladder: the SL lock and the progressive partials (ladderPlan). It replaces the single scale-out below.
     if (S.tp_ladder) {
       const partialsDone = [...recent].filter((rid) => String(rid).startsWith(`pl:${p.ticket}:`)).length;
-      const lad = ladderPlan({ position: p, sym, signal, levels, settings: S, partialsDone, now });
+      const lad = ladderPlan({ position: p, sym, signal, levels, settings: S, partialsDone, now, meta: positionMeta?.[p.intent_id] ?? null, candles });
       if (lad.sl != null) {
         // One stop per position per plan: the ladder's lock wins only when it is tighter than a stop already planned.
         const i = out.findIndex((x) => x.kind === "modify_sl" && x.ticket === p.ticket);
@@ -606,7 +634,7 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
   return { intents, extendOf: (p) => ["stable", "rising"].includes(trendOf(p)) };
 }
 
-export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null } = {}) {
+export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined } = {}) {
   const intents = [], notes = [];
   const note = (code, detail) => notes.push(detail ? { code, detail } : { code });
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
@@ -678,7 +706,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // Position management runs on every sync, whatever the entry gates say (audit 2026-11-11, owner:
   // "perbaiki"): a blackout, the rollover quarantine, a pause, a wide spread or a full book only stop
   // NEW entries; the positions already open keep their break-even, extended target and scale-out.
-  intents.push(...manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket), now, extendOf: exits.extendOf }));
+  intents.push(...manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket), now, extendOf: exits.extendOf, positionMeta, candles }));
 
   if (!side) { note("no_side"); return { intents, notes }; }
 
@@ -847,6 +875,9 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     if (!tight) openIntent.stop_source = `grid:${signal.grid_cell}`;
   }
   if (volRegime !== "NORMAL") openIntent.vol_regime = volRegime;
+  // The mode it opened in and its stop distance (the ladder's step per mode; a later mode switch never changes them).
+  if (["scalp", "intraday", "swing"].includes(signal.trading_mode)) openIntent.mode = signal.trading_mode;
+  if (finite(price) && finite(sl)) openIntent.r_dist = roundTo(Math.abs(price - sl), sym.digits);
   intents.push(openIntent);
   return { intents, notes };
 }
