@@ -157,7 +157,7 @@ test("Omega: /omega and /omega/ render inside the Nexus SPA with the left panel;
     "Market Watch",
     "Navigator",
     "Algo Trading",
-    "Setup & Configuration Center",
+    "Connection & EA", // Setup's sub-tab since the 2026-11-18 rebuild (was "Setup & Configuration Center")
     "FxPro",
     "Dupoin",
     "Valetax",
@@ -170,7 +170,7 @@ test("Omega: /omega and /omega/ render inside the Nexus SPA with the left panel;
     "e-quick-toggle",
     "configLocked",
     "Locked:",
-    "Session:",
+    "omega-status-strip", // the one status strip since the 2026-11-18 rebuild (the old "Session:" badge)
   ]) {
     assert.ok(omegaUi.includes(term), term);
   }
