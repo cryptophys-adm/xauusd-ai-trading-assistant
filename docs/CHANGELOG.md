@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- fix(omega): the ladder locks to TPx−1 (owner 2026-11-18, confirmed: "TPx−1"). One step past TP1 the stop stays at break-even; past TP2 it goes to TP1; past TP3 to TP2. It was TPx since #456.
 - fix(omega): the ladder's closed-candle confirmation (review of #456).
   - A candle needs its final minute bar.
   - Candles come only from the connected terminal's own server and symbol, and the cache keys on that identity.

@@ -357,7 +357,7 @@ export function ladderPlan({ position: p, sym, signal = null, levels = null, set
   if (!rungs.length) return none;
   const reached = rungs.filter((x) => dir * (price - x) >= 0).length;
   // SL lock (owner 2026-11-18, confirmed): one step past the entry, the stop goes to break-even (plus the buffer); one
-  // step past TPx, to TPx. The step is the mode's (ladderStep). With `candles` (the planner always passes them) the
+  // step past TPx, to TPx−1 (below). The step is the mode's (ladderStep). With `candles` (the planner always passes them) the
   // trigger is the mode's last CLOSED candle (LADDER_CONFIRM_TF): its close beyond the level and the candle itself in the
   // trade's direction (no reversal candle); no such candle, no new lock. Without `candles`, the live price (tests).
   const { step: lockPx, mode } = ladderStep(meta, S);
@@ -370,11 +370,14 @@ export function ladderPlan({ position: p, sym, signal = null, levels = null, set
   const L = [open, ...rungs];
   const past = lockPx != null && finite(trigger) ? L.filter((x) => dir * (trigger - x) >= lockPx).length : 0;
   let sl = null, slRung = null;
+  // Owner 2026-11-18 (confirmed: "TPx−1"): one step past the entry, or past TP1, the stop is at break-even (TP0);
+  // one step past TPx (x >= 2), it goes to TPx−1. Past TP1 it does not move to TP1.
   if (past >= 1) {
-    const target = roundTo(past === 1 ? open + dir * buffer : L[past - 1], digits);
+    const rung = Math.max(0, past - 2);
+    const target = roundTo(rung === 0 ? open + dir * buffer : L[rung], digits);
     const better = !finite(curSl) || curSl <= 0 ? true : buy ? target > curSl + point : target < curSl - point;
     const room = buy ? target < sym.bid - floorPx : target > sym.ask + floorPx;
-    if (target > 0 && better && room) { sl = target; slRung = past - 1; }
+    if (target > 0 && better && room) { sl = target; slRung = rung; }
   }
   // Partial: one per rung reached, at most ladder_max_partials.
   let partial = null;

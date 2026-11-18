@@ -21,17 +21,18 @@ test("TL1 the rungs: key levels between the entry and the target (near edge), th
   assert.deepEqual(ladderRungs({ position: { ...LONG, tp: 0 }, levels }), [], "no target, no ladder");
 });
 
-test("TL2 the lock (owner 2026-11-18): a step past the entry → break-even, a step past TPx → TPx; scalp 30 pips; never looser, never inside the broker's distance", () => {
+test("TL2 the lock (owner 2026-11-18): a step past the entry → break-even, a step past TPx → TPx−1; scalp 30 pips; never looser, never inside the broker's distance", () => {
   assert.equal(GOLD_PIP * S.ladder_lock_pips, 3);
   // Entry 4000, TP1 4010: 4002.9 is 29 pips past the entry: nothing; 4003 is 30 past: break-even plus the buffer.
   assert.equal(ladderPlan({ position: LONG, sym: at(4002.9), settings: S, now: NOW }).sl, null);
   const be = ladderPlan({ position: LONG, sym: at(4003), settings: S, now: NOW });
   assert.deepEqual([be.sl, be.sl_rung], [4000.3, 0]);
   // 30 pips past TP1 (4010): the stop goes to TP1; 30 past TP2 (4020): to TP2.
-  assert.deepEqual([ladderPlan({ position: LONG, sym: at(4013), settings: S, now: NOW }).sl, ladderPlan({ position: LONG, sym: at(4013), settings: S, now: NOW }).sl_rung], [4010, 1]);
-  assert.equal(ladderPlan({ position: LONG, sym: at(4023.5), settings: S, now: NOW }).sl, 4020);
+  assert.deepEqual([ladderPlan({ position: LONG, sym: at(4013), settings: S, now: NOW }).sl, ladderPlan({ position: LONG, sym: at(4013), settings: S, now: NOW }).sl_rung], [4000.3, 0], "past TP1: the stop stays at break-even (TPx−1 = TP0)");
+  assert.deepEqual([ladderPlan({ position: LONG, sym: at(4023.5), settings: S, now: NOW }).sl, ladderPlan({ position: LONG, sym: at(4023.5), settings: S, now: NOW }).sl_rung], [4010, 1], "past TP2: to TP1");
+  assert.equal(ladderPlan({ position: LONG, sym: at(4033.5), settings: S, now: NOW }).sl, 4020, "past TP3: to TP2");
   assert.equal(ladderPlan({ position: { ...LONG, sl: 4021 }, sym: at(4023.5), settings: S, now: NOW }).sl, null, "a tighter stop is kept");
-  assert.equal(ladderPlan({ position: SHORT, sym: at(3986.5), settings: S, now: NOW }).sl, 3990, "the short locks at its TP1");
+  assert.equal(ladderPlan({ position: SHORT, sym: at(3976.5), settings: S, now: NOW }).sl, 3990, "the short, past its TP2, locks at its TP1");
   assert.equal(ladderPlan({ position: LONG, sym: { ...at(4013), stops_level_points: 1500 }, settings: S, now: NOW }).sl, null, "too close to price for the broker");
 });
 
@@ -47,7 +48,7 @@ test("TL2b per mode and on closed candles: intraday 0.5R, swing 0.3R; the trigge
   assert.deepEqual([on.sl, on.sl_rung], [4000.3, 0]);
   assert.equal(ladderPlan({ position: LONG, sym: at(4016), settings: S, now: NOW, meta, candles: { M15: { o: 4008, c: 4006, close_ms: NOW - 60_000 } } }).sl, null, "a red candle against a long confirms nothing");
   assert.equal(ladderPlan({ position: LONG, sym: at(4016), settings: S, now: NOW, meta, candles: {} }).sl, null, "no candle: no new lock");
-  assert.equal(ladderPlan({ position: LONG, sym: at(4016), settings: S, now: NOW, meta: { mode: "scalp" }, candles: { M5: { o: 4010, c: 4013.5, close_ms: NOW - 60_000 } } }).sl, 4010, "scalp on M5: 30 pips past TP1");
+  assert.equal(ladderPlan({ position: LONG, sym: at(4016), settings: S, now: NOW, meta: { mode: "scalp" }, candles: { M5: { o: 4010, c: 4023.5, close_ms: NOW - 60_000 } } }).sl, 4010, "scalp on M5: 30 pips past TP2 -> TP1");
   const { lastClosedCandle } = await import("../src/omega-broker.mjs");
   const t0 = Date.parse("2026-11-18T10:00:00Z");
   const bars = Array.from({ length: 15 }, (_, i) => ({ t: t0 + i * 60_000, o: 4000 + i, h: 4001 + i, l: 3999 + i, c: 4000.5 + i }));
@@ -87,10 +88,10 @@ test("TL4 manageIntents: the ladder runs by default, its ids fit the bridge, the
   const pl = out.find((i) => i.kind === "partial_close");
   assert.deepEqual([pl.id, pl.volume, pl.reason], ["pl:101:1", 0.04, "ladder_tp1_50pct"]);
   const ms = out.find((i) => i.kind === "modify_sl");
-  assert.deepEqual([ms.sl, ms.tp, ms.reason], [4010, 4030, "ladder_lock_tp1"]);
+  assert.deepEqual([ms.sl, ms.tp, ms.reason], [4000.3, 4030, "ladder_lock_tp0"]);
   assert.ok(out.every((i) => i.id.length <= INTENT_ID_MAX));
   assert.ok(!out.some((i) => i.reason === "tp1_scale_out"));
-  const later = manageIntents({ positions: [{ ...LONG, volume: 0.04, sl: 4010 }], sym: at(4013.5), settings: S, signal: power(0.1), recentIntentIds: ["pl:101:1", "ms:101:lad:401000"], now: NOW });
+  const later = manageIntents({ positions: [{ ...LONG, volume: 0.04, sl: 4000.3 }], sym: at(4013.5), settings: S, signal: power(0.1), recentIntentIds: ["pl:101:1", "ms:101:lad:400030"], now: NOW });
   assert.deepEqual(later, [], "TP1 banked and locked: nothing more until TP2");
   assert.ok(manageIntents({ positions: [{ ...LONG, source: "manual", magic: 0, intent_id: null }], sym: at(4013.5), settings: S, now: NOW }).length === 0, "never a manual position");
   const off = manageIntents({ positions: [LONG], sym: at(4013.5), settings: { ...S, tp_ladder: false }, now: NOW });
