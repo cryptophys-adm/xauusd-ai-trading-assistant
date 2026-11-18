@@ -5,6 +5,11 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- feat(omega): the TP ladder's lock per mode, on closed candles (owner 2026-11-18, confirmed: "Setuju").
+  - **Step per mode.** Scalp keeps +30 pips. Intraday uses +0.5R and swing +0.3R, where R is the stop distance at entry (open intents now record `mode` and `r_dist`).
+  - **Lock.** A step past the entry puts the stop at break-even; a step past TPx puts it at TPx.
+  - **Trigger.** The mode's last closed broker candle (M5, M15 or H1, from the M1 corpus), closing beyond the level in the trade's direction. With no such candle there is no new lock.
+  - **Knobs.** `ladder_r_intraday`, `ladder_r_swing`.
 - feat(omega): the same-side re-entry guard (owner 2026-11-18, confirmed: "Setuju").
   - **Why.** Four times on 2026-11-18 the Position Manager closed a SELL on weakening and the next 15m SELL reopened seconds later.
   - **Cooldown.** After a PM exit for `pm_take_profit_weakening` or `pm_cut_loss`, a new entry on the same side waits for `reentry_cooldown_bars` (1) closed 15m bar (`reentry_cooldown`).
