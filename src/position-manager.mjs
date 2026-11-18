@@ -12,6 +12,11 @@
 // TP1 is the plan's target (the open intent's tp), watched here; TP2 is the next key level beyond it, set as the
 // broker's take-profit once. 1 pip = 0.10.
 //
+// In R since 2026-11-18 (owner, confirmed: "Per mode"; docs/RFC_ACCOUNT_PROFILES.md section 8): the +/-30 pip band
+// of the profit and loss rules is the position's own stop distance at entry (the open intent's r_dist) times
+// PM_R_BAND of the mode it opened in: scalp 0.3R, intraday and range 0.5R, swing 0.7R. A position whose stop distance
+// is unknown keeps 30 pips. The 30 pips beyond TP1 of lock_tp1 stay in pips.
+//
 // Guardrails (owner): only close, or a stop moved in the position's favour (never widened), or the take-profit
 // moved out to TP2; never an add, a reversal or an open. Inputs are measured: the strategy agent's confidence on the
 // position's side against the bar before, the quorum's shares, the decision's stance. Never the council's own
@@ -31,6 +36,22 @@ export { ensurePositionSchema, pendingPositionActions, markPositionActions, ACTI
 
 export const PIP = 0.1;
 export const THRESHOLD_PIPS = 30;
+/** The profit and loss band in R of the stop distance at entry, per trading mode (owner 2026-11-18: "Per mode"). */
+export const PM_R_BAND = Object.freeze({ scalp: 0.3, intraday: 0.5, range: 0.5, swing: 0.7 });
+const DEFAULT_MODE = "intraday";
+
+/**
+ * Pure: the band of one position, { pips, r, mode, r_dist_pips }: its mode's R band times its stop distance at entry
+ * (`openIntent.r_dist`, else |entry − sl| of the intent), or THRESHOLD_PIPS with r null when that distance is unknown.
+ * The mode is the intent's, else the decision's (`fallbackMode`), else intraday.
+ */
+export function pmBand(openIntent, fallbackMode = null) {
+  const mode = [openIntent?.mode, fallbackMode].find((m) => typeof m === "string" && Object.hasOwn(PM_R_BAND, m)) ?? DEFAULT_MODE;
+  const given = Number(openIntent?.r_dist);
+  const dist = Number.isFinite(given) && given > 0 ? given : Math.abs(Number(openIntent?.entry) - Number(openIntent?.sl));
+  if (!(Number.isFinite(dist) && dist > 0)) return { pips: THRESHOLD_PIPS, r: null, mode, r_dist_pips: null };
+  return { pips: r1(PM_R_BAND[mode] * dist / PIP), r: PM_R_BAND[mode], mode, r_dist_pips: r1(dist / PIP) };
+}
 export const POSITION_COUNCIL_METER = "position_council";
 export const POSITION_COUNCIL_DAILY_USD = 5;
 /** A quorum share on the position's side that fell by more than this since the bar before is a confluence drop. */
@@ -70,10 +91,13 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
   const share = buy ? decision.quorum.long_share : decision.quorum.short_share;
   const prevShare = buy ? decision.quorum_prev?.long_share : decision.quorum_prev?.short_share;
   const beyond = levels.filter((z) => (buy ? z.low > tp1 + spreadPx : z.high < tp1 - spreadPx)).sort((a, b) => (buy ? a.low - b.low : b.high - a.high))[0];
+  const band = pmBand(openIntent, decision.trading_mode ?? null);
+  const pips = pipsOf(dir * (price - open));
   return {
     ticket: p.ticket, side: p.side, dir, open, price, sl: Number.isFinite(sl) ? sl : null, tp: Number.isFinite(tp) ? tp : null,
     tp1, tp2: beyond ? (buy ? beyond.low : beyond.high) : null, spread: spreadPx, point,
-    pips: pipsOf(dir * (price - open)), beyond_tp1_pips: pipsOf(dir * (price - tp1)),
+    pips, beyond_tp1_pips: pipsOf(dir * (price - tp1)),
+    band_pips: band.pips, band_r: band.r, mode: band.mode, r_dist_pips: band.r_dist_pips, r: band.r_dist_pips ? Math.round((pips / band.r_dist_pips) * 100) / 100 : null,
     agent, agent_conf: isNum(conf) ? conf : null, agent_conf_prev: isNum(prev) ? prev : null, agent_trend: confidenceTrend(conf, prev),
     stance: decision.stance, with_decision: decision.stance === p.side,
     share: isNum(share) ? share : null, share_prev: isNum(prevShare) ? prevShare : null
@@ -93,14 +117,16 @@ export function positionAction(f, council) {
   const tpAtTp1 = f.tp != null && Math.abs(f.tp - f.tp1) <= PIP / 2;
   // Beyond TP1 by 30 pips: the stop locks TP1 (no council needed: a measured price rule).
   if (f.beyond_tp1_pips >= THRESHOLD_PIPS && better(f.tp1) && room(f.tp1)) return { action: "sl", rule: "lock_tp1", sl: f.tp1, why: `${f.beyond_tp1_pips} pips beyond TP1: stop to TP1` };
-  if (f.pips >= THRESHOLD_PIPS) {
+  const band = isNum(f.band_pips) && f.band_pips > 0 ? f.band_pips : THRESHOLD_PIPS;
+  const at = (sign) => `${sign > 0 ? "+" : ""}${f.pips} pips${f.r != null ? ` (${sign > 0 ? "+" : ""}${f.r}R, band ${f.band_r}R ${f.mode})` : ""}`;
+  if (f.pips >= band) {
     if (!council) return { action: "none", rule: "council_unavailable", why: "the council did not answer: the stop and target stay" };
-    if (council.momentum === "weakening") return { action: "close", rule: "take_profit_weakening", why: `+${f.pips} pips and the momentum is weakening: closed without waiting for TP1` };
+    if (council.momentum === "weakening") return { action: "close", rule: "take_profit_weakening", why: `${at(1)} and the momentum is weakening: closed without waiting for TP1` };
     const be = f.open + f.dir * f.spread;
-    if (better(be) && room(be)) return { action: "sl", rule: "breakeven", sl: be, why: `+${f.pips} pips and still strong: stop to break-even plus the spread` };
-    return tpAtTp1 && f.tp2 != null ? { action: "tp", rule: "tp2_target", tp: f.tp2, why: "target out to TP2 (the next key level)" } : { action: "hold", rule: "protected", why: `+${f.pips} pips, the stop already protects it` };
+    if (better(be) && room(be)) return { action: "sl", rule: "breakeven", sl: be, why: `${at(1)} and still strong: stop to break-even plus the spread` };
+    return tpAtTp1 && f.tp2 != null ? { action: "tp", rule: "tp2_target", tp: f.tp2, why: "target out to TP2 (the next key level)" } : { action: "hold", rule: "protected", why: `${at(1)}, the stop already protects it` };
   }
-  if (f.pips <= -THRESHOLD_PIPS) {
+  if (f.pips <= -band) {
     if (f.agent_conf == null || f.agent_conf_prev == null || f.share == null) return { action: "none", rule: "inputs_missing", why: "the agent's confidence or the quorum is missing: the stop stays" };
     const shareDrop = f.share_prev != null && f.share_prev - f.share > SHARE_DROP;
     const reasons = [
@@ -109,11 +135,11 @@ export function positionAction(f, council) {
       ...(shareDrop ? [`the quorum's ${f.side === "BUY" ? "bullish" : "bearish"} share fell ${Math.round(f.share_prev * 100)}% to ${Math.round(f.share * 100)}%`] : []),
       ...(council?.thesis === "broken" ? ["the council calls the thesis broken"] : [])
     ];
-    if (reasons.length) return { action: "close", rule: "cut_loss", why: `${f.pips} pips and ${reasons.join("; ")}: loss cut` };
-    return { action: "hold", rule: "hold_to_stop", why: `${f.pips} pips but still strong: held to the original stop` };
+    if (reasons.length) return { action: "close", rule: "cut_loss", why: `${at(-1)} and ${reasons.join("; ")}: loss cut` };
+    return { action: "hold", rule: "hold_to_stop", why: `${at(-1)} but still strong: held to the original stop` };
   }
   if (tpAtTp1 && f.tp2 != null && f.pips > 0) return { action: "tp", rule: "tp2_target", tp: f.tp2, why: "target out to TP2 (the next key level)" };
-  return { action: "hold", rule: "inside_band", why: `${f.pips} pips: inside the ±${THRESHOLD_PIPS} pip band` };
+  return { action: "hold", rule: "inside_band", why: `${f.pips} pips: inside the ±${band} pip band${f.r != null ? ` (±${f.band_r}R ${f.mode})` : ""}` };
 }
 
 export const POSITION_COUNCIL_SCHEMA = Object.freeze({
@@ -128,7 +154,7 @@ export const POSITION_COUNCIL_SCHEMA = Object.freeze({
 /** Pure: the council's messages for one position (measured inputs only; never a size, never the council's own confidence). */
 export function positionCouncilMessages(f, { m5 = null, levels = [] } = {}) {
   const evidence = {
-    position: { side: f.side, open: f.open, price: f.price, pips: f.pips, stop: f.sl, target: f.tp, tp1: f.tp1, tp2: f.tp2, beyond_tp1_pips: f.beyond_tp1_pips },
+    position: { side: f.side, open: f.open, price: f.price, pips: f.pips, r: f.r ?? null, mode: f.mode ?? null, band_pips: f.band_pips ?? null, stop: f.sl, target: f.tp, tp1: f.tp1, tp2: f.tp2, beyond_tp1_pips: f.beyond_tp1_pips },
     measured: { agent: f.agent, agent_confidence_now: f.agent_conf, agent_confidence_15m_ago: f.agent_conf_prev, agent_trend: f.agent_trend, decision_stance: f.stance, quorum_share_with_position: f.share, quorum_share_15m_ago: f.share_prev },
     m5: m5 ? { atr: m5.m5_atr ?? null, swing_low: m5.m5_swing_low ?? null, swing_high: m5.m5_swing_high ?? null, confirmation_buy: m5.m5_buy === true, confirmation_sell: m5.m5_sell === true } : null,
     key_levels: levels.slice(0, 12)
@@ -304,7 +330,7 @@ export async function readPositionManager(env, { now = Date.now(), limit = 50 } 
   try {
     await ensurePositionSchema(env.DB);
     const rows = (await env.DB.prepare("SELECT * FROM position_actions ORDER BY at_ms DESC LIMIT ?").bind(Math.max(1, Math.min(200, Number(limit) || 50))).all()).results ?? [];
-    return { version: "cryptophys.position-manager.v1", mode: positionManagerMode(env), cap_usd: dailyCapUsd(env), spent_usd: await positionCouncilSpendUsd(env.DB, { now }), threshold_pips: THRESHOLD_PIPS, rows };
+    return { version: "cryptophys.position-manager.v1", mode: positionManagerMode(env), cap_usd: dailyCapUsd(env), spent_usd: await positionCouncilSpendUsd(env.DB, { now }), threshold_pips: THRESHOLD_PIPS, band_r: PM_R_BAND, rows };
   } catch (error) {
     return { version: "cryptophys.position-manager.v1", error: String(error?.message ?? error).slice(0, 160), rows: [] };
   }

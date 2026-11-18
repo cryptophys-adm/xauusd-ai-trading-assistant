@@ -1,5 +1,7 @@
 export const PIP: number;
 export const THRESHOLD_PIPS: number;
+export const PM_R_BAND: Readonly<Record<"scalp" | "intraday" | "range" | "swing", number>>;
+export function pmBand(openIntent: any, fallbackMode?: string | null): { pips: number; r: number | null; mode: string; r_dist_pips: number | null };
 export const POSITION_COUNCIL_METER: string;
 export const POSITION_COUNCIL_DAILY_USD: number;
 export const SHARE_DROP: number;

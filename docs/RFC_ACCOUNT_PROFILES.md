@@ -1,6 +1,6 @@
 # RFC: Account Profiles & Dynamic Mode (Omega)
 
-- **Status:** decided by the owner (2026-11-18); building in four phases. Phases 1 to 3 built (EA 1.15, `src/account-spec.mjs`, sizing in `planIntents`, the profile agent in `src/profile-agent.mjs`). ADR-0020 Amendment 3 merged on the platform (main 1ade63d, 2026-11-18 03:53 UTC).
+- **Status:** decided by the owner (2026-11-18); four phases, all built (phase 4: the mode selector and the Position Manager in R). Phases 1 to 3 built (EA 1.15, `src/account-spec.mjs`, sizing in `planIntents`, the profile agent in `src/profile-agent.mjs`). ADR-0020 Amendment 3 merged on the platform (main 1ade63d, 2026-11-18 03:53 UTC).
 - **Builds on:** ADR-0020 (no new trading authority, Decision Engine veto, never move funds), docs/RFC_STRATEGY_RECOMMENDATION.md, src/grid-adapt.mjs (evidence gate), src/omega-engine.mjs (sizing), ea/mt5/OmegaExecutor.mq5 (1.14).
 
 ## Goal (owner)
@@ -90,6 +90,8 @@ Each account chooses a mode:
 ## 8. Position manager in R
 
 The fixed ±30-pip thresholds in `src/position-manager.mjs` (`THRESHOLD_PIPS`) become R-based per mode, e.g. break-even at +0.5R and a cut at −0.5R when signals weaken.
+
+**Built 2026-11-18** (owner, confirmed: "Per mode"). Evidence: Omega's stops over the 7 days before averaged 139 pips (78–195), so 30 pips was ~0.2R (0.15–0.38R). The band is `PM_R_BAND` × the stop distance at entry (`pmBand`): scalp 0.3R, intraday and range 0.5R, swing 0.7R. It moves the take-profit-when-weakening, the break-even and the cut-loss rules; the TP1 lock (30 pips beyond TP1) stays in pips. A position without a known stop distance keeps 30 pips.
 
 ## 9. One code path, per-account profiles
 

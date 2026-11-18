@@ -5,6 +5,10 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- feat(omega): the Position Manager's profit and loss band in R per mode (owner 2026-11-18, confirmed: "Per mode"; RFC_ACCOUNT_PROFILES section 8, the last part of phase 4).
+  - The ±30 pips of take-profit-when-weakening, break-even and cut-loss become the position's stop distance at entry times its mode's band (`PM_R_BAND`: scalp 0.3R, intraday and range 0.5R, swing 0.7R; `pmBand`). With Omega's 139-pip average stop that is 42 / 70 / 98 pips instead of 30.
+  - The mode is the open intent's, else the decision's, else intraday; a position without a known stop distance keeps 30 pips. The TP1 lock (30 pips beyond TP1) is unchanged.
+  - Each action's line and the council's evidence carry the R, the band and the mode; `GET /api/omega/position-manager` adds `band_r`.
 - fix(omega): same-side re-entry waits one closed M5 candle only; deposits and withdrawals never count as the day's loss (owner 2026-11-18, relayed and confirmed: "Setuju keduanya").
   - **Re-entry.** After a `pm_take_profit_weakening` or `pm_cut_loss` exit, a same-side entry waits only until the next M5 candle closes after the exit (`reentry_cooldown_bars`, 1, whole candles 0 to 12; note `reentry_cooldown` names the time it frees). The 0.5×ATR(M15) pullback (`reentry_pullback_atr`) and the confidence bypass are gone, and so is the note `reentry_needs_pullback`.
   - **Daily loss.** Each deposit or withdrawal is kept for its UTC day (D1 `omega_accounts.day_ops`); `dailyLossExecutor` moves the day's reference by those after it (the broker's day start, or the owner's reset; the onboarding balance already moves with them). A withdrawal no longer trips the daily floor or shrinks the risk budget, and a deposit no longer hides a loss.
