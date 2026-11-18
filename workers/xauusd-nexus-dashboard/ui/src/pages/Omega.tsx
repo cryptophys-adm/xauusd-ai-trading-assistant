@@ -516,6 +516,23 @@ const appliedLimit = (setting: unknown, cap: number | undefined) => {
   return cap == null ? v : Math.min(v, cap);
 };
 
+// Total open risk per profile (src/account-spec.mjs PROFILES open_risk_pct), for the header's tooltip.
+const PROFILE_TOTAL_OPEN: Record<string, number> = { safe: 2, conservative: 5, aggressive: 10 };
+
+/**
+ * Pure: a position's money at its stop (owner 2026-11-18). The loss to the SL in money and % of equity, or, once the
+ * stop is at or beyond the entry (break-even or a lock), the profit it locks. Null without a stop or a tick value.
+ */
+function riskToSl(p: any, br: any): { locked: boolean; amount: number; pct: number | null } | null {
+  const open = Number(p?.entry ?? p?.open_price), sl = Number(p?.sl), vol = Number(p?.volume);
+  const tick = Number(br?.tick_size), value = Number(br?.tick_value);
+  if (!(open > 0) || !(sl > 0) || !(vol > 0) || !(tick > 0) || !(value > 0)) return null;
+  const dist = p?.side === "BUY" ? open - sl : sl - open; // > 0: the stop loses; <= 0: the stop locks profit
+  const amount = Math.round((Math.abs(dist) / tick) * value * vol * 100) / 100;
+  const eq = Number(br?.equity);
+  return dist > 0 ? { locked: false, amount, pct: eq > 0 ? Math.round((amount / eq) * 1000) / 10 : null } : { locked: true, amount, pct: null };
+}
+
 // A reported leverage this high is a broker's "unlimited" (FxPro demo: 1:2,000,000,000), not a real ratio.
 const LEVERAGE_UNLIMITED_FROM = 100_000;
 
@@ -528,6 +545,8 @@ export default function Omega() {
   // MT5 Web Terminal & Separated Setup Mode UI state
   const [viewMode, setViewMode] = useState<"terminal" | "setup">("terminal");
   const [setupTab, setSetupTab] = useState<"engine" | "profile" | "connection">("engine");
+  // On a phone the Market Watch column folds above the chart (owner 2026-11-18: MT5 layout, no horizontal scroll).
+  const [dockOpen, setDockOpen] = useState(false);
   const [mt5Tf, setMt5Tf] = useState<Mt5Tf>("M15");
   const [toolboxTab, setToolboxTab] = useState<ToolboxTab>("trade");
   const [showBidAsk, setShowBidAsk] = useState(true);
@@ -806,61 +825,115 @@ export default function Omega() {
     conn.status === "stored" && conn.server && br.terminal_connected
   );
   const configLocked = accountActive;
-  // The broker as the connected server names it, only once its spec is validated (orchestrator relay, owner
-  // 2026-11-18: labels follow the broker; a stale or unknown spec says so).
-  const brokerKey = detectBrokerFromServer(br.server || "");
-  const brokerLabel = br.server && account?.spec_status === "validated"
-    ? (brokerKey === "custom" ? String(br.server).split(/[-_ .]/)[0] : BROKER_PRESETS.find((p) => p.key === brokerKey)?.name.split(" ")[0] ?? br.server)
-    : "broker unknown";
+  // The broker as the connected server names it, once its spec is validated (owner 2026-11-18: labels follow the
+  // broker; "broker unknown" otherwise), the account mode, and the risk that applies under the profile.
+  const brokerWord = String(br.server || "").split(/[-_. ]/)[0];
+  const brokerLabel = br.server && account?.spec_status === "validated" && brokerWord ? brokerWord : "broker unknown";
   const tradeTag = br.trade_mode === "real" ? "LIVE" : br.trade_mode === "demo" ? "DEMO" : br.trade_mode === "contest" ? "CONTEST" : "—";
+  const capOf = (k: "risk" | "positions" | "daily") => (account && account.profile !== "custom" ? PROFILE_CAPS[account.profile]?.[k] : undefined);
+  const appliedRisk = e.risk_pct != null ? appliedLimit(e.risk_pct, capOf("risk")) : null;
+  const appliedPositions = e.max_positions != null ? appliedLimit(e.max_positions, capOf("positions")) : null;
+  const appliedDaily = e.max_daily_loss_pct != null ? appliedLimit(e.max_daily_loss_pct, capOf("daily")) : null;
 
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
-      {/* One status strip (owner 2026-11-18: "Asses ulang UI/UX ... agar lebih user friendly"): each fact once. The
-          broker name comes from the connected server; until its spec is validated it reads "broker unknown". */}
-      <div id="omega-status-strip" className="flex flex-wrap items-center gap-1.5 rounded-xl border border-cyan-500/25 bg-[#09101d] px-3 py-2 text-[11px]">
-        <span className="mono rounded-md border border-white/10 bg-black/40 px-2 py-0.5 text-slate-200" title={`Server ${serverName}`}>
-          {brokerLabel} · <strong className={tradeTag === "LIVE" ? "text-amber-300" : "text-cyan-300"}>{tradeTag}</strong> · {br.symbol || "—"}
-        </span>
-        <Badge tone={br.terminal_connected ? "green" : "red"}>
-          <Dot tone={br.terminal_connected ? "green" : "red"} pulse={br.terminal_connected} />
-          MT5 {br.terminal_connected ? (br.trade_allowed === false ? "algo blocked" : "live") : "offline"}
-        </Badge>
-        {br.executor?.version ? (
-          <Badge tone={br.ea_version_gate?.met === false ? "red" : "green"}>EA {br.executor.version}{br.ea_version_gate?.met === false ? ` < ${br.ea_version_gate.min_version}` : " ✓"}</Badge>
-        ) : null}
-        <Badge tone={algoActive ? (e.live_armed ? "amber" : "green") : "slate"}>
-          {algoActive ? (e.live_armed ? "Armed" : "Engine on") : "Engine off"}
-        </Badge>
-        {c.mode && c.mode !== "active" ? <Badge tone={c.mode === "killed" ? "red" : "amber"}>{c.mode}</Badge> : null}
-        {s.kill ? <Badge tone="red">kill ({s.kill_source || "server"})</Badge> : null}
-        {s.blackout ? <Badge tone="amber">news blackout</Badge> : null}
-        {account ? <Badge tone="cyan">{account.profile_label}</Badge> : null}
-        <span className="mono ml-auto flex flex-wrap items-center gap-2 text-slate-300">
-          <span>Eq <strong className="text-cyan-200">{balFmt(br.equity, cur)}</strong></span>
-          <span>Day <strong className={toneCls(hb?.today_pnl ?? br.day_realized_pl)}>{money(hb?.today_pnl ?? br.day_realized_pl, cur)}</strong></span>
-          <span className="text-slate-500" title={streamLive ? "Live push" : "Polling"}>{updatedAt}</span>
-        </span>
-      </div>
-      {error ? <p className="text-[12px] text-rose-300">Error: {error}</p> : null}
+      {/* Top Status Banner */}
+      <Panel
+        title="Omega"
+        icon={<Zap className="h-3.5 w-3.5 text-cyan-300" />}
+        right={
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge tone={br.terminal_connected ? "green" : "red"}>
+              <Dot tone={br.terminal_connected ? "green" : "red"} pulse={br.terminal_connected} />
+              {br.terminal_connected ? "MT5 connected" : "MT5 disconnected"}
+            </Badge>
+            <Badge tone={br.seen ? "green" : "red"}>
+              <Dot tone={br.seen ? "green" : "red"} pulse={br.seen} />
+              {br.seen ? "Bridge online" : "Bridge offline"}
+            </Badge>
+            <Badge tone={streamLive ? "green" : "cyan"}>
+              <Dot tone={streamLive ? "green" : "cyan"} pulse={streamLive} />
+              {streamLive ? "Streaming" : "Polling"}
+            </Badge>
+            <Badge tone={tradeTag === "LIVE" ? "amber" : "cyan"}>
+              <span title={`Server ${serverName}`}>{brokerLabel} · {tradeTag} · {br.symbol || "—"}</span>
+            </Badge>
+            {account ? (
+              <Badge tone="cyan">
+                <span title={`Applied now: risk ${appliedRisk ?? "—"}% per trade, ${appliedPositions ?? "—"} positions, daily loss ${appliedDaily ?? "—"}%${account.profile !== "custom" && PROFILE_CAPS[account.profile] ? `, total open risk ${PROFILE_TOTAL_OPEN[account.profile]}%` : ""}. Each is the smaller of the setting and the profile's cap.`}>
+                  {account.profile_label} · {appliedRisk ?? "—"}%
+                </span>
+              </Badge>
+            ) : null}
+            <Badge tone={c.mode === "killed" ? "red" : c.mode === "paused" ? "amber" : "green"}>
+              control: {c.mode || "active"}
+            </Badge>
+            {s.kill ? <Badge tone="red">kill ({s.kill_source || "server"})</Badge> : null}
+            {s.blackout ? <Badge tone="amber">event blackout</Badge> : null}
+            {viewer.subject ? (
+              <Badge tone="slate">
+                {viewer.subject}
+                {canControl ? "" : " · read only"}
+              </Badge>
+            ) : null}
+          </div>
+        }
+      >
+        {error ? (
+          <p className="text-[12px] text-rose-300">Error: {error}</p>
+        ) : (
+          <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
+            <span className="mono">Updated {updatedAt}</span>
+          </div>
+        )}
+      </Panel>
 
-      <div id="omega-mode-bar" className="flex items-center gap-1.5" role="tablist">
-        {([["terminal", "Monitor", <Terminal key="t" className="h-3.5 w-3.5" />], ["setup", "Setup", <Sliders key="s" className="h-3.5 w-3.5" />]] as const).map(([key, label, icon]) => (
+      {/* Separated Workspace Mode Bar: MT5 Terminal vs Setup & Configuration Center */}
+      <div
+        id="omega-mode-bar"
+        className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-cyan-500/25 bg-[#09101d] px-3.5 py-2.5 shadow-lg"
+      >
+        <div className="flex flex-wrap items-center gap-2">
           <button
-            key={key}
             type="button"
-            role="tab"
-            aria-selected={viewMode === key}
-            id={key === "terminal" ? "tab-terminal-mode" : "tab-setup-mode"}
-            onClick={() => setViewMode(key)}
-            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition ${
-              viewMode === key ? "border-cyan-400/50 bg-cyan-500/20 text-cyan-100" : "border-white/10 bg-black/30 text-slate-400 hover:text-slate-200"
+            id="tab-terminal-mode"
+            onClick={() => setViewMode("terminal")}
+            className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition ${
+              viewMode === "terminal"
+                ? "border-cyan-400/50 bg-cyan-500/20 text-cyan-100 shadow-[0_0_20px_rgba(34,211,238,0.18)]"
+                : "border-white/10 bg-black/30 text-slate-400 hover:bg-white/5 hover:text-slate-200"
             }`}
           >
-            {icon}
-            {label}
+            <Terminal className="h-3.5 w-3.5 text-cyan-300" />
+            Terminal
           </button>
-        ))}
+          <button
+            type="button"
+            id="tab-setup-mode"
+            onClick={() => setViewMode("setup")}
+            className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition ${
+              viewMode === "setup"
+                ? "border-emerald-400/50 bg-emerald-500/20 text-emerald-100 shadow-[0_0_20px_rgba(16,185,129,0.18)]"
+                : "border-white/10 bg-black/30 text-slate-400 hover:bg-white/5 hover:text-slate-200"
+            }`}
+          >
+            <Sliders className="h-3.5 w-3.5 text-emerald-300" />
+            Setup
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          {configLocked ? (
+            <span className="mono flex items-center gap-1.5 rounded-md border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1 text-emerald-200">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Session: <strong className="text-emerald-100">{serverName}</strong> · locked</span>
+            </span>
+          ) : (
+            <span className="mono rounded-md border border-white/10 bg-black/40 px-2.5 py-1 text-slate-300">
+              Broker: <strong className="text-cyan-300">{BROKER_PRESETS.find((p) => p.key === selectedBroker)?.name || "Custom"}</strong> ({bServer || serverName})
+            </span>
+          )}
+        </div>
       </div>
 
       {viewMode === "terminal" ? (
@@ -869,9 +942,92 @@ export default function Omega() {
             WINDOWS METATRADER 5 TERMINAL — WEB EDITION WORKSTATION
            ===================================================================== */}
         <div className="overflow-hidden rounded-xl border border-cyan-500/25 bg-[#070b13] shadow-[0_20px_60px_rgba(0,0,0,0.65)]">
+        {/* Windows MT5 Application Title Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-linear-to-r from-[#0d1526] via-[#0a101d] to-[#0d1526] px-3.5 py-2">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-6 w-6 items-center justify-center rounded-sm bg-cyan-500/15 border border-cyan-400/30 text-cyan-300">
+              <Terminal className="h-3.5 w-3.5" />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[12.5px] font-bold tracking-wide text-slate-100">
+                MT5 Terminal
+              </span>
+              <span className="mono rounded-sm bg-white/5 px-2 py-0.5 text-[11px] text-cyan-300 border border-white/10">
+                {symbolName},{mt5Tf}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 text-[11px]">
+            <div className="flex items-center gap-1.5 text-slate-300">
+              <Dot tone={br.terminal_connected ? "green" : "red"} pulse={br.terminal_connected} />
+              <span className="mono">
+                {br.terminal_connected ? "Connected" : "Offline"} · Sync {agoMs(br.synced_age_ms)}
+              </span>
+            </div>
+          </div>
+        </div>
+
         {/* MT5 Standard Top Toolbar (Algo Trading, Timeframes, Overlay Toggles, Live Account Strip) */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-[#0b111e] px-3 py-2">
           <div className="flex flex-wrap items-center gap-2">
+            {/* Algo Trading Master Direct Toggle Button */}
+            <button
+              type="button"
+              disabled={!canControl}
+              onClick={() => {
+                const next = !eEnabled;
+                setEEnabled(next);
+                saveEngine({ enabled: next });
+              }}
+              className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] font-semibold transition disabled:opacity-40 ${
+                eEnabled
+                  ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
+                  : "border-rose-400/35 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20"
+              }`}
+              title="Toggle algo trading"
+            >
+              <span className={`h-2 w-2 rounded-full ${eEnabled ? "bg-emerald-400 animate-pulse" : "bg-rose-400"}`} />
+              Algo Trading: {eEnabled ? "ON" : "OFF"}
+            </button>
+
+            {/* MT5 Terminal VPS Execution Health Pill */}
+            <button
+              type="button"
+              onClick={() => setToolboxTab("state_machine")}
+              className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] font-semibold transition ${
+                !br.terminal_connected
+                  ? "border-rose-500/40 bg-rose-500/15 text-rose-300 hover:bg-rose-500/25"
+                  : !br.trade_allowed
+                  ? "border-amber-500/50 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30 animate-pulse"
+                  : "border-emerald-400/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
+              }`}
+              title={
+                !br.terminal_connected
+                  ? "Terminal disconnected; watchdog is recovering"
+                  : !br.trade_allowed
+                  ? "Algo trading disabled on the terminal; watchdog is correcting"
+                  : "Terminal live; algo trading allowed"
+              }
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  !br.terminal_connected
+                    ? "bg-rose-500"
+                    : !br.trade_allowed
+                    ? "bg-amber-400 animate-pulse"
+                    : "bg-emerald-400 animate-pulse"
+                }`}
+              />
+              {!br.terminal_connected
+                ? "Terminal: Offline"
+                : !br.trade_allowed
+                ? "Terminal: Algo blocked"
+                : "Terminal: Live"}
+            </button>
+
+            <div className="h-4 w-px bg-white/10" />
+
             {/* Timeframe Selector */}
             <div className="flex items-center gap-1 rounded-md border border-white/10 bg-black/40 p-0.5">
               {MT5_TFS.map((t) => (
@@ -940,9 +1096,50 @@ export default function Omega() {
               >
                 Key Levels ({keyZones.length})
               </button>
+              <button
+                type="button"
+                onClick={() => setToolboxTab("state_machine")}
+                className={`flex items-center gap-1.5 rounded border px-2 py-0.5 text-[11px] font-semibold transition ${
+                  toolboxTab === "state_machine"
+                    ? "border-cyan-400/50 bg-cyan-500/20 text-cyan-200"
+                    : "border-white/10 bg-black/30 text-slate-300 hover:border-cyan-400/30 hover:text-cyan-200"
+                }`}
+                title="Watchdog"
+              >
+                <Cpu className="h-3 w-3 text-cyan-400" />
+                Watchdog
+              </button>
+              <button
+                type="button"
+                onClick={() => setToolboxTab("tca_sor")}
+                className={`flex items-center gap-1.5 rounded border px-2 py-0.5 text-[11px] font-semibold transition ${
+                  toolboxTab === "tca_sor"
+                    ? "border-emerald-400/50 bg-emerald-500/20 text-emerald-200"
+                    : "border-white/10 bg-black/30 text-slate-300 hover:border-emerald-400/30 hover:text-emerald-200"
+                }`}
+                title="Execution quality"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                Execution: {b?.tca?.quality || "—"}
+              </button>
             </div>
           </div>
 
+          {/* Right Quick Account Readout */}
+          <div className="mono flex flex-wrap items-center gap-3 text-[11.5px]">
+            <div>
+              <span className="text-slate-500">Balance: </span>
+              <span className="font-bold text-slate-100">{balFmt(br.balance, cur)}</span>
+            </div>
+            <div>
+              <span className="text-slate-500">Equity: </span>
+              <span className="font-bold text-cyan-300">{balFmt(br.equity, cur)}</span>
+            </div>
+            <div>
+              <span className="text-slate-500">Floating: </span>
+              <span className={`font-bold ${toneCls(floatingPnl)}`}>{money(floatingPnl, cur)}</span>
+            </div>
+          </div>
         </div>
 
         {/* Autonomous Cerebrum Watchdog Self-Healing Banner */}
@@ -967,8 +1164,201 @@ export default function Omega() {
           </div>
         ) : null}
 
-        {/* The chart, full width at a fixed height (owner 2026-11-18: monitoring first; 320 px on a phone). */}
-        <div className="flex h-[320px] flex-col sm:h-[460px]">
+        {/* MT5 Main Split Workspace: Left Dock (Market Watch + Navigator) & Center Chart */}
+        <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr]">
+          {/* Left Dock: Market Watch + Contract Spec + Navigator */}
+          <button type="button" onClick={() => setDockOpen((v) => !v)} aria-expanded={dockOpen} id="omega-dock-toggle"
+            className="flex items-center justify-between border-b border-white/10 bg-[#0d1525] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300 lg:hidden">
+            <span>Market Watch · {symbolName}</span><span>{dockOpen ? "▴" : "▾"}</span>
+          </button>
+          <div className={`${dockOpen ? "flex" : "hidden"} flex-col border-b border-white/10 bg-[#080d18] lg:flex lg:border-b-0 lg:border-r`}>
+            {/* Market Watch Header */}
+            <div className="flex items-center justify-between border-b border-white/10 bg-[#0d1525] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+              <span className="flex items-center gap-1.5">
+                <CandlestickChart className="h-3.5 w-3.5 text-cyan-300" />
+                Market Watch · {symbolName}
+              </span>
+              <span className="mono flex items-center gap-1 text-[10px] text-slate-400">
+                {tickDir === "up" ? <span className="text-emerald-300">▲</span> : tickDir === "down" ? <span className="text-rose-300">▼</span> : null}
+                {br.spread_points != null ? `${br.spread_points} pts` : "—"}
+              </span>
+            </div>
+
+            {/* MT5 One-Click Trading Style Dual Bid / Ask Box */}
+            <div className="grid grid-cols-2 gap-2 p-2.5 border-b border-white/10 bg-black/25">
+              <div className="rounded-lg border border-rose-500/30 bg-linear-to-b from-rose-500/15 to-rose-950/20 px-2.5 py-2 text-center">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-rose-300">BID (SELL)</div>
+                <div className="mono mt-0.5 text-lg font-extrabold text-rose-200">{num(br.bid, digits)}</div>
+              </div>
+              <div className="rounded-lg border border-emerald-500/30 bg-linear-to-b from-emerald-500/15 to-emerald-950/20 px-2.5 py-2 text-center">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">ASK (BUY)</div>
+                <div className="mono mt-0.5 text-lg font-extrabold text-emerald-200">{num(br.ask, digits)}</div>
+              </div>
+            </div>
+
+            {/* Market Watch Symbol Table */}
+            <div className="border-b border-white/10 px-2.5 py-2">
+              <table className="w-full text-left text-[11px]">
+                <thead>
+                  <tr className="border-b border-white/10 text-[10px] uppercase text-slate-500">
+                    <th className="pb-1">Symbol</th>
+                    <th className="pb-1 text-right">Bid</th>
+                    <th className="pb-1 text-right">Ask</th>
+                    <th className="pb-1 text-right"> {!s.market_price ? "Pts" : "Spread"}</th>
+                  </tr>
+                </thead>
+                <tbody className="mono divide-y divide-white/5">
+                  <tr className="bg-cyan-500/5">
+                    <td className="py-1.5 font-bold text-cyan-300">{symbolName}</td>
+                    <td className="py-1.5 text-right text-emerald-300">{num(br.bid, digits)}</td>
+                    <td className="py-1.5 text-right text-rose-300">{num(br.ask, digits)}</td>
+                    <td className="py-1.5 text-right text-amber-200">{br.spread_points ?? "—"}</td>
+                  </tr>
+                  {s.market_price ? (
+                    <tr>
+                      <td className="py-1 text-slate-400">XAUUSD feed</td>
+                      <td className="py-1 text-right text-slate-300" colSpan={2}>
+                        {num(s.market_price, 2)}
+                      </td>
+                      <td className="py-1 text-right text-slate-500">—</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Symbol Contract Specification */}
+            <div className="border-b border-white/10 px-3 py-2">
+              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                Specification
+              </div>
+              <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]">
+                <dt className="text-slate-500">Digits / Point</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.digits ?? "—"} / {br.point ?? "—"}
+                </dd>
+                <dt className="text-slate-500">Tick Size / Val</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.tick_size ?? "—"} / {br.tick_value != null ? num(br.tick_value, 2) : "—"}
+                </dd>
+                <dt className="text-slate-500">Volume Min / Max</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.volume_min ?? "—"} / {br.volume_max ?? "—"}
+                </dd>
+                <dt className="text-slate-500">Volume Step</dt>
+                <dd className="mono text-right text-slate-300">{br.volume_step ?? "—"}</dd>
+                <dt className="text-slate-500">Stops Level</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.stops_level_points != null ? `${br.stops_level_points} pts` : "—"}
+                </dd>
+                <dt className="text-slate-500">Profit ccy / Contract</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.symbol_check?.currency_profit ?? "—"} / {br.symbol_check?.contract_size != null ? `${br.symbol_check.contract_size} oz` : "—"}
+                </dd>
+                <dt className="text-slate-500">Chart symbol</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.symbol_check?.chart_symbol ?? "—"}
+                  {br.symbol_check?.resolution?.status ? ` (${br.symbol_check.resolution.status})` : ""}
+                </dd>
+              </dl>
+              {/* USD gold only (PR #405): a refused symbol opens nothing and is never silent. */}
+              {br.symbol_check ? (
+                <p
+                  className={`mt-1.5 text-[11px] ${br.symbol_check.ok ? "text-emerald-300" : "text-rose-300"}`}
+                  aria-label="Trade symbol check"
+                >
+                  {br.symbol_check.ok ? `Symbol verified: ${br.symbol_check.text}` : br.symbol_check.text}
+                </p>
+              ) : null}
+              {/* Account Profiles phase 1 (docs/RFC_ACCOUNT_PROFILES.md): the broker spec gate and the stored profile. */}
+              <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]" aria-label="Account spec">
+                <dt className="text-slate-500">Leverage / Margin</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.leverage == null
+                    ? "—"
+                    : Number(br.leverage) >= LEVERAGE_UNLIMITED_FROM
+                      ? <span title={`The broker reports 1:${Number(br.leverage).toLocaleString("en-US")}: unlimited or unknown leverage. Sizing never uses leverage; the margin is the broker's OrderCheck answer.`}>unlimited</span>
+                      : `1:${Number(br.leverage).toLocaleString("en-US")}`} / {br.margin_mode ?? "—"}
+                </dd>
+                <dt className="text-slate-500">Margin / lot</dt>
+                <dd className="mono text-right text-slate-300">{br.margin_per_lot != null ? num(br.margin_per_lot, 2) : "—"}</dd>
+                <dt className="text-slate-500">Freeze / Trade mode</dt>
+                <dd className="mono text-right text-slate-300">
+                  {br.freeze_level_points != null ? `${br.freeze_level_points} pts` : "—"} / {br.symbol_trade_mode ?? "—"}
+                </dd>
+              </dl>
+              {/* Spec and EA gate as two badges; the detail is in the tooltip (owner 2026-11-18: no prose here). */}
+              <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px]">
+                {account ? (
+                  <span aria-label="Broker spec check" title={account.spec_text}
+                    className={`rounded-sm border px-1.5 py-0.5 ${account.spec_status === "validated" ? "border-emerald-400/30 text-emerald-300" : "border-amber-400/30 text-amber-300"}`}>
+                    spec {account.spec_status === "validated" ? "✓" : account.spec_status}
+                  </span>
+                ) : null}
+                {br.ea_version_gate ? (
+                  <span aria-label="EA version gate" title={`EA version gate ${br.ea_version_gate.on ? "on" : "off"}: new entries need OmegaExecutor ${br.ea_version_gate.min_version} or later.`}
+                    className={`rounded-sm border px-1.5 py-0.5 ${br.ea_version_gate.met ? "border-emerald-400/30 text-emerald-300" : "border-rose-400/30 text-rose-300"}`}>
+                    EA {br.executor?.version ?? "?"} {br.ea_version_gate.met ? "✓" : `< ${br.ea_version_gate.min_version}`}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+
+            {/* MT5 Navigator Tree (Ctrl+N) */}
+            <div className="flex items-center justify-between border-b border-white/10 bg-[#0d1525] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+              <span className="flex items-center gap-1.5">
+                <Layers className="h-3.5 w-3.5 text-cyan-300" />
+                Navigator
+              </span>
+            </div>
+            <div className="flex-1 space-y-2 px-3 py-2.5 text-[11.5px]">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Accounts</div>
+                <div className="mt-1 flex items-center justify-between rounded-sm bg-white/3 px-2 py-1 border border-white/5">
+                  <span className="mono text-slate-200 truncate">{serverName}</span>
+                  <Badge tone={br.terminal_connected ? "green" : "red"}>
+                    {br.trade_mode || "unknown"}
+                  </Badge>
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Expert Advisors</div>
+                <div className="mt-1 space-y-1">
+                  <div className="flex items-center justify-between rounded-sm bg-cyan-500/[0.07] px-2 py-1 border border-cyan-400/20">
+                    <span className="mono flex items-center gap-1.5 text-cyan-200">
+                      <Bot className="h-3 w-3 text-cyan-300" />
+                      OmegaExecutor
+                    </span>
+                    <span className="mono text-[10px] text-emerald-300">
+                      {br.terminal_connected ? `${symbolName}, M1` : "standby"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between rounded-sm bg-white/2 px-2 py-1 border border-white/5">
+                    <span className="mono text-slate-300">CryptophysXAUUSD</span>
+                    <span className="mono text-[10px] text-slate-400">
+                      {ea.connected ? (hb?.version ? `v${hb.version}` : "—") : "direct EA"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Decision Engine</div>
+                <div className="mt-1 flex items-center justify-between rounded-sm bg-white/3 px-2 py-1 border border-white/5">
+                  <span className="text-slate-300">Signal</span>
+                  <span
+                    className={`mono font-bold ${
+                      s.side === "BUY" ? "text-emerald-300" : s.side === "SELL" ? "text-rose-300" : "text-slate-400"
+                    }`}
+                  >
+                    {!s.side || s.side === "NONE" ? "WAIT" : `${s.side} (${num(s.entry, 2)})`}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Center / Right MT5 Interactive Candlestick Chart: stretches to the row's height (the sidebar's) */}
+          <div className="flex min-h-[430px] flex-col">
             <Mt5ChartCanvas
               tf={mt5Tf}
               symbol={symbolName}
@@ -985,6 +1375,7 @@ export default function Omega() {
               keyZones={keyZones}
               showKeyLevels={showKeyLevels}
             />
+          </div>
         </div>
 
         {/* =================================================================
@@ -1038,6 +1429,7 @@ export default function Omega() {
                       <th>T/P</th>
                       <th>Current</th>
                       <th>Profit ({cur})</th>
+                      <th title="Loss at the stop in money and % of equity; once the stop is at or beyond the entry, the profit it locks">Risk @ SL</th>
                       <th>Intent</th>
                       <th className="text-right">Action</th>
                     </tr>
@@ -1045,7 +1437,7 @@ export default function Omega() {
                   <tbody>
                     {positionsList.length === 0 ? (
                       <tr>
-                        <td colSpan={13} className="py-4 text-center text-[12px] text-slate-500">
+                        <td colSpan={14} className="py-4 text-center text-[12px] text-slate-500">
                           No open positions.
                         </td>
                       </tr>
@@ -1082,6 +1474,13 @@ export default function Omega() {
                             <td className="mono text-emerald-300">{p.tp ? num(p.tp, digits) : "—"}</td>
                             <td className="mono text-slate-200">{num(curPrice, digits)}</td>
                             <td className={`mono font-bold ${toneCls(p.profit)}`}>{money(p.profit, cur)}</td>
+                            {(() => {
+                              const r = riskToSl(p, br);
+                              if (!r) return <td className="mono text-slate-500">—</td>;
+                              return r.locked
+                                ? <td className="mono text-emerald-300">locked +{money(r.amount, cur).replace(/^\+/, "")}</td>
+                                : <td className="mono text-rose-300">SL −{money(r.amount, cur).replace(/^[-+]/, "")} · {r.pct}%</td>;
+                            })()}
                             <td className="mono text-[11px] text-slate-400">{p.signal_id || p.intent_id || (isManual ? "Manual" : "—")}</td>
                             <td className="text-right">
                               <button
@@ -1202,8 +1601,8 @@ export default function Omega() {
                 </div>
                 <div className="text-slate-400">
                   {/* What applies, not the raw setting: the smaller of the setting and the profile's cap. */}
-                  Risk/Trade: <span className="text-slate-200" title="Applied: the smaller of the setting and the profile's cap">{e.risk_pct != null ? `${account && account.profile !== "custom" ? appliedLimit(e.risk_pct, PROFILE_CAPS[account.profile]?.risk) : e.risk_pct}%` : "—"}</span> · Max Pos:{" "}
-                  <span className="text-slate-200">{e.max_positions != null ? (account && account.profile !== "custom" ? appliedLimit(e.max_positions, PROFILE_CAPS[account.profile]?.positions) : e.max_positions) : "—"}</span>
+                  Risk/Trade: <span className="text-slate-200" title="Applied: the smaller of the setting and the profile's cap">{appliedRisk != null ? `${appliedRisk}%` : "—"}</span> · Max Pos:{" "}
+                  <span className="text-slate-200">{appliedPositions ?? "—"}</span>
                 </div>
               </div>
             </div>
@@ -2425,201 +2824,6 @@ export default function Omega() {
               <dt className="text-slate-500">Bridge version</dt><dd className="mono text-slate-400">{br.bridge_version || "—"}</dd>
             </dl>
           </Panel>
-          ) : null}
-          {setupTab === "connection" ? (
-            <div className="overflow-hidden rounded-xl border border-white/10 md:col-span-2">
-          {/* Left Dock: Market Watch + Contract Spec + Navigator */}
-          <div className="flex flex-col border-b border-white/10 bg-[#080d18] ">
-            {/* Market Watch Header */}
-            <div className="flex items-center justify-between border-b border-white/10 bg-[#0d1525] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
-              <span className="flex items-center gap-1.5">
-                <CandlestickChart className="h-3.5 w-3.5 text-cyan-300" />
-                Market Watch · {symbolName}
-              </span>
-              <span className="mono flex items-center gap-1 text-[10px] text-slate-400">
-                {tickDir === "up" ? <span className="text-emerald-300">▲</span> : tickDir === "down" ? <span className="text-rose-300">▼</span> : null}
-                {br.spread_points != null ? `${br.spread_points} pts` : "—"}
-              </span>
-            </div>
-
-            {/* MT5 One-Click Trading Style Dual Bid / Ask Box */}
-            <div className="grid grid-cols-2 gap-2 p-2.5 border-b border-white/10 bg-black/25">
-              <div className="rounded-lg border border-rose-500/30 bg-linear-to-b from-rose-500/15 to-rose-950/20 px-2.5 py-2 text-center">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-rose-300">BID (SELL)</div>
-                <div className="mono mt-0.5 text-lg font-extrabold text-rose-200">{num(br.bid, digits)}</div>
-              </div>
-              <div className="rounded-lg border border-emerald-500/30 bg-linear-to-b from-emerald-500/15 to-emerald-950/20 px-2.5 py-2 text-center">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">ASK (BUY)</div>
-                <div className="mono mt-0.5 text-lg font-extrabold text-emerald-200">{num(br.ask, digits)}</div>
-              </div>
-            </div>
-
-            {/* Market Watch Symbol Table */}
-            <div className="border-b border-white/10 px-2.5 py-2">
-              <table className="w-full text-left text-[11px]">
-                <thead>
-                  <tr className="border-b border-white/10 text-[10px] uppercase text-slate-500">
-                    <th className="pb-1">Symbol</th>
-                    <th className="pb-1 text-right">Bid</th>
-                    <th className="pb-1 text-right">Ask</th>
-                    <th className="pb-1 text-right"> {!s.market_price ? "Pts" : "Spread"}</th>
-                  </tr>
-                </thead>
-                <tbody className="mono divide-y divide-white/5">
-                  <tr className="bg-cyan-500/5">
-                    <td className="py-1.5 font-bold text-cyan-300">{symbolName}</td>
-                    <td className="py-1.5 text-right text-emerald-300">{num(br.bid, digits)}</td>
-                    <td className="py-1.5 text-right text-rose-300">{num(br.ask, digits)}</td>
-                    <td className="py-1.5 text-right text-amber-200">{br.spread_points ?? "—"}</td>
-                  </tr>
-                  {s.market_price ? (
-                    <tr>
-                      <td className="py-1 text-slate-400">XAUUSD feed</td>
-                      <td className="py-1 text-right text-slate-300" colSpan={2}>
-                        {num(s.market_price, 2)}
-                      </td>
-                      <td className="py-1 text-right text-slate-500">—</td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Symbol Contract Specification */}
-            <div className="border-b border-white/10 px-3 py-2">
-              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                Specification
-              </div>
-              <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]">
-                <dt className="text-slate-500">Digits / Point</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.digits ?? "—"} / {br.point ?? "—"}
-                </dd>
-                <dt className="text-slate-500">Tick Size / Val</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.tick_size ?? "—"} / {br.tick_value != null ? num(br.tick_value, 2) : "—"}
-                </dd>
-                <dt className="text-slate-500">Volume Min / Max</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.volume_min ?? "—"} / {br.volume_max ?? "—"}
-                </dd>
-                <dt className="text-slate-500">Volume Step</dt>
-                <dd className="mono text-right text-slate-300">{br.volume_step ?? "—"}</dd>
-                <dt className="text-slate-500">Stops Level</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.stops_level_points != null ? `${br.stops_level_points} pts` : "—"}
-                </dd>
-                <dt className="text-slate-500">Profit ccy / Contract</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.symbol_check?.currency_profit ?? "—"} / {br.symbol_check?.contract_size != null ? `${br.symbol_check.contract_size} oz` : "—"}
-                </dd>
-                <dt className="text-slate-500">Chart symbol</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.symbol_check?.chart_symbol ?? "—"}
-                  {br.symbol_check?.resolution?.status ? ` (${br.symbol_check.resolution.status})` : ""}
-                </dd>
-              </dl>
-              {/* USD gold only (PR #405): a refused symbol opens nothing and is never silent. */}
-              {br.symbol_check ? (
-                <p
-                  className={`mt-1.5 text-[11px] ${br.symbol_check.ok ? "text-emerald-300" : "text-rose-300"}`}
-                  aria-label="Trade symbol check"
-                >
-                  {br.symbol_check.ok ? `Symbol verified: ${br.symbol_check.text}` : br.symbol_check.text}
-                </p>
-              ) : null}
-              {/* Account Profiles phase 1 (docs/RFC_ACCOUNT_PROFILES.md): the broker spec gate and the stored profile. */}
-              <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]" aria-label="Account spec">
-                <dt className="text-slate-500">Leverage / Margin</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.leverage == null
-                    ? "—"
-                    : Number(br.leverage) >= LEVERAGE_UNLIMITED_FROM
-                      ? <span title={`The broker reports 1:${Number(br.leverage).toLocaleString("en-US")}: unlimited or unknown leverage. Sizing never uses leverage; the margin is the broker's OrderCheck answer.`}>unlimited</span>
-                      : `1:${Number(br.leverage).toLocaleString("en-US")}`} / {br.margin_mode ?? "—"}
-                </dd>
-                <dt className="text-slate-500">Margin / lot</dt>
-                <dd className="mono text-right text-slate-300">{br.margin_per_lot != null ? num(br.margin_per_lot, 2) : "—"}</dd>
-                <dt className="text-slate-500">Freeze / Trade mode</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.freeze_level_points != null ? `${br.freeze_level_points} pts` : "—"} / {br.symbol_trade_mode ?? "—"}
-                </dd>
-                <dt className="text-slate-500">Profile</dt>
-                <dd className="mono text-right text-slate-300" title="Set in Setup → Risk profile">
-                  {account ? `${account.profile_label} (ceiling ${account.ceiling})` : "—"}
-                </dd>
-              </dl>
-              {/* Spec and EA gate as two badges; the detail is in the tooltip (owner 2026-11-18: no prose here). */}
-              <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px]">
-                {account ? (
-                  <span aria-label="Broker spec check" title={account.spec_text}
-                    className={`rounded-sm border px-1.5 py-0.5 ${account.spec_status === "validated" ? "border-emerald-400/30 text-emerald-300" : "border-amber-400/30 text-amber-300"}`}>
-                    spec {account.spec_status === "validated" ? "✓" : account.spec_status}
-                  </span>
-                ) : null}
-                {br.ea_version_gate ? (
-                  <span aria-label="EA version gate" title={`EA version gate ${br.ea_version_gate.on ? "on" : "off"}: new entries need OmegaExecutor ${br.ea_version_gate.min_version} or later.`}
-                    className={`rounded-sm border px-1.5 py-0.5 ${br.ea_version_gate.met ? "border-emerald-400/30 text-emerald-300" : "border-rose-400/30 text-rose-300"}`}>
-                    EA {br.executor?.version ?? "?"} {br.ea_version_gate.met ? "✓" : `< ${br.ea_version_gate.min_version}`}
-                  </span>
-                ) : null}
-              </div>
-            </div>
-
-            {/* MT5 Navigator Tree (Ctrl+N) */}
-            <div className="flex items-center justify-between border-b border-white/10 bg-[#0d1525] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
-              <span className="flex items-center gap-1.5">
-                <Layers className="h-3.5 w-3.5 text-cyan-300" />
-                Navigator
-              </span>
-            </div>
-            <div className="flex-1 space-y-2 px-3 py-2.5 text-[11.5px]">
-              <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Accounts</div>
-                <div className="mt-1 flex items-center justify-between rounded-sm bg-white/3 px-2 py-1 border border-white/5">
-                  <span className="mono text-slate-200 truncate">{serverName}</span>
-                  <Badge tone={br.terminal_connected ? "green" : "red"}>
-                    {br.trade_mode || "unknown"}
-                  </Badge>
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Expert Advisors</div>
-                <div className="mt-1 space-y-1">
-                  <div className="flex items-center justify-between rounded-sm bg-cyan-500/[0.07] px-2 py-1 border border-cyan-400/20">
-                    <span className="mono flex items-center gap-1.5 text-cyan-200">
-                      <Bot className="h-3 w-3 text-cyan-300" />
-                      OmegaExecutor
-                    </span>
-                    <span className="mono text-[10px] text-emerald-300">
-                      {br.terminal_connected ? `${symbolName}, M1` : "standby"}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between rounded-sm bg-white/2 px-2 py-1 border border-white/5">
-                    <span className="mono text-slate-300">CryptophysXAUUSD</span>
-                    <span className="mono text-[10px] text-slate-400">
-                      {ea.connected ? (hb?.version ? `v${hb.version}` : "—") : "direct EA"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Decision Engine</div>
-                <div className="mt-1 flex items-center justify-between rounded-sm bg-white/3 px-2 py-1 border border-white/5">
-                  <span className="text-slate-300">Signal</span>
-                  <span
-                    className={`mono font-bold ${
-                      s.side === "BUY" ? "text-emerald-300" : s.side === "SELL" ? "text-rose-300" : "text-slate-400"
-                    }`}
-                  >
-                    {!s.side || s.side === "NONE" ? "WAIT" : `${s.side} (${num(s.entry, 2)})`}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-            </div>
           ) : null}
         </div>
       </div>
