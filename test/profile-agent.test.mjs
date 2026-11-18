@@ -104,7 +104,7 @@ test("PA7 approval mode: the agent proposes, once; downgrades still run at once"
 async function seeded(profile = "custom", ceiling = "custom") {
   resetAccountSpecSchemaForTests(); resetProfileAgentSchemaForTests();
   const db = d1();
-  const executor = { connected: true, server: "S", executor: { version: "1.15" }, account: { currency: "USD", equity: 1000, balance: 1000, leverage: 500, margin_mode: "hedging", login_hash: "b".repeat(64) },
+  const executor = { connected: true, server: "S", executor: { version: "1.16" }, account: { currency: "USD", equity: 1000, balance: 1000, leverage: 500, margin_mode: "hedging", login_hash: "b".repeat(64) },
     symbol: { name: "GOLD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, trade_mode: "full", margin_per_lot: 0.38, atr_points: 200 }, positions: [], orders: [] };
   const a = await syncAccount(db, executor, { settings: { risk_pct: 2, max_positions: 5, max_daily_loss_pct: 10 }, now: NOW - 30 * DAY });
   if (profile !== "custom" || ceiling !== "custom") await db.prepare("UPDATE omega_accounts SET profile = ?, ceiling = ? WHERE account_ref = ?").bind(profile, ceiling, a.account_ref).run();

@@ -42,7 +42,7 @@
 //|     manually on a chart profile when OMEGA_TAKE_STARTUP=false.   |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.15"
+#property version   "1.16"
 
 #include <Trade/Trade.mqh>
 
@@ -82,7 +82,7 @@ input bool   DynamicAtrStopEnabled  = true;  // Adaptive ATR-based SL+ and Trail
 input double AtrMultiplierTrigger   = 1.0;   // Break-even trigger multiplier of ATR (1.0 = 1x ATR)
 input double AtrMultiplierTrailing  = 1.5;   // Trailing distance multiplier of ATR (1.5 = 1.5x ATR)
 
-const string OMEGA_EXECUTOR_VERSION = "1.15"; // keep equal to #property version
+const string OMEGA_EXECUTOR_VERSION = "1.16"; // keep equal to #property version
 const string OMEGA_FOLDER    = "omega";
 const string STATE_TMP_PATH  = "omega/state.tmp";
 const string STATE_JSON_PATH = "omega/state.json";
@@ -316,11 +316,14 @@ string OpenRefusal(const string sym, const string side, const double volume, con
       if(minDist > 0.0 && d < minDist) return "refused: stops_level";
      }
 
-   // The margin is computed first (a terminal that cannot price it opens nothing); whether the account can carry it
-   // is OrderCheck's answer below, which also counts a hedged opposite position (a plain margin > free margin compare
-   // would not).
+   // The margin is computed first: a terminal that cannot price it (OrderCalcMargin false) opens nothing, with the
+   // error code. A margin of 0 is a valid answer (1.16, 2026-11-18): under unlimited leverage (FxPro demo, 1:2,000,000,000)
+   // 0.01 lot needs about USD 0.004, which the terminal rounds to 0.00; 1.15 refused every open there as margin_unknown.
+   // Whether the account can carry the order is OrderCheck's answer below, which also counts a hedged opposite position.
    double margin = 0.0;
-   if(!OrderCalcMargin(buy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, sym, volume, price, margin) || margin <= 0.0) return "refused: margin_unknown";
+   ResetLastError();
+   if(!OrderCalcMargin(buy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, sym, volume, price, margin)) return StringFormat("refused: margin_unknown_%d", GetLastError());
+   if(margin < 0.0) return "refused: margin_negative";
 
    MqlTradeRequest req;
    MqlTradeCheckResult check;

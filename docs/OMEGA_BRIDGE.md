@@ -162,6 +162,9 @@ MT5's `[StartUp]` section in `/opt/mt5-ingestion-gateway/config/terminal_gateway
     `account_seen`, `spec_changed`, `spec_invalid`, `spec_validated`, `account_ref_upgraded`; one Telegram line
     for a new account, a changed spec and its first validation. The login hash is used in the sync only: it is
     not stored with the bridge state and not served.
+  - **1.16 (2026-11-18):** a margin of 0 from `OrderCalcMargin` is valid (unlimited leverage rounds a small lot's
+    margin to 0.00); only a failing call refuses (`refused: margin_unknown_<error>`). 1.15 refused every open on such
+    an account. The entry gate's minimum is 1.16.
   - **EA version gate:** `OMEGA_EA_VERSION_GATE` "on" opens nothing while the EA is older than 1.15 (note
     `ea_outdated`). On since 2026-11-18, once 1.15 ran on the VPS.
 

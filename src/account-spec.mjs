@@ -22,7 +22,9 @@
 // D1 table (created lazily): omega_accounts, one row per account reference.
 
 export const SPEC_SETTLE_MS = 60_000;
-export const EXECUTOR_ENTRY_MIN_VERSION = "1.15";
+// 1.16 since 2026-11-18: OmegaExecutor 1.15 refused every open under unlimited leverage (margin rounded to 0.00 read as
+// "margin_unknown"), so new entries wait for 1.16 instead of sending orders the EA can only refuse.
+export const EXECUTOR_ENTRY_MIN_VERSION = "1.16";
 
 /** The profiles (RFC §4). Custom takes the account's own settings. Phase 1 stores; phase 2 sizes within them. */
 export const PROFILES = Object.freeze({
@@ -74,7 +76,8 @@ export function versionAtLeast(v, min) {
 }
 
 /** Whether the executor reports the 1.15 spec (leverage, margin mode, margin per lot...). */
-export const reportsFullSpec = (executor) => versionAtLeast(executor?.executor?.version ?? null, EXECUTOR_ENTRY_MIN_VERSION);
+export const FULL_SPEC_VERSION = "1.15";
+export const reportsFullSpec = (executor) => versionAtLeast(executor?.executor?.version ?? null, FULL_SPEC_VERSION);
 
 /** Whether new entries need EXECUTOR_ENTRY_MIN_VERSION (owner: on once OmegaExecutor 1.15 runs on the VPS). */
 export const eaVersionGateOn = (env) => String(env?.OMEGA_EA_VERSION_GATE ?? "").trim() === "on";
@@ -137,7 +140,8 @@ export function specProblem(executor) {
   if (!finite(a.leverage) || a.leverage <= 0) return "leverage";
   if (!["hedging", "netting", "exchange"].includes(a.margin_mode)) return "margin_mode";
   if (s.trade_mode !== "full" && s.trade_mode !== "long_only" && s.trade_mode !== "short_only") return `trade_mode_${s.trade_mode ?? "unknown"}`;
-  if (!finite(s.margin_per_lot) || s.margin_per_lot <= 0) return "margin_per_lot";
+  // 0 is valid: under unlimited leverage the terminal may round a lot's margin to 0.00 (1.16 fix, 2026-11-18).
+  if (!finite(s.margin_per_lot) || s.margin_per_lot < 0) return "margin_per_lot";
   if (finite(s.freeze_level_points) && s.freeze_level_points < 0) return "freeze_level_points";
   return null;
 }

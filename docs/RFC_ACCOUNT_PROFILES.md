@@ -127,7 +127,9 @@ owner clicks only; downgrades may run. The gates, for phase 3:
 - **Profiles stored.** D1 `omega_accounts`: the first account seen is Custom (`risk_pct` 2, `max_positions` 5,
   `max_daily_loss_pct` 10 at the time), ceiling Custom, autonomous; any later account Safe, ceiling Safe, approval.
   No lot size changes in phase 1.
-- **EA version gate.** `OMEGA_EA_VERSION_GATE` "on" blocks new entries for an EA before 1.15 (`ea_outdated`). It
+- **EA 1.16.** 1.15 refused every open on the FxPro demo: under unlimited leverage the margin of 0.01 lot rounds to
+  0.00, which 1.15 read as unknown. 1.16 refuses only when `OrderCalcMargin` fails, and the entry gate's minimum is 1.16.
+- **EA version gate.** `OMEGA_EA_VERSION_GATE` "on" blocks new entries for an EA before the minimum (`ea_outdated`). It
   shipped "off" and is on since 1.15 runs on the VPS: seen 2026-11-18 04:17:31 UTC (the 1.14 row adopted, the spec
   changed with the new fields), validated 04:18:32 UTC.
 
