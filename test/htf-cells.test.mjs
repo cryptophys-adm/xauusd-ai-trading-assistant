@@ -203,3 +203,33 @@ test("HC11 probation halves the hard cap too: on a small account the minimum lot
   assert.ok(n, JSON.stringify(p.notes));
   assert.match(n.detail, /cap of 2\.5%/);
 });
+
+import { applyRangeMode, isRanging, rangeEvidence } from "../src/htf-cells.mjs";
+
+test("HC12 range mode on a signal: only while the 1H regime ranges and only the range strategies; other modes untouched", () => {
+  const s = (agent) => ({ ...sig(agent, "SELL"), trading_mode: "range" });
+  assert.equal(isRanging("normal-ranging"), true);
+  assert.equal(isRanging("high-trending"), false);
+  const ok = applyRangeMode(s("range_fade"), { regime: "low-ranging" });
+  assert.deepEqual([ok.side, ok.regime_1h], ["SELL", "low-ranging"]);
+  const out = applyRangeMode(s("range_fade"), { regime: "normal-trending" });
+  assert.deepEqual([out.side, out.awaiting_reason], ["NONE", "range_breakout"]);
+  assert.match(cellGateText(out), /not ranging \(a breakout\)/);
+  const other = applyRangeMode(s("zone_pullback"), { regime: "normal-ranging" });
+  assert.deepEqual([other.side, other.awaiting_reason], ["NONE", "range_mode_agent"]);
+  assert.match(cellGateText(other), /only range_fade and sweep_reversal trade in range mode/);
+  const intraday = { ...sig("zone_pullback", "BUY"), trading_mode: "intraday" };
+  assert.equal(applyRangeMode(intraday, { regime: "normal-trending" }), intraday);
+  // The range trade still goes through the cell gate afterwards.
+  assert.equal(applyCellGate(ok, { htf: { h4: "down", d1: "down", trend: "down" }, cells: [] }).awaiting_reason, "cell_collecting");
+});
+
+test("HC13 range's evidence for the selector: a passing cell with the trend or neutral; against-trend cells do not count", () => {
+  assert.equal(rangeEvidence([{ agent: "range_fade", side: "BUY", context: "against", setups: 40, mean_r: 0.5, status: "pass" }]).status, "collecting");
+  const e = rangeEvidence([
+    { agent: "range_fade", side: "SELL", context: "with", setups: 35, mean_r: 0.3, status: "pass" },
+    { agent: "sweep_reversal", side: "SELL", context: "neutral", setups: 31, mean_r: 0.15, status: "pass" },
+    { agent: "range_fade", side: "BUY", context: "neutral", setups: 12, mean_r: 0.4, status: "collecting" }
+  ], { medianStop: 6 });
+  assert.deepEqual([e.status, e.n, e.mean_r, e.median_stop, e.best_cell], ["pass", 66, 0.3, 6, "range_fade|SELL|with"]);
+});

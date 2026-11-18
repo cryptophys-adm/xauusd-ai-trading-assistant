@@ -26,3 +26,4 @@ export function modeSelectorTick(env: unknown, options?: { now?: number; call?: 
 export function setAccountProfile(env: unknown, input?: { account_ref?: string; action?: string; value?: string | null; actor?: string }, options?: { now?: number }): Promise<Record<string, any>>;
 export function probationTick(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
 export function setProbation(env: unknown, input?: { enabled?: unknown; actor?: string }, options?: { now?: number }): Promise<Record<string, any>>;
+export function rangeExitStep(env: unknown, options?: { now?: number; regime?: string | null }): Promise<Record<string, any>>;

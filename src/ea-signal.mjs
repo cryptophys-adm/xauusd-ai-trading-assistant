@@ -24,7 +24,7 @@
 // it carries no account number. The control (active, paused, killed) is set by Omega
 // (omega.cryptophys.work, src/ea-execution.mjs) and kept in KV under EA_CONTROL_KEY.
 
-import { applyCellGate, htfAt, loadHtfBars, structureAt, probationFrom, PROBATION_KEY } from "./htf-cells.mjs";
+import { applyCellGate, applyRangeMode, htfAt, loadHtfBars, structureAt, probationFrom, PROBATION_KEY } from "./htf-cells.mjs";
 import { readPlanLearning } from "./plan-learning.mjs";
 import { gridAdaptMode, applyGridChoice, readGridChoices } from "./grid-adapt.mjs";
 import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
@@ -267,7 +267,9 @@ export async function eaSignal(env, { now = Date.now(), control: controlIn = nul
     const adapted = gridAdaptMode(env) === "live" ? applyGridChoice(out, { decision, choices: await readGridChoices(env) }) : out;
     // Range mode step 1 (owner 2026-11-18, src/htf-cells.mjs): a range strategy trades only with the H4/D1 trend and only in a
     // cell whose evidence passes. RANGE_CELL_GATE "off" stops the gate (emergency only).
-    const gated = String(env?.RANGE_CELL_GATE ?? "on").trim().toLowerCase() === "off" ? adapted : applyCellGate(adapted, await cellGateInputs(env, { now }));
+    // Range mode (owner 2026-11-18): only the range strategies, and only while the decision's 1H regime ranges.
+    const ranged = applyRangeMode(adapted, { regime: decision?.context?.regime_1h ?? null });
+    const gated = String(env?.RANGE_CELL_GATE ?? "on").trim().toLowerCase() === "off" ? ranged : applyCellGate(ranged, await cellGateInputs(env, { now }));
     // The strategy arm (owner 2026-11-17): read again at signal time, so a disarm stops entries before the next decision.
     if (strategyArmMode(env) === "live") return applyArmGate(gated, await readArmState(env));
     return gated;

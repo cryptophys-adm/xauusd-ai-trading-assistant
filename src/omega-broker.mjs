@@ -23,7 +23,7 @@ import { goldCheckOf, goldSymbolText, isCentCurrency, ownerTradeSymbol, TRADE_SY
 import { PROBATION, PROBATION_KEY, probationFrom, probationVerdict } from "./htf-cells.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
 import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./profile-council.mjs";
-import { runModeSelector, modeStatus, capOf } from "./mode-selector.mjs";
+import { runModeSelector, modeStatus, capOf, rangeExitTick } from "./mode-selector.mjs";
 import { readCorpusBars } from "./corpus-oracle.mjs";
 import { readLatestDecision } from "./decision-engine.mjs";
 import { brokerLabelFor, dailyLossExecutor, onboardingDayRef } from "./account-spec.mjs";
@@ -998,6 +998,12 @@ export async function modeSelectorTick(env, { now = Date.now(), call = undefined
   try { regime = (await readLatestDecision(env))?.context?.regime_1h ?? null; } catch { regime = null; }
   return runModeSelector(env, { now, account, regime, forcedDay, ...(call ? { call } : {}),
     log: (action, detail) => event(db, now, "agent:mode", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
+}
+
+/** Range's breakout exit (src/mode-selector.mjs rangeExitTick) with the Omega event and Telegram line. Every 5 minutes. */
+export async function rangeExitStep(env, { now = Date.now(), regime = undefined } = {}) {
+  await ensureSchema(env.DB);
+  return rangeExitTick(env, { now, regime, log: (action, detail) => event(env.DB, now, "agent:mode", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
 }
 
 /** The owner's profile controls (the caller checked OWNER_ACCESS_SUB): ceiling, profile, agent mode, accept, decline. */

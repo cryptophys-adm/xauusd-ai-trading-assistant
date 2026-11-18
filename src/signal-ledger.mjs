@@ -143,7 +143,7 @@ export function simulateSignal(signal, bars, { now = Date.now(), fillWindowMs = 
 // lot), no wait for the 5m entry trigger.
 export const OMEGA_POLICY_VERSION = "cryptophys.ledger-omega.v3";
 export const OMEGA_SIM = Object.freeze({ spread: 0.2, atr_period: 14, limit_pullback: 0.35, broker_day_utc: 22 });
-export const TRADING_MODES = Object.freeze(["scalp", "intraday", "swing"]);
+export const TRADING_MODES = Object.freeze(["scalp", "intraday", "swing", "range"]);
 const M15 = 15 * 60_000;
 
 /** The close of a Decision Engine key's bar ("...:<bar open ms>"), as decision-engine.mjs keyCloseMs. */

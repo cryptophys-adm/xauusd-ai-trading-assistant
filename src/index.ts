@@ -269,7 +269,7 @@ import { runKnobProposals } from "./council-knob-tuning.mjs";
 import { readKnobOverrides } from "./council-knobs.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
-import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile, modeSelectorTick, probationTick, setProbation } from "./omega-broker.mjs";
+import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile, modeSelectorTick, probationTick, setProbation, rangeExitStep } from "./omega-broker.mjs";
 import { ownerModeAction, relayModeChanges, modeStatus } from "./mode-selector.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
@@ -2304,7 +2304,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     if (url.searchParams.has("mode")) return dashboardJson({ status: "error", error: "read_only", hint: "POST /omega/api/trading-mode as a signed-in person" }, 405);
     try {
       const sel = await modeStatus(env) as Record<string, unknown>;
-      return dashboardJson({ status: "ok", mode: await tradingMode(env), pinned: ["scalp", "intraday", "swing"].includes(String(env.TRADING_MODE ?? "").trim().toLowerCase()),
+      return dashboardJson({ status: "ok", mode: await tradingMode(env), pinned: ["scalp", "intraday", "swing", "range"].includes(String(env.TRADING_MODE ?? "").trim().toLowerCase()),
         // Phase 4: Auto (selector + council) or pinned by the owner; the last switch (an automatic one can be vetoed).
         auto: sel.auto === true, owner_pinned: sel.pinned === true, baseline: sel.baseline ?? null, last_switch: sel.last_switch ?? null });
     }
@@ -2748,6 +2748,11 @@ async function runLedgerStep(env: Env): Promise<void> {
     const step = await profileAgentTick(env) as { status?: string };
     if (step?.status === "changed" || step?.status === "proposed" || step?.status === "failed") console.log("profile_agent", JSON.stringify(step));
   } catch (e) { console.error("profile_agent_failed", e instanceof Error ? e.message : String(e)); }
+  // Range mode's breakout exit (owner 2026-11-18): back to the mode it came from once the 1H regime trends.
+  try {
+    const x = await rangeExitStep(env) as { status?: string };
+    if (x?.status === "changed" || x?.status === "failed") console.log("range_exit", JSON.stringify(x));
+  } catch (e) { console.error("range_exit_failed", e instanceof Error ? e.message : String(e)); }
   // Reversal probation's revert check (src/htf-cells.mjs): a cell whose last probation trades average under 0R stops.
   try {
     const p = await probationTick(env) as { status?: string };

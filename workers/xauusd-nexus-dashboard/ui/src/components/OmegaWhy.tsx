@@ -19,6 +19,8 @@ const CODES: Record<string, { kind: Kind; text: string }> = {
   htf_unknown: { kind: "block", text: "The H4/D1 trend is unknown (too few bars), so no range strategy trades." },
   cell_collecting: { kind: "block", text: "This range strategy's side in this H4/D1 context is still collecting evidence (30 replayed setups needed): no live trade yet." },
   cell_below_bar: { kind: "block", text: "This range strategy's side in this H4/D1 context is under the +0.10R bar over 30+ setups: held until its record improves." },
+  range_breakout: { kind: "block", text: "Range mode, but the 1H regime is no longer ranging (a breakout): no range trade. The mode returns to the previous one within 5 minutes." },
+  range_mode_agent: { kind: "block", text: "Range mode: only the range strategies (Range fade, Sweep reversal) trade; this decision's trade is another strategy's." },
   probation_unconfirmed: { kind: "block", text: "A counter-trend sweep reversal waits for a change of structure (CHoCH/BOS) on a closed H1 or H4 candle before its probation trade." },
   probation_reverted: { kind: "block", text: "Reversal probation is reverted for this cell: its last 5 probation trades averaged under 0R. It trades against the trend again only once its record passes." },
   probation_busy: { kind: "block", text: "A probation trade is already open: one at a time." },

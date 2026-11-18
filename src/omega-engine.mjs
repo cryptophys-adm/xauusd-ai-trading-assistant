@@ -335,7 +335,8 @@ export const LADDER_CONFIRM_TF = Object.freeze({ scalp: "M5", intraday: "M15", s
  * stop distance at entry. null when an R step has no R (then the ladder locks nothing new).
  */
 export function ladderStep(meta, S) {
-  const mode = meta?.mode === "intraday" || meta?.mode === "swing" ? meta.mode : "scalp";
+  // Range (owner 2026-11-18) is laddered as intraday: +0.5R steps on M15 candles.
+  const mode = meta?.mode === "intraday" || meta?.mode === "range" ? "intraday" : meta?.mode === "swing" ? "swing" : "scalp";
   if (mode === "scalp") return { mode, step: S.ladder_lock_pips * GOLD_PIP, unit: "pips" };
   const r = Number(meta?.r_dist);
   if (!(r > 0)) return { mode, step: null, unit: "R" };
@@ -641,7 +642,7 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
   return { intents, extendOf: (p) => ["stable", "rising"].includes(trendOf(p)) };
 }
 
-const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar", "probation_unconfirmed", "probation_reverted"]);
+const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar", "probation_unconfirmed", "probation_reverted", "range_breakout", "range_mode_agent"]);
 
 export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined } = {}) {
   const intents = [], notes = [];
@@ -906,7 +907,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   }
   if (volRegime !== "NORMAL") openIntent.vol_regime = volRegime;
   // The mode it opened in and its stop distance (the ladder's step per mode; a later mode switch never changes them).
-  if (["scalp", "intraday", "swing"].includes(signal.trading_mode)) openIntent.mode = signal.trading_mode;
+  if (["scalp", "intraday", "swing", "range"].includes(signal.trading_mode)) openIntent.mode = signal.trading_mode;
   if (finite(price) && finite(sl)) openIntent.r_dist = roundTo(Math.abs(price - sl), sym.digits);
   // Reversal probation: tagged, with the money it risks at the stop (its trades' R for the revert check).
   if (probation) {

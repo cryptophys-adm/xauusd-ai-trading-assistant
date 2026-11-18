@@ -187,7 +187,35 @@ export function cellGateText(sig) {
   if (sig?.awaiting_reason === "htf_unknown") return `${who}: the H4/D1 trend is unknown (too few bars), so no range trade`;
   if (sig?.awaiting_reason === "cell_collecting") return `${who} (${sig.htf_context}): collecting evidence, ${setups}/${CELL_GATE.min_setups} setups`;
   if (sig?.awaiting_reason === "cell_below_bar") return `${who} (${sig.htf_context}): ${mean}R per setup over ${setups} setups, under the +${CELL_GATE.min_mean_r}R bar`;
+  if (sig?.awaiting_reason === "range_breakout") return `range mode: the 1H regime is ${sig.regime_1h ?? "unknown"}, not ranging (a breakout): no range trade; the mode returns by itself`;
+  if (sig?.awaiting_reason === "range_mode_agent") return `range mode: ${sig.trade_agent || "this agent"} is not a range strategy (only ${RANGE_GATED_AGENTS.join(" and ")} trade in range mode)`;
   if (sig?.awaiting_reason === "probation_unconfirmed") return `${who} against the H4/D1 trend (${sig.htf_trend}): probation waits for a change of structure on a closed H1 or H4 candle`;
   if (sig?.awaiting_reason === "probation_reverted") return `${who} against the H4/D1 trend: probation reverted for this cell (its last ${PROBATION.revert_last_n} probation trades averaged under 0R) until its record passes`;
   return status ? `${who} (${sig?.htf_context}): cell ${status}` : "";
+}
+
+// Range as the 4th trading mode (owner 2026-11-18, confirmed: "Setuju"): on while the 1H regime ranges; only the range
+// strategies trade in it (still through the cell gate above); it leaves by itself on a breakout (the 1H regime trending).
+export const isRanging = (regime) => typeof regime === "string" && regime.endsWith("-ranging");
+
+/**
+ * Pure: the range mode on a signal (before applyCellGate). In "range" a BUY or SELL needs the 1H regime ranging
+ * (range_breakout) and a range strategy as its agent (range_mode_agent); otherwise it has no side. Other modes: unchanged.
+ */
+export function applyRangeMode(sig, { regime = null, gated = RANGE_GATED_AGENTS } = {}) {
+  if (!sig || sig.trading_mode !== "range" || (sig.side !== "BUY" && sig.side !== "SELL")) return sig;
+  const reason = !isRanging(regime) ? "range_breakout" : !gated.includes(sig.trade_agent) ? "range_mode_agent" : null;
+  if (!reason) return { ...sig, regime_1h: regime };
+  return { ...sig, regime_1h: regime ?? "unknown", awaiting_signal_id: sig.signal_id, awaiting_side: sig.side, awaiting_reason: reason, signal_id: "", side: "NONE", action: "", entry: 0, stop: 0, tp1: 0 };
+}
+
+/**
+ * Pure: the range mode's evidence for the mode selector, from the cells: "pass" when a range strategy's cell with the
+ * trend or with no clear trend passes (its best mean R), "collecting" otherwise. Shaped like a walk-forward result.
+ */
+export function rangeEvidence(cells, { medianStop = null } = {}) {
+  const ok = (Array.isArray(cells) ? cells : []).filter((c) => c?.status === "pass" && (c.context === "with" || c.context === "neutral"));
+  if (!ok.length) return { status: "collecting", n: (cells || []).reduce((a, c) => a + (Number(c?.setups) || 0), 0), mean_r: null, holdout_mean_r: null, scope: "cells", median_stop: medianStop };
+  const best = ok.reduce((a, c) => (c.mean_r > a.mean_r ? c : a));
+  return { status: "pass", n: ok.reduce((a, c) => a + c.setups, 0), mean_r: best.mean_r, holdout_mean_r: null, scope: "cells", median_stop: medianStop, best_cell: cellKey(best.agent, best.side, best.context) };
 }

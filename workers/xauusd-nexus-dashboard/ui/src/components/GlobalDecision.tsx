@@ -368,6 +368,7 @@ export default function GlobalDecision() {
                   <option value="scalp">scalp</option>
                   <option value="intraday">intraday</option>
                   <option value="swing">swing</option>
+                  <option value="range" title="Only the range strategies trade, with the H4/D1 trend and only in cells whose evidence passes; it returns to the previous mode by itself on a breakout">range</option>
                 </select>
               )}
               {modePinned && <span className="text-slate-500">pinned by the server</span>}
