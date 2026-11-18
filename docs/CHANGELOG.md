@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- feat(public): `PublicProjection.warroom({ source })` for the CTA studio's Create → War Room (owner 2026-11-18, confirmed: "Real-time analysis"). Sources `15m` (the War Room), `1h`, `4h`, `1d` (room_runs `tf:H1`, `tf:H4`, `tf:D1`) and `news` (the 24-hour digest). Analysis only: the bias, reasons and metric names of the latest concluded run, or the digest's bias, summary, reasons, counts and headlines; never the decision (BUY, SELL, WAIT), its confidence, a price or order wording (`publicPhrase`; "order flow", "order block" and "order book" are analysis). `src/public-warroom.mjs`, test PW1–PW3.
 - feat(omega): the Position Manager's profit and loss band in R per mode (owner 2026-11-18, confirmed: "Per mode"; RFC_ACCOUNT_PROFILES section 8, the last part of phase 4).
   - The ±30 pips of take-profit-when-weakening, break-even and cut-loss become the position's stop distance at entry times its mode's band (`PM_R_BAND`: scalp 0.3R, intraday and range 0.5R, swing 0.7R; `pmBand`). With Omega's 139-pip average stop that is 42 / 70 / 98 pips instead of 30.
   - The mode is the open intent's, else the decision's, else intraday; a position without a known stop distance keeps 30 pips. The TP1 lock (30 pips beyond TP1) is unchanged.
