@@ -18,7 +18,7 @@
 // Intent ids are deterministic and at most 31 characters (they become the MT5 order comment).
 
 import { confidenceTrend, parseConfidences } from "./agent-confidence.mjs";
-import { goldSymbolCheck } from "./gold-symbol.mjs";
+import { goldCheckOf, mappedPriceProblem } from "./gold-symbol.mjs";
 import { versionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, effectiveLimits, PROFILES } from "./account-spec.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
@@ -726,7 +726,10 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const gates = [
     // USD gold only (owner 2026-11-17, PR #405): a symbol off the list, not priced in USD, with an odd contract
     // size or refused by the EA itself opens nothing. Open positions keep their management above.
-    [!goldSymbolCheck(sym, executor.symbol_error).ok, "symbol_unverified"],
+    [!goldCheckOf(executor).ok, "symbol_unverified"],
+    // An owner-set gold symbol off the list (cent accounts, e.g. "GoldOne") must price as gold: its bid within 2% of
+    // the signal's reference entry, else nothing opens.
+    [mappedPriceProblem(sym, signal.entry) !== null, "symbol_price_mismatch"],
     // Account Profiles phase 1 (docs/RFC_ACCOUNT_PROFILES.md §1-2, owner 2026-11-18): a new or changed broker spec opens
     // nothing until it validates (src/account-spec.mjs); with OMEGA_EA_VERSION_GATE "on", an EA older than 1.15 (no
     // margin, stops or freeze check of its own) opens nothing either. Open positions keep their management above.

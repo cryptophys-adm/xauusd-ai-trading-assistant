@@ -3,9 +3,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { GOLD_USD_SYMBOLS, GOLD_CONTRACT_SIZE_MIN, GOLD_CONTRACT_SIZE_MAX, goldSymbolCheck, goldSymbolText } from "../src/gold-symbol.mjs";
+import { GOLD_USD_SYMBOLS, GOLD_CONTRACT_SIZE_MIN, GOLD_CONTRACT_SIZE_MAX, goldSymbolCheck, goldSymbolText, goldCheckOf, mappedPriceProblem, isCentCurrency } from "../src/gold-symbol.mjs";
 import { GOLD_SYMBOL_CANDIDATES, GOLD_CONTRACT_SIZE_MIN as BRIDGE_MIN, GOLD_CONTRACT_SIZE_MAX as BRIDGE_MAX } from "../bridge/omega-bridge/src/symbols.mjs";
-import { executorFrom, bridgeSymbolFrom } from "../src/omega-broker.mjs";
+import { executorFrom, bridgeSymbolFrom, centToUsd, redactAccount } from "../src/omega-broker.mjs";
 import { planIntents, OMEGA_DEFAULTS } from "../src/omega-engine.mjs";
 import { omegaSymbolIssue } from "../src/health-alerts.mjs";
 
@@ -33,7 +33,11 @@ test("G2. the EA matches names exactly, checks the contract and never falls back
   assert.ok(!/firstExisting/.test(ea), "no fallback to a symbol without a price");
   assert.ok(!/g_tradeSymbol = _Symbol;\s*\n\s*return g_tradeSymbol;\s*\n\s*\}\s*$/m.test(ea.split("string ResolveGoldSymbol()")[1]?.split("//+")[0] ?? ""), "no fallback to the chart symbol");
   assert.match(ea, /if\(GOLD_USD_SYMBOLS\[i\] == name\) return true;/);
-  assert.match(ea, /SymbolInfoString\(sym, SYMBOL_CURRENCY_PROFIT\) != "USD"\) return "profit_currency_not_usd"/);
+  // 1.17: USD, or USC (US cents) on a cent account only.
+  assert.match(ea, /if\(profitCur != "USD" && !\(IsCentAccount\(\) && profitUp == "USC"\)\) return "profit_currency_not_usd";/);
+  // 1.17: the owner's one exact name (omega/trade_symbol.txt from the bridge) is allowed, under the same checks.
+  assert.match(ea, /if\(name != "" && name == g_ownerSymbol\) return true;/);
+  assert.match(ea, /const string TRADE_SYMBOL_PATH = "omega\/trade_symbol\.txt";/);
   assert.match(ea, /size < GOLD_CONTRACT_SIZE_MIN \|\| size > GOLD_CONTRACT_SIZE_MAX\) return "contract_size_out_of_range"/);
   assert.match(ea, /g_symbolError = "no_usd_gold_symbol \(" \+ lastProblem \+ "\)";\s*\n\s*return "";/);
   // Fail closed: an open intent without a verified symbol is refused; the corpus is not written.
@@ -111,7 +115,7 @@ test("G6. the health alert names a refused symbol, and the bridge's exhausted se
   assert.equal(await omegaSymbolIssue({ DB: db(st(SYM)) }, NOW), null);
   const euro = await omegaSymbolIssue({ DB: db(st({ ...SYM, name: "GOLDEURO", currency_profit: "EUR" })) }, NOW);
   assert.equal(euro.kind, "omega_symbol");
-  assert.match(euro.subject, /GOLDEURO refused: the name is not on the USD gold list\. No new entries\./);
+  assert.match(euro.subject, /GOLDEURO refused: the name is not on the USD gold list \(set the account's gold symbol in Setup → Connection & EA\)\. No new entries\./);
   const own = await omegaSymbolIssue({ DB: db(st({ name: "" }, { symbol_error: "no_usd_gold_symbol (XAUUSD:profit_currency_not_usd)" })) }, NOW);
   assert.equal(own.detail.problem, "symbol_error:no_usd_gold_symbol (XAUUSD:profit_currency_not_usd)");
   // No connection stored: nothing to say.
@@ -120,4 +124,61 @@ test("G6. the health alert names a refused symbol, and the bridge's exhausted se
   const exhausted = await omegaSymbolIssue({ DB: db({ bridge: { state: "null" }, conn: { status: "stored" }, event: { ms: NOW - 60_000, detail: JSON.stringify({ status: "exhausted", server: "NoGold-Demo", tried: ["XAUUSD", "GOLD"] }) } }) }, NOW);
   assert.equal(exhausted.key, "omega_symbol:bridge_exhausted");
   assert.match(exhausted.subject, /no gold chart symbol works on NoGold-Demo \(tried XAUUSD, GOLD\)/);
+});
+
+test("G7. cent accounts: the owner's exact gold symbol passes the same checks; USC profit only on a cent account", () => {
+  const goldOne = { ...USD_GOLD, name: "GoldOne" };
+  assert.equal(goldSymbolCheck(goldOne).problem, "name_not_allowed", "off the list without the owner's name");
+  assert.equal(goldSymbolCheck(goldOne, null, { ownerSymbol: "GoldOne" }).ok, true);
+  assert.equal(goldSymbolCheck({ ...goldOne, name: "goldone" }, null, { ownerSymbol: "GoldOne" }).ok, false, "exact, case-sensitive");
+  assert.equal(goldSymbolCheck({ ...goldOne, contract_size: 1000 }, null, { ownerSymbol: "GoldOne" }).problem, "contract_size_out_of_range");
+  assert.equal(goldSymbolCheck({ ...goldOne, currency_profit: "USC" }, null, { ownerSymbol: "GoldOne" }).problem, "profit_currency_not_usd");
+  assert.equal(goldSymbolCheck({ ...goldOne, currency_profit: "USC" }, null, { ownerSymbol: "GoldOne", cent: true }).ok, true);
+  assert.equal(goldSymbolCheck({ ...goldOne, currency_profit: "EUR" }, null, { ownerSymbol: "GoldOne", cent: true }).ok, false);
+  assert.equal(goldCheckOf({ symbol: goldOne, owner_symbol: "GoldOne", account: { cent: true } }).ok, true);
+  assert.ok(isCentCurrency("USC") && isCentCurrency("USc") && !isCentCurrency("USD"));
+  // A name off the list must price as gold: within 2% of the reference, else refused; a listed name is not asked.
+  assert.equal(mappedPriceProblem({ name: "GoldOne", bid: 4101 }, 4100), null);
+  assert.equal(mappedPriceProblem({ name: "GoldOne", bid: 2050 }, 4100), "mapped_price_mismatch");
+  assert.equal(mappedPriceProblem({ name: "GoldOne", bid: 0 }, 4100), "mapped_price_unverified");
+  assert.equal(mappedPriceProblem({ name: "GoldOne", bid: 4101 }, null), "mapped_price_unverified");
+  assert.equal(mappedPriceProblem({ name: "GOLD", bid: 1 }, 4100), null);
+});
+
+test("G8. a USC account's amounts become USD once, where the bridge state enters; ratios are unchanged", () => {
+  const raw = { connected: true, server: "Cent-Live", account: { currency: "USC", balance: 5450, equity: 5300, day_start_balance: 5450, day_realized_pl: -150, margin_free: 5000 },
+    symbol: { name: "GoldOne", currency_profit: "USD", contract_size: 100, tick_size: 0.01, tick_value: 100, margin_per_lot: 4000, bid: 4101 },
+    positions: [{ ticket: 1, side: "BUY", volume: 0.01, profit: -150 }], deals: [{ deal_ticket: 9, profit: 250, commission: -10, swap: -5 }] };
+  const ex = executorFrom(raw);
+  assert.equal(ex.account.cent, true);
+  assert.equal(ex.account.currency, "USC", "the account keeps its currency for the label");
+  assert.deepEqual([ex.account.balance, ex.account.equity, ex.account.day_start_balance, ex.account.day_realized_pl, ex.account.margin_free], [54.5, 53, 54.5, -1.5, 50]);
+  assert.deepEqual([ex.symbol.tick_value, ex.symbol.margin_per_lot, ex.symbol.bid], [1, 40, 4101], "prices are not amounts");
+  assert.deepEqual([ex.positions[0].profit, ex.deals[0].profit, ex.deals[0].commission, ex.deals[0].swap], [-1.5, 2.5, -0.1, -0.05]);
+  // The loss a stop risks, as a share of equity, is the same before and after.
+  const pct = (eq, tv) => ((10 / 0.01) * tv * 0.01) / eq;
+  assert.equal(Math.round(pct(5300, 100) * 1e9), Math.round(pct(ex.account.equity, ex.symbol.tick_value) * 1e9));
+  const usd = executorFrom({ ...raw, account: { ...raw.account, currency: "USD" } });
+  assert.deepEqual([usd.account.cent, usd.account.balance, usd.symbol.tick_value], [false, 5450, 100], "a USD account is untouched");
+  assert.equal(centToUsd(null), null);
+});
+
+test("G9. the terminal's journal line never carries the account number", () => {
+  assert.equal(redactAccount("'5012345': authorization on Cent-Live failed (Invalid account)"), "'[account]': authorization on Cent-Live failed (Invalid account)");
+  assert.equal(redactAccount("initializing of OmegaExecutor (GOLD,M1) failed with code 0 (symbol synchronization timeout)"), "initializing of OmegaExecutor (GOLD,M1) failed with code 0 (symbol synchronization timeout)");
+  assert.equal(redactAccount("price 4012.55 and 12345.67"), "price 4012.55 and 12345.67", "prices keep their digits");
+  assert.equal(bridgeSymbolFrom({ status: "trial", terminal_error: "'87654321' authorization failed" }).terminal_error, "'[account]' authorization failed");
+  assert.equal(executorFrom({ connected: false, terminal_error: "login 87654321 failed" }).terminal_error, "login [account] failed");
+});
+
+test("G10. the engine opens on the owner's GoldOne only when it prices as gold; a cent account sizes in USD", () => {
+  const goldOne = { ...SYM, name: "GoldOne" };
+  const cent = (sym) => ({ ...executor(sym), owner_symbol: "GoldOne", account: { trade_mode: "demo", currency: "USC", cent: true, balance: 10_000, equity: 10_000, day_start_balance: 10_000 } });
+  const ok = plan(cent(goldOne));
+  assert.ok(ok.intents.some((it) => it.kind === "open"), `opens: ${JSON.stringify(ok.notes)}`);
+  const off = plan(cent({ ...goldOne, bid: 2050, ask: 2050.2 }));
+  assert.ok(!off.intents.some((it) => it.kind === "open"));
+  assert.ok(off.notes.some((n) => n.code === "symbol_price_mismatch"), JSON.stringify(off.notes));
+  const noOwner = plan({ ...cent(goldOne), owner_symbol: null });
+  assert.ok(noOwner.notes.some((n) => n.code === "symbol_unverified"));
 });

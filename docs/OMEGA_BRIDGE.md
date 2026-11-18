@@ -29,6 +29,10 @@ Owner decisions 2026-11-09: Omega (`xauusd-omega`, `https://nexus.cryptophys.wor
 ## Host Installation
 
 ### 1. Copy `OmegaExecutor.mq5` and compile in MetaEditor
+Since 1.17 (2026-11-18, cent accounts) the EA may trade one more name: the account's gold symbol the owner set in
+Setup → Connection & EA (e.g. `GoldOne`), which bridge 1.4.0 writes to `MQL5/Files/omega/trade_symbol.txt`. It
+passes only the same checks as the listed names; on a USC (US cent) account a profit currency of USC passes beside
+USD. An EA before 1.17 refuses such a name (`name_not_allowed`), so update the bridge and the EA together.
 Since 1.13 (2026-11-12) the EA writes no macro bars by default (`CorpusMacroEnabled = false`): the broker supplies XAUUSD only, plus the USD calendar. Since 1.11 (2026-11-12) the EA's local break-even and micro trailing are off by default: Omega alone moves stops and targets. Since 1.12 the EA reports its version and these inputs to the server, and the Omega page shows "EA stop control": "Omega only" when both are off, a red warning while one is still on. A chart that keeps inputs from an older attachment keeps its old values, so after recompiling, re-attach the EA (or set `AutoBreakEvenEnabled` and `TrailingStopEnabled` to false in its inputs).
 
 Copy `ea/mt5/OmegaExecutor.mq5` into the Wine prefix's `MQL5/Experts/` directory and compile it into `OmegaExecutor.ex5`:
@@ -162,6 +166,8 @@ MT5's `[StartUp]` section in `/opt/mt5-ingestion-gateway/config/terminal_gateway
     `account_seen`, `spec_changed`, `spec_invalid`, `spec_validated`, `account_ref_upgraded`; one Telegram line
     for a new account, a changed spec and its first validation. The login hash is used in the sync only: it is
     not stored with the bridge state and not served.
+  - **1.17 (2026-11-18, cent accounts):** the owner-set gold symbol (`omega/trade_symbol.txt`, from bridge 1.4.0)
+    is tried first and passes the same checks as the listed names; on a USC account a USC profit currency passes.
   - **1.16 (2026-11-18):** a margin of 0 from `OrderCalcMargin` is valid (unlimited leverage rounds a small lot's
     margin to 0.00); only a failing call refuses (`refused: margin_unknown_<error>`). 1.15 refused every open on such
     an account. The entry gate's minimum is 1.16.

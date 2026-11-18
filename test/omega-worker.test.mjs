@@ -165,7 +165,7 @@ test("settings and connection changes: a person, same origin, JSON; the actor is
   assert.equal((await call("/api/settings", "POST", { enabled: true })).status, 200);
   assert.deepEqual(O.calls.at(-1), ["setSettings", { body: { enabled: true }, actor: "owner@example.com" }]);
   assert.equal((await call("/api/connection", "POST", { server: "Monex-Demo", envelope: { v: 1 } })).status, 200);
-  assert.deepEqual(O.calls.at(-1), ["setConnection", { envelope: { v: 1 }, server: "Monex-Demo", actor: "owner@example.com" }]);
+  assert.deepEqual(O.calls.at(-1), ["setConnection", { envelope: { v: 1 }, server: "Monex-Demo", trade_symbol: null, actor: "owner@example.com" }]);
   assert.equal((await call("/api/connection", "DELETE", { reason: "switch" })).status, 200);
   assert.deepEqual(O.calls.at(-1), ["clearConnection", { reason: "switch", actor: "owner@example.com" }]);
   assert.equal((await call("/api/position/close", "POST", { ticket: 109121707, reason: "manual_user_exit" })).status, 200);

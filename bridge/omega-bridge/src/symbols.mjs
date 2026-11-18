@@ -32,22 +32,28 @@ export const GOLD_CONTRACT_SIZE_MAX = 100;
  * symbol only when the EA trades a symbol that passes: an exact listed name, profit currency USD, contract
  * size 1-100 oz, and no symbol_error (OmegaExecutor 1.14+ reports the contract; an older EA never passes).
  */
-export function stateSymbolProblem(state) {
+export function stateSymbolProblem(state, { ownerSymbol = null } = {}) {
   if (!state || typeof state !== "object") return "no_state";
   if (typeof state.symbol_error === "string" && state.symbol_error) return `symbol_error:${state.symbol_error.slice(0, 96)}`;
   const s = state.symbol ?? {};
-  if (typeof s.name !== "string" || !GOLD_SYMBOL_CANDIDATES.includes(s.name)) return "name_not_allowed";
+  const owner = isSafeSymbol(ownerSymbol) ? ownerSymbol : null;
+  if (typeof s.name !== "string" || (!GOLD_SYMBOL_CANDIDATES.includes(s.name) && s.name !== owner)) return "name_not_allowed";
   if (typeof s.currency_profit !== "string" || !s.currency_profit) return "currency_not_reported";
-  if (s.currency_profit !== "USD") return "profit_currency_not_usd";
+  // A cent (USC) account may price gold in US cents (owner 2026-11-18).
+  const cent = String(state.account?.currency ?? "").trim().toUpperCase() === "USC";
+  if (s.currency_profit !== "USD" && !(cent && s.currency_profit.trim().toUpperCase() === "USC")) return "profit_currency_not_usd";
   if (typeof s.contract_size !== "number" || !Number.isFinite(s.contract_size)) return "contract_size_not_reported";
   if (s.contract_size < GOLD_CONTRACT_SIZE_MIN || s.contract_size > GOLD_CONTRACT_SIZE_MAX) return "contract_size_out_of_range";
   return null;
 }
 
 const MEMORY_FILE = "symbols.json";
+const OWNER_FILE = "owner-symbol.json";
+// Read by OmegaExecutor 1.17+ (MQL5/Files/omega/trade_symbol.txt): the one extra name it may trade.
+export const EA_TRADE_SYMBOL_FILE = "trade_symbol.txt";
 const TRIAL_FILE = "symbol-trial.json";
 
-function isSafeSymbol(name) {
+export function isSafeSymbol(name) {
   return typeof name === "string" && /^[A-Za-z0-9._#+-]{1,32}$/.test(name);
 }
 
@@ -55,11 +61,14 @@ export function serverKey(server) {
   return String(server || "").trim().toLowerCase();
 }
 
-/** Ordered, unique chart-symbol candidates for a server, without the ones in `exclude`. */
-export function candidateSymbols({ learned = null, configured = null, exclude = [] } = {}) {
+/**
+ * Ordered, unique chart-symbol candidates for a server, without the ones in `exclude`. The owner's symbol (set with the
+ * connection, cent accounts, owner 2026-11-18) comes first, then the proven one, OMEGA_SYMBOL and the list.
+ */
+export function candidateSymbols({ owner = null, learned = null, configured = null, exclude = [] } = {}) {
   const out = [];
   const skip = new Set(exclude.map((s) => String(s)));
-  for (const s of [learned, configured, ...GOLD_SYMBOL_CANDIDATES]) {
+  for (const s of [owner, learned, configured, ...GOLD_SYMBOL_CANDIDATES]) {
     if (!isSafeSymbol(s) || skip.has(s) || out.includes(s)) continue;
     out.push(s);
   }
@@ -95,6 +104,32 @@ export function rememberSymbol(stateDir, server, symbol, { fs = nodeFs } = {}) {
   const next = map && typeof map === "object" && !Array.isArray(map) ? map : {};
   next[serverKey(server)] = symbol;
   writeJson(stateDir, MEMORY_FILE, next, fs);
+}
+
+/**
+ * The owner-set gold symbol for the applied connection: { server, symbol } or null. Written when a connection carrying
+ * `trade_symbol` is applied and removed when one without it is applied or the connection is cleared. The same name is
+ * written for the EA (EA_TRADE_SYMBOL_FILE in the omega files dir), which may then trade it under its contract checks.
+ */
+export function readOwnerSymbol(stateDir, server, { fs = nodeFs } = {}) {
+  const o = readJson(path.join(stateDir, OWNER_FILE), fs);
+  if (!o || !isSafeSymbol(o.symbol) || serverKey(o.server) !== serverKey(server)) return null;
+  return o.symbol;
+}
+
+export function writeOwnerSymbol(stateDir, omegaFilesDir, server, symbol, { fs = nodeFs } = {}) {
+  const eaFile = path.join(omegaFilesDir, EA_TRADE_SYMBOL_FILE);
+  if (isSafeSymbol(symbol) && server) {
+    writeJson(stateDir, OWNER_FILE, { server, symbol }, fs);
+    fs.mkdirSync(omegaFilesDir, { recursive: true });
+    const tmp = `${eaFile}.tmp.${process.pid}`;
+    fs.writeFileSync(tmp, symbol + "\n", "utf8");
+    fs.renameSync(tmp, eaFile);
+    return;
+  }
+  for (const f of [path.join(stateDir, OWNER_FILE), eaFile]) {
+    try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* ignore */ }
+  }
 }
 
 export function forgetSymbol(stateDir, server, { fs = nodeFs } = {}) {

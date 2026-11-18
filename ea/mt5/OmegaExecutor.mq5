@@ -42,7 +42,7 @@
 //|     manually on a chart profile when OMEGA_TAKE_STARTUP=false.   |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.16"
+#property version   "1.17"
 
 #include <Trade/Trade.mqh>
 
@@ -82,11 +82,14 @@ input bool   DynamicAtrStopEnabled  = true;  // Adaptive ATR-based SL+ and Trail
 input double AtrMultiplierTrigger   = 1.0;   // Break-even trigger multiplier of ATR (1.0 = 1x ATR)
 input double AtrMultiplierTrailing  = 1.5;   // Trailing distance multiplier of ATR (1.5 = 1.5x ATR)
 
-const string OMEGA_EXECUTOR_VERSION = "1.16"; // keep equal to #property version
+const string OMEGA_EXECUTOR_VERSION = "1.17"; // keep equal to #property version
 const string OMEGA_FOLDER    = "omega";
 const string STATE_TMP_PATH  = "omega/state.tmp";
 const string STATE_JSON_PATH = "omega/state.json";
 const string INTENTS_PATH    = "omega/intents.txt";
+// 1.17 (cent accounts, owner 2026-11-18): the account's gold symbol the owner set with the connection, written by
+// omega-bridge 1.4.0+ when it is off GOLD_USD_SYMBOLS (e.g. "GoldOne"). One exact name; absent means the list only.
+const string TRADE_SYMBOL_PATH = "omega/trade_symbol.txt";
 const string PROCESSED_PATH  = "omega/processed.txt";
 const string RESULTS_PATH    = "omega/results.txt";
 const string CORPUS_TMP_PATH  = "omega/corpus.tmp";
@@ -129,12 +132,55 @@ string GOLD_USD_SYMBOLS[] = {
 const double GOLD_CONTRACT_SIZE_MIN = 1.0;
 const double GOLD_CONTRACT_SIZE_MAX = 100.0;
 string g_symbolError = "";
+string g_ownerSymbol = "";        // 1.17: the owner-set gold symbol (TRADE_SYMBOL_PATH), or ""
+datetime g_ownerSymbolReadAt = 0;
+
+// 1.17: reads TRADE_SYMBOL_PATH at most every 10 seconds. A name with characters MT5 never uses is ignored.
+void LoadOwnerSymbol()
+  {
+   if(g_ownerSymbolReadAt != 0 && TimeGMT() - g_ownerSymbolReadAt < 10) return;
+   g_ownerSymbolReadAt = TimeGMT();
+   string name = "";
+   if(FileIsExist(TRADE_SYMBOL_PATH))
+     {
+      int h = FileOpen(TRADE_SYMBOL_PATH, FILE_READ | FILE_TXT | FILE_ANSI);
+      if(h != INVALID_HANDLE)
+        {
+         if(!FileIsEnding(h)) name = FileReadString(h);
+         FileClose(h);
+        }
+     }
+   StringTrimLeft(name);
+   StringTrimRight(name);
+   bool safe = StringLen(name) >= 1 && StringLen(name) <= 32;
+   for(int i = 0; safe && i < StringLen(name); i++)
+     {
+      ushort c = StringGetCharacter(name, i);
+      safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-' || c == '#' || c == '+';
+     }
+   if(!safe) name = "";
+   if(name != g_ownerSymbol)
+     {
+      PrintFormat("OmegaExecutor: owner gold symbol %s", name == "" ? "(none: the USD gold list only)" : name);
+      g_ownerSymbol = name;
+      g_tradeSymbol = "";   // resolve again
+     }
+  }
 
 bool IsAllowedGoldName(const string name)
   {
+   if(name != "" && name == g_ownerSymbol) return true; // 1.17: the owner's one exact name
    for(int i = 0; i < ArraySize(GOLD_USD_SYMBOLS); i++)
       if(GOLD_USD_SYMBOLS[i] == name) return true;   // exact, case-sensitive: no prefix or substring match
    return false;
+  }
+
+// 1.17: an account in US cents (USC) may price gold in US cents too.
+bool IsCentAccount()
+  {
+   string c = AccountInfoString(ACCOUNT_CURRENCY);
+   StringToUpper(c);
+   return c == "USC";
   }
 
 // "" when `sym` is USD gold this EA may trade, else the reason it is refused.
@@ -143,7 +189,10 @@ string GoldSymbolProblem(const string sym)
    if(sym == "" || !IsAllowedGoldName(sym)) return "name_not_allowed";
    if(!SymbolInfoInteger(sym, SYMBOL_EXIST)) return "not_on_server";
    if(!SymbolInfoInteger(sym, SYMBOL_SELECT)) SymbolSelect(sym, true); // a price needs Market Watch
-   if(SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT) != "USD") return "profit_currency_not_usd";
+   string profitCur = SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT);
+   string profitUp = profitCur;
+   StringToUpper(profitUp);
+   if(profitCur != "USD" && !(IsCentAccount() && profitUp == "USC")) return "profit_currency_not_usd";
    double size = SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE);
    if(size < GOLD_CONTRACT_SIZE_MIN || size > GOLD_CONTRACT_SIZE_MAX) return "contract_size_out_of_range";
    if(SymbolInfoInteger(sym, SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_DISABLED) return "trade_disabled";
@@ -154,10 +203,25 @@ string GoldSymbolProblem(const string sym)
 // The USD gold symbol to trade, or "" (then g_symbolError says why). Never falls back to another symbol.
 string ResolveGoldSymbol()
   {
+   LoadOwnerSymbol();
    if(g_tradeSymbol != "" && GoldSymbolProblem(g_tradeSymbol) == "")
       return g_tradeSymbol;
 
    string lastProblem = "no_usd_gold_symbol";
+   // 1.17: the owner's symbol first (the bridge also opens its chart), under the same checks.
+   if(g_ownerSymbol != "" && SymbolInfoInteger(g_ownerSymbol, SYMBOL_EXIST))
+     {
+      string p = GoldSymbolProblem(g_ownerSymbol);
+      if(p == "")
+        {
+         g_tradeSymbol = g_ownerSymbol;
+         g_symbolError = "";
+         return g_tradeSymbol;
+        }
+      lastProblem = g_ownerSymbol + ":" + p;
+     }
+   else if(g_ownerSymbol != "")
+      lastProblem = g_ownerSymbol + ":not_on_server";
    // The chart symbol first (the bridge sets it per server), then the list in its order.
    if(IsAllowedGoldName(_Symbol))
      {

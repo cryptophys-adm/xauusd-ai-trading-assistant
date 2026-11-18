@@ -19,7 +19,7 @@ import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
-import { goldSymbolCheck, goldSymbolText } from "./gold-symbol.mjs";
+import { goldCheckOf, goldSymbolText, isCentCurrency, ownerTradeSymbol, TRADE_SYMBOL_RE } from "./gold-symbol.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
 import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./profile-council.mjs";
 import { runModeSelector, modeStatus, capOf } from "./mode-selector.mjs";
@@ -66,7 +66,7 @@ export function bridgeStateKey(executor) {
     ? executor.orders.map((o) => [o?.ticket ?? null, o?.type ?? null, o?.volume_current ?? null, o?.price_open ?? null, o?.sl ?? null, o?.tp ?? null]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
     : null;
   const deals = Array.isArray(executor.deals) ? executor.deals.map((d) => d?.deal_ticket ?? null).sort() : null;
-  return JSON.stringify([executor.connected, executor.trade_allowed, executor.server, executor.terminal_error, executor.executor, executor.account?.trade_mode, executor.account?.currency, executor.symbol?.name, executor.symbol?.currency_profit ?? null, executor.symbol?.contract_size ?? null, executor.symbol_error ?? null, executor.bridge_symbol?.status ?? null, executor.bridge_symbol?.chart_symbol ?? null, positions, orders, deals]);
+  return JSON.stringify([executor.connected, executor.trade_allowed, executor.server, executor.terminal_error, executor.executor, executor.account?.trade_mode, executor.account?.currency, executor.symbol?.name, executor.symbol?.currency_profit ?? null, executor.symbol?.contract_size ?? null, executor.symbol_error ?? null, executor.bridge_symbol?.status ?? null, executor.bridge_symbol?.chart_symbol ?? null, executor.bridge_symbol?.terminal_error ?? null, executor.owner_symbol ?? null, positions, orders, deals]);
 }
 // The deal tickets stored (or found stored with their source) per database binding: the bridge reports each
 // closed deal on every sync (2026-11-13: 36 deals), and each report cost an insert attempt and an update.
@@ -89,6 +89,8 @@ async function ensureSchema(db) {
   await db.prepare("INSERT OR IGNORE INTO omega_settings (id, settings, version) VALUES (1, ?, 0)").bind(JSON.stringify(OMEGA_DEFAULTS)).run();
   await db.prepare("INSERT OR IGNORE INTO omega_connection (id, version, status) VALUES (1, 0, 'none')").run();
   await db.prepare("INSERT OR IGNORE INTO omega_bridge (id) VALUES (1)").run();
+  // Cent accounts (owner 2026-11-18): the account's gold symbol the owner sets with the connection, or NULL.
+  try { await db.prepare("ALTER TABLE omega_connection ADD COLUMN trade_symbol TEXT").run(); } catch { /* already there */ }
   schemaReady = true;
 }
 const parse = (text, fallback = null) => { try { return text == null ? fallback : JSON.parse(text); } catch { return fallback; } };
@@ -302,14 +304,24 @@ function envelopeError(envelope) {
 
 export async function connectionStatus(env) {
   await ensureSchema(env.DB);
-  const row = await env.DB.prepare("SELECT version, status, server, kid, updated_by, updated_ms FROM omega_connection WHERE id = 1").first();
-  return { version: Number(row.version), status: row.status, server: row.server ?? null, kid: row.kid ?? null, updated_by: row.updated_by ?? null, updated_ms: row.updated_ms ?? null };
+  const row = await env.DB.prepare("SELECT version, status, server, kid, updated_by, updated_ms, trade_symbol FROM omega_connection WHERE id = 1").first();
+  return { version: Number(row.version), status: row.status, server: row.server ?? null, kid: row.kid ?? null, updated_by: row.updated_by ?? null, updated_ms: row.updated_ms ?? null, trade_symbol: row.status === "stored" ? ownerTradeSymbol(row.trade_symbol) : null };
 }
 
-export async function setConnection(env, { envelope, server, actor }, { now = Date.now() } = {}) {
+/**
+ * Store the connection. `trade_symbol` (optional, owner 2026-11-18 for cent accounts): the exact name of the account's
+ * gold symbol when it is not on the USD gold list (e.g. "GoldOne"). It is not a secret, so it travels beside the
+ * envelope: the bridge opens its chart first and the EA may trade it, still only under the contract checks, and the
+ * engine opens nothing on it until it prices within 2% of the reference gold price. Empty means the list only.
+ */
+export async function setConnection(env, { envelope, server, actor, trade_symbol = null }, { now = Date.now() } = {}) {
   await ensureSchema(env.DB);
   const name = typeof server === "string" ? server.trim() : "";
   if (!SERVER_RE.test(name)) return { ok: false, error: "server must be 1-64 letters, digits, dot, dash, underscore or space" };
+  const symText = typeof trade_symbol === "string" ? trade_symbol.trim() : "";
+  if (trade_symbol != null && typeof trade_symbol !== "string") return { ok: false, error: "trade_symbol must be text" };
+  if (symText && !TRADE_SYMBOL_RE.test(symText)) return { ok: false, error: "trade_symbol must be 1-32 letters, digits, dot, dash, underscore, # or +" };
+  const tradeSymbol = symText || null;
   const bad = envelopeError(envelope);
   if (bad) return { ok: false, error: bad };
   const text = JSON.stringify(envelope);
@@ -319,10 +331,10 @@ export async function setConnection(env, { envelope, server, actor }, { now = Da
   if (bridge.kid !== envelope.kid) return { ok: false, error: "kid_mismatch" };
   const cur = await connectionStatus(env);
   const version = cur.version + 1;
-  await env.DB.prepare("UPDATE omega_connection SET version = ?, status = 'stored', server = ?, kid = ?, envelope = ?, updated_by = ?, updated_ms = ? WHERE id = 1")
-    .bind(version, name, envelope.kid, text, actor, now).run();
-  await event(env.DB, now, actor, "connection_set", { server: name, version });
-  return { ok: true, version, status: "stored", server: name };
+  await env.DB.prepare("UPDATE omega_connection SET version = ?, status = 'stored', server = ?, kid = ?, envelope = ?, updated_by = ?, updated_ms = ?, trade_symbol = ? WHERE id = 1")
+    .bind(version, name, envelope.kid, text, actor, now, tradeSymbol).run();
+  await event(env.DB, now, actor, "connection_set", { server: name, version, trade_symbol: tradeSymbol });
+  return { ok: true, version, status: "stored", server: name, trade_symbol: tradeSymbol };
 }
 
 export async function clearConnection(env, { actor, reason }, { now = Date.now() } = {}) {
@@ -331,7 +343,7 @@ export async function clearConnection(env, { actor, reason }, { now = Date.now()
   if (!why) return { ok: false, error: "a reason is required to disconnect" };
   const cur = await connectionStatus(env);
   const version = cur.version + 1;
-  await env.DB.prepare("UPDATE omega_connection SET version = ?, status = 'cleared', server = NULL, envelope = NULL, updated_by = ?, updated_ms = ? WHERE id = 1").bind(version, actor, now).run();
+  await env.DB.prepare("UPDATE omega_connection SET version = ?, status = 'cleared', server = NULL, envelope = NULL, trade_symbol = NULL, updated_by = ?, updated_ms = ? WHERE id = 1").bind(version, actor, now).run();
   await env.DB.prepare("UPDATE omega_bridge SET state = NULL WHERE id = 1").run();
   await event(env.DB, now, actor, "connection_cleared", { reason: why, version });
   return { ok: true, version, status: "cleared" };
@@ -373,6 +385,14 @@ export function executorInfoFrom(x) {
   };
 }
 
+/**
+ * Pure: a terminal journal line without an account number. MT5 writes the login in its authorization lines
+ * ("'5012345': authorization on ... failed"); a run of 5 or more digits becomes "[account]" (prices have a dot).
+ */
+export function redactAccount(text) {
+  return typeof text === "string" ? text.replace(/(^|[^\d.])\d{5,}(?![\d.])/g, "$1[account]") : text;
+}
+
 const BRIDGE_SYMBOL_STATUSES = new Set(["confirmed", "trial", "exhausted", "stopped", "none"]);
 /** The bridge's chart-symbol resolution for the applied server (omega-bridge 1.3.0+), checked; else null. */
 export function bridgeSymbolFrom(v) {
@@ -385,6 +405,9 @@ export function bridgeSymbolFrom(v) {
     learned: s(v.learned, 32),
     tried: Array.isArray(v.tried) ? v.tried.filter((x) => typeof x === "string").slice(0, 20).map((x) => x.slice(0, 32)) : [],
     error: s(v.error, 120),
+    // omega-bridge 1.4.0+: the terminal's last login or start error (e.g. the EA failed to start on a chart symbol
+    // the account lacks), sent also while no EA state exists. Never a login, password or account number.
+    terminal_error: redactAccount(s(v.terminal_error, 160)),
     since_ms: typeof v.since_ms === "number" && Number.isFinite(v.since_ms) ? v.since_ms : null
   };
 }
@@ -394,12 +417,12 @@ export function executorFrom(state) {
   if (!state || typeof state !== "object" || Array.isArray(state)) return null;
   const n = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
   const a = state.account ?? {}, s = state.symbol ?? {};
-  return {
+  const out = {
     connected: state.connected === true,
     trade_allowed: typeof state.trade_allowed === "boolean" ? state.trade_allowed : (state.connected === true ? true : null),
     server: typeof state.server === "string" ? state.server.slice(0, 64) : null,
     received_ms: n(state.received_ms),
-    terminal_error: typeof state.terminal_error === "string" ? state.terminal_error.slice(0, 200) : null,
+    terminal_error: typeof state.terminal_error === "string" ? redactAccount(state.terminal_error.slice(0, 200)) : null,
     // OmegaExecutor 1.12+: its version and whether it still moves stops by itself (null when not reported).
     executor: executorInfoFrom(state.executor),
     account: {
@@ -486,6 +509,31 @@ export function executorFrom(state) {
       closed_ms: n(d?.closed_ms)
     }))
   };
+  return centToUsd(out);
+}
+
+/**
+ * Cent accounts (owner 2026-11-18, "Setuju"): an account in US cents (USC) reports every amount in cents. Omega's
+ * money math, its limits and its pages are in USD, so each amount is divided by 100 once, here, where the bridge's
+ * state enters: balance, equity, the day's start and result, free margin, the tick value and a lot's margin (both in
+ * the deposit currency), and each position's and deal's profit, commission and swap. The account keeps its currency
+ * ("USC") and carries cent: true, so the pages label it CENT. Ratios (risk %, daily loss %) are unchanged by this.
+ */
+export const CENT_SCALE = 0.01;
+export function centToUsd(ex) {
+  if (!ex || !isCentCurrency(ex.account?.currency)) {
+    if (ex?.account) ex.account.cent = false;
+    return ex;
+  }
+  const c = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v * CENT_SCALE * 1e6) / 1e6 : v);
+  const a = ex.account;
+  for (const k of ["balance", "equity", "day_start_balance", "day_realized_pl", "margin_free"]) a[k] = c(a[k]);
+  a.cent = true;
+  ex.symbol.tick_value = c(ex.symbol.tick_value);
+  ex.symbol.margin_per_lot = c(ex.symbol.margin_per_lot);
+  for (const p of ex.positions) p.profit = c(p.profit);
+  for (const d of ex.deals) { d.profit = c(d.profit); d.commission = c(d.commission); d.swap = c(d.swap); }
+  return ex;
 }
 
 export const CLOSE_MAX_ATTEMPTS = 10;
@@ -528,6 +576,10 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   const db = env.DB;
   if (typeof kid !== "string" || !KID_RE.test(kid) || typeof publicKey !== "string" || !B64_RE.test(publicKey) || publicKey.length > 1024) return { ok: false, error: "kid and public_key are required" };
   const executor = executorFrom(state);
+  // The connection the bridge must apply (read once: its owner-set gold symbol goes with the state too).
+  const conn = await db.prepare("SELECT version, status, server, kid, envelope, trade_symbol FROM omega_connection WHERE id = 1").first();
+  const ownerSymbol = conn?.status === "stored" ? ownerTradeSymbol(conn.trade_symbol) : null;
+  if (executor) executor.owner_symbol = ownerSymbol;
   // omega-bridge 1.3.0+ reports its chart-symbol resolution beside the state (also while no EA runs).
   const resolution = bridgeSymbolFrom(bridgeSymbol);
   if (executor && resolution) executor.bridge_symbol = resolution;
@@ -553,6 +605,12 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     const was = parse(last?.detail, {});
     if (was?.status !== resolution.status || was?.server !== resolution.server) await event(db, now, "bridge", "bridge_symbol", resolution);
   }
+  // The terminal's own error while no EA runs (e.g. "symbol synchronization timeout" on a chart the account lacks):
+  // an event once per change, so the Omega page says why nothing trades instead of showing a blank state.
+  if (!executor && resolution?.terminal_error) {
+    const last = await db.prepare("SELECT detail FROM omega_events WHERE action = 'terminal_error' ORDER BY id DESC LIMIT 1").first();
+    if (parse(last?.detail, {})?.error !== resolution.terminal_error) await event(db, now, "bridge", "terminal_error", { server: resolution.server, chart_symbol: resolution.chart_symbol, error: resolution.terminal_error });
+  }
   // The traded symbol is never silent (owner 2026-11-17, PR #405): a change on the same server and a refusal
   // (not USD gold, or the EA's own symbol_error) are events on the Omega page; the health alert says it too.
   if (executor) {
@@ -561,8 +619,8 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     if (name && prevName && name !== prevName && before?.server === executor.server) {
       await event(db, now, "bridge", "symbol_changed", { server: executor.server, from: prevName, to: name });
     }
-    const check = goldSymbolCheck(executor.symbol, executor.symbol_error);
-    const prevCheck = before ? goldSymbolCheck(before.symbol, before.symbol_error) : null;
+    const check = goldCheckOf(executor);
+    const prevCheck = before ? goldCheckOf(before) : null;
     if (!check.ok && (prevCheck?.ok !== false || prevCheck.problem !== check.problem || prevName !== name)) {
       await event(db, now, "bridge", "symbol_refused", { server: executor.server, symbol: name, problem: check.problem, currency_profit: executor.symbol?.currency_profit ?? null, contract_size: executor.symbol?.contract_size ?? null });
     }
@@ -592,7 +650,8 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           signal_id: d.signal_id,
           opened_ms: d.opened_ms,
           closed_ms: d.closed_ms,
-          currency: executor?.account?.currency || "USD",
+          // A cent account's deals were converted to USD in executorFrom (centToUsd).
+          currency: executor?.account?.cent === true ? "USD" : (executor?.account?.currency || "USD"),
           source: d.source
         }, { now });
         if (stored?.ok) known.add(seenKey);
@@ -641,14 +700,13 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   await reconcileFilledOpens(env, db, executor, now);
   await db.prepare("UPDATE omega_intents SET status = 'expired', updated_ms = ? WHERE status IN ('pending', 'sent') AND created_ms < ?").bind(now, now - INTENT_TTL_MS).run();
 
-  // The connection the bridge must apply.
-  const conn = await db.prepare("SELECT version, status, server, kid, envelope FROM omega_connection WHERE id = 1").first();
+  // The connection the bridge must apply (read above).
   let connection = null;
   if (conn.status === "stored" && conn.kid !== kid) {
     await db.prepare("UPDATE omega_connection SET status = 'needs_reentry', envelope = NULL, updated_ms = ? WHERE id = 1").bind(now).run();
     await event(db, now, "bridge", "connection_needs_reentry", { reason: "bridge key changed" });
   } else if (conn.status === "stored") {
-    connection = { version: Number(conn.version), server: conn.server, envelope: parse(conn.envelope) };
+    connection = { version: Number(conn.version), server: conn.server, envelope: parse(conn.envelope), ...(ownerSymbol ? { trade_symbol: ownerSymbol } : {}) };
   } else if (conn.status === "cleared") {
     connection = { version: Number(conn.version), cleared: true };
   }
@@ -902,6 +960,9 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
   const lastRec = await db.prepare("SELECT ms, detail FROM omega_events WHERE actor = 'agent:cerebrum' AND action = 'autonomous_recovery' ORDER BY id DESC LIMIT 1").first();
   // The planner's current notes (written only when they change): why Omega is or is not entering now.
   const lastPlan = await db.prepare("SELECT ms, detail FROM omega_events WHERE action = 'plan' ORDER BY id DESC LIMIT 1").first();
+  // While no EA state exists, the terminal's own last error the bridge reported (an event, 30 minutes at most).
+  const lastTermErr = !st && connection.status === "stored" ? await db.prepare("SELECT ms, detail FROM omega_events WHERE action = 'terminal_error' ORDER BY id DESC LIMIT 1").first() : null;
+  const termErrNoState = lastTermErr && now - Number(lastTermErr.ms) < 30 * 60_000 && Number(lastTermErr.ms) >= Number(connection.updated_ms ?? 0) ? (parse(lastTermErr.detail, {})?.error ?? null) : null;
   // Account Profiles phase 1: the accounts seen, their broker spec status and profile (never a login).
   let accounts = [];
   try { accounts = await readAccounts(db); } catch { accounts = []; }
@@ -1008,12 +1069,12 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
 
   return {
     engine: { env_enabled: engineEnvEnabled(env), ...settings.settings, settings_version: settings.version, updated_by: settings.updated_by, updated_ms: settings.updated_ms },
-    connection: { version: connection.version, status: connection.status, server: connection.server, updated_by: connection.updated_by, updated_ms: connection.updated_ms },
+    connection: { version: connection.version, status: connection.status, server: connection.server, trade_symbol: connection.trade_symbol, updated_by: connection.updated_by, updated_ms: connection.updated_ms },
     bridge: {
       seen: syncedAge != null && syncedAge < BRIDGE_SEEN_MS, synced_age_ms: syncedAge, kid: b?.kid ?? null, bridge_version: b?.bridge_version ?? null,
       terminal_connected: Boolean(st?.connected === true && connection.status === "stored" && (now - Number(st?.received_ms || 0) < 60_000)),
       trade_allowed: Boolean(st?.trade_allowed === true && connection.status === "stored" && (now - Number(st?.received_ms || 0) < 60_000)),
-      terminal_error: st?.connected !== true ? (st?.terminal_error ?? null) : null,
+      terminal_error: st?.connected !== true ? (st?.terminal_error ?? termErrNoState ?? null) : null,
       // The EA's self-report (1.12+): its version, its local break-even and trailing, and what Omega makes of it.
       executor: executorStatus(st?.executor),
       // The entry gate on the EA version (OMEGA_EA_VERSION_GATE, off until OmegaExecutor 1.15 runs on the VPS).
@@ -1021,6 +1082,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       leverage: st?.account?.leverage ?? null, margin_mode: st?.account?.margin_mode ?? null, margin_free: st?.account?.margin_free ?? null,
       freeze_level_points: st?.symbol?.freeze_level_points ?? null, symbol_trade_mode: st?.symbol?.trade_mode ?? null, margin_per_lot: st?.symbol?.margin_per_lot ?? null,
       server: connection.status === "stored" ? (st?.server ?? null) : null, trade_mode: st?.account?.trade_mode ?? null, currency: st?.account?.currency ?? null,
+      // A cent (USC) account: every amount here is already in USD (centToUsd); the page labels the account CENT.
+      cent: st?.account?.cent === true, owner_symbol: st?.owner_symbol ?? null,
       balance: st?.account?.balance ?? null, equity: st?.account?.equity ?? null, day_start_balance: st?.account?.day_start_balance ?? null, day_realized_pl: st?.account?.day_realized_pl ?? null,
       symbol: st?.symbol?.name ?? null, bid: st?.symbol?.bid ?? null, ask: st?.symbol?.ask ?? null, spread_points: st?.symbol?.spread_points ?? null,
       digits: st?.symbol?.digits ?? null, point: st?.symbol?.point ?? null, tick_size: st?.symbol?.tick_size ?? null, tick_value: st?.symbol?.tick_value ?? null,
@@ -1028,7 +1091,7 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       atr_value: atrVal, atr_points: atrPts,
       // The traded symbol, checked (PR #405): USD gold or no new entries; the bridge's chart-symbol resolution.
       symbol_check: st ? (() => {
-        const check = goldSymbolCheck(st.symbol, st.symbol_error);
+        const check = goldCheckOf(st);
         return {
           ok: check.ok, problem: check.problem, text: goldSymbolText(check, st.symbol),
           chart_symbol: st.symbol?.chart ?? st.bridge_symbol?.chart_symbol ?? null,

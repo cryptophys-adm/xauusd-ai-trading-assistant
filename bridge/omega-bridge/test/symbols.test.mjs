@@ -13,6 +13,9 @@ import {
   rememberSymbol,
   readTrial,
   writeTrial,
+  readOwnerSymbol,
+  writeOwnerSymbol,
+  EA_TRADE_SYMBOL_FILE,
 } from "../src/symbols.mjs";
 import { applyCredentials, setStartupSymbol } from "../src/ini.mjs";
 import { createDaemon } from "../src/daemon.mjs";
@@ -264,6 +267,52 @@ test("daemon: no EA state for the applied server and no trial starts a trial fro
     assert.ok(logs.some((l) => l.includes('"symbol_trial_started"')));
     assert.deepEqual(execCalls, ["systemctl restart mt5-terminal.service"]);
     assert.match(fs.readFileSync(h.terminalIni, "utf8"), /^Symbol=XAUUSD$/m);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cent accounts: the owner's gold symbol leads the candidates, passes the state check, and is written for the EA", () => {
+  assert.deepEqual(candidateSymbols({ owner: "GoldOne", learned: "GOLD" }).slice(0, 3), ["GoldOne", "GOLD", "XAUUSD"]);
+  const st = { server: "S", account: { currency: "USC" }, symbol: { name: "GoldOne", currency_profit: "USD", contract_size: 100 } };
+  assert.equal(stateSymbolProblem(st), "name_not_allowed", "without the owner's symbol the name is off the list");
+  assert.equal(stateSymbolProblem(st, { ownerSymbol: "GoldOne" }), null);
+  assert.equal(stateSymbolProblem({ ...st, symbol: { ...st.symbol, currency_profit: "USC" } }, { ownerSymbol: "GoldOne" }), null, "USC profit on a cent account");
+  assert.equal(stateSymbolProblem({ ...st, account: { currency: "USD" }, symbol: { ...st.symbol, currency_profit: "USC" } }, { ownerSymbol: "GoldOne" }), "profit_currency_not_usd");
+  assert.equal(stateSymbolProblem({ ...st, symbol: { ...st.symbol, contract_size: 1000 } }, { ownerSymbol: "GoldOne" }), "contract_size_out_of_range");
+  const dir = tmp(), files = path.join(dir, "files");
+  writeOwnerSymbol(dir, files, "Broker-Cent", "GoldOne", { fs });
+  assert.equal(readOwnerSymbol(dir, "broker-cent", { fs }), "GoldOne");
+  assert.equal(readOwnerSymbol(dir, "Other-Server", { fs }), null);
+  assert.equal(fs.readFileSync(path.join(files, EA_TRADE_SYMBOL_FILE), "utf8").trim(), "GoldOne");
+  writeOwnerSymbol(dir, files, null, null, { fs });
+  assert.equal(readOwnerSymbol(dir, "Broker-Cent", { fs }), null);
+  assert.equal(fs.existsSync(path.join(files, EA_TRADE_SYMBOL_FILE)), false);
+});
+
+test("daemon: an EA trading the owner's GoldOne on a cent account is confirmed; the terminal error is reported while no EA runs (login redacted)", async () => {
+  const dir = tmp();
+  try {
+    const nowRef = { ms: 1794870000000 };
+    const execCalls = [], logs = [], syncBodies = [];
+    const h = makeDaemon(dir, { nowRef, execCalls, logs, syncBodies });
+    setup(h, { server: "Cent-Live", symbol: "GoldOne", nowMs: nowRef.ms });
+    writeOwnerSymbol(h.stateDir, path.join(h.mt5FilesDir), "Cent-Live", "GoldOne", { fs });
+    fs.writeFileSync(path.join(h.mt5FilesDir, "state.json"), JSON.stringify({ connected: true, server: "Cent-Live", account: { currency: "USC" }, symbol: { name: "GoldOne", currency_profit: "USD", contract_size: 100 } }));
+    nowRef.ms += 1500;
+    await h.daemon.tick();
+    assert.equal(learnedSymbol(h.stateDir, "Cent-Live"), "GoldOne");
+    assert.equal(execCalls.length, 0);
+    assert.equal(syncBodies.at(-1).bridge_symbol.owner_symbol, "GoldOne");
+    assert.equal(syncBodies.at(-1).bridge_symbol.terminal_error, null, "an EA state exists: no terminal error");
+    // No EA state (it failed to start): the terminal's last journal error goes with the sync, the login redacted.
+    fs.rmSync(path.join(h.mt5FilesDir, "state.json"));
+    fs.mkdirSync(path.join(h.terminalDir, "logs"), { recursive: true });
+    const line = ["CS", "0", "12:00:00.000", "Terminal", "'5012345': authorization on Cent-Live failed (Invalid account)"].join("\t");
+    fs.writeFileSync(path.join(h.terminalDir, "logs", "20261118.log"), Buffer.from(line + "\r\n", "utf16le"));
+    nowRef.ms += 1500;
+    await h.daemon.tick();
+    assert.equal(syncBodies.at(-1).bridge_symbol.terminal_error, "'[account]': authorization on Cent-Live failed (Invalid account)");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

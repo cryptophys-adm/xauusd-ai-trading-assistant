@@ -5,6 +5,12 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- feat(omega): cent accounts and the owner's gold symbol (owner 2026-11-18, confirmed: "Setuju"). OmegaExecutor 1.17, omega-bridge 1.4.0.
+  - **Why.** A cent account's gold is "GoldOne", on no list: the bridge opened a GOLD chart the account lacks, the EA failed to start ("symbol synchronization timeout") and the balance read 0.
+  - **Owner symbol.** Setup → Connection & EA's "Symbol" selector is now sent with the connection (`trade_symbol`; "Other" for a typed name). The server, the bridge and the EA accept that one exact name under the same contract checks; the bridge opens its chart first and writes `omega/trade_symbol.txt` for the EA.
+  - **Fail-closed.** A name off the list opens nothing until its bid is within 2% of the signal's entry (`symbol_price_mismatch`).
+  - **USC.** Amounts are divided by 100 once where the bridge state enters (`centToUsd`); limits, sizing and pages are in USD; the account is labelled CENT. A USC profit currency passes only on a USC account.
+  - **Terminal errors.** With no EA state, the terminal's last journal error is reported (`terminal_error` event, shown on the Omega page), account digits redacted.
 - fix(omega): the ladder locks TPx again (owner 2026-11-18: "TP1+1 langkah geser ke TP1, TP2+1 langkah, geser ke TP2, dan seterusnya"). A step past TPx moves the stop to TPx. This replaces the TPx−1 rule of #458.
 - fix(omega): the ladder locks to TPx−1 (owner 2026-11-18, confirmed: "TPx−1"). One step past TP1 the stop stays at break-even; past TP2 it goes to TP1; past TP3 to TP2. It was TPx since #456.
 - fix(omega): the ladder's closed-candle confirmation (review of #456).

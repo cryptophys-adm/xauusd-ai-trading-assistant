@@ -146,7 +146,11 @@ const GOLD_PAIR_OPTIONS = [
   { value: "XAUUSD.m", label: "XAUUSD.m (Monex / MIFX)" },
   { value: "XAUUSDm", label: "XAUUSDm (Exness / Valetax)" },
   { value: "GOLD", label: "GOLD (FxPro / Dupoin)" },
+  // Cent accounts (owner 2026-11-18): a gold symbol off the list, typed exactly as Market Watch shows it (e.g. GoldOne).
+  { value: "OTHER", label: "Other (type the exact name)" },
 ];
+// The same rule as src/gold-symbol.mjs TRADE_SYMBOL_RE.
+const TRADE_SYMBOL_RE = /^[A-Za-z0-9._#+-]{1,32}$/;
 
 function detectBrokerFromServer(srv: string): BrokerKey {
   const s = (srv || "").toLowerCase();
@@ -578,6 +582,7 @@ export default function Omega() {
   // No broker preselected: the connected server picks it (2026-11-18: labels follow the broker, never a default name).
   const [selectedBroker, setSelectedBroker] = useState<BrokerKey>("custom");
   const [goldPair, setGoldPair] = useState<string>("AUTO_GOLD");
+  const [goldOther, setGoldOther] = useState<string>("");
   const [showPass, setShowPass] = useState<boolean>(false);
   const [bServer, setBServer] = useState("");
   const [bLogin, setBLogin] = useState("");
@@ -695,14 +700,20 @@ export default function Omega() {
       setBrokerMsg({ tone: "text-amber-200", text: "Fill in the server, login and password." });
       return;
     }
+    // The account's gold symbol: Auto sends none (the EA looks for the listed names); a listed or typed name is sent.
+    const tradeSymbol = goldPair === "AUTO_GOLD" ? null : goldPair === "OTHER" ? goldOther.trim() : goldPair;
+    if (tradeSymbol !== null && !TRADE_SYMBOL_RE.test(tradeSymbol)) {
+      setBrokerMsg({ tone: "text-amber-200", text: "Type the gold symbol exactly as Market Watch shows it (letters, digits, . _ - # +)." });
+      return;
+    }
     setBrokerMsg({ tone: "text-slate-300", text: "Encrypting…" });
     try {
       const key = await omegaJson("/omega/api/bridge/key");
       const envelope = await buildEnvelope(key.public_key, key.kid, { server, login, password });
-      const out = await omegaJson("/omega/api/connection", "POST", { server, envelope });
+      const out = await omegaJson("/omega/api/connection", "POST", { server, envelope, trade_symbol: tradeSymbol });
       setBrokerMsg({
         tone: "text-emerald-300",
-        text: `Saved v${out.version} for ${out.server}; applied at next bridge sync.`,
+        text: `Saved v${out.version} for ${out.server}${out.trade_symbol ? ` (gold symbol ${out.trade_symbol})` : ""}; applied at next bridge sync.`,
       });
     } catch (e: any) {
       setBrokerMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
@@ -805,7 +816,10 @@ export default function Omega() {
   const profileAttention = account?.pending_upgrade?.to && !(account.pending_upgrade.expires_ms && account.pending_upgrade.expires_ms <= Date.now())
     ? `The profile agent proposes ${account.pending_upgrade.to}` : account?.pending_downgrade?.to ? "A downgrade is waiting for the profile council" : "";
   const watchdog = b?.autonomous_watchdog || null;
-  const cur = br.currency || hb?.currency || "USD";
+  // A cent (USC) account: the backend already converted every amount to USD (centToUsd), so amounts show in USD
+  // and the account is labelled CENT.
+  const cur = br.cent ? "USD" : (br.currency || hb?.currency || "USD");
+  const acctCur = br.cent ? "USD" : (br.currency || "");
   const digits = typeof br.digits === "number" && br.digits >= 0 ? br.digits : 2;
   const symbolName = br.symbol || "symbol not reported";
   const serverName = br.server || conn.server || "no server";
@@ -1973,6 +1987,7 @@ export default function Omega() {
                         server: serverName,
                         trade_mode: br.trade_mode,
                         currency: br.currency,
+                        cent: br.cent === true,
                         balance: br.balance,
                         equity: br.equity,
                         day_start_balance: br.day_start_balance,
@@ -2526,7 +2541,7 @@ export default function Omega() {
                   <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300" htmlFor="b-gold-pair">
                     Symbol {configLocked ? "(locked)" : ""}
                   </label>
-                  <Hint text="Auto: the EA picks the broker's gold symbol from Market Watch." />
+                  <Hint text="Auto: the EA picks the broker's gold symbol from Market Watch (XAUUSD, GOLD, XAUUSD.m...). Other: type the account's gold symbol exactly (e.g. GoldOne on a cent account). It must be gold priced in USD or US cents, and it opens nothing until its price is within 2% of the reference gold price." />
                 </div>
                 <select
                   id="b-gold-pair"
@@ -2543,6 +2558,22 @@ export default function Omega() {
                     </option>
                   ))}
                 </select>
+                {goldPair === "OTHER" && (
+                  <input
+                    id="b-gold-other"
+                    aria-label="Gold symbol name"
+                    disabled={configLocked}
+                    maxLength={32}
+                    spellCheck={false}
+                    placeholder="e.g. GoldOne"
+                    value={goldOther}
+                    onChange={(ev) => setGoldOther(ev.target.value)}
+                    className="mt-1 w-full rounded-md border border-amber-400/30 bg-black/30 px-2.5 py-1.5 text-[12px] text-amber-100 focus:border-amber-400 focus:outline-hidden"
+                  />
+                )}
+                {conn?.trade_symbol ? (
+                  <div className="mt-1 text-[10px] text-slate-400">Stored with the connection: <strong className="text-amber-200">{conn.trade_symbol}</strong></div>
+                ) : null}
               </div>
 
               <div>
@@ -2824,9 +2855,9 @@ export default function Omega() {
               <dd className={`mono ${br.terminal_connected ? "text-emerald-300" : "text-rose-300"}`}>
                 {br.terminal_connected ? `connected to ${br.server || "?"}` : "not connected"}
               </dd>
-              <dt className="text-slate-500">Account</dt><dd className={`mono ${br.trade_mode === "real" ? "text-amber-200" : "text-slate-200"}`}>{br.trade_mode || "—"}</dd>
-              <dt className="text-slate-500">Balance</dt><dd className="mono text-slate-200">{balFmt(br.balance, br.currency || "")}</dd>
-              <dt className="text-slate-500">Equity</dt><dd className="mono text-slate-200">{balFmt(br.equity, br.currency || "")}</dd>
+              <dt className="text-slate-500">Account</dt><dd className={`mono ${br.trade_mode === "real" ? "text-amber-200" : "text-slate-200"}`}>{br.trade_mode || "—"}{br.cent ? " · CENT (USC, shown in USD)" : ""}</dd>
+              <dt className="text-slate-500">Balance</dt><dd className="mono text-slate-200">{balFmt(br.balance, acctCur)}</dd>
+              <dt className="text-slate-500">Equity</dt><dd className="mono text-slate-200">{balFmt(br.equity, acctCur)}</dd>
               <dt className="text-slate-500">Symbol</dt><dd className="mono text-slate-200">{br.symbol || "—"}</dd>
               <dt className="text-slate-500">Bid / Ask</dt><dd className="mono text-slate-200">{br.bid != null && br.ask != null ? `${num(br.bid, digits)} / ${num(br.ask, digits)}` : "—"}</dd>
               <dt className="text-slate-500">Spread</dt><dd className="mono text-slate-200">{br.spread_points != null ? `${br.spread_points} pts` : "—"}</dd>

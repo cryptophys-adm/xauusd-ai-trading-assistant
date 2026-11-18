@@ -17,7 +17,7 @@ import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { engineLabel } from "./engine-names.mjs";
 import { rejectionSummary, REJECTION_TEXT } from "./webhook-rejections.mjs";
 import { aetherSyncStatus, syncAlerts } from "./aether-sync.mjs";
-import { goldSymbolCheck, goldSymbolText } from "./gold-symbol.mjs";
+import { goldCheckOf, goldSymbolText } from "./gold-symbol.mjs";
 import { readFallbackCause, fallbackSourceLabel } from "./feed.mjs";
 
 export const HEALTH_AGENT_ID = "xauusd-risk-manager";
@@ -155,7 +155,7 @@ export async function omegaSymbolIssue(env, now = Date.now()) {
   let st = null;
   try { st = JSON.parse(row?.state || "null"); } catch { st = null; }
   const fresh = Boolean(st) && Number(st.received_ms) > 0 && now - Number(st.received_ms) <= 5 * 60_000;
-  const check = fresh ? goldSymbolCheck(st.symbol, st.symbol_error) : null;
+  const check = fresh ? goldCheckOf(st) : null;
   if (check?.ok) return null;
   if (!fresh) {
     // No EA state: the bridge may have tried every chart symbol (exhausted) or stopped on a login failure.
