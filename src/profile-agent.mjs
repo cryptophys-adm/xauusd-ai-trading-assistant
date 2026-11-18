@@ -31,6 +31,7 @@
 // deals closed since the switch; that is correct for one connected account, which is what Omega runs today.
 
 import { PROFILES, ensureAccountSchema } from "./account-spec.mjs";
+import { DEAL_NET_SQL, DEAL_MONEY_COLUMNS_SQL } from "./gold-symbol.mjs";
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { HEALTH_AGENT_ID } from "./health-alerts.mjs";
 import { SOFT_TRIGGERS, PENDING_DOWNGRADE_MAX_MS, VETO_HOLD_MS, vetoLapsed, trailingLosses, councilEvidence, councilLine } from "./profile-council.mjs";
@@ -228,7 +229,7 @@ async function accountForBalanceOps(db, row, executor, { now, log }) {
   if (balance === lastBalance && maxId === lastId) return row;
   let dealsNet = 0;
   try {
-    dealsNet = Number((await db.prepare("SELECT SUM(COALESCE(profit, 0) + COALESCE(commission, 0) + COALESCE(swap, 0)) AS n FROM ea_deals WHERE id > ? AND id <= ?").bind(lastId, maxId).first())?.n) || 0;
+    dealsNet = Number((await db.prepare(`SELECT SUM(${DEAL_NET_SQL}) AS n FROM ea_deals WHERE id > ? AND id <= ?`).bind(lastId, maxId).first())?.n) || 0;
   } catch { return row; }
   const op = balanceOperation({ lastBalance, balance, dealsNet });
   const set = { last_balance: balance, last_deal_id: maxId };
@@ -254,7 +255,7 @@ async function accountForBalanceOps(db, row, executor, { now, log }) {
  */
 export async function dealsSince(db, sinceMs) {
   try {
-    const rows = (await db.prepare("SELECT profit, commission, swap FROM ea_deals WHERE closed_ms >= ? AND COALESCE(source, '') = 'omega' ORDER BY closed_ms, id LIMIT 500").bind(Number(sinceMs) || 0).all()).results ?? [];
+    const rows = (await db.prepare(`SELECT ${DEAL_MONEY_COLUMNS_SQL} FROM ea_deals WHERE closed_ms >= ? AND COALESCE(source, '') = 'omega' ORDER BY closed_ms, id LIMIT 500`).bind(Number(sinceMs) || 0).all()).results ?? [];
     return rows.map((r) => ({ net: (Number(r.profit) || 0) + (Number(r.commission) || 0) + (Number(r.swap) || 0) }));
   } catch { return null; }
 }

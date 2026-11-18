@@ -22,6 +22,7 @@
 import { callBusModel } from "./model-call.mjs";
 import { ensureAiUsageSchema, neuronsOf, USD_PER_1K_NEURONS } from "./ai-usage.mjs";
 import { PROFILES } from "./account-spec.mjs";
+import { DEAL_MONEY_COLUMNS_SQL } from "./gold-symbol.mjs";
 
 export const PROFILE_COUNCIL_METER = "profile_council";
 export const PROFILE_COUNCIL_DAILY_USD = 0.25;
@@ -124,7 +125,7 @@ async function spendUsd(db, now) {
 async function perProfile(db, row, now) {
   const since = now - 90 * 86_400_000;
   const changes = (await db.prepare("SELECT to_profile, at_ms FROM omega_profile_changes WHERE account_ref = ? ORDER BY at_ms, id").bind(row.account_ref).all()).results ?? [];
-  const deals = (await db.prepare("SELECT profit, commission, swap, closed_ms FROM ea_deals WHERE closed_ms >= ? AND COALESCE(source, '') = 'omega' ORDER BY closed_ms LIMIT 1000").bind(since).all()).results ?? [];
+  const deals = (await db.prepare(`SELECT ${DEAL_MONEY_COLUMNS_SQL}, closed_ms FROM ea_deals WHERE closed_ms >= ? AND COALESCE(source, '') = 'omega' ORDER BY closed_ms LIMIT 1000`).bind(since).all()).results ?? [];
   const out = {};
   for (const d of deals) {
     let p = null;

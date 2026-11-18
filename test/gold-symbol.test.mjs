@@ -215,3 +215,27 @@ test("G12. a tick value that is neither contract x tick size nor that in cents o
   // A EUR account keeps the broker's figure (its own currency).
   assert.equal(executorFrom({ account: { currency: "EUR" }, symbol: sym }).symbol.tick_value, 7);
 });
+
+test("G13. 'perbaiki deal': a deal stored in cents (USX) reads in USD; the exposure line names the dollar risk", async () => {
+  const { dealInUsd } = await import("../src/ea-execution.mjs");
+  const { DEAL_NET_SQL, DEAL_MONEY_COLUMNS_SQL, positionExposure, exposureText } = await import("../src/gold-symbol.mjs");
+  // The incident's deal: -1254 USX stored before #461.
+  assert.deepEqual(dealInUsd({ deal_ticket: 356158606, profit: -1254, commission: 0, swap: 0, currency: "USX" }),
+    { deal_ticket: 356158606, profit: -12.54, commission: 0, swap: 0, currency: "USD", currency_stored: "USX" });
+  const usd = { deal_ticket: 1, profit: -5, commission: -0.1, swap: 0, currency: "USD" };
+  assert.equal(dealInUsd(usd), usd, "a USD row is unchanged");
+  // The SQL the money readers use, on SQLite.
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(":memory:");
+  db.exec("CREATE TABLE ea_deals (id INTEGER PRIMARY KEY, profit REAL, commission REAL, swap REAL, currency TEXT)");
+  db.exec("INSERT INTO ea_deals (profit, commission, swap, currency) VALUES (-1254, 0, 0, 'USX'), (-5, -0.1, 0, 'USD'), (300, 0, 0, 'usc'), (2, 0, 0, NULL)");
+  assert.equal(Math.round(db.prepare(`SELECT SUM(${DEAL_NET_SQL}) AS n FROM ea_deals`).get().n * 100) / 100, -12.54 - 5.1 + 3 + 2);
+  assert.deepEqual({ ...db.prepare(`SELECT ${DEAL_MONEY_COLUMNS_SQL} FROM ea_deals WHERE id = 1`).get() }, { profit: -12.54, commission: 0, swap: 0 });
+  // Exposure: the 3 GoldOne lots (1 oz) at a 14.97 stop on $54.50.
+  const x = positionExposure({ side: "SELL", volume: 3, open_price: 3771.45, sl: 3786.42 }, { currency_profit: "USD", contract_size: 1 }, 54.5);
+  assert.deepEqual(x, { usd_per_dollar: 3, risk_at_sl_usd: 44.91, risk_at_sl_pct: 82.4 });
+  assert.equal(exposureText(x), "≈ $3 per $1 move · risk at SL $44.91 (82.4%)");
+  // 0.10 lot of a 100 oz contract: $10 per $1 move; a stop already locking profit has no risk.
+  assert.deepEqual(positionExposure({ side: "BUY", volume: 0.1, open_price: 4000, sl: 4005 }, { currency_profit: "USD", contract_size: 100 }, 1000), { usd_per_dollar: 10, risk_at_sl_usd: null, risk_at_sl_pct: null });
+  assert.equal(positionExposure({ side: "BUY", volume: 1, open_price: 1, sl: 0.9 }, { currency_profit: "EUR", contract_size: 100 }, 1000), null);
+});

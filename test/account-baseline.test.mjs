@@ -32,7 +32,7 @@ const exec = (equity = 1000, balance = 1000, hash = "d") => ({ connected: true, 
 async function seeded() {
   resetAccountSpecSchemaForTests(); resetProfileAgentSchemaForTests();
   const db = d1();
-  db.raw.exec("CREATE TABLE ea_deals (id INTEGER PRIMARY KEY AUTOINCREMENT, profit REAL, commission REAL, swap REAL, closed_ms INTEGER, source TEXT)");
+  db.raw.exec("CREATE TABLE ea_deals (id INTEGER PRIMARY KEY AUTOINCREMENT, profit REAL, commission REAL, swap REAL, closed_ms INTEGER, source TEXT, currency TEXT)");
   const a = await syncAccount(db, exec(), { settings: { risk_pct: 2, max_positions: 3, max_daily_loss_pct: 10 }, now: NOW - DAY });
   const get = () => db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(a.account_ref).first();
   return { db, ref: a.account_ref, get };

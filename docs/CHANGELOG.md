@@ -5,6 +5,9 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- fix(omega): cent deals read in USD, and an exposure line on every position (owner 2026-11-18: "keduanya").
+  - **Deals.** A deal stored before #461 with a cent currency (USX, USC) kept its amounts in cents (the incident's −1254 USX). The money readers (loss streak, daily loss, the balance-operation check, the profile council, the policy rollback stats, the deals list and its stats) now read such rows ÷100 in USD (`DEAL_MONEY_COLUMNS_SQL`, `DEAL_NET_SQL`, `dealInUsd`). Nothing stored is rewritten.
+  - **Exposure.** Each open position carries `exposure`: USD per $1 move in gold, and the loss at its stop in USD and % of equity (`positionExposure`). The Omega page shows it under the volume; the "Order Executed" Telegram line says it too, e.g. "≈ $3 per $1 move · risk at SL $44.91 (82.4%)".
 - fix(omega): size on the real dollar risk on cent accounts (incident 2026-11-18 13:21 UTC).
   - **What happened.** On the FxPro GoldOne account (currency "USX", 5450 = $54.50) Omega opened SELL 3 lots (1 oz each) at 3771.45, stop 3786.42: about $44.9 at the stop, ~82% of the account, while the engine counted ~0.8%. "USX" was not known as cents, and the broker reported the tick value in USD while balance and profit were in cents.
   - **USX** is US cents, like USC.

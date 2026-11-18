@@ -41,6 +41,41 @@ const ALLOWED = new Set(GOLD_USD_SYMBOLS);
 export const CENT_CURRENCIES = Object.freeze(["USC", "USX"]);
 export const isCentCurrency = (c) => typeof c === "string" && CENT_CURRENCIES.includes(c.trim().toUpperCase());
 
+/**
+ * SQL for an ea_deals row's money in USD (owner 2026-11-18, "perbaiki deal"): a deal stored before the cent fix (#461)
+ * kept the account's cent currency (USX, USC) and its amounts in cents; deals stored since are in USD with currency
+ * "USD". Readers that add up money select `${DEAL_PROFIT_SQL} AS profit` etc. so both read in USD.
+ */
+const DEAL_IS_CENT_SQL = `UPPER(TRIM(COALESCE(currency, ''))) IN (${CENT_CURRENCIES.map((c) => `'${c}'`).join(", ")})`;
+const inUsd = (expr) => `(CASE WHEN ${DEAL_IS_CENT_SQL} THEN (${expr}) / 100.0 ELSE (${expr}) END)`;
+export const DEAL_PROFIT_SQL = inUsd("profit");
+export const DEAL_COMMISSION_SQL = inUsd("commission");
+export const DEAL_SWAP_SQL = inUsd("swap");
+export const DEAL_MONEY_COLUMNS_SQL = `${DEAL_PROFIT_SQL} AS profit, ${DEAL_COMMISSION_SQL} AS commission, ${DEAL_SWAP_SQL} AS swap`;
+export const DEAL_NET_SQL = inUsd("COALESCE(profit, 0) + COALESCE(commission, 0) + COALESCE(swap, 0)");
+
+/**
+ * Pure: a position's exposure in USD (owner 2026-11-18, "baris eksposur"), so a lot is never ambiguous across brokers
+ * and cent accounts: `usd_per_dollar` (what a $1 move in gold does), `risk_at_sl_usd` and `risk_at_sl_pct` of equity
+ * (null without a stop on the loss side). Only for a USD-profit symbol with a known contract size; else null.
+ */
+export function positionExposure(p, sym, equity) {
+  const fin = (v) => typeof v === "number" && Number.isFinite(v);
+  if (!p || !sym || sym.currency_profit !== "USD" || !fin(sym.contract_size) || !(sym.contract_size > 0) || !fin(p.volume) || !(p.volume > 0)) return null;
+  const perDollar = Math.round(p.volume * sym.contract_size * 1e6) / 1e6;
+  const lossSide = fin(p.sl) && p.sl > 0 && fin(p.open_price) && ((p.side === "BUY" && p.sl < p.open_price) || (p.side === "SELL" && p.sl > p.open_price));
+  const risk = lossSide ? Math.round(Math.abs(p.open_price - p.sl) * perDollar * 100) / 100 : null;
+  const pct = risk != null && fin(equity) && equity > 0 ? Math.round((risk / equity) * 1000) / 10 : null;
+  return { usd_per_dollar: perDollar, risk_at_sl_usd: risk, risk_at_sl_pct: pct };
+}
+
+/** Pure: the exposure as one line, e.g. "≈ $3 per $1 move · risk at SL $44.91 (82.4%)". */
+export function exposureText(x) {
+  if (!x) return "";
+  const usd = (v) => `$${Number(v.toFixed(2))}`;
+  return `≈ ${usd(x.usd_per_dollar)} per $1 move${x.risk_at_sl_usd != null ? ` · risk at SL ${usd(x.risk_at_sl_usd)}${x.risk_at_sl_pct != null ? ` (${x.risk_at_sl_pct}%)` : ""}` : " · no stop on the loss side"}`;
+}
+
 /** Pure: the owner-set trade symbol, or null when none or malformed. */
 export function ownerTradeSymbol(v) {
   const s = typeof v === "string" ? v.trim() : "";
