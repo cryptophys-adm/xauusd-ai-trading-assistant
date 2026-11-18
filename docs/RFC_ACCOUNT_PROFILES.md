@@ -142,6 +142,9 @@ owner clicks only; downgrades may run. The gates, for phase 3:
   The day's risk budget still applies after it.
 - **Total open risk.** What the open positions lose at their stops plus the new entry stays within the profile's total
   open risk: the lot is capped (`lot_capped_open_risk`) or the entry skipped (`open_risk_cap`). It never raises a lot.
+- **Leverage is never an input.** Sizing uses the stop distance and the loss tick value only; the margin is the
+  broker's `OrderCalcMargin` and `OrderCheck` answer in the EA. A reported leverage of 1:100,000 or more (the FxPro
+  demo reports 1:2,000,000,000, margin USD 0.38 a lot) is shown as "unlimited" on the Omega page.
 - **Where the reasons show.** The Omega page's entry status, with the numbers (`planner.details`, stored with the plan
   event when the codes change). The Signal Ledger replays in R, without lots, so the minimum-lot rule has no row there.
 
