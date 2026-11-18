@@ -108,3 +108,54 @@ test("AB4 seen before: a new login is first time on Omega with its own row; the 
   assert.equal(back.account_ref, ref, "the same login: its own row");
   assert.equal((await get()).last_seen_ms, NOW + 2 * 3_600_000);
 });
+
+test("AB5 the onboarding day: the daily loss counts from the balance at onboarding, so losses before Omega never trip it", async () => {
+  const { dailyLossExecutor, onboardingDayRef } = await import("../src/account-spec.mjs");
+  const { dailyLossHit } = await import("../src/strategy-arm.mjs");
+  const created = Date.parse("2026-11-18T08:29:57Z");
+  const row = { created_ms: created, onboard_balance: 54.5, balance_peak: 54.5 };
+  const ex = { account: { equity: 54.5, balance: 54.5, day_start_balance: 3370.69, day_realized_pl: -3316.19 } };
+  assert.equal(dailyLossHit(ex, 20), true, "the broker's day start: tripped by the manual losses");
+  const day = dailyLossExecutor(ex, row, created + 3_600_000);
+  assert.deepEqual([day.account.day_start_balance, day.account.day_realized_pl, day.account.broker_day_start_balance, day.account.day_reference], [54.5, 0, 3370.69, "onboarding"]);
+  assert.equal(dailyLossHit(day, 20), false);
+  assert.equal(dailyLossHit(dailyLossExecutor({ account: { ...ex.account, equity: 40 } }, row, created + 3_600_000), 20), true, "a loss after onboarding still counts");
+  assert.equal(onboardingDayRef(row, Date.parse("2026-11-19T00:00:01Z")), null, "the next day: the broker's day start");
+  assert.equal(dailyLossExecutor(ex, row, Date.parse("2026-11-19T01:00:00Z")), ex);
+  assert.equal(onboardingDayRef({ created_ms: created, balance_peak: 54.5 }, created + 1000), 54.5, "a row from before the column: its first peak");
+});
+
+test("AB6 a block from before onboarding counted is lifted once; a recorded daily-loss block stands; the owner may still raise the profile, audited", async () => {
+  const { db, ref, get } = await seeded();
+  await db.prepare("UPDATE omega_accounts SET profile = 'safe', ceiling = 'aggressive', upgrade_block_until_ms = ? WHERE account_ref = ?").bind(NOW + 3_600_000, ref).run();
+  const events = [];
+  await runProfileAgent(db, await get(), { executor: exec(), now: NOW, onboardingDay: true, log: async (a, d) => events.push([a, d]) });
+  assert.equal((await get()).upgrade_block_until_ms, null);
+  assert.ok(events.some((e) => e[0] === "upgrade_block_cleared"));
+  // A real daily loss now: the block has its reason and is not lifted when equity recovers.
+  await runProfileAgent(db, await get(), { executor: exec(), now: NOW + 1000, onboardingDay: true, dailyLoss: true });
+  const blocked = await get();
+  assert.deepEqual([blocked.upgrade_block_reason, blocked.upgrade_block_until_ms > NOW], ["daily_loss_limit", true]);
+  await runProfileAgent(db, await get(), { executor: exec(), now: NOW + 2000, onboardingDay: true });
+  assert.ok((await get()).upgrade_block_until_ms > NOW, "a recorded block stands to the next UTC day");
+  // The owner overrides it: recorded as owner_override_daily_lock.
+  const lines = [];
+  const r = await ownerSetProfile(db, { account_ref: ref, action: "profile", value: "conservative", actor: "owner@example.com", now: NOW + 3000, notify: async (t) => lines.push(t) });
+  assert.equal(r.ok, true);
+  assert.equal(r.change.reason, "owner_override_daily_lock");
+  assert.match(lines[0], /overriding today's daily loss block/);
+});
+
+test("AB7 approval mode: the proposal carries the council's advice and an expiry, the Telegram line a deep link; an expired proposal cannot be accepted", async () => {
+  const { db, ref, get } = await seeded();
+  await db.prepare("UPDATE omega_accounts SET profile = 'safe', ceiling = 'aggressive', agent_mode = 'approval', balance_peak = 1000, profile_ms = ? WHERE account_ref = ?").bind(NOW - 10 * DAY, ref).run();
+  for (let i = 0; i < 20; i++) deal(db, 6, "omega", NOW - 5 * DAY + i);
+  const lines = [];
+  const review = async () => ({ id: "pc_9", kind: "upgrade", verdict: "approve", reason: "approved by 3 of 3 seats, risk included", seats: {} });
+  const r = await runProfileAgent(db, await get(), { executor: exec(1010, 1010), withEvidence: true, now: NOW, review, notify: async (t) => lines.push(t) });
+  assert.equal(r.status, "proposed");
+  const p = JSON.parse((await get()).pending_upgrade);
+  assert.deepEqual([p.to, p.council.verdict, p.expires_ms], ["conservative", "approve", NOW + DAY]);
+  assert.match(lines[0], /Council: approve .* https:\/\/nexus\.cryptophys\.work\/omega#setup\/profile/);
+  assert.match((await ownerSetProfile(db, { account_ref: ref, action: "accept", now: NOW + DAY + 1 })).error, /expired/);
+});
