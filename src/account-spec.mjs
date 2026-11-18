@@ -276,6 +276,33 @@ export async function syncAccount(db, executor, { settings = null, now = Date.no
   return { account_ref: ref, spec_status: status, spec_problem: status === "validated" ? null : problem, profile: row.profile, ceiling: row.ceiling, agent_mode: row.agent_mode, row };
 }
 
+/**
+ * Pure: the broker label for notifications and pages (orchestrator relay, owner 2026-11-18: "label notif alert ... harus
+ * dinamis sesuai dengan brokernya"), e.g. "FxPro (DEMO) · GOLD". The broker is the first word of the server the
+ * terminal reports; a spec that is not validated (or no server) reads "broker unknown". The account mode is DEMO, LIVE
+ * or CONTEST; the symbol is the broker's own.
+ */
+export function brokerLabel(executor, { validated = false } = {}) {
+  const server = typeof executor?.server === "string" ? executor.server.trim() : "";
+  const word = server.split(/[-_. ]/)[0];
+  const broker = validated && word ? word : "broker unknown";
+  const mode = { demo: "DEMO", real: "LIVE", contest: "CONTEST" }[executor?.account?.trade_mode] ?? "?";
+  const symbol = typeof executor?.symbol?.name === "string" && executor.symbol.name ? ` · ${executor.symbol.name}` : "";
+  return `${broker} (${mode})${symbol}`;
+}
+
+/** The broker label for this executor, its spec status read from D1 (notifications only: one read each). */
+export async function brokerLabelFor(db, executor) {
+  try {
+    await ensureSchema(db);
+    const { ref } = await accountRef(executor);
+    const row = await db.prepare("SELECT spec_status FROM omega_accounts WHERE account_ref = ?").bind(ref).first();
+    return brokerLabel(executor, { validated: row?.spec_status === "validated" });
+  } catch {
+    return brokerLabel(executor, { validated: false });
+  }
+}
+
 /** The account rows for the Omega page (newest first, at most 20). */
 export async function readAccounts(db) {
   await ensureSchema(db);

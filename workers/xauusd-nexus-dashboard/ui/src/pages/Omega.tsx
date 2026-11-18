@@ -150,7 +150,7 @@ const GOLD_PAIR_OPTIONS = [
 
 function detectBrokerFromServer(srv: string): BrokerKey {
   const s = (srv || "").toLowerCase();
-  if (!s) return "monex";
+  if (!s) return "custom";
   if (s.includes("monex") || s.includes("mifx")) return "monex";
   if (s.includes("fxpro") || s.includes("efxpro")) return "fxpro";
   if (s.includes("dupoin")) return "dupoin";
@@ -554,10 +554,11 @@ export default function Omega() {
   const [exitModalPosition, setExitModalPosition] = useState<ExitTargetPosition | null>(null);
 
   // Broker & Gold Pairing setup state
-  const [selectedBroker, setSelectedBroker] = useState<BrokerKey>("monex");
+  // No broker preselected: the connected server picks it (2026-11-18: labels follow the broker, never a default name).
+  const [selectedBroker, setSelectedBroker] = useState<BrokerKey>("custom");
   const [goldPair, setGoldPair] = useState<string>("AUTO_GOLD");
   const [showPass, setShowPass] = useState<boolean>(false);
-  const [bServer, setBServer] = useState("Monex-Demo");
+  const [bServer, setBServer] = useState("");
   const [bLogin, setBLogin] = useState("");
   const [bPassword, setBPassword] = useState("");
   const [brokerMsg, setBrokerMsg] = useState<{ tone: string; text: string } | null>(null);
@@ -2097,7 +2098,7 @@ export default function Omega() {
                   id="b-server"
                   disabled={configLocked}
                   maxLength={64}
-                  placeholder="e.g. Monex-Demo"
+                  placeholder="e.g. Broker-Demo"
                   spellCheck={false}
                   value={bServer}
                   onChange={(ev) => {
