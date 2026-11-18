@@ -108,12 +108,40 @@ export async function positionAgents(db, executor) {
 }
 
 /**
+ * A stop or target change the terminal applied but whose result line never arrived (2026-11-18: ticket 389881390's TP
+ * moved to 3774.65 while its intent expired): the position now showing that stop or target is the terminal's word that
+ * it ran, so the intent is recorded as done (reconciled), once. No Telegram line: a modify sends none on success either.
+ */
+export async function reconcileModifies(db, executor, now) {
+  const positions = (Array.isArray(executor?.positions) ? executor.positions : []).filter((p) => Number(p?.ticket) > 0);
+  if (!positions.length) return 0;
+  let rows = [];
+  try {
+    rows = (await db.prepare("SELECT id, kind, payload FROM omega_intents WHERE kind IN ('modify_sl', 'modify_tp') AND result IS NULL AND status IN ('pending', 'sent', 'expired') AND created_ms > ? LIMIT 50").bind(now - 86_400_000).all()).results ?? [];
+  } catch { return 0; }
+  const tol = (Number(executor?.symbol?.point) > 0 ? Number(executor.symbol.point) : 0.01) / 2 + 1e-9;
+  let n = 0;
+  for (const row of rows) {
+    const it = parse(row.payload, {});
+    const pos = positions.find((p) => Number(p.ticket) === Number(it.ticket));
+    if (!pos) continue;
+    const want = row.kind === "modify_sl" ? Number(it.sl) : Number(it.tp), have = row.kind === "modify_sl" ? Number(pos.sl) : Number(pos.tp);
+    if (!Number.isFinite(want) || !Number.isFinite(have) || Math.abs(want - have) > tol) continue;
+    const res = await db.prepare("UPDATE omega_intents SET status = 'done', result = ?, updated_ms = ? WHERE id = ? AND result IS NULL")
+      .bind(JSON.stringify({ ok: true, ticket: Number(pos.ticket), error: null, executed_ms: null, fill_price: null, slippage_pts: null, latency_ms: null, reconciled: true }), now, row.id).run();
+    if (Number(res?.meta?.changes ?? 1) > 0) { n += 1; await event(db, now, "bridge", "intent_reconciled", { id: row.id, ticket: Number(pos.ticket) }); }
+  }
+  return n;
+}
+
+/**
  * An open the terminal filled but whose result line never reached the Worker (2026-11-18: ticket 389746494 was
  * open with its intent id while the intent had no result and expired). The open position that carries the intent id
  * is the terminal's own word that it ran, so the intent is recorded as done from the position, once, with an event
  * and the executed line on Telegram. A result that arrives later does not overwrite it (status 'done' is final).
  */
 export async function reconcileFilledOpens(env, db, executor, now) {
+  await reconcileModifies(db, executor, now);
   const byId = new Map();
   for (const p of Array.isArray(executor?.positions) ? executor.positions : []) {
     if (typeof p?.intent_id === "string" && p.intent_id.startsWith("open:") && Number(p?.ticket) > 0 && !byId.has(p.intent_id)) byId.set(p.intent_id, p);

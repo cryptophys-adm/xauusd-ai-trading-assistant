@@ -175,6 +175,17 @@ test("a filled open whose result line never arrived is recorded done from the op
   assert.equal(e.DB.raw.prepare("SELECT COUNT(*) n FROM omega_events WHERE action = 'intent_reconciled'").get().n, 1);
 });
 
+test("a stop or target change the terminal applied without a result line is recorded done from the position (2026-11-18)", async () => {
+  const e = env();
+  await enable(e);
+  e.DB.raw.prepare("INSERT INTO omega_intents (id, kind, payload, status, created_ms, updated_ms) VALUES (?, 'modify_tp', ?, 'expired', ?, ?)").run("pm:77:t:1", JSON.stringify({ id: "pm:77:t:1", kind: "modify_tp", ticket: 77, tp: 4111.5 }), NOW - 60_000, NOW - 1000);
+  e.DB.raw.prepare("INSERT INTO omega_intents (id, kind, payload, status, created_ms, updated_ms) VALUES (?, 'modify_sl', ?, 'expired', ?, ?)").run("ms:77:x", JSON.stringify({ id: "ms:77:x", kind: "modify_sl", ticket: 77, sl: 4099 }), NOW - 60_000, NOW - 1000);
+  const pos = { ticket: 77, side: "BUY", volume: 0.01, open_price: 4100, sl: 4095, tp: 4111.5, intent_id: "open:9:B", source: "omega", magic: 920200, opened_ms: NOW - 120_000 };
+  await sync(e, { state: { ...STATE, positions: [pos] } });
+  assert.equal(e.DB.raw.prepare("SELECT status FROM omega_intents WHERE id = 'pm:77:t:1'").get().status, "done");
+  assert.equal(e.DB.raw.prepare("SELECT status FROM omega_intents WHERE id = 'ms:77:x'").get().status, "expired", "the stop is not where the intent asked: not recorded");
+});
+
 test("a kill that failed is retried with the next attempt id, never the same id twice", async () => {
   const e = env();
   await e.SIGNAL_CACHE.put("ea:control", JSON.stringify({ mode: "killed", reason: "r", actor: "o", at: "2026-11-09T11:04:00.000Z" }));
