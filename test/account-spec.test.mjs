@@ -69,7 +69,7 @@ test("AS2 specProblem: 1.14 needs the fields it reports; 1.15 also leverage, mar
   assert.equal(specProblem(executor({ acct: { leverage: 0 } })), "leverage");
   assert.equal(specProblem(executor({ acct: { margin_mode: "unknown" } })), "margin_mode");
   assert.equal(specProblem(executor({ sym: { trade_mode: "close_only" } })), "trade_mode_close_only");
-  assert.equal(specProblem(executor({ sym: { margin_per_lot: 0 } })), "margin_per_lot");
+  assert.equal(specProblem(executor({ sym: { margin_per_lot: -0.5 } })), "margin_per_lot", "negative; 0 is valid under unlimited leverage (AS18)");
   assert.equal(specProblem(null), "no_state");
 });
 
@@ -170,7 +170,8 @@ test("AS8 planIntents: spec_unvalidated and ea_outdated stop new entries only; m
   assert.deepEqual(kinds(closing), ["close"], "the opposite position is still closed");
   const outdated = planIntents({ ...base, executor: executor({ version: "1.14" }), eaGate: true });
   assert.deepEqual([kinds(outdated), outdated.notes.at(-1).code], [[], "ea_outdated"]);
-  assert.deepEqual(kinds(planIntents({ ...base, executor: executor({ version: "1.15" }), eaGate: true })), ["open"]);
+  assert.deepEqual(kinds(planIntents({ ...base, executor: executor({ version: "1.16" }), eaGate: true })), ["open"]);
+  assert.equal(planIntents({ ...base, executor: executor({ version: "1.15" }), eaGate: true }).notes.at(-1).code, "ea_outdated", "1.15 refuses every open under unlimited leverage");
   assert.deepEqual(kinds(planIntents({ ...base, executor: executor({ version: "1.14" }), eaGate: false })), ["open"], "the gate is off by default");
 });
 
@@ -178,7 +179,7 @@ test("AS9 the EA version gate is off unless OMEGA_EA_VERSION_GATE is \"on\"; wra
   assert.equal(eaVersionGateOn({}), false);
   assert.equal(eaVersionGateOn({ OMEGA_EA_VERSION_GATE: "off" }), false);
   assert.equal(eaVersionGateOn({ OMEGA_EA_VERSION_GATE: "on" }), true);
-  assert.equal(EXECUTOR_ENTRY_MIN_VERSION, "1.15");
+  assert.equal(EXECUTOR_ENTRY_MIN_VERSION, "1.16");
   const wrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   assert.match(wrangler, /"OMEGA_EA_VERSION_GATE": "on"/);
   assert.deepEqual([versionAtLeast("1.15", "1.15"), versionAtLeast("1.9", "1.15"), versionAtLeast("2.0", "1.15"), versionAtLeast(null, "1.15")], [true, false, true, false]);
@@ -203,7 +204,7 @@ test("AS10 bridgeSync: the live account is stored, a spec change holds the next 
   assert.equal(o.accounts.length, 1);
   assert.deepEqual([o.accounts[0].profile, o.accounts[0].spec_status], ["custom", "pending"]);
   assert.match(o.accounts[0].spec_text, /no new entries until it validates/);
-  assert.deepEqual(o.bridge.ea_version_gate, { on: false, min_version: "1.15", met: true });
+  assert.deepEqual(o.bridge.ea_version_gate, { on: false, min_version: "1.16", met: false });
   assert.equal(o.bridge.margin_mode, "hedging");
   const events = env.DB.raw.prepare("SELECT action, detail FROM omega_events WHERE action IN ('account_seen', 'spec_changed')").all();
   assert.deepEqual(events.map((e) => e.action), ["account_seen", "spec_changed"]);
@@ -222,8 +223,8 @@ test("AS11 executorFrom keeps the 1.15 fields, checked, and drops anything malfo
 });
 
 test("AS12 OmegaExecutor 1.15 reports the spec and is the last gate: it refuses with a reason, never resizes, never moves a stop", () => {
-  assert.match(ea, /#property version\s+"1\.15"/);
-  assert.ok(ea.includes('const string OMEGA_EXECUTOR_VERSION = "1.15";'));
+  assert.match(ea, /#property version\s+"1\.16"/);
+  assert.ok(ea.includes('const string OMEGA_EXECUTOR_VERSION = "1.16";'));
   // The spec in state.json.
   for (const field of ["leverage", "margin_mode", "margin_free", "login_hash", "freeze_level_points", "trade_mode", "margin_per_lot"]) {
     assert.ok(ea.includes(`\\"${field}\\":`), field);
@@ -317,4 +318,14 @@ test("AS17 the profile's total open risk caps or stops a new entry; the lot is n
   assert.ok(openOf(part).volume < 0.4 && part.notes.some((n) => n.code === "lot_capped_open_risk"));
   const free = plan2({ profile: "conservative", settings: S });
   assert.equal(openOf(free).volume, 0.4, "nothing open: the risk per trade decides");
+});
+
+test("AS18 unlimited leverage (FxPro demo 1:2,000,000,000): a margin rounded to 0 is valid; only a failing OrderCalcMargin refuses", () => {
+  const unlimited = executor({ version: "1.16", acct: { leverage: 2_000_000_000 }, sym: { margin_per_lot: 0 } });
+  assert.equal(specProblem(unlimited), null, "margin per lot 0 is a valid spec");
+  assert.equal(specProblem(executor({ version: "1.16", sym: { margin_per_lot: -1 } })), "margin_per_lot");
+  const refusal = ea.slice(ea.indexOf("string OpenRefusal("), ea.indexOf("string ModifyRefusal("));
+  assert.ok(!/margin\s*<=\s*0\.0/.test(refusal), "1.15's margin <= 0 refusal is gone");
+  assert.match(refusal, /if\(!OrderCalcMargin\([^)]*\)\) return StringFormat\("refused: margin_unknown_%d", GetLastError\(\)\);/);
+  assert.ok(refusal.indexOf("OrderCalcMargin(") < refusal.indexOf("OrderCheck("), "OrderCheck still decides after it");
 });
