@@ -50,7 +50,10 @@ export const AGENT_COLUMNS = [
   ["last_upgrade_ms", "INTEGER"],      // the last upgrade (at most one per 7 days)
   ["upgrade_block_until_ms", "INTEGER"], // no autonomous upgrade before (the next UTC day after a kill or the daily loss)
   ["vol_latched", "INTEGER"],          // an extreme-volatility step taken; re-armed once volatility is normal again
-  ["pending_upgrade", "TEXT"]          // approval mode: the upgrade the agent proposes, for the owner's click
+  ["pending_upgrade", "TEXT"],         // approval mode: the upgrade the agent proposes, for the owner's click
+  // The profile council (src/profile-council.mjs), downgrade review on (OMEGA_PROFILE_COUNCIL_DOWNGRADE "on") only:
+  ["pending_downgrade", "TEXT"],       // a soft downgrade waiting for its review (new entries wait with it)
+  ["council_veto", "TEXT"]             // the council's veto of a soft downgrade: { reason, until_ms, review_id }
 ];
 let schemaReady = false;
 export function resetAccountSpecSchemaForTests() { schemaReady = false; }
@@ -192,7 +195,8 @@ const rowOut = (r) => r ? ({
   profile: r.profile, ceiling: r.ceiling, agent_mode: r.agent_mode, custom: parse(r.custom),
   profile_by: r.profile_by ?? null, profile_ms: r.profile_ms ?? null, created_ms: r.created_ms,
   balance_peak: r.balance_peak ?? null, last_upgrade_ms: r.last_upgrade_ms ?? null, upgrade_block_until_ms: r.upgrade_block_until_ms ?? null,
-  pending_upgrade: parse(r.pending_upgrade)
+  pending_upgrade: parse(r.pending_upgrade),
+  pending_downgrade: parse(r.pending_downgrade), council_veto: parse(r.council_veto)
 }) : null;
 
 /** The Custom snapshot of the account's settings (risk per trade, positions, daily loss) as they trade today. */

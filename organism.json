@@ -201,6 +201,9 @@
           "task": "strategy_council"
         },
         {
+          "task": "profile_council"
+        },
+        {
           "task": "cfc_seat"
         },
         {

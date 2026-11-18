@@ -130,12 +130,18 @@ test("PA8 runProfileAgent: a forced switch writes the row, one audit row, one ev
   assert.equal(again.status, "unchanged", "already Safe: nothing more");
 });
 
-test("PA9 runProfileAgent with evidence: the cron's upgrade sets last_upgrade_ms; an agent failure raises nothing", async () => {
+test("PA9 runProfileAgent with evidence: the cron's upgrade needs the council and sets last_upgrade_ms; an agent failure raises nothing", async () => {
   const { db, executor, get } = await seeded("conservative", "custom");
   await db.raw.exec("CREATE TABLE IF NOT EXISTS ea_deals (id INTEGER PRIMARY KEY AUTOINCREMENT, profit REAL, commission REAL, swap REAL, closed_ms INTEGER)");
   for (let i = 0; i < 20; i++) db.raw.prepare("INSERT INTO ea_deals (profit, commission, swap, closed_ms) VALUES (6, -0.5, 0, ?)").run(NOW - 10 * DAY + i);
-  const r = await runProfileAgent(db, await get(), { executor: { ...executor, account: { ...executor.account, equity: 1010, balance: 1010 } }, withEvidence: true, now: NOW });
+  const up = { ...executor, account: { ...executor.account, equity: 1010, balance: 1010 } };
+  // No council (the bridge sync): an upgrade is never raised without one.
+  assert.equal((await runProfileAgent(db, await get(), { executor: up, withEvidence: true, now: NOW })).status, "unchanged");
+  assert.equal((await get()).profile, "conservative");
+  const review = async () => ({ id: "pc_1", kind: "upgrade", verdict: "approve", reason: "approved by 3 of 3 seats, risk included", seats: { risk: { verdict: "approve", reason: "r" }, strategy: { verdict: "approve", reason: "s" }, trade_management: { verdict: "approve", reason: "t" } } });
+  const r = await runProfileAgent(db, await get(), { executor: up, withEvidence: true, now: NOW, review });
   assert.deepEqual([r.status, r.change?.to], ["changed", "aggressive"]);
+  assert.equal(JSON.parse(db.raw.prepare("SELECT evidence FROM omega_profile_changes ORDER BY id DESC LIMIT 1").get().evidence).council.id, "pc_1");
   assert.equal((await get()).last_upgrade_ms, NOW);
   const broken = { prepare() { throw new Error("d1 down"); } };
   assert.equal((await runProfileAgent(broken, await get(), { executor, killed: true, now: NOW })).status, "failed");
@@ -169,6 +175,8 @@ test("PA11 the risk_profile.v1 digest: the agreed fields only, info or warning, 
   assert.deepEqual(Object.keys(r.body.items[0]).sort(), ["account_ref", "actor", "at", "evidence_ref", "from", "reason", "to"]);
   assert.equal(r.body.items[0].evidence_ref, "omega_profile_changes:1");
   assert.equal(profileReport(rows.slice(1)).severity, "info");
+  const reviewed = profileReport([{ ...rows[1], actor: "agent", reason: "evidence", evidence: JSON.stringify({ trades: 20, council: { id: "pc_1", verdict: "approve", reason: "x", seats: {} } }) }]);
+  assert.deepEqual(reviewed.body.items[0].council, { id: "pc_1", verdict: "approve" }, "the council's id and verdict, not its seats");
   assert.notEqual(profileReport(rows).severity, "critical");
   assert.match(profileLine("acct_0123456789abcdef", "custom", "aggressive", { actor: "agent", reason: "drawdown" }), /Custom → Aggressive \(agent, a 20% drawdown\)/);
 });

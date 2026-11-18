@@ -33,6 +33,7 @@
 import { PROFILES, ensureAccountSchema } from "./account-spec.mjs";
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { HEALTH_AGENT_ID } from "./health-alerts.mjs";
+import { SOFT_TRIGGERS, PENDING_DOWNGRADE_MAX_MS, VETO_HOLD_MS, vetoLapsed, trailingLosses, councilEvidence, councilLine } from "./profile-council.mjs";
 
 export const LADDER = Object.freeze(["safe", "conservative", "aggressive", "custom"]);
 export const DRAWDOWN_STEP_PCT = 20;
@@ -169,6 +170,29 @@ async function writeState(db, ref, state) {
   await db.prepare(`UPDATE omega_accounts SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE account_ref = ?`).bind(...cols.map((c) => state[c]), ref).run();
 }
 
+/**
+ * The council's review of a soft downgrade: a veto keeps the profile (D1 council_veto, an audit row "council_veto" at
+ * severity warning, the Telegram line); anything else applies the downgrade with the council in its evidence.
+ */
+async function downgradeReview(db, row, change, { state, ddReset, deals, executor, now, log, notify, review }) {
+  let r = null;
+  try { r = await review(row, change, { deals, executor }); } catch { r = null; }
+  if (r?.verdict === "reject") {
+    await writeState(db, row.account_ref, { ...state, pending_downgrade: null, council_veto: JSON.stringify({ reason: change.reason, until_ms: now + VETO_HOLD_MS, review_id: r.id ?? null, at_ms: now }) });
+    const evidence = { trigger: change.reason, would_be: change.to, trigger_evidence: change.evidence ?? null, council: councilEvidence(r) };
+    try {
+      await db.prepare("INSERT INTO omega_profile_changes (account_ref, from_profile, to_profile, actor, reason, evidence, severity, at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(row.account_ref, row.profile, row.profile, "council", "council_veto", JSON.stringify(evidence), "warning", now).run();
+    } catch { /* the veto stands in the account row */ }
+    try { if (log) await log("profile_downgrade_vetoed", { account_ref: row.account_ref, from: row.profile, to: change.to, ...evidence }); } catch { /* audit best effort */ }
+    try { if (notify) await notify(councilLine(row.account_ref, r, { from: row.profile, to: change.to })); } catch { /* best effort */ }
+    return { status: "vetoed", review: r, review_pending: false };
+  }
+  const council = councilEvidence(r) ?? { verdict: r?.verdict ?? "failed", reason: r?.reason ?? "the council failed" };
+  const record = await applySwitch(db, row, { ...change, evidence: { ...(change.evidence ?? {}), council } }, { now, state: { ...state, ...ddReset, pending_downgrade: null, council_veto: null }, log, notify });
+  return { status: "changed", change: record, review: r };
+}
+
 /** The deals closed since `sinceMs`, oldest first, as { net } (profit + commission + swap). */
 async function dealsSince(db, sinceMs) {
   try {
@@ -183,7 +207,7 @@ async function dealsSince(db, sinceMs) {
  * no read), the 5-minute ledger cron with it. D1 writes only on a change. Never throws; a failure raises nothing.
  * Returns { status, change?, propose? }.
  */
-export async function runProfileAgent(db, row, { executor, killed = false, dailyLoss = false, withEvidence = false, now = Date.now(), log = null, notify = null } = {}) {
+export async function runProfileAgent(db, row, { executor, killed = false, dailyLoss = false, withEvidence = false, now = Date.now(), log = null, notify = null, review = null, downgradeCouncil = false } = {}) {
   try {
     if (!row?.account_ref) return { status: "no_account" };
     await ensureSchema(db);
@@ -194,8 +218,69 @@ export async function runProfileAgent(db, row, { executor, killed = false, daily
       orders: Array.isArray(executor?.orders) ? executor.orders.length : 0,
       atr_points: executor?.symbol?.atr_points, killed, daily_loss: dailyLoss, deals, now
     });
-    if (decision.change) {
-      const record = await applySwitch(db, row, decision.change, { now, state: decision.state, log, notify });
+    const change = decision.change;
+    const pending = parse(row.pending_downgrade);
+    const clearCouncil = { pending_downgrade: null, council_veto: null };
+    // The kill switch and the daily loss limit never wait for the council.
+    if (change?.forced) {
+      const record = await applySwitch(db, row, change, { now, state: { ...decision.state, ...clearCouncil }, log, notify });
+      return { status: "changed", change: record };
+    }
+    if (killed || dailyLoss) { await writeState(db, row.account_ref, { ...decision.state, ...(pending ? clearCouncil : {}) }); return { status: "unchanged" }; }
+    // A soft downgrade waiting for its review (OMEGA_PROFILE_COUNCIL_DOWNGRADE "on"): reviewed here when the council can
+    // run (the ledger cron), applied when the switch is off again or the review is late (PENDING_DOWNGRADE_MAX_MS).
+    if (pending?.to && rank(pending.to) < rank(row.profile)) {
+      const { dd_ref: _skip, ...kept } = decision.state;
+      const pendingChange = { to: pending.to, reason: pending.reason, actor: "agent", forced: false, evidence: pending.evidence ?? null };
+      const ddReset = pending.reason === "drawdown" && finite(num(executor?.account?.equity)) ? { dd_ref: num(executor.account.equity) } : {};
+      const late = now - (Number(pending.at_ms) || 0) >= PENDING_DOWNGRADE_MAX_MS;
+      if (downgradeCouncil && !late && !review) {
+        await writeState(db, row.account_ref, kept);
+        return { status: "review_pending", review_pending: true };
+      }
+      if (!downgradeCouncil || late) {
+        const record = await applySwitch(db, row, { ...pendingChange, evidence: { ...(pendingChange.evidence ?? {}), council: { verdict: "not_reviewed", reason: downgradeCouncil ? "the review did not run in time" : "the downgrade review is off" } } }, { now, state: { ...kept, ...ddReset, ...clearCouncil }, log, notify });
+        return { status: "changed", change: record };
+      }
+      return downgradeReview(db, row, pendingChange, { state: { ...kept }, ddReset, deals, executor, now, log, notify, review });
+    }
+    // A pending downgrade the profile already went past (the owner lowered it): nothing left to review.
+    if (row.pending_downgrade != null) decision.state.pending_downgrade = null;
+    if (change && rank(change.to) < rank(row.profile) && downgradeCouncil && SOFT_TRIGGERS.includes(change.reason)) {
+      const { dd_ref: _skip, ...kept } = decision.state;
+      const veto = parse(row.council_veto);
+      if (veto && !vetoLapsed(veto, { now, reason: change.reason, drawdownPct: num(change.evidence?.drawdown_pct), losses: deals ? trailingLosses(deals) : null })) {
+        await writeState(db, row.account_ref, kept);
+        return { status: "vetoed", review_pending: false };
+      }
+      const ddReset = change.reason === "drawdown" ? { dd_ref: decision.state.dd_ref } : {};
+      if (!review) {
+        await writeState(db, row.account_ref, { ...kept, pending_downgrade: JSON.stringify({ to: change.to, reason: change.reason, evidence: change.evidence ?? null, at_ms: now }), council_veto: null });
+        try { if (log) await log("profile_review_pending", { account_ref: row.account_ref, from: row.profile, to: change.to, reason: change.reason }); } catch { /* audit best effort */ }
+        return { status: "review_pending", review_pending: true };
+      }
+      return downgradeReview(db, row, change, { state: kept, ddReset, deals, executor, now, log, notify, review });
+    }
+    // An autonomous upgrade needs the council's approval; without a council (the bridge sync) nothing is raised.
+    if (change && rank(change.to) > rank(row.profile)) {
+      if (!review) { await writeState(db, row.account_ref, decision.state); return { status: "unchanged" }; }
+      const r = await review(row, change, { deals, executor });
+      if (r?.verdict === "approve") {
+        const record = await applySwitch(db, row, { ...change, evidence: { ...(change.evidence ?? {}), council: councilEvidence(r) } }, { now, state: decision.state, log, notify });
+        try { if (notify) await notify(councilLine(row.account_ref, r, { from: row.profile, to: change.to })); } catch { /* best effort */ }
+        return { status: "changed", change: record, review: r };
+      }
+      await writeState(db, row.account_ref, decision.state);
+      if (r?.verdict !== "skipped") {
+        try { if (log) await log("profile_upgrade_refused", { account_ref: row.account_ref, from: row.profile, to: change.to, council: councilEvidence(r) ?? { verdict: r?.verdict ?? "failed", reason: r?.reason ?? null } }); } catch { /* audit best effort */ }
+        try {
+          if (notify) await notify(r?.seats ? councilLine(row.account_ref, r, { from: row.profile, to: change.to }) : `XAUUSD SYSTEM · Omega account ${row.account_ref}: the profile council could not review ${label(row.profile)} → ${label(change.to)} (${r?.reason ?? "failed"}); no upgrade.`);
+        } catch { /* best effort */ }
+      }
+      return { status: "refused", review: r };
+    }
+    if (change) {
+      const record = await applySwitch(db, row, change, { now, state: { ...decision.state, ...(row.council_veto ? { council_veto: null } : {}) }, log, notify });
       return { status: "changed", change: record };
     }
     if (decision.propose) {
@@ -263,7 +348,9 @@ export async function ownerSetProfile(db, { account_ref, action, value = null, a
 export function profileReport(rows) {
   const items = rows.map((r) => ({
     account_ref: String(r.account_ref), from: String(r.from_profile), to: String(r.to_profile), actor: String(r.actor), reason: String(r.reason),
-    evidence_ref: `omega_profile_changes:${Number(r.id)}`, at: new Date(Number(r.at_ms)).toISOString()
+    evidence_ref: `omega_profile_changes:${Number(r.id)}`, at: new Date(Number(r.at_ms)).toISOString(),
+    // The profile council's session id and verdict, when it reviewed this change (src/profile-council.mjs).
+    ...(parse(r.evidence)?.council?.verdict ? { council: { id: parse(r.evidence).council.id ?? null, verdict: String(parse(r.evidence).council.verdict) } } : {})
   }));
   const forced = rows.some((r) => r.severity === "warning" || FORCED.has(r.reason));
   const last = items.at(-1);
@@ -275,7 +362,7 @@ export function profileReport(rows) {
     body: {
       schema: RISK_PROFILE_SCHEMA,
       items,
-      observation: "Omega account risk profile changes: the agent's downgrades and upgrades and the owner's settings (ADR-0020 Amendment 3)",
+      observation: "Omega account risk profile changes: the agent's downgrades and upgrades (upgrades approved by the profile council), the council's vetoes and the owner's settings (ADR-0020 Amendment 3)",
       source: "xauusd-ai-trading-assistant"
     }
   };

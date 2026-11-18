@@ -31,6 +31,8 @@ export interface Env {
   DECISION_TELEGRAM_MODE?: string;
   OMEGA_ENGINE_ENABLED?: string;
   OMEGA_EA_VERSION_GATE?: string;
+  OMEGA_PROFILE_COUNCIL_DOWNGRADE?: string;
+  PROFILE_COUNCIL_DAILY_USD?: string;
   DB: D1Database;
   SIGNAL_CACHE: KVNamespace;
   WEBHOOK_BUFFER: KVNamespace;
