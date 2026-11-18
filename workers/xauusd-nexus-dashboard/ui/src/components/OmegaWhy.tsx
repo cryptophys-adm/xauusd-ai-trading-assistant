@@ -15,6 +15,8 @@ const CODES: Record<string, { kind: Kind; text: string }> = {
   confidence_drop: { kind: "adjust", text: "A winning position is being closed: its strategy agent's confidence dropped at this 15m evaluation." },
   no_side: { kind: "block", text: "The Decision Engine says WAIT: there is no BUY or SELL to follow." },
   symbol_unverified: { kind: "block", text: "The terminal's trade symbol is not verified USD gold (exact name, profit currency USD, contract size 1-100 oz): no new entries. See Symbol on the bridge card." },
+  symbol_price_mismatch: { kind: "block", text: "The account's own gold symbol does not price within 2% of the reference gold price: no new entries. Check the symbol set in Setup → Connection & EA." },
+  tick_value_mismatch: { kind: "block", text: "The broker's tick value does not match the contract (contract size × tick size in USD, or that in cents): the loss at the stop cannot be trusted, so no new entries." },
   spec_unvalidated: { kind: "block", text: "The account's broker spec (contract, lot limits, leverage, margin mode) is new or changed: no new entries until it validates and holds for a minute. Open positions are still managed. See Account on the bridge card." },
   ea_outdated: { kind: "block", text: "OmegaExecutor is older than the minimum version for entries (1.16: it checks margin, stops and freeze level before sending): no new entries until it is updated on the VPS." },
   reentry_cooldown: { kind: "block", text: "The Position Manager just closed a position on this side (weakening or cut loss): a new entry on the same side waits for a closed 15m bar." },
