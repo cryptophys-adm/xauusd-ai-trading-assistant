@@ -146,7 +146,7 @@ export function decideProfile(row, ctx) {
 /** Pure: the Telegram line for a switch (the opaque reference, never the account number). */
 export function profileLine(accountRef, from, to, { actor, reason, forced }) {
   const why = { kill_switch: "the kill switch", daily_loss_limit: "the daily loss limit", drawdown: `a ${DRAWDOWN_STEP_PCT}% drawdown`, loss_streak: `${LOSS_STREAK} losses in a row`,
-    extreme_volatility: "extreme volatility", evidence: "evidence (equity above its peak, a positive record)", owner: "the owner", owner_override_daily_lock: "the owner, overriding today's daily loss block", owner_reset: "the owner's baseline reset", ceiling_lowered: "the owner's lower ceiling", proposal_accepted: "the owner accepting the agent's proposal" }[reason] ?? reason;
+    extreme_volatility: "extreme volatility", evidence: "evidence (equity above its peak, a positive record)", owner: "the owner", owner_override_daily_lock: "the owner, overriding today's daily loss block", owner_reset: "the owner's baseline reset", owner_reset_override_daily_lock: "the owner's baseline reset over today's daily loss stop", ceiling_lowered: "the owner's lower ceiling", proposal_accepted: "the owner accepting the agent's proposal" }[reason] ?? reason;
   return `XAUUSD SYSTEM · Omega account ${accountRef}: profile ${label(from)} → ${label(to)} (${actor}, ${why})${forced ? "; no autonomous upgrade before the next UTC day" : ""}. New entries only; open positions keep their size and stop.`;
 }
 
@@ -382,6 +382,7 @@ export async function ownerSetProfile(db, { account_ref, action, value = null, a
   if (!row) return { ok: false, error: "unknown account" };
   const audit = async (what, detail) => { try { if (log) await log(what, { account_ref: row.account_ref, actor, ...detail }); } catch { /* audit best effort */ } };
   if (action === "reset") return resetBaseline(db, row, { actor, now, log, notify, executor, connectedRef, killed });
+  if (action === "reset_override") return resetBaseline(db, row, { actor, now, log, notify, executor, connectedRef, killed, override: true });
   if (action === "ceiling") {
     if (!LADDER.includes(value)) return { ok: false, error: "ceiling must be safe, conservative, aggressive or custom" };
     await db.prepare("UPDATE omega_accounts SET ceiling = ? WHERE account_ref = ?").bind(value, row.account_ref).run();
@@ -422,7 +423,7 @@ export async function ownerSetProfile(db, { account_ref, action, value = null, a
     const change = await applySwitch(db, row, { to: pending.to, reason: "proposal_accepted", actor, evidence: pending.evidence ?? null }, { now, log, notify });
     return { ok: true, profile: pending.to, change };
   }
-  return { ok: false, error: "action must be ceiling, profile, agent_mode, accept, decline or reset" };
+  return { ok: false, error: "action must be ceiling, profile, agent_mode, accept, decline, reset or reset_override" };
 }
 
 /**
@@ -433,10 +434,15 @@ export async function ownerSetProfile(db, { account_ref, action, value = null, a
  * day), so a reset can never lift the day's stop. History is kept: one audit row (reason owner_reset, the previous
  * values in its evidence), one event, one Telegram line, and the risk_profile.v1 item.
  */
-async function resetBaseline(db, row, { actor, now, log, notify, executor, connectedRef, killed }) {
+async function resetBaseline(db, row, { actor, now, log, notify, executor, connectedRef, killed, override = false }) {
   if (killed) return { ok: false, error: "the kill switch is on: no reset" };
   const block = num(row.upgrade_block_until_ms);
-  if (finite(block) && block > now) return { ok: false, error: `the kill switch or the daily loss limit fired today: no reset before ${new Date(block).toISOString().slice(11, 16)} UTC` };
+  const blocked = finite(block) && block > now;
+  // The owner's override (owner 2026-11-18, "Reset + buka kunci hari ini", after the cent-account sizing bug): on a day
+  // the daily loss limit fired, the owner may reset AND lift today's stop. The day's loss then counts from the equity at
+  // the reset (account-spec overrideDayRef), so a new loss of the day's limit stops it again. Never over the kill switch.
+  if (override && blocked && row.upgrade_block_reason === "kill_switch") return { ok: false, error: "the kill switch fired today: no override" };
+  if (blocked && !override) return { ok: false, error: `the kill switch or the daily loss limit fired today: no reset before ${new Date(block).toISOString().slice(11, 16)} UTC (or reset with the owner's override)` };
   if (!connectedRef || connectedRef !== row.account_ref) return { ok: false, error: "only the connected account can be reset" };
   const equity = num(executor?.account?.equity), balance = num(executor?.account?.balance);
   if (!finite(equity) || !finite(balance) || equity <= 0 || balance <= 0) return { ok: false, error: "no live balance and equity for this account" };
@@ -445,17 +451,24 @@ async function resetBaseline(db, row, { actor, now, log, notify, executor, conne
   try { maxId = Number((await db.prepare("SELECT MAX(id) AS m FROM ea_deals").first())?.m) || 0; } catch { maxId = 0; }
   const previous = { balance_peak: num(row.balance_peak), dd_ref: num(row.dd_ref), baseline_ms: num(row.baseline_ms), vol_latched: Number(row.vol_latched) === 1, losses_in_a_row: deals ? trailingLosses(deals) : null, pending_downgrade: parse(row.pending_downgrade), council_veto: parse(row.council_veto) };
   const set = { dd_ref: equity, balance_peak: balance, baseline_ms: now, vol_latched: 0, pending_downgrade: null, council_veto: null, last_balance: balance, last_deal_id: maxId };
+  const lifted = override && blocked;
+  if (lifted) {
+    previous.upgrade_block_until_ms = block;
+    previous.upgrade_block_reason = row.upgrade_block_reason ?? null;
+    Object.assign(set, { upgrade_block_until_ms: null, upgrade_block_reason: null, day_ref_override: JSON.stringify({ day: new Date(now).toISOString().slice(0, 10), ref: equity, at_ms: now, actor }) });
+  }
   await writeState(db, row.account_ref, set);
-  const evidence = { previous, baseline: { equity, balance } };
+  const evidence = { previous, baseline: { equity, balance }, ...(lifted ? { daily_stop_lifted: true, day_reference: equity } : {}) };
+  const reason = lifted ? "owner_reset_override_daily_lock" : "owner_reset";
   let id = null;
   try {
     const ins = await db.prepare("INSERT INTO omega_profile_changes (account_ref, from_profile, to_profile, actor, reason, evidence, severity, at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .bind(row.account_ref, row.profile, row.profile, actor, "owner_reset", JSON.stringify(evidence), "info", now).run();
+      .bind(row.account_ref, row.profile, row.profile, actor, reason, JSON.stringify(evidence), lifted ? "warning" : "info", now).run();
     id = Number(ins?.meta?.last_row_id) || null;
   } catch { /* the reset stands in the account row */ }
-  try { if (log) await log("profile_baseline_reset", { account_ref: row.account_ref, actor, evidence_ref: id ? `omega_profile_changes:${id}` : null, ...evidence }); } catch { /* audit best effort */ }
+  try { if (log) await log(lifted ? "profile_baseline_reset_override" : "profile_baseline_reset", { account_ref: row.account_ref, actor, reason, evidence_ref: id ? `omega_profile_changes:${id}` : null, ...evidence }); } catch { /* audit best effort */ }
   const money = (v) => (finite(v) ? v.toFixed(2) : "—");
-  try { if (notify) await notify(`XAUUSD SYSTEM · Omega account ${row.account_ref}: baseline reset by the owner. Peak ${money(previous.balance_peak)} → ${money(balance)}, drawdown reference ${money(previous.dd_ref)} → ${money(equity)}, loss streak ${previous.losses_in_a_row ?? "—"} → 0. Profile ${label(row.profile)} and ceiling ${label(row.ceiling)} unchanged.`); } catch { /* best effort */ }
+  try { if (notify) await notify(`XAUUSD SYSTEM · Omega account ${row.account_ref}: baseline reset by the owner. Peak ${money(previous.balance_peak)} → ${money(balance)}, drawdown reference ${money(previous.dd_ref)} → ${money(equity)}, loss streak ${previous.losses_in_a_row ?? "—"} → 0. Profile ${label(row.profile)} and ceiling ${label(row.ceiling)} unchanged.${lifted ? ` Today's daily loss stop LIFTED by the owner's override: the day's loss now counts from ${money(equity)}.` : ""}`); } catch { /* best effort */ }
   return { ok: true, reset: { ...set, previous } };
 }
 

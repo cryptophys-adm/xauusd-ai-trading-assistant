@@ -947,7 +947,7 @@ export async function setAccountProfile(env, { account_ref, action, value, actor
   await ensureSchema(env.DB);
   // The baseline reset needs the connected account's live state and the kill switch.
   let executor = null, connectedRef = null, killed = false;
-  if (action === "reset") {
+  if (action === "reset" || action === "reset_override") {
     const b = await env.DB.prepare("SELECT state FROM omega_bridge WHERE id = 1").first();
     const st = parse(b?.state);
     if (st?.connected === true && Number(st?.received_ms) > 0 && now - Number(st.received_ms) <= BRIDGE_SEEN_MS) {

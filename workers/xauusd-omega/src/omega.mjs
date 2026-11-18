@@ -287,9 +287,9 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (request.headers.get("sec-fetch-site") && request.headers.get("sec-fetch-site") !== "same-origin") return json({ error: "same_origin_only" }, 403);
       const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
       if (!ownerSub || identity.sub !== ownerSub) return json({ error: "owner_only" }, 403);
-      const action = ["ceiling", "profile", "agent_mode", "accept", "decline", "reset"].includes(r.body.action) ? r.body.action : "";
+      const action = ["ceiling", "profile", "agent_mode", "accept", "decline", "reset", "reset_override"].includes(r.body.action) ? r.body.action : "";
       const ref = typeof r.body.account_ref === "string" && /^acct_[0-9a-f]{16}$/.test(r.body.account_ref) ? r.body.account_ref : "";
-      if (!action || !ref) return json({ error: "account_ref and action (ceiling, profile, agent_mode, accept, decline or reset) are required" }, 400);
+      if (!action || !ref) return json({ error: "account_ref and action (ceiling, profile, agent_mode, accept, decline, reset or reset_override) are required" }, 400);
       if (typeof env.OMEGA.setAccountProfile !== "function") return json({ error: "account_profile_unavailable" }, 503);
       return rpc(() => env.OMEGA.setAccountProfile({ account_ref: ref, action, value: typeof r.body.value === "string" ? r.body.value.slice(0, 20) : null, actor: identity.subject, actor_sub: identity.sub ?? null }), "account_profile_failed");
     }
