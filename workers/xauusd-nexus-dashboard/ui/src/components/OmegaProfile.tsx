@@ -19,7 +19,13 @@ type Account = {
   pending_downgrade?: { to?: string; reason?: string; at_ms?: number } | null;
   council_veto?: { reason?: string; until_ms?: number } | null;
   council_reviews?: CouncilReview[];
+  connected?: boolean;
+  server?: string | null;
+  history?: { first_seen_ms?: number | null; last_seen_ms?: number | null; first_time?: boolean; balance_peak?: number | null; dd_ref?: number | null; baseline_ms?: number | null; losses_in_a_row?: number | null; changes?: number } | null;
 };
+const ago = (ms: number) => { const m = Math.max(0, Math.round((Date.now() - ms) / 60_000)); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+const usd = (v?: number | null) => (typeof v === "number" && Number.isFinite(v) ? v.toFixed(2) : "—");
 type Seat = { verdict?: string; reason?: string } | null;
 type CouncilReview = { id: string; kind: string; from: string; to: string; trigger: string; verdict: string; reason?: string; seats?: Record<string, Seat> | null; at_ms: number };
 const SEAT_LABEL: Record<string, string> = { risk: "Risk", strategy: "Strategy", trade_management: "Trade mgmt" };
@@ -106,6 +112,21 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
     await onChanged();
   };
 
+  const [resetting, setResetting] = useState(false);
+  const reset = async () => {
+    setBusy(true);
+    try {
+      await post({ account_ref: account.account_ref, action: "reset" });
+      setMsg({ tone: "text-emerald-300", text: "Baseline reset." });
+    } catch (e: any) {
+      setMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
+    } finally {
+      setBusy(false);
+      setResetting(false);
+    }
+    await onChanged();
+  };
+  const h = account.history ?? null;
   const select = "rounded-sm border border-white/10 bg-[#0b1220] px-1.5 py-1 text-[12px] text-slate-200";
   const pending = account.pending_upgrade?.to ? account.pending_upgrade : null;
   const blocked = account.upgrade_block_until_ms && account.upgrade_block_until_ms > Date.now() ? account.upgrade_block_until_ms : null;
@@ -165,6 +186,31 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
               ))}
             </div>
           ))}
+        </div>
+      ) : null}
+      {h ? (
+        <div className="space-y-1 border-t border-white/5 pt-2" aria-label="Account baseline">
+          <div className="text-slate-300" id="omega-account-seen">
+            {h.first_time ? "First time on Omega" : `On Omega since ${h.first_seen_ms ? day(h.first_seen_ms) : "—"}`}
+            {h.last_seen_ms ? ` · last seen ${ago(h.last_seen_ms)}` : ""}
+            <span className="text-slate-500"> · {account.server ?? "server unknown"} · {account.account_ref}</span>
+          </div>
+          <div className="flex flex-wrap gap-x-3 text-[11.5px] text-slate-400">
+            <span>Peak {usd(h.balance_peak)}</span>
+            <span>DD ref {usd(h.dd_ref)}</span>
+            <span>Losses in a row {h.losses_in_a_row ?? "—"}</span>
+            <span>Profile changes {h.changes ?? 0}</span>
+            {h.baseline_ms ? <span>Reset {day(h.baseline_ms)}</span> : null}
+          </div>
+          {resetting ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-sm border border-amber-400/30 bg-amber-400/5 px-2 py-1.5" role="alertdialog" aria-label="Confirm the baseline reset">
+              <span className="text-amber-100">Reset {account.account_ref}: peak {usd(h.balance_peak)} and DD ref {usd(h.dd_ref)} start again from the account now, losses in a row {h.losses_in_a_row ?? "—"} → 0. Profile and ceiling unchanged. Confirm?</span>
+              <button id="omega-reset-confirm" className="btn border-amber-400/40 bg-amber-400/10 text-amber-100" disabled={busy} onClick={reset}>Reset {account.account_ref}</button>
+              <button className="btn" disabled={busy} onClick={() => setResetting(false)}>Cancel</button>
+            </div>
+          ) : (
+            <button id="omega-reset" className="btn disabled:opacity-40" disabled={busy || !account.connected} title={account.connected ? "Owner only. Refused while the kill switch is on or after the day's stop." : "Only the connected account can be reset"} onClick={() => setResetting(true)}>Reset baseline</button>
+          )}
         </div>
       ) : null}
       {msg ? <p className={`text-[11.5px] ${msg.tone}`}>{msg.text}</p> : null}

@@ -193,10 +193,65 @@ async function downgradeReview(db, row, change, { state, ddReset, deals, executo
   return { status: "changed", change: record, review: r };
 }
 
-/** The deals closed since `sinceMs`, oldest first, as { net } (profit + commission + swap). */
-async function dealsSince(db, sinceMs) {
+/** Where the loss streak and the upgrade evidence count from: the last switch or the owner's last reset. */
+export const countFrom = (row) => Math.max(Number(row?.profile_ms ?? row?.created_ms) || 0, Number(row?.baseline_ms) || 0);
+export const BALANCE_OP_TOLERANCE = (balance) => Math.max(1, 0.002 * Math.abs(balance));
+
+/**
+ * Pure: a balance operation between two checks. The balance should have moved by the net of the deals stored since
+ * (`dealsNet`); what is left beyond the tolerance (USD 1 or 0.2%) is a deposit (+) or a withdrawal (-). Returns the
+ * amount, or 0.
+ */
+export function balanceOperation({ lastBalance, balance, dealsNet }) {
+  if (!finite(lastBalance) || !finite(balance)) return 0;
+  const op = balance - (lastBalance + (finite(dealsNet) ? dealsNet : 0));
+  return Math.abs(op) > BALANCE_OP_TOLERANCE(balance) ? Math.round(op * 100) / 100 : 0;
+}
+
+/**
+ * The deposit/withdrawal check (owner 2026-11-18: "deposits and withdrawals adjust the baseline and are not P&L"). On a
+ * balance operation the drawdown reference and the balance peak move by its amount (an Omega event "balance_operation");
+ * the check's own state is written only when the balance or the deals changed. Returns the row to decide on.
+ */
+async function accountForBalanceOps(db, row, executor, { now, log }) {
+  const balance = num(executor?.account?.balance);
+  if (!finite(balance)) return row;
+  let maxId = null;
+  try { maxId = Number((await db.prepare("SELECT MAX(id) AS m FROM ea_deals").first())?.m) || 0; } catch { return row; }
+  const lastBalance = num(row.last_balance), lastId = num(row.last_deal_id);
+  if (!finite(lastBalance) || !finite(lastId)) {
+    await writeState(db, row.account_ref, { last_balance: balance, last_deal_id: maxId });
+    return { ...row, last_balance: balance, last_deal_id: maxId };
+  }
+  if (balance === lastBalance && maxId === lastId) return row;
+  let dealsNet = 0;
   try {
-    const rows = (await db.prepare("SELECT profit, commission, swap FROM ea_deals WHERE closed_ms >= ? ORDER BY closed_ms, id LIMIT 500").bind(Number(sinceMs) || 0).all()).results ?? [];
+    dealsNet = Number((await db.prepare("SELECT SUM(COALESCE(profit, 0) + COALESCE(commission, 0) + COALESCE(swap, 0)) AS n FROM ea_deals WHERE id > ? AND id <= ?").bind(lastId, maxId).first())?.n) || 0;
+  } catch { return row; }
+  const op = balanceOperation({ lastBalance, balance, dealsNet });
+  const set = { last_balance: balance, last_deal_id: maxId };
+  if (op !== 0) {
+    if (finite(num(row.dd_ref))) set.dd_ref = Math.round((num(row.dd_ref) + op) * 100) / 100;
+    if (finite(num(row.balance_peak))) set.balance_peak = Math.round((num(row.balance_peak) + op) * 100) / 100;
+  }
+  // Only from the state this check read (the bridge sync and the cron never both apply one operation).
+  const cols = Object.keys(set);
+  const res = await db.prepare(`UPDATE omega_accounts SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE account_ref = ? AND last_balance = ? AND last_deal_id = ?`)
+    .bind(...cols.map((c) => set[c]), row.account_ref, lastBalance, lastId).run();
+  if (!(Number(res?.meta?.changes ?? 1) > 0)) return row;
+  if (op !== 0) {
+    try { if (log) await log("balance_operation", { account_ref: row.account_ref, amount: op, kind: op > 0 ? "deposit" : "withdrawal", balance, dd_ref: set.dd_ref ?? null, balance_peak: set.balance_peak ?? null }); } catch { /* audit best effort */ }
+  }
+  return { ...row, ...set };
+}
+
+/**
+ * Omega's own deals closed since `sinceMs`, oldest first, as { net } (profit + commission + swap). Manual deals never
+ * count (owner 2026-11-18: the loss streak and the evidence are Omega's trades only).
+ */
+export async function dealsSince(db, sinceMs) {
+  try {
+    const rows = (await db.prepare("SELECT profit, commission, swap FROM ea_deals WHERE closed_ms >= ? AND COALESCE(source, '') = 'omega' ORDER BY closed_ms, id LIMIT 500").bind(Number(sinceMs) || 0).all()).results ?? [];
     return rows.map((r) => ({ net: (Number(r.profit) || 0) + (Number(r.commission) || 0) + (Number(r.swap) || 0) }));
   } catch { return null; }
 }
@@ -207,11 +262,14 @@ async function dealsSince(db, sinceMs) {
  * no read), the 5-minute ledger cron with it. D1 writes only on a change. Never throws; a failure raises nothing.
  * Returns { status, change?, propose? }.
  */
-export async function runProfileAgent(db, row, { executor, killed = false, dailyLoss = false, withEvidence = false, now = Date.now(), log = null, notify = null, review = null, downgradeCouncil = false } = {}) {
+export async function runProfileAgent(db, rowIn, { executor, killed = false, dailyLoss = false, withEvidence = false, now = Date.now(), log = null, notify = null, review = null, downgradeCouncil = false } = {}) {
+  let row = rowIn;
   try {
     if (!row?.account_ref) return { status: "no_account" };
     await ensureSchema(db);
-    const deals = withEvidence ? await dealsSince(db, row.profile_ms ?? row.created_ms) : null;
+    // Deposits and withdrawals move the baseline, never the drawdown or the peak (owner 2026-11-18).
+    row = await accountForBalanceOps(db, row, executor, { now, log });
+    const deals = withEvidence ? await dealsSince(db, countFrom(row)) : null;
     const decision = decideProfile(row, {
       equity: executor?.account?.equity, balance: executor?.account?.balance,
       positions: Array.isArray(executor?.positions) ? executor.positions.length : 0,
@@ -301,11 +359,12 @@ export async function runProfileAgent(db, row, { executor, killed = false, daily
  * agent_mode | accept | decline, `value` the profile or mode. A ceiling below the profile lowers the profile at once.
  * An owner-set profile may not exceed the ceiling.
  */
-export async function ownerSetProfile(db, { account_ref, action, value = null, actor = "owner", now = Date.now(), log = null, notify = null } = {}) {
+export async function ownerSetProfile(db, { account_ref, action, value = null, actor = "owner", now = Date.now(), log = null, notify = null, executor = null, connectedRef = null, killed = false } = {}) {
   await ensureSchema(db);
   const row = await db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(String(account_ref ?? "")).first();
   if (!row) return { ok: false, error: "unknown account" };
   const audit = async (what, detail) => { try { if (log) await log(what, { account_ref: row.account_ref, actor, ...detail }); } catch { /* audit best effort */ } };
+  if (action === "reset") return resetBaseline(db, row, { actor, now, log, notify, executor, connectedRef, killed });
   if (action === "ceiling") {
     if (!LADDER.includes(value)) return { ok: false, error: "ceiling must be safe, conservative, aggressive or custom" };
     await db.prepare("UPDATE omega_accounts SET ceiling = ? WHERE account_ref = ?").bind(value, row.account_ref).run();
@@ -341,7 +400,56 @@ export async function ownerSetProfile(db, { account_ref, action, value = null, a
     const change = await applySwitch(db, row, { to: pending.to, reason: "proposal_accepted", actor, evidence: pending.evidence ?? null }, { now, log, notify });
     return { ok: true, profile: pending.to, change };
   }
-  return { ok: false, error: "action must be ceiling, profile, agent_mode, accept or decline" };
+  return { ok: false, error: "action must be ceiling, profile, agent_mode, accept, decline or reset" };
+}
+
+/**
+ * The owner's baseline reset (owner 2026-11-18, confirmed: "setuju semua"), for the connected account only: the
+ * drawdown reference and the balance peak start again from the account now, the loss streak and the evidence count
+ * from now, the volatility latch, a pending downgrade and a council veto are cleared. The profile and the ceiling stay.
+ * Refused while the kill switch is on, and on a day the kill switch or the daily loss limit fired (until the next UTC
+ * day), so a reset can never lift the day's stop. History is kept: one audit row (reason owner_reset, the previous
+ * values in its evidence), one event, one Telegram line, and the risk_profile.v1 item.
+ */
+async function resetBaseline(db, row, { actor, now, log, notify, executor, connectedRef, killed }) {
+  if (killed) return { ok: false, error: "the kill switch is on: no reset" };
+  const block = num(row.upgrade_block_until_ms);
+  if (finite(block) && block > now) return { ok: false, error: `the kill switch or the daily loss limit fired today: no reset before ${new Date(block).toISOString().slice(11, 16)} UTC` };
+  if (!connectedRef || connectedRef !== row.account_ref) return { ok: false, error: "only the connected account can be reset" };
+  const equity = num(executor?.account?.equity), balance = num(executor?.account?.balance);
+  if (!finite(equity) || !finite(balance) || equity <= 0 || balance <= 0) return { ok: false, error: "no live balance and equity for this account" };
+  const deals = await dealsSince(db, countFrom(row));
+  let maxId = 0;
+  try { maxId = Number((await db.prepare("SELECT MAX(id) AS m FROM ea_deals").first())?.m) || 0; } catch { maxId = 0; }
+  const previous = { balance_peak: num(row.balance_peak), dd_ref: num(row.dd_ref), baseline_ms: num(row.baseline_ms), vol_latched: Number(row.vol_latched) === 1, losses_in_a_row: deals ? trailingLosses(deals) : null, pending_downgrade: parse(row.pending_downgrade), council_veto: parse(row.council_veto) };
+  const set = { dd_ref: equity, balance_peak: balance, baseline_ms: now, vol_latched: 0, pending_downgrade: null, council_veto: null, last_balance: balance, last_deal_id: maxId };
+  await writeState(db, row.account_ref, set);
+  const evidence = { previous, baseline: { equity, balance } };
+  let id = null;
+  try {
+    const ins = await db.prepare("INSERT INTO omega_profile_changes (account_ref, from_profile, to_profile, actor, reason, evidence, severity, at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(row.account_ref, row.profile, row.profile, actor, "owner_reset", JSON.stringify(evidence), "info", now).run();
+    id = Number(ins?.meta?.last_row_id) || null;
+  } catch { /* the reset stands in the account row */ }
+  try { if (log) await log("profile_baseline_reset", { account_ref: row.account_ref, actor, evidence_ref: id ? `omega_profile_changes:${id}` : null, ...evidence }); } catch { /* audit best effort */ }
+  const money = (v) => (finite(v) ? v.toFixed(2) : "—");
+  try { if (notify) await notify(`XAUUSD SYSTEM · Omega account ${row.account_ref}: baseline reset by the owner. Peak ${money(previous.balance_peak)} → ${money(balance)}, drawdown reference ${money(previous.dd_ref)} → ${money(equity)}, loss streak ${previous.losses_in_a_row ?? "—"} → 0. Profile ${label(row.profile)} and ceiling ${label(row.ceiling)} unchanged.`); } catch { /* best effort */ }
+  return { ok: true, reset: { ...set, previous } };
+}
+
+/**
+ * The "seen before" facts of an account for the owner's reset (owner 2026-11-18): when Omega first and last saw it, its
+ * baseline, its loss streak and how many profile changes it has. `first_time` when it was first seen within 15 minutes.
+ */
+export async function accountHistory(db, row, { now = Date.now() } = {}) {
+  try {
+    await ensureSchema(db);
+    const deals = await dealsSince(db, countFrom(row));
+    const n = Number((await db.prepare("SELECT COUNT(*) AS n FROM omega_profile_changes WHERE account_ref = ?").bind(row.account_ref).first())?.n) || 0;
+    const first = Number(row.created_ms) || null;
+    return { first_seen_ms: first, last_seen_ms: Number(row.last_seen_ms) || null, first_time: first != null && now - first < 15 * 60_000,
+      balance_peak: num(row.balance_peak), dd_ref: num(row.dd_ref), baseline_ms: num(row.baseline_ms), losses_in_a_row: deals ? trailingLosses(deals) : null, changes: n };
+  } catch { return null; }
 }
 
 /** Pure: the risk_profile.v1 digest for these change rows (oldest first). */

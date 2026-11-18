@@ -20,7 +20,7 @@ import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
 import { goldSymbolCheck, goldSymbolText } from "./gold-symbol.mjs";
-import { runProfileAgent, ownerSetProfile } from "./profile-agent.mjs";
+import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
 import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./profile-council.mjs";
 import { brokerLabelFor } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
@@ -719,7 +719,20 @@ export async function profileAgentTick(env, { now = Date.now(), call = undefined
 /** The owner's profile controls (the caller checked OWNER_ACCESS_SUB): ceiling, profile, agent mode, accept, decline. */
 export async function setAccountProfile(env, { account_ref, action, value, actor = "owner" } = {}, { now = Date.now() } = {}) {
   await ensureSchema(env.DB);
-  return ownerSetProfile(env.DB, { account_ref, action, value, actor: String(actor || "owner").slice(0, 120), now,
+  // The baseline reset needs the connected account's live state and the kill switch.
+  let executor = null, connectedRef = null, killed = false;
+  if (action === "reset") {
+    const b = await env.DB.prepare("SELECT state FROM omega_bridge WHERE id = 1").first();
+    const st = parse(b?.state);
+    if (st?.connected === true && Number(st?.received_ms) > 0 && now - Number(st.received_ms) <= BRIDGE_SEEN_MS) {
+      executor = st;
+      const accounts = await readAccounts(env.DB);
+      connectedRef = accounts.find((a) => a.server && a.server === st.server && (a.account_ref === account_ref))?.account_ref ?? null;
+    }
+    const control = await readControl(env);
+    killed = control?.mode === "killed" || String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
+  }
+  return ownerSetProfile(env.DB, { account_ref, action, value, actor: String(actor || "owner").slice(0, 120), now, executor, connectedRef, killed,
     log: (what, detail) => event(env.DB, now, actor || "owner", what, detail), notify: (t) => sendOmegaTelegram(env, t) });
 }
 
@@ -755,8 +768,12 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
   // Account Profiles phase 1: the accounts seen, their broker spec status and profile (never a login).
   let accounts = [];
   try { accounts = await readAccounts(db); } catch { accounts = []; }
-  const councilReviews = {};
-  for (const a of accounts.slice(0, 5)) councilReviews[a.account_ref] = await lastCouncilReviews(db, a.account_ref);
+  const councilReviews = {}, histories = {};
+  for (const a of accounts.slice(0, 5)) {
+    councilReviews[a.account_ref] = await lastCouncilReviews(db, a.account_ref);
+    const r = await db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(a.account_ref).first();
+    histories[a.account_ref] = r ? await accountHistory(db, r, { now }) : null;
+  }
 
   // TCA: Transaction Cost Analysis aggregation over completed intents
   let tcaLatencySum = 0, tcaLatencyCount = 0;
@@ -897,7 +914,9 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       // The profile agent (phase 3): its proposal in approval mode, the block after a kill or the daily loss, the last upgrade.
       pending_upgrade: a.pending_upgrade, upgrade_block_until_ms: a.upgrade_block_until_ms, last_upgrade_ms: a.last_upgrade_ms,
       // The profile council: a soft downgrade waiting for review, a veto in force, the last reviews.
-      pending_downgrade: a.pending_downgrade ?? null, council_veto: a.council_veto ?? null, council_reviews: councilReviews[a.account_ref] ?? []
+      pending_downgrade: a.pending_downgrade ?? null, council_veto: a.council_veto ?? null, council_reviews: councilReviews[a.account_ref] ?? [],
+      // The owner's reset (owner 2026-11-18): whether Omega saw this account before, its baseline, its streak.
+      history: histories[a.account_ref] ?? null, connected: Boolean(st?.connected === true && a.server && a.server === st?.server)
     })),
     autonomous_watchdog: {
       active: true,
