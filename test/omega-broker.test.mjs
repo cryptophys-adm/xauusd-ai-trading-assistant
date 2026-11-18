@@ -150,6 +150,31 @@ test("an unreported intent expires after the TTL, a late result still lands, and
   assert.equal(e.DB.raw.prepare("SELECT status FROM omega_intents WHERE id = ?").get(it.id).status, "failed");
 });
 
+test("a filled open whose result line never arrived is recorded done from the open position, once (2026-11-18)", async () => {
+  const e = env();
+  await enable(e);
+  const { intents: [it] } = await sync(e);
+  assert.equal(it.kind, "open");
+  const t = NOW + INTENT_TTL_MS + 1;
+  // The TTL passes with no result: expired.
+  await sync(e, { state: { ...STATE, received_ms: t - 1000 } }, { now: t });
+  assert.equal(e.DB.raw.prepare("SELECT status FROM omega_intents WHERE id = ?").get(it.id).status, "expired");
+  // The terminal shows the position carrying the intent id; still no result line.
+  const pos = { ticket: 389746494, side: it.side, volume: it.volume, open_price: 4101.1, sl: it.sl, tp: it.tp, intent_id: it.id, opened_ms: NOW + 1500 };
+  const st = { ...STATE, received_ms: t, positions: [pos] };
+  await sync(e, { state: st }, { now: t + 1000 });
+  const row = e.DB.raw.prepare("SELECT status, result FROM omega_intents WHERE id = ?").get(it.id);
+  assert.equal(row.status, "done");
+  const r = JSON.parse(row.result);
+  assert.equal(r.ticket, 389746494);
+  assert.equal(r.fill_price, 4101.1);
+  assert.equal(r.reconciled, true);
+  // Once: the next sync and a late result change nothing.
+  await sync(e, { state: st, results: [{ id: it.id, ok: false, error: "late", executed_ms: t }] }, { now: t + 2000 });
+  assert.equal(e.DB.raw.prepare("SELECT status FROM omega_intents WHERE id = ?").get(it.id).status, "done");
+  assert.equal(e.DB.raw.prepare("SELECT COUNT(*) n FROM omega_events WHERE action = 'intent_reconciled'").get().n, 1);
+});
+
 test("a kill that failed is retried with the next attempt id, never the same id twice", async () => {
   const e = env();
   await e.SIGNAL_CACHE.put("ea:control", JSON.stringify({ mode: "killed", reason: "r", actor: "o", at: "2026-11-09T11:04:00.000Z" }));
