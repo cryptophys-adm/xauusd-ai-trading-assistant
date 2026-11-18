@@ -38,7 +38,10 @@ const CODES: Record<string, { kind: Kind; text: string }> = {
   waiting_for_pullback: { kind: "block", text: "Limit entry: price is too far from the entry; waiting for a pullback into the band." },
   price_past_entry: { kind: "block", text: "Limit entry: price already ran past the entry toward the stop; waiting for it to come back inside the band." },
   stop_breached: { kind: "block", text: "Price is already beyond the plan's stop." },
-  volume_below_min: { kind: "block", text: "The risk per trade gives less than the broker's minimum lot." },
+  volume_below_min: { kind: "block", text: "The risk per trade gives less than the broker's minimum lot, and the minimum lot would risk more than the account's profile allows: the setup is skipped." },
+  min_lot_within_cap: { kind: "adjust", text: "The risk per trade gives less than the minimum lot; the minimum lot is used because its real risk stays within the profile's hard cap." },
+  open_risk_cap: { kind: "block", text: "The open positions already use the profile's total open risk: no new entry." },
+  lot_capped_open_risk: { kind: "adjust", text: "The lot is capped by the profile's total open risk." },
   stop_5m: { kind: "adjust", text: "Market entry: the stop moves to the broker's 5m structure (tighter than the plan's)." },
   adaptive_stop: { kind: "adjust", text: "The stop is widened to 0.75 ATR to avoid noise; the target keeps the plan's reward-to-risk." },
   lot_capped_5m: { kind: "adjust", text: "The lot is capped because the 5m stop is tighter than the plan's." },
@@ -53,7 +56,7 @@ export function omegaReason(code: string) {
 }
 
 /** The planner's current notes as a short list; `sinceMs` is when they last changed. */
-export default function OmegaWhy({ codes, sinceMs }: { codes: string[] | null | undefined; sinceMs?: number | null }) {
+export default function OmegaWhy({ codes, sinceMs, details }: { codes: string[] | null | undefined; sinceMs?: number | null; details?: Record<string, string> | null }) {
   if (!codes?.length) return <p className="text-[11px] text-slate-500">No planner notes yet.</p>;
   const items = codes.map((c) => ({ code: c, ...omegaReason(c) }));
   const blocked = items.some((i) => i.kind === "block");
@@ -67,7 +70,10 @@ export default function OmegaWhy({ codes, sinceMs }: { codes: string[] | null | 
         {items.map((i) => (
           <li key={i.code} className="flex items-start gap-2 text-[11.5px] text-slate-300">
             <span className="mt-0.5"><Badge tone={TONE[i.kind]}>{i.kind === "block" ? "why" : i.kind}</Badge></span>
-            <span className="min-w-0 flex-1">{i.text} <span className="mono text-[10px] text-slate-600">{i.code}</span></span>
+            <span className="min-w-0 flex-1">
+              {i.text} <span className="mono text-[10px] text-slate-600">{i.code}</span>
+              {details?.[i.code] ? <span className="block text-[11px] text-slate-400">{details[i.code]}</span> : null}
+            </span>
           </li>
         ))}
       </ul>

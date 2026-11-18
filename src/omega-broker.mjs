@@ -546,7 +546,9 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   }
   const notesKey = plan.notes.map((x) => x.code).join(",");
   const lastNotes = await db.prepare("SELECT detail FROM omega_events WHERE action = 'plan' ORDER BY id DESC LIMIT 1").first();
-  if ((parse(lastNotes?.detail, {})?.notes ?? null) !== notesKey) await event(db, now, "engine", "plan", { notes: notesKey });
+  // A note's reason in numbers (phase 2: the minimum lot, the open risk) rides along, as it stood when the codes changed.
+  const noteDetails = Object.fromEntries(plan.notes.filter((x) => typeof x.detail === "string").map((x) => [x.code, x.detail.slice(0, 200)]));
+  if ((parse(lastNotes?.detail, {})?.notes ?? null) !== notesKey) await event(db, now, "engine", "plan", Object.keys(noteDetails).length ? { notes: notesKey, details: noteDetails } : { notes: notesKey });
 
   const open = await db.prepare("SELECT id, payload FROM omega_intents WHERE status IN ('pending', 'sent') ORDER BY created_ms, id").all();
   const intents = (open.results ?? []).map((r) => parse(r.payload)).filter(Boolean);
@@ -808,7 +810,7 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     volatility,
     intents: intents.map((r) => ({ ...parse(r.payload, {}), status: r.status, result: parse(r.result), created_ms: r.created_ms, updated_ms: r.updated_ms })),
     events: events.map((r) => ({ ms: r.ms, actor: r.actor, action: r.action, detail: parse(r.detail) })),
-    planner: lastPlan ? { since_ms: lastPlan.ms, codes: String(parse(lastPlan.detail, {})?.notes ?? "").split(",").filter(Boolean) } : null
+    planner: lastPlan ? { since_ms: lastPlan.ms, codes: String(parse(lastPlan.detail, {})?.notes ?? "").split(",").filter(Boolean), details: parse(lastPlan.detail, {})?.details ?? {} } : null
   };
 }
 

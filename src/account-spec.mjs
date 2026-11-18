@@ -127,6 +127,30 @@ export function specProblem(executor) {
   return null;
 }
 
+/**
+ * Pure (phase 2, RFC §3-4): the limits new entries are sized within. The profile's caps are the outer bound and the
+ * engine settings (the owner's, or the Aether policy inside OMEGA_POLICY_BOUNDS) may only tighten inside them, so each
+ * limit is the smaller of the two. Custom is the account's own settings, unchanged (the live account sizes as today).
+ * Returns { profile, risk_pct, max_positions, max_daily_loss_pct, hard_cap_pct, open_risk_pct }; a cap the profile does
+ * not set is null.
+ */
+export function effectiveLimits(profile, settings = {}) {
+  const P = PROFILES[profile] ?? PROFILES.safe;
+  const id = PROFILES[profile] ? profile : "safe";
+  const min = (a, b) => (finite(a) && finite(b) ? Math.min(a, b) : finite(a) ? a : finite(b) ? b : null);
+  if (id === "custom") {
+    return { profile: id, risk_pct: settings.risk_pct ?? null, max_positions: settings.max_positions ?? null, max_daily_loss_pct: settings.max_daily_loss_pct ?? null, hard_cap_pct: null, open_risk_pct: null };
+  }
+  return {
+    profile: id,
+    risk_pct: min(settings.risk_pct, P.target_risk_pct),
+    max_positions: min(settings.max_positions, P.max_positions),
+    max_daily_loss_pct: min(settings.max_daily_loss_pct, P.daily_loss_pct),
+    hard_cap_pct: P.hard_cap_pct,
+    open_risk_pct: P.open_risk_pct
+  };
+}
+
 /** The opaque account reference: { ref, legacy, legacy_ref }. Never the login. */
 export async function accountRef(executor) {
   const server = typeof executor?.server === "string" ? executor.server : "";
