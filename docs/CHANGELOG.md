@@ -5,6 +5,10 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- fix(omega): the ladder's closed-candle confirmation (review of #456).
+  - A candle needs its final minute bar.
+  - Candles come only from the connected terminal's own server and symbol, and the cache keys on that identity.
+  - A candle must close after the position opened to confirm a lock.
 - feat(omega): the TP ladder's lock per mode, on closed candles (owner 2026-11-18, confirmed: "Setuju").
   - **Step per mode.** Scalp keeps +30 pips. Intraday uses +0.5R and swing +0.3R, where R is the stop distance at entry (open intents now record `mode` and `r_dist`).
   - **Lock.** A step past the entry puts the stop at break-even; a step past TPx puts it at TPx.
