@@ -17,6 +17,8 @@ const CODES: Record<string, { kind: Kind; text: string }> = {
   symbol_unverified: { kind: "block", text: "The terminal's trade symbol is not verified USD gold (exact name, profit currency USD, contract size 1-100 oz): no new entries. See Symbol on the bridge card." },
   spec_unvalidated: { kind: "block", text: "The account's broker spec (contract, lot limits, leverage, margin mode) is new or changed: no new entries until it validates and holds for a minute. Open positions are still managed. See Account on the bridge card." },
   ea_outdated: { kind: "block", text: "OmegaExecutor is older than the minimum version for entries (1.16: it checks margin, stops and freeze level before sending): no new entries until it is updated on the VPS." },
+  reentry_cooldown: { kind: "block", text: "The Position Manager just closed a position on this side (weakening or cut loss): a new entry on the same side waits for a closed 15m bar." },
+  reentry_needs_pullback: { kind: "block", text: "A same-side re-entry after a weakening exit needs a pullback of 0.5×ATR(M15) from the exit price, or the strategy agent's confidence back at its entry level." },
   profile_review_pending: { kind: "block", text: "A downgrade of the risk profile is waiting for the profile council's review: no new entries until it decides (at most 10 minutes)." },
   bad_signal: { kind: "block", text: "The signal is incomplete." },
   expired: { kind: "block", text: "The signal expired before it could be entered." },

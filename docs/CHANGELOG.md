@@ -5,6 +5,12 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-18
+- feat(omega): the same-side re-entry guard (owner 2026-11-18, confirmed: "Setuju").
+  - **Why.** Four times on 2026-11-18 the Position Manager closed a SELL on weakening and the next 15m SELL reopened seconds later.
+  - **Cooldown.** After a PM exit for `pm_take_profit_weakening` or `pm_cut_loss`, a new entry on the same side waits for `reentry_cooldown_bars` (1) closed 15m bar (`reentry_cooldown`).
+  - **After the cooldown.** The entry also needs a pullback of `reentry_pullback_atr` (0.5) × ATR(M15) from the exit price, or the strategy agent's confidence back at its level when the closed position opened (`reentry_needs_pullback`, with the price needed).
+  - **Exempt.** Exits by TP, the ladder or the stop.
+  - **Entry confidence.** The open intent now records `agent_conf` at entry.
 - feat(omega): phase 4, the trading-mode selector (owner 2026-11-18, confirmed: "Setuju"). See `docs/RFC_ACCOUNT_PROFILES.md` "Phase 4".
   - **Daily run.** On Auto, once a UTC day: the replay evidence per mode and regime, feasibility at the minimum lot against the profile cap, and fail-safe moves without the council (revert on failed evidence, drop an infeasible mode, back to the baseline after the kill switch or the daily loss).
   - **Council.** A better mode switches only after two passing runs and the mode council's approval: the risk seat and three of four.
