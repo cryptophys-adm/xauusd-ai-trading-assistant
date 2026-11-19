@@ -107,6 +107,12 @@ test("a run tags each headline, writes the TLDR, and the desks read it; an uncha
   assert.equal(desk.window, "the last 24 hours");
 
   assert.equal((await runNewsDaily(e, { now: NOW + 60_000, clock: () => NOW + 60_000 })).status, "unchanged");
+  // Owner 2026-11-18: an unchanged hour still counts as a check, so a quiet night is no stale reading.
+  const later = NOW + 4 * 3_600_000;
+  assert.equal((await runNewsDaily(e, { now: later, clock: () => later })).status, "unchanged");
+  const checked = await readNewsDaily(e.DB);
+  assert.equal(checked.checked_at, new Date(later).toISOString());
+  assert.ok(Date.parse(checked.run_at) < later, "the reading itself keeps its run time");
   assert.equal(ai.calls.length, 2);
 });
 
