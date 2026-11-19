@@ -4,7 +4,10 @@
 // thesis, and fixed rules turn that into at most one action:
 //   profit >= +30 pips, momentum weakening        close now, without waiting for TP1
 //   profit >= +30 pips, still strong               stop to break-even plus the spread
-//   price >= 30 pips beyond TP1                    stop to TP1 (locks it), the position runs on to TP2
+//   price >= 30 pips beyond TP1                    stop to TP1 (locks it), the position runs on to TP2; closed
+//     instead when the council reads the momentum weakening
+// The stop locks (break-even, TP1) go through the council; when it does not answer they apply as the mechanical
+// fallback (owner 2026-11-19: "Lewat council juga", then "ya" to the fallback).
 //   loss <= -30 pips, a measured reason and the    cut the loss now
 //     council agrees: the decision on the other side, or the agent's measured confidence or the quorum's share
 //     on the position's side dropped; and the council answered with the thesis weakening or broken
@@ -24,7 +27,7 @@
 // moved out to TP2; never an add, a reversal or an open. Inputs are measured: the strategy agent's confidence on the
 // position's side against the bar before, the quorum's shares, the decision's stance. Never the council's own
 // confidence. A missing input, a council timeout or failure, or the daily cap means no action (the broker's stop
-// and target stay). POSITION_MANAGER_MODE "live" runs it, "off" stops it. Metered as "position_council" with its own
+// and target stay), except the stop locks, which apply as the fallback. POSITION_MANAGER_MODE "live" runs it, "off" stops it. Metered as "position_council" with its own
 // daily cap (POSITION_COUNCIL_DAILY_USD, default 5), apart from the Decision Engine and the War Rooms.
 //
 // Here: the pure rules, the council's messages and schema, and the runner on the main Worker's 5-minute cron. Omega
@@ -119,15 +122,23 @@ export function positionAction(f, council) {
   const room = (x) => (f.dir > 0 ? x < f.price - f.spread : x > f.price + f.spread);
   // TP2 at the broker once: a take-profit still at TP1 moves out to the next key level.
   const tpAtTp1 = f.tp != null && Math.abs(f.tp - f.tp1) <= PIP / 2;
-  // Beyond TP1 by 30 pips: the stop locks TP1 (no council needed: a measured price rule).
-  if (f.beyond_tp1_pips >= THRESHOLD_PIPS && better(f.tp1) && room(f.tp1)) return { action: "sl", rule: "lock_tp1", sl: f.tp1, why: `${f.beyond_tp1_pips} pips beyond TP1: stop to TP1` };
+  // The stop locks go through the council too (owner 2026-11-19: "Lewat council juga"; and "ya" to the fallback): the
+  // council's answer decides between locking and taking the profit now (momentum weakening). When it does not answer
+  // (a failure, a timeout, the daily cap), the lock is applied as the mechanical fallback: a lock only reduces risk.
+  const silent = council ? "" : " (the council did not answer: the lock applies as the fallback)";
+  const reading = council ? `; the council reads ${council.momentum}, thesis ${council.thesis}` : silent;
+  // Beyond TP1 by 30 pips: the stop locks TP1, or the position closes when the council reads the momentum weakening.
+  if (f.beyond_tp1_pips >= THRESHOLD_PIPS && better(f.tp1) && room(f.tp1)) {
+    if (council?.momentum === "weakening") return { action: "close", rule: "take_profit_weakening", why: `${f.beyond_tp1_pips} pips beyond TP1 and the momentum is weakening: closed instead of locking TP1` };
+    return { action: "sl", rule: "lock_tp1", sl: f.tp1, why: `${f.beyond_tp1_pips} pips beyond TP1: stop to TP1${reading}` };
+  }
   const band = isNum(f.band_pips) && f.band_pips > 0 ? f.band_pips : THRESHOLD_PIPS;
   const at = (sign) => `${sign > 0 ? "+" : ""}${f.pips} pips${f.r != null ? ` (${sign > 0 ? "+" : ""}${f.r}R, band ${f.band_r}R ${f.mode})` : ""}`;
   if (f.pips >= band) {
-    if (!council) return { action: "none", rule: "council_unavailable", why: "the council did not answer: the stop and target stay" };
-    if (council.momentum === "weakening") return { action: "close", rule: "take_profit_weakening", why: `${at(1)} and the momentum is weakening: closed without waiting for TP1` };
+    if (council?.momentum === "weakening") return { action: "close", rule: "take_profit_weakening", why: `${at(1)} and the momentum is weakening: closed without waiting for TP1` };
     const be = f.open + f.dir * f.spread;
-    if (better(be) && room(be)) return { action: "sl", rule: "breakeven", sl: be, why: `${at(1)} and still strong: stop to break-even plus the spread` };
+    if (better(be) && room(be)) return { action: "sl", rule: "breakeven", sl: be, why: `${at(1)}${council ? " and still strong" : ""}: stop to break-even plus the spread${reading}` };
+    if (!council) return { action: "none", rule: "council_unavailable", why: "the council did not answer: the stop and target stay" };
     return tpAtTp1 && f.tp2 != null ? { action: "tp", rule: "tp2_target", tp: f.tp2, why: "target out to TP2 (the next key level)" } : { action: "hold", rule: "protected", why: `${at(1)}, the stop already protects it` };
   }
   if (f.pips <= -band) {
@@ -230,7 +241,7 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
       const key = `pm:cap:${new Date(now).toISOString().slice(0, 10)}`;
       if (!(await env.SIGNAL_CACHE?.get?.(key))) {
         await env.SIGNAL_CACHE?.put?.(key, "1", { expirationTtl: 2 * 86_400 });
-        try { await send(`XAUUSD POSITION MANAGER · paused for today\nThe position council reached its daily cap (USD ${capUsd}). The broker's stops and targets stay; it resumes at 00:00 UTC.`); } catch { /* said next time */ }
+        try { await send(`XAUUSD POSITION MANAGER · paused for today\nThe position council reached its daily cap (USD ${capUsd}). No close until 00:00 UTC; the stop locks (break-even, TP1) still apply as the fallback, and the broker's stops and targets stay.`); } catch { /* said next time */ }
       }
     }
     for (const p of positions) {
