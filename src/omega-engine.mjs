@@ -607,15 +607,20 @@ export function openRiskAtStops(positions = [], sym = {}) {
  * and 5-minute bar (the id carries the action's bar). `actions` are { id, ticket, action, rule, sl, tp }.
  */
 export function positionManagerIntents({ positions = [], sym = {}, actions = [], skipTickets = [] } = {}) {
-  const out = [], used = [];
-  if (!finite(sym.bid) || !finite(sym.ask)) return { intents: out, used };
+  // `dropped`: each action that became no intent, with the reason in plain words (owner 2026-11-19: the Telegram
+  // line says what reached the broker, and why an action did not).
+  const out = [], used = [], dropped = [];
+  const drop = (a, reason) => dropped.push({ id: a.id, reason });
+  if (!finite(sym.bid) || !finite(sym.ask)) { for (const a of actions) drop(a, "no live price from the terminal"); return { intents: out, used, dropped }; }
   const skip = new Set(skipTickets.filter((t) => t != null));
   const point = positive(sym.point) ? sym.point : 0.01;
   const digits = Number.isInteger(sym.digits) ? sym.digits : 2;
   const floorPx = (finite(sym.stops_level_points) ? sym.stops_level_points : 0) * point + (finite(sym.spread_points) ? sym.spread_points : 0) * point;
   for (const a of actions) {
     const p = positions.find((x) => x?.ticket === a.ticket);
-    if (!p || skip.has(p.ticket) || !isOmegaOwned(p) || (p.side !== "BUY" && p.side !== "SELL")) continue;
+    if (!p) { drop(a, "the position is no longer open"); continue; }
+    if (skip.has(p.ticket)) { drop(a, "another close of this position comes first"); continue; }
+    if (!isOmegaOwned(p) || (p.side !== "BUY" && p.side !== "SELL")) { drop(a, "not an Omega position"); continue; }
     const buy = p.side === "BUY", curSl = Number(p.sl), curTp = Number(p.tp);
     const bar = String(a.id).split(":").pop();
     if (a.action === "close") {
@@ -624,17 +629,18 @@ export function positionManagerIntents({ positions = [], sym = {}, actions = [],
       const sl = roundTo(a.sl, digits);
       const tighter = !Number.isFinite(curSl) || curSl <= 0 || (buy ? sl > curSl + point / 2 : sl < curSl - point / 2);
       const room = buy ? sl < sym.bid - floorPx : sl > sym.ask + floorPx;
-      if (!tighter || !room) continue;
+      if (!tighter) { drop(a, `the stop is already at or beyond ${sl}`); continue; }
+      if (!room) { drop(a, `the live price leaves no room for a stop at ${sl}`); continue; }
       out.push({ id: `pm:${p.ticket}:s:${bar}`, kind: "modify_sl", ticket: p.ticket, sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `pm_${a.rule}` });
     } else if (a.action === "tp" && finite(a.tp)) {
       const tp = roundTo(a.tp, digits);
       const outward = Number.isFinite(curTp) && curTp > 0 && (buy ? tp > curTp + point / 2 && tp > sym.ask + floorPx : tp < curTp - point / 2 && tp < sym.bid - floorPx);
-      if (!outward) continue;
+      if (!outward) { drop(a, `a target at ${tp} is not further out than the broker's (${Number.isFinite(curTp) && curTp > 0 ? curTp : "none"})`); continue; }
       out.push({ id: `pm:${p.ticket}:t:${bar}`, kind: "modify_tp", ticket: p.ticket, tp, reason: `pm_${a.rule}` });
-    } else continue;
+    } else { drop(a, "not an action Omega applies"); continue; }
     used.push(a.id);
   }
-  return { intents: out, used };
+  return { intents: out, used, dropped };
 }
 
 export const LEAN_BAND = 0.15;
@@ -670,6 +676,8 @@ const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_col
 
 export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {} } = {}) {
   const intents = [], notes = [];
+  // The Position Manager actions that became no intent, with the reason (said on Telegram by the sync).
+  const pmDropped = [];
   const note = (code, detail) => notes.push(detail ? { code, detail } : { code });
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
   // Account Profiles phase 2 (docs/RFC_ACCOUNT_PROFILES.md §3-4): new entries are sized within the account's profile.
@@ -692,12 +700,12 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   if (signal?.kill === true || control?.mode === "killed") {
     note("kill");
     if (positions.length) intents.push({ id: closeAllId(killKey(signal, control)), kind: "close_all", reason: "kill" });
-    return { intents, notes };
+    return { intents, notes, pm_dropped: pmDropped };
   }
-  if (!engineEnabled || S.enabled !== true) { note("engine_off"); return { intents, notes }; }
+  if (!engineEnabled || S.enabled !== true) { note("engine_off"); return { intents, notes, pm_dropped: pmDropped }; }
   if (!executor || executor.connected !== true || !finite(executor.received_ms) || now - executor.received_ms > EXECUTOR_MAX_AGE_MS) {
     note("executor_stale");
-    return { intents, notes };
+    return { intents, notes, pm_dropped: pmDropped };
   }
 
   // The EA still moves stops by itself (OmegaExecutor 1.12+ reports it): said, never a gate.
@@ -714,7 +722,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     }
     if (intents.length) {
       note("mean_reversal_exit");
-      return { intents, notes };
+      return { intents, notes, pm_dropped: pmDropped };
     }
   }
 
@@ -737,11 +745,15 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     pm.intents = pm.intents.filter((it) => {
       if (it.kind !== "modify_tp") return true;
       const p = positions.find((x) => x.ticket === it.ticket);
-      return p ? ladderTp1Locked({ position: p, levels, sym, signal }) : false;
+      if (p && ladderTp1Locked({ position: p, levels, sym, signal })) return true;
+      const [, t, , b] = String(it.id).split(":");
+      pm.dropped.push({ id: `pm:${t}:${b}`, reason: "the TP ladder holds the target until the stop locks TP1 (ADR-0020 Amendment 4)" });
+      return false;
     });
   }
   if (pm.intents.length) note("position_manager");
   intents.push(...pm.intents);
+  pmDropped.push(...pm.dropped);
 
   // Position management runs on every sync, whatever the entry gates say (audit 2026-11-11, owner:
   // "perbaiki"): a blackout, the rollover quarantine, a pause, a wide spread or a full book only stop
@@ -752,7 +764,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     // A range strategy held by the H4/D1 filter or its cell's evidence (src/htf-cells.mjs) says so on the page.
     if (CELL_GATE_REASONS.includes(signal?.awaiting_reason)) note(signal.awaiting_reason, cellGateText(signal));
     else note("no_side");
-    return { intents, notes };
+    return { intents, notes, pm_dropped: pmDropped };
   }
 
   const issued = signal.issued_ms, id = openId(issued, side);
@@ -806,26 +818,26 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     [armLive && tradeAgent != null && positions.some((p) => isOmegaOwned(p) && posAgent(p) === tradeAgent), "strategy_has_position"],
     [armLive && positions.some((p) => isOmegaOwned(p) && (p.side === "BUY" || p.side === "SELL") && p.side !== side), "opposing_position"]
   ];
-  for (const [blocked, code] of gates) if (blocked) { note(code); return { intents, notes }; }
+  for (const [blocked, code] of gates) if (blocked) { note(code); return { intents, notes, pm_dropped: pmDropped }; }
   const re = reentryGate({ side, reentry, settings: S, now });
-  if (re) { note(re.code, re.detail); return { intents, notes }; }
+  if (re) { note(re.code, re.detail); return { intents, notes, pm_dropped: pmDropped }; }
 
   const needed = [account.equity, account.day_start_balance, signal.entry, signal.stop, signal.tp1, sym.bid, sym.ask, sym.point, sym.tick_size, sym.tick_value, sym.volume_step, sym.volume_min, sym.volume_max];
-  if (!needed.every(positive) || !Number.isInteger(sym.digits)) { note("bad_input"); return { intents, notes }; }
+  if (!needed.every(positive) || !Number.isInteger(sym.digits)) { note("bad_input"); return { intents, notes, pm_dropped: pmDropped }; }
   const lossFloor = account.day_start_balance * (1 - S.max_daily_loss_pct / 100);
-  if (account.equity <= lossFloor) { note("daily_loss_limit"); return { intents, notes }; }
+  if (account.equity <= lossFloor) { note("daily_loss_limit"); return { intents, notes, pm_dropped: pmDropped }; }
   // Daily risk budget (owner 2026-11-12): what the day can still lose is the equity above the daily
   // loss floor less what the open positions would lose at their stops; a new entry risks at most that.
   const budget = account.equity - openRiskAtStops(positions.filter((p) => !intents.some((it) => it.kind === "close" && it.ticket === p.ticket)), sym) - lossFloor;
-  if (!(budget > 0)) { note("daily_risk_budget"); return { intents, notes }; }
+  if (!(budget > 0)) { note("daily_risk_budget"); return { intents, notes, pm_dropped: pmDropped }; }
 
   const buy = side === "BUY";
   const planOk = buy ? signal.stop < signal.entry && signal.entry < signal.tp1 : signal.tp1 < signal.entry && signal.entry < signal.stop;
-  if (!planOk) { note("plan_wrong_side"); return { intents, notes }; }
+  if (!planOk) { note("plan_wrong_side"); return { intents, notes, pm_dropped: pmDropped }; }
   const planStopDist = Math.abs(signal.entry - signal.stop);
   let stopDist = planStopDist, tpDist = Math.abs(signal.tp1 - signal.entry);
   const minDist = (finite(sym.stops_level_points) ? sym.stops_level_points : 0) * sym.point;
-  if (stopDist <= minDist || tpDist <= minDist) { note("stops_level"); return { intents, notes }; }
+  if (stopDist <= minDist || tpDist <= minDist) { note("stops_level"); return { intents, notes, pm_dropped: pmDropped }; }
 
   // 5m execution (docs/RFC_OMEGA_5M_EXECUTION.md, owner 2026-11-12): a market entry's stop moves to the
   // broker's 5m structure (the swing of the last 3 broker 5m bars beyond a buffer of 2 spreads or 0.1
@@ -864,16 +876,16 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
 
   if (signal.action === "ENTER_LIMIT") {
     const priceAway = buy ? sym.ask > signal.entry + 0.35 * stopDist : sym.bid < signal.entry - 0.35 * stopDist;
-    if (priceAway) { note("waiting_for_pullback"); return { intents, notes }; }
+    if (priceAway) { note("waiting_for_pullback"); return { intents, notes, pm_dropped: pmDropped }; }
     // Owner 2026-11-13 ("setuju"): price past the entry toward the plan's stop by more than 0.35 x the plan's
     // stop distance is not entered. The stop keeps its distance from the fill, so such an entry put the stop
     // well beyond the key level the plan stood on (a SELL at 3903.98 against a 3888.48 entry, its stop 14
     // past the plan's). It waits: price may come back inside the band before the signal expires.
     const pastEntry = buy ? sym.ask < signal.entry - 0.35 * planStopDist : sym.bid > signal.entry + 0.35 * planStopDist;
-    if (pastEntry) { note("price_past_entry"); return { intents, notes }; }
+    if (pastEntry) { note("price_past_entry"); return { intents, notes, pm_dropped: pmDropped }; }
   }
   const breached = buy ? sym.bid <= signal.stop : sym.ask >= signal.stop;
-  if (breached) { note("stop_breached"); return { intents, notes }; }
+  if (breached) { note("stop_breached"); return { intents, notes, pm_dropped: pmDropped }; }
 
   const price = buy ? sym.ask : sym.bid;
   const sl = roundTo(buy ? price - stopDist : price + stopDist, sym.digits);
@@ -900,7 +912,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     } else {
       const cap = limits && finite(limits.hard_cap_pct) ? `the ${label} cap of ${limits.hard_cap_pct}%` : `the risk per trade of ${S.risk_pct}%`;
       note("volume_below_min", `stop ${stopPts} pts: the minimum lot ${sym.volume_min} risks ${minRisk}% of ${roundTo(account.equity, 2)}, over ${cap}`);
-      return { intents, notes };
+      return { intents, notes, pm_dropped: pmDropped };
     }
   }
   // The profile's total open risk (RFC §4): what the open positions lose at their stops plus this entry's risk.
@@ -910,12 +922,12 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     const roomVolume = room > 0 ? floorToStep(room / lossPerLot, sym.volume_step) : 0;
     if (!(roomVolume >= sym.volume_min)) {
       note("open_risk_cap", `open positions risk ${pctOf(openRisk)}% at their stops; the ${label} total open risk is ${limits.open_risk_pct}%`);
-      return { intents, notes };
+      return { intents, notes, pm_dropped: pmDropped };
     }
     if (volume > roomVolume) { volume = roomVolume; note("lot_capped_open_risk"); }
   }
   const budgetVolume = floorToStep(budget / lossPerLot, sym.volume_step);
-  if (budgetVolume < sym.volume_min) { note("daily_risk_budget"); return { intents, notes }; }
+  if (budgetVolume < sym.volume_min) { note("daily_risk_budget"); return { intents, notes, pm_dropped: pmDropped }; }
   if (volume > budgetVolume) { volume = budgetVolume; note("lot_capped_daily_budget"); }
 
   const openIntent = { id, kind: "open", side, volume, entry: price, sl, tp, signal_issued_ms: issued, reason: "signal", stop_source: tight ? "stop_5m" : "plan", trigger_source: typeof signal.trigger_source === "string" ? signal.trigger_source : null };
@@ -943,5 +955,5 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     openIntent.risk_usd = roundTo(lossPerLot * volume, 2);
   }
   intents.push(openIntent);
-  return { intents, notes };
+  return { intents, notes, pm_dropped: pmDropped };
 }

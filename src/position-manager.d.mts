@@ -16,7 +16,8 @@ export function positionAction(facts: Record<string, any> | null, council: Recor
 export function positionCouncilMessages(facts: Record<string, any>, options?: Record<string, any>): Array<{ role: string; content: string }>;
 export function cleanCouncil(obj: unknown): { momentum: string; thesis: string; reason: string } | null;
 export function positionCouncilSpendUsd(db: unknown, options?: { now?: number }): Promise<number>;
-export function actionMessage(row: Record<string, any>): string;
+export function actionMessage(row: Record<string, any>, outcome?: { applied: boolean; reason?: string }): string;
+export function actionIdOfIntent(intentId: unknown): string | null;
 export function runPositionManager(env: unknown, options?: Record<string, any>): Promise<Record<string, any>>;
 export function latestDecisions(db: unknown): Promise<Record<string, any> | null>;
 export function brokerLevels(signal: unknown): Array<{ low: number; high: number }>;
