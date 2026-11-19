@@ -233,6 +233,22 @@ export function writeIntents(dir, intents = [], { fs = nodeFs, now = () => Date.
 }
 
 /**
+ * Atomically write `reference.txt` (ASCII "<price>;<written_ms>"): the reference gold price in USD from the server, which
+ * OmegaExecutor 1.19+ uses to find gold on any broker by its price, whatever the broker names it (owner 2026-11-19).
+ * A missing or non-positive price writes nothing; the EA drops a reference older than 15 minutes.
+ */
+export function writeReferencePrice(dir, price, { fs = nodeFs, now = () => Date.now() } = {}) {
+  if (typeof price !== "number" || !Number.isFinite(price) || !(price > 0)) return null;
+  fs.mkdirSync(dir, { recursive: true });
+  const writtenMs = now();
+  const targetPath = path.join(dir, "reference.txt");
+  const tmpPath = path.join(dir, `reference.txt.tmp.${process.pid}.${writtenMs}`);
+  fs.writeFileSync(tmpPath, `${Number(price.toFixed(5))};${writtenMs}\n`, { encoding: "ascii" });
+  fs.renameSync(tmpPath, targetPath);
+  return targetPath;
+}
+
+/**
  * Parse the contents of `results.txt` (`id;ok(1|0);ticket;error;executed_ms`).
  *
  * @param {string} text

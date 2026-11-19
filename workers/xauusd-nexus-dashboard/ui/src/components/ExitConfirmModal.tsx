@@ -70,7 +70,7 @@ export function ExitConfirmModal({
           <div className="flex items-center justify-between">
             <span className="text-slate-400 text-[11px] uppercase tracking-wider font-semibold">Position</span>
             <div className="flex items-center gap-2">
-              <span className="mono font-semibold text-slate-200">{position.symbol || "XAUUSD.m"}</span>
+              <span className="mono font-semibold text-slate-200">{position.symbol || "gold"}</span>
               <span
                 className={`mono font-bold px-1.5 py-0.5 rounded text-[11px] border ${
                   position.side === "BUY"

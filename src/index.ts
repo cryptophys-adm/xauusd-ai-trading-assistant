@@ -1902,8 +1902,9 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   async setSettings(input: { body?: unknown; actor: string }): Promise<JsonObject> {
     return writeSettings(this.env, { body: input?.body, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
   }
-  async setConnection(input: { envelope?: unknown; server?: unknown; trade_symbol?: unknown; actor: string }): Promise<JsonObject> {
-    return setConnection(this.env, { envelope: input?.envelope, server: input?.server, trade_symbol: typeof input?.trade_symbol === "string" ? input.trade_symbol : null, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
+  async setConnection(input: { envelope?: unknown; server?: unknown; trade_symbol?: unknown; units_per_usd?: unknown; actor: string }): Promise<JsonObject> {
+    const units = input?.units_per_usd == null || input.units_per_usd === "" ? null : Number(input.units_per_usd);
+    return setConnection(this.env, { envelope: input?.envelope, server: input?.server, trade_symbol: typeof input?.trade_symbol === "string" ? input.trade_symbol : null, units_per_usd: units, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
   }
   async clearConnection(input: { reason?: unknown; actor: string }): Promise<JsonObject> {
     return clearConnection(this.env, { reason: input?.reason, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;

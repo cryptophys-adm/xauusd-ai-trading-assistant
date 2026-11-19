@@ -8,7 +8,7 @@ export function engineEnvEnabled(env: unknown): boolean;
 export function readSettings(env: unknown): Promise<Record<string, any>>;
 export function writeSettings(env: unknown, input: { body?: unknown; actor: string }, options?: { now?: number }): Promise<Record<string, any>>;
 export function connectionStatus(env: unknown): Promise<Record<string, any>>;
-export function setConnection(env: unknown, input: { envelope?: unknown; server?: unknown; trade_symbol?: unknown; actor: string }, options?: { now?: number }): Promise<Record<string, any>>;
+export function setConnection(env: unknown, input: { envelope?: unknown; server?: unknown; trade_symbol?: unknown; units_per_usd?: number | null; actor: string }, options?: { now?: number }): Promise<Record<string, any>>;
 export function clearConnection(env: unknown, input: { actor: string; reason?: unknown }, options?: { now?: number }): Promise<Record<string, any>>;
 export function bridgeKey(env: unknown, options?: { now?: number }): Promise<Record<string, any> | null>;
 export function executorFrom(state: unknown): Record<string, any> | null;

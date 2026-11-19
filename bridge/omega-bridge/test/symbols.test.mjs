@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  GOLD_SYMBOL_CANDIDATES,
+  CHART_BOOTSTRAP_SYMBOLS,
   candidateSymbols,
   forgetSymbol,
   learnedSymbol,
@@ -28,8 +28,8 @@ test("symbols: candidate order and per-server memory", () => {
   const dir = tmp();
   try {
     // Proven symbol first, then OMEGA_SYMBOL, then the common names without repeats.
-    assert.deepEqual(candidateSymbols({ learned: "GOLD", configured: "XAUUSD.m" }).slice(0, 4), ["GOLD", "XAUUSD.m", "XAUUSD", "XAUUSDm"]);
-    assert.deepEqual(candidateSymbols({ configured: "XAUUSD.m", exclude: ["XAUUSD.m", "XAUUSD"] }).slice(0, 2), ["GOLD", "XAUUSDm"]);
+    assert.deepEqual(candidateSymbols({ learned: "GOLD", configured: "XAUUSD.m" }).slice(0, 4), ["GOLD", "XAUUSD.m", "XAUUSD", "EURUSD"]);
+    assert.deepEqual(candidateSymbols({ configured: "XAUUSD.m", exclude: ["XAUUSD.m", "XAUUSD"] }).slice(0, 2), ["GOLD", "EURUSD"]);
     assert.ok(!candidateSymbols({ configured: "bad\nname" }).includes("bad\nname"));
 
     const stateDir = path.join(dir, "state");
@@ -92,18 +92,17 @@ function setup(h, { server = "FxPro-MT5 Demo", symbol = "XAUUSD.m", trial = true
   if (trial) writeTrial(h.stateDir, { server, symbol, tried: [], started_ms: nowMs, status: "trial" });
 }
 
-test("symbols: stateSymbolProblem accepts USD gold only (exact name, USD profit, 1-100 oz, no symbol_error)", () => {
-  assert.equal(stateSymbolProblem(usdGold("S", "GOLD")), null);
-  assert.equal(stateSymbolProblem(usdGold("S", "XAUUSD.m")), null);
-  assert.equal(stateSymbolProblem({ ...usdGold("S", "GOLDEURO") }), "name_not_allowed");
-  assert.equal(stateSymbolProblem({ ...usdGold("S", "gold") }), "name_not_allowed", "case-sensitive, exact");
-  assert.equal(stateSymbolProblem({ ...usdGold("S", "XAUUSD_mini") }), "name_not_allowed", "no prefix match");
-  assert.equal(stateSymbolProblem({ server: "S", symbol: { name: "GOLD", currency_profit: "EUR", contract_size: 100 } }), "profit_currency_not_usd");
+test("symbols: stateSymbolProblem checks what the EA reports, never the name (universal, 2026-11-19)", () => {
+  // Any name the broker gives gold passes when the EA reports USD profit and 1-100 oz: the EA found it by its price.
+  for (const name of ["GOLD", "XAUUSD.m", "GoldOne", "Au.spot", "XAU/USD", "gold"]) assert.equal(stateSymbolProblem(usdGold("S", name)), null, name);
+  assert.equal(stateSymbolProblem({ server: "S", symbol: { name: "GOLDEURO", currency_profit: "EUR", contract_size: 100 } }), "profit_currency_not_usd", "gold in euro is another instrument");
   assert.equal(stateSymbolProblem({ server: "S", symbol: { name: "GOLD", currency_profit: "USD", contract_size: 1000 } }), "contract_size_out_of_range");
   assert.equal(stateSymbolProblem({ server: "S", symbol: { name: "GOLD", currency_profit: "USD", contract_size: 0.5 } }), "contract_size_out_of_range");
   assert.equal(stateSymbolProblem({ server: "S", symbol: { name: "GOLD" } }), "currency_not_reported", "an EA older than 1.14 never passes");
-  assert.equal(stateSymbolProblem({ server: "S", symbol: { name: "", currency_profit: "", contract_size: 0 }, symbol_error: "no_usd_gold_symbol (GOLDEURO:name_not_allowed)" }), "symbol_error:no_usd_gold_symbol (GOLDEURO:name_not_allowed)");
-  assert.ok(!GOLD_SYMBOL_CANDIDATES.some((n) => /EUR|AUD|GBP|JPY|CHF/i.test(n)));
+  assert.equal(stateSymbolProblem({ server: "S", symbol: { name: "", currency_profit: "", contract_size: 0 }, symbol_error: "no_usd_gold_symbol (no_reference_price)" }), "symbol_error:no_usd_gold_symbol (no_reference_price)");
+  assert.equal(stateSymbolProblem({ server: "S", symbol: { name: "" } }), "no_symbol");
+  // The bootstrap list only opens a first chart: it is not what may be traded.
+  assert.ok(CHART_BOOTSTRAP_SYMBOLS.includes("EURUSD"), "a common non-gold name, so the EA can start and scan");
 });
 
 test("daemon: a chart symbol the server lacks is replaced by the next candidate and the one that works is remembered", async () => {
@@ -162,7 +161,7 @@ test("daemon: a GOLDEURO-only server is refused: never remembered, no restart lo
     fs.writeFileSync(path.join(h.mt5FilesDir, "state.json"), JSON.stringify({ connected: true, server: "Euro-Demo", symbol: { name: "", currency_profit: "", contract_size: 0 }, symbol_error: "no_usd_gold_symbol (XAUUSD:profit_currency_not_usd)" }));
     for (let i = 0; i < 5; i++) { nowRef.ms += 1500; await h.daemon.tick(); }
     assert.equal(learnedSymbol(h.stateDir, "Euro-Demo"), null, "never remembered");
-    assert.equal(execCalls.length, 0, "no restart: another chart name cannot help, the EA checks every listed name");
+    assert.equal(execCalls.length, 0, "no restart: another chart cannot help, the EA scans every symbol from any chart");
     assert.equal(logs.filter((l) => l.includes('"symbol_refused"')).length, 1, "logged once");
     const last = syncBodies.at(-1);
     assert.equal(last.bridge_symbol.status, "none");
@@ -189,7 +188,7 @@ test("daemon: when every name fails the search ends exhausted and stays there (n
     const h = makeDaemon(dir, { nowRef, execCalls, logs, syncBodies });
     setup(h, { server: "NoGold-Demo", symbol: "XAUUSD.m", nowMs: nowRef.ms });
     for (let i = 0; i < 40; i++) { nowRef.ms += 1500; await h.daemon.tick(); }
-    const n = GOLD_SYMBOL_CANDIDATES.length;
+    const n = CHART_BOOTSTRAP_SYMBOLS.length;
     assert.equal(execCalls.length, n - 1, "each listed name tried once");
     assert.equal(readTrial(h.stateDir).status, "exhausted");
     assert.equal(logs.filter((l) => l.includes('"symbol_trial_exhausted"')).length, 1);
@@ -272,14 +271,12 @@ test("daemon: no EA state for the applied server and no trial starts a trial fro
   }
 });
 
-test("cent accounts: the owner's gold symbol leads the candidates, passes the state check, and is written for the EA", () => {
+test("the owner's gold symbol (a hint) leads the chart candidates and is written for the EA", () => {
   assert.deepEqual(candidateSymbols({ owner: "GoldOne", learned: "GOLD" }).slice(0, 3), ["GoldOne", "GOLD", "XAUUSD"]);
-  const st = { server: "S", account: { currency: "USC" }, symbol: { name: "GoldOne", currency_profit: "USD", contract_size: 100 } };
-  assert.equal(stateSymbolProblem(st), "name_not_allowed", "without the owner's symbol the name is off the list");
-  assert.equal(stateSymbolProblem(st, { ownerSymbol: "GoldOne" }), null);
-  assert.equal(stateSymbolProblem({ ...st, symbol: { ...st.symbol, currency_profit: "USC" } }, { ownerSymbol: "GoldOne" }), null, "USC profit on a cent account");
-  assert.equal(stateSymbolProblem({ ...st, account: { currency: "USD" }, symbol: { ...st.symbol, currency_profit: "USC" } }, { ownerSymbol: "GoldOne" }), "profit_currency_not_usd");
-  assert.equal(stateSymbolProblem({ ...st, symbol: { ...st.symbol, contract_size: 1000 } }, { ownerSymbol: "GoldOne" }), "contract_size_out_of_range");
+  const st = { server: "S", account: { currency: "USX" }, symbol: { name: "GoldOne", currency_profit: "USD", contract_size: 1 } };
+  assert.equal(stateSymbolProblem(st), null, "no name list: the EA's checks decide");
+  assert.equal(stateSymbolProblem({ ...st, symbol: { ...st.symbol, currency_profit: "USC" } }), "profit_currency_not_usd", "money in cents is the account's, never the instrument's profit currency");
+  assert.equal(stateSymbolProblem({ ...st, symbol: { ...st.symbol, contract_size: 1000 } }), "contract_size_out_of_range");
   const dir = tmp(), files = path.join(dir, "files");
   writeOwnerSymbol(dir, files, "Broker-Cent", "GoldOne", { fs });
   assert.equal(readOwnerSymbol(dir, "broker-cent", { fs }), "GoldOne");

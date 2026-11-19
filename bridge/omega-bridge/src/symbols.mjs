@@ -1,47 +1,43 @@
-// Gold chart symbol per broker server (2026-11-16).
+// The chart the terminal opens at start, per broker server (2026-11-16; universal since 2026-11-19).
 //
-// The terminal attaches OmegaExecutor at start to the chart named in `[StartUp] Symbol`. When that symbol
-// does not exist on the selected server (e.g. Monex's "XAUUSD.m" on FxPro, whose gold is "XAUUSD") the
-// chart never loads and the EA never runs OnInit: no state.json, no trading. Broker servers name gold
-// differently, so the bridge picks the chart symbol per server instead of one fixed name:
-//   1. the symbol already proven on this server (symbols.json in the state dir);
-//   2. the configured OMEGA_SYMBOL, then the common gold names (FxPro: "GOLD", Monex: "XAUUSD.m").
-// The terminal's Bases/<server>/history|ticks folders are no hint: a chart opened on a name the server
-// lacks creates them too (FxPro had an XAUUSD folder but no XAUUSD symbol, 2026-11-16).
-// A choice is proven when the EA writes state.json for that server; until then it is a trial, and after
-// SYMBOL_TRIAL_MS without the EA the bridge moves to the next candidate.
+// The terminal attaches OmegaExecutor at start to the chart named in `[StartUp] Symbol`. When that symbol does not
+// exist on the selected server the chart never loads and the EA never runs OnInit: no state.json, no trading.
+// Since OmegaExecutor 1.19 the chart only has to EXIST: the EA scans every symbol the server offers and finds gold
+// priced in USD by its contract and its price against the reference (owner 2026-11-19: "Harusnya bisa universal apapun
+// broker, nama pair maupun servernya"). No name decides what is traded. The bridge picks the chart per server:
+//   1. the owner's symbol, if set with the connection (a hint);
+//   2. the symbol the EA last traded on this server (symbols.json in the state dir), proven by its state;
+//   3. the configured OMEGA_SYMBOL, then CHART_BOOTSTRAP_SYMBOLS: common names on many servers, used ONLY to open a
+//      first chart on a server never seen before, so the EA can start and find gold itself.
+// The terminal's Bases/<server>/history|ticks folders are no hint: a chart opened on a name the server lacks creates
+// them too (2026-11-16). A choice is proven when the EA writes state.json for that server; until then it is a trial,
+// and after SYMBOL_TRIAL_MS without the EA the bridge moves to the next candidate.
 
 import nodeFs from "node:fs";
 import path from "node:path";
 
 export const SYMBOL_TRIAL_MS = 120000;
 
-// USD gold only (owner 2026-11-17, PR #405): the exact names OmegaExecutor (GOLD_USD_SYMBOLS) and the server
-// (src/gold-symbol.mjs GOLD_USD_SYMBOLS) accept, the commonest first; test/gold-symbol.test.mjs keeps the three equal.
-export const GOLD_SYMBOL_CANDIDATES = [
-  "XAUUSD", "GOLD", "XAUUSD.m", "XAUUSDm",
-  "XAUUSD.s", "XAUUSD.v", "XAUUSD.pro", "XAUUSD.r",
-  "XAUUSD.ecn", "XAUUSDc", "XAUUSDz", "GOLD.m", "GOLDm",
+// Only to open a first chart on a new server (see above): never a list of what may be traded.
+export const CHART_BOOTSTRAP_SYMBOLS = [
+  "XAUUSD", "GOLD", "EURUSD", "GBPUSD", "USDJPY", "XAUUSD.m", "XAUUSDm", "EURUSD.m", "EURUSDm",
 ];
 
 export const GOLD_CONTRACT_SIZE_MIN = 1;
 export const GOLD_CONTRACT_SIZE_MAX = 100;
 
 /**
- * Pure: why the EA's reported trade symbol is not USD gold, or null when it is. The bridge remembers a chart
- * symbol only when the EA trades a symbol that passes: an exact listed name, profit currency USD, contract
- * size 1-100 oz, and no symbol_error (OmegaExecutor 1.14+ reports the contract; an older EA never passes).
+ * Pure: why the EA's reported trade symbol is not gold priced in USD, or null when it is. No name is checked: the EA
+ * found it by its contract and price (1.19); the bridge checks what it reports: no symbol_error, profit currency USD,
+ * contract size 1-100 oz.
  */
-export function stateSymbolProblem(state, { ownerSymbol = null } = {}) {
+export function stateSymbolProblem(state) {
   if (!state || typeof state !== "object") return "no_state";
   if (typeof state.symbol_error === "string" && state.symbol_error) return `symbol_error:${state.symbol_error.slice(0, 96)}`;
   const s = state.symbol ?? {};
-  const owner = isSafeSymbol(ownerSymbol) ? ownerSymbol : null;
-  if (typeof s.name !== "string" || (!GOLD_SYMBOL_CANDIDATES.includes(s.name) && s.name !== owner)) return "name_not_allowed";
+  if (typeof s.name !== "string" || !s.name) return "no_symbol";
   if (typeof s.currency_profit !== "string" || !s.currency_profit) return "currency_not_reported";
-  // A cent (USC) account may price gold in US cents (owner 2026-11-18).
-  const cent = String(state.account?.currency ?? "").trim().toUpperCase() === "USC";
-  if (s.currency_profit !== "USD" && !(cent && s.currency_profit.trim().toUpperCase() === "USC")) return "profit_currency_not_usd";
+  if (s.currency_profit !== "USD") return "profit_currency_not_usd";
   if (typeof s.contract_size !== "number" || !Number.isFinite(s.contract_size)) return "contract_size_not_reported";
   if (s.contract_size < GOLD_CONTRACT_SIZE_MIN || s.contract_size > GOLD_CONTRACT_SIZE_MAX) return "contract_size_out_of_range";
   return null;
@@ -49,7 +45,7 @@ export function stateSymbolProblem(state, { ownerSymbol = null } = {}) {
 
 const MEMORY_FILE = "symbols.json";
 const OWNER_FILE = "owner-symbol.json";
-// Read by OmegaExecutor 1.17+ (MQL5/Files/omega/trade_symbol.txt): the one extra name it may trade.
+// Read by OmegaExecutor 1.17+ (MQL5/Files/omega/trade_symbol.txt): since 1.19 a hint it tries first, under the same checks.
 export const EA_TRADE_SYMBOL_FILE = "trade_symbol.txt";
 const TRIAL_FILE = "symbol-trial.json";
 
@@ -68,7 +64,7 @@ export function serverKey(server) {
 export function candidateSymbols({ owner = null, learned = null, configured = null, exclude = [] } = {}) {
   const out = [];
   const skip = new Set(exclude.map((s) => String(s)));
-  for (const s of [owner, learned, configured, ...GOLD_SYMBOL_CANDIDATES]) {
+  for (const s of [owner, learned, configured, ...CHART_BOOTSTRAP_SYMBOLS]) {
     if (!isSafeSymbol(s) || skip.has(s) || out.includes(s)) continue;
     out.push(s);
   }
