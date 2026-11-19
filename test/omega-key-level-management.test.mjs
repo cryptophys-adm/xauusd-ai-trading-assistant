@@ -115,7 +115,7 @@ test("P9. OmegaExecutor no longer moves stops by itself: its local break-even an
   const ea = readFileSync(new URL("../ea/mt5/OmegaExecutor.mq5", import.meta.url), "utf8");
   assert.match(ea, /input bool\s+AutoBreakEvenEnabled\s+= false;/);
   assert.match(ea, /input bool\s+TrailingStopEnabled\s+= false;/);
-  assert.match(ea, /#property version\s+"1\.1[1-9]"/, "1.11 turned them off; later versions keep them off");
+  assert.match(ea, /#property version\s+"1\.(1[1-9]|[2-9][0-9])"/, "1.11 turned them off; later versions keep them off");
 });
 
 test("P10. production 13:00 UTC replayed: the scalp target is the nearest key level 0.25 ATR ahead, qualified zones included", () => {

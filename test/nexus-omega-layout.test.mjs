@@ -18,7 +18,7 @@ test("OL1 the MT5 layout: Market Watch and the spec in a left column beside the 
 });
 
 test("OL2 the header: dynamic broker and DEMO/LIVE, the profile with the applied risk; algo shown once", () => {
-  assert.match(ui, /const brokerLabel = br\.server && account\?\.spec_status === "validated" && brokerWord \? brokerWord : "broker unknown";/);
+  assert.match(ui, /const brokerLabel = account\?\.spec_status === "validated" \? brokerName : "broker unknown";/);
   assert.match(ui, /\{brokerLabel\} · \{tradeTag\} · \{br\.symbol \|\| "—"\}/);
   assert.match(ui, /\{account\.profile_label\} · \{appliedRisk \?\? "—"\}%/);
   assert.equal((ui.match(/Algo Trading: \{/g) || []).length, 1, "the toolbar toggle only");
