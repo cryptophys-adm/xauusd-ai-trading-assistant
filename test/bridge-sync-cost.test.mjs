@@ -35,7 +35,7 @@ const SPKI = publicKey.export({ type: "spki", format: "der" }).toString("base64"
 const KID = createHash("sha256").update(Buffer.from(SPKI, "base64")).digest("hex").slice(0, 16);
 const T0 = Date.parse("2026-11-11T10:00:00Z");
 const state = (over = {}) => ({
-  connected: true, trade_allowed: true, server: "Monex-Demo", received_ms: T0,
+  connected: true, trade_allowed: true, server: "AnyBroker-Demo", received_ms: T0,
   account: { trade_mode: "demo", currency: "USD", balance: 10_000, equity: 10_000 },
   symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, bid: 4101, ask: 4101.2, spread_points: 20 },
   positions: [],

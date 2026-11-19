@@ -227,8 +227,8 @@ test("AS11 executorFrom keeps the 1.15 fields, checked, and drops anything malfo
 });
 
 test("AS12 OmegaExecutor 1.15 reports the spec and is the last gate: it refuses with a reason, never resizes, never moves a stop", () => {
-  assert.match(ea, /#property version\s+"1\.19"/);
-  assert.ok(ea.includes('const string OMEGA_EXECUTOR_VERSION = "1.19";'));
+  assert.match(ea, /#property version\s+"1\.20"/);
+  assert.ok(ea.includes('const string OMEGA_EXECUTOR_VERSION = "1.20";'));
   // The spec in state.json.
   for (const field of ["leverage", "margin_mode", "margin_free", "login_hash", "freeze_level_points", "trade_mode", "margin_per_lot"]) {
     assert.ok(ea.includes(`\\"${field}\\":`), field);
@@ -324,7 +324,7 @@ test("AS17 the profile's total open risk caps or stops a new entry; the lot is n
   assert.equal(openOf(free).volume, 0.4, "nothing open: the risk per trade decides");
 });
 
-test("AS18 unlimited leverage (FxPro demo 1:2,000,000,000): a margin rounded to 0 is valid; only a failing OrderCalcMargin refuses", () => {
+test("AS18 unlimited leverage (a demo with 1:2,000,000,000): a margin rounded to 0 is valid; only a failing OrderCalcMargin refuses", () => {
   const unlimited = executor({ version: "1.16", acct: { leverage: 2_000_000_000 }, sym: { margin_per_lot: 0 } });
   assert.equal(specProblem(unlimited), null, "margin per lot 0 is a valid spec");
   assert.equal(specProblem(executor({ version: "1.16", sym: { margin_per_lot: -1 } })), "margin_per_lot");
@@ -379,7 +379,8 @@ test("AS20 two accounts on one server (2026-11-19): the connected one is found b
   for (const [action, value] of [["reset", null], ["profile", "safe"], ["ceiling", "safe"], ["agent_mode", "approval"]]) {
     const wrong = await setAccountProfile(env, { account_ref: refCent, action, value }, { now: NOW + 130_000 });
     assert.equal(wrong.ok, false, action);
-    assert.equal(wrong.error, `USX account · GoldOne (${refCent}) is not the connected account: the controls act on the connected account only`);
+    assert.equal(wrong.error, "USX account · GoldOne is not the connected account: the controls act on the connected account only");
+    assert.ok(!wrong.error.includes(refCent), "no internal id in what the owner reads");
   }
   // Each refusal is recorded, so the owner's attempt can be traced (action, account, reason; never a login).
   const refused = env.DB.raw.prepare("SELECT detail FROM omega_events WHERE action = 'profile_control_refused' ORDER BY id").all().map((r) => JSON.parse(r.detail));

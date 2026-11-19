@@ -62,6 +62,7 @@ export const AGENT_COLUMNS = [
   ["last_seen_ms", "INTEGER"],         // the last bridge sync of this account (written at most every LAST_SEEN_EVERY_MS)
   ["onboard_balance", "REAL"],         // the balance when Omega first saw the account (the onboarding day's daily-loss reference)
   ["upgrade_block_reason", "TEXT"],    // why upgrade_block_until_ms is set: kill_switch or daily_loss_limit
+  ["upgrade_block_evidence", "TEXT"],  // a daily-loss block's evidence { day, reference, equity, limit_pct }, re-checked each tick
   // The owner's reset over today's daily loss stop (owner 2026-11-18, "Reset + buka kunci hari ini"): { day, ref,
   // at_ms, actor }. For that UTC day the daily loss counts from `ref` (the equity at the reset); the next day ignores it.
   ["day_ref_override", "TEXT"],
@@ -280,7 +281,7 @@ export async function syncAccount(db, executor, { settings = null, now = Date.no
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'system', ?, ?, ?, ?)`)
       .bind(ref, spec.server, legacy ? 1 : 0, hash, JSON.stringify(spec), status, problem, now, problem ? null : now, profile, profile, agentMode, custom, now, now, now, Number.isFinite(onboard) && onboard > 0 ? onboard : null).run();
     await say("account_seen", { account_ref: ref, profile, ceiling: profile, agent_mode: agentMode, spec_hash: hash, spec_problem: problem },
-      `Omega: account ${ref} seen, profile ${PROFILES[profile].label}${problem ? `; its broker spec is not usable (${problem}), no new entries` : "; broker spec validated"}.`);
+      `Omega: a new account seen (${accountIdentity(spec).label}${executor?.account?.company ? ` at ${String(executor.account.company).slice(0, 48)}` : ""}), profile ${PROFILES[profile].label}${problem ? `; its broker spec is not usable (${problem}), no new entries` : "; broker spec validated"}.`);
     return { account_ref: ref, spec_status: status, spec_problem: problem, profile, ceiling: profile, agent_mode: agentMode, row: await db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(ref).first() };
   }
 
@@ -292,7 +293,7 @@ export async function syncAccount(db, executor, { settings = null, now = Date.no
     await db.prepare("UPDATE omega_accounts SET server = ?, spec_hash = ?, spec = ?, spec_status = ?, spec_problem = ?, spec_since_ms = ?, spec_validated_ms = NULL WHERE account_ref = ?")
       .bind(spec.server, hash, JSON.stringify(spec), status, problem, now, ref).run();
     await say("spec_changed", { account_ref: ref, from: row.spec_hash ?? null, to: hash, changed, problem },
-      `Omega: the broker spec of ${ref} changed (${changed.join(", ") || "first report"}). New entries wait until it validates; open positions are still managed.`);
+      `Omega: the broker spec of the account (${accountIdentity(spec).label}) changed (${changed.join(", ") || "first report"}). New entries wait until it validates; open positions are still managed.`);
   } else if (problem && status !== "invalid") {
     status = "invalid";
     // The same spec with a field the terminal briefly cannot give (a tick value of 0 while it reconnects): an event,
@@ -306,7 +307,7 @@ export async function syncAccount(db, executor, { settings = null, now = Date.no
     status = "validated";
     await db.prepare("UPDATE omega_accounts SET spec_status = 'validated', spec_problem = NULL, spec_validated_ms = COALESCE(spec_validated_ms, ?) WHERE account_ref = ?").bind(now, ref).run();
     const firstTime = row.spec_validated_ms == null;
-    await say("spec_validated", { account_ref: ref, spec_hash: hash }, firstTime ? `Omega: the broker spec of ${ref} is validated. New entries may open again.` : null);
+    await say("spec_validated", { account_ref: ref, spec_hash: hash }, firstTime ? `Omega: the broker spec of the account (${accountIdentity(spec).label}) is validated. New entries may open again.` : null);
   }
   // When the account was last seen on Omega (the owner's "seen before" line), one write per LAST_SEEN_EVERY_MS.
   if (!(Number(row.last_seen_ms) > 0) || now - Number(row.last_seen_ms) >= LAST_SEEN_EVERY_MS || now < Number(row.last_seen_ms)) {
@@ -395,10 +396,10 @@ export function withDayOp(row, { amount, at_ms }) {
  * symbol is the broker's own.
  */
 export function brokerLabel(executor, { validated = false } = {}) {
+  // The broker as the terminal names itself (OmegaExecutor 1.19 ACCOUNT_COMPANY); never the server's name (owner
+  // 2026-11-19: nothing named after a server). An older EA reports none: "MT5 broker".
   const company = typeof executor?.account?.company === "string" ? executor.account.company.trim().slice(0, 48) : "";
-  const server = typeof executor?.server === "string" ? executor.server.trim().slice(0, 48) : "";
-  const name = company || server;
-  const broker = validated && name ? name : "broker unknown";
+  const broker = validated ? (company || "MT5 broker") : "broker unknown";
   const mode = { demo: "DEMO", real: "LIVE", contest: "CONTEST" }[executor?.account?.trade_mode] ?? "?";
   const symbol = typeof executor?.symbol?.name === "string" && executor.symbol.name ? ` · ${executor.symbol.name}` : "";
   return `${broker} (${mode})${symbol}`;

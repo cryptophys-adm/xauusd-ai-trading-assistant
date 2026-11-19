@@ -33,11 +33,11 @@ test("symbols: candidate order and per-server memory", () => {
     assert.ok(!candidateSymbols({ configured: "bad\nname" }).includes("bad\nname"));
 
     const stateDir = path.join(dir, "state");
-    assert.equal(learnedSymbol(stateDir, "Monex-Demo"), null);
-    rememberSymbol(stateDir, "Monex-Demo", "XAUUSD.m");
-    rememberSymbol(stateDir, "FxPro-MT5 Demo", "GOLD");
-    assert.equal(learnedSymbol(stateDir, "monex-demo"), "XAUUSD.m");
-    assert.equal(learnedSymbol(stateDir, " FxPro-MT5 Demo "), "GOLD");
+    assert.equal(learnedSymbol(stateDir, "AnyBroker-Demo"), null);
+    rememberSymbol(stateDir, "AnyBroker-Demo", "XAUUSD.m");
+    rememberSymbol(stateDir, "OtherBroker-Server Demo", "GOLD");
+    assert.equal(learnedSymbol(stateDir, "anybroker-demo"), "XAUUSD.m");
+    assert.equal(learnedSymbol(stateDir, " OtherBroker-Server Demo "), "GOLD");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -47,7 +47,7 @@ test("ini: setStartupSymbol changes only [StartUp] Symbol", () => {
   const ini = "[Common]\r\nLogin=1\r\n[StartUp]\r\nExpert=OmegaExecutor\r\nSymbol=XAUUSD.m\r\nPeriod=M1\r\n";
   assert.equal(setStartupSymbol(ini, "XAUUSD"), ini.replace("Symbol=XAUUSD.m", "Symbol=XAUUSD"));
   assert.throws(() => setStartupSymbol(ini, "X\nY"));
-  const applied = applyCredentials("[StartUp]\nSymbol=XAUUSD.m\n", { server: "FxPro-MT5 Demo", login: "1", password: "p", takeStartup: true, symbol: "GOLD" });
+  const applied = applyCredentials("[StartUp]\nSymbol=XAUUSD.m\n", { server: "OtherBroker-Server Demo", login: "1", password: "p", takeStartup: true, symbol: "GOLD" });
   assert.match(applied, /^Symbol=GOLD$/m);
   assert.match(applied, /\[Charts\]\nProfileLast=Omega/);
 });
@@ -85,7 +85,7 @@ function makeDaemon(dir, { nowRef, execCalls, logs, syncBodies = [] }) {
 // A state.json of an EA 1.14 trading verified USD gold on `server`.
 const usdGold = (server, name) => ({ connected: true, server, symbol: { name, currency_profit: "USD", contract_size: 100 }, symbol_error: null });
 
-function setup(h, { server = "FxPro-MT5 Demo", symbol = "XAUUSD.m", trial = true, nowMs }) {
+function setup(h, { server = "OtherBroker-Server Demo", symbol = "XAUUSD.m", trial = true, nowMs }) {
   fs.mkdirSync(h.stateDir, { recursive: true });
   fs.writeFileSync(path.join(h.stateDir, "applied.json"), JSON.stringify({ version: 57, server, applied_ms: nowMs }));
   fs.writeFileSync(h.terminalIni, `[Common]\nServer=${server}\n[StartUp]\nExpert=OmegaExecutor\nSymbol=${symbol}\nPeriod=M1\n`);
@@ -118,7 +118,7 @@ test("daemon: a chart symbol the server lacks is replaced by the next candidate 
     await h.daemon.tick();
     assert.equal(execCalls.length, 0);
 
-    // No EA after the window: next candidate, terminal restarted once (FxPro has neither XAUUSD.m nor XAUUSD).
+    // No EA after the window: next candidate, terminal restarted once (this server has neither XAUUSD.m nor XAUUSD).
     nowRef.ms += 1500;
     await h.daemon.tick();
     assert.deepEqual(execCalls, ["systemctl restart mt5-terminal.service"]);
@@ -130,17 +130,17 @@ test("daemon: a chart symbol the server lacks is replaced by the next candidate 
     assert.match(fs.readFileSync(h.terminalIni, "utf8"), /^Symbol=GOLD$/m);
 
     // A state.json of another server never confirms.
-    fs.writeFileSync(path.join(h.mt5FilesDir, "state.json"), JSON.stringify(usdGold("Monex-Demo", "XAUUSD.m")));
+    fs.writeFileSync(path.join(h.mt5FilesDir, "state.json"), JSON.stringify(usdGold("AnyBroker-Demo", "XAUUSD.m")));
     nowRef.ms += 100;
     await h.daemon.tick();
     assert.equal(readTrial(h.stateDir).symbol, "GOLD");
 
     // The EA comes up for this server on verified USD gold: the symbol is remembered and the trial ends.
-    fs.writeFileSync(path.join(h.mt5FilesDir, "state.json"), JSON.stringify(usdGold("FxPro-MT5 Demo", "GOLD")));
+    fs.writeFileSync(path.join(h.mt5FilesDir, "state.json"), JSON.stringify(usdGold("OtherBroker-Server Demo", "GOLD")));
     nowRef.ms += 100;
     await h.daemon.tick();
     assert.equal(readTrial(h.stateDir), null);
-    assert.equal(learnedSymbol(h.stateDir, "FxPro-MT5 Demo"), "GOLD");
+    assert.equal(learnedSymbol(h.stateDir, "OtherBroker-Server Demo"), "GOLD");
     assert.ok(logs.some((l) => l.includes('"symbol_confirmed"')));
     assert.equal(execCalls.length, 2);
   } finally {
@@ -211,16 +211,16 @@ test("daemon: a proven symbol is never forgotten or cycled away while the termin
     const logs = [];
     const h = makeDaemon(dir, { nowRef, execCalls, logs });
     setup(h, { symbol: "GOLD", trial: false, nowMs: nowRef.ms });
-    rememberSymbol(h.stateDir, "FxPro-MT5 Demo", "GOLD");
+    rememberSymbol(h.stateDir, "OtherBroker-Server Demo", "GOLD");
     // No EA state for a long time (maintenance, a slow start): no trial, no restart for a symbol, no forgetting.
     for (let i = 0; i < 10; i++) { nowRef.ms += 1500; await h.daemon.tick(); }
-    assert.equal(learnedSymbol(h.stateDir, "FxPro-MT5 Demo"), "GOLD");
+    assert.equal(learnedSymbol(h.stateDir, "OtherBroker-Server Demo"), "GOLD");
     assert.equal(readTrial(h.stateDir), null);
     assert.ok(!logs.some((l) => l.includes('"symbol_trial_')));
     assert.match(fs.readFileSync(h.terminalIni, "utf8"), /^Symbol=GOLD$/m);
     // An explicit reset clears it.
-    forgetSymbol(h.stateDir, "FxPro-MT5 Demo");
-    assert.equal(learnedSymbol(h.stateDir, "FxPro-MT5 Demo"), null);
+    forgetSymbol(h.stateDir, "OtherBroker-Server Demo");
+    assert.equal(learnedSymbol(h.stateDir, "OtherBroker-Server Demo"), null);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -236,7 +236,7 @@ test("daemon: a login failure stops the symbol trial, and it stays stopped inste
     setup(h, { symbol: "XAUUSD", nowMs: nowRef.ms });
     const logsDir = path.join(h.terminalDir, "logs");
     fs.mkdirSync(logsDir, { recursive: true });
-    fs.writeFileSync(path.join(logsDir, "20261116.log"), Buffer.from("AB\t0\t23:15:05.933\tNetwork\t'1': authorization on FxPro-MT5 Demo failed (Invalid account)\r\n", "utf16le"));
+    fs.writeFileSync(path.join(logsDir, "20261116.log"), Buffer.from("AB\t0\t23:15:05.933\tNetwork\t'1': authorization on OtherBroker-Server Demo failed (Invalid account)\r\n", "utf16le"));
 
     nowRef.ms += 1500;
     await h.daemon.tick();

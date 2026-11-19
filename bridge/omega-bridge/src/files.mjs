@@ -233,17 +233,29 @@ export function writeIntents(dir, intents = [], { fs = nodeFs, now = () => Date.
 }
 
 /**
- * Atomically write `reference.txt` (ASCII "<price>;<written_ms>"): the reference gold price in USD from the server, which
- * OmegaExecutor 1.19+ uses to find gold on any broker by its price, whatever the broker names it (owner 2026-11-19).
- * A missing or non-positive price writes nothing; the EA drops a reference older than 15 minutes.
+ * Write the reference gold price for OmegaExecutor (MQL5/Files/omega/reference.txt), atomically. First line
+ * `<price>;<ms>`: since 1.6.0 the price's own time (the close of its 5-minute bar, `reference.market_ms`), so the EA
+ * ages the price and not the file; then one line `<close_ms>;<close>` per past H4 close of the reference, oldest
+ * first, for the EA's price-path check (OmegaExecutor 1.20). The server sends no reference while its feed runs on the
+ * broker's own bars (the MT5 fallback); then nothing is written and the EA's copy ages out. An EA before 1.20 reads the
+ * first line only. Returns the path written, or null when there is no price.
+ *
+ * @param {string} dir
+ * @param {{ price?: number, market_ms?: number, closes?: Array<[number, number]> } | number | null} ref
  */
-export function writeReferencePrice(dir, price, { fs = nodeFs, now = () => Date.now() } = {}) {
-  if (typeof price !== "number" || !Number.isFinite(price) || !(price > 0)) return null;
+export function writeReferencePrice(dir, ref, { fs = nodeFs, now = () => Date.now() } = {}) {
+  const r = typeof ref === "number" ? { price: ref } : ref;
+  const price = Number(r?.price);
+  if (!Number.isFinite(price) || !(price > 0)) return null;
+  const at = Number(r?.market_ms) > 0 ? Math.trunc(Number(r.market_ms)) : now();
+  const closes = (Array.isArray(r?.closes) ? r.closes : [])
+    .filter((c) => Array.isArray(c) && Number(c[0]) > 0 && Number(c[1]) > 0).slice(-48)
+    .map(([t, c]) => `${Math.trunc(Number(t))};${Number(Number(c).toFixed(5))}`);
   fs.mkdirSync(dir, { recursive: true });
-  const writtenMs = now();
+  const stamp = now();
   const targetPath = path.join(dir, "reference.txt");
-  const tmpPath = path.join(dir, `reference.txt.tmp.${process.pid}.${writtenMs}`);
-  fs.writeFileSync(tmpPath, `${Number(price.toFixed(5))};${writtenMs}\n`, { encoding: "ascii" });
+  const tmpPath = path.join(dir, `reference.txt.tmp.${process.pid}.${stamp}`);
+  fs.writeFileSync(tmpPath, [`${Number(price.toFixed(5))};${at}`, ...closes].join("\n") + "\n", { encoding: "ascii" });
   fs.renameSync(tmpPath, targetPath);
   return targetPath;
 }

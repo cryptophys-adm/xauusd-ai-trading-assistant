@@ -31,7 +31,7 @@ import {
 } from "./symbols.mjs";
 import { DEFAULT_STATE_DIR, loadOrCreateKeyPair } from "./keys.mjs";
 
-export const BRIDGE_VERSION = "1.5.0";
+export const BRIDGE_VERSION = "1.6.0";
 export const DEFAULT_OMEGA_URL = "https://nexus.cryptophys.work/omega";
 export const DEFAULT_TERMINAL_INI = "/opt/mt5-ingestion-gateway/config/terminal_gateway.ini";
 export const DEFAULT_TERMINAL_SERVICE = "mt5-terminal.service";
@@ -745,7 +745,8 @@ export function createDaemon(options = {}) {
     const intents = Array.isArray(payload?.intents) ? payload.intents : [];
     writeIntents(config.omegaFilesDir, intents, { fs, now });
     // 1.5.0: the reference gold price for OmegaExecutor 1.19+ (gold found by its price on any broker).
-    try { writeReferencePrice(config.omegaFilesDir, payload?.reference_price, { fs, now }); } catch { /* the EA keeps the last one for 15 minutes */ }
+    // The reference (server 2026-11-19+: its price, the price's time and past H4 closes); an older server sends the price only.
+    try { writeReferencePrice(config.omegaFilesDir, payload?.reference ?? payload?.reference_price, { fs, now }); } catch { /* the EA's copy ages out */ }
     // The server's corpus cursor: the newest broker minute it kept (null while the Corpus Oracle is off).
     if (typeof payload?.corpus_cursor_ms === "number" && Number.isFinite(payload.corpus_cursor_ms)) corpusCursorMs = payload.corpus_cursor_ms;
     if (payload?.corpus_macro_cursors && typeof payload.corpus_macro_cursors === "object") {

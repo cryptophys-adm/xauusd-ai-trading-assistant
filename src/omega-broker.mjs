@@ -19,7 +19,8 @@ import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
-import { goldCheckOf, goldSymbolText, accountMoney, moneyText, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText } from "./gold-symbol.mjs";
+import { goldCheckOf, goldSymbolText, accountMoney, moneyText, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText, referenceFrom } from "./gold-symbol.mjs";
+import { fallbackSinceMs } from "./feed.mjs";
 import { PROBATION, PROBATION_KEY, probationFrom, probationVerdict } from "./htf-cells.mjs";
 import { delegationsForSync, withDelegated, delegatedStopIntents, markDelegatedIntents, plannerIds, hitlSupported, readDelegations, HITL_EA_MIN_VERSION } from "./omega-hitl.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
@@ -422,7 +423,7 @@ export function bridgeSymbolFrom(v) {
 }
 
 /** The executor state as the bridge reports it; anything malformed is null (the engine then waits). */
-export function executorFrom(state, { ownerUnitsPerUsd = null } = {}) {
+export function executorFrom(state, { ownerUnitsPerUsd = null, stored = false } = {}) {
   if (!state || typeof state !== "object" || Array.isArray(state)) return null;
   const n = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
   const a = state.account ?? {}, s = state.symbol ?? {};
@@ -520,6 +521,17 @@ export function executorFrom(state, { ownerUnitsPerUsd = null } = {}) {
       closed_ms: n(d?.closed_ms)
     }))
   };
+  // The state D1 keeps (omega_bridge.state) is this function's own output, already in US dollars. Read back with
+  // `stored`, it keeps the money and tick figures it was converted with and is never divided again (orchestrator review
+  // of #477: a cent account with the owner's value and no trade would otherwise be divided by 100 twice).
+  if (stored) {
+    const m = a.money && typeof a.money === "object" ? a.money : null;
+    out.account.money = m ? { ...m } : null;
+    out.account.cent = a.cent === true;
+    out.symbol.tick_value_reported = n(s.tick_value_reported);
+    out.symbol.tick_value_problem = typeof s.tick_value_problem === "string" ? s.tick_value_problem : null;
+    return out;
+  }
   return toUsd(out, { ownerUnitsPerUsd });
 }
 
@@ -800,7 +812,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       const dailyPct = effectiveLimits(account.row.profile, settings ?? {}).max_daily_loss_pct ?? settings?.max_daily_loss_pct;
       // The profile council (src/profile-council.mjs) does not run here: an upgrade waits for the cron, and a soft
       // downgrade under OMEGA_PROFILE_COUNCIL_DOWNGRADE "on" waits for its review with new entries held.
-      const step = await runProfileAgent(db, account.row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), onboardingDay: dayExec !== executor || onboardingDayRef(account.row, now) != null, now, downgradeCouncil: downgradeCouncilOn(env),
+      const step = await runProfileAgent(db, account.row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), dailyRef: dayExec?.account?.day_start_balance ?? null, dailyPct, onboardingDay: dayExec !== executor || onboardingDayRef(account.row, now) != null, now, downgradeCouncil: downgradeCouncilOn(env),
         log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
       if (step.status === "changed") account = { ...account, profile: step.change.to };
       if (step.review_pending === true) account = { ...account, review_pending: true };
@@ -914,8 +926,15 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
 
   // The reference gold price in USD (the feed's last closed 5-minute close), for OmegaExecutor 1.19+ to find gold on any
   // broker by its price (bridge 1.5.0+ writes it to MQL5/Files/omega/reference.txt). Null when the feed has none.
-  const referencePrice = Number(signal?.market_price) > 0 ? Number(signal.market_price) : null;
-  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, reference_price: referencePrice, ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
+  // The reference the EA finds gold by: the feed's price and its time, with past 4h closes; none while the feed runs
+  // on the broker's own bars (the MT5 fallback). `reference_price` stays for bridge 1.5.0.
+  let reference = null;
+  try {
+    const h4 = JSON.parse((await env.SIGNAL_CACHE?.get?.("market-data:v2:series:OANDA:XAUUSD|4h")) || "null");
+    reference = referenceFrom({ price: signal?.market_price, marketMs: signal?.market_ms, h4, fallbackSince: await fallbackSinceMs(env), now });
+  } catch { reference = null; }
+  const referencePrice = reference?.price ?? null;
+  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, reference_price: referencePrice, reference, ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
 }
 
 // ---------------------------------------------------------------- overview (for the page)
@@ -958,7 +977,7 @@ export async function profileAgentTick(env, { now = Date.now(), call = undefined
   const killed = control?.mode === "killed" || String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
   const dailyPct = effectiveLimits(row?.profile, settings ?? {}).max_daily_loss_pct ?? settings?.max_daily_loss_pct;
   const dayExec = dailyLossExecutor(executor, row, now);
-  return runProfileAgent(db, row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), onboardingDay: onboardingDayRef(row, now) != null, withEvidence: true, now,
+  return runProfileAgent(db, row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), dailyRef: dayExec?.account?.day_start_balance ?? null, dailyPct, onboardingDay: onboardingDayRef(row, now) != null, withEvidence: true, now,
     downgradeCouncil: downgradeCouncilOn(env), review: (r, change, { deals }) => reviewProfileChange(env, r, change, { executor, deals, now, call }),
     log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
 }
@@ -1092,6 +1111,8 @@ export async function brokerStatus(env, { now = Date.now() } = {}) {
     connected: Boolean(st?.connected === true && connection.status === "stored" && fresh),
     armed: settings.settings?.enabled === true,
     server: connection.status === "stored" ? (st?.server ?? connection.server ?? null) : null,
+    // The broker as the terminal names itself (OmegaExecutor 1.19 ACCOUNT_COMPANY): the pages' label, never the server.
+    broker: connection.status === "stored" ? (st?.account?.company ?? null) : null,
     positions: Array.isArray(st?.positions) ? st.positions.length : 0,
     synced_age_ms: b?.synced_ms ? now - Number(b.synced_ms) : null
   };
@@ -1223,7 +1244,7 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     engine: { env_enabled: engineEnvEnabled(env), ...settings.settings, settings_version: settings.version, updated_by: settings.updated_by, updated_ms: settings.updated_ms },
     // The owner's edits and delegation (owner 2026-11-19, src/omega-hitl.mjs): the delegated tickets, the toggle, and
     // whether the terminal's OmegaExecutor takes them (1.18+).
-    delegation: { ...(await readDelegations(db)), supported: hitlSupported(executorFrom(st)), ea_min_version: HITL_EA_MIN_VERSION },
+    delegation: { ...(await readDelegations(db)), supported: hitlSupported(executorFrom(st, { stored: true })), ea_min_version: HITL_EA_MIN_VERSION },
     // Reversal probation (src/htf-cells.mjs): the owner's switch and the reverted cells.
     probation: { ...probationFrom((await env.SIGNAL_CACHE?.get?.(PROBATION_KEY)) ?? null), risk_scale: PROBATION.risk_scale, revert_last_n: PROBATION.revert_last_n, agents: PROBATION.agents },
     connection: { version: connection.version, status: connection.status, server: connection.server, trade_symbol: connection.trade_symbol, units_per_usd: connection.units_per_usd, updated_by: connection.updated_by, updated_ms: connection.updated_ms },
@@ -1232,6 +1253,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       terminal_connected: Boolean(st?.connected === true && connection.status === "stored" && (now - Number(st?.received_ms || 0) < 60_000)),
       trade_allowed: Boolean(st?.trade_allowed === true && connection.status === "stored" && (now - Number(st?.received_ms || 0) < 60_000)),
       terminal_error: st?.connected !== true ? (st?.terminal_error ?? termErrNoState ?? null) : null,
+      // The broker as the terminal names itself (OmegaExecutor 1.19 ACCOUNT_COMPANY); null before 1.19.
+      broker: st?.account?.company ?? null,
       // The EA's self-report (1.12+): its version, its local break-even and trailing, and what Omega makes of it.
       executor: executorStatus(st?.executor),
       // The entry gate on the EA version (OMEGA_EA_VERSION_GATE, off until OmegaExecutor 1.15 runs on the VPS).
@@ -1311,8 +1334,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
  * to the open Omega pages after each sync carries these instead (owner 2026-11-14: realtime chart, no added
  * cost). Nothing is written. Null for a state without a quote.
  */
-export function liveBridgeFields(state, { now = Date.now() } = {}) {
-  const st = executorFrom(state);
+export function liveBridgeFields(state, { now = Date.now(), ownerUnitsPerUsd = null } = {}) {
+  const st = executorFrom(state, { ownerUnitsPerUsd });
   if (!st || typeof st?.symbol?.bid !== "number") return null;
   return {
     bid: st.symbol.bid ?? null, ask: st.symbol.ask ?? null, spread_points: st.symbol.spread_points ?? null,

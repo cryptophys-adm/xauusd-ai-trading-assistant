@@ -109,9 +109,9 @@ export default function AppShell({ current, children }: { current: string; child
           <div className="ml-auto hidden items-center gap-2 sm:flex">
             <a href="/#/omega" onClick={(e) => navigate(e, "/#/omega")}
               className={`chip transition ${current === "omega" ? "border-cyan-400/40 bg-cyan-400/20 text-cyan-200" : omegaStatus?.connected ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300 hover:border-emerald-400/50 hover:text-white" : "border-cyan-400/20 bg-cyan-400/10 text-cyan-300 hover:border-cyan-400/40 hover:text-white"}`}
-              title={omegaStatus?.connected ? `MetaTrader 5 live: ${omegaStatus.server || "Bridge connected"} (${omegaStatus.armed ? "Armed" : "Disarmed"}, ${omegaStatus.positions} pos)` : "MetaTrader 5 live execution bridge and terminal (Standby)"}>
+              title={omegaStatus?.connected ? `MetaTrader 5 live: ${omegaStatus.broker || "Bridge connected"} (${omegaStatus.armed ? "Armed" : "Disarmed"}, ${omegaStatus.positions} pos)` : "MetaTrader 5 live execution bridge and terminal (Standby)"}>
               <Zap className={`h-3 w-3 ${omegaStatus?.connected ? "text-emerald-300" : "text-cyan-300"}`} />
-              <span>{current === "omega" ? "MT5 Live" : omegaStatus?.connected ? `Omega: ${omegaStatus.server || "Live"}${omegaStatus.positions > 0 ? ` (${omegaStatus.positions})` : ""}` : "Omega: Standby"}</span>
+              <span>{current === "omega" ? "MT5 Live" : omegaStatus?.connected ? `Omega: ${omegaStatus.broker || "Live"}${omegaStatus.positions > 0 ? ` (${omegaStatus.positions})` : ""}` : "Omega: Standby"}</span>
             </a>
             <span className="chip border-emerald-400/20 bg-emerald-400/10 text-emerald-300"><ShieldCheck className="h-3 w-3" />{current === "omega" ? "Execution · Access protected" : "Advisory only"}</span>
             <span className={`chip ${live ? "border-amber-400/20 bg-amber-400/10 text-amber-200" : "border-rose-400/20 bg-rose-400/10 text-rose-300"}`}>

@@ -110,9 +110,17 @@ export function measuredUnitsPerUsd({ positions = [], deals = [], symbol = null 
 
 /**
  * Pure: the account's money as Omega reads it: { currency, units_per_usd, source, problem }. source is "usd" (the
- * account currency is USD), "measured" (its own trades), "owner" (the value the owner gave, until a trade measures
+ * account currency is USD), "measured" (its own trades), "owner_verified" (the owner's value, which the trades confirm),
+ * "owner" (the value the owner gave, until a trade measures
  * it) or null; problem is null, "money_unverified" (no value) or "money_mismatch" (a measurement disagrees).
  */
+/** Pure: a measured ratio within 1% of 10^n (n = -3..6) is exactly 10^n; any other ratio (a currency's rate) is kept. */
+export function snapPowerOfTen(v) {
+  if (!fin(v) || !(v > 0)) return v;
+  const p = 10 ** Math.round(Math.log10(v));
+  return Math.abs(v - p) <= p * 0.01 && p >= 1e-3 && p <= 1e6 ? p : v;
+}
+
 export function accountMoney({ currency, positions = [], deals = [], symbol = null, ownerUnitsPerUsd = null } = {}) {
   const cur = typeof currency === "string" ? currency.trim() : "";
   const measured = measuredUnitsPerUsd({ positions, deals, symbol });
@@ -124,7 +132,11 @@ export function accountMoney({ currency, positions = [], deals = [], symbol = nu
   }
   if (measured) {
     if (owner && off(measured.units_per_usd, owner)) return { currency: cur || null, units_per_usd: measured.units_per_usd, source: "measured", owner, problem: "money_mismatch" };
-    return { currency: cur || null, units_per_usd: measured.units_per_usd, source: "measured", samples: measured.samples, problem: null };
+    // Converted with an exact number (orchestrator review of #477): the owner's value when the measurement agrees with it
+    // (the measurement verifies, the declared value converts); otherwise a measurement within 1% of a power of ten is
+    // that power (a cent account is 100 by construction, a median of 99.7 would scale every amount by 0.3%).
+    if (owner) return { currency: cur || null, units_per_usd: owner, source: "owner_verified", measured: measured.units_per_usd, samples: measured.samples, problem: null };
+    return { currency: cur || null, units_per_usd: snapPowerOfTen(measured.units_per_usd), source: "measured", measured: measured.units_per_usd, samples: measured.samples, problem: null };
   }
   if (owner) return { currency: cur || null, units_per_usd: owner, source: "owner", problem: null };
   return { currency: cur || null, units_per_usd: null, source: null, problem: "money_unverified" };
@@ -183,5 +195,25 @@ export function moneyText(m) {
   if (m.problem === "money_unverified") return `${m.currency ?? "The account currency"} is not USD and the account has no trade yet to measure it against the dollar: set its value with the connection (e.g. 100 for a cent account). No new entries.`;
   if (m.problem === "money_mismatch") return `${m.currency}: the account's trades measure ${m.measured ?? m.units_per_usd} a dollar, not ${m.source === "usd" ? 1 : m.owner}. No new entries.`;
   if (m.source === "usd") return "USD";
-  return `${m.currency}: ${m.units_per_usd} a dollar (${m.source === "measured" ? `measured from ${m.samples ?? "its"} trades` : "the owner's value, until a trade measures it"})`;
+  const how = m.source === "measured" ? `measured from ${m.samples ?? "its"} trades`
+    : m.source === "owner_verified" ? `the owner's value, confirmed by ${m.samples ?? "its"} trades` : "the owner's value, until a trade measures it";
+  return `${m.currency}: ${m.units_per_usd} a dollar (${how})`;
+}
+
+/**
+ * The reference OmegaExecutor finds gold by (orchestrator review of #477): the feed's last 5-minute close and its time,
+ * and its last REFERENCE_H4_CLOSES closed 4-hour closes ([close_ms, close], oldest first) for the EA's price-path check.
+ * Null while the feed runs on the broker's own bars (the MT5 fallback, `fallbackSinceMs`): a broker is never checked
+ * against itself. Pure: `h4` is the cached 4h series ({ candles }), `fallbackSince` the fallback's start or null.
+ */
+export const REFERENCE_H4_CLOSES = 12;
+export function referenceFrom({ price, marketMs = null, h4 = null, fallbackSince = null, now = Date.now() } = {}) {
+  const p = Number(price), at = Number(marketMs);
+  if (!(p > 0)) return null;
+  if (fallbackSince != null && (!(at > 0) || at > fallbackSince)) return null;
+  const closes = (Array.isArray(h4?.candles) ? h4.candles : [])
+    .map((c) => [Date.parse(c?.close_time), Number(c?.close)])
+    .filter(([t, c]) => Number.isFinite(t) && t <= now && c > 0 && (fallbackSince == null || t <= fallbackSince))
+    .sort((a, b) => a[0] - b[0]).slice(-REFERENCE_H4_CLOSES);
+  return { price: p, market_ms: at > 0 ? at : null, closes };
 }

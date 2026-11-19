@@ -109,7 +109,8 @@ test("PC4 an upgrade the council rejects (or cannot review) leaves the profile, 
   assert.equal((await get()).profile, "conservative");
   assert.equal(events[0][0], "profile_upgrade_refused");
   assert.equal(lines.length, 1);
-  assert.match(lines[0], new RegExp(`account ${ref}: the profile council rejects Conservative → Aggressive; the profile stays Conservative`));
+  assert.match(lines[0], /Omega · USD account · GOLD: the profile council rejects Conservative → Aggressive; the profile stays Conservative/);
+  assert.ok(!lines[0].includes(ref), "never the internal id");
   assert.match(lines[0], /risk: reject, risk says reject/);
   const failing = await runProfileAgent(db, await get(), { executor: up, withEvidence: true, now: NOW + 60_000, review: async () => ({ id: null, kind: "upgrade", verdict: "skipped", reason: "one upgrade review a UTC day", seats: null }), notify: async (t) => lines.push(t) });
   assert.equal(failing.status, "refused");

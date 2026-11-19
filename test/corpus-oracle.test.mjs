@@ -28,22 +28,22 @@ const NOW = Date.parse("2026-11-11T10:00:30Z");
 const T0 = Date.parse("2026-11-11T09:00:00Z");
 const bar = (i, base = 4100) => [T0 + i * M, base + i * 0.1, base + i * 0.1 + 0.5, base + i * 0.1 - 0.5, base + i * 0.1 + 0.2, 120, 18];
 const bars = (n) => Array.from({ length: n }, (_, i) => bar(i));
-const EXECUTOR = { connected: true, server: "Monex-Live", symbol: { name: "XAUUSD" } };
-const CONN = { version: 3, status: "stored", server: "Monex-Live" };
-const corpus = (over = {}) => ({ server: "Monex-Live", symbol: "XAUUSD", timeframe: "M1", bars: bars(60), ...over });
+const EXECUTOR = { connected: true, server: "AnyBroker-Live", symbol: { name: "XAUUSD" } };
+const CONN = { version: 3, status: "stored", server: "AnyBroker-Live" };
+const corpus = (over = {}) => ({ server: "AnyBroker-Live", symbol: "XAUUSD", timeframe: "M1", bars: bars(60), ...over });
 
 test("only Omega's active broker, pair and user: anything else is refused, never stored", () => {
   assert.equal(corpusMode({}), "off");
   assert.equal(corpusMode({ CORPUS_ORACLE_MODE: "shadow" }), "shadow");
   const ok = validateCorpus(corpus(), { executor: EXECUTOR, connection: CONN, now: NOW });
   assert.equal(ok.ok, true);
-  assert.equal(ok.source, "mt5:monex-live:XAUUSD");
+  assert.equal(ok.source, "mt5:anybroker-live:XAUUSD");
   assert.equal(ok.bars.length, 60);
   assert.equal(ok.connection_version, 3);
   assert.equal(validateCorpus(corpus({ server: "Other-Live" }), { executor: EXECUTOR, connection: CONN, now: NOW }).error, "broker_mismatch");
   assert.equal(validateCorpus(corpus({ symbol: "XAGUSD" }), { executor: EXECUTOR, connection: CONN, now: NOW }).error, "pair_mismatch");
   assert.equal(validateCorpus(corpus(), { executor: EXECUTOR, connection: { ...CONN, status: "cleared" }, now: NOW }).error, "no_active_user");
-  assert.equal(validateCorpus(corpus(), { executor: { ...EXECUTOR, server: "Monex-Demo" }, connection: CONN, now: NOW }).error, "executor_broker_mismatch");
+  assert.equal(validateCorpus(corpus(), { executor: { ...EXECUTOR, server: "AnyBroker-Demo" }, connection: CONN, now: NOW }).error, "executor_broker_mismatch");
   assert.equal(validateCorpus(corpus({ timeframe: "M5" }), { executor: EXECUTOR, connection: CONN, now: NOW }).error, "timeframe_must_be_M1");
   // Open bar, unaligned time, broken OHLC, out of order: each refused bar is counted.
   const bad = validateCorpus(corpus({ bars: [bar(1), [T0 + 30_000, 1, 2, 0.5, 1.5, 1, 1], [T0 + 2 * M, 10, 9, 8, 9.5, 1, 1], bar(0), [NOW - (NOW % M), 1, 2, 0.5, 1, 1, 1]] }), { executor: EXECUTOR, connection: CONN, now: NOW });
@@ -73,7 +73,7 @@ test("ingest: off ignores; shadow stores once per minute, returns the cursor, co
   resetCorpusSchemaCacheForTests();
   const db = d1();
   db.raw.exec("CREATE TABLE omega_connection (id INTEGER PRIMARY KEY, version INTEGER, status TEXT, server TEXT)");
-  db.raw.prepare("INSERT INTO omega_connection (id, version, status, server) VALUES (1, 3, 'stored', 'Monex-Live')").run();
+  db.raw.prepare("INSERT INTO omega_connection (id, version, status, server) VALUES (1, 3, 'stored', 'AnyBroker-Live')").run();
   assert.deepEqual(await ingestCorpus({ DB: db }, corpus(), { executor: EXECUTOR, now: NOW }), { mode: "off", cursor_ms: null });
   const env = { DB: db, CORPUS_ORACLE_MODE: "shadow" };
   const first = await ingestCorpus(env, corpus(), { executor: EXECUTOR, now: NOW });
@@ -87,7 +87,7 @@ test("ingest: off ignores; shadow stores once per minute, returns the cursor, co
   const status = await corpusStatus({ ...env, SIGNAL_CACHE: { get: async (k) => (k.endsWith("|15m") ? JSON.stringify(tv) : null) } }, { now: NOW });
   assert.equal(status.mode, "shadow");
   assert.equal(status.feeds_local_lane, false, "phase 1 feeds no decision");
-  const s = status.sources.find((x) => x.source === "mt5:monex-live:XAUUSD");
+  const s = status.sources.find((x) => x.source === "mt5:anybroker-live:XAUUSD");
   assert.equal(s.bars_24h, 60);
   assert.equal(s.missing_minutes_24h, 0);
   assert.equal(s.m15_complete_24h, 4);
@@ -100,29 +100,29 @@ test("the bridge sync takes the corpus and answers the cursor; without it, the s
   resetOmegaBrokerSchemaForTests(); resetCorpusSchemaCacheForTests();
   const m = new Map();
   const env = { DB: d1(), SIGNAL_CACHE: { get: async (k) => m.get(k) ?? null, put: async (k, v) => { m.set(k, v); } }, OMEGA_ENGINE_ENABLED: "false", CORPUS_ORACLE_MODE: "shadow" };
-  const STATE = { connected: true, server: "Monex-Live", received_ms: NOW - 1000, account: { trade_mode: "demo", currency: "USD", balance: 1, equity: 1, day_start_balance: 1, day_realized_pl: 0 }, symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 }, positions: [] };
+  const STATE = { connected: true, server: "AnyBroker-Live", received_ms: NOW - 1000, account: { trade_mode: "demo", currency: "USD", balance: 1, equity: 1, day_start_balance: 1, day_realized_pl: 0 }, symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 }, positions: [] };
   const args = { state: STATE, results: [], publicKey: "A".repeat(64), kid: "0123456789abcdef", bridgeVersion: "1.0.0" };
   const plain = await bridgeSync(env, args, { now: NOW, signal: null });
   assert.equal(plain.ok, true);
   assert.equal(plain.corpus_cursor_ms, null);
-  await env.DB.prepare("UPDATE omega_connection SET version = 3, status = 'stored', server = 'Monex-Live', kid = '0123456789abcdef' WHERE id = 1").run();
+  await env.DB.prepare("UPDATE omega_connection SET version = 3, status = 'stored', server = 'AnyBroker-Live', kid = '0123456789abcdef' WHERE id = 1").run();
   const withCorpus = await bridgeSync(env, { ...args, corpus: corpus() }, { now: NOW, signal: null });
   assert.equal(withCorpus.ok, true);
   assert.equal(withCorpus.corpus_cursor_ms, T0 + 59 * M);
-  assert.equal(corpusSource(" Monex-Live ", "xauusd"), "mt5:monex-live:XAUUSD");
+  assert.equal(corpusSource(" AnyBroker-Live ", "xauusd"), "mt5:anybroker-live:XAUUSD");
 });
 
 test("the MT5 fallback reads the active source's bars after a time; the feed of a candle follows the 1m fallback mark", async () => {
   resetCorpusSchemaCacheForTests();
   const db = d1();
   db.raw.exec("CREATE TABLE omega_connection (id INTEGER PRIMARY KEY, version INTEGER, status TEXT, server TEXT)");
-  db.raw.prepare("INSERT INTO omega_connection (id, version, status, server) VALUES (1, 3, 'stored', 'Monex-Live')").run();
+  db.raw.prepare("INSERT INTO omega_connection (id, version, status, server) VALUES (1, 3, 'stored', 'AnyBroker-Live')").run();
   assert.deepEqual(await readCorpusBars({ DB: db }, { sinceMs: 0 }), { source: null, bars: [] }, "off reads nothing");
   const env = { DB: db, CORPUS_ORACLE_MODE: "shadow" };
   assert.deepEqual(await readCorpusBars(env), { source: null, bars: [] }, "nothing collected yet");
   await ingestCorpus(env, corpus(), { executor: EXECUTOR, now: NOW });
   const r = await readCorpusBars(env, { sinceMs: T0 + 49 * M, limit: 5 });
-  assert.equal(r.source, "mt5:monex-live:XAUUSD");
+  assert.equal(r.source, "mt5:anybroker-live:XAUUSD");
   assert.deepEqual(r.bars.map((b) => b.t), [50, 51, 52, 53, 54].map((i) => T0 + i * M), "after the time, oldest first, limited");
   assert.deepEqual(Object.keys(r.bars[0]).sort(), ["c", "h", "l", "o", "t", "v"]);
 
@@ -141,10 +141,10 @@ test("stage 2: the macro symbols' bars and the MQL5 calendar, only from Omega's 
   resetCorpusSchemaCacheForTests();
   const db = d1();
   db.raw.exec("CREATE TABLE omega_connection (id INTEGER PRIMARY KEY, version INTEGER, status TEXT, server TEXT)");
-  db.raw.prepare("INSERT INTO omega_connection (id, version, status, server) VALUES (1, 3, 'stored', 'Monex-Live')").run();
+  db.raw.prepare("INSERT INTO omega_connection (id, version, status, server) VALUES (1, 3, 'stored', 'AnyBroker-Live')").run();
   const env = { DB: db, CORPUS_ORACLE_MODE: "shadow" };
   const series = (base, n = 60, px = 1.1) => ({ base, symbol: `${base}.m`, bars: Array.from({ length: n }, (_, i) => [T0 + i * M, px, px + 0.001, px - 0.001, px + 0.0005, 10, 2]) });
-  const payload = { server: "Monex-Live", series: [series("XAGUSD", 60, 50), series("EURUSD"), series("BTCUSD"), series("eurusd")] };
+  const payload = { server: "AnyBroker-Live", series: [series("XAGUSD", 60, 50), series("EURUSD"), series("BTCUSD"), series("eurusd")] };
   const v = validateCorpusMacro(payload, { executor: EXECUTOR, connection: CONN, now: NOW });
   assert.deepEqual(v.series.map((s) => s.base), ["XAGUSD", "EURUSD"]);
   assert.equal(v.refused_series, 2, "an unknown base and a repeated one");
@@ -153,15 +153,15 @@ test("stage 2: the macro symbols' bars and the MQL5 calendar, only from Omega's 
   await ingestCorpus(env, corpus(), { executor: EXECUTOR, now: NOW });
   const r = await ingestCorpusMacro(env, payload, { executor: EXECUTOR, now: NOW + 1000 });
   assert.deepEqual(r.cursors, { XAGUSD: T0 + 59 * M, EURUSD: T0 + 59 * M });
-  assert.equal((await readCorpusBars(env, { sinceMs: 0 })).source, "mt5:monex-live:XAUUSD", "the pair's source, though a macro source is newer");
+  assert.equal((await readCorpusBars(env, { sinceMs: 0 })).source, "mt5:anybroker-live:XAUUSD", "the pair's source, though a macro source is newer");
   const xag = await readMacroBars(env, { base: "xagusd", sinceMs: T0 + 57 * M });
-  assert.deepEqual([xag.source, xag.symbol, xag.bars.length, xag.bars[0].c], ["mt5macro:monex-live:XAGUSD", "XAGUSD.m", 2, 50.0005]);
+  assert.deepEqual([xag.source, xag.symbol, xag.bars.length, xag.bars[0].c], ["mt5macro:anybroker-live:XAGUSD", "XAGUSD.m", 2, 50.0005]);
   assert.deepEqual(await readMacroBars(env, { base: "US10Y" }), { source: null, bars: [] }, "no broker source for the yield");
   const status = await corpusStatus(env, { now: NOW });
-  assert.deepEqual(status.sources.map((s) => s.source), ["mt5:monex-live:XAUUSD"]);
-  assert.deepEqual(status.macro.map((s) => s.source), ["mt5macro:monex-live:EURUSD", "mt5macro:monex-live:XAGUSD"]);
+  assert.deepEqual(status.sources.map((s) => s.source), ["mt5:anybroker-live:XAUUSD"]);
+  assert.deepEqual(status.macro.map((s) => s.source), ["mt5macro:anybroker-live:EURUSD", "mt5macro:anybroker-live:XAGUSD"]);
 
-  const cal = { server: "Monex-Live", written_ms: NOW, events: [
+  const cal = { server: "AnyBroker-Live", written_ms: NOW, events: [
     { value_id: "1", title: "Nonfarm Payrolls", currency: "USD", time_ms: Date.parse("2026-11-06T13:30:00Z"), importance: 3, actual: 119, forecast: 50, previous: 22, unit: "0" },
     { value_id: "2", title: "German CPI", currency: "EUR", time_ms: Date.parse("2026-11-06T07:00:00Z"), importance: 3, actual: 2 },
     { value_id: "3", title: "Old", currency: "USD", time_ms: NOW - 40 * 86_400_000, importance: 3, actual: 1 }
@@ -178,7 +178,7 @@ test("phase 2: the broker shadow lane's agreement per 15m bar and engine, summar
   const env = { DB: db, CORPUS_ORACLE_MODE: "shadow" };
   const key = (i) => `OANDA:XAUUSD:15:${T0 + i * 15 * M}`;
   assert.equal((await recordBrokerShadow(env, { candle_key: "OANDA:XAUUSD:60:1", engines: {} })).error, "invalid_candle_key", "15m only");
-  await recordBrokerShadow(env, { candle_key: key(0), source: "mt5:monex-live:XAUUSD", engines: { prophet: { fields: 10, matched: 10, mismatched: [], direction_match: true }, gmi: { fields: 5, matched: 4, mismatched: ["gmi_v12_70.gate"], direction_match: true }, other: { fields: 1, matched: 1 } } }, { now: NOW });
+  await recordBrokerShadow(env, { candle_key: key(0), source: "mt5:anybroker-live:XAUUSD", engines: { prophet: { fields: 10, matched: 10, mismatched: [], direction_match: true }, gmi: { fields: 5, matched: 4, mismatched: ["gmi_v12_70.gate"], direction_match: true }, other: { fields: 1, matched: 1 } } }, { now: NOW });
   await recordBrokerShadow(env, { candle_key: key(1), engines: { prophet: { fields: 10, matched: 8, mismatched: ["prophet_r38.t_enc", "prophet_r38.d_enc"], direction_match: false }, gmi: { fields: 5, matched: 9 } } }, { now: NOW });
   const s = await brokerShadowSummary(env, { now: NOW });
   assert.deepEqual(s.engines.prophet, { bars: 2, field_agreement: 0.9, direction_agreement: 0.5, most_different: [{ field: "prophet_r38.d_enc", bars: 1 }, { field: "prophet_r38.t_enc", bars: 1 }] });

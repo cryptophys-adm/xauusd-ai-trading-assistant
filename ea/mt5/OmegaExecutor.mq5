@@ -42,7 +42,7 @@
 //|     manually on a chart profile when OMEGA_TAKE_STARTUP=false.   |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.19"
+#property version   "1.20"
 
 #include <Trade/Trade.mqh>
 
@@ -82,7 +82,7 @@ input bool   DynamicAtrStopEnabled  = true;  // Adaptive ATR-based SL+ and Trail
 input double AtrMultiplierTrigger   = 1.0;   // Break-even trigger multiplier of ATR (1.0 = 1x ATR)
 input double AtrMultiplierTrailing  = 1.5;   // Trailing distance multiplier of ATR (1.5 = 1.5x ATR)
 
-const string OMEGA_EXECUTOR_VERSION = "1.19"; // keep equal to #property version
+const string OMEGA_EXECUTOR_VERSION = "1.20"; // keep equal to #property version
 const string OMEGA_FOLDER    = "omega";
 const string STATE_TMP_PATH  = "omega/state.tmp";
 const string STATE_JSON_PATH = "omega/state.json";
@@ -90,7 +90,10 @@ const string INTENTS_PATH    = "omega/intents.txt";
 // 1.17: a gold symbol name the owner set with the connection (omega-bridge 1.4.0+). Since 1.19 only a hint tried
 // first, under the same checks as any other symbol.
 const string TRADE_SYMBOL_PATH = "omega/trade_symbol.txt";
-// 1.19: the reference gold price in USD, written by omega-bridge 1.5.0+ from each sync ("<price>;<written_ms>").
+// 1.19: the reference gold price in USD, written by omega-bridge from each sync. First line "<price>;<ms>" (bridge 1.5.0:
+// the time it wrote the file; 1.6.0+: the price's own time, the close of its 5-minute bar). 1.20: then one line per past
+// H4 close of the reference, "<close_ms>;<close>", oldest first (bridge 1.6.0+). The server sends none of it while its
+// feed runs on this broker's own bars (the MT5 fallback): a broker is never checked against itself.
 const string REFERENCE_PATH = "omega/reference.txt";
 const string PROCESSED_PATH  = "omega/processed.txt";
 const string RESULTS_PATH    = "omega/results.txt";
@@ -125,15 +128,21 @@ int      g_atrHandle = INVALID_HANDLE;
 //   3. it is not disabled for trading and it has a price;
 //   4. its price lies within 2% of the reference gold price the server sends (REFERENCE_PATH). The price is what tells
 //      gold from silver, oil, an index or gold in grams; with no fresh reference nothing is chosen.
+//   5. (1.20) it has no expiry (a future is not spot gold), and its own past prices follow the reference's past H4
+//      closes (PricePathProblem): one price near gold fits other instruments; a price path does not.
 // The owner's symbol (TRADE_SYMBOL_PATH) and the chart symbol are tried first, under the same checks. When several
-// symbols pass, the one with the smallest spread (relative to its price) is kept. When none does, the EA trades nothing
+// symbols pass, the one with the smallest spread (relative to its price) is kept, unless their contracts differ (1.20:
+// then none is chosen until the owner names one). A chosen symbol is checked against the reference price whenever a
+// fresh one exists (1.20) and is dropped when it fails. When none passes, the EA trades nothing
 // and opens nothing: state.json carries "symbol_error" with the reason, the symbol block is empty, the corpus is not
 // written, and every open intent is refused (closes and stop changes on existing tickets still run).
 const double GOLD_CONTRACT_SIZE_MIN = 1.0;
 const double GOLD_CONTRACT_SIZE_MAX = 100.0;
 const double GOLD_PRICE_TOLERANCE   = 0.02;
-const int    REFERENCE_MAX_AGE_SEC  = 900;   // a reference older than 15 minutes is no reference
+const int    REFERENCE_MAX_AGE_SEC  = 1200;  // 1.20: a price whose own time is more than 20 minutes old is no reference
 const int    SCAN_EVERY_SEC         = 30;    // an unresolved server is scanned at most every 30 seconds
+const double PATH_TOLERANCE         = 0.005; // 1.20: each past close, relative to the newest, within 0.5% of the reference's
+const int    PATH_MIN_POINTS        = 6;     // 1.20: at least six past closes to compare a price path
 string g_symbolError = "";
 string g_ownerSymbol = "";        // 1.17: the owner-set gold symbol (TRADE_SYMBOL_PATH), or ""
 datetime g_ownerSymbolReadAt = 0;
@@ -141,31 +150,86 @@ double   g_refPrice = 0.0;        // 1.19: the reference gold price in USD, 0 wh
 datetime g_refReadAt = 0;
 datetime g_lastScanAt = 0;
 string   g_scanSelected = ";";    // 1.19: symbols the scan added to Market Watch (";A;B;"), removed again when not gold
+long     g_refT[];                // 1.20: the reference's past H4 closes: their times (UTC ms), oldest first
+double   g_refC[];                // 1.20: and their prices
 
-// 1.19: reads REFERENCE_PATH at most every 10 seconds; a price written more than REFERENCE_MAX_AGE_SEC ago is dropped.
+// Reads REFERENCE_PATH at most every 10 seconds. 1.20: a price whose time (the second field) is more than
+// REFERENCE_MAX_AGE_SEC old is dropped, with its past closes; the closes follow on the next lines.
 void LoadReferencePrice()
   {
    if(g_refReadAt != 0 && TimeGMT() - g_refReadAt < 10) return;
    g_refReadAt = TimeGMT();
    double price = 0.0;
-   long writtenMs = 0;
+   long priceMs = 0;
+   ArrayResize(g_refT, 0);
+   ArrayResize(g_refC, 0);
    if(FileIsExist(REFERENCE_PATH))
      {
       int h = FileOpen(REFERENCE_PATH, FILE_READ | FILE_TXT | FILE_ANSI);
       if(h != INVALID_HANDLE)
         {
-         string line = FileIsEnding(h) ? "" : FileReadString(h);
-         FileClose(h);
-         string parts[];
-         if(StringSplit(line, ';', parts) >= 2)
+         int lineNo = 0;
+         while(!FileIsEnding(h) && lineNo < 64)
            {
-            price = StringToDouble(parts[0]);
-            writtenMs = StringToInteger(parts[1]);
+            string line = FileReadString(h);
+            string parts[];
+            if(StringSplit(line, ';', parts) >= 2)
+              {
+               if(lineNo == 0)
+                 {
+                  price = StringToDouble(parts[0]);
+                  priceMs = StringToInteger(parts[1]);
+                 }
+               else
+                 {
+                  long t = StringToInteger(parts[0]);
+                  double c = StringToDouble(parts[1]);
+                  if(t > 0 && c > 0.0)
+                    {
+                     int k = ArraySize(g_refC);
+                     ArrayResize(g_refT, k + 1);
+                     ArrayResize(g_refC, k + 1);
+                     g_refT[k] = t;
+                     g_refC[k] = c;
+                    }
+                 }
+              }
+            lineNo++;
            }
+         FileClose(h);
         }
      }
    long nowMs = (long)TimeGMT() * 1000;
-   g_refPrice = (price > 0.0 && writtenMs > 0 && nowMs - writtenMs <= (long)REFERENCE_MAX_AGE_SEC * 1000) ? price : 0.0;
+   bool fresh = price > 0.0 && priceMs > 0 && nowMs - priceMs <= (long)REFERENCE_MAX_AGE_SEC * 1000;
+   g_refPrice = fresh ? price : 0.0;
+   if(!fresh) { ArrayResize(g_refT, 0); ArrayResize(g_refC, 0); }
+  }
+
+// 1.20: "" when the symbol's own past prices follow the reference's (its M5 close at each of the reference's past H4
+// closes within 2%, and each relative to the newest within PATH_TOLERANCE), else the reason. One price inside 2% fits
+// anything that happens to trade near gold; two instruments do not share a price path (orchestrator review of 1.19).
+string PricePathProblem(const string sym)
+  {
+   int n = ArraySize(g_refC);
+   if(n < PATH_MIN_POINTS) return "no_reference_path";
+   long offsetSec = (long)(TimeTradeServer() - TimeGMT());   // the server's clock against UTC
+   double syms[];
+   ArrayResize(syms, n);
+   for(int i = 0; i < n; i++)
+     {
+      datetime t = (datetime)(g_refT[i] / 1000 + offsetSec - 1);   // just before the reference bar's close
+      int shift = iBarShift(sym, PERIOD_M5, t, false);
+      if(shift < 0) return "no_history";
+      double c = iClose(sym, PERIOD_M5, shift);
+      datetime bt = iTime(sym, PERIOD_M5, shift);
+      if(c <= 0.0 || bt <= 0 || MathAbs((double)(t - bt)) > 900.0) return "no_history";   // a gap is no match
+      if(MathAbs(c - g_refC[i]) / g_refC[i] > GOLD_PRICE_TOLERANCE) return "price_path_mismatch";
+      syms[i] = c;
+     }
+   double sN = syms[n - 1], rN = g_refC[n - 1];
+   for(int i = 0; i < n - 1; i++)
+      if(MathAbs(syms[i] / sN - g_refC[i] / rN) > PATH_TOLERANCE) return "price_path_mismatch";
+   return "";
   }
 
 // 1.17: reads TRADE_SYMBOL_PATH at most every 10 seconds. A name with characters MT5 never uses is ignored.
@@ -201,10 +265,12 @@ void LoadOwnerSymbol()
   }
 
 // "" when `sym` is gold priced in USD that this EA may trade, else the reason it is refused. No name is checked.
-// checkPrice: the price against the reference decides which symbol is gold when one is chosen; a symbol already chosen
-// keeps its place while the reference is missing or stale (a feed outage, a weekend gap), because its contract has not
-// changed. The server still refuses every open whose broker price is more than 2% from the signal's price.
-string GoldSymbolProblem(const string sym, const bool checkPrice = true)
+// checkPrice: the bid against the reference price; checkPath (1.20): the symbol's own past prices against the
+// reference's (PricePathProblem), required to choose a symbol. A chosen symbol is checked again with the price whenever
+// a fresh reference exists, and keeps its place only while there is none (a feed outage, a weekend, the MT5
+// fallback), because its contract has not changed. The server also refuses every open whose broker price is more than
+// 2% from the signal's price.
+string GoldSymbolProblem(const string sym, const bool checkPrice = true, const bool checkPath = true)
   {
    if(sym == "") return "no_symbol";
    if(!SymbolInfoInteger(sym, SYMBOL_EXIST)) return "not_on_server";
@@ -212,6 +278,8 @@ string GoldSymbolProblem(const string sym, const bool checkPrice = true)
    double size = SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE);
    if(size < GOLD_CONTRACT_SIZE_MIN || size > GOLD_CONTRACT_SIZE_MAX) return "contract_size_out_of_range";
    if(SymbolInfoInteger(sym, SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_DISABLED) return "trade_disabled";
+   // 1.20: a contract with an expiry (a future) is not spot gold: its price drifts from spot and it rolls.
+   if(SymbolInfoInteger(sym, SYMBOL_EXPIRATION_TIME) > 0) return "expiring_contract";
    if(!SymbolInfoInteger(sym, SYMBOL_SELECT)) SymbolSelect(sym, true); // a price needs Market Watch
    double bid = SymbolInfoDouble(sym, SYMBOL_BID);
    if(bid <= 0.0) return "no_price";
@@ -219,7 +287,8 @@ string GoldSymbolProblem(const string sym, const bool checkPrice = true)
    LoadReferencePrice();
    if(g_refPrice <= 0.0) return "no_reference_price";
    if(MathAbs(bid - g_refPrice) / g_refPrice > GOLD_PRICE_TOLERANCE) return "price_not_gold";
-   return "";
+   if(!checkPath) return "";
+   return PricePathProblem(sym);
   }
 
 // The spread relative to the price, to choose between several symbols that pass (smaller is better).
@@ -233,7 +302,10 @@ double RelativeSpread(const string sym)
 string ResolveGoldSymbol()
   {
    LoadOwnerSymbol();
-   if(g_tradeSymbol != "" && GoldSymbolProblem(g_tradeSymbol, false) == "")
+   // 1.20: a chosen symbol is checked against the reference price whenever a fresh one exists (orchestrator review of
+   // 1.19: it was never checked again); without one it keeps its place.
+   LoadReferencePrice();
+   if(g_tradeSymbol != "" && GoldSymbolProblem(g_tradeSymbol, g_refPrice > 0.0, false) == "")
       return g_tradeSymbol;
 
    string lastProblem = "no_usd_gold_symbol";
@@ -263,6 +335,12 @@ string ResolveGoldSymbol()
       g_lastScanAt = TimeGMT();
       string best = "";
       double bestSpread = 0.0;
+      // 1.20: every symbol that passes, with its contract: several with different contracts are not told apart by
+      // spread; the owner names one (the account's gold symbol with the connection, tried first above).
+      int passed = 0;
+      double firstSize = 0.0;
+      bool sizesDiffer = false;
+      string passing = "";
       int total = SymbolsTotal(false);
       for(int i = 0; i < total; i++)
         {
@@ -278,10 +356,14 @@ string ResolveGoldSymbol()
          string p = GoldSymbolProblem(c);
          if(p == "")
            {
+            passed++;
+            if(passed == 1) firstSize = size;
+            else if(MathAbs(size - firstSize) > 1e-9) sizesDiffer = true;
+            if(StringLen(passing) < 120) passing += (passing == "" ? "" : ",") + c + ":" + DoubleToString(size, 0);
             double sp = RelativeSpread(c);
             if(best == "" || sp < bestSpread) { best = c; bestSpread = sp; }
            }
-         else if(p == "price_not_gold" && StringFind(g_scanSelected, ";" + c + ";") >= 0)
+         else if((p == "price_not_gold" || p == "price_path_mismatch") && StringFind(g_scanSelected, ";" + c + ";") >= 0)
            {
             // Not gold, and the scan added it: leave Market Watch as it was. A symbol without a price yet
             // ("no_price") stays until the next scan has its price.
@@ -289,9 +371,14 @@ string ResolveGoldSymbol()
             StringReplace(g_scanSelected, ";" + c + ";", ";");
            }
         }
+      if(best != "" && sizesDiffer)
+        {
+         lastProblem = "ambiguous_gold_symbols (" + passing + "): set the account's gold symbol with the connection";
+         best = "";
+        }
       if(best != "")
         {
-         if(best != g_tradeSymbol) PrintFormat("OmegaExecutor: gold priced in USD on this server is %s (found by its contract and price)", best);
+         if(best != g_tradeSymbol) PrintFormat("OmegaExecutor: gold priced in USD on this server is %s (found by its contract, price and price path)", best);
          g_tradeSymbol = best;
          g_symbolError = "";
          return g_tradeSymbol;

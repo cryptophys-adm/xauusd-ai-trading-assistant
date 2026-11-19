@@ -8,7 +8,7 @@ import { planIntents, manageIntents, OMEGA_DEFAULTS, settingsFrom } from "../src
 const kv = () => { const m = new Map(); return { m, async get(k) { return m.get(k) ?? null; }, async put(k, v) { m.set(k, v); } }; };
 const CLOSE = Date.parse("2026-11-12T10:15:00Z"); // the decision's 15m close
 const M5 = 5 * 60_000;
-const bar = (i, over = {}) => ({ close_ms: CLOSE + i * M5, ready: true, buy_confirmed: false, sell_confirmed: false, swing_high: 4012, swing_low: 4003, atr: 2, bars: 500, source: "mt5:monex-demo:XAUUSD.M", ...over });
+const bar = (i, over = {}) => ({ close_ms: CLOSE + i * M5, ready: true, buy_confirmed: false, sell_confirmed: false, swing_high: 4012, swing_low: 4003, atr: 2, bars: 500, source: "mt5:anybroker-demo:XAUUSD.M", ...over });
 const DECISION = { decision_key: `OANDA:XAUUSD:15:${CLOSE - 15 * 60_000}`, stance: "BUY", trade: { side: "BUY", action: "ENTER_MARKET", entry: 4005, stop: 3995, tp: 4025 }, guardrails: { long: { entry_trigger: { fired: false, source: null } } } };
 
 test("the broker trigger: stored with the last bars, fresh for 6 minutes, off with the switch", async () => {
