@@ -4,9 +4,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
-import { GOLD_CONTRACT_SIZE_MIN, GOLD_CONTRACT_SIZE_MAX, goldSymbolCheck, goldSymbolText, goldPriceProblem, accountMoney, measuredUnitsPerUsd, moneyText } from "../src/gold-symbol.mjs";
+import { GOLD_CONTRACT_SIZE_MIN, GOLD_CONTRACT_SIZE_MAX, goldSymbolCheck, goldSymbolText, goldPriceProblem, accountMoney, measuredUnitsPerUsd, moneyText, snapPowerOfTen, referenceFrom, REFERENCE_H4_CLOSES, eaRefusalText } from "../src/gold-symbol.mjs";
 import { GOLD_CONTRACT_SIZE_MIN as BRIDGE_MIN, GOLD_CONTRACT_SIZE_MAX as BRIDGE_MAX } from "../bridge/omega-bridge/src/symbols.mjs";
-import { executorFrom, bridgeSymbolFrom, toUsd, redactAccount } from "../src/omega-broker.mjs";
+import { executorFrom, bridgeSymbolFrom, toUsd, redactAccount, liveBridgeFields } from "../src/omega-broker.mjs";
 import { planIntents, OMEGA_DEFAULTS } from "../src/omega-engine.mjs";
 import { omegaSymbolIssue } from "../src/health-alerts.mjs";
 
@@ -31,13 +31,11 @@ test("G1. no list of gold names, brokers or currency codes decides anything, in 
   }
 });
 
-test("G2. OmegaExecutor 1.19 finds gold by its contract and price on any server; never falls back; says why", () => {
-  assert.match(ea, /#property version\s+"1\.19"/);
+test("G2. OmegaExecutor (1.19+) finds gold by its contract and price on any server; never falls back; says why", () => {
   assert.match(ea, /int total = SymbolsTotal\(false\);/, "every symbol the server offers");
   assert.match(ea, /if\(SymbolInfoString\(sym, SYMBOL_CURRENCY_PROFIT\) != "USD"\) return "profit_currency_not_usd";/);
   assert.match(ea, /if\(size < GOLD_CONTRACT_SIZE_MIN \|\| size > GOLD_CONTRACT_SIZE_MAX\) return "contract_size_out_of_range";/);
   assert.match(ea, /if\(g_refPrice <= 0\.0\) return "no_reference_price";/, "no reference, no choice");
-  assert.match(ea, /if\(g_tradeSymbol != "" && GoldSymbolProblem\(g_tradeSymbol, false\) == ""\)/, "a chosen symbol is kept while the reference is missing; the server checks each open's price");
   assert.match(ea, /if\(g_refPrice <= 0\.0\)\s*lastProblem = "no_reference_price";/, "no scan, and nothing added to Market Watch, without a reference");
   assert.match(ea, /SymbolSelect\(c, false\);\s*StringReplace\(g_scanSelected/, "a symbol the scan added and that is not gold leaves Market Watch");
   assert.match(ea, /if\(MathAbs\(bid - g_refPrice\) \/ g_refPrice > GOLD_PRICE_TOLERANCE\) return "price_not_gold";/);
@@ -70,7 +68,7 @@ test("G3. goldSymbolCheck: any name; USD profit, 1-100 oz, no symbol_error; the 
 });
 
 test("G4. the server keeps the contract, the EA's refusal and the bridge's resolution, checked", () => {
-  const ex = executorFrom({ connected: true, server: "FxPro-MT5 Demo", symbol: { ...USD_GOLD, chart: "GOLD" }, symbol_error: null, bridge_symbol: { status: "confirmed", server: "FxPro-MT5 Demo", chart_symbol: "GOLD", learned: "GOLD", tried: [] } });
+  const ex = executorFrom({ connected: true, server: "OtherBroker-Server Demo", symbol: { ...USD_GOLD, chart: "GOLD" }, symbol_error: null, bridge_symbol: { status: "confirmed", server: "OtherBroker-Server Demo", chart_symbol: "GOLD", learned: "GOLD", tried: [] } });
   assert.deepEqual([ex.symbol.currency_profit, ex.symbol.contract_size, ex.symbol.chart, ex.symbol_error, ex.bridge_symbol.status], ["USD", 100, "GOLD", null, "confirmed"]);
   const refused = executorFrom({ connected: true, symbol: { name: "" }, symbol_error: "no_usd_gold_symbol (no_reference_price)" });
   assert.equal(refused.symbol_error, "no_usd_gold_symbol (no_reference_price)");
@@ -157,6 +155,14 @@ test("G7. the account's money: USD is one dollar; any other currency is measured
   assert.equal(accountMoney({ currency: "USD", positions: pos, symbol: gold }).problem, "money_mismatch", "a 'USD' account whose trades pay 100 a dollar is not trusted");
   assert.match(moneyText(accountMoney({ currency: "ZZC" })), /not USD and the account has no trade yet/);
   assert.equal(moneyText(accountMoney({ currency: "USX", positions: pos, symbol: gold })), "USX: 100 a dollar (measured from 1 trades)");
+  // Converted with an exact number (orchestrator review of #477): a measurement of 99.7 that agrees with the owner's 100
+  // converts with 100; without the owner's value a measurement within 1% of a power of ten is that power.
+  const near = [{ symbol: "Au", side: "SELL", volume: 3, open_price: 3771.45, profit: 828.5 }]; // 828.5 / 831 = 99.7 a dollar
+  assert.equal(measuredUnitsPerUsd({ positions: near, symbol: gold }).units_per_usd, 99.699158);
+  assert.deepEqual([accountMoney({ currency: "USX", positions: near, symbol: gold, ownerUnitsPerUsd: 100 }).units_per_usd, accountMoney({ currency: "USX", positions: near, symbol: gold, ownerUnitsPerUsd: 100 }).source], [100, "owner_verified"]);
+  assert.match(moneyText(accountMoney({ currency: "USX", positions: near, symbol: gold, ownerUnitsPerUsd: 100 })), /the owner's value, confirmed by 1 trades/);
+  assert.equal(accountMoney({ currency: "USX", positions: near, symbol: gold }).units_per_usd, 100);
+  assert.deepEqual([snapPowerOfTen(99.7), snapPowerOfTen(1.004), snapPowerOfTen(0.92), snapPowerOfTen(1000.5), snapPowerOfTen(97)], [100, 1, 0.92, 1000, 97], "a currency's rate (0.92) is kept");
 });
 
 test("G8. amounts become USD once, where the bridge state enters, with the measured ratio; ratios are unchanged", () => {
@@ -169,6 +175,18 @@ test("G8. amounts become USD once, where the bridge state enters, with the measu
   assert.deepEqual([ex.account.balance, ex.account.equity, ex.account.day_start_balance, ex.account.day_realized_pl, ex.account.margin_free], [54.5, 53, 54.5, -1.5, 50]);
   assert.deepEqual([ex.symbol.tick_value, ex.symbol.margin_per_lot, ex.symbol.bid], [0.01, 40, 4101], "a tick of 1 oz is $0.01; prices are not amounts");
   assert.deepEqual([ex.positions[0].profit, ex.deals[0].profit, ex.deals[0].commission, ex.deals[0].swap], [1.5, 2.5, -0.1, -0.05]);
+  // The measurement reads the raw state (the account's own units), and the raw state is what D1 keeps: converting
+  // leaves it untouched, so reading the stored state again measures 100 again, never 1.
+  assert.deepEqual([raw.account.balance, raw.positions[0].profit, raw.deals[0].profit], [5450, 150, 250]);
+  assert.equal(executorFrom(JSON.parse(JSON.stringify(raw))).account.money.units_per_usd, 100);
+  // What D1 keeps is the converted executor: read back with `stored` it is never divided again, even when the money
+  // came from the owner's value (no trade to measure), and the live push converts the raw state with the same value.
+  const ownedRaw = executorFrom({ ...raw, positions: [], deals: [] }, { ownerUnitsPerUsd: 100 });
+  const kept = JSON.parse(JSON.stringify(ownedRaw));
+  const back = executorFrom(kept, { stored: true });
+  assert.deepEqual([ownedRaw.account.balance, back.account.balance, back.account.money.units_per_usd, back.account.money.source, back.account.cent], [54.5, 54.5, 100, "owner", true]);
+  assert.equal(executorFrom(kept, { ownerUnitsPerUsd: 100 }).account.balance, 0.545, "without `stored` it would be divided twice (the bug this guards)");
+  assert.equal(liveBridgeFields({ ...raw, positions: [], deals: [] }, { ownerUnitsPerUsd: 100 }).balance, 54.5);
   // With no trade and no owner value nothing is converted and the money is unverified.
   const fresh = executorFrom({ ...raw, positions: [], deals: [] });
   assert.deepEqual([fresh.account.money.problem, fresh.account.balance], ["money_unverified", 5450]);
@@ -250,4 +268,46 @@ test("G13. 'perbaiki deal': a deal stored in cents (USX) reads in USD; the expos
   // 0.10 lot of a 100 oz contract: $10 per $1 move; a stop already locking profit has no risk.
   assert.deepEqual(positionExposure({ side: "BUY", volume: 0.1, open_price: 4000, sl: 4005 }, { currency_profit: "USD", contract_size: 100 }, 1000), { usd_per_dollar: 10, risk_at_sl_usd: null, risk_at_sl_pct: null });
   assert.equal(positionExposure({ side: "BUY", volume: 1, open_price: 1, sl: 0.9 }, { currency_profit: "EUR", contract_size: 100 }, 1000), null);
+});
+
+test("G13. the reference the EA finds gold by: price, its own time and past 4h closes; none while the feed runs on the broker's bars", () => {
+  const NOW = Date.parse("2026-11-19T10:00:00Z");
+  const h4 = { candles: Array.from({ length: 20 }, (_, i) => ({ close_time: new Date(NOW - (20 - i) * 14_400_000).toISOString(), close: 3700 + i })) };
+  const r = referenceFrom({ price: 3734.1, marketMs: NOW - 120_000, h4, fallbackSince: null, now: NOW });
+  assert.deepEqual([r.price, r.market_ms, r.closes.length, REFERENCE_H4_CLOSES], [3734.1, NOW - 120_000, 12, 12]);
+  assert.deepEqual(r.closes.at(-1), [NOW - 14_400_000, 3719], "oldest first, the newest last");
+  // The MT5 fallback: the feed's price after its start is the broker's own: no reference at all.
+  assert.equal(referenceFrom({ price: 3734.1, marketMs: NOW - 60_000, h4, fallbackSince: NOW - 3_600_000, now: NOW }), null);
+  // A price from before the fallback is still independent; its closes stop at the fallback's start.
+  const before = referenceFrom({ price: 3734.1, marketMs: NOW - 8 * 3_600_000, h4, fallbackSince: NOW - 6 * 3_600_000, now: NOW });
+  assert.ok(before.closes.every(([t]) => t <= NOW - 6 * 3_600_000));
+  assert.equal(referenceFrom({ price: 0, marketMs: NOW, h4, now: NOW }), null);
+  // After a fallback ends, its 4h bars (the broker's own until healed) are left out: the last recorded interval.
+  const healed = referenceFrom({ price: 3734.1, marketMs: NOW - 60_000, h4, excluded: [[NOW - 30 * 3_600_000, NOW - 20 * 3_600_000]], now: NOW });
+  assert.ok(healed.closes.every(([t]) => !(t > NOW - 30 * 3_600_000 && t - 14_400_000 < NOW - 20 * 3_600_000)));
+  assert.equal(referenceFrom({ price: 3734.1, marketMs: NOW - 60_000, h4, excluded: [[NOW - 3_600_000, null]], now: NOW }), null, "a price inside a fallback still recorded open");
+  // The Console says which symbols and contracts are ambiguous, names as reported.
+  assert.match(eaRefusalText("symbol_error:no_usd_gold_symbol (ambiguous_gold_symbols (GOLD:100,Gold_One:1): name one with the connection)"), /different contracts: GOLD \(100 oz\), Gold_One \(1 oz\)\. Name the account's gold symbol/);
+});
+
+test("G14. OmegaExecutor 1.20: a chosen symbol is checked again; choosing needs the price path; futures and ambiguous contracts refused", () => {
+  assert.match(ea, /#property version\s+"1\.20"/);
+  assert.match(ea, /string keepProblem = g_tradeSymbol != "" \? GoldSymbolProblem\(g_tradeSymbol, g_refPrice > 0\.0, false\) : "no_symbol";/, "re-checked against a fresh reference, kept without one");
+  assert.match(ea, /if\(!checkPath\) return "";\s*return PricePathProblem\(sym\);/, "the price path decides a choice");
+  // Gaps are skipped, not failed (the broker closed, history loading): at least six matched points over 12 hours, each
+  // from a window of 75 minutes (a clock an hour off across DST still matches), at the symbol's own median level.
+  assert.match(ea, /int got = CopyClose\(sym, PERIOD_M5, t - PATH_WINDOW_SEC, t \+ PATH_WINDOW_SEC, closes\);\s*if\(got <= 0\) continue;/);
+  assert.match(ea, /if\(m < PATH_MIN_POINTS \|\| \(rt\[m - 1\] - rt\[0\]\) \/ 1000 < PATH_MIN_SPAN_SEC\) return "no_history";/);
+  assert.match(ea, /if\(x < lo\[i\] \* \(1\.0 - PATH_TOLERANCE\) \|\| x > hi\[i\] \* \(1\.0 \+ PATH_TOLERANCE\)\) return "price_path_mismatch";/);
+  // A restart without a reference keeps the symbol verified before (this login, same contract), checked again later.
+  assert.match(ea, /if\(g_tradeSymbol == "" && !g_restoreTried && TerminalInfoInteger\(TERMINAL_CONNECTED\)\)/, "not spent before the terminal is connected");
+  assert.match(ea, /if\(p == "no_price"\) \{ retry = true; return ""; \}/, "nor before the symbol has a tick");
+  assert.match(ea, /if\(login == "" \|\| parts\[0\] != login\) return "";/, "bound to the login hash");
+  assert.match(ea, /SaveVerifiedSymbol\(g_tradeSymbol\);\s*return g_tradeSymbol;/);
+  assert.match(ea, /keepProblem == "price_not_gold" \|\| keepProblem == "not_on_server"/, "forgotten only when shown not to be gold, never for a passing state");
+  assert.doesNotMatch(ea, /g_refPrice > 0\.0\) FileDelete/);
+  assert.match(ea, /if\(g_tradeSymbol != "" && \(keepProblem == "no_price" \|\| keepProblem == "trade_disabled"\)\)\s*\{\s*g_symbolError = [^;]+;\s*return "";/, "a passing state keeps the symbol in memory and opens nothing");
+  assert.match(ea, /if\(SymbolInfoInteger\(sym, SYMBOL_EXPIRATION_TIME\) > 0\) return "expiring_contract";/);
+  assert.match(ea, /if\(best != "" && sizesDiffer\)\s*\{\s*lastProblem = "ambiguous_gold_symbols \(/);
+  assert.match(ea, /bool fresh = price > 0\.0 && priceMs > 0 && nowMs - priceMs <= \(long\)REFERENCE_MAX_AGE_SEC \* 1000;/, "aged on the price's own time");
 });

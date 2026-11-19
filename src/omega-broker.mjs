@@ -19,7 +19,8 @@ import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
-import { goldCheckOf, goldSymbolText, accountMoney, moneyText, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText } from "./gold-symbol.mjs";
+import { goldCheckOf, goldSymbolText, accountMoney, moneyText, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText, referenceFrom } from "./gold-symbol.mjs";
+import { fallbackSinceMs } from "./feed.mjs";
 import { PROBATION, PROBATION_KEY, probationFrom, probationVerdict } from "./htf-cells.mjs";
 import { delegationsForSync, withDelegated, delegatedStopIntents, markDelegatedIntents, plannerIds, hitlSupported, readDelegations, HITL_EA_MIN_VERSION } from "./omega-hitl.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
@@ -422,7 +423,7 @@ export function bridgeSymbolFrom(v) {
 }
 
 /** The executor state as the bridge reports it; anything malformed is null (the engine then waits). */
-export function executorFrom(state, { ownerUnitsPerUsd = null } = {}) {
+export function executorFrom(state, { ownerUnitsPerUsd = null, stored = false } = {}) {
   if (!state || typeof state !== "object" || Array.isArray(state)) return null;
   const n = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
   const a = state.account ?? {}, s = state.symbol ?? {};
@@ -470,7 +471,7 @@ export function executorFrom(state, { ownerUnitsPerUsd = null } = {}) {
       margin_per_lot: n(s.margin_per_lot)
     },
     // The EA's own refusal when no allowed USD gold symbol trades on the server (1.14+), else null.
-    symbol_error: typeof state.symbol_error === "string" && state.symbol_error ? state.symbol_error.slice(0, 96) : null,
+    symbol_error: typeof state.symbol_error === "string" && state.symbol_error ? state.symbol_error.slice(0, 200) : null,
     // The bridge's per-server chart-symbol resolution (omega-bridge 1.3.0+), else null.
     bridge_symbol: bridgeSymbolFrom(state.bridge_symbol),
     positions: (Array.isArray(state.positions) ? state.positions : []).slice(0, 50).map((p) => ({
@@ -520,6 +521,17 @@ export function executorFrom(state, { ownerUnitsPerUsd = null } = {}) {
       closed_ms: n(d?.closed_ms)
     }))
   };
+  // The state D1 keeps (omega_bridge.state) is this function's own output, already in US dollars. Read back with
+  // `stored`, it keeps the money and tick figures it was converted with and is never divided again (orchestrator review
+  // of #477: a cent account with the owner's value and no trade would otherwise be divided by 100 twice).
+  if (stored) {
+    const m = a.money && typeof a.money === "object" ? a.money : null;
+    out.account.money = m ? { ...m } : null;
+    out.account.cent = a.cent === true;
+    out.symbol.tick_value_reported = n(s.tick_value_reported);
+    out.symbol.tick_value_problem = typeof s.tick_value_problem === "string" ? s.tick_value_problem : null;
+    return out;
+  }
   return toUsd(out, { ownerUnitsPerUsd });
 }
 
@@ -613,6 +625,25 @@ export function executorStatus(info) {
  * One bridge sync: store its key and state, apply its results, plan, and return what it must do.
  * @returns {{ intents: object[], connection: null | object, settings_version: number }}
  */
+// The reference's inputs, read at most once a minute per isolate (the bridge syncs every 5 seconds; the 4h series and
+// the fallback state change far slower): the cached 4h series, the running fallback's start, and the last recorded
+// fallback interval (D1 health_alerts market_data_fallback), whose 4h bars were built on the broker's own prices.
+let REFERENCE_SOURCES = null;
+export function resetReferenceSourcesForTests() { REFERENCE_SOURCES = null; }
+async function referenceSources(env, now) {
+  if (REFERENCE_SOURCES && now - REFERENCE_SOURCES.at < 60_000 && REFERENCE_SOURCES.env === env) return REFERENCE_SOURCES;
+  let h4 = null, excluded = [];
+  try { h4 = JSON.parse((await env.SIGNAL_CACHE?.get?.("market-data:v2:series:OANDA:XAUUSD|4h")) || "null"); } catch { h4 = null; }
+  try {
+    const row = await env.DB.prepare("SELECT opened_at, resolved_at FROM health_alerts WHERE alert_key = 'market_data_fallback'").first();
+    const a = Date.parse(row?.opened_at ?? ""), b = row?.resolved_at ? Date.parse(row.resolved_at) : null;
+    // The alert opens on a health check after the fallback starts: 15 minutes of margin before it.
+    if (Number.isFinite(a)) excluded = [[a - 900_000, Number.isFinite(b) ? b : null]];
+  } catch { excluded = []; }
+  REFERENCE_SOURCES = { at: now, env, h4, fallbackSince: await fallbackSinceMs(env), excluded };
+  return REFERENCE_SOURCES;
+}
+
 export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVersion, corpus = null, corpusMacro = null, calendar = null, bridgeSymbol = null } = {}, { now = Date.now(), signal: signalIn } = {}) {
   await ensureSchema(env.DB);
   const db = env.DB;
@@ -680,6 +711,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       if (known.has(seenKey)) continue;
       try {
         const stored = await storeDeal(env, {
+          account_ref: executor.account_ref ?? null,
           deal_ticket: d.deal_ticket,
           position_ticket: d.position_ticket,
           mode: executor?.account?.trade_mode || "unknown",
@@ -800,7 +832,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       const dailyPct = effectiveLimits(account.row.profile, settings ?? {}).max_daily_loss_pct ?? settings?.max_daily_loss_pct;
       // The profile council (src/profile-council.mjs) does not run here: an upgrade waits for the cron, and a soft
       // downgrade under OMEGA_PROFILE_COUNCIL_DOWNGRADE "on" waits for its review with new entries held.
-      const step = await runProfileAgent(db, account.row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), onboardingDay: dayExec !== executor || onboardingDayRef(account.row, now) != null, now, downgradeCouncil: downgradeCouncilOn(env),
+      const step = await runProfileAgent(db, account.row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), dailyPct, onboardingDay: dayExec !== executor || onboardingDayRef(account.row, now) != null, now, downgradeCouncil: downgradeCouncilOn(env),
         log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
       if (step.status === "changed") account = { ...account, profile: step.change.to };
       if (step.review_pending === true) account = { ...account, review_pending: true };
@@ -914,8 +946,15 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
 
   // The reference gold price in USD (the feed's last closed 5-minute close), for OmegaExecutor 1.19+ to find gold on any
   // broker by its price (bridge 1.5.0+ writes it to MQL5/Files/omega/reference.txt). Null when the feed has none.
-  const referencePrice = Number(signal?.market_price) > 0 ? Number(signal.market_price) : null;
-  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, reference_price: referencePrice, ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
+  // The reference the EA finds gold by: the feed's price and its time, with past 4h closes; none while the feed runs
+  // on the broker's own bars (the MT5 fallback). `reference_price` stays for bridge 1.5.0.
+  let reference = null;
+  try {
+    const src = await referenceSources(env, now);
+    reference = referenceFrom({ price: signal?.market_price, marketMs: signal?.market_ms, h4: src.h4, fallbackSince: src.fallbackSince, excluded: src.excluded, now });
+  } catch { reference = null; }
+  const referencePrice = reference?.price ?? null;
+  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, reference_price: referencePrice, reference, ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
 }
 
 // ---------------------------------------------------------------- overview (for the page)
@@ -958,7 +997,7 @@ export async function profileAgentTick(env, { now = Date.now(), call = undefined
   const killed = control?.mode === "killed" || String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
   const dailyPct = effectiveLimits(row?.profile, settings ?? {}).max_daily_loss_pct ?? settings?.max_daily_loss_pct;
   const dayExec = dailyLossExecutor(executor, row, now);
-  return runProfileAgent(db, row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), onboardingDay: onboardingDayRef(row, now) != null, withEvidence: true, now,
+  return runProfileAgent(db, row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), dailyPct, onboardingDay: onboardingDayRef(row, now) != null, withEvidence: true, now,
     downgradeCouncil: downgradeCouncilOn(env), review: (r, change, { deals }) => reviewProfileChange(env, r, change, { executor, deals, now, call }),
     log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
 }
@@ -1092,6 +1131,8 @@ export async function brokerStatus(env, { now = Date.now() } = {}) {
     connected: Boolean(st?.connected === true && connection.status === "stored" && fresh),
     armed: settings.settings?.enabled === true,
     server: connection.status === "stored" ? (st?.server ?? connection.server ?? null) : null,
+    // The broker as the terminal names itself (OmegaExecutor 1.19 ACCOUNT_COMPANY): the pages' label, never the server.
+    broker: connection.status === "stored" ? (st?.account?.company ?? null) : null,
     positions: Array.isArray(st?.positions) ? st.positions.length : 0,
     synced_age_ms: b?.synced_ms ? now - Number(b.synced_ms) : null
   };
@@ -1118,8 +1159,12 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
   try { accounts = await readAccounts(db); } catch { accounts = []; }
   // The connected account by its own reference (connectedAccount), not by the server it shares with others.
   const liveRef = st?.connected === true ? (await connectedAccount(accounts, st))?.account_ref ?? null : null;
+  // Only the account the terminal is connected to now is read and served (owner 2026-11-19, relayed: "akun sen udah
+  // disconnect kok masih dibaca"): an account that is not connected appears on no page; its stored row stays in D1
+  // and is used again if it connects.
+  accounts = liveRef ? accounts.filter((a) => a.account_ref === liveRef) : [];
   const councilReviews = {}, histories = {};
-  for (const a of accounts.slice(0, 5)) {
+  for (const a of accounts.slice(0, 1)) {
     councilReviews[a.account_ref] = await lastCouncilReviews(db, a.account_ref);
     const r = await db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(a.account_ref).first();
     histories[a.account_ref] = r ? await accountHistory(db, r, { now }) : null;
@@ -1223,7 +1268,7 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     engine: { env_enabled: engineEnvEnabled(env), ...settings.settings, settings_version: settings.version, updated_by: settings.updated_by, updated_ms: settings.updated_ms },
     // The owner's edits and delegation (owner 2026-11-19, src/omega-hitl.mjs): the delegated tickets, the toggle, and
     // whether the terminal's OmegaExecutor takes them (1.18+).
-    delegation: { ...(await readDelegations(db)), supported: hitlSupported(executorFrom(st)), ea_min_version: HITL_EA_MIN_VERSION },
+    delegation: { ...(await readDelegations(db)), supported: hitlSupported(executorFrom(st, { stored: true })), ea_min_version: HITL_EA_MIN_VERSION },
     // Reversal probation (src/htf-cells.mjs): the owner's switch and the reverted cells.
     probation: { ...probationFrom((await env.SIGNAL_CACHE?.get?.(PROBATION_KEY)) ?? null), risk_scale: PROBATION.risk_scale, revert_last_n: PROBATION.revert_last_n, agents: PROBATION.agents },
     connection: { version: connection.version, status: connection.status, server: connection.server, trade_symbol: connection.trade_symbol, units_per_usd: connection.units_per_usd, updated_by: connection.updated_by, updated_ms: connection.updated_ms },
@@ -1232,6 +1277,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       terminal_connected: Boolean(st?.connected === true && connection.status === "stored" && (now - Number(st?.received_ms || 0) < 60_000)),
       trade_allowed: Boolean(st?.trade_allowed === true && connection.status === "stored" && (now - Number(st?.received_ms || 0) < 60_000)),
       terminal_error: st?.connected !== true ? (st?.terminal_error ?? termErrNoState ?? null) : null,
+      // The broker as the terminal names itself (OmegaExecutor 1.19 ACCOUNT_COMPANY); null before 1.19.
+      broker: st?.account?.company ?? null,
       // The EA's self-report (1.12+): its version, its local break-even and trailing, and what Omega makes of it.
       executor: executorStatus(st?.executor),
       // The entry gate on the EA version (OMEGA_EA_VERSION_GATE, off until OmegaExecutor 1.15 runs on the VPS).
@@ -1298,7 +1345,9 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     macro_risk: macroRisk,
     volatility,
     intents: intents.map((r) => ({ ...parse(r.payload, {}), status: r.status, result: parse(r.result), created_ms: r.created_ms, updated_ms: r.updated_ms })),
-    events: events.map((r) => ({ ms: r.ms, actor: r.actor, action: r.action, detail: parse(r.detail) })),
+    // An event of another account (its id in the detail) is not shown: only the connected account appears.
+    events: events.map((r) => ({ ms: r.ms, actor: r.actor, action: r.action, detail: parse(r.detail) }))
+      .filter((e) => !(typeof e.detail?.account_ref === "string" && e.detail.account_ref !== liveRef)),
     planner: lastPlan ? { since_ms: lastPlan.ms, codes: String(parse(lastPlan.detail, {})?.notes ?? "").split(",").filter(Boolean), details: parse(lastPlan.detail, {})?.details ?? {} } : null
   };
 }
@@ -1311,8 +1360,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
  * to the open Omega pages after each sync carries these instead (owner 2026-11-14: realtime chart, no added
  * cost). Nothing is written. Null for a state without a quote.
  */
-export function liveBridgeFields(state, { now = Date.now() } = {}) {
-  const st = executorFrom(state);
+export function liveBridgeFields(state, { now = Date.now(), ownerUnitsPerUsd = null } = {}) {
+  const st = executorFrom(state, { ownerUnitsPerUsd });
   if (!st || typeof st?.symbol?.bid !== "number") return null;
   return {
     bid: st.symbol.bid ?? null, ask: st.symbol.ask ?? null, spread_points: st.symbol.spread_points ?? null,

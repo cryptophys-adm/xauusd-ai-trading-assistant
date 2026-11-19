@@ -1,4 +1,4 @@
-import OmegaProfile, { OmegaAccounts } from "../components/OmegaProfile";
+import OmegaProfile from "../components/OmegaProfile";
 import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import { usePushMany } from "../lib/push";
 import {
@@ -755,10 +755,12 @@ export default function Omega() {
   const profileAttention = account?.pending_upgrade?.to && !(account.pending_upgrade.expires_ms && account.pending_upgrade.expires_ms <= Date.now())
     ? `The profile agent proposes ${account.pending_upgrade.to}` : account?.pending_downgrade?.to ? "A downgrade is waiting for the profile council" : "";
   const watchdog = b?.autonomous_watchdog || null;
-  // A cent (USC) account: the backend already converted every amount to USD (centToUsd), so amounts show in USD
-  // and the account is labelled CENT.
-  const cur = br.cent ? "USD" : (br.currency || hb?.currency || "USD");
-  const acctCur = br.cent ? "USD" : (br.currency || "");
+  // Every amount is in US dollars once the account's units per dollar are known (USD, measured or the owner's value:
+  // the backend converted them once); otherwise the amounts are the account's own and carry its currency (owner
+  // 2026-11-19: no currency code decides).
+  const inUsd = Number(account?.money?.units_per_usd) > 0;
+  const cur = inUsd ? "USD" : (br.currency || hb?.currency || "USD");
+  const acctCur = inUsd ? "USD" : (br.currency || "");
   const digits = typeof br.digits === "number" && br.digits >= 0 ? br.digits : 2;
   const symbolName = br.symbol || "symbol not reported";
   const serverName = br.server || conn.server || "no server";
@@ -786,10 +788,13 @@ export default function Omega() {
     conn.status === "stored" && conn.server && br.terminal_connected
   );
   const configLocked = accountActive;
-  // The broker as the connected server names it, once its spec is validated (owner 2026-11-18: labels follow the
-  // broker; "broker unknown" otherwise), the account mode, and the risk that applies under the profile.
-  const brokerWord = String(br.server || "").split(/[-_. ]/)[0];
-  const brokerLabel = br.server && account?.spec_status === "validated" && brokerWord ? brokerWord : "broker unknown";
+  // The broker as the terminal names itself (OmegaExecutor 1.19 ACCOUNT_COMPANY), once the account's spec is validated
+  // (owner 2026-11-19: nothing named after a server; "broker unknown" otherwise), the account mode, and the risk that
+  // applies under the profile.
+  const brokerName: string = br.broker || "MT5 broker";
+  const brokerLabel = account?.spec_status === "validated" ? brokerName : "broker unknown";
+  // The connected account as the terminal describes it (currency, cent or not, gold symbol): never a server or an id.
+  const accountLabel: string = account?.identity?.label || (br.terminal_connected ? "MT5 account" : "no account");
   const tradeTag = br.trade_mode === "real" ? "LIVE" : br.trade_mode === "demo" ? "DEMO" : br.trade_mode === "contest" ? "CONTEST" : "—";
   const capOf = (k: "risk" | "positions" | "daily") => (account && account.profile !== "custom" ? PROFILE_CAPS[account.profile]?.[k] : undefined);
   const appliedRisk = e.risk_pct != null ? appliedLimit(e.risk_pct, capOf("risk")) : null;
@@ -817,7 +822,7 @@ export default function Omega() {
               {streamLive ? "Streaming" : "Polling"}
             </Badge>
             <Badge tone={tradeTag === "LIVE" ? "amber" : "cyan"}>
-              <span title={`Server ${serverName}`}>{brokerLabel} · {tradeTag} · {br.symbol || "—"}</span>
+              <span>{brokerLabel} · {tradeTag} · {br.symbol || "—"}</span>
             </Badge>
             {account ? (
               <Badge tone="cyan">
@@ -888,7 +893,7 @@ export default function Omega() {
           {configLocked ? (
             <span className="mono flex items-center gap-1.5 rounded-md border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1 text-emerald-200">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Session: <strong className="text-emerald-100">{serverName}</strong> · locked</span>
+              <span>Session: <strong className="text-emerald-100">{brokerName}</strong> · locked</span>
             </span>
           ) : (
             <span className="mono rounded-md border border-white/10 bg-black/40 px-2.5 py-1 text-slate-300">
@@ -1277,7 +1282,7 @@ export default function Omega() {
               <div>
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Accounts</div>
                 <div className="mt-1 flex items-center justify-between rounded-sm bg-white/3 px-2 py-1 border border-white/5">
-                  <span className="mono text-slate-200 truncate">{serverName}</span>
+                  <span className="mono text-slate-200 truncate">{accountLabel}</span>
                   <Badge tone={br.terminal_connected ? "green" : "red"}>
                     {br.trade_mode || "unknown"}
                   </Badge>
@@ -1887,7 +1892,7 @@ export default function Omega() {
                       </Badge>
                     </div>
                     <div className="mt-2 text-[13px] font-extrabold text-cyan-200 truncate">
-                      {serverName}
+                      {brokerName} · {accountLabel}
                     </div>
                     <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
                       <div className="flex justify-between">
@@ -2457,7 +2462,7 @@ export default function Omega() {
                 <div className="rounded-lg border border-emerald-400/40 bg-emerald-500/10 p-2.5 text-[11.5px] text-emerald-200">
                   <div className="flex items-center gap-2 font-semibold">
                     <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>Connected: {serverName} ({br.trade_mode ? br.trade_mode.toUpperCase() : "UNKNOWN"})</span>
+                    <span>Connected: {brokerName} · {accountLabel} ({br.trade_mode ? br.trade_mode.toUpperCase() : "UNKNOWN"})</span>
                   </div>
                   <p className="mt-1 text-[11px] text-slate-300">Disconnect to change broker or account.</p>
                 </div>
@@ -2825,8 +2830,7 @@ export default function Omega() {
             hint="Downgrades run at once: the kill switch or the daily loss to Safe, a 20% drawdown, 4 losses in a row, extreme volatility. Upgrades: one step on evidence, never above the ceiling or with a position or order open, at most one per 7 days."
             right={account ? <Badge tone="cyan">{account.profile_label}</Badge> : null}
           >
-            <OmegaAccounts accounts={accounts} />
-            {account?.account_ref ? <OmegaProfile account={account} onChanged={load} /> : <p className="text-[11px] text-slate-500">{accounts.length ? "No account is connected now. The controls act on the connected account only." : "No account seen yet."}</p>}
+            {account?.account_ref ? <OmegaProfile account={account} onChanged={load} /> : <p className="text-[11px] text-slate-500">No account is connected now. The controls act on the connected account only.</p>}
           </Panel>
           ) : null}
 
@@ -2844,9 +2848,9 @@ export default function Omega() {
               <dt className="text-slate-500">Key ID</dt><dd className="mono text-slate-300">{br.kid || "—"}</dd>
               <dt className="text-slate-500">Terminal</dt>
               <dd className={`mono ${br.terminal_connected ? "text-emerald-300" : "text-rose-300"}`}>
-                {br.terminal_connected ? `connected to ${br.server || "?"}` : "not connected"}
+                {br.terminal_connected ? `connected to ${brokerName}` : "not connected"}
               </dd>
-              <dt className="text-slate-500">Account</dt><dd className={`mono ${br.trade_mode === "real" ? "text-amber-200" : "text-slate-200"}`}>{br.trade_mode || "—"}{br.cent ? " · CENT (USC, shown in USD)" : ""}</dd>
+              <dt className="text-slate-500">Account</dt><dd className={`mono ${br.trade_mode === "real" ? "text-amber-200" : "text-slate-200"}`}>{br.trade_mode || "—"}{account?.money_text && account?.money?.source !== "usd" ? ` · ${account.money_text}; shown in USD` : ""}</dd>
               <dt className="text-slate-500">Balance</dt><dd className="mono text-slate-200">{balFmt(br.balance, acctCur)}</dd>
               <dt className="text-slate-500">Equity</dt><dd className="mono text-slate-200">{balFmt(br.equity, acctCur)}</dd>
               <dt className="text-slate-500">Symbol</dt><dd className="mono text-slate-200">{br.symbol || "—"}</dd>

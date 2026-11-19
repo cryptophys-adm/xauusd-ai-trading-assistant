@@ -39,12 +39,12 @@ test("unset, the switch reads the default; a person sets it with a reason, audit
   assert.equal(same.changed, false, "no Telegram for no change");
 
   env.DB.raw.exec("CREATE TABLE corpus_sources (source TEXT, last_minute_ms INTEGER, updated_ms INTEGER)");
-  env.DB.raw.prepare("INSERT INTO corpus_sources VALUES ('mt5:monex-demo:XAUUSD.M', ?, ?)").run(NOW - 120_000, NOW);
+  env.DB.raw.prepare("INSERT INTO corpus_sources VALUES ('mt5:anybroker-demo:XAUUSD.M', ?, ?)").run(NOW - 120_000, NOW);
   env.SIGNAL_CACHE.m.set("market-data:v2:series:OANDA:XAUUSD|1m", JSON.stringify({ fallback: { since_sec: Date.parse("2026-11-11T14:16:00Z") / 1000 } }));
   const state = await readFeedFallback(env, { now: NOW });
   assert.deepEqual([state.mode, state.mode_source, state.set_by, state.reason], ["off", "owner", "owner@example.com", "again"]);
   assert.deepEqual([state.active, state.active_since], [true, "2026-11-11T14:16:00.000Z"]);
-  assert.deepEqual(state.corpus, { source: "mt5:monex-demo:XAUUSD.M", last_bar_close: new Date(NOW - 60_000).toISOString(), age_s: 60 });
+  assert.deepEqual(state.corpus, { source: "mt5:anybroker-demo:XAUUSD.M", last_bar_close: new Date(NOW - 60_000).toISOString(), age_s: 60 });
   assert.equal(state.events.length, 2);
   assert.deepEqual([state.events[1].mode, state.events[1].previous_mode, state.events[1].reason], ["off", "auto", "trade only on TradingView"]);
   assert.doesNotMatch(JSON.stringify(state), /\d{4}\.\d/, "no price");

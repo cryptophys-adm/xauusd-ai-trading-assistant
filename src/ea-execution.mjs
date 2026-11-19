@@ -59,6 +59,9 @@ async function ensureSchema(db) {
   try { await db.prepare("ALTER TABLE ea_deals ADD COLUMN source TEXT").run(); } catch { /* already there */ }
   // Strategy arm (RFC §5, owner 2026-11-17): the strategy whose open intent opened the position.
   try { await db.prepare("ALTER TABLE ea_deals ADD COLUMN strategy TEXT").run(); } catch { /* already there */ }
+  // The account the deal belongs to (its opaque reference; owner 2026-11-19: pages show the connected account only).
+  // Deals stored before the column have none.
+  try { await db.prepare("ALTER TABLE ea_deals ADD COLUMN account_ref TEXT").run(); } catch { /* already there */ }
   schemaReady = true;
 }
 
@@ -120,11 +123,12 @@ export async function storeDeal(env, body, { now = Date.now() } = {}) {
   await ensureSchema(env.DB);
   const d = deal;
   const r = await env.DB.prepare(
-    `INSERT INTO ea_deals (deal_ticket, position_ticket, mode, side, volume, entry_price, exit_price, stop_loss, take_profit, profit, commission, swap, reason, signal_id, opened_ms, closed_ms, currency, received_at, source)
-     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    `INSERT INTO ea_deals (deal_ticket, position_ticket, mode, side, volume, entry_price, exit_price, stop_loss, take_profit, profit, commission, swap, reason, signal_id, opened_ms, closed_ms, currency, received_at, source, account_ref)
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
      WHERE NOT EXISTS (SELECT 1 FROM ea_deals WHERE deal_ticket = ?)
      ON CONFLICT DO NOTHING`
-  ).bind(d.deal_ticket, d.position_ticket, d.mode, d.side, d.volume, d.entry_price, d.exit_price, d.stop_loss, d.take_profit, d.profit, d.commission, d.swap, d.reason, d.signal_id, d.opened_ms, d.closed_ms, d.currency, new Date(now).toISOString(), DEAL_SOURCES.includes(body?.source) ? body.source : null, d.deal_ticket).run();
+  ).bind(d.deal_ticket, d.position_ticket, d.mode, d.side, d.volume, d.entry_price, d.exit_price, d.stop_loss, d.take_profit, d.profit, d.commission, d.swap, d.reason, d.signal_id, d.opened_ms, d.closed_ms, d.currency, new Date(now).toISOString(), DEAL_SOURCES.includes(body?.source) ? body.source : null,
+    typeof body?.account_ref === "string" && /^acct_[0-9a-f]{16}$/.test(body.account_ref) ? body.account_ref : null, d.deal_ticket).run();
   const stored = Number(r?.meta?.changes ?? 0) > 0;
   // A deal first stored without its source (before the column existed, 2026-11-11) takes it from a later
   // report: after the clean-up of 2026-11-13 kept each ticket's first row, 25 deals had none, and the

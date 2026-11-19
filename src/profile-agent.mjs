@@ -30,7 +30,7 @@
 // Limitation: deals in D1 ea_deals carry no account reference. The loss streak and the upgrade evidence read the
 // deals closed since the switch; that is correct for one connected account, which is what Omega runs today.
 
-import { PROFILES, ensureAccountSchema, withDayOp, accountIdentity } from "./account-spec.mjs";
+import { PROFILES, ensureAccountSchema, withDayOp, accountIdentity, dailyLossExecutor } from "./account-spec.mjs";
 import { DEAL_NET_SQL, DEAL_MONEY_COLUMNS_SQL } from "./gold-symbol.mjs";
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { HEALTH_AGENT_ID } from "./health-alerts.mjs";
@@ -54,6 +54,9 @@ const FORCED = new Set(["kill_switch", "daily_loss_limit"]);
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const num = (v) => (v == null ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 const parse = (s) => { try { return s == null ? null : JSON.parse(s); } catch { return null; } };
+// The account as the terminal describes it (currency, gold symbol), for every line the owner reads (owner 2026-11-19:
+// never an internal id or a server name).
+const accountName = (row) => accountIdentity(parse(row?.spec)).label;
 export const rank = (p) => LADDER.indexOf(p);
 const label = (p) => PROFILES[p]?.label ?? p;
 /** The next UTC midnight after `now`. */
@@ -143,11 +146,11 @@ export function decideProfile(row, ctx) {
   return { change: null, propose: { to: up, reason: "evidence", evidence, at_ms: now, expires_ms: now + PROPOSAL_TTL_MS }, state };
 }
 
-/** Pure: the Telegram line for a switch (the opaque reference, never the account number). */
-export function profileLine(accountRef, from, to, { actor, reason, forced }) {
+/** Pure: the Telegram line for a switch, naming the account as the terminal describes it (never an id or a login). */
+export function profileLine(name, from, to, { actor, reason, forced }) {
   const why = { kill_switch: "the kill switch", daily_loss_limit: "the daily loss limit", drawdown: `a ${DRAWDOWN_STEP_PCT}% drawdown`, loss_streak: `${LOSS_STREAK} losses in a row`,
     extreme_volatility: "extreme volatility", evidence: "evidence (equity above its peak, a positive record)", owner: "the owner", owner_override_daily_lock: "the owner, overriding today's daily loss block", owner_reset: "the owner's baseline reset", owner_reset_override_daily_lock: "the owner's baseline reset over today's daily loss stop", ceiling_lowered: "the owner's lower ceiling", proposal_accepted: "the owner accepting the agent's proposal" }[reason] ?? reason;
-  return `XAUUSD SYSTEM · Omega account ${accountRef}: profile ${label(from)} → ${label(to)} (${actor}, ${why})${forced ? "; no autonomous upgrade before the next UTC day" : ""}. New entries only; open positions keep their size and stop.`;
+  return `XAUUSD SYSTEM · Omega · ${name}: profile ${label(from)} → ${label(to)} (${actor}, ${why})${forced ? "; no autonomous upgrade before the next UTC day" : ""}. New entries only; open positions keep their size and stop.`;
 }
 
 /** Applies one switch: the row, the audit row, the Omega event, the Telegram line. Returns the change record. */
@@ -163,7 +166,7 @@ async function applySwitch(db, row, { to, reason, actor, forced = false, evidenc
   const id = Number(ins?.meta?.last_row_id) || null;
   const record = { account_ref: row.account_ref, from, to, actor, reason, evidence_ref: id ? `omega_profile_changes:${id}` : null, at: new Date(now).toISOString(), severity };
   try { if (log) await log("profile_changed", { ...record, evidence }); } catch { /* the audit row stands */ }
-  try { if (notify) await notify(profileLine(row.account_ref, from, to, { actor, reason, forced })); } catch { /* best effort */ }
+  try { if (notify) await notify(profileLine(accountName(row), from, to, { actor, reason, forced })); } catch { /* best effort */ }
   return record;
 }
 
@@ -188,7 +191,7 @@ async function downgradeReview(db, row, change, { state, ddReset, deals, executo
         .bind(row.account_ref, row.profile, row.profile, "council", "council_veto", JSON.stringify(evidence), "warning", now).run();
     } catch { /* the veto stands in the account row */ }
     try { if (log) await log("profile_downgrade_vetoed", { account_ref: row.account_ref, from: row.profile, to: change.to, ...evidence }); } catch { /* audit best effort */ }
-    try { if (notify) await notify(councilLine(row.account_ref, r, { from: row.profile, to: change.to })); } catch { /* best effort */ }
+    try { if (notify) await notify(councilLine(accountName(row), r, { from: row.profile, to: change.to })); } catch { /* best effort */ }
     return { status: "vetoed", review: r, review_pending: false };
   }
   const council = councilEvidence(r) ?? { verdict: r?.verdict ?? "failed", reason: r?.reason ?? "the council failed" };
@@ -265,12 +268,41 @@ export async function dealsSince(db, sinceMs) {
 }
 
 /**
+ * Pure: the raw inputs a daily-loss block stands on, recorded when it is set (orchestrator review of #478): the EA's own
+ * day start, balance and equity, the limit, and the account fields the day reference reads (onboarding, deposits and
+ * withdrawals of the day, the owner's override). Never the reference itself: that is recomputed from these.
+ */
+export function blockEvidence(row, executor, limitPct, now) {
+  const a = executor?.account ?? {};
+  return { v: 1, day: new Date(now).toISOString().slice(0, 10), at_ms: now, limit_pct: num(limitPct),
+    ea_day_start: num(a.broker_day_start_balance ?? a.day_start_balance), balance: num(a.balance), equity: num(a.equity),
+    row: { created_ms: num(row?.created_ms), onboard_balance: num(row?.onboard_balance), balance_peak: num(row?.balance_peak), day_ops: row?.day_ops ?? null, day_ref_override: row?.day_ref_override ?? null } };
+}
+
+/**
+ * Pure: whether the code as it is now finds no daily loss in a block's recorded inputs (`dayRef` is the day-reference
+ * function, dailyLossExecutor). Only a change of that code can lift a block: today's prices, the broker's day rolling
+ * before the UTC day, a withdrawal or the clock never do, because none of them is read. False (the block stands)
+ * without evidence, with evidence of another version, or on another day.
+ */
+export function blockUnsupported(row, { now, dayRef }) {
+  const ev = parse(row?.upgrade_block_evidence);
+  if (!ev || ev.v !== 1 || ev.day !== new Date(now).toISOString().slice(0, 10) || typeof dayRef !== "function") return false;
+  const eq = num(ev.equity), pct = num(ev.limit_pct);
+  if (!finite(eq) || !(eq > 0) || !finite(pct) || !(pct > 0) || !finite(num(ev.ea_day_start))) return false;
+  const exec = dayRef({ account: { day_start_balance: num(ev.ea_day_start), balance: num(ev.balance), equity: eq } }, ev.row ?? {}, num(ev.at_ms) ?? now);
+  const start = num(exec?.account?.day_start_balance);
+  if (!finite(start) || !(start > 0)) return false;
+  return !(eq <= start * (1 - pct / 100));
+}
+
+/**
  * One agent step for the account `row` (from syncAccount) on this executor state. `withEvidence` reads the deals
  * (the loss streak and the upgrade); the bridge sync runs without it (the forced, drawdown and volatility steps cost
  * no read), the 5-minute ledger cron with it. D1 writes only on a change. Never throws; a failure raises nothing.
  * Returns { status, change?, propose? }.
  */
-export async function runProfileAgent(db, rowIn, { executor, killed = false, dailyLoss = false, withEvidence = false, now = Date.now(), log = null, notify = null, review = null, downgradeCouncil = false, onboardingDay = false } = {}) {
+export async function runProfileAgent(db, rowIn, { executor, killed = false, dailyLoss = false, dailyPct = null, withEvidence = false, now = Date.now(), log = null, notify = null, review = null, downgradeCouncil = false, onboardingDay = false } = {}) {
   let row = rowIn;
   try {
     if (!row?.account_ref) return { status: "no_account" };
@@ -284,6 +316,17 @@ export async function runProfileAgent(db, rowIn, { executor, killed = false, dai
       orders: Array.isArray(executor?.orders) ? executor.orders.length : 0,
       atr_points: executor?.symbol?.atr_points, killed, daily_loss: dailyLoss, deals, now
     });
+    // A new daily-loss block records the raw inputs it stands on (the row as the caller read it for the daily loss).
+    if (decision.state.upgrade_block_reason === "daily_loss_limit" && decision.state.upgrade_block_until_ms) decision.state.upgrade_block_evidence = JSON.stringify(blockEvidence(rowIn, executor, dailyPct, now));
+    else if (decision.state.upgrade_block_reason === "kill_switch") decision.state.upgrade_block_evidence = null;
+    // A daily-loss block the code no longer finds in its own recorded inputs is lifted, audited (orchestrator relay, owner
+    // 2026-11-19: the $300 deposit counted twice set one that stood all day). The current day-reference code is run on
+    // the inputs recorded at the block, never on today's state; a block without evidence (set before this rule) runs to
+    // its end.
+    if (!killed && !dailyLoss && row.upgrade_block_reason === "daily_loss_limit" && num(row.upgrade_block_until_ms) > now && blockUnsupported(row, { now, dayRef: dailyLossExecutor })) {
+      Object.assign(decision.state, { upgrade_block_until_ms: null, upgrade_block_reason: null, upgrade_block_evidence: null });
+      try { if (log) await log("upgrade_block_lifted", { account_ref: row.account_ref, reason: "the current daily loss code finds no loss in the inputs the block was set on", evidence: parse(row.upgrade_block_evidence) }); } catch { /* audit best effort */ }
+    }
     // A block set on the onboarding day before the daily loss counted from onboarding (2026-11-18: the real account's
     // manual losses before Omega tripped it) is lifted once; a block with its reason recorded stands to the next day.
     if (onboardingDay && !killed && !dailyLoss && !decision.change?.forced && num(row.upgrade_block_until_ms) > now && row.upgrade_block_reason == null) {
@@ -340,14 +383,14 @@ export async function runProfileAgent(db, rowIn, { executor, killed = false, dai
       const r = await review(row, change, { deals, executor });
       if (r?.verdict === "approve") {
         const record = await applySwitch(db, row, { ...change, evidence: { ...(change.evidence ?? {}), council: councilEvidence(r) } }, { now, state: decision.state, log, notify });
-        try { if (notify) await notify(councilLine(row.account_ref, r, { from: row.profile, to: change.to })); } catch { /* best effort */ }
+        try { if (notify) await notify(councilLine(accountName(row), r, { from: row.profile, to: change.to })); } catch { /* best effort */ }
         return { status: "changed", change: record, review: r };
       }
       await writeState(db, row.account_ref, decision.state);
       if (r?.verdict !== "skipped") {
         try { if (log) await log("profile_upgrade_refused", { account_ref: row.account_ref, from: row.profile, to: change.to, council: councilEvidence(r) ?? { verdict: r?.verdict ?? "failed", reason: r?.reason ?? null } }); } catch { /* audit best effort */ }
         try {
-          if (notify) await notify(r?.seats ? councilLine(row.account_ref, r, { from: row.profile, to: change.to }) : `XAUUSD SYSTEM · Omega account ${row.account_ref}: the profile council could not review ${label(row.profile)} → ${label(change.to)} (${r?.reason ?? "failed"}); no upgrade.`);
+          if (notify) await notify(r?.seats ? councilLine(accountName(row), r, { from: row.profile, to: change.to }) : `XAUUSD SYSTEM · Omega · ${accountName(row)}: the profile council could not review ${label(row.profile)} → ${label(change.to)} (${r?.reason ?? "failed"}); no upgrade.`);
         } catch { /* best effort */ }
       }
       return { status: "refused", review: r };
@@ -365,7 +408,7 @@ export async function runProfileAgent(db, rowIn, { executor, killed = false, dai
       await writeState(db, row.account_ref, { ...decision.state, pending_upgrade: JSON.stringify(propose) });
       try { if (log) await log("profile_proposed", { account_ref: row.account_ref, from: row.profile, ...propose }); } catch { /* audit best effort */ }
       const advice = propose.council ? ` Council: ${propose.council.verdict} (${propose.council.reason}).` : "";
-      try { if (notify) await notify(`XAUUSD SYSTEM · Omega account ${row.account_ref}: the profile agent proposes ${label(row.profile)} → ${label(propose.to)} on evidence (${propose.evidence?.trades ?? "?"} trades, mean ${propose.evidence?.mean_net ?? "?"}).${advice} Accept or decline by ${new Date(propose.expires_ms).toISOString().slice(0, 16).replace("T", " ")} UTC: ${NEXUS_RISK_PROFILE_URL}`); } catch { /* best effort */ }
+      try { if (notify) await notify(`XAUUSD SYSTEM · Omega · ${accountName(row)}: the profile agent proposes ${label(row.profile)} → ${label(propose.to)} on evidence (${propose.evidence?.trades ?? "?"} trades, mean ${propose.evidence?.mean_net ?? "?"}).${advice} Accept or decline by ${new Date(propose.expires_ms).toISOString().slice(0, 16).replace("T", " ")} UTC: ${NEXUS_RISK_PROFILE_URL}`); } catch { /* best effort */ }
       return { status: "proposed", propose };
     }
     await writeState(db, row.account_ref, decision.state);
@@ -387,7 +430,7 @@ export async function ownerSetProfile(db, { account_ref, action, value = null, a
   // Owner 2026-11-19 ("harus bisa membedakan mana akun sen dan usd"): every owner control acts on the connected
   // account only, and a refusal names the account, so a change can never land on the other one unseen.
   if (requireConnected && (!connectedRef || connectedRef !== row.account_ref)) {
-    return { ok: false, error: `${accountIdentity(parse(row.spec)).label} (${row.account_ref}) is not the connected account: the controls act on the connected account only` };
+    return { ok: false, error: `${accountName(row)} is not the connected account: the controls act on the connected account only` };
   }
   const audit = async (what, detail) => { try { if (log) await log(what, { account_ref: row.account_ref, actor, ...detail }); } catch { /* audit best effort */ } };
   if (action === "reset") return resetBaseline(db, row, { actor, now, log, notify, executor, connectedRef, killed });
@@ -396,7 +439,7 @@ export async function ownerSetProfile(db, { account_ref, action, value = null, a
     if (!LADDER.includes(value)) return { ok: false, error: "ceiling must be safe, conservative, aggressive or custom" };
     await db.prepare("UPDATE omega_accounts SET ceiling = ? WHERE account_ref = ?").bind(value, row.account_ref).run();
     await audit("profile_ceiling_set", { from: row.ceiling, to: value });
-    try { if (notify) await notify(`XAUUSD SYSTEM · Omega account ${row.account_ref}: ceiling ${label(row.ceiling)} → ${label(value)} (owner).`); } catch { /* best effort */ }
+    try { if (notify) await notify(`XAUUSD SYSTEM · Omega · ${accountName(row)}: ceiling ${label(row.ceiling)} → ${label(value)} (owner).`); } catch { /* best effort */ }
     let change = null;
     if (rank(row.profile) > rank(value)) change = await applySwitch(db, { ...row, ceiling: value }, { to: value, reason: "ceiling_lowered", actor }, { now, log, notify });
     else if (parse(row.pending_upgrade) && rank(parse(row.pending_upgrade).to) > rank(value)) await writeState(db, row.account_ref, { pending_upgrade: null });
@@ -464,7 +507,7 @@ async function resetBaseline(db, row, { actor, now, log, notify, executor, conne
   if (lifted) {
     previous.upgrade_block_until_ms = block;
     previous.upgrade_block_reason = row.upgrade_block_reason ?? null;
-    Object.assign(set, { upgrade_block_until_ms: null, upgrade_block_reason: null, day_ref_override: JSON.stringify({ day: new Date(now).toISOString().slice(0, 10), ref: equity, at_ms: now, actor }) });
+    Object.assign(set, { upgrade_block_until_ms: null, upgrade_block_reason: null, upgrade_block_evidence: null, day_ref_override: JSON.stringify({ day: new Date(now).toISOString().slice(0, 10), ref: equity, at_ms: now, actor }) });
   }
   await writeState(db, row.account_ref, set);
   const evidence = { previous, baseline: { equity, balance }, ...(lifted ? { daily_stop_lifted: true, day_reference: equity } : {}) };
@@ -477,7 +520,7 @@ async function resetBaseline(db, row, { actor, now, log, notify, executor, conne
   } catch { /* the reset stands in the account row */ }
   try { if (log) await log(lifted ? "profile_baseline_reset_override" : "profile_baseline_reset", { account_ref: row.account_ref, actor, reason, evidence_ref: id ? `omega_profile_changes:${id}` : null, ...evidence }); } catch { /* audit best effort */ }
   const money = (v) => (finite(v) ? v.toFixed(2) : "—");
-  try { if (notify) await notify(`XAUUSD SYSTEM · Omega account ${row.account_ref}: baseline reset by the owner. Peak ${money(previous.balance_peak)} → ${money(balance)}, drawdown reference ${money(previous.dd_ref)} → ${money(equity)}, loss streak ${previous.losses_in_a_row ?? "—"} → 0. Profile ${label(row.profile)} and ceiling ${label(row.ceiling)} unchanged.${lifted ? ` Today's daily loss stop LIFTED by the owner's override: the day's loss now counts from ${money(equity)}.` : ""}`); } catch { /* best effort */ }
+  try { if (notify) await notify(`XAUUSD SYSTEM · Omega · ${accountName(row)}: baseline reset by the owner. Peak ${money(previous.balance_peak)} → ${money(balance)}, drawdown reference ${money(previous.dd_ref)} → ${money(equity)}, loss streak ${previous.losses_in_a_row ?? "—"} → 0. Profile ${label(row.profile)} and ceiling ${label(row.ceiling)} unchanged.${lifted ? ` Today's daily loss stop LIFTED by the owner's override: the day's loss now counts from ${money(equity)}.` : ""}`); } catch { /* best effort */ }
   return { ok: true, reset: { ...set, previous } };
 }
 

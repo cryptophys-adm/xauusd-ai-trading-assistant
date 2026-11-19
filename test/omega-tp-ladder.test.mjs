@@ -61,10 +61,10 @@ test("TL2b per mode and on closed candles: intraday 0.5R, swing 0.3R; the trigge
   const { ladderCandles, resetCandleCacheForTests } = await import("../src/omega-broker.mjs");
   resetCandleCacheForTests();
   const read = async () => ({ server: "OtherBroker-Live", symbol: "XAUUSD", bars });
-  const c = await ladderCandles({}, t0 + 16 * 60_000, { read, server: "FxPro-MT5 Demo", symbol: "GOLD" });
+  const c = await ladderCandles({}, t0 + 16 * 60_000, { read, server: "OtherBroker-Server Demo", symbol: "GOLD" });
   assert.deepEqual([c.M5, c.M15, c.H1], [null, null, null]);
   resetCandleCacheForTests();
-  const c2 = await ladderCandles({}, t0 + 16 * 60_000, { read: async () => ({ server: "FxPro-MT5 Demo", symbol: "GOLD", bars }), server: "FxPro-MT5 Demo", symbol: "GOLD" });
+  const c2 = await ladderCandles({}, t0 + 16 * 60_000, { read: async () => ({ server: "OtherBroker-Server Demo", symbol: "GOLD", bars }), server: "OtherBroker-Server Demo", symbol: "GOLD" });
   assert.ok(c2.M15, "same broker and symbol: its own candle");
 });
 

@@ -26,7 +26,7 @@ function d1() {
 }
 const NOW = Date.parse("2026-11-18T10:00:00Z");
 const DAY = 86_400_000;
-const exec = (equity = 1000, balance = 1000, hash = "d") => ({ connected: true, server: "FxPro-MT5 Demo", executor: { version: "1.16" }, account: { currency: "USD", equity, balance, leverage: 500, margin_mode: "hedging", login_hash: hash.repeat(64), trade_mode: "demo" },
+const exec = (equity = 1000, balance = 1000, hash = "d") => ({ connected: true, server: "OtherBroker-Server Demo", executor: { version: "1.16" }, account: { currency: "USD", equity, balance, leverage: 500, margin_mode: "hedging", login_hash: hash.repeat(64), trade_mode: "demo" },
   symbol: { name: "GOLD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, trade_mode: "full", margin_per_lot: 0.38, atr_points: 200 }, positions: [], orders: [] });
 
 async function seeded() {

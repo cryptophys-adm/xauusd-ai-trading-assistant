@@ -88,7 +88,7 @@ test("envelope: WebCrypto RSA-OAEP + AES-256-GCM round trip and refusal of wrong
   try {
     const keys = loadOrCreateKeyPair(tmpDir);
     const secretPayload = {
-      server: "Monex-Live",
+      server: "AnyBroker-Live",
       login: "88776655",
       password: "SuperSecretBrokerPassword!42",
     };
@@ -128,7 +128,7 @@ test("envelope: WebCrypto RSA-OAEP + AES-256-GCM round trip and refusal of wrong
 
     // Refuse invalid plaintext JSON or missing fields without leaking plaintext
     const badEnvelope = await buildBrowserEnvelope(keys.publicKeyBase64, keys.kid, {
-      server: "Monex-Live",
+      server: "AnyBroker-Live",
       login: "88776655",
       password: "",
     });
@@ -136,7 +136,7 @@ test("envelope: WebCrypto RSA-OAEP + AES-256-GCM round trip and refusal of wrong
       () => openEnvelope(badEnvelope, keys.privateKey, keys.kid),
       (err) => {
         assert.ok(!err.message.includes("88776655"));
-        assert.ok(!err.message.includes("Monex-Live"));
+        assert.ok(!err.message.includes("AnyBroker-Live"));
         return true;
       },
     );
@@ -150,7 +150,7 @@ test("ini: applyCredentials and clearCredentials preserve comments, unrelated ke
     "; Gateway configuration file",
     "[Common]",
     "Login=11111",
-    "Server=Monex-Demo",
+    "Server=AnyBroker-Demo",
     "Password=oldpass",
     "NewsEnable=0",
     "KeepPrivate=1",
@@ -170,7 +170,7 @@ test("ini: applyCredentials and clearCredentials preserve comments, unrelated ke
   ].join("\r\n");
 
   const updated = applyCredentials(sampleIniCrlf, {
-    server: "Monex-Real",
+    server: "AnyBroker-Real",
     login: "998877",
     password: "new-secret-password",
     takeStartup: true,
@@ -195,7 +195,7 @@ test("ini: applyCredentials and clearCredentials preserve comments, unrelated ke
 
   // Credentials and Experts flags updated
   assert.ok(updated.includes("Login=998877\r\n"));
-  assert.ok(updated.includes("Server=Monex-Real\r\n"));
+  assert.ok(updated.includes("Server=AnyBroker-Real\r\n"));
   assert.ok(updated.includes("Password=new-secret-password\r\n"));
   assert.ok(updated.includes("Enable=1\r\n"));
   assert.ok(updated.includes("AllowLiveTrading=1\r\n"));
@@ -208,7 +208,7 @@ test("ini: applyCredentials and clearCredentials preserve comments, unrelated ke
 
   // When takeStartup is false, StartUp section is untouched
   const keptStartup = applyCredentials(sampleIniCrlf, {
-    server: "Monex-Real",
+    server: "AnyBroker-Real",
     login: "998877",
     password: "new-secret-password",
     takeStartup: false,
@@ -222,20 +222,20 @@ test("ini: applyCredentials and clearCredentials preserve comments, unrelated ke
   const cleared = clearCredentials(updated);
   assert.ok(cleared.includes("Login=\r\n"));
   assert.ok(cleared.includes("Password=\r\n"));
-  assert.ok(cleared.includes("Server=Monex-Real\r\n"));
+  assert.ok(cleared.includes("Server=AnyBroker-Real\r\n"));
   assert.ok(cleared.includes("AllowLiveTrading=0\r\n"));
   assert.ok(cleared.includes("; keep this comment\r\n"));
   assert.equal(cleared.replace(/\r\n/g, "").includes("\n"), false);
 
   // Creating missing sections from an empty INI
   const fromEmpty = applyCredentials("", {
-    server: "Monex-Demo",
+    server: "AnyBroker-Demo",
     login: "12345",
     password: "pw",
     takeStartup: true,
     symbol: "XAUUSD.m",
   });
-  assert.ok(fromEmpty.includes("[Common]\nLogin=12345\nServer=Monex-Demo\nPassword=pw"));
+  assert.ok(fromEmpty.includes("[Common]\nLogin=12345\nServer=AnyBroker-Demo\nPassword=pw"));
   assert.ok(fromEmpty.includes("[Experts]\nEnable=1\nEnabled=1\nAllowLiveTrading=1\nAllowDllImport=0\nAccount=0\nProfile=0"));
   assert.ok(fromEmpty.includes("[StartUp]\nExpert=OmegaExecutor\nSymbol=XAUUSD.m\nPeriod=M1"));
 });
@@ -294,7 +294,7 @@ test("files: intents.txt format & atomic write, state.json parse handling, and r
       path.join(omegaDir, "state.json"),
       JSON.stringify({
         connected: true,
-        server: "Monex-Demo",
+        server: "AnyBroker-Demo",
         login: "123456",
         account: {
           login: "123456",
@@ -375,7 +375,7 @@ test("daemon: applies new connection once, restarts terminal once, skips same ve
     const initialIni = [
       "[Common]",
       "Login=0000",
-      "Server=Monex-Demo",
+      "Server=AnyBroker-Demo",
       "Password=init",
       "NewsEnable=0",
       "KeepPrivate=1",
@@ -438,7 +438,7 @@ test("daemon: applies new connection once, restarts terminal once, skips same ve
     });
 
     const envelope = await buildBrowserEnvelope(daemon.keys.publicKeyBase64, daemon.keys.kid, {
-      server: "Monex-Live",
+      server: "AnyBroker-Live",
       login: sensitiveLogin,
       password: sensitivePassword,
     });
@@ -466,7 +466,7 @@ test("daemon: applies new connection once, restarts terminal once, skips same ve
         ],
         connection: {
           version: 1,
-          server: "Monex-Live",
+          server: "AnyBroker-Live",
           envelope,
         },
         settings_version: 1,
@@ -482,7 +482,7 @@ test("daemon: applies new connection once, restarts terminal once, skips same ve
       cmd: "systemctl",
       args: ["restart", "mt5-terminal.service"],
     });
-    assert.equal(syncBodies[0].bridge_version, "1.5.0");
+    assert.equal(syncBodies[0].bridge_version, "1.6.0");
     assert.equal(syncBodies[0].kid, daemon.keys.kid);
     assert.equal(syncBodies[0].public_key, daemon.keys.publicKeyBase64);
     assert.equal(syncBodies[0].results.length, 1);
@@ -492,7 +492,7 @@ test("daemon: applies new connection once, restarts terminal once, skips same ve
     const iniAfterV1 = fs.readFileSync(terminalIni, "utf8");
     assert.ok(iniAfterV1.includes(`Login=${sensitiveLogin}`));
     assert.ok(iniAfterV1.includes(`Password=${sensitivePassword}`));
-    assert.ok(iniAfterV1.includes("Server=Monex-Live"));
+    assert.ok(iniAfterV1.includes("Server=AnyBroker-Live"));
     assert.ok(iniAfterV1.includes("AllowLiveTrading=1"));
     assert.ok(iniAfterV1.includes("Expert=OmegaExecutor"));
     assert.equal(fs.statSync(terminalIni).mode & 0o777, 0o600);
@@ -501,7 +501,7 @@ test("daemon: applies new connection once, restarts terminal once, skips same ve
     const appliedText = fs.readFileSync(path.join(stateDir, "applied.json"), "utf8");
     const appliedJson = JSON.parse(appliedText);
     assert.equal(appliedJson.version, 1);
-    assert.equal(appliedJson.server, "Monex-Live");
+    assert.equal(appliedJson.server, "AnyBroker-Live");
     assert.ok(!appliedText.includes(sensitiveLogin));
     assert.ok(!appliedText.includes(sensitivePassword));
 
@@ -591,15 +591,15 @@ test("Corpus Oracle: readCorpus returns the closed M1 bars after the cursor; the
     fs.mkdirSync(mt5FilesDir, { recursive: true });
     const T0 = 1794391200000;
     const bars = Array.from({ length: 5 }, (_, i) => [T0 + i * 60000, 4100 + i, 4101 + i, 4099 + i, 4100.5 + i, 100, 18]);
-    fs.writeFileSync(path.join(mt5FilesDir, "corpus.json"), "﻿" + JSON.stringify({ server: "Monex-Live", symbol: "XAUUSD", timeframe: "M1", digits: 2, utc_offset_s: 7200, written_ms: T0 + 300000, bars, login: 123 }));
+    fs.writeFileSync(path.join(mt5FilesDir, "corpus.json"), "﻿" + JSON.stringify({ server: "AnyBroker-Live", symbol: "XAUUSD", timeframe: "M1", digits: 2, utc_offset_s: 7200, written_ms: T0 + 300000, bars, login: 123 }));
     const all = readCorpus(mt5FilesDir);
-    assert.deepEqual([all.server, all.symbol, all.timeframe, all.bars.length], ["Monex-Live", "XAUUSD", "M1", 5]);
+    assert.deepEqual([all.server, all.symbol, all.timeframe, all.bars.length], ["AnyBroker-Live", "XAUUSD", "M1", 5]);
     assert.equal(all.login, undefined, "never a login");
     assert.equal(readCorpus(mt5FilesDir, { afterMs: T0 + 2 * 60000 }).bars.length, 2);
     assert.equal(readCorpus(mt5FilesDir, { afterMs: T0 + 9 * 60000 }), null);
     fs.writeFileSync(path.join(mt5FilesDir, "corpus.json"), "{not json");
     assert.equal(readCorpus(mt5FilesDir), null);
-    fs.writeFileSync(path.join(mt5FilesDir, "corpus.json"), JSON.stringify({ server: "Monex-Live", symbol: "XAUUSD", timeframe: "M1", bars }));
+    fs.writeFileSync(path.join(mt5FilesDir, "corpus.json"), JSON.stringify({ server: "AnyBroker-Live", symbol: "XAUUSD", timeframe: "M1", bars }));
 
     const bodies = [];
     let cursor = null;
@@ -629,15 +629,27 @@ test("MT5 fallback stage 2: corpus_macro.json per base after its cursor; calenda
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omega-macro-"));
   assert.equal(readCorpusMacro(dir), null, "no file");
   const bars = (n) => Array.from({ length: n }, (_, i) => [1_000_000 * 60_000 + i * 60_000, 1, 2, 0.5, 1.5, 3, 1]);
-  fs.writeFileSync(path.join(dir, "corpus_macro.json"), JSON.stringify({ server: "Monex-Demo", series: [
+  fs.writeFileSync(path.join(dir, "corpus_macro.json"), JSON.stringify({ server: "AnyBroker-Demo", series: [
     { base: "XAGUSD", symbol: "XAGUSD.m", bars: bars(5) }, { base: "eurusd", symbol: "EURUSD.m", bars: bars(3) }, { base: "BTCUSD", symbol: "BTCUSD.m", bars: bars(3) }
   ] }));
   const all = readCorpusMacro(dir);
   assert.deepEqual(all.series.map((s) => [s.base, s.bars.length]), [["XAGUSD", 5], ["EURUSD", 3]], "known bases only, upper case");
   const after = readCorpusMacro(dir, { afterMsByBase: { XAGUSD: bars(5)[3][0], EURUSD: bars(3)[2][0] } });
   assert.deepEqual(after.series.map((s) => [s.base, s.bars.length]), [["XAGUSD", 1]], "only bars after each base's cursor");
-  fs.writeFileSync(path.join(dir, "calendar.json"), JSON.stringify({ server: "Monex-Demo", written_ms: 500, events: [{ value_id: "9", title: "Nonfarm Payrolls", currency: "USD", time_ms: 1, importance: 3, actual: 119, forecast: null }, { title: "" }] }));
+  fs.writeFileSync(path.join(dir, "calendar.json"), JSON.stringify({ server: "AnyBroker-Demo", written_ms: 500, events: [{ value_id: "9", title: "Nonfarm Payrolls", currency: "USD", time_ms: 1, importance: 3, actual: 119, forecast: null }, { title: "" }] }));
   const cal = readCalendar(dir);
   assert.deepEqual([cal.written_ms, cal.events.length, cal.events[0].actual, cal.events[0].forecast], [500, 1, 119, null]);
   assert.equal(readCalendar(dir, { afterWrittenMs: 500 }), null, "the server already took this file");
+});
+
+test("reference.txt (1.6.0): the price with its own time, then the past H4 closes oldest first; an old server's bare price still works", async () => {
+  const { writeReferencePrice } = await import("../src/files.mjs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omega-ref-"));
+  try {
+    writeReferencePrice(dir, { price: 3734.12, market_ms: 1795050000000, closes: [[1795000000000, 3720.5], [1795014400000, 3725.25]] }, { now: () => 1795050123000 });
+    assert.equal(fs.readFileSync(path.join(dir, "reference.txt"), "ascii"), "3734.12;1795050000000\n1795000000000;3720.5\n1795014400000;3725.25\n");
+    writeReferencePrice(dir, 3700, { now: () => 1795050200000 });
+    assert.equal(fs.readFileSync(path.join(dir, "reference.txt"), "ascii"), "3700;1795050200000\n", "a bare price: the time it was written");
+    assert.equal(writeReferencePrice(dir, null), null, "no reference (the server's feed runs on the broker's bars): nothing written");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

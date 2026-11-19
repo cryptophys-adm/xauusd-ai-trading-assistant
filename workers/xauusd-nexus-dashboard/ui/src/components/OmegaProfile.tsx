@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 
 // Account profile controls (docs/RFC_ACCOUNT_PROFILES.md §10, ADR-0020 Amendment 3), on the Setup view's "Risk profile"
+// panel, for the account the terminal is connected to now only, described by what the terminal reports (owner
+// 2026-11-19: no list of other accounts, no internal id, no server name). The account's internal id travels in the
+// requests only, so the server can refuse anything but the connected account.
+//
 // panel (owner 2026-11-18: not on the monitoring view; no prose; an explicit Update with a confirm). Changing a select
 // only edits a draft; Update names the change and applies it after the owner confirms. The server refuses anyone but
 // the owner (owner_only) and audits each change; a ceiling below the profile lowers the profile at once.
@@ -66,26 +70,6 @@ export function changeSummary(from: Draft, to: Draft): string {
   if (to.ceiling !== from.ceiling) parts.push(`Ceiling ${LABEL[from.ceiling] ?? from.ceiling} → ${LABEL[to.ceiling] ?? to.ceiling}`);
   if (to.agent_mode !== from.agent_mode) parts.push(`Agent ${MODE_LABEL[from.agent_mode] ?? from.agent_mode} → ${MODE_LABEL[to.agent_mode] ?? to.agent_mode}`);
   return parts.join(", ");
-}
-
-/**
- * Every account Omega has seen, each with what it is (USD or cent, its gold symbol) and whether it is the one the
- * terminal is logged in to now (owner 2026-11-19: "harus bisa membedakan mana akun sen dan usd"). The controls below
- * act on the connected account only.
- */
-export function OmegaAccounts({ accounts }: { accounts: Account[] }) {
-  if (accounts.length < 2) return null;
-  return (
-    <ul className="mb-2 space-y-1 text-[12px]" aria-label="Accounts seen by Omega">
-      {accounts.map((a) => (
-        <li key={a.account_ref} className={`flex flex-wrap items-center gap-x-2 rounded-sm border px-2 py-1 ${a.connected ? "border-emerald-400/30 bg-emerald-400/5" : "border-white/5 text-slate-500"}`}>
-          <span className={a.connected ? "font-semibold text-emerald-200" : ""}>{a.identity?.label ?? "Account"}</span>
-          <span className="text-slate-500">{a.server ?? "server unknown"} · {a.account_ref}</span>
-          <span className={a.connected ? "text-emerald-300" : "text-slate-500"}>{a.connected ? "connected" : "not connected"}</span>
-        </li>
-      ))}
-    </ul>
-  );
 }
 
 export default function OmegaProfile({ account, onChanged }: { account: Account; onChanged: () => void | Promise<void> }) {
@@ -227,7 +211,6 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
           <div className="text-slate-300" id="omega-account-seen">
             {h.first_time ? "First time on Omega" : `On Omega since ${h.first_seen_ms ? day(h.first_seen_ms) : "—"}`}
             {h.last_seen_ms ? ` · last seen ${ago(h.last_seen_ms)}` : ""}
-            <span className="text-slate-500"> · {account.server ?? "server unknown"} · {account.account_ref}</span>
           </div>
           <div className="flex flex-wrap gap-x-3 text-[11.5px] text-slate-400">
             <span>Peak {usd(h.balance_peak)}</span>
@@ -238,9 +221,9 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
           </div>
           {resetting ? (
             <div className="flex flex-wrap items-center gap-2 rounded-sm border border-amber-400/30 bg-amber-400/5 px-2 py-1.5" role="alertdialog" aria-label="Confirm the baseline reset">
-              <span className="text-amber-100">Reset {account.account_ref}: peak {usd(h.balance_peak)} and DD ref {usd(h.dd_ref)} start again from the account now, losses in a row {h.losses_in_a_row ?? "—"} → 0. Profile and ceiling unchanged.
+              <span className="text-amber-100">Reset this account ({account.identity?.label ?? "connected"}): peak {usd(h.balance_peak)} and DD ref {usd(h.dd_ref)} start again from the account now, losses in a row {h.losses_in_a_row ?? "—"} → 0. Profile and ceiling unchanged.
                 {resetting === "reset_override" ? " ALSO lifts today's daily loss stop: Omega may open new positions today; the day's loss counts again from the equity now. Recorded as an override." : ""} Confirm?</span>
-              <button id="omega-reset-confirm" className="btn border-amber-400/40 bg-amber-400/10 text-amber-100" disabled={busy} onClick={reset}>{resetting === "reset_override" ? "Reset + lift today's stop" : `Reset ${account.account_ref}`}</button>
+              <button id="omega-reset-confirm" className="btn border-amber-400/40 bg-amber-400/10 text-amber-100" disabled={busy} onClick={reset}>{resetting === "reset_override" ? "Reset + lift today's stop" : "Reset"}</button>
               <button className="btn" disabled={busy} onClick={() => setResetting(false)}>Cancel</button>
             </div>
           ) : (

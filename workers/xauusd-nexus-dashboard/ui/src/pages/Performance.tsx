@@ -688,7 +688,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
 
       {/* Open Positions in Broker MT5 */}
       <Panel
-        title={`Open Positions${br.server ? ` · ${br.server}` : ""} (${positions.length})`}
+        title={`Open Positions${br.broker ? ` · ${br.broker}` : ""} (${positions.length})`}
         icon={<Activity className="h-3.5 w-3.5 text-emerald-400" />}
         right={
           <div className="flex items-center gap-2">

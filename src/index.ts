@@ -1818,7 +1818,9 @@ async function publishOmegaOverview(env: Env, state: unknown = null): Promise<vo
     const body = await omegaOverviewBody(env) as Record<string, any>;
     // This sync's own quote, account and positions (the D1 row can be up to 30 s old): the page's chart and
     // prices move at the bridge's 5-second sync, with nothing written (owner 2026-11-14: realtime, no added cost).
-    const live = state ? liveBridgeFields(state) : null;
+    // Converted with the same units per dollar as the sync (the owner's value with the connection, until trades measure it).
+    const ownerUnits = Number(body?.broker?.connection?.units_per_usd) > 0 ? Number(body.broker.connection.units_per_usd) : null;
+    const live = state ? liveBridgeFields(state, { ownerUnitsPerUsd: ownerUnits }) : null;
     if (live && body?.broker?.bridge) body.broker = { ...body.broker, bridge: { ...body.broker.bridge, ...live } };
     await publishSnapshot(env, "omega-overview", body);
   } catch (e) {

@@ -110,9 +110,17 @@ export function measuredUnitsPerUsd({ positions = [], deals = [], symbol = null 
 
 /**
  * Pure: the account's money as Omega reads it: { currency, units_per_usd, source, problem }. source is "usd" (the
- * account currency is USD), "measured" (its own trades), "owner" (the value the owner gave, until a trade measures
+ * account currency is USD), "measured" (its own trades), "owner_verified" (the owner's value, which the trades confirm),
+ * "owner" (the value the owner gave, until a trade measures
  * it) or null; problem is null, "money_unverified" (no value) or "money_mismatch" (a measurement disagrees).
  */
+/** Pure: a measured ratio within 1% of 10^n (n = -3..6) is exactly 10^n; any other ratio (a currency's rate) is kept. */
+export function snapPowerOfTen(v) {
+  if (!fin(v) || !(v > 0)) return v;
+  const p = 10 ** Math.round(Math.log10(v));
+  return Math.abs(v - p) <= p * 0.01 && p >= 1e-3 && p <= 1e6 ? p : v;
+}
+
 export function accountMoney({ currency, positions = [], deals = [], symbol = null, ownerUnitsPerUsd = null } = {}) {
   const cur = typeof currency === "string" ? currency.trim() : "";
   const measured = measuredUnitsPerUsd({ positions, deals, symbol });
@@ -124,7 +132,11 @@ export function accountMoney({ currency, positions = [], deals = [], symbol = nu
   }
   if (measured) {
     if (owner && off(measured.units_per_usd, owner)) return { currency: cur || null, units_per_usd: measured.units_per_usd, source: "measured", owner, problem: "money_mismatch" };
-    return { currency: cur || null, units_per_usd: measured.units_per_usd, source: "measured", samples: measured.samples, problem: null };
+    // Converted with an exact number (orchestrator review of #477): the owner's value when the measurement agrees with it
+    // (the measurement verifies, the declared value converts); otherwise a measurement within 1% of a power of ten is
+    // that power (a cent account is 100 by construction, a median of 99.7 would scale every amount by 0.3%).
+    if (owner) return { currency: cur || null, units_per_usd: owner, source: "owner_verified", measured: measured.units_per_usd, samples: measured.samples, problem: null };
+    return { currency: cur || null, units_per_usd: snapPowerOfTen(measured.units_per_usd), source: "measured", measured: measured.units_per_usd, samples: measured.samples, problem: null };
   }
   if (owner) return { currency: cur || null, units_per_usd: owner, source: "owner", problem: null };
   return { currency: cur || null, units_per_usd: null, source: null, problem: "money_unverified" };
@@ -137,7 +149,7 @@ export function accountMoney({ currency, positions = [], deals = [], symbol = nu
  * null when ok. The price (goldPriceProblem) and the account's money (accountMoney) are checked beside it.
  */
 export function goldSymbolCheck(sym, symbolError = null) {
-  if (typeof symbolError === "string" && symbolError) return { ok: false, problem: `symbol_error:${symbolError.slice(0, 96)}` };
+  if (typeof symbolError === "string" && symbolError) return { ok: false, problem: `symbol_error:${symbolError.slice(0, 200)}` };
   const name = typeof sym?.name === "string" ? sym.name : "";
   if (!name) return { ok: false, problem: "no_symbol" };
   if (typeof sym?.currency_profit !== "string" || !sym.currency_profit) return { ok: false, problem: "currency_not_reported" };
@@ -164,6 +176,24 @@ export function goldPriceProblem(sym, reference) {
 }
 
 /** Pure: a readable line for the Omega page and the health alert. */
+/**
+ * Pure: the EA's refusal in words. OmegaExecutor 1.20 refuses to pick between gold symbols with different contracts
+ * ("ambiguous_gold_symbols (GOLD:100,GoldOne:1): ..."): the names and contracts are shown as reported, so the owner knows
+ * what to type; reason codes are spelled out, symbol names are never altered.
+ */
+export function eaRefusalText(problem) {
+  const p = String(problem).replace(/^symbol_error:/, "");
+  const amb = p.match(/ambiguous_gold_symbols \(([^)]*)\)/);
+  if (amb) {
+    const list = amb[1].split(",").filter(Boolean).map((x) => { const [n, c] = x.split(":"); return `${n} (${c} oz)`; }).join(", ");
+    return `several symbols on this server are gold priced in USD with different contracts: ${list}. Name the account's gold symbol with the connection (Setup, Connection & EA)`;
+  }
+  const words = { no_usd_gold_symbol: "no gold priced in USD found", no_reference_price: "no reference gold price yet (the server sends none while its feed runs on this broker's bars)",
+    price_not_gold: "its price is not gold's", price_path_mismatch: "its past prices do not follow gold's", no_history: "its price history is still loading",
+    expiring_contract: "it is a contract with an expiry, not spot gold", no_reference_path: "no past reference prices yet" };
+  return `the EA refused it: ${p.replace(/\b(no_usd_gold_symbol|no_reference_price|price_not_gold|price_path_mismatch|no_history|expiring_contract|no_reference_path)\b/g, (w) => words[w])}`;
+}
+
 export function goldSymbolText(check, sym) {
   if (check?.ok) return `${sym?.name} (USD, ${sym?.contract_size} oz a lot)`;
   const name = typeof sym?.name === "string" && sym.name ? sym.name : "no symbol";
@@ -173,7 +203,7 @@ export function goldSymbolText(check, sym) {
     profit_currency_not_usd: `its profit currency is ${sym?.currency_profit}, not USD`,
     contract_size_not_reported: "the EA did not report the contract size (OmegaExecutor 1.14 or later needed)",
     contract_size_out_of_range: `its contract size ${sym?.contract_size} is outside ${GOLD_CONTRACT_SIZE_MIN}-${GOLD_CONTRACT_SIZE_MAX} oz`,
-  }[check?.problem] ?? String(check?.problem ?? "refused").replace(/^symbol_error:/, "the EA refused it: ").replace(/_/g, " ");
+  }[check?.problem] ?? eaRefusalText(String(check?.problem ?? "refused"));
   return `${name} refused: ${why}. No new entries.`;
 }
 
@@ -183,5 +213,30 @@ export function moneyText(m) {
   if (m.problem === "money_unverified") return `${m.currency ?? "The account currency"} is not USD and the account has no trade yet to measure it against the dollar: set its value with the connection (e.g. 100 for a cent account). No new entries.`;
   if (m.problem === "money_mismatch") return `${m.currency}: the account's trades measure ${m.measured ?? m.units_per_usd} a dollar, not ${m.source === "usd" ? 1 : m.owner}. No new entries.`;
   if (m.source === "usd") return "USD";
-  return `${m.currency}: ${m.units_per_usd} a dollar (${m.source === "measured" ? `measured from ${m.samples ?? "its"} trades` : "the owner's value, until a trade measures it"})`;
+  const how = m.source === "measured" ? `measured from ${m.samples ?? "its"} trades`
+    : m.source === "owner_verified" ? `the owner's value, confirmed by ${m.samples ?? "its"} trades` : "the owner's value, until a trade measures it";
+  return `${m.currency}: ${m.units_per_usd} a dollar (${how})`;
+}
+
+/**
+ * The reference OmegaExecutor finds gold by (orchestrator review of #477): the feed's last 5-minute close and its time,
+ * and its last REFERENCE_H4_CLOSES closed 4-hour closes ([close_ms, close], oldest first) for the EA's price-path check.
+ * Null while the feed runs on the broker's own bars (the MT5 fallback, `fallbackSinceMs`): a broker is never checked
+ * against itself. Pure: `h4` is the cached 4h series ({ candles }), `fallbackSince` the fallback's start or null.
+ */
+export const REFERENCE_H4_CLOSES = 12;
+// `excluded`: [from_ms, to_ms] intervals the feed ran on the broker's bars (the last recorded MT5 fallback, until the
+// series is healed from TradingView): a 4h bar overlapping one is the broker's own and is left out.
+export function referenceFrom({ price, marketMs = null, h4 = null, fallbackSince = null, excluded = [], now = Date.now() } = {}) {
+  const p = Number(price), at = Number(marketMs);
+  if (!(p > 0)) return null;
+  if (fallbackSince != null && (!(at > 0) || at > fallbackSince)) return null;
+  const spans = (Array.isArray(excluded) ? excluded : []).filter((x) => Array.isArray(x) && Number(x[0]) > 0).map(([a, b]) => [Number(a), Number(b) > 0 ? Number(b) : now]);
+  if (spans.some(([a, b]) => at > 0 && at > a && at <= b + 300_000)) return null;
+  const closes = (Array.isArray(h4?.candles) ? h4.candles : [])
+    .map((c) => [Date.parse(c?.close_time), Number(c?.close)])
+    .filter(([t, c]) => Number.isFinite(t) && t <= now && c > 0 && (fallbackSince == null || t <= fallbackSince)
+      && !spans.some(([a, b]) => t > a && t - 14_400_000 < b))
+    .sort((a, b) => a[0] - b[0]).slice(-REFERENCE_H4_CLOSES);
+  return { price: p, market_ms: at > 0 ? at : null, closes };
 }

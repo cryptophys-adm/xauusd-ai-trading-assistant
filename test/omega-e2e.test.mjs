@@ -45,7 +45,7 @@ function d1() {
 const ISSUED = Date.parse("2026-11-09T11:00:00Z");
 let clock = ISSUED + 5 * 60_000;
 const SIGNAL = { side: "BUY", entry: 4100, stop: 4095, tp1: 4110, issued_ms: ISSUED, expires_ms: ISSUED + 3_600_000, blackout: false, kill: false, paused: false };
-const INI = "; MT5 gateway\r\n[Common]\r\nLogin=REPLACE_LOGIN\r\nServer=Monex-Demo\r\nPassword=REPLACE_PASSWORD\r\nKeepPrivate=1\r\n[Experts]\r\nEnable=1\r\nAllowLiveTrading=0\r\n[StartUp]\r\nExpert=m1_ohlcv_ingest\r\nSymbol=REPLACE_SYMBOL\r\nPeriod=M1\r\nExpertParameters=m1_ohlcv_ingest.set\r\n";
+const INI = "; MT5 gateway\r\n[Common]\r\nLogin=REPLACE_LOGIN\r\nServer=AnyBroker-Demo\r\nPassword=REPLACE_PASSWORD\r\nKeepPrivate=1\r\n[Experts]\r\nEnable=1\r\nAllowLiveTrading=0\r\n[StartUp]\r\nExpert=m1_ohlcv_ingest\r\nSymbol=REPLACE_SYMBOL\r\nPeriod=M1\r\nExpertParameters=m1_ohlcv_ingest.set\r\n";
 
 test("bridge ⇄ Omega ⇄ engine: key registration, encrypted login, a sized order, its result, disconnect", async () => {
   resetKeyCacheForTests();
@@ -90,8 +90,8 @@ test("bridge ⇄ Omega ⇄ engine: key registration, encrypted login, a sized or
     assert.equal(readFileSync(join(files, "intents.txt"), "utf8").trim(), `#v1;${clock}`);
 
     // 2. The owner enters the credentials on the page (browser-side encryption) and enables the engine.
-    const envelope = await buildEnvelope(key.public_key, key.kid, { server: "Monex-Demo", login: "5550123", password: "hunter2!" });
-    assert.equal((await setConnection(aiEnv, { envelope, server: "Monex-Demo", actor: "owner@example.com" }, { now: clock })).ok, true);
+    const envelope = await buildEnvelope(key.public_key, key.kid, { server: "AnyBroker-Demo", login: "5550123", password: "hunter2!" });
+    assert.equal((await setConnection(aiEnv, { envelope, server: "AnyBroker-Demo", actor: "owner@example.com" }, { now: clock })).ok, true);
     assert.equal((await writeSettings(aiEnv, { body: { enabled: true }, actor: "owner@example.com" }, { now: clock })).ok, true);
     for (const row of aiEnv.DB.raw.prepare("SELECT * FROM omega_connection").all()) {
       assert.ok(!JSON.stringify(row).includes("5550123") && !JSON.stringify(row).includes("hunter2"), "D1 never holds the login or the password");
@@ -100,7 +100,7 @@ test("bridge ⇄ Omega ⇄ engine: key registration, encrypted login, a sized or
     // 3. The EA writes its state; the next sync logs the terminal in and carries the sized order.
     clock += 5_000;
     const state = {
-      connected: true, server: "Monex-Demo", received_ms: clock - 1_000,
+      connected: true, server: "AnyBroker-Demo", received_ms: clock - 1_000,
       account: { trade_mode: "demo", currency: "USD", balance: 10_000, equity: 10_000, day_start_balance: 10_000, day_realized_pl: 0 },
       symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 },
       positions: []

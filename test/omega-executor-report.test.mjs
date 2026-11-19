@@ -12,7 +12,7 @@ const ea = readFileSync(new URL("../ea/mt5/OmegaExecutor.mq5", import.meta.url),
 const versionAtLeastForTest = (v, min) => { const a = v.split(".").map(Number), b = min.split(".").map(Number); for (let i = 0; i < 2; i++) { if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0); } return true; };
 
 test("E0. since 1.13 the EA writes no macro bars by default (owner 2026-11-12: the broker supplies XAUUSD only); the calendar stays", () => {
-  assert.match(ea, /#property version\s+"1\.1[3-9]"/);
+  assert.match(ea, /#property version\s+"1\.(1[3-9]|[2-9][0-9])"/);
   assert.match(ea, /input bool\s+CorpusMacroEnabled = false;/);
   assert.match(ea, /input bool\s+CalendarEnabled\s+= true;/);
   assert.match(ea, /if\(!CorpusMacroEnabled\) return;/);

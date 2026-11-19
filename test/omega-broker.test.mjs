@@ -33,7 +33,7 @@ const ISSUED = Date.parse("2026-11-09T11:00:00Z");
 const NOW = ISSUED + 5 * 60_000;
 const SIGNAL = { side: "BUY", entry: 4100, stop: 4095, tp1: 4110, issued_ms: ISSUED, expires_ms: ISSUED + 3_600_000, blackout: false, kill: false, paused: false };
 const STATE = {
-  connected: true, server: "Monex-Demo", received_ms: NOW - 1000,
+  connected: true, server: "AnyBroker-Demo", received_ms: NOW - 1000,
   account: { trade_mode: "demo", currency: "USD", balance: 10_000, equity: 10_000, day_start_balance: 10_000, day_realized_pl: 0, login: 5550123 },
   symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 50, volume_step: 0.01, stops_level_points: 0, bid: 4101, ask: 4101.2, spread_points: 20 },
   positions: []
@@ -43,7 +43,7 @@ const enable = (e) => writeSettings(e, { body: { enabled: true }, actor: "owner@
 
 test("the browser envelope opens with node:crypto exactly as docs/OMEGA_BRIDGE_PROTOCOL.md shows", async () => {
   assert.equal(await keyId(SPKI), KID);
-  const creds = { server: "Monex-Demo", login: "5550123", password: "p@ss wörd" };
+  const creds = { server: "AnyBroker-Demo", login: "5550123", password: "p@ss wörd" };
   const envl = await buildEnvelope(SPKI, KID, creds);
   assert.deepEqual(Object.keys(envl).sort(), ["ciphertext", "iv", "kid", "v", "wrapped_key"]);
   const aesKey = privateDecrypt({ key: privateKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" }, Buffer.from(envl.wrapped_key, "base64"));
@@ -56,17 +56,17 @@ test("the browser envelope opens with node:crypto exactly as docs/OMEGA_BRIDGE_P
 
 test("a connection needs a bridge that synced, its key id, a valid envelope and server name", async () => {
   const e = env();
-  const envl = await buildEnvelope(SPKI, KID, { server: "Monex-Demo", login: "1", password: "x" });
-  assert.equal((await setConnection(e, { envelope: envl, server: "Monex-Demo", actor: "o" })).error, "bridge_not_seen");
+  const envl = await buildEnvelope(SPKI, KID, { server: "AnyBroker-Demo", login: "1", password: "x" });
+  assert.equal((await setConnection(e, { envelope: envl, server: "AnyBroker-Demo", actor: "o" })).error, "bridge_not_seen");
   await sync(e);
-  assert.equal((await setConnection(e, { envelope: { ...envl, kid: "f".repeat(16) }, server: "Monex-Demo", actor: "o" })).error, "kid_mismatch");
-  assert.match((await setConnection(e, { envelope: { ...envl, iv: "AAAA" }, server: "Monex-Demo", actor: "o" })).error, /iv/);
-  assert.match((await setConnection(e, { envelope: { ...envl, v: 2 }, server: "Monex-Demo", actor: "o" })).error, /v must be 1/);
+  assert.equal((await setConnection(e, { envelope: { ...envl, kid: "f".repeat(16) }, server: "AnyBroker-Demo", actor: "o" })).error, "kid_mismatch");
+  assert.match((await setConnection(e, { envelope: { ...envl, iv: "AAAA" }, server: "AnyBroker-Demo", actor: "o" })).error, /iv/);
+  assert.match((await setConnection(e, { envelope: { ...envl, v: 2 }, server: "AnyBroker-Demo", actor: "o" })).error, /v must be 1/);
   assert.match((await setConnection(e, { envelope: envl, server: "<script>", actor: "o" })).error, /server/);
-  const ok = await setConnection(e, { envelope: envl, server: "Monex-Demo", actor: "owner@example.com" });
+  const ok = await setConnection(e, { envelope: envl, server: "AnyBroker-Demo", actor: "owner@example.com" });
   assert.deepEqual([ok.ok, ok.version, ok.status], [true, 1, "stored"]);
   const r = await sync(e);
-  assert.deepEqual(r.connection, { version: 1, server: "Monex-Demo", envelope: envl });
+  assert.deepEqual(r.connection, { version: 1, server: "AnyBroker-Demo", envelope: envl });
 });
 
 test("a new bridge key voids the stored connection (needs re-entry) and it is never served", async () => {
@@ -212,7 +212,7 @@ test("the overview has no envelope, login, password or public key; the key route
   assert.equal(parsed.bridge.digits, 2);
   assert.equal(parsed.bridge.volume_step, 0.01);
   assert.equal(parsed.bridge.day_start_balance, 10_000);
-  assert.deepEqual({ ...parsed.route, bridge_sync_age_ms: undefined }, { active_route: "Monex-Demo", status: "trading", failover: "none", bridge_sync_age_ms: undefined }, "the route is the terminal's own server");
+  assert.deepEqual({ ...parsed.route, bridge_sync_age_ms: undefined }, { active_route: "AnyBroker-Demo", status: "trading", failover: "none", bridge_sync_age_ms: undefined }, "the route is the terminal's own server");
 });
 
 test("the sync refuses a missing key id or an oversized state", async () => {
@@ -259,7 +259,7 @@ test("institutional execution telemetry: overview exposes TCA, the measured orde
     state: {
       connected: true,
       trade_allowed: true,
-      server: "Monex-Demo",
+      server: "AnyBroker-Demo",
       received_ms: NOW + 1_000,
       symbol: { name: "XAUUSD.m", atr_value: 3.5, atr_points: 350, bid: 4050.2, ask: 4050.4, spread_points: 20 }
     },
@@ -296,7 +296,7 @@ test("institutional execution telemetry: overview exposes TCA, the measured orde
 test("observability: executor preserves positions with source, magic, symbol and reports pending orders", async () => {
   const st = {
     connected: true,
-    server: "Monex-Demo",
+    server: "AnyBroker-Demo",
     account: { trade_mode: "demo", currency: "USD", balance: 1000, equity: 1025 },
     symbol: { name: "XAUUSD.m", digits: 2, bid: 4050, ask: 4050.2 },
     positions: [

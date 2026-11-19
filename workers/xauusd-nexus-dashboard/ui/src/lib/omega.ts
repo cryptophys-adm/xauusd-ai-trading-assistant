@@ -5,14 +5,14 @@ import { usePoll } from "./usePoll";
  * Omega's light status read (one bridge row, Access-checked by Omega), every 60 s while the page is visible.
  * Null when Omega cannot be read (no Access session for it, or Omega down): the badge then shows Standby.
  */
-export type OmegaStatus = { connected: boolean; armed: boolean; server?: string | null; positions: number };
+export type OmegaStatus = { connected: boolean; armed: boolean; server?: string | null; broker?: string | null; positions: number };
 
 async function readStatus(): Promise<OmegaStatus | null> {
   try {
     const res = await fetch("/omega/api/status", { credentials: "same-origin", headers: { accept: "application/json" } });
     if (!res.ok) return null;
     const d = await res.json();
-    return { connected: d?.connected === true, armed: d?.armed === true, server: d?.server ?? null, positions: Number(d?.positions) || 0 };
+    return { connected: d?.connected === true, armed: d?.armed === true, server: d?.server ?? null, broker: d?.broker ?? null, positions: Number(d?.positions) || 0 };
   } catch {
     return null;
   }

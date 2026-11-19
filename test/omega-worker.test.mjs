@@ -165,8 +165,8 @@ test("settings and connection changes: a person, same origin, JSON; the actor is
 
   assert.equal((await call("/api/settings", "POST", { enabled: true })).status, 200);
   assert.deepEqual(O.calls.at(-1), ["setSettings", { body: { enabled: true }, actor: "owner@example.com" }]);
-  assert.equal((await call("/api/connection", "POST", { server: "Monex-Demo", envelope: { v: 1 } })).status, 200);
-  assert.deepEqual(O.calls.at(-1), ["setConnection", { envelope: { v: 1 }, server: "Monex-Demo", trade_symbol: null, units_per_usd: null, actor: "owner@example.com" }]);
+  assert.equal((await call("/api/connection", "POST", { server: "AnyBroker-Demo", envelope: { v: 1 } })).status, 200);
+  assert.deepEqual(O.calls.at(-1), ["setConnection", { envelope: { v: 1 }, server: "AnyBroker-Demo", trade_symbol: null, units_per_usd: null, actor: "owner@example.com" }]);
   assert.equal((await call("/api/connection", "DELETE", { reason: "switch" })).status, 200);
   assert.deepEqual(O.calls.at(-1), ["clearConnection", { reason: "switch", actor: "owner@example.com" }]);
   assert.equal((await call("/api/position/close", "POST", { ticket: 109121707, reason: "manual_user_exit" })).status, 200);
@@ -286,12 +286,12 @@ test("ADR-0015: the overview push goes through Omega's identity check to the hub
 test("UI audit DEF-10: the Nexus badge reads Omega's light status, after the identity check", async () => {
   resetKeyCacheForTests();
   let calls = 0;
-  const O = { ...omega(), status: async () => { calls += 1; return { connected: true, armed: false, server: "Monex-Demo", positions: 1 }; } };
+  const O = { ...omega(), status: async () => { calls += 1; return { connected: true, armed: false, server: "AnyBroker-Demo", positions: 1 }; } };
   const env = { ...ENV_BASE, OMEGA: O };
   const opts = { fetchImpl: certsFetch, now: NOW };
   const person = await jwt({ email: "Owner@Example.com" });
   const r = await handle(req("/api/status", { token: person }), env, opts);
-  assert.deepEqual(await r.json(), { connected: true, armed: false, server: "Monex-Demo", positions: 1 });
+  assert.deepEqual(await r.json(), { connected: true, armed: false, server: "AnyBroker-Demo", positions: 1 });
   assert.equal((await handle(req("/api/status"), env, opts)).status, 403, "no JWT, nothing");
   assert.equal((await handle(req("/api/status", { token: person, method: "POST", body: {} }), env, opts)).status, 405);
   assert.equal(calls, 1);

@@ -216,12 +216,12 @@ export function councilEvidence(review) {
   if (!review?.id) return null;
   return { id: review.id, verdict: review.verdict, reason: review.reason, seats: Object.fromEntries(SEATS.map((s) => [s, review.seats?.[s] ? `${review.seats[s].verdict}: ${review.seats[s].reason}` : "no answer"])) };
 }
-export function councilLine(accountRef, review, { from, to }) {
+export function councilLine(name, review, { from, to }) {
   const what = review.kind === "upgrade"
     ? (review.verdict === "approve" ? `approves ${label(from)} → ${label(to)}` : `rejects ${label(from)} → ${label(to)}; the profile stays ${label(from)}`)
     : (review.verdict === "reject" ? `vetoes the downgrade ${label(from)} → ${label(to)}; the profile stays ${label(from)} for up to 24 h` : `lets the downgrade ${label(from)} → ${label(to)} apply`);
   const seats = SEATS.map((s) => `${s.replace("_", " ")}: ${review.seats?.[s] ? `${review.seats[s].verdict}, ${review.seats[s].reason}` : "no answer"}`).join("\n");
-  return `XAUUSD SYSTEM · Omega account ${accountRef}: the profile council ${what} (${review.reason}).\n${seats}`;
+  return `XAUUSD SYSTEM · Omega · ${name}: the profile council ${what} (${review.reason}).\n${seats}`;
 }
 
 /** The account's last reviews, newest first, for the Omega page. */
