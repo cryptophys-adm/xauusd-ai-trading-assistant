@@ -5,6 +5,10 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-19
+- perf(market-data): a published bar is not rebuilt every minute (owner 2026-11-19, relayed "setuju semua": profile first, nothing the agents or parity read may change).
+  - **Profile.** Inside each freshness window (H1 25 min, M15 9, H4 30, D1 60) every 1-minute cron rebuilt the bar's engines and HUD snapshots before it read the bar's published marker, about 24 wasted H1 builds an hour.
+  - **What changes.** Each publisher reads the marker first, keyed by the producer's own candle key of the last candle. In node, a minute with every bar already sent fell from about 4.5 s to 0.1 ms; the first build of a bar is unchanged (about 4.3 s for H1).
+  - **Outputs.** The build code is untouched (no hashed producer file changes); the peeked key equals the built key (test); `force` still rebuilds.
 - perf(omega): a light bridge sync when there is nothing to manage (owner 2026-11-19, relayed "setuju semua", then directly "Keduanya, bertahap": step 1, no VPS step).
   - **Why.** The bridge syncs about 1.7 times a second (on every state.json write), and a full plan costs about 15 D1 statements.
   - **What changes.** An idle sync now reuses the isolate's last full plan, at most 5 s old, and only delivers the open intents. It uses about 3 statements; in node the measured time per idle sync fell from 1.88 ms to 0.53 ms.

@@ -3,10 +3,10 @@
 // observed and lets its autonomous parity registry decide trust by comparing
 // them with the TradingView webhook outputs for the same candle_key.
 import { buildBundle } from "./tradingview-source.mjs";
-import { buildH1LocalCalculations, CHART_TICKERID } from "../../local-engines/producer/src/h1-producer.mjs";
-import { buildM5LocalCalculations } from "../../local-engines/producer/src/m5-local-producer.mjs";
-import { buildM15LocalCalculations } from "../../local-engines/producer/src/m15-local-producer.mjs";
-import { buildHtfLocalCalculations, HTF_CHARTS } from "../../local-engines/producer/src/htf-local-producer.mjs";
+import { buildH1LocalCalculations, CHART_TICKERID, webhookCandleKey } from "../../local-engines/producer/src/h1-producer.mjs";
+import { buildM5LocalCalculations, m5WebhookCandleKey } from "../../local-engines/producer/src/m5-local-producer.mjs";
+import { buildM15LocalCalculations, m15WebhookCandleKey } from "../../local-engines/producer/src/m15-local-producer.mjs";
+import { buildHtfLocalCalculations, HTF_CHARTS, htfWebhookCandleKey } from "../../local-engines/producer/src/htf-local-producer.mjs";
 import { m5ContextFromRecords } from "../../local-engines/producer/src/m5-context.mjs";
 import { buildHudSnapshot } from "../../local-engines/producer/src/hud-snapshot.mjs";
 import { buildGmiHudRecord } from "../../local-engines/producer/src/gmi-hud-producer.mjs";
@@ -25,6 +25,21 @@ function seenSet(kv) {
   let set = SEEN.get(kv);
   if (!set) { set = new Set(); SEEN.set(kv, set); }
   return set;
+}
+/**
+ * CPU (owner 2026-11-19, relayed "setuju semua"): the cron runs every minute, and each publisher rebuilt its bar's
+ * engines (Prophet, GMI, Mizan, the HUD snapshot and its chart-plane replays) before it read the bar's "already
+ * published" marker: for an H1 bar, about 24 full rebuilds an hour for nothing. The marker is now read first, from
+ * the candle key the producer would give (the last candle's open time, the same key function), and the engines run
+ * only for a bar not yet published. What a published bar carries is unchanged: the build itself is untouched.
+ */
+export function peekCandleKey(candles, keyOf) {
+  const last = Array.isArray(candles) ? candles.at(-1) : null;
+  const openMs = last ? Date.parse(last.open_time) : NaN;
+  return Number.isFinite(openMs) ? keyOf(openMs) : null;
+}
+async function publishedBefore(kv, key) {
+  return key ? isPublished(kv, PUBLISHED_PREFIX + key) : false;
 }
 function remember(kv, key) {
   if (!kv || typeof kv !== "object") return;
@@ -83,6 +98,8 @@ export async function publishLocalComputation(env, { now = Date.now(), force = f
   if (!lastH1) return { status: "no_h1_data" };
   const closedAgo = now - Date.parse(lastH1.close_time);
   if (!force && closedAgo > MAX_PUBLISH_DELAY_MS) return { status: "no_fresh_h1_close", last_h1_close_time: lastH1.close_time };
+  const peekH1 = peekCandleKey(resolvedBundle.timeframes?.H1?.candles, webhookCandleKey);
+  if (!force && (await publishedBefore(kv, peekH1))) return { status: "already_published", candle_key: peekH1 };
 
   let built;
   try {
@@ -196,6 +213,8 @@ export async function publishM5LocalComputation(env, { now = Date.now(), force =
   if (!lastM5) return { status: "no_m5_data" };
   const closedAgo = now - Date.parse(lastM5.close_time);
   if (!force && closedAgo > MAX_M5_PUBLISH_DELAY_MS) return { status: "no_fresh_m5_close", last_m5_close_time: lastM5.close_time };
+  const peekM5 = peekCandleKey(resolvedBundle.timeframes?.M5?.candles, m5WebhookCandleKey);
+  if (!force && (await publishedBefore(kv, peekM5))) return { status: "already_published", candle_key: peekM5 };
 
   let built;
   try {
@@ -249,6 +268,8 @@ export async function publishM15LocalComputation(env, { now = Date.now(), force 
   const lastM15 = resolvedBundle.timeframes?.M15?.candles?.at(-1);
   if (!lastM15) return { status: "no_m15_data" };
   if (!force && now - Date.parse(lastM15.close_time) > MAX_M15_PUBLISH_DELAY_MS) return { status: "no_fresh_m15_close", last_m15_close_time: lastM15.close_time };
+  const peekM15 = peekCandleKey(resolvedBundle.timeframes?.M15?.candles, m15WebhookCandleKey);
+  if (!force && (await publishedBefore(kv, peekM15))) return { status: "already_published", candle_key: peekM15 };
   let built;
   try {
     built = buildM15LocalCalculations(resolvedBundle, { now, mintick: Number(env.CHART_MINTICK) || 0.001 });
@@ -305,6 +326,8 @@ export async function publishHtfLocalComputation(env, { now = Date.now(), force 
     const last = resolvedBundle.timeframes?.[chart]?.candles?.at(-1);
     if (!last) { charts[chart] = { status: "no_data" }; continue; }
     if (!force && now - Date.parse(last.close_time) > MAX_HTF_PUBLISH_DELAY_MS[chart]) { charts[chart] = { status: "no_fresh_close", last_close_time: last.close_time }; continue; }
+    const peekHtf = peekCandleKey(resolvedBundle.timeframes?.[chart]?.candles, (ms) => htfWebhookCandleKey(chart, ms));
+    if (!force && (await publishedBefore(kv, peekHtf))) { charts[chart] = { status: "already_published", candle_key: peekHtf }; continue; }
     let built;
     try {
       built = buildHtfLocalCalculations(resolvedBundle, { chart, now, mintick: Number(env.CHART_MINTICK) || 0.001 });
@@ -368,9 +391,9 @@ export async function publishHudSnapshots(env, { now = Date.now(), bundle = null
     const closeMs = Date.parse(last.close_time);
     const late = now - closeMs > maxDelayMs;
     if (late && !(now - closeMs <= catchUpMs)) { results[chart] = { status: "no_fresh_close" }; continue; }
-    // A late bar is only sent when it was never sent: check the marker before building.
-    const lateKey = late ? [CHART_TICKERID, HUD_PERIOD[chart], String(Date.parse(last.open_time))].join(":") : null;
-    if (lateKey && await isPublished(kv, "market-data:v2:hud-published:" + lateKey)) { results[chart] = { status: "already_published", candle_key: lateKey }; continue; }
+    // The marker is read before building, on time and late alike (a late bar is only sent when it was never sent).
+    const peekKey = [CHART_TICKERID, HUD_PERIOD[chart], String(Date.parse(last.open_time))].join(":");
+    if (await isPublished(kv, "market-data:v2:hud-published:" + peekKey)) { results[chart] = { status: "already_published", candle_key: peekKey }; continue; }
     let snapshot;
     try {
       snapshot = buildHudSnapshot(late ? bundleUntil(resolvedBundle, closeMs) : resolvedBundle, { chart, now, mintick: Number(env.CHART_MINTICK) || 0.001 });
