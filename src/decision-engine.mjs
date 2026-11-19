@@ -36,7 +36,7 @@
 // The server never sizes a position; prices come only from the key-level plan.
 
 import { goldClosedAt, nextGoldChange } from "./market-hours.mjs";
-import { loadStrategyInputs, buildStrategy, planForDirection, riskChecks, triggerOf, squeezeOf, SQUEEZE_RULE, STRATEGY_PARAMS, atr } from "./strategy-engine.mjs";
+import { loadStrategyInputs, buildStrategy, planForDirection, riskChecks, triggerOf, squeezeOf, roomAtrOf, SQUEEZE_RULE, STRATEGY_PARAMS, atr } from "./strategy-engine.mjs";
 import { buildGlobalConclusion } from "./global-conclusion.mjs";
 import { readMacroRoom } from "./macro-room.mjs";
 import { readCorrelations } from "./correlations.mjs";
@@ -628,13 +628,16 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
   // Squeezed between key zones (owner 2026-11-13: "no trade"): the same check on both sides, because it
   // is about the place, not the direction. SQUEEZE_GUARD "off" leaves the check out.
   if (squeezeGuardEnabled(env)) {
+    // The room in 1H ranges: the trading mode's learned value (src/room-tuning.mjs, owner 2026-11-19), inside 0.5 to 1.5.
+    const roomAtr = roomAtrOf(env?.ROOM_CORRIDOR_ATR);
+    const ranges = roomAtr === 1 ? "one 1H average range" : `${roomAtr} times the 1H average range`;
     let sq = null;
-    try { sq = squeezeOf(strategy); } catch { sq = null; }
+    try { sq = squeezeOf(strategy, { corridorAtr: roomAtr }); } catch { sq = null; }
     const zone = (z) => (z.low === z.high ? z.low.toFixed(2) : `${z.low.toFixed(2)}–${z.high.toFixed(2)}`);
     add("room", !sq?.squeezed, !sq ? "no price or 1H range to measure the room with"
       : sq.corridor == null ? `no key zone ${sq.below ? "above" : sq.above ? "below" : "above or below"} price within reach: there is room to move`
-      : sq.squeezed ? `price is squeezed: the key zones below (${zone(sq.below)}) and above (${zone(sq.above)}) are ${sq.corridor.toFixed(2)} apart, less than ${SQUEEZE_RULE.corridor_atr === 1 ? "one 1H average range" : `${SQUEEZE_RULE.corridor_atr} times the 1H average range`} (${sq.needed.toFixed(2)})`
-      : `the key zones below and above price are ${sq.corridor.toFixed(2)} apart (${sq.corridor_atr} times the 1H average range; at least ${SQUEEZE_RULE.corridor_atr} needed)`);
+      : sq.squeezed ? `price is squeezed: the key zones below (${zone(sq.below)}) and above (${zone(sq.above)}) are ${sq.corridor.toFixed(2)} apart, less than ${ranges} (${sq.needed.toFixed(2)})`
+      : `the key zones below and above price are ${sq.corridor.toFixed(2)} apart (${sq.corridor_atr} times the 1H average range; at least ${roomAtr} needed)`);
   }
   const cautions = [...risk.cautions, ...contextCautions(dir, inputs.market ?? null)];
   return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions, supports: risk.supports ?? [], min_rrr: MIN_RRR, target_rule: nearest ? "nearest" : "rrr", entry_trigger: entryTrigger };
@@ -1221,7 +1224,9 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     key_levels: keyLevelsAround(strategy),
     // The corridor price stood in (src/strategy-engine.mjs squeezeOf): the nearest key zones below and
     // above and how far apart they are, kept on every decision so the "room" guardrail can be measured.
-    squeeze: squeezeOf(strategy),
+    squeeze: squeezeOf(strategy, { corridorAtr: roomAtrOf(env?.ROOM_CORRIDOR_ATR) }),
+    // The room the guardrail asked for in this decision's mode (src/room-tuning.mjs): the replay's fidelity reads it.
+    room_atr: roomAtrOf(env?.ROOM_CORRIDOR_ATR),
     // Every strategy agent's own plan per side (src/strategy-agents.mjs), live or shadow: what each would
     // have traded here, kept so the plan learner can measure each agent on the bars that follow.
     strategy_plans: strategyPlansOf(assessment?.guards ?? guards),
@@ -1317,6 +1322,9 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     // The council's live knob values (owner 2026-11-17, docs/RFC_COUNCIL_PROPOSALS.md): loaded lazily, so this module
     // and the knob registry (which reads this module's constants) do not import each other. Unreadable: none.
     try { env.COUNCIL_KNOBS = await (await import("./council-knobs.mjs")).readKnobOverrides(env, { now }); } catch { env.COUNCIL_KNOBS = {}; }
+    // The room guardrail's value for this mode (owner 2026-11-19: the learning protocol adjusts it, src/room-tuning.mjs);
+    // loaded lazily (that module reads this one). Unreadable: the rule's 1.
+    try { env.ROOM_CORRIDOR_ATR = (await (await import("./room-tuning.mjs")).activeRoom(env, env.TRADING_MODE, { now })).value; } catch { env.ROOM_CORRIDOR_ATR = SQUEEZE_RULE.corridor_atr; }
     const data = loaded ?? await loadDecisionInputs(env, { now });
     let witnessWeights = null;
     try { witnessWeights = await activeWitnessTuning(env, { now }); } catch { witnessWeights = null; }

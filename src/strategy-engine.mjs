@@ -160,7 +160,16 @@ export function zoneLevels(zones, { qualified = false } = {}) {
  * decisions). A candidate price is at (within a third of the agent's tolerance, as the agent reads "at
  * price") is the place of the trade, not a wall. Without a candidate on one side there is room.
  */
-export const SQUEEZE_RULE = Object.freeze({ corridor_atr: 1 });
+export const SQUEEZE_RULE = Object.freeze({ corridor_atr: 1, min_atr: 0.5, max_atr: 1.5 });
+/**
+ * Pure: the room the guardrail asks for, in 1H average ranges: the learned value of the trading mode (src/room-tuning.mjs,
+ * owner 2026-11-19) held inside the owner's bounds (min_atr to max_atr), else the rule's 1. The guard is never switched off.
+ */
+export function roomAtrOf(v) {
+  const n = Number(v);
+  if (v === null || v === undefined || v === "" || !Number.isFinite(n)) return SQUEEZE_RULE.corridor_atr;
+  return Math.round(Math.min(SQUEEZE_RULE.max_atr, Math.max(SQUEEZE_RULE.min_atr, n)) * 100) / 100;
+}
 /**
  * Pure: the corridor price stands in: { squeezed, corridor, corridor_atr, needed, below, above } (the facing
  * edges of the two zones; below and above are { low, high } or null), or null without a price or a 1H range.
