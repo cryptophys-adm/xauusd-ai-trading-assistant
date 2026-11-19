@@ -711,6 +711,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       if (known.has(seenKey)) continue;
       try {
         const stored = await storeDeal(env, {
+          account_ref: executor.account_ref ?? null,
           deal_ticket: d.deal_ticket,
           position_ticket: d.position_ticket,
           mode: executor?.account?.trade_mode || "unknown",
@@ -1158,8 +1159,12 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
   try { accounts = await readAccounts(db); } catch { accounts = []; }
   // The connected account by its own reference (connectedAccount), not by the server it shares with others.
   const liveRef = st?.connected === true ? (await connectedAccount(accounts, st))?.account_ref ?? null : null;
+  // Only the account the terminal is connected to now is read and served (owner 2026-11-19, relayed: "akun sen udah
+  // disconnect kok masih dibaca"): an account that is not connected appears on no page; its stored row stays in D1
+  // and is used again if it connects.
+  accounts = liveRef ? accounts.filter((a) => a.account_ref === liveRef) : [];
   const councilReviews = {}, histories = {};
-  for (const a of accounts.slice(0, 5)) {
+  for (const a of accounts.slice(0, 1)) {
     councilReviews[a.account_ref] = await lastCouncilReviews(db, a.account_ref);
     const r = await db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(a.account_ref).first();
     histories[a.account_ref] = r ? await accountHistory(db, r, { now }) : null;
@@ -1340,7 +1345,9 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     macro_risk: macroRisk,
     volatility,
     intents: intents.map((r) => ({ ...parse(r.payload, {}), status: r.status, result: parse(r.result), created_ms: r.created_ms, updated_ms: r.updated_ms })),
-    events: events.map((r) => ({ ms: r.ms, actor: r.actor, action: r.action, detail: parse(r.detail) })),
+    // An event of another account (its id in the detail) is not shown: only the connected account appears.
+    events: events.map((r) => ({ ms: r.ms, actor: r.actor, action: r.action, detail: parse(r.detail) }))
+      .filter((e) => !(typeof e.detail?.account_ref === "string" && e.detail.account_ref !== liveRef)),
     planner: lastPlan ? { since_ms: lastPlan.ms, codes: String(parse(lastPlan.detail, {})?.notes ?? "").split(",").filter(Boolean), details: parse(lastPlan.detail, {})?.details ?? {} } : null
   };
 }

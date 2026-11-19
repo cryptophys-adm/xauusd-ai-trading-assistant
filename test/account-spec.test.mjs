@@ -373,8 +373,11 @@ test("AS20 two accounts on one server (2026-11-19): the connected one is found b
   const o = await brokerOverview(env, { now: NOW + 120_000 });
   assert.deepEqual(o.accounts.filter((a) => a.connected).map((a) => a.account_ref), [refUsd]);
   // Each account says which it is (owner 2026-11-19: "harus bisa membedakan mana akun sen dan usd").
-  assert.deepEqual(o.accounts.map((a) => [a.account_ref === refUsd ? "usd" : "cent", a.identity.label, a.identity.cent, a.connected]).sort(),
-    [["cent", "USX account · GoldOne", false, false], ["usd", "USD account · XAUUSD", false, true]], "cent is read from the measured money, not the code (the cent account is not connected here)");
+  // Only the connected account is served (owner 2026-11-19: "akun sen udah disconnect kok masih dibaca"): the cent
+  // account's stored row stays in D1 but appears on no page.
+  assert.deepEqual(o.accounts.map((a) => [a.account_ref === refUsd ? "usd" : "cent", a.identity.label, a.identity.cent, a.connected]),
+    [["usd", "USD account · XAUUSD", false, true]]);
+  assert.ok(!JSON.stringify(o).includes(refCent), "the account that is not connected is nowhere in the overview");
   // Every owner control refuses the account that is not connected, naming it; the connected one is changed.
   for (const [action, value] of [["reset", null], ["profile", "safe"], ["ceiling", "safe"], ["agent_mode", "approval"]]) {
     const wrong = await setAccountProfile(env, { account_ref: refCent, action, value }, { now: NOW + 130_000 });

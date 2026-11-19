@@ -2830,7 +2830,7 @@ export default function Omega() {
             hint="Downgrades run at once: the kill switch or the daily loss to Safe, a 20% drawdown, 4 losses in a row, extreme volatility. Upgrades: one step on evidence, never above the ceiling or with a position or order open, at most one per 7 days."
             right={account ? <Badge tone="cyan">{account.profile_label}</Badge> : null}
           >
-            {account?.account_ref ? <OmegaProfile account={account} onChanged={load} /> : <p className="text-[11px] text-slate-500">{accounts.length ? "No account is connected now. The controls act on the connected account only." : "No account seen yet."}</p>}
+            {account?.account_ref ? <OmegaProfile account={account} onChanged={load} /> : <p className="text-[11px] text-slate-500">No account is connected now. The controls act on the connected account only.</p>}
           </Panel>
           ) : null}
 
