@@ -27,7 +27,7 @@ import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, 
 import { publishSnapshot } from "./push-hub.mjs";
 import { readAllocationState, rosterSplit } from "./agent-allocation.mjs";
 import { gateShadowTurns } from "./shadow-switch.mjs";
-import { metricShadowEnabled, runMetricShadow, runMetricRebuttals, readMetricShadowBar, metricMenu } from "./metric-shadow.mjs";
+import { metricShadowEnabled, runMetricShadow, runMetricRebuttals, readMetricShadowBar, metricMenu, metricLiveAgents, metricToOpening, metricMessages, METRIC_OPENING_SCHEMA } from "./metric-shadow.mjs";
 import { arenaEnabled, isArenaBar, arenaEvery, runArenaCall } from "./model-arena.mjs";
 import { agentReputation, sessionOf } from "./outcome-scoring.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
@@ -655,8 +655,22 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   // Phase 1: the communication bus. Open pages see the room start (ADR-0015 phase 1).
   await publishWarRoom(env);
   const open = phase(WAR_ROOM_OPENING_MS);
+  // The agents promoted to the metric opening (owner 2026-11-19, src/metric-shadow.mjs METRIC_LIVE_AGENTS).
+  const metricLive = new Set(metricLiveAgents(env));
+  const verifiedFor = (agent) => (agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]));
   const openingOpts = (agent) => {
     const data = agentData(agent, evidence, hud, confirmations, desk15, projection);
+    if (metricLive.has(agent)) {
+      // The prompt tested in shadow; the answer is turned into a room opening (its readings as the claim).
+      const menu = metricMenu(data);
+      return {
+        messages: metricMessages(openingRole(agent), data, menu), schemaName: "war_room_opening_metric", schema: METRIC_OPENING_SCHEMA,
+        evidence: { menu, learned: null },
+        maxTokens: 500, effort: "low",
+        validate: (o) => { const t = metricToOpening(o, agent, menu); return t.valid ? validateOpening(o, agent, { verifiedLines: verifiedFor(agent), forbiddenNames: forbiddenNamesFor(agent, fullRoster) }) : t; },
+        toBody: (o) => ({ body: { claim: clip(o.claim, CLAIM_MAX), bias: o.bias, metrics: o.metrics, metric_table: o.metric_table ?? null, format: "metric", name: agentName(agent) }, refs: [] })
+      };
+    }
     return {
     messages: openingMessages(agent, data, learnedFor(agent)), schemaName: "war_room_opening", schema: OPENING_SCHEMA,
     // A4, in shadow (src/room-memo.mjs): the memo key the agent's evidence would give: its metric menu and notes.
@@ -739,7 +753,8 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   if (metricShadowEnabled(env)) {
     const dataFor = (agent) => agentData(agent, evidence, hud, confirmations, desk15, projection);
     jobs.push(["metrics", async () => {
-      const openings = await runMetricShadow(env, { room: "M15", barTime, clock, agents: answered.map((m) => ({ agent: m.agent, stance: m.stance })), dataFor, roleFor: openingRole });
+      // A promoted agent already opened in metric form: no shadow copy of it (its control would be itself).
+      const openings = await runMetricShadow(env, { room: "M15", barTime, clock, agents: answered.filter((m) => !metricLive.has(m.agent)).map((m) => ({ agent: m.agent, stance: m.stance })), dataFor, roleFor: openingRole });
       const rebuttals = await runMetricRebuttals(env, { room: "M15", barTime, clock, rebutters: debate.map((m) => ({ agent: m.agent, stance: m.stance })), dataFor, roleFor: openingRole });
       // A3: the open pages get the bar's metric chips at once (ADR-0015 push), not at their next poll.
       if (Number(openings?.stored) || Number(rebuttals?.stored)) await publishWarRoom(env);

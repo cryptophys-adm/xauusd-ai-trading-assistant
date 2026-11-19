@@ -5,6 +5,12 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-19
+- feat(war-room): Order Blocks opens live in the metric format (owner 2026-11-19: "Promosi Order Blocks sekarang").
+  - **What changes.** On the 15m War Room, Order Blocks' live opening now uses the metric prompt tested in shadow. The answer becomes a plain room opening (bias from the weighted implications, the readings as the claim, the table kept as `metric_table`) and passes the room's own validation.
+  - **The evidence.** It was the only agent better than its prose control in both slices: discovery 36 vs 20 (p 0.022) and holdout 24 vs 16. Its discovery slice had 175 of the 200 bars the rule asks for.
+  - **Risk.** In shadow it took a side on 219 of 275 bars where its prose control took one on 39, so expect Order Blocks to call BUY or SELL far more often.
+  - **What stays.** Every other agent stays on prose.
+  - **Switch.** `METRIC_LIVE` "off" reverts it.
 - chore(shadow): retire the shadow arms that were not better, to cut model load (owner 2026-11-19, directly: "1+2+3 hentikan semua", then "Pertahankan, hentikan sisanya" and "Hentikan seluruh arm"). Before (ai_usage_daily, 18 Nov): shadow sources about 1.63M prompt and 0.20M completion tokens. Record per arm (sign test on decided pairs that differ, one-sided, Holm over the eight tested arms; D1 to 2026-11-19 17:47 UTC):
   - **Kept: metric opening shadow, M15.** Better: 238 vs 170, p 0.0004, Holm 0.0032; accuracy 47.3% vs 45.2% over 3,038 scored bars. It takes a side twice as often as its control (1,591 vs 824 bars) and misses twice as often (770 vs 396). About 0.62M prompt tokens a day.
   - **Retired on "not better": metric rebuttals** (19 vs 26, Holm 1). New switch `METRIC_REBUTTAL` "off"; `METRIC_SHADOW` still stops both.

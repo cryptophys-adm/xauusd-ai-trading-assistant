@@ -174,3 +174,22 @@ test("production config (owner 2026-11-19): the note arm, the rebuttals and the 
   assert.match(cfg, /"MODEL_ARENA": "off"/);
   assert.doesNotMatch(cfg, /"METRIC_SHADOW": "off"/);
 });
+
+test("promotion (owner 2026-11-19): Order Blocks opens live in metric form; the answer becomes a plain room opening", async () => {
+  const { metricLiveAgents, metricToOpening, METRIC_LIVE_AGENTS } = await import("../src/metric-shadow.mjs");
+  assert.deepEqual([...METRIC_LIVE_AGENTS], ["order_blocks"]);
+  assert.deepEqual(metricLiveAgents({}), ["order_blocks"]);
+  assert.deepEqual(metricLiveAgents({ METRIC_LIVE: "off" }), []);
+  assert.deepEqual(metricLiveAgents({ METRIC_LIVE: "order_blocks, prophet" }), ["order_blocks", "prophet"]);
+  const o = { stance: "BUY", confidence: 0.6, metrics: [{ id: "ob.nearest", value: "4100", reading: "bull_ob_retest", implication: "bullish", weight: 0.7 }, { id: "L2", reading: "volume_rising", implication: "bullish", weight: 0.3 }] };
+  assert.deepEqual(metricToOpening(o, "order_blocks", [{ id: "L2" }]), { valid: true, errors: [] });
+  assert.equal(o.agent, "order_blocks");
+  assert.equal(o.bias, "BULLISH");
+  assert.equal(o.claim, "My readings: bull ob retest, bullish; volume rising, bullish.");
+  assert.equal(o.metric_table[0].value, "[level]", "no price level in the table");
+  assert.deepEqual(metricToOpening(o, "order_blocks", []), { valid: true, errors: [] }, "idempotent");
+  assert.deepEqual(metricToOpening({ stance: "BUY", confidence: 2, metrics: [] }, "order_blocks", []), { valid: false, errors: ["metric_answer_invalid"] });
+  const neutral = { stance: "WAIT", confidence: 0.4, metrics: [{ id: "a", reading: "x_up", implication: "bullish", weight: 0.5 }, { id: "b", reading: "y_down", implication: "bearish", weight: 0.5 }] };
+  metricToOpening(neutral, "order_blocks", []);
+  assert.equal(neutral.bias, "NEUTRAL");
+});

@@ -157,6 +157,45 @@ export function checkMetricAnswer(o, menu) {
   return { valid, cited: metrics.length, grounded, metrics };
 }
 
+/**
+ * The agents whose LIVE 15m War Room opening is the metric format (promoted by the owner, 2026-11-19: "Promosi Order
+ * Blocks sekarang"). Order Blocks was the one agent better than its prose control in both slices: discovery 36 vs 20
+ * (sign test p 0.022) and holdout 24 vs 16, though its discovery slice had 175 of the 200 bars the rule asks for. The
+ * prompt is the one tested in shadow (metricMessages); the answer becomes a room opening by metricToOpening.
+ * METRIC_LIVE "off" puts every agent back on the prose opening at once; a comma list of agent ids replaces the set.
+ */
+export const METRIC_LIVE_AGENTS = Object.freeze(["order_blocks"]);
+export function metricLiveAgents(env) {
+  const v = String(env?.METRIC_LIVE ?? "").trim().toLowerCase();
+  if (v === "off") return [];
+  // An explicit comma list replaces the promoted set (tests, or a step the owner takes by config).
+  if (v && v !== "on") return v.split(",").map((x) => x.trim()).filter((x) => /^[a-z0-9_]+$/.test(x));
+  return [...METRIC_LIVE_AGENTS];
+}
+
+const plainReading = (r) => String(r ?? "").replace(/_+/g, " ").replace(/([a-z])\.(?=[a-z])/gi, "$1 ").replace(/=/g, " at ").replace(/[<>]/g, (c) => (c === "<" ? " below " : " above ")).replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * Pure: a metric answer ({ stance, confidence, metrics: [{ id, reading, implication, weight }] }) turned, in place,
+ * into a War Room opening: the agent, its bias from the weighted implications, a plain claim built from the readings
+ * (no ids, so it reads as language), and one plain line per metric. The metric table itself is kept as metric_table.
+ * Idempotent: an answer already turned is checked again as it is. Returns { valid, errors }.
+ */
+export function metricToOpening(o, agent, menu) {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
+  if (Array.isArray(o.metric_table) && typeof o.claim === "string") return { valid: true, errors: [] };
+  const check = checkMetricAnswer(o, menu);
+  if (!check.valid) return { valid: false, errors: ["metric_answer_invalid"] };
+  const score = check.metrics.reduce((sum, m) => sum + (m.implication === "bullish" ? 1 : m.implication === "bearish" ? -1 : 0) * (Number(m.weight) || 0), 0);
+  const lines = check.metrics.map((m) => `${plainReading(m.reading)}, ${m.implication}`.slice(0, 80)).filter((t) => t.length > 2);
+  o.agent = agent;
+  o.bias = score > 0.1 ? "BULLISH" : score < -0.1 ? "BEARISH" : "NEUTRAL";
+  o.claim = `My readings: ${lines.join("; ")}.`.slice(0, 400);
+  o.metric_table = check.metrics.map((m) => ({ id: m.id, value: m.value ?? null, reading: m.reading, implication: m.implication, weight: m.weight }));
+  o.metrics = lines;
+  return { valid: true, errors: [] };
+}
+
 /** The shadow prompt: the agent's role line and data, its metric menu, and the answer form (no prose). */
 export function metricMessages(roleLine, data, menu) {
   return chatMessages([
