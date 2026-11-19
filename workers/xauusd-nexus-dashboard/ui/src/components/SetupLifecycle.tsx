@@ -8,6 +8,12 @@ import { Badge, Hint } from "./ui";
  * (same side) or call against it; they never move these levels. Omega's own trade of it is shown beside.
  * From GET /api/conclusion/global → setups (src/signal-ledger.mjs activeSetups of the AI Worker).
  */
+/** The ledger's paper gates in words: they come from the ledger's own paper trades, never from the account. */
+const PAPER_GATE: Record<string, string> = {
+  max_positions: "another paper trade still open (max positions)",
+  same_side_unprotected: "a paper trade on this side not yet protected",
+  waiting_for_pullback: "price never came back to the entry"
+};
 const hm = (iso?: string | null) => (iso ? String(iso).slice(11, 16) : "");
 const px = (x?: number | null) => (x == null ? "—" : x.toFixed(2));
 const r = (x?: number | null) => (x == null ? "" : `${x > 0 ? "+" : ""}${Math.round(x * 100) / 100}R`);
@@ -80,7 +86,10 @@ export default function SetupLifecycle({ setup: s, levels }: { setup: any; level
       </div>
       <div className="mt-2 flex flex-wrap gap-x-3 text-[10px] text-slate-500">
         {(s.r?.tp1 != null || s.r?.open != null) && <span>plan {s.r?.tp1 != null ? `TP1 ${r(s.r.tp1)}` : `open ${r(s.r.open)}`}{s.r?.tp2 != null ? ` · TP2 ${r(s.r.tp2)}` : ""}</span>}
-        {o && <span>Omega {o.status === "closed" ? `${r(o.r)} (${OMEGA_EXIT[o.exit] ?? o.exit})` : o.status === "skipped" ? `skipped: ${String(o.gate ?? "").replace(/_/g, " ")}` : o.status}</span>}
+        {/* The ledger's replay of Omega's policy on paper (owner 2026-11-18: "omega selalu info max positions"): it is not
+            the live EA, whose reason is on the Omega page ("Omega right now"); "max positions" here means another paper
+            trade of the ledger is still open. */}
+        {o && <span title="The Signal Ledger's paper replay of Omega's policy, not the live EA. The live EA's reason is on the Omega page.">Omega policy (paper) {o.status === "closed" ? `${r(o.r)} (${OMEGA_EXIT[o.exit] ?? o.exit})` : o.status === "skipped" ? `skipped: ${PAPER_GATE[o.gate] ?? String(o.gate ?? "").replace(/_/g, " ")}` : o.status}</span>}
       </div>
     </div>
   );
