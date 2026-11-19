@@ -45,6 +45,11 @@ export async function nexusFacts(env) {
   return {
     "decision.room_min_atr": rooms[t.mode] ?? rooms.intraday ?? 1,
     "decision.room_min_atr_by_mode": rooms,
+    // One fact per mode (the canon anchors these): a mode switch alone is no drift for the doctrine protocol.
+    "decision.room_min_atr_scalp": rooms.scalp ?? 1,
+    "decision.room_min_atr_intraday": rooms.intraday ?? 1,
+    "decision.room_min_atr_swing": rooms.swing ?? 1,
+    "decision.room_min_atr_range": rooms.range ?? 1,
     "decision.room_bounds_atr": [ROOM_MIN, ROOM_MAX],
     "decision.room_tuning": roomTuningFrozen(env) ? "default" : "auto",
     "decision.engine_enabled": decisionEngineEnabled(env),

@@ -328,3 +328,22 @@ test("a suspended agent backs off: one denial, then no call for an hour, then on
   const status2 = await platformStatus({ DB, AGENTS: kernel() }, { now: t0 });
   assert.deepEqual(status2.backoff, []);
 });
+
+test("the kernel's 4-an-hour limit is kept here: a fifth report in the hour is held (retried later), never sent to be denied", async () => {
+  const { resetPlatformBackoffForTests, PLATFORM_REPORTS_PER_HOUR } = await import("../src/platform-reports.mjs");
+  resetPlatformBackoffForTests();
+  const DB = d1();
+  const AGENTS = kernel();
+  const env = { DB, AGENTS };
+  const t0 = Date.parse("2026-11-19T13:00:00Z");
+  const report = { kind: "xauusd_digest", severity: "info", subject: "s", body: {} };
+  assert.equal(PLATFORM_REPORTS_PER_HOUR, 4);
+  for (let i = 0; i < 4; i++) assert.equal((await publishToPlatform(env, "xauusd-risk-manager", report, { now: t0 + i * 60_000 })).outcome, "success");
+  const fifth = await publishToPlatform(env, "xauusd-risk-manager", report, { now: t0 + 10 * 60_000 });
+  assert.deepEqual(fifth, { outcome: "failed", reason: "local_budget", local: true }, "held: every caller retries a failed report later");
+  assert.equal(AGENTS.calls.filter((c) => c.capability === "reports.publish").length, 4, "the fifth never reached the kernel");
+  // Another agent has its own budget.
+  assert.equal((await publishToPlatform(env, "xauusd-moderator", report, { now: t0 + 10 * 60_000 })).outcome, "success");
+  // An hour after the first, the window has room again.
+  assert.equal((await publishToPlatform(env, "xauusd-risk-manager", report, { now: t0 + 60 * 60_000 + 1 })).outcome, "success");
+});

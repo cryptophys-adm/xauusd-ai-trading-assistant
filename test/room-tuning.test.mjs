@@ -179,5 +179,6 @@ test("RT7 the report for Aether and the doctrine facts carry values only", async
   assert.equal(facts["decision.room_min_atr"], 1);
   assert.deepEqual(facts["decision.room_min_atr_by_mode"], { scalp: 1, intraday: 1, swing: 1, range: 1 });
   assert.deepEqual(facts["decision.room_bounds_atr"], [0.5, 1.5]);
+  assert.deepEqual(["scalp", "intraday", "swing", "range"].map((m) => facts[`decision.room_min_atr_${m}`]), [1, 1, 1, 1], "one anchored fact per mode");
   assert.equal(facts["decision.room_tuning"], "auto");
 });

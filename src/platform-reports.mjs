@@ -87,12 +87,21 @@ function candleOpenIso(candleKey) {
 export const PLATFORM_BACKOFF_MS = 3_600_000;
 const AGENT_OFF = /agent_enabled|agent_suspended|agent_disabled/;
 export const BACKOFF_SCHEMA_SQL = "CREATE TABLE IF NOT EXISTS platform_backoff (agent_id TEXT PRIMARY KEY, until_ms INTEGER NOT NULL, reason TEXT, since TEXT NOT NULL)";
+// The kernel's own rule (platform control-plane-shared/src/capabilities.ts, ai-kernel supervisor.ts, read 2026-11-19):
+// reports.publish allows 4 consumed calls per agent in any rolling hour (else "rate_limited"), and an agent outside the
+// kernel with 5 or more denied or failed calls in an hour is proposed for suspension by consensus, which then holds
+// until someone resumes it. Five callers share xauusd-risk-manager (health alerts, EA heartbeat relay, strategy-arm
+// relay, profile relay, mode selector), so the budget is kept here, per agent, before the kernel is asked: a call past
+// it is not sent (outcome "failed", reason "local_budget"), which every caller retries at its next cycle. A refusal the
+// kernel never sees cannot count toward a suspension.
+export const PLATFORM_REPORTS_PER_HOUR = 4;
+export const PUBLISH_LOG_SCHEMA_SQL = "CREATE TABLE IF NOT EXISTS platform_publish_log (agent_id TEXT NOT NULL, at_ms INTEGER NOT NULL)";
 let backoffReady = new WeakSet(); // the databases the table was made in
 const backoffMemory = new Map(); // without a database (tests, local): agent_id → { until_ms, reason }
-export function resetPlatformBackoffForTests() { backoffReady = new WeakSet(); backoffMemory.clear(); }
+export function resetPlatformBackoffForTests() { backoffReady = new WeakSet(); backoffMemory.clear(); publishMemory.clear(); }
 async function backoffDb(env) {
   if (!env?.DB) return null;
-  if (!backoffReady.has(env.DB)) { await env.DB.prepare(BACKOFF_SCHEMA_SQL).run(); backoffReady.add(env.DB); }
+  if (!backoffReady.has(env.DB)) { await env.DB.prepare(BACKOFF_SCHEMA_SQL).run(); await env.DB.prepare(PUBLISH_LOG_SCHEMA_SQL).run(); backoffReady.add(env.DB); }
   return env.DB;
 }
 async function readBackoff(env, agentId) {
@@ -117,6 +126,25 @@ async function clearBackoff(env, agentId) {
     await db.prepare("DELETE FROM platform_backoff WHERE agent_id = ?").bind(agentId).run();
   } catch { /* harmless */ }
 }
+const publishMemory = new Map(); // without a database: agent_id → [at_ms]
+/** How many reports this agent published in the rolling hour before `now`. Unreadable: 0 (the kernel still enforces). */
+async function publishedLastHour(env, agentId, now) {
+  try {
+    const db = await backoffDb(env);
+    if (!db) return (publishMemory.get(agentId) ?? []).filter((t) => t > now - 3_600_000).length;
+    const row = await db.prepare("SELECT COUNT(*) AS n FROM platform_publish_log WHERE agent_id = ? AND at_ms > ?").bind(agentId, now - 3_600_000).first();
+    return Number(row?.n ?? 0);
+  } catch { return 0; }
+}
+async function logPublished(env, agentId, now) {
+  try {
+    const db = await backoffDb(env);
+    if (!db) { publishMemory.set(agentId, [...(publishMemory.get(agentId) ?? []).filter((t) => t > now - 3_600_000), now]); return; }
+    await db.prepare("INSERT INTO platform_publish_log (agent_id, at_ms) VALUES (?, ?)").bind(agentId, now).run();
+    await db.prepare("DELETE FROM platform_publish_log WHERE at_ms < ?").bind(now - 2 * 3_600_000).run();
+  } catch { /* the kernel still enforces its limit */ }
+}
+
 /** The agent's status from one whoami read, or null when it cannot be read (then the report is tried). */
 async function agentStatus(env, agentId) {
   if (typeof env?.AGENTS?.whoami !== "function") return null;
@@ -153,6 +181,10 @@ export async function publishToPlatform(env, agentId, report, { timeoutMs = PLAT
       return { outcome: "denied", reason: `backoff: ${off.reason} (status ${status})`, backoff: true };
     }
   }
+  // The kernel's hourly limit, kept here so a report past it is held instead of denied (a denial counts toward a suspension).
+  if (await publishedLastHour(env, agentId, now) >= PLATFORM_REPORTS_PER_HOUR) {
+    return { outcome: "failed", reason: "local_budget", local: true };
+  }
   let timer;
   try {
     const result = await Promise.race([
@@ -165,6 +197,7 @@ export async function publishToPlatform(env, agentId, report, { timeoutMs = PLAT
       // Kernel shape: { outcome: "succeeded", result: { report: { report_id, … } } }.
       const reportId = result?.result?.report?.report_id ?? result?.result?.report_id ?? null;
       if (off) await clearBackoff(env, agentId);
+      await logPublished(env, agentId, now);
       return { outcome: "success", report_id: typeof reportId === "string" ? reportId : null };
     }
     const reason = typeof result?.reason === "string" ? result.reason.slice(0, 200) : typeof result?.error === "string" ? result.error : "unknown";
