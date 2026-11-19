@@ -292,7 +292,7 @@ test("G13. the reference the EA finds gold by: price, its own time and past 4h c
 
 test("G14. OmegaExecutor 1.20: a chosen symbol is checked again; choosing needs the price path; futures and ambiguous contracts refused", () => {
   assert.match(ea, /#property version\s+"1\.20"/);
-  assert.match(ea, /if\(g_tradeSymbol != "" && GoldSymbolProblem\(g_tradeSymbol, g_refPrice > 0\.0, false\) == ""\)/, "re-checked against a fresh reference, kept without one");
+  assert.match(ea, /string keepProblem = g_tradeSymbol != "" \? GoldSymbolProblem\(g_tradeSymbol, g_refPrice > 0\.0, false\) : "no_symbol";/, "re-checked against a fresh reference, kept without one");
   assert.match(ea, /if\(!checkPath\) return "";\s*return PricePathProblem\(sym\);/, "the price path decides a choice");
   // Gaps are skipped, not failed (the broker closed, history loading): at least six matched points over 12 hours, each
   // from a window of 75 minutes (a clock an hour off across DST still matches), at the symbol's own median level.
@@ -300,10 +300,12 @@ test("G14. OmegaExecutor 1.20: a chosen symbol is checked again; choosing needs 
   assert.match(ea, /if\(m < PATH_MIN_POINTS \|\| \(rt\[m - 1\] - rt\[0\]\) \/ 1000 < PATH_MIN_SPAN_SEC\) return "no_history";/);
   assert.match(ea, /if\(x < lo\[i\] \* \(1\.0 - PATH_TOLERANCE\) \|\| x > hi\[i\] \* \(1\.0 \+ PATH_TOLERANCE\)\) return "price_path_mismatch";/);
   // A restart without a reference keeps the symbol verified before (this login, same contract), checked again later.
-  assert.match(ea, /if\(g_tradeSymbol == "" && !g_restoreTried\)/);
+  assert.match(ea, /if\(g_tradeSymbol == "" && !g_restoreTried && TerminalInfoInteger\(TERMINAL_CONNECTED\)\)/, "not spent before the terminal is connected");
+  assert.match(ea, /if\(p == "no_price"\) \{ retry = true; return ""; \}/, "nor before the symbol has a tick");
   assert.match(ea, /if\(login == "" \|\| parts\[0\] != login\) return "";/, "bound to the login hash");
   assert.match(ea, /SaveVerifiedSymbol\(g_tradeSymbol\);\s*return g_tradeSymbol;/);
-  assert.match(ea, /if\(g_tradeSymbol != "" && g_refPrice > 0\.0\) FileDelete\(VERIFIED_PATH\);/, "forgotten when it fails against a fresh reference");
+  assert.match(ea, /keepProblem == "price_not_gold" \|\| keepProblem == "not_on_server"/, "forgotten only when shown not to be gold, never for a passing state");
+  assert.doesNotMatch(ea, /g_refPrice > 0\.0\) FileDelete/);
   assert.match(ea, /if\(SymbolInfoInteger\(sym, SYMBOL_EXPIRATION_TIME\) > 0\) return "expiring_contract";/);
   assert.match(ea, /if\(best != "" && sizesDiffer\)\s*\{\s*lastProblem = "ambiguous_gold_symbols \(/);
   assert.match(ea, /bool fresh = price > 0\.0 && priceMs > 0 && nowMs - priceMs <= \(long\)REFERENCE_MAX_AGE_SEC \* 1000;/, "aged on the price's own time");

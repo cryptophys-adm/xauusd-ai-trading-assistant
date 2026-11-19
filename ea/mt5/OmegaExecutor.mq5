@@ -265,8 +265,11 @@ void SaveVerifiedSymbol(const string sym)
 
 // 1.20: the verified symbol of this login when it still exists with the same contract and passes the checks that need
 // no reference; "" otherwise. It is then kept under the keep rule and checked again at the first fresh reference.
-string RestoreVerifiedSymbol()
+// `retry` is set while the answer cannot be known yet (right after a restart: the terminal not connected, no tick yet),
+// so the one restore of the run is not spent then.
+string RestoreVerifiedSymbol(bool &retry)
   {
+   retry = false;
    if(!FileIsExist(VERIFIED_PATH)) return "";
    int h = FileOpen(VERIFIED_PATH, FILE_READ | FILE_TXT | FILE_ANSI);
    if(h == INVALID_HANDLE) return "";
@@ -279,7 +282,9 @@ string RestoreVerifiedSymbol()
    string sym = parts[1];
    if(sym == "" || !SymbolInfoInteger(sym, SYMBOL_EXIST)) return "";
    if(MathAbs(SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE) - StringToDouble(parts[2])) > 1e-6) return "";
-   if(GoldSymbolProblem(sym, false, false) != "") return "";
+   string p = GoldSymbolProblem(sym, false, false);
+   if(p == "no_price") { retry = true; return ""; }
+   if(p != "") return "";
    return sym;
   }
 
@@ -354,10 +359,11 @@ string ResolveGoldSymbol()
   {
    LoadOwnerSymbol();
    // 1.20: after a restart, the symbol verified before (this login, same contract), unless the owner names another.
-   if(g_tradeSymbol == "" && !g_restoreTried)
+   if(g_tradeSymbol == "" && !g_restoreTried && TerminalInfoInteger(TERMINAL_CONNECTED))
      {
-      g_restoreTried = true;
-      string r = RestoreVerifiedSymbol();
+      bool retry = false;
+      string r = RestoreVerifiedSymbol(retry);
+      if(!retry) g_restoreTried = true;   // tried again on a later call while the symbol has no price yet
       if(r != "" && (g_ownerSymbol == "" || g_ownerSymbol == r))
         {
          g_tradeSymbol = r;
@@ -367,9 +373,14 @@ string ResolveGoldSymbol()
    // 1.20: a chosen symbol is checked against the reference price whenever a fresh one exists (orchestrator review of
    // 1.19: it was never checked again); without one it keeps its place.
    LoadReferencePrice();
-   if(g_tradeSymbol != "" && GoldSymbolProblem(g_tradeSymbol, g_refPrice > 0.0, false) == "")
+   string keepProblem = g_tradeSymbol != "" ? GoldSymbolProblem(g_tradeSymbol, g_refPrice > 0.0, false) : "no_symbol";
+   if(g_tradeSymbol != "" && keepProblem == "")
       return g_tradeSymbol;
-   if(g_tradeSymbol != "" && g_refPrice > 0.0) FileDelete(VERIFIED_PATH);   // it failed against a fresh reference
+   // The verified symbol is forgotten only when it is shown not to be gold any more (its price against a fresh
+   // reference, or its contract), never for a passing state such as no tick yet or trading paused.
+   if(g_tradeSymbol != "" && (keepProblem == "price_not_gold" || keepProblem == "not_on_server" || keepProblem == "profit_currency_not_usd"
+      || keepProblem == "contract_size_out_of_range" || keepProblem == "expiring_contract"))
+      FileDelete(VERIFIED_PATH);
 
    string lastProblem = "no_usd_gold_symbol";
    // The owner's symbol first (a hint), then the chart symbol, under the same checks.
