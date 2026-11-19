@@ -52,7 +52,7 @@ export const EA_EXECUTION_SCHEMA_SQL = [
 ];
 let schemaReady = false;
 export function resetEaExecutionSchemaForTests() { schemaReady = false; }
-async function ensureSchema(db) {
+export async function ensureSchema(db) {
   if (schemaReady) return;
   for (const sql of EA_EXECUTION_SCHEMA_SQL) await db.prepare(sql).run();
   // B-12 (2026-11-11): who opened the position (omega, manual, external, ea), for Omega's policy rollback.
@@ -170,15 +170,31 @@ export async function dedupeDeals(env, { batch = 20_000 } = {}) {
 /** SQL: only the first stored row of each deal ticket (older duplicates are skipped wherever deals are read). */
 export const FIRST_OF_DEAL = "id IN (SELECT MIN(id) FROM ea_deals GROUP BY deal_ticket)";
 
-/** Recent closed deals, newest first. Never throws. */
-export async function listDeals(env, { limit = 50, sinceMs = null } = {}) {
+/** The account the terminal last reported (its opaque reference in the stored state), or null. Never throws. */
+export async function lastAccountRef(env) {
+  try {
+    const row = await env.DB.prepare("SELECT json_extract(state, '$.account_ref') AS ref FROM omega_bridge WHERE id = 1").first();
+    return typeof row?.ref === "string" && /^acct_[0-9a-f]{16}$/.test(row.ref) ? row.ref : null;
+  } catch { return null; }
+}
+
+/**
+ * Recent closed deals, newest first. Never throws. `account` (owner 2026-11-19, "hapus" the mixed history): the deals
+ * of that account only; "last" reads the account the terminal last reported, and with none known nothing is listed.
+ * Deals of other accounts and deals stored before the account was recorded stay in D1 (Omega's own statistics read
+ * them) but are on no page.
+ */
+export async function listDeals(env, { limit = 50, sinceMs = null, account = null } = {}) {
   try {
     await ensureSchema(env.DB);
     const n = Math.max(1, Math.min(500, Math.round(Number(limit) || 50)));
+    const ref = account === "last" ? await lastAccountRef(env) : account;
+    if (account != null && !ref) return [];
     // One row per deal ticket (the first stored): rows stored twice before 2026-11-13 are not counted again.
-    const q = sinceMs == null
-      ? env.DB.prepare(`SELECT * FROM ea_deals WHERE ${FIRST_OF_DEAL} ORDER BY closed_ms DESC LIMIT ?`).bind(n)
-      : env.DB.prepare(`SELECT * FROM ea_deals WHERE closed_ms >= ? AND ${FIRST_OF_DEAL} ORDER BY closed_ms DESC LIMIT ?`).bind(sinceMs, n);
+    const where = [FIRST_OF_DEAL], args = [];
+    if (sinceMs != null) { where.unshift("closed_ms >= ?"); args.push(sinceMs); }
+    if (ref) { where.unshift("account_ref = ?"); args.unshift(ref); }
+    const q = env.DB.prepare(`SELECT * FROM ea_deals WHERE ${where.join(" AND ")} ORDER BY closed_ms DESC LIMIT ?`).bind(...args, n);
     return ((await q.all())?.results || []).map(dealInUsd);
   } catch { return []; }
 }
@@ -249,8 +265,8 @@ export async function omegaOverview(env, { now = Date.now() } = {}) {
   let heartbeat = null;
   try { heartbeat = JSON.parse((await env.SIGNAL_CACHE?.get?.(EA_HEARTBEAT_KEY)) || "null"); } catch { heartbeat = null; }
   const age = heartbeat?.received_at ? now - Date.parse(heartbeat.received_at) : null;
-  const deals = await listDeals(env, { limit: 50 });
-  const month = await listDeals(env, { limit: 500, sinceMs: now - 30 * DAY_MS });
+  const deals = await listDeals(env, { limit: 50, account: "last" });
+  const month = await listDeals(env, { limit: 500, sinceMs: now - 30 * DAY_MS, account: "last" });
   const startOfDay = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
   return {
     server_ms: now,

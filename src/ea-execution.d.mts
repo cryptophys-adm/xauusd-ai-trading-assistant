@@ -4,7 +4,7 @@ export const HEARTBEAT_STALE_MS: number;
 export function resetEaExecutionSchemaForTests(): void;
 export function dealFrom(body: unknown, options?: { now?: number }): { deal?: Record<string, any>; error?: string };
 export function storeDeal(env: unknown, body: unknown, options?: { now?: number }): Promise<{ ok: boolean; stored?: boolean; error?: string }>;
-export function listDeals(env: unknown, options?: { limit?: number; sinceMs?: number | null }): Promise<Record<string, any>[]>;
+export function listDeals(env: unknown, options?: { limit?: number; sinceMs?: number | null; account?: string | null }): Promise<Record<string, any>[]>;
 export function dealStats(deals: Record<string, any>[]): Record<string, any>;
 export function setControl(env: unknown, input?: { mode?: string; reason?: string; actor?: string }, options?: { now?: number }): Promise<{ ok: boolean; error?: string; control?: Record<string, any>; previous_mode?: string }>;
 export function controlEvents(env: unknown, options?: { limit?: number }): Promise<Record<string, any>[]>;

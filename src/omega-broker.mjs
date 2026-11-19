@@ -14,7 +14,7 @@
 import { ingestCorpus, ingestCorpusMacro, ingestMt5Calendar } from "./corpus-oracle.mjs";
 import { goldClosedAt } from "./market-hours.mjs";
 import { eaSignal, readControl, blackoutWindow } from "./ea-signal.mjs";
-import { storeDeal, dealStats, FIRST_OF_DEAL } from "./ea-execution.mjs";
+import { storeDeal, dealStats, FIRST_OF_DEAL, ensureSchema as ensureDealsSchema } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
@@ -628,6 +628,7 @@ export function executorStatus(info) {
 // The reference's inputs, read at most once a minute per isolate (the bridge syncs every 5 seconds; the 4h series and
 // the fallback state change far slower): the cached 4h series, the running fallback's start, and the last recorded
 // fallback interval (D1 health_alerts market_data_fallback), whose 4h bars were built on the broker's own prices.
+const DEALS_TAGGED = new Set();
 let REFERENCE_SOURCES = null;
 export function resetReferenceSourcesForTests() { REFERENCE_SOURCES = null; }
 async function referenceSources(env, now) {
@@ -698,6 +699,19 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     const prevCheck = before ? goldCheckOf(before) : null;
     if (!check.ok && (prevCheck?.ok !== false || prevCheck.problem !== check.problem || prevName !== name)) {
       await event(db, now, "bridge", "symbol_refused", { server: executor.server, symbol: name, problem: check.problem, currency_profit: executor.symbol?.currency_profit ?? null, contract_size: executor.symbol?.contract_size ?? null });
+    }
+  }
+
+  // The deals this account reports (its last 100 from the terminal) are its own: one stored before the account was
+  // recorded takes it now, once per isolate and ticket (owner 2026-11-19: pages show the connected account's deals).
+  if (Array.isArray(executor?.deals) && executor.deals.length > 0 && typeof executor.account_ref === "string") {
+    const untagged = executor.deals.map((d) => Number(d?.deal_ticket)).filter((t) => Number.isInteger(t) && t > 0 && !DEALS_TAGGED.has(`${executor.account_ref}|${t}`));
+    if (untagged.length) {
+      try {
+        await ensureDealsSchema(db);
+        await db.prepare(`UPDATE ea_deals SET account_ref = ? WHERE account_ref IS NULL AND deal_ticket IN (${untagged.map(() => "?").join(",")})`).bind(executor.account_ref, ...untagged).run();
+        for (const t of untagged) DEALS_TAGGED.add(`${executor.account_ref}|${t}`);
+      } catch { /* tried again by the next isolate */ }
     }
   }
 

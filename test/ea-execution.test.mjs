@@ -113,7 +113,10 @@ test("the heartbeat keeps each open position's known fields; the overview has ev
   const e = env();
   const now = OPEN + 3_700_000;
   await storeHeartbeat(e, { mode: "demo", positions: 1, positions_detail: [{ ticket: 5001, side: "BUY", volume: 0.05 }] }, { now: now - 60_000 });
-  await storeDeal(e, { ...DEAL, closed_ms: now - 1000 });
+  // The overview lists the deals of the account the terminal last reported (owner 2026-11-19).
+  e.DB.raw.exec("CREATE TABLE IF NOT EXISTS omega_bridge (id INTEGER PRIMARY KEY, state TEXT)");
+  e.DB.raw.prepare("INSERT OR REPLACE INTO omega_bridge (id, state) VALUES (1, ?)").run(JSON.stringify({ account_ref: "acct_cccccccccccccccc" }));
+  await storeDeal(e, { ...DEAL, closed_ms: now - 1000, account_ref: "acct_cccccccccccccccc" });
   const o = await omegaOverview(e, { now });
   assert.equal(o.ea.connected, true);
   assert.equal(o.heartbeat.positions_detail[0].ticket, 5001);
@@ -176,4 +179,18 @@ test("a deal stored without its source takes it from a later report, and never c
   await storeDeal(e, { ...DEAL, deal_ticket: 8001, source: "manual" });
   assert.equal(e.DB.raw.prepare("SELECT source FROM ea_deals WHERE deal_ticket = 8001").get().source, "omega", "a source once set stays");
   assert.equal(e.DB.raw.prepare("SELECT COUNT(*) AS n FROM ea_deals WHERE deal_ticket = 8001").get().n, 1);
+});
+
+test("pages list the deals of the account the terminal last reported only (owner 2026-11-19: the mixed history removed)", async () => {
+  const e = env();
+  const A = "acct_aaaaaaaaaaaaaaaa", B = "acct_bbbbbbbbbbbbbbbb";
+  await storeDeal(e, { ...DEAL, deal_ticket: 8001, account_ref: A });
+  await storeDeal(e, { ...DEAL, deal_ticket: 8002, account_ref: B, closed_ms: DEAL.closed_ms + 1000 });
+  await storeDeal(e, { ...DEAL, deal_ticket: 8003, closed_ms: DEAL.closed_ms + 2000 }); // stored before accounts were recorded
+  assert.deepEqual((await listDeals(e)).map((d) => d.deal_ticket), [8003, 8002, 8001], "Omega's own statistics still read every deal");
+  assert.deepEqual(await listDeals(e, { account: "last" }), [], "no account reported yet: nothing listed");
+  e.DB.raw.exec("CREATE TABLE IF NOT EXISTS omega_bridge (id INTEGER PRIMARY KEY, state TEXT)");
+  e.DB.raw.prepare("INSERT INTO omega_bridge (id, state) VALUES (1, ?)").run(JSON.stringify({ account_ref: A }));
+  assert.deepEqual((await listDeals(e, { account: "last" })).map((d) => d.deal_ticket), [8001]);
+  assert.deepEqual((await listDeals(e, { account: B })).map((d) => d.deal_ticket), [8002]);
 });
