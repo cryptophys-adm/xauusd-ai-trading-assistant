@@ -42,7 +42,21 @@ export async function nexusFacts(env) {
   // operational value the learning protocol moves inside the owner's bounds, carried here for the doctrine protocol.
   const rooms = {};
   for (const m of ROOM_MODES) { try { rooms[m] = (await activeRoom(env, m)).value; } catch { rooms[m] = 1; } }
+  // The Decision Engine's thresholds per trading mode (owner 2026-11-19, relayed: "mau"): one fact per mode, as the room,
+  // so a mode switch alone is no drift. The council's live knobs replace a mode's quorum and reward as the engine reads
+  // them (modeThresholds); unreadable knobs: the code's values. Scalp has no reward minimum (owner 2026-11-12, "Tanpa batas
+  // RRR"): its 0 is reported, not a bounded value.
+  let knobs = {};
+  try { knobs = await (await import("./council-knobs.mjs")).readKnobOverrides(env); } catch { knobs = {}; }
+  const perMode = {};
+  for (const m of ROOM_MODES) {
+    const x = modeThresholds(m, knobs);
+    perMode[`decision.quorum_min_${m}`] = x.quorum_min;
+    perMode[`decision.lean_${m}`] = x.lean;
+    perMode[`decision.min_rrr_${m}`] = x.min_rrr;
+  }
   return {
+    ...perMode,
     "decision.room_min_atr": rooms[t.mode] ?? rooms.intraday ?? 1,
     "decision.room_min_atr_by_mode": rooms,
     // One fact per mode (the canon anchors these): a mode switch alone is no drift for the doctrine protocol.
