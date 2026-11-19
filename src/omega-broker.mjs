@@ -21,6 +21,7 @@ import { pendingPositionActions, markPositionActions } from "./position-actions.
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
 import { goldCheckOf, goldSymbolText, isCentCurrency, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText } from "./gold-symbol.mjs";
 import { PROBATION, PROBATION_KEY, probationFrom, probationVerdict } from "./htf-cells.mjs";
+import { delegationsForSync, withDelegated, delegatedStopIntents, markDelegatedIntents, plannerIds, hitlSupported, readDelegations, HITL_EA_MIN_VERSION } from "./omega-hitl.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
 import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./profile-council.mjs";
 import { runModeSelector, modeStatus, capOf, rangeExitTick } from "./mode-selector.mjs";
@@ -798,12 +799,27 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   const hasPositions = Array.isArray(executor?.positions) && executor.positions.length > 0;
   const meta = hasPositions ? await positionMeta(db, executor) : {};
   const candles = hasPositions ? await ladderCandles(env, now, { server: executor?.server, symbol: executor?.symbol?.name }) : {};
-  const plan = planIntents({ signal, control, settings, executor: dayExec, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: (recent.results ?? []).map((r) => r.id), agents, pmActions, account, eaGate, reentry, positionMeta: meta, candles });
+  // Delegated manual positions (owner 2026-11-19, src/omega-hitl.mjs): managed like Omega's own, with "d:" intents,
+  // only on an OmegaExecutor that accepts them (1.18+).
+  let delegated = [];
+  if (hasPositions && executor?.connected === true) {
+    try { delegated = await delegationsForSync(db, executor, { now, log: (action, detail) => event(db, now, "agent:delegate", action, detail) }); } catch { delegated = []; }
+  }
+  const delegateOk = delegated.length > 0 && hitlSupported(executor);
+  const dlg = delegateOk ? withDelegated(dayExec, delegated, { mode: signal?.trading_mode ?? null }) : { executor: dayExec, meta: {} };
+  const plan = planIntents({ signal, control, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: { ...meta, ...dlg.meta }, candles });
+  if (delegated.length && !delegateOk) plan.notes.push({ code: "delegate_needs_ea_1_18", detail: `${delegated.length} delegated position${delegated.length > 1 ? "s wait" : " waits"} for OmegaExecutor 1.18` });
   if (pmActions.length) {
     // An action that became an intent is applied; one the live price no longer allows is skipped (never retried).
     const planned = new Set(plan.intents.filter((it) => String(it.id).startsWith("pm:")).map((it) => { const [, t, , b] = String(it.id).split(":"); return `pm:${t}:${b}`; }));
     await markPositionActions(db, pmActions.filter((a) => planned.has(a.id)).map((a) => a.id), "applied");
     await markPositionActions(db, pmActions.filter((a) => !planned.has(a.id)).map((a) => a.id), "skipped");
+  }
+  if (delegateOk) {
+    // A delegated position without a stop gets the plan's stop (once), then its intents carry the "d:" id.
+    const recentIds = new Set(plannerIds((recent.results ?? []).map((r) => r.id)));
+    for (const s of delegatedStopIntents({ positions: dlg.executor.positions, sym: dlg.executor.symbol, signal })) if (!recentIds.has(s.id) && !plan.intents.some((x) => x.ticket === s.ticket && x.kind === "modify_sl")) plan.intents.push(s);
+    plan.intents = markDelegatedIntents(plan.intents, delegated);
   }
   for (const planned of plan.intents) {
     const it = await withAttempt(db, planned);
@@ -1164,6 +1180,9 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
 
   return {
     engine: { env_enabled: engineEnvEnabled(env), ...settings.settings, settings_version: settings.version, updated_by: settings.updated_by, updated_ms: settings.updated_ms },
+    // The owner's edits and delegation (owner 2026-11-19, src/omega-hitl.mjs): the delegated tickets, the toggle, and
+    // whether the terminal's OmegaExecutor takes them (1.18+).
+    delegation: { ...(await readDelegations(db)), supported: hitlSupported(executorFrom(st)), ea_min_version: HITL_EA_MIN_VERSION },
     // Reversal probation (src/htf-cells.mjs): the owner's switch and the reverted cells.
     probation: { ...probationFrom((await env.SIGNAL_CACHE?.get?.(PROBATION_KEY)) ?? null), risk_scale: PROBATION.risk_scale, revert_last_n: PROBATION.revert_last_n, agents: PROBATION.agents },
     connection: { version: connection.version, status: connection.status, server: connection.server, trade_symbol: connection.trade_symbol, updated_by: connection.updated_by, updated_ms: connection.updated_ms },

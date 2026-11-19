@@ -166,6 +166,11 @@ MT5's `[StartUp]` section in `/opt/mt5-ingestion-gateway/config/terminal_gateway
     `account_seen`, `spec_changed`, `spec_invalid`, `spec_validated`, `account_ref_upgraded`; one Telegram line
     for a new account, a changed spec and its first validation. The login hash is used in the sync only: it is
     not stored with the bridge state and not served.
+  - **1.18 (2026-11-19, Modify and Delegate on the Trade tab):** `modify_sltp` and `modify_order` (the owner's edit
+    of a position's stop and target or of a pending order's price, stop and target), and a position or order without
+    the EA's magic may be acted on only for `manual:` and `d:` ids (the owner's edit, a delegated manual position).
+    Compile and attach it like 1.17; the bridge needs no update. Before 1.18 Nexus refuses the edit
+    (`ea_1_18_required`) and delegated positions wait (note `delegate_needs_ea_1_18`).
   - **1.17 (2026-11-18, cent accounts):** the owner-set gold symbol (`omega/trade_symbol.txt`, from bridge 1.4.0)
     is tried first and passes the same checks as the listed names; on a USC account a USC profit currency passes.
   - **1.16 (2026-11-18):** a margin of 0 from `OrderCalcMargin` is valid (unlimited leverage rounds a small lot's

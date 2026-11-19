@@ -81,6 +81,12 @@ Content-Type: application/json
 | `open` | `side` (`BUY`/`SELL`), `volume`, `sl`, `tp` | market order on the chart symbol, comment = `id` |
 | `close` | `ticket` | closes that position if it is its own (magic) |
 | `close_all` | — | closes every own position and deletes every own pending order |
+| `modify_sltp` | `ticket`, `sl`, `tp` (0 removes a level) | OmegaExecutor 1.18+: the position's stop and target in one request (the owner's edit from Nexus) |
+| `modify_order` | `ticket`, `volume` = the order's new price, `sl`, `tp` | OmegaExecutor 1.18+: a pending order's price, stop and target; its expiry stays (the bridge line has no price field, so the price rides in `volume`) |
+
+Since OmegaExecutor 1.18 (owner 2026-11-19) an intent may act on a position or order without the EA's magic number
+only when its id starts with `manual:` (the owner's own edit or close from Nexus) or `d:` (a manual position the owner
+delegated to Omega, `src/omega-hitl.mjs`); any other id on such a ticket ends `foreign_magic` as before.
 
 `connection` is one of:
 

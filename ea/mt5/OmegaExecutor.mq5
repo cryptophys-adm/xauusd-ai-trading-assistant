@@ -42,7 +42,7 @@
 //|     manually on a chart profile when OMEGA_TAKE_STARTUP=false.   |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.17"
+#property version   "1.18"
 
 #include <Trade/Trade.mqh>
 
@@ -82,7 +82,7 @@ input bool   DynamicAtrStopEnabled  = true;  // Adaptive ATR-based SL+ and Trail
 input double AtrMultiplierTrigger   = 1.0;   // Break-even trigger multiplier of ATR (1.0 = 1x ATR)
 input double AtrMultiplierTrailing  = 1.5;   // Trailing distance multiplier of ATR (1.5 = 1.5x ATR)
 
-const string OMEGA_EXECUTOR_VERSION = "1.17"; // keep equal to #property version
+const string OMEGA_EXECUTOR_VERSION = "1.18"; // keep equal to #property version
 const string OMEGA_FOLDER    = "omega";
 const string STATE_TMP_PATH  = "omega/state.tmp";
 const string STATE_JSON_PATH = "omega/state.json";
@@ -417,6 +417,13 @@ string OpenRefusal(const string sym, const string side, const double volume, con
 
 // Before a stop or target change on an open position: "" when it may go, else the reason. A level inside the freeze
 // level (the old one or the new one) cannot be changed at the broker; the EA says so instead of sending it.
+// 1.18 (owner 2026-11-19, "Human AI interaction"): the owner's own edit from Nexus ("manual:" ids) and a manual
+// position the owner delegated to Omega ("d:" ids) may act on a position or order without this EA's magic number.
+bool MayActOnForeign(const string id)
+  {
+   return StringFind(id, "manual:") == 0 || StringFind(id, "d:") == 0;
+  }
+
 string ModifyRefusal(const string sym, const bool buy, const double oldLevel, const double newLevel)
   {
    double point = SymbolInfoDouble(sym, SYMBOL_POINT);
@@ -1163,7 +1170,7 @@ void ExecuteCloseIntent(const string id, const ulong ticket)
    long posMagic = PositionGetInteger(POSITION_MAGIC);
    if(posMagic != MagicNumber)
      {
-      if(StringFind(id, "manual") < 0 && StringFind(id, "kill") < 0 && StringFind(id, "force") < 0)
+      if(StringFind(id, "manual") < 0 && StringFind(id, "kill") < 0 && StringFind(id, "force") < 0 && !MayActOnForeign(id))
         {
          AppendResult(id, false, ticket, "foreign_magic", nowMs);
          return;
@@ -1188,7 +1195,7 @@ void ExecutePartialCloseIntent(const string id, const ulong ticket, const double
       AppendResult(id, false, ticket, "position_not_found", nowMs);
       return;
      }
-   if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
+   if(PositionGetInteger(POSITION_MAGIC) != MagicNumber && !MayActOnForeign(id))
      {
       AppendResult(id, false, ticket, "foreign_magic", nowMs);
       return;
@@ -1216,7 +1223,7 @@ void ExecuteModifySlIntent(const string id, const ulong ticket, const double new
       AppendResult(id, false, ticket, "position_not_found", nowMs);
       return;
      }
-   if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
+   if(PositionGetInteger(POSITION_MAGIC) != MagicNumber && !MayActOnForeign(id))
      {
       AppendResult(id, false, ticket, "foreign_magic", nowMs);
       return;
@@ -1252,7 +1259,7 @@ void ExecuteModifyTpIntent(const string id, const ulong ticket, const double new
       AppendResult(id, false, ticket, "position_not_found", nowMs);
       return;
      }
-   if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
+   if(PositionGetInteger(POSITION_MAGIC) != MagicNumber && !MayActOnForeign(id))
      {
       AppendResult(id, false, ticket, "foreign_magic", nowMs);
       return;
@@ -1273,6 +1280,75 @@ void ExecuteModifyTpIntent(const string id, const ulong ticket, const double new
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(SlippagePoints);
    bool ok = trade.PositionModify(ticket, sl, newTp);
+   long executedMs = NowUtcMs();
+   if(ok)
+      AppendResult(id, true, ticket, "", executedMs);
+   else
+      AppendResult(id, false, ticket, trade.ResultRetcodeDescription(), executedMs);
+  }
+
+// 1.18: a position's stop and target in one request (the owner's edit from Nexus). 0 removes a level.
+void ExecuteModifySlTpIntent(const string id, const ulong ticket, const double newSl, const double newTp)
+  {
+   long nowMs = NowUtcMs();
+   if(ticket == 0 || !PositionSelectByTicket(ticket))
+     {
+      AppendResult(id, false, ticket, "position_not_found", nowMs);
+      return;
+     }
+   long posMagic = PositionGetInteger(POSITION_MAGIC);
+   if(posMagic != MagicNumber && !MayActOnForeign(id))
+     {
+      AppendResult(id, false, ticket, "foreign_magic", nowMs);
+      return;
+     }
+   string sym = PositionGetString(POSITION_SYMBOL);
+   bool buy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+   double curSl = PositionGetDouble(POSITION_SL), curTp = PositionGetDouble(POSITION_TP);
+   if(newSl == curSl && newTp == curTp)
+     {
+      AppendResult(id, true, ticket, "already_set", nowMs);
+      return;
+     }
+   string refusal = ModifyRefusal(sym, buy, curSl, newSl);
+   if(refusal == "") refusal = ModifyRefusal(sym, buy, curTp, newTp);
+   if(refusal != "")
+     {
+      AppendResult(id, false, ticket, refusal, nowMs);
+      return;
+     }
+   trade.SetExpertMagicNumber(posMagic == MagicNumber ? MagicNumber : 0);
+   bool ok = trade.PositionModify(ticket, newSl, newTp);
+   trade.SetExpertMagicNumber(MagicNumber);
+   long executedMs = NowUtcMs();
+   if(ok)
+      AppendResult(id, true, ticket, "", executedMs);
+   else
+      AppendResult(id, false, ticket, trade.ResultRetcodeDescription(), executedMs);
+  }
+
+// 1.18: a pending order's price, stop and target (the owner's edit from Nexus); its expiry stays. 0 removes SL/TP.
+void ExecuteModifyOrderIntent(const string id, const ulong ticket, const double newPrice, const double newSl, const double newTp)
+  {
+   long nowMs = NowUtcMs();
+   if(ticket == 0 || !OrderSelect(ticket))
+     {
+      AppendResult(id, false, ticket, "order_not_found", nowMs);
+      return;
+     }
+   long ordMagic = OrderGetInteger(ORDER_MAGIC);
+   if(ordMagic != MagicNumber && !MayActOnForeign(id))
+     {
+      AppendResult(id, false, ticket, "foreign_magic", nowMs);
+      return;
+     }
+   double price = newPrice > 0.0 ? newPrice : OrderGetDouble(ORDER_PRICE_OPEN);
+   ENUM_ORDER_TYPE_TIME typeTime = (ENUM_ORDER_TYPE_TIME)OrderGetInteger(ORDER_TYPE_TIME);
+   datetime expiry = (datetime)OrderGetInteger(ORDER_TIME_EXPIRATION);
+   double stopLimit = OrderGetDouble(ORDER_PRICE_STOPLIMIT);
+   trade.SetExpertMagicNumber(ordMagic == MagicNumber ? MagicNumber : 0);
+   bool ok = trade.OrderModify(ticket, price, newSl, newTp, typeTime, expiry, stopLimit);
+   trade.SetExpertMagicNumber(MagicNumber);
    long executedMs = NowUtcMs();
    if(ok)
       AppendResult(id, true, ticket, "", executedMs);
@@ -1375,6 +1451,11 @@ void ProcessIntentsFile()
          ExecuteModifySlIntent(id, ticket, sl);
       else if(kind == "modify_tp")
          ExecuteModifyTpIntent(id, ticket, tp);
+      else if(kind == "modify_sltp")
+         ExecuteModifySlTpIntent(id, ticket, sl, tp);
+      // 1.18: the bridge's line has no price field; a modify_order carries the order's new price in the volume field.
+      else if(kind == "modify_order")
+         ExecuteModifyOrderIntent(id, ticket, volume, sl, tp);
       else
          AppendResult(id, false, 0, "unknown_intent_kind", NowUtcMs());
      }

@@ -32,6 +32,7 @@ import { ensureAiUsageSchema, neuronsOf, USD_PER_1K_NEURONS } from "./ai-usage.m
 import { confidenceTrend } from "./agent-confidence.mjs";
 import { eaSignal } from "./ea-signal.mjs";
 import { ensurePositionSchema, ACTION_TTL_MS } from "./position-actions.mjs";
+import { readDelegations, hitlSupported } from "./omega-hitl.mjs";
 export { ensurePositionSchema, pendingPositionActions, markPositionActions, ACTION_TTL_MS } from "./position-actions.mjs";
 
 export const PIP = 0.1;
@@ -198,11 +199,23 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
   try {
     await ensurePositionSchema(db);
     const executor = executorIn !== undefined ? executorIn : JSON.parse((await db.prepare("SELECT state FROM omega_bridge WHERE id = 1").first())?.state || "null");
-    const positions = (Array.isArray(executor?.positions) ? executor.positions : []).filter((p) => typeof p?.intent_id === "string" && p.intent_id.startsWith("open:") && (p.side === "BUY" || p.side === "SELL"));
+    // Omega's own positions, and the manual ones the owner delegated (owner 2026-11-19, src/omega-hitl.mjs; needs
+    // OmegaExecutor 1.18): a delegated position reads its own stop and target as its plan.
+    let delegatedTickets = new Set();
+    if (hitlSupported(executor)) { try { delegatedTickets = new Set((await readDelegations(db)).tickets); } catch { delegatedTickets = new Set(); } }
+    const delegatedOf = (p) => delegatedTickets.has(Number(p?.ticket)) && (p?.source === "manual" || p?.magic === 0);
+    const positions = (Array.isArray(executor?.positions) ? executor.positions : [])
+      .map((p) => (delegatedOf(p) ? { ...p, intent_id: `deleg:${p.ticket}`, delegated: true } : p))
+      .filter((p) => typeof p?.intent_id === "string" && (p.intent_id.startsWith("open:") || p.delegated === true) && (p.side === "BUY" || p.side === "SELL"));
     if (!positions.length) return { status: "no_positions" };
     const sym = executor?.symbol ?? {};
-    const ids = positions.map((p) => p.intent_id);
-    const openIntents = intentsIn ?? Object.fromEntries(((await db.prepare(`SELECT id, payload FROM omega_intents WHERE kind = 'open' AND id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all()).results ?? []).map((r) => [r.id, JSON.parse(r.payload)]));
+    const ids = positions.filter((p) => !p.delegated).map((p) => p.intent_id);
+    const stored = intentsIn ?? (ids.length ? Object.fromEntries(((await db.prepare(`SELECT id, payload FROM omega_intents WHERE kind = 'open' AND id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all()).results ?? []).map((r) => [r.id, JSON.parse(r.payload)])) : {});
+    const openIntents = { ...stored };
+    for (const p of positions.filter((x) => x.delegated)) {
+      openIntents[p.intent_id] ??= { tp: Number(p.tp) > 0 ? p.tp : null, entry: p.open_price, sl: Number(p.sl) > 0 ? p.sl : null, strategy: null,
+        ...(Number(p.sl) > 0 && Number.isFinite(Number(p.open_price)) ? { r_dist: Math.abs(Number(p.open_price) - Number(p.sl)) } : {}) };
+    }
     let signal = signalIn;
     if (signal === undefined) { try { signal = await eaSignal(env, { now }); } catch { signal = null; } }
     const decision = decisionIn !== undefined ? decisionIn : await latestDecisions(db);

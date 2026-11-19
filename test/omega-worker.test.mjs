@@ -125,6 +125,7 @@ function broker() {
     overview: async () => ({ signal: { side: "BUY" }, broker: { engine: {} } }),
     deals: async () => ({ deals: [] }),
     setControl: rec("setControl"), setSettings: rec("setSettings"), setConnection: rec("setConnection"), clearConnection: rec("clearConnection"), closePosition: rec("closePosition"),
+    ownerModify: rec("ownerModify"), setDelegation: rec("setDelegation"), setDelegateMode: rec("setDelegateMode"),
     bridgeKey: async () => ({ kid: "0123456789abcdef", public_key: "AAAA", synced_age_ms: 1000 }),
     bridgeSync: async (input) => { calls.push(["bridgeSync", input]); return { ok: true, intents: [], connection: null, settings_version: 1 }; }
   };
@@ -367,4 +368,29 @@ test("POST /api/council (Call for Councils P2) is owner only; actions start, mes
   assert.equal((await post(owner, { action: "message", session_id: "cfc_x_1", text: "why?", to: ["risk", "technical", "m15"] })).status, 200);
   assert.deepEqual([calls[0].action, calls[0].text, calls[0].actor_sub], ["start", "Key Level entry SL / SL+", "owner-sub-0001"]);
   assert.deepEqual(calls[1].to, ["risk", "technical"], "at most 2 seats per message");
+});
+
+test("Modify and Delegate (owner 2026-11-19): the owner alone, same origin, JSON; prices or empty", async () => {
+  resetKeyCacheForTests();
+  const O = broker();
+  const env = { ...ENV_BASE, OMEGA: O, OWNER_ACCESS_SUB: "owner-sub-0001" };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const owner = await jwt({ email: "Owner@Example.com", sub: "owner-sub-0001" });
+  const guest = await jwt({ email: "guest@example.com", sub: "guest-sub" });
+  const post = (path, body, token = owner) => handle(req(path, { token, method: "POST", body }), env, opts);
+  assert.equal((await post("/api/position/modify", { ticket: 7, sl: 3700.5, tp: "" })).status, 200);
+  assert.deepEqual(O.calls.at(-1), ["ownerModify", { target: "position", ticket: 7, sl: 3700.5, tp: null, price: null, actor: "owner@example.com" }]);
+  assert.equal((await post("/api/position/modify", { target: "order", ticket: 8, price: 3750, sl: 3760, tp: 3700 })).status, 200);
+  assert.equal(O.calls.at(-1)[1].target, "order");
+  assert.equal((await post("/api/position/modify", { ticket: 7, sl: "abc" })).status, 400);
+  assert.equal((await post("/api/position/modify", { ticket: -1, sl: 1 })).status, 400);
+  assert.equal((await post("/api/position/delegate", { ticket: 9, on: true })).status, 200);
+  assert.deepEqual(O.calls.at(-1), ["setDelegation", { ticket: 9, on: true, actor: "owner@example.com" }]);
+  assert.equal((await post("/api/position/delegate", { ticket: 9, on: "yes" })).status, 400);
+  assert.equal((await post("/api/delegate-mode", { on: true })).status, 200);
+  assert.deepEqual(O.calls.at(-1), ["setDelegateMode", { on: true, actor: "owner@example.com" }]);
+  for (const path of ["/api/position/modify", "/api/position/delegate", "/api/delegate-mode"]) {
+    assert.equal((await post(path, { ticket: 7, on: true, sl: 1 }, guest)).status, 403, `${path}: not the owner`);
+    assert.equal((await handle(req(path, { token: owner }), env, opts)).status, 405);
+  }
 });
