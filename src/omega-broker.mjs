@@ -665,6 +665,27 @@ async function referenceSources(env, now) {
   return REFERENCE_SOURCES;
 }
 
+/**
+ * The light sync (owner 2026-11-19: "Keduanya, bertahap", step 1 of cutting the bridge stream's cost). The bridge
+ * syncs on every state.json write, about 1.7 times a second, and each full sync plans with about 15 D1 statements.
+ * A sync may reuse this isolate's last full plan, and only deliver the open intents, when all of these hold:
+ * - the last full plan is at most LIGHT_SYNC_MAX_AGE_MS old;
+ * - the state that matters (bridgeStateKey), the connection, the key and the bridge version are unchanged;
+ * - the terminal is connected with no open position and no pending order;
+ * - the request carries no result and no corpus, macro or calendar data.
+ * Anything else, including any open position, runs the full plan, so the management of a position is never slower.
+ */
+export const LIGHT_SYNC_MAX_AGE_MS = 5_000;
+const LIGHT_SYNC = new WeakMap();
+export function lightSyncEligible({ last, lightKey, executor, results, corpus, corpusMacro, calendar, now }) {
+  if (!last || last.lightKey !== lightKey || !(now >= last.at) || now - last.at >= LIGHT_SYNC_MAX_AGE_MS) return false;
+  if (Array.isArray(results) && results.length) return false;
+  if (corpus || corpusMacro || calendar) return false;
+  if (executor?.connected !== true) return false;
+  if ((Array.isArray(executor.positions) && executor.positions.length) || (Array.isArray(executor.orders) && executor.orders.length)) return false;
+  return true;
+}
+
 export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVersion, corpus = null, corpusMacro = null, calendar = null, bridgeSymbol = null } = {}, { now = Date.now(), signal: signalIn } = {}) {
   await ensureSchema(env.DB);
   const db = env.DB;
@@ -694,6 +715,15 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       .bind(kid, publicKey, version, stateText, now).run();
   }
   if (prev?.kid && prev.kid !== kid) await event(db, now, "bridge", "bridge_key_changed", { from: prev.kid, to: kid });
+  // The light path (owner 2026-11-19: "Keduanya, bertahap", step 1): a sync with nothing to manage and nothing new
+  // reuses the last full plan of this isolate, at most LIGHT_SYNC_MAX_AGE_MS old, and only delivers the open intents.
+  const lightKey = `${bridgeStateKey(executor)}|${conn?.version ?? ""}|${conn?.status ?? ""}|${kid}|${version}`;
+  const last = LIGHT_SYNC.get(db);
+  if (lightSyncEligible({ last, lightKey, executor, results, corpus, corpusMacro, calendar, now })) {
+    const open = (await db.prepare("SELECT id, status, payload FROM omega_intents WHERE status IN ('pending', 'sent') ORDER BY created_ms, id").all()).results ?? [];
+    if (open.some((r) => r.status === "pending")) await db.prepare("UPDATE omega_intents SET status = 'sent', updated_ms = ? WHERE status = 'pending'").bind(now).run();
+    return { ...last.response, intents: open.map((r) => parse(r.payload)).filter(Boolean), corpus_cursor_ms: null, corpus_macro_cursors: null, calendar_seen_ms: null, light: true };
+  }
   // The bridge found no chart symbol the server has (exhausted) or stopped on a login failure: an event once per
   // change, which the health alert reads while no fresh, verified state says otherwise.
   if (resolution && (resolution.status === "exhausted" || resolution.status === "stopped")) {
@@ -1032,7 +1062,11 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     reference = referenceFrom({ price: signal?.market_price, marketMs: signal?.market_ms, h4: src.h4, fallbackSince: src.fallbackSince, excluded: src.excluded, now });
   } catch { reference = null; }
   const referencePrice = reference?.price ?? null;
-  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, reference_price: referencePrice, reference, ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
+  const response = { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, reference_price: referencePrice, reference, ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
+  // A full plan that ended with nothing to manage is what the light path may reuse (never a recovery or a review).
+  if (!recovery && !reviewStarted) LIGHT_SYNC.set(db, { at: now, lightKey, response: { ...response, intents: [] } });
+  else LIGHT_SYNC.delete(db);
+  return response;
 }
 
 // ---------------------------------------------------------------- overview (for the page)
