@@ -131,3 +131,42 @@ test("UI audit DEF-10: the badge's light status reads one bridge row and the set
   assert.ok(!env.DB.log.some((q) => /ea_deals|omega_intents|omega_events/.test(q)), env.DB.log.join("\n"));
   assert.equal((await brokerStatus(env, { now: T0 + 120_000 })).connected, false, "a state older than a minute is not connected");
 });
+
+test("the light sync (owner 2026-11-19, step 1): idle syncs reuse the last full plan for 5 s; any position, result or change plans in full", async () => {
+  const { LIGHT_SYNC_MAX_AGE_MS } = await import("../src/omega-broker.mjs");
+  resetOmegaBrokerSchemaForTests();
+  const env = { DB: counted(), SIGNAL_CACHE: kv(), OMEGA_ENGINE_ENABLED: "true" };
+  await writeSettings(env, { body: { enabled: true }, actor: "owner@example.com" }, { now: T0 });
+  const sync = (now, over = {}, extra = {}) => bridgeSync(env, { state: state({ received_ms: now, deals: [], ...over }), results: [], publicKey: SPKI, kid: KID, bridgeVersion: "1.0.0", ...extra }, { now });
+  const full = (log) => log.some((s) => /FROM omega_settings/.test(s));
+  await sync(T0);
+  // Idle, the quote moving: four light syncs inside 5 s, each 3 statements (connection, bridge row, open intents).
+  for (let i = 1; i <= 4; i++) {
+    env.DB.log.length = 0;
+    const r = await sync(T0 + i * 1_000, { symbol: { name: "XAUUSD", currency_profit: "USD", contract_size: 100, digits: 2, point: 0.01, bid: 4101 + i, ask: 4101.2 + i, spread_points: 20 } });
+    assert.equal(r.light, true, `sync ${i}`);
+    assert.equal(full(env.DB.log), false);
+    assert.equal(env.DB.log.length, 3, env.DB.log.join("\n"));
+  }
+  // 5 s after the full plan: planned in full again.
+  env.DB.log.length = 0;
+  assert.equal((await sync(T0 + LIGHT_SYNC_MAX_AGE_MS)).light, undefined);
+  assert.ok(full(env.DB.log));
+  // An open position: always the full plan (management is never slower).
+  const pos = [{ ticket: 77, side: "BUY", volume: 0.01, open_price: 4102, sl: 4095, tp: 4110 }];
+  await sync(T0 + 6_000, { positions: pos });
+  env.DB.log.length = 0;
+  assert.equal((await sync(T0 + 6_500, { positions: pos })).light, undefined);
+  assert.ok(full(env.DB.log));
+  // A result from the terminal: the full plan.
+  await sync(T0 + 7_000);
+  assert.equal((await sync(T0 + 7_500, {}, { results: [{ id: "x", ok: true }] })).light, undefined);
+  // An intent queued by the owner between two light syncs is still delivered.
+  await sync(T0 + 8_000);
+  env.DB.log.length = 0;
+  await env.DB.prepare("INSERT INTO omega_intents (id, kind, payload, status, created_ms, updated_ms) VALUES ('manual:c:1', 'close_all', ?, 'pending', ?, ?)").bind(JSON.stringify({ id: "manual:c:1", kind: "close_all" }), T0 + 8_100, T0 + 8_100).run();
+  const r = await sync(T0 + 8_500);
+  assert.equal(r.light, true);
+  assert.deepEqual(r.intents.map((i) => i.id), ["manual:c:1"]);
+  assert.ok(env.DB.log.some((s) => /UPDATE omega_intents SET status = 'sent'/.test(s)), "marked sent");
+});

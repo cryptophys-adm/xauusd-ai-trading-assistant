@@ -5,6 +5,12 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-19
+- perf(omega): a light bridge sync when there is nothing to manage (owner 2026-11-19, relayed "setuju semua", then directly "Keduanya, bertahap": step 1, no VPS step).
+  - **Why.** The bridge syncs about 1.7 times a second (on every state.json write), and a full plan costs about 15 D1 statements.
+  - **What changes.** An idle sync now reuses the isolate's last full plan, at most 5 s old, and only delivers the open intents. It uses about 3 statements; in node the measured time per idle sync fell from 1.88 ms to 0.53 ms.
+  - **When it does not apply.** Any open position, pending order, terminal result, corpus, macro or calendar data, or a state change runs the full plan as before.
+  - **Trade-off.** A new signal or a settings change with nothing open is planned at most 5 s later.
+  - **Step 2.** The bridge honouring a calm mode from the server follows with a bridge release.
 - feat(war-room): Order Blocks opens live in the metric format (owner 2026-11-19: "Promosi Order Blocks sekarang").
   - **What changes.** On the 15m War Room, Order Blocks' live opening now uses the metric prompt tested in shadow. The answer becomes a plain room opening (bias from the weighted implications, the readings as the claim, the table kept as `metric_table`) and passes the room's own validation.
   - **The evidence.** It was the only agent better than its prose control in both slices: discovery 36 vs 20 (p 0.022) and holdout 24 vs 16. Its discovery slice had 175 of the 200 bars the rule asks for.
