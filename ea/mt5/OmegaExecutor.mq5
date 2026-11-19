@@ -375,7 +375,17 @@ string ResolveGoldSymbol()
    LoadReferencePrice();
    string keepProblem = g_tradeSymbol != "" ? GoldSymbolProblem(g_tradeSymbol, g_refPrice > 0.0, false) : "no_symbol";
    if(g_tradeSymbol != "" && keepProblem == "")
+     {
+      g_symbolError = "";
       return g_tradeSymbol;
+     }
+   // A passing state (no tick yet, trading paused for broker maintenance) keeps the symbol in memory: nothing opens
+   // meanwhile (the refusal says why), and it trades again when the state passes, with or without a reference.
+   if(g_tradeSymbol != "" && (keepProblem == "no_price" || keepProblem == "trade_disabled"))
+     {
+      g_symbolError = "no_usd_gold_symbol (" + g_tradeSymbol + ":" + keepProblem + ")";
+      return "";
+     }
    // The verified symbol is forgotten only when it is shown not to be gold any more (its price against a fresh
    // reference, or its contract), never for a passing state such as no tick yet or trading paused.
    if(g_tradeSymbol != "" && (keepProblem == "price_not_gold" || keepProblem == "not_on_server" || keepProblem == "profit_currency_not_usd"

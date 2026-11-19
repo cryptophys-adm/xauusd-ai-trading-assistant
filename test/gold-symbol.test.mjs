@@ -306,6 +306,7 @@ test("G14. OmegaExecutor 1.20: a chosen symbol is checked again; choosing needs 
   assert.match(ea, /SaveVerifiedSymbol\(g_tradeSymbol\);\s*return g_tradeSymbol;/);
   assert.match(ea, /keepProblem == "price_not_gold" \|\| keepProblem == "not_on_server"/, "forgotten only when shown not to be gold, never for a passing state");
   assert.doesNotMatch(ea, /g_refPrice > 0\.0\) FileDelete/);
+  assert.match(ea, /if\(g_tradeSymbol != "" && \(keepProblem == "no_price" \|\| keepProblem == "trade_disabled"\)\)\s*\{\s*g_symbolError = [^;]+;\s*return "";/, "a passing state keeps the symbol in memory and opens nothing");
   assert.match(ea, /if\(SymbolInfoInteger\(sym, SYMBOL_EXPIRATION_TIME\) > 0\) return "expiring_contract";/);
   assert.match(ea, /if\(best != "" && sizesDiffer\)\s*\{\s*lastProblem = "ambiguous_gold_symbols \(/);
   assert.match(ea, /bool fresh = price > 0\.0 && priceMs > 0 && nowMs - priceMs <= \(long\)REFERENCE_MAX_AGE_SEC \* 1000;/, "aged on the price's own time");
