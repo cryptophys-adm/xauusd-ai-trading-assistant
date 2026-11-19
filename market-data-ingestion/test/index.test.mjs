@@ -392,6 +392,51 @@ test("15m publisher is off unless M15_PARITY_PUBLISH is true, then posts timefra
   assert.equal((await publishM15LocalComputation(e, { now: now + 20 * 60_000 })).status, "no_fresh_m15_close");
 });
 
+test("CPU: a bar already published is not rebuilt: the marker is read from the last candle's key before any engine runs", async () => {
+  const ai = fakeAiWorker();
+  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai, M15_PARITY_PUBLISH: "true", HUD_SNAPSHOT_PUBLISH: "true" });
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
+  const b = await buildBundle(e);
+  const sent = [];
+  e.AI_WORKER.submitHud = async (snap) => { sent.push(snap); return { status: 202, body: {} }; };
+  // A bundle whose candle reads are counted: a build walks hundreds of bars, the peek reads the last one.
+  const reads = {};
+  const counted = { ...b, timeframes: Object.fromEntries(Object.entries(b.timeframes).map(([tf, frame]) => [tf, { ...frame, candles: new Proxy(frame.candles, {
+    get(target, prop, recv) { if (typeof prop === "string" && /^\d+$/.test(prop)) reads[tf] = (reads[tf] ?? 0) + 1; return Reflect.get(target, prop, recv); }
+  }) }])) };
+  const nowH1 = Date.parse(b.timeframes.H1.candles.at(-1).close_time) + 60_000;
+  const nowM15 = Date.parse(b.timeframes.M15.candles.at(-1).close_time) + 60_000;
+
+  const h1 = await publishLocalComputation(e, { now: nowH1, bundle: b });
+  assert.equal(h1.status, "published", JSON.stringify(h1));
+  const m15 = await publishM15LocalComputation(e, { now: nowM15, bundle: b });
+  assert.equal(m15.status, "published", JSON.stringify(m15));
+  const hud = await publishHudSnapshots(e, { now: nowH1, bundle: b });
+  assert.equal(hud.charts.H1.status, "published", JSON.stringify(hud));
+  const posts = ai.posts.length, huds = sent.length;
+
+  for (const k of Object.keys(reads)) delete reads[k];
+  const h1Again = await publishLocalComputation(e, { now: nowH1, bundle: counted });
+  assert.deepEqual(h1Again, { status: "already_published", candle_key: h1.candle_key }, "the peeked key is the key the build gives");
+  assert.ok((reads.H1 ?? 0) <= 3 && !reads.M15 && !reads.H4 && !reads.D1, JSON.stringify(reads));
+
+  for (const k of Object.keys(reads)) delete reads[k];
+  const m15Again = await publishM15LocalComputation(e, { now: nowM15, bundle: counted });
+  assert.deepEqual(m15Again, { status: "already_published", candle_key: m15.candle_key });
+  assert.ok((reads.M15 ?? 0) <= 3 && !reads.H1, JSON.stringify(reads));
+
+  for (const k of Object.keys(reads)) delete reads[k];
+  const hudAgain = await publishHudSnapshots(e, { now: nowH1, bundle: counted });
+  assert.deepEqual(hudAgain.charts.H1, { status: "already_published", candle_key: hud.charts.H1.candle_key });
+  assert.ok((reads.H1 ?? 0) <= 3, JSON.stringify(reads));
+  assert.equal(ai.posts.length, posts, "nothing posted twice");
+  assert.equal(sent.length, huds);
+
+  // force still rebuilds (the operator's re-send path is unchanged).
+  assert.notEqual((await publishLocalComputation(e, { now: nowH1, bundle: b, force: true })).status, "already_published");
+});
+
 test("scheduled cron publishes the 5m parity records end to end (no swallowed failures)", async () => {
   const posts = [];
   const contexts = [];
