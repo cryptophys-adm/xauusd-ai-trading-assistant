@@ -1054,8 +1054,16 @@ export async function setAccountProfile(env, { account_ref, action, value, actor
     const control = await readControl(env);
     killed = control?.mode === "killed" || String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
   }
-  return ownerSetProfile(env.DB, { account_ref, action, value, actor: String(actor || "owner").slice(0, 120), now, executor, connectedRef, killed, requireConnected: true,
+  const result = await ownerSetProfile(env.DB, { account_ref, action, value, actor: String(actor || "owner").slice(0, 120), now, executor, connectedRef, killed, requireConnected: true,
     log: (what, detail) => event(env.DB, now, actor || "owner", what, detail), notify: (t) => sendOmegaTelegram(env, t) });
+  // A refused owner control is recorded too (2026-11-19: the owner's attempts after 03:50 UTC left no trace), so the
+  // page's message can be traced: the action, the value, the account and the reason; never a login.
+  if (result?.ok === false) {
+    try {
+      await event(env.DB, now, String(actor || "owner").slice(0, 120), "profile_control_refused", { account_ref: String(account_ref ?? "").slice(0, 40), action: String(action ?? "").slice(0, 20), value: value == null ? null : String(value).slice(0, 20), connected_ref: connectedRef, terminal_live: executor != null, error: String(result.error ?? "").slice(0, 200) });
+    } catch { /* the refusal still reaches the page */ }
+  }
+  return result;
 }
 
 export async function brokerStatus(env, { now = Date.now() } = {}) {
