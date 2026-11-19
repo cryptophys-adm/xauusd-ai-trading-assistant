@@ -12,13 +12,16 @@ import { MODE_THRESHOLDS, MIN_CONFIDENCE } from "./decision-engine.mjs";
 
 const knob = (id, label, current, min, max, step, unit, applies) => Object.freeze({ id, label, current, min, max, step, unit, applies });
 
+// The quorum knobs stay inside the doctrine's hard bounds, 0.45 to 0.7 (owner 2026-11-19: "ya", on the history of
+// 10-19 Nov: no scalp side ever sat between 0.40 and 0.45, and the swing trades at 0.70-0.80 of the weight hit 5 of 6, which a
+// 0.75 knob would have blocked). An amendment the Aether seat would refuse is never proposed here.
 export const KNOB_REGISTRY = Object.freeze([
   knob("decision.min_confidence", "Minimum council confidence to act", MIN_CONFIDENCE, 0.3, 0.6, 0.05, "share", "Decision Engine: the council's confidence floor"),
   knob("decision.min_rrr.intraday", "Minimum reward to risk, intraday mode", MODE_THRESHOLDS.intraday.min_rrr, 1, 2.5, 0.1, "R", "Decision Engine reward guardrail in intraday mode"),
   knob("decision.min_rrr.swing", "Minimum reward to risk, swing mode", MODE_THRESHOLDS.swing.min_rrr, 1.5, 3, 0.1, "R", "Decision Engine reward guardrail in swing mode"),
-  knob("decision.quorum_min.scalp", "Witness quorum needed, scalp mode", MODE_THRESHOLDS.scalp.quorum_min, 0.4, 0.65, 0.05, "share", "Decision Engine quorum guardrail in scalp mode"),
-  knob("decision.quorum_min.intraday", "Witness quorum needed, intraday mode", MODE_THRESHOLDS.intraday.quorum_min, 0.4, 0.7, 0.05, "share", "Decision Engine quorum guardrail in intraday mode"),
-  knob("decision.quorum_min.swing", "Witness quorum needed, swing mode", MODE_THRESHOLDS.swing.quorum_min, 0.45, 0.75, 0.05, "share", "Decision Engine quorum guardrail in swing mode")
+  knob("decision.quorum_min.scalp", "Witness quorum needed, scalp mode", MODE_THRESHOLDS.scalp.quorum_min, 0.45, 0.65, 0.05, "share", "Decision Engine quorum guardrail in scalp mode"),
+  knob("decision.quorum_min.intraday", "Witness quorum needed, intraday mode", MODE_THRESHOLDS.intraday.quorum_min, 0.45, 0.7, 0.05, "share", "Decision Engine quorum guardrail in intraday mode"),
+  knob("decision.quorum_min.swing", "Witness quorum needed, swing mode", MODE_THRESHOLDS.swing.quorum_min, 0.45, 0.7, 0.05, "share", "Decision Engine quorum guardrail in swing mode")
   // Phase 2 (2026-11-17): only knobs the shadow replay can test are listed; the strategy engine's and the agents' own
   // numbers (near_atr, max_risk_atr, ...) need code to make them tunable, so a council proposes them as a task.
 ]);

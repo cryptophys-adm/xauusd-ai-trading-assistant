@@ -136,3 +136,12 @@ test("KT4. a queued knob change goes live by itself when it proves better, and r
   assert.match((await state("cp_again")).note, /rolled back before/);
   resetKnobCache();
 });
+
+test("the quorum knobs stay inside the doctrine's bounds 0.45 to 0.7 (owner 2026-11-19: \"ya\")", async () => {
+  const { KNOB_REGISTRY } = await import("../src/council-knobs.mjs");
+  const quorum = KNOB_REGISTRY.filter((k) => k.id.startsWith("decision.quorum_min."));
+  assert.deepEqual(quorum.map((k) => [k.id, k.min, k.max]), [["decision.quorum_min.scalp", 0.45, 0.65], ["decision.quorum_min.intraday", 0.45, 0.7], ["decision.quorum_min.swing", 0.45, 0.7]]);
+  for (const k of quorum) assert.ok(k.current >= k.min && k.current <= k.max, `${k.id}: today's value inside its range`);
+  const rrr = KNOB_REGISTRY.filter((k) => k.id.startsWith("decision.min_rrr."));
+  for (const k of rrr) assert.ok(k.min >= 1 && k.max <= 3, `${k.id} inside the doctrine's 1 to 3`);
+});

@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-19
+- fix(council): the quorum knobs stay inside the doctrine's bounds 0.45 to 0.7 (owner: "ya"): scalp 0.45-0.65 (was 0.40), intraday 0.45-0.7 (was 0.40), swing 0.45-0.7 (was 0.75). No knob was ever live, so no value in force changes. History 10-19 Nov: no scalp side between 0.40 and 0.45; swing trades at 0.70-0.80 of the weight hit 5 of 6.
 - feat(doctrine): the Decision Engine's thresholds per trading mode in the doctrine facts (owner, relayed: "mau"): `decision.quorum_min_<mode>`, `decision.lean_<mode>`, `decision.min_rrr_<mode>` for scalp, intraday, swing and range, as the engine reads them (the council's live knobs included), beside the single facts of the mode in force. Only the reporting changes; no value, guardrail or rule.
 - fix(tuning): the room guardrail's hourly step is recorded in `auto_tune_runs` (step `room`, each mode's counts and the changes); the run log accepted only the weighting and witness steps, so the first live room runs left no row.
 - fix(platform): the kernel's 4 reports an hour per agent are kept here (D1 `platform_publish_log`): a fifth report in the hour is held and retried later instead of denied, since 5 denials in an hour get an agent suspended (the cause of the Risk Manager's suspension on 18 Nov). The doctrine facts also carry the room per mode (`decision.room_min_atr_scalp`, `_intraday`, `_swing`, `_range`).

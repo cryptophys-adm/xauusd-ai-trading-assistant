@@ -34,9 +34,11 @@ Each knob's current value is read from the code that uses it.
 | `decision.min_confidence` (the council's floor) | 0.4 | 0.3 to 0.6 | 0.05 |
 | `decision.min_rrr.intraday` | 1.5 R | 1 to 2.5 | 0.1 |
 | `decision.min_rrr.swing` | 2 R | 1.5 to 3 | 0.1 |
-| `decision.quorum_min.scalp` | 0.45 | 0.4 to 0.65 | 0.05 |
-| `decision.quorum_min.intraday` | 0.5 | 0.4 to 0.7 | 0.05 |
-| `decision.quorum_min.swing` | 0.6 | 0.45 to 0.75 | 0.05 |
+| `decision.quorum_min.scalp` | 0.45 | 0.45 to 0.65 | 0.05 |
+| `decision.quorum_min.intraday` | 0.5 | 0.45 to 0.7 | 0.05 |
+| `decision.quorum_min.swing` | 0.6 | 0.45 to 0.7 | 0.05 |
+
+The quorum knobs stay inside the doctrine's hard bounds, 0.45 to 0.7 (owner 2026-11-19: "ya", on the decisions of 10-19 Nov: no scalp side sat between 0.40 and 0.45; the swing trades at 0.70-0.80 of the weight hit 5 of 6, which a 0.75 knob would have blocked).
 
 The registry is the only way a council can change a number. Adding a knob is a reviewed change to this file.
 

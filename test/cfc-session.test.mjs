@@ -194,7 +194,7 @@ test("CS10. typed options: a knob change only within the registry's bounds, anyt
   assert.deepEqual(opts.map((o) => [o.option_id, o.kind]), [["rrr", "policy_parameter"], ["atr", "repository_task"], ["far", "repository_task"], ["code", "repository_task"], ["no_change", "no_change"]]);
   assert.deepEqual([opts[0].knob, opts[0].from, opts[0].value], ["decision.min_rrr.intraday", 1.5, 1.8], "rounded to the knob's step");
   assert.match(opts[1].spec, /not a valid knob change: unknown knob/);
-  assert.match(opts[2].spec, /must stay within 0.4 to 0.65/);
+  assert.match(opts[2].spec, /must stay within 0.45 to 0.65/);
 
   const env = await setup();
   await setSessionsSwitch(env, { on: true });
