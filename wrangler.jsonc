@@ -173,7 +173,13 @@
     // hourly deterministic suggestion flags (no model call; the cards on the Call for Councils page); "off" runs
     // nothing; "on" is kept for the sessions of phase P2 and in P1 behaves as "suggest". No mode starts a session.
     "CFC_MODE": "on",
-    "SHADOW_KNOWLEDGE_ENABLED": "true",
+    // Shadow arms retired 2026-11-19 (owner, directly: "1+2+3 hentikan semua", then "Pertahankan, hentikan sisanya" and
+    // "Hentikan seluruh arm"; the record per arm is in docs/CHANGELOG.md): the learned-note arm and its A/A arm, the
+    // metric rebuttals and the model arena make no model call. Their stored rows stay. The metric opening shadow stays:
+    // it was better than its control (sign test 238 vs 170, Holm p 0.003).
+    "SHADOW_KNOWLEDGE_ENABLED": "false",
+    "METRIC_REBUTTAL": "off",
+    "MODEL_ARENA": "off",
     "LEARNED_KNOWLEDGE_ENABLED": "true"
   },
   "routes": [

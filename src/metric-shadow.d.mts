@@ -2,6 +2,7 @@ export const METRIC_SHADOW_VERSION: string;
 export const IMPLICATIONS: readonly string[];
 export const METRIC_OPENING_SCHEMA: Readonly<Record<string, unknown>>;
 export function metricShadowEnabled(env: unknown): boolean;
+export function metricRebuttalEnabled(env: unknown): boolean;
 export function maxCallsPerHour(env: unknown): number;
 export function noLevels(v: unknown): unknown;
 export function candleSummary(prefix: string, candles: unknown[]): { id: string; value: unknown }[];

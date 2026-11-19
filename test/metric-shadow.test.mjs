@@ -156,3 +156,21 @@ test("A2: only on every fourth bar, after the agent's own metric opening; stored
   assert.deepEqual(chips.rebuttals.risk.rebuts[0], { agent: "technical", their_metric: "candles_15m.change_1", my_metric: "candles_15m.change_4", relation: "contradicts" });
   assert.equal(await readMetricShadowBar(d1(), { barTime }), null);
 });
+
+test("retired 2026-11-19: METRIC_REBUTTAL off stops the rebuttals only; the opening shadow keeps its switch", async () => {
+  const { metricRebuttalEnabled, metricShadowEnabled } = await import("../src/metric-shadow.mjs");
+  assert.equal(metricRebuttalEnabled({}), true);
+  assert.equal(metricRebuttalEnabled({ METRIC_REBUTTAL: "off" }), false);
+  assert.equal(metricShadowEnabled({ METRIC_REBUTTAL: "off" }), true, "the opening shadow is not touched");
+  assert.equal(metricRebuttalEnabled({ METRIC_SHADOW: "off" }), false, "METRIC_SHADOW off still stops both");
+  assert.equal((await runMetricRebuttals({ METRIC_REBUTTAL: "off" }, { rebutters: [{ agent: "risk", stance: "WAIT" }] })).status, "disabled");
+});
+
+test("production config (owner 2026-11-19): the note arm, the rebuttals and the arena are off; the metric opening shadow is on", async () => {
+  const { readFileSync } = await import("node:fs");
+  const cfg = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  assert.match(cfg, /"SHADOW_KNOWLEDGE_ENABLED": "false"/);
+  assert.match(cfg, /"METRIC_REBUTTAL": "off"/);
+  assert.match(cfg, /"MODEL_ARENA": "off"/);
+  assert.doesNotMatch(cfg, /"METRIC_SHADOW": "off"/);
+});
