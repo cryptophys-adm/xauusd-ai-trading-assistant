@@ -251,6 +251,37 @@ To rotate the bridge's RSA-3072 key pair:
 
 ---
 
+## Calm mode (omega-bridge 1.7.0, 2026-11-19)
+
+Owner 2026-11-19 ("Keduanya, bertahap", step 2 of cutting the bridge stream's cost). The EA writes `state.json` every
+2 s, and 1.6.0 synced on every write (about 1.7 syncs a second). Every sync response now carries `stream_mode`
+(`bridgeStreamMode` in `src/omega-broker.mjs`):
+
+- **`calm`:** the terminal is connected with no open position, no pending order, no open intent, no recovery and no
+  profile review. A 1.7.0 bridge then syncs on its period (`OMEGA_SYNC_MS`, 5 s) and on `results.txt`, not on the
+  `state.json` writes.
+- **`fast`:** anything else. The bridge syncs on every write, as 1.6.0.
+
+The bridge also goes fast on its own, before the server answers, when its `state.json` shows a position, an order or
+a lost connection, or a result waits (`localBusy`, `wakesOn`).
+
+The trade-off: an entry the server plans while calm reaches the terminal at the next periodic sync, at most 5 s
+later. An open position is always managed at the fast pace.
+
+The switches are `OMEGA_BRIDGE_CALM` "off" on the Worker (always fast) and `OMEGA_CALM_MODE=false` on the bridge
+(the 1.6.0 behaviour). An older bridge ignores the field, and a 1.7.0 bridge with an older server stays fast.
+
+**Update on the VPS** (bridge only; the EA is unchanged):
+
+```bash
+cd /root/omega-bridge-agy && git pull --ff-only
+sudo cp -r /root/omega-bridge-agy/bridge/omega-bridge/src /opt/omega-bridge/
+sudo systemctl restart omega-bridge.service
+sudo journalctl -u omega-bridge -n 30 --no-pager | grep -E "daemon_started|error"
+```
+
+`daemon_started` must show `"bridge_version":"1.7.0"` and `"calm_mode":true`. The Omega page shows the bridge version.
+
 ## Troubleshooting
 
 - **HTTP 403 (`sync_forbidden`):** Logged at most once per minute with `"hint": "check OMEGA_BRIDGE_CLIENT_ID / the Access service token"`. Verify that:

@@ -169,4 +169,28 @@ test("the light sync (owner 2026-11-19, step 1): idle syncs reuse the last full 
   assert.equal(r.light, true);
   assert.deepEqual(r.intents.map((i) => i.id), ["manual:c:1"]);
   assert.ok(env.DB.log.some((s) => /UPDATE omega_intents SET status = 'sent'/.test(s)), "marked sent");
+  assert.equal(r.stream_mode, "fast", "an intent to deliver: fast");
+});
+
+test("stream mode (owner 2026-11-19, step 2; bridge 1.7.0): calm with nothing to manage, fast with a position, an order, an intent, a lost terminal or the switch off", async () => {
+  const { bridgeStreamMode } = await import("../src/omega-broker.mjs");
+  const ex = { connected: true, positions: [], orders: [] };
+  assert.equal(bridgeStreamMode({}, { executor: ex }), "calm");
+  assert.equal(bridgeStreamMode({}, { executor: { ...ex, positions: [{ ticket: 1 }] } }), "fast");
+  assert.equal(bridgeStreamMode({}, { executor: { ...ex, orders: [{ ticket: 2 }] } }), "fast");
+  assert.equal(bridgeStreamMode({}, { executor: ex, intents: [{ id: "open:1:BUY" }] }), "fast");
+  assert.equal(bridgeStreamMode({}, { executor: { ...ex, connected: false } }), "fast");
+  assert.equal(bridgeStreamMode({}, { executor: null }), "fast");
+  assert.equal(bridgeStreamMode({}, { executor: ex, recovery: { directive: "restart_terminal" } }), "fast");
+  assert.equal(bridgeStreamMode({}, { executor: ex, reviewStarted: true }), "fast");
+  assert.equal(bridgeStreamMode({ OMEGA_BRIDGE_CALM: "off" }, { executor: ex }), "fast");
+
+  resetOmegaBrokerSchemaForTests();
+  const env = { DB: counted(), SIGNAL_CACHE: kv(), OMEGA_ENGINE_ENABLED: "true" };
+  await writeSettings(env, { body: { enabled: true }, actor: "owner@example.com" }, { now: T0 });
+  const sync = (now, over = {}) => bridgeSync(env, { state: state({ received_ms: now, deals: [], ...over }), results: [], publicKey: SPKI, kid: KID, bridgeVersion: "1.7.0" }, { now });
+  assert.equal((await sync(T0)).stream_mode, "calm", "full plan, idle");
+  const light = await sync(T0 + 1_000);
+  assert.deepEqual([light.light, light.stream_mode], [true, "calm"], "light plan, idle");
+  assert.equal((await sync(T0 + 2_000, { positions: [{ ticket: 77, side: "BUY", volume: 0.01, open_price: 4102, sl: 4095, tp: 4110 }] })).stream_mode, "fast");
 });
