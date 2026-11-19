@@ -381,6 +381,11 @@ test("AS20 two accounts on one server (2026-11-19): the connected one is found b
     assert.equal(wrong.ok, false, action);
     assert.equal(wrong.error, `Cent account (USX) · GoldOne (${refCent}) is not the connected account: the controls act on the connected account only`);
   }
+  // Each refusal is recorded, so the owner's attempt can be traced (action, account, reason; never a login).
+  const refused = env.DB.raw.prepare("SELECT detail FROM omega_events WHERE action = 'profile_control_refused' ORDER BY id").all().map((r) => JSON.parse(r.detail));
+  assert.deepEqual(refused.map((r) => [r.action, r.account_ref, r.connected_ref, r.terminal_live]), [["reset", refCent, refUsd, true], ["profile", refCent, refUsd, true], ["ceiling", refCent, refUsd, true], ["agent_mode", refCent, refUsd, true]]);
+  assert.match(refused[3].error, /not the connected account/);
+  assert.ok(!JSON.stringify(refused).includes(LOGIN_HASH));
   const before = env.DB.raw.prepare("SELECT profile, ceiling, agent_mode FROM omega_accounts WHERE account_ref = ?").get(refCent);
   const ok = await setAccountProfile(env, { account_ref: refUsd, action: "agent_mode", value: "approval" }, { now: NOW + 130_000 });
   assert.equal(ok.ok, true);
