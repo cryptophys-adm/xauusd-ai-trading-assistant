@@ -6,3 +6,7 @@ export function readingSentences(text: unknown, options?: { max?: number; len?: 
 export function publicRoomReading(row: Record<string, any> | null, source: string): Record<string, any> | null;
 export function publicNewsReading(daily: Record<string, any> | null): Record<string, any> | null;
 export function readPublicWarRoom(env: unknown, input?: { source?: string }, deps?: { readNewsDaily?: ((db: unknown) => Promise<any>) | null }): Promise<Record<string, any>>;
+export const POSITION_WORDING: RegExp;
+export function publicNames(s: unknown): string;
+export function publicRoomScene(row: Record<string, any> | null, messages?: any[], source?: string): Record<string, any> | null;
+export function readPublicWarRoomScene(env: unknown): Promise<Record<string, any>>;

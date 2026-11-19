@@ -64,3 +64,34 @@ test("PW3 the reader: the latest concluded run of the source's room; news from t
   const empty = { DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) } };
   assert.match((await readPublicWarRoom(empty, { source: "1d" })).error, /no reading/);
 });
+
+test("PW4 the stricter filter (2026-11-19, per-analyst text): whole sentences only, no positional wording, Matrix, ratios", async () => {
+  const { readingSentences, publicPhrase } = await import("../src/public-warroom.mjs");
+  const long = "The momentum indicators across the session have stayed weak and the structure keeps printing lower highs with every bounce being sold into by larger participants, which is enough to justify a high-confidence sell.";
+  assert.ok(long.length > 200);
+  assert.deepEqual(readingSentences(long, { len: 260 }), [], "a forbidden word deep in a long sentence still refuses it");
+  assert.deepEqual(readingSentences("Gold drifted lower through London. " + "x".repeat(230) + "."), ["Gold drifted lower through London."], "too long: dropped, never clipped");
+  assert.deepEqual(readingSentences("Structure is bearish. Waiting for the next candle to confirm the move. Staying flat here. No setup is trade-ready. Pattern #1 holds."), ["Structure is bearish."]);
+  assert.deepEqual(readingSentences("The Decision Matrix sees a bearish confluence."), ["The Matrix sees a bearish confluence."]);
+  assert.equal(publicPhrase("Price respects the Fibonacci 0.618 level."), true, "a ratio is no price");
+  assert.equal(publicPhrase("Price respects 3741.80."), false);
+});
+
+test("PW5 the room scene: roster, metrics, filtered claim and rebuttal per analyst; never a stance or confidence", async () => {
+  const { publicRoomScene } = await import("../src/public-warroom.mjs");
+  const row = { bar_close: "2026-11-19T01:45:00.000Z", bias: "BEARISH", agents_heard: 3, body_json: JSON.stringify({
+    conclusion: { stance: "SELL", confidence: 0.88, reasons: ["The dollar index near 19-month highs pulls gold lower."] },
+    agents: [{ agent: "supertrend", status: "ok", stance: "WAIT", bias: "BULLISH", confidence: 0.4, metrics: ["the supertrend"] }, { agent: "fabio_amt", status: "ok", stance: "SELL", bias: "BEARISH", confidence: 0.8 }, { agent: "decision_matrix", status: "failed" }] }) };
+  const msgs = [
+    { step: "open:supertrend", agent: "supertrend", body_json: JSON.stringify({ claim: "The supertrend stays below price. Wait for the next close before acting.", bias: "BULLISH", metrics: ["the supertrend indicator"] }) },
+    { step: "open:fabio_amt", agent: "fabio_amt", body_json: JSON.stringify({ claim: "Sellers dominate the footprint order flow below the value area.", bias: "BEARISH", metrics: ["the value area range", "the footprint order flow"] }) },
+    { step: "debate:fabio_amt", agent: "fabio_amt", body_json: JSON.stringify({ argument: "I disagree with the bullish momentum claim. Sell at 3741.", rebuts: ["supertrend", "ghost"], bias: "BEARISH" }) }
+  ];
+  const s = publicRoomScene(row, msgs, "15m");
+  assert.deepEqual([s.source, s.bias, s.moderator.length], ["15m", "bearish", 1]);
+  assert.deepEqual(s.analysts.map((a) => a.id), ["supertrend", "fabio_amt"], "a failed seat is not on the roster");
+  const st = s.analysts[0], fa = s.analysts[1];
+  assert.deepEqual([st.bias, st.claim, st.metrics], ["bullish", ["The supertrend stays below price."], ["the supertrend indicator"]]);
+  assert.deepEqual([fa.claim, fa.rebuttal, fa.rebuts], [["Sellers dominate the footprint order flow below the value area."], ["I disagree with the bullish momentum claim."], ["supertrend"]]);
+  assert.doesNotMatch(JSON.stringify(s), /SELL|WAIT|stance|confidence|0\.88|0\.8\b|3741/);
+});
