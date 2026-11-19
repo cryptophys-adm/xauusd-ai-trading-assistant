@@ -24,11 +24,20 @@ test("PM1. the rules, in pips (1 pip = 0.10)", () => {
   // +35 and still strong: stop to break-even plus the spread.
   const be = positionAction(f, { momentum: "holding", thesis: "intact" });
   assert.deepEqual([be.action, be.rule, be.sl], ["sl", "breakeven", 3880 - 0.2]);
-  // Council failed: no action (fail safe).
-  assert.equal(positionAction(f, null).action, "none");
-  // 30 pips beyond TP1 (3870 - 3.00 = 3867.00): the stop locks TP1, no council needed.
+  // Council failed: the break-even lock applies as the mechanical fallback (owner 2026-11-19: "ya"); nothing else does.
+  const fb = positionAction(f, null);
+  assert.deepEqual([fb.action, fb.rule, fb.sl], ["sl", "breakeven", 3880 - 0.2]);
+  assert.match(fb.why, /the council did not answer: the lock applies as the fallback/);
+  assert.equal(positionAction(facts(3876.3, { sl: 3879.8 }), null).action, "none", "the stop already at break-even: no council, no action");
+  // 30 pips beyond TP1 (3870 - 3.00 = 3867.00): the stop locks TP1 through the council, or as the fallback without it.
   const lock = positionAction(facts(3866.8), null);
   assert.deepEqual([lock.action, lock.rule, lock.sl], ["sl", "lock_tp1", 3870]);
+  const lockC = positionAction(facts(3866.8), { momentum: "holding", thesis: "intact" });
+  assert.deepEqual([lockC.action, lockC.rule], ["sl", "lock_tp1"]);
+  assert.match(lockC.why, /the council reads holding, thesis intact/);
+  // The council reads the momentum weakening beyond TP1: the profit is taken instead of locking TP1.
+  const takeC = positionAction(facts(3866.8), { momentum: "weakening", thesis: "weakening" });
+  assert.deepEqual([takeC.action, takeC.rule], ["close", "take_profit_weakening"]);
   // TP2 at the broker once: the target still at TP1 moves out to the next key level below (3862).
   const tp2 = positionAction(facts(3878.8), null);
   assert.deepEqual([tp2.action, tp2.tp], ["tp", 3862]);
@@ -120,7 +129,7 @@ test("PM5. the runner: once per position and 5m bar, live only, no Telegram line
   const before = calls.length;
   const capped = await runPositionManager(env, { ...base, now: now + 300_000 });
   assert.equal(calls.length, before, "no council call past the cap");
-  assert.deepEqual(capped.positions.map((p) => [p.action, p.rule]), [["none", "daily_cap"]]);
+  assert.deepEqual(capped.positions.map((p) => [p.action, p.rule]), [["sl", "breakeven"]], "past the cap the stop lock still applies as the fallback");
   assert.ok(sent.some((t) => /paused for today/.test(t)));
 });
 
