@@ -709,8 +709,12 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     if (untagged.length) {
       try {
         await ensureDealsSchema(db);
-        await db.prepare(`UPDATE ea_deals SET account_ref = ? WHERE account_ref IS NULL AND deal_ticket IN (${untagged.map(() => "?").join(",")})`).bind(executor.account_ref, ...untagged).run();
-        for (const t of untagged) DEALS_TAGGED.add(`${executor.account_ref}|${t}`);
+        // D1 binds at most 100 parameters a statement: 50 tickets (and the reference) at a time.
+        for (let i = 0; i < untagged.length; i += 50) {
+          const part = untagged.slice(i, i + 50);
+          await db.prepare(`UPDATE ea_deals SET account_ref = ? WHERE account_ref IS NULL AND deal_ticket IN (${part.map(() => "?").join(",")})`).bind(executor.account_ref, ...part).run();
+          for (const t of part) DEALS_TAGGED.add(`${executor.account_ref}|${t}`);
+        }
       } catch { /* tried again by the next isolate */ }
     }
   }

@@ -20,7 +20,8 @@ function d1() {
     prepare(sql) {
       let params = [];
       const stmt = {
-        bind(...args) { params = args.map((v) => (v === undefined ? null : v)); return stmt; },
+        // D1 binds at most 100 parameters a statement: the test database refuses more, as D1 does.
+        bind(...args) { if (args.length > 100) throw new Error("D1: too many SQL variables"); params = args.map((v) => (v === undefined ? null : v)); return stmt; },
         async run() { const r = db.prepare(sql).run(...params); return { meta: { changes: Number(r.changes) } }; },
         async first() { return db.prepare(sql).get(...params) ?? null; },
         async all() { return { results: db.prepare(sql).all(...params) }; }
@@ -407,10 +408,15 @@ test("AS21 the deals an account reports are its own: one stored before the accou
   const deal = { deal_ticket: 9001, position_ticket: 1, side: "BUY", volume: 0.01, entry_price: 4000, exit_price: 4010, profit: 10, commission: 0, swap: 0, reason: "tp", opened_ms: NOW - 7_200_000, closed_ms: NOW - 3_600_000, source: "omega" };
   await storeDeal(env, { ...deal, mode: "demo" });   // stored before the account was recorded
   await storeDeal(env, { ...deal, deal_ticket: 9002, mode: "demo" });   // another account's, never reported by this one
-  const st = executor({ over: { deals: [deal] } });
+  // The terminal reports up to 100 deals; D1 binds at most 100 parameters a statement (the first version bound 101
+  // and tagged nothing live): the test database refuses more than 100 too.
+  const many = Array.from({ length: 99 }, (_, i) => ({ ...deal, deal_ticket: 10_000 + i }));
+  const st = executor({ over: { deals: [deal, ...many] } });
   await bridgeSync(env, { state: { ...st, received_ms: NOW - 1000 }, results: [], publicKey: "QUJD", kid: "0123456789abcdef", bridgeVersion: "1.5.0" }, { now: NOW });
   const ref = (await accountRef(st)).ref;
   const rows = env.DB.raw.prepare("SELECT deal_ticket, account_ref FROM ea_deals ORDER BY deal_ticket").all();
-  assert.deepEqual(rows.map((r) => [r.deal_ticket, r.account_ref]), [[9001, ref], [9002, null]]);
-  assert.deepEqual((await listDeals(env, { account: "last" })).map((d) => d.deal_ticket), [9001]);
+  assert.deepEqual(rows.filter((r) => r.deal_ticket < 10_000).map((r) => [r.deal_ticket, r.account_ref]), [[9001, ref], [9002, null]]);
+  assert.ok(rows.filter((r) => r.deal_ticket >= 10_000).every((r) => r.account_ref === ref), "all 100 reported deals are tagged, in parts");
+  const listed = (await listDeals(env, { account: "last", limit: 500 })).map((d) => d.deal_ticket);
+  assert.deepEqual([listed.length, listed.includes(9001), listed.includes(9002)], [100, true, false]);
 });
