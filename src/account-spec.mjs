@@ -21,6 +21,7 @@
 //
 // D1 table (created lazily): omega_accounts, one row per account reference.
 
+import { CENT_CURRENCIES } from "./gold-symbol.mjs";
 export const SPEC_SETTLE_MS = 60_000;
 // 1.16 since 2026-11-18: OmegaExecutor 1.15 refused every open under unlimited leverage (margin rounded to 0.00 read as
 // "margin_unknown"), so new entries wait for 1.16 instead of sending orders the EA can only refuse.
@@ -186,6 +187,20 @@ export function effectiveLimits(profile, settings = {}) {
     hard_cap_pct: P.hard_cap_pct,
     open_risk_pct: P.open_risk_pct
   };
+}
+
+/**
+ * Pure: which account this is, in words the owner tells apart (owner 2026-11-19: "harus bisa membedakan mana akun sen
+ * dan usd"): { currency, cent, symbol, contract_size, label }, e.g. "USD account · GOLD" or "Cent account (USX) ·
+ * GoldOne", from the stored spec. Never the login.
+ */
+export function accountIdentity(spec) {
+  const cur = typeof spec?.account_currency === "string" && spec.account_currency.trim() ? spec.account_currency.trim().toUpperCase() : null;
+  const cent = Boolean(cur && CENT_CURRENCIES.includes(cur));
+  const symbol = typeof spec?.symbol === "string" && spec.symbol ? spec.symbol : null;
+  const contract = Number.isFinite(Number(spec?.contract_size)) && spec?.contract_size != null ? Number(spec.contract_size) : null;
+  const kind = cent ? `Cent account (${cur})` : cur ? `${cur} account` : "Account (currency unknown)";
+  return { currency: cur, cent, symbol, contract_size: contract, label: symbol ? `${kind} · ${symbol}` : kind };
 }
 
 /** The opaque account reference: { ref, legacy, legacy_ref }. Never the login. */

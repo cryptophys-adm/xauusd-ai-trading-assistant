@@ -30,7 +30,7 @@
 // Limitation: deals in D1 ea_deals carry no account reference. The loss streak and the upgrade evidence read the
 // deals closed since the switch; that is correct for one connected account, which is what Omega runs today.
 
-import { PROFILES, ensureAccountSchema, withDayOp } from "./account-spec.mjs";
+import { PROFILES, ensureAccountSchema, withDayOp, accountIdentity } from "./account-spec.mjs";
 import { DEAL_NET_SQL, DEAL_MONEY_COLUMNS_SQL } from "./gold-symbol.mjs";
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { HEALTH_AGENT_ID } from "./health-alerts.mjs";
@@ -380,10 +380,15 @@ export async function runProfileAgent(db, rowIn, { executor, killed = false, dai
  * agent_mode | accept | decline, `value` the profile or mode. A ceiling below the profile lowers the profile at once.
  * An owner-set profile may not exceed the ceiling.
  */
-export async function ownerSetProfile(db, { account_ref, action, value = null, actor = "owner", now = Date.now(), log = null, notify = null, executor = null, connectedRef = null, killed = false } = {}) {
+export async function ownerSetProfile(db, { account_ref, action, value = null, actor = "owner", now = Date.now(), log = null, notify = null, executor = null, connectedRef = null, killed = false, requireConnected = false } = {}) {
   await ensureSchema(db);
   const row = await db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(String(account_ref ?? "")).first();
   if (!row) return { ok: false, error: "unknown account" };
+  // Owner 2026-11-19 ("harus bisa membedakan mana akun sen dan usd"): every owner control acts on the connected
+  // account only, and a refusal names the account, so a change can never land on the other one unseen.
+  if (requireConnected && (!connectedRef || connectedRef !== row.account_ref)) {
+    return { ok: false, error: `${accountIdentity(parse(row.spec)).label} (${row.account_ref}) is not the connected account: the controls act on the connected account only` };
+  }
   const audit = async (what, detail) => { try { if (log) await log(what, { account_ref: row.account_ref, actor, ...detail }); } catch { /* audit best effort */ } };
   if (action === "reset") return resetBaseline(db, row, { actor, now, log, notify, executor, connectedRef, killed });
   if (action === "reset_override") return resetBaseline(db, row, { actor, now, log, notify, executor, connectedRef, killed, override: true });

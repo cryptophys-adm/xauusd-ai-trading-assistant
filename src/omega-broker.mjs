@@ -27,7 +27,7 @@ import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./p
 import { runModeSelector, modeStatus, capOf, rangeExitTick } from "./mode-selector.mjs";
 import { readCorpusBars } from "./corpus-oracle.mjs";
 import { readLatestDecision } from "./decision-engine.mjs";
-import { brokerLabelFor, dailyLossExecutor, onboardingDayRef, accountRef } from "./account-spec.mjs";
+import { brokerLabelFor, dailyLossExecutor, onboardingDayRef, accountRef, accountIdentity } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
 export const OMEGA_SCHEMA_SQL = [
@@ -1040,21 +1040,21 @@ export async function rangeExitStep(env, { now = Date.now(), regime = undefined 
 /** The owner's profile controls (the caller checked OWNER_ACCESS_SUB): ceiling, profile, agent mode, accept, decline. */
 export async function setAccountProfile(env, { account_ref, action, value, actor = "owner" } = {}, { now = Date.now() } = {}) {
   await ensureSchema(env.DB);
-  // The baseline reset needs the connected account's live state and the kill switch.
+  // Every owner control acts on the connected account only (owner 2026-11-19: "harus bisa membedakan mana akun sen
+  // dan usd"): the account the live terminal is logged in to, found by its own reference (connectedAccount).
   let executor = null, connectedRef = null, killed = false;
+  const b = await env.DB.prepare("SELECT state FROM omega_bridge WHERE id = 1").first();
+  const st = parse(b?.state);
+  if (st?.connected === true && Number(st?.received_ms) > 0 && now - Number(st.received_ms) <= BRIDGE_SEEN_MS) {
+    executor = st;
+    connectedRef = (await connectedAccount(await readAccounts(env.DB), st))?.account_ref ?? null;
+  }
+  // The baseline reset also needs the kill switch.
   if (action === "reset" || action === "reset_override") {
-    const b = await env.DB.prepare("SELECT state FROM omega_bridge WHERE id = 1").first();
-    const st = parse(b?.state);
-    if (st?.connected === true && Number(st?.received_ms) > 0 && now - Number(st.received_ms) <= BRIDGE_SEEN_MS) {
-      executor = st;
-      const accounts = await readAccounts(env.DB);
-      const live = await connectedAccount(accounts, st);
-      connectedRef = live && live.account_ref === account_ref ? live.account_ref : null;
-    }
     const control = await readControl(env);
     killed = control?.mode === "killed" || String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
   }
-  return ownerSetProfile(env.DB, { account_ref, action, value, actor: String(actor || "owner").slice(0, 120), now, executor, connectedRef, killed,
+  return ownerSetProfile(env.DB, { account_ref, action, value, actor: String(actor || "owner").slice(0, 120), now, executor, connectedRef, killed, requireConnected: true,
     log: (what, detail) => event(env.DB, now, actor || "owner", what, detail), notify: (t) => sendOmegaTelegram(env, t) });
 }
 
@@ -1242,6 +1242,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     // Account Profiles (docs/RFC_ACCOUNT_PROFILES.md): each account's opaque reference, broker spec status and profile.
     accounts: accounts.map((a) => ({
       account_ref: a.account_ref, server: a.server, legacy_ref: a.legacy,
+      // Which account this is (owner 2026-11-19): USD or cent, its currency and gold symbol, e.g. "Cent account (USX) · GoldOne".
+      identity: accountIdentity(a.spec),
       spec_status: a.spec_status, spec_problem: a.spec_problem, spec_hash: a.spec_hash, spec_since_ms: a.spec_since_ms, spec_validated_ms: a.spec_validated_ms,
       spec_text: specStatusText(a),
       profile: a.profile, profile_label: PROFILES[a.profile]?.label ?? a.profile, ceiling: a.ceiling, agent_mode: a.agent_mode, custom: a.custom,

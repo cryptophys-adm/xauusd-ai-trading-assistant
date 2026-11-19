@@ -372,8 +372,20 @@ test("AS20 two accounts on one server (2026-11-19): the connected one is found b
   // The pages mark only the connected account; the owner's reset reaches it and refuses the other one.
   const o = await brokerOverview(env, { now: NOW + 120_000 });
   assert.deepEqual(o.accounts.filter((a) => a.connected).map((a) => a.account_ref), [refUsd]);
-  const wrong = await setAccountProfile(env, { account_ref: refCent, action: "reset" }, { now: NOW + 130_000 });
-  assert.deepEqual([wrong.ok, wrong.error], [false, "only the connected account can be reset"]);
-  const right = await setAccountProfile(env, { account_ref: refUsd, action: "reset" }, { now: NOW + 130_000 });
-  assert.notEqual(right.error, "only the connected account can be reset");
+  // Each account says which it is (owner 2026-11-19: "harus bisa membedakan mana akun sen dan usd").
+  assert.deepEqual(o.accounts.map((a) => [a.account_ref === refUsd ? "usd" : "cent", a.identity.label, a.identity.cent, a.connected]).sort(),
+    [["cent", "Cent account (USX) · GoldOne", true, false], ["usd", "USD account · XAUUSD", false, true]]);
+  // Every owner control refuses the account that is not connected, naming it; the connected one is changed.
+  for (const [action, value] of [["reset", null], ["profile", "safe"], ["ceiling", "safe"], ["agent_mode", "approval"]]) {
+    const wrong = await setAccountProfile(env, { account_ref: refCent, action, value }, { now: NOW + 130_000 });
+    assert.equal(wrong.ok, false, action);
+    assert.equal(wrong.error, `Cent account (USX) · GoldOne (${refCent}) is not the connected account: the controls act on the connected account only`);
+  }
+  const before = env.DB.raw.prepare("SELECT profile, ceiling, agent_mode FROM omega_accounts WHERE account_ref = ?").get(refCent);
+  const ok = await setAccountProfile(env, { account_ref: refUsd, action: "agent_mode", value: "approval" }, { now: NOW + 130_000 });
+  assert.equal(ok.ok, true);
+  assert.deepEqual(env.DB.raw.prepare("SELECT profile, ceiling, agent_mode FROM omega_accounts WHERE account_ref = ?").get(refCent), before, "the cent account is untouched");
+  // With no live terminal nothing is the connected account: every control refuses.
+  const off = await setAccountProfile(env, { account_ref: refUsd, action: "agent_mode", value: "autonomous" }, { now: NOW + 3_600_000 });
+  assert.equal(off.ok, false);
 });
