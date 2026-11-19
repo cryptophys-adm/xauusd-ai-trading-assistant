@@ -191,18 +191,24 @@ test("AB9 deposits and withdrawals never count as the day's loss (owner 2026-11-
   const { dailyLossExecutor, dayOpsSince, withDayOp } = await import("../src/account-spec.mjs");
   const { dailyLossHit } = await import("../src/strategy-arm.mjs");
   const now = Date.parse("2026-11-20T12:00:00Z");
-  // The broker's day start 1000; the owner withdrew 300 at 10:00: equity 690 is a 1.4% day, not 31%.
+  // The broker's day start as the EA reports it: the balance less today's closed deals (OmegaExecutor.mq5), so it
+  // already holds today's deposits and withdrawals. The owner withdrew 300 at 10:00 from 1000 and lost 10 in trades:
+  // balance 690, day start 700. A 1.4% day, not 31%, and nothing is added again.
   let row = { created_ms: Date.parse("2026-11-01T00:00:00Z") };
   row = { ...row, day_ops: withDayOp(row, { amount: -300, at_ms: Date.parse("2026-11-20T10:00:00Z") }) };
-  const ex = { account: { equity: 690, balance: 690, day_start_balance: 1000, day_realized_pl: -310 } };
-  assert.equal(dailyLossHit(ex, 20), true, "without the rule the withdrawal trips a 20% stop");
-  const day = dailyLossExecutor(ex, row, now);
-  assert.deepEqual([day.account.day_start_balance, day.account.day_realized_pl, day.account.day_reference, day.account.day_balance_ops, day.account.broker_day_start_balance], [700, -10, "broker", -300, 1000]);
-  assert.equal(dailyLossHit(day, 20), false);
-  // A deposit never hides a loss: +500 then equity 1200 is a 300 loss on a 1500 start (20%).
+  const ex = { account: { equity: 690, balance: 690, day_start_balance: 700, day_realized_pl: -10 } };
+  assert.equal(dailyLossExecutor(ex, row, now), ex, "the broker's day start is used as it is");
+  assert.equal(dailyLossHit(dailyLossExecutor(ex, row, now), 20), false);
+  // A deposit never hides a loss: +500 on 1000, then 300 lost in trades: balance 1200, day start 1500 (20%).
   const dep = { ...row, day_ops: withDayOp({}, { amount: 500, at_ms: Date.parse("2026-11-20T09:00:00Z") }) };
-  assert.equal(dailyLossHit(dailyLossExecutor({ account: { equity: 1200, balance: 1200, day_start_balance: 1000 } }, dep, now), 20), true);
-  // Yesterday's operations are not today's; none today leaves the executor as it is.
+  assert.equal(dailyLossHit(dailyLossExecutor({ account: { equity: 1200, balance: 1200, day_start_balance: 1500, day_realized_pl: -300 } }, dep, now), 20), true);
+  // 2026-11-19 (orchestrator, confirmed in D1): +300 deposit on 52.64, then a +16.49 close. The EA's day start 352.64
+  // already holds it; adding it again (652.64) read as a 43% loss and downgraded the account to Safe.
+  const nov19 = { created_ms: Date.parse("2026-11-18T08:00:00Z"), day_ops: withDayOp({}, { amount: 300, at_ms: Date.parse("2026-11-20T01:23:06Z") }) };
+  const live = { account: { equity: 368.18, balance: 369.13, day_start_balance: 352.64, day_realized_pl: 16.49 } };
+  assert.equal(dailyLossExecutor(live, nov19, now).account.day_start_balance, 352.64);
+  assert.equal(dailyLossHit(dailyLossExecutor(live, nov19, now), 3), false);
+  // Yesterday's operations are not today's.
   assert.equal(dailyLossExecutor(ex, row, Date.parse("2026-11-21T01:00:00Z")), ex);
   assert.equal(dayOpsSince(row, now, Date.parse("2026-11-20T11:00:00Z")), 0, "only after the reference");
   // The owner's reset at 11:00 (ref 700): an op after it moves it, one before it is already in it.

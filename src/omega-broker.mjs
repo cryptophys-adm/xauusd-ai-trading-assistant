@@ -27,7 +27,7 @@ import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./p
 import { runModeSelector, modeStatus, capOf, rangeExitTick } from "./mode-selector.mjs";
 import { readCorpusBars } from "./corpus-oracle.mjs";
 import { readLatestDecision } from "./decision-engine.mjs";
-import { brokerLabelFor, dailyLossExecutor, onboardingDayRef } from "./account-spec.mjs";
+import { brokerLabelFor, dailyLossExecutor, onboardingDayRef, accountRef, accountIdentity } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
 export const OMEGA_SCHEMA_SQL = [
@@ -68,7 +68,7 @@ export function bridgeStateKey(executor) {
     ? executor.orders.map((o) => [o?.ticket ?? null, o?.type ?? null, o?.volume_current ?? null, o?.price_open ?? null, o?.sl ?? null, o?.tp ?? null]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
     : null;
   const deals = Array.isArray(executor.deals) ? executor.deals.map((d) => d?.deal_ticket ?? null).sort() : null;
-  return JSON.stringify([executor.connected, executor.trade_allowed, executor.server, executor.terminal_error, executor.executor, executor.account?.trade_mode, executor.account?.currency, executor.symbol?.name, executor.symbol?.currency_profit ?? null, executor.symbol?.contract_size ?? null, executor.symbol_error ?? null, executor.bridge_symbol?.status ?? null, executor.bridge_symbol?.chart_symbol ?? null, executor.bridge_symbol?.terminal_error ?? null, executor.owner_symbol ?? null, positions, orders, deals]);
+  return JSON.stringify([executor.connected, executor.trade_allowed, executor.server, executor.terminal_error, executor.executor, executor.account?.trade_mode, executor.account?.currency, executor.symbol?.name, executor.symbol?.currency_profit ?? null, executor.symbol?.contract_size ?? null, executor.symbol_error ?? null, executor.bridge_symbol?.status ?? null, executor.bridge_symbol?.chart_symbol ?? null, executor.bridge_symbol?.terminal_error ?? null, executor.owner_symbol ?? null, executor.account_ref ?? null, positions, orders, deals]);
 }
 // The deal tickets stored (or found stored with their source) per database binding: the bridge reports each
 // closed deal on every sync (2026-11-13: 36 deals), and each report cost an insert attempt and an update.
@@ -614,7 +614,9 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   const resolution = bridgeSymbolFrom(bridgeSymbol);
   if (executor && resolution) executor.bridge_symbol = resolution;
   // The account's opaque login hash (OmegaExecutor 1.15) is used for its reference in this sync only, never stored
-  // with the state that the pages, the health check and the watchdog read.
+  // with the state that the pages, the health check and the watchdog read. The reference itself (account_ref, the
+  // opaque id the pages show) is stored, so the cron and the owner's controls find this very account (connectedAccount).
+  if (executor) executor.account_ref = (await accountRef(executor)).ref;
   const stateText = JSON.stringify(executor, (k, v) => (k === "login_hash" ? undefined : v));
   if (stateText.length > STATE_MAX_BYTES) return { ok: false, error: "state_too_large" };
 
@@ -909,6 +911,19 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
  * settings, never the full overview (deals, intents, events): the badge reads it every 60 seconds.
  */
 /**
+ * The stored account the terminal is connected to: the one whose reference is the terminal's own (the login hash the
+ * EA sends, as syncAccount files it), never the first row on the same server. Two accounts on one server (2026-11-19:
+ * a USD account and a cent account on FxPro-MT5) were mixed up by the server match: the cron applied the connected
+ * account's balance, deposits and daily loss to the other row, and the owner's controls landed there too.
+ */
+export async function connectedAccount(accounts, executor) {
+  if (!executor || typeof executor.server !== "string" || !executor.server) return null;
+  // The reference bridgeSync stored with the state; a state from before it (or a live executor) derives it.
+  const ref = typeof executor.account_ref === "string" && executor.account_ref ? executor.account_ref : (await accountRef(executor)).ref;
+  return (accounts ?? []).find((a) => a.account_ref === ref) ?? null;
+}
+
+/**
  * The profile agent's evidence steps (phase 3), from the 5-minute ledger cron: the loss streak and the upgrades, on
  * the last bridge state of the connected account. Nothing runs on a stale terminal (no state in 2 minutes): an
  * upgrade needs a live view of the open positions and orders.
@@ -920,7 +935,7 @@ export async function profileAgentTick(env, { now = Date.now(), call = undefined
   const executor = parse(b?.state);
   if (!executor || executor.connected !== true || !(Number(executor.received_ms) > 0) || now - Number(executor.received_ms) > BRIDGE_SEEN_MS) return { status: "stale" };
   const accounts = await readAccounts(db);
-  const acct = accounts.find((a) => a.server && a.server === executor.server);
+  const acct = await connectedAccount(accounts, executor);
   if (!acct) return { status: "no_account" };
   const row = await db.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").bind(acct.account_ref).first();
   const control = await readControl(env);
@@ -1001,7 +1016,7 @@ export async function modeSelectorTick(env, { now = Date.now(), call = undefined
   const st = parse(b?.state);
   let account = null, forcedDay = false;
   if (st?.connected === true && Number(st?.received_ms) > 0 && now - Number(st.received_ms) <= BRIDGE_SEEN_MS) {
-    const acct = (await readAccounts(db)).find((a) => a.server && a.server === st.server);
+    const acct = await connectedAccount(await readAccounts(db), st);
     const { settings } = await readSettings(env);
     if (acct) {
       account = { equity: Number(st.account?.equity), volume_min: Number(st.symbol?.volume_min) || 0.01, contract_size: Number(st.symbol?.contract_size) || 100, cap_pct: capOf(acct.profile, settings) };
@@ -1025,20 +1040,21 @@ export async function rangeExitStep(env, { now = Date.now(), regime = undefined 
 /** The owner's profile controls (the caller checked OWNER_ACCESS_SUB): ceiling, profile, agent mode, accept, decline. */
 export async function setAccountProfile(env, { account_ref, action, value, actor = "owner" } = {}, { now = Date.now() } = {}) {
   await ensureSchema(env.DB);
-  // The baseline reset needs the connected account's live state and the kill switch.
+  // Every owner control acts on the connected account only (owner 2026-11-19: "harus bisa membedakan mana akun sen
+  // dan usd"): the account the live terminal is logged in to, found by its own reference (connectedAccount).
   let executor = null, connectedRef = null, killed = false;
+  const b = await env.DB.prepare("SELECT state FROM omega_bridge WHERE id = 1").first();
+  const st = parse(b?.state);
+  if (st?.connected === true && Number(st?.received_ms) > 0 && now - Number(st.received_ms) <= BRIDGE_SEEN_MS) {
+    executor = st;
+    connectedRef = (await connectedAccount(await readAccounts(env.DB), st))?.account_ref ?? null;
+  }
+  // The baseline reset also needs the kill switch.
   if (action === "reset" || action === "reset_override") {
-    const b = await env.DB.prepare("SELECT state FROM omega_bridge WHERE id = 1").first();
-    const st = parse(b?.state);
-    if (st?.connected === true && Number(st?.received_ms) > 0 && now - Number(st.received_ms) <= BRIDGE_SEEN_MS) {
-      executor = st;
-      const accounts = await readAccounts(env.DB);
-      connectedRef = accounts.find((a) => a.server && a.server === st.server && (a.account_ref === account_ref))?.account_ref ?? null;
-    }
     const control = await readControl(env);
     killed = control?.mode === "killed" || String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
   }
-  return ownerSetProfile(env.DB, { account_ref, action, value, actor: String(actor || "owner").slice(0, 120), now, executor, connectedRef, killed,
+  return ownerSetProfile(env.DB, { account_ref, action, value, actor: String(actor || "owner").slice(0, 120), now, executor, connectedRef, killed, requireConnected: true,
     log: (what, detail) => event(env.DB, now, actor || "owner", what, detail), notify: (t) => sendOmegaTelegram(env, t) });
 }
 
@@ -1077,6 +1093,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
   // Account Profiles phase 1: the accounts seen, their broker spec status and profile (never a login).
   let accounts = [];
   try { accounts = await readAccounts(db); } catch { accounts = []; }
+  // The connected account by its own reference (connectedAccount), not by the server it shares with others.
+  const liveRef = st?.connected === true ? (await connectedAccount(accounts, st))?.account_ref ?? null : null;
   const councilReviews = {}, histories = {};
   for (const a of accounts.slice(0, 5)) {
     councilReviews[a.account_ref] = await lastCouncilReviews(db, a.account_ref);
@@ -1224,6 +1242,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     // Account Profiles (docs/RFC_ACCOUNT_PROFILES.md): each account's opaque reference, broker spec status and profile.
     accounts: accounts.map((a) => ({
       account_ref: a.account_ref, server: a.server, legacy_ref: a.legacy,
+      // Which account this is (owner 2026-11-19): USD or cent, its currency and gold symbol, e.g. "Cent account (USX) · GoldOne".
+      identity: accountIdentity(a.spec),
       spec_status: a.spec_status, spec_problem: a.spec_problem, spec_hash: a.spec_hash, spec_since_ms: a.spec_since_ms, spec_validated_ms: a.spec_validated_ms,
       spec_text: specStatusText(a),
       profile: a.profile, profile_label: PROFILES[a.profile]?.label ?? a.profile, ceiling: a.ceiling, agent_mode: a.agent_mode, custom: a.custom,
@@ -1233,10 +1253,10 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       // The profile council: a soft downgrade waiting for review, a veto in force, the last reviews.
       pending_downgrade: a.pending_downgrade ?? null, council_veto: a.council_veto ?? null, council_reviews: councilReviews[a.account_ref] ?? [],
       // The owner's reset (owner 2026-11-18): whether Omega saw this account before, its baseline, its streak.
-      history: histories[a.account_ref] ?? null, connected: Boolean(st?.connected === true && a.server && a.server === st?.server),
+      history: histories[a.account_ref] ?? null, connected: liveRef != null && a.account_ref === liveRef,
       upgrade_block_reason: a.upgrade_block_reason ?? null,
       // The day's P&L in % against the daily-loss reference (the onboarding balance on the day Omega first saw it).
-      day_pl_pct: (() => { if (!(st?.connected === true && a.server === st?.server)) return null; const x = dailyLossExecutor(st, a, now)?.account; const ref = Number(x?.day_start_balance), eq = Number(x?.equity); return ref > 0 && Number.isFinite(eq) ? Math.round(((eq - ref) / ref) * 1000) / 10 : null; })()
+      day_pl_pct: (() => { if (liveRef == null || a.account_ref !== liveRef) return null; const x = dailyLossExecutor(st, a, now)?.account; const ref = Number(x?.day_start_balance), eq = Number(x?.equity); return ref > 0 && Number.isFinite(eq) ? Math.round(((eq - ref) / ref) * 1000) / 10 : null; })()
     })),
     // The trading mode and its selector (phase 4): Auto (council) or pinned by the owner, the last switch, the history.
     trading_mode: await modeStatus(env),

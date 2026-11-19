@@ -23,6 +23,7 @@ type Account = {
   council_reviews?: CouncilReview[];
   connected?: boolean;
   server?: string | null;
+  identity?: { currency?: string | null; cent?: boolean; symbol?: string | null; contract_size?: number | null; label?: string } | null;
   history?: { first_seen_ms?: number | null; last_seen_ms?: number | null; first_time?: boolean; balance_peak?: number | null; dd_ref?: number | null; baseline_ms?: number | null; losses_in_a_row?: number | null; changes?: number } | null;
 };
 const ago = (ms: number) => { const m = Math.max(0, Math.round((Date.now() - ms) / 60_000)); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
@@ -65,6 +66,26 @@ export function changeSummary(from: Draft, to: Draft): string {
   if (to.ceiling !== from.ceiling) parts.push(`Ceiling ${LABEL[from.ceiling] ?? from.ceiling} → ${LABEL[to.ceiling] ?? to.ceiling}`);
   if (to.agent_mode !== from.agent_mode) parts.push(`Agent ${MODE_LABEL[from.agent_mode] ?? from.agent_mode} → ${MODE_LABEL[to.agent_mode] ?? to.agent_mode}`);
   return parts.join(", ");
+}
+
+/**
+ * Every account Omega has seen, each with what it is (USD or cent, its gold symbol) and whether it is the one the
+ * terminal is logged in to now (owner 2026-11-19: "harus bisa membedakan mana akun sen dan usd"). The controls below
+ * act on the connected account only.
+ */
+export function OmegaAccounts({ accounts }: { accounts: Account[] }) {
+  if (accounts.length < 2) return null;
+  return (
+    <ul className="mb-2 space-y-1 text-[12px]" aria-label="Accounts seen by Omega">
+      {accounts.map((a) => (
+        <li key={a.account_ref} className={`flex flex-wrap items-center gap-x-2 rounded-sm border px-2 py-1 ${a.connected ? "border-emerald-400/30 bg-emerald-400/5" : "border-white/5 text-slate-500"}`}>
+          <span className={a.connected ? "font-semibold text-emerald-200" : ""}>{a.identity?.label ?? "Account"}</span>
+          <span className="text-slate-500">{a.server ?? "server unknown"} · {a.account_ref}</span>
+          <span className={a.connected ? "text-emerald-300" : "text-slate-500"}>{a.connected ? "connected" : "not connected"}</span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 export default function OmegaProfile({ account, onChanged }: { account: Account; onChanged: () => void | Promise<void> }) {
@@ -136,6 +157,11 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
   const lockWarning = Boolean(blocked && rank(draft.profile) > rank(saved.profile));
   return (
     <div className="space-y-2 text-[12px]" aria-label="Account profile controls">
+      {/* Which account these controls change (owner 2026-11-19): USD or cent, its gold symbol, connected or not. */}
+      <div id="omega-account-identity" className="flex flex-wrap items-center gap-x-2 text-[12.5px]">
+        <span className="font-semibold text-slate-100">{account.identity?.label ?? "Account"}</span>
+        <span className={account.connected ? "text-emerald-300" : "text-rose-300"}>{account.connected ? "connected" : "not connected"}</span>
+      </div>
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5">
         <label className="text-slate-500" htmlFor="omega-profile">Profile</label>
         <select id="omega-profile" className={select} value={draft.profile} disabled={busy} onChange={(e) => edit("profile", e.target.value)}>

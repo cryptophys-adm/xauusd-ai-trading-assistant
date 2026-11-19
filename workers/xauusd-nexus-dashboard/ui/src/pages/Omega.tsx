@@ -1,4 +1,4 @@
-import OmegaProfile from "../components/OmegaProfile";
+import OmegaProfile, { OmegaAccounts } from "../components/OmegaProfile";
 import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import { usePushMany } from "../lib/push";
 import {
@@ -848,9 +848,10 @@ export default function Omega() {
   const e = b?.engine || {};
   const conn = b?.connection || {};
   const br = b?.bridge || {};
-  // The connected account's row (the one on the bridge's server, else the newest seen); never a login, only its opaque reference.
+  // The connected account's row, as the server marks it (the live login's own reference, never the first account on
+  // the same server: owner 2026-11-19, "harus bisa membedakan mana akun sen dan usd"). No connected account: none.
   const accounts: any[] = Array.isArray(b?.accounts) ? b.accounts : [];
-  const account = accounts.find((a) => a?.server && a.server === br.server) ?? accounts[0] ?? null;
+  const account = accounts.find((a) => a?.connected === true) ?? null;
   // Phase 4: the trading mode for new orders, Auto (council) or pinned by the owner.
   const tm = b?.trading_mode ?? null;
   const tradingModeLabel = tm?.mode ? `${String(tm.mode).charAt(0).toUpperCase()}${String(tm.mode).slice(1)} (${tm.auto ? "auto" : "pinned"})` : "";
@@ -2991,7 +2992,8 @@ export default function Omega() {
             hint="Downgrades run at once: the kill switch or the daily loss to Safe, a 20% drawdown, 4 losses in a row, extreme volatility. Upgrades: one step on evidence, never above the ceiling or with a position or order open, at most one per 7 days."
             right={account ? <Badge tone="cyan">{account.profile_label}</Badge> : null}
           >
-            {account?.account_ref ? <OmegaProfile account={account} onChanged={load} /> : <p className="text-[11px] text-slate-500">No account seen yet.</p>}
+            <OmegaAccounts accounts={accounts} />
+            {account?.account_ref ? <OmegaProfile account={account} onChanged={load} /> : <p className="text-[11px] text-slate-500">{accounts.length ? "No account is connected now. The controls act on the connected account only." : "No account seen yet."}</p>}
           </Panel>
           ) : null}
 
