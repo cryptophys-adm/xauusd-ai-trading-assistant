@@ -79,13 +79,80 @@ function candleOpenIso(candleKey) {
   return Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : null;
 }
 
+// The suspension backoff (platform audit 2026-11-19, relayed by the orchestrator): xauusd-risk-manager was suspended by
+// consensus on 18 Nov and every report since was denied "failed: agent_enabled", dozens in the platform's audit ledger.
+// A denial that says the agent itself is off is not retried on every cycle: the agent waits PLATFORM_BACKOFF_MS, then one
+// status read (whoami) decides: "enabled" publishes again, anything else waits another PLATFORM_BACKOFF_MS. Resuming
+// the agent is the owner's call on the platform's Agents page; nothing here resumes it.
+export const PLATFORM_BACKOFF_MS = 3_600_000;
+const AGENT_OFF = /agent_enabled|agent_suspended|agent_disabled/;
+export const BACKOFF_SCHEMA_SQL = "CREATE TABLE IF NOT EXISTS platform_backoff (agent_id TEXT PRIMARY KEY, until_ms INTEGER NOT NULL, reason TEXT, since TEXT NOT NULL)";
+let backoffReady = new WeakSet(); // the databases the table was made in
+const backoffMemory = new Map(); // without a database (tests, local): agent_id → { until_ms, reason }
+export function resetPlatformBackoffForTests() { backoffReady = new WeakSet(); backoffMemory.clear(); }
+async function backoffDb(env) {
+  if (!env?.DB) return null;
+  if (!backoffReady.has(env.DB)) { await env.DB.prepare(BACKOFF_SCHEMA_SQL).run(); backoffReady.add(env.DB); }
+  return env.DB;
+}
+async function readBackoff(env, agentId) {
+  try {
+    const db = await backoffDb(env);
+    if (!db) return backoffMemory.get(agentId) ?? null;
+    return await db.prepare("SELECT until_ms, reason, since FROM platform_backoff WHERE agent_id = ?").bind(agentId).first();
+  } catch { return null; }
+}
+async function writeBackoff(env, agentId, untilMs, reason, nowMs) {
+  try {
+    const db = await backoffDb(env);
+    if (!db) { backoffMemory.set(agentId, { until_ms: untilMs, reason, since: new Date(nowMs).toISOString() }); return; }
+    await db.prepare("INSERT INTO platform_backoff (agent_id, until_ms, reason, since) VALUES (?, ?, ?, ?) ON CONFLICT(agent_id) DO UPDATE SET until_ms = excluded.until_ms, reason = excluded.reason")
+      .bind(agentId, untilMs, reason, new Date(nowMs).toISOString()).run();
+  } catch { /* the next denial writes it again */ }
+}
+async function clearBackoff(env, agentId) {
+  try {
+    const db = await backoffDb(env);
+    if (!db) { backoffMemory.delete(agentId); return; }
+    await db.prepare("DELETE FROM platform_backoff WHERE agent_id = ?").bind(agentId).run();
+  } catch { /* harmless */ }
+}
+/** The agent's status from one whoami read, or null when it cannot be read (then the report is tried). */
+async function agentStatus(env, agentId) {
+  if (typeof env?.AGENTS?.whoami !== "function") return null;
+  let timer;
+  try {
+    const w = await Promise.race([env.AGENTS.whoami(agentId), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), PLATFORM_CALL_TIMEOUT_MS); })]);
+    return typeof w?.status === "string" ? w.status : null;
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+/** The agents waiting out a suspension (for the status page): [{ agent_id, until, reason, since }]. */
+export async function platformBackoffs(env) {
+  try {
+    const db = await backoffDb(env);
+    if (!db) return [...backoffMemory.entries()].map(([agent_id, b]) => ({ agent_id, until: new Date(b.until_ms).toISOString(), reason: b.reason, since: b.since }));
+    const rows = (await db.prepare("SELECT agent_id, until_ms, reason, since FROM platform_backoff ORDER BY agent_id").all()).results ?? [];
+    return rows.map((r) => ({ agent_id: r.agent_id, until: new Date(Number(r.until_ms)).toISOString(), reason: r.reason, since: r.since }));
+  } catch { return []; }
+}
+
 /**
  * Sends one report and resolves to `{ outcome, reason?, report_id? }`. Never throws.
  * `success`; `denied` and `rejected` are final (the cursor advances); `failed` means a
  * transport error or a timeout, retried once by the next sweep.
  */
-export async function publishToPlatform(env, agentId, report, { timeoutMs = PLATFORM_REPORT_TIMEOUT_MS } = {}) {
+export async function publishToPlatform(env, agentId, report, { timeoutMs = PLATFORM_REPORT_TIMEOUT_MS, now = Date.now() } = {}) {
   if (!platformEnabled(env)) return { outcome: "disabled" };
+  // An agent the platform switched off waits (PLATFORM_BACKOFF_MS), then one status read decides.
+  const off = await readBackoff(env, agentId);
+  if (off) {
+    if (now < Number(off.until_ms)) return { outcome: "denied", reason: `backoff: ${off.reason}`, backoff: true };
+    const status = await agentStatus(env, agentId);
+    if (status !== null && status !== "enabled") {
+      await writeBackoff(env, agentId, now + PLATFORM_BACKOFF_MS, off.reason, now);
+      return { outcome: "denied", reason: `backoff: ${off.reason} (status ${status})`, backoff: true };
+    }
+  }
   let timer;
   try {
     const result = await Promise.race([
@@ -97,11 +164,16 @@ export async function publishToPlatform(env, agentId, report, { timeoutMs = PLAT
     if (result?.outcome === "succeeded" || result?.outcome === "success") {
       // Kernel shape: { outcome: "succeeded", result: { report: { report_id, … } } }.
       const reportId = result?.result?.report?.report_id ?? result?.result?.report_id ?? null;
+      if (off) await clearBackoff(env, agentId);
       return { outcome: "success", report_id: typeof reportId === "string" ? reportId : null };
     }
     const reason = typeof result?.reason === "string" ? result.reason.slice(0, 200) : typeof result?.error === "string" ? result.error : "unknown";
     const outcome = result?.outcome === "failed" ? "rejected" : "denied";
     console.warn(JSON.stringify({ event: "platform_report_" + outcome, agent_id: agentId, reason }));
+    if (AGENT_OFF.test(reason)) {
+      await writeBackoff(env, agentId, now + PLATFORM_BACKOFF_MS, reason, now);
+      console.warn(JSON.stringify({ event: "platform_report_backoff", agent_id: agentId, reason, until: new Date(now + PLATFORM_BACKOFF_MS).toISOString() }));
+    }
     return { outcome, reason };
   } catch (error) {
     const reason = error instanceof Error && error.message === "timeout" ? "timeout" : "rpc_failed";
@@ -425,5 +497,5 @@ export async function platformStatus(env, { now = Date.now() } = {}) {
   const pick = whoami && typeof whoami === "object" && !whoami.error
     ? { agent_id: whoami.agent_id, status: whoami.status, tier_max: whoami.tier_max, host_worker: whoami.host_worker, capabilities: Array.isArray(whoami.capabilities) ? whoami.capabilities.map((c) => c?.capability ?? c) : [] }
     : whoami;
-  return { enabled: true, whoami: pick, publications };
+  return { enabled: true, whoami: pick, publications, backoff: await platformBackoffs(env) };
 }

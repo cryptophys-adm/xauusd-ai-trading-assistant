@@ -53,6 +53,7 @@ The earlier "8 + 1 Workers" plan in older documents is **cancelled**.
     - Observations only: decision and confidence, never size, lots, levels or order wording.
     - `critical` is never sent, because the platform opens a GitHub issue for it.
     - A denial (rate limit, kill switch, suspension) or a kernel rejection is recorded and not retried. Only a transport failure is retried, once, by the next sweep.
+    - **Suspension backoff** (platform audit 2026-11-19: `xauusd-risk-manager`, suspended by consensus on 18 Nov, kept being denied `failed: agent_enabled` every 10 to 20 minutes). A denial that says the agent itself is off (`agent_enabled`, `agent_suspended`, `agent_disabled`) puts that agent in D1 `platform_backoff` for an hour (`PLATFORM_BACKOFF_MS`): no publish until then; after it, one `whoami` read decides (`enabled` publishes again and clears the backoff, anything else waits another hour). A rate limit or the global kill switch is not a suspension. `GET /api/platform/status` lists the agents waiting (`backoff`). Resuming an agent is the owner's call on the platform's Agents page.
     - Every failure is non-fatal: the chain runs whether the kernel is up or not.
   - **Cursors and status:** cursors live in D1 `platform_publications` (migration `0007`). `GET /api/platform/status` shows `whoami("xauusd-moderator")`, cached for 5 minutes, and the publications.
   - The platform reads this Worker only through `GET /api/decisions`, and it never writes here.
