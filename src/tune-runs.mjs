@@ -9,7 +9,7 @@
 export const TUNE_RUNS_VERSION = "cryptophys.auto-tune-runs.v1";
 export const TUNE_RUNS_KEEP_DAYS = 30;
 const DAY_MS = 86_400_000;
-const STEP = /^(weighting:(15|60|240|1D)|witness)$/;
+const STEP = /^(weighting:(15|60|240|1D)|witness|room)$/;
 
 export const TUNE_RUNS_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS auto_tune_runs (
@@ -51,7 +51,9 @@ export function replaySummary(replay) {
     verdicts,
     most_paired: best ? { id: best.id ?? null, discovery: num(best.discovery?.bars), holdout: num(best.holdout?.bars) } : null,
     reverse: replay.reverse ? { decisions: num(replay.reverse.rooms), p_value: num(replay.reverse.p_value) } : null,
-    ...(replay.replay_fidelity ? { fidelity: num(replay.replay_fidelity.share), fidelity_checks: num(replay.replay_fidelity.checks) } : {})
+    ...(replay.replay_fidelity ? { fidelity: num(replay.replay_fidelity.share), fidelity_checks: num(replay.replay_fidelity.checks) } : {}),
+    // The room guardrail per trading mode (src/room-tuning.mjs): each mode's value, decisions, scored, accuracy, fidelity.
+    ...(replay.modes && typeof replay.modes === "object" ? { modes: Object.fromEntries(Object.entries(replay.modes).map(([m, x]) => [m, { active: num(x?.active), decisions: num(x?.decisions), scored: num(x?.scored), accuracy: num(x?.accuracy), fidelity: num(x?.fidelity?.share) }])) } : {})
   };
 }
 
@@ -67,7 +69,7 @@ export function tuneRunRow({ step, startedMs, finishedMs, versionId = null, repl
     version_id: clip(versionId, 64),
     detail: {
       replay: replaySummary(replay),
-      applied: applied ? { status: applied.status ?? null, reason: clip(applied.reason ?? applied.error, 300), id: applied.id ?? null, from: applied.from ?? null } : null,
+      applied: applied ? { status: applied.status ?? null, reason: clip(applied.reason ?? applied.error, 300), id: applied.id ?? null, from: applied.from ?? null, ...(Array.isArray(applied.changes) ? { changes: applied.changes.slice(0, 4).map((c) => ({ status: c.status, mode: c.mode, from: num(c.from), to: num(c.to) })) } : {}) } : null,
       pushed: pushed ? { status: pushed.status ?? null, reason: clip(pushed.reason ?? pushed.error, 300), candidates: num(pushed.candidates) } : null,
       error: clip(error, 300)
     }
