@@ -260,6 +260,22 @@ export async function lastWeakeningExit(db, now) {
   } catch { return null; }
 }
 
+/**
+ * One Position Manager line (src/position-actions.mjs actionMessage). An applied or refused action is always said; the
+ * same "not applied" reason for the same ticket and rule is said once an hour (PM PR 2: no line every five minutes).
+ */
+export const PM_NOT_APPLIED_REPEAT_MS = 3_600_000;
+async function sendPmLine(env, row, outcome) {
+  if (outcome?.applied !== true && env?.SIGNAL_CACHE?.get) {
+    const key = `pm:na:${row.ticket}:${row.rule}:${String(outcome?.reason ?? "").slice(0, 80)}`;
+    try {
+      if (await env.SIGNAL_CACHE.get(key)) return;
+      await env.SIGNAL_CACHE.put(key, "1", { expirationTtl: Math.round(PM_NOT_APPLIED_REPEAT_MS / 1000) });
+    } catch { /* said anyway */ }
+  }
+  await sendOmegaTelegram(env, escHtml(actionMessage(row, outcome)));
+}
+
 /** Pure: plain text made safe for Telegram's HTML mode. */
 export const escHtml = (t) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -783,7 +799,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       const pmId = actionIdOfIntent(r.id);
       if (pmId) {
         const row = (await positionActionRows(db, [pmId]))[pmId];
-        if (row) await sendOmegaTelegram(env, escHtml(actionMessage(row, result.ok ? { applied: true } : { applied: false, reason: `the broker refused it (${result.error || "no reason given"})` })));
+        if (row) await sendPmLine(env, row, result.ok ? { applied: true } : { applied: false, reason: `the broker refused it (${result.error || "no reason given"})` });
         continue;
       }
       // The broker label of this terminal, e.g. "FxPro (DEMO) · GOLD"; "broker unknown" until its spec is validated.
@@ -826,7 +842,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   await db.prepare("UPDATE omega_intents SET status = 'expired', updated_ms = ? WHERE status IN ('pending', 'sent') AND created_ms < ?").bind(now, now - INTENT_TTL_MS).run();
   if (pmExpiring.length) {
     const rows = await positionActionRows(db, pmExpiring.map(actionIdOfIntent).filter(Boolean));
-    for (const row of Object.values(rows)) await sendOmegaTelegram(env, escHtml(actionMessage(row, { applied: false, reason: `the terminal did not answer within ${Math.round(INTENT_TTL_MS / 60_000)} minutes` })));
+    for (const row of Object.values(rows)) await sendPmLine(env, row, { applied: false, reason: `the terminal did not answer within ${Math.round(INTENT_TTL_MS / 60_000)} minutes` });
   }
 
   // The connection the bridge must apply (read above).
@@ -918,11 +934,11 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       const why = Object.fromEntries((plan.pm_dropped ?? []).map((d) => [d.id, d.reason]));
       const fallback = `Omega's plan stopped first (${plan.notes.map((x) => x.code).join(", ") || "no reason recorded"})`;
       const rows = await positionActionRows(db, skipped.map((a) => a.id));
-      for (const a of skipped) if (rows[a.id]) await sendOmegaTelegram(env, escHtml(actionMessage(rows[a.id], { applied: false, reason: why[a.id] ?? fallback })));
+      for (const a of skipped) if (rows[a.id]) await sendPmLine(env, rows[a.id], { applied: false, reason: why[a.id] ?? fallback });
     }
   }
   // An action older than its time to live was never read by a sync: said as not applied, once.
-  for (const row of await expireStalePositionActions(db, { now })) await sendOmegaTelegram(env, escHtml(actionMessage(row, { applied: false, reason: `it was older than ${Math.round(ACTION_TTL_MS / 60_000)} minutes when Omega's sync came (the price moved on)` })));
+  for (const row of await expireStalePositionActions(db, { now })) await sendPmLine(env, row, { applied: false, reason: `it was older than ${Math.round(ACTION_TTL_MS / 60_000)} minutes when Omega's sync came (the price moved on)` });
   if (delegateOk) {
     // A delegated position without a stop gets the plan's stop (once), then its intents carry the "d:" id.
     const recentIds = new Set(plannerIds((recent.results ?? []).map((r) => r.id)));

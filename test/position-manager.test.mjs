@@ -38,9 +38,22 @@ test("PM1. the rules, in pips (1 pip = 0.10)", () => {
   // The council reads the momentum weakening beyond TP1: the profit is taken instead of locking TP1.
   const takeC = positionAction(facts(3866.8), { momentum: "weakening", thesis: "weakening" });
   assert.deepEqual([takeC.action, takeC.rule], ["close", "take_profit_weakening"]);
-  // TP2 at the broker once: the target still at TP1 moves out to the next key level below (3862).
-  const tp2 = positionAction(facts(3878.8), null);
+  // TP2 (PM PR 2): the target still at TP1 moves out to the next key level below (3862) only with the council's answer,
+  // the momentum not weakening and the thesis intact; otherwise it holds and nothing is sent.
+  const tp2 = positionAction(facts(3878.8), { momentum: "holding", thesis: "intact" });
   assert.deepEqual([tp2.action, tp2.tp], ["tp", 3862]);
+  assert.match(tp2.why, /the council reads holding, thesis intact/);
+  assert.deepEqual(Object.values((({ action, rule }) => ({ action, rule }))(positionAction(facts(3878.8), null))), ["hold", "tp2_waits_council"]);
+  assert.equal(positionAction(facts(3878.8), { momentum: "weakening", thesis: "intact" }).rule, "tp2_waits_council");
+  assert.equal(positionAction(facts(3878.8), { momentum: "strengthening", thesis: "weakening" }).rule, "tp2_waits_council");
+  // Under the TP ladder: TP2 waits until the stop locks the ladder's TP1 (the first key level inside, here none: a third).
+  const ladderF = (bid, over = {}) => positionFacts({ position: pos(over), sym: sym(bid), openIntent: intent, levels, decision: decision(), ladder: true });
+  const held = positionAction(ladderF(3878.8), { momentum: "holding", thesis: "intact" });
+  assert.deepEqual([held.action, held.rule], ["hold", "tp2_waits_ladder"]);
+  // The stop at the ladder's TP1 (3880 - 10/3 = 3876.67 for a SELL): TP2 goes out.
+  const lockedF = ladderF(3874, { sl: 3876.5 });
+  assert.equal(lockedF.ladder_hold, false);
+  assert.equal(positionAction(lockedF, { momentum: "holding", thesis: "intact" }).action, "tp");
 });
 
 test("PM2. a loss of 30 pips: cut only on a measured reason the council confirms; a WAIT alone holds (owner 2026-11-19)", () => {
