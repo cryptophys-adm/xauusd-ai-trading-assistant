@@ -156,3 +156,40 @@ test("A2: only on every fourth bar, after the agent's own metric opening; stored
   assert.deepEqual(chips.rebuttals.risk.rebuts[0], { agent: "technical", their_metric: "candles_15m.change_1", my_metric: "candles_15m.change_4", relation: "contradicts" });
   assert.equal(await readMetricShadowBar(d1(), { barTime }), null);
 });
+
+test("retired 2026-11-19: METRIC_REBUTTAL off stops the rebuttals only; the opening shadow keeps its switch", async () => {
+  const { metricRebuttalEnabled, metricShadowEnabled } = await import("../src/metric-shadow.mjs");
+  assert.equal(metricRebuttalEnabled({}), true);
+  assert.equal(metricRebuttalEnabled({ METRIC_REBUTTAL: "off" }), false);
+  assert.equal(metricShadowEnabled({ METRIC_REBUTTAL: "off" }), true, "the opening shadow is not touched");
+  assert.equal(metricRebuttalEnabled({ METRIC_SHADOW: "off" }), false, "METRIC_SHADOW off still stops both");
+  assert.equal((await runMetricRebuttals({ METRIC_REBUTTAL: "off" }, { rebutters: [{ agent: "risk", stance: "WAIT" }] })).status, "disabled");
+});
+
+test("production config (owner 2026-11-19): the note arm, the rebuttals and the arena are off; the metric opening shadow is on", async () => {
+  const { readFileSync } = await import("node:fs");
+  const cfg = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  assert.match(cfg, /"SHADOW_KNOWLEDGE_ENABLED": "false"/);
+  assert.match(cfg, /"METRIC_REBUTTAL": "off"/);
+  assert.match(cfg, /"MODEL_ARENA": "off"/);
+  assert.doesNotMatch(cfg, /"METRIC_SHADOW": "off"/);
+});
+
+test("promotion (owner 2026-11-19): Order Blocks opens live in metric form; the answer becomes a plain room opening", async () => {
+  const { metricLiveAgents, metricToOpening, METRIC_LIVE_AGENTS } = await import("../src/metric-shadow.mjs");
+  assert.deepEqual([...METRIC_LIVE_AGENTS], ["order_blocks"]);
+  assert.deepEqual(metricLiveAgents({}), ["order_blocks"]);
+  assert.deepEqual(metricLiveAgents({ METRIC_LIVE: "off" }), []);
+  assert.deepEqual(metricLiveAgents({ METRIC_LIVE: "order_blocks, prophet" }), ["order_blocks", "prophet"]);
+  const o = { stance: "BUY", confidence: 0.6, metrics: [{ id: "ob.nearest", value: "4100", reading: "bull_ob_retest", implication: "bullish", weight: 0.7 }, { id: "L2", reading: "volume_rising", implication: "bullish", weight: 0.3 }] };
+  assert.deepEqual(metricToOpening(o, "order_blocks", [{ id: "L2" }]), { valid: true, errors: [] });
+  assert.equal(o.agent, "order_blocks");
+  assert.equal(o.bias, "BULLISH");
+  assert.equal(o.claim, "My readings: bull ob retest, bullish; volume rising, bullish.");
+  assert.equal(o.metric_table[0].value, "[level]", "no price level in the table");
+  assert.deepEqual(metricToOpening(o, "order_blocks", []), { valid: true, errors: [] }, "idempotent");
+  assert.deepEqual(metricToOpening({ stance: "BUY", confidence: 2, metrics: [] }, "order_blocks", []), { valid: false, errors: ["metric_answer_invalid"] });
+  const neutral = { stance: "WAIT", confidence: 0.4, metrics: [{ id: "a", reading: "x_up", implication: "bullish", weight: 0.5 }, { id: "b", reading: "y_down", implication: "bearish", weight: 0.5 }] };
+  metricToOpening(neutral, "order_blocks", []);
+  assert.equal(neutral.bias, "NEUTRAL");
+});

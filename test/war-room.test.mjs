@@ -588,3 +588,36 @@ test("the sweep's missed room: meets from the cached 5m series when the 5m conte
   const empty = env(fakeAI());
   assert.equal((await runMissedWarRoom(empty, { now, clock: () => now })).result.status, "no_m5_bars");
 });
+
+test("an agent promoted to the metric opening (owner 2026-11-19, Order Blocks) opens live from the metric prompt; its readings are the claim", async () => {
+  const base = fakeAI({ stances: { technical: "SELL" } });
+  const ai = {
+    calls: base.calls,
+    run: async (model, request) => {
+      if (/Answer with metric readings only/.test(request.messages[0].content)) {
+        base.calls.push({ model, request });
+        const content = { stance: "SELL", confidence: 0.62, metrics: [{ id: "hud.theta", value: 43, reading: "theta_high", implication: "bearish", weight: 0.6 }, { id: "hud.entropy", value: 0.86, reading: "entropy>0.8", implication: "neutral", weight: 0.4 }], invalidation: null };
+        return { choices: [{ message: { content: JSON.stringify(content) }, finish_reason: "stop" }], usage: { total_tokens: 60 } };
+      }
+      return base.run(model, request);
+    }
+  };
+  const e = env(ai, { METRIC_LIVE: "kinetic_engine" });
+  assert.equal((await runWarRoomBar(e, task())).status, "complete");
+  const room = await readWarRoom(e.DB);
+  const k = room.openings.find((o) => o.id === "kinetic_engine");
+  assert.equal(k.status, "ok");
+  assert.equal(k.stance, "SELL");
+  assert.equal(k.bias, "BEARISH", "the weighted implications lean bearish");
+  assert.equal(k.claim, "My readings: theta high, bearish; entropy above 0.8, neutral.");
+  assert.deepEqual(k.metrics, ["theta high, bearish", "entropy above 0.8, neutral"]);
+  assert.ok(ai.calls.some((c) => /Answer with metric readings only/.test(c.request.messages[0].content) && /Kinetic/.test(c.request.messages[0].content)), "the tested prompt, with the agent's role line");
+  // The other agents keep the prose opening.
+  assert.ok(room.openings.filter((o) => o.id !== "kinetic_engine").every((o) => o.claim === "My own data supports waiting for the next candle."));
+  // METRIC_LIVE off: everyone on prose.
+  resetThreadSchemaCacheForTests();
+  const ai2 = fakeAI();
+  const e2 = env(ai2, { METRIC_LIVE: "off" });
+  await runWarRoomBar(e2, task());
+  assert.ok(!ai2.calls.some((c) => /Answer with metric readings only/.test(c.request.messages[0].content)));
+});

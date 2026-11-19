@@ -261,6 +261,9 @@
           "task": "war_room_opening"
         },
         {
+          "task": "war_room_opening_metric"
+        },
+        {
           "task": "war_room_rebuttal"
         }
       ]

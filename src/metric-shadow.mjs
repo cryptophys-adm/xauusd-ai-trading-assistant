@@ -37,6 +37,12 @@ export const METRIC_OPENING_SCHEMA = Object.freeze({
 });
 
 export function metricShadowEnabled(env) { return String(env?.METRIC_SHADOW ?? "").trim().toLowerCase() !== "off"; }
+/**
+ * The metric rebuttals on their own switch (owner 2026-11-19: retired, "1+2+3 hentikan semua"; the rebuttal arm was
+ * not better than its control, 19 vs 26 on the sign test): METRIC_REBUTTAL "off" stops them while the metric opening
+ * shadow, which was better (238 vs 170, Holm p 0.003), keeps running. METRIC_SHADOW "off" stops both.
+ */
+export function metricRebuttalEnabled(env) { return metricShadowEnabled(env) && String(env?.METRIC_REBUTTAL ?? "").trim().toLowerCase() !== "off"; }
 export function maxCallsPerHour(env) {
   const n = Number(env?.METRIC_SHADOW_MAX_CALLS_PER_HOUR ?? DEFAULT_MAX_CALLS_PER_HOUR);
   return Number.isFinite(n) && n >= 0 ? Math.min(n, 120) : DEFAULT_MAX_CALLS_PER_HOUR;
@@ -151,6 +157,45 @@ export function checkMetricAnswer(o, menu) {
   return { valid, cited: metrics.length, grounded, metrics };
 }
 
+/**
+ * The agents whose LIVE 15m War Room opening is the metric format (promoted by the owner, 2026-11-19: "Promosi Order
+ * Blocks sekarang"). Order Blocks was the one agent better than its prose control in both slices: discovery 36 vs 20
+ * (sign test p 0.022) and holdout 24 vs 16, though its discovery slice had 175 of the 200 bars the rule asks for. The
+ * prompt is the one tested in shadow (metricMessages); the answer becomes a room opening by metricToOpening.
+ * METRIC_LIVE "off" puts every agent back on the prose opening at once; a comma list of agent ids replaces the set.
+ */
+export const METRIC_LIVE_AGENTS = Object.freeze(["order_blocks"]);
+export function metricLiveAgents(env) {
+  const v = String(env?.METRIC_LIVE ?? "").trim().toLowerCase();
+  if (v === "off") return [];
+  // An explicit comma list replaces the promoted set (tests, or a step the owner takes by config).
+  if (v && v !== "on") return v.split(",").map((x) => x.trim()).filter((x) => /^[a-z0-9_]+$/.test(x));
+  return [...METRIC_LIVE_AGENTS];
+}
+
+const plainReading = (r) => String(r ?? "").replace(/_+/g, " ").replace(/([a-z])\.(?=[a-z])/gi, "$1 ").replace(/=/g, " at ").replace(/[<>]/g, (c) => (c === "<" ? " below " : " above ")).replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * Pure: a metric answer ({ stance, confidence, metrics: [{ id, reading, implication, weight }] }) turned, in place,
+ * into a War Room opening: the agent, its bias from the weighted implications, a plain claim built from the readings
+ * (no ids, so it reads as language), and one plain line per metric. The metric table itself is kept as metric_table.
+ * Idempotent: an answer already turned is checked again as it is. Returns { valid, errors }.
+ */
+export function metricToOpening(o, agent, menu) {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return { valid: false, errors: ["not_an_object"] };
+  if (Array.isArray(o.metric_table) && typeof o.claim === "string") return { valid: true, errors: [] };
+  const check = checkMetricAnswer(o, menu);
+  if (!check.valid) return { valid: false, errors: ["metric_answer_invalid"] };
+  const score = check.metrics.reduce((sum, m) => sum + (m.implication === "bullish" ? 1 : m.implication === "bearish" ? -1 : 0) * (Number(m.weight) || 0), 0);
+  const lines = check.metrics.map((m) => `${plainReading(m.reading)}, ${m.implication}`.slice(0, 80)).filter((t) => t.length > 2);
+  o.agent = agent;
+  o.bias = score > 0.1 ? "BULLISH" : score < -0.1 ? "BEARISH" : "NEUTRAL";
+  o.claim = `My readings: ${lines.join("; ")}.`.slice(0, 400);
+  o.metric_table = check.metrics.map((m) => ({ id: m.id, value: m.value ?? null, reading: m.reading, implication: m.implication, weight: m.weight }));
+  o.metrics = lines;
+  return { valid: true, errors: [] };
+}
+
 /** The shadow prompt: the agent's role line and data, its metric menu, and the answer form (no prose). */
 export function metricMessages(roleLine, data, menu) {
   return chatMessages([
@@ -261,7 +306,7 @@ export function metricRebuttalMessages(roleLine, { menu, opening, bus }) {
  * rebuttal bar (METRIC_REBUTTAL_EVERY, default every fourth); idempotent; bounded per hour. Never throws.
  */
 export async function runMetricRebuttals(env, { room = "M15", barTime, rebutters = [], dataFor, roleFor, clock = () => Date.now(), deadlineMs = 90_000 } = {}) {
-  if (!metricShadowEnabled(env)) return { status: "disabled" };
+  if (!metricRebuttalEnabled(env)) return { status: "disabled" };
   if (!env?.DB || !rebutters.length) return { status: "nothing_to_do" };
   if (!isRebuttalBar(barTime, rebuttalEvery(env))) return { status: "not_a_rebuttal_bar" };
   try {
@@ -399,7 +444,7 @@ export async function readMetricShadow(env, { days = 7, now = Date.now(), room =
   const rows = (await env.DB.prepare(`SELECT ${cols} FROM metric_shadow_outputs WHERE room = ? AND bar_time >= ?`).bind(room, since).all()).results || [];
   const rebuttals = (await env.DB.prepare(`SELECT ${cols} FROM metric_shadow_rebuttals WHERE room = ? AND bar_time >= ?`).bind(room, since).all()).results || [];
   return {
-    version: METRIC_SHADOW_VERSION, enabled: metricShadowEnabled(env), room, days, max_calls_per_hour: maxCallsPerHour(env),
+    version: METRIC_SHADOW_VERSION, enabled: metricShadowEnabled(env), rebuttals_enabled: metricRebuttalEnabled(env), room, days, max_calls_per_hour: maxCallsPerHour(env),
     agents: compareMetricShadow(rows),
     // A2: the rebuttals in metric form against the agent's live rebuttal on the same bar.
     rebuttals: compareMetricShadow(rebuttals), rebuttal_every: rebuttalEvery(env), rebuttal_max_calls_per_hour: rebuttalCallsPerHour(env)
