@@ -60,3 +60,13 @@ test("R3. rows older than the keep window are dropped on write", async () => {
   await recordTuneRun(env, { step: "witness", startedMs: T0, finishedMs: T0 }, { now: T0 });
   assert.equal((await readTuneRuns(env)).runs.length, 1);
 });
+
+test("R4. the room guardrail step (src/room-tuning.mjs) is recorded with each mode's counts and the changes", () => {
+  const replay = { rooms: 343, candidates: [{ id: "room:scalp:0.75", verdict: "collecting", discovery: { bars: 120 }, holdout: { bars: 100 } }],
+    modes: { scalp: { active: 1, decisions: 300, scored: 280, accuracy: 0.41, fidelity: { share: 0.98 } }, intraday: { active: 1, decisions: 20, scored: 18, accuracy: null, fidelity: { share: null } } } };
+  const applied = { status: "changed", changes: [{ status: "activated", mode: "scalp", from: 1, to: 0.75, reason: "x" }] };
+  const row = tuneRunRow({ step: "room", startedMs: 0, finishedMs: 10, replay, applied, pushed: { status: "accepted" } });
+  assert.equal(row.step, "room");
+  assert.deepEqual(row.detail.replay.modes.scalp, { active: 1, decisions: 300, scored: 280, accuracy: 0.41, fidelity: 0.98 });
+  assert.deepEqual(row.detail.applied.changes, [{ status: "activated", mode: "scalp", from: 1, to: 0.75 }]);
+});
