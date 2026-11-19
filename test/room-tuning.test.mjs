@@ -181,4 +181,8 @@ test("RT7 the report for Aether and the doctrine facts carry values only", async
   assert.deepEqual(facts["decision.room_bounds_atr"], [0.5, 1.5]);
   assert.deepEqual(["scalp", "intraday", "swing", "range"].map((m) => facts[`decision.room_min_atr_${m}`]), [1, 1, 1, 1], "one anchored fact per mode");
   assert.equal(facts["decision.room_tuning"], "auto");
+  // The thresholds per mode too (owner 2026-11-19: "mau"), the values each mode has today; the single facts stay.
+  assert.deepEqual(["scalp", "intraday", "swing", "range"].map((m) => [facts[`decision.quorum_min_${m}`], facts[`decision.lean_${m}`], facts[`decision.min_rrr_${m}`]]),
+    [[0.45, 0.1, 0], [0.5, 0.15, 1.5], [0.6, 0.2, 2], [0.5, 0.15, 1.5]]);
+  assert.deepEqual([facts["decision.quorum_min"], facts["decision.lean"], facts["decision.min_rrr"]], [0.45, 0.1, 0], "the mode in force (scalp) as before");
 });
