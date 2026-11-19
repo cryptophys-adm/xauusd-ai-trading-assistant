@@ -325,9 +325,12 @@ export function overrideDayRef(row, now) {
 /**
  * Pure: the executor the daily-loss checks read. On the day of the owner's reset over the daily stop its day start is
  * the equity at that reset (a new loss of the day's limit from there stops it again); on the onboarding day it is the
- * onboarding reference; otherwise the broker's day start. Today's deposits and withdrawals after the reference move it
- * by their amount (owner 2026-11-18, confirmed: "Setuju keduanya"), so a withdrawal never reads as a loss and a deposit
- * never hides one.
+ * onboarding reference; otherwise the broker's day start. Today's deposits and withdrawals after the owner's reset move
+ * it by their amount (owner 2026-11-18, confirmed: "Setuju keduanya"), so a withdrawal never reads as a loss and a
+ * deposit never hides one. The broker's day start needs no such move: the EA reports it as the balance less today's
+ * closed-deal result (OmegaExecutor.mq5 ComputeTodayRealizedPl), so it already holds today's deposits and withdrawals.
+ * Adding them again counted a deposit twice (2026-11-19: a $300 deposit read as a 47% daily loss and downgraded the
+ * account to Safe) and would have hidden a loss as large as a withdrawal.
  */
 export function dailyLossExecutor(executor, row, now) {
   const acct = executor?.account;
@@ -339,14 +342,14 @@ export function dailyLossExecutor(executor, row, now) {
     const ops = sinceMs == null ? 0 : dayOpsSince(row, now, sinceMs);
     const adjusted = Math.round((ref + ops) * 100) / 100;
     if (!(adjusted > 0)) return executor;
-    if (reference === "broker" && ops === 0) return executor;
     return { ...executor, account: { ...acct, broker_day_start_balance: Number.isFinite(start) ? start : null, day_start_balance: adjusted, day_realized_pl: Number.isFinite(bal) ? Math.round((bal - adjusted) * 100) / 100 : acct.day_realized_pl, day_reference: reference, ...(ops !== 0 ? { day_balance_ops: ops } : {}) } };
   };
   const over = overrideDayRef(row, now);
   if (over != null) return at(over, "owner_override", overrideAtMs(row));
   const ref = onboardingDayRef(row, now);
   if (ref != null && !(Number.isFinite(start) && start > 0 && start <= ref)) return at(ref, "onboarding", null);
-  return Number.isFinite(start) && start > 0 ? at(start, "broker", Date.parse(`${utcDay(now)}T00:00:00Z`)) : executor;
+  // The broker's day start already holds today's balance operations (see above): the executor as it is.
+  return executor;
 }
 
 const overrideAtMs = (row) => { try { return Number(JSON.parse(row?.day_ref_override ?? "null")?.at_ms) || 0; } catch { return 0; } };

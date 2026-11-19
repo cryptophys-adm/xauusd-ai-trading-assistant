@@ -348,3 +348,32 @@ test("AS19 the risk setting goes to 10% (owner 2026-11-18) and each profile stil
   assert.match(ui, /noValidate/, "the server's reason shows instead of a silent browser block");
   assert.match(ui, /id="e-risk" type="number" min="0\.01" max="10"/);
 });
+
+test("AS20 two accounts on one server (2026-11-19): the connected one is found by its own reference, never by the server", async () => {
+  const { connectedAccount, setAccountProfile } = await import("../src/omega-broker.mjs");
+  resetOmegaBrokerSchemaForTests(); resetAccountSpecSchemaForTests();
+  const env = { DB: d1(), SIGNAL_CACHE: kv(), OMEGA_ENGINE_ENABLED: "true" };
+  await writeSettings(env, { body: { enabled: true }, actor: "owner@example.com" }, { now: NOW });
+  const OTHER = createHash("sha256").update("omega|Broker-Live|7770001").digest("hex");
+  const sync = (st, now) => bridgeSync(env, { state: { ...st, received_ms: now - 1000 }, results: [], publicKey: "QUJD", kid: "0123456789abcdef", bridgeVersion: "1.3.0" }, { now });
+  const usd = executor(), cent = executor({ acct: { login_hash: OTHER, currency: "USX" }, sym: { name: "GoldOne", contract_size: 1 } });
+  // The USD account first, then a cent account on the same server (a newer row), then the USD account again.
+  await sync(usd, NOW);
+  await sync(cent, NOW + 60_000);
+  await sync(usd, NOW + 120_000);
+  const refUsd = (await accountRef(usd)).ref, refCent = (await accountRef(cent)).ref;
+  assert.notEqual(refUsd, refCent);
+  const stored = JSON.parse(env.DB.raw.prepare("SELECT state FROM omega_bridge WHERE id = 1").get().state);
+  assert.equal(stored.account_ref, refUsd, "the state carries the opaque reference of the account it came from");
+  assert.ok(!JSON.stringify(stored).includes(LOGIN_HASH), "never the login hash");
+  const accounts = await readAccounts(env.DB);
+  assert.equal(accounts.filter((a) => a.server === "Broker-Live").length, 2);
+  assert.equal((await connectedAccount(accounts, stored))?.account_ref, refUsd);
+  // The pages mark only the connected account; the owner's reset reaches it and refuses the other one.
+  const o = await brokerOverview(env, { now: NOW + 120_000 });
+  assert.deepEqual(o.accounts.filter((a) => a.connected).map((a) => a.account_ref), [refUsd]);
+  const wrong = await setAccountProfile(env, { account_ref: refCent, action: "reset" }, { now: NOW + 130_000 });
+  assert.deepEqual([wrong.ok, wrong.error], [false, "only the connected account can be reset"]);
+  const right = await setAccountProfile(env, { account_ref: refUsd, action: "reset" }, { now: NOW + 130_000 });
+  assert.notEqual(right.error, "only the connected account can be reset");
+});
