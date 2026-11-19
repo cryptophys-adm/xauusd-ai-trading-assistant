@@ -16,7 +16,7 @@ import { goldClosedAt } from "./market-hours.mjs";
 import { eaSignal, readControl, blackoutWindow } from "./ea-signal.mjs";
 import { storeDeal, dealStats, FIRST_OF_DEAL, ensureSchema as ensureDealsSchema } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
-import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
+import { OMEGA_DEFAULTS, STOP_COMMAND_MS, commandedStops, planIntents, settingsFrom } from "./omega-engine.mjs";
 import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
 import { goldCheckOf, goldSymbolText, accountMoney, moneyText, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText, referenceFrom } from "./gold-symbol.mjs";
@@ -871,7 +871,9 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   }
   const delegateOk = delegated.length > 0 && hitlSupported(executor);
   const dlg = delegateOk ? withDelegated(dayExec, delegated, { mode: signal?.trading_mode ?? null }) : { executor: dayExec, meta: {} };
-  const plan = planIntents({ signal, control, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: { ...meta, ...dlg.meta }, candles });
+  // The stops Omega commanded in the last minutes (commandedStops): a snapshot older than a modification never loosens it.
+  const stops = hasPositions ? commandedStops((await db.prepare("SELECT payload, status, result FROM omega_intents WHERE kind = 'modify_sl' AND created_ms > ? AND status IN ('pending', 'sent', 'done')").bind(now - STOP_COMMAND_MS).all()).results ?? []) : {};
+  const plan = planIntents({ signal, control, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: { ...meta, ...dlg.meta }, candles, stops });
   if (delegated.length && !delegateOk) plan.notes.push({ code: "delegate_needs_ea_1_18", detail: `${delegated.length} delegated position${delegated.length > 1 ? "s wait" : " waits"} for OmegaExecutor 1.18` });
   if (pmActions.length) {
     // An action that became an intent is applied; one the live price no longer allows is skipped (never retried).

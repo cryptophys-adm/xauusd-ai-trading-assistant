@@ -157,3 +157,40 @@ test("RE1 the same-side re-entry guard: only until the next M5 candle closes aft
   assert.equal(p.notes.at(-1).code, "reentry_cooldown");
   assert.ok(!p.intents.some((i) => i.kind === "open"));
 });
+
+test("TL8 a stale snapshot never loosens a stop: the stops Omega just commanded count (2026-11-19, ticket 362785677)", async () => {
+  const { commandedStops, withCommandedStop } = await import("../src/omega-engine.mjs");
+  // The live case: SELL 0.01 at 3719.87, stop 3735.59, target 3705.39; the break-even lock's buffer is 2 x the spread.
+  const POS = { ticket: 362785677, side: "SELL", volume: 0.01, open_price: 3719.87, sl: 3735.59, tp: 3705.39, source: "omega", magic: 920200, intent_id: "open:1795089600000:S" };
+  const sym = (spread) => ({ ...SYM, spread_points: spread, bid: 3716.5, ask: 3716.5 + spread * 0.01 });
+  const locks = (out) => out.filter((x) => x.kind === "modify_sl").map((x) => x.sl);
+  // Without what was commanded, the snapshot taken before the first lock landed sends a looser one (the live bug).
+  assert.deepEqual(locks(manageIntents({ positions: [POS], sym: sym(32), settings: S, now: NOW })), [3719.23]);
+  const rows = [
+    { payload: JSON.stringify({ kind: "modify_sl", ticket: 362785677, sl: 3719.19 }), status: "done", result: JSON.stringify({ ok: true }) },
+    { payload: { kind: "modify_sl", ticket: 362785677, sl: 3719.0 }, status: "done", result: { ok: false, error: "invalid_stops" } },
+    { payload: { kind: "modify_sl", ticket: 9, sl: 4000 }, status: "sent", result: null },
+    { payload: { kind: "modify_tp", ticket: 9, tp: 4100 }, status: "pending", result: null },
+    { payload: "{broken", status: "pending" },
+  ];
+  const stops = commandedStops(rows);
+  assert.deepEqual(stops, { 362785677: [3719.19], 9: [4000] }, "done with ok, or in flight; a refused one does not count");
+  assert.equal(withCommandedStop(POS, stops).sl, 3719.19);
+  assert.equal(withCommandedStop({ ...POS, sl: 3718 }, stops).sl, 3718, "a tighter snapshot stays");
+  assert.equal(withCommandedStop({ ...SHORT, ticket: 1 }, stops).sl, SHORT.sl, "another ticket is untouched");
+  assert.equal(withCommandedStop({ ...LONG, ticket: 9, sl: 3990 }, stops).sl, 4000, "for a long, the higher stop");
+  // With them: the stale snapshot (entry stop) and the next one (3719.23 applied) send nothing more at TP0.
+  assert.deepEqual(locks(manageIntents({ positions: [POS], sym: sym(32), settings: S, now: NOW, stops })), []);
+  assert.deepEqual(locks(manageIntents({ positions: [{ ...POS, sl: 3719.23 }], sym: sym(34), settings: S, now: NOW, stops })), []);
+});
+
+test("TL9 the break-even lock is taken once: a stop past the entry is not moved again at TP0 when the spread widens; TP1 still locks", () => {
+  const POS = { ticket: 5, side: "SELL", volume: 0.01, open_price: 3719.87, sl: 3719.23, tp: 3705.39, source: "omega", magic: 920200, intent_id: "open:5:S" };
+  const sym = (bid, spread) => ({ ...SYM, spread_points: spread, bid, ask: bid + spread * 0.01 });
+  assert.equal(ladderPlan({ position: POS, sym: sym(3716.5, 34), settings: S, now: NOW }).sl, null, "3719.19 is tighter by 4 cents, but TP0 is already taken");
+  assert.equal(ladderPlan({ position: { ...POS, sl: 3719.87 }, sym: sym(3716.5, 34), settings: S, now: NOW }).sl, 3719.19, "a stop at the entry itself still gets the buffer");
+  assert.equal(ladderPlan({ position: { ...POS, sl: 3735.59 }, sym: sym(3716.5, 34), settings: S, now: NOW }).sl, 3719.19, "first lock as before");
+  // TP1 of a 3719.87 -> 3705.39 short without key levels is a third of the way: 3715.04; 30 pips past it the stop goes there.
+  const tp1 = ladderPlan({ position: POS, sym: sym(3711.5, 34), settings: S, now: NOW });
+  assert.deepEqual([tp1.sl, tp1.sl_rung], [3715.04, 1]);
+});
