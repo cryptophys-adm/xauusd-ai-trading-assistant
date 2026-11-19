@@ -39,6 +39,32 @@ Nov), with new agents last.
 | 5 | **The Mizan statistical stack.** s1-2 weights; s3 phi_wave and regime_score; s4 oracle_signals; s5 mtf_hurst, mtf_zscore, phi_confluence; s8 risk_score; s11 psi_field, gamma_dilation, psi_adaptive, rho_phase; s12 asset_gravity; s13 entropy_tensor, vol_anomaly_tensor, noise_level; s14 confidence_matrix; s17 safe_mode, gravity_veto, sniper_override; s18 div_bonus; s19 state_energy; s20 bayesian_net_tick and action_label; s22 markov_win_rate. | **A new agent, "Mizan Oracle"** (rooms; a witness of the Decision Engine only after promotion) | **Yes** | No installed indicator calls these functions, so TradingView has no reference. Proposal: a small **Cryptophys Mizan Probe** indicator in `pinescript/ssot` that calls the library and sends the values in one alert JSON on 15m. The owner installs it on TradingView; the usual 24-candle parity then applies. |
 | 6 | **Second trade plans, as evidence only.** GMI Fabio progressive SL, SMC zones, position box and % CAP sizing; Prophet latched entry reference, manual position management and its exit reasons, TARGET KEY latch and HIT; Mizan s19 project_tp/project_sl. | Position Manager, as "what the indicator's own plan says" beside Omega's plan | No | Engine fields in the alert JSON. They are never used as a price for an order. |
 
+## Settled before building (orchestrator review of this RFC)
+
+1. **The Position Manager gets no new line until it has its own shadow.**
+   - The Position Manager closes live positions by itself; both Omega trades of 19 Nov were closed by it (`pm_take_profit_weakening` and `pm_cut_loss`). A new line in its prompt therefore changes exits on real money.
+   - Stages 2, 4 and 6 add nothing to its prompt until a Position Manager shadow arm exists. That arm runs the same snapshot with and without the new lines; the live action stays the control's.
+   - **Paired outcome.** For each position-management decision where the arms differ (close versus hold, or a different stop), the score is the R the position would have made. For a close, that is the R at the close. For a hold, it is the R at the position's actual later exit, or at the stop or target, whichever the bars reach first.
+   - It uses the same sign test with Holm, discovery and holdout. The owner promotes.
+   - Building that arm is a stage of its own (stage 0b), before any Position Manager line.
+2. **The unit of promotion is one agent in one stage.**
+   - Each agent that gets new lines in a stage has one shadow arm carrying all of that agent's new lines for the stage.
+   - Holm runs across the arms of the stage. If an arm fails, the agent and the stage it belongs to are known; the lines inside it are tested again only if the owner asks.
+   - **Duration, stated honestly.** The 15m room runs about 92 decisions a weekday. Each arm needs 200 discovery and 100 holdout paired decisions where it differs from the control, and only a share of decisions differ. That puts one stage at **2 to 4 weeks**.
+   - Run one after the other, the six stages take **3 to 5 months**. Arms on different agents can run at the same time, so overlapping stages 1-4, which touch mostly different agents, brings this to about **6 to 10 weeks**. Stage 5 starts only once the Mizan Probe has 24 matching candles.
+3. **One Pine update and one reinstall for every stage.**
+   - Emitting a field costs nothing until an agent reads it, and the 24-candle parity count can start for every field at once. So one update of the GMI and Prophet alert JSON in `pinescript/ssot` carries every field of every stage. The owner reinstalls the two alerts once, and installs the Mizan Probe in the same sitting.
+   - **Size.** TradingView allows 40,960 characters in a message built by Pine's `alert()` or `alert_message` (4,000 in the alert dialog's Message field). Both alerts are "Any alert() function call", so the larger limit applies.
+   - Before the update is designed, each payload is measured against that limit. A payload close to it is split into a second `alert()` call on the same bar.
+   - Inbound webhooks do not count against the 500-a-day budget, which is the pull adapter's outbound calls.
+4. **Path-dependent values.** Life CVD, the SMR reservoir, whale-zone HP and age, the Markov win rate and other cumulative values depend on where the history starts. The chart's start depends on how much history TradingView loads, which the local replay cannot match.
+   - These values are compared by their **per-bar change**, the increment of the closed bar, which does not depend on the start. Their level is shown only as unverified context.
+   - A value that is not cumulative but has a long warm-up (for example a 52-week extreme) is compared only after the local series covers its whole window.
+5. **What the Mizan agent may say.**
+   - Mizan s17 (`safe_mode`, `gravity_veto`, `sniper_override`) and s20 (`action_label`, the Bayesian verdict) would be verdicts in everything but name. The agent states the measured inputs and the score, for example "the Bayesian posterior for a long is 0.62". It never states the label as an instruction.
+   - The words `sniper`, `override`, `veto`, `safe mode` and the action labels are added to the public filter as decision words. They never reach a public page.
+   - The council reads the agent like any other witness: as evidence, not an authority.
+
 ## Cost
 
 **Baseline** (D1 `ai_usage_daily`, weekdays 16-18 Nov): about 4,200 model calls and 6.1 million prompt tokens a day.
@@ -58,7 +84,7 @@ after promotion the shadow copy goes away.
 | 2 | +100k to +150k | about +2% | None new |
 | 3 | +50k (room lines); the Key Level Agent is deterministic | about +1% | None new |
 | 4 | +100k to +150k | about +2% | None new |
-| 5 | +300k to +450k: a new opening in every room, plus its rebuttals and its shadow arm | about +5 to +7% | About +10% room message rows in D1. One more TradingView alert, and webhooks inside the shared 500-a-day budget (`tv-budget`). |
+| 5 | +300k to +450k: a new opening in every room, plus its rebuttals and its shadow arm | about +5 to +7% | About +10% room message rows in D1. One more TradingView alert: about 96 inbound webhooks a weekday. These are not counted in the 500-a-day budget (`tv-budget`), which counts only the pull adapter's outbound calls. |
 | 6 | +50k (Position Manager prompt) | about +1% | None new |
 
 All stages together come to about +15 to +20% prompt tokens while in shadow. The existing guards stay in place: the
