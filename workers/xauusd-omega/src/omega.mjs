@@ -409,6 +409,32 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (typeof env.OMEGA.unpinStrategy !== "function") return json({ error: "strategy_council_unavailable" }, 503);
       return rpc(() => env.OMEGA.unpinStrategy({ strategy_id: id, actor_sub: identity.sub ?? null }), "strategy_unpin_failed");
     }
+    // Human-AI interaction on the Trade tab (owner 2026-11-19): the owner's edit of a position or a pending order, and
+    // delegation of manual positions to Omega. The owner alone, same origin; the AI Worker checks the live price again.
+    if (route === "POST /api/position/modify" || route === "POST /api/position/delegate" || route === "POST /api/delegate-mode") {
+      const r = await personJson(request, url, identity, 1024);
+      if (r.response) return r.response;
+      if (request.headers.get("sec-fetch-site") && request.headers.get("sec-fetch-site") !== "same-origin") return json({ error: "same_origin_only" }, 403);
+      const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
+      if (!ownerSub || identity.sub !== ownerSub) return json({ error: "owner_only" }, 403);
+      const level = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
+      if (route === "POST /api/delegate-mode") {
+        if (typeof r.body.on !== "boolean") return json({ error: "on must be true or false" }, 400);
+        if (typeof env.OMEGA.setDelegateMode !== "function") return json({ error: "delegation_unavailable" }, 503);
+        return rpc(() => env.OMEGA.setDelegateMode({ on: r.body.on, actor: identity.subject }), "delegate_mode_failed");
+      }
+      const ticket = Number(r.body?.ticket);
+      if (!Number.isInteger(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
+      if (route === "POST /api/position/delegate") {
+        if (typeof r.body.on !== "boolean") return json({ error: "on must be true or false" }, 400);
+        if (typeof env.OMEGA.setDelegation !== "function") return json({ error: "delegation_unavailable" }, 503);
+        return rpc(() => env.OMEGA.setDelegation({ ticket, on: r.body.on, actor: identity.subject }), "delegate_failed");
+      }
+      const levels = [level(r.body.sl), level(r.body.tp), level(r.body.price)];
+      if (levels.some((v) => v !== null && !(Number.isFinite(v) && v >= 0))) return json({ error: "sl, tp and price must be prices (or empty)" }, 400);
+      if (typeof env.OMEGA.ownerModify !== "function") return json({ error: "modify_unavailable" }, 503);
+      return rpc(() => env.OMEGA.ownerModify({ target: r.body.target === "order" ? "order" : "position", ticket, sl: levels[0], tp: levels[1], price: levels[2], actor: identity.subject }), "modify_failed");
+    }
     if (route === "POST /api/position/close") {
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;
@@ -416,7 +442,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (!Number.isFinite(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
       return rpc(() => env.OMEGA.closePosition({ ticket, reason: r.body?.reason, actor: identity.subject }), "close_position_failed");
     }
-    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/feed-fallback", "/api/trading-mode", "/api/strategy-arm", "/api/strategy-council", "/api/strategy-arm/unpin", "/api/council", "/api/shadow-mode", "/api/push", "/api/status", "/api/account-profile", "/api/probation"].includes(path)) return json({ error: "method_not_allowed" }, 405);
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/position/modify", "/api/position/delegate", "/api/delegate-mode", "/api/feed-fallback", "/api/trading-mode", "/api/strategy-arm", "/api/strategy-council", "/api/strategy-arm/unpin", "/api/council", "/api/shadow-mode", "/api/push", "/api/status", "/api/account-profile", "/api/probation"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 

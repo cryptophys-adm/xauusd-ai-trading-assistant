@@ -1,5 +1,5 @@
 import OmegaProfile from "../components/OmegaProfile";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import { usePushMany } from "../lib/push";
 import {
   Activity,
@@ -576,6 +576,10 @@ export default function Omega() {
   const [controlMsg, setControlMsg] = useState<{ tone: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [closingTicket, setClosingTicket] = useState<number | null>(null);
+  // Human-AI interaction (owner 2026-11-19): the owner's edit of a position or pending order, and delegation to Omega.
+  const [editRow, setEditRow] = useState<{ target: "position" | "order"; ticket: number; sl: string; tp: string; price: string } | null>(null);
+  const [hitlBusy, setHitlBusy] = useState(false);
+  const [hitlMsg, setHitlMsg] = useState<{ tone: string; text: string } | null>(null);
   const [exitModalPosition, setExitModalPosition] = useState<ExitTargetPosition | null>(null);
 
   // Broker & Gold Pairing setup state
@@ -764,6 +768,42 @@ export default function Omega() {
     setExitModalPosition(pos);
   };
 
+  const lvl = (v: string) => (v.trim() === "" ? null : Number(v));
+  const saveModify = async () => {
+    if (!editRow) return;
+    const body = { target: editRow.target, ticket: editRow.ticket, sl: lvl(editRow.sl), tp: lvl(editRow.tp), ...(editRow.target === "order" ? { price: lvl(editRow.price) } : {}) };
+    if ([body.sl, body.tp, (body as any).price].some((v) => v != null && !(Number.isFinite(v) && v >= 0))) { setHitlMsg({ tone: "text-rose-300", text: "Prices only (empty removes a level)." }); return; }
+    setHitlBusy(true);
+    try {
+      await omegaJson("/omega/api/position/modify", "POST", body);
+      setHitlMsg({ tone: "text-emerald-300", text: `Modify sent for #${editRow.ticket}; the EA applies it at the next sync.` });
+      setEditRow(null);
+      await load();
+    } catch (err: any) {
+      setHitlMsg({ tone: "text-rose-300", text: `Modify refused for #${editRow.ticket}: ${err?.message || "error"}` });
+    } finally { setHitlBusy(false); }
+  };
+  const delegate = async (ticket: number, on: boolean) => {
+    setHitlBusy(true);
+    try {
+      await omegaJson("/omega/api/position/delegate", "POST", { ticket, on });
+      setHitlMsg({ tone: "text-emerald-300", text: on ? `#${ticket} delegated: Omega manages it from the next sync.` : `#${ticket} is yours again: Omega no longer manages it.` });
+      await load();
+    } catch (err: any) {
+      setHitlMsg({ tone: "text-rose-300", text: `Delegation failed for #${ticket}: ${err?.message || "error"}` });
+    } finally { setHitlBusy(false); }
+  };
+  const delegateMode = async (on: boolean) => {
+    setHitlBusy(true);
+    try {
+      await omegaJson("/omega/api/delegate-mode", "POST", { on });
+      setHitlMsg({ tone: "text-emerald-300", text: on ? "Your next manual entries go to Omega until you turn this off." : "New manual entries stay yours." });
+      await load();
+    } catch (err: any) {
+      setHitlMsg({ tone: "text-rose-300", text: `Delegate toggle failed: ${err?.message || "error"}` });
+    } finally { setHitlBusy(false); }
+  };
+
   const confirmExitPosition = async (ticket: number) => {
     setClosingTicket(ticket);
     try {
@@ -800,6 +840,8 @@ export default function Omega() {
   const ea = data?.ea || {};
   const st = data?.stats || {};
   const b = data?.broker || null;
+  // Delegation and the owner's edits (owner 2026-11-19, src/omega-hitl.mjs).
+  const delegation: any = b?.delegation ?? null;
   const viewer = data?.viewer || { can_control: false };
   const canControl = Boolean(viewer.can_control);
 
@@ -1437,6 +1479,16 @@ export default function Omega() {
           {/* Tab 1: TRADE (Open Positions + Classic MT5 Account Summary Row) */}
           {toolboxTab === "trade" ? (
             <div>
+              {/* Delegate (owner 2026-11-19): manual positions handed to Omega, one by one or every new one. */}
+              <div className="flex flex-wrap items-center gap-3 border-b border-white/10 bg-[#090f1b] px-3.5 py-1.5 text-[11px]">
+                <label className="inline-flex items-center gap-2 text-slate-300" title="Every manual position opened while this is on is handed to Omega: a stop from the plan when it has none, break-even, the TP ladder, the Position Manager and the closes on an opposite signal. Omega never adds to it or reverses it.">
+                  <input type="checkbox" className="accent-cyan-400" disabled={hitlBusy || !delegation?.supported} checked={delegation?.mode?.on === true} onChange={(e) => delegateMode(e.target.checked)} />
+                  Delegate my next manual entries to Omega
+                </label>
+                {delegation?.mode?.on && delegation?.mode?.since_ms ? <span className="text-slate-500">on since {timeUtc(delegation.mode.since_ms)}</span> : null}
+                {delegation && delegation.supported === false ? <span className="text-amber-300">Modify and Delegate need OmegaExecutor {delegation.ea_min_version ?? "1.18"} on the terminal.</span> : null}
+                {hitlMsg ? <span className={hitlMsg.tone}>{hitlMsg.text}</span> : null}
+              </div>
               <div className="table-wrap max-h-[240px] overflow-y-auto">
                 <table className="tbl">
                   <thead>
@@ -1470,12 +1522,19 @@ export default function Omega() {
                         const curPrice = isBuy ? br.bid : br.ask;
                         const isManual = p.source === "manual" || p.magic === 0;
                         const isOmega = p.source === "omega" || p.magic === 920200 || String(p.intent_id || "").startsWith("open:");
+                        const isDelegated = isManual && (delegation?.tickets ?? []).map(Number).includes(Number(p.ticket));
+                        const editing = editRow?.target === "position" && editRow.ticket === Number(p.ticket);
                         return (
-                          <tr key={p.ticket}>
+                          <Fragment key={p.ticket}>
+                          <tr>
                             <td className="mono font-bold text-cyan-300">{p.symbol || symbolName}</td>
                             <td className="mono">#{String(p.ticket)}</td>
                             <td>
-                              {isManual ? (
+                              {isDelegated ? (
+                                <span className="inline-flex items-center gap-1 rounded-sm bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-200 border border-cyan-400/40" title="A manual position you delegated: Omega manages it like its own.">
+                                  MANUAL → OMEGA
+                                </span>
+                              ) : isManual ? (
                                 <span className="inline-flex items-center gap-1 rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
                                   MANUAL
                                 </span>
@@ -1514,7 +1573,27 @@ export default function Omega() {
                                 : <td className="mono text-rose-300">SL −{money(r.amount, cur).replace(/^[-+]/, "")} · {r.pct}%</td>;
                             })()}
                             <td className="mono text-[11px] text-slate-400">{p.signal_id || p.intent_id || (isManual ? "Manual" : "—")}</td>
-                            <td className="text-right">
+                            <td className="text-right whitespace-nowrap">
+                              <button
+                                type="button"
+                                disabled={hitlBusy || !delegation?.supported}
+                                onClick={() => setEditRow(editing ? null : { target: "position", ticket: Number(p.ticket), sl: p.sl ? String(p.sl) : "", tp: p.tp ? String(p.tp) : "", price: "" })}
+                                className="mr-1 inline-flex items-center rounded-sm bg-cyan-500/15 px-2 py-1 text-[11px] font-bold text-cyan-200 border border-cyan-400/40 hover:bg-cyan-500/25 disabled:opacity-40"
+                                title={delegation?.supported ? "Change this position's stop and target" : "Needs OmegaExecutor 1.18"}
+                              >
+                                {editing ? "CANCEL" : "MODIFY"}
+                              </button>
+                              {isManual ? (
+                                <button
+                                  type="button"
+                                  disabled={hitlBusy || (!isDelegated && !delegation?.supported)}
+                                  onClick={() => delegate(Number(p.ticket), !isDelegated)}
+                                  className="mr-1 inline-flex items-center rounded-sm bg-violet-500/15 px-2 py-1 text-[11px] font-bold text-violet-200 border border-violet-400/40 hover:bg-violet-500/25 disabled:opacity-40"
+                                  title={isDelegated ? "Take this position back: Omega stops managing it" : "Hand this manual position to Omega: it manages it like its own (never adds to it or reverses it)"}
+                                >
+                                  {isDelegated ? "TAKE BACK" : "DELEGATE"}
+                                </button>
+                              ) : null}
                               <button
                                 type="button"
                                 disabled={closingTicket === p.ticket}
@@ -1545,6 +1624,20 @@ export default function Omega() {
                               </button>
                             </td>
                           </tr>
+                          {editing ? (
+                            <tr>
+                              <td colSpan={14} className="bg-cyan-500/5">
+                                <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-[11px]">
+                                  <span className="text-slate-400">Modify #{String(p.ticket)} {p.side}:</span>
+                                  <label className="text-rose-300">S/L <input inputMode="decimal" className="mono ml-1 w-24 rounded-sm border border-white/15 bg-black/40 px-1.5 py-0.5 text-slate-100" value={editRow!.sl} onChange={(e) => setEditRow({ ...editRow!, sl: e.target.value })} placeholder="none" /></label>
+                                  <label className="text-emerald-300">T/P <input inputMode="decimal" className="mono ml-1 w-24 rounded-sm border border-white/15 bg-black/40 px-1.5 py-0.5 text-slate-100" value={editRow!.tp} onChange={(e) => setEditRow({ ...editRow!, tp: e.target.value })} placeholder="none" /></label>
+                                  <button type="button" disabled={hitlBusy} onClick={saveModify} className="rounded-sm bg-cyan-500/25 px-2.5 py-1 font-bold text-cyan-100 border border-cyan-400/50 hover:bg-cyan-500/35 disabled:opacity-40">SEND</button>
+                                  <span className="text-slate-500">Empty removes a level. {isOmega || isDelegated ? "Omega keeps managing it and may move the stop again." : ""}</span>
+                                </div>
+                              </td>
+                            </tr>
+                          ) : null}
+                          </Fragment>
                         );
                       })
                     )}
@@ -1571,13 +1664,17 @@ export default function Omega() {
                           <th>S/L</th>
                           <th>T/P</th>
                           <th>Comment</th>
+                          <th className="text-right">Action</th>
                         </tr>
                       </thead>
                       <tbody>
                         {ordersList.map((o: any) => {
                           const isManualOrd = o.source === "manual" || o.magic === 0;
+                          const editingOrd = editRow?.target === "order" && editRow.ticket === Number(o.ticket);
+                          const modifiable = ["BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"].includes(o.type);
                           return (
-                            <tr key={o.ticket}>
+                            <Fragment key={o.ticket}>
+                            <tr>
                               <td className="mono font-bold text-cyan-300">{o.symbol || symbolName}</td>
                               <td className="mono">#{String(o.ticket)}</td>
                               <td>
@@ -1598,7 +1695,33 @@ export default function Omega() {
                               <td className="mono text-rose-300">{o.sl ? num(o.sl, digits) : "—"}</td>
                               <td className="mono text-emerald-300">{o.tp ? num(o.tp, digits) : "—"}</td>
                               <td className="mono text-[11px] text-slate-400">{o.comment || "—"}</td>
+                              <td className="text-right">
+                                <button
+                                  type="button"
+                                  disabled={hitlBusy || !modifiable || !delegation?.supported}
+                                  onClick={() => setEditRow(editingOrd ? null : { target: "order", ticket: Number(o.ticket), price: o.price_open ? String(o.price_open) : "", sl: o.sl ? String(o.sl) : "", tp: o.tp ? String(o.tp) : "" })}
+                                  className="inline-flex items-center rounded-sm bg-cyan-500/15 px-2 py-1 text-[11px] font-bold text-cyan-200 border border-cyan-400/40 hover:bg-cyan-500/25 disabled:opacity-40"
+                                  title={!modifiable ? "Only limit and stop orders" : delegation?.supported ? "Change this order's price, stop and target" : "Needs OmegaExecutor 1.18"}
+                                >
+                                  {editingOrd ? "CANCEL" : "MODIFY"}
+                                </button>
+                              </td>
                             </tr>
+                            {editingOrd ? (
+                              <tr>
+                                <td colSpan={11} className="bg-cyan-500/5">
+                                  <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-[11px]">
+                                    <span className="text-slate-400">Modify order #{String(o.ticket)} {o.type}:</span>
+                                    <label className="text-slate-200">Price <input inputMode="decimal" className="mono ml-1 w-24 rounded-sm border border-white/15 bg-black/40 px-1.5 py-0.5 text-slate-100" value={editRow!.price} onChange={(e) => setEditRow({ ...editRow!, price: e.target.value })} /></label>
+                                    <label className="text-rose-300">S/L <input inputMode="decimal" className="mono ml-1 w-24 rounded-sm border border-white/15 bg-black/40 px-1.5 py-0.5 text-slate-100" value={editRow!.sl} onChange={(e) => setEditRow({ ...editRow!, sl: e.target.value })} placeholder="none" /></label>
+                                    <label className="text-emerald-300">T/P <input inputMode="decimal" className="mono ml-1 w-24 rounded-sm border border-white/15 bg-black/40 px-1.5 py-0.5 text-slate-100" value={editRow!.tp} onChange={(e) => setEditRow({ ...editRow!, tp: e.target.value })} placeholder="none" /></label>
+                                    <button type="button" disabled={hitlBusy} onClick={saveModify} className="rounded-sm bg-cyan-500/25 px-2.5 py-1 font-bold text-cyan-100 border border-cyan-400/50 hover:bg-cyan-500/35 disabled:opacity-40">SEND</button>
+                                    <span className="text-slate-500">{isManualOrd ? "Your order." : "Omega's order."} Empty S/L or T/P removes it.</span>
+                                  </div>
+                                </td>
+                              </tr>
+                            ) : null}
+                            </Fragment>
                           );
                         })}
                       </tbody>

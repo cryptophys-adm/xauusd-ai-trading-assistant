@@ -4,6 +4,13 @@ This file is the single source of truth for repository changes. Topology and
 deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
+## 2026-11-19
+- feat(omega): Modify and Delegate on the Trade tab (owner 2026-11-19, Human-AI interaction; confirmed: "Posisi + pending order", "Omega lanjut biasa", "Tombol + toggle", "Kelola penuh"). OmegaExecutor 1.18.
+  - **Modify:** an open position's S/L and T/P, and a pending limit or stop order's price, S/L and T/P, checked against the live price and the broker's stop distance, queued as one `manual:` intent (`modify_sltp`, `modify_order`) and audited. Omega keeps managing its own positions afterwards.
+  - **Delegate:** a manual position handed to Omega by its button, or every manual position opened while the toggle is on; "TAKE BACK" releases it (never re-adopted by the toggle). Managed like Omega's own: a stop from the plan when none, break-even, TP ladder, Position Manager, opposite-signal close; never an add, a larger size or a reversal. Its intents carry `d:` ids.
+  - **EA 1.18:** `modify_sltp`, `modify_order` (the new price in the volume field: no bridge change), and foreign-magic actions only for `manual:` and `d:` ids. Before 1.18 Nexus refuses edits and delegated positions wait.
+  - `src/omega-hitl.mjs`, routes `POST /omega/api/position/modify`, `/position/delegate`, `/delegate-mode` (owner only), tests HI1–HI5 and the route test.
+
 ## 2026-11-18
 - fix(decision): 1H and News no longer read as stale after the daily reopen (owner 2026-11-18, confirmed: "Perbaiki keduanya").
   - **Rooms.** A room's age leaves out the daily break as well as the weekend (`goldPausedAt`, `goldPausedMsBetween` in `src/market-hours.mjs`). The cause: the 1H room of 22:00 UTC was 2 hours old at the 00:00 decision, which ran about 4 minutes before the first 1H room after the reopen concluded, so the "fresh" guardrail held that decision.

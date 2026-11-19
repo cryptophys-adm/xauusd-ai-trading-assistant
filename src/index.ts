@@ -231,6 +231,7 @@ import { scoreModelArena, pruneModelArena, readModelArena } from "./model-arena.
 import { readPublicProjection } from "./public-projection.mjs";
 import { publicAnalysis } from "./public-analysis.mjs";
 import { readPublicWarRoom } from "./public-warroom.mjs";
+import { ownerModify, setDelegation, setDelegateMode, ensureHitlSchema } from "./omega-hitl.mjs";
 import { readShadowMode, setShadowMode, shadowModeMessage, checkShadowBudget } from "./shadow-switch.mjs";
 import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
 import { reserveTvCalls, releaseTvCalls } from "./tv-budget.mjs";
@@ -1956,6 +1957,19 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   }
   async closePosition(input: { ticket: number; reason?: string; actor?: string }): Promise<JsonObject> {
     return closePosition(this.env, input ?? {}) as Promise<JsonObject>;
+  }
+  /** The owner's edit of a position's SL/TP or a pending order's price/SL/TP (owner 2026-11-19, src/omega-hitl.mjs). */
+  async ownerModify(input: { target?: string; ticket?: number; sl?: number | null; tp?: number | null; price?: number | null; actor?: string }): Promise<JsonObject> {
+    await ensureHitlSchema(this.env.DB);
+    return ownerModify(this.env, { ...(input ?? {}), target: input?.target === "order" ? "order" : "position" }) as Promise<JsonObject>;
+  }
+  /** Delegate a manual position to Omega or take it back (owner 2026-11-19). */
+  async setDelegation(input: { ticket?: number; on?: boolean; actor?: string }): Promise<JsonObject> {
+    return setDelegation(this.env, input ?? {}) as Promise<JsonObject>;
+  }
+  /** The toggle: delegate every manual position opened from now on (owner 2026-11-19). */
+  async setDelegateMode(input: { on?: boolean; actor?: string }): Promise<JsonObject> {
+    return setDelegateMode(this.env, input ?? {}) as Promise<JsonObject>;
   }
 }
 

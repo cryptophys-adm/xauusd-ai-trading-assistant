@@ -1,0 +1,16 @@
+export const HITL_EA_MIN_VERSION: string;
+export const DELEGATE_PREFIX: string;
+export function resetHitlSchemaForTests(): void;
+export function ensureHitlSchema(db: unknown): Promise<void>;
+export function hitlSupported(executor: unknown): boolean;
+export function checkPositionModify(input: { position: any; sym: any; sl?: unknown; tp?: unknown }): Record<string, any>;
+export function checkOrderModify(input: { order: any; sym: any; price?: unknown; sl?: unknown; tp?: unknown }): Record<string, any>;
+export function ownerModify(env: unknown, input?: Record<string, unknown>, deps?: Record<string, unknown>): Promise<Record<string, any>>;
+export function readDelegations(db: unknown): Promise<Record<string, any>>;
+export function setDelegation(env: unknown, input?: Record<string, unknown>, deps?: Record<string, unknown>): Promise<Record<string, any>>;
+export function setDelegateMode(env: unknown, input?: Record<string, unknown>, deps?: Record<string, unknown>): Promise<Record<string, any>>;
+export function delegationsForSync(db: unknown, executor: unknown, options?: Record<string, unknown>): Promise<number[]>;
+export function withDelegated(executor: any, tickets?: number[], options?: Record<string, unknown>): { executor: any; meta: Record<string, any> };
+export function delegatedStopIntents(input: Record<string, unknown>): any[];
+export function markDelegatedIntents(intents?: any[], tickets?: number[]): any[];
+export function plannerIds(ids?: string[]): string[];

@@ -175,6 +175,8 @@ export const closeAllId = (key) => `ka:${key}`;
  */
 export function isOmegaOwned(p) {
   if (!p) return false;
+  // A manual position the owner delegated to Omega (owner 2026-11-19, src/omega-hitl.mjs): managed like its own.
+  if (p.delegated === true) return true;
   if (p.source === "omega") return true;
   if (p.magic === 920200) return true;
   if (typeof p.intent_id === "string" && p.intent_id.startsWith("open:")) return true;
