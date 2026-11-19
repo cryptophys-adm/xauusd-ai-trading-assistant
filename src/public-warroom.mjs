@@ -31,7 +31,7 @@ const ANALYSIS_TERMS = /\border[- ](flow|blocks?|book)s?\b/gi;
  * stands is advice, whatever its words: flat, ready to trade, waiting for an entry or a candle, the sidelines, a
  * reference to a ranked item ("#1").
  */
-export const POSITION_WORDING = /\b(flat|trade[- ]?ready|ready to trade|setup is ready|in the trade|in a trade|in position|on the sidelines|sidelines|stand aside|stay(?:ing)? out|wait(?:s|ed|ing)?|hold(?:s|ing)? off|take (?:the|a) trade|no trade|position(?:s|ed|ing)?)\b|#\s?\d/i;
+export const POSITION_WORDING = /\b(flat|trade[- ]?ready|ready to trade|setup is ready|in the trade|in a trade|in position|on the sidelines|sidelines|stand aside|stay(?:ing)? out|wait(?:s|ed|ing)?|hold(?:s|ing)? off|take (?:the|a) trade|no trade|(?:enough|safe|ready|clear) to trade|tradeable|tradable|position(?:s|ed|ing)?)\b|#\s?\d/i;
 /** Names the public text may carry that contain a forbidden word: the Decision Matrix analyst is "Matrix" in public. */
 const PUBLIC_NAMES = [[/\bdecision matrix\b/gi, "Matrix"]];
 /** A ratio such as Fibonacci 0.618 is no price: decimals under 1 are left out of the price check. */
@@ -122,10 +122,13 @@ const ID_RE = /^[a-z0-9_]{2,40}$/;
  * (analysis); the room's bias and the Moderator's public reasons. Never a stance, a confidence, a decision, a price,
  * order or positional wording: every sentence passes readingSentences, every metric metricName.
  */
-export function publicRoomScene(row, messages = [], source) {
+export function publicRoomScene(row, messages = null, source) {
   const reading = publicRoomReading(row, source);
   if (!reading) return null;
   const body = parse(row.body_json, {});
+  // A v2 run document carries its own steps (room-runs.mjs): the 1H, 4H and 1D rooms keep their statements only
+  // there. `messages` (agent_thread_messages rows) is the fallback for a document without steps.
+  if (Array.isArray(body?.steps) && body.steps.length) messages = body.steps;
   const seats = (Array.isArray(body?.agents) ? body.agents : []).filter((a) => typeof a?.agent === "string" && ID_RE.test(a.agent) && a.status !== "failed");
   const byAgent = new Map();
   for (const m of Array.isArray(messages) ? messages : []) {
@@ -166,7 +169,9 @@ export async function readPublicWarRoomScene(env) {
       const meta = WARROOM_SOURCES[source];
       const row = await env.DB.prepare("SELECT bar_close, bias, agents_heard, body_json FROM room_runs WHERE room = ? AND status = 'concluded' ORDER BY bar_close DESC LIMIT 1").bind(meta.room).first();
       if (!row?.bar_close) continue;
-      const msgs = (await env.DB.prepare("SELECT step, agent, body_json FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? AND (step LIKE 'open:%' OR step LIKE 'debate:%') LIMIT 60").bind(THREAD_OF[source](row.bar_close), row.bar_close).all()).results ?? [];
+      // The steps are in the run document; only a document without them needs the thread's rows.
+      const hasSteps = Array.isArray(parse(row.body_json, {})?.steps);
+      const msgs = hasSteps ? null : (await env.DB.prepare("SELECT step, agent, body_json FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? AND (step LIKE 'open:%' OR step LIKE 'debate:%') LIMIT 60").bind(THREAD_OF[source](row.bar_close), row.bar_close).all()).results ?? [];
       const scene = publicRoomScene(row, msgs, source);
       if (scene) rooms[source] = scene;
     } catch { /* that room is left out */ }

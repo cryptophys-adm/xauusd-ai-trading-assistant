@@ -75,6 +75,7 @@ test("PW4 the stricter filter (2026-11-19, per-analyst text): whole sentences on
   assert.deepEqual(readingSentences("The Decision Matrix sees a bearish confluence."), ["The Matrix sees a bearish confluence."]);
   assert.equal(publicPhrase("Price respects the Fibonacci 0.618 level."), true, "a ratio is no price");
   assert.equal(publicPhrase("Price respects 3741.80."), false);
+  assert.equal(publicPhrase("The environment is stable enough to trade, but the direction is unconfirmed."), false, "trade readiness is positional");
 });
 
 test("PW5 the room scene: roster, metrics, filtered claim and rebuttal per analyst; never a stance or confidence", async () => {
@@ -94,4 +95,23 @@ test("PW5 the room scene: roster, metrics, filtered claim and rebuttal per analy
   assert.deepEqual([st.bias, st.claim, st.metrics], ["bullish", ["The supertrend stays below price."], ["the supertrend indicator"]]);
   assert.deepEqual([fa.claim, fa.rebuttal, fa.rebuts], [["Sellers dominate the footprint order flow below the value area."], ["I disagree with the bullish momentum claim."], ["supertrend"]]);
   assert.doesNotMatch(JSON.stringify(s), /SELL|WAIT|stance|confidence|0\.88|0\.8\b|3741/);
+});
+
+test("PW6 the 1H, 4H and 1D rooms keep their statements in the run document's steps: the scene reads them there", async () => {
+  const { publicRoomScene, readPublicWarRoomScene } = await import("../src/public-warroom.mjs");
+  const steps = [
+    { id: 2, step: "open:h1", agent: "h1", body_json: JSON.stringify({ claim: "The hourly candle closed below the prior low.", bias: "BEARISH", metrics: ["the last closed candles"] }) },
+    { id: 3, step: "debate:risk", agent: "risk", body_json: JSON.stringify({ argument: "The range is still wide for this timeframe.", rebuts: ["h1"], bias: "NEUTRAL" }) },
+    { id: 4, step: "shadow:risk", agent: "risk", body_json: JSON.stringify({ argument: "A shadow answer is never shown." }) }
+  ];
+  const row = { bar_close: "2026-11-19T02:00:00.000Z", bias: "BEARISH", body_json: JSON.stringify({ conclusion: { reasons: ["Lower closes dominate the hour."] }, agents: [{ agent: "h1", status: "ok" }, { agent: "risk", status: "ok" }], thread_id: "tf:H1", steps }) };
+  const s = publicRoomScene(row, null, "1h");
+  assert.deepEqual(s.analysts.map((a) => [a.id, a.claim, a.rebuttal, a.rebuts]), [["h1", ["The hourly candle closed below the prior low."], [], []], ["risk", [], ["The range is still wide for this timeframe."], ["h1"]]]);
+  assert.doesNotMatch(JSON.stringify(s), /shadow answer/);
+  // With steps in the document, no agent_thread_messages query is made.
+  const seen = [];
+  const env = { DB: { prepare: (sql) => ({ bind: () => ({ first: async () => (sql.includes("room_runs") ? row : null), all: async () => { seen.push(sql); return { results: [] }; } }) }) } };
+  const out = await readPublicWarRoomScene(env);
+  assert.equal(out.rooms["1h"].analysts.length, 2);
+  assert.deepEqual(seen, [], "the thread table is not read");
 });
