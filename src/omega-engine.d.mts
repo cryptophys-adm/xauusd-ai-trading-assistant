@@ -29,7 +29,7 @@ export function planIntents(input?: {
   account?: { spec_status: string; spec_problem?: string | null } | null;
   eaGate?: boolean;
   stops?: Record<string, number[]>;
-}): { intents: Record<string, any>[]; notes: { code: string }[] };
+}): { intents: Record<string, any>[]; notes: { code: string }[]; pm_dropped: { id: string; reason: string }[] };
 export const ROLLOVER_QUARANTINE_UTC: string;
 export function manageIntents(input?: { positions?: any[]; sym?: any; settings?: any; signal?: any; side?: string | null; recentIntentIds?: string[]; skipTickets?: unknown[]; stops?: Record<string, number[]> }): Array<Record<string, any>>;
 export const STOP_COMMAND_MS: number;

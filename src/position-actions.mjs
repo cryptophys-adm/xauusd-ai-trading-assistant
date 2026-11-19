@@ -33,3 +33,47 @@ export async function markPositionActions(db, ids, status) {
   for (const id of ids) await db.prepare("UPDATE position_actions SET status = ? WHERE id = ?").bind(status, id).run();
 }
 
+
+/** Pure: the stored action id ("pm:<ticket>:<bar>") of a Position Manager intent id ("pm:<ticket>:<c|s|t>:<bar>", with
+ * an attempt suffix ":<n>" or the delegated prefix "d:"), or null for any other intent. */
+export function actionIdOfIntent(intentId) {
+  const parts = String(intentId ?? "").replace(/^d:/, "").split(":");
+  if (parts[0] !== "pm" || parts.length < 4 || !/^\d+$/.test(parts[1]) || !["c", "s", "t"].includes(parts[2]) || !/^\d+$/.test(parts[3])) return null;
+  return `pm:${parts[1]}:${parts[3]}`;
+}
+
+/** The stored actions of these ids (for their Telegram line), {} when none can be read. */
+export async function positionActionRows(db, ids) {
+  const list = [...new Set(ids.filter((x) => typeof x === "string"))].slice(0, 50);
+  if (!list.length) return {};
+  try {
+    await ensurePositionSchema(db);
+    const rows = (await db.prepare(`SELECT id, ticket, side, pips, action, rule, sl, tp, why, council, status FROM position_actions WHERE id IN (${list.map(() => "?").join(", ")})`).bind(...list).all()).results ?? [];
+    return Object.fromEntries(rows.map((r) => [r.id, r]));
+  } catch { return {}; }
+}
+
+/** The pending actions older than ACTION_TTL_MS, marked "expired" and returned (each once): never applied. */
+export async function expireStalePositionActions(db, { now = Date.now() } = {}) {
+  try {
+    await ensurePositionSchema(db);
+    const rows = (await db.prepare("SELECT id, ticket, side, pips, action, rule, sl, tp, why, council, status FROM position_actions WHERE status = 'pending' AND at_ms <= ? LIMIT 20").bind(now - ACTION_TTL_MS).all()).results ?? [];
+    const out = [];
+    for (const r of rows) {
+      const res = await db.prepare("UPDATE position_actions SET status = 'expired' WHERE id = ? AND status = 'pending'").bind(r.id).run();
+      if (Number(res?.meta?.changes ?? 1) > 0) out.push(r);
+    }
+    return out;
+  } catch { return []; }
+}
+
+/**
+ * Pure: the Telegram line of one action, as it reached the broker or not (owner 2026-11-19: the line says what the
+ * broker did). `outcome` is { applied: true } or { applied: false, reason }. Plain text: the sender escapes it.
+ */
+export function actionMessage(row, outcome = { applied: true }) {
+  const what = { close: "close", sl: `stop to ${row.sl}`, tp: `target to ${row.tp}` }[row.action] ?? row.action;
+  const pips = row.pips == null ? "" : ` · ${row.pips >= 0 ? "+" : ""}${row.pips} pips`;
+  const head = outcome?.applied === true ? `${what} · applied at the broker` : `${what} · NOT applied: ${outcome?.reason || "unknown"}`;
+  return `XAUUSD POSITION MANAGER · #${row.ticket} ${row.side}${pips} · ${head}\n${row.why}${row.council ? `\nCouncil: ${row.council}` : ""}`;
+}

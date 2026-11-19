@@ -34,15 +34,30 @@ test("PM1. the rules, in pips (1 pip = 0.10)", () => {
   assert.deepEqual([tp2.action, tp2.tp], ["tp", 3862]);
 });
 
-test("PM2. a loss of 30 pips: cut when the decision, the agent's confidence or the quorum turned; else hold to the stop", () => {
-  const loss = (dec, council = { momentum: "holding", thesis: "intact" }) => positionAction(facts(3882.8, {}, dec), council);
+test("PM2. a loss of 30 pips: cut only on a measured reason the council confirms; a WAIT alone holds (owner 2026-11-19)", () => {
+  const weak = { momentum: "weakening", thesis: "weakening" };
+  const loss = (dec, council = weak) => positionAction(facts(3882.8, {}, dec), council);
+  const dropped = { agent_confidence: { zone_pullback: { long: 0.3, short: 0.6 } } };
   assert.equal(facts(3882.8).pips, -30);
   assert.equal(loss(decision()).action, "hold", "still strong: held to the original stop");
-  assert.equal(loss(decision({ stance: "WAIT" })).action, "close", "the decision turned WAIT");
+  // A WAIT alone is never a reason to cut, whatever the council says (362862558 was cut on it, 2026-11-19).
+  const wait = loss(decision({ stance: "WAIT" }), { momentum: "weakening", thesis: "broken" });
+  assert.deepEqual([wait.action, wait.rule], ["hold", "hold_to_stop"]);
+  assert.match(wait.why, /the decision is WAIT, not a reason alone/);
+  // A measured reason with the council's thesis weakening or broken: cut.
   assert.equal(loss(decision({ stance: "BUY" })).action, "close", "the decision turned to the other side");
-  assert.equal(loss(decision({ agent_confidence: { zone_pullback: { long: 0.3, short: 0.6 } } })).action, "close", "the agent's measured confidence dropped");
+  assert.equal(loss(decision(dropped)).action, "close", "the agent's measured confidence dropped");
   assert.equal(loss(decision({ quorum: { long_share: 0.2, short_share: 0.7 } })).action, "close", "the quorum's share on the side fell");
-  assert.equal(loss(decision(), { momentum: "weakening", thesis: "broken" }).action, "close", "the council calls the thesis broken");
+  const both = loss(decision({ stance: "WAIT", ...dropped }));
+  assert.deepEqual([both.action, both.rule], ["close", "cut_loss"]);
+  assert.match(both.why, /confidence dropped 0\.8 to 0\.6; the decision is WAIT; the council calls the thesis weakening: loss cut/);
+  // The council decides with the measured reason: thesis intact holds; no answer holds the stop (no action).
+  const intact = loss(decision({ stance: "BUY" }), { momentum: "holding", thesis: "intact" });
+  assert.deepEqual([intact.action, intact.rule], ["hold", "hold_thesis_intact"]);
+  const silent = loss(decision({ stance: "BUY" }), null);
+  assert.deepEqual([silent.action, silent.rule], ["none", "council_unavailable"]);
+  // The council's thesis alone (no measured reason) never cuts: a single model reading is not a measurement.
+  assert.equal(loss(decision(), { momentum: "weakening", thesis: "broken" }).action, "hold");
   assert.equal(loss(decision({ agent_confidence_prev: {} })).action, "none", "a missing measured input: no action");
   assert.equal(positionAction(null, null).action, "none");
 });
@@ -85,7 +100,7 @@ function memDb() {
   return { prepare: wrap, raw: db };
 }
 
-test("PM5. the runner: once per position and 5m bar, live only, Telegram per action, the daily cap stops the council", async () => {
+test("PM5. the runner: once per position and 5m bar, live only, no Telegram line before the broker answers, the daily cap stops the council", async () => {
   resetPositionSchemaCacheForTests();
   const db = memDb(), sent = [], calls = [];
   const kv = new Map();
@@ -97,7 +112,7 @@ test("PM5. the runner: once per position and 5m bar, live only, Telegram per act
   const r = await runPositionManager(env, { ...base, now });
   assert.deepEqual(r.positions.map((p) => [p.action, p.rule]), [["close", "take_profit_weakening"]]);
   assert.equal(calls[0].meterSource, POSITION_COUNCIL_METER);
-  assert.match(sent[0], /POSITION MANAGER · #101 SELL · \+37 pips · closed/);
+  assert.equal(sent.length, 0, "the action is said by Omega once the broker answers (owner 2026-11-19), not when it is decided");
   assert.equal((await runPositionManager(env, { ...base, now: now + 60_000 })).positions.length, 0, "once per 5m bar");
   assert.deepEqual((await pendingPositionActions(db, { now: now + 60_000 })).map((a) => a.action), ["close"]);
   // The cap reached: no council call, no action, one Telegram line a day.
@@ -116,7 +131,9 @@ test("PM6. the daily report: a close against holding to the original stop and ta
   const rep = positionReport(rows, bars, { now: 10_000 });
   assert.deepEqual([rep.items[0].held_pips, rep.items[0].saved_pips, rep.saved_pips], [-100, 135, 135]);
   assert.equal(THRESHOLD_PIPS, 30);
-  assert.match(actionMessage({ ticket: 1, side: "BUY", pips: -31, action: "close", why: "cut", council: null }), /-31 pips · closed/);
+  assert.match(actionMessage({ ticket: 1, side: "BUY", pips: -31, action: "close", why: "cut", council: null }), /-31 pips · close · applied at the broker\ncut$/);
+  assert.match(actionMessage({ ticket: 1, side: "SELL", pips: 12, action: "tp", tp: 3862, why: "out", council: "holding, thesis intact: ok" }, { applied: false, reason: "the TP ladder holds the target" }),
+    /#1 SELL · \+12 pips · target to 3862 · NOT applied: the TP ladder holds the target\nout\nCouncil: holding/);
 });
 
 test("PM-R the profit and loss band in R of the stop at entry, per mode (owner 2026-11-18: \"Per mode\")", async () => {
@@ -142,9 +159,9 @@ test("PM-R the profit and loss band in R of the stop at entry, per mode (owner 2
   const take = positionAction(fR(3874.3), { momentum: "weakening", thesis: "weakening" });
   assert.deepEqual([take.action, take.rule], ["close", "take_profit_weakening"]);
   assert.match(take.why, /\+55 pips \(\+0\.55R, band 0\.5R intraday\)/);
-  // -30 pips is no longer a cut on intraday with a 100-pip stop; -52 with the decision turned is.
-  assert.equal(positionAction(fR(3882.8, decision({ stance: "WAIT" })), { momentum: "weakening", thesis: "broken" }).action, "hold");
-  const cut = positionAction(fR(3885, decision({ stance: "WAIT" })), { momentum: "weakening", thesis: "intact" });
+  // -30 pips is no longer a cut on intraday with a 100-pip stop; -52 with the decision turned and the council agreeing is.
+  assert.equal(positionAction(fR(3882.8, decision({ stance: "BUY" })), { momentum: "weakening", thesis: "broken" }).action, "hold");
+  const cut = positionAction(fR(3885, decision({ stance: "BUY" })), { momentum: "weakening", thesis: "weakening" });
   assert.deepEqual([cut.action, cut.rule], ["close", "cut_loss"]);
   // Scalp with the same stop: 30 pips, as before.
   const fs = positionFacts({ position: pos(), sym: sym(3876.3), openIntent: { ...ri, mode: "scalp" }, levels: [], decision: decision() });

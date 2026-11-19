@@ -5,10 +5,13 @@
 //   profit >= +30 pips, momentum weakening        close now, without waiting for TP1
 //   profit >= +30 pips, still strong               stop to break-even plus the spread
 //   price >= 30 pips beyond TP1                    stop to TP1 (locks it), the position runs on to TP2
-//   loss <= -30 pips, the decision is WAIT or the  cut the loss now
-//     other side, or the agent's measured confidence or the quorum's share on the position's side dropped, or
-//     the council calls the thesis broken
-//   loss <= -30 pips, still strong                 hold to the original stop
+//   loss <= -30 pips, a measured reason and the    cut the loss now
+//     council agrees: the decision on the other side, or the agent's measured confidence or the quorum's share
+//     on the position's side dropped; and the council answered with the thesis weakening or broken
+//   loss <= -30 pips, otherwise                    hold to the original stop (the broker's stop stays)
+// A WAIT decision alone is never a reason to cut (owner 2026-11-19: "WAIT bisa jadi HOLD, harus divalidasi jangan
+// langsung diexit"): it is said in the reason when it stands beside a measured one. Without the council's answer
+// nothing is cut; the stop stays.
 // TP1 is the plan's target (the open intent's tp), watched here; TP2 is the next key level beyond it, set as the
 // broker's take-profit once. 1 pip = 0.10.
 //
@@ -33,7 +36,7 @@ import { confidenceTrend } from "./agent-confidence.mjs";
 import { eaSignal } from "./ea-signal.mjs";
 import { ensurePositionSchema, ACTION_TTL_MS } from "./position-actions.mjs";
 import { readDelegations, hitlSupported } from "./omega-hitl.mjs";
-export { ensurePositionSchema, pendingPositionActions, markPositionActions, ACTION_TTL_MS } from "./position-actions.mjs";
+export { ensurePositionSchema, pendingPositionActions, markPositionActions, ACTION_TTL_MS, actionMessage, actionIdOfIntent } from "./position-actions.mjs";
 
 export const PIP = 0.1;
 export const THRESHOLD_PIPS = 30;
@@ -100,7 +103,7 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
     pips, beyond_tp1_pips: pipsOf(dir * (price - tp1)),
     band_pips: band.pips, band_r: band.r, mode: band.mode, r_dist_pips: band.r_dist_pips, r: band.r_dist_pips ? Math.round((pips / band.r_dist_pips) * 100) / 100 : null,
     agent, agent_conf: isNum(conf) ? conf : null, agent_conf_prev: isNum(prev) ? prev : null, agent_trend: confidenceTrend(conf, prev),
-    stance: decision.stance, with_decision: decision.stance === p.side,
+    stance: decision.stance, with_decision: decision.stance === p.side, against_decision: decision.stance === (buy ? "SELL" : "BUY"),
     share: isNum(share) ? share : null, share_prev: isNum(prevShare) ? prevShare : null
   };
 }
@@ -130,14 +133,18 @@ export function positionAction(f, council) {
   if (f.pips <= -band) {
     if (f.agent_conf == null || f.agent_conf_prev == null || f.share == null) return { action: "none", rule: "inputs_missing", why: "the agent's confidence or the quorum is missing: the stop stays" };
     const shareDrop = f.share_prev != null && f.share_prev - f.share > SHARE_DROP;
+    // Measured reasons only. A WAIT decision is not one (owner 2026-11-19): it is said beside one, never alone.
     const reasons = [
-      ...(!f.with_decision ? [`the decision is ${f.stance}`] : []),
+      ...(f.against_decision ? [`the decision is ${f.stance}`] : []),
       ...(f.agent_trend === "drop" ? [`the ${f.agent} confidence dropped ${f.agent_conf_prev} to ${f.agent_conf}`] : []),
-      ...(shareDrop ? [`the quorum's ${f.side === "BUY" ? "bullish" : "bearish"} share fell ${Math.round(f.share_prev * 100)}% to ${Math.round(f.share * 100)}%`] : []),
-      ...(council?.thesis === "broken" ? ["the council calls the thesis broken"] : [])
+      ...(shareDrop ? [`the quorum's ${f.side === "BUY" ? "bullish" : "bearish"} share fell ${Math.round(f.share_prev * 100)}% to ${Math.round(f.share * 100)}%`] : [])
     ];
-    if (reasons.length) return { action: "close", rule: "cut_loss", why: `${at(-1)} and ${reasons.join("; ")}: loss cut` };
-    return { action: "hold", rule: "hold_to_stop", why: `${at(-1)} but still strong: held to the original stop` };
+    const wait = !f.with_decision && !f.against_decision ? `the decision is ${f.stance}` : null;
+    if (!reasons.length) return { action: "hold", rule: "hold_to_stop", why: `${at(-1)} but no measured reason to cut${wait ? ` (${wait}, not a reason alone)` : ""}: held to the original stop` };
+    // The cut goes through the council: without its answer, or with the thesis intact, the position holds.
+    if (!council) return { action: "none", rule: "council_unavailable", why: `${at(-1)} and ${reasons.join("; ")}, but the council did not answer: the stop stays` };
+    if (council.thesis === "intact") return { action: "hold", rule: "hold_thesis_intact", why: `${at(-1)} and ${reasons.join("; ")}, but the council calls the thesis intact: held to the original stop` };
+    return { action: "close", rule: "cut_loss", why: `${at(-1)} and ${[...reasons, ...(wait ? [wait] : [])].join("; ")}; the council calls the thesis ${council.thesis}: loss cut` };
   }
   if (tpAtTp1 && f.tp2 != null && f.pips > 0) return { action: "tp", rule: "tp2_target", tp: f.tp2, why: "target out to TP2 (the next key level)" };
   return { action: "hold", rule: "inside_band", why: `${f.pips} pips: inside the ±${band} pip band${f.r != null ? ` (±${f.band_r}R ${f.mode})` : ""}` };
@@ -180,12 +187,6 @@ export async function positionCouncilSpendUsd(db, { now = Date.now() } = {}) {
   let neurons = 0;
   for (const r of rows) neurons += neuronsOf(r.model, Number(r.p) || 0, Number(r.c) || 0, Number(r.k) || 0) ?? 0;
   return Math.round((neurons / 1000) * USD_PER_1K_NEURONS * 10_000) / 10_000;
-}
-
-/** Pure: the Telegram line of one action. */
-export function actionMessage(row) {
-  const what = { close: "closed", sl: `stop to ${row.sl}`, tp: `target to ${row.tp}` }[row.action] ?? row.action;
-  return `XAUUSD POSITION MANAGER · #${row.ticket} ${row.side} · ${row.pips >= 0 ? "+" : ""}${row.pips} pips · ${what}\n${row.why}${row.council ? `\nCouncil: ${row.council}` : ""}`;
 }
 
 /**
@@ -250,7 +251,7 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
         orig_sl: f?.sl ?? null, orig_tp: f?.tp ?? null, basis: isNum(signal?.feed_basis) ? signal.feed_basis : null, status: ["close", "sl", "tp"].includes(a.action) ? "pending" : "noted" };
       await db.prepare("INSERT OR IGNORE INTO position_actions (id, ticket, bar, at_ms, side, pips, price, action, rule, sl, tp, why, council, orig_sl, orig_tp, basis, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(row.id, row.ticket, row.bar, row.at_ms, row.side, row.pips, row.price, row.action, row.rule, row.sl, row.tp, row.why, row.council, row.orig_sl, row.orig_tp, row.basis, row.status).run();
-      if (row.status === "pending" && send) { try { await send(actionMessage(row)); } catch { /* the action stands; the line is lost */ } }
+      // No Telegram line here: Omega says what reached the broker, or why the action was not applied (owner 2026-11-19).
       out.push({ ticket: row.ticket, action: row.action, rule: row.rule, pips: row.pips });
     }
     return { status: "ran", spent_usd: spent, cap_usd: capUsd, positions: out };
@@ -288,7 +289,7 @@ export function positionReport(rows, bars, { now = Date.now() } = {}) {
   const items = [];
   let saved = 0, scored = 0;
   for (const r of rows) {
-    if (r.action !== "close" || r.status !== "applied") { items.push({ ticket: r.ticket, rule: r.rule, action: r.action, pips: r.pips, held_pips: null, saved_pips: null }); continue; }
+    if (r.action !== "close" || r.status !== "applied") { items.push({ ticket: r.ticket, rule: r.rule, action: r.action, status: r.status ?? null, pips: r.pips, held_pips: null, saved_pips: null }); continue; }
     const dir = r.side === "BUY" ? 1 : -1, basis = isNum(r.basis) ? r.basis : 0;
     const after = bars.filter((b) => ms(b) >= r.at_ms && ms(b) <= now);
     let heldExit = null;
@@ -304,7 +305,7 @@ export function positionReport(rows, bars, { now = Date.now() } = {}) {
     const held = heldExit != null && open != null ? pipsOf(dir * (heldExit - open)) : null;
     const s = held != null && isNum(r.pips) ? r1(r.pips - held) : null;
     if (s != null) { saved += s; scored += 1; }
-    items.push({ ticket: r.ticket, rule: r.rule, action: r.action, pips: r.pips, held_pips: held, saved_pips: s });
+    items.push({ ticket: r.ticket, rule: r.rule, action: r.action, status: r.status ?? null, pips: r.pips, held_pips: held, saved_pips: s });
   }
   return { actions: rows.length, scored, saved_pips: r1(saved), items };
 }
@@ -314,7 +315,7 @@ export const REPORT_HOUR = 21;
 
 /** Pure: the daily report as a Telegram text. */
 export function reportMessage(day, rep) {
-  const lines = rep.items.filter((i) => ["close", "sl", "tp"].includes(i.action)).map((i) => `#${i.ticket} ${i.rule}: ${i.pips >= 0 ? "+" : ""}${i.pips} pips${i.saved_pips != null ? ` · held to the original stop/target: ${i.held_pips >= 0 ? "+" : ""}${i.held_pips} → ${i.saved_pips >= 0 ? "saved" : "lost"} ${Math.abs(i.saved_pips)} pips` : ""}`);
+  const lines = rep.items.filter((i) => ["close", "sl", "tp"].includes(i.action)).map((i) => `#${i.ticket} ${i.rule}${i.status && i.status !== "applied" ? ` (not applied: ${i.status})` : ""}: ${i.pips >= 0 ? "+" : ""}${i.pips} pips${i.saved_pips != null ? ` · held to the original stop/target: ${i.held_pips >= 0 ? "+" : ""}${i.held_pips} → ${i.saved_pips >= 0 ? "saved" : "lost"} ${Math.abs(i.saved_pips)} pips` : ""}`);
   return [`XAUUSD POSITION MANAGER · report ${day}`, lines.length ? `${lines.length} action${lines.length === 1 ? "" : "s"}; closes against holding: ${rep.saved_pips >= 0 ? "+" : ""}${rep.saved_pips} pips (${rep.scored} scored)` : "No action today.", ...lines.slice(0, 20)].join("\n");
 }
 

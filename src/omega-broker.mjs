@@ -17,7 +17,8 @@ import { eaSignal, readControl, blackoutWindow } from "./ea-signal.mjs";
 import { storeDeal, dealStats, FIRST_OF_DEAL, ensureSchema as ensureDealsSchema } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, STOP_COMMAND_MS, commandedStops, planIntents, settingsFrom } from "./omega-engine.mjs";
-import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
+import { pendingPositionActions, markPositionActions, positionActionRows, expireStalePositionActions, actionIdOfIntent, actionMessage, ACTION_TTL_MS } from "./position-actions.mjs";
+import { announceExits } from "./position-exit.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
 import { goldCheckOf, goldSymbolText, accountMoney, moneyText, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText, referenceFrom } from "./gold-symbol.mjs";
 import { fallbackSinceMs } from "./feed.mjs";
@@ -258,6 +259,9 @@ export async function lastWeakeningExit(db, now) {
     return { side, ticket, exit_price: Number.isFinite(Number(deal?.exit_price)) ? Number(deal.exit_price) : null, exit_ms: Number(deal?.closed_ms) || Number(row.updated_ms) || null, entry_conf: Number.isFinite(Number(p.agent_conf)) ? Number(p.agent_conf) : null };
   } catch { return null; }
 }
+
+/** Pure: plain text made safe for Telegram's HTML mode. */
+export const escHtml = (t) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 export async function sendOmegaTelegram(env, message) {
   if (!env?.TELEGRAM_BOT_TOKEN || !env?.TELEGRAM_CHAT_ID) return;
@@ -720,6 +724,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   }
 
   // Persist closed deals reported by MT5 terminal
+  const newDeals = [];
   if (Array.isArray(executor?.deals) && executor.deals.length > 0) {
     const known = storedDeals(db);
     for (const d of executor.deals) {
@@ -749,6 +754,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           source: d.source
         }, { now });
         if (stored?.ok) known.add(seenKey);
+        if (stored?.ok && stored.stored === true) newDeals.push(d);
       } catch {
         // Ignored; deals persistence should not disrupt sync cycle
       }
@@ -773,6 +779,13 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     await db.prepare("UPDATE omega_intents SET status = ?, result = ?, updated_ms = ? WHERE id = ? AND status IN ('pending', 'sent', 'expired')")
       .bind(result.ok ? "done" : "failed", JSON.stringify(result), now, r.id).run();
     if (existing && (existing.status === "pending" || existing.status === "sent")) {
+      // A Position Manager intent: its own line, as the broker answered (owner 2026-11-19: say what reached the broker).
+      const pmId = actionIdOfIntent(r.id);
+      if (pmId) {
+        const row = (await positionActionRows(db, [pmId]))[pmId];
+        if (row) await sendOmegaTelegram(env, escHtml(actionMessage(row, result.ok ? { applied: true } : { applied: false, reason: `the broker refused it (${result.error || "no reason given"})` })));
+        continue;
+      }
       // The broker label of this terminal, e.g. "FxPro (DEMO) · GOLD"; "broker unknown" until its spec is validated.
       const label = await brokerLabelFor(db, executor);
       if (result.ok) {
@@ -784,8 +797,9 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           const xp = positionExposure({ side: p.side, volume: p.volume, open_price: result.fill_price || p.entry, sl: p.sl }, executor?.symbol, executor?.account?.equity);
           const xpText = xp ? `\nExposure: <code>${exposureText(xp)}</code>` : "";
           await sendOmegaTelegram(env, `🟢 <b>Omega Order Executed · ${label}</b>${p.probation === true ? " · <b>PROBATION ½ risk</b> (counter-trend reversal)" : ""}\nTicket: <code>#${result.ticket || "—"}</code>\nSide: <b>${p.side}</b> | Volume: <code>${p.volume}</code> lot ${executor?.symbol?.name ?? ""}\nEntry: <code>${p.entry || "—"}</code> | Fill: <code>${result.fill_price || p.entry || "—"}</code>\nSL: <code>${p.sl}</code> | TP: <code>${p.tp}</code>${xpText}${tcaText}`);
-        } else if (p?.kind === "close" || p?.kind === "partial_close") {
-          await sendOmegaTelegram(env, `💰 <b>Omega Position ${p.kind === "partial_close" ? `Scaled Out (${p.volume ?? "part"} lot)` : "Closed"} · ${label}</b>\nTicket: <code>#${result.ticket || p.ticket || "—"}</code>\nReason: <code>${p.reason || "executed"}</code>`);
+        } else if (p?.kind === "partial_close") {
+          // A full close is said from its exit deal (announceExits above, at this or the next sync): entry, exit, result.
+          await sendOmegaTelegram(env, `💰 <b>Omega Position Scaled Out (${p.volume ?? "part"} lot) · ${label}</b>\nTicket: <code>#${result.ticket || p.ticket || "—"}</code>\nReason: <code>${p.reason || "executed"}</code>`);
         } else if (p?.kind === "modify_tp") {
           await sendOmegaTelegram(env, `🎯 <b>Extended TP Expanded (Runner) · ${label}</b>\nTicket: <code>#${p.ticket}</code>\nNew TP: <code>${p.tp}</code>`);
         }
@@ -795,7 +809,25 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     }
   }
   await reconcileFilledOpens(env, db, executor, now);
+  // Every Omega (or delegated) position that left the book, the broker's take-profit and stop included, is said once
+  // with its reason, entry, exit and result (owner 2026-11-19; src/position-exit.mjs). After the results above, so an
+  // Omega close answered in this same sync gives its reason.
+  if (newDeals.length) {
+    try {
+      let delegatedTickets = [];
+      if (newDeals.some((d) => d?.source !== "omega")) delegatedTickets = (await readDelegations(db)).tickets;
+      const label = await brokerLabelFor(db, executor);
+      await announceExits(db, newDeals, { openTickets: (Array.isArray(executor?.positions) ? executor.positions : []).map((p) => p?.ticket), delegated: delegatedTickets, now, label,
+        send: (t) => sendOmegaTelegram(env, t), log: (action, detail) => event(db, now, "engine", action, detail) });
+    } catch { /* the deals are stored; the notices are lost */ }
+  }
+  // A Position Manager intent the terminal never answered is said as not applied (the expiry below).
+  const pmExpiring = ((await db.prepare("SELECT id FROM omega_intents WHERE status IN ('pending', 'sent') AND created_ms < ? AND (id LIKE 'pm:%' OR id LIKE 'd:pm:%')").bind(now - INTENT_TTL_MS).all()).results ?? []).map((r) => r.id);
   await db.prepare("UPDATE omega_intents SET status = 'expired', updated_ms = ? WHERE status IN ('pending', 'sent') AND created_ms < ?").bind(now, now - INTENT_TTL_MS).run();
+  if (pmExpiring.length) {
+    const rows = await positionActionRows(db, pmExpiring.map(actionIdOfIntent).filter(Boolean));
+    for (const row of Object.values(rows)) await sendOmegaTelegram(env, escHtml(actionMessage(row, { applied: false, reason: `the terminal did not answer within ${Math.round(INTENT_TTL_MS / 60_000)} minutes` })));
+  }
 
   // The connection the bridge must apply (read above).
   let connection = null;
@@ -879,8 +911,18 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     // An action that became an intent is applied; one the live price no longer allows is skipped (never retried).
     const planned = new Set(plan.intents.filter((it) => String(it.id).startsWith("pm:")).map((it) => { const [, t, , b] = String(it.id).split(":"); return `pm:${t}:${b}`; }));
     await markPositionActions(db, pmActions.filter((a) => planned.has(a.id)).map((a) => a.id), "applied");
-    await markPositionActions(db, pmActions.filter((a) => !planned.has(a.id)).map((a) => a.id), "skipped");
+    const skipped = pmActions.filter((a) => !planned.has(a.id));
+    await markPositionActions(db, skipped.map((a) => a.id), "skipped");
+    // A skipped action is said with its reason; an applied one is said when the broker answers (above).
+    if (skipped.length) {
+      const why = Object.fromEntries((plan.pm_dropped ?? []).map((d) => [d.id, d.reason]));
+      const fallback = `Omega's plan stopped first (${plan.notes.map((x) => x.code).join(", ") || "no reason recorded"})`;
+      const rows = await positionActionRows(db, skipped.map((a) => a.id));
+      for (const a of skipped) if (rows[a.id]) await sendOmegaTelegram(env, escHtml(actionMessage(rows[a.id], { applied: false, reason: why[a.id] ?? fallback })));
+    }
   }
+  // An action older than its time to live was never read by a sync: said as not applied, once.
+  for (const row of await expireStalePositionActions(db, { now })) await sendOmegaTelegram(env, escHtml(actionMessage(row, { applied: false, reason: `it was older than ${Math.round(ACTION_TTL_MS / 60_000)} minutes when Omega's sync came (the price moved on)` })));
   if (delegateOk) {
     // A delegated position without a stop gets the plan's stop (once), then its intents carry the "d:" id.
     const recentIds = new Set(plannerIds((recent.results ?? []).map((r) => r.id)));
