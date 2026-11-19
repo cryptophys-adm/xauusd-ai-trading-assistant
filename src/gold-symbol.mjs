@@ -149,7 +149,7 @@ export function accountMoney({ currency, positions = [], deals = [], symbol = nu
  * null when ok. The price (goldPriceProblem) and the account's money (accountMoney) are checked beside it.
  */
 export function goldSymbolCheck(sym, symbolError = null) {
-  if (typeof symbolError === "string" && symbolError) return { ok: false, problem: `symbol_error:${symbolError.slice(0, 96)}` };
+  if (typeof symbolError === "string" && symbolError) return { ok: false, problem: `symbol_error:${symbolError.slice(0, 200)}` };
   const name = typeof sym?.name === "string" ? sym.name : "";
   if (!name) return { ok: false, problem: "no_symbol" };
   if (typeof sym?.currency_profit !== "string" || !sym.currency_profit) return { ok: false, problem: "currency_not_reported" };
@@ -176,6 +176,24 @@ export function goldPriceProblem(sym, reference) {
 }
 
 /** Pure: a readable line for the Omega page and the health alert. */
+/**
+ * Pure: the EA's refusal in words. OmegaExecutor 1.20 refuses to pick between gold symbols with different contracts
+ * ("ambiguous_gold_symbols (GOLD:100,GoldOne:1): ..."): the names and contracts are shown as reported, so the owner knows
+ * what to type; reason codes are spelled out, symbol names are never altered.
+ */
+export function eaRefusalText(problem) {
+  const p = String(problem).replace(/^symbol_error:/, "");
+  const amb = p.match(/ambiguous_gold_symbols \(([^)]*)\)/);
+  if (amb) {
+    const list = amb[1].split(",").filter(Boolean).map((x) => { const [n, c] = x.split(":"); return `${n} (${c} oz)`; }).join(", ");
+    return `several symbols on this server are gold priced in USD with different contracts: ${list}. Name the account's gold symbol with the connection (Setup, Connection & EA)`;
+  }
+  const words = { no_usd_gold_symbol: "no gold priced in USD found", no_reference_price: "no reference gold price yet (the server sends none while its feed runs on this broker's bars)",
+    price_not_gold: "its price is not gold's", price_path_mismatch: "its past prices do not follow gold's", no_history: "its price history is still loading",
+    expiring_contract: "it is a contract with an expiry, not spot gold", no_reference_path: "no past reference prices yet" };
+  return `the EA refused it: ${p.replace(/\b(no_usd_gold_symbol|no_reference_price|price_not_gold|price_path_mismatch|no_history|expiring_contract|no_reference_path)\b/g, (w) => words[w])}`;
+}
+
 export function goldSymbolText(check, sym) {
   if (check?.ok) return `${sym?.name} (USD, ${sym?.contract_size} oz a lot)`;
   const name = typeof sym?.name === "string" && sym.name ? sym.name : "no symbol";
@@ -185,7 +203,7 @@ export function goldSymbolText(check, sym) {
     profit_currency_not_usd: `its profit currency is ${sym?.currency_profit}, not USD`,
     contract_size_not_reported: "the EA did not report the contract size (OmegaExecutor 1.14 or later needed)",
     contract_size_out_of_range: `its contract size ${sym?.contract_size} is outside ${GOLD_CONTRACT_SIZE_MIN}-${GOLD_CONTRACT_SIZE_MAX} oz`,
-  }[check?.problem] ?? String(check?.problem ?? "refused").replace(/^symbol_error:/, "the EA refused it: ").replace(/_/g, " ");
+  }[check?.problem] ?? eaRefusalText(String(check?.problem ?? "refused"));
   return `${name} refused: ${why}. No new entries.`;
 }
 
@@ -207,13 +225,18 @@ export function moneyText(m) {
  * against itself. Pure: `h4` is the cached 4h series ({ candles }), `fallbackSince` the fallback's start or null.
  */
 export const REFERENCE_H4_CLOSES = 12;
-export function referenceFrom({ price, marketMs = null, h4 = null, fallbackSince = null, now = Date.now() } = {}) {
+// `excluded`: [from_ms, to_ms] intervals the feed ran on the broker's bars (the last recorded MT5 fallback, until the
+// series is healed from TradingView): a 4h bar overlapping one is the broker's own and is left out.
+export function referenceFrom({ price, marketMs = null, h4 = null, fallbackSince = null, excluded = [], now = Date.now() } = {}) {
   const p = Number(price), at = Number(marketMs);
   if (!(p > 0)) return null;
   if (fallbackSince != null && (!(at > 0) || at > fallbackSince)) return null;
+  const spans = (Array.isArray(excluded) ? excluded : []).filter((x) => Array.isArray(x) && Number(x[0]) > 0).map(([a, b]) => [Number(a), Number(b) > 0 ? Number(b) : now]);
+  if (spans.some(([a, b]) => at > 0 && at > a && at <= b + 300_000)) return null;
   const closes = (Array.isArray(h4?.candles) ? h4.candles : [])
     .map((c) => [Date.parse(c?.close_time), Number(c?.close)])
-    .filter(([t, c]) => Number.isFinite(t) && t <= now && c > 0 && (fallbackSince == null || t <= fallbackSince))
+    .filter(([t, c]) => Number.isFinite(t) && t <= now && c > 0 && (fallbackSince == null || t <= fallbackSince)
+      && !spans.some(([a, b]) => t > a && t - 14_400_000 < b))
     .sort((a, b) => a[0] - b[0]).slice(-REFERENCE_H4_CLOSES);
   return { price: p, market_ms: at > 0 ? at : null, closes };
 }

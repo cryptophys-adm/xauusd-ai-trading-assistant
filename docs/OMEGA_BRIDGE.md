@@ -31,14 +31,21 @@ Owner decisions 2026-11-09: Omega (`xauusd-omega`, `https://nexus.cryptophys.wor
 ### 1. Copy `OmegaExecutor.mq5` and compile in MetaEditor
 **Since 1.20 (2026-11-19, orchestrator review of 1.19, owner: "harus diperbaiki semua sampai ultimate")** a symbol is
 chosen only when its own past prices follow the reference's: bridge 1.6.0 writes, after the price line, the reference's
-last 12 closed H4 closes (`<close_ms>;<close>`, oldest first), and the EA requires the symbol's M5 close at each of them
-within 2% and, relative to the newest, within 0.5% (`price_path_mismatch`; `no_history` until the terminal has loaded
-the symbol's history). A contract with an expiry is refused (`expiring_contract`). In the scan, symbols that pass with
+last 12 closed H4 closes (`<close_ms>;<close>`, oldest first). For each, the EA takes the range of the symbol's M5
+closes within 75 minutes (a server clock an hour off across a DST change still matches); a close with no bars there
+(the broker closed, history still loading) is skipped. With at least 6 matched closes over 12 hours, the symbol's level
+(the median of range-middle / reference) must be within 2% of the reference and each reference close at that level
+inside its range, widened by 0.5% (`price_path_mismatch`; too few points: `no_history`). The verified symbol is kept in
+`omega/verified_symbol.txt` (`<login hash>;<symbol>;<contract>;<utc>`): after a restart without a reference (the MT5
+fallback, the daily break, the weekend) the EA restores it for the same login and contract, keeps it under the keep
+rule and checks it again at the first fresh reference; a failure there deletes the file. A contract with an expiry is refused (`expiring_contract`). In the scan, symbols that pass with
 different contract sizes are not told apart by spread: none is chosen (`ambiguous_gold_symbols (...)`) until the owner
 names one with the connection. A chosen symbol is checked against the reference price whenever a fresh one exists and
 is dropped when it fails; it keeps its place only while there is none. The price line's time is the price's own (the
 close of its 5-minute bar), so a stopped feed ages out after 20 minutes. The server sends no reference at all while
-its feed runs on the broker's own bars (the MT5 fallback): a broker is never checked against itself; then the EA
+its feed runs on the broker's own bars (the MT5 fallback), and leaves out the 4h bars inside the last recorded fallback
+(D1 `health_alerts` market_data_fallback, until they are healed from TradingView): a broker is never checked against
+itself; then the EA
 keeps a chosen symbol and chooses none. Update bridge 1.6.0 and EA 1.20 together (an EA 1.19 reads the first line only
 and keeps working with bridge 1.6.0).
 

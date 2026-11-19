@@ -209,33 +209,39 @@ test("PA13 the route is owner only and same origin; the gateway checks the owner
   assert.match(index, /async setAccountProfile[\s\S]{0,200}ownerCheck\(this\.env, input\?\.actor_sub \?\? null\) !== "owner"/);
 });
 
-test("PA14 a daily-loss block records its evidence; one the corrected day reference does not support is lifted, audited", async () => {
-  // Set: the evidence the block stands on (day, reference, equity, limit).
-  const set = decideProfile(row({ profile: "aggressive" }), ctx({ daily_loss: true, equity: 760, daily_ref: 1000, daily_pct: 3 }));
-  assert.equal(set.change.reason, "daily_loss_limit");
-  assert.deepEqual(JSON.parse(set.state.upgrade_block_evidence), { day: "2026-11-18", reference: 1000, equity: 760, limit_pct: 3 });
-  assert.equal(decideProfile(row(), ctx({ killed: true })).state.upgrade_block_evidence, null, "the kill switch has no daily evidence");
-  // The incident: a $300 deposit counted twice put the reference at 669 instead of 369; equity 368 read as a 45% loss.
-  const blocked = row({ profile: "safe", upgrade_block_until_ms: nextUtcDay(NOW), upgrade_block_reason: "daily_loss_limit",
-    upgrade_block_evidence: JSON.stringify({ day: "2026-11-18", reference: 669.13, equity: 368.18, limit_pct: 3 }) });
-  assert.equal(blockUnsupported(blocked, { dailyRef: 369.13, now: NOW }), true, "under the corrected reference 368.18 is a 0.3% dip");
-  assert.equal(blockUnsupported(blocked, { dailyRef: 669.13, now: NOW }), false, "a reference that still supports it");
-  assert.equal(blockUnsupported({ ...blocked, upgrade_block_evidence: null }, { dailyRef: 369.13, now: NOW }), false, "no evidence (set before the rule): it runs to its end");
-  assert.equal(blockUnsupported(blocked, { dailyRef: 369.13, now: NOW + DAY }), false, "another day");
-  // runProfileAgent lifts it and logs why.
+test("PA14 a daily-loss block records its raw inputs; only the current code finding no loss in them lifts it, never the market, the clock or a transfer", async () => {
+  const { dailyLossExecutor } = await import("../src/account-spec.mjs");
+  const D = "2026-11-18";
+  const ev = (over = {}) => JSON.stringify({ v: 1, day: D, at_ms: NOW, limit_pct: 10, ea_day_start: 1000, balance: 900, equity: 900, row: { created_ms: NOW - 30 * DAY }, ...over });
+  const blocked = (e) => row({ profile: "safe", upgrade_block_until_ms: nextUtcDay(NOW), upgrade_block_reason: "daily_loss_limit", upgrade_block_evidence: e });
+  // A real 10% loss: the code finds it in the inputs, so the block stands, whatever happens afterwards: the broker's day
+  // rolls at 22:00 UTC (the EA's day start becomes 900), a withdrawal lowers it; neither is read.
+  assert.equal(blockUnsupported(blocked(ev()), { now: NOW + 7 * 3_600_000, dayRef: dailyLossExecutor }), false, "the broker's day rolled before the UTC day: stands");
+  assert.equal(blockUnsupported(blocked(ev()), { now: NOW + 3_600_000, dayRef: dailyLossExecutor }), false, "a withdrawal after the loss: stands");
+  // The incident (19 Nov): the EA's day start already held the $300 deposit; the code of the day added it again.
+  const incident = ev({ limit_pct: 3, ea_day_start: 369.13, balance: 369.13, equity: 368.18, row: { created_ms: NOW - 30 * DAY, day_ops: JSON.stringify({ day: D, ops: [{ at_ms: NOW - 3_600_000, amount: 300 }] }) } });
+  const buggy = (exec, r, at) => ({ account: { ...exec.account, day_start_balance: exec.account.day_start_balance + 300 } });
+  assert.equal(blockUnsupported(blocked(incident), { now: NOW, dayRef: buggy }), false, "the code that set it still finds the loss");
+  assert.equal(blockUnsupported(blocked(incident), { now: NOW, dayRef: dailyLossExecutor }), true, "the corrected code finds a 0.26% dip: lifted");
+  assert.equal(blockUnsupported(blocked(null), { now: NOW, dayRef: dailyLossExecutor }), false, "no evidence (set before the rule): it runs to its end");
+  assert.equal(blockUnsupported(blocked(incident), { now: NOW + DAY, dayRef: dailyLossExecutor }), false, "another day");
+  // runProfileAgent records the inputs with a new block and lifts an unsupported one, audited.
   resetAccountSpecSchemaForTests(); resetProfileAgentSchemaForTests();
   const db = d1();
   await syncAccount(db, { connected: true, server: "Any-Live", account: { currency: "USD", balance: 369.13, equity: 368.5, trade_mode: "real", leverage: 500, margin_mode: "hedging", login_hash: "a".repeat(64) },
     symbol: { name: "Au", currency_profit: "USD", currency_base: "USD", contract_size: 100, digits: 2, point: 0.01, tick_size: 0.01, tick_value: 1, volume_min: 0.01, volume_max: 100, volume_step: 0.01, trade_mode: "full", bid: 3700, ask: 3700.3 },
-    executor: { name: "OmegaExecutor", version: "1.19" } }, { now: NOW }).catch(() => null);
+    executor: { name: "OmegaExecutor", version: "1.20" } }, { now: NOW }).catch(() => null);
   const ref = db.raw.prepare("SELECT account_ref FROM omega_accounts LIMIT 1").get()?.account_ref;
-  if (ref) {
-    db.raw.prepare("UPDATE omega_accounts SET profile = 'safe', upgrade_block_until_ms = ?, upgrade_block_reason = 'daily_loss_limit', upgrade_block_evidence = ? WHERE account_ref = ?").run(nextUtcDay(NOW), blocked.upgrade_block_evidence, ref);
-    const logs = [];
-    const r = await runProfileAgent(db, db.raw.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").get(ref), { executor: { account: { equity: 368.5, balance: 369.13 }, symbol: { atr_points: 200 } }, dailyLoss: false, dailyRef: 369.13, dailyPct: 3, now: NOW, log: async (a, d) => logs.push([a, d]) });
-    assert.equal(r.status, "unchanged");
-    const after = db.raw.prepare("SELECT upgrade_block_until_ms, upgrade_block_reason, upgrade_block_evidence FROM omega_accounts WHERE account_ref = ?").get(ref);
-    assert.deepEqual([after.upgrade_block_until_ms, after.upgrade_block_reason, after.upgrade_block_evidence], [null, null, null]);
-    assert.equal(logs.find(([a]) => a === "upgrade_block_lifted")?.[1]?.reference_now, 369.13);
-  } else assert.fail("syncAccount created no row");
+  assert.ok(ref, "syncAccount created the row");
+  const get = () => db.raw.prepare("SELECT * FROM omega_accounts WHERE account_ref = ?").get(ref);
+  db.raw.prepare("UPDATE omega_accounts SET profile = 'aggressive' WHERE account_ref = ?").run(ref);
+  await runProfileAgent(db, get(), { executor: { account: { equity: 900, balance: 900, day_start_balance: 1000 }, symbol: { atr_points: 200 } }, dailyLoss: true, dailyPct: 10, now: NOW });
+  const set = JSON.parse(get().upgrade_block_evidence);
+  assert.deepEqual([set.v, set.ea_day_start, set.equity, set.limit_pct], [1, 1000, 900, 10]);
+  db.raw.prepare("UPDATE omega_accounts SET upgrade_block_evidence = ? WHERE account_ref = ?").run(incident, ref);
+  const logs = [];
+  await runProfileAgent(db, get(), { executor: { account: { equity: 368.5, balance: 369.13 }, symbol: { atr_points: 200 } }, dailyLoss: false, dailyPct: 3, now: NOW, log: async (a, d) => logs.push([a, d]) });
+  const after = get();
+  assert.deepEqual([after.upgrade_block_until_ms, after.upgrade_block_reason, after.upgrade_block_evidence], [null, null, null]);
+  assert.ok(logs.some(([a]) => a === "upgrade_block_lifted"));
 });

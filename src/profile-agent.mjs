@@ -30,7 +30,7 @@
 // Limitation: deals in D1 ea_deals carry no account reference. The loss streak and the upgrade evidence read the
 // deals closed since the switch; that is correct for one connected account, which is what Omega runs today.
 
-import { PROFILES, ensureAccountSchema, withDayOp, accountIdentity } from "./account-spec.mjs";
+import { PROFILES, ensureAccountSchema, withDayOp, accountIdentity, dailyLossExecutor } from "./account-spec.mjs";
 import { DEAL_NET_SQL, DEAL_MONEY_COLUMNS_SQL } from "./gold-symbol.mjs";
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { HEALTH_AGENT_ID } from "./health-alerts.mjs";
@@ -98,13 +98,7 @@ export function decideProfile(row, ctx) {
   if (ctx.killed || ctx.daily_loss) {
     const reason = ctx.killed ? "kill_switch" : "daily_loss_limit";
     const until = nextUtcDay(now);
-    if (!(num(row?.upgrade_block_until_ms) >= until)) {
-      state.upgrade_block_until_ms = until; state.upgrade_block_reason = reason;
-      // The evidence a daily-loss block stands on, so a later tick can check it against the day reference the code
-      // computes then (orchestrator relay, owner 2026-11-19: a block today's bugs set must not persist on its own).
-      state.upgrade_block_evidence = reason === "daily_loss_limit" && finite(num(ctx.daily_ref)) && finite(equity) && finite(num(ctx.daily_pct))
-        ? JSON.stringify({ day: new Date(now).toISOString().slice(0, 10), reference: num(ctx.daily_ref), equity, limit_pct: num(ctx.daily_pct) }) : null;
-    }
+    if (!(num(row?.upgrade_block_until_ms) >= until)) { state.upgrade_block_until_ms = until; state.upgrade_block_reason = reason; }
     if (profile !== "safe") return down("safe", reason, { equity, balance }, { forced: true });
     return { change: null, propose: null, state };
   }
@@ -274,15 +268,32 @@ export async function dealsSince(db, sinceMs) {
 }
 
 /**
- * Pure: whether a daily-loss block's recorded evidence fails against today's reference as the code computes it now:
- * the equity at the block was not at or below the reference less the limit. False (the block stands) without evidence,
- * without a reference, or on another day.
+ * Pure: the raw inputs a daily-loss block stands on, recorded when it is set (orchestrator review of #478): the EA's own
+ * day start, balance and equity, the limit, and the account fields the day reference reads (onboarding, deposits and
+ * withdrawals of the day, the owner's override). Never the reference itself: that is recomputed from these.
  */
-export function blockUnsupported(row, { dailyRef, now }) {
+export function blockEvidence(row, executor, limitPct, now) {
+  const a = executor?.account ?? {};
+  return { v: 1, day: new Date(now).toISOString().slice(0, 10), at_ms: now, limit_pct: num(limitPct),
+    ea_day_start: num(a.broker_day_start_balance ?? a.day_start_balance), balance: num(a.balance), equity: num(a.equity),
+    row: { created_ms: num(row?.created_ms), onboard_balance: num(row?.onboard_balance), balance_peak: num(row?.balance_peak), day_ops: row?.day_ops ?? null, day_ref_override: row?.day_ref_override ?? null } };
+}
+
+/**
+ * Pure: whether the code as it is now finds no daily loss in a block's recorded inputs (`dayRef` is the day-reference
+ * function, dailyLossExecutor). Only a change of that code can lift a block: today's prices, the broker's day rolling
+ * before the UTC day, a withdrawal or the clock never do, because none of them is read. False (the block stands)
+ * without evidence, with evidence of another version, or on another day.
+ */
+export function blockUnsupported(row, { now, dayRef }) {
   const ev = parse(row?.upgrade_block_evidence);
-  const ref = num(dailyRef);
-  if (!ev || ev.day !== new Date(now).toISOString().slice(0, 10) || !finite(ref) || !(ref > 0) || !finite(num(ev.equity)) || !finite(num(ev.limit_pct))) return false;
-  return num(ev.equity) > ref * (1 - num(ev.limit_pct) / 100) + 0.005;
+  if (!ev || ev.v !== 1 || ev.day !== new Date(now).toISOString().slice(0, 10) || typeof dayRef !== "function") return false;
+  const eq = num(ev.equity), pct = num(ev.limit_pct);
+  if (!finite(eq) || !(eq > 0) || !finite(pct) || !(pct > 0) || !finite(num(ev.ea_day_start))) return false;
+  const exec = dayRef({ account: { day_start_balance: num(ev.ea_day_start), balance: num(ev.balance), equity: eq } }, ev.row ?? {}, num(ev.at_ms) ?? now);
+  const start = num(exec?.account?.day_start_balance);
+  if (!finite(start) || !(start > 0)) return false;
+  return !(eq <= start * (1 - pct / 100));
 }
 
 /**
@@ -291,7 +302,7 @@ export function blockUnsupported(row, { dailyRef, now }) {
  * no read), the 5-minute ledger cron with it. D1 writes only on a change. Never throws; a failure raises nothing.
  * Returns { status, change?, propose? }.
  */
-export async function runProfileAgent(db, rowIn, { executor, killed = false, dailyLoss = false, dailyRef = null, dailyPct = null, withEvidence = false, now = Date.now(), log = null, notify = null, review = null, downgradeCouncil = false, onboardingDay = false } = {}) {
+export async function runProfileAgent(db, rowIn, { executor, killed = false, dailyLoss = false, dailyPct = null, withEvidence = false, now = Date.now(), log = null, notify = null, review = null, downgradeCouncil = false, onboardingDay = false } = {}) {
   let row = rowIn;
   try {
     if (!row?.account_ref) return { status: "no_account" };
@@ -303,14 +314,18 @@ export async function runProfileAgent(db, rowIn, { executor, killed = false, dai
       equity: executor?.account?.equity, balance: executor?.account?.balance,
       positions: Array.isArray(executor?.positions) ? executor.positions.length : 0,
       orders: Array.isArray(executor?.orders) ? executor.orders.length : 0,
-      atr_points: executor?.symbol?.atr_points, killed, daily_loss: dailyLoss, daily_ref: dailyRef, daily_pct: dailyPct, deals, now
+      atr_points: executor?.symbol?.atr_points, killed, daily_loss: dailyLoss, deals, now
     });
-    // A daily-loss block the corrected day reference no longer supports is lifted, audited (orchestrator relay, owner
-    // 2026-11-19: the $300 deposit counted twice set one that stood all day). Its recorded equity is checked against
-    // today's reference as the code computes it now; a block without evidence (set before this rule) runs to its end.
-    if (!killed && !dailyLoss && row.upgrade_block_reason === "daily_loss_limit" && num(row.upgrade_block_until_ms) > now && blockUnsupported(row, { dailyRef, now })) {
+    // A new daily-loss block records the raw inputs it stands on (the row as the caller read it for the daily loss).
+    if (decision.state.upgrade_block_reason === "daily_loss_limit" && decision.state.upgrade_block_until_ms) decision.state.upgrade_block_evidence = JSON.stringify(blockEvidence(rowIn, executor, dailyPct, now));
+    else if (decision.state.upgrade_block_reason === "kill_switch") decision.state.upgrade_block_evidence = null;
+    // A daily-loss block the code no longer finds in its own recorded inputs is lifted, audited (orchestrator relay, owner
+    // 2026-11-19: the $300 deposit counted twice set one that stood all day). The current day-reference code is run on
+    // the inputs recorded at the block, never on today's state; a block without evidence (set before this rule) runs to
+    // its end.
+    if (!killed && !dailyLoss && row.upgrade_block_reason === "daily_loss_limit" && num(row.upgrade_block_until_ms) > now && blockUnsupported(row, { now, dayRef: dailyLossExecutor })) {
       Object.assign(decision.state, { upgrade_block_until_ms: null, upgrade_block_reason: null, upgrade_block_evidence: null });
-      try { if (log) await log("upgrade_block_lifted", { account_ref: row.account_ref, reason: "the corrected daily reference does not support the daily loss block", evidence: parse(row.upgrade_block_evidence), reference_now: dailyRef }); } catch { /* audit best effort */ }
+      try { if (log) await log("upgrade_block_lifted", { account_ref: row.account_ref, reason: "the current daily loss code finds no loss in the inputs the block was set on", evidence: parse(row.upgrade_block_evidence) }); } catch { /* audit best effort */ }
     }
     // A block set on the onboarding day before the daily loss counted from onboarding (2026-11-18: the real account's
     // manual losses before Omega tripped it) is lifted once; a block with its reason recorded stands to the next day.

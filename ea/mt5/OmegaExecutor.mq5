@@ -142,7 +142,13 @@ const double GOLD_PRICE_TOLERANCE   = 0.02;
 const int    REFERENCE_MAX_AGE_SEC  = 1200;  // 1.20: a price whose own time is more than 20 minutes old is no reference
 const int    SCAN_EVERY_SEC         = 30;    // an unresolved server is scanned at most every 30 seconds
 const double PATH_TOLERANCE         = 0.005; // 1.20: each past close, relative to the newest, within 0.5% of the reference's
-const int    PATH_MIN_POINTS        = 6;     // 1.20: at least six past closes to compare a price path
+const int    PATH_MIN_POINTS        = 6;     // 1.20: at least six matched past closes to accept a price path
+const int    PATH_WINDOW_SEC        = 4500;  // 1.20: the symbol's M5 closes within 75 minutes of each reference close
+                                             // (covers a server clock an hour off across a DST change)
+const int    PATH_MIN_SPAN_SEC      = 43200; // 1.20: the matched points span at least 12 hours (several sessions)
+// 1.20: the symbol verified by the full check, kept across restarts (an EA restart without a reference, in the MT5
+// fallback, the daily break or the weekend, keeps trading the symbol it had): "<login hash>;<symbol>;<contract>;<utc>".
+const string VERIFIED_PATH          = "omega/verified_symbol.txt";
 string g_symbolError = "";
 string g_ownerSymbol = "";        // 1.17: the owner-set gold symbol (TRADE_SYMBOL_PATH), or ""
 datetime g_ownerSymbolReadAt = 0;
@@ -152,6 +158,7 @@ datetime g_lastScanAt = 0;
 string   g_scanSelected = ";";    // 1.19: symbols the scan added to Market Watch (";A;B;"), removed again when not gold
 long     g_refT[];                // 1.20: the reference's past H4 closes: their times (UTC ms), oldest first
 double   g_refC[];                // 1.20: and their prices
+bool     g_restoreTried = false;  // 1.20: the verified symbol is restored once per EA run
 
 // Reads REFERENCE_PATH at most every 10 seconds. 1.20: a price whose time (the second field) is more than
 // REFERENCE_MAX_AGE_SEC old is dropped, with its past closes; the closes follow on the next lines.
@@ -205,31 +212,75 @@ void LoadReferencePrice()
    if(!fresh) { ArrayResize(g_refT, 0); ArrayResize(g_refC, 0); }
   }
 
-// 1.20: "" when the symbol's own past prices follow the reference's (its M5 close at each of the reference's past H4
-// closes within 2%, and each relative to the newest within PATH_TOLERANCE), else the reason. One price inside 2% fits
-// anything that happens to trade near gold; two instruments do not share a price path (orchestrator review of 1.19).
+// 1.20: "" when the symbol's own past prices follow the reference's, else the reason. For each past H4 close of the
+// reference, the symbol's M5 closes within PATH_WINDOW_SEC of it give a range; a point without any (the broker closed,
+// or its history is still loading) is skipped. With at least PATH_MIN_POINTS points over PATH_MIN_SPAN_SEC: the
+// symbol's level is the median of range-middle / reference (within 2% of 1), and each reference close at that level
+// must fall in its range (widened by PATH_TOLERANCE). One price near gold fits other instruments; a path does not
+// (orchestrator review of 1.19 and of 1.20).
 string PricePathProblem(const string sym)
   {
    int n = ArraySize(g_refC);
    if(n < PATH_MIN_POINTS) return "no_reference_path";
-   long offsetSec = (long)(TimeTradeServer() - TimeGMT());   // the server's clock against UTC
-   double syms[];
-   ArrayResize(syms, n);
+   long offsetSec = (long)(TimeTradeServer() - TimeGMT());   // the server's clock against UTC, today's
+   double lo[], hi[], rc[];
+   long rt[];
+   ArrayResize(lo, n); ArrayResize(hi, n); ArrayResize(rc, n); ArrayResize(rt, n);
+   int m = 0;
    for(int i = 0; i < n; i++)
      {
-      datetime t = (datetime)(g_refT[i] / 1000 + offsetSec - 1);   // just before the reference bar's close
-      int shift = iBarShift(sym, PERIOD_M5, t, false);
-      if(shift < 0) return "no_history";
-      double c = iClose(sym, PERIOD_M5, shift);
-      datetime bt = iTime(sym, PERIOD_M5, shift);
-      if(c <= 0.0 || bt <= 0 || MathAbs((double)(t - bt)) > 900.0) return "no_history";   // a gap is no match
-      if(MathAbs(c - g_refC[i]) / g_refC[i] > GOLD_PRICE_TOLERANCE) return "price_path_mismatch";
-      syms[i] = c;
+      datetime t = (datetime)(g_refT[i] / 1000 + offsetSec);
+      double closes[];
+      int got = CopyClose(sym, PERIOD_M5, t - PATH_WINDOW_SEC, t + PATH_WINDOW_SEC, closes);
+      if(got <= 0) continue;
+      double l = closes[0], h = closes[0];
+      for(int j = 1; j < got; j++) { l = MathMin(l, closes[j]); h = MathMax(h, closes[j]); }
+      if(l <= 0.0) continue;
+      lo[m] = l; hi[m] = h; rc[m] = g_refC[i]; rt[m] = g_refT[i];
+      m++;
      }
-   double sN = syms[n - 1], rN = g_refC[n - 1];
-   for(int i = 0; i < n - 1; i++)
-      if(MathAbs(syms[i] / sN - g_refC[i] / rN) > PATH_TOLERANCE) return "price_path_mismatch";
+   if(m < PATH_MIN_POINTS || (rt[m - 1] - rt[0]) / 1000 < PATH_MIN_SPAN_SEC) return "no_history";
+   double k[];
+   ArrayResize(k, m);
+   for(int i = 0; i < m; i++) k[i] = ((lo[i] + hi[i]) / 2.0) / rc[i];
+   ArraySort(k);
+   double scale = (m % 2 == 1) ? k[m / 2] : (k[m / 2 - 1] + k[m / 2]) / 2.0;
+   if(MathAbs(scale - 1.0) > GOLD_PRICE_TOLERANCE) return "price_path_mismatch";
+   for(int i = 0; i < m; i++)
+     {
+      double x = rc[i] * scale;
+      if(x < lo[i] * (1.0 - PATH_TOLERANCE) || x > hi[i] * (1.0 + PATH_TOLERANCE)) return "price_path_mismatch";
+     }
    return "";
+  }
+
+// 1.20: remember the symbol the full check verified, for this login only (its hash, never the login).
+void SaveVerifiedSymbol(const string sym)
+  {
+   int h = FileOpen(VERIFIED_PATH, FILE_WRITE | FILE_TXT | FILE_ANSI);
+   if(h == INVALID_HANDLE) return;
+   FileWriteString(h, AccountLoginHash() + ";" + sym + ";" + DoubleToString(SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE), 4) + ";" + IntegerToString((long)TimeGMT()) + "\n");
+   FileClose(h);
+  }
+
+// 1.20: the verified symbol of this login when it still exists with the same contract and passes the checks that need
+// no reference; "" otherwise. It is then kept under the keep rule and checked again at the first fresh reference.
+string RestoreVerifiedSymbol()
+  {
+   if(!FileIsExist(VERIFIED_PATH)) return "";
+   int h = FileOpen(VERIFIED_PATH, FILE_READ | FILE_TXT | FILE_ANSI);
+   if(h == INVALID_HANDLE) return "";
+   string line = FileIsEnding(h) ? "" : FileReadString(h);
+   FileClose(h);
+   string parts[];
+   if(StringSplit(line, ';', parts) < 3) return "";
+   string login = AccountLoginHash();
+   if(login == "" || parts[0] != login) return "";
+   string sym = parts[1];
+   if(sym == "" || !SymbolInfoInteger(sym, SYMBOL_EXIST)) return "";
+   if(MathAbs(SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE) - StringToDouble(parts[2])) > 1e-6) return "";
+   if(GoldSymbolProblem(sym, false, false) != "") return "";
+   return sym;
   }
 
 // 1.17: reads TRADE_SYMBOL_PATH at most every 10 seconds. A name with characters MT5 never uses is ignored.
@@ -302,11 +353,23 @@ double RelativeSpread(const string sym)
 string ResolveGoldSymbol()
   {
    LoadOwnerSymbol();
+   // 1.20: after a restart, the symbol verified before (this login, same contract), unless the owner names another.
+   if(g_tradeSymbol == "" && !g_restoreTried)
+     {
+      g_restoreTried = true;
+      string r = RestoreVerifiedSymbol();
+      if(r != "" && (g_ownerSymbol == "" || g_ownerSymbol == r))
+        {
+         g_tradeSymbol = r;
+         PrintFormat("OmegaExecutor: %s restored (verified before this restart; checked again at the next fresh reference)", r);
+        }
+     }
    // 1.20: a chosen symbol is checked against the reference price whenever a fresh one exists (orchestrator review of
    // 1.19: it was never checked again); without one it keeps its place.
    LoadReferencePrice();
    if(g_tradeSymbol != "" && GoldSymbolProblem(g_tradeSymbol, g_refPrice > 0.0, false) == "")
       return g_tradeSymbol;
+   if(g_tradeSymbol != "" && g_refPrice > 0.0) FileDelete(VERIFIED_PATH);   // it failed against a fresh reference
 
    string lastProblem = "no_usd_gold_symbol";
    // The owner's symbol first (a hint), then the chart symbol, under the same checks.
@@ -321,6 +384,7 @@ string ResolveGoldSymbol()
         {
          g_tradeSymbol = firsts[f];
          g_symbolError = "";
+         SaveVerifiedSymbol(g_tradeSymbol);
          return g_tradeSymbol;
         }
       lastProblem = firsts[f] + ":" + p;
@@ -373,7 +437,7 @@ string ResolveGoldSymbol()
         }
       if(best != "" && sizesDiffer)
         {
-         lastProblem = "ambiguous_gold_symbols (" + passing + "): set the account's gold symbol with the connection";
+         lastProblem = "ambiguous_gold_symbols (" + passing + "): name one with the connection";
          best = "";
         }
       if(best != "")
@@ -381,6 +445,7 @@ string ResolveGoldSymbol()
          if(best != g_tradeSymbol) PrintFormat("OmegaExecutor: gold priced in USD on this server is %s (found by its contract, price and price path)", best);
          g_tradeSymbol = best;
          g_symbolError = "";
+         SaveVerifiedSymbol(g_tradeSymbol);
          return g_tradeSymbol;
         }
      }

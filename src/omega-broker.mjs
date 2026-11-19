@@ -471,7 +471,7 @@ export function executorFrom(state, { ownerUnitsPerUsd = null, stored = false } 
       margin_per_lot: n(s.margin_per_lot)
     },
     // The EA's own refusal when no allowed USD gold symbol trades on the server (1.14+), else null.
-    symbol_error: typeof state.symbol_error === "string" && state.symbol_error ? state.symbol_error.slice(0, 96) : null,
+    symbol_error: typeof state.symbol_error === "string" && state.symbol_error ? state.symbol_error.slice(0, 200) : null,
     // The bridge's per-server chart-symbol resolution (omega-bridge 1.3.0+), else null.
     bridge_symbol: bridgeSymbolFrom(state.bridge_symbol),
     positions: (Array.isArray(state.positions) ? state.positions : []).slice(0, 50).map((p) => ({
@@ -625,6 +625,25 @@ export function executorStatus(info) {
  * One bridge sync: store its key and state, apply its results, plan, and return what it must do.
  * @returns {{ intents: object[], connection: null | object, settings_version: number }}
  */
+// The reference's inputs, read at most once a minute per isolate (the bridge syncs every 5 seconds; the 4h series and
+// the fallback state change far slower): the cached 4h series, the running fallback's start, and the last recorded
+// fallback interval (D1 health_alerts market_data_fallback), whose 4h bars were built on the broker's own prices.
+let REFERENCE_SOURCES = null;
+export function resetReferenceSourcesForTests() { REFERENCE_SOURCES = null; }
+async function referenceSources(env, now) {
+  if (REFERENCE_SOURCES && now - REFERENCE_SOURCES.at < 60_000 && REFERENCE_SOURCES.env === env) return REFERENCE_SOURCES;
+  let h4 = null, excluded = [];
+  try { h4 = JSON.parse((await env.SIGNAL_CACHE?.get?.("market-data:v2:series:OANDA:XAUUSD|4h")) || "null"); } catch { h4 = null; }
+  try {
+    const row = await env.DB.prepare("SELECT opened_at, resolved_at FROM health_alerts WHERE alert_key = 'market_data_fallback'").first();
+    const a = Date.parse(row?.opened_at ?? ""), b = row?.resolved_at ? Date.parse(row.resolved_at) : null;
+    // The alert opens on a health check after the fallback starts: 15 minutes of margin before it.
+    if (Number.isFinite(a)) excluded = [[a - 900_000, Number.isFinite(b) ? b : null]];
+  } catch { excluded = []; }
+  REFERENCE_SOURCES = { at: now, env, h4, fallbackSince: await fallbackSinceMs(env), excluded };
+  return REFERENCE_SOURCES;
+}
+
 export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVersion, corpus = null, corpusMacro = null, calendar = null, bridgeSymbol = null } = {}, { now = Date.now(), signal: signalIn } = {}) {
   await ensureSchema(env.DB);
   const db = env.DB;
@@ -812,7 +831,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       const dailyPct = effectiveLimits(account.row.profile, settings ?? {}).max_daily_loss_pct ?? settings?.max_daily_loss_pct;
       // The profile council (src/profile-council.mjs) does not run here: an upgrade waits for the cron, and a soft
       // downgrade under OMEGA_PROFILE_COUNCIL_DOWNGRADE "on" waits for its review with new entries held.
-      const step = await runProfileAgent(db, account.row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), dailyRef: dayExec?.account?.day_start_balance ?? null, dailyPct, onboardingDay: dayExec !== executor || onboardingDayRef(account.row, now) != null, now, downgradeCouncil: downgradeCouncilOn(env),
+      const step = await runProfileAgent(db, account.row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), dailyPct, onboardingDay: dayExec !== executor || onboardingDayRef(account.row, now) != null, now, downgradeCouncil: downgradeCouncilOn(env),
         log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
       if (step.status === "changed") account = { ...account, profile: step.change.to };
       if (step.review_pending === true) account = { ...account, review_pending: true };
@@ -930,8 +949,8 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // on the broker's own bars (the MT5 fallback). `reference_price` stays for bridge 1.5.0.
   let reference = null;
   try {
-    const h4 = JSON.parse((await env.SIGNAL_CACHE?.get?.("market-data:v2:series:OANDA:XAUUSD|4h")) || "null");
-    reference = referenceFrom({ price: signal?.market_price, marketMs: signal?.market_ms, h4, fallbackSince: await fallbackSinceMs(env), now });
+    const src = await referenceSources(env, now);
+    reference = referenceFrom({ price: signal?.market_price, marketMs: signal?.market_ms, h4: src.h4, fallbackSince: src.fallbackSince, excluded: src.excluded, now });
   } catch { reference = null; }
   const referencePrice = reference?.price ?? null;
   return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, reference_price: referencePrice, reference, ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
@@ -977,7 +996,7 @@ export async function profileAgentTick(env, { now = Date.now(), call = undefined
   const killed = control?.mode === "killed" || String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
   const dailyPct = effectiveLimits(row?.profile, settings ?? {}).max_daily_loss_pct ?? settings?.max_daily_loss_pct;
   const dayExec = dailyLossExecutor(executor, row, now);
-  return runProfileAgent(db, row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), dailyRef: dayExec?.account?.day_start_balance ?? null, dailyPct, onboardingDay: onboardingDayRef(row, now) != null, withEvidence: true, now,
+  return runProfileAgent(db, row, { executor, killed, dailyLoss: dailyLossHit(dayExec, dailyPct), dailyPct, onboardingDay: onboardingDayRef(row, now) != null, withEvidence: true, now,
     downgradeCouncil: downgradeCouncilOn(env), review: (r, change, { deals }) => reviewProfileChange(env, r, change, { executor, deals, now, call }),
     log: (action, detail) => event(db, now, "agent:profile", action, detail), notify: (t) => sendOmegaTelegram(env, t) });
 }

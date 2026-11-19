@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
-import { GOLD_CONTRACT_SIZE_MIN, GOLD_CONTRACT_SIZE_MAX, goldSymbolCheck, goldSymbolText, goldPriceProblem, accountMoney, measuredUnitsPerUsd, moneyText, snapPowerOfTen, referenceFrom, REFERENCE_H4_CLOSES } from "../src/gold-symbol.mjs";
+import { GOLD_CONTRACT_SIZE_MIN, GOLD_CONTRACT_SIZE_MAX, goldSymbolCheck, goldSymbolText, goldPriceProblem, accountMoney, measuredUnitsPerUsd, moneyText, snapPowerOfTen, referenceFrom, REFERENCE_H4_CLOSES, eaRefusalText } from "../src/gold-symbol.mjs";
 import { GOLD_CONTRACT_SIZE_MIN as BRIDGE_MIN, GOLD_CONTRACT_SIZE_MAX as BRIDGE_MAX } from "../bridge/omega-bridge/src/symbols.mjs";
 import { executorFrom, bridgeSymbolFrom, toUsd, redactAccount, liveBridgeFields } from "../src/omega-broker.mjs";
 import { planIntents, OMEGA_DEFAULTS } from "../src/omega-engine.mjs";
@@ -282,13 +282,28 @@ test("G13. the reference the EA finds gold by: price, its own time and past 4h c
   const before = referenceFrom({ price: 3734.1, marketMs: NOW - 8 * 3_600_000, h4, fallbackSince: NOW - 6 * 3_600_000, now: NOW });
   assert.ok(before.closes.every(([t]) => t <= NOW - 6 * 3_600_000));
   assert.equal(referenceFrom({ price: 0, marketMs: NOW, h4, now: NOW }), null);
+  // After a fallback ends, its 4h bars (the broker's own until healed) are left out: the last recorded interval.
+  const healed = referenceFrom({ price: 3734.1, marketMs: NOW - 60_000, h4, excluded: [[NOW - 30 * 3_600_000, NOW - 20 * 3_600_000]], now: NOW });
+  assert.ok(healed.closes.every(([t]) => !(t > NOW - 30 * 3_600_000 && t - 14_400_000 < NOW - 20 * 3_600_000)));
+  assert.equal(referenceFrom({ price: 3734.1, marketMs: NOW - 60_000, h4, excluded: [[NOW - 3_600_000, null]], now: NOW }), null, "a price inside a fallback still recorded open");
+  // The Console says which symbols and contracts are ambiguous, names as reported.
+  assert.match(eaRefusalText("symbol_error:no_usd_gold_symbol (ambiguous_gold_symbols (GOLD:100,Gold_One:1): name one with the connection)"), /different contracts: GOLD \(100 oz\), Gold_One \(1 oz\)\. Name the account's gold symbol/);
 });
 
 test("G14. OmegaExecutor 1.20: a chosen symbol is checked again; choosing needs the price path; futures and ambiguous contracts refused", () => {
   assert.match(ea, /#property version\s+"1\.20"/);
   assert.match(ea, /if\(g_tradeSymbol != "" && GoldSymbolProblem\(g_tradeSymbol, g_refPrice > 0\.0, false\) == ""\)/, "re-checked against a fresh reference, kept without one");
   assert.match(ea, /if\(!checkPath\) return "";\s*return PricePathProblem\(sym\);/, "the price path decides a choice");
-  assert.match(ea, /if\(MathAbs\(syms\[i\] \/ sN - g_refC\[i\] \/ rN\) > PATH_TOLERANCE\) return "price_path_mismatch";/);
+  // Gaps are skipped, not failed (the broker closed, history loading): at least six matched points over 12 hours, each
+  // from a window of 75 minutes (a clock an hour off across DST still matches), at the symbol's own median level.
+  assert.match(ea, /int got = CopyClose\(sym, PERIOD_M5, t - PATH_WINDOW_SEC, t \+ PATH_WINDOW_SEC, closes\);\s*if\(got <= 0\) continue;/);
+  assert.match(ea, /if\(m < PATH_MIN_POINTS \|\| \(rt\[m - 1\] - rt\[0\]\) \/ 1000 < PATH_MIN_SPAN_SEC\) return "no_history";/);
+  assert.match(ea, /if\(x < lo\[i\] \* \(1\.0 - PATH_TOLERANCE\) \|\| x > hi\[i\] \* \(1\.0 \+ PATH_TOLERANCE\)\) return "price_path_mismatch";/);
+  // A restart without a reference keeps the symbol verified before (this login, same contract), checked again later.
+  assert.match(ea, /if\(g_tradeSymbol == "" && !g_restoreTried\)/);
+  assert.match(ea, /if\(login == "" \|\| parts\[0\] != login\) return "";/, "bound to the login hash");
+  assert.match(ea, /SaveVerifiedSymbol\(g_tradeSymbol\);\s*return g_tradeSymbol;/);
+  assert.match(ea, /if\(g_tradeSymbol != "" && g_refPrice > 0\.0\) FileDelete\(VERIFIED_PATH\);/, "forgotten when it fails against a fresh reference");
   assert.match(ea, /if\(SymbolInfoInteger\(sym, SYMBOL_EXPIRATION_TIME\) > 0\) return "expiring_contract";/);
   assert.match(ea, /if\(best != "" && sizesDiffer\)\s*\{\s*lastProblem = "ambiguous_gold_symbols \(/);
   assert.match(ea, /bool fresh = price > 0\.0 && priceMs > 0 && nowMs - priceMs <= \(long\)REFERENCE_MAX_AGE_SEC \* 1000;/, "aged on the price's own time");
