@@ -31,7 +31,7 @@ import {
 } from "./symbols.mjs";
 import { DEFAULT_STATE_DIR, loadOrCreateKeyPair } from "./keys.mjs";
 
-export const BRIDGE_VERSION = "1.6.0";
+export const BRIDGE_VERSION = "1.7.0";
 export const DEFAULT_OMEGA_URL = "https://nexus.cryptophys.work/omega";
 export const DEFAULT_TERMINAL_INI = "/opt/mt5-ingestion-gateway/config/terminal_gateway.ini";
 export const DEFAULT_TERMINAL_SERVICE = "mt5-terminal.service";
@@ -116,6 +116,8 @@ export function resolveConfig(options = {}) {
   const syncMs = Number.isFinite(syncMsRaw) && syncMsRaw > 0 ? syncMsRaw : DEFAULT_SYNC_MS;
   const streamMinMsRaw = Number(options.streamMinMs ?? env.OMEGA_STREAM_MIN_MS ?? DEFAULT_STREAM_MIN_MS);
   const streamMinMs = Number.isFinite(streamMinMsRaw) && streamMinMsRaw >= 50 ? streamMinMsRaw : DEFAULT_STREAM_MIN_MS;
+  // 1.7.0: honour the server's calm mode (OMEGA_CALM_MODE=off keeps every state.json write a sync, as 1.6.0).
+  const calmMode = options.calmMode !== undefined ? Boolean(options.calmMode) : parseBoolEnv(env.OMEGA_CALM_MODE, true);
 
   return {
     omegaUrl,
@@ -130,7 +132,24 @@ export function resolveConfig(options = {}) {
     symbol,
     syncMs,
     streamMinMs,
+    calmMode,
   };
+}
+
+/**
+ * 1.7.0 (owner 2026-11-19: "Keduanya, bertahap", step 2): the local reasons to stay fast whatever the server says:
+ * a state the bridge cannot read, a terminal not connected, an open position or a pending order.
+ */
+/** 1.7.0: whether a file event wakes a sync: results.txt always; state.json unless calm and nothing busy in it. */
+export function wakesOn(filename, { calm = false, readStateNow = () => null } = {}) {
+  if (!filename || filename === "results.txt") return true;
+  if (filename !== "state.json") return false;
+  return !calm || localBusy(readStateNow());
+}
+export function localBusy(state) {
+  if (!state || typeof state !== "object") return true;
+  if (state.connected !== true) return true;
+  return (Array.isArray(state.positions) && state.positions.length > 0) || (Array.isArray(state.orders) && state.orders.length > 0);
 }
 
 function readAppliedState(stateDir, fs) {
@@ -302,6 +321,10 @@ export function createDaemon(options = {}) {
   let sleepResolve = null;
   let fileWatcher = null;
   let lastTickCompletedMs = 0;
+  // 1.7.0: calm while the server answers stream_mode "calm" and nothing is busy here. A calm bridge syncs on its
+  // period (syncMs) and on results.txt, not on every state.json write; a state.json showing a position or an order,
+  // or a lost connection, wakes it at once.
+  let calm = false;
 
   function wakeNow() {
     if (wakeTimer) {
@@ -627,6 +650,7 @@ export function createDaemon(options = {}) {
   }
 
   async function tick() {
+    calm = false; // set again only by a successful sync below
     const state = readState(config.omegaFilesDir, { fs });
     if (state && !state.connected) {
       try {
@@ -868,9 +892,13 @@ export function createDaemon(options = {}) {
       }
     }
 
+    calm = config.calmMode && payload?.stream_mode === "calm" && !appliedConnection && !symbolTrialBusy
+      && pendingResultsById.size === 0 && intents.length === 0 && !localBusy(state);
+
     return {
       ok: true,
       status: 200,
+      calm,
       delayMs: currentBackoffMs,
       intentsCount: intents.length,
       appliedConnection,
@@ -928,9 +956,7 @@ export function createDaemon(options = {}) {
       try {
         fs.mkdirSync(config.omegaFilesDir, { recursive: true });
         fileWatcher = fs.watch(config.omegaFilesDir, (_eventType, filename) => {
-          if (!filename || filename === "state.json" || filename === "results.txt") {
-            requestWake();
-          }
+          if (wakesOn(filename, { calm, readStateNow: () => readState(config.omegaFilesDir, { fs }) })) requestWake();
         });
         if (fileWatcher && typeof fileWatcher.on === "function") {
           fileWatcher.on("error", () => {});
@@ -948,6 +974,7 @@ export function createDaemon(options = {}) {
       omega_url: config.omegaUrl,
       sync_ms: config.syncMs,
       stream_min_ms: config.streamMinMs,
+      calm_mode: config.calmMode,
     });
 
     try {
@@ -984,5 +1011,6 @@ export function createDaemon(options = {}) {
     wake: requestWake,
     getBackoffMs: () => currentBackoffMs,
     getConsecutiveFailures: () => consecutiveFailures,
+    isCalm: () => calm,
   };
 }

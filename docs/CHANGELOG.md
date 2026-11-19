@@ -5,6 +5,11 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-19
+- perf(omega): bridge calm mode, omega-bridge 1.7.0 (owner 2026-11-19: "Keduanya, bertahap", step 2; owner "lanjutkan terkait vps").
+  - **Why.** The EA writes state.json every 2 s, and the bridge synced on every write (about 1.7 syncs a second) even with nothing to manage.
+  - **What changes.** Each sync response carries `stream_mode`. While calm (terminal connected, no position, order, intent, recovery or review), a 1.7.0 bridge syncs every 5 s and on results instead (about 0.2 a second). Anything else, or a position or an order in the bridge's own state, is fast as before.
+  - **Trade-off.** An entry planned while calm reaches the terminal at most 5 s later; open positions are managed at the fast pace.
+  - **Rollout.** The server goes first, then the owner updates the bridge on the VPS (`docs/OMEGA_BRIDGE.md`, "Calm mode"). The EA is unchanged. An older bridge ignores the field.
 - perf(market-data): a published bar is not rebuilt every minute (owner 2026-11-19, relayed "setuju semua": profile first, nothing the agents or parity read may change).
   - **Profile.** Inside each freshness window (H1 25 min, M15 9, H4 30, D1 60) every 1-minute cron rebuilt the bar's engines and HUD snapshots before it read the bar's published marker, about 24 wasted H1 builds an hour.
   - **What changes.** Each publisher reads the marker first, keyed by the producer's own candle key of the last candle. In node, a minute with every bar already sent fell from about 4.5 s to 0.1 ms; the first build of a bar is unchanged (about 4.3 s for H1).

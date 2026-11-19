@@ -686,6 +686,20 @@ export function lightSyncEligible({ last, lightKey, executor, results, corpus, c
   return true;
 }
 
+/**
+ * The bridge's stream mode (owner 2026-11-19: "Keduanya, bertahap", step 2; omega-bridge 1.7.0+). "calm": nothing to
+ * manage (the terminal connected, no position, no pending order, no open intent, no recovery or review), so the
+ * bridge may skip the syncs its state.json writes would start and sync on its own period (OMEGA_SYNC_MS, 5 s).
+ * "fast" otherwise. The bridge also goes fast by itself when its own state shows a position or an order, or a
+ * result waits. OMEGA_BRIDGE_CALM "off" always answers "fast". An older bridge ignores the field.
+ */
+export function bridgeStreamMode(env, { executor, intents = [], recovery = null, reviewStarted = false } = {}) {
+  if (String(env?.OMEGA_BRIDGE_CALM ?? "").toLowerCase() === "off") return "fast";
+  if (executor?.connected !== true || recovery || reviewStarted) return "fast";
+  if ((Array.isArray(executor.positions) && executor.positions.length) || (Array.isArray(executor.orders) && executor.orders.length)) return "fast";
+  return Array.isArray(intents) && intents.length ? "fast" : "calm";
+}
+
 export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVersion, corpus = null, corpusMacro = null, calendar = null, bridgeSymbol = null } = {}, { now = Date.now(), signal: signalIn } = {}) {
   await ensureSchema(env.DB);
   const db = env.DB;
@@ -722,7 +736,8 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   if (lightSyncEligible({ last, lightKey, executor, results, corpus, corpusMacro, calendar, now })) {
     const open = (await db.prepare("SELECT id, status, payload FROM omega_intents WHERE status IN ('pending', 'sent') ORDER BY created_ms, id").all()).results ?? [];
     if (open.some((r) => r.status === "pending")) await db.prepare("UPDATE omega_intents SET status = 'sent', updated_ms = ? WHERE status = 'pending'").bind(now).run();
-    return { ...last.response, intents: open.map((r) => parse(r.payload)).filter(Boolean), corpus_cursor_ms: null, corpus_macro_cursors: null, calendar_seen_ms: null, light: true };
+    const openIntents = open.map((r) => parse(r.payload)).filter(Boolean);
+    return { ...last.response, intents: openIntents, corpus_cursor_ms: null, corpus_macro_cursors: null, calendar_seen_ms: null, stream_mode: bridgeStreamMode(env, { executor, intents: openIntents }), light: true };
   }
   // The bridge found no chart symbol the server has (exhausted) or stopped on a login failure: an event once per
   // change, which the health alert reads while no fresh, verified state says otherwise.
@@ -1062,7 +1077,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     reference = referenceFrom({ price: signal?.market_price, marketMs: signal?.market_ms, h4: src.h4, fallbackSince: src.fallbackSince, excluded: src.excluded, now });
   } catch { reference = null; }
   const referencePrice = reference?.price ?? null;
-  const response = { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, reference_price: referencePrice, reference, ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
+  const response = { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, reference_price: referencePrice, reference, stream_mode: bridgeStreamMode(env, { executor, intents, recovery, reviewStarted }), ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
   // A full plan that ended with nothing to manage is what the light path may reuse (never a recovery or a review).
   if (!recovery && !reviewStarted) LIGHT_SYNC.set(db, { at: now, lightKey, response: { ...response, intents: [] } });
   else LIGHT_SYNC.delete(db);

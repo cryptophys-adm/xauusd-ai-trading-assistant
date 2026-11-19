@@ -482,7 +482,7 @@ test("daemon: applies new connection once, restarts terminal once, skips same ve
       cmd: "systemctl",
       args: ["restart", "mt5-terminal.service"],
     });
-    assert.equal(syncBodies[0].bridge_version, "1.6.0");
+    assert.equal(syncBodies[0].bridge_version, "1.7.0");
     assert.equal(syncBodies[0].kid, daemon.keys.kid);
     assert.equal(syncBodies[0].public_key, daemon.keys.publicKeyBase64);
     assert.equal(syncBodies[0].results.length, 1);
@@ -652,4 +652,52 @@ test("reference.txt (1.6.0): the price with its own time, then the past H4 close
     assert.equal(fs.readFileSync(path.join(dir, "reference.txt"), "ascii"), "3700;1795050200000\n", "a bare price: the time it was written");
     assert.equal(writeReferencePrice(dir, null), null, "no reference (the server's feed runs on the broker's bars): nothing written");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("calm mode (1.7.0): calm only when the server says so and nothing is busy here; state.json wakes a calm bridge only for a position, an order or a lost connection", async () => {
+  const { wakesOn, localBusy } = await import("../src/daemon.mjs");
+  const idle = { connected: true, server: "AnyBroker-Live", positions: [], orders: [], received_ms: 1 };
+  const withPos = { ...idle, positions: [{ ticket: 1 }] };
+  // The file-event rule.
+  assert.equal(wakesOn("results.txt", { calm: true }), true, "a result always wakes");
+  assert.equal(wakesOn("state.json", { calm: false, readStateNow: () => idle }), true, "fast: every state write");
+  assert.equal(wakesOn("state.json", { calm: true, readStateNow: () => idle }), false, "calm and idle: the period syncs");
+  assert.equal(wakesOn("state.json", { calm: true, readStateNow: () => withPos }), true, "a position wakes at once");
+  assert.equal(wakesOn("state.json", { calm: true, readStateNow: () => ({ ...idle, orders: [{ ticket: 2 }] }) }), true);
+  assert.equal(wakesOn("state.json", { calm: true, readStateNow: () => ({ ...idle, connected: false }) }), true);
+  assert.equal(wakesOn("state.json", { calm: true, readStateNow: () => null }), true, "an unreadable state wakes");
+  assert.equal(wakesOn("corpus.json", { calm: false }), false);
+  assert.equal(localBusy(idle), false);
+
+  // The daemon follows the server's answer.
+  const tmpDir = makeTempDir();
+  try {
+    const mt5FilesDir = path.join(tmpDir, "mt5-files", "omega");
+    fs.mkdirSync(mt5FilesDir, { recursive: true });
+    const writeState = (s) => fs.writeFileSync(path.join(mt5FilesDir, "state.json"), JSON.stringify(s));
+    let answer = { ok: true, intents: [], connection: null, stream_mode: "calm" };
+    const make = (extra = {}) => createDaemon({
+      omegaUrl: "https://nexus.cryptophys.work/omega", cfAccessClientId: "cid", cfAccessClientSecret: "secret",
+      stateDir: path.join(tmpDir, "state"), mt5FilesDir, terminalIni: path.join(tmpDir, "t.ini"), terminalService: "mt5.service",
+      syncMs: 5000, now: () => 1794391200000, logs: [], stdout: { write() {} }, exec: async () => {},
+      fetch: async () => ({ status: 200, json: async () => answer }), ...extra,
+    });
+    const daemon = make();
+    writeState(idle);
+    assert.equal((await daemon.tick()).calm, true, "server calm, idle here");
+    assert.equal(daemon.isCalm(), true);
+    writeState(withPos);
+    assert.equal((await daemon.tick()).calm, false, "a position here keeps it fast");
+    writeState(idle);
+    answer = { ...answer, stream_mode: "fast" };
+    assert.equal((await daemon.tick()).calm, false, "server fast");
+    answer = { ok: true, intents: [], connection: null };
+    assert.equal((await daemon.tick()).calm, false, "an older server (no field): fast, as 1.6.0");
+    answer = { ok: true, intents: [{ id: "open:1:BUY", kind: "open", side: "BUY", volume: 0.1 }], connection: null, stream_mode: "calm" };
+    assert.equal((await daemon.tick()).calm, false, "an intent to deliver: fast");
+    answer = { ok: true, intents: [], connection: null, stream_mode: "calm" };
+    assert.equal((await make({ calmMode: false }).tick()).calm, false, "OMEGA_CALM_MODE=off");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
