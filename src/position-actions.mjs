@@ -72,7 +72,7 @@ export async function expireStalePositionActions(db, { now = Date.now() } = {}) 
  * broker did). `outcome` is { applied: true } or { applied: false, reason }. Plain text: the sender escapes it.
  */
 export function actionMessage(row, outcome = { applied: true }) {
-  const what = { close: "close", sl: `stop to ${row.sl}`, tp: `target to ${row.tp}` }[row.action] ?? row.action;
+  const what = { close: "close", sl: `stop to ${row.sl}`, tp: row.sl != null ? `target to ${row.tp} and stop to ${row.sl}` : `target to ${row.tp}` }[row.action] ?? row.action;
   const pips = row.pips == null ? "" : ` · ${row.pips >= 0 ? "+" : ""}${row.pips} pips`;
   const head = outcome?.applied === true ? `${what} · applied at the broker` : `${what} · NOT applied: ${outcome?.reason || "unknown"}`;
   return `XAUUSD POSITION MANAGER · #${row.ticket} ${row.side}${pips} · ${head}\n${row.why}${row.council ? `\nCouncil: ${row.council}` : ""}`;

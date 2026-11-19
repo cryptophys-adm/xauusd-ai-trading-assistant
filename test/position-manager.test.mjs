@@ -48,8 +48,16 @@ test("PM1. the rules, in pips (1 pip = 0.10)", () => {
   assert.equal(positionAction(facts(3878.8), { momentum: "strengthening", thesis: "weakening" }).rule, "tp2_waits_council");
   // Under the TP ladder: TP2 waits until the stop locks the ladder's TP1 (the first key level inside, here none: a third).
   const ladderF = (bid, over = {}) => positionFacts({ position: pos(over), sym: sym(bid), openIntent: intent, levels, decision: decision(), ladder: true });
-  const held = positionAction(ladderF(3878.8), { momentum: "holding", thesis: "intact" });
+  // ADR-0020 Amendment 6: before the TP1 lock, in profit, TP2 goes out with the stop at break-even plus the spread.
+  const tpBe = positionAction(ladderF(3878.8), { momentum: "holding", thesis: "intact" });
+  assert.deepEqual([tpBe.action, tpBe.rule, tpBe.tp, tpBe.sl], ["tp", "tp2_breakeven", 3862, 3880 - 0.2]);
+  assert.match(tpBe.why, /one modification/);
+  // No room for the break-even stop yet (+1 pip): it waits.
+  const held = positionAction(ladderF(3879.7), { momentum: "holding", thesis: "intact" });
   assert.deepEqual([held.action, held.rule], ["hold", "tp2_waits_ladder"]);
+  // The stop already past break-even (3879.5 for a SELL): the target goes out with the stop where it is.
+  const past = positionAction(ladderF(3878.8, { sl: 3879.5 }), { momentum: "holding", thesis: "intact" });
+  assert.deepEqual([past.rule, past.sl], ["tp2_breakeven", 3879.5]);
   // The stop at the ladder's TP1 (3880 - 10/3 = 3876.67 for a SELL): TP2 goes out.
   const lockedF = ladderF(3874, { sl: 3876.5 });
   assert.equal(lockedF.ladder_hold, false);

@@ -197,3 +197,27 @@ test("PB9. the sync: a Position Manager action is said when the broker answers, 
   const answered = await withTelegram(async () => { await sync(e, { results: [{ id: intentId, ok: true, ticket: 101, executed_ms: NOW + 1_500 }], state: STATE({ positions: [pos()] }) }, NOW + 2_000); });
   assert.deepEqual(answered.filter((t) => /POSITION MANAGER/.test(t)), [escHtml("XAUUSD POSITION MANAGER · #101 SELL · +37 pips · close · applied at the broker\n-31 pips and the decision is BUY; the council calls the thesis weakening: loss cut\nCouncil: weakening, thesis weakening: fading")]);
 });
+
+test("PB10. TP2 with the break-even stop: one modify_sltp on OmegaExecutor 1.18+, never looser or below the entry (ADR-0020 Amendment 6)", () => {
+  const positions = [pos()];
+  const a = { id: "pm:101:9", ticket: 101, action: "tp", rule: "tp2_breakeven", tp: 3862, sl: 3879.8 };
+  const r = positionManagerIntents({ positions, sym: sym(3876.1), actions: [a], sltp: true });
+  assert.deepEqual(r.intents.map((i) => [i.id, i.kind, i.sl, i.tp, i.reason]), [["pm:101:t:9", "modify_sltp", 3879.8, 3862, "pm_tp2_breakeven"]]);
+  assert.match(positionManagerIntents({ positions, sym: sym(3876.1), actions: [a], sltp: false }).dropped[0].reason, /OmegaExecutor 1\.18/);
+  assert.match(positionManagerIntents({ positions, sym: sym(3876.1), actions: [{ ...a, sl: 3880.5 }], sltp: true }).dropped[0].reason, /looser than the broker's or below the entry/);
+  assert.match(positionManagerIntents({ positions: [pos({ sl: 3879 })], sym: sym(3876.1), actions: [a], sltp: true }).dropped[0].reason, /looser/);
+  // Through the plan under the ladder: the stop-and-target passes (it carries its own protection); a bare TP2 still waits.
+  const executor = { connected: true, received_ms: 1_000, positions, account: { trade_mode: "demo" }, symbol: sym(3876.1), executor: { version: "1.20" } };
+  const plan = planIntents({ executor, now: 1_000, engineEnabled: true, settings: { enabled: true, tp_ladder: true }, pmActions: [a] });
+  assert.ok(plan.intents.some((i) => i.id === "pm:101:t:9" && i.kind === "modify_sltp"));
+  assert.match(actionMessage({ ticket: 101, side: "SELL", pips: 37, action: "tp", tp: 3862, sl: 3879.8, why: "w", council: null }), /target to 3862 and stop to 3879\.8 · applied at the broker/);
+});
+
+test("PB11. a Position Manager modify_sltp counts as a commanded stop; the owner's own does not", async () => {
+  const { commandedStops } = await import("../src/omega-engine.mjs");
+  const rows = [
+    { payload: { id: "pm:101:t:9", kind: "modify_sltp", ticket: 101, sl: 3879.8, tp: 3862 }, status: "sent" },
+    { payload: { id: "manual:mp:101:1", kind: "modify_sltp", ticket: 101, sl: 3895, tp: 3862 }, status: "sent" }
+  ];
+  assert.deepEqual(commandedStops(rows), { 101: [3879.8] });
+});

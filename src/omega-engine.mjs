@@ -411,7 +411,10 @@ export function commandedStops(rows = []) {
   for (const r of rows) {
     let it = r?.payload, res = r?.result;
     try { if (typeof it === "string") it = JSON.parse(it); if (typeof res === "string") res = JSON.parse(res); } catch { continue; }
-    if (it?.kind !== "modify_sl" || it.ticket == null || !positive(Number(it.sl))) continue;
+    // A Position Manager stop-and-target (modify_sltp, ADR-0020 Amendment 6) commands a stop too; the owner's own
+    // modify_sltp (manual: ids) may loosen one on purpose and is never held against the snapshot.
+    const pmSltp = it?.kind === "modify_sltp" && /^(d:)?pm:/.test(String(it.id ?? ""));
+    if ((it?.kind !== "modify_sl" && !pmSltp) || it.ticket == null || !positive(Number(it.sl))) continue;
     const live = r.status === "pending" || r.status === "sent" || (r.status === "done" && res?.ok === true);
     if (!live) continue;
     (out[String(it.ticket)] ??= []).push(Number(it.sl));
@@ -606,7 +609,7 @@ export function openRiskAtStops(positions = [], sym = {}) {
  * only out to TP2 (the side's way). Risk-reducing only: never an open, an add or a wider stop. One intent per ticket
  * and 5-minute bar (the id carries the action's bar). `actions` are { id, ticket, action, rule, sl, tp }.
  */
-export function positionManagerIntents({ positions = [], sym = {}, actions = [], skipTickets = [] } = {}) {
+export function positionManagerIntents({ positions = [], sym = {}, actions = [], skipTickets = [], sltp = false } = {}) {
   // `dropped`: each action that became no intent, with the reason in plain words (owner 2026-11-19: the Telegram
   // line says what reached the broker, and why an action did not).
   const out = [], used = [], dropped = [];
@@ -636,7 +639,18 @@ export function positionManagerIntents({ positions = [], sym = {}, actions = [],
       const tp = roundTo(a.tp, digits);
       const outward = Number.isFinite(curTp) && curTp > 0 && (buy ? tp > curTp + point / 2 && tp > sym.ask + floorPx : tp < curTp - point / 2 && tp < sym.bid - floorPx);
       if (!outward) { drop(a, `a target at ${tp} is not further out than the broker's (${Number.isFinite(curTp) && curTp > 0 ? curTp : "none"})`); continue; }
-      out.push({ id: `pm:${p.ticket}:t:${bar}`, kind: "modify_tp", ticket: p.ticket, tp, reason: `pm_${a.rule}` });
+      if (finite(a.sl)) {
+        // ADR-0020 Amendment 6: the target out to TP2 with the stop at break-even or better, in one modification (both
+        // or neither; OmegaExecutor 1.18 modify_sltp). The stop never below the entry, never looser, with room.
+        const sl = roundTo(a.sl, digits), open = Number(p.open_price ?? p.entry);
+        if (!sltp) { drop(a, "TP2 with the break-even stop needs OmegaExecutor 1.18 or newer"); continue; }
+        const notLooser = Number.isFinite(curSl) && curSl > 0 ? (buy ? sl >= curSl - point / 2 : sl <= curSl + point / 2) : true;
+        const notBelowEntry = Number.isFinite(open) && (buy ? sl >= open - point / 2 : sl <= open + point / 2);
+        const room = buy ? sl < sym.bid - floorPx : sl > sym.ask + floorPx;
+        if (!notLooser || !notBelowEntry) { drop(a, `a stop at ${sl} would be looser than the broker's or below the entry`); continue; }
+        if (!room) { drop(a, `the live price leaves no room for a stop at ${sl}`); continue; }
+        out.push({ id: `pm:${p.ticket}:t:${bar}`, kind: "modify_sltp", ticket: p.ticket, sl, tp, reason: `pm_${a.rule}` });
+      } else out.push({ id: `pm:${p.ticket}:t:${bar}`, kind: "modify_tp", ticket: p.ticket, tp, reason: `pm_${a.rule}` });
     } else { drop(a, "not an action Omega applies"); continue; }
     used.push(a.id);
   }
@@ -737,7 +751,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   if (exits.intents.length) note(exits.intents.some((it) => it.reason === "lean_flip") ? "lean_flip" : "confidence_drop");
   intents.push(...exits.intents);
   // The Position Manager's actions (owner 2026-11-17): after the strategy exits, before the routine management.
-  const pm = positionManagerIntents({ positions, sym, actions: pmActions, skipTickets: intents.filter((it) => it.kind === "close").map((it) => it.ticket) });
+  const pm = positionManagerIntents({ positions, sym, actions: pmActions, skipTickets: intents.filter((it) => it.kind === "close").map((it) => it.ticket), sltp: versionAtLeast(executor.executor?.version ?? null, "1.18") });
   // ADR-0020 Amendment 4: under the TP ladder the Position Manager's outward take-profit (TP2) waits, like every
   // outward move, until the stop locks a profit at or beyond TP1.
   if (S.tp_ladder) {

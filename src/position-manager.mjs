@@ -142,7 +142,17 @@ export function positionAction(f, council) {
     if (!tpAtTp1 || f.tp2 == null) return fallback;
     if (!council) return { action: "hold", rule: "tp2_waits_council", why: "TP2 waits: the council did not answer" };
     if (council.momentum === "weakening" || council.thesis !== "intact") return { action: "hold", rule: "tp2_waits_council", why: `TP2 waits: the council reads ${council.momentum}, thesis ${council.thesis}` };
-    if (f.ladder_hold) return { action: "hold", rule: "tp2_waits_ladder", why: "TP2 waits: the TP ladder holds the target until the stop locks TP1" };
+    if (f.ladder_hold) {
+      // ADR-0020 Amendment 6 (owner 2026-11-19, "Merge #490 + kerjakan opsi BE"): before the ladder's TP1 lock, TP2 goes
+      // out in profit together with the stop at break-even plus the spread or better, in one modification (both or
+      // neither): the worst case is about zero instead of the TP1 profit, never below the entry.
+      const be = f.open + f.dir * f.spread;
+      if (f.pips > 0 && room(be)) {
+        const sl = better(be) ? be : f.sl;
+        return { action: "tp", rule: "tp2_breakeven", tp: f.tp2, sl, why: `target out to TP2 with the stop at ${better(be) ? "break-even plus the spread" : "its level, already past break-even"} (one modification); the council reads ${council.momentum}, thesis intact` };
+      }
+      return { action: "hold", rule: "tp2_waits_ladder", why: "TP2 waits: no room for a break-even stop yet" };
+    }
     return { action: "tp", rule: "tp2_target", tp: f.tp2, why: `target out to TP2 (the next key level); the council reads ${council.momentum}, thesis intact` };
   };
   const band = isNum(f.band_pips) && f.band_pips > 0 ? f.band_pips : THRESHOLD_PIPS;
