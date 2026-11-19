@@ -9,6 +9,7 @@
 // Advisory only: no levels, sizes or orders are produced here.
 import { roomLean, loadStrategyInputs, buildStrategy } from "./strategy-engine.mjs";
 import { readMacroRoom } from "./macro-room.mjs";
+import { goldPausedMsBetween } from "./market-hours.mjs";
 
 export { roomLean };
 
@@ -37,33 +38,15 @@ const word = (v) => {
 
 export const WEEKEND_GAP_MS = 48 * 3600 * 1000;
 
-function weekendClosedMs(startMs, endMs) {
-  let closedMs = 0;
-  let cur = startMs;
-  while (cur < endMs) {
-    const curDate = new Date(cur);
-    const day = curDate.getUTCDay();
-    const nextMidnight = Date.UTC(
-      curDate.getUTCFullYear(),
-      curDate.getUTCMonth(),
-      curDate.getUTCDate() + 1
-    );
-    const segmentEnd = Math.min(endMs, nextMidnight);
-    if (day === 0 || day === 6) {
-      closedMs += segmentEnd - cur;
-    }
-    cur = segmentEnd;
-  }
-  return closedMs;
-}
-
-/** Pure: true when a room is older than maxAgeMs during active trading (excluding weekend market closures). */
+/** Pure: true when a room is older than maxAgeMs during active trading (weekends and the daily break not counted). */
 export function isRoomStale(atIso, now = Date.now(), maxAgeMs = 0) {
   const at = Date.parse(String(atIso ?? ""));
   if (!Number.isFinite(at)) return false;
   const elapsed = now - at;
   if (elapsed <= maxAgeMs) return false;
-  const closedTime = weekendClosedMs(at, now);
+  // The weekend and the daily break (owner 2026-11-18, confirmed: "Perbaiki keduanya"): the hour gold does not trade
+  // is no age, so the first room after the daily reopen is not read as stale.
+  const closedTime = goldPausedMsBetween(at, now);
   if (elapsed - closedTime <= maxAgeMs) return false;
   return true;
 }
@@ -103,7 +86,9 @@ export function buildGlobalConclusion({ d1 = null, h4 = null, h1 = null, m15 = n
   timeframes.push({
     key: "NEWS", label: "News", role: SPEC.NEWS.role, available: Boolean(t || nl != null), lean: nl, side: side(nl),
     action: t?.stance ?? null, confidence: t?.confidence ?? null, summary: t?.summary ?? null, at: news?.run_at ?? null,
-    stale: Boolean(news?.run_at && isRoomStale(news.run_at, now, 3 * SPEC.NEWS.periodMs))
+    // Its age is from the last hourly check (owner 2026-11-18): a quiet night with no new headline is no stale reading;
+    // it goes stale only when News Daily itself stops running.
+    stale: Boolean((news?.checked_at ?? news?.run_at) && isRoomStale(news?.checked_at ?? news?.run_at, now, 3 * SPEC.NEWS.periodMs))
   });
 
   let s = 0, w = 0;

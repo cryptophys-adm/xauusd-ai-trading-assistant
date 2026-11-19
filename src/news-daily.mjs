@@ -181,7 +181,11 @@ export async function runNewsDaily(env, { now = Date.now(), clock = () => Date.n
   if (!items.length) return { status: "no_articles" };
   const digest = await digestOf(items);
   const latest = await readNewsDaily(db);
-  if (latest?.digest === digest && latest.tldr?.status === "ok") return { status: "unchanged", items: items.length };
+  if (latest?.digest === digest && latest.tldr?.status === "ok") {
+    // Checked and still current (owner 2026-11-18): the reading's age counts from here, not from the last new headline.
+    await markChecked(db, now);
+    return { status: "unchanged", items: items.length };
+  }
 
   const runId = new Date(Math.floor(now / 60_000) * 60_000).toISOString();
   const threadId = `newsdaily:${runId.slice(0, 10)}`;
@@ -239,6 +243,18 @@ export async function runNewsDaily(env, { now = Date.now(), clock = () => Date.n
   return { status: "complete", calls, items: tagged.length, tagged_now: todo.length };
 }
 
+const CHECK_SQL = "CREATE TABLE IF NOT EXISTS news_daily_check (id INTEGER PRIMARY KEY CHECK (id = 1), checked_at TEXT NOT NULL)";
+/** Records that News Daily ran and found its reading current (one row). Never throws. */
+async function markChecked(db, now) {
+  try {
+    await db.prepare(CHECK_SQL).run();
+    await db.prepare("INSERT INTO news_daily_check (id, checked_at) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET checked_at = excluded.checked_at").bind(new Date(now).toISOString()).run();
+  } catch { /* the reading ages from its run instead */ }
+}
+async function lastChecked(db) {
+  try { return (await db.prepare("SELECT checked_at FROM news_daily_check WHERE id = 1").first())?.checked_at ?? null; } catch { return null; }
+}
+
 /** The latest daily news analysis for the News tab: items with their bias, and the TLDR. */
 export async function readNewsDaily(db) {
   await ensureThreadSchema(db);
@@ -247,8 +263,12 @@ export async function readNewsDaily(db) {
   const rows = ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(row.thread_id, row.run_id).all()).results || []).map(rowToThreadMessage);
   const brief = rows.find((m) => m.step === "brief");
   const t = rows.find((m) => m.step === "tldr");
+  const checked = await lastChecked(db);
   return {
-    run_at: row.run_id, digest: brief?.digest ?? null, window_from: brief?.window_from ?? null, window_to: brief?.window_to ?? null,
+    run_at: row.run_id,
+    // The last hourly run that found this reading current, when after its own run (owner 2026-11-18).
+    checked_at: checked && Date.parse(checked) > Date.parse(row.run_id) ? checked : row.run_id,
+    digest: brief?.digest ?? null, window_from: brief?.window_from ?? null, window_to: brief?.window_to ?? null,
     context: brief?.context ?? null, counts: brief?.counts ?? null,
     items: (brief?.items || []).map((i) => ({ title: i.title, url: i.url, published_at: i.published_at, symbols: i.symbols, bias: i.bias ?? null, why: i.why ?? null })),
     tldr: t ? { status: t.status, stance: t.stance, confidence: t.confidence, summary: t.summary ?? null, reasons: t.reasons ?? [] } : null
