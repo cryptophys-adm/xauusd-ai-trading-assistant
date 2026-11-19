@@ -28,6 +28,10 @@ export function planIntents(input?: {
   pmActions?: Record<string, any>[];
   account?: { spec_status: string; spec_problem?: string | null } | null;
   eaGate?: boolean;
+  stops?: Record<string, number[]>;
 }): { intents: Record<string, any>[]; notes: { code: string }[] };
 export const ROLLOVER_QUARANTINE_UTC: string;
-export function manageIntents(input?: { positions?: any[]; sym?: any; settings?: any; signal?: any; side?: string | null; recentIntentIds?: string[]; skipTickets?: unknown[] }): Array<Record<string, any>>;
+export function manageIntents(input?: { positions?: any[]; sym?: any; settings?: any; signal?: any; side?: string | null; recentIntentIds?: string[]; skipTickets?: unknown[]; stops?: Record<string, number[]> }): Array<Record<string, any>>;
+export const STOP_COMMAND_MS: number;
+export function commandedStops(rows?: Array<{ payload?: unknown; status?: string; result?: unknown }>): Record<string, number[]>;
+export function withCommandedStop<T extends Record<string, any>>(p: T, stops?: Record<string, number[]>): T;

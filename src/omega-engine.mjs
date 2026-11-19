@@ -378,8 +378,11 @@ export function ladderPlan({ position: p, sym, signal = null, levels = null, set
     const rung = past - 1;
     const target = roundTo(rung === 0 ? open + dir * buffer : L[rung], digits);
     const better = !finite(curSl) || curSl <= 0 ? true : buy ? target > curSl + point : target < curSl - point;
+    // The break-even lock is taken once: its buffer follows the spread and the M5 ATR, so a stop already past the entry
+    // is not moved again by a few cents at TP0 (2026-11-19: three modifications in seven seconds).
+    const lockedBeyondEntry = finite(curSl) && curSl > 0 && (buy ? curSl > open + point / 2 : curSl < open - point / 2);
     const room = buy ? target < sym.bid - floorPx : target > sym.ask + floorPx;
-    if (target > 0 && better && room) { sl = target; slRung = rung; }
+    if (target > 0 && better && room && !(rung === 0 && lockedBeyondEntry)) { sl = target; slRung = rung; }
   }
   // Partial: one per rung reached, at most ladder_max_partials.
   let partial = null;
@@ -396,6 +399,37 @@ export function ladderPlan({ position: p, sym, signal = null, levels = null, set
 }
 
 /**
+ * Pure: the stops Omega has commanded recently, per ticket ({ [ticket]: [sl, ...] }), from omega_intents rows
+ * ({ payload, status, result }): modify_sl intents still pending or sent, or done with an ok result. The executor's
+ * position snapshot can predate a modification Omega has just made (2026-11-19, ticket 362785677: a SELL locked at
+ * 3719.19, the next sync still saw the entry stop and sent 3719.23, the one after sent 3719.19 again). The
+ * management reads the tightest of these and the snapshot, so a stale snapshot never loosens a stop.
+ */
+export const STOP_COMMAND_MS = 5 * 60_000;
+export function commandedStops(rows = []) {
+  const out = {};
+  for (const r of rows) {
+    let it = r?.payload, res = r?.result;
+    try { if (typeof it === "string") it = JSON.parse(it); if (typeof res === "string") res = JSON.parse(res); } catch { continue; }
+    if (it?.kind !== "modify_sl" || it.ticket == null || !positive(Number(it.sl))) continue;
+    const live = r.status === "pending" || r.status === "sent" || (r.status === "done" && res?.ok === true);
+    if (!live) continue;
+    (out[String(it.ticket)] ??= []).push(Number(it.sl));
+  }
+  return out;
+}
+
+/** Pure: the position with its stop at the tightest of the snapshot's and the stops commanded for it. */
+export function withCommandedStop(p, stops = {}) {
+  const list = stops?.[String(p?.ticket)];
+  if (!Array.isArray(list) || !list.length || (p.side !== "BUY" && p.side !== "SELL")) return p;
+  const cur = Number(p.sl), buy = p.side === "BUY";
+  let sl = finite(cur) && cur > 0 ? cur : null;
+  for (const x of list) if (sl == null || (buy ? x > sl : x < sl)) sl = x;
+  return sl === cur ? p : { ...p, sl };
+}
+
+/**
  * Pure: the management of the positions already open (audit 2026-11-11), on every sync whatever the
  * entry gates say. `skipTickets` are positions being closed in the same plan.
  *   key levels  with the signal's key levels on a known basis (owner 2026-11-12): SL+, trailing TP and
@@ -407,7 +441,7 @@ export function ladderPlan({ position: p, sym, signal = null, levels = null, set
  *               positions on the signal's side;
  *   scale-out   a position of 0.02 lots or more at 1.5R or its target banks half, once per position.
  */
-export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [], now = Date.now(), extendOf = () => true, positionMeta = {}, candles = undefined } = {}) {
+export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [], now = Date.now(), extendOf = () => true, positionMeta = {}, candles = undefined, stops = {} } = {}) {
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
   const out = [];
   if (!finite(sym.bid) || !finite(sym.ask)) return out;
@@ -417,8 +451,9 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
   const scaledBefore = (ticket) => [...recent].some((rid) => String(rid).startsWith(`ps:${ticket}:`));
   const targetExtTp = positive(signal?.extended_tp) ? signal.extended_tp : positive(signal?.tp2) ? signal.tp2 : null;
   const levels = brokerKeyLevels(signal);
-  for (const p of positions) {
-    if (p?.ticket == null || skip.has(p.ticket) || (p.side !== "BUY" && p.side !== "SELL") || !isOmegaOwned(p)) continue;
+  for (const p0 of positions) {
+    if (p0?.ticket == null || skip.has(p0.ticket) || (p0.side !== "BUY" && p0.side !== "SELL") || !isOmegaOwned(p0)) continue;
+    const p = withCommandedStop(p0, stops);
     const buy = p.side === "BUY";
     const open = Number(p.open_price ?? p.entry), curSl = Number(p.sl), curTp = Number(p.tp), vol = Number(p.volume);
     if (!Number.isFinite(open)) continue;
@@ -633,7 +668,7 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
 
 const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar", "probation_unconfirmed", "probation_reverted", "range_breakout", "range_mode_agent"]);
 
-export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined } = {}) {
+export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {} } = {}) {
   const intents = [], notes = [];
   const note = (code, detail) => notes.push(detail ? { code, detail } : { code });
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
@@ -711,7 +746,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // Position management runs on every sync, whatever the entry gates say (audit 2026-11-11, owner:
   // "perbaiki"): a blackout, the rollover quarantine, a pause, a wide spread or a full book only stop
   // NEW entries; the positions already open keep their break-even, extended target and scale-out.
-  intents.push(...manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket), now, extendOf: exits.extendOf, positionMeta, candles }));
+  intents.push(...manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket), now, extendOf: exits.extendOf, positionMeta, candles, stops }));
 
   if (!side) {
     // A range strategy held by the H4/D1 filter or its cell's evidence (src/htf-cells.mjs) says so on the page.
