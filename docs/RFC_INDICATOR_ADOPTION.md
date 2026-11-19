@@ -1,7 +1,8 @@
 # RFC: Adopting the unported GMI, Prophet and Mizan modules
 
-Status: **proposed, waiting for the owner's confirmation of the plan and the order** (owner 2026-11-19, relayed by the
-orchestrator: "adopsi semuanya"). Nothing here is built until the owner confirms. The four agents dismantled on
+Status: **accepted** (owner 2026-11-19, relayed by the orchestrator: "adopsi semuanya"; then directly, 19 Nov: the order of
+stages 1 to 6 as proposed, one Pine update of the GMI and Prophet alerts with the Mizan Probe installed in the same
+sitting, and one new agent for stage 5). Each stage is still built as its own PR, shadow first, and promoted by the owner. The four agents dismantled on
 2026-11-11 (R37 Funnel, GABFX Price Action, Playbook Execution, Grid Bot Protocol) stay dismantled.
 
 "Adopt" means: computed locally from closed bars and read by an agent, by the Decision Engine as a witness, or by the
@@ -107,12 +108,12 @@ shadow kill switch, the daily neuron breaker and the room memo.
 - **Docs.** `docs/HUD_AGENTS_ASSESSMENT.md` is stale. It says Camarilla is not ported and that s_jerk is computed
   locally; both are wrong on main. Stage 1 corrects it.
 
-## Questions for the owner
+## Questions for the owner (answered 2026-11-19)
 
-1. **The order.** Is stage 1 → 2 → 3 → 4 → 5 → 6 the right sequence, or should something come first?
+1. **The order.** Is stage 1 → 2 → 3 → 4 → 5 → 6 the right sequence, or should something come first? **Yes, as proposed.**
 2. **Parity for the engine fields.** Agree to extend the GMI and Prophet alert JSON in `pinescript/ssot`, and to
-   reinstall the two alerts on TradingView when a stage is ready?
+   reinstall the two alerts on TradingView when a stage is ready? **Yes, once, with every field of every stage.**
 3. **Parity for Mizan.** Agree to install a **Cryptophys Mizan Probe** indicator with one 15m alert? Without a
-   reference, the Mizan values can only be shown as unverified.
+   reference, the Mizan values can only be shown as unverified. **Yes, in the same sitting.**
 4. **Stage 5 agent.** One new "Mizan Oracle" agent in the rooms, read as evidence and becoming a witness only after
-   promotion? Or spread the values over the existing agents, with no new agent?
+   promotion? Or spread the values over the existing agents, with no new agent? **One new agent.**
