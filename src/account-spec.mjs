@@ -21,7 +21,6 @@
 //
 // D1 table (created lazily): omega_accounts, one row per account reference.
 
-import { CENT_CURRENCIES } from "./gold-symbol.mjs";
 export const SPEC_SETTLE_MS = 60_000;
 // 1.16 since 2026-11-18: OmegaExecutor 1.15 refused every open under unlimited leverage (margin rounded to 0.00 read as
 // "margin_unknown"), so new entries wait for 1.16 instead of sending orders the EA can only refuse.
@@ -194,9 +193,11 @@ export function effectiveLimits(profile, settings = {}) {
  * dan usd"): { currency, cent, symbol, contract_size, label }, e.g. "USD account · GOLD" or "Cent account (USX) ·
  * GoldOne", from the stored spec. Never the login.
  */
-export function accountIdentity(spec) {
-  const cur = typeof spec?.account_currency === "string" && spec.account_currency.trim() ? spec.account_currency.trim().toUpperCase() : null;
-  const cent = Boolean(cur && CENT_CURRENCIES.includes(cur));
+export function accountIdentity(spec, money = null) {
+  const cur = typeof spec?.account_currency === "string" && spec.account_currency.trim() ? spec.account_currency.trim() : null;
+  // Cent or not is read from the account's measured units per dollar (100), never from its currency code.
+  const k = Number(money?.units_per_usd);
+  const cent = Number.isFinite(k) && Math.abs(k - 100) <= 1;
   const symbol = typeof spec?.symbol === "string" && spec.symbol ? spec.symbol : null;
   const contract = Number.isFinite(Number(spec?.contract_size)) && spec?.contract_size != null ? Number(spec.contract_size) : null;
   const kind = cent ? `Cent account (${cur})` : cur ? `${cur} account` : "Account (currency unknown)";
@@ -388,14 +389,16 @@ export function withDayOp(row, { amount, at_ms }) {
 
 /**
  * Pure: the broker label for notifications and pages (orchestrator relay, owner 2026-11-18: "label notif alert ... harus
- * dinamis sesuai dengan brokernya"), e.g. "FxPro (DEMO) · GOLD". The broker is the first word of the server the
- * terminal reports; a spec that is not validated (or no server) reads "broker unknown". The account mode is DEMO, LIVE
- * or CONTEST; the symbol is the broker's own.
+ * dinamis sesuai dengan brokernya"), e.g. "FxPro Global Markets (DEMO) · GOLD". The broker is the company the terminal
+ * reports (OmegaExecutor 1.19, ACCOUNT_COMPANY: any broker, no list), else the server name as the terminal reports it;
+ * a spec that is not validated (or neither) reads "broker unknown". The account mode is DEMO, LIVE or CONTEST; the
+ * symbol is the broker's own.
  */
 export function brokerLabel(executor, { validated = false } = {}) {
-  const server = typeof executor?.server === "string" ? executor.server.trim() : "";
-  const word = server.split(/[-_. ]/)[0];
-  const broker = validated && word ? word : "broker unknown";
+  const company = typeof executor?.account?.company === "string" ? executor.account.company.trim().slice(0, 48) : "";
+  const server = typeof executor?.server === "string" ? executor.server.trim().slice(0, 48) : "";
+  const name = company || server;
+  const broker = validated && name ? name : "broker unknown";
   const mode = { demo: "DEMO", real: "LIVE", contest: "CONTEST" }[executor?.account?.trade_mode] ?? "?";
   const symbol = typeof executor?.symbol?.name === "string" && executor.symbol.name ? ` · ${executor.symbol.name}` : "";
   return `${broker} (${mode})${symbol}`;

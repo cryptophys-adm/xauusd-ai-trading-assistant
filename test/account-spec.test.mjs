@@ -227,8 +227,8 @@ test("AS11 executorFrom keeps the 1.15 fields, checked, and drops anything malfo
 });
 
 test("AS12 OmegaExecutor 1.15 reports the spec and is the last gate: it refuses with a reason, never resizes, never moves a stop", () => {
-  assert.match(ea, /#property version\s+"1\.18"/);
-  assert.ok(ea.includes('const string OMEGA_EXECUTOR_VERSION = "1.18";'));
+  assert.match(ea, /#property version\s+"1\.19"/);
+  assert.ok(ea.includes('const string OMEGA_EXECUTOR_VERSION = "1.19";'));
   // The spec in state.json.
   for (const field of ["leverage", "margin_mode", "margin_free", "login_hash", "freeze_level_points", "trade_mode", "margin_per_lot"]) {
     assert.ok(ea.includes(`\\"${field}\\":`), field);
@@ -248,7 +248,7 @@ test("AS12 OmegaExecutor 1.15 reports the spec and is the last gate: it refuses 
   }
   assert.match(ea.slice(ea.indexOf("string ModifyRefusal(")), /SYMBOL_TRADE_FREEZE_LEVEL[\s\S]*"refused: freeze_level"/);
   // The gold allowlist stays.
-  assert.match(ea, /string GOLD_USD_SYMBOLS\[\] = \{/);
+  assert.ok(!/string GOLD_USD_SYMBOLS\[\]/.test(ea), "1.19: no list of gold names; gold is found by its contract and price");
 });
 
 // ------------------------------------------------------------------ phase 2: sizing within the profile's caps
@@ -374,12 +374,12 @@ test("AS20 two accounts on one server (2026-11-19): the connected one is found b
   assert.deepEqual(o.accounts.filter((a) => a.connected).map((a) => a.account_ref), [refUsd]);
   // Each account says which it is (owner 2026-11-19: "harus bisa membedakan mana akun sen dan usd").
   assert.deepEqual(o.accounts.map((a) => [a.account_ref === refUsd ? "usd" : "cent", a.identity.label, a.identity.cent, a.connected]).sort(),
-    [["cent", "Cent account (USX) · GoldOne", true, false], ["usd", "USD account · XAUUSD", false, true]]);
+    [["cent", "USX account · GoldOne", false, false], ["usd", "USD account · XAUUSD", false, true]], "cent is read from the measured money, not the code (the cent account is not connected here)");
   // Every owner control refuses the account that is not connected, naming it; the connected one is changed.
   for (const [action, value] of [["reset", null], ["profile", "safe"], ["ceiling", "safe"], ["agent_mode", "approval"]]) {
     const wrong = await setAccountProfile(env, { account_ref: refCent, action, value }, { now: NOW + 130_000 });
     assert.equal(wrong.ok, false, action);
-    assert.equal(wrong.error, `Cent account (USX) · GoldOne (${refCent}) is not the connected account: the controls act on the connected account only`);
+    assert.equal(wrong.error, `USX account · GoldOne (${refCent}) is not the connected account: the controls act on the connected account only`);
   }
   // Each refusal is recorded, so the owner's attempt can be traced (action, account, reason; never a login).
   const refused = env.DB.raw.prepare("SELECT detail FROM omega_events WHERE action = 'profile_control_refused' ORDER BY id").all().map((r) => JSON.parse(r.detail));

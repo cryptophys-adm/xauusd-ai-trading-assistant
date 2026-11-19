@@ -29,7 +29,19 @@ Owner decisions 2026-11-09: Omega (`xauusd-omega`, `https://nexus.cryptophys.wor
 ## Host Installation
 
 ### 1. Copy `OmegaExecutor.mq5` and compile in MetaEditor
-Since 1.17 (2026-11-18, cent accounts) the EA may trade one more name: the account's gold symbol the owner set in
+**Since 1.19 (2026-11-19, universal: owner "Harusnya bisa universal apapun broker, nama pair maupun servernya")
+the EA has no name list.** It finds the account's gold by what the terminal reports: profit currency `USD`, a contract
+of 1 to 100 oz, trading not disabled, a bid, and that bid within 2% of the reference gold price, which bridge 1.5.0
+writes to `MQL5/Files/omega/reference.txt` (`price;written_ms`, from the sync's `reference_price`; older than 15
+minutes counts as missing). It tries the owner's symbol hint first, then the chart symbol, then scans every symbol
+on the server (`SymbolsTotal(false)`, every 30 s while none is found) and keeps the one with the smallest relative
+spread; a symbol the scan added to Market Watch and that is not gold is removed again. Without a reference price it
+chooses nothing (`no_usd_gold_symbol (no_reference_price)`, no scan); a symbol already chosen is kept while the
+reference is missing or stale (its currency and contract are still checked), and the server refuses every open whose
+broker price is more than 2% from the signal's (`symbol_price_mismatch`). The state's account carries `company`
+(`ACCOUNT_COMPANY`), which the pages use as the broker's name. Update the bridge (1.5.0) and the EA (1.19) together:
+EA 1.19 without bridge 1.5.0 has no reference price and opens nothing; an older EA keeps its list.
+Before 1.19: since 1.17 (2026-11-18, cent accounts) the EA could trade one more name: the account's gold symbol the owner set in
 Setup → Connection & EA (e.g. `GoldOne`), which bridge 1.4.0 writes to `MQL5/Files/omega/trade_symbol.txt`. It
 passes only the same checks as the listed names; on a USC (US cent) account a profit currency of USC passes beside
 USD. An EA before 1.17 refuses such a name (`name_not_allowed`), so update the bridge and the EA together.
@@ -118,7 +130,12 @@ MT5's `[StartUp]` section in `/opt/mt5-ingestion-gateway/config/terminal_gateway
   the stale-state watchdog waits for it. If the applied server has no EA state for 120 s, no trial runs and no
   symbol is proven, the bridge starts one from the ini's current symbol.
 
-  **USD gold only (owner 2026-11-17, PR #405; OmegaExecutor 1.14, omega-bridge 1.3.0).** One list of exact
+  **Since omega-bridge 1.5.0 (2026-11-19)** these names only open a first chart so the EA can start
+  (`CHART_BOOTSTRAP_SYMBOLS`); the EA 1.19 finds the gold symbol itself from any chart, and the bridge checks the
+  EA's symbol by its contract only (`stateSymbolProblem`: profit currency USD, 1 to 100 oz), never by name.
+
+  **USD gold only (owner 2026-11-17, PR #405; OmegaExecutor 1.14, omega-bridge 1.3.0; the name list was removed
+  on 2026-11-19, see above).** One list of exact
   names (`src/gold-symbol.mjs`, the EA's `GOLD_USD_SYMBOLS`, the bridge's `GOLD_SYMBOL_CANDIDATES`; a test keeps
   them equal) and the contract checked at every layer:
   - **EA:** a symbol is traded only when its name is on the list exactly (no prefix match: `GOLDEURO`, `GOLDgr`
@@ -166,6 +183,9 @@ MT5's `[StartUp]` section in `/opt/mt5-ingestion-gateway/config/terminal_gateway
     `account_seen`, `spec_changed`, `spec_invalid`, `spec_validated`, `account_ref_upgraded`; one Telegram line
     for a new account, a changed spec and its first validation. The login hash is used in the sync only: it is
     not stored with the bridge state and not served.
+  - **1.19 (2026-11-19, universal):** no name list; gold found by profit currency, contract and price against
+    `omega/reference.txt` (bridge 1.5.0); `account.company` in the state. Compile and attach it, and deploy bridge
+    1.5.0 with it.
   - **1.18 (2026-11-19, Modify and Delegate on the Trade tab):** `modify_sltp` and `modify_order` (the owner's edit
     of a position's stop and target or of a pending order's price, stop and target), and a position or order without
     the EA's magic may be acted on only for `manual:` and `d:` ids (the owner's edit, a delegated manual position).

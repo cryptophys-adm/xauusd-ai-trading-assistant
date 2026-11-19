@@ -740,7 +740,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                           </span>
                         )}
                       </td>
-                      <td className="mono font-semibold">{p.symbol || br.symbol || "XAUUSD.m"}</td>
+                      <td className="mono font-semibold">{p.symbol || br.symbol || "—"}</td>
                       <td
                         className="mono font-bold"
                         style={{ color: pSide === "BUY" ? C.bull : C.bear }}
@@ -759,7 +759,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                           onClick={() =>
                             requestExitPosition({
                               ticket: p.ticket,
-                              symbol: p.symbol || br.symbol || "XAUUSD.m",
+                              symbol: p.symbol || br.symbol || "",
                               side: pSide,
                               volume: p.volume,
                               open_price: p.open_price,

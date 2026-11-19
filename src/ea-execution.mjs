@@ -15,7 +15,7 @@
 // migrated): nothing here signs, submits or touches anyone else's transactions.
 
 import { CONTROL_MODES, EA_CONTROL_KEY, EA_HEARTBEAT_KEY, eaSignal, readControl } from "./ea-signal.mjs";
-import { isCentCurrency } from "./gold-symbol.mjs";
+import { isLegacyCentDeal } from "./gold-symbol.mjs";
 
 export const EA_EXECUTION_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS ea_deals (
@@ -184,7 +184,7 @@ export async function listDeals(env, { limit = 50, sinceMs = null } = {}) {
  * and its amounts in cents, read in USD; `currency_stored` keeps what was stored. Other rows are unchanged.
  */
 export function dealInUsd(d) {
-  if (!d || !isCentCurrency(d.currency)) return d;
+  if (!d || !isLegacyCentDeal(d.currency)) return d;
   const c = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v) / 100 : v);
   return { ...d, profit: c(d.profit), commission: c(d.commission), swap: c(d.swap), currency: "USD", currency_stored: d.currency };
 }

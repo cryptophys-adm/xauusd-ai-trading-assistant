@@ -19,7 +19,7 @@ import { gatedEvents } from "./econ-calendar.mjs";
 import { OMEGA_DEFAULTS, planIntents, settingsFrom } from "./omega-engine.mjs";
 import { pendingPositionActions, markPositionActions } from "./position-actions.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
-import { goldCheckOf, goldSymbolText, isCentCurrency, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText } from "./gold-symbol.mjs";
+import { goldCheckOf, goldSymbolText, accountMoney, moneyText, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText } from "./gold-symbol.mjs";
 import { PROBATION, PROBATION_KEY, probationFrom, probationVerdict } from "./htf-cells.mjs";
 import { delegationsForSync, withDelegated, delegatedStopIntents, markDelegatedIntents, plannerIds, hitlSupported, readDelegations, HITL_EA_MIN_VERSION } from "./omega-hitl.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
@@ -93,6 +93,9 @@ async function ensureSchema(db) {
   await db.prepare("INSERT OR IGNORE INTO omega_bridge (id) VALUES (1)").run();
   // Cent accounts (owner 2026-11-18): the account's gold symbol the owner sets with the connection, or NULL.
   try { await db.prepare("ALTER TABLE omega_connection ADD COLUMN trade_symbol TEXT").run(); } catch { /* already there */ }
+  // The account's units per US dollar the owner gave with the connection (2026-11-19), for an account whose currency is
+  // not USD and that has no trade yet to measure it (src/gold-symbol.mjs accountMoney). Null: none given.
+  try { await db.prepare("ALTER TABLE omega_connection ADD COLUMN units_per_usd REAL").run(); } catch { /* already there */ }
   schemaReady = true;
 }
 const parse = (text, fallback = null) => { try { return text == null ? fallback : JSON.parse(text); } catch { return fallback; } };
@@ -306,8 +309,8 @@ function envelopeError(envelope) {
 
 export async function connectionStatus(env) {
   await ensureSchema(env.DB);
-  const row = await env.DB.prepare("SELECT version, status, server, kid, updated_by, updated_ms, trade_symbol FROM omega_connection WHERE id = 1").first();
-  return { version: Number(row.version), status: row.status, server: row.server ?? null, kid: row.kid ?? null, updated_by: row.updated_by ?? null, updated_ms: row.updated_ms ?? null, trade_symbol: row.status === "stored" ? ownerTradeSymbol(row.trade_symbol) : null };
+  const row = await env.DB.prepare("SELECT version, status, server, kid, updated_by, updated_ms, trade_symbol, units_per_usd FROM omega_connection WHERE id = 1").first();
+  return { version: Number(row.version), status: row.status, server: row.server ?? null, kid: row.kid ?? null, updated_by: row.updated_by ?? null, updated_ms: row.updated_ms ?? null, trade_symbol: row.status === "stored" ? ownerTradeSymbol(row.trade_symbol) : null, units_per_usd: row.status === "stored" && Number(row.units_per_usd) > 0 ? Number(row.units_per_usd) : null };
 }
 
 /**
@@ -316,7 +319,7 @@ export async function connectionStatus(env) {
  * envelope: the bridge opens its chart first and the EA may trade it, still only under the contract checks, and the
  * engine opens nothing on it until it prices within 2% of the reference gold price. Empty means the list only.
  */
-export async function setConnection(env, { envelope, server, actor, trade_symbol = null }, { now = Date.now() } = {}) {
+export async function setConnection(env, { envelope, server, actor, trade_symbol = null, units_per_usd = null }, { now = Date.now() } = {}) {
   await ensureSchema(env.DB);
   const name = typeof server === "string" ? server.trim() : "";
   if (!SERVER_RE.test(name)) return { ok: false, error: "server must be 1-64 letters, digits, dot, dash, underscore or space" };
@@ -324,6 +327,10 @@ export async function setConnection(env, { envelope, server, actor, trade_symbol
   if (trade_symbol != null && typeof trade_symbol !== "string") return { ok: false, error: "trade_symbol must be text" };
   if (symText && !TRADE_SYMBOL_RE.test(symText)) return { ok: false, error: "trade_symbol must be 1-32 letters, digits, dot, dash, underscore, # or +" };
   const tradeSymbol = symText || null;
+  // Optional: how many units of the account currency make one US dollar (e.g. 100 for a cent account), for an account
+  // that is not in USD and has not traded yet. Its trades measure it from then on; a disagreement opens nothing.
+  if (units_per_usd != null && (typeof units_per_usd !== "number" || !Number.isFinite(units_per_usd) || units_per_usd <= 0 || units_per_usd > 1_000_000)) return { ok: false, error: "units_per_usd must be a positive number" };
+  const unitsPerUsd = units_per_usd ?? null;
   const bad = envelopeError(envelope);
   if (bad) return { ok: false, error: bad };
   const text = JSON.stringify(envelope);
@@ -333,10 +340,10 @@ export async function setConnection(env, { envelope, server, actor, trade_symbol
   if (bridge.kid !== envelope.kid) return { ok: false, error: "kid_mismatch" };
   const cur = await connectionStatus(env);
   const version = cur.version + 1;
-  await env.DB.prepare("UPDATE omega_connection SET version = ?, status = 'stored', server = ?, kid = ?, envelope = ?, updated_by = ?, updated_ms = ?, trade_symbol = ? WHERE id = 1")
-    .bind(version, name, envelope.kid, text, actor, now, tradeSymbol).run();
-  await event(env.DB, now, actor, "connection_set", { server: name, version, trade_symbol: tradeSymbol });
-  return { ok: true, version, status: "stored", server: name, trade_symbol: tradeSymbol };
+  await env.DB.prepare("UPDATE omega_connection SET version = ?, status = 'stored', server = ?, kid = ?, envelope = ?, updated_by = ?, updated_ms = ?, trade_symbol = ?, units_per_usd = ? WHERE id = 1")
+    .bind(version, name, envelope.kid, text, actor, now, tradeSymbol, unitsPerUsd).run();
+  await event(env.DB, now, actor, "connection_set", { server: name, version, trade_symbol: tradeSymbol, units_per_usd: unitsPerUsd });
+  return { ok: true, version, status: "stored", server: name, trade_symbol: tradeSymbol, units_per_usd: unitsPerUsd };
 }
 
 export async function clearConnection(env, { actor, reason }, { now = Date.now() } = {}) {
@@ -345,7 +352,7 @@ export async function clearConnection(env, { actor, reason }, { now = Date.now()
   if (!why) return { ok: false, error: "a reason is required to disconnect" };
   const cur = await connectionStatus(env);
   const version = cur.version + 1;
-  await env.DB.prepare("UPDATE omega_connection SET version = ?, status = 'cleared', server = NULL, envelope = NULL, trade_symbol = NULL, updated_by = ?, updated_ms = ? WHERE id = 1").bind(version, actor, now).run();
+  await env.DB.prepare("UPDATE omega_connection SET version = ?, status = 'cleared', server = NULL, envelope = NULL, trade_symbol = NULL, units_per_usd = NULL, updated_by = ?, updated_ms = ? WHERE id = 1").bind(version, actor, now).run();
   await env.DB.prepare("UPDATE omega_bridge SET state = NULL WHERE id = 1").run();
   await event(env.DB, now, actor, "connection_cleared", { reason: why, version });
   return { ok: true, version, status: "cleared" };
@@ -415,7 +422,7 @@ export function bridgeSymbolFrom(v) {
 }
 
 /** The executor state as the bridge reports it; anything malformed is null (the engine then waits). */
-export function executorFrom(state) {
+export function executorFrom(state, { ownerUnitsPerUsd = null } = {}) {
   if (!state || typeof state !== "object" || Array.isArray(state)) return null;
   const n = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
   const a = state.account ?? {}, s = state.symbol ?? {};
@@ -433,7 +440,9 @@ export function executorFrom(state) {
       leverage: n(a.leverage),
       margin_mode: ["hedging", "netting", "exchange", "unknown"].includes(a.margin_mode) ? a.margin_mode : null,
       margin_free: n(a.margin_free),
-      login_hash: typeof a.login_hash === "string" && /^[0-9a-f]{64}$/.test(a.login_hash) ? a.login_hash : null
+      login_hash: typeof a.login_hash === "string" && /^[0-9a-f]{64}$/.test(a.login_hash) ? a.login_hash : null,
+      // OmegaExecutor 1.19+: the broker's company as the terminal reports it (the label; never a login).
+      company: typeof a.company === "string" && a.company.trim() ? a.company.trim().slice(0, 64) : null
     },
     symbol: {
       name: typeof s.name === "string" ? s.name.slice(0, 32) : null,
@@ -511,59 +520,62 @@ export function executorFrom(state) {
       closed_ms: n(d?.closed_ms)
     }))
   };
-  return centToUsd(out);
+  return toUsd(out, { ownerUnitsPerUsd });
 }
 
 /**
- * Cent accounts (owner 2026-11-18, "Setuju"): an account in US cents (USC) reports every amount in cents. Omega's
- * money math, its limits and its pages are in USD, so each amount is divided by 100 once, here, where the bridge's
- * state enters: balance, equity, the day's start and result, free margin, the tick value and a lot's margin (both in
- * the deposit currency), and each position's and deal's profit, commission and swap. The account keeps its currency
- * ("USC") and carries cent: true, so the pages label it CENT. Ratios (risk %, daily loss %) are unchanged by this.
+ * Every amount Omega works with is in US dollars, on any account (owner 2026-11-19: "Harusnya bisa universal apapun
+ * broker, nama pair maupun servernya"). The account's units per dollar come from accountMoney (src/gold-symbol.mjs):
+ * one for a USD account, otherwise measured from its own trades or, before it has traded, the owner's value; never
+ * from a list of currency codes. Each amount is divided by it once, here, where the bridge's state enters: balance,
+ * equity, the day's start and result, free margin, a lot's margin (in the deposit currency), and each position's and
+ * deal's profit, commission and swap. The account keeps its currency for the label and carries `money` (the ratio,
+ * where it came from and any problem) and `cent` (100 units a dollar). Ratios (risk %, daily loss %) are unchanged.
+ * With no verified ratio nothing is converted and the engine opens nothing (gate money_unverified).
  */
-export const CENT_SCALE = 0.01;
 const near = (a, b) => Math.abs(a - b) <= Math.max(1e-12, Math.abs(b) * 0.01);
-export function centToUsd(ex) {
+export function toUsd(ex, { ownerUnitsPerUsd = null } = {}) {
   if (!ex) return ex;
-  const cent = isCentCurrency(ex.account?.currency);
-  if (ex.account) ex.account.cent = cent;
-  const c = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v * CENT_SCALE * 1e6) / 1e6 : v);
-  if (cent) {
+  const money = accountMoney({ currency: ex.account?.currency, positions: ex.positions, deals: ex.deals, symbol: ex.symbol, ownerUnitsPerUsd });
+  const k = money.units_per_usd;
+  if (ex.account) { ex.account.money = money; ex.account.cent = typeof k === "number" && Math.abs(k - 100) <= 1; }
+  const scale = typeof k === "number" && k > 0 && k !== 1 ? 1 / k : null;
+  const c = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v * scale * 1e6) / 1e6 : v);
+  if (scale) {
     const a = ex.account;
-    for (const k of ["balance", "equity", "day_start_balance", "day_realized_pl", "margin_free"]) a[k] = c(a[k]);
+    for (const key of ["balance", "equity", "day_start_balance", "day_realized_pl", "margin_free"]) a[key] = c(a[key]);
     ex.symbol.margin_per_lot = c(ex.symbol.margin_per_lot);
     for (const p of ex.positions) p.profit = c(p.profit);
     for (const d of ex.deals) { d.profit = c(d.profit); d.commission = c(d.commission); d.swap = c(d.swap); }
   }
-  usdTickValue(ex, cent, c);
+  usdTickValue(ex, k);
   return ex;
 }
 
 /**
  * The tick value Omega sizes on (incident 2026-11-18: a 3-lot GoldOne SELL on a $54.50 cent account risked about 82%
- * of it at the stop). The broker reported 0.01 a tick for a 1 oz contract, which is the value in USD, while the
- * balance and profit were in cents: divided by 100 like the other amounts, or taken as cents, the loss at the stop
- * was understated 100 times. For a symbol whose profit currency is USD on a USD or cent account, one tick of one lot
- * is worth exactly contract_size × tick_size dollars, so Omega uses that. The broker's figure is kept as
- * `tick_value_reported`; when it is neither that value nor 100 times it (cents), `tick_value_problem` is set and the
- * engine opens nothing (gate `tick_value_mismatch`). Other accounts keep the broker's figure (in their own currency).
+ * of it at the stop, because the broker reported a tick value in dollars while the account was in cents). For a
+ * USD-priced instrument one tick of one lot is worth exactly contract_size × tick_size dollars, on any broker, so
+ * Omega uses that. The broker's figure is kept as `tick_value_reported`; when it is neither that value in the
+ * account's units (× units per dollar) nor that value in dollars, `tick_value_problem` is set and the engine opens
+ * nothing (gate tick_value_mismatch).
  */
-function usdTickValue(ex, cent, c) {
+function usdTickValue(ex, k) {
   const s = ex.symbol, raw = s.tick_value;
-  const usdAccount = cent || String(ex.account?.currency ?? "").trim().toUpperCase() === "USD";
   const fin = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
   s.tick_value_problem = null;
-  if (usdAccount && s.currency_profit === "USD" && fin(s.contract_size) && fin(s.tick_size)) {
+  if (s.currency_profit === "USD" && fin(s.contract_size) && fin(s.tick_size)) {
     const expected = Math.round(s.contract_size * s.tick_size * 1e9) / 1e9;
     if (fin(raw)) {
       s.tick_value_reported = raw;
-      const ok = near(raw, expected) || (cent && near(raw, expected / CENT_SCALE));
+      const ok = near(raw, expected) || (fin(k) && near(raw, expected * k));
       if (!ok) s.tick_value_problem = "tick_value_mismatch";
     }
     s.tick_value = expected;
     return;
   }
-  if (cent) s.tick_value = c(raw);
+  // Not priced in USD: never traded (goldSymbolCheck); the reported figure in dollars where the ratio is known.
+  if (fin(raw) && fin(k) && k !== 1) s.tick_value = Math.round((raw / k) * 1e9) / 1e9;
 }
 
 export const CLOSE_MAX_ATTEMPTS = 10;
@@ -605,9 +617,9 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   await ensureSchema(env.DB);
   const db = env.DB;
   if (typeof kid !== "string" || !KID_RE.test(kid) || typeof publicKey !== "string" || !B64_RE.test(publicKey) || publicKey.length > 1024) return { ok: false, error: "kid and public_key are required" };
-  const executor = executorFrom(state);
-  // The connection the bridge must apply (read once: its owner-set gold symbol goes with the state too).
-  const conn = await db.prepare("SELECT version, status, server, kid, envelope, trade_symbol FROM omega_connection WHERE id = 1").first();
+  // The connection the bridge must apply (read once: its owner-set gold symbol and money value go with the state too).
+  const conn = await db.prepare("SELECT version, status, server, kid, envelope, trade_symbol, units_per_usd FROM omega_connection WHERE id = 1").first();
+  const executor = executorFrom(state, { ownerUnitsPerUsd: conn?.status === "stored" ? Number(conn.units_per_usd) || null : null });
   const ownerSymbol = conn?.status === "stored" ? ownerTradeSymbol(conn.trade_symbol) : null;
   if (executor) executor.owner_symbol = ownerSymbol;
   // omega-bridge 1.3.0+ reports its chart-symbol resolution beside the state (also while no EA runs).
@@ -682,8 +694,8 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           signal_id: d.signal_id,
           opened_ms: d.opened_ms,
           closed_ms: d.closed_ms,
-          // A cent account's deals were converted to USD in executorFrom (centToUsd).
-          currency: executor?.account?.cent === true ? "USD" : (executor?.account?.currency || "USD"),
+          // Deals were converted to USD in executorFrom (toUsd) when the account's units per dollar are known.
+          currency: Number(executor?.account?.money?.units_per_usd) > 0 ? "USD" : (executor?.account?.currency || "USD"),
           source: d.source
         }, { now });
         if (stored?.ok) known.add(seenKey);
@@ -900,7 +912,10 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     try { const r = await ingestMt5Calendar(env, calendar, { executor, now }); calendarSeen = r.events != null && Number.isFinite(Number(calendar.written_ms)) ? Number(calendar.written_ms) : null; } catch { calendarSeen = null; }
   }
 
-  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
+  // The reference gold price in USD (the feed's last closed 5-minute close), for OmegaExecutor 1.19+ to find gold on any
+  // broker by its price (bridge 1.5.0+ writes it to MQL5/Files/omega/reference.txt). Null when the feed has none.
+  const referencePrice = Number(signal?.market_price) > 0 ? Number(signal.market_price) : null;
+  return { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, reference_price: referencePrice, ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
 }
 
 // ---------------------------------------------------------------- overview (for the page)
@@ -1211,7 +1226,7 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     delegation: { ...(await readDelegations(db)), supported: hitlSupported(executorFrom(st)), ea_min_version: HITL_EA_MIN_VERSION },
     // Reversal probation (src/htf-cells.mjs): the owner's switch and the reverted cells.
     probation: { ...probationFrom((await env.SIGNAL_CACHE?.get?.(PROBATION_KEY)) ?? null), risk_scale: PROBATION.risk_scale, revert_last_n: PROBATION.revert_last_n, agents: PROBATION.agents },
-    connection: { version: connection.version, status: connection.status, server: connection.server, trade_symbol: connection.trade_symbol, updated_by: connection.updated_by, updated_ms: connection.updated_ms },
+    connection: { version: connection.version, status: connection.status, server: connection.server, trade_symbol: connection.trade_symbol, units_per_usd: connection.units_per_usd, updated_by: connection.updated_by, updated_ms: connection.updated_ms },
     bridge: {
       seen: syncedAge != null && syncedAge < BRIDGE_SEEN_MS, synced_age_ms: syncedAge, kid: b?.kid ?? null, bridge_version: b?.bridge_version ?? null,
       terminal_connected: Boolean(st?.connected === true && connection.status === "stored" && (now - Number(st?.received_ms || 0) < 60_000)),
@@ -1224,8 +1239,10 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       leverage: st?.account?.leverage ?? null, margin_mode: st?.account?.margin_mode ?? null, margin_free: st?.account?.margin_free ?? null,
       freeze_level_points: st?.symbol?.freeze_level_points ?? null, symbol_trade_mode: st?.symbol?.trade_mode ?? null, margin_per_lot: st?.symbol?.margin_per_lot ?? null,
       server: connection.status === "stored" ? (st?.server ?? null) : null, trade_mode: st?.account?.trade_mode ?? null, currency: st?.account?.currency ?? null,
-      // A cent (USC) account: every amount here is already in USD (centToUsd); the page labels the account CENT.
+      // Every amount here is in USD (toUsd) once the account's units per dollar are known; `money` says how they were found.
       cent: st?.account?.cent === true, owner_symbol: st?.owner_symbol ?? null,
+      // How the account's money was read (owner 2026-11-19, universal): its units per dollar and where they came from.
+      money: st?.account?.money ?? null, money_text: st?.account?.money ? moneyText(st.account.money) : null,
       balance: st?.account?.balance ?? null, equity: st?.account?.equity ?? null, day_start_balance: st?.account?.day_start_balance ?? null, day_realized_pl: st?.account?.day_realized_pl ?? null,
       symbol: st?.symbol?.name ?? null, bid: st?.symbol?.bid ?? null, ask: st?.symbol?.ask ?? null, spread_points: st?.symbol?.spread_points ?? null,
       digits: st?.symbol?.digits ?? null, point: st?.symbol?.point ?? null, tick_size: st?.symbol?.tick_size ?? null, tick_value: st?.symbol?.tick_value ?? null,
@@ -1251,7 +1268,7 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     accounts: accounts.map((a) => ({
       account_ref: a.account_ref, server: a.server, legacy_ref: a.legacy,
       // Which account this is (owner 2026-11-19): USD or cent, its currency and gold symbol, e.g. "Cent account (USX) · GoldOne".
-      identity: accountIdentity(a.spec),
+      identity: accountIdentity(a.spec, liveRef != null && a.account_ref === liveRef ? st?.account?.money ?? null : null),
       spec_status: a.spec_status, spec_problem: a.spec_problem, spec_hash: a.spec_hash, spec_since_ms: a.spec_since_ms, spec_validated_ms: a.spec_validated_ms,
       spec_text: specStatusText(a),
       profile: a.profile, profile_label: PROFILES[a.profile]?.label ?? a.profile, ceiling: a.ceiling, agent_mode: a.agent_mode, custom: a.custom,

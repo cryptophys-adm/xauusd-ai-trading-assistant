@@ -158,13 +158,10 @@ test("Omega: /omega and /omega/ render inside the Nexus SPA with the left panel;
     "Navigator",
     "Algo Trading",
     "Setup & Configuration Center",
-    "FxPro",
-    "Dupoin",
-    "Valetax",
-    "Exness",
-    "Monex",
-    "b-server-select",
+    "b-server",
     "b-gold-pair",
+    "b-units-usd",
+    "units_per_usd",
     "AUTO_GOLD",
     "e-enabled",
     "e-quick-toggle",
@@ -174,4 +171,6 @@ test("Omega: /omega and /omega/ render inside the Nexus SPA with the left panel;
   ]) {
     assert.ok(omegaUi.includes(term), term);
   }
+  // Universal (owner 2026-11-19): no broker presets or server lists on the page.
+  assert.doesNotMatch(omegaUi, /BROKER_PRESETS|b-server-select|selectedBroker/);
 });

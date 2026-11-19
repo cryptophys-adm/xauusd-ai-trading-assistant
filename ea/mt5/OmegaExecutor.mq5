@@ -42,7 +42,7 @@
 //|     manually on a chart profile when OMEGA_TAKE_STARTUP=false.   |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.18"
+#property version   "1.19"
 
 #include <Trade/Trade.mqh>
 
@@ -82,14 +82,16 @@ input bool   DynamicAtrStopEnabled  = true;  // Adaptive ATR-based SL+ and Trail
 input double AtrMultiplierTrigger   = 1.0;   // Break-even trigger multiplier of ATR (1.0 = 1x ATR)
 input double AtrMultiplierTrailing  = 1.5;   // Trailing distance multiplier of ATR (1.5 = 1.5x ATR)
 
-const string OMEGA_EXECUTOR_VERSION = "1.18"; // keep equal to #property version
+const string OMEGA_EXECUTOR_VERSION = "1.19"; // keep equal to #property version
 const string OMEGA_FOLDER    = "omega";
 const string STATE_TMP_PATH  = "omega/state.tmp";
 const string STATE_JSON_PATH = "omega/state.json";
 const string INTENTS_PATH    = "omega/intents.txt";
-// 1.17 (cent accounts, owner 2026-11-18): the account's gold symbol the owner set with the connection, written by
-// omega-bridge 1.4.0+ when it is off GOLD_USD_SYMBOLS (e.g. "GoldOne"). One exact name; absent means the list only.
+// 1.17: a gold symbol name the owner set with the connection (omega-bridge 1.4.0+). Since 1.19 only a hint tried
+// first, under the same checks as any other symbol.
 const string TRADE_SYMBOL_PATH = "omega/trade_symbol.txt";
+// 1.19: the reference gold price in USD, written by omega-bridge 1.5.0+ from each sync ("<price>;<written_ms>").
+const string REFERENCE_PATH = "omega/reference.txt";
 const string PROCESSED_PATH  = "omega/processed.txt";
 const string RESULTS_PATH    = "omega/results.txt";
 const string CORPUS_TMP_PATH  = "omega/corpus.tmp";
@@ -113,27 +115,58 @@ datetime g_lastCalendarAt = 0;
 int      g_atrHandle = INVALID_HANDLE;
 
 //+------------------------------------------------------------------+
-//| USD gold symbol: exact names, checked contract, fail closed      |
+//| Gold priced in USD on any broker, found by what it is (1.19)     |
 //+------------------------------------------------------------------+
-// Owner 2026-11-17 (PR #405, "setuju"): the EA trades XAU priced in USD only. Until 1.13 any name starting
-// with GOLD or XAUUSD passed (GOLDEURO is gold priced in euro) and, with no such symbol priced, the EA fell
-// back to a symbol without a price or to the chart symbol. Since 1.14 a symbol counts only when:
-//   1. its name is one of GOLD_USD_SYMBOLS exactly (the same list as src/gold-symbol.mjs and the bridge);
-//   2. it exists, its profit currency is USD and its contract size is 1 to 100 troy ounces a lot;
-//   3. it is not disabled for trading and it has a price.
-// When none does, the EA trades nothing and opens nothing: state.json carries "symbol_error" with the reason,
-// the symbol block is empty, the corpus is not written, and every open intent is refused (closes and stop
-// changes on existing tickets still run).
-string GOLD_USD_SYMBOLS[] = {
-   "XAUUSD", "GOLD", "XAUUSD.m", "XAUUSDm",
-   "XAUUSD.s", "XAUUSD.v", "XAUUSD.pro", "XAUUSD.r",
-   "XAUUSD.ecn", "XAUUSDc", "XAUUSDz", "GOLD.m", "GOLDm"
-};
+// Owner 2026-11-19: "Harusnya bisa universal apapun broker, nama pair maupun servernya". Until 1.18 a symbol counted
+// only when its name was on a list of 13 gold names; a broker that named gold otherwise needed the owner to type it.
+// Since 1.19 no name decides. The EA scans every symbol the server offers and a symbol counts only when:
+//   1. its profit currency is USD (gold priced in another currency is another instrument);
+//   2. its contract is 1 to 100 troy ounces a lot;
+//   3. it is not disabled for trading and it has a price;
+//   4. its price lies within 2% of the reference gold price the server sends (REFERENCE_PATH). The price is what tells
+//      gold from silver, oil, an index or gold in grams; with no fresh reference nothing is chosen.
+// The owner's symbol (TRADE_SYMBOL_PATH) and the chart symbol are tried first, under the same checks. When several
+// symbols pass, the one with the smallest spread (relative to its price) is kept. When none does, the EA trades nothing
+// and opens nothing: state.json carries "symbol_error" with the reason, the symbol block is empty, the corpus is not
+// written, and every open intent is refused (closes and stop changes on existing tickets still run).
 const double GOLD_CONTRACT_SIZE_MIN = 1.0;
 const double GOLD_CONTRACT_SIZE_MAX = 100.0;
+const double GOLD_PRICE_TOLERANCE   = 0.02;
+const int    REFERENCE_MAX_AGE_SEC  = 900;   // a reference older than 15 minutes is no reference
+const int    SCAN_EVERY_SEC         = 30;    // an unresolved server is scanned at most every 30 seconds
 string g_symbolError = "";
 string g_ownerSymbol = "";        // 1.17: the owner-set gold symbol (TRADE_SYMBOL_PATH), or ""
 datetime g_ownerSymbolReadAt = 0;
+double   g_refPrice = 0.0;        // 1.19: the reference gold price in USD, 0 when none or stale
+datetime g_refReadAt = 0;
+datetime g_lastScanAt = 0;
+string   g_scanSelected = ";";    // 1.19: symbols the scan added to Market Watch (";A;B;"), removed again when not gold
+
+// 1.19: reads REFERENCE_PATH at most every 10 seconds; a price written more than REFERENCE_MAX_AGE_SEC ago is dropped.
+void LoadReferencePrice()
+  {
+   if(g_refReadAt != 0 && TimeGMT() - g_refReadAt < 10) return;
+   g_refReadAt = TimeGMT();
+   double price = 0.0;
+   long writtenMs = 0;
+   if(FileIsExist(REFERENCE_PATH))
+     {
+      int h = FileOpen(REFERENCE_PATH, FILE_READ | FILE_TXT | FILE_ANSI);
+      if(h != INVALID_HANDLE)
+        {
+         string line = FileIsEnding(h) ? "" : FileReadString(h);
+         FileClose(h);
+         string parts[];
+         if(StringSplit(line, ';', parts) >= 2)
+           {
+            price = StringToDouble(parts[0]);
+            writtenMs = StringToInteger(parts[1]);
+           }
+        }
+     }
+   long nowMs = (long)TimeGMT() * 1000;
+   g_refPrice = (price > 0.0 && writtenMs > 0 && nowMs - writtenMs <= (long)REFERENCE_MAX_AGE_SEC * 1000) ? price : 0.0;
+  }
 
 // 1.17: reads TRADE_SYMBOL_PATH at most every 10 seconds. A name with characters MT5 never uses is ignored.
 void LoadOwnerSymbol()
@@ -161,94 +194,111 @@ void LoadOwnerSymbol()
    if(!safe) name = "";
    if(name != g_ownerSymbol)
      {
-      PrintFormat("OmegaExecutor: owner gold symbol %s", name == "" ? "(none: the USD gold list only)" : name);
+      PrintFormat("OmegaExecutor: owner gold symbol %s", name == "" ? "(none: found by contract and price)" : name);
       g_ownerSymbol = name;
       g_tradeSymbol = "";   // resolve again
      }
   }
 
-bool IsAllowedGoldName(const string name)
+// "" when `sym` is gold priced in USD that this EA may trade, else the reason it is refused. No name is checked.
+// checkPrice: the price against the reference decides which symbol is gold when one is chosen; a symbol already chosen
+// keeps its place while the reference is missing or stale (a feed outage, a weekend gap), because its contract has not
+// changed. The server still refuses every open whose broker price is more than 2% from the signal's price.
+string GoldSymbolProblem(const string sym, const bool checkPrice = true)
   {
-   if(name != "" && name == g_ownerSymbol) return true; // 1.17: the owner's one exact name
-   for(int i = 0; i < ArraySize(GOLD_USD_SYMBOLS); i++)
-      if(GOLD_USD_SYMBOLS[i] == name) return true;   // exact, case-sensitive: no prefix or substring match
-   return false;
-  }
-
-// 1.17: an account in US cents (USC) may price gold in US cents too.
-bool IsCentAccount()
-  {
-   string c = AccountInfoString(ACCOUNT_CURRENCY);
-   StringToUpper(c);
-   return c == "USC";
-  }
-
-// "" when `sym` is USD gold this EA may trade, else the reason it is refused.
-string GoldSymbolProblem(const string sym)
-  {
-   if(sym == "" || !IsAllowedGoldName(sym)) return "name_not_allowed";
+   if(sym == "") return "no_symbol";
    if(!SymbolInfoInteger(sym, SYMBOL_EXIST)) return "not_on_server";
-   if(!SymbolInfoInteger(sym, SYMBOL_SELECT)) SymbolSelect(sym, true); // a price needs Market Watch
-   string profitCur = SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT);
-   string profitUp = profitCur;
-   StringToUpper(profitUp);
-   if(profitCur != "USD" && !(IsCentAccount() && profitUp == "USC")) return "profit_currency_not_usd";
+   if(SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT) != "USD") return "profit_currency_not_usd";
    double size = SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE);
    if(size < GOLD_CONTRACT_SIZE_MIN || size > GOLD_CONTRACT_SIZE_MAX) return "contract_size_out_of_range";
    if(SymbolInfoInteger(sym, SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_DISABLED) return "trade_disabled";
-   if(SymbolInfoDouble(sym, SYMBOL_BID) <= 0.0) return "no_price";
+   if(!SymbolInfoInteger(sym, SYMBOL_SELECT)) SymbolSelect(sym, true); // a price needs Market Watch
+   double bid = SymbolInfoDouble(sym, SYMBOL_BID);
+   if(bid <= 0.0) return "no_price";
+   if(!checkPrice) return "";
+   LoadReferencePrice();
+   if(g_refPrice <= 0.0) return "no_reference_price";
+   if(MathAbs(bid - g_refPrice) / g_refPrice > GOLD_PRICE_TOLERANCE) return "price_not_gold";
    return "";
   }
 
-// The USD gold symbol to trade, or "" (then g_symbolError says why). Never falls back to another symbol.
+// The spread relative to the price, to choose between several symbols that pass (smaller is better).
+double RelativeSpread(const string sym)
+  {
+   double bid = SymbolInfoDouble(sym, SYMBOL_BID), ask = SymbolInfoDouble(sym, SYMBOL_ASK);
+   return bid > 0.0 && ask >= bid ? (ask - bid) / bid : 1.0;
+  }
+
+// The gold symbol to trade, or "" (then g_symbolError says why). Never falls back to a symbol that fails the checks.
 string ResolveGoldSymbol()
   {
    LoadOwnerSymbol();
-   if(g_tradeSymbol != "" && GoldSymbolProblem(g_tradeSymbol) == "")
+   if(g_tradeSymbol != "" && GoldSymbolProblem(g_tradeSymbol, false) == "")
       return g_tradeSymbol;
 
    string lastProblem = "no_usd_gold_symbol";
-   // 1.17: the owner's symbol first (the bridge also opens its chart), under the same checks.
-   if(g_ownerSymbol != "" && SymbolInfoInteger(g_ownerSymbol, SYMBOL_EXIST))
+   // The owner's symbol first (a hint), then the chart symbol, under the same checks.
+   string firsts[2];
+   firsts[0] = g_ownerSymbol;
+   firsts[1] = _Symbol;
+   for(int f = 0; f < 2; f++)
      {
-      string p = GoldSymbolProblem(g_ownerSymbol);
+      if(firsts[f] == "") continue;
+      string p = GoldSymbolProblem(firsts[f]);
       if(p == "")
         {
-         g_tradeSymbol = g_ownerSymbol;
+         g_tradeSymbol = firsts[f];
          g_symbolError = "";
          return g_tradeSymbol;
         }
-      lastProblem = g_ownerSymbol + ":" + p;
+      lastProblem = firsts[f] + ":" + p;
      }
-   else if(g_ownerSymbol != "")
-      lastProblem = g_ownerSymbol + ":not_on_server";
-   // The chart symbol first (the bridge sets it per server), then the list in its order.
-   if(IsAllowedGoldName(_Symbol))
+   // Then every symbol on the server, at most every SCAN_EVERY_SEC seconds while none is found. Without a reference
+   // price nothing can be told apart, so nothing is scanned (and nothing is added to Market Watch).
+   LoadReferencePrice();
+   if(g_refPrice <= 0.0)
+      lastProblem = "no_reference_price";
+   else if(g_lastScanAt == 0 || TimeGMT() - g_lastScanAt >= SCAN_EVERY_SEC)
      {
-      string p = GoldSymbolProblem(_Symbol);
-      if(p == "")
+      g_lastScanAt = TimeGMT();
+      string best = "";
+      double bestSpread = 0.0;
+      int total = SymbolsTotal(false);
+      for(int i = 0; i < total; i++)
         {
-         g_tradeSymbol = _Symbol;
+         string c = SymbolName(i, false);
+         if(c == "" || c == firsts[0] || c == firsts[1]) continue;
+         // Cheap checks first, so only plausible symbols are added to Market Watch for a price.
+         if(SymbolInfoString(c, SYMBOL_CURRENCY_PROFIT) != "USD") continue;
+         double size = SymbolInfoDouble(c, SYMBOL_TRADE_CONTRACT_SIZE);
+         if(size < GOLD_CONTRACT_SIZE_MIN || size > GOLD_CONTRACT_SIZE_MAX) continue;
+         if(SymbolInfoInteger(c, SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_DISABLED) continue;
+         if(!(bool)SymbolInfoInteger(c, SYMBOL_SELECT) && StringFind(g_scanSelected, ";" + c + ";") < 0)
+            g_scanSelected += c + ";";   // GoldSymbolProblem adds it to Market Watch for a price
+         string p = GoldSymbolProblem(c);
+         if(p == "")
+           {
+            double sp = RelativeSpread(c);
+            if(best == "" || sp < bestSpread) { best = c; bestSpread = sp; }
+           }
+         else if(p == "price_not_gold" && StringFind(g_scanSelected, ";" + c + ";") >= 0)
+           {
+            // Not gold, and the scan added it: leave Market Watch as it was. A symbol without a price yet
+            // ("no_price") stays until the next scan has its price.
+            SymbolSelect(c, false);
+            StringReplace(g_scanSelected, ";" + c + ";", ";");
+           }
+        }
+      if(best != "")
+        {
+         if(best != g_tradeSymbol) PrintFormat("OmegaExecutor: gold priced in USD on this server is %s (found by its contract and price)", best);
+         g_tradeSymbol = best;
          g_symbolError = "";
          return g_tradeSymbol;
         }
-      lastProblem = _Symbol + ":" + p;
-     }
-   for(int i = 0; i < ArraySize(GOLD_USD_SYMBOLS); i++)
-     {
-      string c = GOLD_USD_SYMBOLS[i];
-      if(c == _Symbol || !SymbolInfoInteger(c, SYMBOL_EXIST)) continue;
-      string p = GoldSymbolProblem(c);
-      if(p == "")
-        {
-         g_tradeSymbol = c;
-         g_symbolError = "";
-         return g_tradeSymbol;
-        }
-      lastProblem = c + ":" + p;
      }
    if(g_tradeSymbol != "")
-      PrintFormat("OmegaExecutor: %s no longer passes the USD gold check (%s); trading stops", g_tradeSymbol, lastProblem);
+      PrintFormat("OmegaExecutor: %s no longer passes the gold check (%s); trading stops", g_tradeSymbol, lastProblem);
    g_tradeSymbol = "";
    g_symbolError = "no_usd_gold_symbol (" + lastProblem + ")";
    return "";
@@ -805,7 +855,7 @@ void WriteStateJson()
    string json = StringFormat(
       "{\"connected\":%s,\"server\":\"%s\","
       "\"account\":{\"trade_mode\":\"%s\",\"currency\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"day_start_balance\":%.2f,\"day_realized_pl\":%.2f,"
-      "\"leverage\":%I64d,\"margin_mode\":\"%s\",\"margin_free\":%.2f,\"login_hash\":\"%s\"},"
+      "\"leverage\":%I64d,\"margin_mode\":\"%s\",\"margin_free\":%.2f,\"login_hash\":\"%s\",\"company\":\"%s\"},"
       "\"symbol\":{\"name\":\"%s\",\"digits\":%d,\"point\":%s,\"tick_size\":%s,\"tick_value\":%s,\"volume_min\":%.4f,\"volume_max\":%.4f,\"volume_step\":%.4f,\"stops_level_points\":%d,\"bid\":%s,\"ask\":%s,\"spread_points\":%d,\"atr_value\":%.2f,\"atr_points\":%d,"
       "\"chart\":\"%s\",\"currency_profit\":\"%s\",\"currency_base\":\"%s\",\"contract_size\":%.4f,"
       "\"freeze_level_points\":%d,\"trade_mode\":\"%s\",\"margin_per_lot\":%.2f},",
@@ -821,6 +871,7 @@ void WriteStateJson()
       AccountMarginModeString(),
       marginFree,
       AccountLoginHash(),
+      EscapeJson(AccountInfoString(ACCOUNT_COMPANY)),
       EscapeJson(sym),
       digits,
       DoubleToString(point, digits),

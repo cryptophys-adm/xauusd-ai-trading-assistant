@@ -19,7 +19,7 @@
 
 import { cellGateText } from "./htf-cells.mjs";
 import { confidenceTrend, parseConfidences } from "./agent-confidence.mjs";
-import { goldCheckOf, mappedPriceProblem } from "./gold-symbol.mjs";
+import { goldCheckOf, goldPriceProblem } from "./gold-symbol.mjs";
 import { versionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, effectiveLimits, PROFILES } from "./account-spec.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
@@ -728,12 +728,15 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const tradeAgent = typeof signal.trade_agent === "string" && signal.trade_agent ? signal.trade_agent : null;
   const posAgent = (p) => (typeof agents?.[p.intent_id] === "string" && agents[p.intent_id]) || DEFAULT_POSITION_AGENT;
   const gates = [
-    // USD gold only (owner 2026-11-17, PR #405): a symbol off the list, not priced in USD, with an odd contract
-    // size or refused by the EA itself opens nothing. Open positions keep their management above.
+    // Gold priced in USD on any broker, whatever its name (owner 2026-11-19, universal): a symbol not priced in USD,
+    // with an odd contract size or refused by the EA itself opens nothing. Open positions keep their management above.
     [!goldCheckOf(executor).ok, "symbol_unverified"],
-    // An owner-set gold symbol off the list (cent accounts, e.g. "GoldOne") must price as gold: its bid within 2% of
-    // the signal's reference entry, else nothing opens.
-    [mappedPriceProblem(sym, signal.entry) !== null, "symbol_price_mismatch"],
+    // Every symbol must price as gold: its bid within 2% of the signal's reference entry, else nothing opens. This is
+    // what tells gold in USD from silver, gold in euro or in grams: a name never decides.
+    [goldPriceProblem(sym, signal.entry) !== null, "symbol_price_mismatch"],
+    // The account's units per US dollar must be known and agree with its own trades (src/gold-symbol.mjs
+    // accountMoney): without them a lot's dollar risk cannot be trusted (the 2026-11-18 lot x100 incident).
+    [typeof executor?.account?.money?.problem === "string" && executor.account.money.problem !== "", executor?.account?.money?.problem === "money_mismatch" ? "money_mismatch" : "money_unverified"],
     // One probation position at a time (src/htf-cells.mjs): a second waits until the first is closed.
     [probation && positions.some((p) => positionMeta?.[p.intent_id]?.probation === true), "probation_busy"],
     // A probation trade never hedges: no entry while any position (Omega's or not) is open on the other side.

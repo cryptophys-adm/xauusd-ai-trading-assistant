@@ -45,123 +45,14 @@ interface Candle {
 
 type Mt5Tf = "M5" | "M15" | "H1" | "H4" | "D1";
 type ToolboxTab = "trade" | "history" | "intents" | "state_machine" | "tca_sor" | "events";
-type BrokerKey = "monex" | "fxpro" | "dupoin" | "valetax" | "exness" | "custom";
-
-interface BrokerPreset {
-  key: BrokerKey;
-  name: string;
-  company: string;
-  goldSymbol: string;
-  servers: string[];
-}
-
-const BROKER_PRESETS: BrokerPreset[] = [
-  {
-    key: "monex",
-    name: "Monex (MIFX)",
-    company: "PT Monex Investindo Futures",
-    goldSymbol: "XAUUSD.m",
-    servers: ["Monex-Demo", "Monex-Live"],
-  },
-  {
-    key: "fxpro",
-    name: "FxPro",
-    company: "FxPro Group / Global",
-    goldSymbol: "XAUUSD / GOLD",
-    servers: ["FxPro-MT5", "FxPro.Global-MT5", "EFXPro-Live"],
-  },
-  {
-    key: "dupoin",
-    name: "Dupoin",
-    company: "PT Dupoin Futures Indonesia / Intl",
-    goldSymbol: "XAUUSD",
-    servers: [
-      "DupoinFuturesID-Demo",
-      "DupoinFuturesID-Real",
-      "DupoinInternational-Demo",
-      "DupoinInternational-Real",
-    ],
-  },
-  {
-    key: "valetax",
-    name: "Valetax",
-    company: "Valetax International / Global",
-    goldSymbol: "XAUUSD",
-    servers: [
-      "ValetaxIntl-Demo",
-      "ValetaxIntl-Live2",
-      "ValetaxIntl-Live5",
-      "ValetaxIntl-Live7",
-      "ValetaxIntl-Live8",
-      "ValetaxIntl-Live9",
-      "ValetaxGlobal-Live3",
-    ],
-  },
-  {
-    key: "exness",
-    name: "Exness",
-    company: "Exness Technologies Ltd",
-    goldSymbol: "XAUUSDm / XAUUSD",
-    servers: [
-      "Exness-MT5Trial",
-      "Exness-MT5Trial2",
-      "Exness-MT5Trial3",
-      "Exness-MT5Trial4",
-      "Exness-MT5Trial5",
-      "Exness-MT5Trial6",
-      "Exness-MT5Trial7",
-      "Exness-MT5Trial8",
-      "Exness-MT5Trial9",
-      "Exness-MT5Trial10",
-      "Exness-MT5Trial11",
-      "Exness-MT5Trial12",
-      "Exness-MT5Real",
-      "Exness-MT5Real2",
-      "Exness-MT5Real3",
-      "Exness-MT5Real4",
-      "Exness-MT5Real5",
-      "Exness-MT5Real6",
-      "Exness-MT5Real7",
-      "Exness-MT5Real8",
-      "Exness-MT5Real9",
-      "Exness-MT5Real10",
-      "Exness-MT5Real11",
-      "Exness-MT5Real12",
-      "Exness-MT5Real15",
-      "Exness-MT5Real20",
-    ],
-  },
-  {
-    key: "custom",
-    name: "Custom Server",
-    company: "Manual entry",
-    goldSymbol: "Auto (XAUUSD / GOLD)",
-    servers: [],
-  },
-];
-
+// The account's gold symbol (owner 2026-11-19, universal): found automatically by OmegaExecutor 1.19 on any broker, by its
+// contract and its price against the reference gold price; a typed name is only a hint tried first, under the same checks.
 const GOLD_PAIR_OPTIONS = [
-  { value: "AUTO_GOLD", label: "Auto (default)" },
-  { value: "XAUUSD", label: "XAUUSD" },
-  { value: "XAUUSD.m", label: "XAUUSD.m (Monex / MIFX)" },
-  { value: "XAUUSDm", label: "XAUUSDm (Exness / Valetax)" },
-  { value: "GOLD", label: "GOLD (FxPro / Dupoin)" },
-  // Cent accounts (owner 2026-11-18): a gold symbol off the list, typed exactly as Market Watch shows it (e.g. GoldOne).
-  { value: "OTHER", label: "Other (type the exact name)" },
+  { value: "AUTO_GOLD", label: "Automatic (found by contract and price)" },
+  { value: "OTHER", label: "Hint: type a symbol name" },
 ];
 // The same rule as src/gold-symbol.mjs TRADE_SYMBOL_RE.
 const TRADE_SYMBOL_RE = /^[A-Za-z0-9._#+-]{1,32}$/;
-
-function detectBrokerFromServer(srv: string): BrokerKey {
-  const s = (srv || "").toLowerCase();
-  if (!s) return "custom";
-  if (s.includes("monex") || s.includes("mifx")) return "monex";
-  if (s.includes("fxpro") || s.includes("efxpro")) return "fxpro";
-  if (s.includes("dupoin")) return "dupoin";
-  if (s.includes("valetax")) return "valetax";
-  if (s.includes("exness")) return "exness";
-  return "custom";
-}
 
 const MT5_TFS: { key: Mt5Tf; label: string }[] = [
   { key: "M5", label: "M5" },
@@ -584,9 +475,10 @@ export default function Omega() {
 
   // Broker & Gold Pairing setup state
   // No broker preselected: the connected server picks it (2026-11-18: labels follow the broker, never a default name).
-  const [selectedBroker, setSelectedBroker] = useState<BrokerKey>("custom");
   const [goldPair, setGoldPair] = useState<string>("AUTO_GOLD");
   const [goldOther, setGoldOther] = useState<string>("");
+  // Units of the account currency per US dollar, only for an account not in USD that has not traded yet (e.g. 100 for cents).
+  const [unitsPerUsd, setUnitsPerUsd] = useState<string>("");
   const [showPass, setShowPass] = useState<boolean>(false);
   const [bServer, setBServer] = useState("");
   const [bLogin, setBLogin] = useState("");
@@ -626,7 +518,6 @@ export default function Omega() {
     if (activeSrv && !serverInitRef.current) {
       serverInitRef.current = true;
       setBServer(activeSrv);
-      setSelectedBroker(detectBrokerFromServer(activeSrv));
     }
     const eng = ov?.broker?.engine;
     if (eng && !engineDirtyRef.current) {
@@ -704,8 +595,13 @@ export default function Omega() {
       setBrokerMsg({ tone: "text-amber-200", text: "Fill in the server, login and password." });
       return;
     }
-    // The account's gold symbol: Auto sends none (the EA looks for the listed names); a listed or typed name is sent.
-    const tradeSymbol = goldPair === "AUTO_GOLD" ? null : goldPair === "OTHER" ? goldOther.trim() : goldPair;
+    // The account's gold symbol: Automatic sends none (the EA finds gold by its contract and price); a typed name is a hint.
+    const tradeSymbol = goldPair === "OTHER" && goldOther.trim() ? goldOther.trim() : null;
+    const units = unitsPerUsd.trim() === "" ? null : Number(unitsPerUsd);
+    if (units !== null && !(Number.isFinite(units) && units > 0)) {
+      setBrokerMsg({ tone: "text-amber-200", text: "Units per US dollar must be a positive number (e.g. 100 for a cent account), or empty." });
+      return;
+    }
     if (tradeSymbol !== null && !TRADE_SYMBOL_RE.test(tradeSymbol)) {
       setBrokerMsg({ tone: "text-amber-200", text: "Type the gold symbol exactly as Market Watch shows it (letters, digits, . _ - # +)." });
       return;
@@ -714,7 +610,7 @@ export default function Omega() {
     try {
       const key = await omegaJson("/omega/api/bridge/key");
       const envelope = await buildEnvelope(key.public_key, key.kid, { server, login, password });
-      const out = await omegaJson("/omega/api/connection", "POST", { server, envelope, trade_symbol: tradeSymbol });
+      const out = await omegaJson("/omega/api/connection", "POST", { server, envelope, trade_symbol: tradeSymbol, units_per_usd: units });
       setBrokerMsg({
         tone: "text-emerald-300",
         text: `Saved v${out.version} for ${out.server}${out.trade_symbol ? ` (gold symbol ${out.trade_symbol})` : ""}; applied at next bridge sync.`,
@@ -996,7 +892,7 @@ export default function Omega() {
             </span>
           ) : (
             <span className="mono rounded-md border border-white/10 bg-black/40 px-2.5 py-1 text-slate-300">
-              Broker: <strong className="text-cyan-300">{BROKER_PRESETS.find((p) => p.key === selectedBroker)?.name || "Custom"}</strong> ({bServer || serverName})
+              Server: <strong className="text-cyan-300">{bServer || serverName || "—"}</strong>
             </span>
           )}
         </div>
@@ -2524,70 +2420,18 @@ export default function Omega() {
           ))}
         </div>
 
-        {/* Step 1: broker selector cards (Connection & EA only) */}
+        {/* The connected server (owner 2026-11-19, universal: no broker presets; the broker is what the terminal reports). */}
         {setupTab === "connection" ? (
-        <div>
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-cyan-300">
-              Broker
-            </span>
+            <span className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-cyan-300">Broker</span>
             <span className="mono text-[11px] text-slate-400">
               {configLocked ? (
                 <span className="text-emerald-300">Locked: <strong className="text-slate-100">{serverName}</strong></span>
               ) : (
-                <>Server: <strong className="text-slate-200">{bServer || serverName}</strong></>
+                <>Server: <strong className="text-slate-200">{bServer || serverName || "—"}</strong></>
               )}
             </span>
           </div>
-          <div id="broker-preset-grid" className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-            {BROKER_PRESETS.map((preset) => {
-              const active = selectedBroker === preset.key;
-              return (
-                <button
-                  key={preset.key}
-                  type="button"
-                  data-broker={preset.key}
-                  disabled={configLocked && !active}
-                  onClick={() => {
-                    if (configLocked) return;
-                    setSelectedBroker(preset.key);
-                    if (preset.servers.length > 0) {
-                      setBServer(preset.servers[0]);
-                    }
-                  }}
-                  className={`flex flex-col items-start justify-between rounded-lg border p-2.5 text-left transition ${
-                    active
-                      ? "border-cyan-400/60 bg-cyan-500/15 text-slate-100 shadow-[0_0_20px_rgba(34,211,238,0.14)]"
-                      : configLocked
-                        ? "border-white/5 bg-black/20 text-slate-500 opacity-40 cursor-not-allowed"
-                        : "border-white/10 bg-black/35 text-slate-300 hover:border-white/25 hover:bg-white/5"
-                  }`}
-                  title={configLocked && !active ? "Disconnect first to switch brokers." : undefined}
-                >
-                  <div className="flex w-full items-center justify-between gap-1">
-                    <span className="text-[12px] font-bold text-slate-100">{preset.name}</span>
-                    {active ? (
-                      <span className="flex items-center gap-1 rounded-sm bg-cyan-500/20 px-1.5 py-0.5 text-[9px] font-bold text-cyan-300 border border-cyan-400/30">
-                        {configLocked ? "ACTIVE" : "SELECTED"}
-                      </span>
-                    ) : configLocked ? (
-                      <span className="rounded-sm bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-500">
-                        OFF
-                      </span>
-                    ) : null}
-                  </div>
-                  <span className="mt-0.5 line-clamp-1 text-[10px] text-slate-400">{preset.company}</span>
-                  <div className="mt-2 flex w-full items-center justify-between border-t border-white/10 pt-1.5 text-[10px]">
-                    <span className="mono text-amber-200">{preset.goldSymbol}</span>
-                    <span className="mono text-slate-400">
-                      {preset.servers.length ? `${preset.servers.length} srv` : "manual"}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
         ) : null}
 
         {/* Step 2, 3, 4: 3-Column Configuration Panels */}
@@ -2619,34 +2463,6 @@ export default function Omega() {
                 </div>
               ) : null}
 
-              {/* Server Dropdown from Selected Broker Preset */}
-              {(() => {
-                const preset = BROKER_PRESETS.find((p) => p.key === selectedBroker);
-                if (!preset || preset.servers.length === 0) return null;
-                return (
-                  <div>
-                    <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300" htmlFor="b-server-select">
-                      Server preset {configLocked ? "(locked)" : ""}
-                    </label>
-                    <select
-                      id="b-server-select"
-                      disabled={configLocked}
-                      value={preset.servers.includes(bServer) ? bServer : preset.servers[0]}
-                      onChange={(ev) => setBServer(ev.target.value)}
-                      className={`mt-1 w-full rounded-md border border-cyan-400/35 bg-[#091322] px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400 focus:outline-hidden ${
-                        configLocked ? "cursor-not-allowed opacity-50 bg-black/40" : ""
-                      }`}
-                    >
-                      {preset.servers.map((srv) => (
-                        <option key={srv} value={srv}>
-                          {srv}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                );
-              })()}
-
               <div>
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-server">
                   Server {configLocked ? "(locked)" : ""}
@@ -2655,13 +2471,10 @@ export default function Omega() {
                   id="b-server"
                   disabled={configLocked}
                   maxLength={64}
-                  placeholder="e.g. Broker-Demo"
+                  placeholder="the server name exactly as MT5 shows it"
                   spellCheck={false}
                   value={bServer}
-                  onChange={(ev) => {
-                    setBServer(ev.target.value);
-                    setSelectedBroker(detectBrokerFromServer(ev.target.value));
-                  }}
+                  onChange={(ev) => setBServer(ev.target.value)}
                   className={`mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-hidden ${
                     configLocked ? "cursor-not-allowed opacity-50 bg-black/40" : ""
                   }`}
@@ -2674,7 +2487,7 @@ export default function Omega() {
                   <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300" htmlFor="b-gold-pair">
                     Symbol {configLocked ? "(locked)" : ""}
                   </label>
-                  <Hint text="Auto: the EA picks the broker's gold symbol from Market Watch (XAUUSD, GOLD, XAUUSD.m...). Other: type the account's gold symbol exactly (e.g. GoldOne on a cent account). It must be gold priced in USD or US cents, and it opens nothing until its price is within 2% of the reference gold price." />
+                  <Hint text="Any broker, any symbol name: the EA scans every symbol on the server and keeps the one priced in USD, 1 to 100 oz a lot, within 2% of the reference gold price. A typed name is only tried first, under the same checks." />
                 </div>
                 <select
                   id="b-gold-pair"
@@ -2707,6 +2520,26 @@ export default function Omega() {
                 {conn?.trade_symbol ? (
                   <div className="mt-1 text-[10px] text-slate-400">Stored with the connection: <strong className="text-amber-200">{conn.trade_symbol}</strong></div>
                 ) : null}
+              </div>
+
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-units-usd">
+                    Units per US dollar {configLocked ? "(locked)" : "(optional)"}
+                  </label>
+                  <Hint text="Leave empty for a USD account. For an account in another currency that has not traded yet, how many of its units make one US dollar (e.g. 100 for a cent account). Once it trades, its own trades measure it; a disagreement opens nothing." />
+                </div>
+                <input
+                  id="b-units-usd"
+                  disabled={configLocked}
+                  inputMode="decimal"
+                  maxLength={12}
+                  placeholder="empty, or e.g. 100"
+                  value={unitsPerUsd}
+                  onChange={(ev) => setUnitsPerUsd(ev.target.value)}
+                  className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-hidden"
+                />
+                {account?.money_text ? <div className="mt-1 text-[10px] text-slate-400">Account money: <strong className="text-slate-200">{account.money_text}</strong></div> : null}
               </div>
 
               <div>
