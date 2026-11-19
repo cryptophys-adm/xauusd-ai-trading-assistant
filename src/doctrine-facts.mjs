@@ -16,6 +16,7 @@ import { blackoutWindow } from "./ea-signal.mjs";
 import { OMEGA_DEFAULTS, RISK_PCT_MAX, ROLLOVER_QUARANTINE_UTC } from "./omega-engine.mjs";
 import { readSettings } from "./omega-broker.mjs";
 import { activeWitnessTuning, tuningFrozen } from "./witness-tuning.mjs";
+import { activeRoom, roomTuningFrozen, ROOM_MIN, ROOM_MAX, ROOM_MODES } from "./room-tuning.mjs";
 
 export const DOCTRINE_FACTS_SCHEMA = "cryptophys.doctrine-facts.v1";
 
@@ -37,7 +38,15 @@ export async function nexusFacts(env) {
   // The weights in force: the auto-tuned set when one is active (src/witness-tuning.mjs).
   let weights = { ...activeWitnessWeights(env) };
   try { weights = { ...(await activeWitnessTuning(env)).weights }; } catch { /* the static set */ }
+  // The room guardrail in 1H ranges, per mode and for the mode in force (src/room-tuning.mjs, owner 2026-11-19): an
+  // operational value the learning protocol moves inside the owner's bounds, carried here for the doctrine protocol.
+  const rooms = {};
+  for (const m of ROOM_MODES) { try { rooms[m] = (await activeRoom(env, m)).value; } catch { rooms[m] = 1; } }
   return {
+    "decision.room_min_atr": rooms[t.mode] ?? rooms.intraday ?? 1,
+    "decision.room_min_atr_by_mode": rooms,
+    "decision.room_bounds_atr": [ROOM_MIN, ROOM_MAX],
+    "decision.room_tuning": roomTuningFrozen(env) ? "default" : "auto",
     "decision.engine_enabled": decisionEngineEnabled(env),
     "decision.cadence": "15m",
     "decision.witness_weights": weights,

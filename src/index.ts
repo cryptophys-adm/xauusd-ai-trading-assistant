@@ -210,6 +210,7 @@ import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLates
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport, pushExecutionReport, pushModelReport } from "./aether-push.mjs";
 import { applyWitnessTuning, readWitnessTuning, witnessTuningMessage, witnessTuningReport } from "./witness-tuning.mjs";
+import { applyRoomTuning, readRoomTuning, roomTuningMessage, roomTuningReport } from "./room-tuning.mjs";
 import { runTuneStep, readTuneRuns } from "./tune-runs.mjs";
 import { pushDoctrineFacts } from "./doctrine-facts.mjs";
 import { fetchEffectiveDoctrine } from "./doctrine-consumer.mjs";
@@ -2645,6 +2646,12 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     try { return dashboardJson({ status: "ok", ...(await readTuneRuns(env, { step: url.searchParams.get("step"), limit: Number(url.searchParams.get("limit")) || 48 })) }); }
     catch (error) { console.error("tune_runs_read_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
   }
+  if (url.pathname === "/api/weighting/room") {
+    // The room guardrail per trading mode (src/room-tuning.mjs, owner 2026-11-19): the value in force per mode, the
+    // replay of the values next to it (discovery with Holm, holdout), the reverse shadow, the fidelity and the history.
+    try { return dashboardJson({ status: "ok", ...(await readRoomTuning(env)) }); }
+    catch (error) { console.error("room_tuning_read_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
+  }
   if (url.pathname === "/api/weighting/engine") {
     // The Decision Engine's witness weights (src/witness-tuning.mjs): the active set, the replay of the
     // sets next to it (discovery with Holm, holdout), the reverse shadow, the replay fidelity and the history.
@@ -3241,6 +3248,27 @@ export default {
               return { replay, applied, pushed };
             });
             if (run.error) console.error("witness_tuning_failed", run.error);
+          }
+          // The room guardrail per trading mode, the same protocol (owner 2026-11-19: "guardrail room biarkan protocol
+          // learning dan knowledge yang melakukan adjustment secara dinamis"; bounds 0.5 to 1.5 times the 1H range).
+          {
+            const run = await runTuneStep(env, "room", async () => {
+              let replay = await readRoomTuning(env, { useCache: false });
+              const applied = await applyRoomTuning(env, { replay });
+              if (applied.status !== "unchanged") console.log("room_tuning", JSON.stringify(applied));
+              let told = false;
+              for (const change of applied.changes ?? []) {
+                const line = roomTuningMessage(change);
+                if (!line) continue;
+                told = true;
+                try { await sendTelegram(env, line); } catch (e) { console.error("room_tuning_telegram_failed", e instanceof Error ? e.message : String(e)); }
+              }
+              if (told) replay = await readRoomTuning(env, { useCache: false });
+              const pushed = await pushWitnessTuningReport(env, roomTuningReport(replay));
+              if (pushed.status !== "disabled" && pushed.status !== "unchanged") console.log("room_tuning_report", JSON.stringify(pushed));
+              return { replay, applied, pushed };
+            });
+            if (run.error) console.error("room_tuning_failed", run.error);
           }
         }
         // The Signal Ledger runs on its own 5-minute schedule (LEDGER_CRON, runLedgerStep below).
