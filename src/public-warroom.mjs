@@ -26,22 +26,38 @@ const parse = (v, d) => { if (v && typeof v === "object") return v; try { return
 
 /** Analysis terms that contain the word "order" but are no order: order flow, an order block, the order book. */
 const ANALYSIS_TERMS = /\border[- ](flow|blocks?|book)s?\b/gi;
-/** Pure: whether a text may stand in a public reading (no price, no order wording, no signal). */
+/**
+ * Positional wording (2026-11-19, the holo war room's per-analyst text): a sentence that says what to do or where one
+ * stands is advice, whatever its words: flat, ready to trade, waiting for an entry or a candle, the sidelines, a
+ * reference to a ranked item ("#1").
+ */
+export const POSITION_WORDING = /\b(flat|trade[- ]?ready|ready to trade|setup is ready|in the trade|in a trade|in position|on the sidelines|sidelines|stand aside|stay(?:ing)? out|wait(?:s|ed|ing)?|hold(?:s|ing)? off|take (?:the|a) trade|no trade|position(?:s|ed|ing)?)\b|#\s?\d/i;
+/** Names the public text may carry that contain a forbidden word: the Decision Matrix analyst is "Matrix" in public. */
+const PUBLIC_NAMES = [[/\bdecision matrix\b/gi, "Matrix"]];
+/** A ratio such as Fibonacci 0.618 is no price: decimals under 1 are left out of the price check. */
+const RATIOS = /\b0?\.\d+\b/g;
+/** Pure: the text with its public names (before any check). */
+export const publicNames = (s) => PUBLIC_NAMES.reduce((t, [re, name]) => t.replace(re, name), String(s ?? ""));
+/** Pure: whether a text may stand in a public reading (no price, no order wording, no signal, no position). */
 export function publicPhrase(s) {
-  const t = String(s ?? "");
-  return Boolean(t.trim()) && !PRICE_LIKE.test(t) && !ORDER_WORDING.test(t.replace(ANALYSIS_TERMS, " ")) && !SIGNAL_WORDING.test(t);
+  const t = publicNames(s);
+  return Boolean(t.trim()) && !PRICE_LIKE.test(t.replace(RATIOS, " ")) && !ORDER_WORDING.test(t.replace(ANALYSIS_TERMS, " ")) && !SIGNAL_WORDING.test(t) && !POSITION_WORDING.test(t);
 }
 
-/** Pure: the sentences of a text a public reading may carry (no price, no order wording, no signal). */
+/**
+ * Pure: the sentences of a text a public reading may carry. Each whole sentence is checked first and a sentence longer
+ * than `len` is dropped, never clipped: a cut could hide the word that should have refused it (2026-11-19: "...to
+ * justify a high-confidence sell" passed once cut at 200 characters).
+ */
 export function readingSentences(text, { max = 3, len = 220 } = {}) {
-  const parts = (Array.isArray(text) ? text : [text]).flatMap((t) => String(t ?? "").split(/(?<=[.!?])\s+/));
-  return parts.map((s) => clip(s, len)).filter(publicPhrase).slice(0, max);
+  const parts = (Array.isArray(text) ? text : [text]).flatMap((t) => String(t ?? "").replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s+/));
+  return parts.map((x) => publicNames(x).trim()).filter((x) => x.length <= len && publicPhrase(x)).slice(0, max);
 }
 
 /** Pure: a public name of a metric ("the US dollar strength"), or null. */
 function metricName(m) {
-  const s = clip(m, 60);
-  return publicPhrase(s) ? s : null;
+  const s = publicNames(String(m ?? "").replace(/\s+/g, " ").trim());
+  return s.length <= 60 && publicPhrase(s) ? s : null;
 }
 
 /** Pure: the public reading of one concluded room run (D1 room_runs row), or null. */
@@ -93,4 +109,67 @@ export async function readPublicWarRoom(env, { source } = {}, { readNewsDaily = 
   } catch (error) {
     return { version: PUBLIC_WARROOM_VERSION, source, error: String(error?.message ?? error).slice(0, 120) };
   }
+}
+
+/** The thread each room's statements live in (D1 agent_thread_messages), by source. */
+const THREAD_OF = Object.freeze({ "15m": (bar) => `warroom:${String(bar).slice(0, 10)}`, "1h": () => "tf:H1", "4h": () => "tf:H4", "1d": () => "tf:D1" });
+const ID_RE = /^[a-z0-9_]{2,40}$/;
+
+/**
+ * Pure: the public scene of one concluded room run for the CTA's holo war room (owner 2026-11-19: "Sinkron dengan room
+ * nyata"; "Cukup info yang perlu dan layak untuk konsumsi public"). The roster in speaking order, and per analyst its
+ * metric names, at most two sentences of its opening claim and of its rebuttal, the analysts it rebutted and its bias
+ * (analysis); the room's bias and the Moderator's public reasons. Never a stance, a confidence, a decision, a price,
+ * order or positional wording: every sentence passes readingSentences, every metric metricName.
+ */
+export function publicRoomScene(row, messages = [], source) {
+  const reading = publicRoomReading(row, source);
+  if (!reading) return null;
+  const body = parse(row.body_json, {});
+  const seats = (Array.isArray(body?.agents) ? body.agents : []).filter((a) => typeof a?.agent === "string" && ID_RE.test(a.agent) && a.status !== "failed");
+  const byAgent = new Map();
+  for (const m of Array.isArray(messages) ? messages : []) {
+    const step = String(m?.step ?? ""), agent = String(m?.agent ?? "");
+    if (!ID_RE.test(agent)) continue;
+    const b = parse(m.body_json, {});
+    const e = byAgent.get(agent) ?? {};
+    if (step.startsWith("open:")) e.claim = b.claim ?? b.argument ?? null;
+    else if (step.startsWith("debate:")) { e.rebuttal = b.argument ?? b.claim ?? null; e.rebuts = Array.isArray(b.rebuts) ? b.rebuts : []; }
+    if (Array.isArray(b.metrics)) e.metrics = b.metrics;
+    if (b.bias) e.bias = b.bias;
+    byAgent.set(agent, e);
+  }
+  const ids = new Set(seats.map((a) => a.agent));
+  const analysts = seats.map((a) => {
+    const e = byAgent.get(a.agent) ?? {};
+    const bias = BIASES[String(e.bias ?? a.bias ?? "").toUpperCase()] ?? null;
+    return {
+      id: a.agent,
+      bias,
+      metrics: [...new Set((e.metrics ?? a.metrics ?? []).map(metricName).filter(Boolean))].slice(0, 3),
+      claim: readingSentences(e.claim ?? "", { max: 2, len: 220 }),
+      rebuttal: readingSentences(e.rebuttal ?? "", { max: 2, len: 220 }),
+      rebuts: (e.rebuts ?? []).filter((r) => typeof r === "string" && ids.has(r)).slice(0, 3)
+    };
+  });
+  return { source, label: reading.label, at: reading.at, bias: reading.bias, moderator: reading.reasons, analysts };
+}
+
+/**
+ * The latest public scene of every timeframe room (PublicProjection.warroomScene): one read for the holo war room,
+ * which the CTA caches at the edge for about a minute. Never throws: a room that cannot be read is left out.
+ */
+export async function readPublicWarRoomScene(env) {
+  const rooms = {};
+  for (const source of ["15m", "1h", "4h", "1d"]) {
+    try {
+      const meta = WARROOM_SOURCES[source];
+      const row = await env.DB.prepare("SELECT bar_close, bias, agents_heard, body_json FROM room_runs WHERE room = ? AND status = 'concluded' ORDER BY bar_close DESC LIMIT 1").bind(meta.room).first();
+      if (!row?.bar_close) continue;
+      const msgs = (await env.DB.prepare("SELECT step, agent, body_json FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? AND (step LIKE 'open:%' OR step LIKE 'debate:%') LIMIT 60").bind(THREAD_OF[source](row.bar_close), row.bar_close).all()).results ?? [];
+      const scene = publicRoomScene(row, msgs, source);
+      if (scene) rooms[source] = scene;
+    } catch { /* that room is left out */ }
+  }
+  return { version: PUBLIC_WARROOM_VERSION, rooms, notice: "Analysis, not a signal." };
 }

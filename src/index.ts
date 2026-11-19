@@ -230,7 +230,7 @@ import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
 import { scoreModelArena, pruneModelArena, readModelArena } from "./model-arena.mjs";
 import { readPublicProjection } from "./public-projection.mjs";
 import { publicAnalysis } from "./public-analysis.mjs";
-import { readPublicWarRoom } from "./public-warroom.mjs";
+import { readPublicWarRoom, readPublicWarRoomScene } from "./public-warroom.mjs";
 import { ownerModify, setDelegation, setDelegateMode, ensureHitlSchema } from "./omega-hitl.mjs";
 import { readShadowMode, setShadowMode, shadowModeMessage, checkShadowBudget } from "./shadow-switch.mjs";
 import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
@@ -1772,6 +1772,13 @@ export class PublicProjection extends WorkerEntrypoint<Env> {
    */
   async warroom(input?: { source?: string }): Promise<JsonObject> {
     return readPublicWarRoom(this.env, { source: String(input?.source ?? "") }) as Promise<JsonObject>;
+  }
+  /**
+   * The holo war room's scene (owner 2026-11-19): the latest public scene of the 15m, 1H, 4H and 1D rooms, the roster
+   * and each analyst's filtered claim and rebuttal; never a stance, confidence, decision or price (src/public-warroom.mjs).
+   */
+  async warroomScene(): Promise<JsonObject> {
+    return readPublicWarRoomScene(this.env) as Promise<JsonObject>;
   }
 }
 
