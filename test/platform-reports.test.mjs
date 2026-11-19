@@ -287,3 +287,63 @@ test("T7. a report waits 15 s for the kernel (it stores the report after ~7 s at
   assert.match(src, /timeoutMs = PLATFORM_REPORT_TIMEOUT_MS/);
   assert.match(src, /env\.AGENTS\.whoami\("xauusd-moderator"\)[\s\S]{0,200}PLATFORM_CALL_TIMEOUT_MS/);
 });
+
+test("a suspended agent backs off: one denial, then no call for an hour, then one status read decides (platform audit 2026-11-19)", async () => {
+  const { resetPlatformBackoffForTests, platformBackoffs, PLATFORM_BACKOFF_MS } = await import("../src/platform-reports.mjs");
+  resetPlatformBackoffForTests();
+  const DB = d1();
+  let status = "suspended";
+  const calls = [];
+  const AGENTS = {
+    async whoami(agentId) { calls.push(["whoami", agentId]); return { agent_id: agentId, status }; },
+    async syscall(agentId) { calls.push(["syscall", agentId]); return status === "enabled" ? { outcome: "succeeded", result: { report: { report_id: "rpt_9" } } } : { outcome: "denied", reason: "failed: agent_enabled" }; }
+  };
+  const env = { DB, AGENTS };
+  const t0 = Date.parse("2026-11-19T13:00:00Z");
+  const report = { kind: "xauusd_digest", severity: "info", subject: "s", body: {} };
+  assert.deepEqual(await publishToPlatform(env, "xauusd-risk-manager", report, { now: t0 }), { outcome: "denied", reason: "failed: agent_enabled" });
+  const [b] = await platformBackoffs(env);
+  assert.deepEqual([b.agent_id, b.until], ["xauusd-risk-manager", new Date(t0 + PLATFORM_BACKOFF_MS).toISOString()]);
+  // Inside the hour: no call at all.
+  for (const m of [10, 20, 59]) {
+    const r = await publishToPlatform(env, "xauusd-risk-manager", report, { now: t0 + m * 60_000 });
+    assert.equal(r.backoff, true);
+  }
+  assert.deepEqual(calls, [["syscall", "xauusd-risk-manager"]], "one publish, then nothing for an hour");
+  // Other agents are untouched.
+  status = "suspended";
+  // After the hour, still suspended: one status read, no publish, another hour.
+  const later = await publishToPlatform(env, "xauusd-risk-manager", report, { now: t0 + PLATFORM_BACKOFF_MS + 1 });
+  assert.match(later.reason, /status suspended/);
+  assert.deepEqual(calls.slice(1), [["whoami", "xauusd-risk-manager"]]);
+  // Resumed by the owner: the next due try reads "enabled", publishes, and the backoff is cleared.
+  status = "enabled";
+  const resumed = await publishToPlatform(env, "xauusd-risk-manager", report, { now: t0 + 2 * PLATFORM_BACKOFF_MS + 2 });
+  assert.deepEqual(resumed, { outcome: "success", report_id: "rpt_9" });
+  assert.deepEqual(await platformBackoffs(env), []);
+  // A rate limit or the global kill switch is not a suspension: no backoff.
+  const other = { DB, AGENTS: { async syscall() { return { outcome: "denied", reason: "rate_limited" }; } } };
+  await publishToPlatform(other, "xauusd-moderator", report, { now: t0 });
+  assert.deepEqual(await platformBackoffs(other), []);
+  const status2 = await platformStatus({ DB, AGENTS: kernel() }, { now: t0 });
+  assert.deepEqual(status2.backoff, []);
+});
+
+test("the kernel's 4-an-hour limit is kept here: a fifth report in the hour is held (retried later), never sent to be denied", async () => {
+  const { resetPlatformBackoffForTests, PLATFORM_REPORTS_PER_HOUR } = await import("../src/platform-reports.mjs");
+  resetPlatformBackoffForTests();
+  const DB = d1();
+  const AGENTS = kernel();
+  const env = { DB, AGENTS };
+  const t0 = Date.parse("2026-11-19T13:00:00Z");
+  const report = { kind: "xauusd_digest", severity: "info", subject: "s", body: {} };
+  assert.equal(PLATFORM_REPORTS_PER_HOUR, 4);
+  for (let i = 0; i < 4; i++) assert.equal((await publishToPlatform(env, "xauusd-risk-manager", report, { now: t0 + i * 60_000 })).outcome, "success");
+  const fifth = await publishToPlatform(env, "xauusd-risk-manager", report, { now: t0 + 10 * 60_000 });
+  assert.deepEqual(fifth, { outcome: "failed", reason: "local_budget", local: true }, "held: every caller retries a failed report later");
+  assert.equal(AGENTS.calls.filter((c) => c.capability === "reports.publish").length, 4, "the fifth never reached the kernel");
+  // Another agent has its own budget.
+  assert.equal((await publishToPlatform(env, "xauusd-moderator", report, { now: t0 + 10 * 60_000 })).outcome, "success");
+  // An hour after the first, the window has room again.
+  assert.equal((await publishToPlatform(env, "xauusd-risk-manager", report, { now: t0 + 60 * 60_000 + 1 })).outcome, "success");
+});
