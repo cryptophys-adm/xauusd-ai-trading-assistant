@@ -143,7 +143,7 @@ async function withTelegram(fn) {
   try { await fn(sent); } finally { globalThis.fetch = orig; }
   return sent;
 }
-function env() { resetOmegaBrokerSchemaForTests(); resetPositionSchemaCacheForTests(); resetEaExecutionSchemaForTests(); return { DB: d1(), SIGNAL_CACHE: { get: async () => null, put: async () => {} }, OMEGA_ENGINE_ENABLED: "true", TELEGRAM_BOT_TOKEN: "t", TELEGRAM_CHAT_ID: "c" }; }
+function env() { resetOmegaBrokerSchemaForTests(); resetPositionSchemaCacheForTests(); resetEaExecutionSchemaForTests(); return { DB: d1(), SIGNAL_CACHE: (() => { const m = new Map(); return { get: async (k) => m.get(k) ?? null, put: async (k, v) => { m.set(k, v); } }; })(), OMEGA_ENGINE_ENABLED: "true", TELEGRAM_BOT_TOKEN: "t", TELEGRAM_CHAT_ID: "c" }; }
 const sync = (e, over = {}, now = NOW) => bridgeSync(e, { state: STATE(), results: [], publicKey: SPKI, kid: KID, bridgeVersion: "1.0.0", ...over }, { now, signal: null });
 
 test("PB8. the sync: a broker take-profit is said once with its numbers; a full close says it from the deal, not twice", async () => {
@@ -183,6 +183,11 @@ test("PB9. the sync: a Position Manager action is said when the broker answers, 
   const line = sent.find((t) => /POSITION MANAGER/.test(t));
   assert.match(line, /#101 SELL · \+37 pips · target to 3862 · NOT applied: the TP ladder holds the target until the stop locks TP1/);
   assert.equal(e.DB.raw.prepare("SELECT status FROM position_actions WHERE id = ?").get(`pm:101:${bar}`).status, "skipped");
+  // The same reason for the same ticket and rule a bar later: not said again within the hour (PM PR 2).
+  ins(`pm:101:${bar - 1}`, "tp", { rule: "tp2_target", tp: 3862, why: "target out to TP2 (the next key level)" });
+  const again = await withTelegram(async () => { await sync(e, { state: STATE({ positions: [pos()] }) }, NOW + 500); });
+  assert.equal(again.filter((t) => /POSITION MANAGER/.test(t)).length, 0, "said once an hour");
+  assert.equal(e.DB.raw.prepare("SELECT status FROM position_actions WHERE id = ?").get(`pm:101:${bar - 1}`).status, "skipped");
 
   // A close that reaches the broker: no line at planning, one when the broker answers.
   ins(`pm:101:${bar + 1}`, "close", { rule: "cut_loss", why: "-31 pips and the decision is BUY; the council calls the thesis weakening: loss cut" });

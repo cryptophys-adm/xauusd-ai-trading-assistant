@@ -39,6 +39,7 @@ import { confidenceTrend } from "./agent-confidence.mjs";
 import { eaSignal } from "./ea-signal.mjs";
 import { ensurePositionSchema, ACTION_TTL_MS } from "./position-actions.mjs";
 import { readDelegations, hitlSupported } from "./omega-hitl.mjs";
+import { OMEGA_DEFAULTS, ladderTp1Locked } from "./omega-engine.mjs";
 export { ensurePositionSchema, pendingPositionActions, markPositionActions, ACTION_TTL_MS, actionMessage, actionIdOfIntent } from "./position-actions.mjs";
 
 export const PIP = 0.1;
@@ -83,7 +84,7 @@ export const pipsOf = (dist) => r1(dist / PIP);
  * strategy); `levels` the key levels on the broker's scale (low first); `decision` the latest Decision Engine record
  * (stance, quorum, agent_confidence and agent_confidence_prev). Returns null when an input the rules need is missing.
  */
-export function positionFacts({ position: p, sym, openIntent, levels = [], decision }) {
+export function positionFacts({ position: p, sym, openIntent, levels = [], decision, ladder = false, signal = null }) {
   if (!p || (p.side !== "BUY" && p.side !== "SELL") || !isNum(sym?.bid) || !isNum(sym?.ask)) return null;
   const buy = p.side === "BUY", dir = buy ? 1 : -1;
   const open = Number(p.open_price ?? p.entry), sl = Number(p.sl), tp = Number(p.tp);
@@ -107,7 +108,9 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
     band_pips: band.pips, band_r: band.r, mode: band.mode, r_dist_pips: band.r_dist_pips, r: band.r_dist_pips ? Math.round((pips / band.r_dist_pips) * 100) / 100 : null,
     agent, agent_conf: isNum(conf) ? conf : null, agent_conf_prev: isNum(prev) ? prev : null, agent_trend: confidenceTrend(conf, prev),
     stance: decision.stance, with_decision: decision.stance === p.side, against_decision: decision.stance === (buy ? "SELL" : "BUY"),
-    share: isNum(share) ? share : null, share_prev: isNum(prevShare) ? prevShare : null
+    share: isNum(share) ? share : null, share_prev: isNum(prevShare) ? prevShare : null,
+    // Under the TP ladder an outward target waits until the stop locks the ladder's TP1 (ADR-0020 Amendment 4).
+    ladder_hold: ladder === true && !ladderTp1Locked({ position: p, levels: levels.length ? levels : null, sym, signal })
   };
 }
 
@@ -132,6 +135,16 @@ export function positionAction(f, council) {
     if (council?.momentum === "weakening") return { action: "close", rule: "take_profit_weakening", why: `${f.beyond_tp1_pips} pips beyond TP1 and the momentum is weakening: closed instead of locking TP1` };
     return { action: "sl", rule: "lock_tp1", sl: f.tp1, why: `${f.beyond_tp1_pips} pips beyond TP1: stop to TP1${reading}` };
   }
+  // TP2 (owner 2026-11-19, PM PR 2): the target moves out only when the council answered with the momentum not
+  // weakening and the thesis intact, and, under the TP ladder, once the stop locks its TP1. Otherwise the target holds
+  // and nothing is sent (no action, so no "not applied" line every five minutes).
+  const tp2 = (fallback) => {
+    if (!tpAtTp1 || f.tp2 == null) return fallback;
+    if (!council) return { action: "hold", rule: "tp2_waits_council", why: "TP2 waits: the council did not answer" };
+    if (council.momentum === "weakening" || council.thesis !== "intact") return { action: "hold", rule: "tp2_waits_council", why: `TP2 waits: the council reads ${council.momentum}, thesis ${council.thesis}` };
+    if (f.ladder_hold) return { action: "hold", rule: "tp2_waits_ladder", why: "TP2 waits: the TP ladder holds the target until the stop locks TP1" };
+    return { action: "tp", rule: "tp2_target", tp: f.tp2, why: `target out to TP2 (the next key level); the council reads ${council.momentum}, thesis intact` };
+  };
   const band = isNum(f.band_pips) && f.band_pips > 0 ? f.band_pips : THRESHOLD_PIPS;
   const at = (sign) => `${sign > 0 ? "+" : ""}${f.pips} pips${f.r != null ? ` (${sign > 0 ? "+" : ""}${f.r}R, band ${f.band_r}R ${f.mode})` : ""}`;
   if (f.pips >= band) {
@@ -139,7 +152,7 @@ export function positionAction(f, council) {
     const be = f.open + f.dir * f.spread;
     if (better(be) && room(be)) return { action: "sl", rule: "breakeven", sl: be, why: `${at(1)}${council ? " and still strong" : ""}: stop to break-even plus the spread${reading}` };
     if (!council) return { action: "none", rule: "council_unavailable", why: "the council did not answer: the stop and target stay" };
-    return tpAtTp1 && f.tp2 != null ? { action: "tp", rule: "tp2_target", tp: f.tp2, why: "target out to TP2 (the next key level)" } : { action: "hold", rule: "protected", why: `${at(1)}, the stop already protects it` };
+    return tp2({ action: "hold", rule: "protected", why: `${at(1)}, the stop already protects it` });
   }
   if (f.pips <= -band) {
     if (f.agent_conf == null || f.agent_conf_prev == null || f.share == null) return { action: "none", rule: "inputs_missing", why: "the agent's confidence or the quorum is missing: the stop stays" };
@@ -157,7 +170,7 @@ export function positionAction(f, council) {
     if (council.thesis === "intact") return { action: "hold", rule: "hold_thesis_intact", why: `${at(-1)} and ${reasons.join("; ")}, but the council calls the thesis intact: held to the original stop` };
     return { action: "close", rule: "cut_loss", why: `${at(-1)} and ${[...reasons, ...(wait ? [wait] : [])].join("; ")}; the council calls the thesis ${council.thesis}: loss cut` };
   }
-  if (tpAtTp1 && f.tp2 != null && f.pips > 0) return { action: "tp", rule: "tp2_target", tp: f.tp2, why: "target out to TP2 (the next key level)" };
+  if (tpAtTp1 && f.tp2 != null && f.pips > 0) return tp2(null);
   return { action: "hold", rule: "inside_band", why: `${f.pips} pips: inside the ±${band} pip band${f.r != null ? ` (±${f.band_r}R ${f.mode})` : ""}` };
 }
 
@@ -232,6 +245,9 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     if (signal === undefined) { try { signal = await eaSignal(env, { now }); } catch { signal = null; } }
     const decision = decisionIn !== undefined ? decisionIn : await latestDecisions(db);
     const levels = brokerLevels(signal);
+    // The TP ladder setting (Omega's settings, default on): TP2 waits for its TP1 lock (positionFacts ladder_hold).
+    let ladder = OMEGA_DEFAULTS.tp_ladder === true;
+    try { const row = await db.prepare("SELECT settings FROM omega_settings WHERE id = 1").first(); const st = row?.settings ? JSON.parse(row.settings) : {}; if (typeof st.tp_ladder === "boolean") ladder = st.tp_ladder; } catch { /* the default */ }
     const bar = Math.floor(now / 300_000);
     const capUsd = dailyCapUsd(env);
     const spent = await positionCouncilSpendUsd(db, { now });
@@ -247,7 +263,7 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     for (const p of positions) {
       const id = `pm:${p.ticket}:${bar}`;
       if (await db.prepare("SELECT id FROM position_actions WHERE id = ?").bind(id).first()) continue;
-      const f = positionFacts({ position: p, sym, openIntent: openIntents[p.intent_id], levels, decision });
+      const f = positionFacts({ position: p, sym, openIntent: openIntents[p.intent_id], levels, decision, ladder, signal });
       let council = null, councilNote = null;
       if (f && spent < capUsd) {
         try {
