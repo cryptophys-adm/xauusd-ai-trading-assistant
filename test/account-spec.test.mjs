@@ -398,3 +398,19 @@ test("AS20 two accounts on one server (2026-11-19): the connected one is found b
   const off = await setAccountProfile(env, { account_ref: refUsd, action: "agent_mode", value: "autonomous" }, { now: NOW + 3_600_000 });
   assert.equal(off.ok, false);
 });
+
+test("AS21 the deals an account reports are its own: one stored before the account was recorded takes it (pages show its deals only)", async () => {
+  const { storeDeal, listDeals } = await import("../src/ea-execution.mjs");
+  resetOmegaBrokerSchemaForTests(); resetAccountSpecSchemaForTests();
+  const env = { DB: d1(), SIGNAL_CACHE: kv(), OMEGA_ENGINE_ENABLED: "true" };
+  await writeSettings(env, { body: { enabled: true }, actor: "owner@example.com" }, { now: NOW });
+  const deal = { deal_ticket: 9001, position_ticket: 1, side: "BUY", volume: 0.01, entry_price: 4000, exit_price: 4010, profit: 10, commission: 0, swap: 0, reason: "tp", opened_ms: NOW - 7_200_000, closed_ms: NOW - 3_600_000, source: "omega" };
+  await storeDeal(env, { ...deal, mode: "demo" });   // stored before the account was recorded
+  await storeDeal(env, { ...deal, deal_ticket: 9002, mode: "demo" });   // another account's, never reported by this one
+  const st = executor({ over: { deals: [deal] } });
+  await bridgeSync(env, { state: { ...st, received_ms: NOW - 1000 }, results: [], publicKey: "QUJD", kid: "0123456789abcdef", bridgeVersion: "1.5.0" }, { now: NOW });
+  const ref = (await accountRef(st)).ref;
+  const rows = env.DB.raw.prepare("SELECT deal_ticket, account_ref FROM ea_deals ORDER BY deal_ticket").all();
+  assert.deepEqual(rows.map((r) => [r.deal_ticket, r.account_ref]), [[9001, ref], [9002, null]]);
+  assert.deepEqual((await listDeals(env, { account: "last" })).map((d) => d.deal_ticket), [9001]);
+});

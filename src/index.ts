@@ -1837,7 +1837,7 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     return brokerStatus(this.env) as Promise<JsonObject>;
   }
   async deals(options: { limit?: number } = {}): Promise<JsonObject> {
-    return { deals: await listDeals(this.env, { limit: options?.limit ?? 200 }) } as JsonObject;
+    return { deals: await listDeals(this.env, { limit: options?.limit ?? 200, account: "last" }) } as JsonObject;
   }
   async setControl(input: { mode?: string; reason?: string; actor?: string }): Promise<JsonObject> {
     const result = await setControl(this.env, input ?? {}) as JsonObject;
@@ -2346,7 +2346,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/deals") {
     try {
       const limit = Math.max(1, Math.min(500, Number(url.searchParams.get("limit") || "200") || 200));
-      return dashboardJson({ status: "ok", deals: await listDeals(env, { limit }) });
+      return dashboardJson({ status: "ok", deals: await listDeals(env, { limit, account: "last" }) });
     } catch (error) {
       console.error("deals_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error", error: "deals_unavailable" }, 500);
