@@ -7,7 +7,7 @@ what changed and when, by merge commit and PR.
 ## 2026-11-20
 - feat(omega): limit entries, stage 1: the switch and EA 1.21, no behaviour change (owner 2026-11-20, relayed; scope confirmed: "Yes, that scope"; docs/RFC_OMEGA_LIMIT_ENTRY.md).
   - **Switch.** `entry_order` ("market" default); "limit" is refused until stage 3.
-  - **Accounting.** Omega's own pending limits count as positions and as risk at their stops in every entry gate, and are deleted at once (`delete_order`) on a hard reason; with the switch on market all of them are, so none can survive. Kill's `close_all` also runs when only a pending order exists; Omega switched off deletes them.
+  - **Accounting.** Omega's own pending limits count as positions and as risk at their stops in every entry gate, and are deleted at once (`delete_order`) on a hard reason; with the switch on market all of them are, so none can survive. Kill's `close_all` also runs when only a pending order exists; Omega switched off deletes them, and so do disarm on a real account (`disarmed`, ADR-0020 Amendment 7) and a missing stop (`pending_without_stop`).
   - **OmegaExecutor 1.21.** `place_limit` (`<lot>@<price>` in the volume field, the expiry in the ticket field; refused through the price, inside stops or freeze level, without an expiry ahead, on netting accounts) and `delete_order`; its own expiry timer (never GTC), a 12 h maximum life and a 120 s dead-man switch. The bridge is unchanged.
   - **Live effect.** None: no pending Omega order exists, and nothing places one until stage 3 and the owner's switch.
 

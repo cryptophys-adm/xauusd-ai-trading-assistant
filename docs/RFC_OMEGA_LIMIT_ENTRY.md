@@ -132,6 +132,9 @@ still move the existing one.
 
 **Deleted at once, with no council involved:**
 - pause, kill (`close_all` already deletes every order) and Omega switched off;
+- disarm on a real account (`disarmed`: the owner's disarm or auto-disarm under ADR-0020; Amendment 7: a resting entry is
+  cancelled on disarm or kill);
+- an Omega pending order without a stop (`pending_without_stop`): Omega never places one, and its risk is unbounded;
 - `entry_order` set back to `"market"`;
 - a profile downgrade;
 - the daily budget exhausted;

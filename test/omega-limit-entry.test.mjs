@@ -62,6 +62,26 @@ test("LE5 the hard reasons, in order (stage 3 uses them with entry_order limit)"
   // While LIMIT_ENTRY_AVAILABLE is false every reason collapses to the switch.
   assert.equal(why(), "entry_order_market");
   assert.equal(pendingDeleteReason({ settings: ON }), "entry_order_market");
+  // Behind the stage switch, the reasons in their order (the demo fixture needs no arm).
+  const at = (over = {}) => why({ available: true, ...over });
+  assert.equal(at(), null, "nothing holds: the order is kept");
+  assert.equal(at({ settings: ON, available: true }), "entry_order_market");
+  const real = { ...EXECUTOR, account: { ...EXECUTOR.account, trade_mode: "real" } };
+  assert.equal(at({ executor: real }), "disarmed", "a real account disarmed (owner or auto-disarm): deleted at once");
+  assert.equal(at({ executor: real, settings: { ...S, live_armed: true } }), null, "armed: kept");
+  assert.equal(at({ executor: real, signal: { ...SIGNAL, paused: true } }), "disarmed", "disarm comes before pause");
+  assert.equal(at({ signal: { ...SIGNAL, paused: true } }), "paused");
+  assert.equal(at({ signal: { ...SIGNAL, blackout: true } }), "blackout");
+  assert.equal(at({ executor: { ...EXECUTOR, symbol: { ...EXECUTOR.symbol, tick_value_problem: "x" } } }), "tick_value_mismatch");
+  assert.equal(at({ account: { spec_status: "pending" } }), "spec_unvalidated");
+  assert.equal(at({ account: { spec_status: "validated", review_pending: true } }), "profile_review_pending");
+  assert.equal(at({ lossFloor: 10_000 }), "daily_loss_limit");
+});
+
+test("LE7 an Omega pending order without a stop is said and deleted (Omega never places one)", () => {
+  const r = plan({ executor: { ...EXECUTOR, orders: [{ ...ORDER, sl: 0 }, { ...ORDER, ticket: 780 }] } });
+  assert.deepEqual(r.notes.find((n) => n.code === "pending_without_stop"), { code: "pending_without_stop", detail: "777" });
+  assert.deepEqual(r.intents.filter((it) => it.kind === "delete_order").map((d) => [d.ticket, d.reason]), [[777, "pending_without_stop"], [780, "entry_order_market"]]);
 });
 
 test("LE6 OmegaExecutor 1.21: place_limit with lot@price and a required expiry, delete_order, no GTC, a dead-man switch", () => {

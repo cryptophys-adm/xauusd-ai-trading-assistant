@@ -41,4 +41,5 @@ export function omegaPendingOrders(executor: Record<string, any> | null | undefi
 export function pendingAsPosition(o: Record<string, any>): Record<string, any>;
 export function pendingRiskAtStops(orders?: Record<string, any>[], sym?: Record<string, any>): number;
 export function pendingDeleteReason(input?: Record<string, any>): string | null;
+export function pendingWithoutStop(o: Record<string, any>): boolean;
 export function deleteOrderIntent(ticket: number, reason: string, now?: number): { id: string; kind: "delete_order"; ticket: number; reason: string };

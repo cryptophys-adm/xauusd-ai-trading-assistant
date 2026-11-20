@@ -217,12 +217,15 @@ export function pendingRiskAtStops(orders = [], sym = {}) {
 }
 /**
  * Why Omega's pending orders must go now, deterministically and without the council (RFC §6), or null: the switch back
- * to market, pause, a news blackout, the symbol, money or tick value failing, an unvalidated or downgrading profile,
- * the daily loss floor reached. Kill and Omega switched off are handled before this (close_all, engine_off).
+ * to market, disarm on a real account (owner disarm or auto-disarm; ADR-0020 Amendment 7: cancelled on disarm or kill),
+ * pause, a news blackout, the symbol, money or tick value failing, an unvalidated or downgrading profile, the daily loss
+ * floor reached. Kill and Omega switched off are handled before this (close_all, engine_off). `available` is the stage
+ * switch (LIMIT_ENTRY_AVAILABLE); tests pass it to check the order of the reasons behind it.
  */
-export function pendingDeleteReason({ settings = OMEGA_DEFAULTS, signal = null, control = null, executor = null, account = null, lossFloor = null } = {}) {
+export function pendingDeleteReason({ settings = OMEGA_DEFAULTS, signal = null, control = null, executor = null, account = null, lossFloor = null, available = LIMIT_ENTRY_AVAILABLE } = {}) {
   const sym = executor?.symbol ?? {};
-  if (settings.entry_order !== "limit" || !LIMIT_ENTRY_AVAILABLE) return "entry_order_market";
+  if (settings.entry_order !== "limit" || !available) return "entry_order_market";
+  if (executor?.account?.trade_mode !== "demo" && settings.live_armed !== true) return "disarmed";
   if (signal?.paused === true || control?.mode === "paused") return "paused";
   if (signal?.blackout === true) return "blackout";
   if (!goldCheckOf(executor).ok) return "symbol_unverified";
@@ -232,6 +235,10 @@ export function pendingDeleteReason({ settings = OMEGA_DEFAULTS, signal = null, 
   if (account?.review_pending === true) return "profile_review_pending";
   if (finite(lossFloor) && finite(executor?.account?.equity) && executor.account.equity <= lossFloor) return "daily_loss_limit";
   return null;
+}
+/** An Omega pending order without a stop: Omega never places one, so it is deleted (its risk is unbounded). */
+export function pendingWithoutStop(o) {
+  return !(Number(o?.sl) > 0);
 }
 /** One delete per order and minute: a refused delete is sent again a minute later, never twice in a minute. */
 export function deleteOrderIntent(ticket, reason, now = Date.now()) {
@@ -783,6 +790,12 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // Omega's own pending limits (docs/RFC_OMEGA_LIMIT_ENTRY.md §6): deleted at once, without the council, when a hard
   // reason holds; the ones kept count as positions and as risk at their stops in every gate below.
   let pendingKept = omegaPendingOrders(executor);
+  const noStop = pendingKept.filter(pendingWithoutStop);
+  if (noStop.length) {
+    note("pending_without_stop", noStop.map((o) => o.ticket).join(","));
+    for (const o of noStop) { const d = deleteOrderIntent(o.ticket, "pending_without_stop", now); if (!recent.has(d.id)) intents.push(d); }
+    pendingKept = pendingKept.filter((o) => !pendingWithoutStop(o));
+  }
   if (pendingKept.length) {
     const acct = executor.account ?? {};
     const floor = positive(acct.day_start_balance) ? acct.day_start_balance * (1 - S.max_daily_loss_pct / 100) : null;
