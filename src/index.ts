@@ -2824,6 +2824,9 @@ async function runLedgerStep(env: Env): Promise<void> {
     const engineOn = decisionEngineEnabled(env);
     const ledger = await runSignalLedger(env, { readStrategy: engineOn ? null : readStrategy, h1Decisions: !engineOn });
     if (ledger.status === "ok" && (Number((ledger.added as Record<string, number>).h1_decision) || Number((ledger.added as Record<string, number>).strategy) || Number(ledger.changed))) console.log("signal_ledger", JSON.stringify(ledger));
+    // The v4 Omega replay (src/ledger-omega4.mjs) and its hourly parity check against the live account.
+    const v4 = (ledger as { omega4?: { replay?: { status?: string; written?: number }; parity?: { status?: string } | null } }).omega4;
+    if (v4 && (v4.replay?.status === "failed" || Number(v4.replay?.written) > 0 || v4.parity?.status === "checked" || v4.parity?.status === "failed")) console.log("ledger_omega4", JSON.stringify(v4));
     // Backlog 11.2 (owner decision 2026-11-08): each new ledger event to the owner's Telegram, once.
     const alerts = await sendLedgerAlerts(env, { send: (text: string) => sendTelegram(env, text) });
     if (alerts.status !== "disabled" && (Number(alerts.sent) || Number(alerts.seeded) || Number(alerts.failed))) console.log("ledger_alerts", JSON.stringify(alerts));

@@ -317,9 +317,16 @@ function UnderwaterDrawdownChart({
   );
 }
 
-type Policy = "tp1" | "tp2" | "omega";
+type Policy = "tp1" | "tp2" | "omega" | "omega4";
 const MODES = ["scalp", "intraday", "swing", "range"] as const;
-const OMEGA_EXIT: Record<string, string> = { target: "target", trailed_target: "trailed TP", stop: "stop", sl_plus: "SL+", power_reversal: "power reversed", lean_flip: "lean flipped", confidence_drop: "confidence dropped", opposite: "opposite", time: "time" };
+// v3 and v4 exits (v4: the live engine's own close reasons, src/ledger-omega4.mjs; the parity table uses the same codes).
+const OMEGA_EXIT: Record<string, string> = {
+  target: "target", trailed_target: "trailed TP", stop: "stop", sl_plus: "SL+", power_reversal: "power reversed", lean_flip: "lean flipped",
+  confidence_drop: "confidence dropped", opposite: "opposite", time: "time",
+  pm_take_profit_weakening: "PM: weakening", pm_cut_loss: "PM: cut loss", mean_reversal: "mean reversal", opposite_5m: "opposite 5m",
+  kill: "kill", data_gap: "data gap", stop_out: "stop-out", manual: "manual", expert: "EA close"
+};
+const exitText = (code: any) => (code == null ? "—" : OMEGA_EXIT[code] ?? String(code).replace(/_/g, " "));
 
 /**
  * The plan's targets and the Omega policy per trading mode (owner 2026-11-12: "kebijakan Omega di
@@ -348,6 +355,8 @@ function ModePolicyTable({ byMode }: { byMode: any }) {
             <th>Omega</th>
             <th>Omega max DD</th>
             <th>Omega vs TP1</th>
+            <th>Omega v4</th>
+            <th>v4 vs v3</th>
             <th>Skipped</th>
           </tr>
         </thead>
@@ -356,6 +365,8 @@ function ModePolicyTable({ byMode }: { byMode: any }) {
             const b = byMode[m];
             const o = b?.omega;
             const pr = o?.paired;
+            const o4 = b?.omega4;
+            const p4 = o4?.paired;
             return (
               <tr key={m}>
                 <td className="font-semibold capitalize text-slate-200">{m}</td>
@@ -374,10 +385,29 @@ function ModePolicyTable({ byMode }: { byMode: any }) {
                     <span className="text-slate-500">—</span>
                   )}
                 </td>
+                <td>{cell(o4)}</td>
+                <td className="mono">
+                  {p4?.trades ? (
+                    <>
+                      {r(p4.v4_r)} vs {r(p4.v3_r)}
+                      <span className="text-slate-500"> · better: v4 {p4.v4_better}, v3 {p4.v3_better} / {p4.trades}</span>
+                    </>
+                  ) : (
+                    <span className="text-slate-500">—</span>
+                  )}
+                </td>
                 <td className="text-[11px] text-slate-400">
                   {Object.entries(o?.skipped ?? {})
                     .map(([k, v]) => `${k.replace(/_/g, " ")} (${v})`)
                     .join(" · ") || "—"}
+                  {Object.keys(o4?.skipped ?? {}).length ? (
+                    <span className="block text-slate-500">
+                      v4:{" "}
+                      {Object.entries(o4.skipped)
+                        .map(([k, v]) => `${k.replace(/_/g, " ")} (${v})`)
+                        .join(" · ")}
+                    </span>
+                  ) : null}
                 </td>
               </tr>
             );
@@ -392,8 +422,8 @@ function ModePolicyTable({ byMode }: { byMode: any }) {
  * Outcome Distribution Histogram (Buckets of R-multiples).
  */
 function OutcomeDistributionHistogram({ items, policy }: { items: any[]; policy: Policy }) {
-  const rKey = policy === "tp2" ? "r_tp2" : policy === "omega" ? "r_omega" : "r_tp1";
-  const closed = items.filter((x) => (policy === "omega" ? x.omega_status : x.status) === "closed" && Number.isFinite(x[rKey]));
+  const rKey = policy === "tp2" ? "r_tp2" : policy === "omega" ? "r_omega" : policy === "omega4" ? "r_omega4" : "r_tp1";
+  const closed = items.filter((x) => (policy === "omega" ? x.omega_status : policy === "omega4" ? x.omega4_status : x.status) === "closed" && Number.isFinite(x[rKey]));
 
   const buckets = useMemo(() => {
     const b = [
@@ -1120,6 +1150,85 @@ function DisparityKnowledgePanel({
 }
 
 /**
+ * The v4 parity check (src/ledger-omega4.mjs omegaParity, hourly): the replay through the live engine against Omega's
+ * real trades on the live USD account (owner 2026-11-20: "pastikan omega performance sama dengan omega yang live
+ * sekarang"). R and exit codes only, never a price or an account.
+ */
+function OmegaParityPanel({ parity }: { parity: any }) {
+  if (!parity) return <Empty>No parity check yet: it runs hourly from the ledger cron once v4 has replayed the live window.</Empty>;
+  const th = parity.thresholds ?? {};
+  const cur = parity.current_code;
+  const line = (p: any) => (
+    <span className="mono">
+      {p?.trades_compared ?? 0} compared · same exit {pct(p?.same_exit_share)} · mean |ΔR| {p?.mean_abs_dr ?? "—"}
+      {p?.v4_only ? ` · ${p.v4_only} v4 only` : ""}
+    </span>
+  );
+  const trades: any[] = parity.trades ?? [];
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-3 text-[12px]">
+        <Badge tone={parity.pass ? "green" : "red"}>{parity.pass ? "PASS" : "FAIL"}</Badge>
+        {line(parity)}
+        <span className="text-[11px] text-slate-500">
+          pass: same exit ≥ {pct(th.same_exit_min)} and mean |ΔR| ≤ {th.mean_abs_dr_max} · since {String(parity.since ?? "").replace("T", " ").slice(0, 16)} UTC · checked {String(parity.checked_at ?? "").replace("T", " ").slice(0, 16)}
+        </span>
+      </div>
+      {cur ? (
+        <div className="flex flex-wrap items-center gap-3 text-[12px]">
+          <Badge tone={cur.pass ? "green" : cur.trades_compared ? "red" : "slate"}>{cur.trades_compared ? (cur.pass ? "PASS" : "FAIL") : "—"}</Badge>
+          <span className="text-[11px] text-slate-400">Live trades on the current Position Manager code (since {String(cur.since ?? "").replace("T", " ").slice(0, 16)} UTC):</span>
+          {line(cur)}
+        </div>
+      ) : null}
+      {!trades.length ? (
+        <Empty>No live trade in the window yet.</Empty>
+      ) : (
+        <div className="table-wrap max-h-[320px] overflow-y-auto">
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>Signal (UTC)</th>
+                <th>Side</th>
+                <th>Mode</th>
+                <th>Matched</th>
+                <th>Entry Δ</th>
+                <th>Exit live</th>
+                <th>Exit v4</th>
+                <th>R live</th>
+                <th>R v4</th>
+                <th>ΔR</th>
+                <th>Cause</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trades.map((t, i) => (
+                <tr key={`${t.issued_at}-${t.side}-${i}`}>
+                  <td className="mono text-[11px]">
+                    {String(t.issued_at).replace("T", " ").slice(0, 16)}
+                    {t.live_code === "earlier" ? <span className="ml-1 text-[10px] text-slate-500">earlier code</span> : null}
+                  </td>
+                  <td className={`mono font-semibold ${t.side === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{t.side}</td>
+                  <td className="text-slate-300 capitalize">{t.mode ?? "—"}</td>
+                  <td>{t.v4_only ? <Badge tone="amber">v4 only</Badge> : t.matched ? <Badge tone="cyan">yes</Badge> : <Badge tone="red">no</Badge>}</td>
+                  <td className="mono text-[11px]">{t.entry_diff_s == null ? "—" : `${t.entry_diff_s > 0 ? "+" : ""}${t.entry_diff_s}s`}</td>
+                  <td className="text-[11px]">{exitText(t.live_exit)}</td>
+                  <td className="text-[11px]" style={{ color: t.same_exit ? C.bull : undefined }}>{t.v4_exit ? exitText(t.v4_exit) : t.v4_status ?? "—"}</td>
+                  <td className="mono">{r(t.live_r)}</td>
+                  <td className="mono">{r(t.v4_r)}</td>
+                  <td className="mono" style={{ color: t.dr != null && Math.abs(t.dr) > (th.mean_abs_dr_max ?? 0.1) ? C.bear : undefined }}>{t.dr == null ? "—" : r(t.dr)}</td>
+                  <td className="text-[11px] text-slate-400">{t.cause ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Performance (owner request 2026-11-07): the Signal Ledger. Every directional signal of the Decision
  * Engine followed on closed bars to its outcome in R. Advisory only: R multiples of the advice, never money, lots or positions.
  */
@@ -1240,7 +1349,15 @@ export default function Performance() {
               onClick={() => setPolicy("omega")}
               title="Omega rules: market entry, daily gates, SL+ and trailing TP"
             >
-              Omega policy
+              Omega policy (v3)
+            </button>
+            <button
+              type="button"
+              className={toggle(policy === "omega4")}
+              onClick={() => setPolicy("omega4")}
+              title="Omega v4: the live engine replayed (planIntents, the Position Manager, the TP ladder, the re-entry cooldown, the profile's caps)"
+            >
+              Omega v4 (live engine)
             </button>
           </div>
         )}
@@ -1265,7 +1382,7 @@ export default function Performance() {
                 <Kpi
                   label="Closed Trades"
                   value={String(perf?.trades ?? 0)}
-                  sub={`${block.signals} signals · ${block.open} open · ${block.pending} pending`}
+                  sub={policy === "omega4" ? `${block.omega4?.decisions ?? 0} decisions · ${block.omega4?.open ?? 0} open · ${block.omega4?.pending ?? 0} pending` : `${block.signals} signals · ${block.open} open · ${block.pending} pending`}
                   color={C.cyan}
                   icon={<Activity className="h-3.5 w-3.5 text-cyan-400" />}
                 />
@@ -1318,6 +1435,30 @@ export default function Performance() {
                 hint={`Omega: ${l?.rules?.omega?.entry ?? "market entry on the bar after the decision"}; ${l?.rules?.omega?.management ?? "key-level management"}; gates: ${l?.rules?.omega?.gates ?? "the day's loss limit"}. Approximations: ${l?.rules?.omega?.approximations ?? "feed bars"}.`}
               >
                 <ModePolicyTable byMode={l?.by_mode} />
+                {policy === "omega4" && l?.rules?.omega4 ? (
+                  <div className="mt-2 text-[11px] text-slate-400">
+                    <p>
+                      <span className="text-slate-300">Omega v4</span> ({l.rules.omega4.version}): {l.rules.omega4.engine}. {l.rules.omega4.granularity}. {l.rules.omega4.unit}.
+                    </p>
+                    <p className="mt-1">Approximations: {(l.rules.omega4.approximations ?? []).join("; ")}.</p>
+                    <p className="mt-1">
+                      Not reconstructable:{" "}
+                      {Object.entries(l.rules.omega4.not_reconstructable ?? {})
+                        .map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`)
+                        .join("; ")}
+                      .
+                    </p>
+                  </div>
+                ) : null}
+              </Panel>
+
+              {/* v4 against the live account (src/ledger-omega4.mjs omegaParity) */}
+              <Panel
+                title="Omega v4 Parity with Live"
+                icon={<Scale className="h-3.5 w-3.5 text-cyan-400" />}
+                hint={l?.rules?.omega4?.parity ?? "v4 against the live account's real Omega trades"}
+              >
+                <OmegaParityPanel parity={l?.parity} />
               </Panel>
 
               {/* Interactive Equity Curve & Underwater Chart */}
@@ -1416,6 +1557,7 @@ export default function Performance() {
                           <th>Status</th>
                           <th>R</th>
                           <th>Omega</th>
+                          <th>Omega v4</th>
                           <th>MFE / MAE</th>
                         </tr>
                       </thead>
@@ -1423,6 +1565,7 @@ export default function Performance() {
                         {items.map((x) => {
                           const rVal = policy === "tp2" ? x.r_tp2 : x.r_tp1;
                           const om = x.omega_status;
+                          const o4 = x.omega4_status;
                           return (
                             <tr key={x.id}>
                               <td className="mono">{when(x.opened_at)}</td>
@@ -1477,6 +1620,18 @@ export default function Performance() {
                                   <span className="text-[10px] text-amber-200">{String(x.omega_gate ?? "skipped").replace(/_/g, " ")}</span>
                                 ) : om ? (
                                   <span className="text-cyan-300">{om}</span>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
+                              <td className="mono">
+                                {o4 === "closed" ? (
+                                  <span style={{ color: (x.r_omega4 ?? 0) > 0 ? C.bull : (x.r_omega4 ?? 0) < 0 ? C.bear : undefined }}>
+                                    {r(x.r_omega4)}{" "}
+                                    <span className="text-[10px] text-slate-400">{exitText(x.omega4_exit)}</span>
+                                  </span>
+                                ) : o4 ? (
+                                  <span className={o4 === "skipped" ? "text-[10px] text-amber-200" : "text-cyan-300"}>{o4}</span>
                                 ) : (
                                   "—"
                                 )}
