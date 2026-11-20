@@ -1,6 +1,7 @@
 # RFC: Omega limit entries, held by the council, with learned knobs
 
-Status: reviewed by the orchestrator (2026-11-20, six points folded in), for the owner's review. Owner decision 2026-11-20, relayed by the orchestrator and
+Status: reviewed by the orchestrator (2026-11-20, six points folded in) and by the platform session (2026-11-20, §7 and the
+stage 3 precondition in §10 folded in), for the owner's review. Owner decision 2026-11-20, relayed by the orchestrator and
 confirmed by the owner in the session ("Yes, that scope"): "setuju dan tetap dinamis learning dan knowledge karena prinsip
 system ini adalah feedloop auto learning dan dinamis."
 
@@ -82,13 +83,13 @@ reasons are:
 - the decision now stands against the order's side;
 - the strategy agent's confidence trend is a `drop`;
 - the quorum share fell by more than `cancel_share_drop` (a learned knob);
-- price moved more than `move_max_atr` × ATR(15m) from the order (for a move: the new level must lie within that distance and
-  keep the stop and target sides valid).
+- price moved more than `move_max_atr` × ATR(14) of the 15m bars from the order (for a move: the new level must lie within
+  that distance and keep the stop and target sides valid).
 
 A WAIT stance alone is never a reason. Without a measured reason the order is kept (`keep_no_reason`).
 
 **The council has no fixed 15-minute expiry.** It keeps the order while the signal stands, up to `max_pending_life` (a learned
-knob; starting value 1 hour), after which Omega deletes the order (`pending_expired`).
+knob per mode, §7; intraday starts at 60 minutes), after which Omega deletes the order (`pending_expired`).
 
 **Mechanical fallback (#489's idea):** when the council does not answer (model failure, timeout or daily cap), the pending order
 is **cancelled at that 15m close** (`council_unavailable`). No pending order is left unattended.
@@ -139,14 +140,34 @@ still move the existing one.
 
 ## 7. Dynamic knobs, learned per mode, within doctrine bounds
 
-None of these values are hard-coded beyond their starting values:
+None of these values are hard-coded beyond their starting values. Every knob has a value per mode for all four modes
+(scalp, intraday, swing and range). Range mode uses limit entries too: its range strategies enter at the range's edges,
+which is where a limit rests.
 
-| Knob | Meaning | Start | Bound (per mode, proposed) |
-|---|---|---|---|
-| `max_pending_life` | how long a limit may wait | 60 min | scalp 15–120, intraday 30–240, swing 60–720 min |
-| `move_max_atr` | how far the council may move it | 0.5 × ATR(15m) | 0–1.0 |
-| `cancel_share_drop` | quorum share drop that counts as a reason | 0.05 | 0.03–0.10 |
-| `placement_band` | furthest limit from price, in plan stops | 0.35 | 0.1–1.0 |
+**The knobs, their units and their platform fact names** (fact names carry no "order", "trade" or "trading", because the
+Policy Engine's prohibited filter refuses them; platform test K2):
+
+| Knob | Platform fact | Unit, exactly |
+|---|---|---|
+| `max_pending_life` | `omega.limit_life_min_<mode>` | minutes, from the order's placement (the EA's `placed_ms`) to its deletion; the EA's expiry is set from it |
+| `move_max_atr` | `omega.limit_move_max_atr_<mode>` | multiple of ATR(14) of the closed **15m** bars (the decision timeframe, `strategy-engine.mjs` `atr`), in broker price, read at the 15m close of the check |
+| `cancel_share_drop` | `omega.limit_cancel_share_drop_<mode>` | absolute drop (0–1) of the order side's share of the Decision Engine's weighted witness quorum (`quorum.long_share` for a buy, `quorum.short_share` for a sell), from the placing decision to the current 15m decision |
+| `placement_band` | `omega.limit_band_<mode>` | fraction of the plan's stop distance (\|entry − stop\| of the placing decision), measured from the current broker ask (buy) or bid (sell) to the limit |
+
+**Starting values and bounds** (proposed to the platform session; narrowed in its review of 2026-11-20):
+
+| Knob | scalp | intraday | swing | range |
+|---|---|---|---|---|
+| `max_pending_life` (min) | 15–60, start 30 | 30–240, start 60 | 60–720, start 240 | 30–240, start 60 |
+| `move_max_atr` (× ATR(14) 15m) | 0–0.5, start 0.25 | 0–0.5, start 0.5 | 0–0.5, start 0.5 | 0–0.5, start 0.25 |
+| `cancel_share_drop` (share) | 0.03–0.10, start 0.05 | 0.03–0.10, start 0.05 | 0.03–0.10, start 0.05 | 0.03–0.10, start 0.05 |
+| `placement_band` (× stop distance) | 0.1–0.6, start 0.35 | 0.1–0.6, start 0.35 | 0.1–0.6, start 0.35 | 0.1–0.6, start 0.35 |
+
+- `placement_band` stays well under 1.0: at 1.0 the limit would sit on the stop and the sizing breaks. The platform allows a
+  ceiling of 0.6–0.7; this RFC proposes the lower end, 0.6.
+- Range and scalp start `move_max_atr` at 0.25: a range edge is a fixed level, and a scalp's stop is short.
+- Range mode's own exit still holds: on a range breakout the decision loses its side (`range_breakout`), which is a measured
+  cancel reason (§4).
 
 **Tuning:**
 - They are tuned like the council knobs (`council-knob-tuning.mjs`) and the room guardrail (#482):
@@ -212,6 +233,10 @@ None of these values are hard-coded beyond their starting values:
 2. **The ledger policy and the report (§8).** Measurement only. It starts collecting on today's signals at once.
 3. **Live limit placement and the pending council (§3–§5),** behind `entry_order: "limit"`, with the knobs at their starting
    values.
+   - **Precondition: ADR-0020 Amendment 7** (resting entries under the arm) must be merged on the platform before stage 3
+     goes live. It says a resting order may only be moved or cancelled, never widened beyond its plan; the Decision Engine
+     veto, auto-disarm and the cap still apply to it; and it is cancelled on disarm or kill. The platform session drafts it
+     and the owner confirms it there. Until it is merged, `LIMIT_ENTRY_AVAILABLE` stays false.
 4. **The learned knobs (§7):** the tuning loop, the bounds request to the platform session and the anchors with Aether.
 
 The owner installs EA 1.21 after stage 1 and switches `entry_order` to `"limit"` after stage 3.
