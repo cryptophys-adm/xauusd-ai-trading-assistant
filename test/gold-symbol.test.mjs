@@ -291,7 +291,7 @@ test("G13. the reference the EA finds gold by: price, its own time and past 4h c
 });
 
 test("G14. OmegaExecutor 1.20: a chosen symbol is checked again; choosing needs the price path; futures and ambiguous contracts refused", () => {
-  assert.match(ea, /#property version\s+"1\.20"/);
+  assert.match(ea, /#property version\s+"1\.2[0-9]"/, "1.20 or later");
   assert.match(ea, /string keepProblem = g_tradeSymbol != "" \? GoldSymbolProblem\(g_tradeSymbol, g_refPrice > 0\.0, false\) : "no_symbol";/, "re-checked against a fresh reference, kept without one");
   assert.match(ea, /if\(!checkPath\) return "";\s*return PricePathProblem\(sym\);/, "the price path decides a choice");
   // Gaps are skipped, not failed (the broker closed, history loading): at least six matched points over 12 hours, each

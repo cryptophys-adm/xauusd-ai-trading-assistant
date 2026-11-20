@@ -6,6 +6,7 @@ export interface OmegaSettings {
   max_daily_loss_pct: number;
   max_spread_points: number;
   max_signal_age_ms: number;
+  entry_order?: "market" | "limit";
 }
 export const OMEGA_DEFAULTS: Readonly<OmegaSettings>;
 export const RISK_PCT_MAX: number;
@@ -35,3 +36,9 @@ export function manageIntents(input?: { positions?: any[]; sym?: any; settings?:
 export const STOP_COMMAND_MS: number;
 export function commandedStops(rows?: Array<{ payload?: unknown; status?: string; result?: unknown }>): Record<string, number[]>;
 export function withCommandedStop<T extends Record<string, any>>(p: T, stops?: Record<string, number[]>): T;
+export const LIMIT_ENTRY_AVAILABLE: boolean;
+export function omegaPendingOrders(executor: Record<string, any> | null | undefined): Record<string, any>[];
+export function pendingAsPosition(o: Record<string, any>): Record<string, any>;
+export function pendingRiskAtStops(orders?: Record<string, any>[], sym?: Record<string, any>): number;
+export function pendingDeleteReason(input?: Record<string, any>): string | null;
+export function deleteOrderIntent(ticket: number, reason: string, now?: number): { id: string; kind: "delete_order"; ticket: number; reason: string };

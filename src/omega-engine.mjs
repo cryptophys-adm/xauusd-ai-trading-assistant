@@ -48,8 +48,13 @@ export const OMEGA_DEFAULTS = Object.freeze({
   reentry_cooldown_bars: 1,
   // The ladder's step per mode (owner 2026-11-18, confirmed: "Setuju"): scalp ladder_lock_pips, intraday and swing in R.
   ladder_r_intraday: 0.5,
-  ladder_r_swing: 0.3
+  ladder_r_swing: 0.3,
+  // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md, owner 2026-11-20): "market" enters a limit plan at market as before;
+  // "limit" works the plan's level at the broker as a pending order, held by the council (stage 3; refused until then).
+  entry_order: "market"
 });
+/** Stage 1 of docs/RFC_OMEGA_LIMIT_ENTRY.md: the switch exists, "limit" is refused until stage 3 ships. */
+export const LIMIT_ENTRY_AVAILABLE = false;
 // 10 since 2026-11-18 (owner: "Naikkan ke 10%, dikunci profil", docs/RFC_ACCOUNT_PROFILES.md §4): the setting may go
 // to the RFC's 10% maximum; what an entry risks is the smaller of the setting and the account profile's target (Safe 1%,
 // Conservative 2%, Aggressive 5%), and Custom uses the setting itself. It was 2, which held every profile at 2%.
@@ -136,6 +141,11 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS) {
     }
     out.sor_mode = body.sor_mode;
   }
+  if (body.entry_order !== undefined) {
+    if (body.entry_order !== "market" && body.entry_order !== "limit") return { error: "entry_order must be 'market' or 'limit'" };
+    if (body.entry_order === "limit" && !LIMIT_ENTRY_AVAILABLE) return { error: "limit entries are not available yet (docs/RFC_OMEGA_LIMIT_ENTRY.md stage 3)" };
+    out.entry_order = body.entry_order;
+  }
   if (body.live_armed !== undefined) {
     if (typeof body.live_armed !== "boolean") return { error: "live_armed must be true or false" };
     if (body.live_armed) {
@@ -183,6 +193,49 @@ export function isOmegaOwned(p) {
   if (p.source === "manual" || p.source === "external" || p.magic === 0) return false;
   // Fallback for legacy unit tests without source/magic annotations
   return true;
+}
+
+/* ---------- pending Omega orders (docs/RFC_OMEGA_LIMIT_ENTRY.md §6) ---------- */
+const LIMIT_TYPES = new Set(["BUY_LIMIT", "SELL_LIMIT"]);
+/** Omega's own pending limit orders in the terminal's report (by its magic or its "omega" source). */
+export function omegaPendingOrders(executor) {
+  return (Array.isArray(executor?.orders) ? executor.orders : []).filter((o) => LIMIT_TYPES.has(o?.type) && (o.source === "omega" || o.magic === 920200) && positive(o.ticket));
+}
+/** A pending order as the gates see it: a position on its side, unprotected until it fills and its stop is locked. */
+export function pendingAsPosition(o) {
+  return { ticket: o.ticket, side: o.type === "BUY_LIMIT" ? "BUY" : "SELL", volume: o.volume_current ?? o.volume_initial, open_price: o.price_open, sl: o.sl, tp: o.tp, pending: true, source: "omega" };
+}
+/** What the pending orders would lose at their stops if filled (the price they would fill at to their stop). */
+export function pendingRiskAtStops(orders = [], sym = {}) {
+  let total = 0;
+  for (const o of orders) {
+    const sl = Number(o?.sl), vol = Number(o?.volume_current ?? o?.volume_initial), price = Number(o?.price_open);
+    if (!(sl > 0) || !(vol > 0) || !(price > 0) || !positive(sym.tick_size) || !positive(sym.tick_value)) return Infinity;
+    total += (Math.abs(price - sl) / sym.tick_size) * sym.tick_value * vol;
+  }
+  return total;
+}
+/**
+ * Why Omega's pending orders must go now, deterministically and without the council (RFC §6), or null: the switch back
+ * to market, pause, a news blackout, the symbol, money or tick value failing, an unvalidated or downgrading profile,
+ * the daily loss floor reached. Kill and Omega switched off are handled before this (close_all, engine_off).
+ */
+export function pendingDeleteReason({ settings = OMEGA_DEFAULTS, signal = null, control = null, executor = null, account = null, lossFloor = null } = {}) {
+  const sym = executor?.symbol ?? {};
+  if (settings.entry_order !== "limit" || !LIMIT_ENTRY_AVAILABLE) return "entry_order_market";
+  if (signal?.paused === true || control?.mode === "paused") return "paused";
+  if (signal?.blackout === true) return "blackout";
+  if (!goldCheckOf(executor).ok) return "symbol_unverified";
+  if (typeof sym.tick_value_problem === "string" && sym.tick_value_problem !== "") return "tick_value_mismatch";
+  if (typeof executor?.account?.money?.problem === "string" && executor.account.money.problem !== "") return "money_unverified";
+  if (account != null && account.spec_status !== "validated") return "spec_unvalidated";
+  if (account?.review_pending === true) return "profile_review_pending";
+  if (finite(lossFloor) && finite(executor?.account?.equity) && executor.account.equity <= lossFloor) return "daily_loss_limit";
+  return null;
+}
+/** One delete per order and minute: a refused delete is sent again a minute later, never twice in a minute. */
+export function deleteOrderIntent(ticket, reason, now = Date.now()) {
+  return { id: `del:${ticket}:${Math.floor(now / 60_000)}`.slice(0, INTENT_ID_MAX), kind: "delete_order", ticket, reason };
 }
 
 /**
@@ -713,13 +766,32 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
 
   if (signal?.kill === true || control?.mode === "killed") {
     note("kill");
-    if (positions.length) intents.push({ id: closeAllId(killKey(signal, control)), kind: "close_all", reason: "kill" });
+    if (positions.length || omegaPendingOrders(executor).length) intents.push({ id: closeAllId(killKey(signal, control)), kind: "close_all", reason: "kill" });
     return { intents, notes, pm_dropped: pmDropped };
   }
-  if (!engineEnabled || S.enabled !== true) { note("engine_off"); return { intents, notes, pm_dropped: pmDropped }; }
+  if (!engineEnabled || S.enabled !== true) {
+    note("engine_off");
+    // Omega switched off leaves no pending order of its own at the broker (RFC §6).
+    for (const o of omegaPendingOrders(executor)) if (!recent.has(deleteOrderIntent(o.ticket, "engine_off", now).id)) intents.push(deleteOrderIntent(o.ticket, "engine_off", now));
+    return { intents, notes, pm_dropped: pmDropped };
+  }
   if (!executor || executor.connected !== true || !finite(executor.received_ms) || now - executor.received_ms > EXECUTOR_MAX_AGE_MS) {
     note("executor_stale");
     return { intents, notes, pm_dropped: pmDropped };
+  }
+
+  // Omega's own pending limits (docs/RFC_OMEGA_LIMIT_ENTRY.md §6): deleted at once, without the council, when a hard
+  // reason holds; the ones kept count as positions and as risk at their stops in every gate below.
+  let pendingKept = omegaPendingOrders(executor);
+  if (pendingKept.length) {
+    const acct = executor.account ?? {};
+    const floor = positive(acct.day_start_balance) ? acct.day_start_balance * (1 - S.max_daily_loss_pct / 100) : null;
+    const why = pendingDeleteReason({ settings: S, signal, control, executor, account: accountSpec, lossFloor: floor });
+    if (why) {
+      note("pending_deleted", why);
+      for (const o of pendingKept) { const d = deleteOrderIntent(o.ticket, why, now); if (!recent.has(d.id)) intents.push(d); }
+      pendingKept = [];
+    }
   }
 
   // The EA still moves stops by itself (OmegaExecutor 1.12+ reports it): said, never a gate.
@@ -782,7 +854,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   }
 
   const issued = signal.issued_ms, id = openId(issued, side);
-  const sameSide = positions.filter((p) => p.side === side);
+  const sameSide = [...positions, ...pendingKept.map(pendingAsPosition)].filter((p) => p.side === side);
   const decided = finite(signal.decided_ms) ? signal.decided_ms : issued;
   const closing = intents.filter((it) => it.kind === "close").length;
   const armLive = signal.arm_mode === "armed" || signal.arm_mode === "auto";
@@ -820,7 +892,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     [signal.paused === true || control?.mode === "paused", "paused"],
     [account.trade_mode !== "demo" && S.live_armed !== true, "live_not_armed"],
     [recent.has(id) || positions.some((p) => p.intent_id === id), "already_opened"],
-    [positions.length - closing >= S.max_positions || sameSide.length >= S.max_positions, "max_positions"],
+    [positions.length - closing + pendingKept.length >= S.max_positions || sameSide.length >= S.max_positions, "max_positions"],
     [!finite(sym.spread_points) || sym.spread_points > S.max_spread_points, "spread"],
     [isRolloverQuarantine(now), "rollover_quarantine"],
     // No stacking (owner 2026-11-12, "larangan tumpuk posisi"): a second position on a side opens only
@@ -842,7 +914,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   if (account.equity <= lossFloor) { note("daily_loss_limit"); return { intents, notes, pm_dropped: pmDropped }; }
   // Daily risk budget (owner 2026-11-12): what the day can still lose is the equity above the daily
   // loss floor less what the open positions would lose at their stops; a new entry risks at most that.
-  const budget = account.equity - openRiskAtStops(positions.filter((p) => !intents.some((it) => it.kind === "close" && it.ticket === p.ticket)), sym) - lossFloor;
+  const budget = account.equity - openRiskAtStops(positions.filter((p) => !intents.some((it) => it.kind === "close" && it.ticket === p.ticket)), sym) - pendingRiskAtStops(pendingKept, sym) - lossFloor;
   if (!(budget > 0)) { note("daily_risk_budget"); return { intents, notes, pm_dropped: pmDropped }; }
 
   const buy = side === "BUY";

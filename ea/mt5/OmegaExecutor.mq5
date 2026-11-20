@@ -42,7 +42,7 @@
 //|     manually on a chart profile when OMEGA_TAKE_STARTUP=false.   |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.20"
+#property version   "1.21"
 
 #include <Trade/Trade.mqh>
 
@@ -51,6 +51,9 @@ input int  SlippagePoints    = 30;     // Max price deviation in points for mark
 input int  StateEverySeconds = 1;      // How often omega/state.json is refreshed on timer (seconds)
 input int  MinTickIntervalMs = 250;    // Minimum interval between tick-driven state.json writes (ms)
 input int  MaxIntentsAgeSeconds = 30;  // ignore an intents.txt older than this (bridge down, terminal restarted)
+// 1.21 (docs/RFC_OMEGA_LIMIT_ENTRY.md §9): this EA's own pending limit orders never outlive the server's reach.
+input int  PendingDeadManSeconds = 120;   // no fresh intents.txt for this long: delete this EA's own pending orders
+input int  PendingMaxLifeSeconds = 43200; // an own pending order older than this is deleted whatever its expiry (12 h)
 // Corpus Oracle (owner 2026-11-11): the broker's closed M1 bars of the traded symbol for the local lane.
 input bool CorpusOracleEnabled = true; // write omega/corpus.json once per closed M1 bar
 input int  CorpusBars          = 120;  // closed M1 bars kept in corpus.json (10 to 240)
@@ -82,7 +85,7 @@ input bool   DynamicAtrStopEnabled  = true;  // Adaptive ATR-based SL+ and Trail
 input double AtrMultiplierTrigger   = 1.0;   // Break-even trigger multiplier of ATR (1.0 = 1x ATR)
 input double AtrMultiplierTrailing  = 1.5;   // Trailing distance multiplier of ATR (1.5 = 1.5x ATR)
 
-const string OMEGA_EXECUTOR_VERSION = "1.20"; // keep equal to #property version
+const string OMEGA_EXECUTOR_VERSION = "1.21"; // keep equal to #property version
 const string OMEGA_FOLDER    = "omega";
 const string STATE_TMP_PATH  = "omega/state.tmp";
 const string STATE_JSON_PATH = "omega/state.json";
@@ -105,6 +108,10 @@ const string CALENDAR_TMP_PATH  = "omega/calendar.tmp";
 const string CALENDAR_JSON_PATH = "omega/calendar.json";
 
 CTrade   trade;
+// 1.21: the newest intents.txt header seen (UTC ms) and the expiry this EA keeps per own pending order (UTC seconds).
+long     g_lastIntentsMs = 0;
+ulong    g_pendTickets[];
+long     g_pendExpiry[];
 string   g_processedIds[];
 string   g_tradeSymbol = "";
 datetime g_lastStateAt = 0;
@@ -1615,6 +1622,168 @@ void ExecuteCloseAllIntent(const string id)
    AppendResult(id, allOk, 0, allOk ? "" : lastErr, executedMs);
   }
 
+
+//+------------------------------------------------------------------+
+//| 1.21: pending limit orders (docs/RFC_OMEGA_LIMIT_ENTRY.md §9)    |
+//+------------------------------------------------------------------+
+void RememberPendingExpiry(const ulong ticket, const long expiryUtc)
+  {
+   int n = ArraySize(g_pendTickets);
+   for(int i = 0; i < n; i++) if(g_pendTickets[i] == ticket) { g_pendExpiry[i] = expiryUtc; return; }
+   ArrayResize(g_pendTickets, n + 1);
+   ArrayResize(g_pendExpiry, n + 1);
+   g_pendTickets[n] = ticket;
+   g_pendExpiry[n] = expiryUtc;
+  }
+
+long PendingExpiryOf(const ulong ticket)
+  {
+   for(int i = 0; i < ArraySize(g_pendTickets); i++) if(g_pendTickets[i] == ticket) return g_pendExpiry[i];
+   return 0;
+  }
+
+// Before a pending limit: "" when it may go, else the reason. Nothing is moved: a limit already through the price,
+// inside the stops or freeze level, or with a stop or target on the wrong side of its own price is refused.
+string LimitRefusal(const string sym, const bool buy, const double volume, const double price, const double sl, const double tp)
+  {
+   string mode = SymbolTradeModeString(sym);
+   if(mode == "disabled" || mode == "close_only" || mode == "unknown") return "refused: trade_mode_" + mode;
+   if(buy && mode == "short_only") return "refused: trade_mode_short_only";
+   if(!buy && mode == "long_only") return "refused: trade_mode_long_only";
+   // Position ticket = order ticket holds on a hedging account only (RFC §5).
+   if(AccountMarginModeString() != "hedging") return "refused: netting_account";
+   double ask = SymbolInfoDouble(sym, SYMBOL_ASK), bid = SymbolInfoDouble(sym, SYMBOL_BID);
+   if(ask <= 0.0 || bid <= 0.0) return "refused: no_price";
+   double point = SymbolInfoDouble(sym, SYMBOL_POINT);
+   // A buy limit waits below the ask, a sell limit above the bid; through it, it would fill at once: a missed entry.
+   if(buy ? price >= ask : price <= bid) return "refused: limit_through_price";
+   double minDist = (double)SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
+   double freeze = (double)SymbolInfoInteger(sym, SYMBOL_TRADE_FREEZE_LEVEL) * point;
+   double gap = buy ? ask - price : price - bid;
+   if(minDist > 0.0 && gap < minDist) return "refused: stops_level";
+   if(freeze > 0.0 && gap <= freeze) return "refused: freeze_level";
+   if(sl > 0.0)
+     {
+      double d = buy ? price - sl : sl - price;
+      if(d <= 0.0) return "refused: sl_wrong_side";
+      if(minDist > 0.0 && d < minDist) return "refused: stops_level";
+     }
+   if(tp > 0.0)
+     {
+      double d = buy ? tp - price : price - tp;
+      if(d <= 0.0) return "refused: tp_wrong_side";
+      if(minDist > 0.0 && d < minDist) return "refused: stops_level";
+     }
+   MqlTradeRequest req;
+   MqlTradeCheckResult check;
+   ZeroMemory(req);
+   ZeroMemory(check);
+   req.action = TRADE_ACTION_PENDING;
+   req.symbol = sym;
+   req.volume = volume;
+   req.type = buy ? ORDER_TYPE_BUY_LIMIT : ORDER_TYPE_SELL_LIMIT;
+   req.price = price;
+   req.sl = sl;
+   req.tp = tp;
+   req.magic = (ulong)MagicNumber;
+   req.type_time = ORDER_TIME_GTC;
+   if(!OrderCheck(req, check))
+     {
+      if(check.retcode == TRADE_RETCODE_NO_MONEY) return "refused: margin";
+      if(check.retcode == TRADE_RETCODE_INVALID_STOPS) return "refused: stops_level";
+      if(check.retcode == TRADE_RETCODE_INVALID_VOLUME) return "refused: volume";
+      if(check.retcode == TRADE_RETCODE_INVALID_PRICE) return "refused: price";
+      if(check.retcode == TRADE_RETCODE_MARKET_CLOSED) return "refused: market_closed";
+      if(check.retcode == TRADE_RETCODE_TRADE_DISABLED) return "refused: trade_disabled";
+      return StringFormat("refused: order_check_%u", check.retcode);
+     }
+   return "";
+  }
+
+void ExecutePlaceLimitIntent(const string id, const string side, const string volField, const double sl, const double tp, const long expiryUtc)
+  {
+   long nowMs = NowUtcMs();
+   if(side != "BUY" && side != "SELL") { AppendResult(id, false, 0, "invalid_side", nowMs); return; }
+   if(ResolveGoldSymbol() == "") { AppendResult(id, false, 0, "symbol_error", nowMs); return; }
+   string parts[];
+   if(StringSplit(volField, '@', parts) != 2) { AppendResult(id, false, 0, "invalid_limit_field", nowMs); return; }
+   double volume = StringToDouble(parts[0]);
+   double rawPrice = StringToDouble(parts[1]);
+   if(!IsValidVolume(volume)) { AppendResult(id, false, 0, "invalid_volume", nowMs); return; }
+   if(rawPrice <= 0.0) { AppendResult(id, false, 0, "invalid_price", nowMs); return; }
+   // An expiry is required and must lie ahead: no pending order without an end (RFC §9: no GTC, ever).
+   long nowUtc = (long)TimeGMT();
+   if(expiryUtc <= nowUtc + 60) { AppendResult(id, false, 0, "refused: expiry", nowMs); return; }
+
+   string sym = ResolveGoldSymbol();
+   int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   bool buy = (side == "BUY");
+   double price = NormalizeDouble(rawPrice, digits);
+   double normSl = sl > 0.0 ? NormalizeDouble(sl, digits) : 0.0;
+   double normTp = tp > 0.0 ? NormalizeDouble(tp, digits) : 0.0;
+   string refusal = LimitRefusal(sym, buy, volume, price, normSl, normTp);
+   if(refusal != "") { AppendResult(id, false, 0, refusal, nowMs); return; }
+
+   // The broker's own expiry where the symbol allows one (server time); this EA's timer deletes it in any case.
+   long expModes = SymbolInfoInteger(sym, SYMBOL_EXPIRATION_MODE);
+   bool specified = (expModes & SYMBOL_EXPIRATION_SPECIFIED) == SYMBOL_EXPIRATION_SPECIFIED;
+   ENUM_ORDER_TYPE_TIME typeTime = specified ? ORDER_TIME_SPECIFIED : ORDER_TIME_GTC;
+   datetime brokerExpiry = specified ? (datetime)((long)TimeTradeServer() + (expiryUtc - nowUtc)) : 0;
+
+   trade.SetExpertMagicNumber(MagicNumber);
+   bool ok = buy
+             ? trade.BuyLimit(volume, price, sym, normSl, normTp, typeTime, brokerExpiry, id)
+             : trade.SellLimit(volume, price, sym, normSl, normTp, typeTime, brokerExpiry, id);
+   long executedMs = NowUtcMs();
+   if(ok)
+     {
+      ulong orderTicket = trade.ResultOrder();
+      if(orderTicket > 0) RememberPendingExpiry(orderTicket, expiryUtc);
+      AppendResult(id, true, orderTicket, "", executedMs, price, 0.0);
+     }
+   else
+      AppendResult(id, false, 0, trade.ResultRetcodeDescription(), executedMs);
+  }
+
+void ExecuteDeleteOrderIntent(const string id, const ulong ticket)
+  {
+   long nowMs = NowUtcMs();
+   if(ticket == 0 || !OrderSelect(ticket)) { AppendResult(id, false, ticket, "order_not_found", nowMs); return; }
+   long ordMagic = OrderGetInteger(ORDER_MAGIC);
+   if(ordMagic != MagicNumber && !MayActOnForeign(id)) { AppendResult(id, false, ticket, "foreign_magic", nowMs); return; }
+   trade.SetExpertMagicNumber(ordMagic == MagicNumber ? MagicNumber : 0);
+   bool ok = trade.OrderDelete(ticket);
+   trade.SetExpertMagicNumber(MagicNumber);
+   AppendResult(id, ok, ticket, ok ? "" : trade.ResultRetcodeDescription(), NowUtcMs());
+  }
+
+// Every second: this EA's own pending orders past their expiry or their maximum life are deleted, and all of them when
+// no fresh intents.txt has come for PendingDeadManSeconds (the server, the bridge or the link is down). No server needed.
+void EnforcePendingSafety()
+  {
+   long nowUtc = (long)TimeGMT();
+   long nowMs = NowUtcMs();
+   bool deadMan = g_lastIntentsMs > 0 && nowMs - g_lastIntentsMs > (long)PendingDeadManSeconds * 1000;
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      ulong t = OrderGetTicket(i);
+      if(t == 0 || !OrderSelect(t)) continue;
+      if(OrderGetInteger(ORDER_MAGIC) != MagicNumber) continue;
+      ENUM_ORDER_TYPE type = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+      if(type != ORDER_TYPE_BUY_LIMIT && type != ORDER_TYPE_SELL_LIMIT) continue;
+      long expiry = PendingExpiryOf(t);
+      long setupUtc = (long)OrderGetInteger(ORDER_TIME_SETUP) - ((long)TimeTradeServer() - nowUtc);
+      string why = "";
+      if(deadMan) why = "dead_man";
+      else if(expiry > 0 && nowUtc >= expiry) why = "expired";
+      else if(nowUtc - setupUtc >= (long)PendingMaxLifeSeconds) why = "max_life";
+      if(why == "") continue;
+      trade.SetExpertMagicNumber(MagicNumber);
+      bool ok = trade.OrderDelete(t);
+      AppendResult(StringFormat("ea:del:%I64u", t), ok, t, ok ? why : trade.ResultRetcodeDescription(), nowMs);
+     }
+  }
+
 void ProcessIntentsFile()
   {
    if(!FileIsExist(INTENTS_PATH)) return;
@@ -1638,6 +1807,7 @@ void ProcessIntentsFile()
 
    // Only a fresh file from the bridge: a stale one (bridge down, terminal just restarted) is ignored.
    if(writtenMs <= 0 || NowUtcMs() - writtenMs > (long)MaxIntentsAgeSeconds * 1000) return;
+   if(writtenMs > g_lastIntentsMs) g_lastIntentsMs = writtenMs;
 
    for(int i = 0; i < ArraySize(lines); i++)
      {
@@ -1680,6 +1850,11 @@ void ProcessIntentsFile()
       // 1.18: the bridge's line has no price field; a modify_order carries the order's new price in the volume field.
       else if(kind == "modify_order")
          ExecuteModifyOrderIntent(id, ticket, volume, sl, tp);
+      // 1.21: a pending limit; the volume field carries "<lot>@<price>", the ticket field the expiry (UTC epoch seconds).
+      else if(kind == "place_limit")
+         ExecutePlaceLimitIntent(id, side, count > 3 ? fields[3] : "", sl, tp, (long)ticket);
+      else if(kind == "delete_order")
+         ExecuteDeleteOrderIntent(id, ticket);
       else
          AppendResult(id, false, 0, "unknown_intent_kind", NowUtcMs());
      }
@@ -1692,6 +1867,9 @@ int OnInit()
   {
    FolderCreate(OMEGA_FOLDER, 0);
    LoadProcessedIds();
+   // 1.21: the dead-man switch counts from the start; an own pending order left from before a restart still has to see
+   // the bridge within PendingDeadManSeconds.
+   g_lastIntentsMs = NowUtcMs();
    string sym = ResolveGoldSymbol();
    // Without a USD gold symbol the EA still starts: it reports symbol_error in state.json and trades nothing.
    if(sym != "") g_atrHandle = iATR(sym, PERIOD_M15, 14);
@@ -1843,6 +2021,7 @@ void OnTick()
       g_lastStateAt = TimeGMT();
      }
    ProcessIntentsFile();
+   EnforcePendingSafety();
   }
 
 void OnTimer()
