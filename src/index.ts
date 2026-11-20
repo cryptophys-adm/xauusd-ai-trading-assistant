@@ -232,6 +232,7 @@ import { scoreModelArena, pruneModelArena, readModelArena } from "./model-arena.
 import { readPublicProjection } from "./public-projection.mjs";
 import { publicAnalysis } from "./public-analysis.mjs";
 import { readPublicWarRoom, readPublicWarRoomScene } from "./public-warroom.mjs";
+import { readPublicTrackRecord } from "./public-track-record.mjs";
 import { ownerModify, setDelegation, setDelegateMode, ensureHitlSchema } from "./omega-hitl.mjs";
 import { readShadowMode, setShadowMode, shadowModeMessage, checkShadowBudget } from "./shadow-switch.mjs";
 import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
@@ -1780,6 +1781,14 @@ export class PublicProjection extends WorkerEntrypoint<Env> {
    */
   async warroomScene(): Promise<JsonObject> {
     return readPublicWarRoomScene(this.env) as Promise<JsonObject>;
+  }
+  /**
+   * The public track record (owner 2026-11-20, confirmed: "Yes, build it"): win rate, expectancy, net R and profit
+   * factor per exit scenario, in R only, aggregates only, from results closed more than the public delay ago; the
+   * managed exit only while the v4 replay matches the live account (src/public-track-record.mjs).
+   */
+  async trackRecord(): Promise<JsonObject> {
+    return readPublicTrackRecord(this.env) as Promise<JsonObject>;
   }
 }
 
