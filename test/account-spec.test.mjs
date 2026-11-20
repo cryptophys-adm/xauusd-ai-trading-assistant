@@ -420,3 +420,35 @@ test("AS21 the deals an account reports are its own: one stored before the accou
   const listed = (await listDeals(env, { account: "last", limit: 500 })).map((d) => d.deal_ticket);
   assert.deepEqual([listed.length, listed.includes(9001), listed.includes(9002)], [100, true, false]);
 });
+
+test("AS22 the Engine form's Default button follows the active profile (owner 2026-11-20): the overview serves the profile's values and OMEGA_DEFAULTS", async () => {
+  const { engineDefaultsFor, appliedNotes } = await import("../workers/xauusd-nexus-dashboard/ui/src/lib/engineDefaults.ts");
+  resetOmegaBrokerSchemaForTests(); resetAccountSpecSchemaForTests();
+  const env = { DB: d1(), SIGNAL_CACHE: kv(), OMEGA_ENGINE_ENABLED: "true" };
+  await writeSettings(env, { body: { enabled: true, risk_pct: 5, max_positions: 3, max_daily_loss_pct: 8 }, actor: "owner@example.com" }, { now: NOW });
+  const st = executor();
+  await bridgeSync(env, { state: { ...st, received_ms: NOW - 1000 }, results: [], publicKey: "QUJD", kid: "0123456789abcdef", bridgeVersion: "1.5.0" }, { now: NOW });
+  const view = async () => brokerOverview(env, { now: NOW });
+  // The first account is Custom: the profile sets nothing, so Default fills OMEGA_DEFAULTS.
+  let o = await view();
+  assert.deepEqual(o.engine_defaults, { risk_pct: OMEGA_DEFAULTS.risk_pct, max_positions: OMEGA_DEFAULTS.max_positions, max_daily_loss_pct: OMEGA_DEFAULTS.max_daily_loss_pct, max_spread_points: 60, max_signal_age_min: 10 });
+  assert.deepEqual(o.accounts[0].profile_limits, { target_risk_pct: null, max_positions: null, daily_loss_pct: null });
+  assert.deepEqual(engineDefaultsFor(o.accounts[0].profile_limits, o.engine_defaults), { risk_pct: 0.5, max_positions: 1, max_daily_loss_pct: 2, max_spread_points: 60, max_signal_age_min: 10 });
+  assert.deepEqual(appliedNotes({ risk_pct: "5", max_positions: "3", max_daily_loss_pct: "8" }, o.accounts[0].profile_limits, o.accounts[0].profile_label), { risk_pct: null, max_positions: null, max_daily_loss_pct: null }, "Custom applies the settings as they are");
+  // Conservative: 2 / 2 / 6 / 60 / 10, and every field above its cap says what applies.
+  env.DB.raw.prepare("UPDATE omega_accounts SET profile = 'conservative'").run();
+  o = await view();
+  const a = o.accounts[0];
+  assert.deepEqual(a.profile_limits, { target_risk_pct: PROFILES.conservative.target_risk_pct, max_positions: PROFILES.conservative.max_positions, daily_loss_pct: PROFILES.conservative.daily_loss_pct });
+  assert.deepEqual(engineDefaultsFor(a.profile_limits, o.engine_defaults), { risk_pct: 2, max_positions: 2, max_daily_loss_pct: 6, max_spread_points: 60, max_signal_age_min: 10 });
+  assert.deepEqual(appliedNotes({ risk_pct: String(o.engine.risk_pct), max_positions: String(o.engine.max_positions), max_daily_loss_pct: String(o.engine.max_daily_loss_pct) }, a.profile_limits, a.profile_label),
+    { risk_pct: "5% set, 2% applied (Conservative cap)", max_positions: "3 set, 2 applied (Conservative cap)", max_daily_loss_pct: "8% set, 6% applied (Conservative cap)" });
+  // The same applied values the engine uses (effectiveLimits).
+  const lim = effectiveLimits("conservative", o.engine);
+  assert.deepEqual([lim.risk_pct, lim.max_positions, lim.max_daily_loss_pct], [2, 2, 6]);
+  // The page: a Default button that fills the form only (never enabled, Arm or the profile); Save writes it.
+  const ui = readFileSync(new URL("../workers/xauusd-nexus-dashboard/ui/src/pages/Omega.tsx", import.meta.url), "utf8");
+  assert.match(ui, /id="e-default"[\s\S]{0,80}onClick=\{fillEngineDefaults\}/);
+  const fill = ui.slice(ui.indexOf("const fillEngineDefaults"), ui.indexOf("};", ui.indexOf("const fillEngineDefaults")));
+  assert.ok(fill.length > 0 && !/setEEnabled|live_armed|saveEngine|omegaJson|profile\/set/.test(fill), "Default only fills the form");
+});

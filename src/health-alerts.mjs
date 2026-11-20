@@ -5,7 +5,8 @@
 // from TradingView's final bar, a missing local H1 record, a timeframe room that did not
 // conclude, model calls lost to the Workers AI rate limit, a stale News Daily or a stale War
 // Room. Each problem is an alert row (D1 `health_alerts`): it opens once, stays open while the
-// problem holds, and resolves when it is gone.
+// problem holds, and resolves when it is gone. A `report_once` alert (the execution report refused by Aether) is reported
+// once per key: it may reopen while its problem holds again, without a second report or a resolution report.
 //
 // Opening an alert sends one `warning` report to the Cryptophys Platform kernel from
 // `xauusd-risk-manager` (operational risk); resolving a lasting alert sends one `info` report.
@@ -17,6 +18,7 @@ import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { engineLabel } from "./engine-names.mjs";
 import { rejectionSummary, REJECTION_TEXT } from "./webhook-rejections.mjs";
 import { aetherSyncStatus, syncAlerts } from "./aether-sync.mjs";
+import { executionReportIssue } from "./aether-push.mjs";
 import { goldCheckOf, goldSymbolText } from "./gold-symbol.mjs";
 import { readFallbackCause, fallbackSourceLabel } from "./feed.mjs";
 
@@ -284,6 +286,11 @@ export async function detectHealthIssues(env, now = Date.now()) {
     if (issue) out.push(issue);
   } catch { /* never fatal */ }
 
+  // 12. Aether refused the execution report twice in a row or more (2026-11-18 to 11-20: every push refused, silently).
+  //     The validator's codes only, never a price, an account or an email (src/aether-push.mjs executionReportAlert).
+  const execution = await executionReportIssue(env);
+  if (execution) out.push(execution);
+
   // 9. End-to-end sync with Aether (hardening 2026-11-09): each warning check of AetherReader.sync()
   //    and of this side (KB hash match, this Worker's card push). Production only (binding absent elsewhere).
   try { out.push(...syncAlerts(await aetherSyncStatus(env, { now }))); } catch { /* never fatal */ }
@@ -326,10 +333,17 @@ export async function runHealthAlerts(env, { now = Date.now(), detect = detectHe
     // A one-shot alert (one candle) opens once; it never reopens after it resolved.
     const prior = await rows(db, "SELECT status FROM health_alerts WHERE alert_key = ?", a.key);
     if (prior.length && a.one_shot) continue;
+    // A report-once alert reopens while its problem holds again but keeps its first report (no second one).
+    if (prior.length && a.report_once) {
+      await db.prepare("UPDATE health_alerts SET status = 'open', subject = ?, detail = ?, resolved_at = NULL, updated_at = ? WHERE alert_key = ?").bind(a.subject, JSON.stringify(a.detail ?? null), nowIso, a.key).run();
+      opened += 1;
+      openedAlerts.push({ key: a.key, kind: a.kind, subject: a.subject });
+      continue;
+    }
     await db.prepare(
       "INSERT INTO health_alerts (alert_key, kind, status, subject, detail, one_shot, opened_at, updated_at) VALUES (?, ?, 'open', ?, ?, ?, ?, ?) " +
       "ON CONFLICT(alert_key) DO UPDATE SET status = 'open', subject = excluded.subject, detail = excluded.detail, opened_at = excluded.opened_at, resolved_at = NULL, reported_open_at = NULL, reported_resolved_at = NULL, report_outcome = NULL, updated_at = excluded.updated_at"
-    ).bind(a.key, a.kind, a.subject, JSON.stringify(a.detail ?? null), a.one_shot ? 1 : 0, nowIso, nowIso).run();
+    ).bind(a.key, a.kind, a.subject, JSON.stringify(a.detail ?? null), a.one_shot || a.report_once ? 1 : 0, nowIso, nowIso).run();
     opened += 1;
     openedAlerts.push({ key: a.key, kind: a.kind, subject: a.subject });
   }
