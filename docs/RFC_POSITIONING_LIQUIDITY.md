@@ -1,7 +1,22 @@
 # RFC: the Positioning & Liquidity analyst, two lenses, live from the start under Aether's bounded weight
 
-Status: proposed 2026-11-20, for the orchestrator's review, then the owner's. Nothing is built yet. The knob names and
-bounds of §8 are proposed to the platform session for `DOCTRINE_BOUNDS`; amending a bound is the owner's.
+Status: built 2026-11-20 in one PR (breakglass, below), live on merge in every role; for the orchestrator's review, then
+the owner's. The knob names and bounds of §8 are proposed to the platform session for `DOCTRINE_BOUNDS`; amending a
+bound is the owner's. As built: §15. Deviations: §16.
+
+**Decisions (owner, 2026-11-20, confirmed directly in the session).**
+1. "Sekarang breakglass urgent jadi langsung live": breakglass. The owner's word is the `promotion_by_owner` act. Both
+   lenses ship in ONE PR, live on merge in every role at once (no shadow stage, no staged delivery of §13), with Aether
+   moving the weights inside hard bounds. Breakglass waives none of: CI; the orchestrator's review; the hard guards
+   (`tick_value_mismatch`, `volume_below_min`, profile caps, daily budget, A7/A8 limits, kill); the automatic drop to
+   the floor on a poor score, with an event and a private Telegram line; "liquidity never opens a position alone"; the
+   "baseline: insufficient" labelling. Rollback: the owner settings `positioning_enabled` and `liquidity_enabled`
+   (default on, because the owner ordered it live); off, the lens contributes nothing.
+2. "Setuju": the 10-minute stop and target deferral during a spread spike (§6) is approved. Hard guards are never
+   deferred: the fill guard, kill, the daily limit, any forced close.
+3. "rekomendasi": liquidity pools join `brokerKeyLevels` with source `"liquidity"`. They are key levels, so A8's
+   measured reason "a key level just outside the stop" (`key_level_outside`) covers them. No A8 text change and no
+   separate `liquidity_pool_outside` reason (§6 and §12 point 9 are superseded).
 
 Provenance: owner decision 2026-11-20, confirmed directly in the session.
 - Scope: "cocok digabung aja kalau sebelumnya untuk decision, liquidity candle ini bisa untuk key level, strategy dan
@@ -415,6 +430,10 @@ doctrine protocol; xauusd reads it back (§7.1). There is no automatic threshold
 
 ## 12. Objections and refinements (the owner asked for them)
 
+Decisions of 2026-11-20 (top of this RFC): point 1 is settled by the owner's breakglass act; point 9 is superseded
+(pools are key levels; A8's `key_level_outside` covers them); point 11 holds in the one PR (each lens ships with its
+floor).
+
 1. **Doctrine `promotion_by_owner`.** The canon says no parameter is promoted automatically: candidates run in shadow,
    and the owner approves a promotion PR. Going live with no shadow is the owner's own decision, and each stage PR the
    owner merges is the promotion. For Aether's later moves to fit the canon, the lens weights and thresholds must be
@@ -468,6 +487,14 @@ doctrine protocol; xauusd reads it back (§7.1). There is no automatic threshold
 
 ## 14. Open points
 
+Decisions of 2026-11-20: the deferral (§6) is approved; the A8 reason question is closed (pools are key levels); the
+staged delivery of §13 is replaced by one PR, live on merge. Still open:
+- **`COT_DELAYED_RELEASES` is empty.** The real release days of the 2025 shutdown weeks are not filled in yet; those
+  rows use the estimated Friday (marked `released_estimated`). They lie outside the day-one replay's window (the 4H
+  series reaches about 83 days back), so no replayed reading reads them early. Fill them from CFTC's schedule.
+- **Aether's methods.** `KnowledgeIngress.lensPolicy()` and `ingestLensReport()` are read when Aether offers them; until
+  then the lens facts are read from the `omegaPolicy()` pack and the report is not sent.
+
 - **COT outages.** A government shutdown has stopped the report before. `cot_stale` turns the witness stale and it drops
   out of the quorum. The outage weeks join `COT_DELAYED_RELEASES` so the backfill stays point in time.
 - **Legacy as a proxy.** Non-commercial is wider than managed money. The fallback keeps its own percentile and says so;
@@ -477,3 +504,121 @@ doctrine protocol; xauusd reads it back (§7.1). There is no automatic threshold
 - **D1 size:** about 1,400 rows a day per account and source, about 170,000 at 120 days.
 - **The idle sweep and the Friday release:** the release falls before the weekly close, so the regular sweep normally
   reads it. The idle heartbeat covers a late release (§3.1).
+
+## 15. As built (2026-11-20)
+
+**Modules.** `src/positioning-lens.mjs` (lens A), `src/liquidity-lens.mjs` (lens B), `src/lens-policy.mjs` (knobs,
+switches, score, floor, report), `src/lens-steps.mjs` (the scheduled work, the sync's spike clock, health, the page).
+Wired into `src/decision-engine.mjs`, `src/witness-tuning.mjs`, `src/omega-engine.mjs`, `src/omega-broker.mjs`,
+`src/ea-signal.mjs`, `src/position-manager.mjs`, `src/limit-council.mjs`, `src/corpus-oracle.mjs`,
+`src/omega-policy.mjs`, `src/doctrine-facts.mjs`, `src/health-alerts.mjs`, `src/war-room.mjs`,
+`src/timeframe-threads.mjs`, `src/mode-selector.mjs`, `src/profile-council.mjs`, `src/ledger-omega4.mjs`, `src/index.ts`.
+
+**Switches.** Omega settings `positioning_enabled` and `liquidity_enabled`, default `true` (`OMEGA_DEFAULTS`), owner only
+on the Omega page (Setup → Engine); Aether's policy never writes them. Off: lens A adds no witness, no room line, no
+pack fact; lens B adds no gate, deferral, level, council reason or room line. Data collection (the CFTC rows, the
+archive, the baseline) keeps running so a switch back on has its history.
+
+**Knobs as built** (`LENS_KNOBS`, `LENS_SCORE_KNOBS`; start = anchor, clamped to the bound; equal to §8):
+
+| Fact | scalp | intraday | swing | range | Bound |
+|---|---|---|---|---|---|
+| `positioning.de_weight_<mode>` | 0.02 | 0.03 | 0.05 | 0.03 | 0.02–0.04 / 0.02–0.06 / 0.02–0.10 / 0.02–0.05 |
+| `positioning.crowd_pctl_<mode>` | 0.90 | 0.90 | 0.90 | 0.90 | 0.80–0.95 |
+| `positioning.flow_z_<mode>` | 1.0 | 1.0 | 1.0 | 1.0 | 0.5–2.0 |
+| `liquidity.council_weight_<mode>` | 0.4 | 0.3 | 0.2 | 0.3 | 0–0.8 / 0–0.6 / 0–0.4 / 0–0.6 |
+| `liquidity.spike_pctl_<mode>` | 0.95 | 0.95 | 0.97 | 0.95 | 0.90–0.99 |
+| `liquidity.thin_pctl_<mode>` | 0.20 | 0.20 | 0.20 | 0.20 | 0.05–0.30 |
+| `liquidity.spread_widen_<mode>` | 1.8 | 2.0 | 2.5 | 2.0 | 1.5–4.0 |
+| `liquidity.sweep_lookback_min_<mode>` | 60 | 180 | 720 | 180 | 30–120 / 60–360 / 240–1440 / 60–360 |
+| `liquidity.pool_tol_atr_<mode>` | 0.05 | 0.05 | 0.08 | 0.05 | 0.02–0.15 |
+| `liquidity.hvn_pctl_<mode>` | 0.85 | 0.85 | 0.85 | 0.85 | 0.80–0.95 |
+| `liquidity.profile_window_min_<mode>` | 240 | 1440 | 7200 | 1440 | 120–480 / 480–2880 / 2880–14400 / 480–2880 |
+| `positioning.score_floor`, `liquidity.score_floor` | 0.45 | | | | 0.40–0.50 |
+| `positioning.score_window` / `liquidity.score_window` | 60 / 100 | | | | 40–200 / 50–300 |
+
+**Aether's values.** The hourly Aether pull (`pullOmegaPolicy`, the existing pack path) also reads the lens facts:
+`AETHER.lensPolicy()` when Aether offers it, else the `positioning.*` / `liquidity.*` keys of the `omegaPolicy()` pack's
+`values`. Each is clamped to its bound into KV `lens:policy:v1` with the pack's `doctrine_sha` (`storeLensPolicy`).
+Readers call `lensKnobs(lens, mode, { policy, floor, enabled, baseline })`: Aether's value, else the anchor; lens B
+held at its anchor while its baseline is insufficient; the floor after a rollback; 0 with the switch off.
+
+**Lens A.** `runCotStep` in the sweep beside `refreshCalendar` and in the closed-market heartbeat: the backfill once
+(`$limit=260`, both series, KV `cot:backfill:v1`), then only while a report is due (the scheduled release of the week
+after the newest row passed), at most once an hour (KV `cot:fetch:last`), 30 requests a week, 10 s timeout,
+`user-agent: cryptophys-nexus/1.0`. D1 `cot_reports` (lazy), 5 years. `cotAt(rows, t)` and `positioningFactsAt` read
+only rows with `released_ms <= t`; the percentile and z stay inside one series. The Decision Engine inserts
+`POSITIONING` after the set in force (`withPositioning`: weight w, the others × (1 − w)); `at: null` (no decay); stale
+after 14 days. The witness tuner's replay keeps it at its recorded weight in every arm (`replayDecision`). The council
+gets one prompt sentence. The 4H and 1D rooms' brief carries the line (`context`, not on the roster: outside the
+quorum and the crowd). The mode council's pack and a profile upgrade's evidence carry `positioning` (crowding,
+divergence). Readings at each 4H close the feed's series holds (the first run replays them all point in time), scored
+with `scoreStance` on 6 bars.
+
+**Lens B.** D1 `broker_bars_1m` written in `ingestCorpus` under `executor.account_ref` (`acct_<16 hex>` only),
+pruned at 120 days, backfilled once from `corpus_bars` of the active connection version. The 5-minute ledger step
+(`runLiquidityStep`, before the Position Manager): the baseline per NY hour of the week over 8 weeks (KV
+`liquidity:baseline:<account_ref>`, rebuilt on a new identity `account|source|digits` with a `liquidity_baseline_reset`
+event, else the hours that ended recomputed), the facts of the last closed bar for the mode in force, one
+`liquidity_readings` row (30 days), the shared state (KV `liquidity:state:v1`: facts, levels, the medians per hour of
+the week). `eaSignal` carries `liquidity_on`, `liquidity_weight`, `liquidity_levels` (`low:high:kind`, broker scale),
+`liquidity_spread_median` (this hour of the week), `liquidity_spread_widen`, `liquidity_sweep`,
+`liquidity_sweep_age_min`, `liquidity_thin`; `liquidity_on` is false with the switch off, at the floor or on a state
+older than 15 minutes. `brokerKeyLevels` appends the levels with `source: "liquidity"` and `kind`. `planIntents`: the gate
+`liquidity_spread_spike` right after `spread` (Omega's live `spread_points` / the hour's median ≥ `spread_widen`);
+`deferModifications` holds `modify_sl` / `modify_tp` / `modify_sltp` up to 10 minutes from the spike's start (KV
+`liquidity:spike:v1`, note `liquidity_modify_deferred`); closes, `close_all`, deletes, partial closes and an intent marked
+`hard` are never held. The entry request carries `liquidity` (weight, thin, sweep with/against); `ENTRY_REASONS` gains
+`liquidity_thin` → place_limit, `liquidity_sweep_with` → enter_market, `liquidity_sweep_against` → skip, each held only
+when the request carries it. The Position Manager reads the signal: `liquidity_sweep_against` joins the loss band's cut
+reasons (the council's thesis still decides) and `TP_NEARER_REASONS`. The 15m and 1H rooms' brief carries the line.
+
+**Scores and floor.** D1 `lens_readings` (`lens`, `kind`, `at_ms`, `mode`, `side`, `outcome`, no price). Kinds: `h4`
+(lens A), `sweep`, `block` (scored from `ledger_omega4.r_omega4`: a v4 loss is a hit), `maker` (a `liquidity_thin`
+answer, scored from `r_limit` against `r_omega4`). After each ledger step `lensFloorStep`: below `score_floor` over the
+last `score_window` decisive readings (at least 20) the lens is floored in every mode (KV `lens:floor:v1`), with
+`omega_events` `lens_weight_floor` and one line through `sendOmegaTelegram`. It lifts only when Aether's policy brings a
+weight for the lens under another `doctrine_sha`, pulled after the floor.
+
+**Report, health, page.** `cryptophys.lens-report.v1` daily through `AETHER.ingestLensReport` when offered
+(`pushLensReport`); `forbiddenReportKeys` refuses any key matching `price|entry|stop|sl|tp|target|level|zone|bid|ask`.
+Doctrine facts: `positioning.*` in the Nexus seat, `liquidity.*` in the Omega seat, each with `<lens>.enabled`. Health:
+`cot_stale`, `liquidity_archive_stale`, `lens_at_floor` (`report_once`). `GET /api/lens`; Nexus: the "Positioning &
+Liquidity" panel on the Strategy page (weight per mode and source, score, floor, baseline, COT freshness, switches), the
+two switches on the Omega page, and `liquidity_spread_spike` / `liquidity_modify_deferred` in "why".
+
+**Parity era.** `ERA_SWITCHES` gains `positioning_enabled` and `liquidity_enabled`. The signature compares each switch
+with its default (`eraSwitches`), so at their defaults (on) they add nothing, and a lens switched off writes
+`<name>=false` and starts a new era at the settings' `updated_ms`. The behaviour fingerprint gains a `liquidity` group
+(the hand inputs with the lens on and the live spread at 3x and 1x the norm), so `ENGINE_BEHAVIOUR_HASH` moves and a new
+era starts at the deploy. An old-shape era is now adopted as the first fingerprint's behaviour
+(`ERA_ADOPTABLE_BEHAVIOUR_HASH`), never as a later one. v4: the stored decisions already hold `POSITIONING` as it was
+computed live, point in time (`cotAt` at the close), so v4 replays the same witness; v4 has no live spread, so it
+replays without lens B's gate and deferral, and `omegaParity` treats a v4-only trade whose signal the gate held live
+(a `block` reading) as an expected difference, not counted.
+
+## 16. Deviations from this RFC
+
+1. **One PR, live on merge** (owner decision 1), instead of the four stages of §13.
+2. **No `liquidity_pool_outside`** (owner decision 3): pools are key levels; A8's `key_level_outside` covers them.
+3. **Floor minimum.** A lens is floored only with at least 20 decisive readings in its window (`LENS_SCORE_MIN_N`), so a
+   handful of early readings cannot floor it. §7.3 sets no minimum.
+4. **Floor lift.** "A newer doctrine version" is read as a weight for the lens under a `doctrine_sha` other than the one
+   in force at the rollback, pulled after it (shas have no order).
+5. **Batch size.** `broker_bars_1m` rows are written 8 a statement (13 columns; D1 binds at most 100 parameters), not 20.
+6. **The 45-bar rule.** An hour whose exclusions (rollover quarantine, the daily reopen, a session open) leave fewer
+   than 60 eligible minutes needs 75 % of its eligible minutes, not 45 bars, else it could never be sufficient.
+7. **Lens A's day-one replay** covers the feed's 4H series (500 bars, about 83 days), not the last year: the AI Worker
+   holds no longer 4H history. The CFTC backfill is the full 3 + 1 years.
+8. **Rolling fallback.** While insufficient, a percentile is the mixture of the same NY hour of day's per-hour quantile
+   functions weighted by their bars (else every hour with data), not a fresh scan of raw bars each run.
+9. **Liquidity facts** are computed each 5-minute ledger step for the mode in force; the live spread ratio is computed
+   by `planIntents` in the sync from the signal's hourly median and Omega's live `spread_points`.
+10. **Report path.** `ingestLensReport` (new, optional), not `ingestWeightingReport`, whose schema it would fail.
+11. **Threshold sensitivities** (§8 "How thresholds learn", §10) are not in the report yet: the report carries weights,
+    sources, scores, floors, the baseline and the COT freshness.
+12. **The Nexus agent card** is a panel on the Strategy page; the lens is not a room seat, so the agent inventory does
+    not list it.
+13. **Source tag.** Only liquidity zones carry `source: "liquidity"`; the Key Level Agent's zones keep their shape (no
+    `source` key), so every reader and the fixtures stay byte for byte when lens B is off.
+
