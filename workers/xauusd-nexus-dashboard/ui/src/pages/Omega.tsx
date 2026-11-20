@@ -808,6 +808,9 @@ export default function Omega() {
   // Default fills the profile's values (OMEGA_DEFAULTS without an active profile); Save still writes them.
   const formNotes = appliedNotes({ risk_pct: eRisk, max_positions: eMaxPos, max_daily_loss_pct: eLoss }, account?.profile_limits ?? null, account?.profile_label ?? null);
   const engineDefaults = engineDefaultsFor(account?.profile_limits ?? null, b?.engine_defaults ?? null);
+  // A Custom profile sets no values to follow, so Default stays off there rather than filling Omega's lower defaults
+  // over the owner's own numbers.
+  const customProfile = !!account?.profile_limits && account.profile_limits.target_risk_pct == null && account.profile_limits.max_positions == null && account.profile_limits.daily_loss_pct == null;
   const fillEngineDefaults = () => {
     const d = engineDefaults;
     setEngineDirty(true);
@@ -2816,9 +2819,9 @@ export default function Omega() {
                 <button
                   type="button"
                   id="e-default"
-                  disabled={!canControl}
+                  disabled={!canControl || customProfile}
                   onClick={fillEngineDefaults}
-                  title={`Fill ${engineDefaults.risk_pct}% risk, ${engineDefaults.max_positions} positions, ${engineDefaults.max_daily_loss_pct}% daily loss, ${engineDefaults.max_spread_points} pts spread and ${engineDefaults.max_signal_age_min} min signal age (${account?.profile_label ? `the ${account.profile_label} profile` : "Omega's defaults"}). Press Save to apply.`}
+                  title={customProfile ? "The Custom profile sets no values to follow: set them by hand." : `Fill ${engineDefaults.risk_pct}% risk, ${engineDefaults.max_positions} positions, ${engineDefaults.max_daily_loss_pct}% daily loss, ${engineDefaults.max_spread_points} pts spread and ${engineDefaults.max_signal_age_min} min signal age (${account?.profile_label ? `the ${account.profile_label} profile` : "Omega's defaults"}). Press Save to apply.`}
                   className="btn border-cyan-400/30 bg-cyan-400/10 text-cyan-200 disabled:opacity-40"
                 >
                   Default
