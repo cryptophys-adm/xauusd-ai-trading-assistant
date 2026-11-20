@@ -104,7 +104,9 @@ async function lensFacts(env, lens) {
   try {
     const st = await readLensState(env);
     for (const m of LENS_MODES) {
-      const k = lensKnobs(lens, m, { policy: st.policy, floor: st.floor, enabled: st.switches[lens], baseline: "sufficient" });
+      // The knob as the doctrine holds it (Aether's value or the anchor, at its floor after a rollback): the owner's switch
+      // is its own fact (<lens>.enabled), so a lens switched off does not report a weight of 0 outside its bound.
+      const k = lensKnobs(lens, m, { policy: st.policy, floor: st.floor, enabled: true, baseline: "sufficient" });
       for (const base of Object.keys(LENS_KNOBS).filter((b) => b.startsWith(`${lens}.`))) out[`${base}_${m}`] = k[base.split(".")[1]];
       if (m === "intraday") { out[`${lens}.score_floor`] = k.score_floor; out[`${lens}.score_window`] = k.score_window; }
     }

@@ -1,6 +1,7 @@
 // The Knowledge Council's Nexus and Omega seats (owner 2026-11-11): the facts this Worker reports to
 // Aether every hour, read from the running code, variables and stored Omega settings.
 import test from "node:test";
+import { resetLensStateMemoForTests } from "../src/lens-policy.mjs";
 import assert from "node:assert/strict";
 import { doctrineFacts, guardrailIds, pushDoctrineFacts, DOCTRINE_FACTS_SCHEMA } from "../src/doctrine-facts.mjs";
 import { decide, modeThresholds, tradeFor, MIN_RRR } from "../src/decision-engine.mjs";
@@ -39,6 +40,15 @@ test("the facts report: both seats, the Decision Engine's thresholds per trading
   assert.equal((await doctrineFacts({ DECISION_ENGINE: "off" })).seats.nexus.facts["decision.engine_enabled"], false);
   assert.equal((await doctrineFacts({ OMEGA_EXEC_5M: "off" })).seats.nexus.facts["decision.execution_trigger"], "prophet_candle_for_market_orders", "the switch off: TradingView's 5m or 15m confirmation");
   assert.ok(guardrailIds({}).includes("quorum"));
+});
+
+test("a lens switched off reports its switch, and its weight stays inside the doctrine's bound", async () => {
+  const db = { prepare: (sql) => ({ bind: () => ({ first: async () => null, run: async () => ({}) }), run: async () => ({}), first: async () => (/omega_settings/.test(sql) ? { settings: JSON.stringify({ positioning_enabled: false, liquidity_enabled: false }), version: 3 } : null) }) };
+  resetLensStateMemoForTests();
+  const n = (await doctrineFacts({ DB: db })).seats.nexus.facts;
+  resetLensStateMemoForTests();
+  assert.deepEqual([n["positioning.enabled"], n["liquidity.enabled"]], [false, false]);
+  assert.deepEqual([n["positioning.de_weight_swing"], n["liquidity.council_weight_scalp"]], [0.05, 0.4], "the knob, not the switch's 0");
 });
 
 test("the Omega seat reports the stored settings in force", async () => {
