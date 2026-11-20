@@ -1,5 +1,6 @@
-// Omega limit entries, stage 1 (docs/RFC_OMEGA_LIMIT_ENTRY.md, owner 2026-11-20): the switch (limit refused until stage
-// 3), pending Omega orders counted as positions and as risk, deleted at once on a hard reason, and EA 1.21's contract.
+// Omega limit entries, stage 1 (docs/RFC_OMEGA_LIMIT_ENTRY.md, owner 2026-11-20): the switch (limit and council need EA
+// 1.21 since stage 3), pending Omega orders counted as positions and as risk, deleted at once on a hard reason, and EA
+// 1.21's contract. Stage 3's own tests: test/omega-limit-stage3.test.mjs.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -19,11 +20,12 @@ const ORDER = { ticket: 777, symbol: "XAUUSD", type: "BUY_LIMIT", volume_initial
 const plan = (over = {}) => planIntents({ signal: SIGNAL, control: { mode: "active" }, settings: ON, executor: EXECUTOR, now: NOW, engineEnabled: true, ...over });
 const codes = (r) => r.notes.map((n) => n.code);
 
-test("LE1 the switch: entry_order defaults to market; limit is refused until stage 3; anything else is refused", () => {
+test("LE1 the switch: entry_order defaults to market; limit and council need EA 1.21 since stage 3; anything else is refused", () => {
   assert.equal(OMEGA_DEFAULTS.entry_order, "market");
-  assert.equal(LIMIT_ENTRY_AVAILABLE, false, "stage 1");
-  assert.match(settingsFrom({ entry_order: "limit" }).error, /not available yet/);
-  assert.match(settingsFrom({ entry_order: "stop" }).error, /market' or 'limit'/);
+  assert.equal(LIMIT_ENTRY_AVAILABLE, true, "stage 3 flips it");
+  assert.match(settingsFrom({ entry_order: "limit" }).error, /^ea_1_21_required/);
+  assert.equal(settingsFrom({ entry_order: "limit" }, OMEGA_DEFAULTS, { ea_version: "1.21" }).settings.entry_order, "limit");
+  assert.match(settingsFrom({ entry_order: "stop" }).error, /market', 'limit' or 'council'/);
   assert.equal(settingsFrom({ entry_order: "market" }).settings.entry_order, "market");
   assert.equal(settingsFrom({ risk_pct: 1 }, { ...OMEGA_DEFAULTS, entry_order: "market" }).settings.entry_order, "market", "kept across other changes");
 });
@@ -59,8 +61,8 @@ test("LE4 Omega off deletes its pending orders; kill closes all, orders included
 test("LE5 the hard reasons, in order (stage 3 uses them with entry_order limit)", () => {
   const S = { ...ON, entry_order: "limit" };
   const why = (over = {}) => pendingDeleteReason({ settings: S, signal: SIGNAL, control: { mode: "active" }, executor: EXECUTOR, account: { spec_status: "validated" }, lossFloor: 9_800, ...over });
-  // While LIMIT_ENTRY_AVAILABLE is false every reason collapses to the switch.
-  assert.equal(why(), "entry_order_market");
+  // With the stage switch off every reason collapses to the switch.
+  assert.equal(why({ available: false }), "entry_order_market");
   assert.equal(pendingDeleteReason({ settings: ON }), "entry_order_market");
   // Behind the stage switch, the reasons in their order (the demo fixture needs no arm).
   const at = (over = {}) => why({ available: true, ...over });

@@ -5,6 +5,17 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-20
+- feat(omega): limit entries, stage 3: live limit placement and the pending council behind `entry_order` "limit" and "council" (owner 2026-11-20; docs/RFC_OMEGA_LIMIT_ENTRY.md §2-§6, ADR-0020 Amendment 7; `src/omega-engine.mjs`, `src/limit-council.mjs`, `src/omega-limit-knobs.mjs`).
+  - **Switch.** `LIMIT_ENTRY_AVAILABLE` true; `entry_order` "market" (default), "limit" or "council", refused below OmegaExecutor 1.21 (`ea_1_21_required`); Aether's policy never writes it.
+  - **Market unchanged.** planIntents with "market" gives what it gave at 3b245ca (test S12: hashes of 64 hand fixtures and v4's replay traces). v4 forces a market replay.
+  - **Placement.** After every gate of today: one pending order, the platform cap of 3, EA 1.21; the limit at `entry + feed_basis` within `placement_band` x the stop, on the right side of price, never on netting; sized at the limit price with every hard guard; expiry `max_pending_life`, never GTC.
+  - **Councils.** The entry council (one model call per signal, meter `entry_council`, the PM's daily cap) runs in the 5-minute ledger step and is read by the next sync; planIntents stays pure. Limit: place or skip. Council: enter_market, place_limit or skip with a measured reason, silent = today's market path; one limit-to-market conversion per signal, the delete first. At each 15m close: keep, move (toward price, at most `move_max_atr` x ATR, stop and target shifted the same, lot untouched) or cancel, with a measured reason or `keep_no_reason`; silent cancels (`council_unavailable`).
+  - **Cancels without the council.** `daily_risk_budget`, `pending_unrecorded`, `profile_downgrade`, `de_veto`, `quorum_share_drop`, `pending_expired`, after stage 1's reasons. The signal carries `quorum_long_share`, `quorum_short_share`, `veto_long`, `veto_short`.
+  - **Fill.** Re-checked once (`fill_guard_<name>` closes at once); recorded with the gap in R; managed by the Position Manager as any Omega open.
+  - **Telegram.** Placed, moved, cancelled, filled: the owner's private chat only.
+  - **Nexus.** Entry order selector (limit and council disabled below EA 1.21 with the reason); status, reason and expiry in the Pending Orders table.
+  - **Parity.** `ENGINE_CODE_HASH` changes: a new parity era starts at the deploy.
+  - **Tests.** test/omega-limit-stage3.test.mjs S1-S14, test/omega-limit-sync.test.mjs LS1-LS3.
 - feat(ledger): limit entries, stage 2: "Omega with limit entry", the maker counterfactual beside v4, measurement only (owner 2026-11-20, scope and order confirmed; docs/RFC_OMEGA_LIMIT_ENTRY.md §8; `src/ledger-omega-limit.mjs`, `cryptophys.ledger-omega-limit.v1`).
   - **What.** On the same signals and the same simulated account as v4, a resting limit at the decision's level replaces the market entry: placed at the first minute planIntents' gates pass, sized by planIntents as if filled at the limit, filled when a 1m bar reaches it, and managed after the fill exactly as a v4 trade. Missed: `limit_through_price`, `limit_out_of_band`, `pending_expired`, `decision_against`, `quorum_share_drop`, `blackout`, `daily_loss_limit`, `profile_downgrade`, `kill`, `paused`.
   - **v4 unchanged.** `replayOmega4` takes an optional entry policy; without one its results are byte for byte those before (checked on three synthetic days), and `ENGINE_CODE_HASH` does not move (no new parity era).

@@ -198,6 +198,9 @@
           "task": "position_council"
         },
         {
+          "task": "entry_council"
+        },
+        {
           "task": "strategy_council"
         },
         {

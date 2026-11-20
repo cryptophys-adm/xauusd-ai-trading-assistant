@@ -177,7 +177,14 @@ export function managementFields(decision, { basis = null } = {}) {
     strategy_execution: decision?.strategy_execution === true,
     trade_agent: typeof decision?.trade?.agent === "string" ? decision.trade.agent : "",
     agent_conf: flatConfidences(decision?.agent_confidence),
-    agent_conf_prev: flatConfidences(decision?.agent_confidence_prev)
+    agent_conf_prev: flatConfidences(decision?.agent_confidence_prev),
+    // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md §4, ADR-0020 Amendment 7): the quorum's share on each side and the
+    // Decision Engine's vetoes per side at this close, for the deterministic cancels of a resting Omega limit
+    // (quorum_share_drop, de_veto). -1 when the decision has no quorum.
+    quorum_long_share: Number.isFinite(decision?.quorum?.long_share) ? decision.quorum.long_share : -1,
+    quorum_short_share: Number.isFinite(decision?.quorum?.short_share) ? decision.quorum.short_share : -1,
+    veto_long: Array.isArray(decision?.vetoes?.long) && decision.vetoes.long.length > 0,
+    veto_short: Array.isArray(decision?.vetoes?.short) && decision.vetoes.short.length > 0
   };
 }
 

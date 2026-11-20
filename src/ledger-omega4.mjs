@@ -43,6 +43,8 @@ import * as gridAdapt from "./grid-adapt.mjs";
 import * as htfCells from "./htf-cells.mjs";
 import * as agentConfidence from "./agent-confidence.mjs";
 import * as brokerTrigger from "./broker-trigger.mjs";
+import * as omegaLimitKnobs from "./omega-limit-knobs.mjs";
+import * as limitCouncil from "./limit-council.mjs";
 
 export { OMEGA4_VERSION, OMEGA4_PARITY_KEY };
 
@@ -210,7 +212,9 @@ export function replayOmega4({
   profileAt = () => null, balanceAt = null, councils = {}, control = [], blackouts = [], grid = null, arms = null,
   eaGate = false, plan = planIntents, trace = null, spread = OMEGA4_SIM.spread, maxSteps = Infinity, entry = null, version = OMEGA4_VERSION
 } = {}) {
-  const S = { ...OMEGA_DEFAULTS, ...(settings && typeof settings === "object" ? settings : {}), enabled: true, live_armed: true };
+  // v4 is the market replay (the taker): the live entry_order ("limit" or "council", docs/RFC_OMEGA_LIMIT_ENTRY.md stage 3)
+  // never reaches it; the maker side is the limit policy's (`entry`, src/ledger-omega-limit.mjs).
+  const S = { ...OMEGA_DEFAULTS, ...(settings && typeof settings === "object" ? settings : {}), enabled: true, live_armed: true, entry_order: "market" };
   const m1 = Array.isArray(bars) && bars.length && finite(bars[0]?.t) ? bars : minuteBars(bars);
   const d5 = aggregate(m1, M5), d15 = aggregate(m1, M15);
   const decs = (Array.isArray(decisions) ? decisions : []).filter((d) => d && finite(d.close_ms)).sort((a, b) => a.close_ms - b.close_ms);
@@ -520,11 +524,15 @@ function toRecord(t, { openR = null, version = OMEGA4_VERSION } = {}) {
  * (Function.prototype.toString in node, the repository's own text) and values make ENGINE_CODE_HASH.
  */
 export const ENGINE_CODE = Object.freeze({
-  "omega-engine": [omegaEngine, ["planIntents", "manageIntents", "keyLevelPlan", "ladderPlan", "ladderRungs", "ladderStep", "ladderTp1Locked", "partialShare", "strategyExits", "positionManagerIntents", "reentryGate", "isProtected", "openRiskAtStops", "commandedStops", "withCommandedStop", "brokerKeyLevels", "powerBand", "floorToStep", "isRolloverQuarantine", "isOmegaOwned", "openId", "closeId", "pendingRiskAtStops", "pendingDeleteReason", "omegaPendingOrders", "pendingAsPosition", "settingsFrom", "OMEGA_DEFAULTS", "POWER_STRONG", "POWER_WEAK", "POWER_FRESH_MS", "LEAN_BAND", "DEFAULT_POSITION_AGENT", "LADDER_CONFIRM_TF", "REENTRY_EXIT_REASONS", "GOLD_PIP", "STOP_COMMAND_MS", "EXECUTOR_MAX_AGE_MS", "LIMIT_ENTRY_AVAILABLE"]],
+  "omega-engine": [omegaEngine, ["planIntents", "manageIntents", "keyLevelPlan", "ladderPlan", "ladderRungs", "ladderStep", "ladderTp1Locked", "partialShare", "strategyExits", "positionManagerIntents", "reentryGate", "isProtected", "openRiskAtStops", "commandedStops", "withCommandedStop", "brokerKeyLevels", "powerBand", "floorToStep", "isRolloverQuarantine", "isOmegaOwned", "openId", "closeId", "pendingRiskAtStops", "pendingDeleteReason", "omegaPendingOrders", "pendingAsPosition", "settingsFrom", "OMEGA_DEFAULTS", "POWER_STRONG", "POWER_WEAK", "POWER_FRESH_MS", "LEAN_BAND", "DEFAULT_POSITION_AGENT", "LADDER_CONFIRM_TF", "REENTRY_EXIT_REASONS", "GOLD_PIP", "STOP_COMMAND_MS", "EXECUTOR_MAX_AGE_MS", "LIMIT_ENTRY_AVAILABLE",
+    // Live limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md stage 3): the placement, the council's actions, the fill's re-check.
+    "limitPlacement", "limitActionIntents", "fillGuard", "deleteOrderIntent", "pendingWithoutStop", "PROFILE_RANK", "ENTRY_ORDERS", "LIMIT_EA_MIN_VERSION", "PLATFORM_MAX_OPEN", "ENTRY_COUNCIL_WAIT_MS"]],
   "position-manager": [positionManager, ["positionFacts", "positionAction", "pmBand", "brokerLevels", "latestDecisions", "runPositionManager", "cleanCouncil", "PM_R_BAND", "THRESHOLD_PIPS", "PIP", "SHARE_DROP"]],
   "position-actions": [positionActions, ["pendingPositionActions", "ACTION_TTL_MS"]],
   "ea-signal": [eaSignalModule, ["eaSignal", "eaSignalFrom", "eaSignalFromDecision", "entryTriggerFor", "managementFields", "applyArmGate"]],
-  "omega-broker": [omegaBroker, ["lastClosedCandle", "ladderCandles", "lastWeakeningExit", "positionMeta", "positionAgents"]],
+  "omega-broker": [omegaBroker, ["lastClosedCandle", "ladderCandles", "lastWeakeningExit", "positionMeta", "positionAgents", "limitInputs"]],
+  "omega-limit-knobs": [omegaLimitKnobs, ["limitKnobs", "LIMIT_KNOB_START", "LIMIT_KNOB_BOUNDS"]],
+  "limit-council": [limitCouncil, ["entryFacts", "entryChoice", "pendingFacts", "pendingAction", "runLimitCouncil", "ENTRY_REASONS", "PULLBACK_MIN_R", "ENTRY_SHARE_DROP", "LIMIT_ACTION_TTL_MS"]],
   "account-spec": [accountSpec, ["effectiveLimits", "PROFILES", "versionAtLeast", "EXECUTOR_ENTRY_MIN_VERSION"]],
   "gold-symbol": [goldSymbol, ["goldSymbolCheck", "goldCheckOf", "goldPriceProblem", "GOLD_PRICE_TOLERANCE", "GOLD_CONTRACT_SIZE_MIN", "GOLD_CONTRACT_SIZE_MAX"]],
   "grid-adapt": [gridAdapt, ["applyGridChoice", "cellLevels"]],
@@ -558,7 +566,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. The
  * deployed Worker then sees a hash its KV era does not hold and starts a new parity window (nextEra).
  */
-export const ENGINE_CODE_HASH = "fc885c96c68c3383a206d97b257f729c0619109dd807311842406c654fe0cb84";
+export const ENGINE_CODE_HASH = "7497aa5177163fa88c581f1f8f90edc5094b99aa8c66a161eb24aaa8a26a9104";
 /** The first era: from #491 (2026-11-19 17:48 UTC), the Position Manager v4 replays (owner window from 12:00, orchestrator review of #498). */
 export const ERA_SEED_MS = Date.parse("2026-11-19T17:48:00Z");
 export const OMEGA4_ERA_KEY = "ledger:omega4:era:v1";
