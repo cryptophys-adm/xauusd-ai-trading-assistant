@@ -1,6 +1,6 @@
 # RFC: Omega limit entries, held by the council, with learned knobs
 
-Status: draft for review (orchestrator first, then the owner). Owner decision 2026-11-20, relayed by the orchestrator and
+Status: reviewed by the orchestrator (2026-11-20, six points folded in), for the owner's review. Owner decision 2026-11-20, relayed by the orchestrator and
 confirmed by the owner in the session ("Yes, that scope"): "setuju dan tetap dinamis learning dan knowledge karena prinsip
 system ini adalah feedloop auto learning dan dinamis."
 
@@ -64,8 +64,8 @@ Then Omega asks the **entry council**:
 **Placement band (a learned knob, §7)**
 - The limit must be on the correct side of the current broker price: a buy limit below the ask, a sell limit above the bid.
 - It must be no further than `placement_band` × the plan's stop from the current price. Otherwise: `limit_out_of_band`.
-- A limit that would fill at once (price already through it) is not placed. The next cycle sees the market path's reasons
-  instead.
+- A limit that would fill at once (price already through it) is not placed. In limit mode there is no market fallback, so
+  this is a **missed entry** (`limit_through_price`), and the ledger counts it as one (§8).
 
 **Sizing at placement, as if filled**
 - The lot uses today's formula: risk_pct, the profile caps, `volume_below_min`, `tick_value_mismatch`, the open-risk cap and
@@ -95,11 +95,23 @@ is **cancelled at that 15m close** (`council_unavailable`). No pending order is 
 
 ## 5. After the fill
 
-The EA reports the fill as a new position whose ticket equals the order's ticket (MT5 hedging accounts). Omega then:
+The EA reports the fill as a new position whose ticket equals the order's ticket (MT5 hedging accounts).
+
+**Re-check at fill (the deterministic backstop).** Before anything else, the hard guards run once more on the new position:
+- `tick_value_mismatch`;
+- the volume against the symbol's `volume_min` and `volume_max`;
+- the profile hard caps;
+- the daily loss budget, including this position's risk at its stop.
+
+On any breach the Position Manager closes the position at once, with that guard as its measured reason (`fill_guard_<name>`).
+This covers anything that changed between placement and fill.
+
+Otherwise Omega:
 - records the open, with the intent id, signal, stop source and mode;
 - hands the position to the Position Manager as today: stop locks, TP2 with break-even (ADR-0020 Amendment 6), and exits by
   the council;
-- sends one Telegram line per event: placed, moved, cancelled (with its reason) and filled.
+- sends one Telegram line per event: placed, moved, cancelled (with its reason) and filled. **These lines go to the owner's
+  private channel only**, never to a public or CTA channel, because they carry levels.
 
 ## 6. Hard guards (deterministic; no consensus overrides them)
 
@@ -144,8 +156,9 @@ None of these values are hard-coded beyond their starting values:
 - Live values are kept per mode in KV `omega-limit-knobs:v1`. Every change is an event and reaches Aether.
 
 **Doctrine bounds:**
-- The bounds live in the platform kernel's `DOCTRINE_BOUNDS` per mode. They are proposed to the platform session, not set by
-  xauusd.
+- The bounds live in the platform kernel's `DOCTRINE_BOUNDS` per mode (cryptophys-cloud-platform 6bf061a, live in the kernel
+  since 30416b2). They are proposed to the platform session, not set by xauusd. The orchestrator sent the bounds above as a
+  heads-up for stage 4.
 - Aether holds an anchor per knob and mode in the canon, so knowledge can pull a knob toward what worked.
 - xauusd clamps every value to the bound it reads, and falls back to the starting value without one.
 
@@ -173,13 +186,19 @@ None of these values are hard-coded beyond their starting values:
   - `sl` and `tp` are as usual.
   - `ticket` carries the expiry as UTC epoch seconds.
   - The EA converts the expiry to server time (`TimeTradeServer() + (expiry − TimeGMT())`).
-  - When the symbol does not allow `ORDER_TIME_SPECIFIED`, the EA places the order GTC; Omega's own lifetime then deletes it.
+  - **No GTC, ever.** When the symbol does not allow `ORDER_TIME_SPECIFIED`, the EA still places the order, but enforces the
+    expiry itself: it keeps the expiry per ticket and deletes its own pending order at that time from its own timer. This works
+    with no server, bridge or VPS link.
   - Refusals: a price already through, `SYMBOL_TRADE_STOPS_LEVEL`, and the freeze level.
   - The order comment carries the intent id.
 - **`delete_order`**
   - `ticket` is the order.
   - The EA acts only on its own magic, or on `manual:`/`d:` ids, as today.
 - **`modify_order`** is unchanged (the price rides in `volume`). The council's moves use it.
+- **Dead-man switch.** If the EA has seen no fresh intents file (a new `#v1;<written_ms>` header) for
+  `PendingDeadManSeconds` (an EA input, default 120 s), it deletes its own pending Omega orders.
+  - Kill, pause and every deletion in §6 need the bridge to reach the EA. This switch covers the case where they cannot.
+  - Open positions are not touched: they keep their broker stop and target.
 - **Results:** one result per intent, with the retcode.
 - The orders report (`BuildOrdersJson`) already carries the ticket, type, price, SL, TP, source and `placed_ms`.
 
