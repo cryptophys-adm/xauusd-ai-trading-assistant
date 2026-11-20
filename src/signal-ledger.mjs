@@ -142,6 +142,10 @@ export function simulateSignal(signal, bars, { now = Date.now(), fillWindowMs = 
 // as the 15m ATR(14) / sqrt 3 and the 5m swing as the last 15 minutes, no scale-out (Omega trades 0.01
 // lot), no wait for the 5m entry trigger.
 export const OMEGA_POLICY_VERSION = "cryptophys.ledger-omega.v3";
+/** The replay through the live engine's own functions (src/ledger-omega4.mjs), kept beside v3 (owner 2026-11-20). */
+export const OMEGA4_VERSION = "cryptophys.ledger-omega.v4";
+/** The latest v4 parity check against the live account (src/ledger-omega4.mjs runOmegaParity), in SIGNAL_CACHE. */
+export const OMEGA4_PARITY_KEY = "ledger:omega4:parity:v1";
 export const OMEGA_SIM = Object.freeze({ spread: 0.2, atr_period: 14, limit_pullback: 0.35, broker_day_utc: 22 });
 export const TRADING_MODES = Object.freeze(["scalp", "intraday", "swing", "range"]);
 const M15 = 15 * 60_000;
@@ -311,12 +315,13 @@ export function omegaGate({ side, fillMs, others = [], settings = OMEGA_DEFAULTS
 
 /** Pure: performance of closed, filled signals under one policy ("tp1" or "tp2"). */
 export function performance(items, policy = "tp1") {
-  // The Omega policy closes on its own clock (omega_closed_at) and its R is sized by the day's budget.
-  const omega = policy === "omega";
+  // The Omega policy closes on its own clock (omega_closed_at) and its R is sized by the day's budget. v4 ("omega4")
+  // counts each trade in its own R: the lot planIntents sized is the trade's risk, and R is the unit of the live parity.
+  const omega = policy === "omega", v4 = policy === "omega4";
   const key = policy === "tp2" ? "r_tp2" : "r_tp1";
-  const rOf = (x) => (omega ? r3(x.r_omega * (finite(x.omega_size) ? x.omega_size : 1)) : x[key]);
-  const at = (x) => (omega ? x.omega_closed_at : x.closed_at);
-  const closed = items.filter((x) => (omega ? x.omega_status === "closed" && finite(x.r_omega) : x.status === "closed" && finite(x[key]))).sort((a, b) => toMs(at(a)) - toMs(at(b)));
+  const rOf = (x) => (v4 ? x.r_omega4 : omega ? r3(x.r_omega * (finite(x.omega_size) ? x.omega_size : 1)) : x[key]);
+  const at = (x) => (v4 ? x.omega4_closed_at : omega ? x.omega_closed_at : x.closed_at);
+  const closed = items.filter((x) => (v4 ? x.omega4_status === "closed" && finite(x.r_omega4) : omega ? x.omega_status === "closed" && finite(x.r_omega) : x.status === "closed" && finite(x[key]))).sort((a, b) => toMs(at(a)) - toMs(at(b)));
   const rs = closed.map(rOf);
   const wins = rs.filter((r) => r > 0), losses = rs.filter((r) => r < 0);
   let cum = 0, peak = 0, maxDd = 0;
@@ -346,10 +351,59 @@ function omegaBlock(list) {
   };
 }
 
-/** Pure: the ledger view of `items` (rows of signal_ledger, with their outcome fields). */
-export function ledgerView(items, { days }) {
+/**
+ * Pure: the v4 policy (src/ledger-omega4.mjs) of the v4 rows `v4` (D1 ledger_omega4: every BUY/SELL decision the replay
+ * saw, the ones the ledger's own no-stacking rule held back included), paired with v3 on the ledger rows `list` both
+ * policies closed.
+ */
+function omega4Block(v4, list) {
+  const tally = (key, pick) => { const o = {}; for (const x of v4.filter(pick)) { const k = x[key] || "unknown"; o[k] = (o[k] || 0) + 1; } return o; };
+  const both = list.filter((x) => x.source === "decision" && x.omega_status === "closed" && finite(x.r_omega) && x.omega4_status === "closed" && finite(x.r_omega4));
+  return {
+    ...performance(v4, "omega4"),
+    decisions: v4.length, pending: v4.filter((x) => x.omega4_status === "pending").length, open: v4.filter((x) => x.omega4_status === "open").length,
+    exits: tally("omega4_exit", (x) => x.omega4_status === "closed"), skipped: tally("omega4_gate", (x) => x.omega4_status === "skipped"),
+    in_ledger: v4.filter((x) => x.in_ledger).length,
+    // The same ledger signals under v3 and v4 (v3 R sized by its budget, v4 in its own R).
+    paired: { trades: both.length, v4_r: r3(both.reduce((a, x) => a + x.r_omega4, 0)), v3_r: r3(both.reduce((a, x) => a + x.r_omega * (finite(x.omega_size) ? x.omega_size : 1), 0)), v4_better: both.filter((x) => x.r_omega4 > x.r_omega * (finite(x.omega_size) ? x.omega_size : 1) + 1e-9).length, v3_better: both.filter((x) => x.r_omega * (finite(x.omega_size) ? x.omega_size : 1) > x.r_omega4 + 1e-9).length }
+  };
+}
+
+/** The v4 rules and their approximations, said in the view (owner: "pastikan omega performance sama dengan omega yang live sekarang"). */
+export const OMEGA4_RULES = Object.freeze({
+  version: OMEGA4_VERSION,
+  engine: "the live functions themselves: eaSignalFromDecision and managementFields (the signal), planIntents (every gate and every management step in the live order), positionFacts and positionAction (the Position Manager), reentryGate, the TP ladder and its lock, the profile's risk caps",
+  account: "one simulated account over every Decision Engine BUY/SELL, the ledger's held-back signals included; the live USD account's profile at that time (omega_profile_changes) and its balance rebuilt from its deals; without a live account the current profile and a 1000 USD start",
+  unit: "R per trade: realised P/L over the risk at the open (|entry - stop| x the volume at the open); partials count their share; size 1 (the lot's risk share of the profile target is kept in omega4_json)",
+  granularity: "1m: planIntents at each minute's open (live syncs every 5 s), the broker's stop and target inside the minute (stop first; a SELL closes at the ask), the Position Manager at 3 minutes past each 5m close (live about 2.5)",
+  approximations: [
+    "the feed's 1m bars instead of the broker's, with a fixed 0.2 spread and the key levels on the feed's scale (basis 0)",
+    "1m granularity instead of 5 s syncs: an entry or a lock inside a minute waits for the next minute's open",
+    "the Position Council's recorded verdict for that position and 5m bar where the live account had one, else no answer: the mechanical fallback (locks apply, nothing is cut or closed on weakening)",
+    "the M15 ATR (atr_value), the 5m structure (structureOf) and the ladder's closed candles rebuilt from the feed's 1m bars",
+    "the Omega settings as stored now (their history is not kept); the engine switch and the live arm taken as on; the EA control (pause, kill) from ea_control_events; the news blackout from the week's calendar",
+    "the account's balance rebuilt from its last known balance and its deals: deposits, withdrawals and the owner's daily-loss resets are not told apart"
+  ],
+  not_reconstructable: {
+    strategy_arm: "the arm state as it is now, applied to every replayed decision (its history is not stored)",
+    grid_choice: "the grid's current choices (GRID_ADAPT_MODE live), applied to every replayed decision",
+    cell_gate: "the range strategies' H4/D1 cell gate is not stored: their decisions are not traded (cell_gate_unreconstructable)",
+    probation: "follows the cell gate: no probation trade is replayed",
+    broker_5m_trigger: "the broker's 5m Prophet confirmations are not stored: m5_ready is false, so no opposite_5m close, and a market entry still waiting for its confirmation is not traded (entry_trigger_unreconstructable)",
+    news_blackout: "from the cached week's calendar (High-impact USD, the blackout window in force); outside that week none",
+    kill_switch: "Omega's control history only; EA_SIGNALS_ENABLED is read as never off"
+  },
+  bars: "the feed's 1m bars from KV (about two days), and before that from the D1 archive ledger_bars_1m (each run appends only the new minutes, 120 days kept), so a replay stays reproducible",
+  run: "from the checkpoint (the whole replay state at its next minute), at most 720 replay minutes a 5-minute run; a longer catch-up goes on at the next run",
+  parity: "omegaParity against the live USD account: only the live trades opened under the current engine and Position Manager code count (its era, from the code's hash; a later change starts a new window at its deploy); at least 20 of them, else insufficient; passes with the same exit on at least 90 % of the trades compared and a mean |dR| of at most 0.1; the trades since 2026-11-19 12:00 UTC under earlier code are shown apart, not counted"
+});
+
+/** Pure: the ledger view of `items` (rows of signal_ledger, with their outcome fields) and `omega4` (D1 ledger_omega4 rows). */
+export function ledgerView(items, { days, omega4 = [] } = {}) {
   const by = (source) => items.filter((x) => source == null || x.source === source);
-  const block = (list) => {
+  const ledgerIds = new Set(items.map((x) => x.id));
+  const v4All = omega4.map((x) => ({ ...x, in_ledger: ledgerIds.has(`decision:${x.decision_key}`) }));
+  const block = (list, v4 = []) => {
     const count = (s) => list.filter((x) => x.status === s).length;
     const cancelled = {};
     for (const x of list.filter((x) => x.status === "cancelled")) cancelled[x.exit_reason] = (cancelled[x.exit_reason] || 0) + 1;
@@ -360,7 +414,8 @@ export function ledgerView(items, { days }) {
       ambiguous: list.filter((x) => x.ambiguous).length,
       sl_plus: list.filter((x) => x.sl_plus_triggered).length,
       tp1: performance(list, "tp1"), tp2: performance(list.filter((x) => finite(x.tp2)), "tp2"),
-      omega: omegaBlock(list)
+      omega: omegaBlock(list),
+      omega4: omega4Block(v4, list)
     };
   };
   const decisions = by("decision");
@@ -369,10 +424,11 @@ export function ledgerView(items, { days }) {
     rules: {
       fill_window_hours: FILL_WINDOW_MS / 3600_000, hold_max_hours: HOLD_MAX_MS / 3600_000, same_bar: "stop first (conservative)", unit: "R, never money",
       bars: "1m where the 1m series reaches (about two days), else 15m, else 1H; followed every 5 minutes",
-      omega: { version: OMEGA_POLICY_VERSION, entry: "market the minute after the decision (a limit plan waits up to the signal's age for price within 0.35 x the stop distance)", management: "every minute: key levels by quorum power (SL+, trailing TP, close on a reversed power), the opposite decision once made, 72 h; with the strategy execution rules, the lean flip, a winner's agent confidence drop, and the trailing TP only while that confidence holds", gates: "daily loss limit and risk budget in R, max positions, no stacking", approximations: "feed bars, fixed spread, no 5m or adaptive stop, no 5m entry trigger, no scale-out" }
+      omega: { version: OMEGA_POLICY_VERSION, entry: "market the minute after the decision (a limit plan waits up to the signal's age for price within 0.35 x the stop distance)", management: "every minute: key levels by quorum power (SL+, trailing TP, close on a reversed power), the opposite decision once made, 72 h; with the strategy execution rules, the lean flip, a winner's agent confidence drop, and the trailing TP only while that confidence holds", gates: "daily loss limit and risk budget in R, max positions, no stacking", approximations: "feed bars, fixed spread, no 5m or adaptive stop, no 5m entry trigger, no scale-out" },
+      omega4: OMEGA4_RULES
     },
-    all: block(by(null)), by_source: Object.fromEntries(SOURCES.map((s) => [s, block(by(s))])),
-    by_mode: Object.fromEntries(TRADING_MODES.map((m) => [m, block(decisions.filter((x) => x.trading_mode === m))])),
+    all: block(by(null), v4All), by_source: Object.fromEntries(SOURCES.map((s) => [s, block(by(s), s === "decision" ? v4All : [])])),
+    by_mode: Object.fromEntries(TRADING_MODES.map((m) => [m, block(decisions.filter((x) => x.trading_mode === m), v4All.filter((x) => x.trading_mode === m))])),
     items: items.slice().sort((a, b) => toMs(b.opened_at) - toMs(a.opened_at)).slice(0, 100)
   };
 }
@@ -407,10 +463,26 @@ export const LEDGER_SCHEMA_SQL = [
     blocking_id TEXT,
     reason TEXT
   )`,
-  "CREATE INDEX IF NOT EXISTS idx_signal_ledger_held_at ON signal_ledger_held(held_at)"
+  "CREATE INDEX IF NOT EXISTS idx_signal_ledger_held_at ON signal_ledger_held(held_at)",
+  // The v4 Omega policy (src/ledger-omega4.mjs, owner 2026-11-20): one row per Decision Engine BUY/SELL the replay saw,
+  // also those the ledger's own no-stacking rule held back (Omega's own rules decide there, as live).
+  `CREATE TABLE IF NOT EXISTS ledger_omega4 (
+    decision_key TEXT PRIMARY KEY,
+    side TEXT NOT NULL,
+    issued_ms INTEGER NOT NULL,
+    trading_mode TEXT, agent TEXT,
+    omega4_status TEXT NOT NULL, omega4_gate TEXT, omega4_filled_at TEXT, omega4_closed_at TEXT, omega4_exit TEXT,
+    r_omega4 REAL, omega4_size REAL, omega4_json TEXT,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_ledger_omega4_issued ON ledger_omega4(issued_ms)",
+  // The feed's 1m bars the v4 replay reads, kept past the KV series' two days (src/ledger-omega4.mjs archiveMinuteBars).
+  "CREATE TABLE IF NOT EXISTS ledger_bars_1m (minute_ms INTEGER PRIMARY KEY, o REAL NOT NULL, h REAL NOT NULL, l REAL NOT NULL, c REAL NOT NULL)"
 ];
 /** The Omega policy's columns (src/signal-ledger.mjs simulateOmega), added in place. */
-const OMEGA_COLUMNS = ["trading_mode TEXT", "entry_action TEXT", "omega_status TEXT", "omega_gate TEXT", "omega_filled_at TEXT", "omega_closed_at TEXT", "omega_exit TEXT", "r_omega REAL", "omega_size REAL", "omega_json TEXT"];
+const OMEGA_COLUMNS = ["trading_mode TEXT", "entry_action TEXT", "omega_status TEXT", "omega_gate TEXT", "omega_filled_at TEXT", "omega_closed_at TEXT", "omega_exit TEXT", "r_omega REAL", "omega_size REAL", "omega_json TEXT",
+  // v4 (src/ledger-omega4.mjs), on the ledger's own rows beside v3, so the two are paired on the same signals.
+  "omega4_status TEXT", "omega4_exit TEXT", "r_omega4 REAL", "omega4_size REAL", "omega4_filled_at TEXT", "omega4_closed_at TEXT", "omega4_json TEXT"];
 let schemaReady = false;
 export function resetLedgerSchemaCacheForTests() { schemaReady = false; }
 export async function ensureLedgerSchema(db) {
@@ -585,15 +657,35 @@ export async function evaluateOpenSignals(env, { now = Date.now(), bars = null, 
   return changed;
 }
 
+/**
+ * v4 (src/ledger-omega4.mjs): the replay from its last flat minute to now on the 1m bars, then the parity check against
+ * the live account at most once an hour. Loaded on demand (it pulls the live engine's modules in). Never throws.
+ */
+export async function runOmega4Step(env, { now = Date.now(), bars = null } = {}) {
+  try {
+    const v4 = await import("./ledger-omega4.mjs");
+    const replay = await v4.runOmega4(env, { now, bars });
+    const parity = await v4.runOmegaParity(env, { now });
+    return { replay, parity };
+  } catch (e) {
+    return { replay: { status: "failed", error: String(e?.message ?? e).slice(0, 200) }, parity: null };
+  }
+}
+
 /** The sweep's ledger step: ingest new signals, then follow every live one. Never fatal. */
 export async function runSignalLedger(env, { now = Date.now(), readStrategy = null, h1Decisions = true } = {}) {
   if (!env?.DB) return { status: "unavailable" };
   await ensureLedgerSchema(env.DB);
   const added = { h1_decision: h1Decisions ? await ingestH1Decisions(env, { sinceIso: iso(now - 7 * 86_400_000), now }) : 0, strategy: 0 };
   if (readStrategy) { try { added.strategy = await ingestStrategy(env, await readStrategy(env, { now }), { now }); } catch { added.strategy = 0; } }
-  const changed = await evaluateOpenSignals(env, { now });
-  return { status: "ok", added, changed };
+  const loaded = await ledgerSeries(env);
+  const changed = await evaluateOpenSignals(env, { now, bars: loaded.bars, m15: loaded.m15 });
+  const omega4 = omega4Enabled(env) ? await runOmega4Step(env, { now, bars: loaded.bars }) : { replay: { status: "off" }, parity: null };
+  return { status: "ok", added, changed, omega4 };
 }
+
+/** LEDGER_OMEGA4 "off" stops the v4 replay and its parity check (default on). */
+export const omega4Enabled = (env) => String(env?.LEDGER_OMEGA4 ?? "on").trim().toLowerCase() !== "off";
 
 /** GET /api/ledger: the ledger of the last `days` days. */
 export async function readLedger(env, { days = 30, now = Date.now() } = {}) {
@@ -602,7 +694,10 @@ export async function readLedger(env, { days = 30, now = Date.now() } = {}) {
   const rows = (await env.DB.prepare("SELECT * FROM signal_ledger WHERE opened_at >= ? ORDER BY opened_at").bind(since).all()).results || [];
   const held = (await env.DB.prepare("SELECT decision_key, side, held_at, blocking_id, reason FROM signal_ledger_held WHERE held_at >= ? ORDER BY held_at DESC LIMIT 50").bind(since).all()).results || [];
   const heldCount = await env.DB.prepare("SELECT COUNT(*) AS n FROM signal_ledger_held WHERE held_at >= ?").bind(since).first();
-  return { ...ledgerView(rows.map((r) => ({ ...r, ambiguous: Boolean(r.ambiguous) })), { days }), held: { count: Number(heldCount?.n) || 0, items: held } };
+  const omega4 = (await env.DB.prepare("SELECT decision_key, side, issued_ms, trading_mode, agent, omega4_status, omega4_gate, omega4_filled_at, omega4_closed_at, omega4_exit, r_omega4, omega4_size FROM ledger_omega4 WHERE issued_ms >= ? ORDER BY issued_ms").bind(now - days * 86_400_000).all()).results || [];
+  let parity = null;
+  try { parity = JSON.parse((await env.SIGNAL_CACHE?.get?.(OMEGA4_PARITY_KEY)) || "null"); } catch { parity = null; }
+  return { ...ledgerView(rows.map((r) => ({ ...r, ambiguous: Boolean(r.ambiguous) })), { days, omega4 }), held: { count: Number(heldCount?.n) || 0, items: held }, parity };
 }
 
 // ---------------------------------------------------------------------------
