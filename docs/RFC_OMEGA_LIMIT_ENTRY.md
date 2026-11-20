@@ -1,7 +1,9 @@
 # RFC: Omega limit entries, held by the council, with learned knobs
 
 Status: reviewed by the orchestrator (2026-11-20, six points folded in) and by the platform session (2026-11-20, §7 and the
-stage 3 precondition in §10 folded in), for the owner's review. Owner decision 2026-11-20, relayed by the orchestrator and
+stage 3 precondition in §10 folded in), for the owner's review. Updated 2026-11-20 with the owner's confirmation: the
+`"council"` entry order (§2), and ADR-0020 Amendments 7 and 8, merged on the platform (cryptophys-cloud-platform ed43279),
+folded into §4, §6 and §10. Stage 1 is merged (#497); stage 2 (§8, measurement only) is the PR that adds this line. Owner decision 2026-11-20, relayed by the orchestrator and
 confirmed by the owner in the session ("Yes, that scope"): "setuju dan tetap dinamis learning dan knowledge karena prinsip
 system ini adalah feedloop auto learning dan dinamis."
 
@@ -34,19 +36,42 @@ know which entry works, per mode and regime.
 
 ## 2. The switch
 
-- New Omega setting `entry_order`: `"market"` (default) or `"limit"`.
-  - It is added to `OMEGA_DEFAULTS` and checked in `settingsFrom` as an enum, like `sor_mode`.
+- New Omega setting `entry_order`: `"market" | "limit" | "council"`. The default stays `"market"`.
+  - It is added to `OMEGA_DEFAULTS` and checked in `settingsFrom` as an enum, like `sor_mode`. Stage 1 accepts
+    `"market"` and `"limit"` and refuses `"limit"` until stage 3; stage 3 adds `"council"` behind the same switch.
   - It is the owner's switch on the Omega page and needs no deploy.
   - Aether's policy (`applyOmegaPolicy`) never writes it.
-- `"limit"` is refused (`ea_1_21_required`) while the connected EA is older than 1.21.
+- `"limit"` and `"council"` are refused (`ea_1_21_required`) while the connected EA is older than 1.21.
 - Back to `"market"`: any pending Omega limit is deleted at the next sync, and entries return to today's path unchanged.
+
+**`"limit"`** places every entry as a limit (§3–§5): a missed limit is a missed trade.
+
+**`"council"` (owner, confirmed 2026-11-20).** The entry council (§3) chooses per signal between three answers, each with
+a measured reason (the rule of `cut_loss`, #488):
+- `enter_market`: the taker entry, today's market path;
+- `place_limit`: the maker entry, a resting limit (§3–§5);
+- `skip`: no entry.
+
+The rules under `"council"`:
+- **A silent council is today's market path.** No answer (model failure, timeout, the daily cap) means `enter_market`
+  through today's gates, never a skip and never a limit.
+- **One limit→market conversion per signal.** While its limit rests, the council may convert it once to a market entry:
+  - the cancel goes first (`delete_order`), and the market leg is planned only after the cancel's result;
+  - a fill in the meantime ends the conversion: the filled position is managed as any limit fill (§5), and no market leg
+    follows;
+  - the market leg is sized afresh at its own price, with today's formula and every gate of today (§6). It never inherits
+    the limit's lot.
+- **Risk is money at the stop.** risk_pct, the profile caps and the daily budget count the money each entry would lose at
+  its stop, at the price it enters at. The adaptive stop (0.75 × ATR) stays for both entries.
+- The ledger measures exactly this choice (§8): every signal is followed as taker (v4) and as maker (the limit policy).
 
 ## 3. Placement: only on the council's consensus
 
 When `entry_order` is `"limit"` and the decision is `ENTER_LIMIT`, every entry gate of today runs first, unchanged and in the
 same order (`planIntents` :791-902).
 
-Then Omega asks the **entry council**:
+Then Omega asks the **entry council** (under `"council"`, the same call answers `enter_market`, `place_limit` or `skip`,
+§2):
 - **Seats:** Omega's entry seat and the Position Manager's seat, in one model call (`callBusModel`, its own schema and meter
   source `entry_council`, the same daily USD cap as the position council).
 - **What it reads:** the 15m decision with its reasons, and the 1H, 4H and 1D rooms' latest readings and biases.
@@ -82,11 +107,24 @@ At each **15m close** while a limit is pending, the Position Manager's run asks 
 reasons are:
 - the decision now stands against the order's side;
 - the strategy agent's confidence trend is a `drop`;
-- the quorum share fell by more than `cancel_share_drop` (a learned knob);
-- price moved more than `move_max_atr` × ATR(14) of the 15m bars from the order (for a move: the new level must lie within
-  that distance and keep the stop and target sides valid).
+- price moved more than `move_max_atr` × ATR(14) of the 15m bars from the order.
 
 A WAIT stance alone is never a reason. Without a measured reason the order is kept (`keep_no_reason`).
+
+**A move, under ADR-0020 Amendment 7 (merged, ed43279):**
+- only toward price, and by at most `move_max_atr` × ATR(14) of the 15m bars from the order's level;
+- the stop and the target shift by the same amount as the level, so the order's distances never change: a move never
+  widens the stop or the plan, and it keeps the stop and target sides valid;
+- the lot is not raised by a move (the risk at the stop stays what it was at placement or less).
+
+**Deterministic cancels, with no council involved (A7):** the order is deleted at once when
+- its side's quorum share (`quorum.long_share` for a buy, `quorum.short_share` for a sell) fell by more than
+  `cancel_share_drop` from the placing decision to the current 15m decision (`quorum_share_drop`; this was a council reason
+  before A7);
+- the Decision Engine vetoes its side (`de_veto`);
+- the profile is downgraded to Safe (`profile_downgrade`);
+- the account is disarmed (`disarmed`) or killed (`kill`);
+- and the hard reasons of §6.
 
 **The council has no fixed 15-minute expiry.** It keeps the order while the signal stands, up to `max_pending_life` (a learned
 knob per mode, §7; intraday starts at 60 minutes), after which Omega deletes the order (`pending_expired`).
@@ -127,6 +165,9 @@ Otherwise Omega:
 - `openRiskAtStops` adds its risk at the stop;
 - `same_side_unprotected` treats it as unprotected until filled and locked.
 
+**The platform cap (ADR-0020 A7):** pending orders count toward the platform's cap of 3 open positions per account, together
+with the open positions. The profile's own `max_positions` (Safe 1, Conservative 2, Aggressive 3) stays the tighter one.
+
 **Only one pending Omega order at a time.** A second signal while one is pending is `pending_order_exists`; the council may
 still move the existing one.
 
@@ -134,9 +175,11 @@ still move the existing one.
 - pause, kill (`close_all` already deletes every order) and Omega switched off;
 - disarm on a real account (`disarmed`: the owner's disarm or auto-disarm under ADR-0020; Amendment 7: a resting entry is
   cancelled on disarm or kill);
+- a Decision Engine veto of its side (`de_veto`, A7);
+- its side's quorum share falling by more than `cancel_share_drop` (`quorum_share_drop`, A7, §4);
 - an Omega pending order without a stop (`pending_without_stop`): Omega never places one, and its risk is unbounded;
 - `entry_order` set back to `"market"`;
-- a profile downgrade;
+- a profile downgrade (to Safe in A7's words; any downgrade here);
 - the daily budget exhausted;
 - a news blackout starting;
 - the symbol or money checks failing.
@@ -201,6 +244,28 @@ Policy Engine's prohibited filter refuses them; platform test K2):
   - the paired comparison against market entry.
 - The same records feed the knob tuning in §7.
 
+**Built in stage 2 (`src/ledger-omega-limit.mjs`, measurement only):**
+- **The replay.** `replayOmegaLimit` is v4's own replay (`replayOmega4`) with an entry policy: one simulated account, the
+  same 1m bars, decisions, gates and management. The policy places a resting limit at the decision's level (`signal.entry`,
+  feed scale, basis 0) at the first minute planIntents' own gates pass for the signal; planIntents sizes it as if filled at
+  the limit (a probe call with the symbol priced at the level). It fills when a 1m bar's range reaches it (a buy when the
+  ask's low does, a sell when the bid's high does). After the fill the position is a v4 trade: planIntents, the TP ladder
+  and the Position Manager. v4's results and its `ENGINE_CODE_HASH` are unchanged.
+- **Missed:** `limit_through_price`, `limit_out_of_band` (at placement); `pending_expired` (at `max_pending_life`);
+  `decision_against`, `quorum_share_drop`, `blackout`, `daily_loss_limit`, `profile_downgrade`, `kill`, `paused` (checked
+  at every minute's open while it rests). One resting order at a time (`pending_order_exists`).
+- **Knobs:** the start values of §7, clamped to A7's bounds; no reader of the `omega.limit_*` facts exists yet.
+  `move_max_atr` is recorded but moves nothing (no council in a replay).
+- **Not modelled:** the council's place, keep and move; `de_veto` and disarm (the replay keeps the arm on, as v4); the
+  fill-time re-check of §5.
+- **Storage:** the `limit_*` columns and `regime` on v4's own `ledger_omega4` row of each decision, so maker and taker pair
+  on one row.
+- **Run:** after v4 in the same 5-minute ledger step, never past the minute v4 has replayed, within what v4 left of the
+  run's 720-minute bound.
+- **Report:** `cryptophys.execution-report.v1` gains a top-level `limit` block (the schema stays v1; Aether's validator allows extra top-level fields) per mode and regime (fill rate, missed by reason,
+  maker and taker R per trade, profit factor and total R, the pairs: n, maker better, taker better, mean ΔR). Nexus
+  shows it as "Maker vs taker" on the Performance page.
+
 ## 9. EA 1.21 (the owner installs it on the VPS; the bridge is unchanged)
 
 `intents.txt` keeps its format, `id;kind;side;volume;sl;tp;ticket`, so the bridge needs no change.
@@ -234,12 +299,16 @@ Policy Engine's prohibited filter refuses them; platform test K2):
    - The deletion guards of §6.
    - Default `"market"`, so nothing changes live.
 2. **The ledger policy and the report (§8).** Measurement only. It starts collecting on today's signals at once.
-3. **Live limit placement and the pending council (§3–§5),** behind `entry_order: "limit"`, with the knobs at their starting
-   values.
-   - **Precondition: ADR-0020 Amendment 7** (resting entries under the arm) must be merged on the platform before stage 3
-     goes live. It says a resting order may only be moved or cancelled, never widened beyond its plan; the Decision Engine
-     veto, auto-disarm and the cap still apply to it; and it is cancelled on disarm or kill. The platform session drafts it
-     and the owner confirms it there. Until it is merged, `LIMIT_ENTRY_AVAILABLE` stays false.
+   **This is the stage 2 PR** (2026-11-20): `src/ledger-omega-limit.mjs`, the `limit_*` columns of `ledger_omega4`,
+   the execution report's `limit` block and the Nexus "Maker vs taker" panel. No live behaviour changes:
+   `LIMIT_ENTRY_AVAILABLE` stays false and nothing places an order.
+3. **Live limit placement and the pending council (§3–§5),** behind `entry_order: "limit"` and `"council"` (§2), with the
+   knobs at their starting values. **Stage 3 is the PR that flips `LIMIT_ENTRY_AVAILABLE` to true**; stage 2 must not.
+   - **Precondition met: ADR-0020 Amendment 7** (resting entries under the arm) is merged on the platform (with Amendment 8,
+     cryptophys-cloud-platform ed43279). Its stricter points are folded in above: a move only toward price within
+     `move_max_atr`, the stop and target shifted by the same amount, never widened (§4); deterministic cancels on the
+     quorum share drop, a Decision Engine veto (`de_veto`), a downgrade to Safe, disarm and kill (§4, §6); pending orders
+     counted toward the platform cap of 3 (§6). Stage 3 implements them as written here.
 4. **The learned knobs (§7):** the tuning loop, the bounds request to the platform session and the anchors with Aether.
 
 The owner installs EA 1.21 after stage 1 and switches `entry_order` to `"limit"` after stage 3.
