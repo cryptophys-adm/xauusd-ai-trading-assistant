@@ -16,7 +16,7 @@ import { goldClosedAt } from "./market-hours.mjs";
 import { eaSignal, readControl, blackoutWindow } from "./ea-signal.mjs";
 import { storeDeal, dealStats, FIRST_OF_DEAL, ensureSchema as ensureDealsSchema } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
-import { OMEGA_DEFAULTS, STOP_COMMAND_MS, commandedStops, planIntents, settingsFrom, omegaPendingOrders, openId, fillGapR, LIMIT_ENTRY_AVAILABLE, LIMIT_EA_MIN_VERSION, ENTRY_ORDERS } from "./omega-engine.mjs";
+import { OMEGA_DEFAULTS, STOP_COMMAND_MS, commandedStops, loosenRecords, planIntents, settingsFrom, omegaPendingOrders, openId, fillGapR, LIMIT_ENTRY_AVAILABLE, LIMIT_EA_MIN_VERSION, ENTRY_ORDERS } from "./omega-engine.mjs";
 import { requestEntryCouncil, readEntryCouncil, pendingLimitActions, markLimitActions, placeLimitRows, ensureLimitCouncilSchema } from "./limit-council.mjs";
 import { pendingPositionActions, markPositionActions, positionActionRows, expireStalePositionActions, actionIdOfIntent, actionMessage, ACTION_TTL_MS } from "./position-actions.mjs";
 import { announceExits } from "./position-exit.mjs";
@@ -134,6 +134,35 @@ export async function positionMeta(db, executor) {
     }
     return out;
   } catch { return {}; }
+}
+
+/**
+ * What ADR-0020 Amendment 8 reads at each sync with positions (src/omega-engine.mjs planIntents `pmLoosen`): the
+ * loosenings already sent (`loosened`, loosenRecords: a position there counts as unprotected and is never loosened
+ * again, whatever the switch says now) and each Omega position's original entry stop (`original`, by ticket: the open
+ * or place_limit intent's sl, its mode and its stop distance at entry). Never throws: an unreadable record gives no
+ * original stop, so nothing is loosened.
+ */
+export async function pmLoosenInputs(db, executor, now = Date.now()) {
+  const out = { loosened: {}, original: {} };
+  const positions = (Array.isArray(executor?.positions) ? executor.positions : []).filter((p) => typeof p?.intent_id === "string" && p.intent_id.startsWith("open:") && Number(p?.ticket) > 0);
+  try {
+    const rows = (await db.prepare("SELECT payload, status, result FROM omega_intents WHERE kind IN ('modify_sl', 'modify_sltp') AND json_extract(payload, '$.loosen') = 1 AND created_ms > ?").bind(now - 30 * 86_400_000).all()).results ?? [];
+    out.loosened = loosenRecords(rows);
+  } catch { return out; }
+  const ids = [...new Set(positions.map((p) => p.intent_id))].slice(0, 50);
+  if (!ids.length) return out;
+  try {
+    const rows = (await db.prepare(`SELECT id, payload FROM omega_intents WHERE kind IN ('open', 'place_limit') AND id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all()).results ?? [];
+    const byId = Object.fromEntries(rows.map((r) => [r.id, parse(r.payload, {})]));
+    for (const p of positions) {
+      const it = byId[p.intent_id];
+      const sl = Number(it?.sl);
+      if (!(sl > 0)) continue;
+      out.original[String(p.ticket)] = { sl, mode: typeof it.mode === "string" ? it.mode : null, r_dist: Number(it.r_dist) > 0 ? Number(it.r_dist) : null };
+    }
+  } catch { /* no original stop: nothing is loosened */ }
+  return out;
 }
 
 /**
@@ -957,6 +986,12 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       if (pmId) {
         const row = (await positionActionRows(db, [pmId]))[pmId];
         if (row) await sendPmLine(env, row, result.ok ? { applied: true } : { applied: false, reason: `the broker refused it (${result.error || "no reason given"})` });
+        // ADR-0020 Amendment 8: every loosening and council target move, as the broker answered, in omega_events (R and
+        // the rule, no price, no account).
+        if (p?.loosen === true || /^pm_tp_(nearer|further)_/.test(String(p?.reason ?? ""))) {
+          await event(db, now, "engine", p.loosen === true ? "pm_stop_loosened" : "pm_tp_moved", { intent_id: r.id, ticket: Number(p.ticket) || null, rule: String(p.reason ?? "").replace(/^pm_/, ""), mode: p.mode ?? null, applied: result.ok,
+            ...(p.loosen === true ? { risk_r_before: p.risk_r_before ?? null, risk_r_after: p.risk_r_after ?? null } : { tp_r_from: p.tp_r_from ?? null, tp_r_to: p.tp_r_to ?? null }), ...(result.ok ? {} : { error: result.error ?? null }) });
+        }
         continue;
       }
       // The broker label of this terminal, e.g. "FxPro (DEMO) · GOLD"; "broker unknown" until its spec is validated.
@@ -1093,7 +1128,10 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // stored answers (src/limit-council.mjs), each resting order's place_limit intent, the fills not yet re-checked and
   // the last limit->market conversion. With "market" none of this is read and planIntents gets none of it.
   const limitIn = settings?.entry_order === "limit" || settings?.entry_order === "council" ? await limitInputs(db, executor, signal, now) : {};
-  const plan = planIntents({ signal, control, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: { ...meta, ...dlg.meta }, candles, stops, ...limitIn });
+  // ADR-0020 Amendment 8: the loosenings already sent and the original entry stops (read whatever the switch says: a
+  // loosened position stays unprotected after the switch goes off).
+  const pmLoosen = hasPositions ? await pmLoosenInputs(db, executor, now) : null;
+  const plan = planIntents({ signal, control, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: { ...meta, ...dlg.meta }, candles, stops, ...limitIn, ...(pmLoosen ? { pmLoosen } : {}) });
   if (plan.entry_request || plan.limit_used || plan.fill_checks) await limitAfterPlan(env, db, { plan, limitIn, executor, now });
   if (delegated.length && !delegateOk) plan.notes.push({ code: "delegate_needs_ea_1_18", detail: `${delegated.length} delegated position${delegated.length > 1 ? "s wait" : " waits"} for OmegaExecutor 1.18` });
   if (pmActions.length) {
@@ -1554,6 +1592,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
     // The owner's edits and delegation (owner 2026-11-19, src/omega-hitl.mjs): the delegated tickets, the toggle, and
     // whether the terminal's OmegaExecutor takes them (1.18+).
     delegation: { ...(await readDelegations(db)), supported: hitlSupported(executorFrom(st, { stored: true })), ea_min_version: HITL_EA_MIN_VERSION },
+    // ADR-0020 Amendment 8: the owner's switch and the positions whose stop the council loosened (once each).
+    pm_loosen: { enabled: settings.settings?.pm_loosen_enabled === true, loosened: Object.keys((await pmLoosenInputs(db, { positions: [] }, now)).loosened).map(Number) },
     // Reversal probation (src/htf-cells.mjs): the owner's switch and the reverted cells.
     probation: { ...probationFrom((await env.SIGNAL_CACHE?.get?.(PROBATION_KEY)) ?? null), risk_scale: PROBATION.risk_scale, revert_last_n: PROBATION.revert_last_n, agents: PROBATION.agents },
     connection: { version: connection.version, status: connection.status, server: connection.server, trade_symbol: connection.trade_symbol, units_per_usd: connection.units_per_usd, updated_by: connection.updated_by, updated_ms: connection.updated_ms },
@@ -1713,7 +1753,10 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
       const worse = after.profit_factor != null && after.profit_factor < 1 && (before?.profit_factor == null || after.profit_factor < before.profit_factor);
       const record = { ...applied, evaluated: true, evaluated_at: new Date(now).toISOString(), after };
       if (worse) {
-        const r = await writeSettings(env, { body: { ...current.settings, ...applied.from }, actor: "aether-rollback" }, { now });
+        // The owner's A8 switch is carried as stored (Aether never writes it, ADR-0020 Amendment 8).
+        const back = { ...current.settings, ...applied.from };
+        delete back.pm_loosen_enabled;
+        const r = await writeSettings(env, { body: back, actor: "aether-rollback" }, { now });
         record.rolled_back = r.ok === true;
         record.rejected_shas = [...new Set([...(applied.rejected_shas || []), applied.sha])];
         await kv?.put?.(OMEGA_POLICY_APPLIED_KEY, JSON.stringify(record));
@@ -1732,8 +1775,10 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
   if (!policy || typeof policy !== "object") return { status: "invalid_policy" };
   if (policy.doctrine_sha && (applied?.rejected_shas || []).includes(policy.doctrine_sha)) return { status: "rejected_sha" };
   const body = { ...current.settings };
-  // Aether's policy never writes entry_order (docs/RFC_OMEGA_LIMIT_ENTRY.md §2): the owner's switch is carried as stored.
+  // Aether's policy never writes entry_order (docs/RFC_OMEGA_LIMIT_ENTRY.md §2) nor pm_loosen_enabled (ADR-0020
+  // Amendment 8): the owner's switches are carried as stored.
   delete body.entry_order;
+  delete body.pm_loosen_enabled;
   for (const k of POLICY_FIELDS) {
     if (policy[k] != null && Number.isFinite(Number(policy[k]))) body[k] = clamp(Number(policy[k]), OMEGA_POLICY_BOUNDS[k]);
   }

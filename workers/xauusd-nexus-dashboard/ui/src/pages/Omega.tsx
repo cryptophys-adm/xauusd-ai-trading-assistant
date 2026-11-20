@@ -739,6 +739,8 @@ export default function Omega() {
   const b = data?.broker || null;
   // Delegation and the owner's edits (owner 2026-11-19, src/omega-hitl.mjs).
   const delegation: any = b?.delegation ?? null;
+  // ADR-0020 Amendment 8: the owner's switch and the positions whose stop the council loosened (once each).
+  const pmLoosen: any = b?.pm_loosen ?? null;
   const viewer = data?.viewer || { can_control: false };
   const canControl = Boolean(viewer.can_control);
 
@@ -1446,6 +1448,7 @@ export default function Omega() {
                         const isManual = p.source === "manual" || p.magic === 0;
                         const isOmega = p.source === "omega" || p.magic === 920200 || String(p.intent_id || "").startsWith("open:");
                         const isDelegated = isManual && (delegation?.tickets ?? []).map(Number).includes(Number(p.ticket));
+                        const loosenedOnce = (pmLoosen?.loosened ?? []).map(Number).includes(Number(p.ticket));
                         const editing = editRow?.target === "position" && editRow.ticket === Number(p.ticket);
                         return (
                           <Fragment key={p.ticket}>
@@ -1470,6 +1473,11 @@ export default function Omega() {
                                   EXTERNAL
                                 </span>
                               )}
+                              {loosenedOnce ? (
+                                <span className="ml-1 inline-flex items-center gap-1 rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200 border border-amber-400/40" title="The Position Council loosened this position's stop once (ADR-0020 Amendment 8). It counts as unprotected again and is never loosened a second time.">
+                                  LOOSENED ONCE
+                                </span>
+                              ) : null}
                             </td>
                             <td className="mono">{timeUtc(p.opened_ms)}</td>
                             <td className={`mono font-bold ${isBuy ? "text-emerald-300" : "text-rose-300"}`}>{p.side}</td>
@@ -2799,6 +2807,20 @@ export default function Omega() {
                   ))}
                 </select>
               </div>
+              {/* ADR-0020 Amendment 8: the owner's switch, off by default (the settings write is owner only). */}
+              <label className="flex cursor-pointer items-start gap-2 text-[11px] text-slate-300" htmlFor="e-pm-loosen">
+                <input
+                  type="checkbox"
+                  id="e-pm-loosen"
+                  disabled={!canControl}
+                  checked={e.pm_loosen_enabled === true}
+                  onChange={(ev) => saveEngine({ pm_loosen_enabled: ev.target.checked })}
+                  className="mt-0.5 h-3.5 w-3.5 accent-amber-400 disabled:opacity-40"
+                />
+                <span>
+                  <span className="font-semibold text-slate-100">Council may loosen a stop (A8)</span>: once per position, with a measured reason, the Position Council may move a tightened stop part of the way back toward the original entry stop (never past it, never back into loss from break-even) and move a take profit nearer or further.
+                </span>
+              </label>
               {entryOrder.ea_ok === false ? (
                 <p className="text-[11px] text-amber-200" aria-label="Entry order needs EA 1.21">Limit and council need OmegaExecutor {entryOrder.ea_min_version ?? "1.21"}; the terminal reports {entryOrder.ea_version ?? "no version"}.</p>
               ) : null}
