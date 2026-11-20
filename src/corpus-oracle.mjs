@@ -19,6 +19,8 @@
 //
 // Switch: CORPUS_ORACLE_MODE = "off" (default; the bars are ignored) | "shadow" (collect and measure).
 
+import { archiveBrokerBars } from "./liquidity-lens.mjs";
+
 export const CORPUS_TIMEFRAME = "M1";
 export const CORPUS_MAX_BARS_PER_SYNC = 240;
 export const CORPUS_KEEP_MS = 14 * 86_400_000;
@@ -162,6 +164,14 @@ export async function ingestCorpus(env, corpus, { executor = null, now = Date.no
       .bind(v.source, b.t, b.o, b.h, b.l, b.c, b.v, b.s, v.connection_version, now).run();
     if (Number(r?.meta?.changes)) stored += 1;
   }
+  // The liquidity lens's archive (docs/RFC_POSITIONING_LIQUIDITY.md §4.1): the same validated bars under the account's
+  // opaque reference (never the account number), kept 120 days. Never blocks the corpus.
+  try {
+    if (typeof executor?.account_ref === "string") {
+      const legacy = !(typeof executor?.account?.login_hash === "string" && /^[0-9a-f]{64}$/.test(executor.account.login_hash));
+      await archiveBrokerBars(db, { accountRef: executor.account_ref, legacy, source: v.source, digits: Number.isInteger(executor?.symbol?.digits) ? executor.symbol.digits : null, connectionVersion: v.connection_version, bars: v.bars, now });
+    }
+  } catch { /* the corpus stands */ }
   const last = await db.prepare("SELECT MAX(minute_ms) AS t FROM corpus_bars WHERE source = ?").bind(v.source).first();
   await db.prepare(`INSERT INTO corpus_sources (source, server, symbol, connection_version, last_minute_ms, stored, refused, last_error, updated_ms) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
     ON CONFLICT(source) DO UPDATE SET connection_version = excluded.connection_version, last_minute_ms = excluded.last_minute_ms, stored = stored + excluded.stored, refused = refused + excluded.refused, last_error = NULL, updated_ms = excluded.updated_ms`)

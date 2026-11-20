@@ -41,6 +41,8 @@ const CODES: Record<string, { kind: Kind; text: string }> = {
   max_positions: { kind: "block", text: "The maximum number of positions is open." },
   spread: { kind: "block", text: "The spread is wider than allowed." },
   rollover_quarantine: { kind: "block", text: "Daily rollover window: spreads are unreliable, entries wait." },
+  liquidity_spread_spike: { kind: "block", text: "The live spread is far above this hour's norm on this broker (liquidity lens): new entries wait." },
+  liquidity_modify_deferred: { kind: "info", text: "A stop or target change waits for the spread spike to pass (at most 10 minutes); closes and hard guards are never held." },
   same_side_unprotected: { kind: "block", text: "No stacking: a position on the same side is not yet protected (its stop is not at break-even or better)." },
   strategy_has_position: { kind: "block", text: "Strategy arm: this strategy already has an open position (one position per strategy)." },
   opposing_position: { kind: "block", text: "Strategy arm: an Omega position on the other side is still open or being closed; the entry waits for it to go." },

@@ -46,6 +46,7 @@ import * as brokerTrigger from "./broker-trigger.mjs";
 import * as omegaLimitKnobs from "./omega-limit-knobs.mjs";
 import * as pmLoosenKnobs from "./pm-loosen-knobs.mjs";
 import * as limitCouncil from "./limit-council.mjs";
+import * as liquidityLens from "./liquidity-lens.mjs";
 
 export { OMEGA4_VERSION, OMEGA4_PARITY_KEY };
 
@@ -531,7 +532,7 @@ export const ENGINE_CODE = Object.freeze({
     // ADR-0020 Amendment 8 (2026-11-20): Omega's check of the council's loosening and target moves, and the loosenings sent.
     "a8Intent", "loosenRecords"]],
   "position-manager": [positionManager, ["positionFacts", "positionAction", "pmBand", "brokerLevels", "latestDecisions", "runPositionManager", "cleanCouncil", "PM_R_BAND", "THRESHOLD_PIPS", "PIP", "SHARE_DROP",
-    "ruleAction", "a8Action", "loosenHold", "loosenPlan", "targetPlan", "atrExpanded", "loosenFacts", "loosenInputs", "cleanCouncilA8", "LOOSEN_REASONS", "TP_NEARER_REASONS", "TP_FURTHER_REASONS", "LOOSEN_LOOKBACK_MS"]],
+    "ruleAction", "a8Action", "loosenHold", "loosenPlan", "targetPlan", "atrExpanded", "loosenFacts", "loosenInputs", "cleanCouncilA8", "LOOSEN_REASONS", "TP_NEARER_REASONS", "TP_FURTHER_REASONS", "LOOSEN_LOOKBACK_MS", "liquidityOf", "positionCouncilMessages"]],
   "position-actions": [positionActions, ["pendingPositionActions", "ACTION_TTL_MS"]],
   "ea-signal": [eaSignalModule, ["eaSignal", "eaSignalFrom", "eaSignalFromDecision", "entryTriggerFor", "managementFields", "applyArmGate"]],
   "omega-broker": [omegaBroker, ["lastClosedCandle", "ladderCandles", "lastWeakeningExit", "positionMeta", "positionAgents", "limitInputs", "pmLoosenInputs"]],
@@ -543,7 +544,10 @@ export const ENGINE_CODE = Object.freeze({
   "grid-adapt": [gridAdapt, ["applyGridChoice", "cellLevels"]],
   "htf-cells": [htfCells, ["applyRangeMode", "applyCellGate", "RANGE_GATED_AGENTS", "PROBATION"]],
   "agent-confidence": [agentConfidence, ["confidenceTrend", "flatConfidences", "parseConfidences", "CONFIDENCE_STABLE_BAND"]],
-  "broker-trigger": [brokerTrigger, ["brokerTriggerFields", "readBrokerTrigger", "BROKER_TRIGGER_FRESH_MS"]]
+  "broker-trigger": [brokerTrigger, ["brokerTriggerFields", "readBrokerTrigger", "BROKER_TRIGGER_FRESH_MS"]],
+  // The Positioning & Liquidity analyst's lens B (docs/RFC_POSITIONING_LIQUIDITY.md §4.4-§6): the signal's liquidity
+  // fields and levels, the spread-spike entry gate and the modification deferral planIntents applies.
+  "liquidity-lens": [liquidityLens, ["liquidityFields", "signalLiquidityLevels", "liveSpreadRatio", "liveSpreadSpike", "deferModifications", "nyHourOfWeek", "DEFERRABLE_KINDS", "LIQUIDITY_MODIFY_DEFER_MAX_MS", "LIQUIDITY_STATE_FRESH_MS", "SWEEP_WITH_MAX_AGE_MIN"]]
 });
 
 /** The text ENGINE_CODE_HASH is taken of: each name with its function's source or its value, module by module. */
@@ -571,7 +575,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "bbff5fadea876d05598713150251ea791989a4b8b5f65133f350873068ec9649";
+export const ENGINE_CODE_HASH = "42f5f5120c666fa556a2215c0b1dcbf70f3b3be7e45468c17c44f6559c968503";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -579,18 +583,24 @@ export const ENGINE_CODE_HASH = "bbff5fadea876d05598713150251ea791989a4b8b5f6513
  *   traces and records); positionFacts, positionAction, the council's messages, schema and cleaning,
  *   positionManagerIntents and planIntents with Position Manager actions over the A8 switch-off fixtures
  *   (test/fixtures/pm-a8-off.mjs); replayOmega4's traces and records over the v4 replay fixtures
- *   (test/fixtures/omega-v4-replay.mjs). Only tests build the text, so the Worker bundle carries the value alone.
+ *   (test/fixtures/omega-v4-replay.mjs); planIntents over the hand inputs with the liquidity lens on (its default) and
+ *   the live spread at 3x and 1x the hour's norm (docs/RFC_POSITIONING_LIQUIDITY.md: the gate and the deferral; this
+ *   group moved the hash in 2026-11-20's lens PR, a new era at its deploy). Only tests build the text, so the Worker
+ *   bundle carries the value alone.
  * test/ledger-omega-v4.test.mjs V14 recomputes it and fails, printing the new value, when the behaviour changes. A new
  * value starts a new parity era at the deploy; a source change that leaves it as it is carries the era over.
  */
-export const ENGINE_BEHAVIOUR_HASH = "df71fd7ca2bcc577816e0c6007e92165d004634edf23350d23369a2b649cfb88";
+export const ENGINE_BEHAVIOUR_HASH = "b58968b207cfdeafa4e1ce5ad4363370c9ec1e6aa50ae2d23f3bbe3afed5c09f";
 /**
  * The behaviour switches of the stored Omega settings (omega_settings id 1) whose value off their default
  * (OMEGA_DEFAULTS) changes what the live engine does: the era's switch signature (eraSwitches). A switch that turns
  * on, changes or goes back to its default starts a new era at the settings' updated_ms. Add each new one here; the
  * next one will be wait_bias_entry (docs/RFC_WAIT_BIAS_ENTRY.md).
  */
-export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled"]);
+// positioning_enabled and liquidity_enabled (docs/RFC_POSITIONING_LIQUIDITY.md, owner 2026-11-20) are on by default: the
+// signature compares each switch with its default (OMEGA_DEFAULTS), so at their defaults they add nothing, and the
+// owner turning a lens off writes "liquidity_enabled=false" and starts a new era at that time.
+export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled"]);
 /**
  * Engine code hashes from before the behaviour fingerprint whose switch-off behaviour is proven identical to the
  * first ENGINE_BEHAVIOUR_HASH: 7497aa51 (#502, limit entries stage 3; test/omega-limit-stage3.test.mjs S12 proves the
@@ -598,6 +608,12 @@ export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled"]);
  * A8-2 proves the Position Manager byte for byte against ad21475, whose engine code is stage 3's). A stored era of the
  * old shape ({ hash, since_ms }) with one of these is adopted with its since_ms; any other starts a new era.
  */
+/**
+ * The behaviour the adoptable code hashes were proven identical to: the first ENGINE_BEHAVIOUR_HASH (#504). An old-shape
+ * era is adopted as this behaviour, so a later behaviour (the Positioning & Liquidity analyst's lens B, 2026-11-20)
+ * starts its own era at its deploy instead of inheriting the old era's since.
+ */
+export const ERA_ADOPTABLE_BEHAVIOUR_HASH = "df71fd7ca2bcc577816e0c6007e92165d004634edf23350d23369a2b649cfb88";
 export const ERA_ADOPTABLE_CODE_HASHES = Object.freeze([
   "7497aa5177163fa88c581f1f8f90edc5094b99aa8c66a161eb24aaa8a26a9104",
   "bbff5fadea876d05598713150251ea791989a4b8b5f65133f350873068ec9649"
@@ -658,7 +674,7 @@ export function nextEra(stored, { behaviour = ENGINE_BEHAVIOUR_HASH, code = ENGI
   if (oldShape) {
     const adopt = ERA_ADOPTABLE_CODE_HASHES.includes(stored.hash);
     cur = {
-      behaviour_hash: adopt ? behaviour : null, code_hash: stored.hash, switches: [], since_ms: stored.since_ms, commit: stored.commit ?? null,
+      behaviour_hash: adopt ? ERA_ADOPTABLE_BEHAVIOUR_HASH : null, code_hash: stored.hash, switches: [], since_ms: stored.since_ms, commit: stored.commit ?? null,
       seeded: stored.seeded === true, reason: stored.seeded === true ? "seed" : "code change", adopted_ms: now,
       previous: Array.isArray(stored.previous) ? stored.previous : [], carried: []
     };
@@ -791,7 +807,10 @@ export function liveTradesFrom({ deals = [], opens = {}, closes = {} } = {}) {
  * for at least PARITY_PASS.same_exit_min of the trades compared and the mean |ΔR| of the closed pairs is at most
  * PARITY_PASS.mean_abs_dr_max. `untilMs` is the end of the replay (later trades are not compared yet).
  */
-export function omegaParity({ ledgerRows = [], liveTrades = [], liveOpen = [], sinceMs = PARITY_SINCE_MS, untilMs = Infinity, now = Date.now(), era = null } = {}) {
+export function omegaParity({ ledgerRows = [], liveTrades = [], liveOpen = [], sinceMs = PARITY_SINCE_MS, untilMs = Infinity, now = Date.now(), era = null, expected = [] } = {}) {
+  // The liquidity lens's spread-spike gate (docs/RFC_POSITIONING_LIQUIDITY.md §7.2): v4 replays without the lens, so a
+  // signal the gate held live is an expected difference (`expected`: "<signal issued ms>|<side>"), never a v4-only miss.
+  const expectedSet = new Set(Array.isArray(expected) ? expected : []);
   const eraSince = finite(era?.since_ms) ? era.since_ms : PARITY_CURRENT_CODE_MS;
   const rowOf = new Map();
   for (const r of ledgerRows) { const c = decisionCloseMs(r?.decision_key); if (finite(c)) rowOf.set(`${c}|${r.side}`, r); }
@@ -829,6 +848,7 @@ export function omegaParity({ ledgerRows = [], liveTrades = [], liveOpen = [], s
     const c = decisionCloseMs(r?.decision_key);
     if (!finite(c) || used.has(`${c}|${r.side}`) || !(c >= sinceMs) || !(c <= untilMs)) continue;
     if (r.omega4_status !== "closed") continue;
+    if (expectedSet.has(`${c}|${r.side}`)) continue;
     trades.push({ issued_at: iso(c), side: r.side, mode: r.trading_mode ?? null, live_code: c >= eraSince ? "current" : "earlier", matched: false, v4_only: true, live_exit: null, v4_exit: r.omega4_exit ?? null, live_r: null, v4_r: r.r_omega4 ?? null, dr: null, entry_diff_s: null, same_exit: false, v4_status: r.omega4_status, cause: "v4 traded it, live did not" });
   }
   trades.sort((a, b) => a.issued_at.localeCompare(b.issued_at));
@@ -1078,7 +1098,11 @@ export async function runOmegaParity(env, { now = Date.now(), force = false } = 
     const live = await loadLiveTrades(env, { sinceMs: PARITY_SINCE_MS });
     // The era (its moves, "era carried (behaviour identical)" among them, go to the ledger_omega4 log line as era_events).
     const { era, events } = await eraStep(env, { now });
-    const result = omegaParity({ ledgerRows: rows, liveTrades: live.trades, liveOpen: live.open, era, untilMs: finite(until) && until > 0 ? until + M1 : now, now });
+    let expected = [];
+    try {
+      expected = ((await env.DB.prepare("SELECT at_ms, side FROM lens_readings WHERE lens = 'liquidity' AND kind = 'block' AND at_ms >= ?").bind(PARITY_SINCE_MS).all()).results ?? []).map((r) => `${Number(r.at_ms)}|${Number(r.side) > 0 ? "BUY" : "SELL"}`);
+    } catch { expected = []; }
+    const result = omegaParity({ ledgerRows: rows, liveTrades: live.trades, liveOpen: live.open, era, untilMs: finite(until) && until > 0 ? until + M1 : now, now, expected });
     await env.SIGNAL_CACHE.put(OMEGA4_PARITY_KEY, JSON.stringify(result), { expirationTtl: 8 * 86_400 });
     return {
       status: "checked", parity: result.status, era_since: result.era.since, era_reason: result.era.reason, trades: result.trades_compared, live_trades: result.live_trades, same_exit_share: result.same_exit_share, mean_abs_dr: result.mean_abs_dr,

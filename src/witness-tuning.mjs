@@ -128,7 +128,11 @@ export function neighbourWeights(active) {
  */
 export function replayDecision(d, weights) {
   if (!Array.isArray(d?.checks?.long) || !Array.isArray(d?.checks?.short) || !d.checks.long.length || !d.checks.short.length) return null;
-  const cards = (d.witnesses || []).map((c) => ({ ...c, weight: isNum(weights?.[c.key]) ? weights[c.key] : 0 }));
+  // POSITIONING (docs/RFC_POSITIONING_LIQUIDITY.md §3.4) is outside the tuner: every arm keeps it at its recorded
+  // weight and scales the arm's set by 1 - w, as the live engine does (SESSION is fixed the same way).
+  const pos = (d.witnesses || []).find((c) => c.key === "POSITIONING" && isNum(c.weight));
+  const pw = pos ? pos.weight : 0;
+  const cards = (d.witnesses || []).map((c) => ({ ...c, weight: c.key === "POSITIONING" ? pw : isNum(weights?.[c.key]) ? weights[c.key] * (1 - pw) : 0 }));
   const q = quorumOf(cards, { now: d.decided_ms });
   const t = modeThresholds(d.mode);
   const quorumPass = (dir) => {
@@ -384,7 +388,7 @@ const truthy = (v) => v === true || v === 1 || v === "1" || v === "true";
 export function decisionFromRow(row) {
   const close = keyCloseMs(row.decision_key);
   if (!Number.isFinite(close)) return null;
-  const witnesses = (parse(row.w) || []).map(([key, available, stale, lean, at]) => ({ key, available: truthy(available), stale: truthy(stale), lean: isNum(lean) ? lean : null, at: at ?? null }));
+  const witnesses = (parse(row.w) || []).map(([key, available, stale, lean, at, weight]) => ({ key, available: truthy(available), stale: truthy(stale), lean: isNum(lean) ? lean : null, at: at ?? null, ...(key === "POSITIONING" && isNum(weight) ? { weight } : {}) }));
   const checks = (s) => (parse(s) || []).map(([id, pass]) => ({ id, pass: truthy(pass) }));
   const long = checks(row.gl), short = checks(row.gs);
   const quorumOfSide = (list) => { const q = list.find((c) => c.id === "quorum"); return q ? q.pass : null; };
@@ -403,7 +407,7 @@ export async function loadDecisions(db, sinceIso) {
   await ensureDecisionSchema(db);
   const checks = (side) => `(SELECT json_group_array(json_array(json_extract(c.value, '$.id'), json_extract(c.value, '$.pass'))) FROM json_each(d.decision_json, '$.guardrails.${side}.checks') c)`;
   const sql = "SELECT d.decision_key, d.bar_close, json_extract(d.decision_json, '$.trading_mode') AS mode, json_extract(d.decision_json, '$.decided_at') AS decided_at, json_extract(d.decision_json, '$.weights') AS weights, " +
-    "(SELECT json_group_array(json_array(json_extract(w.value, '$.key'), json_extract(w.value, '$.available'), json_extract(w.value, '$.stale'), json_extract(w.value, '$.lean'), json_extract(w.value, '$.at'))) FROM json_each(d.decision_json, '$.witnesses') w) AS w, " +
+    "(SELECT json_group_array(json_array(json_extract(w.value, '$.key'), json_extract(w.value, '$.available'), json_extract(w.value, '$.stale'), json_extract(w.value, '$.lean'), json_extract(w.value, '$.at'), json_extract(w.value, '$.weight'))) FROM json_each(d.decision_json, '$.witnesses') w) AS w, " +
     `${checks("long")} AS gl, ${checks("short")} AS gs FROM engine_decisions d WHERE d.bar_close >= ? ORDER BY d.bar_close`;
   const rows = (await db.prepare(sql).bind(sinceIso).all()).results || [];
   return rows.map(decisionFromRow).filter(Boolean).sort((a, b) => a.close_ms - b.close_ms);

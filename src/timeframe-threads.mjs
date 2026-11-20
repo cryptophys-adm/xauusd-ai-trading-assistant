@@ -42,6 +42,7 @@ import {
 } from "./war-room.mjs";
 import { closedHtfCandleKeys, OBSERVED_PREFIX } from "./parity-sweep.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
+import { roomContextLine } from "./lens-steps.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import { projectionReading } from "./projection-agent.mjs";
 import { readPatternCalibration } from "./pattern-calibration.mjs";
@@ -432,7 +433,12 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   const learnedPack = learnedKnowledgeEnabled(env) ? await effectiveLearnedPack(env) : undefined;
   const learnedFor = (agent) => learnedBlock(env, { agent, ...learnedCtx, pack: learnedPack });
   if (!existing.has("brief")) {
+    // The Positioning & Liquidity analyst's line (docs/RFC_POSITIONING_LIQUIDITY.md §2, §3.5, §4.3): lens A in the 4H and
+    // 1D rooms, lens B in the 1H room; context, not on the roster, so outside the quorum and the crowd; no price.
+    let lensContext = null;
+    try { lensContext = await roomContextLine(env, chart); } catch { lensContext = null; }
     await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: {
+      ...(lensContext ? { context: lensContext } : {}),
       chart, candle_key: candleKey, roster, ...(allocation.benched.length ? { benched: allocation.benched, shadow: allocation.shadow } : {}), calibration, confirmations: ev.confirmations, bar: ev.technical.candles.at(-1) ?? null,
       hud_snapshot: Boolean(ev.hud),
       // Which learned pack and notes the room saw (RFC §10); recorded only when the notes are on.
@@ -644,7 +650,7 @@ export async function readTimeframeThread(db, chart, { candleKey = null, env = n
     crowd: c?.crowd ?? (openings.some((o) => o.status === "ok") ? buildCrowdLine(finalEntries(openings, debate), rep, await crowdOptions(env ?? { DB: db }, chart)) : null),
     tf: chart, tab: spec.tab, bar_open: barOpenOf(run), reconvened: String(run).includes("#"), bar_close: brief?.bar_time ?? rows[0]?.bar_time ?? null, candle_key: brief?.candle_key ?? null,
     phase: c?.status === "ok" ? "closed" : debate.length ? "debate" : "opening",
-    confirmations: brief?.confirmations ?? null, hud_snapshot: brief?.hud_snapshot ?? null,
+    confirmations: brief?.confirmations ?? null, hud_snapshot: brief?.hud_snapshot ?? null, context: brief?.context ?? null,
     roster: (brief?.roster || []).map((id) => ({ id, name: tfAgentName(id), calibration: note(id) })),
     conclusion: c ? { status: c.status, stance: c.stance, bias: c.bias ?? null, majority_bias: c.majority_bias ?? null, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [], dissent: (c.dissent || []).map((id) => ({ id, name: tfAgentName(id) })), majority: c.majority ?? null, model: c.model ?? null, fallback_used: c.fallback_used === true, ...(c.status !== "ok" ? { errors: c.errors ?? [], primary_error: c.primary_error ?? null, raw: String(c.insight ?? "").slice(0, 300) } : {}) } : null,
     openings,

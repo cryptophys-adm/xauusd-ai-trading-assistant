@@ -156,7 +156,11 @@ export async function buildPack(env, row, { change, executor, deals, now }) {
     const doc = parse(await env?.SIGNAL_CACHE?.get?.("strategy-council:v1"));
     verdicts = doc?.verdicts ? Object.fromEntries(Object.entries(doc.verdicts).map(([k, v]) => [k, { walk_forward: v?.walk_forward?.status ?? null, mean_r: v?.walk_forward?.mean_r ?? null, live_mean_r: v?.live_mean_r ?? null, proposal: v?.proposal ?? null }])) : null;
   } catch { verdicts = null; }
+  // Lens A (docs/RFC_POSITIONING_LIQUIDITY.md §3.5): crowding and divergence in an upgrade's evidence, never a trigger.
+  let positioning = null;
+  if (rank(change.to) > rank(row.profile)) { try { positioning = await (await import("./lens-steps.mjs")).positioningPack(env, { now }); } catch { positioning = null; } }
   return {
+    ...(positioning ? { positioning } : {}),
     account_ref: row.account_ref, kind: rank(change.to) > rank(row.profile) ? "upgrade" : "downgrade",
     from: row.profile, to: change.to, ceiling: row.ceiling, trigger: change.reason, trigger_evidence: change.evidence ?? null,
     equity: r2(equity), balance: r2(balance), balance_peak: finite(peak) ? r2(peak) : null,

@@ -5,6 +5,7 @@
 // with the doctrine of its canon once a day and proposes each lasting difference to the Cerebrum
 // consensus, which executes it. Every value here is read from the running code, its variables and the
 // stored Omega settings: never typed in. No price, level, size or account appears.
+import { LENS_MODES, LENS_KNOBS, lensKnobs, readLensState } from "./lens-policy.mjs";
 import { strategyArmMode, ARM_MAX } from "./strategy-arm.mjs";
 import { exec5mMode } from "./broker-trigger.mjs";
 import { activeWitnessWeights, decisionEngineEnabled, guardrailsFor, MIN_CONFIDENCE, modeThresholds, tradingMode } from "./decision-engine.mjs";
@@ -88,8 +89,25 @@ export async function nexusFacts(env) {
     "calendar.blackout_before_min": Math.round(beforeMs / 60_000),
     "calendar.blackout_after_min": Math.round(afterMs / 60_000),
     "parity.approval_candles": DEFAULT_POLICY.promoteAfter,
-    "lanes.indicator_source": String(env?.INDICATOR_SOURCE ?? "local").trim().toLowerCase() || "local"
+    "lanes.indicator_source": String(env?.INDICATOR_SOURCE ?? "local").trim().toLowerCase() || "local",
+    // The Positioning & Liquidity analyst's lens A knobs in force (docs/RFC_POSITIONING_LIQUIDITY.md §8, §10).
+    ...(await lensFacts(env, "positioning"))
   };
+}
+
+/** The knobs in force of one lens as doctrine facts (`<base>_<mode>` and the score knobs), plus its switch. */
+async function lensFacts(env, lens) {
+  const out = {};
+  try {
+    const st = await readLensState(env);
+    for (const m of LENS_MODES) {
+      const k = lensKnobs(lens, m, { policy: st.policy, floor: st.floor, enabled: st.switches[lens], baseline: "sufficient" });
+      for (const base of Object.keys(LENS_KNOBS).filter((b) => b.startsWith(`${lens}.`))) out[`${base}_${m}`] = k[base.split(".")[1]];
+      if (m === "intraday") { out[`${lens}.score_floor`] = k.score_floor; out[`${lens}.score_window`] = k.score_window; }
+    }
+    out[`${lens}.enabled`] = st.switches[lens] !== false;
+  } catch { /* none */ }
+  return out;
 }
 
 /** The execution side (the Omega seat): the settings in force and the fixed gates. */
@@ -107,7 +125,9 @@ export async function omegaFacts(env) {
     "omega.live_arm_required": true,
     // The strategy arm (RFC §10, owner 2026-11-17): live → an entry needs an armed strategy or the AUTO pick.
     "omega.strategy_arm_required": strategyArmMode(env) === "live",
-    "omega.max_armed_strategies": ARM_MAX
+    "omega.max_armed_strategies": ARM_MAX,
+    // The Positioning & Liquidity analyst's lens B knobs in force (docs/RFC_POSITIONING_LIQUIDITY.md §8, §10).
+    ...(await lensFacts(env, "liquidity"))
   };
 }
 

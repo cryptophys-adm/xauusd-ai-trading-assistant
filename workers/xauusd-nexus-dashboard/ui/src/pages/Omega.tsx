@@ -2821,6 +2821,23 @@ export default function Omega() {
                   <span className="font-semibold text-slate-100">Council may loosen a stop (A8)</span>: once per position, with a measured reason, the Position Council may move a tightened stop part of the way back toward the original entry stop (never past it, never back into loss from break-even) and move a take profit nearer or further.
                 </span>
               </label>
+              {/* The Positioning & Liquidity analyst's rollback switches (owner 2026-11-20, breakglass live): on by default; off, the lens contributes nothing. */}
+              {([
+                ["positioning_enabled", "e-lens-positioning", "Positioning lens (CFTC)", "the POSITIONING witness of the Decision Engine (a small, capped lean from managed money's weekly positioning) and its line in the 4H and 1D rooms."],
+                ["liquidity_enabled", "e-lens-liquidity", "Liquidity lens (broker M1)", "the spread-spike entry gate, the 10-minute stop and target deferral during a spike, the liquidity key levels and the councils' liquidity reasons. It never opens a position."]
+              ] as const).map(([key, id, label, what]) => (
+                <label key={key} className="flex cursor-pointer items-start gap-2 text-[11px] text-slate-300" htmlFor={id}>
+                  <input
+                    type="checkbox"
+                    id={id}
+                    disabled={!canControl}
+                    checked={e[key] !== false}
+                    onChange={(ev) => saveEngine({ [key]: ev.target.checked })}
+                    className="mt-0.5 h-3.5 w-3.5 accent-cyan-400 disabled:opacity-40"
+                  />
+                  <span><span className="font-semibold text-slate-100">{label}</span>: {what}</span>
+                </label>
+              ))}
               {entryOrder.ea_ok === false ? (
                 <p className="text-[11px] text-amber-200" aria-label="Entry order needs EA 1.21">Limit and council need OmegaExecutor {entryOrder.ea_min_version ?? "1.21"}; the terminal reports {entryOrder.ea_version ?? "no version"}.</p>
               ) : null}

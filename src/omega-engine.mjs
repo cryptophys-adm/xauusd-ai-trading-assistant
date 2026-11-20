@@ -23,6 +23,7 @@ import { goldCheckOf, goldPriceProblem } from "./gold-symbol.mjs";
 import { versionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, effectiveLimits, PROFILES } from "./account-spec.mjs";
 import { limitKnobs } from "./omega-limit-knobs.mjs";
 import { pmLoosenKnobs } from "./pm-loosen-knobs.mjs";
+import { signalLiquidityLevels, liveSpreadSpike, deferModifications } from "./liquidity-lens.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
   enabled: false,
@@ -58,7 +59,12 @@ export const OMEGA_DEFAULTS = Object.freeze({
   // Platform ADR-0020 Amendment 8 (owner 2026-11-20, "setuju", "keduanya"): the Position Council may loosen a tightened
   // stop once, within bounds, and move a take profit nearer or further. The owner's switch on the Omega page only;
   // Aether's policy never writes it. Off: today's rules, unchanged.
-  pm_loosen_enabled: false
+  pm_loosen_enabled: false,
+  // The Positioning & Liquidity analyst's rollback switches (docs/RFC_POSITIONING_LIQUIDITY.md; owner 2026-11-20:
+  // "Sekarang breakglass urgent jadi langsung live"): on by default, the owner's switches on the Omega page only;
+  // Aether's policy never writes them. Off, the lens contributes nothing (no witness, gate, deferral, reason or level).
+  positioning_enabled: true,
+  liquidity_enabled: true
 });
 /** Stage 3 of docs/RFC_OMEGA_LIMIT_ENTRY.md: "limit" and "council" may be switched on (with OmegaExecutor 1.21). */
 export const LIMIT_ENTRY_AVAILABLE = true;
@@ -142,6 +148,11 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS, { ea_version = null
   if (body.pm_loosen_enabled !== undefined) {
     if (typeof body.pm_loosen_enabled !== "boolean") return { error: "pm_loosen_enabled must be true or false" };
     out.pm_loosen_enabled = body.pm_loosen_enabled;
+  }
+  for (const key of ["positioning_enabled", "liquidity_enabled"]) {
+    if (body[key] === undefined) continue;
+    if (typeof body[key] !== "boolean") return { error: `${key} must be true or false` };
+    out[key] = body[key];
   }
   if (body.max_signal_age_min !== undefined) {
     const m = body.max_signal_age_min;
@@ -301,12 +312,18 @@ export const POWER_FRESH_MS = 35 * 60_000;
 
 /** Pure: the signal's key levels on the broker's scale ({ low, high }, lowest first), or null without a known basis. */
 export function brokerKeyLevels(signal) {
-  if (signal?.feed_basis_known !== true || !finite(signal.feed_basis) || typeof signal.key_levels !== "string" || !signal.key_levels) return null;
+  // The Positioning & Liquidity analyst's lens B (docs/RFC_POSITIONING_LIQUIDITY.md §4.4; owner 2026-11-20,
+  // "rekomendasi"): sweep extremes, untaken pools and high-volume nodes join the key levels with source "liquidity",
+  // already on the broker's scale (no basis added), only while the lens is on (the signal's liquidity_on).
+  const liquidity = signalLiquidityLevels(signal);
   const out = [];
-  for (const part of signal.key_levels.split(",")) {
-    const [lo, hi] = part.split(":").map(Number);
-    if (positive(lo) && positive(hi) && lo <= hi) out.push({ low: lo + signal.feed_basis, high: hi + signal.feed_basis });
+  if (signal?.feed_basis_known === true && finite(signal.feed_basis) && typeof signal.key_levels === "string" && signal.key_levels) {
+    for (const part of signal.key_levels.split(",")) {
+      const [lo, hi] = part.split(":").map(Number);
+      if (positive(lo) && positive(hi) && lo <= hi) out.push({ low: lo + signal.feed_basis, high: hi + signal.feed_basis });
+    }
   }
+  out.push(...liquidity);
   return out.length ? out.sort((a, b) => a.low - b.low) : null;
 }
 
@@ -987,12 +1004,14 @@ export function fillGapR({ side, planned, filled, rDist }) {
 
 const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar", "probation_unconfirmed", "probation_reverted", "range_breakout", "range_mode_agent"]);
 
-export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null, pmLoosen = null } = {}) {
+export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null, pmLoosen = null, liquiditySpikeSince = null } = {}) {
   const intents = [], notes = [];
   // The Position Manager actions that became no intent, with the reason (said on Telegram by the sync).
   const pmDropped = [];
   const note = (code, detail) => notes.push(detail ? { code, detail } : { code });
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
+  // The liquidity lens off (the owner's switch): its fields on the signal are read as absent (no gate, deferral or level).
+  if (S.liquidity_enabled === false && signal?.liquidity_on === true) signal = { ...signal, liquidity_on: false };
   // Account Profiles phase 2 (docs/RFC_ACCOUNT_PROFILES.md §3-4): new entries are sized within the account's profile.
   // Each limit is the smaller of the profile's cap and the setting; Custom keeps the settings as they are.
   const profileLimits = typeof accountSpec?.profile === "string" ? effectiveLimits(accountSpec.profile, S) : null;
@@ -1017,7 +1036,18 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // nothing below changes and the result has its three fields only.
   const limitMode = LIMIT_ENTRY_AVAILABLE && (S.entry_order === "limit" || S.entry_order === "council");
   const extra = limitMode ? { entry_request: null, limit_used: [], limit_dropped: [], fill_checks: [] } : null;
-  const done = () => (extra ? { intents, notes, pm_dropped: pmDropped, ...extra } : { intents, notes, pm_dropped: pmDropped });
+  // Lens B (RFC §6; owner 2026-11-20, "Setuju"): while the live spread spikes, the planner's stop and target
+  // modifications (the ladder, the Position Manager, A8) wait up to 10 minutes from the spike's start; closes, kill,
+  // pause, the fill guard, the daily limit and every forced close are never deferred (they are not modifications).
+  const liqSpike = signal?.liquidity_on === true && liveSpreadSpike(signal, executor?.symbol ?? {});
+  const finish = () => {
+    if (!liqSpike) return;
+    const d = deferModifications(intents, { spike: true, spikeSinceMs: liquiditySpikeSince, now });
+    if (!d.deferred.length) return;
+    intents.splice(0, intents.length, ...d.intents);
+    note("liquidity_modify_deferred", d.deferred.map((it) => it.id).join(",").slice(0, 200));
+  };
+  const done = () => { finish(); return extra ? { intents, notes, pm_dropped: pmDropped, ...extra } : { intents, notes, pm_dropped: pmDropped }; };
 
   if (signal?.kill === true || control?.mode === "killed") {
     note("kill");
@@ -1248,6 +1278,9 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     [recent.has(id) || positions.some((p) => p.intent_id === id), "already_opened"],
     [positions.length - closing + pendingKept.length >= S.max_positions || sameSide.length >= S.max_positions, "max_positions"],
     [!finite(sym.spread_points) || sym.spread_points > S.max_spread_points, "spread"],
+    // Lens B (RFC §5.1): no new entry while the live spread is at or above the mode's spread_widen times the hour of
+    // the week's median bar spread; the absolute gate above stays. It also holds a limit's placement.
+    [signal?.liquidity_on === true && liveSpreadSpike(signal, sym), "liquidity_spread_spike"],
     [isRolloverQuarantine(now), "rollover_quarantine"],
     // No stacking (owner 2026-11-12, "larangan tumpuk posisi"): a second position on a side opens only
     // once every position already on that side is protected (its stop at or beyond its open price).
@@ -1300,7 +1333,9 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
       // calls a model. Prices stay inside the system: the request goes to D1 and the model, never to Aether.
       extra.entry_request = { id, side, entry_order: S.entry_order, issued_ms: issued, decided_ms: decided, action: signal.action, mode: signal.trading_mode || null, agent: tradeAgent,
         plan: { entry: signal.entry, stop: signal.stop, tp1: signal.tp1, stop_dist: roundTo(planStopDist, sym.digits) }, market: { bid: sym.bid, ask: sym.ask },
-        limit: lim.ok ? { price: lim.price, away_r: lim.away_r, band: lim.knobs.placement_band, life_min: lim.knobs.max_pending_life } : { refused: lim.code, away_r: lim.away_r ?? null } };
+        limit: lim.ok ? { price: lim.price, away_r: lim.away_r, band: lim.knobs.placement_band, life_min: lim.knobs.max_pending_life } : { refused: lim.code, away_r: lim.away_r ?? null },
+        // Lens B (docs/RFC_POSITIONING_LIQUIDITY.md §5.3), only while it is on: thin liquidity and the sweep on this side.
+        ...(signal.liquidity_on === true ? { liquidity: { weight: signal.liquidity_weight, thin: signal.liquidity_thin === true, sweep: signal.liquidity_sweep === (side === "BUY" ? "sell_side" : "buy_side") ? "with" : signal.liquidity_sweep ? "against" : null } } : {}) };
       note("entry_council_waiting", S.entry_order);
       return done();
     };

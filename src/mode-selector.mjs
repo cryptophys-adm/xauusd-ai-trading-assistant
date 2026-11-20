@@ -219,6 +219,8 @@ export async function runModeSelector(env, { now = Date.now(), account = null, r
       applied = { from: control.mode, to: d.to, actor: "selector", reason: d.reason, at_ms: now, id };
     } else if (d.action === "propose") {
       const pack = { from: control.mode, to: d.to, ...summary, account: account ? { equity: account.equity, profile_cap_pct: account.cap_pct } : null };
+      // Lens A (docs/RFC_POSITIONING_LIQUIDITY.md §3.5): crowding and divergence, a fact for the seats, never a trigger.
+      try { const pos = await (await import("./lens-steps.mjs")).positioningPack(env, { now }); if (pos) pack.positioning = pos; } catch { /* without it */ }
       const review = await reviewModeSwitch(env, pack, { now, call });
       const council = { verdict: review.verdict, reason: review.reason, seats: review.seats };
       if (review.verdict === "approve") {

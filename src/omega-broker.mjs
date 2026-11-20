@@ -16,6 +16,8 @@ import { goldClosedAt } from "./market-hours.mjs";
 import { eaSignal, readControl, blackoutWindow } from "./ea-signal.mjs";
 import { storeDeal, dealStats, FIRST_OF_DEAL, ensureSchema as ensureDealsSchema } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
+import { spikeSince, recordSpikeBlock } from "./lens-steps.mjs";
+import { liveSpreadSpike } from "./liquidity-lens.mjs";
 import { OMEGA_DEFAULTS, STOP_COMMAND_MS, commandedStops, loosenRecords, planIntents, settingsFrom, omegaPendingOrders, openId, fillGapR, LIMIT_ENTRY_AVAILABLE, LIMIT_EA_MIN_VERSION, ENTRY_ORDERS } from "./omega-engine.mjs";
 import { requestEntryCouncil, readEntryCouncil, pendingLimitActions, markLimitActions, placeLimitRows, ensureLimitCouncilSchema } from "./limit-council.mjs";
 import { pendingPositionActions, markPositionActions, positionActionRows, expireStalePositionActions, actionIdOfIntent, actionMessage, ACTION_TTL_MS } from "./position-actions.mjs";
@@ -1131,7 +1133,14 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // ADR-0020 Amendment 8: the loosenings already sent and the original entry stops (read whatever the switch says: a
   // loosened position stays unprotected after the switch goes off).
   const pmLoosen = hasPositions ? await pmLoosenInputs(db, executor, now) : null;
-  const plan = planIntents({ signal, control, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: { ...meta, ...dlg.meta }, candles, stops, ...limitIn, ...(pmLoosen ? { pmLoosen } : {}) });
+  // The liquidity lens (docs/RFC_POSITIONING_LIQUIDITY.md §6): the start of a live spread spike, the deferral's clock.
+  let liquiditySpikeSince = null;
+  if (signal?.liquidity_on === true && settings?.liquidity_enabled !== false) {
+    try { liquiditySpikeSince = await spikeSince(env, liveSpreadSpike(signal, executor?.symbol ?? {}), { now }); } catch { liquiditySpikeSince = null; }
+  }
+  const plan = planIntents({ signal, control, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: { ...meta, ...dlg.meta }, candles, stops, ...limitIn, ...(pmLoosen ? { pmLoosen } : {}), liquiditySpikeSince });
+  // A new entry the spread spike held back is a reading of the lens (scored later from the v4 replay).
+  if (plan.notes.some((x) => x.code === "liquidity_spread_spike")) { try { await recordSpikeBlock(db, signal, { now }); } catch { /* the plan stands */ } }
   if (plan.entry_request || plan.limit_used || plan.fill_checks) await limitAfterPlan(env, db, { plan, limitIn, executor, now });
   if (delegated.length && !delegateOk) plan.notes.push({ code: "delegate_needs_ea_1_18", detail: `${delegated.length} delegated position${delegated.length > 1 ? "s wait" : " waits"} for OmegaExecutor 1.18` });
   if (pmActions.length) {

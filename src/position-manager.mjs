@@ -37,6 +37,7 @@ import { callBusModel } from "./model-call.mjs";
 import { ensureAiUsageSchema, neuronsOf, USD_PER_1K_NEURONS } from "./ai-usage.mjs";
 import { confidenceTrend } from "./agent-confidence.mjs";
 import { eaSignal } from "./ea-signal.mjs";
+import { SWEEP_WITH_MAX_AGE_MIN } from "./liquidity-lens.mjs";
 import { ensurePositionSchema, ACTION_TTL_MS } from "./position-actions.mjs";
 import { readDelegations, hitlSupported } from "./omega-hitl.mjs";
 import { OMEGA_DEFAULTS, ladderTp1Locked, loosenRecords } from "./omega-engine.mjs";
@@ -116,8 +117,26 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
   };
   // ADR-0020 Amendment 8: only with its switch on (`loosen` given by the runner); otherwise the facts are today's.
   if (loosen && typeof loosen === "object") out.loosen = loosenFacts(loosen, { openIntent, mode: band.mode, levels });
+  // The liquidity lens (docs/RFC_POSITIONING_LIQUIDITY.md §6), only while it is on (the signal's liquidity_on: the
+  // owner's switch, the weight above its floor, a fresh state); otherwise the facts are today's.
+  const liq = liquidityOf(signal, p.side);
+  if (liq) out.liquidity = liq;
   return out;
 }
+
+/**
+ * Pure: the liquidity lens's reading for a position (RFC §6): a reclaimed sweep on a volume spike in the last 15
+ * minutes, `against` the position (a buy-side sweep for a long, a sell-side one for a short) or `with` it; the lens
+ * weight. Null while the lens is off or no sweep stands.
+ */
+export function liquidityOf(signal, side) {
+  if (signal?.liquidity_on !== true || (signal.liquidity_sweep !== "buy_side" && signal.liquidity_sweep !== "sell_side")) return null;
+  const age = Number(signal.liquidity_sweep_age_min);
+  if (!(isNum(age) && age >= 0 && age <= SWEEP_WITH_MAX_AGE_MIN)) return null;
+  const against = signal.liquidity_sweep === (side === "BUY" ? "buy_side" : "sell_side");
+  return { sweep: against ? "against" : "with", sweep_side: signal.liquidity_sweep, age_min: age, weight: isNum(Number(signal.liquidity_weight)) ? Number(signal.liquidity_weight) : null };
+}
+const sweepAgainstText = (f) => `a reclaimed ${f.liquidity.sweep_side === "buy_side" ? "buy-side" : "sell-side"} sweep on a volume spike ${f.liquidity.age_min} minutes ago argues against the ${f.side === "BUY" ? "long" : "short"} (liquidity_sweep_against)`;
 
 /**
  * Pure: what the bounded loosening and the two-way target read (ADR-0020 Amendment 8). `loosen` is what the runner
@@ -206,7 +225,9 @@ export function ruleAction(f, council) {
     const reasons = [
       ...(f.against_decision ? [`the decision is ${f.stance}`] : []),
       ...(f.agent_trend === "drop" ? [`the ${f.agent} confidence dropped ${f.agent_conf_prev} to ${f.agent_conf}`] : []),
-      ...(shareDrop ? [`the quorum's ${f.side === "BUY" ? "bullish" : "bearish"} share fell ${Math.round(f.share_prev * 100)}% to ${Math.round(f.share * 100)}%`] : [])
+      ...(shareDrop ? [`the quorum's ${f.side === "BUY" ? "bullish" : "bearish"} share fell ${Math.round(f.share_prev * 100)}% to ${Math.round(f.share * 100)}%`] : []),
+      // The liquidity lens (RFC §6): a measured reason beside the others; the cut still needs the council's thesis.
+      ...(f.liquidity?.sweep === "against" ? [sweepAgainstText(f)] : [])
     ];
     const wait = !f.with_decision && !f.against_decision ? `the decision is ${f.stance}` : null;
     if (!reasons.length) return { action: "hold", rule: "hold_to_stop", why: `${at(-1)} but no measured reason to cut${wait ? ` (${wait}, not a reason alone)` : ""}: held to the original stop` };
@@ -223,7 +244,7 @@ export function ruleAction(f, council) {
 
 /** The measured reasons the council may name, per change (docs/RFC_PM_A8.md §2). */
 export const LOOSEN_REASONS = Object.freeze(["atr_expansion", "key_level_outside", "high_impact_release"]);
-export const TP_NEARER_REASONS = Object.freeze(["momentum_fading", "key_level_before", "confidence_drop"]);
+export const TP_NEARER_REASONS = Object.freeze(["momentum_fading", "key_level_before", "confidence_drop", "liquidity_sweep_against"]);
 export const TP_FURTHER_REASONS = Object.freeze(["atr_expansion_trend", "key_level_beyond"]);
 /** The holds an A8 change may replace: never a close, a lock, TP2, an input missing, or a loss at the cut band. */
 const A8_BASE_RULES = Object.freeze(["inside_band", "protected", "tp2_waits_council", "tp2_waits_ladder"]);
@@ -323,6 +344,9 @@ export function targetPlan(f, council) {
     } else if (reason === "confidence_drop") {
       if (f.agent_trend !== "drop") return no(`the ${f.agent} confidence did not drop`);
       measured = `the ${f.agent} confidence dropped ${f.agent_conf_prev} to ${f.agent_conf}`;
+    } else if (reason === "liquidity_sweep_against") {
+      if (f.liquidity?.sweep !== "against") return no("no reclaimed sweep against the position in the last 15 minutes (or the liquidity lens is off)");
+      measured = sweepAgainstText(f);
     } else {
       if (!before) return no("no key level stands before the target");
       measured = `a key level ${before.low}-${before.high} stands before the target`;
@@ -404,8 +428,11 @@ export function positionCouncilMessages(f, { m5 = null, levels = [] } = {}) {
       atr_reference_from: L.atr_ref_source, atr_expand_threshold: L.knobs.atr_expand, back_share: L.knobs.back_share, high_impact_release: L.release ? `${L.release.title} ${L.release.time}` : null };
   }
   const system = "You are the Position Council of the XAUUSD system. Every 5 minutes you judge ONE open position from measured inputs only: the strategy agent's confidence on the position's side now and 15 minutes ago, the quorum's share on its side, the Decision Engine's stance, the broker's 5m structure and the key levels. Answer momentum (strengthening, holding or weakening: is price still moving the position's way with the agents and the quorum behind it?) and thesis (intact, weakening or broken: does the reason the position was opened still hold?). Fixed rules turn your answer into an action; you never choose the action, a size or a price. Return only the JSON object, with one short reason in plain words.";
+  // The liquidity lens (RFC §6), only while it is on and a sweep stands: one measured fact and one sentence.
+  if (f.liquidity) evidence.liquidity = { sweep: f.liquidity.sweep, sweep_side: f.liquidity.sweep_side, age_min: f.liquidity.age_min, lens_weight: f.liquidity.weight };
+  const liq = f.liquidity ? ` liquidity is the broker's own tick volume: a reclaimed sweep on a volume spike in the last 15 minutes, with or against the position; weigh it at ${f.liquidity.weight ?? "its lens weight"}. Against the position it is a measured reason (liquidity_sweep_against) for a cut in the loss band${L ? " or a target nearer" : ""}; it never decides alone.` : "";
   return [
-    { role: "system", content: L ? `${system}${A8_SYSTEM}` : system },
+    { role: "system", content: `${system}${L ? A8_SYSTEM : ""}${liq}` },
     { role: "user", content: JSON.stringify(evidence) }
   ];
 }

@@ -20,7 +20,11 @@ test("the facts report: both seats, the Decision Engine's thresholds per trading
   // 2026-11-12: the broker's 5m confirmation times market orders while OMEGA_EXEC_5M is on (the default).
   assert.equal(n["decision.execution_trigger"], "prophet_candle_for_market_orders_broker_5m");
   assert.deepEqual([n["calendar.blackout_before_min"], n["calendar.blackout_after_min"], n["parity.approval_candles"], n["weighting.mode"]], [120, 30, 24, "auto"]);
-  assert.ok(Object.keys(n).every((k) => !k.startsWith("omega.")) && Object.keys(o).every((k) => k.startsWith("omega.")), "each fact in its own seat");
+  // The Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md §10): positioning.* in the Nexus seat, liquidity.* in the Omega seat.
+  assert.ok(Object.keys(n).every((k) => !k.startsWith("omega.") && !k.startsWith("liquidity.")) && Object.keys(o).every((k) => k.startsWith("omega.") || k.startsWith("liquidity.")), "each fact in its own seat");
+  assert.equal(n["positioning.de_weight_swing"], 0.05);
+  assert.equal(o["liquidity.council_weight_scalp"], 0.4);
+  assert.ok(Object.keys(o).filter((k) => k.startsWith("liquidity.")).length >= 34 && Object.keys(n).filter((k) => k.startsWith("positioning.")).length >= 14);
   assert.deepEqual([o["omega.risk_pct"], o["omega.max_spread_points"], o["omega.max_signal_age_min"], o["omega.rollover_quarantine_utc"]], [0.5, 60, 10, "21:55-22:15"]);
   assert.doesNotMatch(JSON.stringify(f), /entry|stop_loss|take_profit|login|password|account/i);
   const scalp = await doctrineFacts({ TRADING_MODE: "scalp", WEIGHTING_MODE: "default", BLACKOUT_MINUTES: "60" });

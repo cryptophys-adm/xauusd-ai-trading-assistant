@@ -66,6 +66,10 @@ export interface Env {
     // Phase A7: the items a person approved for shadow testing (never a live prompt).
     learnedPack(): Promise<Record<string, unknown>>;
     omegaPolicy?(): Promise<Record<string, unknown>>;
+    // The Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md §7.1, §10): the lens knobs in force and the
+    // daily lens report; both optional until the Aether session adds them (the omegaPolicy pack is read meanwhile).
+    lensPolicy?(): Promise<Record<string, unknown>>;
+    ingestLensReport?(report: unknown): Promise<Record<string, unknown>>;
     // The Knowledge Council's facts (owner 2026-11-11, src/doctrine-facts.mjs).
     ingestDoctrineFacts?(facts: unknown): Promise<Record<string, unknown>>;
     // The Signal Ledger's execution report: the plan and the Omega policy per trading mode, in R.
@@ -218,6 +222,8 @@ import { aetherSyncStatus } from "./aether-sync.mjs";
 import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
 import { pullOmegaPolicy } from "./omega-policy.mjs";
+import { runLensStep, lensStatus, pushLensReport } from "./lens-steps.mjs";
+import { runCotStep } from "./positioning-lens.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
 import { readNeuronAllocation } from "./neuron-allocation.mjs";
@@ -273,7 +279,7 @@ import { runKnobProposals } from "./council-knob-tuning.mjs";
 import { readKnobOverrides } from "./council-knobs.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
-import { bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile, modeSelectorTick, probationTick, setProbation, rangeExitStep } from "./omega-broker.mjs";
+import { sendOmegaTelegram, bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile, modeSelectorTick, probationTick, setProbation, rangeExitStep } from "./omega-broker.mjs";
 import { ownerModeAction, relayModeChanges, modeStatus } from "./mode-selector.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
@@ -2640,6 +2646,12 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     try { return dashboardJson(await eaSignal(env)); }
     catch (error) { console.error("ea_signal_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ kill: true, side: "NONE", error: "unavailable" }, 500); }
   }
+  if (url.pathname === "/api/lens") {
+    // The Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md §10): per lens the weight per mode and its
+    // source, the score, the floor, lens B's baseline, the COT freshness and the owner's switches. No price.
+    try { return dashboardJson({ status: "ok", ...(await lensStatus(env)) }); }
+    catch (error) { console.error("lens_status_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
+  }
   if (url.pathname === "/api/corpus/status") {
     // Corpus Oracle phase 1 (owner 2026-11-11, src/corpus-oracle.mjs): the broker corpus from Omega's
     // active broker, pair and user; freshness, completeness and the basis against the TradingView feed.
@@ -2821,6 +2833,13 @@ async function runLedgerStep(env: Env): Promise<void> {
     const relay = await relayModeChanges(env) as { status?: string };
     if (relay?.status === "sent" || relay?.status === "failed") console.log("mode_relay", JSON.stringify(relay));
   } catch (e) { console.error("mode_relay_failed", e instanceof Error ? e.message : String(e)); }
+  // The Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md): lens B's facts and baseline, both lenses'
+  // readings and scores, and the automatic floor (an event and one line to the owner's private chat). Before the
+  // Position Manager, so it reads this run's liquidity.
+  try {
+    const lens = await runLensStep(env, { notify: (text: string) => sendOmegaTelegram(env, text) }) as { liquidity?: { status?: string }; floor?: { status?: string } };
+    if (lens.floor?.status === "floored" || lens.floor?.status === "failed" || lens.liquidity?.status === "failed") console.log("lens_step", JSON.stringify(lens));
+  } catch (e) { console.error("lens_step_failed", e instanceof Error ? e.message : String(e)); }
   // The 5-minute Position Manager (owner 2026-11-17, src/position-manager.mjs): each open Omega position once a 5m
   // bar; risk-reducing only; POSITION_MANAGER_MODE "off" stops it. Then its daily report after 21:00 UTC.
   try {
@@ -3132,6 +3151,11 @@ export default {
             const calendar = await refreshCalendar(env);
             if (calendar.status !== "fresh") console.log("econ_calendar", JSON.stringify(calendar));
           } catch (e) { console.error("econ_calendar_failed", e instanceof Error ? e.message : String(e)); }
+          // Lens A (docs/RFC_POSITIONING_LIQUIDITY.md §3.1): a report published after the idle starts is still read.
+          try {
+            const cot = await runCotStep(env);
+            if (cot.status !== "fresh" && cot.status !== "not_due") console.log("cot_reports", JSON.stringify(cot));
+          } catch (e) { console.error("cot_reports_failed", e instanceof Error ? e.message : String(e)); }
           await runHealthStep(env);
           console.log("sweep_idle", JSON.stringify({ at: new Date(event.scheduledTime || Date.now()).toISOString(), heartbeat: true }));
         })());
@@ -3306,6 +3330,10 @@ export default {
           // Backlog 11.1: the economic calendar, refreshed at most once an hour (non-fatal).
           const calendar = await refreshCalendar(env);
           if (calendar.status !== "fresh") console.log("econ_calendar", JSON.stringify(calendar));
+          // Lens A of the Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md §3.1): the CFTC report,
+          // backfilled once, then fetched only while a new week's report is due (at most one request per series an hour).
+          const cot = await runCotStep(env);
+          if (cot.status !== "fresh" && cot.status !== "not_due") console.log("cot_reports", JSON.stringify(cot));
           // The released values, surprises and gold's reactions (src/econ-releases.mjs, owner 2026-11-10).
           const releases = await refreshEconReleases(env, { gatedEvents: await gatedEvents(env), readMt5: readMt5Calendar });
           if (releases.live || releases.backfill || releases.reactions || releases.status !== "ok") console.log("econ_releases", JSON.stringify(releases));
@@ -3340,6 +3368,12 @@ export default {
             const facts = await pushDoctrineFacts(env);
             if (facts.status !== "ok" && facts.status !== "disabled") console.log("doctrine_facts", JSON.stringify(facts));
           } catch (e) { console.error("doctrine_facts_failed", e instanceof Error ? e.message : String(e)); }
+          // The Positioning & Liquidity analyst's daily lens report (cryptophys.lens-report.v1: weights, scores, floors;
+          // no price), when Aether offers KnowledgeIngress.ingestLensReport.
+          try {
+            const lr = await pushLensReport(env);
+            if (lr.status !== "disabled" && lr.status !== "sent_today") console.log("lens_report", JSON.stringify(lr));
+          } catch (e) { console.error("lens_report_failed", e instanceof Error ? e.message : String(e)); }
           // The news shadow's daily comparison (measurement phase B, owner 2026-11-17 "A dan B"): once a day after
           // 21:00 UTC, two shadow-metered analyst readings; it feeds nothing.
           try {
