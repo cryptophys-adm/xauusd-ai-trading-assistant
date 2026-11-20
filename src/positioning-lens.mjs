@@ -359,7 +359,7 @@ export function cotDue(rows, now) {
  * cot:backfill:v1, retried the next hour on a failure), then the live fetch only while a report is due, at most one
  * request per series an hour (KV cot:fetch:last) and COT_WEEK_CAP a week. No model call. Never throws.
  */
-export async function runCotStep(env, { now = Date.now(), fetchImpl = globalThis.fetch } = {}) {
+export async function runCotStep(env, { now = Date.now(), fetchImpl = globalThis.fetch, allowBackfill = true } = {}) {
   const db = env?.DB, kv = env?.SIGNAL_CACHE;
   if (!db || !kv?.put || typeof fetchImpl !== "function") return { status: "unavailable" };
   try {
@@ -367,6 +367,9 @@ export async function runCotStep(env, { now = Date.now(), fetchImpl = globalThis
     const last = Date.parse((await kv.get(COT_FETCH_LAST_KEY)) || "");
     if (Number.isFinite(last) && now - last < HOUR - 60_000) return { status: "fresh" };
     const backfilled = Boolean(await kv.get(COT_BACKFILL_KEY));
+    // The closed-market idle heartbeat stays light (test/market-idle.test.mjs): it reads a new weekly report once the
+    // history is in, and leaves the one-time 3 + 1 year backfill to the next trading sweep.
+    if (!backfilled && !allowBackfill) return { status: "backfill_pending" };
     const rows = backfilled ? await readCotRows(db) : [];
     if (backfilled && !cotDue(rows, now)) return { status: "not_due" };
     const wk = weekKey(now);

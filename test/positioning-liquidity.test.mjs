@@ -117,6 +117,9 @@ test("PL3. storage: a live row is released at max(schedule, first seen); a revis
   const now = Date.parse("2026-11-21T10:00:00Z");
   const calls = [];
   const fetchImpl = async (url) => { calls.push(url); const legacy = url.includes("6dca-aqww"); return { ok: true, json: async () => socrata(10, { series: legacy ? "legacy" : "disaggregated" }) }; };
+  // The closed-market idle heartbeat leaves the backfill to a trading sweep: no request, nothing marked fetched.
+  assert.equal((await runCotStep(e, { now, fetchImpl, allowBackfill: false })).status, "backfill_pending");
+  assert.equal(calls.length, 0);
   const r1 = await runCotStep(e, { now, fetchImpl });
   assert.equal(r1.backfill, true);
   assert.equal(calls.length, 2);

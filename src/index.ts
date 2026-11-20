@@ -3151,10 +3151,11 @@ export default {
             const calendar = await refreshCalendar(env);
             if (calendar.status !== "fresh") console.log("econ_calendar", JSON.stringify(calendar));
           } catch (e) { console.error("econ_calendar_failed", e instanceof Error ? e.message : String(e)); }
-          // Lens A (docs/RFC_POSITIONING_LIQUIDITY.md §3.1): a report published after the idle starts is still read.
+          // Lens A (docs/RFC_POSITIONING_LIQUIDITY.md §3.1): a report published after the idle starts is still read; the
+          // one-time backfill waits for a trading sweep, so the idle sweep stays light.
           try {
-            const cot = await runCotStep(env);
-            if (cot.status !== "fresh" && cot.status !== "not_due") console.log("cot_reports", JSON.stringify(cot));
+            const cot = await runCotStep(env, { allowBackfill: false });
+            if (cot.status !== "fresh" && cot.status !== "not_due" && cot.status !== "backfill_pending") console.log("cot_reports", JSON.stringify(cot));
           } catch (e) { console.error("cot_reports_failed", e instanceof Error ? e.message : String(e)); }
           await runHealthStep(env);
           console.log("sweep_idle", JSON.stringify({ at: new Date(event.scheduledTime || Date.now()).toISOString(), heartbeat: true }));
